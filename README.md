@@ -1,10 +1,20 @@
-# Ichimoku Cloud Calculator
+# Crypto Trading with Indicators
 
-This project is a Node.js application that calculates the Ichimoku Cloud indicator for different periods (1 hour, 30 minutes, 15 minutes) and provides insights on potential trading opportunities.
+This project aims to provide a simple framework for trading cryptocurrencies using technical indicators. It leverages various indicators to make informed trading decisions.
 
-## Installation
+## Features
 
-1. Clone this repository to your local machine:
+- **Indicator Integration**: Utilizes popular technical indicators such as Moving Averages, RSI, MACD, etc.
+- **Flexible Strategy Implementation**: Allows users to define their trading strategies based on indicators.
+- **Backtesting Support**: Provides tools for backtesting trading strategies against historical data.
+- **Real-time Trading**: Supports real-time trading execution based on defined strategies.
+- **Extensible Architecture**: Designed to be easily extendable for adding new indicators or strategies.
 
-   ```bash
-   git clone https://github.com/your-username/ichimoku-cloud-calculator.git
+## Usage
+
+1. **Installation**: Clone the repository and install dependencies.
+
+```bash
+git clone <repository_url>
+cd crypto-trading-indicators
+npm install
