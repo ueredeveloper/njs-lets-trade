@@ -9,8 +9,6 @@ router.post("/ichimoku-cloud", async (req, res) => {
 
   let candles = req.body;
 
-  console.log(candles)
-
   let input = {
         high  : candles.map(c=> parseFloat(c.high)),
         low   : candles.map(c=> parseFloat(c.low)),
@@ -22,8 +20,6 @@ router.post("/ichimoku-cloud", async (req, res) => {
 
 
      let result = ichimokuCloud.calculate(input)
-
-     console.log(result)
 
      res.send(result);
 

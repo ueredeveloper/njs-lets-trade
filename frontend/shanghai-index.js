@@ -24,20 +24,36 @@ const downBorderColor = '#008F28';
             values: values
         };
     }
-    function calculateMA(dayCount) {
+    function calculateMA(dayCount, candles) {
         var result = [];
-        for (var i = 0, len = candlesOpenCloseLowHigh.values.length; i < len; i++) {
+
+        let candlesValues = candles.map(c => [c.openTime, c.close, c.open, c.low, c.high])
+        for (var i = 0, len = candlesValues.values.length; i < len; i++) {
             if (i < dayCount) {
                 result.push('-');
                 continue;
             }
             var sum = 0;
             for (var j = 0; j < dayCount; j++) {
-                sum += +candlesOpenCloseLowHigh.values[i - j][1];
+                sum += +candlesValues.values[i - j][1];
             }
             result.push(sum / dayCount);
         }
         return result;
+    }
+
+    const fetchCandlessticks = async (symbol, limit, period)=> {
+
+
+       let candlesticks =  await fetch(`http://localhost:3000/services/candles/?symbol=${symbol}&limit=${limit}&period=${period}`)
+        .then(response => {
+            if (!response.ok) {
+                throw new Error('Network response was not ok');
+            }
+            return response.json();
+        });
+
+        return candlesticks;
     }
 
     const fetchIchimokuCloud = async (candles) => {
@@ -59,13 +75,7 @@ const downBorderColor = '#008F28';
         return ichimokuCloud;
     }
 
-    let candles = await fetch('http://localhost:3000/services/candles/?symbol=BTCUSDT&limit=230&period=1h')
-        .then(response => {
-            if (!response.ok) {
-                throw new Error('Network response was not ok');
-            }
-            return response.json();
-        });
+    let candles = await fetchCandlessticks('BTCUSDT', 230, '1h')
 
     /**
      * Adicionar apenas os últimos 115 resultados para comparar com ichimoku cloud
@@ -73,9 +83,9 @@ const downBorderColor = '#008F28';
     let candlesOpenCloseLowHigh = splitData(candles.slice(-115).map(c => [c.openTime, c.close, c.open, c.low, c.high]))//.slice(-115);
 
     /**
-     * Traz 115 períodos a parte de 166 enviados.
+     * Traz 115 períodos a partir de 166 enviados.
      */
-    let ichimokuValues = await fetchIchimokuCloud(candles)
+    let ichimokuValues = await fetchIchimokuCloud(candles.slice(-166))
 
 
     option = {
@@ -225,7 +235,7 @@ const downBorderColor = '#008F28';
             {
                 name: 'MA200',
                 type: 'line',
-                data: calculateMA(200),
+                data: calculateMA(200, candles),
                 smooth: true,
                 lineStyle: {
                     opacity: 0.5
