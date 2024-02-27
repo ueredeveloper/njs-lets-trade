@@ -28,30 +28,30 @@ const downBorderColor = '#008F28';
         var result = [];
 
         let candlesValues = candles.map(c => [c.openTime, c.close, c.open, c.low, c.high])
-        for (var i = 0, len = candlesValues.values.length; i < len; i++) {
+        for (var i = 0, len = candlesValues.length; i < len; i++) {
             if (i < dayCount) {
                 result.push('-');
                 continue;
             }
             var sum = 0;
             for (var j = 0; j < dayCount; j++) {
-                sum += +candlesValues.values[i - j][1];
+                sum += +candlesValues[i - j][1];
             }
             result.push(sum / dayCount);
         }
         return result;
     }
 
-    const fetchCandlessticks = async (symbol, limit, period)=> {
+    const fetchCandlessticks = async (symbol, limit, period) => {
 
 
-       let candlesticks =  await fetch(`http://localhost:3000/services/candles/?symbol=${symbol}&limit=${limit}&period=${period}`)
-        .then(response => {
-            if (!response.ok) {
-                throw new Error('Network response was not ok');
-            }
-            return response.json();
-        });
+        let candlesticks = await fetch(`http://localhost:3000/services/candles/?symbol=${symbol}&limit=${limit}&period=${period}`)
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Network response was not ok');
+                }
+                return response.json();
+            });
 
         return candlesticks;
     }
@@ -75,7 +75,7 @@ const downBorderColor = '#008F28';
         return ichimokuCloud;
     }
 
-    let candles = await fetchCandlessticks('BTCUSDT', 230, '1h')
+    let candles = await fetchCandlessticks('BTCUSDT', 260, '1h')
 
     /**
      * Adicionar apenas os últimos 115 resultados para comparar com ichimoku cloud
@@ -87,6 +87,14 @@ const downBorderColor = '#008F28';
      */
     let ichimokuValues = await fetchIchimokuCloud(candles.slice(-166))
 
+    //console.log(ichimokuValues.map(ic => ic.spanA))
+
+    let spanA = ichimokuValues.map(ic => ic.spanA)
+    // Adiciona 25 períodos antes dos valores para que esta linha fique adiantada no chart.
+    Array.apply(null, Array(25)).map(arr=> spanA.unshift(arr))
+    let spanB= ichimokuValues.map(ic => ic.spanB)
+    // Adiciona 25 períodos antes dos valores para que esta linha fique adiantada no chart.
+    Array.apply(null, Array(25)).map(arr=> spanB.unshift(arr))
 
     option = {
         title: {
@@ -101,7 +109,7 @@ const downBorderColor = '#008F28';
         },
         legend: {
             //data: ['Candles', 'MA5', 'MA10', 'MA20', 'MA30']
-            data: ['Candles', 'MA200', 'ichiBaseLine']
+            data: ['Candles', 'MA200', 'Base Line', 'Conversion Line', 'Span A', 'Span B']
         },
         grid: {
             left: '10%',
@@ -235,14 +243,23 @@ const downBorderColor = '#008F28';
             {
                 name: 'MA200',
                 type: 'line',
-                data: calculateMA(200, candles),
+                data: calculateMA(200, candles).slice(-115),
                 smooth: true,
                 lineStyle: {
                     opacity: 0.5
                 }
             },
             {
-                name: 'ichiBaseLine',
+                name: 'Conversion Line',
+                type: 'line',
+                data: ichimokuValues.map(ic => ic.conversion),
+                smooth: true,
+                lineStyle: {
+                    opacity: 0.5
+                }
+            },
+            {
+                name: 'Base Line',
                 type: 'line',
                 data: ichimokuValues.map(ic => ic.base),
                 smooth: true,
@@ -250,6 +267,27 @@ const downBorderColor = '#008F28';
                     opacity: 0.5
                 }
             },
+            {
+                name: 'Span A',
+                type: 'line',
+                data: spanA,
+                smooth: true,
+                lineStyle: {
+                    opacity: 0.5
+                }
+            },
+            {
+                name: 'Span B',
+                type: 'line',
+                data: spanB,
+                smooth: true,
+                lineStyle: {
+                    opacity: 0.5
+                }
+            },
+
+
+
             /*{
                 name: 'MA10',
                 type: 'line',
