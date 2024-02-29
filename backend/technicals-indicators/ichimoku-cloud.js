@@ -6,23 +6,23 @@ const { fetchCandles } = require('../services')
 // bollinger technical
 router.get("/", async (req, res) => {
 
-    let {symbol,limit, period} = req.query;
+  let { symbol, interval, limit } = req.query;
 
-    let candles = await fetchCandles(symbol, 166, period)
-  
-    let input = {
-        high  : candles.map(c=> parseFloat(c.high)),
-        low   : candles.map(c=> parseFloat(c.low)),
-        conversionPeriod: 9,
-        basePeriod: 26,
-        spanPeriod: 52,
-        displacement: 26
-      }
+  let candles = await fetchCandles(symbol, interval, limit)
+
+  let input = {
+    high: candles.map(c => parseFloat(c.high)),
+    low: candles.map(c => parseFloat(c.low)),
+    conversionPeriod: 9,
+    basePeriod: 26,
+    spanPeriod: 52,
+    displacement: 26
+  }
 
 
-     let result = ichimokuCloud.calculate(input)
+  let result = ichimokuCloud.calculate(input)
 
-     res.send(result);
+  res.send(result);
 
 });
 

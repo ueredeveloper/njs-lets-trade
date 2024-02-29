@@ -1,41 +1,48 @@
-/*import * as echarts from 'echarts';
+/*import { renderShangaiIndexChart } from "./components/content/shanghai-index-chart";
+import ChartsList from "./components/content/charts-list";
 
-var chartDom = document.getElementById('main');
-var myChart = echarts.init(chartDom);
-var option;
+const chartsList = new ChartsList()
 
-fetch('http://localhost:3000/services/candles/?symbol=BTCUSDT&limit=23&period=1h')
-  .then(response => {
-    if (!response.ok) {
-      throw new Error('Network response was not ok');
-    }
-    return response.json();
-  })
-  .then(candles => {
+document.body.appendChild(chartsList)
+*/
+// intervals: 1m, 3m, 5m, 15m, 30m, 1h, 2h, 4h, 6h, 8h, 12h, 1d, 3d, 1w, 1M
+//renderShangaiIndexChart('SCUSDT', 266, '1m')
+//renderShangaiIndexChart('BTCUSDT', 266, '1m')
+/*
+import ChartList from "./components/content/chart-list";
+
+// Create a container element
+const container = document.createElement('div');
+
+// Set the innerHTML of the container to the markup returned by ChartsList
+container.innerHTML = ChartsList();
+
+// Append the container to the body of the document
+document.body.appendChild(container);*/
+
+//import renderCharts from "./components/content/chart-list";
+import renderQuoteCurrenciesButton from "./components/content/renderQuoteCurrenciesButton";
+import renderQuoteCurrencies from "./components/content/renderQuotesCurrencies";
+
+let currency = {
+    symbol: 'BTCUSDT',
+    limit: 266,
+    intervals: ['5m', '15m', '30m', '1h', '4h', '1d']
+}
+
+//renderCharts(currency)
+
+let tab = document.getElementById('tab-quote-currencies');
+
+tab.innerHTML = renderQuoteCurrencies();
+let topTab = document.getElementsByClassName('tab-buttons');
+
+topTab[0].appendChild(renderQuoteCurrenciesButton('London'));
+topTab[0].appendChild(renderQuoteCurrenciesButton('Paris'));
+topTab[0].appendChild(renderQuoteCurrenciesButton('Tokyo'));
 
 
-    option = {
-      xAxis: {
-        data: candles.map(c=> c.openTime)
-      },
-      yAxis: {},
-      series: [
-        {
-          type: 'candlestick',
-          data: 
-            candles.map(c=> [parseFloat(c.open), parseFloat(c.close), parseFloat(c.low), parseFloat(c.high)])
-          
-        }
-      ]
-    };
-    
-    option && myChart.setOption(option);
-    console.log(data); // Process the data received from the server
-  })
-  .catch(error => {
-    console.error('There was a problem with your fetch operation:', error);
-  });*/
 
-import { myChart } from "./shanghai-index";
+
 
 
