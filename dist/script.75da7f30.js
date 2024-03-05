@@ -450,10 +450,26 @@ var QuoteView = {
     }
     return renderList;
   }(),
-  includeStyles: function includeStyles() {
-    var cssLink = $('<link rel="stylesheet" type="text/css" href="/view/styles.css">');
-    $('head').append(cssLink);
-  }
+  includeStyles: function () {
+    var _includeStyles = _asyncToGenerator( /*#__PURE__*/_regeneratorRuntime().mark(function _callee3() {
+      return _regeneratorRuntime().wrap(function _callee3$(_context3) {
+        while (1) switch (_context3.prev = _context3.next) {
+          case 0:
+            // não está funcionando
+
+            //$('head').append('<link rel="stylesheet" type="text/css" href="/view/style.css">');
+            if (!document.getElementById) document.write('<link rel="stylesheet" type="text/css" href="/view/styles.css">');
+          case 1:
+          case "end":
+            return _context3.stop();
+        }
+      }, _callee3);
+    }));
+    function includeStyles() {
+      return _includeStyles.apply(this, arguments);
+    }
+    return includeStyles;
+  }()
 };
 var _default = exports.default = QuoteView;
 },{"../model/currency-model":"model/currency-model.js","../controller/currency-controller":"controller/currency-controller.js"}],"controller/quote-controller.js":[function(require,module,exports) {
@@ -544,7 +560,7 @@ var parent = module.bundle.parent;
 if ((!parent || !parent.isParcelRequire) && typeof WebSocket !== 'undefined') {
   var hostname = "" || location.hostname;
   var protocol = location.protocol === 'https:' ? 'wss' : 'ws';
-  var ws = new WebSocket(protocol + '://' + hostname + ':' + "55088" + '/');
+  var ws = new WebSocket(protocol + '://' + hostname + ':' + "56963" + '/');
   ws.onmessage = function (event) {
     checkedAssets = {};
     assetsToAccept = [];

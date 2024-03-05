@@ -1,1 +1,1 @@
-{"version":3,"sources":["view/styles.css"],"names":[],"mappings":"AAAA;AACA;AACA;AACA","file":"styles.685d68f1.css","sourceRoot":"..\\frontend","sourcesContent":["body{\r\n  background-color: blue;\r\n}\r\n"]}
+{"version":3,"sources":["view/styles.css"],"names":[],"mappings":"AAAA;AACA;AACA","file":"styles.685d68f1.css","sourceRoot":"..\\frontend","sourcesContent":["li {\r\n    float: left;\r\n  }"]}

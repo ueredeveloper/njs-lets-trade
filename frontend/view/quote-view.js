@@ -51,10 +51,12 @@ const QuoteView = {
 
 
     },
-    includeStyles: function () {
+    includeStyles: async function () {
+
+        // não está funcionando
      
-        const cssLink = $('<link rel="stylesheet" type="text/css" href="/view/styles.css">');
-        $('head').append(cssLink);
+        //$('head').append('<link rel="stylesheet" type="text/css" href="/view/style.css">');
+       // if (!document.getElementById) document.write('<link rel="stylesheet" type="text/css" href="/view/styles.css">');
     }
     
 };
