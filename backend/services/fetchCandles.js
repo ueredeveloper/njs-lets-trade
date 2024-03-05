@@ -4,9 +4,9 @@ const { getClandles } = require('../binance')
 
 router.get("/candles", async (req, res) => {
 
-    let {symbol, limit, period} = req.query;
+    let {symbol, limit, interval} = req.query;
 
-    await getClandles(symbol, limit, period).then(response=> {res.send(JSON.stringify(response))})
+    await getClandles(symbol, limit, interval).then(response=> {res.send(JSON.stringify(response))})
 
 });
 

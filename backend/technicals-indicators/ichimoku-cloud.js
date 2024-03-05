@@ -6,9 +6,9 @@ const { fetchCandles } = require('../services')
 // bollinger technical
 router.get("/", async (req, res) => {
 
-    let {symbol,limit, period} = req.query;
+    let {symbol,limit, interval} = req.query;
 
-    let candles = await fetchCandles(symbol, 166, period)
+    let candles = await fetchCandles(symbol, limit, interval)
   
     let input = {
         high  : candles.map(c=> parseFloat(c.high)),
