@@ -17,7 +17,7 @@ const QuoteView = {
         // Cria uma array de cotações de forma assíncrona.
         let quotes = await this.quotes;
         // Cria array de li tags com a array de cotações.
-        let liTags = quotes.map(quote => '<li><a class="float-left mx-2">' + quote + '</a></li>');
+        let liTags = quotes.map(quote => '<li><a class="float-left mx-2 cursor-pointer">' + quote + '</a></li>');
         // Concatena como string a array de li tags.
         liTags = liTags.join('')
 

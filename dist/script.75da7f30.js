@@ -139,7 +139,7 @@ var CurrencyView = {
           case 0:
             this.textInput = $('#textInput');
             this.addButton = $('#addButton');
-            this.currenciesTable = $('#currencies-table');
+            this.currenciesTable = $('#list-currencies');
             this.addButton.on('click', function () {
               _currencyController.default.addCurrency({
                 symbol: CurrencyView.textInput.val()
@@ -159,7 +159,7 @@ var CurrencyView = {
                       currencies = _context.sent;
                       // Filtra por quotação, por exemplo: USDT.
                       currenciesFilteredByQuote = CurrencyView.filterCurrenciesByQuote(currencies, selectedQuote); // Busca a tag tbody dentro da tag table e limpa esta tabela para novas linhas.
-                      table = $('#currencies-table').empty();
+                      table = $('#list-currencies').empty();
                       CurrencyView.createTable(table);
                       CurrencyView.fillTable(table, currenciesFilteredByQuote);
                     case 7:
@@ -212,7 +212,7 @@ var CurrencyView = {
    * @param {*} table 
    */
   createTable: function createTable(table) {
-    table.append("\n      <table>\n        <tbody>\n          <tr>\n            <th class=\"w-9/12\">S\xEDmbolo</th>\n            <th>Pre\xE7o</th>\n          </tr>\n        </tbody>\n      </table>\n    ");
+    table.append("\n      <table class=\"\">\n        <!-- congela a tag thead -->\n        <thead class=\"sticky top-0 z-10\" >\n          <tr class=\"bg-zinc-100\">\n            <th>S\xEDmbolo</th>\n            <th>Pre\xE7o</th>\n          </tr>\n        </thead>\n        <tbody></tbody>\n      </table>\n    ");
   },
   /**
    * Preenche tabela com valores.
@@ -390,6 +390,16 @@ var CurrencyController = {
               "symbol": "PARCELUSDC",
               "price": "0.00131400",
               "currency_collections": [[]]
+            }, {
+              "id": null,
+              "symbol": "CORHUSDT",
+              "price": "0.00131400",
+              "currency_collections": [[]]
+            }, {
+              "id": null,
+              "symbol": "ETHUSDT",
+              "price": "0.00131400",
+              "currency_collections": [[]]
             }];
           case 2:
             currencies = _context.sent;
@@ -501,7 +511,7 @@ var QuoteView = {
             quotes = _context2.sent;
             // Cria array de li tags com a array de cotações.
             liTags = quotes.map(function (quote) {
-              return '<li><a class="float-left mx-2">' + quote + '</a></li>';
+              return '<li><a class="float-left mx-2 cursor-pointer">' + quote + '</a></li>';
             }); // Concatena como string a array de li tags.
             liTags = liTags.join('');
             this.div.append("\n            <ul id=\"quote-view\" >\n                ".concat(liTags, "\n            </ul>\n            "));
@@ -606,7 +616,7 @@ var parent = module.bundle.parent;
 if ((!parent || !parent.isParcelRequire) && typeof WebSocket !== 'undefined') {
   var hostname = "" || location.hostname;
   var protocol = location.protocol === 'https:' ? 'wss' : 'ws';
-  var ws = new WebSocket(protocol + '://' + hostname + ':' + "62220" + '/');
+  var ws = new WebSocket(protocol + '://' + hostname + ':' + "62170" + '/');
   ws.onmessage = function (event) {
     checkedAssets = {};
     assetsToAccept = [];

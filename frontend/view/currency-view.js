@@ -5,7 +5,7 @@ const CurrencyView = {
   init: async function () {
     this.textInput = $('#textInput');
     this.addButton = $('#addButton');
-    this.currenciesTable = $('#currencies-table')
+    this.currenciesTable = $('#list-currencies')
     this.addButton.on('click', function () {
       CurrencyController.addCurrency({ symbol: CurrencyView.textInput.val() });
       CurrencyView.textInput.val('');
@@ -17,8 +17,8 @@ const CurrencyView = {
       // Filtra por quotação, por exemplo: USDT.
       let currenciesFilteredByQuote = CurrencyView.filterCurrenciesByQuote(currencies, selectedQuote);
       // Busca a tag tbody dentro da tag table e limpa esta tabela para novas linhas.
-      let table = $('#currencies-table').empty();
-      
+      let table = $('#list-currencies').empty();
+
       CurrencyView.createTable(table)
 
       CurrencyView.fillTable(table, currenciesFilteredByQuote)
@@ -42,13 +42,15 @@ const CurrencyView = {
   createTable: function (table) {
 
     table.append(`
-      <table>
-        <tbody>
-          <tr>
-            <th class="w-9/12">Símbolo</th>
+      <table class="">
+        <!-- congela a tag thead -->
+        <thead class="sticky top-0 z-10" >
+          <tr class="bg-zinc-100">
+            <th>Símbolo</th>
             <th>Preço</th>
           </tr>
-        </tbody>
+        </thead>
+        <tbody></tbody>
       </table>
     `);
   },
@@ -81,6 +83,5 @@ const CurrencyView = {
   }
 
 };
-
 
 export default CurrencyView;

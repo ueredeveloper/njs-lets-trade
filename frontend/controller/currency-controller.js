@@ -5,7 +5,7 @@ import CurrencyView from "../view/currency-view";
 const CurrencyController = {
     init: async function () {
         // Buscando pela binanace
-        // CurrencyModel.currencies = await fetchAllCurrencies();
+        //CurrencyModel.currencies = await fetchAllCurrencies();
 
         // Exemplo de teste com duas moedas
         let currencies = await [
@@ -17,6 +17,8 @@ const CurrencyController = {
             { "id": null, "symbol": "LEFTUSDT", "price": "0.00131400", "currency_collections": [[]] },
             { "id": null, "symbol": "RIGHBNB", "price": "0.00131400", "currency_collections": [[]] },
             { "id": null, "symbol": "PARCELUSDC", "price": "0.00131400", "currency_collections": [[]] },
+            { "id": null, "symbol": "CORHUSDT", "price": "0.00131400", "currency_collections": [[]] },
+            { "id": null, "symbol": "ETHUSDT", "price": "0.00131400", "currency_collections": [[]] },
         ]
         CurrencyModel.currencies = currencies;
 
