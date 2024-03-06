@@ -1,64 +1,32 @@
-import CurrencyModel from "../model/currency-model";
-import CurrencyController from "../controller/currency-controller";
+import QuoteModel from "../model/quotes-model";
 
 const QuoteView = {
     init: async function () {
         this.div = $('#list-quotes');
-        // this.addButton = $('#addButton');
-        // this.currenciesTable = $('#currencies-table')
-        // this.addButton.on('click', function () {
-        //   CurrencyController.addCurrency({ symbol: QuoteView.textInput.val() });
-        //   QuoteView.textInput.val('');
-        // });
-        this.includeStyles();
+        this.quotes = QuoteModel.getQuotes();
         this.renderList();
-        
+        this.div.on('click', 'li', function () {
+            const selectedQuote = $(this).text().trim();
+            console.log(selectedQuote)
+            // Trigger an event to notify about the quote change
+            $(document).trigger('quoteChanged', selectedQuote);
+        });
+
     },
     renderList: async function () {
-
-        // this.div.empty();
-        // let currencies = await CurrencyModel.getCurrencies();
+        // Cria uma array de cotações de forma assíncrona.
+        let quotes = await this.quotes;
+        // Cria array de li tags com a array de cotações.
+        let liTags = quotes.map(quote => '<li><a class="float-left mx-2">' + quote + '</a></li>');
+        // Concatena como string a array de li tags.
+        liTags = liTags.join('')
 
         this.div.append(`
-            <ul id="quote-view">
-                <li><a href="#home">Home</a></li>
-                <li><a href="#news">News</a></li>
-                <li><a href="#contact">Contact</a></li>
-                <li><a href="#about">About</a></li>
+            <ul id="quote-view" >
+                ${liTags}
             </ul>
-    `)
-
-        // this.currenciesTable.append(`
-        //   <table>
-        //     <tbody>
-        //       <tr>
-        //         <th>Símbolo</th>
-        //         <th>Preço</th>
-        //       </tr>
-        //     </tbody>
-        //   </table>
-        // `);
-
-        // const tbody = this.currenciesTable.find('tbody');
-        // currencies.forEach(function (item) {
-        //   tbody.append(`
-        //   <tr>
-        //     <td>${item.symbol}</td>
-        //     <td>${item.price}</td>
-        //   </tr>
-        // `);
-        // });
-
-
-    },
-    includeStyles: async function () {
-
-        // não está funcionando
-     
-        //$('head').append('<link rel="stylesheet" type="text/css" href="/view/style.css">');
-       // if (!document.getElementById) document.write('<link rel="stylesheet" type="text/css" href="/view/styles.css">');
+            `);
     }
-    
 };
 
 

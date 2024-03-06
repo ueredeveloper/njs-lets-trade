@@ -10,39 +10,74 @@ const CurrencyView = {
       CurrencyController.addCurrency({ symbol: CurrencyView.textInput.val() });
       CurrencyView.textInput.val('');
     });
-    this.renderList();
+    this.tbody = this.renderList();
+    $(document).on('quoteChanged', async function (event, selectedQuote) {
+      // Busca todas as moedas
+      let currencies = await CurrencyModel.getCurrencies();
+      // Filtra por quotação, por exemplo: USDT.
+      let currenciesFilteredByQuote = CurrencyView.filterCurrenciesByQuote(currencies, selectedQuote);
+      // Busca a tag tbody dentro da tag table e limpa esta tabela para novas linhas.
+      let table = $('#currencies-table').empty();
+      
+      CurrencyView.createTable(table)
+
+      CurrencyView.fillTable(table, currenciesFilteredByQuote)
+
+    });
   },
   renderList: async function () {
 
-    this.currenciesTable.empty();
     let currencies = await CurrencyModel.getCurrencies();
+    let currenciesFilteredByQuote = this.filterCurrenciesByQuote(currencies, 'USDT')
 
-    this.currenciesTable.append(`
+    this.createTable(this.currenciesTable)
+
+    this.fillTable(this.currenciesTable, currenciesFilteredByQuote)
+
+  },
+  /**
+   * Cria tabela com moedas (símbolo, valor).
+   * @param {*} table 
+   */
+  createTable: function (table) {
+
+    table.append(`
       <table>
         <tbody>
           <tr>
-            <th>Símbolo</th>
+            <th class="w-9/12">Símbolo</th>
             <th>Preço</th>
           </tr>
         </tbody>
       </table>
     `);
+  },
+  /**
+   * Preenche tabela com valores.
+   * @param {*} table 
+   * @param {*} currencies 
+   */
+  fillTable: function (table, currencies) {
 
-    const tbody = this.currenciesTable.find('tbody');
+    let tbody = table.find('tbody');
+
     currencies.forEach(function (item) {
       tbody.append(`
-      <tr>
-        <td>${item.symbol}</td>
-        <td>${item.price}</td>
-      </tr>
-    `);
+        <tr>
+          <td>${item.symbol}</td>
+          <td>${item.price}</td>
+        </tr>
+      `);
     });
-
-
-
-
-
-
+  },
+  /**
+   * Filtra por cotação, por exemplo: USDT.
+   * @param {*} currencies 
+   * @param {*} quote 
+   * @returns 
+   */
+  filterCurrenciesByQuote: function (currencies, quote) {
+    return currencies.filter(currency => currency.symbol.endsWith(quote))
   }
 
 };

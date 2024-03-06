@@ -11,6 +11,12 @@ const CurrencyController = {
         let currencies = await [
             { "id": null, "symbol": "ETHBTC", "price": "0.05522000", "currency_collections": [[]] },
             { "id": null, "symbol": "LTCBTC", "price": "0.00131400", "currency_collections": [[]] },
+            { "id": null, "symbol": "DYDXUSDT", "price": "0.00131400", "currency_collections": [[]] },
+            { "id": null, "symbol": "JASMYUSDC", "price": "0.00131400", "currency_collections": [[]] },
+            { "id": null, "symbol": "ROMBNB", "price": "0.00131400", "currency_collections": [[]] },
+            { "id": null, "symbol": "LEFTUSDT", "price": "0.00131400", "currency_collections": [[]] },
+            { "id": null, "symbol": "RIGHBNB", "price": "0.00131400", "currency_collections": [[]] },
+            { "id": null, "symbol": "PARCELUSDC", "price": "0.00131400", "currency_collections": [[]] },
         ]
         CurrencyModel.currencies = currencies;
 
