@@ -1,6 +1,7 @@
 import CandleView from "../view/candle-view";
 
 const CandleModel = {
+  
   candles: [[
     {
       openTime: 0,

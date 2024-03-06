@@ -1,6 +1,7 @@
 import CurrencyView from "../view/currency-view";
 
 const IndicatorModel = {
+    
     indicators: ['MA9', 'MA21', 'MA200', 'Bollinger Bands', 'Ichimoku Cloud'],
     ichomokuLines: ['Conversion', 'Baseline', 'Span A', 'Span B' ],
     addIndicator: function (item) {

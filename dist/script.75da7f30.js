@@ -952,7 +952,7 @@ var CandleView = {
                   while (1) switch (_context.prev = _context.next) {
                     case 0:
                       _this.interval = value;
-                      console.log('candle view ', _this.inverval);
+                      console.log('candle view ', _this.interval);
                     case 2:
                     case "end":
                       return _context.stop();
@@ -1034,7 +1034,6 @@ var CandleView = {
                         results.forEach(function (result) {
                           var currency = result.currency,
                             ichimokuCloud = result.ichimokuCloud;
-                          console.log(ichimokuCloud[114].base, ichimokuCloud[114].conversion);
                           if (ichimokuCloud[114].base > ichimokuCloud[114].conversion) {
                             coins.push(currency.symbol);
                           }
@@ -1224,7 +1223,7 @@ var parent = module.bundle.parent;
 if ((!parent || !parent.isParcelRequire) && typeof WebSocket !== 'undefined') {
   var hostname = "" || location.hostname;
   var protocol = location.protocol === 'https:' ? 'wss' : 'ws';
-  var ws = new WebSocket(protocol + '://' + hostname + ':' + "53001" + '/');
+  var ws = new WebSocket(protocol + '://' + hostname + ':' + "54022" + '/');
   ws.onmessage = function (event) {
     checkedAssets = {};
     assetsToAccept = [];

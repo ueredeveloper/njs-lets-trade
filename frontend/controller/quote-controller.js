@@ -2,6 +2,7 @@ import QuoteModel from "../model/quotes-model";
 import QuoteView from "../view/quote-view";
 
 
+
 const QuoteController = {
     init: async function () {
       

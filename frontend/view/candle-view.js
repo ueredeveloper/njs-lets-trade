@@ -11,12 +11,13 @@ const CandleView = {
     // Inicializa os intervalos na tag criada.
     IntervalController.init();
 
+    
     this.interval = '1h';
 
     $(document).on('intervalChanged',
       async (event, value) => {
         this.interval = value;
-        console.log('candle view ', this.inverval)
+        console.log('candle view ', this.interval)
       })
 
     $(document).on('onClickButtonIndicatorView', async (event) => {
@@ -67,7 +68,7 @@ const CandleView = {
         .then(results => {
             results.forEach(result => {
                 let { currency, ichimokuCloud } = result;
-                console.log(ichimokuCloud[114].base , ichimokuCloud[114].conversion)
+                
                 if (ichimokuCloud[114].base > ichimokuCloud[114].conversion) {
                     coins.push(currency.symbol);
                 }

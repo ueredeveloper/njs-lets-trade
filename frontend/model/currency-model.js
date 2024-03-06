@@ -1,6 +1,7 @@
 import CurrencyView from "../view/currency-view";
 
 const CurrencyModel = {
+  
     currencies : [
       { "id": null, "symbol": "ETHBTC", "price": "0.05522000", "currency_collections": [[]] },
       { "id": null, "symbol": "LTCBTC", "price": "0.00131400", "currency_collections": [[]] },

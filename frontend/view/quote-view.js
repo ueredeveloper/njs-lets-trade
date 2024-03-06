@@ -1,5 +1,6 @@
 import QuoteModel from "../model/quotes-model";
 
+
 const QuoteView = {
     init: async function () {
         this.div = $('#list-quotes');
