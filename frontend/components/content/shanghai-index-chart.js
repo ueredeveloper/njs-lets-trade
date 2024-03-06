@@ -1,16 +1,18 @@
 import * as echarts from 'echarts';
+import { convertOpenTime } from '../../utils/convertOpenTime';
 
-var chartDom = document.getElementById('main');
-var myChart = echarts.init(chartDom);
-var option;
 
-const upColor = '#ec0000';
-const upBorderColor = '#8A0000';
-const downColor = '#00da3c';
-const downBorderColor = '#008F28';
-// Each item: open，close，lowest，highest
 
-(async () => {
+const renderShangaiIndexChart = async (div, symbol, limit, interval) => {
+
+    // var chartDom = document.getElementById(id);
+    var shangaiIndexChart = echarts.init(div);
+    var option;
+
+    const upColor = '#ec0000';
+    const upBorderColor = '#8A0000';
+    const downColor = '#00da3c';
+    const downBorderColor = '#008F28';
 
     function splitData(rawData) {
         const categoryData = [];
@@ -42,10 +44,10 @@ const downBorderColor = '#008F28';
         return result;
     }
 
-    const fetchCandlessticks = async (symbol, limit, period) => {
+    const fetchCandlesticks = async (symbol, limit, interval) => {
 
 
-        let candlesticks = await fetch(`http://localhost:3000/services/candles/?symbol=${symbol}&limit=${limit}&period=${period}`)
+        let candlesticks = await fetch(`http://localhost:3000/services/candles/?symbol=${symbol}&limit=${limit}&interval=${interval}`)
             .then(response => {
                 if (!response.ok) {
                     throw new Error('Network response was not ok');
@@ -75,30 +77,26 @@ const downBorderColor = '#008F28';
         return ichimokuCloud;
     }
 
-    let candles = await fetchCandlessticks('BTCUSDT', 260, '1h')
+    let candles = await fetchCandlesticks(symbol, limit, interval)
 
-    /**
-     * Adicionar apenas os últimos 115 resultados para comparar com ichimoku cloud
-     */
-    let candlesOpenCloseLowHigh = splitData(candles.slice(-115).map(c => [c.openTime, c.close, c.open, c.low, c.high]))//.slice(-115);
 
-    /**
-     * Traz 115 períodos a partir de 166 enviados.
-     */
+    // Adicionar apenas os últimos 115 resultados para comparar com ichimoku cloud
+    // Ordenação: openTime, open，close，lowest，highest
+    let candlesOpenCloseLowHigh = splitData(candles.slice(-115).map(c => [convertOpenTime(c.openTime, interval), c.close, c.open, c.low, c.high]));
+
+    //Traz 115 períodos a partir de 166 enviados.
     let ichimokuValues = await fetchIchimokuCloud(candles.slice(-166))
-
-    //console.log(ichimokuValues.map(ic => ic.spanA))
 
     let spanA = ichimokuValues.map(ic => ic.spanA)
     // Adiciona 25 períodos antes dos valores para que esta linha fique adiantada no chart.
-    Array.apply(null, Array(25)).map(arr=> spanA.unshift(arr))
-    let spanB= ichimokuValues.map(ic => ic.spanB)
+    Array.apply(null, Array(25)).map(arr => spanA.unshift(arr))
+    let spanB = ichimokuValues.map(ic => ic.spanB)
     // Adiciona 25 períodos antes dos valores para que esta linha fique adiantada no chart.
-    Array.apply(null, Array(25)).map(arr=> spanB.unshift(arr))
+    Array.apply(null, Array(25)).map(arr => spanB.unshift(arr))
 
     option = {
         title: {
-            text: 'Candlestick',
+            text: '', //`${symbol}, ${interval}`,
             left: 0
         },
         tooltip: {
@@ -108,13 +106,20 @@ const downBorderColor = '#008F28';
             }
         },
         legend: {
-            //data: ['Candles', 'MA5', 'MA10', 'MA20', 'MA30']
-            data: ['Candles', 'MA200', 'Base Line', 'Conversion Line', 'Span A', 'Span B']
+            data: ['Candles', 'MA200', 'Base Line', 'Conversion Line', 'Span A', 'Span B'],
+            selected: {
+                'Candles': true, // Somente Candles e MA200 não selecionadas
+                'MA200': true, 
+                'Base Line': false,
+                'Conversion Line': false,
+                'Span A': false,
+                'Span B': false
+            }
         },
         grid: {
             left: '10%',
-            right: '10%',
-            bottom: '15%'
+            right: '5%',
+            bottom: '20%'
         },
         xAxis: {
             type: 'category',
@@ -134,7 +139,7 @@ const downBorderColor = '#008F28';
         dataZoom: [
             {
                 type: 'inside',
-                start: 50,
+                start: 70,
                 end: 100
             },
             {
@@ -318,13 +323,8 @@ const downBorderColor = '#008F28';
         ]
     };
 
-    option && myChart.setOption(option);
+    option && shangaiIndexChart.setOption(option);
 
+}
 
-
-})();
-
-
-
-
-export { myChart }
+export { renderShangaiIndexChart }

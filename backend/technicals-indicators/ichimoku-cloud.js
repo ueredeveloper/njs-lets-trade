@@ -19,10 +19,9 @@ router.get("/", async (req, res) => {
         displacement: 26
       }
 
+  let result = ichimokuCloud.calculate(input)
 
-     let result = ichimokuCloud.calculate(input)
-
-     res.send(result);
+  res.send(result);
 
 });
 

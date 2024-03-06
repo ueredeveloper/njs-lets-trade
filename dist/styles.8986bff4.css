@@ -1,0 +1,36 @@
+div.scrollmenu {
+  background-color: #333;
+  overflow: auto;
+  white-space: nowrap;
+}
+
+div.scrollmenu a {
+  display: inline-block;
+  color: white;
+  text-align: center;
+  padding: 14px;
+  text-decoration: none;
+}
+
+div.scrollmenu a:hover {
+  background-color: #777;
+}
+
+/* container com charts renderizando horizontalmente e com scrool horizontal */
+#charts-container {
+  display: flex;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: auto;
+  height: 200px;
+}
+
+/* tamanho mínimo do chart */
+.chart {
+  width: 600px;
+  min-width: 600px;
+
+  height: 100%;
+}
+
+/*# sourceMappingURL=/styles.8986bff4.css.map */
