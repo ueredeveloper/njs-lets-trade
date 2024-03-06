@@ -10,7 +10,7 @@ const CurrencyView = {
       CurrencyController.addCurrency({ symbol: CurrencyView.textInput.val() });
       CurrencyView.textInput.val('');
     });
-    this.tbody = this.renderList();
+    this.renderList();
     $(document).on('quoteChanged', async function (event, selectedQuote) {
       // Busca todas as moedas
       let currencies = await CurrencyModel.getCurrencies();
