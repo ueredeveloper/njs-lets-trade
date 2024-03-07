@@ -182,7 +182,6 @@ const currenciesTable = () => {
       td.appendChild(selectRowButton())
        //td.insertAdjacentHTML('beforeend', selectRowButton());
 
-     //console.log(td.childNodes)
         tr.appendChild(td)
 
         container.getElementsByTagName('tbody')[0].appendChild(tr)

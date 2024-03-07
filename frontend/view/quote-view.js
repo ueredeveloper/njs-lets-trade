@@ -8,8 +8,7 @@ const QuoteView = {
         this.renderList();
         this.div.on('click', 'li', function () {
             const selectedQuote = $(this).text().trim();
-            console.log(selectedQuote)
-            // Trigger an event to notify about the quote change
+
             $(document).trigger('quoteChanged', selectedQuote);
         });
 

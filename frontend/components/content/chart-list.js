@@ -4,7 +4,7 @@ const renderCharts = (currency) => {
 
   currency.intervals.forEach ((interval, index) => {
 
-    console.log(interval)
+  
 
     let container = document.getElementById('charts-container');
     let div = document.createElement('div');

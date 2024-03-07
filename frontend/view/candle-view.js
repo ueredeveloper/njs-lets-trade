@@ -4,6 +4,7 @@ import fetchCandlesticksAndCloud from "../services/fetchCandlesAndIchimokuCloud"
 import ichimokuLinesCompartions from "../utils/compareIchimokuLines";
 import compareIchimokuLines from "../utils/compareIchimokuLines";
 import fetchCandlesAndSMA from "../services/fetchCandlesAndSMA";
+import compareCandlesAndSMA from "../utils/compareCandlesAndSMA";
 
 const CandleView = {
 
@@ -23,59 +24,56 @@ const CandleView = {
       "indicator": "Ichimoku"
     }
 
+    this.filteredCurrencyByQuote;
     $(document).on('intervalChanged', (event, value) => {
       this.interval = value;
     });
 
     $(document).on('onIndicatorChange', async (event, params) => {
       this.indicatorParams = params;
-      console.log( this.indicatorParams.line1 + '|' + this.indicatorParams.compare + '|' + this.indicatorParams.line2
-      )
     })
 
     $(document).on('onClickButtonIndicatorView', async (event) => {
 
-    
+
       let indicator = this.indicatorParams.indicator;
 
       let condition = this.indicatorParams.line1 + '|' + this.indicatorParams.compare + '|' + this.indicatorParams.line2;
 
+      let symbolCandlesAndSMA;
+      let smaResult;
 
-     /* if (this.indicatorParams.indicator == "Ichimoku") {
-        let result = await ichimokuLinesCompartions(symbolCandlesAndIchimoku, condition)
+      this.filteredCurrencyByQuote = await CurrencyModel.currencies.filter(currency => currency.symbol.endsWith('USDT'))
 
-        console.log(result)
-      } else {
-        console.log(indicator)
-      }*/
-
-       /*
-    indicators: ['MA09', 'MA21', 'MA200', 'Bollinger Bands', 'Ichimoku Cloud'],
-    ichomokuLines: ['Conversion', 'Baseline', 'Span A', 'Span B' ]
-    */
+      console.log('filtered ', this.filteredCurrencyByQuote)
 
       switch (this.indicatorParams.indicator) {
         case 'MA09':
-            let symbolCandlesandSMA = await fetchCandlesAndSMA(CurrencyModel.currencies, this.interval, 66);
-            //let result  = await compare
-            break;
+          symbolCandlesAndSMA = await fetchCandlesAndSMA(this.filteredCurrencyByQuote, this.interval, 9, 21);
+          smaResult = await compareCandlesAndSMA(symbolCandlesAndSMA);
+          console.log(smaResult)
+          break;
         case 'MA21':
-            console.log(' iMA21')
-            break;
-            case 'MA200':
-            console.log(' ima200')
-            break;
-            case 'Bollinger Bands':
-            console.log(' iboll')
-            break;
+          symbolCandlesAndSMA = await fetchCandlesAndSMA(this.filteredCurrencyByQuote, this.interval, 21, 32);
+          smaResult = await compareCandlesAndSMA(symbolCandlesAndSMA);
+          console.log(smaResult)
+          break;
+        case 'MA200':
+          symbolCandlesAndSMA = await fetchCandlesAndSMA(this.filteredCurrencyByQuote, this.interval, 200, 232);
+          smaResult = await compareCandlesAndSMA(symbolCandlesAndSMA);
+          console.log(smaResult)
+          break;
+        case 'Bollinger Bands':
+          console.log('bollinger bands')
+          break;
         default:
           //Busca candles e ichimoku cloud
-          let symbolCandlesAndIchimoku = await fetchCandlesticksAndCloud(CurrencyModel.currencies, this.interval)
+          let symbolCandlesAndIchimoku = await fetchCandlesticksAndCloud(this.filteredCurrencyByQuote, this.interval)
           // Compara as linhas ichimoku
           let result = await compareIchimokuLines(symbolCandlesAndIchimoku, condition)
 
           console.log(result)
-    }
+      }
 
     });
 

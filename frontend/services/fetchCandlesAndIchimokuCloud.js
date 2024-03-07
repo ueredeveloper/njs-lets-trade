@@ -20,7 +20,8 @@ const fetchCandlesticksAndCloud = (currencies, interval)=>{
               headers: {
                 'Content-Type': 'application/json'
               },
-              body: JSON.stringify(candlesticks)
+              // A array de candles deve 166 resultas e retornar assim 115 valores ichimoku
+              body: JSON.stringify(candlesticks.slice(-166))
             }).then(response => {
               if (!response.ok) {
                 throw new Error('Network response was not ok');

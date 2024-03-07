@@ -15,7 +15,6 @@ const compareIchimokuLines = async (symbolCandlesAndIchimoku, condition) => {
         */
 
         let lastIchimoku = ichimokuCloud.slice(-1)[0];
-        console.log(lastIchimoku)
 
         switch (condition) {
            
