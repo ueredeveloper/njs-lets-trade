@@ -3,56 +3,64 @@ import IndicatorModel from "../model/indicators-model";
 
 
 const IndicatorView = {
+
+    /*
+    indicators: ['MA09', 'MA21', 'MA200', 'Bollinger Bands', 'Ichimoku Cloud'],
+    ichomokuLines: ['Conversion', 'Baseline', 'Span A', 'Span B' ]
+    */
     init: async function () {
         this.div = $('#list-indicators');
         this.indicators = IndicatorModel.getIndicators();
         this.ichimokuLines = IndicatorModel.getIchimokuLines();
+
+        this.indicatorParams = {
+            "line1": "Conversion",
+            "compare": "below",
+            "line2": "Baseline",
+            "indicator": "Ichimoku"
+        }
         this.renderList();
-       
-        $(document).on('click', 'button', function(){
+        /**
+         * Ação de busca
+         */
+        $(document).on('click', 'button', function () {
             // adicionar intervalor symbol, limit, interval nos parametros
-            $(document).trigger('onClickButtonIndicatorView', 'params');
+            $(document).trigger('onClickButtonIndicatorView', 'indicatorParams');
         });
 
-        this.div
-            .on('click', 'input', function () {
-                let value = $(this).val();
-         
-                switch (value) {
-                    case 'MA09':
-                      console.log('Ma 09');
-                      break;
-                    case 'MA21':
-                        console.log('Ma 21');
-                      break;
-                    case 'MA200':
-                        console.log('Ma 200');
-                      break;
-                    case 'Bollinger':
-                        console.log('Bollinger Bands');
-                      break;
-                    
-                    default:
-                        // Ichimoku Clouds
-                      console.log(`${value}.`);
-                  }
+        /**
+         * Muda o tipo de indicador
+         */
+        this.div.on('click', 'input', (event) => {
 
+            let value = $(event.target).val();
 
+            this.indicatorParams.indicator = value;
 
+            $(document).trigger('onIndicatorChange', this.indicatorParams);
 
+        });
+        /**
+         * Muda as comparações entre as linhas Ichimoku, ex: linha de  conversão abaixo da linha base.
+         */
 
-                //$(document).trigger('intervalChanged', value);
+        $(document).on('onSelectsChange', async (event, indicatorParams) => {
+            // Parâmetros enviados pelos selects e options
+            let { name, value } = indicatorParams;
+            // Preencher a variável `this.indicatorParams` com valores.
+            switch (name) {
+                case 'selectLine1':
+                    this.indicatorParams.line1 = value;
+                    break;
+                case 'selectCompare':
+                    this.indicatorParams.compare = value;
+                    break;
+                default:
+                    this.indicatorParams.line2 = value;
+            }
 
-
-
-
-
-            });
-
-    this.div.on('change', 'select', function(){
-        let value = $(this).val();
-        console.log(value)
-    })
+            $(document).trigger('onIndicatorChange', this.indicatorParams);
+        })
 
     },
     renderList: async function () {
@@ -79,58 +87,73 @@ const IndicatorView = {
         // Concatena como string a array de li tags.
         ichiTags = ichiTags.join('');
 
-
         this.createIchimokuSelectLines(this.div);
         this.fillIchimokuSelectLines();
         this.createIndicatorButton(this.div)
 
     },
-    createIndicatorsForm(div) {
+    createIndicatorsForm: function (div) {
         this.div.append('<form id="indicators-form" class="mx-5"></form><br>')
     },
-    fillIndicatorsForm(tags) {
+    fillIndicatorsForm: function (tags) {
         let form = $('#indicators-form');
         form.append(`${tags}`);
     },
-    createIchimokuSelectLines(div) {
+    createIchimokuSelectLines: function (div) {
         this.div.append(
             `
-            <select id="select-line-1" class="mx-2"></select>
+            <select id="selectLine1" class="mx-2"></select>
             <select id="selectCompare" class="mx-2"></select>
-            <select id="select-line-2" class="mx-2"></select>
+            <select id="selectLine2" class="mx-2"></select>
             `
         )
     },
-    fillIchimokuSelectLines() {
-        let select1 = $('#select-line-1');
-        select1.append(
-            `
-                <option value="">-- Linha Ichimoku --</option>
-                <option value="conversionLine">Linha de Conversão</option>
-                <option value="baseLine">Linha de Base</option>
-                <option value="spanA">Linha Span A</option>
-                <option value="spanB">Linha Span B</option>
-                `
-        )
-        let selectCompare = $('#selectCompare');
-        selectCompare.append(
-            `
-                    <option value="">-- Comparação --</option>
-                    <option value="above">Acima</option>
-                    <option value="below">Abaixo</option>
-                    `
-        )
-        let select2 = $('#select-line-2');
+    fillIchimokuSelectLines: function () {
 
-        select2.append(
+        let selectLine1 = $('#selectLine1');
+
+        selectLine1.append(
             `
             <option value="">-- Linha Ichimoku --</option>
-            <option value="conversionLine">Linha de Conversão</option>
-            <option value="baseLine">Linha de Base</option>
-            <option value="spanA">Linha Span A</option>
-            <option value="spanB">Linha Span B</option>
+            <option value="Conversion">Linha de Conversão</option>
+            <option value="Baseline">Linha de Base</option>
+            <option value="span A">Linha Span A</option>
+            <option value="span B">Linha Span B</option>
+                `
+        );
+        selectLine1.on('change', function () {
+            let value = $(this).val();
+            $(document).trigger('onSelectsChange', { value: value, name: 'selectLine1' });
+        });
+
+        let selectCompare = $('#selectCompare');
+
+        selectCompare.append(
             `
-        )
+            <option value="">-- Comparação --</option>
+            <option value="above">Acima</option>
+            <option value="below">Abaixo</option>
+            `
+        );
+        selectCompare.on('change', function () {
+            let value = $(this).val();
+            $(document).trigger('onSelectsChange', { value: value, name: 'selectCompare' });
+        });
+        let selectLine2 = $('#selectLine2');
+
+        selectLine2.append(
+            `
+            <option value="">-- Linha Ichimoku --</option>
+            <option value="Conversion">Linha de Conversão</option>
+            <option value="Baseline">Linha de Base</option>
+            <option value="span A">Linha Span A</option>
+            <option value="span B">Linha Span B</option>
+            `
+        );
+        selectLine2.on('change', function () {
+            let value = $(this).val();
+            $(document).trigger('onSelectsChange', { value: value, name: 'selectLine2' });
+        });
     },
     createIndicatorButton: function () {
         this.div.append(`<button type="button" class="bg-gray-200 hover:bg-green-200 hover:p-0.5 active:bg-blue-200">Click Me!</button>`)
