@@ -1,7 +1,7 @@
 
-const fetchCandlesticksAndCloud = (currencies, interval)=>{
+const fetchCandlesAndSMA = (currencies, interval, period)=>{
     
-    function _fetchCandlesticksAndCloud(symbol, interval) {
+    function _fetchCandlesAndSMA(symbol, interval) {
 
         return new Promise(async (resolve, reject) => {
           try {
@@ -15,7 +15,7 @@ const fetchCandlesticksAndCloud = (currencies, interval)=>{
               });
 
             // Fetch ichimoku cloud
-            let ichimokuCloud = await fetch('http://localhost:3000/services/ichimoku-cloud', {
+            let sma = await fetch(`http://localhost:3000/services/sma?period=${period}`, {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json'
@@ -29,7 +29,7 @@ const fetchCandlesticksAndCloud = (currencies, interval)=>{
             });
 
             // Resolve with the data
-            resolve({ symbol, ichimokuCloud, candlesticks });
+            resolve({ symbol, sma, candlesticks });
           } catch (error) {
             reject(error);
           }
@@ -37,7 +37,7 @@ const fetchCandlesticksAndCloud = (currencies, interval)=>{
       }
 
       // Map the currencies to an array of promises
-      let promises = currencies.map(currency => _fetchCandlesticksAndCloud(currency.symbol, interval));
+      let promises = currencies.map(currency => _fetchCandlesAndSMA(currency.symbol, interval));
 
       // Use Promise.all to wait for all promises to resolve
       let results = Promise.all(promises)
@@ -49,6 +49,7 @@ const fetchCandlesticksAndCloud = (currencies, interval)=>{
         });
 
         return results;
+
 }
 
-export default fetchCandlesticksAndCloud;
+export default fetchCandlesAndSMA;

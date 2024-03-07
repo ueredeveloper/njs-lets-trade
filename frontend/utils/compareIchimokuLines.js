@@ -1,4 +1,4 @@
-const ichimokuLinesCompartions = async (symbolCandlesAndIchimoku, condition) => {
+const compareIchimokuLines = async (symbolCandlesAndIchimoku, condition) => {
 
     // let { candlesticks, ichimokuCloud, symbol } = symbolCandlesAndIchimoku;
 
@@ -40,4 +40,4 @@ const ichimokuLinesCompartions = async (symbolCandlesAndIchimoku, condition) => 
     return results;
 }
 
-export default ichimokuLinesCompartions
+export default compareIchimokuLines;

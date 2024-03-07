@@ -1,14 +1,13 @@
 import CurrencyModel from "../model/currency-model";
 import IntervalController from "../controller/interval-controller";
 import fetchCandlesticksAndCloud from "../services/fetchCandlesAndIchimokuCloud";
-import ichimokuLinesCompartions from "../utils/ichimokuLinesComparations";
+import ichimokuLinesCompartions from "../utils/compareIchimokuLines";
+import compareIchimokuLines from "../utils/compareIchimokuLines";
+import fetchCandlesAndSMA from "../services/fetchCandlesAndSMA";
 
 const CandleView = {
 
   init: async function () {
-
-    let array = [{a: 1}, {a: 2}, {a: 3}, {a: 4}]
-    console.log('array ', array.slice(-1)[0].a)
 
     this.div = $('#candles-container');
     // Adiciona a tag para os intervalos.
@@ -36,83 +35,47 @@ const CandleView = {
 
     $(document).on('onClickButtonIndicatorView', async (event) => {
 
-      let symbolCandlesAndIchimoku = await fetchCandlesticksAndCloud(CurrencyModel.currencies, this.interval)
-
+    
       let indicator = this.indicatorParams.indicator;
 
       let condition = this.indicatorParams.line1 + '|' + this.indicatorParams.compare + '|' + this.indicatorParams.line2;
 
 
-      if (this.indicatorParams.indicator == "Ichimoku") {
+     /* if (this.indicatorParams.indicator == "Ichimoku") {
         let result = await ichimokuLinesCompartions(symbolCandlesAndIchimoku, condition)
 
         console.log(result)
       } else {
         console.log(indicator)
-      }
+      }*/
 
+       /*
+    indicators: ['MA09', 'MA21', 'MA200', 'Bollinger Bands', 'Ichimoku Cloud'],
+    ichomokuLines: ['Conversion', 'Baseline', 'Span A', 'Span B' ]
+    */
 
-     
+      switch (this.indicatorParams.indicator) {
+        case 'MA09':
+            let symbolCandlesandSMA = await fetchCandlesAndSMA(CurrencyModel.currencies, this.interval, 66);
+            //let result  = await compare
+            break;
+        case 'MA21':
+            console.log(' iMA21')
+            break;
+            case 'MA200':
+            console.log(' ima200')
+            break;
+            case 'Bollinger Bands':
+            console.log(' iboll')
+            break;
+        default:
+          //Busca candles e ichimoku cloud
+          let symbolCandlesAndIchimoku = await fetchCandlesticksAndCloud(CurrencyModel.currencies, this.interval)
+          // Compara as linhas ichimoku
+          let result = await compareIchimokuLines(symbolCandlesAndIchimoku, condition)
 
-
-      /* function fetchCandlesticksAndCloud(currency, interval) {
- 
-         return new Promise(async (resolve, reject) => {
-           try {
-             // Fetch candlesticks
-             let candlesticks = await fetch(`http://localhost:3000/services/candles/?symbol=${currency.symbol}&limit=${166}&interval=${interval}`)
-               .then(response => {
-                 if (!response.ok) {
-                   throw new Error('Network response was not ok');
-                 }
-                 return response.json();
-               });
- 
-             // Fetch ichimoku cloud
-             let ichimokuCloud = await fetch('http://localhost:3000/services/ichimoku-cloud', {
-               method: 'POST',
-               headers: {
-                 'Content-Type': 'application/json'
-               },
-               body: JSON.stringify(candlesticks)
-             }).then(response => {
-               if (!response.ok) {
-                 throw new Error('Network response was not ok');
-               }
-               return response.json();
-             });
- 
-             // Resolve with the data
-             resolve({ currency, ichimokuCloud });
-           } catch (error) {
-             reject(error);
-           }
-         });
-       }
- 
-       let coins = [];
- 
-       // Map the currencies to an array of promises
-       let promises = CurrencyModel.currencies.map(currency => fetchCandlesticksAndCloud(currency, this.interval));
- 
-       // Use Promise.all to wait for all promises to resolve
-       Promise.all(promises)
-         .then(results => {
-           results.forEach(result => {
-             let { currency, ichimokuCloud } = result;
- 
-             if (ichimokuCloud[114].base > ichimokuCloud[114].conversion) {
-               coins.push(currency.symbol);
-             }
-           });
-           console.log(coins); // You can access coins here
-         })
-         .catch(error => {
-           console.error('Error:', error);
-         });*/
-
-
-
+          console.log(result)
+    }
 
     });
 
