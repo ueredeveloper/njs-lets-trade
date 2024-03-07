@@ -14,7 +14,45 @@ const IndicatorView = {
             $(document).trigger('onClickButtonIndicatorView', 'params');
         });
 
-        $(document).on('click')
+        this.div
+            .on('click', 'input', function () {
+                let value = $(this).val();
+         
+                switch (value) {
+                    case 'MA09':
+                      console.log('Ma 09');
+                      break;
+                    case 'MA21':
+                        console.log('Ma 21');
+                      break;
+                    case 'MA200':
+                        console.log('Ma 200');
+                      break;
+                    case 'Bollinger':
+                        console.log('Bollinger Bands');
+                      break;
+                    
+                    default:
+                        // Ichimoku Clouds
+                      console.log(`${value}.`);
+                  }
+
+
+
+
+
+                //$(document).trigger('intervalChanged', value);
+
+
+
+
+
+            });
+
+    this.div.on('change', 'select', function(){
+        let value = $(this).val();
+        console.log(value)
+    })
 
     },
     renderList: async function () {
@@ -35,7 +73,7 @@ const IndicatorView = {
         let ichimokuLines = await this.ichimokuLines;
         // Cria array de li tags com a array de cotações.
         let ichiTags = ichimokuLines.map(value => `
-            <input type="radio" id="ma9" value="ma09">
+            <input type="radio" id=${value} value=${value}>
             <label for="html">${value}</label>
             `);
         // Concatena como string a array de li tags.
@@ -57,9 +95,9 @@ const IndicatorView = {
     createIchimokuSelectLines(div) {
         this.div.append(
             `
-            <select id="select-line-1" onchange="showSecondaryOptions()" class="mx-2"></select>
+            <select id="select-line-1" class="mx-2"></select>
             <select id="selectCompare" class="mx-2"></select>
-            <select id="select-line-2" onchange="showSecondaryOptions()" class="mx-2"></select>
+            <select id="select-line-2" class="mx-2"></select>
             `
         )
     },
@@ -67,6 +105,7 @@ const IndicatorView = {
         let select1 = $('#select-line-1');
         select1.append(
             `
+                <option value="">-- Linha Ichimoku --</option>
                 <option value="conversionLine">Linha de Conversão</option>
                 <option value="baseLine">Linha de Base</option>
                 <option value="spanA">Linha Span A</option>
@@ -76,6 +115,7 @@ const IndicatorView = {
         let selectCompare = $('#selectCompare');
         selectCompare.append(
             `
+                    <option value="">-- Comparação --</option>
                     <option value="above">Acima</option>
                     <option value="below">Abaixo</option>
                     `
@@ -84,6 +124,7 @@ const IndicatorView = {
 
         select2.append(
             `
+            <option value="">-- Linha Ichimoku --</option>
             <option value="conversionLine">Linha de Conversão</option>
             <option value="baseLine">Linha de Base</option>
             <option value="spanA">Linha Span A</option>
