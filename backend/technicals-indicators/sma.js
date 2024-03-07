@@ -1,13 +1,16 @@
 const router = require("express").Router();
 //const Candles = require('../binance/candles');
-const ichimokuCloud = require('technicalindicators').IchimokuCloud;
+const SMA = require('technicalindicators').SMA
+const { fetchCandles } = require('../services')
 
 // bollinger technical
-router.post("/ichimoku-cloud", async (req, res) => {
+router.get("/", async (req, res) => {
 
-  let candles = req.body;
+    let {symbol,limit, interval} = req.query;
 
-  let input = {
+    let candles = await fetchCandles(symbol, limit, interval)
+  
+    let input = {
         high  : candles.map(c=> parseFloat(c.high)),
         low   : candles.map(c=> parseFloat(c.low)),
         conversionPeriod: 9,
@@ -16,10 +19,9 @@ router.post("/ichimoku-cloud", async (req, res) => {
         displacement: 26
       }
 
+  let result = ichimokuCloud.calculate(input)
 
-     let result = ichimokuCloud.calculate(input)
-
-     res.send(result);
+  res.send(result);
 
 });
 

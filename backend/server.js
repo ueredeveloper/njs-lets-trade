@@ -8,7 +8,7 @@ const httpProxy = require('http-proxy');
 const {ichimokuCloudRouter} = require('./technicals-indicators');
 
 //const {client} = require('./services/fetchClient');
-const { fetchCandles, fetchIchimokuCloud, fetchAllCurrencies } = require('./services');
+const { fetchCandles, fetchIchimokuCloud, fetchAllCurrencies, fetchSMA } = require('./services');
 
 const app = express();
 app.use(cors());
@@ -20,6 +20,7 @@ const router = express.Router();
 app.use('/services', fetchCandles);
 app.use('/services', fetchIchimokuCloud);
 app.use('/services', fetchAllCurrencies);
+app.use('/services', fetchSMA);
 
 // Create a new proxy server instance
 const proxy = httpProxy.createProxyServer();
