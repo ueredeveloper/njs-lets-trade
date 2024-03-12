@@ -6,7 +6,7 @@ import CurrencyView from "../view/currency-view";
 const CurrencyController = {
     init: async function () {
         // Buscando pela binanace
-        //CurrencyModel.currencies = await fetchAllCurrencies();
+        CurrencyModel.currencies = await fetchAllCurrencies();
 
         CurrencyView.init();
     },

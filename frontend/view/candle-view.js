@@ -24,7 +24,9 @@ const CandleView = {
       "indicator": "Ichimoku"
     }
 
-    this.filteredCurrencyByQuote;
+    this.filteredCurrencyByQuote = []
+    this.filteredCurrenciesByBinanceUSDT =[];
+    
     $(document).on('intervalChanged', (event, value) => {
       this.interval = value;
     });
@@ -43,23 +45,26 @@ const CandleView = {
       let symbolCandlesAndSMA;
       let smaResult;
 
-      this.filteredCurrencyByQuote = await CurrencyModel.currencies.filter(currency => currency.symbol.endsWith('USDT'))
+      /** é preciso criar um método que filtre por cotação (USDT, BNB, BTC) e por moedas presentes na binance(JASMYUSDT, ...) */
 
-      console.log('filtered ', this.filteredCurrencyByQuote)
+      this.filteredCurrencyByQuote = await CurrencyModel.currencies.filter(currency => currency.symbol.endsWith('USDT'));
+
+      this.filteredCurrenciesByBinanceUSDT = await CurrencyModel.currencies.filter(currency => CurrencyModel.binanceUSDT.includes(currency.symbol));
+
 
       switch (this.indicatorParams.indicator) {
         case 'MA09':
-          symbolCandlesAndSMA = await fetchCandlesAndSMA(this.filteredCurrencyByQuote, this.interval, 9, 21);
+          symbolCandlesAndSMA = await fetchCandlesAndSMA(this.filteredCurrenciesByBinanceUSDT, this.interval, 9, 21);
           smaResult = await compareCandlesAndSMA(symbolCandlesAndSMA);
           console.log(smaResult)
           break;
         case 'MA21':
-          symbolCandlesAndSMA = await fetchCandlesAndSMA(this.filteredCurrencyByQuote, this.interval, 21, 32);
+          symbolCandlesAndSMA = await fetchCandlesAndSMA(this.filteredCurrenciesByBinanceUSDT, this.interval, 21, 32);
           smaResult = await compareCandlesAndSMA(symbolCandlesAndSMA);
           console.log(smaResult)
           break;
         case 'MA200':
-          symbolCandlesAndSMA = await fetchCandlesAndSMA(this.filteredCurrencyByQuote, this.interval, 200, 232);
+          symbolCandlesAndSMA = await fetchCandlesAndSMA(this.filteredCurrenciesByBinanceUSDT, this.interval, 200, 232);
           smaResult = await compareCandlesAndSMA(symbolCandlesAndSMA);
           console.log(smaResult)
           break;
@@ -68,7 +73,7 @@ const CandleView = {
           break;
         default:
           //Busca candles e ichimoku cloud
-          let symbolCandlesAndIchimoku = await fetchCandlesticksAndCloud(this.filteredCurrencyByQuote, this.interval)
+          let symbolCandlesAndIchimoku = await fetchCandlesticksAndCloud(this.filteredCurrenciesByBinanceUSDT, this.interval)
           // Compara as linhas ichimoku
           let result = await compareIchimokuLines(symbolCandlesAndIchimoku, condition)
 

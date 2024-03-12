@@ -12,7 +12,6 @@ router.post("/sma", async (req, res) => {
   let { period } = req.query;
 
   let values = candles.map(c => parseFloat(c.close));
-  console.log(values)
 
   let results = SMA.calculate({ period: period, values: values })
 

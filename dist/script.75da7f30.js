@@ -254,60 +254,31 @@ function _asyncToGenerator(fn) { return function () { var self = this, args = ar
 var CurrencyModel = {
   currencies: [{
     "id": null,
-    "symbol": "ETHBTC",
+    "symbol": "AAAAUSDT",
     "price": "0.05522000",
     "currency_collections": [[]]
   }, {
     "id": null,
-    "symbol": "LTCBTC",
+    "symbol": "1INCHUSDT",
     "price": "0.00131400",
     "currency_collections": [[]]
   }, {
     "id": null,
-    "symbol": "DYDXUSDT",
+    "symbol": "AAVEUSDT",
     "price": "0.00131400",
     "currency_collections": [[]]
   }, {
     "id": null,
-    "symbol": "JASMYUSDT",
+    "symbol": "ACAUSDT",
     "price": "0.00131400",
     "currency_collections": [[]]
   }, {
     "id": null,
-    "symbol": "ADABNB",
-    "price": "0.00131400",
-    "currency_collections": [[]]
-  }, {
-    "id": null,
-    "symbol": "ALGOUSDT",
-    "price": "0.00131400",
-    "currency_collections": [[]]
-  }, {
-    "id": null,
-    "symbol": "AXSBNB",
-    "price": "0.00131400",
-    "currency_collections": [[]]
-  }, {
-    "id": null,
-    "symbol": "LINKUSDC",
-    "price": "0.00131400",
-    "currency_collections": [[]]
-  }, {
-    "id": null,
-    "symbol": "INJUSDT",
-    "price": "0.00131400",
-    "currency_collections": [[]]
-  }, {
-    "id": null,
-    "symbol": "ETHUSDT",
-    "price": "0.00131400",
-    "currency_collections": [[]]
-  }, {
-    "id": null,
-    "symbol": "ALICEUSDT",
+    "symbol": "ACEUSDT",
     "price": "0.00131400",
     "currency_collections": [[]]
   }],
+  binanceUSDT: ["1000SATSUSDT", "1INCHUSDT", "AAVEUSDT", "ACAUSDT", "ACEUSDT", "ACHUSDT", "ACMUSDT", "ADAUSDT", "ADXUSDT", "AERGOUSDT", "AEURUSDT", "AGIXUSDT", "AGLDUSDT", "AIUSDT", "AKROUSDT", "ALCXUSDT", "ALGOUSDT", "ALICEUSDT", "ALPACAUSDT", "ALPHAUSDT", "ALPINEUSDT", "ALTUSDT", "AMBUSDT", "AMPUSDT", "ANKRUSDT", "APEUSDT", "API3USDT", "APTUSDT", "ARBUSDT", "ARDRUSDT", "ARKMUSDT", "ARKUSDT", "ARPAUSDT", "ARUSDT", "ASRUSDT", "ASTRUSDT", "ASTUSDT", "ATAUSDT", "ATMUSDT", "ATOMUSDT", "AUCTIONUSDT", "AUDIOUSDT", "AVAUSDT", "AVAXUSDT", "AXLUSDT", "AXSUSDT", "BADGERUSDT", "BAKEUSDT", "BALUSDT", "BANDUSDT", "BARUSDT", "BATUSDT", "BCHUSDT", "BEAMXUSDT", "BELUSDT", "BETAUSDT", "BICOUSDT", "BIFIUSDT", "BLURUSDT", "BLZUSDT", "BNBUSDT", "BNTUSDT", "BNXUSDT", "BONDUSDT", "BONKUSDT", "BSWUSDT", "BTCUSDT", "BTTCUSDT", "BURGERUSDT", "C98USDT", "CAKEUSDT", "CELOUSDT", "CELRUSDT", "CFXUSDT", "CHESSUSDT", "CHRUSDT", "CHZUSDT", "CITYUSDT", "CKBUSDT", "CLVUSDT", "COMBOUSDT", "COMPUSDT", "COSUSDT", "COTIUSDT", "CREAMUSDT", "CRVUSDT", "CTKUSDT", "CTSIUSDT", "CTXCUSDT", "CVCUSDT", "CVPUSDT", "CVXUSDT", "CYBERUSDT", "DARUSDT", "DASHUSDT", "DATAUSDT", "DCRUSDT", "DEGOUSDT", "DENTUSDT", "DEXEUSDT", "DFUSDT", "DGBUSDT", "DIAUSDT", "DOCKUSDT", "DODOUSDT", "DOGEUSDT", "DOTUSDT", "DREPUSDT", "DUSKUSDT", "DYDXUSDT", "DYMUSDT", "EDUUSDT", "EGLDUSDT", "ELFUSDT", "ENJUSDT", "ENSUSDT", "EOSUSDT", "EPXUSDT", "ERNUSDT", "ETCUSDT", "ETHUSDT", "EURUSDT", "FARMUSDT", "FDUSDUSDT", "FETUSDT", "FIDAUSDT", "FILUSDT", "FIOUSDT", "FIROUSDT", "FISUSDT", "FLMUSDT", "FLOKIUSDT", "FLOWUSDT", "FLUXUSDT", "FORTHUSDT", "FORUSDT", "FRONTUSDT", "FTMUSDT", "FTTUSDT", "FUNUSDT", "FXSUSDT", "GALAUSDT", "GALUSDT", "GASUSDT", "GFTUSDT", "GHSTUSDT", "GLMRUSDT", "GLMUSDT", "GMTUSDT", "GMXUSDT", "GNOUSDT", "GNSUSDT", "GRTUSDT", "GTCUSDT", "HARDUSDT", "HBARUSDT", "HFTUSDT", "HIFIUSDT", "HIGHUSDT", "HIVEUSDT", "HOOKUSDT", "HOTUSDT", "ICPUSDT", "ICXUSDT", "IDEXUSDT", "IDUSDT", "ILVUSDT", "IMXUSDT", "INJUSDT", "IOSTUSDT", "IOTAUSDT", "IOTXUSDT", "IQUSDT", "IRISUSDT", "JASMYUSDT", "JOEUSDT", "JSTUSDT", "JTOUSDT", "JUPUSDT", "JUVUSDT", "KAVAUSDT", "KDAUSDT", "KEYUSDT", "KLAYUSDT", "KMDUSDT", "KNCUSDT", "KP3RUSDT", "KSMUSDT", "LAZIOUSDT", "LDOUSDT", "LEVERUSDT", "LINAUSDT", "LINKUSDT", "LITUSDT", "LOKAUSDT", "LOOMUSDT", "LPTUSDT", "LQTYUSDT", "LRCUSDT", "LSKUSDT", "LTCUSDT", "LTOUSDT", "LUNAUSDT", "LUNCUSDT", "MAGICUSDT", "MANAUSDT", "MANTAUSDT", "MASKUSDT", "MATICUSDT", "MAVUSDT", "MBLUSDT", "MBOXUSDT", "MDTUSDT", "MDXUSDT", "MEMEUSDT", "MINAUSDT", "MKRUSDT", "MLNUSDT", "MOBUSDT", "MOVRUSDT", "MTLUSDT", "NEARUSDT", "NEOUSDT", "NEXOUSDT", "NFPUSDT", "NKNUSDT", "NMRUSDT", "NTRNUSDT", "NULSUSDT", "OAXUSDT", "OCEANUSDT", "OGNUSDT", "OGUSDT", "OMGUSDT", "OMUSDT", "ONEUSDT", "ONGUSDT", "ONTUSDT", "OOKIUSDT", "OPUSDT", "ORDIUSDT", "ORNUSDT", "OSMOUSDT", "OXTUSDT", "PAXGUSDT", "PDAUSDT", "PENDLEUSDT", "PEOPLEUSDT", "PEPEUSDT", "PERPUSDT", "PHAUSDT", "PHBUSDT", "PIVXUSDT", "PIXELUSDT", "PNTUSDT", "POLSUSDT", "POLYXUSDT", "PONDUSDT", "PORTALUSDT", "PORTOUSDT", "POWRUSDT", "PROMUSDT", "PROSUSDT", "PSGUSDT", "PUNDIXUSDT", "PYRUSDT", "PYTHUSDT", "QIUSDT", "QKCUSDT", "QNTUSDT", "QTUMUSDT", "QUICKUSDT", "RADUSDT", "RAREUSDT", "RAYUSDT", "RDNTUSDT", "REEFUSDT", "REIUSDT", "RENUSDT", "REQUSDT", "RIFUSDT", "RLCUSDT", "RNDRUSDT", "RONINUSDT", "ROSEUSDT", "RPLUSDT", "RSRUSDT", "RUNEUSDT", "RVNUSDT", "SANDUSDT", "SANTOSUSDT", "SCRTUSDT", "SCUSDT", "SEIUSDT", "SFPUSDT", "SHIBUSDT", "SKLUSDT", "SLPUSDT", "SNTUSDT", "SNXUSDT", "SOLUSDT", "SPELLUSDT", "SSVUSDT", "STEEMUSDT", "STGUSDT", "STMXUSDT", "STORJUSDT", "STPTUSDT", "STRAXUSDT", "STRKUSDT", "STXUSDT", "SUIUSDT", "SUNUSDT", "SUPERUSDT", "SUSHIUSDT", "SXPUSDT", "SYNUSDT", "SYSUSDT", "TFUELUSDT", "THETAUSDT", "TIAUSDT", "TKOUSDT", "TLMUSDT", "TRBUSDT", "TROYUSDT", "TRUUSDT", "TRXUSDT", "TUSDT", "TUSDUSDT", "TWTUSDT", "UFTUSDT", "UMAUSDT", "UNFIUSDT", "UNIUSDT", "USDCUSDT", "USDPUSDT", "USTCUSDT", "UTKUSDT", "VANRYUSDT", "VETUSDT", "VGXUSDT", "VIBUSDT", "VICUSDT", "VIDTUSDT", "VITEUSDT", "VOXELUSDT", "VTHOUSDT", "WANUSDT", "WAVESUSDT", "WAXPUSDT", "WBETHUSDT", "WBTCUSDT", "WIFUSDT", "WINGUSDT", "WINUSDT", "WLDUSDT", "WNXMUSDT", "WOOUSDT", "WRXUSDT", "XAIUSDT", "XECUSDT", "XEMUSDT", "XLMUSDT", "XNOUSDT", "XRPUSDT", "XTZUSDT", "XVGUSDT", "XVSUSDT", "YFIUSDT", "YGGUSDT", "ZECUSDT", "ZENUSDT", "ZILUSDT", "ZRXUSDT"],
   addCurrency: function addCurrency(item) {
     this.currencies.push(item);
     // Notify the View of changes
@@ -403,11 +374,12 @@ var CurrencyController = {
       return _regeneratorRuntime().wrap(function _callee$(_context) {
         while (1) switch (_context.prev = _context.next) {
           case 0:
-            // Buscando pela binanace
-            //CurrencyModel.currencies = await fetchAllCurrencies();
-
+            _context.next = 2;
+            return (0, _binance.fetchAllCurrencies)();
+          case 2:
+            _currencyModel.default.currencies = _context.sent;
             _currencyView.default.init();
-          case 1:
+          case 4:
           case "end":
             return _context.stop();
         }
@@ -1341,7 +1313,8 @@ var CandleView = {
               "line2": "baseLine",
               "indicator": "Ichimoku"
             };
-            this.filteredCurrencyByQuote;
+            this.filteredCurrencyByQuote = [];
+            this.filteredCurrenciesByBinanceUSDT = [];
             $(document).on('intervalChanged', function (event, value) {
               _this.interval = value;
             });
@@ -1375,57 +1348,62 @@ var CandleView = {
                       });
                     case 4:
                       _this.filteredCurrencyByQuote = _context2.sent;
-                      console.log('filtered ', _this.filteredCurrencyByQuote);
+                      _context2.next = 7;
+                      return _currencyModel.default.currencies.filter(function (currency) {
+                        return _currencyModel.default.binanceUSDT.includes(currency.symbol);
+                      });
+                    case 7:
+                      _this.filteredCurrenciesByBinanceUSDT = _context2.sent;
                       _context2.t0 = _this.indicatorParams.indicator;
-                      _context2.next = _context2.t0 === 'MA09' ? 9 : _context2.t0 === 'MA21' ? 17 : _context2.t0 === 'MA200' ? 25 : _context2.t0 === 'Bollinger Bands' ? 33 : 35;
+                      _context2.next = _context2.t0 === 'MA09' ? 11 : _context2.t0 === 'MA21' ? 19 : _context2.t0 === 'MA200' ? 27 : _context2.t0 === 'Bollinger Bands' ? 35 : 37;
                       break;
-                    case 9:
-                      _context2.next = 11;
-                      return (0, _fetchCandlesAndSMA.default)(_this.filteredCurrencyByQuote, _this.interval, 9, 21);
                     case 11:
+                      _context2.next = 13;
+                      return (0, _fetchCandlesAndSMA.default)(_this.filteredCurrenciesByBinanceUSDT, _this.interval, 9, 21);
+                    case 13:
                       symbolCandlesAndSMA = _context2.sent;
-                      _context2.next = 14;
+                      _context2.next = 16;
                       return (0, _compareCandlesAndSMA.default)(symbolCandlesAndSMA);
-                    case 14:
+                    case 16:
                       smaResult = _context2.sent;
                       console.log(smaResult);
-                      return _context2.abrupt("break", 42);
-                    case 17:
-                      _context2.next = 19;
-                      return (0, _fetchCandlesAndSMA.default)(_this.filteredCurrencyByQuote, _this.interval, 21, 32);
+                      return _context2.abrupt("break", 44);
                     case 19:
+                      _context2.next = 21;
+                      return (0, _fetchCandlesAndSMA.default)(_this.filteredCurrenciesByBinanceUSDT, _this.interval, 21, 32);
+                    case 21:
                       symbolCandlesAndSMA = _context2.sent;
-                      _context2.next = 22;
+                      _context2.next = 24;
                       return (0, _compareCandlesAndSMA.default)(symbolCandlesAndSMA);
-                    case 22:
+                    case 24:
                       smaResult = _context2.sent;
                       console.log(smaResult);
-                      return _context2.abrupt("break", 42);
-                    case 25:
-                      _context2.next = 27;
-                      return (0, _fetchCandlesAndSMA.default)(_this.filteredCurrencyByQuote, _this.interval, 200, 232);
+                      return _context2.abrupt("break", 44);
                     case 27:
+                      _context2.next = 29;
+                      return (0, _fetchCandlesAndSMA.default)(_this.filteredCurrenciesByBinanceUSDT, _this.interval, 200, 232);
+                    case 29:
                       symbolCandlesAndSMA = _context2.sent;
-                      _context2.next = 30;
+                      _context2.next = 32;
                       return (0, _compareCandlesAndSMA.default)(symbolCandlesAndSMA);
-                    case 30:
+                    case 32:
                       smaResult = _context2.sent;
                       console.log(smaResult);
-                      return _context2.abrupt("break", 42);
-                    case 33:
-                      console.log('bollinger bands');
-                      return _context2.abrupt("break", 42);
+                      return _context2.abrupt("break", 44);
                     case 35:
-                      _context2.next = 37;
-                      return (0, _fetchCandlesAndIchimokuCloud.default)(_this.filteredCurrencyByQuote, _this.interval);
+                      console.log('bollinger bands');
+                      return _context2.abrupt("break", 44);
                     case 37:
+                      _context2.next = 39;
+                      return (0, _fetchCandlesAndIchimokuCloud.default)(_this.filteredCurrenciesByBinanceUSDT, _this.interval);
+                    case 39:
                       symbolCandlesAndIchimoku = _context2.sent;
-                      _context2.next = 40;
+                      _context2.next = 42;
                       return (0, _compareIchimokuLines.default)(symbolCandlesAndIchimoku, condition);
-                    case 40:
+                    case 42:
                       result = _context2.sent;
                       console.log(result);
-                    case 42:
+                    case 44:
                     case "end":
                       return _context2.stop();
                   }
@@ -1436,7 +1414,7 @@ var CandleView = {
               };
             }());
             this.renderList();
-          case 10:
+          case 11:
           case "end":
             return _context3.stop();
         }
@@ -1601,7 +1579,7 @@ var parent = module.bundle.parent;
 if ((!parent || !parent.isParcelRequire) && typeof WebSocket !== 'undefined') {
   var hostname = "" || location.hostname;
   var protocol = location.protocol === 'https:' ? 'wss' : 'ws';
-  var ws = new WebSocket(protocol + '://' + hostname + ':' + "50586" + '/');
+  var ws = new WebSocket(protocol + '://' + hostname + ':' + "56771" + '/');
   ws.onmessage = function (event) {
     checkedAssets = {};
     assetsToAccept = [];
