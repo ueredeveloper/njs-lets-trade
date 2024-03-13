@@ -95,7 +95,8 @@ const IndicatorView = {
             {
                 indicator: 'ma-09',
                 legend: 'MA - 9 Períodos',
-                id: 'ma-09'
+                id: 'ma-09',
+                optionsId: 'ma-09-options'
             },
             {
                 indicator: 'ma-21',
@@ -113,15 +114,80 @@ const IndicatorView = {
                 id: 'ichi'
             }
         ]
+        /*<fieldset class="border-2 mx-2">
+        <legend>${form.legend}</legend>
+                    <input type="checkbox" class='ma-200-indicator mx-2'>
+                </fieldset>*/
 
-        forms.forEach(form => {
+        forms.forEach((form, i) => {
             this.div.append(`
-            <fieldset class="border-2 mx-2">
+          
+            <div id=${form.id} class="flex-1">
+                <fieldset class="border-2 mx-2">
                 <legend>${form.legend}</legend>
-                    <input type="checkbox" class='ma-200-indicator'>
+                    <input type="checkbox" class='ma-200-indicator mx-2'>
                 </fieldset>
+                <div id=${form.optionsId}></div>
+            </div>
+            
         `)
         })
+
+        let selects = [{
+            indicator: 'ma-09',
+            name: 'candle',
+            checkboxId: 'checkbox-ma-09',
+            selectId: 'select-ma-09-candle',
+            options: ['high', 'low', 'close']
+        },
+        {
+            indicator: 'ma-09',
+            name: 'compare',
+            checkboxId: 'checkbox-ma-09',
+            selectId: 'select-ma-09-compare',
+            options: ['above', 'bellow']
+
+        }
+        ]
+
+        selects.forEach(checkbox => {
+            $('#ma-09-options').append(
+                `<select id=${checkbox.selectId} class="mx-2">
+                ${checkbox.options.map(op => `<option>${op}</option>`)}
+              </select>
+              `
+            );
+            $(document).ready(function () {
+                $('#' + checkbox.checkboxId).change(function () {
+                    if ($(this).is(':checked')) {
+                        $('#ma-09-options').show();
+                        $('#' + checkbox.selectId).on('change', function () {
+                            let value = $(this).val();
+                            console.log('value ', value)
+                            let indicator = [...indicators].find(i => i.indicator === checkbox.indicator);
+                            if (indicator) {
+                                indicator[checkbox.name] = value
+                            } else {
+                                indicators.add({
+                                    indicator: checkbox.indicator,
+                                    [checkbox.name]: value
+                                })
+                            }
+
+                            console.log(indicators)
+
+                        });
+
+
+                    } else {
+                        $('#ma-09-options').hide();
+                        $('#' + checkbox.selectId).off('change');
+                        indicators.delete([...indicators].find(i => i.indicator === checkbox.indicator))
+                        console.log(indicators)
+                    }
+                });
+            });
+        });
 
 
 
