@@ -724,40 +724,59 @@ var IndicatorView = {
   }(),
   renderList: function () {
     var _renderList = _asyncToGenerator( /*#__PURE__*/_regeneratorRuntime().mark(function _callee3() {
-      var indicators, tags, ichimokuLines, ichiTags;
+      var _this2 = this;
+      var forms;
       return _regeneratorRuntime().wrap(function _callee3$(_context3) {
         while (1) switch (_context3.prev = _context3.next) {
           case 0:
-            _context3.next = 2;
-            return this.indicators;
+            /* // Cria uma array de cotações de forma assíncrona.
+             let indicators = await this.indicators;
+             // Cria array de li tags com a array de cotações.
+             let tags = indicators.map(value => `
+                 <input type="radio" id=${value} value=${value} name="value">
+                 <label for="html">${value}</label>
+                 `);
+             // Concatena como string a array de li tags.
+             tags = tags.join('');
+                this.createIndicatorsForm(this.div)
+             this.fillIndicatorsForm(tags)
+                // Cria uma array de cotações de forma assíncrona.
+             let ichimokuLines = await this.ichimokuLines;
+             // Cria array de li tags com a array de cotações.
+             let ichiTags = ichimokuLines.map(value => `
+                 <input type="radio" id=${value} value=${value}>
+                 <label for="html">${value}</label>
+                 `);
+             // Concatena como string a array de li tags.
+             ichiTags = ichiTags.join('');
+                this.createIchimokuSelectLines(this.div);
+             this.fillIchimokuSelectLines();
+             this.createIndicatorButton(this.div)*/
+            forms = [{
+              indicator: 'ma-09',
+              legend: 'MA - 9 Períodos',
+              id: 'ma-09'
+            }, {
+              indicator: 'ma-21',
+              legend: 'MA - 21 Períodos',
+              id: 'ma-21'
+            }, {
+              indicator: 'ma-200',
+              legend: 'MA - 200 Períodos',
+              id: 'ma-21'
+            }, {
+              indicator: 'ichimoku',
+              legend: 'Ichimoku',
+              id: 'ichi'
+            }];
+            forms.forEach(function (form) {
+              _this2.div.append("\n            <fieldset class=\"border-2 mx-2\">\n                <legend>".concat(form.legend, "</legend>\n                    <input type=\"checkbox\" class='ma-200-indicator'>\n                </fieldset>\n        "));
+            });
           case 2:
-            indicators = _context3.sent;
-            // Cria array de li tags com a array de cotações.
-            tags = indicators.map(function (value) {
-              return "\n            <input type=\"radio\" id=".concat(value, " value=").concat(value, " name=\"value\">\n            <label for=\"html\">").concat(value, "</label>\n            ");
-            }); // Concatena como string a array de li tags.
-            tags = tags.join('');
-            this.createIndicatorsForm(this.div);
-            this.fillIndicatorsForm(tags);
-
-            // Cria uma array de cotações de forma assíncrona.
-            _context3.next = 9;
-            return this.ichimokuLines;
-          case 9:
-            ichimokuLines = _context3.sent;
-            // Cria array de li tags com a array de cotações.
-            ichiTags = ichimokuLines.map(function (value) {
-              return "\n            <input type=\"radio\" id=".concat(value, " value=").concat(value, ">\n            <label for=\"html\">").concat(value, "</label>\n            ");
-            }); // Concatena como string a array de li tags.
-            ichiTags = ichiTags.join('');
-            this.createIchimokuSelectLines(this.div);
-            this.fillIchimokuSelectLines();
-            this.createIndicatorButton(this.div);
-          case 15:
           case "end":
             return _context3.stop();
         }
-      }, _callee3, this);
+      }, _callee3);
     }));
     function renderList() {
       return _renderList.apply(this, arguments);
@@ -1601,7 +1620,7 @@ var parent = module.bundle.parent;
 if ((!parent || !parent.isParcelRequire) && typeof WebSocket !== 'undefined') {
   var hostname = "" || location.hostname;
   var protocol = location.protocol === 'https:' ? 'wss' : 'ws';
-  var ws = new WebSocket(protocol + '://' + hostname + ':' + "50586" + '/');
+  var ws = new WebSocket(protocol + '://' + hostname + ':' + "51450" + '/');
   ws.onmessage = function (event) {
     checkedAssets = {};
     assetsToAccept = [];

@@ -64,32 +64,66 @@ const IndicatorView = {
 
     },
     renderList: async function () {
-        // Cria uma array de cotações de forma assíncrona.
-        let indicators = await this.indicators;
-        // Cria array de li tags com a array de cotações.
-        let tags = indicators.map(value => `
-            <input type="radio" id=${value} value=${value} name="value">
-            <label for="html">${value}</label>
-            `);
-        // Concatena como string a array de li tags.
-        tags = tags.join('');
+        /* // Cria uma array de cotações de forma assíncrona.
+         let indicators = await this.indicators;
+         // Cria array de li tags com a array de cotações.
+         let tags = indicators.map(value => `
+             <input type="radio" id=${value} value=${value} name="value">
+             <label for="html">${value}</label>
+             `);
+         // Concatena como string a array de li tags.
+         tags = tags.join('');
+ 
+         this.createIndicatorsForm(this.div)
+         this.fillIndicatorsForm(tags)
+ 
+         // Cria uma array de cotações de forma assíncrona.
+         let ichimokuLines = await this.ichimokuLines;
+         // Cria array de li tags com a array de cotações.
+         let ichiTags = ichimokuLines.map(value => `
+             <input type="radio" id=${value} value=${value}>
+             <label for="html">${value}</label>
+             `);
+         // Concatena como string a array de li tags.
+         ichiTags = ichiTags.join('');
+ 
+         this.createIchimokuSelectLines(this.div);
+         this.fillIchimokuSelectLines();
+         this.createIndicatorButton(this.div)*/
 
-        this.createIndicatorsForm(this.div)
-        this.fillIndicatorsForm(tags)
+        let forms = [
+            {
+                indicator: 'ma-09',
+                legend: 'MA - 9 Períodos',
+                id: 'ma-09'
+            },
+            {
+                indicator: 'ma-21',
+                legend: 'MA - 21 Períodos',
+                id: 'ma-21'
+            },
+            {
+                indicator: 'ma-200',
+                legend: 'MA - 200 Períodos',
+                id: 'ma-21'
+            },
+            {
+                indicator: 'ichimoku',
+                legend: 'Ichimoku',
+                id: 'ichi'
+            }
+        ]
 
-        // Cria uma array de cotações de forma assíncrona.
-        let ichimokuLines = await this.ichimokuLines;
-        // Cria array de li tags com a array de cotações.
-        let ichiTags = ichimokuLines.map(value => `
-            <input type="radio" id=${value} value=${value}>
-            <label for="html">${value}</label>
-            `);
-        // Concatena como string a array de li tags.
-        ichiTags = ichiTags.join('');
+        forms.forEach(form => {
+            this.div.append(`
+            <fieldset class="border-2 mx-2">
+                <legend>${form.legend}</legend>
+                    <input type="checkbox" class='ma-200-indicator'>
+                </fieldset>
+        `)
+        })
 
-        this.createIchimokuSelectLines(this.div);
-        this.fillIchimokuSelectLines();
-        this.createIndicatorButton(this.div)
+
 
     },
     createIndicatorsForm: function (div) {
