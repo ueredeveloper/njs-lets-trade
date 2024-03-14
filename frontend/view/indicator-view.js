@@ -10,7 +10,8 @@ const IndicatorView = {
     */
     init: async function () {
         this.div = $('#list-indicators');
-        this.indicators = IndicatorModel.getIndicators();
+        this.indicators = await IndicatorModel.getIndicators();
+        this.params = new Set();
         this.ichimokuLines = IndicatorModel.getIchimokuLines();
 
         this.indicatorParams = {
@@ -96,21 +97,25 @@ const IndicatorView = {
                 indicator: 'ma-09',
                 legend: 'MA - 9 Períodos',
                 id: 'ma-09',
+                checkboxId: 'checkbox-ma-09',
                 optionsId: 'ma-09-options'
             },
             {
                 indicator: 'ma-21',
                 legend: 'MA - 21 Períodos',
+                checkboxId: 'checkbox-ma-21',
                 id: 'ma-21'
             },
             {
                 indicator: 'ma-200',
                 legend: 'MA - 200 Períodos',
-                id: 'ma-21'
+                checkboxId: 'checkbox-ma-200',
+                id: 'ma-200'
             },
             {
                 indicator: 'ichimoku',
                 legend: 'Ichimoku',
+                checkboxId: 'checkbox-ichimoku',
                 id: 'ichi'
             }
         ]
@@ -125,13 +130,12 @@ const IndicatorView = {
             <div id=${form.id} class="flex-1">
                 <fieldset class="border-2 mx-2">
                 <legend>${form.legend}</legend>
-                    <input type="checkbox" class='ma-200-indicator mx-2'>
+                    <input type="checkbox" id=${form.checkboxId} class='${form.class} mx-2'>
                 </fieldset>
                 <div id=${form.optionsId}></div>
             </div>
             
-        `)
-        })
+        `);
 
         let selects = [{
             indicator: 'ma-09',
@@ -151,43 +155,46 @@ const IndicatorView = {
         ]
 
         selects.forEach(checkbox => {
+            // adiciona select
             $('#ma-09-options').append(
                 `<select id=${checkbox.selectId} class="mx-2">
                 ${checkbox.options.map(op => `<option>${op}</option>`)}
-              </select>
+                </select>
               `
             );
+            // remove da tela o select para apenas mostrar quanto o input estiver checked
+            $('#ma-09-options').hide();
+
             $(document).ready(function () {
                 $('#' + checkbox.checkboxId).change(function () {
                     if ($(this).is(':checked')) {
                         $('#ma-09-options').show();
                         $('#' + checkbox.selectId).on('change', function () {
                             let value = $(this).val();
-                            console.log('value ', value)
-                            let indicator = [...indicators].find(i => i.indicator === checkbox.indicator);
-                            if (indicator) {
-                                indicator[checkbox.name] = value
+                            let param = [...IndicatorView.params].find(i => i.indicator === checkbox.indicator);
+                            if (param) {
+                                param[checkbox.name] = value
                             } else {
-                                indicators.add({
+                                IndicatorView.params.add({
                                     indicator: checkbox.indicator,
                                     [checkbox.name]: value
                                 })
                             }
-
-                            console.log(indicators)
-
                         });
-
-
                     } else {
                         $('#ma-09-options').hide();
                         $('#' + checkbox.selectId).off('change');
-                        indicators.delete([...indicators].find(i => i.indicator === checkbox.indicator))
-                        console.log(indicators)
+                        IndicatorView.params.delete([...IndicatorView.params].find(i => i.indicator === checkbox.indicator));
                     }
                 });
             });
         });
+
+
+
+        })
+
+       
 
 
 
