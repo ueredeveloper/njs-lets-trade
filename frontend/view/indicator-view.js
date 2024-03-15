@@ -98,103 +98,161 @@ const IndicatorView = {
                 legend: 'MA - 9 Períodos',
                 id: 'ma-09',
                 checkboxId: 'checkbox-ma-09',
-                optionsId: 'ma-09-options'
+                optionsId: 'ma-09-options',
+                selects: [{
+                    indicator: 'ma-09',
+                    name: 'candle',
+                    checkboxId: 'checkbox-ma-09',
+                    selectId: 'select-ma-09-candle',
+                    options: ['high', 'low', 'close']
+                },
+                {
+                    indicator: 'ma-09',
+                    name: 'compare',
+                    checkboxId: 'checkbox-ma-09',
+                    selectId: 'select-ma-09-compare',
+                    options: ['above', 'bellow']
+
+                }
+                ]
             },
             {
                 indicator: 'ma-21',
                 legend: 'MA - 21 Períodos',
                 checkboxId: 'checkbox-ma-21',
-                id: 'ma-21'
+                optionsId: 'ma-21-options',
+                id: 'ma-21',
+                selects: [{
+                    indicator: 'ma-21',
+                    name: 'candle',
+                    checkboxId: 'checkbox-ma-21',
+                    selectId: 'select-ma-21-candle',
+                    options: ['high', 'low', 'close']
+                },
+                {
+                    indicator: 'ma-21',
+                    name: 'compare',
+                    checkboxId: 'checkbox-ma-21',
+                    selectId: 'select-ma-21-compare',
+                    options: ['above', 'bellow']
+
+                }
+                ]
             },
             {
                 indicator: 'ma-200',
                 legend: 'MA - 200 Períodos',
                 checkboxId: 'checkbox-ma-200',
-                id: 'ma-200'
+                optionsId: 'ma-200-options',
+                id: 'ma-200',
+                selects: [{
+                    indicator: 'ma-200',
+                    name: 'candle',
+                    checkboxId: 'checkbox-ma-200',
+                    selectId: 'select-ma-200-candle',
+                    options: ['high', 'low', 'close']
+                },
+                {
+                    indicator: 'ma-200',
+                    name: 'compare',
+                    checkboxId: 'checkbox-ma-200',
+                    selectId: 'select-ma-200-compare',
+                    options: ['above', 'bellow']
+
+                }]
             },
             {
                 indicator: 'ichimoku',
                 legend: 'Ichimoku',
                 checkboxId: 'checkbox-ichimoku',
-                id: 'ichi'
+                optionsId: 'ichi-options',
+                id: 'ichi',
+                selects: [{
+                    indicator: 'ichimoku',
+                    name: 'line1',
+                    checkboxId: 'checkbox-ichimoku',
+                    selectId: 'select-ma-ichimoku-line1',
+                    options: ['conversion', 'base', 'spanA', 'spanB']
+                },
+                {
+                    indicator: 'ichimoku',
+                    name: 'compare',
+                    checkboxId: 'checkbox-ichimoku',
+                    selectId: 'select-ichimoku-compare',
+                    options: ['above', 'bellow']
+
+                },
+                {
+                    indicator: 'ichimoku',
+                    name: 'line2',
+                    checkboxId: 'checkbox-ichimoku',
+                    selectId: 'select-ichimoku-line2',
+                    options: ['conversion', 'base', 'spanA', 'spanB']
+
+                }]
             }
         ]
-        /*<fieldset class="border-2 mx-2">
-        <legend>${form.legend}</legend>
-                    <input type="checkbox" class='ma-200-indicator mx-2'>
-                </fieldset>*/
 
-        forms.forEach((form, i) => {
+        forms.map((form, i) => {
+            console.log(form.selects, form.id, form.checkboxId, form.class, 'op id ', form.optionsId)
             this.div.append(`
-          
             <div id=${form.id} class="flex-1">
                 <fieldset class="border-2 mx-2">
                 <legend>${form.legend}</legend>
-                    <input type="checkbox" id=${form.checkboxId} class='${form.class} mx-2'>
+                    <input type="checkbox" id=${form.checkboxId} mx-2'>
                 </fieldset>
                 <div id=${form.optionsId}></div>
             </div>
             
         `);
 
-        let selects = [{
-            indicator: 'ma-09',
-            name: 'candle',
-            checkboxId: 'checkbox-ma-09',
-            selectId: 'select-ma-09-candle',
-            options: ['high', 'low', 'close']
-        },
-        {
-            indicator: 'ma-09',
-            name: 'compare',
-            checkboxId: 'checkbox-ma-09',
-            selectId: 'select-ma-09-compare',
-            options: ['above', 'bellow']
 
-        }
-        ]
-
-        selects.forEach(checkbox => {
-            // adiciona select
-            $('#ma-09-options').append(
-                `<select id=${checkbox.selectId} class="mx-2">
+            form.selects.forEach(checkbox => {
+                // adiciona select
+                $('#' + form.optionsId).append(
+                    `<select id=${checkbox.selectId} class="mx-2">
                 ${checkbox.options.map(op => `<option>${op}</option>`)}
                 </select>
               `
-            );
-            // remove da tela o select para apenas mostrar quanto o input estiver checked
-            $('#ma-09-options').hide();
+                );
+                // remove da tela o select para apenas mostrar quanto o input estiver checked
+                $('#' + form.optionsId).hide();
 
-            $(document).ready(function () {
-                $('#' + checkbox.checkboxId).change(function () {
-                    if ($(this).is(':checked')) {
-                        $('#ma-09-options').show();
-                        $('#' + checkbox.selectId).on('change', function () {
-                            let value = $(this).val();
-                            let param = [...IndicatorView.params].find(i => i.indicator === checkbox.indicator);
-                            if (param) {
-                                param[checkbox.name] = value
-                            } else {
-                                IndicatorView.params.add({
-                                    indicator: checkbox.indicator,
-                                    [checkbox.name]: value
-                                })
-                            }
-                        });
-                    } else {
-                        $('#ma-09-options').hide();
-                        $('#' + checkbox.selectId).off('change');
-                        IndicatorView.params.delete([...IndicatorView.params].find(i => i.indicator === checkbox.indicator));
-                    }
+                $(document).ready(function () {
+                    $('#' + checkbox.checkboxId).change(function () {
+                        if ($(this).is(':checked')) {
+                            $('#' + form.optionsId).show();
+                            $('#' + checkbox.selectId).on('change', function () {
+                                let value = $(this).val();
+                                let param = [...IndicatorView.params].find(i => i.indicator === checkbox.indicator);
+                                if (param) {
+                                    param[checkbox.name] = value;
+                                    console.log(IndicatorView.params)
+                                } else {
+                                    IndicatorView.params.add({
+                                        indicator: checkbox.indicator,
+                                        [checkbox.name]: value
+                                    });
+                                    console.log(IndicatorView.params)
+                                }
+                            });
+
+                        } else {
+                            $('#' + form.optionsId).hide();
+                            $('#' + checkbox.selectId).off('change');
+                            IndicatorView.params.delete([...IndicatorView.params].find(i => i.indicator === checkbox.indicator));
+                            console.log('close params ', IndicatorView.params)
+                        }
+
+                    });
                 });
             });
-        });
 
 
 
         })
 
-       
+
 
 
 

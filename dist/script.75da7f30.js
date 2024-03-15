@@ -770,30 +770,8 @@ var IndicatorView = {
               legend: 'MA - 9 Períodos',
               id: 'ma-09',
               checkboxId: 'checkbox-ma-09',
-              optionsId: 'ma-09-options'
-            }, {
-              indicator: 'ma-21',
-              legend: 'MA - 21 Períodos',
-              checkboxId: 'checkbox-ma-21',
-              id: 'ma-21'
-            }, {
-              indicator: 'ma-200',
-              legend: 'MA - 200 Períodos',
-              checkboxId: 'checkbox-ma-200',
-              id: 'ma-200'
-            }, {
-              indicator: 'ichimoku',
-              legend: 'Ichimoku',
-              checkboxId: 'checkbox-ichimoku',
-              id: 'ichi'
-            }];
-            /*<fieldset class="border-2 mx-2">
-            <legend>${form.legend}</legend>
-                        <input type="checkbox" class='ma-200-indicator mx-2'>
-                    </fieldset>*/
-            forms.forEach(function (form, i) {
-              _this2.div.append("\n          \n            <div id=".concat(form.id, " class=\"flex-1\">\n                <fieldset class=\"border-2 mx-2\">\n                <legend>").concat(form.legend, "</legend>\n                    <input type=\"checkbox\" id=").concat(form.checkboxId, " class='").concat(form.class, " mx-2'>\n                </fieldset>\n                <div id=").concat(form.optionsId, "></div>\n            </div>\n            \n        "));
-              var selects = [{
+              optionsId: 'ma-09-options',
+              selects: [{
                 indicator: 'ma-09',
                 name: 'candle',
                 checkboxId: 'checkbox-ma-09',
@@ -805,18 +783,85 @@ var IndicatorView = {
                 checkboxId: 'checkbox-ma-09',
                 selectId: 'select-ma-09-compare',
                 options: ['above', 'bellow']
-              }];
-              selects.forEach(function (checkbox) {
+              }]
+            }, {
+              indicator: 'ma-21',
+              legend: 'MA - 21 Períodos',
+              checkboxId: 'checkbox-ma-21',
+              optionsId: 'ma-21-options',
+              id: 'ma-21',
+              selects: [{
+                indicator: 'ma-21',
+                name: 'candle',
+                checkboxId: 'checkbox-ma-21',
+                selectId: 'select-ma-21-candle',
+                options: ['high', 'low', 'close']
+              }, {
+                indicator: 'ma-21',
+                name: 'compare',
+                checkboxId: 'checkbox-ma-21',
+                selectId: 'select-ma-21-compare',
+                options: ['above', 'bellow']
+              }]
+            }, {
+              indicator: 'ma-200',
+              legend: 'MA - 200 Períodos',
+              checkboxId: 'checkbox-ma-200',
+              optionsId: 'ma-200-options',
+              id: 'ma-200',
+              selects: [{
+                indicator: 'ma-200',
+                name: 'candle',
+                checkboxId: 'checkbox-ma-200',
+                selectId: 'select-ma-200-candle',
+                options: ['high', 'low', 'close']
+              }, {
+                indicator: 'ma-200',
+                name: 'compare',
+                checkboxId: 'checkbox-ma-200',
+                selectId: 'select-ma-200-compare',
+                options: ['above', 'bellow']
+              }]
+            }, {
+              indicator: 'ichimoku',
+              legend: 'Ichimoku',
+              checkboxId: 'checkbox-ichimoku',
+              optionsId: 'ichi-options',
+              id: 'ichi',
+              selects: [{
+                indicator: 'ichimoku',
+                name: 'line1',
+                checkboxId: 'checkbox-ichimoku',
+                selectId: 'select-ma-ichimoku-line1',
+                options: ['conversion', 'base', 'spanA', 'spanB']
+              }, {
+                indicator: 'ichimoku',
+                name: 'compare',
+                checkboxId: 'checkbox-ichimoku',
+                selectId: 'select-ichimoku-compare',
+                options: ['above', 'bellow']
+              }, {
+                indicator: 'ichimoku',
+                name: 'line2',
+                checkboxId: 'checkbox-ichimoku',
+                selectId: 'select-ichimoku-line2',
+                options: ['conversion', 'base', 'spanA', 'spanB']
+              }]
+            }];
+            forms.map(function (form, i) {
+              console.log(form.selects, form.id, form.checkboxId, form.class, 'op id ', form.optionsId);
+              _this2.div.append("\n            <div id=".concat(form.id, " class=\"flex-1\">\n                <fieldset class=\"border-2 mx-2\">\n                <legend>").concat(form.legend, "</legend>\n                    <input type=\"checkbox\" id=").concat(form.checkboxId, " mx-2'>\n                </fieldset>\n                <div id=").concat(form.optionsId, "></div>\n            </div>\n            \n        "));
+              form.selects.forEach(function (checkbox) {
                 // adiciona select
-                $('#ma-09-options').append("<select id=".concat(checkbox.selectId, " class=\"mx-2\">\n                ").concat(checkbox.options.map(function (op) {
+                $('#' + form.optionsId).append("<select id=".concat(checkbox.selectId, " class=\"mx-2\">\n                ").concat(checkbox.options.map(function (op) {
                   return "<option>".concat(op, "</option>");
                 }), "\n                </select>\n              "));
                 // remove da tela o select para apenas mostrar quanto o input estiver checked
-                $('#ma-09-options').hide();
+                $('#' + form.optionsId).hide();
                 $(document).ready(function () {
                   $('#' + checkbox.checkboxId).change(function () {
                     if ($(this).is(':checked')) {
-                      $('#ma-09-options').show();
+                      $('#' + form.optionsId).show();
                       $('#' + checkbox.selectId).on('change', function () {
                         var value = $(this).val();
                         var param = _toConsumableArray(IndicatorView.params).find(function (i) {
@@ -824,18 +869,21 @@ var IndicatorView = {
                         });
                         if (param) {
                           param[checkbox.name] = value;
+                          console.log(IndicatorView.params);
                         } else {
                           IndicatorView.params.add(_defineProperty({
                             indicator: checkbox.indicator
                           }, checkbox.name, value));
+                          console.log(IndicatorView.params);
                         }
                       });
                     } else {
-                      $('#ma-09-options').hide();
+                      $('#' + form.optionsId).hide();
                       $('#' + checkbox.selectId).off('change');
                       IndicatorView.params.delete(_toConsumableArray(IndicatorView.params).find(function (i) {
                         return i.indicator === checkbox.indicator;
                       }));
+                      console.log('close params ', IndicatorView.params);
                     }
                   });
                 });
@@ -1689,7 +1737,7 @@ var parent = module.bundle.parent;
 if ((!parent || !parent.isParcelRequire) && typeof WebSocket !== 'undefined') {
   var hostname = "" || location.hostname;
   var protocol = location.protocol === 'https:' ? 'wss' : 'ws';
-  var ws = new WebSocket(protocol + '://' + hostname + ':' + "64083" + '/');
+  var ws = new WebSocket(protocol + '://' + hostname + ':' + "56801" + '/');
   ws.onmessage = function (event) {
     checkedAssets = {};
     assetsToAccept = [];
