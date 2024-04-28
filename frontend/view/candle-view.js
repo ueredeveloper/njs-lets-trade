@@ -25,8 +25,8 @@ const CandleView = {
     }
 
     this.filteredCurrencyByQuote = []
-    this.filteredCurrenciesByBinanceUSDT =[];
-    
+    this.filteredCurrenciesByBinanceUSDT = [];
+
     $(document).on('intervalChanged', (event, value) => {
       this.interval = value;
     });
@@ -56,20 +56,20 @@ const CandleView = {
         case 'MA09':
           symbolCandlesAndSMA = await fetchCandlesAndSMA(this.filteredCurrenciesByBinanceUSDT, this.interval, 9, 21);
           smaResult = await compareCandlesAndSMA(symbolCandlesAndSMA);
-          console.log(smaResult)
+          console.log(this.interval, condition, smaResult)
           break;
         case 'MA21':
           symbolCandlesAndSMA = await fetchCandlesAndSMA(this.filteredCurrenciesByBinanceUSDT, this.interval, 21, 32);
           smaResult = await compareCandlesAndSMA(symbolCandlesAndSMA);
-          console.log(smaResult)
+          console.log(this.interval, condition, smaResult)
           break;
         case 'MA200':
           symbolCandlesAndSMA = await fetchCandlesAndSMA(this.filteredCurrenciesByBinanceUSDT, this.interval, 200, 232);
           smaResult = await compareCandlesAndSMA(symbolCandlesAndSMA);
-          console.log(smaResult)
+          console.log('ma 200 ', this.interval, condition, smaResult)
           break;
         case 'Bollinger Bands':
-          console.log('bollinger bands')
+          console.log(condition, 'bollinger bands')
           break;
         default:
           //Busca candles e ichimoku cloud
@@ -77,7 +77,7 @@ const CandleView = {
           // Compara as linhas ichimoku
           let result = await compareIchimokuLines(symbolCandlesAndIchimoku, condition)
 
-          console.log(result)
+          console.log(this.interval, condition, result)
       }
 
     });

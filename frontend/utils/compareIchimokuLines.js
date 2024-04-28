@@ -13,21 +13,30 @@ const compareIchimokuLines = async (symbolCandlesAndIchimoku, condition) => {
             IndicatorModel.ichomokuLines: ['Conversion', 'Baseline', 'Span A', 'Span B' ],
 
         */
+       console.log(condition)
 
         let lastIchimoku = ichimokuCloud.slice(-1)[0];
 
         switch (condition) {
-           
+
             // Se a solicitação é a linha de conversão abaixo da linha base. Considerando a comparação da última linha ichimoku.
             case 'Conversion|below|Baseline':
                 if (lastIchimoku.conversion < lastIchimoku.base) {
-                    results.push({symbol, lastIchimoku});
+                    //results.push({symbol, lastIchimoku});
+                    results.push(symbol);
                 }
 
                 break;
             case 'Conversion|above|Baseline':
                 if (lastIchimoku.conversion > lastIchimoku.base) {
-                    results.push({symbol, lastIchimoku});
+                    //results.push({symbol, lastIchimoku});
+                    results.push(symbol);
+                }
+                break;
+            case 'Conversion|above|span A':
+                if (lastIchimoku.conversion > lastIchimoku.spanA && lastIchimoku.conversion > lastIchimoku.spanB) {
+                    //results.push({symbol, lastIchimoku});
+                    results.push(symbol);
                 }
                 break;
             default:
