@@ -13,7 +13,7 @@ const FavoriteView = {
   },
   renderList: async function () {
 
-    this.favorites.map(favorite=> this.div.append(`<button>${favorite}</button>`))
+    //this.favorites.map(favorite=> this.div.append(`<button>${favorite}</button>`))
 
     
 

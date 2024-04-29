@@ -23,3 +23,7 @@ yarn-error.log
 Thumbs.db
 # Ignore cache files
 .cache/
+
+/dist
+/data
+/backend/data/

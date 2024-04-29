@@ -1,4 +1,3 @@
-
 const compareCandlesAndSMA = async (symbolCandlesAndSMA) => {
 
     /*
@@ -34,7 +33,7 @@ const compareCandlesAndSMA = async (symbolCandlesAndSMA) => {
         let lastSMA = sma.slice(-1)[0];
         //Se SMA acima do último candlestick(close)
         if (lastSMA > lastCandlesticks.close) {
-          // results.push({ symbol, lastSMA, lastCandlesticks });
+            //results.push({ symbol, lastSMA, lastCandlesticks });
             results.push(symbol);
         }
 
