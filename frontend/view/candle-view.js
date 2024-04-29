@@ -76,8 +76,8 @@ const CandleView = {
           let symbolCandlesAndIchimoku = await fetchCandlesticksAndCloud(this.filteredCurrenciesByBinanceUSDT, this.interval)
           // Compara as linhas ichimoku
           let result = await compareIchimokuLines(symbolCandlesAndIchimoku, condition)
-
-          console.log(result)
+          
+          console.log(this.interval, condition, result)
       }
 
     });

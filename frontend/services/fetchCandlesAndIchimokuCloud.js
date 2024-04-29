@@ -5,7 +5,7 @@ const fetchCandlesticksAndCloud = (currencies, interval)=>{
 
         return new Promise(async (resolve, reject) => {
           try {
-            // Fetch candlesticks
+            // Fetch candlesticks // valor padrão: 166
             let candlesticks = await fetch(`http://localhost:3000/services/candles/?symbol=${symbol}&limit=${166}&interval=${interval}`)
               .then(response => {
                 if (!response.ok) {
