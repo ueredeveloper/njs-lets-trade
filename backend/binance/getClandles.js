@@ -12,19 +12,32 @@ module.exports = getClandles = async function (symbol, interval, limit) {
      * 200 ou 300 períodos para a api, pediremos apenas os últimos valores necessários.
      */
 
-    let dbCandles = await readCandles(symbol, interval, (err, data) => {
-        if (err) {
-            console.error('Error reading file:', err);
-            return;
+    let dbCandles;
+    try {
+        // Leitura do db desktop em json
+        dbCandles = await readCandles(symbol, interval);
+    } catch (error) {
+        // Caso não haja ainda o arquivo, cria o arquivo
+        if (error.code === 'ENOENT') {
+            writeCandles(symbol, interval, [])
+            dbCandles = [];
+        } else {
+            // Outro erro, vamos lançá-lo novamente
+            throw error;
         }
+    }
 
-        return data;
-
-    });
     // Data atual, no momento da solicitação.
     const currentTimestamp = Date.now();
     // Diferença entre a data atual e data do último candle salvo no banco desktop.
-    let dbLastOpenTime = dbCandles.slice(-1)[0].openTime;
+    let dbLastOpenTime;
+
+    if (dbCandles.length > 0) {
+        dbLastOpenTime = dbCandles.slice(-1)[0].openTime;
+    } else {
+        dbLastOpenTime = Date.now();
+    }
+
 
     const timeDifference = currentTimestamp - dbLastOpenTime;
     // Período solicitado em milisegundos
@@ -32,21 +45,53 @@ module.exports = getClandles = async function (symbol, interval, limit) {
     // Limite de candles necessários para atualizar o banco
     const limitForUpdateDb = Math.floor(timeDifference / miliseconds);
 
-    console.log(limitForUpdateDb)
-
-    if (limitForUpdateDb > 0) {
+    // Caso o tamanho da array maior que mil, deletar o valor mais antigo. A array não pode ultrapassar mil registros.
+    if (dbCandles.length > 1000) {
+        dbCandles.shift()
+    }
+    /** Se a solicitação for maior do que o que existe no banco, atualiza todo o banco com o tamanho da solicitação */
+    if (limit > dbCandles.length) {
 
         let client = await getClient();
-        let candles = await client.candles({ symbol: symbol, interval: interval, limit: limitForUpdateDb });
+        let candles = await client.candles({ symbol: symbol, interval: interval, limit: limit });
 
+        writeCandles(symbol, interval, candles)
 
-        candles.forEach(candle => dbCandles.push(candle));
+        return candles;
 
+    } else {
 
-        writeCandles(symbol, interval, dbCandles)
+        /** Se o limite de atualizações de candle for  maior que zero */
+        if (limitForUpdateDb > 0) {
 
+            let client = await getClient();
+            let candles = await client.candles({ symbol: symbol, interval: interval, limit: limitForUpdateDb });
+
+            // Busca candles para atualizar banco
+            candles.forEach(candle => dbCandles.push(candle));
+
+            // Retirar valores repetidos a partir do atributo openTime
+            let uniqueItems = [];
+
+            // Iterate through the array
+            
+            dbCandles.forEach(item => {
+                // Use INT_CD as the key to check uniqueness
+                uniqueItems[item.openTime] = item;
+            });
+            let uniqueArray = Object.values(uniqueItems);
+
+            writeCandles(symbol, interval, uniqueArray)
+
+        } else {
+            // Cria novo arquivo json
+            let client = await getClient();
+            dbCandles = await client.candles({ symbol: symbol, interval: interval, limit: limit });
+            writeCandles(symbol, interval, dbCandles)
+        }
+        return dbCandles.slice(-limit);
     }
 
 
-    return dbCandles.slice(-limit);
+
 }
