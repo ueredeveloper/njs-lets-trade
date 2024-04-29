@@ -13,7 +13,6 @@ const compareIchimokuLines = async (symbolCandlesAndIchimoku, condition) => {
             IndicatorModel.ichomokuLines: ['Conversion', 'Baseline', 'Span A', 'Span B' ],
 
         */
-       console.log(condition)
 
         let lastIchimoku = ichimokuCloud.slice(-1)[0];
 
@@ -47,5 +46,4 @@ const compareIchimokuLines = async (symbolCandlesAndIchimoku, condition) => {
 
     return results;
 }
-
 export default compareIchimokuLines;
