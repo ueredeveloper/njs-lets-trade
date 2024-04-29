@@ -36,20 +36,23 @@ module.exports = getClandles = async function (symbol, interval, limit) {
     // Data atual, no momento da solicitação.
     const currentTimestamp = Date.now();
     // Diferença entre a data atual e data do último candle salvo no banco desktop.
-    let dbLastOpenTime;
+    let dbLastItemOpenTime;
 
     if (dbCandles.length > 0) {
-        dbLastOpenTime = dbCandles.slice(-1)[0].openTime;
+
+        dbLastItemOpenTime = dbCandles.slice(-1)[0].openTime;
     } else {
-        dbLastOpenTime = Date.now();
+        dbLastItemOpenTime = Date.now();
     }
 
 
-    const timeDifference = currentTimestamp - dbLastOpenTime;
+    const timeDifference = currentTimestamp - dbLastItemOpenTime;
     // Período solicitado em milisegundos
     let miliseconds = await convertIntervalToMiliseconds(interval);
     // Limite de candles necessários para atualizar o banco
     const limitForUpdateDb = Math.floor(timeDifference / miliseconds);
+
+    console.log('db len ', dbCandles.length, 'symbol',  symbol, miliseconds, 'limite de updates ', limitForUpdateDb, currentTimestamp,dbLastItemOpenTime)
 
     // Caso o tamanho da array maior que mil, deletar o valor mais antigo. A array não pode ultrapassar mil registros.
     if (dbCandles.length > 1000) {
@@ -79,8 +82,7 @@ module.exports = getClandles = async function (symbol, interval, limit) {
             // Retirar valores repetidos a partir do atributo openTime
             let uniqueItems = [];
 
-            // Iterate through the array
-            
+            // Verificar para não ter repetições de candles ao salvar
             dbCandles.forEach(item => {
                 // Use INT_CD as the key to check uniqueness
                 uniqueItems[item.openTime] = item;
@@ -90,7 +92,7 @@ module.exports = getClandles = async function (symbol, interval, limit) {
             writeCandles(symbol, interval, uniqueArray)
 
         } else {
-            // Cria novo arquivo json
+            // Busca candles na quantidade solicitada e salva no banco.
             let client = await getClient();
             dbCandles = await client.candles({ symbol: symbol, interval: interval, limit: limit });
             writeCandles(symbol, interval, dbCandles)
