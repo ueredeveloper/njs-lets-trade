@@ -33,9 +33,12 @@ const compareIchimokuLines = async (symbolCandlesAndIchimoku, condition) => {
                 }
                 break;
             case 'Conversion|above|span A':
-                if (lastIchimoku.conversion > lastIchimoku.spanA && lastIchimoku.conversion > lastIchimoku.spanB) {
-                    //results.push({symbol, lastIchimoku});
-                    results.push(symbol);
+                // comparação com 25 períodos anteriores da spanA e spanB
+                let spanA = ichimokuCloud.slice(-25)[0].spanA;
+                let spanB = ichimokuCloud.slice(-25)[0].spanB;
+                if (lastIchimoku.conversion > spanA && lastIchimoku.conversion > spanB) {
+                    results.push({symbol: symbol,conversion: lastIchimoku.conversion,  spanA: spanA, spanB: spanB});
+                    //results.push(symbol);
                 }
                 break;
             default:

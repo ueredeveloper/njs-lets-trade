@@ -92,10 +92,29 @@ module.exports = getClandles = async function (symbol, interval, limit) {
             writeCandles(symbol, interval, uniqueArray)
 
         } else {
+            /*
+            console.log('else, limit for update < 0 or === 0 ', limitForUpdateDb===0, limitForUpdateDb, limit)
             // Busca candles na quantidade solicitada e salva no banco.
             let client = await getClient();
             dbCandles = await client.candles({ symbol: symbol, interval: interval, limit: limit });
-            writeCandles(symbol, interval, dbCandles)
+            writeCandles(symbol, interval, dbCandles)*/
+            let client = await getClient();
+            let candles = await client.candles({ symbol: symbol, interval: interval, limit: 1 });
+
+            // Busca candles para atualizar banco
+            candles.forEach(candle => dbCandles.push(candle));
+
+            // Retirar valores repetidos a partir do atributo openTime
+            let uniqueItems = [];
+
+            // Verificar para não ter repetições de candles ao salvar
+            dbCandles.forEach(item => {
+                // Use INT_CD as the key to check uniqueness
+                uniqueItems[item.openTime] = item;
+            });
+            let uniqueArray = Object.values(uniqueItems);
+
+            writeCandles(symbol, interval, uniqueArray)
         }
         return dbCandles.slice(-limit);
     }
