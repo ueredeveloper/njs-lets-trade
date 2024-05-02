@@ -1,7 +1,6 @@
 /**
  * For scrap binance browser
  */
-
 const getSymbols = () => {
     let btn = document.createElement('button');
     btn.innerHTML = 'CLICK';
@@ -15,6 +14,7 @@ const getSymbols = () => {
         }
     }
 }
+//getSymbols()
 
 const scrollCurrencies = () => {
     let div = document.getElementsByClassName('header-container');
@@ -78,3 +78,4 @@ const scrollCurrencies = () => {
     div[0].appendChild(par1);
     div[0].appendChild(btn2);
 }
+//scrollCurrencies()
