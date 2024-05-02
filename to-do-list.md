@@ -7,7 +7,14 @@
 ### Tarefa []: Separar as Linhas Ichimoku
     Verificar as linhas ichimoku no gráfico. Talvez seja melhor agrupar em um botão que abre as  linhas, algo assim.
 
-### Tarefa []: Criar um Banco de Dados Local
-    Criar um banco local em json utilizando node para moedas favoritas, blacklisted etc.
 
+### Tarefa [X]: Criar um Banco de Dados Local
+    Criar um banco local em json utilizando node para moedas favoritas, blacklisted etc.
+        30/04/2024 - No momento foi criado um banco com os valores das moedas para pesquisars. Este banco é atualizado ao pesquisar com valores recentes.
+    [] - Ainda falta criar as  moedas favoritas etc.
+
+**30/04/2024**
+### Tarefa []: Filtro de Moedas - Moedas Novas
+    Moedas novas não tem como pesquisar no gráfico de 8 horas ichimoku ou média móvel. É preciso adicionar esta exceção na hora das pesquisas. 
+        Ver currency-model, moedas pesquisáveis na binance.
     
