@@ -27,7 +27,7 @@ const compareIchimokuLines = async (symbolCandlesAndIchimoku, condition) => {
 
                 break;
             case 'Conversion|above|Baseline':
-                if (lastIchimoku.conversion > lastIchimoku.base) {
+                if (lastIchimoku.conversion > lastIchimoku.base || lastIchimoku.conversion === lastIchimoku.base) {
                     //results.push({symbol, lastIchimoku});
                     results.push(symbol);
                 }
@@ -37,7 +37,7 @@ const compareIchimokuLines = async (symbolCandlesAndIchimoku, condition) => {
                 let spanA = ichimokuCloud.slice(-25)[0].spanA;
                 let spanB = ichimokuCloud.slice(-25)[0].spanB;
                 if (lastIchimoku.conversion > spanA && lastIchimoku.conversion > spanB) {
-                    results.push({symbol: symbol,conversion: lastIchimoku.conversion,  spanA: spanA, spanB: spanB});
+                    results.push({ symbol: symbol, conversion: lastIchimoku.conversion, spanA: spanA, spanB: spanB });
                     //results.push(symbol);
                 }
                 break;
