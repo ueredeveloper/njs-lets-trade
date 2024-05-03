@@ -37,6 +37,8 @@ const IndicatorView = {
 
             this.indicatorParams.indicator = value;
 
+            console.log(this.indicatorParams)
+
             $(document).trigger('onIndicatorChange', this.indicatorParams);
 
         });
