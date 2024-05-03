@@ -39,13 +39,13 @@ const scrollCurrencies = () => {
         let i = 0;
         const interval = setInterval(() => {
             if (i >= currencies.length) {
-                console.log('if i>=currencies.len, clear')
+                //console.log('if i>=currencies.len, clear')
                 clearInterval(interval); // Stop the interval after clicking on all elements
                 return;
             }
 
             try {
-                console.log('click  ', i, currencies[i].innerText)
+                //console.log('click  ', i, currencies[i].innerText)
                 currencies[i].click();
                 i++;
             } catch (error) {
@@ -63,7 +63,7 @@ const scrollCurrencies = () => {
         let price = document.getElementsByClassName('showPrice')[0];
 
 
-        console.log('Buy ', __buy, 'Price ', price)
+        //console.log('Buy ', __buy, 'Price ', price)
 
         let result = parseFloat(__buy.replace(/,/g, '')) * parseFloat(price.innerText.replace(/,/g, ''));
 

@@ -45,6 +45,7 @@ const CandleView = {
       let symbolCandlesAndSMA;
       let smaResult;
 
+
       /** é preciso criar um método que filtre por cotação (USDT, BNB, BTC) e por moedas presentes na binance(JASMYUSDT, ...) */
 
       this.filteredCurrencyByQuote = await CurrencyModel.currencies.filter(currency => currency.symbol.endsWith('USDT'));
@@ -56,28 +57,60 @@ const CandleView = {
         case 'MA09':
           symbolCandlesAndSMA = await fetchCandlesAndSMA(this.filteredCurrenciesByBinanceUSDT, this.interval, 9, 21);
           smaResult = await compareCandlesAndSMA(symbolCandlesAndSMA);
-          console.log(this.interval, condition, smaResult)
+          console.log('ma 09 ', this.interval, smaResult)
           break;
         case 'MA21':
           symbolCandlesAndSMA = await fetchCandlesAndSMA(this.filteredCurrenciesByBinanceUSDT, this.interval, 21, 32);
           smaResult = await compareCandlesAndSMA(symbolCandlesAndSMA);
-          console.log(this.interval, condition, smaResult)
+          console.log('ma 21 ', this.interval, smaResult)
           break;
         case 'MA200':
           symbolCandlesAndSMA = await fetchCandlesAndSMA(this.filteredCurrenciesByBinanceUSDT, this.interval, 200, 232);
           smaResult = await compareCandlesAndSMA(symbolCandlesAndSMA);
-          console.log('ma 200 ', this.interval, condition, smaResult)
+          console.log('ma 200 ', this.interval, smaResult)
           break;
         case 'Bollinger Bands':
-          console.log(condition, 'bollinger bands')
+          console.log('bollinger bands')
           break;
         default:
           //Busca candles e ichimoku cloud
           let symbolCandlesAndIchimoku = await fetchCandlesticksAndCloud(this.filteredCurrenciesByBinanceUSDT, this.interval)
+          /* Object example: 
+            let symbolCandlesAndIchimoku = {
+              "symbol": "BTCUSDT",
+              "ichimoku": [
+                {
+                  "conversion": 67666.695,
+                  "base": 66168.05,
+                  "spanA": 66917.3725,
+                  "spanB": 67276
+                },
+
+              ],
+              "candles": [
+                {
+                  "openTime": 1707120000000,
+                  "open": "43071.87000000",
+                  "high": "43569.76000000",
+                  "low": "42600.11000000",
+                  "close": "42644.03000000",
+                  "volume": "12084.60276000",
+                  "closeTime": 1707148799999,
+                  "quoteVolume": "521550254.17210780",
+                  "trades": 528264,
+                  "baseAssetVolume": "6002.56911000",
+                  "quoteAssetVolume": "259161700.11689530"
+                },
+                ...
+                ],
+              "sma": [61525.71079999999,61666.310699999995,...]
+              }
+            */
+
           // Compara as linhas ichimoku
           let result = await compareIchimokuLines(symbolCandlesAndIchimoku, condition)
 
-          console.log(this.interval, condition, result)
+          console.log(condition, this.interval, result)
       }
 
     });
