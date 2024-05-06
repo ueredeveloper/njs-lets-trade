@@ -68,7 +68,12 @@ const CandleView = {
         case 'MA200':
           symbolCandlesAndSMA = await fetchCandlesAndSMA(this.filteredCurrenciesByBinanceUSDT, this.interval, 200, 232);
           smaResult = await compareCandlesAndSMA(symbolCandlesAndSMA);
-          console.log('ma 200 ', this.interval, smaResult)
+
+          // Organizar por proximidade com a média móvel
+          let smaSortedCoins = sortCoinsByProximity(smaResult)
+
+          console.log('ma 200', this.interval, smaSortedCoins.map(sma=> sma.symbol))
+
           break;
         case 'Bollinger Bands':
           console.log('bollinger bands')
@@ -108,14 +113,10 @@ const CandleView = {
               }
             */
 
-              console.log(symbolCandlesAndIchimoku)
-
           // Compara as linhas ichimoku
           let result = await compareIchimokuLines(symbolCandlesAndIchimoku, condition)
 
-          let sortedCoins = sortCoinsByProximity(result)
-
-          console.log(condition, this.interval, sortedCoins)
+          console.log(condition, this.interval, result)
       }
 
     });

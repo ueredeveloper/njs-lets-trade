@@ -14,7 +14,16 @@
     [] - Ainda falta criar as  moedas favoritas etc.
 
 **30/04/2024**
-### Tarefa []: Filtro de Moedas - Moedas Novas
+### Tarefa [X]: Filtro de Moedas - Moedas Novas
     Moedas novas não tem como pesquisar no gráfico de 8 horas ichimoku ou média móvel. É preciso adicionar esta exceção na hora das pesquisas. 
         Ver currency-model, moedas pesquisáveis na binance.
+
+        * Foi adicionado.
     
+**06/05/2024
+### Tarefa []: Verificar espaço temporal entre candles
+    Por o banco desktop ser atualizado ao pesquisar, pode ser que demore a pesquisar e o espaço temporal entra uma atualização e outra deixa um vácuo  de candles, por  exemplo: 
+        candle de 14:00
+            pula candle de 15:00
+                atualiza com o candle de 16:00.
+            

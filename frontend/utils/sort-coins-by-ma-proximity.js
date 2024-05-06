@@ -14,12 +14,11 @@ function sortCoinsByProximity(coins) {
     */
     let result = coins.sort((x, y) => {
 
-        //Comparação sma e candle
-        let _x = (Number(x.candleClose) - Number(x.lastSMA)) / Number(x.candleClose)
-        // Comparação sma e candle
-        let _y = (Number(y.candleClose) - Number(y.lastSMA)) / Number(y.candleClose)
-        // comparação para ordenamento
-        return _x - _y
+        // Calcula porcentagem entre candle close e último valor da média móvel
+        let percentDiffX = (parseFloat(x.candleClose) - parseFloat(x.lastSMA)) / parseFloat(x.candleClose);
+        let percentDiffY = (parseFloat(y.candleClose) - parseFloat(y.lastSMA)) / parseFloat(y.candleClose);
+        // Compare the percentage differences
+        return percentDiffY - percentDiffX;
     });
 
     return result;
