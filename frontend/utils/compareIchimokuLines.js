@@ -1,5 +1,7 @@
 const compareIchimokuLines = async (symbolCandlesAndIchimoku, condition) => {
 
+    console.log(symbolCandlesAndIchimoku)
+
     //console.log('compare inchimoku lines ', symbolCandlesAndIchimoku)
 
     // let { candlesticks, ichimoku, symbol } = symbolCandlesAndIchimoku;
@@ -44,8 +46,8 @@ const compareIchimokuLines = async (symbolCandlesAndIchimoku, condition) => {
                     let spanA = ichimoku.slice(-25)[0].spanA;
                     let spanB = ichimoku.slice(-25)[0].spanB;
                     if (lastIchimoku.conversion > spanA && lastIchimoku.conversion > spanB) {
-                        results.push({ symbol: symbol, conversion: lastIchimoku.conversion, spanA: spanA, spanB: spanB });
-                        //results.push(symbol);
+                        //results.push({ symbol: symbol, conversion: lastIchimoku.conversion, spanA: spanA, spanB: spanB });
+                        results.push(symbol);
                     }
                     break;
                 default:

@@ -5,6 +5,7 @@ import ichimokuLinesCompartions from "../utils/compareIchimokuLines";
 import compareIchimokuLines from "../utils/compareIchimokuLines";
 import fetchCandlesAndSMA from "../services/fetchCandlesAndSMA";
 import compareCandlesAndSMA from "../utils/compareCandlesAndSMA";
+import { sortCoinsByProximity } from "../utils/sort-coins-by-ma-proximity";
 
 const CandleView = {
 
@@ -107,10 +108,14 @@ const CandleView = {
               }
             */
 
+              console.log(symbolCandlesAndIchimoku)
+
           // Compara as linhas ichimoku
           let result = await compareIchimokuLines(symbolCandlesAndIchimoku, condition)
 
-          console.log(condition, this.interval, result)
+          let sortedCoins = sortCoinsByProximity(result)
+
+          console.log(condition, this.interval, sortedCoins)
       }
 
     });

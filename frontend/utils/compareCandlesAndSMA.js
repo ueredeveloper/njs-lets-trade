@@ -32,9 +32,18 @@ const compareCandlesAndSMA = async (symbolCandlesAndSMA) => {
 
         let lastSMA = sma.slice(-1)[0];
         //Se SMA acima do último candlestick(close)
-        if (lastSMA > lastCandlesticks.close) {
-            //results.push({ symbol, lastSMA, lastCandlesticks });
-            results.push(symbol);
+        let candleClose = lastCandlesticks.close;
+        if (lastSMA > candleClose) {
+
+            let result = { symbol, lastSMA, candleClose }
+           /*{
+                "symbol": "ADAUSDT",
+                "lastSMA": 0.5206745000000003,
+                "candleClose": "0.45760000"
+            }*/
+            
+            results.push(result);
+            //results.push(symbol);
         }
 
     });
