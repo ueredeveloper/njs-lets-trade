@@ -1,9 +1,5 @@
 const compareIchimokuLines = async (symbolCandlesAndIchimoku, condition) => {
 
-    console.log(symbolCandlesAndIchimoku)
-
-    //console.log('compare inchimoku lines ', symbolCandlesAndIchimoku)
-
     // let { candlesticks, ichimoku, symbol } = symbolCandlesAndIchimoku;
 
     let results = []

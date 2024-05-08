@@ -1,166 +1,284 @@
-import IndicatorModel from "../model/indicators-model";
-
-
-
 const IndicatorView = {
+    init: function () {
 
-    /*
-    indicators: ['MA09', 'MA21', 'MA200', 'Bollinger Bands', 'Ichimoku Cloud'],
-    ichomokuLines: ['Conversion', 'Baseline', 'Span A', 'Span B' ]
-    */
-    init: async function () {
         this.div = $('#list-indicators');
-        this.indicators = IndicatorModel.getIndicators();
-        this.ichimokuLines = IndicatorModel.getIchimokuLines();
-
-        this.indicatorParams = {
-            "line1": "Conversion",
-            "compare": "below",
-            "line2": "Baseline",
-            "indicator": "Ichimoku"
-        }
-        this.renderList();
-        /**
-         * Ação de busca
-         */
-        $(document).on('click', 'button', function () {
-            // adicionar intervalor symbol, limit, interval nos parametros
-            $(document).trigger('onClickButtonIndicatorView', 'indicatorParams');
-        });
-
-        /**
-         * Muda o tipo de indicador
-         */
-        this.div.on('click', 'input', (event) => {
-
-            let value = $(event.target).val();
-
-            this.indicatorParams.indicator = value;
-
-            console.log(this.indicatorParams)
-
-            $(document).trigger('onIndicatorChange', this.indicatorParams);
-
-        });
-        /**
-         * Muda as comparações entre as linhas Ichimoku, ex: linha de  conversão abaixo da linha base.
-         */
-
-        $(document).on('onSelectsChange', async (event, indicatorParams) => {
-            // Parâmetros enviados pelos selects e options
-            let { name, value } = indicatorParams;
-            // Preencher a variável `this.indicatorParams` com valores.
-            switch (name) {
-                case 'selectLine1':
-                    this.indicatorParams.line1 = value;
-                    break;
-                case 'selectCompare':
-                    this.indicatorParams.compare = value;
-                    break;
-                default:
-                    this.indicatorParams.line2 = value;
+        this.params = {
+            maIndicator: {
+                maIntervals: new Set(['1m']),
+                maValue: 200,
+                maCandle: 'close',
+                maCompare: 'above',
+                checked: false
+            },
+            ichIndicator: {
+                ichIntervals: new Set(['1m']),
+                ichValue: null,
+                ichCandle: 'close',
+                ichLine1: 'conversion',
+                ichLine2: 'base',
+                ichCompare: 'above',
+                checked: false
             }
+        }
 
-            $(document).trigger('onIndicatorChange', this.indicatorParams);
-        })
+        this.render();
 
-    },
-    renderList: async function () {
-        // Cria uma array de cotações de forma assíncrona.
-        let indicators = await this.indicators;
-        // Cria array de li tags com a array de cotações.
-        let tags = indicators.map(value => `
-            <input type="radio" id=${value} value=${value} name="value">
-            <label for="html">${value}</label>
-            `);
-        // Concatena como string a array de li tags.
-        tags = tags.join('');
+        $(document).ready(function () {
 
-        this.createIndicatorsForm(this.div)
-        this.fillIndicatorsForm(tags)
+            // Moving Average
 
-        // Cria uma array de cotações de forma assíncrona.
-        let ichimokuLines = await this.ichimokuLines;
-        // Cria array de li tags com a array de cotações.
-        let ichiTags = ichimokuLines.map(value => `
-            <input type="radio" id=${value} value=${value}>
-            <label for="html">${value}</label>
-            `);
-        // Concatena como string a array de li tags.
-        ichiTags = ichiTags.join('');
+            ['maIndicator', 'ichIndicator'].forEach(item => {
 
-        this.createIchimokuSelectLines(this.div);
-        this.fillIchimokuSelectLines();
-        this.createIndicatorButton(this.div)
+                $('#' + item).change(function () {
+                    // Seta se checkbox foi clicado ou não
+                    IndicatorView.params[item].checked = $(this).is(':checked');
 
-    },
-    createIndicatorsForm: function (div) {
-        this.div.append('<form id="indicators-form" class="mx-5"></form><br>')
-    },
-    fillIndicatorsForm: function (tags) {
-        let form = $('#indicators-form');
-        form.append(`${tags}`);
-    },
-    createIchimokuSelectLines: function (div) {
-        this.div.append(
-            `
-            <select id="selectLine1" class="mx-2"></select>
-            <select id="selectCompare" class="mx-2"></select>
-            <select id="selectLine2" class="mx-2"></select>
-            `
-        )
-    },
-    fillIchimokuSelectLines: function () {
+                })
+            });
 
-        let selectLine1 = $('#selectLine1');
+            ['maValue', 'maCandle', 'maCompare'].forEach(item => {
 
-        selectLine1.append(
-            `
-            <option value="">-- Linha Ichimoku --</option>
-            <option value="Conversion">Linha de Conversão</option>
-            <option value="Baseline">Linha de Base</option>
-            <option value="span A">Linha Span A</option>
-            <option value="span B">Linha Span B</option>
-                `
-        );
-        selectLine1.on('change', function () {
-            let value = $(this).val();
-            $(document).trigger('onSelectsChange', { value: value, name: 'selectLine1' });
+                $('#' + item).on('change', function () {
+                    let name = $(this).attr('name');
+
+                    let value = $(this).val();
+
+                    let {
+                        maIndicator
+                    } = IndicatorView.params;
+
+                    maIndicator.checked ? maIndicator[name] = value : maIndicator.params[name] = null;
+
+                    console.log(IndicatorView.params.maIndicator)
+
+                });
+
+            });
+
+            // Ichimoku
+
+            ['ichLine1', 'ichCompare', 'ichLine2'].forEach(item => {
+
+                $('#' + item).on('change', function () {
+                    var name = $(this).attr('name');
+                    let value = $(this).val();
+                    let {
+                        ichIndicator
+                    } = IndicatorView.params;
+
+                    ichIndicator.checked ? ichIndicator[name] = value : ichIndicator.params[name] = null
+
+                    console.log(IndicatorView.params.ichIndicator)
+
+                });
+
+            });
+
+            ['ich1m', 'ich5m', 'ich15m', 'ich1h', 'ich4h', 'ich8h', 'ich1d', 'ich3d', 'ich1w'].forEach(item => {
+
+                $('#' + item).change(function () {
+                    let checked = $(this).is(':checked');
+                    let name = $(this).attr('name');
+
+                    if (checked) {
+
+                        let ichChecked = IndicatorView.params.ichIndicator.checked;
+                        if (ichChecked) {
+                            let intervals = IndicatorView.params.ichIndicator.ichIntervals;
+
+                            intervals.add(name)
+                            console.log('if ich indicator checked', IndicatorView.params.ichIndicator.ichIntervals);
+                        }
+                    } else {
+
+                        console.log('else')
+
+                        let intervals = IndicatorView.params.ichIndicator.ichIntervals;
+
+                        intervals.delete(name)
+                        console.log('if ich indicator checked', IndicatorView.params.ichIndicator.ichIntervals);
+
+
+                    }
+
+                })
+            });
+
+
+            ['ma1m', 'ma5m', 'ma15m', 'ma1h', 'ma4h', 'ma8h', 'ma1d', 'ma3d', 'ma1w'].forEach(item => {
+
+                $('#' + item).change(function () {
+                    let checked = $(this).is(':checked');
+                    let name = $(this).attr('name');
+
+                    if (checked) {
+
+                        let maChecked = IndicatorView.params.maIndicator.checked;
+                        if (maChecked) {
+                            let intervals = IndicatorView.params.maIndicator.maIntervals;
+
+                            intervals.add(name)
+                            console.log('if ma indicator checked', IndicatorView.params.maIndicator.maIntervals);
+                        }
+                    } else {
+
+                        console.log('else')
+
+                        let intervals = IndicatorView.params.maIndicator.maIntervals;
+
+                        intervals.delete(name)
+                        console.log('if ma indicator checked', IndicatorView.params.maIndicator.maIntervals);
+
+
+                    }
+
+                })
+            });
+
         });
 
-        let selectCompare = $('#selectCompare');
+        let button = this.createIndicatorButton()
 
-        selectCompare.append(
-            `
-            <option value="">-- Comparação --</option>
-            <option value="above">Acima</option>
-            <option value="below">Abaixo</option>
-            `
-        );
-        selectCompare.on('change', function () {
-            let value = $(this).val();
-            $(document).trigger('onSelectsChange', { value: value, name: 'selectCompare' });
-        });
-        let selectLine2 = $('#selectLine2');
+        this.div.append(button)
 
-        selectLine2.append(
-            `
-            <option value="">-- Linha Ichimoku --</option>
-            <option value="Conversion">Linha de Conversão</option>
-            <option value="Baseline">Linha de Base</option>
-            <option value="span A">Linha Span A</option>
-            <option value="span B">Linha Span B</option>
-            `
-        );
-        selectLine2.on('change', function () {
-            let value = $(this).val();
-            $(document).trigger('onSelectsChange', { value: value, name: 'selectLine2' });
-        });
+    },
+    render: function () {
+
+        this.div.append(`
+          <form class="flex-1 mx-2 ">
+            ${this.renderMovingAverage()}
+            ${this.renderIchimokuCloud()}
+          </form>
+        `)
+
+        $("#fieldMaIndicator").append(`${this.renderMaIntervals()}`);
+        $("#fieldIchIndicator").append(`${this.renderIchimokuIntervals()}`)
+
+    },
+    renderMovingAverage: function () {
+        return `
+          <fieldset id="fieldMaIndicator" class="flex flex-row border-2 p-2 items-center">
+                <legend>Moving Average</legend>
+                <!-- Checkbox --> 
+                    <input type="checkbox" class="mx-2" id="maIndicator" name="ma" value="ma">
+                  <label for="maIndicator" class="mx-2"> Moving Average</label>
+              
+              <!-- MA Value - Select -->
+              <select name="maValue" class="flex-1 mx-2 h-7 " id="maValue">
+                <option value="9">09</option>
+                <option value="21">21</option>
+                <option value="200">200</option>
+                      </select>
+              
+               <!-- Compare - Select -->
+              <select name="maCompare" class="flex-1 mx-2 h-7" id="maCompare">
+                <option value="above">Above</option>
+                <option value="bellow">Bellow</option>
+                      </select>
+              
+              <!-- Candle - Select -->
+              <select name="maCandle" class="flex-1 mx-2 h-7" id="maCandle">
+                <option value="high">Candle High</option>
+                <option value="close">Candle Close</option>
+                <option value="low">Candle Low</option>
+                      </select>
+             
+               </fieldset>
+              `
+    },
+    renderIchimokuCloud: function () {
+
+        return `
+              <fieldset id="fieldIchIndicator" class="flex flexRow border-2 p-2 items-center">
+                <legend>Ichimoku Cloud</legend>
+                <input type="checkbox" id="ichIndicator" name="ichimoku" value="ichimoku">
+                <label for="ichIndicator" class="mx-2"> Ichimoku Cloud</label>
+                
+                <!-- Line 1 - Select -->
+                <select name="ichLine1" class="flex-1 mx-2 h-7" id="ichLine1">
+                <option value="conversion">Conversion Line</option>
+                <option value="base">Base Line</option>
+                <option value="spanA">Span A</option>
+                <option value="spanB">Span B</option>
+                <option value="spanA+B">Span A and B</option>
+                      </select>
+              
+                <!-- Compare - Select -->
+                <select name="ichCompare" class="flex-1 mx-2 h-7" id="ichCompare">
+                <option value="above">Above</option>
+                <option value="bellow">Bellow</option>
+                       </select>
+              
+                <!-- Line 2 - Select -->
+                <select name="ichLine2" class="flex-1 mx-2 h-7" id="ichLine2">
+                <option value="conversion">Conversion Line</option>
+                <option value="base">Base Line</option>
+                <option value="spanA">Span A</option>
+                <option value="spanB">Span B</option>
+                <option value="spanA+B">Span A and B</option>
+                </select>
+              
+            </fieldset>
+        `
+    },
+
+    renderMaIntervals: function () {
+
+        return `
+           
+            <input type="checkbox" id="ma1m" name="1m" value="1h">
+            <label for="ma1m">1m</label><br>
+            <input type="checkbox" id="ma5m" name="5m" value="5m">
+            <label for="ma5m">5m</label><br>
+            <input type="checkbox" id="ma15m" name="15m" value="15m">
+            <label for="ma5m">15m</label><br>
+            <input type="checkbox" id="ma1h" name="1h" value="1h">
+            <label for="ma1h">1h</label><br>
+            <input type="checkbox" id="ma4h" name="4h" value="4h">
+            <label for="ma4h">4h</label><br>
+            <input type="checkbox" id="ma8h" name="8h" value="8h">
+            <label for="ma8h">8h</label><br>
+            <input type="checkbox" id="ma1d" name="1d" value="1d">
+            <label for="ma1d">1d</label><br>
+            <input type="checkbox" id="ma3d" name="3d" value="3d">
+            <label for="ma3d">3d</label><br>
+            <input type="checkbox" id="ma1w" name="1w" value="1w">
+            <label for="ma1w">1w</label><br>
+            
+        `
+
+    },
+    renderIchimokuIntervals: function () {
+
+        return `
+        
+          <input type="checkbox" id="ich1m" name="1m" value="1h">
+          <label for="ich1m">1m</label><br>
+          <input type="checkbox" id="ich5m" name="5m" value="5m">
+          <label for="ich5m">5m</label><br>
+          <input type="checkbox" id="ich15m" name="15m" value="15m">
+          <label for="ich5m">15m</label><br>
+          <input type="checkbox" id="ich1h" name="1h" value="1h">
+          <label for="ich1h">1h</label><br>
+          <input type="checkbox" id="ich4h" name="4h" value="4h">
+          <label for="ich4h">4h</label><br>
+          <input type="checkbox" id="ch8h" name="8h" value="8h">
+          <label for="ch8h">8h</label><br>
+          <input type="checkbox" id="ich1d" name="1d" value="1d">
+          <label for="ich1d">1d</label><br>
+          <input type="checkbox" id="ch3d" name="3d" value="3d">
+          <label for="ch3d">3d</label><br>
+          <input type="checkbox" id="ich1w" name="1w" value="1w">
+          <label for="ich1w">1w</label><br>
+          
+              `
+
     },
     createIndicatorButton: function () {
-        this.div.append(`<button type="button" class="bg-gray-200 hover:bg-green-200 hover:p-0.5 active:bg-blue-200">Click Me!</button>`)
+        this.div.append(`<button type="button" class="w-20 m-5 bg-gray-200 hover:bg-green-200 hover:p-0.5 active:bg-blue-200">Search</button>`)
     }
-};
 
+
+}
 
 export default IndicatorView;
