@@ -116,7 +116,7 @@ const CandleView = {
           // Compara as linhas ichimoku
           let result = await compareIchimokuLines(symbolCandlesAndIchimoku, condition)
 
-          console.log(condition, this.interval, result)
+          console.log(condition, this.interval, result.map(r=> r))
       }
 
     });
