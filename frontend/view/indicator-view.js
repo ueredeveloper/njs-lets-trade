@@ -3,20 +3,19 @@ const IndicatorView = {
 
         this.div = $('#list-indicators');
         this.params = {
-            maIndicator: {
-                maIntervals: new Set(['1m']),
-                maValue: 200,
-                maCandle: 'close',
-                maCompare: 'above',
+            movingAverage: {
+                intervals: new Set(['1h']),
+                length: '200',
+                candle: 'close',
+                compare: 'bellow',
                 checked: false
             },
-            ichIndicator: {
-                ichIntervals: new Set(['1m']),
-                ichValue: null,
-                ichCandle: 'close',
-                ichLine1: 'conversion',
-                ichLine2: 'base',
-                ichCompare: 'above',
+            ichimokuCloud: {
+                intervals: new Set(['1h']),
+                candle: 'close',
+                line1: 'conversion',
+                line2: 'base',
+                compare: 'above',
                 checked: false
             }
         }
@@ -30,8 +29,12 @@ const IndicatorView = {
             ['maIndicator', 'ichIndicator'].forEach(item => {
 
                 $('#' + item).change(function () {
+                    let name = $(this).attr('name'); // ichimokuCloud movingAverage
+
+                    console.log(name)
+
                     // Seta se checkbox foi clicado ou não
-                    IndicatorView.params[item].checked = $(this).is(':checked');
+                    IndicatorView.params[name].checked = $(this).is(':checked');
 
                 })
             });
@@ -40,35 +43,40 @@ const IndicatorView = {
 
                 $('#' + item).on('change', function () {
                     let name = $(this).attr('name');
-
                     let value = $(this).val();
 
+                    console.log(name, value)
+
                     let {
-                        maIndicator
+                        movingAverage
                     } = IndicatorView.params;
 
-                    maIndicator.checked ? maIndicator[name] = value : maIndicator.params[name] = null;
+                    movingAverage.checked ? movingAverage[name] = value : movingAverage.params[name] = null;
 
-                    console.log(IndicatorView.params.maIndicator)
+                    let {length, compare, candle} = IndicatorView.params.movingAverage
+
+                    let request = `${length}|${compare}|${candle}`;
+
+                    console.log(request)
 
                 });
 
             });
 
-            // Ichimoku
+            // ichimokuCloud
 
-            ['ichLine1', 'ichCompare', 'ichLine2'].forEach(item => {
+            ['line1', 'compare', 'line2'].forEach(item => {
 
                 $('#' + item).on('change', function () {
                     var name = $(this).attr('name');
                     let value = $(this).val();
                     let {
-                        ichIndicator
+                        ichimokuCloud
                     } = IndicatorView.params;
 
-                    ichIndicator.checked ? ichIndicator[name] = value : ichIndicator.params[name] = null
+                    ichimokuCloud.checked ? ichimokuCloud[name] = value : ichimokuCloud.params[name] = null
 
-                    console.log(IndicatorView.params.ichIndicator)
+                    let {line1, compare, line2 } = IndicatorView.params.ichimokuCloud
 
                 });
 
@@ -82,21 +90,21 @@ const IndicatorView = {
 
                     if (checked) {
 
-                        let ichChecked = IndicatorView.params.ichIndicator.checked;
+                        let ichChecked = IndicatorView.params.ichimokuCloud.checked;
                         if (ichChecked) {
-                            let intervals = IndicatorView.params.ichIndicator.ichIntervals;
+                            let intervals = IndicatorView.params.ichimokuCloud.intervals;
 
                             intervals.add(name)
-                            console.log('if ich indicator checked', IndicatorView.params.ichIndicator.ichIntervals);
+                            console.log('if ich indicator checked', IndicatorView.params.ichimokuCloud.intervals);
                         }
                     } else {
 
                         console.log('else')
 
-                        let intervals = IndicatorView.params.ichIndicator.ichIntervals;
+                        let intervals = IndicatorView.params.ichimokuCloud.intervals;
 
                         intervals.delete(name)
-                        console.log('if ich indicator checked', IndicatorView.params.ichIndicator.ichIntervals);
+                        console.log('if ich indicator checked', IndicatorView.params.ichimokuCloud.intervals);
 
 
                     }
@@ -113,21 +121,21 @@ const IndicatorView = {
 
                     if (checked) {
 
-                        let maChecked = IndicatorView.params.maIndicator.checked;
+                        let maChecked = IndicatorView.params.movingAverage.checked;
                         if (maChecked) {
-                            let intervals = IndicatorView.params.maIndicator.maIntervals;
+                            let intervals = IndicatorView.params.movingAverage.intervals;
 
                             intervals.add(name)
-                            console.log('if ma indicator checked', IndicatorView.params.maIndicator.maIntervals);
+                            console.log('if ma indicator checked', IndicatorView.params.movingAverage.intervals);
                         }
                     } else {
 
                         console.log('else')
 
-                        let intervals = IndicatorView.params.maIndicator.maIntervals;
+                        let intervals = IndicatorView.params.movingAverage.intervals;
 
                         intervals.delete(name)
-                        console.log('if ma indicator checked', IndicatorView.params.maIndicator.maIntervals);
+                        console.log('if ma indicator checked', IndicatorView.params.movingAverage.intervals);
 
 
                     }
@@ -151,7 +159,7 @@ const IndicatorView = {
           </form>
         `)
 
-        $("#fieldMaIndicator").append(`${this.renderMaIntervals()}`);
+        $("#fieldMaIndicator").append(`${this.renderintervals()}`);
         $("#fieldIchIndicator").append(`${this.renderIchimokuIntervals()}`)
 
     },
@@ -160,24 +168,24 @@ const IndicatorView = {
           <fieldset id="fieldMaIndicator" class="flex flex-row border-2 p-2 items-center">
                 <legend>Moving Average</legend>
                 <!-- Checkbox --> 
-                    <input type="checkbox" class="mx-2" id="maIndicator" name="ma" value="ma">
+                    <input type="checkbox" class="mx-2" id="maIndicator" name="movingAverage" value="ma">
                   <label for="maIndicator" class="mx-2"> Moving Average</label>
               
               <!-- MA Value - Select -->
-              <select name="maValue" class="flex-1 mx-2 h-7 " id="maValue">
+              <select name="length" class="flex-1 mx-2 h-7 " id="maValue">
                 <option value="9">09</option>
                 <option value="21">21</option>
                 <option value="200">200</option>
                       </select>
               
                <!-- Compare - Select -->
-              <select name="maCompare" class="flex-1 mx-2 h-7" id="maCompare">
+              <select name="compare" class="flex-1 mx-2 h-7" id="maCompare">
                 <option value="above">Above</option>
                 <option value="bellow">Bellow</option>
                       </select>
               
               <!-- Candle - Select -->
-              <select name="maCandle" class="flex-1 mx-2 h-7" id="maCandle">
+              <select name="candle" class="flex-1 mx-2 h-7" id="maCandle">
                 <option value="high">Candle High</option>
                 <option value="close">Candle Close</option>
                 <option value="low">Candle Low</option>
@@ -191,11 +199,11 @@ const IndicatorView = {
         return `
               <fieldset id="fieldIchIndicator" class="flex flexRow border-2 p-2 items-center">
                 <legend>Ichimoku Cloud</legend>
-                <input type="checkbox" id="ichIndicator" name="ichimoku" value="ichimoku">
+                <input type="checkbox" id="ichIndicator" name="ichimokuCloud" value="ichimokuCloud">
                 <label for="ichIndicator" class="mx-2"> Ichimoku Cloud</label>
                 
                 <!-- Line 1 - Select -->
-                <select name="ichLine1" class="flex-1 mx-2 h-7" id="ichLine1">
+                <select name="line1" class="flex-1 mx-2 h-7" id="line1">
                 <option value="conversion">Conversion Line</option>
                 <option value="base">Base Line</option>
                 <option value="spanA">Span A</option>
@@ -204,13 +212,13 @@ const IndicatorView = {
                       </select>
               
                 <!-- Compare - Select -->
-                <select name="ichCompare" class="flex-1 mx-2 h-7" id="ichCompare">
+                <select name="compare" class="flex-1 mx-2 h-7" id="compare">
                 <option value="above">Above</option>
                 <option value="bellow">Bellow</option>
                        </select>
               
                 <!-- Line 2 - Select -->
-                <select name="ichLine2" class="flex-1 mx-2 h-7" id="ichLine2">
+                <select name="line2" class="flex-1 mx-2 h-7" id="line2">
                 <option value="conversion">Conversion Line</option>
                 <option value="base">Base Line</option>
                 <option value="spanA">Span A</option>
@@ -222,7 +230,7 @@ const IndicatorView = {
         `
     },
 
-    renderMaIntervals: function () {
+    renderintervals: function () {
 
         return `
            
