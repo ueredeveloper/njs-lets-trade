@@ -4,7 +4,7 @@ const IndicatorView = {
     init: function () {
 
         this.div = $('#list-indicators');
-        this.params = [IndicatorModel.getMovingAverage()]
+        this.params = []
 
         this.render();
 
@@ -12,10 +12,37 @@ const IndicatorView = {
 
 
 
-            /*  $('#btnSearch').on('click', function () {
-  
-                  console.log('btn search')
-              });*/
+            $('#btnSearch').on('click', function () {
+                $('.indicatorContainer').each(function () {
+                    let container = $(this);
+                    let indicatorType = container.find('.indicatorType').val();
+                    let selects = container.find('.indicatorSelects select');
+                    let line1 = selects.eq(0).val();
+                    let compare = selects.eq(1).val();
+                    let line2 = selects.eq(2).val();
+                    let checkboxes = container.find('.indicatorSelects input[type="checkbox"]');
+                    let checkboxValues = checkboxes.filter(':checked').map(function () {
+                        return this.value;
+                    }).get();
+
+                    if (indicatorType === 'ichomokuCloud') {
+                        IndicatorView.params.push(`${indicatorType}|${line1}|${compare}|${line2}|${checkboxValues.join('|')}`);
+
+                    } else if (indicatorType === 'movingAverage') {
+                        IndicatorView.params.push(`${indicatorType}|${line1}|${compare}|${line2}|${checkboxValues.join('|')}`);
+
+                    } else {
+                        console.log('Indicador não encontrado')
+                    }
+
+                    console.log(IndicatorView.params)
+                    /* console.log('Line 1:', line1);
+                     console.log('Compare:', compare);
+                     console.log('Line 2:', line2);
+                     console.log('Checkbox Values:', checkboxValues);*/
+                });
+            });
+
 
 
 
@@ -32,111 +59,91 @@ const IndicatorView = {
                      IndicatorView.params[name].checked = $(this).is(':checked');
  
                  })
-             });
- 
-             ['maValue', 'maCandle', 'maCompare'].forEach(item => {
- 
-                 $('#' + item).on('change', function () {
-                     let name = $(this).attr('name');
-                     let value = $(this).val();
- 
-                     console.log(name, value)
- 
-                     let {
-                         movingAverage
-                     } = IndicatorView.params;
- 
-                     movingAverage.checked ? movingAverage[name] = value : movingAverage.params[name] = null;
- 
-                     let { length, compare, candle } = IndicatorView.params.movingAverage
- 
-                     let request = `${length}|${compare}|${candle}`;
- 
-                     console.log(request)
- 
-                 });
- 
-             });
- 
-             // ichimokuCloud
- 
-             ['line1', 'compare', 'line2'].forEach(item => {
- 
-                 $('#' + item).on('change', function () {
-                     var name = $(this).attr('name');
-                     let value = $(this).val();
-                     let {
-                         ichimokuCloud
-                     } = IndicatorView.params;
- 
-                     ichimokuCloud.checked ? ichimokuCloud[name] = value : ichimokuCloud.params[name] = null
- 
-                     let { line1, compare, line2 } = IndicatorView.params.ichimokuCloud
- 
-                 });
- 
-             });
- 
-             ['ich1m', 'ich5m', 'ich15m', 'ich1h', 'ich4h', 'ich8h', 'ich1d', 'ich3d', 'ich1w'].forEach(item => {
- 
-                 $('#' + item).change(function () {
-                     let checked = $(this).is(':checked');
-                     let name = $(this).attr('name');
- 
-                     if (checked) {
- 
-                         let ichChecked = IndicatorView.params.ichimokuCloud.checked;
-                         if (ichChecked) {
-                             let intervals = IndicatorView.params.ichimokuCloud.intervals;
- 
-                             intervals.add(name)
-                             console.log('if ich indicator checked', IndicatorView.params.ichimokuCloud.intervals);
-                         }
-                     } else {
- 
-                         console.log('else')
- 
-                         let intervals = IndicatorView.params.ichimokuCloud.intervals;
- 
-                         intervals.delete(name)
-                         console.log('if ich indicator checked', IndicatorView.params.ichimokuCloud.intervals);
- 
- 
-                     }
- 
-                 })
-             });
- 
- 
-             ['ma1m', 'ma5m', 'ma15m', 'ma1h', 'ma4h', 'ma8h', 'ma1d', 'ma3d', 'ma1w'].forEach(item => {
- 
-                 $('#' + item).change(function () {
-                     let checked = $(this).is(':checked');
-                     let name = $(this).attr('name');
- 
-                     if (checked) {
- 
-                         let maChecked = IndicatorView.params.movingAverage.checked;
-                         if (maChecked) {
-                             let intervals = IndicatorView.params.movingAverage.intervals;
- 
-                             intervals.add(name)
-                             console.log('if ma indicator checked', IndicatorView.params.movingAverage.intervals);
-                         }
-                     } else {
- 
-                         console.log('else')
- 
-                         let intervals = IndicatorView.params.movingAverage.intervals;
- 
-                         intervals.delete(name)
-                         console.log('if ma indicator checked', IndicatorView.params.movingAverage.intervals);
- 
- 
-                     }
- 
-                 })
              });*/
+
+
+
+            /*
+ 
+            // ichimokuCloud
+ 
+            ['line1', 'compare', 'line2'].forEach(item => {
+ 
+                $('#' + item).on('change', function () {
+                    var name = $(this).attr('name');
+                    let value = $(this).val();
+                    let {
+                        ichimokuCloud
+                    } = IndicatorView.params;
+ 
+                    ichimokuCloud.checked ? ichimokuCloud[name] = value : ichimokuCloud.params[name] = null
+ 
+                    let { line1, compare, line2 } = IndicatorView.params.ichimokuCloud
+ 
+                });
+ 
+            });
+ 
+            ['ich1m', 'ich5m', 'ich15m', 'ich1h', 'ich4h', 'ich8h', 'ich1d', 'ich3d', 'ich1w'].forEach(item => {
+ 
+                $('#' + item).change(function () {
+                    let checked = $(this).is(':checked');
+                    let name = $(this).attr('name');
+ 
+                    if (checked) {
+ 
+                        let ichChecked = IndicatorView.params.ichimokuCloud.checked;
+                        if (ichChecked) {
+                            let intervals = IndicatorView.params.ichimokuCloud.intervals;
+ 
+                            intervals.add(name)
+                            console.log('if ich indicator checked', IndicatorView.params.ichimokuCloud.intervals);
+                        }
+                    } else {
+ 
+                        console.log('else')
+ 
+                        let intervals = IndicatorView.params.ichimokuCloud.intervals;
+ 
+                        intervals.delete(name)
+                        console.log('if ich indicator checked', IndicatorView.params.ichimokuCloud.intervals);
+ 
+ 
+                    }
+ 
+                })
+            });
+ 
+ 
+            ['ma1m', 'ma5m', 'ma15m', 'ma1h', 'ma4h', 'ma8h', 'ma1d', 'ma3d', 'ma1w'].forEach(item => {
+ 
+                $('#' + item).change(function () {
+                    let checked = $(this).is(':checked');
+                    let name = $(this).attr('name');
+ 
+                    if (checked) {
+ 
+                        let maChecked = IndicatorView.params.movingAverage.checked;
+                        if (maChecked) {
+                            let intervals = IndicatorView.params.movingAverage.intervals;
+ 
+                            intervals.add(name)
+                            console.log('if ma indicator checked', IndicatorView.params.movingAverage.intervals);
+                        }
+                    } else {
+ 
+                        console.log('else')
+ 
+                        let intervals = IndicatorView.params.movingAverage.intervals;
+ 
+                        intervals.delete(name)
+                        console.log('if ma indicator checked', IndicatorView.params.movingAverage.intervals);
+ 
+ 
+                    }
+ 
+                })
+            });*/
 
         });
 
@@ -171,8 +178,6 @@ const IndicatorView = {
             let value = $(this).val();
             let indicatorSelects = $(this).closest('.indicatorContent').find('.indicatorSelects');
 
-            console.log(value, indicatorSelects)
-
             switch (value) {
                 case 'movingAverage':
                     indicatorSelects.empty();
@@ -204,9 +209,37 @@ const IndicatorView = {
 
     },
     renderMovingAverage: function () {
+
+        $(document).ready(function () {
+
+            ['maLength', 'maCandle', 'maCompare'].forEach(item => {
+
+                $('#' + item).on('change', function () {
+                    let name = $(this).attr('name');
+                    let value = $(this).val();
+
+                    console.log(name, value)
+
+                    let {
+                        movingAverage
+                    } = IndicatorView.params;
+
+                    movingAverage.checked ? movingAverage[name] = value : movingAverage.params[name] = null;
+
+                    let { length, compare, candle } = IndicatorView.params.movingAverage
+
+                    let request = `${length}|${compare}|${candle}`;
+
+                    console.log(request)
+
+                });
+
+            });
+
+        })
         return `
             
-            <select name="length" class="flex-1 mx-2 h-7 " id="maValue">
+            <select name="length" class="flex-1 mx-2 h-7 " id="maLength">
                 <option value="9">09</option>
                 <option value="21">21</option>
                 <option value="200">200</option>
