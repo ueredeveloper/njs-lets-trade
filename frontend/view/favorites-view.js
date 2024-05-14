@@ -9,6 +9,7 @@ const FavoriteView = {
     this.favorites = FavoriteModel.getFavorites();
    
     this.renderList();
+    
 
   },
   renderList: async function () {

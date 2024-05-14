@@ -26,6 +26,7 @@
         candle de 14:00
             pula candle de 15:00
                 atualiza com o candle de 16:00.
+      
             
 **13/05/2024
 ### Tarefa []: Filtrar por moedas ruins na binance

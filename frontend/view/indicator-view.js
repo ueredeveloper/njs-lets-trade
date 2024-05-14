@@ -1,6 +1,7 @@
 import IndicatorModel from "../model/indicators-model";
 
 const IndicatorView = {
+    
     init: function () {
 
         this.div = $('#list-indicators');

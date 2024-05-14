@@ -60,6 +60,7 @@ const fetchCandlesticksAndCloud = (currencies, intervals) => {
           reject(error);
         }
 
+        
       }
 
       return results;

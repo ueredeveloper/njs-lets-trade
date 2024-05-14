@@ -6,6 +6,8 @@ import { ShangaiChartView } from "./shangai-chart-view";
 
 const CandleView = {
 
+    
+
   init: async function () {
 
     this.div = $('#candles-container');

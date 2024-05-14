@@ -240,6 +240,7 @@ const ShangaiChartView = async (div, currency) => {
             },
 
 
+            
 
             /*{
                 name: 'MA10',
