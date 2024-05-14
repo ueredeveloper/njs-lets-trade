@@ -27,3 +27,6 @@
             pula candle de 15:00
                 atualiza com o candle de 16:00.
             
+**13/05/2024
+### Tarefa []: Filtrar por moedas ruins na binance
+    Há moedas que com baixa liquidez, difíceis de vender, o que pode prejudicar o stop loss.

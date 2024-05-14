@@ -4,7 +4,6 @@ const IndicatorView = {
     init: function () {
 
         this.div = $('#list-indicators');
-        this.params = []
 
         this.render();
 
@@ -29,16 +28,18 @@ const IndicatorView = {
                     }).get();
 
                     if (indicatorType === 'ichimokuCloud') {
-                        params.push(`${indicatorType}|${line1}|${compare}|${line2}|${checkboxValues.join('|')}`);
+                        let intervals = checkboxValues.toString();
+                        params.push({ condition: `${indicatorType}|${line1}|${compare}|${line2}`, intervals: intervals });
 
                     } else if (indicatorType === 'movingAverage') {
-                        params.push(`${indicatorType}|${line1}|${compare}|${line2}|${checkboxValues.join('|')}`);
+                        let intervals = checkboxValues.toString();
+                        params.push({ condition: `${indicatorType}|${line1}|${compare}|${line2}`, intervals: `${intervals}` });
 
                     } else {
                         console.log(`Indicador não encontrado: ${indicatorType}`)
                     }
 
-                    IndicatorView.params = params;
+                    $(document).trigger('onIndicatorViewClickButton', [params]);
 
 
                 });
@@ -108,34 +109,6 @@ const IndicatorView = {
     },
     renderMovingAverage: function () {
 
-        $(document).ready(function () {
-
-            ['maLength', 'maCandle', 'maCompare'].forEach(item => {
-
-                $('#' + item).on('change', function () {
-                    let name = $(this).attr('name');
-                    let value = $(this).val();
-
-                    console.log(name, value)
-
-                    let {
-                        movingAverage
-                    } = IndicatorView.params;
-
-                    movingAverage.checked ? movingAverage[name] = value : movingAverage.params[name] = null;
-
-                    let { length, compare, candle } = IndicatorView.params.movingAverage
-
-                    let request = `${length}|${compare}|${candle}`;
-
-                    console.log(request)
-
-                });
-
-            });
-
-
-        })
         return `
             
             <select name="length" class="flex-1 mx-2 h-7 " id="maLength">
