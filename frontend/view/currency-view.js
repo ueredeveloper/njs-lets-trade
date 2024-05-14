@@ -63,8 +63,6 @@ const CurrencyView = {
 
     let tbody = table.find('tbody');
 
-    
-    
     currencies.forEach(function (item) {
       tbody.append(`
         <tr>

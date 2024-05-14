@@ -1,5 +1,6 @@
 import IndicatorModel from "../model/indicators-model";
 
+
 const IndicatorView = {
     
     init: function () {

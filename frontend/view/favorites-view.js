@@ -1,7 +1,7 @@
 import FavoriteModel from "../model/favorite-model";
 
-const FavoriteView = {
 
+const FavoriteView = {
   init: async function () {
 
     this.div = $('#favorite-container');
@@ -9,7 +9,7 @@ const FavoriteView = {
     this.favorites = FavoriteModel.getFavorites();
    
     this.renderList();
-    
+
 
   },
   renderList: async function () {

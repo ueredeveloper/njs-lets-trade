@@ -3,10 +3,9 @@ import IntervalController from "../controller/interval-controller";
 import fetchCandlesticksAndCloud from "../services/fetchCandlesAndIchimokuCloud";
 import { ShangaiChartView } from "./shangai-chart-view";
 
-
 const CandleView = {
 
-    
+
 
   init: async function () {
 

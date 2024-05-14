@@ -1,7 +1,5 @@
 import * as echarts from 'echarts';
-import { convertOpenTime } from '../../utils/convertOpenTime';
-
-
+import { convertOpenTime } from '../utils/convertOpenTime';
 
 const ShangaiChartView = async (div, currency) => {
 
@@ -240,7 +238,7 @@ const ShangaiChartView = async (div, currency) => {
             },
 
 
-            
+
 
             /*{
                 name: 'MA10',
