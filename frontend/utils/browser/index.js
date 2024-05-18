@@ -78,4 +78,4 @@ const scrollCurrencies = () => {
     div[0].appendChild(par1);
     div[0].appendChild(btn2);
 }
-//scrollCurrencies()
+scrollCurrencies()
