@@ -1,11 +1,14 @@
+import CurrencyModel from "../model/currency-model";
 import IndicatorModel from "../model/indicators-model";
+import fetchCandlesticksAndCloud from "../services/fetchCandlesAndIchimokuCloud";
 
 
 const IndicatorView = {
-    
+
     init: function () {
 
         this.div = $('#list-indicators');
+        this.currencies = []
 
         this.render();
 
@@ -13,11 +16,11 @@ const IndicatorView = {
 
             IndicatorView.params = []
 
-            $('#btnSearch').on('click', function () {
+            $('#btnSearch').on('click', async function () {
 
                 let params = []
 
-                $('.indicatorContent').each(function () {
+                $('.indicatorContent').each( async function () {
                     let container = $(this);
                     let indicatorType = container.find('.indicatorType').val();
                     let selects = container.find('.indicatorSelects select');
@@ -31,17 +34,61 @@ const IndicatorView = {
 
                     if (indicatorType === 'ichimokuCloud') {
                         let intervals = checkboxValues.toString();
-                        params.push({ condition: `${indicatorType}|${line1}|${compare}|${line2}`, intervals: intervals });
+                        params.push({
+                            condition: `${indicatorType}|${line1}|${compare}|${line2}`,
+                            acronym: `${indicatorType.toString()[0]}|${line1.toString()[0]}|${compare.toString()[0]}|${line2.toString()[0]}`,
+                            intervals: intervals
+                        });
 
                     } else if (indicatorType === 'movingAverage') {
                         let intervals = checkboxValues.toString();
-                        params.push({ condition: `${indicatorType}|${line1}|${compare}|${line2}`, intervals: `${intervals}` });
+                        params.push({
+                            condition: `${indicatorType}|${line1}|${compare}|${line2}`,
+                            acronym: `${indicatorType.toString()[0]}|${line1.toString()[0]}|${compare.toString()[0]}|${line2.toString()[0]}`,
+                            intervals: `${intervals}`
+                        });
 
                     } else {
                         console.log(`Indicador não encontrado: ${indicatorType}`)
                     }
 
-                    $(document).trigger('onIndicatorViewClickButton', [params]);
+                    for (const param of params) {
+                        let { condition, intervals } = param //.intervals.split(',')
+                
+                        let currencies = CurrencyModel.currencies.filter(currency => CurrencyModel.binanceUSDT.includes(currency.symbol));
+                
+
+                        console.log(condition, intervals, currencies)
+                        //console.log(filteredCurrenciesByBinanceUSDT)
+                        switch (condition) {
+                          case 'ichimokuCloud|conversion|above|base':
+                            let results = await fetchCandlesticksAndCloud(currencies, intervals);
+                            IndicatorView.currencies.push(results)
+                            break
+                          case 'ichimokuCloud|conversion|above|spanA':
+                            break
+                          case 'ichimokuCloud|conversion|above|spanB':
+                            break
+                          case 'ichimokuCloud|conversion|above|spanA+B':
+                            break
+                          case 'ichimokuCloud|conversion|above|high':
+                            break
+                          case 'ichimokuCloud|conversion|above|close':
+                            break
+                          case 'ichimokuCloud|conversion|above|low':
+                            break
+                          case 'movingAverage|200|above|close':
+                            break
+                          case 'movingAverage|200|bellow|close':
+                            break
+                
+                        }
+                
+                       console.log(IndicatorView.currencies)
+                
+                      }
+
+                    //  $(document).trigger('onIndicatorViewClickButton', [params]);
 
 
                 });

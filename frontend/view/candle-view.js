@@ -1,7 +1,6 @@
 import CurrencyModel from "../model/currency-model";
 import IntervalController from "../controller/interval-controller";
 import fetchCandlesticksAndCloud from "../services/fetchCandlesAndIchimokuCloud";
-import { ShangaiChartView } from "./shangai-chart-view";
 
 const CandleView = {
 
@@ -8530,7 +8529,7 @@ const CandleView = {
     results.forEach(result=> 
       {
         result.forEach(res=>{
-          ShangaiChartView(this.div, res)
+         // ShangaiChartView(this.div, res)
         })
       }
     )
