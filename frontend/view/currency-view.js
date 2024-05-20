@@ -28,7 +28,7 @@ const CurrencyView = {
   renderList: async function () {
 
     let currencies = await CurrencyModel.getAllCurrencies();
-    console.log(currencies)
+   
     let currenciesFilteredByQuote = this.filterCurrenciesByQuote(currencies, 'USDT')
 
     this.createTable(this.currenciesTable)

@@ -5,9 +5,13 @@ const CurrencyModel = {
   currencies: [],
 
   addCurrency: function (item) {
-    this.currencies.push(item);
-    // Notify the View of changes
-    CurrencyView.renderList();
+
+    let index = this.currencies.findIndex(obj => obj.symbol === item.symbol);
+
+    // Se o objeto for econtrado, edite.
+    if (index !== -1) {
+      this.currencies[index] = item;
+    }
   },
   getAllCurrencies: async function () {
     return await this.currencies;

@@ -2,6 +2,7 @@ import CurrencyModel from "../model/currency-model";
 import FilterModel from "../model/filter-model";
 import IndicatorModel from "../model/indicators-model";
 import fetchCandlesticksAndCloud from "../services/fetchCandlesAndIchimokuCloud";
+import compareIchimokuLines from "../utils/compareIchimokuLines";
 
 
 const IndicatorView = {
@@ -54,7 +55,7 @@ const IndicatorView = {
                     }
 
                     for (const param of params) {
-                        let { condition, intervals } = param //.intervals.split(',')
+                        let { condition, intervals, acronym } = param //.intervals.split(',')
                 
                         //let allCurrencies = await CurrencyModel.getAllCurrencies();
                         let allCurrencies = await CurrencyModel.getAllCurrencies();
@@ -65,7 +66,20 @@ const IndicatorView = {
                         switch (condition) {
                           case 'ichimokuCloud|conversion|above|base':
                             let results = await fetchCandlesticksAndCloud(currencies, intervals);
-                            IndicatorView.currencies.push(results)
+
+                            //20/05/2024 -> continuar daqui
+                            //let compareResults = await compareIchimokuLines(results, condition )
+
+                            results.forEach(result => {
+                                result.forEach(item=> {
+                                    console.log(item)
+                                    //CurrencyModel.addCurrency({condition: condition, acronym:acronym, ...item})
+                                    CurrencyModel.addCurrency(item)
+                                })
+
+                               
+                            })
+                            //IndicatorView.currencies.push(results)
                             break
                           case 'ichimokuCloud|conversion|above|spanA':
                             break
@@ -86,7 +100,9 @@ const IndicatorView = {
                 
                         }
                 
-                       console.log(IndicatorView.currencies)
+                       //console.log(IndicatorView.currencies)
+                       let _allCurrencies =  await CurrencyModel.getAllCurrencies()
+                       console.log(_allCurrencies)
                 
                       }
 

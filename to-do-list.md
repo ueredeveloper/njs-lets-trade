@@ -31,3 +31,9 @@
 **13/05/2024
 ### Tarefa []: Filtrar por moedas ruins na binance
     Há moedas que com baixa liquidez, difíceis de vender, o que pode prejudicar o stop loss.
+
+** 20/05/2024
+### Tarefa []: Adicionar comparações
+    No momento estou adicionando o método comparação para depois adicionar a moeda junto com todas as moedas (currency model, all currencies) já informando qual o filtro daquela moeda em específico.
+
+    

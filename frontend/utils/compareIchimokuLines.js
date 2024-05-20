@@ -4,6 +4,8 @@ const compareIchimokuLines = async (symbolCandlesAndIchimoku, condition) => {
 
     let results = []
 
+    console.log('compare')
+
     symbolCandlesAndIchimoku.forEach(({ ichimoku, symbol }) => {
 
         /* 
@@ -68,6 +70,8 @@ const compareIchimokuLines = async (symbolCandlesAndIchimoku, condition) => {
         }
 
     });*/
+
+    console.log(results)
 
     return results;
 }
