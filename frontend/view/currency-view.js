@@ -13,7 +13,7 @@ const CurrencyView = {
     this.renderList();
     $(document).on('quoteChanged', async function (event, selectedQuote) {
       // Busca todas as moedas
-      let currencies = await CurrencyModel.getCurrencies();
+      let currencies = await CurrencyModel.getAllCurrencies();
       // Filtra por quotação, por exemplo: USDT.
       let currenciesFilteredByQuote = CurrencyView.filterCurrenciesByQuote(currencies, selectedQuote);
       // Busca a tag tbody dentro da tag table e limpa esta tabela para novas linhas.
@@ -27,7 +27,8 @@ const CurrencyView = {
   },
   renderList: async function () {
 
-    let currencies = await CurrencyModel.getCurrencies();
+    let currencies = await CurrencyModel.getAllCurrencies();
+    console.log(currencies)
     let currenciesFilteredByQuote = this.filterCurrenciesByQuote(currencies, 'USDT')
 
     this.createTable(this.currenciesTable)

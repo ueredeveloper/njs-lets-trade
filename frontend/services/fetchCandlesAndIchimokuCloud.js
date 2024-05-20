@@ -52,7 +52,13 @@ const fetchCandlesticksAndCloud = (currencies, intervals) => {
             return response.json();
           });
 
-          results.push({ symbol: symbol, interval: interval, ichimokuCloud: ichimokuCloud, candlesticks: candlesticks, movingAverage: movingAverage })
+          results.push({ 
+            symbol: symbol, 
+            price: candlesticks.slice(-1)[0].close,
+            interval: interval, 
+            ichimokuCloud: ichimokuCloud, 
+            candlesticks: candlesticks, 
+            movingAverage: movingAverage })
 
           // Resolve with the data
           resolve(results);

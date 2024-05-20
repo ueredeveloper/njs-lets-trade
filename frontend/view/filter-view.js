@@ -1,4 +1,3 @@
-import QuoteModel from "../model/quotes-model";
 
 const FilterView = {
     init: async function () {

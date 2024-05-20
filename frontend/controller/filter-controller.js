@@ -1,5 +1,5 @@
-import FilterView from "../view/filter-view";
 
+import FilterView from "../view/filter-view";
 
 const FilterController = {
     init: async function () {
