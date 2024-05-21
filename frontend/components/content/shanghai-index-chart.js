@@ -323,6 +323,7 @@ const renderShangaiIndexChart = async (div, symbol, limit, interval) => {
         ]
     };
 
+
     option && shangaiIndexChart.setOption(option);
 
 }

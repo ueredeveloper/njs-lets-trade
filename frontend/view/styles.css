@@ -1,4 +1,15 @@
+* {
+  margin: 0;
+  padding: 0;
+}
+
+#chart-container {
+  position: relative;
+  height: 20rem;
+  overflow: hidden;
+}
+
 li {
-    border:1px;
-    float: left;
-  }
+  border: 1px;
+  float: left;
+}
