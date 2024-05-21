@@ -390,30 +390,7 @@ const CurrencyModel = {
         "OMNIUSDT",
         "REZUSDT"
       ]
-    },
-    {
-      "name": "1h|i|conversion|a|base",
-      "list": [
-          "BTCUSDT",
-          "ETHUSDT",
-          "BNBUSDT",
-          "NEOUSDT",
-          "LTCUSDT",
-          "QTUMUSDT",
-          "ADAUSDT",
-          "XRPUSDT",
-          "EOSUSDT",
-          "IOTAUSDT",
-          "XLMUSDT",
-          "ONTUSDT",
-          "TRXUSDT",
-          "ETCUSDT",
-          "ICXUSDT",
-          "NULSUSDT",
-          "VETUSDT",
-          "USDCUSDT"
-      ]
-  }
+    }
   ],
   quotes: ['USDT', 'BTC', 'BNB'],
 
@@ -455,6 +432,11 @@ const CurrencyModel = {
   },
   getFilters: function () {
     return this.filters;
+  }, 
+  findFilter: function(name){
+    let filter = this.filters.find(filter=> filter.name === name)
+
+    return filter;
   }
 };
 

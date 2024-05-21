@@ -26,19 +26,23 @@ const CurrencyView = {
     });
     $(document).on('selectedFilter', async function (event, selection) {
 
-      console.log(selection)
+      //console.log(selection)
       // Busca todas as moedas
       let currencies = await CurrencyModel.getAllCurrencies();
-      // Filtra por quotação, por exemplo: USDT.
-      let currenciesFiltered = CurrencyView.filterCurrenciesByQuote(currencies, selection);
+      // Busca o filtro indicado
+      let filter = await CurrencyModel.findFilter(selection);
+      // Filtra 
+      let results = currencies.filter(currency=> filter.list.includes(currency.symbol));
+
       // Busca a tag tbody dentro da tag table e limpa esta tabela para novas linhas.
       let table = $('#list-currencies').empty();
 
       CurrencyView.createTable(table)
 
-      CurrencyView.fillTable(table, currenciesFilteredByQuote)
+      CurrencyView.fillTable(table, results)
 
     });
+    
   },
   renderList: async function () {
 

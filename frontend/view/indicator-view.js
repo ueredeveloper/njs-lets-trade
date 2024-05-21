@@ -114,7 +114,7 @@ const IndicatorView = {
 
                     }
 
-                    //  $(document).trigger('onIndicatorViewClickButton', [params]);
+                    $(document).trigger('onSearchByIndicator');
 
 
                 });
