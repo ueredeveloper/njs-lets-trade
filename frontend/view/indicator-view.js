@@ -3,6 +3,7 @@ import FilterModel from "../model/filter-model";
 import IndicatorModel from "../model/indicators-model";
 import fetchCandlesticksAndCloud from "../services/fetchCandlesAndIchimokuCloud";
 import compareIchimokuLines from "../utils/compareIchimokuLines";
+import { conversionAboveBase, conversionAboveCloseCandle, conversionAboveHighCandle, conversionAboveLowCandle, conversionAboveSpanA, conversionAboveSpanAAndSpanB, conversionAboveSpanB, createIchimokuFilter } from "../utils/createIchimokuFilter";
 
 
 const IndicatorView = {
@@ -22,7 +23,7 @@ const IndicatorView = {
 
                 let params = []
 
-                $('.indicatorContent').each( async function () {
+                $('.indicatorContent').each(async function () {
                     let container = $(this);
                     let indicatorType = container.find('.indicatorType').val();
                     let selects = container.find('.indicatorSelects select');
@@ -38,7 +39,7 @@ const IndicatorView = {
                         let intervals = checkboxValues.toString();
                         params.push({
                             condition: `${indicatorType}|${line1}|${compare}|${line2}`,
-                            acronym: `${indicatorType.toString()[0]}|${line1.toString()[0]}|${compare.toString()[0]}|${line2.toString()[0]}`,
+                            acronym: `${indicatorType.toString()[0]}|${line1.toString()}|${compare.toString()[0]}|${line2.toString()}`,
                             intervals: intervals
                         });
 
@@ -46,7 +47,7 @@ const IndicatorView = {
                         let intervals = checkboxValues.toString();
                         params.push({
                             condition: `${indicatorType}|${line1}|${compare}|${line2}`,
-                            acronym: `${indicatorType.toString()[0]}|${line1.toString()[0]}|${compare.toString()[0]}|${line2.toString()[0]}`,
+                            acronym: `${indicatorType.toString()[0]}|${line1.toString()}|${compare.toString()[0]}|${line2.toString()}`,
                             intervals: `${intervals}`
                         });
 
@@ -55,56 +56,63 @@ const IndicatorView = {
                     }
 
                     for (const param of params) {
-                        let { condition, intervals, acronym } = param //.intervals.split(',')
-                
+                        let { condition, intervals, acronym } = param
+
                         //let allCurrencies = await CurrencyModel.getAllCurrencies();
                         let allCurrencies = await CurrencyModel.getAllCurrencies();
 
-                        let currencies = await CurrencyModel.getBinanceCurrenciesWithUsdt(allCurrencies)
+                        let currencies = await CurrencyModel.getBinanceCurrenciesWithUsdt(allCurrencies);
 
-                        //console.log(filteredCurrenciesByBinanceUSDT)
-                        switch (condition) {
-                          case 'ichimokuCloud|conversion|above|base':
-                            let results = await fetchCandlesticksAndCloud(currencies, intervals);
+                        let splitIntervals = intervals.split(',');
 
-                            //20/05/2024 -> continuar daqui
-                            //let compareResults = await compareIchimokuLines(results, condition )
+                        for (const interval of splitIntervals) {
 
-                            results.forEach(result => {
-                                result.forEach(item=> {
-                                    console.log(item)
-                                    //CurrencyModel.addCurrency({condition: condition, acronym:acronym, ...item})
-                                    CurrencyModel.addCurrency(item)
-                                })
+                            if (condition.startsWith('ichimokuCloud')) {
 
-                               
-                            })
-                            //IndicatorView.currencies.push(results)
-                            break
-                          case 'ichimokuCloud|conversion|above|spanA':
-                            break
-                          case 'ichimokuCloud|conversion|above|spanB':
-                            break
-                          case 'ichimokuCloud|conversion|above|spanA+B':
-                            break
-                          case 'ichimokuCloud|conversion|above|high':
-                            break
-                          case 'ichimokuCloud|conversion|above|close':
-                            break
-                          case 'ichimokuCloud|conversion|above|low':
-                            break
-                          case 'movingAverage|200|above|close':
-                            break
-                          case 'movingAverage|200|bellow|close':
-                            break
-                
+                                // Busca indicadores de cada moeda solicitada
+                                let array = await fetchCandlesticksAndCloud(currencies, intervals);
+                                let filterName = `${interval}|${acronym}`;
+
+                                const keywords = ['high', 'low', 'close'];
+                                for (let keyword of keywords) {
+                                    if (condition.includes(keyword)) {
+                                        switch (condition) {
+                                            case 'ichimokuCloud|conversion|above|high':
+                                                createIchimokuFilter(array, filterName, conversionAboveHighCandle)
+                                                break;
+                                            case 'ichimokuCloud|conversion|above|close':
+                                                createIchimokuFilter(array, filterName, conversionAboveCloseCandle)
+                                                break;
+                                            case 'ichimokuCloud|conversion|above|low':
+                                                createIchimokuFilter(array, filterName, conversionAboveLowCandle)
+                                                break;
+                                        }
+                                    } else {
+                                        switch (condition) {
+                                            case 'ichimokuCloud|conversion|above|base':
+                                                createIchimokuFilter(array, filterName, conversionAboveBase)
+                                                break;
+                                            case 'ichimokuCloud|conversion|above|spanA':
+                                                createIchimokuFilter(array, filterName, conversionAboveSpanA)
+                                                break;
+                                            case 'ichimokuCloud|conversion|above|spanB':
+                                                createIchimokuFilter(array, filterName, conversionAboveSpanB)
+                                                break;
+                                            case 'ichimokuCloud|conversion|above|spanA+B':
+                                                createIchimokuFilter(array, filterName, conversionAboveSpanAAndSpanB)
+                                                break;
+                                        }
+                                    }
+
+
+
+                                }
+
+                            }
+
                         }
-                
-                       //console.log(IndicatorView.currencies)
-                       let _allCurrencies =  await CurrencyModel.getAllCurrencies()
-                       console.log(_allCurrencies)
-                
-                      }
+
+                    }
 
                     //  $(document).trigger('onIndicatorViewClickButton', [params]);
 

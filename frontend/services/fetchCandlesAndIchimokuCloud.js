@@ -54,6 +54,7 @@ const fetchCandlesticksAndCloud = (currencies, intervals) => {
 
           results.push({ 
             symbol: symbol, 
+            // Adiciona o fechamento do último preço
             price: candlesticks.slice(-1)[0].close,
             interval: interval, 
             ichimokuCloud: ichimokuCloud, 
@@ -75,7 +76,7 @@ const fetchCandlesticksAndCloud = (currencies, intervals) => {
   }
 
   // Map the currencies to an array of promises
-  let promises = currencies.slice(0, 2).map(currency => _fetchCandlesticksAndCloud(currency.symbol, intervals));
+  let promises = currencies.slice(0, 20).map(currency => _fetchCandlesticksAndCloud(currency.symbol, intervals));
 
   // Use Promise.all to wait for all promises to resolve
   let results = Promise.all(promises)
