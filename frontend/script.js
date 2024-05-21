@@ -9,7 +9,6 @@ import ShangaiChartController from "./controller/shangai-chart-controller";
 ShangaiChartController.init()
 FavoriteController.init();
 FilterController.init()
-FilterController.init();
 QuoteController.init();
 CurrencyController.init();
 IndicatorController.init();

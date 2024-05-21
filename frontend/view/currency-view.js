@@ -11,11 +11,26 @@ const CurrencyView = {
       CurrencyView.textInput.val('');
     });
     this.renderList();
-    $(document).on('quoteChanged', async function (event, selectedQuote) {
+    $(document).on('quoteChanged', async function (event, selected) {
       // Busca todas as moedas
       let currencies = await CurrencyModel.getAllCurrencies();
       // Filtra por quotação, por exemplo: USDT.
-      let currenciesFilteredByQuote = CurrencyView.filterCurrenciesByQuote(currencies, selectedQuote);
+      let currenciesFilteredByQuote = CurrencyView.filterCurrenciesByQuote(currencies, selected);
+      // Busca a tag tbody dentro da tag table e limpa esta tabela para novas linhas.
+      let table = $('#list-currencies').empty();
+
+      CurrencyView.createTable(table)
+
+      CurrencyView.fillTable(table, currenciesFilteredByQuote)
+
+    });
+    $(document).on('selectedFilter', async function (event, selection) {
+
+      console.log(selection)
+      // Busca todas as moedas
+      let currencies = await CurrencyModel.getAllCurrencies();
+      // Filtra por quotação, por exemplo: USDT.
+      let currenciesFiltered = CurrencyView.filterCurrenciesByQuote(currencies, selection);
       // Busca a tag tbody dentro da tag table e limpa esta tabela para novas linhas.
       let table = $('#list-currencies').empty();
 

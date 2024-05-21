@@ -5,7 +5,7 @@ const CurrencyModel = {
   currencies: [],
   filters: [
     {
-      name: 'binanceUsdt',
+      name: 'BinanceUSDT',
       list: [
         "BTCUSDT",
         "1INCHUSDT",
@@ -390,11 +390,34 @@ const CurrencyModel = {
         "OMNIUSDT",
         "REZUSDT"
       ]
-    }
+    },
+    {
+      "name": "1h|i|conversion|a|base",
+      "list": [
+          "BTCUSDT",
+          "ETHUSDT",
+          "BNBUSDT",
+          "NEOUSDT",
+          "LTCUSDT",
+          "QTUMUSDT",
+          "ADAUSDT",
+          "XRPUSDT",
+          "EOSUSDT",
+          "IOTAUSDT",
+          "XLMUSDT",
+          "ONTUSDT",
+          "TRXUSDT",
+          "ETCUSDT",
+          "ICXUSDT",
+          "NULSUSDT",
+          "VETUSDT",
+          "USDCUSDT"
+      ]
+  }
   ],
+  quotes: ['USDT', 'BTC', 'BNB'],
 
   addCurrency: function (item) {
-
     let index = this.currencies.findIndex(obj => obj.symbol === item.symbol);
 
     // Se o objeto for econtrado, edite.
@@ -405,7 +428,6 @@ const CurrencyModel = {
   getAllCurrencies: async function () {
     return await this.currencies;
   },
-
   getBinanceCurrenciesWithUsdt: async function (currencies) {
 
     let bincanceCurrenciesWithUsdt = this.filters[0].list;
@@ -416,7 +438,7 @@ const CurrencyModel = {
 
   },
   addFilter: function (item) {
-    
+
     let index = this.filters.findIndex(obj => obj.name === item.name);
 
     console.log(index, item, item.name, item.list)
@@ -428,6 +450,12 @@ const CurrencyModel = {
       this.filters.push(item)
     }
   },
+  getQuotes: function () {
+    return this.quotes;
+  },
+  getFilters: function () {
+    return this.filters;
+  }
 };
 
 export default CurrencyModel;

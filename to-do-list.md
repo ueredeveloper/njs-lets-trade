@@ -36,4 +36,7 @@
 ### Tarefa []: Adicionar comparações
     No momento estou adicionando o método comparação para depois adicionar a moeda junto com todas as moedas (currency model, all currencies) já informando qual o filtro daquela moeda em específico.
 
+**    21/05/2024
+### Tarefa []: Filtrar por indicadores
+    Criar o filtro por indicadores mostrando as moedas na tabela.
     
