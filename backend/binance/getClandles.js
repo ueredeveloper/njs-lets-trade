@@ -52,11 +52,12 @@ module.exports = getClandles = async function (symbol, interval, limit) {
     // Limite de candles necessários para atualizar o banco
     const limitForUpdateDb = Math.floor(timeDifference / miliseconds);
 
-    console.log('db len ', dbCandles.length, 'symbol',  symbol, miliseconds, 'limite de updates ', limitForUpdateDb, currentTimestamp,dbLastItemOpenTime)
+    console.log('db len ', dbCandles.length, 'symbol',  symbol, 'update len ', limitForUpdateDb
+    )
 
     // Caso o tamanho da array maior que mil, deletar o valor mais antigo. A array não pode ultrapassar mil registros.
     if (dbCandles.length > 1000) {
-        dbCandles.shift()
+        dbCandles = dbCandles.slice(-999)
     }
     /** Se a solicitação for maior do que o que existe no banco, atualiza todo o banco com o tamanho da solicitação */
     if (limit > dbCandles.length) {
@@ -92,12 +93,7 @@ module.exports = getClandles = async function (symbol, interval, limit) {
             writeCandles(symbol, interval, uniqueArray)
 
         } else {
-            /*
-            console.log('else, limit for update < 0 or === 0 ', limitForUpdateDb===0, limitForUpdateDb, limit)
-            // Busca candles na quantidade solicitada e salva no banco.
-            let client = await getClient();
-            dbCandles = await client.candles({ symbol: symbol, interval: interval, limit: limit });
-            writeCandles(symbol, interval, dbCandles)*/
+           
             let client = await getClient();
             let candles = await client.candles({ symbol: symbol, interval: interval, limit: 1 });
 

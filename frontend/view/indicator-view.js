@@ -40,6 +40,8 @@ const IndicatorView = {
 
                     if (indicatorType === 'ichimokuCloud') {
                         let intervals = checkboxValues.toString();
+
+                        console.log('ichi ', intervals)
                         params.push({
                             condition: `${indicatorType}|${line1}|${compare}|${line2}`,
                             acronym: `${indicatorType.toString()[0]}|${line1.toString()}|${compare.toString()[0]}|${line2.toString()}`,
@@ -48,6 +50,8 @@ const IndicatorView = {
 
                     } else if (indicatorType === 'movingAverage') {
                         let intervals = checkboxValues.toString();
+
+                        console.log('moving average ', intervals)
                         params.push({
                             condition: `${indicatorType}|${line1}|${compare}|${line2}`,
                             acronym: `${indicatorType.toString()[0]}|${line1.toString()}|${compare.toString()[0]}|${line2.toString()}`,
@@ -112,11 +116,11 @@ const IndicatorView = {
                                 }
 
                             } else {
-                          
+
                                 let filterName = `${interval}|${acronym}`;
                                 let maPeriod = filterName.split('|')[2]// 9, 21 ou 200
                                 let array = await fetchCandlesAndMovingAverage(currencies, intervals, maPeriod);
-                             
+
                                 switch (condition) {
                                     case 'movingAverage|200|above|close':
                                         createMovingAverageFilter(array, filterName, movingAverageAboveCandleClose)
@@ -124,7 +128,7 @@ const IndicatorView = {
                                     case 'movingAverage|200|bellow|close':
                                         createMovingAverageFilter(array, filterName, movingAverageBellowCandleClose)
                                         break;
-                                    
+
                                 }
                             }
 
@@ -266,7 +270,7 @@ const IndicatorView = {
 
         return `
             <div class="flex flex-row">
-                <input type="checkbox" id="ma1m" name="1m" value="1h">
+                <input type="checkbox" id="ma1m" name="1m" value="1m">
                 <label for="ma1m" class="mx-1">1m</label><br>
                 <input type="checkbox" id="ma5m name="5m" value="5m">
                 <label for="ma5m" class="mx-1">5m</label><br>

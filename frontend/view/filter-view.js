@@ -33,9 +33,9 @@ const FilterView = {
         filters.forEach(filter => {
 
             tag.append(`
-                <li class="mx-4">
+                <li class="mx-0.5 bg-red-200 px-1 text-center">
                     <a class="float-left cursor-pointer">${filter.name}</a>
-                    <input type="checkbox" name=${filter.name} class="ch-filters"/>
+                    <input type="checkbox" name=${filter.name} class="ch-filters mx-2"/>
                 </li>`)
                 .appendTo(this.div)
 

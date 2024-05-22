@@ -4238,7 +4238,7 @@ const ShangaiChartView = {
                 2960.075599999997
             ]
         };
-        this.limit = 40;
+        this.limit = 66;
 
         $(document).on('selectCurrencyForChart', async function (event, currency) {
 
@@ -4324,10 +4324,10 @@ const ShangaiChartView = {
                     type: 'candlestick',
                     data: this.currency.candlesticks.slice(-this.limit).map(item => [item.close, item.open, item.low, item.high]),
                     itemStyle: {
-                        color: '#FD1050',
-                        color0: '#0CF49B',
-                        borderColor: '#FD1050',
-                        borderColor0: '#0CF49B'
+                       /* color: 'green',// '#FD1050',
+                        color0: 'green', //#0CF49B',
+                        borderColor: 'red', //'#FD1050',
+                        borderColor0: 'red',// '#0CF49B'*/
                     }
                 },
                 {
@@ -4337,7 +4337,8 @@ const ShangaiChartView = {
                     smooth: true,
                     showSymbol: false,
                     lineStyle: {
-                        width: 1
+                        color: 'orange',
+                        width: 2
                     }
                 },
                 {
@@ -4347,6 +4348,7 @@ const ShangaiChartView = {
                     smooth: true,
                     showSymbol: false,
                     lineStyle: {
+                        color: 'blue',
                         width: 1
                     }
                 },
@@ -4357,30 +4359,28 @@ const ShangaiChartView = {
                     smooth: true,
                     showSymbol: false,
                     lineStyle: {
+                        color: 'gray',
                         width: 1
                     }
                 },
                 {
                     name: 'spanA',
                     type: 'line',
-
-
                     data: this.currency.ichimokuCloud.slice(-this.limit - 24).map(item => item.spanA),
                     showSymbol: false,
                     lineStyle: {
+                        color: 'green',
                         width: 1
                     }
                 },
                 {
                     name: 'spanB',
                     type: 'line',
-
-
-
                     data: this.currency.ichimokuCloud.slice(-this.limit - 24).map(item => item.spanB),
                     smooth: true,
                     showSymbol: false,
                     lineStyle: {
+                        color: 'red',
                         width: 1
                     }
                 }

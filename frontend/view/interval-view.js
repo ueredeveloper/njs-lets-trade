@@ -10,6 +10,9 @@ const IntervalView = {
         this.div
             .on('click', 'input', function () {
                 let value = $(this).val();
+                console.log('input value', value)
+
+                console.log(value)
                 $(document).trigger('intervalChanged', value);
             });
 
@@ -20,7 +23,7 @@ const IntervalView = {
         let intervals = await this.intervals;
         // Cria array de li tags com a array de intervalos.
         let tags = intervals.map(value => `
-            <input type="radio" id=${value} value=${value} name="value">
+            <input type="radio" id=${value} value=${value}>
             <label for="html">${value}</label>
             `);
         // Concatena como string a array de li tags.
