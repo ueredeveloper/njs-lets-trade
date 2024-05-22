@@ -388,7 +388,8 @@ const CurrencyModel = {
         "OMNIUSDT",
         "REZUSDT"
       ]
-    }
+    },
+
   ],
   quotes: ['USDT', 'BTC', 'BNB'],
 
@@ -458,13 +459,15 @@ const CurrencyModel = {
     }
 
     const commonSymbols = getCommonSymbols(data);
-    //console.log(commonSymbols); // Output: ["AAVEUSDT", "ACMUSDT"]
 
     this.addFilter({
       name: name,
       list: commonSymbols
     })
 
+  },
+  clearFilter: function () {
+    this.filters = this.filters.filter(f => f.name === '1h|Binance|USDT')
   }
 };
 

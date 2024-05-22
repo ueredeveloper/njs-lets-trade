@@ -21,7 +21,7 @@ const QuoteView = {
         tags = tags.join('')
 
         this.div.append(`
-            <ul id="quote-view" >
+            <ul id="quote-view" class="flex flex-row">
                 ${tags}
             </ul>
             `);
