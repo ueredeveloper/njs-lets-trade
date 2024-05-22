@@ -1,12 +1,11 @@
 import IntervalModel from "../model/interval-model";
 
-
 const IntervalView = {
     init: async function () {
         this.div = $('#list-intervals');
         this.intervals = IntervalModel.getIntervals()
 
-        this.renderList();
+        this.render();
 
         this.div
             .on('click', 'input', function () {
@@ -16,7 +15,7 @@ const IntervalView = {
 
 
     },
-    renderList: async function () {
+    render: async function () {
         // Cria uma array de intervalos de forma assíncrona.
         let intervals = await this.intervals;
         // Cria array de li tags com a array de intervalos.

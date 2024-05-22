@@ -9,6 +9,7 @@
     <link rel="stylesheet" href="table-styles.css" />
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
+    <script src="https://fastly.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
 
     <title>Let's Trade</title>
 </head>
@@ -29,16 +30,18 @@
 
     </div>
  
-    
-    <div id="candles-container"></div>
+    <div id="chart-container"></div>
 
     <div id="favorite-container"></div>
 
     <div id="list-quotes"></div>
+    <div id="list-filters"></div>
+    <div id="btn-new-filter"></div>
+ 
 
     <div id="list-currencies" class="overflow-y-auto h-40 w-full"></div>
 
-    <div id="list-indicators" class="flex "></div>
+    <div id="list-indicators" class="flex flex-col"></div>
    
         <!-- heigh 396px e width 50% -->
        <!--<div id="main" class="h-96 overflow-auto"></div>--> 

@@ -1,19 +1,29 @@
-import CurrencyView from "../view/currency-view";
-
 const IndicatorModel = {
-    
-    indicators: ['MA09', 'MA21', 'MA200', 'Bollinger Bands', 'Ichimoku Cloud'],
-    ichomokuLines: ['Conversion', 'Baseline', 'Span A', 'Span B' ],
-    addIndicator: function (item) {
-        this.indicators.push(item);
-        // Notify the View of changes
-        CurrencyView.renderList();
+
+    ichimokuCloud: {
+        type: 'ichimoku cloud',
+        intervals: new Set(['1h']),
+        candle: 'close',
+        line1: 'conversion',
+        line2: 'base',
+        compare: 'above',
+        checked: false
     },
-    getIndicators: async function () {
-        return this.indicators;
+    movingAverage: {
+        type: 'moving average',
+        intervals: new Set(['1h']),
+        length: '200',
+        candle: 'close',
+        compare: 'bellow',
+        checked: false
     },
-    getIchimokuLines: function(){
-        return this.ichomokuLines;
+
+    getIchimokuCloud: function () {
+        return this.ichimokuCloud;
+    },
+
+    getMovingAverage: function () {
+        return this.movingAverage;
     }
 };
 

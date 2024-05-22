@@ -26,4 +26,17 @@
         candle de 14:00
             pula candle de 15:00
                 atualiza com o candle de 16:00.
+      
             
+**13/05/2024
+### Tarefa []: Filtrar por moedas ruins na binance
+    Há moedas que com baixa liquidez, difíceis de vender, o que pode prejudicar o stop loss.
+
+** 20/05/2024
+### Tarefa []: Adicionar comparações
+    No momento estou adicionando o método comparação para depois adicionar a moeda junto com todas as moedas (currency model, all currencies) já informando qual o filtro daquela moeda em específico.
+
+**    21/05/2024
+### Tarefa []: Filtrar por indicadores
+    Criar o filtro por indicadores mostrando as moedas na tabela.
+    

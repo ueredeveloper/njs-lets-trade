@@ -33,7 +33,7 @@ const compareCandlesAndSMA = async (symbolCandlesAndSMA) => {
         let lastSMA = sma.slice(-1)[0];
         //Se SMA acima do último candlestick(close)
         let candleClose = lastCandlesticks.close;
-        if (lastSMA > candleClose) {
+        if (lastSMA < candleClose) {
 
             let result = { symbol, lastSMA, candleClose }
            /*{
