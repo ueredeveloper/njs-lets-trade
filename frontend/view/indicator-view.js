@@ -2,8 +2,11 @@ import CurrencyModel from "../model/currency-model";
 import FilterModel from "../model/filter-model";
 import IndicatorModel from "../model/indicators-model";
 import fetchCandlesticksAndCloud from "../services/fetchCandlesAndIchimokuCloud";
+import fetchCandlesAndMovingAverage from "../services/fetchCandlesAndMovingAverage";
+import fetchCandlesAndSMA from "../services/fetchCandlesAndSMA";
 import compareIchimokuLines from "../utils/compareIchimokuLines";
 import { conversionAboveBase, conversionAboveCloseCandle, conversionAboveHighCandle, conversionAboveLowCandle, conversionAboveSpanA, conversionAboveSpanAAndSpanB, conversionAboveSpanB, createIchimokuFilter } from "../utils/createIchimokuFilter";
+import { createMovingAverageFilter, movingAverageAboveCandleClose, movingAverageBellowCandleClose } from "../utils/createMovingAverageFilter";
 
 
 const IndicatorView = {
@@ -108,13 +111,28 @@ const IndicatorView = {
 
                                 }
 
+                            } else {
+                          
+                                let filterName = `${interval}|${acronym}`;
+                                let maPeriod = filterName.split('|')[2]// 9, 21 ou 200
+                                let array = await fetchCandlesAndMovingAverage(currencies, intervals, maPeriod);
+                             
+                                switch (condition) {
+                                    case 'movingAverage|200|above|close':
+                                        createMovingAverageFilter(array, filterName, movingAverageAboveCandleClose)
+                                        break;
+                                    case 'movingAverage|200|bellow|close':
+                                        createMovingAverageFilter(array, filterName, movingAverageBellowCandleClose)
+                                        break;
+                                    
+                                }
                             }
 
                         }
 
                     }
 
-                    $(document).trigger('onSearchByIndicator');
+                    $(document).trigger('filterViewOnSearchByIndicator');
 
 
                 });

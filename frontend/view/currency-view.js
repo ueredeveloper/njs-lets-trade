@@ -94,8 +94,6 @@ const CurrencyView = {
    */
   fillTable: function (table, currencies) {
 
-    console.log(currencies)
-
     let tbody = table.find('tbody');
 
     let interval = currencies.name.split('|')[0] // ex: '1h|i|conversion|a|base'

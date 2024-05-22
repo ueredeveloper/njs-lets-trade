@@ -428,14 +428,43 @@ const CurrencyModel = {
   },
   getFilters: function () {
     return this.filters;
-  }, 
-  findFilter: function(name){
-    let filter = this.filters.find(filter=> filter.name === name)
+  },
+  findFilter: function (name) {
+    let filter = this.filters.find(filter => filter.name === name)
 
     return filter;
-  }, 
-  findCurrency: function(){
+  },
+  findCurrency: function () {
     this.currencies.list.find(currency.symbol)
+  },
+  joinFilters: function (selectedFilters) {
+
+    let name = selectedFilters.join('|')
+
+    let data = this.filters.filter(f => selectedFilters.includes(f.name))
+
+    function getCommonSymbols(arrays) {
+      if (arrays.length === 0) return [];
+
+      // Start with the first list
+      let commonSymbols = arrays[0].list;
+
+      // Iterate through the remaining lists
+      for (let i = 1; i < arrays.length; i++) {
+        commonSymbols = commonSymbols.filter(symbol => arrays[i].list.includes(symbol));
+      }
+
+      return commonSymbols;
+    }
+
+    const commonSymbols = getCommonSymbols(data);
+    //console.log(commonSymbols); // Output: ["AAVEUSDT", "ACMUSDT"]
+
+    this.addFilter({
+      name: name,
+      list: commonSymbols
+    })
+
   }
 };
 
