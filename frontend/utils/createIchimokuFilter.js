@@ -13,7 +13,7 @@ function createIchimokuFilter(array, name, condictionCallback) {
             let { symbol, ichimokuCloud, candlesticks } = item;
 
             if (ichimokuCloud.length === 0) {
-                results.push(`erro: ${symbol}, moeda recente, sem candles suficientes.`)
+                filter.list.push(`erro: ${symbol}, moeda recente, sem candles suficientes.`)
             } else {
 
                 let lastIchimokuValue = ichimokuCloud.slice(-1)[0];

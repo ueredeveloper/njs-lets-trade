@@ -13,7 +13,7 @@ function createMovingAverageFilter(array, name, condictionCallback) {
             let { symbol, movingAverage, candlesticks } = item;
 
             if (movingAverage.length === 0) {
-                results.push(`erro: ${symbol}, moeda recente, sem candles suficientes.`)
+                filter.list.push(`erro: ${symbol}, moeda recente, sem candles suficientes.`)
             } else {
 
                 let lastCandlestick = candlesticks.slice(-1)[0];
