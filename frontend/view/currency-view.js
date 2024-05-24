@@ -15,7 +15,6 @@ const CurrencyView = {
 
     $(document).on('onQuoteViewSelectChange', async function (event, selection) {
 
-      console.log(selection)
       // Busca todas as moedas
       let currencies = await CurrencyModel.getAllCurrencies();
       // Filtra por quotação, por exemplo: USDT.
@@ -109,7 +108,14 @@ const CurrencyView = {
       var btn = $('<tr>') // Create a table row for the button
         .append(`<td>${item.symbol}</td>`) // Add currency symbol
         .append(`<td>${item.price}</td>`) // Add currency price
-        .append('<td><button class="btn-select-currency">Select</button></td>') // Add button with class
+        .append(`
+          <td>
+            <button class="btn-select-currency">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="size-6">
+              <path stroke-linecap="round" stroke-linejoin="round" d="m4.5 12.75 6 6 9-13.5" />
+              </svg>
+            </button>
+          </td>`) // Add button with class
         .appendTo(tbody); // Append the row to the table body
 
       // Ação dos botões

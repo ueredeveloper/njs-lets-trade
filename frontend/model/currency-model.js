@@ -392,7 +392,7 @@ const CurrencyModel = {
               "NOTUSDT"
           ]
       },
-      {
+      /*{
           "name": "1h|i|conversion|a|base1h|i|conversion|a|base1h|i|conversion|a|base",
           "list": [
               "BNBUSDT",
@@ -774,7 +774,7 @@ const CurrencyModel = {
               "WUSDT",
               "erro: NOTUSDT, moeda recente, sem candles suficientes."
           ]
-      }
+      }*/
   ]
   ,
   quotes: ['USDT', 'BTC', 'BNB'],
