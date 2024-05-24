@@ -24,6 +24,8 @@ const FilterView = {
         console.log('this  FilterView render')
         // Cria uma array de cotações de forma assíncrona.
         let filters = await CurrencyModel.getFilters();
+
+        console.log(filters)
        
         this.div.empty();
         $('#list-currencies').empty()
