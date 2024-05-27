@@ -27,3 +27,6 @@ Thumbs.db
 /dist
 /data
 /backend/data/
+
+# Ignorar pasta de cobertura
+coverage/

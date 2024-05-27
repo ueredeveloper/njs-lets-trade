@@ -1,7 +1,6 @@
 const Binance = require('binance-api-node').default
 require('dotenv').config();
 
-
 const BINANCE_API_KEY = process.env.BINANCE_API_KEY;
 const BINANCE_SECRET_KEY = process.env.BINANCE_SECRET_KEY;
 
