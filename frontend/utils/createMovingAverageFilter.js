@@ -33,10 +33,18 @@ function createMovingAverageFilter(array, name, condictionCallback) {
 }
 
 function movingAverageAboveCandleClose(lastMovingAverage, lastCandlestick) {
-    return lastMovingAverage > lastCandlestick.close;
+
+    let percentageDifference  = ((lastCandlestick.close - lastMovingAverage) / lastMovingAverage) * 100;
+    /*
+    Último valor da média móvel maior que o último valor do fechamento do candle ou porcentagem do 
+    primeiro valor sobre o segundo menor que 2%. Assim pega-se também aqueles valores um 
+    pouco maiores que o valor do última média móvel.*/
+    return lastMovingAverage > lastCandlestick.close || percentageDifference <=1.01;
 }
 function movingAverageBellowCandleClose(lastMovingAverage, lastCandlestick) {
-    return lastMovingAverage < lastCandlestick.close;
+    let percentageDifference  = ((lastCandlestick.close - lastMovingAverage) / lastMovingAverage) * 100;
+
+    return lastMovingAverage < lastCandlestick.close || percentageDifference >=-1.01;;
 }
 
 
