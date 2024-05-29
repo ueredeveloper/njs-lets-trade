@@ -15,3 +15,15 @@ describe('print all currencies', () => {
         //expect(console.log).toHaveBeenCalledWith(currencies);
     });
 });
+
+
+/*
+console.log
+    [
+      {
+        id: null,
+        symbol: 'ETHBTC',
+        price: '0.05702000',
+        currency_collections: [ [] ]
+      },
+      */

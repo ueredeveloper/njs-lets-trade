@@ -25,23 +25,23 @@ async function calculateLiquidity() {
             ...
          */
 
+        // Converte objeto para array
         let array = Object.entries(allBookTickers);
-
+        // Relaciona um símbole a seus valores
         let allBooksTickersArray = array.map((obj) => { return { symbol: obj[0], ...obj[1] } })
-
+        let i = 1;
 
         for (ticker of allBooksTickersArray) {
+           
+            
             const { symbol, bidQty, askQty } = ticker;
-            const liquidez = parseFloat(bidQty) + parseFloat(askQty);
-
+            const qtyLiquidez = parseFloat(bidQty) + parseFloat(askQty);
+            // Printa uma moeda específica
            // if (symbol === 'POLYXUSDT' || symbol === 'CKBUSDT') {
-                if (symbol === 'POLYXUSDT' ) {
-
-                
+                if (symbol === '1INCHUSDT' || symbol === 'AAVEUSDT' || symbol === 'ACMUSDT') {
 
                 let orderBookData = await getBook(symbol);
 
-                //console.log(orderBookData)
 
                 // Calculando a liquidez dos bids (compras)
                 const liquidezBids = analyseMoneyFlow(orderBookData.bids);
@@ -57,32 +57,17 @@ async function calculateLiquidity() {
                 const venda = liquidezAsks;
                 const entradas = compra - venda;
 
-                console.log(`Compra (${symbol}):`, compra.toFixed(2));
-                console.log(`Venda (${symbol}):`, venda.toFixed(2));
-                console.log(`Entradas (${symbol}):`, entradas.toFixed(2));
+                console.log(`${i} Compra (${symbol}): ${compra.toFixed(2)} => Venda (${symbol}): ${venda.toFixed(2)} || entradas: ${entradas}`);
+                console.log(`Símbolo: ${symbol}, Liquidez qty (compra+venda): ${qtyLiquidez}: tickers => compra: ${ticker.bidQty} venda: ${ticker.askQty}   `);
+                console.log(`Símbolo: ${symbol}, Liquidez USDT: ${liquidezTotal}, compra: ${liquidezBids} , venda: ${liquidezAsks}`);
 
-                let candles = await getClandles(symbol, '15m', 1)
-
-                console.log(`Símbolo: ${symbol}, Liquidez: ${liquidez}: ticker => BUY ${ticker.bidQty} SELL ${ticker.askQty}   `);
-               // console.log(`Símbolo: ${symbol}, Liquidez: ${liquidez}: ticker => BUY ${ticker.bidQty} SELL ${ticker.askQty}  ${JSON.stringify(candles)} `);
+                i++;
             }
         }
 
-        /*allBooksTickersArray.forEach(ticker => {
-            const { symbol, bidQty, askQty } = ticker;
-            const liquidez = parseFloat(bidQty) + parseFloat(askQty);
-
-            if (symbol === 'BTCUSDT' || symbol === 'DYDXUSDT' || symbol ==='EDUUSDT') {
-
-                let book = await getBook(symbol);
-
-                console.log(`Símbolo: ${symbol}, Liquidez: ${liquidez}: ticker => ${JSON.stringify(ticker)}  ${JSON.stringify(candles)}`);
-            }
-           
-        });*/
     } catch (error) {
         console.error('Erro ao buscar todos os book tickers:', error);
     }
 }
 
-calculateLiquidity();
+module.exports = calculateLiquidity;
