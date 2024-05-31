@@ -30,6 +30,7 @@ const scrollCurrencies = () => {
     btn2.innerHTML = '&#8853;';
 
     let par1 = document.createElement('p');
+    par1.style.width = "100px"
     par1.id = 'par1';
 
 

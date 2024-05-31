@@ -5,7 +5,7 @@ import fetchCandlesticksAndCloud from "../services/fetchCandlesAndIchimokuCloud"
 import fetchCandlesAndMovingAverage from "../services/fetchCandlesAndMovingAverage";
 import fetchCandlesAndSMA from "../services/fetchCandlesAndSMA";
 import compareIchimokuLines from "../utils/compareIchimokuLines";
-import { conversionAboveBase, conversionAboveCloseCandle, conversionAboveHighCandle, conversionAboveLowCandle, conversionAboveSpanA, conversionAboveSpanAAndSpanB, conversionAboveSpanB, createIchimokuFilter } from "../utils/createIchimokuFilter";
+import { conversionAboveBase, conversionAboveCloseCandle, conversionAboveHighCandle, conversionAboveLowCandle, conversionAboveSpanA, conversionAboveSpanAAndSpanB, conversionAboveSpanB, conversionBellowBase, createIchimokuFilter } from "../utils/createIchimokuFilter";
 import { createMovingAverageFilter, movingAverageAboveCandleClose, movingAverageBellowCandleClose } from "../utils/createMovingAverageFilter";
 
 
@@ -98,6 +98,9 @@ const IndicatorView = {
                                         switch (condition) {
                                             case 'ichimokuCloud|conversion|above|base':
                                                 createIchimokuFilter(array, filterName, conversionAboveBase)
+                                                break;
+                                            case 'ichimokuCloud|conversion|bellow|base':
+                                                createIchimokuFilter(array, filterName, conversionBellowBase)
                                                 break;
                                             case 'ichimokuCloud|conversion|above|spanA':
                                                 createIchimokuFilter(array, filterName, conversionAboveSpanA)
