@@ -5,6 +5,10 @@ const { json } = require("body-parser");
 const getBook = require("../binance/getBook");
 const analyseMoneyFlow = require("./analyseMoneyFlow");
 
+function formatValueWithColor(value, colorCode) {
+    return `\x1b[${colorCode}m${value}\x1b[0m`;
+}
+
 async function calculateLiquidity() {
     try {
         //const allBookTickers = await client.allBookTickers();
@@ -32,13 +36,14 @@ async function calculateLiquidity() {
         let i = 1;
 
         for (ticker of allBooksTickersArray) {
-           
-            
+
+
             const { symbol, bidQty, askQty } = ticker;
             const qtyLiquidez = parseFloat(bidQty) + parseFloat(askQty);
+            const qtyOrders = parseFloat(bidQty) - parseFloat(askQty)
             // Printa uma moeda específica
-           // if (symbol === 'POLYXUSDT' || symbol === 'CKBUSDT') {
-                if (symbol === '1INCHUSDT' || symbol === 'AAVEUSDT' || symbol === 'ACMUSDT') {
+            // if (symbol === 'POLYXUSDT' || symbol === 'CKBUSDT') {
+            if (symbol === 'PEPEUSDT' || symbol === 'PEOPLEUSDT') {
 
                 let orderBookData = await getBook(symbol);
 
@@ -59,7 +64,12 @@ async function calculateLiquidity() {
 
                 console.log(`${i} Compra (${symbol}): ${compra.toFixed(2)} => Venda (${symbol}): ${venda.toFixed(2)} || entradas: ${entradas}`);
                 console.log(`Símbolo: ${symbol}, Liquidez qty (compra+venda): ${qtyLiquidez}: tickers => compra: ${ticker.bidQty} venda: ${ticker.askQty}   `);
-                console.log(`Símbolo: ${symbol}, Liquidez USDT: ${liquidezTotal}, compra: ${liquidezBids} , venda: ${liquidezAsks}`);
+                console.log(
+                    `Símbolo: ${symbol}, 
+                    ${formatValueWithColor('Qty Ordens: ' + qtyOrders, qtyOrders < 0 ? 31 : 32)}
+                    venda: ${liquidezAsks} 
+                    ${formatValueWithColor('Entradas/Saídas: ' + entradas, entradas < 0 ? 31 : 32)},    
+                        `);
 
                 i++;
             }
