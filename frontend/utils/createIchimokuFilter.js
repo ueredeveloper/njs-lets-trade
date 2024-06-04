@@ -42,6 +42,9 @@ function createIchimokuFilter(array, name, condictionCallback) {
 function conversionAboveBase(lastIchimokuValue, lastCandlestick, spanA, spanB) {
     return lastIchimokuValue.conversion > lastIchimokuValue.base;
 }
+function conversionBellowBase(lastIchimokuValue, lastCandlestick, spanA, spanB) {
+    return lastIchimokuValue.conversion < lastIchimokuValue.base;
+}
 function conversionAboveSpanA(lastIchimokuValue, lastCandlestick, spanA, spanB) {
     return lastIchimokuValue.conversion > spanA;
 }
@@ -63,7 +66,7 @@ function conversionAboveCloseCandle(lastIchimokuValue, lastCandlestick, spanA, s
 
 
 export {
-    createIchimokuFilter, conversionAboveBase,
+    createIchimokuFilter, conversionAboveBase, conversionBellowBase,
     conversionAboveSpanA, conversionAboveSpanB,
     conversionAboveSpanAAndSpanB, conversionAboveHighCandle,
     conversionAboveLowCandle, conversionAboveCloseCandle
