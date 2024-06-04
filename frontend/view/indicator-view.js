@@ -307,7 +307,7 @@ const IndicatorView = {
                     <option value="movingAverage">Moving Average</option>
                 </select>
                 <!-- Selects -->
-                <div class="indicatorSelects flex flex-row" class="bg-red-200"></div>
+                <div class="indicatorSelects flex flex-row flex-wrap" class="bg-red-200"></div>
                
             </div>
         `
