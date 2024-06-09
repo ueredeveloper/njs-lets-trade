@@ -98,7 +98,11 @@ module.exports = getClandles = async function (symbol, interval, limit) {
             let candles = await client.candles({ symbol: symbol, interval: interval, limit: 1 });
 
             // Busca candles para atualizar banco
-            candles.forEach(candle => dbCandles.push(candle));
+            candles.forEach(candle => {
+
+                dbCandles.pop()
+                dbCandles.push(candle)
+            });
 
             // Retirar valores repetidos a partir do atributo openTime
             let uniqueItems = [];
