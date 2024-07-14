@@ -1,7 +1,8 @@
 import * as echarts from 'echarts';
-import { convertOpenTime } from '../utils/convertOpenTime';
+
 import './styles.css'
 import CurrencyModel from '../model/currency-model';
+import convertOpenTime from '../utils/convertOpenTime';
 
 const ShangaiChartView = {
 
@@ -4277,7 +4278,17 @@ const ShangaiChartView = {
             },
             xAxis: {
                 type: 'category',
-                data: this.currency.candlesticks.slice(-this.limit - 24).map(item => new Date(item.openTime).getHours()),
+                //data: this.currency.candlesticks.slice(-this.limit - 24).map(item => new Date(item.openTime).getHours()),
+                //data: this.currency.candlesticks.slice(-this.limit - 24).map(item => convertOpenTime(item.openTime, this.currency.interval )),
+                data: (() => {
+                    // Cria array com datas
+                    let initialArray = this.currency.candlesticks.map(item => convertOpenTime(item.openTime, this.currency.interval ))
+                    ;
+                    // Adiciona valores vazios à frente, lugar da spanA e spanB, adiantadas 25 períodos
+                    let valuesToPush = new Array(24).fill('');
+                    // Concatena as udas arrays
+                    return initialArray.concat(valuesToPush).slice(-this.limit - 24);
+                })(),
                 axisLine: {
                     lineStyle: {
                         color: '#8392A5'
