@@ -17,7 +17,6 @@ const IndicatorView = {
         this.currencies = []
 
         this.render();
-        this.i = []
 
         $(document).ready(function () {
 
@@ -35,16 +34,14 @@ const IndicatorView = {
                     let compare = selects.eq(1).val();
                     let line2 = selects.eq(2).val();
                     let checkboxes = container.find('.indicatorSelects input[type="checkbox"]');
-
                     let checkboxValues = checkboxes.filter(':checked').map(function () {
                         return this.value;
                     }).get();
 
-              
-
                     if (indicatorType === 'ichimokuCloud') {
                         let intervals = checkboxValues.toString();
 
+                        console.log('ichi ', intervals)
                         params.push({
                             condition: `${indicatorType}|${line1}|${compare}|${line2}`,
                             acronym: `${indicatorType.toString()[0]}|${line1.toString()}|${compare.toString()[0]}|${line2.toString()}`,
@@ -54,6 +51,7 @@ const IndicatorView = {
                     } else if (indicatorType === 'movingAverage') {
                         let intervals = checkboxValues.toString();
 
+                        console.log('moving average ', intervals)
                         params.push({
                             condition: `${indicatorType}|${line1}|${compare}|${line2}`,
                             acronym: `${indicatorType.toString()[0]}|${line1.toString()}|${compare.toString()[0]}|${line2.toString()}`,
@@ -64,10 +62,7 @@ const IndicatorView = {
                         console.log(`Indicador não encontrado: ${indicatorType}`)
                     }
 
-                   
-
                     for (const param of params) {
-
                         let { condition, intervals, acronym } = param
 
                         //let allCurrencies = await CurrencyModel.getAllCurrencies();
@@ -82,7 +77,7 @@ const IndicatorView = {
                             if (condition.startsWith('ichimokuCloud')) {
 
                                 // Busca indicadores de cada moeda solicitada
-                                let array = []//await fetchCandlesticksAndCloud(currencies, intervals);
+                                let array = await fetchCandlesticksAndCloud(currencies, intervals);
                                 let filterName = `${interval}|${acronym}`;
 
                                 const keywords = ['high', 'low', 'close'];
@@ -91,40 +86,30 @@ const IndicatorView = {
                                         switch (condition) {
                                             case 'ichimokuCloud|conversion|above|high':
                                                 createIchimokuFilter(array, filterName, conversionAboveHighCandle)
-                                               console.log(array, filterName, conversionAboveHighCandle)
                                                 break;
                                             case 'ichimokuCloud|conversion|above|close':
                                                 createIchimokuFilter(array, filterName, conversionAboveCloseCandle)
-                                               console.log(array, filterName, conversionAboveCloseCandle)
                                                 break;
                                             case 'ichimokuCloud|conversion|above|low':
                                                 createIchimokuFilter(array, filterName, conversionAboveLowCandle)
-                                              console.log(array, filterName, conversionAboveLowCandle)
                                                 break;
                                         }
-                                    } 
-                                    else {
-
+                                    } else {
                                         switch (condition) {
                                             case 'ichimokuCloud|conversion|above|base':
-                                               createIchimokuFilter(array, filterName, conversionAboveBase)
-                                              console.log(array, filterName, conversionAboveBase)
+                                                createIchimokuFilter(array, filterName, conversionAboveBase)
                                                 break;
                                             case 'ichimokuCloud|conversion|bellow|base':
-                                              createIchimokuFilter(array, filterName, conversionBellowBase)
-                                             console.log(array, filterName, conversionBellowBase)
+                                                createIchimokuFilter(array, filterName, conversionBellowBase)
                                                 break;
                                             case 'ichimokuCloud|conversion|above|spanA':
-                                              createIchimokuFilter(array, filterName, conversionAboveSpanA)
-                                              console.log(array, filterName, conversionAboveSpanA)
+                                                createIchimokuFilter(array, filterName, conversionAboveSpanA)
                                                 break;
                                             case 'ichimokuCloud|conversion|above|spanB':
                                                 createIchimokuFilter(array, filterName, conversionAboveSpanB)
-                                              console.log(array, filterName, conversionAboveSpanB)
                                                 break;
                                             case 'ichimokuCloud|conversion|above|spanA+B':
-                                               createIchimokuFilter(array, filterName, conversionAboveSpanAAndSpanB)
-                                              console.log(array, filterName, conversionAboveSpanAAndSpanB)
+                                                createIchimokuFilter(array, filterName, conversionAboveSpanAAndSpanB)
                                                 break;
                                         }
                                     }
@@ -133,8 +118,7 @@ const IndicatorView = {
 
                                 }
 
-                            } 
-                            else {
+                            } else {
 
                                 let filterName = `${interval}|${acronym}`;
                                 let maPeriod = filterName.split('|')[2]// 9, 21 ou 200
@@ -142,12 +126,10 @@ const IndicatorView = {
 
                                 switch (condition) {
                                     case 'movingAverage|200|above|close':
-                                       createMovingAverageFilter(array, filterName, movingAverageAboveCandleClose)
-                                       console.log(array, filterName, movingAverageAboveCandleClose)
+                                        createMovingAverageFilter(array, filterName, movingAverageAboveCandleClose)
                                         break;
                                     case 'movingAverage|200|bellow|close':
-                                       createMovingAverageFilter(array, filterName, movingAverageBellowCandleClose)
-                                      console.log(array, filterName, movingAverageBellowCandleClose)
+                                        createMovingAverageFilter(array, filterName, movingAverageBellowCandleClose)
                                         break;
 
                                 }
@@ -157,11 +139,11 @@ const IndicatorView = {
 
                     }
 
-                   // console.log(IndicatorView.i)
                     $(document).trigger('filterViewOnSearchByIndicator');
 
 
                 });
+
             });
 
         });
