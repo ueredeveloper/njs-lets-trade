@@ -1,6 +1,7 @@
 import CurrencyModel from "../model/currency-model";
 
 function createIchimokuFilter(array, name, condictionCallback) {
+    
     // Cria uma array unidimensiona, ex: 
     let filter = {
         name: name,

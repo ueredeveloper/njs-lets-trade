@@ -1,5 +1,6 @@
 const compareIchimokuLines = async (symbolCandlesAndIchimoku, condition) => {
 
+    
     /*let symbolCandlesAndIchimoku = [{
         "symbol": "BTCUSDT",
         "price": "71220.00000000",

@@ -9,6 +9,7 @@ import { conversionAboveBase, conversionAboveCloseCandle, conversionAboveHighCan
 import { createMovingAverageFilter, movingAverageAboveCandleClose, movingAverageBellowCandleClose } from "../utils/createMovingAverageFilter";
 
 
+
 const IndicatorView = {
 
     init: function () {

@@ -1,5 +1,6 @@
 
 const convertOpenTime = (time, interval) => {
+    
     let conversionTime;
 
     const options = {
@@ -16,15 +17,18 @@ const convertOpenTime = (time, interval) => {
             conversionTime = new Date(adjustedTime).toLocaleString('pt-BR', { ...options, minute: 'numeric' });
             break;
         case interval.includes('h'):
-            conversionTime = new Date(time).toLocaleString('pt-BR', { ...options, hour: 'numeric', hour12: false });
+            // Formata a hora de um timestamp para incluir ":00" no final.
+            let formatedHour = `${new Date(time).toLocaleString('pt-BR', { ...options, hour: 'numeric', hour12: false })}:00`
+            conversionTime = formatedHour;
             break;
         case interval.includes('1d'):
+            // Adiciona uma hora
             date = addDays(time, 1);
             conversionTime = date.toLocaleString('pt-BR', { ...options, day: 'numeric' });
             break;
         case interval.includes('3d'):
-            // Adiciona um dia
-            date = addDays(time, 1);
+           // date = new Date(time);
+            date = addDays(time, -1);
             conversionTime = `${date.getDate()} ${getMonthAbbreviation(date.getMonth())} ${date.getFullYear().toString().slice(2)}`;
             break;
         case interval.includes('1w'):
