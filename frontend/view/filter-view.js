@@ -66,6 +66,8 @@ const FilterView = {
         });
 
         $('#list-actions').empty()
+
+        // Botão de adicionar filtro
         let div = $('#list-actions')
             .append(`
             <button id="btn-add-filter" class="mx-2">
@@ -82,6 +84,7 @@ const FilterView = {
             FilterView.render()
         });
 
+        // Botão de  remover filtro
         div.append(`
             <button id="btn-remove-filters" class="mx-2">
                 <svg width="25px" height="25px" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -89,17 +92,20 @@ const FilterView = {
                 </svg>
             </button>
             `)
+
         div.find("#btn-remove-filters").click(function () {
             // Busca todos os checkboxes clicados (checked) para criar novos filtros.
             let filtersToRemove = $('.ch-filters:checked').map(function () {
                 return $(this).attr('name');
             }).get();
 
-           CurrencyModel.removeFilters(filtersToRemove);
-           FilterView.render();
+            CurrencyModel.removeFilters(filtersToRemove);
+            FilterView.render();
 
 
         });
+
+        // Botão de remover todos os filtros
         div.append(`
             <button id="btn-remove-all-filters" class="mx-2">
                 <svg width="25px" height="25px" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -107,6 +113,7 @@ const FilterView = {
                 </svg>
             </button>
         `)
+
         div.find("#btn-remove-all-filters").click(function () {
 
             CurrencyModel.clearAllFilters()

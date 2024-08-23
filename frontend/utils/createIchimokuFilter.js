@@ -9,7 +9,6 @@ function createIchimokuFilter(array, name, condictionCallback) {
     // Adiciona as moedas pesquisadas, editando com novas informações como ichimoku e ma-200 desta moeda.
     array.forEach(items => {
 
-        console.log(items)
         items.forEach(item => {
 
             let { symbol, ichimokuCloud, candlesticks } = item;

@@ -4,9 +4,12 @@ import IndicatorModel from "../model/indicators-model";
 import fetchCandlesticksAndCloud from "../services/fetchCandlesAndIchimokuCloud";
 import fetchCandlesAndMovingAverage from "../services/fetchCandlesAndMovingAverage";
 import fetchCandlesAndSMA from "../services/fetchCandlesAndSMA";
+import fetchCandlesticks from "../services/fetchCandlesticks";
+import fetchRsiIndicator from "../services/fetchRsiIndicator";
 import compareIchimokuLines from "../utils/compareIchimokuLines";
 import { conversionAboveBase, conversionAboveCloseCandle, conversionAboveHighCandle, conversionAboveLowCandle, conversionAboveSpanA, conversionAboveSpanAAndSpanB, conversionAboveSpanB, conversionBellowBase, createIchimokuFilter } from "../utils/createIchimokuFilter";
 import { createMovingAverageFilter, movingAverageAboveCandleClose, movingAverageBellowCandleClose } from "../utils/createMovingAverageFilter";
+import { createRsiFilter, lastRsiAbove70 } from "../utils/createRsiFilter";
 
 
 const IndicatorView = {
@@ -38,10 +41,10 @@ const IndicatorView = {
                         return this.value;
                     }).get();
 
+
                     if (indicatorType === 'ichimokuCloud') {
                         let intervals = checkboxValues.toString();
 
-                        console.log('ichi ', intervals)
                         params.push({
                             condition: `${indicatorType}|${line1}|${compare}|${line2}`,
                             acronym: `${indicatorType.toString()[0]}|${line1.toString()}|${compare.toString()[0]}|${line2.toString()}`,
@@ -51,28 +54,94 @@ const IndicatorView = {
                     } else if (indicatorType === 'movingAverage') {
                         let intervals = checkboxValues.toString();
 
-                        console.log('moving average ', intervals)
                         params.push({
                             condition: `${indicatorType}|${line1}|${compare}|${line2}`,
                             acronym: `${indicatorType.toString()[0]}|${line1.toString()}|${compare.toString()[0]}|${line2.toString()}`,
                             intervals: `${intervals}`
                         });
 
-                    } else {
+                    } else if (indicatorType === 'relativeStrengthIndex') {
+                        let intervals = checkboxValues.toString();
+
+                        params.push({
+                            condition: `${indicatorType}|${line1}|${compare}`,
+                            acronym: `${indicatorType.toString()[0]}|${compare.toString()[0]}|${line1.toString()}`,
+                            intervals: `${intervals}`
+                        });
+
+                    }
+                    else {
                         console.log(`Indicador não encontrado: ${indicatorType}`)
                     }
 
                     for (const param of params) {
                         let { condition, intervals, acronym } = param
 
-                        //let allCurrencies = await CurrencyModel.getAllCurrencies();
                         let allCurrencies = await CurrencyModel.getAllCurrencies();
+                        /**
+                         * {
+                            name: '1h|All', 
+                            list: [
+                            {
+                                "id": null,
+                                "symbol": "ETHBTC",
+                                "price": "0.04335000",
+                                "currency_collections": [
+                                    []
+                                ]
+                            }
+                            ]
+                            }
+                            
+                         */
 
-                        let currencies = await CurrencyModel.getBinanceCurrenciesWithUsdt(allCurrencies);
+                        let usdtCurrencies = await CurrencyModel.getBinanceCurrenciesWithUsdt(allCurrencies);
+
+                        /*
+                        [
+                             {
+                                 "id": null,
+                                 "symbol": "BTCUSDT",
+                                 "price": "61661.31000000",
+                                 "currency_collections": [[]]
+                             }
+                         ]
+                         */
 
                         let splitIntervals = intervals.split(',');
 
-                        for (const interval of splitIntervals) {
+                        let candlesticks = await fetchCandlesticks(usdtCurrencies, intervals);
+                        /**
+                         * candlesticks: [
+                            {
+                                "openTime": 1723474800000,
+                                "open": "60299.99000000",
+                                "high": "60510.20000000",
+                                "low": "59230.00000000",
+                                "close": "60207.37000000",
+                                "volume": "2847.64813000",
+                                "closeTime": 1723478399999,
+                                "quoteVolume": "170319130.17460140",
+                                "trades": 170255,
+                                "baseAssetVolume": "1437.49391000",
+                                "quoteAssetVolume": "86014312.67468460"
+                            }
+                            ],
+                            interval:"1h",
+                            price: "61486.00000000",
+                            symbol: "BTCUSDT"
+                         */
+
+                        if (condition.startsWith('relative')) {
+
+                            let rsiIndicador = await fetchRsiIndicator(usdtCurrencies, intervals)
+
+                            createRsiFilter(rsiIndicador, intervals, acronym, lastRsiAbove70)
+
+                        }
+
+
+                        /*for (const interval of splitIntervals) {
 
                             if (condition.startsWith('ichimokuCloud')) {
 
@@ -135,7 +204,7 @@ const IndicatorView = {
                                 }
                             }
 
-                        }
+                        }*/
 
                     }
 
@@ -188,6 +257,10 @@ const IndicatorView = {
                 case 'ichimokuCloud':
                     indicatorSelects.empty();
                     indicatorSelects.append(IndicatorView.renderIchimokuCloud());
+                    break;
+                case 'relativeStrengthIndex':
+                    indicatorSelects.empty();
+                    indicatorSelects.append(IndicatorView.renderRelativeStrengthIndex());
                     break;
                 default:
                     indicatorSelects.empty(); // Clear the content if no option is selected
@@ -268,6 +341,28 @@ const IndicatorView = {
              
         `
     },
+    renderRelativeStrengthIndex: function () {
+
+        return `
+             
+            <select name="compare" class="flex-1 mx-2 h-7" id="compare">
+                <option value="above" selected>Above</option>
+                <option value="bellow">Below</option>
+            </select>
+            
+            <select name="line2" class="flex-1 mx-2 h-7" id="line2">
+                <option value="conversion" class="bg-green-200">Value (Overgbought or Oversold)</option>
+                <option value="30" class="bg-green-100">30</option>
+                <option value="40" class="bg-green-100">40</option>
+                <option value="50" class="bg-green-100">50</option>
+                <option value="60" class="bg-green-200" selected>60</option>
+                <option value="70" class="bg-gray-200">70</option>
+            </select>
+
+            ${this.renderintervals()}
+             
+        `
+    },
 
     renderintervals: function () {
 
@@ -308,6 +403,7 @@ const IndicatorView = {
                     <option value="">Indicador</option>
                     <option value="ichimokuCloud">Ichimoku Cloud</option>
                     <option value="movingAverage">Moving Average</option>
+                    <option value="relativeStrengthIndex">RSI</option>
                 </select>
                 <!-- Selects -->
                 <div class="indicatorSelects flex flex-row flex-wrap" class="bg-red-200"></div>
