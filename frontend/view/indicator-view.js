@@ -110,7 +110,7 @@ const IndicatorView = {
 
                         let splitIntervals = intervals.split(',');
 
-                        let candlesticks = await fetchCandlesticks(usdtCurrencies, intervals);
+                        //let candlesticks = await fetchCandlesticks(usdtCurrencies, intervals);
                         /**
                          * candlesticks: [
                             {
