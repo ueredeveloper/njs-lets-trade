@@ -99,9 +99,7 @@ const compareIchimokuLines = async (symbolCandlesAndIchimoku, condition) => {
         }
 
     });*/
-
-    console.log(results)
-
+    
     return results;
 }
 export default compareIchimokuLines;

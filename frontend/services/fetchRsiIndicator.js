@@ -1,6 +1,7 @@
 
 const fetchRsiIndicator = (currencies, intervals) => {
 
+    
     function _fetch(symbol, intervals) {
 
         return new Promise(async (resolve, reject) => {
@@ -8,9 +9,9 @@ const fetchRsiIndicator = (currencies, intervals) => {
             let results = []
 
             // Cria array de intervalos solicitados
-            let array = intervals.split(',')
+            //let array = intervals.split(',')
 
-            for (const interval of array) {
+            for (const interval of intervals) {
 
                 try {
                     // Fetch candlesticks // valor padrão: 166

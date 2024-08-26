@@ -3,6 +3,7 @@ import CurrencyController from "../controller/currency-controller";
 import fetchCandlesticksAndCloud from "../services/fetchCandlesAndIchimokuCloud";
 
 const CurrencyView = {
+  
   init: async function () {
     this.textInput = $('#textInput');
     this.addButton = $('#addButton');
@@ -30,7 +31,6 @@ const CurrencyView = {
 
     $(document).on('currencyViewSelectFilter', async function (event, selection) {
 
-      //console.log(selection)
       // Busca todas as moedas
       let currencies = await CurrencyModel.getAllCurrencies();
       // Busca o filtro indicado

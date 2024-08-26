@@ -1,6 +1,7 @@
 import CurrencyModel from "../model/currency-model";
 
 const FilterView = {
+    
     init: async function () {
         this.div = $('#list-filters');
         this.filters = CurrencyModel.getFilters()
@@ -20,8 +21,6 @@ const FilterView = {
     },
     // Renderiza a tabela e as tabs
     render: async function () {
-
-        console.log('this  FilterView render')
         // Cria uma array de cotações de forma assíncrona.
         let filters = await CurrencyModel.getFilters();
 

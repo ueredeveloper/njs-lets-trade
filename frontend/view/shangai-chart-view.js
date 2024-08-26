@@ -4,6 +4,7 @@ import './styles.css'
 import CurrencyModel from '../model/currency-model';
 
 const ShangaiChartView = {
+    
 
     init: function () {
 

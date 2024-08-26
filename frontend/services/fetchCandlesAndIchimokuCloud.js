@@ -1,7 +1,8 @@
 
-const fetchCandlesticksAndCloud = (currencies, intervals) => {
+const fetchCandlesticksAndCloud = async (currencies, intervals) => {
 
-  function _fetchCandlesticksAndCloud(symbol, intervals) {
+  
+  async function _fetchCandlesticksAndCloud(symbol, intervals) {
 
     return new Promise(async (resolve, reject) => {
 

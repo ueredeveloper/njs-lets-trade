@@ -1,5 +1,8 @@
+
+// model/currency-model.js
 const CurrencyModel = {
 
+  
   currencies: [],
   filters: [
     {
@@ -30,7 +33,7 @@ const CurrencyModel = {
     return filteredCurrenciesByBinanceWithUsdt;
 
   },
-  addFilter: function (item) {
+  addFilter: async function (item) {
 
     let index = this.filters.findIndex(obj => obj.name === item.name);
 
@@ -40,6 +43,8 @@ const CurrencyModel = {
     } else {
       this.filters.push(item)
     }
+
+    
   },
   getQuotes: function () {
     return this.quotes;
@@ -96,7 +101,23 @@ const CurrencyModel = {
     let setFilters = new Set([firstFilter, ...newFilters])
     this.filters = Array.from(setFilters)
 
+  },
+
+  getForTestIndicatorsAndCurrencies: async function () {
+
+    try {
+      let response = await fetch('./indicators-and-currencies.json');  // Fetch the JSON file
+      if (!response.ok) {
+        throw new Error('Network response was not ok');
+      }
+      let data = await response.json();
+      return data;  // Return the JSON data
+    } catch (error) {
+      console.error('There has been a problem with your fetch operation:', error);
+      return null;  // Return null or handle the error as needed
+    }
   }
+
 };
 
 export default CurrencyModel;

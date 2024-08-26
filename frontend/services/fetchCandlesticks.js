@@ -1,6 +1,7 @@
 
 const fetchCandlesticks = (currencies, intervals) => {
 
+    
     function _fetchCandles(symbol, intervals) {
 
         return new Promise(async (resolve, reject) => {
