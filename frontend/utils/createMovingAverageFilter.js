@@ -1,6 +1,5 @@
 import CurrencyModel from "../model/currency-model";
 
-
 async function createMovingAverageFilter(array, intervals, acronym, condictionCallback) {
 
     intervals.forEach(interval => {

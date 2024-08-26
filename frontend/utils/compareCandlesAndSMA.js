@@ -1,6 +1,5 @@
 const compareCandlesAndSMA = async (symbolCandlesAndSMA) => {
 
-    
     /*
     {
         "symbol": "ETHBTC",

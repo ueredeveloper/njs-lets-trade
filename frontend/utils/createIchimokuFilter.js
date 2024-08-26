@@ -82,10 +82,14 @@ async function createIchimokuFilter(array, intervals, acronym, condictionCallbac
 
                         filter.list.push(_symbol);
                     }
+
                 }
+
+
             }
             // atualiza moeda  
             // CurrencyModel.addCurrency(item);
+
         });
 
         /* Exemplo de filtro: {

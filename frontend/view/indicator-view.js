@@ -13,9 +13,8 @@ import { createMovingAverageFilter, movingAverageAboveCandleClose, movingAverage
 import { createRsiFilter, lastRsiAbove30Bellow40, lastRsiAbove40Bellow50, lastRsiAbove50Bellow60, lastRsiAbove60Bellow70, lastRsiAbove70, lastRsiAbove70Bellow80 } from "../utils/createRsiFilter";
 
 
-
 const IndicatorView = {
-    
+
 
     init: function () {
 
@@ -150,7 +149,7 @@ const IndicatorView = {
                     if (condition.startsWith('relative')) {
 
                         //let rsiIndicador = await fetchRsiIndicator(usdtCurrencies, intervals)
-                    
+
                         //relativeStrengthIndex|above|60|bellow|70
 
                         switch (condition) {
