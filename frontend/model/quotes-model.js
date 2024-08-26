@@ -2,6 +2,7 @@ import CurrencyView from "../view/currency-view";
 
 const QuoteModel = {
   
+  
     quotes: ['USDT', 'BTC', 'BNB', 'USDC'],
     addQuote: function(item) {
       this.quotes.push(item);

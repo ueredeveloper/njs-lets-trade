@@ -5,6 +5,7 @@ import CurrencyModel from '../model/currency-model';
 import convertOpenTime from '../utils/convertOpenTime';
 
 const ShangaiChartView = {
+    
 
     init: function () {
 

@@ -57,8 +57,10 @@ const scrollCurrencies = () => {
     }
     function handleUSDTMoviment() {
 
-        let _buy = document.getElementsByClassName('tableContent')
-        let __buy = _buy[3].getElementsByClassName('contentBuy')[0].innerText;
+       // let _buy = document.getElementsByClassName('tableContent')
+       // let __buy = _buy[3].getElementsByClassName('contentBuy')[0].innerText;
+       let _buy =  document.getElementsByClassName('t-caption2')[3];
+       let __buy = _buy.children[1].childNodes[1];
 
 
         let price = document.getElementsByClassName('showPrice')[0];
@@ -66,7 +68,8 @@ const scrollCurrencies = () => {
 
         //console.log('Buy ', __buy, 'Price ', price)
 
-        let result = parseFloat(__buy.replace(/,/g, '')) * parseFloat(price.innerText.replace(/,/g, ''));
+        let result = parseFloat(__buy.textContent.replace(/,/g, '')) * parseFloat(price.textContent.replace(/,/g, ''));
+       // let result = parseFloat(__buy.replace(/,/g, '')) * parseFloat(price.innerText.replace(/,/g, ''));
 
         document.getElementById('par1').innerHTML = result.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });;
 

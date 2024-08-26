@@ -2,6 +2,7 @@ import IntervalModel from "../model/interval-model";
 
 
 const IntervalView = {
+    
     init: async function () {
         this.div = $('#list-intervals');
         this.intervals = IntervalModel.getIntervals()
@@ -11,9 +12,6 @@ const IntervalView = {
         this.div
             .on('click', 'input', function () {
                 let value = $(this).val();
-                console.log('input value', value)
-
-                console.log(value)
                 $(document).trigger('intervalChanged', value);
             });
 

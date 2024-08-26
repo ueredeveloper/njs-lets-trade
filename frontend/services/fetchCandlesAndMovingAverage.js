@@ -1,6 +1,7 @@
 
 const fetchCandlesAndMovingAverage = (currencies, intervals, period) => {
 
+  
     function _fetchCandlesAndMovingAverage(symbol, intervals, period) {
   
       return new Promise(async (resolve, reject) => {

@@ -1,5 +1,6 @@
 const IndicatorModel = {
 
+    
     ichimokuCloud: {
         type: 'ichimoku cloud',
         intervals: new Set(['1h']),

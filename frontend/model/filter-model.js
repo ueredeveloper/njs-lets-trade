@@ -4,6 +4,8 @@ import CurrencyModel from "./currency-model";
 
 const FilterModel = {
 
+
+    
     getAllCurrencies: async function () {
         let allCurrencies = await CurrencyModel.getAllCurrencies();
         return allCurrencies;

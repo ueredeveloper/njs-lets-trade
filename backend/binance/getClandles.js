@@ -11,7 +11,11 @@ const convertIntervalToMiliseconds = require('../utils/convert-interval-to-milis
  * @param {string} interval - O intervalo, se 1h (uma hora), 4h, 15 (quinze minutos) etc.
  * @param {integer} limit - O limite de candles solicitados.
  */
+
+let i  = 0
 module.exports = getClandles = async function (symbol, interval, limit) {
+
+    
 
     /**
      * Como temos os valores das moedas salvos, vamos buscar apenas os valores novos, assim, ao inves de pedir
@@ -52,8 +56,9 @@ module.exports = getClandles = async function (symbol, interval, limit) {
     // Limite de candles necessários para atualizar o banco
     const limitForUpdateDb = Math.floor(timeDifference / miliseconds);
 
-    console.log('db len ', dbCandles.length, 'symbol',  symbol, 'update len ', limitForUpdateDb
-    )
+    // Símbolo e limite de atualizações
+    console.log(i, 'symbol',  symbol, 'update len ', limitForUpdateDb);
+    i++;
 
     // Caso o tamanho da array maior que mil, deletar o valor mais antigo. A array não pode ultrapassar mil registros.
     if (dbCandles.length > 1000) {

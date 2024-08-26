@@ -14,6 +14,7 @@ const fetchCandlesAndSMA = (currencies, interval, period, limit) => {
  */
   function _fetchCandlesAndSMA(symbol, limit, interval) {
 
+    
     return new Promise(async (resolve, reject) => {
       try {
         // Fetch candlesticks
