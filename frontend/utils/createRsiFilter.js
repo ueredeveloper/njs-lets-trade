@@ -83,6 +83,9 @@ function createRsiFilter(array, intervals, acronym, condictionCallback) {
     });
 
 }
+function lastRsiAbove20Bellow30(lastRsi) {
+    return lastRsi > 20.0 && lastRsi < 30.0;
+}
 
 function lastRsiAbove30Bellow40(lastRsi) {
     return lastRsi > 30.0 && lastRsi < 40.0;
@@ -100,8 +103,10 @@ function lastRsiAbove70Bellow80(lastRsi) {
     return lastRsi > 70.0 && lastRsi < 80.0;
 }
 
+
 export {
     createRsiFilter,
+    lastRsiAbove20Bellow30,
     lastRsiAbove30Bellow40,
     lastRsiAbove40Bellow50,
     lastRsiAbove50Bellow60,
