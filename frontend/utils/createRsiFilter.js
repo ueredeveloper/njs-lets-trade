@@ -81,7 +81,7 @@ function createRsiFilter(array, intervals, acronym, condictionCallback) {
 
         CurrencyModel.addFilter(filter);
     });
-   
+
 }
 
 function lastRsiAbove30Bellow40(lastRsi) {
@@ -106,5 +106,6 @@ export {
     lastRsiAbove40Bellow50,
     lastRsiAbove50Bellow60,
     lastRsiAbove60Bellow70,
-    lastRsiAbove70Bellow80
+    lastRsiAbove70Bellow80,
+
 }
