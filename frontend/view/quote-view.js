@@ -1,5 +1,4 @@
 import CurrencyModel from "../model/currency-model";
-import QuoteModel from "../model/quotes-model";
 
 const QuoteView = {
     

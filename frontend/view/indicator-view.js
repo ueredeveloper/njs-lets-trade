@@ -1,13 +1,5 @@
 import CurrencyModel from "../model/currency-model";
-import FilterModel from "../model/filter-model";
-import IndicatorModel from "../model/indicators-model";
-import fetchCandlesticksAndCloud from "../services/fetchCandlesAndIchimokuCloud";
 import fetchCandlesAndIndicators from "../services/fetchCandlesAndIndicators";
-import fetchCandlesAndMovingAverage from "../services/fetchCandlesAndMovingAverage";
-import fetchCandlesAndSMA from "../services/fetchCandlesAndSMA";
-import fetchCandlesticks from "../services/fetchCandlesticks";
-import fetchRsiIndicator from "../services/fetchRsiIndicator";
-import compareIchimokuLines from "../utils/compareIchimokuLines";
 import { conversionAboveBase, conversionAboveCloseCandle, conversionAboveHighCandle, conversionAboveLowCandle, conversionAboveSpanA, conversionAboveSpanAAndSpanB, conversionAboveSpanB, conversionBellowBase, createIchimokuFilter } from "../utils/createIchimokuFilter";
 import { createMovingAverageFilter, movingAverageAboveCandleClose, movingAverageBellowCandleClose } from "../utils/createMovingAverageFilter";
 import { createRsiFilter, lastRsiAbove30Bellow40, lastRsiAbove40Bellow50, lastRsiAbove50Bellow60, lastRsiAbove60Bellow70, lastRsiAbove70, lastRsiAbove70Bellow80 } from "../utils/createRsiFilter";
