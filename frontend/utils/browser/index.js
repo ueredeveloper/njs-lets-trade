@@ -83,3 +83,17 @@ const scrollCurrencies = () => {
     div[0].appendChild(btn2);
 }
 scrollCurrencies()
+
+// atualizar lista de moedas usdt binance 
+
+// use Set para não repetir moedas
+let symbols = new Set();
+let items = document.getElementsByClassName('item-symbol-text');
+
+
+for (let i = 0; i<items.length;i++){
+ symbols.add (items[i].childNodes[0].textContent + items[i].childNodes[1].textContent)
+}
+
+Array.from(symbols);
+
