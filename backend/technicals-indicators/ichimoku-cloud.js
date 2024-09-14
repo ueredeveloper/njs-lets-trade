@@ -1,5 +1,4 @@
 const router = require("express").Router();
-//const Candles = require('../binance/candles');
 const ichimokuCloud = require('technicalindicators').IchimokuCloud;
 const { fetchCandles } = require('../services')
 

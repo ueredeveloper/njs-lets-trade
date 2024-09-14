@@ -1,6 +1,4 @@
 const router = require("express").Router();
-//const Candles = require('../binance/candles');
-const SMA = require('technicalindicators').SMA
 const { fetchCandles } = require('../services')
 
 // bollinger technical

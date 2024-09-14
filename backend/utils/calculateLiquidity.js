@@ -1,7 +1,4 @@
-const { all } = require("proxy-addr");
 const getAllBookTickers = require("../binance/getAllBookTickers");
-const getClandles = require("../binance/getClandles");
-const { json } = require("body-parser");
 const getBook = require("../binance/getBook");
 const analyseMoneyFlow = require("./analyseMoneyFlow");
 

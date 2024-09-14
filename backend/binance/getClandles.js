@@ -1,4 +1,3 @@
-const fs = require('node:fs');
 const getClient = require('./getClient');
 const writeCandles = require('../utils/write-candles');
 const readCandles = require('../utils/read-candles');

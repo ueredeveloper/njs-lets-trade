@@ -1,8 +1,5 @@
 const router = require("express").Router();
-//const Candles = require('../binance/candles');
 const SMA = require('technicalindicators').SMA;
-const { fetchCandles } = require('.')
-
 
 // simple movie average
 router.post("/sma", async (req, res) => {
