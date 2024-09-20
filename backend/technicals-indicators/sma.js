@@ -1,7 +1,7 @@
 const router = require("express").Router();
-const { fetchCandles } = require('../services')
+const fetchCandles = require('../services/fetchCandles')
 
-// bollinger technical
+//technicals-indicators/sma.js
 router.get("/", async (req, res) => {
 
     let {symbol,limit, interval} = req.query;

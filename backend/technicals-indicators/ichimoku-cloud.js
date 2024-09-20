@@ -1,8 +1,8 @@
 const router = require("express").Router();
 const ichimokuCloud = require('technicalindicators').IchimokuCloud;
-const { fetchCandles } = require('../services')
+const fetchCandles = require('../services/fetchCandles');
 
-// bollinger technical
+// /technicals-indicators/ichimoku-cloud.js
 router.get("/", async (req, res) => {
 
     let {symbol,limit, interval} = req.query;
