@@ -1,6 +1,6 @@
 const router = require("express").Router();
 //const { fetchCandles } = require('../services')
-
+const { getClandles } = require("../binance");
 //technicals-indicators/sma.js
 router.get("/", async (req, res) => {
 
