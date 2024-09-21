@@ -1,13 +1,15 @@
 const router = require("express").Router();
 const ichimokuCloud = require('technicalindicators').IchimokuCloud;
-const { fetchCandles } = require('../services')
+const { getClandles } = require("../binance");
+//const { fetchCandles } = require('../services')
 
 // bollinger technical
 router.get("/", async (req, res) => {
 
     let {symbol,limit, interval} = req.query;
 
-    let candles = await fetchCandles(symbol, limit, interval)
+   // let candles = await fetchCandles(symbol, limit, interval);
+   let candles = await getClandles(symbol, interval, limit).then(response => { res.send(JSON.stringify(response)) });
   
     let input = {
         high  : candles.map(c=> parseFloat(c.high)),
