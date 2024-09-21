@@ -4,6 +4,7 @@ const rsi = require('technicalindicators').RSI;
 // bollinger technical
 router.post("/rsi", async (req, res) => {
 
+  // remove cíclical error
   let candles = req.body;
 
   var inputRSI = {

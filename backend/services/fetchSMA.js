@@ -4,6 +4,7 @@ const SMA = require('technicalindicators').SMA;
 // simple movie average
 router.post("/sma", async (req, res) => {
 
+  // remove cíclical error
   let candles = req.body;
 
   let { period } = req.query;

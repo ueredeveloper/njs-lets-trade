@@ -7,6 +7,7 @@ const fetchSMA = require('./fetchSMA');
 const fetchRSI = require('./fetchRSI');
 const fetchVWAP = require('./fetchVWAP');
 
-module.exports = {fetchCandles, fetchIchimokuCloud, fetchAllCurrencies, fetchSMA, fetchRSI, fetchVWAP }
+// remove cíclical error
+module.exports = { fetchCandles, fetchIchimokuCloud, fetchAllCurrencies, fetchSMA, fetchRSI, fetchVWAP }
 
 

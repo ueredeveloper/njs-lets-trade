@@ -21,6 +21,7 @@ const router = require("express").Router();
  */
 router.get("/currencies", async (req, res) => {
 
+    // remove cíclical error
     await getAllCurrencies().then(response => res.send(JSON.stringify(response)));
 });
 
