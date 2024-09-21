@@ -1,12 +1,13 @@
 const router = require("express").Router();
-const fetchCandles = require('../services/fetchCandles')
+//const { fetchCandles } = require('../services')
 
 //technicals-indicators/sma.js
 router.get("/", async (req, res) => {
 
     let {symbol,limit, interval} = req.query;
 
-    let candles = await fetchCandles(symbol, limit, interval)
+   // let candles = await fetchCandles(symbol, limit, interval);
+   let candles = await getClandles(symbol, interval, limit).then(response => { res.send(JSON.stringify(response)) });
   
     let input = {
         high  : candles.map(c=> parseFloat(c.high)),
