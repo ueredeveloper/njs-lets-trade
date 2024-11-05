@@ -14,7 +14,25 @@ const getSymbols = () => {
         }
     }
 }
-//getSymbols()
+//getSymbols();
+
+/*
+
+04/11/2024
+
+let div = document.getElementsByClassName('fixed-size-list')[1]
+div.style.setProperty('--scroll-size', '20px');
+
+let symbols = new Set();
+
+let items = document.getElementsByClassName('item-symbol-text');     
+
+for (let i = 0; i < items.length; i++) {
+	symbols.add(items[i].children[0].textContent + 'USDT');
+}
+
+*/
+
 
 const scrollCurrencies = () => {
     let div = document.getElementsByClassName('header-container');
@@ -55,6 +73,25 @@ const scrollCurrencies = () => {
             }
         }, 3000);
     }
+
+    function parseAbbreviatedNumber(value) {
+        // Extract the number and suffix
+        const number = parseFloat(value);
+        const suffix = value.slice(-1).toUpperCase();
+    
+        // Convert based on suffix
+        switch (suffix) {
+            case 'K':
+                return number * 1_000;
+            case 'M':
+                return number * 1_000_000;
+            case 'B':
+                return number * 1_000_000_000;
+            default:
+                return number; // Return as is if no suffix
+        }
+    }
+
     function handleUSDTMoviment() {
 
        // let _buy = document.getElementsByClassName('tableContent')
@@ -68,7 +105,7 @@ const scrollCurrencies = () => {
 
         //console.log('Buy ', __buy, 'Price ', price)
 
-        let result = parseFloat(__buy.textContent.replace(/,/g, '')) * parseFloat(price.textContent.replace(/,/g, ''));
+        let result = parseAbbreviatedNumber(__buy.textContent) * parseFloat(price.textContent.replace(/,/g, ''));
        // let result = parseFloat(__buy.replace(/,/g, '')) * parseFloat(price.innerText.replace(/,/g, ''));
 
         document.getElementById('par1').innerHTML = result.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });;
