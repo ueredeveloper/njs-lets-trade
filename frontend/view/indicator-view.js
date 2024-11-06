@@ -10,7 +10,7 @@ import fetchRsiIndicator from "../services/fetchRsiIndicator";
 import compareIchimokuLines from "../utils/compareIchimokuLines";
 import { conversionAboveBase, conversionAboveCloseCandle, conversionAboveHighCandle, conversionAboveLowCandle, conversionAboveSpanA, conversionAboveSpanAAndSpanB, conversionAboveSpanB, conversionBellowBase, createIchimokuFilter } from "../utils/createIchimokuFilter";
 import { createMovingAverageFilter, movingAverageAboveCandleClose, movingAverageBellowCandleClose } from "../utils/createMovingAverageFilter";
-import { createRsiFilter, lastRsiAbove20Bellow30, lastRsiAbove30Bellow40, lastRsiAbove40Bellow50, lastRsiAbove50Bellow60, lastRsiAbove60Bellow70, lastRsiAbove70Bellow80 } from "../utils/createRsiFilter";
+import { createRsiFilter, lastRsiAbove10Bellow20, lastRsiAbove20Bellow30, lastRsiAbove30Bellow40, lastRsiAbove40Bellow50, lastRsiAbove50Bellow60, lastRsiAbove60Bellow70, lastRsiAbove70Bellow80 } from "../utils/createRsiFilter";
 
 
 const IndicatorView = {
@@ -153,6 +153,9 @@ const IndicatorView = {
                         //relativeStrengthIndex|above|60|bellow|70
 
                         switch (condition) {
+                            case 'relativeStrengthIndex|above|10|bellow|20':
+                                createRsiFilter(candlesAndIndicators, intervals, acronym, lastRsiAbove10Bellow20)
+                                break;
                             case 'relativeStrengthIndex|above|20|bellow|30':
                                 createRsiFilter(candlesAndIndicators, intervals, acronym, lastRsiAbove20Bellow30)
                                 break;
@@ -435,6 +438,7 @@ const IndicatorView = {
 
             <select name="line1" class="flex-1 mx-2 h-7" id="line1">
                 <option value="conversion" class="bg-green-200">Value</option>
+                <option value="10" class="bg-green-100">10</option>
                 <option value="20" class="bg-green-100">20</option>
                 <option value="30" class="bg-green-100">30</option>
                 <option value="40" class="bg-green-100">40</option>
@@ -451,6 +455,7 @@ const IndicatorView = {
             
             <select name="line2" class="flex-1 mx-2 h-7" id="line2">
                 <option value="conversion" class="bg-green-200">Value</option>
+                <option value="10" class="bg-green-100">10</option>
                 <option value="20" class="bg-green-100">20</option>
                 <option value="30" class="bg-green-100">30</option>
                 <option value="40" class="bg-green-100">40</option>
