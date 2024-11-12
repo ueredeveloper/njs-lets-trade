@@ -214,13 +214,33 @@ const IndicatorView = {
                         }
                     }
                     else if (condition.startsWith('movingAverage')) {
+                        console.log(condition)
                         switch (condition) {
+                            case 'movingAverage|9|above|close':
+                                createMovingAverageFilter(candlesAndIndicators, intervals, acronym, movingAverageBellowCandleClose)
+                                break;
+                            case 'movingAverage|9|bellow|close':
+                                createMovingAverageFilter(candlesAndIndicators, intervals, acronym, movingAverageBellowCandleClose)
+                                break;
+                                case 'movingAverage|20|above|close':
+                                createMovingAverageFilter(candlesAndIndicators, intervals, acronym, movingAverageBellowCandleClose)
+                                break;
+                            case 'movingAverage|20|bellow|close':
+                                createMovingAverageFilter(candlesAndIndicators, intervals, acronym, movingAverageBellowCandleClose)
+                                break;
+                                case 'movingAverage|80|above|close':
+                                createMovingAverageFilter(candlesAndIndicators, intervals, acronym, movingAverageBellowCandleClose)
+                                break;
+                            case 'movingAverage|80|bellow|close':
+                                createMovingAverageFilter(candlesAndIndicators, intervals, acronym, movingAverageBellowCandleClose)
+                                break;
                             case 'movingAverage|200|above|close':
                                 createMovingAverageFilter(candlesAndIndicators, intervals, acronym, movingAverageAboveCandleClose)
                                 break;
                             case 'movingAverage|200|bellow|close':
                                 createMovingAverageFilter(candlesAndIndicators, intervals, acronym, movingAverageBellowCandleClose)
                                 break;
+                            
                             default: alert("Condição de MA ainda não calculada!")
 
                         }
@@ -372,7 +392,8 @@ const IndicatorView = {
             
             <select name="length" class="flex-1 mx-2 h-7 " id="maLength">
                 <option value="9">09</option>
-                <option value="21">21</option>
+                <option value="20">20</option>
+                <option value="80">80</option>
                 <option value="200" selected>200</option>
             </select>
               
