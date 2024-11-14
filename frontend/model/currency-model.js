@@ -5,7 +5,7 @@ const CurrencyModel = {
   filters: [
     {
       name: '1h|Binance|USDT',
-      // Lista atualizada em 30/08/2024
+      // Lista atualizada em 05/11/2024
       list: [
         "BTCUSDT",
         "1INCHUSDT",
@@ -392,6 +392,7 @@ const CurrencyModel = {
         "LUMIAUSDT",
         "KAIAUSDT"
       ]
+
     },
   ],
   quotes: ['USDT', 'BTC', 'BNB'],

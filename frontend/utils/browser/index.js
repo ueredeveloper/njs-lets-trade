@@ -29,7 +29,6 @@ let items = document.getElementsByClassName('item-symbol-text');
 
 for (let i = 0; i < items.length; i++) {
 	symbols.add(items[i].children[0].textContent + 'USDT');
-}
 
 */
 
