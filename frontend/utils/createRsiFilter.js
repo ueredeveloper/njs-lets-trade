@@ -83,6 +83,7 @@ function createRsiFilter(array, intervals, acronym, condictionCallback) {
     });
 
 }
+
 function lastRsiAbove10Bellow20(lastRsi) {
     return lastRsi > 10.0 && lastRsi < 20.0;
 }

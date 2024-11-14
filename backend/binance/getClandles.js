@@ -1,4 +1,3 @@
-const fs = require('node:fs');
 const getClient = require('./getClient');
 const writeCandles = require('../utils/write-candles');
 const readCandles = require('../utils/read-candles');
@@ -16,6 +15,7 @@ let i  = 0
 module.exports = getClandles = async function (symbol, interval, limit) {
 
     
+// remove cíclical error
 
     /**
      * Como temos os valores das moedas salvos, vamos buscar apenas os valores novos, assim, ao inves de pedir

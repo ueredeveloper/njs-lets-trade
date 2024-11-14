@@ -15,10 +15,12 @@ async function createMovingAverageFilter(array, intervals, acronym, condictionCa
         // Adiciona as moedas pesquisadas, editando com novas informações como ichimoku e ma-200 desta moeda.
         array.forEach(item => {
 
-            let { symbol: _symbol, movingAverage: _movingAverage, candlesticks: _candlesticks, interval: _interval } = item;
+            let { symbol: _symbol, movingAverage: _movingAverage, candlesticks: _candlesticks, interval: _interval, movingAverage50: _50 } = item;
 
             // É preciso comparar os intervalos, por isso nomeação em underline. Ex: _movingAverage.
             if (interval === _interval) {
+
+                console.log(_50, _movingAverage)
 
                 if (_movingAverage.length === 0) {
                     filter.list.push(`erro: ${_symbol}, moeda recente, sem candles suficientes.`)
@@ -57,6 +59,18 @@ function movingAverageBellowCandleClose(lastMovingAverage, lastCandlestick) {
     let percentageDifference = ((lastCandlestick.close - lastMovingAverage) / lastMovingAverage) * 100;
 
     return lastMovingAverage < lastCandlestick.close || percentageDifference >= -0.51;;
+}
+
+function sma50BellowSma200 (lastSma50, lastSma200){
+    let percentageDifference = ((lastSma200 - lastSma50) / lastSma50) * 100;
+
+    return lastMovingAverage < lastCandlestick.close || percentageDifference >= -0.51;;
+}
+
+function sma50AboveSma200 (lastSma50, lastSma200){
+    let percentageDifference = ((lastSma200 - lastSma50) / lastSma50) * 100;
+
+    return lastMovingAverage > lastCandlestick.close || percentageDifference <= -0.51;;
 }
 
 

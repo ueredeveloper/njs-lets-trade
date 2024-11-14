@@ -14,10 +14,9 @@ const getSymbols = () => {
         }
     }
 }
-//getSymbols();
+//getSymbols()
 
 /*
-
 04/11/2024
 
 let div = document.getElementsByClassName('fixed-size-list')[1]
@@ -28,10 +27,8 @@ let symbols = new Set();
 let items = document.getElementsByClassName('item-symbol-text');     
 
 for (let i = 0; i < items.length; i++) {
-	symbols.add(items[i].children[0].textContent + 'USDT');
-
-*/
-
+	symbols.add(items[i].children[0].textContent + 'USDT');
+}*/
 
 const scrollCurrencies = () => {
     let div = document.getElementsByClassName('header-container');
@@ -77,7 +74,7 @@ const scrollCurrencies = () => {
         // Extract the number and suffix
         const number = parseFloat(value);
         const suffix = value.slice(-1).toUpperCase();
-    
+
         // Convert based on suffix
         switch (suffix) {
             case 'K':
@@ -93,19 +90,16 @@ const scrollCurrencies = () => {
 
     function handleUSDTMoviment() {
 
-       // let _buy = document.getElementsByClassName('tableContent')
-       // let __buy = _buy[3].getElementsByClassName('contentBuy')[0].innerText;
-       let _buy =  document.getElementsByClassName('t-caption2')[3];
-       let __buy = _buy.children[1].childNodes[1];
+        // let _buy = document.getElementsByClassName('tableContent')
+        // let __buy = _buy[3].getElementsByClassName('contentBuy')[0].innerText;
+        let _buy = document.getElementsByClassName('t-caption2')[3];
+        let __buy = _buy.children[1].childNodes[1];
 
 
         let price = document.getElementsByClassName('showPrice')[0];
 
-
-        //console.log('Buy ', __buy, 'Price ', price)
-
         let result = parseAbbreviatedNumber(__buy.textContent) * parseFloat(price.textContent.replace(/,/g, ''));
-       // let result = parseFloat(__buy.replace(/,/g, '')) * parseFloat(price.innerText.replace(/,/g, ''));
+        // let result = parseFloat(__buy.replace(/,/g, '')) * parseFloat(price.innerText.replace(/,/g, ''));
 
         document.getElementById('par1').innerHTML = result.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });;
 
@@ -127,9 +121,8 @@ let symbols = new Set();
 let items = document.getElementsByClassName('item-symbol-text');
 
 
-for (let i = 0; i<items.length;i++){
- symbols.add (items[i].childNodes[0].textContent + items[i].childNodes[1].textContent)
+for (let i = 0; i < items.length; i++) {
+    symbols.add(items[i].childNodes[0].textContent + items[i].childNodes[1].textContent)
 }
 
 Array.from(symbols);
-
