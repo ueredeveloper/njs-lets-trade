@@ -4,7 +4,7 @@
 const getSymbols = () => {
     let btn = document.createElement('button');
     btn.innerHTML = 'CLICK';
-    let list = document.getElementsByClassName('sort-item-wrap');
+    let list = document.getElementsByClassName('bn-tab-list');
     list[0].appendChild(btn)
     var symbols = []
     btn.onclick = function () {

@@ -503,6 +503,8 @@ const IndicatorView = {
                 <label for="ma5m" class="mx-1">15m</label><br>
                 <input type="checkbox" id="ma1h" name="1h" value="1h" checked>
                 <label for="ma1h" class="mx-1">1h</label><br>
+                <input type="checkbox" id="ma2h" name="2h" value="2h">
+                <label for="ma2h" class="mx-1">2h</label><br>
                 <input type="checkbox" id="ma4h" name="4h" value="4h">
                 <label for="ma4h" class="mx-1">4h</label><br>
                 <input type="checkbox" id="ma8h" name="8h" value="8h">
