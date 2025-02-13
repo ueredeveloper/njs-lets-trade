@@ -16,5 +16,5 @@ module.exports = getAllCurrencies = async function (symbol, interval, limit) {
     } catch (error) {
         console.error('Error fetching prices:', error);
     }
-    return candles;
+    
 }
