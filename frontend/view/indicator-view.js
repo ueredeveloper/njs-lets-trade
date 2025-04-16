@@ -451,12 +451,12 @@ const IndicatorView = {
 
             <select name="line1" class="flex-1 mx-2 h-7" id="line1">
                 <option value="conversion" class="bg-green-200">Value</option>
-                <option value="10" class="bg-green-100">10</option>
+                <option value="10" class="bg-green-100" selected>10</option>
                 <option value="20" class="bg-green-100">20</option>
                 <option value="30" class="bg-green-100">30</option>
                 <option value="40" class="bg-green-100">40</option>
                 <option value="50" class="bg-green-100">50</option>
-                <option value="60" class="bg-green-200" selected>60</option>
+                <option value="60" class="bg-green-200">60</option>
                 <option value="70" class="bg-gray-200">70</option>
                 <option value="80" class="bg-gray-200">80</option>
             </select>
@@ -469,12 +469,12 @@ const IndicatorView = {
             <select name="line2" class="flex-1 mx-2 h-7" id="line2">
                 <option value="conversion" class="bg-green-200">Value</option>
                 <option value="10" class="bg-green-100">10</option>
-                <option value="20" class="bg-green-100">20</option>
+                <option value="20" class="bg-green-100" selected>20</option>
                 <option value="30" class="bg-green-100">30</option>
                 <option value="40" class="bg-green-100">40</option>
                 <option value="50" class="bg-green-100">50</option>
                 <option value="60" class="bg-green-200">60</option>
-                <option value="70" class="bg-gray-200" selected>70</option>
+                <option value="70" class="bg-gray-200">70</option>
                 <option value="80" class="bg-gray-200">80</option>
             </select>
 
