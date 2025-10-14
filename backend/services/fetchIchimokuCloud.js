@@ -1,7 +1,7 @@
 const router = require("express").Router();
 const ichimokuCloud = require('technicalindicators').IchimokuCloud;
 
-// bollinger technical
+// Ichimoku Cloud
 router.post("/ichimoku-cloud", async (req, res) => {
 
   // remove cíclical error

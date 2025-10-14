@@ -1,13 +1,5 @@
 import CurrencyModel from "../model/currency-model";
-import FilterModel from "../model/filter-model";
-import IndicatorModel from "../model/indicators-model";
-import fetchCandlesticksAndCloud from "../services/fetchCandlesAndIchimokuCloud";
 import fetchCandlesAndIndicators from "../services/fetchCandlesAndIndicators";
-import fetchCandlesAndMovingAverage from "../services/fetchCandlesAndMovingAverage";
-import fetchCandlesAndSMA from "../services/fetchCandlesAndSMA";
-import fetchCandlesticks from "../services/fetchCandlesticks";
-import fetchRsiIndicator from "../services/fetchRsiIndicator";
-import compareIchimokuLines from "../utils/compareIchimokuLines";
 import { conversionAboveBase, conversionAboveCloseCandle, conversionAboveHighCandle, conversionAboveLowCandle, conversionAboveSpanA, conversionAboveSpanAAndSpanB, conversionAboveSpanB, conversionBellowBase, createIchimokuFilter } from "../utils/createIchimokuFilter";
 import { createMovingAverageFilter, movingAverageAboveCandleClose, movingAverageBellowCandleClose } from "../utils/createMovingAverageFilter";
 import { createRsiFilter, lastRsiAbove10Bellow20, lastRsiAbove20Bellow30, lastRsiAbove30Bellow40, lastRsiAbove40Bellow50, lastRsiAbove50Bellow60, lastRsiAbove60Bellow70, lastRsiAbove70Bellow80 } from "../utils/createRsiFilter";
@@ -55,7 +47,8 @@ const IndicatorView = {
                             intervals: intervals
                         });
 
-                    } else if (indicatorType === 'movingAverage') {
+                    } 
+                    else if (indicatorType === 'movingAverage') {
                         let intervals = checkboxValues.toString();
                         // Captura as seleções do usuário neste indicador
                         let line1 = selects.eq(0).val();
@@ -68,7 +61,8 @@ const IndicatorView = {
                             intervals: `${intervals}`
                         });
 
-                    } else if (indicatorType === 'relativeStrengthIndex') {
+                    } 
+                    else if (indicatorType === 'relativeStrengthIndex') {
                         let intervals = checkboxValues.toString();
                         // Captura as seleções do usuário neste indicador
                         let compare1 = selects.eq(0).val();
@@ -81,6 +75,20 @@ const IndicatorView = {
                             acronym: `${indicatorType.toString()[0]}|${compare1.toString()[0]}|${line1.toString()[0]}|${compare2.toString()[0]}|${line2.toString()[0]}`,
                             intervals: `${intervals}`
                         });
+
+                    }
+                    else if (indicatorType === 'lowestIndex') {
+                        let intervals = checkboxValues.toString();
+                        // Captura as seleções do usuário neste indicador
+                        let name = selects.eq(0).val();
+                       
+                        console.log('lowest index name ', name)
+
+                        /*params.push({
+                            condition: `${indicatorType}|${compare1}|${line1}|${compare2}|${line2}`,
+                            acronym: `${indicatorType.toString()[0]}|${compare1.toString()[0]}|${line1.toString()[0]}|${compare2.toString()[0]}|${line2.toString()[0]}`,
+                            intervals: `${intervals}`
+                        });*/
 
                     }
                     else {
@@ -110,6 +118,8 @@ const IndicatorView = {
                 //let candlesAndIndicators = currencyModel.getForTestIndicatorsAndCurrencies();
 
                 for (const param of params) {
+
+                    console.log(param)
 
                     let { condition, acronym } = param;
 
@@ -222,13 +232,13 @@ const IndicatorView = {
                             case 'movingAverage|9|bellow|close':
                                 createMovingAverageFilter(candlesAndIndicators, intervals, acronym, movingAverageBellowCandleClose)
                                 break;
-                                case 'movingAverage|20|above|close':
+                            case 'movingAverage|20|above|close':
                                 createMovingAverageFilter(candlesAndIndicators, intervals, acronym, movingAverageBellowCandleClose)
                                 break;
                             case 'movingAverage|20|bellow|close':
                                 createMovingAverageFilter(candlesAndIndicators, intervals, acronym, movingAverageBellowCandleClose)
                                 break;
-                                case 'movingAverage|80|above|close':
+                            case 'movingAverage|80|above|close':
                                 createMovingAverageFilter(candlesAndIndicators, intervals, acronym, movingAverageBellowCandleClose)
                                 break;
                             case 'movingAverage|80|bellow|close':
@@ -240,7 +250,7 @@ const IndicatorView = {
                             case 'movingAverage|200|bellow|close':
                                 createMovingAverageFilter(candlesAndIndicators, intervals, acronym, movingAverageBellowCandleClose)
                                 break;
-                            
+
                             default: alert("Condição de MA ainda não calculada!")
 
                         }
@@ -366,6 +376,10 @@ const IndicatorView = {
                     indicatorSelects.empty();
                     indicatorSelects.append(IndicatorView.renderRelativeStrengthIndex());
                     break;
+                case 'lowestIndex':
+                    indicatorSelects.empty();
+                    indicatorSelects.append(IndicatorView.renderLowestIndex());
+                    break;
                 default:
                     indicatorSelects.empty(); // Clear the content if no option is selected
             }
@@ -393,6 +407,7 @@ const IndicatorView = {
             <select name="length" class="flex-1 mx-2 h-7 " id="maLength">
                 <option value="9">09</option>
                 <option value="20">20</option>
+                <option value="50">50</option>
                 <option value="80">80</option>
                 <option value="200" selected>200</option>
             </select>
@@ -459,12 +474,12 @@ const IndicatorView = {
 
             <select name="line1" class="flex-1 mx-2 h-7" id="line1">
                 <option value="conversion" class="bg-green-200">Value</option>
-                <option value="10" class="bg-green-100">10</option>
+                <option value="10" class="bg-green-100" selected>10</option>
                 <option value="20" class="bg-green-100">20</option>
                 <option value="30" class="bg-green-100">30</option>
                 <option value="40" class="bg-green-100">40</option>
                 <option value="50" class="bg-green-100">50</option>
-                <option value="60" class="bg-green-200" selected>60</option>
+                <option value="60" class="bg-green-200">60</option>
                 <option value="70" class="bg-gray-200">70</option>
                 <option value="80" class="bg-gray-200">80</option>
             </select>
@@ -477,18 +492,21 @@ const IndicatorView = {
             <select name="line2" class="flex-1 mx-2 h-7" id="line2">
                 <option value="conversion" class="bg-green-200">Value</option>
                 <option value="10" class="bg-green-100">10</option>
-                <option value="20" class="bg-green-100">20</option>
+                <option value="20" class="bg-green-100" selected>20</option>
                 <option value="30" class="bg-green-100">30</option>
                 <option value="40" class="bg-green-100">40</option>
                 <option value="50" class="bg-green-100">50</option>
                 <option value="60" class="bg-green-200">60</option>
-                <option value="70" class="bg-gray-200" selected>70</option>
+                <option value="70" class="bg-gray-200">70</option>
                 <option value="80" class="bg-gray-200">80</option>
             </select>
 
             ${this.renderintervals()}
              
         `
+    },
+    renderLowestIndex: function () {
+        return `<span class="flex-1 mx-2 h-7 ">${this.renderintervals()}</span>`
     },
 
     renderintervals: function () {
@@ -501,12 +519,16 @@ const IndicatorView = {
                 <label for="ma5m" class="mx-1">5m</label><br>
                 <input type="checkbox" id="ma15m" name="15m" value="15m">
                 <label for="ma5m" class="mx-1">15m</label><br>
-                <input type="checkbox" id="ma1h" name="1h" value="1h" checked>
+                <input type="checkbox" id="ma1h" name="1h" value="1h">
                 <label for="ma1h" class="mx-1">1h</label><br>
                 <input type="checkbox" id="ma2h" name="2h" value="2h">
                 <label for="ma2h" class="mx-1">2h</label><br>
                 <input type="checkbox" id="ma4h" name="4h" value="4h">
                 <label for="ma4h" class="mx-1">4h</label><br>
+
+                <input type="checkbox" id="ma6h" name="6h" value="6h" checked>
+                <label for="ma6h" class="mx-1">6h</label><br>
+
                 <input type="checkbox" id="ma8h" name="8h" value="8h">
                 <label for="ma8h" class="mx-1">8h</label><br>
                 <input type="checkbox" id="ma12h" name="12h" value="12h">
@@ -535,6 +557,7 @@ const IndicatorView = {
                     <option value="ichimokuCloud">Ichimoku Cloud</option>
                     <option value="movingAverage">Moving Average</option>
                     <option value="relativeStrengthIndex">RSI</option>
+                    <option value="lowestIndex">Index de Menor Preço</option>
                 </select>
                 <!-- Selects -->
                 <div class="indicatorSelects flex flex-row flex-wrap" class="bg-red-200"></div>

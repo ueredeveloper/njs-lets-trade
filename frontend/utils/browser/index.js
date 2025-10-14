@@ -127,3 +127,69 @@ for (let i = 0; i < items.length; i++) {
 
 Array.from(symbols);
 
+
+/**
+ * Funcionando em 15/04/2025
+ * 
+ Cria botão que ao clickar capturar os pares (BTC/USDT) listados na binance
+
+// Div onde será adicionado o botão na tela da binance
+const coinInfoTable = document.querySelector('.coinInfoTable');
+// Div onde esta o scroll das moedas
+let market = document.getElementsByName('market')
+// Div mais mais propriamente onde está o scroll
+const scrollableDiv = market[0].querySelector('.fixed-size-list');
+// Variável para ir baixando a div quando incrementa com 100
+let i = 100
+// Variável onde será guardados as todas as moedas, Set para não repetir moedas
+let symbols = new Set();
+// Variável de captura, moeda por moeda
+let items = document.getElementsByClassName('item-symbol-text');
+
+if (coinInfoTable) {
+  // Cria botão
+  const button = document.createElement('button');
+  
+  // Propriedades do botão
+  button.textContent = 'Load Coins';
+  button.style.padding = '8px 16px';
+  button.style.margin = '10px';
+  button.style.backgroundColor = '#3a3a3a';
+  button.style.color = 'white';
+  button.style.border = 'none';
+  button.style.borderRadius = '4px';
+  button.style.cursor = 'pointer';
+  button.style.fontSize = '14px';
+  
+  // Add hover effect
+  button.onmouseover = () => {
+    button.style.backgroundColor = '#4a4a4a';
+  };
+  button.onmouseout = () => {
+    button.style.backgroundColor = '#3a3a3a';
+  };
+  
+  // Função
+  button.onclick = () => {
+    // Rolar página
+	if (scrollableDiv) {
+  	 	scrollableDiv.scrollTop = i;
+     		i = i + 100;
+     	}
+
+    // Capturar moedas
+	for (let i = 0; i < items.length; i++) {
+    	symbols.add(items[i].childNodes[0].textContent + items[i].childNodes[1].textContent)
+}	
+  };
+  
+  // Insere o botão na div
+  coinInfoTable.parentNode.insertBefore(button, coinInfoTable.nextSibling);
+  
+  // Alternatively, if you want the button inside the table:
+  // coinInfoTable.appendChild(button);
+} else {
+  console.error('coinInfoTable not found');
+}
+
+ */

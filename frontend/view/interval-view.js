@@ -1,6 +1,5 @@
 import IntervalModel from "../model/interval-model";
 
-
 const IntervalView = {
     
     init: async function () {
