@@ -1,7 +1,7 @@
 
 const fetchCandlesAndIndicators = async (currencies, intervals) => {
 
-  
+
   async function _fetch(symbol, intervals) {
 
     // Array para armazenar todas as Promises de requisições
@@ -61,9 +61,24 @@ const fetchCandlesAndIndicators = async (currencies, intervals) => {
           return response.json();
         });
 
+        // Busca o index do último preço mais báixo dentre os 20 últimos candlesticks
+        let lowestIndex = await fetch('http://localhost:3000/services/fetch-lowest-index', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          // Envia somente os 20 últimos candlesticks
+          body: JSON.stringify(candlesticks.slice(-10))
+        }).then(response => {
+          if (!response.ok) {
+            throw new Error('Network response was not ok');
+          }
+          return response.json();
+        });
+
         // Adicione todas as Promises ao array de promises
-        promises.push(Promise.all([candlesticks, ichimokuCloud, movingAverage, rsiIndicator])
-          .then(([candlesticks, ichimokuCloud, movingAverage, rsiIndicator]) => {
+        promises.push(Promise.all([candlesticks, ichimokuCloud, movingAverage, rsiIndicator, lowestIndex])
+          .then(([candlesticks, ichimokuCloud, movingAverage, rsiIndicator, lowestIndex]) => {
             return {
               symbol: symbol,
               price: candlesticks.slice(-1)[0].close,
@@ -71,7 +86,8 @@ const fetchCandlesAndIndicators = async (currencies, intervals) => {
               candlesticks: candlesticks,
               ichimokuCloud: ichimokuCloud,
               movingAverage: movingAverage,
-              rsiIndicator: rsiIndicator
+              rsiIndicator: rsiIndicator,
+              lowestIndex: lowestIndex.lowestIndex
             };
           })
         );

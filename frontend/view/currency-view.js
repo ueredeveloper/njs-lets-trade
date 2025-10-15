@@ -36,7 +36,10 @@ const CurrencyView = {
       // Busca o filtro indicado
       let filter = await CurrencyModel.findFilter(selection);
       // Filtra 
-      let list = currencies.list.filter(currency => filter.list.includes(currency.symbol));
+      //let list = currencies.list.filter(currency => filter.list.includes(currency.symbol));
+
+      // Desta forma se mantém a ordem do filtro. Necessário para o filtro por indexação do menor valor
+      let list = filter.list.map(list=> currencies.list.find(cl=> cl.symbol === list))
 
       // Busca a tag tbody dentro da tag table e limpa esta tabela para novas linhas.
       let table = $('#list-currencies').empty();
@@ -80,6 +83,7 @@ const CurrencyView = {
             <th>Símbolo</th>
             <th>Preço</th>
             <th>Ação</th>
+            <th>Index Menor Preço</th>
           </tr>
         </thead>
         <tbody></tbody>
@@ -116,6 +120,7 @@ const CurrencyView = {
               </svg>
             </button>
           </td>`) // Add button with class
+          .append(`<td>${item?.lowestIndex|| ""}</td>`)
         .appendTo(tbody); // Append the row to the table body
 
       // Ação dos botões

@@ -15,7 +15,7 @@ async function createMovingAverageFilter(array, intervals, acronym, condictionCa
         // Adiciona as moedas pesquisadas, editando com novas informações como ichimoku e ma-200 desta moeda.
         array.forEach(item => {
 
-            let { symbol: _symbol, movingAverage: _movingAverage, candlesticks: _candlesticks, interval: _interval, movingAverage50: _50 } = item;
+            let { symbol: _symbol, movingAverage: _movingAverage, candlesticks: _candlesticks, interval: _interval } = item;
 
             // É preciso comparar os intervalos, por isso nomeação em underline. Ex: _movingAverage.
             if (interval === _interval) {
@@ -35,7 +35,6 @@ async function createMovingAverageFilter(array, intervals, acronym, condictionCa
 
                 }
             }
-            //CurrencyModel.addCurrency(item)
 
         });
 
@@ -53,26 +52,13 @@ function movingAverageAboveCandleClose(lastMovingAverage, lastCandlestick) {
     Último valor da média móvel maior que o último valor do fechamento do candle ou porcentagem do 
     primeiro valor sobre o segundo menor que 0,5%. Assim pega-se também aqueles valores um 
     pouco maiores que o valor do última média móvel.*/
-    return lastMovingAverage > lastCandlestick.close || percentageDifference <= 0.51;
+    return lastMovingAverage > lastCandlestick.close; // || percentageDifference <= 0.51;
 }
 function movingAverageBellowCandleClose(lastMovingAverage, lastCandlestick) {
     let percentageDifference = ((lastCandlestick.close - lastMovingAverage) / lastMovingAverage) * 100;
 
     return lastMovingAverage < lastCandlestick.close || percentageDifference >= -0.51;;
 }
-
-function sma50BellowSma200 (lastSma50, lastSma200){
-    let percentageDifference = ((lastSma200 - lastSma50) / lastSma50) * 100;
-
-    return lastMovingAverage < lastCandlestick.close || percentageDifference >= -0.51;;
-}
-
-function sma50AboveSma200 (lastSma50, lastSma200){
-    let percentageDifference = ((lastSma200 - lastSma50) / lastSma50) * 100;
-
-    return lastMovingAverage > lastCandlestick.close || percentageDifference <= -0.51;;
-}
-
 
 export {
     createMovingAverageFilter, movingAverageAboveCandleClose, movingAverageBellowCandleClose

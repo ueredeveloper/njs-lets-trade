@@ -1,6 +1,7 @@
 import CurrencyModel from "../model/currency-model";
 import fetchCandlesAndIndicators from "../services/fetchCandlesAndIndicators";
 import { conversionAboveBase, conversionAboveCloseCandle, conversionAboveHighCandle, conversionAboveLowCandle, conversionAboveSpanA, conversionAboveSpanAAndSpanB, conversionAboveSpanB, conversionBellowBase, createIchimokuFilter } from "../utils/createIchimokuFilter";
+import { createLowestIndexFilter } from "../utils/createLowestIndexFilter";
 import { createMovingAverageFilter, movingAverageAboveCandleClose, movingAverageBellowCandleClose } from "../utils/createMovingAverageFilter";
 import { createRsiFilter, lastRsiAbove10Bellow20, lastRsiAbove20Bellow30, lastRsiAbove30Bellow40, lastRsiAbove40Bellow50, lastRsiAbove50Bellow60, lastRsiAbove60Bellow70, lastRsiAbove70Bellow80 } from "../utils/createRsiFilter";
 
@@ -47,7 +48,8 @@ const IndicatorView = {
                             intervals: intervals
                         });
 
-                    } else if (indicatorType === 'movingAverage') {
+                    }
+                    else if (indicatorType === 'movingAverage') {
                         let intervals = checkboxValues.toString();
                         // Captura as seleções do usuário neste indicador
                         let line1 = selects.eq(0).val();
@@ -60,10 +62,12 @@ const IndicatorView = {
                             intervals: `${intervals}`
                         });
 
-                    } else if (indicatorType === 'relativeStrengthIndex') {
+                    }
+                    else if (indicatorType === 'relativeStrengthIndex') {
                         let intervals = checkboxValues.toString();
                         // Captura as seleções do usuário neste indicador
                         let compare1 = selects.eq(0).val();
+                        console.log('rsi ', compare1)
                         let line1 = selects.eq(1).val();
                         let compare2 = selects.eq(2).val();
                         let line2 = selects.eq(3).val();
@@ -71,6 +75,18 @@ const IndicatorView = {
                         params.push({
                             condition: `${indicatorType}|${compare1}|${line1}|${compare2}|${line2}`,
                             acronym: `${indicatorType.toString()[0]}|${compare1.toString()[0]}|${line1.toString()[0]}|${compare2.toString()[0]}|${line2.toString()[0]}`,
+                            intervals: `${intervals}`
+                        });
+
+                    }
+                    else if (indicatorType === 'lowestIndex') {
+                        let intervals = checkboxValues.toString();
+                        // Captura as seleções do usuário neste indicador
+                        let condition = 'lowestIndex';
+
+                        params.push({
+                            condition: condition,
+                            acronym: condition,
                             intervals: `${intervals}`
                         });
 
@@ -97,13 +113,15 @@ const IndicatorView = {
                 let allCurrencies = await CurrencyModel.getAllCurrencies();
                 let usdtCurrencies = await CurrencyModel.getBinanceCurrenciesWithUsdt(allCurrencies);
 
-                console.log('usdt currencies', usdtCurrencies)
-                let candlesAndIndicators = await fetchCandlesAndIndicators(usdtCurrencies, intervals)
+                // para pesquisar poucas moedas usdtCurrencies.slice(0,10)
+                let candlesAndIndicators = await fetchCandlesAndIndicators(usdtCurrencies.slice(0,10), intervals)
 
                 // Não está funcionando. É para testes com dados locais,sem que pricise fazer fetch.
                 //let candlesAndIndicators = currencyModel.getForTestIndicatorsAndCurrencies();
 
                 for (const param of params) {
+
+                    console.log(param)
 
                     let { condition, acronym } = param;
 
@@ -216,13 +234,13 @@ const IndicatorView = {
                             case 'movingAverage|9|bellow|close':
                                 createMovingAverageFilter(candlesAndIndicators, intervals, acronym, movingAverageBellowCandleClose)
                                 break;
-                                case 'movingAverage|20|above|close':
+                            case 'movingAverage|20|above|close':
                                 createMovingAverageFilter(candlesAndIndicators, intervals, acronym, movingAverageBellowCandleClose)
                                 break;
                             case 'movingAverage|20|bellow|close':
                                 createMovingAverageFilter(candlesAndIndicators, intervals, acronym, movingAverageBellowCandleClose)
                                 break;
-                                case 'movingAverage|80|above|close':
+                            case 'movingAverage|80|above|close':
                                 createMovingAverageFilter(candlesAndIndicators, intervals, acronym, movingAverageBellowCandleClose)
                                 break;
                             case 'movingAverage|80|bellow|close':
@@ -234,10 +252,13 @@ const IndicatorView = {
                             case 'movingAverage|200|bellow|close':
                                 createMovingAverageFilter(candlesAndIndicators, intervals, acronym, movingAverageBellowCandleClose)
                                 break;
-                            
+
                             default: alert("Condição de MA ainda não calculada!")
 
                         }
+                    }
+                    else if (condition.startsWith('lowest')) {
+                        createLowestIndexFilter(candlesAndIndicators, intervals, acronym)
                     }
 
 
@@ -360,6 +381,10 @@ const IndicatorView = {
                     indicatorSelects.empty();
                     indicatorSelects.append(IndicatorView.renderRelativeStrengthIndex());
                     break;
+                case 'lowestIndex':
+                    indicatorSelects.empty();
+                    indicatorSelects.append(IndicatorView.renderLowestIndex());
+                    break;
                 default:
                     indicatorSelects.empty(); // Clear the content if no option is selected
             }
@@ -387,6 +412,7 @@ const IndicatorView = {
             <select name="length" class="flex-1 mx-2 h-7 " id="maLength">
                 <option value="9">09</option>
                 <option value="20">20</option>
+                <option value="50">50</option>
                 <option value="80">80</option>
                 <option value="200" selected>200</option>
             </select>
@@ -484,6 +510,9 @@ const IndicatorView = {
              
         `
     },
+    renderLowestIndex: function () {
+        return `<span class="flex-1 mx-2 h-7 ">${this.renderintervals()}</span>`
+    },
 
     renderintervals: function () {
 
@@ -495,7 +524,6 @@ const IndicatorView = {
                 <label for="ma5m" class="mx-1">5m</label><br>
                 <input type="checkbox" id="ma15m" name="15m" value="15m">
                 <label for="ma5m" class="mx-1">15m</label><br>
-
                 <input type="checkbox" id="ma1h" name="1h" value="1h">
                 <label for="ma1h" class="mx-1">1h</label><br>
                 <input type="checkbox" id="ma2h" name="2h" value="2h">
@@ -506,7 +534,6 @@ const IndicatorView = {
 
                 <input type="checkbox" id="ma6h" name="6h" value="6h" checked>
                 <label for="ma6h" class="mx-1">6h</label><br>
-
 
                 <input type="checkbox" id="ma8h" name="8h" value="8h">
                 <label for="ma8h" class="mx-1">8h</label><br>
@@ -536,6 +563,7 @@ const IndicatorView = {
                     <option value="ichimokuCloud">Ichimoku Cloud</option>
                     <option value="movingAverage">Moving Average</option>
                     <option value="relativeStrengthIndex">RSI</option>
+                    <option value="lowestIndex">Índice de Menor Preço</option>
                 </select>
                 <!-- Selects -->
                 <div class="indicatorSelects flex flex-row flex-wrap" class="bg-red-200"></div>
