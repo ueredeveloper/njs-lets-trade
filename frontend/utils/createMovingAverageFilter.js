@@ -20,7 +20,7 @@ async function createMovingAverageFilter(array, intervals, acronym, condictionCa
             // É preciso comparar os intervalos, por isso nomeação em underline. Ex: _movingAverage.
             if (interval === _interval) {
 
-                console.log(_50, _movingAverage)
+                //console.log(_50, _movingAverage)
 
                 if (_movingAverage.length === 0) {
                     filter.list.push(`erro: ${_symbol}, moeda recente, sem candles suficientes.`)

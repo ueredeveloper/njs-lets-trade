@@ -96,6 +96,8 @@ const IndicatorView = {
 
                 let allCurrencies = await CurrencyModel.getAllCurrencies();
                 let usdtCurrencies = await CurrencyModel.getBinanceCurrenciesWithUsdt(allCurrencies);
+
+                console.log('usdt currencies', usdtCurrencies)
                 let candlesAndIndicators = await fetchCandlesAndIndicators(usdtCurrencies, intervals)
 
                 // Não está funcionando. É para testes com dados locais,sem que pricise fazer fetch.
@@ -493,12 +495,19 @@ const IndicatorView = {
                 <label for="ma5m" class="mx-1">5m</label><br>
                 <input type="checkbox" id="ma15m" name="15m" value="15m">
                 <label for="ma5m" class="mx-1">15m</label><br>
-                <input type="checkbox" id="ma1h" name="1h" value="1h" checked>
+
+                <input type="checkbox" id="ma1h" name="1h" value="1h">
                 <label for="ma1h" class="mx-1">1h</label><br>
                 <input type="checkbox" id="ma2h" name="2h" value="2h">
                 <label for="ma2h" class="mx-1">2h</label><br>
+
                 <input type="checkbox" id="ma4h" name="4h" value="4h">
                 <label for="ma4h" class="mx-1">4h</label><br>
+
+                <input type="checkbox" id="ma6h" name="6h" value="6h" checked>
+                <label for="ma6h" class="mx-1">6h</label><br>
+
+
                 <input type="checkbox" id="ma8h" name="8h" value="8h">
                 <label for="ma8h" class="mx-1">8h</label><br>
                 <input type="checkbox" id="ma12h" name="12h" value="12h">

@@ -43,3 +43,7 @@
 ** 24/05/2024
 ### Tarefa []: Limpar apenas alguns  filtros
     Criar opção de limpar apenas alguns filtros. Cria-se vários filtros, porém é preciso a opção de deletar alguns e outros não.
+
+### Tarefa []: Cópia de Candlesticks
+    - [] Copiar candlesticks para utilizar com a inteligência e perguntar sobre padões etc. No caso do Chat Gpt ele não consegue encontrar
+    os últimos candles da BTC, por exemplo, tendo que mostrar um json dos últimos candles antes de perguntar.
