@@ -35,22 +35,20 @@ async function createLowestIndexFilter(array, intervals, acronym) {
     intervals.forEach(interval => {
 
         let name = `${interval}|${acronym}`;
+        // Cria uma array unidimensiona, ex: 
 
-        // Ordena pelo menor índice e retorna apenas os símbolos
-        let list = array
-            .sort((a, b) => a.lowestIndex - b.lowestIndex)
-            .map(_arr => _arr.symbol)
+        let filterListByInterval = array.filter(arr => arr.interval === interval)
 
-        // Cria o filtro com nome e lista
         let filter = {
             name: name,
-            list: list
+            list: filterListByInterval
+                .sort((a, b) => a.lowestIndex - b.lowestIndex)
+                .map(_arr => _arr.symbol)
         }
-        // Adiciona o filtro ao modelo de moedas
-        CurrencyModel.addFilter(filter)
+
+        CurrencyModel.addFilter(filter);
 
     });
-
 
 }
 

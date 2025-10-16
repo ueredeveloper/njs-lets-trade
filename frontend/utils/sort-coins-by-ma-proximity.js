@@ -2,7 +2,6 @@
 
 function sortCoinsByProximity(coins) {
     
-
     /*
     [
         {

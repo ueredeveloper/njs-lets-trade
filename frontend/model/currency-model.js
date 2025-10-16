@@ -454,9 +454,9 @@ const CurrencyModel = {
   getBinanceCurrenciesWithUsdt: async function (currencies) {
 
     let bincanceCurrenciesWithUsdt = this.filters[0].list;
-  
+
     // Moedas estáveis que não quero capturar
-    let stableCurrencies = ["TUSDUSDT", "USDPUSDT", "FDUSDUSDT", "EURIUSDT", "XUSDUSDT", "USDCUSDT", "EURUSDT"];
+    let stableCurrencies = ["TUSDUSDT", "USDPUSDT", "FDUSDUSDT", "EURIUSDT", "XUSDUSDT", "USDCUSDT", "EURUSDT", "USDEUSDT", "USD1USDT", "BFUSDUSDT"];
 
 
     let filteredCurrenciesByBinanceWithUsdt = currencies.list.filter(currency => bincanceCurrenciesWithUsdt.includes(currency.symbol) && !stableCurrencies.includes(currency.symbol));

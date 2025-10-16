@@ -193,3 +193,24 @@ if (coinInfoTable) {
 }
 
  */
+
+
+/*
+16/10/2025 - Para encontrar todas as stablescoins
+
+site: https://coinmarketcap.com/pt-br/view/stablecoin
+
+
+let stables = document.getElementsByClassName('cvoEnU')
+
+Array.from(stables).forEach(st=> console.log(st.innerHTML))
+
+Utilizando o site da binance
+
+https://www.binance.com/pt-BR/altcoins/stablecoin
+
+let stables = document.getElementsByClassName('css-18kqmhp')
+
+
+
+*/
