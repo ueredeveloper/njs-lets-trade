@@ -83,7 +83,7 @@ const CurrencyView = {
             <th>Símbolo</th>
             <th>Preço</th>
             <th>Ação</th>
-            <th>Index Menor Preço</th>
+            
           </tr>
         </thead>
         <tbody></tbody>
@@ -120,7 +120,7 @@ const CurrencyView = {
               </svg>
             </button>
           </td>`) // Add button with class
-          .append(`<td>${item?.lowestIndex|| ""}</td>`)
+          
         .appendTo(tbody); // Append the row to the table body
 
       // Ação dos botões

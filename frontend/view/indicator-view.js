@@ -114,14 +114,13 @@ const IndicatorView = {
                 let usdtCurrencies = await CurrencyModel.getBinanceCurrenciesWithUsdt(allCurrencies);
 
                 // para pesquisar poucas moedas usdtCurrencies.slice(0,10)
-                let candlesAndIndicators = await fetchCandlesAndIndicators(usdtCurrencies.slice(0,10), intervals)
+                let candlesAndIndicators = await fetchCandlesAndIndicators(usdtCurrencies, intervals)
 
                 // Não está funcionando. É para testes com dados locais,sem que pricise fazer fetch.
                 //let candlesAndIndicators = currencyModel.getForTestIndicatorsAndCurrencies();
 
                 for (const param of params) {
 
-                    console.log(param)
 
                     let { condition, acronym } = param;
 
@@ -226,7 +225,7 @@ const IndicatorView = {
                         }
                     }
                     else if (condition.startsWith('movingAverage')) {
-                        console.log(condition)
+
                         switch (condition) {
                             case 'movingAverage|9|above|close':
                                 createMovingAverageFilter(candlesAndIndicators, intervals, acronym, movingAverageBellowCandleClose)
