@@ -37,13 +37,13 @@ async function createLowestIndexFilter(array, intervals, acronym) {
         let name = `${interval}|${acronym}`;
         // Cria uma array unidimensiona, ex: 
 
-        let filterListByInterval = array.filter(arr => arr.interval === interval)
+        let filterListByInterval = array.filter(item => item.interval === interval)
 
         let filter = {
             name: name,
             list: filterListByInterval
-                .sort((a, b) => a.lowestIndex - b.lowestIndex)
-                .map(_arr => _arr.symbol)
+                .sort((a, b) => parseFloat(b.lowestIndex) - parseFloat(a.lowestIndex))
+                .map(item => item.symbol)
         }
 
         CurrencyModel.addFilter(filter);

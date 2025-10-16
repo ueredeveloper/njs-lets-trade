@@ -3,7 +3,7 @@ import CurrencyController from "../controller/currency-controller";
 import fetchCandlesticksAndCloud from "../services/fetchCandlesAndIchimokuCloud";
 
 const CurrencyView = {
-  
+
   init: async function () {
     this.textInput = $('#textInput');
     this.addButton = $('#addButton');
@@ -39,7 +39,7 @@ const CurrencyView = {
       //let list = currencies.list.filter(currency => filter.list.includes(currency.symbol));
 
       // Desta forma se mantém a ordem do filtro. Necessário para o filtro por indexação do menor valor
-      let list = filter.list.map(list=> currencies.list.find(cl=> cl.symbol === list))
+      let list = filter.list.map(list => currencies.list.find(cl => cl.symbol === list))
 
       // Busca a tag tbody dentro da tag table e limpa esta tabela para novas linhas.
       let table = $('#list-currencies').empty();
@@ -66,7 +66,7 @@ const CurrencyView = {
 
     this.createTable(this.currenciesTable)
 
-    this.fillTable(this.currenciesTable, {name: '1h|USDT', list: currenciesFilteredByQuote})
+    this.fillTable(this.currenciesTable, { name: '1h|USDT', list: currenciesFilteredByQuote })
 
   },
   /**
@@ -120,7 +120,7 @@ const CurrencyView = {
               </svg>
             </button>
           </td>`) // Add button with class
-          
+
         .appendTo(tbody); // Append the row to the table body
 
       // Ação dos botões
