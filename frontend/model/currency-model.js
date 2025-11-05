@@ -434,7 +434,13 @@ const CurrencyModel = {
         "NOMUSDT",
         "2ZUSDT",
         "MORPHOUSDT",
-        "ASTERUSDT"
+        "ASTERUSDT",
+        "WALUSDT",
+        "EULUSDT",
+        "ENSOUSDT",
+        "YBUSDT",
+        "ZBTUSDT",
+        "TURTLEUSDT"
       ]
     },
   ],
