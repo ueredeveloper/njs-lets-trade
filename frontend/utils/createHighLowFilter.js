@@ -30,7 +30,7 @@ import CurrencyModel from "../model/currency-model";
  * await createLowestIndexFilter(array, ["1h", "4h"], "USDT");
  * // Cria filtros com nomes "1h|USDT" e "4h|USDT" e adiciona ao CurrencyModel
  */
-async function createLowestIndexFilter(array, intervals, acronym) {
+async function createHighLowFilter (array, intervals, acronym) {
 
     intervals.forEach(interval => {
 
@@ -38,13 +38,13 @@ async function createLowestIndexFilter(array, intervals, acronym) {
         // Filtra por intervalo
         let filterListByInterval = array.filter(item => item.interval === interval)
         // Ordena pelo menor valor mais próximo do último candle retornando apenas o símbolo da moeda
-        let sortedByLowestIndex = filterListByInterval
-                .sort((a, b) => parseFloat(b.lowestIndex) - parseFloat(a.lowestIndex))
-                .map(item => item.symbol)
+        let sortedByHighLowVariation = filterListByInterval
+            .sort((a, b) => parseFloat(b.highLowVariation) - parseFloat(a.highLowVariation))
+            .map(item => item.symbol)
 
         let filter = {
             name: name,
-            list: sortedByLowestIndex
+            list: sortedByHighLowVariation
         }
 
         CurrencyModel.addFilter(filter);
@@ -54,5 +54,5 @@ async function createLowestIndexFilter(array, intervals, acronym) {
 }
 
 export {
-    createLowestIndexFilter
+    createHighLowFilter
 }

@@ -68,6 +68,21 @@ const fetchCandlesAndIndicators = async (currencies, intervals) => {
             'Content-Type': 'application/json'
           },
           // Envia somente os 20 últimos candlesticks
+          body: JSON.stringify(candlesticks.slice(-20))
+        }).then(response => {
+          if (!response.ok) {
+            throw new Error('Network response was not ok');
+          }
+          return response.json();
+        });
+
+        // Busca o index do último preço mais báixo dentre os 20 últimos candlesticks
+        let highLowVariation = await fetch('http://localhost:3000/services/fetch-high-low-variation', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          // Envia somente os 20 últimos candlesticks
           body: JSON.stringify(candlesticks.slice(-10))
         }).then(response => {
           if (!response.ok) {
@@ -87,7 +102,8 @@ const fetchCandlesAndIndicators = async (currencies, intervals) => {
               ichimokuCloud: ichimokuCloud,
               movingAverage: movingAverage,
               rsiIndicator: rsiIndicator,
-              lowestIndex: lowestIndex.lowestIndex
+              lowestIndex: lowestIndex.lowestIndex,
+              highLowVariation: highLowVariation.highLowVariation
             };
           })
         );

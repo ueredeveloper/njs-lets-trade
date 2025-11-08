@@ -1,5 +1,6 @@
 import CurrencyModel from "../model/currency-model";
 import fetchCandlesAndIndicators from "../services/fetchCandlesAndIndicators";
+import { createHighLowFilter } from "../utils/createHighLowFilter";
 import { conversionAboveBase, conversionAboveCloseCandle, conversionAboveHighCandle, conversionAboveLowCandle, conversionAboveSpanA, conversionAboveSpanAAndSpanB, conversionAboveSpanB, conversionBellowBase, createIchimokuFilter } from "../utils/createIchimokuFilter";
 import { createLowestIndexFilter } from "../utils/createLowestIndexFilter";
 import { createMovingAverageFilter, movingAverageAboveCandleClose, movingAverageBellowCandleClose } from "../utils/createMovingAverageFilter";
@@ -83,6 +84,18 @@ const IndicatorView = {
                         let intervals = checkboxValues.toString();
                         // Captura as seleções do usuário neste indicador
                         let condition = 'lowestIndex';
+
+                        params.push({
+                            condition: condition,
+                            acronym: condition,
+                            intervals: `${intervals}`
+                        });
+
+                    }
+                    else if (indicatorType === 'highLowVariation') {
+                        let intervals = checkboxValues.toString();
+                        // Captura as seleções do usuário neste indicador
+                        let condition = 'highLowVariation';
 
                         params.push({
                             condition: condition,
@@ -259,6 +272,9 @@ const IndicatorView = {
                     else if (condition.startsWith('lowest')) {
                         createLowestIndexFilter(candlesAndIndicators, intervals, acronym)
                     }
+                    else if (condition.startsWith('highLow')) {
+                        createHighLowFilter(candlesAndIndicators, intervals, acronym)
+                    }
 
 
                     /*for (const interval of splitIntervals) {
@@ -383,6 +399,10 @@ const IndicatorView = {
                 case 'lowestIndex':
                     indicatorSelects.empty();
                     indicatorSelects.append(IndicatorView.renderLowestIndex());
+                    break;
+                case 'highLowVariation':
+                    indicatorSelects.empty();
+                    indicatorSelects.append(IndicatorView.renderHighLowVariation());
                     break;
                 default:
                     indicatorSelects.empty(); // Clear the content if no option is selected
@@ -513,6 +533,11 @@ const IndicatorView = {
         return `<span class="flex-1 mx-2 h-7 ">${this.renderintervals()}</span>`
     },
 
+    renderHighLowVariation: function () {
+        return `<span class="flex-1 mx-2 h-7 ">${this.renderintervals()}</span>`
+    },
+
+
     renderintervals: function () {
 
         return `
@@ -563,6 +588,7 @@ const IndicatorView = {
                     <option value="movingAverage">Moving Average</option>
                     <option value="relativeStrengthIndex">RSI</option>
                     <option value="lowestIndex">Índice de Menor Preço</option>
+                    <option value="highLowVariation">Variação de Valor</option>
                 </select>
                 <!-- Selects -->
                 <div class="indicatorSelects flex flex-row flex-wrap" class="bg-red-200"></div>

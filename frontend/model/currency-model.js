@@ -442,7 +442,9 @@ const CurrencyModel = {
     "ZBTUSDT",
     "TURTLEUSDT",
     "GIGGLEUSDT",
-    "FUSDT"
+    "FUSDT",
+    "KITEUSDT",
+    "MMTUSDT"
 ]
     },
   ],
