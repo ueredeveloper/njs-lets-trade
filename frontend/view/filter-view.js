@@ -1,10 +1,15 @@
 import CurrencyModel from "../model/currency-model";
 
 const FilterView = {
-    
+
     init: async function () {
+
         this.div = $('#list-filters');
-        this.filters = CurrencyModel.getFilters()
+        this.filters = CurrencyModel.getFilters();
+
+         // Filtra moedas por volume, maior que 10M, maior que 20M e maior que 50M
+        await CurrencyModel.get24hsVolume();
+
         this.selectedFilters = []
         this.render();
         this.div.on('click', 'li', function () {
@@ -17,10 +22,13 @@ const FilterView = {
             FilterView.render()
         });
 
+       
+
 
     },
     // Renderiza a tabela e as tabs
     render: async function () {
+        
         // Cria uma array de cotações de forma assíncrona.
         let filters = await CurrencyModel.getFilters();
 
@@ -30,6 +38,8 @@ const FilterView = {
         let tag = $('<ul id="filter-view" class="flex flex-row inline-block max-w-full whitespace-nowrap">')
 
         filters.forEach(filter => {
+
+            console.log(filter)
 
             tag.append(`
 
