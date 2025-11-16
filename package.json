@@ -1,6 +1,6 @@
 {
   "name": "njs-lets-trade",
-  "version": "1.12",
+  "version": "1.12.1",
   "description": "",
   "main": "index.js",
   "dependencies": {

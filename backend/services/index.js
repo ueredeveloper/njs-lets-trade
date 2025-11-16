@@ -8,7 +8,7 @@ const fetchRSI = require('./fetchRSI');
 const fetchVWAP = require('./fetchVWAP');
 const fetchLowestIndex = require('./fetchLowestIndex');
 const fetchHighLowVariation = require('./fetchHighLowVariation')
-const fetch24HsVolume = require('./fetch25hsVolume')
+const fetch24HsVolume = require('./fetch24hsVolume')
 
 // remove cíclical error
 module.exports = { 

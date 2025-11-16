@@ -14,12 +14,7 @@ async function get24hVolumeFilters() {
   const response = await fetch(url); // fetch nativo do Node 20
   const data = await response.json();
 
-  
-  let listedCoins = await getActiveUsdtPairs()
-
-  console.log('listed ----------------> ', listedCoins.length)
-
-
+  let listedOnBinance = await getActiveUsdtPairs()
 
   // Filtra somente pares USDT e aplica o filtro de volume mínimo
   let list10 = data
@@ -46,7 +41,7 @@ async function get24hVolumeFilters() {
 
   let result50 = { name: "1h|Binance|50M", list: list50 }
 
-  return [listedCoins, result10, result30, result50];
+  return [listedOnBinance, result10, result30, result50];
 }
 
 module.exports = { get24hVolumeFilters };

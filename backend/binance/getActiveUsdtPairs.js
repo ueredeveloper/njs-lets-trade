@@ -13,9 +13,6 @@ async function getActiveUsdtPairs() {
     .filter(s => s.symbol.endsWith("USDT"))
     .filter(s => s.status === "TRADING")
     .map(s => s.symbol);
-
-    console.log('active usdt pairs +++++++++++++++++++ ', activeUsdtPairs.length)
-
   return {name: "1h|Binance|USDT", list: activeUsdtPairs};
 }
 
