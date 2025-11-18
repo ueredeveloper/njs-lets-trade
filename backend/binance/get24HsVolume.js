@@ -16,13 +16,21 @@ async function get24hVolumeFilters() {
 
   let listedOnBinance = await getActiveUsdtPairs()
 
-  // Filtra somente pares USDT e aplica o filtro de volume mínimo
+   // Filtra somente pares USDT e aplica o filtro de volume mínimo
   let list10 = data
+    .filter(ticker => ticker.symbol.endsWith("USDT"))
+    .filter(ticker => Number(ticker.quoteVolume) > 10_000_000 )
+    .map(ticker => ticker.symbol);
+
+  let result10 = { name: "1h|Binance|10M⇾", list: list10 }
+
+  // Filtra somente pares USDT e aplica o filtro de volume mínimo
+  let list1030 = data
     .filter(ticker => ticker.symbol.endsWith("USDT"))
     .filter(ticker => Number(ticker.quoteVolume) > 10_000_000 && Number(ticker.quoteVolume) < 30_000_000)
     .map(ticker => ticker.symbol);
 
-  let result10 = { name: "1h|Binance|10M", list: list10 }
+  let result1030 = { name: "1h|Binance|10M⇿30M", list: list1030 }
 
   // Filtra somente pares USDT e aplica o filtro de volume mínimo
   let list30 = data
@@ -30,8 +38,7 @@ async function get24hVolumeFilters() {
     .filter(ticker => Number(ticker.quoteVolume) > 30_000_000 && Number(ticker.quoteVolume) < 50_000_000)
     .map(ticker => ticker.symbol);
 
-  let result30 = { name: "1h|Binance|30M", list: list30 }
-
+  let result30 = { name: "1h|Binance|30M⇿50M", list: list30 }
 
   // Filtra somente pares USDT e aplica o filtro de volume mínimo
   let list50 = data
@@ -39,9 +46,9 @@ async function get24hVolumeFilters() {
     .filter(ticker => Number(ticker.quoteVolume) > 50_000_000)
     .map(ticker => ticker.symbol);
 
-  let result50 = { name: "1h|Binance|50M", list: list50 }
+  let result50 = { name: "1h|Binance|50M⇾", list: list50 }
 
-  return [listedOnBinance, result10, result30, result50];
+  return [listedOnBinance, result10, result1030, result30, result50];
 }
 
 module.exports = { get24hVolumeFilters };

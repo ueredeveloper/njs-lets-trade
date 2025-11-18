@@ -39,8 +39,6 @@ const FilterView = {
 
         filters.forEach(filter => {
 
-            console.log(filter)
-
             tag.append(`
 
                 <li class="px-0.5 text-center">
@@ -59,6 +57,7 @@ const FilterView = {
                 let checkedNames = $('.ch-filters:checked').map(function () {
                     return $(this).attr('name');
                 }).get();
+
                 // Adiciona todos os inputs checados em um Set para não haver repetições
                 let names = new Set(checkedNames);
                 // Remove o nome deste input para ordenar e adicioná-lo como sempre o primeiro

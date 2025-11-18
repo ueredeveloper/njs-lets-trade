@@ -82,7 +82,7 @@ const CurrencyModel = {
     function getCommonSymbols(arrays) {
       if (arrays.length === 0) return [];
 
-      // Start with the first list
+      // Captura a primeira lista, que tem todas moedas listadas na binance
       let commonSymbols = arrays[0].list;
 
       // Iterate through the remaining lists
