@@ -1,12 +1,17 @@
 const fs = require("fs").promises;
 const path = require("path");
+const { analyzeFivePeriodVolumeChange } = require("./analyzeFivePeriodVolume");
 
 /**
  * Busca os dados de volume 24h da API da Binance, filtra os pares USDT
  * e salva em um arquivo JSON com timestamp.
  *  * Use: node backend/utils/volumeCaptureJob.js
  */
+
+let captureLen = 0;
+
 async function captureAndSaveVolume() {
+
   const url = "https://api.binance.com/api/v3/ticker/24hr";
 
   try {
@@ -35,7 +40,18 @@ async function captureAndSaveVolume() {
 
     // 4. Salva os dados no arquivo
     await fs.writeFile(filePath, JSON.stringify(usdtTickers, null, 2));
+
     console.log(`Dados salvos com sucesso em: ${filename}`);
+    captureLen +=1;
+
+    if (captureLen>4) {
+       console.log(captureLen, 'analyse five periods volume change')
+      analyzeFivePeriodVolumeChange()
+      captureLen = 0;
+    }
+
+
+
   } catch (error) {
     console.error("Falha ao capturar ou salvar os dados de volume:", error);
   }
@@ -44,6 +60,7 @@ async function captureAndSaveVolume() {
 /**
  * Inicia o job que captura o volume a cada 5 minutos.
  */
+
 function startVolumeCaptureJob() {
   const FIVE_MINUTES_IN_MS = 0.5 * 60 * 1000;
   console.log("Iniciando job de captura de volume a cada 5 minutos.");

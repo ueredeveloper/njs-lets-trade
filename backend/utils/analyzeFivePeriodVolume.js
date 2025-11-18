@@ -89,10 +89,12 @@ async function analyzeFivePeriodVolumeChange(topN = 20) {
     console.error("Ocorreu um erro ao analisar o volume:", error.message);
   }
 }
-
+/*
 // Para executar este script diretamente: node backend/utils/analyzeFivePeriodVolume.js
 (async () => {
   await analyzeFivePeriodVolumeChange(20);
 })();
+
+*/
 
 module.exports = { analyzeFivePeriodVolumeChange };
