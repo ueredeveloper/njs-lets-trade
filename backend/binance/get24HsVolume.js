@@ -5,7 +5,7 @@ const { getActiveUsdtPairs } = require("./getActiveUsdtPairs");
 /**
  * Retrieves all USDT trading pairs whose 24h quote volume
  * is higher than the specified minimum quote volume.
- * Use: node backend/utils/volumeCaptureJob.js
+
  *
  * @param {number} minQuoteVolume - Quantidade mínima de volume em USDT para filtrar os pares.
  * @returns {Promise<string[]>} - Retorna uma lista de símbolos que atendem ao volume mínimo.

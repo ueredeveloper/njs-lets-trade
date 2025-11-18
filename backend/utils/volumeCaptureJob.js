@@ -4,6 +4,7 @@ const path = require("path");
 /**
  * Busca os dados de volume 24h da API da Binance, filtra os pares USDT
  * e salva em um arquivo JSON com timestamp.
+ *  * Use: node backend/utils/volumeCaptureJob.js
  */
 async function captureAndSaveVolume() {
   const url = "https://api.binance.com/api/v3/ticker/24hr";

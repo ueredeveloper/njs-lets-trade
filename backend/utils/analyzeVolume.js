@@ -8,7 +8,10 @@ const path = require("path");
  * @returns {Promise<string[]>} - Uma promessa que resolve para um array com os caminhos dos dois arquivos mais recentes.
  */
 async function getLatestVolumeFiles(dirPath) {
+
   const files = await fs.readdir(dirPath);
+
+  // Lê todos os arquivos, e organiza do mais recente para o mais antigo
   const volumeFiles = files
     .filter((file) => file.startsWith("24Hs-Volume-") && file.endsWith(".json"))
     .sort((a, b) => {
@@ -17,6 +20,8 @@ async function getLatestVolumeFiles(dirPath) {
       const timeB = parseInt(b.split("-")[2].replace(".json", ""));
       return timeB - timeA; // Ordena do mais recente para o mais antigo
     });
+
+    
 
   if (volumeFiles.length < 2) {
     throw new Error(
@@ -62,6 +67,7 @@ async function analyzeAllVolumeChanges(topN = 20) {
 
       // Só calcula se a moeda existir em ambos os arquivos e o volume anterior não for zero
       if (previousTicker && parseFloat(previousTicker.quoteVolume) > 0) {
+        //console.log(previousTicker.symbol,previousTicker.quoteVolume)
         const latestVolume = parseFloat(latestTicker.quoteVolume);
         const previousVolume = parseFloat(previousTicker.quoteVolume);
         const percentageChange =
