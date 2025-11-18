@@ -1,7 +1,9 @@
+import fetch24hVolume from "../services/fetch24HsVolume";
 
 // model/currency-model.js
 const CurrencyModel = {
   currencies: [],
+<<<<<<< HEAD
   filters: [
     {
       name: '1h|Binance|USDT',
@@ -447,6 +449,10 @@ const CurrencyModel = {
       ]
     },
   ],
+=======
+  filters: [],
+
+>>>>>>> feat/adiciona-filtros-volume
   quotes: ['USDT', 'BTC', 'BNB'],
 
   addCurrency: function (item) {
@@ -465,7 +471,22 @@ const CurrencyModel = {
     let bincanceCurrenciesWithUsdt = this.filters[0].list;
 
     // Moedas estáveis que não quero capturar
-    let stableCurrencies = ["TUSDUSDT", "USDPUSDT", "FDUSDUSDT", "EURIUSDT", "XUSDUSDT", "USDCUSDT", "EURUSDT", "USDEUSDT", "USD1USDT", "BFUSDUSDT"];
+    let stableCurrencies = [
+      "TUSDUSDT",
+      "USDPUSDT",
+      "FDUSDUSDT",
+      "EURIUSDT",
+      "XUSDUSDT",
+      "USDCUSDT",
+      "EURUSDT",
+      "USDEUSDT",
+      "USD1USDT",
+      "BFUSDUSDT",
+      "NEXOUSDT",
+      "FXSUSDT",
+      "AEURUSDT",
+      "PAXGUSDT"
+    ];
 
 
     let filteredCurrenciesByBinanceWithUsdt = currencies.list.filter(currency => bincanceCurrenciesWithUsdt.includes(currency.symbol) && !stableCurrencies.includes(currency.symbol));
@@ -509,7 +530,7 @@ const CurrencyModel = {
     function getCommonSymbols(arrays) {
       if (arrays.length === 0) return [];
 
-      // Start with the first list
+      // Captura a primeira lista, que tem todas moedas listadas na binance
       let commonSymbols = arrays[0].list;
 
       // Iterate through the remaining lists
@@ -556,6 +577,13 @@ const CurrencyModel = {
       console.error('There has been a problem with your fetch operation:', error);
       return null;  // Return null or handle the error as needed
     }
+  },
+
+  get24hsVolume: async function () {
+
+    let filteredVolumes = await fetch24hVolume();
+
+    this.filters = [...this.filters, ...filteredVolumes]
   }
 
 };

@@ -68,7 +68,7 @@ const IndicatorView = {
                         let intervals = checkboxValues.toString();
                         // Captura as seleções do usuário neste indicador
                         let compare1 = selects.eq(0).val();
-                        console.log('rsi ', compare1)
+     
                         let line1 = selects.eq(1).val();
                         let compare2 = selects.eq(2).val();
                         let line2 = selects.eq(3).val();

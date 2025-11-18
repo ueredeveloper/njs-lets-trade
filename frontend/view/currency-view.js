@@ -109,10 +109,12 @@ const CurrencyView = {
         "price": "0.00003194",
       }
       */
-      var btn = $('<tr>') // Create a table row for the button
-        .append(`<td>${item.symbol}</td>`) // Add currency symbol
-        .append(`<td>${item.price}</td>`) // Add currency price
-        .append(`
+
+      if (item != undefined) {
+        var btn = $('<tr>') // Create a table row for the button
+          .append(`<td>${item.symbol}</td>`) // Add currency symbol
+          .append(`<td>${item.price}</td>`) // Add currency price
+          .append(`
           <td>
             <button class="btn-select-currency">
               <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="size-6">
@@ -121,19 +123,23 @@ const CurrencyView = {
             </button>
           </td>`) // Add button with class
 
-        .appendTo(tbody); // Append the row to the table body
+          .appendTo(tbody); // Append the row to the table body
 
-      // Ação dos botões
-      btn.find('.btn-select-currency').click(async function () {
+        // Ação dos botões
+        btn.find('.btn-select-currency').click(async function () {
 
-        // Busca indicadores da moeda
-        let currency = await fetchCandlesticksAndCloud([item], interval);
-        // Envia a moeda para o chart
-        $(document).trigger('selectCurrencyForChart', currency);
+          // Busca indicadores da moeda
+          let currency = await fetchCandlesticksAndCloud([item], interval);
+          // Envia a moeda para o chart
+          $(document).trigger('selectCurrencyForChart', currency);
 
-        // Add your desired action here (e.g., highlight row, store selection, etc.)
-        //$(this).parent().parent().addClass('selected'); // Example: Highlight selected row
-      });
+          // Add your desired action here (e.g., highlight row, store selection, etc.)
+          //$(this).parent().parent().addClass('selected'); // Example: Highlight selected row
+        });
+      }
+
+
+
     });
   },
   /**
