@@ -1,11 +1,15 @@
+const fs = require('node:fs/promises');
+const path = require("path");
 const { getActiveUsdtPairs } = require("./getActiveUsdtPairs");
 
 /**
  * Retrieves all USDT trading pairs whose 24h quote volume
  * is higher than the specified minimum quote volume.
+ * Use: node backend/utils/volumeCaptureJob.js
  *
  * @param {number} minQuoteVolume - Quantidade mínima de volume em USDT para filtrar os pares.
  * @returns {Promise<string[]>} - Retorna uma lista de símbolos que atendem ao volume mínimo.
+ * 
  */
 async function get24hVolumeFilters() {
   const url = "https://api.binance.com/api/v3/ticker/24hr";
@@ -13,6 +17,22 @@ async function get24hVolumeFilters() {
   // Requisição da lista de todos os tickers 24h
   const response = await fetch(url); // fetch nativo do Node 20
   const data = await response.json();
+
+  try {
+   
+    const timestamp = Date.now();
+    const filename = `24Hs-Volume-${timestamp}`;
+    const dataDir = path.join(`./backend/data/volume/${filename}.json`);
+
+    // Moedas que fazem par com usdt.
+    let usdtTickers = data
+    .filter(ticker => ticker.symbol.endsWith("USDT"));
+     
+    await fs.writeFile(dataDir, JSON.stringify(usdtTickers, null, 2));
+    console.log(`Dados de volume 24h salvos em ${filename}`);
+  } catch (error) {
+    console.error("Erro ao salvar os dados de volume 24h:", error);
+  }
 
   let listedOnBinance = await getActiveUsdtPairs()
 
