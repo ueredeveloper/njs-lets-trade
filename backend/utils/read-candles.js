@@ -10,7 +10,7 @@ Lê os dados das velas de um arquivo JSON.
 */
 async function readCandles(symbol, interval) {
 
-    const filePath = path.join(__dirname, '..', 'data', `${symbol}-${interval}.json`);
+    const filePath = path.join(__dirname, '..', 'data', 'candlestick', `${symbol}-${interval}.json`);
 
     try {
         const data = await fs.readFile(filePath, 'utf8');

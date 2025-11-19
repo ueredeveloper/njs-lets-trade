@@ -38,16 +38,16 @@ async function getLatestNVolumeFiles(dirPath, n) {
  * e exibe um ranking das maiores altas.
  * @param {number} topN - O número de moedas a serem exibidas no ranking.
  */
-async function analyzeFivePeriodVolumeChange(topN = 20) {
+async function analyzeFivePeriodVolumeChange(topN = 20, period) {
   try {
     const volumeDir = path.join(__dirname, "..", "data", "volume");
-    const filesToAnalyze = await getLatestNVolumeFiles(volumeDir, 5);
+    const filesToAnalyze = await getLatestNVolumeFiles(volumeDir, period);
 
     // O primeiro arquivo é o mais recente, o último é o mais antigo.
     const latestFile = filesToAnalyze[0];
     const oldestFile = filesToAnalyze[filesToAnalyze.length - 1];
 
-    console.log(`--- Análise de Variação de Volume (5 Períodos) ---`);
+    console.log(`--- Análise de Variação de Volume (${period} Períodos) ---`);
     console.log(`Comparando arquivos:`);
     console.log(`  - Mais Recente: ${path.basename(latestFile)}`);
     console.log(`  - Mais Antigo:  ${path.basename(oldestFile)}\n`);
@@ -64,6 +64,7 @@ async function analyzeFivePeriodVolumeChange(topN = 20) {
     const changes = [];
 
     for (const latestTicker of latestData) {
+
       const oldestTicker = oldestDataMap.get(latestTicker.symbol);
 
       if (oldestTicker && parseFloat(oldestTicker.quoteVolume) > 0) {
@@ -71,7 +72,7 @@ async function analyzeFivePeriodVolumeChange(topN = 20) {
         const oldestVolume = parseFloat(oldestTicker.quoteVolume);
         const percentageChange = ((latestVolume - oldestVolume) / oldestVolume) * 100;
 
-        changes.push({ symbol: latestTicker.symbol, percentageChange });
+        changes.push({ symbol: latestTicker.symbol, percentageChange, quoteVolume: latestTicker.quoteVolume,  bidQty: latestTicker.bidQty, askQty: latestTicker.askQty});
       }
     }
 
@@ -79,10 +80,14 @@ async function analyzeFivePeriodVolumeChange(topN = 20) {
       .sort((a, b) => b.percentageChange - a.percentageChange)
       .slice(0, topN);
 
-    console.log(`Top ${topN} Maiores Altas de Volume (nos últimos 5 períodos):`);
+    console.log(`Top ${topN} Maiores Altas de Volume (nos últimos ${period} períodos):`);
     topGainers.forEach((coin, index) => {
+
+
       console.log(
-        `${(index + 1).toString().padStart(2, " ")}. ${coin.symbol.padEnd(12, " ")}: +${coin.percentageChange.toFixed(2)}%`
+        `${(index + 1).toString().padStart(2, " ")}. 
+          ${coin.symbol.padEnd(12, " ")}: 
+            +${coin.percentageChange.toFixed(2)}%, volume: ${coin.quoteVolume} compradores: ${coin.bidQty} vendedores: ${coin.askQty}`
       );
     });
   } catch (error) {
