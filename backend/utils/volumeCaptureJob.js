@@ -46,7 +46,7 @@ async function captureAndSaveVolume() {
 
     if (captureLen>4) {
        console.log(captureLen, 'analyse five periods volume change')
-      analyzeFivePeriodVolumeChange()
+      analyzeFivePeriodVolumeChange(20, 10);
       captureLen = 0;
     }
 

@@ -38,10 +38,10 @@ async function getLatestNVolumeFiles(dirPath, n) {
  * e exibe um ranking das maiores altas.
  * @param {number} topN - O número de moedas a serem exibidas no ranking.
  */
-async function analyzeFivePeriodVolumeChange(topN = 20) {
+async function analyzeFivePeriodVolumeChange(topN = 20, period) {
   try {
     const volumeDir = path.join(__dirname, "..", "data", "volume");
-    const filesToAnalyze = await getLatestNVolumeFiles(volumeDir, 5);
+    const filesToAnalyze = await getLatestNVolumeFiles(volumeDir, period);
 
     // O primeiro arquivo é o mais recente, o último é o mais antigo.
     const latestFile = filesToAnalyze[0];
