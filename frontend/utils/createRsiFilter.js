@@ -107,6 +107,16 @@ function lastRsiAbove70Bellow80(lastRsi) {
     return lastRsi > 70.0 && lastRsi < 80.0;
 }
 
+function lastRsiAbove70Bellow90(lastRsi) {
+    return lastRsi > 70.0 && lastRsi < 90.0;
+}
+
+function lastRsiAbove80Bellow90(lastRsi) {
+    return lastRsi > 80.0 && lastRsi < 90.0;
+}
+
+
+
 
 export {
     createRsiFilter,
@@ -117,5 +127,7 @@ export {
     lastRsiAbove50Bellow60,
     lastRsiAbove60Bellow70,
     lastRsiAbove70Bellow80,
+    lastRsiAbove80Bellow90,
+    lastRsiAbove70Bellow90
 
 }

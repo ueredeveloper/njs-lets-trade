@@ -38,7 +38,7 @@ async function getLatestNVolumeFiles(dirPath, n) {
  * e exibe um ranking das maiores altas.
  * @param {number} topN - O número de moedas a serem exibidas no ranking.
  */
-async function analyzeFivePeriodVolumeChange(topN = 20, period) {
+async function anaylsePeriodVolumeChange(topN = 10, period) {
   try {
     const volumeDir = path.join(__dirname, "..", "data", "volume");
     const filesToAnalyze = await getLatestNVolumeFiles(volumeDir, period);
@@ -47,10 +47,12 @@ async function analyzeFivePeriodVolumeChange(topN = 20, period) {
     const latestFile = filesToAnalyze[0];
     const oldestFile = filesToAnalyze[filesToAnalyze.length - 1];
 
-    console.log(`--- Análise de Variação de Volume (5 Períodos) ---`);
-    console.log(`Comparando arquivos:`);
-    console.log(`  - Mais Recente: ${path.basename(latestFile)}`);
-    console.log(`  - Mais Antigo:  ${path.basename(oldestFile)}\n`);
+
+    let date = new Date();
+
+
+    console.log(`--- Análise de Variação de Volume (${period} Períodos) --- ${date.getHours()}:${date.getMinutes()}`);
+ 
 
     // Lê os dados dos dois arquivos (mais novo e mais antigo)
     const latestData = JSON.parse(await fs.readFile(latestFile, "utf-8"));
@@ -64,6 +66,7 @@ async function analyzeFivePeriodVolumeChange(topN = 20, period) {
     const changes = [];
 
     for (const latestTicker of latestData) {
+
       const oldestTicker = oldestDataMap.get(latestTicker.symbol);
 
       if (oldestTicker && parseFloat(oldestTicker.quoteVolume) > 0) {
@@ -71,7 +74,7 @@ async function analyzeFivePeriodVolumeChange(topN = 20, period) {
         const oldestVolume = parseFloat(oldestTicker.quoteVolume);
         const percentageChange = ((latestVolume - oldestVolume) / oldestVolume) * 100;
 
-        changes.push({ symbol: latestTicker.symbol, percentageChange });
+        changes.push({ symbol: latestTicker.symbol, percentageChange, quoteVolume: latestTicker.quoteVolume, bidQty: latestTicker.bidQty, askQty: latestTicker.askQty });
       }
     }
 
@@ -79,10 +82,16 @@ async function analyzeFivePeriodVolumeChange(topN = 20, period) {
       .sort((a, b) => b.percentageChange - a.percentageChange)
       .slice(0, topN);
 
-    console.log(`Top ${topN} Maiores Altas de Volume (nos últimos 5 períodos):`);
+    console.log(`Top ${topN} Maiores Altas de Volume (nos últimos ${period} períodos):`);
     topGainers.forEach((coin, index) => {
+
+      const formatado = new Intl.NumberFormat("pt-BR", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+      }).format(coin.quoteVolume);
+
       console.log(
-        `${(index + 1).toString().padStart(2, " ")}. ${coin.symbol.padEnd(12, " ")}: +${coin.percentageChange.toFixed(2)}%`
+        `${(index + 1).toString().padStart(2, " ")}. ${coin.symbol.padEnd(12, " ")}: +${coin.percentageChange.toFixed(2)}%, Volume: ${formatado} Mais compradores (true/false)? ${Number(coin.bidQty) > Number(coin.askQty)}`
       );
     });
   } catch (error) {
@@ -92,9 +101,9 @@ async function analyzeFivePeriodVolumeChange(topN = 20, period) {
 /*
 // Para executar este script diretamente: node backend/utils/analyzeFivePeriodVolume.js
 (async () => {
-  await analyzeFivePeriodVolumeChange(20);
+  await anaylsePeriodVolumeChange(20);
 })();
 
 */
 
-module.exports = { analyzeFivePeriodVolumeChange };
+module.exports = { anaylsePeriodVolumeChange };

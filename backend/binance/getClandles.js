@@ -61,8 +61,8 @@ module.exports = getClandles = async function (symbol, interval, limit) {
     i++;
 
     // Caso o tamanho da array maior que mil, deletar o valor mais antigo. A array não pode ultrapassar mil registros.
-    if (dbCandles.length > 1000) {
-        dbCandles = dbCandles.slice(-999)
+    if (dbCandles.length > 500) {
+        dbCandles = dbCandles.slice(-499)
     }
     /** Se a solicitação for maior do que o que existe no banco, atualiza todo o banco com o tamanho da solicitação */
     if (limit > dbCandles.length) {
@@ -98,9 +98,13 @@ module.exports = getClandles = async function (symbol, interval, limit) {
             writeCandles(symbol, interval, uniqueArray)
 
         } else {
+
+            //console.log('limite update = ', limitForUpdateDb, ', atualiza 1 candle.')
            
             let client = await getClient();
             let candles = await client.candles({ symbol: symbol, interval: interval, limit: 1 });
+
+            //console.log(candles.length)
 
             // Busca candles para atualizar banco
             candles.forEach(candle => {

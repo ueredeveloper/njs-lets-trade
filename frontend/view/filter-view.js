@@ -1,4 +1,5 @@
 import CurrencyModel from "../model/currency-model";
+import { sortByTypeOfIntervals, sortFirstIncludesBinance } from "../utils/sort-firts-includes-binance";
 
 const FilterView = {
 
@@ -7,7 +8,7 @@ const FilterView = {
         this.div = $('#list-filters');
         this.filters = CurrencyModel.getFilters();
 
-         // Filtra moedas por volume, maior que 10M, maior que 20M e maior que 50M
+        // Filtra moedas por volume, maior que 10M, maior que 20M e maior que 50M
         await CurrencyModel.get24hsVolume();
 
         this.selectedFilters = []
@@ -22,15 +23,25 @@ const FilterView = {
             FilterView.render()
         });
 
-       
+
 
 
     },
     // Renderiza a tabela e as tabs
     render: async function () {
-        
+
         // Cria uma array de cotações de forma assíncrona.
         let filters = await CurrencyModel.getFilters();
+        // Separa primeiro filtro de moedas, ativas na binance
+        let binanceCurrencies = filters[0]
+        // Separa segundo filtro, moedas com volume maior que 5 Milhões 
+        let filter5M = filters[1]
+
+        // Organiza por ordem alfabética para juntar intervalos iguais (1h com 1h) etc...
+        filters = [binanceCurrencies, filter5M, ...sortByTypeOfIntervals(filters.slice(2))]
+
+        // Traz pra frente os indicadores de volume que tem a string "Binances" nome (10 milhões, ...)
+        filters = [binanceCurrencies, filter5M, ...sortFirstIncludesBinance(filters.slice(2))];
 
         this.div.empty();
         $('#list-currencies').empty()
@@ -129,8 +140,25 @@ const FilterView = {
 
         });
 
+        // Muda a cor dos filtros para melhor visualização.
+        let aTag = document.getElementsByTagName("a");
+
+        Array.from(aTag).forEach(tag => {
+            const t = tag.innerHTML.trim().toLowerCase();
+
+            if (t.startsWith("1h")) tag.style.backgroundColor = "#8A8AFF";
+            if (t.startsWith("2h")) tag.style.backgroundColor = "#7FDBFF";
+            if (t.startsWith("4h")) tag.style.backgroundColor = "#39CCCC";
+            if (t.startsWith("6h")) tag.style.backgroundColor = "#2ECC40";
+            if (t.startsWith("8h")) tag.style.backgroundColor = "#01FF70";
+            if (t.startsWith("12h")) tag.style.backgroundColor = "#FFDC00";
+            if (t.startsWith("1d")) tag.style.backgroundColor = "#FF851B";
+            if (t.startsWith("3d")) tag.style.backgroundColor = "#FF4136";
+            if (t.startsWith("1w")) tag.style.backgroundColor = "#B10DC9";
+        });
 
     }
+
 };
 
 

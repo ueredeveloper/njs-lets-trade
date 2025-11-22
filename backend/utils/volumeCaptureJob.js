@@ -1,75 +1,84 @@
 const fs = require("fs").promises;
 const path = require("path");
-const { analyzeFivePeriodVolumeChange } = require("./analyzeFivePeriodVolume");
-
-/**
- * Busca os dados de volume 24h da API da Binance, filtra os pares USDT
- * e salva em um arquivo JSON com timestamp.
- *  * Use: node backend/utils/volumeCaptureJob.js
- */
+const { anaylsePeriodVolumeChange } = require("./analysePeriodVolumeChange");
+const { analyseVolume } = require("./analyseVolume");
 
 let captureLen = 0;
+let jobInterval = 1;
+let interval = null;
+
+
+/**
+ * How to use: node ./backend/utils/volumeCaptureJob.js
+ */
+function startVolumeCaptureJob() {
+  const MINUTES_IN_MS = 1 * 60 * 1000;
+
+  console.log(`Iniciando job de captura de volume a cada ${MINUTES_IN_MS / 1000 / 60} minuto(s).`);
+
+  // Executa a primeira imediatamente
+  captureAndSaveVolume();
+
+  // Repetir a cada intervalo
+  interval = setInterval(captureAndSaveVolume, MINUTES_IN_MS);
+}
 
 async function captureAndSaveVolume() {
-
   const url = "https://api.binance.com/api/v3/ticker/24hr";
 
   try {
-    // 1. Requisição da lista de todos os tickers 24h
-    console.log("Capturando dados de volume 24h da Binance...");
-    const response = await fetch(url); // fetch nativo do Node 20
+
+    console.log("Capturando dados de volume 24h da Binance");
+
+    const response = await fetch(url);
     if (!response.ok) {
       throw new Error(`Erro na API da Binance: ${response.statusText}`);
     }
+
     const data = await response.json();
 
-    // 2. Preparação do arquivo e diretório
     const timestamp = Date.now();
     const filename = `24Hs-Volume-${timestamp}.json`;
     const volumeDir = path.join(__dirname, "..", "data", "volume");
-
-    // Garante que o diretório de destino exista
-    await fs.mkdir(volumeDir, { recursive: true });
-
     const filePath = path.join(volumeDir, filename);
 
-    // 3. Filtra apenas moedas que fazem par com USDT
-    const usdtTickers = data.filter((ticker) =>
-      ticker.symbol.endsWith("USDT")
+    await fs.mkdir(volumeDir, { recursive: true });
+
+    const usdtTickers = data.filter(
+      (ticker) => ticker.symbol.endsWith("USDT") && ticker.quoteVolume > 9_000_000
     );
 
-    // 4. Salva os dados no arquivo
     await fs.writeFile(filePath, JSON.stringify(usdtTickers, null, 2));
 
-    console.log(`Dados salvos com sucesso em: ${filename}`);
-    captureLen +=1;
+    //console.log(`Dados salvos com sucesso em: ${filename}`);
 
-    if (captureLen>4) {
-       console.log(captureLen, 'analyse five periods volume change')
-      analyzeFivePeriodVolumeChange(20, 10);
+    captureLen++;
+
+    // Quando fizer 5 capturas…
+    if (captureLen >= 5) {
+      anaylsePeriodVolumeChange(10, 5);
+
+      analyseVolume();
+
       captureLen = 0;
+      jobInterval++;
+
+      //console.log("Job interval:", jobInterval);
+
+      // ➤ Para o job quando jobInterval chegar a 4. Então fará 3 verificações e parará.
+      if (jobInterval === 4) {
+        //console.log("Job finalizado. Parando interval... valor: ", jobInterval);
+        clearInterval(interval);
+      }
     }
-
-
-
   } catch (error) {
     console.error("Falha ao capturar ou salvar os dados de volume:", error);
   }
 }
 
-/**
- * Inicia o job que captura o volume a cada 5 minutos.
- */
 
-function startVolumeCaptureJob() {
-  const FIVE_MINUTES_IN_MS = 0.5 * 60 * 1000;
-  console.log("Iniciando job de captura de volume a cada 5 minutos.");
-
-  captureAndSaveVolume(); // Executa imediatamente na primeira vez
-  setInterval(captureAndSaveVolume, FIVE_MINUTES_IN_MS);
-}
-
-// Inicia o processo em segundo plano
-startVolumeCaptureJob();
+(async () => {
+  startVolumeCaptureJob();
+})();
 
 module.exports = { startVolumeCaptureJob };

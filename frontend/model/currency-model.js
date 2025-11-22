@@ -36,7 +36,8 @@ const CurrencyModel = {
       "NEXOUSDT",
       "FXSUSDT",
       "AEURUSDT",
-      "PAXGUSDT"
+      "PAXGUSDT",
+      "FDUSDUSDT"
     ];
 
 
