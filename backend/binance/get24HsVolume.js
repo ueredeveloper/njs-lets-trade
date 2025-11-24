@@ -42,6 +42,7 @@ async function get24hVolumeFilters() {
     .filter(ticker => Number(ticker.quoteVolume) > 9_000_000 )
     .map(ticker => ticker.symbol);
 
+    
   let result9 = { name: "1h|Binance|9M⇾", list: list9 }
 
   // Filtra somente pares USDT e aplica o filtro de volume mínimo

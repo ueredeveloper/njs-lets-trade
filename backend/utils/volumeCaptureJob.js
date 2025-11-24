@@ -45,12 +45,33 @@ async function captureAndSaveVolume() {
     await fs.mkdir(volumeDir, { recursive: true });
 
     const usdtTickers = data.filter(
-      (ticker) => ticker.symbol.endsWith("USDT") && ticker.quoteVolume > 9_000_000
+      (ticker) =>
+        // apenas pares com usdt
+        ticker.symbol.endsWith("USDT")
+        
+        // remove stablecoins e moedas que não me interessam como paxg
+        && [
+          "TUSDUSDT",
+          "USDPUSDT",
+          "FDUSDUSDT",
+          "EURIUSDT",
+          "XUSDUSDT",
+          "USDCUSDT",
+          "EURUSDT",
+          "USDEUSDT",
+          "USD1USDT",
+          "BFUSDUSDT",
+          "NEXOUSDT",
+          "FXSUSDT",
+          "AEURUSDT",
+          "PAXGUSDT",
+          "FDUSDUSDT"
+        ].every(s => s !== ticker.symbol)
+        // limita moedas com volume maior que 9 milhões de dólares em 24h
+        && ticker.quoteVolume > 9_000_000
     );
 
     await fs.writeFile(filePath, JSON.stringify(usdtTickers, null, 2));
-
-    //console.log(`Dados salvos com sucesso em: ${filename}`);
 
     captureLen++;
 
@@ -63,11 +84,9 @@ async function captureAndSaveVolume() {
       captureLen = 0;
       jobInterval++;
 
-      //console.log("Job interval:", jobInterval);
-
       // ➤ Para o job quando jobInterval chegar a 4. Então fará 3 verificações e parará.
       if (jobInterval === 4) {
-        //console.log("Job finalizado. Parando interval... valor: ", jobInterval);
+        
         clearInterval(interval);
       }
     }

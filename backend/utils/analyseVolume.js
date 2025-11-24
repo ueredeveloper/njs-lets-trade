@@ -8,6 +8,7 @@ const { all } = require("proxy-addr");
  * Use: node ./backend/utils/analyseVolume.js
  */
 const analyseVolume = async () => {
+  
 
   // Captura as moedas com mais de 5 milhões de volume em 24 horas
   let topVolume = await fetchLargestVolumes(9_000_000)
@@ -44,19 +45,20 @@ const analyseVolume = async () => {
 
       coin.symbol = fc.symbol;
       coin.quoteVolume = fc.quoteVolume;
-      
+
 
       coin = { ...coin };
     });
 
     let hasEveryPositveValues = coin.percentages.every(p => p > 0)
 
-    if (hasEveryPositveValues){
+    if (hasEveryPositveValues) {
+     
       let info = `${coin.symbol} - Volume ($): ${formatNumber(coin.quoteVolume)}, Valores positivos: ${hasEveryPositveValues}`;
       let colorWithInfo = `\x1b[34m${info}\x1b[0m`; // azul
       console.log(colorWithInfo)
     }
-  
+
 
   });
 
@@ -73,7 +75,25 @@ const fetchLargestVolumes = async (volumeMin = 9_000_000) => {
 
   // Filtra somente pares USDT e aplica o filtro de volume mínimo
   let listTopVolumes = data
-    .filter(ticker => ticker.symbol.endsWith("USDT"))
+    .filter(ticker =>
+      ticker.symbol.endsWith("USDT")
+      && [
+        "TUSDUSDT",
+        "USDPUSDT",
+        "FDUSDUSDT",
+        "EURIUSDT",
+        "XUSDUSDT",
+        "USDCUSDT",
+        "EURUSDT",
+        "USDEUSDT",
+        "USD1USDT",
+        "BFUSDUSDT",
+        "NEXOUSDT",
+        "FXSUSDT",
+        "AEURUSDT",
+        "PAXGUSDT",
+        "FDUSDUSDT"
+      ].every(s => s !== ticker.symbol))
     .filter(ticker => Number(ticker.quoteVolume) > volumeMin)
     .map(ticker => ticker.symbol);
 
@@ -114,4 +134,4 @@ const formatNumber = (value) => {
   return numberFormated;
 }
 
-module.exports = {analyseVolume};
+module.exports = { analyseVolume };
