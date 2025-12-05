@@ -4,7 +4,7 @@ import { createHighLowFilter } from "../utils/createHighLowFilter";
 import { conversionAboveBase, conversionAboveCloseCandle, conversionAboveHighCandle, conversionAboveLowCandle, conversionAboveSpanA, conversionAboveSpanAAndSpanB, conversionAboveSpanB, conversionBellowBase, createIchimokuFilter } from "../utils/createIchimokuFilter";
 import { createLowestIndexFilter } from "../utils/createLowestIndexFilter";
 import { createMovingAverageFilter, movingAverageAboveCandleClose, movingAverageBellowCandleClose } from "../utils/createMovingAverageFilter";
-import { createRsiFilter, lastRsiAbove10Bellow20, lastRsiAbove20Bellow30, lastRsiAbove30Bellow40, lastRsiAbove40Bellow50, lastRsiAbove50Bellow60, lastRsiAbove60Bellow70, lastRsiAbove70Bellow80, lastRsiAbove70Bellow90, lastRsiAbove80Bellow90 } from "../utils/createRsiFilter";
+import { createRsiFilter, lastRsiAbove10Bellow20, lastRsiAbove20Bellow30, lastRsiAbove30Bellow40, lastRsiAbove40Bellow50, lastRsiAbove50Bellow60, lastRsiAbove60Bellow70, lastRsiAbove70Bellow80, lastRsiAbove70Bellow99, lastRsiAbove80Bellow90 } from "../utils/createRsiFilter";
 
 
 const IndicatorView = {
@@ -203,8 +203,8 @@ const IndicatorView = {
                             case 'relativeStrengthIndex|above|80|bellow|90':
                                 createRsiFilter(candlesAndIndicators, intervals, acronym, lastRsiAbove80Bellow90)
                                 break;
-                            case 'relativeStrengthIndex|above|70|bellow|90':
-                                createRsiFilter(candlesAndIndicators, intervals, acronym, lastRsiAbove70Bellow90)
+                            case 'relativeStrengthIndex|above|70|bellow|99':
+                                createRsiFilter(candlesAndIndicators, intervals, acronym, lastRsiAbove70Bellow99)
                                 break;
                             default: alert("Não há ainda cálculo para estas condições!")
 
@@ -515,6 +515,7 @@ const IndicatorView = {
                 <option value="70" class="bg-gray-200" selected>70</option>
                 <option value="80" class="bg-gray-200">80</option>
                 <option value="90" class="bg-gray-200">90</option>
+                <option value="99" class="bg-gray-200">99</option>
             </select>
              
             <select name="compare" class="flex-1 mx-2 h-7" id="compare-2">
@@ -532,7 +533,8 @@ const IndicatorView = {
                 <option value="60" class="bg-green-200">60</option>
                 <option value="70" class="bg-gray-200">70</option>
                 <option value="80" class="bg-gray-200">80</option>
-                <option value="90" class="bg-gray-200" selected>90</option>
+                <option value="90" class="bg-gray-200">90</option>
+                <option value="99" class="bg-gray-200" selected>99</option>
             </select>
 
             ${this.renderintervals()}
