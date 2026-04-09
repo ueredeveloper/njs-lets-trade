@@ -83,7 +83,6 @@ function createRsiFilter(array, intervals, acronym, condictionCallback) {
     });
 
 }
-
 function lastRsiAbove10Bellow20(lastRsi) {
     return lastRsi > 10.0 && lastRsi < 20.0;
 }
@@ -106,17 +105,12 @@ function lastRsiAbove60Bellow70(lastRsi) {
 function lastRsiAbove70Bellow80(lastRsi) {
     return lastRsi > 70.0 && lastRsi < 80.0;
 }
-
-function lastRsiAbove70Bellow99(lastRsi) {
-    return lastRsi > 70.0 && lastRsi < 99.0;
-}
-
 function lastRsiAbove80Bellow90(lastRsi) {
     return lastRsi > 80.0 && lastRsi < 90.0;
 }
-
-
-
+function lastRsiAbove70Bellow99(lastRsi) {
+    return lastRsi > 70.0 && lastRsi < 99.0;
+}
 
 export {
     createRsiFilter,
