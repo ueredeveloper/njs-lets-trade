@@ -152,7 +152,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
       {
         name: 'Candles',
         type: 'candlestick',
-        data: candlesticks.slice(-LIMIT).map((c) => [c.close, c.open, c.low, c.high]),
+        data: candlesticks.slice(-LIMIT).map((c) => [c.open, c.close, c.low, c.high]),
         itemStyle: {
           color: C_UP, color0: C_DOWN,
           borderColor: C_UP, borderColor0: C_DOWN,
