@@ -34,42 +34,37 @@ async function get24hVolumeFilters() {
     console.error("Erro ao salvar os dados de volume 24h:", error);
   }
 
-  let listedOnBinance = await getActiveUsdtPairs()
+  const listedOnBinance = await getActiveUsdtPairs();
+  const list5M = [];
+  const list1030 = [];
+  const list30 = [];
+  const list50 = [];
 
-   // Filtra somente pares USDT e aplica o filtro de volume mínimo
-  let list9 = data
-    .filter(ticker => ticker.symbol.endsWith("USDT"))
-    .filter(ticker => Number(ticker.quoteVolume) > 9_000_000 )
-    .map(ticker => ticker.symbol);
+  data.forEach(ticker => {
+    if (!ticker.symbol.endsWith("USDT")) return;
 
-    
-  let result9 = { name: "1h|Binance|9M⇾", list: list9 }
+    const volume = Number(ticker.quoteVolume);
 
-  // Filtra somente pares USDT e aplica o filtro de volume mínimo
-  let list1030 = data
-    .filter(ticker => ticker.symbol.endsWith("USDT"))
-    .filter(ticker => Number(ticker.quoteVolume) > 10_000_000 && Number(ticker.quoteVolume) < 30_000_000)
-    .map(ticker => ticker.symbol);
+    if (volume > 5_000_000) {
+      list5M.push(ticker.symbol);
+      
+      if (volume > 50_000_000) {
+        list50.push(ticker.symbol);
+      } else if (volume > 30_000_000) {
+        list30.push(ticker.symbol);
+      } else if (volume > 10_000_000) {
+        list1030.push(ticker.symbol);
+      }
+    }
+  });
 
-  let result1030 = { name: "1h|Binance|10M⇿30M", list: list1030 }
-
-  // Filtra somente pares USDT e aplica o filtro de volume mínimo
-  let list30 = data
-    .filter(ticker => ticker.symbol.endsWith("USDT"))
-    .filter(ticker => Number(ticker.quoteVolume) > 30_000_000 && Number(ticker.quoteVolume) < 50_000_000)
-    .map(ticker => ticker.symbol);
-
-  let result30 = { name: "1h|Binance|30M⇿50M", list: list30 }
-
-  // Filtra somente pares USDT e aplica o filtro de volume mínimo
-  let list50 = data
-    .filter(ticker => ticker.symbol.endsWith("USDT"))
-    .filter(ticker => Number(ticker.quoteVolume) > 50_000_000)
-    .map(ticker => ticker.symbol);
-
-  let result50 = { name: "1h|Binance|50M⇾", list: list50 }
-
-  return [listedOnBinance, result9, result1030, result30, result50];
+  return [
+    listedOnBinance,
+    { name: "1h|Binance|5M⇾", list: list5M },
+    { name: "1h|Binance|10M⇿30M", list: list1030 },
+    { name: "1h|Binance|30M⇿50M", list: list30 },
+    { name: "1h|Binance|50M⇾", list: list50 }
+  ];
 }
 
 module.exports = { get24hVolumeFilters };
