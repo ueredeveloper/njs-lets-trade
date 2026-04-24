@@ -9,10 +9,12 @@ const fetchVWAP = require('./fetchVWAP');
 const fetchLowestIndex = require('./fetchLowestIndex');
 const fetchHighLowVariation = require('./fetchHighLowVariation')
 const fetch24HsVolume = require('./fetch24hsVolume')
+const fetchIndicatorSearch = require('./fetchIndicatorSearch')
 
 // remove cíclical error
-module.exports = { 
-    fetchCandles, fetchIchimokuCloud, fetchAllCurrencies, 
-    fetchSMA, fetchRSI, fetchVWAP, fetchLowestIndex, fetchHighLowVariation, fetch24HsVolume }
+module.exports = {
+    fetchCandles, fetchIchimokuCloud, fetchAllCurrencies,
+    fetchSMA, fetchRSI, fetchVWAP, fetchLowestIndex, fetchHighLowVariation, fetch24HsVolume,
+    fetchIndicatorSearch }
 
 

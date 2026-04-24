@@ -11,7 +11,7 @@ const { ichimokuCloudRouter } = require('./technicals-indicators');
 const {
   fetchCandles, fetchIchimokuCloud, fetchAllCurrencies,
   fetchSMA, fetchRSI, fetchVWAP, fetchLowestIndex,
-  fetchHighLowVariation, fetch24HsVolume } = require('./services');
+  fetchHighLowVariation, fetch24HsVolume, fetchIndicatorSearch } = require('./services');
 
 const app = express();
 app.use(cors());
@@ -29,6 +29,7 @@ app.use('/services', fetchVWAP);
 app.use('/services', fetchLowestIndex)
 app.use('/services', fetchHighLowVariation)
 app.use('/services', fetch24HsVolume)
+app.use('/services', fetchIndicatorSearch)
 
 // Proxy para o frontend (só necessário no modo Parcel legado).
 // No modo Vite, o próprio Vite faz proxy /services → Express, então não é preciso.

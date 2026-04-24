@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useCurrency } from '../contexts/CurrencyContext';
-import { fetchCandlesAndIndicators } from '../services/api';
+import { fetchCandlesAndIndicators, fetchIndicatorSearch } from '../services/api';
 import {
   createRsiFilter,
   lastRsiAbove10Bellow20, lastRsiAbove20Bellow30, lastRsiAbove30Bellow40,
@@ -299,88 +299,85 @@ export default function IndicatorPanel() {
   async function handleSearch() {
     setSearching(true);
     try {
-      const uniqueIntervals = [...new Set(indicators.flatMap((ind) => ind.intervals))];
-      const usdtCurrencies = getBinanceCurrenciesWithUsdt(currencies);
-      const candlesData = await fetchCandlesAndIndicators(usdtCurrencies, uniqueIntervals);
+      const rsiIndicators = indicators.filter((ind) => ind.type === 'relativeStrengthIndex');
+      const otherIndicators = indicators.filter((ind) => ind.type && ind.type !== 'relativeStrengthIndex');
 
-      for (const ind of indicators) {
-        const { type, intervals } = ind;
-        if (!type) continue;
+      // RSI: pesquisa via novo endpoint do backend (sem enviar candlesticks)
+      for (const ind of rsiIndicators) {
+        const compare1 = ind.compare1 ?? 'above';
+        const line1 = ind.line1 ?? '70';
+        const compare2 = ind.compare2 ?? 'bellow';
+        const line2 = ind.line2 ?? '99';
 
-        if (type === 'relativeStrengthIndex') {
-          const compare1 = ind.compare1 ?? 'above';
-          const line1 = ind.line1 ?? '70';
-          const compare2 = ind.compare2 ?? 'bellow';
-          const line2 = ind.line2 ?? '99';
-          const condition = `relativeStrengthIndex|${compare1}|${line1}|${compare2}|${line2}`;
-          const acronym = `r|${compare1[0]}|${line1}|${compare2[0]}|${line2}`;
-
-          const cbMap = {
-            'relativeStrengthIndex|above|10|bellow|20': lastRsiAbove10Bellow20,
-            'relativeStrengthIndex|above|20|bellow|30': lastRsiAbove20Bellow30,
-            'relativeStrengthIndex|above|30|bellow|40': lastRsiAbove30Bellow40,
-            'relativeStrengthIndex|above|40|bellow|50': lastRsiAbove40Bellow50,
-            'relativeStrengthIndex|above|50|bellow|60': lastRsiAbove50Bellow60,
-            'relativeStrengthIndex|above|60|bellow|70': lastRsiAbove60Bellow70,
-            'relativeStrengthIndex|above|70|bellow|80': lastRsiAbove70Bellow80,
-            'relativeStrengthIndex|above|80|bellow|90': lastRsiAbove80Bellow90,
-            'relativeStrengthIndex|above|70|bellow|99': lastRsiAbove70Bellow99,
-          };
-          const cb = cbMap[condition];
-          if (cb) createRsiFilter(candlesData, intervals, acronym, cb, addFilter);
-          else alert('Condição RSI ainda não calculada!');
+        for (const interval of ind.intervals) {
+          const query = `${interval}|rsi|${compare1}|${line1}|${compare2}|${line2}`;
+          console.log('[frontend-react] RSI query montada:', query);
+          const filter = await fetchIndicatorSearch(query);
+          console.log('[frontend-react] resultado recebido:', filter.name, '—', filter.list.length, 'moedas:', filter.list);
+          addFilter(filter);
         }
+      }
 
-        else if (type === 'ichimokuCloud') {
-          const line1 = ind.line1 ?? 'conversion';
-          const compare = ind.compare ?? 'above';
-          const line2 = ind.line2 ?? 'base';
-          const condition = `ichimokuCloud|${line1}|${compare}|${line2}`;
-          const acronym = `i|${line1}|${compare[0]}|${line2}`;
+      // Outros indicadores: fluxo original (Ichimoku, MA, lowestIndex, highLow)
+      if (otherIndicators.length > 0) {
+        const uniqueIntervals = [...new Set(otherIndicators.flatMap((ind) => ind.intervals))];
+        const usdtCurrencies = getBinanceCurrenciesWithUsdt(currencies);
+        const candlesData = await fetchCandlesAndIndicators(usdtCurrencies, uniqueIntervals);
 
-          const cbMap = {
-            'ichimokuCloud|conversion|above|high':    conversionAboveHighCandle,
-            'ichimokuCloud|conversion|above|close':   conversionAboveCloseCandle,
-            'ichimokuCloud|conversion|above|low':     conversionAboveLowCandle,
-            'ichimokuCloud|conversion|above|base':    conversionAboveBase,
-            'ichimokuCloud|conversion|bellow|base':   conversionBellowBase,
-            'ichimokuCloud|conversion|above|spanA':   conversionAboveSpanA,
-            'ichimokuCloud|conversion|above|spanB':   conversionAboveSpanB,
-            'ichimokuCloud|conversion|above|spanA+B': conversionAboveSpanAAndSpanB,
-          };
-          const cb = cbMap[condition];
-          if (cb) createIchimokuFilter(candlesData, intervals, acronym, cb, addFilter);
-          else alert('Ichimoku Cloud ainda não calculado!');
-        }
+        for (const ind of otherIndicators) {
+          const { type, intervals } = ind;
 
-        else if (type === 'movingAverage') {
-          const length = ind.length ?? '200';
-          const compare = ind.compare ?? 'above';
-          const candle = ind.candle ?? 'close';
-          const condition = `movingAverage|${length}|${compare}|${candle}`;
-          const acronym = `m|${length}|${compare[0]}|${candle}`;
+          if (type === 'ichimokuCloud') {
+            const line1 = ind.line1 ?? 'conversion';
+            const compare = ind.compare ?? 'above';
+            const line2 = ind.line2 ?? 'base';
+            const condition = `ichimokuCloud|${line1}|${compare}|${line2}`;
+            const acronym = `i|${line1}|${compare[0]}|${line2}`;
 
-          const cbMap = {
-            'movingAverage|200|above|close': movingAverageAboveCandleClose,
-            'movingAverage|200|bellow|close': movingAverageBellowCandleClose,
-            'movingAverage|9|above|close':   movingAverageAboveCandleClose,
-            'movingAverage|9|bellow|close':  movingAverageBellowCandleClose,
-            'movingAverage|20|above|close':  movingAverageAboveCandleClose,
-            'movingAverage|20|bellow|close': movingAverageBellowCandleClose,
-            'movingAverage|80|above|close':  movingAverageAboveCandleClose,
-            'movingAverage|80|bellow|close': movingAverageBellowCandleClose,
-          };
-          const cb = cbMap[condition];
-          if (cb) createMovingAverageFilter(candlesData, intervals, acronym, cb, addFilter);
-          else alert('Condição MA ainda não calculada!');
-        }
+            const cbMap = {
+              'ichimokuCloud|conversion|above|high':    conversionAboveHighCandle,
+              'ichimokuCloud|conversion|above|close':   conversionAboveCloseCandle,
+              'ichimokuCloud|conversion|above|low':     conversionAboveLowCandle,
+              'ichimokuCloud|conversion|above|base':    conversionAboveBase,
+              'ichimokuCloud|conversion|bellow|base':   conversionBellowBase,
+              'ichimokuCloud|conversion|above|spanA':   conversionAboveSpanA,
+              'ichimokuCloud|conversion|above|spanB':   conversionAboveSpanB,
+              'ichimokuCloud|conversion|above|spanA+B': conversionAboveSpanAAndSpanB,
+            };
+            const cb = cbMap[condition];
+            if (cb) createIchimokuFilter(candlesData, intervals, acronym, cb, addFilter);
+            else alert('Ichimoku Cloud ainda não calculado!');
+          }
 
-        else if (type === 'lowestIndex') {
-          createLowestIndexFilter(candlesData, intervals, 'lowestIndex', addFilter);
-        }
+          else if (type === 'movingAverage') {
+            const length = ind.length ?? '200';
+            const compare = ind.compare ?? 'above';
+            const candle = ind.candle ?? 'close';
+            const condition = `movingAverage|${length}|${compare}|${candle}`;
+            const acronym = `m|${length}|${compare[0]}|${candle}`;
 
-        else if (type === 'highLowVariation') {
-          createHighLowFilter(candlesData, intervals, 'highLowVariation', addFilter);
+            const cbMap = {
+              'movingAverage|200|above|close':  movingAverageAboveCandleClose,
+              'movingAverage|200|bellow|close': movingAverageBellowCandleClose,
+              'movingAverage|9|above|close':    movingAverageAboveCandleClose,
+              'movingAverage|9|bellow|close':   movingAverageBellowCandleClose,
+              'movingAverage|20|above|close':   movingAverageAboveCandleClose,
+              'movingAverage|20|bellow|close':  movingAverageBellowCandleClose,
+              'movingAverage|80|above|close':   movingAverageAboveCandleClose,
+              'movingAverage|80|bellow|close':  movingAverageBellowCandleClose,
+            };
+            const cb = cbMap[condition];
+            if (cb) createMovingAverageFilter(candlesData, intervals, acronym, cb, addFilter);
+            else alert('Condição MA ainda não calculada!');
+          }
+
+          else if (type === 'lowestIndex') {
+            createLowestIndexFilter(candlesData, intervals, 'lowestIndex', addFilter);
+          }
+
+          else if (type === 'highLowVariation') {
+            createHighLowFilter(candlesData, intervals, 'highLowVariation', addFilter);
+          }
         }
       }
     } catch (err) {
