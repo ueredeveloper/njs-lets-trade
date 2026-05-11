@@ -143,7 +143,13 @@ function IndicatorRow({ value, onChange }) {
             <select
               className={sel}
               value={value.line1 ?? '70'}
-              onChange={(e) => onChange({ ...value, line1: e.target.value })}
+              onChange={(e) => {
+                const v1 = Number(e.target.value);
+                const RSI_VALUES = [10,20,30,40,50,60,70,80,90,99];
+                const nextIdx = RSI_VALUES.indexOf(v1) + 1;
+                const suggested = nextIdx < RSI_VALUES.length ? String(RSI_VALUES[nextIdx]) : '99';
+                onChange({ ...value, line1: e.target.value, line2: suggested });
+              }}
               title="Valor da primeira condição do RSI (0–100)"
             >
               {[10,20,30,40,50,60,70,80,90,99].map(v => <option key={v} value={String(v)}>{v}</option>)}
