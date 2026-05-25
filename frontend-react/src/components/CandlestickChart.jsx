@@ -5,7 +5,7 @@ import { fetchCandlesticksAndCloud } from '../services/api';
 import convertOpenTime from '../utils/convertOpenTime';
 
 const LIMIT = 66;
-const INTERVALS = ['1m', '5m', '15m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w'];
+const INTERVALS = ['1m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w'];
 
 const C_UP    = '#26a69a';
 const C_DOWN  = '#ef5350';

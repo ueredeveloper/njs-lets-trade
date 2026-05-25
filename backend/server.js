@@ -1,3 +1,7 @@
+// Para rodar: `npm start` na raiz do projeto.
+// Isso executa `node start.js`, que sobe este servidor (porta 3000) e o Vite (porta 5173) juntos.
+// Para rodar só o backend: `npm run backend`
+
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
@@ -11,7 +15,8 @@ const { ichimokuCloudRouter } = require('./technicals-indicators');
 const {
   fetchCandles, fetchIchimokuCloud, fetchAllCurrencies,
   fetchSMA, fetchRSI, fetchVWAP, fetchLowestIndex,
-  fetchHighLowVariation, fetch24HsVolume, fetchIndicatorSearch } = require('./services');
+  fetchHighLowVariation, fetch24HsVolume, fetchIndicatorSearch,
+  fetchRsiOversoldRecovery } = require('./services');
 
 const app = express();
 app.use(cors());
@@ -30,6 +35,7 @@ app.use('/services', fetchLowestIndex)
 app.use('/services', fetchHighLowVariation)
 app.use('/services', fetch24HsVolume)
 app.use('/services', fetchIndicatorSearch)
+app.use('/services', fetchRsiOversoldRecovery)
 
 // Proxy para o frontend (só necessário no modo Parcel legado).
 // No modo Vite, o próprio Vite faz proxy /services → Express, então não é preciso.

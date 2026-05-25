@@ -61,8 +61,8 @@ module.exports = getClandles = async function (symbol, interval, limit) {
     i++;
 
     // Caso o tamanho da array maior que mil, deletar o valor mais antigo. A array não pode ultrapassar mil registros.
-    if (dbCandles.length > 500) {
-        dbCandles = dbCandles.slice(-499)
+    if (dbCandles.length > 3000) {
+        dbCandles = dbCandles.slice(-2999);
     }
     /** Se a solicitação for maior do que o que existe no banco, atualiza todo o banco com o tamanho da solicitação */
     if (limit > dbCandles.length) {

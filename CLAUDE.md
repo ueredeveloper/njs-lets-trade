@@ -5,12 +5,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-# Run backend + frontend together (recommended for development)
-npm start
+# Run backend + frontend React together (recommended for development)
+npm start           # node start.js — spawns Vite (port 5173) + Express (port 3000)
 
 # Run separately
-npm run backend     # Express server on port 3000
-npm run frontend    # Parcel dev server on port 1234
+npm run backend          # Express server on port 3000
+npm run frontend:react   # Vite dev server on port 5173
 
 # Tests (backend only)
 npx jest
