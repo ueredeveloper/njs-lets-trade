@@ -24,7 +24,7 @@ import Tooltip from './Tooltip';
 const INTERVALS = ['1m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w'];
 
 const INTERVAL_LABELS = {
-  '1m': '1 minuto', '5m': '5 minutos', '15m': '15 minutos', '30m': '30 minutos',
+  '1m': '1 minuto', '5m': '5 minutos', '15m': '15 minutos',
   '1h': '1 hora', '2h': '2 horas', '4h': '4 horas',
   '6h': '6 horas', '8h': '8 horas', '12h': '12 horas',
   '1d': '1 dia', '3d': '3 dias', '1w': '1 semana',
@@ -420,7 +420,7 @@ export default function IndicatorPanel() {
 
       {open && (
         <div className="flex flex-col gap-2 px-4 pb-3">
-          <div className="flex flex-col gap-2 overflow-y-auto" style={{ maxHeight: '18vh' }}>
+          <div className="flex flex-col gap-2 overflow-y-auto" style={{ maxHeight: 'min(18vh, 280px)' }}>
             {indicators.map((ind, i) => (
               <IndicatorRow key={i} value={ind} onChange={(v) => updateIndicator(i, v)} />
             ))}

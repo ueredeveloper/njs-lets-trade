@@ -16,6 +16,23 @@ export async function fetch24hVolume() {
 }
 
 /**
+ * Analisa ciclos RSI sobrevenda→sobrecompra para uma moeda salva no backend.
+ * @param {string} symbol    ex: 'BTCUSDT'
+ * @param {string} interval  ex: '1h'
+ * @param {number} oversold    limiar de entrada (padrão 30)
+ * @param {number} overbought  limiar de saída   (padrão 70)
+ */
+export async function fetchRsiOversoldRecovery(symbol, interval, oversold = 30, overbought = 70) {
+  const params = new URLSearchParams({ symbol, interval, oversold, overbought });
+  const res = await fetch(`/services/rsi-oversold-recovery?${params}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+/**
  * Busca candles + Ichimoku + SMA para exibir no gráfico.
  * @param {string} symbol  ex: 'BTCUSDT'
  * @param {string} interval ex: '1h'

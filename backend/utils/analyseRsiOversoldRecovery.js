@@ -126,6 +126,8 @@ module.exports = analyseRsiOversoldRecovery;
 // Exemplos:
 //   node backend/utils/analyseRsiOversoldRecovery.js WAVESUSDT 30m
 //   node backend/utils/analyseRsiOversoldRecovery.js WAVESUSDT 30m 20 60
+
+/*
 if (require.main === module) {
     const [,, symbol, interval, oversold, overbought] = process.argv;
 
@@ -162,3 +164,4 @@ if (require.main === module) {
         process.exit(1);
     });
 }
+    */

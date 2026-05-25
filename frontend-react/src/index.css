@@ -11,9 +11,13 @@
 body {
   margin: 0;
   font-family: system-ui, sans-serif;
-  font-size: 13px;
+  font-size: 11px;
   background-color: #1a0a25;
   color: #b3aca4;
+}
+
+@media (min-width: 640px) {
+  body { font-size: 13px; }
 }
 
 /* Scrollbar sutil */

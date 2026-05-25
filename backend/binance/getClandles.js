@@ -11,11 +11,12 @@ const convertIntervalToMiliseconds = require('../utils/convert-interval-to-milis
  * @param {integer} limit - O limite de candles solicitados.
  */
 
-let i  = 0
+let i = 0
 module.exports = getClandles = async function (symbol, interval, limit) {
 
-    
-// remove cíclical error
+    //limit = 1000; // para iniciar e trazer muitos candles, no dia a dia trará somente 266
+
+    // remove cíclical error
 
     /**
      * Como temos os valores das moedas salvos, vamos buscar apenas os valores novos, assim, ao inves de pedir
@@ -57,7 +58,7 @@ module.exports = getClandles = async function (symbol, interval, limit) {
     const limitForUpdateDb = Math.floor(timeDifference / miliseconds);
 
     // Símbolo e limite de atualizações
-    console.log(i, 'symbol',  symbol, 'update len ', limitForUpdateDb);
+    console.log(i, 'symbol', symbol, 'update len ', limitForUpdateDb);
     i++;
 
     // Caso o tamanho da array maior que mil, deletar o valor mais antigo. A array não pode ultrapassar mil registros.
@@ -78,6 +79,8 @@ module.exports = getClandles = async function (symbol, interval, limit) {
 
         /** Se o limite de atualizações de candle for  maior que zero */
         if (limitForUpdateDb > 0) {
+
+            console.log('limite update = ', limitForUpdateDb, ', atualiza ', limitForUpdateDb, ' candles.')
 
             let client = await getClient();
             let candles = await client.candles({ symbol: symbol, interval: interval, limit: limitForUpdateDb });
@@ -100,7 +103,7 @@ module.exports = getClandles = async function (symbol, interval, limit) {
         } else {
 
             //console.log('limite update = ', limitForUpdateDb, ', atualiza 1 candle.')
-           
+
             let client = await getClient();
             let candles = await client.candles({ symbol: symbol, interval: interval, limit: 1 });
 

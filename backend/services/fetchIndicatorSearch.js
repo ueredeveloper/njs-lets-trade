@@ -97,7 +97,6 @@ router.get('/indicator-search', async (req, res) => {
         const lastValue = indicatorValues[indicatorValues.length - 1];
         if (!satisfiesConditions(lastValue, conditions)) return null;
 
-        console.log(`[backend] match: ${symbol} | último ${indicator.toUpperCase()}=${lastValue.toFixed(2)}`);
         const lastCandle = candles[candles.length - 1];
         return {
           nome,

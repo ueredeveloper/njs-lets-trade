@@ -7,12 +7,14 @@ import CurrencyTable from './components/CurrencyTable';
 import IndicatorPanel from './components/IndicatorPanel';
 import CandlestickChart from './components/CandlestickChart';
 import SettingsSidebar from './components/SettingsSidebar';
+import StatisticsPanel from './components/StatisticsPanel';
 
 function AppContent() {
   const { setCurrencies, setFilters, addFilter, setSelectedChart } = useCurrency();
   const [activeFilter, setActiveFilter] = useState(null);
   const [loading, setLoading] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [mobileView, setMobileView] = useState('chart'); // 'chart' | 'list'
 
   useEffect(() => {
     async function init() {
@@ -28,7 +30,6 @@ function AppContent() {
         const volumeFilters = await fetch24hVolume();
         volumeFilters.forEach((f) => addFilter(f));
 
-        // Carrega gráfico do BTC por padrão
         const btcData = await fetchCandlesticksAndCloud('BTCUSDT', '1h');
         setSelectedChart(btcData);
       } catch (err) {
@@ -51,6 +52,17 @@ function AppContent() {
     );
   }
 
+  const tabBtn = (view, label) => (
+    <button
+      onClick={() => setMobileView(view)}
+      className={`px-3 py-1 text-xs rounded transition-colors ${
+        mobileView === view ? 'bg-p3 text-white' : 'text-p5/60 hover:text-p5'
+      }`}
+    >
+      {label}
+    </button>
+  );
+
   return (
     <div className="flex flex-col h-screen overflow-hidden">
 
@@ -59,8 +71,15 @@ function AppContent() {
         <h1 className="text-lg font-bold tracking-widest text-p5 uppercase">
           Let&apos;s Trade
         </h1>
+
+        {/* Tabs de navegação — visíveis só em mobile */}
+        <div className="flex md:hidden items-center gap-1 bg-p2/50 rounded p-0.5">
+          {tabBtn('chart', 'Gráfico')}
+          {tabBtn('list', 'Moedas')}
+        </div>
+
         <div className="flex items-center gap-3">
-          <span className="text-xs text-p4 opacity-60">crypto screener</span>
+          <span className="hidden sm:inline text-xs text-p4 opacity-60">crypto screener</span>
           <button
             onClick={() => setSettingsOpen(true)}
             className="text-p5 hover:text-white p-1 rounded hover:bg-p2 transition-colors"
@@ -77,32 +96,38 @@ function AppContent() {
 
       <SettingsSidebar open={settingsOpen} onClose={() => setSettingsOpen(false)} />
 
-      {/* Corpo principal: gráfico esquerda | painel direita */}
-      <div className="flex min-h-0 flex-1 overflow-hidden">
+      {/* Corpo principal */}
+      <div className="flex flex-col md:flex-row min-h-0 flex-1 overflow-hidden">
 
-        {/* Coluna esquerda — Gráfico */}
-        <div className="flex flex-col flex-1 min-w-0 bg-p1 border-r border-p2">
+        {/* Coluna esquerda — Gráfico (oculto em mobile quando view=list) */}
+        <div className={`flex-col flex-1 min-w-0 bg-p1 md:border-r border-p2
+          ${mobileView === 'list' ? 'hidden md:flex' : 'flex'}`}>
           <CandlestickChart />
         </div>
 
-        {/* Coluna direita — Lista de moedas */}
-        <div className="flex flex-col w-80 shrink-0 bg-p1">
+        {/* Coluna direita — Lista de moedas (oculto em mobile quando view=chart) */}
+        <div className={`flex-col w-full md:w-80 md:shrink-0 bg-p1
+          ${mobileView === 'chart' ? 'hidden md:flex' : 'flex'}`}>
 
-          {/* Filtros — 40% vertical */}
-          <div className="flex flex-col min-h-0 px-2 py-1 border-b border-p2 overflow-hidden" style={{ height: '40%' }}>
+          {/* Filtros */}
+          <div className="flex flex-col min-h-0 px-2 py-1 border-b border-p2 overflow-hidden"
+            style={{ height: '40%' }}>
             <FilterTabs onSelectFilter={setActiveFilter} />
           </div>
 
-          {/* Tabela — 60% vertical */}
+          {/* Tabela */}
           <div className="min-h-0 overflow-hidden" style={{ height: '60%' }}>
             <CurrencyTable activeFilter={activeFilter} />
           </div>
         </div>
       </div>
 
-      {/* Rodapé — Painel de indicadores */}
+      {/* Rodapé — Painéis */}
       <div className="shrink-0 border-t border-p2 bg-p1">
         <IndicatorPanel />
+        <div className="border-t border-p2">
+          <StatisticsPanel />
+        </div>
       </div>
 
     </div>
