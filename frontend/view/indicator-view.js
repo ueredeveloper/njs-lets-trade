@@ -5,6 +5,7 @@ import { conversionAboveBase, conversionAboveCloseCandle, conversionAboveHighCan
 import { createLowestIndexFilter } from "../utils/createLowestIndexFilter";
 import { createMovingAverageFilter, movingAverageAboveCandleClose, movingAverageBellowCandleClose } from "../utils/createMovingAverageFilter";
 import { createRsiFilter, lastRsiAbove10Bellow20, lastRsiAbove20Bellow30, lastRsiAbove30Bellow40, lastRsiAbove40Bellow50, lastRsiAbove50Bellow60, lastRsiAbove60Bellow70, lastRsiAbove70Bellow80, lastRsiAbove70Bellow99, lastRsiAbove80Bellow90 } from "../utils/createRsiFilter";
+import fetchIndicatorSearch from "../services/fetchIndicatorSearch";
 
 
 const IndicatorView = {
@@ -24,8 +25,9 @@ const IndicatorView = {
             $('#btnSearch').on('click', async function () {
 
                 let params = []
+                let rsiQueries = []
                 // Verifica seleções do usuário e cria novos parâmetros de busca
-                $('.indicatorContent').each(async function () {
+                $('.indicatorContent').each(function () {
                     let container = $(this);
                     let indicatorType = container.find('.indicatorType').val();
                     let selects = container.find('.indicatorSelects select');
@@ -65,21 +67,16 @@ const IndicatorView = {
 
                     }
                     else if (indicatorType === 'relativeStrengthIndex') {
-                        let intervals = checkboxValues.toString();
-                        // Captura as seleções do usuário neste indicador
                         let compare1 = selects.eq(0).val();
-
                         let line1 = selects.eq(1).val();
                         let compare2 = selects.eq(2).val();
                         let line2 = selects.eq(3).val();
 
-                        params.push({
-                            condition: `${indicatorType}|${compare1}|${line1}|${compare2}|${line2}`,
-                            acronym: `${indicatorType.toString()[0]}|${compare1.toString()[0]}|${line1.toString()[0]}|${compare2.toString()[0]}|${line2.toString()[0]}`,
-                            intervals: `${intervals}`
+                        checkboxValues.forEach(interval => {
+                            const query = `${interval}|rsi|${compare1}|${line1}|${compare2}|${line2}`;
+                            console.log('[frontend] RSI query montada:', query);
+                            rsiQueries.push(query);
                         });
-
-                        console.log(params)
 
                     }
                     else if (indicatorType === 'lowestIndex') {
@@ -112,6 +109,17 @@ const IndicatorView = {
 
                 });
 
+                // RSI: pesquisa via novo endpoint do backend
+                for (const query of rsiQueries) {
+                    console.log('[frontend] enviando para indicator-search:', query);
+                    const filter = await fetchIndicatorSearch(query);
+                    console.log('[frontend] resultado recebido:', filter.name, '—', filter.list.length, 'moedas:', filter.list);
+                    CurrencyModel.addFilter(filter);
+                }
+
+                // Outros indicadores: fluxo original (ichimoku, MA, lowestIndex, highLow)
+                if (params.length > 0) {
+
                 // Unifica os intervalos solicitados pelo usuário.
                 let uniqueIntervals = new Set();
                 let intervals = [];
@@ -131,90 +139,11 @@ const IndicatorView = {
                 // para pesquisar poucas moedas usdtCurrencies.slice(0,10)
                 let candlesAndIndicators = await fetchCandlesAndIndicators(usdtCurrencies, intervals)
 
-                // Não está funcionando. É para testes com dados locais,sem que pricise fazer fetch.
-                //let candlesAndIndicators = currencyModel.getForTestIndicatorsAndCurrencies();
-
                 for (const param of params) {
-
 
                     let { condition, acronym } = param;
 
-                    /**
-                     * {
-                        name: '1h|All', 
-                        list: [
-                        {
-                            "id": null,
-                            "symbol": "ETHBTC",
-                            "price": "0.04335000",
-                            "currency_collections": [
-                                []
-                            ]
-                        }
-                        ]
-                        }
-                        
-                     */
-
-
-                    /*
-                    [
-                         {
-                             "id": null,
-                             "symbol": "BTCUSDT",
-                             "price": "61661.31000000",
-                             "currency_collections": [[]]
-                         }
-                     ]
-                     */
-
-                    //let splitIntervals = intervals.split(',');
-
-                    //let candlesticks = await fetchCandlesticks(usdtCurrencies, intervals);
-
-                    if (condition.startsWith('relative')) {
-
-                        //let rsiIndicador = await fetchRsiIndicator(usdtCurrencies, intervals)
-
-                        //relativeStrengthIndex|above|60|bellow|70
-
-                        switch (condition) {
-                            case 'relativeStrengthIndex|above|10|bellow|20':
-                                createRsiFilter(candlesAndIndicators, intervals, acronym, lastRsiAbove10Bellow20)
-                                break;
-                            case 'relativeStrengthIndex|above|20|bellow|30':
-                                createRsiFilter(candlesAndIndicators, intervals, acronym, lastRsiAbove20Bellow30)
-                                break;
-                            case 'relativeStrengthIndex|above|30|bellow|40':
-                                createRsiFilter(candlesAndIndicators, intervals, acronym, lastRsiAbove30Bellow40)
-                                break;
-                            case 'relativeStrengthIndex|above|40|bellow|50':
-                                createRsiFilter(candlesAndIndicators, intervals, acronym, lastRsiAbove40Bellow50)
-                                break;
-                            case 'relativeStrengthIndex|above|50|bellow|60':
-                                createRsiFilter(candlesAndIndicators, intervals, acronym, lastRsiAbove50Bellow60)
-                                break;
-                            case 'relativeStrengthIndex|above|60|bellow|70':
-                                createRsiFilter(candlesAndIndicators, intervals, acronym, lastRsiAbove60Bellow70)
-                                break;
-                            case 'relativeStrengthIndex|above|70|bellow|80':
-                                createRsiFilter(candlesAndIndicators, intervals, acronym, lastRsiAbove70Bellow80)
-                                break;
-                            case 'relativeStrengthIndex|above|80|bellow|90':
-                                createRsiFilter(candlesAndIndicators, intervals, acronym, lastRsiAbove80Bellow90)
-                                break;
-                            case 'relativeStrengthIndex|above|70|bellow|99':
-                                createRsiFilter(candlesAndIndicators, intervals, acronym, lastRsiAbove70Bellow99)
-                                break;
-                            default: alert("Não há ainda cálculo para estas condições!")
-
-                        }
-
-
-                        // createRsiFilter(candlesAndIndicators, intervals, acronym, lastRsiAbove60Bellow70)
-
-                    }
-                    else if (condition.startsWith('ichimokuCloud')) {
+                    if (condition.startsWith('ichimokuCloud')) {
                         switch (condition) {
                             case 'ichimokuCloud|conversion|above|high':
                                 createIchimokuFilter(candlesAndIndicators, intervals, acronym, conversionAboveHighCandle)
@@ -351,6 +280,8 @@ const IndicatorView = {
                     }*/
 
                 }
+
+                } // fim if (params.length > 0)
 
                 $(document).trigger('filterViewOnSearchByIndicator');
 

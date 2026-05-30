@@ -1,3 +1,7 @@
+// Para rodar: `npm start` na raiz do projeto.
+// Isso executa `node start.js`, que sobe este servidor (porta 3000) e o Vite (porta 5173) juntos.
+// Para rodar só o backend: `npm run backend`
+
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
@@ -11,7 +15,8 @@ const { ichimokuCloudRouter } = require('./technicals-indicators');
 const {
   fetchCandles, fetchIchimokuCloud, fetchAllCurrencies,
   fetchSMA, fetchRSI, fetchVWAP, fetchLowestIndex,
-  fetchHighLowVariation, fetch24HsVolume } = require('./services');
+  fetchHighLowVariation, fetch24HsVolume, fetchIndicatorSearch,
+  fetchRsiOversoldRecovery } = require('./services');
 
 const app = express();
 app.use(cors());
@@ -29,13 +34,24 @@ app.use('/services', fetchVWAP);
 app.use('/services', fetchLowestIndex)
 app.use('/services', fetchHighLowVariation)
 app.use('/services', fetch24HsVolume)
+app.use('/services', fetchIndicatorSearch)
+app.use('/services', fetchRsiOversoldRecovery)
 
-// Create a new proxy server instance
-const proxy = httpProxy.createProxyServer();
-
-app.use('/', (req, res) => {
-  proxy.web(req, res, { target: 'http://localhost:1234' });
-});
+// Proxy para o frontend (só necessário no modo Parcel legado).
+// No modo Vite, o próprio Vite faz proxy /services → Express, então não é preciso.
+const FRONTEND_PORT = process.env.FRONTEND_PORT;
+if (FRONTEND_PORT) {
+  const proxy = httpProxy.createProxyServer();
+  app.use('/', (req, res) => {
+    proxy.web(req, res, { target: `http://localhost:${FRONTEND_PORT}` });
+  });
+} else {
+  // Modo React/Vite: redireciona quem acessar o Express diretamente para o Vite
+  const VITE_PORT = process.env.VITE_PORT || 5173;
+  app.use('/', (req, res) => {
+    res.redirect(`http://localhost:${VITE_PORT}${req.path}`);
+  });
+}
 
 
 // Start the server

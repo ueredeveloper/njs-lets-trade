@@ -1,5 +1,3 @@
-const fs = require('node:fs/promises');
-const path = require("path");
 const { getActiveUsdtPairs } = require("./getActiveUsdtPairs");
 
 /**
@@ -18,53 +16,42 @@ async function get24hVolumeFilters() {
   const response = await fetch(url); // fetch nativo do Node 20
   const data = await response.json();
 
-  try {
-   
-    const timestamp = Date.now();
-    const filename = `24Hs-Volume-${timestamp}`;
-    const dataDir = path.join(`./backend/data/volume/${filename}.json`);
+  let listedOnBinance = await getActiveUsdtPairs()
 
-    // Moedas que fazem par com usdt.
-    let usdtTickers = data
-    .filter(ticker => ticker.symbol.endsWith("USDT"));
-     
-    await fs.writeFile(dataDir, JSON.stringify(usdtTickers, null, 2));
-    console.log(`Dados de volume 24h salvos em ${filename}`);
-  } catch (error) {
-    console.error("Erro ao salvar os dados de volume 24h:", error);
-  }
+   // Filtra somente pares USDT e aplica o filtro de volume mínimo
+  let list5 = data
+    .filter(ticker => ticker.symbol.endsWith("USDT"))
+    .filter(ticker => Number(ticker.quoteVolume) > 5_000_000 )
+    .map(ticker => ticker.symbol);
 
-  const listedOnBinance = await getActiveUsdtPairs();
-  const list5M = [];
-  const list1030 = [];
-  const list30 = [];
-  const list50 = [];
+    
+  let result5 = { name: "1h|Binance|5M⇾", list: list5 }
 
-  data.forEach(ticker => {
-    if (!ticker.symbol.endsWith("USDT")) return;
+  // Filtra somente pares USDT e aplica o filtro de volume mínimo
+  let list530 = data
+    .filter(ticker => ticker.symbol.endsWith("USDT"))
+    .filter(ticker => Number(ticker.quoteVolume) > 5_000_000 && Number(ticker.quoteVolume) < 30_000_000)
+    .map(ticker => ticker.symbol);
 
-    const volume = Number(ticker.quoteVolume);
+  let result530 = { name: "1h|Binance|5M⇿30M", list: list530 }
 
-    if (volume > 5_000_000) {
-      list5M.push(ticker.symbol);
-      
-      if (volume > 50_000_000) {
-        list50.push(ticker.symbol);
-      } else if (volume > 30_000_000) {
-        list30.push(ticker.symbol);
-      } else if (volume > 10_000_000) {
-        list1030.push(ticker.symbol);
-      }
-    }
-  });
+  // Filtra somente pares USDT e aplica o filtro de volume mínimo
+  let list3050 = data
+    .filter(ticker => ticker.symbol.endsWith("USDT"))
+    .filter(ticker => Number(ticker.quoteVolume) > 30_000_000 && Number(ticker.quoteVolume) < 50_000_000)
+    .map(ticker => ticker.symbol);
 
-  return [
-    listedOnBinance,
-    { name: "1h|Binance|5M⇾", list: list5M },
-    { name: "1h|Binance|10M⇿30M", list: list1030 },
-    { name: "1h|Binance|30M⇿50M", list: list30 },
-    { name: "1h|Binance|50M⇾", list: list50 }
-  ];
+  let result3050 = { name: "1h|Binance|30M⇿50M", list: list3050 }
+
+  // Filtra somente pares USDT e aplica o filtro de volume mínimo
+  let list50 = data
+    .filter(ticker => ticker.symbol.endsWith("USDT"))
+    .filter(ticker => Number(ticker.quoteVolume) > 50_000_000)
+    .map(ticker => ticker.symbol);
+
+  let result50 = { name: "1h|Binance|50M⇾", list: list50 }
+
+  return [listedOnBinance, result5, result530, result3050, result50];
 }
 
 module.exports = { get24hVolumeFilters };
