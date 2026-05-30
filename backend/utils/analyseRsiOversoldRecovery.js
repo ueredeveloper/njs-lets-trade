@@ -3,7 +3,7 @@ const readCandles = require('./read-candles');
 const getClandles = require('../binance/getClandles');
 
 const RSI_PERIOD = 14;
-const HTF_LIMIT = 200;
+const HTF_LIMIT = 1000;
 
 /**
  * Analisa eventos de sobrevenda/sobrecompra no RSI de uma moeda.

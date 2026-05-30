@@ -16,7 +16,7 @@ function parseQuery(query) {
     throw new Error('Formato inválido. Use: interval|indicator|condition|value[|condition|value]');
   }
 
-  console.log('Parsing query:', query);
+  //console.log('Parsing query:', query);
 
   const interval = parts[0];
   const indicatorRaw = parts[1].toLowerCase();
@@ -75,7 +75,7 @@ router.get('/indicator-search', async (req, res) => {
     const { list: symbols } = await getActiveUsdtPairs();
     const timestamp = Date.now();
 
-    console.log(`indicator-search: "${nome}" — ${symbols.length} símbolos`);
+    //console.log(`indicator-search: "${nome}" — ${symbols.length} símbolos`);
 
     const results = await runWithConcurrency(symbols, async (symbol) => {
       try {
