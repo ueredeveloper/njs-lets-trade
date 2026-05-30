@@ -26,7 +26,7 @@ function SummaryCard({ label, value, highlight }) {
 
 function RsiStats() {
   const { selectedChart } = useCurrency();
-  const [symbol, setSymbol]         = useState('BTCUSDT');
+  const [symbol, setSymbol]         = useState(selectedChart?.symbol || 'BTCUSDT');
   const [interval, setInterval]     = useState('30m');
   const [oversold, setOversold]     = useState(30);
   const [overbought, setOverbought] = useState(70);
@@ -37,6 +37,8 @@ function RsiStats() {
   useEffect(() => {
     if (selectedChart?.symbol) setSymbol(selectedChart.symbol);
   }, [selectedChart?.symbol]);
+
+  useEffect(() => { handleSearch(); }, []);
 
   const inp = 'bg-p2 border border-p3/40 text-p5 text-[11px] sm:text-xs rounded px-2 py-1 focus:outline-none focus:border-p4 w-full';
 
@@ -58,66 +60,66 @@ function RsiStats() {
   }
 
   return (
-    <div className="flex flex-col sm:flex-row gap-3 w-full">
+    <div className="flex gap-3 w-full">
 
-      {/* Formulário */}
-      <div className="flex flex-row sm:flex-col gap-2 w-full sm:w-48 sm:shrink-0 flex-wrap">
+      {/* Formulário — coluna esquerda estreita */}
+      <div className="flex flex-col gap-1.5 w-72 shrink-0">
 
-        <div className="flex flex-col gap-1 min-w-[120px] flex-1">
+        {/* Símbolo */}
+        <div className="flex flex-col gap-0.5">
           <div className="flex items-center justify-between">
             <label className="text-[9px] text-p5/50 uppercase tracking-wider">Símbolo</label>
             {selectedChart?.symbol === symbol && (
-              <span className="text-[8px] text-p4/70 italic">da tabela</span>
+              <span className="text-[8px] text-p4/70 italic">tabela</span>
             )}
           </div>
           <input
             className={inp}
             value={symbol}
             onChange={(e) => setSymbol(e.target.value.toUpperCase())}
-            placeholder="Ex: BTCUSDT"
+            placeholder="BTCUSDT"
             onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
           />
         </div>
 
-        <div className="flex flex-col gap-1 min-w-[80px]">
-          <label className="text-[9px] text-p5/50 uppercase tracking-wider">Intervalo</label>
-          <select className={inp} value={interval} onChange={(e) => setInterval(e.target.value)}>
-            {INTERVALS.map((iv) => <option key={iv} value={iv}>{iv}</option>)}
-          </select>
-        </div>
-
-        <div className="flex gap-1.5">
-          <div className="flex flex-col gap-1 flex-1 min-w-[60px]">
+        {/* Intervalo + Sobrv + Sobrcp + Botão */}
+        <div className="flex items-end gap-1.5">
+          <div className="flex flex-col gap-0.5 flex-1">
+            <label className="text-[9px] text-p5/50 uppercase tracking-wider">Intervalo</label>
+            <select className={inp} value={interval} onChange={(e) => setInterval(e.target.value)}>
+              {INTERVALS.map((iv) => <option key={iv} value={iv}>{iv}</option>)}
+            </select>
+          </div>
+          <div className="flex flex-col gap-0.5 flex-1">
             <label className="text-[9px] text-p5/50 uppercase tracking-wider">Sobrv.</label>
             <input className={inp} type="number" min={1} max={99}
               value={oversold} onChange={(e) => setOversold(Number(e.target.value))} />
           </div>
-          <div className="flex flex-col gap-1 flex-1 min-w-[60px]">
+          <div className="flex flex-col gap-0.5 flex-1">
             <label className="text-[9px] text-p5/50 uppercase tracking-wider">Sobrcp.</label>
             <input className={inp} type="number" min={1} max={99}
               value={overbought} onChange={(e) => setOverbought(Number(e.target.value))} />
           </div>
+          <button
+            onClick={handleSearch}
+            disabled={loading}
+            className="flex items-center justify-center gap-1.5 flex-1 py-1 rounded text-[11px] text-white bg-p3 hover:bg-p4 transition-colors disabled:opacity-50"
+          >
+            {loading
+              ? <div className="w-3 h-3 border border-white border-t-transparent rounded-full animate-spin" />
+              : <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
+                  strokeWidth="2" stroke="currentColor" className="w-3 h-3">
+                  <path strokeLinecap="round" strokeLinejoin="round"
+                    d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
+                </svg>
+            }
+            Buscar
+          </button>
         </div>
-
-        <button
-          onClick={handleSearch}
-          disabled={loading}
-          className="flex items-center justify-center gap-1.5 px-3 py-1.5 rounded text-[11px] sm:text-xs text-white bg-p3 hover:bg-p4 transition-colors disabled:opacity-50 self-end sm:self-auto"
-        >
-          {loading
-            ? <div className="w-3 h-3 border border-white border-t-transparent rounded-full animate-spin" />
-            : <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
-                strokeWidth="2" stroke="currentColor" className="w-3 h-3">
-                <path strokeLinecap="round" strokeLinejoin="round"
-                  d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
-              </svg>
-          }
-          Buscar
-        </button>
       </div>
 
       {/* Resultados */}
-      <div className="flex flex-col flex-1 min-w-0 gap-2">
+      <div className="flex flex-col gap-2 flex-1 min-w-0">
 
         {error && (
           <p className="text-[11px] text-red-400 bg-red-400/10 border border-red-400/20 rounded px-2 py-1.5">
@@ -128,7 +130,7 @@ function RsiStats() {
         {result && (
           <>
             {/* Cartões de resumo */}
-            <div className="flex gap-1.5 flex-wrap">
+            <div className="flex gap-1.5 flex-wrap justify-center">
               <SummaryCard label="Candles" value={result.totalCandles} />
               <SummaryCard label="Períodos RSI" value={result.totalRsiPeriods} />
               <SummaryCard label="Ocorrências" value={result.totalOccurrences} highlight="text-p4" />

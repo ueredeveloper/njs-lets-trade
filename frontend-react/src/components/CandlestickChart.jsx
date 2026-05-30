@@ -7,8 +7,13 @@ import convertOpenTime from '../utils/convertOpenTime';
 const LIMIT = 66;
 const INTERVALS = ['1m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w'];
 
-const C_UP    = '#26a69a';
-const C_DOWN  = '#ef5350';
+const C_UP   = '#26a69a';
+const C_DOWN = '#ef5350';
+
+const INDICATOR_GROUPS = [
+  { id: 'ma200',    label: 'MA200',    color: '#f59e0b' },
+  { id: 'ichimoku', label: 'Ichimoku', color: '#60a5fa' },
+];
 
 function getThemeColors() {
   const style = getComputedStyle(document.documentElement);
@@ -81,90 +86,40 @@ function buildRsiOption({ interval, candlesticks, rsi }, colors) {
   };
 }
 
-function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAverage }, colors) {
+function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAverage }, colors, activeIndicators) {
+  const showMa200    = activeIndicators.includes('ma200');
+  const showIchimoku = activeIndicators.includes('ichimoku');
+
   const xData = (() => {
     const dates = candlesticks.map((c) => convertOpenTime(c.openTime, interval));
     const padding = new Array(24).fill('');
     return [...dates, ...padding].slice(-(LIMIT + 24));
   })();
 
-  return {
-    backgroundColor: colors.bg,
-    title: {
-      text: symbol,
-      subtext: interval,
-      left: 12,
-      top: 8,
-      textStyle: { color: colors.text, fontSize: 15, fontWeight: 'bold' },
-      subtextStyle: { color: colors.axis, fontSize: 11 },
-    },
-    legend: {
-      data: ['Candles', 'MA200', 'CL', 'BL', 'Span A', 'Span B'],
-      inactiveColor: '#444',
-      top: 8,
-      right: 12,
-      textStyle: { color: colors.text, fontSize: 11 },
-    },
-    tooltip: {
-      trigger: 'axis',
-      backgroundColor: '#003f69ee',
-      borderColor: colors.axis,
-      textStyle: { color: colors.text, fontSize: 11 },
-      axisPointer: {
-        animation: false,
-        type: 'cross',
-        lineStyle: { color: colors.axis, width: 1, opacity: 0.8 },
+  const series = [
+    {
+      name: 'Candles',
+      type: 'candlestick',
+      data: candlesticks.slice(-LIMIT).map((c) => [c.open, c.close, c.low, c.high]),
+      itemStyle: {
+        color: C_UP, color0: C_DOWN,
+        borderColor: C_UP, borderColor0: C_DOWN,
       },
     },
-    xAxis: {
-      type: 'category',
-      data: xData,
-      axisLine: { lineStyle: { color: colors.panel } },
-      axisLabel: { color: colors.text, fontSize: 10 },
-      splitLine: { show: false },
-    },
-    yAxis: {
-      scale: true,
-      position: 'right',
-      axisLine: { lineStyle: { color: colors.panel } },
-      axisLabel: { color: colors.text, fontSize: 10 },
-      splitLine: { lineStyle: { color: colors.panel, type: 'dashed', opacity: 0.3 } },
-    },
-    grid: { top: 56, bottom: 72, left: 12, right: 64 },
-    dataZoom: [
-      {
-        type: 'slider',
-        bottom: 8,
-        height: 20,
-        borderColor: colors.panel,
-        fillerColor: 'rgba(21,122,140,0.15)',
-        handleStyle: { color: colors.axis },
-        textStyle: { color: colors.text },
-        dataBackground: {
-          areaStyle: { color: 'rgba(21,122,140,0.2)' },
-          lineStyle: { color: colors.axis, opacity: 0.5 },
-        },
-        brushSelect: true,
-      },
-      { type: 'inside' },
-    ],
-    series: [
-      {
-        name: 'Candles',
-        type: 'candlestick',
-        data: candlesticks.slice(-LIMIT).map((c) => [c.open, c.close, c.low, c.high]),
-        itemStyle: {
-          color: C_UP, color0: C_DOWN,
-          borderColor: C_UP, borderColor0: C_DOWN,
-        },
-      },
-      {
-        name: 'MA200',
-        type: 'line',
-        data: movingAverage.slice(-LIMIT),
-        smooth: true, showSymbol: false,
-        lineStyle: { color: '#f59e0b', width: 1.5 },
-      },
+  ];
+
+  if (showMa200) {
+    series.push({
+      name: 'MA200',
+      type: 'line',
+      data: movingAverage.slice(-LIMIT),
+      smooth: true, showSymbol: false,
+      lineStyle: { color: '#f59e0b', width: 1.5 },
+    });
+  }
+
+  if (showIchimoku) {
+    series.push(
       {
         name: 'CL',
         type: 'line',
@@ -195,7 +150,63 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
         lineStyle: { color: C_DOWN, width: 1, opacity: 0.7 },
         areaStyle: { color: 'rgba(239,83,80,0.05)' },
       },
+    );
+  }
+
+  return {
+    backgroundColor: colors.bg,
+    title: {
+      text: symbol,
+      subtext: interval,
+      left: 12,
+      top: 8,
+      textStyle: { color: colors.text, fontSize: 15, fontWeight: 'bold' },
+      subtextStyle: { color: colors.axis, fontSize: 11 },
+    },
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: '#003f69ee',
+      borderColor: colors.axis,
+      textStyle: { color: colors.text, fontSize: 11 },
+      axisPointer: {
+        animation: false,
+        type: 'cross',
+        lineStyle: { color: colors.axis, width: 1, opacity: 0.8 },
+      },
+    },
+    xAxis: {
+      type: 'category',
+      data: xData,
+      axisLine: { lineStyle: { color: colors.panel } },
+      axisLabel: { color: colors.text, fontSize: 10 },
+      splitLine: { show: false },
+    },
+    yAxis: {
+      scale: true,
+      position: 'right',
+      axisLine: { lineStyle: { color: colors.panel } },
+      axisLabel: { color: colors.text, fontSize: 10 },
+      splitLine: { lineStyle: { color: colors.panel, type: 'dashed', opacity: 0.3 } },
+    },
+    grid: { top: 40, bottom: 72, left: 12, right: 64 },
+    dataZoom: [
+      {
+        type: 'slider',
+        bottom: 8,
+        height: 20,
+        borderColor: colors.panel,
+        fillerColor: 'rgba(21,122,140,0.15)',
+        handleStyle: { color: colors.axis },
+        textStyle: { color: colors.text },
+        dataBackground: {
+          areaStyle: { color: 'rgba(21,122,140,0.2)' },
+          lineStyle: { color: colors.axis, opacity: 0.5 },
+        },
+        brushSelect: true,
+      },
+      { type: 'inside' },
     ],
+    series,
   };
 }
 
@@ -204,6 +215,13 @@ export default function CandlestickChart({ rsiOpen, onToggleRsi }) {
   const [currentInterval, setCurrentInterval] = useState('1h');
   const [loadingInterval, setLoadingInterval] = useState(false);
   const [themeTick, setThemeTick] = useState(0);
+  const [activeIndicators, setActiveIndicators] = useState(['ma200']);
+
+  function toggleIndicator(id) {
+    setActiveIndicators((prev) =>
+      prev.includes(id) ? prev.filter((i) => i !== id) : [...prev, id]
+    );
+  }
 
   useEffect(() => {
     const handleThemeChange = () => setThemeTick(t => t + 1);
@@ -234,8 +252,8 @@ export default function CandlestickChart({ rsiOpen, onToggleRsi }) {
 
   const option = useMemo(() => {
     if (!selectedChart) return null;
-    return buildOption(selectedChart, colors);
-  }, [selectedChart, colors]);
+    return buildOption(selectedChart, colors, activeIndicators);
+  }, [selectedChart, colors, activeIndicators]);
 
   const rsiOption = useMemo(() => {
     if (!selectedChart) return null;
@@ -259,8 +277,8 @@ export default function CandlestickChart({ rsiOpen, onToggleRsi }) {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Barra de intervalos */}
-      <div className="flex items-center gap-1 px-3 pt-2 shrink-0">
+      {/* Barra de intervalos + indicadores */}
+      <div className="flex items-center gap-1 px-3 pt-2 shrink-0 flex-wrap">
         {INTERVALS.map((iv) => (
           <button
             key={iv}
@@ -278,6 +296,29 @@ export default function CandlestickChart({ rsiOpen, onToggleRsi }) {
         {loadingInterval && (
           <div className="w-3 h-3 border border-p4 border-t-transparent rounded-full animate-spin ml-1" />
         )}
+
+        <span className="ml-2 text-p3/60 select-none">|</span>
+
+        {INDICATOR_GROUPS.map(({ id, label, color }) => {
+          const active = activeIndicators.includes(id);
+          return (
+            <button
+              key={id}
+              onClick={() => toggleIndicator(id)}
+              className={`flex items-center gap-1 px-2 py-0.5 text-xs rounded transition-colors ${
+                active
+                  ? 'text-white bg-p3/40'
+                  : 'text-p5/40 hover:text-p5'
+              }`}
+            >
+              <span
+                className="w-2 h-2 rounded-full inline-block shrink-0"
+                style={{ backgroundColor: active ? color : '#555' }}
+              />
+              {label}
+            </button>
+          );
+        })}
       </div>
 
       {/* Gráfico candlestick */}

@@ -15,7 +15,7 @@ function AppContent() {
   const [loading, setLoading] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [mobileView, setMobileView] = useState('chart'); // 'chart' | 'list'
-  const [openPanels, setOpenPanels] = useState([]); // max 2: 'rsi' | 'indicators' | 'stats'
+  const [openPanels, setOpenPanels] = useState(['indicators']); // max 2: 'rsi' | 'indicators' | 'stats'
 
   function togglePanel(id) {
     setOpenPanels((prev) => {
@@ -111,13 +111,13 @@ function AppContent() {
         {/* Coluna esquerda — Gráfico + Indicadores (oculto em mobile quando view=list) */}
         <div className={`flex-col flex-1 min-w-0 bg-p1 md:border-r border-p2
           ${mobileView === 'list' ? 'hidden md:flex' : 'flex'}`}>
-          <div className="flex-1 min-h-0">
+          <div className="flex-none h-[60vh]">
             <CandlestickChart
               rsiOpen={openPanels.includes('rsi')}
               onToggleRsi={() => togglePanel('rsi')}
             />
           </div>
-          <div className="shrink-0 border-t border-p2">
+          <div className="flex-1 min-h-0 overflow-y-auto border-t border-p2">
             <IndicatorPanel
               open={openPanels.includes('indicators')}
               onToggle={() => togglePanel('indicators')}
