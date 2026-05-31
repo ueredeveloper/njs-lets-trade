@@ -395,75 +395,50 @@ export default function IndicatorPanel({ open, onToggle }) {
   const btnIcon = 'p-1.5 rounded text-p5 transition-colors hover:text-white hover:bg-p3 disabled:opacity-40';
 
   return (
-    <div className="flex flex-col">
-      {/* Barra de toggle */}
-      <button
-        onClick={onToggle}
-        className="flex items-center gap-2 px-4 py-2 text-xs text-p5 uppercase tracking-widest hover:text-white transition-colors"
-      >
-        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
-          strokeWidth="1.5" stroke="currentColor"
-          className={`w-3.5 h-3.5 transition-transform ${open ? 'rotate-180' : ''}`}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
-        </svg>
-        Analisar Indicadores
-        <Tooltip
-          text="Busca moedas que atendem às condições de indicadores técnicos nos timeframes selecionados. Os resultados aparecem como filtros na lista acima."
-          maxW={260}
-        >
-          <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full border border-p3/60 text-p5/40 hover:text-p5 hover:border-p4 transition-colors text-[9px] font-bold leading-none select-none ml-0.5">
-            ?
-          </span>
+    <div className="flex flex-col gap-2 px-4 py-3 h-full">
+      <div className="flex-1 min-h-0 flex flex-col gap-2 overflow-y-auto">
+        {indicators.map((ind, i) => (
+          <IndicatorRow key={i} value={ind} onChange={(v) => updateIndicator(i, v)} />
+        ))}
+      </div>
+
+      <div className="flex gap-2 justify-end pt-1 shrink-0">
+        <Tooltip text="Adicionar outra condição de indicador para a mesma busca">
+          <button onClick={addRow} className={btnIcon}>
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
+              strokeWidth="2" stroke="currentColor" className="w-4 h-4">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+            </svg>
+          </button>
         </Tooltip>
-      </button>
 
-      {open && (
-        <div className="flex flex-col gap-2 px-4 pb-3">
-          <div className="flex flex-col gap-2 overflow-y-auto" style={{ maxHeight: 'min(18vh, 280px)' }}>
-            {indicators.map((ind, i) => (
-              <IndicatorRow key={i} value={ind} onChange={(v) => updateIndicator(i, v)} />
-            ))}
-          </div>
+        <Tooltip text="Remover o último indicador da lista">
+          <button onClick={removeLastRow} className={btnIcon}>
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
+              strokeWidth="2" stroke="currentColor" className="w-4 h-4">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14" />
+            </svg>
+          </button>
+        </Tooltip>
 
-          <div className="flex gap-2 justify-end pt-1">
-            <Tooltip text="Adicionar outra condição de indicador para a mesma busca">
-              <button onClick={addRow} className={btnIcon}>
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
-                  strokeWidth="2" stroke="currentColor" className="w-4 h-4">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-                </svg>
-              </button>
-            </Tooltip>
-
-            <Tooltip text="Remover o último indicador da lista">
-              <button onClick={removeLastRow} className={btnIcon}>
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
-                  strokeWidth="2" stroke="currentColor" className="w-4 h-4">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14" />
-                </svg>
-              </button>
-            </Tooltip>
-
-            <Tooltip text="Executar a busca — pode demorar alguns segundos dependendo da quantidade de moedas e intervalos">
-              <button
-                onClick={handleSearch}
-                disabled={searching}
-                className={`${btnIcon} ${!searching ? 'bg-p3 hover:bg-p4 text-white' : ''}`}
-              >
-                {searching ? (
-                  <div className="w-4 h-4 border border-white border-t-transparent rounded-full animate-spin" />
-                ) : (
-                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
-                    strokeWidth="2" stroke="currentColor" className="w-4 h-4">
-                    <path strokeLinecap="round" strokeLinejoin="round"
-                      d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
-                  </svg>
-                )}
-              </button>
-            </Tooltip>
-          </div>
-        </div>
-      )}
+        <Tooltip text="Executar a busca — pode demorar alguns segundos dependendo da quantidade de moedas e intervalos">
+          <button
+            onClick={handleSearch}
+            disabled={searching}
+            className={`${btnIcon} ${!searching ? 'bg-p3 hover:bg-p4 text-white' : ''}`}
+          >
+            {searching ? (
+              <div className="w-4 h-4 border border-white border-t-transparent rounded-full animate-spin" />
+            ) : (
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
+                strokeWidth="2" stroke="currentColor" className="w-4 h-4">
+                <path strokeLinecap="round" strokeLinejoin="round"
+                  d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
+              </svg>
+            )}
+          </button>
+        </Tooltip>
+      </div>
     </div>
   );
 }

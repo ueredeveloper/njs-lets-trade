@@ -1,6 +1,8 @@
 
 const fetchCandlesticks = (currencies, intervals) => {
 
+    console.log('fetchCandlesticks', currencies, intervals)
+
     
     function _fetchCandles(symbol, intervals) {
 

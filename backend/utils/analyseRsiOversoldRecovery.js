@@ -1,6 +1,6 @@
 const RSI = require('technicalindicators').RSI;
 const readCandles = require('./read-candles');
-const getClandles = require('../binance/getClandles');
+const getCandles = require('../binance/getCandles');
 
 const RSI_PERIOD = 14;
 const HTF_LIMIT = 1000;
@@ -84,8 +84,8 @@ async function analyseRsiOversoldRecovery(symbol, interval, options = {}) {
 
     const settled = await Promise.allSettled([
         readCandles(symbol, interval),
-        getClandles(symbol, '4h', HTF_LIMIT),
-        getClandles(symbol, '8h', HTF_LIMIT),
+        getCandles(symbol, '4h', HTF_LIMIT),
+        getCandles(symbol, '8h', HTF_LIMIT),
     ]);
 
     const [candlesResult, candles4hResult, candles8hResult] = settled;

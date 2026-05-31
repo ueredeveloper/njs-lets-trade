@@ -1,4 +1,4 @@
-const { getClandles } = require("../binance");
+const { getCandles } = require("../binance");
 
 const router = require("express").Router();
 
@@ -8,7 +8,7 @@ router.get("/candles", async (req, res) => {
     let { symbol, interval, limit } = req.query;
 
     try {
-        let response = await getClandles(symbol, interval, limit);
+        let response = await getCandles(symbol, interval, limit);
         res.send(JSON.stringify(response));
     } catch (error) {
         res.status(500).send({ error: error.message });

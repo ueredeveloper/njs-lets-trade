@@ -43,6 +43,8 @@ const CurrencyModel = {
 
     let filteredCurrenciesByBinanceWithUsdt = currencies.list.filter(currency => bincanceCurrenciesWithUsdt.includes(currency.symbol) && !stableCurrencies.includes(currency.symbol));
 
+    console.log('filteredCurrenciesByBinanceWithUsdt', filteredCurrenciesByBinanceWithUsdt)
+
     return filteredCurrenciesByBinanceWithUsdt;
 
   },

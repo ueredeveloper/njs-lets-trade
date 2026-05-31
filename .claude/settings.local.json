@@ -4,7 +4,15 @@
       "Bash(npm create *)",
       "Bash(npm install *)",
       "Bash(npm run *)",
-      "Bash(node -e ' *)"
+      "Bash(node -e ' *)",
+      "Bash(powershell -Command \"\\(Get-Content frontend-react/src/App.jsx\\) -replace 'shrink-0 border-t border-p2 min-h-\\\\[35vh\\\\]', 'shrink-0 border-t border-p2 h-[35vh] flex flex-col' | Set-Content frontend-react/src/App.jsx -Encoding utf8\")",
+      "Bash(powershell -Command \"\\(Get-Content 'frontend-react/src/App.jsx'\\) -replace 'shrink-0 border-t border-p2 h-\\\\[35vh\\\\] flex flex-col', 'flex-1 min-h-0 border-t border-p2 flex flex-col' -replace 'shrink-0 border-t border-p2 h-\\\\[35vh\\\\]', 'flex-1 min-h-0 border-t border-p2' | Set-Content 'frontend-react/src/App.jsx' -Encoding utf8\")",
+      "Bash(powershell -Command \"\\(Get-Content 'frontend-react/src/App.jsx'\\) -replace '\\\\\"flex-1 min-h-0\\\\\"\\\\r?\\\\n            <CandlestickChart', '\\\\\"flex-none h-[55vh]\\\\\"\\\\r\\\\n            <CandlestickChart' | Set-Content 'frontend-react/src/App.jsx' -Encoding utf8\")",
+      "Bash(node backend/gate/getGateCandles.js)",
+      "Bash(node backend/gate/getGateCandles.js FIOUSDT all)",
+      "Bash(node backend/gate/getGateCandles.js FIOUSDT)",
+      "Bash(node -e \"const d=require\\('./backend/data/candlestick/FIOUSDT-8h.json'\\); console.log\\('Total:', d.length\\); console.log\\(JSON.stringify\\(d[0], null, 2\\)\\)\")",
+      "Bash(node -e \"require\\('./backend/binance/getCandles'\\); console.log\\('OK'\\)\")"
     ]
   }
 }

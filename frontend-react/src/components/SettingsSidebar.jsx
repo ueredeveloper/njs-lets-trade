@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { reloadCandles } from '../services/api';
 
 const PALETTES = [
   {
@@ -74,8 +75,27 @@ function applyPalette(colors) {
   window.dispatchEvent(new Event('palette-updated'));
 }
 
+const RELOAD_INTERVALS = ['all', '1m', '5m', '15m', '30m', '1h', '2h', '4h', '8h', '1d'];
+
 export default function SettingsSidebar({ open, onClose }) {
   const [activeId, setActiveId] = useState('default');
+  const [reloadSymbol, setReloadSymbol]     = useState('');
+  const [reloadInterval, setReloadInterval] = useState('all');
+  const [reloadState, setReloadState]       = useState(null); // null | 'loading' | { results } | 'error'
+  const [reloadError, setReloadError]       = useState('');
+
+  async function handleReload() {
+    if (!reloadSymbol.trim()) return;
+    setReloadState('loading');
+    setReloadError('');
+    try {
+      const data = await reloadCandles(reloadSymbol.trim().toUpperCase(), reloadInterval);
+      setReloadState(data);
+    } catch (err) {
+      setReloadError(err.message);
+      setReloadState('error');
+    }
+  }
 
   function selectPalette(palette) {
     setActiveId(palette.id);
@@ -116,6 +136,71 @@ export default function SettingsSidebar({ open, onClose }) {
 
         {/* Conteúdo */}
         <div className="flex-1 overflow-y-auto px-4 py-4">
+          <p className="text-p5 text-xs uppercase tracking-widest opacity-50 mb-3">
+            Paleta de cores
+          </p>
+
+          {/* Recarregar candles */}
+          <p className="text-p5 text-xs uppercase tracking-widest opacity-50 mb-3 mt-5">
+            Recarregar candles
+          </p>
+          <div className="flex flex-col gap-2 mb-5">
+            <div className="flex gap-2">
+              <input
+                className="flex-1 bg-p2 border border-p3/40 text-p5 text-xs rounded px-2 py-1.5 focus:outline-none focus:border-p4 placeholder-p5/30"
+                placeholder="Símbolo (ex: BTCUSDT)"
+                value={reloadSymbol}
+                onChange={(e) => { setReloadSymbol(e.target.value.toUpperCase()); setReloadState(null); }}
+                onKeyDown={(e) => e.key === 'Enter' && handleReload()}
+              />
+              <select
+                className="bg-p2 border border-p3/40 text-p5 text-xs rounded px-2 py-1.5 focus:outline-none focus:border-p4"
+                value={reloadInterval}
+                onChange={(e) => setReloadInterval(e.target.value)}
+              >
+                {RELOAD_INTERVALS.map((iv) => (
+                  <option key={iv} value={iv}>{iv === 'all' ? 'Todos' : iv}</option>
+                ))}
+              </select>
+            </div>
+
+            <button
+              onClick={handleReload}
+              disabled={reloadState === 'loading' || !reloadSymbol.trim()}
+              className="flex items-center justify-center gap-2 w-full py-1.5 rounded text-xs text-white bg-p3 hover:bg-p4 transition-colors disabled:opacity-50"
+            >
+              {reloadState === 'loading'
+                ? <><div className="w-3 h-3 border border-white border-t-transparent rounded-full animate-spin" /> Buscando...</>
+                : <>
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
+                      strokeWidth="2" stroke="currentColor" className="w-3.5 h-3.5">
+                      <path strokeLinecap="round" strokeLinejoin="round"
+                        d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
+                    </svg>
+                    Buscar 1000 candles
+                  </>
+              }
+            </button>
+
+            {reloadState && reloadState !== 'loading' && reloadState !== 'error' && (
+              <div className="flex flex-col gap-1 mt-1">
+                {reloadState.results.map((r) => (
+                  <div key={r.interval} className="flex items-center justify-between text-[10px]">
+                    <span className="text-p5/60 font-mono">{r.interval}</span>
+                    {r.status === 'ok'
+                      ? <span className="text-green-400">{r.candles} candles ✓</span>
+                      : <span className="text-red-400">erro</span>
+                    }
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {reloadState === 'error' && (
+              <p className="text-[10px] text-red-400">{reloadError}</p>
+            )}
+          </div>
+
           <p className="text-p5 text-xs uppercase tracking-widest opacity-50 mb-3">
             Paleta de cores
           </p>

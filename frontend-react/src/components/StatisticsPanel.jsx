@@ -60,7 +60,7 @@ function RsiStats() {
   }
 
   return (
-    <div className="flex gap-3 w-full">
+    <div className="flex gap-3 w-full h-full">
 
       {/* Formulário — coluna esquerda estreita */}
       <div className="flex flex-col gap-1.5 w-72 shrink-0">
@@ -119,7 +119,7 @@ function RsiStats() {
       </div>
 
       {/* Resultados */}
-      <div className="flex flex-col gap-2 flex-1 min-w-0">
+      <div className="flex flex-col gap-2 flex-1 min-w-0 min-h-0 h-full">
 
         {error && (
           <p className="text-[11px] text-red-400 bg-red-400/10 border border-red-400/20 rounded px-2 py-1.5">
@@ -128,9 +128,9 @@ function RsiStats() {
         )}
 
         {result && (
-          <>
+          <div className="flex flex-col flex-1 min-h-0 gap-2">
             {/* Cartões de resumo */}
-            <div className="flex gap-1.5 flex-wrap justify-center">
+            <div className="flex gap-1.5 flex-wrap justify-center shrink-0">
               <SummaryCard label="Candles" value={result.totalCandles} />
               <SummaryCard label="Períodos RSI" value={result.totalRsiPeriods} />
               <SummaryCard label="Ocorrências" value={result.totalOccurrences} highlight="text-p4" />
@@ -147,7 +147,7 @@ function RsiStats() {
             {result.occurrences.length === 0 ? (
               <p className="text-[11px] text-p5/50">Nenhum ciclo completo encontrado.</p>
             ) : (
-              <div className="overflow-x-auto overflow-y-auto" style={{ maxHeight: '35vh' }}>
+              <div className="flex-1 min-h-0 overflow-auto">
                 <table className="min-w-full border-collapse">
                   <thead>
                     <tr className="text-[9px] sm:text-[10px] text-p5/40 uppercase tracking-wider border-b border-p3/20">
@@ -187,7 +187,7 @@ function RsiStats() {
                 </table>
               </div>
             )}
-          </>
+          </div>
         )}
 
         {!result && !error && !loading && (
@@ -198,45 +198,30 @@ function RsiStats() {
   );
 }
 
-export default function StatisticsPanel({ open, onToggle }) {
+export default function StatisticsPanel() {
   const [activeTab, setActiveTab] = useState('rsi');
 
   return (
-    <div className="flex flex-col">
+    <div className="flex flex-col h-full">
 
-      <button
-        onClick={onToggle}
-        className="flex items-center gap-2 px-4 py-2 text-xs text-p5 uppercase tracking-widest hover:text-white transition-colors"
-      >
-        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
-          strokeWidth="1.5" stroke="currentColor"
-          className={`w-3.5 h-3.5 transition-transform ${open ? 'rotate-180' : ''}`}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
-        </svg>
-        Estatísticas
-      </button>
+      {/* Abas */}
+      <div className="flex gap-1 border-b border-p3/20 px-4 pt-3 shrink-0">
+        {TABS.map((tab) => (
+          <button
+            key={tab.id}
+            onClick={() => setActiveTab(tab.id)}
+            className={`px-3 py-1 text-xs rounded-t transition-colors ${
+              activeTab === tab.id ? 'bg-p3 text-white' : 'text-p5/60 hover:text-p5'
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
 
-      {open && (
-        <div className="flex flex-col gap-2 px-4 pb-3 overflow-y-auto" style={{ maxHeight: '65vh' }}>
-
-          {/* Abas */}
-          <div className="flex gap-1 border-b border-p3/20">
-            {TABS.map((tab) => (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                className={`px-3 py-1 text-xs rounded-t transition-colors ${
-                  activeTab === tab.id ? 'bg-p3 text-white' : 'text-p5/60 hover:text-p5'
-                }`}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
-
-          {activeTab === 'rsi' && <RsiStats />}
-        </div>
-      )}
+      <div className="flex-1 min-h-0 px-4 pb-3 pt-2">
+        {activeTab === 'rsi' && <RsiStats />}
+      </div>
     </div>
   );
 }

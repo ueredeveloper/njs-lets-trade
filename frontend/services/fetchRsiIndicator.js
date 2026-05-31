@@ -1,6 +1,8 @@
 
 const fetchRsiIndicator = (currencies, intervals) => {
 
+    console.log('fetchRsiIndicator', currencies, intervals)
+
     
     function _fetch(symbol, intervals) {
 

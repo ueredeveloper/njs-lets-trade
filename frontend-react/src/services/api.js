@@ -32,6 +32,16 @@ export async function fetchRsiOversoldRecovery(symbol, interval, oversold = 30, 
   return res.json();
 }
 
+export async function reloadCandles(symbol, interval = 'all') {
+  const params = new URLSearchParams({ symbol, interval });
+  const res = await fetch(`/services/reload-candles?${params}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 /**
  * Busca candles + Ichimoku + SMA para exibir no gráfico.
  * @param {string} symbol  ex: 'BTCUSDT'

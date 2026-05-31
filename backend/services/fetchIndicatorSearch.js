@@ -1,6 +1,6 @@
 const router = require("express").Router();
 const { RSI } = require('technicalindicators');
-const getClandles = require('../binance/getClandles');
+const getCandles = require('../binance/getCandles');
 const { getActiveUsdtPairs } = require('../binance/getActiveUsdtPairs');
 
 const CANDLES_LIMIT = 200;
@@ -79,7 +79,7 @@ router.get('/indicator-search', async (req, res) => {
 
     const results = await runWithConcurrency(symbols, async (symbol) => {
       try {
-        const candles = await getClandles(symbol, interval, CANDLES_LIMIT);
+        const candles = await getCandles(symbol, interval, CANDLES_LIMIT);
         if (!candles || candles.length < 15) return null;
 
         let indicatorValues;

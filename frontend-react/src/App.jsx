@@ -6,6 +6,7 @@ import FilterTabs from './components/FilterTabs';
 import CurrencyTable from './components/CurrencyTable';
 import IndicatorPanel from './components/IndicatorPanel';
 import CandlestickChart from './components/CandlestickChart';
+import RsiChart from './components/RsiChart';
 import SettingsSidebar from './components/SettingsSidebar';
 import StatisticsPanel from './components/StatisticsPanel';
 
@@ -18,17 +19,18 @@ function AppContent() {
   const [openPanels, setOpenPanels] = useState(['indicators']); // max 2: 'rsi' | 'indicators' | 'stats'
 
   function togglePanel(id) {
-    setOpenPanels((prev) => {
-      if (prev.includes(id)) return prev.filter((p) => p !== id);
-      if (prev.length < 2) return [...prev, id];
-      return [...prev.slice(1), id]; // fecha o mais antigo, abre o novo
-    });
+    setOpenPanels((prev) => prev.includes(id) ? ['indicators'] : [id]);
   }
 
   useEffect(() => {
     async function init() {
       try {
-        const allCurrencies = await fetchAllCurrencies();
+        let allCurrencies = await fetchAllCurrencies();
+
+        if (!allCurrencies.some((c) => c.symbol === 'FIOUSDT')) {
+          allCurrencies.push({ id: null, symbol: 'FIOUSDT', price: '', currency_collections: [[]] });
+        }
+
         setCurrencies({ name: '1h|All', list: allCurrencies });
 
         const binanceUsdtList = allCurrencies
@@ -111,24 +113,47 @@ function AppContent() {
         {/* Coluna esquerda — Gráfico + Indicadores (oculto em mobile quando view=list) */}
         <div className={`flex-col flex-1 min-w-0 bg-p1 md:border-r border-p2
           ${mobileView === 'list' ? 'hidden md:flex' : 'flex'}`}>
-          <div className="flex-none h-[60vh]">
-            <CandlestickChart
-              rsiOpen={openPanels.includes('rsi')}
-              onToggleRsi={() => togglePanel('rsi')}
-            />
+          <div className="flex-none h-[55vh]">
+            <CandlestickChart />
           </div>
-          <div className="flex-1 min-h-0 overflow-y-auto border-t border-p2">
-            <IndicatorPanel
-              open={openPanels.includes('indicators')}
-              onToggle={() => togglePanel('indicators')}
-            />
-            <div className="border-t border-p2">
-              <StatisticsPanel
-                open={openPanels.includes('stats')}
-                onToggle={() => togglePanel('stats')}
-              />
+          {/* Barra de toggles — acima dos painéis */}
+          <div className="shrink-0 border-t border-p2 flex divide-x divide-p2">
+            {[
+              { id: 'rsi',        label: 'RSI (14)' },
+              { id: 'indicators', label: 'Analisar Indicadores' },
+              { id: 'stats',      label: 'Estatísticas' },
+            ].map(({ id, label }) => (
+              <button
+                key={id}
+                onClick={() => togglePanel(id)}
+                className={`flex items-center gap-1.5 flex-1 justify-center px-3 py-1.5 text-xs uppercase tracking-widest transition-colors ${
+                  openPanels.includes(id) ? 'text-white' : 'text-p5 hover:text-white'
+                }`}
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
+                  strokeWidth="1.5" stroke="currentColor"
+                  className={`w-3 h-3 shrink-0 transition-transform ${openPanels.includes(id) ? 'rotate-180' : ''}`}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+                </svg>
+                {label}
+              </button>
+            ))}
+          </div>
+          {openPanels.includes('rsi') && (
+            <div className="flex-1 min-h-0">
+              <RsiChart />
             </div>
-          </div>
+          )}
+          {openPanels.includes('indicators') && (
+            <div className="flex-1 min-h-0 flex flex-col">
+              <IndicatorPanel />
+            </div>
+          )}
+          {openPanels.includes('stats') && (
+            <div className="flex-1 min-h-0 flex flex-col">
+              <StatisticsPanel />
+            </div>
+          )}
         </div>
 
         {/* Coluna direita — Lista de moedas (oculto em mobile quando view=chart) */}

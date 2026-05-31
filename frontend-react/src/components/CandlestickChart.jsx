@@ -25,66 +25,6 @@ function getThemeColors() {
   };
 }
 
-function buildRsiOption({ interval, candlesticks, rsi }, colors) {
-  // Mesmo padding de 24 do candlestick para o último valor RSI terminar
-  // na mesma posição visual que o último candle (os 24 slots extras são a
-  // projeção futura do Ichimoku no chart acima).
-  const xData = (() => {
-    const dates = candlesticks.slice(-LIMIT).map((c) => convertOpenTime(c.openTime, interval));
-    const padding = new Array(24).fill('');
-    return [...dates, ...padding];
-  })();
-  const rsiData = (rsi ?? []).slice(-LIMIT);
-
-  return {
-    backgroundColor: colors.bg,
-    grid: { top: 8, bottom: 20, left: 12, right: 64 },
-    tooltip: {
-      trigger: 'axis',
-      backgroundColor: '#003f69ee',
-      borderColor: colors.axis,
-      textStyle: { color: colors.text, fontSize: 11 },
-      axisPointer: { type: 'cross', lineStyle: { color: colors.axis, width: 1, opacity: 0.6 } },
-    },
-    xAxis: {
-      type: 'category',
-      data: xData,
-      axisLine: { lineStyle: { color: colors.panel } },
-      axisLabel: { color: colors.text, fontSize: 9 },
-      splitLine: { show: false },
-    },
-    yAxis: {
-      min: 0,
-      max: 100,
-      scale: false,
-      position: 'right',
-      axisLine: { lineStyle: { color: colors.panel } },
-      axisLabel: { color: colors.text, fontSize: 9 },
-      splitLine: { lineStyle: { color: colors.panel, type: 'dashed', opacity: 0.3 } },
-    },
-    dataZoom: [{ type: 'inside' }],
-    series: [
-      {
-        name: 'RSI(14)',
-        type: 'line',
-        data: rsiData,
-        smooth: true,
-        showSymbol: false,
-        lineStyle: { color: '#a78bfa', width: 1.5 },
-        markLine: {
-          silent: true,
-          symbol: 'none',
-          lineStyle: { type: 'dashed', opacity: 0.5 },
-          data: [
-            { yAxis: 30, lineStyle: { color: C_UP } },
-            { yAxis: 70, lineStyle: { color: C_DOWN } },
-          ],
-          label: { show: true, formatter: '{c}', color: colors.text, fontSize: 9 },
-        },
-      },
-    ],
-  };
-}
 
 function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAverage }, colors, activeIndicators) {
   const showMa200    = activeIndicators.includes('ma200');
@@ -210,7 +150,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
   };
 }
 
-export default function CandlestickChart({ rsiOpen, onToggleRsi }) {
+export default function CandlestickChart() {
   const { selectedChart, setSelectedChart } = useCurrency();
   const [currentInterval, setCurrentInterval] = useState('1h');
   const [loadingInterval, setLoadingInterval] = useState(false);
@@ -254,11 +194,6 @@ export default function CandlestickChart({ rsiOpen, onToggleRsi }) {
     if (!selectedChart) return null;
     return buildOption(selectedChart, colors, activeIndicators);
   }, [selectedChart, colors, activeIndicators]);
-
-  const rsiOption = useMemo(() => {
-    if (!selectedChart) return null;
-    return buildRsiOption(selectedChart, colors);
-  }, [selectedChart, colors]);
 
   if (!selectedChart || !option) {
     return (
@@ -325,34 +260,12 @@ export default function CandlestickChart({ rsiOpen, onToggleRsi }) {
       <div className="flex-1 min-h-0">
         <ReactECharts
           option={option}
+          notMerge={true}
           style={{ height: '100%', width: '100%' }}
           opts={{ renderer: 'canvas' }}
         />
       </div>
 
-      {/* RSI colapsável */}
-      <div className="shrink-0 border-t border-p2">
-        <button
-          onClick={onToggleRsi}
-          className="flex items-center gap-2 px-4 py-2 text-xs text-p5 uppercase tracking-widest hover:text-white transition-colors w-full"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
-            strokeWidth="1.5" stroke="currentColor"
-            className={`w-3.5 h-3.5 transition-transform ${rsiOpen ? 'rotate-180' : ''}`}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
-          </svg>
-          RSI (14)
-        </button>
-        {rsiOpen && (
-          <div style={{ height: '120px' }}>
-            <ReactECharts
-              option={rsiOption}
-              style={{ height: '100%', width: '100%' }}
-              opts={{ renderer: 'canvas' }}
-            />
-          </div>
-        )}
-      </div>
     </div>
   );
 }

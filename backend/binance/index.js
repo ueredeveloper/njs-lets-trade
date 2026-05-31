@@ -1,5 +1,4 @@
-const getClient = require('./getClient');
-const getClandles = require('./getClandles');
+const getClient  = require('./getClient');
+const getCandles = require('./getCandles');
 
-// remove cíclical error
-module.exports = {getClient, getClandles}
+module.exports = { getClient, getCandles };
