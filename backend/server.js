@@ -16,7 +16,7 @@ const {
   fetchCandles, fetchIchimokuCloud, fetchAllCurrencies,
   fetchSMA, fetchRSI, fetchVWAP, fetchLowestIndex,
   fetchHighLowVariation, fetch24HsVolume, fetchIndicatorSearch,
-  fetchRsiOversoldRecovery, fetchReloadCandles } = require('./services');
+  fetchRsiOversoldRecovery, fetchReloadCandles, fetchFavorites } = require('./services');
 
 const app = express();
 app.use(cors());
@@ -37,6 +37,7 @@ app.use('/services', fetch24HsVolume)
 app.use('/services', fetchIndicatorSearch)
 app.use('/services', fetchRsiOversoldRecovery)
 app.use('/services', fetchReloadCandles)
+app.use('/services', fetchFavorites)
 
 // Proxy para o frontend (só necessário no modo Parcel legado).
 // No modo Vite, o próprio Vite faz proxy /services → Express, então não é preciso.

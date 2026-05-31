@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useCallback } from 'react';
+import { addFavorite, removeFavorite } from '../services/api';
 
 // Stablecoins que não queremos capturar
 const STABLE_CURRENCIES = new Set([
@@ -21,6 +22,19 @@ export function CurrencyProvider({ children }) {
 
   // Quote selecionada: 'USDT' | 'BTC' | 'BNB'
   const [selectedQuote, setSelectedQuote] = useState('USDT');
+
+  // Favoritos: Set de símbolos (ex: Set{'BTCUSDT', 'FIOUSDT'})
+  const [favorites, setFavorites] = useState(new Set());
+
+  const toggleFavorite = useCallback(async (symbol) => {
+    const sym = symbol.toUpperCase();
+    setFavorites((prev) => {
+      const next = new Set(prev);
+      if (next.has(sym)) { next.delete(sym); removeFavorite(sym).catch(() => {}); }
+      else               { next.add(sym);    addFavorite(sym).catch(() => {}); }
+      return next;
+    });
+  }, []);
 
   const quotes = ['USDT', 'BTC', 'BNB'];
 
@@ -110,6 +124,9 @@ export function CurrencyProvider({ children }) {
         setSelectedQuote,
         selectedChart,
         setSelectedChart,
+        favorites,
+        setFavorites,
+        toggleFavorite,
       }}
     >
       {children}

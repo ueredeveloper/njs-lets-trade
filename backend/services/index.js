@@ -12,11 +12,12 @@ const fetch24HsVolume = require('./fetch24hsVolume')
 const fetchIndicatorSearch = require('./fetchIndicatorSearch')
 const fetchRsiOversoldRecovery = require('./fetchRsiOversoldRecovery')
 const fetchReloadCandles       = require('./fetchReloadCandles')
+const fetchFavorites           = require('./fetchFavorites')
 
 // remove cíclical error
 module.exports = {
     fetchCandles, fetchIchimokuCloud, fetchAllCurrencies,
     fetchSMA, fetchRSI, fetchVWAP, fetchLowestIndex, fetchHighLowVariation, fetch24HsVolume,
-    fetchIndicatorSearch, fetchRsiOversoldRecovery, fetchReloadCandles }
+    fetchIndicatorSearch, fetchRsiOversoldRecovery, fetchReloadCandles, fetchFavorites }
 
 

@@ -129,6 +129,7 @@ export default function FilterTabs({ onSelectFilter }) {
   }
 
   function handleClick(name) {
+    if (activeFilter === name) { setActiveFilter(null); onSelectFilter(null); return; }
     setActiveFilter(name);
     onSelectFilter(name);
   }
@@ -143,6 +144,7 @@ export default function FilterTabs({ onSelectFilter }) {
     <div className="flex flex-col gap-1 h-full min-h-0">
       {/* Lista de tags de filtro */}
       <div className="flex flex-wrap gap-1 flex-1 min-h-0 overflow-y-auto content-start">
+
         {sortedFilters.map((filter) => {
           const color = getIntervalColor(filter.name);
           const isActive = activeFilter === filter.name;

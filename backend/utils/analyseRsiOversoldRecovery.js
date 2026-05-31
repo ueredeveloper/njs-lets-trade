@@ -1,9 +1,9 @@
 const RSI = require('technicalindicators').RSI;
-const readCandles = require('./read-candles');
 const getCandles = require('../binance/getCandles');
 
 const RSI_PERIOD = 14;
-const HTF_LIMIT = 1000;
+const HTF_LIMIT  = 1000;
+const MAIN_LIMIT = 1500;
 
 /**
  * Analisa eventos de sobrevenda/sobrecompra no RSI de uma moeda.
@@ -83,7 +83,7 @@ async function analyseRsiOversoldRecovery(symbol, interval, options = {}) {
     const { oversold = 30, overbought = 70 } = options;
 
     const settled = await Promise.allSettled([
-        readCandles(symbol, interval),
+        getCandles(symbol, interval, MAIN_LIMIT),
         getCandles(symbol, '4h', HTF_LIMIT),
         getCandles(symbol, '8h', HTF_LIMIT),
     ]);
@@ -106,40 +106,76 @@ async function analyseRsiOversoldRecovery(symbol, interval, options = {}) {
     //   SEEK_EXIT  → aguarda RSI cruzar acima de overbought → registra saída, volta ao início
     // Cada ciclo começa somente após o anterior ser concluído (não há sobreposição).
     const occurrences = [];
-    let state = 'SEEK_ENTRY';
-    let entryIdx = null;
+    let state     = 'SEEK_ENTRY';
+    let entryIdx  = null;
+    let minRsiIdx = null; // índice do RSI mínimo no ciclo aberto atual
 
     for (let i = 0; i < rsiValues.length; i++) {
         if (state === 'SEEK_ENTRY' && rsiValues[i] < oversold) {
-            entryIdx = i;
+            entryIdx  = i;
+            minRsiIdx = i;
             state = 'SEEK_EXIT';
             continue;
         }
 
-        if (state === 'SEEK_EXIT' && rsiValues[i] >= overbought) {
-            const entryCandle = candles[entryIdx + offset];
-            const exitCandle  = candles[i + offset];
-            const entryPrice  = parseFloat(entryCandle.close);
-            const exitPrice   = parseFloat(exitCandle.close);
-            const entryTime   = parseInt(entryCandle.openTime);
+        if (state === 'SEEK_EXIT') {
+            // Atualiza o mínimo se RSI continuar caindo dentro da zona de sobrevenda
+            if (rsiValues[i] < rsiValues[minRsiIdx]) {
+                minRsiIdx = i;
+            }
 
-            occurrences.push({
-                startDate: new Date(entryCandle.openTime).toISOString(),
-                entryPrice,
-                entryRsi:   parseFloat(rsiValues[entryIdx].toFixed(2)),
-                entryRsi4h: findRsiAt(series4h, entryTime),
-                entryRsi8h: findRsiAt(series8h, entryTime),
-                endDate: new Date(exitCandle.openTime).toISOString(),
-                exitPrice,
-                exitRsi: parseFloat(rsiValues[i].toFixed(2)),
-                appreciationPercent: parseFloat(
-                    (((exitPrice - entryPrice) / entryPrice) * 100).toFixed(2)
-                ),
-            });
+            if (rsiValues[i] >= overbought) {
+                const entryCandle = candles[entryIdx + offset];
+                const exitCandle  = candles[i + offset];
+                const entryPrice  = parseFloat(entryCandle.close);
+                const exitPrice   = parseFloat(exitCandle.close);
+                const entryTime   = parseInt(entryCandle.openTime);
 
-            entryIdx = null;
-            state = 'SEEK_ENTRY';
+                occurrences.push({
+                    startDate: new Date(entryCandle.openTime).toISOString(),
+                    entryPrice,
+                    entryRsi:   parseFloat(rsiValues[entryIdx].toFixed(2)),
+                    entryRsi4h: findRsiAt(series4h, entryTime),
+                    entryRsi8h: findRsiAt(series8h, entryTime),
+                    endDate: new Date(exitCandle.openTime).toISOString(),
+                    exitPrice,
+                    exitRsi: parseFloat(rsiValues[i].toFixed(2)),
+                    appreciationPercent: parseFloat(
+                        (((exitPrice - entryPrice) / entryPrice) * 100).toFixed(2)
+                    ),
+                });
+
+                entryIdx  = null;
+                minRsiIdx = null;
+                state = 'SEEK_ENTRY';
+            }
         }
+    }
+
+    // Ciclo aberto: RSI cruzou abaixo de oversold mas ainda não atingiu overbought.
+    // Registra o ponto de RSI mínimo atingido na zona de sobrevenda.
+    let openOccurrence = null;
+    if (state === 'SEEK_EXIT' && minRsiIdx !== null) {
+        const lowestCandle = candles[minRsiIdx + offset];
+        const lastCandle   = candles[candles.length - 1];
+        const entryPrice   = parseFloat(lowestCandle.close);
+        const currentPrice = parseFloat(lastCandle.close);
+        const entryTime    = parseInt(lowestCandle.openTime);
+
+        openOccurrence = {
+            isOpen:    true,
+            startDate: new Date(lowestCandle.openTime).toISOString(),
+            entryPrice,
+            entryRsi:    parseFloat(rsiValues[minRsiIdx].toFixed(2)),
+            entryRsi4h:  findRsiAt(series4h, entryTime),
+            entryRsi8h:  findRsiAt(series8h, entryTime),
+            endDate:     null,
+            exitPrice:   null,
+            exitRsi:     null,
+            appreciationPercent: parseFloat(
+                (((currentPrice - entryPrice) / entryPrice) * 100).toFixed(2)
+            ),
+        };
     }
 
     const total = occurrences.length;
@@ -158,6 +194,7 @@ async function analyseRsiOversoldRecovery(symbol, interval, options = {}) {
         totalOccurrences: total,
         avgAppreciationPercent,
         occurrences,
+        openOccurrence,
     };
 }
 

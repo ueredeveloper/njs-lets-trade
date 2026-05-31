@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { CurrencyProvider, useCurrency } from './contexts/CurrencyContext';
-import { fetchAllCurrencies, fetch24hVolume, fetchCandlesticksAndCloud } from './services/api';
+import { fetchAllCurrencies, fetch24hVolume, fetchCandlesticksAndCloud, getFavorites } from './services/api';
 
 import FilterTabs from './components/FilterTabs';
 import CurrencyTable from './components/CurrencyTable';
@@ -11,7 +11,7 @@ import SettingsSidebar from './components/SettingsSidebar';
 import StatisticsPanel from './components/StatisticsPanel';
 
 function AppContent() {
-  const { setCurrencies, setFilters, addFilter, setSelectedChart } = useCurrency();
+  const { setCurrencies, setFilters, addFilter, setSelectedChart, setFavorites } = useCurrency();
   const [activeFilter, setActiveFilter] = useState(null);
   const [loading, setLoading] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -25,11 +25,7 @@ function AppContent() {
   useEffect(() => {
     async function init() {
       try {
-        let allCurrencies = await fetchAllCurrencies();
-
-        if (!allCurrencies.some((c) => c.symbol === 'FIOUSDT')) {
-          allCurrencies.push({ id: null, symbol: 'FIOUSDT', price: '', currency_collections: [[]] });
-        }
+        const allCurrencies = await fetchAllCurrencies();
 
         setCurrencies({ name: '1h|All', list: allCurrencies });
 
@@ -43,6 +39,9 @@ function AppContent() {
 
         const btcData = await fetchCandlesticksAndCloud('BTCUSDT', '1h');
         setSelectedChart(btcData);
+
+        const favList = await getFavorites().catch(() => []);
+        setFavorites(new Set(favList));
       } catch (err) {
         console.error('Erro ao inicializar:', err);
       } finally {
@@ -119,9 +118,9 @@ function AppContent() {
           {/* Barra de toggles — acima dos painéis */}
           <div className="shrink-0 border-t border-p2 flex divide-x divide-p2">
             {[
-              { id: 'rsi',        label: 'RSI (14)' },
               { id: 'indicators', label: 'Analisar Indicadores' },
               { id: 'stats',      label: 'Estatísticas' },
+              { id: 'rsi',        label: 'RSI (14)' },
             ].map(({ id, label }) => (
               <button
                 key={id}

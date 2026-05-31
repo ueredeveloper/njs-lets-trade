@@ -34,23 +34,16 @@ function RsiStats() {
   const [result, setResult]         = useState(null);
   const [error, setError]           = useState(null);
 
-  useEffect(() => {
-    if (selectedChart?.symbol) setSymbol(selectedChart.symbol);
-  }, [selectedChart?.symbol]);
-
-  useEffect(() => { handleSearch(); }, []);
-
   const inp = 'bg-p2 border border-p3/40 text-p5 text-[11px] sm:text-xs rounded px-2 py-1 focus:outline-none focus:border-p4 w-full';
 
-  async function handleSearch() {
-    if (!symbol.trim()) return;
+  async function handleSearch(overrideSymbol) {
+    const sym = (overrideSymbol ?? symbol).trim().toUpperCase();
+    if (!sym) return;
     setLoading(true);
     setError(null);
     setResult(null);
     try {
-      const data = await fetchRsiOversoldRecovery(
-        symbol.trim().toUpperCase(), interval, oversold, overbought
-      );
+      const data = await fetchRsiOversoldRecovery(sym, interval, oversold, overbought);
       setResult(data);
     } catch (err) {
       setError(err.message);
@@ -58,6 +51,15 @@ function RsiStats() {
       setLoading(false);
     }
   }
+
+  useEffect(() => {
+    if (selectedChart?.symbol) {
+      setSymbol(selectedChart.symbol);
+      handleSearch(selectedChart.symbol);
+    }
+  }, [selectedChart?.symbol]);
+
+  useEffect(() => { handleSearch(); }, []);
 
   return (
     <div className="flex gap-3 w-full h-full">
@@ -144,12 +146,12 @@ function RsiStats() {
             </div>
 
             {/* Tabela */}
-            {result.occurrences.length === 0 ? (
-              <p className="text-[11px] text-p5/50">Nenhum ciclo completo encontrado.</p>
+            {result.occurrences.length === 0 && !result.openOccurrence ? (
+              <p className="text-[11px] text-p5/50">Nenhum ciclo encontrado.</p>
             ) : (
               <div className="flex-1 min-h-0 overflow-auto">
                 <table className="min-w-full border-collapse">
-                  <thead>
+                  <thead className="sticky top-0 z-10 bg-p1">
                     <tr className="text-[9px] sm:text-[10px] text-p5/40 uppercase tracking-wider border-b border-p3/20">
                       <th className="text-left pb-1 pr-2">#</th>
                       <th className="text-left pb-1 pr-2">Início</th>
@@ -183,6 +185,28 @@ function RsiStats() {
                         </tr>
                       );
                     })}
+
+                    {/* Ciclo aberto — RSI cruzou oversold mas ainda não atingiu overbought */}
+                    {result.openOccurrence && (() => {
+                      const o   = result.openOccurrence;
+                      const pos = o.appreciationPercent >= 0;
+                      return (
+                        <tr className="border-t-2 border-amber-500/40 bg-amber-500/5">
+                          <td className="py-1 pr-2 text-[10px] text-amber-400/70">↓</td>
+                          <td className="py-1 pr-2 text-[10px] sm:text-xs font-mono whitespace-nowrap text-amber-300">{formatDate(o.startDate)}</td>
+                          <td className="py-1 pr-2 text-[10px] sm:text-xs text-right font-mono text-amber-300">${o.entryPrice.toLocaleString('en-US', { maximumFractionDigits: 4 })}</td>
+                          <td className="py-1 pr-2 text-[10px] sm:text-xs text-right text-yellow-400 font-bold">{o.entryRsi}</td>
+                          <td className="py-1 pr-2 text-[10px] sm:text-xs text-right text-orange-400">{o.entryRsi4h ?? '—'}</td>
+                          <td className="py-1 pr-2 text-[10px] sm:text-xs text-right text-amber-600">{o.entryRsi8h ?? '—'}</td>
+                          <td className="py-1 pr-2 text-[10px] sm:text-xs whitespace-nowrap text-amber-400/60 italic">em aberto</td>
+                          <td className="py-1 pr-2 text-[10px] sm:text-xs text-right text-p5/30">—</td>
+                          <td className="py-1 pr-2 text-[10px] sm:text-xs text-right text-p5/30">—</td>
+                          <td className={`py-1 text-[10px] sm:text-xs text-right font-bold ${pos ? 'text-green-400' : 'text-red-400'}`}>
+                            {pos ? '+' : ''}{o.appreciationPercent}%
+                          </td>
+                        </tr>
+                      );
+                    })()}
                   </tbody>
                 </table>
               </div>

@@ -3,7 +3,8 @@ const readCandles                = require('../utils/read-candles');
 const convertIntervalToMiliseconds = require('../utils/convert-interval-to-miliseconds');
 const { toGateSymbol }           = require('../utils/toGateSymbol');
 
-const GATE_BASE = 'https://api.gateio.ws/api/v4';
+const GATE_BASE      = 'https://api.gateio.ws/api/v4';
+const GATE_MAX_LIMIT = 1000;
 
 // Intervalos buscados no modo "all"
 const ALL_INTERVALS = ['1m', '5m', '15m', '30m', '1h', '2h', '4h', '8h', '1d'];
@@ -95,14 +96,14 @@ async function getGateCandles(symbol, interval, limit) {
 
   if (limit > dbCandles.length) {
     // Banco local tem menos candles do que o solicitado: faz carga completa
-    const candles = await fetchFromGate(symbol, interval, limit);
+    const candles = await fetchFromGate(symbol, interval, Math.min(limit, GATE_MAX_LIMIT));
     writeCandles(symbol, interval, candles);
     return candles;
   }
 
   if (limitForUpdateDb > 0) {
-    // Há candles novos: busca apenas o delta
-    const newCandles = await fetchFromGate(symbol, interval, limitForUpdateDb);
+    // Há candles novos: busca apenas o delta (respeitando o limite da Gate.io)
+    const newCandles = await fetchFromGate(symbol, interval, Math.min(limitForUpdateDb, GATE_MAX_LIMIT));
     newCandles.forEach(c => dbCandles.push(c));
   } else {
     // Atualiza somente o candle atual (em formação)
