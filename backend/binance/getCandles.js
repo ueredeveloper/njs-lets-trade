@@ -5,7 +5,7 @@ const convertIntervalToMiliseconds = require('../utils/convert-interval-to-milis
 const { getGateCandles }           = require('../gate/getGateCandles');
 
 // Símbolos deslistados na Binance — usar Gate.io automaticamente
-const GATE_ONLY_SYMBOLS = new Set(['FIOUSDT']);
+const GATE_ONLY_SYMBOLS = new Set(['SKYAIUSDT']);
 
 /**
  * Busca candles de um símbolo. Se o símbolo estiver deslistado na Binance,

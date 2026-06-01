@@ -10,12 +10,11 @@ function splitSymbol(symbol) {
   return { base: symbol, quote: '' };
 }
 
-export default function CurrencyTable({ activeFilter }) {
+export default function CurrencyTable({ activeFilter, showFavorites, setShowFavorites, onSelectCurrency }) {
   const { currencies, findFilter, selectedQuote, setSelectedChart, favorites, toggleFavorite } = useCurrency();
   const [loadingSymbol, setLoadingSymbol] = useState(null);
   const [activeRow, setActiveRow] = useState(null);
   const [search, setSearch] = useState('');
-  const [showFavorites, setShowFavorites] = useState(false);
 
   const rows = useMemo(() => {
     if (!currencies.list?.length) return [];
@@ -51,6 +50,7 @@ export default function CurrencyTable({ activeFilter }) {
   const interval = (activeFilter && activeFilter !== 'favoritos') ? activeFilter.split('|')[0] : '1h';
 
   async function handleSelect(item) {
+    onSelectCurrency?.();
     setLoadingSymbol(item.symbol);
     setActiveRow(item.symbol);
     try {

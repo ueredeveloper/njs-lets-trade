@@ -5,7 +5,7 @@ import { fetchCandlesticksAndCloud } from '../services/api';
 import convertOpenTime from '../utils/convertOpenTime';
 
 const LIMIT = 66;
-const INTERVALS = ['1m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w'];
+const INTERVALS = ['5m', '15m', '30m', '1h', '2h', '4h', '8h', '1d'];
 
 const C_UP   = '#26a69a';
 const C_DOWN = '#ef5350';
@@ -128,29 +128,13 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
       axisLabel: { color: colors.text, fontSize: 10 },
       splitLine: { lineStyle: { color: colors.panel, type: 'dashed', opacity: 0.3 } },
     },
-    grid: { top: 40, bottom: 72, left: 12, right: 64 },
-    dataZoom: [
-      {
-        type: 'slider',
-        bottom: 8,
-        height: 20,
-        borderColor: colors.panel,
-        fillerColor: 'rgba(21,122,140,0.15)',
-        handleStyle: { color: colors.axis },
-        textStyle: { color: colors.text },
-        dataBackground: {
-          areaStyle: { color: 'rgba(21,122,140,0.2)' },
-          lineStyle: { color: colors.axis, opacity: 0.5 },
-        },
-        brushSelect: true,
-      },
-      { type: 'inside' },
-    ],
+    grid: { top: 40, bottom: 12, left: 12, right: 64 },
+    dataZoom: [{ type: 'inside' }],
     series,
   };
 }
 
-export default function CandlestickChart() {
+export default function CandlestickChart({ onOpenCurrencyList }) {
   const { selectedChart, setSelectedChart } = useCurrency();
   const [currentInterval, setCurrentInterval] = useState('1h');
   const [loadingInterval, setLoadingInterval] = useState(false);
@@ -214,6 +198,15 @@ export default function CandlestickChart() {
     <div className="flex flex-col h-full">
       {/* Barra de intervalos + indicadores */}
       <div className="flex items-center gap-1 px-3 pt-2 shrink-0 flex-wrap">
+        {selectedChart?.symbol && (
+          <button
+            onClick={onOpenCurrencyList}
+            title="Trocar moeda"
+            className="mr-1 px-2 py-0.5 text-xs font-mono font-bold text-p4 hover:text-white bg-p2/60 hover:bg-p3/40 rounded transition-colors"
+          >
+            {selectedChart.symbol}
+          </button>
+        )}
         {INTERVALS.map((iv) => (
           <button
             key={iv}

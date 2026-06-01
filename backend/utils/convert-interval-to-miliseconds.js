@@ -11,16 +11,16 @@ async function convertIntervalToMiliseconds(interval) {
             return 30 * 60 * 1000;
         case '1h':
             return 1 * 60 * 60 * 1000;
+        case '2h':
+            return 2 * 60 * 60 * 1000;
         case '4h':
             return 4 * 60 * 60 * 1000;
+        case '8h':
+            return 8 * 60 * 60 * 1000;
         case '1d':
             return 24 * 60 * 60 * 1000;
-        case '3d':
-            return 3 * 24 * 60 * 60 * 1000;
-        case '1w':
-            return 7 * 24 * 60 * 60 * 1000;
         default:
-            return 8 * 60 * 60 * 1000; // Default to 8 hours
+            return 60 * 60 * 1000; // 1h
     }
 
 }

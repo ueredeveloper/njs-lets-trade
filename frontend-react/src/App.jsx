@@ -15,8 +15,10 @@ function AppContent() {
   const [activeFilter, setActiveFilter] = useState(null);
   const [loading, setLoading] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [mobileView, setMobileView] = useState('chart'); // 'chart' | 'list'
-  const [openPanels, setOpenPanels] = useState(['indicators']); // max 2: 'rsi' | 'indicators' | 'stats'
+  const [currencyModalOpen, setCurrencyModalOpen] = useState(false);
+  const [currencyModalVisible, setCurrencyModalVisible] = useState(false);
+  const [showFavorites, setShowFavorites] = useState(false);
+  const [openPanels, setOpenPanels] = useState(['indicators']);
 
   function togglePanel(id) {
     setOpenPanels((prev) => prev.includes(id) ? ['indicators'] : [id]);
@@ -62,16 +64,20 @@ function AppContent() {
     );
   }
 
-  const tabBtn = (view, label) => (
-    <button
-      onClick={() => setMobileView(view)}
-      className={`px-3 py-1 text-xs rounded transition-colors ${
-        mobileView === view ? 'bg-p3 text-white' : 'text-p5/60 hover:text-p5'
-      }`}
-    >
-      {label}
-    </button>
-  );
+  function openCurrencyModal() {
+    setCurrencyModalOpen(true);
+    requestAnimationFrame(() => requestAnimationFrame(() => setCurrencyModalVisible(true)));
+  }
+
+  function closeCurrencyModal() {
+    setCurrencyModalVisible(false);
+    setTimeout(() => setCurrencyModalOpen(false), 320);
+  }
+
+  function handleSelectFilter(name) {
+    setActiveFilter(name);
+    setShowFavorites(false);
+  }
 
   return (
     <div className="flex flex-col h-screen overflow-hidden">
@@ -81,12 +87,6 @@ function AppContent() {
         <h1 className="text-lg font-bold tracking-widest text-p5 uppercase">
           Let&apos;s Trade
         </h1>
-
-        {/* Tabs de navegação — visíveis só em mobile */}
-        <div className="flex md:hidden items-center gap-1 bg-p2/50 rounded p-0.5">
-          {tabBtn('chart', 'Gráfico')}
-          {tabBtn('list', 'Moedas')}
-        </div>
 
         <div className="flex items-center gap-3">
           <span className="hidden sm:inline text-xs text-p4 opacity-60">crypto screener</span>
@@ -106,14 +106,66 @@ function AppContent() {
 
       <SettingsSidebar open={settingsOpen} onClose={() => setSettingsOpen(false)} />
 
-      {/* Corpo principal */}
-      <div className="flex flex-col md:flex-row min-h-0 flex-1 overflow-hidden">
+      {/* Bottom sheet de moedas */}
+      {currencyModalOpen && (
+        <div
+          className="fixed inset-0 z-50"
+          onClick={closeCurrencyModal}
+        >
+          {/* Backdrop */}
+          <div
+            className="absolute inset-0 bg-black/60 transition-opacity duration-300"
+            style={{ opacity: currencyModalVisible ? 1 : 0 }}
+          />
 
-        {/* Coluna esquerda — Gráfico + Indicadores (oculto em mobile quando view=list) */}
-        <div className={`flex-col flex-1 min-w-0 bg-p1 md:border-r border-p2
-          ${mobileView === 'list' ? 'hidden md:flex' : 'flex'}`}>
+          {/* Sheet — sobe de baixo */}
+          <div
+            className="absolute inset-x-0 bottom-0 flex flex-col bg-p1 border-t border-p2 rounded-t-2xl shadow-2xl transition-transform duration-300 ease-out"
+            style={{
+              height: '80%',
+              transform: currencyModalVisible ? 'translateY(0)' : 'translateY(100%)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Handle */}
+            <div className="flex justify-center pt-2 pb-1 shrink-0">
+              <div className="w-10 h-1 rounded-full bg-p3/50" />
+            </div>
+
+            {/* Cabeçalho */}
+            <div className="flex items-center justify-between px-4 py-2 border-b border-p2 shrink-0">
+              <span className="text-sm font-semibold text-p5 uppercase tracking-widest">Moedas</span>
+              <button
+                onClick={closeCurrencyModal}
+                className="text-p5 hover:text-white p-1 rounded hover:bg-p2 transition-colors text-lg leading-none"
+              >
+                ×
+              </button>
+            </div>
+
+            {/* Filtros */}
+            <div className="flex flex-col min-h-0 px-2 py-1 border-b border-p2 overflow-hidden" style={{ height: '40%' }}>
+              <FilterTabs onSelectFilter={handleSelectFilter} />
+            </div>
+
+            {/* Tabela */}
+            <div className="flex-1 min-h-0 overflow-hidden">
+              <CurrencyTable
+                activeFilter={activeFilter}
+                showFavorites={showFavorites}
+                setShowFavorites={setShowFavorites}
+                onSelectCurrency={closeCurrencyModal}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Corpo principal */}
+      <div className="flex flex-col min-h-0 flex-1 overflow-hidden">
+        <div className="flex flex-col flex-1 min-w-0 min-h-0 bg-p1">
           <div className="flex-none h-[55vh]">
-            <CandlestickChart />
+            <CandlestickChart onOpenCurrencyList={openCurrencyModal} />
           </div>
           {/* Barra de toggles — acima dos painéis */}
           <div className="shrink-0 border-t border-p2 flex divide-x divide-p2">
@@ -153,22 +205,6 @@ function AppContent() {
               <StatisticsPanel />
             </div>
           )}
-        </div>
-
-        {/* Coluna direita — Lista de moedas (oculto em mobile quando view=chart) */}
-        <div className={`flex flex-col flex-1 min-h-0 md:flex-none md:w-80 md:shrink-0 bg-p1
-          ${mobileView === 'chart' ? 'hidden md:flex' : ''}`}>
-
-          {/* Filtros */}
-          <div className="flex flex-col min-h-0 px-2 py-1 border-b border-p2 overflow-hidden"
-            style={{ height: '40%' }}>
-            <FilterTabs onSelectFilter={setActiveFilter} />
-          </div>
-
-          {/* Tabela — ocupa o restante até o fundo */}
-          <div className="flex-1 min-h-0 overflow-hidden">
-            <CurrencyTable activeFilter={activeFilter} />
-          </div>
         </div>
       </div>
 

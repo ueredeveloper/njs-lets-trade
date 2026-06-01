@@ -17,9 +17,9 @@ function formatDate(iso) {
 
 function SummaryCard({ label, value, highlight }) {
   return (
-    <div className="flex flex-col items-center justify-center bg-p2/50 border border-p3/20 rounded px-2 py-1.5 min-w-[80px]">
-      <span className={`text-xs font-bold ${highlight ?? 'text-p5'}`}>{value}</span>
-      <span className="text-[9px] text-p5/50 mt-0.5 text-center leading-tight">{label}</span>
+    <div className="flex flex-col items-center justify-center bg-p2/50 border border-p3/20 rounded px-0.5 py-px sm:px-2 sm:py-1.5 min-w-[38px] sm:min-w-[80px]">
+      <span className={`text-[8px] sm:text-xs font-bold ${highlight ?? 'text-p5'}`}>{value}</span>
+      <span className="text-[6px] sm:text-[9px] text-p5/50 text-center leading-tight">{label}</span>
     </div>
   );
 }
@@ -62,10 +62,10 @@ function RsiStats() {
   useEffect(() => { handleSearch(); }, []);
 
   return (
-    <div className="flex gap-3 w-full h-full">
+    <div className="flex flex-col md:flex-row gap-3 w-full">
 
-      {/* Formulário — coluna esquerda estreita */}
-      <div className="flex flex-col gap-1.5 w-72 shrink-0">
+      {/* Formulário */}
+      <div className="flex flex-col gap-1.5 w-full md:w-72 md:shrink-0">
 
         {/* Símbolo */}
         <div className="flex flex-col gap-0.5">
@@ -121,7 +121,7 @@ function RsiStats() {
       </div>
 
       {/* Resultados */}
-      <div className="flex flex-col gap-2 flex-1 min-w-0 min-h-0 h-full">
+      <div className="flex flex-col gap-2 flex-1 min-w-0">
 
         {error && (
           <p className="text-[11px] text-red-400 bg-red-400/10 border border-red-400/20 rounded px-2 py-1.5">
@@ -130,7 +130,7 @@ function RsiStats() {
         )}
 
         {result && (
-          <div className="flex flex-col flex-1 min-h-0 gap-2">
+          <div className="flex flex-col gap-2">
             {/* Cartões de resumo */}
             <div className="flex gap-1.5 flex-wrap justify-center shrink-0">
               <SummaryCard label="Candles" value={result.totalCandles} />
@@ -149,7 +149,7 @@ function RsiStats() {
             {result.occurrences.length === 0 && !result.openOccurrence ? (
               <p className="text-[11px] text-p5/50">Nenhum ciclo encontrado.</p>
             ) : (
-              <div className="flex-1 min-h-0 overflow-auto">
+              <div className="overflow-x-auto">
                 <table className="min-w-full border-collapse">
                   <thead className="sticky top-0 z-10 bg-p1">
                     <tr className="text-[9px] sm:text-[10px] text-p5/40 uppercase tracking-wider border-b border-p3/20">
@@ -243,7 +243,7 @@ export default function StatisticsPanel() {
         ))}
       </div>
 
-      <div className="flex-1 min-h-0 px-4 pb-3 pt-2">
+      <div className="flex-1 min-h-0 overflow-auto px-4 pb-3 pt-2">
         {activeTab === 'rsi' && <RsiStats />}
       </div>
     </div>
