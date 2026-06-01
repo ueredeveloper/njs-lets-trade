@@ -181,7 +181,13 @@ function AppContent() {
             </div>
 
             {/* Filtros */}
-            <div className="flex flex-col min-h-0 px-2 py-1 border-b border-p2 overflow-hidden" style={{ height: '40%' }}>
+            <div
+              className="flex flex-col min-h-0 px-2 py-1 border-b border-p2 overflow-hidden"
+              style={{ height: '40%' }}
+              onTouchStart={handleDragStart}
+              onTouchMove={handleDragMove}
+              onTouchEnd={handleDragEnd}
+            >
               <FilterTabs onSelectFilter={handleSelectFilter} />
             </div>
 
