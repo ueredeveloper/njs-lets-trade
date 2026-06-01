@@ -32,24 +32,24 @@ export async function fetchRsiOversoldRecovery(symbol, interval, oversold = 30, 
   return res.json();
 }
 
-export async function getFavorites() {
-  const res = await fetch('/services/favorites');
+export async function getFavorites(type) {
+  const res = await fetch(`/services/favorites?type=${type}`);
   if (!res.ok) throw new Error('Falha ao buscar favoritos');
   return res.json(); // string[]
 }
 
-export async function addFavorite(symbol) {
+export async function addFavorite(symbol, type) {
   const res = await fetch('/services/favorites', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ symbol }),
+    body: JSON.stringify({ symbol, type }),
   });
   if (!res.ok) throw new Error('Falha ao adicionar favorito');
   return res.json();
 }
 
-export async function removeFavorite(symbol) {
-  const res = await fetch(`/services/favorites/${encodeURIComponent(symbol)}`, { method: 'DELETE' });
+export async function removeFavorite(symbol, type) {
+  const res = await fetch(`/services/favorites/${encodeURIComponent(symbol)}?type=${type}`, { method: 'DELETE' });
   if (!res.ok) throw new Error('Falha ao remover favorito');
   return res.json();
 }

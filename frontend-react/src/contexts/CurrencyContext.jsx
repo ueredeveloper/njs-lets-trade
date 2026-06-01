@@ -23,22 +23,31 @@ export function CurrencyProvider({ children }) {
   // Quote selecionada: 'USDT' | 'BTC' | 'BNB'
   const [selectedQuote, setSelectedQuote] = useState('USDT');
 
-  // Favoritos: Set de símbolos (ex: Set{'BTCUSDT', 'FIOUSDT'})
-  const [favorites, setFavorites] = useState(new Set());
+  // Favoritos Gate (azul #0068ff) e Binance (laranja #fcd535)
+  const [gateFavorites, setGateFavorites]       = useState(new Set());
+  const [binanceFavorites, setBinanceFavorites] = useState(new Set());
 
-  const toggleFavorite = useCallback(async (symbol) => {
+  const toggleGateFavorite = useCallback(async (symbol) => {
     const sym = symbol.toUpperCase();
-    setFavorites((prev) => {
+    setGateFavorites((prev) => {
       const next = new Set(prev);
-      if (next.has(sym)) { next.delete(sym); removeFavorite(sym).catch(() => {}); }
-      else               { next.add(sym);    addFavorite(sym).catch(() => {}); }
+      if (next.has(sym)) { next.delete(sym); removeFavorite(sym, 'gate').catch(() => {}); }
+      else               { next.add(sym);    addFavorite(sym, 'gate').catch(() => {}); }
+      return next;
+    });
+  }, []);
+
+  const toggleBinanceFavorite = useCallback(async (symbol) => {
+    const sym = symbol.toUpperCase();
+    setBinanceFavorites((prev) => {
+      const next = new Set(prev);
+      if (next.has(sym)) { next.delete(sym); removeFavorite(sym, 'binance').catch(() => {}); }
+      else               { next.add(sym);    addFavorite(sym, 'binance').catch(() => {}); }
       return next;
     });
   }, []);
 
   const quotes = ['USDT', 'BTC', 'BNB'];
-
-  // --- Métodos equivalentes ao CurrencyModel ---
 
   const addFilter = useCallback((item) => {
     setFilters((prev) => {
@@ -56,7 +65,6 @@ export function CurrencyProvider({ children }) {
     setFilters((prev) => {
       const first = prev[0];
       const kept = prev.filter((f) => !filtersToRemove.includes(f.name));
-      // garante que o primeiro sempre está presente, sem repetições
       const merged = [first, ...kept.filter((f) => f.name !== first?.name)];
       return merged;
     });
@@ -73,7 +81,6 @@ export function CurrencyProvider({ children }) {
 
       if (chosen.length === 0) return prev;
 
-      // intersecção: começa da primeira lista e filtra pelas demais
       let common = chosen[0].list;
       for (let i = 1; i < chosen.length; i++) {
         common = common.filter((sym) => chosen[i].list.includes(sym));
@@ -124,9 +131,12 @@ export function CurrencyProvider({ children }) {
         setSelectedQuote,
         selectedChart,
         setSelectedChart,
-        favorites,
-        setFavorites,
-        toggleFavorite,
+        gateFavorites,
+        setGateFavorites,
+        binanceFavorites,
+        setBinanceFavorites,
+        toggleGateFavorite,
+        toggleBinanceFavorite,
       }}
     >
       {children}

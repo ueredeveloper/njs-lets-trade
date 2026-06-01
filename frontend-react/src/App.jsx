@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { CurrencyProvider, useCurrency } from './contexts/CurrencyContext';
 import { fetchAllCurrencies, fetch24hVolume, fetchCandlesticksAndCloud, getFavorites } from './services/api';
 
+
 import FilterTabs from './components/FilterTabs';
 import CurrencyTable from './components/CurrencyTable';
 import IndicatorPanel from './components/IndicatorPanel';
@@ -11,13 +12,13 @@ import SettingsSidebar from './components/SettingsSidebar';
 import StatisticsPanel from './components/StatisticsPanel';
 
 function AppContent() {
-  const { setCurrencies, setFilters, addFilter, setSelectedChart, setFavorites } = useCurrency();
+  const { setCurrencies, setFilters, addFilter, setSelectedChart, setGateFavorites, setBinanceFavorites } = useCurrency();
   const [activeFilter, setActiveFilter] = useState(null);
   const [loading, setLoading] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [currencyModalOpen, setCurrencyModalOpen] = useState(false);
   const [currencyModalVisible, setCurrencyModalVisible] = useState(false);
-  const [showFavorites, setShowFavorites] = useState(false);
+  const [showFavorites, setShowFavorites] = useState(null); // null | 'gate' | 'binance'
   const [dragY, setDragY] = useState(0);
   const dragStartY = useRef(null);
   const [openPanels, setOpenPanels] = useState(['indicators']);
@@ -41,11 +42,15 @@ function AppContent() {
         const volumeFilters = await fetch24hVolume();
         volumeFilters.forEach((f) => addFilter(f));
 
-        const btcData = await fetchCandlesticksAndCloud('BTCUSDT', '1h');
+        const btcData = await fetchCandlesticksAndCloud('BTCUSDT', '30m');
         setSelectedChart(btcData);
 
-        const favList = await getFavorites().catch(() => []);
-        setFavorites(new Set(favList));
+        const [gateList, binanceList] = await Promise.all([
+          getFavorites('gate').catch(() => []),
+          getFavorites('binance').catch(() => []),
+        ]);
+        setGateFavorites(new Set(gateList));
+        setBinanceFavorites(new Set(binanceList));
       } catch (err) {
         console.error('Erro ao inicializar:', err);
       } finally {
@@ -99,7 +104,7 @@ function AppContent() {
 
   function handleSelectFilter(name) {
     setActiveFilter(name);
-    setShowFavorites(false);
+    setShowFavorites(null);
   }
 
   return (
@@ -197,7 +202,7 @@ function AppContent() {
                 activeFilter={activeFilter}
                 showFavorites={showFavorites}
                 setShowFavorites={setShowFavorites}
-                onSelectCurrency={closeCurrencyModal}
+                onSelectCurrency={() => { closeCurrencyModal(); setOpenPanels(['stats']); }}
               />
             </div>
           </div>
@@ -205,14 +210,17 @@ function AppContent() {
       )}
 
       {/* Corpo principal */}
-      <div className="flex flex-col min-h-0 flex-1 overflow-hidden">
-        <div className="flex flex-col flex-1 min-w-0 min-h-0 bg-p1">
+      <div className="flex flex-row min-h-0 flex-1 overflow-hidden">
+
+        {/* Coluna esquerda — Gráfico + painéis */}
+        <div className="flex flex-col flex-1 min-w-0 min-h-0 bg-p1 md:border-r border-p2">
           <div className="relative flex-none h-[55vh]">
             <CandlestickChart />
+            {/* Botão Moedas — só visível em mobile */}
             <button
               onClick={openCurrencyModal}
               title="Abrir lista de moedas"
-              className="absolute bottom-2 right-2 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-p3/80 hover:bg-p4 text-white text-xs font-mono font-semibold shadow-lg backdrop-blur-sm transition-colors"
+              className="md:hidden absolute bottom-2 right-2 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-p3/80 hover:bg-p4 text-white text-xs font-mono font-semibold shadow-lg backdrop-blur-sm transition-colors"
             >
               <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
                 strokeWidth="2" stroke="currentColor" className="w-3.5 h-3.5 shrink-0">
@@ -222,7 +230,7 @@ function AppContent() {
               Moedas
             </button>
           </div>
-          {/* Barra de toggles — acima dos painéis */}
+          {/* Barra de toggles */}
           <div className="shrink-0 border-t border-p2 flex divide-x divide-p2">
             {[
               { id: 'indicators', label: 'Analisar Indicadores' },
@@ -261,6 +269,22 @@ function AppContent() {
             </div>
           )}
         </div>
+
+        {/* Coluna direita — Moedas (só desktop) */}
+        <div className="hidden md:flex flex-col w-80 shrink-0 min-h-0 bg-p1">
+          <div className="flex flex-col min-h-0 px-2 py-1 border-b border-p2 overflow-hidden" style={{ height: '40%' }}>
+            <FilterTabs onSelectFilter={handleSelectFilter} />
+          </div>
+          <div className="flex-1 min-h-0 overflow-hidden">
+            <CurrencyTable
+              activeFilter={activeFilter}
+              showFavorites={showFavorites}
+              setShowFavorites={setShowFavorites}
+              onSelectCurrency={() => setOpenPanels(['stats'])}
+            />
+          </div>
+        </div>
+
       </div>
 
     </div>

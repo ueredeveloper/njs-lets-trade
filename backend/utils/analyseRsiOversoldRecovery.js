@@ -110,8 +110,10 @@ async function analyseRsiOversoldRecovery(symbol, interval, options = {}) {
     let entryIdx  = null;
     let minRsiIdx = null; // índice do RSI mínimo no ciclo aberto atual
 
+    const RSI_TOLERANCE = 2;
+
     for (let i = 0; i < rsiValues.length; i++) {
-        if (state === 'SEEK_ENTRY' && rsiValues[i] < oversold) {
+        if (state === 'SEEK_ENTRY' && rsiValues[i] < oversold + RSI_TOLERANCE) {
             entryIdx  = i;
             minRsiIdx = i;
             state = 'SEEK_EXIT';
@@ -124,8 +126,8 @@ async function analyseRsiOversoldRecovery(symbol, interval, options = {}) {
                 minRsiIdx = i;
             }
 
-            if (rsiValues[i] >= overbought) {
-                const entryCandle = candles[entryIdx + offset];
+            if (rsiValues[i] >= overbought - RSI_TOLERANCE) {
+                const entryCandle = candles[minRsiIdx + offset];
                 const exitCandle  = candles[i + offset];
                 const entryPrice  = parseFloat(entryCandle.close);
                 const exitPrice   = parseFloat(exitCandle.close);
@@ -134,7 +136,7 @@ async function analyseRsiOversoldRecovery(symbol, interval, options = {}) {
                 occurrences.push({
                     startDate: new Date(entryCandle.openTime).toISOString(),
                     entryPrice,
-                    entryRsi:   parseFloat(rsiValues[entryIdx].toFixed(2)),
+                    entryRsi:   parseFloat(rsiValues[minRsiIdx].toFixed(2)),
                     entryRsi4h: findRsiAt(series4h, entryTime),
                     entryRsi8h: findRsiAt(series8h, entryTime),
                     endDate: new Date(exitCandle.openTime).toISOString(),

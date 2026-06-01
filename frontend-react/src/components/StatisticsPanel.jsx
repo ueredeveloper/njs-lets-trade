@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useCurrency } from '../contexts/CurrencyContext';
-import { fetchRsiOversoldRecovery } from '../services/api';
+import { fetchRsiOversoldRecovery, fetchCandlesticksAndCloud } from '../services/api';
 
 const INTERVALS = ['1m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w'];
 
@@ -25,7 +25,7 @@ function SummaryCard({ label, value, highlight }) {
 }
 
 function RsiStats() {
-  const { selectedChart } = useCurrency();
+  const { selectedChart, setSelectedChart } = useCurrency();
   const [symbol, setSymbol]         = useState(selectedChart?.symbol || 'BTCUSDT');
   const [interval, setInterval]     = useState('30m');
   const [oversold, setOversold]     = useState(30);
@@ -36,7 +36,7 @@ function RsiStats() {
 
   const inp = 'bg-p2 border border-p3/40 text-p5 text-[11px] sm:text-xs rounded px-2 py-1 focus:outline-none focus:border-p4 w-full';
 
-  async function handleSearch(overrideSymbol) {
+  async function handleSearch(overrideSymbol, updateChart = false) {
     const sym = (overrideSymbol ?? symbol).trim().toUpperCase();
     if (!sym) return;
     setLoading(true);
@@ -45,6 +45,10 @@ function RsiStats() {
     try {
       const data = await fetchRsiOversoldRecovery(sym, interval, oversold, overbought);
       setResult(data);
+      if (updateChart) {
+        const chartData = await fetchCandlesticksAndCloud(sym, interval);
+        setSelectedChart(chartData);
+      }
     } catch (err) {
       setError(err.message);
     } finally {
@@ -55,7 +59,7 @@ function RsiStats() {
   useEffect(() => {
     if (selectedChart?.symbol) {
       setSymbol(selectedChart.symbol);
-      handleSearch(selectedChart.symbol);
+      handleSearch(selectedChart.symbol, false);
     }
   }, [selectedChart?.symbol]);
 
@@ -80,7 +84,7 @@ function RsiStats() {
             value={symbol}
             onChange={(e) => setSymbol(e.target.value.toUpperCase())}
             placeholder="BTCUSDT"
-            onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+            onKeyDown={(e) => e.key === 'Enter' && handleSearch(undefined, true)}
           />
         </div>
 
@@ -103,7 +107,7 @@ function RsiStats() {
               value={overbought} onChange={(e) => setOverbought(Number(e.target.value))} />
           </div>
           <button
-            onClick={handleSearch}
+            onClick={() => handleSearch(undefined, true)}
             disabled={loading}
             className="flex items-center justify-center gap-1.5 flex-1 py-1 rounded text-[11px] text-white bg-p3 hover:bg-p4 transition-colors disabled:opacity-50"
           >

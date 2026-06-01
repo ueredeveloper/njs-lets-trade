@@ -136,7 +136,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
 
 export default function CandlestickChart() {
   const { selectedChart, setSelectedChart } = useCurrency();
-  const [currentInterval, setCurrentInterval] = useState('1h');
+  const [currentInterval, setCurrentInterval] = useState('30m');
   const [loadingInterval, setLoadingInterval] = useState(false);
   const [themeTick, setThemeTick] = useState(0);
   const [activeIndicators, setActiveIndicators] = useState(['ma200']);

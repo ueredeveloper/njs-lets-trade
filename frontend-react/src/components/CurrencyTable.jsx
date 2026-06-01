@@ -2,6 +2,9 @@ import { useMemo, useState } from 'react';
 import { useCurrency } from '../contexts/CurrencyContext';
 import { fetchCandlesticksAndCloud } from '../services/api';
 
+const GATE_COLOR    = '#0068ff';
+const BINANCE_COLOR = '#fcd535';
+
 // Remove a quote do final do símbolo: "BTCUSDT" → "BTC", "BNBUSDT" → "BNB"
 function splitSymbol(symbol) {
   if (symbol.endsWith('USDT')) return { base: symbol.slice(0, -4), quote: 'USDT' };
@@ -10,21 +13,43 @@ function splitSymbol(symbol) {
   return { base: symbol, quote: '' };
 }
 
+// 'gate' | 'binance' | null
+function FavButton({ active, color, label, onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      title={`${active ? 'Remover de' : 'Adicionar a'} favoritos ${label}`}
+      className="flex items-center justify-center w-5 h-5 rounded text-[9px] font-bold transition-all hover:scale-110"
+      style={{
+        background: active ? color : 'transparent',
+        color: active ? '#fff' : color,
+        border: `1px solid ${color}`,
+        opacity: active ? 1 : 0.45,
+      }}
+    >
+      {label[0]}
+    </button>
+  );
+}
+
 export default function CurrencyTable({ activeFilter, showFavorites, setShowFavorites, onSelectCurrency }) {
-  const { currencies, findFilter, selectedQuote, setSelectedChart, favorites, toggleFavorite } = useCurrency();
+  const {
+    currencies, findFilter, selectedQuote, setSelectedChart,
+    gateFavorites, binanceFavorites, toggleGateFavorite, toggleBinanceFavorite,
+  } = useCurrency();
   const [loadingSymbol, setLoadingSymbol] = useState(null);
-  const [activeRow, setActiveRow] = useState(null);
-  const [search, setSearch] = useState('');
+  const [activeRow, setActiveRow]         = useState(null);
+  const [search, setSearch]               = useState('');
 
   const rows = useMemo(() => {
     if (!currencies.list?.length) return [];
 
     let list;
 
-    if (showFavorites) {
-      list = currencies.list.filter((c) => favorites.has(c.symbol));
-    } else if (activeFilter === 'favoritos') {
-      list = currencies.list.filter((c) => favorites.has(c.symbol));
+    if (showFavorites === 'gate') {
+      list = currencies.list.filter((c) => gateFavorites.has(c.symbol));
+    } else if (showFavorites === 'binance') {
+      list = currencies.list.filter((c) => binanceFavorites.has(c.symbol));
     } else if (activeFilter) {
       const filter = findFilter(activeFilter);
       if (filter) {
@@ -38,16 +63,15 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
       list = currencies.list.filter((c) => c.symbol.endsWith(selectedQuote));
     }
 
-    // Aplica filtro de busca
     if (search.trim()) {
       const term = search.trim().toUpperCase();
       list = list.filter((c) => c.symbol.includes(term));
     }
 
     return list;
-  }, [currencies, activeFilter, selectedQuote, findFilter, search, showFavorites, favorites]);
+  }, [currencies, activeFilter, selectedQuote, findFilter, search, showFavorites, gateFavorites, binanceFavorites]);
 
-  const interval = (activeFilter && activeFilter !== 'favoritos') ? activeFilter.split('|')[0] : '1h';
+  const interval = (activeFilter && activeFilter !== 'favoritos') ? activeFilter.split('|')[0] : '30m';
 
   async function handleSelect(item) {
     onSelectCurrency?.();
@@ -60,6 +84,14 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
       setLoadingSymbol(null);
     }
   }
+
+  function toggleShowFavorites(type) {
+    setShowFavorites((prev) => prev === type ? null : type);
+    setSearch('');
+  }
+
+  const gateCount    = gateFavorites.size;
+  const binanceCount = binanceFavorites.size;
 
   return (
     <div className="flex flex-col h-full">
@@ -86,29 +118,49 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
         </div>
       </div>
 
-      {/* Cabeçalho contador */}
+      {/* Cabeçalho contador + filtros de favoritos */}
       <div className="flex items-center justify-between px-3 py-1 border-b border-p2 shrink-0">
         <span className="text-xs text-p5 opacity-50 uppercase tracking-wider">Moedas</span>
         <div className="flex items-center gap-2">
           <span className="text-xs font-mono text-p4">{rows.length}</span>
-          {favorites.size > 0 && (
-            <button
-              onClick={() => setShowFavorites((v) => !v)}
-              title={showFavorites ? 'Ver todas as moedas' : `Ver ${favorites.size} favorita${favorites.size > 1 ? 's' : ''}`}
-              className="flex items-center gap-1 px-1.5 py-0.5 rounded transition-colors"
+
+          {/* Filtro Gate */}
+          <button
+            onClick={() => toggleShowFavorites('gate')}
+            title={showFavorites === 'gate' ? 'Ver todas as moedas' : `Favoritos Gate (${gateCount})`}
+            className="flex items-center gap-1 px-1.5 py-0.5 rounded transition-all"
+            style={{ opacity: showFavorites === 'gate' ? 1 : 0.5 }}
+          >
+            <span
+              className="text-[10px] font-bold px-1 py-0.5 rounded"
+              style={{
+                background: showFavorites === 'gate' ? GATE_COLOR : 'transparent',
+                color: showFavorites === 'gate' ? '#fff' : GATE_COLOR,
+                border: `1px solid ${GATE_COLOR}`,
+              }}
             >
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
-                fill={showFavorites ? 'currentColor' : 'none'}
-                stroke="currentColor" strokeWidth="1.5"
-                className={`w-5 h-5 sm:w-3.5 sm:h-3.5 transition-colors ${showFavorites ? 'text-yellow-400' : 'text-p5/40 hover:text-yellow-400'}`}>
-                <path strokeLinecap="round" strokeLinejoin="round"
-                  d="M11.48 3.499a.562.562 0 0 1 1.04 0l2.125 5.111a.563.563 0 0 0 .475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 0 0-.182.557l1.285 5.385a.562.562 0 0 1-.84.61l-4.725-2.885a.562.562 0 0 0-.586 0L6.982 20.54a.562.562 0 0 1-.84-.61l1.285-5.386a.562.562 0 0 0-.182-.557l-4.204-3.602a.562.562 0 0 1 .321-.988l5.518-.442a.563.563 0 0 0 .475-.345L11.48 3.5Z" />
-              </svg>
-              {showFavorites && (
-                <span className="text-[10px] text-yellow-400">{favorites.size}</span>
-              )}
-            </button>
-          )}
+              G{gateCount > 0 ? ` ${gateCount}` : ''}
+            </span>
+          </button>
+
+          {/* Filtro Binance */}
+          <button
+            onClick={() => toggleShowFavorites('binance')}
+            title={showFavorites === 'binance' ? 'Ver todas as moedas' : `Favoritos Binance (${binanceCount})`}
+            className="flex items-center gap-1 px-1.5 py-0.5 rounded transition-all"
+            style={{ opacity: showFavorites === 'binance' ? 1 : 0.5 }}
+          >
+            <span
+              className="text-[10px] font-bold px-1 py-0.5 rounded"
+              style={{
+                background: showFavorites === 'binance' ? BINANCE_COLOR : 'transparent',
+                color: showFavorites === 'binance' ? '#000' : BINANCE_COLOR,
+                border: `1px solid ${BINANCE_COLOR}`,
+              }}
+            >
+              B{binanceCount > 0 ? ` ${binanceCount}` : ''}
+            </span>
+          </button>
         </div>
       </div>
 
@@ -117,7 +169,7 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
         <table className="w-full text-xs">
           <thead className="sticky top-0 z-10 bg-p1">
             <tr className="border-b border-p2">
-              <th className="w-6" />
+              <th className="w-14" />
               <th className="text-left px-2 py-1.5 text-p5 opacity-50 font-normal uppercase tracking-wider">Par</th>
               <th className="text-right px-3 py-1.5 text-p5 opacity-50 font-normal uppercase tracking-wider">Preço</th>
               <th className="w-8" />
@@ -126,7 +178,8 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
           <tbody>
             {rows.map((item) => {
               const { base, quote } = splitSymbol(item.symbol);
-              const isFav = favorites.has(item.symbol);
+              const isGate    = gateFavorites.has(item.symbol);
+              const isBinance = binanceFavorites.has(item.symbol);
               return (
                 <tr
                   key={item.symbol}
@@ -137,23 +190,21 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
                       : 'hover:bg-p2/40 text-p5'
                   }`}
                 >
-                  <td className="pl-2 text-center">
-                    <button
-                      onClick={(e) => { e.stopPropagation(); toggleFavorite(item.symbol); }}
-                      className="p-0.5 rounded hover:scale-110 transition-transform"
-                      title={isFav ? 'Remover dos favoritos' : 'Adicionar aos favoritos'}
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg"
-                        viewBox="0 0 24 24"
-                        fill={isFav ? 'currentColor' : 'none'}
-                        stroke="currentColor"
-                        strokeWidth="1.5"
-                        className={`w-5 h-5 sm:w-3.5 sm:h-3.5 ${isFav ? 'text-yellow-400' : 'text-p5/30 hover:text-yellow-400/60'}`}
-                      >
-                        <path strokeLinecap="round" strokeLinejoin="round"
-                          d="M11.48 3.499a.562.562 0 0 1 1.04 0l2.125 5.111a.563.563 0 0 0 .475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 0 0-.182.557l1.285 5.385a.562.562 0 0 1-.84.61l-4.725-2.885a.562.562 0 0 0-.586 0L6.982 20.54a.562.562 0 0 1-.84-.61l1.285-5.386a.562.562 0 0 0-.182-.557l-4.204-3.602a.562.562 0 0 1 .321-.988l5.518-.442a.563.563 0 0 0 .475-.345L11.48 3.5Z" />
-                      </svg>
-                    </button>
+                  <td className="pl-2">
+                    <div className="flex items-center gap-1">
+                      <FavButton
+                        active={isGate}
+                        color={GATE_COLOR}
+                        label="Gate"
+                        onClick={(e) => { e.stopPropagation(); toggleGateFavorite(item.symbol); }}
+                      />
+                      <FavButton
+                        active={isBinance}
+                        color={BINANCE_COLOR}
+                        label="Binance"
+                        onClick={(e) => { e.stopPropagation(); toggleBinanceFavorite(item.symbol); }}
+                      />
+                    </div>
                   </td>
                   <td className="px-2 py-1.5 font-mono font-semibold">
                     {base}

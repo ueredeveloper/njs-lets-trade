@@ -4,7 +4,7 @@ const { toGateSymbol } = require('../utils/toGateSymbol');
 const GATE_BASE = 'https://api.gateio.ws/api/v4';
 
 // Símbolos que existem apenas na Gate.io — adicionados ao retorno com preço ao vivo.
-const GATE_ONLY_SYMBOLS = ['SKYAIUSDT'];
+const GATE_ONLY_SYMBOLS = ['SKYAIUSDT', 'SLXUSDT', 'HUSDT'];
 
 async function fetchGatePrice(binanceSymbol) {
   const pair = toGateSymbol(binanceSymbol);
