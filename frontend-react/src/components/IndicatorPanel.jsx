@@ -51,6 +51,11 @@ const ICHIMOKU_LINE_LABELS = {
 
 const EMPTY_INDICATOR = { type: '', intervals: ['8h'] };
 
+const DEFAULT_INDICATORS = [
+  { type: 'relativeStrengthIndex', intervals: ['30m', '4h', '8h'], compare1: 'above', line1: '10', compare2: 'bellow', line2: '20' },
+  { type: 'relativeStrengthIndex', intervals: ['30m', '4h', '8h'], compare1: 'above', line1: '20', compare2: 'bellow', line2: '30' },
+];
+
 /** Gera um resumo legível da configuração do indicador */
 function buildSummary(value) {
   const { type, intervals } = value;
@@ -286,7 +291,7 @@ function IndicatorRow({ value, onChange }) {
 
 export default function IndicatorPanel({ open, onToggle }) {
   const { currencies, getBinanceCurrenciesWithUsdt, addFilter } = useCurrency();
-  const [indicators, setIndicators] = useState([{ ...EMPTY_INDICATOR }]);
+  const [indicators, setIndicators] = useState(DEFAULT_INDICATORS);
   const [searching, setSearching] = useState(false);
 
   function updateIndicator(index, newVal) {
