@@ -164,8 +164,20 @@ function AppContent() {
       {/* Corpo principal */}
       <div className="flex flex-col min-h-0 flex-1 overflow-hidden">
         <div className="flex flex-col flex-1 min-w-0 min-h-0 bg-p1">
-          <div className="flex-none h-[55vh]">
-            <CandlestickChart onOpenCurrencyList={openCurrencyModal} />
+          <div className="relative flex-none h-[55vh]">
+            <CandlestickChart />
+            <button
+              onClick={openCurrencyModal}
+              title="Abrir lista de moedas"
+              className="absolute bottom-2 right-2 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-p3/80 hover:bg-p4 text-white text-xs font-mono font-semibold shadow-lg backdrop-blur-sm transition-colors"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
+                strokeWidth="2" stroke="currentColor" className="w-3.5 h-3.5 shrink-0">
+                <path strokeLinecap="round" strokeLinejoin="round"
+                  d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25H12" />
+              </svg>
+              Moedas
+            </button>
           </div>
           {/* Barra de toggles — acima dos painéis */}
           <div className="shrink-0 border-t border-p2 flex divide-x divide-p2">

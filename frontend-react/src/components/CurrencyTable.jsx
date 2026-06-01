@@ -67,7 +67,7 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
       <div className="px-2 py-1 shrink-0">
         <div className="flex items-center gap-1.5 bg-p2/50 border border-p3/30 rounded px-2 py-1">
           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
-            strokeWidth="2" stroke="currentColor" className="w-3.5 h-3.5 text-p5 opacity-40 shrink-0">
+            strokeWidth="2" stroke="currentColor" className="w-4 h-4 sm:w-3.5 sm:h-3.5 text-p5 opacity-40 shrink-0">
             <path strokeLinecap="round" strokeLinejoin="round"
               d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
           </svg>
@@ -79,7 +79,7 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
             className="flex-1 bg-transparent text-p5 text-xs outline-none placeholder-p5/30"
           />
           {search && (
-            <button onClick={() => setSearch('')} className="text-p5 opacity-40 hover:opacity-80">
+            <button onClick={() => setSearch('')} className="text-p5 opacity-40 hover:opacity-80 text-2xl sm:text-sm leading-none px-1">
               ×
             </button>
           )}
@@ -100,7 +100,7 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
                 fill={showFavorites ? 'currentColor' : 'none'}
                 stroke="currentColor" strokeWidth="1.5"
-                className={`w-3.5 h-3.5 transition-colors ${showFavorites ? 'text-yellow-400' : 'text-p5/40 hover:text-yellow-400'}`}>
+                className={`w-5 h-5 sm:w-3.5 sm:h-3.5 transition-colors ${showFavorites ? 'text-yellow-400' : 'text-p5/40 hover:text-yellow-400'}`}>
                 <path strokeLinecap="round" strokeLinejoin="round"
                   d="M11.48 3.499a.562.562 0 0 1 1.04 0l2.125 5.111a.563.563 0 0 0 .475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 0 0-.182.557l1.285 5.385a.562.562 0 0 1-.84.61l-4.725-2.885a.562.562 0 0 0-.586 0L6.982 20.54a.562.562 0 0 1-.84-.61l1.285-5.386a.562.562 0 0 0-.182-.557l-4.204-3.602a.562.562 0 0 1 .321-.988l5.518-.442a.563.563 0 0 0 .475-.345L11.48 3.5Z" />
               </svg>
@@ -148,7 +148,7 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
                         fill={isFav ? 'currentColor' : 'none'}
                         stroke="currentColor"
                         strokeWidth="1.5"
-                        className={`w-3.5 h-3.5 ${isFav ? 'text-yellow-400' : 'text-p5/30 hover:text-yellow-400/60'}`}
+                        className={`w-5 h-5 sm:w-3.5 sm:h-3.5 ${isFav ? 'text-yellow-400' : 'text-p5/30 hover:text-yellow-400/60'}`}
                       >
                         <path strokeLinecap="round" strokeLinejoin="round"
                           d="M11.48 3.499a.562.562 0 0 1 1.04 0l2.125 5.111a.563.563 0 0 0 .475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 0 0-.182.557l1.285 5.385a.562.562 0 0 1-.84.61l-4.725-2.885a.562.562 0 0 0-.586 0L6.982 20.54a.562.562 0 0 1-.84-.61l1.285-5.386a.562.562 0 0 0-.182-.557l-4.204-3.602a.562.562 0 0 1 .321-.988l5.518-.442a.563.563 0 0 0 .475-.345L11.48 3.5Z" />

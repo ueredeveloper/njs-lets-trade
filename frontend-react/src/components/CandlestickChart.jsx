@@ -134,7 +134,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
   };
 }
 
-export default function CandlestickChart({ onOpenCurrencyList }) {
+export default function CandlestickChart() {
   const { selectedChart, setSelectedChart } = useCurrency();
   const [currentInterval, setCurrentInterval] = useState('1h');
   const [loadingInterval, setLoadingInterval] = useState(false);
@@ -198,15 +198,6 @@ export default function CandlestickChart({ onOpenCurrencyList }) {
     <div className="flex flex-col h-full">
       {/* Barra de intervalos + indicadores */}
       <div className="flex items-center gap-1 px-3 pt-2 shrink-0 flex-wrap">
-        {selectedChart?.symbol && (
-          <button
-            onClick={onOpenCurrencyList}
-            title="Trocar moeda"
-            className="mr-1 px-2 py-0.5 text-xs font-mono font-bold text-p4 hover:text-white bg-p2/60 hover:bg-p3/40 rounded transition-colors"
-          >
-            {selectedChart.symbol}
-          </button>
-        )}
         {INTERVALS.map((iv) => (
           <button
             key={iv}
