@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { CurrencyProvider, useCurrency } from './contexts/CurrencyContext';
 import { fetchAllCurrencies, fetch24hVolume, fetchCandlesticksAndCloud, getFavorites } from './services/api';
 
@@ -18,6 +18,8 @@ function AppContent() {
   const [currencyModalOpen, setCurrencyModalOpen] = useState(false);
   const [currencyModalVisible, setCurrencyModalVisible] = useState(false);
   const [showFavorites, setShowFavorites] = useState(false);
+  const [dragY, setDragY] = useState(0);
+  const dragStartY = useRef(null);
   const [openPanels, setOpenPanels] = useState(['indicators']);
 
   function togglePanel(id) {
@@ -66,12 +68,33 @@ function AppContent() {
 
   function openCurrencyModal() {
     setCurrencyModalOpen(true);
+    setDragY(0);
     requestAnimationFrame(() => requestAnimationFrame(() => setCurrencyModalVisible(true)));
   }
 
   function closeCurrencyModal() {
+    setDragY(0);
     setCurrencyModalVisible(false);
     setTimeout(() => setCurrencyModalOpen(false), 320);
+  }
+
+  function handleDragStart(e) {
+    dragStartY.current = e.touches[0].clientY;
+  }
+
+  function handleDragMove(e) {
+    if (dragStartY.current === null) return;
+    const delta = e.touches[0].clientY - dragStartY.current;
+    if (delta > 0) setDragY(delta);
+  }
+
+  function handleDragEnd() {
+    if (dragY > 120) {
+      closeCurrencyModal();
+    } else {
+      setDragY(0);
+    }
+    dragStartY.current = null;
   }
 
   function handleSelectFilter(name) {
@@ -120,24 +143,38 @@ function AppContent() {
 
           {/* Sheet — sobe de baixo */}
           <div
-            className="absolute inset-x-0 bottom-0 flex flex-col bg-p1 border-t border-p2 rounded-t-2xl shadow-2xl transition-transform duration-300 ease-out"
+            className="absolute inset-x-0 bottom-0 flex flex-col bg-p1 border-t border-p2 rounded-t-2xl shadow-2xl"
             style={{
               height: '80%',
-              transform: currencyModalVisible ? 'translateY(0)' : 'translateY(100%)',
+              transform: dragY > 0
+                ? `translateY(${dragY}px)`
+                : currencyModalVisible ? 'translateY(0)' : 'translateY(100%)',
+              transition: dragY > 0 ? 'none' : 'transform 300ms ease-out',
             }}
             onClick={(e) => e.stopPropagation()}
           >
-            {/* Handle */}
-            <div className="flex justify-center pt-2 pb-1 shrink-0">
-              <div className="w-10 h-1 rounded-full bg-p3/50" />
+            {/* Handle — área de drag */}
+            <div
+              className="flex justify-center pt-3 pb-2 shrink-0 cursor-grab active:cursor-grabbing touch-none"
+              onTouchStart={handleDragStart}
+              onTouchMove={handleDragMove}
+              onTouchEnd={handleDragEnd}
+            >
+              <div className="w-12 h-1.5 rounded-full bg-p3/60" />
             </div>
 
             {/* Cabeçalho */}
-            <div className="flex items-center justify-between px-4 py-2 border-b border-p2 shrink-0">
+            <div
+              className="flex items-center justify-between px-4 py-2 border-b border-p2 shrink-0 cursor-grab active:cursor-grabbing touch-none"
+              onTouchStart={handleDragStart}
+              onTouchMove={handleDragMove}
+              onTouchEnd={handleDragEnd}
+            >
               <span className="text-sm font-semibold text-p5 uppercase tracking-widest">Moedas</span>
               <button
                 onClick={closeCurrencyModal}
-                className="text-p5 hover:text-white p-1 rounded hover:bg-p2 transition-colors text-lg leading-none"
+                onTouchStart={(e) => e.stopPropagation()}
+                className="text-p5 hover:text-white w-9 h-9 flex items-center justify-center rounded-full hover:bg-p2 transition-colors text-2xl leading-none"
               >
                 ×
               </button>

@@ -79,7 +79,7 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
             className="flex-1 bg-transparent text-p5 text-xs outline-none placeholder-p5/30"
           />
           {search && (
-            <button onClick={() => setSearch('')} className="text-p5 opacity-40 hover:opacity-80 text-2xl sm:text-sm leading-none px-1">
+            <button onClick={() => setSearch('')} className="text-p5 opacity-50 hover:opacity-90 w-7 h-7 flex items-center justify-center rounded-full hover:bg-p3/30 text-xl leading-none transition-colors">
               ×
             </button>
           )}
