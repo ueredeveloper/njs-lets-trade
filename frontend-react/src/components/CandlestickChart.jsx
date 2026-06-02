@@ -155,13 +155,6 @@ export default function CandlestickChart() {
 
   const colors = useMemo(() => getThemeColors(), [themeTick]);
 
-  // Quando o símbolo muda externamente (ex: click na tabela), sincroniza o intervalo
-  useEffect(() => {
-    if (selectedChart?.interval) {
-      setCurrentInterval(selectedChart.interval);
-    }
-  }, [selectedChart?.symbol]);
-
   async function handleIntervalChange(iv) {
     if (!selectedChart?.symbol || iv === currentInterval) return;
     setCurrentInterval(iv);

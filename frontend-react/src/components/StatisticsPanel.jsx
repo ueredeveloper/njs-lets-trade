@@ -63,6 +63,12 @@ function RsiStats() {
     }
   }, [selectedChart?.symbol]);
 
+  useEffect(() => {
+    if (selectedChart?.interval) {
+      setInterval(selectedChart.interval);
+    }
+  }, [selectedChart?.interval]);
+
   useEffect(() => { handleSearch(); }, []);
 
   return (

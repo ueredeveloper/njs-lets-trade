@@ -34,7 +34,7 @@ function FavButton({ active, color, label, onClick }) {
 
 export default function CurrencyTable({ activeFilter, showFavorites, setShowFavorites, onSelectCurrency }) {
   const {
-    currencies, findFilter, selectedQuote, setSelectedChart,
+    currencies, findFilter, selectedQuote, setSelectedChart, selectedChart,
     gateFavorites, binanceFavorites, toggleGateFavorite, toggleBinanceFavorite,
   } = useCurrency();
   const [loadingSymbol, setLoadingSymbol] = useState(null);
@@ -71,7 +71,7 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
     return list;
   }, [currencies, activeFilter, selectedQuote, findFilter, search, showFavorites, gateFavorites, binanceFavorites]);
 
-  const interval = (activeFilter && activeFilter !== 'favoritos') ? activeFilter.split('|')[0] : '30m';
+  const interval = selectedChart?.interval || '30m';
 
   async function handleSelect(item) {
     onSelectCurrency?.();
