@@ -1,9 +1,17 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useCallback } from 'react';
 import { useCurrency } from '../contexts/CurrencyContext';
 import { fetchCandlesticksAndCloud } from '../services/api';
 
 const GATE_COLOR    = '#0068ff';
 const BINANCE_COLOR = '#fcd535';
+
+function formatVolume(vol) {
+  if (vol == null || isNaN(vol) || vol <= 0) return '—';
+  if (vol >= 1e9) return `${(vol / 1e9).toFixed(1)}B`;
+  if (vol >= 1e6) return `${(vol / 1e6).toFixed(1)}M`;
+  if (vol >= 1e3) return `${(vol / 1e3).toFixed(0)}K`;
+  return vol.toFixed(0);
+}
 
 // Remove a quote do final do símbolo: "BTCUSDT" → "BTC", "BNBUSDT" → "BNB"
 function splitSymbol(symbol) {
@@ -40,6 +48,11 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
   const [loadingSymbol, setLoadingSymbol] = useState(null);
   const [activeRow, setActiveRow]         = useState(null);
   const [search, setSearch]               = useState('');
+  const [sortVolume, setSortVolume]       = useState('desc'); // 'desc' | 'asc' | null
+
+  const cycleSort = useCallback(() => {
+    setSortVolume((v) => v === 'desc' ? 'asc' : v === 'asc' ? null : 'desc');
+  }, []);
 
   const rows = useMemo(() => {
     if (!currencies.list?.length) return [];
@@ -68,8 +81,11 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
       list = list.filter((c) => c.symbol.includes(term));
     }
 
+    if (sortVolume === 'desc') list = [...list].sort((a, b) => (b.volume || 0) - (a.volume || 0));
+    if (sortVolume === 'asc')  list = [...list].sort((a, b) => (a.volume || 0) - (b.volume || 0));
+
     return list;
-  }, [currencies, activeFilter, selectedQuote, findFilter, search, showFavorites, gateFavorites, binanceFavorites]);
+  }, [currencies, activeFilter, selectedQuote, findFilter, search, showFavorites, gateFavorites, binanceFavorites, sortVolume]);
 
   const interval = (activeFilter && activeFilter !== 'favoritos') ? activeFilter.split('|')[0] : '30m';
 
@@ -169,10 +185,17 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
         <table className="w-full text-xs">
           <thead className="sticky top-0 z-10 bg-p1">
             <tr className="border-b border-p2">
-              <th className="w-14" />
+              <th className="w-12" />
               <th className="text-left px-2 py-1.5 text-p5 opacity-50 font-normal uppercase tracking-wider">Par</th>
-              <th className="text-right px-3 py-1.5 text-p5 opacity-50 font-normal uppercase tracking-wider">Preço</th>
-              <th className="w-8" />
+              <th className="text-right px-2 py-1.5 text-p5 opacity-50 font-normal uppercase tracking-wider">Preço</th>
+              <th
+                className="text-right px-2 py-1.5 text-p5 opacity-50 font-normal uppercase tracking-wider cursor-pointer hover:opacity-90 select-none whitespace-nowrap"
+                onClick={cycleSort}
+                title="Ordenar por volume 24h"
+              >
+                Vol{sortVolume === 'desc' ? ' ↓' : sortVolume === 'asc' ? ' ↑' : ''}
+              </th>
+              <th className="w-6" />
             </tr>
           </thead>
           <tbody>
@@ -210,8 +233,9 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
                     {base}
                     <span className="opacity-40 font-normal text-[10px]">/{quote}</span>
                   </td>
-                  <td className="px-3 py-1.5 text-right font-mono">{item.price}</td>
-                  <td className="pr-2 text-center">
+                  <td className="px-2 py-1.5 text-right font-mono">{item.price}</td>
+                  <td className="px-2 py-1.5 text-right font-mono text-[10px] opacity-60">{formatVolume(item.volume)}</td>
+                  <td className="pr-1 text-center">
                     {loadingSymbol === item.symbol ? (
                       <div className="w-3 h-3 border border-p4 border-t-transparent rounded-full animate-spin mx-auto" />
                     ) : activeRow === item.symbol ? (

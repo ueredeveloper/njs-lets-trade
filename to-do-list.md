@@ -47,3 +47,8 @@
 ### Tarefa []: Cópia de Candlesticks
     - [] Copiar candlesticks para utilizar com a inteligência e perguntar sobre padrões etc. No caso do Chat Gpt ele não consegue encontrar
     os últimos candles da BTC, por exemplo, tendo que mostrar um json dos últimos candles antes de perguntar.
+
+
+### Tarefa []: Opções do Usuário
+    -   []  Salvar em banco as moedas favoritas do usuário
+    -   []  Salvar em banco os indicadores mais utilizados pelo usuário. No meu caso rsi entre 10 e 20 e rsi entre 20 e 30, nos intervalos de 30min, 4h e 8h.
