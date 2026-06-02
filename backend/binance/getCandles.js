@@ -1,11 +1,12 @@
-const getClient                    = require('./getClient');
-const writeCandles                 = require('../utils/write-candles');
-const readCandles                  = require('../utils/read-candles');
+const getClient = require('./getClient');
+const writeCandles = require('../utils/write-candles');
+const readCandles = require('../utils/read-candles');
 const convertIntervalToMiliseconds = require('../utils/convert-interval-to-miliseconds');
-const { getGateCandles }           = require('../gate/getGateCandles');
+const { getGateCandles } = require('../gate/getGateCandles');
 
 // Símbolos deslistados na Binance — usar Gate.io automaticamente
-const GATE_ONLY_SYMBOLS = new Set(['SKYAIUSDT', 'SLXUSDT']);
+const GATE_ONLY_SYMBOLS = new Set(['SKYAIUSDT', 'SLXUSDT', 'UNIUSDT', 'ZESTUSDT', 'ONDOUSDT',
+    'VIRTUAL', 'FARTCOINUSDT', 'ARIAUSDT', 'ALLOUSDT', 'BEATUSDT', 'FILUSDT']);
 
 /**
  * Busca candles de um símbolo. Se o símbolo estiver deslistado na Binance,
@@ -45,8 +46,8 @@ module.exports = getCandles = async function (symbol, interval, limit) {
         dbLastItemOpenTime = Date.now();
     }
 
-    const timeDifference   = currentTimestamp - dbLastItemOpenTime;
-    let miliseconds        = await convertIntervalToMiliseconds(interval);
+    const timeDifference = currentTimestamp - dbLastItemOpenTime;
+    let miliseconds = await convertIntervalToMiliseconds(interval);
     const limitForUpdateDb = Math.floor(timeDifference / miliseconds);
 
     i++;
@@ -57,7 +58,7 @@ module.exports = getCandles = async function (symbol, interval, limit) {
 
     if (limit > dbCandles.length) {
 
-        let client  = await getClient();
+        let client = await getClient();
         let candles = await client.candles({ symbol, interval, limit });
 
         writeCandles(symbol, interval, candles);
@@ -67,14 +68,14 @@ module.exports = getCandles = async function (symbol, interval, limit) {
 
         if (limitForUpdateDb > 0) {
 
-            let client  = await getClient();
+            let client = await getClient();
             let candles = await client.candles({ symbol, interval, limit: limitForUpdateDb });
 
             candles.forEach(candle => dbCandles.push(candle));
 
         } else {
 
-            let client  = await getClient();
+            let client = await getClient();
             let candles = await client.candles({ symbol, interval, limit: 1 });
 
             dbCandles.pop();
