@@ -13,9 +13,17 @@ const convertOpenTime = (time, interval) => {
 
     switch (true) {
 
-        case interval.includes('m'):
-            conversionTime = new Date(adjustedTime).toLocaleString('pt-BR', { ...options, minute: 'numeric' });
+        case interval.includes('m'): {
+            const rawDate = new Date(time);
+            const minute = parseInt(rawDate.toLocaleString('pt-BR', { ...options, minute: 'numeric' }));
+            if (minute === 0) {
+                const hour = parseInt(rawDate.toLocaleString('pt-BR', { ...options, hour: 'numeric', hour12: false }));
+                conversionTime = `${hour}:00`;
+            } else {
+                conversionTime = String(minute).padStart(2, '0');
+            }
             break;
+        }
         case interval.includes('h'):
             // Formata a hora de um timestamp para incluir ":00" no final.
             let formatedHour = `${new Date(time).toLocaleString('pt-BR', { ...options, hour: 'numeric', hour12: false })}:00`
