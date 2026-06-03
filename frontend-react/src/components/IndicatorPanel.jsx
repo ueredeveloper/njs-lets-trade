@@ -108,14 +108,15 @@ function IndicatorRow({ value, onChange }) {
     });
   }
 
-  const sel = 'bg-p2 border border-p3/40 text-p5 text-xs rounded px-2 py-1 focus:outline-none focus:border-p4';
+  const sel = 'bg-p2 border border-p3/40 text-p5 text-[10px] sm:text-xs rounded px-1 sm:px-2 py-0.5 sm:py-1 focus:outline-none focus:border-p4 min-w-0';
   const summary = buildSummary(value);
 
   return (
     <div className="flex w-full flex-col bg-p2/50 border border-p3/20 rounded p-2 gap-2">
-      <div className="flex w-full items-center flex-wrap gap-2">
+      {/* Seletores — linha única no mobile */}
+      <div className="flex w-full items-center gap-1 sm:gap-2 flex-nowrap sm:flex-wrap">
         {/* Tipo */}
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 min-w-0 shrink-0">
           <select
             className={sel}
             value={type}
@@ -134,20 +135,16 @@ function IndicatorRow({ value, onChange }) {
           )}
         </div>
 
+
         {type === 'relativeStrengthIndex' && (
           <>
-            <select
-              className={sel}
-              value={value.compare1 ?? 'above'}
+            <select className={sel} value={value.compare1 ?? 'above'}
               onChange={(e) => onChange({ ...value, compare1: e.target.value })}
-              title="Primeira condição: Above = RSI acima do valor | Below = RSI abaixo do valor"
-            >
+              title="Primeira condição: Above = RSI acima do valor | Below = RSI abaixo do valor">
               <option value="above">Above</option>
               <option value="bellow">Below</option>
             </select>
-            <select
-              className={sel}
-              value={value.line1 ?? '70'}
+            <select className={sel} value={value.line1 ?? '70'}
               onChange={(e) => {
                 const v1 = Number(e.target.value);
                 const RSI_VALUES = [10,20,30,40,50,60,70,80,90,99];
@@ -155,25 +152,18 @@ function IndicatorRow({ value, onChange }) {
                 const suggested = nextIdx < RSI_VALUES.length ? String(RSI_VALUES[nextIdx]) : '99';
                 onChange({ ...value, line1: e.target.value, line2: suggested });
               }}
-              title="Valor da primeira condição do RSI (0–100)"
-            >
+              title="Valor da primeira condição do RSI (0–100)">
               {[10,20,30,40,50,60,70,80,90,99].map(v => <option key={v} value={String(v)}>{v}</option>)}
             </select>
-            <select
-              className={sel}
-              value={value.compare2 ?? 'bellow'}
+            <select className={sel} value={value.compare2 ?? 'bellow'}
               onChange={(e) => onChange({ ...value, compare2: e.target.value })}
-              title="Segunda condição adicional: Above = RSI acima | Below = RSI abaixo"
-            >
+              title="Segunda condição: Above = RSI acima | Below = RSI abaixo">
               <option value="above">Above</option>
               <option value="bellow">Below</option>
             </select>
-            <select
-              className={sel}
-              value={value.line2 ?? '99'}
+            <select className={sel} value={value.line2 ?? '99'}
               onChange={(e) => onChange({ ...value, line2: e.target.value })}
-              title="Valor da segunda condição do RSI (0–100)"
-            >
+              title="Valor da segunda condição do RSI (0–100)">
               {[10,20,30,40,50,60,70,80,90,99].map(v => <option key={v} value={String(v)}>{v}</option>)}
             </select>
           </>
@@ -258,25 +248,25 @@ function IndicatorRow({ value, onChange }) {
             </select>
           </>
         )}
+      </div>
 
-        {/* Intervalos */}
-        <div className="flex flex-row flex-wrap gap-x-2 gap-y-1">
-          {INTERVALS.map((iv) => (
-            <label
-              key={iv}
-              className="flex items-center gap-1 text-xs text-p5 cursor-pointer"
-              title={`Timeframe: ${INTERVAL_LABELS[iv] ?? iv}`}
-            >
-              <input
-                type="checkbox"
-                checked={intervals.includes(iv)}
-                onChange={() => toggleInterval(iv)}
-                className="accent-p4 cursor-pointer"
-              />
-              {iv}
-            </label>
-          ))}
-        </div>
+      {/* Intervalos */}
+      <div className="flex flex-row flex-wrap gap-x-2 gap-y-1">
+        {INTERVALS.map((iv) => (
+          <label
+            key={iv}
+            className="flex items-center gap-1 text-xs text-p5 cursor-pointer"
+            title={`Timeframe: ${INTERVAL_LABELS[iv] ?? iv}`}
+          >
+            <input
+              type="checkbox"
+              checked={intervals.includes(iv)}
+              onChange={() => toggleInterval(iv)}
+              className="accent-p4 cursor-pointer"
+            />
+            {iv}
+          </label>
+        ))}
       </div>
 
       {/* Sumário da configuração atual */}
@@ -397,7 +387,7 @@ export default function IndicatorPanel({ open, onToggle }) {
     }
   }
 
-  const btnIcon = 'p-1.5 rounded text-p5 transition-colors hover:text-white hover:bg-p3 disabled:opacity-40';
+  const btnIcon = 'p-1.5 rounded text-p5 transition-colors hover:text-white hover:bg-p4 disabled:opacity-40';
 
   return (
     <div className="flex flex-col gap-2 px-4 py-3 h-full">
@@ -430,7 +420,7 @@ export default function IndicatorPanel({ open, onToggle }) {
           <button
             onClick={handleSearch}
             disabled={searching}
-            className={`${btnIcon} ${!searching ? 'bg-p3 hover:bg-p4 text-white' : ''}`}
+            className={`${btnIcon} ${!searching ? 'bg-p4 hover:bg-p3 text-white' : ''}`}
           >
             {searching ? (
               <div className="w-4 h-4 border border-white border-t-transparent rounded-full animate-spin" />

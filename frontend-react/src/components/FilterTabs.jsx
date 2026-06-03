@@ -22,6 +22,38 @@ function getIntervalColor(name) {
   return '#157a8c';
 }
 
+const CARD_COLORS = ['#4C86C6', '#EF3D4D', '#FED269', '#4DBD97', '#9B6ED6'];
+
+function hexToRgba(hex, alpha) {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+function getContrastText(hex) {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  return luminance > 0.55 ? '#0f172a' : '#ffffff';
+}
+
+// Padrão de tamanhos de linha — nunca repete consecutivamente
+const ROW_PATTERN = [3, 1, 2, 3, 2, 1, 3, 2, 1, 2, 3, 1, 2, 3, 1, 3, 2, 1, 2, 3];
+
+function buildRows(filters) {
+  const rows = [];
+  let i = 0, p = 0;
+  while (i < filters.length) {
+    const size = ROW_PATTERN[p % ROW_PATTERN.length];
+    rows.push(filters.slice(i, i + size));
+    i += size;
+    p++;
+  }
+  return rows;
+}
+
 // Ícone funil
 function IconFunnel({ className }) {
   return (
@@ -57,6 +89,26 @@ function getFilterDescription(name) {
   const interval = parts[0];
   const type = parts[1];
 
+  // Filtros de volume combinado Binance+Gate: Mercado|3M⇾, Mercado|5M⇿30M, etc.
+  if (interval === 'Mercado') {
+    const param = parts[1] ?? '';
+    if (param.includes('⇿')) {
+      const [low, high] = param.split('⇿');
+      return `Volume entre ${low} e ${high} USDT (Binance + Gate.io)`;
+    }
+    if (param.includes('⇾')) {
+      const val = param.replace('⇾', '').trim();
+      return `Volume acima de ${val} USDT (Binance + Gate.io)`;
+    }
+    return `Mercado: ${param}`;
+  }
+
+  if (type === 'Mercado') {
+    const param = parts[2] ?? '';
+    if (param === 'USDT') return 'Todos os pares USDT (Binance + Gate.io)';
+    return `Mercado: ${param}`;
+  }
+
   if (type === 'Binance') {
     const param = parts[2] ?? '';
     if (param === 'USDT') return `Moedas com par USDT`;
@@ -73,8 +125,8 @@ function getFilterDescription(name) {
     return `Filtro Binance: ${param}`;
   }
 
-  if (type === 'r') {
-    // 1h|r|a|70|b|99
+  if (type === 'r' || type === 'rsi') {
+    // 1h|rsi|a|70|b|99
     const c1 = parts[2] === 'a' ? 'acima' : 'abaixo';
     const v1 = parts[3];
     const c2 = parts[4] === 'b' ? 'abaixo' : 'acima';
@@ -138,43 +190,58 @@ export default function FilterTabs({ onSelectFilter }) {
   function handleRemove() { removeFilters(Array.from(checked)); setChecked(new Set()); }
   function handleClearAll() { clearAllFilters(); setChecked(new Set()); setActiveFilter(null); onSelectFilter(null); }
 
-  const btnBase = 'p-1 rounded text-p5 transition-colors hover:text-white';
+  const btnBase = 'p-1 rounded text-p5 transition-colors hover:text-white hover:bg-p4';
 
   return (
     <div className="flex flex-col gap-1 h-full min-h-0">
-      {/* Lista de tags de filtro */}
-      <div className="flex flex-wrap gap-1 flex-1 min-h-0 overflow-y-auto content-start">
-
-        {sortedFilters.map((filter) => {
-          const color = getIntervalColor(filter.name);
-          const isActive = activeFilter === filter.name;
-          const description = getFilterDescription(filter.name);
-          return (
-            <div
-              key={filter.name}
-              title={description}
-              className={`flex items-center gap-0.5 rounded px-1.5 py-0.5 cursor-pointer border transition-all ${
-                isActive
-                  ? 'border-p4 bg-p2'
-                  : 'border-transparent bg-p2/60 hover:border-p3'
-              }`}
-            >
-              <span
-                className="text-xs font-mono"
-                style={{ color }}
-                onClick={() => handleClick(filter.name)}
-              >
-                {filter.name}
-              </span>
-              <input
-                type="checkbox"
-                checked={checked.has(filter.name)}
-                onChange={() => toggleCheck(filter.name)}
-                className="w-3 h-3 accent-p4 cursor-pointer"
-              />
+      {/* Linhas com tamanhos variados */}
+      <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden flex flex-col gap-1">
+        {(() => {
+          let gi = 0;
+          return buildRows(sortedFilters).map((row, rowIdx) => (
+            <div key={rowIdx} className="flex gap-1">
+              {row.map((filter) => {
+                const cardColor = CARD_COLORS[gi % CARD_COLORS.length];
+                gi++;
+                const textColor = getContrastText(cardColor);
+                const isActive  = activeFilter === filter.name;
+                const isChecked = checked.has(filter.name);
+                const count     = filter.list?.length ?? 0;
+                const bgAlpha   = isActive ? 1.00 : isChecked ? 0.90 : 0.82;
+                return (
+                  <div
+                    key={filter.name}
+                    title={getFilterDescription(filter.name)}
+                    onClick={() => handleClick(filter.name)}
+                    style={{
+                      background: hexToRgba(cardColor, bgAlpha),
+                      borderColor: isActive ? textColor : hexToRgba(cardColor, 1),
+                      outline: isActive ? `2px solid ${textColor}` : undefined,
+                      outlineOffset: isActive ? '-2px' : undefined,
+                    }}
+                    className="flex-1 flex flex-col gap-0.5 rounded border px-2 py-2 cursor-pointer transition-all hover:brightness-110 min-w-0"
+                  >
+                    <span className="text-[10px] font-mono font-semibold truncate leading-tight" style={{ color: textColor }}>
+                      {filter.name}
+                    </span>
+                    <div className="flex items-end justify-between gap-1 mt-0.5">
+                      <span className="text-[11px] font-mono font-bold leading-none" style={{ color: textColor }}>
+                        {count}
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={(e) => { e.stopPropagation(); toggleCheck(filter.name); }}
+                        onClick={(e) => e.stopPropagation()}
+                        className="w-4 h-4 accent-p4 cursor-pointer shrink-0"
+                      />
+                    </div>
+                  </div>
+                );
+              })}
             </div>
-          );
-        })}
+          ));
+        })()}
       </div>
 
       {/* Botões de ação */}

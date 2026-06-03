@@ -64,14 +64,28 @@ export async function reloadCandles(symbol, interval = 'all') {
   return res.json();
 }
 
+/** Retorna lista de todas as moedas USDT disponíveis na Gate.io (cache 5min no backend). */
+export async function fetchGateCurrencies() {
+  const res = await fetch('/services/gate-currencies');
+  if (!res.ok) throw new Error('Falha ao buscar moedas Gate.io');
+  return res.json(); // [{ symbol, price, volume }]
+}
+
+/** Dispara o pré-carregamento de todos os intervalos padrão para um símbolo Gate.io. */
+export function gatePreloadCandles(symbol) {
+  fetch(`/services/gate-prefetch?symbol=${encodeURIComponent(symbol)}`).catch(() => {});
+}
+
 /**
  * Busca candles + Ichimoku + SMA para exibir no gráfico.
- * @param {string} symbol  ex: 'BTCUSDT'
+ * @param {string} symbol   ex: 'BTCUSDT'
  * @param {string} interval ex: '1h'
+ * @param {string} [source] 'gate' para forçar Gate.io; omitir para Binance
  */
-export async function fetchCandlesticksAndCloud(symbol, interval) {
+export async function fetchCandlesticksAndCloud(symbol, interval, source = null) {
+  const srcParam = source === 'gate' ? '&source=gate' : '';
   const candles = await fetch(
-    `/services/candles/?symbol=${symbol}&limit=266&interval=${interval}`,
+    `/services/candles/?symbol=${symbol}&limit=266&interval=${interval}${srcParam}`,
   ).then((r) => r.json());
 
   const [ichimokuCloud, movingAverage, rsi] = await Promise.all([
@@ -104,7 +118,7 @@ function buildNome(query) {
   const parts = query.trim().split('|');
   const interval = parts[0];
   const indRaw = parts[1].toLowerCase();
-  const indicator = (indRaw === 'rsi' || indRaw === 'r') ? 'r' : indRaw[0];
+  const indicator = (indRaw === 'rsi' || indRaw === 'r') ? 'rsi' : indRaw[0];
   const condParts = [];
   for (let i = 2; i + 1 < parts.length; i += 2) {
     const cond = parts[i][0].toLowerCase() === 'a' ? 'a' : 'b';

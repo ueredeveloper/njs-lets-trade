@@ -1,9 +1,10 @@
-import { useMemo, useState, useCallback } from 'react';
+import { useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import { useCurrency } from '../contexts/CurrencyContext';
-import { fetchCandlesticksAndCloud } from '../services/api';
+import { fetchCandlesticksAndCloud, fetchGateCurrencies, gatePreloadCandles } from '../services/api';
 
 const GATE_COLOR    = '#0068ff';
 const BINANCE_COLOR = '#fcd535';
+const TRADE_COLOR   = '#00c076';
 
 function formatVolume(vol) {
   if (vol == null || isNaN(vol) || vol <= 0) return '—';
@@ -40,18 +41,39 @@ function FavButton({ active, color, label, onClick }) {
   );
 }
 
+// Para cada símbolo favorito: usa Binance se tiver volume > 0, senão Gate.
+// Símbolos não encontrados em nenhum lugar são ignorados.
+function resolveFavorites(favSet, binanceList, gateAll) {
+  const binanceMap = new Map(binanceList.map((c) => [c.symbol, c]));
+  const gateMap    = new Map((gateAll || []).map((c) => [c.symbol, c]));
+  const result = [];
+  for (const sym of favSet) {
+    const b = binanceMap.get(sym);
+    const g = gateMap.get(sym);
+    if (b && (b.volume || 0) > 0) result.push(b);
+    else if (g) result.push(g);
+    else if (b)  result.push(b); // volume 0 mas existe — inclui mesmo assim
+  }
+  return result;
+}
+
 export default function CurrencyTable({ activeFilter, showFavorites, setShowFavorites, onSelectCurrency }) {
   const {
-    currencies, findFilter, selectedQuote, setSelectedChart, selectedChart,
-    gateFavorites, binanceFavorites, toggleGateFavorite, toggleBinanceFavorite,
+    currencies, findFilter, selectedQuote, setSelectedChart,
+    gateFavorites, binanceFavorites, tradeFavorites,
+    toggleGateFavorite, toggleBinanceFavorite, toggleTradeFavorite,
   } = useCurrency();
   const [loadingSymbol, setLoadingSymbol] = useState(null);
   const [activeRow, setActiveRow]         = useState(null);
   const [search, setSearch]               = useState('');
-  const [sortVolume, setSortVolume]       = useState('desc'); // 'desc' | 'asc' | null
+  const [sortVolume, setSortVolume]       = useState('desc'); // 'desc' | 'asc'
+  const [gateItems, setGateItems]         = useState([]);
+  const [gateLoading, setGateLoading]     = useState(false);
+  const [gateAll, setGateAll]             = useState(null); // todas as moedas Gate (para favoritos)
+  const gateCacheRef                      = useRef(null);
 
   const cycleSort = useCallback(() => {
-    setSortVolume((v) => v === 'desc' ? 'asc' : v === 'asc' ? null : 'desc');
+    setSortVolume((v) => v === 'desc' ? 'asc' : 'desc');
   }, []);
 
   const rows = useMemo(() => {
@@ -60,14 +82,22 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
     let list;
 
     if (showFavorites === 'gate') {
-      list = currencies.list.filter((c) => gateFavorites.has(c.symbol));
+      list = resolveFavorites(gateFavorites, currencies.list, gateAll);
     } else if (showFavorites === 'binance') {
       list = currencies.list.filter((c) => binanceFavorites.has(c.symbol));
+    } else if (showFavorites === 'trade') {
+      list = resolveFavorites(tradeFavorites, currencies.list, gateAll);
     } else if (activeFilter) {
       const filter = findFilter(activeFilter);
       if (filter) {
+        const isMarket = activeFilter.startsWith('Mercado|');
         list = filter.list
-          .map((sym) => currencies.list.find((c) => c.symbol === sym))
+          .map((sym) => {
+            const binance = currencies.list.find((c) => c.symbol === sym);
+            if (binance) return binance;
+            if (isMarket && gateAll) return gateAll.find((c) => c.symbol === sym) ?? null;
+            return null;
+          })
           .filter(Boolean);
       }
     }
@@ -81,21 +111,69 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
       list = list.filter((c) => c.symbol.includes(term));
     }
 
-    if (sortVolume === 'desc') list = [...list].sort((a, b) => (b.volume || 0) - (a.volume || 0));
-    if (sortVolume === 'asc')  list = [...list].sort((a, b) => (a.volume || 0) - (b.volume || 0));
+    list = list.slice().sort((a, b) => {
+      const va = Number(a.volume) || 0;
+      const vb = Number(b.volume) || 0;
+      return sortVolume === 'desc' ? vb - va : va - vb;
+    });
 
     return list;
-  }, [currencies, activeFilter, selectedQuote, findFilter, search, showFavorites, gateFavorites, binanceFavorites, sortVolume]);
+  }, [currencies, activeFilter, selectedQuote, findFilter, search, showFavorites, gateFavorites, binanceFavorites, tradeFavorites, sortVolume, gateAll]);
 
-  const interval = selectedChart?.interval || '30m';
+  // Busca Gate.io sempre que o usuário digita (≥2 chars), excluindo moedas já na lista Binance
+  useEffect(() => {
+    const term = search.trim().toUpperCase();
+    if (term.length < 2) { setGateItems([]); return; }
 
-  async function handleSelect(item) {
+    let cancelled = false;
+    setGateLoading(true);
+
+    (async () => {
+      try {
+        if (!gateCacheRef.current) {
+          gateCacheRef.current = await fetchGateCurrencies();
+          setGateAll(gateCacheRef.current);
+        }
+        if (!cancelled) {
+          const binanceSymbols = new Set(currencies.list?.map(c => c.symbol) ?? []);
+          setGateItems(
+            gateCacheRef.current
+              .filter(c => c.symbol.includes(term) && !binanceSymbols.has(c.symbol))
+              .slice(0, 40)
+          );
+        }
+      } catch {
+        if (!cancelled) setGateItems([]);
+      } finally {
+        if (!cancelled) setGateLoading(false);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [search, currencies.list]);
+
+  // Carrega moedas Gate.io quando necessário para favoritos ou filtros de mercado
+  useEffect(() => {
+    const needGate = showFavorites === 'gate' || showFavorites === 'trade'
+      || (activeFilter && activeFilter.startsWith('Mercado|'));
+    if (!needGate) return;
+    if (gateCacheRef.current) { setGateAll(gateCacheRef.current); return; }
+    fetchGateCurrencies().then((items) => {
+      gateCacheRef.current = items;
+      setGateAll(items);
+    }).catch(() => {});
+  }, [showFavorites, activeFilter]);
+
+  const interval = (activeFilter && activeFilter !== 'favoritos') ? activeFilter.split('|')[0] : '30m';
+
+  async function handleSelect(item, source = null) {
     onSelectCurrency?.();
     setLoadingSymbol(item.symbol);
     setActiveRow(item.symbol);
     try {
-      const data = await fetchCandlesticksAndCloud(item.symbol, interval);
+      const data = await fetchCandlesticksAndCloud(item.symbol, interval, source);
       setSelectedChart(data);
+      if (source === 'gate') gatePreloadCandles(item.symbol);
     } finally {
       setLoadingSymbol(null);
     }
@@ -108,6 +186,7 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
 
   const gateCount    = gateFavorites.size;
   const binanceCount = binanceFavorites.size;
+  const tradeCount   = tradeFavorites.size;
 
   return (
     <div className="flex flex-col h-full">
@@ -139,6 +218,25 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
         <span className="text-xs text-p5 opacity-50 uppercase tracking-wider">Moedas</span>
         <div className="flex items-center gap-2">
           <span className="text-xs font-mono text-p4">{rows.length}</span>
+
+          {/* Filtro Trade Now */}
+          <button
+            onClick={() => toggleShowFavorites('trade')}
+            title={showFavorites === 'trade' ? 'Ver todas as moedas' : `Em trade agora (${tradeCount})`}
+            className="flex items-center gap-1 px-1.5 py-0.5 rounded transition-all"
+            style={{ opacity: showFavorites === 'trade' ? 1 : 0.5 }}
+          >
+            <span
+              className="text-[10px] font-bold px-1 py-0.5 rounded"
+              style={{
+                background: showFavorites === 'trade' ? TRADE_COLOR : 'transparent',
+                color: showFavorites === 'trade' ? '#fff' : TRADE_COLOR,
+                border: `1px solid ${TRADE_COLOR}`,
+              }}
+            >
+              TN{tradeCount > 0 ? ` ${tradeCount}` : ''}
+            </span>
+          </button>
 
           {/* Filtro Gate */}
           <button
@@ -193,7 +291,7 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
                 onClick={cycleSort}
                 title="Ordenar por volume 24h"
               >
-                Vol{sortVolume === 'desc' ? ' ↓' : sortVolume === 'asc' ? ' ↑' : ''}
+                Vol{sortVolume === 'desc' ? ' ↓' : ' ↑'}
               </th>
               <th className="w-6" />
             </tr>
@@ -203,6 +301,7 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
               const { base, quote } = splitSymbol(item.symbol);
               const isGate    = gateFavorites.has(item.symbol);
               const isBinance = binanceFavorites.has(item.symbol);
+              const isTrade   = tradeFavorites.has(item.symbol);
               return (
                 <tr
                   key={item.symbol}
@@ -210,44 +309,97 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
                   className={`border-b border-p2/30 cursor-pointer transition-colors ${
                     activeRow === item.symbol
                       ? 'bg-p2/80 text-white'
+                      : isTrade
+                      ? 'bg-emerald-500/10 hover:bg-emerald-500/20 text-p5'
                       : 'hover:bg-p2/40 text-p5'
                   }`}
                 >
                   <td className="pl-2">
                     <div className="flex items-center gap-1">
-                      <FavButton
-                        active={isGate}
-                        color={GATE_COLOR}
-                        label="Gate"
-                        onClick={(e) => { e.stopPropagation(); toggleGateFavorite(item.symbol); }}
-                      />
-                      <FavButton
-                        active={isBinance}
-                        color={BINANCE_COLOR}
-                        label="Binance"
-                        onClick={(e) => { e.stopPropagation(); toggleBinanceFavorite(item.symbol); }}
-                      />
+                      <FavButton active={isTrade}   color={TRADE_COLOR}   label="Trade"   onClick={(e) => { e.stopPropagation(); toggleTradeFavorite(item.symbol); }} />
+                      <FavButton active={isGate}    color={GATE_COLOR}    label="Gate"    onClick={(e) => { e.stopPropagation(); toggleGateFavorite(item.symbol); }} />
+                      <FavButton active={isBinance} color={BINANCE_COLOR} label="Binance" onClick={(e) => { e.stopPropagation(); toggleBinanceFavorite(item.symbol); }} />
                     </div>
                   </td>
                   <td className="px-2 py-1.5 font-mono font-semibold">
-                    {base}
-                    <span className="opacity-40 font-normal text-[10px]">/{quote}</span>
+                    {base}<span className="opacity-40 font-normal text-[10px]">/{quote}</span>
                   </td>
                   <td className="px-2 py-1.5 text-right font-mono">{item.price}</td>
                   <td className="px-2 py-1.5 text-right font-mono text-[10px] opacity-60">{formatVolume(item.volume)}</td>
                   <td className="pr-1 text-center">
-                    {loadingSymbol === item.symbol ? (
-                      <div className="w-3 h-3 border border-p4 border-t-transparent rounded-full animate-spin mx-auto" />
-                    ) : activeRow === item.symbol ? (
-                      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
-                        strokeWidth="2" stroke="currentColor" className="w-3.5 h-3.5 mx-auto text-p4">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
-                      </svg>
-                    ) : null}
+                    {loadingSymbol === item.symbol
+                      ? <div className="w-3 h-3 border border-p4 border-t-transparent rounded-full animate-spin mx-auto" />
+                      : activeRow === item.symbol
+                        ? <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor" className="w-3.5 h-3.5 mx-auto text-p4"><path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" /></svg>
+                        : null}
                   </td>
                 </tr>
               );
             })}
+
+            {/* Separador + resultados Gate.io */}
+            {gateLoading && rows.length === 0 && (
+              <tr>
+                <td colSpan={5} className="py-3 text-center">
+                  <div className="flex items-center justify-center gap-2 text-[11px] text-p5/50">
+                    <div className="w-3 h-3 border border-p4 border-t-transparent rounded-full animate-spin" />
+                    Buscando na Gate.io…
+                  </div>
+                </td>
+              </tr>
+            )}
+
+            {gateItems.length > 0 && (
+              <>
+                <tr>
+                  <td colSpan={5} className="px-2 py-1 border-t border-p3/30">
+                    <span
+                      className="text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded"
+                      style={{ color: GATE_COLOR, border: `1px solid ${GATE_COLOR}` }}
+                    >
+                      Gate.io · {gateItems.length}
+                    </span>
+                  </td>
+                </tr>
+                {gateItems.map((item) => {
+                  const { base, quote } = splitSymbol(item.symbol);
+                  const isGate  = gateFavorites.has(item.symbol);
+                  const isTrade = tradeFavorites.has(item.symbol);
+                  return (
+                    <tr
+                      key={`gate-${item.symbol}`}
+                      onClick={() => handleSelect(item, 'gate')}
+                      className={`border-b border-p2/30 cursor-pointer transition-colors ${
+                        activeRow === item.symbol
+                          ? 'bg-p2/80 text-white'
+                          : isTrade
+                          ? 'bg-emerald-500/10 hover:bg-emerald-500/20 text-p5'
+                          : 'hover:bg-p2/40 text-p5'
+                      }`}
+                    >
+                      <td className="pl-2">
+                        <div className="flex items-center gap-1">
+                          <FavButton active={isTrade} color={TRADE_COLOR} label="Trade" onClick={(e) => { e.stopPropagation(); toggleTradeFavorite(item.symbol); }} />
+                          <FavButton active={isGate}  color={GATE_COLOR}  label="Gate"  onClick={(e) => { e.stopPropagation(); toggleGateFavorite(item.symbol); }} />
+                        </div>
+                      </td>
+                      <td className="px-2 py-1.5 font-mono font-semibold">
+                        {base}<span className="opacity-40 font-normal text-[10px]">/{quote}</span>
+                      </td>
+                      <td className="px-2 py-1.5 text-right font-mono">{item.price > 0 ? item.price : '—'}</td>
+                      <td className="px-2 py-1.5 text-right font-mono text-[10px] opacity-60">{formatVolume(item.volume)}</td>
+                      <td className="pr-1 text-center">
+                        {loadingSymbol === item.symbol
+                          ? <div className="w-3 h-3 border border-p4 border-t-transparent rounded-full animate-spin mx-auto" />
+                          : activeRow === item.symbol
+                            ? <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor" className="w-3.5 h-3.5 mx-auto text-p4"><path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" /></svg>
+                            : null}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </>
+            )}
           </tbody>
         </table>
       </div>

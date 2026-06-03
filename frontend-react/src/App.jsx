@@ -12,7 +12,7 @@ import SettingsSidebar from './components/SettingsSidebar';
 import StatisticsPanel from './components/StatisticsPanel';
 
 function AppContent() {
-  const { setCurrencies, setFilters, addFilter, setSelectedChart, setGateFavorites, setBinanceFavorites } = useCurrency();
+  const { setCurrencies, setFilters, addFilter, setSelectedChart, setGateFavorites, setBinanceFavorites, setTradeFavorites } = useCurrency();
   const [activeFilter, setActiveFilter] = useState(null);
   const [loading, setLoading] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -37,7 +37,7 @@ function AppContent() {
         const binanceUsdtList = allCurrencies
           .filter((c) => c.symbol.endsWith('USDT'))
           .map((c) => c.symbol);
-        setFilters([{ name: '1h|Binance|USDT', list: binanceUsdtList }]);
+        setFilters([{ name: '1h|Mercado|USDT', list: binanceUsdtList }]);
 
         const volumeFilters = await fetch24hVolume();
         volumeFilters.forEach((f) => addFilter(f));
@@ -45,12 +45,14 @@ function AppContent() {
         const btcData = await fetchCandlesticksAndCloud('BTCUSDT', '30m');
         setSelectedChart(btcData);
 
-        const [gateList, binanceList] = await Promise.all([
+        const [gateList, binanceList, tradeList] = await Promise.all([
           getFavorites('gate').catch(() => []),
           getFavorites('binance').catch(() => []),
+          getFavorites('trade').catch(() => []),
         ]);
         setGateFavorites(new Set(gateList));
         setBinanceFavorites(new Set(binanceList));
+        setTradeFavorites(new Set(tradeList));
       } catch (err) {
         console.error('Erro ao inicializar:', err);
       } finally {
@@ -235,7 +237,6 @@ function AppContent() {
             {[
               { id: 'indicators', label: 'Analisar Indicadores' },
               { id: 'stats',      label: 'Estatísticas' },
-              { id: 'rsi',        label: 'RSI (14)' },
             ].map(({ id, label }) => (
               <button
                 key={id}
@@ -253,11 +254,6 @@ function AppContent() {
               </button>
             ))}
           </div>
-          {openPanels.includes('rsi') && (
-            <div className="flex-1 min-h-0">
-              <RsiChart />
-            </div>
-          )}
           {openPanels.includes('indicators') && (
             <div className="flex-1 min-h-0 flex flex-col">
               <IndicatorPanel />
@@ -271,7 +267,7 @@ function AppContent() {
         </div>
 
         {/* Coluna direita — Moedas (só desktop) */}
-        <div className="hidden md:flex flex-col w-80 shrink-0 min-h-0 bg-p1">
+        <div className="hidden md:flex flex-col w-96 shrink-0 min-h-0 bg-p1">
           <div className="flex flex-col min-h-0 px-2 py-1 border-b border-p2 overflow-hidden" style={{ height: '40%' }}>
             <FilterTabs onSelectFilter={handleSelectFilter} />
           </div>

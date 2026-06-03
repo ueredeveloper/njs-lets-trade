@@ -8,34 +8,9 @@ const PALETTES = [
     colors: { p1: '#260d33', p2: '#003f69', p3: '#106b87', p4: '#157a8c', p5: '#b3aca4' },
   },
   {
-    id: 'palette1',
-    name: 'Dark Green',
-    colors: { p1: '#05110d', p2: '#0b1f17', p3: '#132e22', p4: '#00c076', p5: '#c8e6c9' },
-  },
-  {
-    id: 'palette2',
-    name: 'Deep Blue',
-    colors: { p1: '#020a14', p2: '#071828', p3: '#0d2540', p4: '#38bdf8', p5: '#e2eeff' },
-  },
-  {
-    id: 'palette3',
-    name: 'Amber',
-    colors: { p1: '#0e0a02', p2: '#1c1506', p3: '#2b200d', p4: '#fbbf24', p5: '#fef9ec' },
-  },
-  {
     id: 'dracula',
     name: 'Dracula',
     colors: { p1: '#13131f', p2: '#1e1e2e', p3: '#2d2d44', p4: '#bd93f9', p5: '#f8f8f2' },
-  },
-  {
-    id: 'nord',
-    name: 'Nord',
-    colors: { p1: '#141921', p2: '#1e242f', p3: '#2a3244', p4: '#88c0d0', p5: '#eceff4' },
-  },
-  {
-    id: 'monokai',
-    name: 'Monokai',
-    colors: { p1: '#14140f', p2: '#1e1e17', p3: '#2d2d24', p4: '#a6e22e', p5: '#f8f8f2' },
   },
   {
     id: 'tokyo',
@@ -43,24 +18,14 @@ const PALETTES = [
     colors: { p1: '#0a0c16', p2: '#13152a', p3: '#1e2035', p4: '#7aa2f7', p5: '#c0caf5' },
   },
   {
-    id: 'catppuccin',
-    name: 'Catppuccin',
-    colors: { p1: '#0d0d17', p2: '#161622', p3: '#1e1e2e', p4: '#cba6f7', p5: '#cdd6f4' },
+    id: 'light',
+    name: 'Claro',
+    colors: { p1: '#f1f5f9', p2: '#dde3ec', p3: '#94a3b8', p4: '#0369a1', p5: '#0f172a' },
   },
   {
-    id: 'sunset',
-    name: 'Sunset',
-    colors: { p1: '#100a15', p2: '#1e1020', p3: '#2e1a31', p4: '#fb923c', p5: '#fde8d0' },
-  },
-  {
-    id: 'crimson',
-    name: 'Crimson',
-    colors: { p1: '#110607', p2: '#1f0c0e', p3: '#2e1416', p4: '#f87171', p5: '#fde8e8' },
-  },
-  {
-    id: 'slate',
-    name: 'Slate',
-    colors: { p1: '#0a0c0f', p2: '#131720', p3: '#1e2533', p4: '#94a3b8', p5: '#e2e8f0' },
+    id: 'light-warm',
+    name: 'Claro Quente',
+    colors: { p1: '#faf7f2', p2: '#ede8df', p3: '#a8a29e', p4: '#b45309', p5: '#1c1917' },
   },
 ];
 
@@ -136,12 +101,8 @@ export default function SettingsSidebar({ open, onClose }) {
 
         {/* Conteúdo */}
         <div className="flex-1 overflow-y-auto px-4 py-4">
-          <p className="text-p5 text-xs uppercase tracking-widest opacity-50 mb-3">
-            Paleta de cores
-          </p>
-
           {/* Recarregar candles */}
-          <p className="text-p5 text-xs uppercase tracking-widest opacity-50 mb-3 mt-5">
+          <p className="text-p5 text-xs uppercase tracking-widest opacity-50 mb-3">
             Recarregar candles
           </p>
           <div className="flex flex-col gap-2 mb-5">

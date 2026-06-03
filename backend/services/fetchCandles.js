@@ -1,18 +1,17 @@
-const { getCandles } = require("../binance");
+const { getCandles }    = require('../binance');
+const { getGateCandles } = require('../gate/getGateCandles');
 
-const router = require("express").Router();
+const router = require('express').Router();
 
-
-// remove cíclical error
-router.get("/candles", async (req, res) => {
-    let { symbol, interval, limit } = req.query;
-
-    try {
-        let response = await getCandles(symbol, interval, limit);
-        res.send(JSON.stringify(response));
-    } catch (error) {
-        res.status(500).send({ error: error.message });
-    }
+router.get('/candles', async (req, res) => {
+  const { symbol, interval, limit, source } = req.query;
+  try {
+    const fn       = source === 'gate' ? getGateCandles : getCandles;
+    const response = await fn(symbol, interval, limit);
+    res.send(JSON.stringify(response));
+  } catch (error) {
+    res.status(500).send({ error: error.message });
+  }
 });
 
 module.exports = router;
