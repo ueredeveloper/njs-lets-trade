@@ -142,36 +142,51 @@ export default function FilterTabs({ onSelectFilter }) {
 
   return (
     <div className="flex flex-col gap-1 h-full min-h-0">
-      {/* Lista de tags de filtro */}
-      <div className="flex flex-wrap gap-1 flex-1 min-h-0 overflow-y-auto content-start">
-
+      {/* Grid adaptável de cards */}
+      <div
+        className="flex-1 min-h-0 overflow-y-auto"
+        style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: '4px', alignContent: 'start' }}
+      >
         {sortedFilters.map((filter) => {
           const color = getIntervalColor(filter.name);
           const isActive = activeFilter === filter.name;
+          const isChecked = checked.has(filter.name);
           const description = getFilterDescription(filter.name);
+          const count = filter.list?.length ?? 0;
           return (
             <div
               key={filter.name}
               title={description}
-              className={`flex items-center gap-0.5 rounded px-1.5 py-0.5 cursor-pointer border transition-all ${
+              onClick={() => handleClick(filter.name)}
+              className={`relative flex flex-col gap-0.5 rounded border px-2 py-1.5 cursor-pointer transition-all overflow-hidden ${
                 isActive
                   ? 'border-p4 bg-p2'
-                  : 'border-transparent bg-p2/60 hover:border-p3'
+                  : isChecked
+                  ? 'border-p3/60 bg-p2/80'
+                  : 'border-p3/20 bg-p2/40 hover:border-p3/50 hover:bg-p2/70'
               }`}
             >
-              <span
-                className="text-xs font-mono"
-                style={{ color }}
-                onClick={() => handleClick(filter.name)}
-              >
-                {filter.name}
+              {/* Stripe colorida à esquerda */}
+              <div className="absolute left-0 top-0 bottom-0 w-[3px] rounded-l" style={{ background: color }} />
+
+              <div className="flex items-start justify-between gap-1 pl-1">
+                <span className="text-[10px] font-mono font-semibold truncate leading-tight" style={{ color }}>
+                  {filter.name}
+                </span>
+                <input
+                  type="checkbox"
+                  checked={isChecked}
+                  onChange={(e) => { e.stopPropagation(); toggleCheck(filter.name); }}
+                  onClick={(e) => e.stopPropagation()}
+                  className="w-3 h-3 accent-p4 cursor-pointer shrink-0 mt-px"
+                />
+              </div>
+
+              <p className="text-[9px] text-p5/50 truncate pl-1 leading-tight">{description}</p>
+
+              <span className="text-[9px] font-mono pl-1 leading-none mt-0.5" style={{ color, opacity: 0.6 }}>
+                {count}
               </span>
-              <input
-                type="checkbox"
-                checked={checked.has(filter.name)}
-                onChange={() => toggleCheck(filter.name)}
-                className="w-3 h-3 accent-p4 cursor-pointer"
-              />
             </div>
           );
         })}

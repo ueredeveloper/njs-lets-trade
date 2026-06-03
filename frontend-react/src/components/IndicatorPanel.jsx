@@ -108,14 +108,15 @@ function IndicatorRow({ value, onChange }) {
     });
   }
 
-  const sel = 'bg-p2 border border-p3/40 text-p5 text-xs rounded px-2 py-1 focus:outline-none focus:border-p4';
+  const sel = 'bg-p2 border border-p3/40 text-p5 text-[10px] sm:text-xs rounded px-1 sm:px-2 py-0.5 sm:py-1 focus:outline-none focus:border-p4 min-w-0';
   const summary = buildSummary(value);
 
   return (
     <div className="flex w-full flex-col bg-p2/50 border border-p3/20 rounded p-2 gap-2">
-      <div className="flex w-full items-center flex-wrap gap-2">
+      {/* Seletores — linha única no mobile */}
+      <div className="flex w-full items-center gap-1 sm:gap-2 flex-nowrap sm:flex-wrap">
         {/* Tipo */}
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 min-w-0 shrink-0">
           <select
             className={sel}
             value={type}
@@ -258,25 +259,25 @@ function IndicatorRow({ value, onChange }) {
             </select>
           </>
         )}
+      </div>
 
-        {/* Intervalos */}
-        <div className="flex flex-row flex-wrap gap-x-2 gap-y-1">
-          {INTERVALS.map((iv) => (
-            <label
-              key={iv}
-              className="flex items-center gap-1 text-xs text-p5 cursor-pointer"
-              title={`Timeframe: ${INTERVAL_LABELS[iv] ?? iv}`}
-            >
-              <input
-                type="checkbox"
-                checked={intervals.includes(iv)}
-                onChange={() => toggleInterval(iv)}
-                className="accent-p4 cursor-pointer"
-              />
-              {iv}
-            </label>
-          ))}
-        </div>
+      {/* Intervalos */}
+      <div className="flex flex-row flex-wrap gap-x-2 gap-y-1">
+        {INTERVALS.map((iv) => (
+          <label
+            key={iv}
+            className="flex items-center gap-1 text-xs text-p5 cursor-pointer"
+            title={`Timeframe: ${INTERVAL_LABELS[iv] ?? iv}`}
+          >
+            <input
+              type="checkbox"
+              checked={intervals.includes(iv)}
+              onChange={() => toggleInterval(iv)}
+              className="accent-p4 cursor-pointer"
+            />
+            {iv}
+          </label>
+        ))}
       </div>
 
       {/* Sumário da configuração atual */}
