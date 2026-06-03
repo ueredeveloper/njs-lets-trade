@@ -111,7 +111,7 @@ function RsiStats() {
           <button
             onClick={() => handleSearch(undefined, true)}
             disabled={loading}
-            className="shrink-0 flex items-center justify-center gap-1 py-1 px-1.5 sm:flex-1 sm:gap-1.5 rounded text-[11px] text-white bg-p3 hover:bg-p4 transition-colors disabled:opacity-50"
+            className="shrink-0 flex items-center justify-center gap-1 py-1 px-1.5 sm:flex-1 sm:gap-1.5 rounded text-[11px] text-white bg-p4 hover:bg-p3 transition-colors disabled:opacity-50"
           >
             {loading
               ? <div className="w-3 h-3 border border-white border-t-transparent rounded-full animate-spin" />
@@ -130,7 +130,7 @@ function RsiStats() {
       <div className="flex flex-col gap-2 flex-1 min-w-0">
 
         {error && (
-          <p className="text-[11px] text-red-400 bg-red-400/10 border border-red-400/20 rounded px-2 py-1.5">
+          <p className="text-[11px] text-red-600 bg-red-400/10 border border-red-400/20 rounded px-2 py-1.5">
             {error}
           </p>
         )}
@@ -145,7 +145,7 @@ function RsiStats() {
               <SummaryCard
                 label="Valor. média"
                 value={`${result.avgAppreciationPercent > 0 ? '+' : ''}${result.avgAppreciationPercent}%`}
-                highlight={result.avgAppreciationPercent >= 0 ? 'text-green-400' : 'text-red-400'}
+                highlight={result.avgAppreciationPercent >= 0 ? 'text-green-600' : 'text-red-600'}
               />
               <SummaryCard label="RSI entrada" value={`< ${result.oversoldThreshold}`} />
               <SummaryCard label="RSI saída"   value={`> ${result.overboughtThreshold}`} />
@@ -191,13 +191,13 @@ function RsiStats() {
                             {showAll && <td className="py-0.5 pr-2 text-[10px] text-p5/40">{i + 1}</td>}
                             <td className="py-0.5 pr-2 text-[10px] sm:text-xs font-mono whitespace-nowrap">{formatDate(o.startDate)}</td>
                             {showAll && <td className="py-0.5 pr-2 text-[10px] sm:text-xs text-right font-mono">${o.entryPrice.toLocaleString('en-US', { maximumFractionDigits: 4 })}</td>}
-                            <td className="py-0.5 pr-2 text-[10px] sm:text-xs text-right text-yellow-400">{o.entryRsi}</td>
-                            <td className="py-0.5 pr-2 text-[10px] sm:text-xs text-right text-orange-400">{o.entryRsi4h ?? '—'}</td>
+                            <td className="py-0.5 pr-2 text-[10px] sm:text-xs text-right text-yellow-600">{o.entryRsi}</td>
+                            <td className="py-0.5 pr-2 text-[10px] sm:text-xs text-right text-orange-600">{o.entryRsi4h ?? '—'}</td>
                             <td className="py-0.5 pr-2 text-[10px] sm:text-xs text-right text-amber-600">{o.entryRsi8h ?? '—'}</td>
                             <td className="py-0.5 pr-2 text-[10px] sm:text-xs font-mono whitespace-nowrap">{formatDate(o.endDate)}</td>
                             {showAll && <td className="py-0.5 pr-2 text-[10px] sm:text-xs text-right font-mono">${o.exitPrice.toLocaleString('en-US', { maximumFractionDigits: 4 })}</td>}
-                            <td className="py-0.5 pr-2 text-[10px] sm:text-xs text-right text-yellow-400">{o.exitRsi}</td>
-                            <td className={`py-0.5 text-[10px] sm:text-xs text-right font-bold ${pos ? 'text-green-400' : 'text-red-400'}`}>
+                            <td className="py-0.5 pr-2 text-[10px] sm:text-xs text-right text-yellow-600">{o.exitRsi}</td>
+                            <td className={`py-0.5 text-[10px] sm:text-xs text-right font-bold ${pos ? 'text-green-600' : 'text-red-600'}`}>
                               {pos ? '+' : ''}{o.appreciationPercent}%
                             </td>
                           </tr>
@@ -209,16 +209,16 @@ function RsiStats() {
                         const pos = o.appreciationPercent >= 0;
                         return (
                           <tr className="border-t-2 border-amber-500/40 bg-amber-500/5">
-                            {showAll && <td className="py-1 pr-2 text-[10px] text-amber-400/70">↓</td>}
-                            <td className="py-1 pr-2 text-[10px] sm:text-xs font-mono whitespace-nowrap text-amber-300">{formatDate(o.startDate)}</td>
-                            {showAll && <td className="py-1 pr-2 text-[10px] sm:text-xs text-right font-mono text-amber-300">${o.entryPrice.toLocaleString('en-US', { maximumFractionDigits: 4 })}</td>}
-                            <td className="py-1 pr-2 text-[10px] sm:text-xs text-right text-yellow-400 font-bold">{o.entryRsi}</td>
-                            <td className="py-1 pr-2 text-[10px] sm:text-xs text-right text-orange-400">{o.entryRsi4h ?? '—'}</td>
+                            {showAll && <td className="py-1 pr-2 text-[10px] text-amber-700">↓</td>}
+                            <td className="py-1 pr-2 text-[10px] sm:text-xs font-mono whitespace-nowrap text-amber-700">{formatDate(o.startDate)}</td>
+                            {showAll && <td className="py-1 pr-2 text-[10px] sm:text-xs text-right font-mono text-amber-700">${o.entryPrice.toLocaleString('en-US', { maximumFractionDigits: 4 })}</td>}
+                            <td className="py-1 pr-2 text-[10px] sm:text-xs text-right text-yellow-600 font-bold">{o.entryRsi}</td>
+                            <td className="py-1 pr-2 text-[10px] sm:text-xs text-right text-orange-600">{o.entryRsi4h ?? '—'}</td>
                             <td className="py-1 pr-2 text-[10px] sm:text-xs text-right text-amber-600">{o.entryRsi8h ?? '—'}</td>
-                            <td className="py-1 pr-2 text-[10px] sm:text-xs whitespace-nowrap text-amber-400/60 italic">em aberto</td>
+                            <td className="py-1 pr-2 text-[10px] sm:text-xs whitespace-nowrap text-amber-700 italic">em aberto</td>
                             {showAll && <td className="py-1 pr-2 text-[10px] sm:text-xs text-right text-p5/30">—</td>}
                             <td className="py-1 pr-2 text-[10px] sm:text-xs text-right text-p5/30">—</td>
-                            <td className={`py-1 text-[10px] sm:text-xs text-right font-bold ${pos ? 'text-green-400' : 'text-red-400'}`}>
+                            <td className={`py-1 text-[10px] sm:text-xs text-right font-bold ${pos ? 'text-green-600' : 'text-red-600'}`}>
                               {pos ? '+' : ''}{o.appreciationPercent}%
                             </td>
                           </tr>
@@ -253,7 +253,7 @@ export default function StatisticsPanel() {
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
             className={`px-3 py-1 text-xs rounded-t transition-colors ${
-              activeTab === tab.id ? 'bg-p3 text-white' : 'text-p5/60 hover:text-p5'
+              activeTab === tab.id ? 'bg-p4 text-white' : 'text-p5/60 hover:text-p5'
             }`}
           >
             {tab.label}

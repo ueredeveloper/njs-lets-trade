@@ -62,6 +62,16 @@ const PALETTES = [
     name: 'Slate',
     colors: { p1: '#0a0c0f', p2: '#131720', p3: '#1e2533', p4: '#94a3b8', p5: '#e2e8f0' },
   },
+  {
+    id: 'light',
+    name: 'Claro',
+    colors: { p1: '#f1f5f9', p2: '#dde3ec', p3: '#94a3b8', p4: '#0369a1', p5: '#0f172a' },
+  },
+  {
+    id: 'light-warm',
+    name: 'Claro Quente',
+    colors: { p1: '#faf7f2', p2: '#ede8df', p3: '#a8a29e', p4: '#b45309', p5: '#1c1917' },
+  },
 ];
 
 function applyPalette(colors) {

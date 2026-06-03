@@ -22,6 +22,28 @@ function getIntervalColor(name) {
   return '#157a8c';
 }
 
+function hexToRgba(hex, alpha) {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+// Padrão de tamanhos de linha — nunca repete consecutivamente
+const ROW_PATTERN = [3, 1, 2, 3, 2, 1, 3, 2, 1, 2, 3, 1, 2, 3, 1, 3, 2, 1, 2, 3];
+
+function buildRows(filters) {
+  const rows = [];
+  let i = 0, p = 0;
+  while (i < filters.length) {
+    const size = ROW_PATTERN[p % ROW_PATTERN.length];
+    rows.push(filters.slice(i, i + size));
+    i += size;
+    p++;
+  }
+  return rows;
+}
+
 // Ícone funil
 function IconFunnel({ className }) {
   return (
@@ -138,58 +160,52 @@ export default function FilterTabs({ onSelectFilter }) {
   function handleRemove() { removeFilters(Array.from(checked)); setChecked(new Set()); }
   function handleClearAll() { clearAllFilters(); setChecked(new Set()); setActiveFilter(null); onSelectFilter(null); }
 
-  const btnBase = 'p-1 rounded text-p5 transition-colors hover:text-white';
+  const btnBase = 'p-1 rounded text-p5 transition-colors hover:text-white hover:bg-p4';
 
   return (
     <div className="flex flex-col gap-1 h-full min-h-0">
-      {/* Grid adaptável de cards */}
-      <div
-        className="flex-1 min-h-0 overflow-y-auto"
-        style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: '4px', alignContent: 'start' }}
-      >
-        {sortedFilters.map((filter) => {
-          const color = getIntervalColor(filter.name);
-          const isActive = activeFilter === filter.name;
-          const isChecked = checked.has(filter.name);
-          const description = getFilterDescription(filter.name);
-          const count = filter.list?.length ?? 0;
-          return (
-            <div
-              key={filter.name}
-              title={description}
-              onClick={() => handleClick(filter.name)}
-              className={`relative flex flex-col gap-0.5 rounded border px-2 py-1.5 cursor-pointer transition-all overflow-hidden ${
-                isActive
-                  ? 'border-p4 bg-p2'
-                  : isChecked
-                  ? 'border-p3/60 bg-p2/80'
-                  : 'border-p3/20 bg-p2/40 hover:border-p3/50 hover:bg-p2/70'
-              }`}
-            >
-              {/* Stripe colorida à esquerda */}
-              <div className="absolute left-0 top-0 bottom-0 w-[3px] rounded-l" style={{ background: color }} />
-
-              <div className="flex items-start justify-between gap-1 pl-1">
-                <span className="text-[10px] font-mono font-semibold truncate leading-tight" style={{ color }}>
-                  {filter.name}
-                </span>
-                <input
-                  type="checkbox"
-                  checked={isChecked}
-                  onChange={(e) => { e.stopPropagation(); toggleCheck(filter.name); }}
-                  onClick={(e) => e.stopPropagation()}
-                  className="w-3 h-3 accent-p4 cursor-pointer shrink-0 mt-px"
-                />
-              </div>
-
-              <p className="text-[9px] text-p5/50 truncate pl-1 leading-tight">{description}</p>
-
-              <span className="text-[9px] font-mono pl-1 leading-none mt-0.5" style={{ color, opacity: 0.6 }}>
-                {count}
-              </span>
-            </div>
-          );
-        })}
+      {/* Linhas com tamanhos variados */}
+      <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden flex flex-col gap-1">
+        {buildRows(sortedFilters).map((row, rowIdx) => (
+          <div key={rowIdx} className="flex gap-1">
+            {row.map((filter) => {
+              const color = getIntervalColor(filter.name);
+              const isActive = activeFilter === filter.name;
+              const isChecked = checked.has(filter.name);
+              const count = filter.list?.length ?? 0;
+              const bgAlpha  = isActive ? 0.92 : isChecked ? 0.75 : 0.60;
+              const brdAlpha = isActive ? 1.00 : isChecked ? 0.90 : 0.75;
+              return (
+                <div
+                  key={filter.name}
+                  title={getFilterDescription(filter.name)}
+                  onClick={() => handleClick(filter.name)}
+                  style={{
+                    background: hexToRgba(color, bgAlpha),
+                    borderColor: hexToRgba(color, brdAlpha),
+                  }}
+                  className="flex-1 flex flex-col gap-0.5 rounded border px-2 py-2 cursor-pointer transition-all hover:brightness-125 min-w-0"
+                >
+                  <div className="flex items-start justify-between gap-1">
+                    <span className="text-[10px] font-mono font-semibold truncate leading-tight text-p5">
+                      {filter.name}
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={isChecked}
+                      onChange={(e) => { e.stopPropagation(); toggleCheck(filter.name); }}
+                      onClick={(e) => e.stopPropagation()}
+                      className="w-3 h-3 accent-p4 cursor-pointer shrink-0 mt-px"
+                    />
+                  </div>
+                  <span className="text-[11px] font-mono font-bold leading-none mt-0.5 text-p5">
+                    {count}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        ))}
       </div>
 
       {/* Botões de ação */}

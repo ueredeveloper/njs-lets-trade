@@ -398,7 +398,7 @@ export default function IndicatorPanel({ open, onToggle }) {
     }
   }
 
-  const btnIcon = 'p-1.5 rounded text-p5 transition-colors hover:text-white hover:bg-p3 disabled:opacity-40';
+  const btnIcon = 'p-1.5 rounded text-p5 transition-colors hover:text-white hover:bg-p4 disabled:opacity-40';
 
   return (
     <div className="flex flex-col gap-2 px-4 py-3 h-full">
@@ -431,7 +431,7 @@ export default function IndicatorPanel({ open, onToggle }) {
           <button
             onClick={handleSearch}
             disabled={searching}
-            className={`${btnIcon} ${!searching ? 'bg-p3 hover:bg-p4 text-white' : ''}`}
+            className={`${btnIcon} ${!searching ? 'bg-p4 hover:bg-p3 text-white' : ''}`}
           >
             {searching ? (
               <div className="w-4 h-4 border border-white border-t-transparent rounded-full animate-spin" />
