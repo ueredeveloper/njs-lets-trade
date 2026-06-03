@@ -22,11 +22,21 @@ function getIntervalColor(name) {
   return '#157a8c';
 }
 
+const CARD_COLORS = ['#4C86C6', '#EF3D4D', '#FED269', '#4DBD97', '#9B6ED6'];
+
 function hexToRgba(hex, alpha) {
   const r = parseInt(hex.slice(1, 3), 16);
   const g = parseInt(hex.slice(3, 5), 16);
   const b = parseInt(hex.slice(5, 7), 16);
   return `rgba(${r},${g},${b},${alpha})`;
+}
+
+function getContrastText(hex) {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  return luminance > 0.55 ? '#0f172a' : '#ffffff';
 }
 
 // Padrão de tamanhos de linha — nunca repete consecutivamente
@@ -166,46 +176,52 @@ export default function FilterTabs({ onSelectFilter }) {
     <div className="flex flex-col gap-1 h-full min-h-0">
       {/* Linhas com tamanhos variados */}
       <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden flex flex-col gap-1">
-        {buildRows(sortedFilters).map((row, rowIdx) => (
-          <div key={rowIdx} className="flex gap-1">
-            {row.map((filter) => {
-              const color = getIntervalColor(filter.name);
-              const isActive = activeFilter === filter.name;
-              const isChecked = checked.has(filter.name);
-              const count = filter.list?.length ?? 0;
-              const bgAlpha  = isActive ? 0.92 : isChecked ? 0.75 : 0.60;
-              const brdAlpha = isActive ? 1.00 : isChecked ? 0.90 : 0.75;
-              return (
-                <div
-                  key={filter.name}
-                  title={getFilterDescription(filter.name)}
-                  onClick={() => handleClick(filter.name)}
-                  style={{
-                    background: hexToRgba(color, bgAlpha),
-                    borderColor: hexToRgba(color, brdAlpha),
-                  }}
-                  className="flex-1 flex flex-col gap-0.5 rounded border px-2 py-2 cursor-pointer transition-all hover:brightness-125 min-w-0"
-                >
-                  <div className="flex items-start justify-between gap-1">
-                    <span className="text-[10px] font-mono font-semibold truncate leading-tight text-p5">
-                      {filter.name}
+        {(() => {
+          let gi = 0;
+          return buildRows(sortedFilters).map((row, rowIdx) => (
+            <div key={rowIdx} className="flex gap-1">
+              {row.map((filter) => {
+                const cardColor = CARD_COLORS[gi % CARD_COLORS.length];
+                gi++;
+                const textColor = getContrastText(cardColor);
+                const isActive  = activeFilter === filter.name;
+                const isChecked = checked.has(filter.name);
+                const count     = filter.list?.length ?? 0;
+                const bgAlpha   = isActive ? 1.00 : isChecked ? 0.90 : 0.82;
+                return (
+                  <div
+                    key={filter.name}
+                    title={getFilterDescription(filter.name)}
+                    onClick={() => handleClick(filter.name)}
+                    style={{
+                      background: hexToRgba(cardColor, bgAlpha),
+                      borderColor: isActive ? textColor : hexToRgba(cardColor, 1),
+                      outline: isActive ? `2px solid ${textColor}` : undefined,
+                      outlineOffset: isActive ? '-2px' : undefined,
+                    }}
+                    className="flex-1 flex flex-col gap-0.5 rounded border px-2 py-2 cursor-pointer transition-all hover:brightness-110 min-w-0"
+                  >
+                    <div className="flex items-start justify-between gap-1">
+                      <span className="text-[10px] font-mono font-semibold truncate leading-tight" style={{ color: textColor }}>
+                        {filter.name}
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={(e) => { e.stopPropagation(); toggleCheck(filter.name); }}
+                        onClick={(e) => e.stopPropagation()}
+                        className="w-3 h-3 accent-p4 cursor-pointer shrink-0 mt-px"
+                      />
+                    </div>
+                    <span className="text-[11px] font-mono font-bold leading-none mt-0.5" style={{ color: textColor }}>
+                      {count}
                     </span>
-                    <input
-                      type="checkbox"
-                      checked={isChecked}
-                      onChange={(e) => { e.stopPropagation(); toggleCheck(filter.name); }}
-                      onClick={(e) => e.stopPropagation()}
-                      className="w-3 h-3 accent-p4 cursor-pointer shrink-0 mt-px"
-                    />
                   </div>
-                  <span className="text-[11px] font-mono font-bold leading-none mt-0.5 text-p5">
-                    {count}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-        ))}
+                );
+              })}
+            </div>
+          ));
+        })()}
       </div>
 
       {/* Botões de ação */}
