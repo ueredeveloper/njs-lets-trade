@@ -235,7 +235,6 @@ function AppContent() {
             {[
               { id: 'indicators', label: 'Analisar Indicadores' },
               { id: 'stats',      label: 'Estatísticas' },
-              { id: 'rsi',        label: 'RSI (14)' },
             ].map(({ id, label }) => (
               <button
                 key={id}
@@ -253,11 +252,6 @@ function AppContent() {
               </button>
             ))}
           </div>
-          {openPanels.includes('rsi') && (
-            <div className="flex-1 min-h-0">
-              <RsiChart />
-            </div>
-          )}
           {openPanels.includes('indicators') && (
             <div className="flex-1 min-h-0 flex flex-col">
               <IndicatorPanel />
@@ -271,7 +265,7 @@ function AppContent() {
         </div>
 
         {/* Coluna direita — Moedas (só desktop) */}
-        <div className="hidden md:flex flex-col w-80 shrink-0 min-h-0 bg-p1">
+        <div className="hidden md:flex flex-col w-96 shrink-0 min-h-0 bg-p1">
           <div className="flex flex-col min-h-0 px-2 py-1 border-b border-p2 overflow-hidden" style={{ height: '40%' }}>
             <FilterTabs onSelectFilter={handleSelectFilter} />
           </div>

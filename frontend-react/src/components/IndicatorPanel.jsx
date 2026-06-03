@@ -135,20 +135,16 @@ function IndicatorRow({ value, onChange }) {
           )}
         </div>
 
+
         {type === 'relativeStrengthIndex' && (
           <>
-            <select
-              className={sel}
-              value={value.compare1 ?? 'above'}
+            <select className={sel} value={value.compare1 ?? 'above'}
               onChange={(e) => onChange({ ...value, compare1: e.target.value })}
-              title="Primeira condição: Above = RSI acima do valor | Below = RSI abaixo do valor"
-            >
+              title="Primeira condição: Above = RSI acima do valor | Below = RSI abaixo do valor">
               <option value="above">Above</option>
               <option value="bellow">Below</option>
             </select>
-            <select
-              className={sel}
-              value={value.line1 ?? '70'}
+            <select className={sel} value={value.line1 ?? '70'}
               onChange={(e) => {
                 const v1 = Number(e.target.value);
                 const RSI_VALUES = [10,20,30,40,50,60,70,80,90,99];
@@ -156,25 +152,18 @@ function IndicatorRow({ value, onChange }) {
                 const suggested = nextIdx < RSI_VALUES.length ? String(RSI_VALUES[nextIdx]) : '99';
                 onChange({ ...value, line1: e.target.value, line2: suggested });
               }}
-              title="Valor da primeira condição do RSI (0–100)"
-            >
+              title="Valor da primeira condição do RSI (0–100)">
               {[10,20,30,40,50,60,70,80,90,99].map(v => <option key={v} value={String(v)}>{v}</option>)}
             </select>
-            <select
-              className={sel}
-              value={value.compare2 ?? 'bellow'}
+            <select className={sel} value={value.compare2 ?? 'bellow'}
               onChange={(e) => onChange({ ...value, compare2: e.target.value })}
-              title="Segunda condição adicional: Above = RSI acima | Below = RSI abaixo"
-            >
+              title="Segunda condição: Above = RSI acima | Below = RSI abaixo">
               <option value="above">Above</option>
               <option value="bellow">Below</option>
             </select>
-            <select
-              className={sel}
-              value={value.line2 ?? '99'}
+            <select className={sel} value={value.line2 ?? '99'}
               onChange={(e) => onChange({ ...value, line2: e.target.value })}
-              title="Valor da segunda condição do RSI (0–100)"
-            >
+              title="Valor da segunda condição do RSI (0–100)">
               {[10,20,30,40,50,60,70,80,90,99].map(v => <option key={v} value={String(v)}>{v}</option>)}
             </select>
           </>
