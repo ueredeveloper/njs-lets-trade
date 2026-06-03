@@ -89,6 +89,12 @@ function getFilterDescription(name) {
   const interval = parts[0];
   const type = parts[1];
 
+  if (type === 'Mercado') {
+    const param = parts[2] ?? '';
+    if (param === 'USDT') return 'Todos os pares USDT (Binance + Gate.io)';
+    return `Mercado: ${param}`;
+  }
+
   if (type === 'Binance') {
     const param = parts[2] ?? '';
     if (param === 'USDT') return `Moedas com par USDT`;

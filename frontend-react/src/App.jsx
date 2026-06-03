@@ -12,7 +12,7 @@ import SettingsSidebar from './components/SettingsSidebar';
 import StatisticsPanel from './components/StatisticsPanel';
 
 function AppContent() {
-  const { setCurrencies, setFilters, addFilter, setSelectedChart, setGateFavorites, setBinanceFavorites } = useCurrency();
+  const { setCurrencies, setFilters, addFilter, setSelectedChart, setGateFavorites, setBinanceFavorites, setTradeFavorites } = useCurrency();
   const [activeFilter, setActiveFilter] = useState(null);
   const [loading, setLoading] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -37,7 +37,7 @@ function AppContent() {
         const binanceUsdtList = allCurrencies
           .filter((c) => c.symbol.endsWith('USDT'))
           .map((c) => c.symbol);
-        setFilters([{ name: '1h|Binance|USDT', list: binanceUsdtList }]);
+        setFilters([{ name: '1h|Mercado|USDT', list: binanceUsdtList }]);
 
         const volumeFilters = await fetch24hVolume();
         volumeFilters.forEach((f) => addFilter(f));
@@ -45,12 +45,14 @@ function AppContent() {
         const btcData = await fetchCandlesticksAndCloud('BTCUSDT', '30m');
         setSelectedChart(btcData);
 
-        const [gateList, binanceList] = await Promise.all([
+        const [gateList, binanceList, tradeList] = await Promise.all([
           getFavorites('gate').catch(() => []),
           getFavorites('binance').catch(() => []),
+          getFavorites('trade').catch(() => []),
         ]);
         setGateFavorites(new Set(gateList));
         setBinanceFavorites(new Set(binanceList));
+        setTradeFavorites(new Set(tradeList));
       } catch (err) {
         console.error('Erro ao inicializar:', err);
       } finally {

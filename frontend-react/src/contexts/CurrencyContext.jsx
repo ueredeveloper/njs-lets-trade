@@ -23,9 +23,10 @@ export function CurrencyProvider({ children }) {
   // Quote selecionada: 'USDT' | 'BTC' | 'BNB'
   const [selectedQuote, setSelectedQuote] = useState('USDT');
 
-  // Favoritos Gate (azul #0068ff) e Binance (laranja #fcd535)
+  // Favoritos Gate (azul #0068ff), Binance (amarelo #fcd535) e Trade Now (verde #00c076)
   const [gateFavorites, setGateFavorites]       = useState(new Set());
   const [binanceFavorites, setBinanceFavorites] = useState(new Set());
+  const [tradeFavorites, setTradeFavorites]     = useState(new Set());
 
   const toggleGateFavorite = useCallback(async (symbol) => {
     const sym = symbol.toUpperCase();
@@ -43,6 +44,16 @@ export function CurrencyProvider({ children }) {
       const next = new Set(prev);
       if (next.has(sym)) { next.delete(sym); removeFavorite(sym, 'binance').catch(() => {}); }
       else               { next.add(sym);    addFavorite(sym, 'binance').catch(() => {}); }
+      return next;
+    });
+  }, []);
+
+  const toggleTradeFavorite = useCallback(async (symbol) => {
+    const sym = symbol.toUpperCase();
+    setTradeFavorites((prev) => {
+      const next = new Set(prev);
+      if (next.has(sym)) { next.delete(sym); removeFavorite(sym, 'trade').catch(() => {}); }
+      else               { next.add(sym);    addFavorite(sym, 'trade').catch(() => {}); }
       return next;
     });
   }, []);
@@ -71,7 +82,7 @@ export function CurrencyProvider({ children }) {
   }, []);
 
   const clearAllFilters = useCallback(() => {
-    setFilters((prev) => prev.filter((f) => f.name === '1h|Binance|USDT'));
+    setFilters((prev) => prev.filter((f) => f.name === '1h|Mercado|USDT'));
   }, []);
 
   const joinFilters = useCallback((selectedFilterNames) => {
@@ -135,8 +146,11 @@ export function CurrencyProvider({ children }) {
         setGateFavorites,
         binanceFavorites,
         setBinanceFavorites,
+        tradeFavorites,
+        setTradeFavorites,
         toggleGateFavorite,
         toggleBinanceFavorite,
+        toggleTradeFavorite,
       }}
     >
       {children}

@@ -68,14 +68,14 @@ function RsiStats() {
   useEffect(() => { handleSearch(); }, []);
 
   return (
-    <div className="flex flex-col md:flex-row gap-3 w-full">
+    <div className="flex flex-col gap-2 w-full">
 
-      {/* Formulário — mobile: linha única; sm+: coluna com duas linhas */}
-      <div className="flex flex-row sm:flex-col gap-1 sm:gap-1.5 items-end w-full md:w-72 md:shrink-0">
+      {/* Formulário — sempre em linha única */}
+      <div className="flex flex-row gap-1 md:gap-2 items-end w-full md:w-auto md:shrink-0">
 
         {/* Símbolo */}
-        <div className="flex flex-col gap-0 sm:gap-0.5 flex-1 sm:w-full min-w-0">
-          <div className="hidden sm:flex items-center justify-between">
+        <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-0">
+          <div className="hidden md:flex items-center justify-between">
             <label className="text-[9px] text-p5/50 uppercase tracking-wider">Símbolo</label>
             {selectedChart?.symbol === symbol && (
               <span className="text-[8px] text-p4/70 italic">tabela</span>
@@ -90,40 +90,44 @@ function RsiStats() {
           />
         </div>
 
-        {/* Intervalo + Sobrv + Sobrcp + Botão */}
-        <div className="flex items-end gap-1 flex-[4] min-w-0">
-          <div className="flex flex-col gap-0 sm:gap-0.5 flex-1 min-w-0">
-            <label className="hidden sm:block text-[9px] text-p5/50 uppercase tracking-wider">Intervalo</label>
-            <select className={inp} value={interval} onChange={(e) => setInterval(e.target.value)}>
-              {INTERVALS.map((iv) => <option key={iv} value={iv}>{iv}</option>)}
-            </select>
-          </div>
-          <div className="flex flex-col gap-0 sm:gap-0.5 flex-1 min-w-0">
-            <label className="hidden sm:block text-[9px] text-p5/50 uppercase tracking-wider">Sobrv.</label>
-            <input className={inpNum} type="number" min={1} max={99}
-              value={oversold} onChange={(e) => setOversold(Number(e.target.value))} />
-          </div>
-          <div className="flex flex-col gap-0 sm:gap-0.5 flex-1 min-w-0">
-            <label className="hidden sm:block text-[9px] text-p5/50 uppercase tracking-wider">Sobrcp.</label>
-            <input className={inpNum} type="number" min={1} max={99}
-              value={overbought} onChange={(e) => setOverbought(Number(e.target.value))} />
-          </div>
-          <button
-            onClick={() => handleSearch(undefined, true)}
-            disabled={loading}
-            className="shrink-0 flex items-center justify-center gap-1 py-1 px-1.5 sm:flex-1 sm:gap-1.5 rounded text-[11px] text-white bg-p4 hover:bg-p3 transition-colors disabled:opacity-50"
-          >
-            {loading
-              ? <div className="w-3 h-3 border border-white border-t-transparent rounded-full animate-spin" />
-              : <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
-                  strokeWidth="2" stroke="currentColor" className="w-3 h-3">
-                  <path strokeLinecap="round" strokeLinejoin="round"
-                    d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
-                </svg>
-            }
-            Buscar
-          </button>
+        {/* Intervalo */}
+        <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-0">
+          <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">Intervalo</label>
+          <select className={inp} value={interval} onChange={(e) => setInterval(e.target.value)}>
+            {INTERVALS.map((iv) => <option key={iv} value={iv}>{iv}</option>)}
+          </select>
         </div>
+
+        {/* Sobrv */}
+        <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-0">
+          <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">Sobrv.</label>
+          <input className={inpNum} type="number" min={1} max={99}
+            value={oversold} onChange={(e) => setOversold(Number(e.target.value))} />
+        </div>
+
+        {/* Sobrcp */}
+        <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-0">
+          <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">Sobrcp.</label>
+          <input className={inpNum} type="number" min={1} max={99}
+            value={overbought} onChange={(e) => setOverbought(Number(e.target.value))} />
+        </div>
+
+        {/* Botão */}
+        <button
+          onClick={() => handleSearch(undefined, true)}
+          disabled={loading}
+          className="shrink-0 flex items-center justify-center gap-1 py-1 px-1.5 md:flex-1 md:gap-1.5 rounded text-[11px] text-white bg-p4 hover:bg-p3 transition-colors disabled:opacity-50"
+        >
+          {loading
+            ? <div className="w-3 h-3 border border-white border-t-transparent rounded-full animate-spin" />
+            : <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
+                strokeWidth="2" stroke="currentColor" className="w-3 h-3">
+                <path strokeLinecap="round" strokeLinejoin="round"
+                  d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
+              </svg>
+          }
+          Buscar
+        </button>
       </div>
 
       {/* Resultados */}
