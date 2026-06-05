@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef, useEffect } from 'react';
 import { useCurrency } from '../contexts/CurrencyContext';
 import { sortByTypeOfIntervals, sortFirstIncludesBinance } from '../utils/sort-firts-includes-binance';
 
@@ -39,17 +39,42 @@ function getContrastText(hex) {
   return luminance > 0.55 ? '#0f172a' : '#ffffff';
 }
 
-// Padrão de tamanhos de linha — nunca repete consecutivamente
-const ROW_PATTERN = [3, 1, 2, 3, 2, 1, 3, 2, 1, 2, 3, 1, 2, 3, 1, 3, 2, 1, 2, 3];
+// Ciclo de item count por linha — nunca repete consecutivamente: 1≠2≠3≠2≠1≠3≠1…
+const CYCLE = [1, 2, 3, 2, 1, 3];
+
+// Em linha de 2: o de nome maior recebe span-2, o menor span-1 (somam 3)
+// Em linha de 1: span-3 (largura total)
+// Em linha de 3: todos span-1
+function assignSpans(rowFilters) {
+  const n = rowFilters.length;
+  if (n === 1) return [3];
+  if (n === 2) {
+    return rowFilters[0].name.length >= rowFilters[1].name.length
+      ? [2, 1] : [1, 2];
+  }
+  return [1, 1, 1];
+}
 
 function buildRows(filters) {
   const rows = [];
-  let i = 0, p = 0;
+  let i = 0, ci = 0, prevCount = -1;
   while (i < filters.length) {
-    const size = ROW_PATTERN[p % ROW_PATTERN.length];
-    rows.push(filters.slice(i, i + size));
-    i += size;
-    p++;
+    const remaining = filters.length - i;
+    // Nome longo (filtro combinado) não cabe bem em linha de 3 — limita a 2
+    const cap = filters[i].name.length > 20 ? 2 : 3;
+
+    let count, attempts = 0;
+    do {
+      count = Math.min(CYCLE[ci % CYCLE.length], remaining, cap);
+      ci++;
+      attempts++;
+    } while (count === prevCount && attempts < CYCLE.length);
+
+    const rowFilters = filters.slice(i, i + count);
+    const spans      = assignSpans(rowFilters);
+    rows.push(rowFilters.map((f, j) => ({ filter: f, span: spans[j] })));
+    prevCount = count;
+    i += count;
   }
   return rows;
 }
@@ -135,7 +160,7 @@ function getFilterDescription(name) {
       if (preset === 'alto')  return 'Volume alto vs. market cap — especulativo (>30%)';
     }
     if (metric === 'diluição') {
-      if (preset === 'baixo') return 'Baixa diluição futura — FDV até 2× market cap';
+      if (preset === 'baixo') return 'Poucos tokens ainda por vir — FDV até 2× market cap (a maior parte do supply já circula)';
       if (preset === 'medio') return 'Diluição moderada — FDV entre 2× e 5× market cap';
       if (preset === 'alto')  return 'Alta diluição futura — FDV acima de 5× market cap';
     }
@@ -174,6 +199,26 @@ export default function FilterTabs({ onSelectFilter }) {
   const { filters, joinFilters, removeFilters, clearAllFilters } = useCurrency();
   const [checked, setChecked] = useState(new Set());
   const [activeFilter, setActiveFilter] = useState(null);
+  const [flashing, setFlashing] = useState(new Set());
+  const prevFilterNamesRef = useRef(new Set());
+  const flashTimerRef = useRef(null);
+
+  useEffect(() => {
+    const prev = prevFilterNamesRef.current;
+    const newNames = filters.map(f => f.name).filter(n => !prev.has(n));
+    prevFilterNamesRef.current = new Set(filters.map(f => f.name));
+
+    if (newNames.length === 0) return;
+
+    if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+
+    setFlashing(s => { const n = new Set(s); newNames.forEach(name => n.add(name)); return n; });
+
+    flashTimerRef.current = setTimeout(() => {
+      setFlashing(s => { const n = new Set(s); newNames.forEach(name => n.delete(name)); return n; });
+      flashTimerRef.current = null;
+    }, 5000);
+  }, [filters]);
 
   const sortedFilters = useMemo(() => {
     if (!filters.length) return [];
@@ -214,26 +259,28 @@ export default function FilterTabs({ onSelectFilter }) {
           let gi = 0;
           return buildRows(sortedFilters).map((row, rowIdx) => (
             <div key={rowIdx} className="flex gap-1">
-              {row.map((filter) => {
-                const cardColor = CARD_COLORS[gi % CARD_COLORS.length];
+              {row.map(({ filter, span }) => {
+                const cardColor  = CARD_COLORS[gi % CARD_COLORS.length];
                 gi++;
-                const textColor = getContrastText(cardColor);
-                const isActive  = activeFilter === filter.name;
-                const isChecked = checked.has(filter.name);
-                const count     = filter.list?.length ?? 0;
-                const bgAlpha   = isActive ? 1.00 : isChecked ? 0.90 : 0.82;
+                const textColor  = getContrastText(cardColor);
+                const isActive   = activeFilter === filter.name;
+                const isChecked  = checked.has(filter.name);
+                const isFlashing = flashing.has(filter.name);
+                const count      = filter.list?.length ?? 0;
+                const bgAlpha    = isActive ? 1.00 : isChecked ? 0.90 : 0.82;
                 return (
                   <div
                     key={filter.name}
                     title={getFilterDescription(filter.name)}
                     onClick={() => handleClick(filter.name)}
                     style={{
+                      flex: span,
                       background: hexToRgba(cardColor, bgAlpha),
                       borderColor: isActive ? textColor : hexToRgba(cardColor, 1),
                       outline: isActive ? `2px solid ${textColor}` : undefined,
                       outlineOffset: isActive ? '-2px' : undefined,
                     }}
-                    className="flex-1 flex flex-col gap-0.5 rounded border px-2 py-2 cursor-pointer transition-all hover:brightness-110 min-w-0"
+                    className={`flex flex-col gap-0.5 rounded border px-2 py-2 cursor-pointer transition-all hover:brightness-110 min-w-0${isFlashing ? ' animate-pulse' : ''}`}
                   >
                     <span className="text-[10px] font-mono font-semibold truncate leading-tight" style={{ color: textColor }}>
                       {filter.name}
