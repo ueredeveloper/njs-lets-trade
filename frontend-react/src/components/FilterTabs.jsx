@@ -125,6 +125,23 @@ function getFilterDescription(name) {
     return `Filtro Binance: ${param}`;
   }
 
+  // Filtros de market cap: mcap|giro|baixo, mcap|diluição|alto, etc.
+  if (interval === 'mcap') {
+    const metric = parts[1]; // 'giro' | 'diluição'
+    const preset = parts[2]; // 'baixo' | 'medio' | 'alto'
+    if (metric === 'giro') {
+      if (preset === 'baixo') return 'Volume baixo vs. market cap — possivelmente inflado (<5%)';
+      if (preset === 'medio') return 'Volume normal vs. market cap (5–30%)';
+      if (preset === 'alto')  return 'Volume alto vs. market cap — especulativo (>30%)';
+    }
+    if (metric === 'diluição') {
+      if (preset === 'baixo') return 'Baixa diluição futura — FDV até 2× market cap';
+      if (preset === 'medio') return 'Diluição moderada — FDV entre 2× e 5× market cap';
+      if (preset === 'alto')  return 'Alta diluição futura — FDV acima de 5× market cap';
+    }
+    return `Market Cap: ${metric} ${preset}`;
+  }
+
   if (type === 'r' || type === 'rsi') {
     // 1h|rsi|a|70|b|99
     const c1 = parts[2] === 'a' ? 'acima' : 'abaixo';
@@ -149,9 +166,6 @@ function getFilterDescription(name) {
     const candle = parts[4];
     return `MA${period} ${comp} ${candle} (${interval})`;
   }
-
-  if (type === 'lowestIndex')      return `Menor preço nos últimos períodos (${interval})`;
-  if (type === 'highLowVariation') return `Variação de preço alto/baixo (${interval})`;
 
   return name;
 }

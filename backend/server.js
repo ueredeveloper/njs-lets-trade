@@ -14,8 +14,7 @@ const { ichimokuCloudRouter } = require('./technicals-indicators');
 //const {client} = require('./services/fetchClient');
 const {
   fetchCandles, fetchIchimokuCloud, fetchAllCurrencies,
-  fetchSMA, fetchRSI, fetchVWAP, fetchLowestIndex,
-  fetchHighLowVariation, fetch24HsVolume, fetchIndicatorSearch,
+  fetchSMA, fetchRSI, fetchVWAP, fetch24HsVolume, fetchMarketCapFilter, fetchIndicatorSearch,
   fetchRsiOversoldRecovery, fetchReloadCandles, fetchFavorites,
   fetchGateCurrencies, fetchGatePrefetch } = require('./services');
 
@@ -32,9 +31,8 @@ app.use('/services', fetchAllCurrencies);
 app.use('/services', fetchSMA);
 app.use('/services', fetchRSI);
 app.use('/services', fetchVWAP);
-app.use('/services', fetchLowestIndex)
-app.use('/services', fetchHighLowVariation)
 app.use('/services', fetch24HsVolume)
+app.use('/services', fetchMarketCapFilter)
 app.use('/services', fetchIndicatorSearch)
 app.use('/services', fetchRsiOversoldRecovery)
 app.use('/services', fetchReloadCandles)
@@ -59,8 +57,44 @@ if (FRONTEND_PORT) {
 }
 
 
-// Start the server
+// RSI cache: carrega do disco, sobe o servidor, depois aquece em background
+const rsiCache = require('./cache/rsiCache');
+const { getActiveUsdtPairs } = require('./binance/getActiveUsdtPairs');
+
+const RSI_INTERVALS = ['1h', '2h', '4h', '8h', '1d'];
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
-});
+
+async function refreshRsiCache() {
+  const t0 = Date.now();
+  const { list: symbols } = await getActiveUsdtPairs();
+  console.log(`[rsiCache] iniciando warmup — ${symbols.length} símbolos × ${RSI_INTERVALS.length} intervalos`);
+  await rsiCache.warmup(symbols, RSI_INTERVALS);
+  await rsiCache.saveToDisk();
+  const total = ((Date.now() - t0) / 1000).toFixed(1);
+  console.log(`[rsiCache] ciclo completo em ${total}s`);
+}
+
+async function startServer() {
+  const t0 = Date.now();
+  console.log('[rsiCache] carregando cache do disco...');
+  await rsiCache.loadFromDisk();
+
+  app.listen(PORT, () => {
+    const boot = ((Date.now() - t0) / 1000).toFixed(2);
+    console.log(`Server is running on port ${PORT} (pronto em ${boot}s)`);
+  });
+
+  // Warmup em background — atualiza entradas desatualizadas
+  refreshRsiCache().catch(e => console.error('[rsiCache] erro no warmup:', e.message));
+
+  // Refresh a cada 5 minutos
+  setInterval(async () => {
+    try {
+      await refreshRsiCache();
+    } catch (e) {
+      console.error('[rsiCache] erro no refresh:', e.message);
+    }
+  }, 5 * 60 * 1000);
+}
+
+startServer();

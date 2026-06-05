@@ -1,4 +1,4 @@
-const getClient = require('./getClient');
+const fetchKlines = require('./fetchKlines');
 const writeCandles = require('../utils/write-candles');
 const readCandles = require('../utils/read-candles');
 const convertIntervalToMiliseconds = require('../utils/convert-interval-to-miliseconds');
@@ -16,7 +16,6 @@ const GATE_ONLY_SYMBOLS = new Set(['SKYAIUSDT', 'SLXUSDT', 'UNIUSDT', 'ZESTUSDT'
  * @param {string}  interval Ex: '1h', '4h', '8h'
  * @param {number}  limit    Quantidade de candles solicitados
  */
-let i = 0;
 module.exports = getCandles = async function (symbol, interval, limit) {
 
     if (GATE_ONLY_SYMBOLS.has(symbol.toUpperCase())) {
@@ -50,17 +49,13 @@ module.exports = getCandles = async function (symbol, interval, limit) {
     let miliseconds = await convertIntervalToMiliseconds(interval);
     const limitForUpdateDb = Math.floor(timeDifference / miliseconds);
 
-    i++;
-
     if (dbCandles.length > 3000) {
         dbCandles = dbCandles.slice(-2999);
     }
 
     if (limit > dbCandles.length) {
 
-        let client = await getClient();
-        let candles = await client.candles({ symbol, interval, limit });
-
+        const candles = await fetchKlines(symbol, interval, limit);
         writeCandles(symbol, interval, candles);
         return candles;
 
@@ -68,16 +63,12 @@ module.exports = getCandles = async function (symbol, interval, limit) {
 
         if (limitForUpdateDb > 0) {
 
-            let client = await getClient();
-            let candles = await client.candles({ symbol, interval, limit: limitForUpdateDb });
-
+            const candles = await fetchKlines(symbol, interval, limitForUpdateDb);
             candles.forEach(candle => dbCandles.push(candle));
 
         } else {
 
-            let client = await getClient();
-            let candles = await client.candles({ symbol, interval, limit: 1 });
-
+            const candles = await fetchKlines(symbol, interval, 1);
             dbCandles.pop();
             candles.forEach(candle => dbCandles.push(candle));
         }

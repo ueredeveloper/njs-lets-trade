@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useCurrency } from '../contexts/CurrencyContext';
-import { fetchCandlesAndIndicators, fetchIndicatorSearch } from '../services/api';
+import { fetchCandlesAndIndicators, fetchIndicatorSearch, fetchMarketCapFilter } from '../services/api';
 import {
   createRsiFilter,
   lastRsiAbove10Bellow20, lastRsiAbove20Bellow30, lastRsiAbove30Bellow40,
@@ -17,8 +17,6 @@ import {
   createMovingAverageFilter,
   movingAverageAboveCandleClose, movingAverageBellowCandleClose,
 } from '../utils/createMovingAverageFilter';
-import { createLowestIndexFilter } from '../utils/createLowestIndexFilter';
-import { createHighLowFilter } from '../utils/createHighLowFilter';
 import Tooltip from './Tooltip';
 
 const INTERVALS = ['1m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w'];
@@ -34,8 +32,7 @@ const INDICATOR_DESCRIPTIONS = {
   ichimokuCloud: 'Sistema japonês com 5 linhas que indica tendência, suporte/resistência e momentum. Muito usado em análise técnica avançada.',
   movingAverage: 'Média Móvel Simples (SMA) — média dos últimos N preços de fechamento. Quando o preço cruza a MA, sinaliza mudança de tendência.',
   relativeStrengthIndex: 'RSI — oscilador de 0 a 100 que mede força do movimento. Abaixo de 30 = sobrevendido (possível alta). Acima de 70 = sobrecomprado (possível queda).',
-  lowestIndex: 'Filtra moedas que atingiram o menor preço recente dentro do período analisado. Útil para encontrar moedas em suporte histórico.',
-  highLowVariation: 'Filtra moedas com maior variação percentual entre a máxima e a mínima do período. Útil para encontrar moedas com alta volatilidade.',
+  marketCap: 'Cruza dados da CoinGecko com o volume da Binance. "Giro de volume" detecta moedas com preço inflado sem sustentação real de negócios. "Diluição futura" identifica tokens com muita emissão ainda pendente.',
 };
 
 const ICHIMOKU_LINE_LABELS = {
@@ -75,14 +72,17 @@ function buildSummary(value) {
     const l2 = value.line2 ?? 'base';
     return `Ichimoku: ${l1} ${cmp} ${l2} → ${ivLabel}`;
   }
+  if (type === 'marketCap') {
+    const metricLabel = value.metric === 'dilution' ? 'Diluição futura' : 'Giro de volume';
+    const presetLabel = { baixo: 'baixo', medio: 'médio', alto: 'alto' }[value.preset ?? 'baixo'] ?? '';
+    return `Market Cap: ${metricLabel} ${presetLabel}`;
+  }
   if (type === 'movingAverage') {
     const len = value.length ?? '200';
     const cmp = (value.compare ?? 'above') === 'above' ? 'acima' : 'abaixo';
     const cdl = value.candle ?? 'close';
     return `MA${len}: preço (${cdl}) ${cmp} da média → ${ivLabel}`;
   }
-  if (type === 'lowestIndex') return `Menor preço recente → ${ivLabel}`;
-  if (type === 'highLowVariation') return `Maior variação máxima/mínima → ${ivLabel}`;
   return null;
 }
 
@@ -127,14 +127,35 @@ function IndicatorRow({ value, onChange }) {
             <option value="ichimokuCloud">Ichimoku Cloud</option>
             <option value="movingAverage">Moving Average</option>
             <option value="relativeStrengthIndex">RSI</option>
-            <option value="lowestIndex">Índice de Menor Preço</option>
-            <option value="highLowVariation">Variação de Valor</option>
+            <option value="marketCap">Market Cap</option>
           </select>
           {type && INDICATOR_DESCRIPTIONS[type] && (
             <HelpIcon text={INDICATOR_DESCRIPTIONS[type]} />
           )}
         </div>
 
+
+        {type === 'marketCap' && (
+          <>
+            <select className={sel} value={value.metric ?? 'turnover'}
+              onChange={(e) => onChange({ ...value, metric: e.target.value })}
+              title="Giro: volume÷market cap. Baixo = preço sem sustentação real. Diluição: tokens ainda não emitidos vs. cap atual.">
+              <option value="turnover">Giro de Volume</option>
+              <option value="dilution">Diluição Futura</option>
+            </select>
+            <select className={sel} value={value.preset ?? 'baixo'}
+              onChange={(e) => onChange({ ...value, preset: e.target.value })}
+              title={
+                (value.metric ?? 'turnover') === 'turnover'
+                  ? 'Baixo <5% (inflado) · Médio 5–30% (normal) · Alto >30% (especulativo)'
+                  : 'Baixo <2× (saudável) · Médio 2–5× · Alto >5× (risco de diluição)'
+              }>
+              <option value="baixo">{(value.metric ?? 'turnover') === 'turnover' ? 'Baixo — possível inflado (<5%)' : 'Baixo — pouca diluição (<2×)'}</option>
+              <option value="medio">{(value.metric ?? 'turnover') === 'turnover' ? 'Médio — normal (5–30%)'         : 'Médio — moderado (2–5×)'}</option>
+              <option value="alto">{(value.metric ?? 'turnover') === 'turnover'  ? 'Alto — especulativo (>30%)'     : 'Alto — risco elevado (>5×)'}</option>
+            </select>
+          </>
+        )}
 
         {type === 'relativeStrengthIndex' && (
           <>
@@ -250,8 +271,8 @@ function IndicatorRow({ value, onChange }) {
         )}
       </div>
 
-      {/* Intervalos */}
-      <div className="flex flex-row flex-wrap gap-x-2 gap-y-1">
+      {/* Intervalos — ocultos para Market Cap (não é indicador de série temporal) */}
+      {type !== 'marketCap' && <div className="flex flex-row flex-wrap gap-x-2 gap-y-1">
         {INTERVALS.map((iv) => (
           <label
             key={iv}
@@ -267,7 +288,7 @@ function IndicatorRow({ value, onChange }) {
             {iv}
           </label>
         ))}
-      </div>
+      </div>}
 
       {/* Sumário da configuração atual */}
       {summary && (
@@ -299,8 +320,9 @@ export default function IndicatorPanel({ open, onToggle }) {
   async function handleSearch() {
     setSearching(true);
     try {
-      const rsiIndicators = indicators.filter((ind) => ind.type === 'relativeStrengthIndex');
-      const otherIndicators = indicators.filter((ind) => ind.type && ind.type !== 'relativeStrengthIndex');
+      const rsiIndicators   = indicators.filter((ind) => ind.type === 'relativeStrengthIndex');
+      const mcapIndicators  = indicators.filter((ind) => ind.type === 'marketCap');
+      const otherIndicators = indicators.filter((ind) => ind.type && ind.type !== 'relativeStrengthIndex' && ind.type !== 'marketCap');
 
       // RSI: pesquisa via novo endpoint do backend (sem enviar candlesticks)
       for (const ind of rsiIndicators) {
@@ -318,7 +340,15 @@ export default function IndicatorPanel({ open, onToggle }) {
         }
       }
 
-      // Outros indicadores: fluxo original (Ichimoku, MA, lowestIndex, highLow)
+      // Market Cap: chama endpoint direto, sem candles
+      for (const ind of mcapIndicators) {
+        const metric = ind.metric ?? 'turnover';
+        const preset = ind.preset ?? 'baixo';
+        const filter = await fetchMarketCapFilter(metric, preset);
+        addFilter(filter);
+      }
+
+      // Outros indicadores: fluxo original (Ichimoku, MA)
       if (otherIndicators.length > 0) {
         const uniqueIntervals = [...new Set(otherIndicators.flatMap((ind) => ind.intervals))];
         const usdtCurrencies = getBinanceCurrenciesWithUsdt(currencies);
@@ -371,13 +401,6 @@ export default function IndicatorPanel({ open, onToggle }) {
             else alert('Condição MA ainda não calculada!');
           }
 
-          else if (type === 'lowestIndex') {
-            createLowestIndexFilter(candlesData, intervals, 'lowestIndex', addFilter);
-          }
-
-          else if (type === 'highLowVariation') {
-            createHighLowFilter(candlesData, intervals, 'highLowVariation', addFilter);
-          }
         }
       }
     } catch (err) {

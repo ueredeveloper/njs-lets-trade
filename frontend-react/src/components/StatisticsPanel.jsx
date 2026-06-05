@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useCurrency } from '../contexts/CurrencyContext';
 import { fetchRsiOversoldRecovery, fetchCandlesticksAndCloud } from '../services/api';
+import Tooltip from './Tooltip';
 
 const INTERVALS = ['1m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w'];
 
@@ -15,13 +16,14 @@ function formatDate(iso) {
   });
 }
 
-function SummaryCard({ label, value, highlight }) {
-  return (
+function SummaryCard({ label, value, highlight, tooltip }) {
+  const card = (
     <div className="flex flex-col items-center justify-center bg-p2/50 border border-p3/20 rounded px-0.5 py-px sm:px-2 sm:py-1.5 min-w-[38px] sm:min-w-[80px]">
       <span className={`text-[10px] sm:text-xs font-bold ${highlight ?? 'text-p5'}`}>{value}</span>
       <span className="text-[8px] sm:text-[9px] text-p5/50 text-center leading-tight">{label}</span>
     </div>
   );
+  return tooltip ? <Tooltip text={tooltip} maxW={220}>{card}</Tooltip> : card;
 }
 
 function RsiStats() {
@@ -149,16 +151,17 @@ function RsiStats() {
           <div className="flex flex-col gap-2">
             {/* Cartões de resumo */}
             <div className="flex gap-1.5 flex-wrap justify-center shrink-0">
-              <SummaryCard label="Candles" value={result.totalCandles} />
-              <SummaryCard label="Períodos RSI" value={result.totalRsiPeriods} />
-              <SummaryCard label="Ocorrências" value={result.totalOccurrences} highlight="text-p4" />
+              <SummaryCard label="Candles"     value={result.totalCandles}      tooltip="Total de candles analisados no período selecionado." />
+              <SummaryCard label="Períodos RSI" value={result.totalRsiPeriods}   tooltip="Candles com RSI calculado — os primeiros 14 são descartados pelo período do indicador." />
+              <SummaryCard label="Ocorrências"  value={result.totalOccurrences}  highlight="text-p4" tooltip="Número de ciclos completos: entrada na sobrevenda e saída na sobrecompra." />
               <SummaryCard
                 label="Valor. média"
                 value={`${result.avgAppreciationPercent > 0 ? '+' : ''}${result.avgAppreciationPercent}%`}
                 highlight={result.avgAppreciationPercent >= 0 ? 'text-green-600' : 'text-red-600'}
+                tooltip="Valor em aberto não é contabilizado."
               />
-              <SummaryCard label="RSI entrada" value={`< ${result.oversoldThreshold}`} />
-              <SummaryCard label="RSI saída"   value={`> ${result.overboughtThreshold}`} />
+              <SummaryCard label="RSI entrada" value={`< ${result.oversoldThreshold}`} tooltip="RSI abaixo deste valor marca o início de um ciclo (zona de sobrevenda)." />
+              <SummaryCard label="RSI saída"   value={`> ${result.overboughtThreshold}`} tooltip="RSI acima deste valor encerra o ciclo (zona de sobrecompra)." />
             </div>
 
             {/* Tabela */}

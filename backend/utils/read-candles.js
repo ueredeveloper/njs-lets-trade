@@ -14,10 +14,16 @@ async function readCandles(symbol, interval) {
 
     try {
         const data = await fs.readFile(filePath, 'utf8');
-        const dataArray = JSON.parse(data); // Parse the JSON string into an array
-        return dataArray;
+        return JSON.parse(data);
     } catch (err) {
-        console.error('Error reading file:', err);
+        if (err instanceof SyntaxError) {
+            // Arquivo corrompido ou truncado — sobrescreve com array vazio
+            // para que getCandles busque dados frescos na Binance
+            await fs.writeFile(filePath, '[]', 'utf8').catch(() => {});
+            const e = new Error(`Candle file corrupt, reset: ${filePath}`);
+            e.code = 'ENOENT';
+            throw e;
+        }
         throw err;
     }
 }

@@ -13,7 +13,10 @@
       "Bash(node backend/gate/getGateCandles.js FIOUSDT)",
       "Bash(node -e \"const d=require\\('./backend/data/candlestick/FIOUSDT-8h.json'\\); console.log\\('Total:', d.length\\); console.log\\(JSON.stringify\\(d[0], null, 2\\)\\)\")",
       "Bash(node -e \"require\\('./backend/binance/getCandles'\\); console.log\\('OK'\\)\")",
-      "Bash(Remove-Item \"c:\\\\workspace\\\\njs-lets-trade\\\\backend\\\\binance\\\\getClandles.js\")"
+      "Bash(Remove-Item \"c:\\\\workspace\\\\njs-lets-trade\\\\backend\\\\binance\\\\getClandles.js\")",
+      "Bash(Get-ChildItem -Path \"c:\\\\workspace\\\\njs-lets-trade\\\\backend\\\\\" -Recurse -Directory | Select-Object -ExpandProperty FullName | Sort-Object)",
+      "Bash(xargs grep -l \"binance\\\\|api.binance\")",
+      "WebSearch"
     ]
   }
 }

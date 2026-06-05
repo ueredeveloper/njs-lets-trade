@@ -20,9 +20,12 @@ const router = require("express").Router();
  * @returns {undefined}
  */
 router.get("/currencies", async (req, res) => {
-
-    // remove cíclical error
-    await getAllCurrencies().then(response => res.send(JSON.stringify(response)));
+  try {
+    const currencies = await getAllCurrencies();
+    res.send(JSON.stringify(currencies));
+  } catch (error) {
+    res.status(502).json({ error: error.message });
+  }
 });
 
 module.exports = router;

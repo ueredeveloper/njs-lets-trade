@@ -9,6 +9,12 @@ export async function fetchAllCurrencies() {
   return res.json();
 }
 
+export async function fetchMarketCapFilter(metric, preset) {
+  const res = await fetch(`/services/market-cap-filter?metric=${metric}&preset=${preset}`);
+  if (!res.ok) throw new Error(`market-cap-filter falhou: HTTP ${res.status}`);
+  return res.json(); // { name, list }
+}
+
 export async function fetch24hVolume() {
   const res = await fetch('/services/24hs-volume');
   if (!res.ok) throw new Error('Falha ao buscar volume 24h');
@@ -84,9 +90,14 @@ export function gatePreloadCandles(symbol) {
  */
 export async function fetchCandlesticksAndCloud(symbol, interval, source = null) {
   const srcParam = source === 'gate' ? '&source=gate' : '';
-  const candles = await fetch(
+  const candlesRaw = await fetch(
     `/services/candles/?symbol=${symbol}&limit=266&interval=${interval}${srcParam}`,
   ).then((r) => r.json());
+
+  if (!Array.isArray(candlesRaw)) {
+    throw new Error(`Candles indisponíveis para ${symbol} ${interval}`);
+  }
+  const candles = candlesRaw;
 
   const [ichimokuCloud, movingAverage, rsi] = await Promise.all([
     fetch('/services/ichimoku-cloud', {
@@ -155,11 +166,14 @@ export async function fetchIndicatorSearch(query) {
  */
 export async function fetchCandlesAndIndicators(currencies, intervals) {
   async function fetchOne(symbol, interval) {
-    const candles = await fetch(
+    const candlesRaw = await fetch(
       `/services/candles/?symbol=${symbol}&limit=266&interval=${interval}`,
     ).then((r) => r.json());
 
-    const [ichimokuCloud, movingAverage, rsiIndicator, lowestIndex, highLowVariation] =
+    if (!Array.isArray(candlesRaw)) return null;
+    const candles = candlesRaw;
+
+    const [ichimokuCloud, movingAverage, rsiIndicator] =
       await Promise.all([
         fetch('/services/ichimoku-cloud', {
           method: 'POST',
@@ -178,18 +192,6 @@ export async function fetchCandlesAndIndicators(currencies, intervals) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(candles.slice(-166)),
         }).then((r) => r.json()),
-
-        fetch('/services/fetch-lowest-index', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(candles.slice(-20)),
-        }).then((r) => r.json()),
-
-        fetch('/services/fetch-high-low-variation', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(candles.slice(-10)),
-        }).then((r) => r.json()),
       ]);
 
     return {
@@ -200,8 +202,6 @@ export async function fetchCandlesAndIndicators(currencies, intervals) {
       ichimokuCloud,
       movingAverage,
       rsiIndicator,
-      lowestIndex: lowestIndex.lowestIndex,
-      highLowVariation: highLowVariation.highLowVariation,
     };
   }
 

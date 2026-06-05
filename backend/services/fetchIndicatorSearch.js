@@ -2,21 +2,16 @@ const router = require("express").Router();
 const { RSI } = require('technicalindicators');
 const getCandles = require('../binance/getCandles');
 const { getActiveUsdtPairs } = require('../binance/getActiveUsdtPairs');
+const { get: rsiGet, storeFromCandles } = require('../cache/rsiCache');
 
 const CANDLES_LIMIT = 200;
 const CONCURRENCY = 30;
 
-/**
- * Parse query string like "8h|rsi|above|70|below|99" or short form "8h|r|a|70|b|99".
- * Returns { interval, indicator, conditions, nome }.
- */
 function parseQuery(query) {
   const parts = query.trim().split('|');
   if (parts.length < 4) {
     throw new Error('Formato inválido. Use: interval|indicator|condition|value[|condition|value]');
   }
-
-  //console.log('Parsing query:', query);
 
   const interval = parts[0];
   const indicatorRaw = parts[1].toLowerCase();
@@ -47,8 +42,7 @@ function satisfiesConditions(value, conditions) {
 }
 
 function calcRSI(candles) {
-  const values = candles.map(c => parseFloat(c.close));
-  return RSI.calculate({ values, period: 14 });
+  return RSI.calculate({ values: candles.map(c => parseFloat(c.close)), period: 14 });
 }
 
 async function runWithConcurrency(items, fn, concurrency) {
@@ -72,47 +66,67 @@ router.get('/indicator-search', async (req, res) => {
 
     const { interval, indicator, conditions, nome } = parseQuery(query);
 
+    if (indicator !== 'rsi') {
+      return res.status(400).json({ error: `Indicador "${indicator}" não suportado neste endpoint` });
+    }
+
     const { list: symbols } = await getActiveUsdtPairs();
     const timestamp = Date.now();
 
-    //console.log(`indicator-search: "${nome}" — ${symbols.length} símbolos`);
+    const hits = [];
+    const misses = [];
 
-    const results = await runWithConcurrency(symbols, async (symbol) => {
-      try {
-        const candles = await getCandles(symbol, interval, CANDLES_LIMIT);
-        if (!candles || candles.length < 15) return null;
-
-        let indicatorValues;
-        if (indicator === 'rsi') {
-          indicatorValues = calcRSI(candles);
-        } else {
-          return null;
-        }
-
-        if (!indicatorValues || indicatorValues.length === 0) return null;
-
-        const lastValue = indicatorValues[indicatorValues.length - 1];
-        if (!satisfiesConditions(lastValue, conditions)) return null;
-
-        const lastCandle = candles[candles.length - 1];
-        return {
+    // Caminho rápido: leitura do cache em memória (sem I/O)
+    for (const symbol of symbols) {
+      const entry = rsiGet(symbol, interval);
+      if (!entry) {
+        misses.push(symbol);
+        continue;
+      }
+      if (satisfiesConditions(entry.rsi, conditions)) {
+        hits.push({
           nome,
           data: timestamp,
-          coin: {
-            symbol: symbol.replace('USDT', '/USDT'),
-            open: lastCandle.open,
-            high: lastCandle.high,
-            low: lastCandle.low,
-            close: lastCandle.close,
-          },
-          values: indicatorValues.slice(-20),
-        };
-      } catch {
-        return null;
+          coin: { symbol: symbol.replace('USDT', '/USDT'), ...entry.lastCandle },
+          values: entry.values,
+        });
       }
-    }, CONCURRENCY);
+    }
 
-    res.json(results);
+    // Caminho lento: símbolos sem cache (só no cold-start ou novos pares)
+    if (misses.length > 0) {
+      const missHits = await runWithConcurrency(misses, async (symbol) => {
+        try {
+          const candles = await getCandles(symbol, interval, CANDLES_LIMIT);
+          if (!candles || candles.length < 15) return null;
+
+          const indicatorValues = calcRSI(candles);
+          if (!indicatorValues || indicatorValues.length === 0) return null;
+
+          // Popula o cache com os dados já computados (sem re-buscar candles)
+          storeFromCandles(symbol, interval, candles);
+
+          const lastValue = indicatorValues[indicatorValues.length - 1];
+          if (!satisfiesConditions(lastValue, conditions)) return null;
+
+          return {
+            nome,
+            data: timestamp,
+            coin: {
+              symbol: symbol.replace('USDT', '/USDT'),
+              open: last.open, high: last.high, low: last.low, close: last.close,
+            },
+            values: indicatorValues.slice(-20),
+          };
+        } catch {
+          return null;
+        }
+      }, CONCURRENCY);
+
+      hits.push(...missHits);
+    }
+
+    res.json(hits);
   } catch (err) {
     console.error('indicator-search error:', err);
     res.status(500).json({ error: err.message });

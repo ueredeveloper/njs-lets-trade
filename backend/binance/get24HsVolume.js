@@ -1,9 +1,10 @@
 const { getActiveUsdtPairs }  = require("./getActiveUsdtPairs");
 const { getAllGateCurrencies } = require("../gate/getAllGateCurrencies");
+const getTickers               = require("./cachedTicker24hr");
 
 async function get24hVolumeFilters() {
   const [binanceData, gateCurrencies, listedOnBinance] = await Promise.all([
-    fetch("https://api.binance.com/api/v3/ticker/24hr").then(r => r.json()),
+    getTickers(),
     getAllGateCurrencies().catch(() => []),
     getActiveUsdtPairs(),
   ]);

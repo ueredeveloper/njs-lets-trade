@@ -8,7 +8,12 @@ router.get('/candles', async (req, res) => {
   try {
     const fn       = source === 'gate' ? getGateCandles : getCandles;
     const response = await fn(symbol, interval, limit);
-    res.send(JSON.stringify(response));
+    if (!Array.isArray(response)) {
+      return res.status(502).json({ error: 'Candle data unavailable for this symbol' });
+    }
+    const slim = response.map(({ openTime, open, high, low, close, volume }) =>
+      ({ openTime, open, high, low, close, volume }));
+    res.send(JSON.stringify(slim));
   } catch (error) {
     res.status(500).send({ error: error.message });
   }

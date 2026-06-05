@@ -16,32 +16,60 @@ async function fetchGateTicker(binanceSymbol) {
   };
 }
 
-module.exports = getAllCurrencies = async function () {
-  try {
-    const res     = await fetch('https://api.binance.com/api/v3/ticker/24hr');
-    const tickers = await res.json();
+let _cachedCurrencies = null;
+let _cachedAt = 0;
+const CURRENCIES_TTL_MS = 30 * 1000; // 30 segundos
 
-    const currencies = tickers.map((t) => ({
-      id: null,
-      symbol: t.symbol,
-      price:  t.lastPrice,
-      volume: parseFloat(t.quoteVolume),
-      currency_collections: [[]],
-    }));
+// Promise em andamento para evitar chamadas duplicadas simultâneas
+let _inflight = null;
 
-    // Inclui moedas Gate.io adicionadas pelo usuário via busca
-    let gateAdded = [];
-    try { gateAdded = JSON.parse(fs.readFileSync(GATE_ADDED_FILE, 'utf8')); } catch {}
+const getTickers = require('./cachedTicker24hr');
 
-    for (const sym of gateAdded) {
-      if (!currencies.some((c) => c.symbol === sym)) {
-        const { price, volume } = await fetchGateTicker(sym).catch(() => ({ price: '', volume: 0 }));
-        currencies.push({ id: null, symbol: sym, price, volume, currency_collections: [[]] });
-      }
+async function fetchCurrencies() {
+  const tickers = await getTickers();
+
+  const currencies = tickers.map((t) => ({
+    symbol: t.symbol,
+    price:  t.lastPrice,
+    volume: parseFloat(t.quoteVolume),
+  }));
+
+  // Inclui moedas Gate.io adicionadas pelo usuário via busca
+  let gateAdded = [];
+  try { gateAdded = JSON.parse(fs.readFileSync(GATE_ADDED_FILE, 'utf8')); } catch {}
+
+  for (const sym of gateAdded) {
+    if (!currencies.some((c) => c.symbol === sym)) {
+      const { price, volume } = await fetchGateTicker(sym).catch(() => ({ price: '', volume: 0 }));
+      currencies.push({ symbol: sym, price, volume });
     }
-
-    return currencies;
-  } catch (error) {
-    console.error('Error fetching prices:', error);
   }
+
+  return currencies;
+}
+
+module.exports = getAllCurrencies = async function () {
+  if (_cachedCurrencies && Date.now() - _cachedAt < CURRENCIES_TTL_MS) {
+    return _cachedCurrencies;
+  }
+
+  // Deduplica chamadas simultâneas: todas aguardam a mesma promise
+  if (_inflight) return _inflight;
+
+  _inflight = fetchCurrencies()
+    .then((result) => {
+      _cachedCurrencies = result;
+      _cachedAt = Date.now();
+      _inflight = null;
+      return result;
+    })
+    .catch((error) => {
+      console.error('Error fetching prices:', error.message);
+      _inflight = null;
+      // Retorna o cache anterior se disponível, senão relança
+      if (_cachedCurrencies) return _cachedCurrencies;
+      throw error;
+    });
+
+  return _inflight;
 };
