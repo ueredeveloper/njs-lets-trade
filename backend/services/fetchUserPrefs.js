@@ -7,6 +7,7 @@ const PREFS_FILE = path.join(__dirname, '../data/user-prefs.json');
 
 const DEFAULTS = {
   intervals:        ['30m', '4h', '8h'],
+  chartInterval:    '30m',
   recentIndicators: [],
 };
 
@@ -23,9 +24,10 @@ router.get('/user-prefs', (req, res) => res.json(read()));
 
 router.post('/user-prefs', (req, res) => {
   const prefs  = read();
-  const { intervals, indicator } = req.body ?? {};
+  const { intervals, chartInterval, indicator } = req.body ?? {};
 
-  if (Array.isArray(intervals)) prefs.intervals = intervals;
+  if (Array.isArray(intervals))       prefs.intervals     = intervals;
+  if (typeof chartInterval === 'string') prefs.chartInterval = chartInterval;
 
   if (indicator) {
     const key = JSON.stringify({ type: indicator.type, ...indicator });

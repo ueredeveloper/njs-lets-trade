@@ -2,11 +2,12 @@ import { useMemo, useState, useEffect, useRef } from 'react';
 import { useI18n } from '../i18n';
 import ReactECharts from 'echarts-for-react';
 import { useCurrency } from '../contexts/CurrencyContext';
-import { fetchCandlesticksAndCloud } from '../services/api';
+import { fetchCandlesticksAndCloud, fetchUserPrefs, saveUserPrefs } from '../services/api';
 import convertOpenTime from '../utils/convertOpenTime';
 
 const LIMIT = 66;
-const INTERVALS = ['5m', '15m', '30m', '1h', '2h', '4h', '8h', '1d'];
+const INTERVALS = ['1m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w'];
+const DEFAULT_INTERVAL = '30m';
 
 const C_UP   = '#26a69a';
 const C_DOWN = '#ef5350';
@@ -200,10 +201,18 @@ export default function CandlestickChart() {
   const { selectedChart, setSelectedChart, chartZoom } = useCurrency();
   const { t } = useI18n();
   const chartRef = useRef(null);
-  const [currentInterval, setCurrentInterval] = useState('30m');
+  const [currentInterval, setCurrentInterval] = useState(DEFAULT_INTERVAL);
   const [loadingInterval, setLoadingInterval] = useState(false);
   const [themeTick, setThemeTick] = useState(0);
   const [activeIndicators, setActiveIndicators] = useState(['ma200', 'rsi']);
+
+  useEffect(() => {
+    fetchUserPrefs().then(prefs => {
+      if (prefs?.chartInterval && INTERVALS.includes(prefs.chartInterval)) {
+        setCurrentInterval(prefs.chartInterval);
+      }
+    });
+  }, []);
 
   function toggleIndicator(id) {
     setActiveIndicators((prev) =>
@@ -220,8 +229,10 @@ export default function CandlestickChart() {
   const colors = useMemo(() => getThemeColors(), [themeTick]);
 
   async function handleIntervalChange(iv) {
-    if (!selectedChart?.symbol || iv === currentInterval) return;
+    if (iv === currentInterval) return;
     setCurrentInterval(iv);
+    saveUserPrefs({ chartInterval: iv });
+    if (!selectedChart?.symbol) return;
     setLoadingInterval(true);
     try {
       const data = await fetchCandlesticksAndCloud(selectedChart.symbol, iv);
