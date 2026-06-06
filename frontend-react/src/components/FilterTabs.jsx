@@ -245,7 +245,7 @@ export default function FilterTabs({ onSelectFilter }) {
     onSelectFilter(name);
   }
 
-  function handleJoin() { joinFilters(Array.from(checked)); }
+  function handleJoin() { joinFilters(Array.from(checked)); setChecked(new Set()); }
   function handleRemove() { removeFilters(Array.from(checked)); setChecked(new Set()); }
   function handleClearAll() { clearAllFilters(); setChecked(new Set()); setActiveFilter(null); onSelectFilter(null); }
 
