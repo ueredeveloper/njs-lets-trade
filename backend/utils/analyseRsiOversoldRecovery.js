@@ -185,6 +185,12 @@ async function analyseRsiOversoldRecovery(symbol, interval, options = {}) {
         ? parseFloat((occurrences.reduce((s, o) => s + o.appreciationPercent, 0) / total).toFixed(2))
         : 0;
 
+    // Série RSI alinhada por openTime — usada pelo gráfico ao clicar numa linha
+    const rsiSeries = rsiValues.map((v, i) => ({
+        openTime: parseInt(candles[i + RSI_PERIOD].openTime),
+        rsi:      parseFloat(v.toFixed(2)),
+    }));
+
     return {
         symbol,
         interval,
@@ -197,6 +203,7 @@ async function analyseRsiOversoldRecovery(symbol, interval, options = {}) {
         avgAppreciationPercent,
         occurrences,
         openOccurrence,
+        rsiSeries,
     };
 }
 

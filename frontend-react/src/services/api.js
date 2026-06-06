@@ -9,6 +9,22 @@ export async function fetchAllCurrencies() {
   return res.json();
 }
 
+export async function fetchUserPrefs() {
+  try {
+    const res = await fetch('/services/user-prefs');
+    if (!res.ok) return null;
+    return res.json();
+  } catch { return null; }
+}
+
+export async function saveUserPrefs(update) {
+  fetch('/services/user-prefs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(update),
+  }).catch(() => {});
+}
+
 export async function fetchStablecoins() {
   const res = await fetch('/services/stablecoins');
   if (!res.ok) throw new Error(`stablecoins falhou: HTTP ${res.status}`);
@@ -94,10 +110,10 @@ export function gatePreloadCandles(symbol) {
  * @param {string} interval ex: '1h'
  * @param {string} [source] 'gate' para forçar Gate.io; omitir para Binance
  */
-export async function fetchCandlesticksAndCloud(symbol, interval, source = null) {
+export async function fetchCandlesticksAndCloud(symbol, interval, source = null, limit = 266) {
   const srcParam = source === 'gate' ? '&source=gate' : '';
   const candlesRaw = await fetch(
-    `/services/candles/?symbol=${symbol}&limit=266&interval=${interval}${srcParam}`,
+    `/services/candles/?symbol=${symbol}&limit=${limit}&interval=${interval}${srcParam}`,
   ).then((r) => r.json());
 
   if (!Array.isArray(candlesRaw)) {
@@ -109,19 +125,19 @@ export async function fetchCandlesticksAndCloud(symbol, interval, source = null)
     fetch('/services/ichimoku-cloud', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(candles.slice(-166)),
+      body: JSON.stringify(candles.slice(-Math.max(limit, 166))),
     }).then((r) => r.json()),
 
     fetch('/services/sma?period=200', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(candles),
+      body: JSON.stringify(candles.slice(-600)), // SMA200 precisa de ≤600 candles
     }).then((r) => r.json()),
 
     fetch('/services/rsi', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(candles.slice(-166)),
+      body: JSON.stringify(candles), // todos os candles — necessário para RSI histórico correto
     }).then((r) => r.json()),
   ]);
 

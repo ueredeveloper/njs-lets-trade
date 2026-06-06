@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useCurrency } from '../contexts/CurrencyContext';
-import { fetchCandlesAndIndicators, fetchIndicatorSearch, fetchMarketCapFilter } from '../services/api';
+import { fetchCandlesAndIndicators, fetchIndicatorSearch, fetchMarketCapFilter, fetchUserPrefs, saveUserPrefs } from '../services/api';
+import { useI18n } from '../i18n';
 import {
   createRsiFilter,
   lastRsiAbove10Bellow20, lastRsiAbove20Bellow30, lastRsiAbove30Bellow40,
@@ -28,23 +29,7 @@ const INTERVAL_LABELS = {
   '1d': '1 dia', '3d': '3 dias', '1w': '1 semana',
 };
 
-const INDICATOR_DESCRIPTIONS = {
-  ichimokuCloud: 'Sistema japonês com 5 linhas que indica tendência, suporte/resistência e momentum. Muito usado em análise técnica avançada.',
-  movingAverage: 'Média Móvel Simples (SMA) — média dos últimos N preços de fechamento. Quando o preço cruza a MA, sinaliza mudança de tendência.',
-  relativeStrengthIndex: 'RSI — oscilador de 0 a 100 que mede força do movimento. Abaixo de 30 = sobrevendido (possível alta). Acima de 70 = sobrecomprado (possível queda).',
-  marketCap: 'Cruza dados da CoinGecko com o volume da Binance. "Giro de volume" detecta moedas com preço inflado sem sustentação real de negócios. "Diluição futura" identifica tokens com muita emissão ainda pendente.',
-};
-
-const ICHIMOKU_LINE_LABELS = {
-  conversion: 'Conversion (Tenkan-sen) — média das últimas 9 barras',
-  base: 'Base (Kijun-sen) — média das últimas 26 barras',
-  spanA: 'Span A — borda superior/inferior da nuvem',
-  spanB: 'Span B — borda oposta da nuvem',
-  'spanA+B': 'Span A + B — acima de ambas as bordas da nuvem',
-  high: 'High — máxima do candle',
-  close: 'Close — fechamento do candle',
-  low: 'Low — mínima do candle',
-};
+// Descrições e labels traduzidos via t() dentro dos componentes
 
 const EMPTY_INDICATOR = { type: '', intervals: ['8h'] };
 
@@ -56,34 +41,34 @@ const DEFAULT_INDICATORS = [
 ];
 
 /** Gera um resumo legível da configuração do indicador */
-function buildSummary(value) {
+function buildSummary(value, t) {
   const { type, intervals } = value;
   if (!type) return null;
   const ivLabel = intervals.length ? intervals.join(', ') : '—';
 
   if (type === 'relativeStrengthIndex') {
-    const c1 = (value.compare1 ?? 'above') === 'above' ? 'acima de' : 'abaixo de';
+    const c1 = (value.compare1 ?? 'above') === 'above' ? t('sum.above') : t('sum.bellow');
     const v1 = value.line1 ?? '70';
-    const c2 = (value.compare2 ?? 'bellow') === 'above' ? 'acima de' : 'abaixo de';
+    const c2 = (value.compare2 ?? 'bellow') === 'above' ? t('sum.above') : t('sum.bellow');
     const v2 = value.line2 ?? '99';
-    return `RSI ${c1} ${v1} e ${c2} ${v2} → ${ivLabel}`;
+    return t('sum.rsi', c1, v1, c2, v2, ivLabel);
   }
   if (type === 'ichimokuCloud') {
-    const l1 = value.line1 ?? 'conversion';
-    const cmp = (value.compare ?? 'above') === 'above' ? 'acima de' : 'abaixo de';
-    const l2 = value.line2 ?? 'base';
-    return `Ichimoku: ${l1} ${cmp} ${l2} → ${ivLabel}`;
+    const l1  = value.line1 ?? 'conversion';
+    const cmp = (value.compare ?? 'above') === 'above' ? t('sum.above') : t('sum.bellow');
+    const l2  = value.line2 ?? 'base';
+    return t('sum.ichimoku', l1, cmp, l2, ivLabel);
   }
   if (type === 'marketCap') {
-    const metricLabel = value.metric === 'dilution' ? 'Diluição futura' : 'Giro de volume';
+    const metricLabel = value.metric === 'dilution' ? t('mcap.dilution') : t('mcap.turnover');
     const presetLabel = { baixo: 'baixo', medio: 'médio', alto: 'alto' }[value.preset ?? 'baixo'] ?? '';
-    return `Market Cap: ${metricLabel} ${presetLabel}`;
+    return t('sum.mcap', metricLabel, presetLabel);
   }
   if (type === 'movingAverage') {
     const len = value.length ?? '200';
-    const cmp = (value.compare ?? 'above') === 'above' ? 'acima' : 'abaixo';
+    const cmp = (value.compare ?? 'above') === 'above' ? t('sum.above_short') : t('sum.bellow_short');
     const cdl = value.candle ?? 'close';
-    return `MA${len}: preço (${cdl}) ${cmp} da média → ${ivLabel}`;
+    return t('sum.ma', len, cmp, cdl, ivLabel);
   }
   return null;
 }
@@ -100,6 +85,8 @@ function HelpIcon({ text }) {
 
 function IndicatorRow({ value, onChange }) {
   const { type, intervals } = value;
+  const { t } = useI18n();
+  const [showPicker, setShowPicker] = useState(false);
 
   function toggleInterval(iv) {
     onChange({
@@ -110,8 +97,13 @@ function IndicatorRow({ value, onChange }) {
     });
   }
 
+  function addInterval(iv) {
+    if (!intervals.includes(iv)) onChange({ ...value, intervals: [...intervals, iv] });
+    setShowPicker(false);
+  }
+
   const sel = 'bg-p2 border border-p3/40 text-p5 text-[10px] sm:text-xs rounded px-1 sm:px-2 py-0.5 sm:py-1 focus:outline-none focus:border-p4 min-w-0';
-  const summary = buildSummary(value);
+  const summary = buildSummary(value, t);
 
   return (
     <div className="flex w-full flex-col bg-p2/50 border border-p3/20 rounded p-2 gap-2">
@@ -125,14 +117,14 @@ function IndicatorRow({ value, onChange }) {
             onChange={(e) => onChange({ ...value, type: e.target.value, params: {} })}
             title="Escolha o indicador técnico a ser analisado"
           >
-            <option value="">Indicador</option>
-            <option value="ichimokuCloud">Ichimoku Cloud</option>
-            <option value="movingAverage">Moving Average</option>
-            <option value="relativeStrengthIndex">RSI</option>
-            <option value="marketCap">Market Cap</option>
+            <option value="">{t('ind.placeholder')}</option>
+            <option value="ichimokuCloud">{t('ind.ichimoku')}</option>
+            <option value="movingAverage">{t('ind.ma')}</option>
+            <option value="relativeStrengthIndex">{t('ind.rsi')}</option>
+            <option value="marketCap">{t('ind.marketcap')}</option>
           </select>
-          {type && INDICATOR_DESCRIPTIONS[type] && (
-            <HelpIcon text={INDICATOR_DESCRIPTIONS[type]} />
+          {type && t(`ind.desc.${type === 'relativeStrengthIndex' ? 'rsi' : type === 'ichimokuCloud' ? 'ichimoku' : type === 'movingAverage' ? 'ma' : 'marketcap'}`) !== `ind.desc.${type}` && (
+            <HelpIcon text={t(`ind.desc.${type === 'relativeStrengthIndex' ? 'rsi' : type === 'ichimokuCloud' ? 'ichimoku' : type === 'movingAverage' ? 'ma' : 'marketcap'}`)} />
           )}
         </div>
 
@@ -142,19 +134,15 @@ function IndicatorRow({ value, onChange }) {
             <select className={sel} value={value.metric ?? 'turnover'}
               onChange={(e) => onChange({ ...value, metric: e.target.value })}
               title="Giro: volume÷market cap. Baixo = preço sem sustentação real. Diluição: tokens ainda não emitidos vs. cap atual.">
-              <option value="turnover">Giro de Volume</option>
-              <option value="dilution">Diluição Futura</option>
+              <option value="turnover">{t('mcap.turnover')}</option>
+              <option value="dilution">{t('mcap.dilution')}</option>
             </select>
             <select className={sel} value={value.preset ?? 'baixo'}
               onChange={(e) => onChange({ ...value, preset: e.target.value })}
-              title={
-                (value.metric ?? 'turnover') === 'turnover'
-                  ? 'Baixo <5% (inflado) · Médio 5–30% (normal) · Alto >30% (especulativo)'
-                  : 'Baixo <2× (saudável) · Médio 2–5× · Alto >5× (risco de diluição)'
-              }>
-              <option value="baixo">{(value.metric ?? 'turnover') === 'turnover' ? 'Baixo — possível inflado (<5%)' : 'Baixo — pouca diluição (<2×)'}</option>
-              <option value="medio">{(value.metric ?? 'turnover') === 'turnover' ? 'Médio — normal (5–30%)'         : 'Médio — moderado (2–5×)'}</option>
-              <option value="alto">{(value.metric ?? 'turnover') === 'turnover'  ? 'Alto — especulativo (>30%)'     : 'Alto — risco elevado (>5×)'}</option>
+              title={(value.metric ?? 'turnover') === 'turnover' ? t('mcap.tip_t') : t('mcap.tip_d')}>
+              <option value="baixo">{(value.metric ?? 'turnover') === 'turnover' ? t('mcap.low_t') : t('mcap.low_d')}</option>
+              <option value="medio">{(value.metric ?? 'turnover') === 'turnover' ? t('mcap.mid_t') : t('mcap.mid_d')}</option>
+              <option value="alto">{(value.metric ?? 'turnover') === 'turnover'  ? t('mcap.high_t') : t('mcap.high_d')}</option>
             </select>
           </>
         )}
@@ -164,8 +152,8 @@ function IndicatorRow({ value, onChange }) {
             <select className={sel} value={value.compare1 ?? 'above'}
               onChange={(e) => onChange({ ...value, compare1: e.target.value })}
               title="Primeira condição: Above = RSI acima do valor | Below = RSI abaixo do valor">
-              <option value="above">Above</option>
-              <option value="bellow">Below</option>
+              <option value="above">{t('cmp.above')}</option>
+              <option value="bellow">{t('cmp.bellow')}</option>
             </select>
             <select className={sel} value={value.line1 ?? '70'}
               onChange={(e) => {
@@ -181,8 +169,8 @@ function IndicatorRow({ value, onChange }) {
             <select className={sel} value={value.compare2 ?? 'bellow'}
               onChange={(e) => onChange({ ...value, compare2: e.target.value })}
               title="Segunda condição: Above = RSI acima | Below = RSI abaixo">
-              <option value="above">Above</option>
-              <option value="bellow">Below</option>
+              <option value="above">{t('cmp.above')}</option>
+              <option value="bellow">{t('cmp.bellow')}</option>
             </select>
             <select className={sel} value={value.line2 ?? '99'}
               onChange={(e) => onChange({ ...value, line2: e.target.value })}
@@ -200,14 +188,14 @@ function IndicatorRow({ value, onChange }) {
               onChange={(e) => onChange({ ...value, line1: e.target.value })}
               title={Object.entries(ICHIMOKU_LINE_LABELS).map(([k,v]) => `${k}: ${v}`).join('\n')}
             >
-              <option value="conversion">Conversion</option>
-              <option value="base">Base</option>
-              <option value="spanA">Span A</option>
-              <option value="spanB">Span B</option>
-              <option value="spanA+B">Span A+B</option>
-              <option value="high">High</option>
-              <option value="close">Close</option>
-              <option value="low">Low</option>
+              <option value="conversion">{t('ichi.conversion')}</option>
+              <option value="base">{t('ichi.base')}</option>
+              <option value="spanA">{t('ichi.spanA')}</option>
+              <option value="spanB">{t('ichi.spanB')}</option>
+              <option value="spanA+B">{t('ichi.spanAB')}</option>
+              <option value="high">{t('ichi.high')}</option>
+              <option value="close">{t('ichi.close')}</option>
+              <option value="low">{t('ichi.low')}</option>
             </select>
             <select
               className={sel}
@@ -215,8 +203,8 @@ function IndicatorRow({ value, onChange }) {
               onChange={(e) => onChange({ ...value, compare: e.target.value })}
               title="Above = linha 1 está acima de linha 2 | Below = linha 1 está abaixo de linha 2"
             >
-              <option value="above">Above</option>
-              <option value="bellow">Below</option>
+              <option value="above">{t('cmp.above')}</option>
+              <option value="bellow">{t('cmp.bellow')}</option>
             </select>
             <select
               className={sel}
@@ -224,14 +212,14 @@ function IndicatorRow({ value, onChange }) {
               onChange={(e) => onChange({ ...value, line2: e.target.value })}
               title="Linha de referência para a comparação"
             >
-              <option value="conversion">Conversion</option>
-              <option value="base">Base</option>
-              <option value="spanA">Span A</option>
-              <option value="spanB">Span B</option>
-              <option value="spanA+B">Span A+B</option>
-              <option value="high">High</option>
-              <option value="close">Close</option>
-              <option value="low">Low</option>
+              <option value="conversion">{t('ichi.conversion')}</option>
+              <option value="base">{t('ichi.base')}</option>
+              <option value="spanA">{t('ichi.spanA')}</option>
+              <option value="spanB">{t('ichi.spanB')}</option>
+              <option value="spanA+B">{t('ichi.spanAB')}</option>
+              <option value="high">{t('ichi.high')}</option>
+              <option value="close">{t('ichi.close')}</option>
+              <option value="low">{t('ichi.low')}</option>
             </select>
           </>
         )}
@@ -256,8 +244,8 @@ function IndicatorRow({ value, onChange }) {
               onChange={(e) => onChange({ ...value, compare: e.target.value })}
               title="Above = preço do candle acima da média (tendência de alta) | Below = preço abaixo da média (tendência de baixa)"
             >
-              <option value="above">Above</option>
-              <option value="bellow">Below</option>
+              <option value="above">{t('cmp.above')}</option>
+              <option value="bellow">{t('cmp.bellow')}</option>
             </select>
             <select
               className={sel}
@@ -265,32 +253,60 @@ function IndicatorRow({ value, onChange }) {
               onChange={(e) => onChange({ ...value, candle: e.target.value })}
               title="Qual preço do candle comparar com a média: Close = fechamento | High = máxima | Low = mínima"
             >
-              <option value="high">High</option>
-              <option value="close">Close</option>
-              <option value="low">Low</option>
+              <option value="high">{t('candle.high_full')}</option>
+              <option value="close">{t('candle.close_full')}</option>
+              <option value="low">{t('candle.low_full')}</option>
             </select>
           </>
         )}
       </div>
 
-      {/* Intervalos — ocultos para Market Cap (não é indicador de série temporal) */}
-      {type !== 'marketCap' && <div className="flex flex-row flex-wrap gap-x-2 gap-y-1">
-        {INTERVALS.map((iv) => (
-          <label
-            key={iv}
-            className="flex items-center gap-1 text-xs text-p5 cursor-pointer"
-            title={`Timeframe: ${INTERVAL_LABELS[iv] ?? iv}`}
-          >
-            <input
-              type="checkbox"
-              checked={intervals.includes(iv)}
-              onChange={() => toggleInterval(iv)}
-              className="accent-p4 cursor-pointer"
-            />
-            {iv}
-          </label>
-        ))}
-      </div>}
+      {/* Intervalos — ocultos para Market Cap */}
+      {type !== 'marketCap' && (
+        <div className="flex flex-row flex-wrap gap-1 items-center">
+          {/* Intervalos selecionados como pills removíveis */}
+          {intervals.map((iv) => (
+            <button
+              key={iv}
+              onClick={() => toggleInterval(iv)}
+              title={`Remover ${INTERVAL_LABELS[iv] ?? iv}`}
+              className="text-[10px] px-1.5 py-0.5 rounded bg-p4/25 border border-p4/50 text-p5 hover:bg-red-500/20 hover:border-red-500/40 transition-colors"
+            >
+              {iv} ×
+            </button>
+          ))}
+
+          {/* Botão + ou picker horizontal */}
+          {!showPicker ? (
+            <button
+              onClick={() => setShowPicker(true)}
+              title="Adicionar intervalo"
+              className="text-[10px] px-1.5 py-0.5 rounded bg-p2 border border-p3/40 text-p5 hover:bg-p3/60 transition-colors leading-none"
+            >
+              +
+            </button>
+          ) : (
+            <div className="flex flex-row flex-wrap gap-1 items-center border border-p3/30 rounded px-1.5 py-1 bg-p1/60">
+              {INTERVALS.filter(iv => !intervals.includes(iv)).map(iv => (
+                <button
+                  key={iv}
+                  onClick={() => addInterval(iv)}
+                  title={`Adicionar ${INTERVAL_LABELS[iv] ?? iv}`}
+                  className="text-[10px] px-1.5 py-0.5 rounded bg-p2 border border-p3/40 text-p5 hover:bg-p4/30 hover:border-p4 transition-colors"
+                >
+                  {iv}
+                </button>
+              ))}
+              <button
+                onClick={() => setShowPicker(false)}
+                className="text-[10px] px-1 text-p5/40 hover:text-p5 transition-colors ml-1"
+              >
+                ✕
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Sumário da configuração atual */}
       {summary && (
@@ -304,15 +320,24 @@ function IndicatorRow({ value, onChange }) {
 
 export default function IndicatorPanel({ open, onToggle }) {
   const { currencies, getBinanceCurrenciesWithUsdt, addFilter } = useCurrency();
+  const { t } = useI18n();
   const [indicators, setIndicators] = useState(DEFAULT_INDICATORS);
   const [searching, setSearching] = useState(false);
+  const [savedIntervals, setSavedIntervals] = useState(['30m', '4h', '8h']);
+
+  // Carrega preferências do backend na montagem
+  useEffect(() => {
+    fetchUserPrefs().then(prefs => {
+      if (prefs?.intervals?.length) setSavedIntervals(prefs.intervals);
+    });
+  }, []);
 
   function updateIndicator(index, newVal) {
     setIndicators((prev) => prev.map((item, i) => (i === index ? newVal : item)));
   }
 
   function addRow() {
-    setIndicators((prev) => [...prev, { ...EMPTY_INDICATOR }]);
+    setIndicators((prev) => [...prev, { type: '', intervals: [...savedIntervals] }]);
   }
 
   function removeLastRow() {
@@ -325,6 +350,14 @@ export default function IndicatorPanel({ open, onToggle }) {
       const rsiIndicators   = indicators.filter((ind) => ind.type === 'relativeStrengthIndex');
       const mcapIndicators  = indicators.filter((ind) => ind.type === 'marketCap');
       const otherIndicators = indicators.filter((ind) => ind.type && ind.type !== 'relativeStrengthIndex' && ind.type !== 'marketCap');
+
+      // Salva intervalos e análises usadas nas preferências
+      const allIntervals = [...new Set(indicators.flatMap(ind => ind.intervals ?? []))];
+      if (allIntervals.length) {
+        setSavedIntervals(allIntervals);
+        saveUserPrefs({ intervals: allIntervals });
+      }
+      indicators.filter(ind => ind.type).forEach(ind => saveUserPrefs({ indicator: ind }));
 
       // RSI: pesquisa via novo endpoint do backend (sem enviar candlesticks)
       for (const ind of rsiIndicators) {
@@ -416,14 +449,14 @@ export default function IndicatorPanel({ open, onToggle }) {
 
   return (
     <div className="flex flex-col gap-2 px-4 py-3 h-full">
-      <div className="flex-1 min-h-0 flex flex-col gap-2 overflow-y-auto">
+      <div className="flex-1 min-h-0 overflow-y-auto grid grid-cols-1 md:grid-cols-2 gap-2 content-start">
         {indicators.map((ind, i) => (
           <IndicatorRow key={i} value={ind} onChange={(v) => updateIndicator(i, v)} />
         ))}
       </div>
 
       <div className="flex gap-2 justify-end pt-1 shrink-0">
-        <Tooltip text="Adicionar outra condição de indicador para a mesma busca">
+        <Tooltip text={t('ip.add_row')}>
           <button onClick={addRow} className={btnIcon}>
             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
               strokeWidth="2" stroke="currentColor" className="w-4 h-4">
@@ -432,7 +465,7 @@ export default function IndicatorPanel({ open, onToggle }) {
           </button>
         </Tooltip>
 
-        <Tooltip text="Remover o último indicador da lista">
+        <Tooltip text={t('ip.remove_row')}>
           <button onClick={removeLastRow} className={btnIcon}>
             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
               strokeWidth="2" stroke="currentColor" className="w-4 h-4">
@@ -441,7 +474,7 @@ export default function IndicatorPanel({ open, onToggle }) {
           </button>
         </Tooltip>
 
-        <Tooltip text="Executar a busca — pode demorar alguns segundos dependendo da quantidade de moedas e intervalos">
+        <Tooltip text={t('ip.search')}>
           <button
             onClick={handleSearch}
             disabled={searching}

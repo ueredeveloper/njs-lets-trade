@@ -1,4 +1,5 @@
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState, useEffect, useRef } from 'react';
+import { useI18n } from '../i18n';
 import ReactECharts from 'echarts-for-react';
 import { useCurrency } from '../contexts/CurrencyContext';
 import { fetchCandlesticksAndCloud } from '../services/api';
@@ -27,15 +28,43 @@ function getThemeColors() {
 }
 
 
-function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAverage, rsi }, colors, activeIndicators) {
+function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAverage, rsi }, colors, activeIndicators, displayLimit = LIMIT, zoomPeriod = null) {
   const showMa200    = activeIndicators.includes('ma200');
   const showIchimoku = activeIndicators.includes('ichimoku');
   const showRsi      = activeIndicators.includes('rsi');
+  const DL = Math.min(displayLimit, candlesticks.length);
 
   const xData = (() => {
     const dates = candlesticks.map((c) => convertOpenTime(c.openTime, interval));
     const padding = new Array(24).fill('');
-    return [...dates, ...padding].slice(-(LIMIT + 24));
+    return [...dates, ...padding].slice(-(DL + 24));
+  })();
+
+  // Linhas verticais suaves de início e fim do ciclo clicado
+  // Usa índice numérico — convertOpenTime retorna strings curtas não únicas (ex: "22:00")
+  // que o ECharts não consegue localizar com segurança no eixo de categoria.
+  const periodMarkLines = (() => {
+    if (!zoomPeriod) return null;
+    const startMs  = new Date(zoomPeriod.startDate).getTime();
+    const endMs    = new Date(zoomPeriod.endDate).getTime();
+    const startIdx = candlesticks.findIndex(c => Number(c.openTime) >= startMs);
+    const endIdx   = candlesticks.reduce((best, c, i) =>
+      Number(c.openTime) <= endMs ? i : best, -1);
+    if (startIdx === -1 && endIdx === -1) return null;
+    const fmt = (iso) => new Date(iso).toLocaleString('pt-BR', {
+      timeZone: 'America/Sao_Paulo',
+      day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+    }).replace(',', '');
+    const line = (idx, label) => ({
+      xAxis: idx,
+      lineStyle: { color: 'rgba(255,255,255,0.45)', width: 1, type: 'dashed' },
+      label: { show: true, formatter: label, color: 'rgba(255,255,255,0.75)',
+               fontSize: 12, fontWeight: 'bold', position: 'insideEndTop', padding: [2, 4] },
+    });
+    const data = [];
+    if (startIdx !== -1) data.push(line(startIdx, fmt(zoomPeriod.startDate)));
+    if (endIdx   !== -1) data.push(line(endIdx,   fmt(zoomPeriod.endDate)));
+    return data.length ? { silent: true, symbol: 'none', data } : null;
   })();
 
   const axisBase = (gridIndex) => ({
@@ -52,30 +81,31 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
       name: 'Candles',
       type: 'candlestick',
       xAxisIndex: idx, yAxisIndex: idx,
-      data: candlesticks.slice(-LIMIT).map((c) => [c.open, c.close, c.low, c.high]),
+      data: candlesticks.slice(-DL).map((c) => [c.open, c.close, c.low, c.high]),
       itemStyle: { color: C_UP, color0: C_DOWN, borderColor: C_UP, borderColor0: C_DOWN },
+      ...(periodMarkLines ? { markLine: periodMarkLines } : {}),
     },
     ...(showMa200 ? [{
       name: 'MA200',
       type: 'line',
       xAxisIndex: idx, yAxisIndex: idx,
-      data: movingAverage.slice(-LIMIT),
+      data: movingAverage.slice(-DL),
       smooth: true, showSymbol: false,
       lineStyle: { color: '#f59e0b', width: 1.5 },
     }] : []),
     ...(showIchimoku ? [
       { name: 'CL', type: 'line', xAxisIndex: idx, yAxisIndex: idx,
-        data: ichimokuCloud.slice(-LIMIT).map((c) => c.conversion),
+        data: ichimokuCloud.slice(-DL).map((c) => c.conversion),
         smooth: true, showSymbol: false, lineStyle: { color: '#60a5fa', width: 1 } },
       { name: 'BL', type: 'line', xAxisIndex: idx, yAxisIndex: idx,
-        data: ichimokuCloud.slice(-LIMIT).map((c) => c.base),
+        data: ichimokuCloud.slice(-DL).map((c) => c.base),
         smooth: true, showSymbol: false, lineStyle: { color: '#94a3b8', width: 1 } },
       { name: 'Span A', type: 'line', xAxisIndex: idx, yAxisIndex: idx,
-        data: ichimokuCloud.slice(-(LIMIT + 24)).map((c) => c.spanA),
+        data: ichimokuCloud.slice(-(DL + 24)).map((c) => c.spanA),
         showSymbol: false, lineStyle: { color: C_UP, width: 1, opacity: 0.7 },
         areaStyle: { color: 'rgba(38,166,154,0.05)' } },
       { name: 'Span B', type: 'line', xAxisIndex: idx, yAxisIndex: idx,
-        data: ichimokuCloud.slice(-(LIMIT + 24)).map((c) => c.spanB),
+        data: ichimokuCloud.slice(-(DL + 24)).map((c) => c.spanB),
         smooth: true, showSymbol: false, lineStyle: { color: C_DOWN, width: 1, opacity: 0.7 },
         areaStyle: { color: 'rgba(239,83,80,0.05)' } },
     ] : []),
@@ -109,7 +139,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
   }
 
   // Modo dual-grid: candles (80%) + RSI (20%)
-  const rsiData = rsi ? rsi.slice(-LIMIT) : [];
+  const rsiData = rsi ? rsi.slice(-DL) : [];
 
   return {
     backgroundColor: colors.bg,
@@ -167,11 +197,13 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
 }
 
 export default function CandlestickChart() {
-  const { selectedChart, setSelectedChart } = useCurrency();
+  const { selectedChart, setSelectedChart, chartZoom } = useCurrency();
+  const { t } = useI18n();
+  const chartRef = useRef(null);
   const [currentInterval, setCurrentInterval] = useState('30m');
   const [loadingInterval, setLoadingInterval] = useState(false);
   const [themeTick, setThemeTick] = useState(0);
-  const [activeIndicators, setActiveIndicators] = useState(['ma200']);
+  const [activeIndicators, setActiveIndicators] = useState(['ma200', 'rsi']);
 
   function toggleIndicator(id) {
     setActiveIndicators((prev) =>
@@ -199,10 +231,30 @@ export default function CandlestickChart() {
     }
   }
 
+  // Zoom para o período do ciclo clicado nas estatísticas
+  useEffect(() => {
+    if (!chartZoom || !chartRef.current || !selectedChart?.candlesticks?.length) return;
+    const candles = selectedChart.candlesticks;
+    const startMs = new Date(chartZoom.startDate).getTime();
+    const endMs   = new Date(chartZoom.endDate).getTime();
+    const startIdx = candles.findIndex(c => Number(c.openTime) >= startMs);
+    let   endIdx   = candles.findIndex(c => Number(c.openTime) >= endMs);
+    if (startIdx === -1) return;
+    if (endIdx === -1) endIdx = candles.length - 1;
+    const s = Math.max(0, startIdx - 10);
+    const e = Math.min(candles.length - 1, endIdx + 10);
+    const startPct = (s / candles.length) * 100;
+    const endPct   = (e / candles.length) * 100;
+    const instance = chartRef.current.getEchartsInstance();
+    instance.dispatchAction({ type: 'dataZoom', start: startPct, end: endPct });
+  }, [chartZoom, selectedChart]);
+
+  const displayLimit = chartZoom ? (selectedChart?.candlesticks?.length ?? LIMIT) : LIMIT;
+
   const option = useMemo(() => {
     if (!selectedChart) return null;
-    return buildOption(selectedChart, colors, activeIndicators);
-  }, [selectedChart, colors, activeIndicators]);
+    return buildOption(selectedChart, colors, activeIndicators, displayLimit, chartZoom);
+  }, [selectedChart, colors, activeIndicators, displayLimit, chartZoom]);
 
   if (!selectedChart || !option) {
     return (
@@ -213,7 +265,7 @@ export default function CandlestickChart() {
             <path strokeLinecap="round" strokeLinejoin="round"
               d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 0 1 3 19.875v-6.75ZM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V8.625ZM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V4.125Z" />
           </svg>
-          <span className="text-sm tracking-wider">Selecione uma moeda para ver o gráfico</span>
+          <span className="text-sm tracking-wider">{t('chart.select')}</span>
         </div>
       </div>
     );
@@ -273,6 +325,7 @@ export default function CandlestickChart() {
       {/* Gráfico candlestick */}
       <div className="flex-1 min-h-0">
         <ReactECharts
+          ref={chartRef}
           option={option}
           notMerge={true}
           style={{ height: '100%', width: '100%' }}

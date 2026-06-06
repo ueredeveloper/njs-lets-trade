@@ -25,6 +25,9 @@ export function CurrencyProvider({ children }) {
   // Moeda selecionada para o gráfico: { symbol, candles, ichimoku }
   const [selectedChart, setSelectedChart] = useState(null);
 
+  // Zoom do gráfico para um período específico: { startDate, endDate } ISO strings
+  const [chartZoom, setChartZoom] = useState(null);
+
   // Quote selecionada: 'USDT' | 'BTC' | 'BNB'
   const [selectedQuote, setSelectedQuote] = useState('USDT');
 
@@ -147,6 +150,8 @@ export function CurrencyProvider({ children }) {
         setSelectedQuote,
         selectedChart,
         setSelectedChart,
+        chartZoom,
+        setChartZoom,
         gateFavorites,
         setGateFavorites,
         binanceFavorites,

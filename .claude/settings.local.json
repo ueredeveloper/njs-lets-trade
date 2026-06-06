@@ -16,7 +16,9 @@
       "Bash(Remove-Item \"c:\\\\workspace\\\\njs-lets-trade\\\\backend\\\\binance\\\\getClandles.js\")",
       "Bash(Get-ChildItem -Path \"c:\\\\workspace\\\\njs-lets-trade\\\\backend\\\\\" -Recurse -Directory | Select-Object -ExpandProperty FullName | Sort-Object)",
       "Bash(xargs grep -l \"binance\\\\|api.binance\")",
-      "WebSearch"
+      "WebSearch",
+      "Bash(Get-ChildItem -Path . -Directory)",
+      "Bash(Select-Object Name)"
     ]
   }
 }

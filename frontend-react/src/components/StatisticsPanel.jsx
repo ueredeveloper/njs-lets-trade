@@ -1,7 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useCurrency } from '../contexts/CurrencyContext';
 import { fetchRsiOversoldRecovery, fetchCandlesticksAndCloud } from '../services/api';
 import Tooltip from './Tooltip';
+import { useI18n } from '../i18n';
 
 const INTERVALS = ['1m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w'];
 
@@ -26,14 +27,22 @@ function SummaryCard({ label, value, highlight, tooltip }) {
   return tooltip ? <Tooltip text={tooltip} maxW={220}>{card}</Tooltip> : card;
 }
 
+const INTERVAL_MS = {
+  '1m':60000,'5m':300000,'15m':900000,'30m':1800000,'1h':3600000,
+  '2h':7200000,'4h':14400000,'6h':21600000,'8h':28800000,'12h':43200000,
+  '1d':86400000,'3d':259200000,'1w':604800000,
+};
+
 function RsiStats() {
-  const { selectedChart, setSelectedChart } = useCurrency();
+  const { selectedChart, setSelectedChart, setChartZoom } = useCurrency();
+  const { t, formatPrice } = useI18n();
   const [symbol, setSymbol]         = useState(selectedChart?.symbol || 'BTCUSDT');
   const [interval, setInterval]     = useState('30m');
   const [oversold, setOversold]     = useState(30);
   const [overbought, setOverbought] = useState(70);
   const [loading, setLoading]       = useState(false);
   const [result, setResult]         = useState(null);
+  const rsiSeriesRef = useRef(null); // série RSI com warmup correto das estatísticas
   const [error, setError]           = useState(null);
   const [showAll, setShowAll]       = useState(false);
 
@@ -49,6 +58,8 @@ function RsiStats() {
     try {
       const data = await fetchRsiOversoldRecovery(sym, interval, oversold, overbought);
       setResult(data);
+      // Guarda a série RSI calculada com warmup completo (1500 candles)
+      rsiSeriesRef.current = data.rsiSeries ?? null;
       if (updateChart) {
         const chartData = await fetchCandlesticksAndCloud(sym, interval);
         setSelectedChart(chartData);
@@ -134,7 +145,7 @@ function RsiStats() {
                   d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
               </svg>
           }
-          Buscar
+          {t('stats.search')}
         </button>
       </div>
 
@@ -151,17 +162,17 @@ function RsiStats() {
           <div className="flex flex-col gap-2">
             {/* Cartões de resumo */}
             <div className="flex gap-1.5 flex-wrap justify-center shrink-0">
-              <SummaryCard label="Candles"     value={result.totalCandles}      tooltip="Total de candles analisados no período selecionado." />
-              <SummaryCard label="Períodos RSI" value={result.totalRsiPeriods}   tooltip="Candles com RSI calculado — os primeiros 14 são descartados pelo período do indicador." />
-              <SummaryCard label="Ocorrências"  value={result.totalOccurrences}  highlight="text-p4" tooltip="Número de ciclos completos: entrada na sobrevenda e saída na sobrecompra." />
+              <SummaryCard label={t('stats.card.candles')}   value={result.totalCandles}     tooltip={t('stats.tip.candles')} />
+              <SummaryCard label={t('stats.card.rsi_p')}    value={result.totalRsiPeriods}  tooltip={t('stats.tip.rsi_p')} />
+              <SummaryCard label={t('stats.card.occur')}    value={result.totalOccurrences} highlight="text-p4" tooltip={t('stats.tip.occur')} />
               <SummaryCard
-                label="Valor. média"
+                label={t('stats.card.avg')}
                 value={`${result.avgAppreciationPercent > 0 ? '+' : ''}${result.avgAppreciationPercent}%`}
                 highlight={result.avgAppreciationPercent >= 0 ? 'text-green-600' : 'text-red-600'}
-                tooltip="Valor em aberto não é contabilizado."
+                tooltip={t('stats.tip.avg')}
               />
-              <SummaryCard label="RSI entrada" value={`< ${result.oversoldThreshold}`} tooltip="RSI abaixo deste valor marca o início de um ciclo (zona de sobrevenda)." />
-              <SummaryCard label="RSI saída"   value={`> ${result.overboughtThreshold}`} tooltip="RSI acima deste valor encerra o ciclo (zona de sobrecompra)." />
+              <SummaryCard label={t('stats.card.entry_rsi')} value={`< ${result.oversoldThreshold}`}   tooltip={t('stats.tip.entry_rsi')} />
+              <SummaryCard label={t('stats.card.exit_rsi')}  value={`> ${result.overboughtThreshold}`} tooltip={t('stats.tip.exit_rsi')} />
             </div>
 
             {/* Tabela */}
@@ -171,7 +182,7 @@ function RsiStats() {
               <div className="flex flex-col gap-1">
                 {/* Toggle todas as colunas */}
                 <div className="flex items-center gap-2 justify-end">
-                  <span className="text-[10px] text-p5/50">Detalhes</span>
+                  <span className="text-[10px] text-p5/50">{t('stats.details')}</span>
                   <button
                     onClick={() => setShowAll(v => !v)}
                     className={`relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${showAll ? 'bg-p4' : 'bg-p3/40'}`}
@@ -185,13 +196,13 @@ function RsiStats() {
                     <thead className="sticky top-0 z-10 bg-p1">
                       <tr className="text-[9px] sm:text-[10px] text-p5/40 uppercase tracking-wider border-b border-p3/20">
                         {showAll && <th className="text-left pb-1 pr-2">#</th>}
-                        <th className="text-left pb-1 pr-2">Início</th>
-                        {showAll && <th className="text-right pb-1 pr-2">P. entrada</th>}
+                        <th className="text-left pb-1 pr-2">{t('stats.start')}</th>
+                        {showAll && <th className="text-right pb-1 pr-2">{t('stats.entry_p')}</th>}
                         <th className="text-right pb-1 pr-2">RSI</th>
                         <th className="text-right pb-1 pr-2">RSI 4h</th>
                         <th className="text-right pb-1 pr-2">RSI 8h</th>
-                        <th className="text-left pb-1 pr-2">Fim</th>
-                        {showAll && <th className="text-right pb-1 pr-2">P. saída</th>}
+                        <th className="text-left pb-1 pr-2">{t('stats.end')}</th>
+                        {showAll && <th className="text-right pb-1 pr-2">{t('stats.exit_p')}</th>}
                         <th className="text-right pb-1 pr-2">RSI</th>
                         <th className="text-right pb-1">Valor.</th>
                       </tr>
@@ -200,7 +211,56 @@ function RsiStats() {
                       {result.occurrences.map((o, i) => {
                         const pos = o.appreciationPercent >= 0;
                         return (
-                          <tr key={i} className="border-b border-p3/10 hover:bg-p2/40 transition-colors">
+                          <tr
+                            key={i}
+                            title={t('stats.click_row')}
+                            className="border-b border-p3/10 hover:bg-p2/40 transition-colors cursor-pointer"
+                            onClick={async () => {
+                              const startMs = new Date(o.startDate).getTime();
+                              const endMs   = new Date(o.endDate).getTime();
+                              const msPerCandle = INTERVAL_MS[interval] ?? 1800000;
+                              // Candles necessários do momento atual até o início do ciclo + padding
+                              const needed = Math.min(3000, Math.max(266,
+                                Math.ceil((Date.now() - startMs) / msPerCandle) + 40));
+                              try {
+                                const sym = (symbol || selectedChart?.symbol || 'BTCUSDT').trim().toUpperCase();
+                                const data = await fetchCandlesticksAndCloud(sym, interval, null, needed);
+
+                                // Substitui o RSI recalculado pelo RSI correto das estatísticas
+                                // (que usou 1500 candles com warmup completo)
+                                const statsRsi = rsiSeriesRef.current;
+                                if (statsRsi?.length) {
+                                  const rsiByTime = new Map(statsRsi.map(r => [r.openTime, r.rsi]));
+                                  data.rsi = data.candlesticks.map(c => rsiByTime.get(Number(c.openTime)) ?? null);
+                                }
+
+                                setSelectedChart(data);
+                                setChartZoom({ startDate: o.startDate, endDate: o.endDate });
+
+                                // Tabela de candles do período no console
+                                const statsRsiMap = statsRsi
+                                  ? new Map(statsRsi.map(r => [r.openTime, r.rsi]))
+                                  : new Map();
+                                const periodCandles = data.candlesticks.filter(c => {
+                                  const ts = Number(c.openTime);
+                                  return ts >= startMs && ts <= endMs;
+                                });
+                                console.group(`📊 ${sym} ${interval} — ${formatDate(o.startDate)} → ${formatDate(o.endDate)}`);
+                                console.table(periodCandles.map(c => ({
+                                  data:   formatDate(new Date(Number(c.openTime)).toISOString()),
+                                  open:   Number(c.open),
+                                  high:   Number(c.high),
+                                  low:    Number(c.low),
+                                  close:  Number(c.close),
+                                  volume: Number(c.volume),
+                                  RSI:    statsRsiMap.get(Number(c.openTime)) ?? '—',
+                                })));
+                                console.groupEnd();
+                              } catch (err) {
+                                console.warn('[cycle click]', err.message);
+                              }
+                            }}
+                          >
                             {showAll && <td className="py-0.5 pr-2 text-[10px] text-p5/40">{i + 1}</td>}
                             <td className="py-0.5 pr-2 text-[10px] sm:text-xs font-mono whitespace-nowrap">{formatDate(o.startDate)}</td>
                             {showAll && <td className="py-0.5 pr-2 text-[10px] sm:text-xs text-right font-mono">${o.entryPrice.toLocaleString('en-US', { maximumFractionDigits: 4 })}</td>}
@@ -228,7 +288,7 @@ function RsiStats() {
                             <td className="py-1 pr-2 text-[10px] sm:text-xs text-right text-yellow-600 font-bold">{o.entryRsi}</td>
                             <td className="py-1 pr-2 text-[10px] sm:text-xs text-right text-orange-600">{o.entryRsi4h ?? '—'}</td>
                             <td className="py-1 pr-2 text-[10px] sm:text-xs text-right text-amber-600">{o.entryRsi8h ?? '—'}</td>
-                            <td className="py-1 pr-2 text-[10px] sm:text-xs whitespace-nowrap text-amber-700 italic">em aberto</td>
+                            <td className="py-1 pr-2 text-[10px] sm:text-xs whitespace-nowrap text-amber-700 italic">{t('stats.open')}</td>
                             {showAll && <td className="py-1 pr-2 text-[10px] sm:text-xs text-right text-p5/30">—</td>}
                             <td className="py-1 pr-2 text-[10px] sm:text-xs text-right text-p5/30">—</td>
                             <td className={`py-1 text-[10px] sm:text-xs text-right font-bold ${pos ? 'text-green-600' : 'text-red-600'}`}>
@@ -246,7 +306,7 @@ function RsiStats() {
         )}
 
         {!result && !error && !loading && (
-          <p className="text-[11px] text-p5/30 italic">Configure os parâmetros e clique em Buscar.</p>
+          <p className="text-[11px] text-p5/30 italic">{t('stats.configure')}</p>
         )}
       </div>
     </div>

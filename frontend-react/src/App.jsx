@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { CurrencyProvider, useCurrency } from './contexts/CurrencyContext';
+import { LanguageProvider } from './contexts/LanguageContext';
+import { useI18n } from './i18n';
 import { fetchAllCurrencies, fetch24hVolume, fetchStablecoins, fetchCandlesticksAndCloud, getFavorites } from './services/api';
 
 
@@ -13,6 +15,7 @@ import StatisticsPanel from './components/StatisticsPanel';
 
 function AppContent() {
   const { setCurrencies, setFilters, addFilter, setSelectedChart, setGateFavorites, setBinanceFavorites, setTradeFavorites } = useCurrency();
+  const { t } = useI18n();
   const [activeFilter, setActiveFilter] = useState(null);
   const [loading, setLoading] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -70,7 +73,7 @@ function AppContent() {
       <div className="flex items-center justify-center h-screen">
         <div className="flex flex-col items-center gap-3">
           <div className="w-8 h-8 border-2 border-p4 border-t-transparent rounded-full animate-spin" />
-          <span className="text-p5 text-sm tracking-widest uppercase">Carregando moedas...</span>
+          <span className="text-p5 text-sm tracking-widest uppercase">{t('app.loading')}</span>
         </div>
       </div>
     );
@@ -122,7 +125,7 @@ function AppContent() {
         </h1>
 
         <div className="flex items-center gap-3">
-          <span className="hidden sm:inline text-xs text-p4 opacity-60">crypto screener</span>
+          <span className="hidden sm:inline text-xs text-p4 opacity-60">{t('app.crypto_screener')}</span>
           <button
             onClick={() => setSettingsOpen(true)}
             className="text-p5 hover:text-white p-1 rounded hover:bg-p2 transition-colors"
@@ -180,7 +183,7 @@ function AppContent() {
               onTouchMove={handleDragMove}
               onTouchEnd={handleDragEnd}
             >
-              <span className="text-sm font-semibold text-p5 uppercase tracking-widest">Moedas</span>
+              <span className="text-sm font-semibold text-p5 uppercase tracking-widest">{t('app.currencies')}</span>
               <button
                 onClick={closeCurrencyModal}
                 onTouchStart={(e) => e.stopPropagation()}
@@ -232,14 +235,14 @@ function AppContent() {
                 <path strokeLinecap="round" strokeLinejoin="round"
                   d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25H12" />
               </svg>
-              Moedas
+              {t('app.currencies')}
             </button>
           </div>
           {/* Barra de toggles */}
           <div className="shrink-0 border-t border-p2 flex divide-x divide-p2">
             {[
-              { id: 'indicators', label: 'Analisar Indicadores' },
-              { id: 'stats',      label: 'Estatísticas' },
+              { id: 'indicators', label: t('app.analyze') },
+              { id: 'stats',      label: t('app.statistics') },
             ].map(({ id, label }) => (
               <button
                 key={id}
@@ -292,8 +295,10 @@ function AppContent() {
 
 export default function App() {
   return (
-    <CurrencyProvider>
-      <AppContent />
-    </CurrencyProvider>
+    <LanguageProvider>
+      <CurrencyProvider>
+        <AppContent />
+      </CurrencyProvider>
+    </LanguageProvider>
   );
 }

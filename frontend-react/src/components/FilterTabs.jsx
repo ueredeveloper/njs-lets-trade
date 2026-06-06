@@ -1,4 +1,5 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
+import { useI18n } from '../i18n';
 import { useCurrency } from '../contexts/CurrencyContext';
 import { sortByTypeOfIntervals, sortFirstIncludesBinance } from '../utils/sort-firts-includes-binance';
 
@@ -107,99 +108,80 @@ function IconFunnelOff({ className }) {
   );
 }
 
-function getFilterDescription(name) {
-  const parts = name.split('|');
+function getFilterDescription(name, t) {
+  const parts    = name.split('|');
   if (parts.length < 2) return name;
-
   const interval = parts[0];
-  const type = parts[1];
+  const type     = parts[1];
 
-  // Filtros de volume combinado Binance+Gate: Mercado|3M⇾, Mercado|5M⇿30M, etc.
   if (interval === 'Mercado') {
     const param = parts[1] ?? '';
-    if (param.includes('⇿')) {
-      const [low, high] = param.split('⇿');
-      return `Volume entre ${low} e ${high} USDT (Binance + Gate.io)`;
-    }
-    if (param.includes('⇾')) {
-      const val = param.replace('⇾', '').trim();
-      return `Volume acima de ${val} USDT (Binance + Gate.io)`;
-    }
+    if (param.includes('⇿')) { const [lo, hi] = param.split('⇿'); return t('filter.mkt_range', lo, hi); }
+    if (param.includes('⇾')) return t('filter.mkt_above', param.replace('⇾', '').trim());
     return `Mercado: ${param}`;
   }
 
   if (type === 'Mercado') {
     const param = parts[2] ?? '';
-    if (param === 'USDT') return 'Todos os pares USDT (Binance + Gate.io)';
+    if (param === 'USDT') return t('filter.usdt');
     return `Mercado: ${param}`;
   }
 
   if (type === 'Binance') {
     const param = parts[2] ?? '';
-    if (param === 'USDT') return `Moedas com par USDT`;
-    if (param === 'BTC')  return `Moedas com par BTC`;
-    if (param === 'BNB')  return `Moedas com par BNB`;
-    if (param.includes('⇿')) {
-      const [low, high] = param.split('⇿');
-      return `Volume entre ${low} e ${high} USDT (${interval})`;
-    }
-    if (param.includes('⇾')) {
-      const val = param.replace('⇾', '').trim();
-      return `Volume acima de ${val} USDT (${interval})`;
-    }
-    return `Filtro Binance: ${param}`;
+    if (param === 'USDT') return t('filter.usdt');
+    if (param === 'BTC')  return t('filter.btc');
+    if (param === 'BNB')  return t('filter.bnb');
+    if (param.includes('⇿')) { const [lo, hi] = param.split('⇿'); return t('filter.vol_range', lo, hi, interval); }
+    if (param.includes('⇾')) return t('filter.vol_above', param.replace('⇾', '').trim(), interval);
+    return `Binance: ${param}`;
   }
 
-  // Filtros de stablecoins: Stables|USD, Stables|EUR, etc.
   if (interval === 'Stables') {
     const cat = parts[1] ?? '';
-    if (cat === 'USD')    return 'Stablecoins atreladas ao dólar (USDC, DAI, FDUSD…)';
-    if (cat === 'EUR')    return 'Stablecoins atreladas ao euro (EURT, EURC…)';
-    if (cat === 'Ouro')   return 'Tokens lastreados em ouro (PAXG, XAUT…)';
-    if (cat === 'Outras') return 'Stablecoins de outras moedas (JPY, IDR, SGD…)';
+    if (cat === 'USD')    return t('filter.stables_usd');
+    if (cat === 'EUR')    return t('filter.stables_eur');
+    if (cat === 'Ouro')   return t('filter.stables_gold');
+    if (cat === 'Outras') return t('filter.stables_other');
     return `Stablecoins: ${cat}`;
   }
 
-  // Filtros de market cap: mcap|giro|baixo, mcap|diluição|alto, etc.
   if (interval === 'mcap') {
-    const metric = parts[1]; // 'giro' | 'diluição'
-    const preset = parts[2]; // 'baixo' | 'medio' | 'alto'
+    const metric = parts[1];
+    const preset = parts[2];
     if (metric === 'giro') {
-      if (preset === 'baixo') return 'Volume baixo vs. market cap — possivelmente inflado (<5%)';
-      if (preset === 'medio') return 'Volume normal vs. market cap (5–30%)';
-      if (preset === 'alto')  return 'Volume alto vs. market cap — especulativo (>30%)';
+      if (preset === 'baixo') return t('filter.mcap_low_t');
+      if (preset === 'medio') return t('filter.mcap_mid_t');
+      if (preset === 'alto')  return t('filter.mcap_high_t');
     }
     if (metric === 'diluição') {
-      if (preset === 'baixo') return 'Poucos tokens ainda por vir — FDV até 2× market cap (a maior parte do supply já circula)';
-      if (preset === 'medio') return 'Diluição moderada — FDV entre 2× e 5× market cap';
-      if (preset === 'alto')  return 'Alta diluição futura — FDV acima de 5× market cap';
+      if (preset === 'baixo') return t('filter.mcap_low_d');
+      if (preset === 'medio') return t('filter.mcap_mid_d');
+      if (preset === 'alto')  return t('filter.mcap_high_d');
     }
     return `Market Cap: ${metric} ${preset}`;
   }
 
   if (type === 'r' || type === 'rsi') {
-    // 1h|rsi|a|70|b|99
-    const c1 = parts[2] === 'a' ? 'acima' : 'abaixo';
+    const c1 = parts[2] === 'a' ? t('filter.acima') : t('filter.abaixo');
     const v1 = parts[3];
-    const c2 = parts[4] === 'b' ? 'abaixo' : 'acima';
+    const c2 = parts[4] === 'b' ? t('filter.abaixo') : t('filter.acima');
     const v2 = parts[5];
-    return `RSI ${c1} de ${v1} e ${c2} de ${v2} (${interval})`;
+    return t('filter.rsi', c1, v1, c2, v2, interval);
   }
 
   if (type === 'i') {
-    // 1h|i|conversion|a|base
     const line1 = parts[2];
-    const comp  = parts[3] === 'a' ? 'acima de' : 'abaixo de';
+    const comp  = parts[3] === 'a' ? t('filter.acima') : t('filter.abaixo');
     const line2 = parts[4];
-    return `Ichimoku: ${line1} ${comp} ${line2} (${interval})`;
+    return t('filter.ichi', line1, comp, line2, interval);
   }
 
   if (type === 'm') {
-    // 1h|m|200|a|close
     const period = parts[2];
-    const comp   = parts[3] === 'a' ? 'acima do' : 'abaixo do';
+    const comp   = parts[3] === 'a' ? t('filter.acima') : t('filter.abaixo');
     const candle = parts[4];
-    return `MA${period} ${comp} ${candle} (${interval})`;
+    return t('filter.ma', period, comp, candle, interval);
   }
 
   return name;
@@ -207,6 +189,7 @@ function getFilterDescription(name) {
 
 export default function FilterTabs({ onSelectFilter }) {
   const { filters, joinFilters, removeFilters, clearAllFilters } = useCurrency();
+  const { t } = useI18n();
   const [checked, setChecked] = useState(new Set());
   const [activeFilter, setActiveFilter] = useState(null);
   const [flashing, setFlashing] = useState(new Set());
@@ -288,7 +271,7 @@ export default function FilterTabs({ onSelectFilter }) {
                 return (
                   <div
                     key={filter.name}
-                    title={getFilterDescription(filter.name)}
+                    title={getFilterDescription(filter.name, t)}
                     onClick={() => handleClick(filter.name)}
                     style={{
                       flex: span,
@@ -326,21 +309,21 @@ export default function FilterTabs({ onSelectFilter }) {
       <div className="flex gap-1 justify-end">
         <button
           onClick={handleJoin}
-          title="Intersecionar filtros marcados — exibe apenas moedas presentes em TODOS os filtros selecionados"
+          title={t('filter.btn_join')}
           className={`${btnBase} hover:bg-p3`}
         >
           <IconFunnel className="w-4 h-4" />
         </button>
         <button
           onClick={handleRemove}
-          title="Remover filtros marcados da lista"
+          title={t('filter.btn_remove')}
           className={`${btnBase} hover:bg-p3`}
         >
           <IconFunnelX className="w-4 h-4" />
         </button>
         <button
           onClick={handleClearAll}
-          title="Limpar todos os filtros e voltar à lista completa"
+          title={t('filter.btn_clear')}
           className={`${btnBase} hover:bg-red-800`}
         >
           <IconFunnelOff className="w-4 h-4" />

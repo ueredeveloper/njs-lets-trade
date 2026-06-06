@@ -1,6 +1,7 @@
 import { useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import { useCurrency } from '../contexts/CurrencyContext';
 import { fetchCandlesticksAndCloud, fetchGateCurrencies, gatePreloadCandles } from '../services/api';
+import { useI18n } from '../i18n';
 
 const GATE_COLOR    = '#0068ff';
 const BINANCE_COLOR = '#fcd535';
@@ -59,10 +60,11 @@ function resolveFavorites(favSet, binanceList, gateAll) {
 
 export default function CurrencyTable({ activeFilter, showFavorites, setShowFavorites, onSelectCurrency }) {
   const {
-    currencies, findFilter, selectedQuote, setSelectedChart,
+    currencies, findFilter, selectedQuote, setSelectedChart, setChartZoom,
     gateFavorites, binanceFavorites, tradeFavorites,
     toggleGateFavorite, toggleBinanceFavorite, toggleTradeFavorite,
   } = useCurrency();
+  const { t, formatPrice } = useI18n();
   const [loadingSymbol, setLoadingSymbol] = useState(null);
   const [activeRow, setActiveRow]         = useState(null);
   const [search, setSearch]               = useState('');
@@ -173,6 +175,7 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
     setLoadingSymbol(item.symbol);
     setActiveRow(item.symbol);
     try {
+      setChartZoom(null);
       const data = await fetchCandlesticksAndCloud(item.symbol, interval, source);
       setSelectedChart(data);
       if (source === 'gate') gatePreloadCandles(item.symbol);
@@ -206,7 +209,7 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Buscar moeda..."
+            placeholder={t('table.search')}
             className="flex-1 bg-transparent text-p5 text-xs outline-none placeholder-p5/30"
           />
           {search && (
@@ -328,7 +331,7 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
                   <td className="px-2 py-1.5 font-mono font-semibold">
                     {base}<span className="opacity-40 font-normal text-[10px]">/{quote}</span>
                   </td>
-                  <td className="px-2 py-1.5 text-right font-mono">{item.price}</td>
+                  <td className="px-2 py-1.5 text-right font-mono">{formatPrice(item.price)}</td>
                   <td className="px-2 py-1.5 text-right font-mono text-[10px] opacity-60">{formatVolume(item.volume)}</td>
                   <td className="pr-1 text-center">
                     {loadingSymbol === item.symbol
@@ -390,7 +393,7 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
                       <td className="px-2 py-1.5 font-mono font-semibold">
                         {base}<span className="opacity-40 font-normal text-[10px]">/{quote}</span>
                       </td>
-                      <td className="px-2 py-1.5 text-right font-mono">{item.price > 0 ? item.price : '—'}</td>
+                      <td className="px-2 py-1.5 text-right font-mono">{item.price > 0 ? formatPrice(item.price) : '—'}</td>
                       <td className="px-2 py-1.5 text-right font-mono text-[10px] opacity-60">{formatVolume(item.volume)}</td>
                       <td className="pr-1 text-center">
                         {loadingSymbol === item.symbol

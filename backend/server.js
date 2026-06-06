@@ -14,14 +14,14 @@ const { ichimokuCloudRouter } = require('./technicals-indicators');
 //const {client} = require('./services/fetchClient');
 const {
   fetchCandles, fetchIchimokuCloud, fetchAllCurrencies,
-  fetchSMA, fetchRSI, fetchVWAP, fetch24HsVolume, fetchMarketCapFilter, fetchStablecoins, fetchIndicatorSearch,
+  fetchSMA, fetchRSI, fetchVWAP, fetch24HsVolume, fetchMarketCapFilter, fetchStablecoins, fetchUserPrefs, fetchIndicatorSearch,
   fetchRsiOversoldRecovery, fetchReloadCandles, fetchFavorites,
   fetchGateCurrencies, fetchGatePrefetch } = require('./services');
 
 const app = express();
 app.use(cors());
-app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({ extended: true }));
+app.use(bodyParser.json({ limit: '10mb' }));
+app.use(bodyParser.urlencoded({ extended: true, limit: '10mb' }));
 
 const router = express.Router();
 
@@ -34,6 +34,7 @@ app.use('/services', fetchVWAP);
 app.use('/services', fetch24HsVolume)
 app.use('/services', fetchMarketCapFilter)
 app.use('/services', fetchStablecoins)
+app.use('/services', fetchUserPrefs)
 app.use('/services', fetchIndicatorSearch)
 app.use('/services', fetchRsiOversoldRecovery)
 app.use('/services', fetchReloadCandles)
