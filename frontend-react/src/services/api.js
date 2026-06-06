@@ -9,6 +9,12 @@ export async function fetchAllCurrencies() {
   return res.json();
 }
 
+export async function fetchStablecoins() {
+  const res = await fetch('/services/stablecoins');
+  if (!res.ok) throw new Error(`stablecoins falhou: HTTP ${res.status}`);
+  return res.json(); // [{ name, list }]
+}
+
 export async function fetchMarketCapFilter(metric, preset) {
   const res = await fetch(`/services/market-cap-filter?metric=${metric}&preset=${preset}`);
   if (!res.ok) throw new Error(`market-cap-filter falhou: HTTP ${res.status}`);

@@ -164,7 +164,9 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
     }).catch(() => {});
   }, [showFavorites, activeFilter]);
 
-  const interval = (activeFilter && activeFilter !== 'favoritos') ? activeFilter.split('|')[0] : '30m';
+  const VALID_INTERVALS = new Set(['1m','5m','15m','30m','1h','2h','4h','6h','8h','12h','1d','3d','1w']);
+  const filterPrefix = activeFilter ? activeFilter.split('|')[0] : '';
+  const interval = VALID_INTERVALS.has(filterPrefix) ? filterPrefix : '30m';
 
   async function handleSelect(item, source = null) {
     onSelectCurrency?.();
@@ -174,6 +176,8 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
       const data = await fetchCandlesticksAndCloud(item.symbol, interval, source);
       setSelectedChart(data);
       if (source === 'gate') gatePreloadCandles(item.symbol);
+    } catch (err) {
+      console.warn(`[CurrencyTable] candles indisponíveis para ${item.symbol}:`, err.message);
     } finally {
       setLoadingSymbol(null);
     }

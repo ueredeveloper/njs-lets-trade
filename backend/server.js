@@ -14,7 +14,7 @@ const { ichimokuCloudRouter } = require('./technicals-indicators');
 //const {client} = require('./services/fetchClient');
 const {
   fetchCandles, fetchIchimokuCloud, fetchAllCurrencies,
-  fetchSMA, fetchRSI, fetchVWAP, fetch24HsVolume, fetchMarketCapFilter, fetchIndicatorSearch,
+  fetchSMA, fetchRSI, fetchVWAP, fetch24HsVolume, fetchMarketCapFilter, fetchStablecoins, fetchIndicatorSearch,
   fetchRsiOversoldRecovery, fetchReloadCandles, fetchFavorites,
   fetchGateCurrencies, fetchGatePrefetch } = require('./services');
 
@@ -33,6 +33,7 @@ app.use('/services', fetchRSI);
 app.use('/services', fetchVWAP);
 app.use('/services', fetch24HsVolume)
 app.use('/services', fetchMarketCapFilter)
+app.use('/services', fetchStablecoins)
 app.use('/services', fetchIndicatorSearch)
 app.use('/services', fetchRsiOversoldRecovery)
 app.use('/services', fetchReloadCandles)

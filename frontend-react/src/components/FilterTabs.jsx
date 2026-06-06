@@ -150,6 +150,16 @@ function getFilterDescription(name) {
     return `Filtro Binance: ${param}`;
   }
 
+  // Filtros de stablecoins: Stables|USD, Stables|EUR, etc.
+  if (interval === 'Stables') {
+    const cat = parts[1] ?? '';
+    if (cat === 'USD')    return 'Stablecoins atreladas ao dólar (USDC, DAI, FDUSD…)';
+    if (cat === 'EUR')    return 'Stablecoins atreladas ao euro (EURT, EURC…)';
+    if (cat === 'Ouro')   return 'Tokens lastreados em ouro (PAXG, XAUT…)';
+    if (cat === 'Outras') return 'Stablecoins de outras moedas (JPY, IDR, SGD…)';
+    return `Stablecoins: ${cat}`;
+  }
+
   // Filtros de market cap: mcap|giro|baixo, mcap|diluição|alto, etc.
   if (interval === 'mcap') {
     const metric = parts[1]; // 'giro' | 'diluição'
@@ -200,10 +210,16 @@ export default function FilterTabs({ onSelectFilter }) {
   const [checked, setChecked] = useState(new Set());
   const [activeFilter, setActiveFilter] = useState(null);
   const [flashing, setFlashing] = useState(new Set());
-  const prevFilterNamesRef = useRef(new Set());
+  const prevFilterNamesRef = useRef(null); // null = primeira renderização ainda não registrada
   const flashTimerRef = useRef(null);
 
   useEffect(() => {
+    // Primeira execução: registra os filtros já existentes sem piscar
+    if (prevFilterNamesRef.current === null) {
+      prevFilterNamesRef.current = new Set(filters.map(f => f.name));
+      return;
+    }
+
     const prev = prevFilterNamesRef.current;
     const newNames = filters.map(f => f.name).filter(n => !prev.has(n));
     prevFilterNamesRef.current = new Set(filters.map(f => f.name));
@@ -214,8 +230,9 @@ export default function FilterTabs({ onSelectFilter }) {
 
     setFlashing(s => { const n = new Set(s); newNames.forEach(name => n.add(name)); return n; });
 
+    // Limpa TODOS os flashes após 5s (não só o último lote)
     flashTimerRef.current = setTimeout(() => {
-      setFlashing(s => { const n = new Set(s); newNames.forEach(name => n.delete(name)); return n; });
+      setFlashing(new Set());
       flashTimerRef.current = null;
     }, 5000);
   }, [filters]);

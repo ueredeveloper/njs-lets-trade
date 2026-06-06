@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { CurrencyProvider, useCurrency } from './contexts/CurrencyContext';
-import { fetchAllCurrencies, fetch24hVolume, fetchCandlesticksAndCloud, getFavorites } from './services/api';
+import { fetchAllCurrencies, fetch24hVolume, fetchStablecoins, fetchCandlesticksAndCloud, getFavorites } from './services/api';
 
 
 import FilterTabs from './components/FilterTabs';
@@ -41,6 +41,9 @@ function AppContent() {
 
         const volumeFilters = await fetch24hVolume();
         volumeFilters.forEach((f) => addFilter(f));
+
+        const stableFilters = await fetchStablecoins().catch(() => []);
+        stableFilters.forEach((f) => addFilter(f));
 
         const btcData = await fetchCandlesticksAndCloud('BTCUSDT', '30m');
         setSelectedChart(btcData);
