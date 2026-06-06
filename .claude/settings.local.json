@@ -18,7 +18,10 @@
       "Bash(xargs grep -l \"binance\\\\|api.binance\")",
       "WebSearch",
       "Bash(Get-ChildItem -Path . -Directory)",
-      "Bash(Select-Object Name)"
+      "Bash(Select-Object Name)",
+      "PowerShell(Get-ChildItem \"c:\\\\workspace\\\\njs-lets-trade\\\\frontend\\\\\" | Where-Object { $_.Name -notlike \"node_modules\" -and $_.Name -notlike \"dist\" })",
+      "Skill(update-config)",
+      "Skill(update-config:*)"
     ]
   }
 }

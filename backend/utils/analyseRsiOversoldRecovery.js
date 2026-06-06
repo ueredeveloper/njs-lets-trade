@@ -3,7 +3,7 @@ const getCandles = require('../binance/getCandles');
 
 const RSI_PERIOD = 14;
 const HTF_LIMIT  = 1000;
-const MAIN_LIMIT = 1500;
+const MAIN_LIMIT = 3000; // 3000 candles = ~62 dias em 30m — warmup suficiente para RSI convergir
 
 /**
  * Analisa eventos de sobrevenda/sobrecompra no RSI de uma moeda.
@@ -110,10 +110,8 @@ async function analyseRsiOversoldRecovery(symbol, interval, options = {}) {
     let entryIdx  = null;
     let minRsiIdx = null; // índice do RSI mínimo no ciclo aberto atual
 
-    const RSI_TOLERANCE = 2;
-
     for (let i = 0; i < rsiValues.length; i++) {
-        if (state === 'SEEK_ENTRY' && rsiValues[i] < oversold + RSI_TOLERANCE) {
+        if (state === 'SEEK_ENTRY' && rsiValues[i] < oversold + 1) {
             entryIdx  = i;
             minRsiIdx = i;
             state = 'SEEK_EXIT';
@@ -126,7 +124,7 @@ async function analyseRsiOversoldRecovery(symbol, interval, options = {}) {
                 minRsiIdx = i;
             }
 
-            if (rsiValues[i] >= overbought - RSI_TOLERANCE) {
+            if (rsiValues[i] >= overbought - 1) {
                 const entryCandle = candles[minRsiIdx + offset];
                 const exitCandle  = candles[i + offset];
                 const entryPrice  = parseFloat(entryCandle.close);

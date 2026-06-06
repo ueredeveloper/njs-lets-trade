@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { reloadCandles } from '../services/api';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useI18n } from '../i18n';
+import { useCurrency } from '../contexts/CurrencyContext';
 
 const PALETTES = [
   { id: 'default',    name: 'Padrão / Default',
@@ -28,11 +29,18 @@ const RELOAD_INTERVALS = ['all', '1m', '5m', '15m', '30m', '1h', '2h', '4h', '8h
 export default function SettingsSidebar({ open, onClose }) {
   const { lang, setLang } = useLanguage();
   const { t } = useI18n();
+  const { selectedChart } = useCurrency();
   const [activeId, setActiveId]           = useState('default');
   const [reloadSymbol, setReloadSymbol]   = useState('');
   const [reloadInterval, setReloadInterval] = useState('all');
   const [reloadState, setReloadState]     = useState(null);
   const [reloadError, setReloadError]     = useState('');
+
+  useEffect(() => {
+    if (open && selectedChart?.symbol) {
+      setReloadSymbol(selectedChart.symbol);
+    }
+  }, [open, selectedChart]);
 
   async function handleReload() {
     if (!reloadSymbol.trim()) return;
