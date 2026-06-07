@@ -82,6 +82,88 @@ export async function removeFavorite(symbol, type) {
   return res.json();
 }
 
+// ── Gate.io Trading ──────────────────────────────────────────────────────────
+
+/** Retorna os trades do usuário para um símbolo na Gate.io (máx 1000). */
+export async function fetchGateTrades(symbol, limit = 500) {
+  const params = new URLSearchParams({ symbol: symbol.toUpperCase(), limit });
+  const res = await fetch(`/services/gate-trades?${params}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+/** Retorna saldos da conta Gate.io (somente não-zero). */
+export async function fetchGateAccount() {
+  const res = await fetch('/services/gate-account');
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+/**
+ * Envia uma ordem na Gate.io.
+ * @param {{ symbol, side: 'buy'|'sell', type?: 'market'|'limit', amount, price? }} params
+ */
+export async function placeGateOrder({ symbol, side, type = 'market', amount, price }) {
+  const res = await fetch('/services/gate-order', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ symbol, side, type, amount, price }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+// ── Binance Trading ──────────────────────────────────────────────────────────
+
+/** Retorna os trades do usuário para um símbolo (máx 500). */
+export async function fetchBinanceTrades(symbol, limit = 500) {
+  const params = new URLSearchParams({ symbol: symbol.toUpperCase(), limit });
+  const res = await fetch(`/services/binance-trades?${params}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+/** Retorna saldos da conta Binance (somente não-zero). */
+export async function fetchBinanceAccount() {
+  const res = await fetch('/services/binance-account');
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+/**
+ * Envia uma ordem na Binance.
+ * @param {{ symbol, side: 'BUY'|'SELL', type?: 'MARKET'|'LIMIT', quantity, price? }} params
+ */
+export async function placeBinanceOrder({ symbol, side, type = 'MARKET', quantity, price }) {
+  const res = await fetch('/services/binance-order', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ symbol, side, type, quantity, price }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 export async function reloadCandles(symbol, interval = 'all') {
   const params = new URLSearchParams({ symbol, interval });
   const res = await fetch(`/services/reload-candles?${params}`);
@@ -110,7 +192,7 @@ export function gatePreloadCandles(symbol) {
  * @param {string} interval ex: '1h'
  * @param {string} [source] 'gate' para forçar Gate.io; omitir para Binance
  */
-export async function fetchCandlesticksAndCloud(symbol, interval, source = null, limit = 266) {
+export async function fetchCandlesticksAndCloud(symbol, interval, source = null, limit = 500) {
   const srcParam = source === 'gate' ? '&source=gate' : '';
   const candlesRaw = await fetch(
     `/services/candles/?symbol=${symbol}&limit=${limit}&interval=${interval}${srcParam}`,

@@ -6,6 +6,13 @@ const BINANCE_SECRET_KEY = process.env.BINANCE_SECRET_KEY;
 
 module.exports = getClient = async function (){
 
+    if (!BINANCE_API_KEY || !BINANCE_SECRET_KEY) {      
+        console.error('[getClient] BINANCE_API_KEY ou BINANCE_SECRET_KEY não definidos no .env');
+        return null;
+    }
+
+    console.log('[getClient] Criando cliente Binance com API Key:', BINANCE_API_KEY);
+
 // remove cíclical error
     const client = Binance({
         apiKey: BINANCE_API_KEY,

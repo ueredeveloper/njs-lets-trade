@@ -1,6 +1,6 @@
 import { useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import { useCurrency } from '../contexts/CurrencyContext';
-import { fetchCandlesticksAndCloud, fetchGateCurrencies, gatePreloadCandles } from '../services/api';
+import { fetchCandlesticksAndCloud, fetchGateCurrencies, gatePreloadCandles, fetchBinanceTrades, fetchGateTrades } from '../services/api';
 import { useI18n } from '../i18n';
 
 const GATE_COLOR    = '#0068ff';
@@ -63,6 +63,7 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
     currencies, findFilter, selectedQuote, setSelectedChart, setChartZoom,
     gateFavorites, binanceFavorites, tradeFavorites,
     toggleGateFavorite, toggleBinanceFavorite, toggleTradeFavorite,
+    setTradePurchases,
   } = useCurrency();
   const { t, formatPrice } = useI18n();
   const [loadingSymbol, setLoadingSymbol] = useState(null);
@@ -174,11 +175,32 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
     onSelectCurrency?.();
     setLoadingSymbol(item.symbol);
     setActiveRow(item.symbol);
+    // Limpa trades anteriores imediatamente
+    setTradePurchases([]);
     try {
       setChartZoom(null);
-      const data = await fetchCandlesticksAndCloud(item.symbol, interval, source);
+      // Se source não foi informado, detecta Gate pelo fato de o símbolo não estar na lista Binance
+      const isGateOnly = !currencies.list.some(c => c.symbol === item.symbol);
+      const effectiveSource = source ?? (isGateOnly ? 'gate' : null);
+
+      const data = await fetchCandlesticksAndCloud(item.symbol, interval, effectiveSource);
       setSelectedChart(data);
-      if (source === 'gate') gatePreloadCandles(item.symbol);
+      if (effectiveSource === 'gate') gatePreloadCandles(item.symbol);
+
+      // Busca trades do usuário para favoritos Trade Now:
+      // usa Gate.io se o símbolo for favorito Gate OU se vier da Gate (não está na Binance)
+      if (showFavorites === 'trade' && tradeFavorites.has(item.symbol)) {
+        const useGateTrades = gateFavorites.has(item.symbol) || effectiveSource === 'gate';
+        const fetcher = useGateTrades
+          ? fetchGateTrades(item.symbol)
+          : fetchBinanceTrades(item.symbol);
+        fetcher
+          .then(trades => {
+            const buys = trades.filter(t => t.isBuyer);
+            setTradePurchases(buys);
+          })
+          .catch(err => console.warn('[CurrencyTable] trades indisponíveis:', err.message));
+      }
     } catch (err) {
       console.warn(`[CurrencyTable] candles indisponíveis para ${item.symbol}:`, err.message);
     } finally {

@@ -28,6 +28,10 @@ export function CurrencyProvider({ children }) {
   // Zoom do gráfico para um período específico: { startDate, endDate } ISO strings
   const [chartZoom, setChartZoom] = useState(null);
 
+  // Trades de compra do usuário para a moeda selecionada (favorito Trade Now)
+  // Array de { time: number (ms), price: string, qty: string, isBuyer: boolean }
+  const [tradePurchases, setTradePurchases] = useState([]);
+
   // Quote selecionada: 'USDT' | 'BTC' | 'BNB'
   const [selectedQuote, setSelectedQuote] = useState('USDT');
 
@@ -152,6 +156,8 @@ export function CurrencyProvider({ children }) {
         setSelectedChart,
         chartZoom,
         setChartZoom,
+        tradePurchases,
+        setTradePurchases,
         gateFavorites,
         setGateFavorites,
         binanceFavorites,

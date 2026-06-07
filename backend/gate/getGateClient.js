@@ -9,11 +9,17 @@ if (!API_KEY || !SECRET_KEY) {
   console.error('[getGateClient] GATEIO_API_KEY ou GATEIO_SECRET_KEY não definidos no .env');
 }
 
+
 /**
  * Gera os headers de autenticação Gate.io API v4 (HMAC-SHA512).
  * Ref: https://www.gate.io/docs/developers/apiv4/en/#authentication
  */
 function buildAuthHeaders(method, path, queryString = '', body = '') {
+
+  console.log('[getGateClient] Gerando headers de autenticação para', method, path);
+
+  console.log('  api key:', API_KEY);
+
   const timestamp  = Math.floor(Date.now() / 1000).toString();
   const hashedBody = crypto.createHash('sha512').update(body).digest('hex');
   // Ordem correta: method → path → query → hashed_body → timestamp
@@ -35,6 +41,11 @@ function buildAuthHeaders(method, path, queryString = '', body = '') {
  * @param {Record<string,string>} [params]  query params (GET) ou campos do body (POST)
  */
 async function gateRequest(method, endpointPath, params = {}) {
+
+  console.log(`[getGateClient] Preparando requisição ${method} ${endpointPath} com params:`, params);
+
+  console.log('  Construindo URL e corpo da requisição...' , API_KEY);
+
   const apiPath = `/api/v4${endpointPath}`;
 
   let url         = `${BASE_URL}${endpointPath}`;

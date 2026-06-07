@@ -5,7 +5,7 @@ import { useCurrency } from '../contexts/CurrencyContext';
 import { fetchCandlesticksAndCloud, fetchUserPrefs, saveUserPrefs } from '../services/api';
 import convertOpenTime from '../utils/convertOpenTime';
 
-const LIMIT = 66;
+const LIMIT = 76;
 const INTERVALS = ['1m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w'];
 const DEFAULT_INTERVAL = '30m';
 
@@ -29,7 +29,7 @@ function getThemeColors() {
 }
 
 
-function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAverage, rsi }, colors, activeIndicators, displayLimit = LIMIT, zoomPeriod = null) {
+function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAverage, rsi }, colors, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = []) {
   const showMa200    = activeIndicators.includes('ma200');
   const showIchimoku = activeIndicators.includes('ichimoku');
   const showRsi      = activeIndicators.includes('rsi');
@@ -68,6 +68,42 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
     return data.length ? { silent: true, symbol: 'none', data } : null;
   })();
 
+  // Linhas verticais azuis para cada compra do usuário
+  // idx é relativo ao slice exibido (candlesticks.slice(-DL)), não ao array completo
+  const fmtTradeDate = (ms) => {
+    const d = new Date(ms);
+    const date = d.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit' });
+    const time = d.toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit' });
+    return `${date}\n${time}`;
+  };
+
+  const tradeMarkLines = (() => {
+    if (!tradeTimes.length) return null;
+    const offset = candlesticks.length - DL; // quantos candles antes da janela visível
+    const data = tradeTimes.flatMap(tradeMs => {
+      const idx = candlesticks.reduce((best, c, i) =>
+        Math.abs(Number(c.openTime) - tradeMs) < Math.abs(Number(candlesticks[best].openTime) - tradeMs)
+          ? i : best
+      , 0);
+      const localIdx = idx - offset;
+      if (localIdx < 0) return []; // trade antes da janela visível
+      return [{
+        xAxis: localIdx,
+        lineStyle: { color: '#3b82f6', width: 1.5, type: 'solid' },
+        label: {
+          show: true,
+          formatter: `compra\n${fmtTradeDate(tradeMs)}`,
+          color: '#3b82f6',
+          fontSize: 11,
+          lineHeight: 16,
+          position: 'insideStartTop',
+          padding: [3, 5],
+        },
+      }];
+    });
+    return data.length ? { silent: true, symbol: 'none', data } : null;
+  })();
+
   const axisBase = (gridIndex) => ({
     gridIndex,
     type: 'category',
@@ -84,7 +120,11 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
       xAxisIndex: idx, yAxisIndex: idx,
       data: candlesticks.slice(-DL).map((c) => [c.open, c.close, c.low, c.high]),
       itemStyle: { color: C_UP, color0: C_DOWN, borderColor: C_UP, borderColor0: C_DOWN },
-      ...(periodMarkLines ? { markLine: periodMarkLines } : {}),
+      ...(periodMarkLines || tradeMarkLines ? {
+        markLine: periodMarkLines && tradeMarkLines
+          ? { silent: true, symbol: 'none', data: [...periodMarkLines.data, ...tradeMarkLines.data] }
+          : (periodMarkLines ?? tradeMarkLines),
+      } : {}),
     },
     ...(showMa200 ? [{
       name: 'MA200',
@@ -198,7 +238,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
 }
 
 export default function CandlestickChart() {
-  const { selectedChart, setSelectedChart, chartZoom } = useCurrency();
+  const { selectedChart, setSelectedChart, chartZoom, tradePurchases } = useCurrency();
   const { t } = useI18n();
   const chartRef = useRef(null);
   const [currentInterval, setCurrentInterval] = useState(DEFAULT_INTERVAL);
@@ -260,12 +300,25 @@ export default function CandlestickChart() {
     instance.dispatchAction({ type: 'dataZoom', start: startPct, end: endPct });
   }, [chartZoom, selectedChart]);
 
-  const displayLimit = chartZoom ? (selectedChart?.candlesticks?.length ?? LIMIT) : LIMIT;
+  // Timestamps de compra (ms) — plain array, sem useMemo para evitar TDZ em HMR
+  const tradeTimes = tradePurchases.map(t => Number(t.time));
+
+  // Expande a janela para cobrir a compra mais antiga — IIFE sem hook
+  const displayLimit = (() => {
+    const candles = selectedChart?.candlesticks;
+    if (chartZoom) return candles?.length ?? LIMIT;
+    if (!candles?.length || !tradeTimes.length) return LIMIT;
+    const oldest = Math.min(...tradeTimes);
+    const idx = candles.findIndex(c => Number(c.openTime) >= oldest);
+    if (idx === -1 || idx >= candles.length - LIMIT) return LIMIT;
+    return Math.min(candles.length, candles.length - idx + 5);
+  })();
 
   const option = useMemo(() => {
     if (!selectedChart) return null;
-    return buildOption(selectedChart, colors, activeIndicators, displayLimit, chartZoom);
-  }, [selectedChart, colors, activeIndicators, displayLimit, chartZoom]);
+    return buildOption(selectedChart, colors, activeIndicators, displayLimit, chartZoom, tradeTimes);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedChart, colors, activeIndicators, chartZoom, tradePurchases]);
 
   if (!selectedChart || !option) {
     return (
