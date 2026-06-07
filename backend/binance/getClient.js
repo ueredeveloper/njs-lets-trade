@@ -11,8 +11,6 @@ module.exports = getClient = async function (){
         return null;
     }
 
-    console.log('[getClient] Criando cliente Binance com API Key:', BINANCE_API_KEY);
-
 // remove cíclical error
     const client = Binance({
         apiKey: BINANCE_API_KEY,

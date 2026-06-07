@@ -33,6 +33,7 @@ const RSI_BUY        = 30;
 const RSI_SELL       = 70;
 const VARIATION_MIN  = 1;            // % variação mínima do candle para confirmar sinal
 const BUY_DISCOUNT   = 0.02;         // limit order 2% abaixo do close
+const FEE_RATE       = 0.002;        // 0.2% taxa Gate.io (maker e taker)
 const POLL_MS        = 5 * 60 * 1000; // verifica a cada 5 min
 const CANDLE_LIMIT   = 200;
 
@@ -152,12 +153,14 @@ async function getUsdtBalance() {
   return usdt ? parseFloat(usdt.available) : 0;
 }
 
-/** Coloca limit buy 2% abaixo do close usando todo o saldo USDT disponível. */
+const MAX_USDT_PER_COIN = 40; // teto por moeda
+
+/** Coloca limit buy 2% abaixo do close. Usa até MAX_USDT_PER_COIN ou saldo disponível. */
 async function placeLimitBuy(gatePair, closePrice, log) {
   const balance    = await getUsdtBalance();
-  const budget     = balance * 0.99; // 1% de margem para taxa
+  const budget     = Math.min(balance * 0.99, MAX_USDT_PER_COIN);
   if (budget < 0.5) { log('⚠️  Saldo USDT insuficiente (menos de $0.50).'); return null; }
-  log(`💰 Saldo USDT disponível: ${balance.toFixed(4)} → usando ${budget.toFixed(4)} USDT`);
+  log(`💰 Saldo USDT: ${balance.toFixed(2)} → usando ${budget.toFixed(2)} USDT (teto: $${MAX_USDT_PER_COIN})`);
 
   const limitPrice = parseFloat((closePrice * (1 - BUY_DISCOUNT)).toFixed(8));
   const qty        = parseFloat((budget / limitPrice).toFixed(8));
@@ -245,18 +248,19 @@ async function tick(symbol, gatePair, log) {
       const status = order.status; // 'open' | 'closed' | 'cancelled'
 
       if (status === 'closed') {
-        // Ordem preenchida — calcula qty real (amount - left)
+        // Ordem preenchida — calcula qty real (amount - left) e desconta taxa de compra
         const filledQty   = parseFloat(order.amount) - parseFloat(order.left || 0);
+        const netQty      = parseFloat((filledQty * (1 - FEE_RATE)).toFixed(8)); // tokens reais após 0.2% de taxa
         const filledPrice = parseFloat(order.avg_deal_price || order.price || state.pendingPrice);
         state = {
           phase:    'BOUGHT',
           buyPrice: filledPrice,
-          buyQty:   filledQty,
-          buyUsdt:  filledQty * filledPrice,
+          buyQty:   netQty,                      // quantidade disponível para venda (já sem a taxa)
+          buyUsdt:  netQty * filledPrice,
           buyTime:  now(),
         };
         saveState(symbol, state);
-        log(`🟢 COMPRA PREENCHIDA | qty=${filledQty} | preço=${filledPrice} | USDT≈${state.buyUsdt.toFixed(2)} | ${state.buyTime}`);
+        log(`🟢 COMPRA PREENCHIDA | qty=${filledQty} − taxa 0.2% = ${netQty} | preço=${filledPrice} | USDT≈${state.buyUsdt.toFixed(2)} | ${state.buyTime}`);
 
       } else if (status === 'cancelled') {
         log(`⚠️  Limit order foi cancelada externamente (id=${state.pendingOrderId}) — voltando a WATCHING.`);
@@ -293,9 +297,12 @@ async function tick(symbol, gatePair, log) {
       log(`📉 RSI voltou a ${rsi.toFixed(2)} ≤ ${RSI_SELL} — vendendo…`);
       try {
         await placeMarketSell(gatePair, state.buyQty);
-        const pnl    = ((last.close - state.buyPrice) / state.buyPrice * 100).toFixed(2);
-        const usdtPnl = ((last.close - state.buyPrice) * state.buyQty).toFixed(4);
-        log(`🔴 VENDA   | qty=${state.buyQty} | preço≈${last.close} | PnL≈${pnl}% (${usdtPnl > 0 ? '+' : ''}${usdtPnl} USDT) | comprado em ${state.buyTime}`);
+        // Receita líquida: preço × qty × (1 − taxa_saída) − custo de compra
+        const grossUsdt  = last.close * state.buyQty;
+        const netUsdt    = grossUsdt * (1 - FEE_RATE);
+        const usdtPnl    = (netUsdt - state.buyUsdt).toFixed(4);
+        const pnl        = ((netUsdt - state.buyUsdt) / state.buyUsdt * 100).toFixed(2);
+        log(`🔴 VENDA   | qty=${state.buyQty} | preço≈${last.close} | receita líquida≈${netUsdt.toFixed(2)} USDT | PnL≈${pnl}% (${Number(usdtPnl) > 0 ? '+' : ''}${usdtPnl} USDT) | comprado em ${state.buyTime}`);
         state = { phase: 'WATCHING' };
         saveState(symbol, state);
       } catch (err) {
@@ -350,7 +357,8 @@ async function main() {
   console.log(`   Moedas (${symbols.length}): ${symbols.join(', ')}`);
   console.log(`   Compra : RSI < ${RSI_BUY} + var ≥ ${VARIATION_MIN}%  →  limit ${BUY_DISCOUNT * 100}% abaixo do close`);
   console.log(`   Venda  : RSI > ${RSI_SELL} e volta a ≤ ${RSI_SELL}  →  market order`);
-  console.log(`   Capital: todo o saldo USDT disponível no momento da compra`);
+  console.log(`   Capital: até $${MAX_USDT_PER_COIN} USDT por moeda (ou saldo disponível se menor)`);
+  console.log(`   Taxa   : ${FEE_RATE * 100}% entrada + ${FEE_RATE * 100}% saída (descontadas da qty/receita)`);
   console.log(`   Poll   : a cada ${POLL_MS / 60000} min\n`);
 
   await Promise.all(symbols.map(startSymbol));
