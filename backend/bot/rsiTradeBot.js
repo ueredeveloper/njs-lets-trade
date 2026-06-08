@@ -114,12 +114,19 @@ function now() {
   }).replace(',', '');
 }
 
+// Cores ANSI para o terminal (não são escritas no arquivo de log)
+const R = '\x1b[31m'; // vermelho — RSI > 70
+const G = '\x1b[32m'; // verde   — RSI < 30
+const X = '\x1b[0m';  // reset
+
 function makeLogger(symbol) {
   const logFile = path.join(BOT_DATA_DIR, `log-${symbol}.txt`);
   return function log(...args) {
-    const line = `[${now()}] [${symbol}] ${args.join(' ')}`;
-    console.log(line);
-    try { fs.appendFileSync(logFile, line + '\n'); } catch {}
+    const plain   = `[${now()}] [${symbol}] ${args.join(' ')}`;
+    // Remove códigos ANSI antes de escrever no arquivo
+    const noAnsi  = plain.replace(/\x1b\[[0-9;]*m/g, '');
+    console.log(plain);
+    try { fs.appendFileSync(logFile, noAnsi + '\n'); } catch {}
   };
 }
 
@@ -227,22 +234,40 @@ async function tick(symbol, gatePair, log) {
   const variation = ((last.high - last.low) / last.low) * 100;
 
   let state = loadState(symbol);
-  log(`RSI=${rsi.toFixed(2)}  close=${last.close}  var=${variation.toFixed(2)}%  fase=${state.phase}`);
+  const rsiColor = rsi > RSI_SELL ? R : rsi < RSI_BUY ? G : '';
+  log(`${rsiColor}RSI=${rsi.toFixed(2)}${rsiColor ? X : ''}  close=${last.close}  var=${variation.toFixed(2)}%  fase=${state.phase}`);
 
   // ── WATCHING: aguarda sinal de compra ──────────────────────────────────────
   if (state.phase === 'WATCHING') {
-    if (rsi < RSI_BUY && variation >= VARIATION_MIN) {
-      // Verifica saldo real do token — evita comprar se já há posição aberta
-      const baseCurrency  = gatePair.split('_')[0]; // "LINK_USDT" → "LINK"
-      const tokenBalance  = await getTokenBalance(baseCurrency);
-      const holdingUsdt   = tokenBalance * last.close;
-      if (holdingUsdt >= MIN_HOLDING_USDT) {
-        log(`📦 Posição existente detectada: ${tokenBalance.toFixed(4)} ${baseCurrency} ≈ $${holdingUsdt.toFixed(2)} USDT — aguardando venda antes de comprar.`);
-        return { rsi, phase: state.phase };
+    // Verifica saldo real do token em QUALQUER situação (não só quando RSI < 30)
+    // Se há posição aberta (compra manual ou de sessão anterior), inicia monitoramento para venda
+    const baseCurrency = gatePair.split('_')[0];
+    const tokenBalance = await getTokenBalance(baseCurrency);
+    const holdingUsdt  = tokenBalance * last.close;
+    if (holdingUsdt >= MIN_HOLDING_USDT) {
+      state = {
+        phase:    'BOUGHT',
+        buyPrice: last.close,
+        buyQty:   tokenBalance * (1 - FEE_RATE), // aproximação líquida
+        buyUsdt:  holdingUsdt,
+        buyTime:  now(),
+        detected: true, // posição detectada externamente, não comprada pelo bot
+      };
+      saveState(symbol, state);
+      log(`📦 Posição detectada: ${tokenBalance.toFixed(4)} ${baseCurrency} ≈ $${holdingUsdt.toFixed(2)} USDT — monitorando para venda.`);
+      // Se RSI já está acima de 70, avança direto para ABOVE_70
+      if (rsi > RSI_SELL) {
+        state.phase = 'ABOVE_70';
+        saveState(symbol, state);
+        log(`${R}📈 RSI já acima de ${RSI_SELL} (${rsi.toFixed(2)}) — aguardando retorno para ≤ ${RSI_SELL}…${X}`);
       }
+      return;
+    }
+
+    if (rsi < RSI_BUY && variation >= VARIATION_MIN) {
 
       const limitPrice = parseFloat((last.close * (1 - BUY_DISCOUNT)).toFixed(8));
-      log(`📍 RSI < ${RSI_BUY} (${rsi.toFixed(2)}) + var ${variation.toFixed(2)}% — colocando limit buy a ${limitPrice} (${BUY_DISCOUNT * 100}% abaixo de ${last.close})…`);
+      log(`${G}📍 RSI < ${RSI_BUY} (${rsi.toFixed(2)}) + var ${variation.toFixed(2)}% — sinal de COMPRA${X}`);
       try {
         const result = await placeLimitBuy(gatePair, last.close, log);
         if (result) {
@@ -255,7 +280,14 @@ async function tick(symbol, gatePair, log) {
             pendingTime:    now(),
           };
           saveState(symbol, state);
-          log(`⏳ LIMIT ORDER colocada | id=${result.orderId} | preço=${result.limitPrice} | qty=${result.qty} | USDT≈${result.budget.toFixed(2)}`);
+          log(`${'─'.repeat(60)}`);
+          log(`${G}🟢 ORDEM DE COMPRA ABERTA${X}`);
+          log(`   Par    : ${gatePair}`);
+          log(`   Preço  : ${result.limitPrice}  (${BUY_DISCOUNT * 100}% abaixo de ${last.close})`);
+          log(`   Qty    : ${result.qty}`);
+          log(`   USDT   : ≈${result.budget.toFixed(2)}`);
+          log(`   ID     : ${result.orderId}`);
+          log(`${'─'.repeat(60)}`);
         }
       } catch (err) {
         log(`❌ Erro ao colocar limit order: ${err.message}`);
@@ -316,15 +348,23 @@ async function tick(symbol, gatePair, log) {
   } else if (state.phase === 'ABOVE_70') {
     if (rsi <= RSI_SELL) {
       const sellPrice = parseFloat((last.close * (1 - SELL_DISCOUNT)).toFixed(8));
-      log(`📉 RSI voltou a ${rsi.toFixed(2)} ≤ ${RSI_SELL} — vendendo a ${sellPrice} (${SELL_DISCOUNT * 100}% abaixo de ${last.close})…`);
+      log(`${R}📉 RSI voltou a ${rsi.toFixed(2)} ≤ ${RSI_SELL} — sinal de VENDA${X}`);
       try {
         await placeLimitSell(gatePair, state.buyQty, last.close);
-        // Receita líquida: preço_venda × qty × (1 − taxa) − custo de compra
         const grossUsdt  = sellPrice * state.buyQty;
         const netUsdt    = grossUsdt * (1 - FEE_RATE);
         const usdtPnl    = (netUsdt - state.buyUsdt).toFixed(4);
         const pnl        = ((netUsdt - state.buyUsdt) / state.buyUsdt * 100).toFixed(2);
-        log(`🔴 VENDA   | qty=${state.buyQty} | limit=${sellPrice} | receita líquida≈${netUsdt.toFixed(2)} USDT | PnL≈${pnl}% (${Number(usdtPnl) > 0 ? '+' : ''}${usdtPnl} USDT) | comprado em ${state.buyTime}`);
+        const pnlSign    = Number(usdtPnl) >= 0 ? '+' : '';
+        log(`${'─'.repeat(60)}`);
+        log(`${R}🔴 ORDEM DE VENDA ABERTA${X}`);
+        log(`   Par      : ${gatePair}`);
+        log(`   Preço    : ${sellPrice}  (${SELL_DISCOUNT * 100}% abaixo de ${last.close})`);
+        log(`   Qty      : ${state.buyQty}`);
+        log(`   Rec. líq.: ≈${netUsdt.toFixed(2)} USDT`);
+        log(`   PnL      : ${pnlSign}${usdtPnl} USDT  (${pnlSign}${pnl}%)${state.detected ? '  [posição detectada externamente]' : ''}`);
+        log(`   Comprado : ${state.buyTime}`);
+        log(`${'─'.repeat(60)}`);
         state = { phase: 'WATCHING' };
         saveState(symbol, state);
       } catch (err) {
