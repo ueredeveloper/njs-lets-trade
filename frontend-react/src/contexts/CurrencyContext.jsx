@@ -32,6 +32,9 @@ export function CurrencyProvider({ children }) {
   // Array de { time: number (ms), price: string, qty: string, isBuyer: boolean }
   const [tradePurchases, setTradePurchases] = useState([]);
 
+  // Todos os trades (compras + vendas) da moeda selecionada
+  const [allTrades, setAllTrades] = useState([]);
+
   // Quote selecionada: 'USDT' | 'BTC' | 'BNB'
   const [selectedQuote, setSelectedQuote] = useState('USDT');
 
@@ -158,6 +161,8 @@ export function CurrencyProvider({ children }) {
         setChartZoom,
         tradePurchases,
         setTradePurchases,
+        allTrades,
+        setAllTrades,
         gateFavorites,
         setGateFavorites,
         binanceFavorites,

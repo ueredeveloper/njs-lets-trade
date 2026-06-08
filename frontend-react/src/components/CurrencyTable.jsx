@@ -63,7 +63,7 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
     currencies, findFilter, selectedQuote, setSelectedChart, setChartZoom,
     gateFavorites, binanceFavorites, tradeFavorites,
     toggleGateFavorite, toggleBinanceFavorite, toggleTradeFavorite,
-    setTradePurchases,
+    setTradePurchases, setAllTrades,
   } = useCurrency();
   const { t, formatPrice } = useI18n();
   const [loadingSymbol, setLoadingSymbol] = useState(null);
@@ -177,6 +177,7 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
     setActiveRow(item.symbol);
     // Limpa trades anteriores imediatamente
     setTradePurchases([]);
+    setAllTrades([]);
     try {
       setChartZoom(null);
       // Se source não foi informado, detecta Gate pelo fato de o símbolo não estar na lista Binance
@@ -196,8 +197,8 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
           : fetchBinanceTrades(item.symbol);
         fetcher
           .then(trades => {
-            const buys = trades.filter(t => t.isBuyer);
-            setTradePurchases(buys);
+            setAllTrades(trades);
+            setTradePurchases(trades.filter(t => t.isBuyer));
           })
           .catch(err => console.warn('[CurrencyTable] trades indisponíveis:', err.message));
       }

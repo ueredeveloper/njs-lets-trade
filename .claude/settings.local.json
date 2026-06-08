@@ -21,7 +21,10 @@
       "Bash(Select-Object Name)",
       "PowerShell(Get-ChildItem \"c:\\\\workspace\\\\njs-lets-trade\\\\frontend\\\\\" | Where-Object { $_.Name -notlike \"node_modules\" -and $_.Name -notlike \"dist\" })",
       "Skill(update-config)",
-      "Skill(update-config:*)"
+      "Skill(update-config:*)",
+      "WebFetch(domain:echarts.apache.org)",
+      "WebFetch(domain:apache.github.io)",
+      "WebFetch(domain:www.mail-archive.com)"
     ]
   }
 }
