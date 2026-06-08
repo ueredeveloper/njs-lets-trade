@@ -186,13 +186,18 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
       const isGateOnly = !currencies.list.some(c => c.symbol === item.symbol);
       const effectiveSource = source ?? (isGateOnly ? 'gate' : null);
 
-      const data = await fetchCandlesticksAndCloud(item.symbol, interval, effectiveSource);
+      // Para moedas Trade Now usa o intervalo configurado no bot; caso contrário usa o filtro ativo
+      const tradeInterval = tradeFavorites.has(item.symbol) ? tradeConfigs.get(item.symbol)?.interval : null;
+      const effectiveInterval = tradeInterval || interval;
+
+      const data = await fetchCandlesticksAndCloud(item.symbol, effectiveInterval, effectiveSource);
       setSelectedChart(data);
       if (effectiveSource === 'gate') gatePreloadCandles(item.symbol);
 
       // Busca trades para trade favorites e gate favorites (para mostrar marcadores no chart)
       if (tradeFavorites.has(item.symbol) || gateFavorites.has(item.symbol)) {
-        const useGateTrades = gateFavorites.has(item.symbol) || effectiveSource === 'gate';
+        const tradeConfig = tradeConfigs.get(item.symbol);
+        const useGateTrades = (tradeConfig?.exchange !== 'binance') && (gateFavorites.has(item.symbol) || effectiveSource === 'gate');
         const fetcher = useGateTrades
           ? fetchGateTrades(item.symbol)
           : fetchBinanceTrades(item.symbol);

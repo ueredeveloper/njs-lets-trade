@@ -602,6 +602,14 @@ export default function CandlestickChart() {
     });
   }, []);
 
+  // Sincroniza o botão de intervalo ativo quando o chart muda externamente
+  // (ex: seleção de moeda Trade Now com intervalo próprio)
+  useEffect(() => {
+    if (selectedChart?.interval && INTERVALS.includes(selectedChart.interval)) {
+      setCurrentInterval(selectedChart.interval);
+    }
+  }, [selectedChart]);
+
   function toggleIndicator(id) {
     setActiveIndicators((prev) =>
       prev.includes(id) ? prev.filter((i) => i !== id) : [...prev, id]

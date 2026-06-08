@@ -33,13 +33,14 @@ const RSI_BUY        = 30;
 const RSI_SELL       = 70;
 const VARIATION_MIN  = 1;            // % variação mínima do candle (default para 30m+)
 
-// Variação mínima padrão por intervalo: candles curtos têm amplitude menor
+// Variação mínima padrão por intervalo: candles curtos têm amplitude menor.
+// Para 1m não exigimos variação — o RSI já é o sinal; amplitude de 1m é pequena demais.
 function defaultVariationMin(iv) {
-  if (/^1m$/i.test(iv))  return 0.1;
+  if (/^1m$/i.test(iv))  return 0;    // sem filtro de variação para 1m
   if (/^\d+m$/i.test(iv)) {
     const n = parseInt(iv);
-    if (n <= 5)  return 0.2;
-    if (n <= 15) return 0.4;
+    if (n <= 5)  return 0.1;
+    if (n <= 15) return 0.3;
   }
   return VARIATION_MIN; // 1% para 30m+
 }
@@ -507,7 +508,7 @@ async function tick(symbol, pair, log, config, adapter) {
 
   let state = loadState(symbol);
   const rsiColor = rsi > rsiSell ? R : rsi < rsiBuy ? G : '';
-  log(`${rsiColor}RSI=${rsi.toFixed(2)}${rsiColor ? X : ''}  close=${last.close}  fase=${state.phase}`);
+  log(`${rsiColor}RSI=${rsi.toFixed(2)}${rsiColor ? X : ''}  close=${last.close}  var=${variation.toFixed(2)}%  fase=${state.phase}`);
 
   // ── WATCHING: aguarda sinal de compra ──────────────────────────────────────
   if (state.phase === 'WATCHING') {
@@ -538,8 +539,7 @@ async function tick(symbol, pair, log, config, adapter) {
 
     if (rsi < rsiBuy && variation >= variationMin) {
 
-      const limitPrice = parseFloat((last.close * (1 - BUY_DISCOUNT)).toFixed(8));
-      log(`${G}📍 RSI < ${rsiBuy} (${rsi.toFixed(2)}) + var ${variation.toFixed(2)}% ≥ ${variationMin}% — sinal de COMPRA${X}`);
+      log(`${G}📍 RSI < ${rsiBuy} (${rsi.toFixed(2)}) + var ${variation.toFixed(2)}%${variationMin > 0 ? ` ≥ ${variationMin}%` : ''} — sinal de COMPRA${X}`);
       try {
         const result = await adapter.placeLimitBuy(pair, last.close, log);
         if (result) {
@@ -564,6 +564,8 @@ async function tick(symbol, pair, log, config, adapter) {
       } catch (err) {
         log(`❌ Erro ao colocar limit order: ${err.message}`);
       }
+    } else if (rsi < rsiBuy && variationMin > 0) {
+      log(`${G}⚠️  RSI < ${rsiBuy} (${rsi.toFixed(2)}) mas var=${variation.toFixed(2)}% < ${variationMin}% — aguardando candle com mais amplitude${X}`);
     }
 
   // ── PENDING_BUY: verifica se a ordem foi preenchida ────────────────────────
