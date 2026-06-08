@@ -6,7 +6,7 @@ import { fetchCandlesticksAndCloud, fetchUserPrefs, saveUserPrefs, fetchGateTrad
 import convertOpenTime from '../utils/convertOpenTime';
 
 const LIMIT = 76;
-const INTERVALS = ['1m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w'];
+const INTERVALS = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w'];
 const DEFAULT_INTERVAL = '30m';
 
 const C_UP   = '#26a69a';
@@ -97,7 +97,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
     const d = new Date(ms);
     const date = d.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit' });
     const time = d.toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit' });
-    return `${date}\n${time}`;
+    return `${date} ${time}`;
   };
 
   const tradeMarkData = (() => {
@@ -115,10 +115,9 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
         lineStyle: { color: '#3b82f6', width: 1.5, type: 'solid' },
         label: {
           show: true,
-          formatter: `compra\n${fmtTradeDate(tradeMs)}`,
+          formatter: `compra ${fmtTradeDate(tradeMs)}`,
           color: '#3b82f6',
-          fontSize: 11,
-          lineHeight: 16,
+          fontSize: 9,
           position: 'insideStartTop',
           padding: [3, 5],
         },
@@ -319,7 +318,7 @@ function buildMatrixOption({ symbol, interval, candlesticks, rsi }, activeIndica
     const d    = new Date(ms);
     const date = d.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit' });
     const time = d.toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit' });
-    return `${date}\n${time}`;
+    return `${date} ${time}`;
   };
   const tradeMarkData = (() => {
     if (!tradeTimes.length) return [];
@@ -328,7 +327,7 @@ function buildMatrixOption({ symbol, interval, candlesticks, rsi }, activeIndica
       const idx      = candlesticks.reduce((best, c, i) => Math.abs(Number(c.openTime) - tradeMs) < Math.abs(Number(candlesticks[best].openTime) - tradeMs) ? i : best, 0);
       const localIdx = idx - offset;
       if (localIdx < 0) return [];
-      return [{ xAxis: localIdx, lineStyle: { color: '#3b82f6', width: 1.5, type: 'solid' }, label: { show: true, formatter: `compra\n${fmtTradeDate(tradeMs)}`, color: '#3b82f6', fontSize: 11, lineHeight: 16, position: 'insideStartTop', padding: [3, 5] } }];
+      return [{ xAxis: localIdx, lineStyle: { color: '#3b82f6', width: 1.5, type: 'solid' }, label: { show: true, formatter: `compra ${fmtTradeDate(tradeMs)}`, color: '#3b82f6', fontSize: 9, position: 'insideStartTop', padding: [3, 5] } }];
     });
   })();
 
@@ -439,6 +438,7 @@ function TradeHistoryPanel({ symbol, gateFavorites }) {
 
   useEffect(() => {
     if (!symbol) return;
+    doRefresh();
     const id = setInterval(doRefresh, 60_000);
     return () => clearInterval(id);
   // eslint-disable-next-line react-hooks/exhaustive-deps

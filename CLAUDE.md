@@ -73,3 +73,68 @@ Entry point: `frontend/index.html` → `frontend/script.js`.
 ### Tests
 
 Jest tests are in `backend/tests/` and only cover backend logic. There are no frontend tests. Run with `npx jest`.
+
+---
+
+## Trade Bot (`backend/bot/rsiTradeBot.js`)
+
+Standalone process — runs independently of the Express server. Start with:
+
+```bash
+node backend/bot/rsiTradeBot.js
+```
+
+### Configuration per symbol (`backend/data/favorites-trade.json`)
+
+Each trade favorite is stored as an object with per-symbol config:
+
+```json
+[
+  { "symbol": "ALGOUSDT", "interval": "1m",  "rsiBuy": 30, "rsiSell": 70 },
+  { "symbol": "LINKUSDT", "interval": "30m", "rsiBuy": 28, "rsiSell": 72 }
+]
+```
+
+The frontend `TradeConfigModal` writes this format when the user clicks the "TN" button. The old string format (`["BTCUSDT"]`) is still accepted — the bot and backend migrate it automatically using defaults (`30m`, 30, 70).
+
+> **Gate.io supported intervals:** `1m`, `5m`, `15m`, `30m`, `1h`, `4h`, `8h`, `1d`. The `3m` interval is NOT supported by Gate.io and will cause candle fetch errors in the bot (only safe to use in the Binance chart).
+
+### Adaptive polling
+
+- Intervals **< 15m** (`1m`, `3m`, `5m`): polls every candle duration (1m → every 60s)
+- Intervals **≥ 15m** (`15m`, `30m`, `1h`…): polls every **5 minutes** regardless
+
+The 5-minute cap exists so the bot catches sell signals without waiting for a full 30-minute (or longer) candle to close.
+
+### Gate.io clock synchronization — error 403
+
+**Symptom:** `403: gap between request Timestamp and server time exceeds 60`
+
+**Cause:** The Gate.io API rejects any authenticated request where the `Timestamp` header differs from the server clock by more than 60 seconds. Windows clocks frequently drift (especially after sleep/hibernate) because `w32tm` does not resync automatically.
+
+**Fix implemented in two places:**
+
+| File | When used |
+|---|---|
+| `backend/bot/rsiTradeBot.js` | Bot orders, balance checks, order status |
+| `backend/gate/getGateClient.js` | Express endpoints: fetch trades, balance, orders |
+
+Both files call `GET /api/v4/spot/time` on startup (note: the old `/api/v4/time` endpoint now returns 404; the new one returns `server_time` in **milliseconds**, so divide by 1000 before comparing with `Date.now()/1000`), compute `clockOffsetSec = serverTime - localTime`, and apply it to every HMAC signature:
+
+```js
+timestamp = Math.floor(Date.now() / 1000) + clockOffsetSec
+```
+
+The offset is refreshed every hour to handle continued drift. If you need to force-sync the OS clock (requires admin PowerShell):
+
+```powershell
+w32tm /resync /force
+```
+
+### Terminal output
+
+Each symbol gets a unique ANSI color. Timestamp format:
+- `HH:MM` for hour-based intervals (30m, 1h, 4h…)
+- `HH:MM:SS` for minute-based intervals (1m, 5m…)
+
+See `backend/bot/README.md` for full strategy documentation.

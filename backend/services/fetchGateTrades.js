@@ -28,7 +28,9 @@ router.get('/gate-trades', async (req, res) => {
     }));
     res.json(normalized);
   } catch (err) {
-    console.error('[gate-trades]', err.message);
+    console.warn('[gate-trades]', symbol, err.message);
+    // Qualquer erro da Gate.io (4xx, clock drift, par inválido) → retorna vazio em vez de 500
+    if (err.message.startsWith('Gate.io')) return res.json([]);
     res.status(500).json({ error: err.message });
   }
 });

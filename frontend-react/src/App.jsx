@@ -14,7 +14,7 @@ import SettingsSidebar from './components/SettingsSidebar';
 import StatisticsPanel from './components/StatisticsPanel';
 
 function AppContent() {
-  const { setCurrencies, setFilters, addFilter, setSelectedChart, setGateFavorites, setBinanceFavorites, setTradeFavorites } = useCurrency();
+  const { setCurrencies, setFilters, addFilter, setSelectedChart, setGateFavorites, setBinanceFavorites, setTradeFavorites, setTradeConfigs } = useCurrency();
   const { t } = useI18n();
   const [activeFilter, setActiveFilter] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -58,7 +58,9 @@ function AppContent() {
         ]);
         setGateFavorites(new Set(gateList));
         setBinanceFavorites(new Set(binanceList));
-        setTradeFavorites(new Set(tradeList));
+        // tradeList é [{symbol, exchange, interval, rsiBuy, rsiSell}]
+        setTradeFavorites(new Set(tradeList.map(t => t.symbol)));
+        setTradeConfigs(new Map(tradeList.map(t => [t.symbol, { exchange: t.exchange ?? 'gate', interval: t.interval, rsiBuy: t.rsiBuy, rsiSell: t.rsiSell }])));
       } catch (err) {
         console.error('Erro ao inicializar:', err);
       } finally {

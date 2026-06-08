@@ -31,36 +31,83 @@ const ti               = require('technicalindicators');
 const RSI_PERIOD     = 14;
 const RSI_BUY        = 30;
 const RSI_SELL       = 70;
-const VARIATION_MIN  = 1;            // % variação mínima do candle para confirmar sinal
-const BUY_DISCOUNT   = 0.02;         // limit buy  2%   abaixo do close
+const VARIATION_MIN  = 1;            // % variação mínima do candle (default para 30m+)
+
+// Variação mínima padrão por intervalo: candles curtos têm amplitude menor
+function defaultVariationMin(iv) {
+  if (/^1m$/i.test(iv))  return 0.1;
+  if (/^\d+m$/i.test(iv)) {
+    const n = parseInt(iv);
+    if (n <= 5)  return 0.2;
+    if (n <= 15) return 0.4;
+  }
+  return VARIATION_MIN; // 1% para 30m+
+}
+const BUY_DISCOUNT   = 0.01;         // limit buy  1%   abaixo do close
 const SELL_DISCOUNT  = 0.003;        // limit sell 0.3% abaixo do close (garante fill)
 const FEE_RATE       = 0.002;        // 0.2% taxa Gate.io (maker e taker)
-const POLL_MS = 5 * 60 * 1000; // verifica a cada 5 min com os dados do candle atual
 const CANDLE_LIMIT   = 200;
+
+const POLL_MIN_MS = 5 * 60_000; // teto de polling: 5 minutos
+
+// Intervalo de polling: igual ao candle se < 15 min, senão 5 min fixo
+function pollMsFor(iv) {
+  const n = parseInt(iv, 10);
+  let candleMs;
+  if (iv.endsWith('m')) candleMs = n * 60_000;
+  else if (iv.endsWith('h')) candleMs = n * 3_600_000;
+  else if (iv.endsWith('d')) candleMs = n * 86_400_000;
+  else if (iv.endsWith('w')) candleMs = n * 7 * 86_400_000;
+  else candleMs = POLL_MIN_MS;
+  return candleMs < POLL_MIN_MS ? candleMs : POLL_MIN_MS;
+}
 
 const API_KEY    = process.env.GATEIO_API_KEY;
 const SECRET_KEY = process.env.GATEIO_SECRET_KEY;
 const BASE_URL   = 'https://api.gateio.ws/api/v4';
 
+const BINANCE_API_KEY    = process.env.BINANCE_API_KEY;
+const BINANCE_SECRET_KEY = process.env.BINANCE_SECRET_KEY;
+const BINANCE_BASE_URL   = 'https://api.binance.com';
+
 const FAVORITES_FILE = path.join(__dirname, '../data/favorites-trade.json');
 const BOT_DATA_DIR   = path.join(__dirname, '../data/bot');
+
+// ── Sincronização de relógio com Gate.io ──────────────────────────────────────
+// Windows pode ter o relógio desincronizado; offset corrije o timestamp nas assinaturas.
+let clockOffsetSec = 0;
+
+async function syncClock() {
+  try {
+    // /api/v4/spot/time retorna server_time em milissegundos
+    const res  = await fetch(`${BASE_URL}/spot/time`);
+    const data = await res.json();
+    if (!data?.server_time) throw new Error(`campo server_time ausente: ${JSON.stringify(data)}`);
+    const gateTimeSec = Math.floor(data.server_time / 1000);
+    const offset = gateTimeSec - Math.floor(Date.now() / 1000);
+    clockOffsetSec = offset;
+    if (Math.abs(offset) > 2)
+      console.log(`⏱️  Clock offset: ${offset > 0 ? '+' : ''}${offset}s — timestamp Gate.io ajustado`);
+  } catch (err) {
+    console.warn(`⚠️  syncClock falhou (${err.message}) — offset mantido em ${clockOffsetSec}s`);
+  }
+}
 
 // ── Gate.io API autenticada ───────────────────────────────────────────────────
 
 function gateSign(method, endpointPath, queryString, bodyStr) {
-  const timestamp  = Math.floor(Date.now() / 1000).toString();
+  const timestamp  = (Math.floor(Date.now() / 1000) + clockOffsetSec).toString();
   const hashedBody = crypto.createHash('sha512').update(bodyStr || '').digest('hex');
   const msg        = [method.toUpperCase(), `/api/v4${endpointPath}`, queryString, hashedBody, timestamp].join('\n');
   const sign       = crypto.createHmac('sha512', SECRET_KEY).update(msg).digest('hex');
   return { timestamp, sign };
 }
 
-async function gateReq(method, endpointPath, params = {}) {
+async function gateReq(method, endpointPath, params = {}, _retry = true) {
   let url  = `${BASE_URL}${endpointPath}`;
   let qs   = '';
   let body = '';
 
-  // GET e DELETE passam params como query string; POST/PUT como body JSON
   if (method === 'GET' || method === 'DELETE') {
     qs = new URLSearchParams(params).toString();
     if (qs) url += `?${qs}`;
@@ -82,6 +129,20 @@ async function gateReq(method, endpointPath, params = {}) {
 
   if (!res.ok) {
     const msg = data?.message || data?.label || text;
+
+    // Auto-corrige offset de relógio a partir do erro 403 da Gate.io e repete a requisição
+    if (res.status === 403 && _retry) {
+      const match = msg.match(/current_time:(\d+).*header\.timestamp:(\d+)/);
+      if (match) {
+        const serverTime = parseInt(match[1]);
+        const sentTime   = parseInt(match[2]);
+        // sentTime = localTime + prevOffset  →  localTime = sentTime - prevOffset
+        clockOffsetSec = serverTime - (sentTime - clockOffsetSec);
+        console.log(`⏱️  Clock auto-corrigido: offset=${clockOffsetSec > 0 ? '+' : ''}${clockOffsetSec}s — repetindo ${method} ${endpointPath}…`);
+        return gateReq(method, endpointPath, params, false);
+      }
+    }
+
     throw new Error(`Gate ${method} ${endpointPath} ${res.status}: ${msg}`);
   }
   return data;
@@ -89,10 +150,25 @@ async function gateReq(method, endpointPath, params = {}) {
 
 // ── Candles públicos ──────────────────────────────────────────────────────────
 
-async function fetchCandles(gatePair, limit = CANDLE_LIMIT) {
-  const url = `${BASE_URL}/spot/candlesticks?currency_pair=${gatePair}&interval=30m&limit=${limit}`;
+async function fetchBinanceCandles(symbol, limit = CANDLE_LIMIT, interval = '1m') {
+  const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
   const res = await fetch(url);
-  if (!res.ok) throw new Error(`Candles ${gatePair}: HTTP ${res.status}`);
+  if (!res.ok) throw new Error(`Candles Binance ${symbol}: HTTP ${res.status}`);
+  const raw = await res.json();
+  // Binance: [openTime, open, high, low, close, volume, closeTime, ...]
+  return raw.map(c => ({
+    openTime: Number(c[0]),
+    open:  parseFloat(c[1]),
+    high:  parseFloat(c[2]),
+    low:   parseFloat(c[3]),
+    close: parseFloat(c[4]),
+  }));
+}
+
+async function fetchGateCandles(pair, limit = CANDLE_LIMIT, interval = '30m') {
+  const url = `${BASE_URL}/spot/candlesticks?currency_pair=${pair}&interval=${interval}&limit=${limit}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Candles ${pair}: HTTP ${res.status}`);
   const raw = await res.json();
   // Gate.io: [timestamp_s, vol_base, close, high, low, open, vol_quote]
   return raw.map(c => ({
@@ -106,6 +182,7 @@ async function fetchCandles(gatePair, limit = CANDLE_LIMIT) {
 
 // ── Logging ───────────────────────────────────────────────────────────────────
 
+// Usado nos arquivos de estado (timestamp completo)
 function now() {
   return new Date().toLocaleString('pt-BR', {
     timeZone: 'America/Sao_Paulo',
@@ -114,16 +191,39 @@ function now() {
   }).replace(',', '');
 }
 
+// Timestamp curto para o terminal: HH:MM (ou HH:MM:SS se intervalo em minutos)
+function nowFmt(withSeconds = false) {
+  const opts = { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit' };
+  if (withSeconds) opts.second = '2-digit';
+  return new Date().toLocaleTimeString('pt-BR', opts);
+}
+
 // Cores ANSI para o terminal (não são escritas no arquivo de log)
 const R = '\x1b[31m'; // vermelho — RSI > 70
 const G = '\x1b[32m'; // verde   — RSI < 30
 const X = '\x1b[0m';  // reset
 
-function makeLogger(symbol) {
-  const logFile = path.join(BOT_DATA_DIR, `log-${symbol}.txt`);
+// Paleta de cores por símbolo (rotativa)
+const SYMBOL_COLORS = [
+  '\x1b[94m', // azul brilhante
+  '\x1b[93m', // amarelo brilhante
+  '\x1b[95m', // magenta brilhante
+  '\x1b[96m', // ciano brilhante
+  '\x1b[92m', // verde brilhante
+  '\x1b[91m', // vermelho brilhante
+  '\x1b[33m', // amarelo
+  '\x1b[35m', // magenta
+  '\x1b[36m', // ciano
+  '\x1b[34m', // azul
+];
+
+function makeLogger(symbol, symbolColor = '', interval = '30m') {
+  const logFile    = path.join(BOT_DATA_DIR, `log-${symbol}.txt`);
+  const isMinutes  = /^\d+m$/.test(interval); // '1m', '3m', '5m', etc.
+  const symTag     = `${symbolColor}[${symbol}]${X}`;
   return function log(...args) {
-    const plain   = `[${now()}] [${symbol}] ${args.join(' ')}`;
-    // Remove códigos ANSI antes de escrever no arquivo
+    const ts      = nowFmt(isMinutes);
+    const plain   = `[${ts}] ${symTag} ${args.join(' ')}`;
     const noAnsi  = plain.replace(/\x1b\[[0-9;]*m/g, '');
     console.log(plain);
     try { fs.appendFileSync(logFile, noAnsi + '\n'); } catch {}
@@ -155,14 +255,13 @@ function saveState(symbol, state) {
 
 // ── Ordens ────────────────────────────────────────────────────────────────────
 
-async function getUsdtBalance() {
+async function getGateUsdtBalance() {
   const accounts = await gateReq('GET', '/spot/accounts');
   const usdt = accounts.find(a => a.currency === 'USDT');
   return usdt ? parseFloat(usdt.available) : 0;
 }
 
-/** Retorna o saldo disponível de uma moeda base (ex: 'LINK', 'FARTCOIN'). */
-async function getTokenBalance(baseCurrency) {
+async function getGateTokenBalance(baseCurrency) {
   const accounts = await gateReq('GET', '/spot/accounts');
   const acc = accounts.find(a => a.currency === baseCurrency);
   return acc ? parseFloat(acc.available) : 0;
@@ -171,9 +270,8 @@ async function getTokenBalance(baseCurrency) {
 const MAX_USDT_PER_COIN  = 40;  // teto por moeda
 const MIN_HOLDING_USDT   = 5;   // saldo mínimo em USDT para considerar "posição aberta"
 
-/** Coloca limit buy 2% abaixo do close. Usa até MAX_USDT_PER_COIN ou saldo disponível. */
-async function placeLimitBuy(gatePair, closePrice, log) {
-  const balance    = await getUsdtBalance();
+async function placeGateLimitBuy(pair, closePrice, log) {
+  const balance    = await getGateUsdtBalance();
   const budget     = Math.min(balance * 0.99, MAX_USDT_PER_COIN);
   if (budget < 0.5) { log('⚠️  Saldo USDT insuficiente (menos de $0.50).'); return null; }
   log(`💰 Saldo USDT: ${balance.toFixed(2)} → usando ${budget.toFixed(2)} USDT (teto: $${MAX_USDT_PER_COIN})`);
@@ -182,7 +280,7 @@ async function placeLimitBuy(gatePair, closePrice, log) {
   const qty        = parseFloat((budget / limitPrice).toFixed(8));
 
   const order = await gateReq('POST', '/spot/orders', {
-    currency_pair: gatePair,
+    currency_pair: pair,
     side:          'buy',
     type:          'limit',
     price:         String(limitPrice),
@@ -193,26 +291,23 @@ async function placeLimitBuy(gatePair, closePrice, log) {
   return { orderId: order.id, limitPrice, qty, budget };
 }
 
-/** Verifica status de uma ordem. Retorna o objeto da ordem Gate.io. */
-async function checkOrder(orderId, gatePair) {
-  return gateReq('GET', `/spot/orders/${orderId}`, { currency_pair: gatePair });
+async function checkGateOrder(orderId, pair) {
+  return gateReq('GET', `/spot/orders/${orderId}`, { currency_pair: pair });
 }
 
-/** Cancela ordem pendente. */
-async function cancelOrder(orderId, gatePair, log) {
+async function cancelGateOrder(orderId, pair, log) {
   try {
-    await gateReq('DELETE', `/spot/orders/${orderId}`, { currency_pair: gatePair });
+    await gateReq('DELETE', `/spot/orders/${orderId}`, { currency_pair: pair });
     log(`🚫 Limit order cancelada (id=${orderId})`);
   } catch (err) {
     log(`⚠️  Não foi possível cancelar ${orderId}: ${err.message}`);
   }
 }
 
-/** Coloca limit sell 0.3% abaixo do preço atual para garantir o fill. */
-async function placeLimitSell(gatePair, qty, closePrice) {
+async function placeGateLimitSell(pair, qty, closePrice) {
   const sellPrice = parseFloat((closePrice * (1 - SELL_DISCOUNT)).toFixed(8));
   return gateReq('POST', '/spot/orders', {
-    currency_pair: gatePair,
+    currency_pair: pair,
     side:          'sell',
     type:          'limit',
     price:         String(sellPrice),
@@ -221,10 +316,187 @@ async function placeLimitSell(gatePair, qty, closePrice) {
   });
 }
 
+// ── Binance API autenticada ───────────────────────────────────────────────────
+
+let binanceClockOffsetMs = 0;
+
+async function syncBinanceClock() {
+  try {
+    const res  = await fetch(`${BINANCE_BASE_URL}/api/v3/time`);
+    const data = await res.json();
+    binanceClockOffsetMs = data.serverTime - Date.now();
+    if (Math.abs(binanceClockOffsetMs) > 2000)
+      console.log(`⏱️  Binance clock offset: ${binanceClockOffsetMs > 0 ? '+' : ''}${Math.round(binanceClockOffsetMs / 1000)}s — timestamp ajustado`);
+  } catch (err) {
+    console.warn(`⚠️  syncBinanceClock falhou (${err.message}) — offset mantido em ${binanceClockOffsetMs}ms`);
+  }
+}
+
+function binanceSign(params) {
+  const qs  = new URLSearchParams(params).toString();
+  const sig = crypto.createHmac('sha256', BINANCE_SECRET_KEY).update(qs).digest('hex');
+  return `${qs}&signature=${sig}`;
+}
+
+async function binanceReq(method, endpointPath, params = {}) {
+  const signed = binanceSign({ ...params, timestamp: Date.now() + binanceClockOffsetMs, recvWindow: 10000 });
+  let url  = `${BINANCE_BASE_URL}${endpointPath}`;
+  let body;
+  if (method === 'GET' || method === 'DELETE') {
+    url += `?${signed}`;
+  } else {
+    body = signed;
+  }
+  const res = await fetch(url, {
+    method,
+    headers: { 'X-MBX-APIKEY': BINANCE_API_KEY, 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: body,
+  });
+  const text = await res.text();
+  let data;
+  try { data = JSON.parse(text); } catch { data = text; }
+  if (!res.ok) throw new Error(`Binance ${method} ${endpointPath} ${res.status}: ${data?.msg || text}`);
+  return data;
+}
+
+async function getBinanceUsdtBalance() {
+  const account = await binanceReq('GET', '/api/v3/account');
+  const usdt = account.balances.find(b => b.asset === 'USDT');
+  return usdt ? parseFloat(usdt.free) : 0;
+}
+
+async function getBinanceTokenBalance(baseCurrency) {
+  const account = await binanceReq('GET', '/api/v3/account');
+  const asset = account.balances.find(b => b.asset === baseCurrency);
+  return asset ? parseFloat(asset.free) : 0;
+}
+
+async function placeBinanceLimitBuy(pair, closePrice, log) {
+  const balance = await getBinanceUsdtBalance();
+  const budget  = Math.min(balance * 0.99, MAX_USDT_PER_COIN);
+  if (budget < 0.5) { log('⚠️  Saldo USDT insuficiente (menos de $0.50).'); return null; }
+  log(`💰 Saldo USDT: ${balance.toFixed(2)} → usando ${budget.toFixed(2)} USDT (teto: $${MAX_USDT_PER_COIN})`);
+
+  // Busca filtros de precisão do par para não rejeitar a ordem
+  const exInfo  = await fetch(`${BINANCE_BASE_URL}/api/v3/exchangeInfo?symbol=${pair}`).then(r => r.json());
+  const filters = exInfo.symbols?.[0]?.filters ?? [];
+  const lotFilter   = filters.find(f => f.filterType === 'LOT_SIZE');
+  const priceFilter = filters.find(f => f.filterType === 'PRICE_FILTER');
+
+  const stepSize  = lotFilter   ? parseFloat(lotFilter.stepSize)   : 1e-8;
+  const tickSize  = priceFilter ? parseFloat(priceFilter.tickSize) : 1e-8;
+  const decimalsP = tickSize  < 1 ? String(tickSize).split('.')[1]?.length  ?? 8 : 0;
+  const decimalsQ = stepSize  < 1 ? String(stepSize).split('.')[1]?.length  ?? 8 : 0;
+
+  const limitPrice = parseFloat((Math.floor(closePrice * (1 - BUY_DISCOUNT) / tickSize) * tickSize).toFixed(decimalsP));
+  const qty        = parseFloat((Math.floor(budget / limitPrice / stepSize) * stepSize).toFixed(decimalsQ));
+
+  const order = await binanceReq('POST', '/api/v3/order', {
+    symbol:      pair,
+    side:        'BUY',
+    type:        'LIMIT',
+    timeInForce: 'GTC',
+    price:       String(limitPrice),
+    quantity:    String(qty),
+  });
+  return { orderId: order.orderId, limitPrice, qty, budget };
+}
+
+function normalizeBinanceOrder(order) {
+  const statusMap = { NEW: 'open', PARTIALLY_FILLED: 'open', FILLED: 'closed', CANCELED: 'cancelled', EXPIRED: 'cancelled', REJECTED: 'cancelled' };
+  const execQty  = parseFloat(order.executedQty || 0);
+  const quoteQty = parseFloat(order.cummulativeQuoteQty || 0);
+  return {
+    ...order,
+    status:         statusMap[order.status] ?? 'open',
+    amount:         order.origQty,
+    left:           String(parseFloat(order.origQty) - execQty),
+    avg_deal_price: execQty > 0 ? String(quoteQty / execQty) : order.price,
+  };
+}
+
+async function checkBinanceOrder(orderId, pair) {
+  const order = await binanceReq('GET', '/api/v3/order', { symbol: pair, orderId });
+  return normalizeBinanceOrder(order);
+}
+
+async function cancelBinanceOrder(orderId, pair, log) {
+  try {
+    await binanceReq('DELETE', '/api/v3/order', { symbol: pair, orderId });
+    log(`🚫 Limit order cancelada (id=${orderId})`);
+  } catch (err) {
+    log(`⚠️  Não foi possível cancelar ${orderId}: ${err.message}`);
+  }
+}
+
+async function placeBinanceLimitSell(pair, qty, closePrice) {
+  const exInfo  = await fetch(`${BINANCE_BASE_URL}/api/v3/exchangeInfo?symbol=${pair}`).then(r => r.json());
+  const filters = exInfo.symbols?.[0]?.filters ?? [];
+  const lotFilter   = filters.find(f => f.filterType === 'LOT_SIZE');
+  const priceFilter = filters.find(f => f.filterType === 'PRICE_FILTER');
+  const stepSize  = lotFilter   ? parseFloat(lotFilter.stepSize)   : 1e-8;
+  const tickSize  = priceFilter ? parseFloat(priceFilter.tickSize) : 1e-8;
+  const decimalsP = tickSize < 1 ? String(tickSize).split('.')[1]?.length  ?? 8 : 0;
+  const decimalsQ = stepSize < 1 ? String(stepSize).split('.')[1]?.length  ?? 8 : 0;
+
+  const sellPrice = parseFloat((Math.floor(closePrice * (1 - SELL_DISCOUNT) / tickSize) * tickSize).toFixed(decimalsP));
+  const sellQty   = parseFloat((Math.floor(parseFloat(qty) / stepSize) * stepSize).toFixed(decimalsQ));
+
+  return binanceReq('POST', '/api/v3/order', {
+    symbol:      pair,
+    side:        'SELL',
+    type:        'LIMIT',
+    timeInForce: 'GTC',
+    price:       String(sellPrice),
+    quantity:    String(sellQty),
+  });
+}
+
+// ── Exchange adapters ─────────────────────────────────────────────────────────
+// Interface comum para Gate.io e Binance. Cada adapter expõe os mesmos métodos
+// para que tick() seja agnóstico de exchange.
+
+function createGateAdapter() {
+  return {
+    name:           'Gate.io',
+    toPair:         (symbol)              => toGateSymbol(symbol),
+    baseCurrency:   (pair)                => pair.split('_')[0],
+    fetchCandles:   (pair, lim, iv)       => fetchGateCandles(pair, lim, iv),
+    getUsdtBalance: ()                    => getGateUsdtBalance(),
+    getTokenBalance:(base)                => getGateTokenBalance(base),
+    placeLimitBuy:  (pair, price, log)    => placeGateLimitBuy(pair, price, log),
+    checkOrder:     (id, pair)            => checkGateOrder(id, pair),
+    cancelOrder:    (id, pair, log)       => cancelGateOrder(id, pair, log),
+    placeLimitSell: (pair, qty, price)    => placeGateLimitSell(pair, qty, price),
+  };
+}
+
+function createBinanceAdapter() {
+  return {
+    name:           'Binance',
+    toPair:         (symbol)              => symbol,
+    baseCurrency:   (pair)                => pair.endsWith('USDT') ? pair.slice(0, -4) : pair.slice(0, -3),
+    fetchCandles:   (pair, lim, iv)       => fetchBinanceCandles(pair, lim, iv),
+    getUsdtBalance: ()                    => getBinanceUsdtBalance(),
+    getTokenBalance:(base)                => getBinanceTokenBalance(base),
+    placeLimitBuy:  (pair, price, log)    => placeBinanceLimitBuy(pair, price, log),
+    checkOrder:     (id, pair)            => checkBinanceOrder(id, pair),
+    cancelOrder:    (id, pair, log)       => cancelBinanceOrder(id, pair, log),
+    placeLimitSell: (pair, qty, price)    => placeBinanceLimitSell(pair, qty, price),
+  };
+}
+
+function createAdapter(exchange) {
+  if (exchange === 'binance') return createBinanceAdapter();
+  return createGateAdapter();
+}
+
 // ── Tick principal ────────────────────────────────────────────────────────────
 
-async function tick(symbol, gatePair, log) {
-  const candles = await fetchCandles(gatePair);
+async function tick(symbol, pair, log, config, adapter) {
+  const { rsiBuy = RSI_BUY, rsiSell = RSI_SELL, interval = '30m' } = config;
+  const variationMin = config.variationMin !== undefined ? config.variationMin : defaultVariationMin(interval);
+  const candles = await adapter.fetchCandles(pair, CANDLE_LIMIT, interval);
   const closes  = candles.map(c => c.close);
   const rsiVals = ti.RSI.calculate({ values: closes, period: RSI_PERIOD });
   if (rsiVals.length < 2) { log('RSI insuficiente — aguardando candles.'); return; }
@@ -234,15 +506,15 @@ async function tick(symbol, gatePair, log) {
   const variation = ((last.high - last.low) / last.low) * 100;
 
   let state = loadState(symbol);
-  const rsiColor = rsi > RSI_SELL ? R : rsi < RSI_BUY ? G : '';
-  log(`${rsiColor}RSI=${rsi.toFixed(2)}${rsiColor ? X : ''}  close=${last.close}  var=${variation.toFixed(2)}%  fase=${state.phase}`);
+  const rsiColor = rsi > rsiSell ? R : rsi < rsiBuy ? G : '';
+  log(`${rsiColor}RSI=${rsi.toFixed(2)}${rsiColor ? X : ''}  close=${last.close}  fase=${state.phase}`);
 
   // ── WATCHING: aguarda sinal de compra ──────────────────────────────────────
   if (state.phase === 'WATCHING') {
     // Verifica saldo real do token em QUALQUER situação (não só quando RSI < 30)
     // Se há posição aberta (compra manual ou de sessão anterior), inicia monitoramento para venda
-    const baseCurrency = gatePair.split('_')[0];
-    const tokenBalance = await getTokenBalance(baseCurrency);
+    const baseCurrency = adapter.baseCurrency(pair);
+    const tokenBalance = await adapter.getTokenBalance(baseCurrency);
     const holdingUsdt  = tokenBalance * last.close;
     if (holdingUsdt >= MIN_HOLDING_USDT) {
       state = {
@@ -256,20 +528,20 @@ async function tick(symbol, gatePair, log) {
       saveState(symbol, state);
       log(`📦 Posição detectada: ${tokenBalance.toFixed(4)} ${baseCurrency} ≈ $${holdingUsdt.toFixed(2)} USDT — monitorando para venda.`);
       // Se RSI já está acima de 70, avança direto para ABOVE_70
-      if (rsi > RSI_SELL) {
+      if (rsi > rsiSell) {
         state.phase = 'ABOVE_70';
         saveState(symbol, state);
-        log(`${R}📈 RSI já acima de ${RSI_SELL} (${rsi.toFixed(2)}) — aguardando retorno para ≤ ${RSI_SELL}…${X}`);
+        log(`${R}📈 RSI já acima de ${rsiSell} (${rsi.toFixed(2)}) — aguardando retorno para ≤ ${rsiSell}…${X}`);
       }
       return;
     }
 
-    if (rsi < RSI_BUY && variation >= VARIATION_MIN) {
+    if (rsi < rsiBuy && variation >= variationMin) {
 
       const limitPrice = parseFloat((last.close * (1 - BUY_DISCOUNT)).toFixed(8));
-      log(`${G}📍 RSI < ${RSI_BUY} (${rsi.toFixed(2)}) + var ${variation.toFixed(2)}% — sinal de COMPRA${X}`);
+      log(`${G}📍 RSI < ${rsiBuy} (${rsi.toFixed(2)}) + var ${variation.toFixed(2)}% ≥ ${variationMin}% — sinal de COMPRA${X}`);
       try {
-        const result = await placeLimitBuy(gatePair, last.close, log);
+        const result = await adapter.placeLimitBuy(pair, last.close, log);
         if (result) {
           state = {
             phase:          'PENDING_BUY',
@@ -282,7 +554,7 @@ async function tick(symbol, gatePair, log) {
           saveState(symbol, state);
           log(`${'─'.repeat(60)}`);
           log(`${G}🟢 ORDEM DE COMPRA ABERTA${X}`);
-          log(`   Par    : ${gatePair}`);
+          log(`   Par    : ${pair}`);
           log(`   Preço  : ${result.limitPrice}  (${BUY_DISCOUNT * 100}% abaixo de ${last.close})`);
           log(`   Qty    : ${result.qty}`);
           log(`   USDT   : ≈${result.budget.toFixed(2)}`);
@@ -297,7 +569,7 @@ async function tick(symbol, gatePair, log) {
   // ── PENDING_BUY: verifica se a ordem foi preenchida ────────────────────────
   } else if (state.phase === 'PENDING_BUY') {
     try {
-      const order = await checkOrder(state.pendingOrderId, gatePair);
+      const order = await adapter.checkOrder(state.pendingOrderId, pair);
       const status = order.status; // 'open' | 'closed' | 'cancelled'
 
       if (status === 'closed') {
@@ -316,20 +588,30 @@ async function tick(symbol, gatePair, log) {
         log(`🟢 COMPRA PREENCHIDA | qty=${filledQty} − taxa 0.2% = ${netQty} | preço=${filledPrice} | USDT≈${state.buyUsdt.toFixed(2)} | ${state.buyTime}`);
 
       } else if (status === 'cancelled') {
-        log(`⚠️  Limit order foi cancelada externamente (id=${state.pendingOrderId}) — voltando a WATCHING.`);
+        log(`${'─'.repeat(60)}`);
+        log(`🚫 COMPRA CANCELADA (externamente)`);
+        log(`   Par    : ${pair}`);
+        log(`   ID     : ${state.pendingOrderId}`);
+        log(`   Preço  : ${state.pendingPrice}`);
+        log(`${'─'.repeat(60)}`);
         state = { phase: 'WATCHING' };
         saveState(symbol, state);
 
       } else {
         // 'open': ordem ainda pendente
-        // Cancela se RSI já subiu de volta acima de RSI_BUY (oportunidade passou)
-        if (rsi > RSI_BUY) {
-          log(`📊 RSI voltou a ${rsi.toFixed(2)} > ${RSI_BUY} — oportunidade passou, cancelando limit order…`);
-          await cancelOrder(state.pendingOrderId, gatePair, log);
+        // Cancela se RSI atingiu o nível de venda (oportunidade de compra passou)
+        if (rsi >= rsiSell) {
+          await adapter.cancelOrder(state.pendingOrderId, pair, log);
+          log(`${'─'.repeat(60)}`);
+          log(`🚫 COMPRA CANCELADA — RSI atingiu ${rsi.toFixed(2)} ≥ ${rsiSell}`);
+          log(`   Par    : ${pair}`);
+          log(`   ID     : ${state.pendingOrderId}`);
+          log(`   Preço  : ${state.pendingPrice}`);
+          log(`${'─'.repeat(60)}`);
           state = { phase: 'WATCHING' };
           saveState(symbol, state);
         } else {
-          log(`⏳ Limit order aberta (id=${state.pendingOrderId}) | preço alvo=${state.pendingPrice} | aguardando fill…`);
+          log(`⏳ Limit order aberta (id=${state.pendingOrderId}) | preço alvo=${state.pendingPrice} | RSI=${rsi.toFixed(2)} | aguardando fill…`);
         }
       }
     } catch (err) {
@@ -338,19 +620,19 @@ async function tick(symbol, gatePair, log) {
 
   // ── BOUGHT: aguarda RSI cruzar acima de 70 ────────────────────────────────
   } else if (state.phase === 'BOUGHT') {
-    if (rsi > RSI_SELL) {
+    if (rsi > rsiSell) {
       state.phase = 'ABOVE_70';
       saveState(symbol, state);
-      log(`📈 RSI passou de ${RSI_SELL} (${rsi.toFixed(2)}) — aguardando retorno para ≤ ${RSI_SELL}…`);
+      log(`📈 RSI passou de ${rsiSell} (${rsi.toFixed(2)}) — aguardando retorno para ≤ ${rsiSell}…`);
     }
 
   // ── ABOVE_70: aguarda RSI voltar para ≤ 70 e vende ───────────────────────
   } else if (state.phase === 'ABOVE_70') {
-    if (rsi <= RSI_SELL) {
+    if (rsi <= rsiSell) {
       const sellPrice = parseFloat((last.close * (1 - SELL_DISCOUNT)).toFixed(8));
-      log(`${R}📉 RSI voltou a ${rsi.toFixed(2)} ≤ ${RSI_SELL} — sinal de VENDA${X}`);
+      log(`${R}📉 RSI voltou a ${rsi.toFixed(2)} ≤ ${rsiSell} — sinal de VENDA${X}`);
       try {
-        await placeLimitSell(gatePair, state.buyQty, last.close);
+        const sellOrder  = await adapter.placeLimitSell(pair, state.buyQty, last.close);
         const grossUsdt  = sellPrice * state.buyQty;
         const netUsdt    = grossUsdt * (1 - FEE_RATE);
         const usdtPnl    = (netUsdt - state.buyUsdt).toFixed(4);
@@ -358,20 +640,64 @@ async function tick(symbol, gatePair, log) {
         const pnlSign    = Number(usdtPnl) >= 0 ? '+' : '';
         log(`${'─'.repeat(60)}`);
         log(`${R}🔴 ORDEM DE VENDA ABERTA${X}`);
-        log(`   Par      : ${gatePair}`);
+        log(`   Par      : ${pair}`);
         log(`   Preço    : ${sellPrice}  (${SELL_DISCOUNT * 100}% abaixo de ${last.close})`);
         log(`   Qty      : ${state.buyQty}`);
         log(`   Rec. líq.: ≈${netUsdt.toFixed(2)} USDT`);
         log(`   PnL      : ${pnlSign}${usdtPnl} USDT  (${pnlSign}${pnl}%)${state.detected ? '  [posição detectada externamente]' : ''}`);
         log(`   Comprado : ${state.buyTime}`);
+        log(`   ID       : ${sellOrder?.id ?? 'n/a'}`);
         log(`${'─'.repeat(60)}`);
-        state = { phase: 'WATCHING' };
+        state = {
+          phase:         'PENDING_SELL',
+          sellOrderId:   sellOrder?.id,
+          sellPrice,
+          sellQty:       state.buyQty,
+          buyUsdt:       state.buyUsdt,
+          buyTime:       state.buyTime,
+          detected:      state.detected,
+          estimatedUsdt: netUsdt,
+        };
         saveState(symbol, state);
       } catch (err) {
         log(`❌ Erro ao vender: ${err.message}`);
       }
     } else {
-      log(`⏳ RSI ainda acima de ${RSI_SELL} (${rsi.toFixed(2)}) — aguardando retorno…`);
+      log(`⏳ RSI ainda acima de ${rsiSell} (${rsi.toFixed(2)}) — aguardando retorno…`);
+    }
+
+  // ── PENDING_SELL: verifica se a ordem de venda foi preenchida ─────────────
+  } else if (state.phase === 'PENDING_SELL') {
+    try {
+      const order  = await adapter.checkOrder(state.sellOrderId, pair);
+      const status = order.status;
+
+      if (status === 'closed') {
+        log(`${'─'.repeat(60)}`);
+        log(`${R}✅ VENDA CONCLUÍDA${X}`);
+        log(`   Par      : ${pair}`);
+        log(`   ID       : ${state.sellOrderId}`);
+        log(`   Rec. líq.: ≈${state.estimatedUsdt.toFixed(2)} USDT`);
+        log(`${'─'.repeat(60)}`);
+        state = { phase: 'WATCHING' };
+        saveState(symbol, state);
+
+      } else if (status === 'cancelled') {
+        log(`${'─'.repeat(60)}`);
+        log(`🚫 VENDA CANCELADA (externamente)`);
+        log(`   Par    : ${pair}`);
+        log(`   ID     : ${state.sellOrderId}`);
+        log(`   Preço  : ${state.sellPrice}`);
+        log(`${'─'.repeat(60)}`);
+        // Volta para ABOVE_70 para tentar vender novamente no próximo tick
+        state = { phase: 'ABOVE_70', buyPrice: state.buyPrice, buyQty: state.sellQty, buyUsdt: state.buyUsdt, buyTime: state.buyTime, detected: state.detected };
+        saveState(symbol, state);
+
+      } else {
+        log(`⏳ Ordem de venda aberta (id=${state.sellOrderId}) | preço=${state.sellPrice} | aguardando fill…`);
+      }
+    } catch (err) {
+      log(`❌ Erro ao verificar ordem de venda ${state.sellOrderId}: ${err.message}`);
     }
   }
 
@@ -379,13 +705,17 @@ async function tick(symbol, gatePair, log) {
 
 // ── Inicialização ─────────────────────────────────────────────────────────────
 
-async function startSymbol(symbol) {
-  const gatePair = toGateSymbol(symbol);
-  const log      = makeLogger(symbol);
-  const state    = loadState(symbol);
+async function startSymbol(cfg) {
+  const { symbol, exchange = 'gate', interval = '30m', rsiBuy = RSI_BUY, rsiSell = RSI_SELL, symbolColor = '' } = cfg;
+  const adapter     = createAdapter(exchange);
+  const pair        = adapter.toPair(symbol);
+  const log         = makeLogger(symbol, symbolColor, interval);
+  const state       = loadState(symbol);
+  const variationMin = cfg.variationMin !== undefined ? cfg.variationMin : defaultVariationMin(interval);
+  const config      = { interval, rsiBuy, rsiSell, variationMin };
+  const pollMs      = pollMsFor(interval);
 
-
-  log(`=== Iniciado | par Gate: ${gatePair} | capital: saldo total USDT | fase: ${state.phase} ===`);
+  log(`=== Iniciado | ${adapter.name} | par: ${pair} | intervalo: ${interval} | poll: ${pollMs / 1000}s | RSI compra <${rsiBuy} | RSI venda >${rsiSell} | var≥${variationMin}% | fase: ${state.phase} ===`);
 
   if (state.phase === 'PENDING_BUY') {
     log(`♻️  Estado restaurado — limit order pendente id=${state.pendingOrderId} | preço=${state.pendingPrice} (colocada em ${state.pendingTime})`);
@@ -394,12 +724,12 @@ async function startSymbol(symbol) {
   }
 
   const run = async () => {
-    try { await tick(symbol, gatePair, log); }
+    try { await tick(symbol, pair, log, config, adapter); }
     catch (err) { log(`❌ Tick error: ${err.message}`); }
   };
 
   await run();
-  setInterval(run, POLL_MS);
+  setInterval(run, pollMs);
 }
 
 async function main() {
@@ -410,22 +740,37 @@ async function main() {
 
   fs.mkdirSync(BOT_DATA_DIR, { recursive: true });
 
-  let symbols;
-  try { symbols = JSON.parse(fs.readFileSync(FAVORITES_FILE, 'utf8')); }
+  // Sincroniza relógios com Gate.io e Binance, renova a cada hora
+  await Promise.all([syncClock(), syncBinanceClock()]);
+  setInterval(syncClock,         60 * 60_000);
+  setInterval(syncBinanceClock,  60 * 60_000);
+
+  let entries;
+  try { entries = JSON.parse(fs.readFileSync(FAVORITES_FILE, 'utf8')); }
   catch { console.error(`Não encontrou ${FAVORITES_FILE}`); process.exit(1); }
 
-  if (!symbols.length) { console.error('Nenhum símbolo em favorites-trade.json'); process.exit(1); }
+  // Normaliza: strings legadas → objetos com config default; atribui cor por símbolo
+  const configs = entries.map((e, i) => {
+    const base = typeof e === 'string'
+      ? { symbol: e, exchange: 'gate', interval: '30m', rsiBuy: RSI_BUY, rsiSell: RSI_SELL }
+      : { exchange: 'gate', ...e };   // garante exchange com default para entradas antigas
+    return { ...base, symbolColor: SYMBOL_COLORS[i % SYMBOL_COLORS.length] };
+  });
+
+  if (!configs.length) { console.error('Nenhum símbolo em favorites-trade.json'); process.exit(1); }
 
   console.log(`\n🤖 RSI Trade Bot`);
-  console.log(`   Moedas (${symbols.length}): ${symbols.join(', ')}`);
-  console.log(`   Compra : RSI < ${RSI_BUY} + var ≥ ${VARIATION_MIN}%  →  limit ${BUY_DISCOUNT * 100}% abaixo do close`);
-  console.log(`   Venda  : RSI > ${RSI_SELL} e volta a ≤ ${RSI_SELL}  →  limit sell ${SELL_DISCOUNT * 100}% abaixo do close`);
+  configs.forEach(c => {
+    const pollSec = pollMsFor(c.interval) / 1000;
+    console.log(`   ${c.symbolColor}${c.symbol}${X}: exchange=${c.exchange}  intervalo=${c.interval}  poll=${pollSec}s  RSI compra <${c.rsiBuy}  RSI venda >${c.rsiSell}`);
+  });
+  console.log(`   Compra : var ≥ ${VARIATION_MIN}%  →  limit ${BUY_DISCOUNT * 100}% abaixo do close`);
+  console.log(`   Venda  : RSI cruza e volta  →  limit sell ${SELL_DISCOUNT * 100}% abaixo do close`);
   console.log(`   Capital: até $${MAX_USDT_PER_COIN} USDT por moeda (ou saldo disponível se menor)`);
   console.log(`   Taxa   : ${FEE_RATE * 100}% entrada + ${FEE_RATE * 100}% saída (descontadas da qty/receita)`);
-  console.log(`   Poll   : a cada ${POLL_MS / 60000} min (RSI calculado com o candle atual)`);
-  console.log(`   Poll   : a cada ${POLL_MS / 60000} min\n`);
+  console.log(`   Poll   : ≤ ${POLL_MIN_MS / 60000} min (proporcional ao intervalo de cada moeda)\n`);
 
-  await Promise.all(symbols.map(startSymbol));
+  await Promise.all(configs.map(startSymbol));
 }
 
 main().catch(err => { console.error('Fatal:', err.message); process.exit(1); });

@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useCallback } from 'react';
-import { addFavorite, removeFavorite } from '../services/api';
+import { addFavorite, addTradeFavorite, removeFavorite } from '../services/api';
 
 // Stablecoins que não queremos capturar
 const STABLE_CURRENCIES = new Set([
@@ -42,6 +42,8 @@ export function CurrencyProvider({ children }) {
   const [gateFavorites, setGateFavorites]       = useState(new Set());
   const [binanceFavorites, setBinanceFavorites] = useState(new Set());
   const [tradeFavorites, setTradeFavorites]     = useState(new Set());
+  // Config por símbolo: Map<symbol, { interval, rsiBuy, rsiSell }>
+  const [tradeConfigs, setTradeConfigs]         = useState(new Map());
 
   const toggleGateFavorite = useCallback(async (symbol) => {
     const sym = symbol.toUpperCase();
@@ -63,14 +65,28 @@ export function CurrencyProvider({ children }) {
     });
   }, []);
 
-  const toggleTradeFavorite = useCallback(async (symbol) => {
+  const toggleTradeFavorite = useCallback((symbol, config = null) => {
     const sym = symbol.toUpperCase();
     setTradeFavorites((prev) => {
       const next = new Set(prev);
-      if (next.has(sym)) { next.delete(sym); removeFavorite(sym, 'trade').catch(() => {}); }
-      else               { next.add(sym);    addFavorite(sym, 'trade').catch(() => {}); }
+      if (next.has(sym)) {
+        next.delete(sym);
+        setTradeConfigs(m => { const n = new Map(m); n.delete(sym); return n; });
+        removeFavorite(sym, 'trade').catch(() => {});
+      } else {
+        next.add(sym);
+        const cfg = config || { exchange: 'gate', interval: '30m', rsiBuy: 30, rsiSell: 70 };
+        setTradeConfigs(m => { const n = new Map(m); n.set(sym, cfg); return n; });
+        addTradeFavorite(sym, cfg).catch(() => {});
+      }
       return next;
     });
+  }, []);
+
+  const updateTradeConfig = useCallback((symbol, config) => {
+    const sym = symbol.toUpperCase();
+    setTradeConfigs(prev => { const next = new Map(prev); next.set(sym, config); return next; });
+    addTradeFavorite(sym, config).catch(() => {});
   }, []);
 
   const quotes = ['USDT', 'BTC', 'BNB'];
@@ -169,9 +185,12 @@ export function CurrencyProvider({ children }) {
         setBinanceFavorites,
         tradeFavorites,
         setTradeFavorites,
+        tradeConfigs,
+        setTradeConfigs,
         toggleGateFavorite,
         toggleBinanceFavorite,
         toggleTradeFavorite,
+        updateTradeConfig,
       }}
     >
       {children}

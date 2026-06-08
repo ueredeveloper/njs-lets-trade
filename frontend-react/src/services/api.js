@@ -76,6 +76,16 @@ export async function addFavorite(symbol, type) {
   return res.json();
 }
 
+export async function addTradeFavorite(symbol, { exchange = 'gate', interval, rsiBuy, rsiSell }) {
+  const res = await fetch('/services/favorites', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ symbol, type: 'trade', exchange, interval, rsiBuy, rsiSell }),
+  });
+  if (!res.ok) throw new Error('Falha ao salvar configuração de trade');
+  return res.json();
+}
+
 export async function removeFavorite(symbol, type) {
   const res = await fetch(`/services/favorites/${encodeURIComponent(symbol)}?type=${type}`, { method: 'DELETE' });
   if (!res.ok) throw new Error('Falha ao remover favorito');

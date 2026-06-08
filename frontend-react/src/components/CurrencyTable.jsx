@@ -2,6 +2,7 @@ import { useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import { useCurrency } from '../contexts/CurrencyContext';
 import { fetchCandlesticksAndCloud, fetchGateCurrencies, gatePreloadCandles, fetchBinanceTrades, fetchGateTrades } from '../services/api';
 import { useI18n } from '../i18n';
+import TradeConfigModal from './TradeConfigModal';
 
 const GATE_COLOR    = '#0068ff';
 const BINANCE_COLOR = '#fcd535';
@@ -61,13 +62,14 @@ function resolveFavorites(favSet, binanceList, gateAll) {
 export default function CurrencyTable({ activeFilter, showFavorites, setShowFavorites, onSelectCurrency }) {
   const {
     currencies, findFilter, selectedQuote, setSelectedChart, setChartZoom,
-    gateFavorites, binanceFavorites, tradeFavorites,
-    toggleGateFavorite, toggleBinanceFavorite, toggleTradeFavorite,
+    gateFavorites, binanceFavorites, tradeFavorites, tradeConfigs,
+    toggleGateFavorite, toggleBinanceFavorite, toggleTradeFavorite, updateTradeConfig,
     setTradePurchases, setAllTrades,
   } = useCurrency();
   const { t, formatPrice } = useI18n();
-  const [loadingSymbol, setLoadingSymbol] = useState(null);
-  const [activeRow, setActiveRow]         = useState(null);
+  const [loadingSymbol, setLoadingSymbol]       = useState(null);
+  const [activeRow, setActiveRow]               = useState(null);
+  const [tradeModalSymbol, setTradeModalSymbol] = useState(null); // símbolo com modal aberto
   const [search, setSearch]               = useState('');
   const [sortVolume, setSortVolume]       = useState('desc'); // 'desc' | 'asc'
   const [gateItems, setGateItems]         = useState([]);
@@ -167,7 +169,7 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
     }).catch(() => {});
   }, [showFavorites, activeFilter]);
 
-  const VALID_INTERVALS = new Set(['1m','5m','15m','30m','1h','2h','4h','6h','8h','12h','1d','3d','1w']);
+  const VALID_INTERVALS = new Set(['1m','3m','5m','15m','30m','1h','2h','4h','6h','8h','12h','1d','3d','1w']);
   const filterPrefix = activeFilter ? activeFilter.split('|')[0] : '';
   const interval = VALID_INTERVALS.has(filterPrefix) ? filterPrefix : '30m';
 
@@ -188,9 +190,8 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
       setSelectedChart(data);
       if (effectiveSource === 'gate') gatePreloadCandles(item.symbol);
 
-      // Busca trades do usuário para favoritos Trade Now:
-      // usa Gate.io se o símbolo for favorito Gate OU se vier da Gate (não está na Binance)
-      if (showFavorites === 'trade' && tradeFavorites.has(item.symbol)) {
+      // Busca trades para trade favorites e gate favorites (para mostrar marcadores no chart)
+      if (tradeFavorites.has(item.symbol) || gateFavorites.has(item.symbol)) {
         const useGateTrades = gateFavorites.has(item.symbol) || effectiveSource === 'gate';
         const fetcher = useGateTrades
           ? fetchGateTrades(item.symbol)
@@ -346,7 +347,7 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
                 >
                   <td className="pl-2">
                     <div className="flex items-center gap-1">
-                      <FavButton active={isTrade}   color={TRADE_COLOR}   label="Trade"   onClick={(e) => { e.stopPropagation(); toggleTradeFavorite(item.symbol); }} />
+                      <FavButton active={isTrade}   color={TRADE_COLOR}   label="Trade"   onClick={(e) => { e.stopPropagation(); setTradeModalSymbol(item.symbol); }} />
                       <FavButton active={isGate}    color={GATE_COLOR}    label="Gate"    onClick={(e) => { e.stopPropagation(); toggleGateFavorite(item.symbol); }} />
                       <FavButton active={isBinance} color={BINANCE_COLOR} label="Binance" onClick={(e) => { e.stopPropagation(); toggleBinanceFavorite(item.symbol); }} />
                     </div>
@@ -409,7 +410,7 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
                     >
                       <td className="pl-2">
                         <div className="flex items-center gap-1">
-                          <FavButton active={isTrade} color={TRADE_COLOR} label="Trade" onClick={(e) => { e.stopPropagation(); toggleTradeFavorite(item.symbol); }} />
+                          <FavButton active={isTrade} color={TRADE_COLOR} label="Trade" onClick={(e) => { e.stopPropagation(); setTradeModalSymbol(item.symbol); }} />
                           <FavButton active={isGate}  color={GATE_COLOR}  label="Gate"  onClick={(e) => { e.stopPropagation(); toggleGateFavorite(item.symbol); }} />
                         </div>
                       </td>
@@ -433,6 +434,28 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
           </tbody>
         </table>
       </div>
+
+      {/* Modal de configuração Trade Now */}
+      {tradeModalSymbol && (
+        <TradeConfigModal
+          symbol={tradeModalSymbol}
+          isActive={tradeFavorites.has(tradeModalSymbol)}
+          currentConfig={tradeConfigs?.get(tradeModalSymbol)}
+          onConfirm={(config) => {
+            if (tradeFavorites.has(tradeModalSymbol)) {
+              updateTradeConfig(tradeModalSymbol, config);
+            } else {
+              toggleTradeFavorite(tradeModalSymbol, config);
+            }
+            setTradeModalSymbol(null);
+          }}
+          onRemove={() => {
+            toggleTradeFavorite(tradeModalSymbol);
+            setTradeModalSymbol(null);
+          }}
+          onCancel={() => setTradeModalSymbol(null)}
+        />
+      )}
     </div>
   );
 }
