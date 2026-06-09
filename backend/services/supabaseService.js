@@ -14,6 +14,14 @@
 const router    = require('express').Router();
 const supabase  = require('../supabase/client');
 
+// Se Supabase não estiver configurado, retorna 503 imediatamente para todos os
+// endpoints /services/sb/* e evita queries com URL vazia que crasham o processo.
+const SUPABASE_OK = !!(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
+router.use((req, res, next) => {
+  if (!SUPABASE_OK) return res.status(503).json({ error: 'Supabase não configurado. Defina SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY no .env.' });
+  next();
+});
+
 // ── Middleware: resolve user_id ───────────────────────────────────────────────
 async function getUserId(req, res, next) {
   // 1. JWT Supabase no header Authorization
@@ -273,8 +281,9 @@ router.post('/user-prefs', getUserId, async (req, res) => {
     );
     // Se já existia, incrementa contador via RPC (evita race condition)
     if (!error) {
-      await supabase.rpc('increment_indicator_count', { p_user_id: req.userId, p_key: key })
-        .catch(() => {}); // RPC opcional; sem ela o count fica estático em 1
+      try {
+        await supabase.rpc('increment_indicator_count', { p_user_id: req.userId, p_key: key });
+      } catch {} // RPC opcional; sem ela o count fica estático em 1
     } else {
       console.warn('[supabase] upsert recent_indicators:', error.message);
     }
@@ -297,6 +306,14 @@ router.post('/user-prefs', getUserId, async (req, res) => {
       lastUsed: r.last_used,
     })),
   });
+});
+
+// Captura erros assíncronos que escapam dos handlers (Express 4 não faz isso automaticamente).
+// Sem este handler, um throw dentro de um async route crasharia o processo inteiro.
+// eslint-disable-next-line no-unused-vars
+router.use((err, req, res, next) => {
+  console.error('[supabase] erro não tratado:', err.message);
+  res.status(500).json({ error: err.message });
 });
 
 module.exports = router;

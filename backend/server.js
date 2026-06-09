@@ -1,3 +1,10 @@
+// Impede que unhandled promise rejections (ex: async handlers sem try-catch) matem o processo.
+// Express 4 não captura erros assíncronos automaticamente; sem este handler o Node.js 15+ encerra
+// o processo e gera ECONNRESET em todas as conexões abertas.
+process.on('unhandledRejection', (reason) => {
+  console.error('[server] unhandledRejection:', reason);
+});
+
 // Para rodar: `npm start` na raiz do projeto.
 // Isso executa `node start.js`, que sobe este servidor (porta 3000) e o Vite (porta 5173) juntos.
 // Para rodar só o backend: `npm run backend`

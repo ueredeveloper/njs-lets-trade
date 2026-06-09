@@ -109,6 +109,7 @@ router.get('/indicator-search', async (req, res) => {
           const lastValue = indicatorValues[indicatorValues.length - 1];
           if (!satisfiesConditions(lastValue, conditions)) return null;
 
+          const last = candles[candles.length - 1];
           return {
             nome,
             data: timestamp,
