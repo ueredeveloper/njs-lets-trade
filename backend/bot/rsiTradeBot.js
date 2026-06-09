@@ -181,6 +181,34 @@ async function fetchGateCandles(pair, limit = CANDLE_LIMIT, interval = '30m') {
   }));
 }
 
+// ── Filtro 4h para entrada 30m ────────────────────────────────────────────────
+// Antes de comprar no RSI 30m, verifica que nenhum RSI 4h dos últimos 2 dias
+// (= 12 candles de 4h) esteve acima de 50. Garante entrada na perna de subida
+// do RSI 4h, não na descida.
+
+async function check4hRsiFilter(pair, adapter, log) {
+  try {
+    const candles4h = await adapter.fetchCandles(pair, 50, '4h');
+    const closes4h  = candles4h.map(c => c.close);
+    const rsi4h     = ti.RSI.calculate({ values: closes4h, period: RSI_PERIOD });
+    if (rsi4h.length === 0) {
+      log('⚠️  Filtro 4h: dados insuficientes — entrada bloqueada por precaução');
+      return false;
+    }
+    const recent = rsi4h.slice(-12); // 12 candles × 4h = 2 dias
+    const maxRsi = Math.max(...recent);
+    if (maxRsi <= 50) {
+      log(`🔍 Filtro 4h (2d): RSI máx=${maxRsi.toFixed(2)} ≤ 50 — ✅ tendência crescente no 4h`);
+      return true;
+    }
+    log(`🔍 Filtro 4h (2d): RSI máx=${maxRsi.toFixed(2)} > 50 — ❌ RSI 4h elevado recentemente, entrada bloqueada`);
+    return false;
+  } catch (err) {
+    log(`⚠️  Filtro 4h: erro (${err.message}) — entrada bloqueada por precaução`);
+    return false;
+  }
+}
+
 // ── Logging ───────────────────────────────────────────────────────────────────
 
 // Usado nos arquivos de estado (timestamp completo)
@@ -538,8 +566,14 @@ async function tick(symbol, pair, log, config, adapter) {
     }
 
     if (rsi < rsiBuy && variation >= variationMin) {
+      log(`${G}📍 RSI < ${rsiBuy} (${rsi.toFixed(2)}) + var ${variation.toFixed(2)}%${variationMin > 0 ? ` ≥ ${variationMin}%` : ''}${X}`);
 
-      log(`${G}📍 RSI < ${rsiBuy} (${rsi.toFixed(2)}) + var ${variation.toFixed(2)}%${variationMin > 0 ? ` ≥ ${variationMin}%` : ''} — sinal de COMPRA${X}`);
+      if (interval === '30m') {
+        const passes = await check4hRsiFilter(pair, adapter, log);
+        if (!passes) return;
+      }
+
+      log(`${G}✅ Sinal de COMPRA confirmado${X}`);
       try {
         const result = await adapter.placeLimitBuy(pair, last.close, log);
         if (result) {
