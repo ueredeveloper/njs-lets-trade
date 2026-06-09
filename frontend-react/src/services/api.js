@@ -11,14 +11,14 @@ export async function fetchAllCurrencies() {
 
 export async function fetchUserPrefs() {
   try {
-    const res = await fetch('/services/user-prefs');
+    const res = await fetch('/services/sb/user-prefs');
     if (!res.ok) return null;
     return res.json();
   } catch { return null; }
 }
 
 export async function saveUserPrefs(update) {
-  fetch('/services/user-prefs', {
+  fetch('/services/sb/user-prefs', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(update),
@@ -61,13 +61,13 @@ export async function fetchRsiOversoldRecovery(symbol, interval, oversold = 30, 
 }
 
 export async function getFavorites(type) {
-  const res = await fetch(`/services/favorites?type=${type}`);
+  const res = await fetch(`/services/sb/favorites?type=${type}`);
   if (!res.ok) throw new Error('Falha ao buscar favoritos');
-  return res.json(); // string[]
+  return res.json();
 }
 
 export async function addFavorite(symbol, type) {
-  const res = await fetch('/services/favorites', {
+  const res = await fetch('/services/sb/favorites', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ symbol, type }),
@@ -76,8 +76,8 @@ export async function addFavorite(symbol, type) {
   return res.json();
 }
 
-export async function addTradeFavorite(symbol, { exchange = 'gate', interval, rsiBuy, rsiSell }) {
-  const res = await fetch('/services/favorites', {
+export async function addTradeFavorite(symbol, { exchange = 'binance', interval, rsiBuy, rsiSell }) {
+  const res = await fetch('/services/sb/favorites', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ symbol, type: 'trade', exchange, interval, rsiBuy, rsiSell }),
@@ -87,7 +87,7 @@ export async function addTradeFavorite(symbol, { exchange = 'gate', interval, rs
 }
 
 export async function removeFavorite(symbol, type) {
-  const res = await fetch(`/services/favorites/${encodeURIComponent(symbol)}?type=${type}`, { method: 'DELETE' });
+  const res = await fetch(`/services/sb/favorites/${encodeURIComponent(symbol)}?type=${type}`, { method: 'DELETE' });
   if (!res.ok) throw new Error('Falha ao remover favorito');
   return res.json();
 }

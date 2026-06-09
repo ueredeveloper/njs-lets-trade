@@ -1,21 +1,15 @@
-const router = require('express').Router();
-const fs     = require('fs');
-const path   = require('path');
+const router    = require('express').Router();
+const supabase  = require('../supabase/client');
 const { getGateCandles } = require('../gate/getGateCandles');
 
-const INTERVALS       = ['1m', '5m', '15m', '30m', '1h', '2h', '4h', '8h', '1d'];
-const GATE_ADDED_FILE = path.join(__dirname, '../data/gate-added.json');
+const INTERVALS = ['1m', '5m', '15m', '30m', '1h', '2h', '4h', '8h', '1d'];
+const USER_ID   = process.env.SUPABASE_DEFAULT_USER_ID;
 
-function persistGateSymbol(symbol) {
-  try {
-    const existing = JSON.parse(fs.readFileSync(GATE_ADDED_FILE, 'utf8'));
-    if (!existing.includes(symbol)) {
-      existing.push(symbol);
-      fs.writeFileSync(GATE_ADDED_FILE, JSON.stringify(existing, null, 2));
-    }
-  } catch {
-    fs.writeFileSync(GATE_ADDED_FILE, JSON.stringify([symbol], null, 2));
-  }
+async function persistGateSymbol(symbol) {
+  if (!USER_ID) return;
+  await supabase
+    .from('favorites_gate')
+    .upsert({ user_id: USER_ID, symbol, gate_added: true }, { onConflict: 'user_id,symbol' });
 }
 
 router.get('/gate-prefetch', async (req, res) => {
@@ -26,7 +20,7 @@ router.get('/gate-prefetch', async (req, res) => {
   res.json({ status: 'iniciado', symbol: sym, intervals: INTERVALS });
 
   // Salva o símbolo imediatamente (antes dos candles terminarem)
-  persistGateSymbol(sym);
+  persistGateSymbol(sym).catch(e => console.warn('[gate-prefetch] supabase:', e.message));
 
   Promise.allSettled(
     INTERVALS.map(iv => getGateCandles(sym, iv, 1000))

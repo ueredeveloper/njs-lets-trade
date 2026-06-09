@@ -71,8 +71,36 @@ const BINANCE_API_KEY    = process.env.BINANCE_API_KEY;
 const BINANCE_SECRET_KEY = process.env.BINANCE_SECRET_KEY;
 const BINANCE_BASE_URL   = 'https://api.binance.com';
 
-const FAVORITES_FILE = path.join(__dirname, '../data/favorites-trade.json');
 const BOT_DATA_DIR   = path.join(__dirname, '../data/bot');
+
+// ── Favoritos via Supabase ────────────────────────────────────────────────────
+
+async function loadFavoritesTrade() {
+  const sbUrl = process.env.SUPABASE_URL;
+  const sbKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const userId = process.env.SUPABASE_DEFAULT_USER_ID;
+
+  if (!sbUrl || !sbKey || !userId) {
+    console.error('❌ SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY ou SUPABASE_DEFAULT_USER_ID não definidos no .env');
+    process.exit(1);
+  }
+
+  const url = `${sbUrl}/rest/v1/favorites_trade?user_id=eq.${encodeURIComponent(userId)}&select=*&order=position.asc`;
+  const res = await fetch(url, {
+    headers: { 'apikey': sbKey, 'Authorization': `Bearer ${sbKey}` },
+  });
+  if (!res.ok) throw new Error(`Supabase favorites_trade: HTTP ${res.status}`);
+  const rows = await res.json();
+  return rows.map(r => ({
+    symbol:       r.symbol,
+    exchange:     r.exchange     ?? 'binance',
+    interval:     r.interval     ?? '30m',
+    rsiBuy:       Number(r.rsi_buy  ?? 30),
+    rsiSell:      Number(r.rsi_sell ?? 70),
+    ...(r.variation_min !== null && r.variation_min !== undefined
+      ? { variationMin: Number(r.variation_min) } : {}),
+  }));
+}
 
 // ── Sincronização de relógio com Gate.io ──────────────────────────────────────
 // Windows pode ter o relógio desincronizado; offset corrije o timestamp nas assinaturas.
@@ -781,19 +809,13 @@ async function main() {
   setInterval(syncClock,         60 * 60_000);
   setInterval(syncBinanceClock,  60 * 60_000);
 
-  let entries;
-  try { entries = JSON.parse(fs.readFileSync(FAVORITES_FILE, 'utf8')); }
-  catch { console.error(`Não encontrou ${FAVORITES_FILE}`); process.exit(1); }
+  const entries = await loadFavoritesTrade();
+  if (!entries.length) { console.error('Nenhum símbolo em favorites_trade (Supabase).'); process.exit(1); }
 
-  // Normaliza: strings legadas → objetos com config default; atribui cor por símbolo
-  const configs = entries.map((e, i) => {
-    const base = typeof e === 'string'
-      ? { symbol: e, exchange: 'gate', interval: '30m', rsiBuy: RSI_BUY, rsiSell: RSI_SELL }
-      : { exchange: 'gate', ...e };   // garante exchange com default para entradas antigas
-    return { ...base, symbolColor: SYMBOL_COLORS[i % SYMBOL_COLORS.length] };
-  });
-
-  if (!configs.length) { console.error('Nenhum símbolo em favorites-trade.json'); process.exit(1); }
+  const configs = entries.map((e, i) => ({
+    exchange: 'binance', ...e,
+    symbolColor: SYMBOL_COLORS[i % SYMBOL_COLORS.length],
+  }));
 
   console.log(`\n🤖 RSI Trade Bot`);
   configs.forEach(c => {

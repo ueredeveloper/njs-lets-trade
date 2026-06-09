@@ -1,9 +1,8 @@
-const { toGateSymbol }  = require('../utils/toGateSymbol');
-const fs                = require('fs');
-const path              = require('path');
+const { toGateSymbol } = require('../utils/toGateSymbol');
+const supabase         = require('../supabase/client');
 
-const GATE_BASE       = 'https://api.gateio.ws/api/v4';
-const GATE_ADDED_FILE = path.join(__dirname, '../data/gate-added.json');
+const GATE_BASE  = 'https://api.gateio.ws/api/v4';
+const USER_ID    = process.env.SUPABASE_DEFAULT_USER_ID;
 
 async function fetchGateTicker(binanceSymbol) {
   const pair = toGateSymbol(binanceSymbol);
@@ -36,7 +35,14 @@ async function fetchCurrencies() {
 
   // Inclui moedas Gate.io adicionadas pelo usuário via busca
   let gateAdded = [];
-  try { gateAdded = JSON.parse(fs.readFileSync(GATE_ADDED_FILE, 'utf8')); } catch {}
+  if (USER_ID) {
+    const { data } = await supabase
+      .from('favorites_gate')
+      .select('symbol')
+      .eq('user_id', USER_ID)
+      .eq('gate_added', true);
+    gateAdded = (data ?? []).map(r => r.symbol);
+  }
 
   for (const sym of gateAdded) {
     if (!currencies.some((c) => c.symbol === sym)) {

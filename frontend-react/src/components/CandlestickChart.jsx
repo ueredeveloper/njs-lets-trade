@@ -33,6 +33,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
   const showMa200    = activeIndicators.includes('ma200');
   const showIchimoku = activeIndicators.includes('ichimoku');
   const showRsi      = activeIndicators.includes('rsi');
+  const showRsi50    = activeIndicators.includes('rsi50');
   const DL = Math.min(displayLimit, candlesticks.length);
 
   const xData = (() => {
@@ -250,6 +251,8 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
           data: [
             { yAxis: 30, lineStyle: { color: '#ef5350', type: 'dashed', width: 1 },
               label: { formatter: '30', color: '#ef5350', fontSize: 9, position: 'start' } },
+            ...(showRsi50 ? [{ yAxis: 50, lineStyle: { color: '#facc15', type: 'dashed', width: 1, opacity: 0.6 },
+              label: { formatter: '50', color: '#facc15', fontSize: 9, position: 'start' } }] : []),
             { yAxis: 70, lineStyle: { color: '#26a69a', type: 'dashed', width: 1 },
               label: { formatter: '70', color: '#26a69a', fontSize: 9, position: 'start' } },
           ],
@@ -262,7 +265,8 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
 // ── Gráfico Matrix: área de preço + RSI, tema terminal verde ─────────────────
 
 function buildMatrixOption({ symbol, interval, candlesticks, rsi }, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = []) {
-  const showRsi = activeIndicators.includes('rsi');
+  const showRsi   = activeIndicators.includes('rsi');
+  const showRsi50 = activeIndicators.includes('rsi50');
   const DL      = Math.min(displayLimit, candlesticks.length);
   const INTRADAY = !['1d', '3d', '1w'].includes(interval);
 
@@ -407,6 +411,7 @@ function buildMatrixOption({ symbol, interval, candlesticks, rsi }, activeIndica
           silent: true, symbol: 'none',
           data: [
             { yAxis: 30, lineStyle: { color: '#ef5350', type: 'dashed', width: 1 }, label: { formatter: '30', color: '#ef5350', fontSize: 9, position: 'start' } },
+            ...(showRsi50 ? [{ yAxis: 50, lineStyle: { color: '#facc15', type: 'dashed', width: 1, opacity: 0.6 }, label: { formatter: '50', color: '#facc15', fontSize: 9, position: 'start' } }] : []),
             { yAxis: 70, lineStyle: { color: G,         type: 'dashed', width: 1 }, label: { formatter: '70', color: G,         fontSize: 9, position: 'start' } },
           ],
         },
@@ -747,42 +752,99 @@ export default function CandlestickChart() {
           )}
         </div>
 
-        {/* Linha 2 — indicadores */}
-        <div className="flex items-center gap-1.5">
-          {INDICATOR_GROUPS.map(({ id, label, color }) => {
-            const active = activeIndicators.includes(id);
-            return (
-              <button
-                key={id}
-                onClick={() => toggleIndicator(id)}
-                style={active ? { borderColor: color, color } : {}}
-                className={`flex items-center gap-1.5 px-2.5 py-0.5 text-xs rounded border transition-colors ${
-                  active
-                    ? 'bg-p2/60 border-current'
-                    : 'border-p3/30 text-p5/50 hover:border-p3 hover:text-p5'
-                }`}
-              >
-                <span
-                  className="w-2 h-2 rounded-full shrink-0"
-                  style={{ backgroundColor: active ? color : '#555' }}
-                />
-                {label}
-              </button>
-            );
-          })}
-        </div>
       </div>
 
       {/* Conteúdo da aba */}
       {activeTab === 'chart' ? (
-        <div className="flex-1 min-h-0">
+        <div className="flex-1 min-h-0 relative">
           {chartNode}
+          {/* Botões de indicadores — canto superior direito do chart */}
+          <div style={{ position: 'absolute', top: 6, right: 68, display: 'flex', flexDirection: 'column', gap: 3, zIndex: 10 }}>
+            {INDICATOR_GROUPS.map(({ id, label, color }) => {
+              const active = activeIndicators.includes(id);
+              return (
+                <button
+                  key={id}
+                  onClick={() => toggleIndicator(id)}
+                  style={{
+                    fontSize: 10, padding: '1px 7px', borderRadius: 4, cursor: 'pointer',
+                    background: active ? color : 'transparent',
+                    color:      active ? (id === 'ma200' ? '#000' : '#fff') : color,
+                    border: `1px solid ${color}`,
+                    opacity: active ? 1 : 0.5,
+                    transition: 'all 0.15s',
+                    display: 'flex', alignItems: 'center', gap: 4,
+                  }}
+                >
+                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: active ? (id === 'ma200' ? '#000' : '#fff') : color, flexShrink: 0 }} />
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+          {/* Botão RSI 50 — canto superior direito do painel RSI */}
+          <button
+            onClick={() => toggleIndicator('rsi50')}
+            style={{
+              position: 'absolute', top: 'calc(79% + 4px)', right: 68,
+              fontSize: 10, padding: '1px 7px', borderRadius: 4, cursor: 'pointer',
+              background: activeIndicators.includes('rsi50') ? '#facc15' : 'transparent',
+              color:      activeIndicators.includes('rsi50') ? '#000' : '#facc15',
+              border: '1px solid #facc15',
+              opacity: activeIndicators.includes('rsi50') ? 1 : 0.5,
+              transition: 'all 0.15s',
+              zIndex: 10,
+              display: 'flex', alignItems: 'center', gap: 4,
+            }}
+          >
+            <span style={{ width: 6, height: 6, borderRadius: '50%', background: activeIndicators.includes('rsi50') ? '#000' : '#facc15', flexShrink: 0 }} />
+            RSI 50
+          </button>
         </div>
       ) : (
         <div className="flex flex-1 min-h-0">
           {/* Gráfico (lado esquerdo) */}
-          <div className="flex-1 min-w-0 min-h-0">
+          <div className="flex-1 min-w-0 min-h-0 relative">
             {chartNode}
+            {/* Botões de indicadores — canto superior direito */}
+            <div style={{ position: 'absolute', top: 6, right: 68, display: 'flex', flexDirection: 'column', gap: 3, zIndex: 10 }}>
+              {INDICATOR_GROUPS.map(({ id, label, color }) => {
+                const active = activeIndicators.includes(id);
+                return (
+                  <button
+                    key={id}
+                    onClick={() => toggleIndicator(id)}
+                    style={{
+                      fontSize: 10, padding: '1px 7px', borderRadius: 4, cursor: 'pointer',
+                      background: active ? color : 'transparent',
+                      color:      active ? (id === 'ma200' ? '#000' : '#fff') : color,
+                      border: `1px solid ${color}`,
+                      opacity: active ? 1 : 0.5,
+                      transition: 'all 0.15s',
+                      display: 'flex', alignItems: 'center', gap: 4,
+                    }}
+                  >
+                    <span style={{ width: 6, height: 6, borderRadius: '50%', background: active ? (id === 'ma200' ? '#000' : '#fff') : color, flexShrink: 0 }} />
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+            <button
+              onClick={() => toggleIndicator('rsi50')}
+              style={{
+                position: 'absolute', top: 'calc(79% + 4px)', right: 68,
+                fontSize: 10, padding: '1px 7px', borderRadius: 4, cursor: 'pointer',
+                background: activeIndicators.includes('rsi50') ? '#facc15' : 'transparent',
+                color:      activeIndicators.includes('rsi50') ? '#000' : '#facc15',
+                border: '1px solid #facc15',
+                opacity: activeIndicators.includes('rsi50') ? 1 : 0.5,
+                transition: 'all 0.15s',
+                zIndex: 10,
+              }}
+            >
+              50
+            </button>
           </div>
           {/* Painel de histórico (lado direito) */}
           <div className="w-24 sm:w-64 shrink-0 min-h-0 overflow-hidden">

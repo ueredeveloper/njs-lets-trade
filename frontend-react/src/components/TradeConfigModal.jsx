@@ -11,7 +11,7 @@ const EXCHANGES = [
 ];
 
 export default function TradeConfigModal({ symbol, isActive, currentConfig, onConfirm, onRemove, onCancel }) {
-  const [exchange,  setExchange]   = useState(currentConfig?.exchange  ?? 'gate');
+  const [exchange,  setExchange]   = useState(currentConfig?.exchange  ?? 'binance');
   const [interval,  setIntervalVal] = useState(currentConfig?.interval ?? '30m');
   const [rsiBuy,    setRsiBuy]     = useState(currentConfig?.rsiBuy    ?? 30);
   const [rsiSell,   setRsiSell]    = useState(currentConfig?.rsiSell   ?? 70);

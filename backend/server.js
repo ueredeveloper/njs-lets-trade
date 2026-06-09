@@ -14,9 +14,10 @@ const { ichimokuCloudRouter } = require('./technicals-indicators');
 //const {client} = require('./services/fetchClient');
 const {
   fetchCandles, fetchIchimokuCloud, fetchAllCurrencies,
-  fetchSMA, fetchRSI, fetchVWAP, fetch24HsVolume, fetchMarketCapFilter, fetchStablecoins, fetchUserPrefs, fetchIndicatorSearch,
-  fetchRsiOversoldRecovery, fetchReloadCandles, fetchFavorites,
+  fetchSMA, fetchRSI, fetchVWAP, fetch24HsVolume, fetchMarketCapFilter, fetchStablecoins, fetchIndicatorSearch,
+  fetchRsiOversoldRecovery, fetchReloadCandles,
   fetchGateCurrencies, fetchGatePrefetch, fetchBinanceTrades, fetchGateTrades } = require('./services');
+const supabaseService = require('./services/supabaseService');
 
 const app = express();
 app.use(cors());
@@ -34,15 +35,14 @@ app.use('/services', fetchVWAP);
 app.use('/services', fetch24HsVolume)
 app.use('/services', fetchMarketCapFilter)
 app.use('/services', fetchStablecoins)
-app.use('/services', fetchUserPrefs)
 app.use('/services', fetchIndicatorSearch)
 app.use('/services', fetchRsiOversoldRecovery)
 app.use('/services', fetchReloadCandles)
-app.use('/services', fetchFavorites)
 app.use('/services', fetchGateCurrencies)
 app.use('/services', fetchGatePrefetch)
 app.use('/services', fetchBinanceTrades)
 app.use('/services', fetchGateTrades)
+app.use('/services/sb', supabaseService)
 
 // Proxy para o frontend (só necessário no modo Parcel legado).
 // No modo Vite, o próprio Vite faz proxy /services → Express, então não é preciso.

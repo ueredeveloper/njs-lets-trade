@@ -17,7 +17,7 @@ function getThemeColors() {
   };
 }
 
-function buildRsiOption({ interval, candlesticks, rsi }, colors) {
+function buildRsiOption({ interval, candlesticks, rsi }, colors, show50) {
   const xData = (() => {
     const dates = candlesticks.slice(-LIMIT).map((c) => convertOpenTime(c.openTime, interval));
     return [...dates, ...new Array(24).fill('')];
@@ -60,6 +60,7 @@ function buildRsiOption({ interval, candlesticks, rsi }, colors) {
         lineStyle: { type: 'dashed', opacity: 0.5 },
         data: [
           { yAxis: 30, lineStyle: { color: C_UP } },
+          ...(show50 ? [{ yAxis: 50, lineStyle: { color: '#facc15', opacity: 0.4 } }] : []),
           { yAxis: 70, lineStyle: { color: C_DOWN } },
         ],
         label: { show: true, formatter: '{c}', color: colors.text, fontSize: 9 },
@@ -71,6 +72,7 @@ function buildRsiOption({ interval, candlesticks, rsi }, colors) {
 export default function RsiChart() {
   const { selectedChart } = useCurrency();
   const [themeTick, setThemeTick] = useState(0);
+  const [show50, setShow50] = useState(false);
 
   useEffect(() => {
     const fn = () => setThemeTick(t => t + 1);
@@ -79,15 +81,31 @@ export default function RsiChart() {
   }, []);
 
   const colors    = useMemo(() => getThemeColors(), [themeTick]);
-  const rsiOption = useMemo(() => selectedChart ? buildRsiOption(selectedChart, colors) : null, [selectedChart, colors]);
+  const rsiOption = useMemo(() => selectedChart ? buildRsiOption(selectedChart, colors, show50) : null, [selectedChart, colors, show50]);
 
   if (!rsiOption) return null;
 
   return (
-    <ReactECharts
-      option={rsiOption}
-      style={{ height: '100%', width: '100%' }}
-      opts={{ renderer: 'canvas' }}
-    />
+    <div style={{ position: 'relative', height: '100%', width: '100%' }}>
+      <ReactECharts
+        option={rsiOption}
+        style={{ height: '100%', width: '100%' }}
+        opts={{ renderer: 'canvas' }}
+      />
+      <button
+        onClick={() => setShow50(v => !v)}
+        style={{
+          position: 'absolute', top: 4, left: 8,
+          fontSize: 10, padding: '1px 7px', borderRadius: 4, cursor: 'pointer',
+          background: show50 ? '#facc15' : 'transparent',
+          color: show50 ? '#000' : '#facc15',
+          border: '1px solid #facc15',
+          opacity: show50 ? 1 : 0.55,
+          transition: 'all 0.15s',
+        }}
+      >
+        50
+      </button>
+    </div>
   );
 }

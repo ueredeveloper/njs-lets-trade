@@ -9,11 +9,9 @@ const fetchVWAP = require('./fetchVWAP');
 const fetch24HsVolume = require('./fetch24hsVolume')
 const fetchMarketCapFilter = require('./fetchMarketCapFilter')
 const fetchStablecoins     = require('./fetchStablecoins')
-const fetchUserPrefs       = require('./fetchUserPrefs')
 const fetchIndicatorSearch = require('./fetchIndicatorSearch')
 const fetchRsiOversoldRecovery = require('./fetchRsiOversoldRecovery')
 const fetchReloadCandles       = require('./fetchReloadCandles')
-const fetchFavorites           = require('./fetchFavorites')
 const fetchGateCurrencies      = require('./fetchGateCurrencies')
 const fetchGatePrefetch        = require('./fetchGatePrefetch')
 const fetchBinanceTrades       = require('./fetchBinanceTrades')
@@ -22,8 +20,8 @@ const fetchGateTrades          = require('./fetchGateTrades')
 // remove cíclical error
 module.exports = {
     fetchCandles, fetchIchimokuCloud, fetchAllCurrencies,
-    fetchSMA, fetchRSI, fetchVWAP, fetch24HsVolume, fetchMarketCapFilter, fetchStablecoins, fetchUserPrefs,
-    fetchIndicatorSearch, fetchRsiOversoldRecovery, fetchReloadCandles, fetchFavorites,
+    fetchSMA, fetchRSI, fetchVWAP, fetch24HsVolume, fetchMarketCapFilter, fetchStablecoins,
+    fetchIndicatorSearch, fetchRsiOversoldRecovery, fetchReloadCandles,
     fetchGateCurrencies, fetchGatePrefetch, fetchBinanceTrades, fetchGateTrades }
 
 
