@@ -484,7 +484,7 @@ async function placeBinanceLimitSell(pair, qty, closePrice) {
   const sellPrice = parseFloat((Math.floor(closePrice * (1 - SELL_DISCOUNT) / tickSize) * tickSize).toFixed(decimalsP));
   const sellQty   = parseFloat((Math.floor(parseFloat(qty) / stepSize) * stepSize).toFixed(decimalsQ));
 
-  return binanceReq('POST', '/api/v3/order', {
+  const order = await binanceReq('POST', '/api/v3/order', {
     symbol:      pair,
     side:        'SELL',
     type:        'LIMIT',
@@ -492,6 +492,8 @@ async function placeBinanceLimitSell(pair, qty, closePrice) {
     price:       String(sellPrice),
     quantity:    String(sellQty),
   });
+  // Normaliza para o mesmo contrato do Gate.io: expõe .id
+  return { ...order, id: order.orderId };
 }
 
 // ── Exchange adapters ─────────────────────────────────────────────────────────
@@ -737,6 +739,25 @@ async function tick(symbol, pair, log, config, adapter) {
 
   // ── PENDING_SELL: verifica se a ordem de venda foi preenchida ─────────────
   } else if (state.phase === 'PENDING_SELL') {
+    // Guarda defensivo: sellOrderId ausente (estado corrompido ou salvo antes da correção)
+    if (!state.sellOrderId) {
+      log(`⚠️  sellOrderId ausente — verificando saldo para recuperar estado…`);
+      const baseCurrency  = adapter.baseCurrency(pair);
+      const tokenBalance  = await adapter.getTokenBalance(baseCurrency);
+      const holdingUsdt   = tokenBalance * last.close;
+      if (holdingUsdt >= MIN_HOLDING_USDT) {
+        // Ainda tem saldo: volta para ABOVE_70 para tentar vender novamente
+        state = { phase: 'ABOVE_70', buyQty: tokenBalance, buyUsdt: holdingUsdt, buyTime: state.buyTime ?? now(), detected: true };
+        saveState(symbol, state);
+        log(`♻️  Saldo detectado (${tokenBalance.toFixed(4)} ≈ $${holdingUsdt.toFixed(2)}) — voltando a ABOVE_70 para nova tentativa de venda`);
+      } else {
+        // Saldo zerado: venda provavelmente já ocorreu externamente
+        state = { phase: 'WATCHING' };
+        saveState(symbol, state);
+        log(`✅ Saldo zerado — assumindo venda concluída, voltando a WATCHING`);
+      }
+      return;
+    }
     try {
       const order  = await adapter.checkOrder(state.sellOrderId, pair);
       const status = order.status;
