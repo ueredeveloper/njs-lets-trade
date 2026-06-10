@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useCallback } from 'react';
-import { addFavorite, addTradeFavorite, removeFavorite } from '../services/api';
+import { addFavorite, addTradeFavorite, removeFavorite, fetchActiveTrades } from '../services/api';
 
 // Stablecoins que não queremos capturar
 const STABLE_CURRENCIES = new Set([
@@ -44,6 +44,8 @@ export function CurrencyProvider({ children }) {
   const [tradeFavorites, setTradeFavorites]     = useState(new Set());
   // Config por símbolo: Map<symbol, { interval, rsiBuy, rsiSell }>
   const [tradeConfigs, setTradeConfigs]         = useState(new Map());
+  // Posições abertas do bot: Map<symbol, { phase, buyPrice, buyQty, buyUsdt, buyTime }>
+  const [activeTrades, setActiveTrades]         = useState(new Map());
 
   const toggleGateFavorite = useCallback(async (symbol) => {
     const sym = symbol.toUpperCase();
@@ -81,6 +83,15 @@ export function CurrencyProvider({ children }) {
       }
       return next;
     });
+  }, []);
+
+  const refreshActiveTrades = useCallback(async () => {
+    try {
+      const list = await fetchActiveTrades();
+      setActiveTrades(new Map(list.map(t => [t.symbol.toUpperCase(), t])));
+    } catch (err) {
+      console.warn('[CurrencyContext] refreshActiveTrades:', err.message);
+    }
   }, []);
 
   const updateTradeConfig = useCallback((symbol, config) => {
@@ -191,6 +202,9 @@ export function CurrencyProvider({ children }) {
         toggleBinanceFavorite,
         toggleTradeFavorite,
         updateTradeConfig,
+        activeTrades,
+        setActiveTrades,
+        refreshActiveTrades,
       }}
     >
       {children}

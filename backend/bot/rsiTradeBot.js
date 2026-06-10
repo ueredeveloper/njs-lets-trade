@@ -25,12 +25,19 @@ require('dotenv').config({ path: path.join(__dirname, '../../.env') });
 
 const { toGateSymbol } = require('../utils/toGateSymbol');
 const ti               = require('technicalindicators');
+const {
+  fetchBinanceCandles,
+  fetchGateCandles,
+  fetchBinanceCurrentPrice,
+  fetchGateCurrentPrice,
+} = require('./prices');
 
 // ── Configuração ──────────────────────────────────────────────────────────────
 
 const RSI_PERIOD     = 14;
 const RSI_BUY        = 30;
 const RSI_SELL       = 70;
+const RSI_OVERBOUGHT = 80;           // venda imediata se RSI ≥ este valor (sem esperar retorno a 70)
 const VARIATION_MIN  = 1;            // % variação mínima do candle (default para 30m+)
 
 // Variação mínima padrão por intervalo: candles curtos têm amplitude menor.
@@ -44,8 +51,18 @@ function defaultVariationMin(iv) {
   }
   return VARIATION_MIN; // 1% para 30m+
 }
-const BUY_DISCOUNT   = 0.01;         // limit buy  1%   abaixo do close
-const SELL_DISCOUNT  = 0.003;        // limit sell 0.3% abaixo do close (garante fill)
+// Desconto padrão na ordem de compra por intervalo.
+// Candles curtos se movem rápido; 1% em 1m dificilmente faz fill antes do sinal mudar.
+function defaultBuyDiscount(iv) {
+  if (/^1m$/i.test(iv))  return 0.002; // 0.2% para 1m
+  if (/^\d+m$/i.test(iv)) {
+    const n = parseInt(iv);
+    if (n <= 5)  return 0.003; // 0.3% para 5m
+    if (n <= 15) return 0.005; // 0.5% para 15m
+  }
+  return 0.01; // 1% para 30m+
+}
+const SELL_DISCOUNT  = 0.002;        // limit sell 0.2% abaixo do close (garante fill)
 const FEE_RATE       = 0.002;        // 0.2% taxa Gate.io (maker e taker)
 const CANDLE_LIMIT   = 200;
 
@@ -177,38 +194,6 @@ async function gateReq(method, endpointPath, params = {}, _retry = true) {
   return data;
 }
 
-// ── Candles públicos ──────────────────────────────────────────────────────────
-
-async function fetchBinanceCandles(symbol, limit = CANDLE_LIMIT, interval = '1m') {
-  const url = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Candles Binance ${symbol}: HTTP ${res.status}`);
-  const raw = await res.json();
-  // Binance: [openTime, open, high, low, close, volume, closeTime, ...]
-  return raw.map(c => ({
-    openTime: Number(c[0]),
-    open:  parseFloat(c[1]),
-    high:  parseFloat(c[2]),
-    low:   parseFloat(c[3]),
-    close: parseFloat(c[4]),
-  }));
-}
-
-async function fetchGateCandles(pair, limit = CANDLE_LIMIT, interval = '30m') {
-  const url = `${BASE_URL}/spot/candlesticks?currency_pair=${pair}&interval=${interval}&limit=${limit}`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Candles ${pair}: HTTP ${res.status}`);
-  const raw = await res.json();
-  // Gate.io: [timestamp_s, vol_base, close, high, low, open, vol_quote]
-  return raw.map(c => ({
-    openTime: Number(c[0]) * 1000,
-    open:  parseFloat(c[5]),
-    high:  parseFloat(c[3]),
-    low:   parseFloat(c[4]),
-    close: parseFloat(c[2]),
-  }));
-}
-
 // ── Filtro 4h para entrada 30m ────────────────────────────────────────────────
 // Antes de comprar no RSI 30m, verifica que nenhum RSI 4h dos últimos 2 dias
 // (= 12 candles de 4h) esteve acima de 50. Garante entrada na perna de subida
@@ -327,13 +312,13 @@ async function getGateTokenBalance(baseCurrency) {
 const MAX_USDT_PER_COIN  = 40;  // teto por moeda
 const MIN_HOLDING_USDT   = 5;   // saldo mínimo em USDT para considerar "posição aberta"
 
-async function placeGateLimitBuy(pair, closePrice, log) {
+async function placeGateLimitBuy(pair, closePrice, log, buyDiscount = 0.01) {
   const balance    = await getGateUsdtBalance();
   const budget     = Math.min(balance * 0.99, MAX_USDT_PER_COIN);
   if (budget < 0.5) { log('⚠️  Saldo USDT insuficiente (menos de $0.50).'); return null; }
   log(`💰 Saldo USDT: ${balance.toFixed(2)} → usando ${budget.toFixed(2)} USDT (teto: $${MAX_USDT_PER_COIN})`);
 
-  const limitPrice = parseFloat((closePrice * (1 - BUY_DISCOUNT)).toFixed(8));
+  const limitPrice = parseFloat((closePrice * (1 - buyDiscount)).toFixed(8));
   const qty        = parseFloat((budget / limitPrice).toFixed(8));
 
   const order = await gateReq('POST', '/spot/orders', {
@@ -428,7 +413,7 @@ async function getBinanceTokenBalance(baseCurrency) {
   return asset ? parseFloat(asset.free) : 0;
 }
 
-async function placeBinanceLimitBuy(pair, closePrice, log) {
+async function placeBinanceLimitBuy(pair, closePrice, log, buyDiscount = 0.01) {
   const balance = await getBinanceUsdtBalance();
   const budget  = Math.min(balance * 0.99, MAX_USDT_PER_COIN);
   if (budget < 0.5) { log('⚠️  Saldo USDT insuficiente (menos de $0.50).'); return null; }
@@ -445,7 +430,7 @@ async function placeBinanceLimitBuy(pair, closePrice, log) {
   const decimalsP = tickSize  < 1 ? String(tickSize).split('.')[1]?.length  ?? 8 : 0;
   const decimalsQ = stepSize  < 1 ? String(stepSize).split('.')[1]?.length  ?? 8 : 0;
 
-  const limitPrice = parseFloat((Math.floor(closePrice * (1 - BUY_DISCOUNT) / tickSize) * tickSize).toFixed(decimalsP));
+  const limitPrice = parseFloat((Math.floor(closePrice * (1 - buyDiscount) / tickSize) * tickSize).toFixed(decimalsP));
   const qty        = parseFloat((Math.floor(budget / limitPrice / stepSize) * stepSize).toFixed(decimalsQ));
 
   const order = await binanceReq('POST', '/api/v3/order', {
@@ -515,31 +500,33 @@ async function placeBinanceLimitSell(pair, qty, closePrice) {
 
 function createGateAdapter() {
   return {
-    name:           'Gate.io',
-    toPair:         (symbol)              => toGateSymbol(symbol),
-    baseCurrency:   (pair)                => pair.split('_')[0],
-    fetchCandles:   (pair, lim, iv)       => fetchGateCandles(pair, lim, iv),
-    getUsdtBalance: ()                    => getGateUsdtBalance(),
-    getTokenBalance:(base)                => getGateTokenBalance(base),
-    placeLimitBuy:  (pair, price, log)    => placeGateLimitBuy(pair, price, log),
-    checkOrder:     (id, pair)            => checkGateOrder(id, pair),
-    cancelOrder:    (id, pair, log)       => cancelGateOrder(id, pair, log),
-    placeLimitSell: (pair, qty, price)    => placeGateLimitSell(pair, qty, price),
+    name:            'Gate.io',
+    toPair:          (symbol)              => toGateSymbol(symbol),
+    baseCurrency:    (pair)                => pair.split('_')[0],
+    fetchCandles:    (pair, lim, iv)       => fetchGateCandles(pair, lim, iv),
+    getCurrentPrice: (pair)               => fetchGateCurrentPrice(pair),
+    getUsdtBalance:  ()                    => getGateUsdtBalance(),
+    getTokenBalance: (base)                => getGateTokenBalance(base),
+    placeLimitBuy:   (pair, price, log, d)  => placeGateLimitBuy(pair, price, log, d),
+    checkOrder:      (id, pair)            => checkGateOrder(id, pair),
+    cancelOrder:     (id, pair, log)       => cancelGateOrder(id, pair, log),
+    placeLimitSell:  (pair, qty, price)    => placeGateLimitSell(pair, qty, price),
   };
 }
 
 function createBinanceAdapter() {
   return {
-    name:           'Binance',
-    toPair:         (symbol)              => symbol,
-    baseCurrency:   (pair)                => pair.endsWith('USDT') ? pair.slice(0, -4) : pair.slice(0, -3),
-    fetchCandles:   (pair, lim, iv)       => fetchBinanceCandles(pair, lim, iv),
-    getUsdtBalance: ()                    => getBinanceUsdtBalance(),
-    getTokenBalance:(base)                => getBinanceTokenBalance(base),
-    placeLimitBuy:  (pair, price, log)    => placeBinanceLimitBuy(pair, price, log),
-    checkOrder:     (id, pair)            => checkBinanceOrder(id, pair),
-    cancelOrder:    (id, pair, log)       => cancelBinanceOrder(id, pair, log),
-    placeLimitSell: (pair, qty, price)    => placeBinanceLimitSell(pair, qty, price),
+    name:            'Binance',
+    toPair:          (symbol)              => symbol,
+    baseCurrency:    (pair)                => pair.endsWith('USDT') ? pair.slice(0, -4) : pair.slice(0, -3),
+    fetchCandles:    (pair, lim, iv)       => fetchBinanceCandles(pair, lim, iv),
+    getCurrentPrice: (pair)               => fetchBinanceCurrentPrice(pair),
+    getUsdtBalance:  ()                    => getBinanceUsdtBalance(),
+    getTokenBalance: (base)                => getBinanceTokenBalance(base),
+    placeLimitBuy:   (pair, price, log, d)  => placeBinanceLimitBuy(pair, price, log, d),
+    checkOrder:      (id, pair)            => checkBinanceOrder(id, pair),
+    cancelOrder:     (id, pair, log)       => cancelBinanceOrder(id, pair, log),
+    placeLimitSell:  (pair, qty, price)    => placeBinanceLimitSell(pair, qty, price),
   };
 }
 
@@ -552,7 +539,9 @@ function createAdapter(exchange) {
 
 async function tick(symbol, pair, log, config, adapter) {
   const { rsiBuy = RSI_BUY, rsiSell = RSI_SELL, interval = '30m' } = config;
-  const variationMin = config.variationMin !== undefined ? config.variationMin : defaultVariationMin(interval);
+  const variationMin   = config.variationMin   !== undefined ? config.variationMin   : defaultVariationMin(interval);
+  const buyDiscount    = config.buyDiscount    !== undefined ? config.buyDiscount    : defaultBuyDiscount(interval);
+  const rsiOverbought  = config.rsiOverbought  !== undefined ? config.rsiOverbought  : RSI_OVERBOUGHT;
   const candles = await adapter.fetchCandles(pair, CANDLE_LIMIT, interval);
   const closes  = candles.map(c => c.close);
   const rsiVals = ti.RSI.calculate({ values: closes, period: RSI_PERIOD });
@@ -603,7 +592,7 @@ async function tick(symbol, pair, log, config, adapter) {
 
       log(`${G}✅ Sinal de COMPRA confirmado${X}`);
       try {
-        const result = await adapter.placeLimitBuy(pair, last.close, log);
+        const result = await adapter.placeLimitBuy(pair, last.close, log, buyDiscount);
         if (result) {
           state = {
             phase:          'PENDING_BUY',
@@ -617,7 +606,7 @@ async function tick(symbol, pair, log, config, adapter) {
           log(`${'─'.repeat(60)}`);
           log(`${G}🟢 ORDEM DE COMPRA ABERTA${X}`);
           log(`   Par    : ${pair}`);
-          log(`   Preço  : ${result.limitPrice}  (${BUY_DISCOUNT * 100}% abaixo de ${last.close})`);
+          log(`   Preço  : ${result.limitPrice}  (${buyDiscount * 100}% abaixo de ${last.close})`);
           log(`   Qty    : ${result.qty}`);
           log(`   USDT   : ≈${result.budget.toFixed(2)}`);
           log(`   ID     : ${result.orderId}`);
@@ -682,52 +671,68 @@ async function tick(symbol, pair, log, config, adapter) {
       log(`❌ Erro ao verificar order ${state.pendingOrderId}: ${err.message}`);
     }
 
-  // ── BOUGHT: aguarda RSI cruzar acima de 70 ────────────────────────────────
+  // ── Executa ordem de venda e retorna o novo estado PENDING_SELL ──────────
+  async function executeSell(reason) {
+    try {
+      const livePrice = await adapter.getCurrentPrice(pair);
+      const sellPrice = parseFloat((livePrice * (1 - SELL_DISCOUNT)).toFixed(8));
+      const sellOrder = await adapter.placeLimitSell(pair, state.buyQty, livePrice);
+      const grossUsdt = sellPrice * state.buyQty;
+      const netUsdt   = grossUsdt * (1 - FEE_RATE);
+      const usdtPnl   = (netUsdt - state.buyUsdt).toFixed(4);
+      const pnl       = ((netUsdt - state.buyUsdt) / state.buyUsdt * 100).toFixed(2);
+      const pnlSign   = Number(usdtPnl) >= 0 ? '+' : '';
+      log(`${'─'.repeat(60)}`);
+      log(`${R}🔴 ORDEM DE VENDA ABERTA${X}`);
+      log(`   Par      : ${pair}`);
+      log(`   Motivo   : ${reason}`);
+      log(`   Preço    : ${sellPrice}  (${SELL_DISCOUNT * 100}% abaixo de ${livePrice} — preço live)`);
+      log(`   Qty      : ${state.buyQty}`);
+      log(`   Rec. líq.: ≈${netUsdt.toFixed(2)} USDT`);
+      log(`   PnL      : ${pnlSign}${usdtPnl} USDT  (${pnlSign}${pnl}%)${state.detected ? '  [posição detectada externamente]' : ''}`);
+      log(`   Comprado : ${state.buyTime}`);
+      log(`   ID       : ${sellOrder?.id ?? 'n/a'}`);
+      log(`${'─'.repeat(60)}`);
+      return {
+        phase:         'PENDING_SELL',
+        sellOrderId:   sellOrder?.id,
+        sellPrice,
+        sellQty:       state.buyQty,
+        buyUsdt:       state.buyUsdt,
+        buyTime:       state.buyTime,
+        detected:      state.detected,
+        estimatedUsdt: netUsdt,
+      };
+    } catch (err) {
+      log(`❌ Erro ao vender: ${err.message}`);
+      return null;
+    }
+  }
+
+  // ── BOUGHT: aguarda RSI cruzar acima de rsiSell ou atingir rsiOverbought ──
   } else if (state.phase === 'BOUGHT') {
-    if (rsi > rsiSell) {
+    if (rsi >= rsiOverbought) {
+      log(`${R}🚀 RSI sobrecomprado extremo: ${rsi.toFixed(2)} ≥ ${rsiOverbought} — venda imediata${X}`);
+      const newState = await executeSell(`RSI ${rsi.toFixed(2)} ≥ ${rsiOverbought} (sobrecomprado extremo)`);
+      if (newState) { state = newState; saveState(symbol, state); }
+    } else if (rsi > rsiSell) {
       state.phase = 'ABOVE_70';
       saveState(symbol, state);
-      log(`📈 RSI passou de ${rsiSell} (${rsi.toFixed(2)}) — aguardando retorno para ≤ ${rsiSell}…`);
+      log(`📈 RSI passou de ${rsiSell} (${rsi.toFixed(2)}) — aguardando retorno para ≤ ${rsiSell} ou ≥ ${rsiOverbought}…`);
     }
 
-  // ── ABOVE_70: aguarda RSI voltar para ≤ 70 e vende ───────────────────────
+  // ── ABOVE_70: vende quando RSI retorna a ≤ rsiSell OU atinge rsiOverbought
   } else if (state.phase === 'ABOVE_70') {
-    if (rsi <= rsiSell) {
-      const sellPrice = parseFloat((last.close * (1 - SELL_DISCOUNT)).toFixed(8));
+    if (rsi >= rsiOverbought) {
+      log(`${R}🚀 RSI sobrecomprado extremo: ${rsi.toFixed(2)} ≥ ${rsiOverbought} — venda imediata${X}`);
+      const newState = await executeSell(`RSI ${rsi.toFixed(2)} ≥ ${rsiOverbought} (sobrecomprado extremo)`);
+      if (newState) { state = newState; saveState(symbol, state); }
+    } else if (rsi <= rsiSell) {
       log(`${R}📉 RSI voltou a ${rsi.toFixed(2)} ≤ ${rsiSell} — sinal de VENDA${X}`);
-      try {
-        const sellOrder  = await adapter.placeLimitSell(pair, state.buyQty, last.close);
-        const grossUsdt  = sellPrice * state.buyQty;
-        const netUsdt    = grossUsdt * (1 - FEE_RATE);
-        const usdtPnl    = (netUsdt - state.buyUsdt).toFixed(4);
-        const pnl        = ((netUsdt - state.buyUsdt) / state.buyUsdt * 100).toFixed(2);
-        const pnlSign    = Number(usdtPnl) >= 0 ? '+' : '';
-        log(`${'─'.repeat(60)}`);
-        log(`${R}🔴 ORDEM DE VENDA ABERTA${X}`);
-        log(`   Par      : ${pair}`);
-        log(`   Preço    : ${sellPrice}  (${SELL_DISCOUNT * 100}% abaixo de ${last.close})`);
-        log(`   Qty      : ${state.buyQty}`);
-        log(`   Rec. líq.: ≈${netUsdt.toFixed(2)} USDT`);
-        log(`   PnL      : ${pnlSign}${usdtPnl} USDT  (${pnlSign}${pnl}%)${state.detected ? '  [posição detectada externamente]' : ''}`);
-        log(`   Comprado : ${state.buyTime}`);
-        log(`   ID       : ${sellOrder?.id ?? 'n/a'}`);
-        log(`${'─'.repeat(60)}`);
-        state = {
-          phase:         'PENDING_SELL',
-          sellOrderId:   sellOrder?.id,
-          sellPrice,
-          sellQty:       state.buyQty,
-          buyUsdt:       state.buyUsdt,
-          buyTime:       state.buyTime,
-          detected:      state.detected,
-          estimatedUsdt: netUsdt,
-        };
-        saveState(symbol, state);
-      } catch (err) {
-        log(`❌ Erro ao vender: ${err.message}`);
-      }
+      const newState = await executeSell(`RSI ${rsi.toFixed(2)} ≤ ${rsiSell} (retorno ao nível de venda)`);
+      if (newState) { state = newState; saveState(symbol, state); }
     } else {
-      log(`⏳ RSI ainda acima de ${rsiSell} (${rsi.toFixed(2)}) — aguardando retorno…`);
+      log(`⏳ RSI em ${rsi.toFixed(2)} — aguardando retorno a ≤ ${rsiSell} ou subida a ≥ ${rsiOverbought}…`);
     }
 
   // ── PENDING_SELL: verifica se a ordem de venda foi preenchida ─────────────
@@ -771,15 +776,16 @@ async function tick(symbol, pair, log, config, adapter) {
 
 async function startSymbol(cfg) {
   const { symbol, exchange = 'gate', interval = '30m', rsiBuy = RSI_BUY, rsiSell = RSI_SELL, symbolColor = '' } = cfg;
-  const adapter     = createAdapter(exchange);
-  const pair        = adapter.toPair(symbol);
-  const log         = makeLogger(symbol, symbolColor, interval);
-  const state       = loadState(symbol);
-  const variationMin = cfg.variationMin !== undefined ? cfg.variationMin : defaultVariationMin(interval);
-  const config      = { interval, rsiBuy, rsiSell, variationMin };
-  const pollMs      = pollMsFor(interval);
+  const adapter       = createAdapter(exchange);
+  const pair          = adapter.toPair(symbol);
+  const log           = makeLogger(symbol, symbolColor, interval);
+  const state         = loadState(symbol);
+  const variationMin  = cfg.variationMin  !== undefined ? cfg.variationMin  : defaultVariationMin(interval);
+  const rsiOverbought = cfg.rsiOverbought !== undefined ? cfg.rsiOverbought : RSI_OVERBOUGHT;
+  const config        = { interval, rsiBuy, rsiSell, variationMin, rsiOverbought };
+  const pollMs        = pollMsFor(interval);
 
-  log(`=== Iniciado | ${adapter.name} | par: ${pair} | intervalo: ${interval} | poll: ${pollMs / 1000}s | RSI compra <${rsiBuy} | RSI venda >${rsiSell} | var≥${variationMin}% | fase: ${state.phase} ===`);
+  log(`=== Iniciado | ${adapter.name} | par: ${pair} | intervalo: ${interval} | poll: ${pollMs / 1000}s | RSI compra <${rsiBuy} | RSI venda >${rsiSell} | RSI imediato ≥${rsiOverbought} | var≥${variationMin}% | fase: ${state.phase} ===`);
 
   if (state.phase === 'PENDING_BUY') {
     log(`♻️  Estado restaurado — limit order pendente id=${state.pendingOrderId} | preço=${state.pendingPrice} (colocada em ${state.pendingTime})`);
@@ -819,11 +825,14 @@ async function main() {
 
   console.log(`\n🤖 RSI Trade Bot`);
   configs.forEach(c => {
-    const pollSec = pollMsFor(c.interval) / 1000;
-    console.log(`   ${c.symbolColor}${c.symbol}${X}: exchange=${c.exchange}  intervalo=${c.interval}  poll=${pollSec}s  RSI compra <${c.rsiBuy}  RSI venda >${c.rsiSell}`);
+    const pollSec    = pollMsFor(c.interval) / 1000;
+    const buyDisc    = (c.buyDiscount !== undefined ? c.buyDiscount : defaultBuyDiscount(c.interval)) * 100;
+    const varMin     = c.variationMin  !== undefined ? c.variationMin  : defaultVariationMin(c.interval);
+    const overbought = c.rsiOverbought !== undefined ? c.rsiOverbought : RSI_OVERBOUGHT;
+    console.log(`   ${c.symbolColor}${c.symbol}${X}: exchange=${c.exchange}  intervalo=${c.interval}  poll=${pollSec}s  RSI compra <${c.rsiBuy}  RSI venda >${c.rsiSell}  RSI imediato ≥${overbought}  compra −${buyDisc}%  var≥${varMin}%`);
   });
-  console.log(`   Compra : var ≥ ${VARIATION_MIN}%  →  limit ${BUY_DISCOUNT * 100}% abaixo do close`);
-  console.log(`   Venda  : RSI cruza e volta  →  limit sell ${SELL_DISCOUNT * 100}% abaixo do close`);
+  console.log(`   Compra : desconto e var mínima por intervalo (ver defaultBuyDiscount / defaultVariationMin)`);
+  console.log(`   Venda  : RSI volta a ≤${RSI_SELL}  OU  RSI ≥ ${RSI_OVERBOUGHT}  →  limit sell ${SELL_DISCOUNT * 100}% abaixo do preço live`);
   console.log(`   Capital: até $${MAX_USDT_PER_COIN} USDT por moeda (ou saldo disponível se menor)`);
   console.log(`   Taxa   : ${FEE_RATE * 100}% entrada + ${FEE_RATE * 100}% saída (descontadas da qty/receita)`);
   console.log(`   Poll   : ≤ ${POLL_MIN_MS / 60000} min (proporcional ao intervalo de cada moeda)\n`);
