@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback } from 'react';
+import { createContext, useContext, useState, useCallback, useEffect } from 'react';
 import { addFavorite, addTradeFavorite, removeFavorite, fetchActiveTrades } from '../services/api';
 
 // Stablecoins que não queremos capturar
@@ -149,6 +149,27 @@ export function CurrencyProvider({ children }) {
       return [...prev, newFilter];
     });
   }, []);
+
+  // Sincroniza cada lista de favoritos como filtro, permitindo intersecções no FilterTabs
+  useEffect(() => {
+    if (binanceFavorites.size > 0) addFilter({ name: 'Favoritos|Binance', list: Array.from(binanceFavorites) });
+    else removeFilters(['Favoritos|Binance']);
+  }, [binanceFavorites, addFilter, removeFilters]);
+
+  useEffect(() => {
+    if (gateFavorites.size > 0) addFilter({ name: 'Favoritos|Gate', list: Array.from(gateFavorites) });
+    else removeFilters(['Favoritos|Gate']);
+  }, [gateFavorites, addFilter, removeFilters]);
+
+  useEffect(() => {
+    if (tradeFavorites.size > 0) addFilter({ name: 'Favoritos|Trade', list: Array.from(tradeFavorites) });
+    else removeFilters(['Favoritos|Trade']);
+  }, [tradeFavorites, addFilter, removeFilters]);
+
+  useEffect(() => {
+    if (activeTrades.size > 0) addFilter({ name: 'Favoritos|Ativos', list: Array.from(activeTrades.keys()) });
+    else removeFilters(['Favoritos|Ativos']);
+  }, [activeTrades, addFilter, removeFilters]);
 
   const getBinanceCurrenciesWithUsdt = useCallback(
     (currenciesObj) => {
