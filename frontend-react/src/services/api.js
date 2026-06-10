@@ -92,6 +92,21 @@ export async function removeFavorite(symbol, type) {
   return res.json();
 }
 
+// ── Active Trades (bot positions) ────────────────────────────────────────────
+
+/**
+ * Retorna os símbolos onde o bot tem posição aberta (phase BOUGHT ou ABOVE_70).
+ * @returns {Promise<Array<{symbol, phase, buyPrice, buyQty, buyUsdt, buyTime}>>}
+ */
+export async function fetchActiveTrades() {
+  const res = await fetch('/services/active-trades');
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 // ── Gate.io Trading ──────────────────────────────────────────────────────────
 
 /** Retorna os trades do usuário para um símbolo na Gate.io (máx 1000). */

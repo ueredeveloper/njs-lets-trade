@@ -114,6 +114,14 @@ function getFilterDescription(name, t) {
   const interval = parts[0];
   const type     = parts[1];
 
+  if (interval === 'Favoritos') {
+    if (type === 'Binance') return 'Favoritos Binance';
+    if (type === 'Gate')    return 'Favoritos Gate';
+    if (type === 'Trade')   return 'Trade Now';
+    if (type === 'Ativos')  return 'Trades Ativos';
+    return `Favoritos: ${type}`;
+  }
+
   if (interval === 'Mercado') {
     const param = parts[1] ?? '';
     if (param.includes('⇿')) { const [lo, hi] = param.split('⇿'); return t('filter.mkt_range', lo, hi); }

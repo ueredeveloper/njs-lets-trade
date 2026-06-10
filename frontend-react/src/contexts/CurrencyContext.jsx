@@ -1,5 +1,5 @@
-import { createContext, useContext, useState, useCallback } from 'react';
-import { addFavorite, addTradeFavorite, removeFavorite } from '../services/api';
+import { createContext, useContext, useState, useCallback, useEffect } from 'react';
+import { addFavorite, addTradeFavorite, removeFavorite, fetchActiveTrades } from '../services/api';
 
 // Stablecoins que não queremos capturar
 const STABLE_CURRENCIES = new Set([
@@ -47,6 +47,8 @@ export function CurrencyProvider({ children }) {
   const [tradeFavorites, setTradeFavorites]     = useState(new Set());
   // Config por símbolo: Map<symbol, { interval, rsiBuy, rsiSell }>
   const [tradeConfigs, setTradeConfigs]         = useState(new Map());
+  // Posições abertas do bot: Map<symbol, { phase, buyPrice, buyQty, buyUsdt, buyTime }>
+  const [activeTrades, setActiveTrades]         = useState(new Map());
 
   const toggleGateFavorite = useCallback(async (symbol) => {
     const sym = symbol.toUpperCase();
@@ -86,6 +88,15 @@ export function CurrencyProvider({ children }) {
     });
   }, []);
 
+  const refreshActiveTrades = useCallback(async () => {
+    try {
+      const list = await fetchActiveTrades();
+      setActiveTrades(new Map(list.map(t => [t.symbol.toUpperCase(), t])));
+    } catch (err) {
+      console.warn('[CurrencyContext] refreshActiveTrades:', err.message);
+    }
+  }, []);
+
   const updateTradeConfig = useCallback((symbol, config) => {
     const sym = symbol.toUpperCase();
     setTradeConfigs(prev => { const next = new Map(prev); next.set(sym, config); return next; });
@@ -109,9 +120,9 @@ export function CurrencyProvider({ children }) {
   const removeFilters = useCallback((filtersToRemove) => {
     setFilters((prev) => {
       const first = prev[0];
-      const kept = prev.filter((f) => !filtersToRemove.includes(f.name));
-      const merged = [first, ...kept.filter((f) => f.name !== first?.name)];
-      return merged;
+      const kept = prev.filter((f) => f && !filtersToRemove.includes(f.name));
+      if (!first) return kept;
+      return [first, ...kept.filter((f) => f.name !== first.name)];
     });
   }, []);
 
@@ -141,6 +152,27 @@ export function CurrencyProvider({ children }) {
       return [...prev, newFilter];
     });
   }, []);
+
+  // Sincroniza cada lista de favoritos como filtro, permitindo intersecções no FilterTabs
+  useEffect(() => {
+    if (binanceFavorites.size > 0) addFilter({ name: 'Favoritos|Binance', list: Array.from(binanceFavorites) });
+    else removeFilters(['Favoritos|Binance']);
+  }, [binanceFavorites, addFilter, removeFilters]);
+
+  useEffect(() => {
+    if (gateFavorites.size > 0) addFilter({ name: 'Favoritos|Gate', list: Array.from(gateFavorites) });
+    else removeFilters(['Favoritos|Gate']);
+  }, [gateFavorites, addFilter, removeFilters]);
+
+  useEffect(() => {
+    if (tradeFavorites.size > 0) addFilter({ name: 'Favoritos|Trade', list: Array.from(tradeFavorites) });
+    else removeFilters(['Favoritos|Trade']);
+  }, [tradeFavorites, addFilter, removeFilters]);
+
+  useEffect(() => {
+    if (activeTrades.size > 0) addFilter({ name: 'Favoritos|Ativos', list: Array.from(activeTrades.keys()) });
+    else removeFilters(['Favoritos|Ativos']);
+  }, [activeTrades, addFilter, removeFilters]);
 
   const getBinanceCurrenciesWithUsdt = useCallback(
     (currenciesObj) => {
@@ -196,6 +228,9 @@ export function CurrencyProvider({ children }) {
         toggleBinanceFavorite,
         toggleTradeFavorite,
         updateTradeConfig,
+        activeTrades,
+        setActiveTrades,
+        refreshActiveTrades,
       }}
     >
       {children}

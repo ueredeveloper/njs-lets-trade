@@ -7,6 +7,8 @@ import TradeConfigModal from './TradeConfigModal';
 const GATE_COLOR    = '#0068ff';
 const BINANCE_COLOR = '#fcd535';
 const TRADE_COLOR   = '#00c076';
+const ACTIVE_COLOR  = '#f59e0b';
+
 
 function formatVolume(vol) {
   if (vol == null || isNaN(vol) || vol <= 0) return '—';
@@ -61,10 +63,11 @@ function resolveFavorites(favSet, binanceList, gateAll) {
 
 export default function CurrencyTable({ activeFilter, showFavorites, setShowFavorites, onSelectCurrency }) {
   const {
-    currencies, findFilter, selectedQuote, setSelectedChart, setChartZoom,
+    currencies, findFilter, selectedQuote, selectedChart, setSelectedChart, setChartZoom,
     gateFavorites, binanceFavorites, tradeFavorites, tradeConfigs,
     toggleGateFavorite, toggleBinanceFavorite, toggleTradeFavorite, updateTradeConfig,
-    setTradePurchases, setAllTrades, chartInterval,
+    setTradePurchases, setAllTrades,
+    activeTrades, refreshActiveTrades,
   } = useCurrency();
   const { t, formatPrice } = useI18n();
   const [loadingSymbol, setLoadingSymbol]       = useState(null);
@@ -92,6 +95,9 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
       list = currencies.list.filter((c) => binanceFavorites.has(c.symbol));
     } else if (showFavorites === 'trade') {
       list = resolveFavorites(tradeFavorites, currencies.list, gateAll);
+    } else if (showFavorites === 'active') {
+      const activeSymbols = new Set(activeTrades.keys());
+      list = resolveFavorites(activeSymbols, currencies.list, gateAll);
     } else if (activeFilter) {
       const filter = findFilter(activeFilter);
       if (filter) {
@@ -116,14 +122,25 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
       list = list.filter((c) => c.symbol.includes(term));
     }
 
+    // Nas abas trade e active: ordena primeiro por intervalo, depois por volume
+    const INTERVAL_ORDER = ['1m','3m','5m','15m','30m','1h','2h','4h','6h','8h','12h','1d','3d','1w'];
+    const byInterval = showFavorites === 'trade' || showFavorites === 'active';
+
     list = list.slice().sort((a, b) => {
+      if (byInterval) {
+        const ia = INTERVAL_ORDER.indexOf(tradeConfigs.get(a.symbol)?.interval ?? '');
+        const ib = INTERVAL_ORDER.indexOf(tradeConfigs.get(b.symbol)?.interval ?? '');
+        const idxA = ia === -1 ? INTERVAL_ORDER.length : ia;
+        const idxB = ib === -1 ? INTERVAL_ORDER.length : ib;
+        if (idxA !== idxB) return idxA - idxB;
+      }
       const va = Number(a.volume) || 0;
       const vb = Number(b.volume) || 0;
       return sortVolume === 'desc' ? vb - va : va - vb;
     });
 
     return list;
-  }, [currencies, activeFilter, selectedQuote, findFilter, search, showFavorites, gateFavorites, binanceFavorites, tradeFavorites, sortVolume, gateAll]);
+  }, [currencies, activeFilter, selectedQuote, findFilter, search, showFavorites, gateFavorites, binanceFavorites, tradeFavorites, tradeConfigs, activeTrades, sortVolume, gateAll]);
 
   // Busca Gate.io sempre que o usuário digita (≥2 chars), excluindo moedas já na lista Binance
   useEffect(() => {
@@ -157,9 +174,16 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
     return () => { cancelled = true; };
   }, [search, currencies.list]);
 
+  // Carrega active trades ao entrar no filtro
+  useEffect(() => {
+    if (showFavorites !== 'active') return;
+    refreshActiveTrades();
+  }, [showFavorites, refreshActiveTrades]);
+
   // Carrega moedas Gate.io quando necessário para favoritos ou filtros de mercado
   useEffect(() => {
     const needGate = showFavorites === 'gate' || showFavorites === 'trade'
+      || showFavorites === 'active'
       || (activeFilter && activeFilter.startsWith('Mercado|'));
     if (!needGate) return;
     if (gateCacheRef.current) { setGateAll(gateCacheRef.current); return; }
@@ -182,7 +206,9 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
       const isGateOnly = !currencies.list.some(c => c.symbol === item.symbol);
       const effectiveSource = source ?? (isGateOnly ? 'gate' : null);
 
-      const data = await fetchCandlesticksAndCloud(item.symbol, chartInterval, effectiveSource);
+      const effectiveInterval = selectedChart?.interval || '30m';
+
+      const data = await fetchCandlesticksAndCloud(item.symbol, effectiveInterval, effectiveSource);
       setSelectedChart(data);
       if (effectiveSource === 'gate') gatePreloadCandles(item.symbol);
 
@@ -215,6 +241,7 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
   const gateCount    = gateFavorites.size;
   const binanceCount = binanceFavorites.size;
   const tradeCount   = tradeFavorites.size;
+  const activeCount  = activeTrades.size;
 
   return (
     <div className="flex flex-col h-full">
@@ -263,6 +290,25 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
               }}
             >
               TN{tradeCount > 0 ? ` ${tradeCount}` : ''}
+            </span>
+          </button>
+
+          {/* Filtro Active Trades (posições abertas do bot) */}
+          <button
+            onClick={() => toggleShowFavorites('active')}
+            title={showFavorites === 'active' ? 'Ver todas as moedas' : `Trades ativos — posições compradas (${activeCount})`}
+            className="flex items-center gap-1 px-1.5 py-0.5 rounded transition-all"
+            style={{ opacity: showFavorites === 'active' ? 1 : 0.5 }}
+          >
+            <span
+              className="text-[10px] font-bold px-1 py-0.5 rounded"
+              style={{
+                background: showFavorites === 'active' ? ACTIVE_COLOR : 'transparent',
+                color: showFavorites === 'active' ? '#000' : ACTIVE_COLOR,
+                border: `1px solid ${ACTIVE_COLOR}`,
+              }}
+            >
+              AT{activeCount > 0 ? ` ${activeCount}` : ''}
             </span>
           </button>
 
@@ -327,9 +373,19 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
           <tbody>
             {rows.map((item) => {
               const { base, quote } = splitSymbol(item.symbol);
-              const isGate    = gateFavorites.has(item.symbol);
-              const isBinance = binanceFavorites.has(item.symbol);
-              const isTrade   = tradeFavorites.has(item.symbol);
+              const isGate     = gateFavorites.has(item.symbol);
+              const isBinance  = binanceFavorites.has(item.symbol);
+              const isTrade    = tradeFavorites.has(item.symbol);
+              const activeInfo  = activeTrades.get(item.symbol);
+              const isActive   = !!activeInfo;
+              const tradeConfig = tradeConfigs.get(item.symbol);
+
+              // P&L em % se tiver preço atual e preço de compra
+              let pnlPct = null;
+              if (isActive && activeInfo.buyPrice && item.price) {
+                pnlPct = ((parseFloat(item.price) - activeInfo.buyPrice) / activeInfo.buyPrice) * 100;
+              }
+
               return (
                 <tr
                   key={item.symbol}
@@ -337,6 +393,8 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
                   className={`border-b border-p2/30 cursor-pointer transition-colors ${
                     activeRow === item.symbol
                       ? 'bg-p2/80 text-white'
+                      : isActive
+                      ? 'bg-amber-500/10 hover:bg-amber-500/20 text-p5'
                       : isTrade
                       ? 'bg-emerald-500/10 hover:bg-emerald-500/20 text-p5'
                       : 'hover:bg-p2/40 text-p5'
@@ -350,9 +408,34 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
                     </div>
                   </td>
                   <td className="px-2 py-1.5 font-mono font-semibold">
-                    {base}<span className="opacity-40 font-normal text-[10px]">/{quote}</span>
+                    <div className="flex flex-col">
+                      <span>{base}<span className="opacity-40 font-normal text-[10px]">/{quote}</span></span>
+                      {isActive && (
+                        <span className="text-[9px] font-normal" style={{ color: ACTIVE_COLOR }}>
+                          @{formatPrice(activeInfo.buyPrice)}
+                          {activeInfo.phase === 'ABOVE_70' && ' ▲70'}
+                        </span>
+                      )}
+                      {(isActive || isTrade) && tradeConfig && (
+                        <span className="text-[9px] font-normal text-p5/50">
+                          {tradeConfig.interval} · &lt;{tradeConfig.rsiBuy} &gt;{tradeConfig.rsiSell}
+                        </span>
+                      )}
+                    </div>
                   </td>
-                  <td className="px-2 py-1.5 text-right font-mono">{formatPrice(item.price)}</td>
+                  <td className="px-2 py-1.5 text-right font-mono">
+                    <div className="flex flex-col items-end">
+                      <span>{formatPrice(item.price)}</span>
+                      {isActive && pnlPct !== null && (
+                        <span
+                          className="text-[9px] font-bold"
+                          style={{ color: pnlPct >= 0 ? '#00c076' : '#ff4d4f' }}
+                        >
+                          {pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%
+                        </span>
+                      )}
+                    </div>
+                  </td>
                   <td className="px-2 py-1.5 text-right font-mono text-[10px] opacity-60">{formatVolume(item.volume)}</td>
                   <td className="pr-1 text-center">
                     {loadingSymbol === item.symbol
