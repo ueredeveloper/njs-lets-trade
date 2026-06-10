@@ -275,7 +275,7 @@ function AppContent() {
         </div>
 
         {/* Coluna direita — Moedas (só desktop) */}
-        <div className="hidden md:flex flex-col w-96 shrink-0 min-h-0 bg-p1">
+        <div className="hidden md:flex flex-col w-[28rem] shrink-0 min-h-0 bg-p1">
           <div className="flex flex-col min-h-0 px-2 py-1 border-b border-p2 overflow-hidden" style={{ height: '40%' }}>
             <FilterTabs onSelectFilter={handleSelectFilter} />
           </div>

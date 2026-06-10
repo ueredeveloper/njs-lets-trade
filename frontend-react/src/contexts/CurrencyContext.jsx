@@ -117,9 +117,9 @@ export function CurrencyProvider({ children }) {
   const removeFilters = useCallback((filtersToRemove) => {
     setFilters((prev) => {
       const first = prev[0];
-      const kept = prev.filter((f) => !filtersToRemove.includes(f.name));
-      const merged = [first, ...kept.filter((f) => f.name !== first?.name)];
-      return merged;
+      const kept = prev.filter((f) => f && !filtersToRemove.includes(f.name));
+      if (!first) return kept;
+      return [first, ...kept.filter((f) => f.name !== first.name)];
     });
   }, []);
 
