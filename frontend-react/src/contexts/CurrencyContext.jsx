@@ -127,7 +127,7 @@ export function CurrencyProvider({ children }) {
   }, []);
 
   const clearAllFilters = useCallback(() => {
-    setFilters((prev) => prev.filter((f) => f.name === '1h|Mercado|USDT'));
+    setFilters((prev) => prev.filter((f) => f.name === 'Mercado|USDT'));
   }, []);
 
   const joinFilters = useCallback((selectedFilterNames) => {

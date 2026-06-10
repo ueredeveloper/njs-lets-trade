@@ -22,7 +22,7 @@ async function getActiveUsdtPairs() {
     .filter(s => s.status === "TRADING")
     .map(s => s.symbol);
 
-  _cachedPairs = { name: "1h|Mercado|USDT", list: activeUsdtPairs };
+  _cachedPairs = { name: "Mercado|USDT", list: activeUsdtPairs };
   _cachedAt = Date.now();
   return _cachedPairs;
 }

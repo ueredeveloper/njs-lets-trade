@@ -124,6 +124,7 @@ function getFilterDescription(name, t) {
 
   if (interval === 'Mercado') {
     const param = parts[1] ?? '';
+    if (param === 'USDT') return t('filter.usdt');
     if (param.includes('⇿')) { const [lo, hi] = param.split('⇿'); return t('filter.mkt_range', lo, hi); }
     if (param.includes('⇾')) return t('filter.mkt_above', param.replace('⇾', '').trim());
     return `Mercado: ${param}`;
@@ -231,9 +232,12 @@ export default function FilterTabs({ onSelectFilter }) {
   const sortedFilters = useMemo(() => {
     if (!filters.length) return [];
     try {
-      const binance = filters.filter((f) => f.name.includes('Binance'));
-      const others  = filters.filter((f) => !f.name.includes('Binance'));
-      return [...binance, ...sortFirstIncludesBinance(sortByTypeOfIntervals([...others]))];
+      const mercado = filters.find((f) => f.name === 'Mercado|USDT');
+      const rest    = filters.filter((f) => f.name !== 'Mercado|USDT');
+      const binance = rest.filter((f) => f.name.includes('Binance'));
+      const others  = rest.filter((f) => !f.name.includes('Binance'));
+      const sorted  = [...binance, ...sortFirstIncludesBinance(sortByTypeOfIntervals([...others]))];
+      return mercado ? [mercado, ...sorted] : sorted;
     } catch {
       return filters;
     }

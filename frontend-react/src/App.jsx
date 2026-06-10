@@ -40,7 +40,7 @@ function AppContent() {
         const binanceUsdtList = allCurrencies
           .filter((c) => c.symbol.endsWith('USDT'))
           .map((c) => c.symbol);
-        setFilters([{ name: '1h|Mercado|USDT', list: binanceUsdtList }]);
+        setFilters([{ name: 'Mercado|USDT', list: binanceUsdtList }]);
 
         const volumeFilters = await fetch24hVolume();
         volumeFilters.forEach((f) => addFilter(f));
