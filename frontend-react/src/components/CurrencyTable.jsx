@@ -64,7 +64,7 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
     currencies, findFilter, selectedQuote, setSelectedChart, setChartZoom,
     gateFavorites, binanceFavorites, tradeFavorites, tradeConfigs,
     toggleGateFavorite, toggleBinanceFavorite, toggleTradeFavorite, updateTradeConfig,
-    setTradePurchases, setAllTrades,
+    setTradePurchases, setAllTrades, chartInterval,
   } = useCurrency();
   const { t, formatPrice } = useI18n();
   const [loadingSymbol, setLoadingSymbol]       = useState(null);
@@ -169,10 +169,6 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
     }).catch(() => {});
   }, [showFavorites, activeFilter]);
 
-  const VALID_INTERVALS = new Set(['1m','3m','5m','15m','30m','1h','2h','4h','6h','8h','12h','1d','3d','1w']);
-  const filterPrefix = activeFilter ? activeFilter.split('|')[0] : '';
-  const interval = VALID_INTERVALS.has(filterPrefix) ? filterPrefix : '30m';
-
   async function handleSelect(item, source = null) {
     onSelectCurrency?.();
     setLoadingSymbol(item.symbol);
@@ -186,11 +182,7 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
       const isGateOnly = !currencies.list.some(c => c.symbol === item.symbol);
       const effectiveSource = source ?? (isGateOnly ? 'gate' : null);
 
-      // Para moedas Trade Now usa o intervalo configurado no bot; caso contrário usa o filtro ativo
-      const tradeInterval = tradeFavorites.has(item.symbol) ? tradeConfigs.get(item.symbol)?.interval : null;
-      const effectiveInterval = tradeInterval || interval;
-
-      const data = await fetchCandlesticksAndCloud(item.symbol, effectiveInterval, effectiveSource);
+      const data = await fetchCandlesticksAndCloud(item.symbol, chartInterval, effectiveSource);
       setSelectedChart(data);
       if (effectiveSource === 'gate') gatePreloadCandles(item.symbol);
 

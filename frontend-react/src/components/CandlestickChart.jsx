@@ -590,7 +590,7 @@ function TradeHistoryPanel({ symbol, gateFavorites }) {
 // ── Componente principal ──────────────────────────────────────────────────────
 
 export default function CandlestickChart() {
-  const { selectedChart, setSelectedChart, chartZoom, tradePurchases, gateFavorites } = useCurrency();
+  const { selectedChart, setSelectedChart, chartZoom, tradePurchases, gateFavorites, chartInterval: savedInterval, setChartInterval } = useCurrency();
   const { t } = useI18n();
   const chartRef = useRef(null);
   const [currentInterval, setCurrentInterval] = useState(DEFAULT_INTERVAL);
@@ -603,17 +603,11 @@ export default function CandlestickChart() {
     fetchUserPrefs().then(prefs => {
       if (prefs?.chartInterval && INTERVALS.includes(prefs.chartInterval)) {
         setCurrentInterval(prefs.chartInterval);
+        setChartInterval(prefs.chartInterval);
       }
     });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  // Sincroniza o botão de intervalo ativo quando o chart muda externamente
-  // (ex: seleção de moeda Trade Now com intervalo próprio)
-  useEffect(() => {
-    if (selectedChart?.interval && INTERVALS.includes(selectedChart.interval)) {
-      setCurrentInterval(selectedChart.interval);
-    }
-  }, [selectedChart]);
 
   function toggleIndicator(id) {
     setActiveIndicators((prev) =>
@@ -632,6 +626,7 @@ export default function CandlestickChart() {
   async function handleIntervalChange(iv) {
     if (iv === currentInterval) return;
     setCurrentInterval(iv);
+    setChartInterval(iv);
     saveUserPrefs({ chartInterval: iv });
     if (!selectedChart?.symbol) return;
     setLoadingInterval(true);

@@ -1,6 +1,7 @@
 import CurrencyModel from "../model/currency-model";
 import CurrencyController from "../controller/currency-controller";
 import fetchCandlesticksAndCloud from "../services/fetchCandlesAndIchimokuCloud";
+import { ShangaiChartView } from "./shangai-chart-view";
 
 const CurrencyView = {
 
@@ -99,8 +100,6 @@ const CurrencyView = {
 
     let tbody = table.find('tbody');
 
-    let interval = currencies.name.split('|')[0] // ex: '1h|i|conversion|a|base'
-
     currencies.list.forEach(function (item) {
       /* item:
       {
@@ -129,7 +128,7 @@ const CurrencyView = {
         btn.find('.btn-select-currency').click(async function () {
 
           // Busca indicadores da moeda
-          let currency = await fetchCandlesticksAndCloud([item], interval);
+          let currency = await fetchCandlesticksAndCloud([item], ShangaiChartView.currency.interval);
           // Envia a moeda para o chart
           $(document).trigger('selectCurrencyForChart', currency);
 

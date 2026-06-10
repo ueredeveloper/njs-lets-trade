@@ -25,6 +25,9 @@ export function CurrencyProvider({ children }) {
   // Moeda selecionada para o gráfico: { symbol, candles, ichimoku }
   const [selectedChart, setSelectedChart] = useState(null);
 
+  // Intervalo ativo no gráfico — fonte de verdade compartilhada entre chart e tabela
+  const [chartInterval, setChartInterval] = useState('30m');
+
   // Zoom do gráfico para um período específico: { startDate, endDate } ISO strings
   const [chartZoom, setChartZoom] = useState(null);
 
@@ -173,6 +176,8 @@ export function CurrencyProvider({ children }) {
         setSelectedQuote,
         selectedChart,
         setSelectedChart,
+        chartInterval,
+        setChartInterval,
         chartZoom,
         setChartZoom,
         tradePurchases,
