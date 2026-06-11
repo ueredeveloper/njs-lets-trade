@@ -51,16 +51,9 @@ function defaultVariationMin(iv) {
   }
   return VARIATION_MIN; // 1% para 30m+
 }
-// Desconto padrão na ordem de compra por intervalo.
-// Candles curtos se movem rápido; 1% em 1m dificilmente faz fill antes do sinal mudar.
-function defaultBuyDiscount(iv) {
-  if (/^1m$/i.test(iv))  return 0.002; // 0.2% para 1m
-  if (/^\d+m$/i.test(iv)) {
-    const n = parseInt(iv);
-    if (n <= 5)  return 0.003; // 0.3% para 5m
-    if (n <= 15) return 0.005; // 0.5% para 15m
-  }
-  return 0.01; // 1% para 30m+
+// Desconto padrão na ordem de compra: 0.2% para todos os intervalos.
+function defaultBuyDiscount(_iv) {
+  return 0.002;
 }
 const SELL_DISCOUNT  = 0.002;        // limit sell 0.2% abaixo do close (garante fill)
 const FEE_RATE       = 0.002;        // 0.2% taxa Gate.io (maker e taker)
@@ -538,6 +531,11 @@ function createAdapter(exchange) {
   return createGateAdapter();
 }
 
+// ── Rastreamento de cruzamento RSI (por símbolo + intervalo) ──────────────────
+// Guarda se o RSI estava acima do nível de compra no tick anterior.
+// Permite logar apenas a entrada na zona de sobrevenda, não cada tick.
+const rsiWasAbove = new Map(); // chave: "SYMBOL:interval"
+
 // ── Tick principal ────────────────────────────────────────────────────────────
 
 async function tick(symbol, pair, log, config, adapter) {
@@ -570,6 +568,14 @@ async function tick(symbol, pair, log, config, adapter) {
   const rsiExit = rsiExitVals[rsiExitVals.length - 1];
   const last    = candles[candles.length - 1];
   const variation = ((last.high - last.low) / last.low) * 100;
+
+  // Detecta cruzamento: RSI entrou na zona de sobrevenda neste tick
+  const alertKey    = `${symbol}:${interval}`;
+  const wasAboveBuy = rsiWasAbove.get(alertKey) !== false; // default true (desconhecido = assume acima)
+  rsiWasAbove.set(alertKey, rsi >= rsiBuy);
+  if (rsi < rsiBuy && wasAboveBuy) {
+    log(`🔔 RSI entrou em sobrevenda: ${rsi.toFixed(2)} < ${rsiBuy}  |  intervalo=${interval}  |  close=${last.close}  |  var=${variation.toFixed(2)}%`);
+  }
 
   let state = loadState(symbol);
   if (separateSellInterval) {
