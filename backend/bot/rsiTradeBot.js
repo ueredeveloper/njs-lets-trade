@@ -310,7 +310,7 @@ async function getGateTokenBalance(baseCurrency) {
 }
 
 const MAX_USDT_PER_COIN  = 40;  // teto por moeda
-const MIN_HOLDING_USDT   = 5;   // saldo mínimo em USDT para considerar "posição aberta"
+const MIN_HOLDING_USDT   = 3;   // saldo mínimo em USDT para considerar "posição aberta"
 
 async function placeGateLimitBuy(pair, closePrice, log, buyDiscount = 0.01) {
   const balance    = await getGateUsdtBalance();
@@ -592,6 +592,19 @@ async function tick(symbol, pair, log, config, adapter) {
     } catch (err) {
       log(`❌ Erro ao vender: ${err.message}`);
       return null;
+    }
+  }
+
+  // ── Verifica saldo real em BOUGHT/ABOVE_70 — limpa estado se vendido externamente ──
+  if (state.phase === 'BOUGHT' || state.phase === 'ABOVE_70') {
+    const baseCurrency = adapter.baseCurrency(pair);
+    const tokenBalance = await adapter.getTokenBalance(baseCurrency);
+    const holdingUsdt  = tokenBalance * last.close;
+    if (holdingUsdt < MIN_HOLDING_USDT) {
+      state = { phase: 'WATCHING' };
+      saveState(symbol, state);
+      log(`✅ Saldo ${baseCurrency} ≈ $${holdingUsdt.toFixed(2)} < $${MIN_HOLDING_USDT} — posição encerrada externamente, voltando a WATCHING`);
+      return;
     }
   }
 

@@ -48,7 +48,7 @@ function AppContent() {
         const stableFilters = await fetchStablecoins().catch(() => []);
         stableFilters.forEach((f) => addFilter(f));
 
-        const btcData = await fetchCandlesticksAndCloud('BTCUSDT', '30m');
+        const btcData = await fetchCandlesticksAndCloud('BTCUSDT', '1h');
         setSelectedChart(btcData);
 
         const [gateList, binanceList, tradeList] = await Promise.all([

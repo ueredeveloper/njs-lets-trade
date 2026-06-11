@@ -2,12 +2,12 @@ import { useMemo, useState, useEffect, useRef } from 'react';
 import { useI18n } from '../i18n';
 import ReactECharts from 'echarts-for-react';
 import { useCurrency } from '../contexts/CurrencyContext';
-import { fetchCandlesticksAndCloud, fetchUserPrefs, saveUserPrefs, fetchGateTrades, fetchBinanceTrades } from '../services/api';
+import { fetchCandlesticksAndCloud, fetchGateTrades, fetchBinanceTrades } from '../services/api';
 import convertOpenTime from '../utils/convertOpenTime';
 
 const LIMIT = 76;
 const INTERVALS = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w'];
-const DEFAULT_INTERVAL = '30m';
+const DEFAULT_INTERVAL = '1h';
 
 const C_UP   = '#26a69a';
 const C_DOWN = '#ef5350';
@@ -599,15 +599,6 @@ export default function CandlestickChart() {
   const [activeIndicators, setActiveIndicators] = useState(['ma200', 'rsi']);
   const [activeTab, setActiveTab] = useState('chart'); // 'chart' | 'matrix'
 
-  useEffect(() => {
-    fetchUserPrefs().then(prefs => {
-      if (prefs?.chartInterval && INTERVALS.includes(prefs.chartInterval)) {
-        setCurrentInterval(prefs.chartInterval);
-        setChartInterval(prefs.chartInterval);
-      }
-    });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   function toggleIndicator(id) {
     setActiveIndicators((prev) =>
@@ -627,7 +618,6 @@ export default function CandlestickChart() {
     if (iv === currentInterval) return;
     setCurrentInterval(iv);
     setChartInterval(iv);
-    saveUserPrefs({ chartInterval: iv });
     if (!selectedChart?.symbol) return;
     setLoadingInterval(true);
     try {
