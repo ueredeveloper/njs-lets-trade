@@ -216,6 +216,20 @@ async function check4hRsiFilter(pair, adapter, log) {
   }
 }
 
+// Verifica RSI de 1m para gatilho de venda rápida quando RSI ≥ 80.
+// Retorna { triggers: bool, rsi: number|null }
+async function check1mRsiSell(pair, adapter) {
+  try {
+    const candles = await adapter.fetchCandles(pair, 50, '1m');
+    const rsi1m   = ti.RSI.calculate({ values: candles.map(c => c.close), period: RSI_PERIOD });
+    if (!rsi1m.length) return { triggers: false, rsi: null };
+    const current = rsi1m[rsi1m.length - 1];
+    return { triggers: current >= 80, rsi: current };
+  } catch {
+    return { triggers: false, rsi: null };
+  }
+}
+
 // ── Logging ───────────────────────────────────────────────────────────────────
 
 // Usado nos arquivos de estado (timestamp completo)
@@ -764,6 +778,16 @@ async function tick(symbol, pair, log, config, adapter) {
       const newState = await executeSell(`RSI(${effectiveSellInterval}) ${rsiExit.toFixed(2)} ≥ ${rsiOverbought} (sobrecomprado extremo)`);
       if (newState) { state = newState; saveState(symbol, state); }
     } else if (rsiExit > rsiSell) {
+      // Antes de aguardar retorno, checa RSI 1m: se ≥ 80 vende imediatamente
+      if (interval !== '1m') {
+        const { triggers: sell1m, rsi: rsi1m } = await check1mRsiSell(pair, adapter);
+        if (sell1m) {
+          log(`${R}📈 RSI(${effectiveSellInterval})=${rsiExit.toFixed(2)} > ${rsiSell} + RSI(1m)=${rsi1m.toFixed(2)} ≥ 80 — venda imediata${X}`);
+          const newState = await executeSell(`RSI(${effectiveSellInterval}) ${rsiExit.toFixed(2)} > ${rsiSell} + RSI(1m) ${rsi1m.toFixed(2)} ≥ 80`);
+          if (newState) { state = newState; saveState(symbol, state); }
+          return;
+        }
+      }
       state.phase = 'ABOVE_70';
       saveState(symbol, state);
       log(`📈 RSI saída passou de ${rsiSell} (${rsiExit.toFixed(2)}) — aguardando retorno para ≤ ${rsiSell} ou ≥ ${rsiOverbought}…`);
@@ -780,6 +804,16 @@ async function tick(symbol, pair, log, config, adapter) {
       const newState = await executeSell(`RSI(${effectiveSellInterval}) ${rsiExit.toFixed(2)} ≤ ${rsiSell} (retorno ao nível de venda)`);
       if (newState) { state = newState; saveState(symbol, state); }
     } else {
+      // Checa RSI 1m como gatilho de venda rápida enquanto aguarda
+      if (interval !== '1m') {
+        const { triggers: sell1m, rsi: rsi1m } = await check1mRsiSell(pair, adapter);
+        if (sell1m) {
+          log(`${R}🚀 RSI(1m)=${rsi1m.toFixed(2)} ≥ 80 — venda imediata${X}`);
+          const newState = await executeSell(`RSI(1m) ${rsi1m.toFixed(2)} ≥ 80 (sobrecomprado no 1m)`);
+          if (newState) { state = newState; saveState(symbol, state); }
+          return;
+        }
+      }
       log(`⏳ RSI em ${rsi.toFixed(2)} — aguardando retorno a ≤ ${rsiSell} ou subida a ≥ ${rsiOverbought}…`);
     }
 
