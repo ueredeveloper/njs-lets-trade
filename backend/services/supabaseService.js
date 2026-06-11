@@ -120,18 +120,19 @@ router.get('/favorites', getUserId, async (req, res) => {
       interval:     r.interval,
       rsiBuy:       Number(r.rsi_buy),
       rsiSell:      Number(r.rsi_sell),
+      sellInterval: r.sell_interval ?? null,
       variationMin: r.variation_min !== null ? Number(r.variation_min) : undefined,
     })));
   }
   res.json(data.map(r => r.symbol));
 });
 
-// POST /services/sb/favorites  { symbol, type, [exchange, interval, rsiBuy, rsiSell, variationMin] }
+// POST /services/sb/favorites  { symbol, type, [exchange, interval, rsiBuy, rsiSell, sellInterval, variationMin] }
 router.post('/favorites', getUserId, async (req, res) => {
   const type = validType(req, res);
   if (!type) return;
 
-  const { symbol, exchange = 'gate', interval = '30m', rsiBuy = 30, rsiSell = 70, variationMin } = req.body;
+  const { symbol, exchange = 'gate', interval = '30m', rsiBuy = 30, rsiSell = 70, sellInterval, variationMin } = req.body;
   if (!symbol) return res.status(400).json({ error: 'symbol obrigatório' });
   const sym = symbol.toUpperCase();
 
@@ -145,6 +146,7 @@ router.post('/favorites', getUserId, async (req, res) => {
       interval,
       rsi_buy:       Number(rsiBuy),
       rsi_sell:      Number(rsiSell),
+      sell_interval: sellInterval || null,
       variation_min: variationMin !== undefined ? Number(variationMin) : null,
     };
     ({ data: row, error } = await supabase
@@ -177,6 +179,7 @@ router.post('/favorites', getUserId, async (req, res) => {
       interval:     r.interval,
       rsiBuy:       Number(r.rsi_buy),
       rsiSell:      Number(r.rsi_sell),
+      sellInterval: r.sell_interval ?? null,
       variationMin: r.variation_min !== null ? Number(r.variation_min) : undefined,
     })));
   }
@@ -210,6 +213,7 @@ router.delete('/favorites/:symbol', getUserId, async (req, res) => {
       interval:     r.interval,
       rsiBuy:       Number(r.rsi_buy),
       rsiSell:      Number(r.rsi_sell),
+      sellInterval: r.sell_interval ?? null,
       variationMin: r.variation_min !== null ? Number(r.variation_min) : undefined,
     })));
   }

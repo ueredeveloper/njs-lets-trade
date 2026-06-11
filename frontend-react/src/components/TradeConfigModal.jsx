@@ -11,16 +11,17 @@ const EXCHANGES = [
 ];
 
 export default function TradeConfigModal({ symbol, isActive, currentConfig, onConfirm, onRemove, onCancel }) {
-  const [exchange,  setExchange]   = useState(currentConfig?.exchange  ?? 'binance');
-  const [interval,  setIntervalVal] = useState(currentConfig?.interval ?? '30m');
-  const [rsiBuy,    setRsiBuy]     = useState(currentConfig?.rsiBuy    ?? 30);
-  const [rsiSell,   setRsiSell]    = useState(currentConfig?.rsiSell   ?? 70);
+  const [exchange,     setExchange]     = useState(currentConfig?.exchange     ?? 'binance');
+  const [interval,     setIntervalVal]  = useState(currentConfig?.interval     ?? '30m');
+  const [sellInterval, setSellInterval] = useState(currentConfig?.sellInterval ?? '');
+  const [rsiBuy,       setRsiBuy]       = useState(currentConfig?.rsiBuy       ?? 30);
+  const [rsiSell,      setRsiSell]      = useState(currentConfig?.rsiSell      ?? 70);
 
   function handleConfirm() {
     const buy  = Number(rsiBuy);
     const sell = Number(rsiSell);
     if (buy >= sell) return;
-    onConfirm({ exchange, interval, rsiBuy: buy, rsiSell: sell });
+    onConfirm({ exchange, interval, sellInterval: sellInterval || null, rsiBuy: buy, rsiSell: sell });
   }
 
   return (
@@ -70,9 +71,9 @@ export default function TradeConfigModal({ symbol, isActive, currentConfig, onCo
             </div>
           </div>
 
-          {/* Intervalo */}
+          {/* Intervalo entrada */}
           <div>
-            <label className="block text-[10px] uppercase tracking-wider text-p5/50 mb-1">Intervalo</label>
+            <label className="block text-[10px] uppercase tracking-wider text-p5/50 mb-1">Intervalo Entrada (compra)</label>
             <select
               value={interval}
               onChange={e => setIntervalVal(e.target.value)}
@@ -85,10 +86,26 @@ export default function TradeConfigModal({ symbol, isActive, currentConfig, onCo
             </select>
           </div>
 
+          {/* Intervalo saída */}
+          <div>
+            <label className="block text-[10px] uppercase tracking-wider text-p5/50 mb-1">Intervalo Saída (venda)</label>
+            <select
+              value={sellInterval}
+              onChange={e => setSellInterval(e.target.value)}
+              className="w-full rounded px-2.5 py-1.5 text-xs text-p5 outline-none appearance-none cursor-pointer"
+              style={{ background: '#1e2130', border: '1px solid #2a2d3a' }}
+            >
+              <option value="">Igual à entrada ({interval})</option>
+              {INTERVALS.map(iv => (
+                <option key={iv} value={iv}>{iv}</option>
+              ))}
+            </select>
+          </div>
+
           {/* RSI Compra */}
           <div>
             <label className="block text-[10px] uppercase tracking-wider mb-1" style={{ color: '#26a69a' }}>
-              RSI Compra — abaixo de
+              RSI Compra ({interval}) — abaixo de
             </label>
             <div className="flex items-center gap-2">
               <input
@@ -106,7 +123,7 @@ export default function TradeConfigModal({ symbol, isActive, currentConfig, onCo
           {/* RSI Venda */}
           <div>
             <label className="block text-[10px] uppercase tracking-wider mb-1" style={{ color: '#ef5350' }}>
-              RSI Venda — acima de
+              RSI Venda ({sellInterval || interval}) — acima de
             </label>
             <div className="flex items-center gap-2">
               <input

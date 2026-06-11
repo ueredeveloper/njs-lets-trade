@@ -45,7 +45,7 @@ export function CurrencyProvider({ children }) {
   const [gateFavorites, setGateFavorites]       = useState(new Set());
   const [binanceFavorites, setBinanceFavorites] = useState(new Set());
   const [tradeFavorites, setTradeFavorites]     = useState(new Set());
-  // Config por símbolo: Map<symbol, { interval, rsiBuy, rsiSell }>
+  // Config por símbolo: Map<symbol, { interval, rsiBuy, rsiSell, sellInterval }>
   const [tradeConfigs, setTradeConfigs]         = useState(new Map());
   // Posições abertas do bot: Map<symbol, { phase, buyPrice, buyQty, buyUsdt, buyTime }>
   const [activeTrades, setActiveTrades]         = useState(new Map());
@@ -80,7 +80,7 @@ export function CurrencyProvider({ children }) {
         removeFavorite(sym, 'trade').catch(() => {});
       } else {
         next.add(sym);
-        const cfg = config || { exchange: 'gate', interval: '30m', rsiBuy: 30, rsiSell: 70 };
+        const cfg = config || { exchange: 'gate', interval: '30m', rsiBuy: 30, rsiSell: 70, sellInterval: null };
         setTradeConfigs(m => { const n = new Map(m); n.set(sym, cfg); return n; });
         addTradeFavorite(sym, cfg).catch(() => {});
       }

@@ -114,6 +114,7 @@ async function loadFavoritesTrade() {
     interval:     r.interval     ?? '30m',
     rsiBuy:       Number(r.rsi_buy  ?? 30),
     rsiSell:      Number(r.rsi_sell ?? 70),
+    sellInterval: r.sell_interval ?? null,
     ...(r.variation_min !== null && r.variation_min !== undefined
       ? { variationMin: Number(r.variation_min) } : {}),
   }));
@@ -540,22 +541,45 @@ function createAdapter(exchange) {
 // ── Tick principal ────────────────────────────────────────────────────────────
 
 async function tick(symbol, pair, log, config, adapter) {
-  const { rsiBuy = RSI_BUY, rsiSell = RSI_SELL, interval = '30m' } = config;
+  const { rsiBuy = RSI_BUY, rsiSell = RSI_SELL, interval = '30m', sellInterval } = config;
+  const effectiveSellInterval = sellInterval || interval;
+  const separateSellInterval  = effectiveSellInterval !== interval;
+
   const variationMin   = config.variationMin   !== undefined ? config.variationMin   : defaultVariationMin(interval);
   const buyDiscount    = config.buyDiscount    !== undefined ? config.buyDiscount    : defaultBuyDiscount(interval);
   const rsiOverbought  = config.rsiOverbought  !== undefined ? config.rsiOverbought  : RSI_OVERBOUGHT;
+
+  // Candles de entrada (sinal de compra)
   const candles = await adapter.fetchCandles(pair, CANDLE_LIMIT, interval);
   const closes  = candles.map(c => c.close);
   const rsiVals = ti.RSI.calculate({ values: closes, period: RSI_PERIOD });
   if (rsiVals.length < 2) { log('RSI insuficiente — aguardando candles.'); return; }
 
-  const rsi       = rsiVals[rsiVals.length - 1];
-  const last      = candles[candles.length - 1];
+  // Candles de saída (sinal de venda) — busca separada só quando intervalo difere
+  let rsiExitVals;
+  if (separateSellInterval) {
+    const sellCandles = await adapter.fetchCandles(pair, CANDLE_LIMIT, effectiveSellInterval);
+    const sellCloses  = sellCandles.map(c => c.close);
+    rsiExitVals = ti.RSI.calculate({ values: sellCloses, period: RSI_PERIOD });
+    if (rsiExitVals.length < 2) { log('RSI saída insuficiente — aguardando candles.'); return; }
+  } else {
+    rsiExitVals = rsiVals;
+  }
+
+  const rsi     = rsiVals[rsiVals.length - 1];
+  const rsiExit = rsiExitVals[rsiExitVals.length - 1];
+  const last    = candles[candles.length - 1];
   const variation = ((last.high - last.low) / last.low) * 100;
 
   let state = loadState(symbol);
-  const rsiColor = rsi > rsiSell ? R : rsi < rsiBuy ? G : '';
-  log(`${rsiColor}RSI=${rsi.toFixed(2)}${rsiColor ? X : ''}  close=${last.close}  var=${variation.toFixed(2)}%  fase=${state.phase}`);
+  if (separateSellInterval) {
+    const buyColor  = rsi     < rsiBuy  ? G : '';
+    const sellColor = rsiExit > rsiSell ? R : '';
+    log(`${buyColor}RSI_entrada=${rsi.toFixed(2)}(${interval})${buyColor ? X : ''}  ${sellColor}RSI_saída=${rsiExit.toFixed(2)}(${effectiveSellInterval})${sellColor ? X : ''}  close=${last.close}  var=${variation.toFixed(2)}%  fase=${state.phase}`);
+  } else {
+    const rsiColor = rsi > rsiSell ? R : rsi < rsiBuy ? G : '';
+    log(`${rsiColor}RSI=${rsi.toFixed(2)}${rsiColor ? X : ''}  close=${last.close}  var=${variation.toFixed(2)}%  fase=${state.phase}`);
+  }
 
   // ── Executa ordem de venda e retorna o novo estado PENDING_SELL ──────────
   async function executeSell(reason) {
@@ -627,10 +651,10 @@ async function tick(symbol, pair, log, config, adapter) {
       saveState(symbol, state);
       log(`📦 Posição detectada: ${tokenBalance.toFixed(4)} ${baseCurrency} ≈ $${holdingUsdt.toFixed(2)} USDT — monitorando para venda.`);
       // Se RSI já está acima de 70, avança direto para ABOVE_70
-      if (rsi > rsiSell) {
+      if (rsiExit > rsiSell) {
         state.phase = 'ABOVE_70';
         saveState(symbol, state);
-        log(`${R}📈 RSI já acima de ${rsiSell} (${rsi.toFixed(2)}) — aguardando retorno para ≤ ${rsiSell}…${X}`);
+        log(`${R}📈 RSI saída já acima de ${rsiSell} (${rsiExit.toFixed(2)}) — aguardando retorno para ≤ ${rsiSell}…${X}`);
       }
       return;
     }
@@ -705,11 +729,11 @@ async function tick(symbol, pair, log, config, adapter) {
 
       } else {
         // 'open': ordem ainda pendente
-        // Cancela se RSI atingiu o nível de venda (oportunidade de compra passou)
-        if (rsi >= rsiSell) {
+        // Cancela se RSI de saída atingiu o nível de venda (oportunidade de compra passou)
+        if (rsiExit >= rsiSell) {
           await adapter.cancelOrder(state.pendingOrderId, pair, log);
           log(`${'─'.repeat(60)}`);
-          log(`🚫 COMPRA CANCELADA — RSI atingiu ${rsi.toFixed(2)} ≥ ${rsiSell}`);
+          log(`🚫 COMPRA CANCELADA — RSI(${effectiveSellInterval}) atingiu ${rsiExit.toFixed(2)} ≥ ${rsiSell}`);
           log(`   Par    : ${pair}`);
           log(`   ID     : ${state.pendingOrderId}`);
           log(`   Preço  : ${state.pendingPrice}`);
@@ -726,25 +750,25 @@ async function tick(symbol, pair, log, config, adapter) {
 
   // ── BOUGHT: aguarda RSI cruzar acima de rsiSell ou atingir rsiOverbought ──
   } else if (state.phase === 'BOUGHT') {
-    if (rsi >= rsiOverbought) {
-      log(`${R}🚀 RSI sobrecomprado extremo: ${rsi.toFixed(2)} ≥ ${rsiOverbought} — venda imediata${X}`);
-      const newState = await executeSell(`RSI ${rsi.toFixed(2)} ≥ ${rsiOverbought} (sobrecomprado extremo)`);
+    if (rsiExit >= rsiOverbought) {
+      log(`${R}🚀 RSI saída sobrecomprado extremo: ${rsiExit.toFixed(2)} ≥ ${rsiOverbought} — venda imediata${X}`);
+      const newState = await executeSell(`RSI(${effectiveSellInterval}) ${rsiExit.toFixed(2)} ≥ ${rsiOverbought} (sobrecomprado extremo)`);
       if (newState) { state = newState; saveState(symbol, state); }
-    } else if (rsi > rsiSell) {
+    } else if (rsiExit > rsiSell) {
       state.phase = 'ABOVE_70';
       saveState(symbol, state);
-      log(`📈 RSI passou de ${rsiSell} (${rsi.toFixed(2)}) — aguardando retorno para ≤ ${rsiSell} ou ≥ ${rsiOverbought}…`);
+      log(`📈 RSI saída passou de ${rsiSell} (${rsiExit.toFixed(2)}) — aguardando retorno para ≤ ${rsiSell} ou ≥ ${rsiOverbought}…`);
     }
 
   // ── ABOVE_70: vende quando RSI retorna a ≤ rsiSell OU atinge rsiOverbought
   } else if (state.phase === 'ABOVE_70') {
-    if (rsi >= rsiOverbought) {
-      log(`${R}🚀 RSI sobrecomprado extremo: ${rsi.toFixed(2)} ≥ ${rsiOverbought} — venda imediata${X}`);
-      const newState = await executeSell(`RSI ${rsi.toFixed(2)} ≥ ${rsiOverbought} (sobrecomprado extremo)`);
+    if (rsiExit >= rsiOverbought) {
+      log(`${R}🚀 RSI saída sobrecomprado extremo: ${rsiExit.toFixed(2)} ≥ ${rsiOverbought} — venda imediata${X}`);
+      const newState = await executeSell(`RSI(${effectiveSellInterval}) ${rsiExit.toFixed(2)} ≥ ${rsiOverbought} (sobrecomprado extremo)`);
       if (newState) { state = newState; saveState(symbol, state); }
-    } else if (rsi <= rsiSell) {
-      log(`${R}📉 RSI voltou a ${rsi.toFixed(2)} ≤ ${rsiSell} — sinal de VENDA${X}`);
-      const newState = await executeSell(`RSI ${rsi.toFixed(2)} ≤ ${rsiSell} (retorno ao nível de venda)`);
+    } else if (rsiExit <= rsiSell) {
+      log(`${R}📉 RSI saída voltou a ${rsiExit.toFixed(2)} ≤ ${rsiSell} — sinal de VENDA${X}`);
+      const newState = await executeSell(`RSI(${effectiveSellInterval}) ${rsiExit.toFixed(2)} ≤ ${rsiSell} (retorno ao nível de venda)`);
       if (newState) { state = newState; saveState(symbol, state); }
     } else {
       log(`⏳ RSI em ${rsi.toFixed(2)} — aguardando retorno a ≤ ${rsiSell} ou subida a ≥ ${rsiOverbought}…`);
@@ -809,17 +833,21 @@ async function tick(symbol, pair, log, config, adapter) {
 // ── Inicialização ─────────────────────────────────────────────────────────────
 
 async function startSymbol(cfg) {
-  const { symbol, exchange = 'gate', interval = '30m', rsiBuy = RSI_BUY, rsiSell = RSI_SELL, symbolColor = '' } = cfg;
+  const { symbol, exchange = 'gate', interval = '30m', rsiBuy = RSI_BUY, rsiSell = RSI_SELL, symbolColor = '', sellInterval } = cfg;
+  const effectiveSellInterval = sellInterval || interval;
   const adapter       = createAdapter(exchange);
   const pair          = adapter.toPair(symbol);
   const log           = makeLogger(symbol, symbolColor, interval);
   const state         = loadState(symbol);
   const variationMin  = cfg.variationMin  !== undefined ? cfg.variationMin  : defaultVariationMin(interval);
   const rsiOverbought = cfg.rsiOverbought !== undefined ? cfg.rsiOverbought : RSI_OVERBOUGHT;
-  const config        = { interval, rsiBuy, rsiSell, variationMin, rsiOverbought };
-  const pollMs        = pollMsFor(interval);
+  const config        = { interval, rsiBuy, rsiSell, sellInterval, variationMin, rsiOverbought };
+  const pollMs        = Math.min(pollMsFor(interval), pollMsFor(effectiveSellInterval));
 
-  log(`=== Iniciado | ${adapter.name} | par: ${pair} | intervalo: ${interval} | poll: ${pollMs / 1000}s | RSI compra <${rsiBuy} | RSI venda >${rsiSell} | RSI imediato ≥${rsiOverbought} | var≥${variationMin}% | fase: ${state.phase} ===`);
+  const ivLabel = effectiveSellInterval !== interval
+    ? `entrada=${interval} / saída=${effectiveSellInterval}`
+    : interval;
+  log(`=== Iniciado | ${adapter.name} | par: ${pair} | intervalo: ${ivLabel} | poll: ${pollMs / 1000}s | RSI compra <${rsiBuy} | RSI venda >${rsiSell} | RSI imediato ≥${rsiOverbought} | var≥${variationMin}% | fase: ${state.phase} ===`);
 
   if (state.phase === 'PENDING_BUY') {
     log(`♻️  Estado restaurado — limit order pendente id=${state.pendingOrderId} | preço=${state.pendingPrice} (colocada em ${state.pendingTime})`);
@@ -859,11 +887,13 @@ async function main() {
 
   console.log(`\n🤖 RSI Trade Bot`);
   configs.forEach(c => {
-    const pollSec    = pollMsFor(c.interval) / 1000;
+    const sellIv     = c.sellInterval || c.interval;
+    const pollSec    = Math.min(pollMsFor(c.interval), pollMsFor(sellIv)) / 1000;
     const buyDisc    = (c.buyDiscount !== undefined ? c.buyDiscount : defaultBuyDiscount(c.interval)) * 100;
     const varMin     = c.variationMin  !== undefined ? c.variationMin  : defaultVariationMin(c.interval);
     const overbought = c.rsiOverbought !== undefined ? c.rsiOverbought : RSI_OVERBOUGHT;
-    console.log(`   ${c.symbolColor}${c.symbol}${X}: exchange=${c.exchange}  intervalo=${c.interval}  poll=${pollSec}s  RSI compra <${c.rsiBuy}  RSI venda >${c.rsiSell}  RSI imediato ≥${overbought}  compra −${buyDisc}%  var≥${varMin}%`);
+    const ivLabel    = c.sellInterval ? `entrada=${c.interval}/saída=${c.sellInterval}` : c.interval;
+    console.log(`   ${c.symbolColor}${c.symbol}${X}: exchange=${c.exchange}  intervalo=${ivLabel}  poll=${pollSec}s  RSI compra <${c.rsiBuy}  RSI venda >${c.rsiSell}  RSI imediato ≥${overbought}  compra −${buyDisc}%  var≥${varMin}%`);
   });
   console.log(`   Compra : desconto e var mínima por intervalo (ver defaultBuyDiscount / defaultVariationMin)`);
   console.log(`   Venda  : RSI volta a ≤${RSI_SELL}  OU  RSI ≥ ${RSI_OVERBOUGHT}  →  limit sell ${SELL_DISCOUNT * 100}% abaixo do preço live`);

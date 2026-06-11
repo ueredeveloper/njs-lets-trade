@@ -418,7 +418,13 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
                       )}
                       {(isActive || isTrade) && tradeConfig && (
                         <span className="text-[9px] font-normal text-p5/50">
-                          {tradeConfig.interval} · &lt;{tradeConfig.rsiBuy} &gt;{tradeConfig.rsiSell}
+                          {tradeConfig.exchange === 'gate' ? 'Gate' : 'Bnb'}
+                          {' · '}
+                          {tradeConfig.interval}&lt;{tradeConfig.rsiBuy}
+                          {tradeConfig.sellInterval && tradeConfig.sellInterval !== tradeConfig.interval
+                            ? <> / {tradeConfig.sellInterval}&gt;{tradeConfig.rsiSell}</>
+                            : <>&gt;{tradeConfig.rsiSell}</>
+                          }
                         </span>
                       )}
                     </div>

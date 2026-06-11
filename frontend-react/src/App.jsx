@@ -60,7 +60,7 @@ function AppContent() {
         setBinanceFavorites(new Set(binanceList));
         // tradeList é [{symbol, exchange, interval, rsiBuy, rsiSell}]
         setTradeFavorites(new Set(tradeList.map(t => t.symbol)));
-        setTradeConfigs(new Map(tradeList.map(t => [t.symbol, { exchange: t.exchange ?? 'gate', interval: t.interval, rsiBuy: t.rsiBuy, rsiSell: t.rsiSell }])));
+        setTradeConfigs(new Map(tradeList.map(t => [t.symbol, { exchange: t.exchange ?? 'gate', interval: t.interval, rsiBuy: t.rsiBuy, rsiSell: t.rsiSell, sellInterval: t.sellInterval ?? null }])));
       } catch (err) {
         console.error('Erro ao inicializar:', err);
       } finally {

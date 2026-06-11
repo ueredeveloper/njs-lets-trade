@@ -76,11 +76,11 @@ export async function addFavorite(symbol, type) {
   return res.json();
 }
 
-export async function addTradeFavorite(symbol, { exchange = 'binance', interval, rsiBuy, rsiSell }) {
+export async function addTradeFavorite(symbol, { exchange = 'binance', interval, rsiBuy, rsiSell, sellInterval }) {
   const res = await fetch('/services/sb/favorites', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ symbol, type: 'trade', exchange, interval, rsiBuy, rsiSell }),
+    body: JSON.stringify({ symbol, type: 'trade', exchange, interval, rsiBuy, rsiSell, sellInterval: sellInterval || null }),
   });
   if (!res.ok) throw new Error('Falha ao salvar configuração de trade');
   return res.json();
