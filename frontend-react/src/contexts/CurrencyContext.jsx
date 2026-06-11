@@ -77,12 +77,12 @@ export function CurrencyProvider({ children }) {
       if (next.has(sym)) {
         next.delete(sym);
         setTradeConfigs(m => { const n = new Map(m); n.delete(sym); return n; });
-        removeFavorite(sym, 'trade').catch(() => {});
+        removeFavorite(sym, 'trade').catch((err) => console.warn('[CurrencyContext] removeTradeFavorite:', err.message));
       } else {
         next.add(sym);
         const cfg = config || { exchange: 'gate', interval: '30m', rsiBuy: 30, rsiSell: 70, sellInterval: null };
         setTradeConfigs(m => { const n = new Map(m); n.set(sym, cfg); return n; });
-        addTradeFavorite(sym, cfg).catch(() => {});
+        addTradeFavorite(sym, cfg).catch((err) => console.warn('[CurrencyContext] addTradeFavorite:', err.message));
       }
       return next;
     });

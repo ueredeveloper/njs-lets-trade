@@ -67,24 +67,34 @@ router.get('/active-trades', async (req, res) => {
     const { ok: gateOk, map: gateBalances }       = balanceCache.gate;
     const { ok: binanceOk, map: binanceBalances }  = balanceCache.binance;
 
-    const exchangeAvailable = gateOk || binanceOk;
-
     const result = [];
     for (const file of files) {
       try {
         const state = JSON.parse(fs.readFileSync(path.join(BOT_DATA_DIR, file), 'utf8'));
+
         if (state.phase !== 'BOUGHT' && state.phase !== 'ABOVE_70') continue;
 
         const symbol       = file.replace('state-', '').replace('.json', '');
         const baseCurrency = symbol.endsWith('USDT') ? symbol.slice(0, -4) : symbol.slice(0, -3);
 
-        if (exchangeAvailable) {
-          // Saldo real na exchange × preço de compra (proxy conservador de valor atual)
-          const balance     = (gateBalances.get(baseCurrency) ?? 0) + (binanceBalances.get(baseCurrency) ?? 0);
-          const holdingUsdt = balance * (state.buyPrice ?? 0);
+        // Verifica holding real usando apenas a exchange correta do trade.
+        // Se a exchange da ordem não consta no state (arquivos antigos), soma ambas.
+        const stateExchange = state.exchange; // 'gate' | 'binance' | undefined
+        const relevantOk = stateExchange === 'binance' ? binanceOk
+                         : stateExchange === 'gate'    ? gateOk
+                         : gateOk || binanceOk;
+
+        if (relevantOk) {
+          const balance = stateExchange === 'binance' ? (binanceBalances.get(baseCurrency) ?? 0)
+                        : stateExchange === 'gate'    ? (gateBalances.get(baseCurrency) ?? 0)
+                        : (gateBalances.get(baseCurrency) ?? 0) + (binanceBalances.get(baseCurrency) ?? 0);
+          // Se buyPrice é desconhecido, usa buyUsdt histórico como proxy
+          const holdingUsdt = state.buyPrice
+            ? balance * state.buyPrice
+            : (state.buyUsdt ?? 0);
           if (holdingUsdt < MIN_HOLDING_USDT) continue;
         } else {
-          // Fallback se ambas as APIs falharam: filtra pelo buyUsdt histórico
+          // Fallback: exchange API indisponível — usa buyUsdt histórico
           if ((state.buyUsdt ?? 0) < MIN_HOLDING_USDT) continue;
         }
 

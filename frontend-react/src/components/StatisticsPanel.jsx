@@ -49,20 +49,23 @@ function RsiStats() {
   const inp = 'bg-p2 border border-p3/40 text-p5 text-[10px] sm:text-xs rounded px-1 sm:px-2 py-1 focus:outline-none focus:border-p4 w-full';
   const inpNum = `${inp} [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none`;
 
-  async function handleSearch(overrideSymbol, updateChart = false, overrideInterval) {
-    const sym = (overrideSymbol ?? symbol).trim().toUpperCase();
-    const iv  = overrideInterval ?? interval;
+  async function handleSearch(overrideSymbol, updateChart = false, overrideInterval, overrideSource) {
+    const sym    = (overrideSymbol ?? symbol).trim().toUpperCase();
+    const iv     = overrideInterval ?? interval;
+    // Usa source do gráfico apenas quando o símbolo buscado é o mesmo do gráfico
+    const chartSource = selectedChart?.symbol === sym ? (selectedChart?.source ?? null) : null;
+    const src    = overrideSource !== undefined ? overrideSource : chartSource;
     if (!sym) return;
     setLoading(true);
     setError(null);
     setResult(null);
     try {
-      const data = await fetchRsiOversoldRecovery(sym, iv, oversold, overbought);
+      const data = await fetchRsiOversoldRecovery(sym, iv, oversold, overbought, src);
       setResult(data);
       // Guarda a série RSI calculada com warmup completo (1500 candles)
       rsiSeriesRef.current = data.rsiSeries ?? null;
       if (updateChart) {
-        const chartData = await fetchCandlesticksAndCloud(sym, iv);
+        const chartData = await fetchCandlesticksAndCloud(sym, iv, src);
         setSelectedChart(chartData);
       }
     } catch (err) {
@@ -77,9 +80,10 @@ function RsiStats() {
     if (!selectedChart?.symbol) return;
     const sym = selectedChart.symbol;
     const iv  = selectedChart.interval;
+    const src = selectedChart.source ?? null;
     setSymbol(sym);
     if (iv) setInterval(iv);
-    handleSearch(sym, false, iv);
+    handleSearch(sym, false, iv, src);
   }, [selectedChart?.symbol, selectedChart?.interval]);
 
   return (

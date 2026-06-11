@@ -110,7 +110,7 @@ async function loadFavoritesTrade() {
   const rows = await res.json();
   return rows.map(r => ({
     symbol:       r.symbol,
-    exchange:     r.exchange     ?? 'binance',
+    exchange:     r.exchange     ?? 'gate',
     interval:     r.interval     ?? '30m',
     rsiBuy:       Number(r.rsi_buy  ?? 30),
     rsiSell:      Number(r.rsi_sell ?? 70),
@@ -541,7 +541,7 @@ function createAdapter(exchange) {
 // ── Tick principal ────────────────────────────────────────────────────────────
 
 async function tick(symbol, pair, log, config, adapter) {
-  const { rsiBuy = RSI_BUY, rsiSell = RSI_SELL, interval = '30m', sellInterval } = config;
+  const { rsiBuy = RSI_BUY, rsiSell = RSI_SELL, interval = '30m', sellInterval, exchange = 'gate' } = config;
   const effectiveSellInterval = sellInterval || interval;
   const separateSellInterval  = effectiveSellInterval !== interval;
 
@@ -605,6 +605,7 @@ async function tick(symbol, pair, log, config, adapter) {
       log(`${'─'.repeat(60)}`);
       return {
         phase:         'PENDING_SELL',
+        exchange:      state.exchange ?? exchange,
         sellOrderId:   sellOrder?.id,
         sellPrice,
         sellQty:       state.buyQty,
@@ -625,7 +626,7 @@ async function tick(symbol, pair, log, config, adapter) {
     const tokenBalance = await adapter.getTokenBalance(baseCurrency);
     const holdingUsdt  = tokenBalance * last.close;
     if (holdingUsdt < MIN_HOLDING_USDT) {
-      state = { phase: 'WATCHING' };
+      state = { phase: 'WATCHING', exchange };
       saveState(symbol, state);
       log(`✅ Saldo ${baseCurrency} ≈ $${holdingUsdt.toFixed(2)} < $${MIN_HOLDING_USDT} — posição encerrada externamente, voltando a WATCHING`);
       return;
@@ -642,6 +643,7 @@ async function tick(symbol, pair, log, config, adapter) {
     if (holdingUsdt >= MIN_HOLDING_USDT) {
       state = {
         phase:    'BOUGHT',
+        exchange,
         buyPrice: last.close,
         buyQty:   tokenBalance * (1 - FEE_RATE), // aproximação líquida
         buyUsdt:  holdingUsdt,
@@ -709,6 +711,7 @@ async function tick(symbol, pair, log, config, adapter) {
         const filledPrice = parseFloat(order.avg_deal_price || order.price || state.pendingPrice);
         state = {
           phase:    'BOUGHT',
+          exchange,
           buyPrice: filledPrice,
           buyQty:   netQty,                      // quantidade disponível para venda (já sem a taxa)
           buyUsdt:  netQty * filledPrice,
@@ -784,7 +787,7 @@ async function tick(symbol, pair, log, config, adapter) {
       const holdingUsdt   = tokenBalance * last.close;
       if (holdingUsdt >= MIN_HOLDING_USDT) {
         // Ainda tem saldo: volta para ABOVE_70 para tentar vender novamente
-        state = { phase: 'ABOVE_70', buyQty: tokenBalance, buyUsdt: holdingUsdt, buyTime: state.buyTime ?? now(), detected: true };
+        state = { phase: 'ABOVE_70', exchange: state.exchange ?? exchange, buyQty: tokenBalance, buyUsdt: holdingUsdt, buyTime: state.buyTime ?? now(), detected: true };
         saveState(symbol, state);
         log(`♻️  Saldo detectado (${tokenBalance.toFixed(4)} ≈ $${holdingUsdt.toFixed(2)}) — voltando a ABOVE_70 para nova tentativa de venda`);
       } else {
@@ -817,7 +820,7 @@ async function tick(symbol, pair, log, config, adapter) {
         log(`   Preço  : ${state.sellPrice}`);
         log(`${'─'.repeat(60)}`);
         // Volta para ABOVE_70 para tentar vender novamente no próximo tick
-        state = { phase: 'ABOVE_70', buyPrice: state.buyPrice, buyQty: state.sellQty, buyUsdt: state.buyUsdt, buyTime: state.buyTime, detected: state.detected };
+        state = { phase: 'ABOVE_70', exchange: state.exchange ?? exchange, buyPrice: state.buyPrice, buyQty: state.sellQty, buyUsdt: state.buyUsdt, buyTime: state.buyTime, detected: state.detected };
         saveState(symbol, state);
 
       } else {
@@ -832,6 +835,9 @@ async function tick(symbol, pair, log, config, adapter) {
 
 // ── Inicialização ─────────────────────────────────────────────────────────────
 
+// Configs em tempo de execução: atualizadas pelo watchFavorites sem reiniciar o bot.
+const liveConfigs = {};
+
 async function startSymbol(cfg) {
   const { symbol, exchange = 'gate', interval = '30m', rsiBuy = RSI_BUY, rsiSell = RSI_SELL, symbolColor = '', sellInterval } = cfg;
   const effectiveSellInterval = sellInterval || interval;
@@ -841,8 +847,10 @@ async function startSymbol(cfg) {
   const state         = loadState(symbol);
   const variationMin  = cfg.variationMin  !== undefined ? cfg.variationMin  : defaultVariationMin(interval);
   const rsiOverbought = cfg.rsiOverbought !== undefined ? cfg.rsiOverbought : RSI_OVERBOUGHT;
-  const config        = { interval, rsiBuy, rsiSell, sellInterval, variationMin, rsiOverbought };
   const pollMs        = Math.min(pollMsFor(interval), pollMsFor(effectiveSellInterval));
+
+  // Registra config mutável; watchFavorites atualiza campos in-place entre ticks
+  liveConfigs[symbol] = { interval, rsiBuy, rsiSell, sellInterval, variationMin, rsiOverbought, exchange };
 
   const ivLabel = effectiveSellInterval !== interval
     ? `entrada=${interval} / saída=${effectiveSellInterval}`
@@ -856,12 +864,47 @@ async function startSymbol(cfg) {
   }
 
   const run = async () => {
-    try { await tick(symbol, pair, log, config, adapter); }
+    try { await tick(symbol, pair, log, liveConfigs[symbol], adapter); }
     catch (err) { log(`❌ Tick error: ${err.message}`); }
   };
 
   await run();
   setInterval(run, pollMs);
+}
+
+// Recarrega favorites_trade do Supabase a cada 5 min e atualiza configs in-place.
+// Campos atualizáveis em tempo real: rsiBuy, rsiSell, interval, sellInterval,
+// variationMin, rsiOverbought. (Trocar exchange/symbol requer reinício do bot.)
+async function watchFavorites(colorOffset) {
+  const UPDATABLE = ['rsiBuy', 'rsiSell', 'interval', 'sellInterval', 'variationMin', 'rsiOverbought'];
+
+  setInterval(async () => {
+    let entries;
+    try {
+      entries = await loadFavoritesTrade();
+    } catch (err) {
+      console.warn(`⚠️  [watchFavorites] erro ao recarregar favoritos: ${err.message}`);
+      return;
+    }
+
+    entries.forEach((e, i) => {
+      const sym = e.symbol;
+      if (liveConfigs[sym]) {
+        const changed = UPDATABLE.filter(k => e[k] !== undefined && liveConfigs[sym][k] !== e[k]);
+        if (changed.length) {
+          const summary = changed.map(k => `${k}: ${liveConfigs[sym][k]} → ${e[k]}`).join('  ');
+          changed.forEach(k => { liveConfigs[sym][k] = e[k]; });
+          console.log(`🔄 [${sym}] config atualizada: ${summary}`);
+        }
+      } else {
+        // Novo símbolo adicionado enquanto o bot estava rodando
+        const idx = colorOffset + i;
+        const cfg = { exchange: 'binance', ...e, symbolColor: SYMBOL_COLORS[idx % SYMBOL_COLORS.length] };
+        console.log(`➕ Novo símbolo detectado: ${sym} — iniciando…`);
+        startSymbol(cfg).catch(err => console.error(`❌ startSymbol ${sym}:`, err.message));
+      }
+    });
+  }, 5 * 60_000);
 }
 
 async function main() {
@@ -902,6 +945,9 @@ async function main() {
   console.log(`   Poll   : ≤ ${POLL_MIN_MS / 60000} min (proporcional ao intervalo de cada moeda)\n`);
 
   await Promise.all(configs.map(startSymbol));
+
+  // Verifica mudanças no banco a cada 5 minutos
+  watchFavorites(configs.length);
 }
 
 main().catch(err => { console.error('Fatal:', err.message); process.exit(1); });

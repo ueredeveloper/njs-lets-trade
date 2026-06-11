@@ -38,6 +38,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
 
   const xData = (() => {
     const dates = candlesticks.map((c) => convertOpenTime(c.openTime, interval));
+    if (!showIchimoku) return dates.slice(-DL);
     const padding = new Array(24).fill('');
     return [...dates, ...padding].slice(-(DL + 24));
   })();
@@ -128,9 +129,25 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
 
   // Todas as markLines unificadas: separadores de dia + zoom + compras
   const allMarkLineData = [...dayBreakData, ...periodMarkData, ...tradeMarkData];
-  const markLineConfig   = allMarkLineData.length
-    ? { silent: true, symbol: 'none', data: allMarkLineData }
-    : null;
+
+  const lastClose = candlesticks.length ? parseFloat(candlesticks[candlesticks.length - 1].close) : null;
+  const _fmtP = (p) => p < 0.01 ? p.toFixed(6) : p < 1 ? p.toFixed(4) : p.toFixed(2);
+  const finalMarkLine = {
+    silent: true, symbol: 'none',
+    data: [
+      ...allMarkLineData,
+      ...(lastClose != null ? [{
+        yAxis: lastClose,
+        lineStyle: { color: '#facc15', width: 1, type: 'solid', opacity: 0.7 },
+        label: {
+          show: true, position: 'end',
+          formatter: _fmtP(lastClose),
+          color: '#111', fontSize: 10, fontWeight: 'bold',
+          backgroundColor: '#facc15', padding: [2, 5], borderRadius: 2,
+        }
+      }] : [])
+    ]
+  };
 
   const axisBase = (gridIndex) => ({
     gridIndex,
@@ -148,7 +165,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
       xAxisIndex: idx, yAxisIndex: idx,
       data: candlesticks.slice(-DL).map((c) => [c.open, c.close, c.low, c.high]),
       itemStyle: { color: C_UP, color0: C_DOWN, borderColor: C_UP, borderColor0: C_DOWN },
-      ...(markLineConfig ? { markLine: markLineConfig } : {}),
+      markLine: finalMarkLine,
     },
     ...(showMa200 ? [{
       name: 'MA200',
@@ -275,12 +292,7 @@ function buildMatrixOption({ symbol, interval, candlesticks, rsi }, activeIndica
   const G_LABEL  = 'rgba(34,197,94,0.38)';
   const BG       = '#050d0a';
 
-  // xData com padding (igual ao buildOption)
-  const xData = (() => {
-    const dates   = candlesticks.map(c => convertOpenTime(c.openTime, interval));
-    const padding = new Array(24).fill('');
-    return [...dates, ...padding].slice(-(DL + 24));
-  })();
+  const xData = candlesticks.map(c => convertOpenTime(c.openTime, interval)).slice(-DL);
 
   // separadores de dia (em tom verde)
   const dayBreakData = (() => {
@@ -336,9 +348,26 @@ function buildMatrixOption({ symbol, interval, candlesticks, rsi }, activeIndica
   })();
 
   const allMarkLineData = [...dayBreakData, ...periodMarkData, ...tradeMarkData];
-  const markLineConfig   = allMarkLineData.length ? { silent: true, symbol: 'none', data: allMarkLineData } : null;
 
   const closes  = candlesticks.slice(-DL).map(c => c.close);
+  const lastClose = candlesticks.length ? parseFloat(candlesticks[candlesticks.length - 1].close) : null;
+  const _fmtP = (p) => p < 0.01 ? p.toFixed(6) : p < 1 ? p.toFixed(4) : p.toFixed(2);
+  const finalMarkLine = {
+    silent: true, symbol: 'none',
+    data: [
+      ...allMarkLineData,
+      ...(lastClose != null ? [{
+        yAxis: lastClose,
+        lineStyle: { color: G, width: 1, type: 'solid', opacity: 0.7 },
+        label: {
+          show: true, position: 'end',
+          formatter: _fmtP(lastClose),
+          color: BG, fontSize: 10, fontWeight: 'bold',
+          backgroundColor: G, padding: [2, 5], borderRadius: 2, fontFamily: 'monospace',
+        }
+      }] : [])
+    ]
+  };
   const rsiData = rsi ? rsi.slice(-DL) : [];
 
   const axisBase = (gridIndex, showLabel) => ({
@@ -398,7 +427,7 @@ function buildMatrixOption({ symbol, interval, candlesticks, rsi }, activeIndica
           color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
             colorStops: [{ offset: 0, color: 'rgba(34,197,94,0.28)' }, { offset: 1, color: 'rgba(34,197,94,0.02)' }] },
         },
-        ...(markLineConfig ? { markLine: markLineConfig } : {}),
+        markLine: finalMarkLine,
       },
       ...(showRsi && rsiData.length ? [{
         name: 'RSI',
@@ -621,7 +650,7 @@ export default function CandlestickChart() {
     if (!selectedChart?.symbol) return;
     setLoadingInterval(true);
     try {
-      const data = await fetchCandlesticksAndCloud(selectedChart.symbol, iv);
+      const data = await fetchCandlesticksAndCloud(selectedChart.symbol, iv, selectedChart.source ?? null);
       setSelectedChart(data);
     } finally {
       setLoadingInterval(false);
@@ -645,7 +674,10 @@ export default function CandlestickChart() {
     instance.dispatchAction({ type: 'dataZoom', start: startPct, end: endPct });
   }, [chartZoom, selectedChart]);
 
-  const tradeTimes = tradePurchases.map(t => Number(t.time));
+  const tradeTimes = [...tradePurchases]
+    .sort((a, b) => Number(a.time) - Number(b.time))
+    .slice(-2)
+    .map(t => Number(t.time));
 
   const displayLimit = (() => {
     const candles = selectedChart?.candlesticks;

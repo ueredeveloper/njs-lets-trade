@@ -3,7 +3,7 @@ const analyseRsiOversoldRecovery = require('../utils/analyseRsiOversoldRecovery'
 
 // GET /services/rsi-oversold-recovery?symbol=BTCUSDT&interval=1h&oversold=30&overbought=70
 router.get('/rsi-oversold-recovery', async (req, res) => {
-    const { symbol, interval, oversold, overbought } = req.query;
+    const { symbol, interval, oversold, overbought, source } = req.query;
 
     if (!symbol || !interval) {
         return res.status(400).json({ error: 'Parâmetros obrigatórios: symbol, interval' });
@@ -12,6 +12,7 @@ router.get('/rsi-oversold-recovery', async (req, res) => {
     const options = {
         oversold:   oversold   ? parseFloat(oversold)   : 30,
         overbought: overbought ? parseFloat(overbought) : 70,
+        source:     source     ?? null,
     };
 
     try {

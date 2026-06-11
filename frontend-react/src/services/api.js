@@ -50,8 +50,9 @@ export async function fetch24hVolume() {
  * @param {number} oversold    limiar de entrada (padrão 30)
  * @param {number} overbought  limiar de saída   (padrão 70)
  */
-export async function fetchRsiOversoldRecovery(symbol, interval, oversold = 30, overbought = 70) {
+export async function fetchRsiOversoldRecovery(symbol, interval, oversold = 30, overbought = 70, source = null) {
   const params = new URLSearchParams({ symbol, interval, oversold, overbought });
+  if (source) params.set('source', source);
   const res = await fetch(`/services/rsi-oversold-recovery?${params}`);
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
@@ -248,7 +249,7 @@ export async function fetchCandlesticksAndCloud(symbol, interval, source = null,
     }).then((r) => r.json()),
   ]);
 
-  return { symbol, interval, price: candles.at(-1)?.close, candlesticks: candles, ichimokuCloud, movingAverage, rsi };
+  return { symbol, interval, source: source ?? null, price: candles.at(-1)?.close, candlesticks: candles, ichimokuCloud, movingAverage, rsi };
 }
 
 /** Constrói o nome normalizado a partir da query string.

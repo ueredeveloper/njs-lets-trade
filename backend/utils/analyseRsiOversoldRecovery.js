@@ -1,5 +1,6 @@
 const RSI = require('technicalindicators').RSI;
 const getCandles = require('../binance/getCandles');
+const { getGateCandles } = require('../gate/getGateCandles');
 
 const RSI_PERIOD = 14;
 const HTF_LIMIT  = 1000;
@@ -80,12 +81,13 @@ function findRsiAt(series, targetTime) {
 }
 
 async function analyseRsiOversoldRecovery(symbol, interval, options = {}) {
-    const { oversold = 30, overbought = 70 } = options;
+    const { oversold = 30, overbought = 70, source } = options;
+    const fetchCandles = source === 'gate' ? getGateCandles : getCandles;
 
     const settled = await Promise.allSettled([
-        getCandles(symbol, interval, MAIN_LIMIT),
-        getCandles(symbol, '4h', HTF_LIMIT),
-        getCandles(symbol, '8h', HTF_LIMIT),
+        fetchCandles(symbol, interval, MAIN_LIMIT),
+        fetchCandles(symbol, '4h', HTF_LIMIT),
+        fetchCandles(symbol, '8h', HTF_LIMIT),
     ]);
 
     const [candlesResult, candles4hResult, candles8hResult] = settled;

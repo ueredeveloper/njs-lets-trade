@@ -203,8 +203,10 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
     try {
       setChartZoom(null);
       // Se source não foi informado, detecta Gate pelo fato de o símbolo não estar na lista Binance
+      // ou por ser um favorito Gate (símbolo pode existir na Binance mas sem candles disponíveis)
       const isGateOnly = !currencies.list.some(c => c.symbol === item.symbol);
-      const effectiveSource = source ?? (isGateOnly ? 'gate' : null);
+      const isGateFav  = gateFavorites.has(item.symbol);
+      const effectiveSource = source ?? ((isGateOnly || isGateFav) ? 'gate' : null);
 
       const effectiveInterval = selectedChart?.interval || '30m';
 

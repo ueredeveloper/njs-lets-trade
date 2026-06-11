@@ -90,6 +90,7 @@ create table if not exists public.favorites_trade (
   interval        text         not null default '30m',
   rsi_buy         numeric(5,2) not null default 30,
   rsi_sell        numeric(5,2) not null default 70,
+  sell_interval   text,                                  -- null = usa o mesmo intervalo de entrada
   variation_min   numeric(5,2),                          -- null = padrão automático por intervalo
   position        integer      not null default 0,
   created_at      timestamptz  not null default now(),
