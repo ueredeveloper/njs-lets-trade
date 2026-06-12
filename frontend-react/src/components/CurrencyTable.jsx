@@ -67,7 +67,7 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
     gateFavorites, binanceFavorites, tradeFavorites, tradeConfigs,
     toggleGateFavorite, toggleBinanceFavorite, toggleTradeFavorite, updateTradeConfig,
     setTradePurchases, setAllTrades,
-    activeTrades, refreshActiveTrades,
+    activeTrades, refreshActiveTrades, dismissActiveTrade,
   } = useCurrency();
   const { t, formatPrice } = useI18n();
   const [loadingSymbol, setLoadingSymbol]       = useState(null);
@@ -295,7 +295,7 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
             </span>
           </button>
 
-          {/* Filtro Active Trades (posições abertas do bot) */}
+          {/* Filtro Active Trades (posições abertas nas exchanges) */}
           <button
             onClick={() => toggleShowFavorites('active')}
             title={showFavorites === 'active' ? 'Ver todas as moedas' : `Trades ativos — posições compradas (${activeCount})`}
@@ -413,9 +413,13 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
                     <div className="flex flex-col">
                       <span>{base}<span className="opacity-40 font-normal text-[10px]">/{quote}</span></span>
                       {isActive && (
-                        <span className="text-[9px] font-normal" style={{ color: ACTIVE_COLOR }}>
-                          @{formatPrice(activeInfo.buyPrice)}
-                          {activeInfo.phase === 'ABOVE_70' && ' ▲70'}
+                        <span className="flex items-center gap-1 text-[9px] font-normal" style={{ color: ACTIVE_COLOR }}>
+                          <span>@{formatPrice(activeInfo.buyPrice)}</span>
+                          <button
+                            title="Ignorar posição (saldo residual)"
+                            onClick={(e) => { e.stopPropagation(); dismissActiveTrade(item.symbol); }}
+                            className="opacity-50 hover:opacity-100 leading-none"
+                          >×</button>
                         </span>
                       )}
                       {(isActive || isTrade) && tradeConfig && (

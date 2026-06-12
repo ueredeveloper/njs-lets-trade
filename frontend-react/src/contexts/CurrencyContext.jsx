@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useCallback, useEffect } from 'react';
-import { addFavorite, addTradeFavorite, removeFavorite, fetchActiveTrades } from '../services/api';
+import { addFavorite, addTradeFavorite, removeFavorite, fetchActiveTrades, ignoreActiveTrade } from '../services/api';
 
 // Stablecoins que não queremos capturar
 const STABLE_CURRENCIES = new Set([
@@ -47,7 +47,7 @@ export function CurrencyProvider({ children }) {
   const [tradeFavorites, setTradeFavorites]     = useState(new Set());
   // Config por símbolo: Map<symbol, { interval, rsiBuy, rsiSell, sellInterval }>
   const [tradeConfigs, setTradeConfigs]         = useState(new Map());
-  // Posições abertas do bot: Map<symbol, { phase, buyPrice, buyQty, buyUsdt, buyTime }>
+  // Saldos reais das exchanges: Map<symbol, { exchange, buyPrice, buyQty }>
   const [activeTrades, setActiveTrades]         = useState(new Map());
 
   const toggleGateFavorite = useCallback(async (symbol) => {
@@ -94,6 +94,15 @@ export function CurrencyProvider({ children }) {
       setActiveTrades(new Map(list.map(t => [t.symbol.toUpperCase(), t])));
     } catch (err) {
       console.warn('[CurrencyContext] refreshActiveTrades:', err.message);
+    }
+  }, []);
+
+  const dismissActiveTrade = useCallback(async (symbol) => {
+    try {
+      await ignoreActiveTrade(symbol);
+      setActiveTrades(prev => { const next = new Map(prev); next.delete(symbol.toUpperCase()); return next; });
+    } catch (err) {
+      console.warn('[CurrencyContext] dismissActiveTrade:', err.message);
     }
   }, []);
 
@@ -231,6 +240,7 @@ export function CurrencyProvider({ children }) {
         activeTrades,
         setActiveTrades,
         refreshActiveTrades,
+        dismissActiveTrade,
       }}
     >
       {children}

@@ -1,27 +1,56 @@
-const router  = require('express').Router();
-const path    = require('path');
-const fs      = require('fs');
-const crypto  = require('crypto');
+const router          = require('express').Router();
 const { gateRequest } = require('../gate/getGateClient');
+const getTickers      = require('../binance/cachedTicker24hr');
+const crypto          = require('crypto');
+const path            = require('path');
+const fs              = require('fs');
 
-const BOT_DATA_DIR     = path.join(__dirname, '../data/bot');
 const MIN_HOLDING_USDT = 3;
 const BINANCE_BASE     = 'https://api.binance.com';
-const BALANCE_TTL_MS   = 30_000; // cache de saldos por 30s
+const BALANCE_TTL_MS   = 30_000;
+const CLOCK_TTL_MS     = 60 * 60_000;
 
-let balanceCache     = null;
-let balanceCachedAt  = 0;
+const STABLE_COINS   = new Set(['BUSD', 'TUSD', 'DAI', 'FDUSD']);
+const IGNORE_FILE    = path.join(__dirname, '../data/active-trades-ignore.json');
+
+function readIgnoreList() {
+  try { return new Set(JSON.parse(fs.readFileSync(IGNORE_FILE, 'utf8'))); }
+  catch { return new Set(); }
+}
+
+function writeIgnoreList(set) {
+  fs.writeFileSync(IGNORE_FILE, JSON.stringify([...set], null, 2));
+}
+
+let binanceClockOffset = 0;
+let binanceClockSyncAt = 0;
+
+async function syncBinanceClock() {
+  if (Date.now() - binanceClockSyncAt < CLOCK_TTL_MS) return;
+  try {
+    const res  = await fetch(`${BINANCE_BASE}/api/v3/time`);
+    const data = await res.json();
+    binanceClockOffset = Math.floor(data.serverTime / 1000) - Math.floor(Date.now() / 1000);
+    binanceClockSyncAt = Date.now();
+  } catch {
+    binanceClockOffset = 0;
+  }
+}
+
+let balanceCache    = null;
+let balanceCachedAt = 0;
 
 async function getGateBalances() {
   try {
     const accounts = await gateRequest('GET', '/spot/accounts');
     const map = new Map();
     for (const a of accounts) {
-      const total = parseFloat(a.available || 0) + parseFloat(a.locked || 0);
-      if (total > 0) map.set(a.currency, total);
+      const qty = parseFloat(a.available || 0);
+      if (qty > 0) map.set(a.currency.toUpperCase(), qty);
     }
     return { ok: true, map };
-  } catch {
+  } catch (err) {
+    console.error('[active-trades] Gate.io balance error:', err.message);
     return { ok: false, map: new Map() };
   }
 }
@@ -31,85 +60,146 @@ async function getBinanceBalances() {
     const apiKey = process.env.BINANCE_API_KEY;
     const secret = process.env.BINANCE_SECRET_KEY;
     if (!apiKey || !secret) return { ok: false, map: new Map() };
-    const timestamp = Date.now();
+
+    await syncBinanceClock();
+    const timestamp = Math.floor(Date.now() / 1000 + binanceClockOffset) * 1000;
     const qs  = `timestamp=${timestamp}&recvWindow=10000`;
     const sig = crypto.createHmac('sha256', secret).update(qs).digest('hex');
     const res = await fetch(`${BINANCE_BASE}/api/v3/account?${qs}&signature=${sig}`, {
       headers: { 'X-MBX-APIKEY': apiKey },
     });
-    if (!res.ok) return { ok: false, map: new Map() };
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      console.error('[active-trades] Binance balance error:', res.status, body.msg ?? '');
+      return { ok: false, map: new Map() };
+    }
     const data = await res.json();
     const map = new Map();
     for (const b of data.balances || []) {
-      const total = parseFloat(b.free || 0) + parseFloat(b.locked || 0);
-      if (total > 0) map.set(b.asset, total);
+      const qty = parseFloat(b.free || 0);
+      if (qty > 0) map.set(b.asset.toUpperCase(), qty);
     }
     return { ok: true, map };
-  } catch {
+  } catch (err) {
+    console.error('[active-trades] Binance balance error:', err.message);
     return { ok: false, map: new Map() };
   }
 }
 
+// GET /services/active-trades/debug  → saldos brutos de cada exchange
+router.get('/active-trades/debug', async (req, res) => {
+  const [gate, binance] = await Promise.all([getGateBalances(), getBinanceBalances()]);
+  res.json({
+    gate:    { ok: gate.ok,    balances: Object.fromEntries(gate.map) },
+    binance: { ok: binance.ok, balances: Object.fromEntries(binance.map) },
+  });
+});
+
 // GET /services/active-trades
 router.get('/active-trades', async (req, res) => {
   try {
-    if (!fs.existsSync(BOT_DATA_DIR)) return res.json([]);
-
-    const files = fs.readdirSync(BOT_DATA_DIR)
-      .filter(f => f.startsWith('state-') && f.endsWith('.json'));
-
-    // Busca saldos reais (cache de 30s para não bater nas exchanges a cada requisição)
     if (!balanceCache || Date.now() - balanceCachedAt > BALANCE_TTL_MS) {
       const [gate, binance] = await Promise.all([getGateBalances(), getBinanceBalances()]);
       balanceCache    = { gate, binance };
       balanceCachedAt = Date.now();
     }
-    const { ok: gateOk, map: gateBalances }       = balanceCache.gate;
-    const { ok: binanceOk, map: binanceBalances }  = balanceCache.binance;
+    const { ok: gateOk, map: gateBalances }      = balanceCache.gate;
+    const { ok: binanceOk, map: binanceBalances } = balanceCache.binance;
+
+    if (!gateOk && !binanceOk) return res.json([]);
+
+    const ignoreList = readIgnoreList();
+
+    // Preços Binance
+    const priceMap = new Map();
+    try {
+      const tickers = await getTickers();
+      for (const t of tickers) {
+        if (t.symbol.endsWith('USDT'))
+          priceMap.set(t.symbol.slice(0, -4).toUpperCase(), parseFloat(t.lastPrice));
+      }
+    } catch (err) {
+      console.error('[active-trades] Binance ticker error:', err.message);
+    }
+
+    // Preços Gate.io como fallback para tokens sem par na Binance (endpoint público)
+    try {
+      const res  = await fetch('https://api.gateio.ws/api/v4/spot/tickers');
+      const data = await res.json();
+      for (const t of data) {
+        if (!t.currency_pair.endsWith('_USDT')) continue;
+        const base = t.currency_pair.replace('_USDT', '').toUpperCase();
+        if (!priceMap.has(base)) priceMap.set(base, parseFloat(t.last));
+      }
+    } catch (err) {
+      console.error('[active-trades] Gate ticker error:', err.message);
+    }
+
+    const currencies = new Set([
+      ...(gateOk    ? gateBalances.keys()    : []),
+      ...(binanceOk ? binanceBalances.keys() : []),
+    ]);
 
     const result = [];
-    for (const file of files) {
-      try {
-        const state = JSON.parse(fs.readFileSync(path.join(BOT_DATA_DIR, file), 'utf8'));
+    for (const asset of currencies) {
+      if (STABLE_COINS.has(asset)) continue;
+      if (ignoreList.has(asset))   continue;
 
-        if (state.phase !== 'BOUGHT' && state.phase !== 'ABOVE_70') continue;
+      const gateQty    = gateBalances.get(asset)    ?? 0;
+      const binanceQty = binanceBalances.get(asset) ?? 0;
+      const totalQty   = gateQty + binanceQty;
+      if (totalQty <= 0) continue;
 
-        const symbol       = file.replace('state-', '').replace('.json', '');
-        const baseCurrency = symbol.endsWith('USDT') ? symbol.slice(0, -4) : symbol.slice(0, -3);
+      const exchange = binanceQty > 0 && gateQty === 0 ? 'binance'
+                     : gateQty > 0 && binanceQty === 0 ? 'gate'
+                     : 'both';
 
-        // Verifica holding real usando apenas a exchange correta do trade.
-        // Se a exchange da ordem não consta no state (arquivos antigos), soma ambas.
-        const stateExchange = state.exchange; // 'gate' | 'binance' | undefined
-        const relevantOk = stateExchange === 'binance' ? binanceOk
-                         : stateExchange === 'gate'    ? gateOk
-                         : gateOk || binanceOk;
+      if (asset === 'USDT' || asset === 'USDC') {
+        if (totalQty >= MIN_HOLDING_USDT)
+          result.push({ symbol: asset, exchange, buyQty: totalQty, buyPrice: 1 });
+        continue;
+      }
 
-        if (relevantOk) {
-          const balance = stateExchange === 'binance' ? (binanceBalances.get(baseCurrency) ?? 0)
-                        : stateExchange === 'gate'    ? (gateBalances.get(baseCurrency) ?? 0)
-                        : (gateBalances.get(baseCurrency) ?? 0) + (binanceBalances.get(baseCurrency) ?? 0);
-          // Se buyPrice é desconhecido, usa buyUsdt histórico como proxy
-          const holdingUsdt = state.buyPrice
-            ? balance * state.buyPrice
-            : (state.buyUsdt ?? 0);
-          if (holdingUsdt < MIN_HOLDING_USDT) continue;
-        } else {
-          // Fallback: exchange API indisponível — usa buyUsdt histórico
-          if ((state.buyUsdt ?? 0) < MIN_HOLDING_USDT) continue;
-        }
+      const price       = priceMap.get(asset) ?? 0;
+      // Preço desconhecido em ambas exchanges → ignorar (não tem como calcular valor)
+      if (price === 0) continue;
 
-        result.push({
-          symbol,
-          phase:    state.phase,
-          buyPrice: state.buyPrice ?? null,
-          buyQty:   state.buyQty   ?? null,
-          buyUsdt:  state.buyUsdt  ?? null,
-          buyTime:  state.buyTime  ?? null,
-        });
-      } catch {}
+      const holdingUsdt = totalQty * price;
+      if (holdingUsdt < MIN_HOLDING_USDT) continue;
+
+      result.push({ symbol: `${asset}USDT`, exchange, buyQty: totalQty, buyPrice: price });
     }
 
     res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /services/active-trades/ignore  { symbol: "HYPEUSDT" }  → adiciona à lista
+router.post('/active-trades/ignore', (req, res) => {
+  try {
+    const raw    = (req.body?.symbol ?? '').toUpperCase().replace(/USDT$/, '');
+    if (!raw) return res.status(400).json({ error: 'symbol obrigatório' });
+    const list = readIgnoreList();
+    list.add(raw);
+    writeIgnoreList(list);
+    balanceCache = null; // força refresh imediato
+    res.json({ ignored: [...list] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /services/active-trades/ignore/:symbol  → remove da lista
+router.delete('/active-trades/ignore/:symbol', (req, res) => {
+  try {
+    const raw  = req.params.symbol.toUpperCase().replace(/USDT$/, '');
+    const list = readIgnoreList();
+    list.delete(raw);
+    writeIgnoreList(list);
+    balanceCache = null;
+    res.json({ ignored: [...list] });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

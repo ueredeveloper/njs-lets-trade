@@ -231,7 +231,7 @@ async function check1mRsiSell(pair, adapter) {
 }
 
 // ── Filtro MA50 1h — distância máxima de 5% do preço atual ───────────────────
-// Se o preço estiver mais de 5% acima ou abaixo da MA50(1h), a entrada é bloqueada.
+// Se o preço estiver mais de 3% acima ou abaixo da MA50(1h), a entrada é bloqueada.
 // Indica que o preço está muito distante de seu equilíbrio de médio prazo.
 
 async function checkMa50Filter(pair, adapter, log, currentPrice) {
@@ -245,9 +245,9 @@ async function checkMa50Filter(pair, adapter, log, currentPrice) {
     }
     const ma50 = ma50Vals[ma50Vals.length - 1];
     const dist = Math.abs(currentPrice - ma50) / ma50 * 100;
-    if (dist > 5) {
+    if (dist > 3) {
       const dir = currentPrice > ma50 ? 'acima' : 'abaixo';
-      log(`🔍 Filtro MA50(1h): preço=${currentPrice.toFixed(4)} ${dir} de MA50=${ma50.toFixed(4)} por ${dist.toFixed(1)}% > 5% — ❌ entrada bloqueada`);
+      log(`🔍 Filtro MA50(1h): preço=${currentPrice.toFixed(4)} ${dir} de MA50=${ma50.toFixed(4)} por ${dist.toFixed(1)}% > 3% — ❌ entrada bloqueada`);
       return { ok: false, ma50 };
     }
     log(`🔍 Filtro MA50(1h): preço=${currentPrice.toFixed(4)} a ${dist.toFixed(1)}% da MA50=${ma50.toFixed(4)} — ✅ dentro do limite`);

@@ -93,14 +93,27 @@ export async function removeFavorite(symbol, type) {
   return res.json();
 }
 
-// ── Active Trades (bot positions) ────────────────────────────────────────────
+// ── Active Trades (posições reais nas exchanges) ─────────────────────────────
 
 /**
- * Retorna os símbolos onde o bot tem posição aberta (phase BOUGHT ou ABOVE_70).
- * @returns {Promise<Array<{symbol, phase, buyPrice, buyQty, buyUsdt, buyTime}>>}
+ * Retorna os símbolos com saldo real nas exchanges (Gate.io + Binance) acima de $3.
+ * @returns {Promise<Array<{symbol, exchange, buyPrice, buyQty}>>}
  */
 export async function fetchActiveTrades() {
   const res = await fetch('/services/active-trades');
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function ignoreActiveTrade(symbol) {
+  const res = await fetch('/services/active-trades/ignore', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ symbol }),
+  });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error ?? `HTTP ${res.status}`);
