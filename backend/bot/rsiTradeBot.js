@@ -369,6 +369,11 @@ async function placeGateLimitBuy(pair, closePrice, log, buyDiscount = 0.01) {
   return { orderId: order.id, limitPrice, qty, budget };
 }
 
+async function getOpenGateOrders(pair) {
+  const orders = await gateReq('GET', '/spot/orders', { currency_pair: pair, status: 'open' });
+  return Array.isArray(orders) ? orders : [];
+}
+
 async function checkGateOrder(orderId, pair) {
   return gateReq('GET', `/spot/orders/${orderId}`, { currency_pair: pair });
 }
@@ -493,6 +498,11 @@ function normalizeBinanceOrder(order) {
   };
 }
 
+async function getOpenBinanceOrders(pair) {
+  const orders = await binanceReq('GET', '/api/v3/openOrders', { symbol: pair });
+  return Array.isArray(orders) ? orders : [];
+}
+
 async function checkBinanceOrder(orderId, pair) {
   const order = await binanceReq('GET', '/api/v3/order', { symbol: pair, orderId });
   return normalizeBinanceOrder(order);
@@ -545,6 +555,7 @@ function createGateAdapter() {
     getCurrentPrice: (pair)               => fetchGateCurrentPrice(pair),
     getUsdtBalance:  ()                    => getGateUsdtBalance(),
     getTokenBalance: (base)                => getGateTokenBalance(base),
+    getOpenOrders:   (pair)                => getOpenGateOrders(pair),
     placeLimitBuy:   (pair, price, log, d)  => placeGateLimitBuy(pair, price, log, d),
     checkOrder:      (id, pair)            => checkGateOrder(id, pair),
     cancelOrder:     (id, pair, log)       => cancelGateOrder(id, pair, log),
@@ -561,6 +572,7 @@ function createBinanceAdapter() {
     getCurrentPrice: (pair)               => fetchBinanceCurrentPrice(pair),
     getUsdtBalance:  ()                    => getBinanceUsdtBalance(),
     getTokenBalance: (base)                => getBinanceTokenBalance(base),
+    getOpenOrders:   (pair)                => getOpenBinanceOrders(pair),
     placeLimitBuy:   (pair, price, log, d)  => placeBinanceLimitBuy(pair, price, log, d),
     checkOrder:      (id, pair)            => checkBinanceOrder(id, pair),
     cancelOrder:     (id, pair, log)       => cancelBinanceOrder(id, pair, log),
@@ -727,6 +739,11 @@ async function tick(symbol, pair, log, config, adapter) {
 
       log(`${G}✅ Sinal de COMPRA confirmado${X}`);
       try {
+        const openOrders = await adapter.getOpenOrders(pair);
+        if (openOrders.length > 0) {
+          log(`⚠️  Já existe(m) ${openOrders.length} ordem(ns) aberta(s) para ${pair} — entrada bloqueada para evitar duplicata.`);
+          return;
+        }
         const result = await adapter.placeLimitBuy(pair, last.close, log, buyDiscount);
         if (result) {
           state = {

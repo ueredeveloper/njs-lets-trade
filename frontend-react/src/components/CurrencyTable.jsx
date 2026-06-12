@@ -373,6 +373,38 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
             </tr>
           </thead>
           <tbody>
+            {showFavorites === 'active' && (() => {
+              const stableRows = [];
+              for (const sym of ['USDT', 'USDC']) {
+                const info = activeTrades.get(sym);
+                if (!info) continue;
+                stableRows.push(
+                  <tr key={sym} className="border-b border-p2/30 bg-amber-500/10 text-p5">
+                    <td className="pl-2">
+                      <button
+                        title="Ignorar posição"
+                        onClick={(e) => { e.stopPropagation(); dismissActiveTrade(sym); }}
+                        className="text-[10px] opacity-40 hover:opacity-90 px-1"
+                      >×</button>
+                    </td>
+                    <td className="px-2 py-1.5 font-mono font-semibold">
+                      <div className="flex flex-col">
+                        <span>{sym}</span>
+                        <span className="text-[9px] font-normal" style={{ color: ACTIVE_COLOR }}>
+                          {info.exchange === 'both' ? 'Gate + Bnb' : info.exchange === 'gate' ? 'Gate' : 'Bnb'}
+                        </span>
+                      </div>
+                    </td>
+                    <td className="px-2 py-1.5 text-right font-mono text-xs">$1.00</td>
+                    <td className="px-2 py-1.5 text-right font-mono text-xs" style={{ color: ACTIVE_COLOR }}>
+                      ${info.buyQty.toLocaleString('en-US', { maximumFractionDigits: 2 })}
+                    </td>
+                    <td />
+                  </tr>
+                );
+              }
+              return stableRows;
+            })()}
             {rows.map((item) => {
               const { base, quote } = splitSymbol(item.symbol);
               const isGate     = gateFavorites.has(item.symbol);
