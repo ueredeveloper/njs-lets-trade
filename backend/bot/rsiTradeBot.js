@@ -23,14 +23,15 @@ const fs     = require('fs');
 const crypto = require('crypto');
 require('dotenv').config({ path: path.join(__dirname, '../../.env') });
 
-const { toGateSymbol } = require('../utils/toGateSymbol');
-const ti               = require('technicalindicators');
+const { toGateSymbol }   = require('../utils/toGateSymbol');
+const ti                 = require('technicalindicators');
 const {
   fetchBinanceCandles,
   fetchGateCandles,
   fetchBinanceCurrentPrice,
   fetchGateCurrentPrice,
 } = require('./prices');
+const { sendWhatsApp }   = require('./whatsapp');
 
 // ── Configuração ──────────────────────────────────────────────────────────────
 
@@ -629,6 +630,7 @@ async function tick(symbol, pair, log, config, adapter) {
   rsiWasAbove.set(alertKey, rsi >= rsiBuy);
   if (rsi < rsiBuy && wasAboveBuy) {
     log(`🔔 RSI entrou em sobrevenda: ${rsi.toFixed(2)} < ${rsiBuy}  |  intervalo=${interval}  |  close=${last.close}  |  var=${variation.toFixed(2)}%`);
+    sendWhatsApp(`🔔 POSSÍVEL ENTRADA: ${symbol}\nRSI=${rsi.toFixed(2)} < ${rsiBuy} | ${interval} | close=${last.close} | var=${variation.toFixed(2)}%`);
   }
 
   let state = loadState(symbol);
@@ -663,6 +665,7 @@ async function tick(symbol, pair, log, config, adapter) {
       log(`   Comprado : ${state.buyTime}`);
       log(`   ID       : ${sellOrder?.id ?? 'n/a'}`);
       log(`${'─'.repeat(60)}`);
+      sendWhatsApp(`${reason.includes('stop-loss') ? '🛑' : '🔴'} VENDA: ${symbol}\nPreço: ${sellPrice}\nQty: ${state.buyQty}\nPnL: ${pnlSign}${usdtPnl} USDT (${pnlSign}${pnl}%)`);
       return {
         phase:         'PENDING_SELL',
         exchange:      state.exchange ?? exchange,
@@ -728,6 +731,7 @@ async function tick(symbol, pair, log, config, adapter) {
 
     if (rsi < rsiBuy && variation >= variationMin) {
       log(`${G}📍 RSI < ${rsiBuy} (${rsi.toFixed(2)}) + var ${variation.toFixed(2)}%${variationMin > 0 ? ` ≥ ${variationMin}%` : ''}${X}`);
+      sendWhatsApp(`📍 SINAL COMPRA: ${symbol}\nRSI=${rsi.toFixed(2)} < ${rsiBuy} | var=${variation.toFixed(2)}% | close=${last.close} | ${interval}`);
 
       const { ok: passesMa50, ma50: ma50Value } = await checkMa50Filter(pair, adapter, log, last.close);
       if (!passesMa50) return;
@@ -764,6 +768,7 @@ async function tick(symbol, pair, log, config, adapter) {
           log(`   USDT     : ≈${result.budget.toFixed(2)}`);
           log(`   ID       : ${result.orderId}`);
           log(`${'─'.repeat(60)}`);
+          sendWhatsApp(`🟢 COMPRA: ${symbol}\nPreço: ${result.limitPrice}\nQty: ${result.qty}\nUSDT: ≈${result.budget.toFixed(2)}`);
         }
       } catch (err) {
         log(`❌ Erro ao colocar limit order: ${err.message}`);
@@ -793,6 +798,7 @@ async function tick(symbol, pair, log, config, adapter) {
         };
         saveState(symbol, state);
         log(`🟢 COMPRA PREENCHIDA | qty=${filledQty} − taxa 0.2% = ${netQty} | preço=${filledPrice} | USDT≈${state.buyUsdt.toFixed(2)} | ${state.buyTime}`);
+        sendWhatsApp(`✅ COMPRA PREENCHIDA: ${symbol}\nPreço: ${filledPrice}\nQty: ${netQty}\nUSDT: ≈${state.buyUsdt.toFixed(2)}`);
 
       } else if (status === 'cancelled') {
         log(`${'─'.repeat(60)}`);
@@ -854,6 +860,7 @@ async function tick(symbol, pair, log, config, adapter) {
         state.phase = 'ABOVE_70';
         saveState(symbol, state);
         log(`📈 RSI(${interval})=${rsi.toFixed(2)} > 70 — aguardando retorno para ≤ 70 ou RSI(${effectiveSellInterval}) ≥ ${rsiSell}…`);
+        sendWhatsApp(`📈 POSSÍVEL SAÍDA: ${symbol}\nRSI(${interval})=${rsi.toFixed(2)} > 70 | aguardando ≤ 70 ou RSI(${effectiveSellInterval}) ≥ ${rsiSell}`);
       }
     } else {
       // Modo single-intervalo
@@ -874,6 +881,7 @@ async function tick(symbol, pair, log, config, adapter) {
         state.phase = 'ABOVE_70';
         saveState(symbol, state);
         log(`📈 RSI saída passou de ${rsiSell} (${rsiExit.toFixed(2)}) — aguardando retorno para ≤ ${rsiSell} ou ≥ ${rsiOverbought}…`);
+        sendWhatsApp(`📈 POSSÍVEL SAÍDA: ${symbol}\nRSI(${effectiveSellInterval})=${rsiExit.toFixed(2)} > ${rsiSell} | aguardando ≤ ${rsiSell} ou ≥ ${rsiOverbought}`);
       }
     }
 
@@ -955,6 +963,7 @@ async function tick(symbol, pair, log, config, adapter) {
         log(`   ID       : ${state.sellOrderId}`);
         log(`   Rec. líq.: ≈${state.estimatedUsdt.toFixed(2)} USDT`);
         log(`${'─'.repeat(60)}`);
+        sendWhatsApp(`💰 VENDA CONCLUÍDA: ${symbol}\nRecebido: ≈${state.estimatedUsdt.toFixed(2)} USDT`);
         state = { phase: 'WATCHING' };
         saveState(symbol, state);
 

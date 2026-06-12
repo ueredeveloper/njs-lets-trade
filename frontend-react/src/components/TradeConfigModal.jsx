@@ -12,10 +12,10 @@ const EXCHANGES = [
 
 export default function TradeConfigModal({ symbol, isActive, currentConfig, onConfirm, onRemove, onCancel }) {
   const [exchange,     setExchange]     = useState(currentConfig?.exchange     ?? 'binance');
-  const [interval,     setIntervalVal]  = useState(currentConfig?.interval     ?? '30m');
-  const [sellInterval, setSellInterval] = useState(currentConfig?.sellInterval ?? '');
+  const [interval,     setIntervalVal]  = useState(currentConfig?.interval     ?? '5m');
+  const [sellInterval, setSellInterval] = useState(currentConfig?.sellInterval ?? '1m');
   const [rsiBuy,       setRsiBuy]       = useState(currentConfig?.rsiBuy       ?? 30);
-  const [rsiSell,      setRsiSell]      = useState(currentConfig?.rsiSell      ?? 70);
+  const [rsiSell,      setRsiSell]      = useState(currentConfig?.rsiSell      ?? 80);
 
   function handleConfirm() {
     const buy  = Number(rsiBuy);

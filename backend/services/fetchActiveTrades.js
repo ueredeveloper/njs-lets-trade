@@ -155,8 +155,11 @@ router.get('/active-trades', async (req, res) => {
                      : 'both';
 
       if (asset === 'USDT' || asset === 'USDC') {
-        if (totalQty >= MIN_HOLDING_USDT)
-          result.push({ symbol: asset, exchange, buyQty: totalQty, buyPrice: 1 });
+        // Emite uma entrada por exchange (símbolos distintos para evitar colisão no Map)
+        if (gateQty >= MIN_HOLDING_USDT)
+          result.push({ symbol: `${asset}_GATE`, exchange: 'gate',    buyQty: gateQty,    buyPrice: 1 });
+        if (binanceQty >= MIN_HOLDING_USDT)
+          result.push({ symbol: `${asset}_BNB`,  exchange: 'binance', buyQty: binanceQty, buyPrice: 1 });
         continue;
       }
 
