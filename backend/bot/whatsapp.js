@@ -14,6 +14,7 @@ const AUTH_DIR = path.join(__dirname, '../../.baileys_auth');
 let sock  = null;
 let ready = false;
 const pendingQueue = [];
+const MAX_QUEUE    = 50; // descarta mensagens antigas se WhatsApp ficar offline muito tempo
 
 // Logger mínimo compatível com pino — silencia os logs internos do Baileys
 const logger = {
@@ -76,12 +77,21 @@ async function connect() {
   });
 }
 
-connect().catch(err => console.warn(`⚠️  WhatsApp init falhou: ${err.message}`));
+async function connectWithRetry() {
+  try {
+    await connect();
+  } catch (err) {
+    console.warn(`⚠️  WhatsApp init falhou: ${err.message} — tentando novamente em 30s`);
+    setTimeout(connectWithRetry, 30_000);
+  }
+}
+
+connectWithRetry();
 
 async function sendWhatsApp(message) {
   if (!ready || !sock) {
-    pendingQueue.push(message);
-    console.warn('⏳ WhatsApp ainda conectando — mensagem em fila:', message.split('\n')[0]);
+    if (pendingQueue.length < MAX_QUEUE) pendingQueue.push(message);
+    console.warn('⏳ WhatsApp offline — mensagem em fila:', message.split('\n')[0]);
     return;
   }
   try {
