@@ -40,6 +40,9 @@ to-do-list.md
 # Ignorar orçamento de hospedagem
 orcamento.md
 
-# whatsapp-web.js — sessão e cache do Puppeteer
+# whatsapp-web.js — sessão e cache do Puppeteer (legado)
 .wwebjs_auth/
 .wwebjs_cache/
+
+# Baileys — sessão WhatsApp
+.baileys_auth/

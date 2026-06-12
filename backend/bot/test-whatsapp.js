@@ -2,76 +2,78 @@
 
 require('dotenv').config({ path: require('path').join(__dirname, '../../.env') });
 
-const path   = require('path');
-const { Client, LocalAuth } = require('whatsapp-web.js');
-const qrcode = require('qrcode-terminal');
+const path = require('path');
 
-const rawNumber     = process.env.WHATSAPP_NOTIFY_NUMBER || '5561999171222';
-const NOTIFY_NUMBER = rawNumber.includes('@') ? rawNumber : `${rawNumber}@c.us`;
-const USE_PAIRING   = process.env.WHATSAPP_PAIRING_CODE === 'true';
+const rawNumber = process.env.WHATSAPP_NOTIFY_NUMBER || '5561999171222';
+const JID       = rawNumber.includes('@') ? rawNumber : `${rawNumber}@s.whatsapp.net`;
+const USE_PAIRING = process.env.WHATSAPP_PAIRING_CODE !== 'false';
+const AUTH_DIR  = path.join(__dirname, '../../.baileys_auth');
 
-console.log('🔄 Iniciando cliente WhatsApp...');
-console.log(`   Número destino : ${NOTIFY_NUMBER}`);
+console.log('🔄 Iniciando cliente WhatsApp (Baileys)...');
+console.log(`   Número destino : ${rawNumber}`);
 console.log(`   Modo           : ${USE_PAIRING ? 'código de pareamento' : 'QR code'}`);
-console.log(`   Sessão salva   : ${path.join(__dirname, '../../.wwebjs_auth')}\n`);
+console.log(`   Sessão salva   : ${AUTH_DIR}\n`);
 
-const client = new Client({
-  authStrategy: new LocalAuth({ dataPath: path.join(__dirname, '../../.wwebjs_auth') }),
-  puppeteer: { headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] },
-});
+const logger = {
+  level: 'silent',
+  trace: () => {}, debug: () => {}, info: () => {},
+  warn:  () => {}, error: () => {}, fatal: () => {},
+  child: function () { return this; },
+};
 
-client.on('loading_screen', (percent) => {
-  process.stdout.write(`\r⏳ Carregando WhatsApp Web... ${percent}%   `);
-});
+(async () => {
+  const {
+    default: makeWASocket,
+    useMultiFileAuthState,
+    DisconnectReason,
+    fetchLatestBaileysVersion,
+  } = await import('@whiskeysockets/baileys');
 
-client.on('qr', async qr => {
-  console.log('\n');
-  if (USE_PAIRING) {
-    try {
-      const code = await client.requestPairingCode(rawNumber);
-      console.log(`📱 Código de pareamento: ${code}`);
-      console.log('   WhatsApp → Configurações → Dispositivos conectados → Conectar → Conectar com número de telefone\n');
-    } catch (err) {
-      console.warn(`⚠️  requestPairingCode falhou: ${err.message}`);
-      console.log('   Exibindo QR como fallback:\n');
-      qrcode.generate(qr, { small: true });
+  const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
+  const { version }          = await fetchLatestBaileysVersion();
+
+  const sock = makeWASocket({ version, auth: state, printQRInTerminal: !USE_PAIRING, logger });
+
+  sock.ev.on('creds.update', saveCreds);
+
+  sock.ev.on('connection.update', async (update) => {
+    const { connection, lastDisconnect, qr } = update;
+
+    if (qr && USE_PAIRING && !sock.authState.creds.registered) {
+      try {
+        const code = await sock.requestPairingCode(rawNumber);
+        console.log(`📱 Código de pareamento: ${code}`);
+        console.log('   WhatsApp → Configurações → Dispositivos conectados → Conectar → Número de telefone\n');
+      } catch (err) {
+        console.warn(`⚠️  requestPairingCode falhou: ${err.message}`);
+      }
     }
-  } else {
-    console.log('📱 Sessão expirada — escaneie o QR code com seu celular:\n');
-    qrcode.generate(qr, { small: true });
-  }
-});
 
-client.on('authenticated', () => {
-  console.log('\n✅ Autenticado!');
-});
+    if (connection === 'open') {
+      console.log('✅ WhatsApp conectado! Enviando mensagem de teste...');
+      try {
+        await sock.sendMessage(JID, { text: '✅ Teste do bot RSI Trade\nWhatsApp (Baileys) conectado e funcionando!' });
+        console.log('✅ Mensagem enviada com sucesso!');
+      } catch (err) {
+        console.error(`❌ Erro ao enviar: ${err.message}`);
+      }
+      setTimeout(() => process.exit(0), 3000);
+    }
 
-client.on('auth_failure', msg => {
-  console.error(`\n❌ Falha na autenticação: ${msg}`);
+    if (connection === 'close') {
+      const code      = lastDisconnect?.error?.output?.statusCode;
+      const loggedOut = code === DisconnectReason.loggedOut;
+      if (loggedOut) {
+        console.error('❌ Sessão encerrada — apague .baileys_auth e rode novamente.');
+        process.exit(1);
+      }
+    }
+  });
+})().catch(err => {
+  console.error(`❌ Erro ao inicializar: ${err.message}`);
   process.exit(1);
 });
 
-client.on('ready', async () => {
-  console.log('✅ WhatsApp pronto! Enviando mensagem de teste...');
-  try {
-    await client.sendMessage(NOTIFY_NUMBER, '✅ Teste do bot RSI Trade\nWhatsApp conectado e funcionando!');
-    console.log('✅ Mensagem enviada com sucesso!');
-  } catch (err) {
-    console.error(`❌ Erro ao enviar: ${err.message}`);
-  }
-  setTimeout(() => { client.destroy(); process.exit(0); }, 3000);
-});
-
-client.on('disconnected', reason => {
-  console.warn(`\n⚠️  Desconectado: ${reason}`);
-});
-
-client.initialize().catch(err => {
-  console.error(`\n❌ Erro ao inicializar: ${err.message}`);
-  process.exit(1);
-});
-
-// Timeout de segurança: 2 minutos (tempo para escanear QR se necessário)
 setTimeout(() => {
   console.error('\n❌ Timeout: cliente não ficou pronto em 2 minutos.');
   process.exit(1);

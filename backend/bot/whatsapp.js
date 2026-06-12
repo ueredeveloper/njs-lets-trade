@@ -1,84 +1,91 @@
 'use strict';
 
-const path   = require('path');
-const { Client, LocalAuth } = require('whatsapp-web.js');
-const qrcode = require('qrcode-terminal');
+const path = require('path');
 
-const rawNumber     = process.env.WHATSAPP_NOTIFY_NUMBER || '5561999171222';
-const NOTIFY_NUMBER = rawNumber.includes('@') ? rawNumber : `${rawNumber}@c.us`;
+const rawNumber = process.env.WHATSAPP_NOTIFY_NUMBER || '5561999171222';
+// Baileys usa @s.whatsapp.net (diferente do @c.us do whatsapp-web.js)
+const JID = rawNumber.includes('@') ? rawNumber : `${rawNumber}@s.whatsapp.net`;
 
-// WHATSAPP_PAIRING_CODE=true no .env → usa código de 8 dígitos (ideal para Termux)
-const USE_PAIRING = process.env.WHATSAPP_PAIRING_CODE === 'true';
+// false = mostra QR no terminal; true = código de pareamento (padrão — funciona no Termux)
+const USE_PAIRING = process.env.WHATSAPP_PAIRING_CODE !== 'false';
 
-const client = new Client({
-  authStrategy: new LocalAuth({ dataPath: path.join(__dirname, '../../.wwebjs_auth') }),
-  puppeteer: { headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] },
-});
+const AUTH_DIR = path.join(__dirname, '../../.baileys_auth');
 
-let ready    = false;
-let chatId   = null; // resolvido via getNumberId no ready
-// Mensagens enviadas antes do ready — entregues assim que conectar
+let sock  = null;
+let ready = false;
 const pendingQueue = [];
 
-client.on('qr', async qr => {
-  if (USE_PAIRING) {
-    try {
-      const code = await client.requestPairingCode(rawNumber);
-      console.log(`\n📱 Código de pareamento WhatsApp: ${code}`);
-      console.log('   No WhatsApp → Configurações → Dispositivos conectados → Conectar um dispositivo → Conectar com número de telefone\n');
-    } catch (err) {
-      console.warn(`⚠️  requestPairingCode falhou: ${err.message}`);
+// Logger mínimo compatível com pino — silencia os logs internos do Baileys
+const logger = {
+  level: 'silent',
+  trace: () => {}, debug: () => {}, info: () => {},
+  warn:  () => {}, error: () => {}, fatal: () => {},
+  child: function () { return this; },
+};
+
+async function connect() {
+  const {
+    default: makeWASocket,
+    useMultiFileAuthState,
+    DisconnectReason,
+    fetchLatestBaileysVersion,
+  } = await import('@whiskeysockets/baileys');
+
+  const { state, saveCreds }  = await useMultiFileAuthState(AUTH_DIR);
+  const { version }           = await fetchLatestBaileysVersion();
+
+  sock = makeWASocket({ version, auth: state, printQRInTerminal: !USE_PAIRING, logger });
+
+  sock.ev.on('creds.update', saveCreds);
+
+  sock.ev.on('connection.update', async (update) => {
+    const { connection, lastDisconnect, qr } = update;
+
+    // Solicita código de pareamento quando o QR é gerado e modo pairing está ativo
+    if (qr && USE_PAIRING && !sock.authState.creds.registered) {
+      try {
+        const code = await sock.requestPairingCode(rawNumber);
+        console.log(`\n📱 Código de pareamento WhatsApp: ${code}`);
+        console.log('   WhatsApp → Configurações → Dispositivos conectados → Conectar → Número de telefone\n');
+      } catch (err) {
+        console.warn(`⚠️  requestPairingCode falhou: ${err.message}`);
+      }
     }
-  } else {
-    console.log('\n📱 WhatsApp — escaneie o QR code com seu celular:\n');
-    qrcode.generate(qr, { small: true });
-  }
-});
 
-client.on('ready', async () => {
-  ready = true;
-  console.log('✅ WhatsApp conectado.');
-
-  try {
-    const numId = await client.getNumberId(rawNumber);
-    chatId = numId ? numId._serialized : NOTIFY_NUMBER;
-    console.log(`📱 Chat ID resolvido: ${chatId}`);
-  } catch {
-    chatId = NOTIFY_NUMBER;
-  }
-
-  const allMsgs = [`🤖 Bot RSI Trade iniciado`, ...pendingQueue.splice(0)];
-  for (const msg of allMsgs) {
-    try {
-      await client.sendMessage(chatId, msg);
-      console.log(`📤 WhatsApp enviado: ${msg.split('\n')[0]}`);
-    } catch (err) {
-      console.warn(`⚠️  WhatsApp send falhou: ${err.message}`);
+    if (connection === 'open') {
+      ready = true;
+      console.log('✅ WhatsApp conectado.');
+      const allMsgs = [`🤖 Bot RSI Trade iniciado`, ...pendingQueue.splice(0)];
+      for (const msg of allMsgs) {
+        try {
+          await sock.sendMessage(JID, { text: msg });
+          console.log(`📤 WhatsApp enviado: ${msg.split('\n')[0]}`);
+        } catch (err) {
+          console.warn(`⚠️  WhatsApp send falhou: ${err.message}`);
+        }
+      }
     }
-  }
-});
 
-client.on('auth_failure', msg => {
-  console.warn(`⚠️  WhatsApp autenticação falhou: ${msg}`);
-});
+    if (connection === 'close') {
+      ready = false;
+      const code      = lastDisconnect?.error?.output?.statusCode;
+      const loggedOut = code === DisconnectReason.loggedOut;
+      console.warn(`⚠️  WhatsApp desconectado (${code}). ${loggedOut ? 'Sessão encerrada — apague .baileys_auth e reinicie.' : 'Reconectando...'}`);
+      if (!loggedOut) setTimeout(connect, 5000);
+    }
+  });
+}
 
-client.on('disconnected', reason => {
-  ready = false;
-  console.warn(`⚠️  WhatsApp desconectado: ${reason}`);
-});
-
-client.initialize().catch(err => {
-  console.warn(`⚠️  WhatsApp init falhou: ${err.message}`);
-});
+connect().catch(err => console.warn(`⚠️  WhatsApp init falhou: ${err.message}`));
 
 async function sendWhatsApp(message) {
-  if (!ready || !chatId) {
+  if (!ready || !sock) {
     pendingQueue.push(message);
     console.warn('⏳ WhatsApp ainda conectando — mensagem em fila:', message.split('\n')[0]);
     return;
   }
   try {
-    await client.sendMessage(chatId, message);
+    await sock.sendMessage(JID, { text: message });
   } catch (err) {
     console.warn(`⚠️  WhatsApp send falhou: ${err.message}`);
   }
