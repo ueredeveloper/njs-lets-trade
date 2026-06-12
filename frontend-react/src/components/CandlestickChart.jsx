@@ -13,6 +13,7 @@ const C_UP   = '#26a69a';
 const C_DOWN = '#ef5350';
 
 const INDICATOR_GROUPS = [
+  { id: 'ma50',     label: 'MA50',     color: '#22d3ee' },
   { id: 'ma200',    label: 'MA200',    color: '#f59e0b' },
   { id: 'ichimoku', label: 'Ichimoku', color: '#60a5fa' },
   { id: 'rsi',      label: 'RSI',      color: '#a78bfa' },
@@ -29,7 +30,8 @@ function getThemeColors() {
 }
 
 
-function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAverage, rsi }, colors, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = []) {
+function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAverage, ma50, rsi }, colors, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = []) {
+  const showMa50     = activeIndicators.includes('ma50');
   const showMa200    = activeIndicators.includes('ma200');
   const showIchimoku = activeIndicators.includes('ichimoku');
   const showRsi      = activeIndicators.includes('rsi');
@@ -158,6 +160,22 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
     splitLine: { show: false },
   });
 
+  // Alinha séries com o eixo X:
+  // — left-pad com null quando a série tem menos valores que DL (moedas novas com poucos candles)
+  // — right-pad com null quando Ichimoku está ativo (24 posições futuras no xData)
+  const futurePad = showIchimoku ? 24 : 0;
+  const alignSeries = (arr) => {
+    const raw = arr?.slice(-DL) ?? [];
+    return [
+      ...new Array(DL - raw.length).fill(null),
+      ...raw,
+      ...new Array(futurePad).fill(null),
+    ];
+  };
+
+  const ma50Data  = alignSeries(ma50);
+  const ma200Data = alignSeries(movingAverage);
+
   const candleSeries = (idx) => [
     {
       name: 'Candles',
@@ -167,11 +185,19 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
       itemStyle: { color: C_UP, color0: C_DOWN, borderColor: C_UP, borderColor0: C_DOWN },
       markLine: finalMarkLine,
     },
+    ...(showMa50 && ma50?.length ? [{
+      name: 'MA50',
+      type: 'line',
+      xAxisIndex: idx, yAxisIndex: idx,
+      data: ma50Data,
+      smooth: true, showSymbol: false,
+      lineStyle: { color: '#22d3ee', width: 1.5 },
+    }] : []),
     ...(showMa200 ? [{
       name: 'MA200',
       type: 'line',
       xAxisIndex: idx, yAxisIndex: idx,
-      data: movingAverage.slice(-DL),
+      data: ma200Data,
       smooth: true, showSymbol: false,
       lineStyle: { color: '#f59e0b', width: 1.5 },
     }] : []),
@@ -220,7 +246,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
     };
   }
 
-  const rsiData = rsi ? rsi.slice(-DL) : [];
+  const rsiData = alignSeries(rsi);
 
   return {
     backgroundColor: colors.bg,
@@ -368,7 +394,10 @@ function buildMatrixOption({ symbol, interval, candlesticks, rsi }, activeIndica
       }] : [])
     ]
   };
-  const rsiData = rsi ? rsi.slice(-DL) : [];
+  const rsiData = (() => {
+    const raw = rsi?.slice(-DL) ?? [];
+    return [...new Array(DL - raw.length).fill(null), ...raw];
+  })();
 
   const axisBase = (gridIndex, showLabel) => ({
     gridIndex,
@@ -625,7 +654,7 @@ export default function CandlestickChart() {
   const [currentInterval, setCurrentInterval] = useState(DEFAULT_INTERVAL);
   const [loadingInterval, setLoadingInterval] = useState(false);
   const [themeTick, setThemeTick] = useState(0);
-  const [activeIndicators, setActiveIndicators] = useState(['ma200', 'rsi']);
+  const [activeIndicators, setActiveIndicators] = useState(['ma50', 'ma200', 'rsi']);
   const [activeTab, setActiveTab] = useState('chart'); // 'chart' | 'matrix'
 
 

@@ -230,6 +230,34 @@ async function check1mRsiSell(pair, adapter) {
   }
 }
 
+// ── Filtro MA50 1h — distância máxima de 5% do preço atual ───────────────────
+// Se o preço estiver mais de 5% acima ou abaixo da MA50(1h), a entrada é bloqueada.
+// Indica que o preço está muito distante de seu equilíbrio de médio prazo.
+
+async function checkMa50Filter(pair, adapter, log, currentPrice) {
+  try {
+    const candles1h = await adapter.fetchCandles(pair, 100, '1h');
+    const closes1h  = candles1h.map(c => c.close);
+    const ma50Vals  = ti.SMA.calculate({ values: closes1h, period: 50 });
+    if (ma50Vals.length === 0) {
+      log('⚠️  Filtro MA50(1h): dados insuficientes — entrada bloqueada por precaução');
+      return { ok: false, ma50: null };
+    }
+    const ma50 = ma50Vals[ma50Vals.length - 1];
+    const dist = Math.abs(currentPrice - ma50) / ma50 * 100;
+    if (dist > 5) {
+      const dir = currentPrice > ma50 ? 'acima' : 'abaixo';
+      log(`🔍 Filtro MA50(1h): preço=${currentPrice.toFixed(4)} ${dir} de MA50=${ma50.toFixed(4)} por ${dist.toFixed(1)}% > 5% — ❌ entrada bloqueada`);
+      return { ok: false, ma50 };
+    }
+    log(`🔍 Filtro MA50(1h): preço=${currentPrice.toFixed(4)} a ${dist.toFixed(1)}% da MA50=${ma50.toFixed(4)} — ✅ dentro do limite`);
+    return { ok: true, ma50 };
+  } catch (err) {
+    log(`⚠️  Filtro MA50(1h): erro (${err.message}) — entrada bloqueada por precaução`);
+    return { ok: false, ma50: null };
+  }
+}
+
 // ── Logging ───────────────────────────────────────────────────────────────────
 
 // Usado nos arquivos de estado (timestamp completo)
@@ -672,17 +700,25 @@ async function tick(symbol, pair, log, config, adapter) {
       };
       saveState(symbol, state);
       log(`📦 Posição detectada: ${tokenBalance.toFixed(4)} ${baseCurrency} ≈ $${holdingUsdt.toFixed(2)} USDT — monitorando para venda.`);
-      // Se RSI já está acima de 70, avança direto para ABOVE_70
-      if (rsiExit > rsiSell) {
+      // Se RSI já está acima do nível de ABOVE_70, avança direto para esse estado
+      const alreadyAbove = separateSellInterval ? rsi > 70 : rsiExit > rsiSell;
+      if (alreadyAbove) {
         state.phase = 'ABOVE_70';
         saveState(symbol, state);
-        log(`${R}📈 RSI saída já acima de ${rsiSell} (${rsiExit.toFixed(2)}) — aguardando retorno para ≤ ${rsiSell}…${X}`);
+        if (separateSellInterval) {
+          log(`${R}📈 RSI(${interval}) já acima de 70 (${rsi.toFixed(2)}) — aguardando retorno para ≤ 70…${X}`);
+        } else {
+          log(`${R}📈 RSI saída já acima de ${rsiSell} (${rsiExit.toFixed(2)}) — aguardando retorno para ≤ ${rsiSell}…${X}`);
+        }
       }
       return;
     }
 
     if (rsi < rsiBuy && variation >= variationMin) {
       log(`${G}📍 RSI < ${rsiBuy} (${rsi.toFixed(2)}) + var ${variation.toFixed(2)}%${variationMin > 0 ? ` ≥ ${variationMin}%` : ''}${X}`);
+
+      const { ok: passesMa50, ma50: ma50Value } = await checkMa50Filter(pair, adapter, log, last.close);
+      if (!passesMa50) return;
 
       if (interval === '30m') {
         const passes = await check4hRsiFilter(pair, adapter, log);
@@ -704,11 +740,12 @@ async function tick(symbol, pair, log, config, adapter) {
           saveState(symbol, state);
           log(`${'─'.repeat(60)}`);
           log(`${G}🟢 ORDEM DE COMPRA ABERTA${X}`);
-          log(`   Par    : ${pair}`);
-          log(`   Preço  : ${result.limitPrice}  (${buyDiscount * 100}% abaixo de ${last.close})`);
-          log(`   Qty    : ${result.qty}`);
-          log(`   USDT   : ≈${result.budget.toFixed(2)}`);
-          log(`   ID     : ${result.orderId}`);
+          log(`   Par      : ${pair}`);
+          log(`   Preço    : ${result.limitPrice}  (${buyDiscount * 100}% abaixo de ${last.close})`);
+          log(`   MA50(1h) : ${ma50Value !== null ? ma50Value.toFixed(4) : 'n/a'}`);
+          log(`   Qty      : ${result.qty}`);
+          log(`   USDT     : ≈${result.budget.toFixed(2)}`);
+          log(`   ID       : ${result.orderId}`);
           log(`${'─'.repeat(60)}`);
         }
       } catch (err) {
@@ -768,53 +805,105 @@ async function tick(symbol, pair, log, config, adapter) {
         }
       }
     } catch (err) {
-      log(`❌ Erro ao verificar order ${state.pendingOrderId}: ${err.message}`);
+      if (err.message.includes('404')) {
+        log(`${'─'.repeat(60)}`);
+        log(`🚫 COMPRA CANCELADA — ordem ${state.pendingOrderId} não encontrada na exchange (404)`);
+        log(`   Par    : ${pair}`);
+        log(`   ID     : ${state.pendingOrderId}`);
+        log(`${'─'.repeat(60)}`);
+        state = { phase: 'WATCHING' };
+        saveState(symbol, state);
+      } else {
+        log(`❌ Erro ao verificar order ${state.pendingOrderId}: ${err.message}`);
+      }
     }
 
   // ── BOUGHT: aguarda RSI cruzar acima de rsiSell ou atingir rsiOverbought ──
   } else if (state.phase === 'BOUGHT') {
-    if (rsiExit >= rsiOverbought) {
-      log(`${R}🚀 RSI saída sobrecomprado extremo: ${rsiExit.toFixed(2)} ≥ ${rsiOverbought} — venda imediata${X}`);
-      const newState = await executeSell(`RSI(${effectiveSellInterval}) ${rsiExit.toFixed(2)} ≥ ${rsiOverbought} (sobrecomprado extremo)`);
+    if (state.buyPrice && last.close <= state.buyPrice * 0.95) {
+      const drop = ((last.close - state.buyPrice) / state.buyPrice * 100).toFixed(2);
+      log(`${R}🛑 STOP-LOSS: preço=${last.close} caiu ${drop}% abaixo da compra=${state.buyPrice} — venda imediata${X}`);
+      const newState = await executeSell(`stop-loss: preço ${drop}% abaixo da compra (${state.buyPrice})`);
       if (newState) { state = newState; saveState(symbol, state); }
-    } else if (rsiExit > rsiSell) {
-      // Antes de aguardar retorno, checa RSI 1m: se ≥ 80 vende imediatamente
-      if (interval !== '1m') {
-        const { triggers: sell1m, rsi: rsi1m } = await check1mRsiSell(pair, adapter);
-        if (sell1m) {
-          log(`${R}📈 RSI(${effectiveSellInterval})=${rsiExit.toFixed(2)} > ${rsiSell} + RSI(1m)=${rsi1m.toFixed(2)} ≥ 80 — venda imediata${X}`);
-          const newState = await executeSell(`RSI(${effectiveSellInterval}) ${rsiExit.toFixed(2)} > ${rsiSell} + RSI(1m) ${rsi1m.toFixed(2)} ≥ 80`);
-          if (newState) { state = newState; saveState(symbol, state); }
-          return;
-        }
+    } else if (separateSellInterval) {
+      // Modo dual-intervalo:
+      //   saída rápida: RSI(sellInterval) ≥ rsiSell → vende imediatamente (ex: RSI 1m ≥ 80)
+      //   saída lenta : RSI(interval)    > 70       → ABOVE_70, aguarda RSI(interval) ≤ 70
+      if (rsiExit >= rsiSell) {
+        log(`${R}🚀 RSI(${effectiveSellInterval})=${rsiExit.toFixed(2)} ≥ ${rsiSell} — venda imediata${X}`);
+        const newState = await executeSell(`RSI(${effectiveSellInterval}) ${rsiExit.toFixed(2)} ≥ ${rsiSell}`);
+        if (newState) { state = newState; saveState(symbol, state); }
+      } else if (rsi > 70) {
+        state.phase = 'ABOVE_70';
+        saveState(symbol, state);
+        log(`📈 RSI(${interval})=${rsi.toFixed(2)} > 70 — aguardando retorno para ≤ 70 ou RSI(${effectiveSellInterval}) ≥ ${rsiSell}…`);
       }
-      state.phase = 'ABOVE_70';
-      saveState(symbol, state);
-      log(`📈 RSI saída passou de ${rsiSell} (${rsiExit.toFixed(2)}) — aguardando retorno para ≤ ${rsiSell} ou ≥ ${rsiOverbought}…`);
+    } else {
+      // Modo single-intervalo
+      if (rsiExit >= rsiOverbought) {
+        log(`${R}🚀 RSI sobrecomprado extremo: ${rsiExit.toFixed(2)} ≥ ${rsiOverbought} — venda imediata${X}`);
+        const newState = await executeSell(`RSI(${effectiveSellInterval}) ${rsiExit.toFixed(2)} ≥ ${rsiOverbought} (sobrecomprado extremo)`);
+        if (newState) { state = newState; saveState(symbol, state); }
+      } else if (rsiExit > rsiSell) {
+        if (interval !== '1m') {
+          const { triggers: sell1m, rsi: rsi1m } = await check1mRsiSell(pair, adapter);
+          if (sell1m) {
+            log(`${R}📈 RSI(${effectiveSellInterval})=${rsiExit.toFixed(2)} > ${rsiSell} + RSI(1m)=${rsi1m.toFixed(2)} ≥ 80 — venda imediata${X}`);
+            const newState = await executeSell(`RSI(${effectiveSellInterval}) ${rsiExit.toFixed(2)} > ${rsiSell} + RSI(1m) ${rsi1m.toFixed(2)} ≥ 80`);
+            if (newState) { state = newState; saveState(symbol, state); }
+            return;
+          }
+        }
+        state.phase = 'ABOVE_70';
+        saveState(symbol, state);
+        log(`📈 RSI saída passou de ${rsiSell} (${rsiExit.toFixed(2)}) — aguardando retorno para ≤ ${rsiSell} ou ≥ ${rsiOverbought}…`);
+      }
     }
 
   // ── ABOVE_70: vende quando RSI retorna a ≤ rsiSell OU atinge rsiOverbought
   } else if (state.phase === 'ABOVE_70') {
-    if (rsiExit >= rsiOverbought) {
-      log(`${R}🚀 RSI saída sobrecomprado extremo: ${rsiExit.toFixed(2)} ≥ ${rsiOverbought} — venda imediata${X}`);
-      const newState = await executeSell(`RSI(${effectiveSellInterval}) ${rsiExit.toFixed(2)} ≥ ${rsiOverbought} (sobrecomprado extremo)`);
+    if (state.buyPrice && last.close <= state.buyPrice * 0.95) {
+      const drop = ((last.close - state.buyPrice) / state.buyPrice * 100).toFixed(2);
+      log(`${R}🛑 STOP-LOSS: preço=${last.close} caiu ${drop}% abaixo da compra=${state.buyPrice} — venda imediata${X}`);
+      const newState = await executeSell(`stop-loss: preço ${drop}% abaixo da compra (${state.buyPrice})`);
       if (newState) { state = newState; saveState(symbol, state); }
-    } else if (rsiExit <= rsiSell) {
-      log(`${R}📉 RSI saída voltou a ${rsiExit.toFixed(2)} ≤ ${rsiSell} — sinal de VENDA${X}`);
-      const newState = await executeSell(`RSI(${effectiveSellInterval}) ${rsiExit.toFixed(2)} ≤ ${rsiSell} (retorno ao nível de venda)`);
-      if (newState) { state = newState; saveState(symbol, state); }
-    } else {
-      // Checa RSI 1m como gatilho de venda rápida enquanto aguarda
-      if (interval !== '1m') {
-        const { triggers: sell1m, rsi: rsi1m } = await check1mRsiSell(pair, adapter);
-        if (sell1m) {
-          log(`${R}🚀 RSI(1m)=${rsi1m.toFixed(2)} ≥ 80 — venda imediata${X}`);
-          const newState = await executeSell(`RSI(1m) ${rsi1m.toFixed(2)} ≥ 80 (sobrecomprado no 1m)`);
-          if (newState) { state = newState; saveState(symbol, state); }
-          return;
-        }
+    } else if (separateSellInterval) {
+      // Modo dual-intervalo:
+      //   saída rápida: RSI(sellInterval) ≥ rsiSell → vende imediatamente
+      //   saída lenta : RSI(interval)    ≤ 70       → RSI de entrada voltou → vende
+      if (rsiExit >= rsiSell) {
+        log(`${R}🚀 RSI(${effectiveSellInterval})=${rsiExit.toFixed(2)} ≥ ${rsiSell} — venda imediata${X}`);
+        const newState = await executeSell(`RSI(${effectiveSellInterval}) ${rsiExit.toFixed(2)} ≥ ${rsiSell}`);
+        if (newState) { state = newState; saveState(symbol, state); }
+      } else if (rsi <= 70) {
+        log(`${R}📉 RSI(${interval})=${rsi.toFixed(2)} voltou a ≤ 70 — sinal de VENDA${X}`);
+        const newState = await executeSell(`RSI(${interval}) ${rsi.toFixed(2)} ≤ 70 (retorno da zona sobrecomprada no intervalo de entrada)`);
+        if (newState) { state = newState; saveState(symbol, state); }
+      } else {
+        log(`⏳ RSI(${interval})=${rsi.toFixed(2)} aguardando ≤ 70 | RSI(${effectiveSellInterval})=${rsiExit.toFixed(2)} aguardando ≥ ${rsiSell}…`);
       }
-      log(`⏳ RSI em ${rsi.toFixed(2)} — aguardando retorno a ≤ ${rsiSell} ou subida a ≥ ${rsiOverbought}…`);
+    } else {
+      // Modo single-intervalo
+      if (rsiExit >= rsiOverbought) {
+        log(`${R}🚀 RSI sobrecomprado extremo: ${rsiExit.toFixed(2)} ≥ ${rsiOverbought} — venda imediata${X}`);
+        const newState = await executeSell(`RSI(${effectiveSellInterval}) ${rsiExit.toFixed(2)} ≥ ${rsiOverbought} (sobrecomprado extremo)`);
+        if (newState) { state = newState; saveState(symbol, state); }
+      } else if (rsiExit <= rsiSell) {
+        log(`${R}📉 RSI saída voltou a ${rsiExit.toFixed(2)} ≤ ${rsiSell} — sinal de VENDA${X}`);
+        const newState = await executeSell(`RSI(${effectiveSellInterval}) ${rsiExit.toFixed(2)} ≤ ${rsiSell} (retorno ao nível de venda)`);
+        if (newState) { state = newState; saveState(symbol, state); }
+      } else {
+        if (interval !== '1m') {
+          const { triggers: sell1m, rsi: rsi1m } = await check1mRsiSell(pair, adapter);
+          if (sell1m) {
+            log(`${R}🚀 RSI(1m)=${rsi1m.toFixed(2)} ≥ 80 — venda imediata${X}`);
+            const newState = await executeSell(`RSI(1m) ${rsi1m.toFixed(2)} ≥ 80 (sobrecomprado no 1m)`);
+            if (newState) { state = newState; saveState(symbol, state); }
+            return;
+          }
+        }
+        log(`⏳ RSI em ${rsi.toFixed(2)} — aguardando retorno a ≤ ${rsiSell} ou subida a ≥ ${rsiOverbought}…`);
+      }
     }
 
   // ── PENDING_SELL: verifica se a ordem de venda foi preenchida ─────────────
@@ -867,7 +956,28 @@ async function tick(symbol, pair, log, config, adapter) {
         log(`⏳ Ordem de venda aberta (id=${state.sellOrderId}) | preço=${state.sellPrice} | aguardando fill…`);
       }
     } catch (err) {
-      log(`❌ Erro ao verificar ordem de venda ${state.sellOrderId}: ${err.message}`);
+      if (err.message.includes('404')) {
+        // Ordem não encontrada: verificar saldo para determinar se a venda já ocorreu
+        log(`⚠️  Ordem de venda ${state.sellOrderId} não encontrada (404) — verificando saldo…`);
+        try {
+          const baseCurrency = adapter.baseCurrency(pair);
+          const tokenBalance = await adapter.getTokenBalance(baseCurrency);
+          const holdingUsdt  = tokenBalance * last.close;
+          if (holdingUsdt >= MIN_HOLDING_USDT) {
+            state = { phase: 'ABOVE_70', exchange: state.exchange ?? exchange, buyQty: tokenBalance, buyUsdt: holdingUsdt, buyTime: state.buyTime ?? now(), detected: true };
+            saveState(symbol, state);
+            log(`♻️  Saldo detectado (${tokenBalance.toFixed(4)} ≈ $${holdingUsdt.toFixed(2)}) — voltando a ABOVE_70 para nova tentativa de venda`);
+          } else {
+            state = { phase: 'WATCHING' };
+            saveState(symbol, state);
+            log(`✅ Saldo zerado — assumindo venda concluída, voltando a WATCHING`);
+          }
+        } catch (balErr) {
+          log(`❌ Erro ao verificar saldo após 404: ${balErr.message}`);
+        }
+      } else {
+        log(`❌ Erro ao verificar ordem de venda ${state.sellOrderId}: ${err.message}`);
+      }
     }
   }
 

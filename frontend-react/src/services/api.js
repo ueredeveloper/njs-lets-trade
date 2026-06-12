@@ -229,7 +229,7 @@ export async function fetchCandlesticksAndCloud(symbol, interval, source = null,
   }
   const candles = candlesRaw;
 
-  const [ichimokuCloud, movingAverage, rsi] = await Promise.all([
+  const [ichimokuCloud, movingAverage, ma50, rsi] = await Promise.all([
     fetch('/services/ichimoku-cloud', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -239,17 +239,23 @@ export async function fetchCandlesticksAndCloud(symbol, interval, source = null,
     fetch('/services/sma?period=200', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(candles.slice(-600)), // SMA200 precisa de ≤600 candles
+      body: JSON.stringify(candles.slice(-600)),
+    }).then((r) => r.json()),
+
+    fetch('/services/sma?period=50', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(candles.slice(-300)),
     }).then((r) => r.json()),
 
     fetch('/services/rsi', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(candles), // todos os candles — necessário para RSI histórico correto
+      body: JSON.stringify(candles),
     }).then((r) => r.json()),
   ]);
 
-  return { symbol, interval, source: source ?? null, price: candles.at(-1)?.close, candlesticks: candles, ichimokuCloud, movingAverage, rsi };
+  return { symbol, interval, source: source ?? null, price: candles.at(-1)?.close, candlesticks: candles, ichimokuCloud, movingAverage, ma50, rsi };
 }
 
 /** Constrói o nome normalizado a partir da query string.

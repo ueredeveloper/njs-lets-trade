@@ -123,7 +123,9 @@ export default function TradeConfigModal({ symbol, isActive, currentConfig, onCo
           {/* RSI Venda */}
           <div>
             <label className="block text-[10px] uppercase tracking-wider mb-1" style={{ color: '#ef5350' }}>
-              RSI Venda ({sellInterval || interval}) — acima de
+              {sellInterval && sellInterval !== interval
+                ? `RSI Saída rápida (${sellInterval}) — vende se ≥`
+                : `RSI Venda (${interval}) — acima de`}
             </label>
             <div className="flex items-center gap-2">
               <input
@@ -136,6 +138,11 @@ export default function TradeConfigModal({ symbol, isActive, currentConfig, onCo
               />
               <span className="text-xs text-p5/40 shrink-0">RSI &gt; {rsiSell}</span>
             </div>
+            {sellInterval && sellInterval !== interval && (
+              <p className="text-[9px] mt-1" style={{ color: '#94a3b8' }}>
+                + RSI({interval}) &gt; 70 → aguarda retorno ≤ 70
+              </p>
+            )}
           </div>
 
           {Number(rsiBuy) >= Number(rsiSell) && (
