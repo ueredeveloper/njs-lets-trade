@@ -7,7 +7,7 @@ import convertOpenTime from '../utils/convertOpenTime';
 
 const LIMIT = 76;
 const INTERVALS = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w'];
-const DEFAULT_INTERVAL = '1h';
+const DEFAULT_INTERVAL = '5m';
 
 const C_UP   = '#26a69a';
 const C_DOWN = '#ef5350';
@@ -30,19 +30,20 @@ function getThemeColors() {
 }
 
 
-function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAverage, ma50, rsi }, colors, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = []) {
+function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAverage, ma50, rsi }, colors, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = [], crossMaPoints = null, crossMaLabel = '') {
   const showMa50     = activeIndicators.includes('ma50');
   const showMa200    = activeIndicators.includes('ma200');
   const showIchimoku = activeIndicators.includes('ichimoku');
   const showRsi      = activeIndicators.includes('rsi');
   const showRsi50    = activeIndicators.includes('rsi50');
+  const showRsi80    = activeIndicators.includes('rsi80');
   const DL = Math.min(displayLimit, candlesticks.length);
+  const LEFT_PAD  = 1;
+  const RIGHT_PAD = showIchimoku ? 24 : 3;
 
   const xData = (() => {
-    const dates = candlesticks.map((c) => convertOpenTime(c.openTime, interval));
-    if (!showIchimoku) return dates.slice(-DL);
-    const padding = new Array(24).fill('');
-    return [...dates, ...padding].slice(-(DL + 24));
+    const slicedDates = candlesticks.slice(-DL).map((c) => convertOpenTime(c.openTime, interval));
+    return [...new Array(LEFT_PAD).fill(''), ...slicedDates, ...new Array(RIGHT_PAD).fill('')];
   })();
 
   // Separadores de dia — só faz sentido em intervalos intraday (< 1d)
@@ -57,7 +58,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
       const day = new Date(Number(c.openTime)).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
       if (prevDay !== null && day !== prevDay) {
         result.push({
-          xAxis: i,
+          xAxis: i + LEFT_PAD,
           lineStyle: { color: 'rgba(255,255,255,0.07)', width: 1, type: 'solid' },
           label: {
             show: true,
@@ -86,7 +87,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
       day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
     }).replace(',', '');
     const line = (idx, label) => ({
-      xAxis: idx,
+      xAxis: idx + LEFT_PAD,
       lineStyle: { color: 'rgba(255,255,255,0.45)', width: 1, type: 'dashed' },
       label: { show: true, formatter: label, color: 'rgba(255,255,255,0.75)',
                fontSize: 12, fontWeight: 'bold', position: 'insideEndTop', padding: [2, 4] },
@@ -115,7 +116,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
       const localIdx = idx - offset;
       if (localIdx < 0) return [];
       return [{
-        xAxis: localIdx,
+        xAxis: localIdx + LEFT_PAD,
         lineStyle: { color: '#3b82f6', width: 1.5, type: 'solid' },
         label: {
           show: true,
@@ -163,14 +164,65 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
   // Alinha séries com o eixo X:
   // — left-pad com null quando a série tem menos valores que DL (moedas novas com poucos candles)
   // — right-pad com null quando Ichimoku está ativo (24 posições futuras no xData)
-  const futurePad = showIchimoku ? 24 : 0;
+  const futurePad = RIGHT_PAD;
   const alignSeries = (arr) => {
     const raw = arr?.slice(-DL) ?? [];
     return [
-      ...new Array(DL - raw.length).fill(null),
+      ...new Array(LEFT_PAD + Math.max(0, DL - raw.length)).fill(null),
       ...raw,
       ...new Array(futurePad).fill(null),
     ];
+  };
+
+  const alignCrossMA = () => {
+    if (!crossMaPoints?.length) return [];
+    const full = candlesticks.map(c => {
+      const t = Number(c.openTime);
+      let lo = 0, hi = crossMaPoints.length - 1, best = null;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        if (crossMaPoints[mid].openTime <= t) { best = crossMaPoints[mid].value; lo = mid + 1; }
+        else hi = mid - 1;
+      }
+      return best;
+    });
+    return alignSeries(full);
+  };
+  const crossMaAligned = alignCrossMA();
+
+  const _fmtV = v => v == null ? '—' : (v < 0.01 ? Number(v).toFixed(6) : v < 1 ? Number(v).toFixed(4) : Number(v).toFixed(2));
+
+  const tooltipFormatter = (params) => {
+    const time = params[0]?.axisValue ?? '';
+    let html = `<div style="font-family:monospace;font-size:11px;min-width:150px;line-height:1.6">`;
+    html += `<div style="margin-bottom:5px;opacity:0.5;font-size:10px">${time}</div>`;
+    for (const p of params) {
+      if (p.value == null) continue;
+      if (p.seriesType === 'candlestick') {
+        const [o, c, l, h] = p.value;
+        const up = parseFloat(c) >= parseFloat(o);
+        const col = up ? '#26a69a' : '#ef5350';
+        html += `<div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 10px;margin-bottom:4px">`;
+        html += `<span style="color:#888">O</span><span style="color:${col};font-weight:bold">${_fmtV(o)}</span>`;
+        html += `<span style="color:#888">H</span><span style="color:${col}">${_fmtV(h)}</span>`;
+        html += `<span style="color:#888">L</span><span style="color:${col}">${_fmtV(l)}</span>`;
+        html += `<span style="color:#888">C</span><span style="color:${col};font-weight:bold">${_fmtV(c)}</span>`;
+        html += `</div><hr style="border:none;border-top:1px solid rgba(255,255,255,0.08);margin:3px 0"/>`;
+      } else {
+        if (p.seriesName === 'CL' || p.seriesName === 'BL' || p.seriesName === 'Span A' || p.seriesName === 'Span B') continue;
+        let col = p.color ?? '#fff';
+        if (p.seriesName === 'RSI') {
+          const rv = parseFloat(p.value);
+          col = rv >= 70 ? '#26a69a' : rv <= 30 ? '#ef5350' : '#a78bfa';
+        }
+        html += `<div style="display:flex;justify-content:space-between;gap:14px">`;
+        html += `<span style="color:${col};opacity:0.85">${p.seriesName}</span>`;
+        html += `<span style="color:#fff;font-weight:bold">${_fmtV(p.value)}</span>`;
+        html += `</div>`;
+      }
+    }
+    html += `</div>`;
+    return html;
   };
 
   const ma50Data  = alignSeries(ma50);
@@ -181,7 +233,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
       name: 'Candles',
       type: 'candlestick',
       xAxisIndex: idx, yAxisIndex: idx,
-      data: candlesticks.slice(-DL).map((c) => [c.open, c.close, c.low, c.high]),
+      data: [...new Array(LEFT_PAD).fill('-'), ...candlesticks.slice(-DL).map((c) => [c.open, c.close, c.low, c.high])],
       itemStyle: { color: C_UP, color0: C_DOWN, borderColor: C_UP, borderColor0: C_DOWN },
       markLine: finalMarkLine,
     },
@@ -203,20 +255,37 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
     }] : []),
     ...(showIchimoku ? [
       { name: 'CL', type: 'line', xAxisIndex: idx, yAxisIndex: idx,
-        data: ichimokuCloud.slice(-DL).map((c) => c.conversion),
+        data: [...new Array(LEFT_PAD).fill(null), ...ichimokuCloud.slice(-DL).map((c) => c.conversion)],
         smooth: true, showSymbol: false, lineStyle: { color: '#60a5fa', width: 1 } },
       { name: 'BL', type: 'line', xAxisIndex: idx, yAxisIndex: idx,
-        data: ichimokuCloud.slice(-DL).map((c) => c.base),
+        data: [...new Array(LEFT_PAD).fill(null), ...ichimokuCloud.slice(-DL).map((c) => c.base)],
         smooth: true, showSymbol: false, lineStyle: { color: '#94a3b8', width: 1 } },
       { name: 'Span A', type: 'line', xAxisIndex: idx, yAxisIndex: idx,
-        data: ichimokuCloud.slice(-(DL + 24)).map((c) => c.spanA),
+        data: [...new Array(LEFT_PAD).fill(null), ...ichimokuCloud.slice(-(DL + RIGHT_PAD)).map((c) => c.spanA)],
         showSymbol: false, lineStyle: { color: C_UP, width: 1, opacity: 0.7 },
         areaStyle: { color: 'rgba(38,166,154,0.05)' } },
       { name: 'Span B', type: 'line', xAxisIndex: idx, yAxisIndex: idx,
-        data: ichimokuCloud.slice(-(DL + 24)).map((c) => c.spanB),
+        data: [...new Array(LEFT_PAD).fill(null), ...ichimokuCloud.slice(-(DL + RIGHT_PAD)).map((c) => c.spanB)],
         smooth: true, showSymbol: false, lineStyle: { color: C_DOWN, width: 1, opacity: 0.7 },
         areaStyle: { color: 'rgba(239,83,80,0.05)' } },
     ] : []),
+    ...(crossMaAligned.some(v => v !== null) ? [{
+      name: crossMaLabel,
+      type: 'line',
+      xAxisIndex: idx, yAxisIndex: idx,
+      data: crossMaAligned,
+      smooth: true, showSymbol: false,
+      lineStyle: { color: '#fb923c', width: 1.5, type: 'dashed' },
+      endLabel: {
+        show: true,
+        formatter: crossMaLabel,
+        color: '#fb923c',
+        fontSize: 9,
+        padding: [1, 4],
+        backgroundColor: 'rgba(0,0,0,0.5)',
+        borderRadius: 2,
+      },
+    }] : []),
   ];
 
   if (!showRsi) {
@@ -230,6 +299,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
       tooltip: {
         trigger: 'axis', backgroundColor: '#003f69ee', borderColor: colors.axis,
         textStyle: { color: colors.text, fontSize: 11 },
+        formatter: tooltipFormatter,
         axisPointer: { animation: false, type: 'cross', lineStyle: { color: colors.axis, width: 1, opacity: 0.8 } },
       },
       xAxis: { type: 'category', data: xData,
@@ -258,6 +328,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
     tooltip: {
       trigger: 'axis', backgroundColor: '#003f69ee', borderColor: colors.axis,
       textStyle: { color: colors.text, fontSize: 11 },
+      formatter: tooltipFormatter,
       axisPointer: { animation: false, type: 'cross', lineStyle: { color: colors.axis, width: 1, opacity: 0.8 } },
     },
     grid: [
@@ -298,6 +369,8 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
               label: { formatter: '50', color: '#facc15', fontSize: 9, position: 'start' } }] : []),
             { yAxis: 70, lineStyle: { color: '#26a69a', type: 'dashed', width: 1 },
               label: { formatter: '70', color: '#26a69a', fontSize: 9, position: 'start' } },
+            ...(showRsi80 ? [{ yAxis: 80, lineStyle: { color: '#fb923c', type: 'dashed', width: 1 },
+              label: { formatter: '80', color: '#fb923c', fontSize: 9, position: 'start' } }] : []),
           ],
         },
       },
@@ -310,7 +383,10 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
 function buildMatrixOption({ symbol, interval, candlesticks, rsi }, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = []) {
   const showRsi   = activeIndicators.includes('rsi');
   const showRsi50 = activeIndicators.includes('rsi50');
+  const showRsi80 = activeIndicators.includes('rsi80');
   const DL      = Math.min(displayLimit, candlesticks.length);
+  const LEFT_PAD  = 1;
+  const RIGHT_PAD = 3;
   const INTRADAY = !['1d', '3d', '1w'].includes(interval);
 
   const G        = '#22c55e';                       // verde Matrix
@@ -318,7 +394,10 @@ function buildMatrixOption({ symbol, interval, candlesticks, rsi }, activeIndica
   const G_LABEL  = 'rgba(34,197,94,0.38)';
   const BG       = '#050d0a';
 
-  const xData = candlesticks.map(c => convertOpenTime(c.openTime, interval)).slice(-DL);
+  const xData = (() => {
+    const slicedDates = candlesticks.slice(-DL).map(c => convertOpenTime(c.openTime, interval));
+    return [...new Array(LEFT_PAD).fill(''), ...slicedDates, ...new Array(RIGHT_PAD).fill('')];
+  })();
 
   // separadores de dia (em tom verde)
   const dayBreakData = (() => {
@@ -330,7 +409,7 @@ function buildMatrixOption({ symbol, interval, candlesticks, rsi }, activeIndica
       const day = new Date(Number(c.openTime)).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
       if (prevDay !== null && day !== prevDay) {
         result.push({
-          xAxis: i,
+          xAxis: i + LEFT_PAD,
           lineStyle: { color: 'rgba(34,197,94,0.10)', width: 1, type: 'solid' },
           label: { show: true, formatter: day.slice(0, 5), color: 'rgba(34,197,94,0.28)', fontSize: 9, position: 'insideEndTop', padding: [2, 3] },
         });
@@ -348,7 +427,7 @@ function buildMatrixOption({ symbol, interval, candlesticks, rsi }, activeIndica
     const startIdx = candlesticks.findIndex(c => Number(c.openTime) >= startMs);
     const endIdx   = candlesticks.reduce((best, c, i) => Number(c.openTime) <= endMs ? i : best, -1);
     const fmt = iso => new Date(iso).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(',', '');
-    const mk  = (idx, label) => ({ xAxis: idx, lineStyle: { color: 'rgba(255,255,255,0.35)', width: 1, type: 'dashed' }, label: { show: true, formatter: label, color: 'rgba(255,255,255,0.65)', fontSize: 11, fontWeight: 'bold', position: 'insideEndTop', padding: [2, 4] } });
+    const mk  = (idx, label) => ({ xAxis: idx + LEFT_PAD, lineStyle: { color: 'rgba(255,255,255,0.35)', width: 1, type: 'dashed' }, label: { show: true, formatter: label, color: 'rgba(255,255,255,0.65)', fontSize: 11, fontWeight: 'bold', position: 'insideEndTop', padding: [2, 4] } });
     const data = [];
     if (startIdx !== -1) data.push(mk(startIdx, fmt(zoomPeriod.startDate)));
     if (endIdx   !== -1) data.push(mk(endIdx,   fmt(zoomPeriod.endDate)));
@@ -369,13 +448,13 @@ function buildMatrixOption({ symbol, interval, candlesticks, rsi }, activeIndica
       const idx      = candlesticks.reduce((best, c, i) => Math.abs(Number(c.openTime) - tradeMs) < Math.abs(Number(candlesticks[best].openTime) - tradeMs) ? i : best, 0);
       const localIdx = idx - offset;
       if (localIdx < 0) return [];
-      return [{ xAxis: localIdx, lineStyle: { color: '#3b82f6', width: 1.5, type: 'solid' }, label: { show: true, formatter: `compra ${fmtTradeDate(tradeMs)}`, color: '#3b82f6', fontSize: 9, position: 'insideStartTop', padding: [3, 5] } }];
+      return [{ xAxis: localIdx + LEFT_PAD, lineStyle: { color: '#3b82f6', width: 1.5, type: 'solid' }, label: { show: true, formatter: `compra ${fmtTradeDate(tradeMs)}`, color: '#3b82f6', fontSize: 9, position: 'insideStartTop', padding: [3, 5] } }];
     });
   })();
 
   const allMarkLineData = [...dayBreakData, ...periodMarkData, ...tradeMarkData];
 
-  const closes  = candlesticks.slice(-DL).map(c => c.close);
+  const closes    = candlesticks.slice(-DL).map(c => c.close);
   const lastClose = candlesticks.length ? parseFloat(candlesticks[candlesticks.length - 1].close) : null;
   const _fmtP = (p) => p < 0.01 ? p.toFixed(6) : p < 1 ? p.toFixed(4) : p.toFixed(2);
   const finalMarkLine = {
@@ -396,7 +475,7 @@ function buildMatrixOption({ symbol, interval, candlesticks, rsi }, activeIndica
   };
   const rsiData = (() => {
     const raw = rsi?.slice(-DL) ?? [];
-    return [...new Array(DL - raw.length).fill(null), ...raw];
+    return [...new Array(LEFT_PAD + Math.max(0, DL - raw.length)).fill(null), ...raw, ...new Array(RIGHT_PAD).fill(null)];
   })();
 
   const axisBase = (gridIndex, showLabel) => ({
@@ -449,7 +528,7 @@ function buildMatrixOption({ symbol, interval, candlesticks, rsi }, activeIndica
         name: 'Preço',
         type: 'line',
         xAxisIndex: 0, yAxisIndex: 0,
-        data: closes,
+        data: [...new Array(LEFT_PAD).fill(null), ...closes],
         showSymbol: false,
         lineStyle: { color: G, width: 1.5 },
         areaStyle: {
@@ -471,6 +550,7 @@ function buildMatrixOption({ symbol, interval, candlesticks, rsi }, activeIndica
             { yAxis: 30, lineStyle: { color: '#ef5350', type: 'dashed', width: 1 }, label: { formatter: '30', color: '#ef5350', fontSize: 9, position: 'start' } },
             ...(showRsi50 ? [{ yAxis: 50, lineStyle: { color: '#facc15', type: 'dashed', width: 1, opacity: 0.6 }, label: { formatter: '50', color: '#facc15', fontSize: 9, position: 'start' } }] : []),
             { yAxis: 70, lineStyle: { color: G,         type: 'dashed', width: 1 }, label: { formatter: '70', color: G,         fontSize: 9, position: 'start' } },
+            ...(showRsi80 ? [{ yAxis: 80, lineStyle: { color: '#fb923c', type: 'dashed', width: 1 }, label: { formatter: '80', color: '#fb923c', fontSize: 9, position: 'start' } }] : []),
           ],
         },
       }] : []),
@@ -654,8 +734,13 @@ export default function CandlestickChart() {
   const [currentInterval, setCurrentInterval] = useState(DEFAULT_INTERVAL);
   const [loadingInterval, setLoadingInterval] = useState(false);
   const [themeTick, setThemeTick] = useState(0);
-  const [activeIndicators, setActiveIndicators] = useState(['ma50', 'ma200', 'rsi']);
+  const [activeIndicators, setActiveIndicators] = useState(['ma50', 'rsi']);
   const [activeTab, setActiveTab] = useState('chart'); // 'chart' | 'matrix'
+  const [crossMaPeriod, setCrossMaPeriod] = useState('50');
+  const [crossMaInterval, setCrossMaInterval] = useState('1h');
+  const [crossMaEnabled, setCrossMaEnabled] = useState(false);
+  const [crossMaPoints, setCrossMaPoints] = useState(null);
+  const [crossMaLoading, setCrossMaLoading] = useState(false);
 
 
   function toggleIndicator(id) {
@@ -669,6 +754,41 @@ export default function CandlestickChart() {
     window.addEventListener('palette-updated', handleThemeChange);
     return () => window.removeEventListener('palette-updated', handleThemeChange);
   }, []);
+
+  useEffect(() => {
+    if (!crossMaEnabled || !selectedChart?.symbol || crossMaInterval === currentInterval) {
+      setCrossMaPoints(null);
+      return;
+    }
+    let cancelled = false;
+    setCrossMaLoading(true);
+    (async () => {
+      try {
+        const srcParam = selectedChart.source === 'gate' ? '&source=gate' : '';
+        const htCandles = await fetch(
+          `/services/candles/?symbol=${selectedChart.symbol}&limit=500&interval=${crossMaInterval}${srcParam}`
+        ).then(r => r.json());
+        if (!Array.isArray(htCandles) || cancelled) return;
+        const sma = await fetch(`/services/sma?period=${crossMaPeriod}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(htCandles),
+        }).then(r => r.json());
+        if (cancelled) return;
+        const offset = htCandles.length - sma.length;
+        setCrossMaPoints(sma.map((val, i) => ({
+          openTime: Number(htCandles[offset + i].openTime),
+          value: val,
+        })));
+      } catch (e) {
+        console.warn('[crossMA]', e.message);
+        setCrossMaPoints(null);
+      } finally {
+        if (!cancelled) setCrossMaLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [crossMaEnabled, crossMaPeriod, crossMaInterval, selectedChart?.symbol, selectedChart?.source, currentInterval]);
 
   const colors = useMemo(() => getThemeColors(), [themeTick]);
 
@@ -718,14 +838,15 @@ export default function CandlestickChart() {
     return Math.min(candles.length, candles.length - idx + 5);
   })();
 
+  const crossMaLabel = `MA${crossMaPeriod}@${crossMaInterval}`;
   const option = useMemo(() => {
     if (!selectedChart) return null;
     if (activeTab === 'matrix') {
       return buildMatrixOption(selectedChart, activeIndicators, displayLimit, chartZoom, tradeTimes);
     }
-    return buildOption(selectedChart, colors, activeIndicators, displayLimit, chartZoom, tradeTimes);
+    return buildOption(selectedChart, colors, activeIndicators, displayLimit, chartZoom, tradeTimes, crossMaPoints, crossMaLabel);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedChart, colors, activeIndicators, chartZoom, tradePurchases, activeTab]);
+  }, [selectedChart, colors, activeIndicators, chartZoom, tradePurchases, activeTab, crossMaPoints, crossMaLabel]);
 
   if (!selectedChart || !option) {
     return (
@@ -798,6 +919,7 @@ export default function CandlestickChart() {
           )}
         </div>
 
+
       </div>
 
       {/* Conteúdo da aba */}
@@ -828,24 +950,82 @@ export default function CandlestickChart() {
               );
             })}
           </div>
-          {/* Botão RSI 50 — canto superior direito do painel RSI */}
-          <button
-            onClick={() => toggleIndicator('rsi50')}
-            style={{
-              position: 'absolute', top: 'calc(79% + 4px)', right: 68,
-              fontSize: 10, padding: '1px 7px', borderRadius: 4, cursor: 'pointer',
-              background: activeIndicators.includes('rsi50') ? '#facc15' : 'transparent',
-              color:      activeIndicators.includes('rsi50') ? '#000' : '#facc15',
-              border: '1px solid #facc15',
-              opacity: activeIndicators.includes('rsi50') ? 1 : 0.5,
-              transition: 'all 0.15s',
-              zIndex: 10,
-              display: 'flex', alignItems: 'center', gap: 4,
-            }}
-          >
-            <span style={{ width: 6, height: 6, borderRadius: '50%', background: activeIndicators.includes('rsi50') ? '#000' : '#facc15', flexShrink: 0 }} />
-            RSI 50
-          </button>
+          {/* Controles cross-MA — canto inferior esquerdo da área de preço */}
+          <div style={{
+            position: 'absolute', bottom: 'calc(24% + 6px)', left: 14,
+            display: 'flex', alignItems: 'center', gap: 3, zIndex: 10,
+            background: 'rgba(0,0,0,0.45)', borderRadius: 5, padding: '3px 6px',
+          }}>
+            <span style={{ fontSize: 9, color: '#fb923c', opacity: 0.8, fontFamily: 'monospace' }}>MA</span>
+            {['50', '200'].map(p => {
+              const sel = crossMaPeriod === p;
+              return (
+                <button key={p} onClick={() => setCrossMaPeriod(p)} style={{
+                  fontSize: 9, padding: '1px 5px', borderRadius: 3, cursor: 'pointer', fontFamily: 'monospace',
+                  background: sel ? '#fb923c' : 'transparent',
+                  color: sel ? '#000' : '#fb923c',
+                  border: `1px solid ${sel ? '#fb923c' : 'rgba(251,146,60,0.4)'}`,
+                }}>
+                  {p}
+                </button>
+              );
+            })}
+            <span style={{ fontSize: 9, color: '#fb923c', opacity: 0.35, fontFamily: 'monospace' }}>@</span>
+            {['1m', '5m', '15m', '30m', '1h', '2h', '4h', '8h', '12h', '1d'].map(iv => {
+              const sel = crossMaInterval === iv;
+              const sameAsChart = iv === currentInterval;
+              return (
+                <button key={iv} onClick={() => setCrossMaInterval(iv)} style={{
+                  fontSize: 9, padding: '1px 5px', borderRadius: 3, cursor: 'pointer', fontFamily: 'monospace',
+                  background: sel ? '#fb923c' : 'transparent',
+                  color: sel ? '#000' : '#fb923c',
+                  border: `1px solid ${sel ? '#fb923c' : 'rgba(251,146,60,0.4)'}`,
+                  textDecoration: sel && sameAsChart ? 'line-through' : 'none',
+                  opacity: sameAsChart && !sel ? 0.3 : 1,
+                }}>
+                  {iv}
+                </button>
+              );
+            })}
+            <button onClick={() => setCrossMaEnabled(e => !e)} style={{
+              fontSize: 9, padding: '1px 6px', borderRadius: 3, cursor: 'pointer', fontFamily: 'monospace',
+              background: crossMaEnabled ? '#fb923c' : 'transparent',
+              color: crossMaEnabled ? '#000' : '#fb923c',
+              border: `1px solid ${crossMaEnabled ? '#fb923c' : 'rgba(251,146,60,0.5)'}`,
+              marginLeft: 2,
+            }}>
+              {crossMaEnabled ? 'ON' : 'OFF'}
+            </button>
+            {crossMaLoading && <div className="animate-spin" style={{ width: 8, height: 8, borderRadius: '50%', border: '1.5px solid #fb923c', borderTopColor: 'transparent' }} />}
+          </div>
+
+          {/* Botões RSI 80 e RSI 50 — canto superior direito do painel RSI */}
+          <div style={{ position: 'absolute', top: 'calc(79% + 4px)', right: 68, display: 'flex', flexDirection: 'column', gap: 3, zIndex: 10 }}>
+            {[
+              { id: 'rsi80', label: 'RSI 80', color: '#fb923c' },
+              { id: 'rsi50', label: 'RSI 50', color: '#facc15' },
+            ].map(({ id, label, color }) => {
+              const active = activeIndicators.includes(id);
+              return (
+                <button
+                  key={id}
+                  onClick={() => toggleIndicator(id)}
+                  style={{
+                    fontSize: 10, padding: '1px 7px', borderRadius: 4, cursor: 'pointer',
+                    background: active ? color : 'transparent',
+                    color:      active ? '#000' : color,
+                    border: `1px solid ${color}`,
+                    opacity: active ? 1 : 0.5,
+                    transition: 'all 0.15s',
+                    display: 'flex', alignItems: 'center', gap: 4,
+                  }}
+                >
+                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: active ? '#000' : color, flexShrink: 0 }} />
+                  {label}
+                </button>
+              );
+            })}
+          </div>
         </div>
       ) : (
         <div className="flex flex-1 min-h-0">
@@ -876,21 +1056,30 @@ export default function CandlestickChart() {
                 );
               })}
             </div>
-            <button
-              onClick={() => toggleIndicator('rsi50')}
-              style={{
-                position: 'absolute', top: 'calc(79% + 4px)', right: 68,
-                fontSize: 10, padding: '1px 7px', borderRadius: 4, cursor: 'pointer',
-                background: activeIndicators.includes('rsi50') ? '#facc15' : 'transparent',
-                color:      activeIndicators.includes('rsi50') ? '#000' : '#facc15',
-                border: '1px solid #facc15',
-                opacity: activeIndicators.includes('rsi50') ? 1 : 0.5,
-                transition: 'all 0.15s',
-                zIndex: 10,
-              }}
-            >
-              50
-            </button>
+            <div style={{ position: 'absolute', top: 'calc(79% + 4px)', right: 68, display: 'flex', flexDirection: 'column', gap: 3, zIndex: 10 }}>
+              {[
+                { id: 'rsi80', label: '80', color: '#fb923c' },
+                { id: 'rsi50', label: '50', color: '#facc15' },
+              ].map(({ id, label, color }) => {
+                const active = activeIndicators.includes(id);
+                return (
+                  <button
+                    key={id}
+                    onClick={() => toggleIndicator(id)}
+                    style={{
+                      fontSize: 10, padding: '1px 7px', borderRadius: 4, cursor: 'pointer',
+                      background: active ? color : 'transparent',
+                      color:      active ? '#000' : color,
+                      border: `1px solid ${color}`,
+                      opacity: active ? 1 : 0.5,
+                      transition: 'all 0.15s',
+                    }}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
           </div>
           {/* Painel de histórico (lado direito) */}
           <div className="w-24 sm:w-64 shrink-0 min-h-0 overflow-hidden">

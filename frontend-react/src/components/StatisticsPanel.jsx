@@ -37,7 +37,7 @@ function RsiStats() {
   const { selectedChart, setSelectedChart, setChartZoom } = useCurrency();
   const { t, formatPrice } = useI18n();
   const [symbol, setSymbol]         = useState(selectedChart?.symbol || 'BTCUSDT');
-  const [interval, setInterval]     = useState('1h');
+  const [interval, setInterval]     = useState('5m');
   const [oversold, setOversold]     = useState(30);
   const [overbought, setOverbought] = useState(70);
   const [loading, setLoading]       = useState(false);

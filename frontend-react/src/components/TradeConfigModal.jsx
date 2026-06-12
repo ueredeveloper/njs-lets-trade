@@ -10,8 +10,8 @@ const EXCHANGES = [
   { id: 'binance', label: 'Binance',  color: BINANCE_COLOR },
 ];
 
-export default function TradeConfigModal({ symbol, isActive, currentConfig, onConfirm, onRemove, onCancel }) {
-  const [exchange,     setExchange]     = useState(currentConfig?.exchange     ?? 'binance');
+export default function TradeConfigModal({ symbol, isActive, currentConfig, defaultExchange, onConfirm, onRemove, onCancel }) {
+  const [exchange,     setExchange]     = useState(currentConfig?.exchange     ?? defaultExchange ?? 'binance');
   const [interval,     setIntervalVal]  = useState(currentConfig?.interval     ?? '5m');
   const [sellInterval, setSellInterval] = useState(currentConfig?.sellInterval ?? '1m');
   const [rsiBuy,       setRsiBuy]       = useState(currentConfig?.rsiBuy       ?? 30);

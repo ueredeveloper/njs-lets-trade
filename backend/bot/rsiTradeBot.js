@@ -347,12 +347,13 @@ async function getGateTokenBalance(baseCurrency) {
 }
 
 const MAX_USDT_PER_COIN  = 40;  // teto por moeda
+const MIN_BUY_USDT       = 30;  // saldo mínimo para aceitar nova compra
 const MIN_HOLDING_USDT   = 3;   // saldo mínimo em USDT para considerar "posição aberta"
 
 async function placeGateLimitBuy(pair, closePrice, log, buyDiscount = 0.01) {
   const balance    = await getGateUsdtBalance();
   const budget     = Math.min(balance * 0.99, MAX_USDT_PER_COIN);
-  if (budget < 0.5) { log('⚠️  Saldo USDT insuficiente (menos de $0.50).'); return null; }
+  if (budget < MIN_BUY_USDT) { log(`⚠️  Saldo USDT insuficiente — disponível $${balance.toFixed(2)}, mínimo $${MIN_BUY_USDT}.`); return null; }
   log(`💰 Saldo USDT: ${balance.toFixed(2)} → usando ${budget.toFixed(2)} USDT (teto: $${MAX_USDT_PER_COIN})`);
 
   const limitPrice = parseFloat((closePrice * (1 - buyDiscount)).toFixed(8));
@@ -458,7 +459,7 @@ async function getBinanceTokenBalance(baseCurrency) {
 async function placeBinanceLimitBuy(pair, closePrice, log, buyDiscount = 0.01) {
   const balance = await getBinanceUsdtBalance();
   const budget  = Math.min(balance * 0.99, MAX_USDT_PER_COIN);
-  if (budget < 0.5) { log('⚠️  Saldo USDT insuficiente (menos de $0.50).'); return null; }
+  if (budget < MIN_BUY_USDT) { log(`⚠️  Saldo USDT insuficiente — disponível $${balance.toFixed(2)}, mínimo $${MIN_BUY_USDT}.`); return null; }
   log(`💰 Saldo USDT: ${balance.toFixed(2)} → usando ${budget.toFixed(2)} USDT (teto: $${MAX_USDT_PER_COIN})`);
 
   // Busca filtros de precisão do par para não rejeitar a ordem
@@ -828,9 +829,9 @@ async function tick(symbol, pair, log, config, adapter) {
         }
       }
     } catch (err) {
-      if (err.message.includes('404')) {
+      if (err.message.includes('404') || err.message.toLowerCase().includes('order does not exist')) {
         log(`${'─'.repeat(60)}`);
-        log(`🚫 COMPRA CANCELADA — ordem ${state.pendingOrderId} não encontrada na exchange (404)`);
+        log(`🚫 COMPRA CANCELADA — ordem ${state.pendingOrderId} não encontrada na exchange`);
         log(`   Par    : ${pair}`);
         log(`   ID     : ${state.pendingOrderId}`);
         log(`${'─'.repeat(60)}`);
@@ -1039,9 +1040,19 @@ async function startSymbol(cfg) {
     log(`♻️  Estado restaurado — comprado a ${state.buyPrice} em ${state.buyTime}`);
   }
 
+  let consecutiveErrors = 0;
   const run = async () => {
-    try { await tick(symbol, pair, log, liveConfigs[symbol], adapter); }
-    catch (err) { log(`❌ Tick error: ${err.message}`); }
+    try {
+      await tick(symbol, pair, log, liveConfigs[symbol], adapter);
+      consecutiveErrors = 0;
+    } catch (err) {
+      consecutiveErrors++;
+      if (consecutiveErrors <= 3) {
+        log(`❌ Tick error: ${err.message}`);
+      } else if (consecutiveErrors === 4) {
+        log(`❌ Tick error repetido — silenciando erros para ${symbol}. Verifique se o símbolo existe na exchange.`);
+      }
+    }
   };
 
   await run();
