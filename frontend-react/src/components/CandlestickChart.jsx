@@ -13,10 +13,10 @@ const C_UP   = '#26a69a';
 const C_DOWN = '#ef5350';
 
 const INDICATOR_GROUPS = [
-  { id: 'ma50',     label: 'MA50',     color: '#22d3ee' },
-  { id: 'ma200',    label: 'MA200',    color: '#f59e0b' },
-  { id: 'ichimoku', label: 'Ichimoku', color: '#60a5fa' },
-  { id: 'rsi',      label: 'RSI',      color: '#a78bfa' },
+  { id: 'ma50',     label: 'MA50',  color: '#22d3ee' },
+  { id: 'ma200',    label: 'MA200', color: '#f59e0b' },
+  { id: 'ichimoku', label: 'Ichi',  color: '#60a5fa' },
+  { id: 'rsi',      label: 'RSI',   color: '#a78bfa' },
 ];
 
 function getThemeColors() {
@@ -947,16 +947,16 @@ export default function CandlestickChart() {
                   key={id}
                   onClick={() => toggleIndicator(id)}
                   style={{
-                    fontSize: 10, padding: '1px 7px', borderRadius: 4, cursor: 'pointer',
+                    fontSize: 9, padding: '1px 4px', borderRadius: 4, cursor: 'pointer',
                     background: active ? color : 'transparent',
                     color:      active ? (id === 'ma200' ? '#000' : '#fff') : color,
                     border: `1px solid ${color}`,
                     opacity: active ? 1 : 0.5,
                     transition: 'all 0.15s',
-                    display: 'flex', alignItems: 'center', gap: 4,
+                    display: 'flex', alignItems: 'center', gap: 3,
                   }}
                 >
-                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: active ? (id === 'ma200' ? '#000' : '#fff') : color, flexShrink: 0 }} />
+                  <span style={{ width: 5, height: 5, borderRadius: '50%', background: active ? (id === 'ma200' ? '#000' : '#fff') : color, flexShrink: 0 }} />
                   {label}
                 </button>
               );
@@ -965,15 +965,15 @@ export default function CandlestickChart() {
           {/* Controles cross-MA — canto inferior esquerdo da área de preço */}
           <div style={{
             position: 'absolute', bottom: 'calc(24% + 6px)', left: 14,
-            display: 'flex', alignItems: 'center', gap: 3, zIndex: 10,
-            background: 'rgba(0,0,0,0.45)', borderRadius: 5, padding: '3px 6px',
+            display: 'flex', alignItems: 'center', gap: 2, zIndex: 10,
+            background: 'rgba(0,0,0,0.45)', borderRadius: 5, padding: '2px 5px',
           }}>
-            <span style={{ fontSize: 9, color: '#fb923c', opacity: 0.8, fontFamily: 'monospace' }}>MA</span>
+            <span style={{ fontSize: 8, color: '#fb923c', opacity: 0.8, fontFamily: 'monospace' }}>MA</span>
             {['50', '200'].map(p => {
               const sel = crossMaPeriod === p;
               return (
                 <button key={p} onClick={() => setCrossMaPeriod(p)} style={{
-                  fontSize: 9, padding: '1px 5px', borderRadius: 3, cursor: 'pointer', fontFamily: 'monospace',
+                  fontSize: 8, padding: '1px 4px', borderRadius: 3, cursor: 'pointer', fontFamily: 'monospace',
                   background: sel ? '#fb923c' : 'transparent',
                   color: sel ? '#000' : '#fb923c',
                   border: `1px solid ${sel ? '#fb923c' : 'rgba(251,146,60,0.4)'}`,
@@ -982,13 +982,13 @@ export default function CandlestickChart() {
                 </button>
               );
             })}
-            <span style={{ fontSize: 9, color: '#fb923c', opacity: 0.35, fontFamily: 'monospace' }}>@</span>
+            <span style={{ fontSize: 8, color: '#fb923c', opacity: 0.35, fontFamily: 'monospace' }}>@</span>
             {['1m', '5m', '15m', '30m', '1h', '2h', '4h', '8h', '12h', '1d'].map(iv => {
               const sel = crossMaInterval === iv;
               const sameAsChart = iv === (selectedChart?.interval ?? currentInterval);
               return (
                 <button key={iv} onClick={() => setCrossMaInterval(iv)} style={{
-                  fontSize: 9, padding: '1px 5px', borderRadius: 3, cursor: 'pointer', fontFamily: 'monospace',
+                  fontSize: 8, padding: '1px 3px', borderRadius: 3, cursor: 'pointer', fontFamily: 'monospace',
                   background: sel ? '#fb923c' : 'transparent',
                   color: sel ? '#000' : '#fb923c',
                   border: `1px solid ${sel ? '#fb923c' : 'rgba(251,146,60,0.4)'}`,
@@ -1000,15 +1000,15 @@ export default function CandlestickChart() {
               );
             })}
             <button onClick={() => setCrossMaEnabled(e => !e)} style={{
-              fontSize: 9, padding: '1px 6px', borderRadius: 3, cursor: 'pointer', fontFamily: 'monospace',
+              fontSize: 8, padding: '1px 5px', borderRadius: 3, cursor: 'pointer', fontFamily: 'monospace',
               background: crossMaEnabled ? '#fb923c' : 'transparent',
               color: crossMaEnabled ? '#000' : '#fb923c',
               border: `1px solid ${crossMaEnabled ? '#fb923c' : 'rgba(251,146,60,0.5)'}`,
-              marginLeft: 2,
+              marginLeft: 1,
             }}>
               {crossMaEnabled ? 'ON' : 'OFF'}
             </button>
-            {crossMaLoading && <div className="animate-spin" style={{ width: 8, height: 8, borderRadius: '50%', border: '1.5px solid #fb923c', borderTopColor: 'transparent' }} />}
+            {crossMaLoading && <div className="animate-spin" style={{ width: 7, height: 7, borderRadius: '50%', border: '1.5px solid #fb923c', borderTopColor: 'transparent' }} />}
           </div>
 
           {/* Botões RSI 80 e RSI 50 — canto superior direito do painel RSI */}
@@ -1053,16 +1053,16 @@ export default function CandlestickChart() {
                     key={id}
                     onClick={() => toggleIndicator(id)}
                     style={{
-                      fontSize: 10, padding: '1px 7px', borderRadius: 4, cursor: 'pointer',
+                      fontSize: 9, padding: '1px 4px', borderRadius: 4, cursor: 'pointer',
                       background: active ? color : 'transparent',
                       color:      active ? (id === 'ma200' ? '#000' : '#fff') : color,
                       border: `1px solid ${color}`,
                       opacity: active ? 1 : 0.5,
                       transition: 'all 0.15s',
-                      display: 'flex', alignItems: 'center', gap: 4,
+                      display: 'flex', alignItems: 'center', gap: 3,
                     }}
                   >
-                    <span style={{ width: 6, height: 6, borderRadius: '50%', background: active ? (id === 'ma200' ? '#000' : '#fff') : color, flexShrink: 0 }} />
+                    <span style={{ width: 5, height: 5, borderRadius: '50%', background: active ? (id === 'ma200' ? '#000' : '#fff') : color, flexShrink: 0 }} />
                     {label}
                   </button>
                 );
