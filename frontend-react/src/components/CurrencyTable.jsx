@@ -393,15 +393,15 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
                     </td>
                     <td className="px-2 py-1.5 font-mono font-semibold">
                       <div className="flex flex-col">
-                        <span>{label}</span>
-                        <span className="text-[9px] font-normal" style={{ color: ACTIVE_COLOR }}>
+                        <span>{label}<span className="opacity-40 font-normal text-[10px]">/USDT</span></span>
+                        <span className="text-[9px] font-normal text-p5/50">
                           {info.exchange === 'gate' ? 'Gate' : 'Bnb'}
                         </span>
                       </div>
                     </td>
-                    <td className="px-2 py-1.5 text-right font-mono text-xs">$1.00</td>
-                    <td className="px-2 py-1.5 text-right font-mono text-xs" style={{ color: ACTIVE_COLOR }}>
-                      ${info.buyQty.toLocaleString('en-US', { maximumFractionDigits: 2 })}
+                    <td className="px-2 py-1.5 text-right font-mono">1.00</td>
+                    <td className="px-2 py-1.5 text-right font-mono text-[10px] opacity-60">
+                      {formatVolume(info.buyQty)}
                     </td>
                     <td />
                   </tr>

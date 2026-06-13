@@ -42,21 +42,36 @@ const RSI_OVERBOUGHT = 80;           // venda imediata se RSI ≥ este valor (se
 const VARIATION_MIN  = 1;            // % variação mínima do candle (default para 30m+)
 
 // Variação mínima padrão por intervalo: candles curtos têm amplitude menor.
-// Para 1m não exigimos variação — o RSI já é o sinal; amplitude de 1m é pequena demais.
 function defaultVariationMin(iv) {
   if (/^1m$/i.test(iv))  return 0;    // sem filtro de variação para 1m
   if (/^\d+m$/i.test(iv)) {
     const n = parseInt(iv);
     if (n <= 5)  return 0.1;
-    if (n <= 15) return 0.3;
+    if (n <= 15) return 0.5;          // 15m: 0.5% de variação mínima do candle
   }
   return VARIATION_MIN; // 1% para 30m+
 }
-// Desconto padrão na ordem de compra: 0.2% para todos os intervalos.
-function defaultBuyDiscount(_iv) {
+// Desconto padrão na ordem de compra.
+// 15m e abaixo: 0% (entrada direta ao preço de fechamento do candle).
+// 30m+: 0.2% abaixo do fechamento.
+function defaultBuyDiscount(iv) {
+  if (/^\d+m$/i.test(iv) && parseInt(iv) <= 15) return 0;
   return 0.002;
 }
-const SELL_DISCOUNT  = 0.002;        // limit sell 0.2% abaixo do close (garante fill)
+// Intervalo de saída padrão: para 15m usa RSI de 5m (checa venda com mais frequência).
+// Para outros intervalos mantém o mesmo intervalo de entrada.
+function defaultSellInterval(iv) {
+  if (iv === '15m') return '5m';
+  return null;
+}
+// Desconto padrão na ordem de venda por intervalo.
+// 15m: 0.5% — moedas baratas têm spread maior; 0.2% não garante fill.
+// Outros: 0.2%.
+function defaultSellDiscount(iv) {
+  if (iv === '15m') return 0.005;
+  return 0.002;
+}
+const SELL_DISCOUNT  = 0.002;        // limit sell 0.2% abaixo do close (garante fill) — sobrescrito por defaultSellDiscount
 const FEE_RATE       = 0.002;        // 0.2% taxa Gate.io (maker e taker)
 const CANDLE_LIMIT   = 200;
 
@@ -102,16 +117,19 @@ async function loadFavoritesTrade() {
   });
   if (!res.ok) throw new Error(`Supabase favorites_trade: HTTP ${res.status}`);
   const rows = await res.json();
-  return rows.map(r => ({
-    symbol:       r.symbol,
-    exchange:     r.exchange     ?? 'gate',
-    interval:     r.interval     ?? '30m',
-    rsiBuy:       Number(r.rsi_buy  ?? 30),
-    rsiSell:      Number(r.rsi_sell ?? 70),
-    sellInterval: r.sell_interval ?? null,
-    ...(r.variation_min !== null && r.variation_min !== undefined
-      ? { variationMin: Number(r.variation_min) } : {}),
-  }));
+  return rows.map(r => {
+    const iv = r.interval ?? '30m';
+    return {
+      symbol:       r.symbol,
+      exchange:     r.exchange     ?? 'gate',
+      interval:     iv,
+      rsiBuy:       Number(r.rsi_buy  ?? RSI_BUY),
+      rsiSell:      Number(r.rsi_sell ?? RSI_SELL) - (iv === '15m' ? 0.5 : 0),
+      sellInterval: r.sell_interval ?? null,
+      ...(r.variation_min !== null && r.variation_min !== undefined
+        ? { variationMin: Number(r.variation_min) } : {}),
+    };
+  });
 }
 
 // ── Sincronização de relógio com Gate.io ──────────────────────────────────────
@@ -389,8 +407,8 @@ async function cancelGateOrder(orderId, pair, log) {
   }
 }
 
-async function placeGateLimitSell(pair, qty, closePrice) {
-  const sellPrice = parseFloat((closePrice * (1 - SELL_DISCOUNT)).toFixed(8));
+async function placeGateLimitSell(pair, qty, closePrice, sellDiscount = SELL_DISCOUNT) {
+  const sellPrice = parseFloat((closePrice * (1 - sellDiscount)).toFixed(8));
   return gateReq('POST', '/spot/orders', {
     currency_pair: pair,
     side:          'sell',
@@ -519,7 +537,7 @@ async function cancelBinanceOrder(orderId, pair, log) {
   }
 }
 
-async function placeBinanceLimitSell(pair, qty, closePrice) {
+async function placeBinanceLimitSell(pair, qty, closePrice, sellDiscount = SELL_DISCOUNT) {
   const exInfo  = await fetch(`${BINANCE_BASE_URL}/api/v3/exchangeInfo?symbol=${pair}`).then(r => r.json());
   const filters = exInfo.symbols?.[0]?.filters ?? [];
   const lotFilter   = filters.find(f => f.filterType === 'LOT_SIZE');
@@ -529,7 +547,7 @@ async function placeBinanceLimitSell(pair, qty, closePrice) {
   const decimalsP = tickSize < 1 ? String(tickSize).split('.')[1]?.length  ?? 8 : 0;
   const decimalsQ = stepSize < 1 ? String(stepSize).split('.')[1]?.length  ?? 8 : 0;
 
-  const sellPrice = parseFloat((Math.floor(closePrice * (1 - SELL_DISCOUNT) / tickSize) * tickSize).toFixed(decimalsP));
+  const sellPrice = parseFloat((Math.floor(closePrice * (1 - sellDiscount) / tickSize) * tickSize).toFixed(decimalsP));
   const sellQty   = parseFloat((Math.floor(parseFloat(qty) / stepSize) * stepSize).toFixed(decimalsQ));
 
   const order = await binanceReq('POST', '/api/v3/order', {
@@ -561,7 +579,7 @@ function createGateAdapter() {
     placeLimitBuy:   (pair, price, log, d)  => placeGateLimitBuy(pair, price, log, d),
     checkOrder:      (id, pair)            => checkGateOrder(id, pair),
     cancelOrder:     (id, pair, log)       => cancelGateOrder(id, pair, log),
-    placeLimitSell:  (pair, qty, price)    => placeGateLimitSell(pair, qty, price),
+    placeLimitSell:  (pair, qty, price, d)  => placeGateLimitSell(pair, qty, price, d),
   };
 }
 
@@ -578,7 +596,7 @@ function createBinanceAdapter() {
     placeLimitBuy:   (pair, price, log, d)  => placeBinanceLimitBuy(pair, price, log, d),
     checkOrder:      (id, pair)            => checkBinanceOrder(id, pair),
     cancelOrder:     (id, pair, log)       => cancelBinanceOrder(id, pair, log),
-    placeLimitSell:  (pair, qty, price)    => placeBinanceLimitSell(pair, qty, price),
+    placeLimitSell:  (pair, qty, price, d)  => placeBinanceLimitSell(pair, qty, price, d),
   };
 }
 
@@ -596,7 +614,7 @@ const rsiWasAbove = new Map(); // chave: "SYMBOL:interval"
 
 async function tick(symbol, pair, log, config, adapter) {
   const { rsiBuy = RSI_BUY, rsiSell = RSI_SELL, interval = '30m', sellInterval, exchange = 'gate' } = config;
-  const effectiveSellInterval = sellInterval || interval;
+  const effectiveSellInterval = sellInterval || defaultSellInterval(interval) || interval;
   const separateSellInterval  = effectiveSellInterval !== interval;
 
   const variationMin   = config.variationMin   !== undefined ? config.variationMin   : defaultVariationMin(interval);
@@ -647,9 +665,10 @@ async function tick(symbol, pair, log, config, adapter) {
   // ── Executa ordem de venda e retorna o novo estado PENDING_SELL ──────────
   async function executeSell(reason) {
     try {
+      const sellDiscount = defaultSellDiscount(interval);
       const livePrice = await adapter.getCurrentPrice(pair);
-      const sellPrice = parseFloat((livePrice * (1 - SELL_DISCOUNT)).toFixed(8));
-      const sellOrder = await adapter.placeLimitSell(pair, state.buyQty, livePrice);
+      const sellPrice = parseFloat((livePrice * (1 - sellDiscount)).toFixed(8));
+      const sellOrder = await adapter.placeLimitSell(pair, state.buyQty, livePrice, sellDiscount);
       const grossUsdt = sellPrice * state.buyQty;
       const netUsdt   = grossUsdt * (1 - FEE_RATE);
       const usdtPnl   = (netUsdt - state.buyUsdt).toFixed(4);
@@ -659,7 +678,7 @@ async function tick(symbol, pair, log, config, adapter) {
       log(`${R}🔴 ORDEM DE VENDA ABERTA${X}`);
       log(`   Par      : ${pair}`);
       log(`   Motivo   : ${reason}`);
-      log(`   Preço    : ${sellPrice}  (${SELL_DISCOUNT * 100}% abaixo de ${livePrice} — preço live)`);
+      log(`   Preço    : ${sellPrice}  (${sellDiscount * 100}% abaixo de ${livePrice} — preço live)`);
       log(`   Qty      : ${state.buyQty}`);
       log(`   Rec. líq.: ≈${netUsdt.toFixed(2)} USDT`);
       log(`   PnL      : ${pnlSign}${usdtPnl} USDT  (${pnlSign}${pnl}%)${state.detected ? '  [posição detectada externamente]' : ''}`);
@@ -1017,14 +1036,15 @@ const liveConfigs = {};
 
 async function startSymbol(cfg) {
   const { symbol, exchange = 'gate', interval = '30m', rsiBuy = RSI_BUY, rsiSell = RSI_SELL, symbolColor = '', sellInterval } = cfg;
-  const effectiveSellInterval = sellInterval || interval;
+  const effectiveSellInterval = sellInterval || defaultSellInterval(interval) || interval;
   const adapter       = createAdapter(exchange);
   const pair          = adapter.toPair(symbol);
   const log           = makeLogger(symbol, symbolColor, interval);
   const state         = loadState(symbol);
   const variationMin  = cfg.variationMin  !== undefined ? cfg.variationMin  : defaultVariationMin(interval);
   const rsiOverbought = cfg.rsiOverbought !== undefined ? cfg.rsiOverbought : RSI_OVERBOUGHT;
-  const pollMs        = Math.min(pollMsFor(interval), pollMsFor(effectiveSellInterval));
+  // 15m: poll a cada 1 minuto para não perder o cruzamento de RSI=70 no 5m
+  const pollMs        = interval === '15m' ? 60_000 : Math.min(pollMsFor(interval), pollMsFor(effectiveSellInterval));
 
   // Registra config mutável; watchFavorites atualiza campos in-place entre ticks
   liveConfigs[symbol] = { interval, rsiBuy, rsiSell, sellInterval, variationMin, rsiOverbought, exchange };

@@ -141,7 +141,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
       ...allMarkLineData,
       ...(lastClose != null ? [{
         yAxis: lastClose,
-        lineStyle: { color: '#facc15', width: 1, type: 'solid', opacity: 0.7 },
+        lineStyle: { color: 'rgba(0,0,0,0)' },
         label: {
           show: true, position: 'end',
           formatter: _fmtP(lastClose),
@@ -463,7 +463,7 @@ function buildMatrixOption({ symbol, interval, candlesticks, rsi }, activeIndica
       ...allMarkLineData,
       ...(lastClose != null ? [{
         yAxis: lastClose,
-        lineStyle: { color: G, width: 1, type: 'solid', opacity: 0.7 },
+        lineStyle: { color: 'rgba(0,0,0,0)' },
         label: {
           show: true, position: 'end',
           formatter: _fmtP(lastClose),
@@ -755,8 +755,19 @@ export default function CandlestickChart() {
     return () => window.removeEventListener('palette-updated', handleThemeChange);
   }, []);
 
+  // Sincroniza currentInterval com o intervalo real do gráfico quando o símbolo muda.
+  // Necessário porque App.jsx carrega o gráfico inicial com '1h' mas currentInterval
+  // começa como DEFAULT_INTERVAL ('5m'), causando mismatch.
   useEffect(() => {
-    if (!crossMaEnabled || !selectedChart?.symbol || crossMaInterval === currentInterval) {
+    if (selectedChart?.interval) {
+      setCurrentInterval(selectedChart.interval);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedChart?.symbol]);
+
+  useEffect(() => {
+    const chartInterval = selectedChart?.interval;
+    if (!crossMaEnabled || !selectedChart?.symbol || crossMaInterval === chartInterval) {
       setCrossMaPoints(null);
       return;
     }
@@ -788,7 +799,7 @@ export default function CandlestickChart() {
       }
     })();
     return () => { cancelled = true; };
-  }, [crossMaEnabled, crossMaPeriod, crossMaInterval, selectedChart?.symbol, selectedChart?.source, currentInterval]);
+  }, [crossMaEnabled, crossMaPeriod, crossMaInterval, selectedChart?.symbol, selectedChart?.source, selectedChart?.interval]);
 
   const colors = useMemo(() => getThemeColors(), [themeTick]);
 
@@ -973,7 +984,7 @@ export default function CandlestickChart() {
             <span style={{ fontSize: 9, color: '#fb923c', opacity: 0.35, fontFamily: 'monospace' }}>@</span>
             {['1m', '5m', '15m', '30m', '1h', '2h', '4h', '8h', '12h', '1d'].map(iv => {
               const sel = crossMaInterval === iv;
-              const sameAsChart = iv === currentInterval;
+              const sameAsChart = iv === (selectedChart?.interval ?? currentInterval);
               return (
                 <button key={iv} onClick={() => setCrossMaInterval(iv)} style={{
                   fontSize: 9, padding: '1px 5px', borderRadius: 3, cursor: 'pointer', fontFamily: 'monospace',
