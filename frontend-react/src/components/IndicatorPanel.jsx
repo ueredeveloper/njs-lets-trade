@@ -83,6 +83,7 @@ function HelpIcon({ text }) {
   );
 }
 
+
 function IndicatorRow({ value, onChange }) {
   const { type, intervals } = value;
   const { t } = useI18n();

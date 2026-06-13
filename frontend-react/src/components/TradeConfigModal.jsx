@@ -5,6 +5,7 @@ const GATE_COLOR    = '#0068ff';
 const BINANCE_COLOR = '#f0b90b';
 const INTERVALS     = ['1m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d'];
 
+
 const EXCHANGES = [
   { id: 'gate',    label: 'Gate.io',  color: GATE_COLOR    },
   { id: 'binance', label: 'Binance',  color: BINANCE_COLOR },

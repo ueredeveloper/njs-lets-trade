@@ -4,6 +4,7 @@ import { useLanguage } from '../contexts/LanguageContext';
 import { useI18n } from '../i18n';
 import { useCurrency } from '../contexts/CurrencyContext';
 
+
 const PALETTES = [
   { id: 'default',    name: 'Padrão / Default',
     colors: { p1: '#260d33', p2: '#003f69', p3: '#106b87', p4: '#157a8c', p5: '#b3aca4' } },

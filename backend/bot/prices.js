@@ -9,6 +9,7 @@
 const GATE_BASE    = 'https://api.gateio.ws/api/v4';
 const BINANCE_BASE = 'https://api.binance.com';
 
+
 /**
  * Busca candles históricos na Binance.
  * @param {string} symbol      - Par no formato Binance, ex: "EDUUSDT"

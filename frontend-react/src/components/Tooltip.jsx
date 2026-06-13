@@ -12,6 +12,7 @@ export default function Tooltip({ text, children, position = 'top', maxW = 220 }
     ? 'top-full left-1/2 -translate-x-1/2 border-t-[#0d1117] border-x-transparent border-b-transparent'
     : 'bottom-full left-1/2 -translate-x-1/2 border-b-[#0d1117] border-x-transparent border-t-transparent';
 
+    
   return (
     <span className="relative group/tip inline-flex">
       {children}

@@ -26,6 +26,7 @@ function splitSymbol(symbol) {
   return { base: symbol, quote: '' };
 }
 
+
 // 'gate' | 'binance' | null
 function FavButton({ active, color, label, onClick }) {
   return (

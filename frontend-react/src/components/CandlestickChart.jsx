@@ -579,6 +579,7 @@ function TradeHistoryPanel({ symbol, gateFavorites }) {
   const [refreshing, setRefreshing] = useState(false);
   const [lastUpdate, setLastUpdate] = useState(null);
 
+  
   useEffect(() => {
     if (!symbol) return;
     doRefresh();

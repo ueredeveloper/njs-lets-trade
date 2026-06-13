@@ -114,6 +114,7 @@ function getFilterDescription(name, t) {
   const interval = parts[0];
   const type     = parts[1];
 
+  
   if (interval === 'Favoritos') {
     if (type === 'Binance') return 'Favoritos Binance';
     if (type === 'Gate')    return 'Favoritos Gate';

@@ -17,12 +17,14 @@ const fetchGatePrefetch        = require('./fetchGatePrefetch')
 const fetchBinanceTrades       = require('./fetchBinanceTrades')
 const fetchGateTrades          = require('./fetchGateTrades')
 const fetchActiveTrades        = require('./fetchActiveTrades')
+const stgBotStatus             = require('./stgBotStatus')
 
 // remove cíclical error
 module.exports = {
     fetchCandles, fetchIchimokuCloud, fetchAllCurrencies,
     fetchSMA, fetchRSI, fetchVWAP, fetch24HsVolume, fetchMarketCapFilter, fetchStablecoins,
     fetchIndicatorSearch, fetchRsiOversoldRecovery, fetchReloadCandles,
-    fetchGateCurrencies, fetchGatePrefetch, fetchBinanceTrades, fetchGateTrades, fetchActiveTrades }
+    fetchGateCurrencies, fetchGatePrefetch, fetchBinanceTrades, fetchGateTrades, fetchActiveTrades,
+    stgBotStatus }
 
 

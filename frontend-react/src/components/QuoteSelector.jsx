@@ -3,6 +3,7 @@ import { useCurrency } from '../contexts/CurrencyContext';
 export default function QuoteSelector() {
   const { quotes, selectedQuote, setSelectedQuote } = useCurrency();
 
+  
   return (
     <div className="flex flex-row gap-1">
       {quotes.map((quote) => (

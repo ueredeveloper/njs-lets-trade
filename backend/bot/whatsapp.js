@@ -1,6 +1,7 @@
 'use strict';
 
-const path = require('path');
+const path   = require('path');
+const qrcode = require('qrcode-terminal');
 
 const rawNumber = process.env.WHATSAPP_NOTIFY_NUMBER || '5561999171222';
 // Baileys usa @s.whatsapp.net (diferente do @c.us do whatsapp-web.js)
@@ -35,21 +36,25 @@ async function connect() {
   const { state, saveCreds }  = await useMultiFileAuthState(AUTH_DIR);
   const { version }           = await fetchLatestBaileysVersion();
 
-  sock = makeWASocket({ version, auth: state, printQRInTerminal: !USE_PAIRING, logger });
+  sock = makeWASocket({ version, auth: state, logger });
 
   sock.ev.on('creds.update', saveCreds);
 
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
 
-    // Solicita código de pareamento quando o QR é gerado e modo pairing está ativo
-    if (qr && USE_PAIRING && !sock.authState.creds.registered) {
-      try {
-        const code = await sock.requestPairingCode(rawNumber);
-        console.log(`\n📱 Código de pareamento WhatsApp: ${code}`);
-        console.log('   WhatsApp → Configurações → Dispositivos conectados → Conectar → Número de telefone\n');
-      } catch (err) {
-        console.warn(`⚠️  requestPairingCode falhou: ${err.message}`);
+    if (qr) {
+      if (USE_PAIRING && !sock.authState.creds.registered) {
+        try {
+          const code = await sock.requestPairingCode(rawNumber);
+          console.log(`\n📱 Código de pareamento WhatsApp: ${code}`);
+          console.log('   WhatsApp → Dispositivos conectados → Conectar → Número de telefone\n');
+        } catch (err) {
+          console.warn(`⚠️  requestPairingCode falhou: ${err.message}`);
+        }
+      } else {
+        console.log('\n📷 Escaneie o QR code abaixo com o WhatsApp:\n');
+        qrcode.generate(qr, { small: true });
       }
     }
 
