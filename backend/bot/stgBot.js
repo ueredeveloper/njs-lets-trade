@@ -15,9 +15,10 @@
  *   node backend/bot/stgBot.js BTCUSDT 100 binance
  */
 
-const path   = require('path');
-const crypto = require('crypto');
-const fs     = require('fs');
+const path     = require('path');
+const crypto   = require('crypto');
+const fs       = require('fs');
+const readline = require('readline');
 require('dotenv').config({ path: path.join(__dirname, '../../.env') });
 
 const ti = require('technicalindicators');
@@ -212,7 +213,7 @@ async function gateMarketBuy(pair, usdtAmount) {
   return { filledQty: netQty, quoteQty: quoteQty || grossQty * avgPrice, avgPrice };
 }
 
-// Limit IOC 0.5% abaixo do mercado — preenche imediatamente como market order
+// Market order de venda — fallback para limit IOC 5% abaixo se o par não suportar market
 // Retorna { soldQty, usdtOut, exitPrice }
 async function gateMarketSell(pair, qty) {
   // Usa saldo real para evitar "Not enough balance" (ex: state salvo antes do fix da taxa)
@@ -222,29 +223,20 @@ async function gateMarketSell(pair, qty) {
   if (sellQty < parseFloat(qty))
     log(`⚠️  Qty ajustada: ${qty} → ${sellQty} (saldo real na Gate.io)`);
 
-  const tickerUrl = `${GATE_BASE}/spot/tickers?currency_pair=${pair}`;
-  const ticker    = await fetch(tickerUrl).then(r => r.json());
-  const price     = parseFloat(ticker[0]?.last);
-  if (!price) throw new Error(`Gate.io: preço inválido para ${pair}`);
-
-  const limitPrice = parseFloat((price * 0.995).toFixed(8));
-  const safeQty    = sellQty.toFixed(8);
+  const safeQty = sellQty.toFixed(8);
 
   const order = await gateReq('POST', '/spot/orders', {
     currency_pair: pair,
     side:          'sell',
-    type:          'limit',
-    price:         String(limitPrice),
+    type:          'market',
     amount:        safeQty,
-    time_in_force: 'ioc',
   });
 
-  await new Promise(r => setTimeout(r, 1000));
-  const filled = await gateReq('GET', `/spot/orders/${order.id}`, { currency_pair: pair });
-
-  const soldQty  = parseFloat(filled.amount) - parseFloat(filled.left || 0);
-  const usdtOut  = parseFloat(filled.filled_total || 0);
-  const exitPrice = parseFloat(filled.avg_deal_price || limitPrice);
+  await new Promise(r => setTimeout(r, 2000));
+  const filled    = await gateReq('GET', `/spot/orders/${order.id}`, { currency_pair: pair });
+  const soldQty   = parseFloat(filled.amount) - parseFloat(filled.left || 0);
+  const usdtOut   = parseFloat(filled.filled_total || 0);
+  const exitPrice = parseFloat(filled.avg_deal_price || 0);
 
   if (soldQty <= 0) throw new Error(`Gate.io: venda não preenchida (status=${filled.status})`);
   return { soldQty, usdtOut: usdtOut || soldQty * exitPrice, exitPrice };
@@ -339,6 +331,26 @@ function log(...args) {
   const noAnsi = msg.replace(/\x1b\[[0-9;]*m/g, '');
   console.log(msg);
   try { fs.appendFileSync(LOG_FILE, noAnsi + '\n'); } catch {}
+}
+
+// ── Volume 24h ────────────────────────────────────────────────────────────────
+async function fetch24hVolume() {
+  try {
+    if (EXCHANGE === 'gate') {
+      const data = await fetch(`${GATE_BASE}/spot/tickers?currency_pair=${adapter.pair}`).then(r => r.json());
+      return parseFloat(data[0]?.quote_volume || 0);
+    } else {
+      const data = await fetch(`${BINANCE_BASE}/api/v3/ticker/24hr?symbol=${SYMBOL}`).then(r => r.json());
+      return parseFloat(data.quoteVolume || 0);
+    }
+  } catch { return null; }
+}
+
+function askUser(question) {
+  return new Promise(resolve => {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    rl.question(question, answer => { rl.close(); resolve(answer.trim().toLowerCase()); });
+  });
 }
 
 // ── Indicadores ───────────────────────────────────────────────────────────────
@@ -525,7 +537,24 @@ async function main() {
   console.log(`   Saída      : RSI(${RSI_PERIOD}, ${INTERVAL_RSI}) > ${RSI_SELL}  (sem stop-loss)`);
   console.log(`   Capital    : ${parseFloat(state.capital).toFixed(4)} USDT  (inicial: ${parseFloat(state.initial_capital).toFixed(4)})`);
   console.log(`   Fase       : ${state.phase}`);
-  console.log(`   Poll       : ${POLL_MS / 1000}s\n`);
+  console.log(`   Poll       : ${POLL_MS / 1000}s`);
+
+  const vol = await fetch24hVolume();
+  if (vol !== null) {
+    const volFmt = vol >= 1_000_000
+      ? `$${(vol / 1_000_000).toFixed(2)}M`
+      : `$${(vol / 1000).toFixed(1)}K`;
+    console.log(`   Volume 24h : ${volFmt}`);
+    if (vol < 1_000_000) {
+      console.log(`\n${Y}⚠️  Volume 24h abaixo de $1M — par com baixa liquidez, ordens podem não preencher.${X}`);
+      const resp = await askUser('   Deseja continuar mesmo assim? [s/N]: ');
+      if (resp !== 's' && resp !== 'sim') {
+        console.log('❌ Operação cancelada.');
+        process.exit(0);
+      }
+    }
+  }
+  console.log();
 
   if (state.phase === 'BOUGHT') {
     log(`♻️  Posição aberta — comprado a ${parseFloat(state.buy_price).toFixed(6)} em ${state.buy_time} | qty=${state.buy_qty}`);
