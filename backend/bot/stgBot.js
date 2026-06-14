@@ -11,8 +11,8 @@
  *
  * Uso:
  *   node backend/bot/stgBot.js STGUSDT 40
- *   node backend/bot/stgBot.js BTCUSDT 100
- *   node backend/bot/stgBot.js ALGOUSDT
+ *   node backend/bot/stgBot.js HEMIUSDT 40 gate
+ *   node backend/bot/stgBot.js BTCUSDT 100 binance
  */
 
 const path   = require('path');
@@ -21,55 +21,58 @@ const fs     = require('fs');
 require('dotenv').config({ path: path.join(__dirname, '../../.env') });
 
 const ti = require('technicalindicators');
-const { fetchBinanceCandles } = require('./prices');
-const { sendWhatsApp }        = require('./whatsapp');
+const { fetchBinanceCandles, fetchGateCandles } = require('./prices');
+const { toGateSymbol }  = require('../utils/toGateSymbol');
+const { sendWhatsApp }  = require('./whatsapp');
 
 // ── Argumentos ────────────────────────────────────────────────────────────────
 const SYMBOL           = (process.argv[2] || 'STGUSDT').toUpperCase();
 const INITIAL_CAPITAL  = parseFloat(process.argv[3] || '40');
+const EXCHANGE         = (process.argv[4] || 'binance').toLowerCase(); // 'binance' | 'gate'
+
+// STATE_KEY: Gate.io usa sufixo _GATE para não conflitar com Binance no Supabase
+const STATE_KEY = EXCHANGE === 'gate' ? `${SYMBOL}_GATE` : SYMBOL;
 
 // ── Configuração ──────────────────────────────────────────────────────────────
-const INTERVAL_RSI  = '5m';
-const INTERVAL_EMA  = '1h';
-const EMA_PERIOD    = 200;
-const RSI_PERIOD    = 14;
-const RSI_BUY       = 30;
-const RSI_SELL      = 70;
-const FEE_RATE      = 0.001;    // 0.1% por lado (maker Binance)
-const CANDLE_RSI    = 100;      // candles 5m para RSI
-const CANDLE_EMA    = 250;      // candles 1h para EMA200 (200 + warmup)
-const POLL_MS       = 60_000;   // verifica a cada 60 s
+const INTERVAL_RSI = '5m';
+const INTERVAL_EMA = '1h';
+const EMA_PERIOD   = 200;
+const RSI_PERIOD   = 14;
+const RSI_BUY      = 30;
+const RSI_SELL     = 70;
+const CANDLE_RSI   = 100;   // candles 5m para RSI
+const CANDLE_EMA   = 250;   // candles 1h para EMA200 (200 + warmup)
+const POLL_MS      = 60_000; // verifica a cada 60 s
 
 // ── Binance ───────────────────────────────────────────────────────────────────
-const BINANCE_BASE = 'https://api.binance.com';
-const API_KEY      = process.env.BINANCE_API_KEY;
-const SECRET_KEY   = process.env.BINANCE_SECRET_KEY;
+const BINANCE_BASE       = 'https://api.binance.com';
+const BINANCE_API_KEY    = process.env.BINANCE_API_KEY;
+const BINANCE_SECRET_KEY = process.env.BINANCE_SECRET_KEY;
+let   binanceClockOffsetMs = 0;
 
-let clockOffsetMs = 0;
-
-async function syncClock() {
+async function syncBinanceClock() {
   try {
     const res  = await fetch(`${BINANCE_BASE}/api/v3/time`);
     const data = await res.json();
-    clockOffsetMs = data.serverTime - Date.now();
+    binanceClockOffsetMs = data.serverTime - Date.now();
   } catch {}
 }
 
 function binanceSign(params) {
   const qs  = new URLSearchParams(params).toString();
-  const sig = crypto.createHmac('sha256', SECRET_KEY).update(qs).digest('hex');
+  const sig = crypto.createHmac('sha256', BINANCE_SECRET_KEY).update(qs).digest('hex');
   return `${qs}&signature=${sig}`;
 }
 
 async function binanceReq(method, endpoint, params = {}) {
-  const ts     = Date.now() + clockOffsetMs;
+  const ts     = Date.now() + binanceClockOffsetMs;
   const signed = binanceSign({ ...params, timestamp: ts, recvWindow: 10000 });
   const url    = method === 'GET'
     ? `${BINANCE_BASE}${endpoint}?${signed}`
     : `${BINANCE_BASE}${endpoint}`;
   const res = await fetch(url, {
     method,
-    headers: { 'X-MBX-APIKEY': API_KEY, 'Content-Type': 'application/x-www-form-urlencoded' },
+    headers: { 'X-MBX-APIKEY': BINANCE_API_KEY, 'Content-Type': 'application/x-www-form-urlencoded' },
     body: method !== 'GET' ? signed : undefined,
   });
   const text = await res.text();
@@ -79,30 +82,178 @@ async function binanceReq(method, endpoint, params = {}) {
   return data;
 }
 
-// Compra a mercado com quoteOrderQty (USDT)
-async function marketBuy(usdtAmount) {
-  return binanceReq('POST', '/api/v3/order', {
-    symbol:        SYMBOL,
-    side:          'BUY',
-    type:          'MARKET',
-    quoteOrderQty: usdtAmount.toFixed(2),
+// Retorna { filledQty, quoteQty, avgPrice }
+async function binanceMarketBuy(usdtAmount) {
+  const order    = await binanceReq('POST', '/api/v3/order', {
+    symbol: SYMBOL, side: 'BUY', type: 'MARKET', quoteOrderQty: usdtAmount.toFixed(2),
   });
+  const filledQty = parseFloat(order.executedQty);
+  const quoteQty  = parseFloat(order.cummulativeQuoteQty);
+  return { filledQty, quoteQty, avgPrice: quoteQty / filledQty };
 }
 
-// Venda a mercado com quantity (tokens)
-async function marketSell(qty) {
+// Retorna { soldQty, usdtOut, exitPrice }
+async function binanceMarketSell(qty) {
   const info      = await fetch(`${BINANCE_BASE}/api/v3/exchangeInfo?symbol=${SYMBOL}`).then(r => r.json());
   const lotFilter = info.symbols?.[0]?.filters?.find(f => f.filterType === 'LOT_SIZE');
   const stepSize  = lotFilter ? parseFloat(lotFilter.stepSize) : 1;
   const decimals  = stepSize < 1 ? (String(stepSize).split('.')[1]?.length ?? 0) : 0;
   const safeQty   = (Math.floor(qty / stepSize) * stepSize).toFixed(decimals);
-  return binanceReq('POST', '/api/v3/order', {
-    symbol:   SYMBOL,
-    side:     'SELL',
-    type:     'MARKET',
-    quantity: safeQty,
+  const order     = await binanceReq('POST', '/api/v3/order', {
+    symbol: SYMBOL, side: 'SELL', type: 'MARKET', quantity: safeQty,
   });
+  const soldQty = parseFloat(order.executedQty);
+  const usdtOut = parseFloat(order.cummulativeQuoteQty);
+  return { soldQty, usdtOut, exitPrice: usdtOut / soldQty };
 }
+
+// ── Gate.io ───────────────────────────────────────────────────────────────────
+const GATE_BASE       = 'https://api.gateio.ws/api/v4';
+const GATE_API_KEY    = process.env.GATEIO_API_KEY;
+const GATE_SECRET_KEY = process.env.GATEIO_SECRET_KEY;
+let   gateClockOffsetSec = 0;
+
+async function syncGateClock() {
+  try {
+    const res  = await fetch(`${GATE_BASE}/spot/time`);
+    const data = await res.json();
+    if (!data?.server_time) return;
+    const offset = Math.floor(data.server_time / 1000) - Math.floor(Date.now() / 1000);
+    gateClockOffsetSec = offset;
+    if (Math.abs(offset) > 2)
+      console.log(`⏱️  Gate.io clock offset: ${offset > 0 ? '+' : ''}${offset}s`);
+  } catch {}
+}
+
+function gateSign(method, endpointPath, queryString, bodyStr) {
+  const timestamp  = (Math.floor(Date.now() / 1000) + gateClockOffsetSec).toString();
+  const hashedBody = crypto.createHash('sha512').update(bodyStr || '').digest('hex');
+  const msg        = [method.toUpperCase(), `/api/v4${endpointPath}`, queryString, hashedBody, timestamp].join('\n');
+  const sign       = crypto.createHmac('sha512', GATE_SECRET_KEY).update(msg).digest('hex');
+  return { timestamp, sign };
+}
+
+async function gateReq(method, endpointPath, params = {}, _retry = true) {
+  let url  = `${GATE_BASE}${endpointPath}`;
+  let qs   = '';
+  let body = '';
+  if (method === 'GET') {
+    qs = new URLSearchParams(params).toString();
+    if (qs) url += `?${qs}`;
+  } else {
+    body = JSON.stringify(params);
+  }
+  const { timestamp, sign } = gateSign(method, endpointPath, qs, body);
+  const res = await fetch(url, {
+    method,
+    headers: { KEY: GATE_API_KEY, Timestamp: timestamp, SIGN: sign, 'Content-Type': 'application/json' },
+    body: method === 'POST' ? body : undefined,
+  });
+  const text = await res.text();
+  let data;
+  try { data = JSON.parse(text); } catch { data = text; }
+  if (!res.ok) {
+    const msg = data?.message || data?.label || text;
+    if (res.status === 403 && _retry) {
+      const match = msg.match(/current_time:(\d+).*header\.timestamp:(\d+)/);
+      if (match) {
+        gateClockOffsetSec = parseInt(match[1]) - (parseInt(match[2]) - gateClockOffsetSec);
+        console.log(`⏱️  Gate.io clock auto-corrigido: offset=${gateClockOffsetSec}s — repetindo ${method}…`);
+        return gateReq(method, endpointPath, params, false);
+      }
+    }
+    throw new Error(`Gate ${method} ${endpointPath} ${res.status}: ${msg}`);
+  }
+  return data;
+}
+
+// Limit IOC 0.5% acima do mercado — preenche imediatamente como market order
+// Retorna { filledQty, quoteQty, avgPrice }
+async function gateMarketBuy(pair, usdtAmount) {
+  const tickerUrl = `${GATE_BASE}/spot/tickers?currency_pair=${pair}`;
+  const ticker    = await fetch(tickerUrl).then(r => r.json());
+  const price     = parseFloat(ticker[0]?.last);
+  if (!price) throw new Error(`Gate.io: preço inválido para ${pair}`);
+
+  const limitPrice = parseFloat((price * 1.005).toFixed(8));
+  const qty        = parseFloat((usdtAmount / limitPrice).toFixed(8));
+
+  const order = await gateReq('POST', '/spot/orders', {
+    currency_pair: pair,
+    side:          'buy',
+    type:          'limit',
+    price:         String(limitPrice),
+    amount:        String(qty),
+    time_in_force: 'ioc',
+  });
+
+  // Para IOC, aguarda 1s e busca status final
+  await new Promise(r => setTimeout(r, 1000));
+  const filled = await gateReq('GET', `/spot/orders/${order.id}`, { currency_pair: pair });
+
+  const filledQty = parseFloat(filled.amount) - parseFloat(filled.left || 0);
+  const quoteQty  = parseFloat(filled.filled_total || 0);
+  const avgPrice  = parseFloat(filled.avg_deal_price || limitPrice);
+
+  if (filledQty <= 0) throw new Error(`Gate.io: compra não preenchida (status=${filled.status})`);
+  return { filledQty, quoteQty: quoteQty || filledQty * avgPrice, avgPrice };
+}
+
+// Limit IOC 0.5% abaixo do mercado — preenche imediatamente como market order
+// Retorna { soldQty, usdtOut, exitPrice }
+async function gateMarketSell(pair, qty) {
+  const tickerUrl = `${GATE_BASE}/spot/tickers?currency_pair=${pair}`;
+  const ticker    = await fetch(tickerUrl).then(r => r.json());
+  const price     = parseFloat(ticker[0]?.last);
+  if (!price) throw new Error(`Gate.io: preço inválido para ${pair}`);
+
+  const limitPrice = parseFloat((price * 0.995).toFixed(8));
+  const safeQty    = parseFloat(qty).toFixed(8);
+
+  const order = await gateReq('POST', '/spot/orders', {
+    currency_pair: pair,
+    side:          'sell',
+    type:          'limit',
+    price:         String(limitPrice),
+    amount:        safeQty,
+    time_in_force: 'ioc',
+  });
+
+  await new Promise(r => setTimeout(r, 1000));
+  const filled = await gateReq('GET', `/spot/orders/${order.id}`, { currency_pair: pair });
+
+  const soldQty  = parseFloat(filled.amount) - parseFloat(filled.left || 0);
+  const usdtOut  = parseFloat(filled.filled_total || 0);
+  const exitPrice = parseFloat(filled.avg_deal_price || limitPrice);
+
+  if (soldQty <= 0) throw new Error(`Gate.io: venda não preenchida (status=${filled.status})`);
+  return { soldQty, usdtOut: usdtOut || soldQty * exitPrice, exitPrice };
+}
+
+// ── Adapter ───────────────────────────────────────────────────────────────────
+function buildAdapter() {
+  if (EXCHANGE === 'gate') {
+    const pair = toGateSymbol(SYMBOL);
+    return {
+      name:         'Gate.io',
+      pair,
+      syncClock:    syncGateClock,
+      fetchCandles: (limit, iv) => fetchGateCandles(pair, limit, iv),
+      marketBuy:    (usdt)      => gateMarketBuy(pair, usdt),
+      marketSell:   (qty)       => gateMarketSell(pair, qty),
+    };
+  }
+  return {
+    name:         'Binance',
+    pair:         SYMBOL,
+    syncClock:    syncBinanceClock,
+    fetchCandles: (limit, iv) => fetchBinanceCandles(SYMBOL, limit, iv),
+    marketBuy:    (usdt)      => binanceMarketBuy(usdt),
+    marketSell:   (qty)       => binanceMarketSell(qty),
+  };
+}
+
+const adapter = buildAdapter();
 
 // ── Supabase ──────────────────────────────────────────────────────────────────
 const SB_URL = process.env.SUPABASE_URL;
@@ -125,11 +276,10 @@ async function sbReq(method, table, body, query = '') {
 }
 
 async function loadState() {
-  const rows = await sbReq('GET', 'dedicated_bot_state', null, `?symbol=eq.${SYMBOL}&limit=1`);
+  const rows = await sbReq('GET', 'dedicated_bot_state', null, `?symbol=eq.${STATE_KEY}&limit=1`);
   if (!rows?.length) {
-    // Cria linha inicial se não existir
     const created = await sbReq('POST', 'dedicated_bot_state', {
-      symbol:          SYMBOL,
+      symbol:          STATE_KEY,
       initial_capital: INITIAL_CAPITAL,
       capital:         INITIAL_CAPITAL,
       phase:           'WATCHING',
@@ -140,7 +290,7 @@ async function loadState() {
 }
 
 async function saveState(update) {
-  await sbReq('PATCH', 'dedicated_bot_state', { ...update, updated_at: new Date().toISOString() }, `?symbol=eq.${SYMBOL}`);
+  await sbReq('PATCH', 'dedicated_bot_state', { ...update, updated_at: new Date().toISOString() }, `?symbol=eq.${STATE_KEY}`);
 }
 
 async function saveTrade(trade) {
@@ -149,7 +299,7 @@ async function saveTrade(trade) {
 
 // ── Logging ───────────────────────────────────────────────────────────────────
 const LOG_DIR  = path.join(__dirname, '../data/bot');
-const LOG_FILE = path.join(LOG_DIR, `log-${SYMBOL}-dedicated.txt`);
+const LOG_FILE = path.join(LOG_DIR, `log-${STATE_KEY}-dedicated.txt`);
 fs.mkdirSync(LOG_DIR, { recursive: true });
 
 const G = '\x1b[32m', R = '\x1b[31m', Y = '\x1b[33m', X = '\x1b[0m';
@@ -165,7 +315,7 @@ function nowFull() {
 }
 
 function log(...args) {
-  const msg    = `[${nowFmt()}] [${SYMBOL}] ${args.join(' ')}`;
+  const msg    = `[${nowFmt()}] [${STATE_KEY}] ${args.join(' ')}`;
   const noAnsi = msg.replace(/\x1b\[[0-9;]*m/g, '');
   console.log(msg);
   try { fs.appendFileSync(LOG_FILE, noAnsi + '\n'); } catch {}
@@ -173,7 +323,7 @@ function log(...args) {
 
 // ── Indicadores ───────────────────────────────────────────────────────────────
 async function computeRsi() {
-  const candles = await fetchBinanceCandles(SYMBOL, CANDLE_RSI, INTERVAL_RSI);
+  const candles = await adapter.fetchCandles(CANDLE_RSI, INTERVAL_RSI);
   const closes  = candles.map(c => c.close);
   const rsiVals = ti.RSI.calculate({ values: closes, period: RSI_PERIOD });
   return {
@@ -183,11 +333,11 @@ async function computeRsi() {
 }
 
 async function computeEma200() {
-  const candles = await fetchBinanceCandles(SYMBOL, CANDLE_EMA, INTERVAL_EMA);
+  const candles = await adapter.fetchCandles(CANDLE_EMA, INTERVAL_EMA);
   const closes  = candles.map(c => c.close);
   if (closes.length < EMA_PERIOD) return { ema200: null, closePrice1h: null, bullish: null };
-  const emaVals     = ti.EMA.calculate({ values: closes, period: EMA_PERIOD });
-  const ema200      = emaVals[emaVals.length - 1];
+  const emaVals      = ti.EMA.calculate({ values: closes, period: EMA_PERIOD });
+  const ema200       = emaVals[emaVals.length - 1];
   const closePrice1h = closes[closes.length - 1];
   return {
     ema200,
@@ -198,7 +348,6 @@ async function computeEma200() {
 
 // ── Tick principal ────────────────────────────────────────────────────────────
 async function tick() {
-  // Busca RSI(5m) e EMA200(1h) em paralelo
   const [rsiData, emaData] = await Promise.all([computeRsi(), computeEma200()]);
   const { rsi, closePrice } = rsiData;
   const { ema200, bullish } = emaData;
@@ -232,24 +381,22 @@ async function tick() {
 
     log(`${G}📍 RSI(5m)=${rsi.toFixed(2)} < ${RSI_BUY} + EMA200 confirmando ALTA — comprando ${parseFloat(capital).toFixed(4)} USDT${X}`);
 
-    let order;
+    let result;
     try {
-      order = await marketBuy(parseFloat(capital));
+      result = await adapter.marketBuy(parseFloat(capital));
     } catch (err) {
       log(`❌ Erro na compra: ${err.message}`);
       return;
     }
 
-    const filledQty  = parseFloat(order.executedQty);
-    const quoteQty   = parseFloat(order.cummulativeQuoteQty);
-    const avgPrice   = quoteQty / filledQty;
+    const { filledQty, quoteQty, avgPrice } = result;
 
     await saveState({
       phase:        'BOUGHT',
       buy_price:    avgPrice,
       buy_qty:      filledQty,
       buy_usdt:     quoteQty,
-      buy_time:     nowFull(),
+      buy_time:     new Date().toISOString(),
       rsi_entry:    rsi,
       ema200_entry: ema200,
     });
@@ -264,13 +411,12 @@ async function tick() {
     log(`   Capital usado: ${parseFloat(capital).toFixed(4)} USDT`);
     log(`${'─'.repeat(60)}`);
     sendWhatsApp(
-      `🟢 ${SYMBOL} COMPRA\nPreço: ${avgPrice.toFixed(6)}\nQty: ${filledQty}\nUSDT: ${quoteQty.toFixed(4)}\nRSI: ${rsi.toFixed(2)}\nEMA200(1h): ${ema200.toFixed(4)}\nCapital: ${parseFloat(capital).toFixed(4)}`,
+      `🟢 ${SYMBOL} COMPRA [${adapter.name}]\nPreço: ${avgPrice.toFixed(6)}\nQty: ${filledQty}\nUSDT: ${quoteQty.toFixed(4)}\nRSI: ${rsi.toFixed(2)}\nEMA200(1h): ${ema200.toFixed(4)}\nCapital: ${parseFloat(capital).toFixed(4)}`,
     );
 
-  // ── BOUGHT: aguarda RSI > 70 (sem filtro de tendência na saída) ───────────
+  // ── BOUGHT: aguarda RSI > 70 ───────────────────────────────────────────────
   } else if (phase === 'BOUGHT') {
     if (rsi <= RSI_SELL) {
-      // Alerta se tendência virou para baixa enquanto em posição
       if (!bullish) {
         log(`${Y}⚠️  Em posição. Tendência virou BAIXA (EMA200=${ema200.toFixed(4)}) — aguardando RSI>${RSI_SELL} para sair${X}`);
       }
@@ -279,17 +425,15 @@ async function tick() {
 
     log(`${R}📈 RSI(5m)=${rsi.toFixed(2)} > ${RSI_SELL} — vendendo ${state.buy_qty} ${SYMBOL}${X}`);
 
-    let order;
+    let result;
     try {
-      order = await marketSell(parseFloat(state.buy_qty));
+      result = await adapter.marketSell(parseFloat(state.buy_qty));
     } catch (err) {
       log(`❌ Erro na venda: ${err.message}`);
       return;
     }
 
-    const soldQty       = parseFloat(order.executedQty);
-    const usdtOut       = parseFloat(order.cummulativeQuoteQty);
-    const exitPrice     = usdtOut / soldQty;
+    const { soldQty, usdtOut, exitPrice } = result;
     const capitalBefore = parseFloat(capital);
     const pnlUsdt       = usdtOut - parseFloat(state.buy_usdt);
     const pnlPct        = (pnlUsdt / capitalBefore) * 100;
@@ -297,9 +441,9 @@ async function tick() {
     const pnlSign       = pnlUsdt >= 0 ? '+' : '';
 
     await saveTrade({
-      symbol:         SYMBOL,
+      symbol:         STATE_KEY,
       entry_time:     state.buy_time,
-      exit_time:      nowFull(),
+      exit_time:      new Date().toISOString(),
       entry_price:    parseFloat(state.buy_price),
       exit_price:     exitPrice,
       qty:            soldQty,
@@ -336,22 +480,27 @@ async function tick() {
     log(`   Capital     : ${capitalBefore.toFixed(4)} → ${capitalAfter.toFixed(4)} USDT`);
     log(`${'─'.repeat(60)}`);
     sendWhatsApp(
-      `🔴 ${SYMBOL} VENDA\nPreço: ${exitPrice.toFixed(6)}\nUSDT rec.: ${usdtOut.toFixed(4)}\nPnL: ${pnlSign}${pnlUsdt.toFixed(4)} USDT (${pnlSign}${pnlPct.toFixed(2)}%)\nCapital: ${capitalBefore.toFixed(4)} → ${capitalAfter.toFixed(4)}\nRSI: ${rsi.toFixed(2)}`,
+      `🔴 ${SYMBOL} VENDA [${adapter.name}]\nPreço: ${exitPrice.toFixed(6)}\nUSDT rec.: ${usdtOut.toFixed(4)}\nPnL: ${pnlSign}${pnlUsdt.toFixed(4)} USDT (${pnlSign}${pnlPct.toFixed(2)}%)\nCapital: ${capitalBefore.toFixed(4)} → ${capitalAfter.toFixed(4)}\nRSI: ${rsi.toFixed(2)}`,
     );
   }
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 async function main() {
-  if (!API_KEY || !SECRET_KEY) { console.error('❌ BINANCE_API_KEY / BINANCE_SECRET_KEY ausentes no .env'); process.exit(1); }
-  if (!SB_URL  || !SB_KEY)     { console.error('❌ SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY ausentes no .env'); process.exit(1); }
+  if (EXCHANGE === 'gate') {
+    if (!GATE_API_KEY || !GATE_SECRET_KEY) { console.error('❌ GATEIO_API_KEY / GATEIO_SECRET_KEY ausentes no .env'); process.exit(1); }
+  } else {
+    if (!BINANCE_API_KEY || !BINANCE_SECRET_KEY) { console.error('❌ BINANCE_API_KEY / BINANCE_SECRET_KEY ausentes no .env'); process.exit(1); }
+  }
+  if (!SB_URL || !SB_KEY) { console.error('❌ SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY ausentes no .env'); process.exit(1); }
 
-  await syncClock();
-  setInterval(syncClock, 60 * 60_000);
+  await adapter.syncClock();
+  setInterval(adapter.syncClock, 60 * 60_000);
 
   const state = await loadState();
   console.log(`\n🤖 Dedicated Bot`);
-  console.log(`   Símbolo    : ${SYMBOL}`);
+  console.log(`   Exchange   : ${adapter.name}`);
+  console.log(`   Símbolo    : ${SYMBOL}  (par: ${adapter.pair})`);
   console.log(`   Entrada    : RSI(${RSI_PERIOD}, ${INTERVAL_RSI}) < ${RSI_BUY}  +  preço > EMA${EMA_PERIOD}(${INTERVAL_EMA})`);
   console.log(`   Saída      : RSI(${RSI_PERIOD}, ${INTERVAL_RSI}) > ${RSI_SELL}  (sem stop-loss)`);
   console.log(`   Capital    : ${parseFloat(state.capital).toFixed(4)} USDT  (inicial: ${parseFloat(state.initial_capital).toFixed(4)})`);
