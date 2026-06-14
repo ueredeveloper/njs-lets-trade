@@ -17,13 +17,19 @@ let ready = false;
 const pendingQueue = [];
 const MAX_QUEUE    = 50; // descarta mensagens antigas se WhatsApp ficar offline muito tempo
 
-// Logger mínimo compatível com pino — silencia os logs internos do Baileys
-const logger = {
-  level: 'silent',
-  trace: () => {}, debug: () => {}, info: () => {},
-  warn:  () => {}, error: () => {}, fatal: () => {},
-  child: function () { return this; },
-};
+// Logger silencioso — usa pino se disponível (dependência do Baileys), senão stub
+let logger;
+try {
+  const pino = require('pino');
+  logger = pino({ level: 'silent' });
+} catch {
+  logger = {
+    level: 'silent',
+    trace: () => {}, debug: () => {}, info: () => {},
+    warn:  () => {}, error: () => {}, fatal: () => {},
+    child: function () { return this; },
+  };
+}
 
 async function connect() {
   const {
