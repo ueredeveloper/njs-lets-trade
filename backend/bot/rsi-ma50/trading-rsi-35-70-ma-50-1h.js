@@ -18,12 +18,12 @@ const path     = require('path');
 const crypto   = require('crypto');
 const fs       = require('fs');
 const readline = require('readline');
-require('dotenv').config({ path: path.join(__dirname, '../../.env') });
+require('dotenv').config({ path: path.join(__dirname, '../../../.env') });
 
 const ti = require('technicalindicators');
-const { fetchBinanceCandles, fetchGateCandles } = require('./prices');
-const { toGateSymbol } = require('../utils/toGateSymbol');
-const { sendWhatsApp } = require('./whatsapp');
+const { fetchBinanceCandles, fetchGateCandles } = require('../prices');
+const { toGateSymbol } = require('../../utils/toGateSymbol');
+const { sendWhatsApp } = require('../whatsapp');
 
 // ── Configuração ──────────────────────────────────────────────────────────────
 const INTERVAL_RSI       = '1m';   // RSI calculado em 1 minuto
@@ -44,7 +44,7 @@ const VOL_MIN_USDT       = 1_000_000;
 const GATE_FEE_RATE      = 0.002;
 
 // ── Logging ───────────────────────────────────────────────────────────────────
-const BOT_DIR = path.join(__dirname, '../data/bot');
+const BOT_DIR = path.join(__dirname, '../../data/bot');
 fs.mkdirSync(BOT_DIR, { recursive: true });
 
 const G = '\x1b[32m', R = '\x1b[31m', Y = '\x1b[33m', X = '\x1b[0m';

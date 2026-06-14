@@ -19,12 +19,12 @@ const path     = require('path');
 const crypto   = require('crypto');
 const fs       = require('fs');
 const readline = require('readline');
-require('dotenv').config({ path: path.join(__dirname, '../../.env') });
+require('dotenv').config({ path: path.join(__dirname, '../../../.env') });
 
 const ti = require('technicalindicators');
-const { fetchBinanceCandles, fetchGateCandles } = require('./prices');
-const { toGateSymbol }  = require('../utils/toGateSymbol');
-const { sendWhatsApp }  = require('./whatsapp');
+const { fetchBinanceCandles, fetchGateCandles } = require('../prices');
+const { toGateSymbol }  = require('../../utils/toGateSymbol');
+const { sendWhatsApp }  = require('../whatsapp');
 
 // ── Argumentos ────────────────────────────────────────────────────────────────
 const SYMBOL           = (process.argv[2] || 'STGUSDT').toUpperCase();
@@ -310,7 +310,7 @@ async function saveTrade(trade) {
 }
 
 // ── Logging ───────────────────────────────────────────────────────────────────
-const LOG_DIR  = path.join(__dirname, '../data/bot');
+const LOG_DIR  = path.join(__dirname, '../../data/bot');
 const LOG_FILE = path.join(LOG_DIR, `log-${STATE_KEY}-dedicated.txt`);
 fs.mkdirSync(LOG_DIR, { recursive: true });
 

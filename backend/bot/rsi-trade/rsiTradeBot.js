@@ -22,17 +22,17 @@
 const path   = require('path');
 const fs     = require('fs');
 const crypto = require('crypto');
-require('dotenv').config({ path: path.join(__dirname, '../../.env') });
+require('dotenv').config({ path: path.join(__dirname, '../../../.env') });
 
-const { toGateSymbol }   = require('../utils/toGateSymbol');
+const { toGateSymbol }   = require('../../utils/toGateSymbol');
 const ti                 = require('technicalindicators');
 const {
   fetchBinanceCandles,
   fetchGateCandles,
   fetchBinanceCurrentPrice,
   fetchGateCurrentPrice,
-} = require('./prices');
-const { sendWhatsApp }   = require('./whatsapp');
+} = require('../prices');
+const { sendWhatsApp }   = require('../whatsapp');
 
 // ── Configuração ──────────────────────────────────────────────────────────────
 
@@ -95,7 +95,7 @@ const BINANCE_API_KEY    = process.env.BINANCE_API_KEY;
 const BINANCE_SECRET_KEY = process.env.BINANCE_SECRET_KEY;
 const BINANCE_BASE_URL   = 'https://api.binance.com';
 
-const BOT_DATA_DIR   = path.join(__dirname, '../data/bot');
+const BOT_DATA_DIR   = path.join(__dirname, '../../data/bot');
 
 // ── Favoritos via Supabase ────────────────────────────────────────────────────
 
@@ -118,12 +118,15 @@ async function loadFavoritesTrade() {
   return rows.map(r => {
     const iv = r.interval ?? '30m';
     return {
-      symbol:       r.symbol,
-      exchange:     r.exchange     ?? 'gate',
-      interval:     iv,
-      rsiBuy:       Number(r.rsi_buy  ?? RSI_BUY),
-      rsiSell:      Number(r.rsi_sell ?? RSI_SELL) - (iv === '15m' ? 0.5 : 0),
-      sellInterval: r.sell_interval ?? null,
+      symbol:        r.symbol,
+      exchange:      r.exchange      ?? 'gate',
+      interval:      iv,
+      rsiBuy:        Number(r.rsi_buy  ?? RSI_BUY),
+      rsiSell:       Number(r.rsi_sell ?? RSI_SELL) - (iv === '15m' ? 0.5 : 0),
+      sellInterval:  r.sell_interval  ?? null,
+      ma50LowerPct:  r.ma50_lower_pct !== null && r.ma50_lower_pct !== undefined
+                       ? Number(r.ma50_lower_pct)
+                       : MA50_LOWER_PCT,
       ...(r.variation_min !== null && r.variation_min !== undefined
         ? { variationMin: Number(r.variation_min) } : {}),
     };
@@ -233,28 +236,14 @@ async function check4hRsiFilter(pair, adapter, log) {
   }
 }
 
-// Verifica RSI de 1m para gatilho de venda rápida quando RSI ≥ 80.
-// Retorna { triggers: bool, rsi: number|null }
-async function check1mRsiSell(pair, adapter) {
-  try {
-    const candles = await adapter.fetchCandles(pair, 50, '1m');
-    const rsi1m   = ti.RSI.calculate({ values: candles.map(c => c.close), period: RSI_PERIOD });
-    if (!rsi1m.length) return { triggers: false, rsi: null };
-    const current = rsi1m[rsi1m.length - 1];
-    return { triggers: current >= 80, rsi: current };
-  } catch {
-    return { triggers: false, rsi: null };
-  }
-}
-
 // ── Filtro MA50 1h ────────────────────────────────────────────────────────────
-// Regra principal : preço atual dentro de ±3% da MA50(1h) → ✅
-// Regra de exceção: preço abaixo de -3% MAS algum dos últimos 10 candles 1h
-//                   cruzou a MA50 (low ≤ MA50 ≤ high) → ✅
-//                   Indica retorno em direção à MA50 após afastamento temporário.
-// Retorna: { ok, ma50, distPct, crossCandle, crossAgo, crossTime }
+// Limites rígidos: preço entre -3% e +3% da MA50(1h) → ✅
+//   Abaixo de -3%: ❌ queda livre (sem exceção)
+//   Acima de +3% : ❌ afastado demais (limite positivo a calibrar via analyzeMa50UpperLimit)
+// Retorna: { ok, ma50, distPct }
 
-const MA50_DIST_MAX_PCT = 3; // % máxima de distância da MA50
+const MA50_LOWER_PCT = -3; // piso rígido: não entra se preço < MA50 − 3%
+const MA50_UPPER_PCT =  3; // teto provisório: calibrar com analyzeMa50UpperLimit
 
 function formatCandleTime(openTimeMs) {
   return new Date(openTimeMs).toLocaleString('pt-BR', {
@@ -264,45 +253,77 @@ function formatCandleTime(openTimeMs) {
   });
 }
 
-async function checkMa50Filter(pair, adapter, log, currentPrice) {
+async function checkMa50Filter(pair, adapter, log, currentPrice, lowerPct = MA50_LOWER_PCT) {
   try {
     const candles1h = await adapter.fetchCandles(pair, 100, '1h');
     if (candles1h.length < 50) {
       log('⚠️  Filtro MA50(1h): dados insuficientes — entrada bloqueada por precaução');
-      return { ok: false, ma50: null, distPct: null, crossCandle: null, crossAgo: null, crossTime: null };
+      return { ok: false, ma50: null, distPct: null };
     }
 
     const last50  = candles1h.slice(-50);
     const ma50    = last50.reduce((s, c) => s + c.close, 0) / 50;
     const distPct = (currentPrice - ma50) / ma50 * 100;
 
-    if (Math.abs(distPct) <= MA50_DIST_MAX_PCT) {
-      log(`🔍 Filtro MA50(1h): preço=${currentPrice.toFixed(4)} | MA50=${ma50.toFixed(4)} | dist=${distPct.toFixed(2)}% ≤ ±${MA50_DIST_MAX_PCT}% — ✅ próximo da MA50`);
-      return { ok: true, ma50, distPct, crossCandle: null, crossAgo: null, crossTime: null };
+    if (distPct >= lowerPct && distPct <= MA50_UPPER_PCT) {
+      log(`🔍 Filtro MA50(1h): preço=${currentPrice.toFixed(4)} | MA50=${ma50.toFixed(4)} | dist=${distPct.toFixed(2)}% — ✅ dentro de [${lowerPct}%, +${MA50_UPPER_PCT}%]`);
+      return { ok: true, ma50, distPct };
     }
 
-    // Preço acima de +3%: bloqueio direto
-    if (distPct > MA50_DIST_MAX_PCT) {
-      log(`🔍 Filtro MA50(1h): preço=${currentPrice.toFixed(4)} | MA50=${ma50.toFixed(4)} | dist=+${distPct.toFixed(2)}% > +${MA50_DIST_MAX_PCT}% — ❌ afastado acima da MA50`);
-      return { ok: false, ma50, distPct, crossCandle: null, crossAgo: null, crossTime: null };
+    if (distPct > MA50_UPPER_PCT) {
+      log(`🔍 Filtro MA50(1h): preço=${currentPrice.toFixed(4)} | MA50=${ma50.toFixed(4)} | dist=+${distPct.toFixed(2)}% > +${MA50_UPPER_PCT}% — ❌ afastado acima da MA50`);
+    } else {
+      log(`🔍 Filtro MA50(1h): preço=${currentPrice.toFixed(4)} | MA50=${ma50.toFixed(4)} | dist=${distPct.toFixed(2)}% < ${lowerPct}% — ❌ queda livre abaixo da MA50`);
     }
-
-    // Preço abaixo de -3%: exceção se algum dos últimos 10 candles cruzou a MA50
-    const recent10 = candles1h.slice(-10);
-    const crossIdx = recent10.findIndex(c => c.low <= ma50 && c.high >= ma50);
-    if (crossIdx !== -1) {
-      const crossCandle = recent10[crossIdx];
-      const crossAgo    = recent10.length - crossIdx; // quantos candles atrás (1 = o mais recente dos 10)
-      const crossTime   = crossCandle.openTime ? formatCandleTime(crossCandle.openTime) : 'n/a';
-      log(`🔍 Filtro MA50(1h): preço=${currentPrice.toFixed(4)} | MA50=${ma50.toFixed(4)} | dist=${distPct.toFixed(2)}% | candle[${crossIdx + 1}/10] ${crossTime} cruzou MA50 — ✅ retornando à MA50`);
-      return { ok: true, ma50, distPct, crossCandle, crossAgo, crossTime };
-    }
-
-    log(`🔍 Filtro MA50(1h): preço=${currentPrice.toFixed(4)} | MA50=${ma50.toFixed(4)} | dist=${distPct.toFixed(2)}% < -${MA50_DIST_MAX_PCT}% e nenhum candle recente cruzou — ❌ queda livre`);
-    return { ok: false, ma50, distPct, crossCandle: null, crossAgo: null, crossTime: null };
+    return { ok: false, ma50, distPct };
   } catch (err) {
     log(`⚠️  Filtro MA50(1h): erro (${err.message}) — entrada bloqueada por precaução`);
-    return { ok: false, ma50: null, distPct: null, crossCandle: null, crossAgo: null, crossTime: null };
+    return { ok: false, ma50: null, distPct: null };
+  }
+}
+
+// ── Análise de excursões acima da MA50(1h) ───────────────────────────────────
+// Calcula estatísticas dos picos históricos acima da MA50 para calibrar MA50_UPPER_PCT.
+// Cada "excursão" começa quando price > MA50 e termina quando price volta a ≤ MA50.
+async function analyzeMa50UpperLimit(pair, adapter, log) {
+  try {
+    const candles = await adapter.fetchCandles(pair, 500, '1h');
+    if (candles.length < 55) { log('📊 Análise MA50: candles insuficientes'); return; }
+
+    const peaks = [];
+    let inExcursion = false;
+    let maxDist = 0;
+
+    for (let i = 50; i < candles.length; i++) {
+      const ma50    = candles.slice(i - 50, i).reduce((s, c) => s + c.close, 0) / 50;
+      const distPct = (candles[i].close - ma50) / ma50 * 100;
+
+      if (distPct > 0) {
+        inExcursion = true;
+        if (distPct > maxDist) maxDist = distPct;
+      } else if (inExcursion) {
+        peaks.push(maxDist);
+        inExcursion = false;
+        maxDist = 0;
+      }
+    }
+    if (inExcursion && maxDist > 0) peaks.push(maxDist);
+
+    if (!peaks.length) { log('📊 Análise MA50: nenhuma excursão acima da MA50 encontrada'); return; }
+
+    peaks.sort((a, b) => a - b);
+    const n   = peaks.length;
+    const avg = peaks.reduce((s, v) => s + v, 0) / n;
+    const med = peaks[Math.floor(n / 2)];
+    const p75 = peaks[Math.floor(n * 0.75)];
+    const p90 = peaks[Math.floor(n * 0.90)];
+    const max = peaks[n - 1];
+
+    log(`📊 MA50(1h) excursões acima (${n} episódios nos últimos ${candles.length}h):`);
+    log(`   Mediana: +${med.toFixed(2)}%  |  Média: +${avg.toFixed(2)}%  |  P75: +${p75.toFixed(2)}%  |  P90: +${p90.toFixed(2)}%  |  Máx: +${max.toFixed(2)}%`);
+    log(`   → Sugestão de MA50_UPPER_PCT: usa P75 (+${p75.toFixed(2)}%) para capturar 75% das entradas e bloquear as 25% mais extremas`);
+  } catch (err) {
+    log(`⚠️  analyzeMa50UpperLimit: ${err.message}`);
   }
 }
 
@@ -329,31 +350,40 @@ const R = '\x1b[31m'; // vermelho — RSI > 70
 const G = '\x1b[32m'; // verde   — RSI < 30
 const X = '\x1b[0m';  // reset
 
-// Paleta de cores por símbolo (rotativa)
+// Paleta de cores por símbolo — sem verde nem vermelho (reservados para compra/venda)
 const SYMBOL_COLORS = [
-  '\x1b[94m', // azul brilhante
-  '\x1b[93m', // amarelo brilhante
-  '\x1b[95m', // magenta brilhante
-  '\x1b[96m', // ciano brilhante
-  '\x1b[92m', // verde brilhante
-  '\x1b[91m', // vermelho brilhante
-  '\x1b[33m', // amarelo
-  '\x1b[35m', // magenta
-  '\x1b[36m', // ciano
-  '\x1b[34m', // azul
+  '\x1b[94m',       // azul brilhante
+  '\x1b[93m',       // amarelo brilhante
+  '\x1b[95m',       // magenta brilhante
+  '\x1b[96m',       // ciano brilhante
+  '\x1b[33m',       // amarelo
+  '\x1b[35m',       // magenta
+  '\x1b[36m',       // ciano
+  '\x1b[34m',       // azul
+  '\x1b[90m',       // cinza
+  '\x1b[97m',       // branco brilhante
+  '\x1b[38;5;208m', // laranja
+  '\x1b[38;5;129m', // roxo
+  '\x1b[38;5;51m',  // turquesa
+  '\x1b[38;5;198m', // rosa
+  '\x1b[38;5;220m', // ouro
 ];
 
 function makeLogger(symbol, symbolColor = '', interval = '30m') {
-  const logFile    = path.join(BOT_DATA_DIR, `log-${symbol}.txt`);
-  const isMinutes  = /^\d+m$/.test(interval); // '1m', '3m', '5m', etc.
-  const symTag     = `${symbolColor}[${symbol}]${X}`;
-  return function log(...args) {
-    const ts      = nowFmt(isMinutes);
-    const plain   = `[${ts}] ${symTag} ${args.join(' ')}`;
-    const noAnsi  = plain.replace(/\x1b\[[0-9;]*m/g, '');
+  const logFile   = path.join(BOT_DATA_DIR, `log-${symbol}.txt`);
+  const isMinutes = /^\d+m$/.test(interval);
+  let override = null; // null = usa symbolColor; string = sobrepõe (ex: G ou R)
+  function log(...args) {
+    const ts     = nowFmt(isMinutes);
+    const c      = override !== null ? override : symbolColor;
+    const symTag = c ? `${c}[${symbol}]${X}` : `[${symbol}]`;
+    const plain  = `[${ts}] ${symTag} ${args.join(' ')}`;
+    const noAnsi = plain.replace(/\x1b\[[0-9;]*m/g, '');
     console.log(plain);
     try { fs.appendFileSync(logFile, noAnsi + '\n'); } catch {}
-  };
+  }
+  log.setColor = (c) => { override = c; }; // null reseta para symbolColor
+  return log;
 }
 
 // ── Estado por símbolo ────────────────────────────────────────────────────────
@@ -649,6 +679,7 @@ async function tick(symbol, pair, log, config, adapter) {
   const variationMin   = config.variationMin   !== undefined ? config.variationMin   : defaultVariationMin(interval);
   const buyDiscount    = config.buyDiscount    !== undefined ? config.buyDiscount    : defaultBuyDiscount(interval);
   const rsiOverbought  = config.rsiOverbought  !== undefined ? config.rsiOverbought  : RSI_OVERBOUGHT;
+  const ma50LowerPct   = config.ma50LowerPct   !== undefined ? config.ma50LowerPct   : MA50_LOWER_PCT;
 
   // Candles de entrada (sinal de compra)
   const candles = await adapter.fetchCandles(pair, CANDLE_LIMIT, interval);
@@ -672,6 +703,9 @@ async function tick(symbol, pair, log, config, adapter) {
   const last    = candles[candles.length - 1];
   const variation = ((last.high - last.low) / last.low) * 100;
 
+  // Verde apenas em compra, vermelho apenas em venda; null = volta para cor do símbolo
+  log.setColor(rsi < rsiBuy ? G : rsiExit > rsiSell ? R : null);
+
   // Detecta cruzamento: RSI entrou na zona de sobrevenda neste tick
   const alertKey    = `${symbol}:${interval}`;
   const wasAboveBuy = rsiWasAbove.get(alertKey) !== false; // default true (desconhecido = assume acima)
@@ -683,12 +717,9 @@ async function tick(symbol, pair, log, config, adapter) {
 
   let state = loadState(symbol);
   if (separateSellInterval) {
-    const buyColor  = rsi     < rsiBuy  ? G : '';
-    const sellColor = rsiExit > rsiSell ? R : '';
-    log(`${buyColor}RSI_entrada=${rsi.toFixed(2)}(${interval})${buyColor ? X : ''}  ${sellColor}RSI_saída=${rsiExit.toFixed(2)}(${effectiveSellInterval})${sellColor ? X : ''}  close=${last.close}  var=${variation.toFixed(2)}%  fase=${state.phase}`);
+    log(`RSI_entrada=${rsi.toFixed(2)}(${interval})  RSI_saída=${rsiExit.toFixed(2)}(${effectiveSellInterval})  close=${last.close}  var=${variation.toFixed(2)}%  fase=${state.phase}`);
   } else {
-    const rsiColor = rsi > rsiSell ? R : rsi < rsiBuy ? G : '';
-    log(`${rsiColor}RSI=${rsi.toFixed(2)}${rsiColor ? X : ''}  close=${last.close}  var=${variation.toFixed(2)}%  fase=${state.phase}`);
+    log(`RSI=${rsi.toFixed(2)}  close=${last.close}  var=${variation.toFixed(2)}%  fase=${state.phase}`);
   }
 
   // ── Executa ordem de venda e retorna o novo estado PENDING_SELL ──────────
@@ -781,7 +812,7 @@ async function tick(symbol, pair, log, config, adapter) {
     if (rsi < rsiBuy && variation >= variationMin) {
       log(`${G}📍 RSI < ${rsiBuy} (${rsi.toFixed(2)}) + var ${variation.toFixed(2)}%${variationMin > 0 ? ` ≥ ${variationMin}%` : ''}${X}`);
 
-      const { ok: passesMa50, ma50: ma50Value, distPct: ma50DistPct, crossCandle, crossAgo, crossTime } = await checkMa50Filter(pair, adapter, log, last.close);
+      const { ok: passesMa50, ma50: ma50Value, distPct: ma50DistPct } = await checkMa50Filter(pair, adapter, log, last.close, ma50LowerPct);
 
       // Monta resumo completo da análise para WhatsApp
       const ivLabel      = separateSellInterval ? `entrada=${interval} saída=${effectiveSellInterval}` : interval;
@@ -789,8 +820,8 @@ async function tick(symbol, pair, log, config, adapter) {
         ? `MA50(1h): ${ma50Value.toFixed(4)} USDT  dist: ${ma50DistPct >= 0 ? '+' : ''}${ma50DistPct.toFixed(2)}%`
         : 'MA50(1h): n/a';
       const ma50Status   = passesMa50
-        ? (crossCandle ? `✅ excep: cruzou MA50 ${crossAgo}h atrás (${crossTime})\n   O=${crossCandle.open.toFixed(4)} H=${crossCandle.high.toFixed(4)} L=${crossCandle.low.toFixed(4)} C=${crossCandle.close.toFixed(4)}` : '✅ dentro de ±3%')
-        : (crossCandle ? `⚠️  cruzou mas não passou` : '❌ afastado sem cruzamento recente');
+        ? `✅ dentro de [${MA50_LOWER_PCT}%, +${MA50_UPPER_PCT}%]`
+        : `❌ fora do intervalo permitido`;
       const candleLine   = `Candle: O=${last.open.toFixed(4)} H=${last.high.toFixed(4)} L=${last.low.toFixed(4)} C=${last.close.toFixed(4)}  var=${variation.toFixed(2)}%`;
       const waMsgEntry   = [
         `📍 POSSÍVEL ENTRADA: ${symbol}`,
@@ -831,7 +862,7 @@ async function tick(symbol, pair, log, config, adapter) {
           log(`${G}🟢 ORDEM DE COMPRA ABERTA${X}`);
           log(`   Par      : ${pair}`);
           log(`   Preço    : ${result.limitPrice}  (${buyDiscount * 100}% abaixo de ${last.close})`);
-          log(`   MA50(1h) : ${ma50Value !== null ? ma50Value.toFixed(4) : 'n/a'}`);
+          log(`   MA50(1h) : ${ma50Value !== null ? ma50Value.toFixed(4) : 'n/a'}  (dist: ${ma50DistPct !== null ? (ma50DistPct >= 0 ? '+' : '') + ma50DistPct.toFixed(2) + '%' : 'n/a'})`);
           log(`   Qty      : ${result.qty}`);
           log(`   USDT     : ≈${result.budget.toFixed(2)}`);
           log(`   ID       : ${result.orderId}`);
@@ -911,24 +942,24 @@ async function tick(symbol, pair, log, config, adapter) {
 
   // ── BOUGHT: aguarda RSI cruzar acima de rsiSell ou atingir rsiOverbought ──
   } else if (state.phase === 'BOUGHT') {
-    if (state.buyPrice && last.close <= state.buyPrice * 0.97) {
+    if (state.buyPrice && last.close <= state.buyPrice * 0.95) {
       const drop = ((last.close - state.buyPrice) / state.buyPrice * 100).toFixed(2);
       log(`${R}🛑 STOP-LOSS: preço=${last.close} caiu ${drop}% abaixo da compra=${state.buyPrice} — venda imediata${X}`);
-      const newState = await executeSell(`stop-loss: preço ${drop}% abaixo da compra (${state.buyPrice})`);
+      const newState = await executeSell(`stop-loss 5%: preço ${drop}% abaixo da compra (${state.buyPrice})`);
       if (newState) { state = newState; saveState(symbol, state); }
     } else if (separateSellInterval) {
       // Modo dual-intervalo:
-      //   saída rápida: RSI(sellInterval) ≥ rsiSell → vende imediatamente (ex: RSI 1m ≥ 80)
-      //   saída lenta : RSI(interval)    > 70       → ABOVE_70, aguarda RSI(interval) ≤ 70
-      if (rsiExit >= rsiSell) {
-        log(`${R}🚀 RSI(${effectiveSellInterval})=${rsiExit.toFixed(2)} ≥ ${rsiSell} — venda imediata${X}`);
-        const newState = await executeSell(`RSI(${effectiveSellInterval}) ${rsiExit.toFixed(2)} ≥ ${rsiSell}`);
+      //   saída rápida: RSI(5m) ≥ 80 → vende imediatamente
+      //   saída lenta : RSI(15m) > 70 → ABOVE_70, aguarda RSI(15m) ≤ 70
+      if (rsiExit >= rsiOverbought) {
+        log(`${R}🚀 RSI(${effectiveSellInterval})=${rsiExit.toFixed(2)} ≥ ${rsiOverbought} — venda imediata${X}`);
+        const newState = await executeSell(`RSI(${effectiveSellInterval}) ${rsiExit.toFixed(2)} ≥ ${rsiOverbought}`);
         if (newState) { state = newState; saveState(symbol, state); }
       } else if (rsi > 70) {
         state.phase = 'ABOVE_70';
         saveState(symbol, state);
-        log(`📈 RSI(${interval})=${rsi.toFixed(2)} > 70 — aguardando retorno para ≤ 70 ou RSI(${effectiveSellInterval}) ≥ ${rsiSell}…`);
-        sendWhatsApp(`📈 POSSÍVEL SAÍDA: ${symbol}\nRSI(${interval})=${rsi.toFixed(2)} > 70 | aguardando ≤ 70 ou RSI(${effectiveSellInterval}) ≥ ${rsiSell}`);
+        log(`📈 RSI(${interval})=${rsi.toFixed(2)} > 70 — aguardando retorno para ≤ 70 ou RSI(${effectiveSellInterval}) ≥ ${rsiOverbought}…`);
+        sendWhatsApp(`📈 POSSÍVEL SAÍDA: ${symbol}\nRSI(${interval})=${rsi.toFixed(2)} > 70 | aguardando ≤ 70 ou RSI(${effectiveSellInterval}) ≥ ${rsiOverbought}`);
       }
     } else {
       // Modo single-intervalo
@@ -937,15 +968,6 @@ async function tick(symbol, pair, log, config, adapter) {
         const newState = await executeSell(`RSI(${effectiveSellInterval}) ${rsiExit.toFixed(2)} ≥ ${rsiOverbought} (sobrecomprado extremo)`);
         if (newState) { state = newState; saveState(symbol, state); }
       } else if (rsiExit > rsiSell) {
-        if (interval !== '1m') {
-          const { triggers: sell1m, rsi: rsi1m } = await check1mRsiSell(pair, adapter);
-          if (sell1m) {
-            log(`${R}📈 RSI(${effectiveSellInterval})=${rsiExit.toFixed(2)} > ${rsiSell} + RSI(1m)=${rsi1m.toFixed(2)} ≥ 80 — venda imediata${X}`);
-            const newState = await executeSell(`RSI(${effectiveSellInterval}) ${rsiExit.toFixed(2)} > ${rsiSell} + RSI(1m) ${rsi1m.toFixed(2)} ≥ 80`);
-            if (newState) { state = newState; saveState(symbol, state); }
-            return;
-          }
-        }
         state.phase = 'ABOVE_70';
         saveState(symbol, state);
         log(`📈 RSI saída passou de ${rsiSell} (${rsiExit.toFixed(2)}) — aguardando retorno para ≤ ${rsiSell} ou ≥ ${rsiOverbought}…`);
@@ -955,25 +977,25 @@ async function tick(symbol, pair, log, config, adapter) {
 
   // ── ABOVE_70: vende quando RSI retorna a ≤ rsiSell OU atinge rsiOverbought
   } else if (state.phase === 'ABOVE_70') {
-    if (state.buyPrice && last.close <= state.buyPrice * 0.97) {
+    if (state.buyPrice && last.close <= state.buyPrice * 0.95) {
       const drop = ((last.close - state.buyPrice) / state.buyPrice * 100).toFixed(2);
       log(`${R}🛑 STOP-LOSS: preço=${last.close} caiu ${drop}% abaixo da compra=${state.buyPrice} — venda imediata${X}`);
-      const newState = await executeSell(`stop-loss: preço ${drop}% abaixo da compra (${state.buyPrice})`);
+      const newState = await executeSell(`stop-loss 5%: preço ${drop}% abaixo da compra (${state.buyPrice})`);
       if (newState) { state = newState; saveState(symbol, state); }
     } else if (separateSellInterval) {
       // Modo dual-intervalo:
-      //   saída rápida: RSI(sellInterval) ≥ rsiSell → vende imediatamente
-      //   saída lenta : RSI(interval)    ≤ 70       → RSI de entrada voltou → vende
-      if (rsiExit >= rsiSell) {
-        log(`${R}🚀 RSI(${effectiveSellInterval})=${rsiExit.toFixed(2)} ≥ ${rsiSell} — venda imediata${X}`);
-        const newState = await executeSell(`RSI(${effectiveSellInterval}) ${rsiExit.toFixed(2)} ≥ ${rsiSell}`);
+      //   saída rápida: RSI(5m) ≥ 80 → vende imediatamente
+      //   saída lenta : RSI(15m) ≤ 70 → retornou da zona sobrecomprada → vende
+      if (rsiExit >= rsiOverbought) {
+        log(`${R}🚀 RSI(${effectiveSellInterval})=${rsiExit.toFixed(2)} ≥ ${rsiOverbought} — venda imediata${X}`);
+        const newState = await executeSell(`RSI(${effectiveSellInterval}) ${rsiExit.toFixed(2)} ≥ ${rsiOverbought}`);
         if (newState) { state = newState; saveState(symbol, state); }
       } else if (rsi <= 70) {
         log(`${R}📉 RSI(${interval})=${rsi.toFixed(2)} voltou a ≤ 70 — sinal de VENDA${X}`);
-        const newState = await executeSell(`RSI(${interval}) ${rsi.toFixed(2)} ≤ 70 (retorno da zona sobrecomprada no intervalo de entrada)`);
+        const newState = await executeSell(`RSI(${interval}) ${rsi.toFixed(2)} ≤ 70 (retorno da zona sobrecomprada)`);
         if (newState) { state = newState; saveState(symbol, state); }
       } else {
-        log(`⏳ RSI(${interval})=${rsi.toFixed(2)} aguardando ≤ 70 | RSI(${effectiveSellInterval})=${rsiExit.toFixed(2)} aguardando ≥ ${rsiSell}…`);
+        log(`⏳ RSI(${interval})=${rsi.toFixed(2)} aguardando ≤ 70 | RSI(${effectiveSellInterval})=${rsiExit.toFixed(2)} aguardando ≥ ${rsiOverbought}…`);
       }
     } else {
       // Modo single-intervalo
@@ -986,15 +1008,6 @@ async function tick(symbol, pair, log, config, adapter) {
         const newState = await executeSell(`RSI(${effectiveSellInterval}) ${rsiExit.toFixed(2)} ≤ ${rsiSell} (retorno ao nível de venda)`);
         if (newState) { state = newState; saveState(symbol, state); }
       } else {
-        if (interval !== '1m') {
-          const { triggers: sell1m, rsi: rsi1m } = await check1mRsiSell(pair, adapter);
-          if (sell1m) {
-            log(`${R}🚀 RSI(1m)=${rsi1m.toFixed(2)} ≥ 80 — venda imediata${X}`);
-            const newState = await executeSell(`RSI(1m) ${rsi1m.toFixed(2)} ≥ 80 (sobrecomprado no 1m)`);
-            if (newState) { state = newState; saveState(symbol, state); }
-            return;
-          }
-        }
         log(`⏳ RSI em ${rsi.toFixed(2)} — aguardando retorno a ≤ ${rsiSell} ou subida a ≥ ${rsiOverbought}…`);
       }
     }
@@ -1091,22 +1104,26 @@ async function startSymbol(cfg) {
   const state         = loadState(symbol);
   const variationMin  = cfg.variationMin  !== undefined ? cfg.variationMin  : defaultVariationMin(interval);
   const rsiOverbought = cfg.rsiOverbought !== undefined ? cfg.rsiOverbought : RSI_OVERBOUGHT;
+  const ma50LowerPct  = cfg.ma50LowerPct  !== undefined ? cfg.ma50LowerPct  : MA50_LOWER_PCT;
   // 15m: poll a cada 1 minuto para não perder o cruzamento de RSI=70 no 5m
   const pollMs        = interval === '15m' ? 60_000 : Math.min(pollMsFor(interval), pollMsFor(effectiveSellInterval));
 
   // Registra config mutável; watchFavorites atualiza campos in-place entre ticks
-  liveConfigs[symbol] = { interval, rsiBuy, rsiSell, sellInterval, variationMin, rsiOverbought, exchange };
+  liveConfigs[symbol] = { interval, rsiBuy, rsiSell, sellInterval, variationMin, rsiOverbought, ma50LowerPct, exchange };
 
   const ivLabel = effectiveSellInterval !== interval
     ? `entrada=${interval} / saída=${effectiveSellInterval}`
     : interval;
-  log(`=== Iniciado | ${adapter.name} | par: ${pair} | intervalo: ${ivLabel} | poll: ${pollMs / 1000}s | RSI compra <${rsiBuy} | RSI venda >${rsiSell} | RSI imediato ≥${rsiOverbought} | var≥${variationMin}% | fase: ${state.phase} ===`);
+  log(`=== Iniciado | ${adapter.name} | par: ${pair} | intervalo: ${ivLabel} | poll: ${pollMs / 1000}s | RSI compra <${rsiBuy} | RSI venda >${rsiSell} | RSI imediato ≥${rsiOverbought} | var≥${variationMin}% | MA50 [${ma50LowerPct}%, +${MA50_UPPER_PCT}%] | fase: ${state.phase} ===`);
 
   if (state.phase === 'PENDING_BUY') {
     log(`♻️  Estado restaurado — limit order pendente id=${state.pendingOrderId} | preço=${state.pendingPrice} (colocada em ${state.pendingTime})`);
   } else if (state.phase === 'BOUGHT' || state.phase === 'ABOVE_70') {
     log(`♻️  Estado restaurado — comprado a ${state.buyPrice} em ${state.buyTime}`);
   }
+
+  // Análise de calibração do limite positivo da MA50 — roda uma vez na inicialização
+  analyzeMa50UpperLimit(pair, adapter, log).catch(() => {});
 
   let consecutiveErrors = 0;
   const run = async () => {
@@ -1131,7 +1148,7 @@ async function startSymbol(cfg) {
 // Campos atualizáveis em tempo real: rsiBuy, rsiSell, interval, sellInterval,
 // variationMin, rsiOverbought. (Trocar exchange/symbol requer reinício do bot.)
 async function watchFavorites(colorOffset) {
-  const UPDATABLE = ['rsiBuy', 'rsiSell', 'interval', 'sellInterval', 'variationMin', 'rsiOverbought'];
+  const UPDATABLE = ['rsiBuy', 'rsiSell', 'interval', 'sellInterval', 'variationMin', 'rsiOverbought', 'ma50LowerPct'];
 
   setInterval(async () => {
     let entries;
