@@ -3,6 +3,17 @@
 const path   = require('path');
 const qrcode = require('qrcode-terminal');
 
+// Suprime console.log internos do Baileys (Signal Protocol session noise)
+const _origLog = console.log;
+console.log = (...args) => {
+  const first = args[0];
+  if (typeof first === 'string' && (
+    first.startsWith('Closing session') ||
+    first.startsWith('Removing old closed session')
+  )) return;
+  _origLog(...args);
+};
+
 const rawNumber = process.env.WHATSAPP_NOTIFY_NUMBER || '5561999171222';
 // Baileys usa @s.whatsapp.net (diferente do @c.us do whatsapp-web.js)
 const JID = rawNumber.includes('@') ? rawNumber : `${rawNumber}@s.whatsapp.net`;

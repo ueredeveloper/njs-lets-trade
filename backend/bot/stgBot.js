@@ -167,8 +167,18 @@ async function gateReq(method, endpointPath, params = {}, _retry = true) {
   return data;
 }
 
+const GATE_FEE_RATE = 0.002; // 0.2% Gate.io taker — taxa cobrada em tokens na compra
+
+// Retorna saldo disponível do token base do par (ex: UNA_USDT → saldo de UNA)
+async function gateGetTokenBalance(pair) {
+  const base     = pair.split('_')[0];
+  const accounts = await gateReq('GET', '/spot/accounts');
+  const acc      = accounts.find(a => a.currency === base);
+  return acc ? parseFloat(acc.available) : 0;
+}
+
 // Limit IOC 0.5% acima do mercado — preenche imediatamente como market order
-// Retorna { filledQty, quoteQty, avgPrice }
+// Retorna { filledQty, quoteQty, avgPrice } — filledQty já líquido de taxa
 async function gateMarketBuy(pair, usdtAmount) {
   const tickerUrl = `${GATE_BASE}/spot/tickers?currency_pair=${pair}`;
   const ticker    = await fetch(tickerUrl).then(r => r.json());
@@ -191,24 +201,34 @@ async function gateMarketBuy(pair, usdtAmount) {
   await new Promise(r => setTimeout(r, 1000));
   const filled = await gateReq('GET', `/spot/orders/${order.id}`, { currency_pair: pair });
 
-  const filledQty = parseFloat(filled.amount) - parseFloat(filled.left || 0);
-  const quoteQty  = parseFloat(filled.filled_total || 0);
-  const avgPrice  = parseFloat(filled.avg_deal_price || limitPrice);
+  const grossQty = parseFloat(filled.amount) - parseFloat(filled.left || 0);
+  const quoteQty = parseFloat(filled.filled_total || 0);
+  const avgPrice = parseFloat(filled.avg_deal_price || limitPrice);
 
-  if (filledQty <= 0) throw new Error(`Gate.io: compra não preenchida (status=${filled.status})`);
-  return { filledQty, quoteQty: quoteQty || filledQty * avgPrice, avgPrice };
+  if (grossQty <= 0) throw new Error(`Gate.io: compra não preenchida (status=${filled.status})`);
+
+  // Gate.io cobra 0.2% de taxa em tokens na compra — salvar qty líquida evita "Not enough balance" na venda
+  const netQty = parseFloat((grossQty * (1 - GATE_FEE_RATE)).toFixed(8));
+  return { filledQty: netQty, quoteQty: quoteQty || grossQty * avgPrice, avgPrice };
 }
 
 // Limit IOC 0.5% abaixo do mercado — preenche imediatamente como market order
 // Retorna { soldQty, usdtOut, exitPrice }
 async function gateMarketSell(pair, qty) {
+  // Usa saldo real para evitar "Not enough balance" (ex: state salvo antes do fix da taxa)
+  const actualBalance = await gateGetTokenBalance(pair);
+  const sellQty       = Math.min(parseFloat(qty), actualBalance);
+  if (sellQty <= 0) throw new Error(`Gate.io: saldo insuficiente para vender ${pair} (disponível: ${actualBalance})`);
+  if (sellQty < parseFloat(qty))
+    log(`⚠️  Qty ajustada: ${qty} → ${sellQty} (saldo real na Gate.io)`);
+
   const tickerUrl = `${GATE_BASE}/spot/tickers?currency_pair=${pair}`;
   const ticker    = await fetch(tickerUrl).then(r => r.json());
   const price     = parseFloat(ticker[0]?.last);
   if (!price) throw new Error(`Gate.io: preço inválido para ${pair}`);
 
   const limitPrice = parseFloat((price * 0.995).toFixed(8));
-  const safeQty    = parseFloat(qty).toFixed(8);
+  const safeQty    = sellQty.toFixed(8);
 
   const order = await gateReq('POST', '/spot/orders', {
     currency_pair: pair,
