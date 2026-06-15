@@ -1,7 +1,6 @@
 'use strict';
 
-const path   = require('path');
-const qrcode = require('qrcode-terminal');
+const path = require('path');
 
 // Suprime console.log internos do Baileys (Signal Protocol session noise)
 const _origLog = console.log;
@@ -18,8 +17,8 @@ const rawNumber = process.env.WHATSAPP_NOTIFY_NUMBER || '5561999171222';
 // Baileys usa @s.whatsapp.net (diferente do @c.us do whatsapp-web.js)
 const JID = rawNumber.includes('@') ? rawNumber : `${rawNumber}@s.whatsapp.net`;
 
-// false = mostra QR no terminal; true = código de pareamento (padrão — funciona no Termux)
-const USE_PAIRING = process.env.WHATSAPP_PAIRING_CODE !== 'false';
+// Termux define TERMUX_VERSION; no Windows usamos QR code via qrcode-terminal
+const USE_PAIRING = !!process.env.TERMUX_VERSION;
 
 const AUTH_DIR = path.join(__dirname, '../../.baileys_auth');
 
@@ -61,17 +60,24 @@ async function connect() {
     const { connection, lastDisconnect, qr } = update;
 
     if (qr) {
-      if (USE_PAIRING && !sock.authState.creds.registered) {
-        try {
-          const code = await sock.requestPairingCode(rawNumber);
-          console.log(`\n📱 Código de pareamento WhatsApp: ${code}`);
-          console.log('   WhatsApp → Dispositivos conectados → Conectar → Número de telefone\n');
-        } catch (err) {
-          console.warn(`⚠️  requestPairingCode falhou: ${err.message}`);
+      if (USE_PAIRING) {
+        if (!sock.authState.creds.registered) {
+          try {
+            const code = await sock.requestPairingCode(rawNumber);
+            console.log(`\n📱 Código de pareamento WhatsApp: ${code}`);
+            console.log('   WhatsApp → Dispositivos conectados → Conectar → Número de telefone\n');
+          } catch (err) {
+            console.warn(`⚠️  requestPairingCode falhou: ${err.message}`);
+          }
         }
       } else {
-        console.log('\n📷 Escaneie o QR code abaixo com o WhatsApp:\n');
-        qrcode.generate(qr, { small: true });
+        try {
+          const qrcode = require('qrcode-terminal');
+          console.log('\n📷 Escaneie o QR code abaixo com o WhatsApp:\n');
+          qrcode.generate(qr, { small: true });
+        } catch {
+          console.log('\n📷 QR code (instale qrcode-terminal para renderizar):', qr);
+        }
       }
     }
 
