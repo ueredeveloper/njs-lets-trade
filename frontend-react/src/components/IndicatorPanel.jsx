@@ -235,6 +235,7 @@ function IndicatorRow({ value, onChange }) {
             >
               <option value="9">9</option>
               <option value="20">20</option>
+              <option value="30">30</option>
               <option value="50">50</option>
               <option value="80">80</option>
               <option value="200">200</option>
@@ -388,7 +389,9 @@ export default function IndicatorPanel({ open, onToggle }) {
       if (otherIndicators.length > 0) {
         const uniqueIntervals = [...new Set(otherIndicators.flatMap((ind) => ind.intervals))];
         const usdtCurrencies = getBinanceCurrenciesWithUsdt(currencies);
-        const candlesData = await fetchCandlesAndIndicators(usdtCurrencies, uniqueIntervals);
+        const maIndicator = otherIndicators.find((ind) => ind.type === 'movingAverage');
+        const maPeriod = maIndicator ? parseInt(maIndicator.length ?? '200') : 200;
+        const candlesData = await fetchCandlesAndIndicators(usdtCurrencies, uniqueIntervals, maPeriod);
 
         for (const ind of otherIndicators) {
           const { type, intervals } = ind;
@@ -419,22 +422,9 @@ export default function IndicatorPanel({ open, onToggle }) {
             const length = ind.length ?? '200';
             const compare = ind.compare ?? 'above';
             const candle = ind.candle ?? 'close';
-            const condition = `movingAverage|${length}|${compare}|${candle}`;
             const acronym = `m|${length}|${compare[0]}|${candle}`;
-
-            const cbMap = {
-              'movingAverage|200|above|close':  movingAverageAboveCandleClose,
-              'movingAverage|200|bellow|close': movingAverageBellowCandleClose,
-              'movingAverage|9|above|close':    movingAverageAboveCandleClose,
-              'movingAverage|9|bellow|close':   movingAverageBellowCandleClose,
-              'movingAverage|20|above|close':   movingAverageAboveCandleClose,
-              'movingAverage|20|bellow|close':  movingAverageBellowCandleClose,
-              'movingAverage|80|above|close':   movingAverageAboveCandleClose,
-              'movingAverage|80|bellow|close':  movingAverageBellowCandleClose,
-            };
-            const cb = cbMap[condition];
-            if (cb) createMovingAverageFilter(candlesData, intervals, acronym, cb, addFilter);
-            else alert('Condição MA ainda não calculada!');
+            const cb = compare === 'above' ? movingAverageAboveCandleClose : movingAverageBellowCandleClose;
+            createMovingAverageFilter(candlesData, intervals, acronym, cb, addFilter);
           }
 
         }

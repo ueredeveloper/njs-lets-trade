@@ -110,8 +110,11 @@ const IndicatorView = {
                 let allCurrencies = await CurrencyModel.getAllCurrencies();
                 let usdtCurrencies = await CurrencyModel.getBinanceCurrenciesWithUsdt(allCurrencies);
 
+                const maParam = params.find(p => p.condition.startsWith('movingAverage'));
+                const maPeriod = maParam ? parseInt(maParam.condition.split('|')[1]) : 200;
+
                 // para pesquisar poucas moedas usdtCurrencies.slice(0,10)
-                let candlesAndIndicators = await fetchCandlesAndIndicators(usdtCurrencies, intervals)
+                let candlesAndIndicators = await fetchCandlesAndIndicators(usdtCurrencies, intervals, maPeriod)
 
                 for (const param of params) {
 
@@ -149,36 +152,10 @@ const IndicatorView = {
                         }
                     }
                     else if (condition.startsWith('movingAverage')) {
-
-                        switch (condition) {
-                            case 'movingAverage|9|above|close':
-                                createMovingAverageFilter(candlesAndIndicators, intervals, acronym, movingAverageBellowCandleClose)
-                                break;
-                            case 'movingAverage|9|bellow|close':
-                                createMovingAverageFilter(candlesAndIndicators, intervals, acronym, movingAverageBellowCandleClose)
-                                break;
-                            case 'movingAverage|20|above|close':
-                                createMovingAverageFilter(candlesAndIndicators, intervals, acronym, movingAverageBellowCandleClose)
-                                break;
-                            case 'movingAverage|20|bellow|close':
-                                createMovingAverageFilter(candlesAndIndicators, intervals, acronym, movingAverageBellowCandleClose)
-                                break;
-                            case 'movingAverage|80|above|close':
-                                createMovingAverageFilter(candlesAndIndicators, intervals, acronym, movingAverageBellowCandleClose)
-                                break;
-                            case 'movingAverage|80|bellow|close':
-                                createMovingAverageFilter(candlesAndIndicators, intervals, acronym, movingAverageBellowCandleClose)
-                                break;
-                            case 'movingAverage|200|above|close':
-                                createMovingAverageFilter(candlesAndIndicators, intervals, acronym, movingAverageAboveCandleClose)
-                                break;
-                            case 'movingAverage|200|bellow|close':
-                                createMovingAverageFilter(candlesAndIndicators, intervals, acronym, movingAverageBellowCandleClose)
-                                break;
-
-                            default: alert("Condição de MA ainda não calculada!")
-
-                        }
+                        const parts = condition.split('|');
+                        const compareType = parts[2]; // 'above' ou 'bellow'
+                        const callback = compareType === 'above' ? movingAverageAboveCandleClose : movingAverageBellowCandleClose;
+                        createMovingAverageFilter(candlesAndIndicators, intervals, acronym, callback);
                     }
 
                     /*for (const interval of splitIntervals) {

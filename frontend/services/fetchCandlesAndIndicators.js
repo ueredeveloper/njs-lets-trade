@@ -1,5 +1,5 @@
 
-const fetchCandlesAndIndicators = async (currencies, intervals) => {
+const fetchCandlesAndIndicators = async (currencies, intervals, maPeriod = 200) => {
 
 
   async function _fetch(symbol, intervals) {
@@ -33,8 +33,7 @@ const fetchCandlesAndIndicators = async (currencies, intervals) => {
         });
 
         // Fetch moving average
-        let period = 200;
-        let movingAverage = await fetch(`http://localhost:3000/services/sma?period=${period}`, {
+        let movingAverage = await fetch(`http://localhost:3000/services/sma?period=${maPeriod}`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json'

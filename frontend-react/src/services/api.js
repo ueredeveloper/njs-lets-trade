@@ -313,7 +313,7 @@ export async function fetchIndicatorSearch(query) {
  * @param {Array<{symbol:string}>} currencies
  * @param {string[]} intervals
  */
-export async function fetchCandlesAndIndicators(currencies, intervals) {
+export async function fetchCandlesAndIndicators(currencies, intervals, maPeriod = 200) {
   async function fetchOne(symbol, interval) {
     const candlesRaw = await fetch(
       `/services/candles/?symbol=${symbol}&limit=266&interval=${interval}`,
@@ -330,7 +330,7 @@ export async function fetchCandlesAndIndicators(currencies, intervals) {
           body: JSON.stringify(candles.slice(-166)),
         }).then((r) => r.json()),
 
-        fetch('/services/sma?period=200', {
+        fetch(`/services/sma?period=${maPeriod}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(candles),

@@ -21,7 +21,7 @@ router.post("/sma", async (req, res) => {
   let values = candles.map(c => parseFloat(c.close));
 
   // Calcula a SMA com base nos valores e no período especificado
-  let results = SMA.calculate({ period: period, values: values });
+  let results = SMA.calculate({ period: parseInt(period), values: values });
 
   // Retorna os resultados da SMA
   res.send(results);
