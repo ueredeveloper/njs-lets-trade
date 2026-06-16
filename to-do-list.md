@@ -53,3 +53,5 @@
     -   []  Salvar em banco as moedas favoritas do usuário
     -   []  Salvar em banco os indicadores mais utilizados pelo usuário. No meu caso rsi entre 10 e 20 e rsi entre 20 e 30, nos intervalos de 30min, 4h e 8h.
 
+## 16/06/2026
+- [] O popup com a área do polígono não está acima do polígono. O ponto superior mais ao norte.
