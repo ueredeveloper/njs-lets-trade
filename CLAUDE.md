@@ -138,3 +138,58 @@ Each symbol gets a unique ANSI color. Timestamp format:
 - `HH:MM:SS` for minute-based intervals (1m, 5m…)
 
 See `backend/bot/README.md` for full strategy documentation.
+
+---
+
+## Multi-Interval RSI Bot (`backend/bot/rsi-ma50/trading-rsi-multi.js`)
+
+Standalone process with multiple configurable strategies. Start with:
+
+```bash
+node backend/bot/rsi-ma50/trading-rsi-multi.js
+```
+
+### Adding a new symbol
+
+The bot reads from the `rsi_multi_bot_state` table in Supabase. To add a symbol, insert a row:
+
+```sql
+INSERT INTO rsi_multi_bot_state (symbol, exchange, strategy_id, initial_capital, capital)
+VALUES ('OPENUSDT', 'binance', 'rsi5m30_15m70', 100, 100)
+ON CONFLICT (symbol, strategy_id) DO NOTHING;
+```
+
+Decisions to make before inserting:
+
+| Field | Options | Description |
+|---|---|---|
+| `exchange` | `'binance'` or `'gate'` | Which exchange to trade on |
+| `strategy_id` | `rsi5m30_15m70`, `rsi1h35_15m85`, `rsi1m30_1m70`, `rsi1m30_1m80` | Entry/exit RSI strategy |
+| `capital` | any number | USDT amount to allocate |
+
+### Running a backtest before going live
+
+```bash
+node backend/bot/rsi-ma50/trading-rsi-multi.js --backtest OPENUSDT rsi5m30_15m70 binance 100
+```
+
+Omit `strategyId` to test all strategies at once. Optional flags (after capital):
+
+```
+[ma50=true|false]  [3candles=true|false]  [4candles=true|false]
+```
+
+### Available strategies
+
+| strategy_id | Entry | Exit | MA50 filter |
+|---|---|---|---|
+| `rsi5m30_15m70` | RSI(5m) < 30 | RSI(15m) > 70 | 1h, enabled |
+| `rsi1h35_15m85` | RSI(1h) < 35 | RSI(15m) > 85 | 1h, enabled |
+| `rsi1m30_1m70`  | RSI(1m) < 30 | RSI(1m) > 70  | disabled |
+| `rsi1m30_1m80`  | RSI(1m) < 30 | RSI(1m) > 80  | disabled |
+
+### Filtering to a single symbol at runtime
+
+```bash
+node backend/bot/rsi-ma50/trading-rsi-multi.js --symbol OPENUSDT
+```

@@ -15,6 +15,12 @@ async function get24hVolumeFilters() {
 
   const gate = gateCurrencies.map(t => ({ symbol: t.symbol, volume: t.volume }));
 
+  const binanceVolumeMap = new Map(binance.map(t => [t.symbol, t.volume]));
+  const activeWithVolume = {
+    name: listedOnBinance.name,
+    list: listedOnBinance.list.filter(symbol => (binanceVolumeMap.get(symbol) ?? 0) > 0),
+  };
+
   // Inclui símbolo se ALGUMA das corretoras atingir o volume mínimo (e máximo opcional)
   function makeFilter(name, minVol, maxVol = Infinity) {
     const symbols = new Set();
@@ -28,7 +34,7 @@ async function get24hVolumeFilters() {
   }
 
   return [
-    listedOnBinance,
+    activeWithVolume,
     makeFilter("Mercado|3M⇾",     3_000_000),
     makeFilter("Mercado|5M⇾",     5_000_000),
     makeFilter("Mercado|5M⇿30M",  5_000_000, 30_000_000),
