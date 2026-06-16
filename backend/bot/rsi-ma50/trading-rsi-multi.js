@@ -20,7 +20,7 @@ const STRATEGIES = {
     exit:     { interval: '15m', rsiPeriod: 14, rsiSell: 70 },
     maFilter: {
       interval: '1h', period: 50, enabled: true,
-      threeCandles: { enabled: true, abovePct: 5 }, // regra dos 3 candles quando >5% acima da MA
+      threeCandles: { enabled: true, abovePct: 5, fourCandlesEnabled: true }, // regra dos 3/4 candles quando >5% acima da MA
     },
     entryDiscount:    0.001,
     pendingTimeoutMs: 30 * 60_000,
@@ -35,7 +35,7 @@ const STRATEGIES = {
     exit:     { interval: '15m', rsiPeriod: 14, rsiSell: 85 },
     maFilter: {
       interval: '1h', period: 50, enabled: true,
-      threeCandles: { enabled: true, abovePct: 5 },
+      threeCandles: { enabled: true, abovePct: 5, fourCandlesEnabled: true },
     },
     entryDiscount:    0.001,
     pendingTimeoutMs: 2 * 60 * 60_000,
@@ -50,12 +50,29 @@ const STRATEGIES = {
     exit:     { interval: '1m', rsiPeriod: 14, rsiSell: 70 },
     maFilter: {
       interval: '1h', period: 50, enabled: false,
-      threeCandles: { enabled: true, abovePct: 5 },
+      threeCandles: { enabled: true, abovePct: 5, fourCandlesEnabled: true },
     },
+    immediateEntry:   true,
     entryDiscount:    0.001,
     pendingTimeoutMs: 30 * 60_000,
     pendingCancelPct: 0.002,
     fastRsiThreshold: 60,
+    pollMs:     60_000,
+    fastPollMs: 30_000,
+  },
+  'rsi1m30_1m80': {
+    label: 'RSI(1m)<30 → RSI(1m)>80',
+    entry:    { interval: '1m', rsiPeriod: 14, rsiBuy: 30 },
+    exit:     { interval: '1m', rsiPeriod: 14, rsiSell: 80 },
+    maFilter: {
+      interval: '1h', period: 50, enabled: false,
+      threeCandles: { enabled: true, abovePct: 5, fourCandlesEnabled: true },
+    },
+    immediateEntry:   true,  // compra no preço atual, sem esperar desconto
+    entryDiscount:    0.001,
+    pendingTimeoutMs: 30 * 60_000,
+    pendingCancelPct: 0.002,
+    fastRsiThreshold: 70,
     pollMs:     60_000,
     fastPollMs: 30_000,
   },
@@ -420,8 +437,20 @@ function checkMaFilter(close, ma50, maCandles, maFilter, entryTime) {
   const intervalMs = 3600000; // 1h em ms
   const completed  = maCandles.filter(c => c.openTime + intervalMs <= entryTime);
   const last3      = completed.slice(-3);
+  const last4      = completed.slice(-4);
 
-  if (last3.length < 3 || !last3.every(c => c.close > c.open)) {
+  // Regra dos 3 candles: últimos 3 fechados todos de alta
+  const threeOk = last3.length >= 3 && last3.every(c => c.close > c.open);
+
+  // Regra dos 4 candles: 3 altas + 1 baixa (o mais recente antes da entrada é o de queda)
+  const fourOk = tc?.fourCandlesEnabled !== false &&
+    last4.length >= 4 &&
+    last4[0].close > last4[0].open &&
+    last4[1].close > last4[1].open &&
+    last4[2].close > last4[2].open &&
+    last4[3].close < last4[3].open;
+
+  if (!threeOk && !fourOk) {
     return { allowed: false, reason: 'THREE_CANDLES_BLOCKED' };
   }
   return { allowed: true, reason: null };
@@ -462,7 +491,8 @@ function loadLocalCandles(symbol, interval) {
 
 // maEnabledOverride: true/false para sobrescrever strategy.maFilter.enabled via CLI; null = usa o padrão da estratégia
 // threeCandlesOverride: true/false para sobrescrever threeCandles.enabled via CLI; null = usa o padrão da estratégia
-async function backtest(symbol, strategyId, exchange = 'binance', capital = 100, maEnabledOverride = null, threeCandlesOverride = null) {
+// fourCandlesOverride: true/false para sobrescrever threeCandles.fourCandlesEnabled via CLI; null = usa o padrão
+async function backtest(symbol, strategyId, exchange = 'binance', capital = 100, maEnabledOverride = null, threeCandlesOverride = null, fourCandlesOverride = null) {
   const base = STRATEGIES[strategyId];
   if (!base) {
     console.error(`❌ Estratégia desconhecida: "${strategyId}". Disponíveis: ${Object.keys(STRATEGIES).join(', ')}`);
@@ -478,7 +508,11 @@ async function backtest(symbol, strategyId, exchange = 'binance', capital = 100,
           ...baseMA,
           enabled: maEnabledOverride !== null ? maEnabledOverride : baseMA.enabled,
           threeCandles: baseMA.threeCandles
-            ? { ...baseMA.threeCandles, enabled: threeCandlesOverride !== null ? threeCandlesOverride : baseMA.threeCandles.enabled }
+            ? {
+                ...baseMA.threeCandles,
+                enabled: threeCandlesOverride !== null ? threeCandlesOverride : baseMA.threeCandles.enabled,
+                fourCandlesEnabled: fourCandlesOverride !== null ? fourCandlesOverride : baseMA.threeCandles.fourCandlesEnabled,
+              }
             : baseMA.threeCandles,
         }
       : null,
@@ -490,8 +524,12 @@ async function backtest(symbol, strategyId, exchange = 'binance', capital = 100,
 
   console.log(`\n${'─'.repeat(68)}`);
   console.log(`📊 Backtest: ${symbol} [${adapter.name}]  —  ${strategy.label}`);
-  const tcActive = maActive && maFilter?.threeCandles?.enabled;
-  console.log(`   MA${maFilter?.period}(${maFilter?.interval}): ${maActive ? '✅ ativo' : '❌ desativado'}${maActive ? `  |  Regra 3 candles: ${tcActive ? '✅ ativo' : '❌ desativado'}` : ''}`);
+  const tcActive  = maActive && maFilter?.threeCandles?.enabled;
+  const fc4Active = tcActive && maFilter?.threeCandles?.fourCandlesEnabled !== false;
+  const candleLabel = tcActive
+    ? (fc4Active ? 'Regra 3+4 candles: ✅ ativo' : 'Regra 3 candles: ✅ ativo (4 candles: ❌)')
+    : 'Regra candles: ❌ desativado';
+  console.log(`   MA${maFilter?.period}(${maFilter?.interval}): ${maActive ? '✅ ativo' : '❌ desativado'}${maActive ? `  |  ${candleLabel}` : ''}`);
 
   // Tenta carregar de arquivo local antes de chamar a API
   const intervals = [...new Set([
@@ -558,11 +596,22 @@ async function backtest(symbol, strategyId, exchange = 'binance', capital = 100,
           signals.push({ entryTime: openTime, entryRsi, entryPrice: close, result: maCheck.reason });
           continue;
         }
-        triggerPrice  = close;
-        limitPrice    = parseFloat((close * (1 - strategy.entryDiscount)).toFixed(8));
-        pendingSince  = openTime;
-        pendingSignal = { entryTime: openTime, entryRsi, entryPrice: close };
-        phase = 'PENDING';
+        if (strategy.immediateEntry) {
+          // Compra imediata no preço atual, sem fase PENDING
+          openSignalIdx = signals.length;
+          signals.push({ entryTime: openTime, entryRsi, entryPrice: close, buyTime: openTime, buyPrice: close, result: 'BOUGHT' });
+          buyPrice = close;
+          buyQty   = capital / close;
+          buyUsdt  = capital;
+          phase = 'BOUGHT';
+          trades.push({ type: 'BUY', time: openTime, price: close, entryRsi });
+        } else {
+          triggerPrice  = close;
+          limitPrice    = parseFloat((close * (1 - strategy.entryDiscount)).toFixed(8));
+          pendingSince  = openTime;
+          pendingSignal = { entryTime: openTime, entryRsi, entryPrice: close };
+          phase = 'PENDING';
+        }
       }
 
     } else if (phase === 'PENDING') {
@@ -685,7 +734,7 @@ async function backtest(symbol, strategyId, exchange = 'binance', capital = 100,
                   : s.result === 'CANCELLED_RECOVERY'    ? 'cancelado (preço subiu)'
                   : s.result === 'CANCELLED_TIMEOUT'     ? 'cancelado (timeout)'
                   : s.result === 'MA_BLOCKED'            ? 'bloqueado (abaixo MA50)'
-                  : s.result === 'THREE_CANDLES_BLOCKED' ? 'bloqueado (3 candles 1h não bullish)'
+                  : s.result === 'THREE_CANDLES_BLOCKED' ? 'bloqueado (padrão candles 1h não atendido)'
                   : s.result === 'MA_NO_DATA'            ? 'bloqueado (sem dados MA)'
                   : s.result === 'PENDING_OPEN'          ? 'pendente'
                   : s.result;
@@ -756,11 +805,30 @@ async function tick(rowId, adapter, strategy, log, prevExitRsi = null) {
         const abovePct = ma50 ? ((close / ma50 - 1) * 100).toFixed(1) : '?';
         const reasons  = {
           MA_BLOCKED:           `preço abaixo MA${maFilter?.period}(${maFilter?.interval})=$${fmtP(ma50)}`,
-          THREE_CANDLES_BLOCKED:`preço ${abovePct}% acima MA50 mas 3 candles 1h anteriores não são todos de alta`,
+          THREE_CANDLES_BLOCKED:`preço ${abovePct}% acima MA50 mas padrão de candles 1h não atendido (3 alta ou 1 queda+3 alta)`,
           MA_NO_DATA:           'sem dados de MA',
         };
         log(`${Y}⚠️  RSI(${entry.interval})=${entryRsi.toFixed(1)} < ${entry.rsiBuy} — bloqueado: ${reasons[maCheck.reason] ?? maCheck.reason}${X}`);
         return { entryRsi, exitRsi, phase: 'WATCHING' };
+      }
+      if (strategy.immediateEntry) {
+        log(`${G}🎯 RSI(${entry.interval})=${entryRsi.toFixed(1)} < ${entry.rsiBuy} → comprando agora $${fmtP(close)} [IMMEDIATE]${X}`);
+        let result;
+        try { result = await adapter.marketBuy(parseFloat(capital)); }
+        catch (err) { log(`❌ Erro na compra: ${err.message}`); return { entryRsi, exitRsi, phase: 'WATCHING' }; }
+        const { filledQty, quoteQty, avgPrice } = result;
+        await saveState(rowId, {
+          phase: 'BOUGHT',
+          buy_price: avgPrice, buy_qty: filledQty, buy_usdt: quoteQty,
+          buy_time: new Date().toISOString(), rsi_entry: entryRsi,
+          trigger_price: null, limit_price: null, trigger_rsi: null, pending_since: null,
+        });
+        log('─'.repeat(60));
+        log(`${G}🟢 COMPRA IMEDIATA${X}  preço=$${fmtP(avgPrice)}  qty=${filledQty}  USDT=$${quoteQty.toFixed(2)}`);
+        log(`   RSI-entrada(${entry.interval})=${entryRsi.toFixed(1)}`);
+        log('─'.repeat(60));
+        sendWhatsApp(`🟢 ${symbol} COMPRA [${adapter.name}]\nPreço: $${fmtP(avgPrice)}\nQty: ${filledQty}\nUSDT: $${quoteQty.toFixed(2)}\nRSI(${entry.interval}): ${entryRsi.toFixed(1)}`);
+        return { entryRsi, exitRsi, phase: 'BOUGHT' };
       }
       const limitPrice = parseFloat((close * (1 - strategy.entryDiscount)).toFixed(8));
       log(`${G}🎯 RSI(${entry.interval})=${entryRsi.toFixed(1)} < ${entry.rsiBuy} + acima MA${maFilter?.period ?? ''}(${maFilter?.interval ?? ''}) → alvo $${fmtP(limitPrice)} [PENDING]${X}`);
@@ -943,11 +1011,13 @@ async function main() {
     const capital    = parseFloat(args[4] ?? '100');
     // args[5]: 'true' | 'false' — sobrescreve maFilter.enabled da estratégia; omitir = usa o padrão
     // args[6]: 'true' | 'false' — sobrescreve threeCandles.enabled; omitir = usa o padrão
+    // args[7]: 'true' | 'false' — sobrescreve threeCandles.fourCandlesEnabled; omitir = usa o padrão
     const maOverride           = args[5] === 'true' ? true : args[5] === 'false' ? false : null;
     const threeCandlesOverride = args[6] === 'true' ? true : args[6] === 'false' ? false : null;
+    const fourCandlesOverride  = args[7] === 'true' ? true : args[7] === 'false' ? false : null;
 
     if (!symbol) {
-      console.log('Uso: node trading-rsi-multi.js --backtest <SYMBOL> [strategyId] [exchange] [capital] [ma50=true|false] [3candles=true|false]');
+      console.log('Uso: node trading-rsi-multi.js --backtest <SYMBOL> [strategyId] [exchange] [capital] [ma50=true|false] [3candles=true|false] [4candles=true|false]');
       console.log('\nEstratégias disponíveis:');
       for (const [id, s] of Object.entries(STRATEGIES))
         console.log(`  ${id.padEnd(22)} ${s.label}  (MA padrão: ${s.maFilter?.enabled ?? false})`);
@@ -960,12 +1030,18 @@ async function main() {
       ? [strategyId]
       : Object.keys(STRATEGIES);
 
-    for (const sid of toTest) await backtest(symbol, sid, exchange, capital, maOverride, threeCandlesOverride);
+    for (const sid of toTest) await backtest(symbol, sid, exchange, capital, maOverride, threeCandlesOverride, fourCandlesOverride);
     console.log();
     process.exit(0);
   }
 
   // ── Modo bot ───────────────────────────────────────────────────────────────
+  // Filtro opcional: node trading-rsi-multi.js --symbol AVNTUSDT
+  const symbolFilter = (() => {
+    const idx = args.indexOf('--symbol');
+    return idx !== -1 ? args[idx + 1]?.toUpperCase() : null;
+  })();
+
   if (!SB_URL || !SB_KEY) {
     console.error('❌ SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY ausentes no .env');
     process.exit(1);
@@ -975,10 +1051,18 @@ async function main() {
   setInterval(syncBinanceClock, 60 * 60_000);
   setInterval(syncGateClock,    60 * 60_000);
 
-  const rows = await loadAllRows();
+  let rows = await loadAllRows();
   if (!rows?.length) {
     console.error('❌ Nenhum símbolo em rsi_multi_bot_state. Execute rsi-multi-bot.sql no Supabase.');
     process.exit(1);
+  }
+  if (symbolFilter) {
+    rows = rows.filter(r => r.symbol.toUpperCase() === symbolFilter);
+    if (!rows.length) {
+      console.error(`❌ Símbolo "${symbolFilter}" não encontrado em rsi_multi_bot_state.`);
+      process.exit(1);
+    }
+    console.log(`   🔎 Filtrando apenas: ${symbolFilter}`);
   }
 
   console.log('\n🤖 Trading RSI Multi-Intervalo Bot');
