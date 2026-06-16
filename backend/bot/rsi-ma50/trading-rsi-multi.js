@@ -63,6 +63,23 @@ const STRATEGIES = {
     pollMs:     60_000,
     fastPollMs: 30_000,
   },
+  'rsi1m30_1m70_ma': {
+    label: 'RSI(1m)<30 → RSI(1m)>70 + MA50(1h) + 3/4 candles',
+    entry:    { interval: '1m', rsiPeriod: 14, rsiBuy: 30 },
+    exit:     { interval: '1m', rsiPeriod: 14, rsiSell: 70 },
+    maFilter: {
+      interval: '1h', period: 50, enabled: true,
+      threeCandles: { enabled: true, abovePct: 5, fourCandlesEnabled: true },
+    },
+    stopLoss:         { interval: '1h', period: 50 },
+    immediateEntry:   true,
+    entryDiscount:    0.001,
+    pendingTimeoutMs: 30 * 60_000,
+    pendingCancelPct: 0.002,
+    fastRsiThreshold: 60,
+    pollMs:     60_000,
+    fastPollMs: 30_000,
+  },
   'rsi1m30_1m80': {
     label: 'RSI(1m)<30 → RSI(1m)>80',
     entry:    { interval: '1m', rsiPeriod: 14, rsiBuy: 30 },
@@ -1145,8 +1162,12 @@ async function main() {
 
     if (!volOk) {
       console.log(`   ${Y}⚠️  Volume < $1M — baixa liquidez${X}`);
-      const resp = await askUser(`   Incluir ${row.symbol} mesmo assim? [s/N]: `);
-      if (resp !== 's' && resp !== 'sim') { console.log(`   ⏭️  ${row.symbol} ignorado.\n`); continue; }
+      if (!symbolFilter) {
+        const resp = await askUser(`   Incluir ${row.symbol} mesmo assim? [s/N]: `);
+        if (resp !== 's' && resp !== 'sim') { console.log(`   ⏭️  ${row.symbol} ignorado.\n`); continue; }
+      } else {
+        console.log(`   ℹ️  Incluindo mesmo assim (símbolo solicitado via --symbol)`);
+      }
     }
 
     toStart.push({ row, color });
