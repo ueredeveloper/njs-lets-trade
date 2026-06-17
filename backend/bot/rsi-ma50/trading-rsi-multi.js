@@ -64,14 +64,15 @@ const STRATEGIES = {
     fastPollMs: 30_000,
   },
   'rsi1m30_1m70_ma': {
-    label: 'RSI(1m)<30 → RSI(1m)>70 + MA50(1h) + 3/4 candles',
+    label: 'RSI(1m)<30 → RSI(1m)>70 + MA50(1h) + MA50(15m) + 3/4 candles',
     entry:    { interval: '1m', rsiPeriod: 14, rsiBuy: 30 },
     exit:     { interval: '1m', rsiPeriod: 14, rsiSell: 70 },
     maFilter: {
       interval: '1h', period: 50, enabled: true,
       threeCandles: { enabled: true, abovePct: 5, fourCandlesEnabled: true },
     },
-    stopLoss:         { interval: '1h', period: 50 },
+    maFilter2:        { interval: '15m', period: 50, enabled: true }, // entrada exige preço acima desta MA também
+    stopLoss:         { interval: '15m', period: 50 }, // stop loss abaixo da MA50(15m)
     immediateEntry:   true,
     entryDiscount:    0.001,
     pendingTimeoutMs: 30 * 60_000,
@@ -553,11 +554,12 @@ async function backtest(symbol, strategyId, exchange = 'binance', capital = 100,
   console.log(`   MA${maFilter?.period}(${maFilter?.interval}): ${maActive ? '✅ ativo' : '❌ desativado'}${maActive ? `  |  ${candleLabel}` : ''}`);
 
   // Tenta carregar de arquivo local antes de chamar a API
-  const { stopLoss } = strategy;
+  const { stopLoss, maFilter2 } = strategy;
   const intervals = [...new Set([
     strategy.entry.interval,
     strategy.exit.interval,
     ...(maActive ? [maFilter.interval] : []),
+    ...(maFilter2?.enabled ? [maFilter2.interval] : []),
     ...(stopLoss ? [stopLoss.interval] : []),
   ])];
 
@@ -575,8 +577,9 @@ async function backtest(symbol, strategyId, exchange = 'binance', capital = 100,
   const apiSpecs = [
     { interval: strategy.entry.interval, limit: LIMIT },
     { interval: strategy.exit.interval,  limit: LIMIT },
-    ...(maActive ? [{ interval: maFilter.interval, limit: Math.max(LIMIT, maFilter.period + 10) }] : []),
-    ...(stopLoss ? [{ interval: stopLoss.interval, limit: Math.max(LIMIT, stopLoss.period + 10) }] : []),
+    ...(maActive      ? [{ interval: maFilter.interval,  limit: Math.max(LIMIT, maFilter.period  + 10) }] : []),
+    ...(maFilter2?.enabled ? [{ interval: maFilter2.interval, limit: Math.max(LIMIT, maFilter2.period + 10) }] : []),
+    ...(stopLoss      ? [{ interval: stopLoss.interval,  limit: Math.max(LIMIT, stopLoss.period  + 10) }] : []),
   ].filter(s => !cMap[s.interval]);
 
   if (apiSpecs.length) {
@@ -598,10 +601,17 @@ async function backtest(symbol, strategyId, exchange = 'binance', capital = 100,
   const maCandles = maActive ? cMap[maFilter.interval] : null;
   const maSeries  = maActive ? computeMaSeries(maCandles, maFilter.period) : null;
 
-  // Série MA para stop loss (reutiliza maSeries se mesmos parâmetros)
-  const sameAsFilter = maActive && stopLoss && maFilter.interval === stopLoss.interval && maFilter.period === stopLoss.period;
-  const slMaCandles  = stopLoss ? (sameAsFilter ? maCandles : cMap[stopLoss.interval]) : null;
-  const slMaSeries   = stopLoss ? (sameAsFilter ? maSeries  : computeMaSeries(slMaCandles, stopLoss.period)) : null;
+  // Série MA secundária (maFilter2)
+  const maSeries2 = maFilter2?.enabled ? computeMaSeries(cMap[maFilter2.interval], maFilter2.period) : null;
+
+  // Série MA para stop loss (reutiliza maSeries ou maSeries2 se mesmos parâmetros)
+  const slSameAs1 = maActive && stopLoss && maFilter.interval === stopLoss.interval && maFilter.period === stopLoss.period;
+  const slSameAs2 = maFilter2?.enabled && stopLoss && maFilter2.interval === stopLoss.interval && maFilter2.period === stopLoss.period;
+  const slMaSeries = stopLoss
+    ? slSameAs1 ? maSeries
+    : slSameAs2 ? maSeries2
+    :             computeMaSeries(cMap[stopLoss.interval], stopLoss.period)
+    : null;
 
   let phase = 'WATCHING';
   let buyPrice = null, buyQty = null, buyUsdt = null;
@@ -615,7 +625,8 @@ async function backtest(symbol, strategyId, exchange = 'binance', capital = 100,
 
   for (const { openTime, close, rsi: entryRsi } of entrySeries) {
     const exitRsi = exitRsiAt(exitSeries, openTime);
-    const ma50    = maSeries ? maAt(maSeries, openTime) : null;
+    const ma50    = maSeries  ? maAt(maSeries,  openTime) : null;
+    const ma2     = maSeries2 ? maAt(maSeries2, openTime) : null;
 
     if (phase === 'WATCHING') {
       if (entryRsi < strategy.entry.rsiBuy) {
@@ -623,6 +634,11 @@ async function backtest(symbol, strategyId, exchange = 'binance', capital = 100,
         if (!maCheck.allowed) {
           maBlockedCount++;
           signals.push({ entryTime: openTime, entryRsi, entryPrice: close, result: maCheck.reason });
+          continue;
+        }
+        if (maFilter2?.enabled && ma2 !== null && close <= ma2) {
+          maBlockedCount++;
+          signals.push({ entryTime: openTime, entryRsi, entryPrice: close, result: 'MA2_BLOCKED' });
           continue;
         }
         if (strategy.immediateEntry) {
@@ -748,6 +764,7 @@ async function backtest(symbol, strategyId, exchange = 'binance', capital = 100,
       CANCELLED_RECOVERY:     '↩️ ',
       CANCELLED_TIMEOUT:      '⏱️ ',
       MA_BLOCKED:             '🚫',
+      MA2_BLOCKED:            '🚫',
       THREE_CANDLES_BLOCKED:  '📊',
       MA_NO_DATA:             '❓',
       PENDING_OPEN:           '⏳',
@@ -773,7 +790,8 @@ async function backtest(symbol, strategyId, exchange = 'binance', capital = 100,
                   : s.result === 'POSITION_OPEN'         ? 'posição aberta'
                   : s.result === 'CANCELLED_RECOVERY'    ? 'cancelado (preço subiu)'
                   : s.result === 'CANCELLED_TIMEOUT'     ? 'cancelado (timeout)'
-                  : s.result === 'MA_BLOCKED'            ? 'bloqueado (abaixo MA50)'
+                  : s.result === 'MA_BLOCKED'            ? `bloqueado (abaixo MA${maFilter?.period}(${maFilter?.interval}))`
+                  : s.result === 'MA2_BLOCKED'           ? `bloqueado (abaixo MA${maFilter2?.period}(${maFilter2?.interval}))`
                   : s.result === 'THREE_CANDLES_BLOCKED' ? 'bloqueado (padrão candles 1h não atendido)'
                   : s.result === 'MA_NO_DATA'            ? 'bloqueado (sem dados MA)'
                   : s.result === 'PENDING_OPEN'          ? 'pendente'
@@ -787,11 +805,12 @@ async function backtest(symbol, strategyId, exchange = 'binance', capital = 100,
 
 // ── Tick (loop ao vivo) ───────────────────────────────────────────────────────
 async function tick(rowId, adapter, strategy, log, prevExitRsi = null) {
-  const { entry, exit, maFilter, stopLoss } = strategy;
+  const { entry, exit, maFilter, maFilter2, stopLoss } = strategy;
   const specs = [
     { interval: entry.interval, limit: entry.rsiPeriod + 50 },
     { interval: exit.interval,  limit: exit.rsiPeriod  + 50 },
-    ...(maFilter?.enabled ? [{ interval: maFilter.interval, limit: maFilter.period + 10 }] : []),
+    ...(maFilter?.enabled  ? [{ interval: maFilter.interval,  limit: maFilter.period  + 10 }] : []),
+    ...(maFilter2?.enabled ? [{ interval: maFilter2.interval, limit: maFilter2.period + 10 }] : []),
     ...(stopLoss ? [{ interval: stopLoss.interval, limit: stopLoss.period + 10 }] : []),
   ];
   const cMap = await fetchCandleMap(adapter, specs);
@@ -811,7 +830,7 @@ async function tick(rowId, adapter, strategy, log, prevExitRsi = null) {
   const exitRsi  = exitRsiArr[exitRsiArr.length - 1];
   const close    = entryCloses[entryCloses.length - 1];
 
-  // MA50 — último valor disponível
+  // MA50(1h) — filtro de entrada principal
   let ma50 = null, maCandles = null;
   if (maFilter?.enabled) {
     maCandles   = cMap[maFilter.interval];
@@ -819,16 +838,23 @@ async function tick(rowId, adapter, strategy, log, prevExitRsi = null) {
     ma50        = maArr[maArr.length - 1] ?? null;
   }
 
-  // MA de stop loss (pode ser a mesma que maFilter ou independente)
+  // MA secundária (maFilter2) — segundo filtro de entrada
+  let ma2 = null;
+  if (maFilter2?.enabled) {
+    const ma2Arr = ti.SMA.calculate({ values: cMap[maFilter2.interval].map(c => c.close), period: maFilter2.period });
+    ma2          = ma2Arr[ma2Arr.length - 1] ?? null;
+  }
+
+  // MA de stop loss — reutiliza ma50 ou ma2 se mesmos parâmetros
   let stopLossMa = null;
   if (stopLoss) {
-    const sameAsFilter = maFilter?.enabled && maFilter.interval === stopLoss.interval && maFilter.period === stopLoss.period;
-    if (sameAsFilter) {
-      stopLossMa = ma50;
-    } else {
-      const slCandles = cMap[stopLoss.interval];
-      const slArr     = ti.SMA.calculate({ values: slCandles.map(c => c.close), period: stopLoss.period });
-      stopLossMa      = slArr[slArr.length - 1] ?? null;
+    const sameAs1 = maFilter?.enabled  && maFilter.interval  === stopLoss.interval && maFilter.period  === stopLoss.period;
+    const sameAs2 = maFilter2?.enabled && maFilter2.interval === stopLoss.interval && maFilter2.period === stopLoss.period;
+    if (sameAs1)      stopLossMa = ma50;
+    else if (sameAs2) stopLossMa = ma2;
+    else {
+      const slArr = ti.SMA.calculate({ values: cMap[stopLoss.interval].map(c => c.close), period: stopLoss.period });
+      stopLossMa  = slArr[slArr.length - 1] ?? null;
     }
   }
 
@@ -842,15 +868,19 @@ async function tick(rowId, adapter, strategy, log, prevExitRsi = null) {
 
   // ── WATCHING ────────────────────────────────────────────────────────────────
   if (phase === 'WATCHING') {
-    const bullish = ma50 !== null ? close > ma50 : true;
-    const maStr   = ma50 !== null
+    const bullish  = ma50 !== null ? close > ma50 : true;
+    const bullish2 = ma2  !== null ? close > ma2  : true;
+    const maStr    = ma50 !== null
       ? `  MA${maFilter.period}(${maFilter.interval})=$${fmtP(ma50)} ${bullish ? `${G}↑${X}` : `${R}↓${X}`}`
       : '';
-    const eColor  = entryRsi < entry.rsiBuy ? G : '';
+    const maStr2   = ma2 !== null
+      ? `  MA${maFilter2.period}(${maFilter2.interval})=$${fmtP(ma2)} ${bullish2 ? `${G}↑${X}` : `${R}↓${X}`}`
+      : '';
+    const eColor   = entryRsi < entry.rsiBuy ? G : '';
     log(
       `${eColor}RSI(${entry.interval})=${entryRsi.toFixed(1)}${eColor ? X : ''}` +
       `  ${exitColor}RSI(${exit.interval})=${exitRsi.toFixed(1)}${exitColor ? X : ''}` +
-      `${maStr}  $${fmtP(close)}  capital=$${parseFloat(capital).toFixed(2)}  [WATCHING]`,
+      `${maStr}${maStr2}  $${fmtP(close)}  capital=$${parseFloat(capital).toFixed(2)}  [WATCHING]`,
     );
 
     if (entryRsi < entry.rsiBuy) {
@@ -863,6 +893,10 @@ async function tick(rowId, adapter, strategy, log, prevExitRsi = null) {
           MA_NO_DATA:           'sem dados de MA',
         };
         log(`${Y}⚠️  RSI(${entry.interval})=${entryRsi.toFixed(1)} < ${entry.rsiBuy} — bloqueado: ${reasons[maCheck.reason] ?? maCheck.reason}${X}`);
+        return { entryRsi, exitRsi, phase: 'WATCHING' };
+      }
+      if (maFilter2?.enabled && ma2 !== null && close <= ma2) {
+        log(`${Y}⚠️  RSI(${entry.interval})=${entryRsi.toFixed(1)} < ${entry.rsiBuy} — bloqueado: preço $${fmtP(close)} ≤ MA${maFilter2.period}(${maFilter2.interval}) $${fmtP(ma2)}${X}`);
         return { entryRsi, exitRsi, phase: 'WATCHING' };
       }
       if (strategy.immediateEntry) {
