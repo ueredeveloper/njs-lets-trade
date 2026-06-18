@@ -308,6 +308,42 @@ export async function fetchIndicatorSearch(query) {
   return { name: nome, list };
 }
 
+// ── Multitrade Favorites ─────────────────────────────────────────────────────
+
+export async function fetchMultitradeFavorites() {
+  const res = await fetch('/services/multitrade-favorites');
+  if (!res.ok) throw new Error(`multitrade-favorites falhou: HTTP ${res.status}`);
+  return res.json();
+}
+
+export async function addMultitradeFavorite(data) {
+  const res = await fetch('/services/multitrade-favorites', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error(`addMultitradeFavorite falhou: HTTP ${res.status}`);
+  return res.json();
+}
+
+export async function updateMultitradeFavorite(id, data) {
+  const res = await fetch(`/services/multitrade-favorites/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error(`updateMultitradeFavorite falhou: HTTP ${res.status}`);
+  return res.json();
+}
+
+export async function removeMultitradeFavorite(id) {
+  const res = await fetch(`/services/multitrade-favorites/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error(`removeMultitradeFavorite falhou: HTTP ${res.status}`);
+  return res.json();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 /**
  * Busca candles + todos os indicadores para o painel de busca.
  * @param {Array<{symbol:string}>} currencies

@@ -31,9 +31,6 @@ Thumbs.db
 # Ignorar pasta de cobertura
 coverage/
 
-# Ignorar json de exemplo - binance
-frontend/model/indicators-and-currencies.json 
-
 # Ignorar a lista de solicitações
 to-do-list.md
 

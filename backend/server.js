@@ -24,7 +24,7 @@ const {
   fetchSMA, fetchRSI, fetchVWAP, fetch24HsVolume, fetchMarketCapFilter, fetchStablecoins, fetchIndicatorSearch,
   fetchRsiOversoldRecovery, fetchReloadCandles,
   fetchGateCurrencies, fetchGatePrefetch, fetchBinanceTrades, fetchGateTrades,
-  fetchActiveTrades, stgBotStatus } = require('./services');
+  fetchActiveTrades, stgBotStatus, multitradeService } = require('./services');
 const supabaseService = require('./services/supabaseService');
 
 const app = express();
@@ -52,6 +52,7 @@ app.use('/services', fetchBinanceTrades)
 app.use('/services', fetchGateTrades)
 app.use('/services', fetchActiveTrades)
 app.use('/services', stgBotStatus)
+app.use('/services', multitradeService)
 app.use('/services/sb', supabaseService)
 
 // Proxy para o frontend (só necessário no modo Parcel legado).
