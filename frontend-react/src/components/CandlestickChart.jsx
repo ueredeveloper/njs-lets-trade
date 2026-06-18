@@ -6,9 +6,27 @@ import { fetchCandlesticksAndCloud, fetchGateTrades, fetchBinanceTrades } from '
 import convertOpenTime from '../utils/convertOpenTime';
 
 const LIMIT = 76;
+const MAX_CANDLES = 1000;
+const CANDLE_FETCH_STEPS = [500, 750, 1000];
+const OVERLAY_MA_INTERVALS = ['1m', '5m', '15m', '30m', '1h', '2h', '4h', '8h', '12h', '1d'];
+const OVERLAY_MA_COLORS = ['#fb923c', '#c084fc'];
+const BAND_PCT_OPTIONS = [2, 3, 4, 5];
+const RSI_EXTRA_INDICATORS = [
+  { id: 'rsi80', label: 'R80', color: '#fb923c' },
+  { id: 'rsi50', label: 'R50', color: '#facc15' },
+];
+const DEFAULT_OVERLAY_SLOTS = [
+  { id: 'slot1', period: '50', interval: '1h', enabled: false },
+  { id: 'slot2', period: '50', interval: '4h', enabled: false },
+];
 const INTERVALS = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w'];
 const DEFAULT_INTERVAL = '5m';
 
+const CHART_LEFT_PAD = 68;
+const PANEL_W = 54;
+const PANEL_GAP = 2;
+const PANEL_HALF = (PANEL_W - PANEL_GAP) / 2;
+const PANEL_QTR  = (PANEL_W - PANEL_GAP * 3) / 4;
 const C_UP   = '#26a69a';
 const C_DOWN = '#ef5350';
 
@@ -18,6 +36,227 @@ const INDICATOR_GROUPS = [
   { id: 'ichimoku', label: 'Ichi',  color: '#60a5fa' },
   { id: 'rsi',      label: 'RSI',   color: '#a78bfa' },
 ];
+
+function alignPointsToCandles(candlesticks, points) {
+  if (!points?.length || !candlesticks?.length) return [];
+  return candlesticks.map(c => {
+    const t = Number(c.openTime);
+    let lo = 0, hi = points.length - 1, best = null;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (points[mid].openTime <= t) { best = points[mid].value; lo = mid + 1; }
+      else hi = mid - 1;
+    }
+    return best;
+  });
+}
+
+async function fetchOverlayMaPoints(symbol, interval, period, source, limit) {
+  const srcParam = source === 'gate' ? '&source=gate' : '';
+  const candles = await fetch(
+    `/services/candles/?symbol=${symbol}&limit=${limit}&interval=${interval}${srcParam}`,
+  ).then(r => r.json());
+  if (!Array.isArray(candles) || !candles.length) return [];
+  const sma = await fetch(`/services/sma?period=${period}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(candles),
+  }).then(r => r.json());
+  if (!Array.isArray(sma)) return [];
+  const offset = candles.length - sma.length;
+  return sma.map((val, i) => ({
+    openTime: Number(candles[offset + i].openTime),
+    value: val,
+  }));
+}
+
+function buildOverlaySeries(overlayConfigs, candlesticks, alignSeries) {
+  return (overlayConfigs ?? []).flatMap(cfg => {
+    if (!cfg.points?.length) return [];
+    const full = alignPointsToCandles(candlesticks, cfg.points);
+    const maData = alignSeries(full);
+    const bands = cfg.bands ?? {};
+    const series = [{
+      name: cfg.label,
+      type: 'line',
+      data: maData,
+      smooth: true,
+      showSymbol: false,
+      lineStyle: { color: cfg.color, width: 1.5, type: 'dashed' },
+      endLabel: {
+        show: true,
+        formatter: cfg.label,
+        color: cfg.color,
+        fontSize: 9,
+        padding: [1, 4],
+        backgroundColor: 'rgba(0,0,0,0.5)',
+        borderRadius: 2,
+      },
+    }];
+    if (bands.showAbove) {
+      series.push({
+        name: `${cfg.label} +${bands.abovePct}%`,
+        type: 'line',
+        data: maData.map(v => (v == null ? null : v * (1 + bands.abovePct / 100))),
+        smooth: true,
+        showSymbol: false,
+        lineStyle: { color: cfg.color, width: 1, type: 'dotted', opacity: 0.65 },
+      });
+    }
+    if (bands.showBelow) {
+      series.push({
+        name: `${cfg.label} -${bands.belowPct}%`,
+        type: 'line',
+        data: maData.map(v => (v == null ? null : v * (1 - bands.belowPct / 100))),
+        smooth: true,
+        showSymbol: false,
+        lineStyle: { color: cfg.color, width: 1, type: 'dotted', opacity: 0.45 },
+      });
+    }
+    return series;
+  });
+}
+
+const panelBtn = (active, color, darkText = false, size = 'full') => ({
+  fontSize: 8,
+  padding: '2px 0',
+  borderRadius: 3,
+  cursor: 'pointer',
+  fontFamily: 'monospace',
+  background: active ? color : 'transparent',
+  color: active ? (darkText ? '#000' : '#fff') : color,
+  border: `1px solid ${color}`,
+  opacity: active ? 1 : 0.55,
+  transition: 'all 0.15s',
+  whiteSpace: 'nowrap',
+  lineHeight: 1.3,
+  boxSizing: 'border-box',
+  textAlign: 'center',
+  width: size === 'full' ? PANEL_W : size === 'half' ? PANEL_HALF : PANEL_QTR,
+});
+
+function ChartLeftIndicatorPanel({
+  activeIndicators,
+  toggleIndicator,
+  overlaySlots,
+  updateOverlaySlot,
+  maBands,
+  setMaBands,
+  overlayMaLoading,
+}) {
+  const block = {
+    background: 'rgba(0,0,0,0.5)',
+    borderRadius: 5,
+    padding: '3px 4px',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: 3,
+    width: PANEL_W + 8,
+    boxSizing: 'border-box',
+  };
+
+  return (
+    <div style={{
+      position: 'absolute',
+      top: 0,
+      bottom: 0,
+      left: 0,
+      width: PANEL_W + 12,
+      zIndex: 10,
+      display: 'flex',
+      flexDirection: 'column',
+      justifyContent: 'center',
+      alignItems: 'center',
+      padding: '4px 2px',
+      pointerEvents: 'none',
+    }}>
+      <div style={{ pointerEvents: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, maxHeight: '100%', overflowY: 'auto' }}>
+        {/* Indicadores do chart */}
+        <div style={block}>
+          {INDICATOR_GROUPS.map(({ id, label, color }) => {
+            const active = activeIndicators.includes(id);
+            return (
+              <button key={id} type="button" onClick={() => toggleIndicator(id)} style={panelBtn(active, color, id === 'ma200')}>
+                {label}
+              </button>
+            );
+          })}
+          {RSI_EXTRA_INDICATORS.map(({ id, label, color }) => {
+            const active = activeIndicators.includes(id);
+            return (
+              <button key={id} type="button" onClick={() => toggleIndicator(id)} style={panelBtn(active, color, true)}>
+                {label}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* MA overlay 1 e 2 */}
+        {overlaySlots.map((slot, idx) => (
+          <div key={slot.id} style={block}>
+            <span style={{ fontSize: 8, color: OVERLAY_MA_COLORS[idx], fontFamily: 'monospace', textAlign: 'center' }}>
+              MA{idx + 1}
+            </span>
+            <div style={{ display: 'flex', gap: PANEL_GAP, justifyContent: 'center', width: PANEL_W }}>
+              {['50', '200'].map(p => (
+                <button key={p} type="button" onClick={() => updateOverlaySlot(slot.id, { period: p })} style={{
+                  ...panelBtn(slot.period === p, OVERLAY_MA_COLORS[idx], true, 'half'),
+                }}>{p}</button>
+              ))}
+            </div>
+            <select
+              value={slot.interval}
+              onChange={e => updateOverlaySlot(slot.id, { interval: e.target.value })}
+              style={{
+                width: PANEL_W, fontSize: 8, padding: '2px 0', borderRadius: 3, fontFamily: 'monospace',
+                boxSizing: 'border-box', textAlign: 'center',
+                background: '#111', color: OVERLAY_MA_COLORS[idx], border: `1px solid ${OVERLAY_MA_COLORS[idx]}66`,
+              }}
+            >
+              {OVERLAY_MA_INTERVALS.map(iv => <option key={iv} value={iv}>{iv}</option>)}
+            </select>
+            <button type="button" onClick={() => updateOverlaySlot(slot.id, { enabled: !slot.enabled })} style={{
+              ...panelBtn(slot.enabled, OVERLAY_MA_COLORS[idx], true, 'full'),
+            }}>
+              {slot.enabled ? 'ON' : 'OFF'}
+            </button>
+          </div>
+        ))}
+
+        {/* Bandas % */}
+        <div style={block}>
+          <span style={{ fontSize: 8, color: '#94a3b8', fontFamily: 'monospace', textAlign: 'center' }}>Bandas</span>
+          <div style={{ display: 'flex', gap: PANEL_GAP, justifyContent: 'center', width: PANEL_W, flexWrap: 'wrap' }}>
+            {BAND_PCT_OPTIONS.map(p => (
+              <button key={p} type="button" onClick={() => setMaBands(b => ({ ...b, pct: p }))} style={{
+                ...panelBtn(maBands.pct === p, '#64748b', maBands.pct === p, 'qtr'),
+                color: maBands.pct === p ? '#fff' : '#94a3b8',
+                border: `1px solid ${maBands.pct === p ? '#94a3b8' : '#475569'}`,
+                background: maBands.pct === p ? '#64748b' : 'transparent',
+              }}>{p}</button>
+            ))}
+          </div>
+          <button type="button" onClick={() => setMaBands(b => ({ ...b, showAbove: !b.showAbove }))} style={{
+            ...panelBtn(maBands.showAbove, '#22c55e', true, 'full'),
+          }}>
+            ↑{maBands.pct}%
+          </button>
+          <button type="button" onClick={() => setMaBands(b => ({ ...b, showBelow: !b.showBelow }))} style={{
+            ...panelBtn(maBands.showBelow, '#f87171', true, 'full'),
+          }}>
+            ↓{maBands.pct}%
+          </button>
+          {overlayMaLoading && (
+            <div style={{ display: 'flex', justifyContent: 'center' }}>
+              <div className="animate-spin" style={{ width: 8, height: 8, borderRadius: '50%', border: '1.5px solid #94a3b8', borderTopColor: 'transparent' }} />
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function getThemeColors() {
   const style = getComputedStyle(document.documentElement);
@@ -30,7 +269,7 @@ function getThemeColors() {
 }
 
 
-function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAverage, ma50, rsi }, colors, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = [], crossMaPoints = null, crossMaLabel = '') {
+function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAverage, ma50, rsi }, colors, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = [], overlayConfigs = []) {
   const showMa50     = activeIndicators.includes('ma50');
   const showMa200    = activeIndicators.includes('ma200');
   const showIchimoku = activeIndicators.includes('ichimoku');
@@ -174,21 +413,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
     ];
   };
 
-  const alignCrossMA = () => {
-    if (!crossMaPoints?.length) return [];
-    const full = candlesticks.map(c => {
-      const t = Number(c.openTime);
-      let lo = 0, hi = crossMaPoints.length - 1, best = null;
-      while (lo <= hi) {
-        const mid = (lo + hi) >> 1;
-        if (crossMaPoints[mid].openTime <= t) { best = crossMaPoints[mid].value; lo = mid + 1; }
-        else hi = mid - 1;
-      }
-      return best;
-    });
-    return alignSeries(full);
-  };
-  const crossMaAligned = alignCrossMA();
+  const overlayLineSeries = buildOverlaySeries(overlayConfigs, candlesticks, alignSeries);
 
   const _fmtV = v => v == null ? '—' : (v < 0.01 ? Number(v).toFixed(6) : v < 1 ? Number(v).toFixed(4) : Number(v).toFixed(2));
 
@@ -269,30 +494,14 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
         smooth: true, showSymbol: false, lineStyle: { color: C_DOWN, width: 1, opacity: 0.7 },
         areaStyle: { color: 'rgba(239,83,80,0.05)' } },
     ] : []),
-    ...(crossMaAligned.some(v => v !== null) ? [{
-      name: crossMaLabel,
-      type: 'line',
-      xAxisIndex: idx, yAxisIndex: idx,
-      data: crossMaAligned,
-      smooth: true, showSymbol: false,
-      lineStyle: { color: '#fb923c', width: 1.5, type: 'dashed' },
-      endLabel: {
-        show: true,
-        formatter: crossMaLabel,
-        color: '#fb923c',
-        fontSize: 9,
-        padding: [1, 4],
-        backgroundColor: 'rgba(0,0,0,0.5)',
-        borderRadius: 2,
-      },
-    }] : []),
+    ...overlayLineSeries.map(s => ({ ...s, xAxisIndex: idx, yAxisIndex: idx })),
   ];
 
   if (!showRsi) {
     return {
       backgroundColor: colors.bg,
       title: {
-        text: symbol, subtext: interval, left: 12, top: 8,
+        text: symbol, subtext: interval, left: CHART_LEFT_PAD, top: 8,
         textStyle: { color: colors.text, fontSize: 15, fontWeight: 'bold' },
         subtextStyle: { color: colors.axis, fontSize: 11 },
       },
@@ -310,7 +519,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
         axisLine: { lineStyle: { color: colors.panel } },
         axisLabel: { color: colors.text, fontSize: 10 },
         splitLine: { lineStyle: { color: colors.panel, type: 'dashed', opacity: 0.3 } } },
-      grid: { top: 40, bottom: 12, left: 12, right: 64 },
+      grid: { top: 40, bottom: 12, left: CHART_LEFT_PAD, right: 64 },
       dataZoom: [{ type: 'inside' }],
       series: candleSeries(0),
     };
@@ -321,7 +530,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
   return {
     backgroundColor: colors.bg,
     title: {
-      text: symbol, subtext: interval, left: 12, top: 8,
+      text: symbol, subtext: interval, left: CHART_LEFT_PAD, top: 8,
       textStyle: { color: colors.text, fontSize: 15, fontWeight: 'bold' },
       subtextStyle: { color: colors.axis, fontSize: 11 },
     },
@@ -332,8 +541,8 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
       axisPointer: { animation: false, type: 'cross', lineStyle: { color: colors.axis, width: 1, opacity: 0.8 } },
     },
     grid: [
-      { top: 40, bottom: '24%', left: 12, right: 64 },
-      { top: '79%', bottom: 20, left: 12, right: 64 },
+      { top: 40, bottom: '24%', left: CHART_LEFT_PAD, right: 64 },
+      { top: '79%', bottom: 20, left: CHART_LEFT_PAD, right: 64 },
     ],
     xAxis: [
       { ...axisBase(0), axisLabel: { show: false } },
@@ -502,7 +711,7 @@ function buildMatrixOption({ symbol, interval, candlesticks, rsi }, activeIndica
   return {
     backgroundColor: BG,
     title: {
-      text: symbol, subtext: interval, left: 12, top: 8,
+      text: symbol, subtext: interval, left: CHART_LEFT_PAD, top: 8,
       textStyle:    { color: G,         fontSize: 15, fontWeight: 'bold', fontFamily: 'monospace' },
       subtextStyle: { color: G_LABEL,   fontSize: 11 },
     },
@@ -514,8 +723,8 @@ function buildMatrixOption({ symbol, interval, candlesticks, rsi }, activeIndica
       axisPointer: { animation: false, type: 'cross', lineStyle: { color: 'rgba(34,197,94,0.3)', width: 1 } },
     },
     grid: showRsi
-      ? [{ top: 40, bottom: '26%', left: 12, right: 64 }, { top: '78%', bottom: 20, left: 12, right: 64 }]
-      : [{ top: 40, bottom: 20,    left: 12, right: 64 }],
+      ? [{ top: 40, bottom: '26%', left: CHART_LEFT_PAD, right: 64 }, { top: '78%', bottom: 20, left: CHART_LEFT_PAD, right: 64 }]
+      : [{ top: 40, bottom: 20,    left: CHART_LEFT_PAD, right: 64 }],
     xAxis: showRsi
       ? [{ ...axisBase(0, false) }, { ...axisBase(1, true) }]
       : { ...axisBase(0, true) },
@@ -737,11 +946,17 @@ export default function CandlestickChart() {
   const [themeTick, setThemeTick] = useState(0);
   const [activeIndicators, setActiveIndicators] = useState(['ma50', 'rsi']);
   const [activeTab, setActiveTab] = useState('chart'); // 'chart' | 'matrix'
-  const [crossMaPeriod, setCrossMaPeriod] = useState('50');
-  const [crossMaInterval, setCrossMaInterval] = useState('1h');
-  const [crossMaEnabled, setCrossMaEnabled] = useState(false);
-  const [crossMaPoints, setCrossMaPoints] = useState(null);
-  const [crossMaLoading, setCrossMaLoading] = useState(false);
+  const [overlaySlots, setOverlaySlots] = useState(DEFAULT_OVERLAY_SLOTS);
+  const [overlayMaCache, setOverlayMaCache] = useState({});
+  const [overlayMaLoading, setOverlayMaLoading] = useState(false);
+  const [maBands, setMaBands] = useState({
+    showAbove: false,
+    showBelow: false,
+    pct: 5,
+  });
+  const [candleFetchLimit, setCandleFetchLimit] = useState(500);
+  const [displayCandleCount, setDisplayCandleCount] = useState(LIMIT);
+  const [loadingMoreCandles, setLoadingMoreCandles] = useState(false);
 
 
   function toggleIndicator(id) {
@@ -763,58 +978,115 @@ export default function CandlestickChart() {
     if (selectedChart?.interval) {
       setCurrentInterval(selectedChart.interval);
     }
+    setCandleFetchLimit(500);
+    setDisplayCandleCount(LIMIT);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedChart?.symbol]);
 
   useEffect(() => {
-    const chartInterval = selectedChart?.interval;
-    if (!crossMaEnabled || !selectedChart?.symbol || crossMaInterval === chartInterval) {
-      setCrossMaPoints(null);
-      return;
+    if (!selectedChart?.symbol) {
+      setOverlayMaCache({});
+      return undefined;
     }
+    const chartIv = selectedChart.interval ?? currentInterval;
+    const toFetch = overlaySlots.filter(s => s.enabled);
+    if (!toFetch.length) {
+      setOverlayMaCache({});
+      setOverlayMaLoading(false);
+      return undefined;
+    }
+
     let cancelled = false;
-    setCrossMaLoading(true);
+    setOverlayMaLoading(true);
     (async () => {
-      try {
-        const srcParam = selectedChart.source === 'gate' ? '&source=gate' : '';
-        const htCandles = await fetch(
-          `/services/candles/?symbol=${selectedChart.symbol}&limit=500&interval=${crossMaInterval}${srcParam}`
-        ).then(r => r.json());
-        if (!Array.isArray(htCandles) || cancelled) return;
-        const sma = await fetch(`/services/sma?period=${crossMaPeriod}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(htCandles),
-        }).then(r => r.json());
-        if (cancelled) return;
-        const offset = htCandles.length - sma.length;
-        setCrossMaPoints(sma.map((val, i) => ({
-          openTime: Number(htCandles[offset + i].openTime),
-          value: val,
-        })));
-      } catch (e) {
-        console.warn('[crossMA]', e.message);
-        setCrossMaPoints(null);
-      } finally {
-        if (!cancelled) setCrossMaLoading(false);
-      }
+      const next = {};
+      await Promise.all(toFetch.map(async (slot, idx) => {
+        const key = `${slot.period}-${slot.interval}`;
+        if (slot.interval === chartIv && slot.period === '50' && activeIndicators.includes('ma50')) {
+          const candles = selectedChart.candlesticks ?? [];
+          const ma = selectedChart.ma50 ?? [];
+          if (ma.length && candles.length) {
+            const offset = candles.length - ma.length;
+            next[key] = ma.map((val, i) => ({
+              openTime: Number(candles[offset + i].openTime),
+              value: val,
+            }));
+          }
+          return;
+        }
+        if (slot.interval === chartIv && slot.period === '200' && activeIndicators.includes('ma200')) {
+          const candles = selectedChart.candlesticks ?? [];
+          const ma = selectedChart.movingAverage ?? [];
+          if (ma.length && candles.length) {
+            const offset = candles.length - ma.length;
+            next[key] = ma.map((val, i) => ({
+              openTime: Number(candles[offset + i].openTime),
+              value: val,
+            }));
+          }
+          return;
+        }
+        try {
+          next[key] = await fetchOverlayMaPoints(
+            selectedChart.symbol,
+            slot.interval,
+            slot.period,
+            selectedChart.source,
+            candleFetchLimit,
+          );
+        } catch (e) {
+          console.warn('[overlayMA]', key, e.message);
+        }
+        void idx;
+      }));
+      if (!cancelled) setOverlayMaCache(next);
+      if (!cancelled) setOverlayMaLoading(false);
     })();
+
     return () => { cancelled = true; };
-  }, [crossMaEnabled, crossMaPeriod, crossMaInterval, selectedChart?.symbol, selectedChart?.source, selectedChart?.interval]);
+  }, [overlaySlots, selectedChart?.symbol, selectedChart?.interval, selectedChart?.source, selectedChart?.candlesticks, selectedChart?.ma50, selectedChart?.movingAverage, currentInterval, candleFetchLimit, activeIndicators]);
 
   const colors = useMemo(() => getThemeColors(), [themeTick]);
+
+  function updateOverlaySlot(id, patch) {
+    setOverlaySlots(prev => prev.map(s => (s.id === id ? { ...s, ...patch } : s)));
+  }
 
   async function handleIntervalChange(iv) {
     if (iv === currentInterval) return;
     setCurrentInterval(iv);
     setChartInterval(iv);
+    setCandleFetchLimit(500);
+    setDisplayCandleCount(LIMIT);
     if (!selectedChart?.symbol) return;
     setLoadingInterval(true);
     try {
-      const data = await fetchCandlesticksAndCloud(selectedChart.symbol, iv, selectedChart.source ?? null);
+      const data = await fetchCandlesticksAndCloud(selectedChart.symbol, iv, selectedChart.source ?? null, 500);
       setSelectedChart(data);
     } finally {
       setLoadingInterval(false);
+    }
+  }
+
+  async function handleLoadMoreCandles() {
+    if (!selectedChart?.symbol) return;
+    const currentLen = selectedChart.candlesticks?.length ?? 0;
+    const nextLimit = CANDLE_FETCH_STEPS.find(step => step > Math.max(candleFetchLimit, currentLen)) ?? MAX_CANDLES;
+    if (nextLimit <= candleFetchLimit && currentLen >= MAX_CANDLES) return;
+
+    setLoadingMoreCandles(true);
+    try {
+      const data = await fetchCandlesticksAndCloud(
+        selectedChart.symbol,
+        currentInterval,
+        selectedChart.source ?? null,
+        nextLimit,
+      );
+      setSelectedChart(data);
+      setCandleFetchLimit(nextLimit);
+      setDisplayCandleCount(Math.min(nextLimit, data.candlesticks?.length ?? nextLimit));
+    } finally {
+      setLoadingMoreCandles(false);
     }
   }
 
@@ -842,7 +1114,8 @@ export default function CandlestickChart() {
 
   const displayLimit = (() => {
     const candles = selectedChart?.candlesticks;
-    if (chartZoom) return candles?.length ?? LIMIT;
+    if (chartZoom) return candles?.length ?? displayCandleCount;
+    if (displayCandleCount > LIMIT) return Math.min(displayCandleCount, candles?.length ?? displayCandleCount);
     if (!candles?.length || !tradeTimes.length) return LIMIT;
     const oldest = Math.min(...tradeTimes);
     const idx = candles.findIndex(c => Number(c.openTime) >= oldest);
@@ -850,15 +1123,31 @@ export default function CandlestickChart() {
     return Math.min(candles.length, candles.length - idx + 5);
   })();
 
-  const crossMaLabel = `MA${crossMaPeriod}@${crossMaInterval}`;
+  const overlayConfigs = useMemo(() => overlaySlots
+    .filter(s => s.enabled)
+    .map((slot, idx) => {
+      const key = `${slot.period}-${slot.interval}`;
+      return {
+        label: `MA${slot.period}@${slot.interval}`,
+        color: OVERLAY_MA_COLORS[idx % OVERLAY_MA_COLORS.length],
+        points: overlayMaCache[key] ?? [],
+        bands: {
+          showAbove: maBands.showAbove,
+          showBelow: maBands.showBelow,
+          abovePct: maBands.pct,
+          belowPct: maBands.pct,
+        },
+      };
+    }), [overlaySlots, overlayMaCache, maBands]);
+
   const option = useMemo(() => {
     if (!selectedChart) return null;
     if (activeTab === 'matrix') {
       return buildMatrixOption(selectedChart, activeIndicators, displayLimit, chartZoom, tradeTimes);
     }
-    return buildOption(selectedChart, colors, activeIndicators, displayLimit, chartZoom, tradeTimes, crossMaPoints, crossMaLabel);
+    return buildOption(selectedChart, colors, activeIndicators, displayLimit, chartZoom, tradeTimes, overlayConfigs);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedChart, colors, activeIndicators, chartZoom, tradePurchases, activeTab, crossMaPoints, crossMaLabel]);
+  }, [selectedChart, colors, activeIndicators, chartZoom, tradePurchases, activeTab, overlayConfigs, displayLimit]);
 
   if (!selectedChart || !option) {
     return (
@@ -929,6 +1218,14 @@ export default function CandlestickChart() {
           {loadingInterval && (
             <div className="w-3 h-3 border border-p4 border-t-transparent rounded-full animate-spin ml-1" />
           )}
+          <button
+            onClick={handleLoadMoreCandles}
+            disabled={loadingMoreCandles || (candleFetchLimit >= MAX_CANDLES && (selectedChart?.candlesticks?.length ?? 0) >= MAX_CANDLES)}
+            title={`Carregar mais candles (até ${MAX_CANDLES})`}
+            className="ml-1 px-2 py-0.5 text-xs rounded font-mono transition-colors disabled:opacity-40 text-p5 hover:bg-p3/40 hover:text-white border border-p3/40"
+          >
+            {loadingMoreCandles ? '…' : `+${selectedChart?.candlesticks?.length ?? candleFetchLimit}/${MAX_CANDLES}`}
+          </button>
         </div>
 
 
@@ -938,160 +1235,30 @@ export default function CandlestickChart() {
       {activeTab === 'chart' ? (
         <div className="flex-1 min-h-0 relative">
           {chartNode}
-          {/* Botões de indicadores — canto superior direito do chart */}
-          <div style={{ position: 'absolute', top: 6, right: 68, display: 'flex', flexDirection: 'column', gap: 3, zIndex: 10 }}>
-            {INDICATOR_GROUPS.map(({ id, label, color }) => {
-              const active = activeIndicators.includes(id);
-              return (
-                <button
-                  key={id}
-                  onClick={() => toggleIndicator(id)}
-                  style={{
-                    fontSize: 9, padding: '1px 4px', borderRadius: 4, cursor: 'pointer',
-                    background: active ? color : 'transparent',
-                    color:      active ? (id === 'ma200' ? '#000' : '#fff') : color,
-                    border: `1px solid ${color}`,
-                    opacity: active ? 1 : 0.5,
-                    transition: 'all 0.15s',
-                    display: 'flex', alignItems: 'center', gap: 3,
-                  }}
-                >
-                  <span style={{ width: 5, height: 5, borderRadius: '50%', background: active ? (id === 'ma200' ? '#000' : '#fff') : color, flexShrink: 0 }} />
-                  {label}
-                </button>
-              );
-            })}
-          </div>
-          {/* Controles cross-MA — canto inferior esquerdo da área de preço */}
-          <div style={{
-            position: 'absolute', bottom: 'calc(24% + 6px)', left: 14,
-            display: 'flex', alignItems: 'center', gap: 2, zIndex: 10,
-            background: 'rgba(0,0,0,0.45)', borderRadius: 5, padding: '2px 5px',
-          }}>
-            <span style={{ fontSize: 8, color: '#fb923c', opacity: 0.8, fontFamily: 'monospace' }}>MA</span>
-            {['50', '200'].map(p => {
-              const sel = crossMaPeriod === p;
-              return (
-                <button key={p} onClick={() => setCrossMaPeriod(p)} style={{
-                  fontSize: 8, padding: '1px 4px', borderRadius: 3, cursor: 'pointer', fontFamily: 'monospace',
-                  background: sel ? '#fb923c' : 'transparent',
-                  color: sel ? '#000' : '#fb923c',
-                  border: `1px solid ${sel ? '#fb923c' : 'rgba(251,146,60,0.4)'}`,
-                }}>
-                  {p}
-                </button>
-              );
-            })}
-            <span style={{ fontSize: 8, color: '#fb923c', opacity: 0.35, fontFamily: 'monospace' }}>@</span>
-            {['1m', '5m', '15m', '30m', '1h', '2h', '4h', '8h', '12h', '1d'].map(iv => {
-              const sel = crossMaInterval === iv;
-              const sameAsChart = iv === (selectedChart?.interval ?? currentInterval);
-              return (
-                <button key={iv} onClick={() => setCrossMaInterval(iv)} style={{
-                  fontSize: 8, padding: '1px 3px', borderRadius: 3, cursor: 'pointer', fontFamily: 'monospace',
-                  background: sel ? '#fb923c' : 'transparent',
-                  color: sel ? '#000' : '#fb923c',
-                  border: `1px solid ${sel ? '#fb923c' : 'rgba(251,146,60,0.4)'}`,
-                  textDecoration: sel && sameAsChart ? 'line-through' : 'none',
-                  opacity: sameAsChart && !sel ? 0.3 : 1,
-                }}>
-                  {iv}
-                </button>
-              );
-            })}
-            <button onClick={() => setCrossMaEnabled(e => !e)} style={{
-              fontSize: 8, padding: '1px 5px', borderRadius: 3, cursor: 'pointer', fontFamily: 'monospace',
-              background: crossMaEnabled ? '#fb923c' : 'transparent',
-              color: crossMaEnabled ? '#000' : '#fb923c',
-              border: `1px solid ${crossMaEnabled ? '#fb923c' : 'rgba(251,146,60,0.5)'}`,
-              marginLeft: 1,
-            }}>
-              {crossMaEnabled ? 'ON' : 'OFF'}
-            </button>
-            {crossMaLoading && <div className="animate-spin" style={{ width: 7, height: 7, borderRadius: '50%', border: '1.5px solid #fb923c', borderTopColor: 'transparent' }} />}
-          </div>
-
-          {/* Botões RSI 80 e RSI 50 — canto superior direito do painel RSI */}
-          <div style={{ position: 'absolute', top: 'calc(79% + 4px)', right: 68, display: 'flex', flexDirection: 'column', gap: 3, zIndex: 10 }}>
-            {[
-              { id: 'rsi80', label: 'RSI 80', color: '#fb923c' },
-              { id: 'rsi50', label: 'RSI 50', color: '#facc15' },
-            ].map(({ id, label, color }) => {
-              const active = activeIndicators.includes(id);
-              return (
-                <button
-                  key={id}
-                  onClick={() => toggleIndicator(id)}
-                  style={{
-                    fontSize: 10, padding: '1px 7px', borderRadius: 4, cursor: 'pointer',
-                    background: active ? color : 'transparent',
-                    color:      active ? '#000' : color,
-                    border: `1px solid ${color}`,
-                    opacity: active ? 1 : 0.5,
-                    transition: 'all 0.15s',
-                    display: 'flex', alignItems: 'center', gap: 4,
-                  }}
-                >
-                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: active ? '#000' : color, flexShrink: 0 }} />
-                  {label}
-                </button>
-              );
-            })}
-          </div>
+          <ChartLeftIndicatorPanel
+            activeIndicators={activeIndicators}
+            toggleIndicator={toggleIndicator}
+            overlaySlots={overlaySlots}
+            updateOverlaySlot={updateOverlaySlot}
+            maBands={maBands}
+            setMaBands={setMaBands}
+            overlayMaLoading={overlayMaLoading}
+          />
         </div>
       ) : (
         <div className="flex flex-1 min-h-0">
           {/* Gráfico (lado esquerdo) */}
           <div className="flex-1 min-w-0 min-h-0 relative">
             {chartNode}
-            {/* Botões de indicadores — canto superior direito */}
-            <div style={{ position: 'absolute', top: 6, right: 68, display: 'flex', flexDirection: 'column', gap: 3, zIndex: 10 }}>
-              {INDICATOR_GROUPS.map(({ id, label, color }) => {
-                const active = activeIndicators.includes(id);
-                return (
-                  <button
-                    key={id}
-                    onClick={() => toggleIndicator(id)}
-                    style={{
-                      fontSize: 9, padding: '1px 4px', borderRadius: 4, cursor: 'pointer',
-                      background: active ? color : 'transparent',
-                      color:      active ? (id === 'ma200' ? '#000' : '#fff') : color,
-                      border: `1px solid ${color}`,
-                      opacity: active ? 1 : 0.5,
-                      transition: 'all 0.15s',
-                      display: 'flex', alignItems: 'center', gap: 3,
-                    }}
-                  >
-                    <span style={{ width: 5, height: 5, borderRadius: '50%', background: active ? (id === 'ma200' ? '#000' : '#fff') : color, flexShrink: 0 }} />
-                    {label}
-                  </button>
-                );
-              })}
-            </div>
-            <div style={{ position: 'absolute', top: 'calc(79% + 4px)', right: 68, display: 'flex', flexDirection: 'column', gap: 3, zIndex: 10 }}>
-              {[
-                { id: 'rsi80', label: '80', color: '#fb923c' },
-                { id: 'rsi50', label: '50', color: '#facc15' },
-              ].map(({ id, label, color }) => {
-                const active = activeIndicators.includes(id);
-                return (
-                  <button
-                    key={id}
-                    onClick={() => toggleIndicator(id)}
-                    style={{
-                      fontSize: 10, padding: '1px 7px', borderRadius: 4, cursor: 'pointer',
-                      background: active ? color : 'transparent',
-                      color:      active ? '#000' : color,
-                      border: `1px solid ${color}`,
-                      opacity: active ? 1 : 0.5,
-                      transition: 'all 0.15s',
-                    }}
-                  >
-                    {label}
-                  </button>
-                );
-              })}
-            </div>
+            <ChartLeftIndicatorPanel
+              activeIndicators={activeIndicators}
+              toggleIndicator={toggleIndicator}
+              overlaySlots={overlaySlots}
+              updateOverlaySlot={updateOverlaySlot}
+              maBands={maBands}
+              setMaBands={setMaBands}
+              overlayMaLoading={overlayMaLoading}
+            />
           </div>
           {/* Painel de histórico (lado direito) */}
           <div className="w-24 sm:w-64 shrink-0 min-h-0 overflow-hidden">

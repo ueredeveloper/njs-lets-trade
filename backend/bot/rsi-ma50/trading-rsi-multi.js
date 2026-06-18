@@ -1,113 +1,19 @@
 'use strict';
 
 /**
- * Trading RSI Multi-Intervalo Bot
+ * Bot único AMAP — Adaptive MA Pullback
  *
- * Estratégias com intervalos distintos de entrada e saída.
+ * Toda estratégia é trade_config (Supabase) ou preset nomeado (strategyPresets.js).
+ * Motor: strategyEngine.js
  *
- * Modo bot  : node backend/bot/rsi-ma50/trading-rsi-multi.js
- * Backtest  : node backend/bot/rsi-ma50/trading-rsi-multi.js --backtest BTCUSDT [strategyId] [exchange] [capital]
- *             (omitir strategyId testa todas as estratégias)
+ * Modo bot     : node backend/bot/rsi-ma50/trading-rsi-multi.js
+ * Filtrar      : node backend/bot/rsi-ma50/trading-rsi-multi.js --symbol BTCUSDT
+ * Backtest     : node backend/bot/rsi-ma50/trading-rsi-multi.js --backtest BTCUSDT [saved|presetId] [exchange] [capital]
+ *                (omitir preset ou usar saved/flex → config do Supabase)
+ * Adaptativo   : node backend/bot/rsi-ma50/trading-rsi-multi.js --adaptive-test BTCUSDT binance 1h 4h
+ *
+ * Presets: flex, rsi15m_4h, rsi5m30_15m70, rsi1h35_15m85, rsi1m30_1m70, rsi1m30_1m70_ma, rsi1m30_1m80
  */
-
-// ── Estratégias ───────────────────────────────────────────────────────────────
-// Edite aqui para adicionar/modificar estratégias.
-// strategy_id deve corresponder ao campo strategy_id em rsi_multi_bot_state.
-const STRATEGIES = {
-  'rsi5m30_15m70': {
-    label: 'RSI(5m)<30 → RSI(15m)>70 + MA50(1h)',
-    entry:    { interval: '5m',  rsiPeriod: 14, rsiBuy: 30 },
-    exit:     { interval: '15m', rsiPeriod: 14, rsiSell: 70 },
-    maFilter: {
-      interval: '1h', period: 50, enabled: true,
-      threeCandles: { enabled: true, abovePct: 5, fourCandlesEnabled: true }, // regra dos 3/4 candles quando >5% acima da MA
-    },
-    stopLoss:         { interval: '1h', period: 50 }, // vende se preço fechar abaixo da MA50(1h)
-    entryDiscount:    0.001,
-    pendingTimeoutMs: 30 * 60_000,
-    pendingCancelPct: 0.002,
-    fastRsiThreshold: 60,
-    pollMs:     60_000,
-    fastPollMs: 30_000,
-  },
-  'rsi1h35_15m85': {
-    label: 'RSI(1h)<35 → RSI(15m)>85 + MA50(1h)',
-    entry:    { interval: '1h',  rsiPeriod: 14, rsiBuy: 35 },
-    exit:     { interval: '15m', rsiPeriod: 14, rsiSell: 85 },
-    maFilter: {
-      interval: '1h', period: 50, enabled: true,
-      threeCandles: { enabled: true, abovePct: 5, fourCandlesEnabled: true },
-    },
-    stopLoss:         { interval: '1h', period: 50 },
-    entryDiscount:    0.001,
-    pendingTimeoutMs: 2 * 60 * 60_000,
-    pendingCancelPct: 0.005,
-    fastRsiThreshold: 75,
-    pollMs:     5 * 60_000,
-    fastPollMs: 60_000,
-  },
-  'rsi1m30_1m70': {
-    label: 'RSI(1m)<30 → RSI(1m)>70',
-    entry:    { interval: '1m', rsiPeriod: 14, rsiBuy: 30 },
-    exit:     { interval: '1m', rsiPeriod: 14, rsiSell: 70 },
-    maFilter: {
-      interval: '1h', period: 50, enabled: false,
-      threeCandles: { enabled: true, abovePct: 5, fourCandlesEnabled: true },
-    },
-    stopLoss:         { interval: '1h', period: 50 },
-    immediateEntry:   true,
-    entryDiscount:    0.001,
-    pendingTimeoutMs: 30 * 60_000,
-    pendingCancelPct: 0.002,
-    fastRsiThreshold: 60,
-    pollMs:     60_000,
-    fastPollMs: 30_000,
-  },
-  'rsi1m30_1m70_ma': {
-    label: 'RSI(1m)<30 → RSI(1m)>70 + MA50(1h) + MA50(15m) + 3/4 candles',
-    entry:    { interval: '1m', rsiPeriod: 14, rsiBuy: 30 },
-    exit:     { interval: '1m', rsiPeriod: 14, rsiSell: 70 },
-    maFilter: {
-      interval: '1h', period: 50, enabled: true,
-      threeCandles: { enabled: true, abovePct: 5, fourCandlesEnabled: true },
-    },
-    maFilter2:        { interval: '15m', period: 50, enabled: true }, // entrada exige preço acima desta MA também
-    stopLoss:         { interval: '15m', period: 50 }, // stop loss abaixo da MA50(15m)
-    immediateEntry:   true,
-    entryDiscount:    0.001,
-    pendingTimeoutMs: 30 * 60_000,
-    pendingCancelPct: 0.002,
-    fastRsiThreshold: 60,
-    pollMs:     60_000,
-    fastPollMs: 30_000,
-  },
-  'rsi1m30_1m80': {
-    label: 'RSI(1m)<30 → RSI(1m)>80',
-    entry:    { interval: '1m', rsiPeriod: 14, rsiBuy: 30 },
-    exit:     { interval: '1m', rsiPeriod: 14, rsiSell: 80 },
-    maFilter: {
-      interval: '1h', period: 50, enabled: false,
-      threeCandles: { enabled: true, abovePct: 5, fourCandlesEnabled: true },
-    },
-    stopLoss:         { interval: '1h', period: 50 },
-    immediateEntry:   true,  // compra no preço atual, sem esperar desconto
-    entryDiscount:    0.001,
-    pendingTimeoutMs: 30 * 60_000,
-    pendingCancelPct: 0.002,
-    fastRsiThreshold: 70,
-    pollMs:     60_000,
-    fastPollMs: 30_000,
-  },
-
-  // Exemplo adicional — descomente para usar:
-  // 'rsi15m32_1h72': {
-  //   label: 'RSI(15m)<32 → RSI(1h)>72',
-  //   entry: { interval: '15m', rsiPeriod: 14, rsiBuy: 32 },
-  //   exit:  { interval: '1h',  rsiPeriod: 14, rsiSell: 72 },
-  //   entryDiscount: 0.001, pendingTimeoutMs: 60 * 60_000, pendingCancelPct: 0.003,
-  //   fastRsiThreshold: 65, pollMs: 2 * 60_000, fastPollMs: 60_000,
-  // },
-};
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -121,9 +27,117 @@ const ti = require('technicalindicators');
 const { fetchBinanceCandles, fetchGateCandles } = require('../prices');
 const { toGateSymbol } = require('../../utils/toGateSymbol');
 const { sendWhatsApp } = require('../whatsapp');
+const {
+  buildTradeConfig, getRequiredSpecs, computeAdaptiveDips, buildMaSnapshot, buildAdaptiveReport,
+  evaluateEntry, evaluateExit, getStopLossMa, checkRsi, checkMinVolume, needsMarketSell, maKey,
+} = require('./strategyEngine');
+const { fmtVolumeUsdt } = require('../volume24h');
+const {
+  configFromPreset, configFromRow, resolveStrategy, hasAdaptiveFilters, listPresetsForCli, presetIds,
+} = require('./strategyPresets');
+
+const DB_BACKTEST_SOURCES = new Set(['saved', 'db', 'supabase', 'flex']);
+const EXCHANGES           = new Set(['binance', 'gate']);
+
+function parseBacktestArgs(argv) {
+  const symbol = argv[1]?.toUpperCase();
+  const a2     = argv[2];
+
+  if (!a2) {
+    return { symbol, fromDb: true, exchange: null, capital: null, presetId: null };
+  }
+  if (DB_BACKTEST_SOURCES.has(a2)) {
+    let exchange = null;
+    let capital  = null;
+    if (argv[3]) {
+      if (EXCHANGES.has(argv[3])) {
+        exchange = argv[3];
+        if (argv[4]) capital = parseFloat(argv[4]);
+      } else {
+        capital = parseFloat(argv[3]);
+      }
+    }
+    return { symbol, fromDb: true, exchange, capital, presetId: null };
+  }
+  if (EXCHANGES.has(a2)) {
+    return { symbol, fromDb: true, exchange: a2, capital: argv[3] ? parseFloat(argv[3]) : null, presetId: null };
+  }
+  if (presetIds().includes(a2)) {
+    return {
+      symbol, fromDb: false, presetId: a2,
+      exchange: argv[3] ?? 'binance',
+      capital:  parseFloat(argv[4] ?? '100'),
+    };
+  }
+  return { error: a2 };
+}
+
+async function backtestFromSupabase(symbol, exchangeHint, capitalHint) {
+  if (!SB_URL || !SB_KEY) {
+    console.error('❌ SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY ausentes no .env');
+    process.exit(1);
+  }
+
+  const row = await loadSavedBacktestRow(symbol, exchangeHint);
+  if (!row) {
+    console.error(`❌ ${symbol} não encontrado no Supabase (rsi_multi_bot_state / multitrade_favorites).`);
+    console.error('   Salve no painel Multi-Trade ou use um preset: --backtest SYM rsi5m30_15m70 binance 100');
+    process.exit(1);
+  }
+
+  const config = configFromRow(row);
+  if (!config) {
+    console.error(`❌ ${symbol}: sem trade_config nem preset válido (strategy_id=${row.strategy_id})`);
+    process.exit(1);
+  }
+
+  const exchange = exchangeHint ?? row.exchange ?? 'binance';
+  const capital  = capitalHint ?? parseFloat(row.capital ?? 100);
+  const source   = row.trade_config ? 'trade_config' : `preset:${row.strategy_id}`;
+
+  console.log(`\n📦 Supabase: ${symbol} [${exchange}]  strategy=${row.strategy_id ?? 'flex'}  (${source})`);
+  console.log(`   Capital: $${capital}`);
+  await backtest(symbol, config, exchange, capital);
+}
+
+async function refreshAdaptiveDips(adapter, config) {
+  const specs = getRequiredSpecs(config).map(s => ({ ...s, limit: Math.max(s.limit, 300) }));
+  const cMap  = await fetchCandleMap(adapter, specs);
+  return computeAdaptiveDips(cMap, config);
+}
+
+async function getCached24hVolume(adapter, session) {
+  const now = Date.now();
+  if (session.volCache && now - session.volCache.ts < VOL_CACHE_MS) {
+    return session.volCache.volumeUsdt;
+  }
+  const volumeUsdt = await adapter.fetch24hVol();
+  session.volCache = { ts: now, volumeUsdt };
+  return volumeUsdt;
+}
+
+async function checkEntryVolume(adapter, config, session) {
+  try {
+    const volumeUsdt = await getCached24hVolume(adapter, session);
+    return { ...checkMinVolume(volumeUsdt, config), volumeUsdt };
+  } catch {
+    return { allowed: true, reason: null, volumeUsdt: null };
+  }
+}
+
+async function executeMarketSell(adapter, config, session, qty, log) {
+  let aggressive = !!config.allowLowVolume;
+  if (!aggressive) {
+    try {
+      const vol = await getCached24hVolume(adapter, session);
+      aggressive = needsMarketSell(config, vol);
+    } catch {}
+  }
+  return adapter.marketSell(qty, log, { aggressive });
+}
 
 const GATE_FEE_RATE = 0.002;
-const VOL_MIN_USDT  = 1_000_000;
+const VOL_CACHE_MS  = 5 * 60_000;
 
 // ── Logging ───────────────────────────────────────────────────────────────────
 const BOT_DIR = path.join(__dirname, '../../data/bot');
@@ -215,18 +229,19 @@ async function binanceMarketBuy(symbol, usdtAmount) {
   return { filledQty, quoteQty, avgPrice: quoteQty / filledQty };
 }
 
-async function binanceMarketSell(symbol, qty) {
+async function binanceMarketSell(symbol, qty, log, { aggressive = false } = {}) {
   const info      = await fetch(`${BINANCE_BASE}/api/v3/exchangeInfo?symbol=${symbol}`).then(r => r.json());
   const lotFilter = info.symbols?.[0]?.filters?.find(f => f.filterType === 'LOT_SIZE');
   const stepSize  = lotFilter ? parseFloat(lotFilter.stepSize) : 1;
   const decimals  = stepSize < 1 ? (String(stepSize).split('.')[1]?.length ?? 0) : 0;
   const safeQty   = (Math.floor(qty / stepSize) * stepSize).toFixed(decimals);
+  if (aggressive && log) log(`📉 Venda MARKET (baixa liquidez) qty=${safeQty}`);
   const order     = await binanceReq('POST', '/api/v3/order', {
     symbol, side: 'SELL', type: 'MARKET', quantity: safeQty,
   });
   const soldQty = parseFloat(order.executedQty);
   const usdtOut = parseFloat(order.cummulativeQuoteQty);
-  return { soldQty, usdtOut, exitPrice: usdtOut / soldQty };
+  return { soldQty, usdtOut, exitPrice: soldQty > 0 ? usdtOut / soldQty : 0 };
 }
 
 async function binance24hVolume(symbol) {
@@ -316,11 +331,33 @@ async function gateMarketBuy(pair, usdtAmount) {
   return { filledQty: netQty, quoteQty: quoteQty || grossQty * avgPrice, avgPrice };
 }
 
-async function gateMarketSell(pair, qty, log) {
+async function gateMarketSell(pair, qty, log, { aggressive = false } = {}) {
   const actualBalance = await gateGetTokenBalance(pair);
   const sellQty       = Math.min(parseFloat(qty), actualBalance);
   if (sellQty <= 0) throw new Error(`Gate.io: saldo insuficiente (disponível: ${actualBalance})`);
   if (sellQty < parseFloat(qty)) log(`⚠️  Qty ajustada: ${qty} → ${sellQty} (saldo real)`);
+
+  if (aggressive) {
+    try {
+      const ticker = await fetch(`${GATE_BASE}/spot/tickers?currency_pair=${pair}`).then(r => r.json());
+      const bid    = parseFloat(ticker[0]?.highest_bid || ticker[0]?.last);
+      if (bid > 0) {
+        log(`📉 Venda IOC no bid $${fmtP(bid)} (baixa liquidez)`);
+        const order  = await gateReq('POST', '/spot/orders', {
+          currency_pair: pair, side: 'sell', type: 'limit',
+          price: String(bid), amount: sellQty.toFixed(8), time_in_force: 'ioc',
+        });
+        await new Promise(r => setTimeout(r, 1500));
+        const filled    = await gateReq('GET', `/spot/orders/${order.id}`, { currency_pair: pair });
+        const soldQty   = parseFloat(filled.amount) - parseFloat(filled.left || 0);
+        const usdtOut   = parseFloat(filled.filled_total || 0);
+        const exitPrice = parseFloat(filled.avg_deal_price || bid);
+        if (soldQty > 0) return { soldQty, usdtOut: usdtOut || soldQty * exitPrice, exitPrice };
+        log(`⚠️  IOC parcial/zero — tentando market`);
+      }
+    } catch (err) { log(`⚠️  IOC falhou (${err.message}) — tentando market`); }
+  }
+
   const order = await gateReq('POST', '/spot/orders', {
     currency_pair: pair, side: 'sell', type: 'market', amount: sellQty.toFixed(8),
   });
@@ -347,7 +384,7 @@ function buildAdapter(exchange, symbol) {
       pair,
       fetchCandles: (lim, iv)  => fetchGateCandles(pair, lim, iv),
       marketBuy:    (usdt)     => gateMarketBuy(pair, usdt),
-      marketSell:   (qty, log) => gateMarketSell(pair, qty, log),
+      marketSell:   (qty, log, opts) => gateMarketSell(pair, qty, log, opts),
       fetch24hVol:  ()         => gate24hVolume(pair),
     };
   }
@@ -356,7 +393,7 @@ function buildAdapter(exchange, symbol) {
     pair:        symbol,
     fetchCandles: (lim, iv)   => fetchBinanceCandles(symbol, lim, iv),
     marketBuy:    (usdt)      => binanceMarketBuy(symbol, usdt),
-    marketSell:   (qty, _log) => binanceMarketSell(symbol, qty),
+    marketSell:   (qty, log, opts) => binanceMarketSell(symbol, qty, log, opts),
     fetch24hVol:  ()          => binance24hVolume(symbol),
   };
 }
@@ -381,8 +418,73 @@ async function sbReq(method, table, body, query = '') {
 
 async function loadAllRows()  { return sbReq('GET', 'rsi_multi_bot_state', null, '?order=id.asc'); }
 async function loadState(id)  { const r = await sbReq('GET', 'rsi_multi_bot_state', null, `?id=eq.${id}&limit=1`); return r?.[0] ?? null; }
+
+/** Carrega config salva no Supabase (bot state → multitrade favorites) */
+async function loadSavedBacktestRow(symbol, exchange = null) {
+  const sym = symbol.toUpperCase();
+  const botQ = exchange
+    ? `?symbol=eq.${sym}&exchange=eq.${exchange}&order=updated_at.desc&limit=1`
+    : `?symbol=eq.${sym}&order=updated_at.desc&limit=1`;
+  const botRows = await sbReq('GET', 'rsi_multi_bot_state', null, botQ);
+  if (botRows?.[0]) return botRows[0];
+
+  const favQ = exchange
+    ? `?symbol=eq.${sym}&exchange=eq.${exchange}&order=updated_at.desc&limit=1`
+    : `?symbol=eq.${sym}&order=updated_at.desc&limit=1`;
+  const favRows = await sbReq('GET', 'multitrade_favorites', null, favQ);
+  return favRows?.[0] ?? null;
+}
+
 async function saveState(id, u) { await sbReq('PATCH', 'rsi_multi_bot_state', { ...u, updated_at: new Date().toISOString() }, `?id=eq.${id}`); }
-async function insertTrade(t)   { await sbReq('POST', 'rsi_multi_bot_trades', t); }
+
+async function insertEntrySignal(data) {
+  try {
+    const r = await sbReq('POST', 'rsi_multi_entry_signals', data);
+    return r?.[0]?.id ?? null;
+  } catch (err) { console.warn(`[${data.symbol}] insertEntrySignal:`, err.message); return null; }
+}
+
+async function patchEntrySignal(id, data) {
+  if (!id) return;
+  try { await sbReq('PATCH', 'rsi_multi_entry_signals', data, `?id=eq.${id}`); }
+  catch (err) { console.warn(`[entry#${id}] patchEntrySignal:`, err.message); }
+}
+
+async function insertExitSignal(data) {
+  try {
+    const r = await sbReq('POST', 'rsi_multi_exit_signals', data);
+    return r?.[0]?.id ?? null;
+  } catch (err) { console.warn(`[${data.symbol}] insertExitSignal:`, err.message); return null; }
+}
+
+async function patchExitSignal(id, data) {
+  if (!id) return;
+  try { await sbReq('PATCH', 'rsi_multi_exit_signals', data, `?id=eq.${id}`); }
+  catch (err) { console.warn(`[exit#${id}] patchExitSignal:`, err.message); }
+}
+
+async function insertTrade(t) {
+  try {
+    const r = await sbReq('POST', 'rsi_multi_bot_trades', t);
+    return r?.[0]?.id ?? null;
+  } catch (err) { console.warn(`[${t.symbol}] insertTrade:`, err.message); return null; }
+}
+
+function entrySignalFields(state, rowId, { price, entryRsi, exitRsi, ma50, ma2, candleOpenTime }) {
+  return {
+    symbol:           state.symbol,
+    exchange:         state.exchange ?? 'binance',
+    strategy_id:      state.strategy_id,
+    state_id:         rowId,
+    candle_open_time: candleOpenTime ? new Date(candleOpenTime).toISOString() : null,
+    price,
+    rsi_entry:        entryRsi,
+    rsi_exit:         exitRsi,
+    ma50,
+    ma2,
+    above_ma_pct:     ma50 ? parseFloat(((price / ma50 - 1) * 100).toFixed(4)) : null,
+  };
+}
 
 // ── Indicadores ───────────────────────────────────────────────────────────────
 
@@ -425,59 +527,6 @@ function maAt(maSeries, time) {
   return best;
 }
 
-/**
- * Verifica se a entrada é permitida pelo filtro MA.
- * Retorna { allowed: boolean, reason: string | null }
- *
- * Regras (quando maFilter.enabled = true):
- *   close ≤ ma50                   → bloqueado (MA_BLOCKED)
- *   close entre ma50 e ma50×(1+%)  → permitido
- *   close > ma50×(1+%) + threeCandles.enabled
- *     → exige 3 últimos 1h candles fechados com close > open
- *     → senão: bloqueado (THREE_CANDLES_BLOCKED)
- *
- * @param {number}   close
- * @param {number}   ma50
- * @param {Array}    maCandles   — candles brutas do intervalo MA (para regra dos 3)
- * @param {object}   maFilter    — config da estratégia
- * @param {number}   entryTime   — openTime da candle de entrada (ms)
- */
-function checkMaFilter(close, ma50, maCandles, maFilter, entryTime) {
-  if (!maFilter?.enabled) return { allowed: true, reason: null };
-  if (ma50 === null)       return { allowed: false, reason: 'MA_NO_DATA' };
-  if (close <= ma50)       return { allowed: false, reason: 'MA_BLOCKED' };
-
-  const tc = maFilter.threeCandles;
-  const thresholdPct = tc?.abovePct ?? 5;
-  const threshold    = ma50 * (1 + thresholdPct / 100);
-
-  if (close <= threshold) return { allowed: true, reason: null }; // zona segura (0-5%)
-
-  // Preço > MA50 + threshold% — aplica regra dos 3 candles se habilitada
-  if (!tc?.enabled) return { allowed: true, reason: null };
-
-  const intervalMs = 3600000; // 1h em ms
-  const completed  = maCandles.filter(c => c.openTime + intervalMs <= entryTime);
-  const last3      = completed.slice(-3);
-  const last4      = completed.slice(-4);
-
-  // Regra dos 3 candles: últimos 3 fechados todos de alta
-  const threeOk = last3.length >= 3 && last3.every(c => c.close > c.open);
-
-  // Regra dos 4 candles: 3 altas + 1 baixa (o mais recente antes da entrada é o de queda)
-  const fourOk = tc?.fourCandlesEnabled !== false &&
-    last4.length >= 4 &&
-    last4[0].close > last4[0].open &&
-    last4[1].close > last4[1].open &&
-    last4[2].close > last4[2].open &&
-    last4[3].close < last4[3].open;
-
-  if (!threeOk && !fourOk) {
-    return { allowed: false, reason: 'THREE_CANDLES_BLOCKED' };
-  }
-  return { allowed: true, reason: null };
-}
-
 // Busca candles de múltiplos intervalos em paralelo, sem duplicar fetches.
 // specs: [{interval, limit}, ...]  — usa o maior limit por intervalo.
 async function fetchCandleMap(adapter, specs) {
@@ -511,159 +560,108 @@ function loadLocalCandles(symbol, interval) {
   }));
 }
 
-// maEnabledOverride: true/false para sobrescrever strategy.maFilter.enabled via CLI; null = usa o padrão da estratégia
-// threeCandlesOverride: true/false para sobrescrever threeCandles.enabled via CLI; null = usa o padrão da estratégia
-// fourCandlesOverride: true/false para sobrescrever threeCandles.fourCandlesEnabled via CLI; null = usa o padrão
-async function backtest(symbol, strategyId, exchange = 'binance', capital = 100, maEnabledOverride = null, threeCandlesOverride = null, fourCandlesOverride = null) {
-  const base = STRATEGIES[strategyId];
-  if (!base) {
-    console.error(`❌ Estratégia desconhecida: "${strategyId}". Disponíveis: ${Object.keys(STRATEGIES).join(', ')}`);
-    return;
-  }
-
-  // Clona para não modificar o objeto global
-  const baseMA = base.maFilter ?? null;
-  const strategy = {
-    ...base,
-    maFilter: baseMA
-      ? {
-          ...baseMA,
-          enabled: maEnabledOverride !== null ? maEnabledOverride : baseMA.enabled,
-          threeCandles: baseMA.threeCandles
-            ? {
-                ...baseMA.threeCandles,
-                enabled: threeCandlesOverride !== null ? threeCandlesOverride : baseMA.threeCandles.enabled,
-                fourCandlesEnabled: fourCandlesOverride !== null ? fourCandlesOverride : baseMA.threeCandles.fourCandlesEnabled,
-              }
-            : baseMA.threeCandles,
-        }
-      : null,
+function maSnapAt(cMap, config, openTime) {
+  const snap = {};
+  const add = (key, period, interval) => {
+    const candles = (cMap[interval] ?? []).filter(c => c.openTime <= openTime);
+    if (!candles.length) return;
+    const series = computeMaSeries(candles, period);
+    const ma = maAt(series, openTime);
+    snap[key] = { ma, candles, period, interval };
   };
+  for (const f of config.maFilters ?? []) {
+    add(maKey(f.period, f.interval), f.period, f.interval);
+  }
+  if (config.extension?.enabled) {
+    const iv = config.extension.maInterval;
+    if (!snap[maKey(50, iv)]) add(maKey(50, iv), 50, iv);
+  }
+  const sl = config.stopLoss;
+  if (sl) add(`sl_${maKey(sl.period, sl.interval)}`, sl.period, sl.interval);
+  return snap;
+}
 
+async function backtest(symbol, config, exchange = 'binance', capital = 100) {
   const adapter = buildAdapter(exchange, symbol);
-  const { maFilter } = strategy;
-  const maActive = maFilter?.enabled;
+  const specs   = getRequiredSpecs(config);
+  const LIMIT   = 1000;
 
   console.log(`\n${'─'.repeat(68)}`);
-  console.log(`📊 Backtest: ${symbol} [${adapter.name}]  —  ${strategy.label}`);
-  const tcActive  = maActive && maFilter?.threeCandles?.enabled;
-  const fc4Active = tcActive && maFilter?.threeCandles?.fourCandlesEnabled !== false;
-  const candleLabel = tcActive
-    ? (fc4Active ? 'Regra 3+4 candles: ✅ ativo' : 'Regra 3 candles: ✅ ativo (4 candles: ❌)')
-    : 'Regra candles: ❌ desativado';
-  console.log(`   MA${maFilter?.period}(${maFilter?.interval}): ${maActive ? '✅ ativo' : '❌ desativado'}${maActive ? `  |  ${candleLabel}` : ''}`);
+  console.log(`📊 Backtest AMAP: ${symbol} [${adapter.name}]  —  ${config.label ?? 'flex'}`);
+  console.log(`   Entrada: RSI(${config.entryRsi.interval})${config.entryRsi.operator}${config.entryRsi.value}`);
+  console.log(`   Saída  : RSI(${config.exitRsi.interval})${config.exitRsi.operator}${config.exitRsi.value}`);
+  console.log(`   Stop   : MA${config.stopLoss.period}(${config.stopLoss.interval})`);
+  console.log(`   Vol mín: ${fmtVolumeUsdt(config.minVolumeUsdt ?? 1_000_000)} 24h (não simulado no histórico)`);
 
-  // Tenta carregar de arquivo local antes de chamar a API
-  const { stopLoss, maFilter2 } = strategy;
-  const intervals = [...new Set([
-    strategy.entry.interval,
-    strategy.exit.interval,
-    ...(maActive ? [maFilter.interval] : []),
-    ...(maFilter2?.enabled ? [maFilter2.interval] : []),
-    ...(stopLoss ? [stopLoss.interval] : []),
-  ])];
-
-  const LIMIT = 1000;
   const cMap = {};
-  for (const iv of intervals) {
-    const local = loadLocalCandles(symbol, iv);
-    if (local) {
-      cMap[iv] = local;
-      console.log(`   📂 ${iv}: arquivo local (${local.length} candles)`);
-    }
+  for (const { interval, limit } of specs) {
+    const local = loadLocalCandles(symbol, interval);
+    cMap[interval] = local ?? await adapter.fetchCandles(Math.max(limit, LIMIT), interval);
+    console.log(`   ${interval}: ${cMap[interval].length} candles`);
   }
 
-  // Busca via API os intervalos que não têm arquivo local
-  const apiSpecs = [
-    { interval: strategy.entry.interval, limit: LIMIT },
-    { interval: strategy.exit.interval,  limit: LIMIT },
-    ...(maActive      ? [{ interval: maFilter.interval,  limit: Math.max(LIMIT, maFilter.period  + 10) }] : []),
-    ...(maFilter2?.enabled ? [{ interval: maFilter2.interval, limit: Math.max(LIMIT, maFilter2.period + 10) }] : []),
-    ...(stopLoss      ? [{ interval: stopLoss.interval,  limit: Math.max(LIMIT, stopLoss.period  + 10) }] : []),
-  ].filter(s => !cMap[s.interval]);
+  const entryCandles = cMap[config.entryRsi.interval];
+  const exitCandles  = cMap[config.exitRsi.interval];
+  if (!entryCandles?.length) { console.error('   ❌ Sem candles de entrada'); return; }
 
-  if (apiSpecs.length) {
-    const fetched = await fetchCandleMap(adapter, apiSpecs);
-    Object.assign(cMap, fetched);
-  }
-
-  const entryCandles = cMap[strategy.entry.interval];
-  const exitCandles  = cMap[strategy.exit.interval];
-
-  console.log(`   Candles  : ${entryCandles.length}×${strategy.entry.interval} entrada | ${exitCandles.length}×${strategy.exit.interval} saída`);
-  console.log(`   Período  : ${fmtDate(entryCandles[0].openTime)} → ${fmtDate(entryCandles[entryCandles.length - 1].openTime)}`);
-
-  const entrySeries = computeRsiSeries(entryCandles, strategy.entry.rsiPeriod);
-  const exitSeries  = (strategy.entry.interval === strategy.exit.interval &&
-                       strategy.entry.rsiPeriod === strategy.exit.rsiPeriod)
+  const entrySeries = computeRsiSeries(entryCandles, config.entryRsi.period);
+  const exitSeries  = config.entryRsi.interval === config.exitRsi.interval && config.entryRsi.period === config.exitRsi.period
     ? entrySeries
-    : computeRsiSeries(exitCandles, strategy.exit.rsiPeriod);
-  const maCandles = maActive ? cMap[maFilter.interval] : null;
-  const maSeries  = maActive ? computeMaSeries(maCandles, maFilter.period) : null;
+    : computeRsiSeries(exitCandles, config.exitRsi.period);
 
-  // Série MA secundária (maFilter2)
-  const maSeries2 = maFilter2?.enabled ? computeMaSeries(cMap[maFilter2.interval], maFilter2.period) : null;
-
-  // Série MA para stop loss (reutiliza maSeries ou maSeries2 se mesmos parâmetros)
-  const slSameAs1 = maActive && stopLoss && maFilter.interval === stopLoss.interval && maFilter.period === stopLoss.period;
-  const slSameAs2 = maFilter2?.enabled && stopLoss && maFilter2.interval === stopLoss.interval && maFilter2.period === stopLoss.period;
-  const slMaSeries = stopLoss
-    ? slSameAs1 ? maSeries
-    : slSameAs2 ? maSeries2
-    :             computeMaSeries(cMap[stopLoss.interval], stopLoss.period)
-    : null;
+  const adaptiveDips = computeAdaptiveDips(cMap, config);
 
   let phase = 'WATCHING';
   let buyPrice = null, buyQty = null, buyUsdt = null;
   let triggerPrice = null, limitPrice = null, pendingSince = null;
-  const trades   = [];
-  const signals  = [];
+  const trades = [], signals = [];
   const startCapital = capital;
-  let maBlockedCount = 0;
-  let pendingSignal  = null;
-  let openSignalIdx  = null; // índice em signals[] do sinal que está em BOUGHT
+  let blockedCount = 0;
+  let pendingSignal = null;
+  let openSignalIdx = null;
+
+  const botOpts = {
+    entryDiscount:    config.entryDiscount    ?? 0.001,
+    immediateEntry:   config.immediateEntry   ?? false,
+    pendingTimeoutMs: config.pendingTimeoutMs ?? 30 * 60_000,
+    pendingCancelPct: config.pendingCancelPct ?? 0.002,
+  };
 
   for (const { openTime, close, rsi: entryRsi } of entrySeries) {
-    const exitRsi = exitRsiAt(exitSeries, openTime);
-    const ma50    = maSeries  ? maAt(maSeries,  openTime) : null;
-    const ma2     = maSeries2 ? maAt(maSeries2, openTime) : null;
+    const exitRsi  = exitRsiAt(exitSeries, openTime);
+    const maSnap   = maSnapAt(cMap, config, openTime);
+    const stopLossMa = getStopLossMa(maSnap, config);
 
     if (phase === 'WATCHING') {
-      if (entryRsi < strategy.entry.rsiBuy) {
-        const maCheck = checkMaFilter(close, ma50, maCandles, maFilter, openTime);
-        if (!maCheck.allowed) {
-          maBlockedCount++;
-          signals.push({ entryTime: openTime, entryRsi, entryPrice: close, result: maCheck.reason });
-          continue;
-        }
-        if (maFilter2?.enabled && ma2 !== null && close <= ma2) {
-          maBlockedCount++;
-          signals.push({ entryTime: openTime, entryRsi, entryPrice: close, result: 'MA2_BLOCKED' });
-          continue;
-        }
-        if (strategy.immediateEntry) {
-          // Compra imediata no preço atual, sem fase PENDING
-          openSignalIdx = signals.length;
-          signals.push({ entryTime: openTime, entryRsi, entryPrice: close, buyTime: openTime, buyPrice: close, result: 'BOUGHT' });
-          buyPrice = close;
-          buyQty   = capital / close;
-          buyUsdt  = capital;
-          phase = 'BOUGHT';
-          trades.push({ type: 'BUY', time: openTime, price: close, entryRsi });
-        } else {
-          triggerPrice  = close;
-          limitPrice    = parseFloat((close * (1 - strategy.entryDiscount)).toFixed(8));
-          pendingSince  = openTime;
-          pendingSignal = { entryTime: openTime, entryRsi, entryPrice: close };
-          phase = 'PENDING';
-        }
+      if (!checkRsi(entryRsi, config.entryRsi)) continue;
+
+      const entryCheck = evaluateEntry({
+        entryRsi, close, entryTimeMs: openTime, config, maSnap, adaptiveDips,
+      });
+      if (!entryCheck.allowed) {
+        blockedCount++;
+        signals.push({ entryTime: openTime, entryRsi, entryPrice: close, result: entryCheck.reason });
+        continue;
+      }
+
+      if (botOpts.immediateEntry) {
+        openSignalIdx = signals.length;
+        signals.push({ entryTime: openTime, entryRsi, entryPrice: close, buyTime: openTime, buyPrice: close, result: 'BOUGHT' });
+        buyPrice = close; buyQty = capital / close; buyUsdt = capital;
+        phase = 'BOUGHT';
+        trades.push({ type: 'BUY', time: openTime, price: close, entryRsi });
+      } else {
+        triggerPrice = close;
+        limitPrice   = parseFloat((close * (1 - botOpts.entryDiscount)).toFixed(8));
+        pendingSince = openTime;
+        pendingSignal = { entryTime: openTime, entryRsi, entryPrice: close };
+        phase = 'PENDING';
       }
 
     } else if (phase === 'PENDING') {
       const elapsedMs  = openTime - pendingSince;
-      const cancelLine = triggerPrice * (1 + strategy.pendingCancelPct);
-
-      if (close > cancelLine || elapsedMs > strategy.pendingTimeoutMs) {
+      const cancelLine = triggerPrice * (1 + botOpts.pendingCancelPct);
+      if (close > cancelLine || elapsedMs > botOpts.pendingTimeoutMs) {
         const reason = close > cancelLine ? 'CANCELLED_RECOVERY' : 'CANCELLED_TIMEOUT';
         if (pendingSignal) { signals.push({ ...pendingSignal, result: reason }); pendingSignal = null; }
         phase = 'WATCHING';
@@ -672,20 +670,15 @@ async function backtest(symbol, strategyId, exchange = 'binance', capital = 100,
         openSignalIdx = signals.length;
         signals.push({ ...pendingSignal, buyTime: openTime, buyPrice: close, result: 'BOUGHT' });
         pendingSignal = null;
-        buyPrice = close;
-        buyQty   = capital / close;
-        buyUsdt  = capital;
+        buyPrice = close; buyQty = capital / close; buyUsdt = capital;
         phase = 'BOUGHT';
         trades.push({ type: 'BUY', time: openTime, price: close, entryRsi });
         triggerPrice = limitPrice = pendingSince = null;
       }
 
     } else if (phase === 'BOUGHT') {
-      const slMa         = slMaSeries ? maAt(slMaSeries, openTime) : null;
-      const stopLossHit  = slMa !== null && close < slMa;
-      const rsiExitHit   = exitRsi !== null && exitRsi > strategy.exit.rsiSell;
-
-      if (stopLossHit || rsiExitHit) {
+      const exitEval = evaluateExit({ close, exitRsi, stopLossMa, config });
+      if (exitEval.exit) {
         const usdtOut = buyQty * close;
         const pnl     = usdtOut - buyUsdt;
         capital += pnl;
@@ -694,27 +687,23 @@ async function backtest(symbol, strategyId, exchange = 'binance', capital = 100,
           signals[openSignalIdx].exitPrice = close;
           signals[openSignalIdx].exitRsi   = exitRsi;
           signals[openSignalIdx].pnlPct    = (pnl / buyUsdt) * 100;
-          if (stopLossHit) signals[openSignalIdx].result = 'STOP_LOSS_MA';
+          if (exitEval.reason === 'stop_loss_ma') signals[openSignalIdx].result = 'STOP_LOSS_MA';
           openSignalIdx = null;
         }
         trades.push({
           type: 'SELL', time: openTime, price: close, exitRsi,
-          stopLoss: stopLossHit,
-          pnlUsdt: pnl, pnlPct: (pnl / buyUsdt) * 100,
-          capitalAfter: capital,
+          stopLoss: exitEval.reason === 'stop_loss_ma',
+          pnlUsdt: pnl, pnlPct: (pnl / buyUsdt) * 100, capitalAfter: capital,
         });
         phase = 'WATCHING';
         buyPrice = buyQty = buyUsdt = null;
       }
     }
   }
-  if (pendingSignal) signals.push({ ...pendingSignal, result: 'PENDING_OPEN' });
-  // posição ainda aberta ao fim do período
-  if (phase === 'BOUGHT' && openSignalIdx !== null) {
-    signals[openSignalIdx].result = 'POSITION_OPEN';
-  }
 
-  // ── Relatório ──────────────────────────────────────────────────────────────
+  if (pendingSignal) signals.push({ ...pendingSignal, result: 'PENDING_OPEN' });
+  if (phase === 'BOUGHT' && openSignalIdx !== null) signals[openSignalIdx].result = 'POSITION_OPEN';
+
   const sells    = trades.filter(t => t.type === 'SELL');
   const wins     = sells.filter(t => t.pnlUsdt >= 0).length;
   const totalPnl = sells.reduce((s, t) => s + t.pnlUsdt, 0);
@@ -725,323 +714,217 @@ async function backtest(symbol, strategyId, exchange = 'binance', capital = 100,
   console.log(`\n   Capital  : $${startCapital.toFixed(2)} → $${capital.toFixed(2)}  (${pSign}${totalPct}%)`);
   console.log(`   Trades   : ${sells.length}  |  Wins: ${wins}  Losses: ${sells.length - wins}  |  Win rate: ${winRate}%`);
   console.log(`   PnL total: ${pSign}$${totalPnl.toFixed(2)}`);
-  if (maFilter?.enabled) console.log(`   Bloqueados MA${maFilter.period}(${maFilter.interval}): ${maBlockedCount} sinais ignorados (preço < MA)`);
-
-  const stopLossCount = sells.filter(t => t.stopLoss).length;
-  if (stopLossCount) console.log(`   Stop Loss (MA): ${stopLossCount} saída(s) por stop loss`);
-
-  if (sells.length) {
-    console.log('\n   Data/Hora              RSI-saída   PnL           Capital');
-    console.log('   ' + '─'.repeat(60));
-    for (const t of sells) {
-      const s    = t.pnlUsdt >= 0 ? '+' : '';
-      const icon = t.stopLoss ? '🛑' : (t.pnlUsdt >= 0 ? '🟢' : '🔴');
-      console.log(
-        `   ${icon} ${fmtDate(t.time).padEnd(22)}` +
-        `  ${(t.exitRsi != null ? t.exitRsi.toFixed(1) : '—').padStart(5)}` +
-        `   ${(s + '$' + t.pnlUsdt.toFixed(2)).padStart(9)}` +
-        `  (${(s + t.pnlPct.toFixed(2) + '%').padStart(7)})` +
-        `  $${t.capitalAfter.toFixed(2)}` +
-        (t.stopLoss ? '  SL' : ''),
-      );
-    }
-    console.log('   ' + '─'.repeat(60));
-  }
-
-  if (phase === 'BOUGHT') {
-    const lastClose  = entryCandles[entryCandles.length - 1].close;
-    const unrealized = buyQty * lastClose - buyUsdt;
-    const us = unrealized >= 0 ? '+' : '';
-    console.log(`\n   ⚠️  Posição aberta: comprado a $${fmtP(buyPrice)}  PnL não realizado: ${us}$${unrealized.toFixed(2)}`);
-  }
-
-  // ── Sinais RSI detectados (para comparar com gráfico da exchange) ──────────
-  if (signals.length) {
-    const ICONS = {
-      BOUGHT:                 '🟢',
-      STOP_LOSS_MA:           '🛑',
-      POSITION_OPEN:          '🟡',
-      CANCELLED_RECOVERY:     '↩️ ',
-      CANCELLED_TIMEOUT:      '⏱️ ',
-      MA_BLOCKED:             '🚫',
-      MA2_BLOCKED:            '🚫',
-      THREE_CANDLES_BLOCKED:  '📊',
-      MA_NO_DATA:             '❓',
-      PENDING_OPEN:           '⏳',
-    };
-    console.log(`\n   ── Sinais RSI(${strategy.entry.interval})<${strategy.entry.rsiBuy} detectados ─────────────────────────────────────────`);
-    console.log(`   ${'Entrada'.padEnd(22)}  RSI   ${'Preço'.padEnd(10)}  ${'Saída'.padEnd(22)}  RSI    PnL%   Resultado`);
-    console.log('   ' + '─'.repeat(100));
-    for (const s of signals) {
-      const entryCol = fmtDate(s.entryTime).padEnd(22);
-      const rsiCol   = s.entryRsi.toFixed(1).padStart(5);
-      const priceCol = ('$' + fmtP(s.entryPrice)).padEnd(10);
-
-      let exitCol = '—'.padEnd(22), exitRsiCol = '  —  ', pnlCol = '   —  ';
-      if (s.exitTime) {
-        exitCol    = fmtDate(s.exitTime).padEnd(22);
-        exitRsiCol = s.exitRsi.toFixed(1).padStart(5);
-        const ps   = s.pnlPct >= 0 ? '+' : '';
-        pnlCol     = (ps + s.pnlPct.toFixed(2) + '%').padStart(7);
-      }
-
-      const label = s.result === 'BOUGHT'                ? 'vendido'
-                  : s.result === 'STOP_LOSS_MA'          ? `stop loss (abaixo MA${stopLoss?.period}(${stopLoss?.interval}))`
-                  : s.result === 'POSITION_OPEN'         ? 'posição aberta'
-                  : s.result === 'CANCELLED_RECOVERY'    ? 'cancelado (preço subiu)'
-                  : s.result === 'CANCELLED_TIMEOUT'     ? 'cancelado (timeout)'
-                  : s.result === 'MA_BLOCKED'            ? `bloqueado (abaixo MA${maFilter?.period}(${maFilter?.interval}))`
-                  : s.result === 'MA2_BLOCKED'           ? `bloqueado (abaixo MA${maFilter2?.period}(${maFilter2?.interval}))`
-                  : s.result === 'THREE_CANDLES_BLOCKED' ? 'bloqueado (padrão candles 1h não atendido)'
-                  : s.result === 'MA_NO_DATA'            ? 'bloqueado (sem dados MA)'
-                  : s.result === 'PENDING_OPEN'          ? 'pendente'
-                  : s.result;
-
-      console.log(`   ${ICONS[s.result] ?? '?'} ${entryCol}  ${rsiCol}  ${priceCol}  ${exitCol}  ${exitRsiCol}  ${pnlCol}  ${label}`);
-    }
-    console.log('   ' + '─'.repeat(100));
+  if (blockedCount) console.log(`   Bloqueados (MA/extensão): ${blockedCount} sinais`);
+  if (sells.filter(t => t.stopLoss).length) {
+    console.log(`   Stop Loss (MA): ${sells.filter(t => t.stopLoss).length} saída(s)`);
   }
 }
 
 // ── Tick (loop ao vivo) ───────────────────────────────────────────────────────
-async function tick(rowId, adapter, strategy, log, prevExitRsi = null) {
-  const { entry, exit, maFilter, maFilter2, stopLoss } = strategy;
-  const specs = [
-    { interval: entry.interval, limit: entry.rsiPeriod + 50 },
-    { interval: exit.interval,  limit: exit.rsiPeriod  + 50 },
-    ...(maFilter?.enabled  ? [{ interval: maFilter.interval,  limit: maFilter.period  + 10 }] : []),
-    ...(maFilter2?.enabled ? [{ interval: maFilter2.interval, limit: maFilter2.period + 10 }] : []),
-    ...(stopLoss ? [{ interval: stopLoss.interval, limit: stopLoss.period + 10 }] : []),
-  ];
-  const cMap = await fetchCandleMap(adapter, specs);
+async function tick(rowId, adapter, strategy, log, prevExitRsi, session) {
+  const { config } = strategy;
+  const specs = getRequiredSpecs(config);
+  const cMap  = await fetchCandleMap(adapter, specs);
 
-  const entryCandles = cMap[entry.interval];
-  const exitCandles  = cMap[exit.interval];
-  const entryCloses  = entryCandles.map(c => c.close);
-  const exitCloses   = exitCandles.map(c => c.close);
-
-  if (entryCloses.length < entry.rsiPeriod + 2) { log('Dados de entrada insuficientes.'); return { entryRsi: null, exitRsi: prevExitRsi }; }
-  if (exitCloses.length  < exit.rsiPeriod  + 2) { log('Dados de saída insuficientes.');   return { entryRsi: null, exitRsi: prevExitRsi }; }
-
-  const entryRsiArr = ti.RSI.calculate({ values: entryCloses, period: entry.rsiPeriod });
-  const exitRsiArr  = ti.RSI.calculate({ values: exitCloses,  period: exit.rsiPeriod  });
-
-  const entryRsi = entryRsiArr[entryRsiArr.length - 1];
-  const exitRsi  = exitRsiArr[exitRsiArr.length - 1];
-  const close    = entryCloses[entryCloses.length - 1];
-
-  // MA50(1h) — filtro de entrada principal
-  let ma50 = null, maCandles = null;
-  if (maFilter?.enabled) {
-    maCandles   = cMap[maFilter.interval];
-    const maArr = ti.SMA.calculate({ values: maCandles.map(c => c.close), period: maFilter.period });
-    ma50        = maArr[maArr.length - 1] ?? null;
+  const entryIv  = config.entryRsi.interval;
+  const exitIv   = config.exitRsi.interval;
+  const entryCandles = cMap[entryIv];
+  const exitCandles  = cMap[exitIv];
+  if (!entryCandles?.length || !exitCandles?.length) {
+    log('Dados insuficientes.'); return { entryRsi: null, exitRsi: prevExitRsi };
   }
 
-  // MA secundária (maFilter2) — segundo filtro de entrada
-  let ma2 = null;
-  if (maFilter2?.enabled) {
-    const ma2Arr = ti.SMA.calculate({ values: cMap[maFilter2.interval].map(c => c.close), period: maFilter2.period });
-    ma2          = ma2Arr[ma2Arr.length - 1] ?? null;
-  }
+  const entryCloses = entryCandles.map(c => c.close);
+  const exitCloses  = exitCandles.map(c => c.close);
+  const entryRsiArr = ti.RSI.calculate({ values: entryCloses, period: config.entryRsi.period });
+  const exitRsiArr  = ti.RSI.calculate({ values: exitCloses,  period: config.exitRsi.period });
+  const entryRsi    = entryRsiArr[entryRsiArr.length - 1];
+  const exitRsi     = exitRsiArr[exitRsiArr.length - 1];
+  const close       = entryCloses[entryCloses.length - 1];
+  const candleMs    = entryCandles[entryCandles.length - 1]?.openTime ?? null;
 
-  // MA de stop loss — reutiliza ma50 ou ma2 se mesmos parâmetros
-  let stopLossMa = null;
-  if (stopLoss) {
-    const sameAs1 = maFilter?.enabled  && maFilter.interval  === stopLoss.interval && maFilter.period  === stopLoss.period;
-    const sameAs2 = maFilter2?.enabled && maFilter2.interval === stopLoss.interval && maFilter2.period === stopLoss.period;
-    if (sameAs1)      stopLossMa = ma50;
-    else if (sameAs2) stopLossMa = ma2;
-    else {
-      const slArr = ti.SMA.calculate({ values: cMap[stopLoss.interval].map(c => c.close), period: stopLoss.period });
-      stopLossMa  = slArr[slArr.length - 1] ?? null;
-    }
-  }
+  if (entryRsi == null || exitRsi == null) return { entryRsi, exitRsi: prevExitRsi };
 
-  if (entryRsi == null || exitRsi == null) { log('Indicadores insuficientes.'); return { entryRsi, exitRsi: prevExitRsi }; }
+  const adaptiveDips = session.adaptiveDips ?? computeAdaptiveDips(cMap, config);
+  const maSnap       = buildMaSnapshot(cMap, config);
+  const stopLossMa   = getStopLossMa(maSnap, config);
 
   const state = await loadState(rowId);
-  if (!state) { log('❌ Linha não encontrada no Supabase.'); return { entryRsi, exitRsi }; }
+  if (!state) { log('❌ Linha não encontrada.'); return { entryRsi, exitRsi }; }
 
   const { phase, capital, symbol } = state;
   const exitColor = exitRsi >= strategy.fastRsiThreshold ? Y : '';
+  const rsiEntryHit = checkRsi(entryRsi, config.entryRsi);
 
-  // ── WATCHING ────────────────────────────────────────────────────────────────
   if (phase === 'WATCHING') {
-    const bullish  = ma50 !== null ? close > ma50 : true;
-    const bullish2 = ma2  !== null ? close > ma2  : true;
-    const maStr    = ma50 !== null
-      ? `  MA${maFilter.period}(${maFilter.interval})=$${fmtP(ma50)} ${bullish ? `${G}↑${X}` : `${R}↓${X}`}`
-      : '';
-    const maStr2   = ma2 !== null
-      ? `  MA${maFilter2.period}(${maFilter2.interval})=$${fmtP(ma2)} ${bullish2 ? `${G}↑${X}` : `${R}↓${X}`}`
-      : '';
-    const eColor   = entryRsi < entry.rsiBuy ? G : '';
     log(
-      `${eColor}RSI(${entry.interval})=${entryRsi.toFixed(1)}${eColor ? X : ''}` +
-      `  ${exitColor}RSI(${exit.interval})=${exitRsi.toFixed(1)}${exitColor ? X : ''}` +
-      `${maStr}${maStr2}  $${fmtP(close)}  capital=$${parseFloat(capital).toFixed(2)}  [WATCHING]`,
+      `${rsiEntryHit ? G : ''}RSI(${entryIv})=${entryRsi.toFixed(1)}${rsiEntryHit ? X : ''}` +
+      `  ${exitColor}RSI(${exitIv})=${exitRsi.toFixed(1)}${exitColor ? X : ''}` +
+      `  $${fmtP(close)}  capital=$${parseFloat(capital).toFixed(2)}  [WATCHING|AMAP]`,
     );
 
-    if (entryRsi < entry.rsiBuy) {
-      const maCheck = checkMaFilter(close, ma50, maCandles, maFilter, Date.now());
-      if (!maCheck.allowed) {
-        const abovePct = ma50 ? ((close / ma50 - 1) * 100).toFixed(1) : '?';
-        const reasons  = {
-          MA_BLOCKED:           `preço abaixo MA${maFilter?.period}(${maFilter?.interval})=$${fmtP(ma50)}`,
-          THREE_CANDLES_BLOCKED:`preço ${abovePct}% acima MA50 mas padrão de candles 1h não atendido (3 alta ou 1 queda+3 alta)`,
-          MA_NO_DATA:           'sem dados de MA',
+    if (rsiEntryHit) {
+      const sigBase = () => entrySignalFields(state, rowId, {
+        price: close, entryRsi, exitRsi, ma50: null, ma2: null, candleOpenTime: candleMs,
+      });
+      const newCandle = session.entryCandleMs !== candleMs;
+      const entryCheck = evaluateEntry({
+        entryRsi, close, entryTimeMs: Date.now(), config, maSnap, adaptiveDips,
+      });
+
+      if (!entryCheck.allowed) {
+        const reasons = {
+          MA_BLOCKED:            'preço abaixo da MA (fixo)',
+          MA_ADAPTIVE_BLOCKED:   `preço abaixo do piso adaptativo (−${entryCheck.dipPct?.toFixed(1) ?? '?'}%)`,
+          THREE_CANDLES_BLOCKED: 'extensão acima da MA sem confirmação 3/4 candles',
+          MA_NO_DATA:            'sem dados de MA',
+          RSI_NOT_MET:           'RSI não atende',
         };
-        log(`${Y}⚠️  RSI(${entry.interval})=${entryRsi.toFixed(1)} < ${entry.rsiBuy} — bloqueado: ${reasons[maCheck.reason] ?? maCheck.reason}${X}`);
+        log(`${Y}⚠️  Entrada bloqueada: ${reasons[entryCheck.reason] ?? entryCheck.reason}${X}`);
+        if (newCandle) {
+          session.entryCandleMs = candleMs;
+          await insertEntrySignal({ ...sigBase(), status: 'blocked', block_reason: entryCheck.reason });
+        }
         return { entryRsi, exitRsi, phase: 'WATCHING' };
       }
-      if (maFilter2?.enabled && ma2 !== null && close <= ma2) {
-        log(`${Y}⚠️  RSI(${entry.interval})=${entryRsi.toFixed(1)} < ${entry.rsiBuy} — bloqueado: preço $${fmtP(close)} ≤ MA${maFilter2.period}(${maFilter2.interval}) $${fmtP(ma2)}${X}`);
+
+      const volCheck = await checkEntryVolume(adapter, config, session);
+      if (!volCheck.allowed) {
+        log(`${Y}⚠️  Entrada bloqueada: volume 24h ${fmtVolumeUsdt(volCheck.volumeUsdt)} < mínimo ${fmtVolumeUsdt(volCheck.minVolumeUsdt)}${X}`);
+        if (newCandle) {
+          session.entryCandleMs = candleMs;
+          await insertEntrySignal({ ...sigBase(), status: 'blocked', block_reason: 'VOLUME_LOW' });
+        }
         return { entryRsi, exitRsi, phase: 'WATCHING' };
       }
+
+      if (newCandle) session.entryCandleMs = candleMs;
+
       if (strategy.immediateEntry) {
-        log(`${G}🎯 RSI(${entry.interval})=${entryRsi.toFixed(1)} < ${entry.rsiBuy} → comprando agora $${fmtP(close)} [IMMEDIATE]${X}`);
         let result;
         try { result = await adapter.marketBuy(parseFloat(capital)); }
         catch (err) { log(`❌ Erro na compra: ${err.message}`); return { entryRsi, exitRsi, phase: 'WATCHING' }; }
         const { filledQty, quoteQty, avgPrice } = result;
+        const now = new Date().toISOString();
+        session.activeEntrySignalId = await insertEntrySignal({
+          ...sigBase(), status: 'executed', immediate_entry: true,
+          executed_at: now, executed_price: avgPrice, executed_qty: filledQty, executed_usdt: quoteQty,
+        });
         await saveState(rowId, {
-          phase: 'BOUGHT',
-          buy_price: avgPrice, buy_qty: filledQty, buy_usdt: quoteQty,
-          buy_time: new Date().toISOString(), rsi_entry: entryRsi,
+          phase: 'BOUGHT', buy_price: avgPrice, buy_qty: filledQty, buy_usdt: quoteQty,
+          buy_time: now, rsi_entry: entryRsi,
           trigger_price: null, limit_price: null, trigger_rsi: null, pending_since: null,
         });
-        log('─'.repeat(60));
-        log(`${G}🟢 COMPRA IMEDIATA${X}  preço=$${fmtP(avgPrice)}  qty=${filledQty}  USDT=$${quoteQty.toFixed(2)}`);
-        log(`   RSI-entrada(${entry.interval})=${entryRsi.toFixed(1)}`);
-        log('─'.repeat(60));
-        sendWhatsApp(`🟢 ${symbol} COMPRA [${adapter.name}]\nPreço: $${fmtP(avgPrice)}\nQty: ${filledQty}\nUSDT: $${quoteQty.toFixed(2)}\nRSI(${entry.interval}): ${entryRsi.toFixed(1)}`);
+        log(`${G}🟢 COMPRA IMEDIATA [AMAP]${X}  $${fmtP(avgPrice)}`);
         return { entryRsi, exitRsi, phase: 'BOUGHT' };
       }
+
       const limitPrice = parseFloat((close * (1 - strategy.entryDiscount)).toFixed(8));
-      log(`${G}🎯 RSI(${entry.interval})=${entryRsi.toFixed(1)} < ${entry.rsiBuy} + acima MA${maFilter?.period ?? ''}(${maFilter?.interval ?? ''}) → alvo $${fmtP(limitPrice)} [PENDING]${X}`);
-      await saveState(rowId, {
-        phase: 'PENDING',
-        trigger_price: close, limit_price: limitPrice,
-        trigger_rsi: entryRsi, pending_since: new Date().toISOString(),
+      const pendingSince = new Date().toISOString();
+      session.activeEntrySignalId = await insertEntrySignal({
+        ...sigBase(), status: 'pending',
+        trigger_price: close, limit_price: limitPrice, pending_since: pendingSince,
       });
-      sendWhatsApp(`🎯 ${symbol}\nRSI(${entry.interval})=${entryRsi.toFixed(1)} < ${entry.rsiBuy}\nMA${maFilter?.period}(${maFilter?.interval}): $${fmtP(ma50)} ↑\nAlvo: $${fmtP(limitPrice)}`);
+      await saveState(rowId, {
+        phase: 'PENDING', trigger_price: close, limit_price: limitPrice,
+        trigger_rsi: entryRsi, pending_since: pendingSince,
+      });
+      log(`${G}🎯 PENDING [AMAP] alvo $${fmtP(limitPrice)}${X}`);
       return { entryRsi, exitRsi, phase: 'PENDING' };
     }
     return { entryRsi, exitRsi, phase: 'WATCHING' };
   }
 
-  // ── PENDING ──────────────────────────────────────────────────────────────────
   if (phase === 'PENDING') {
     const limitPrice   = parseFloat(state.limit_price);
     const triggerPrice = parseFloat(state.trigger_price);
     const pendingMs    = Date.now() - new Date(state.pending_since).getTime();
-    const distPct      = ((close - limitPrice) / limitPrice * 100).toFixed(2);
     const cancelLine   = triggerPrice * (1 + strategy.pendingCancelPct);
 
-    log(
-      `RSI(${entry.interval})=${entryRsi.toFixed(1)}` +
-      `  ${exitColor}RSI(${exit.interval})=${exitRsi.toFixed(1)}${exitColor ? X : ''}` +
-      `  $${fmtP(close)}  alvo=$${fmtP(limitPrice)}  dist=${distPct}%  [PENDING ${fmtDur(pendingMs)}]`,
-    );
-
     if (close > cancelLine || pendingMs > strategy.pendingTimeoutMs) {
-      const reason = close > cancelLine
-        ? `preço recuperou ($${fmtP(close)} > $${fmtP(triggerPrice)})`
-        : `timeout ${fmtDur(strategy.pendingTimeoutMs)}`;
-      log(`❌ Cancelando PENDING — ${reason}`);
-      await saveState(rowId, {
-        phase: 'WATCHING',
-        trigger_price: null, limit_price: null, trigger_rsi: null, pending_since: null,
-      });
+      const blockReason = close > cancelLine ? 'CANCELLED_RECOVERY' : 'CANCELLED_TIMEOUT';
+      await patchEntrySignal(session.activeEntrySignalId, { status: 'cancelled', block_reason: blockReason, pending_until: new Date().toISOString() });
+      session.activeEntrySignalId = null;
+      await saveState(rowId, { phase: 'WATCHING', trigger_price: null, limit_price: null, trigger_rsi: null, pending_since: null });
       return { entryRsi, exitRsi, phase: 'WATCHING' };
     }
-
     if (close <= limitPrice) {
-      log(`${G}✅ Alvo atingido! Comprando $${parseFloat(capital).toFixed(2)}...${X}`);
+      const volCheck = await checkEntryVolume(adapter, config, session);
+      if (!volCheck.allowed) {
+        log(`${Y}⚠️  Compra bloqueada: volume 24h ${fmtVolumeUsdt(volCheck.volumeUsdt)} < mínimo ${fmtVolumeUsdt(volCheck.minVolumeUsdt)}${X}`);
+        return { entryRsi, exitRsi, phase: 'PENDING' };
+      }
       let result;
       try { result = await adapter.marketBuy(parseFloat(capital)); }
       catch (err) { log(`❌ Erro na compra: ${err.message}`); return { entryRsi, exitRsi, phase: 'PENDING' }; }
-
       const { filledQty, quoteQty, avgPrice } = result;
+      const now = new Date().toISOString();
+      await patchEntrySignal(session.activeEntrySignalId, {
+        status: 'executed', pending_until: now,
+        executed_at: now, executed_price: avgPrice, executed_qty: filledQty, executed_usdt: quoteQty,
+      });
       await saveState(rowId, {
-        phase: 'BOUGHT',
-        buy_price: avgPrice, buy_qty: filledQty, buy_usdt: quoteQty,
-        buy_time: new Date().toISOString(), rsi_entry: entryRsi,
+        phase: 'BOUGHT', buy_price: avgPrice, buy_qty: filledQty, buy_usdt: quoteQty,
+        buy_time: now, rsi_entry: entryRsi,
         trigger_price: null, limit_price: null, trigger_rsi: null, pending_since: null,
       });
-      log('─'.repeat(60));
-      log(`${G}🟢 COMPRA${X}  preço=$${fmtP(avgPrice)}  qty=${filledQty}  USDT=$${quoteQty.toFixed(2)}`);
-      log(`   RSI-entrada(${entry.interval})=${entryRsi.toFixed(1)}  RSI-saída(${exit.interval})=${exitRsi.toFixed(1)}`);
-      log('─'.repeat(60));
-      sendWhatsApp(`🟢 ${symbol} COMPRA [${adapter.name}]\nPreço: $${fmtP(avgPrice)}\nQty: ${filledQty}\nUSDT: $${quoteQty.toFixed(2)}\nRSI-entrada(${entry.interval}): ${entryRsi.toFixed(1)}`);
       return { entryRsi, exitRsi, phase: 'BOUGHT' };
     }
-
     return { entryRsi, exitRsi, phase: 'PENDING' };
   }
 
-  // ── BOUGHT ───────────────────────────────────────────────────────────────────
   if (phase === 'BOUGHT') {
-    const buyPrice     = parseFloat(state.buy_price);
-    const pnlPct       = ((close - buyPrice) / buyPrice * 100).toFixed(2);
-    const pnlColor     = parseFloat(pnlPct) >= 0 ? G : R;
-    const fastMark     = exitRsi >= strategy.fastRsiThreshold ? ' ⚡' : '';
-    const stopLossHit  = stopLossMa !== null && close < stopLossMa;
-    const rsiExitHit   = exitRsi > exit.rsiSell;
+    const buyPrice  = parseFloat(state.buy_price);
+    const exitEval  = evaluateExit({ close, exitRsi, stopLossMa, config });
+    const pnlPct    = ((close - buyPrice) / buyPrice * 100).toFixed(2);
 
     log(
-      `RSI(${entry.interval})=${entryRsi.toFixed(1)}` +
-      `  ${exitColor}RSI(${exit.interval})=${exitRsi.toFixed(1)}${exitColor ? X : ''}${fastMark}` +
-      `  $${fmtP(close)}  buy=$${fmtP(buyPrice)}  ${pnlColor}PnL=${pnlPct}%${X}` +
-      (stopLossMa ? `  ${R}SL(MA${stopLoss.period})=$${fmtP(stopLossMa)}${X}` : '') +
-      `  [BOUGHT]`,
+      `RSI(${entryIv})=${entryRsi.toFixed(1)}  RSI(${exitIv})=${exitRsi.toFixed(1)}` +
+      `  $${fmtP(close)}  PnL=${pnlPct}%  [BOUGHT|AMAP]`,
     );
 
-    if (stopLossHit || rsiExitHit) {
-      if (stopLossHit) log(`${R}🛑 STOP LOSS: preço $${fmtP(close)} < MA${stopLoss.period}(${stopLoss.interval}) $${fmtP(stopLossMa)} — vendendo${X}`);
-      else             log(`${R}📈 RSI(${exit.interval})=${exitRsi.toFixed(1)} > ${exit.rsiSell} — vendendo${X}`);
-
+    if (exitEval.exit) {
+      const stopLossHit = exitEval.reason === 'stop_loss_ma';
       let result;
-      try { result = await adapter.marketSell(parseFloat(state.buy_qty), log); }
+      try { result = await executeMarketSell(adapter, config, session, parseFloat(state.buy_qty), log); }
       catch (err) { log(`❌ Erro na venda: ${err.message}`); return { entryRsi, exitRsi, phase: 'BOUGHT' }; }
 
       const { soldQty, usdtOut, exitPrice } = result;
       const capitalBefore = parseFloat(capital);
       const pnlUsdt       = usdtOut - parseFloat(state.buy_usdt);
       const capitalAfter  = capitalBefore + pnlUsdt;
-      const pnlPctFinal   = (pnlUsdt / parseFloat(state.buy_usdt) * 100).toFixed(2);
-      const pnlSign       = pnlUsdt >= 0 ? '+' : '';
+      const exitTime      = new Date().toISOString();
+      const durationMs    = state.buy_time ? Date.now() - new Date(state.buy_time).getTime() : null;
 
-      await insertTrade({
-        symbol, exchange: state.exchange, strategy_id: state.strategy_id,
-        entry_time: state.buy_time, exit_time: new Date().toISOString(),
-        entry_price: buyPrice, exit_price: exitPrice,
-        qty: soldQty, usdt_in: parseFloat(state.buy_usdt), usdt_out: usdtOut,
-        pnl_usdt: pnlUsdt, pnl_pct: parseFloat(pnlPctFinal),
-        capital_before: capitalBefore, capital_after: capitalAfter,
-        rsi_entry: parseFloat(state.rsi_entry ?? 0), rsi_exit: exitRsi,
+      const exitSignalId = await insertExitSignal({
+        symbol, exchange: state.exchange ?? 'binance', strategy_id: state.strategy_id ?? 'flex',
+        state_id: rowId, entry_signal_id: session.activeEntrySignalId ?? null,
+        signal_type: stopLossHit ? 'stop_loss' : 'rsi', price: close, rsi_exit: exitRsi,
+        stop_loss_ma: stopLossMa, buy_price: buyPrice, status: 'executed',
+        executed_at: exitTime, executed_price: exitPrice, executed_qty: soldQty, executed_usdt: usdtOut,
       });
 
+      const tradeId = await insertTrade({
+        symbol, exchange: state.exchange, strategy_id: state.strategy_id ?? 'flex',
+        entry_time: state.buy_time, exit_time: exitTime,
+        entry_price: buyPrice, exit_price: exitPrice,
+        qty: soldQty, usdt_in: parseFloat(state.buy_usdt), usdt_out: usdtOut,
+        pnl_usdt: pnlUsdt, pnl_pct: parseFloat((pnlUsdt / parseFloat(state.buy_usdt) * 100).toFixed(2)),
+        capital_before: capitalBefore, capital_after: capitalAfter,
+        rsi_entry: parseFloat(state.rsi_entry ?? 0), rsi_exit: exitRsi,
+        exit_reason: exitEval.reason, duration_ms: durationMs,
+        entry_signal_id: session.activeEntrySignalId, exit_signal_id: exitSignalId,
+      });
+
+      if (session.activeEntrySignalId) await patchEntrySignal(session.activeEntrySignalId, { trade_id: tradeId });
+      session.activeEntrySignalId = null;
       await saveState(rowId, {
         phase: 'WATCHING', capital: capitalAfter,
         buy_price: null, buy_qty: null, buy_usdt: null, buy_time: null, rsi_entry: null,
       });
-
-      const icon = stopLossHit ? '🛑' : (pnlUsdt >= 0 ? '🟢' : '🔴');
-      log('─'.repeat(60));
-      log(`${icon} VENDA${stopLossHit ? ` [STOP LOSS MA${stopLoss.period}]` : ''}  preço=$${fmtP(exitPrice)}  qty=${soldQty}`);
-      log(`   PnL    : ${pnlSign}$${pnlUsdt.toFixed(4)} (${pnlSign}${pnlPctFinal}%)`);
-      log(`   RSI(${exit.interval}): ${exitRsi.toFixed(1)}`);
-      log(`   Capital: $${capitalBefore.toFixed(4)} → $${capitalAfter.toFixed(4)}`);
-      log('─'.repeat(60));
-      const waReason = stopLossHit
-        ? `🛑 Stop Loss: $${fmtP(close)} < MA${stopLoss.period}(${stopLoss.interval}) $${fmtP(stopLossMa)}`
-        : `📈 RSI(${exit.interval}): ${exitRsi.toFixed(1)}`;
-      sendWhatsApp(`${stopLossHit ? '🛑' : '🔴'} ${symbol} VENDA [${adapter.name}]\nRazão: ${waReason}\nPreço: $${fmtP(exitPrice)}\nPnL: ${pnlSign}$${pnlUsdt.toFixed(2)} (${pnlSign}${pnlPctFinal}%)\nCapital: $${capitalBefore.toFixed(2)} → $${capitalAfter.toFixed(2)}`);
+      log(`${stopLossHit ? '🛑' : '🔴'} VENDA [AMAP] PnL=$${pnlUsdt.toFixed(2)}`);
       return { entryRsi, exitRsi, phase: 'WATCHING' };
     }
-
     return { entryRsi, exitRsi, phase: 'BOUGHT' };
   }
 
@@ -1050,7 +933,7 @@ async function tick(rowId, adapter, strategy, log, prevExitRsi = null) {
 
 // ── startSymbol ───────────────────────────────────────────────────────────────
 async function startSymbol(row, color) {
-  const strategy = STRATEGIES[row.strategy_id];
+  const strategy = resolveStrategy(row);
   if (!strategy) {
     console.error(`❌ strategy_id "${row.strategy_id}" desconhecida para ${row.symbol}`);
     return;
@@ -1060,7 +943,7 @@ async function startSymbol(row, color) {
   const log     = makeLogger(row.symbol, color);
 
   log(
-    `=== RSI Multi Bot | ${adapter.name} | ${adapter.pair}` +
+    `=== AMAP Bot | ${adapter.name} | ${adapter.pair}` +
     ` | ${strategy.label}` +
     ` | poll: ${strategy.pollMs / 1000}s/${strategy.fastPollMs / 1000}s | fase: ${row.phase} ===`,
   );
@@ -1071,9 +954,27 @@ async function startSymbol(row, color) {
     const ms = Date.now() - new Date(row.pending_since).getTime();
     log(`♻️  PENDING — alvo=$${fmtP(row.limit_price)} | gatilho=$${fmtP(row.trigger_price)} | há ${fmtDur(ms)}`);
   }
+  if (strategy.config.allowLowVolume) {
+    log(`ℹ️  Volume baixo autorizado — saída sempre a mercado`);
+  }
 
   let lastResult = { entryRsi: null, exitRsi: null, phase: row.phase };
   let errCount   = 0;
+  const session  = { entryCandleMs: null, activeEntrySignalId: null, adaptiveDips: null };
+
+  if (hasAdaptiveFilters(strategy.config)) {
+    try {
+      session.adaptiveDips = await refreshAdaptiveDips(adapter, strategy.config);
+      const dips = Object.entries(session.adaptiveDips).map(([k, v]) => `${k}:${v}%`).join(' ');
+      log(`📐 Dips adaptativos: ${dips || 'nenhum'}`);
+      setInterval(async () => {
+        try { session.adaptiveDips = await refreshAdaptiveDips(adapter, strategy.config); }
+        catch {}
+      }, 24 * 60 * 60_000);
+    } catch (err) {
+      log(`⚠️  Dips adaptativos: ${err.message}`);
+    }
+  }
 
   const schedule = () => {
     const { phase, exitRsi } = lastResult;
@@ -1083,7 +984,7 @@ async function startSymbol(row, color) {
 
   const run = async () => {
     try {
-      lastResult = await tick(row.id, adapter, strategy, log, lastResult.exitRsi);
+      lastResult = await tick(row.id, adapter, strategy, log, lastResult.exitRsi, session);
       errCount   = 0;
     } catch (err) {
       errCount++;
@@ -1096,38 +997,117 @@ async function startSymbol(row, color) {
   await run();
 }
 
+async function runAdaptiveTest(symbol, exchange, intervals) {
+  const adapter = buildAdapter(exchange, symbol);
+  const config  = buildTradeConfig({
+    maConditions: intervals.map(iv => ({ period: 50, interval: iv, adaptive: true })),
+  });
+  const specs = getRequiredSpecs(config);
+  const cMap  = {};
+  await Promise.all(specs.map(async ({ interval, limit }) => {
+    cMap[interval] = await adapter.fetchCandles(Math.max(limit, 300), interval);
+  }));
+
+  console.log(`\n${'─'.repeat(68)}`);
+  console.log(`📐 AMAP — Teste adaptativo: ${symbol} [${adapter.name}]`);
+
+  const reports = buildAdaptiveReport(cMap, config);
+  if (!reports.length) {
+    console.log('   Nenhum filtro MA adaptativo na config.');
+    return;
+  }
+
+  for (const r of reports) {
+    const candles = cMap[r.interval];
+    const close   = candles[candles.length - 1].close;
+    const ma      = r.currentMa;
+    const floor   = ma != null ? ma * (1 - r.dipPct / 100) : null;
+    const dipNow  = ma != null ? (ma - close) / ma * 100 : null;
+
+    console.log(`\n   ── MA${r.period}(${r.interval}) ─────────────────────────────────────`);
+    console.log(`   Episódios         : ${r.episodeCount ?? r.episodes?.length ?? 0}`);
+    if (r.usedDefault) {
+      console.log(`   Threshold         : ${r.dipPct}% (padrão — ${r.reason})`);
+    } else {
+      console.log(`   Média dos dips    : ${r.avgRaw}%`);
+      console.log(`   Threshold (clamp) : ${r.dipPct}%`);
+    }
+    if (r.episodes?.length) {
+      const top = [...r.episodes].sort((a, b) => b.maxDipPct - a.maxDipPct).slice(0, 5);
+      console.log('   Maiores dips:');
+      for (const ep of top) {
+        console.log(`     ${fmtDate(ep.startTime).padEnd(22)}  ${ep.maxDipPct.toFixed(2)}%`);
+      }
+    }
+    console.log(`   Preço atual       : $${fmtP(close)}`);
+    console.log(`   MA atual          : $${fmtP(ma)}  (dip agora: ${dipNow?.toFixed(2) ?? '—'}%)`);
+    console.log(`   Piso adaptativo   : $${fmtP(floor)}  (MA − ${r.dipPct}%)`);
+    console.log(`   Entrada MA OK?    : ${floor != null && close >= floor ? '✅' : '❌'}`);
+  }
+  console.log('─'.repeat(68));
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 async function main() {
   const args = process.argv.slice(2);
 
-  // ── Modo backtest ──────────────────────────────────────────────────────────
-  if (args[0] === '--backtest') {
-    const symbol     = args[1];
-    const strategyId = args[2];
-    const exchange   = args[3] ?? 'binance';
-    const capital    = parseFloat(args[4] ?? '100');
-    // args[5]: 'true' | 'false' — sobrescreve maFilter.enabled da estratégia; omitir = usa o padrão
-    // args[6]: 'true' | 'false' — sobrescreve threeCandles.enabled; omitir = usa o padrão
-    // args[7]: 'true' | 'false' — sobrescreve threeCandles.fourCandlesEnabled; omitir = usa o padrão
-    const maOverride           = args[5] === 'true' ? true : args[5] === 'false' ? false : null;
-    const threeCandlesOverride = args[6] === 'true' ? true : args[6] === 'false' ? false : null;
-    const fourCandlesOverride  = args[7] === 'true' ? true : args[7] === 'false' ? false : null;
+  if (args[0] === '--adaptive-test') {
+    const symbol    = args[1]?.toUpperCase();
+    const exchange  = args[2] ?? 'binance';
+    const intervals = args.length > 3 ? args.slice(3) : ['1h', '4h'];
 
     if (!symbol) {
-      console.log('Uso: node trading-rsi-multi.js --backtest <SYMBOL> [strategyId] [exchange] [capital] [ma50=true|false] [3candles=true|false] [4candles=true|false]');
-      console.log('\nEstratégias disponíveis:');
-      for (const [id, s] of Object.entries(STRATEGIES))
-        console.log(`  ${id.padEnd(22)} ${s.label}  (MA padrão: ${s.maFilter?.enabled ?? false})`);
+      console.log('Uso: node trading-rsi-multi.js --adaptive-test <SYMBOL> [exchange] [intervals...]');
+      console.log('Ex:  node trading-rsi-multi.js --adaptive-test BTCUSDT binance 1h 4h');
       process.exit(0);
     }
 
     await Promise.all([syncBinanceClock(), syncGateClock()]);
+    await runAdaptiveTest(symbol, exchange, intervals);
+    console.log();
+    process.exit(0);
+  }
 
-    const toTest = (strategyId && STRATEGIES[strategyId])
-      ? [strategyId]
-      : Object.keys(STRATEGIES);
+  // ── Modo backtest ──────────────────────────────────────────────────────────
+  if (args[0] === '--backtest') {
+    const parsed = parseBacktestArgs(args);
 
-    for (const sid of toTest) await backtest(symbol, sid, exchange, capital, maOverride, threeCandlesOverride, fourCandlesOverride);
+    if (!parsed.symbol) {
+      console.log('Uso: node trading-rsi-multi.js --backtest <SYMBOL> [saved|presetId] [exchange] [capital]');
+      console.log('\n  saved / flex / (omitir) → trade_config do Supabase (painel Multi-Trade)');
+      console.log('  <presetId>              → preset local (strategyPresets.js)');
+      console.log('\nExemplos:');
+      console.log('  node trading-rsi-multi.js --backtest BTCUSDT');
+      console.log('  node trading-rsi-multi.js --backtest BTCUSDT saved binance 40');
+      console.log('  node trading-rsi-multi.js --backtest BTCUSDT rsi5m30_15m70 binance 100');
+      console.log('\nPresets:');
+      for (const { id, label } of listPresetsForCli())
+        console.log(`  ${id.padEnd(22)} ${label}`);
+      process.exit(0);
+    }
+
+    if (parsed.error) {
+      console.error(`❌ Opção desconhecida: "${parsed.error}". Use saved ou: ${presetIds().join(', ')}`);
+      process.exit(1);
+    }
+
+    await Promise.all([syncBinanceClock(), syncGateClock()]);
+
+    if (parsed.fromDb) {
+      await backtestFromSupabase(parsed.symbol, parsed.exchange, parsed.capital);
+    } else {
+      const rule3 = args[5] === 'true' ? true : args[5] === 'false' ? false : null;
+      const rule4 = args[6] === 'true' ? true : args[6] === 'false' ? false : null;
+      const overrides = {};
+      if (rule3 !== null) overrides.rule3candles = rule3;
+      if (rule4 !== null) overrides.rule4candles = rule4;
+      const config = configFromPreset(parsed.presetId, overrides);
+      if (!config) {
+        console.error(`❌ Preset "${parsed.presetId}" inválido`);
+        process.exit(1);
+      }
+      await backtest(parsed.symbol, config, parsed.exchange, parsed.capital);
+    }
     console.log();
     process.exit(0);
   }
@@ -1162,17 +1142,17 @@ async function main() {
     console.log(`   🔎 Filtrando apenas: ${symbolFilter}`);
   }
 
-  console.log('\n🤖 Trading RSI Multi-Intervalo Bot');
-  console.log('   Estratégias carregadas:');
-  for (const [id, s] of Object.entries(STRATEGIES))
-    console.log(`   • ${id}: ${s.label}`);
+  console.log('\n🤖 Bot AMAP — trading-rsi-multi.js');
+  console.log('   Config: trade_config (Supabase) ou preset em strategyPresets.js');
+  for (const { id, label } of listPresetsForCli())
+    console.log(`   • ${id}: ${label}`);
   console.log();
 
   const toStart = [];
 
   for (let i = 0; i < rows.length; i++) {
     const row      = rows[i];
-    const strategy = STRATEGIES[row.strategy_id];
+    const strategy = resolveStrategy(row);
     const adapter  = buildAdapter(row.exchange ?? 'binance', row.symbol);
     const color    = COLORS[i % COLORS.length];
 
@@ -1182,26 +1162,29 @@ async function main() {
     }
 
     let volFmt = 'n/a', volOk = true;
+    const minVol = strategy.config.minVolumeUsdt ?? 1_000_000;
     try {
       const vol = await adapter.fetch24hVol();
-      volFmt    = vol >= 1_000_000 ? `$${(vol / 1_000_000).toFixed(2)}M` : `$${(vol / 1000).toFixed(1)}K`;
-      volOk     = vol >= VOL_MIN_USDT;
+      volFmt    = fmtVolumeUsdt(vol);
+      volOk     = vol >= minVol;
     } catch {}
 
     console.log(
       `   ${color}${row.symbol}${X}  exchange=${row.exchange ?? 'binance'}` +
       `  strategy=${row.strategy_id}  capital=$${parseFloat(row.capital).toFixed(2)}` +
-      `  vol24h=${volFmt}  fase=${row.phase}`,
+      `  vol24h=${volFmt}  min=${fmtVolumeUsdt(minVol)}  fase=${row.phase}`,
     );
 
-    if (!volOk) {
-      console.log(`   ${Y}⚠️  Volume < $1M — baixa liquidez${X}`);
+    if (!volOk && !strategy.config.allowLowVolume) {
+      console.log(`   ${Y}⚠️  Volume abaixo do mínimo (${fmtVolumeUsdt(minVol)})${X}`);
       if (!symbolFilter) {
         const resp = await askUser(`   Incluir ${row.symbol} mesmo assim? [s/N]: `);
         if (resp !== 's' && resp !== 'sim') { console.log(`   ⏭️  ${row.symbol} ignorado.\n`); continue; }
       } else {
         console.log(`   ℹ️  Incluindo mesmo assim (símbolo solicitado via --symbol)`);
       }
+    } else if (!volOk && strategy.config.allowLowVolume) {
+      console.log(`   ${Y}ℹ️  Volume baixo — autorizado no painel (venda a mercado)${X}`);
     }
 
     toStart.push({ row, color });

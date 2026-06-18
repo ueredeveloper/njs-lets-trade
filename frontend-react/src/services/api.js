@@ -308,16 +308,23 @@ export async function fetchIndicatorSearch(query) {
   return { name: nome, list };
 }
 
+export async function fetchMaFilter({ interval, period = '50', compare = 'above', candle = 'close' }) {
+  const params = new URLSearchParams({ interval, period: String(period), compare, candle });
+  const res = await fetch(`/services/ma-filter?${params}`);
+  if (!res.ok) throw new Error(`ma-filter falhou: HTTP ${res.status}`);
+  return res.json();
+}
+
 // ── Multitrade Favorites ─────────────────────────────────────────────────────
 
 export async function fetchMultitradeFavorites() {
-  const res = await fetch('/services/multitrade-favorites');
+  const res = await fetch('/services/sb/multitrade-favorites');
   if (!res.ok) throw new Error(`multitrade-favorites falhou: HTTP ${res.status}`);
   return res.json();
 }
 
 export async function addMultitradeFavorite(data) {
-  const res = await fetch('/services/multitrade-favorites', {
+  const res = await fetch('/services/sb/multitrade-favorites', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
@@ -327,7 +334,7 @@ export async function addMultitradeFavorite(data) {
 }
 
 export async function updateMultitradeFavorite(id, data) {
-  const res = await fetch(`/services/multitrade-favorites/${encodeURIComponent(id)}`, {
+  const res = await fetch(`/services/sb/multitrade-favorites/${encodeURIComponent(id)}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
@@ -337,8 +344,38 @@ export async function updateMultitradeFavorite(id, data) {
 }
 
 export async function removeMultitradeFavorite(id) {
-  const res = await fetch(`/services/multitrade-favorites/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  const res = await fetch(`/services/sb/multitrade-favorites/${encodeURIComponent(id)}`, { method: 'DELETE' });
   if (!res.ok) throw new Error(`removeMultitradeFavorite falhou: HTTP ${res.status}`);
+  return res.json();
+}
+
+export async function fetchMultitradeTrades({ symbol, strategyId, limit } = {}) {
+  const params = new URLSearchParams();
+  if (symbol)      params.set('symbol', symbol);
+  if (strategyId)  params.set('strategy_id', strategyId);
+  if (limit)       params.set('limit', String(limit));
+  const res = await fetch(`/services/sb/multitrade-trades?${params}`);
+  if (!res.ok) throw new Error(`multitrade-trades falhou: HTTP ${res.status}`);
+  return res.json();
+}
+
+export async function fetchMultitradeTimeline({ symbol, limit } = {}) {
+  const params = new URLSearchParams();
+  if (symbol) params.set('symbol', symbol);
+  if (limit)  params.set('limit', String(limit));
+  const res = await fetch(`/services/sb/multitrade-timeline?${params}`);
+  if (!res.ok) throw new Error(`multitrade-timeline falhou: HTTP ${res.status}`);
+  return res.json();
+}
+
+export async function checkMultitradeVolume(symbol, exchange, minVolumeUsdt) {
+  const params = new URLSearchParams({
+    symbol,
+    exchange: exchange ?? 'binance',
+    minVolumeUsdt: String(minVolumeUsdt ?? 1_000_000),
+  });
+  const res = await fetch(`/services/sb/multitrade-volume?${params}`);
+  if (!res.ok) throw new Error(`multitrade-volume falhou: HTTP ${res.status}`);
   return res.json();
 }
 

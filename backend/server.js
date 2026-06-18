@@ -21,7 +21,7 @@ const { ichimokuCloudRouter } = require('./technicals-indicators');
 //const {client} = require('./services/fetchClient');
 const {
   fetchCandles, fetchIchimokuCloud, fetchAllCurrencies,
-  fetchSMA, fetchRSI, fetchVWAP, fetch24HsVolume, fetchMarketCapFilter, fetchStablecoins, fetchIndicatorSearch,
+  fetchSMA, fetchRSI, fetchVWAP, fetch24HsVolume, fetchMarketCapFilter, fetchStablecoins, fetchIndicatorSearch, fetchMaFilter,
   fetchRsiOversoldRecovery, fetchReloadCandles,
   fetchGateCurrencies, fetchGatePrefetch, fetchBinanceTrades, fetchGateTrades,
   fetchActiveTrades, stgBotStatus, multitradeService } = require('./services');
@@ -44,6 +44,7 @@ app.use('/services', fetch24HsVolume)
 app.use('/services', fetchMarketCapFilter)
 app.use('/services', fetchStablecoins)
 app.use('/services', fetchIndicatorSearch)
+app.use('/services', fetchMaFilter)
 app.use('/services', fetchRsiOversoldRecovery)
 app.use('/services', fetchReloadCandles)
 app.use('/services', fetchGateCurrencies)
@@ -76,17 +77,21 @@ if (FRONTEND_PORT) {
 const rsiCache = require('./cache/rsiCache');
 const { getActiveUsdtPairs } = require('./binance/getActiveUsdtPairs');
 
-const RSI_INTERVALS = ['1h', '2h', '4h', '8h', '1d'];
+const RSI_INTERVALS = ['15m', '1h', '4h'];
+const RSI_TICK_MS   = 2 * 60 * 1000; // verifica a cada 2 min; TTL por intervalo decide o que buscar
 const PORT = process.env.PORT || 3000;
 
 async function refreshRsiCache() {
   const t0 = Date.now();
   const { list: symbols } = await getActiveUsdtPairs();
-  console.log(`[rsiCache] iniciando warmup — ${symbols.length} símbolos × ${RSI_INTERVALS.length} intervalos`);
-  await rsiCache.warmup(symbols, RSI_INTERVALS);
-  await rsiCache.saveToDisk();
+  const stats = await rsiCache.warmup(symbols, RSI_INTERVALS);
+  if (stats.refreshed > 0 || stats.purged > 0) {
+    await rsiCache.saveToDisk();
+  }
   const total = ((Date.now() - t0) / 1000).toFixed(1);
-  console.log(`[rsiCache] ciclo completo em ${total}s`);
+  if (stats.refreshed > 0) {
+    console.log(`[rsiCache] ciclo em ${total}s`);
+  }
 }
 
 async function startServer() {
@@ -99,17 +104,18 @@ async function startServer() {
     console.log(`Server is running on port ${PORT} (pronto em ${boot}s)`);
   });
 
-  // Warmup em background — atualiza entradas desatualizadas
+  // Warmup em background — só entradas com TTL expirado
+  console.log(`[rsiCache] intervalos: ${RSI_INTERVALS.join(', ')} | tick ${RSI_TICK_MS / 60_000}min`);
   refreshRsiCache().catch(e => console.error('[rsiCache] erro no warmup:', e.message));
 
-  // Refresh a cada 5 minutos
+  // Tick leve — só busca na API quando o TTL do intervalo expirou (15m/1h/4h)
   setInterval(async () => {
     try {
       await refreshRsiCache();
     } catch (e) {
       console.error('[rsiCache] erro no refresh:', e.message);
     }
-  }, 5 * 60 * 1000);
+  }, RSI_TICK_MS);
 }
 
 startServer();

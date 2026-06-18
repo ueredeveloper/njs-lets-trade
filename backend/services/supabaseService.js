@@ -13,6 +13,10 @@
 
 const router    = require('express').Router();
 const supabase  = require('../supabase/client');
+const { buildTradeConfig, buildAdaptiveReport, getRequiredSpecs, buildMaSnapshot, evaluateEntry, computeAdaptiveDips } = require('../bot/rsi-ma50/strategyEngine');
+const { fetchBinanceCandles, fetchGateCandles } = require('../bot/prices');
+const { toGateSymbol } = require('../utils/toGateSymbol');
+const { fetch24hVolumeUsdt, fmtVolumeUsdt, DEFAULT_MIN_VOLUME_USDT } = require('../bot/volume24h');
 
 // Se Supabase não estiver configurado, retorna 503 imediatamente para todos os
 // endpoints /services/sb/* e evita queries com URL vazia que crasham o processo.
@@ -218,6 +222,266 @@ router.delete('/favorites/:symbol', getUserId, async (req, res) => {
     })));
   }
   res.json(list.map(r => r.symbol));
+});
+
+// ============================================================
+//  MULTITRADE FAVORITES  + sync rsi_multi_bot_state
+// ============================================================
+
+function tradeConfigToMaConditions(tc) {
+  if (!tc?.maFilters?.length) return null;
+  return tc.maFilters.map((f, i) => ({
+    id: i + 1,
+    period: f.period,
+    interval: f.interval,
+    direction: 'above',
+    adaptive: f.mode === 'adaptive',
+  }));
+}
+
+function multitradeToEntry(r) {
+  const tc = r.trade_config ?? null;
+  const maConditions = (r.ma_conditions?.length ? r.ma_conditions : tradeConfigToMaConditions(tc)) ?? [];
+  return {
+    id:           r.id,
+    symbol:       r.symbol,
+    exchange:     r.exchange,
+    strategyId:   r.strategy_id,
+    capital:      Number(r.capital),
+    entryRsi:     r.entry_rsi ?? tc?.entryRsi,
+    exitRsi:      r.exit_rsi  ?? tc?.exitRsi,
+    maConditions,
+    rule3candles: r.rule_3_candles ?? tc?.extension?.threeCandles ?? false,
+    rule4candles: r.rule_4_candles ?? tc?.extension?.fourCandles ?? false,
+    stopLoss:     tc?.stopLoss ?? { period: 50, interval: '1h' },
+    extension:    tc?.extension ?? { abovePct: 5, confirmInterval: '1h' },
+    immediateEntry: tc?.immediateEntry ?? false,
+    entryDiscount:  tc?.entryDiscount ?? 0.001,
+    minVolumeUsdt:  tc?.minVolumeUsdt ?? DEFAULT_MIN_VOLUME_USDT,
+    allowLowVolume: tc?.allowLowVolume ?? false,
+    tradeConfig:  tc,
+    createdAt:    r.created_at,
+    updatedAt:    r.updated_at,
+  };
+}
+
+function bodyToMultitradeRow(userId, body) {
+  const sym = body.symbol?.toUpperCase();
+  if (!sym) return null;
+  const trade_config = buildTradeConfig(body);
+  return {
+    user_id:         userId,
+    symbol:          sym,
+    exchange:        body.exchange ?? 'binance',
+    strategy_id:     'flex',
+    capital:         Number(body.capital ?? 100),
+    entry_rsi:       body.entryRsi ?? trade_config.entryRsi,
+    exit_rsi:        body.exitRsi  ?? trade_config.exitRsi,
+    ma_conditions:   body.maConditions ?? [],
+    rule_3_candles:  !!body.rule3candles,
+    rule_4_candles:  !!body.rule4candles,
+    trade_config,
+  };
+}
+
+async function syncBotState({ symbol, exchange, strategy_id, capital, trade_config }) {
+  const row = {
+    symbol, exchange, strategy_id, initial_capital: capital, capital, trade_config,
+  };
+  const { error } = await supabase.from('rsi_multi_bot_state').upsert(row, { onConflict: 'symbol,strategy_id' });
+  if (error) console.warn('[supabase] syncBotState:', error.message);
+}
+
+// GET /services/sb/multitrade-favorites
+router.get('/multitrade-favorites', getUserId, async (req, res) => {
+  const { data, error } = await supabase
+    .from('multitrade_favorites')
+    .select('*')
+    .eq('user_id', req.userId)
+    .order('position')
+    .order('created_at');
+  if (error) return sbError(res, error, 'GET multitrade-favorites');
+  res.json((data ?? []).map(multitradeToEntry));
+});
+
+// POST /services/sb/multitrade-favorites
+router.post('/multitrade-favorites', getUserId, async (req, res) => {
+  const row = bodyToMultitradeRow(req.userId, req.body);
+  if (!row) return res.status(400).json({ error: 'symbol obrigatório' });
+
+  const { data, error } = await supabase
+    .from('multitrade_favorites')
+    .upsert(row, { onConflict: 'user_id,symbol' })
+    .select()
+    .single();
+  if (error) return sbError(res, error, 'POST multitrade-favorites');
+
+  await syncBotState({
+    symbol:      data.symbol,
+    exchange:    data.exchange,
+    strategy_id: data.strategy_id,
+    capital:     Number(data.capital),
+    trade_config: data.trade_config,
+  });
+
+  res.json(multitradeToEntry(data));
+});
+
+// PUT|PATCH /services/sb/multitrade-favorites/:id
+async function updateMultitrade(req, res) {
+  const row = bodyToMultitradeRow(req.userId, req.body);
+  if (!row) return res.status(400).json({ error: 'symbol obrigatório' });
+
+  const { data, error } = await supabase
+    .from('multitrade_favorites')
+    .update(row)
+    .eq('id', req.params.id)
+    .eq('user_id', req.userId)
+    .select()
+    .single();
+  if (error) return sbError(res, error, 'PUT multitrade-favorites');
+  if (!data) return res.status(404).json({ error: 'not found' });
+
+  await syncBotState({
+    symbol:      data.symbol,
+    exchange:    data.exchange,
+    strategy_id: data.strategy_id,
+    capital:     Number(data.capital),
+    trade_config: data.trade_config,
+  });
+
+  res.json(multitradeToEntry(data));
+}
+router.put('/multitrade-favorites/:id', getUserId, updateMultitrade);
+router.patch('/multitrade-favorites/:id', getUserId, updateMultitrade);
+
+// DELETE /services/sb/multitrade-favorites/:id
+router.delete('/multitrade-favorites/:id', getUserId, async (req, res) => {
+  const { data: existing, error: findErr } = await supabase
+    .from('multitrade_favorites')
+    .select('symbol, strategy_id')
+    .eq('id', req.params.id)
+    .eq('user_id', req.userId)
+    .single();
+  if (findErr || !existing) return res.status(404).json({ error: 'not found' });
+
+  const { error } = await supabase
+    .from('multitrade_favorites')
+    .delete()
+    .eq('id', req.params.id)
+    .eq('user_id', req.userId);
+  if (error) return sbError(res, error, 'DELETE multitrade-favorites');
+
+  await supabase
+    .from('rsi_multi_bot_state')
+    .delete()
+    .eq('symbol', existing.symbol)
+    .eq('strategy_id', existing.strategy_id)
+    .eq('phase', 'WATCHING');
+
+  res.json({ deleted: req.params.id });
+});
+
+// GET /services/sb/multitrade-trades?symbol=&strategy_id=&limit=50
+router.get('/multitrade-trades', getUserId, async (req, res) => {
+  let q = supabase.from('rsi_multi_bot_trades').select('*').order('exit_time', { ascending: false });
+  if (req.query.symbol)       q = q.eq('symbol', req.query.symbol.toUpperCase());
+  if (req.query.strategy_id)  q = q.eq('strategy_id', req.query.strategy_id);
+  q = q.limit(Math.min(parseInt(req.query.limit ?? '50', 10), 200));
+
+  const { data, error } = await q;
+  if (error) return sbError(res, error, 'GET multitrade-trades');
+  res.json(data ?? []);
+});
+
+// GET /services/sb/multitrade-timeline?symbol=&limit=100
+router.get('/multitrade-timeline', getUserId, async (req, res) => {
+  let q = supabase.from('rsi_multi_timeline').select('*').order('event_time', { ascending: false });
+  if (req.query.symbol) q = q.eq('symbol', req.query.symbol.toUpperCase());
+  q = q.limit(Math.min(parseInt(req.query.limit ?? '100', 10), 500));
+
+  const { data, error } = await q;
+  if (error) return sbError(res, error, 'GET multitrade-timeline');
+  res.json(data ?? []);
+});
+
+// GET /services/sb/multitrade-volume?symbol=&exchange=&minVolumeUsdt=
+router.get('/multitrade-volume', getUserId, async (req, res) => {
+  const symbol = req.query.symbol?.toUpperCase();
+  if (!symbol) return res.status(400).json({ error: 'symbol obrigatório' });
+
+  const exchange       = req.query.exchange ?? 'binance';
+  const minVolumeUsdt  = Number(req.query.minVolumeUsdt ?? DEFAULT_MIN_VOLUME_USDT);
+
+  try {
+    const volumeUsdt = await fetch24hVolumeUsdt(symbol, exchange);
+    const meetsMin   = volumeUsdt >= minVolumeUsdt;
+    res.json({
+      symbol,
+      exchange,
+      volumeUsdt,
+      volumeFmt:      fmtVolumeUsdt(volumeUsdt),
+      minVolumeUsdt,
+      minVolumeFmt:   fmtVolumeUsdt(minVolumeUsdt),
+      meetsMin,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+async function fetchCandlesForEval(exchange, symbol, interval, limit) {
+  if (exchange === 'gate') {
+    const pair = toGateSymbol(symbol);
+    return fetchGateCandles(pair, limit, interval);
+  }
+  return fetchBinanceCandles(symbol, limit, interval);
+}
+
+// POST /services/sb/multitrade-evaluate  — snapshot ao vivo da config AMAP
+router.post('/multitrade-evaluate', getUserId, async (req, res) => {
+  const sym = req.body?.symbol?.toUpperCase();
+  if (!sym) return res.status(400).json({ error: 'symbol obrigatório' });
+
+  const exchange    = req.body.exchange ?? 'binance';
+  const tradeConfig = buildTradeConfig(req.body);
+  const specs       = getRequiredSpecs(tradeConfig);
+
+  try {
+    const cMap = {};
+    await Promise.all(specs.map(async ({ interval, limit }) => {
+      cMap[interval] = await fetchCandlesForEval(exchange, sym, interval, Math.max(limit, 300));
+    }));
+
+    const entryIv = tradeConfig.entryRsi.interval;
+    const entryCandles = cMap[entryIv];
+    if (!entryCandles?.length) return res.status(502).json({ error: 'sem candles' });
+
+    const ti = require('technicalindicators');
+    const closes = entryCandles.map(c => c.close);
+    const rsiArr = ti.RSI.calculate({ values: closes, period: tradeConfig.entryRsi.period });
+    const entryRsi = rsiArr[rsiArr.length - 1];
+    const close = closes[closes.length - 1];
+    const adaptiveDips = computeAdaptiveDips(cMap, tradeConfig);
+    const maSnap = buildMaSnapshot(cMap, tradeConfig);
+    const entryCheck = evaluateEntry({
+      entryRsi, close, entryTimeMs: Date.now(), config: tradeConfig, maSnap, adaptiveDips,
+    });
+    const adaptive = buildAdaptiveReport(cMap, tradeConfig);
+
+    res.json({
+      symbol: sym,
+      exchange,
+      tradeConfig,
+      price: close,
+      entryRsi,
+      entryAllowed: entryCheck.allowed,
+      entryBlockReason: entryCheck.reason ?? null,
+      adaptive,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ============================================================

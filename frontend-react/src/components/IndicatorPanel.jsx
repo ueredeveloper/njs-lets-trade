@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useCurrency } from '../contexts/CurrencyContext';
-import { fetchCandlesAndIndicators, fetchIndicatorSearch, fetchMarketCapFilter, fetchUserPrefs, saveUserPrefs } from '../services/api';
+import { fetchCandlesAndIndicators, fetchIndicatorSearch, fetchMaFilter, fetchMarketCapFilter, fetchUserPrefs, saveUserPrefs } from '../services/api';
 import { useI18n } from '../i18n';
 import {
   createRsiFilter,
@@ -14,10 +14,6 @@ import {
   conversionAboveSpanA, conversionAboveSpanB, conversionAboveSpanAAndSpanB,
   conversionAboveHighCandle, conversionAboveLowCandle, conversionAboveCloseCandle,
 } from '../utils/createIchimokuFilter';
-import {
-  createMovingAverageFilter,
-  movingAverageAboveCandleClose, movingAverageBellowCandleClose,
-} from '../utils/createMovingAverageFilter';
 import Tooltip from './Tooltip';
 
 const INTERVALS = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w'];
@@ -34,10 +30,12 @@ const INTERVAL_LABELS = {
 const EMPTY_INDICATOR = { type: '', intervals: ['8h'] };
 
 const DEFAULT_INDICATORS = [
-  { type: 'relativeStrengthIndex', intervals: ['30m', '4h', '8h'], compare1: 'above', line1: '10', compare2: 'bellow', line2: '20' },
-  { type: 'relativeStrengthIndex', intervals: ['30m', '4h', '8h'], compare1: 'above', line1: '20', compare2: 'bellow', line2: '30' },
+  { type: 'relativeStrengthIndex', intervals: ['15m'], compare1: 'above', line1: '10', compare2: 'bellow', line2: '20' },
+  { type: 'relativeStrengthIndex', intervals: ['15m'], compare1: 'above', line1: '20', compare2: 'bellow', line2: '30' },
   { type: 'marketCap', intervals: [], metric: 'turnover', preset: 'alto' },
   { type: 'marketCap', intervals: [], metric: 'dilution', preset: 'baixo' },
+  { type: 'movingAverage', intervals: ['1h', '4h'], length: '50', compare: 'above', candle: 'close' },
+  { type: 'movingAverage', intervals: ['1h', '4h'], length: '50', compare: 'bellow', candle: 'close' },
 ];
 
 /** Gera um resumo legível da configuração do indicador */
@@ -325,7 +323,7 @@ export default function IndicatorPanel({ open, onToggle }) {
   const { t } = useI18n();
   const [indicators, setIndicators] = useState(DEFAULT_INDICATORS);
   const [searching, setSearching] = useState(false);
-  const [savedIntervals, setSavedIntervals] = useState(['30m', '4h', '8h']);
+  const [savedIntervals, setSavedIntervals] = useState(['15m', '1h', '4h']);
 
   // Carrega preferências do backend na montagem
   useEffect(() => {
@@ -351,7 +349,8 @@ export default function IndicatorPanel({ open, onToggle }) {
     try {
       const rsiIndicators   = indicators.filter((ind) => ind.type === 'relativeStrengthIndex');
       const mcapIndicators  = indicators.filter((ind) => ind.type === 'marketCap');
-      const otherIndicators = indicators.filter((ind) => ind.type && ind.type !== 'relativeStrengthIndex' && ind.type !== 'marketCap');
+      const maIndicators    = indicators.filter((ind) => ind.type === 'movingAverage');
+      const otherIndicators = indicators.filter((ind) => ind.type && ind.type !== 'relativeStrengthIndex' && ind.type !== 'marketCap' && ind.type !== 'movingAverage');
 
       // Salva intervalos e análises usadas nas preferências
       const allIntervals = [...new Set(indicators.flatMap(ind => ind.intervals ?? []))];
@@ -385,13 +384,22 @@ export default function IndicatorPanel({ open, onToggle }) {
         addFilter(filter);
       }
 
-      // Outros indicadores: fluxo original (Ichimoku, MA)
+      // MA50: cache rsiCache (intervalos 15m/1h/4h aquecidos no servidor)
+      for (const ind of maIndicators) {
+        const length  = ind.length ?? '50';
+        const compare = ind.compare ?? 'above';
+        const candle  = ind.candle ?? 'close';
+        for (const interval of ind.intervals) {
+          const filter = await fetchMaFilter({ interval, period: length, compare, candle });
+          addFilter(filter);
+        }
+      }
+
+      // Outros indicadores: fluxo original (Ichimoku)
       if (otherIndicators.length > 0) {
         const uniqueIntervals = [...new Set(otherIndicators.flatMap((ind) => ind.intervals))];
         const usdtCurrencies = getBinanceCurrenciesWithUsdt(currencies);
-        const maIndicator = otherIndicators.find((ind) => ind.type === 'movingAverage');
-        const maPeriod = maIndicator ? parseInt(maIndicator.length ?? '200') : 200;
-        const candlesData = await fetchCandlesAndIndicators(usdtCurrencies, uniqueIntervals, maPeriod);
+        const candlesData = await fetchCandlesAndIndicators(usdtCurrencies, uniqueIntervals, 200);
 
         for (const ind of otherIndicators) {
           const { type, intervals } = ind;
@@ -417,16 +425,6 @@ export default function IndicatorPanel({ open, onToggle }) {
             if (cb) createIchimokuFilter(candlesData, intervals, acronym, cb, addFilter);
             else alert('Ichimoku Cloud ainda não calculado!');
           }
-
-          else if (type === 'movingAverage') {
-            const length = ind.length ?? '200';
-            const compare = ind.compare ?? 'above';
-            const candle = ind.candle ?? 'close';
-            const acronym = `m|${length}|${compare[0]}|${candle}`;
-            const cb = compare === 'above' ? movingAverageAboveCandleClose : movingAverageBellowCandleClose;
-            createMovingAverageFilter(candlesData, intervals, acronym, cb, addFilter);
-          }
-
         }
       }
     } catch (err) {

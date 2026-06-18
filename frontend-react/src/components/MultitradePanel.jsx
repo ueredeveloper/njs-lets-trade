@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useCurrency } from '../contexts/CurrencyContext';
-import MultitradeModal, { STRATEGY_MAP, getSql, getBacktestCmd } from './MultitradeModal';
+import MultitradeModal, { getBacktestCmd, getAdaptiveTestCmd, hasAdaptiveMa } from './MultitradeModal';
 
 const MT_COLOR      = '#8b5cf6';
 const GATE_COLOR    = '#0068ff';
@@ -50,11 +50,11 @@ export default function MultitradePanel() {
         ) : (
           <div className="space-y-1.5 p-2">
             {multitradeFavorites.map((entry) => {
-              const strat  = STRATEGY_MAP[entry.strategyId];
-              const sql    = getSql(entry);
-              const cmd    = getBacktestCmd(entry);
-              const sqlKey = `${entry.id}-sql`;
-              const cmdKey = `${entry.id}-cmd`;
+              const cmd      = getBacktestCmd(entry);
+              const adaptCmd = getAdaptiveTestCmd(entry);
+              const cmdKey   = `${entry.id}-cmd`;
+              const adaptKey = `${entry.id}-adapt`;
+              const showAdapt = hasAdaptiveMa(entry.maConditions);
 
               return (
                 <div key={entry.id} className="rounded border p-2.5 space-y-2"
@@ -72,7 +72,7 @@ export default function MultitradePanel() {
                     </span>
                     <span className="text-[9px] px-1 py-0.5 rounded border ml-auto font-mono"
                       style={{ color: MT_COLOR, borderColor: `${MT_COLOR}66` }}>
-                      {entry.strategyId}
+                      {entry.strategyId ?? 'flex'}
                     </span>
                   </div>
 
@@ -96,22 +96,27 @@ export default function MultitradePanel() {
                         MA{ma.period}({ma.interval}) {ma.direction === 'above' ? '↑' : '↓'}{ma.adaptive ? '~' : ''}
                       </span>
                     ))}
+                    {entry.stopLoss && (
+                      <span className="text-[9px] px-1 py-0.5 rounded bg-p2 text-red-400/80 font-mono">
+                        SL MA{entry.stopLoss.period}({entry.stopLoss.interval})
+                      </span>
+                    )}
                     {entry.rule3candles && <span className="text-[9px] px-1 py-0.5 rounded bg-p2 text-p5/70">3🕯alta</span>}
                     {entry.rule4candles && <span className="text-[9px] px-1 py-0.5 rounded bg-p2 text-p5/70">4🕯mix</span>}
+                    {entry.minVolumeUsdt != null && (
+                      <span className="text-[9px] px-1 py-0.5 rounded bg-p2 text-p5/70 font-mono">
+                        vol≥{entry.minVolumeUsdt >= 1_000_000
+                          ? `${entry.minVolumeUsdt / 1_000_000}M`
+                          : `${entry.minVolumeUsdt / 1000}K`}
+                      </span>
+                    )}
+                    {entry.allowLowVolume && (
+                      <span className="text-[9px] px-1 py-0.5 rounded bg-amber-500/15 text-amber-400 font-mono">vol↓OK</span>
+                    )}
                   </div>
 
                   {/* Row 3: actions */}
                   <div className="flex gap-1.5">
-                    <button
-                      onClick={() => copy(sql, sqlKey)}
-                      className="flex-1 text-[10px] py-1 rounded transition-colors"
-                      style={{
-                        background: copied === sqlKey ? '#26a69a22' : '#2a2d3a',
-                        color:      copied === sqlKey ? '#26a69a'   : '#94a3b8',
-                        border:     `1px solid ${copied === sqlKey ? '#26a69a' : '#3a3d4a'}`,
-                      }}>
-                      {copied === sqlKey ? '✓ SQL' : 'SQL'}
-                    </button>
                     <button
                       onClick={() => copy(cmd, cmdKey)}
                       className="flex-1 text-[10px] py-1 rounded transition-colors"
@@ -120,8 +125,20 @@ export default function MultitradePanel() {
                         color:      copied === cmdKey ? MT_COLOR        : '#94a3b8',
                         border:     `1px solid ${copied === cmdKey ? MT_COLOR : '#3a3d4a'}`,
                       }}>
-                      {copied === cmdKey ? '✓ Cmd' : 'Test'}
+                      {copied === cmdKey ? '✓ Test' : 'Test'}
                     </button>
+                    {showAdapt && (
+                      <button
+                        onClick={() => copy(adaptCmd, adaptKey)}
+                        className="flex-1 text-[10px] py-1 rounded transition-colors"
+                        style={{
+                          background: copied === adaptKey ? '#26a69a22' : '#2a2d3a',
+                          color:      copied === adaptKey ? '#26a69a'   : '#94a3b8',
+                          border:     `1px solid ${copied === adaptKey ? '#26a69a' : '#3a3d4a'}`,
+                        }}>
+                        {copied === adaptKey ? '✓ Adapt' : 'Adapt'}
+                      </button>
+                    )}
                     <button
                       onClick={() => setEditingEntry(entry)}
                       className="px-2 text-[10px] py-1 rounded text-p5/50 hover:text-p5 transition-colors"
