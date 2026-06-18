@@ -22,6 +22,7 @@ const STRATEGIES = {
       interval: '1h', period: 50, enabled: true,
       threeCandles: { enabled: true, abovePct: 5, fourCandlesEnabled: true }, // regra dos 3/4 candles quando >5% acima da MA
     },
+    stopLoss:         { interval: '1h', period: 50 }, // vende se preço fechar abaixo da MA50(1h)
     entryDiscount:    0.001,
     pendingTimeoutMs: 30 * 60_000,
     pendingCancelPct: 0.002,
@@ -37,6 +38,7 @@ const STRATEGIES = {
       interval: '1h', period: 50, enabled: true,
       threeCandles: { enabled: true, abovePct: 5, fourCandlesEnabled: true },
     },
+    stopLoss:         { interval: '1h', period: 50 },
     entryDiscount:    0.001,
     pendingTimeoutMs: 2 * 60 * 60_000,
     pendingCancelPct: 0.005,
@@ -52,6 +54,25 @@ const STRATEGIES = {
       interval: '1h', period: 50, enabled: false,
       threeCandles: { enabled: true, abovePct: 5, fourCandlesEnabled: true },
     },
+    stopLoss:         { interval: '1h', period: 50 },
+    immediateEntry:   true,
+    entryDiscount:    0.001,
+    pendingTimeoutMs: 30 * 60_000,
+    pendingCancelPct: 0.002,
+    fastRsiThreshold: 60,
+    pollMs:     60_000,
+    fastPollMs: 30_000,
+  },
+  'rsi1m30_1m70_ma': {
+    label: 'RSI(1m)<30 → RSI(1m)>70 + MA50(1h) + MA50(15m) + 3/4 candles',
+    entry:    { interval: '1m', rsiPeriod: 14, rsiBuy: 30 },
+    exit:     { interval: '1m', rsiPeriod: 14, rsiSell: 70 },
+    maFilter: {
+      interval: '1h', period: 50, enabled: true,
+      threeCandles: { enabled: true, abovePct: 5, fourCandlesEnabled: true },
+    },
+    maFilter2:        { interval: '15m', period: 50, enabled: true }, // entrada exige preço acima desta MA também
+    stopLoss:         { interval: '15m', period: 50 }, // stop loss abaixo da MA50(15m)
     immediateEntry:   true,
     entryDiscount:    0.001,
     pendingTimeoutMs: 30 * 60_000,
@@ -68,6 +89,7 @@ const STRATEGIES = {
       interval: '1h', period: 50, enabled: false,
       threeCandles: { enabled: true, abovePct: 5, fourCandlesEnabled: true },
     },
+    stopLoss:         { interval: '1h', period: 50 },
     immediateEntry:   true,  // compra no preço atual, sem esperar desconto
     entryDiscount:    0.001,
     pendingTimeoutMs: 30 * 60_000,
@@ -532,10 +554,13 @@ async function backtest(symbol, strategyId, exchange = 'binance', capital = 100,
   console.log(`   MA${maFilter?.period}(${maFilter?.interval}): ${maActive ? '✅ ativo' : '❌ desativado'}${maActive ? `  |  ${candleLabel}` : ''}`);
 
   // Tenta carregar de arquivo local antes de chamar a API
+  const { stopLoss, maFilter2 } = strategy;
   const intervals = [...new Set([
     strategy.entry.interval,
     strategy.exit.interval,
     ...(maActive ? [maFilter.interval] : []),
+    ...(maFilter2?.enabled ? [maFilter2.interval] : []),
+    ...(stopLoss ? [stopLoss.interval] : []),
   ])];
 
   const LIMIT = 1000;
@@ -552,7 +577,9 @@ async function backtest(symbol, strategyId, exchange = 'binance', capital = 100,
   const apiSpecs = [
     { interval: strategy.entry.interval, limit: LIMIT },
     { interval: strategy.exit.interval,  limit: LIMIT },
-    ...(maActive ? [{ interval: maFilter.interval, limit: Math.max(LIMIT, maFilter.period + 10) }] : []),
+    ...(maActive      ? [{ interval: maFilter.interval,  limit: Math.max(LIMIT, maFilter.period  + 10) }] : []),
+    ...(maFilter2?.enabled ? [{ interval: maFilter2.interval, limit: Math.max(LIMIT, maFilter2.period + 10) }] : []),
+    ...(stopLoss      ? [{ interval: stopLoss.interval,  limit: Math.max(LIMIT, stopLoss.period  + 10) }] : []),
   ].filter(s => !cMap[s.interval]);
 
   if (apiSpecs.length) {
@@ -574,6 +601,18 @@ async function backtest(symbol, strategyId, exchange = 'binance', capital = 100,
   const maCandles = maActive ? cMap[maFilter.interval] : null;
   const maSeries  = maActive ? computeMaSeries(maCandles, maFilter.period) : null;
 
+  // Série MA secundária (maFilter2)
+  const maSeries2 = maFilter2?.enabled ? computeMaSeries(cMap[maFilter2.interval], maFilter2.period) : null;
+
+  // Série MA para stop loss (reutiliza maSeries ou maSeries2 se mesmos parâmetros)
+  const slSameAs1 = maActive && stopLoss && maFilter.interval === stopLoss.interval && maFilter.period === stopLoss.period;
+  const slSameAs2 = maFilter2?.enabled && stopLoss && maFilter2.interval === stopLoss.interval && maFilter2.period === stopLoss.period;
+  const slMaSeries = stopLoss
+    ? slSameAs1 ? maSeries
+    : slSameAs2 ? maSeries2
+    :             computeMaSeries(cMap[stopLoss.interval], stopLoss.period)
+    : null;
+
   let phase = 'WATCHING';
   let buyPrice = null, buyQty = null, buyUsdt = null;
   let triggerPrice = null, limitPrice = null, pendingSince = null;
@@ -586,7 +625,8 @@ async function backtest(symbol, strategyId, exchange = 'binance', capital = 100,
 
   for (const { openTime, close, rsi: entryRsi } of entrySeries) {
     const exitRsi = exitRsiAt(exitSeries, openTime);
-    const ma50    = maSeries ? maAt(maSeries, openTime) : null;
+    const ma50    = maSeries  ? maAt(maSeries,  openTime) : null;
+    const ma2     = maSeries2 ? maAt(maSeries2, openTime) : null;
 
     if (phase === 'WATCHING') {
       if (entryRsi < strategy.entry.rsiBuy) {
@@ -594,6 +634,11 @@ async function backtest(symbol, strategyId, exchange = 'binance', capital = 100,
         if (!maCheck.allowed) {
           maBlockedCount++;
           signals.push({ entryTime: openTime, entryRsi, entryPrice: close, result: maCheck.reason });
+          continue;
+        }
+        if (maFilter2?.enabled && ma2 !== null && close <= ma2) {
+          maBlockedCount++;
+          signals.push({ entryTime: openTime, entryRsi, entryPrice: close, result: 'MA2_BLOCKED' });
           continue;
         }
         if (strategy.immediateEntry) {
@@ -636,20 +681,25 @@ async function backtest(symbol, strategyId, exchange = 'binance', capital = 100,
       }
 
     } else if (phase === 'BOUGHT') {
-      if (exitRsi !== null && exitRsi > strategy.exit.rsiSell) {
+      const slMa         = slMaSeries ? maAt(slMaSeries, openTime) : null;
+      const stopLossHit  = slMa !== null && close < slMa;
+      const rsiExitHit   = exitRsi !== null && exitRsi > strategy.exit.rsiSell;
+
+      if (stopLossHit || rsiExitHit) {
         const usdtOut = buyQty * close;
         const pnl     = usdtOut - buyUsdt;
         capital += pnl;
-        // preenche saída no sinal correspondente
         if (openSignalIdx !== null) {
           signals[openSignalIdx].exitTime  = openTime;
           signals[openSignalIdx].exitPrice = close;
           signals[openSignalIdx].exitRsi   = exitRsi;
           signals[openSignalIdx].pnlPct    = (pnl / buyUsdt) * 100;
+          if (stopLossHit) signals[openSignalIdx].result = 'STOP_LOSS_MA';
           openSignalIdx = null;
         }
         trades.push({
           type: 'SELL', time: openTime, price: close, exitRsi,
+          stopLoss: stopLossHit,
           pnlUsdt: pnl, pnlPct: (pnl / buyUsdt) * 100,
           capitalAfter: capital,
         });
@@ -677,18 +727,22 @@ async function backtest(symbol, strategyId, exchange = 'binance', capital = 100,
   console.log(`   PnL total: ${pSign}$${totalPnl.toFixed(2)}`);
   if (maFilter?.enabled) console.log(`   Bloqueados MA${maFilter.period}(${maFilter.interval}): ${maBlockedCount} sinais ignorados (preço < MA)`);
 
+  const stopLossCount = sells.filter(t => t.stopLoss).length;
+  if (stopLossCount) console.log(`   Stop Loss (MA): ${stopLossCount} saída(s) por stop loss`);
+
   if (sells.length) {
     console.log('\n   Data/Hora              RSI-saída   PnL           Capital');
     console.log('   ' + '─'.repeat(60));
     for (const t of sells) {
       const s    = t.pnlUsdt >= 0 ? '+' : '';
-      const icon = t.pnlUsdt >= 0 ? '🟢' : '🔴';
+      const icon = t.stopLoss ? '🛑' : (t.pnlUsdt >= 0 ? '🟢' : '🔴');
       console.log(
         `   ${icon} ${fmtDate(t.time).padEnd(22)}` +
-        `  ${t.exitRsi.toFixed(1).padStart(5)}` +
+        `  ${(t.exitRsi != null ? t.exitRsi.toFixed(1) : '—').padStart(5)}` +
         `   ${(s + '$' + t.pnlUsdt.toFixed(2)).padStart(9)}` +
         `  (${(s + t.pnlPct.toFixed(2) + '%').padStart(7)})` +
-        `  $${t.capitalAfter.toFixed(2)}`,
+        `  $${t.capitalAfter.toFixed(2)}` +
+        (t.stopLoss ? '  SL' : ''),
       );
     }
     console.log('   ' + '─'.repeat(60));
@@ -705,10 +759,12 @@ async function backtest(symbol, strategyId, exchange = 'binance', capital = 100,
   if (signals.length) {
     const ICONS = {
       BOUGHT:                 '🟢',
+      STOP_LOSS_MA:           '🛑',
       POSITION_OPEN:          '🟡',
       CANCELLED_RECOVERY:     '↩️ ',
       CANCELLED_TIMEOUT:      '⏱️ ',
       MA_BLOCKED:             '🚫',
+      MA2_BLOCKED:            '🚫',
       THREE_CANDLES_BLOCKED:  '📊',
       MA_NO_DATA:             '❓',
       PENDING_OPEN:           '⏳',
@@ -730,10 +786,12 @@ async function backtest(symbol, strategyId, exchange = 'binance', capital = 100,
       }
 
       const label = s.result === 'BOUGHT'                ? 'vendido'
+                  : s.result === 'STOP_LOSS_MA'          ? `stop loss (abaixo MA${stopLoss?.period}(${stopLoss?.interval}))`
                   : s.result === 'POSITION_OPEN'         ? 'posição aberta'
                   : s.result === 'CANCELLED_RECOVERY'    ? 'cancelado (preço subiu)'
                   : s.result === 'CANCELLED_TIMEOUT'     ? 'cancelado (timeout)'
-                  : s.result === 'MA_BLOCKED'            ? 'bloqueado (abaixo MA50)'
+                  : s.result === 'MA_BLOCKED'            ? `bloqueado (abaixo MA${maFilter?.period}(${maFilter?.interval}))`
+                  : s.result === 'MA2_BLOCKED'           ? `bloqueado (abaixo MA${maFilter2?.period}(${maFilter2?.interval}))`
                   : s.result === 'THREE_CANDLES_BLOCKED' ? 'bloqueado (padrão candles 1h não atendido)'
                   : s.result === 'MA_NO_DATA'            ? 'bloqueado (sem dados MA)'
                   : s.result === 'PENDING_OPEN'          ? 'pendente'
@@ -747,11 +805,13 @@ async function backtest(symbol, strategyId, exchange = 'binance', capital = 100,
 
 // ── Tick (loop ao vivo) ───────────────────────────────────────────────────────
 async function tick(rowId, adapter, strategy, log, prevExitRsi = null) {
-  const { entry, exit, maFilter } = strategy;
+  const { entry, exit, maFilter, maFilter2, stopLoss } = strategy;
   const specs = [
     { interval: entry.interval, limit: entry.rsiPeriod + 50 },
     { interval: exit.interval,  limit: exit.rsiPeriod  + 50 },
-    ...(maFilter?.enabled ? [{ interval: maFilter.interval, limit: maFilter.period + 10 }] : []),
+    ...(maFilter?.enabled  ? [{ interval: maFilter.interval,  limit: maFilter.period  + 10 }] : []),
+    ...(maFilter2?.enabled ? [{ interval: maFilter2.interval, limit: maFilter2.period + 10 }] : []),
+    ...(stopLoss ? [{ interval: stopLoss.interval, limit: stopLoss.period + 10 }] : []),
   ];
   const cMap = await fetchCandleMap(adapter, specs);
 
@@ -770,12 +830,32 @@ async function tick(rowId, adapter, strategy, log, prevExitRsi = null) {
   const exitRsi  = exitRsiArr[exitRsiArr.length - 1];
   const close    = entryCloses[entryCloses.length - 1];
 
-  // MA50 — último valor disponível
+  // MA50(1h) — filtro de entrada principal
   let ma50 = null, maCandles = null;
   if (maFilter?.enabled) {
     maCandles   = cMap[maFilter.interval];
     const maArr = ti.SMA.calculate({ values: maCandles.map(c => c.close), period: maFilter.period });
     ma50        = maArr[maArr.length - 1] ?? null;
+  }
+
+  // MA secundária (maFilter2) — segundo filtro de entrada
+  let ma2 = null;
+  if (maFilter2?.enabled) {
+    const ma2Arr = ti.SMA.calculate({ values: cMap[maFilter2.interval].map(c => c.close), period: maFilter2.period });
+    ma2          = ma2Arr[ma2Arr.length - 1] ?? null;
+  }
+
+  // MA de stop loss — reutiliza ma50 ou ma2 se mesmos parâmetros
+  let stopLossMa = null;
+  if (stopLoss) {
+    const sameAs1 = maFilter?.enabled  && maFilter.interval  === stopLoss.interval && maFilter.period  === stopLoss.period;
+    const sameAs2 = maFilter2?.enabled && maFilter2.interval === stopLoss.interval && maFilter2.period === stopLoss.period;
+    if (sameAs1)      stopLossMa = ma50;
+    else if (sameAs2) stopLossMa = ma2;
+    else {
+      const slArr = ti.SMA.calculate({ values: cMap[stopLoss.interval].map(c => c.close), period: stopLoss.period });
+      stopLossMa  = slArr[slArr.length - 1] ?? null;
+    }
   }
 
   if (entryRsi == null || exitRsi == null) { log('Indicadores insuficientes.'); return { entryRsi, exitRsi: prevExitRsi }; }
@@ -788,15 +868,19 @@ async function tick(rowId, adapter, strategy, log, prevExitRsi = null) {
 
   // ── WATCHING ────────────────────────────────────────────────────────────────
   if (phase === 'WATCHING') {
-    const bullish = ma50 !== null ? close > ma50 : true;
-    const maStr   = ma50 !== null
+    const bullish  = ma50 !== null ? close > ma50 : true;
+    const bullish2 = ma2  !== null ? close > ma2  : true;
+    const maStr    = ma50 !== null
       ? `  MA${maFilter.period}(${maFilter.interval})=$${fmtP(ma50)} ${bullish ? `${G}↑${X}` : `${R}↓${X}`}`
       : '';
-    const eColor  = entryRsi < entry.rsiBuy ? G : '';
+    const maStr2   = ma2 !== null
+      ? `  MA${maFilter2.period}(${maFilter2.interval})=$${fmtP(ma2)} ${bullish2 ? `${G}↑${X}` : `${R}↓${X}`}`
+      : '';
+    const eColor   = entryRsi < entry.rsiBuy ? G : '';
     log(
       `${eColor}RSI(${entry.interval})=${entryRsi.toFixed(1)}${eColor ? X : ''}` +
       `  ${exitColor}RSI(${exit.interval})=${exitRsi.toFixed(1)}${exitColor ? X : ''}` +
-      `${maStr}  $${fmtP(close)}  capital=$${parseFloat(capital).toFixed(2)}  [WATCHING]`,
+      `${maStr}${maStr2}  $${fmtP(close)}  capital=$${parseFloat(capital).toFixed(2)}  [WATCHING]`,
     );
 
     if (entryRsi < entry.rsiBuy) {
@@ -809,6 +893,10 @@ async function tick(rowId, adapter, strategy, log, prevExitRsi = null) {
           MA_NO_DATA:           'sem dados de MA',
         };
         log(`${Y}⚠️  RSI(${entry.interval})=${entryRsi.toFixed(1)} < ${entry.rsiBuy} — bloqueado: ${reasons[maCheck.reason] ?? maCheck.reason}${X}`);
+        return { entryRsi, exitRsi, phase: 'WATCHING' };
+      }
+      if (maFilter2?.enabled && ma2 !== null && close <= ma2) {
+        log(`${Y}⚠️  RSI(${entry.interval})=${entryRsi.toFixed(1)} < ${entry.rsiBuy} — bloqueado: preço $${fmtP(close)} ≤ MA${maFilter2.period}(${maFilter2.interval}) $${fmtP(ma2)}${X}`);
         return { entryRsi, exitRsi, phase: 'WATCHING' };
       }
       if (strategy.immediateEntry) {
@@ -895,19 +983,25 @@ async function tick(rowId, adapter, strategy, log, prevExitRsi = null) {
 
   // ── BOUGHT ───────────────────────────────────────────────────────────────────
   if (phase === 'BOUGHT') {
-    const buyPrice = parseFloat(state.buy_price);
-    const pnlPct   = ((close - buyPrice) / buyPrice * 100).toFixed(2);
-    const pnlColor = parseFloat(pnlPct) >= 0 ? G : R;
-    const fastMark = exitRsi >= strategy.fastRsiThreshold ? ' ⚡' : '';
+    const buyPrice     = parseFloat(state.buy_price);
+    const pnlPct       = ((close - buyPrice) / buyPrice * 100).toFixed(2);
+    const pnlColor     = parseFloat(pnlPct) >= 0 ? G : R;
+    const fastMark     = exitRsi >= strategy.fastRsiThreshold ? ' ⚡' : '';
+    const stopLossHit  = stopLossMa !== null && close < stopLossMa;
+    const rsiExitHit   = exitRsi > exit.rsiSell;
 
     log(
       `RSI(${entry.interval})=${entryRsi.toFixed(1)}` +
       `  ${exitColor}RSI(${exit.interval})=${exitRsi.toFixed(1)}${exitColor ? X : ''}${fastMark}` +
-      `  $${fmtP(close)}  buy=$${fmtP(buyPrice)}  ${pnlColor}PnL=${pnlPct}%${X}  [BOUGHT]`,
+      `  $${fmtP(close)}  buy=$${fmtP(buyPrice)}  ${pnlColor}PnL=${pnlPct}%${X}` +
+      (stopLossMa ? `  ${R}SL(MA${stopLoss.period})=$${fmtP(stopLossMa)}${X}` : '') +
+      `  [BOUGHT]`,
     );
 
-    if (exitRsi > exit.rsiSell) {
-      log(`${R}📈 RSI(${exit.interval})=${exitRsi.toFixed(1)} > ${exit.rsiSell} — vendendo${X}`);
+    if (stopLossHit || rsiExitHit) {
+      if (stopLossHit) log(`${R}🛑 STOP LOSS: preço $${fmtP(close)} < MA${stopLoss.period}(${stopLoss.interval}) $${fmtP(stopLossMa)} — vendendo${X}`);
+      else             log(`${R}📈 RSI(${exit.interval})=${exitRsi.toFixed(1)} > ${exit.rsiSell} — vendendo${X}`);
+
       let result;
       try { result = await adapter.marketSell(parseFloat(state.buy_qty), log); }
       catch (err) { log(`❌ Erro na venda: ${err.message}`); return { entryRsi, exitRsi, phase: 'BOUGHT' }; }
@@ -934,14 +1028,17 @@ async function tick(rowId, adapter, strategy, log, prevExitRsi = null) {
         buy_price: null, buy_qty: null, buy_usdt: null, buy_time: null, rsi_entry: null,
       });
 
-      const icon = pnlUsdt >= 0 ? '🔴' : '❌';
+      const icon = stopLossHit ? '🛑' : (pnlUsdt >= 0 ? '🟢' : '🔴');
       log('─'.repeat(60));
-      log(`${icon} VENDA  preço=$${fmtP(exitPrice)}  qty=${soldQty}`);
+      log(`${icon} VENDA${stopLossHit ? ` [STOP LOSS MA${stopLoss.period}]` : ''}  preço=$${fmtP(exitPrice)}  qty=${soldQty}`);
       log(`   PnL    : ${pnlSign}$${pnlUsdt.toFixed(4)} (${pnlSign}${pnlPctFinal}%)`);
       log(`   RSI(${exit.interval}): ${exitRsi.toFixed(1)}`);
       log(`   Capital: $${capitalBefore.toFixed(4)} → $${capitalAfter.toFixed(4)}`);
       log('─'.repeat(60));
-      sendWhatsApp(`🔴 ${symbol} VENDA [${adapter.name}]\nPreço: $${fmtP(exitPrice)}\nPnL: ${pnlSign}$${pnlUsdt.toFixed(2)} (${pnlSign}${pnlPctFinal}%)\nCapital: $${capitalBefore.toFixed(2)} → $${capitalAfter.toFixed(2)}\nRSI(${exit.interval}): ${exitRsi.toFixed(1)}`);
+      const waReason = stopLossHit
+        ? `🛑 Stop Loss: $${fmtP(close)} < MA${stopLoss.period}(${stopLoss.interval}) $${fmtP(stopLossMa)}`
+        : `📈 RSI(${exit.interval}): ${exitRsi.toFixed(1)}`;
+      sendWhatsApp(`${stopLossHit ? '🛑' : '🔴'} ${symbol} VENDA [${adapter.name}]\nRazão: ${waReason}\nPreço: $${fmtP(exitPrice)}\nPnL: ${pnlSign}$${pnlUsdt.toFixed(2)} (${pnlSign}${pnlPctFinal}%)\nCapital: $${capitalBefore.toFixed(2)} → $${capitalAfter.toFixed(2)}`);
       return { entryRsi, exitRsi, phase: 'WATCHING' };
     }
 
@@ -1099,8 +1196,12 @@ async function main() {
 
     if (!volOk) {
       console.log(`   ${Y}⚠️  Volume < $1M — baixa liquidez${X}`);
-      const resp = await askUser(`   Incluir ${row.symbol} mesmo assim? [s/N]: `);
-      if (resp !== 's' && resp !== 'sim') { console.log(`   ⏭️  ${row.symbol} ignorado.\n`); continue; }
+      if (!symbolFilter) {
+        const resp = await askUser(`   Incluir ${row.symbol} mesmo assim? [s/N]: `);
+        if (resp !== 's' && resp !== 'sim') { console.log(`   ⏭️  ${row.symbol} ignorado.\n`); continue; }
+      } else {
+        console.log(`   ℹ️  Incluindo mesmo assim (símbolo solicitado via --symbol)`);
+      }
     }
 
     toStart.push({ row, color });

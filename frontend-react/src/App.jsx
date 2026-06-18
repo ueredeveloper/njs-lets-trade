@@ -12,6 +12,7 @@ import CandlestickChart from './components/CandlestickChart';
 import RsiChart from './components/RsiChart';
 import SettingsSidebar from './components/SettingsSidebar';
 import StatisticsPanel from './components/StatisticsPanel';
+import MultitradePanel from './components/MultitradePanel';
 
 function AppContent() {
   const { setCurrencies, setFilters, addFilter, setSelectedChart, setGateFavorites, setBinanceFavorites, setTradeFavorites, setTradeConfigs } = useCurrency();
@@ -245,6 +246,7 @@ function AppContent() {
             {[
               { id: 'indicators', label: t('app.analyze') },
               { id: 'stats',      label: t('app.statistics') },
+              { id: 'multitrade', label: 'Multi-Trade' },
             ].map(({ id, label }) => (
               <button
                 key={id}
@@ -252,6 +254,7 @@ function AppContent() {
                 className={`flex items-center gap-1.5 flex-1 justify-center px-3 py-1.5 text-xs uppercase tracking-widest transition-colors ${
                   openPanels.includes(id) ? 'text-white' : 'text-p5 hover:text-white'
                 }`}
+                style={openPanels.includes(id) && id === 'multitrade' ? { color: '#8b5cf6' } : {}}
               >
                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
                   strokeWidth="1.5" stroke="currentColor"
@@ -270,6 +273,11 @@ function AppContent() {
           {openPanels.includes('stats') && (
             <div className="flex-1 min-h-0 flex flex-col">
               <StatisticsPanel />
+            </div>
+          )}
+          {openPanels.includes('multitrade') && (
+            <div className="flex-1 min-h-0 flex flex-col">
+              <MultitradePanel />
             </div>
           )}
         </div>
