@@ -2,11 +2,12 @@
 
 /**
  * AMAP — Adaptive MA Pullback engine
- * Motor unificado: entrada RSI + filtros MA (fixo/adaptativo) + extensão (3/4 candles) + saída + stop.
+ * Motor unificado: lê parâmetros normalizados (tradeConfigSchema) e avalia entrada/saída.
  */
 
 const ti = require('technicalindicators');
 const { analyzeAdaptiveDip, lastMa, DEFAULT_OPTS } = require('./adaptiveMaDip');
+const { normalizeTradeConfig, toEngineConfig, TRADE_CONFIG_DEFAULTS } = require('./tradeConfigSchema');
 
 const INTERVAL_MS = {
   '1m': 60_000, '3m': 180_000, '5m': 300_000, '15m': 900_000, '30m': 1_800_000,
@@ -14,71 +15,23 @@ const INTERVAL_MS = {
 };
 
 const BOT_DEFAULTS = {
-  entryDiscount:    0.001,
-  immediateEntry:   false,
-  pendingTimeoutMs: 30 * 60_000,
-  pendingCancelPct: 0.002,
-  pollMs:           60_000,
-  fastPollMs:       30_000,
-  fastRsiThreshold: 65,
-  minVolumeUsdt:    1_000_000,
+  entryDiscount:    TRADE_CONFIG_DEFAULTS.execution.entryDiscount,
+  immediateEntry:   TRADE_CONFIG_DEFAULTS.execution.immediateEntry,
+  pendingTimeoutMs: TRADE_CONFIG_DEFAULTS.execution.pendingTimeoutMs,
+  pendingCancelPct: TRADE_CONFIG_DEFAULTS.execution.pendingCancelPct,
+  pollMs:           TRADE_CONFIG_DEFAULTS.polling.pollMs,
+  fastPollMs:       TRADE_CONFIG_DEFAULTS.polling.fastPollMs,
+  fastRsiThreshold: TRADE_CONFIG_DEFAULTS.polling.fastRsiThreshold,
+  minVolumeUsdt:    TRADE_CONFIG_DEFAULTS.volume.minVolumeUsdt,
 };
 
 function maKey(period, interval) {
   return `${period}_${interval}`;
 }
 
-function normalizeRsi(rsi, fallbackOp, fallbackVal, fallbackIv) {
-  return {
-    interval: rsi?.interval ?? fallbackIv,
-    period:   rsi?.period   ?? 14,
-    operator: rsi?.operator ?? fallbackOp,
-    value:    Number(rsi?.value ?? fallbackVal),
-  };
-}
-
-/** Converte payload do frontend → trade_config persistido */
+/** Converte payload do frontend → trade_config persistido (formato motor) */
 function buildTradeConfig(body = {}) {
-  const maConditions = body.maConditions ?? [];
-  const hasExtension = !!(body.rule3candles || body.rule4candles || body.extension?.enabled);
-
-  const primaryMa = maConditions.find(m => m.adaptive)?.interval
-    ?? maConditions[0]?.interval
-    ?? '1h';
-
-  const timingKeys = ['entryDiscount', 'immediateEntry', 'pendingTimeoutMs', 'pendingCancelPct', 'pollMs', 'fastPollMs', 'fastRsiThreshold'];
-  const timing = {};
-  for (const k of timingKeys) {
-    if (body[k] != null) timing[k] = body[k];
-  }
-
-  return {
-    label: `AMAP ${body.entryRsi?.interval ?? '15m'} RSI<${body.entryRsi?.value ?? 30}`,
-    entryRsi:  normalizeRsi(body.entryRsi,  '<', 30, '15m'),
-    exitRsi:   normalizeRsi(body.exitRsi,   '>', 70, '15m'),
-    maFilters: maConditions.map(m => ({
-      period:   Number(m.period   ?? 50),
-      interval: m.interval ?? '1h',
-      mode:     m.adaptive ? 'adaptive' : 'strict_above',
-    })),
-    extension: {
-      enabled:         hasExtension,
-      maInterval:      body.extension?.maInterval      ?? primaryMa,
-      abovePct:        Number(body.extension?.abovePct ?? 5),
-      confirmInterval: body.extension?.confirmInterval ?? '1h',
-      threeCandles:    !!body.rule3candles,
-      fourCandles:     !!body.rule4candles,
-    },
-    stopLoss: {
-      period:   Number(body.stopLoss?.period   ?? 50),
-      interval: body.stopLoss?.interval ?? '1h',
-    },
-    adaptiveOpts: { ...DEFAULT_OPTS, ...(body.adaptiveOpts ?? {}) },
-    minVolumeUsdt: Number(body.minVolumeUsdt ?? BOT_DEFAULTS.minVolumeUsdt),
-    allowLowVolume:  !!body.allowLowVolume,
-    ...BOT_DEFAULTS,
-    ...timing,
-  };
+  return toEngineConfig(normalizeTradeConfig(body));
 }
 
 /** Intervalos de candles necessários para avaliar a config */
@@ -96,10 +49,14 @@ function getRequiredSpecs(config) {
     add(f.interval, f.period + 60);
   }
   if (config.extension?.enabled) {
-    add(config.extension.confirmInterval, 60);
-    add(config.extension.maInterval, 60);
+    const { threeInterval, fourInterval } = getExtensionIntervals(config.extension);
+    add(threeInterval, 60);
+    add(fourInterval, 60);
+    add(config.extension.maInterval, config.extension.maPeriod + 10);
   }
-  add(config.stopLoss.interval, config.stopLoss.period + 10);
+  if (config.stopLoss?.enabled !== false) {
+    add(config.stopLoss.interval, config.stopLoss.period + 10);
+  }
 
   return [...specs.entries()].map(([interval, limit]) => ({ interval, limit }));
 }
@@ -109,6 +66,10 @@ function computeAdaptiveDips(cMap, config) {
   const dips = {};
   for (const f of config.maFilters ?? []) {
     if (f.mode !== 'adaptive') continue;
+    if (f.fixedDipPct != null) {
+      dips[maKey(f.period, f.interval)] = f.fixedDipPct;
+      continue;
+    }
     const candles = cMap[f.interval];
     const key     = maKey(f.period, f.interval);
     dips[key]     = analyzeAdaptiveDip(candles, f.period, config.adaptiveOpts).dipPct;
@@ -121,8 +82,8 @@ function buildMaSnapshot(cMap, config) {
   const snap = {};
   const intervals = new Set([
     ...(config.maFilters ?? []).map(f => f.interval),
-    config.extension?.maInterval,
-    config.stopLoss?.interval,
+    config.extension?.enabled && config.extension?.maInterval,
+    config.stopLoss?.enabled !== false && config.stopLoss?.interval,
   ].filter(Boolean));
 
   for (const iv of intervals) {
@@ -132,11 +93,12 @@ function buildMaSnapshot(cMap, config) {
       if (f.interval !== iv) continue;
       snap[maKey(f.period, iv)] = { ma: lastMa(candles, f.period), candles, period: f.period, interval: iv };
     }
-    if (config.extension?.maInterval === iv) {
-      const k = maKey(50, iv);
-      if (!snap[k]) snap[k] = { ma: lastMa(candles, 50), candles, period: 50, interval: iv };
+    if (config.extension?.enabled && config.extension.maInterval === iv) {
+      const p = config.extension.maPeriod ?? 50;
+      const k = maKey(p, iv);
+      if (!snap[k]) snap[k] = { ma: lastMa(candles, p), candles, period: p, interval: iv };
     }
-    if (config.stopLoss?.interval === iv) {
+    if (config.stopLoss?.enabled !== false && config.stopLoss?.interval === iv) {
       const p = config.stopLoss.period;
       snap[`sl_${maKey(p, iv)}`] = { ma: lastMa(candles, p), period: p, interval: iv };
     }
@@ -146,38 +108,96 @@ function buildMaSnapshot(cMap, config) {
 
 function checkRsi(value, rule) {
   if (value == null) return false;
+  if (rule.operator === '<=') return value <= rule.value;
+  if (rule.operator === '>=') return value >= rule.value;
   return rule.operator === '<' ? value < rule.value : value > rule.value;
 }
 
-function checkExtension(close, maValue, maCandles, extension, entryTimeMs) {
-  if (!extension?.enabled || maValue == null) return { allowed: true, reason: null };
+/** @deprecated confirmInterval — use threeInterval / fourInterval */
+function getExtensionIntervals(extension) {
+  const fallback = extension?.threeInterval ?? extension?.fourInterval
+    ?? extension?.confirmInterval ?? '1h';
+  return {
+    threeInterval: extension?.threeInterval ?? fallback,
+    fourInterval:  extension?.fourInterval ?? fallback,
+  };
+}
 
-  const thresholdPct = extension.abovePct ?? 5;
-  const threshold    = maValue * (1 + thresholdPct / 100);
-  if (close <= threshold) return { allowed: true, reason: null };
+function completedCandles(candles, interval, entryTimeMs) {
+  const intervalMs = INTERVAL_MS[interval] ?? 3_600_000;
+  return (candles ?? []).filter(c => c.openTime + intervalMs <= entryTimeMs);
+}
 
-  if (!extension.threeCandles && !extension.fourCandles) {
-    return { allowed: true, reason: null };
+function resolveConfirmCandles(confirmCandles) {
+  if (Array.isArray(confirmCandles)) {
+    return { three: confirmCandles, four: confirmCandles };
+  }
+  return {
+    three: confirmCandles?.three ?? confirmCandles?.four ?? [],
+    four:  confirmCandles?.four ?? confirmCandles?.three ?? [],
+  };
+}
+
+function analyzeExtension(close, maValue, confirmCandles, extension, entryTimeMs) {
+  const thresholdPct = extension?.abovePct ?? 5;
+  const aboveMaPct   = maValue != null ? ((close / maValue - 1) * 100) : null;
+
+  if (!extension?.enabled || maValue == null) {
+    return {
+      extended: false, allowed: true, reason: null,
+      threeOk: false, fourOk: false, aboveMaPct, thresholdPct,
+    };
   }
 
-  const intervalMs = INTERVAL_MS[extension.confirmInterval] ?? 3_600_000;
-  const completed  = (maCandles ?? []).filter(c => c.openTime + intervalMs <= entryTimeMs);
-  const last3      = completed.slice(-3);
-  const last4      = completed.slice(-4);
+  const threshold = maValue * (1 + thresholdPct / 100);
+  if (close <= threshold) {
+    return {
+      extended: false, allowed: true, reason: null,
+      threeOk: false, fourOk: false, aboveMaPct, thresholdPct,
+    };
+  }
 
-  const threeOk = extension.threeCandles &&
-    last3.length >= 3 && last3.every(c => c.close > c.open);
+  if (!extension.threeCandles && !extension.fourCandles) {
+    return {
+      extended: true, allowed: true, reason: null,
+      threeOk: false, fourOk: false, aboveMaPct, thresholdPct,
+    };
+  }
 
-  const fourOk = extension.fourCandles &&
+  const { threeInterval, fourInterval } = getExtensionIntervals(extension);
+  const { three, four } = resolveConfirmCandles(confirmCandles);
+  const last3 = completedCandles(three, threeInterval, entryTimeMs).slice(-3);
+  const last4 = completedCandles(four, fourInterval, entryTimeMs).slice(-4);
+
+  const threeOk = !!(extension.threeCandles &&
+    last3.length >= 3 && last3.every(c => c.close > c.open));
+
+  const fourOk = !!(extension.fourCandles &&
     last4.length >= 4 &&
     last4[0].close > last4[0].open &&
     last4[1].close > last4[1].open &&
     last4[2].close > last4[2].open &&
-    last4[3].close < last4[3].open;
+    last4[3].close < last4[3].open);
 
-  if (!threeOk && !fourOk) {
-    return { allowed: false, reason: 'THREE_CANDLES_BLOCKED' };
-  }
+  const logic     = extension.confirmLogic ?? 'any';
+  const confirmed = logic === 'all' ? (threeOk && fourOk) : (threeOk || fourOk);
+
+  return {
+    extended: true,
+    allowed:  confirmed,
+    reason:   confirmed ? null : 'THREE_CANDLES_BLOCKED',
+    threeOk,
+    fourOk,
+    aboveMaPct,
+    thresholdPct,
+    threeInterval,
+    fourInterval,
+  };
+}
+
+function checkExtension(close, maValue, confirmCandles, extension, entryTimeMs) {
+  const r = analyzeExtension(close, maValue, confirmCandles, extension, entryTimeMs);
+  if (!r.allowed && r.extended) return { allowed: false, reason: r.reason ?? 'THREE_CANDLES_BLOCKED' };
   return { allowed: true, reason: null };
 }
 
@@ -198,11 +218,7 @@ function checkMaFilters({ close, maFilters, maSnap, adaptiveDips }) {
   return { allowed: true, reason: null };
 }
 
-/**
- * Avalia se entrada é permitida.
- * @returns {{ allowed, reason?, dipPct?, filter? }}
- */
-function evaluateEntry({ entryRsi, close, entryTimeMs, config, maSnap, adaptiveDips }) {
+function evaluateEntry({ entryRsi, close, entryTimeMs, config, maSnap, adaptiveDips, cMap }) {
   if (!checkRsi(entryRsi, config.entryRsi)) {
     return { allowed: false, reason: 'RSI_NOT_MET' };
   }
@@ -214,23 +230,24 @@ function evaluateEntry({ entryRsi, close, entryTimeMs, config, maSnap, adaptiveD
 
   if (config.extension?.enabled) {
     const extIv  = config.extension.maInterval;
-    const extKey = maKey(50, extIv);
-    const md     = maSnap[extKey] ?? maSnap[maKey(50, extIv)];
+    const extP   = config.extension.maPeriod ?? 50;
+    const extKey = maKey(extP, extIv);
+    const md     = maSnap[extKey];
     const extMa  = md?.ma;
-    const extC   = md?.candles ?? maSnap[maKey(50, config.extension.confirmInterval)]?.candles;
-    const extCheck = checkExtension(close, extMa, extC, config.extension, entryTimeMs);
+    const { threeInterval, fourInterval } = getExtensionIntervals(config.extension);
+    const confirmCandles = cMap ? {
+      three: cMap[threeInterval],
+      four:  cMap[fourInterval],
+    } : { three: md?.candles, four: md?.candles };
+    const extCheck = checkExtension(close, extMa, confirmCandles, config.extension, entryTimeMs);
     if (!extCheck.allowed) return extCheck;
   }
 
   return { allowed: true, reason: null };
 }
 
-/**
- * Avalia saída por RSI ou stop loss MA.
- * @returns {{ exit: boolean, reason?: 'rsi'|'stop_loss_ma' }}
- */
 function evaluateExit({ close, exitRsi, stopLossMa, config }) {
-  if (stopLossMa != null && close < stopLossMa) {
+  if (config.stopLoss?.enabled !== false && stopLossMa != null && close < stopLossMa) {
     return { exit: true, reason: 'stop_loss_ma' };
   }
   if (checkRsi(exitRsi, config.exitRsi)) {
@@ -239,7 +256,6 @@ function evaluateExit({ close, exitRsi, stopLossMa, config }) {
   return { exit: false };
 }
 
-/** Bloqueia entrada se volume 24h (USDT) estiver abaixo do mínimo (exceto allowLowVolume) */
 function checkMinVolume(volumeUsdt, config) {
   if (config?.allowLowVolume) return { allowed: true, reason: null, lowVolumeMode: true };
   const min = config?.minVolumeUsdt ?? BOT_DEFAULTS.minVolumeUsdt;
@@ -248,21 +264,21 @@ function checkMinVolume(volumeUsdt, config) {
   return { allowed: false, reason: 'VOLUME_LOW', volumeUsdt, minVolumeUsdt: min, lowVolumeMode: true };
 }
 
-/** Saída a mercado agressiva quando volume baixo ou usuário autorizou */
 function needsMarketSell(config, volumeUsdt) {
   if (config?.allowLowVolume) return true;
+  if (config?.aggressiveExitOnLowVolume === false) return false;
   if (volumeUsdt == null) return false;
   const min = config?.minVolumeUsdt ?? BOT_DEFAULTS.minVolumeUsdt;
   return volumeUsdt < min;
 }
 
 function getStopLossMa(maSnap, config) {
+  if (config.stopLoss?.enabled === false) return null;
   const sl = config.stopLoss;
   const key = `sl_${maKey(sl.period, sl.interval)}`;
   return maSnap[key]?.ma ?? maSnap[maKey(sl.period, sl.interval)]?.ma ?? null;
 }
 
-/** Relatório de adaptação para 1+ intervalos */
 function buildAdaptiveReport(cMap, config) {
   const lines = [];
   for (const f of config.maFilters ?? []) {
@@ -288,6 +304,9 @@ module.exports = {
   evaluateExit,
   getStopLossMa,
   checkRsi,
+  checkExtension,
+  analyzeExtension,
+  getExtensionIntervals,
   checkMinVolume,
   needsMarketSell,
   buildAdaptiveReport,

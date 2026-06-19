@@ -1,5 +1,6 @@
--- ── rsi_multi_bot_state ──────────────────────────────────────────────────────
--- Um registro por (symbol, strategy_id). Cada par pode rodar estratégias distintas.
+-- ── AMAP Multi-Trade — schema Supabase ───────────────────────────────────────
+-- Execute no SQL Editor do Supabase.
+-- Tabelas rsi_multi_* mantêm o nome histórico (compatibilidade).
 CREATE TABLE IF NOT EXISTS rsi_multi_bot_state (
   id              BIGSERIAL      PRIMARY KEY,
   symbol          TEXT           NOT NULL,

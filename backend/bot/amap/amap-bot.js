@@ -1,18 +1,16 @@
 'use strict';
 
 /**
- * Bot único AMAP — Adaptive MA Pullback
+ * Bot AMAP — Adaptive MA Pullback
  *
- * Toda estratégia é trade_config (Supabase) ou preset nomeado (strategyPresets.js).
- * Motor: strategyEngine.js
+ * Configuração via trade_config (Supabase / painel Multi-Trade).
+ * Motor: strategyEngine.js + tradeConfigSchema.js
  *
- * Modo bot     : node backend/bot/rsi-ma50/trading-rsi-multi.js
- * Filtrar      : node backend/bot/rsi-ma50/trading-rsi-multi.js --symbol BTCUSDT
- * Backtest     : node backend/bot/rsi-ma50/trading-rsi-multi.js --backtest BTCUSDT [saved|presetId] [exchange] [capital]
- *                (omitir preset ou usar saved/flex → config do Supabase)
- * Adaptativo   : node backend/bot/rsi-ma50/trading-rsi-multi.js --adaptive-test BTCUSDT binance 1h 4h
- *
- * Presets: flex, rsi15m_4h, rsi5m30_15m70, rsi1h35_15m85, rsi1m30_1m70, rsi1m30_1m70_ma, rsi1m30_1m80
+ * Modo bot     : node backend/bot/amap/amap-bot.js
+ * Filtrar      : node backend/bot/amap/amap-bot.js --symbol BTCUSDT
+ * Backtest     : node backend/bot/amap/amap-bot.js --backtest BTCUSDT [exchange] [capital]
+ * Adaptativo   : node backend/bot/amap/amap-bot.js --adaptive-test BTCUSDT binance 1h 4h
+ * Extensão 3/4 : node backend/bot/amap/amap-bot.js --extension-test BTCUSDT [exchange] [threeInterval] [fourInterval]
  */
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -32,44 +30,43 @@ const {
   evaluateEntry, evaluateExit, getStopLossMa, checkRsi, checkMinVolume, needsMarketSell, maKey,
 } = require('./strategyEngine');
 const { fmtVolumeUsdt } = require('../volume24h');
-const {
-  configFromPreset, configFromRow, resolveStrategy, hasAdaptiveFilters, listPresetsForCli, presetIds,
-} = require('./strategyPresets');
+const { configFromRow, resolveStrategy, hasAdaptiveFilters } = require('./tradeConfigSchema');
+const { analyzeExtensionHistory, printExtensionReport } = require('./extensionBacktest');
 
-const DB_BACKTEST_SOURCES = new Set(['saved', 'db', 'supabase', 'flex']);
-const EXCHANGES           = new Set(['binance', 'gate']);
+const EXCHANGES    = new Set(['binance', 'gate']);
+const MA_INTERVALS = new Set(['15m', '30m', '1h', '2h', '4h', '8h', '1d']);
+
+function parseExtensionTestArgs(argv) {
+  const symbol = argv[1]?.toUpperCase();
+  if (!symbol) return { symbol: null };
+
+  let exchange = null;
+  const intervals = [];
+  for (let i = 2; i < argv.length; i++) {
+    if (EXCHANGES.has(argv[i])) exchange = argv[i];
+    else if (MA_INTERVALS.has(argv[i])) intervals.push(argv[i]);
+  }
+  return {
+    symbol,
+    exchange,
+    threeInterval: intervals[0] ?? null,
+    fourInterval:  intervals[1] ?? intervals[0] ?? null,
+  };
+}
 
 function parseBacktestArgs(argv) {
   const symbol = argv[1]?.toUpperCase();
-  const a2     = argv[2];
-
-  if (!a2) {
-    return { symbol, fromDb: true, exchange: null, capital: null, presetId: null };
-  }
-  if (DB_BACKTEST_SOURCES.has(a2)) {
-    let exchange = null;
-    let capital  = null;
-    if (argv[3]) {
-      if (EXCHANGES.has(argv[3])) {
-        exchange = argv[3];
-        if (argv[4]) capital = parseFloat(argv[4]);
-      } else {
-        capital = parseFloat(argv[3]);
-      }
+  if (!symbol) return { symbol: null };
+  let exchange = null;
+  let capital  = null;
+  for (let i = 2; i < argv.length; i++) {
+    if (EXCHANGES.has(argv[i])) exchange = argv[i];
+    else {
+      const n = parseFloat(argv[i]);
+      if (!Number.isNaN(n)) capital = n;
     }
-    return { symbol, fromDb: true, exchange, capital, presetId: null };
   }
-  if (EXCHANGES.has(a2)) {
-    return { symbol, fromDb: true, exchange: a2, capital: argv[3] ? parseFloat(argv[3]) : null, presetId: null };
-  }
-  if (presetIds().includes(a2)) {
-    return {
-      symbol, fromDb: false, presetId: a2,
-      exchange: argv[3] ?? 'binance',
-      capital:  parseFloat(argv[4] ?? '100'),
-    };
-  }
-  return { error: a2 };
+  return { symbol, exchange, capital };
 }
 
 async function backtestFromSupabase(symbol, exchangeHint, capitalHint) {
@@ -81,22 +78,19 @@ async function backtestFromSupabase(symbol, exchangeHint, capitalHint) {
   const row = await loadSavedBacktestRow(symbol, exchangeHint);
   if (!row) {
     console.error(`❌ ${symbol} não encontrado no Supabase (rsi_multi_bot_state / multitrade_favorites).`);
-    console.error('   Salve no painel Multi-Trade ou use um preset: --backtest SYM rsi5m30_15m70 binance 100');
+    console.error('   Salve no painel Multi-Trade antes de rodar o backtest.');
     process.exit(1);
   }
 
   const config = configFromRow(row);
   if (!config) {
-    console.error(`❌ ${symbol}: sem trade_config nem preset válido (strategy_id=${row.strategy_id})`);
+    console.error(`❌ ${symbol}: sem trade_config válido`);
     process.exit(1);
   }
 
   const exchange = exchangeHint ?? row.exchange ?? 'binance';
   const capital  = capitalHint ?? parseFloat(row.capital ?? 100);
-  const source   = row.trade_config ? 'trade_config' : `preset:${row.strategy_id}`;
-
-  console.log(`\n📦 Supabase: ${symbol} [${exchange}]  strategy=${row.strategy_id ?? 'flex'}  (${source})`);
-  console.log(`   Capital: $${capital}`);
+  console.log(`\n📦 Supabase: ${symbol} [${exchange}]  capital=$${capital}`);
   await backtest(symbol, config, exchange, capital);
 }
 
@@ -574,7 +568,8 @@ function maSnapAt(cMap, config, openTime) {
   }
   if (config.extension?.enabled) {
     const iv = config.extension.maInterval;
-    if (!snap[maKey(50, iv)]) add(maKey(50, iv), 50, iv);
+    const p  = config.extension.maPeriod ?? 50;
+    if (!snap[maKey(p, iv)]) add(maKey(p, iv), p, iv);
   }
   const sl = config.stopLoss;
   if (sl) add(`sl_${maKey(sl.period, sl.interval)}`, sl.period, sl.interval);
@@ -590,7 +585,7 @@ async function backtest(symbol, config, exchange = 'binance', capital = 100) {
   console.log(`📊 Backtest AMAP: ${symbol} [${adapter.name}]  —  ${config.label ?? 'flex'}`);
   console.log(`   Entrada: RSI(${config.entryRsi.interval})${config.entryRsi.operator}${config.entryRsi.value}`);
   console.log(`   Saída  : RSI(${config.exitRsi.interval})${config.exitRsi.operator}${config.exitRsi.value}`);
-  console.log(`   Stop   : MA${config.stopLoss.period}(${config.stopLoss.interval})`);
+  console.log(`   Stop   : ${config.stopLoss?.enabled === false ? 'desligado' : `MA${config.stopLoss.period}(${config.stopLoss.interval})`}`);
   console.log(`   Vol mín: ${fmtVolumeUsdt(config.minVolumeUsdt ?? 1_000_000)} 24h (não simulado no histórico)`);
 
   const cMap = {};
@@ -636,7 +631,7 @@ async function backtest(symbol, config, exchange = 'binance', capital = 100) {
       if (!checkRsi(entryRsi, config.entryRsi)) continue;
 
       const entryCheck = evaluateEntry({
-        entryRsi, close, entryTimeMs: openTime, config, maSnap, adaptiveDips,
+        entryRsi, close, entryTimeMs: openTime, config, maSnap, adaptiveDips, cMap,
       });
       if (!entryCheck.allowed) {
         blockedCount++;
@@ -769,7 +764,7 @@ async function tick(rowId, adapter, strategy, log, prevExitRsi, session) {
       });
       const newCandle = session.entryCandleMs !== candleMs;
       const entryCheck = evaluateEntry({
-        entryRsi, close, entryTimeMs: Date.now(), config, maSnap, adaptiveDips,
+        entryRsi, close, entryTimeMs: Date.now(), config, maSnap, adaptiveDips, cMap,
       });
 
       if (!entryCheck.allowed) {
@@ -935,7 +930,7 @@ async function tick(rowId, adapter, strategy, log, prevExitRsi, session) {
 async function startSymbol(row, color) {
   const strategy = resolveStrategy(row);
   if (!strategy) {
-    console.error(`❌ strategy_id "${row.strategy_id}" desconhecida para ${row.symbol}`);
+    console.error(`❌ strategy_id "${row.strategy_id}" sem trade_config para ${row.symbol}`);
     return;
   }
 
@@ -1047,9 +1042,85 @@ async function runAdaptiveTest(symbol, exchange, intervals) {
   console.log('─'.repeat(68));
 }
 
+async function runExtensionTest(symbol, exchangeHint, intervalOverrides = {}) {
+  let config = buildTradeConfig({});
+  let exchange = exchangeHint ?? 'binance';
+
+  if (SB_URL && SB_KEY) {
+    const row = await loadSavedBacktestRow(symbol, exchangeHint);
+    if (row) {
+      const fromRow = configFromRow(row);
+      if (fromRow) config = fromRow;
+      exchange = exchangeHint ?? row.exchange ?? 'binance';
+    }
+  }
+
+  const { threeInterval, fourInterval } = intervalOverrides;
+  if (threeInterval || fourInterval) {
+    config = {
+      ...config,
+      extension: {
+        ...config.extension,
+        threeInterval: threeInterval ?? config.extension?.threeInterval,
+        fourInterval:  fourInterval ?? threeInterval ?? config.extension?.fourInterval,
+      },
+    };
+  }
+
+  if (!config.extension?.threeCandles && !config.extension?.fourCandles) {
+    config = {
+      ...config,
+      extension: {
+        ...config.extension,
+        enabled: true,
+        threeCandles: true,
+        fourCandles: true,
+      },
+    };
+  }
+
+  const adapter = buildAdapter(exchange, symbol);
+  const specs   = getRequiredSpecs(config);
+  const LIMIT   = 1000;
+  const cMap    = {};
+
+  for (const { interval, limit } of specs) {
+    const local = loadLocalCandles(symbol, interval);
+    cMap[interval] = local ?? await adapter.fetchCandles(Math.max(limit, LIMIT), interval);
+  }
+
+  const result = analyzeExtensionHistory(cMap, config);
+  printExtensionReport(symbol, config, result);
+  return result;
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 async function main() {
   const args = process.argv.slice(2);
+
+  if (args[0] === '--extension-test') {
+    const parsed = parseExtensionTestArgs(args);
+
+    if (!parsed.symbol) {
+      console.log('Uso: node amap-bot.js --extension-test <SYMBOL> [exchange] [threeInterval] [fourInterval]');
+      console.log('Ex:  node amap-bot.js --extension-test BTCUSDT binance 1h');
+      console.log('Ex:  node amap-bot.js --extension-test BTCUSDT binance 1h 4h');
+      console.log('\n  Usa trade_config do Supabase (se existir) ou defaults AMAP.');
+      console.log('  threeInterval / fourInterval sobrescrevem os candles das regras 3 e 4.');
+      console.log('  Simula cada sinal RSI+MA esticado acima da MA e compara:');
+      console.log('    • entradas confirmadas (3/4 OK) vs bloqueadas');
+      console.log('    • trades salvos (bloqueio evitou prejuízo) vs oportunidades perdidas');
+      process.exit(0);
+    }
+
+    await Promise.all([syncBinanceClock(), syncGateClock()]);
+    await runExtensionTest(parsed.symbol, parsed.exchange, {
+      threeInterval: parsed.threeInterval,
+      fourInterval:  parsed.fourInterval,
+    });
+    console.log();
+    process.exit(0);
+  }
 
   if (args[0] === '--adaptive-test') {
     const symbol    = args[1]?.toUpperCase();
@@ -1057,8 +1128,8 @@ async function main() {
     const intervals = args.length > 3 ? args.slice(3) : ['1h', '4h'];
 
     if (!symbol) {
-      console.log('Uso: node trading-rsi-multi.js --adaptive-test <SYMBOL> [exchange] [intervals...]');
-      console.log('Ex:  node trading-rsi-multi.js --adaptive-test BTCUSDT binance 1h 4h');
+      console.log('Uso: node amap-bot.js --adaptive-test <SYMBOL> [exchange] [intervals...]');
+      console.log('Ex:  node amap-bot.js --adaptive-test BTCUSDT binance 1h 4h');
       process.exit(0);
     }
 
@@ -1073,47 +1144,21 @@ async function main() {
     const parsed = parseBacktestArgs(args);
 
     if (!parsed.symbol) {
-      console.log('Uso: node trading-rsi-multi.js --backtest <SYMBOL> [saved|presetId] [exchange] [capital]');
-      console.log('\n  saved / flex / (omitir) → trade_config do Supabase (painel Multi-Trade)');
-      console.log('  <presetId>              → preset local (strategyPresets.js)');
+      console.log('Uso: node amap-bot.js --backtest <SYMBOL> [exchange] [capital]');
       console.log('\nExemplos:');
-      console.log('  node trading-rsi-multi.js --backtest BTCUSDT');
-      console.log('  node trading-rsi-multi.js --backtest BTCUSDT saved binance 40');
-      console.log('  node trading-rsi-multi.js --backtest BTCUSDT rsi5m30_15m70 binance 100');
-      console.log('\nPresets:');
-      for (const { id, label } of listPresetsForCli())
-        console.log(`  ${id.padEnd(22)} ${label}`);
+      console.log('  node amap-bot.js --backtest BTCUSDT');
+      console.log('  node amap-bot.js --backtest BTCUSDT binance 40');
       process.exit(0);
     }
 
-    if (parsed.error) {
-      console.error(`❌ Opção desconhecida: "${parsed.error}". Use saved ou: ${presetIds().join(', ')}`);
-      process.exit(1);
-    }
-
     await Promise.all([syncBinanceClock(), syncGateClock()]);
-
-    if (parsed.fromDb) {
-      await backtestFromSupabase(parsed.symbol, parsed.exchange, parsed.capital);
-    } else {
-      const rule3 = args[5] === 'true' ? true : args[5] === 'false' ? false : null;
-      const rule4 = args[6] === 'true' ? true : args[6] === 'false' ? false : null;
-      const overrides = {};
-      if (rule3 !== null) overrides.rule3candles = rule3;
-      if (rule4 !== null) overrides.rule4candles = rule4;
-      const config = configFromPreset(parsed.presetId, overrides);
-      if (!config) {
-        console.error(`❌ Preset "${parsed.presetId}" inválido`);
-        process.exit(1);
-      }
-      await backtest(parsed.symbol, config, parsed.exchange, parsed.capital);
-    }
+    await backtestFromSupabase(parsed.symbol, parsed.exchange, parsed.capital);
     console.log();
     process.exit(0);
   }
 
   // ── Modo bot ───────────────────────────────────────────────────────────────
-  // Filtro opcional: node trading-rsi-multi.js --symbol AVNTUSDT
+  // Filtro opcional: node amap-bot.js --symbol AVNTUSDT
   const symbolFilter = (() => {
     const idx = args.indexOf('--symbol');
     return idx !== -1 ? args[idx + 1]?.toUpperCase() : null;
@@ -1130,7 +1175,7 @@ async function main() {
 
   let rows = await loadAllRows();
   if (!rows?.length) {
-    console.error('❌ Nenhum símbolo em rsi_multi_bot_state. Execute rsi-multi-bot.sql no Supabase.');
+    console.error('❌ Nenhum símbolo em rsi_multi_bot_state. Execute amap-bot.sql no Supabase.');
     process.exit(1);
   }
   if (symbolFilter) {
@@ -1142,11 +1187,8 @@ async function main() {
     console.log(`   🔎 Filtrando apenas: ${symbolFilter}`);
   }
 
-  console.log('\n🤖 Bot AMAP — trading-rsi-multi.js');
-  console.log('   Config: trade_config (Supabase) ou preset em strategyPresets.js');
-  for (const { id, label } of listPresetsForCli())
-    console.log(`   • ${id}: ${label}`);
-  console.log();
+  console.log('\n🤖 Bot AMAP — amap-bot.js');
+  console.log('   Config: trade_config (Supabase / painel Multi-Trade)\n');
 
   const toStart = [];
 
@@ -1157,7 +1199,7 @@ async function main() {
     const color    = COLORS[i % COLORS.length];
 
     if (!strategy) {
-      console.log(`   ⚠️  ${row.symbol}: strategy_id="${row.strategy_id}" desconhecida — ignorado`);
+      console.log(`   ⚠️  ${row.symbol}: sem trade_config — ignorado`);
       continue;
     }
 

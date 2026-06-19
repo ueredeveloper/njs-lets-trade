@@ -1,0 +1,46 @@
+---
+description: Sempre adicionar id ou className nos componentes React
+globs: frontend-react/**/*.{jsx,tsx}
+alwaysApply: false
+---
+
+# id / className em componentes
+
+Ao criar ou editar componentes no `frontend-react`, **todo elemento JSX renderizado deve ter `id` ou `className`** (ou ambos).
+
+## Obrigatório
+
+- Elemento raiz de cada componente exportado
+- Botões, inputs, selects, links e outros controles interativos
+- Containers de seção, listas, linhas de tabela e modais
+- Elementos que podem ser alvo de testes, estilo ou debug no DevTools
+
+## Convenção de nomes
+
+- **`id`**: kebab-case, prefixo do componente — ex.: `currency-table-search`, `indicator-panel-btn-search`
+- **`className`**: manter classes Tailwind existentes e acrescentar uma classe semântica quando faltar — ex.: `currency-table-row`, `multitrade-panel-entry`
+- Preferir `id` para elementos únicos; `className` para elementos repetidos (linhas, itens de lista)
+
+## Exemplos
+
+```jsx
+// ❌ BAD — sem identificador
+<div>
+  <button onClick={onSave}>Salvar</button>
+</div>
+
+// ✅ GOOD
+<div id="trade-config-modal" className="trade-config-modal flex flex-col">
+  <button id="trade-config-modal-btn-save" className="trade-config-modal-btn-save ..." onClick={onSave}>
+    Salvar
+  </button>
+</div>
+
+// ✅ GOOD — lista com className no item
+<tr className="currency-table-row" id={symbol ? `currency-row-${symbol}` : undefined}>
+```
+
+## Exceções
+
+- Fragmentos (`<>...</>`) e componentes que só retornam `null`
+- Wrappers puramente estruturais sem significado de UI, desde que o pai já tenha `id` ou `className` descritivo

@@ -70,10 +70,6 @@ export default function MultitradePanel() {
                       }}>
                       {entry.exchange === 'gate' ? 'Gate' : 'Bnb'}
                     </span>
-                    <span className="text-[9px] px-1 py-0.5 rounded border ml-auto font-mono"
-                      style={{ color: MT_COLOR, borderColor: `${MT_COLOR}66` }}>
-                      {entry.strategyId ?? 'flex'}
-                    </span>
                   </div>
 
                   {/* Row 2: conditions summary */}
@@ -93,24 +89,31 @@ export default function MultitradePanel() {
                     )}
                     {(entry.maConditions ?? []).map((ma, i) => (
                       <span key={i} className="text-[9px] px-1 py-0.5 rounded bg-p2 text-p5/70 font-mono">
-                        MA{ma.period}({ma.interval}) {ma.direction === 'above' ? '↑' : '↓'}{ma.adaptive ? '~' : ''}
+                        MA{ma.period}({ma.interval}) {ma.mode === 'adaptive' ? 'adapt.' : 'fixo'}
                       </span>
                     ))}
-                    {entry.stopLoss && (
+                    {entry.extension?.enabled !== false && entry.extension?.threeCandles && (
+                      <span className="text-[9px] px-1 py-0.5 rounded bg-p2 text-p5/70">3🕯</span>
+                    )}
+                    {entry.extension?.enabled !== false && entry.extension?.fourCandles && (
+                      <span className="text-[9px] px-1 py-0.5 rounded bg-p2 text-p5/70">4🕯</span>
+                    )}
+                    {entry.stopLoss?.enabled !== false && entry.stopLoss && (
                       <span className="text-[9px] px-1 py-0.5 rounded bg-p2 text-red-400/80 font-mono">
                         SL MA{entry.stopLoss.period}({entry.stopLoss.interval})
                       </span>
                     )}
-                    {entry.rule3candles && <span className="text-[9px] px-1 py-0.5 rounded bg-p2 text-p5/70">3🕯alta</span>}
-                    {entry.rule4candles && <span className="text-[9px] px-1 py-0.5 rounded bg-p2 text-p5/70">4🕯mix</span>}
-                    {entry.minVolumeUsdt != null && (
+                    {entry.execution?.immediateEntry && (
+                      <span className="text-[9px] px-1 py-0.5 rounded bg-p2 text-p5/70">imediato</span>
+                    )}
+                    {entry.volume?.minVolumeUsdt != null && (
                       <span className="text-[9px] px-1 py-0.5 rounded bg-p2 text-p5/70 font-mono">
-                        vol≥{entry.minVolumeUsdt >= 1_000_000
-                          ? `${entry.minVolumeUsdt / 1_000_000}M`
-                          : `${entry.minVolumeUsdt / 1000}K`}
+                        vol≥{entry.volume.minVolumeUsdt >= 1_000_000
+                          ? `${entry.volume.minVolumeUsdt / 1_000_000}M`
+                          : `${entry.volume.minVolumeUsdt / 1000}K`}
                       </span>
                     )}
-                    {entry.allowLowVolume && (
+                    {entry.volume?.allowLowVolume && (
                       <span className="text-[9px] px-1 py-0.5 rounded bg-amber-500/15 text-amber-400 font-mono">vol↓OK</span>
                     )}
                   </div>

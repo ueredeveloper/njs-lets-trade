@@ -13,7 +13,8 @@
 
 const router    = require('express').Router();
 const supabase  = require('../supabase/client');
-const { buildTradeConfig, buildAdaptiveReport, getRequiredSpecs, buildMaSnapshot, evaluateEntry, computeAdaptiveDips } = require('../bot/rsi-ma50/strategyEngine');
+const { buildTradeConfig, buildAdaptiveReport, getRequiredSpecs, buildMaSnapshot, evaluateEntry, computeAdaptiveDips } = require('../bot/amap/strategyEngine');
+const { toFormState, normalizeTradeConfig, flatConfigToBody } = require('../bot/amap/tradeConfigSchema');
 const { fetchBinanceCandles, fetchGateCandles } = require('../bot/prices');
 const { toGateSymbol } = require('../utils/toGateSymbol');
 const { fetch24hVolumeUsdt, fmtVolumeUsdt, DEFAULT_MIN_VOLUME_USDT } = require('../bot/volume24h');
@@ -228,37 +229,29 @@ router.delete('/favorites/:symbol', getUserId, async (req, res) => {
 //  MULTITRADE FAVORITES  + sync rsi_multi_bot_state
 // ============================================================
 
-function tradeConfigToMaConditions(tc) {
-  if (!tc?.maFilters?.length) return null;
-  return tc.maFilters.map((f, i) => ({
-    id: i + 1,
-    period: f.period,
-    interval: f.interval,
-    direction: 'above',
-    adaptive: f.mode === 'adaptive',
-  }));
-}
-
 function multitradeToEntry(r) {
-  const tc = r.trade_config ?? null;
-  const maConditions = (r.ma_conditions?.length ? r.ma_conditions : tradeConfigToMaConditions(tc)) ?? [];
+  const tc = r.trade_config ? buildTradeConfig(flatConfigToBody(r.trade_config)) : null;
+  const form = toFormState(tc ?? {
+    entryRsi:     r.entry_rsi,
+    exitRsi:      r.exit_rsi,
+    maConditions: r.ma_conditions,
+    extension:    { threeCandles: r.rule_3_candles, fourCandles: r.rule_4_candles },
+  });
+
   return {
     id:           r.id,
     symbol:       r.symbol,
     exchange:     r.exchange,
-    strategyId:   r.strategy_id,
     capital:      Number(r.capital),
-    entryRsi:     r.entry_rsi ?? tc?.entryRsi,
-    exitRsi:      r.exit_rsi  ?? tc?.exitRsi,
-    maConditions,
-    rule3candles: r.rule_3_candles ?? tc?.extension?.threeCandles ?? false,
-    rule4candles: r.rule_4_candles ?? tc?.extension?.fourCandles ?? false,
-    stopLoss:     tc?.stopLoss ?? { period: 50, interval: '1h' },
-    extension:    tc?.extension ?? { abovePct: 5, confirmInterval: '1h' },
-    immediateEntry: tc?.immediateEntry ?? false,
-    entryDiscount:  tc?.entryDiscount ?? 0.001,
-    minVolumeUsdt:  tc?.minVolumeUsdt ?? DEFAULT_MIN_VOLUME_USDT,
-    allowLowVolume: tc?.allowLowVolume ?? false,
+    entryRsi:     form.entryRsi,
+    exitRsi:      form.exitRsi,
+    maConditions: form.maConditions,
+    extension:    form.extension,
+    stopLoss:     form.stopLoss,
+    execution:    form.execution,
+    polling:      form.polling,
+    adaptiveOpts: form.adaptiveOpts,
+    volume:       form.volume,
     tradeConfig:  tc,
     createdAt:    r.created_at,
     updatedAt:    r.updated_at,
@@ -268,6 +261,7 @@ function multitradeToEntry(r) {
 function bodyToMultitradeRow(userId, body) {
   const sym = body.symbol?.toUpperCase();
   if (!sym) return null;
+  const normalized = normalizeTradeConfig(body);
   const trade_config = buildTradeConfig(body);
   return {
     user_id:         userId,
@@ -275,11 +269,11 @@ function bodyToMultitradeRow(userId, body) {
     exchange:        body.exchange ?? 'binance',
     strategy_id:     'flex',
     capital:         Number(body.capital ?? 100),
-    entry_rsi:       body.entryRsi ?? trade_config.entryRsi,
-    exit_rsi:        body.exitRsi  ?? trade_config.exitRsi,
-    ma_conditions:   body.maConditions ?? [],
-    rule_3_candles:  !!body.rule3candles,
-    rule_4_candles:  !!body.rule4candles,
+    entry_rsi:       normalized.entryRsi,
+    exit_rsi:        normalized.exitRsi,
+    ma_conditions:   normalized.maConditions,
+    rule_3_candles:  !!normalized.extension.threeCandles,
+    rule_4_candles:  !!normalized.extension.fourCandles,
     trade_config,
   };
 }
@@ -465,7 +459,7 @@ router.post('/multitrade-evaluate', getUserId, async (req, res) => {
     const adaptiveDips = computeAdaptiveDips(cMap, tradeConfig);
     const maSnap = buildMaSnapshot(cMap, tradeConfig);
     const entryCheck = evaluateEntry({
-      entryRsi, close, entryTimeMs: Date.now(), config: tradeConfig, maSnap, adaptiveDips,
+      entryRsi, close, entryTimeMs: Date.now(), config: tradeConfig, maSnap, adaptiveDips, cMap,
     });
     const adaptive = buildAdaptiveReport(cMap, tradeConfig);
 
