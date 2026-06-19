@@ -11,10 +11,11 @@ export const TRADE_CONFIG_DEFAULTS = {
     threeInterval: '1h', fourInterval: '1h',
     threeCandles: true, fourCandles: true, confirmLogic: 'any',
   },
-  stopLoss: { enabled: true, period: 50, interval: '1h' },
+  stopLoss: { enabled: true, period: 50, interval: '4h' },
   execution: {
     immediateEntry: false, entryDiscount: 0.001,
     pendingTimeoutMs: 30 * 60_000, pendingCancelPct: 0.002,
+    pendingCancelOnExitRsi: true,
   },
   polling: { pollMs: 60_000, fastPollMs: 30_000, fastRsiThreshold: 65 },
   adaptiveOpts: { defaultPct: 3, maxPct: 8, minPct: 0.5, minEpisodes: 3 },
@@ -66,17 +67,26 @@ export function formStateFromEntry(entry) {
   }
   return {
     entryRsi:     { ...d.entryRsi,  ...entry.entryRsi },
-    exitRsi:      { ...d.exitRsi,   ...entry.exitRsi },
+    exitRsi:      { ...d.exitRsi, ...entry.exitRsi, value: Number(entry.exitRsi?.value ?? d.exitRsi.value) },
     maConditions: (entry.maConditions ?? d.maConditions).map((m, i) => ({
       id: i + 1,
       period: m.period ?? 50,
       interval: m.interval ?? '1h',
       mode: m.mode ?? (m.adaptive ? 'adaptive' : 'strict_above'),
-      fixedDipPct: m.fixedDipPct ?? '',
+      fixedDipPct: m.fixedDipPct != null && m.fixedDipPct !== '' ? m.fixedDipPct : '',
     })),
-    extension:    { ...d.extension, ...entry.extension },
+    extension:    {
+      ...d.extension,
+      ...entry.extension,
+      abovePct: Number(entry.extension?.abovePct ?? d.extension.abovePct),
+    },
     stopLoss:     { ...d.stopLoss,  ...entry.stopLoss },
-    execution:    { ...d.execution, ...entry.execution },
+    execution:    {
+      ...d.execution,
+      ...entry.execution,
+      entryDiscount: Number(entry.execution?.entryDiscount ?? d.execution.entryDiscount),
+      pendingCancelOnExitRsi: entry.execution?.pendingCancelOnExitRsi ?? d.execution.pendingCancelOnExitRsi,
+    },
     polling:      { ...d.polling,   ...entry.polling },
     adaptiveOpts: { ...d.adaptiveOpts, ...entry.adaptiveOpts },
     volume:       { ...d.volume,    ...entry.volume },

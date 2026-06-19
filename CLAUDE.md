@@ -155,3 +155,5 @@ node backend/bot/amap/amap-bot.js --adaptive-test BTCUSDT binance 1h 4h
 Motor: `strategyEngine.js`, schema: `tradeConfigSchema.js`. SQL: `amap-bot.sql`.
 
 Símbolos são adicionados pelo painel **Multi-Trade** (sincroniza `multitrade_favorites` → `rsi_multi_bot_state`).
+
+**Avaliação pré-trade (volume, desconto, MA adaptativa, 3/4 candles, backtest):** ver `backend/bot/amap/AVALIACAO-PRE-TRADE.md`.

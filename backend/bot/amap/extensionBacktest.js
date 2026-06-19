@@ -261,5 +261,6 @@ module.exports = {
   simulateForwardTrade,
   classifyExtensionOutcome,
   computeRsiSeries,
+  exitRsiAt,
   maSnapAt,
 };

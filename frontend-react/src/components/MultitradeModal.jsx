@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from 'react';
-import { checkMultitradeVolume } from '../services/api';
+import { checkMultitradeVolume, suggestMultitradeDiscount, suggestMultitradeAdaptive, suggestMultitradeExtensionAbove, suggestMultitradeExitRsi } from '../services/api';
 import {
   RSI_INTERVALS, MA_INTERVALS, MA_PERIODS, RSI_PERIODS, MA_MODES,
   ENTRY_DISCOUNT_OPTIONS, VOLUME_OPTIONS, PENDING_TIMEOUT_OPTIONS, POLL_OPTIONS,
@@ -45,8 +45,9 @@ function SectionHeader({ label, color = '#94a3b8' }) {
 }
 
 function NumInput({ value, onChange, min, max, step = 1, className = 'w-16', ...rest }) {
+  const safe = value ?? '';
   return (
-    <input type="number" value={value} onChange={e => onChange(Number(e.target.value))}
+    <input type="number" value={safe} onChange={e => onChange(Number(e.target.value))}
       min={min} max={max} step={step}
       className={`rounded px-2 py-1 text-xs text-p5 outline-none font-mono ${className}`}
       style={{ background: '#1e2130', border: '1px solid #2a2d3a' }} {...rest} />
@@ -65,6 +66,10 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [volCheck, setVolCheck] = useState(null);
   const [volumeWarnOpen, setVolumeWarnOpen] = useState(false);
+  const [discountSuggest, setDiscountSuggest] = useState(null);
+  const [adaptiveSuggest, setAdaptiveSuggest] = useState({});
+  const [extensionSuggest, setExtensionSuggest] = useState(null);
+  const [exitRsiSuggest, setExitRsiSuggest] = useState(null);
   const [copied, setCopied]     = useState(null);
 
   const patch = useCallback((path, value) => {
@@ -95,6 +100,9 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
       ...prev,
       maConditions: prev.maConditions.map(m => m.id === id ? { ...m, [field]: value } : m),
     }));
+    if (field === 'period' || field === 'interval' || field === 'mode') {
+      setAdaptiveSuggest(prev => { const n = { ...prev }; delete n[id]; return n; });
+    }
   }
 
   useEffect(() => {
@@ -126,6 +134,93 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
     payload.allowLowVolume = allowLow;
     payload.volume = { ...form.volume, allowLowVolume: allowLow };
     return payload;
+  }
+
+  useEffect(() => { setDiscountSuggest(null); }, [symbol, exchange, form.entryRsi, form.exitRsi, form.execution.pendingTimeoutMs]);
+
+  async function handleSuggestDiscount() {
+    const sym = symbol.trim().toUpperCase();
+    if (!sym) return;
+    setDiscountSuggest({ loading: true });
+    try {
+      const r = await suggestMultitradeDiscount({
+        symbol: sym,
+        exchange,
+        entryRsi: form.entryRsi,
+        exitRsi: form.exitRsi,
+        execution: form.execution,
+      });
+      setDiscountSuggest(r);
+      if (r.entryDiscount != null) patch('execution.entryDiscount', r.entryDiscount);
+    } catch (err) {
+      setDiscountSuggest({ error: err.message });
+    }
+  }
+
+  useEffect(() => { setExtensionSuggest(null); }, [symbol, exchange, form.entryRsi, form.exitRsi, form.extension, form.maConditions]);
+
+  useEffect(() => { setExitRsiSuggest(null); }, [symbol, exchange, form.entryRsi, form.exitRsi, form.maConditions, form.extension, form.stopLoss]);
+
+  async function handleSuggestExitRsi() {
+    const sym = symbol.trim().toUpperCase();
+    if (!sym) return;
+    setExitRsiSuggest({ loading: true });
+    try {
+      const r = await suggestMultitradeExitRsi({
+        symbol: sym,
+        exchange,
+        entryRsi: form.entryRsi,
+        exitRsi: form.exitRsi,
+        maConditions: form.maConditions,
+        extension: form.extension,
+        stopLoss: form.stopLoss,
+      });
+      setExitRsiSuggest(r);
+      if (r.suggestedExitRsi != null) patch('exitRsi.value', r.suggestedExitRsi);
+    } catch (err) {
+      setExitRsiSuggest({ error: err.message });
+    }
+  }
+
+  async function handleSuggestExtensionAbove() {
+    const sym = symbol.trim().toUpperCase();
+    if (!sym || !form.extension.enabled) return;
+    setExtensionSuggest({ loading: true });
+    try {
+      const r = await suggestMultitradeExtensionAbove({
+        symbol: sym,
+        exchange,
+        entryRsi: form.entryRsi,
+        exitRsi: form.exitRsi,
+        extension: form.extension,
+        maConditions: form.maConditions,
+        stopLoss: form.stopLoss,
+      });
+      setExtensionSuggest(r);
+      if (r.suggestedAbovePct != null) patch('extension.abovePct', r.suggestedAbovePct);
+    } catch (err) {
+      setExtensionSuggest({ error: err.message });
+    }
+  }
+
+  async function handleSuggestAdaptive(maId) {
+    const ma = form.maConditions.find(m => m.id === maId);
+    const sym = symbol.trim().toUpperCase();
+    if (!sym || !ma || ma.mode !== 'adaptive') return;
+    setAdaptiveSuggest(prev => ({ ...prev, [maId]: { loading: true } }));
+    try {
+      const r = await suggestMultitradeAdaptive({
+        symbol: sym,
+        exchange,
+        period: ma.period,
+        interval: ma.interval,
+        adaptiveOpts: form.adaptiveOpts,
+      });
+      setAdaptiveSuggest(prev => ({ ...prev, [maId]: r }));
+      if (r.suggestedDipPct != null) updateMa(maId, 'fixedDipPct', r.suggestedDipPct);
+    } catch (err) {
+      setAdaptiveSuggest(prev => ({ ...prev, [maId]: { error: err.message } }));
+    }
   }
 
   function handleConfirm() {
@@ -236,9 +331,25 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
                       className="text-p5/30 hover:text-red-400 w-5 h-5 flex items-center justify-center rounded text-sm" style={{ background: '#2a2d3a' }}>×</button>
                   </div>
                   {ma.mode === 'adaptive' && (
-                    <div className="flex gap-1 items-center pl-1">
-                      <span className="text-[9px] text-p5/35 shrink-0">Dip fixo % (opcional):</span>
-                      <NumInput value={ma.fixedDipPct} onChange={v => updateMa(ma.id, 'fixedDipPct', v)} min={0} max={20} step={0.1} className="w-14" />
+                    <div className="pl-1 space-y-1">
+                      <div className="flex gap-1 items-center flex-wrap">
+                        <span className="text-[9px] text-p5/35 shrink-0">Dip fixo % (opcional):</span>
+                        <NumInput value={ma.fixedDipPct} onChange={v => updateMa(ma.id, 'fixedDipPct', v)} min={0} max={20} step={0.1} className="w-14" />
+                        <button type="button" onClick={() => handleSuggestAdaptive(ma.id)}
+                          disabled={!symbol.trim() || adaptiveSuggest[ma.id]?.loading}
+                          className="rounded px-2 py-0.5 text-[9px] font-semibold text-violet-300 border border-violet-500/40 hover:bg-violet-500/10 disabled:opacity-40">
+                          {adaptiveSuggest[ma.id]?.loading ? '…' : 'Sugerir'}
+                        </button>
+                      </div>
+                      {adaptiveSuggest[ma.id] && !adaptiveSuggest[ma.id].loading && (
+                        <p className="text-[9px] font-mono leading-relaxed" style={{ color: adaptiveSuggest[ma.id].error ? '#f59e0b' : '#94a3b8' }}>
+                          {adaptiveSuggest[ma.id].error
+                            ? adaptiveSuggest[ma.id].error
+                            : adaptiveSuggest[ma.id].usedDefault
+                              ? `Poucos episódios (${adaptiveSuggest[ma.id].episodeCount ?? 0}) — padrão ${adaptiveSuggest[ma.id].suggestedDipPct}%`
+                              : `${adaptiveSuggest[ma.id].episodeCount} dips: média ${adaptiveSuggest[ma.id].avgRaw}% → sugerido ${adaptiveSuggest[ma.id].suggestedDipPct}% · entrada MA ${adaptiveSuggest[ma.id].entryOk ? 'OK' : 'bloqueada'} (dip agora ${adaptiveSuggest[ma.id].dipNowPct ?? '—'}%)`}
+                        </p>
+                      )}
                     </div>
                   )}
                 </div>
@@ -267,11 +378,25 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
                     {MA_INTERVALS.map(iv => <option key={iv} value={iv}>{iv}</option>)}
                   </select>
                 </div>
-                <div className="flex gap-1.5 mb-2 items-center flex-wrap">
+                <div className="flex gap-1.5 mb-1 items-center flex-wrap">
                   <span className="text-[10px] text-p5/40">Se preço &gt;</span>
                   <NumInput value={form.extension.abovePct} onChange={v => patch('extension.abovePct', v)} min={0} max={30} step={0.5} />
                   <span className="text-[10px] text-p5/40">% acima da MA ref.</span>
+                  <button type="button" onClick={handleSuggestExtensionAbove}
+                    disabled={!symbol.trim() || extensionSuggest?.loading}
+                    className="rounded px-2 py-0.5 text-[9px] font-semibold text-violet-300 border border-violet-500/40 hover:bg-violet-500/10 disabled:opacity-40">
+                    {extensionSuggest?.loading ? '…' : 'Sugerir'}
+                  </button>
                 </div>
+                {extensionSuggest && !extensionSuggest.loading && (
+                  <p className="text-[9px] font-mono mb-2 leading-relaxed" style={{ color: extensionSuggest.error ? '#f59e0b' : '#94a3b8' }}>
+                    {extensionSuggest.error
+                      ? extensionSuggest.error
+                      : extensionSuggest.usedDefault
+                        ? `${extensionSuggest.signalCount ?? 0} sinais — mediana +${extensionSuggest.medianStretchPct ?? '—'}% → sugerido ${extensionSuggest.suggestedAbovePct}%`
+                        : `${extensionSuggest.signalsInZone ?? 0} sinais ≥ limiar · benefício líq. ${extensionSuggest.sweepNetBenefit ?? '—'}% → sugerido ${extensionSuggest.suggestedAbovePct}% · agora +${extensionSuggest.aboveNowPct ?? '—'}% ${extensionSuggest.extendedNow ? '(zona 3/4)' : ''}`}
+                  </p>
+                )}
                 <label className="flex items-center gap-2 cursor-pointer mb-1">
                   <input type="checkbox" checked={form.extension.threeCandles} onChange={e => patch('extension.threeCandles', e.target.checked)} className="accent-violet-500" />
                   <span className="text-xs text-p5 flex-1">3 candles de alta seguidos</span>
@@ -302,7 +427,7 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
           {/* Saída RSI */}
           <div>
             <SectionHeader label="Saída RSI" color="#ef5350" />
-            <div className="grid grid-cols-3 gap-1.5">
+            <div className="grid grid-cols-3 gap-1.5 mb-1">
               <select value={form.exitRsi.interval} onChange={e => patch('exitRsi.interval', e.target.value)}
                 className="rounded px-1 py-1.5 text-xs text-p5 outline-none cursor-pointer" style={sel}>
                 {RSI_INTERVALS.map(iv => <option key={iv} value={iv}>{iv}</option>)}
@@ -311,9 +436,24 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
                 className="rounded px-1 py-1.5 text-xs text-p5 outline-none font-mono" style={sel}>
                 {RSI_PERIODS.map(p => <option key={p} value={p}>p{p}</option>)}
               </select>
-              <NumInput value={form.exitRsi.value} onChange={v => patch('exitRsi.value', v)} min={1} max={99} className="w-full" />
+              <div className="flex gap-1">
+                <NumInput value={form.exitRsi.value} onChange={v => patch('exitRsi.value', v)} min={1} max={99} className="flex-1" />
+                <button type="button" onClick={handleSuggestExitRsi} disabled={!symbol.trim() || exitRsiSuggest?.loading}
+                  className="shrink-0 rounded px-1.5 text-[9px] font-semibold text-red-300 border border-red-500/40 hover:bg-red-500/10 disabled:opacity-40">
+                  {exitRsiSuggest?.loading ? '…' : 'Sugerir'}
+                </button>
+              </div>
             </div>
-            <p className="text-[9px] text-p5/35 mt-1">Vende quando RSI({form.exitRsi.interval}, {form.exitRsi.period}) &gt; {form.exitRsi.value}</p>
+            {exitRsiSuggest && !exitRsiSuggest.loading && (
+              <p className="text-[9px] font-mono mb-1 leading-relaxed" style={{ color: exitRsiSuggest.error ? '#f59e0b' : '#94a3b8' }}>
+                {exitRsiSuggest.error
+                  ? exitRsiSuggest.error
+                  : exitRsiSuggest.usedDefault
+                    ? `Poucos trades (${exitRsiSuggest.tradeCount ?? 0}) — padrão ${exitRsiSuggest.suggestedExitRsi}`
+                    : `${exitRsiSuggest.tradeCount} trades · pico mediano ${exitRsiSuggest.medianPeakRsi} (média ${exitRsiSuggest.avgPeakRsi}) · atinge 70: ${exitRsiSuggest.hitRate70}% · 75: ${exitRsiSuggest.hitRate75}% · 80: ${exitRsiSuggest.hitRate80}% → sugerido ${exitRsiSuggest.suggestedExitRsi}${exitRsiSuggest.recommendation === 'chega_alto' ? ' (costuma subir alto)' : exitRsiSuggest.recommendation === 'garantir_cedo' ? ' (garantir mais cedo)' : ''}`}
+              </p>
+            )}
+            <p className="text-[9px] text-p5/35">Vende quando RSI({form.exitRsi.interval}, {form.exitRsi.period}) &gt; {form.exitRsi.value}</p>
           </div>
 
           {/* Stop loss */}
@@ -346,13 +486,36 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
             </label>
             {!form.execution.immediateEntry && (
               <>
-                <label className="block text-[10px] text-p5/40 mb-1">Desconto do alvo PENDING</label>
-                <select value={form.execution.entryDiscount} onChange={e => patch('execution.entryDiscount', Number(e.target.value))}
-                  className="w-full rounded px-2.5 py-1.5 text-xs text-p5 outline-none cursor-pointer mb-2" style={sel}>
+                <label className="block text-[10px] text-p5/40 mb-1">Desconto do alvo PENDING (% abaixo do gatilho)</label>
+                <div className="flex gap-1.5 mb-1">
+                  <NumInput
+                    value={parseFloat((form.execution.entryDiscount * 100).toFixed(3))}
+                    onChange={v => patch('execution.entryDiscount', Math.min(10, Math.max(0.01, v)) / 100)}
+                    min={0.01} max={10} step={0.05} className="flex-1"
+                  />
+                  <button type="button" onClick={handleSuggestDiscount} disabled={!symbol.trim() || discountSuggest?.loading}
+                    className="shrink-0 rounded px-2 py-1 text-[10px] font-semibold text-violet-300 border border-violet-500/40 hover:bg-violet-500/10 disabled:opacity-40">
+                    {discountSuggest?.loading ? '…' : 'Sugerir'}
+                  </button>
+                </div>
+                <div className="flex flex-wrap gap-1 mb-2">
                   {ENTRY_DISCOUNT_OPTIONS.map(o => (
-                    <option key={o.value} value={o.value}>{o.label} abaixo do gatilho</option>
+                    <button key={o.value} type="button" onClick={() => patch('execution.entryDiscount', o.value)}
+                      className="rounded px-1.5 py-0.5 text-[10px] font-mono border border-p2 text-p5/60 hover:text-p5 hover:border-violet-500/50"
+                      style={form.execution.entryDiscount === o.value ? { color: '#a78bfa', borderColor: '#8b5cf6' } : {}}>
+                      {o.label}
+                    </button>
                   ))}
-                </select>
+                </div>
+                {discountSuggest && !discountSuggest.loading && (
+                  <p className="text-[10px] font-mono mb-2" style={{ color: discountSuggest.error ? '#f59e0b' : '#94a3b8' }}>
+                    {discountSuggest.error
+                      ? discountSuggest.error
+                      : discountSuggest.usedDefault
+                        ? `Poucos dados (${discountSuggest.episodeCount ?? 0} episódios) — padrão ${discountSuggest.suggestedPct ?? 0.1}%`
+                        : `${discountSuggest.episodeCount} sinais RSI: mediana −${discountSuggest.medianDipPct}% → sugerido −${discountSuggest.suggestedPct}% (fill ~${discountSuggest.hitRateAtSuggested ?? '—'}%)`}
+                  </p>
+                )}
                 <label className="block text-[10px] text-p5/40 mb-1">Timeout PENDING</label>
                 <select value={form.execution.pendingTimeoutMs} onChange={e => patch('execution.pendingTimeoutMs', Number(e.target.value))}
                   className="w-full rounded px-2.5 py-1.5 text-xs text-p5 outline-none cursor-pointer mb-2" style={sel}>
@@ -360,7 +523,15 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
                 </select>
                 <label className="block text-[10px] text-p5/40 mb-1">Cancela se preço subir (% acima do gatilho)</label>
                 <NumInput value={(form.execution.pendingCancelPct * 100).toFixed(2)} onChange={v => patch('execution.pendingCancelPct', v / 100)}
-                  min={0.1} max={5} step={0.1} className="w-full" />
+                  min={0.1} max={5} step={0.1} className="w-full mb-2" />
+                <label className="flex items-center gap-2 cursor-pointer mb-1">
+                  <input type="checkbox" checked={form.execution.pendingCancelOnExitRsi !== false}
+                    onChange={e => patch('execution.pendingCancelOnExitRsi', e.target.checked)} className="accent-violet-500" />
+                  <span className="text-xs text-p5">Cancela PENDING se RSI de saída for atingido</span>
+                </label>
+                <p className="text-[9px] text-p5/35 mb-2">
+                  RSI({form.exitRsi.interval}) &gt; {form.exitRsi.value} — evita comprar após recuperação forte
+                </p>
               </>
             )}
           </div>

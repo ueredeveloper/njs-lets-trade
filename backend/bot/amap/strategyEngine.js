@@ -7,6 +7,7 @@
 
 const ti = require('technicalindicators');
 const { analyzeAdaptiveDip, lastMa, DEFAULT_OPTS } = require('./adaptiveMaDip');
+const { buildEntryDiscountReport } = require('./suggestEntryDiscount');
 const { normalizeTradeConfig, toEngineConfig, TRADE_CONFIG_DEFAULTS } = require('./tradeConfigSchema');
 
 const INTERVAL_MS = {
@@ -19,6 +20,7 @@ const BOT_DEFAULTS = {
   immediateEntry:   TRADE_CONFIG_DEFAULTS.execution.immediateEntry,
   pendingTimeoutMs: TRADE_CONFIG_DEFAULTS.execution.pendingTimeoutMs,
   pendingCancelPct: TRADE_CONFIG_DEFAULTS.execution.pendingCancelPct,
+  pendingCancelOnExitRsi: TRADE_CONFIG_DEFAULTS.execution.pendingCancelOnExitRsi,
   pollMs:           TRADE_CONFIG_DEFAULTS.polling.pollMs,
   fastPollMs:       TRADE_CONFIG_DEFAULTS.polling.fastPollMs,
   fastRsiThreshold: TRADE_CONFIG_DEFAULTS.polling.fastRsiThreshold,
@@ -246,6 +248,81 @@ function evaluateEntry({ entryRsi, close, entryTimeMs, config, maSnap, adaptiveD
   return { allowed: true, reason: null };
 }
 
+/** Detalha cada filtro MA e extensão para um sinal RSI (backtest / relatório). */
+function diagnoseEntry({ entryRsi, close, entryTimeMs, config, maSnap, adaptiveDips, cMap }) {
+  const rsiOk = checkRsi(entryRsi, config.entryRsi);
+  const maChecks = [];
+
+  for (const f of config.maFilters ?? []) {
+    const key   = maKey(f.period, f.interval);
+    const label = `MA${f.period} ${f.interval}`;
+    const md    = maSnap[key];
+    if (!md || md.ma == null) {
+      maChecks.push({ label, ok: false, mode: f.mode, detail: 'sem dados' });
+      continue;
+    }
+    if (f.mode === 'strict_above') {
+      const ok = close > md.ma;
+      maChecks.push({
+        label, ok, mode: 'fixo',
+        detail: ok ? `acima ${md.ma.toFixed(4)}` : `abaixo ${md.ma.toFixed(4)}`,
+      });
+    } else if (f.mode === 'adaptive') {
+      const dipPct = adaptiveDips[key] ?? DEFAULT_OPTS.defaultPct;
+      const floor  = md.ma * (1 - dipPct / 100);
+      const ok     = close >= floor;
+      maChecks.push({
+        label, ok, mode: 'adapt', dipPct,
+        detail: ok
+          ? `≥ piso ${floor.toFixed(4)} (−${dipPct.toFixed(1)}%)`
+          : `< piso ${floor.toFixed(4)} (−${dipPct.toFixed(1)}%)`,
+      });
+    }
+  }
+
+  let extension = null;
+  let allowed   = rsiOk && maChecks.every(m => m.ok);
+  let reason    = !rsiOk ? 'RSI_NOT_MET' : null;
+
+  if (rsiOk && config.extension?.enabled) {
+    const extIv  = config.extension.maInterval;
+    const extP   = config.extension.maPeriod ?? 50;
+    const extKey = maKey(extP, extIv);
+    const md     = maSnap[extKey];
+    const extMa  = md?.ma;
+    const { threeInterval, fourInterval } = getExtensionIntervals(config.extension);
+    const confirmCandles = cMap ? {
+      three: cMap[threeInterval],
+      four:  cMap[fourInterval],
+    } : { three: md?.candles, four: md?.candles };
+    const ext = analyzeExtension(close, extMa, confirmCandles, config.extension, entryTimeMs);
+    extension = {
+      label:    `ext MA${extP} ${extIv}`,
+      extended: ext.extended,
+      threeOk:  ext.threeOk,
+      fourOk:   ext.fourOk,
+      aboveMaPct: ext.aboveMaPct,
+      thresholdPct: ext.thresholdPct,
+      allowed:  !ext.extended || ext.allowed,
+    };
+    if (!extension.allowed) {
+      allowed = false;
+      reason  = ext.reason ?? 'THREE_CANDLES_BLOCKED';
+    }
+  }
+
+  if (rsiOk && !allowed && !reason) {
+    if (maChecks.some(m => !m.ok && m.detail === 'sem dados')) {
+      reason = 'MA_NO_DATA';
+    } else {
+      const failed = maChecks.find(m => !m.ok);
+      if (failed) reason = failed.mode === 'adapt' ? 'MA_ADAPTIVE_BLOCKED' : 'MA_BLOCKED';
+    }
+  }
+
+  return { rsiOk, allowed, reason, maChecks, extension };
+}
+
 function evaluateExit({ close, exitRsi, stopLossMa, config }) {
   if (config.stopLoss?.enabled !== false && stopLossMa != null && close < stopLossMa) {
     return { exit: true, reason: 'stop_loss_ma' };
@@ -295,12 +372,34 @@ function buildAdaptiveReport(cMap, config) {
   return lines;
 }
 
+/** Sugestão de dip % para um filtro MA adaptativo (histórico + snapshot ao vivo). */
+function suggestAdaptiveDip(candles, period, interval, adaptiveOpts = {}) {
+  const analysis = analyzeAdaptiveDip(candles, period, adaptiveOpts);
+  const currentMa  = lastMa(candles, period);
+  const close      = candles?.length ? candles[candles.length - 1].close : null;
+  const dipPct     = analysis.dipPct;
+  const floor      = currentMa != null ? currentMa * (1 - dipPct / 100) : null;
+  const dipNow     = currentMa != null && close != null ? (currentMa - close) / currentMa * 100 : null;
+  return {
+    interval,
+    period,
+    suggestedDipPct: dipPct,
+    ...analysis,
+    currentMa,
+    currentPrice: close,
+    floor,
+    dipNowPct: dipNow != null ? parseFloat(dipNow.toFixed(2)) : null,
+    entryOk: floor != null && close != null && close >= floor,
+  };
+}
+
 module.exports = {
   buildTradeConfig,
   getRequiredSpecs,
   computeAdaptiveDips,
   buildMaSnapshot,
   evaluateEntry,
+  diagnoseEntry,
   evaluateExit,
   getStopLossMa,
   checkRsi,
@@ -310,6 +409,8 @@ module.exports = {
   checkMinVolume,
   needsMarketSell,
   buildAdaptiveReport,
+  suggestAdaptiveDip,
+  buildEntryDiscountReport,
   maKey,
   BOT_DEFAULTS,
   INTERVAL_MS,

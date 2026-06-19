@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS rsi_multi_bot_state (
   buy_time        TIMESTAMPTZ,
   rsi_entry       NUMERIC(8,2),
 
+  trade_config    JSONB,
   updated_at      TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE (symbol, strategy_id)
 );
@@ -38,6 +39,7 @@ CREATE TABLE IF NOT EXISTS multitrade_favorites (
   ma_conditions   JSONB          NOT NULL DEFAULT '[]',
   rule_3_candles  BOOLEAN        NOT NULL DEFAULT FALSE,
   rule_4_candles  BOOLEAN        NOT NULL DEFAULT FALSE,
+  trade_config    JSONB,
   position        INTEGER        NOT NULL DEFAULT 0,
   created_at      TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
   updated_at      TIMESTAMPTZ    NOT NULL DEFAULT NOW(),

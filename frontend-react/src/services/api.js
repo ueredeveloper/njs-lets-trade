@@ -379,6 +379,110 @@ export async function checkMultitradeVolume(symbol, exchange, minVolumeUsdt) {
   return res.json();
 }
 
+/** Sugere desconto PENDING a partir do histórico (queda após RSI de entrada). */
+export async function suggestMultitradeDiscount({ symbol, exchange, entryRsi, exitRsi, execution }) {
+  const params = new URLSearchParams({
+    symbol,
+    exchange: exchange ?? 'binance',
+    entryInterval: entryRsi.interval,
+    entryPeriod: String(entryRsi.period),
+    entryOperator: entryRsi.operator,
+    entryValue: String(entryRsi.value),
+    exitInterval: exitRsi.interval,
+    exitPeriod: String(exitRsi.period),
+    exitOperator: exitRsi.operator,
+    exitValue: String(exitRsi.value),
+    pendingTimeoutMs: String(execution?.pendingTimeoutMs ?? 30 * 60_000),
+    pendingCancelPct: String(execution?.pendingCancelPct ?? 0.002),
+  });
+  const res = await fetch(`/services/sb/multitrade-suggest-discount?${params}`);
+  if (!res.ok) throw new Error(`multitrade-suggest-discount falhou: HTTP ${res.status}`);
+  return res.json();
+}
+
+/** Sugere dip % para filtro MA adaptativo (histórico de quedas abaixo da MA). */
+export async function suggestMultitradeAdaptive({ symbol, exchange, period, interval, adaptiveOpts }) {
+  const params = new URLSearchParams({
+    symbol,
+    exchange: exchange ?? 'binance',
+    period: String(period ?? 50),
+    interval: interval ?? '1h',
+    defaultPct: String(adaptiveOpts?.defaultPct ?? 3),
+    maxPct: String(adaptiveOpts?.maxPct ?? 8),
+    minPct: String(adaptiveOpts?.minPct ?? 0.5),
+    minEpisodes: String(adaptiveOpts?.minEpisodes ?? 3),
+  });
+  const res = await fetch(`/services/sb/multitrade-suggest-adaptive?${params}`);
+  if (!res.ok) throw new Error(`multitrade-suggest-adaptive falhou: HTTP ${res.status}`);
+  return res.json();
+}
+
+/** Sugere % acima da MA para ativar regras 3/4 candles. */
+export async function suggestMultitradeExtensionAbove({
+  symbol, exchange, entryRsi, exitRsi, extension, maConditions, stopLoss,
+}) {
+  const params = new URLSearchParams({
+    symbol,
+    exchange: exchange ?? 'binance',
+    entryInterval: entryRsi.interval,
+    entryPeriod: String(entryRsi.period),
+    entryOperator: entryRsi.operator,
+    entryValue: String(entryRsi.value),
+    exitInterval: exitRsi.interval,
+    exitPeriod: String(exitRsi.period),
+    exitOperator: exitRsi.operator,
+    exitValue: String(exitRsi.value),
+    maPeriod: String(extension?.maPeriod ?? 50),
+    maInterval: extension?.maInterval ?? '1h',
+    threeInterval: extension?.threeInterval ?? extension?.confirmInterval ?? '1h',
+    fourInterval: extension?.fourInterval ?? extension?.confirmInterval ?? '1h',
+    threeCandles: String(extension?.threeCandles !== false),
+    fourCandles: String(extension?.fourCandles !== false),
+    confirmLogic: extension?.confirmLogic ?? 'any',
+    stopLossEnabled: String(stopLoss?.enabled !== false),
+  });
+  if (maConditions?.length) {
+    params.set('maConditions', JSON.stringify(maConditions.map(({ period, interval, mode, fixedDipPct }) => ({
+      period, interval, mode,
+      ...(fixedDipPct !== '' && fixedDipPct != null ? { fixedDipPct: Number(fixedDipPct) } : {}),
+    }))));
+  }
+  const res = await fetch(`/services/sb/multitrade-suggest-extension-above?${params}`);
+  if (!res.ok) throw new Error(`multitrade-suggest-extension-above falhou: HTTP ${res.status}`);
+  return res.json();
+}
+
+/** Sugere nível RSI de saída a partir do pico histórico no intervalo escolhido. */
+export async function suggestMultitradeExitRsi({
+  symbol, exchange, entryRsi, exitRsi, maConditions, extension, stopLoss,
+}) {
+  const params = new URLSearchParams({
+    symbol,
+    exchange: exchange ?? 'binance',
+    entryInterval: entryRsi.interval,
+    entryPeriod: String(entryRsi.period),
+    entryOperator: entryRsi.operator,
+    entryValue: String(entryRsi.value),
+    exitInterval: exitRsi.interval,
+    exitPeriod: String(exitRsi.period),
+    exitOperator: exitRsi.operator,
+    exitValue: String(exitRsi.value),
+    stopLossEnabled: String(stopLoss?.enabled !== false),
+  });
+  if (maConditions?.length) {
+    params.set('maConditions', JSON.stringify(maConditions.map(({ period, interval, mode, fixedDipPct }) => ({
+      period, interval, mode,
+      ...(fixedDipPct !== '' && fixedDipPct != null ? { fixedDipPct: Number(fixedDipPct) } : {}),
+    }))));
+  }
+  if (extension) {
+    params.set('extension', JSON.stringify(extension));
+  }
+  const res = await fetch(`/services/sb/multitrade-suggest-exit-rsi?${params}`);
+  if (!res.ok) throw new Error(`multitrade-suggest-exit-rsi falhou: HTTP ${res.status}`);
+  return res.json();
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**

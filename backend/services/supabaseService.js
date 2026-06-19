@@ -13,7 +13,9 @@
 
 const router    = require('express').Router();
 const supabase  = require('../supabase/client');
-const { buildTradeConfig, buildAdaptiveReport, getRequiredSpecs, buildMaSnapshot, evaluateEntry, computeAdaptiveDips } = require('../bot/amap/strategyEngine');
+const { buildTradeConfig, buildAdaptiveReport, suggestAdaptiveDip, buildEntryDiscountReport, getRequiredSpecs, buildMaSnapshot, evaluateEntry, computeAdaptiveDips } = require('../bot/amap/strategyEngine');
+const { buildExtensionAboveReport } = require('../bot/amap/suggestExtensionAbovePct');
+const { buildExitRsiReport } = require('../bot/amap/suggestExitRsi');
 const { toFormState, normalizeTradeConfig, flatConfigToBody } = require('../bot/amap/tradeConfigSchema');
 const { fetchBinanceCandles, fetchGateCandles } = require('../bot/prices');
 const { toGateSymbol } = require('../utils/toGateSymbol');
@@ -52,8 +54,15 @@ async function getUserId(req, res, next) {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function sbError(res, error, context = '') {
-  console.error(`[supabase] ${context}:`, error.message);
-  res.status(500).json({ error: error.message });
+  const msg = error.message || String(error);
+  console.error(`[supabase] ${context}:`, msg);
+  if (/trade_config.*schema cache/i.test(msg)) {
+    return res.status(500).json({
+      error: msg,
+      hint: 'Execute supabase/add-trade-config.sql no SQL Editor do Supabase.',
+    });
+  }
+  res.status(500).json({ error: msg });
 }
 
 // ============================================================
@@ -424,6 +433,169 @@ router.get('/multitrade-volume', getUserId, async (req, res) => {
   }
 });
 
+// GET /services/sb/multitrade-suggest-discount?symbol=&exchange=&entryInterval=&entryPeriod=&entryOperator=&entryValue=&exitInterval=&exitPeriod=&exitOperator=&exitValue=&pendingTimeoutMs=&pendingCancelPct=
+router.get('/multitrade-suggest-discount', getUserId, async (req, res) => {
+  const symbol = req.query.symbol?.toUpperCase();
+  if (!symbol) return res.status(400).json({ error: 'symbol obrigatório' });
+
+  const exchange = req.query.exchange ?? 'binance';
+  const tradeConfig = buildTradeConfig({
+    entryRsi: {
+      interval: req.query.entryInterval ?? '15m',
+      period:   Number(req.query.entryPeriod ?? 14),
+      operator: req.query.entryOperator ?? '<',
+      value:    Number(req.query.entryValue ?? 30),
+    },
+    exitRsi: {
+      interval: req.query.exitInterval ?? req.query.entryInterval ?? '15m',
+      period:   Number(req.query.exitPeriod ?? req.query.entryPeriod ?? 14),
+      operator: req.query.exitOperator ?? '>',
+      value:    Number(req.query.exitValue ?? 70),
+    },
+    execution: {
+      pendingTimeoutMs: Number(req.query.pendingTimeoutMs ?? 30 * 60_000),
+      pendingCancelPct: Number(req.query.pendingCancelPct ?? 0.002),
+    },
+  });
+
+  const specs = getRequiredSpecs(tradeConfig);
+  try {
+    const cMap = {};
+    await Promise.all(specs.map(async ({ interval, limit }) => {
+      cMap[interval] = await fetchCandlesForEval(exchange, symbol, interval, Math.max(limit, 500));
+    }));
+
+    const report = buildEntryDiscountReport(cMap, tradeConfig);
+    res.json({
+      symbol,
+      exchange,
+      entryDiscount: report.suggestedDiscount,
+      entryDiscountPct: report.suggestedPct,
+      ...report,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /multitrade-suggest-adaptive?symbol=&exchange=&period=50&interval=1h&defaultPct=&maxPct=&minPct=&minEpisodes=
+router.get('/multitrade-suggest-adaptive', getUserId, async (req, res) => {
+  const symbol = req.query.symbol?.toUpperCase();
+  if (!symbol) return res.status(400).json({ error: 'symbol obrigatório' });
+
+  const exchange = req.query.exchange ?? 'binance';
+  const period   = Number(req.query.period ?? 50);
+  const interval = req.query.interval ?? '1h';
+  const adaptiveOpts = {
+    defaultPct:  Number(req.query.defaultPct  ?? 3),
+    maxPct:      Number(req.query.maxPct      ?? 8),
+    minPct:      Number(req.query.minPct      ?? 0.5),
+    minEpisodes: Number(req.query.minEpisodes ?? 3),
+  };
+
+  const limit = period + 300;
+  try {
+    const candles = await fetchCandlesForEval(exchange, symbol, interval, limit);
+    const report  = suggestAdaptiveDip(candles, period, interval, adaptiveOpts);
+    res.json({ symbol, exchange, ...report });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /multitrade-suggest-extension-above?symbol=&exchange=&maPeriod=50&maInterval=1h&entryInterval=15m&...
+router.get('/multitrade-suggest-extension-above', getUserId, async (req, res) => {
+  const symbol = req.query.symbol?.toUpperCase();
+  if (!symbol) return res.status(400).json({ error: 'symbol obrigatório' });
+
+  const exchange = req.query.exchange ?? 'binance';
+  const tradeConfig = buildTradeConfig({
+    entryRsi: {
+      interval: req.query.entryInterval ?? '15m',
+      period:   Number(req.query.entryPeriod ?? 14),
+      operator: req.query.entryOperator ?? '<',
+      value:    Number(req.query.entryValue ?? 30),
+    },
+    exitRsi: {
+      interval: req.query.exitInterval ?? req.query.entryInterval ?? '15m',
+      period:   Number(req.query.exitPeriod ?? req.query.entryPeriod ?? 14),
+      operator: req.query.exitOperator ?? '>',
+      value:    Number(req.query.exitValue ?? 70),
+    },
+    maConditions: req.query.maConditions
+      ? JSON.parse(req.query.maConditions)
+      : undefined,
+    extension: {
+      enabled:       true,
+      maPeriod:      Number(req.query.maPeriod ?? 50),
+      maInterval:    req.query.maInterval ?? '1h',
+      abovePct:      Number(req.query.abovePct ?? 5),
+      threeInterval: req.query.threeInterval ?? '1h',
+      fourInterval:  req.query.fourInterval ?? '1h',
+      threeCandles:  req.query.threeCandles !== 'false',
+      fourCandles:   req.query.fourCandles !== 'false',
+      confirmLogic:  req.query.confirmLogic ?? 'any',
+    },
+    stopLoss: { enabled: req.query.stopLossEnabled !== 'false' },
+  });
+
+  const specs = getRequiredSpecs(tradeConfig);
+  try {
+    const cMap = {};
+    await Promise.all(specs.map(async ({ interval, limit }) => {
+      cMap[interval] = await fetchCandlesForEval(exchange, symbol, interval, Math.max(limit, 500));
+    }));
+
+    const report = buildExtensionAboveReport(cMap, tradeConfig);
+    res.json({ symbol, exchange, abovePct: report.suggestedAbovePct, ...report });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /multitrade-suggest-exit-rsi?symbol=&exchange=&exitInterval=15m&exitPeriod=14&...
+router.get('/multitrade-suggest-exit-rsi', getUserId, async (req, res) => {
+  const symbol = req.query.symbol?.toUpperCase();
+  if (!symbol) return res.status(400).json({ error: 'symbol obrigatório' });
+
+  const exchange = req.query.exchange ?? 'binance';
+  const tradeConfig = buildTradeConfig({
+    entryRsi: {
+      interval: req.query.entryInterval ?? '15m',
+      period:   Number(req.query.entryPeriod ?? 14),
+      operator: req.query.entryOperator ?? '<',
+      value:    Number(req.query.entryValue ?? 30),
+    },
+    exitRsi: {
+      interval: req.query.exitInterval ?? '15m',
+      period:   Number(req.query.exitPeriod ?? 14),
+      operator: req.query.exitOperator ?? '>',
+      value:    Number(req.query.exitValue ?? 70),
+    },
+    maConditions: req.query.maConditions ? JSON.parse(req.query.maConditions) : undefined,
+    extension:    req.query.extension ? JSON.parse(req.query.extension) : undefined,
+    stopLoss:     { enabled: req.query.stopLossEnabled !== 'false' },
+  });
+
+  const specs = getRequiredSpecs(tradeConfig);
+  try {
+    const cMap = {};
+    await Promise.all(specs.map(async ({ interval, limit }) => {
+      cMap[interval] = await fetchCandlesForEval(exchange, symbol, interval, Math.max(limit, 500));
+    }));
+
+    const report = buildExitRsiReport(cMap, tradeConfig);
+    res.json({
+      symbol,
+      exchange,
+      exitRsiValue: report.suggestedExitRsi,
+      ...report,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 async function fetchCandlesForEval(exchange, symbol, interval, limit) {
   if (exchange === 'gate') {
     const pair = toGateSymbol(symbol);
@@ -462,6 +634,7 @@ router.post('/multitrade-evaluate', getUserId, async (req, res) => {
       entryRsi, close, entryTimeMs: Date.now(), config: tradeConfig, maSnap, adaptiveDips, cMap,
     });
     const adaptive = buildAdaptiveReport(cMap, tradeConfig);
+    const entryDiscountSuggest = buildEntryDiscountReport(cMap, tradeConfig);
 
     res.json({
       symbol: sym,
@@ -472,6 +645,7 @@ router.post('/multitrade-evaluate', getUserId, async (req, res) => {
       entryAllowed: entryCheck.allowed,
       entryBlockReason: entryCheck.reason ?? null,
       adaptive,
+      entryDiscountSuggest,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });

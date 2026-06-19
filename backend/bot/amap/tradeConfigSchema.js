@@ -38,7 +38,7 @@ const TRADE_CONFIG_DEFAULTS = {
   stopLoss: {
     enabled:  true,
     period:   50,
-    interval: '1h',
+    interval: '4h',
   },
 
   execution: {
@@ -46,6 +46,8 @@ const TRADE_CONFIG_DEFAULTS = {
     entryDiscount:    0.001,
     pendingTimeoutMs: 30 * 60_000,
     pendingCancelPct: 0.002,
+    /** Cancela PENDING se RSI de saída for atingido antes do alvo de compra */
+    pendingCancelOnExitRsi: true,
   },
 
   polling: {
@@ -94,6 +96,11 @@ function normalizeMaCondition(m) {
   };
 }
 
+function clampEntryDiscount(v) {
+  if (!Number.isFinite(v) || v < 0) return TRADE_CONFIG_DEFAULTS.execution.entryDiscount;
+  return Math.min(0.1, Math.max(0.0001, v));
+}
+
 /** Aceita payload do formulário → trade_config completo */
 function normalizeTradeConfig(body = {}) {
   const d = TRADE_CONFIG_DEFAULTS;
@@ -128,9 +135,10 @@ function normalizeTradeConfig(body = {}) {
   const execBody = body.execution ?? {};
   const execution = {
     immediateEntry:   execBody.immediateEntry ?? d.execution.immediateEntry,
-    entryDiscount:    Number(execBody.entryDiscount ?? d.execution.entryDiscount),
+    entryDiscount:    clampEntryDiscount(Number(execBody.entryDiscount ?? d.execution.entryDiscount)),
     pendingTimeoutMs: Number(execBody.pendingTimeoutMs ?? d.execution.pendingTimeoutMs),
     pendingCancelPct: Number(execBody.pendingCancelPct ?? d.execution.pendingCancelPct),
+    pendingCancelOnExitRsi: execBody.pendingCancelOnExitRsi ?? d.execution.pendingCancelOnExitRsi,
   };
 
   const pollBody = body.polling ?? {};
@@ -191,6 +199,7 @@ function toEngineConfig(normalized) {
     entryDiscount:    n.execution.entryDiscount,
     pendingTimeoutMs: n.execution.pendingTimeoutMs,
     pendingCancelPct: n.execution.pendingCancelPct,
+    pendingCancelOnExitRsi: n.execution.pendingCancelOnExitRsi,
     pollMs:           n.polling.pollMs,
     fastPollMs:       n.polling.fastPollMs,
     fastRsiThreshold: n.polling.fastRsiThreshold,
@@ -233,6 +242,7 @@ function flatConfigToBody(tc) {
       entryDiscount:    tc.entryDiscount,
       pendingTimeoutMs: tc.pendingTimeoutMs,
       pendingCancelPct: tc.pendingCancelPct,
+      pendingCancelOnExitRsi: tc.pendingCancelOnExitRsi,
     },
     polling: {
       pollMs:           tc.pollMs,
@@ -279,6 +289,7 @@ function resolveStrategy(row) {
     immediateEntry:      config.immediateEntry      ?? d.execution.immediateEntry,
     pendingTimeoutMs:    config.pendingTimeoutMs    ?? d.execution.pendingTimeoutMs,
     pendingCancelPct:    config.pendingCancelPct    ?? d.execution.pendingCancelPct,
+    pendingCancelOnExitRsi: config.pendingCancelOnExitRsi ?? d.execution.pendingCancelOnExitRsi,
   };
 }
 
