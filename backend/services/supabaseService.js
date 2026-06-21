@@ -16,7 +16,10 @@ const supabase  = require('../supabase/client');
 const { buildTradeConfig, buildAdaptiveReport, suggestAdaptiveDip, buildEntryDiscountReport, getRequiredSpecs, buildMaSnapshot, evaluateEntry, computeAdaptiveDips } = require('../bot/amap/strategyEngine');
 const { buildExtensionAboveReport } = require('../bot/amap/suggestExtensionAbovePct');
 const { buildExitRsiReport } = require('../bot/amap/suggestExitRsi');
-const { toFormState, normalizeTradeConfig, flatConfigToBody } = require('../bot/amap/tradeConfigSchema');
+const { buildEntryRsiReport } = require('../bot/amap/suggestEntryRsi');
+const { buildEntryMaReport } = require('../bot/amap/suggestEntryMa');
+const { runAmapBacktest } = require('../bot/amap/amapBacktest');
+const { toFormState, normalizeTradeConfig, flatConfigToBody, toEngineConfig } = require('../bot/amap/tradeConfigSchema');
 const { fetchBinanceCandles, fetchGateCandles } = require('../bot/prices');
 const { toGateSymbol } = require('../utils/toGateSymbol');
 const { fetch24hVolumeUsdt, fmtVolumeUsdt, DEFAULT_MIN_VOLUME_USDT } = require('../bot/volume24h');
@@ -254,6 +257,8 @@ function multitradeToEntry(r) {
     capital:      Number(r.capital),
     entryRsi:     form.entryRsi,
     exitRsi:      form.exitRsi,
+    entryRsiPath: form.entryRsiPath,
+    entryMa:      form.entryMa,
     maConditions: form.maConditions,
     extension:    form.extension,
     stopLoss:     form.stopLoss,
@@ -596,6 +601,100 @@ router.get('/multitrade-suggest-exit-rsi', getUserId, async (req, res) => {
   }
 });
 
+function parseMultitradeSuggestQuery(query) {
+  return buildTradeConfig({
+    entryRsi: {
+      interval: query.entryInterval ?? '15m',
+      period:   Number(query.entryPeriod ?? 14),
+      operator: query.entryOperator ?? '<',
+      value:    Number(query.entryValue ?? 30),
+    },
+    exitRsi: {
+      interval: query.exitInterval ?? query.entryInterval ?? '15m',
+      period:   Number(query.exitPeriod ?? query.entryPeriod ?? 14),
+      operator: query.exitOperator ?? '>',
+      value:    Number(query.exitValue ?? 70),
+    },
+    entryRsiPath: query.entryRsiPath ? JSON.parse(query.entryRsiPath) : undefined,
+    entryMa:        query.entryMa ? JSON.parse(query.entryMa) : undefined,
+    maConditions:   query.maConditions ? JSON.parse(query.maConditions) : undefined,
+    extension:      query.extension ? JSON.parse(query.extension) : undefined,
+    stopLoss:       { enabled: query.stopLossEnabled !== 'false' },
+  });
+}
+
+// GET /multitrade-suggest-entry-rsi?symbol=&exchange=&entryValue=30&...
+router.get('/multitrade-suggest-entry-rsi', getUserId, async (req, res) => {
+  const symbol = req.query.symbol?.toUpperCase();
+  if (!symbol) return res.status(400).json({ error: 'symbol obrigatório' });
+
+  const exchange    = req.query.exchange ?? 'binance';
+  const tradeConfig = parseMultitradeSuggestQuery(req.query);
+  const specs       = getRequiredSpecs(tradeConfig);
+
+  try {
+    const cMap = {};
+    await Promise.all(specs.map(async ({ interval, limit }) => {
+      cMap[interval] = await fetchCandlesForEval(exchange, symbol, interval, Math.max(limit, 500));
+    }));
+
+    const report = buildEntryRsiReport(cMap, tradeConfig);
+    const { sweep, ...rest } = report;
+    res.json({
+      symbol,
+      exchange,
+      entryRsiValue: report.suggestedEntryRsi,
+      sweepSummary: sweep?.map(s => ({
+        value: s.value, tradeCount: s.tradeCount, avgPnl: s.avgPnl, winRate: s.winRate,
+      })),
+      ...rest,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /multitrade-suggest-entry-ma?symbol=&exchange=&entryMa={...}&...
+router.get('/multitrade-suggest-entry-ma', getUserId, async (req, res) => {
+  const symbol = req.query.symbol?.toUpperCase();
+  if (!symbol) return res.status(400).json({ error: 'symbol obrigatório' });
+
+  const exchange    = req.query.exchange ?? 'binance';
+  const tradeConfig = parseMultitradeSuggestQuery(req.query);
+  if (!tradeConfig.entryMa?.enabled) {
+    tradeConfig.entryMa = { ...tradeConfig.entryMa, enabled: true };
+  }
+  tradeConfig.entryRsiPath = { enabled: false };
+
+  const specs = getRequiredSpecs(tradeConfig);
+  try {
+    const cMap = {};
+    await Promise.all(specs.map(async ({ interval, limit }) => {
+      cMap[interval] = await fetchCandlesForEval(exchange, symbol, interval, Math.max(limit, 500));
+    }));
+
+    const report = buildEntryMaReport(cMap, tradeConfig);
+    const { sweep, rsiSweep, ...rest } = report;
+    res.json({
+      symbol,
+      exchange,
+      trigger: report.suggestedTrigger,
+      tolerancePct: report.suggestedTolerancePct,
+      maRsiValue: report.suggestedMaRsi,
+      sweepSummary: sweep?.map(s => ({
+        trigger: s.trigger, tolerancePct: s.tolerancePct,
+        tradeCount: s.tradeCount, avgPnl: s.avgPnl, winRate: s.winRate,
+      })),
+      rsiSweepSummary: rsiSweep?.map(s => ({
+        value: s.value, tradeCount: s.tradeCount, avgPnl: s.avgPnl,
+      })),
+      ...rest,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 async function fetchCandlesForEval(exchange, symbol, interval, limit) {
   if (exchange === 'gate') {
     const pair = toGateSymbol(symbol);
@@ -603,6 +702,35 @@ async function fetchCandlesForEval(exchange, symbol, interval, limit) {
   }
   return fetchBinanceCandles(symbol, limit, interval);
 }
+
+// GET /services/sb/multitrade-backtest?symbol=ARUSDT&exchange=binance&capital=40
+router.get('/multitrade-backtest', getUserId, async (req, res) => {
+  const sym = req.query.symbol?.toUpperCase();
+  if (!sym) return res.status(400).json({ error: 'symbol obrigatório' });
+
+  const { data, error } = await supabase
+    .from('multitrade_favorites')
+    .select('*')
+    .eq('user_id', req.userId)
+    .eq('symbol', sym)
+    .maybeSingle();
+
+  if (error) return sbError(res, error, 'GET multitrade-backtest');
+  if (!data) return res.status(404).json({ error: 'Moeda não está no Multi-Trade' });
+
+  const entry    = multitradeToEntry(data);
+  const config   = entry.tradeConfig ?? toEngineConfig(normalizeTradeConfig(entry));
+  const exchange = req.query.exchange ?? entry.exchange ?? 'binance';
+  const capital  = Number(req.query.capital ?? entry.capital ?? 40);
+
+  try {
+    const result = await runAmapBacktest({ symbol: sym, config, exchange, capital });
+    if (result.error) return res.status(502).json(result);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // POST /services/sb/multitrade-evaluate  — snapshot ao vivo da config AMAP
 router.post('/multitrade-evaluate', getUserId, async (req, res) => {

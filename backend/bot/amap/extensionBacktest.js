@@ -79,7 +79,7 @@ function simulateForwardTrade(entryIdx, entrySeries, exitSeries, cMap, config, a
     const exitRsi    = exitRsiAt(exitSeries, openTime);
     const maSnap     = maSnapAt(cMap, config, openTime);
     const stopLossMa = getStopLossMa(maSnap, config);
-    const exitEval   = evaluateExit({ close, exitRsi, stopLossMa, config });
+    const exitEval   = evaluateExit({ close, exitRsi, stopLossMa, maSnap, adaptiveDips, config });
 
     if (exitEval.exit) {
       const pnlPct = ((close - buyPrice) / buyPrice) * 100;

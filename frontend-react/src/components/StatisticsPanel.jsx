@@ -3,11 +3,16 @@ import { useCurrency } from '../contexts/CurrencyContext';
 import { fetchRsiOversoldRecovery, fetchCandlesticksAndCloud } from '../services/api';
 import Tooltip from './Tooltip';
 import { useI18n } from '../i18n';
+import { CHART_VIEW } from '../utils/chartView';
 
 
 const INTERVALS = ['1m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w'];
 
-const TABS = [{ id: 'rsi', label: 'RSI' }];
+const INTERVAL_MS = {
+  '1m':60000,'5m':300000,'15m':900000,'30m':1800000,'1h':3600000,
+  '2h':7200000,'4h':14400000,'6h':21600000,'8h':28800000,'12h':43200000,
+  '1d':86400000,'3d':259200000,'1w':604800000,
+};
 
 function formatDate(iso) {
   const d = new Date(iso);
@@ -28,14 +33,10 @@ function SummaryCard({ label, value, highlight, tooltip }) {
   return tooltip ? <Tooltip text={tooltip} maxW={220}>{card}</Tooltip> : card;
 }
 
-const INTERVAL_MS = {
-  '1m':60000,'5m':300000,'15m':900000,'30m':1800000,'1h':3600000,
-  '2h':7200000,'4h':14400000,'6h':21600000,'8h':28800000,'12h':43200000,
-  '1d':86400000,'3d':259200000,'1w':604800000,
-};
+const TABS = [{ id: 'rsi', label: 'RSI' }];
 
 function RsiStats() {
-  const { selectedChart, setSelectedChart, setChartZoom } = useCurrency();
+  const { selectedChart, setSelectedChart, setChartZoom, setChartViewSource } = useCurrency();
   const { t, formatPrice } = useI18n();
   const [symbol, setSymbol]         = useState(selectedChart?.symbol || 'BTCUSDT');
   const [interval, setInterval]     = useState('5m');
@@ -236,7 +237,12 @@ function RsiStats() {
                                 }
 
                                 setSelectedChart(data);
-                                setChartZoom({ startDate: o.startDate, endDate: o.endDate });
+                                setChartViewSource(CHART_VIEW.STATISTICS);
+                                setChartZoom({
+                                  source: CHART_VIEW.STATISTICS,
+                                  startDate: o.startDate,
+                                  endDate: o.endDate,
+                                });
 
                                 // Tabela de candles do período no console
                                 const statsRsiMap = statsRsi

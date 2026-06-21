@@ -4,6 +4,7 @@ import { fetchCandlesticksAndCloud, fetchGateCurrencies, gatePreloadCandles, fet
 import { useI18n } from '../i18n';
 import TradeConfigModal from './TradeConfigModal';
 import MultitradeModal from './MultitradeModal';
+import { CHART_VIEW } from '../utils/chartView';
 
 const GATE_COLOR    = '#0068ff';
 const BINANCE_COLOR = '#fcd535';
@@ -65,7 +66,8 @@ function resolveFavorites(favSet, binanceList, gateAll) {
 
 export default function CurrencyTable({ activeFilter, showFavorites, setShowFavorites, onSelectCurrency }) {
   const {
-    currencies, findFilter, selectedQuote, selectedChart, setSelectedChart, setChartZoom,
+    currencies, findFilter, selectedQuote, selectedChart, setSelectedChart, setChartZoom, setChartTradeMarkers,
+    setChartViewSource, clearMultitradeChartView,
     gateFavorites, binanceFavorites, tradeFavorites, tradeConfigs,
     toggleGateFavorite, toggleBinanceFavorite, toggleTradeFavorite, updateTradeConfig,
     setTradePurchases, setAllTrades,
@@ -208,6 +210,9 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
     setAllTrades([]);
     try {
       setChartZoom(null);
+      setChartTradeMarkers([]);
+      clearMultitradeChartView();
+      setChartViewSource(CHART_VIEW.TABLE);
       // Se source não foi informado, detecta Gate pelo fato de o símbolo não estar na lista Binance
       // ou por ser um favorito Gate (símbolo pode existir na Binance mas sem candles disponíveis)
       const isGateOnly = !currencies.list.some(c => c.symbol === item.symbol);

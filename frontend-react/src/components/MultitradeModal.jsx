@@ -1,7 +1,8 @@
 import { useState, useCallback, useEffect } from 'react';
-import { checkMultitradeVolume, suggestMultitradeDiscount, suggestMultitradeAdaptive, suggestMultitradeExtensionAbove, suggestMultitradeExitRsi } from '../services/api';
+import { checkMultitradeVolume, suggestMultitradeDiscount, suggestMultitradeAdaptive, suggestMultitradeExtensionAbove, suggestMultitradeExitRsi, suggestMultitradeEntryRsi, suggestMultitradeEntryMa } from '../services/api';
 import {
   RSI_INTERVALS, MA_INTERVALS, MA_PERIODS, RSI_PERIODS, MA_MODES,
+  RSI_OPERATORS, ENTRY_MA_TRIGGERS,
   ENTRY_DISCOUNT_OPTIONS, VOLUME_OPTIONS, PENDING_TIMEOUT_OPTIONS, POLL_OPTIONS,
   formStateFromEntry, formStateToPayload,
 } from '../constants/tradeConfigSchema';
@@ -54,6 +55,45 @@ function NumInput({ value, onChange, min, max, step = 1, className = 'w-16', ...
   );
 }
 
+function EntryPathCard({ active, onToggle, title, subtitle, color, children }) {
+  return (
+    <div className="rounded-md overflow-hidden" style={{ border: `1px solid ${active ? color + '66' : '#2a2d3a'}` }}>
+      <label className="flex items-start gap-2 px-2.5 py-2 cursor-pointer" style={{ background: active ? `${color}12` : '#1a1d28' }}>
+        <input type="checkbox" checked={active} onChange={e => onToggle(e.target.checked)}
+          className="mt-0.5 shrink-0" style={{ accentColor: color }} />
+        <div className="min-w-0">
+          <span className="text-[10px] font-bold block" style={{ color: active ? color : '#94a3b8' }}>{title}</span>
+          {subtitle && <span className="text-[9px] text-p5/40 block mt-0.5">{subtitle}</span>}
+        </div>
+      </label>
+      {active && children && (
+        <div className="px-2.5 pb-2.5 pt-1 space-y-1.5" style={{ background: '#131722' }}>{children}</div>
+      )}
+    </div>
+  );
+}
+
+function RsiRuleFields({ rsi, onPatch, sel, compact }) {
+  const cls = compact ? 'text-[10px] py-1' : 'text-xs py-1.5';
+  return (
+    <div className="grid grid-cols-4 gap-1">
+      <select value={rsi.interval} onChange={e => onPatch('interval', e.target.value)}
+        className={`rounded px-1 ${cls} text-p5 outline-none cursor-pointer col-span-1`} style={sel}>
+        {RSI_INTERVALS.map(iv => <option key={iv} value={iv}>{iv}</option>)}
+      </select>
+      <select value={rsi.period} onChange={e => onPatch('period', Number(e.target.value))}
+        className={`rounded px-1 ${cls} text-p5 outline-none font-mono`} style={sel}>
+        {RSI_PERIODS.map(p => <option key={p} value={p}>p{p}</option>)}
+      </select>
+      <select value={rsi.operator ?? '<'} onChange={e => onPatch('operator', e.target.value)}
+        className={`rounded px-1 ${cls} text-p5 outline-none font-mono text-center`} style={sel}>
+        {RSI_OPERATORS.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
+      </select>
+      <NumInput value={rsi.value} onChange={v => onPatch('value', v)} min={1} max={99} className="w-full" />
+    </div>
+  );
+}
+
 export default function MultitradeModal({ symbol: initialSymbol, defaultExchange, currentEntry, onConfirm, onRemove, onCancel }) {
   const isEditing = !!currentEntry;
   const newId = useCallback(() => Date.now() + Math.random(), []);
@@ -70,7 +110,31 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
   const [adaptiveSuggest, setAdaptiveSuggest] = useState({});
   const [extensionSuggest, setExtensionSuggest] = useState(null);
   const [exitRsiSuggest, setExitRsiSuggest] = useState(null);
+  const [entryRsiSuggest, setEntryRsiSuggest] = useState(null);
+  const [entryMaSuggest, setEntryMaSuggest] = useState(null);
   const [copied, setCopied]     = useState(null);
+  const [entryPathError, setEntryPathError] = useState(null);
+
+  const rsiPathOn = form.entryRsiPath?.enabled !== false;
+  const maPathOn  = !!form.entryMa?.enabled;
+
+  const entrySummary = (() => {
+    const parts = [];
+    if (rsiPathOn) {
+      const r = form.entryRsi;
+      parts.push(`RSI(${r.interval}) ${r.operator ?? '<'} ${r.value}`);
+    }
+    if (maPathOn) {
+      const m = form.entryMa;
+      let s = `MA${m.period} ${m.interval}`;
+      if (m.requireRsi) {
+        const r = m.entryRsi;
+        s += ` + RSI(${r.interval}) ${r.operator ?? '<'} ${r.value}`;
+      }
+      parts.push(s);
+    }
+    return parts.join('  OU  ');
+  })();
 
   const patch = useCallback((path, value) => {
     setForm(prev => {
@@ -161,6 +225,58 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
 
   useEffect(() => { setExitRsiSuggest(null); }, [symbol, exchange, form.entryRsi, form.exitRsi, form.maConditions, form.extension, form.stopLoss]);
 
+  useEffect(() => { setEntryRsiSuggest(null); }, [symbol, exchange, form.entryRsi, form.entryRsiPath, form.maConditions, form.extension, form.stopLoss]);
+
+  useEffect(() => { setEntryMaSuggest(null); }, [symbol, exchange, form.entryMa, form.maConditions, form.extension, form.stopLoss, form.exitRsi]);
+
+  async function handleSuggestEntryRsi() {
+    const sym = symbol.trim().toUpperCase();
+    if (!sym || !rsiPathOn) return;
+    setEntryRsiSuggest({ loading: true });
+    try {
+      const r = await suggestMultitradeEntryRsi({
+        symbol: sym,
+        exchange,
+        entryRsi: form.entryRsi,
+        exitRsi: form.exitRsi,
+        entryRsiPath: form.entryRsiPath,
+        entryMa: form.entryMa,
+        maConditions: form.maConditions,
+        extension: form.extension,
+        stopLoss: form.stopLoss,
+      });
+      setEntryRsiSuggest(r);
+      if (r.entryRsiValue != null) patch('entryRsi.value', r.entryRsiValue);
+    } catch (err) {
+      setEntryRsiSuggest({ error: err.message });
+    }
+  }
+
+  async function handleSuggestEntryMa() {
+    const sym = symbol.trim().toUpperCase();
+    if (!sym || !maPathOn) return;
+    setEntryMaSuggest({ loading: true });
+    try {
+      const r = await suggestMultitradeEntryMa({
+        symbol: sym,
+        exchange,
+        entryRsi: form.entryRsi,
+        exitRsi: form.exitRsi,
+        entryRsiPath: form.entryRsiPath,
+        entryMa: form.entryMa,
+        maConditions: form.maConditions,
+        extension: form.extension,
+        stopLoss: form.stopLoss,
+      });
+      setEntryMaSuggest(r);
+      if (r.trigger) patch('entryMa.trigger', r.trigger);
+      if (r.tolerancePct != null) patch('entryMa.tolerancePct', r.tolerancePct);
+      if (r.maRsiValue != null) patch('entryMa.entryRsi.value', r.maRsiValue);
+    } catch (err) {
+      setEntryMaSuggest({ error: err.message });
+    }
+  }
+
   async function handleSuggestExitRsi() {
     const sym = symbol.trim().toUpperCase();
     if (!sym) return;
@@ -226,6 +342,11 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
   function handleConfirm() {
     const sym = symbol.trim().toUpperCase();
     if (!sym || Number(capital) <= 0) return;
+    if (!rsiPathOn && !maPathOn) {
+      setEntryPathError('Ative pelo menos uma entrada (RSI ou MA).');
+      return;
+    }
+    setEntryPathError(null);
     if (volCheck && !volCheck.loading && volCheck.meetsMin === false && !volumeWarnOpen) {
       setVolumeWarnOpen(true);
       return;
@@ -247,7 +368,7 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto py-4"
       style={{ background: 'rgba(0,0,0,0.72)' }} onClick={onCancel}>
-      <div className="w-[22rem] rounded-lg shadow-2xl border mx-4 my-auto"
+      <div className="w-[24rem] rounded-lg shadow-2xl border mx-4 my-auto"
         style={{ background: '#131722', borderColor: '#2a2d3a' }} onClick={e => e.stopPropagation()}>
 
         <div className="flex items-center justify-between px-4 py-3 border-b" style={{ borderColor: '#2a2d3a' }}>
@@ -287,21 +408,112 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
               className="w-full rounded px-2.5 py-1.5 text-xs text-p5 outline-none font-mono" style={sel} />
           </div>
 
-          {/* Entrada RSI */}
+          {/* Duas entradas (OR) */}
           <div>
-            <SectionHeader label="Entrada RSI" color="#26a69a" />
-            <div className="grid grid-cols-3 gap-1.5">
-              <select value={form.entryRsi.interval} onChange={e => patch('entryRsi.interval', e.target.value)}
-                className="rounded px-1 py-1.5 text-xs text-p5 outline-none cursor-pointer" style={sel}>
-                {RSI_INTERVALS.map(iv => <option key={iv} value={iv}>{iv}</option>)}
-              </select>
-              <select value={form.entryRsi.period} onChange={e => patch('entryRsi.period', Number(e.target.value))}
-                className="rounded px-1 py-1.5 text-xs text-p5 outline-none font-mono" style={sel}>
-                {RSI_PERIODS.map(p => <option key={p} value={p}>p{p}</option>)}
-              </select>
-              <NumInput value={form.entryRsi.value} onChange={v => patch('entryRsi.value', v)} min={1} max={99} className="w-full" />
+            <SectionHeader label="Entradas de compra (OR)" color="#26a69a" />
+            <div className="space-y-2">
+              <EntryPathCard
+                active={rsiPathOn}
+                onToggle={v => { patch('entryRsiPath.enabled', v); setEntryPathError(null); }}
+                title="Entrada 1 — RSI"
+                subtitle={rsiPathOn ? `RSI(${form.entryRsi.interval}) ${form.entryRsi.operator ?? '<'} ${form.entryRsi.value}` : 'Desligada'}
+                color="#26a69a">
+                <RsiRuleFields
+                  rsi={form.entryRsi}
+                  sel={sel}
+                  onPatch={(field, value) => patch(`entryRsi.${field}`, value)}
+                />
+                <div className="flex items-center gap-2 pt-1">
+                  <button type="button" onClick={handleSuggestEntryRsi}
+                    disabled={!symbol.trim() || entryRsiSuggest?.loading}
+                    className="text-[9px] px-2 py-0.5 rounded font-semibold shrink-0"
+                    style={{ background: '#2a2d3a', color: '#26a69a', border: '1px solid #26a69a44' }}>
+                    {entryRsiSuggest?.loading ? '…' : 'Sugerir RSI'}
+                  </button>
+                </div>
+                {entryRsiSuggest && !entryRsiSuggest.loading && (
+                  <p className="text-[9px] font-mono leading-relaxed" style={{ color: entryRsiSuggest.error ? '#f59e0b' : '#94a3b8' }}>
+                    {entryRsiSuggest.error
+                      ? entryRsiSuggest.error
+                      : entryRsiSuggest.usedDefault
+                        ? `Poucos trades (${entryRsiSuggest.bestStats?.tradeCount ?? 0}) — mantém ${entryRsiSuggest.anchorValue}`
+                        : `${entryRsiSuggest.bestStats?.tradeCount ?? '—'} trades · PnL méd. ${entryRsiSuggest.bestStats?.avgPnl ?? '—'}% · win ${entryRsiSuggest.bestStats?.winRate ?? '—'}% → sugerido ${entryRsiSuggest.entryRsiValue}${entryRsiSuggest.vsAnchor?.pnlDelta != null ? ` (+${entryRsiSuggest.vsAnchor.pnlDelta}% vs âncora)` : ''}`}
+                  </p>
+                )}
+              </EntryPathCard>
+
+              <EntryPathCard
+                active={maPathOn}
+                onToggle={v => { patch('entryMa.enabled', v); setEntryPathError(null); }}
+                title="Entrada 2 — MA"
+                subtitle={maPathOn
+                  ? `MA${form.entryMa.period} ${form.entryMa.interval} (${ENTRY_MA_TRIGGERS.find(t => t.id === form.entryMa.trigger)?.label ?? 'toque'})`
+                  : 'Desligada'}
+                color="#8b5cf6">
+                <div className="grid grid-cols-3 gap-1.5">
+                  <select value={form.entryMa.period} onChange={e => patch('entryMa.period', Number(e.target.value))}
+                    className="rounded px-1 py-1.5 text-xs text-p5 outline-none font-mono" style={sel}>
+                    {MA_PERIODS.map(p => <option key={p} value={p}>MA{p}</option>)}
+                  </select>
+                  <select value={form.entryMa.interval} onChange={e => patch('entryMa.interval', e.target.value)}
+                    className="rounded px-1 py-1.5 text-xs text-p5 outline-none" style={sel}>
+                    {MA_INTERVALS.map(iv => <option key={iv} value={iv}>{iv}</option>)}
+                  </select>
+                  <select value={form.entryMa.trigger} onChange={e => patch('entryMa.trigger', e.target.value)}
+                    className="rounded px-1 py-1.5 text-xs text-p5 outline-none" style={sel}>
+                    {ENTRY_MA_TRIGGERS.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
+                  </select>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[9px] text-p5/40 shrink-0">Tolerância</span>
+                  <NumInput value={form.entryMa.tolerancePct} onChange={v => patch('entryMa.tolerancePct', v)}
+                    min={0.1} max={5} step={0.1} className="w-16" />
+                  <span className="text-[9px] text-p5/35">%</span>
+                </div>
+                <label className="flex items-center gap-2 cursor-pointer pt-0.5">
+                  <input type="checkbox" checked={!!form.entryMa.requireRsi}
+                    onChange={e => patch('entryMa.requireRsi', e.target.checked)}
+                    className="accent-[#8b5cf6]" />
+                  <span className="text-[9px] text-p5/50">Combinar com RSI neste caminho</span>
+                </label>
+                {form.entryMa.requireRsi && (
+                  <RsiRuleFields
+                    rsi={form.entryMa.entryRsi}
+                    sel={sel}
+                    compact
+                    onPatch={(field, value) => patch(`entryMa.entryRsi.${field}`, value)}
+                  />
+                )}
+                <div className="flex items-center gap-2 pt-1">
+                  <button type="button" onClick={handleSuggestEntryMa}
+                    disabled={!symbol.trim() || entryMaSuggest?.loading}
+                    className="text-[9px] px-2 py-0.5 rounded font-semibold shrink-0"
+                    style={{ background: '#2a2d3a', color: MT_COLOR, border: `1px solid ${MT_COLOR}44` }}>
+                    {entryMaSuggest?.loading ? '…' : 'Sugerir MA'}
+                  </button>
+                </div>
+                {entryMaSuggest && !entryMaSuggest.loading && (
+                  <p className="text-[9px] font-mono leading-relaxed" style={{ color: entryMaSuggest.error ? '#f59e0b' : '#94a3b8' }}>
+                    {entryMaSuggest.error
+                      ? entryMaSuggest.error
+                      : entryMaSuggest.usedDefault
+                        ? `Poucos sinais (${entryMaSuggest.bestStats?.tradeCount ?? 0}) — mantém ${entryMaSuggest.anchorTrigger} / ${entryMaSuggest.anchorTolerancePct}%`
+                        : `${entryMaSuggest.bestStats?.tradeCount ?? '—'} trades · PnL méd. ${entryMaSuggest.bestStats?.avgPnl ?? '—'}% → ${entryMaSuggest.trigger} / tol. ${entryMaSuggest.tolerancePct}%${entryMaSuggest.maRsiValue != null ? ` · RSI ${entryMaSuggest.maRsiValue}` : ''}${entryMaSuggest.vsAnchor?.pnlDelta != null ? ` (+${entryMaSuggest.vsAnchor.pnlDelta}% vs âncora)` : ''}`}
+                  </p>
+                )}
+              </EntryPathCard>
             </div>
-            <p className="text-[9px] text-p5/35 mt-1">Compra quando RSI({form.entryRsi.interval}, {form.entryRsi.period}) &lt; {form.entryRsi.value}</p>
+            {entrySummary && (
+              <p className="text-[9px] font-mono mt-2 px-1" style={{ color: '#26a69a99' }}>
+                {entrySummary}
+              </p>
+            )}
+            {entryPathError && (
+              <p className="text-[9px] text-red-400 mt-1">{entryPathError}</p>
+            )}
+            <p className="text-[9px] text-p5/30 mt-1">
+              Compra quando qualquer entrada ativa disparar e passar nos filtros MA abaixo.
+            </p>
           </div>
 
           {/* Filtros MA */}
@@ -457,23 +669,70 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
           </div>
 
           {/* Stop loss */}
-          <div>
+          <div id="multitrade-modal-stop-loss">
             <SectionHeader label="Stop Loss" />
-            <label className="flex items-center gap-2 cursor-pointer mb-2">
-              <input type="checkbox" checked={form.stopLoss.enabled} onChange={e => patch('stopLoss.enabled', e.target.checked)} className="accent-violet-500" />
-              <span className="text-xs text-p5">Ativar stop por MA</span>
+            <p className="text-[9px] text-p5/40 mb-2 leading-relaxed">
+              Escolha um, outro ou os dois. Se ambos estiverem ativos, vende no nível mais alto violado na queda.
+            </p>
+
+            <label className="flex items-start gap-2 cursor-pointer mb-2">
+              <input
+                type="checkbox"
+                id="multitrade-modal-stop-loss-fixed"
+                checked={form.stopLoss.fixedEnabled !== false}
+                onChange={e => patch('stopLoss.fixedEnabled', e.target.checked)}
+                className="accent-violet-500 mt-0.5"
+              />
+              <span className="text-xs text-p5 leading-snug">
+                <span className="font-semibold">MA fixa</span>
+                <span className="block text-[9px] text-p5/45">Vende se close &lt; MA no timeframe abaixo</span>
+              </span>
             </label>
-            {form.stopLoss.enabled && (
-              <div className="flex gap-1.5">
-                <select value={form.stopLoss.period} onChange={e => patch('stopLoss.period', Number(e.target.value))}
-                  className="w-16 rounded px-1 py-1.5 text-xs font-mono" style={sel}>
+            {form.stopLoss.fixedEnabled !== false && (
+              <div id="multitrade-modal-stop-loss-fixed-fields" className="flex gap-1.5 mb-3 ml-6">
+                <select
+                  id="multitrade-modal-stop-loss-period"
+                  value={form.stopLoss.period}
+                  onChange={e => patch('stopLoss.period', Number(e.target.value))}
+                  className="w-16 rounded px-1 py-1.5 text-xs font-mono"
+                  style={sel}>
                   {MA_PERIODS.map(p => <option key={p} value={p}>MA{p}</option>)}
                 </select>
-                <select value={form.stopLoss.interval} onChange={e => patch('stopLoss.interval', e.target.value)}
-                  className="flex-1 rounded px-2 py-1.5 text-xs" style={sel}>
+                <select
+                  id="multitrade-modal-stop-loss-interval"
+                  value={form.stopLoss.interval}
+                  onChange={e => patch('stopLoss.interval', e.target.value)}
+                  className="flex-1 rounded px-2 py-1.5 text-xs"
+                  style={sel}>
                   {MA_INTERVALS.map(iv => <option key={iv} value={iv}>{iv}</option>)}
                 </select>
               </div>
+            )}
+
+            <label className="flex items-start gap-2 cursor-pointer mb-1">
+              <input
+                type="checkbox"
+                id="multitrade-modal-stop-loss-adaptive"
+                checked={form.stopLoss.adaptiveEnabled !== false}
+                onChange={e => patch('stopLoss.adaptiveEnabled', e.target.checked)}
+                className="accent-violet-500 mt-0.5"
+              />
+              <span className="text-xs text-p5 leading-snug">
+                <span className="font-semibold">Piso adaptativo</span>
+                <span className="block text-[9px] text-p5/45">
+                  Usa MA × (1 − dip%) de cada filtro de entrada em modo adaptativo
+                </span>
+              </span>
+            </label>
+            {form.stopLoss.adaptiveEnabled !== false && !hasAdaptiveMa(form.maConditions) && (
+              <p id="multitrade-modal-stop-loss-adaptive-warn" className="text-[9px] text-amber-400/90 ml-6 mb-2">
+                Adicione um filtro MA em modo &quot;adapt.&quot; na entrada para este stop ter efeito.
+              </p>
+            )}
+            {form.stopLoss.fixedEnabled === false && form.stopLoss.adaptiveEnabled === false && (
+              <p id="multitrade-modal-stop-loss-off-warn" className="text-[9px] text-p5/35 ml-6">
+                Stop desligado — saída apenas por RSI.
+              </p>
             )}
           </div>
 

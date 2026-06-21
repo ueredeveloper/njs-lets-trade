@@ -1,168 +1,146 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useCurrency } from '../contexts/CurrencyContext';
-import MultitradeModal, { getBacktestCmd, getAdaptiveTestCmd, hasAdaptiveMa } from './MultitradeModal';
+import MultitradeModal from './MultitradeModal';
+import MultitradeBacktestPanel from './MultitradeBacktestPanel';
 
 const MT_COLOR      = '#8b5cf6';
 const GATE_COLOR    = '#0068ff';
 const BINANCE_COLOR = '#f0b90b';
 
 export default function MultitradePanel() {
-  const { multitradeFavorites, addMultitradeEntry, updateMultitradeEntry, removeMultitradeEntry } = useCurrency();
-  const [addModal, setAddModal]       = useState(false);
-  const [editingEntry, setEditingEntry] = useState(null);
-  const [copied, setCopied]           = useState(null);
+  const {
+    multitradeFavorites, selectedChart,
+    addMultitradeEntry, updateMultitradeEntry, removeMultitradeEntry,
+  } = useCurrency();
+  const [addModal, setAddModal]           = useState(false);
+  const [favOpen, setFavOpen]             = useState(false);
+  const [editingEntry, setEditingEntry]   = useState(null);
+  const [pickedSymbol, setPickedSymbol]   = useState(null);
 
-  function copy(text, key) {
-    navigator.clipboard.writeText(text).then(() => {
-      setCopied(key);
-      setTimeout(() => setCopied(null), 2000);
-    }).catch(() => {});
+  const chartSymbol = selectedChart?.symbol?.toUpperCase?.() ?? null;
+
+  const backtestEntry = useMemo(() => {
+    if (chartSymbol) {
+      const match = multitradeFavorites.find(e => e.symbol === chartSymbol);
+      if (match) return match;
+    }
+    if (pickedSymbol) {
+      return multitradeFavorites.find(e => e.symbol === pickedSymbol) ?? null;
+    }
+    if (multitradeFavorites.length === 1) return multitradeFavorites[0];
+    return null;
+  }, [chartSymbol, pickedSymbol, multitradeFavorites]);
+
+  function pickFavorite(entry) {
+    setPickedSymbol(entry.symbol);
+    setFavOpen(false);
   }
 
   return (
-    <div className="flex flex-col h-full min-h-0">
-      {/* Header */}
-      <div className="flex items-center justify-between px-3 py-2 border-b border-p2 shrink-0">
-        <div className="flex items-center gap-2">
-          <span className="text-xs font-semibold text-p5 uppercase tracking-wider">Multi-Trade</span>
+    <div id="multitrade-panel" className="multitrade-panel flex flex-col h-full min-h-0">
+      <div className="multitrade-panel-header flex items-center justify-between px-3 py-2 border-b border-p2 shrink-0 gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-xs font-semibold text-p5 uppercase tracking-wider shrink-0">Multi-Trade</span>
           {multitradeFavorites.length > 0 && (
-            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded"
+            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded shrink-0"
               style={{ background: `${MT_COLOR}22`, color: MT_COLOR, border: `1px solid ${MT_COLOR}44` }}>
               {multitradeFavorites.length}
             </span>
           )}
+          {backtestEntry && (
+            <span className="text-[9px] font-mono text-p5/50 truncate hidden sm:inline">
+              {backtestEntry.symbol}
+            </span>
+          )}
         </div>
-        <button
-          onClick={() => setAddModal(true)}
-          className="text-[10px] px-2 py-1 rounded font-semibold transition-colors hover:opacity-90"
-          style={{ background: MT_COLOR, color: '#fff' }}>
-          + Adicionar
-        </button>
+        <div className="flex items-center gap-1.5 shrink-0">
+          <button
+            id="multitrade-panel-btn-favorites"
+            type="button"
+            onClick={() => setFavOpen(v => !v)}
+            className="multitrade-panel-btn-favorites text-[10px] px-2 py-1 rounded font-semibold transition-colors"
+            style={{
+              background: favOpen ? `${MT_COLOR}33` : '#2a2d3a',
+              color: favOpen ? MT_COLOR : '#94a3b8',
+              border: `1px solid ${favOpen ? MT_COLOR : '#3a3d4a'}`,
+            }}>
+            ★ Favoritas
+          </button>
+          <button
+            id="multitrade-panel-btn-add"
+            type="button"
+            onClick={() => setAddModal(true)}
+            className="multitrade-panel-btn-add text-[10px] px-2 py-1 rounded font-semibold transition-colors hover:opacity-90"
+            style={{ background: MT_COLOR, color: '#fff' }}>
+            + Adicionar
+          </button>
+        </div>
       </div>
 
-      {/* List */}
-      <div className="flex-1 overflow-y-auto">
-        {multitradeFavorites.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full gap-2 py-12">
-            <span className="text-xs text-p5/30">Nenhuma moeda configurada</span>
-            <span className="text-[10px] text-p5/20">Use o botão MT na tabela ou + Adicionar</span>
-          </div>
-        ) : (
-          <div className="space-y-1.5 p-2">
-            {multitradeFavorites.map((entry) => {
-              const cmd      = getBacktestCmd(entry);
-              const adaptCmd = getAdaptiveTestCmd(entry);
-              const cmdKey   = `${entry.id}-cmd`;
-              const adaptKey = `${entry.id}-adapt`;
-              const showAdapt = hasAdaptiveMa(entry.maConditions);
-
-              return (
-                <div key={entry.id} className="rounded border p-2.5 space-y-2"
-                  style={{ background: '#1e2130', borderColor: '#2a2d3a' }}>
-
-                  {/* Row 1: symbol + exchange */}
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    <span className="font-mono font-bold text-xs text-p5">{entry.symbol}</span>
-                    <span className="text-[9px] font-bold px-1 py-0.5 rounded"
+      {favOpen && (
+        <div id="multitrade-panel-favorites" className="multitrade-panel-favorites border-b border-p2 shrink-0 max-h-48 overflow-y-auto">
+          {multitradeFavorites.length === 0 ? (
+            <p className="text-[10px] text-p5/40 px-3 py-3 text-center">Nenhuma favorita MT</p>
+          ) : (
+            <ul className="multitrade-panel-favorites-list divide-y divide-p2/50">
+              {multitradeFavorites.map(entry => {
+                const active = backtestEntry?.symbol === entry.symbol;
+                return (
+                  <li
+                    key={entry.id}
+                    id={`multitrade-fav-${entry.symbol}`}
+                    className={`multitrade-panel-favorites-item flex items-center gap-2 px-3 py-2 cursor-pointer transition-colors ${active ? 'bg-violet-500/10' : 'hover:bg-p2/40'}`}
+                    onClick={() => pickFavorite(entry)}>
+                    <span className="font-mono text-[10px] font-bold text-p5 flex-1 min-w-0 truncate">
+                      {entry.symbol}
+                    </span>
+                    <span className="text-[8px] font-bold px-1 py-0.5 rounded shrink-0"
                       style={{
                         background: entry.exchange === 'gate' ? GATE_COLOR : BINANCE_COLOR,
                         color: entry.exchange === 'gate' ? '#fff' : '#000',
                       }}>
                       {entry.exchange === 'gate' ? 'Gate' : 'Bnb'}
                     </span>
-                  </div>
-
-                  {/* Row 2: conditions summary */}
-                  <div className="flex flex-wrap gap-1">
-                    <span className="text-[9px] px-1 py-0.5 rounded bg-p2 text-p5/70 font-mono">
-                      ${entry.capital}
-                    </span>
-                    {entry.entryRsi && (
-                      <span className="text-[9px] px-1 py-0.5 rounded bg-p2 text-p5/70 font-mono">
-                        RSI{entry.entryRsi.operator}{entry.entryRsi.value} {entry.entryRsi.interval}
-                      </span>
-                    )}
-                    {entry.exitRsi && (
-                      <span className="text-[9px] px-1 py-0.5 rounded bg-p2 text-p5/70 font-mono">
-                        RSI{entry.exitRsi.operator}{entry.exitRsi.value} {entry.exitRsi.interval}
-                      </span>
-                    )}
-                    {(entry.maConditions ?? []).map((ma, i) => (
-                      <span key={i} className="text-[9px] px-1 py-0.5 rounded bg-p2 text-p5/70 font-mono">
-                        MA{ma.period}({ma.interval}) {ma.mode === 'adaptive' ? 'adapt.' : 'fixo'}
-                      </span>
-                    ))}
-                    {entry.extension?.enabled !== false && entry.extension?.threeCandles && (
-                      <span className="text-[9px] px-1 py-0.5 rounded bg-p2 text-p5/70">3🕯</span>
-                    )}
-                    {entry.extension?.enabled !== false && entry.extension?.fourCandles && (
-                      <span className="text-[9px] px-1 py-0.5 rounded bg-p2 text-p5/70">4🕯</span>
-                    )}
-                    {entry.stopLoss?.enabled !== false && entry.stopLoss && (
-                      <span className="text-[9px] px-1 py-0.5 rounded bg-p2 text-red-400/80 font-mono">
-                        SL MA{entry.stopLoss.period}({entry.stopLoss.interval})
-                      </span>
-                    )}
-                    {entry.execution?.immediateEntry && (
-                      <span className="text-[9px] px-1 py-0.5 rounded bg-p2 text-p5/70">imediato</span>
-                    )}
-                    {entry.volume?.minVolumeUsdt != null && (
-                      <span className="text-[9px] px-1 py-0.5 rounded bg-p2 text-p5/70 font-mono">
-                        vol≥{entry.volume.minVolumeUsdt >= 1_000_000
-                          ? `${entry.volume.minVolumeUsdt / 1_000_000}M`
-                          : `${entry.volume.minVolumeUsdt / 1000}K`}
-                      </span>
-                    )}
-                    {entry.volume?.allowLowVolume && (
-                      <span className="text-[9px] px-1 py-0.5 rounded bg-amber-500/15 text-amber-400 font-mono">vol↓OK</span>
-                    )}
-                  </div>
-
-                  {/* Row 3: actions */}
-                  <div className="flex gap-1.5">
+                    <span className="text-[9px] font-mono text-p5/50 shrink-0">${entry.capital}</span>
                     <button
-                      onClick={() => copy(cmd, cmdKey)}
-                      className="flex-1 text-[10px] py-1 rounded transition-colors"
-                      style={{
-                        background: copied === cmdKey ? `${MT_COLOR}22` : '#2a2d3a',
-                        color:      copied === cmdKey ? MT_COLOR        : '#94a3b8',
-                        border:     `1px solid ${copied === cmdKey ? MT_COLOR : '#3a3d4a'}`,
-                      }}>
-                      {copied === cmdKey ? '✓ Test' : 'Test'}
-                    </button>
-                    {showAdapt && (
-                      <button
-                        onClick={() => copy(adaptCmd, adaptKey)}
-                        className="flex-1 text-[10px] py-1 rounded transition-colors"
-                        style={{
-                          background: copied === adaptKey ? '#26a69a22' : '#2a2d3a',
-                          color:      copied === adaptKey ? '#26a69a'   : '#94a3b8',
-                          border:     `1px solid ${copied === adaptKey ? '#26a69a' : '#3a3d4a'}`,
-                        }}>
-                        {copied === adaptKey ? '✓ Adapt' : 'Adapt'}
-                      </button>
-                    )}
-                    <button
-                      onClick={() => setEditingEntry(entry)}
-                      className="px-2 text-[10px] py-1 rounded text-p5/50 hover:text-p5 transition-colors"
-                      style={{ background: '#2a2d3a', border: '1px solid #3a3d4a' }}>
+                      type="button"
+                      id={`multitrade-fav-edit-${entry.symbol}`}
+                      className="multitrade-fav-btn-edit text-[10px] px-1.5 py-0.5 rounded text-p5/50 hover:text-p5 shrink-0"
+                      style={{ background: '#2a2d3a', border: '1px solid #3a3d4a' }}
+                      onClick={(e) => { e.stopPropagation(); setEditingEntry(entry); setFavOpen(false); }}>
                       ✏
                     </button>
-                    <button
-                      onClick={() => removeMultitradeEntry(entry.id)}
-                      className="px-2 text-[10px] py-1 rounded transition-colors"
-                      style={{ background: '#2a2d3a', color: '#ef5350', border: '1px solid #ef535033' }}>
-                      ×
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      )}
+
+      <div className="multitrade-panel-body flex-1 min-h-0 flex flex-col">
+        {multitradeFavorites.length === 0 ? (
+          <div className="multitrade-panel-empty flex flex-col items-center justify-center flex-1 gap-2 py-12">
+            <span className="text-xs text-p5/30">Nenhuma moeda configurada</span>
+            <span className="text-[10px] text-p5/20">Use o botão MT na tabela ou + Adicionar</span>
           </div>
+        ) : !backtestEntry ? (
+          <div className="multitrade-panel-empty flex flex-col items-center justify-center flex-1 gap-2 py-12 px-4 text-center">
+            <span className="text-xs text-p5/40">Selecione uma favorita MT</span>
+            <button
+              type="button"
+              id="multitrade-panel-btn-open-favorites"
+              onClick={() => setFavOpen(true)}
+              className="text-[10px] px-3 py-1.5 rounded font-semibold"
+              style={{ background: `${MT_COLOR}22`, color: MT_COLOR, border: `1px solid ${MT_COLOR}55` }}>
+              ★ Abrir favoritas
+            </button>
+          </div>
+        ) : (
+          <MultitradeBacktestPanel entry={backtestEntry} />
         )}
       </div>
 
-      {/* Modal: adicionar */}
       {addModal && (
         <MultitradeModal
           onConfirm={(data) => { addMultitradeEntry(data); setAddModal(false); }}
@@ -170,7 +148,6 @@ export default function MultitradePanel() {
         />
       )}
 
-      {/* Modal: editar */}
       {editingEntry && (
         <MultitradeModal
           symbol={editingEntry.symbol}

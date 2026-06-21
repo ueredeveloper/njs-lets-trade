@@ -36,8 +36,8 @@ function hitRate(peaks, threshold) {
 }
 
 /** Simula trade a partir da entrada; retorna pico RSI e PnL ao sair em cada limiar. */
-function simulateTradePeaks(entryIdx, entrySeries, exitSeries, cMap, config) {
-  const { getStopLossMa } = engine();
+function simulateTradePeaks(entryIdx, entrySeries, exitSeries, cMap, config, adaptiveDips) {
+  const { getStopLossMa, evaluateExit } = engine();
   const buyPrice = entrySeries[entryIdx].close;
   let peakExitRsi = 0;
   const byThreshold = {};
@@ -49,11 +49,12 @@ function simulateTradePeaks(entryIdx, entrySeries, exitSeries, cMap, config) {
 
     const maSnap     = maSnapAt(cMap, config, openTime);
     const stopLossMa = getStopLossMa(maSnap, config);
-    if (config.stopLoss?.enabled !== false && stopLossMa != null && close < stopLossMa) {
+    const exitEval   = evaluateExit({ close, exitRsi: exitRsiVal, stopLossMa, maSnap, adaptiveDips, config });
+    if (exitEval.exit && exitEval.reason !== 'rsi') {
       const pnlPct = ((close - buyPrice) / buyPrice) * 100;
       return {
         peakExitRsi: parseFloat(peakExitRsi.toFixed(2)),
-        exitReason: 'stop_loss_ma',
+        exitReason: exitEval.reason,
         pnlPct: parseFloat(pnlPct.toFixed(2)),
         byThreshold,
         stopped: true,
@@ -113,7 +114,7 @@ function collectTrades(cMap, config) {
 
     trades.push({
       entryTime: openTime,
-      ...simulateTradePeaks(i, entrySeries, exitSeries, cMap, config),
+      ...simulateTradePeaks(i, entrySeries, exitSeries, cMap, config, adaptiveDips),
     });
   }
 

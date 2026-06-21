@@ -15,6 +15,22 @@ const TRADE_CONFIG_DEFAULTS = {
   entryRsi:  { interval: '15m', period: 14, operator: '<', value: 30 },
   exitRsi:   { interval: '15m', period: 14, operator: '>', value: 70 },
 
+  /** Entrada por RSI (caminho 1) — pode desligar se usar só MA */
+  entryRsiPath: { enabled: true },
+
+  /** Entrada por toque/cruzamento de MA (caminho 2) — OR com RSI */
+  entryMa: {
+    enabled:       false,
+    period:        50,
+    interval:      '1h',
+    /** touch = preço testa a MA; cross_up = close cruza MA de baixo para cima */
+    trigger:       'touch',
+    tolerancePct:  0.5,
+    /** Se true, exige também RSI neste caminho (usa entryMa.entryRsi) */
+    requireRsi:    false,
+    entryRsi:      { interval: '15m', period: 14, operator: '<', value: 40 },
+  },
+
   maConditions: [
     { period: 50, interval: '4h', mode: 'strict_above' },
     { period: 50, interval: '1h', mode: 'adaptive' },
@@ -37,8 +53,12 @@ const TRADE_CONFIG_DEFAULTS = {
 
   stopLoss: {
     enabled:  true,
+    /** Stop quando close < MA(period, interval) */
+    fixedEnabled: true,
     period:   50,
     interval: '4h',
+    /** Pisos adaptativos (MA × (1−dip%)) dos filtros MA em modo adaptive */
+    adaptiveEnabled: true,
   },
 
   execution: {
@@ -108,6 +128,22 @@ function normalizeTradeConfig(body = {}) {
   const entryRsi = normalizeRsi(body.entryRsi, d.entryRsi);
   const exitRsi  = normalizeRsi(body.exitRsi,  d.exitRsi);
 
+  const erpBody = body.entryRsiPath ?? {};
+  const entryRsiPath = {
+    enabled: erpBody.enabled ?? d.entryRsiPath.enabled,
+  };
+
+  const emBody = body.entryMa ?? {};
+  const entryMa = {
+    enabled:      emBody.enabled ?? d.entryMa.enabled,
+    period:       Number(emBody.period ?? d.entryMa.period),
+    interval:     emBody.interval ?? d.entryMa.interval,
+    trigger:      emBody.trigger ?? d.entryMa.trigger,
+    tolerancePct: Number(emBody.tolerancePct ?? d.entryMa.tolerancePct),
+    requireRsi:   emBody.requireRsi ?? d.entryMa.requireRsi,
+    entryRsi:     normalizeRsi(emBody.entryRsi, d.entryMa.entryRsi),
+  };
+
   const rawMa = body.maConditions ?? body.maFilters ?? d.maConditions;
   const maConditions = (rawMa ?? []).map(normalizeMaCondition).filter(m => m.mode !== 'off' && m.mode !== 'disabled');
 
@@ -126,8 +162,19 @@ function normalizeTradeConfig(body = {}) {
   };
 
   const slBody = body.stopLoss ?? {};
+  const legacyOff = slBody.enabled === false
+    && slBody.fixedEnabled == null
+    && slBody.adaptiveEnabled == null;
+  const fixedEnabled = legacyOff
+    ? false
+    : (slBody.fixedEnabled ?? slBody.enabled ?? d.stopLoss.fixedEnabled ?? true);
+  const adaptiveEnabled = legacyOff
+    ? false
+    : (slBody.adaptiveEnabled ?? d.stopLoss.adaptiveEnabled ?? true);
   const stopLoss = {
-    enabled:  slBody.enabled ?? d.stopLoss.enabled,
+    enabled: fixedEnabled || adaptiveEnabled,
+    fixedEnabled,
+    adaptiveEnabled,
     period:   Number(slBody.period ?? d.stopLoss.period),
     interval: slBody.interval ?? d.stopLoss.interval,
   };
@@ -159,7 +206,7 @@ function normalizeTradeConfig(body = {}) {
 
   const label = body.label ?? `AMAP ${entryRsi.interval} RSI${entryRsi.operator}${entryRsi.value}`;
 
-  return { label, entryRsi, exitRsi, maConditions, extension, stopLoss, execution, polling, adaptiveOpts, volume };
+  return { label, entryRsi, exitRsi, entryRsiPath, entryMa, maConditions, extension, stopLoss, execution, polling, adaptiveOpts, volume };
 }
 
 /** trade_config normalizado → formato interno do motor (maFilters, campos flat legados) */
@@ -169,6 +216,8 @@ function toEngineConfig(normalized) {
     label: n.label,
     entryRsi:  n.entryRsi,
     exitRsi:   n.exitRsi,
+    entryRsiPath: n.entryRsiPath,
+    entryMa:   n.entryMa,
     maFilters: n.maConditions.map(m => ({
       period:      m.period,
       interval:    m.interval,
@@ -187,9 +236,11 @@ function toEngineConfig(normalized) {
       confirmLogic:  n.extension.confirmLogic,
     },
     stopLoss: {
-      enabled:  n.stopLoss.enabled,
-      period:   n.stopLoss.period,
-      interval: n.stopLoss.interval,
+      enabled:         n.stopLoss.enabled,
+      fixedEnabled:    n.stopLoss.fixedEnabled,
+      adaptiveEnabled: n.stopLoss.adaptiveEnabled,
+      period:          n.stopLoss.period,
+      interval:        n.stopLoss.interval,
     },
     adaptiveOpts: n.adaptiveOpts,
     minVolumeUsdt:  n.volume.minVolumeUsdt,
@@ -215,6 +266,8 @@ function toFormState(config) {
   return {
     entryRsi:     n.entryRsi,
     exitRsi:      n.exitRsi,
+    entryRsiPath: n.entryRsiPath,
+    entryMa:      n.entryMa,
     maConditions: n.maConditions.map((m, i) => ({ ...m, id: i + 1 })),
     extension:    n.extension,
     stopLoss:     n.stopLoss,
@@ -232,6 +285,8 @@ function flatConfigToBody(tc) {
     label:        tc.label,
     entryRsi:     tc.entryRsi,
     exitRsi:      tc.exitRsi,
+    entryRsiPath: tc.entryRsiPath,
+    entryMa:      tc.entryMa,
     maConditions: (tc.maFilters ?? []).map(f => ({
       period: f.period, interval: f.interval, mode: f.mode, fixedDipPct: f.fixedDipPct,
     })),

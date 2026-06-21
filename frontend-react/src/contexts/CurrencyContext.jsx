@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useCallback, useEffect } from 'react';
 import { addFavorite, addTradeFavorite, removeFavorite, fetchActiveTrades, ignoreActiveTrade,
   fetchMultitradeFavorites, addMultitradeFavorite, updateMultitradeFavorite, removeMultitradeFavorite } from '../services/api';
+import { CHART_VIEW } from '../utils/chartView';
 
 // Stablecoins que não queremos capturar
 const STABLE_CURRENCIES = new Set([
@@ -29,8 +30,14 @@ export function CurrencyProvider({ children }) {
   // Intervalo ativo no gráfico — fonte de verdade compartilhada entre chart e tabela
   const [chartInterval, setChartInterval] = useState('30m');
 
-  // Zoom do gráfico para um período específico: { startDate, endDate } ISO strings
+  // Zoom do gráfico para um período específico: { startDate, endDate, source? } ISO strings
   const [chartZoom, setChartZoom] = useState(null);
+
+  /** Quem controla o chart: default | table | statistics | multitrade — evita resets concorrentes */
+  const [chartViewSource, setChartViewSource] = useState(CHART_VIEW.DEFAULT);
+
+  // Marcadores simulados MT backtest: [{ time, side: 'buy'|'sell', price? }]
+  const [chartTradeMarkers, setChartTradeMarkers] = useState([]);
 
   // Trades de compra do usuário para a moeda selecionada (favorito Trade Now)
   // Array de { time: number (ms), price: string, qty: string, isBuyer: boolean }
@@ -128,6 +135,33 @@ export function CurrencyProvider({ children }) {
     } catch (err) {
       console.warn('[CurrencyContext] removeMultitradeEntry:', err.message);
     }
+  }, []);
+
+  /** Atualização atômica do chart pela aba Multi-Trade (backtest row click) */
+  const applyMultitradeChartView = useCallback(({
+    chartData, symbol, interval, exchangeSource, markers, entryMs, exitMs,
+  }) => {
+    setChartViewSource(CHART_VIEW.MULTITRADE);
+    setChartInterval(interval);
+    setChartTradeMarkers(markers);
+    setSelectedChart({
+      ...chartData,
+      interval,
+      symbol,
+      source: exchangeSource ?? null,
+      tradeMarkers: markers,
+    });
+    setChartZoom({
+      source: CHART_VIEW.MULTITRADE,
+      startDate: new Date(entryMs).toISOString(),
+      endDate:   new Date(exitMs).toISOString(),
+    });
+  }, []);
+
+  const clearMultitradeChartView = useCallback(() => {
+    setChartViewSource(prev => (prev === CHART_VIEW.MULTITRADE ? CHART_VIEW.DEFAULT : prev));
+    setChartTradeMarkers([]);
+    setChartZoom(prev => (prev?.source === CHART_VIEW.MULTITRADE ? null : prev));
   }, []);
 
   const dismissActiveTrade = useCallback(async (symbol) => {
@@ -267,6 +301,12 @@ export function CurrencyProvider({ children }) {
         setChartInterval,
         chartZoom,
         setChartZoom,
+        chartViewSource,
+        setChartViewSource,
+        applyMultitradeChartView,
+        clearMultitradeChartView,
+        chartTradeMarkers,
+        setChartTradeMarkers,
         tradePurchases,
         setTradePurchases,
         allTrades,

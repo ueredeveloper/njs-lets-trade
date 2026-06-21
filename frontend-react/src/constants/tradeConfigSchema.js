@@ -2,6 +2,16 @@
 export const TRADE_CONFIG_DEFAULTS = {
   entryRsi:  { interval: '15m', period: 14, operator: '<', value: 30 },
   exitRsi:   { interval: '15m', period: 14, operator: '>', value: 70 },
+  entryRsiPath: { enabled: true },
+  entryMa: {
+    enabled: false,
+    period: 50,
+    interval: '1h',
+    trigger: 'touch',
+    tolerancePct: 0.5,
+    requireRsi: false,
+    entryRsi: { interval: '15m', period: 14, operator: '<', value: 40 },
+  },
   maConditions: [
     { period: 50, interval: '4h', mode: 'strict_above' },
     { period: 50, interval: '1h', mode: 'adaptive' },
@@ -11,7 +21,13 @@ export const TRADE_CONFIG_DEFAULTS = {
     threeInterval: '1h', fourInterval: '1h',
     threeCandles: true, fourCandles: true, confirmLogic: 'any',
   },
-  stopLoss: { enabled: true, period: 50, interval: '4h' },
+  stopLoss: {
+    enabled: true,
+    fixedEnabled: true,
+    adaptiveEnabled: true,
+    period: 50,
+    interval: '4h',
+  },
   execution: {
     immediateEntry: false, entryDiscount: 0.001,
     pendingTimeoutMs: 30 * 60_000, pendingCancelPct: 0.002,
@@ -26,7 +42,19 @@ export const RSI_INTERVALS = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', 
 export const MA_INTERVALS  = ['15m', '30m', '1h', '2h', '4h', '8h', '1d'];
 export const MA_PERIODS    = [20, 50, 100, 200];
 export const RSI_PERIODS   = [7, 14, 21];
-export const MA_MODES      = [
+export const RSI_OPERATORS = [
+  { id: '<',  label: '<' },
+  { id: '<=', label: '≤' },
+  { id: '>',  label: '>' },
+  { id: '>=', label: '≥' },
+];
+
+export const ENTRY_MA_TRIGGERS = [
+  { id: 'touch',    label: 'Toque na MA' },
+  { id: 'cross_up', label: 'Cruzamento ↑' },
+];
+
+export const MA_MODES = [
   { id: 'strict_above', label: 'fixo (acima MA)' },
   { id: 'adaptive',     label: 'adapt. (dip histórico)' },
 ];
@@ -63,12 +91,24 @@ export const POLL_OPTIONS = [
 export function formStateFromEntry(entry) {
   const d = TRADE_CONFIG_DEFAULTS;
   if (!entry) {
-    return { ...d, maConditions: d.maConditions.map((m, i) => ({ ...m, id: i + 1 })) };
+    return {
+      ...d,
+      entryRsiPath: { ...d.entryRsiPath },
+      entryMa: { ...d.entryMa, entryRsi: { ...d.entryMa.entryRsi } },
+      maConditions: d.maConditions.map((m, i) => ({ ...m, id: i + 1 })),
+    };
   }
+  const src = entry;
   return {
-    entryRsi:     { ...d.entryRsi,  ...entry.entryRsi },
-    exitRsi:      { ...d.exitRsi, ...entry.exitRsi, value: Number(entry.exitRsi?.value ?? d.exitRsi.value) },
-    maConditions: (entry.maConditions ?? d.maConditions).map((m, i) => ({
+    entryRsi:     { ...d.entryRsi,  ...src.entryRsi, operator: src.entryRsi?.operator ?? d.entryRsi.operator },
+    exitRsi:      { ...d.exitRsi, ...src.exitRsi, value: Number(src.exitRsi?.value ?? d.exitRsi.value) },
+    entryRsiPath: { ...d.entryRsiPath, ...src.entryRsiPath },
+    entryMa: {
+      ...d.entryMa,
+      ...src.entryMa,
+      entryRsi: { ...d.entryMa.entryRsi, ...src.entryMa?.entryRsi },
+    },
+    maConditions: (src.maConditions ?? d.maConditions).map((m, i) => ({
       id: i + 1,
       period: m.period ?? 50,
       interval: m.interval ?? '1h',
@@ -77,19 +117,26 @@ export function formStateFromEntry(entry) {
     })),
     extension:    {
       ...d.extension,
-      ...entry.extension,
-      abovePct: Number(entry.extension?.abovePct ?? d.extension.abovePct),
+      ...src.extension,
+      abovePct: Number(src.extension?.abovePct ?? d.extension.abovePct),
     },
-    stopLoss:     { ...d.stopLoss,  ...entry.stopLoss },
+    stopLoss:     {
+      ...d.stopLoss,
+      ...src.stopLoss,
+      fixedEnabled: src.stopLoss?.fixedEnabled
+        ?? (src.stopLoss?.enabled === false ? false : true),
+      adaptiveEnabled: src.stopLoss?.adaptiveEnabled
+        ?? (src.stopLoss?.enabled === false ? false : d.stopLoss.adaptiveEnabled),
+    },
     execution:    {
       ...d.execution,
-      ...entry.execution,
-      entryDiscount: Number(entry.execution?.entryDiscount ?? d.execution.entryDiscount),
-      pendingCancelOnExitRsi: entry.execution?.pendingCancelOnExitRsi ?? d.execution.pendingCancelOnExitRsi,
+      ...src.execution,
+      entryDiscount: Number(src.execution?.entryDiscount ?? d.execution.entryDiscount),
+      pendingCancelOnExitRsi: src.execution?.pendingCancelOnExitRsi ?? d.execution.pendingCancelOnExitRsi,
     },
-    polling:      { ...d.polling,   ...entry.polling },
-    adaptiveOpts: { ...d.adaptiveOpts, ...entry.adaptiveOpts },
-    volume:       { ...d.volume,    ...entry.volume },
+    polling:      { ...d.polling,   ...src.polling },
+    adaptiveOpts: { ...d.adaptiveOpts, ...src.adaptiveOpts },
+    volume:       { ...d.volume,    ...src.volume },
   };
 }
 
@@ -100,12 +147,20 @@ export function formStateToPayload(form, { symbol, exchange, capital }) {
     capital: Number(capital),
     entryRsi:  form.entryRsi,
     exitRsi:   form.exitRsi,
+    entryRsiPath: form.entryRsiPath,
+    entryMa: {
+      ...form.entryMa,
+      entryRsi: { ...form.entryMa.entryRsi, operator: form.entryMa.entryRsi.operator ?? '<' },
+    },
     maConditions: form.maConditions.map(({ period, interval, mode, fixedDipPct }) => ({
       period, interval, mode,
       ...(fixedDipPct !== '' && fixedDipPct != null ? { fixedDipPct: Number(fixedDipPct) } : {}),
     })),
     extension:    form.extension,
-    stopLoss:     form.stopLoss,
+    stopLoss: {
+      ...form.stopLoss,
+      enabled: !!(form.stopLoss.fixedEnabled || form.stopLoss.adaptiveEnabled),
+    },
     execution:    form.execution,
     polling:      form.polling,
     adaptiveOpts: form.adaptiveOpts,

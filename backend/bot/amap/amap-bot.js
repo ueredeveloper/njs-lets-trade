@@ -29,11 +29,13 @@ const { toGateSymbol } = require('../../utils/toGateSymbol');
 const { sendWhatsApp } = require('../whatsapp');
 const {
   buildTradeConfig, getRequiredSpecs, computeAdaptiveDips, buildMaSnapshot, buildAdaptiveReport,
-  evaluateEntry, diagnoseEntry, evaluateExit, getStopLossMa, checkRsi, checkMinVolume, needsMarketSell, maKey,
+  evaluateEntry, diagnoseEntry, evaluateExit, getStopLossMa, getAdaptiveStopFloors, isStopLossExit, checkRsi, checkMinVolume, needsMarketSell, maKey,
+  resolveEntrySignal, entryRsiPathActive, entryMaPathActive, getEntryScanInterval,
 } = require('./strategyEngine');
 const { fmtVolumeUsdt } = require('../volume24h');
 const { configFromRow, resolveStrategy, hasAdaptiveFilters } = require('./tradeConfigSchema');
 const { analyzeExtensionHistory, printExtensionReport } = require('./extensionBacktest');
+const { runAmapBacktest, formatStopLossLabel, formatEntryPathsLabel, ENTRY_OUTCOME_LABELS } = require('./amapBacktest');
 
 const EXCHANGES    = new Set(['binance', 'gate']);
 const MA_INTERVALS = new Set(['15m', '30m', '1h', '2h', '4h', '8h', '1d']);
@@ -162,30 +164,6 @@ function fmtDate(ts) {
   return new Date(ts).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
 }
 
-function backtestPeriodLabel(candles) {
-  if (!candles?.length) return null;
-  const from  = candles[0].openTime;
-  const to    = candles[candles.length - 1].openTime;
-  const days  = (to - from) / 86_400_000;
-  const daysLbl = days >= 1 ? `~${Math.round(days)} dias` : '<1 dia';
-  return { from, to, daysLbl, count: candles.length };
-}
-
-const ENTRY_OUTCOME_LABELS = {
-  MA_BLOCKED:            'bloqueado — abaixo MA fixo',
-  MA_ADAPTIVE_BLOCKED:   'bloqueado — abaixo piso adaptativo',
-  MA_NO_DATA:            'bloqueado — sem dados MA',
-  THREE_CANDLES_BLOCKED: 'bloqueado — extensão sem 3/4 velas',
-  PENDING:               'pendente (aguardando desconto)',
-  PENDING_OPEN:          'pendente ao fim do período',
-  BOUGHT:                'comprado',
-  POSITION_OPEN:         'comprado — posição aberta',
-  STOP_LOSS_MA:          'comprado — stop MA',
-  CANCELLED_EXIT_RSI:    'cancelado — RSI saída',
-  CANCELLED_RECOVERY:    'cancelado — preço subiu',
-  CANCELLED_TIMEOUT:     'cancelado — timeout',
-};
-
 function padCol(str, n) {
   const s = String(str);
   return s.length >= n ? s.slice(0, n) : s.padEnd(n);
@@ -198,14 +176,32 @@ function formatEntryOutcome(outcome, pnlPct) {
   return `${base} (${sign}${pnlPct.toFixed(2)}%)`;
 }
 
-function reconcileEntryLog(entryLog, signals) {
-  const byTime = new Map(entryLog.map(e => [e.time, e]));
-  for (const sig of signals) {
-    const row = byTime.get(sig.entryTime);
-    if (!row) continue;
-    row.outcome = sig.result;
-    if (sig.pnlPct != null) row.pnlPct = sig.pnlPct;
+function printBacktestReport(result, config) {
+  const { summary, period, candlesByInterval } = result;
+  const pSign = summary.totalPnlUsdt >= 0 ? '+' : '';
+
+  console.log(`\n${'─'.repeat(68)}`);
+  console.log(`📊 Backtest AMAP: ${result.symbol} [${result.exchange}]  —  ${result.label}`);
+  console.log(`   Entrada: ${formatEntryPathsLabel(config)}`);
+  console.log(`   Saída  : RSI(${config.exitRsi.interval})${config.exitRsi.operator}${config.exitRsi.value}`);
+  console.log(`   Stop   : ${formatStopLossLabel(config)}`);
+  console.log(`   Vol mín: ${fmtVolumeUsdt(config.minVolumeUsdt ?? 1_000_000)} 24h (não simulado no histórico)`);
+  console.log(`   Candle de scan: ${getEntryScanInterval(config)}`);
+  if (period) {
+    console.log(`   Análise: ${period.daysLbl}  (${period.count} candles, ${fmtDate(period.from)} → ${fmtDate(period.to)})`);
   }
+  for (const [iv, count] of Object.entries(candlesByInterval ?? {})) {
+    console.log(`   ${iv}: ${count} candles`);
+  }
+
+  console.log(`\n   Capital  : $${summary.startCapital.toFixed(2)} → $${summary.endCapital.toFixed(2)}  (${pSign}${summary.totalPnlPct}%)`);
+  console.log(`   Trades   : ${summary.trades}  |  Wins: ${summary.wins}  Losses: ${summary.losses}  |  Win rate: ${summary.winRate ?? '—'}%`);
+  console.log(`   PnL total: ${pSign}$${summary.totalPnlUsdt.toFixed(2)}`);
+  if (summary.blockedCount) console.log(`   Bloqueados (MA/extensão): ${summary.blockedCount} sinais`);
+  if (summary.stopMaCount) console.log(`   Stop Loss MA: ${summary.stopMaCount} saída(s)`);
+  if (summary.stopAdaptCount) console.log(`   Stop Loss adaptativo: ${summary.stopAdaptCount} saída(s)`);
+
+  printEntrySignalHistory(result.entryLog, config);
 }
 
 function printEntrySignalHistory(entryLog, config) {
@@ -229,7 +225,8 @@ function printEntrySignalHistory(entryLog, config) {
   console.log(divider);
 
   for (const e of entryLog) {
-    let row = `  ${padCol(fmtDate(e.time), 18)} ${padCol(e.rsi.toFixed(1), 5)} ${padCol(fmtP(e.price), 10)}`;
+    const ts = e.time ?? (e.timeISO ? new Date(e.timeISO).getTime() : Date.now());
+    let row = `  ${padCol(fmtDate(ts), 18)} ${padCol(e.rsi.toFixed(1), 5)} ${padCol(fmtP(e.price), 10)}`;
     for (const label of maLabels) {
       const m = e.maChecks.find(x => x.label === label);
       row += ` ${padCol(m ? (m.ok ? 'sim' : 'não') : '—', 12)}`;
@@ -667,170 +664,12 @@ function maSnapAt(cMap, config, openTime) {
 }
 
 async function backtest(symbol, config, exchange = 'binance', capital = 100) {
-  const adapter = buildAdapter(exchange, symbol);
-  const specs   = getRequiredSpecs(config);
-  const LIMIT   = 1000;
-
-  console.log(`\n${'─'.repeat(68)}`);
-  console.log(`📊 Backtest AMAP: ${symbol} [${adapter.name}]  —  ${config.label ?? 'flex'}`);
-  console.log(`   Entrada: RSI(${config.entryRsi.interval})${config.entryRsi.operator}${config.entryRsi.value}`);
-  console.log(`   Saída  : RSI(${config.exitRsi.interval})${config.exitRsi.operator}${config.exitRsi.value}`);
-  console.log(`   Stop   : ${config.stopLoss?.enabled === false ? 'desligado' : `MA${config.stopLoss.period}(${config.stopLoss.interval})`}`);
-  console.log(`   Vol mín: ${fmtVolumeUsdt(config.minVolumeUsdt ?? 1_000_000)} 24h (não simulado no histórico)`);
-
-  const cMap = {};
-  for (const { interval, limit } of specs) {
-    const local = loadLocalCandles(symbol, interval);
-    cMap[interval] = local ?? await adapter.fetchCandles(Math.max(limit, LIMIT), interval);
+  const result = await runAmapBacktest({ symbol, config, exchange, capital });
+  if (result.error) {
+    console.error(`   ❌ ${result.error}`);
+    return;
   }
-
-  const entryCandles = cMap[config.entryRsi.interval];
-  const exitCandles  = cMap[config.exitRsi.interval];
-  if (!entryCandles?.length) { console.error('   ❌ Sem candles de entrada'); return; }
-
-  console.log(`   Candle de entrada: ${config.entryRsi.interval}`);
-  const period = backtestPeriodLabel(entryCandles);
-  if (period) {
-    console.log(`   Análise: ${period.daysLbl}  (${period.count} candles, ${fmtDate(period.from)} → ${fmtDate(period.to)})`);
-  }
-  for (const { interval } of specs) {
-    console.log(`   ${interval}: ${cMap[interval].length} candles`);
-  }
-
-  const entrySeries = computeRsiSeries(entryCandles, config.entryRsi.period);
-  const exitSeries  = config.entryRsi.interval === config.exitRsi.interval && config.entryRsi.period === config.exitRsi.period
-    ? entrySeries
-    : computeRsiSeries(exitCandles, config.exitRsi.period);
-
-  const adaptiveDips = computeAdaptiveDips(cMap, config);
-
-  let phase = 'WATCHING';
-  let buyPrice = null, buyQty = null, buyUsdt = null;
-  let triggerPrice = null, limitPrice = null, pendingSince = null;
-  const trades = [], signals = [];
-  const entryLog = [];
-  const startCapital = capital;
-  let blockedCount = 0;
-  let pendingSignal = null;
-  let openSignalIdx = null;
-
-  const botOpts = {
-    entryDiscount:    config.entryDiscount    ?? 0.001,
-    immediateEntry:   config.immediateEntry   ?? false,
-    pendingTimeoutMs: config.pendingTimeoutMs ?? 30 * 60_000,
-    pendingCancelPct: config.pendingCancelPct ?? 0.002,
-    pendingCancelOnExitRsi: config.pendingCancelOnExitRsi ?? true,
-  };
-
-  for (const { openTime, close, rsi: entryRsi } of entrySeries) {
-    const exitRsi  = exitRsiAt(exitSeries, openTime);
-    const maSnap   = maSnapAt(cMap, config, openTime);
-    const stopLossMa = getStopLossMa(maSnap, config);
-
-    if (phase === 'WATCHING') {
-      if (!checkRsi(entryRsi, config.entryRsi)) continue;
-
-      const diag = diagnoseEntry({
-        entryRsi, close, entryTimeMs: openTime, config, maSnap, adaptiveDips, cMap,
-      });
-      const entryCheck = diag.allowed
-        ? { allowed: true, reason: null }
-        : { allowed: false, reason: diag.reason };
-
-      entryLog.push({
-        time: openTime,
-        price: close,
-        rsi: entryRsi,
-        maChecks: diag.maChecks,
-        extension: diag.extension,
-        outcome: entryCheck.allowed ? (botOpts.immediateEntry ? 'BOUGHT' : 'PENDING') : entryCheck.reason,
-      });
-
-      if (!entryCheck.allowed) {
-        blockedCount++;
-        signals.push({ entryTime: openTime, entryRsi, entryPrice: close, result: entryCheck.reason });
-        continue;
-      }
-
-      if (botOpts.immediateEntry) {
-        openSignalIdx = signals.length;
-        signals.push({ entryTime: openTime, entryRsi, entryPrice: close, buyTime: openTime, buyPrice: close, result: 'BOUGHT' });
-        buyPrice = close; buyQty = capital / close; buyUsdt = capital;
-        phase = 'BOUGHT';
-        trades.push({ type: 'BUY', time: openTime, price: close, entryRsi });
-      } else {
-        triggerPrice = close;
-        limitPrice   = parseFloat((close * (1 - botOpts.entryDiscount)).toFixed(8));
-        pendingSince = openTime;
-        pendingSignal = { entryTime: openTime, entryRsi, entryPrice: close };
-        phase = 'PENDING';
-      }
-
-    } else if (phase === 'PENDING') {
-      const elapsedMs  = openTime - pendingSince;
-      const cancelLine = triggerPrice * (1 + botOpts.pendingCancelPct);
-      const exitRsiHit = botOpts.pendingCancelOnExitRsi !== false && checkRsi(exitRsi, config.exitRsi);
-      if (close > cancelLine || elapsedMs > botOpts.pendingTimeoutMs || exitRsiHit) {
-        const reason = exitRsiHit ? 'CANCELLED_EXIT_RSI'
-          : close > cancelLine ? 'CANCELLED_RECOVERY' : 'CANCELLED_TIMEOUT';
-        if (pendingSignal) { signals.push({ ...pendingSignal, result: reason }); pendingSignal = null; }
-        phase = 'WATCHING';
-        triggerPrice = limitPrice = pendingSince = null;
-      } else if (close <= limitPrice) {
-        openSignalIdx = signals.length;
-        signals.push({ ...pendingSignal, buyTime: openTime, buyPrice: close, result: 'BOUGHT' });
-        pendingSignal = null;
-        buyPrice = close; buyQty = capital / close; buyUsdt = capital;
-        phase = 'BOUGHT';
-        trades.push({ type: 'BUY', time: openTime, price: close, entryRsi });
-        triggerPrice = limitPrice = pendingSince = null;
-      }
-
-    } else if (phase === 'BOUGHT') {
-      const exitEval = evaluateExit({ close, exitRsi, stopLossMa, config });
-      if (exitEval.exit) {
-        const usdtOut = buyQty * close;
-        const pnl     = usdtOut - buyUsdt;
-        capital += pnl;
-        if (openSignalIdx !== null) {
-          signals[openSignalIdx].exitTime  = openTime;
-          signals[openSignalIdx].exitPrice = close;
-          signals[openSignalIdx].exitRsi   = exitRsi;
-          signals[openSignalIdx].pnlPct    = (pnl / buyUsdt) * 100;
-          if (exitEval.reason === 'stop_loss_ma') signals[openSignalIdx].result = 'STOP_LOSS_MA';
-          openSignalIdx = null;
-        }
-        trades.push({
-          type: 'SELL', time: openTime, price: close, exitRsi,
-          stopLoss: exitEval.reason === 'stop_loss_ma',
-          pnlUsdt: pnl, pnlPct: (pnl / buyUsdt) * 100, capitalAfter: capital,
-        });
-        phase = 'WATCHING';
-        buyPrice = buyQty = buyUsdt = null;
-      }
-    }
-  }
-
-  if (pendingSignal) signals.push({ ...pendingSignal, result: 'PENDING_OPEN' });
-  if (phase === 'BOUGHT' && openSignalIdx !== null) signals[openSignalIdx].result = 'POSITION_OPEN';
-
-  const sells    = trades.filter(t => t.type === 'SELL');
-  const wins     = sells.filter(t => t.pnlUsdt >= 0).length;
-  const totalPnl = sells.reduce((s, t) => s + t.pnlUsdt, 0);
-  const winRate  = sells.length ? ((wins / sells.length) * 100).toFixed(1) : '—';
-  const totalPct = ((capital / startCapital - 1) * 100).toFixed(2);
-  const pSign    = totalPnl >= 0 ? '+' : '';
-
-  console.log(`\n   Capital  : $${startCapital.toFixed(2)} → $${capital.toFixed(2)}  (${pSign}${totalPct}%)`);
-  console.log(`   Trades   : ${sells.length}  |  Wins: ${wins}  Losses: ${sells.length - wins}  |  Win rate: ${winRate}%`);
-  console.log(`   PnL total: ${pSign}$${totalPnl.toFixed(2)}`);
-  if (blockedCount) console.log(`   Bloqueados (MA/extensão): ${blockedCount} sinais`);
-  if (sells.filter(t => t.stopLoss).length) {
-    console.log(`   Stop Loss (MA): ${sells.filter(t => t.stopLoss).length} saída(s)`);
-  }
-
-  reconcileEntryLog(entryLog, signals);
-  printEntrySignalHistory(entryLog, config);
+  printBacktestReport(result, config);
 }
 
 // ── Tick (loop ao vivo) ───────────────────────────────────────────────────────
@@ -839,7 +678,7 @@ async function tick(rowId, adapter, strategy, log, prevExitRsi, session) {
   const specs = getRequiredSpecs(config);
   const cMap  = await fetchCandleMap(adapter, specs);
 
-  const entryIv  = config.entryRsi.interval;
+  const entryIv  = getEntryScanInterval(config);
   const exitIv   = config.exitRsi.interval;
   const entryCandles = cMap[entryIv];
   const exitCandles  = cMap[exitIv];
@@ -849,14 +688,52 @@ async function tick(rowId, adapter, strategy, log, prevExitRsi, session) {
 
   const entryCloses = entryCandles.map(c => c.close);
   const exitCloses  = exitCandles.map(c => c.close);
-  const entryRsiArr = ti.RSI.calculate({ values: entryCloses, period: config.entryRsi.period });
   const exitRsiArr  = ti.RSI.calculate({ values: exitCloses,  period: config.exitRsi.period });
-  const entryRsi    = entryRsiArr[entryRsiArr.length - 1];
   const exitRsi     = exitRsiArr[exitRsiArr.length - 1];
+
+  let entryRsi = null;
+  if (entryRsiPathActive(config)) {
+    const rsiIv = config.entryRsi.interval;
+    const rsiCandles = rsiIv === entryIv ? entryCandles : (cMap[rsiIv] ?? entryCandles);
+    const rsiCloses = rsiCandles.map(c => c.close);
+    const entryRsiArr = ti.RSI.calculate({ values: rsiCloses, period: config.entryRsi.period });
+    entryRsi = entryRsiArr[entryRsiArr.length - 1];
+  } else if (entryMaPathActive(config) && config.entryMa.requireRsi) {
+    const mr = config.entryMa.entryRsi;
+    const mrCandles = cMap[mr.interval] ?? entryCandles;
+    const mrArr = ti.RSI.calculate({ values: mrCandles.map(c => c.close), period: mr.period });
+    entryRsi = mrArr[mrArr.length - 1];
+  }
+
   const close       = entryCloses[entryCloses.length - 1];
   const candleMs    = entryCandles[entryCandles.length - 1]?.openTime ?? null;
 
-  if (entryRsi == null || exitRsi == null) return { entryRsi, exitRsi: prevExitRsi };
+  const entryLen = entryCandles.length;
+  const rsiCtx = {
+    close,
+    low: entryCandles[entryLen - 1]?.low ?? close,
+    prevClose: entryLen >= 2 ? entryCandles[entryLen - 2].close : null,
+  };
+  const maIv  = entryMaPathActive(config) ? config.entryMa.interval : entryIv;
+  const maCandles = cMap[maIv] ?? entryCandles;
+  const maLen = maCandles.length;
+  const maCtx = {
+    close: maCandles[maLen - 1]?.close ?? close,
+    low: maCandles[maLen - 1]?.low ?? rsiCtx.low,
+    prevClose: maLen >= 2 ? maCandles[maLen - 2].close : null,
+  };
+
+  let maPathRsi = entryRsi;
+  if (entryMaPathActive(config) && config.entryMa.requireRsi) {
+    const mr = config.entryMa.entryRsi;
+    const mrCandles = cMap[mr.interval] ?? entryCandles;
+    const mrCloses = mrCandles.map(c => c.close);
+    const mrArr = ti.RSI.calculate({ values: mrCloses, period: mr.period });
+    maPathRsi = mrArr[mrArr.length - 1];
+  }
+
+  if (exitRsi == null) return { entryRsi, exitRsi: prevExitRsi };
+  if (entryRsiPathActive(config) && entryRsi == null) return { entryRsi, exitRsi: prevExitRsi };
 
   const adaptiveDips = session.adaptiveDips ?? computeAdaptiveDips(cMap, config);
   const maSnap       = buildMaSnapshot(cMap, config);
@@ -867,23 +744,39 @@ async function tick(rowId, adapter, strategy, log, prevExitRsi, session) {
 
   const { phase, capital, symbol } = state;
   const exitColor = exitRsi >= strategy.fastRsiThreshold ? Y : '';
-  const rsiEntryHit = checkRsi(entryRsi, config.entryRsi);
+  const rsiEntryHit = entryRsiPathActive(config) && checkRsi(entryRsi, config.entryRsi);
+  const entryDiag = diagnoseEntry({
+    entryRsi, maPathRsi, rsiCtx, maCtx,
+    close, low: rsiCtx.low, prevClose: rsiCtx.prevClose,
+    entryTimeMs: Date.now(), config, maSnap, adaptiveDips, cMap,
+  });
+  const hadEntrySignal = entryDiag.paths.some(p => p.signal);
+  const entryResolved = resolveEntrySignal({
+    entryRsi, maPathRsi, rsiCtx, maCtx,
+    close, low: rsiCtx.low, prevClose: rsiCtx.prevClose,
+    entryTimeMs: Date.now(), config, maSnap, adaptiveDips, cMap,
+  });
 
   if (phase === 'WATCHING') {
+    const rsiLabel = entryRsiPathActive(config) && entryRsi != null
+      ? `${rsiEntryHit ? G : ''}RSI(${config.entryRsi.interval})=${entryRsi.toFixed(1)}${rsiEntryHit ? X : ''}  `
+      : '';
+    const maLabel = entryMaPathActive(config)
+      ? `MA${config.entryMa.period}(${config.entryMa.interval})  `
+      : '';
     log(
-      `${rsiEntryHit ? G : ''}RSI(${entryIv})=${entryRsi.toFixed(1)}${rsiEntryHit ? X : ''}` +
-      `  ${exitColor}RSI(${exitIv})=${exitRsi.toFixed(1)}${exitColor ? X : ''}` +
+      `${rsiLabel}${maLabel}` +
+      `${exitColor}RSI(${exitIv})=${exitRsi.toFixed(1)}${exitColor ? X : ''}` +
       `  $${fmtP(close)}  capital=$${parseFloat(capital).toFixed(2)}  [WATCHING|AMAP]`,
     );
 
-    if (rsiEntryHit) {
+    if (hadEntrySignal) {
       const sigBase = () => entrySignalFields(state, rowId, {
         price: close, entryRsi, exitRsi, ma50: null, ma2: null, candleOpenTime: candleMs,
+        entry_kind: entryResolved.entryKind ?? entryDiag.entryKind,
       });
       const newCandle = session.entryCandleMs !== candleMs;
-      const entryCheck = evaluateEntry({
-        entryRsi, close, entryTimeMs: Date.now(), config, maSnap, adaptiveDips, cMap,
-      });
+      const entryCheck = entryResolved;
 
       if (!entryCheck.allowed) {
         const reasons = {
@@ -892,6 +785,7 @@ async function tick(rowId, adapter, strategy, log, prevExitRsi, session) {
           THREE_CANDLES_BLOCKED: 'extensão acima da MA sem confirmação 3/4 candles',
           MA_NO_DATA:            'sem dados de MA',
           RSI_NOT_MET:           'RSI não atende',
+          NO_ENTRY_SIGNAL:       'sem sinal de entrada (RSI/MA)',
         };
         log(`${Y}⚠️  Entrada bloqueada: ${reasons[entryCheck.reason] ?? entryCheck.reason}${X}`);
         if (newCandle) {
@@ -993,16 +887,22 @@ async function tick(rowId, adapter, strategy, log, prevExitRsi, session) {
 
   if (phase === 'BOUGHT') {
     const buyPrice  = parseFloat(state.buy_price);
-    const exitEval  = evaluateExit({ close, exitRsi, stopLossMa, config });
+    const exitEval  = evaluateExit({ close, exitRsi, stopLossMa, maSnap, adaptiveDips, config });
     const pnlPct    = ((close - buyPrice) / buyPrice * 100).toFixed(2);
+
+    const adaptiveFloors = getAdaptiveStopFloors(maSnap, adaptiveDips, config);
+    const stopInfo = adaptiveFloors.length
+      ? `  stops: MA${config.stopLoss.period}/${config.stopLoss.interval}=$${fmtP(stopLossMa)}`
+        + adaptiveFloors.map(f => ` piso MA${f.period}/${f.interval}=$${fmtP(f.floor)} (−${f.dipPct.toFixed(1)}%)`).join('')
+      : '';
 
     log(
       `RSI(${entryIv})=${entryRsi.toFixed(1)}  RSI(${exitIv})=${exitRsi.toFixed(1)}` +
-      `  $${fmtP(close)}  PnL=${pnlPct}%  [BOUGHT|AMAP]`,
+      `  $${fmtP(close)}  PnL=${pnlPct}%${stopInfo}  [BOUGHT|AMAP]`,
     );
 
     if (exitEval.exit) {
-      const stopLossHit = exitEval.reason === 'stop_loss_ma';
+      const stopLossHit = isStopLossExit(exitEval.reason);
       let result;
       try { result = await executeMarketSell(adapter, config, session, parseFloat(state.buy_qty), log); }
       catch (err) { log(`❌ Erro na venda: ${err.message}`); return { entryRsi, exitRsi, phase: 'BOUGHT' }; }
@@ -1018,7 +918,7 @@ async function tick(rowId, adapter, strategy, log, prevExitRsi, session) {
         symbol, exchange: state.exchange ?? 'binance', strategy_id: state.strategy_id ?? 'flex',
         state_id: rowId, entry_signal_id: session.activeEntrySignalId ?? null,
         signal_type: stopLossHit ? 'stop_loss' : 'rsi', price: close, rsi_exit: exitRsi,
-        stop_loss_ma: stopLossMa, buy_price: buyPrice, status: 'executed',
+        stop_loss_ma: exitEval.stopLossLevel ?? stopLossMa, buy_price: buyPrice, status: 'executed',
         executed_at: exitTime, executed_price: exitPrice, executed_qty: soldQty, executed_usdt: usdtOut,
       });
 
@@ -1040,7 +940,7 @@ async function tick(rowId, adapter, strategy, log, prevExitRsi, session) {
         phase: 'WATCHING', capital: capitalAfter,
         buy_price: null, buy_qty: null, buy_usdt: null, buy_time: null, rsi_entry: null,
       });
-      log(`${stopLossHit ? '🛑' : '🔴'} VENDA [AMAP] PnL=$${pnlUsdt.toFixed(2)}`);
+      log(`${stopLossHit ? '🛑' : '🔴'} VENDA [AMAP] ${exitEval.reason === 'stop_loss_adaptive' ? `(stop adapt −${exitEval.dipPct?.toFixed(1)}%) ` : exitEval.reason === 'stop_loss_ma' ? '(stop MA) ' : ''}PnL=$${pnlUsdt.toFixed(2)}`);
       return { entryRsi, exitRsi, phase: 'WATCHING' };
     }
     return { entryRsi, exitRsi, phase: 'BOUGHT' };

@@ -483,6 +483,75 @@ export async function suggestMultitradeExitRsi({
   return res.json();
 }
 
+function buildMultitradeSuggestParams({
+  symbol, exchange, entryRsi, exitRsi, entryRsiPath, entryMa, maConditions, extension, stopLoss,
+}) {
+  const params = new URLSearchParams({
+    symbol,
+    exchange: exchange ?? 'binance',
+    entryInterval: entryRsi.interval,
+    entryPeriod: String(entryRsi.period),
+    entryOperator: entryRsi.operator ?? '<',
+    entryValue: String(entryRsi.value),
+    exitInterval: exitRsi.interval,
+    exitPeriod: String(exitRsi.period),
+    exitOperator: exitRsi.operator ?? '>',
+    exitValue: String(exitRsi.value),
+    stopLossEnabled: String(stopLoss?.enabled !== false),
+  });
+  if (entryRsiPath) params.set('entryRsiPath', JSON.stringify(entryRsiPath));
+  if (entryMa) params.set('entryMa', JSON.stringify(entryMa));
+  if (maConditions?.length) {
+    params.set('maConditions', JSON.stringify(maConditions.map(({ period, interval, mode, fixedDipPct }) => ({
+      period, interval, mode,
+      ...(fixedDipPct !== '' && fixedDipPct != null ? { fixedDipPct: Number(fixedDipPct) } : {}),
+    }))));
+  }
+  if (extension) params.set('extension', JSON.stringify(extension));
+  return params;
+}
+
+/** Sugere limiar RSI de entrada (ex.: < 30 vs < 34 vs < 40) pelo histórico. */
+export async function suggestMultitradeEntryRsi({
+  symbol, exchange, entryRsi, exitRsi, entryRsiPath, entryMa, maConditions, extension, stopLoss,
+}) {
+  const params = buildMultitradeSuggestParams({
+    symbol, exchange, entryRsi, exitRsi, entryRsiPath, entryMa, maConditions, extension, stopLoss,
+  });
+  const res = await fetch(`/services/sb/multitrade-suggest-entry-rsi?${params}`);
+  if (!res.ok) throw new Error(`multitrade-suggest-entry-rsi falhou: HTTP ${res.status}`);
+  return res.json();
+}
+
+/** Sugere trigger/tolerância (e RSI combinado) para entrada por MA. */
+export async function suggestMultitradeEntryMa({
+  symbol, exchange, entryRsi, exitRsi, entryRsiPath, entryMa, maConditions, extension, stopLoss,
+}) {
+  const params = buildMultitradeSuggestParams({
+    symbol, exchange, entryRsi, exitRsi, entryRsiPath, entryMa, maConditions, extension, stopLoss,
+  });
+  const res = await fetch(`/services/sb/multitrade-suggest-entry-ma?${params}`);
+  if (!res.ok) throw new Error(`multitrade-suggest-entry-ma falhou: HTTP ${res.status}`);
+  return res.json();
+}
+
+/** Backtest histórico AMAP (moeda deve estar no Multi-Trade). */
+export async function fetchMultitradeBacktest({ symbol, exchange, capital } = {}) {
+  const params = new URLSearchParams({ symbol: symbol.toUpperCase() });
+  if (exchange) params.set('exchange', exchange);
+  if (capital != null) params.set('capital', String(capital));
+  const res = await fetch(`/services/sb/multitrade-backtest?${params}`);
+  if (res.status === 404) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? 'Moeda não está no Multi-Trade');
+  }
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `multitrade-backtest falhou: HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**

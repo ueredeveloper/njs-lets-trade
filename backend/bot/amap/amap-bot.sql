@@ -132,3 +132,13 @@ CREATE TABLE IF NOT EXISTS rsi_multi_bot_trades (
 
 -- Views: rsi_multi_summary, rsi_multi_entry_funnel, rsi_multi_exit_funnel, rsi_multi_timeline
 -- (criar via script de migração no Supabase — ver conversa / drop + create views)
+
+-- trade_config (JSONB) — campos de entrada dupla (sem migração de coluna):
+--   entryRsiPath: { "enabled": true }
+--   entryMa: {
+--     "enabled": false, "period": 50, "interval": "1h",
+--     "trigger": "touch" | "cross_up", "tolerancePct": 0.5,
+--     "requireRsi": false,
+--     "entryRsi": { "interval": "15m", "period": 14, "operator": "<", "value": 40 }
+--   }
+-- Lógica OR: dispara compra se caminho RSI OU caminho MA (± RSI opcional) passar nos filtros MA.

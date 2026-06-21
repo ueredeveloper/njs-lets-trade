@@ -37,6 +37,43 @@ function buildTradeConfig(body = {}) {
 }
 
 /** Intervalos de candles necessários para avaliar a config */
+function stopLossFixedActive(config) {
+  const sl = config?.stopLoss;
+  if (!sl || sl.enabled === false) return false;
+  return sl.fixedEnabled !== false;
+}
+
+function stopLossAdaptiveActive(config) {
+  const sl = config?.stopLoss;
+  if (!sl || sl.enabled === false) return false;
+  return sl.adaptiveEnabled !== false;
+}
+
+function stopLossAnyActive(config) {
+  return stopLossFixedActive(config) || stopLossAdaptiveActive(config);
+}
+
+function entryRsiPathActive(config) {
+  return config?.entryRsiPath?.enabled !== false;
+}
+
+function entryMaPathActive(config) {
+  return config?.entryMa?.enabled === true;
+}
+
+/** Intervalo mais fino entre os caminhos de entrada ativos */
+function getEntryScanInterval(config) {
+  const ivs = [];
+  if (entryRsiPathActive(config)) ivs.push(config.entryRsi.interval);
+  if (entryMaPathActive(config)) ivs.push(config.entryMa.interval);
+  if (entryMaPathActive(config) && config.entryMa.requireRsi) {
+    ivs.push(config.entryMa.entryRsi.interval);
+  }
+  if (!ivs.length) ivs.push(config.entryRsi.interval);
+  return ivs.reduce((a, b) =>
+    (INTERVAL_MS[a] ?? 1e12) <= (INTERVAL_MS[b] ?? 1e12) ? a : b);
+}
+
 function getRequiredSpecs(config) {
   const specs = new Map();
   const add = (interval, limit) => {
@@ -44,7 +81,19 @@ function getRequiredSpecs(config) {
     specs.set(interval, Math.max(prev, limit));
   };
 
-  add(config.entryRsi.interval, config.entryRsi.period + 50);
+  if (entryRsiPathActive(config)) {
+    add(config.entryRsi.interval, config.entryRsi.period + 50);
+  }
+  if (entryMaPathActive(config)) {
+    add(config.entryMa.interval, config.entryMa.period + 60);
+    if (config.entryMa.requireRsi) {
+      add(config.entryMa.entryRsi.interval, config.entryMa.entryRsi.period + 50);
+    }
+  }
+  if (!entryRsiPathActive(config) && !entryMaPathActive(config)) {
+    add(config.entryRsi.interval, config.entryRsi.period + 50);
+  }
+
   add(config.exitRsi.interval,  config.exitRsi.period  + 50);
 
   for (const f of config.maFilters ?? []) {
@@ -56,7 +105,7 @@ function getRequiredSpecs(config) {
     add(fourInterval, 60);
     add(config.extension.maInterval, config.extension.maPeriod + 10);
   }
-  if (config.stopLoss?.enabled !== false) {
+  if (stopLossFixedActive(config)) {
     add(config.stopLoss.interval, config.stopLoss.period + 10);
   }
 
@@ -84,8 +133,9 @@ function buildMaSnapshot(cMap, config) {
   const snap = {};
   const intervals = new Set([
     ...(config.maFilters ?? []).map(f => f.interval),
+    entryMaPathActive(config) && config.entryMa.interval,
     config.extension?.enabled && config.extension?.maInterval,
-    config.stopLoss?.enabled !== false && config.stopLoss?.interval,
+    config.stopLoss?.interval && stopLossFixedActive(config) && config.stopLoss.interval,
   ].filter(Boolean));
 
   for (const iv of intervals) {
@@ -95,12 +145,17 @@ function buildMaSnapshot(cMap, config) {
       if (f.interval !== iv) continue;
       snap[maKey(f.period, iv)] = { ma: lastMa(candles, f.period), candles, period: f.period, interval: iv };
     }
+    if (entryMaPathActive(config) && config.entryMa.interval === iv) {
+      const p = config.entryMa.period;
+      const k = maKey(p, iv);
+      if (!snap[k]) snap[k] = { ma: lastMa(candles, p), candles, period: p, interval: iv };
+    }
     if (config.extension?.enabled && config.extension.maInterval === iv) {
       const p = config.extension.maPeriod ?? 50;
       const k = maKey(p, iv);
       if (!snap[k]) snap[k] = { ma: lastMa(candles, p), candles, period: p, interval: iv };
     }
-    if (config.stopLoss?.enabled !== false && config.stopLoss?.interval === iv) {
+    if (stopLossFixedActive(config) && config.stopLoss?.interval === iv) {
       const p = config.stopLoss.period;
       snap[`sl_${maKey(p, iv)}`] = { ma: lastMa(candles, p), period: p, interval: iv };
     }
@@ -220,11 +275,33 @@ function checkMaFilters({ close, maFilters, maSnap, adaptiveDips }) {
   return { allowed: true, reason: null };
 }
 
-function evaluateEntry({ entryRsi, close, entryTimeMs, config, maSnap, adaptiveDips, cMap }) {
-  if (!checkRsi(entryRsi, config.entryRsi)) {
-    return { allowed: false, reason: 'RSI_NOT_MET' };
+function checkMaEntryTrigger({ close, low, prevClose, maSnap, config }) {
+  const em = config.entryMa;
+  if (!em?.enabled) return { triggered: false, reason: 'MA_PATH_OFF' };
+
+  const key = maKey(em.period, em.interval);
+  const md  = maSnap[key];
+  const ma  = md?.ma;
+  if (ma == null) return { triggered: false, reason: 'MA_ENTRY_NO_DATA', key };
+
+  const tol     = (em.tolerancePct ?? 0.5) / 100;
+  const trigger = em.trigger ?? 'touch';
+
+  if (trigger === 'cross_up') {
+    if (prevClose != null && prevClose < ma && close >= ma) {
+      return { triggered: true, ma, key, trigger };
+    }
+    return { triggered: false, reason: 'MA_NO_CROSS', ma, key };
   }
 
+  const nearClose = Math.abs(close - ma) / ma <= tol;
+  const wickTouch = low != null && low <= ma * (1 + tol) && close >= ma * (1 - tol * 2);
+  if (nearClose || wickTouch) return { triggered: true, ma, key, trigger };
+
+  return { triggered: false, reason: 'MA_NOT_TOUCHED', ma, key };
+}
+
+function applySharedEntryFilters({ close, entryTimeMs, config, maSnap, adaptiveDips, cMap }) {
   const maCheck = checkMaFilters({
     close, maFilters: config.maFilters, maSnap, adaptiveDips,
   });
@@ -248,11 +325,103 @@ function evaluateEntry({ entryRsi, close, entryTimeMs, config, maSnap, adaptiveD
   return { allowed: true, reason: null };
 }
 
-/** Detalha cada filtro MA e extensão para um sinal RSI (backtest / relatório). */
-function diagnoseEntry({ entryRsi, close, entryTimeMs, config, maSnap, adaptiveDips, cMap }) {
-  const rsiOk = checkRsi(entryRsi, config.entryRsi);
-  const maChecks = [];
+function resolveEntrySignal({
+  entryRsi, maPathRsi,
+  rsiCtx, maCtx,
+  close, low, prevClose,
+  entryTimeMs, config, maSnap, adaptiveDips, cMap,
+}) {
+  const rsiClose    = rsiCtx?.close ?? close;
+  const rsiLow      = rsiCtx?.low ?? low;
+  const rsiPrev     = rsiCtx?.prevClose ?? prevClose;
+  const maClose     = maCtx?.close ?? close;
+  const maLow       = maCtx?.low ?? low;
+  const maPrevClose = maCtx?.prevClose ?? prevClose;
 
+  const candidates = [];
+
+  if (entryRsiPathActive(config) && checkRsi(entryRsi, config.entryRsi)) {
+    candidates.push({ kind: 'rsi', close: rsiClose });
+  }
+
+  if (entryMaPathActive(config)) {
+    const mt = checkMaEntryTrigger({
+      close: maClose, low: maLow, prevClose: maPrevClose, maSnap, config,
+    });
+    if (mt.triggered) {
+      const rsiForMa = maPathRsi ?? entryRsi;
+      const rsiRule  = config.entryMa.requireRsi ? config.entryMa.entryRsi : null;
+      if (!rsiRule || checkRsi(rsiForMa, rsiRule)) {
+        candidates.push({ kind: 'ma', close: maClose, maTrigger: mt });
+      }
+    }
+  }
+
+  if (!candidates.length) {
+    return { allowed: false, reason: 'NO_ENTRY_SIGNAL', kind: null };
+  }
+
+  candidates.sort((a, b) => (a.kind === 'rsi' ? 0 : 1) - (b.kind === 'rsi' ? 0 : 1));
+
+  let lastBlock = { allowed: false, reason: 'NO_ENTRY_SIGNAL', kind: null };
+  for (const c of candidates) {
+    const filterResult = applySharedEntryFilters({
+      close: c.close, entryTimeMs, config, maSnap, adaptiveDips, cMap,
+    });
+    if (filterResult.allowed) {
+      return { allowed: true, reason: null, kind: c.kind, entryKind: c.kind };
+    }
+    lastBlock = { ...filterResult, kind: c.kind, entryKind: c.kind };
+  }
+  return lastBlock;
+}
+
+function evaluateEntry(params) {
+  return resolveEntrySignal(params);
+}
+
+/** Detalha cada caminho de entrada, filtros MA e extensão (backtest / relatório). */
+function diagnoseEntry({
+  entryRsi, maPathRsi,
+  rsiCtx, maCtx,
+  close, low, prevClose,
+  entryTimeMs, config, maSnap, adaptiveDips, cMap,
+}) {
+  const rsiClose    = rsiCtx?.close ?? close;
+  const maClose     = maCtx?.close ?? close;
+  const maLow       = maCtx?.low ?? low;
+  const maPrevClose = maCtx?.prevClose ?? prevClose;
+
+  const paths = [];
+
+  if (entryRsiPathActive(config)) {
+    paths.push({
+      kind: 'rsi', active: true,
+      signal: checkRsi(entryRsi, config.entryRsi),
+      label: `RSI(${config.entryRsi.interval}) ${config.entryRsi.operator} ${config.entryRsi.value}`,
+    });
+  }
+
+  if (entryMaPathActive(config)) {
+    const mt = checkMaEntryTrigger({
+      close: maClose, low: maLow, prevClose: maPrevClose, maSnap, config,
+    });
+    const em = config.entryMa;
+    let rsiOk = true;
+    if (em.requireRsi) {
+      rsiOk = checkRsi(maPathRsi ?? entryRsi, em.entryRsi);
+    }
+    paths.push({
+      kind: 'ma', active: true,
+      signal: mt.triggered && rsiOk,
+      maTrigger: mt,
+      rsiOk,
+      label: `MA${em.period} ${em.interval} (${em.trigger ?? 'touch'})` +
+        (em.requireRsi ? ` + RSI ${em.entryRsi.operator} ${em.entryRsi.value}` : ''),
+    });
+  }
+
+  const maChecks = [];
   for (const f of config.maFilters ?? []) {
     const key   = maKey(f.period, f.interval);
     const label = `MA${f.period} ${f.interval}`;
@@ -261,8 +430,9 @@ function diagnoseEntry({ entryRsi, close, entryTimeMs, config, maSnap, adaptiveD
       maChecks.push({ label, ok: false, mode: f.mode, detail: 'sem dados' });
       continue;
     }
+    const filterClose = paths.some(p => p.kind === 'ma' && p.signal) ? maClose : rsiClose;
     if (f.mode === 'strict_above') {
-      const ok = close > md.ma;
+      const ok = filterClose > md.ma;
       maChecks.push({
         label, ok, mode: 'fixo',
         detail: ok ? `acima ${md.ma.toFixed(4)}` : `abaixo ${md.ma.toFixed(4)}`,
@@ -270,7 +440,7 @@ function diagnoseEntry({ entryRsi, close, entryTimeMs, config, maSnap, adaptiveD
     } else if (f.mode === 'adaptive') {
       const dipPct = adaptiveDips[key] ?? DEFAULT_OPTS.defaultPct;
       const floor  = md.ma * (1 - dipPct / 100);
-      const ok     = close >= floor;
+      const ok     = filterClose >= floor;
       maChecks.push({
         label, ok, mode: 'adapt', dipPct,
         detail: ok
@@ -280,22 +450,45 @@ function diagnoseEntry({ entryRsi, close, entryTimeMs, config, maSnap, adaptiveD
     }
   }
 
+  const signalPaths = paths.filter(p => p.signal);
   let extension = null;
-  let allowed   = rsiOk && maChecks.every(m => m.ok);
-  let reason    = !rsiOk ? 'RSI_NOT_MET' : null;
+  let allowed   = false;
+  let reason    = 'NO_ENTRY_SIGNAL';
+  let entryKind = null;
 
-  if (rsiOk && config.extension?.enabled) {
+  if (signalPaths.length) {
+    signalPaths.sort((a, b) => (a.kind === 'rsi' ? 0 : 1) - (b.kind === 'rsi' ? 0 : 1));
+    for (const p of signalPaths) {
+      const filterClose = p.kind === 'ma' ? maClose : rsiClose;
+      const filterResult = applySharedEntryFilters({
+        close: filterClose, entryTimeMs, config, maSnap, adaptiveDips, cMap,
+      });
+      if (filterResult.allowed) {
+        allowed = true;
+        reason = null;
+        entryKind = p.kind;
+        break;
+      }
+      reason = filterResult.reason;
+      entryKind = p.kind;
+    }
+  }
+
+  const rsiOk = paths.some(p => p.kind === 'rsi' && p.signal);
+
+  if (allowed && config.extension?.enabled) {
     const extIv  = config.extension.maInterval;
     const extP   = config.extension.maPeriod ?? 50;
     const extKey = maKey(extP, extIv);
     const md     = maSnap[extKey];
     const extMa  = md?.ma;
+    const filterClose = entryKind === 'ma' ? maClose : rsiClose;
     const { threeInterval, fourInterval } = getExtensionIntervals(config.extension);
     const confirmCandles = cMap ? {
       three: cMap[threeInterval],
       four:  cMap[fourInterval],
     } : { three: md?.candles, four: md?.candles };
-    const ext = analyzeExtension(close, extMa, confirmCandles, config.extension, entryTimeMs);
+    const ext = analyzeExtension(filterClose, extMa, confirmCandles, config.extension, entryTimeMs);
     extension = {
       label:    `ext MA${extP} ${extIv}`,
       extended: ext.extended,
@@ -309,24 +502,24 @@ function diagnoseEntry({ entryRsi, close, entryTimeMs, config, maSnap, adaptiveD
       allowed = false;
       reason  = ext.reason ?? 'THREE_CANDLES_BLOCKED';
     }
-  }
-
-  if (rsiOk && !allowed && !reason) {
-    if (maChecks.some(m => !m.ok && m.detail === 'sem dados')) {
-      reason = 'MA_NO_DATA';
-    } else {
+  } else if (!allowed && rsiOk && maChecks.some(m => !m.ok)) {
+    if (maChecks.some(m => !m.ok && m.detail === 'sem dados')) reason = 'MA_NO_DATA';
+    else {
       const failed = maChecks.find(m => !m.ok);
       if (failed) reason = failed.mode === 'adapt' ? 'MA_ADAPTIVE_BLOCKED' : 'MA_BLOCKED';
     }
   }
 
-  return { rsiOk, allowed, reason, maChecks, extension };
+  return { rsiOk, allowed, reason, entryKind, paths, maChecks, extension };
 }
 
-function evaluateExit({ close, exitRsi, stopLossMa, config }) {
-  if (config.stopLoss?.enabled !== false && stopLossMa != null && close < stopLossMa) {
-    return { exit: true, reason: 'stop_loss_ma' };
-  }
+function evaluateExit({ close, exitRsi, stopLossMa, maSnap, adaptiveDips, config }) {
+  const adaptiveStopFloors = maSnap
+    ? getAdaptiveStopFloors(maSnap, adaptiveDips, config)
+    : [];
+  const stopHit = checkStopLossHits(close, stopLossMa, adaptiveStopFloors, config);
+  if (stopHit) return stopHit;
+
   if (checkRsi(exitRsi, config.exitRsi)) {
     return { exit: true, reason: 'rsi' };
   }
@@ -350,10 +543,74 @@ function needsMarketSell(config, volumeUsdt) {
 }
 
 function getStopLossMa(maSnap, config) {
-  if (config.stopLoss?.enabled === false) return null;
+  if (!stopLossFixedActive(config)) return null;
   const sl = config.stopLoss;
   const key = `sl_${maKey(sl.period, sl.interval)}`;
   return maSnap[key]?.ma ?? maSnap[maKey(sl.period, sl.interval)]?.ma ?? null;
+}
+
+/** Pisos de stop adaptativo (MA × (1 − dip%)) para cada filtro MA em modo adaptive */
+function getAdaptiveStopFloors(maSnap, adaptiveDips, config) {
+  if (!stopLossAdaptiveActive(config)) return [];
+
+  const floors = [];
+  for (const f of config.maFilters ?? []) {
+    if (f.mode !== 'adaptive') continue;
+    const key = maKey(f.period, f.interval);
+    const md  = maSnap[key];
+    if (!md?.ma) continue;
+    const dipPct = f.fixedDipPct ?? adaptiveDips?.[key] ?? DEFAULT_OPTS.defaultPct;
+    floors.push({
+      floor: md.ma * (1 - dipPct / 100),
+      dipPct,
+      ma: md.ma,
+      period: f.period,
+      interval: f.interval,
+      key,
+    });
+  }
+  return floors;
+}
+
+function isStopLossExit(reason) {
+  return reason === 'stop_loss_ma' || reason === 'stop_loss_adaptive';
+}
+
+function checkStopLossHits(close, stopLossMa, adaptiveStopFloors, config) {
+  if (!stopLossAnyActive(config)) return null;
+
+  const stops = [];
+  if (stopLossFixedActive(config) && stopLossMa != null) {
+    stops.push({ level: stopLossMa, reason: 'stop_loss_ma' });
+  }
+  if (stopLossAdaptiveActive(config)) {
+    for (const af of adaptiveStopFloors ?? []) {
+      stops.push({
+        level: af.floor,
+        reason: 'stop_loss_adaptive',
+        adaptiveKey: af.key,
+        dipPct: af.dipPct,
+        ma: af.ma,
+        period: af.period,
+        interval: af.interval,
+      });
+    }
+  }
+
+  const breached = stops.filter(s => close < s.level);
+  if (!breached.length) return null;
+
+  // Nível mais alto entre os violados = o que o preço atingiu primeiro na queda
+  breached.sort((a, b) => b.level - a.level);
+  const hit = breached[0];
+  return {
+    exit: true,
+    reason: hit.reason,
+    stopLossLevel: hit.level,
+    ...(hit.reason === 'stop_loss_adaptive'
+      ? { adaptiveKey: hit.adaptiveKey, dipPct: hit.dipPct, adaptiveMa: hit.ma }
+      : { stopLossMa: hit.level }),
+  };
 }
 
 function buildAdaptiveReport(cMap, config) {
@@ -396,12 +653,23 @@ function suggestAdaptiveDip(candles, period, interval, adaptiveOpts = {}) {
 module.exports = {
   buildTradeConfig,
   getRequiredSpecs,
+  getEntryScanInterval,
+  entryRsiPathActive,
+  entryMaPathActive,
   computeAdaptiveDips,
   buildMaSnapshot,
   evaluateEntry,
+  resolveEntrySignal,
+  checkMaEntryTrigger,
   diagnoseEntry,
+  stopLossFixedActive,
+  stopLossAdaptiveActive,
+  stopLossAnyActive,
   evaluateExit,
   getStopLossMa,
+  getAdaptiveStopFloors,
+  isStopLossExit,
+  checkStopLossHits,
   checkRsi,
   checkExtension,
   analyzeExtension,

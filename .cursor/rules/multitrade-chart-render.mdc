@@ -1,0 +1,73 @@
+---
+description: Regras de renderização do gráfico — uma instância, fontes de controle (Multi-Trade, Estatísticas, tabela)
+globs: frontend-react/**/*.{jsx,tsx,js}
+alwaysApply: false
+---
+
+# Gráfico — regra geral e Multi-Trade
+
+## Arquitetura (uma instância)
+
+- Existe **um único** `CandlestickChart` em `App.jsx` (coluna esquerda, ~55vh).
+- Estado compartilhado via `CurrencyContext`: `selectedChart`, `chartZoom`, `chartTradeMarkers`, `chartViewSource`.
+- **Nunca** chamar `setSelectedChart` em paralelo de vários painéis sem definir `chartViewSource`.
+
+## Fontes de controle (`chartViewSource`)
+
+| Valor | Quem define | Comportamento |
+|-------|-------------|---------------|
+| `default` | init / limpeza | Chart livre, LIMIT 76 velas |
+| `table` | `CurrencyTable` | Seleção manual de moeda |
+| `statistics` | `StatisticsPanel` | Clique em ciclo RSI |
+| `multitrade` | `MultitradeBacktestPanel` | Clique em linha de backtest |
+
+Utilitário: `frontend-react/src/utils/chartView.js` (`CHART_VIEW`, `computeZoomWindow`, `buildFixedDataZoom`).
+
+## Zoom — regra crítica
+
+1. **Buscar histórico completo** até cobrir o período (até 3000 candles).
+2. **Não recortar** `selectedChart.candlesticks` no painel — passar dataset inteiro.
+3. **Zoom via `chartZoom`**: `{ source, startDate, endDate }` (entrada/saída exatas, sem padding nas datas).
+4. **Padding ±10 velas** só em `computeZoomWindow` / `CHART_ZOOM_PAD`.
+5. **dataZoom embutido na option ECharts** (`buildFixedDataZoom`) — persiste com `notMerge={true}`.
+6. **Não usar** `dispatchAction(dataZoom)` para `multitrade` ou `statistics` (causa flash: zoom correto → reset → velas vazias/recentes).
+
+## Multi-Trade — fluxo obrigatório
+
+Usar **`applyMultitradeChartView`** do context (atualização atômica):
+
+```javascript
+applyMultitradeChartView({
+  chartData,      // fetchCandlesticksAndCloud — dataset completo
+  symbol, interval, exchangeSource,
+  markers,        // [{ time, side: 'signal'|'buy'|'sell', price }]
+  entryMs, exitMs // timestamps do sinal e saída
+});
+```
+
+Limpar com **`clearMultitradeChartView`** ao trocar favorita MT ou em erro.
+
+## CandlestickChart — efeitos protegidos
+
+Quando `chartViewSource === 'multitrade'` **e** `chartZoom` ativo:
+
+- **Não** resetar `displayCandleCount` / `candleFetchLimit` no sync de símbolo/intervalo.
+- `displayLimit` = total de candles carregados (não LIMIT 76).
+- Marcadores MT: `markPoint` vertical acima do high (`buildTradeMarkerMarkPoint`).
+
+## Anti-patterns
+
+```javascript
+// ❌ Recortar candles no painel MT
+setSelectedChart(sliceChartData(raw, startMs, endMs));
+
+// ❌ setState separado + setChartZoom(null)
+setSelectedChart(data);
+setChartZoom(null);
+
+// ❌ dispatchAction como único mecanismo de zoom MT
+instance.dispatchAction({ type: 'dataZoom', ... });
+
+// ✅ API atômica do context
+applyMultitradeChartView({ ... });
+```
