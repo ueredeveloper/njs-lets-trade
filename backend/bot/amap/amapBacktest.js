@@ -14,7 +14,9 @@ const {
   getRequiredSpecs, computeAdaptiveDips, diagnoseEntry, evaluateExit,
   getStopLossMa, isStopLossExit, checkRsi, maKey,
   getEntryScanInterval, entryRsiPathActive, entryMaPathActive, resolveEntrySignal,
+  getEntryDiscount, shouldUseImmediateEntry,
 } = require('./strategyEngine');
+const { buildExitReasonDetail, inferRuleId } = require('./exitReasonFormat');
 
 const DATA_DIR = path.join(__dirname, '../../data/candlestick');
 const LIMIT    = 1000;
@@ -218,11 +220,43 @@ function formatEntryPathsLabel(config) {
   return parts.length ? parts.join(' OR ') : '—';
 }
 
+const ENTRY_KIND_SHORT = { rsi: 'RSI', ma: 'MA' };
+
+function formatEntryKindLabel(kind, config) {
+  if (kind === 'rsi') {
+    const r = config.entryRsi;
+    return `RSI(${r.interval}) ${r.operator ?? '<'} ${r.value}`;
+  }
+  if (kind === 'ma') {
+    const em = config.entryMa;
+    const triggerLbl = em.trigger === 'cross_up' ? 'cruzamento ↑' : 'toque';
+    let lbl = `MA${em.period} ${em.interval} (${triggerLbl})`;
+    if (em.requireRsi) {
+      const r = em.entryRsi;
+      lbl += ` + RSI(${r.interval}) ${r.operator ?? '<'} ${r.value}`;
+    }
+    return lbl;
+  }
+  return null;
+}
+
 async function fetchCandlesForExchange(exchange, symbol, interval, limit) {
   if (exchange === 'gate') {
     return fetchGateCandles(toGateSymbol(symbol), limit, interval);
   }
   return fetchBinanceCandles(symbol, limit, interval);
+}
+
+function resolveRuleConfigForBacktest(config, ruleId) {
+  if (ruleId === 'rule2') {
+    if (config.rule2) return config.rule2;
+    return {
+      exitRsi: { interval: '1h', period: 14, operator: '>', value: 70 },
+      entryMa: config.entryMa ?? { period: 50, interval: '1h' },
+      stopLoss: { adaptiveEnabled: true },
+    };
+  }
+  return config.rule1 ?? config;
 }
 
 function reconcileEntryLog(entryLog, signals) {
@@ -232,18 +266,29 @@ function reconcileEntryLog(entryLog, signals) {
     if (!row) continue;
     row.outcome = sig.result;
     if (sig.pnlPct != null) row.pnlPct = sig.pnlPct;
+    if (sig.exitDetail) row.exitDetail = sig.exitDetail;
+    if (sig.ruleId) row.ruleId = sig.ruleId;
   }
 }
 
 function serializeEntryRow(e) {
+  const ruleId = e.ruleId ?? inferRuleId(e.entryKind);
+  const exitLabel = e.exitDetail?.label ?? null;
   return {
     time: e.time,
     timeISO: new Date(e.time).toISOString(),
     rsi: e.rsi != null ? parseFloat(Number(e.rsi).toFixed(2)) : null,
+    maPathRsi: e.maPathRsi != null ? parseFloat(Number(e.maPathRsi).toFixed(2)) : null,
     price: e.price,
+    ruleId,
+    ruleShort: ruleId === 'rule2' ? 'R2' : ruleId === 'rule1' ? 'R1' : null,
     entryKind: e.entryKind ?? null,
+    entryKindShort: ruleId === 'rule2' ? 'R2' : ruleId === 'rule1' ? 'R1' : (ENTRY_KIND_SHORT[e.entryKind] ?? null),
+    entryKindLabel: e.entryKindLabel ?? null,
     outcome: e.outcome,
-    outcomeLabel: ENTRY_OUTCOME_LABELS[e.outcome] ?? e.outcome ?? '—',
+    exitDetail: e.exitDetail ?? null,
+    outcomeLabel: exitLabel ?? ENTRY_OUTCOME_LABELS[e.outcome] ?? e.outcome ?? '—',
+    outcomeShort: e.exitDetail?.short ?? null,
     pnlPct: e.pnlPct != null ? parseFloat(e.pnlPct.toFixed(2)) : null,
     maChecks: (e.maChecks ?? []).map(m => ({
       label: m.label, ok: m.ok,
@@ -329,6 +374,8 @@ async function runAmapBacktest({ symbol, config, exchange = 'binance', capital =
   let openSignalIdx = null;
   let runningCapital = startCapital;
   let lastMaSignalOpenTime = null;
+  let buyEntryKind = null;
+  let pendingEntryKind = null;
 
   const botOpts = {
     entryDiscount:    config.entryDiscount    ?? 0.001,
@@ -367,11 +414,17 @@ async function runAmapBacktest({ symbol, config, exchange = 'binance', capital =
       if (maPathFired && lastMaSignalOpenTime === maCtx.openTime) continue;
       if (maPathFired) lastMaSignalOpenTime = maCtx.openTime;
 
+      const resolvedKind = entryCheck.entryKind ?? diag.entryKind;
+      const useImmediate = entryCheck.allowed
+        && shouldUseImmediateEntry(resolvedKind, { ...config, ...botOpts });
+      const pathDiscount = getEntryDiscount(resolvedKind, { ...config, ...botOpts });
+
       entryLog.push({
-        time: openTime, price: close, rsi: entryRsi,
+        time: openTime, price: close, rsi: entryRsi, maPathRsi,
         entryKind: diag.entryKind,
+        entryKindLabel: formatEntryKindLabel(diag.entryKind, config),
         maChecks: diag.maChecks, extension: diag.extension,
-        outcome: entryCheck.allowed ? (botOpts.immediateEntry ? 'BOUGHT' : 'PENDING') : entryCheck.reason,
+        outcome: entryCheck.allowed ? (useImmediate ? 'BOUGHT' : 'PENDING') : entryCheck.reason,
       });
 
       if (!entryCheck.allowed) {
@@ -383,19 +436,21 @@ async function runAmapBacktest({ symbol, config, exchange = 'binance', capital =
         continue;
       }
 
-      if (botOpts.immediateEntry) {
+      if (useImmediate) {
         openSignalIdx = signals.length;
         signals.push({
           entryTime: openTime, entryRsi, entryPrice: close, entryKind: entryCheck.entryKind,
           buyTime: openTime, buyPrice: close, result: 'BOUGHT',
         });
         buyQty = runningCapital / close; buyUsdt = runningCapital;
+        buyEntryKind = entryCheck.entryKind;
         phase = 'BOUGHT';
         trades.push({ type: 'BUY', time: openTime, price: close, entryRsi, entryKind: entryCheck.entryKind });
       } else {
         triggerPrice = close;
-        limitPrice   = parseFloat((close * (1 - botOpts.entryDiscount)).toFixed(8));
+        limitPrice   = parseFloat((close * (1 - pathDiscount)).toFixed(8));
         pendingSince = openTime;
+        pendingEntryKind = entryCheck.entryKind;
         pendingSignal = {
           entryTime: openTime, entryRsi, entryPrice: close, entryKind: entryCheck.entryKind,
         };
@@ -412,27 +467,39 @@ async function runAmapBacktest({ symbol, config, exchange = 'binance', capital =
         if (pendingSignal) { signals.push({ ...pendingSignal, result: reason }); pendingSignal = null; }
         phase = 'WATCHING';
         triggerPrice = limitPrice = pendingSince = null;
+        pendingEntryKind = null;
       } else if (close <= limitPrice) {
         openSignalIdx = signals.length;
         signals.push({ ...pendingSignal, buyTime: openTime, buyPrice: close, result: 'BOUGHT' });
+        buyEntryKind = pendingEntryKind ?? pendingSignal?.entryKind ?? null;
         pendingSignal = null;
+        pendingEntryKind = null;
         buyQty = runningCapital / close; buyUsdt = runningCapital;
         phase = 'BOUGHT';
-        trades.push({ type: 'BUY', time: openTime, price: close, entryRsi });
+        trades.push({ type: 'BUY', time: openTime, price: close, entryRsi, entryKind: buyEntryKind });
         triggerPrice = limitPrice = pendingSince = null;
       }
 
     } else if (phase === 'BOUGHT') {
-      const exitEval = evaluateExit({ close, exitRsi, stopLossMa, maSnap, adaptiveDips, config });
+      const exitEval = evaluateExit({
+        close, exitRsi, stopLossMa, maSnap, adaptiveDips, config, entryKind: buyEntryKind,
+      });
       if (exitEval.exit) {
         const usdtOut = buyQty * close;
         const pnl     = usdtOut - buyUsdt;
         runningCapital += pnl;
+        const ruleId = inferRuleId(buyEntryKind);
+        const ruleConfig = resolveRuleConfigForBacktest(config, ruleId);
+        const exitDetail = buildExitReasonDetail({
+          ruleId, entryKind: buyEntryKind, exitEval, ruleConfig,
+        });
         if (openSignalIdx !== null) {
           signals[openSignalIdx].exitTime  = openTime;
           signals[openSignalIdx].exitPrice = close;
           signals[openSignalIdx].exitRsi   = exitRsi;
           signals[openSignalIdx].pnlPct    = (pnl / buyUsdt) * 100;
+          signals[openSignalIdx].exitDetail = exitDetail;
+          signals[openSignalIdx].ruleId = ruleId;
           if (exitEval.reason === 'stop_loss_ma') signals[openSignalIdx].result = 'STOP_LOSS_MA';
           else if (exitEval.reason === 'stop_loss_adaptive') signals[openSignalIdx].result = 'STOP_LOSS_ADAPTIVE';
           else if (exitEval.reason === 'rsi') signals[openSignalIdx].result = 'SOLD_RSI';
@@ -441,11 +508,14 @@ async function runAmapBacktest({ symbol, config, exchange = 'binance', capital =
         trades.push({
           type: 'SELL', time: openTime, price: close, exitRsi,
           exitReason: exitEval.reason,
+          exitDetail,
+          ruleId,
           stopLoss: isStopLossExit(exitEval.reason),
           pnlUsdt: pnl, pnlPct: (pnl / buyUsdt) * 100, capitalAfter: runningCapital,
         });
         phase = 'WATCHING';
         buyQty = buyUsdt = null;
+        buyEntryKind = null;
       }
     }
   }
@@ -469,6 +539,7 @@ async function runAmapBacktest({ symbol, config, exchange = 'binance', capital =
     config: {
       entryRsi: config.entryRsi,
       exitRsi:  config.exitRsi,
+      entryPaths: formatEntryPathsLabel(config),
       stopLoss: formatStopLossLabel(config),
     },
     period,
@@ -499,6 +570,8 @@ async function runAmapBacktest({ symbol, config, exchange = 'binance', capital =
       entryRsi: t.entryRsi ?? null,
       exitRsi: t.exitRsi ?? null,
       exitReason: t.exitReason ?? null,
+      exitDetail: t.exitDetail ?? null,
+      ruleId: t.ruleId ?? null,
       pnlUsdt: t.pnlUsdt != null ? parseFloat(t.pnlUsdt.toFixed(2)) : null,
       pnlPct: t.pnlPct != null ? parseFloat(t.pnlPct.toFixed(2)) : null,
       capitalAfter: t.capitalAfter ?? null,
@@ -512,6 +585,8 @@ module.exports = {
   ENTRY_OUTCOME_LABELS,
   formatStopLossLabel,
   formatEntryPathsLabel,
+  formatEntryKindLabel,
+  ENTRY_KIND_SHORT,
   loadLocalCandles,
   computeRsiSeries,
   exitRsiAt,

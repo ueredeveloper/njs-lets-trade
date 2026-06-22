@@ -392,6 +392,7 @@ router.delete('/multitrade-favorites/:id', getUserId, async (req, res) => {
 
 // GET /services/sb/multitrade-trades?symbol=&strategy_id=&limit=50
 router.get('/multitrade-trades', getUserId, async (req, res) => {
+  const { displayExitReason } = require('../bot/amap/exitReasonFormat');
   let q = supabase.from('rsi_multi_bot_trades').select('*').order('exit_time', { ascending: false });
   if (req.query.symbol)       q = q.eq('symbol', req.query.symbol.toUpperCase());
   if (req.query.strategy_id)  q = q.eq('strategy_id', req.query.strategy_id);
@@ -399,7 +400,11 @@ router.get('/multitrade-trades', getUserId, async (req, res) => {
 
   const { data, error } = await q;
   if (error) return sbError(res, error, 'GET multitrade-trades');
-  res.json(data ?? []);
+  const rows = (data ?? []).map(t => ({
+    ...t,
+    exit_reason_label: displayExitReason(t.exit_reason),
+  }));
+  res.json(rows);
 });
 
 // GET /services/sb/multitrade-timeline?symbol=&limit=100
@@ -564,23 +569,11 @@ router.get('/multitrade-suggest-exit-rsi', getUserId, async (req, res) => {
   if (!symbol) return res.status(400).json({ error: 'symbol obrigatório' });
 
   const exchange = req.query.exchange ?? 'binance';
-  const tradeConfig = buildTradeConfig({
-    entryRsi: {
-      interval: req.query.entryInterval ?? '15m',
-      period:   Number(req.query.entryPeriod ?? 14),
-      operator: req.query.entryOperator ?? '<',
-      value:    Number(req.query.entryValue ?? 30),
-    },
-    exitRsi: {
-      interval: req.query.exitInterval ?? '15m',
-      period:   Number(req.query.exitPeriod ?? 14),
-      operator: req.query.exitOperator ?? '>',
-      value:    Number(req.query.exitValue ?? 70),
-    },
-    maConditions: req.query.maConditions ? JSON.parse(req.query.maConditions) : undefined,
-    extension:    req.query.extension ? JSON.parse(req.query.extension) : undefined,
-    stopLoss:     { enabled: req.query.stopLossEnabled !== 'false' },
-  });
+  const tradeConfig = parseMultitradeSuggestQuery(req.query);
+  const entryPath = req.query.entryPath === 'ma'
+    || (tradeConfig.entryMa?.enabled && tradeConfig.entryRsiPath?.enabled === false)
+    ? 'ma'
+    : 'rsi';
 
   const specs = getRequiredSpecs(tradeConfig);
   try {
@@ -589,11 +582,12 @@ router.get('/multitrade-suggest-exit-rsi', getUserId, async (req, res) => {
       cMap[interval] = await fetchCandlesForEval(exchange, symbol, interval, Math.max(limit, 500));
     }));
 
-    const report = buildExitRsiReport(cMap, tradeConfig);
+    const report = buildExitRsiReport(cMap, tradeConfig, { entryPath });
     res.json({
       symbol,
       exchange,
       exitRsiValue: report.suggestedExitRsi,
+      entryPath,
       ...report,
     });
   } catch (err) {

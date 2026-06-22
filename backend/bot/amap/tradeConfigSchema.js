@@ -24,11 +24,13 @@ const TRADE_CONFIG_DEFAULTS = {
     period:        50,
     interval:      '1h',
     /** touch = preço testa a MA; cross_up = close cruza MA de baixo para cima */
-    trigger:       'touch',
+    trigger:       'cross_up',
     tolerancePct:  0.5,
     /** Se true, exige também RSI neste caminho (usa entryMa.entryRsi) */
     requireRsi:    false,
     entryRsi:      { interval: '15m', period: 14, operator: '<', value: 40 },
+    /** PENDING: compra X% abaixo do gatilho MA (padrão 2%) */
+    entryDiscount: 0.02,
   },
 
   maConditions: [
@@ -53,12 +55,14 @@ const TRADE_CONFIG_DEFAULTS = {
 
   stopLoss: {
     enabled:  true,
-    /** Stop quando close < MA(period, interval) */
     fixedEnabled: true,
+    adaptiveEnabled: true,
     period:   50,
     interval: '4h',
-    /** Pisos adaptativos (MA × (1−dip%)) dos filtros MA em modo adaptive */
-    adaptiveEnabled: true,
+    /** Stop adaptativo próprio (não usa filtros de entrada) */
+    adaptivePeriod:   50,
+    adaptiveInterval: '1h',
+    adaptiveFixedDipPct: null,
   },
 
   execution: {
@@ -87,6 +91,25 @@ const TRADE_CONFIG_DEFAULTS = {
     minVolumeUsdt:            1_000_000,
     allowLowVolume:           false,
     aggressiveExitOnLowVolume: true,
+  },
+
+  /** Regra 2 — MA50 1h (independente da regra 1) */
+  rule2: {
+    enabled: false,
+    entryMa: {
+      period: 50,
+      interval: '1h',
+      trigger: 'cross_up',
+      tolerancePct: 0.5,
+      fixedDipPct: null,
+    },
+    exitRsi: { interval: '1h', period: 14, operator: '>', value: 70 },
+    stopLoss: { adaptiveEnabled: true },
+    entryDiscount: 0.02,
+    pendingTimeoutMs: 30 * 60_000,
+    pendingCancelPct: 0.002,
+    pendingCancelOnExitRsi: true,
+    adaptiveOpts: { defaultPct: 3.0, maxPct: 8.0, minPct: 0.5, minEpisodes: 3 },
   },
 };
 
@@ -142,6 +165,9 @@ function normalizeTradeConfig(body = {}) {
     tolerancePct: Number(emBody.tolerancePct ?? d.entryMa.tolerancePct),
     requireRsi:   emBody.requireRsi ?? d.entryMa.requireRsi,
     entryRsi:     normalizeRsi(emBody.entryRsi, d.entryMa.entryRsi),
+    entryDiscount: clampEntryDiscount(
+      Number(emBody.entryDiscount ?? d.entryMa.entryDiscount ?? 0.02),
+    ),
   };
 
   const rawMa = body.maConditions ?? body.maFilters ?? d.maConditions;
@@ -161,7 +187,7 @@ function normalizeTradeConfig(body = {}) {
     confirmLogic:    extBody.confirmLogic ?? d.extension.confirmLogic,
   };
 
-  const slBody = body.stopLoss ?? {};
+  const slBody = (body.rule1 ?? {}).stopLoss ?? body.stopLoss ?? {};
   const legacyOff = slBody.enabled === false
     && slBody.fixedEnabled == null
     && slBody.adaptiveEnabled == null;
@@ -177,6 +203,10 @@ function normalizeTradeConfig(body = {}) {
     adaptiveEnabled,
     period:   Number(slBody.period ?? d.stopLoss.period),
     interval: slBody.interval ?? d.stopLoss.interval,
+    adaptivePeriod:   Number(slBody.adaptivePeriod ?? d.stopLoss.adaptivePeriod ?? 50),
+    adaptiveInterval: slBody.adaptiveInterval ?? d.stopLoss.adaptiveInterval ?? '1h',
+    adaptiveFixedDipPct: slBody.adaptiveFixedDipPct != null && slBody.adaptiveFixedDipPct !== ''
+      ? Number(slBody.adaptiveFixedDipPct) : null,
   };
 
   const execBody = body.execution ?? {};
@@ -206,42 +236,105 @@ function normalizeTradeConfig(body = {}) {
 
   const label = body.label ?? `AMAP ${entryRsi.interval} RSI${entryRsi.operator}${entryRsi.value}`;
 
-  return { label, entryRsi, exitRsi, entryRsiPath, entryMa, maConditions, extension, stopLoss, execution, polling, adaptiveOpts, volume };
+  const r1Body = body.rule1 ?? {};
+  const r2Body = body.rule2 ?? {};
+
+  const rule1 = {
+    enabled: r1Body.enabled ?? entryRsiPath.enabled,
+    entryRsi,
+    exitRsi,
+    maConditions,
+    extension,
+    stopLoss,
+    execution,
+    adaptiveOpts,
+  };
+
+  const r2d = d.rule2;
+  const r2MaBody = r2Body.entryMa ?? entryMa;
+  const rule2 = {
+    enabled: r2Body.enabled ?? entryMa.enabled ?? r2d.enabled,
+    entryMa: {
+      period:       Number(r2MaBody.period ?? r2d.entryMa.period),
+      interval:     r2MaBody.interval ?? r2d.entryMa.interval,
+      trigger:      r2MaBody.trigger ?? r2d.entryMa.trigger,
+      tolerancePct: Number(r2MaBody.tolerancePct ?? r2d.entryMa.tolerancePct),
+      fixedDipPct:  r2MaBody.fixedDipPct ?? r2d.entryMa.fixedDipPct,
+    },
+    exitRsi: normalizeRsi(r2Body.exitRsi ?? r2d.exitRsi, r2d.exitRsi),
+    stopLoss: {
+      adaptiveEnabled: r2Body.stopLoss?.adaptiveEnabled ?? r2d.stopLoss.adaptiveEnabled,
+    },
+    entryDiscount: clampEntryDiscount(Number(
+      r2Body.entryDiscount ?? r2Body.execution?.entryDiscount ?? entryMa.entryDiscount ?? r2d.entryDiscount,
+    )),
+    pendingTimeoutMs: Number(r2Body.pendingTimeoutMs ?? r2Body.execution?.pendingTimeoutMs ?? execution.pendingTimeoutMs),
+    pendingCancelPct: Number(r2Body.pendingCancelPct ?? r2Body.execution?.pendingCancelPct ?? execution.pendingCancelPct),
+    pendingCancelOnExitRsi: r2Body.pendingCancelOnExitRsi ?? r2Body.execution?.pendingCancelOnExitRsi ?? execution.pendingCancelOnExitRsi,
+    adaptiveOpts: { ...r2d.adaptiveOpts, ...(r2Body.adaptiveOpts ?? {}) },
+  };
+
+  return {
+    label, entryRsi, exitRsi, entryRsiPath, entryMa, maConditions, extension, stopLoss, execution, polling, adaptiveOpts, volume,
+    rule1, rule2,
+  };
+}
+
+function buildEngineRule1(n) {
+  const exec = n.rule1?.execution ?? n.execution;
+  const sl = n.rule1?.stopLoss ?? n.stopLoss;
+  const ma = n.rule1?.maConditions ?? n.maConditions;
+  return {
+    enabled: n.rule1?.enabled !== false,
+    entryRsi:  n.rule1?.entryRsi ?? n.entryRsi,
+    exitRsi:   n.rule1?.exitRsi ?? n.exitRsi,
+    maFilters: (ma ?? []).map(m => ({
+      period: m.period, interval: m.interval, mode: m.mode, fixedDipPct: m.fixedDipPct,
+    })),
+    extension: n.rule1?.extension ?? n.extension,
+    stopLoss: sl,
+    adaptiveOpts: n.rule1?.adaptiveOpts ?? n.adaptiveOpts,
+    immediateEntry: exec.immediateEntry,
+    entryDiscount: exec.entryDiscount,
+    pendingTimeoutMs: exec.pendingTimeoutMs,
+    pendingCancelPct: exec.pendingCancelPct,
+    pendingCancelOnExitRsi: exec.pendingCancelOnExitRsi,
+  };
+}
+
+function buildEngineRule2(n) {
+  const r2 = n.rule2 ?? TRADE_CONFIG_DEFAULTS.rule2;
+  return {
+    enabled: r2.enabled === true,
+    entryMa: r2.entryMa,
+    exitRsi: r2.exitRsi,
+    stopLoss: r2.stopLoss,
+    entryDiscount: r2.entryDiscount,
+    pendingTimeoutMs: r2.pendingTimeoutMs,
+    pendingCancelPct: r2.pendingCancelPct,
+    pendingCancelOnExitRsi: r2.pendingCancelOnExitRsi,
+    adaptiveOpts: r2.adaptiveOpts,
+  };
 }
 
 /** trade_config normalizado → formato interno do motor (maFilters, campos flat legados) */
 function toEngineConfig(normalized) {
   const n = normalized ?? normalizeTradeConfig();
+  const rule1 = buildEngineRule1(n);
+  const rule2 = buildEngineRule2(n);
   return {
     label: n.label,
-    entryRsi:  n.entryRsi,
-    exitRsi:   n.exitRsi,
-    entryRsiPath: n.entryRsiPath,
-    entryMa:   n.entryMa,
-    maFilters: n.maConditions.map(m => ({
-      period:      m.period,
-      interval:    m.interval,
-      mode:        m.mode,
-      fixedDipPct: m.fixedDipPct,
-    })),
-    extension: {
-      enabled:       n.extension.enabled,
-      maPeriod:      n.extension.maPeriod,
-      maInterval:    n.extension.maInterval,
-      abovePct:      n.extension.abovePct,
-      threeInterval: n.extension.threeInterval,
-      fourInterval:  n.extension.fourInterval,
-      threeCandles:  n.extension.threeCandles,
-      fourCandles:   n.extension.fourCandles,
-      confirmLogic:  n.extension.confirmLogic,
-    },
-    stopLoss: {
-      enabled:         n.stopLoss.enabled,
-      fixedEnabled:    n.stopLoss.fixedEnabled,
-      adaptiveEnabled: n.stopLoss.adaptiveEnabled,
-      period:          n.stopLoss.period,
-      interval:        n.stopLoss.interval,
-    },
+    rule1,
+    rule2,
+    // legado (regra 1)
+    entryRsi:  rule1.entryRsi,
+    exitRsi:   rule1.exitRsi,
+    entryRsiPath: { enabled: rule1.enabled },
+    entryMa:   { ...rule2.entryMa, enabled: rule2.enabled },
+    maFilters: rule1.maFilters,
+    maConditions: n.maConditions,
+    extension: rule1.extension,
+    stopLoss:  rule1.stopLoss,
     adaptiveOpts: n.adaptiveOpts,
     minVolumeUsdt:  n.volume.minVolumeUsdt,
     allowLowVolume: n.volume.allowLowVolume,
@@ -349,7 +442,9 @@ function resolveStrategy(row) {
 }
 
 function hasAdaptiveFilters(config) {
-  return (config?.maFilters ?? []).some(f => f.mode === 'adaptive');
+  const r1 = (config?.rule1?.maFilters ?? config?.maFilters ?? []).some(f => f.mode === 'adaptive');
+  const r2 = config?.rule2?.enabled && config?.rule2?.stopLoss?.adaptiveEnabled !== false;
+  return r1 || r2;
 }
 
 module.exports = {

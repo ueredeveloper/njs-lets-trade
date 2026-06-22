@@ -270,117 +270,7 @@ function getThemeColors() {
 }
 
 
-/** Formata data/hora e preço para marcadores de trade */
-function fmtMarkerDateTime(ms) {
-  return new Date(ms).toLocaleString('pt-BR', {
-    timeZone: 'America/Sao_Paulo',
-    day: '2-digit', month: '2-digit', year: '2-digit',
-    hour: '2-digit', minute: '2-digit',
-  });
-}
-
-function fmtMarkerPrice(p) {
-  const v = Number(p);
-  if (Number.isNaN(v)) return '—';
-  if (v < 0.01) return v.toFixed(6);
-  if (v < 1) return v.toFixed(4);
-  return v.toFixed(2);
-}
-
-/** Marcadores verticais acima do candle — sinal / bought / sold */
-function buildTradeMarkerMarkPoint(candlesticks, DL, LEFT_PAD, markers, xData) {
-  if (!markers?.length || !candlesticks?.length) return null;
-  const offset = candlesticks.length - DL;
-  const data = [];
-
-  const cfg = {
-    signal: { color: '#f59e0b', title: 'SINAL', offset: [-14, 0], bg: 'rgba(245,158,11,0.18)' },
-    buy:    { color: '#22c55e', title: 'BOUGHT', offset: [0, 0], bg: 'rgba(34,197,94,0.18)' },
-    sell:   { color: '#ef4444', title: 'SOLD', offset: [14, 0], bg: 'rgba(239,68,68,0.18)' },
-  };
-
-  for (const m of markers) {
-    const style = cfg[m.side];
-    if (!style) continue;
-    const timeMs = Number(m.time);
-    const idx = candlesticks.reduce((best, c, i) =>
-      (Math.abs(Number(c.openTime) - timeMs) < Math.abs(Number(candlesticks[best].openTime) - timeMs) ? i : best), 0);
-    const localIdx = idx - offset;
-    if (localIdx < 0 || localIdx >= DL) continue;
-    const xIdx = localIdx + LEFT_PAD;
-    const cat = xData?.[xIdx];
-    if (!cat) continue;
-    const high = parseFloat(candlesticks[idx].high);
-    const dt = fmtMarkerDateTime(timeMs);
-    const price = fmtMarkerPrice(m.price);
-
-    data.push({
-      name: style.title,
-      coord: [cat, high],
-      symbol: 'circle',
-      symbolSize: 1,
-      symbolOffset: style.offset,
-      itemStyle: { color: style.color, opacity: 0.9 },
-      label: {
-        show: true,
-        formatter: `${style.title}\n${dt}\n${price}`,
-        color: style.color,
-        fontSize: 9,
-        fontWeight: 'bold',
-        rotate: 90,
-        position: 'top',
-        distance: 6,
-        backgroundColor: style.bg,
-        padding: [3, 5],
-        borderRadius: 2,
-        lineHeight: 14,
-      },
-    });
-  }
-
-  return data.length ? { silent: true, animation: false, data } : null;
-}
-
-function ChartTradeMarkersBar({ markers }) {
-  if (!markers?.length) return null;
-  const signal = markers.find(m => m.side === 'signal');
-  const buy = markers.find(m => m.side === 'buy');
-  const sell = markers.find(m => m.side === 'sell');
-  if (!signal && !buy && !sell) return null;
-
-  const card = (kind, m) => {
-    const styles = {
-      signal: { color: '#f59e0b', label: '◆ SINAL' },
-      buy:    { color: '#22c55e', label: '▲ BOUGHT' },
-      sell:   { color: '#ef4444', label: '▼ SOLD' },
-    }[kind];
-    return (
-      <div
-        key={kind}
-        id={`chart-trade-marker-${kind}`}
-        className="chart-trade-marker-card flex flex-col px-2 py-1 rounded text-[9px] font-mono leading-tight shadow-md"
-        style={{
-          background: `${styles.color}22`,
-          border: `1px solid ${styles.color}`,
-          color: styles.color,
-        }}>
-        <span className="font-bold">{styles.label}</span>
-        <span className="text-white/90">{fmtMarkerDateTime(m.time)}</span>
-        <span className="text-white/60">@ {fmtMarkerPrice(m.price)}</span>
-      </div>
-    );
-  };
-
-  return (
-    <div id="chart-trade-markers-bar" className="chart-trade-markers-bar absolute top-2 left-[72px] right-[72px] z-20 flex flex-wrap gap-2 pointer-events-none">
-      {signal && card('signal', signal)}
-      {buy && card('buy', buy)}
-      {sell && card('sell', sell)}
-    </div>
-  );
-}
-
-function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAverage, ma50, rsi }, colors, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = [], overlayConfigs = [], tradeMarkers = []) {
+function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAverage, ma50, rsi }, colors, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = [], overlayConfigs = []) {
   const showMa50     = activeIndicators.includes('ma50');
   const showMa200    = activeIndicators.includes('ma200');
   const showIchimoku = activeIndicators.includes('ichimoku');
@@ -482,7 +372,6 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
 
   // Todas as markLines unificadas: separadores de dia + zoom + compras
   const allMarkLineData = [...dayBreakData, ...periodMarkData, ...tradeMarkData];
-  const tradeMarkPoint = buildTradeMarkerMarkPoint(candlesticks, DL, LEFT_PAD, tradeMarkers, xData);
 
   const lastClose = candlesticks.length ? parseFloat(candlesticks[candlesticks.length - 1].close) : null;
   const _fmtP = (p) => p < 0.01 ? p.toFixed(6) : p < 1 ? p.toFixed(4) : p.toFixed(2);
@@ -574,7 +463,6 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
       data: [...new Array(LEFT_PAD).fill('-'), ...candlesticks.slice(-DL).map((c) => [c.open, c.close, c.low, c.high])],
       itemStyle: { color: C_UP, color0: C_DOWN, borderColor: C_UP, borderColor0: C_DOWN },
       markLine: finalMarkLine,
-      ...(tradeMarkPoint ? { markPoint: tradeMarkPoint } : {}),
     },
     ...(showMa50 && ma50?.length ? [{
       name: 'MA50',
@@ -707,7 +595,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
 
 // ── Gráfico Matrix: área de preço + RSI, tema terminal verde ─────────────────
 
-function buildMatrixOption({ symbol, interval, candlesticks, rsi }, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = [], tradeMarkers = []) {
+function buildMatrixOption({ symbol, interval, candlesticks, rsi }, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = []) {
   const showRsi   = activeIndicators.includes('rsi');
   const showRsi50 = activeIndicators.includes('rsi50');
   const showRsi80 = activeIndicators.includes('rsi80');
@@ -779,7 +667,6 @@ function buildMatrixOption({ symbol, interval, candlesticks, rsi }, activeIndica
     });
   })();
 
-  const tradeMarkPoint = buildTradeMarkerMarkPoint(candlesticks, DL, LEFT_PAD, tradeMarkers, xData);
   const allMarkLineData = [...dayBreakData, ...periodMarkData, ...tradeMarkData];
   const zoomWindow = zoomPeriod ? computeZoomWindow(candlesticks, zoomPeriod) : null;
 
@@ -867,7 +754,6 @@ function buildMatrixOption({ symbol, interval, candlesticks, rsi }, activeIndica
             colorStops: [{ offset: 0, color: 'rgba(34,197,94,0.28)' }, { offset: 1, color: 'rgba(34,197,94,0.02)' }] },
         },
         markLine: finalMarkLine,
-        ...(tradeMarkPoint ? { markPoint: tradeMarkPoint } : {}),
       },
       ...(showRsi && rsiData.length ? [{
         name: 'RSI',
@@ -1264,19 +1150,12 @@ export default function CandlestickChart() {
 
   const option = useMemo(() => {
     if (!selectedChart) return null;
-    const tradeMarkers = chartTradeMarkers?.length
-      ? chartTradeMarkers
-      : (selectedChart.tradeMarkers ?? []);
     if (activeTab === 'matrix') {
-      return buildMatrixOption(selectedChart, activeIndicators, displayLimit, chartZoom, tradeTimes, tradeMarkers);
+      return buildMatrixOption(selectedChart, activeIndicators, displayLimit, chartZoom, tradeTimes);
     }
-    return buildOption(selectedChart, colors, activeIndicators, displayLimit, chartZoom, tradeTimes, overlayConfigs, tradeMarkers);
+    return buildOption(selectedChart, colors, activeIndicators, displayLimit, chartZoom, tradeTimes, overlayConfigs);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedChart, colors, activeIndicators, chartZoom, tradePurchases, chartTradeMarkers, activeTab, overlayConfigs, displayLimit]);
-
-  const tradeMarkers = chartTradeMarkers?.length
-    ? chartTradeMarkers
-    : (selectedChart?.tradeMarkers ?? []);
 
   if (!selectedChart || !option) {
     return (
@@ -1364,7 +1243,6 @@ export default function CandlestickChart() {
       {activeTab === 'chart' ? (
         <div className="flex-1 min-h-0 relative">
           {chartNode}
-          <ChartTradeMarkersBar markers={tradeMarkers} />
           <ChartLeftIndicatorPanel
             activeIndicators={activeIndicators}
             toggleIndicator={toggleIndicator}
@@ -1380,7 +1258,6 @@ export default function CandlestickChart() {
           {/* Gráfico (lado esquerdo) */}
           <div className="flex-1 min-w-0 min-h-0 relative">
             {chartNode}
-            <ChartTradeMarkersBar markers={tradeMarkers} />
             <ChartLeftIndicatorPanel
               activeIndicators={activeIndicators}
               toggleIndicator={toggleIndicator}

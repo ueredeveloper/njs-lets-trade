@@ -15,6 +15,8 @@ const INTERVAL_MS = {
   '1h': 3_600_000, '2h': 7_200_000, '4h': 14_400_000, '8h': 28_800_000, '1d': 86_400_000,
 };
 
+const MA_ENTRY_DEFAULT_DISCOUNT = 0.02;
+
 const BOT_DEFAULTS = {
   entryDiscount:    TRADE_CONFIG_DEFAULTS.execution.entryDiscount,
   immediateEntry:   TRADE_CONFIG_DEFAULTS.execution.immediateEntry,
@@ -75,40 +77,24 @@ function getEntryScanInterval(config) {
 }
 
 function getRequiredSpecs(config) {
+  const { getRule1RequiredSpecs } = require('./rule1Engine');
+  const { getRule2RequiredSpecs } = require('./rule2Engine');
   const specs = new Map();
-  const add = (interval, limit) => {
-    const prev = specs.get(interval) ?? 0;
-    specs.set(interval, Math.max(prev, limit));
+  const addAll = (list) => {
+    for (const { interval, limit } of list ?? []) {
+      specs.set(interval, Math.max(specs.get(interval) ?? 0, limit));
+    }
   };
-
-  if (entryRsiPathActive(config)) {
-    add(config.entryRsi.interval, config.entryRsi.period + 50);
-  }
-  if (entryMaPathActive(config)) {
-    add(config.entryMa.interval, config.entryMa.period + 60);
-    if (config.entryMa.requireRsi) {
-      add(config.entryMa.entryRsi.interval, config.entryMa.entryRsi.period + 50);
+  if (config?.rule1) addAll(getRule1RequiredSpecs(config.rule1));
+  else {
+    // legado
+    if (entryRsiPathActive(config)) addAll([{ interval: config.entryRsi.interval, limit: config.entryRsi.period + 50 }]);
+    addAll([{ interval: config.exitRsi.interval, limit: config.exitRsi.period + 50 }]);
+    for (const f of config.maFilters ?? []) {
+      specs.set(f.interval, Math.max(specs.get(f.interval) ?? 0, f.period + 60));
     }
   }
-  if (!entryRsiPathActive(config) && !entryMaPathActive(config)) {
-    add(config.entryRsi.interval, config.entryRsi.period + 50);
-  }
-
-  add(config.exitRsi.interval,  config.exitRsi.period  + 50);
-
-  for (const f of config.maFilters ?? []) {
-    add(f.interval, f.period + 60);
-  }
-  if (config.extension?.enabled) {
-    const { threeInterval, fourInterval } = getExtensionIntervals(config.extension);
-    add(threeInterval, 60);
-    add(fourInterval, 60);
-    add(config.extension.maInterval, config.extension.maPeriod + 10);
-  }
-  if (stopLossFixedActive(config)) {
-    add(config.stopLoss.interval, config.stopLoss.period + 10);
-  }
-
+  if (config?.rule2) addAll(getRule2RequiredSpecs(config.rule2));
   return [...specs.entries()].map(([interval, limit]) => ({ interval, limit }));
 }
 
@@ -513,9 +499,9 @@ function diagnoseEntry({
   return { rsiOk, allowed, reason, entryKind, paths, maChecks, extension };
 }
 
-function evaluateExit({ close, exitRsi, stopLossMa, maSnap, adaptiveDips, config }) {
+function evaluateExit({ close, exitRsi, stopLossMa, maSnap, adaptiveDips, config, entryKind = null }) {
   const adaptiveStopFloors = maSnap
-    ? getAdaptiveStopFloors(maSnap, adaptiveDips, config)
+    ? getAdaptiveStopFloors(maSnap, adaptiveDips, config, { entryKind })
     : [];
   const stopHit = checkStopLossHits(close, stopLossMa, adaptiveStopFloors, config);
   if (stopHit) return stopHit;
@@ -550,12 +536,41 @@ function getStopLossMa(maSnap, config) {
 }
 
 /** Pisos de stop adaptativo (MA × (1 − dip%)) para cada filtro MA em modo adaptive */
-function getAdaptiveStopFloors(maSnap, adaptiveDips, config) {
+function clampEntryDiscount(v, fallback) {
+  if (!Number.isFinite(v) || v < 0) return fallback;
+  return Math.min(0.1, Math.max(0.0001, v));
+}
+
+/** Desconto PENDING por caminho: MA = entryMa.entryDiscount (padrão 2%); RSI = execution.entryDiscount */
+function getEntryDiscount(entryKind, config) {
+  if (entryKind === 'ma') {
+    const v = config.entryMa?.entryDiscount ?? MA_ENTRY_DEFAULT_DISCOUNT;
+    return clampEntryDiscount(v, MA_ENTRY_DEFAULT_DISCOUNT);
+  }
+  return clampEntryDiscount(
+    config.entryDiscount ?? BOT_DEFAULTS.entryDiscount,
+    BOT_DEFAULTS.entryDiscount,
+  );
+}
+
+/** Caminho MA sempre aguarda desconto — nunca compra imediata no gatilho */
+function shouldUseImmediateEntry(entryKind, config) {
+  if (entryKind === 'ma') return false;
+  return !!(config.immediateEntry ?? BOT_DEFAULTS.immediateEntry);
+}
+
+function getAdaptiveStopFloors(maSnap, adaptiveDips, config, opts = {}) {
   if (!stopLossAdaptiveActive(config)) return [];
 
+  const { entryKind = null } = opts;
+  const sl = config.stopLoss;
   const floors = [];
   for (const f of config.maFilters ?? []) {
     if (f.mode !== 'adaptive') continue;
+    // Entrada pelo caminho MA: stop adaptativo só na MA do stop (ex. MA50 4h), não MA50 1h
+    if (entryKind === 'ma') {
+      if (f.period !== sl?.period || f.interval !== sl?.interval) continue;
+    }
     const key = maKey(f.period, f.interval);
     const md  = maSnap[key];
     if (!md?.ma) continue;
@@ -581,7 +596,13 @@ function checkStopLossHits(close, stopLossMa, adaptiveStopFloors, config) {
 
   const stops = [];
   if (stopLossFixedActive(config) && stopLossMa != null) {
-    stops.push({ level: stopLossMa, reason: 'stop_loss_ma' });
+    const sl = config.stopLoss ?? {};
+    stops.push({
+      level: stopLossMa,
+      reason: 'stop_loss_ma',
+      period: sl.period,
+      interval: sl.interval,
+    });
   }
   if (stopLossAdaptiveActive(config)) {
     for (const af of adaptiveStopFloors ?? []) {
@@ -607,6 +628,8 @@ function checkStopLossHits(close, stopLossMa, adaptiveStopFloors, config) {
     exit: true,
     reason: hit.reason,
     stopLossLevel: hit.level,
+    period: hit.period,
+    interval: hit.interval,
     ...(hit.reason === 'stop_loss_adaptive'
       ? { adaptiveKey: hit.adaptiveKey, dipPct: hit.dipPct, adaptiveMa: hit.ma }
       : { stopLossMa: hit.level }),
@@ -668,6 +691,9 @@ module.exports = {
   evaluateExit,
   getStopLossMa,
   getAdaptiveStopFloors,
+  getEntryDiscount,
+  shouldUseImmediateEntry,
+  MA_ENTRY_DEFAULT_DISCOUNT,
   isStopLossExit,
   checkStopLossHits,
   checkRsi,

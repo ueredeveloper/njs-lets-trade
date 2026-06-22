@@ -10,6 +10,8 @@ import {
 const MT_COLOR      = '#8b5cf6';
 const GATE_COLOR    = '#0068ff';
 const BINANCE_COLOR = '#f0b90b';
+const ENTRY_COLOR   = '#26a69a';
+const EXIT_COLOR    = '#ef5350';
 
 function getBacktestCmd({ symbol, exchange, capital }) {
   return `node backend/bot/amap/amap-bot.js --backtest ${symbol} ${exchange} ${capital}`;
@@ -41,6 +43,18 @@ function SectionHeader({ label, color = '#94a3b8' }) {
     <div className="flex items-center gap-2 mb-2">
       <span className="text-[10px] uppercase tracking-wider font-bold" style={{ color }}>{label}</span>
       <div className="flex-1 h-px bg-p2" />
+    </div>
+  );
+}
+
+function RuleGroup({ title, subtitle, color, children }) {
+  return (
+    <div className="rounded-lg overflow-hidden" style={{ border: `1px solid ${color}44` }}>
+      <div className="px-3 py-2" style={{ background: `${color}14`, borderBottom: `1px solid ${color}33` }}>
+        <span className="text-[11px] uppercase tracking-wider font-bold block" style={{ color }}>{title}</span>
+        {subtitle && <span className="text-[9px] text-p5/45 block mt-0.5">{subtitle}</span>}
+      </div>
+      <div className="px-3 py-3 space-y-4" style={{ background: '#0f1219' }}>{children}</div>
     </div>
   );
 }
@@ -103,6 +117,7 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
   const [exchange, setExchange] = useState(currentEntry?.exchange ?? defaultExchange ?? 'binance');
   const [capital, setCapital]   = useState(currentEntry?.capital ?? 40);
   const [form, setForm]         = useState(() => formStateFromEntry(currentEntry));
+  const [activeTab, setActiveTab] = useState('rule1');
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [volCheck, setVolCheck] = useState(null);
   const [volumeWarnOpen, setVolumeWarnOpen] = useState(false);
@@ -110,31 +125,21 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
   const [adaptiveSuggest, setAdaptiveSuggest] = useState({});
   const [extensionSuggest, setExtensionSuggest] = useState(null);
   const [exitRsiSuggest, setExitRsiSuggest] = useState(null);
+  const [exitRsi2Suggest, setExitRsi2Suggest] = useState(null);
   const [entryRsiSuggest, setEntryRsiSuggest] = useState(null);
   const [entryMaSuggest, setEntryMaSuggest] = useState(null);
   const [copied, setCopied]     = useState(null);
   const [entryPathError, setEntryPathError] = useState(null);
 
-  const rsiPathOn = form.entryRsiPath?.enabled !== false;
-  const maPathOn  = !!form.entryMa?.enabled;
+  const rule1On = form.rule1?.enabled !== false;
+  const rule2On = form.rule2?.enabled === true;
 
-  const entrySummary = (() => {
-    const parts = [];
-    if (rsiPathOn) {
-      const r = form.entryRsi;
-      parts.push(`RSI(${r.interval}) ${r.operator ?? '<'} ${r.value}`);
-    }
-    if (maPathOn) {
-      const m = form.entryMa;
-      let s = `MA${m.period} ${m.interval}`;
-      if (m.requireRsi) {
-        const r = m.entryRsi;
-        s += ` + RSI(${r.interval}) ${r.operator ?? '<'} ${r.value}`;
-      }
-      parts.push(s);
-    }
-    return parts.join('  OU  ');
-  })();
+  const entrySummary = rule1On
+    ? `RSI(${form.rule1.entryRsi.interval}) ${form.rule1.entryRsi.operator ?? '<'} ${form.rule1.entryRsi.value}`
+    : '';
+  const rule2Summary = rule2On
+    ? `MA${form.rule2.entryMa.period} ${form.rule2.entryMa.interval} (${ENTRY_MA_TRIGGERS.find(t => t.id === form.rule2.entryMa.trigger)?.label ?? 'toque'})`
+    : '';
 
   const patch = useCallback((path, value) => {
     setForm(prev => {
@@ -153,16 +158,25 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
   function addMa() {
     setForm(prev => ({
       ...prev,
-      maConditions: [...prev.maConditions, { id: newId(), period: 50, interval: '1h', mode: 'strict_above', fixedDipPct: '' }],
+      rule1: {
+        ...prev.rule1,
+        maConditions: [...prev.rule1.maConditions, { id: newId(), period: 50, interval: '1h', mode: 'strict_above', fixedDipPct: '' }],
+      },
     }));
   }
   function removeMa(id) {
-    setForm(prev => ({ ...prev, maConditions: prev.maConditions.filter(m => m.id !== id) }));
+    setForm(prev => ({
+      ...prev,
+      rule1: { ...prev.rule1, maConditions: prev.rule1.maConditions.filter(m => m.id !== id) },
+    }));
   }
   function updateMa(id, field, value) {
     setForm(prev => ({
       ...prev,
-      maConditions: prev.maConditions.map(m => m.id === id ? { ...m, [field]: value } : m),
+      rule1: {
+        ...prev.rule1,
+        maConditions: prev.rule1.maConditions.map(m => m.id === id ? { ...m, [field]: value } : m),
+      },
     }));
     if (field === 'period' || field === 'interval' || field === 'mode') {
       setAdaptiveSuggest(prev => { const n = { ...prev }; delete n[id]; return n; });
@@ -200,7 +214,7 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
     return payload;
   }
 
-  useEffect(() => { setDiscountSuggest(null); }, [symbol, exchange, form.entryRsi, form.exitRsi, form.execution.pendingTimeoutMs]);
+  useEffect(() => { setDiscountSuggest(null); }, [symbol, exchange, form.rule1.entryRsi, form.rule1.exitRsi, form.rule1.execution.pendingTimeoutMs]);
 
   async function handleSuggestDiscount() {
     const sym = symbol.trim().toUpperCase();
@@ -210,43 +224,45 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
       const r = await suggestMultitradeDiscount({
         symbol: sym,
         exchange,
-        entryRsi: form.entryRsi,
-        exitRsi: form.exitRsi,
-        execution: form.execution,
+        entryRsi: form.rule1.entryRsi,
+        exitRsi: form.rule1.exitRsi,
+        execution: form.rule1.execution,
       });
       setDiscountSuggest(r);
-      if (r.entryDiscount != null) patch('execution.entryDiscount', r.entryDiscount);
+      if (r.entryDiscount != null) patch('rule1.execution.entryDiscount', r.entryDiscount);
     } catch (err) {
       setDiscountSuggest({ error: err.message });
     }
   }
 
-  useEffect(() => { setExtensionSuggest(null); }, [symbol, exchange, form.entryRsi, form.exitRsi, form.extension, form.maConditions]);
+  useEffect(() => { setExtensionSuggest(null); }, [symbol, exchange, form.rule1.entryRsi, form.rule1.exitRsi, form.rule1.extension, form.rule1.maConditions]);
 
-  useEffect(() => { setExitRsiSuggest(null); }, [symbol, exchange, form.entryRsi, form.exitRsi, form.maConditions, form.extension, form.stopLoss]);
+  useEffect(() => { setExitRsiSuggest(null); }, [symbol, exchange, form.rule1.entryRsi, form.rule1.exitRsi, form.rule1.maConditions, form.rule1.extension, form.rule1.stopLoss]);
 
-  useEffect(() => { setEntryRsiSuggest(null); }, [symbol, exchange, form.entryRsi, form.entryRsiPath, form.maConditions, form.extension, form.stopLoss]);
+  useEffect(() => { setExitRsi2Suggest(null); }, [symbol, exchange, form.rule2.entryMa, form.rule2.exitRsi, form.rule2.stopLoss]);
 
-  useEffect(() => { setEntryMaSuggest(null); }, [symbol, exchange, form.entryMa, form.maConditions, form.extension, form.stopLoss, form.exitRsi]);
+  useEffect(() => { setEntryRsiSuggest(null); }, [symbol, exchange, form.rule1.entryRsi, form.rule1.enabled, form.rule1.maConditions, form.rule1.extension, form.rule1.stopLoss]);
+
+  useEffect(() => { setEntryMaSuggest(null); }, [symbol, exchange, form.rule2.entryMa, form.rule2.exitRsi, form.rule2.stopLoss]);
 
   async function handleSuggestEntryRsi() {
     const sym = symbol.trim().toUpperCase();
-    if (!sym || !rsiPathOn) return;
+    if (!sym || !rule1On) return;
     setEntryRsiSuggest({ loading: true });
     try {
       const r = await suggestMultitradeEntryRsi({
         symbol: sym,
         exchange,
-        entryRsi: form.entryRsi,
-        exitRsi: form.exitRsi,
-        entryRsiPath: form.entryRsiPath,
-        entryMa: form.entryMa,
-        maConditions: form.maConditions,
-        extension: form.extension,
-        stopLoss: form.stopLoss,
+        entryRsi: form.rule1.entryRsi,
+        exitRsi: form.rule1.exitRsi,
+        entryRsiPath: { enabled: form.rule1.enabled },
+        entryMa: form.rule2.entryMa,
+        maConditions: form.rule1.maConditions,
+        extension: form.rule1.extension,
+        stopLoss: form.rule1.stopLoss,
       });
       setEntryRsiSuggest(r);
-      if (r.entryRsiValue != null) patch('entryRsi.value', r.entryRsiValue);
+      if (r.entryRsiValue != null) patch('rule1.entryRsi.value', r.entryRsiValue);
     } catch (err) {
       setEntryRsiSuggest({ error: err.message });
     }
@@ -254,24 +270,20 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
 
   async function handleSuggestEntryMa() {
     const sym = symbol.trim().toUpperCase();
-    if (!sym || !maPathOn) return;
+    if (!sym || !rule2On) return;
     setEntryMaSuggest({ loading: true });
     try {
       const r = await suggestMultitradeEntryMa({
         symbol: sym,
         exchange,
-        entryRsi: form.entryRsi,
-        exitRsi: form.exitRsi,
-        entryRsiPath: form.entryRsiPath,
-        entryMa: form.entryMa,
-        maConditions: form.maConditions,
-        extension: form.extension,
-        stopLoss: form.stopLoss,
+        entryMa: form.rule2.entryMa,
+        exitRsi: form.rule2.exitRsi,
+        stopLoss: form.rule2.stopLoss,
       });
       setEntryMaSuggest(r);
-      if (r.trigger) patch('entryMa.trigger', r.trigger);
-      if (r.tolerancePct != null) patch('entryMa.tolerancePct', r.tolerancePct);
-      if (r.maRsiValue != null) patch('entryMa.entryRsi.value', r.maRsiValue);
+      if (r.trigger) patch('rule2.entryMa.trigger', r.trigger);
+      if (r.tolerancePct != null) patch('rule2.entryMa.tolerancePct', r.tolerancePct);
+      if (r.maRsiValue != null) patch('rule2.entryMa.entryRsi.value', r.maRsiValue);
     } catch (err) {
       setEntryMaSuggest({ error: err.message });
     }
@@ -285,42 +297,79 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
       const r = await suggestMultitradeExitRsi({
         symbol: sym,
         exchange,
-        entryRsi: form.entryRsi,
-        exitRsi: form.exitRsi,
-        maConditions: form.maConditions,
-        extension: form.extension,
-        stopLoss: form.stopLoss,
+        entryRsi: form.rule1.entryRsi,
+        exitRsi: form.rule1.exitRsi,
+        entryRsiPath: { enabled: form.rule1.enabled },
+        maConditions: form.rule1.maConditions,
+        extension: form.rule1.extension,
+        stopLoss: form.rule1.stopLoss,
       });
       setExitRsiSuggest(r);
-      if (r.suggestedExitRsi != null) patch('exitRsi.value', r.suggestedExitRsi);
+      if (r.suggestedExitRsi != null) patch('rule1.exitRsi.value', r.suggestedExitRsi);
     } catch (err) {
       setExitRsiSuggest({ error: err.message });
     }
   }
 
+  async function handleSuggestExitRsi2() {
+    const sym = symbol.trim().toUpperCase();
+    if (!sym || !rule2On) return;
+    setExitRsi2Suggest({ loading: true });
+    try {
+      const em = form.rule2.entryMa;
+      const r = await suggestMultitradeExitRsi({
+        symbol: sym,
+        exchange,
+        entryRsi: { interval: em.interval, period: 14, operator: '<', value: 30 },
+        exitRsi: form.rule2.exitRsi,
+        entryRsiPath: { enabled: false },
+        entryMa: { ...em, enabled: true },
+        stopLoss: { enabled: false },
+        entryPath: 'ma',
+      });
+      setExitRsi2Suggest(r);
+      if (r.suggestedExitRsi != null) patch('rule2.exitRsi.value', r.suggestedExitRsi);
+    } catch (err) {
+      setExitRsi2Suggest({ error: err.message });
+    }
+  }
+
+  function renderExitRsiSuggest(suggest) {
+    if (!suggest || suggest.loading) return null;
+    return (
+      <p className="text-[9px] font-mono mb-1 leading-relaxed" style={{ color: suggest.error ? '#f59e0b' : '#94a3b8' }}>
+        {suggest.error
+          ? suggest.error
+          : suggest.usedDefault
+            ? `Poucos trades (${suggest.tradeCount ?? 0}) — padrão ${suggest.suggestedExitRsi}`
+            : `${suggest.tradeCount} trades · pico mediano ${suggest.medianPeakRsi} (média ${suggest.avgPeakRsi}) · atinge 70: ${suggest.hitRate70}% · 75: ${suggest.hitRate75}% · 80: ${suggest.hitRate80}% → sugerido ${suggest.suggestedExitRsi}${suggest.recommendation === 'chega_alto' ? ' (costuma subir alto)' : suggest.recommendation === 'garantir_cedo' ? ' (garantir mais cedo)' : ''}`}
+      </p>
+    );
+  }
+
   async function handleSuggestExtensionAbove() {
     const sym = symbol.trim().toUpperCase();
-    if (!sym || !form.extension.enabled) return;
+    if (!sym || !form.rule1.extension.enabled) return;
     setExtensionSuggest({ loading: true });
     try {
       const r = await suggestMultitradeExtensionAbove({
         symbol: sym,
         exchange,
-        entryRsi: form.entryRsi,
-        exitRsi: form.exitRsi,
-        extension: form.extension,
-        maConditions: form.maConditions,
-        stopLoss: form.stopLoss,
+        entryRsi: form.rule1.entryRsi,
+        exitRsi: form.rule1.exitRsi,
+        extension: form.rule1.extension,
+        maConditions: form.rule1.maConditions,
+        stopLoss: form.rule1.stopLoss,
       });
       setExtensionSuggest(r);
-      if (r.suggestedAbovePct != null) patch('extension.abovePct', r.suggestedAbovePct);
+      if (r.suggestedAbovePct != null) patch('rule1.extension.abovePct', r.suggestedAbovePct);
     } catch (err) {
       setExtensionSuggest({ error: err.message });
     }
   }
 
   async function handleSuggestAdaptive(maId) {
-    const ma = form.maConditions.find(m => m.id === maId);
+    const ma = form.rule1.maConditions.find(m => m.id === maId);
     const sym = symbol.trim().toUpperCase();
     if (!sym || !ma || ma.mode !== 'adaptive') return;
     setAdaptiveSuggest(prev => ({ ...prev, [maId]: { loading: true } }));
@@ -330,7 +379,7 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
         exchange,
         period: ma.period,
         interval: ma.interval,
-        adaptiveOpts: form.adaptiveOpts,
+        adaptiveOpts: form.rule1.adaptiveOpts,
       });
       setAdaptiveSuggest(prev => ({ ...prev, [maId]: r }));
       if (r.suggestedDipPct != null) updateMa(maId, 'fixedDipPct', r.suggestedDipPct);
@@ -342,8 +391,8 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
   function handleConfirm() {
     const sym = symbol.trim().toUpperCase();
     if (!sym || Number(capital) <= 0) return;
-    if (!rsiPathOn && !maPathOn) {
-      setEntryPathError('Ative pelo menos uma entrada (RSI ou MA).');
+    if (!rule1On && !rule2On) {
+      setEntryPathError('Ative pelo menos uma regra (1 ou 2).');
       return;
     }
     setEntryPathError(null);
@@ -363,12 +412,12 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
   const payload = buildPayload();
   const cmd      = getBacktestCmd(payload);
   const adaptCmd = getAdaptiveTestCmd(payload);
-  const showAdaptive = hasAdaptiveMa(form.maConditions);
+  const showAdaptive = hasAdaptiveMa(form.rule1.maConditions);
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto py-4"
       style={{ background: 'rgba(0,0,0,0.72)' }} onClick={onCancel}>
-      <div className="w-[24rem] rounded-lg shadow-2xl border mx-4 my-auto"
+      <div className="w-[26rem] rounded-lg shadow-2xl border mx-4 my-auto"
         style={{ background: '#131722', borderColor: '#2a2d3a' }} onClick={e => e.stopPropagation()}>
 
         <div className="flex items-center justify-between px-4 py-3 border-b" style={{ borderColor: '#2a2d3a' }}>
@@ -382,46 +431,75 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
         <div className="px-4 py-4 space-y-4 max-h-[80vh] overflow-y-auto">
 
           <div>
-            <label className="block text-[10px] uppercase tracking-wider text-p5/50 mb-1.5">Símbolo</label>
-            <input type="text" value={symbol} onChange={e => setSymbol(e.target.value.toUpperCase())}
-              className="w-full rounded px-2.5 py-1.5 text-xs text-p5 outline-none font-mono uppercase" style={sel} placeholder="BTCUSDT" />
-          </div>
+            <SectionHeader label="Configuração geral" />
+            <div className="space-y-3">
+              <div>
+                <label className="block text-[10px] uppercase tracking-wider text-p5/50 mb-1.5">Símbolo</label>
+                <input type="text" value={symbol} onChange={e => setSymbol(e.target.value.toUpperCase())}
+                  className="w-full rounded px-2.5 py-1.5 text-xs text-p5 outline-none font-mono uppercase" style={sel} placeholder="BTCUSDT" />
+              </div>
 
-          <div>
-            <label className="block text-[10px] uppercase tracking-wider text-p5/50 mb-1.5">Corretora</label>
-            <div className="flex gap-2">
-              {[{ id: 'gate', label: 'Gate.io', color: GATE_COLOR }, { id: 'binance', label: 'Binance', color: BINANCE_COLOR }].map(ex => (
-                <button key={ex.id} onClick={() => setExchange(ex.id)}
-                  className="flex-1 py-1.5 text-xs rounded font-semibold"
-                  style={{
-                    background: exchange === ex.id ? ex.color : 'transparent',
-                    color: exchange === ex.id ? (ex.id === 'binance' ? '#000' : '#fff') : ex.color,
-                    border: `1px solid ${ex.color}`, opacity: exchange === ex.id ? 1 : 0.55,
-                  }}>{ex.label}</button>
-              ))}
+              <div>
+                <label className="block text-[10px] uppercase tracking-wider text-p5/50 mb-1.5">Corretora</label>
+                <div className="flex gap-2">
+                  {[{ id: 'gate', label: 'Gate.io', color: GATE_COLOR }, { id: 'binance', label: 'Binance', color: BINANCE_COLOR }].map(ex => (
+                    <button key={ex.id} onClick={() => setExchange(ex.id)}
+                      className="flex-1 py-1.5 text-xs rounded font-semibold"
+                      style={{
+                        background: exchange === ex.id ? ex.color : 'transparent',
+                        color: exchange === ex.id ? (ex.id === 'binance' ? '#000' : '#fff') : ex.color,
+                        border: `1px solid ${ex.color}`, opacity: exchange === ex.id ? 1 : 0.55,
+                      }}>{ex.label}</button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[10px] uppercase tracking-wider text-p5/50 mb-1">Capital (USDT)</label>
+                <input type="number" value={capital} onChange={e => setCapital(e.target.value)} min={1}
+                  className="w-full rounded px-2.5 py-1.5 text-xs text-p5 outline-none font-mono" style={sel} />
+              </div>
             </div>
           </div>
 
-          <div>
-            <label className="block text-[10px] uppercase tracking-wider text-p5/50 mb-1">Capital (USDT)</label>
-            <input type="number" value={capital} onChange={e => setCapital(e.target.value)} min={1}
-              className="w-full rounded px-2.5 py-1.5 text-xs text-p5 outline-none font-mono" style={sel} />
+          <div className="flex gap-1 p-1 rounded-lg" style={{ background: '#1a1d28', border: '1px solid #2a2d3a' }}>
+            {[
+              { id: 'rule1', label: 'Regra 1 — RSI', color: ENTRY_COLOR },
+              { id: 'rule2', label: 'Regra 2 — MA50 1h', color: MT_COLOR },
+            ].map(tab => (
+              <button key={tab.id} type="button" onClick={() => setActiveTab(tab.id)}
+                className="flex-1 py-1.5 text-[10px] font-bold rounded transition-colors"
+                style={{
+                  background: activeTab === tab.id ? `${tab.color}22` : 'transparent',
+                  color: activeTab === tab.id ? tab.color : '#94a3b8',
+                  border: `1px solid ${activeTab === tab.id ? tab.color + '55' : 'transparent'}`,
+                }}>
+                {tab.label}
+              </button>
+            ))}
           </div>
 
-          {/* Duas entradas (OR) */}
-          <div>
-            <SectionHeader label="Entradas de compra (OR)" color="#26a69a" />
-            <div className="space-y-2">
-              <EntryPathCard
-                active={rsiPathOn}
-                onToggle={v => { patch('entryRsiPath.enabled', v); setEntryPathError(null); }}
-                title="Entrada 1 — RSI"
-                subtitle={rsiPathOn ? `RSI(${form.entryRsi.interval}) ${form.entryRsi.operator ?? '<'} ${form.entryRsi.value}` : 'Desligada'}
-                color="#26a69a">
+          {activeTab === 'rule1' && (
+          <RuleGroup
+            title="Regra 1 — Entrada RSI e saída"
+            subtitle="Filtros MA, extensão, execução e stop — independente da regra 2"
+            color={ENTRY_COLOR}>
+            <div>
+              <SectionHeader label="Ativar regra 1" color={ENTRY_COLOR} />
+              <label className="flex items-center gap-2 cursor-pointer mb-2">
+                <input type="checkbox" checked={rule1On}
+                  onChange={e => { patch('rule1.enabled', e.target.checked); setEntryPathError(null); }}
+                  className="accent-[#26a69a]" />
+                <span className="text-xs text-p5">Entrada RSI — posição independente da regra 2</span>
+              </label>
+            </div>
+            {rule1On && (
+            <div>
+              <SectionHeader label="Gatilho RSI" color={ENTRY_COLOR} />
                 <RsiRuleFields
-                  rsi={form.entryRsi}
+                  rsi={form.rule1.entryRsi}
                   sel={sel}
-                  onPatch={(field, value) => patch(`entryRsi.${field}`, value)}
+                  onPatch={(field, value) => patch(`rule1.entryRsi.${field}`, value)}
                 />
                 <div className="flex items-center gap-2 pt-1">
                   <button type="button" onClick={handleSuggestEntryRsi}
@@ -440,91 +518,24 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
                         : `${entryRsiSuggest.bestStats?.tradeCount ?? '—'} trades · PnL méd. ${entryRsiSuggest.bestStats?.avgPnl ?? '—'}% · win ${entryRsiSuggest.bestStats?.winRate ?? '—'}% → sugerido ${entryRsiSuggest.entryRsiValue}${entryRsiSuggest.vsAnchor?.pnlDelta != null ? ` (+${entryRsiSuggest.vsAnchor.pnlDelta}% vs âncora)` : ''}`}
                   </p>
                 )}
-              </EntryPathCard>
-
-              <EntryPathCard
-                active={maPathOn}
-                onToggle={v => { patch('entryMa.enabled', v); setEntryPathError(null); }}
-                title="Entrada 2 — MA"
-                subtitle={maPathOn
-                  ? `MA${form.entryMa.period} ${form.entryMa.interval} (${ENTRY_MA_TRIGGERS.find(t => t.id === form.entryMa.trigger)?.label ?? 'toque'})`
-                  : 'Desligada'}
-                color="#8b5cf6">
-                <div className="grid grid-cols-3 gap-1.5">
-                  <select value={form.entryMa.period} onChange={e => patch('entryMa.period', Number(e.target.value))}
-                    className="rounded px-1 py-1.5 text-xs text-p5 outline-none font-mono" style={sel}>
-                    {MA_PERIODS.map(p => <option key={p} value={p}>MA{p}</option>)}
-                  </select>
-                  <select value={form.entryMa.interval} onChange={e => patch('entryMa.interval', e.target.value)}
-                    className="rounded px-1 py-1.5 text-xs text-p5 outline-none" style={sel}>
-                    {MA_INTERVALS.map(iv => <option key={iv} value={iv}>{iv}</option>)}
-                  </select>
-                  <select value={form.entryMa.trigger} onChange={e => patch('entryMa.trigger', e.target.value)}
-                    className="rounded px-1 py-1.5 text-xs text-p5 outline-none" style={sel}>
-                    {ENTRY_MA_TRIGGERS.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
-                  </select>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-[9px] text-p5/40 shrink-0">Tolerância</span>
-                  <NumInput value={form.entryMa.tolerancePct} onChange={v => patch('entryMa.tolerancePct', v)}
-                    min={0.1} max={5} step={0.1} className="w-16" />
-                  <span className="text-[9px] text-p5/35">%</span>
-                </div>
-                <label className="flex items-center gap-2 cursor-pointer pt-0.5">
-                  <input type="checkbox" checked={!!form.entryMa.requireRsi}
-                    onChange={e => patch('entryMa.requireRsi', e.target.checked)}
-                    className="accent-[#8b5cf6]" />
-                  <span className="text-[9px] text-p5/50">Combinar com RSI neste caminho</span>
-                </label>
-                {form.entryMa.requireRsi && (
-                  <RsiRuleFields
-                    rsi={form.entryMa.entryRsi}
-                    sel={sel}
-                    compact
-                    onPatch={(field, value) => patch(`entryMa.entryRsi.${field}`, value)}
-                  />
-                )}
-                <div className="flex items-center gap-2 pt-1">
-                  <button type="button" onClick={handleSuggestEntryMa}
-                    disabled={!symbol.trim() || entryMaSuggest?.loading}
-                    className="text-[9px] px-2 py-0.5 rounded font-semibold shrink-0"
-                    style={{ background: '#2a2d3a', color: MT_COLOR, border: `1px solid ${MT_COLOR}44` }}>
-                    {entryMaSuggest?.loading ? '…' : 'Sugerir MA'}
-                  </button>
-                </div>
-                {entryMaSuggest && !entryMaSuggest.loading && (
-                  <p className="text-[9px] font-mono leading-relaxed" style={{ color: entryMaSuggest.error ? '#f59e0b' : '#94a3b8' }}>
-                    {entryMaSuggest.error
-                      ? entryMaSuggest.error
-                      : entryMaSuggest.usedDefault
-                        ? `Poucos sinais (${entryMaSuggest.bestStats?.tradeCount ?? 0}) — mantém ${entryMaSuggest.anchorTrigger} / ${entryMaSuggest.anchorTolerancePct}%`
-                        : `${entryMaSuggest.bestStats?.tradeCount ?? '—'} trades · PnL méd. ${entryMaSuggest.bestStats?.avgPnl ?? '—'}% → ${entryMaSuggest.trigger} / tol. ${entryMaSuggest.tolerancePct}%${entryMaSuggest.maRsiValue != null ? ` · RSI ${entryMaSuggest.maRsiValue}` : ''}${entryMaSuggest.vsAnchor?.pnlDelta != null ? ` (+${entryMaSuggest.vsAnchor.pnlDelta}% vs âncora)` : ''}`}
-                  </p>
-                )}
-              </EntryPathCard>
-            </div>
             {entrySummary && (
-              <p className="text-[9px] font-mono mt-2 px-1" style={{ color: '#26a69a99' }}>
-                {entrySummary}
-              </p>
+              <p className="text-[9px] font-mono mt-2 px-1" style={{ color: '#26a69a99' }}>{entrySummary}</p>
+            )}
+            </div>
             )}
             {entryPathError && (
               <p className="text-[9px] text-red-400 mt-1">{entryPathError}</p>
             )}
-            <p className="text-[9px] text-p5/30 mt-1">
-              Compra quando qualquer entrada ativa disparar e passar nos filtros MA abaixo.
-            </p>
-          </div>
 
-          {/* Filtros MA */}
-          <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <label className="text-[10px] text-p5/40">Filtros MA</label>
+            <div>
+            <div className="flex items-center justify-between mb-1.5 gap-2">
+              <span className="text-[10px] uppercase tracking-wider font-bold shrink-0" style={{ color: ENTRY_COLOR }}>Filtros MA</span>
+              <div className="flex-1 h-px bg-p2" />
               <button onClick={addMa} className="text-[10px] px-1.5 py-0.5 rounded font-semibold"
                 style={{ background: '#2a2d3a', color: MT_COLOR, border: `1px solid ${MT_COLOR}44` }}>+ MA</button>
             </div>
             <div className="space-y-1.5">
-              {form.maConditions.map(ma => (
+              {form.rule1.maConditions.map(ma => (
                 <div key={ma.id} className="space-y-1">
                   <div className="flex gap-1 items-center">
                     <select value={ma.period} onChange={e => updateMa(ma.id, 'period', Number(e.target.value))}
@@ -566,33 +577,32 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
                   )}
                 </div>
               ))}
-              {!form.maConditions.length && <p className="text-[9px] text-p5/35">Nenhum filtro — entrada só por RSI.</p>}
+              {!form.rule1.maConditions.length && <p className="text-[9px] text-p5/35">Nenhum filtro — entrada só por RSI.</p>}
             </div>
-          </div>
+            </div>
 
-          {/* Extensão */}
-          <div>
-            <SectionHeader label="Extensão acima da MA" />
+            <div>
+            <SectionHeader label="Bloqueio por extensão" color={ENTRY_COLOR} />
             <label className="flex items-center gap-2 cursor-pointer mb-2">
-              <input type="checkbox" checked={form.extension.enabled} onChange={e => patch('extension.enabled', e.target.checked)} className="accent-violet-500" />
+              <input type="checkbox" checked={form.rule1.extension.enabled} onChange={e => patch('rule1.extension.enabled', e.target.checked)} className="accent-violet-500" />
               <span className="text-xs text-p5">Ativar regra de extensão</span>
             </label>
-            {form.extension.enabled && (
+            {form.rule1.extension.enabled && (
               <>
                 <div className="flex gap-1.5 mb-2 items-center flex-wrap">
                   <span className="text-[10px] text-p5/40">Referência:</span>
-                  <select value={form.extension.maPeriod} onChange={e => patch('extension.maPeriod', Number(e.target.value))}
+                  <select value={form.rule1.extension.maPeriod} onChange={e => patch('rule1.extension.maPeriod', Number(e.target.value))}
                     className="w-14 rounded px-1 py-1 text-[10px] font-mono" style={sel}>
                     {MA_PERIODS.map(p => <option key={p} value={p}>MA{p}</option>)}
                   </select>
-                  <select value={form.extension.maInterval} onChange={e => patch('extension.maInterval', e.target.value)}
+                  <select value={form.rule1.extension.maInterval} onChange={e => patch('rule1.extension.maInterval', e.target.value)}
                     className="w-12 rounded px-1 py-1 text-[10px]" style={sel}>
                     {MA_INTERVALS.map(iv => <option key={iv} value={iv}>{iv}</option>)}
                   </select>
                 </div>
                 <div className="flex gap-1.5 mb-1 items-center flex-wrap">
                   <span className="text-[10px] text-p5/40">Se preço &gt;</span>
-                  <NumInput value={form.extension.abovePct} onChange={v => patch('extension.abovePct', v)} min={0} max={30} step={0.5} />
+                  <NumInput value={form.rule1.extension.abovePct} onChange={v => patch('rule1.extension.abovePct', v)} min={0} max={30} step={0.5} />
                   <span className="text-[10px] text-p5/40">% acima da MA ref.</span>
                   <button type="button" onClick={handleSuggestExtensionAbove}
                     disabled={!symbol.trim() || extensionSuggest?.loading}
@@ -610,146 +620,45 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
                   </p>
                 )}
                 <label className="flex items-center gap-2 cursor-pointer mb-1">
-                  <input type="checkbox" checked={form.extension.threeCandles} onChange={e => patch('extension.threeCandles', e.target.checked)} className="accent-violet-500" />
+                  <input type="checkbox" checked={form.rule1.extension.threeCandles} onChange={e => patch('rule1.extension.threeCandles', e.target.checked)} className="accent-violet-500" />
                   <span className="text-xs text-p5 flex-1">3 candles de alta seguidos</span>
-                  <select value={form.extension.threeInterval ?? form.extension.confirmInterval ?? '1h'}
-                    onChange={e => patch('extension.threeInterval', e.target.value)}
+                  <select value={form.rule1.extension.threeInterval ?? form.rule1.extension.confirmInterval ?? '1h'}
+                    onChange={e => patch('rule1.extension.threeInterval', e.target.value)}
                     className="w-12 rounded px-1 py-1 text-[10px]" style={sel}>
                     {MA_INTERVALS.map(iv => <option key={iv} value={iv}>{iv}</option>)}
                   </select>
                 </label>
                 <label className="flex items-center gap-2 cursor-pointer mb-1">
-                  <input type="checkbox" checked={form.extension.fourCandles} onChange={e => patch('extension.fourCandles', e.target.checked)} className="mt-0.5 accent-violet-500" />
+                  <input type="checkbox" checked={form.rule1.extension.fourCandles} onChange={e => patch('rule1.extension.fourCandles', e.target.checked)} className="mt-0.5 accent-violet-500" />
                   <span className="text-xs text-p5 flex-1">3 altas + 1 queda</span>
-                  <select value={form.extension.fourInterval ?? form.extension.confirmInterval ?? '1h'}
-                    onChange={e => patch('extension.fourInterval', e.target.value)}
+                  <select value={form.rule1.extension.fourInterval ?? form.rule1.extension.confirmInterval ?? '1h'}
+                    onChange={e => patch('rule1.extension.fourInterval', e.target.value)}
                     className="w-12 rounded px-1 py-1 text-[10px]" style={sel}>
                     {MA_INTERVALS.map(iv => <option key={iv} value={iv}>{iv}</option>)}
                   </select>
                 </label>
-                <select value={form.extension.confirmLogic} onChange={e => patch('extension.confirmLogic', e.target.value)}
+                <select value={form.rule1.extension.confirmLogic} onChange={e => patch('rule1.extension.confirmLogic', e.target.value)}
                   className="w-full rounded px-2 py-1 text-[10px] text-p5 outline-none mt-1" style={sel}>
                   <option value="any">Basta uma regra (3 OU 4 candles)</option>
                   <option value="all">Exige ambas (3 E 4 candles)</option>
                 </select>
               </>
             )}
-          </div>
-
-          {/* Saída RSI */}
-          <div>
-            <SectionHeader label="Saída RSI" color="#ef5350" />
-            <div className="grid grid-cols-3 gap-1.5 mb-1">
-              <select value={form.exitRsi.interval} onChange={e => patch('exitRsi.interval', e.target.value)}
-                className="rounded px-1 py-1.5 text-xs text-p5 outline-none cursor-pointer" style={sel}>
-                {RSI_INTERVALS.map(iv => <option key={iv} value={iv}>{iv}</option>)}
-              </select>
-              <select value={form.exitRsi.period} onChange={e => patch('exitRsi.period', Number(e.target.value))}
-                className="rounded px-1 py-1.5 text-xs text-p5 outline-none font-mono" style={sel}>
-                {RSI_PERIODS.map(p => <option key={p} value={p}>p{p}</option>)}
-              </select>
-              <div className="flex gap-1">
-                <NumInput value={form.exitRsi.value} onChange={v => patch('exitRsi.value', v)} min={1} max={99} className="flex-1" />
-                <button type="button" onClick={handleSuggestExitRsi} disabled={!symbol.trim() || exitRsiSuggest?.loading}
-                  className="shrink-0 rounded px-1.5 text-[9px] font-semibold text-red-300 border border-red-500/40 hover:bg-red-500/10 disabled:opacity-40">
-                  {exitRsiSuggest?.loading ? '…' : 'Sugerir'}
-                </button>
-              </div>
             </div>
-            {exitRsiSuggest && !exitRsiSuggest.loading && (
-              <p className="text-[9px] font-mono mb-1 leading-relaxed" style={{ color: exitRsiSuggest.error ? '#f59e0b' : '#94a3b8' }}>
-                {exitRsiSuggest.error
-                  ? exitRsiSuggest.error
-                  : exitRsiSuggest.usedDefault
-                    ? `Poucos trades (${exitRsiSuggest.tradeCount ?? 0}) — padrão ${exitRsiSuggest.suggestedExitRsi}`
-                    : `${exitRsiSuggest.tradeCount} trades · pico mediano ${exitRsiSuggest.medianPeakRsi} (média ${exitRsiSuggest.avgPeakRsi}) · atinge 70: ${exitRsiSuggest.hitRate70}% · 75: ${exitRsiSuggest.hitRate75}% · 80: ${exitRsiSuggest.hitRate80}% → sugerido ${exitRsiSuggest.suggestedExitRsi}${exitRsiSuggest.recommendation === 'chega_alto' ? ' (costuma subir alto)' : exitRsiSuggest.recommendation === 'garantir_cedo' ? ' (garantir mais cedo)' : ''}`}
-              </p>
-            )}
-            <p className="text-[9px] text-p5/35">Vende quando RSI({form.exitRsi.interval}, {form.exitRsi.period}) &gt; {form.exitRsi.value}</p>
-          </div>
 
-          {/* Stop loss */}
-          <div id="multitrade-modal-stop-loss">
-            <SectionHeader label="Stop Loss" />
-            <p className="text-[9px] text-p5/40 mb-2 leading-relaxed">
-              Escolha um, outro ou os dois. Se ambos estiverem ativos, vende no nível mais alto violado na queda.
-            </p>
-
-            <label className="flex items-start gap-2 cursor-pointer mb-2">
-              <input
-                type="checkbox"
-                id="multitrade-modal-stop-loss-fixed"
-                checked={form.stopLoss.fixedEnabled !== false}
-                onChange={e => patch('stopLoss.fixedEnabled', e.target.checked)}
-                className="accent-violet-500 mt-0.5"
-              />
-              <span className="text-xs text-p5 leading-snug">
-                <span className="font-semibold">MA fixa</span>
-                <span className="block text-[9px] text-p5/45">Vende se close &lt; MA no timeframe abaixo</span>
-              </span>
-            </label>
-            {form.stopLoss.fixedEnabled !== false && (
-              <div id="multitrade-modal-stop-loss-fixed-fields" className="flex gap-1.5 mb-3 ml-6">
-                <select
-                  id="multitrade-modal-stop-loss-period"
-                  value={form.stopLoss.period}
-                  onChange={e => patch('stopLoss.period', Number(e.target.value))}
-                  className="w-16 rounded px-1 py-1.5 text-xs font-mono"
-                  style={sel}>
-                  {MA_PERIODS.map(p => <option key={p} value={p}>MA{p}</option>)}
-                </select>
-                <select
-                  id="multitrade-modal-stop-loss-interval"
-                  value={form.stopLoss.interval}
-                  onChange={e => patch('stopLoss.interval', e.target.value)}
-                  className="flex-1 rounded px-2 py-1.5 text-xs"
-                  style={sel}>
-                  {MA_INTERVALS.map(iv => <option key={iv} value={iv}>{iv}</option>)}
-                </select>
-              </div>
-            )}
-
-            <label className="flex items-start gap-2 cursor-pointer mb-1">
-              <input
-                type="checkbox"
-                id="multitrade-modal-stop-loss-adaptive"
-                checked={form.stopLoss.adaptiveEnabled !== false}
-                onChange={e => patch('stopLoss.adaptiveEnabled', e.target.checked)}
-                className="accent-violet-500 mt-0.5"
-              />
-              <span className="text-xs text-p5 leading-snug">
-                <span className="font-semibold">Piso adaptativo</span>
-                <span className="block text-[9px] text-p5/45">
-                  Usa MA × (1 − dip%) de cada filtro de entrada em modo adaptativo
-                </span>
-              </span>
-            </label>
-            {form.stopLoss.adaptiveEnabled !== false && !hasAdaptiveMa(form.maConditions) && (
-              <p id="multitrade-modal-stop-loss-adaptive-warn" className="text-[9px] text-amber-400/90 ml-6 mb-2">
-                Adicione um filtro MA em modo &quot;adapt.&quot; na entrada para este stop ter efeito.
-              </p>
-            )}
-            {form.stopLoss.fixedEnabled === false && form.stopLoss.adaptiveEnabled === false && (
-              <p id="multitrade-modal-stop-loss-off-warn" className="text-[9px] text-p5/35 ml-6">
-                Stop desligado — saída apenas por RSI.
-              </p>
-            )}
-          </div>
-
-          {/* Execução */}
-          <div>
-            <SectionHeader label="Execução da compra" />
+            <div>
+            <SectionHeader label="Execução da compra" color={ENTRY_COLOR} />
             <label className="flex items-center gap-2 cursor-pointer mb-2">
-              <input type="checkbox" checked={form.execution.immediateEntry} onChange={e => patch('execution.immediateEntry', e.target.checked)} className="accent-violet-500" />
+              <input type="checkbox" checked={form.rule1.execution.immediateEntry} onChange={e => patch('rule1.execution.immediateEntry', e.target.checked)} className="accent-violet-500" />
               <span className="text-xs text-p5">Compra imediata (mercado)</span>
             </label>
-            {!form.execution.immediateEntry && (
+            {!form.rule1.execution.immediateEntry && (
               <>
                 <label className="block text-[10px] text-p5/40 mb-1">Desconto do alvo PENDING (% abaixo do gatilho)</label>
                 <div className="flex gap-1.5 mb-1">
                   <NumInput
-                    value={parseFloat((form.execution.entryDiscount * 100).toFixed(3))}
-                    onChange={v => patch('execution.entryDiscount', Math.min(10, Math.max(0.01, v)) / 100)}
+                    value={parseFloat((form.rule1.execution.entryDiscount * 100).toFixed(3))}
+                    onChange={v => patch('rule1.execution.entryDiscount', Math.min(10, Math.max(0.01, v)) / 100)}
                     min={0.01} max={10} step={0.05} className="flex-1"
                   />
                   <button type="button" onClick={handleSuggestDiscount} disabled={!symbol.trim() || discountSuggest?.loading}
@@ -759,9 +668,9 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
                 </div>
                 <div className="flex flex-wrap gap-1 mb-2">
                   {ENTRY_DISCOUNT_OPTIONS.map(o => (
-                    <button key={o.value} type="button" onClick={() => patch('execution.entryDiscount', o.value)}
+                    <button key={o.value} type="button" onClick={() => patch('rule1.execution.entryDiscount', o.value)}
                       className="rounded px-1.5 py-0.5 text-[10px] font-mono border border-p2 text-p5/60 hover:text-p5 hover:border-violet-500/50"
-                      style={form.execution.entryDiscount === o.value ? { color: '#a78bfa', borderColor: '#8b5cf6' } : {}}>
+                      style={form.rule1.execution.entryDiscount === o.value ? { color: '#a78bfa', borderColor: '#8b5cf6' } : {}}>
                       {o.label}
                     </button>
                   ))}
@@ -776,28 +685,227 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
                   </p>
                 )}
                 <label className="block text-[10px] text-p5/40 mb-1">Timeout PENDING</label>
-                <select value={form.execution.pendingTimeoutMs} onChange={e => patch('execution.pendingTimeoutMs', Number(e.target.value))}
+                <select value={form.rule1.execution.pendingTimeoutMs} onChange={e => patch('rule1.execution.pendingTimeoutMs', Number(e.target.value))}
                   className="w-full rounded px-2.5 py-1.5 text-xs text-p5 outline-none cursor-pointer mb-2" style={sel}>
                   {PENDING_TIMEOUT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                 </select>
                 <label className="block text-[10px] text-p5/40 mb-1">Cancela se preço subir (% acima do gatilho)</label>
-                <NumInput value={(form.execution.pendingCancelPct * 100).toFixed(2)} onChange={v => patch('execution.pendingCancelPct', v / 100)}
+                <NumInput value={(form.rule1.execution.pendingCancelPct * 100).toFixed(2)} onChange={v => patch('rule1.execution.pendingCancelPct', v / 100)}
                   min={0.1} max={5} step={0.1} className="w-full mb-2" />
                 <label className="flex items-center gap-2 cursor-pointer mb-1">
-                  <input type="checkbox" checked={form.execution.pendingCancelOnExitRsi !== false}
-                    onChange={e => patch('execution.pendingCancelOnExitRsi', e.target.checked)} className="accent-violet-500" />
+                  <input type="checkbox" checked={form.rule1.execution.pendingCancelOnExitRsi !== false}
+                    onChange={e => patch('rule1.execution.pendingCancelOnExitRsi', e.target.checked)} className="accent-violet-500" />
                   <span className="text-xs text-p5">Cancela PENDING se RSI de saída for atingido</span>
                 </label>
                 <p className="text-[9px] text-p5/35 mb-2">
-                  RSI({form.exitRsi.interval}) &gt; {form.exitRsi.value} — evita comprar após recuperação forte
+                  RSI({form.rule1.exitRsi.interval}) &gt; {form.rule1.exitRsi.value} — evita comprar após recuperação forte
                 </p>
               </>
             )}
-          </div>
+            </div>
 
-          {/* Volume */}
+            <div>
+            <SectionHeader label="Saída por RSI (regra 1)" color={EXIT_COLOR} />
+            <div className="grid grid-cols-3 gap-1.5 mb-1">
+              <select value={form.rule1.exitRsi.interval} onChange={e => patch('rule1.exitRsi.interval', e.target.value)}
+                className="rounded px-1 py-1.5 text-xs text-p5 outline-none cursor-pointer" style={sel}>
+                {RSI_INTERVALS.map(iv => <option key={iv} value={iv}>{iv}</option>)}
+              </select>
+              <select value={form.rule1.exitRsi.period} onChange={e => patch('rule1.exitRsi.period', Number(e.target.value))}
+                className="rounded px-1 py-1.5 text-xs text-p5 outline-none font-mono" style={sel}>
+                {RSI_PERIODS.map(p => <option key={p} value={p}>p{p}</option>)}
+              </select>
+              <div className="flex gap-1">
+                <NumInput value={form.rule1.exitRsi.value} onChange={v => patch('rule1.exitRsi.value', v)} min={1} max={99} className="flex-1" />
+                <button type="button" onClick={handleSuggestExitRsi} disabled={!symbol.trim() || exitRsiSuggest?.loading}
+                  className="shrink-0 rounded px-1.5 text-[9px] font-semibold text-red-300 border border-red-500/40 hover:bg-red-500/10 disabled:opacity-40">
+                  {exitRsiSuggest?.loading ? '…' : 'Sugerir'}
+                </button>
+              </div>
+            </div>
+            {renderExitRsiSuggest(exitRsiSuggest)}
+            <p className="text-[9px] text-p5/35">Vende quando RSI({form.rule1.exitRsi.interval}, {form.rule1.exitRsi.period}) &gt; {form.rule1.exitRsi.value}</p>
+            </div>
+
+            <div id="multitrade-modal-stop-loss">
+            <SectionHeader label="Stop loss" color={EXIT_COLOR} />
+            <p className="text-[9px] text-p5/40 mb-2 leading-relaxed">
+              Stop próprio da regra 1 — independente dos filtros de entrada e da regra 2.
+              Se ambos estiverem ativos, vende no nível mais alto violado na queda.
+            </p>
+
+            <label className="flex items-start gap-2 cursor-pointer mb-2">
+              <input
+                type="checkbox"
+                id="multitrade-modal-stop-loss-fixed"
+                checked={form.rule1.stopLoss.fixedEnabled !== false}
+                onChange={e => patch('rule1.stopLoss.fixedEnabled', e.target.checked)}
+                className="accent-violet-500 mt-0.5"
+              />
+              <span className="text-xs text-p5 leading-snug">
+                <span className="font-semibold">MA fixa</span>
+                <span className="block text-[9px] text-p5/45">Vende se close &lt; MA no timeframe abaixo</span>
+              </span>
+            </label>
+            {form.rule1.stopLoss.fixedEnabled !== false && (
+              <div id="multitrade-modal-stop-loss-fixed-fields" className="flex gap-1.5 mb-3 ml-6">
+                <select
+                  id="multitrade-modal-stop-loss-period"
+                  value={form.rule1.stopLoss.period}
+                  onChange={e => patch('rule1.stopLoss.period', Number(e.target.value))}
+                  className="w-16 rounded px-1 py-1.5 text-xs font-mono"
+                  style={sel}>
+                  {MA_PERIODS.map(p => <option key={p} value={p}>MA{p}</option>)}
+                </select>
+                <select
+                  id="multitrade-modal-stop-loss-interval"
+                  value={form.rule1.stopLoss.interval}
+                  onChange={e => patch('rule1.stopLoss.interval', e.target.value)}
+                  className="flex-1 rounded px-2 py-1.5 text-xs"
+                  style={sel}>
+                  {MA_INTERVALS.map(iv => <option key={iv} value={iv}>{iv}</option>)}
+                </select>
+              </div>
+            )}
+
+            <label className="flex items-start gap-2 cursor-pointer mb-1">
+              <input
+                type="checkbox"
+                id="multitrade-modal-stop-loss-adaptive"
+                checked={form.rule1.stopLoss.adaptiveEnabled !== false}
+                onChange={e => patch('rule1.stopLoss.adaptiveEnabled', e.target.checked)}
+                className="accent-violet-500 mt-0.5"
+              />
+              <span className="text-xs text-p5 leading-snug">
+                <span className="font-semibold">Piso adaptativo</span>
+                <span className="block text-[9px] text-p5/45">
+                  MA × (1 − dip% histórico) — MA dedicada ao stop (não usa filtros de entrada)
+                </span>
+              </span>
+            </label>
+            {form.rule1.stopLoss.adaptiveEnabled !== false && (
+              <div id="multitrade-modal-stop-loss-adaptive-fields" className="flex gap-1.5 mb-3 ml-6">
+                <select
+                  value={form.rule1.stopLoss.adaptivePeriod ?? 50}
+                  onChange={e => patch('rule1.stopLoss.adaptivePeriod', Number(e.target.value))}
+                  className="w-16 rounded px-1 py-1.5 text-xs font-mono"
+                  style={sel}>
+                  {MA_PERIODS.map(p => <option key={p} value={p}>MA{p}</option>)}
+                </select>
+                <select
+                  value={form.rule1.stopLoss.adaptiveInterval ?? '1h'}
+                  onChange={e => patch('rule1.stopLoss.adaptiveInterval', e.target.value)}
+                  className="flex-1 rounded px-2 py-1.5 text-xs"
+                  style={sel}>
+                  {MA_INTERVALS.map(iv => <option key={iv} value={iv}>{iv}</option>)}
+                </select>
+              </div>
+            )}
+            {form.rule1.stopLoss.fixedEnabled === false && form.rule1.stopLoss.adaptiveEnabled === false && (
+              <p id="multitrade-modal-stop-loss-off-warn" className="text-[9px] text-p5/35 ml-6">
+                Stop desligado — saída apenas por RSI.
+              </p>
+            )}
+            </div>
+          </RuleGroup>
+          )}
+
+          {activeTab === 'rule2' && (
+          <RuleGroup
+            title="Regra 2 — MA50 1h"
+            subtitle="Cruzamento MA50 1h · Saída RSI 1h &gt; 70 · Stop adaptativo na MA de entrada · posição independente"
+            color={MT_COLOR}>
+            <label className="flex items-center gap-2 cursor-pointer mb-2">
+              <input type="checkbox" checked={rule2On}
+                onChange={e => { patch('rule2.enabled', e.target.checked); setEntryPathError(null); }}
+                className="accent-[#8b5cf6]" />
+              <span className="text-xs text-p5">Ativar — posição independente (não reentra se PENDING/BOUGHT)</span>
+            </label>
+            {rule2On && (<>
+            <SectionHeader label="Entrada — cruzamento MA50 1h" color={MT_COLOR} />
+            <div className="grid grid-cols-3 gap-1.5 mb-2">
+              <select value={form.rule2.entryMa.period} onChange={e => patch('rule2.entryMa.period', Number(e.target.value))}
+                className="rounded px-1 py-1.5 text-xs text-p5 outline-none font-mono" style={sel}>
+                {MA_PERIODS.map(p => <option key={p} value={p}>MA{p}</option>)}
+              </select>
+              <select value={form.rule2.entryMa.interval} onChange={e => patch('rule2.entryMa.interval', e.target.value)}
+                className="rounded px-1 py-1.5 text-xs text-p5 outline-none" style={sel}>
+                {MA_INTERVALS.map(iv => <option key={iv} value={iv}>{iv}</option>)}
+              </select>
+              <select value={form.rule2.entryMa.trigger} onChange={e => patch('rule2.entryMa.trigger', e.target.value)}
+                className="rounded px-1 py-1.5 text-xs text-p5 outline-none" style={sel}>
+                {ENTRY_MA_TRIGGERS.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
+              </select>
+            </div>
+            <div className="flex items-center gap-2 mb-3">
+              <span className="text-[9px] text-p5/40">Tolerância</span>
+              <NumInput value={form.rule2.entryMa.tolerancePct} onChange={v => patch('rule2.entryMa.tolerancePct', v)} min={0.1} max={5} step={0.1} className="w-16" />
+              <span className="text-[9px] text-p5/35">%</span>
+            </div>
+            {rule2Summary && <p className="text-[9px] font-mono mb-2" style={{ color: `${MT_COLOR}99` }}>{rule2Summary}</p>}
+
+            <SectionHeader label="Execução (sempre PENDING)" color={MT_COLOR} />
+            <label className="block text-[10px] text-p5/40 mb-1">Desconto % abaixo do gatilho MA</label>
+            <NumInput
+              value={parseFloat((form.rule2.execution.entryDiscount * 100).toFixed(2))}
+              onChange={v => patch('rule2.execution.entryDiscount', Math.min(10, Math.max(0.1, v)) / 100)}
+              min={0.1} max={10} step={0.1} className="w-full mb-2" />
+            <select value={form.rule2.execution.pendingTimeoutMs} onChange={e => patch('rule2.execution.pendingTimeoutMs', Number(e.target.value))}
+              className="w-full rounded px-2 py-1 text-xs mb-2" style={sel}>
+              {PENDING_TIMEOUT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label} timeout</option>)}
+            </select>
+            <label className="block text-[10px] text-p5/40 mb-1">Cancela se preço subir (% acima do gatilho)</label>
+            <NumInput
+              value={(form.rule2.execution.pendingCancelPct * 100).toFixed(2)}
+              onChange={v => patch('rule2.execution.pendingCancelPct', v / 100)}
+              min={0.1} max={5} step={0.1} className="w-full mb-2" />
+            <label className="flex items-center gap-2 cursor-pointer mb-1">
+              <input type="checkbox" checked={form.rule2.execution.pendingCancelOnExitRsi !== false}
+                onChange={e => patch('rule2.execution.pendingCancelOnExitRsi', e.target.checked)} className="accent-violet-500" />
+              <span className="text-xs text-p5">Cancela PENDING se RSI de saída for atingido</span>
+            </label>
+            <p className="text-[9px] text-p5/35 mb-3">
+              RSI({form.rule2.exitRsi.interval}) &gt; {form.rule2.exitRsi.value} — só da regra 2, não usa RSI da regra 1
+            </p>
+
+            <SectionHeader label="Saída por RSI (regra 2)" color={EXIT_COLOR} />
+            <div className="grid grid-cols-3 gap-1.5 mb-1">
+              <select value={form.rule2.exitRsi.interval} onChange={e => patch('rule2.exitRsi.interval', e.target.value)}
+                className="rounded px-1 py-1.5 text-xs text-p5 outline-none cursor-pointer" style={sel}>
+                {RSI_INTERVALS.map(iv => <option key={iv} value={iv}>{iv}</option>)}
+              </select>
+              <select value={form.rule2.exitRsi.period} onChange={e => patch('rule2.exitRsi.period', Number(e.target.value))}
+                className="rounded px-1 py-1.5 text-xs text-p5 outline-none font-mono" style={sel}>
+                {RSI_PERIODS.map(p => <option key={p} value={p}>p{p}</option>)}
+              </select>
+              <div className="flex gap-1">
+                <NumInput value={form.rule2.exitRsi.value} onChange={v => patch('rule2.exitRsi.value', v)} min={1} max={99} className="flex-1" />
+                <button type="button" onClick={handleSuggestExitRsi2} disabled={!symbol.trim() || exitRsi2Suggest?.loading}
+                  className="shrink-0 rounded px-1.5 text-[9px] font-semibold text-red-300 border border-red-500/40 hover:bg-red-500/10 disabled:opacity-40">
+                  {exitRsi2Suggest?.loading ? '…' : 'Sugerir'}
+                </button>
+              </div>
+            </div>
+            {renderExitRsiSuggest(exitRsi2Suggest)}
+            <p className="text-[9px] text-p5/35 mb-2">
+              Vende quando RSI({form.rule2.exitRsi.interval}, {form.rule2.exitRsi.period}) &gt; {form.rule2.exitRsi.value}
+            </p>
+
+            <SectionHeader label="Stop adaptativo (MA de entrada)" color={EXIT_COLOR} />
+            <label className="flex items-center gap-2 cursor-pointer mb-2">
+              <input type="checkbox" checked={form.rule2.stopLoss.adaptiveEnabled !== false}
+                onChange={e => patch('rule2.stopLoss.adaptiveEnabled', e.target.checked)} className="accent-violet-500" />
+              <span className="text-xs text-p5">
+                Piso = MA{form.rule2.entryMa.period} {form.rule2.entryMa.interval} × (1 − dip% histórico)
+              </span>
+            </label>
+            <p className="text-[9px] text-p5/35">Stop na mesma MA da entrada — independente da regra 1.</p>
+            </>)}
+          </RuleGroup>
+          )}
+
           <div>
-            <SectionHeader label="Volume" />
+            <SectionHeader label="Volume mínimo 24h (compartilhado)" />
             <select value={form.volume.minVolumeUsdt} onChange={e => patch('volume.minVolumeUsdt', Number(e.target.value))}
               className="w-full rounded px-2.5 py-1.5 text-xs text-p5 outline-none cursor-pointer font-mono mb-1" style={sel}>
               {VOLUME_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label} USDT mínimo 24h</option>)}
@@ -842,10 +950,10 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
                 <div>
                   <label className="block text-[10px] text-p5/40 mb-1">MA adaptativa — dip padrão / máx / mín / episódios</label>
                   <div className="grid grid-cols-4 gap-1">
-                    <NumInput value={form.adaptiveOpts.defaultPct} onChange={v => patch('adaptiveOpts.defaultPct', v)} min={0} max={20} step={0.5} className="w-full" />
-                    <NumInput value={form.adaptiveOpts.maxPct} onChange={v => patch('adaptiveOpts.maxPct', v)} min={0} max={30} step={0.5} className="w-full" />
-                    <NumInput value={form.adaptiveOpts.minPct} onChange={v => patch('adaptiveOpts.minPct', v)} min={0} max={10} step={0.1} className="w-full" />
-                    <NumInput value={form.adaptiveOpts.minEpisodes} onChange={v => patch('adaptiveOpts.minEpisodes', v)} min={1} max={20} className="w-full" />
+                    <NumInput value={form.rule1.adaptiveOpts.defaultPct} onChange={v => patch('rule1.adaptiveOpts.defaultPct', v)} min={0} max={20} step={0.5} className="w-full" />
+                    <NumInput value={form.rule1.adaptiveOpts.maxPct} onChange={v => patch('rule1.adaptiveOpts.maxPct', v)} min={0} max={30} step={0.5} className="w-full" />
+                    <NumInput value={form.rule1.adaptiveOpts.minPct} onChange={v => patch('rule1.adaptiveOpts.minPct', v)} min={0} max={10} step={0.1} className="w-full" />
+                    <NumInput value={form.rule1.adaptiveOpts.minEpisodes} onChange={v => patch('rule1.adaptiveOpts.minEpisodes', v)} min={1} max={20} className="w-full" />
                   </div>
                 </div>
               </div>

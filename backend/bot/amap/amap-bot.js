@@ -29,13 +29,16 @@ const { toGateSymbol } = require('../../utils/toGateSymbol');
 const { sendWhatsApp } = require('../whatsapp');
 const {
   buildTradeConfig, getRequiredSpecs, computeAdaptiveDips, buildMaSnapshot, buildAdaptiveReport,
-  evaluateEntry, diagnoseEntry, evaluateExit, getStopLossMa, getAdaptiveStopFloors, isStopLossExit, checkRsi, checkMinVolume, needsMarketSell, maKey,
-  resolveEntrySignal, entryRsiPathActive, entryMaPathActive, getEntryScanInterval,
+  isStopLossExit, checkRsi, needsMarketSell, maKey,
 } = require('./strategyEngine');
 const { fmtVolumeUsdt } = require('../volume24h');
 const { configFromRow, resolveStrategy, hasAdaptiveFilters } = require('./tradeConfigSchema');
+const { parseRulesState, isRuleActive } = require('./rulesState');
+const { runDualRuleTick } = require('./dualRuleTick');
+const { computeRule1EntryAdaptiveDips } = require('./rule1Engine');
 const { analyzeExtensionHistory, printExtensionReport } = require('./extensionBacktest');
 const { runAmapBacktest, formatStopLossLabel, formatEntryPathsLabel, ENTRY_OUTCOME_LABELS } = require('./amapBacktest');
+const { buildExitReasonDetail, packExitReasonForDb } = require('./exitReasonFormat');
 
 const EXCHANGES    = new Set(['binance', 'gate']);
 const MA_INTERVALS = new Set(['15m', '30m', '1h', '2h', '4h', '8h', '1d']);
@@ -101,7 +104,7 @@ async function backtestFromSupabase(symbol, exchangeHint, capitalHint) {
 async function refreshAdaptiveDips(adapter, config) {
   const specs = getRequiredSpecs(config).map(s => ({ ...s, limit: Math.max(s.limit, 300) }));
   const cMap  = await fetchCandleMap(adapter, specs);
-  return computeAdaptiveDips(cMap, config);
+  return computeRule1EntryAdaptiveDips(cMap, config.rule1 ?? config);
 }
 
 async function getCached24hVolume(adapter, session) {
@@ -551,7 +554,19 @@ async function insertTrade(t) {
   } catch (err) { console.warn(`[${t.symbol}] insertTrade:`, err.message); return null; }
 }
 
-function entrySignalFields(state, rowId, { price, entryRsi, exitRsi, ma50, ma2, candleOpenTime }) {
+function inferEntryKindFromPending(trigger, limit, config) {
+  const t = Number(trigger);
+  const l = Number(limit);
+  if (!t || !l || t <= 0) return null;
+  const disc = 1 - l / t;
+  const maD  = config.rule2?.entryDiscount ?? 0.02;
+  const rsiD = config.rule1?.entryDiscount ?? config.entryDiscount ?? 0.001;
+  if (Math.abs(disc - maD) < 0.003) return 'ma';
+  if (Math.abs(disc - rsiD) < 0.003) return 'rsi';
+  return null;
+}
+
+function entrySignalFields(state, rowId, { price, entryRsi, exitRsi, ma50, ma2, candleOpenTime, entry_kind }) {
   return {
     symbol:           state.symbol,
     exchange:         state.exchange ?? 'binance',
@@ -564,6 +579,7 @@ function entrySignalFields(state, rowId, { price, entryRsi, exitRsi, ma50, ma2, 
     ma50,
     ma2,
     above_ma_pct:     ma50 ? parseFloat(((price / ma50 - 1) * 100).toFixed(4)) : null,
+    ...(entry_kind ? { metadata: { entry_kind } } : {}),
   };
 }
 
@@ -672,281 +688,98 @@ async function backtest(symbol, config, exchange = 'binance', capital = 100) {
   printBacktestReport(result, config);
 }
 
-// ── Tick (loop ao vivo) ───────────────────────────────────────────────────────
-async function tick(rowId, adapter, strategy, log, prevExitRsi, session) {
-  const { config } = strategy;
-  const specs = getRequiredSpecs(config);
-  const cMap  = await fetchCandleMap(adapter, specs);
-
-  const entryIv  = getEntryScanInterval(config);
-  const exitIv   = config.exitRsi.interval;
-  const entryCandles = cMap[entryIv];
-  const exitCandles  = cMap[exitIv];
-  if (!entryCandles?.length || !exitCandles?.length) {
-    log('Dados insuficientes.'); return { entryRsi: null, exitRsi: prevExitRsi };
-  }
-
-  const entryCloses = entryCandles.map(c => c.close);
-  const exitCloses  = exitCandles.map(c => c.close);
-  const exitRsiArr  = ti.RSI.calculate({ values: exitCloses,  period: config.exitRsi.period });
-  const exitRsi     = exitRsiArr[exitRsiArr.length - 1];
-
-  let entryRsi = null;
-  if (entryRsiPathActive(config)) {
-    const rsiIv = config.entryRsi.interval;
-    const rsiCandles = rsiIv === entryIv ? entryCandles : (cMap[rsiIv] ?? entryCandles);
-    const rsiCloses = rsiCandles.map(c => c.close);
-    const entryRsiArr = ti.RSI.calculate({ values: rsiCloses, period: config.entryRsi.period });
-    entryRsi = entryRsiArr[entryRsiArr.length - 1];
-  } else if (entryMaPathActive(config) && config.entryMa.requireRsi) {
-    const mr = config.entryMa.entryRsi;
-    const mrCandles = cMap[mr.interval] ?? entryCandles;
-    const mrArr = ti.RSI.calculate({ values: mrCandles.map(c => c.close), period: mr.period });
-    entryRsi = mrArr[mrArr.length - 1];
-  }
-
-  const close       = entryCloses[entryCloses.length - 1];
-  const candleMs    = entryCandles[entryCandles.length - 1]?.openTime ?? null;
-
-  const entryLen = entryCandles.length;
-  const rsiCtx = {
-    close,
-    low: entryCandles[entryLen - 1]?.low ?? close,
-    prevClose: entryLen >= 2 ? entryCandles[entryLen - 2].close : null,
-  };
-  const maIv  = entryMaPathActive(config) ? config.entryMa.interval : entryIv;
-  const maCandles = cMap[maIv] ?? entryCandles;
-  const maLen = maCandles.length;
-  const maCtx = {
-    close: maCandles[maLen - 1]?.close ?? close,
-    low: maCandles[maLen - 1]?.low ?? rsiCtx.low,
-    prevClose: maLen >= 2 ? maCandles[maLen - 2].close : null,
-  };
-
-  let maPathRsi = entryRsi;
-  if (entryMaPathActive(config) && config.entryMa.requireRsi) {
-    const mr = config.entryMa.entryRsi;
-    const mrCandles = cMap[mr.interval] ?? entryCandles;
-    const mrCloses = mrCandles.map(c => c.close);
-    const mrArr = ti.RSI.calculate({ values: mrCloses, period: mr.period });
-    maPathRsi = mrArr[mrArr.length - 1];
-  }
-
-  if (exitRsi == null) return { entryRsi, exitRsi: prevExitRsi };
-  if (entryRsiPathActive(config) && entryRsi == null) return { entryRsi, exitRsi: prevExitRsi };
-
-  const adaptiveDips = session.adaptiveDips ?? computeAdaptiveDips(cMap, config);
-  const maSnap       = buildMaSnapshot(cMap, config);
-  const stopLossMa   = getStopLossMa(maSnap, config);
-
-  const state = await loadState(rowId);
-  if (!state) { log('❌ Linha não encontrada.'); return { entryRsi, exitRsi }; }
-
-  const { phase, capital, symbol } = state;
-  const exitColor = exitRsi >= strategy.fastRsiThreshold ? Y : '';
-  const rsiEntryHit = entryRsiPathActive(config) && checkRsi(entryRsi, config.entryRsi);
-  const entryDiag = diagnoseEntry({
-    entryRsi, maPathRsi, rsiCtx, maCtx,
-    close, low: rsiCtx.low, prevClose: rsiCtx.prevClose,
-    entryTimeMs: Date.now(), config, maSnap, adaptiveDips, cMap,
-  });
-  const hadEntrySignal = entryDiag.paths.some(p => p.signal);
-  const entryResolved = resolveEntrySignal({
-    entryRsi, maPathRsi, rsiCtx, maCtx,
-    close, low: rsiCtx.low, prevClose: rsiCtx.prevClose,
-    entryTimeMs: Date.now(), config, maSnap, adaptiveDips, cMap,
-  });
-
-  if (phase === 'WATCHING') {
-    const rsiLabel = entryRsiPathActive(config) && entryRsi != null
-      ? `${rsiEntryHit ? G : ''}RSI(${config.entryRsi.interval})=${entryRsi.toFixed(1)}${rsiEntryHit ? X : ''}  `
-      : '';
-    const maLabel = entryMaPathActive(config)
-      ? `MA${config.entryMa.period}(${config.entryMa.interval})  `
-      : '';
-    log(
-      `${rsiLabel}${maLabel}` +
-      `${exitColor}RSI(${exitIv})=${exitRsi.toFixed(1)}${exitColor ? X : ''}` +
-      `  $${fmtP(close)}  capital=$${parseFloat(capital).toFixed(2)}  [WATCHING|AMAP]`,
-    );
-
-    if (hadEntrySignal) {
-      const sigBase = () => entrySignalFields(state, rowId, {
-        price: close, entryRsi, exitRsi, ma50: null, ma2: null, candleOpenTime: candleMs,
-        entry_kind: entryResolved.entryKind ?? entryDiag.entryKind,
-      });
-      const newCandle = session.entryCandleMs !== candleMs;
-      const entryCheck = entryResolved;
-
-      if (!entryCheck.allowed) {
-        const reasons = {
-          MA_BLOCKED:            'preço abaixo da MA (fixo)',
-          MA_ADAPTIVE_BLOCKED:   `preço abaixo do piso adaptativo (−${entryCheck.dipPct?.toFixed(1) ?? '?'}%)`,
-          THREE_CANDLES_BLOCKED: 'extensão acima da MA sem confirmação 3/4 candles',
-          MA_NO_DATA:            'sem dados de MA',
-          RSI_NOT_MET:           'RSI não atende',
-          NO_ENTRY_SIGNAL:       'sem sinal de entrada (RSI/MA)',
-        };
-        log(`${Y}⚠️  Entrada bloqueada: ${reasons[entryCheck.reason] ?? entryCheck.reason}${X}`);
-        if (newCandle) {
-          session.entryCandleMs = candleMs;
-          await insertEntrySignal({ ...sigBase(), status: 'blocked', block_reason: entryCheck.reason });
-        }
-        return { entryRsi, exitRsi, phase: 'WATCHING' };
-      }
-
-      const volCheck = await checkEntryVolume(adapter, config, session);
-      if (!volCheck.allowed) {
-        log(`${Y}⚠️  Entrada bloqueada: volume 24h ${fmtVolumeUsdt(volCheck.volumeUsdt)} < mínimo ${fmtVolumeUsdt(volCheck.minVolumeUsdt)}${X}`);
-        if (newCandle) {
-          session.entryCandleMs = candleMs;
-          await insertEntrySignal({ ...sigBase(), status: 'blocked', block_reason: 'VOLUME_LOW' });
-        }
-        return { entryRsi, exitRsi, phase: 'WATCHING' };
-      }
-
-      if (newCandle) session.entryCandleMs = candleMs;
-
-      if (strategy.immediateEntry) {
-        let result;
-        try { result = await adapter.marketBuy(parseFloat(capital)); }
-        catch (err) { log(`❌ Erro na compra: ${err.message}`); return { entryRsi, exitRsi, phase: 'WATCHING' }; }
-        const { filledQty, quoteQty, avgPrice } = result;
-        const now = new Date().toISOString();
-        session.activeEntrySignalId = await insertEntrySignal({
-          ...sigBase(), status: 'executed', immediate_entry: true,
-          executed_at: now, executed_price: avgPrice, executed_qty: filledQty, executed_usdt: quoteQty,
-        });
-        await saveState(rowId, {
-          phase: 'BOUGHT', buy_price: avgPrice, buy_qty: filledQty, buy_usdt: quoteQty,
-          buy_time: now, rsi_entry: entryRsi,
-          trigger_price: null, limit_price: null, trigger_rsi: null, pending_since: null,
-        });
-        log(`${G}🟢 COMPRA IMEDIATA [AMAP]${X}  $${fmtP(avgPrice)}`);
-        return { entryRsi, exitRsi, phase: 'BOUGHT' };
-      }
-
-      const limitPrice = parseFloat((close * (1 - strategy.entryDiscount)).toFixed(8));
-      const pendingSince = new Date().toISOString();
-      session.activeEntrySignalId = await insertEntrySignal({
+// ── Eventos por regra (compra/venda/pending) ───────────────────────────────
+async function processRuleEvents({
+  events, ruleId, rulesState, state, rowId, adapter, config, session, log, capital,
+  entryRsi, exitRsi, close, candleMs,
+}) {
+  for (const ev of events) {
+    const entryKind = ruleId === 'rule2' ? 'ma' : 'rsi';
+    const sigBase = () => entrySignalFields(state, rowId, {
+      price: close, entryRsi, exitRsi, ma50: null, ma2: null, candleOpenTime: candleMs,
+      entry_kind: entryKind,
+    });
+    if (ev.type === 'blocked') {
+      const reasons = {
+        MA_BLOCKED: 'preço abaixo da MA (fixo)',
+        MA_ADAPTIVE_BLOCKED: 'preço abaixo do piso adaptativo',
+        THREE_CANDLES_BLOCKED: 'extensão sem confirmação 3/4 candles',
+        VOLUME_LOW: 'volume abaixo do mínimo',
+      };
+      log(`${Y}⚠️  [${ruleId}] bloqueado: ${reasons[ev.reason] ?? ev.reason}${X}`);
+    } else if (ev.type === 'pending') {
+      const discPct = (ev.discount * 100).toFixed(1);
+      log(`${G}🎯 [${ruleId}] PENDING −${discPct}% alvo $${fmtP(ev.limitPrice)}${X}`);
+      const sigId = await insertEntrySignal({
         ...sigBase(), status: 'pending',
-        trigger_price: close, limit_price: limitPrice, pending_since: pendingSince,
+        trigger_price: ev.triggerPrice, limit_price: ev.limitPrice,
+        pending_since: new Date().toISOString(),
       });
-      await saveState(rowId, {
-        phase: 'PENDING', trigger_price: close, limit_price: limitPrice,
-        trigger_rsi: entryRsi, pending_since: pendingSince,
+      session[`${ruleId}SignalId`] = sigId;
+    } else if (ev.type === 'cancel') {
+      log(`${Y}❌ [${ruleId}] PENDING cancelado (${ev.reason})${X}`);
+      await patchEntrySignal(session[`${ruleId}SignalId`], {
+        status: 'cancelled', block_reason: ev.reason, pending_until: new Date().toISOString(),
       });
-      log(`${G}🎯 PENDING [AMAP] alvo $${fmtP(limitPrice)}${X}`);
-      return { entryRsi, exitRsi, phase: 'PENDING' };
-    }
-    return { entryRsi, exitRsi, phase: 'WATCHING' };
-  }
-
-  if (phase === 'PENDING') {
-    const limitPrice   = parseFloat(state.limit_price);
-    const triggerPrice = parseFloat(state.trigger_price);
-    const pendingMs    = Date.now() - new Date(state.pending_since).getTime();
-    const cancelLine   = triggerPrice * (1 + strategy.pendingCancelPct);
-    const exitRsiHit   = config.pendingCancelOnExitRsi !== false && checkRsi(exitRsi, config.exitRsi);
-
-    if (close > cancelLine || pendingMs > strategy.pendingTimeoutMs || exitRsiHit) {
-      const blockReason = exitRsiHit ? 'CANCELLED_EXIT_RSI'
-        : close > cancelLine ? 'CANCELLED_RECOVERY' : 'CANCELLED_TIMEOUT';
-      if (exitRsiHit) {
-        log(`${Y}❌ PENDING cancelado — RSI(${exitIv})=${exitRsi.toFixed(1)} atingiu saída (>${config.exitRsi.value})${X}`);
-      }
-      await patchEntrySignal(session.activeEntrySignalId, { status: 'cancelled', block_reason: blockReason, pending_until: new Date().toISOString() });
-      session.activeEntrySignalId = null;
-      await saveState(rowId, { phase: 'WATCHING', trigger_price: null, limit_price: null, trigger_rsi: null, pending_since: null });
-      return { entryRsi, exitRsi, phase: 'WATCHING' };
-    }
-    if (close <= limitPrice) {
-      const volCheck = await checkEntryVolume(adapter, config, session);
-      if (!volCheck.allowed) {
-        log(`${Y}⚠️  Compra bloqueada: volume 24h ${fmtVolumeUsdt(volCheck.volumeUsdt)} < mínimo ${fmtVolumeUsdt(volCheck.minVolumeUsdt)}${X}`);
-        return { entryRsi, exitRsi, phase: 'PENDING' };
-      }
+      session[`${ruleId}SignalId`] = null;
+    } else if (ev.type === 'buy') {
       let result;
       try { result = await adapter.marketBuy(parseFloat(capital)); }
-      catch (err) { log(`❌ Erro na compra: ${err.message}`); return { entryRsi, exitRsi, phase: 'PENDING' }; }
+      catch (err) { log(`❌ [${ruleId}] Erro na compra: ${err.message}`); continue; }
       const { filledQty, quoteQty, avgPrice } = result;
       const now = new Date().toISOString();
-      await patchEntrySignal(session.activeEntrySignalId, {
-        status: 'executed', pending_until: now,
-        executed_at: now, executed_price: avgPrice, executed_qty: filledQty, executed_usdt: quoteQty,
-      });
-      await saveState(rowId, {
-        phase: 'BOUGHT', buy_price: avgPrice, buy_qty: filledQty, buy_usdt: quoteQty,
-        buy_time: now, rsi_entry: entryRsi,
-        trigger_price: null, limit_price: null, trigger_rsi: null, pending_since: null,
-      });
-      return { entryRsi, exitRsi, phase: 'BOUGHT' };
-    }
-    return { entryRsi, exitRsi, phase: 'PENDING' };
-  }
-
-  if (phase === 'BOUGHT') {
-    const buyPrice  = parseFloat(state.buy_price);
-    const exitEval  = evaluateExit({ close, exitRsi, stopLossMa, maSnap, adaptiveDips, config });
-    const pnlPct    = ((close - buyPrice) / buyPrice * 100).toFixed(2);
-
-    const adaptiveFloors = getAdaptiveStopFloors(maSnap, adaptiveDips, config);
-    const stopInfo = adaptiveFloors.length
-      ? `  stops: MA${config.stopLoss.period}/${config.stopLoss.interval}=$${fmtP(stopLossMa)}`
-        + adaptiveFloors.map(f => ` piso MA${f.period}/${f.interval}=$${fmtP(f.floor)} (−${f.dipPct.toFixed(1)}%)`).join('')
-      : '';
-
-    log(
-      `RSI(${entryIv})=${entryRsi.toFixed(1)}  RSI(${exitIv})=${exitRsi.toFixed(1)}` +
-      `  $${fmtP(close)}  PnL=${pnlPct}%${stopInfo}  [BOUGHT|AMAP]`,
-    );
-
-    if (exitEval.exit) {
-      const stopLossHit = isStopLossExit(exitEval.reason);
+      rulesState[ruleId].buy_qty = filledQty;
+      rulesState[ruleId].buy_usdt = quoteQty;
+      rulesState[ruleId].buy_price = avgPrice;
+      const sigId = session[`${ruleId}SignalId`];
+      if (sigId) {
+        await patchEntrySignal(sigId, {
+          status: 'executed', immediate_entry: ev.immediate,
+          executed_at: now, executed_price: avgPrice, executed_qty: filledQty, executed_usdt: quoteQty,
+        });
+      }
+      log(`${G}✅ [${ruleId}] COMPRA $${fmtP(avgPrice)} qty=${filledQty}${X}`);
+    } else if (ev.type === 'sell') {
+      const rs = rulesState[ruleId];
       let result;
-      try { result = await executeMarketSell(adapter, config, session, parseFloat(state.buy_qty), log); }
-      catch (err) { log(`❌ Erro na venda: ${err.message}`); return { entryRsi, exitRsi, phase: 'BOUGHT' }; }
-
+      try { result = await executeMarketSell(adapter, config, session, parseFloat(rs.buy_qty), log); }
+      catch (err) { log(`❌ [${ruleId}] Erro na venda: ${err.message}`); continue; }
       const { soldQty, usdtOut, exitPrice } = result;
-      const capitalBefore = parseFloat(capital);
-      const pnlUsdt       = usdtOut - parseFloat(state.buy_usdt);
-      const capitalAfter  = capitalBefore + pnlUsdt;
-      const exitTime      = new Date().toISOString();
-      const durationMs    = state.buy_time ? Date.now() - new Date(state.buy_time).getTime() : null;
-
-      const exitSignalId = await insertExitSignal({
-        symbol, exchange: state.exchange ?? 'binance', strategy_id: state.strategy_id ?? 'flex',
-        state_id: rowId, entry_signal_id: session.activeEntrySignalId ?? null,
-        signal_type: stopLossHit ? 'stop_loss' : 'rsi', price: close, rsi_exit: exitRsi,
-        stop_loss_ma: exitEval.stopLossLevel ?? stopLossMa, buy_price: buyPrice, status: 'executed',
-        executed_at: exitTime, executed_price: exitPrice, executed_qty: soldQty, executed_usdt: usdtOut,
+      const pnlUsdt = usdtOut - parseFloat(rs.buy_usdt);
+      const capitalAfter = parseFloat(capital) + pnlUsdt;
+      const stopLossHit = isStopLossExit(ev.exitReason);
+      const ruleConfig = ruleId === 'rule2' ? config.rule2 : config.rule1;
+      const exitDetail = ev.exitEval
+        ? buildExitReasonDetail({ ruleId, exitEval: ev.exitEval, ruleConfig })
+        : null;
+      const exitReasonStored = exitDetail
+        ? packExitReasonForDb(exitDetail)
+        : ev.exitReason;
+      log(`${stopLossHit ? '🛑' : '🔴'} [${ruleId}] VENDA — ${exitDetail?.short ?? ev.exitReason} PnL=$${pnlUsdt.toFixed(2)}`);
+      await insertTrade({
+        symbol: state.symbol, exchange: state.exchange, strategy_id: state.strategy_id ?? 'flex',
+        entry_time: rs.buy_time, exit_time: new Date().toISOString(),
+        entry_price: rs.buy_price, exit_price: exitPrice,
+        qty: soldQty, usdt_in: parseFloat(rs.buy_usdt), usdt_out: usdtOut,
+        pnl_usdt: pnlUsdt, pnl_pct: parseFloat((pnlUsdt / parseFloat(rs.buy_usdt) * 100).toFixed(2)),
+        capital_before: parseFloat(capital), capital_after: capitalAfter,
+        rsi_entry: parseFloat(rs.rsi_entry ?? 0), rsi_exit: exitRsi,
+        exit_reason: exitReasonStored,
+        entry_signal_id: session[`${ruleId}SignalId`],
       });
-
-      const tradeId = await insertTrade({
-        symbol, exchange: state.exchange, strategy_id: state.strategy_id ?? 'flex',
-        entry_time: state.buy_time, exit_time: exitTime,
-        entry_price: buyPrice, exit_price: exitPrice,
-        qty: soldQty, usdt_in: parseFloat(state.buy_usdt), usdt_out: usdtOut,
-        pnl_usdt: pnlUsdt, pnl_pct: parseFloat((pnlUsdt / parseFloat(state.buy_usdt) * 100).toFixed(2)),
-        capital_before: capitalBefore, capital_after: capitalAfter,
-        rsi_entry: parseFloat(state.rsi_entry ?? 0), rsi_exit: exitRsi,
-        exit_reason: exitEval.reason, duration_ms: durationMs,
-        entry_signal_id: session.activeEntrySignalId, exit_signal_id: exitSignalId,
-      });
-
-      if (session.activeEntrySignalId) await patchEntrySignal(session.activeEntrySignalId, { trade_id: tradeId });
-      session.activeEntrySignalId = null;
-      await saveState(rowId, {
-        phase: 'WATCHING', capital: capitalAfter,
-        buy_price: null, buy_qty: null, buy_usdt: null, buy_time: null, rsi_entry: null,
-      });
-      log(`${stopLossHit ? '🛑' : '🔴'} VENDA [AMAP] ${exitEval.reason === 'stop_loss_adaptive' ? `(stop adapt −${exitEval.dipPct?.toFixed(1)}%) ` : exitEval.reason === 'stop_loss_ma' ? '(stop MA) ' : ''}PnL=$${pnlUsdt.toFixed(2)}`);
-      return { entryRsi, exitRsi, phase: 'WATCHING' };
+      session[`${ruleId}SignalId`] = null;
     }
-    return { entryRsi, exitRsi, phase: 'BOUGHT' };
   }
+  return rulesState;
+}
 
-  return { entryRsi, exitRsi, phase };
+// ── Tick (loop ao vivo) — regras independentes ──────────────────────────────
+async function tick(rowId, adapter, strategy, log, prevExitRsi, session) {
+  return runDualRuleTick({
+    rowId, adapter, strategy, log, prevExitRsi, session,
+    fetchCandleMap, loadState, saveState, getRequiredSpecs,
+    checkEntryVolume, processRuleEvents, fmtP,
+  });
 }
 
 // ── startSymbol ───────────────────────────────────────────────────────────────
@@ -960,17 +793,27 @@ async function startSymbol(row, color) {
   const adapter = buildAdapter(row.exchange ?? 'binance', row.symbol);
   const log     = makeLogger(row.symbol, color);
 
+  const rulesState = parseRulesState(row);
   log(
     `=== AMAP Bot | ${adapter.name} | ${adapter.pair}` +
     ` | ${strategy.label}` +
-    ` | poll: ${strategy.pollMs / 1000}s/${strategy.fastPollMs / 1000}s | fase: ${row.phase} ===`,
+    ` | poll: ${strategy.pollMs / 1000}s/${strategy.fastPollMs / 1000}s` +
+    ` | R1:${rulesState.rule1.phase} R2:${rulesState.rule2.phase} ===`,
   );
 
-  if (row.phase === 'BOUGHT')
-    log(`♻️  Posição aberta — comprado a $${fmtP(row.buy_price)} | qty=${row.buy_qty}`);
-  if (row.phase === 'PENDING') {
-    const ms = Date.now() - new Date(row.pending_since).getTime();
-    log(`♻️  PENDING — alvo=$${fmtP(row.limit_price)} | gatilho=$${fmtP(row.trigger_price)} | há ${fmtDur(ms)}`);
+  if (rulesState.rule1.phase === 'BOUGHT') {
+    log(`♻️  [R1] Posição — $${fmtP(rulesState.rule1.buy_price)} qty=${rulesState.rule1.buy_qty}`);
+  }
+  if (rulesState.rule1.phase === 'PENDING') {
+    const ms = Date.now() - new Date(rulesState.rule1.pending_since).getTime();
+    log(`♻️  [R1] PENDING — alvo=$${fmtP(rulesState.rule1.limit_price)} | há ${fmtDur(ms)}`);
+  }
+  if (rulesState.rule2.phase === 'BOUGHT') {
+    log(`♻️  [R2] Posição — $${fmtP(rulesState.rule2.buy_price)} qty=${rulesState.rule2.buy_qty}`);
+  }
+  if (rulesState.rule2.phase === 'PENDING') {
+    const ms = Date.now() - new Date(rulesState.rule2.pending_since).getTime();
+    log(`♻️  [R2] PENDING — alvo=$${fmtP(rulesState.rule2.limit_price)} | há ${fmtDur(ms)}`);
   }
   if (strategy.config.allowLowVolume) {
     log(`ℹ️  Volume baixo autorizado — saída sempre a mercado`);
@@ -978,7 +821,13 @@ async function startSymbol(row, color) {
 
   let lastResult = { entryRsi: null, exitRsi: null, phase: row.phase };
   let errCount   = 0;
-  const session  = { entryCandleMs: null, activeEntrySignalId: null, adaptiveDips: null };
+  const session  = {
+    entryCandleMs: null,
+    rule1SignalId: null,
+    rule2SignalId: null,
+    adaptiveDips: null,
+    rule2Dip: null,
+  };
 
   if (hasAdaptiveFilters(strategy.config)) {
     try {
@@ -995,8 +844,10 @@ async function startSymbol(row, color) {
   }
 
   const schedule = () => {
-    const { phase, exitRsi } = lastResult;
-    const fast  = phase === 'PENDING' || (exitRsi !== null && exitRsi >= strategy.fastRsiThreshold);
+    const { phase, exitRsi, rulesState } = lastResult;
+    const r2Pending = rulesState?.rule2?.phase === 'PENDING';
+    const r1Pending = rulesState?.rule1?.phase === 'PENDING' || phase === 'PENDING';
+    const fast  = r1Pending || r2Pending || (exitRsi !== null && exitRsi >= strategy.fastRsiThreshold);
     setTimeout(run, fast ? strategy.fastPollMs : strategy.pollMs);
   };
 

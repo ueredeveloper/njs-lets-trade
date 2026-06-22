@@ -6,6 +6,8 @@ const {
   entryRsiPathActive,
   entryMaPathActive,
   getEntryScanInterval,
+  getEntryDiscount,
+  shouldUseImmediateEntry,
   maKey,
 } = require('../bot/amap/strategyEngine');
 const { normalizeTradeConfig, toEngineConfig } = require('../bot/amap/tradeConfigSchema');
@@ -98,5 +100,16 @@ describe('entrada dupla RSI + MA', () => {
       entryMa: { enabled: true, period: 200, interval: '1h', trigger: 'touch' },
     });
     expect(getEntryScanInterval(config)).toBe('15m');
+  });
+
+  test('caminho MA: desconto 2% e sem compra imediata', () => {
+    const config = cfg({
+      entryMa: { enabled: true, entryDiscount: 0.02 },
+      execution: { immediateEntry: true },
+    });
+    expect(getEntryDiscount('ma', config)).toBe(0.02);
+    expect(shouldUseImmediateEntry('ma', config)).toBe(false);
+    expect(getEntryDiscount('rsi', config)).toBe(0.001);
+    expect(shouldUseImmediateEntry('rsi', config)).toBe(true);
   });
 });

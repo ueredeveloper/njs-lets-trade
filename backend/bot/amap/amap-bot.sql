@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS rsi_multi_bot_state (
   buy_time        TIMESTAMPTZ,
   rsi_entry       NUMERIC(8,2),
 
+  rules_state     JSONB,
   trade_config    JSONB,
   updated_at      TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE (symbol, strategy_id)

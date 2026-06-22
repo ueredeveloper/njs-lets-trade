@@ -454,21 +454,24 @@ export async function suggestMultitradeExtensionAbove({
 
 /** Sugere nível RSI de saída a partir do pico histórico no intervalo escolhido. */
 export async function suggestMultitradeExitRsi({
-  symbol, exchange, entryRsi, exitRsi, maConditions, extension, stopLoss,
+  symbol, exchange, entryRsi, exitRsi, entryRsiPath, entryMa, maConditions, extension, stopLoss, entryPath,
 }) {
   const params = new URLSearchParams({
     symbol,
     exchange: exchange ?? 'binance',
     entryInterval: entryRsi.interval,
     entryPeriod: String(entryRsi.period),
-    entryOperator: entryRsi.operator,
+    entryOperator: entryRsi.operator ?? '<',
     entryValue: String(entryRsi.value),
     exitInterval: exitRsi.interval,
     exitPeriod: String(exitRsi.period),
-    exitOperator: exitRsi.operator,
+    exitOperator: exitRsi.operator ?? '>',
     exitValue: String(exitRsi.value),
     stopLossEnabled: String(stopLoss?.enabled !== false),
   });
+  if (entryPath) params.set('entryPath', entryPath);
+  if (entryRsiPath) params.set('entryRsiPath', JSON.stringify(entryRsiPath));
+  if (entryMa) params.set('entryMa', JSON.stringify({ ...entryMa, enabled: entryMa.enabled !== false }));
   if (maConditions?.length) {
     params.set('maConditions', JSON.stringify(maConditions.map(({ period, interval, mode, fixedDipPct }) => ({
       period, interval, mode,

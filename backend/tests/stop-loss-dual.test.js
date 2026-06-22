@@ -83,4 +83,35 @@ describe('stop loss dual (MA fixa + piso adaptativo)', () => {
     const hitMa = checkStopLossHits(100, 90, getAdaptiveStopFloors(maSnap, adaptiveDips, cfg), cfg);
     expect(hitMa).toBeNull();
   });
+
+  test('entrada MA: stop adaptativo só na MA do stop (4h), ignora MA50 1h', () => {
+    const cfg = {
+      ...baseConfig,
+      maFilters: [
+        { period: 50, interval: '4h', mode: 'adaptive' },
+        { period: 50, interval: '1h', mode: 'adaptive' },
+      ],
+    };
+    const snap = {
+      [maKey(50, '4h')]: { ma: 100 },
+      [maKey(50, '1h')]: { ma: 100 },
+      [`sl_${maKey(50, '4h')}`]: { ma: 100 },
+    };
+    const dips = { [maKey(50, '4h')]: 3, [maKey(50, '1h')]: 3 };
+    expect(getAdaptiveStopFloors(snap, dips, cfg)).toHaveLength(2);
+    const maFloors = getAdaptiveStopFloors(snap, dips, cfg, { entryKind: 'ma' });
+    expect(maFloors).toHaveLength(1);
+    expect(maFloors[0].interval).toBe('4h');
+    const hit = evaluateExit({
+      close: 96,
+      exitRsi: 75,
+      stopLossMa: 90,
+      maSnap: snap,
+      adaptiveDips: dips,
+      config: cfg,
+      entryKind: 'ma',
+    });
+    expect(hit.reason).toBe('stop_loss_adaptive');
+    expect(hit.adaptiveKey).toBe(maKey(50, '4h'));
+  });
 });

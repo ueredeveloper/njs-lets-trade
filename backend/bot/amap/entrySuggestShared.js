@@ -149,7 +149,7 @@ function collectEntryPathTrades(cMap, config, pathKind) {
     const entryIdx = findSeriesIdx(entryRsiSeries, pt.openTime);
     if (entryIdx < 0) continue;
 
-    const forward = simulateForwardTrade(entryIdx, entryRsiSeries, exitSeries, cMap, cfg, adaptiveDips);
+    const forward = simulateForwardTrade(entryIdx, entryRsiSeries, exitSeries, cMap, cfg, adaptiveDips, pathKind);
     trades.push({
       entryTime: pt.openTime,
       entryPrice: pathKind === 'ma' ? pt.maCtx.close : pt.close,

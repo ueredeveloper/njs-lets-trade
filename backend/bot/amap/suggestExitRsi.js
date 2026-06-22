@@ -36,7 +36,7 @@ function hitRate(peaks, threshold) {
 }
 
 /** Simula trade a partir da entrada; retorna pico RSI e PnL ao sair em cada limiar. */
-function simulateTradePeaks(entryIdx, entrySeries, exitSeries, cMap, config, adaptiveDips) {
+function simulateTradePeaks(entryIdx, entrySeries, exitSeries, cMap, config, adaptiveDips, entryKind = null) {
   const { getStopLossMa, evaluateExit } = engine();
   const buyPrice = entrySeries[entryIdx].close;
   let peakExitRsi = 0;
@@ -49,7 +49,9 @@ function simulateTradePeaks(entryIdx, entrySeries, exitSeries, cMap, config, ada
 
     const maSnap     = maSnapAt(cMap, config, openTime);
     const stopLossMa = getStopLossMa(maSnap, config);
-    const exitEval   = evaluateExit({ close, exitRsi: exitRsiVal, stopLossMa, maSnap, adaptiveDips, config });
+    const exitEval   = evaluateExit({
+      close, exitRsi: exitRsiVal, stopLossMa, maSnap, adaptiveDips, config, entryKind,
+    });
     if (exitEval.exit && exitEval.reason !== 'rsi') {
       const pnlPct = ((close - buyPrice) / buyPrice) * 100;
       return {
@@ -87,7 +89,66 @@ function simulateTradePeaks(entryIdx, entrySeries, exitSeries, cMap, config, ada
   };
 }
 
-function collectTrades(cMap, config) {
+function findCandleIdx(candles, openTime) {
+  let idx = -1;
+  for (let i = 0; i < candles.length; i++) {
+    if (candles[i].openTime <= openTime) idx = i;
+    else break;
+  }
+  return idx;
+}
+
+/** Trades simulados com entradas pelo caminho MA (regra 2). */
+function collectMaTrades(cMap, config) {
+  const { collectEntryPathTrades } = require('./entrySuggestShared');
+  const em = config.entryMa ?? {};
+  const cfg = {
+    ...config,
+    entryRsiPath: { enabled: false },
+    entryMa: { ...em, enabled: true },
+    entryRsi: config.entryRsi ?? {
+      interval: em.interval ?? '1h',
+      period: 14,
+      operator: '<',
+      value: 30,
+    },
+    extension: { ...(config.extension ?? {}), enabled: false },
+    maFilters: [],
+  };
+
+  const maIv = em.interval ?? '1h';
+  const scanCandles = cMap[maIv];
+  const exitCandles = cMap[config.exitRsi?.interval];
+  if (!scanCandles?.length || !exitCandles?.length) return [];
+
+  const exitSeries = computeRsiSeries(exitCandles, config.exitRsi.period);
+  const pseudoEntrySeries = scanCandles.map(c => ({
+    openTime: c.openTime,
+    close: c.close,
+    rsi: 0,
+  }));
+
+  const { computeAdaptiveDips } = engine();
+  const adaptiveDips = computeAdaptiveDips(cMap, cfg);
+  const pathTrades = collectEntryPathTrades(cMap, cfg, 'ma');
+  const trades = [];
+
+  for (const pt of pathTrades) {
+    const idx = findCandleIdx(scanCandles, pt.entryTime);
+    if (idx < 0) continue;
+    trades.push({
+      entryTime: pt.entryTime,
+      ...simulateTradePeaks(idx, pseudoEntrySeries, exitSeries, cMap, cfg, adaptiveDips, 'ma'),
+    });
+  }
+  return trades;
+}
+
+function collectTrades(cMap, config, opts = {}) {
+  const useMa = opts.entryPath === 'ma'
+    || (config.entryMa?.enabled === true && config.entryRsiPath?.enabled === false);
+  if (useMa) return collectMaTrades(cMap, config);
+
   const { checkRsi, evaluateEntry, computeAdaptiveDips } = engine();
   const entryCandles = cMap[config.entryRsi.interval];
   const exitCandles  = cMap[config.exitRsi.interval];
@@ -145,7 +206,7 @@ function suggestExitRsi(cMap, config, opts = {}) {
   const exitIv = config.exitRsi?.interval ?? '15m';
   const exitP  = config.exitRsi?.period ?? 14;
 
-  const trades = collectTrades(cMap, config);
+  const trades = collectTrades(cMap, config, opts);
   if (trades.length < o.minTrades) {
     return {
       suggestedExitRsi: o.defaultExitRsi,
@@ -216,6 +277,7 @@ module.exports = {
   suggestExitRsi,
   buildExitRsiReport,
   collectTrades,
+  collectMaTrades,
   simulateTradePeaks,
   hitRate,
   DEFAULT_OPTS,

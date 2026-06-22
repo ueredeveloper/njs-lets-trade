@@ -1,6 +1,8 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useCurrency } from '../contexts/CurrencyContext';
 import { fetchMultitradeBacktest, fetchCandlesticksAndCloud } from '../services/api';
+import { ENTRY_MA_TRIGGERS } from '../constants/tradeConfigSchema';
+import { ruleBadgeStyle } from '../utils/exitReasonFormat';
 
 const MT_COLOR = '#8b5cf6';
 
@@ -112,6 +114,48 @@ function outcomeClass(outcome) {
   return 'text-p5/70';
 }
 
+function entryRuleStyle(row) {
+  const ruleId = row.ruleId ?? (row.entryKind === 'ma' ? 'rule2' : row.entryKind === 'rsi' ? 'rule1' : null);
+  return ruleBadgeStyle(ruleId);
+}
+
+function formatResultado(row) {
+  if (row.exitDetail?.label) return row.exitDetail.label;
+  if (row.outcomeLabel) return row.outcomeLabel;
+  return row.outcome ?? '—';
+}
+
+function formatEntryPathsSummary(entry) {
+  if (!entry) return null;
+  const parts = [];
+  if (entry.entryRsiPath?.enabled !== false) {
+    const r = entry.entryRsi ?? {};
+    parts.push(`RSI(${r.interval ?? '15m'}) ${r.operator ?? '<'} ${r.value ?? 30}`);
+  }
+  if (entry.entryMa?.enabled) {
+    const m = entry.entryMa;
+    const tr = ENTRY_MA_TRIGGERS.find(t => t.id === m.trigger)?.label ?? m.trigger ?? 'toque';
+    let lbl = `MA${m.period ?? 50} ${m.interval ?? '1h'} (${tr})`;
+    if (m.requireRsi) {
+      const r = m.entryRsi ?? {};
+      lbl += ` + RSI ${r.operator ?? '<'} ${r.value ?? 40}`;
+    }
+    parts.push(lbl);
+  }
+  return parts.length ? parts.join('  OU  ') : null;
+}
+
+function displayRsiForRow(row, entry) {
+  if (row.entryKind === 'ma') {
+    if (entry?.entryMa?.requireRsi && row.maPathRsi != null) {
+      return { value: row.maPathRsi, title: 'RSI do caminho MA' };
+    }
+    return { value: null, title: 'Entrada por MA — RSI não exigido neste caminho' };
+  }
+  if (row.rsi != null) return { value: row.rsi, title: 'RSI do caminho RSI' };
+  return { value: null, title: null };
+}
+
 const CANDLES_BEFORE = 10;
 
 function fmtDate(isoOrMs) {
@@ -184,6 +228,9 @@ export default function MultitradeBacktestPanel({ entry }) {
     setFocusTrade(null);
     clearMultitradeChartView();
   }, [entry?.symbol, entry?.exchange, entry?.capital, clearMultitradeChartView]);
+
+  const entryPathsSummary = useMemo(() => formatEntryPathsSummary(entry), [entry]);
+  const dualEntryPaths = (entry?.entryRsiPath?.enabled !== false) && !!entry?.entryMa?.enabled;
 
   async function handleRowClick(row) {
     if (!entry?.symbol || !data) return;
@@ -266,6 +313,17 @@ export default function MultitradeBacktestPanel({ entry }) {
             {/* Resumo */}
             <div className="multitrade-backtest-summary grid grid-cols-2 gap-x-3 gap-y-1 text-[10px] font-mono mb-2 p-2 rounded"
               style={{ background: '#1e2130', border: '1px solid #2a2d3a' }}>
+              {entryPathsSummary && (
+                <>
+                  <span className="text-p5/50">Entradas</span>
+                  <span className="text-p5/80 leading-snug" title={data?.config?.entryPaths ?? entryPathsSummary}>
+                    {data?.config?.entryPaths ?? entryPathsSummary}
+                    {dualEntryPaths && (
+                      <span className="text-p5/40"> · 2 caminhos</span>
+                    )}
+                  </span>
+                </>
+              )}
               <span className="text-p5/50">Capital</span>
               <span className="text-p5">${s.startCapital} → ${s.endCapital}
                 <span className={s.totalPnlPct >= 0 ? 'text-emerald-400' : 'text-red-400'}>
@@ -308,6 +366,7 @@ export default function MultitradeBacktestPanel({ entry }) {
                 <thead>
                   <tr className="multitrade-backtest-table-head" style={{ background: '#252836' }}>
                     <th className="text-left px-1.5 py-1 text-p5/50 font-normal">Data</th>
+                    <th className="text-center px-1 py-1 text-p5/50 font-normal">Regra</th>
                     <th className="text-right px-1 py-1 text-p5/50 font-normal">RSI</th>
                     <th className="text-right px-1 py-1 text-p5/50 font-normal">Preço</th>
                     {maLabels.map(l => (
@@ -328,6 +387,9 @@ export default function MultitradeBacktestPanel({ entry }) {
                     const rowKey = row.timeISO ?? String(row.time);
                     const isActive = activeRow === rowKey;
                     const isLoading = chartLoading === rowKey;
+                    const kindStyle = entryRuleStyle(row);
+                    const rsiCell = displayRsiForRow(row, entry);
+                    const resultado = formatResultado(row);
                     return (
                     <tr
                       key={rowKey ?? i}
@@ -338,7 +400,27 @@ export default function MultitradeBacktestPanel({ entry }) {
                         isActive ? 'bg-violet-500/10' : 'hover:bg-p2/40'
                       } ${isLoading ? 'opacity-60' : ''}`}>
                       <td className="px-1.5 py-0.5 text-p5/70 whitespace-nowrap">{fmtDate(row.timeISO ?? row.time)}</td>
-                      <td className="px-1 py-0.5 text-right text-p5">{row.rsi?.toFixed?.(1) ?? row.rsi}</td>
+                      <td className="px-1 py-0.5 text-center whitespace-nowrap">
+                        {row.ruleShort || row.entryKindShort ? (
+                          <span
+                            className="inline-block px-1 py-px rounded text-[8px] font-bold uppercase tracking-wide"
+                            style={{
+                              color: kindStyle.color,
+                              background: kindStyle.bg,
+                              border: `1px solid ${kindStyle.border}`,
+                            }}
+                            title={row.entryKindLabel ?? row.ruleId ?? row.entryKind}>
+                            {row.ruleShort ?? row.entryKindShort}
+                          </span>
+                        ) : (
+                          <span className="text-p5/30">—</span>
+                        )}
+                      </td>
+                      <td
+                        className="px-1 py-0.5 text-right text-p5"
+                        title={rsiCell.title ?? undefined}>
+                        {rsiCell.value != null ? rsiCell.value.toFixed?.(1) ?? rsiCell.value : '—'}
+                      </td>
                       <td className="px-1 py-0.5 text-right text-p5">{fmtPrice(row.price)}</td>
                       {maLabels.map(l => {
                         const m = (row.maChecks ?? []).find(x => x.label === l);
@@ -361,8 +443,11 @@ export default function MultitradeBacktestPanel({ entry }) {
                           </td>
                         </>
                       )}
-                      <td className={`px-1.5 py-0.5 ${outcomeClass(row.outcome)}`}>
-                        {row.outcomeLabel ?? row.outcome}
+                      <td className={`px-1.5 py-0.5 ${outcomeClass(row.outcome)}`} title={row.outcomeShort ?? row.exitDetail?.short ?? undefined}>
+                        <span className="block leading-snug">{resultado}</span>
+                        {row.outcomeShort && row.exitDetail?.label && row.outcomeShort !== resultado && (
+                          <span className="block text-[8px] text-p5/40 font-normal">{row.outcomeShort}</span>
+                        )}
                         {row.pnlPct != null && (
                           <span className="ml-1 opacity-80">
                             ({row.pnlPct >= 0 ? '+' : ''}{row.pnlPct}%)
