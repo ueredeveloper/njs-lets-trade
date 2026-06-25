@@ -31,10 +31,7 @@ describe('computeMaTimeAbovePct', () => {
 
 describe('maTimeAboveCache key format', () => {
   test('nome do filtro segue convenção', () => {
-    const interval = '1h';
-    const period = 50;
-    const minPct = 70;
-    const name = `${interval}|m|${period}|pct|${minPct}`;
-    expect(name).toBe('1h|m|50|pct|70');
+    const { buildMaPctFilterName } = require('../utils/filterNames');
+    expect(buildMaPctFilterName('1h', 50, 70)).toBe('1h|ma|50|pct|70');
   });
 });

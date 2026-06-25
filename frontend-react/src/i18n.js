@@ -168,6 +168,7 @@ const T = {
     'filter.stables_other':  'Stablecoins de outras moedas (JPY, IDR, SGD…)',
 
     // Botões filtros
+    'filter.search_ph':      'Buscar filtro...',
     'filter.btn_join':       'Intersecionar filtros marcados — exibe apenas moedas presentes em TODOS os filtros selecionados',
     'filter.btn_remove':     'Remover filtros marcados da lista',
     'filter.btn_clear':      'Limpar todos os filtros e voltar à lista completa',
@@ -338,6 +339,7 @@ const T = {
     'filter.stables_other':  'Other currency stablecoins (JPY, IDR, SGD…)',
 
     // Filter buttons
+    'filter.search_ph':      'Search filters...',
     'filter.btn_join':       'Intersect checked filters — shows only coins present in ALL selected filters',
     'filter.btn_remove':     'Remove checked filters from the list',
     'filter.btn_clear':      'Clear all filters and return to the full list',

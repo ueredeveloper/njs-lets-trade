@@ -195,17 +195,24 @@ function fmtDate(isoOrMs) {
 
 function findTradesForRow(row, trades, msPerCandle) {
   const signalMs = new Date(row.timeISO ?? row.time).getTime();
-  let buy = (trades ?? []).find(
-    t => t.type === 'BUY' && Math.abs(t.time - signalMs) < msPerCandle,
-  );
+  let buy = row.buyTime
+    ? { time: row.buyTime, price: row.buyPrice ?? row.price }
+    : null;
+  if (!buy) {
+    buy = (trades ?? []).find(
+      t => t.type === 'BUY' && Math.abs(t.time - signalMs) < msPerCandle,
+    );
+  }
   if (!buy) {
     buy = (trades ?? []).find(
       t => t.type === 'BUY' && t.time >= signalMs && t.time - signalMs < msPerCandle * 48,
     );
   }
-  const sell = buy
-    ? (trades ?? []).find(t => t.type === 'SELL' && t.time >= buy.time)
-    : null;
+  const sell = row.exitTime
+    ? { time: row.exitTime, price: row.exitPrice ?? null }
+    : buy
+      ? (trades ?? []).find(t => t.type === 'SELL' && t.time >= buy.time)
+      : null;
   return { buy, sell, signalMs };
 }
 
@@ -465,7 +472,8 @@ export default function MultitradeBacktestPanel({ entry }) {
               <table id="multitrade-backtest-table" className="multitrade-backtest-table w-full text-[9px] font-mono">
                 <thead>
                   <tr className="multitrade-backtest-table-head" style={{ background: '#252836' }}>
-                    <th className="text-left px-1.5 py-1 text-p5/50 font-normal">Data</th>
+                    <th className="text-left px-1.5 py-1 text-p5/50 font-normal">Entrada</th>
+                    <th className="text-left px-1.5 py-1 text-p5/50 font-normal">Saída</th>
                     <th className="text-center px-1 py-1 text-p5/50 font-normal">Regra</th>
                     <th className="text-right px-1 py-1 text-p5/50 font-normal">RSI</th>
                     <th className="text-right px-1 py-1 text-p5/50 font-normal">Preço</th>
@@ -502,6 +510,9 @@ export default function MultitradeBacktestPanel({ entry }) {
                         isActive ? 'bg-violet-500/10' : 'hover:bg-p2/40'
                       } ${isLoading ? 'opacity-60' : ''}`}>
                       <td className="px-1.5 py-0.5 text-p5/70 whitespace-nowrap">{fmtDate(row.timeISO ?? row.time)}</td>
+                      <td className="px-1.5 py-0.5 text-p5/50 whitespace-nowrap">
+                        {row.exitTimeISO ?? row.exitTime ? fmtDate(row.exitTimeISO ?? row.exitTime) : '—'}
+                      </td>
                       <td className="px-1 py-0.5 text-center whitespace-nowrap">
                         {row.ruleShort || row.entryKindShort ? (
                           <span

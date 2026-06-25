@@ -62,13 +62,13 @@ export const RSI_OPERATORS = [
 ];
 
 export const ENTRY_MA_TRIGGERS = [
-  { id: 'touch',    label: 'Toque na MA' },
-  { id: 'cross_up', label: 'Cruzamento ↑' },
+  { id: 'touch',    label: 'Toque na MA (suporte)' },
+  { id: 'cross_up', label: 'Cruzamento ↑ (retomada)' },
 ];
 
 export const MA_MODES = [
-  { id: 'strict_above', label: 'fixo (acima MA)' },
-  { id: 'adaptive',     label: 'adapt. (dip histórico)' },
+  { id: 'strict_above', label: 'Acima da MA (fixo)' },
+  { id: 'adaptive',     label: 'Pullback adaptativo (dip %)' },
 ];
 
 export const ENTRY_DISCOUNT_OPTIONS = [

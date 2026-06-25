@@ -1,0 +1,207 @@
+{
+  "label": "AMAP 1h Swing HEI",
+  "rule1": {
+    "enabled": true,
+    "entryRsi": {
+      "interval": "1h",
+      "period": 14,
+      "operator": "<",
+      "value": 38
+    },
+    "exitRsi": {
+      "interval": "1h",
+      "period": 14,
+      "operator": ">",
+      "value": 65
+    },
+    "maFilters": [
+      {
+        "period": 50,
+        "interval": "4h",
+        "mode": "adaptive",
+        "fixedDipPct": 6,
+        "aboveMaEnabled": true,
+        "aboveMaCandles": 1
+      }
+    ],
+    "maFiltersEnabled": true,
+    "extension": {
+      "enabled": false,
+      "maPeriod": 50,
+      "maInterval": "4h",
+      "abovePct": 7,
+      "threeInterval": "4h",
+      "fourInterval": "4h",
+      "threeCandles": false,
+      "fourCandles": false,
+      "confirmLogic": "any"
+    },
+    "stopLoss": {
+      "enabled": true,
+      "fixedEnabled": true,
+      "adaptiveEnabled": true,
+      "pctCapEnabled": true,
+      "maxLossPct": 5,
+      "period": 50,
+      "interval": "1d",
+      "adaptivePeriod": 50,
+      "adaptiveInterval": "4h",
+      "adaptiveFixedDipPct": null,
+      "fixedAboveMaEnabled": true,
+      "fixedAboveMaCandles": 2,
+      "adaptiveAboveMaEnabled": true,
+      "adaptiveAboveMaCandles": 2
+    },
+    "adaptiveOpts": {
+      "defaultPct": 3,
+      "maxPct": 5,
+      "minPct": 0.5,
+      "minEpisodes": 3
+    },
+    "immediateEntry": true,
+    "entryDiscount": 0.015,
+    "pendingTimeoutMs": 7200000,
+    "pendingCancelPct": 0.003,
+    "pendingCancelOnExitRsi": true
+  },
+  "rule2": {
+    "enabled": true,
+    "entryMa": {
+      "period": 50,
+      "interval": "4h",
+      "trigger": "touch",
+      "tolerancePct": 1.5,
+      "fixedDipPct": "",
+      "aboveMaEnabled": true,
+      "aboveMaCandles": 1
+    },
+    "exitRsi": {
+      "interval": "1h",
+      "period": 14,
+      "operator": ">",
+      "value": 80
+    },
+    "exitRsiConditions": [
+      {
+        "enabled": true,
+        "interval": "1h",
+        "period": 14,
+        "operator": ">",
+        "value": 80
+      },
+      {
+        "enabled": true,
+        "interval": "4h",
+        "period": 14,
+        "operator": ">",
+        "value": 70
+      }
+    ],
+    "exitRsiLogic": "any",
+    "stopLoss": {
+      "adaptiveEnabled": true,
+      "adaptiveAboveMaEnabled": true,
+      "adaptiveAboveMaCandles": 2
+    },
+    "entryDiscount": 0.025,
+    "pendingTimeoutMs": 7200000,
+    "pendingCancelPct": 0.003,
+    "pendingCancelOnExitRsi": true,
+    "adaptiveOpts": {
+      "maxPct": 8,
+      "minPct": 0.5,
+      "defaultPct": 3,
+      "minEpisodes": 3
+    }
+  },
+  "entryRsi": {
+    "interval": "1h",
+    "period": 14,
+    "operator": "<",
+    "value": 38
+  },
+  "exitRsi": {
+    "interval": "1h",
+    "period": 14,
+    "operator": ">",
+    "value": 65
+  },
+  "entryRsiPath": {
+    "enabled": true
+  },
+  "entryMa": {
+    "period": 50,
+    "interval": "4h",
+    "trigger": "touch",
+    "tolerancePct": 1.5,
+    "fixedDipPct": "",
+    "aboveMaEnabled": true,
+    "aboveMaCandles": 1,
+    "enabled": true
+  },
+  "maFilters": [
+    {
+      "period": 50,
+      "interval": "4h",
+      "mode": "adaptive",
+      "fixedDipPct": 6,
+      "aboveMaEnabled": true,
+      "aboveMaCandles": 1
+    }
+  ],
+  "maConditions": [
+    {
+      "period": 50,
+      "interval": "4h",
+      "mode": "adaptive",
+      "fixedDipPct": 6,
+      "aboveMaEnabled": true,
+      "aboveMaCandles": 1
+    }
+  ],
+  "maFiltersEnabled": true,
+  "extension": {
+    "enabled": false,
+    "maPeriod": 50,
+    "maInterval": "4h",
+    "abovePct": 7,
+    "threeInterval": "4h",
+    "fourInterval": "4h",
+    "threeCandles": false,
+    "fourCandles": false,
+    "confirmLogic": "any"
+  },
+  "stopLoss": {
+    "enabled": true,
+    "fixedEnabled": true,
+    "adaptiveEnabled": true,
+    "pctCapEnabled": true,
+    "maxLossPct": 5,
+    "period": 50,
+    "interval": "1d",
+    "adaptivePeriod": 50,
+    "adaptiveInterval": "4h",
+    "adaptiveFixedDipPct": null,
+    "fixedAboveMaEnabled": true,
+    "fixedAboveMaCandles": 2,
+    "adaptiveAboveMaEnabled": true,
+    "adaptiveAboveMaCandles": 2
+  },
+  "adaptiveOpts": {
+    "defaultPct": 3,
+    "maxPct": 5,
+    "minPct": 0.5,
+    "minEpisodes": 3
+  },
+  "immediateEntry": true,
+  "entryDiscount": 0.015,
+  "pendingTimeoutMs": 7200000,
+  "pendingCancelPct": 0.003,
+  "pendingCancelOnExitRsi": true,
+  "pollMs": 300000,
+  "fastPollMs": 60000,
+  "fastRsiThreshold": 60,
+  "minVolumeUsdt": 1000000,
+  "allowLowVolume": false,
+  "aggressiveExitOnLowVolume": true
+}

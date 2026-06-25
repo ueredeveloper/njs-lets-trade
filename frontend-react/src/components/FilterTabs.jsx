@@ -1,6 +1,8 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
 import { useI18n } from '../i18n';
+import { parseRsiConditionToken, parseMaCompareToken } from '../utils/filterNames';
 import { useCurrency } from '../contexts/CurrencyContext';
+import SearchInput from './SearchInput';
 import { sortByTypeOfIntervals, sortFirstIncludesBinance } from '../utils/sort-firts-includes-binance';
 
 const INTERVAL_COLORS = {
@@ -174,28 +176,31 @@ function getFilterDescription(name, t) {
   }
 
   if (type === 'r' || type === 'rsi') {
-    const c1 = parts[2] === 'a' ? t('filter.acima') : t('filter.abaixo');
+    const c1Type = parseRsiConditionToken(parts[2]);
     const v1 = parts[3];
-    const c2 = parts[4] === 'b' ? t('filter.abaixo') : t('filter.acima');
+    const c2Type = parseRsiConditionToken(parts[4]);
     const v2 = parts[5];
+    const c1 = c1Type === 'below' ? t('filter.abaixo') : t('filter.acima');
+    const c2 = c2Type === 'below' ? t('filter.abaixo') : t('filter.acima');
     return t('filter.rsi', c1, v1, c2, v2, interval);
   }
 
   if (type === 'i') {
     const line1 = parts[2];
-    const comp  = parts[3] === 'a' ? t('filter.acima') : t('filter.abaixo');
+    const comp  = parseMaCompareToken(parts[3]) === 'below' ? t('filter.abaixo') : t('filter.acima');
     const line2 = parts[4];
     return t('filter.ichi', line1, comp, line2, interval);
   }
 
-  if (type === 'm') {
+  if (type === 'm' || type === 'ma') {
     if (parts[3] === 'pct') {
       const period = parts[2];
       const minPct = parts[4];
       return t('filter.ma_pct', period, minPct, interval);
     }
     const period = parts[2];
-    const comp   = parts[3] === 'a' ? t('filter.acima') : t('filter.abaixo');
+    const cmpType = parseMaCompareToken(parts[3]);
+    const comp   = cmpType === 'below' ? t('filter.abaixo') : t('filter.acima');
     const candle = parts[4];
     return t('filter.ma', period, comp, candle, interval);
   }
@@ -209,6 +214,7 @@ export default function FilterTabs({ onSelectFilter }) {
   const [checked, setChecked] = useState(new Set());
   const [activeFilter, setActiveFilter] = useState(null);
   const [flashing, setFlashing] = useState(new Set());
+  const [searchQuery, setSearchQuery] = useState('');
   const prevFilterNamesRef = useRef(null); // null = primeira renderização ainda não registrada
   const flashTimerRef = useRef(null);
 
@@ -250,6 +256,16 @@ export default function FilterTabs({ onSelectFilter }) {
     }
   }, [filters]);
 
+  const visibleFilters = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return sortedFilters;
+    return sortedFilters.filter((f) => {
+      const name = f.name.toLowerCase();
+      const desc = getFilterDescription(f.name, t).toLowerCase();
+      return name.includes(q) || desc.includes(q);
+    });
+  }, [sortedFilters, searchQuery, t]);
+
   function toggleCheck(name) {
     setChecked((prev) => {
       const next = new Set(prev);
@@ -272,11 +288,17 @@ export default function FilterTabs({ onSelectFilter }) {
 
   return (
     <div className="flex flex-col gap-1 h-full min-h-0">
+      <SearchInput
+        value={searchQuery}
+        onChange={(e) => setSearchQuery(e.target.value)}
+        placeholder={t('filter.search_ph')}
+        className="shrink-0"
+      />
       {/* Linhas com tamanhos variados */}
       <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden flex flex-col gap-1">
         {(() => {
           let gi = 0;
-          return buildRows(sortedFilters).map((row, rowIdx) => (
+          return buildRows(visibleFilters).map((row, rowIdx) => (
             <div key={rowIdx} className="flex gap-1">
               {row.map(({ filter, span }) => {
                 const cardColor  = CARD_COLORS[gi % CARD_COLORS.length];

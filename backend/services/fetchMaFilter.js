@@ -4,6 +4,7 @@ const getCandles = require('../binance/getCandles');
 const { getActiveUsdtPairs } = require('../binance/getActiveUsdtPairs');
 const { get: cacheGet, storeFromCandles } = require('../cache/rsiCache');
 const { checkMaVsCandle } = require('../utils/maCandleCompare');
+const { buildMaFilterName } = require('../utils/filterNames');
 
 const CANDLES_LIMIT = 200;
 const CONCURRENCY   = 30;
@@ -39,8 +40,8 @@ router.get('/ma-filter', async (req, res) => {
       return res.status(400).json({ error: `MA${period} não disponível via cache (suportado: 50)` });
     }
 
-    const cmpChar = (compare === 'above' || compare === 'a') ? 'a' : 'b';
-    const name    = `${interval}|m|${period}|${cmpChar}|${candle}`;
+    const lang = req.query.lang === 'pt' ? 'pt' : 'en';
+    const name = buildMaFilterName(interval, period, compare, candle, lang);
 
     const { list: symbols } = await getActiveUsdtPairs();
     const matched = [];

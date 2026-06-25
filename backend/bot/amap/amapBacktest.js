@@ -12,11 +12,15 @@ const { fetchBinanceCandles, fetchGateCandles } = require('../prices');
 const { toGateSymbol } = require('../../utils/toGateSymbol');
 const {
   getRequiredSpecs, computeAdaptiveDips, computeMaFilterTimeStats, diagnoseEntry, evaluateExit,
-  getStopLossMa, isStopLossExit, checkRsi, maKey,
+  getStopLossMa, isStopLossExit, checkRsi, maKey, INTERVAL_MS,
   getEntryScanInterval, entryRsiPathActive, entryMaPathActive, resolveEntrySignal,
   getEntryDiscount, shouldUseImmediateEntry, resolveActiveMaFilters,
 } = require('./strategyEngine');
 const { buildExitReasonDetail, buildPendingCancelDetail, inferRuleId } = require('./exitReasonFormat');
+const {
+  evaluateRule2Exit, getRule2ExitRsiConditions, checkRule2ExitRsiConditions,
+  computeRule2AdaptiveDip,
+} = require('./rule2Engine');
 
 const DATA_DIR = path.join(__dirname, '../../data/candlestick');
 const LIMIT    = 1000;
@@ -59,6 +63,110 @@ function exitRsiAt(exitSeries, entryTime) {
     else break;
   }
   return best;
+}
+
+/** RSI de saída usando só velas fechadas (evita lookahead intra-bar). */
+function exitRsiAtClosed(exitSeries, atTime, interval) {
+  const intervalMs = INTERVAL_MS[interval] ?? 3_600_000;
+  let best = null;
+  for (const point of exitSeries) {
+    if (point.openTime + intervalMs <= atTime) best = point.rsi;
+    else break;
+  }
+  return best;
+}
+
+function buildExitRsiSpecs(config) {
+  const specs = [];
+  const seen = new Set();
+  const add = (interval, period = 14) => {
+    if (!interval) return;
+    const key = `${interval}|${period}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    specs.push({ interval, period });
+  };
+  add(config.exitRsi?.interval, config.exitRsi?.period ?? 14);
+  if (config.rule2?.enabled) {
+    for (const c of getRule2ExitRsiConditions(config.rule2)) {
+      add(c.interval, c.period ?? 14);
+    }
+  }
+  return specs;
+}
+
+function buildExitRsiSeriesMap(cMap, specs) {
+  const out = {};
+  for (const { interval, period } of specs) {
+    const candles = cMap[interval];
+    if (!candles?.length) continue;
+    out[`${interval}|${period}`] = computeRsiSeries(candles, period);
+  }
+  return out;
+}
+
+function exitRsiMapAt(seriesMap, specs, atTime, { closedOnly = true } = {}) {
+  const map = {};
+  for (const { interval, period } of specs) {
+    const series = seriesMap[`${interval}|${period}`];
+    if (!series) continue;
+    map[interval] = closedOnly
+      ? exitRsiAtClosed(series, atTime, interval)
+      : exitRsiAt(series, atTime);
+  }
+  return map;
+}
+
+function evaluateBacktestExit({
+  close, exitRsiMap, stopLossMa, maSnap, adaptiveDips, config, buyEntryKind, buyPrice, rule2Dip,
+}) {
+  const ruleId = inferRuleId(buyEntryKind);
+  if (ruleId === 'rule2' && config.rule2?.enabled) {
+    return evaluateRule2Exit({
+      close,
+      exitRsiMap,
+      rule2: config.rule2,
+      entryPrice: buyPrice,
+      maSnap,
+      adaptiveDip: rule2Dip,
+    });
+  }
+  const iv = config.exitRsi?.interval;
+  return evaluateExit({
+    close,
+    exitRsi: iv ? exitRsiMap[iv] : null,
+    stopLossMa,
+    maSnap,
+    adaptiveDips,
+    config,
+    entryKind: buyEntryKind,
+    entryPrice: buyPrice,
+  });
+}
+
+function pendingExitRsiHit(exitRsiMap, config, entryKind) {
+  const ruleId = inferRuleId(entryKind);
+  if (ruleId === 'rule2' && config.rule2?.enabled) {
+    return !!checkRule2ExitRsiConditions(exitRsiMap, config.rule2);
+  }
+  const iv = config.exitRsi?.interval;
+  return checkRsi(iv ? exitRsiMap[iv] : null, config.exitRsi);
+}
+
+function pendingCancelExitMeta(exitRsiMap, config, entryKind) {
+  const ruleId = inferRuleId(entryKind);
+  if (ruleId === 'rule2' && config.rule2?.enabled) {
+    const matched = checkRule2ExitRsiConditions(exitRsiMap, config.rule2);
+    if (matched) {
+      return {
+        exitRsi: exitRsiMap[matched.interval],
+        exitRsiConfig: matched,
+      };
+    }
+    return { exitRsi: null, exitRsiConfig: config.rule2.exitRsi ?? config.exitRsi };
+  }
+  const iv = config.exitRsi?.interval;
+  return { exitRsi: iv ? exitRsiMap[iv] : null, exitRsiConfig: config.exitRsi };
 }
 
 function computeMaSeries(candles, period) {
@@ -275,6 +383,10 @@ function reconcileEntryLog(entryLog, signals) {
     if (sig.ruleId) row.ruleId = sig.ruleId;
     if (sig.cancelDetail) row.cancelDetail = sig.cancelDetail;
     if (sig.cancelTime) row.cancelTime = sig.cancelTime;
+    if (sig.buyTime) row.buyTime = sig.buyTime;
+    if (sig.buyPrice != null) row.buyPrice = sig.buyPrice;
+    if (sig.exitTime) row.exitTime = sig.exitTime;
+    if (sig.exitPrice != null) row.exitPrice = sig.exitPrice;
   }
 }
 
@@ -308,6 +420,12 @@ function serializeEntryRow(e) {
     cancelTimeISO: e.cancelTime ? new Date(e.cancelTime).toISOString() : (
       e.cancelDetail?.cancelTime ? new Date(e.cancelDetail.cancelTime).toISOString() : null
     ),
+    buyTime: e.buyTime ?? null,
+    buyTimeISO: e.buyTime ? new Date(e.buyTime).toISOString() : null,
+    buyPrice: e.buyPrice ?? null,
+    exitTime: e.exitTime ?? null,
+    exitTimeISO: e.exitTime ? new Date(e.exitTime).toISOString() : null,
+    exitPrice: e.exitPrice ?? null,
     rsi: e.rsi != null ? parseFloat(Number(e.rsi).toFixed(2)) : null,
     maPathRsi: e.maPathRsi != null ? parseFloat(Number(e.maPathRsi).toFixed(2)) : null,
     price: e.price,
@@ -405,10 +523,8 @@ async function runAmapBacktest({ symbol, config, exchange = 'binance', capital =
   }
 
   const { points: scanPoints } = buildEntryScanPoints(cMap, config);
-  const exitSeries  = config.entryRsi.interval === config.exitRsi.interval &&
-    config.entryRsi.period === config.exitRsi.period
-    ? computeRsiSeries(entryCandles ?? scanCandles, config.entryRsi.period)
-    : computeRsiSeries(exitCandles, config.exitRsi.period);
+  const exitRsiSpecs = buildExitRsiSpecs(config);
+  const exitRsiSeriesMap = buildExitRsiSeriesMap(cMap, exitRsiSpecs);
 
   const adaptiveDips  = computeAdaptiveDips(cMap, config);
   const maFilterStats = computeMaFilterTimeStats(cMap, config, adaptiveDips);
@@ -438,9 +554,8 @@ async function runAmapBacktest({ symbol, config, exchange = 'binance', capital =
 
   for (const pt of scanPoints) {
     const { openTime, close, entryRsi, maPathRsi, rsiCtx, maCtx } = pt;
-    const exitRsi    = exitRsiAt(exitSeries, openTime);
+    const exitRsiMap = exitRsiMapAt(exitRsiSeriesMap, exitRsiSpecs, openTime);
     const maSnap     = maSnapAt(cMap, config, openTime);
-    const stopLossMa = getStopLossMa(maSnap, config);
 
     if (phase === 'WATCHING') {
       const resolved = resolveEntrySignal({
@@ -512,11 +627,15 @@ async function runAmapBacktest({ symbol, config, exchange = 'binance', capital =
     } else if (phase === 'PENDING') {
       const elapsedMs  = openTime - pendingSince;
       const cancelLine = triggerPrice * (1 + botOpts.pendingCancelPct);
-      const exitRsiHit = botOpts.pendingCancelOnExitRsi !== false && checkRsi(exitRsi, config.exitRsi);
+      const exitRsiHit = botOpts.pendingCancelOnExitRsi !== false
+        && pendingExitRsiHit(exitRsiMap, config, pendingEntryKind ?? pendingSignal?.entryKind);
       if (close > cancelLine || elapsedMs > botOpts.pendingTimeoutMs || exitRsiHit) {
         const reason = exitRsiHit ? 'CANCELLED_EXIT_RSI'
           : close > cancelLine ? 'CANCELLED_RECOVERY' : 'CANCELLED_TIMEOUT';
         const pendingRuleId = inferRuleId(pendingEntryKind ?? pendingSignal?.entryKind);
+        const cancelExitMeta = pendingCancelExitMeta(
+          exitRsiMap, config, pendingEntryKind ?? pendingSignal?.entryKind,
+        );
         const cancelDetail = buildPendingCancelDetail({
           reason,
           ruleId: pendingRuleId,
@@ -529,8 +648,8 @@ async function runAmapBacktest({ symbol, config, exchange = 'binance', capital =
           limitPrice,
           cancelLine,
           closeAtCancel: close,
-          exitRsi,
-          exitRsiConfig: config.exitRsi,
+          exitRsi: cancelExitMeta.exitRsi,
+          exitRsiConfig: cancelExitMeta.exitRsiConfig,
           exitRsiHit,
         });
         if (pendingSignal) {
@@ -548,7 +667,12 @@ async function runAmapBacktest({ symbol, config, exchange = 'binance', capital =
         pendingEntryKind = null;
       } else if (close <= limitPrice) {
         openSignalIdx = signals.length;
-        signals.push({ ...pendingSignal, buyTime: openTime, buyPrice: close, result: 'BOUGHT' });
+        signals.push({
+          ...pendingSignal,
+          buyTime: openTime,
+          buyPrice: close,
+          result: 'BOUGHT',
+        });
         buyEntryKind = pendingEntryKind ?? pendingSignal?.entryKind ?? null;
         buyPrice = close;
         pendingSignal = null;
@@ -560,9 +684,16 @@ async function runAmapBacktest({ symbol, config, exchange = 'binance', capital =
       }
 
     } else if (phase === 'BOUGHT') {
-      const exitEval = evaluateExit({
-        close, exitRsi, stopLossMa, maSnap, adaptiveDips, config, entryKind: buyEntryKind,
-        entryPrice: buyPrice,
+      const stopLossMa = getStopLossMa(maSnap, config);
+      const rule2Dip = buyEntryKind === 'ma' && config.rule2?.entryMa
+        ? computeRule2AdaptiveDip(
+          maSnap[maKey(config.rule2.entryMa.period, config.rule2.entryMa.interval)]?.candles,
+          config.rule2,
+        )
+        : null;
+      const exitEval = evaluateBacktestExit({
+        close, exitRsiMap, stopLossMa, maSnap, adaptiveDips, config,
+        buyEntryKind, buyPrice, rule2Dip,
       });
       if (exitEval.exit) {
         const usdtOut = buyQty * close;
@@ -573,10 +704,13 @@ async function runAmapBacktest({ symbol, config, exchange = 'binance', capital =
         const exitDetail = buildExitReasonDetail({
           ruleId, entryKind: buyEntryKind, exitEval, ruleConfig,
         });
+        const exitRsiLogged = exitEval.exitRsiCondition?.interval
+          ? exitRsiMap[exitEval.exitRsiCondition.interval]
+          : exitRsiMap[config.exitRsi?.interval];
         if (openSignalIdx !== null) {
           signals[openSignalIdx].exitTime  = openTime;
           signals[openSignalIdx].exitPrice = close;
-          signals[openSignalIdx].exitRsi   = exitRsi;
+          signals[openSignalIdx].exitRsi   = exitRsiLogged;
           signals[openSignalIdx].pnlPct    = (pnl / buyUsdt) * 100;
           signals[openSignalIdx].exitDetail = exitDetail;
           signals[openSignalIdx].ruleId = ruleId;
@@ -587,7 +721,7 @@ async function runAmapBacktest({ symbol, config, exchange = 'binance', capital =
           openSignalIdx = null;
         }
         trades.push({
-          type: 'SELL', time: openTime, price: close, exitRsi,
+          type: 'SELL', time: openTime, price: close, exitRsi: exitRsiLogged,
           exitReason: exitEval.reason,
           exitDetail,
           ruleId,
@@ -674,5 +808,7 @@ module.exports = {
   loadLocalCandles,
   computeRsiSeries,
   exitRsiAt,
+  exitRsiAtClosed,
+  exitRsiMapAt,
   maSnapAt,
 };

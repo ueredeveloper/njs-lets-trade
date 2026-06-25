@@ -1,5 +1,6 @@
 import { useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import { useCurrency } from '../contexts/CurrencyContext';
+import SearchInput from './SearchInput';
 import { fetchCandlesticksAndCloud, fetchGateCurrencies, gatePreloadCandles, fetchBinanceTrades, fetchGateTrades } from '../services/api';
 import { useI18n } from '../i18n';
 import TradeConfigModal from './TradeConfigModal';
@@ -269,25 +270,11 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
     <div className="flex flex-col h-full">
       {/* Barra de busca */}
       <div className="px-2 py-1 shrink-0">
-        <div className="flex items-center gap-1.5 bg-p2/50 border border-p3/30 rounded px-2 py-1">
-          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
-            strokeWidth="2" stroke="currentColor" className="w-4 h-4 sm:w-3.5 sm:h-3.5 text-p5 opacity-40 shrink-0">
-            <path strokeLinecap="round" strokeLinejoin="round"
-              d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
-          </svg>
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder={t('table.search')}
-            className="flex-1 bg-transparent text-p5 text-xs outline-none placeholder-p5/30"
-          />
-          {search && (
-            <button onClick={() => setSearch('')} className="text-p5 opacity-50 hover:opacity-90 w-7 h-7 flex items-center justify-center rounded-full hover:bg-p3/30 text-xl leading-none transition-colors">
-              ×
-            </button>
-          )}
-        </div>
+        <SearchInput
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder={t('table.search')}
+        />
       </div>
 
       {/* Cabeçalho contador + filtros de favoritos */}

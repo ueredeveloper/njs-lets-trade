@@ -3,6 +3,7 @@
 const router = require('express').Router();
 const { getActiveUsdtPairs } = require('../binance/getActiveUsdtPairs');
 const maTimeCache = require('../cache/maTimeAboveCache');
+const { buildMaPctFilterName } = require('../utils/filterNames');
 
 const ALLOWED_INTERVALS = new Set([
   '1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w',
@@ -27,7 +28,7 @@ router.get('/ma-time-above-filter', async (req, res) => {
     }
 
     const minPctRounded = Math.round(minPct);
-    const name = `${interval}|m|${period}|pct|${minPctRounded}`;
+    const name = buildMaPctFilterName(interval, period, minPctRounded);
 
     const { list: symbols } = await getActiveUsdtPairs();
     const cacheStats = await maTimeCache.ensureAll(symbols, interval, period, { force });

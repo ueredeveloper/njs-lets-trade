@@ -26,7 +26,22 @@ export function formatPendingCancel(row) {
 }
 
 export function formatBacktestOutcome(row) {
-  if (row.exitDetail?.label) return { label: row.exitDetail.label, detail: null, title: row.exitDetail.short ?? row.exitDetail.label };
+  const exitWhen = row.exitTimeISO ?? row.exitTime;
+  const exitWhenLbl = exitWhen
+    ? new Date(exitWhen).toLocaleString('pt-BR', {
+      timeZone: 'America/Sao_Paulo',
+      day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+    })
+    : null;
+
+  if (row.exitDetail?.label) {
+    return {
+      label: row.exitDetail.label,
+      detail: exitWhenLbl ? `Saída ${exitWhenLbl}` : null,
+      title: [row.exitDetail.short ?? row.exitDetail.label, exitWhenLbl ? `Saída ${exitWhenLbl}` : null]
+        .filter(Boolean).join(' · '),
+    };
+  }
   const pending = formatPendingCancel(row);
   if (pending) return pending;
   if (row.outcomeLabel) return { label: row.outcomeLabel, detail: row.outcomeDetail ?? null, title: row.outcomeDetail ?? row.outcomeLabel };

@@ -3,11 +3,12 @@ const { RSI } = require('technicalindicators');
 const getCandles = require('../binance/getCandles');
 const { getActiveUsdtPairs } = require('../binance/getActiveUsdtPairs');
 const { get: rsiGet, storeFromCandles } = require('../cache/rsiCache');
+const { parseRsiConditionToken, buildRsiFilterName } = require('../utils/filterNames');
 
 const CANDLES_LIMIT = 200;
 const CONCURRENCY = 30;
 
-function parseQuery(query) {
+function parseQuery(query, lang = 'en') {
   const parts = query.trim().split('|');
   if (parts.length < 4) {
     throw new Error('Formato inválido. Use: interval|indicator|condition|value[|condition|value]');
@@ -19,18 +20,15 @@ function parseQuery(query) {
 
   const conditions = [];
   for (let i = 2; i + 1 < parts.length; i += 2) {
-    const cond = parts[i].toLowerCase();
+    const type = parseRsiConditionToken(parts[i]);
     const val = parseFloat(parts[i + 1]);
-    if (isNaN(val)) continue;
-    const type = (cond === 'above' || cond === 'a') ? 'above' : 'below';
+    if (!type || isNaN(val)) continue;
     conditions.push({ type, value: val });
   }
 
   if (conditions.length === 0) throw new Error('Nenhuma condição válida encontrada');
 
-  const shortIndicator = indicator === 'rsi' ? 'r' : indicator;
-  const condStr = conditions.map(c => `${c.type === 'above' ? 'a' : 'b'}|${c.value}`).join('|');
-  const nome = `${interval}|${shortIndicator}|${condStr}`;
+  const nome = buildRsiFilterName(interval, conditions, lang);
 
   return { interval, indicator, conditions, nome };
 }
@@ -64,7 +62,8 @@ router.get('/indicator-search', async (req, res) => {
       return res.status(400).json({ error: 'Parâmetro query obrigatório. Ex: ?query=8h|rsi|above|70|below|99' });
     }
 
-    const { interval, indicator, conditions, nome } = parseQuery(query);
+    const lang = req.query.lang === 'pt' ? 'pt' : 'en';
+    const { interval, indicator, conditions, nome } = parseQuery(query, lang);
 
     if (indicator !== 'rsi') {
       return res.status(400).json({ error: `Indicador "${indicator}" não suportado neste endpoint` });

@@ -55,3 +55,8 @@
 
 ## 16/06/2026
 - [] O popup com a área do polígono não está acima do polígono. O ponto superior mais ao norte.
+
+
+## 22/06/2026
+-[] Está entrando várias vezes se o rsi cai vária vezes abaixo de 30, e se passar pela ma501h como segunda entrada, entra também, concorrendo. 
+    O preço chega na ma50 1h, este esta tem uma adaptativa que coincide com o stoploss, então a moeda fica entrando e saíndo

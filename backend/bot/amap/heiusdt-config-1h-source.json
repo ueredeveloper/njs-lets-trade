@@ -1,0 +1,71 @@
+{
+  "label": "AMAP 1h Swing",
+  "rule1": {
+    "enabled": true,
+    "exitRsi": { "value": 65, "period": 14, "interval": "1h", "operator": ">" },
+    "entryRsi": { "value": 30, "period": 14, "interval": "1h", "operator": "<" },
+    "stopLoss": {
+      "period": 50, "enabled": true, "interval": "1d", "maxLossPct": 5,
+      "fixedEnabled": true, "pctCapEnabled": true, "adaptivePeriod": 50,
+      "adaptiveEnabled": true, "adaptiveInterval": "4h", "adaptiveFixedDipPct": null,
+      "fixedAboveMaCandles": 2, "fixedAboveMaEnabled": true,
+      "adaptiveAboveMaCandles": 2, "adaptiveAboveMaEnabled": true
+    },
+    "extension": {
+      "enabled": true, "abovePct": 7, "maPeriod": 50, "maInterval": "1h",
+      "fourCandles": true, "confirmLogic": "any", "fourInterval": "1h",
+      "threeCandles": true, "threeInterval": "1h"
+    },
+    "maFilters": [
+      { "mode": "adaptive", "period": 50, "interval": "4h", "fixedDipPct": 5, "aboveMaCandles": 2, "aboveMaEnabled": true },
+      { "mode": "adaptive", "period": 50, "interval": "1d", "fixedDipPct": 5, "aboveMaCandles": 2, "aboveMaEnabled": true }
+    ],
+    "adaptiveOpts": { "maxPct": 5, "minPct": 0.5, "defaultPct": 3, "minEpisodes": 3 },
+    "entryDiscount": 0.015, "immediateEntry": true, "maFiltersEnabled": true,
+    "pendingCancelPct": 0.003, "pendingTimeoutMs": 7200000, "pendingCancelOnExitRsi": true
+  },
+  "rule2": {
+    "enabled": true,
+    "entryMa": { "period": 50, "trigger": "cross_up", "interval": "4h", "fixedDipPct": "", "tolerancePct": 0.8, "aboveMaCandles": 2, "aboveMaEnabled": true },
+    "exitRsi": { "value": 80, "period": 14, "interval": "1h", "operator": ">" },
+    "stopLoss": { "adaptiveEnabled": true, "adaptiveAboveMaCandles": 2, "adaptiveAboveMaEnabled": true },
+    "adaptiveOpts": { "maxPct": 8, "minPct": 0.5, "defaultPct": 3, "minEpisodes": 3 },
+    "exitRsiLogic": "any", "entryDiscount": 0.025,
+    "pendingCancelPct": 0.003, "pendingTimeoutMs": 7200000,
+    "exitRsiConditions": [
+      { "value": 80, "period": 14, "enabled": true, "interval": "1h", "operator": ">" },
+      { "value": 70, "period": 14, "enabled": true, "interval": "4h", "operator": ">" }
+    ],
+    "pendingCancelOnExitRsi": true
+  },
+  "pollMs": 300000, "fastPollMs": 60000, "fastRsiThreshold": 60,
+  "entryMa": { "period": 50, "enabled": true, "trigger": "cross_up", "interval": "4h", "fixedDipPct": "", "tolerancePct": 0.8, "aboveMaCandles": 2, "aboveMaEnabled": true },
+  "exitRsi": { "value": 65, "period": 14, "interval": "1h", "operator": ">" },
+  "entryRsi": { "value": 30, "period": 14, "interval": "1h", "operator": "<" },
+  "stopLoss": {
+    "period": 50, "enabled": true, "interval": "1d", "maxLossPct": 5,
+    "fixedEnabled": true, "pctCapEnabled": true, "adaptivePeriod": 50,
+    "adaptiveEnabled": true, "adaptiveInterval": "4h", "adaptiveFixedDipPct": null,
+    "fixedAboveMaCandles": 2, "fixedAboveMaEnabled": true,
+    "adaptiveAboveMaCandles": 2, "adaptiveAboveMaEnabled": true
+  },
+  "extension": {
+    "enabled": true, "abovePct": 7, "maPeriod": 50, "maInterval": "1h",
+    "fourCandles": true, "confirmLogic": "any", "fourInterval": "1h",
+    "threeCandles": true, "threeInterval": "1h"
+  },
+  "maFilters": [
+    { "mode": "adaptive", "period": 50, "interval": "4h", "fixedDipPct": 5, "aboveMaCandles": 2, "aboveMaEnabled": true },
+    { "mode": "adaptive", "period": 50, "interval": "1d", "fixedDipPct": 5, "aboveMaCandles": 2, "aboveMaEnabled": true }
+  ],
+  "adaptiveOpts": { "maxPct": 5, "minPct": 0.5, "defaultPct": 3, "minEpisodes": 3 },
+  "entryRsiPath": { "enabled": true },
+  "maConditions": [
+    { "mode": "adaptive", "period": 50, "interval": "4h", "fixedDipPct": 5, "aboveMaCandles": 2, "aboveMaEnabled": true },
+    { "mode": "adaptive", "period": 50, "interval": "1d", "fixedDipPct": 5, "aboveMaCandles": 2, "aboveMaEnabled": true }
+  ],
+  "entryDiscount": 0.015, "minVolumeUsdt": 1000000, "allowLowVolume": false,
+  "immediateEntry": true, "maFiltersEnabled": true,
+  "pendingCancelPct": 0.003, "pendingTimeoutMs": 7200000, "pendingCancelOnExitRsi": true,
+  "aggressiveExitOnLowVolume": true
+}

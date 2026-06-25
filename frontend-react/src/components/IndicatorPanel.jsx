@@ -348,7 +348,7 @@ function IndicatorRow({ value, onChange }) {
 
 export default function IndicatorPanel({ open, onToggle }) {
   const { currencies, getBinanceCurrenciesWithUsdt, addFilter } = useCurrency();
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const [indicators, setIndicators] = useState(DEFAULT_INDICATORS);
   const [searching, setSearching] = useState(false);
   const [savedIntervals, setSavedIntervals] = useState(['15m', '1h', '4h']);
@@ -399,7 +399,7 @@ export default function IndicatorPanel({ open, onToggle }) {
         for (const interval of ind.intervals) {
           const query = `${interval}|rsi|${compare1}|${line1}|${compare2}|${line2}`;
           console.log('[frontend-react] RSI query montada:', query);
-          const filter = await fetchIndicatorSearch(query);
+          const filter = await fetchIndicatorSearch(query, lang);
           console.log('[frontend-react] resultado recebido:', filter.name, '—', filter.list.length, 'moedas:', filter.list);
           addFilter(filter);
         }
@@ -419,7 +419,7 @@ export default function IndicatorPanel({ open, onToggle }) {
         const compare = ind.compare ?? 'above';
         const candle  = ind.candle ?? 'close';
         for (const interval of ind.intervals) {
-          const filter = await fetchMaFilter({ interval, period: length, compare, candle });
+          const filter = await fetchMaFilter({ interval, period: length, compare, candle, lang });
           addFilter(filter);
         }
       }
