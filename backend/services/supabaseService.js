@@ -19,6 +19,7 @@ const { buildExitRsiReport } = require('../bot/amap/suggestExitRsi');
 const { buildEntryRsiReport } = require('../bot/amap/suggestEntryRsi');
 const { buildEntryMaReport } = require('../bot/amap/suggestEntryMa');
 const { runAmapBacktest } = require('../bot/amap/amapBacktest');
+const { resolveConfigBody, normalizeStrategyId: normStrategyId } = require('../bot/amap/strategyPresets');
 const { toFormState, normalizeTradeConfig, flatConfigToBody, toEngineConfig } = require('../bot/amap/tradeConfigSchema');
 const { fetchBinanceCandles, fetchGateCandles } = require('../bot/prices');
 const { toGateSymbol } = require('../utils/toGateSymbol');
@@ -242,18 +243,17 @@ router.delete('/favorites/:symbol', getUserId, async (req, res) => {
 // ============================================================
 
 function multitradeToEntry(r) {
-  const tc = r.trade_config ? buildTradeConfig(flatConfigToBody(r.trade_config)) : null;
-  const form = toFormState(tc ?? {
-    entryRsi:     r.entry_rsi,
-    exitRsi:      r.exit_rsi,
-    maConditions: r.ma_conditions,
-    extension:    { threeCandles: r.rule_3_candles, fourCandles: r.rule_4_candles },
-  });
+  const sid = normStrategyId(r.strategy_id);
+  const configBody = resolveConfigBody(r);
+  const tc = buildTradeConfig(configBody);
+  const form = toFormState(configBody);
 
   return {
     id:           r.id,
     symbol:       r.symbol,
     exchange:     r.exchange,
+    strategyId:   sid,
+    enabled:      r.enabled !== false,
     capital:      Number(r.capital),
     entryRsi:     form.entryRsi,
     exitRsi:      form.exitRsi,
@@ -267,9 +267,17 @@ function multitradeToEntry(r) {
     adaptiveOpts: form.adaptiveOpts,
     volume:       form.volume,
     tradeConfig:  tc,
+    rule1:        form.rule1 ?? tc?.rule1,
+    rule2:        form.rule2 ?? tc?.rule2,
     createdAt:    r.created_at,
     updatedAt:    r.updated_at,
   };
+}
+
+function resolveStrategyId(body) {
+  const raw = body.strategyId ?? body.strategy_id ?? 'amap-15m';
+  if (raw === 'flex') return 'amap-15m';
+  return raw;
 }
 
 function bodyToMultitradeRow(userId, body) {
@@ -281,7 +289,8 @@ function bodyToMultitradeRow(userId, body) {
     user_id:         userId,
     symbol:          sym,
     exchange:        body.exchange ?? 'binance',
-    strategy_id:     'flex',
+    strategy_id:     resolveStrategyId(body),
+    enabled:         body.enabled !== false,
     capital:         Number(body.capital ?? 100),
     entry_rsi:       normalized.entryRsi,
     exit_rsi:        normalized.exitRsi,
@@ -292,7 +301,17 @@ function bodyToMultitradeRow(userId, body) {
   };
 }
 
-async function syncBotState({ symbol, exchange, strategy_id, capital, trade_config }) {
+async function syncBotState({ symbol, exchange, strategy_id, capital, trade_config, enabled }) {
+  if (enabled === false) {
+    const { error } = await supabase
+      .from('rsi_multi_bot_state')
+      .delete()
+      .eq('symbol', symbol)
+      .eq('strategy_id', strategy_id)
+      .eq('phase', 'WATCHING');
+    if (error) console.warn('[supabase] syncBotState disable:', error.message);
+    return;
+  }
   const row = {
     symbol, exchange, strategy_id, initial_capital: capital, capital, trade_config,
   };
@@ -319,17 +338,18 @@ router.post('/multitrade-favorites', getUserId, async (req, res) => {
 
   const { data, error } = await supabase
     .from('multitrade_favorites')
-    .upsert(row, { onConflict: 'user_id,symbol' })
+    .upsert(row, { onConflict: 'user_id,symbol,strategy_id' })
     .select()
     .single();
   if (error) return sbError(res, error, 'POST multitrade-favorites');
 
   await syncBotState({
-    symbol:      data.symbol,
-    exchange:    data.exchange,
-    strategy_id: data.strategy_id,
-    capital:     Number(data.capital),
+    symbol:       data.symbol,
+    exchange:     data.exchange,
+    strategy_id:  data.strategy_id,
+    capital:      Number(data.capital),
     trade_config: data.trade_config,
+    enabled:      data.enabled !== false,
   });
 
   res.json(multitradeToEntry(data));
@@ -351,11 +371,12 @@ async function updateMultitrade(req, res) {
   if (!data) return res.status(404).json({ error: 'not found' });
 
   await syncBotState({
-    symbol:      data.symbol,
-    exchange:    data.exchange,
-    strategy_id: data.strategy_id,
-    capital:     Number(data.capital),
+    symbol:       data.symbol,
+    exchange:     data.exchange,
+    strategy_id:  data.strategy_id,
+    capital:      Number(data.capital),
     trade_config: data.trade_config,
+    enabled:      data.enabled !== false,
   });
 
   res.json(multitradeToEntry(data));
@@ -702,18 +723,22 @@ router.get('/multitrade-backtest', getUserId, async (req, res) => {
   const sym = req.query.symbol?.toUpperCase();
   if (!sym) return res.status(400).json({ error: 'symbol obrigatório' });
 
-  const { data, error } = await supabase
+  const strategyId = req.query.strategy_id ?? req.query.strategyId ?? null;
+  let q = supabase
     .from('multitrade_favorites')
     .select('*')
     .eq('user_id', req.userId)
-    .eq('symbol', sym)
-    .maybeSingle();
+    .eq('symbol', sym);
+  if (strategyId) q = q.eq('strategy_id', strategyId === 'flex' ? 'amap-15m' : strategyId);
+  else q = q.eq('enabled', true).order('created_at').limit(1);
+
+  const { data, error } = await q.maybeSingle();
 
   if (error) return sbError(res, error, 'GET multitrade-backtest');
   if (!data) return res.status(404).json({ error: 'Moeda não está no Multi-Trade' });
 
   const entry    = multitradeToEntry(data);
-  const config   = entry.tradeConfig ?? toEngineConfig(normalizeTradeConfig(entry));
+  const config   = entry.tradeConfig ?? toEngineConfig(normalizeTradeConfig(resolveConfigBody(data)));
   const exchange = req.query.exchange ?? entry.exchange ?? 'binance';
   const capital  = Number(req.query.capital ?? entry.capital ?? 40);
 

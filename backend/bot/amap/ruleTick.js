@@ -11,7 +11,7 @@ const {
 } = require('./rule1Engine');
 const {
   evaluateRule2Entry, evaluateRule2Exit,
-  getRule2EntryDiscount,
+  getRule2EntryDiscount, checkRule2ExitRsiConditions,
 } = require('./rule2Engine');
 const { canAttemptEntry } = require('./rulesState');
 
@@ -30,13 +30,25 @@ function shouldImmediate(ruleId, ruleConfig) {
 }
 
 function evaluateEntry(ruleId, ctx) {
-  const { ruleConfig, entryRsi, close, low, prevClose, entryTimeMs, maSnap, adaptiveDips, cMap, maCtx } = ctx;
+  const {
+    ruleConfig, config, entryRsi, close, low, prevClose, entryTimeMs,
+    maSnap, maSnapFilters, adaptiveDips, cMap, maCtx, maEntryFilters,
+  } = ctx;
   if (ruleId === 'rule2') {
+    const { getRule2MaEntryFilters } = require('./rule2Engine');
+    const filters = maEntryFilters ?? getRule2MaEntryFilters(config ?? {});
     return evaluateRule2Entry({
       close: maCtx?.close ?? close,
       low: maCtx?.low ?? low,
       prevClose: maCtx?.prevClose ?? prevClose,
-      entryTimeMs, rule2: ruleConfig, maSnap,
+      entryTimeMs,
+      signalOpenTime: maCtx?.openTime,
+      rule2: ruleConfig,
+      maSnap,
+      maSnapFilters: maSnapFilters ?? maSnap,
+      adaptiveDips,
+      maEntryFilters: filters,
+      filterClose: maCtx?.close ?? close,
     });
   }
   return evaluateRule1Entry({
@@ -46,11 +58,15 @@ function evaluateEntry(ruleId, ctx) {
 }
 
 function evaluateExit(ruleId, ctx) {
-  const { ruleConfig, close, exitRsi, maSnap, adaptiveDips, rule2AdaptiveDip } = ctx;
+  const { ruleConfig, close, exitRsi, exitRsiMap, maSnap, adaptiveDips, rule2AdaptiveDip, rule1StopDip, entryPrice } = ctx;
   if (ruleId === 'rule2') {
-    return evaluateRule2Exit({ close, exitRsi, maSnap, adaptiveDip: rule2AdaptiveDip, rule2: ruleConfig });
+    return evaluateRule2Exit({
+      close, exitRsi, exitRsiMap, maSnap, adaptiveDip: rule2AdaptiveDip, rule2: ruleConfig, entryPrice,
+    });
   }
-  return evaluateRule1Exit({ close, exitRsi, rule1: ruleConfig, maSnap, stopDipPct: ctx.rule1StopDip });
+  return evaluateRule1Exit({
+    close, exitRsi, rule1: ruleConfig, maSnap, stopDipPct: rule1StopDip, entryPrice,
+  });
 }
 
 function getExitRsiConfig(ruleId, config) {
@@ -64,7 +80,7 @@ function getExitRsiConfig(ruleId, config) {
 function advanceRuleStateFull(ctx) {
   const {
     ruleId, ruleState, rulesState, ruleConfig, config,
-    entryRsi, exitRsi, close, nowMs,
+    entryRsi, exitRsi, exitRsiMap, close, nowMs,
     entryCheck, volAllowed, maSnap, adaptiveDips, rule2AdaptiveDip, rule1StopDip,
   } = ctx;
   const events = [];
@@ -108,8 +124,11 @@ function advanceRuleStateFull(ctx) {
     const limitPrice   = parseFloat(rs.limit_price);
     const pendingMs    = nowMs - new Date(rs.pending_since).getTime();
     const cancelLine   = triggerPrice * (1 + (exec.pendingCancelPct ?? 0.002));
-    const exitCfg      = getExitRsiConfig(ruleId, config);
-    const exitRsiHit   = exec.pendingCancelOnExitRsi !== false && checkRsi(exitRsi, exitCfg);
+    const exitRsiHit = exec.pendingCancelOnExitRsi !== false && (
+      ruleId === 'rule2'
+        ? !!checkRule2ExitRsiConditions(exitRsiMap ?? {}, ruleConfig)
+        : checkRsi(exitRsi, getExitRsiConfig(ruleId, config))
+    );
 
     if (close > cancelLine || pendingMs > (exec.pendingTimeoutMs ?? 30 * 60_000) || exitRsiHit) {
       const reason = exitRsiHit ? 'CANCELLED_EXIT_RSI'
@@ -143,7 +162,8 @@ function advanceRuleStateFull(ctx) {
 
   if (rs.phase === 'BOUGHT') {
     const exitEval = evaluateExit(ruleId, {
-      ruleConfig, close, exitRsi, maSnap, adaptiveDips, rule2AdaptiveDip, rule1StopDip,
+      ruleConfig, close, exitRsi, exitRsiMap, maSnap, adaptiveDips, rule2AdaptiveDip, rule1StopDip,
+      entryPrice: rs.buy_price != null ? parseFloat(rs.buy_price) : null,
     });
     if (exitEval.exit) {
       events.push({

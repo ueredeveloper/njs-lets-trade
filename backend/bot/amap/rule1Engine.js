@@ -10,6 +10,7 @@ const { analyzeAdaptiveDip, lastMa } = require('./adaptiveMaDip');
 const {
   checkRsi,
   checkMaFilters,
+  resolveActiveMaFilters,
   checkExtension,
   getExtensionIntervals,
   computeAdaptiveDips,
@@ -19,6 +20,7 @@ const {
   stopLossFixedActive,
   stopLossAdaptiveActive,
   maKey,
+  capStopLossDipPct,
 } = require('./strategyEngine');
 
 function rule1Active(config) {
@@ -33,8 +35,9 @@ function getRule1RequiredSpecs(rule1) {
   if (!rule1) return [];
   add(rule1.entryRsi.interval, rule1.entryRsi.period + 50);
   add(rule1.exitRsi.interval, rule1.exitRsi.period + 50);
-  for (const f of rule1.maFilters ?? []) {
-    add(f.interval, f.period + 60);
+  for (const f of resolveActiveMaFilters(rule1)) {
+    const aboveN = f.aboveMaEnabled === true ? (f.aboveMaCandles ?? 10) : 0;
+    add(f.interval, f.period + aboveN + 60);
   }
   if (rule1.extension?.enabled) {
     const { threeInterval, fourInterval } = getExtensionIntervals(rule1.extension);
@@ -43,18 +46,24 @@ function getRule1RequiredSpecs(rule1) {
     add(rule1.extension.maInterval, (rule1.extension.maPeriod ?? 50) + 10);
   }
   if (stopLossFixedActive(rule1)) {
-    add(rule1.stopLoss.interval, rule1.stopLoss.period + 10);
+    const sl = rule1.stopLoss;
+    const aboveN = sl.fixedAboveMaEnabled === true ? (sl.fixedAboveMaCandles ?? 10) : 0;
+    add(sl.interval, sl.period + aboveN + 30);
   }
   if (stopLossAdaptiveActive(rule1)) {
     const sl = rule1.stopLoss;
-    add(sl.adaptiveInterval ?? '1h', (sl.adaptivePeriod ?? 50) + 80);
+    const aboveN = sl.adaptiveAboveMaEnabled === true ? (sl.adaptiveAboveMaCandles ?? 10) : 0;
+    add(sl.adaptiveInterval ?? '1h', (sl.adaptivePeriod ?? 50) + aboveN + 80);
   }
   return [...specs.entries()].map(([interval, limit]) => ({ interval, limit }));
 }
 
-function applyRule1EntryFilters({ close, entryTimeMs, rule1, maSnap, adaptiveDips, cMap }) {
+function applyRule1EntryFilters({ close, entryTimeMs, rule1, maSnap, adaptiveDips, cMap, signalOpenTime }) {
+  const rsiIv = rule1.entryRsi?.interval;
+  const sigTime = signalOpenTime ?? cMap?.[rsiIv]?.at(-1)?.openTime;
   const maCheck = checkMaFilters({
-    close, maFilters: rule1.maFilters, maSnap, adaptiveDips,
+    close, maFilters: resolveActiveMaFilters(rule1), maSnap, adaptiveDips,
+    entryTimeMs, signalOpenTime: sigTime,
   });
   if (!maCheck.allowed) return maCheck;
 
@@ -96,13 +105,13 @@ function computeRule1StopAdaptiveDip(cMap, rule1) {
   const sl = rule1?.stopLoss;
   if (!sl || !stopLossAdaptiveActive(rule1)) return null;
   if (sl.adaptiveFixedDipPct != null && sl.adaptiveFixedDipPct !== '') {
-    return Number(sl.adaptiveFixedDipPct);
+    return capStopLossDipPct(Number(sl.adaptiveFixedDipPct));
   }
   const period = sl.adaptivePeriod ?? 50;
   const interval = sl.adaptiveInterval ?? '1h';
   const candles = cMap[interval];
-  if (!candles?.length) return rule1.adaptiveOpts?.defaultPct ?? 3;
-  return analyzeAdaptiveDip(candles, period, rule1.adaptiveOpts).dipPct;
+  if (!candles?.length) return capStopLossDipPct(rule1.adaptiveOpts?.defaultPct ?? 3);
+  return capStopLossDipPct(analyzeAdaptiveDip(candles, period, rule1.adaptiveOpts).dipPct);
 }
 
 /** Pisos de stop adaptativo — só a MA configurada em stopLoss.adaptivePeriod/Interval */
@@ -114,7 +123,7 @@ function getRule1AdaptiveStopFloors(maSnap, stopDipPct, rule1) {
   const key = maKey(period, interval);
   const md = maSnap[key];
   if (!md?.ma) return [];
-  const dipPct = stopDipPct ?? rule1.adaptiveOpts?.defaultPct ?? 3;
+  const dipPct = capStopLossDipPct(stopDipPct ?? rule1.adaptiveOpts?.defaultPct ?? 3);
   return [{
     floor: md.ma * (1 - dipPct / 100),
     dipPct,
@@ -125,10 +134,10 @@ function getRule1AdaptiveStopFloors(maSnap, stopDipPct, rule1) {
   }];
 }
 
-function evaluateRule1Exit({ close, exitRsi, rule1, maSnap, stopDipPct }) {
+function evaluateRule1Exit({ close, exitRsi, rule1, maSnap, stopDipPct, entryPrice }) {
   const stopLossMa = getStopLossMa(maSnap, rule1);
   const adaptiveFloors = getRule1AdaptiveStopFloors(maSnap, stopDipPct, rule1);
-  const stopHit = checkStopLossHits(close, stopLossMa, adaptiveFloors, rule1);
+  const stopHit = checkStopLossHits(close, stopLossMa, adaptiveFloors, rule1, entryPrice, maSnap);
   if (stopHit) return stopHit;
   if (checkRsi(exitRsi, rule1.exitRsi)) {
     return { exit: true, reason: 'rsi' };
@@ -147,7 +156,7 @@ function getRule1EntryDiscount(rule1) {
 
 function buildRule1MaSnapshot(cMap, rule1) {
   const fakeConfig = {
-    maFilters: rule1.maFilters,
+    maFilters: resolveActiveMaFilters(rule1),
     extension: rule1.extension,
     stopLoss: rule1.stopLoss,
     entryMa: { enabled: false },
@@ -170,7 +179,7 @@ function buildRule1MaSnapshot(cMap, rule1) {
 
 /** Dips dos filtros de entrada (não usados no stop) */
 function computeRule1EntryAdaptiveDips(cMap, rule1) {
-  return computeAdaptiveDips(cMap, { maFilters: rule1.maFilters, adaptiveOpts: rule1.adaptiveOpts });
+  return computeAdaptiveDips(cMap, { maFilters: resolveActiveMaFilters(rule1), adaptiveOpts: rule1.adaptiveOpts });
 }
 
 module.exports = {

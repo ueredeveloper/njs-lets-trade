@@ -17,8 +17,11 @@
   },
   "scripts": {
     "start": "node start.js",
+    "start:dev": "node start.js",
+    "start:bundle": "node start.js",
     "backend": "node backend/server.js",
     "frontend:react": "npm run dev --prefix frontend-react",
+    "build:frontend": "npm run build --prefix frontend-react",
     "test": "jest"
   },
   "repository": {

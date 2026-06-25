@@ -13,7 +13,25 @@ const {
 } = require('./rule1Engine');
 const {
   buildRule2MaSnapshot, computeRule2AdaptiveDip, rule2Active,
+  getRule2ExitRsiConditions,
 } = require('./rule2Engine');
+
+function buildRule2ExitRsiMap(cMap, rule2) {
+  const map = {};
+  for (const cond of getRule2ExitRsiConditions(rule2)) {
+    const candles = cMap[cond.interval];
+    map[cond.interval] = computeExitRsi(candles, cond);
+  }
+  return map;
+}
+
+function formatRule2ExitRsiLog(exitRsiMap, rule2) {
+  const parts = getRule2ExitRsiConditions(rule2).map(c => {
+    const v = exitRsiMap[c.interval];
+    return `${c.interval}=${v?.toFixed(1) ?? '—'}`;
+  });
+  return parts.join(' ');
+}
 
 function computeExitRsi(candles, exitRsiCfg) {
   if (!candles?.length || !exitRsiCfg) return null;
@@ -38,12 +56,10 @@ async function runDualRuleTick(deps) {
 
   const r1EntryIv = rule1?.entryRsi?.interval ?? '15m';
   const r1ExitIv  = rule1?.exitRsi?.interval ?? '15m';
-  const r2ExitIv  = rule2?.exitRsi?.interval ?? '1h';
   const r2MaIv    = rule2?.entryMa?.interval ?? '1h';
 
   const entryCandles = cMap[r1EntryIv] ?? cMap['15m'];
   const r1ExitCandles = cMap[r1ExitIv];
-  const r2ExitCandles = cMap[r2ExitIv];
   const r2MaCandles   = cMap[r2MaIv];
 
   if (!entryCandles?.length) {
@@ -68,7 +84,8 @@ async function runDualRuleTick(deps) {
   }
 
   const exitRsi1 = computeExitRsi(r1ExitCandles, rule1?.exitRsi ?? config.exitRsi);
-  const exitRsi2 = computeExitRsi(r2ExitCandles, rule2?.exitRsi);
+  const exitRsi2Map = rule2Active({ rule2 }) ? buildRule2ExitRsiMap(cMap, rule2) : {};
+  const exitRsi2 = exitRsi2Map[rule2?.exitRsi?.interval] ?? Object.values(exitRsi2Map)[0] ?? null;
   const exitRsi  = exitRsi1 ?? prevExitRsi;
 
   const maLen = r2MaCandles?.length ?? 0;
@@ -76,6 +93,7 @@ async function runDualRuleTick(deps) {
     close: r2MaCandles[maLen - 1]?.close ?? close,
     low: r2MaCandles[maLen - 1]?.low ?? rsiCtx.low,
     prevClose: maLen >= 2 ? r2MaCandles[maLen - 2].close : null,
+    openTime: r2MaCandles[maLen - 1]?.openTime,
   } : rsiCtx;
 
   const maSnap1 = buildRule1MaSnapshot(cMap, rule1);
@@ -111,20 +129,26 @@ async function runDualRuleTick(deps) {
     if (!ruleConfig?.enabled) continue;
 
     const ruleExitRsi = ruleId === 'rule2' ? exitRsi2 : exitRsi1;
+    const ruleExitRsiMap = ruleId === 'rule2' ? exitRsi2Map : null;
     const maSnap = ruleId === 'rule2' ? maSnap2 : maSnap1;
-    const adaptiveDips = ruleId === 'rule2' ? {} : adaptiveDips1;
+    const adaptiveDips = adaptiveDips1;
 
     let entryCheck = { allowed: false, reason: 'NO_ENTRY_SIGNAL' };
     if (rulesState[ruleId].phase === 'WATCHING' && canAttemptEntry(ruleId, rulesState)) {
       entryCheck = evaluateEntry(ruleId, {
-        ruleConfig, entryRsi, close, low: rsiCtx.low, prevClose: rsiCtx.prevClose,
-        entryTimeMs: nowMs, maSnap, adaptiveDips, cMap, maCtx,
+        ruleConfig, config, entryRsi, close, low: rsiCtx.low, prevClose: rsiCtx.prevClose,
+        entryTimeMs: nowMs,
+        maSnap,
+        maSnapFilters: maSnap1,
+        adaptiveDips,
+        cMap,
+        maCtx,
       });
     }
 
     const { ruleState, events } = advanceRuleState({
       ruleId, ruleState: rulesState[ruleId], rulesState, ruleConfig, config,
-      entryRsi, exitRsi: ruleExitRsi, close, nowMs,
+      entryRsi, exitRsi: ruleExitRsi, exitRsiMap: ruleExitRsiMap, close, nowMs,
       entryCheck, volAllowed, maSnap, adaptiveDips, rule2AdaptiveDip: rule2Dip, rule1StopDip,
     });
 
@@ -151,7 +175,7 @@ async function runDualRuleTick(deps) {
     ? `R2 MA${rule2.entryMa.period}/${rule2.entryMa.interval}  ` : '';
   log(
     `${r1Label}${r2Label}` +
-    `saída R1=${exitRsi1?.toFixed(1) ?? '—'} R2=${exitRsi2?.toFixed(1) ?? '—'}  ` +
+    `saída R1=${exitRsi1?.toFixed(1) ?? '—'} R2=${formatRule2ExitRsiLog(exitRsi2Map, rule2) || '—'}  ` +
     `$${fmtP(close)}  [${phases.join(' | ')}]`,
   );
 

@@ -68,18 +68,17 @@ describe('entrada dupla RSI + MA', () => {
     expect(r.entryKind).toBe('rsi');
   });
 
-  test('resolveEntrySignal — caminho MA com RSI opcional', () => {
+  test('resolveEntrySignal — caminho MA regra 2 (touch, sem filtro N candles)', () => {
     const config = cfg({
       entryRsiPath: { enabled: false },
+      rule2: { enabled: true, entryMa: { aboveMaEnabled: false, trigger: 'touch', tolerancePct: 1 } },
       entryMa: {
         enabled: true, period: 50, interval: '1h', trigger: 'touch', tolerancePct: 1,
-        requireRsi: true,
-        entryRsi: { interval: '15m', period: 14, operator: '<', value: 40 },
       },
     });
     const maSnap = { ...baseMaSnap, [maKey(50, '1h')]: { ma: 100 } };
     const ok = resolveEntrySignal({
-      entryRsi: 35, maPathRsi: 35, close: 110,
+      entryRsi: 35, close: 110,
       maCtx: { close: 100.2, low: 99.5, prevClose: 98 },
       entryTimeMs: Date.now(), config, maSnap, adaptiveDips: {},
     });
@@ -87,8 +86,8 @@ describe('entrada dupla RSI + MA', () => {
     expect(ok.entryKind).toBe('ma');
 
     const blocked = resolveEntrySignal({
-      entryRsi: 45, maPathRsi: 45, close: 110,
-      maCtx: { close: 100.2, low: 99.5, prevClose: 98 },
+      entryRsi: 45, close: 110,
+      maCtx: { close: 90, low: 89, prevClose: 88 },
       entryTimeMs: Date.now(), config, maSnap, adaptiveDips: {},
     });
     expect(blocked.allowed).toBe(false);

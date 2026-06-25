@@ -315,6 +315,22 @@ export async function fetchMaFilter({ interval, period = '50', compare = 'above'
   return res.json();
 }
 
+/** Moedas com ≥minPct% do histórico com close acima da MA (cache no servidor). */
+export async function fetchMaTimeAboveFilter({ interval, period = '50', minPct = '70', force = false }) {
+  const params = new URLSearchParams({
+    interval,
+    period: String(period),
+    minPct: String(minPct),
+  });
+  if (force) params.set('force', '1');
+  const res = await fetch(`/services/ma-time-above-filter?${params}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `ma-time-above-filter falhou: HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 // ── Multitrade Favorites ─────────────────────────────────────────────────────
 
 export async function fetchMultitradeFavorites() {
@@ -408,7 +424,7 @@ export async function suggestMultitradeAdaptive({ symbol, exchange, period, inte
     period: String(period ?? 50),
     interval: interval ?? '1h',
     defaultPct: String(adaptiveOpts?.defaultPct ?? 3),
-    maxPct: String(adaptiveOpts?.maxPct ?? 8),
+    maxPct: String(adaptiveOpts?.maxPct ?? 5),
     minPct: String(adaptiveOpts?.minPct ?? 0.5),
     minEpisodes: String(adaptiveOpts?.minEpisodes ?? 3),
   });
@@ -539,10 +555,11 @@ export async function suggestMultitradeEntryMa({
 }
 
 /** Backtest histórico AMAP (moeda deve estar no Multi-Trade). */
-export async function fetchMultitradeBacktest({ symbol, exchange, capital } = {}) {
+export async function fetchMultitradeBacktest({ symbol, exchange, capital, strategyId } = {}) {
   const params = new URLSearchParams({ symbol: symbol.toUpperCase() });
   if (exchange) params.set('exchange', exchange);
   if (capital != null) params.set('capital', String(capital));
+  if (strategyId) params.set('strategy_id', strategyId);
   const res = await fetch(`/services/sb/multitrade-backtest?${params}`);
   if (res.status === 404) {
     const body = await res.json().catch(() => ({}));

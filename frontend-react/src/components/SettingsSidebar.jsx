@@ -4,7 +4,6 @@ import { useLanguage } from '../contexts/LanguageContext';
 import { useI18n } from '../i18n';
 import { useCurrency } from '../contexts/CurrencyContext';
 
-
 const PALETTES = [
   { id: 'default',    name: 'Padrão / Default',
     colors: { p1: '#260d33', p2: '#003f69', p3: '#106b87', p4: '#157a8c', p5: '#b3aca4' } },
@@ -30,7 +29,7 @@ const RELOAD_INTERVALS = ['all', '1m', '5m', '15m', '30m', '1h', '2h', '4h', '8h
 export default function SettingsSidebar({ open, onClose }) {
   const { lang, setLang } = useLanguage();
   const { t } = useI18n();
-  const { selectedChart } = useCurrency();
+  const { selectedChart, assetDisplay, setAssetDisplayCategory, assetCategoryKeys } = useCurrency();
   const [activeId, setActiveId]           = useState('default');
   const [reloadSymbol, setReloadSymbol]   = useState('');
   const [reloadInterval, setReloadInterval] = useState('all');
@@ -65,7 +64,7 @@ export default function SettingsSidebar({ open, onClose }) {
         className={`fixed inset-0 z-40 transition-opacity duration-200 ${open ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}
         onClick={onClose}
       />
-      <div className={`fixed top-0 right-0 h-full w-72 z-50 flex flex-col bg-p1 border-l border-p2 transition-transform duration-200 ${open ? 'translate-x-0' : 'translate-x-full'}`}>
+      <div className={`fixed top-0 right-0 h-full w-80 z-50 flex flex-col bg-p1 border-l border-p2 transition-transform duration-200 ${open ? 'translate-x-0' : 'translate-x-full'}`}>
 
         {/* Cabeçalho */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-p2 shrink-0">
@@ -78,6 +77,30 @@ export default function SettingsSidebar({ open, onClose }) {
         </div>
 
         <div className="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-5">
+
+          {/* Exibição de ativos */}
+          <div>
+            <p className={section}>{t('settings.asset_display')}</p>
+            <p className="text-[10px] text-p5/50 mb-3 leading-relaxed">{t('settings.asset_display_hint')}</p>
+            <div className="flex flex-col gap-2">
+              {assetCategoryKeys.map((key) => (
+                <label
+                  key={key}
+                  className="flex items-start gap-2.5 cursor-pointer group"
+                >
+                  <input
+                    type="checkbox"
+                    checked={assetDisplay[key] === true}
+                    onChange={(e) => setAssetDisplayCategory(key, e.target.checked)}
+                    className="mt-0.5 shrink-0 accent-p4"
+                  />
+                  <span className="text-p5 text-xs leading-snug group-hover:text-white transition-colors">
+                    {t(`settings.category.${key}`)}
+                  </span>
+                </label>
+              ))}
+            </div>
+          </div>
 
           {/* Idioma */}
           <div>

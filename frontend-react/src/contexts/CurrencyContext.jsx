@@ -1,25 +1,22 @@
-import { createContext, useContext, useState, useCallback, useEffect } from 'react';
+import { createContext, useContext, useState, useCallback, useEffect, useMemo } from 'react';
 import { addFavorite, addTradeFavorite, removeFavorite, fetchActiveTrades, ignoreActiveTrade,
   fetchMultitradeFavorites, addMultitradeFavorite, updateMultitradeFavorite, removeMultitradeFavorite } from '../services/api';
 import { CHART_VIEW } from '../utils/chartView';
-
-// Stablecoins que não queremos capturar
-const STABLE_CURRENCIES = new Set([
-  'TUSDUSDT', 'USDPUSDT', 'FDUSDUSDT', 'EURIUSDT', 'XUSDUSDT',
-  'USDCUSDT', 'EURUSDT', 'USDEUSDT', 'USD1USDT', 'BFUSDUSDT',
-  'NEXOUSDT', 'FXSUSDT', 'AEURUSDT', 'PAXGUSDT',
-  // stablecoins adicionais detectadas em produção
-  'WUSDTUSDT', 'DAIUSDT', 'FRAXUSDT', 'LUSDUSDT', 'USDDUSDT',
-  'BUSDUSDT', 'SUSDUSDT', 'GUSDUSDT', 'OUSDUSDT', 'CRVUSDUSDT',
-  'DOLAUSDT', 'STUSDUSDT', 'EURTUSDT', 'EURSUSDT', 'EURCUSDT',
-  'XAUTUSDT', 'GYENUSDT', 'BIDRBUSD', 'BIDRETH',
-]);
+import {
+  ASSET_CATEGORY_KEYS,
+  filterCurrencies,
+  filterSymbols,
+  isSymbolVisible,
+  loadAssetDisplay,
+  saveAssetDisplay,
+} from '../utils/assetCategories';
 
 const CurrencyContext = createContext(null);
 
 export function CurrencyProvider({ children }) {
-  // { name: '1h|All', list: [{symbol, price, ...}] }
-  const [currencies, setCurrencies] = useState({ name: '1h|All', list: [] });
+  // Lista completa do servidor; currencies expõe versão filtrada por categoria
+  const [rawCurrencies, setRawCurrencies] = useState({ name: '1h|All', list: [] });
+  const [assetDisplay, setAssetDisplayState] = useState(() => loadAssetDisplay());
 
   // [{ name: '1h|Binance|USDT', list: ['BTCUSDT', ...] }, ...]
   const [filters, setFilters] = useState([]);
@@ -38,6 +35,9 @@ export function CurrencyProvider({ children }) {
 
   // Marcadores simulados MT backtest: [{ time, side: 'buy'|'sell', price? }]
   const [chartTradeMarkers, setChartTradeMarkers] = useState([]);
+
+  /** Foco do backtest MT: histórico e overlays para o momento do trade */
+  const [multitradeChartFocus, setMultitradeChartFocus] = useState(null);
 
   // Trades de compra do usuário para a moeda selecionada (favorito Trade Now)
   // Array de { time: number (ms), price: string, qty: string, isBuyer: boolean }
@@ -137,13 +137,53 @@ export function CurrencyProvider({ children }) {
     }
   }, []);
 
+  /** Salva 15m/1h de uma moeda — upsert ativos, remove desativados. */
+  const saveMultitradeSymbol = useCallback(async ({ saves }) => {
+    const updated = [];
+    for (const s of saves ?? []) {
+      if (s.remove) {
+        await removeMultitradeFavorite(s.id);
+      } else if (s.id) {
+        const entry = await updateMultitradeFavorite(s.id, s.payload);
+        updated.push(entry);
+      } else {
+        const entry = await addMultitradeFavorite(s.payload);
+        updated.push(entry);
+      }
+    }
+    setMultitradeFavorites(prev => {
+      let next = [...prev];
+      for (const s of saves ?? []) {
+        if (s.remove) next = next.filter(e => e.id !== s.id);
+      }
+      for (const entry of updated) {
+        const idx = next.findIndex(e => e.id === entry.id);
+        if (idx >= 0) next[idx] = entry;
+        else next.push(entry);
+      }
+      return next;
+    });
+    return updated;
+  }, []);
+
   /** Atualização atômica do chart pela aba Multi-Trade (backtest row click) */
   const applyMultitradeChartView = useCallback(({
     chartData, symbol, interval, exchangeSource, markers, entryMs, exitMs,
+    fetchFromMs, candleLimit, overlaySlots,
   }) => {
     setChartViewSource(CHART_VIEW.MULTITRADE);
     setChartInterval(interval);
     setChartTradeMarkers(markers);
+    setMultitradeChartFocus({
+      signalMs: entryMs,
+      entryMs,
+      exitMs,
+      fetchFromMs,
+      candleLimit,
+      overlaySlots,
+      symbol,
+      source: exchangeSource ?? null,
+    });
     setSelectedChart({
       ...chartData,
       interval,
@@ -161,6 +201,7 @@ export function CurrencyProvider({ children }) {
   const clearMultitradeChartView = useCallback(() => {
     setChartViewSource(prev => (prev === CHART_VIEW.MULTITRADE ? CHART_VIEW.DEFAULT : prev));
     setChartTradeMarkers([]);
+    setMultitradeChartFocus(null);
     setChartZoom(prev => (prev?.source === CHART_VIEW.MULTITRADE ? null : prev));
   }, []);
 
@@ -180,6 +221,39 @@ export function CurrencyProvider({ children }) {
   }, []);
 
   const quotes = ['USDT', 'BTC', 'BNB'];
+
+  const setAssetDisplayCategory = useCallback((key, enabled) => {
+    setAssetDisplayState((prev) => {
+      const next = { ...prev, [key]: enabled };
+      saveAssetDisplay(next);
+      return next;
+    });
+  }, []);
+
+  const isVisibleSymbol = useCallback(
+    (symbol) => isSymbolVisible(symbol, assetDisplay),
+    [assetDisplay],
+  );
+
+  const filterVisibleSymbols = useCallback(
+    (symbols) => filterSymbols(symbols, assetDisplay),
+    [assetDisplay],
+  );
+
+  const filterVisibleCurrencies = useCallback(
+    (list) => filterCurrencies(list, assetDisplay),
+    [assetDisplay],
+  );
+
+  const currencies = useMemo(
+    () => ({
+      name: rawCurrencies.name,
+      list: filterCurrencies(rawCurrencies.list, assetDisplay),
+    }),
+    [rawCurrencies, assetDisplay],
+  );
+
+  const setCurrencies = setRawCurrencies;
 
   const addFilter = useCallback((item) => {
     setFilters((prev) => {
@@ -251,7 +325,7 @@ export function CurrencyProvider({ children }) {
   }, [activeTrades, addFilter, removeFilters]);
 
   useEffect(() => {
-    const symbols = multitradeFavorites.map(e => e.symbol);
+    const symbols = [...new Set(multitradeFavorites.filter(e => e.enabled !== false).map(e => e.symbol))];
     if (symbols.length > 0) addFilter({ name: 'Favoritos|MultiTrade', list: symbols });
     else removeFilters(['Favoritos|MultiTrade']);
   }, [multitradeFavorites, addFilter, removeFilters]);
@@ -267,11 +341,12 @@ export function CurrencyProvider({ children }) {
     (currenciesObj) => {
       if (!filters[0]) return [];
       const binanceList = filters[0].list;
-      return currenciesObj.list.filter(
-        (c) => binanceList.includes(c.symbol) && !STABLE_CURRENCIES.has(c.symbol),
+      return filterCurrencies(
+        currenciesObj.list.filter((c) => binanceList.includes(c.symbol)),
+        assetDisplay,
       );
     },
-    [filters],
+    [filters, assetDisplay],
   );
 
   const findFilter = useCallback(
@@ -291,6 +366,12 @@ export function CurrencyProvider({ children }) {
         clearAllFilters,
         joinFilters,
         getBinanceCurrenciesWithUsdt,
+        assetDisplay,
+        setAssetDisplayCategory,
+        isVisibleSymbol,
+        filterVisibleSymbols,
+        filterVisibleCurrencies,
+        assetCategoryKeys: ASSET_CATEGORY_KEYS,
         findFilter,
         quotes,
         selectedQuote,
@@ -305,6 +386,7 @@ export function CurrencyProvider({ children }) {
         setChartViewSource,
         applyMultitradeChartView,
         clearMultitradeChartView,
+        multitradeChartFocus,
         chartTradeMarkers,
         setChartTradeMarkers,
         tradePurchases,
@@ -332,6 +414,7 @@ export function CurrencyProvider({ children }) {
         addMultitradeEntry,
         updateMultitradeEntry,
         removeMultitradeEntry,
+        saveMultitradeSymbol,
       }}
     >
       {children}

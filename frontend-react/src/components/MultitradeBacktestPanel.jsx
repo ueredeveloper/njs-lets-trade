@@ -2,14 +2,11 @@ import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useCurrency } from '../contexts/CurrencyContext';
 import { fetchMultitradeBacktest, fetchCandlesticksAndCloud } from '../services/api';
 import { ENTRY_MA_TRIGGERS } from '../constants/tradeConfigSchema';
-import { ruleBadgeStyle } from '../utils/exitReasonFormat';
+import { STRATEGY_LABELS, STRATEGY_COLORS, normalizeStrategyId } from '../constants/strategyPresets';
+import { ruleBadgeStyle, formatBacktestOutcome } from '../utils/exitReasonFormat';
+import { tradeFetchPlan } from '../utils/multitradeChart';
 
 const MT_COLOR = '#8b5cf6';
-
-const INTERVAL_MS = {
-  '1m': 60_000, '3m': 180_000, '5m': 300_000, '15m': 900_000, '30m': 1_800_000,
-  '1h': 3_600_000, '2h': 7_200_000, '4h': 14_400_000, '8h': 28_800_000, '1d': 86_400_000,
-};
 
 function fmtDateTime(isoOrMs) {
   const d = typeof isoOrMs === 'number' ? new Date(isoOrMs) : new Date(isoOrMs);
@@ -43,7 +40,7 @@ function buildMarkersForRow(row, trades, msPerCandle) {
 
   if (sell) {
     markers.push({ time: sell.time, side: 'sell', price: sell.price });
-  } else if (buy && ['STOP_LOSS_MA', 'STOP_LOSS_ADAPTIVE', 'SOLD_RSI'].includes(row.outcome)) {
+  } else if (buy && ['STOP_LOSS_MA', 'STOP_LOSS_ADAPTIVE', 'STOP_LOSS_PCT_CAP', 'SOLD_RSI'].includes(row.outcome)) {
     const fallbackSell = (trades ?? []).find(t => t.type === 'SELL' && t.time >= buy.time);
     if (fallbackSell) markers.push({ time: fallbackSell.time, side: 'sell', price: fallbackSell.price });
   }
@@ -76,11 +73,11 @@ function TradeFocusBar({ focus }) {
       <div
         key={kind}
         id={`multitrade-focus-${kind}`}
-        className="flex flex-col px-2 py-1 rounded text-[10px] font-mono leading-tight"
-        style={{ background: styles.bg, border: `1px solid ${styles.color}55`, color: styles.color }}>
+        className="px-2 py-1 rounded text-[10px] font-mono leading-tight whitespace-nowrap truncate max-w-full"
+        style={{ background: styles.bg, border: `1px solid ${styles.color}55`, color: styles.color }}
+        title={`${styles.label} ${fmtDateTime(m.time)} @ ${fmtPrice(m.price)}`}>
         <span className="font-bold">{styles.label}</span>
-        <span className="text-p5">{fmtDateTime(m.time)}</span>
-        <span className="text-p5/60">@ {fmtPrice(m.price)}</span>
+        <span className="text-p5"> {fmtDateTime(m.time)} @ {fmtPrice(m.price)}</span>
       </div>
     );
   };
@@ -101,11 +98,28 @@ function fmtPrice(n) {
   return v.toFixed(2);
 }
 
-function outcomeClass(outcome) {
+function fmtMaFilterPct(pct) {
+  if (pct == null) return '—';
+  return `${pct}%`;
+}
+
+function maFilterPctClass(pct) {
+  if (pct == null) return 'text-p5/40';
+  if (pct >= 70) return 'text-emerald-400';
+  if (pct >= 45) return 'text-p5';
+  if (pct >= 25) return 'text-amber-400';
+  return 'text-red-400';
+}
+
+function outcomeClass(row) {
+  const outcome = typeof row === 'string' ? row : row?.outcome;
+  const pnlPct = typeof row === 'object' ? row?.pnlPct : null;
   if (!outcome) return 'text-p5/50';
+  if (pnlPct != null) {
+    return pnlPct >= 0 ? 'text-emerald-400' : 'text-red-400';
+  }
   if (outcome.startsWith('STOP_') || outcome === 'SOLD_RSI') {
-    const pnl = outcome.includes('LOSS');
-    return pnl ? 'text-red-400' : 'text-emerald-400';
+    return outcome.includes('LOSS') ? 'text-red-400' : 'text-emerald-400';
   }
   if (outcome.startsWith('MA_') || outcome === 'THREE_CANDLES_BLOCKED') return 'text-amber-400';
   if (outcome.startsWith('CANCELLED')) return 'text-p5/40';
@@ -119,10 +133,25 @@ function entryRuleStyle(row) {
   return ruleBadgeStyle(ruleId);
 }
 
+function maCheckCell(m) {
+  if (!m) return { glyph: '—', className: 'text-p5/30', title: null };
+  if (m.ok) return { glyph: '✓', className: 'text-emerald-400/80', title: m.detail ?? 'OK' };
+  if (m.detail === 'sem dados') {
+    return { glyph: '?', className: 'text-amber-400/90', title: `${m.label}: histórico insuficiente (precisa ≥50 velas)` };
+  }
+  return { glyph: '✗', className: 'text-red-400/80', title: m.detail ?? `${m.label}: bloqueado` };
+}
+
 function formatResultado(row) {
-  if (row.exitDetail?.label) return row.exitDetail.label;
-  if (row.outcomeLabel) return row.outcomeLabel;
-  return row.outcome ?? '—';
+  return formatBacktestOutcome(row).label;
+}
+
+function formatResultadoDetail(row) {
+  return formatBacktestOutcome(row).detail;
+}
+
+function formatResultadoTitle(row) {
+  return formatBacktestOutcome(row).title;
 }
 
 function formatEntryPathsSummary(entry) {
@@ -155,8 +184,6 @@ function displayRsiForRow(row, entry) {
   if (row.rsi != null) return { value: row.rsi, title: 'RSI do caminho RSI' };
   return { value: null, title: null };
 }
-
-const CANDLES_BEFORE = 10;
 
 function fmtDate(isoOrMs) {
   const d = typeof isoOrMs === 'number' ? new Date(isoOrMs) : new Date(isoOrMs);
@@ -211,6 +238,7 @@ export default function MultitradeBacktestPanel({ entry }) {
         symbol: entry.symbol,
         exchange: entry.exchange,
         capital: entry.capital,
+        strategyId: entry.strategyId,
       });
       setData(result);
     } catch (err) {
@@ -219,15 +247,17 @@ export default function MultitradeBacktestPanel({ entry }) {
     } finally {
       setLoading(false);
     }
-  }, [entry?.symbol, entry?.exchange, entry?.capital]);
+  }, [entry?.symbol, entry?.exchange, entry?.capital, entry?.strategyId]);
 
   useEffect(() => { load(); }, [load]);
 
   useEffect(() => {
+    setData(null);
+    setError(null);
     setActiveRow(null);
     setFocusTrade(null);
     clearMultitradeChartView();
-  }, [entry?.symbol, entry?.exchange, entry?.capital, clearMultitradeChartView]);
+  }, [entry?.id, entry?.strategyId, entry?.symbol, entry?.exchange, entry?.capital, clearMultitradeChartView]);
 
   const entryPathsSummary = useMemo(() => formatEntryPathsSummary(entry), [entry]);
   const dualEntryPaths = (entry?.entryRsiPath?.enabled !== false) && !!entry?.entryMa?.enabled;
@@ -238,30 +268,28 @@ export default function MultitradeBacktestPanel({ entry }) {
     setActiveRow(rowKey);
     setChartLoading(rowKey);
 
-    const iv = entry.entryRsi?.interval ?? '15m';
-    const msPerCandle = INTERVAL_MS[iv] ?? 900_000;
-    const { entryMs, exitMs } = tradeZoomDates(row, data.trades, msPerCandle);
-    const { markers, focus } = buildMarkersForRow(row, data.trades, msPerCandle);
+    const signalMs = new Date(row.timeISO ?? row.time).getTime();
+    const plan = tradeFetchPlan(entry, row, signalMs);
+    const { entryMs, exitMs } = tradeZoomDates(row, data.trades, plan.msPerCandle);
+    const { markers, focus } = buildMarkersForRow(row, data.trades, plan.msPerCandle);
     setFocusTrade(focus);
-
-    // Busca histórico até cobrir entrada; zoom ±10 velas é aplicado no CandlestickChart
-    const fetchFromMs = entryMs - CANDLES_BEFORE * msPerCandle;
-    const needed = Math.min(3000, Math.max(266,
-      Math.ceil((Date.now() - fetchFromMs) / msPerCandle) + 40));
 
     const src = entry.exchange === 'gate' ? 'gate' : null;
     const sym = entry.symbol.toUpperCase();
 
     try {
-      const chartData = await fetchCandlesticksAndCloud(sym, iv, src, needed);
+      const chartData = await fetchCandlesticksAndCloud(sym, plan.interval, src, plan.candleLimit);
       applyMultitradeChartView({
         chartData,
         symbol: sym,
-        interval: iv,
+        interval: plan.interval,
         exchangeSource: src,
         markers,
         entryMs,
         exitMs,
+        fetchFromMs: plan.fetchFromMs,
+        candleLimit: plan.candleLimit,
+        overlaySlots: plan.overlaySlots,
       });
     } catch (err) {
       console.warn('[MultitradeBacktest] chart zoom:', err.message);
@@ -275,6 +303,7 @@ export default function MultitradeBacktestPanel({ entry }) {
   if (!entry) return null;
 
   const s = data?.summary;
+  const maFilterStats = data?.maFilterStats ?? [];
   const maLabels = (entry.maConditions ?? []).map(m => `MA${m.period} ${m.interval}`);
   const showExt  = entry.extension?.enabled !== false;
 
@@ -286,6 +315,15 @@ export default function MultitradeBacktestPanel({ entry }) {
             Análise histórica
           </span>
           <span className="font-mono text-[10px] text-p5/60 truncate">{entry.symbol}</span>
+          {entry.strategyId && (
+            <span className="text-[8px] font-bold px-1 py-0.5 rounded shrink-0"
+              style={{
+                background: `${STRATEGY_COLORS[normalizeStrategyId(entry.strategyId)] ?? MT_COLOR}33`,
+                color: STRATEGY_COLORS[normalizeStrategyId(entry.strategyId)] ?? MT_COLOR,
+              }}>
+              {STRATEGY_LABELS[normalizeStrategyId(entry.strategyId)] ?? entry.strategyId}
+            </span>
+          )}
         </div>
         <button
           id="multitrade-backtest-panel-btn-refresh"
@@ -299,9 +337,9 @@ export default function MultitradeBacktestPanel({ entry }) {
       </div>
 
       <div className="multitrade-backtest-panel-body flex-1 overflow-y-auto min-h-0 px-2 pb-2">
-        {loading && !data && (
+        {loading && !data && !error && (
           <p className="multitrade-backtest-panel-loading text-[10px] text-p5/40 py-4 text-center">
-            Simulando backtest…
+            Simulando backtest{entry.strategyId ? ` (${STRATEGY_LABELS[normalizeStrategyId(entry.strategyId)] ?? entry.strategyId})` : ''}…
           </p>
         )}
         {error && (
@@ -321,6 +359,16 @@ export default function MultitradeBacktestPanel({ entry }) {
                     {dualEntryPaths && (
                       <span className="text-p5/40"> · 2 caminhos</span>
                     )}
+                  </span>
+                </>
+              )}
+              {entry.entryRsi && (
+                <>
+                  <span className="text-p5/50">RSI entrada</span>
+                  <span className="text-p5">
+                    {entry.entryRsi.interval} {entry.entryRsi.operator ?? '<'} {entry.entryRsi.value}
+                    {' · saída '}
+                    {entry.exitRsi?.interval} &gt; {entry.exitRsi?.value}
                   </span>
                 </>
               )}
@@ -347,7 +395,59 @@ export default function MultitradeBacktestPanel({ entry }) {
               {data.period && (
                 <>
                   <span className="text-p5/50">Período</span>
-                  <span className="text-p5/70 col-span-1">{data.period.daysLbl} · {data.period.count} velas</span>
+                  <span className="text-p5/70 col-span-1">
+                    {data.period.daysLbl} · {data.period.count} velas {data.period.interval ?? ''}
+                  </span>
+                </>
+              )}
+              {maFilterStats.length > 0 && (
+                <>
+                  <span className="text-p5/50 col-span-2 pt-1 border-t border-p2/40 mt-0.5">
+                    Tempo acima da MA
+                    <span className="text-p5/30 font-normal normal-case tracking-normal ml-1">
+                      — histórico máximo disponível
+                    </span>
+                  </span>
+                  {maFilterStats.map(stat => {
+                    const abovePct = stat.pctAboveMa ?? stat.pct;
+                    const aboveMet = stat.aboveMaMet ?? stat.met;
+                    const aboveTotal = stat.aboveMaTotal ?? stat.total;
+                    const showAdaptive = stat.mode === 'adaptive'
+                      && stat.pctFilterMet != null
+                      && stat.pctFilterMet !== abovePct;
+                    return (
+                      <span key={stat.label} className="contents">
+                        <span
+                          className="text-p5/50"
+                          title={stat.periodDaysLbl
+                            ? `Close > MA50 no histórico de ${stat.periodDaysLbl} (${aboveTotal} velas ${stat.interval})`
+                            : 'Close acima da SMA — igual ao gráfico Binance'}>
+                          {stat.label.replace(' ', '\u00a0')}
+                          {stat.periodDaysLbl && (
+                            <span className="text-p5/30 font-normal ml-1">{stat.periodDaysLbl}</span>
+                          )}
+                        </span>
+                        <span
+                          className={maFilterPctClass(abovePct)}
+                          title={stat.detail ?? `Close > MA em ${aboveMet}/${aboveTotal} velas de ${stat.interval}`}>
+                          {fmtMaFilterPct(abovePct)}
+                          {abovePct != null && (
+                            <span className="text-p5/35 font-normal ml-1">
+                              ({aboveMet}/{aboveTotal} velas {stat.interval})
+                            </span>
+                          )}
+                          {showAdaptive && (
+                            <span
+                              className="block text-[8px] text-violet-400/80 font-normal leading-snug mt-px"
+                              title={`Critério do bot: close ≥ piso adaptativo (−${stat.dipPct}%)`}>
+                              piso adapt −{stat.dipPct}%: {fmtMaFilterPct(stat.pctFilterMet)}
+                              {' '}({stat.filterMet}/{stat.filterTotal} velas {stat.interval})
+                            </span>
+                          )}
+                        </span>
+                      </span>
+                    );
+                  })}
                 </>
               )}
             </div>
@@ -390,6 +490,8 @@ export default function MultitradeBacktestPanel({ entry }) {
                     const kindStyle = entryRuleStyle(row);
                     const rsiCell = displayRsiForRow(row, entry);
                     const resultado = formatResultado(row);
+                    const resultadoDetail = formatResultadoDetail(row);
+                    const resultadoTitle = formatResultadoTitle(row);
                     return (
                     <tr
                       key={rowKey ?? i}
@@ -424,9 +526,10 @@ export default function MultitradeBacktestPanel({ entry }) {
                       <td className="px-1 py-0.5 text-right text-p5">{fmtPrice(row.price)}</td>
                       {maLabels.map(l => {
                         const m = (row.maChecks ?? []).find(x => x.label === l);
+                        const cell = maCheckCell(m);
                         return (
-                          <td key={l} className={`px-1 py-0.5 text-center ${m?.ok ? 'text-emerald-400/80' : 'text-red-400/80'}`}>
-                            {m ? (m.ok ? '✓' : '✗') : '—'}
+                          <td key={l} className={`px-1 py-0.5 text-center ${cell.className}`} title={cell.title ?? undefined}>
+                            {cell.glyph}
                           </td>
                         );
                       })}
@@ -443,9 +546,14 @@ export default function MultitradeBacktestPanel({ entry }) {
                           </td>
                         </>
                       )}
-                      <td className={`px-1.5 py-0.5 ${outcomeClass(row.outcome)}`} title={row.outcomeShort ?? row.exitDetail?.short ?? undefined}>
+                      <td className={`px-1.5 py-0.5 ${outcomeClass(row)}`} title={resultadoTitle ?? undefined}>
                         <span className="block leading-snug">{resultado}</span>
-                        {row.outcomeShort && row.exitDetail?.label && row.outcomeShort !== resultado && (
+                        {resultadoDetail && (
+                          <span className="block text-[8px] text-p5/45 font-normal leading-snug mt-px">
+                            {resultadoDetail}
+                          </span>
+                        )}
+                        {!resultadoDetail && row.outcomeShort && row.exitDetail?.label && row.outcomeShort !== resultado && (
                           <span className="block text-[8px] text-p5/40 font-normal">{row.outcomeShort}</span>
                         )}
                         {row.pnlPct != null && (

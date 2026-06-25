@@ -2,42 +2,49 @@
 export const TRADE_CONFIG_DEFAULTS = {
   rule1: {
     enabled: true,
-    entryRsi:  { interval: '15m', period: 14, operator: '<', value: 30 },
-    exitRsi:   { interval: '15m', period: 14, operator: '>', value: 70 },
-    maConditions: [
-      { period: 50, interval: '4h', mode: 'strict_above' },
-      { period: 50, interval: '1h', mode: 'adaptive' },
-    ],
+    maFiltersEnabled: false,
+    entryRsi:  { interval: '1h', period: 14, operator: '<', value: 30 },
+    exitRsi:   { interval: '1h', period: 14, operator: '>', value: 70 },
+    maConditions: [],
     extension: {
-      enabled: true, maPeriod: 50, maInterval: '1h', abovePct: 5,
+      enabled: false, maPeriod: 50, maInterval: '1h', abovePct: 5,
       threeInterval: '1h', fourInterval: '1h',
       threeCandles: true, fourCandles: true, confirmLogic: 'any',
     },
     stopLoss: {
-      enabled: true, fixedEnabled: true, adaptiveEnabled: true,
+      enabled: true, fixedEnabled: false, adaptiveEnabled: false,
+      pctCapEnabled: true, maxLossPct: 5,
+      fixedAboveMaEnabled: false, fixedAboveMaCandles: 10,
+      adaptiveAboveMaEnabled: false, adaptiveAboveMaCandles: 10,
       period: 50, interval: '4h',
       adaptivePeriod: 50, adaptiveInterval: '1h',
     },
     execution: {
-      immediateEntry: false, entryDiscount: 0.001,
+      immediateEntry: true, entryDiscount: 0.001,
       pendingTimeoutMs: 30 * 60_000, pendingCancelPct: 0.002,
       pendingCancelOnExitRsi: true,
     },
-    adaptiveOpts: { defaultPct: 3, maxPct: 8, minPct: 0.5, minEpisodes: 3 },
+    adaptiveOpts: { defaultPct: 3, maxPct: 5, minPct: 0.5, minEpisodes: 3 },
   },
   rule2: {
     enabled: false,
     entryMa: {
       period: 50, interval: '1h', trigger: 'cross_up', tolerancePct: 0.5, fixedDipPct: '',
+      aboveMaEnabled: true, aboveMaCandles: 10,
     },
     exitRsi: { interval: '1h', period: 14, operator: '>', value: 70 },
-    stopLoss: { adaptiveEnabled: true },
+    exitRsiConditions: [
+      { enabled: true, interval: '1h',  period: 14, operator: '>', value: 70 },
+      { enabled: true, interval: '15m', period: 14, operator: '>', value: 80 },
+    ],
+    exitRsiLogic: 'any',
+    stopLoss: { adaptiveEnabled: true, adaptiveAboveMaEnabled: false, adaptiveAboveMaCandles: 10 },
     execution: {
       entryDiscount: 0.02,
       pendingTimeoutMs: 30 * 60_000, pendingCancelPct: 0.002,
       pendingCancelOnExitRsi: true,
     },
-    adaptiveOpts: { defaultPct: 3, maxPct: 8, minPct: 0.5, minEpisodes: 3 },
+    adaptiveOpts: { defaultPct: 3, maxPct: 5, minPct: 0.5, minEpisodes: 3 },
   },
   polling: { pollMs: 60_000, fastPollMs: 30_000, fastRsiThreshold: 65 },
   volume: { minVolumeUsdt: 1_000_000, allowLowVolume: false, aggressiveExitOnLowVolume: true },
@@ -93,6 +100,22 @@ export const POLL_OPTIONS = [
   { label: '5 min', value: 5 * 60_000 },
 ];
 
+function mapExitRsiConditions(list, defaults) {
+  const d = defaults ?? TRADE_CONFIG_DEFAULTS.rule2.exitRsiConditions;
+  const src = list?.length ? [...list] : [...d];
+  while (src.length < d.length) {
+    src.push({ ...d[src.length] });
+  }
+  return src.map((c, i) => ({
+    id: i + 1,
+    enabled: c.enabled !== false,
+    interval: c.interval ?? d[i]?.interval ?? '1h',
+    period: Number(c.period ?? d[i]?.period ?? 14),
+    operator: c.operator ?? d[i]?.operator ?? '>',
+    value: Number(c.value ?? d[i]?.value ?? 70),
+  }));
+}
+
 function mapMaConditions(list) {
   return (list ?? []).map((m, i) => ({
     id: i + 1,
@@ -100,6 +123,8 @@ function mapMaConditions(list) {
     interval: m.interval ?? '1h',
     mode: m.mode ?? (m.adaptive ? 'adaptive' : 'strict_above'),
     fixedDipPct: m.fixedDipPct != null && m.fixedDipPct !== '' ? m.fixedDipPct : '',
+    aboveMaEnabled: m.aboveMaEnabled === true,
+    aboveMaCandles: Number(m.aboveMaCandles ?? 10),
   }));
 }
 
@@ -126,13 +151,19 @@ export function formStateFromEntry(entry) {
         ...d.rule1,
         maConditions: mapMaConditions(d.rule1.maConditions),
       },
-      rule2: { ...d.rule2, entryMa: { ...d.rule2.entryMa }, execution: { ...d.rule2.execution } },
+      rule2: { ...d.rule2, entryMa: { ...d.rule2.entryMa }, execution: { ...d.rule2.execution },
+        exitRsiConditions: mapExitRsiConditions(d.rule2.exitRsiConditions) },
       polling: { ...d.polling },
       volume: { ...d.volume },
     };
   }
 
-  const src = entry;
+  const tc = entry.tradeConfig;
+  const src = (entry.rule1 || entry.rule2) ? entry : {
+    ...entry,
+    rule1: tc?.rule1 ?? entry.rule1,
+    rule2: tc?.rule2 ?? entry.rule2,
+  };
   const hasRules = src.rule1 || src.rule2;
 
   if (hasRules) {
@@ -141,14 +172,21 @@ export function formStateFromEntry(entry) {
     return {
       rule1: {
         enabled: r1.enabled ?? d.rule1.enabled,
+        maFiltersEnabled: r1.maFiltersEnabled ?? d.rule1.maFiltersEnabled,
         entryRsi: { ...d.rule1.entryRsi, ...r1.entryRsi },
         exitRsi: { ...d.rule1.exitRsi, ...r1.exitRsi, value: Number(r1.exitRsi?.value ?? d.rule1.exitRsi.value) },
         maConditions: mapMaConditions(r1.maConditions ?? src.maConditions ?? d.rule1.maConditions),
         extension: { ...d.rule1.extension, ...r1.extension, abovePct: Number(r1.extension?.abovePct ?? d.rule1.extension.abovePct) },
         stopLoss: {
           ...d.rule1.stopLoss, ...r1.stopLoss,
-          fixedEnabled: r1.stopLoss?.fixedEnabled ?? (r1.stopLoss?.enabled === false ? false : true),
+          fixedEnabled: r1.stopLoss?.fixedEnabled ?? (r1.stopLoss?.enabled === false ? false : d.rule1.stopLoss.fixedEnabled),
           adaptiveEnabled: r1.stopLoss?.adaptiveEnabled ?? d.rule1.stopLoss.adaptiveEnabled,
+          pctCapEnabled: r1.stopLoss?.pctCapEnabled ?? d.rule1.stopLoss.pctCapEnabled,
+          maxLossPct: Number(r1.stopLoss?.maxLossPct ?? d.rule1.stopLoss.maxLossPct ?? 5),
+          fixedAboveMaEnabled: r1.stopLoss?.fixedAboveMaEnabled ?? d.rule1.stopLoss.fixedAboveMaEnabled,
+          fixedAboveMaCandles: Number(r1.stopLoss?.fixedAboveMaCandles ?? d.rule1.stopLoss.fixedAboveMaCandles ?? 10),
+          adaptiveAboveMaEnabled: r1.stopLoss?.adaptiveAboveMaEnabled ?? d.rule1.stopLoss.adaptiveAboveMaEnabled,
+          adaptiveAboveMaCandles: Number(r1.stopLoss?.adaptiveAboveMaCandles ?? d.rule1.stopLoss.adaptiveAboveMaCandles ?? 10),
           adaptivePeriod: Number(r1.stopLoss?.adaptivePeriod ?? d.rule1.stopLoss.adaptivePeriod),
           adaptiveInterval: r1.stopLoss?.adaptiveInterval ?? d.rule1.stopLoss.adaptiveInterval,
         },
@@ -160,8 +198,12 @@ export function formStateFromEntry(entry) {
         entryMa: {
           ...d.rule2.entryMa, ...r2.entryMa,
           fixedDipPct: r2.entryMa?.fixedDipPct ?? '',
+          aboveMaEnabled: r2.entryMa?.aboveMaEnabled ?? d.rule2.entryMa.aboveMaEnabled,
+          aboveMaCandles: Number(r2.entryMa?.aboveMaCandles ?? d.rule2.entryMa.aboveMaCandles ?? 10),
         },
         exitRsi: { ...d.rule2.exitRsi, ...r2.exitRsi, value: Number(r2.exitRsi?.value ?? d.rule2.exitRsi.value) },
+        exitRsiConditions: mapExitRsiConditions(r2.exitRsiConditions ?? (r2.exitRsi ? [r2.exitRsi] : null)),
+        exitRsiLogic: r2.exitRsiLogic ?? d.rule2.exitRsiLogic ?? 'any',
         stopLoss: { ...d.rule2.stopLoss, ...r2.stopLoss },
         execution: mapRule2Execution(r2, d.rule2),
         adaptiveOpts: { ...d.rule2.adaptiveOpts, ...r2.adaptiveOpts },
@@ -175,14 +217,23 @@ export function formStateFromEntry(entry) {
   return {
     rule1: {
       enabled: src.entryRsiPath?.enabled !== false,
+      maFiltersEnabled: src.maFiltersEnabled ?? src.rule1?.maFiltersEnabled ?? d.rule1.maFiltersEnabled,
       entryRsi: { ...d.rule1.entryRsi, ...src.entryRsi },
       exitRsi: { ...d.rule1.exitRsi, ...src.exitRsi, value: Number(src.exitRsi?.value ?? d.rule1.exitRsi.value) },
       maConditions: mapMaConditions(src.maConditions ?? d.rule1.maConditions),
       extension: { ...d.rule1.extension, ...src.extension, abovePct: Number(src.extension?.abovePct ?? d.rule1.extension.abovePct) },
       stopLoss: {
         ...d.rule1.stopLoss, ...src.stopLoss,
-        fixedEnabled: src.stopLoss?.fixedEnabled ?? true,
-        adaptiveEnabled: src.stopLoss?.adaptiveEnabled ?? true,
+        fixedEnabled: src.stopLoss?.fixedEnabled ?? d.rule1.stopLoss.fixedEnabled,
+        adaptiveEnabled: src.stopLoss?.adaptiveEnabled ?? d.rule1.stopLoss.adaptiveEnabled,
+        fixedAboveMaEnabled: src.stopLoss?.fixedAboveMaEnabled ?? d.rule1.stopLoss.fixedAboveMaEnabled,
+        fixedAboveMaCandles: Number(src.stopLoss?.fixedAboveMaCandles ?? d.rule1.stopLoss.fixedAboveMaCandles ?? 10),
+        adaptiveAboveMaEnabled: src.stopLoss?.adaptiveAboveMaEnabled ?? d.rule1.stopLoss.adaptiveAboveMaEnabled,
+        adaptiveAboveMaCandles: Number(src.stopLoss?.adaptiveAboveMaCandles ?? d.rule1.stopLoss.adaptiveAboveMaCandles ?? 10),
+        pctCapEnabled: src.stopLoss?.pctCapEnabled ?? d.rule1.stopLoss.pctCapEnabled,
+        maxLossPct: Number(src.stopLoss?.maxLossPct ?? d.rule1.stopLoss.maxLossPct ?? 5),
+        adaptivePeriod: Number(src.stopLoss?.adaptivePeriod ?? d.rule1.stopLoss.adaptivePeriod),
+        adaptiveInterval: src.stopLoss?.adaptiveInterval ?? d.rule1.stopLoss.adaptiveInterval,
       },
       execution: { ...d.rule1.execution, ...src.execution },
       adaptiveOpts: { ...d.rule1.adaptiveOpts, ...src.adaptiveOpts },
@@ -192,8 +243,12 @@ export function formStateFromEntry(entry) {
       entryMa: {
         ...d.rule2.entryMa, ...src.entryMa,
         fixedDipPct: src.entryMa?.fixedDipPct ?? '',
+        aboveMaEnabled: src.entryMa?.aboveMaEnabled ?? d.rule2.entryMa.aboveMaEnabled,
+        aboveMaCandles: Number(src.entryMa?.aboveMaCandles ?? d.rule2.entryMa.aboveMaCandles ?? 10),
       },
       exitRsi: { ...d.rule2.exitRsi, ...src.exitRsi },
+      exitRsiConditions: mapExitRsiConditions(src.exitRsiConditions ?? (src.exitRsi ? [src.exitRsi] : null)),
+      exitRsiLogic: src.exitRsiLogic ?? d.rule2.exitRsiLogic ?? 'any',
       stopLoss: { ...d.rule2.stopLoss, ...src.stopLoss },
       execution: mapRule2Execution(
         { ...src, entryMa: src.entryMa, entryDiscount: src.entryMa?.entryDiscount },
@@ -206,25 +261,37 @@ export function formStateFromEntry(entry) {
   };
 }
 
-export function formStateToPayload(form, { symbol, exchange, capital }) {
+export function formStateToPayload(form, { symbol, exchange, capital, strategyId, enabled, label } = {}) {
   const r1 = form.rule1;
   const r2 = form.rule2;
-  return {
+  const payload = {
     symbol,
     exchange,
     capital: Number(capital),
+    ...(strategyId ? { strategyId } : {}),
+    ...(enabled != null ? { enabled } : {}),
+    ...(label ? { label } : {}),
     rule1: {
       enabled: r1.enabled,
+      maFiltersEnabled: r1.maFiltersEnabled !== false,
       entryRsi: r1.entryRsi,
       exitRsi: r1.exitRsi,
-      maConditions: r1.maConditions.map(({ period, interval, mode, fixedDipPct }) => ({
+      maConditions: r1.maConditions.map(({ period, interval, mode, fixedDipPct, aboveMaEnabled, aboveMaCandles }) => ({
         period, interval, mode,
         ...(fixedDipPct !== '' && fixedDipPct != null ? { fixedDipPct: Number(fixedDipPct) } : {}),
+        aboveMaEnabled: aboveMaEnabled === true,
+        aboveMaCandles: Number(aboveMaCandles ?? 10),
       })),
       extension: r1.extension,
       stopLoss: {
         ...r1.stopLoss,
-        enabled: !!(r1.stopLoss.fixedEnabled || r1.stopLoss.adaptiveEnabled),
+        enabled: !!(r1.stopLoss.fixedEnabled || r1.stopLoss.adaptiveEnabled
+          || r1.stopLoss.pctCapEnabled !== false),
+        fixedAboveMaEnabled: r1.stopLoss.fixedAboveMaEnabled === true,
+        fixedAboveMaCandles: Number(r1.stopLoss.fixedAboveMaCandles ?? 10),
+        adaptiveAboveMaEnabled: r1.stopLoss.adaptiveAboveMaEnabled === true,
+        adaptiveAboveMaCandles: Number(r1.stopLoss.adaptiveAboveMaCandles ?? 10),
+        maxLossPct: Math.min(Number(r1.stopLoss.maxLossPct ?? 5), 5),
         adaptivePeriod: Number(r1.stopLoss.adaptivePeriod ?? 50),
         adaptiveInterval: r1.stopLoss.adaptiveInterval ?? '1h',
       },
@@ -238,8 +305,23 @@ export function formStateToPayload(form, { symbol, exchange, capital }) {
         ...(r2.entryMa.fixedDipPct !== '' && r2.entryMa.fixedDipPct != null
           ? { fixedDipPct: Number(r2.entryMa.fixedDipPct) } : {}),
       },
-      exitRsi: r2.exitRsi,
-      stopLoss: r2.stopLoss,
+      exitRsi: (() => {
+        const first = r2.exitRsiConditions?.find(c => c.enabled) ?? r2.exitRsiConditions?.[0];
+        if (first) {
+          return { interval: first.interval, period: first.period, operator: first.operator, value: first.value };
+        }
+        return r2.exitRsi;
+      })(),
+      exitRsiConditions: (r2.exitRsiConditions ?? [])
+        .filter(c => c.enabled !== false)
+        .map(({ interval, period, operator, value }) => ({ enabled: true, interval, period, operator, value })),
+      exitRsiLogic: r2.exitRsiLogic ?? 'any',
+      stopLoss: {
+        ...r2.stopLoss,
+        adaptiveEnabled: r2.stopLoss.adaptiveEnabled !== false,
+        adaptiveAboveMaEnabled: r2.stopLoss.adaptiveAboveMaEnabled === true,
+        adaptiveAboveMaCandles: Number(r2.stopLoss.adaptiveAboveMaCandles ?? 10),
+      },
       entryDiscount: r2.execution.entryDiscount,
       pendingTimeoutMs: r2.execution.pendingTimeoutMs,
       pendingCancelPct: r2.execution.pendingCancelPct,
@@ -251,9 +333,11 @@ export function formStateToPayload(form, { symbol, exchange, capital }) {
     exitRsi: r1.exitRsi,
     entryRsiPath: { enabled: r1.enabled },
     entryMa: { ...r2.entryMa, enabled: r2.enabled, entryDiscount: r2.execution.entryDiscount },
-    maConditions: r1.maConditions.map(({ period, interval, mode, fixedDipPct }) => ({
+    maConditions: r1.maConditions.map(({ period, interval, mode, fixedDipPct, aboveMaEnabled, aboveMaCandles }) => ({
       period, interval, mode,
       ...(fixedDipPct !== '' && fixedDipPct != null ? { fixedDipPct: Number(fixedDipPct) } : {}),
+      aboveMaEnabled: aboveMaEnabled === true,
+      aboveMaCandles: Number(aboveMaCandles ?? 10),
     })),
     extension: r1.extension,
     stopLoss: r1.stopLoss,
@@ -262,4 +346,5 @@ export function formStateToPayload(form, { symbol, exchange, capital }) {
     adaptiveOpts: r1.adaptiveOpts,
     volume: { ...form.volume },
   };
+  return payload;
 }

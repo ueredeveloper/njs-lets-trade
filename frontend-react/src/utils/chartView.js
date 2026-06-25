@@ -6,6 +6,18 @@ export const CHART_VIEW = {
   MULTITRADE: 'multitrade',
 };
 
+export const INTERVAL_MS = {
+  '1m': 60_000, '3m': 180_000, '5m': 300_000, '15m': 900_000, '30m': 1_800_000,
+  '1h': 3_600_000, '2h': 7_200_000, '4h': 14_400_000, '6h': 21_600_000,
+  '8h': 28_800_000, '12h': 43_200_000, '1d': 86_400_000, '3d': 259_200_000, '1w': 604_800_000,
+};
+
+/** Quantidade de candles desde fetchFromMs até agora (+ buffer) */
+export function computeCandleLimitFromTime(fetchFromMs, interval, { buffer = 40, max = 3000, min = 100 } = {}) {
+  const ms = INTERVAL_MS[interval] ?? 3_600_000;
+  return Math.min(max, Math.max(min, Math.ceil((Date.now() - fetchFromMs) / ms) + buffer));
+}
+
 /** Velas extras antes da entrada / depois da saída no zoom MT e Estatísticas */
 export const CHART_ZOOM_PAD = 10;
 

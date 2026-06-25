@@ -12,7 +12,7 @@
 
 const ti = require('technicalindicators');
 
-const DEFAULT_OPTS = { defaultPct: 3.0, maxPct: 8.0, minPct: 0.5, minEpisodes: 3 };
+const DEFAULT_OPTS = { defaultPct: 3.0, maxPct: 5.0, minPct: 0.5, minEpisodes: 3 };
 
 /**
  * @returns {{ dipPct, episodes, usedDefault, reason?, avgRaw?, episodeCount? }}

@@ -4,6 +4,7 @@ import { fetchCandlesticksAndCloud, fetchGateCurrencies, gatePreloadCandles, fet
 import { useI18n } from '../i18n';
 import TradeConfigModal from './TradeConfigModal';
 import MultitradeModal from './MultitradeModal';
+import { getEntriesForSymbol, symbolHasMultitrade } from '../constants/strategyPresets';
 import { CHART_VIEW } from '../utils/chartView';
 
 const GATE_COLOR    = '#0068ff';
@@ -72,13 +73,14 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
     toggleGateFavorite, toggleBinanceFavorite, toggleTradeFavorite, updateTradeConfig,
     setTradePurchases, setAllTrades,
     activeTrades, refreshActiveTrades, dismissActiveTrade,
-    multitradeFavorites, addMultitradeEntry, updateMultitradeEntry, removeMultitradeEntry,
+    multitradeFavorites, removeMultitradeEntry, saveMultitradeSymbol,
+    filterVisibleCurrencies, isVisibleSymbol,
   } = useCurrency();
   const { t, formatPrice } = useI18n();
   const [loadingSymbol, setLoadingSymbol]       = useState(null);
   const [activeRow, setActiveRow]               = useState(null);
   const [tradeModal, setTradeModal] = useState(null); // { symbol, exchange }
-  const [mtModal, setMtModal]       = useState(null); // { symbol, exchange, entry? }
+  const [mtModal, setMtModal]       = useState(null); // { symbol, exchange, entries? }
   const [search, setSearch]               = useState('');
   const [sortVolume, setSortVolume]       = useState('desc'); // 'desc' | 'asc'
   const [gateItems, setGateItems]         = useState([]);
@@ -104,11 +106,15 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
     } else if (showFavorites === 'active') {
       const activeSymbols = new Set(activeTrades.keys());
       list = resolveFavorites(activeSymbols, currencies.list, gateAll);
+    } else if (showFavorites === 'multitrade') {
+      const mtSymbols = new Set(multitradeFavorites.filter(e => e.enabled !== false).map(e => e.symbol));
+      list = resolveFavorites(mtSymbols, currencies.list, gateAll);
     } else if (activeFilter) {
       const filter = findFilter(activeFilter);
       if (filter) {
         const isMarket = activeFilter.startsWith('Mercado|');
         list = filter.list
+          .filter((sym) => isVisibleSymbol(sym))
           .map((sym) => {
             const binance = currencies.list.find((c) => c.symbol === sym);
             if (binance) return binance;
@@ -122,6 +128,8 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
     if (!list) {
       list = currencies.list.filter((c) => c.symbol.endsWith(selectedQuote));
     }
+
+    list = filterVisibleCurrencies(list);
 
     if (search.trim()) {
       const term = search.trim().toUpperCase();
@@ -146,7 +154,7 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
     });
 
     return list;
-  }, [currencies, activeFilter, selectedQuote, findFilter, search, showFavorites, gateFavorites, binanceFavorites, tradeFavorites, tradeConfigs, activeTrades, sortVolume, gateAll]);
+  }, [currencies, activeFilter, selectedQuote, findFilter, search, showFavorites, gateFavorites, binanceFavorites, tradeFavorites, tradeConfigs, activeTrades, multitradeFavorites, sortVolume, gateAll, filterVisibleCurrencies, isVisibleSymbol]);
 
   // Busca Gate.io sempre que o usuário digita (≥2 chars), excluindo moedas já na lista Binance
   useEffect(() => {
@@ -166,7 +174,7 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
           const binanceSymbols = new Set(currencies.list?.map(c => c.symbol) ?? []);
           setGateItems(
             gateCacheRef.current
-              .filter(c => c.symbol.includes(term) && !binanceSymbols.has(c.symbol))
+              .filter(c => c.symbol.includes(term) && !binanceSymbols.has(c.symbol) && isVisibleSymbol(c.symbol))
               .slice(0, 40)
           );
         }
@@ -178,7 +186,7 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
     })();
 
     return () => { cancelled = true; };
-  }, [search, currencies.list]);
+  }, [search, currencies.list, isVisibleSymbol]);
 
   // Carrega e refresca active trades a cada 30s enquanto o filtro AT estiver ativo
   useEffect(() => {
@@ -191,7 +199,7 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
   // Carrega moedas Gate.io quando necessário para favoritos ou filtros de mercado
   useEffect(() => {
     const needGate = showFavorites === 'gate' || showFavorites === 'trade'
-      || showFavorites === 'active'
+      || showFavorites === 'active' || showFavorites === 'multitrade'
       || (activeFilter && activeFilter.startsWith('Mercado|'));
     if (!needGate) return;
     if (gateCacheRef.current) { setGateAll(gateCacheRef.current); return; }
@@ -255,6 +263,7 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
   const binanceCount = binanceFavorites.size;
   const tradeCount   = tradeFavorites.size;
   const activeCount  = activeTrades.size;
+  const mtCount      = new Set(multitradeFavorites.filter(e => e.enabled !== false).map(e => e.symbol)).size;
 
   return (
     <div className="flex flex-col h-full">
@@ -322,6 +331,26 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
               }}
             >
               AT{activeCount > 0 ? ` ${activeCount}` : ''}
+            </span>
+          </button>
+
+          {/* Filtro Multi-Trade */}
+          <button
+            id="currency-table-btn-filter-mt"
+            onClick={() => toggleShowFavorites('multitrade')}
+            title={showFavorites === 'multitrade' ? 'Ver todas as moedas' : `Multi-Trade (${mtCount})`}
+            className="currency-table-btn-filter-mt flex items-center gap-1 px-1.5 py-0.5 rounded transition-all"
+            style={{ opacity: showFavorites === 'multitrade' ? 1 : 0.5 }}
+          >
+            <span
+              className="text-[10px] font-bold px-1 py-0.5 rounded"
+              style={{
+                background: showFavorites === 'multitrade' ? MT_COLOR : 'transparent',
+                color: showFavorites === 'multitrade' ? '#fff' : MT_COLOR,
+                border: `1px solid ${MT_COLOR}`,
+              }}
+            >
+              MT{mtCount > 0 ? ` ${mtCount}` : ''}
             </span>
           </button>
 
@@ -423,8 +452,8 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
               const isGate     = gateFavorites.has(item.symbol);
               const isBinance  = binanceFavorites.has(item.symbol);
               const isTrade    = tradeFavorites.has(item.symbol);
-              const isMT       = multitradeFavorites.some(e => e.symbol === item.symbol);
-              const mtEntry    = multitradeFavorites.find(e => e.symbol === item.symbol);
+              const isMT       = symbolHasMultitrade(multitradeFavorites, item.symbol);
+              const mtEntries  = getEntriesForSymbol(multitradeFavorites, item.symbol);
               const activeInfo  = activeTrades.get(item.symbol);
               const isActive   = !!activeInfo;
               const tradeConfig = tradeConfigs.get(item.symbol);
@@ -446,6 +475,8 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
                       ? 'bg-amber-500/10 hover:bg-amber-500/20 text-p5'
                       : isTrade
                       ? 'bg-emerald-500/10 hover:bg-emerald-500/20 text-p5'
+                      : isMT
+                      ? 'bg-violet-500/10 hover:bg-violet-500/20 text-p5'
                       : 'hover:bg-p2/40 text-p5'
                   }`}
                 >
@@ -454,7 +485,7 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
                       <FavButton active={isTrade}   color={TRADE_COLOR}   label="Trade"   onClick={(e) => { e.stopPropagation(); setTradeModal({ symbol: item.symbol, exchange: isGate && !isBinance ? 'gate' : 'binance' }); }} />
                       <FavButton active={isGate}    color={GATE_COLOR}    label="Gate"    onClick={(e) => { e.stopPropagation(); toggleGateFavorite(item.symbol); }} />
                       <FavButton active={isBinance} color={BINANCE_COLOR} label="Binance" onClick={(e) => { e.stopPropagation(); toggleBinanceFavorite(item.symbol); }} />
-                      <FavButton active={isMT}      color={MT_COLOR}      label="MultiTrade" text="MT" onClick={(e) => { e.stopPropagation(); setMtModal({ symbol: item.symbol, exchange: isGate && !isBinance ? 'gate' : 'binance', entry: mtEntry }); }} />
+                      <FavButton active={isMT}      color={MT_COLOR}      label="MultiTrade" text="MT" onClick={(e) => { e.stopPropagation(); setMtModal({ symbol: item.symbol, exchange: isGate && !isBinance ? 'gate' : 'binance', entries: mtEntries }); }} />
                     </div>
                   </td>
                   <td className="px-2 py-1.5 font-mono font-semibold">
@@ -536,8 +567,8 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
                   const { base, quote } = splitSymbol(item.symbol);
                   const isGate   = gateFavorites.has(item.symbol);
                   const isTrade  = tradeFavorites.has(item.symbol);
-                  const isMTGate = multitradeFavorites.some(e => e.symbol === item.symbol);
-                  const mtEntryGate = multitradeFavorites.find(e => e.symbol === item.symbol);
+                  const isMTGate = symbolHasMultitrade(multitradeFavorites, item.symbol);
+                  const mtEntriesGate = getEntriesForSymbol(multitradeFavorites, item.symbol);
                   return (
                     <tr
                       key={`gate-${item.symbol}`}
@@ -554,7 +585,7 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
                         <div className="flex items-center gap-1">
                           <FavButton active={isTrade}  color={TRADE_COLOR} label="Trade"     onClick={(e) => { e.stopPropagation(); setTradeModal({ symbol: item.symbol, exchange: 'gate' }); }} />
                           <FavButton active={isGate}   color={GATE_COLOR}  label="Gate"      onClick={(e) => { e.stopPropagation(); toggleGateFavorite(item.symbol); }} />
-                          <FavButton active={isMTGate} color={MT_COLOR}    label="MultiTrade" text="MT" onClick={(e) => { e.stopPropagation(); setMtModal({ symbol: item.symbol, exchange: 'gate', entry: mtEntryGate }); }} />
+                          <FavButton active={isMTGate} color={MT_COLOR}    label="MultiTrade" text="MT" onClick={(e) => { e.stopPropagation(); setMtModal({ symbol: item.symbol, exchange: 'gate', entries: mtEntriesGate }); }} />
                         </div>
                       </td>
                       <td className="px-2 py-1.5 font-mono font-semibold">
@@ -606,16 +637,15 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
         <MultitradeModal
           symbol={mtModal.symbol}
           defaultExchange={mtModal.exchange}
-          currentEntry={mtModal.entry}
-          onConfirm={(data) => {
-            if (mtModal.entry) {
-              updateMultitradeEntry(mtModal.entry.id, data);
-            } else {
-              addMultitradeEntry(data);
-            }
+          currentEntries={mtModal.entries}
+          onConfirm={async ({ saves }) => {
+            await saveMultitradeSymbol({ saves });
             setMtModal(null);
           }}
-          onRemove={mtModal.entry ? () => { removeMultitradeEntry(mtModal.entry.id); setMtModal(null); } : undefined}
+          onRemove={mtModal.entries?.length ? async () => {
+            for (const e of mtModal.entries) await removeMultitradeEntry(e.id);
+            setMtModal(null);
+          } : undefined}
           onCancel={() => setMtModal(null)}
         />
       )}

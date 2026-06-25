@@ -17,6 +17,9 @@ const INTERVAL_MS = {
 
 const MA_ENTRY_DEFAULT_DISCOUNT = 0.02;
 
+/** Perda máxima permitida em relação ao preço de entrada (qualquer tipo de stop). */
+const MAX_STOP_LOSS_PCT = 5;
+
 const BOT_DEFAULTS = {
   entryDiscount:    TRADE_CONFIG_DEFAULTS.execution.entryDiscount,
   immediateEntry:   TRADE_CONFIG_DEFAULTS.execution.immediateEntry,
@@ -31,6 +34,25 @@ const BOT_DEFAULTS = {
 
 function maKey(period, interval) {
   return `${period}_${interval}`;
+}
+
+function capStopLossDipPct(dipPct) {
+  if (dipPct == null || !Number.isFinite(Number(dipPct))) return MAX_STOP_LOSS_PCT;
+  return Math.min(Number(dipPct), MAX_STOP_LOSS_PCT);
+}
+
+/** Piso de stop: no máximo MAX_STOP_LOSS_PCT% abaixo do preço de entrada. */
+function entryStopFloor(entryPrice, maxPct = MAX_STOP_LOSS_PCT) {
+  if (entryPrice == null || !Number.isFinite(entryPrice) || entryPrice <= 0) return null;
+  return entryPrice * (1 - maxPct / 100);
+}
+
+/** Stop efetivo = o mais apertado entre MA e teto de % sobre a entrada. */
+function applyEntryStopCap(level, entryPrice, maxPct = MAX_STOP_LOSS_PCT) {
+  if (level == null) return level;
+  const floor = entryStopFloor(entryPrice, maxPct);
+  if (floor == null) return level;
+  return Math.max(level, floor);
 }
 
 /** Converte payload do frontend → trade_config persistido (formato motor) */
@@ -51,8 +73,15 @@ function stopLossAdaptiveActive(config) {
   return sl.adaptiveEnabled !== false;
 }
 
+function stopLossPctCapActive(config) {
+  const sl = config?.stopLoss;
+  if (!sl || sl.enabled === false || sl.pctCapEnabled === false) return false;
+  if (stopLossFixedActive(config) || stopLossAdaptiveActive(config)) return false;
+  return true;
+}
+
 function stopLossAnyActive(config) {
-  return stopLossFixedActive(config) || stopLossAdaptiveActive(config);
+  return stopLossFixedActive(config) || stopLossAdaptiveActive(config) || stopLossPctCapActive(config);
 }
 
 function entryRsiPathActive(config) {
@@ -90,12 +119,102 @@ function getRequiredSpecs(config) {
     // legado
     if (entryRsiPathActive(config)) addAll([{ interval: config.entryRsi.interval, limit: config.entryRsi.period + 50 }]);
     addAll([{ interval: config.exitRsi.interval, limit: config.exitRsi.period + 50 }]);
-    for (const f of config.maFilters ?? []) {
+    for (const f of resolveActiveMaFilters(config)) {
       specs.set(f.interval, Math.max(specs.get(f.interval) ?? 0, f.period + 60));
     }
   }
-  if (config?.rule2) addAll(getRule2RequiredSpecs(config.rule2));
+  if (config?.rule2) addAll(getRule2RequiredSpecs(config.rule2, config));
   return [...specs.entries()].map(([interval, limit]) => ({ interval, limit }));
+}
+
+/**
+ * % de velas em que o preço atende cada filtro MA ativo.
+ * Usa todo o histórico carregado em cMap[interval] (máximo disponível).
+ * @param {{ fromMs?: number, toMs?: number }} [window] — recorte opcional (não usado no backtest)
+ */
+function computeMaFilterTimeStats(cMap, config, adaptiveDips = {}, window = null) {
+  const filters = resolveActiveMaFilters(config);
+  if (!filters.length) return [];
+
+  const { fromMs, toMs } = window ?? {};
+
+  return filters.map(f => {
+    const period   = f.period ?? 50;
+    const interval = f.interval;
+    const label    = `MA${period} ${interval}`;
+    const key      = maKey(period, interval);
+    const candles  = cMap[interval] ?? [];
+
+    if (candles.length < period) {
+      return {
+        label, period, interval, mode: f.mode,
+        pctAboveMa: null, aboveMaMet: 0, aboveMaTotal: 0,
+        pctFilterMet: null, filterMet: 0, filterTotal: 0,
+        dipPct: null, modeLabel: null,
+        detail: 'histórico insuficiente',
+      };
+    }
+
+    const closes = candles.map(c => c.close);
+    const maArr  = ti.SMA.calculate({ values: closes, period });
+    const dipPct = f.mode === 'adaptive'
+      ? (adaptiveDips[key] ?? DEFAULT_OPTS.defaultPct)
+      : null;
+
+    let aboveMaMet = 0;
+    let filterMet  = 0;
+    let counted    = 0;
+
+    for (let i = 0; i < maArr.length; i++) {
+      const idx      = period - 1 + i;
+      const openTime = candles[idx].openTime;
+      if (fromMs != null && openTime < fromMs) continue;
+      if (toMs != null && openTime > toMs) continue;
+
+      const close = closes[idx];
+      const ma    = maArr[i];
+      counted++;
+
+      if (close > ma) aboveMaMet++;
+
+      let filterOk = false;
+      if (f.mode === 'strict_above') {
+        filterOk = close > ma;
+      } else if (f.mode === 'adaptive') {
+        filterOk = close >= ma * (1 - dipPct / 100);
+      } else {
+        filterOk = close > ma;
+      }
+      if (filterOk) filterMet++;
+    }
+
+    const pctAboveMa  = counted ? parseFloat(((aboveMaMet / counted) * 100).toFixed(1)) : null;
+    const pctFilterMet = counted ? parseFloat(((filterMet / counted) * 100).toFixed(1)) : null;
+
+    const winFrom = fromMs ?? candles[period - 1]?.openTime ?? null;
+    const winTo   = toMs ?? candles[candles.length - 1]?.openTime ?? null;
+    const winDays = winFrom != null && winTo != null ? (winTo - winFrom) / 86_400_000 : 0;
+    const periodDaysLbl = winDays >= 1 ? `~${Math.round(winDays)} dias` : (winDays > 0 ? '<1 dia' : null);
+
+    return {
+      label, period, interval, mode: f.mode,
+      pctAboveMa, aboveMaMet, aboveMaTotal: counted,
+      pctFilterMet, filterMet, filterTotal: counted,
+      dipPct: f.mode === 'adaptive' ? parseFloat(Number(dipPct).toFixed(2)) : null,
+      pct: pctAboveMa,
+      met: aboveMaMet,
+      total: counted,
+      modeLabel: f.mode === 'adaptive'
+        ? `piso adaptativo (−${parseFloat(Number(dipPct).toFixed(1))}%)`
+        : 'close acima da MA',
+      detail: counted
+        ? `${aboveMaMet}/${counted} velas ${interval} com close > MA`
+        : null,
+      periodDaysLbl,
+      windowFrom: winFrom,
+      windowTo: winTo,
+    };
+  });
 }
 
 /** Calcula dips adaptativos para cada filtro MA com mode adaptive */
@@ -104,12 +223,12 @@ function computeAdaptiveDips(cMap, config) {
   for (const f of config.maFilters ?? []) {
     if (f.mode !== 'adaptive') continue;
     if (f.fixedDipPct != null) {
-      dips[maKey(f.period, f.interval)] = f.fixedDipPct;
+      dips[maKey(f.period, f.interval)] = capStopLossDipPct(f.fixedDipPct);
       continue;
     }
     const candles = cMap[f.interval];
     const key     = maKey(f.period, f.interval);
-    dips[key]     = analyzeAdaptiveDip(candles, f.period, config.adaptiveOpts).dipPct;
+    dips[key]     = capStopLossDipPct(analyzeAdaptiveDip(candles, f.period, config.adaptiveOpts).dipPct);
   }
   return dips;
 }
@@ -143,7 +262,7 @@ function buildMaSnapshot(cMap, config) {
     }
     if (stopLossFixedActive(config) && config.stopLoss?.interval === iv) {
       const p = config.stopLoss.period;
-      snap[`sl_${maKey(p, iv)}`] = { ma: lastMa(candles, p), period: p, interval: iv };
+      snap[`sl_${maKey(p, iv)}`] = { ma: lastMa(candles, p), candles, period: p, interval: iv };
     }
   }
   return snap;
@@ -182,28 +301,19 @@ function resolveConfirmCandles(confirmCandles) {
 }
 
 function analyzeExtension(close, maValue, confirmCandles, extension, entryTimeMs) {
-  const thresholdPct = extension?.abovePct ?? 5;
-  const aboveMaPct   = maValue != null ? ((close / maValue - 1) * 100) : null;
+  const aboveMaPct = maValue != null ? ((close / maValue - 1) * 100) : null;
 
   if (!extension?.enabled || maValue == null) {
     return {
       extended: false, allowed: true, reason: null,
-      threeOk: false, fourOk: false, aboveMaPct, thresholdPct,
-    };
-  }
-
-  const threshold = maValue * (1 + thresholdPct / 100);
-  if (close <= threshold) {
-    return {
-      extended: false, allowed: true, reason: null,
-      threeOk: false, fourOk: false, aboveMaPct, thresholdPct,
+      threeOk: false, fourOk: false, aboveMaPct,
     };
   }
 
   if (!extension.threeCandles && !extension.fourCandles) {
     return {
-      extended: true, allowed: true, reason: null,
-      threeOk: false, fourOk: false, aboveMaPct, thresholdPct,
+      extended: false, allowed: true, reason: null,
+      threeOk: false, fourOk: false, aboveMaPct,
     };
   }
 
@@ -232,7 +342,6 @@ function analyzeExtension(close, maValue, confirmCandles, extension, entryTimeMs
     threeOk,
     fourOk,
     aboveMaPct,
-    thresholdPct,
     threeInterval,
     fourInterval,
   };
@@ -244,7 +353,22 @@ function checkExtension(close, maValue, confirmCandles, extension, entryTimeMs) 
   return { allowed: true, reason: null };
 }
 
-function checkMaFilters({ close, maFilters, maSnap, adaptiveDips }) {
+function maFiltersEnabledFor(configOrRule1) {
+  const r1 = configOrRule1?.rule1 ?? configOrRule1;
+  if (r1?.maFiltersEnabled === false) return false;
+  if (configOrRule1?.maFiltersEnabled === false && !configOrRule1?.rule1) return false;
+  return true;
+}
+
+/** Filtros MA de entrada ativos (respeita maFiltersEnabled). */
+function resolveActiveMaFilters(configOrRule1) {
+  if (!maFiltersEnabledFor(configOrRule1)) return [];
+  const r1 = configOrRule1?.rule1 ?? configOrRule1;
+  return r1?.maFilters ?? configOrRule1?.maFilters ?? [];
+}
+
+function checkMaFilters({ close, maFilters, maSnap, adaptiveDips, entryTimeMs, signalOpenTime }) {
+  const { checkCandlesAboveMa } = require('./rule2Engine');
   for (const f of maFilters ?? []) {
     const key = maKey(f.period, f.interval);
     const md  = maSnap[key];
@@ -256,6 +380,16 @@ function checkMaFilters({ close, maFilters, maSnap, adaptiveDips }) {
       const dipPct = adaptiveDips[key] ?? DEFAULT_OPTS.defaultPct;
       const floor  = md.ma * (1 - dipPct / 100);
       if (close < floor) return { allowed: false, reason: 'MA_ADAPTIVE_BLOCKED', filter: key, dipPct, floor };
+    }
+
+    if (f.aboveMaEnabled === true) {
+      const count = f.aboveMaCandles ?? 10;
+      const aboveCheck = checkCandlesAboveMa(
+        md.candles, f.period, f.interval, entryTimeMs, count, signalOpenTime,
+      );
+      if (!aboveCheck.allowed) {
+        return { ...aboveCheck, filter: key, entryKind: 'ma_filter' };
+      }
     }
   }
   return { allowed: true, reason: null };
@@ -287,9 +421,12 @@ function checkMaEntryTrigger({ close, low, prevClose, maSnap, config }) {
   return { triggered: false, reason: 'MA_NOT_TOUCHED', ma, key };
 }
 
-function applySharedEntryFilters({ close, entryTimeMs, config, maSnap, adaptiveDips, cMap }) {
+function applySharedEntryFilters({ close, entryTimeMs, config, maSnap, adaptiveDips, cMap, signalOpenTime }) {
+  const rsiIv = config.entryRsi?.interval;
+  const sigTime = signalOpenTime ?? cMap?.[rsiIv]?.at(-1)?.openTime;
   const maCheck = checkMaFilters({
-    close, maFilters: config.maFilters, maSnap, adaptiveDips,
+    close, maFilters: resolveActiveMaFilters(config), maSnap, adaptiveDips,
+    entryTimeMs, signalOpenTime: sigTime,
   });
   if (!maCheck.allowed) return maCheck;
 
@@ -331,14 +468,42 @@ function resolveEntrySignal({
   }
 
   if (entryMaPathActive(config)) {
-    const mt = checkMaEntryTrigger({
-      close: maClose, low: maLow, prevClose: maPrevClose, maSnap, config,
-    });
-    if (mt.triggered) {
-      const rsiForMa = maPathRsi ?? entryRsi;
-      const rsiRule  = config.entryMa.requireRsi ? config.entryMa.entryRsi : null;
-      if (!rsiRule || checkRsi(rsiForMa, rsiRule)) {
-        candidates.push({ kind: 'ma', close: maClose, maTrigger: mt });
+    const em = config.entryMa;
+    if (config.rule2?.enabled) {
+      const { evaluateRule2Entry, getRule2MaEntryFilters } = require('./rule2Engine');
+      const rule2 = {
+        ...config.rule2,
+        enabled: true,
+        entryMa: { ...config.rule2.entryMa, ...em },
+      };
+      const r2check = evaluateRule2Entry({
+        close: maClose,
+        low: maLow,
+        prevClose: maPrevClose,
+        entryTimeMs,
+        signalOpenTime: maCtx?.openTime,
+        rule2,
+        maSnap,
+        maSnapFilters: maSnap,
+        adaptiveDips,
+        maEntryFilters: getRule2MaEntryFilters(config),
+        filterClose: maClose,
+      });
+      if (r2check.allowed) {
+        candidates.push({
+          kind: 'ma', close: maClose, maTrigger: r2check.maTrigger, rule2Complete: true,
+        });
+      }
+    } else {
+      const mt = checkMaEntryTrigger({
+        close: maClose, low: maLow, prevClose: maPrevClose, maSnap, config,
+      });
+      if (mt.triggered) {
+        const rsiForMa = maPathRsi ?? entryRsi;
+        const rsiRule  = config.entryMa.requireRsi ? config.entryMa.entryRsi : null;
+        if (!rsiRule || checkRsi(rsiForMa, rsiRule)) {
+          candidates.push({ kind: 'ma', close: maClose, maTrigger: mt });
+        }
       }
     }
   }
@@ -351,6 +516,9 @@ function resolveEntrySignal({
 
   let lastBlock = { allowed: false, reason: 'NO_ENTRY_SIGNAL', kind: null };
   for (const c of candidates) {
+    if (c.rule2Complete) {
+      return { allowed: true, reason: null, kind: c.kind, entryKind: c.kind };
+    }
     const filterResult = applySharedEntryFilters({
       close: c.close, entryTimeMs, config, maSnap, adaptiveDips, cMap,
     });
@@ -389,26 +557,59 @@ function diagnoseEntry({
   }
 
   if (entryMaPathActive(config)) {
-    const mt = checkMaEntryTrigger({
-      close: maClose, low: maLow, prevClose: maPrevClose, maSnap, config,
-    });
     const em = config.entryMa;
-    let rsiOk = true;
-    if (em.requireRsi) {
-      rsiOk = checkRsi(maPathRsi ?? entryRsi, em.entryRsi);
+    if (config.rule2?.enabled) {
+      const { evaluateRule2Entry, getRule2MaEntryFilters } = require('./rule2Engine');
+      const rule2 = {
+        ...config.rule2,
+        enabled: true,
+        entryMa: { ...config.rule2.entryMa, ...em },
+      };
+      const r2check = evaluateRule2Entry({
+        close: maClose,
+        low: maLow,
+        prevClose: maPrevClose,
+        entryTimeMs,
+        signalOpenTime: maCtx?.openTime,
+        rule2,
+        maSnap,
+        maSnapFilters: maSnap,
+        adaptiveDips,
+        maEntryFilters: getRule2MaEntryFilters(config),
+        filterClose: maClose,
+      });
+      const triggerLbl = em.trigger === 'cross_up' ? 'cruzamento ↑' : 'toque';
+      const aboveLbl = em.aboveMaEnabled === true
+        ? ` · ${em.aboveMaCandles ?? 10} candles acima`
+        : '';
+      paths.push({
+        kind: 'ma', active: true,
+        signal: r2check.allowed,
+        maTrigger: r2check.maTrigger,
+        rule2Check: r2check,
+        label: `MA${em.period} ${em.interval} (${triggerLbl})${aboveLbl}`,
+      });
+    } else {
+      const mt = checkMaEntryTrigger({
+        close: maClose, low: maLow, prevClose: maPrevClose, maSnap, config,
+      });
+      let rsiOk = true;
+      if (em.requireRsi) {
+        rsiOk = checkRsi(maPathRsi ?? entryRsi, em.entryRsi);
+      }
+      paths.push({
+        kind: 'ma', active: true,
+        signal: mt.triggered && rsiOk,
+        maTrigger: mt,
+        rsiOk,
+        label: `MA${em.period} ${em.interval} (${em.trigger ?? 'touch'})` +
+          (em.requireRsi ? ` + RSI ${em.entryRsi.operator} ${em.entryRsi.value}` : ''),
+      });
     }
-    paths.push({
-      kind: 'ma', active: true,
-      signal: mt.triggered && rsiOk,
-      maTrigger: mt,
-      rsiOk,
-      label: `MA${em.period} ${em.interval} (${em.trigger ?? 'touch'})` +
-        (em.requireRsi ? ` + RSI ${em.entryRsi.operator} ${em.entryRsi.value}` : ''),
-    });
   }
 
   const maChecks = [];
-  for (const f of config.maFilters ?? []) {
+  for (const f of resolveActiveMaFilters(config)) {
     const key   = maKey(f.period, f.interval);
     const label = `MA${f.period} ${f.interval}`;
     const md    = maSnap[key];
@@ -419,16 +620,18 @@ function diagnoseEntry({
     const filterClose = paths.some(p => p.kind === 'ma' && p.signal) ? maClose : rsiClose;
     if (f.mode === 'strict_above') {
       const ok = filterClose > md.ma;
+      const aboveSuffix = f.aboveMaEnabled === true ? ` · ${f.aboveMaCandles ?? 10}c acima` : '';
       maChecks.push({
-        label, ok, mode: 'fixo',
+        label: label + aboveSuffix, ok, mode: 'fixo',
         detail: ok ? `acima ${md.ma.toFixed(4)}` : `abaixo ${md.ma.toFixed(4)}`,
       });
     } else if (f.mode === 'adaptive') {
       const dipPct = adaptiveDips[key] ?? DEFAULT_OPTS.defaultPct;
       const floor  = md.ma * (1 - dipPct / 100);
       const ok     = filterClose >= floor;
+      const aboveSuffix = f.aboveMaEnabled === true ? ` · ${f.aboveMaCandles ?? 10}c acima` : '';
       maChecks.push({
-        label, ok, mode: 'adapt', dipPct,
+        label: label + aboveSuffix, ok, mode: 'adapt', dipPct,
         detail: ok
           ? `≥ piso ${floor.toFixed(4)} (−${dipPct.toFixed(1)}%)`
           : `< piso ${floor.toFixed(4)} (−${dipPct.toFixed(1)}%)`,
@@ -445,6 +648,12 @@ function diagnoseEntry({
   if (signalPaths.length) {
     signalPaths.sort((a, b) => (a.kind === 'rsi' ? 0 : 1) - (b.kind === 'rsi' ? 0 : 1));
     for (const p of signalPaths) {
+      if (config.rule2?.enabled && p.kind === 'ma' && p.rule2Check) {
+        allowed = p.rule2Check.allowed;
+        reason = p.rule2Check.allowed ? null : p.rule2Check.reason;
+        entryKind = 'ma';
+        break;
+      }
       const filterClose = p.kind === 'ma' ? maClose : rsiClose;
       const filterResult = applySharedEntryFilters({
         close: filterClose, entryTimeMs, config, maSnap, adaptiveDips, cMap,
@@ -462,7 +671,7 @@ function diagnoseEntry({
 
   const rsiOk = paths.some(p => p.kind === 'rsi' && p.signal);
 
-  if (allowed && config.extension?.enabled) {
+  if (allowed && config.extension?.enabled && !(config.rule2?.enabled && entryKind === 'ma')) {
     const extIv  = config.extension.maInterval;
     const extP   = config.extension.maPeriod ?? 50;
     const extKey = maKey(extP, extIv);
@@ -481,7 +690,6 @@ function diagnoseEntry({
       threeOk:  ext.threeOk,
       fourOk:   ext.fourOk,
       aboveMaPct: ext.aboveMaPct,
-      thresholdPct: ext.thresholdPct,
       allowed:  !ext.extended || ext.allowed,
     };
     if (!extension.allowed) {
@@ -499,11 +707,11 @@ function diagnoseEntry({
   return { rsiOk, allowed, reason, entryKind, paths, maChecks, extension };
 }
 
-function evaluateExit({ close, exitRsi, stopLossMa, maSnap, adaptiveDips, config, entryKind = null }) {
+function evaluateExit({ close, exitRsi, stopLossMa, maSnap, adaptiveDips, config, entryKind = null, entryPrice = null }) {
   const adaptiveStopFloors = maSnap
     ? getAdaptiveStopFloors(maSnap, adaptiveDips, config, { entryKind })
     : [];
-  const stopHit = checkStopLossHits(close, stopLossMa, adaptiveStopFloors, config);
+  const stopHit = checkStopLossHits(close, stopLossMa, adaptiveStopFloors, config, entryPrice, maSnap);
   if (stopHit) return stopHit;
 
   if (checkRsi(exitRsi, config.exitRsi)) {
@@ -574,7 +782,7 @@ function getAdaptiveStopFloors(maSnap, adaptiveDips, config, opts = {}) {
     const key = maKey(f.period, f.interval);
     const md  = maSnap[key];
     if (!md?.ma) continue;
-    const dipPct = f.fixedDipPct ?? adaptiveDips?.[key] ?? DEFAULT_OPTS.defaultPct;
+    const dipPct = capStopLossDipPct(f.fixedDipPct ?? adaptiveDips?.[key] ?? DEFAULT_OPTS.defaultPct);
     floors.push({
       floor: md.ma * (1 - dipPct / 100),
       dipPct,
@@ -588,17 +796,37 @@ function getAdaptiveStopFloors(maSnap, adaptiveDips, config, opts = {}) {
 }
 
 function isStopLossExit(reason) {
-  return reason === 'stop_loss_ma' || reason === 'stop_loss_adaptive';
+  return reason === 'stop_loss_ma' || reason === 'stop_loss_adaptive' || reason === 'stop_loss_pct_cap';
 }
 
-function checkStopLossHits(close, stopLossMa, adaptiveStopFloors, config) {
+function getStopCandlesFromSnap(maSnap, period, interval, useSlKey = false) {
+  const key = useSlKey ? `sl_${maKey(period, interval)}` : maKey(period, interval);
+  return maSnap?.[key]?.candles ?? null;
+}
+
+function stopLossAboveMaOk(sl, kind, maSnap) {
+  if (!sl || !maSnap) return true;
+  const isFixed = kind === 'fixed';
+  const enabled = isFixed ? sl.fixedAboveMaEnabled : sl.adaptiveAboveMaEnabled;
+  const count = isFixed ? (sl.fixedAboveMaCandles ?? 0) : (sl.adaptiveAboveMaCandles ?? 0);
+  if (enabled !== true || !count) return true;
+  const period = isFixed ? sl.period : (sl.adaptivePeriod ?? 50);
+  const interval = isFixed ? sl.interval : (sl.adaptiveInterval ?? '1h');
+  const candles = getStopCandlesFromSnap(maSnap, period, interval, isFixed);
+  if (!candles?.length) return false;
+  const signalOpenTime = candles[candles.length - 1]?.openTime;
+  const { checkCandlesAboveMa } = require('./rule2Engine');
+  return checkCandlesAboveMa(candles, period, interval, null, count, signalOpenTime).allowed;
+}
+
+function checkStopLossHits(close, stopLossMa, adaptiveStopFloors, config, entryPrice, maSnap = null) {
   if (!stopLossAnyActive(config)) return null;
 
   const stops = [];
   if (stopLossFixedActive(config) && stopLossMa != null) {
     const sl = config.stopLoss ?? {};
     stops.push({
-      level: stopLossMa,
+      level: applyEntryStopCap(stopLossMa, entryPrice),
       reason: 'stop_loss_ma',
       period: sl.period,
       interval: sl.interval,
@@ -607,7 +835,7 @@ function checkStopLossHits(close, stopLossMa, adaptiveStopFloors, config) {
   if (stopLossAdaptiveActive(config)) {
     for (const af of adaptiveStopFloors ?? []) {
       stops.push({
-        level: af.floor,
+        level: applyEntryStopCap(af.floor, entryPrice),
         reason: 'stop_loss_adaptive',
         adaptiveKey: af.key,
         dipPct: af.dipPct,
@@ -617,13 +845,31 @@ function checkStopLossHits(close, stopLossMa, adaptiveStopFloors, config) {
       });
     }
   }
+  if (stopLossPctCapActive(config) && entryPrice != null && Number.isFinite(Number(entryPrice))) {
+    const sl = config.stopLoss ?? {};
+    const maxPct = Math.min(Number(sl.maxLossPct ?? MAX_STOP_LOSS_PCT), MAX_STOP_LOSS_PCT);
+    stops.push({
+      level: entryStopFloor(Number(entryPrice), maxPct),
+      reason: 'stop_loss_pct_cap',
+      maxLossPct: maxPct,
+    });
+  }
 
   const breached = stops.filter(s => close < s.level);
-  if (!breached.length) return null;
+  const qualified = breached.filter((s) => {
+    if (s.reason === 'stop_loss_ma') {
+      return stopLossAboveMaOk(config.stopLoss, 'fixed', maSnap);
+    }
+    if (s.reason === 'stop_loss_adaptive') {
+      return stopLossAboveMaOk(config.stopLoss, 'adaptive', maSnap);
+    }
+    return true;
+  });
+  if (!qualified.length) return null;
 
   // Nível mais alto entre os violados = o que o preço atingiu primeiro na queda
-  breached.sort((a, b) => b.level - a.level);
-  const hit = breached[0];
+  qualified.sort((a, b) => b.level - a.level);
+  const hit = qualified[0];
   return {
     exit: true,
     reason: hit.reason,
@@ -680,6 +926,7 @@ module.exports = {
   entryRsiPathActive,
   entryMaPathActive,
   computeAdaptiveDips,
+  computeMaFilterTimeStats,
   buildMaSnapshot,
   evaluateEntry,
   resolveEntrySignal,
@@ -687,6 +934,7 @@ module.exports = {
   diagnoseEntry,
   stopLossFixedActive,
   stopLossAdaptiveActive,
+  stopLossPctCapActive,
   stopLossAnyActive,
   evaluateExit,
   getStopLossMa,
@@ -694,9 +942,16 @@ module.exports = {
   getEntryDiscount,
   shouldUseImmediateEntry,
   MA_ENTRY_DEFAULT_DISCOUNT,
+  MAX_STOP_LOSS_PCT,
+  capStopLossDipPct,
+  entryStopFloor,
+  applyEntryStopCap,
   isStopLossExit,
   checkStopLossHits,
   checkRsi,
+  checkMaFilters,
+  resolveActiveMaFilters,
+  maFiltersEnabledFor,
   checkExtension,
   analyzeExtension,
   getExtensionIntervals,

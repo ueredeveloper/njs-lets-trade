@@ -11,12 +11,12 @@ const ti   = require('technicalindicators');
 const { fetchBinanceCandles, fetchGateCandles } = require('../prices');
 const { toGateSymbol } = require('../../utils/toGateSymbol');
 const {
-  getRequiredSpecs, computeAdaptiveDips, diagnoseEntry, evaluateExit,
+  getRequiredSpecs, computeAdaptiveDips, computeMaFilterTimeStats, diagnoseEntry, evaluateExit,
   getStopLossMa, isStopLossExit, checkRsi, maKey,
   getEntryScanInterval, entryRsiPathActive, entryMaPathActive, resolveEntrySignal,
-  getEntryDiscount, shouldUseImmediateEntry,
+  getEntryDiscount, shouldUseImmediateEntry, resolveActiveMaFilters,
 } = require('./strategyEngine');
-const { buildExitReasonDetail, inferRuleId } = require('./exitReasonFormat');
+const { buildExitReasonDetail, buildPendingCancelDetail, inferRuleId } = require('./exitReasonFormat');
 
 const DATA_DIR = path.join(__dirname, '../../data/candlestick');
 const LIMIT    = 1000;
@@ -25,6 +25,9 @@ const ENTRY_OUTCOME_LABELS = {
   MA_BLOCKED:            'bloqueado — abaixo MA fixo',
   MA_ADAPTIVE_BLOCKED:   'bloqueado — abaixo piso adaptativo',
   MA_NO_DATA:            'bloqueado — sem dados MA',
+  ABOVE_MA_NOT_MET:      'bloqueado — candles abaixo da MA',
+  ABOVE_MA_INSUFFICIENT_DATA: 'bloqueado — histórico insuficiente',
+  ABOVE_MA_NO_DATA:      'bloqueado — sem dados candles acima MA',
   THREE_CANDLES_BLOCKED: 'bloqueado — extensão sem 3/4 velas',
   PENDING:               'pendente (aguardando desconto)',
   PENDING_OPEN:          'pendente ao fim do período',
@@ -32,6 +35,7 @@ const ENTRY_OUTCOME_LABELS = {
   POSITION_OPEN:         'comprado — posição aberta',
   STOP_LOSS_MA:          'comprado — stop MA',
   STOP_LOSS_ADAPTIVE:    'comprado — stop adaptativo',
+  STOP_LOSS_PCT_CAP:     'comprado — stop −5% entrada',
   SOLD_RSI:              'vendido — RSI saída',
   CANCELLED_EXIT_RSI:    'cancelado — RSI saída',
   CANCELLED_RECOVERY:    'cancelado — preço subiu',
@@ -160,7 +164,7 @@ function maSnapAt(cMap, config, openTime) {
     const series = computeMaSeries(candles, period);
     snap[key] = { ma: maAt(series, openTime), candles, period, interval };
   };
-  for (const f of config.maFilters ?? []) {
+  for (const f of resolveActiveMaFilters(config)) {
     add(maKey(f.period, f.interval), f.period, f.interval);
   }
   if (config.extension?.enabled) {
@@ -177,13 +181,14 @@ function maSnapAt(cMap, config, openTime) {
   return snap;
 }
 
-function backtestPeriodLabel(candles) {
+function backtestPeriodLabel(candles, interval = null) {
   if (!candles?.length) return null;
   const from  = candles[0].openTime;
   const to    = candles[candles.length - 1].openTime;
   const days  = (to - from) / 86_400_000;
   return {
     from, to,
+    interval,
     daysLbl: days >= 1 ? `~${Math.round(days)} dias` : '<1 dia',
     count: candles.length,
   };
@@ -268,15 +273,41 @@ function reconcileEntryLog(entryLog, signals) {
     if (sig.pnlPct != null) row.pnlPct = sig.pnlPct;
     if (sig.exitDetail) row.exitDetail = sig.exitDetail;
     if (sig.ruleId) row.ruleId = sig.ruleId;
+    if (sig.cancelDetail) row.cancelDetail = sig.cancelDetail;
+    if (sig.cancelTime) row.cancelTime = sig.cancelTime;
   }
+}
+
+function buildEntryOutcomeLabel(e) {
+  if (e.cancelDetail?.label) return e.cancelDetail.label;
+  if (e.exitDetail?.label) return e.exitDetail.label;
+  const failed = (e.maChecks ?? []).find(m => !m.ok);
+  if (failed) {
+    if (e.outcome === 'MA_NO_DATA' || failed.detail === 'sem dados') {
+      return `bloqueado — sem histórico ${failed.label} (mín. 50 velas no intervalo)`;
+    }
+    if (e.outcome === 'MA_ADAPTIVE_BLOCKED' || failed.mode === 'adapt') {
+      return `bloqueado — abaixo piso adaptativo ${failed.label}`;
+    }
+    if (e.outcome === 'MA_BLOCKED' || failed.mode === 'fixo') {
+      return `bloqueado — abaixo ${failed.label}`;
+    }
+  }
+  return ENTRY_OUTCOME_LABELS[e.outcome] ?? e.outcome ?? '—';
 }
 
 function serializeEntryRow(e) {
   const ruleId = e.ruleId ?? inferRuleId(e.entryKind);
   const exitLabel = e.exitDetail?.label ?? null;
+  const cancelLabel = e.cancelDetail?.label ?? null;
+  const outcomeLabel = cancelLabel ?? exitLabel ?? buildEntryOutcomeLabel(e);
   return {
     time: e.time,
     timeISO: new Date(e.time).toISOString(),
+    cancelTime: e.cancelTime ?? e.cancelDetail?.cancelTime ?? null,
+    cancelTimeISO: e.cancelTime ? new Date(e.cancelTime).toISOString() : (
+      e.cancelDetail?.cancelTime ? new Date(e.cancelDetail.cancelTime).toISOString() : null
+    ),
     rsi: e.rsi != null ? parseFloat(Number(e.rsi).toFixed(2)) : null,
     maPathRsi: e.maPathRsi != null ? parseFloat(Number(e.maPathRsi).toFixed(2)) : null,
     price: e.price,
@@ -287,11 +318,20 @@ function serializeEntryRow(e) {
     entryKindLabel: e.entryKindLabel ?? null,
     outcome: e.outcome,
     exitDetail: e.exitDetail ?? null,
-    outcomeLabel: exitLabel ?? ENTRY_OUTCOME_LABELS[e.outcome] ?? e.outcome ?? '—',
-    outcomeShort: e.exitDetail?.short ?? null,
+    cancelDetail: e.cancelDetail ?? null,
+    outcomeLabel,
+    outcomeShort: e.cancelDetail?.short ?? e.exitDetail?.short ?? (
+      (e.maChecks ?? []).find(m => !m.ok)?.detail ?? null
+    ),
+    outcomeDetail: e.cancelDetail?.detail ?? (
+      (e.maChecks ?? []).find(m => !m.ok)?.detail ?? null
+    ),
     pnlPct: e.pnlPct != null ? parseFloat(e.pnlPct.toFixed(2)) : null,
     maChecks: (e.maChecks ?? []).map(m => ({
-      label: m.label, ok: m.ok,
+      label: m.label,
+      ok: m.ok,
+      mode: m.mode ?? null,
+      detail: m.detail ?? null,
     })),
     extension: e.extension ? {
       extended: e.extension.extended,
@@ -341,9 +381,18 @@ async function runAmapBacktest({ symbol, config, exchange = 'binance', capital =
   const cMap  = cMapIn ?? {};
 
   if (!cMapIn) {
+    const minMaWarmup = Math.max(
+      50,
+      ...(resolveActiveMaFilters(config)).map(f => (f.period ?? 50) + 10),
+    );
     for (const { interval, limit } of specs) {
-      const local = loadLocalCandles(symbol, interval);
-      cMap[interval] = local ?? await fetchCandlesForExchange(exchange, symbol, interval, Math.max(limit, LIMIT));
+      const need = Math.max(limit, LIMIT, minMaWarmup);
+      let candles = loadLocalCandles(symbol, interval);
+      if (!candles?.length || candles.length < need) {
+        const fetched = await fetchCandlesForExchange(exchange, symbol, interval, need);
+        if (!candles?.length || fetched.length > candles.length) candles = fetched;
+      }
+      cMap[interval] = candles;
     }
   }
 
@@ -361,8 +410,9 @@ async function runAmapBacktest({ symbol, config, exchange = 'binance', capital =
     ? computeRsiSeries(entryCandles ?? scanCandles, config.entryRsi.period)
     : computeRsiSeries(exitCandles, config.exitRsi.period);
 
-  const adaptiveDips = computeAdaptiveDips(cMap, config);
-  const startCapital = Number(capital);
+  const adaptiveDips  = computeAdaptiveDips(cMap, config);
+  const maFilterStats = computeMaFilterTimeStats(cMap, config, adaptiveDips);
+  const startCapital  = Number(capital);
 
   let phase = 'WATCHING';
   let buyQty = null, buyUsdt = null;
@@ -376,6 +426,7 @@ async function runAmapBacktest({ symbol, config, exchange = 'binance', capital =
   let lastMaSignalOpenTime = null;
   let buyEntryKind = null;
   let pendingEntryKind = null;
+  let buyPrice = null;
 
   const botOpts = {
     entryDiscount:    config.entryDiscount    ?? 0.001,
@@ -444,6 +495,7 @@ async function runAmapBacktest({ symbol, config, exchange = 'binance', capital =
         });
         buyQty = runningCapital / close; buyUsdt = runningCapital;
         buyEntryKind = entryCheck.entryKind;
+        buyPrice = close;
         phase = 'BOUGHT';
         trades.push({ type: 'BUY', time: openTime, price: close, entryRsi, entryKind: entryCheck.entryKind });
       } else {
@@ -464,7 +516,33 @@ async function runAmapBacktest({ symbol, config, exchange = 'binance', capital =
       if (close > cancelLine || elapsedMs > botOpts.pendingTimeoutMs || exitRsiHit) {
         const reason = exitRsiHit ? 'CANCELLED_EXIT_RSI'
           : close > cancelLine ? 'CANCELLED_RECOVERY' : 'CANCELLED_TIMEOUT';
-        if (pendingSignal) { signals.push({ ...pendingSignal, result: reason }); pendingSignal = null; }
+        const pendingRuleId = inferRuleId(pendingEntryKind ?? pendingSignal?.entryKind);
+        const cancelDetail = buildPendingCancelDetail({
+          reason,
+          ruleId: pendingRuleId,
+          entryKind: pendingEntryKind ?? pendingSignal?.entryKind,
+          pendingSince,
+          cancelTime: openTime,
+          elapsedMs,
+          pendingTimeoutMs: botOpts.pendingTimeoutMs,
+          triggerPrice,
+          limitPrice,
+          cancelLine,
+          closeAtCancel: close,
+          exitRsi,
+          exitRsiConfig: config.exitRsi,
+          exitRsiHit,
+        });
+        if (pendingSignal) {
+          signals.push({
+            ...pendingSignal,
+            result: reason,
+            cancelDetail,
+            cancelTime: openTime,
+            ruleId: pendingRuleId,
+          });
+          pendingSignal = null;
+        }
         phase = 'WATCHING';
         triggerPrice = limitPrice = pendingSince = null;
         pendingEntryKind = null;
@@ -472,6 +550,7 @@ async function runAmapBacktest({ symbol, config, exchange = 'binance', capital =
         openSignalIdx = signals.length;
         signals.push({ ...pendingSignal, buyTime: openTime, buyPrice: close, result: 'BOUGHT' });
         buyEntryKind = pendingEntryKind ?? pendingSignal?.entryKind ?? null;
+        buyPrice = close;
         pendingSignal = null;
         pendingEntryKind = null;
         buyQty = runningCapital / close; buyUsdt = runningCapital;
@@ -483,6 +562,7 @@ async function runAmapBacktest({ symbol, config, exchange = 'binance', capital =
     } else if (phase === 'BOUGHT') {
       const exitEval = evaluateExit({
         close, exitRsi, stopLossMa, maSnap, adaptiveDips, config, entryKind: buyEntryKind,
+        entryPrice: buyPrice,
       });
       if (exitEval.exit) {
         const usdtOut = buyQty * close;
@@ -502,6 +582,7 @@ async function runAmapBacktest({ symbol, config, exchange = 'binance', capital =
           signals[openSignalIdx].ruleId = ruleId;
           if (exitEval.reason === 'stop_loss_ma') signals[openSignalIdx].result = 'STOP_LOSS_MA';
           else if (exitEval.reason === 'stop_loss_adaptive') signals[openSignalIdx].result = 'STOP_LOSS_ADAPTIVE';
+          else if (exitEval.reason === 'stop_loss_pct_cap') signals[openSignalIdx].result = 'STOP_LOSS_PCT_CAP';
           else if (exitEval.reason === 'rsi') signals[openSignalIdx].result = 'SOLD_RSI';
           openSignalIdx = null;
         }
@@ -516,6 +597,7 @@ async function runAmapBacktest({ symbol, config, exchange = 'binance', capital =
         phase = 'WATCHING';
         buyQty = buyUsdt = null;
         buyEntryKind = null;
+        buyPrice = null;
       }
     }
   }
@@ -528,7 +610,7 @@ async function runAmapBacktest({ symbol, config, exchange = 'binance', capital =
   const sells    = trades.filter(t => t.type === 'SELL');
   const wins     = sells.filter(t => t.pnlUsdt >= 0).length;
   const totalPnl = sells.reduce((s, t) => s + t.pnlUsdt, 0);
-  const period   = backtestPeriodLabel(entryCandles);
+  const period   = backtestPeriodLabel(scanCandles ?? entryCandles, scanIv);
 
   return compactBacktestForApi({
     symbol: symbol.toUpperCase(),
@@ -543,6 +625,7 @@ async function runAmapBacktest({ symbol, config, exchange = 'binance', capital =
       stopLoss: formatStopLossLabel(config),
     },
     period,
+    maFilterStats,
     candlesByInterval: Object.fromEntries(
       Object.entries(cMap).map(([iv, arr]) => [iv, arr?.length ?? 0]),
     ),
@@ -558,6 +641,7 @@ async function runAmapBacktest({ symbol, config, exchange = 'binance', capital =
       blockedCount,
       stopMaCount: sells.filter(t => t.exitReason === 'stop_loss_ma').length,
       stopAdaptCount: sells.filter(t => t.exitReason === 'stop_loss_adaptive').length,
+      stopPctCapCount: sells.filter(t => t.exitReason === 'stop_loss_pct_cap').length,
       rsiExitCount: sells.filter(t => t.exitReason === 'rsi').length,
       entrySignals: entryLog.length,
     },

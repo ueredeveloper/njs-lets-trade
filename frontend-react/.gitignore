@@ -8,7 +8,7 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
-dist
+# dist/ é versionado para pull no Termux (bundle sem Vite/Rollup)
 dist-ssr
 *.local
 

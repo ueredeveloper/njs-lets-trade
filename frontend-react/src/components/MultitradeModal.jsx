@@ -1,11 +1,15 @@
 import { useState, useCallback, useEffect } from 'react';
-import { checkMultitradeVolume, suggestMultitradeDiscount, suggestMultitradeAdaptive, suggestMultitradeExtensionAbove, suggestMultitradeExitRsi, suggestMultitradeEntryRsi, suggestMultitradeEntryMa } from '../services/api';
+import { checkMultitradeVolume, suggestMultitradeDiscount, suggestMultitradeAdaptive, suggestMultitradeExitRsi, suggestMultitradeEntryRsi, suggestMultitradeEntryMa } from '../services/api';
 import {
   RSI_INTERVALS, MA_INTERVALS, MA_PERIODS, RSI_PERIODS, MA_MODES,
   RSI_OPERATORS, ENTRY_MA_TRIGGERS,
   ENTRY_DISCOUNT_OPTIONS, VOLUME_OPTIONS, PENDING_TIMEOUT_OPTIONS, POLL_OPTIONS,
   formStateFromEntry, formStateToPayload,
 } from '../constants/tradeConfigSchema';
+import {
+  STRATEGY_IDS, STRATEGY_LABELS, STRATEGY_COLORS,
+  buildDualStrategyState,
+} from '../constants/strategyPresets';
 
 const MT_COLOR      = '#8b5cf6';
 const GATE_COLOR    = '#0068ff';
@@ -108,28 +112,71 @@ function RsiRuleFields({ rsi, onPatch, sel, compact }) {
   );
 }
 
-export default function MultitradeModal({ symbol: initialSymbol, defaultExchange, currentEntry, onConfirm, onRemove, onCancel }) {
-  const isEditing = !!currentEntry;
+export default function MultitradeModal({
+  symbol: initialSymbol,
+  defaultExchange,
+  currentEntries,
+  currentEntry,
+  onConfirm,
+  onRemove,
+  onCancel,
+}) {
+  const entries = currentEntries ?? (currentEntry ? [currentEntry] : []);
+  const isEditing = entries.length > 0;
   const newId = useCallback(() => Date.now() + Math.random(), []);
   const sel = { background: '#1e2130', border: '1px solid #2a2d3a' };
 
-  const [symbol, setSymbol]     = useState(currentEntry?.symbol ?? initialSymbol ?? '');
-  const [exchange, setExchange] = useState(currentEntry?.exchange ?? defaultExchange ?? 'binance');
-  const [capital, setCapital]   = useState(currentEntry?.capital ?? 40);
-  const [form, setForm]         = useState(() => formStateFromEntry(currentEntry));
+  const [dual, setDual] = useState(() => buildDualStrategyState(entries, {
+    symbol: initialSymbol ?? entries[0]?.symbol ?? '',
+    exchange: defaultExchange ?? entries[0]?.exchange ?? 'binance',
+  }));
+  const [activeStrategy, setActiveStrategy] = useState('amap-15m');
   const [activeTab, setActiveTab] = useState('rule1');
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [volCheck, setVolCheck] = useState(null);
   const [volumeWarnOpen, setVolumeWarnOpen] = useState(false);
   const [discountSuggest, setDiscountSuggest] = useState(null);
   const [adaptiveSuggest, setAdaptiveSuggest] = useState({});
-  const [extensionSuggest, setExtensionSuggest] = useState(null);
   const [exitRsiSuggest, setExitRsiSuggest] = useState(null);
   const [exitRsi2Suggest, setExitRsi2Suggest] = useState(null);
   const [entryRsiSuggest, setEntryRsiSuggest] = useState(null);
   const [entryMaSuggest, setEntryMaSuggest] = useState(null);
-  const [copied, setCopied]     = useState(null);
+  const [copied, setCopied] = useState(null);
   const [entryPathError, setEntryPathError] = useState(null);
+
+  const symbol = dual.symbol;
+  const exchange = dual.exchange;
+  const strat = dual.strategies[activeStrategy];
+  const form = strat.form;
+  const capital = strat.capital;
+  const strategyEnabled = strat.enabled;
+
+  const setSymbol = useCallback(v => setDual(prev => ({ ...prev, symbol: v })), []);
+  const setExchange = useCallback(v => setDual(prev => ({ ...prev, exchange: v })), []);
+  const setCapital = useCallback(v => {
+    setDual(prev => ({
+      ...prev,
+      strategies: {
+        ...prev.strategies,
+        [activeStrategy]: { ...prev.strategies[activeStrategy], capital: v },
+      },
+    }));
+  }, [activeStrategy]);
+
+  const patchStrategy = useCallback((sid, updater) => {
+    setDual(prev => ({
+      ...prev,
+      strategies: {
+        ...prev.strategies,
+        [sid]: typeof updater === 'function' ? updater(prev.strategies[sid]) : updater,
+      },
+    }));
+  }, []);
+
+  const setStrategyEnabled = useCallback((sid, enabled) => {
+    patchStrategy(sid, st => ({ ...st, enabled }));
+    setEntryPathError(null);
+  }, [patchStrategy]);
 
   const rule1On = form.rule1?.enabled !== false;
   const rule2On = form.rule2?.enabled === true;
@@ -138,44 +185,82 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
     ? `RSI(${form.rule1.entryRsi.interval}) ${form.rule1.entryRsi.operator ?? '<'} ${form.rule1.entryRsi.value}`
     : '';
   const rule2Summary = rule2On
-    ? `MA${form.rule2.entryMa.period} ${form.rule2.entryMa.interval} (${ENTRY_MA_TRIGGERS.find(t => t.id === form.rule2.entryMa.trigger)?.label ?? 'toque'})`
+    ? `MA${form.rule2.entryMa.period} ${form.rule2.entryMa.interval} · ${form.rule2.entryMa.aboveMaCandles ?? 10} candles acima · ${ENTRY_MA_TRIGGERS.find(t => t.id === form.rule2.entryMa.trigger)?.label ?? 'toque'}`
     : '';
 
+  const rule2TabLabel = rule2On
+    ? `Regra 2 — MA${form.rule2.entryMa.period} ${form.rule2.entryMa.interval}`
+    : 'Regra 2 — MA';
+
+  function patchExitRsiCondition(id, field, value) {
+    patchStrategy(activeStrategy, st => ({
+      ...st,
+      form: {
+        ...st.form,
+        rule2: {
+          ...st.form.rule2,
+          exitRsiConditions: (st.form.rule2.exitRsiConditions ?? []).map(c =>
+            c.id === id ? { ...c, [field]: value } : c),
+        },
+      },
+    }));
+  }
+
   const patch = useCallback((path, value) => {
-    setForm(prev => {
-      const next = { ...prev };
+    setDual(prev => {
+      const sid = activeStrategy;
+      const st = prev.strategies[sid];
+      const nextForm = { ...st.form };
       const keys = path.split('.');
-      let obj = next;
+      let obj = nextForm;
       for (let i = 0; i < keys.length - 1; i++) {
         obj[keys[i]] = { ...obj[keys[i]] };
         obj = obj[keys[i]];
       }
       obj[keys[keys.length - 1]] = value;
-      return next;
+      return {
+        ...prev,
+        strategies: {
+          ...prev.strategies,
+          [sid]: { ...st, form: nextForm },
+        },
+      };
     });
-  }, []);
+  }, [activeStrategy]);
 
   function addMa() {
-    setForm(prev => ({
-      ...prev,
-      rule1: {
-        ...prev.rule1,
-        maConditions: [...prev.rule1.maConditions, { id: newId(), period: 50, interval: '1h', mode: 'strict_above', fixedDipPct: '' }],
+    patchStrategy(activeStrategy, st => ({
+      ...st,
+      form: {
+        ...st.form,
+        rule1: {
+          ...st.form.rule1,
+          maConditions: [...st.form.rule1.maConditions, {
+            id: newId(), period: 50, interval: '1h', mode: 'strict_above', fixedDipPct: '',
+            aboveMaEnabled: false, aboveMaCandles: 10,
+          }],
+        },
       },
     }));
   }
   function removeMa(id) {
-    setForm(prev => ({
-      ...prev,
-      rule1: { ...prev.rule1, maConditions: prev.rule1.maConditions.filter(m => m.id !== id) },
+    patchStrategy(activeStrategy, st => ({
+      ...st,
+      form: {
+        ...st.form,
+        rule1: { ...st.form.rule1, maConditions: st.form.rule1.maConditions.filter(m => m.id !== id) },
+      },
     }));
   }
   function updateMa(id, field, value) {
-    setForm(prev => ({
-      ...prev,
-      rule1: {
-        ...prev.rule1,
-        maConditions: prev.rule1.maConditions.map(m => m.id === id ? { ...m, [field]: value } : m),
+    patchStrategy(activeStrategy, st => ({
+      ...st,
+      form: {
+        ...st.form,
+        rule1: {
+          ...st.form.rule1,
+          maConditions: st.form.rule1.maConditions.map(m => m.id === id ? { ...m, [field]: value } : m),
+        },
       },
     }));
     if (field === 'period' || field === 'interval' || field === 'mode') {
@@ -208,10 +293,51 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
 
   function buildPayload(allowLow = form.volume.allowLowVolume) {
     const sym = symbol.trim().toUpperCase();
-    const payload = formStateToPayload(form, { symbol: sym, exchange, capital: Number(capital) });
+    const payload = formStateToPayload(form, {
+      symbol: sym,
+      exchange,
+      capital: Number(capital),
+      strategyId: activeStrategy,
+      enabled: strategyEnabled,
+      label: `AMAP ${STRATEGY_LABELS[activeStrategy]}`,
+    });
     payload.allowLowVolume = allowLow;
     payload.volume = { ...form.volume, allowLowVolume: allowLow };
     return payload;
+  }
+
+  function buildAllSaves(allowLow) {
+    const sym = symbol.trim().toUpperCase();
+    const saves = [];
+    for (const sid of STRATEGY_IDS) {
+      const st = dual.strategies[sid];
+      if (st.enabled) {
+        const payload = formStateToPayload(st.form, {
+          symbol: sym,
+          exchange,
+          capital: Number(st.capital),
+          strategyId: sid,
+          enabled: true,
+          label: `AMAP ${STRATEGY_LABELS[sid]}`,
+        });
+        payload.allowLowVolume = allowLow ?? st.form.volume.allowLowVolume;
+        payload.volume = { ...st.form.volume, allowLowVolume: payload.allowLowVolume };
+        saves.push({ id: st.id, payload });
+      } else if (st.id) {
+        const payload = formStateToPayload(st.form, {
+          symbol: sym,
+          exchange,
+          capital: Number(st.capital),
+          strategyId: sid,
+          enabled: false,
+          label: `AMAP ${STRATEGY_LABELS[sid]}`,
+        });
+        payload.allowLowVolume = st.form.volume.allowLowVolume;
+        payload.volume = { ...st.form.volume, allowLowVolume: payload.allowLowVolume };
+        saves.push({ id: st.id, payload });
+      }
+    }
+    return saves;
   }
 
   useEffect(() => { setDiscountSuggest(null); }, [symbol, exchange, form.rule1.entryRsi, form.rule1.exitRsi, form.rule1.execution.pendingTimeoutMs]);
@@ -234,8 +360,6 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
       setDiscountSuggest({ error: err.message });
     }
   }
-
-  useEffect(() => { setExtensionSuggest(null); }, [symbol, exchange, form.rule1.entryRsi, form.rule1.exitRsi, form.rule1.extension, form.rule1.maConditions]);
 
   useEffect(() => { setExitRsiSuggest(null); }, [symbol, exchange, form.rule1.entryRsi, form.rule1.exitRsi, form.rule1.maConditions, form.rule1.extension, form.rule1.stopLoss]);
 
@@ -314,6 +438,7 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
   async function handleSuggestExitRsi2() {
     const sym = symbol.trim().toUpperCase();
     if (!sym || !rule2On) return;
+    const cond1 = form.rule2.exitRsiConditions?.[0] ?? form.rule2.exitRsi;
     setExitRsi2Suggest({ loading: true });
     try {
       const em = form.rule2.entryMa;
@@ -321,14 +446,16 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
         symbol: sym,
         exchange,
         entryRsi: { interval: em.interval, period: 14, operator: '<', value: 30 },
-        exitRsi: form.rule2.exitRsi,
+        exitRsi: cond1,
         entryRsiPath: { enabled: false },
         entryMa: { ...em, enabled: true },
         stopLoss: { enabled: false },
         entryPath: 'ma',
       });
       setExitRsi2Suggest(r);
-      if (r.suggestedExitRsi != null) patch('rule2.exitRsi.value', r.suggestedExitRsi);
+      if (r.suggestedExitRsi != null && cond1?.id != null) {
+        patchExitRsiCondition(cond1.id, 'value', r.suggestedExitRsi);
+      }
     } catch (err) {
       setExitRsi2Suggest({ error: err.message });
     }
@@ -345,27 +472,6 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
             : `${suggest.tradeCount} trades · pico mediano ${suggest.medianPeakRsi} (média ${suggest.avgPeakRsi}) · atinge 70: ${suggest.hitRate70}% · 75: ${suggest.hitRate75}% · 80: ${suggest.hitRate80}% → sugerido ${suggest.suggestedExitRsi}${suggest.recommendation === 'chega_alto' ? ' (costuma subir alto)' : suggest.recommendation === 'garantir_cedo' ? ' (garantir mais cedo)' : ''}`}
       </p>
     );
-  }
-
-  async function handleSuggestExtensionAbove() {
-    const sym = symbol.trim().toUpperCase();
-    if (!sym || !form.rule1.extension.enabled) return;
-    setExtensionSuggest({ loading: true });
-    try {
-      const r = await suggestMultitradeExtensionAbove({
-        symbol: sym,
-        exchange,
-        entryRsi: form.rule1.entryRsi,
-        exitRsi: form.rule1.exitRsi,
-        extension: form.rule1.extension,
-        maConditions: form.rule1.maConditions,
-        stopLoss: form.rule1.stopLoss,
-      });
-      setExtensionSuggest(r);
-      if (r.suggestedAbovePct != null) patch('rule1.extension.abovePct', r.suggestedAbovePct);
-    } catch (err) {
-      setExtensionSuggest({ error: err.message });
-    }
   }
 
   async function handleSuggestAdaptive(maId) {
@@ -390,10 +496,28 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
 
   function handleConfirm() {
     const sym = symbol.trim().toUpperCase();
-    if (!sym || Number(capital) <= 0) return;
-    if (!rule1On && !rule2On) {
-      setEntryPathError('Ative pelo menos uma regra (1 ou 2).');
+    if (!sym) return;
+    const anyEnabled = STRATEGY_IDS.some(sid => dual.strategies[sid].enabled);
+    if (!anyEnabled) {
+      setEntryPathError('Ative pelo menos uma estratégia (15m ou 1h).');
       return;
+    }
+    for (const sid of STRATEGY_IDS) {
+      const st = dual.strategies[sid];
+      if (st.enabled && Number(st.capital) <= 0) {
+        setEntryPathError(`Capital inválido na estratégia ${STRATEGY_LABELS[sid]}.`);
+        setActiveStrategy(sid);
+        return;
+      }
+      if (st.enabled) {
+        const r1 = st.form.rule1?.enabled !== false;
+        const r2 = st.form.rule2?.enabled === true;
+        if (!r1 && !r2) {
+          setEntryPathError(`Ative regra 1 ou 2 em ${STRATEGY_LABELS[sid]}.`);
+          setActiveStrategy(sid);
+          return;
+        }
+      }
     }
     setEntryPathError(null);
     if (volCheck && !volCheck.loading && volCheck.meetsMin === false && !volumeWarnOpen) {
@@ -401,18 +525,18 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
       return;
     }
     setVolumeWarnOpen(false);
-    onConfirm(buildPayload());
+    onConfirm({ symbol: sym, exchange, saves: buildAllSaves() });
   }
 
   function handleConfirmDespiteVolume() {
     setVolumeWarnOpen(false);
-    onConfirm(buildPayload(true));
+    onConfirm({ symbol: symbol.trim().toUpperCase(), exchange, saves: buildAllSaves(true) });
   }
 
   const payload = buildPayload();
   const cmd      = getBacktestCmd(payload);
   const adaptCmd = getAdaptiveTestCmd(payload);
-  const showAdaptive = hasAdaptiveMa(form.rule1.maConditions);
+  const showAdaptive = form.rule1.maFiltersEnabled !== false && hasAdaptiveMa(form.rule1.maConditions);
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto py-4"
@@ -453,19 +577,63 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
                   ))}
                 </div>
               </div>
-
-              <div>
-                <label className="block text-[10px] uppercase tracking-wider text-p5/50 mb-1">Capital (USDT)</label>
-                <input type="number" value={capital} onChange={e => setCapital(e.target.value)} min={1}
-                  className="w-full rounded px-2.5 py-1.5 text-xs text-p5 outline-none font-mono" style={sel} />
-              </div>
             </div>
           </div>
 
-          <div className="flex gap-1 p-1 rounded-lg" style={{ background: '#1a1d28', border: '1px solid #2a2d3a' }}>
+          <div>
+            <SectionHeader label="Estratégias" color={MT_COLOR} />
+            <div className="flex gap-1 p-1 rounded-lg mb-2" style={{ background: '#1a1d28', border: '1px solid #2a2d3a' }}>
+              {STRATEGY_IDS.map(sid => {
+                const st = dual.strategies[sid];
+                const color = STRATEGY_COLORS[sid];
+                return (
+                  <button key={sid} type="button" onClick={() => {
+                    setActiveStrategy(sid);
+                    setDiscountSuggest(null);
+                    setExitRsiSuggest(null);
+                    setExitRsi2Suggest(null);
+                    setEntryRsiSuggest(null);
+                    setEntryMaSuggest(null);
+                  }}
+                    className="flex-1 py-1.5 text-[10px] font-bold rounded transition-colors relative"
+                    style={{
+                      background: activeStrategy === sid ? `${color}22` : 'transparent',
+                      color: activeStrategy === sid ? color : '#94a3b8',
+                      border: `1px solid ${activeStrategy === sid ? color + '55' : 'transparent'}`,
+                      opacity: st.enabled ? 1 : 0.55,
+                    }}>
+                    {STRATEGY_LABELS[sid]}
+                    {st.enabled && (
+                      <span className="absolute top-0.5 right-1 text-[8px]" style={{ color }}>●</span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+            <label className="flex items-center gap-2 cursor-pointer mb-2">
+              <input type="checkbox" checked={strategyEnabled}
+                onChange={e => setStrategyEnabled(activeStrategy, e.target.checked)}
+                className="accent-violet-500" style={{ accentColor: STRATEGY_COLORS[activeStrategy] }} />
+              <span className="text-xs text-p5">
+                Ativar <span className="font-bold" style={{ color: STRATEGY_COLORS[activeStrategy] }}>{STRATEGY_LABELS[activeStrategy]}</span>
+              </span>
+            </label>
+            <div className={strategyEnabled ? '' : 'opacity-40 pointer-events-none'}>
+              <label className="block text-[10px] uppercase tracking-wider text-p5/50 mb-1">
+                Capital desta estratégia (USDT)
+              </label>
+              <input type="number" value={capital} onChange={e => setCapital(e.target.value)} min={1}
+                className="w-full rounded px-2.5 py-1.5 text-xs text-p5 outline-none font-mono mb-1" style={sel} />
+              <p className="text-[9px] text-p5/35">
+                Cada estratégia opera com capital independente no bot ({activeStrategy}).
+              </p>
+            </div>
+          </div>
+
+          <div className={`flex gap-1 p-1 rounded-lg ${strategyEnabled ? '' : 'opacity-40 pointer-events-none'}`} style={{ background: '#1a1d28', border: '1px solid #2a2d3a' }}>
             {[
               { id: 'rule1', label: 'Regra 1 — RSI', color: ENTRY_COLOR },
-              { id: 'rule2', label: 'Regra 2 — MA50 1h', color: MT_COLOR },
+              { id: 'rule2', label: rule2TabLabel, color: MT_COLOR },
             ].map(tab => (
               <button key={tab.id} type="button" onClick={() => setActiveTab(tab.id)}
                 className="flex-1 py-1.5 text-[10px] font-bold rounded transition-colors"
@@ -479,7 +647,7 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
             ))}
           </div>
 
-          {activeTab === 'rule1' && (
+          {activeTab === 'rule1' && strategyEnabled && (
           <RuleGroup
             title="Regra 1 — Entrada RSI e saída"
             subtitle="Filtros MA, extensão, execução e stop — independente da regra 2"
@@ -529,12 +697,26 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
 
             <div>
             <div className="flex items-center justify-between mb-1.5 gap-2">
-              <span className="text-[10px] uppercase tracking-wider font-bold shrink-0" style={{ color: ENTRY_COLOR }}>Filtros MA</span>
+              <label className="flex items-center gap-2 cursor-pointer shrink-0">
+                <input
+                  id="multitrade-modal-ma-filters-enabled"
+                  type="checkbox"
+                  checked={form.rule1.maFiltersEnabled !== false}
+                  onChange={e => patch('rule1.maFiltersEnabled', e.target.checked)}
+                  className="accent-violet-500"
+                />
+                <span className="text-[10px] uppercase tracking-wider font-bold" style={{ color: ENTRY_COLOR }}>Filtros MA</span>
+              </label>
               <div className="flex-1 h-px bg-p2" />
-              <button onClick={addMa} className="text-[10px] px-1.5 py-0.5 rounded font-semibold"
-                style={{ background: '#2a2d3a', color: MT_COLOR, border: `1px solid ${MT_COLOR}44` }}>+ MA</button>
+              <button
+                id="multitrade-modal-btn-add-ma"
+                onClick={addMa}
+                disabled={form.rule1.maFiltersEnabled === false}
+                className="text-[10px] px-1.5 py-0.5 rounded font-semibold disabled:opacity-40"
+                style={{ background: '#2a2d3a', color: MT_COLOR, border: `1px solid ${MT_COLOR}44` }}
+              >+ MA</button>
             </div>
-            <div className="space-y-1.5">
+            <div className={`space-y-1.5 ${form.rule1.maFiltersEnabled === false ? 'opacity-40 pointer-events-none' : ''}`}>
               {form.rule1.maConditions.map(ma => (
                 <div key={ma.id} className="space-y-1">
                   <div className="flex gap-1 items-center">
@@ -553,6 +735,22 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
                     <button onClick={() => removeMa(ma.id)}
                       className="text-p5/30 hover:text-red-400 w-5 h-5 flex items-center justify-center rounded text-sm" style={{ background: '#2a2d3a' }}>×</button>
                   </div>
+                  <label className="flex items-center gap-2 cursor-pointer flex-wrap pl-0.5">
+                    <input
+                      type="checkbox"
+                      checked={ma.aboveMaEnabled === true}
+                      onChange={e => updateMa(ma.id, 'aboveMaEnabled', e.target.checked)}
+                      className="accent-violet-500"
+                    />
+                    <span className="text-[9px] text-p5/50">Exigir</span>
+                    <NumInput
+                      value={ma.aboveMaCandles ?? 10}
+                      onChange={v => updateMa(ma.id, 'aboveMaCandles', v)}
+                      min={1} max={50} className="w-12"
+                      disabled={ma.aboveMaEnabled !== true}
+                    />
+                    <span className="text-[9px] text-p5/50">candles fechados acima da MA</span>
+                  </label>
                   {ma.mode === 'adaptive' && (
                     <div className="pl-1 space-y-1">
                       <div className="flex gap-1 items-center flex-wrap">
@@ -577,7 +775,12 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
                   )}
                 </div>
               ))}
-              {!form.rule1.maConditions.length && <p className="text-[9px] text-p5/35">Nenhum filtro — entrada só por RSI.</p>}
+              {!form.rule1.maConditions.length && form.rule1.maFiltersEnabled !== false && (
+                <p className="text-[9px] text-p5/35">Nenhum filtro — entrada só por RSI.</p>
+              )}
+              {form.rule1.maFiltersEnabled === false && (
+                <p className="text-[9px] text-p5/35">Filtros MA desativados — não bloqueiam entrada (R1 e R2).</p>
+              )}
             </div>
             </div>
 
@@ -600,25 +803,6 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
                     {MA_INTERVALS.map(iv => <option key={iv} value={iv}>{iv}</option>)}
                   </select>
                 </div>
-                <div className="flex gap-1.5 mb-1 items-center flex-wrap">
-                  <span className="text-[10px] text-p5/40">Se preço &gt;</span>
-                  <NumInput value={form.rule1.extension.abovePct} onChange={v => patch('rule1.extension.abovePct', v)} min={0} max={30} step={0.5} />
-                  <span className="text-[10px] text-p5/40">% acima da MA ref.</span>
-                  <button type="button" onClick={handleSuggestExtensionAbove}
-                    disabled={!symbol.trim() || extensionSuggest?.loading}
-                    className="rounded px-2 py-0.5 text-[9px] font-semibold text-violet-300 border border-violet-500/40 hover:bg-violet-500/10 disabled:opacity-40">
-                    {extensionSuggest?.loading ? '…' : 'Sugerir'}
-                  </button>
-                </div>
-                {extensionSuggest && !extensionSuggest.loading && (
-                  <p className="text-[9px] font-mono mb-2 leading-relaxed" style={{ color: extensionSuggest.error ? '#f59e0b' : '#94a3b8' }}>
-                    {extensionSuggest.error
-                      ? extensionSuggest.error
-                      : extensionSuggest.usedDefault
-                        ? `${extensionSuggest.signalCount ?? 0} sinais — mediana +${extensionSuggest.medianStretchPct ?? '—'}% → sugerido ${extensionSuggest.suggestedAbovePct}%`
-                        : `${extensionSuggest.signalsInZone ?? 0} sinais ≥ limiar · benefício líq. ${extensionSuggest.sweepNetBenefit ?? '—'}% → sugerido ${extensionSuggest.suggestedAbovePct}% · agora +${extensionSuggest.aboveNowPct ?? '—'}% ${extensionSuggest.extendedNow ? '(zona 3/4)' : ''}`}
-                  </p>
-                )}
                 <label className="flex items-center gap-2 cursor-pointer mb-1">
                   <input type="checkbox" checked={form.rule1.extension.threeCandles} onChange={e => patch('rule1.extension.threeCandles', e.target.checked)} className="accent-violet-500" />
                   <span className="text-xs text-p5 flex-1">3 candles de alta seguidos</span>
@@ -748,7 +932,8 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
               </span>
             </label>
             {form.rule1.stopLoss.fixedEnabled !== false && (
-              <div id="multitrade-modal-stop-loss-fixed-fields" className="flex gap-1.5 mb-3 ml-6">
+              <div id="multitrade-modal-stop-loss-fixed-fields" className="ml-6 mb-2 space-y-1.5">
+                <div className="flex gap-1.5">
                 <select
                   id="multitrade-modal-stop-loss-period"
                   value={form.rule1.stopLoss.period}
@@ -765,6 +950,24 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
                   style={sel}>
                   {MA_INTERVALS.map(iv => <option key={iv} value={iv}>{iv}</option>)}
                 </select>
+                </div>
+                <label className="flex items-center gap-2 cursor-pointer flex-wrap">
+                  <input
+                    id="multitrade-modal-stop-loss-fixed-above-ma"
+                    type="checkbox"
+                    checked={form.rule1.stopLoss.fixedAboveMaEnabled === true}
+                    onChange={e => patch('rule1.stopLoss.fixedAboveMaEnabled', e.target.checked)}
+                    className="accent-violet-500"
+                  />
+                  <span className="text-[10px] text-p5/70">Exigir</span>
+                  <NumInput
+                    value={form.rule1.stopLoss.fixedAboveMaCandles ?? 10}
+                    onChange={v => patch('rule1.stopLoss.fixedAboveMaCandles', v)}
+                    min={1} max={50} className="w-12"
+                    disabled={form.rule1.stopLoss.fixedAboveMaEnabled !== true}
+                  />
+                  <span className="text-[10px] text-p5/70">candles fechados acima da MA antes do stop</span>
+                </label>
               </div>
             )}
 
@@ -784,7 +987,8 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
               </span>
             </label>
             {form.rule1.stopLoss.adaptiveEnabled !== false && (
-              <div id="multitrade-modal-stop-loss-adaptive-fields" className="flex gap-1.5 mb-3 ml-6">
+              <div id="multitrade-modal-stop-loss-adaptive-fields" className="ml-6 mb-2 space-y-1.5">
+                <div className="flex gap-1.5">
                 <select
                   value={form.rule1.stopLoss.adaptivePeriod ?? 50}
                   onChange={e => patch('rule1.stopLoss.adaptivePeriod', Number(e.target.value))}
@@ -799,21 +1003,54 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
                   style={sel}>
                   {MA_INTERVALS.map(iv => <option key={iv} value={iv}>{iv}</option>)}
                 </select>
+                </div>
+                <label className="flex items-center gap-2 cursor-pointer flex-wrap">
+                  <input
+                    id="multitrade-modal-stop-loss-adaptive-above-ma"
+                    type="checkbox"
+                    checked={form.rule1.stopLoss.adaptiveAboveMaEnabled === true}
+                    onChange={e => patch('rule1.stopLoss.adaptiveAboveMaEnabled', e.target.checked)}
+                    className="accent-violet-500"
+                  />
+                  <span className="text-[10px] text-p5/70">Exigir</span>
+                  <NumInput
+                    value={form.rule1.stopLoss.adaptiveAboveMaCandles ?? 10}
+                    onChange={v => patch('rule1.stopLoss.adaptiveAboveMaCandles', v)}
+                    min={1} max={50} className="w-12"
+                    disabled={form.rule1.stopLoss.adaptiveAboveMaEnabled !== true}
+                  />
+                  <span className="text-[10px] text-p5/70">candles fechados acima da MA antes do piso</span>
+                </label>
               </div>
             )}
             {form.rule1.stopLoss.fixedEnabled === false && form.rule1.stopLoss.adaptiveEnabled === false && (
-              <p id="multitrade-modal-stop-loss-off-warn" className="text-[9px] text-p5/35 ml-6">
-                Stop desligado — saída apenas por RSI.
-              </p>
+              <div id="multitrade-modal-stop-loss-pct-cap" className="ml-6 mb-2">
+                <label className="flex items-start gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    id="multitrade-modal-stop-loss-pct-cap-enabled"
+                    checked={form.rule1.stopLoss.pctCapEnabled !== false}
+                    onChange={e => patch('rule1.stopLoss.pctCapEnabled', e.target.checked)}
+                    className="accent-violet-500 mt-0.5"
+                  />
+                  <span className="text-xs text-p5 leading-snug">
+                    <span className="font-semibold">Limite −{Math.min(Number(form.rule1.stopLoss.maxLossPct ?? 5), 5)}% da entrada</span>
+                    <span className="block text-[9px] text-p5/45">Vende se o preço cair mais que o teto abaixo do preço de compra</span>
+                  </span>
+                </label>
+                {form.rule1.stopLoss.pctCapEnabled === false && (
+                  <p className="text-[9px] text-p5/35 mt-1">Stop desligado — saída apenas por RSI.</p>
+                )}
+              </div>
             )}
             </div>
           </RuleGroup>
           )}
 
-          {activeTab === 'rule2' && (
+          {activeTab === 'rule2' && strategyEnabled && (
           <RuleGroup
-            title="Regra 2 — MA50 1h"
-            subtitle="Cruzamento MA50 1h · Saída RSI 1h &gt; 70 · Stop adaptativo na MA de entrada · posição independente"
+            title="Regra 2 — Entrada MA"
+            subtitle="N candles acima da MA → toque ou cruzamento · Saída RSI (uma ou mais) · Stop adaptativo · posição independente"
             color={MT_COLOR}>
             <label className="flex items-center gap-2 cursor-pointer mb-2">
               <input type="checkbox" checked={rule2On}
@@ -822,7 +1059,7 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
               <span className="text-xs text-p5">Ativar — posição independente (não reentra se PENDING/BOUGHT)</span>
             </label>
             {rule2On && (<>
-            <SectionHeader label="Entrada — cruzamento MA50 1h" color={MT_COLOR} />
+            <SectionHeader label="Entrada — MA configurável" color={MT_COLOR} />
             <div className="grid grid-cols-3 gap-1.5 mb-2">
               <select value={form.rule2.entryMa.period} onChange={e => patch('rule2.entryMa.period', Number(e.target.value))}
                 className="rounded px-1 py-1.5 text-xs text-p5 outline-none font-mono" style={sel}>
@@ -837,8 +1074,23 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
                 {ENTRY_MA_TRIGGERS.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
               </select>
             </div>
+            <div className="flex flex-wrap items-center gap-3 mb-2">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={form.rule2.entryMa.aboveMaEnabled !== false}
+                  onChange={e => patch('rule2.entryMa.aboveMaEnabled', e.target.checked)} className="accent-[#8b5cf6]" />
+                <span className="text-[10px] text-p5/60">Exigir candles acima da MA</span>
+              </label>
+              <div className="flex items-center gap-1.5">
+                <span className="text-[9px] text-p5/40">Qtd.</span>
+                <NumInput value={form.rule2.entryMa.aboveMaCandles ?? 10}
+                  onChange={v => patch('rule2.entryMa.aboveMaCandles', v)}
+                  min={1} max={50} step={1} className="w-14"
+                  disabled={form.rule2.entryMa.aboveMaEnabled === false} />
+                <span className="text-[9px] text-p5/35">candles anteriores com close &gt; MA</span>
+              </div>
+            </div>
             <div className="flex items-center gap-2 mb-3">
-              <span className="text-[9px] text-p5/40">Tolerância</span>
+              <span className="text-[9px] text-p5/40">Tolerância (toque)</span>
               <NumInput value={form.rule2.entryMa.tolerancePct} onChange={v => patch('rule2.entryMa.tolerancePct', v)} min={0.1} max={5} step={0.1} className="w-16" />
               <span className="text-[9px] text-p5/35">%</span>
             </div>
@@ -865,30 +1117,58 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
               <span className="text-xs text-p5">Cancela PENDING se RSI de saída for atingido</span>
             </label>
             <p className="text-[9px] text-p5/35 mb-3">
-              RSI({form.rule2.exitRsi.interval}) &gt; {form.rule2.exitRsi.value} — só da regra 2, não usa RSI da regra 1
+              Cancela PENDING se qualquer RSI de saída ativa for atingido (lógica: {form.rule2.exitRsiLogic === 'all' ? 'todas' : 'qualquer'})
             </p>
 
             <SectionHeader label="Saída por RSI (regra 2)" color={EXIT_COLOR} />
-            <div className="grid grid-cols-3 gap-1.5 mb-1">
-              <select value={form.rule2.exitRsi.interval} onChange={e => patch('rule2.exitRsi.interval', e.target.value)}
-                className="rounded px-1 py-1.5 text-xs text-p5 outline-none cursor-pointer" style={sel}>
-                {RSI_INTERVALS.map(iv => <option key={iv} value={iv}>{iv}</option>)}
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-[9px] text-p5/40">Vende quando</span>
+              <select value={form.rule2.exitRsiLogic ?? 'any'} onChange={e => patch('rule2.exitRsiLogic', e.target.value)}
+                className="rounded px-2 py-1 text-[10px] text-p5 outline-none" style={sel}>
+                <option value="any">qualquer condição (OU)</option>
+                <option value="all">todas as condições (E)</option>
               </select>
-              <select value={form.rule2.exitRsi.period} onChange={e => patch('rule2.exitRsi.period', Number(e.target.value))}
-                className="rounded px-1 py-1.5 text-xs text-p5 outline-none font-mono" style={sel}>
-                {RSI_PERIODS.map(p => <option key={p} value={p}>p{p}</option>)}
-              </select>
-              <div className="flex gap-1">
-                <NumInput value={form.rule2.exitRsi.value} onChange={v => patch('rule2.exitRsi.value', v)} min={1} max={99} className="flex-1" />
-                <button type="button" onClick={handleSuggestExitRsi2} disabled={!symbol.trim() || exitRsi2Suggest?.loading}
-                  className="shrink-0 rounded px-1.5 text-[9px] font-semibold text-red-300 border border-red-500/40 hover:bg-red-500/10 disabled:opacity-40">
-                  {exitRsi2Suggest?.loading ? '…' : 'Sugerir'}
-                </button>
+            </div>
+            {(form.rule2.exitRsiConditions ?? []).map((cond, idx) => (
+              <div key={cond.id ?? idx} className="rounded-md p-2 mb-2" style={{ border: '1px solid #2a2d3a', background: '#141720' }}>
+                <label className="flex items-center gap-2 cursor-pointer mb-1.5">
+                  <input type="checkbox" checked={cond.enabled !== false}
+                    onChange={e => patchExitRsiCondition(cond.id, 'enabled', e.target.checked)} className="accent-violet-500" />
+                  <span className="text-[10px] text-p5/50">
+                    Condição {idx + 1}
+                    {cond.enabled !== false && (
+                      <span className="text-p5/35 font-mono ml-1">
+                        RSI({cond.interval}) {cond.operator} {cond.value}
+                      </span>
+                    )}
+                  </span>
+                </label>
+                <div className="grid grid-cols-4 gap-1.5">
+                  <select value={cond.interval} onChange={e => patchExitRsiCondition(cond.id, 'interval', e.target.value)}
+                    className="rounded px-1 py-1.5 text-xs text-p5 outline-none" style={sel}>
+                    {RSI_INTERVALS.map(iv => <option key={iv} value={iv}>{iv}</option>)}
+                  </select>
+                  <select value={cond.period} onChange={e => patchExitRsiCondition(cond.id, 'period', Number(e.target.value))}
+                    className="rounded px-1 py-1.5 text-xs text-p5 outline-none font-mono" style={sel}>
+                    {RSI_PERIODS.map(p => <option key={p} value={p}>p{p}</option>)}
+                  </select>
+                  <select value={cond.operator} onChange={e => patchExitRsiCondition(cond.id, 'operator', e.target.value)}
+                    className="rounded px-1 py-1.5 text-xs text-p5 outline-none text-center" style={sel}>
+                    {RSI_OPERATORS.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
+                  </select>
+                  <NumInput value={cond.value} onChange={v => patchExitRsiCondition(cond.id, 'value', v)} min={1} max={99} />
+                </div>
               </div>
+            ))}
+            <div className="flex gap-1 mb-2">
+              <button type="button" onClick={handleSuggestExitRsi2} disabled={!symbol.trim() || exitRsi2Suggest?.loading}
+                className="rounded px-2 py-1 text-[9px] font-semibold text-red-300 border border-red-500/40 hover:bg-red-500/10 disabled:opacity-40">
+                {exitRsi2Suggest?.loading ? '…' : 'Sugerir RSI (cond. 1)'}
+              </button>
             </div>
             {renderExitRsiSuggest(exitRsi2Suggest)}
             <p className="text-[9px] text-p5/35 mb-2">
-              Vende quando RSI({form.rule2.exitRsi.interval}, {form.rule2.exitRsi.period}) &gt; {form.rule2.exitRsi.value}
+              Ex.: RSI(1h) &gt; 70 e/ou RSI(15m) &gt; 80 — independente da regra 1
             </p>
 
             <SectionHeader label="Stop adaptativo (MA de entrada)" color={EXIT_COLOR} />
@@ -899,6 +1179,25 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
                 Piso = MA{form.rule2.entryMa.period} {form.rule2.entryMa.interval} × (1 − dip% histórico)
               </span>
             </label>
+            {form.rule2.stopLoss.adaptiveEnabled !== false && (
+              <label className="flex items-center gap-2 cursor-pointer flex-wrap mb-2 ml-1">
+                <input
+                  id="multitrade-modal-rule2-stop-above-ma"
+                  type="checkbox"
+                  checked={form.rule2.stopLoss.adaptiveAboveMaEnabled === true}
+                  onChange={e => patch('rule2.stopLoss.adaptiveAboveMaEnabled', e.target.checked)}
+                  className="accent-violet-500"
+                />
+                <span className="text-[10px] text-p5/70">Exigir</span>
+                <NumInput
+                  value={form.rule2.stopLoss.adaptiveAboveMaCandles ?? 10}
+                  onChange={v => patch('rule2.stopLoss.adaptiveAboveMaCandles', v)}
+                  min={1} max={50} className="w-12"
+                  disabled={form.rule2.stopLoss.adaptiveAboveMaEnabled !== true}
+                />
+                <span className="text-[10px] text-p5/70">candles fechados acima da MA antes do stop</span>
+              </label>
+            )}
             <p className="text-[9px] text-p5/35">Stop na mesma MA da entrada — independente da regra 1.</p>
             </>)}
           </RuleGroup>
@@ -951,7 +1250,7 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
                   <label className="block text-[10px] text-p5/40 mb-1">MA adaptativa — dip padrão / máx / mín / episódios</label>
                   <div className="grid grid-cols-4 gap-1">
                     <NumInput value={form.rule1.adaptiveOpts.defaultPct} onChange={v => patch('rule1.adaptiveOpts.defaultPct', v)} min={0} max={20} step={0.5} className="w-full" />
-                    <NumInput value={form.rule1.adaptiveOpts.maxPct} onChange={v => patch('rule1.adaptiveOpts.maxPct', v)} min={0} max={30} step={0.5} className="w-full" />
+                    <NumInput value={form.rule1.adaptiveOpts.maxPct} onChange={v => patch('rule1.adaptiveOpts.maxPct', Math.min(5, v))} min={0} max={5} step={0.5} className="w-full" />
                     <NumInput value={form.rule1.adaptiveOpts.minPct} onChange={v => patch('rule1.adaptiveOpts.minPct', v)} min={0} max={10} step={0.1} className="w-full" />
                     <NumInput value={form.rule1.adaptiveOpts.minEpisodes} onChange={v => patch('rule1.adaptiveOpts.minEpisodes', v)} min={1} max={20} className="w-full" />
                   </div>
@@ -1006,9 +1305,9 @@ export default function MultitradeModal({ symbol: initialSymbol, defaultExchange
           ) : (
             <button onClick={onCancel} className="flex-1 py-1.5 text-xs rounded text-p5/50" style={{ border: '1px solid #2a2d3a' }}>Cancelar</button>
           )}
-          <button onClick={handleConfirm} disabled={!symbol.trim() || Number(capital) <= 0}
+          <button onClick={handleConfirm} disabled={!symbol.trim()}
             className="flex-1 py-1.5 text-xs rounded font-semibold disabled:opacity-40" style={{ background: MT_COLOR, color: '#fff' }}>
-            {isEditing ? 'Atualizar' : 'Confirmar'}
+            {isEditing ? 'Salvar estratégias' : 'Confirmar'}
           </button>
         </div>
       </div>

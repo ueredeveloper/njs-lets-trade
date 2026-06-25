@@ -22,9 +22,24 @@ describe('analyzeExtension — regras 3/4 candles', () => {
   const maValue = 100;
   const closeExtended = 106; // +6% acima da MA
 
-  test('abaixo do limiar de extensão → passa sem checar candles', () => {
+  test('sem confirmação 3/4 → bloqueia (sem limiar % acima da MA)', () => {
     const r = analyzeExtension(103, maValue, [], extension, 10 * H);
-    expect(r.extended).toBe(false);
+    expect(r.extended).toBe(true);
+    expect(r.allowed).toBe(false);
+    expect(r.threeOk).toBe(false);
+  });
+
+  test('regra 3 confirma mesmo com preço só +3% acima da MA', () => {
+    const candles = [
+      candle(1 * H, 100, 101),
+      candle(2 * H, 101, 102),
+      candle(3 * H, 102, 103),
+      candle(4 * H, 103, 104),
+    ];
+    const entryTime = 4 * H + H;
+    const r = analyzeExtension(103, maValue, candles, extension, entryTime);
+    expect(r.extended).toBe(true);
+    expect(r.threeOk).toBe(true);
     expect(r.allowed).toBe(true);
   });
 

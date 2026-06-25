@@ -120,6 +120,7 @@ function getFilterDescription(name, t) {
     if (type === 'Gate')    return 'Favoritos Gate';
     if (type === 'Trade')   return 'Trade Now';
     if (type === 'Ativos')  return 'Trades Ativos';
+    if (type === 'MultiTrade') return 'Multi-Trade';
     return `Favoritos: ${type}`;
   }
 
@@ -188,6 +189,11 @@ function getFilterDescription(name, t) {
   }
 
   if (type === 'm') {
+    if (parts[3] === 'pct') {
+      const period = parts[2];
+      const minPct = parts[4];
+      return t('filter.ma_pct', period, minPct, interval);
+    }
     const period = parts[2];
     const comp   = parts[3] === 'a' ? t('filter.acima') : t('filter.abaixo');
     const candle = parts[4];

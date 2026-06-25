@@ -1,6 +1,6 @@
 'use strict';
 
-const { buildExitReasonDetail, displayExitReason, packExitReasonForDb } = require('../bot/amap/exitReasonFormat');
+const { buildExitReasonDetail, buildPendingCancelDetail, displayExitReason, packExitReasonForDb } = require('../bot/amap/exitReasonFormat');
 
 describe('exitReasonFormat', () => {
   test('stop MA fixa regra 1', () => {
@@ -42,5 +42,23 @@ describe('exitReasonFormat', () => {
     });
     const stored = packExitReasonForDb(d);
     expect(displayExitReason(stored)).toContain('MA50 4h');
+  });
+
+  test('pending cancel timeout com tempo decorrido', () => {
+    const d = buildPendingCancelDetail({
+      reason: 'CANCELLED_TIMEOUT',
+      ruleId: 'rule1',
+      entryKind: 'rsi',
+      pendingSince: 0,
+      cancelTime: 31 * 60_000,
+      elapsedMs: 31 * 60_000,
+      pendingTimeoutMs: 30 * 60_000,
+      triggerPrice: 2095.36,
+      limitPrice: 2093.26,
+    });
+    expect(d.label).toContain('31min');
+    expect(d.label).toContain('30min');
+    expect(d.detail).toContain('2093.26');
+    expect(d.detail).toContain('2095.36');
   });
 });

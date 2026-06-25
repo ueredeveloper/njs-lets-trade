@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useCurrency } from '../contexts/CurrencyContext';
-import { fetchCandlesAndIndicators, fetchIndicatorSearch, fetchMaFilter, fetchMarketCapFilter, fetchUserPrefs, saveUserPrefs } from '../services/api';
+import { fetchCandlesAndIndicators, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMarketCapFilter, fetchUserPrefs, saveUserPrefs } from '../services/api';
 import { useI18n } from '../i18n';
 import {
   createRsiFilter,
@@ -36,6 +36,7 @@ const DEFAULT_INDICATORS = [
   { type: 'marketCap', intervals: [], metric: 'dilution', preset: 'baixo' },
   { type: 'movingAverage', intervals: ['1h', '4h'], length: '50', compare: 'above', candle: 'close' },
   { type: 'movingAverage', intervals: ['1h', '4h'], length: '50', compare: 'bellow', candle: 'close' },
+  { type: 'maTimeAbove', intervals: ['15m', '1h', '4h'], period: '50', minPct: '70' },
 ];
 
 /** Gera um resumo legível da configuração do indicador */
@@ -67,6 +68,11 @@ function buildSummary(value, t) {
     const cmp = (value.compare ?? 'above') === 'above' ? t('sum.above_short') : t('sum.bellow_short');
     const cdl = value.candle ?? 'close';
     return t('sum.ma', len, cmp, cdl, ivLabel);
+  }
+  if (type === 'maTimeAbove') {
+    const pct = value.minPct ?? '70';
+    const per = value.period ?? '50';
+    return t('sum.ma_time_above', per, pct, ivLabel);
   }
   return null;
 }
@@ -119,11 +125,12 @@ function IndicatorRow({ value, onChange }) {
             <option value="">{t('ind.placeholder')}</option>
             <option value="ichimokuCloud">{t('ind.ichimoku')}</option>
             <option value="movingAverage">{t('ind.ma')}</option>
+            <option value="maTimeAbove">{t('ind.ma_time_above')}</option>
             <option value="relativeStrengthIndex">{t('ind.rsi')}</option>
             <option value="marketCap">{t('ind.marketcap')}</option>
           </select>
-          {type && t(`ind.desc.${type === 'relativeStrengthIndex' ? 'rsi' : type === 'ichimokuCloud' ? 'ichimoku' : type === 'movingAverage' ? 'ma' : 'marketcap'}`) !== `ind.desc.${type}` && (
-            <HelpIcon text={t(`ind.desc.${type === 'relativeStrengthIndex' ? 'rsi' : type === 'ichimokuCloud' ? 'ichimoku' : type === 'movingAverage' ? 'ma' : 'marketcap'}`)} />
+          {type && t(`ind.desc.${type === 'relativeStrengthIndex' ? 'rsi' : type === 'ichimokuCloud' ? 'ichimoku' : type === 'movingAverage' ? 'ma' : type === 'maTimeAbove' ? 'ma_time_above' : 'marketcap'}`) !== `ind.desc.${type}` && (
+            <HelpIcon text={t(`ind.desc.${type === 'relativeStrengthIndex' ? 'rsi' : type === 'ichimokuCloud' ? 'ichimoku' : type === 'movingAverage' ? 'ma' : type === 'maTimeAbove' ? 'ma_time_above' : 'marketcap'}`)} />
           )}
         </div>
 
@@ -219,6 +226,27 @@ function IndicatorRow({ value, onChange }) {
               <option value="high">{t('ichi.high')}</option>
               <option value="close">{t('ichi.close')}</option>
               <option value="low">{t('ichi.low')}</option>
+            </select>
+          </>
+        )}
+
+        {type === 'maTimeAbove' && (
+          <>
+            <select
+              className={sel}
+              value={value.period ?? '50'}
+              onChange={(e) => onChange({ ...value, period: e.target.value })}
+              title="Período da média móvel">
+              <option value="50">MA50</option>
+            </select>
+            <select
+              className={sel}
+              value={value.minPct ?? '70'}
+              onChange={(e) => onChange({ ...value, minPct: e.target.value })}
+              title="% mínimo do histórico com close acima da MA (igual ao gráfico Binance)">
+              {[30, 40, 50, 60, 70, 80, 90].map(v => (
+                <option key={v} value={String(v)}>≥{v}%</option>
+              ))}
             </select>
           </>
         )}
@@ -350,7 +378,8 @@ export default function IndicatorPanel({ open, onToggle }) {
       const rsiIndicators   = indicators.filter((ind) => ind.type === 'relativeStrengthIndex');
       const mcapIndicators  = indicators.filter((ind) => ind.type === 'marketCap');
       const maIndicators    = indicators.filter((ind) => ind.type === 'movingAverage');
-      const otherIndicators = indicators.filter((ind) => ind.type && ind.type !== 'relativeStrengthIndex' && ind.type !== 'marketCap' && ind.type !== 'movingAverage');
+      const maTimeIndicators = indicators.filter((ind) => ind.type === 'maTimeAbove');
+      const otherIndicators = indicators.filter((ind) => ind.type && ind.type !== 'relativeStrengthIndex' && ind.type !== 'marketCap' && ind.type !== 'movingAverage' && ind.type !== 'maTimeAbove');
 
       // Salva intervalos e análises usadas nas preferências
       const allIntervals = [...new Set(indicators.flatMap(ind => ind.intervals ?? []))];
@@ -391,6 +420,18 @@ export default function IndicatorPanel({ open, onToggle }) {
         const candle  = ind.candle ?? 'close';
         for (const interval of ind.intervals) {
           const filter = await fetchMaFilter({ interval, period: length, compare, candle });
+          addFilter(filter);
+        }
+      }
+
+      // % tempo acima da MA — cache maTimeAboveCache no servidor
+      for (const ind of maTimeIndicators) {
+        const period = ind.period ?? '50';
+        const minPct = ind.minPct ?? '70';
+        for (const interval of ind.intervals) {
+          const filter = await fetchMaTimeAboveFilter({ interval, period, minPct });
+          console.log('[frontend-react] MA tempo acima:', filter.name, '—', filter.list.length, 'moedas',
+            filter.cache ? `(cache: ${filter.cache.cached} frescos, ${filter.cache.computed} calculados)` : '');
           addFilter(filter);
         }
       }

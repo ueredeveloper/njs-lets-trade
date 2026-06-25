@@ -5,9 +5,9 @@ process.on('unhandledRejection', (reason) => {
   console.error('[server] unhandledRejection:', reason);
 });
 
-// Para rodar: `npm start` na raiz do projeto.
-// Isso executa `node start.js`, que sobe este servidor (porta 3000) e o Vite (porta 5173) juntos.
-// Para rodar só o backend: `npm run backend`
+// Para rodar: `npm start` na raiz (Vite+backend no PC; bundle no Termux).
+// Dev com HMR: `npm run start:dev`  |  Só bundle: `npm run start:bundle`
+// Só backend: `npm run backend`
 
 const http = require('http');
 const fs = require('fs');
@@ -21,7 +21,7 @@ const { ichimokuCloudRouter } = require('./technicals-indicators');
 //const {client} = require('./services/fetchClient');
 const {
   fetchCandles, fetchIchimokuCloud, fetchAllCurrencies,
-  fetchSMA, fetchRSI, fetchVWAP, fetch24HsVolume, fetchMarketCapFilter, fetchStablecoins, fetchIndicatorSearch, fetchMaFilter,
+  fetchSMA, fetchRSI, fetchVWAP, fetch24HsVolume, fetchMarketCapFilter, fetchStablecoins, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter,
   fetchRsiOversoldRecovery, fetchReloadCandles,
   fetchGateCurrencies, fetchGatePrefetch, fetchBinanceTrades, fetchGateTrades,
   fetchActiveTrades, stgBotStatus, multitradeService } = require('./services');
@@ -45,6 +45,7 @@ app.use('/services', fetchMarketCapFilter)
 app.use('/services', fetchStablecoins)
 app.use('/services', fetchIndicatorSearch)
 app.use('/services', fetchMaFilter)
+app.use('/services', fetchMaTimeAboveFilter)
 app.use('/services', fetchRsiOversoldRecovery)
 app.use('/services', fetchReloadCandles)
 app.use('/services', fetchGateCurrencies)
@@ -56,16 +57,28 @@ app.use('/services', stgBotStatus)
 app.use('/services', multitradeService)
 app.use('/services/sb', supabaseService)
 
-// Proxy para o frontend (só necessário no modo Parcel legado).
-// No modo Vite, o próprio Vite faz proxy /services → Express, então não é preciso.
+// Frontend: bundle estático (Termux / produção) ou proxy para dev server (Vite / Parcel).
+const BUNDLE_DIR = path.join(__dirname, '../frontend-react/dist');
+const bundleIndex = path.join(BUNDLE_DIR, 'index.html');
+const onTermux = !!process.env.TERMUX_VERSION;
+const serveBundle =
+  fs.existsSync(bundleIndex) &&
+  (process.env.SERVE_BUNDLE === '1' || onTermux);
+
 const FRONTEND_PORT = process.env.FRONTEND_PORT;
-if (FRONTEND_PORT) {
+if (serveBundle) {
+  app.use(express.static(BUNDLE_DIR));
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/services')) return next();
+    res.sendFile(bundleIndex);
+  });
+  console.log(`[frontend] bundle estático em ${BUNDLE_DIR}`);
+} else if (FRONTEND_PORT) {
   const proxy = httpProxy.createProxyServer();
   app.use('/', (req, res) => {
     proxy.web(req, res, { target: `http://localhost:${FRONTEND_PORT}` });
   });
 } else {
-  // Modo React/Vite: redireciona quem acessar o Express diretamente para o Vite
   const VITE_PORT = process.env.VITE_PORT || 5173;
   app.use('/', (req, res) => {
     res.redirect(`http://localhost:${VITE_PORT}${req.path}`);
@@ -98,6 +111,8 @@ async function startServer() {
   const t0 = Date.now();
   console.log('[rsiCache] carregando cache do disco...');
   await rsiCache.loadFromDisk();
+  const maTimeAboveCache = require('./cache/maTimeAboveCache');
+  await maTimeAboveCache.loadFromDisk();
 
   app.listen(PORT, () => {
     const boot = ((Date.now() - t0) / 1000).toFixed(2);
