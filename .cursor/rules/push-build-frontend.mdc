@@ -1,0 +1,29 @@
+---
+description: Antes de push, rebuild do frontend e commit do dist para Termux
+alwaysApply: true
+---
+
+# Push — build do frontend antes
+
+Quando o usuário pedir **push**, **faça o push**, ou equivalente, execute **sempre** este fluxo **antes** de `git push`:
+
+```bash
+npm run build:frontend
+git add frontend-react/dist
+git commit -m "build frontend"
+git push
+```
+
+## Ordem obrigatória
+
+1. `npm run build:frontend` — gera `frontend-react/dist/` atualizado para o Termux
+2. `git add frontend-react/dist`
+3. `git commit -m "build frontend"` — só se houver mudanças no dist (não criar commit vazio)
+4. Demais commits pendentes, se o usuário pediu incluir outras alterações (seguir protocolo git do usuário)
+5. `git push`
+
+## Notas
+
+- No Termux o app usa o bundle versionado; sem este passo o pull não traz UI atualizada.
+- No Windows (PowerShell), encadear com `;` se necessário, não `&&` em shells antigas.
+- Se `build:frontend` falhar (ex.: Rollup no Windows), corrigir ou avisar o usuário — **não** fazer push sem dist válido.
