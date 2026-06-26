@@ -92,7 +92,7 @@ const { getActiveUsdtPairs } = require('./binance/getActiveUsdtPairs');
 
 const RSI_INTERVALS = ['15m', '1h', '4h'];
 const RSI_TICK_MS   = 2 * 60 * 1000; // verifica a cada 2 min; TTL por intervalo decide o que buscar
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.BACKEND_PORT || process.env.SERVER_PORT || 3000;
 
 async function refreshRsiCache() {
   const t0 = Date.now();

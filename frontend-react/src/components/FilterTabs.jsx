@@ -123,6 +123,7 @@ function getFilterDescription(name, t) {
     if (type === 'Trade')   return 'Trade Now';
     if (type === 'Ativos')  return 'Trades Ativos';
     if (type === 'MultiTrade') return 'Multi-Trade';
+    if (type === '5mTrade')    return '5m Trade';
     return `Favoritos: ${type}`;
   }
 

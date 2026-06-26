@@ -1,20 +1,30 @@
-/** Presets AMAP — uma entrada por timeframe (amap-15m, amap-1h). */
+/** Presets AMAP + Swing — múltiplas estratégias por símbolo. */
 import { formStateFromEntry } from './tradeConfigSchema';
+import { swingFormFromEntry, normalizeSwingForm } from './swingConfigSchema';
 
-export const STRATEGY_IDS = ['amap-15m', 'amap-1h'];
+export const AMAP_STRATEGY_IDS = ['amap-15m', 'amap-1h'];
+export const SWING_STRATEGY_IDS = ['swing-rsi-1h', 'swing-ma50-8h'];
+export const STRATEGY_IDS = [...AMAP_STRATEGY_IDS, ...SWING_STRATEGY_IDS];
 
 export const STRATEGY_LABELS = {
-  'amap-15m': '15m Swing',
-  'amap-1h':  '1h Swing',
+  'amap-15m':      'AMAP 15m',
+  'amap-1h':       'AMAP 1h',
+  'swing-rsi-1h':  'RSI 1h',
+  'swing-ma50-8h': 'MA50 8h',
 };
 
 export const STRATEGY_COLORS = {
-  'amap-15m': '#26a69a',
-  'amap-1h':  '#6366f1',
+  'amap-15m':      '#26a69a',
+  'amap-1h':       '#6366f1',
+  'swing-rsi-1h':  '#f59e0b',
+  'swing-ma50-8h': '#ec4899',
 };
 
-/** Payload legado → formState (via formStateFromEntry). */
-const PRESET_PAYLOADS = {
+export function isSwingStrategy(id) {
+  return SWING_STRATEGY_IDS.includes(id);
+}
+
+const AMAP_PRESETS = {
   'amap-15m': {
     label: 'AMAP 15m RSI<30',
     rule1: {
@@ -115,16 +125,46 @@ const PRESET_PAYLOADS = {
   },
 };
 
+const SWING_PRESETS = {
+  'swing-rsi-1h': {
+    label: 'Swing RSI 1h',
+    kind: 'rsi',
+    entryRsi:  { value: 30, period: 14, interval: '1h', operator: '<' },
+    exitRsi:   { value: 75, period: 14, interval: '1h', operator: '>' },
+    entryMaFilter: { enabled: true, period: 50, interval: '8h', mode: 'strict_above' },
+  },
+  'swing-ma50-8h': {
+    label: 'Swing MA50 8h',
+    kind: 'ma',
+    entryMa: {
+      period: 50, interval: '8h', trigger: 'cross_up',
+      tolerancePct: 0.5, aboveMaCandles: 3, aboveMaEnabled: true,
+    },
+    exitRsi: { value: 80, period: 14, interval: '4h', operator: '>' },
+    entryMaFilter: { enabled: false },
+  },
+};
+
 export function presetFormState(strategyId) {
-  return formStateFromEntry(PRESET_PAYLOADS[strategyId] ?? PRESET_PAYLOADS['amap-15m']);
+  if (isSwingStrategy(strategyId)) {
+    return normalizeSwingForm(SWING_PRESETS[strategyId] ?? SWING_PRESETS['swing-rsi-1h']);
+  }
+  return formStateFromEntry(AMAP_PRESETS[strategyId] ?? AMAP_PRESETS['amap-15m']);
 }
 
 export function normalizeStrategyId(id) {
   if (!id || id === 'flex') return 'amap-15m';
-  return STRATEGY_IDS.includes(id) ? id : 'amap-15m';
+  if (STRATEGY_IDS.includes(id)) return id;
+  return 'amap-15m';
 }
 
-/** Monta estado dual a partir de entradas existentes (0–2 rows por símbolo). */
+export function formForEntry(existing, strategyId) {
+  if (existing?.tradeConfig?.kind) return swingFormFromEntry(existing);
+  if (isSwingStrategy(strategyId)) return presetFormState(strategyId);
+  return existing?.tradeConfig ? formStateFromEntry(existing) : presetFormState(strategyId);
+}
+
+/** Monta estado de todas as estratégias a partir de entradas existentes. */
 export function buildDualStrategyState(currentEntries, { symbol, exchange, defaultCapital = 40 } = {}) {
   const byId = {};
   for (const e of currentEntries ?? []) {
@@ -135,12 +175,15 @@ export function buildDualStrategyState(currentEntries, { symbol, exchange, defau
   const strategies = {};
   for (const sid of STRATEGY_IDS) {
     const existing = byId[sid];
+    const defaultEnabled = sid === 'amap-15m' || sid === 'swing-rsi-1h';
     strategies[sid] = {
-      enabled: existing ? (existing.enabled !== false) : sid === 'amap-15m',
+      enabled: existing ? (existing.enabled !== false) : false,
       id: existing?.id ?? null,
       capital: existing?.capital ?? defaultCapital,
-      form: existing?.tradeConfig ? formStateFromEntry(existing) : presetFormState(sid),
+      form: existing ? formForEntry(existing, sid) : presetFormState(sid),
+      isSwing: isSwingStrategy(sid),
     };
+    if (!existing && defaultEnabled) strategies[sid].enabled = false;
   }
 
   return {
@@ -157,4 +200,12 @@ export function getEntriesForSymbol(favorites, symbol) {
 
 export function symbolHasMultitrade(favorites, symbol) {
   return getEntriesForSymbol(favorites, symbol).some(e => e.enabled !== false);
+}
+
+export function strategyBadgeLabel(sid) {
+  if (sid === 'amap-15m') return '15m';
+  if (sid === 'amap-1h') return '1h';
+  if (sid === 'swing-rsi-1h') return 'RSI';
+  if (sid === 'swing-ma50-8h') return 'MA';
+  return sid.slice(0, 4);
 }

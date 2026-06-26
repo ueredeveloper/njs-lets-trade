@@ -8,10 +8,12 @@ import {
 } from '../constants/tradeConfigSchema';
 import {
   STRATEGY_IDS, STRATEGY_LABELS, STRATEGY_COLORS,
-  buildDualStrategyState,
+  buildDualStrategyState, isSwingStrategy,
 } from '../constants/strategyPresets';
+import { swingFormToPayload } from '../constants/swingConfigSchema';
 import { MT_HELP } from '../constants/multitradeHelp';
 import { FieldLabel, FieldHint } from './MultitradeFieldHint';
+import SwingStrategyForm from './SwingStrategyForm';
 
 const MT_COLOR      = '#8b5cf6';
 const GATE_COLOR    = '#0068ff';
@@ -183,8 +185,9 @@ export default function MultitradeModal({
     setEntryPathError(null);
   }, [patchStrategy]);
 
-  const rule1On = form.rule1?.enabled !== false;
-  const rule2On = form.rule2?.enabled === true;
+  const isSwing = isSwingStrategy(activeStrategy);
+  const rule1On = !isSwing && form.rule1?.enabled !== false;
+  const rule2On = !isSwing && form.rule2?.enabled === true;
 
   const entrySummary = rule1On
     ? `RSI(${form.rule1.entryRsi.interval}) ${form.rule1.entryRsi.operator ?? '<'} ${form.rule1.entryRsi.value}`
@@ -279,14 +282,14 @@ export default function MultitradeModal({
     let cancelled = false;
     setVolCheck({ loading: true });
     const timer = setTimeout(() => {
-      checkMultitradeVolume(sym, exchange, form.volume.minVolumeUsdt)
+      checkMultitradeVolume(sym, exchange, form.volume?.minVolumeUsdt ?? 1_000_000)
         .then(data => { if (!cancelled) setVolCheck({ ...data, loading: false }); })
         .catch(err => { if (!cancelled) setVolCheck({ loading: false, error: err.message }); });
     }, 400);
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [symbol, exchange, form.volume.minVolumeUsdt]);
+  }, [symbol, exchange, form.volume?.minVolumeUsdt]);
 
-  useEffect(() => { setVolumeWarnOpen(false); }, [symbol, exchange, form.volume.minVolumeUsdt]);
+  useEffect(() => { setVolumeWarnOpen(false); }, [symbol, exchange, form.volume?.minVolumeUsdt]);
   useEffect(() => { if (volCheck?.meetsMin) patch('volume.allowLowVolume', false); }, [volCheck?.meetsMin, patch]);
 
   function copy(text, key) {
@@ -296,19 +299,38 @@ export default function MultitradeModal({
     }).catch(() => {});
   }
 
-  function buildPayload(allowLow = form.volume.allowLowVolume) {
-    const sym = symbol.trim().toUpperCase();
-    const payload = formStateToPayload(form, {
+  function buildStrategyPayload(st, sid, { sym, enabled, allowLow }) {
+    const volAllow = allowLow ?? st.form.volume?.allowLowVolume;
+    const meta = {
       symbol: sym,
       exchange,
-      capital: Number(capital),
-      strategyId: activeStrategy,
-      enabled: strategyEnabled,
-      label: `AMAP ${STRATEGY_LABELS[activeStrategy]}`,
+      capital: Number(st.capital),
+      strategyId: sid,
+      strategy_id: sid,
+      enabled,
+      label: STRATEGY_LABELS[sid],
+    };
+    if (isSwingStrategy(sid)) {
+      const payload = swingFormToPayload(st.form, meta);
+      payload.volume = { ...st.form.volume, allowLowVolume: volAllow };
+      return payload;
+    }
+    const payload = formStateToPayload(st.form, {
+      ...meta,
+      label: `AMAP ${STRATEGY_LABELS[sid]}`,
     });
-    payload.allowLowVolume = allowLow;
-    payload.volume = { ...form.volume, allowLowVolume: allowLow };
+    payload.allowLowVolume = volAllow;
+    payload.volume = { ...st.form.volume, allowLowVolume: volAllow };
     return payload;
+  }
+
+  function buildPayload(allowLow = form.volume?.allowLowVolume) {
+    const sym = symbol.trim().toUpperCase();
+    return buildStrategyPayload(
+      { form, capital },
+      activeStrategy,
+      { sym, enabled: strategyEnabled, allowLow },
+    );
   }
 
   function buildAllSaves(allowLow) {
@@ -317,35 +339,24 @@ export default function MultitradeModal({
     for (const sid of STRATEGY_IDS) {
       const st = dual.strategies[sid];
       if (st.enabled) {
-        const payload = formStateToPayload(st.form, {
-          symbol: sym,
-          exchange,
-          capital: Number(st.capital),
-          strategyId: sid,
-          enabled: true,
-          label: `AMAP ${STRATEGY_LABELS[sid]}`,
+        saves.push({
+          id: st.id,
+          payload: buildStrategyPayload(st, sid, { sym, enabled: true, allowLow }),
         });
-        payload.allowLowVolume = allowLow ?? st.form.volume.allowLowVolume;
-        payload.volume = { ...st.form.volume, allowLowVolume: payload.allowLowVolume };
-        saves.push({ id: st.id, payload });
       } else if (st.id) {
-        const payload = formStateToPayload(st.form, {
-          symbol: sym,
-          exchange,
-          capital: Number(st.capital),
-          strategyId: sid,
-          enabled: false,
-          label: `AMAP ${STRATEGY_LABELS[sid]}`,
+        saves.push({
+          id: st.id,
+          payload: buildStrategyPayload(st, sid, { sym, enabled: false, allowLow: st.form.volume?.allowLowVolume }),
         });
-        payload.allowLowVolume = st.form.volume.allowLowVolume;
-        payload.volume = { ...st.form.volume, allowLowVolume: payload.allowLowVolume };
-        saves.push({ id: st.id, payload });
       }
     }
     return saves;
   }
 
-  useEffect(() => { setDiscountSuggest(null); }, [symbol, exchange, form.rule1.entryRsi, form.rule1.exitRsi, form.rule1.execution.pendingTimeoutMs]);
+  useEffect(() => {
+    if (isSwing) return;
+    setDiscountSuggest(null);
+  }, [isSwing, symbol, exchange, form.rule1?.entryRsi, form.rule1?.exitRsi, form.rule1?.execution?.pendingTimeoutMs]);
 
   async function handleSuggestDiscount() {
     const sym = symbol.trim().toUpperCase();
@@ -366,11 +377,17 @@ export default function MultitradeModal({
     }
   }
 
-  useEffect(() => { setExitRsiSuggest(null); }, [symbol, exchange, form.rule1.entryRsi, form.rule1.exitRsi, form.rule1.maConditions, form.rule1.extension, form.rule1.stopLoss]);
+  useEffect(() => {
+    if (isSwing) return;
+    setExitRsiSuggest(null);
+  }, [isSwing, symbol, exchange, form.rule1?.entryRsi, form.rule1?.exitRsi, form.rule1?.maConditions, form.rule1?.extension, form.rule1?.stopLoss]);
 
   useEffect(() => { setExitRsi2Suggest(null); }, [symbol, exchange, form.rule2.entryMa, form.rule2.exitRsi, form.rule2.stopLoss]);
 
-  useEffect(() => { setEntryRsiSuggest(null); }, [symbol, exchange, form.rule1.entryRsi, form.rule1.enabled, form.rule1.maConditions, form.rule1.extension, form.rule1.stopLoss]);
+  useEffect(() => {
+    if (isSwing) { setEntryRsiSuggest(null); return; }
+    setEntryRsiSuggest(null);
+  }, [isSwing, symbol, exchange, form.entryRsi, form.rule1?.entryRsi, form.rule1?.enabled, form.rule1?.maConditions, form.rule1?.extension, form.rule1?.stopLoss]);
 
   useEffect(() => { setEntryMaSuggest(null); }, [symbol, exchange, form.rule2.entryMa, form.rule2.exitRsi, form.rule2.stopLoss]);
 
@@ -466,6 +483,51 @@ export default function MultitradeModal({
     }
   }
 
+  async function handleSuggestSwingEntryRsi() {
+    const sym = symbol.trim().toUpperCase();
+    if (!sym || !isSwing) return;
+    setEntryRsiSuggest({ loading: true });
+    try {
+      const r = await suggestMultitradeEntryRsi({
+        symbol: sym,
+        exchange,
+        strategyId: activeStrategy,
+        entryRsi: form.entryRsi,
+        exitRsi: form.exitRsi,
+        entryMaFilter: form.entryMaFilter,
+        kind: form.kind,
+      });
+      setEntryRsiSuggest(r);
+      if (r.entryRsiValue != null) patch('entryRsi.value', r.entryRsiValue);
+    } catch (err) {
+      setEntryRsiSuggest({ error: err.message });
+    }
+  }
+
+  async function handleSuggestSwingExitRsi() {
+    const sym = symbol.trim().toUpperCase();
+    if (!sym || !isSwing) return;
+    setExitRsiSuggest({ loading: true });
+    try {
+      const r = await suggestMultitradeExitRsi({
+        symbol: sym,
+        exchange,
+        strategyId: activeStrategy,
+        entryRsi: form.entryRsi,
+        exitRsi: form.exitRsi,
+        entryMaFilter: form.entryMaFilter,
+        entryMa: form.entryMa,
+        kind: form.kind,
+        entryPath: form.kind === 'ma' ? 'ma' : 'rsi',
+      });
+      setExitRsiSuggest(r);
+      if (r.exitRsiValue != null) patch('exitRsi.value', r.exitRsiValue);
+      else if (r.suggestedExitRsi != null) patch('exitRsi.value', r.suggestedExitRsi);
+    } catch (err) {
+      setExitRsiSuggest({ error: err.message });
+    }
+  }
+
   function renderExitRsiSuggest(suggest) {
     if (!suggest || suggest.loading) return null;
     return (
@@ -504,7 +566,7 @@ export default function MultitradeModal({
     if (!sym) return;
     const anyEnabled = STRATEGY_IDS.some(sid => dual.strategies[sid].enabled);
     if (!anyEnabled) {
-      setEntryPathError('Ative pelo menos uma estratégia (15m ou 1h).');
+      setEntryPathError('Ative pelo menos uma estratégia.');
       return;
     }
     for (const sid of STRATEGY_IDS) {
@@ -514,7 +576,7 @@ export default function MultitradeModal({
         setActiveStrategy(sid);
         return;
       }
-      if (st.enabled) {
+      if (st.enabled && !isSwingStrategy(sid)) {
         const r1 = st.form.rule1?.enabled !== false;
         const r2 = st.form.rule2?.enabled === true;
         if (!r1 && !r2) {
@@ -539,9 +601,11 @@ export default function MultitradeModal({
   }
 
   const payload = buildPayload();
-  const cmd      = getBacktestCmd(payload);
+  const cmd      = isSwing
+    ? `node backend/bot/swing/swing-bot.js --symbol ${symbol.trim().toUpperCase()}`
+    : getBacktestCmd(payload);
   const adaptCmd = getAdaptiveTestCmd(payload);
-  const showAdaptive = form.rule1.maFiltersEnabled !== false && hasAdaptiveMa(form.rule1.maConditions);
+  const showAdaptive = !isSwing && form.rule1?.maFiltersEnabled !== false && hasAdaptiveMa(form.rule1?.maConditions);
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto py-4"
@@ -587,7 +651,7 @@ export default function MultitradeModal({
           </div>
 
           <div>
-            <SectionHeader label="Estratégias" color={MT_COLOR} hint="Duas instâncias AMAP no mesmo par: 15m (mais ágil) e 1h (mais filtrado). Cada uma tem capital, regras e estado no bot separados." />
+            <SectionHeader label="Estratégias" color={MT_COLOR} hint="AMAP (15m/1h) e Swing (RSI 1h / MA50 8h). Cada aba tem capital e estado independentes no bot." />
             <div className="flex gap-1 p-1 rounded-lg mb-2" style={{ background: '#1a1d28', border: '1px solid #2a2d3a' }}>
               {STRATEGY_IDS.map(sid => {
                 const st = dual.strategies[sid];
@@ -637,7 +701,7 @@ export default function MultitradeModal({
           </div>
 
           <div className={`flex gap-1 p-1 rounded-lg ${strategyEnabled ? '' : 'opacity-40 pointer-events-none'}`} style={{ background: '#1a1d28', border: '1px solid #2a2d3a' }}>
-            {[
+            {!isSwing && [
               { id: 'rule1', label: 'Regra 1 — RSI', color: ENTRY_COLOR, hint: MT_HELP.rule1.group },
               { id: 'rule2', label: rule2TabLabel, color: MT_COLOR, hint: MT_HELP.rule2.group },
             ].map(tab => (
@@ -654,7 +718,21 @@ export default function MultitradeModal({
             ))}
           </div>
 
-          {activeTab === 'rule1' && strategyEnabled && (
+          {isSwing && strategyEnabled && (
+            <SwingStrategyForm
+              form={form}
+              patch={patch}
+              strategyId={activeStrategy}
+              symbol={symbol}
+              exchange={exchange}
+              onSuggestEntryRsi={handleSuggestSwingEntryRsi}
+              onSuggestExitRsi={handleSuggestSwingExitRsi}
+              entryRsiSuggest={entryRsiSuggest}
+              exitRsiSuggest={exitRsiSuggest}
+            />
+          )}
+
+          {!isSwing && activeTab === 'rule1' && strategyEnabled && (
           <RuleGroup
             title="Regra 1 — Entrada RSI e saída"
             subtitle={MT_HELP.rule1.group}
@@ -1060,7 +1138,7 @@ export default function MultitradeModal({
           </RuleGroup>
           )}
 
-          {activeTab === 'rule2' && strategyEnabled && (
+          {!isSwing && activeTab === 'rule2' && strategyEnabled && (
           <RuleGroup
             title="Regra 2 — Entrada MA"
             subtitle={MT_HELP.rule2.group}

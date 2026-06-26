@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useCallback, useEffect, useMemo } from 'react';
 import { addFavorite, addTradeFavorite, removeFavorite, fetchActiveTrades, ignoreActiveTrade,
-  fetchMultitradeFavorites, addMultitradeFavorite, updateMultitradeFavorite, removeMultitradeFavorite } from '../services/api';
+  fetchMultitradeFavorites, addMultitradeFavorite, updateMultitradeFavorite, removeMultitradeFavorite,
+  fetchFiveMTradeFavorites, addFiveMTradeFavorite, updateFiveMTradeFavorite, removeFiveMTradeFavorite } from '../services/api';
 import { CHART_VIEW } from '../utils/chartView';
 import {
   ASSET_CATEGORY_KEYS,
@@ -60,6 +61,9 @@ export function CurrencyProvider({ children }) {
 
   // Multitrade favorites: array de entradas com estratégia configurada
   const [multitradeFavorites, setMultitradeFavorites] = useState([]);
+
+  // 5m Trade favorites: bot RSI 5m (five_min_bot_state)
+  const [fiveMTradeFavorites, setFiveMTradeFavorites] = useState([]);
 
   const toggleGateFavorite = useCallback(async (symbol) => {
     const sym = symbol.toUpperCase();
@@ -134,6 +138,32 @@ export function CurrencyProvider({ children }) {
       setMultitradeFavorites(prev => prev.filter(e => e.id !== id));
     } catch (err) {
       console.warn('[CurrencyContext] removeMultitradeEntry:', err.message);
+    }
+  }, []);
+
+  const saveFiveMTradeEntry = useCallback(async ({ id, symbol, exchange, capital, rsiBuy, rsiSell, maFilters }) => {
+    try {
+      if (id) {
+        const entry = await updateFiveMTradeFavorite(id, { exchange, capital, rsiBuy, rsiSell, maFilters });
+        setFiveMTradeFavorites(prev => prev.map(e => e.id === id ? entry : e));
+        return entry;
+      }
+      const entry = await addFiveMTradeFavorite({ symbol, exchange, capital, rsiBuy, rsiSell, maFilters });
+      setFiveMTradeFavorites(prev => [...prev, entry]);
+      return entry;
+    } catch (err) {
+      console.warn('[CurrencyContext] saveFiveMTradeEntry:', err.message);
+      throw err;
+    }
+  }, []);
+
+  const removeFiveMTradeEntry = useCallback(async (id) => {
+    try {
+      await removeFiveMTradeFavorite(id);
+      setFiveMTradeFavorites(prev => prev.filter(e => e.id !== id));
+    } catch (err) {
+      console.warn('[CurrencyContext] removeFiveMTradeEntry:', err.message);
+      throw err;
     }
   }, []);
 
@@ -330,11 +360,23 @@ export function CurrencyProvider({ children }) {
     else removeFilters(['Favoritos|MultiTrade']);
   }, [multitradeFavorites, addFilter, removeFilters]);
 
+  useEffect(() => {
+    const symbols = fiveMTradeFavorites.map(e => e.symbol);
+    if (symbols.length > 0) addFilter({ name: 'Favoritos|5mTrade', list: symbols });
+    else removeFilters(['Favoritos|5mTrade']);
+  }, [fiveMTradeFavorites, addFilter, removeFilters]);
+
   // Carrega multitrade favorites na inicialização
   useEffect(() => {
     fetchMultitradeFavorites()
       .then(list => setMultitradeFavorites(list))
       .catch(err => console.warn('[CurrencyContext] loadMultitradeFavorites:', err.message));
+  }, []);
+
+  useEffect(() => {
+    fetchFiveMTradeFavorites()
+      .then(list => setFiveMTradeFavorites(list))
+      .catch(err => console.warn('[CurrencyContext] loadFiveMTradeFavorites:', err.message));
   }, []);
 
   const getBinanceCurrenciesWithUsdt = useCallback(
@@ -415,6 +457,10 @@ export function CurrencyProvider({ children }) {
         updateMultitradeEntry,
         removeMultitradeEntry,
         saveMultitradeSymbol,
+        fiveMTradeFavorites,
+        setFiveMTradeFavorites,
+        saveFiveMTradeEntry,
+        removeFiveMTradeEntry,
       }}
     >
       {children}

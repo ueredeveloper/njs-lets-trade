@@ -1,11 +1,67 @@
-# WhatsApp — Conexão via Baileys
+# WhatsApp — cliente HTTP (serviço externo na porta 3005)
 
-O bot usa `@whiskeysockets/baileys` para enviar notificações de compra/venda no WhatsApp.
-A sessão é salva em `.baileys_auth/` na raiz do projeto.
+**Este repositório não roda o serviço WhatsApp.** Outro processo deve estar ativo em `http://localhost:3005` (pareamento, sessão, `AUTH_FOLDER`, etc.). Os bots só enviam mensagens via HTTP.
+
+Fluxo: `5min-trade-bot` → `sendWhatsApp()` → `POST http://localhost:3005/messages/send`
 
 ---
 
-## Configuração no `.env`
+## `.env` do bot (cliente)
+
+Copie do serviço WhatsApp apenas o que o bot precisa:
+
+```env
+API_KEY=udveobdc
+WA_OWNER_NUMBER=5561999171222
+```
+
+| Variável | Uso neste projeto |
+|----------|-------------------|
+| `API_KEY` (ou `WHATSAPP_API_KEY`) | Header `X-Api-Key` |
+| `WA_OWNER_NUMBER` (ou `WHATSAPP_NOTIFY_NUMBER`) | Campo `{ to }` |
+| `WHATSAPP_API_URL` | Opcional — padrão `http://localhost:3005` |
+| `WHATSAPP_PORT` | Porta do serviço externo — padrão `3005` |
+
+**Não use `PORT` neste `.env`** — essa variável era do outro projeto e conflitava com o Express. Backend usa `BACKEND_PORT` (padrão `3000`).
+
+Variáveis **ignoradas** aqui (só no serviço WhatsApp): `AUTH_FOLDER`, `AUTO_RECONNECT`, `WEBHOOK_URL`, `LOG_LEVEL`.
+
+---
+
+## Endpoints chamados pelo bot (serviço já rodando)
+
+| Método | Rota | Uso |
+|--------|------|-----|
+| GET | `/status` | Teste de conexão (`test-whatsapp.js`) |
+| POST | `/messages/send` | Compra, venda, PnL (`X-Api-Key` + `{ to, text }`) |
+
+### Testar (serviço WhatsApp já em execução na 3005)
+
+```cmd
+node backend/bot/test-whatsapp.js
+```
+
+### Exemplo manual
+
+```js
+fetch('http://localhost:3005/messages/send', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'X-Api-Key': 'minha-chave-secreta',
+  },
+  body: JSON.stringify({ to: '5561999171222', text: 'Olá!' }),
+});
+```
+
+---
+
+## Modo Baileys (legado)
+
+Sem `WHATSAPP_API_URL`, o bot conecta direto via `@whiskeysockets/baileys`.
+A sessão é salva em `.baileys_auth/` na raiz do projeto.
+
+### Configuração no `.env`
 
 ```env
 WHATSAPP_NOTIFY_NUMBER=5561999171222   # número SEM + e SEM espaços (com DDD e DDI)
@@ -14,7 +70,7 @@ WHATSAPP_PAIRING_CODE=true             # true = código numérico | false = QR c
 
 ---
 
-## Primeira conexão (ou reconexão após logout)
+## Primeira conexão Baileys (ou reconexão após logout)
 
 ### 1. Apagar sessão anterior
 

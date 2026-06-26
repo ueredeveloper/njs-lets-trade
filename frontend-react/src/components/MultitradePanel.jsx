@@ -4,7 +4,7 @@ import MultitradeModal from './MultitradeModal';
 import MultitradeBacktestPanel from './MultitradeBacktestPanel';
 import {
   STRATEGY_IDS, STRATEGY_LABELS, STRATEGY_COLORS,
-  getEntriesForSymbol, normalizeStrategyId,
+  getEntriesForSymbol, normalizeStrategyId, strategyBadgeLabel,
 } from '../constants/strategyPresets';
 
 const MT_COLOR      = '#8b5cf6';
@@ -128,7 +128,7 @@ export default function MultitradePanel() {
                               color: on ? STRATEGY_COLORS[sid] : '#4a4d5a',
                               border: `1px solid ${on ? STRATEGY_COLORS[sid] + '55' : '#3a3d4a'}`,
                             }}>
-                            {sid === 'amap-15m' ? '15m' : '1h'}
+                            {strategyBadgeLabel(sid)}
                           </span>
                         );
                       })}

@@ -19,9 +19,15 @@ const { buildExitRsiReport } = require('../bot/amap/suggestExitRsi');
 const { buildEntryRsiReport } = require('../bot/amap/suggestEntryRsi');
 const { buildEntryMaReport } = require('../bot/amap/suggestEntryMa');
 const { runAmapBacktest } = require('../bot/amap/amapBacktest');
-const { resolveConfigBody, normalizeStrategyId: normStrategyId } = require('../bot/amap/strategyPresets');
+const { resolveConfigBody: amapResolveConfigBody, normalizeStrategyId: amapNormStrategyId } = require('../bot/amap/strategyPresets');
+const {
+  isSwingStrategy, resolveConfigBody: swingResolveConfigBody, buildTradeConfig: buildSwingTradeConfig,
+} = require('../bot/swing/strategyPresets');
+const { toFormState: swingToFormState, normalizeSwingConfig, toAmapSuggestConfig } = require('../bot/swing/tradeConfigSchema');
+const { getRequiredSpecs: getSwingRequiredSpecs } = require('../bot/swing/strategyEngine');
 const { toFormState, normalizeTradeConfig, flatConfigToBody, toEngineConfig } = require('../bot/amap/tradeConfigSchema');
 const { fetchBinanceCandles, fetchGateCandles } = require('../bot/prices');
+const fetchKlines = require('../binance/fetchKlines');
 const { toGateSymbol } = require('../utils/toGateSymbol');
 const { fetch24hVolumeUsdt, fmtVolumeUsdt, DEFAULT_MIN_VOLUME_USDT } = require('../bot/volume24h');
 
@@ -64,6 +70,18 @@ function sbError(res, error, context = '') {
     return res.status(500).json({
       error: msg,
       hint: 'Execute supabase/add-trade-config.sql no SQL Editor do Supabase.',
+    });
+  }
+  if (/ma_filters.*schema cache/i.test(msg)) {
+    return res.status(500).json({
+      error: msg,
+      hint: 'Execute supabase/add-five-min-bot-columns.sql no SQL Editor do Supabase.',
+    });
+  }
+  if (/rsi_buy.*schema cache/i.test(msg) || /rsi_sell.*schema cache/i.test(msg)) {
+    return res.status(500).json({
+      error: msg,
+      hint: 'Execute supabase/add-five-min-bot-columns.sql no SQL Editor do Supabase.',
     });
   }
   res.status(500).json({ error: msg });
@@ -242,9 +260,45 @@ router.delete('/favorites/:symbol', getUserId, async (req, res) => {
 //  MULTITRADE FAVORITES  + sync rsi_multi_bot_state
 // ============================================================
 
+function normStrategyId(id) {
+  if (isSwingStrategy(id)) return id;
+  return amapNormStrategyId(id);
+}
+
+function resolveConfigBody(r) {
+  if (isSwingStrategy(r?.strategy_id)) return swingResolveConfigBody(r);
+  return amapResolveConfigBody(r);
+}
+
 function multitradeToEntry(r) {
   const sid = normStrategyId(r.strategy_id);
   const configBody = resolveConfigBody(r);
+
+  if (isSwingStrategy(sid)) {
+    const tc = buildSwingTradeConfig(configBody);
+    const form = swingToFormState(configBody);
+    return {
+      id:           r.id,
+      symbol:       r.symbol,
+      exchange:     r.exchange,
+      strategyId:   sid,
+      enabled:      r.enabled !== false,
+      capital:      Number(r.capital),
+      entryRsi:     form.entryRsi,
+      exitRsi:      form.exitRsi,
+      entryMaFilter: form.entryMaFilter,
+      entryMa:      form.entryMa,
+      stopLoss:     form.stopLoss,
+      execution:    form.execution,
+      polling:      form.polling,
+      volume:       form.volume,
+      tradeConfig:  tc,
+      kind:         form.kind,
+      createdAt:    r.created_at,
+      updatedAt:    r.updated_at,
+    };
+  }
+
   const tc = buildTradeConfig(configBody);
   const form = toFormState(configBody);
 
@@ -283,6 +337,29 @@ function resolveStrategyId(body) {
 function bodyToMultitradeRow(userId, body) {
   const sym = body.symbol?.toUpperCase();
   if (!sym) return null;
+  const sid = resolveStrategyId(body);
+
+  if (isSwingStrategy(sid)) {
+    const normalized = normalizeSwingConfig(body);
+    const trade_config = buildSwingTradeConfig(body);
+    return {
+      user_id:         userId,
+      symbol:          sym,
+      exchange:        body.exchange ?? 'binance',
+      strategy_id:     sid,
+      enabled:         body.enabled !== false,
+      capital:         Number(body.capital ?? 100),
+      entry_rsi:       normalized.entryRsi,
+      exit_rsi:        normalized.exitRsi,
+      ma_conditions:   normalized.entryMaFilter?.enabled
+        ? [{ mode: normalized.entryMaFilter.mode, period: normalized.entryMaFilter.period, interval: normalized.entryMaFilter.interval }]
+        : [],
+      rule_3_candles:  false,
+      rule_4_candles:  false,
+      trade_config,
+    };
+  }
+
   const normalized = normalizeTradeConfig(body);
   const trade_config = buildTradeConfig(body);
   return {
@@ -409,6 +486,311 @@ router.delete('/multitrade-favorites/:id', getUserId, async (req, res) => {
     .eq('phase', 'WATCHING');
 
   res.json({ deleted: req.params.id });
+});
+
+// ============================================================
+//  5m TRADE FAVORITES  (five_min_bot_state — bot RSI 5m + DCA)
+// ============================================================
+
+const {
+  normalizeMaFilters, getRequiredIntervals, candleLimitForInterval,
+} = require('../bot/5min-trade-bot/maFilter');
+
+function fiveMTradeToEntry(r) {
+  return {
+    id:             r.id,
+    symbol:         r.symbol,
+    exchange:       r.exchange ?? 'binance',
+    capital:        Number(r.capital),
+    initialCapital: Number(r.initial_capital ?? r.capital),
+    rsiBuy:         Number(r.rsi_buy  ?? 30),
+    rsiSell:        Number(r.rsi_sell ?? 70),
+    maFilters:      normalizeMaFilters(r.ma_filters),
+    phase:          r.phase ?? 'WATCHING',
+    buyCount:       r.buy_count ?? 0,
+    lastBuyTime:    r.last_buy_time ?? r.buy_time ?? null,
+  };
+}
+
+// GET /services/sb/five-m-trade-favorites
+router.get('/five-m-trade-favorites', getUserId, async (req, res) => {
+  const { data, error } = await supabase
+    .from('five_min_bot_state')
+    .select('*')
+    .order('symbol');
+  if (error) return sbError(res, error, 'GET five-m-trade-favorites');
+  res.json((data ?? []).map(fiveMTradeToEntry));
+});
+
+// POST /services/sb/five-m-trade-favorites  { symbol, exchange?, capital?, rsiBuy?, rsiSell?, maFilters? }
+router.post('/five-m-trade-favorites', getUserId, async (req, res) => {
+  const {
+    symbol, exchange = 'binance', capital = 40, rsiBuy = 30, rsiSell = 70, maFilters,
+  } = req.body;
+  if (!symbol) return res.status(400).json({ error: 'symbol obrigatório' });
+  const sym = symbol.toUpperCase();
+  const cap = Number(capital);
+  const buy  = Number(rsiBuy);
+  const sell = Number(rsiSell);
+  if (!Number.isFinite(cap) || cap <= 0) return res.status(400).json({ error: 'capital inválido' });
+  if (!Number.isFinite(buy) || !Number.isFinite(sell) || buy >= sell) {
+    return res.status(400).json({ error: 'rsiBuy deve ser menor que rsiSell' });
+  }
+
+  const maCfg = maFilters !== undefined ? normalizeMaFilters(maFilters) : undefined;
+
+  const { data: existing } = await supabase
+    .from('five_min_bot_state')
+    .select('id, phase')
+    .eq('symbol', sym)
+    .maybeSingle();
+
+  let data, error;
+  if (existing) {
+    const updates = { exchange, capital: cap, rsi_buy: buy, rsi_sell: sell, updated_at: new Date().toISOString() };
+    if (maCfg !== undefined) updates.ma_filters = maCfg;
+    if (existing.phase === 'WATCHING') updates.initial_capital = cap;
+    ({ data, error } = await supabase
+      .from('five_min_bot_state')
+      .update(updates)
+      .eq('id', existing.id)
+      .select()
+      .single());
+  } else {
+    ({ data, error } = await supabase
+      .from('five_min_bot_state')
+      .insert({
+        symbol:          sym,
+        exchange,
+        capital:         cap,
+        initial_capital: cap,
+        rsi_buy:         buy,
+        rsi_sell:        sell,
+        ma_filters:      maCfg ?? normalizeMaFilters(null),
+        phase:           'WATCHING',
+        buy_count:       0,
+      })
+      .select()
+      .single());
+  }
+
+  if (error) return sbError(res, error, 'POST five-m-trade-favorites');
+  res.json(fiveMTradeToEntry(data));
+});
+
+// PATCH /services/sb/five-m-trade-favorites/:id
+router.patch('/five-m-trade-favorites/:id', getUserId, async (req, res) => {
+  const { exchange, capital, rsiBuy, rsiSell, maFilters } = req.body;
+  const { data: existing, error: findErr } = await supabase
+    .from('five_min_bot_state')
+    .select('*')
+    .eq('id', req.params.id)
+    .single();
+  if (findErr || !existing) return res.status(404).json({ error: 'not found' });
+
+  const updates = { updated_at: new Date().toISOString() };
+  if (exchange !== undefined) updates.exchange = exchange;
+  if (capital !== undefined) {
+    const cap = Number(capital);
+    if (!Number.isFinite(cap) || cap <= 0) return res.status(400).json({ error: 'capital inválido' });
+    updates.capital = cap;
+    if (existing.phase === 'WATCHING') updates.initial_capital = cap;
+  }
+  if (rsiBuy !== undefined)  updates.rsi_buy  = Number(rsiBuy);
+  if (rsiSell !== undefined) updates.rsi_sell = Number(rsiSell);
+  if (maFilters !== undefined) updates.ma_filters = normalizeMaFilters(maFilters);
+  const nextBuy  = updates.rsi_buy  ?? Number(existing.rsi_buy  ?? 30);
+  const nextSell = updates.rsi_sell ?? Number(existing.rsi_sell ?? 70);
+  if (nextBuy >= nextSell) return res.status(400).json({ error: 'rsiBuy deve ser menor que rsiSell' });
+
+  const { data, error } = await supabase
+    .from('five_min_bot_state')
+    .update(updates)
+    .eq('id', req.params.id)
+    .select()
+    .single();
+  if (error) return sbError(res, error, 'PATCH five-m-trade-favorites');
+  res.json(fiveMTradeToEntry(data));
+});
+
+// DELETE /services/sb/five-m-trade-favorites/:id
+router.delete('/five-m-trade-favorites/:id', getUserId, async (req, res) => {
+  const { data: existing, error: findErr } = await supabase
+    .from('five_min_bot_state')
+    .select('phase')
+    .eq('id', req.params.id)
+    .single();
+  if (findErr || !existing) return res.status(404).json({ error: 'not found' });
+  if (existing.phase !== 'WATCHING') {
+    return res.status(400).json({
+      error: 'Moeda com posição aberta (BOUGHT). Aguarde a venda antes de remover.',
+    });
+  }
+
+  const { error } = await supabase
+    .from('five_min_bot_state')
+    .delete()
+    .eq('id', req.params.id);
+  if (error) return sbError(res, error, 'DELETE five-m-trade-favorites');
+  res.json({ deleted: req.params.id });
+});
+
+// GET /services/sb/five-m-trade-suggest-rsi?symbol=&exchange=&entryValue=30&exitValue=70&maFilters={json}
+router.get('/five-m-trade-suggest-rsi', getUserId, async (req, res) => {
+  const symbol = req.query.symbol?.toUpperCase();
+  if (!symbol) return res.status(400).json({ error: 'symbol obrigatório' });
+
+  const exchange   = req.query.exchange ?? 'binance';
+  const entryValue = Number(req.query.entryValue ?? req.query.entry_value ?? 30);
+  const exitValue  = Number(req.query.exitValue  ?? req.query.exit_value  ?? 70);
+
+  let maFilters = null;
+  if (req.query.maFilters) {
+    try {
+      maFilters = JSON.parse(req.query.maFilters);
+    } catch {
+      return res.status(400).json({ error: 'maFilters JSON inválido' });
+    }
+  }
+  const maCfg = normalizeMaFilters(maFilters);
+
+  const { build5mRsiReport, DEFAULT_OPTS } = require('../bot/5min-trade-bot/suggest5mRsi');
+
+  try {
+    const intervals = getRequiredIntervals(maCfg);
+    const cMap = {};
+    const maxPeriod = maCfg.enabled
+      ? Math.max(0, ...maCfg.filters.filter(f => f.enabled).map(f => f.period))
+      : 0;
+
+    for (const interval of intervals) {
+      const base = interval === '5m' ? DEFAULT_OPTS.candleLimit : candleLimitForInterval(interval);
+      cMap[interval] = await fetchCandlesForEval(exchange, symbol, interval, base + maxPeriod + 10);
+    }
+
+    const report = build5mRsiReport(
+      cMap['5m'],
+      { anchorEntry: entryValue, anchorExit: exitValue, maFilters: maCfg },
+      cMap,
+    );
+
+    res.json({
+      symbol,
+      exchange,
+      evaluatedAt: new Date().toISOString(),
+      entryRsiValue: report.entry?.suggestedEntryRsi ?? entryValue,
+      exitRsiValue:  report.exit?.suggestedExitRsi  ?? exitValue,
+      entrySweepSummary: report.entry?.sweep?.map(s => ({
+        value: s.value, episodes: s.episodes, tradeCount: s.tradeCount,
+        avgPnl: s.avgPnl, winRate: s.winRate,
+      })),
+      exitSweepSummary: report.exit?.sweep?.map(s => ({
+        value: s.value, tradeCount: s.tradeCount, hitRatePct: s.hitRatePct,
+        avgPnl: s.avgPnl, winRate: s.winRate,
+      })),
+      ...report,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /services/sb/five-m-trade-suggest-ma-adaptation?symbol=&exchange=&rsiBuy=&rsiSell=&maFilters={json}
+router.get('/five-m-trade-suggest-ma-adaptation', getUserId, async (req, res) => {
+  const symbol = req.query.symbol?.toUpperCase();
+  if (!symbol) return res.status(400).json({ error: 'symbol obrigatório' });
+
+  const exchange = req.query.exchange ?? 'binance';
+  const rsiBuy   = Number(req.query.rsiBuy ?? req.query.rsi_buy ?? 30);
+  const rsiSell  = Number(req.query.rsiSell ?? req.query.rsi_sell ?? 70);
+
+  let maFilters = null;
+  if (req.query.maFilters) {
+    try {
+      maFilters = JSON.parse(req.query.maFilters);
+    } catch {
+      return res.status(400).json({ error: 'maFilters JSON inválido' });
+    }
+  }
+  const maCfg = normalizeMaFilters(maFilters);
+
+  if (!Number.isFinite(rsiBuy) || !Number.isFinite(rsiSell) || rsiBuy >= rsiSell) {
+    return res.status(400).json({ error: 'rsiBuy deve ser menor que rsiSell' });
+  }
+
+  const { buildMaAdaptationReport } = require('../bot/5min-trade-bot/suggestMaAdaptation');
+  const { DEFAULT_OPTS } = require('../bot/5min-trade-bot/suggest5mRsi');
+
+  try {
+    const intervals = getRequiredIntervals(maCfg);
+    const cMap = {};
+    const maxPeriod = maCfg.enabled
+      ? Math.max(0, ...maCfg.filters.filter(f => f.enabled).map(f => f.period))
+      : 0;
+
+    for (const interval of intervals) {
+      const base = interval === '5m' ? DEFAULT_OPTS.candleLimit : candleLimitForInterval(interval);
+      cMap[interval] = await fetchCandlesForEval(exchange, symbol, interval, base + maxPeriod + 10);
+    }
+
+    const report = buildMaAdaptationReport(cMap, {
+      maFilters: maCfg,
+      rsiBuy,
+      rsiSell,
+    });
+
+    res.json({ symbol, exchange, rsiBuy, rsiSell, ...report });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /services/sb/five-m-trade-evaluate — snapshot ao vivo com parâmetros do usuário
+router.post('/five-m-trade-evaluate', getUserId, async (req, res) => {
+  const symbol = req.body?.symbol?.toUpperCase();
+  if (!symbol) return res.status(400).json({ error: 'symbol obrigatório' });
+
+  const exchange    = req.body.exchange ?? 'binance';
+  const rsiBuy      = Number(req.body.rsiBuy ?? 30);
+  const rsiSell     = Number(req.body.rsiSell ?? 70);
+  const maCfg       = normalizeMaFilters(req.body.maFilters);
+  const phase       = req.body.phase === 'BOUGHT' ? 'BOUGHT' : 'WATCHING';
+  const lastBuyTime = req.body.lastBuyTime ?? null;
+  const buyCount    = Number(req.body.buyCount ?? 0);
+
+  if (!Number.isFinite(rsiBuy) || !Number.isFinite(rsiSell) || rsiBuy >= rsiSell) {
+    return res.status(400).json({ error: 'rsiBuy deve ser menor que rsiSell' });
+  }
+
+  const { evaluate5mTradeLive } = require('../bot/5min-trade-bot/evaluate5mTrade');
+
+  try {
+    const intervals = getRequiredIntervals(maCfg);
+    const cMap = {};
+    const maxPeriod = maCfg.enabled
+      ? Math.max(0, ...maCfg.filters.filter(f => f.enabled).map(f => f.period))
+      : 0;
+
+    for (const interval of intervals) {
+      const liveLimit = interval === '5m' ? 80 : Math.min(candleLimitForInterval(interval), 120);
+      cMap[interval] = await fetchCandlesForEval(exchange, symbol, interval, liveLimit + maxPeriod + 10);
+    }
+
+    const report = evaluate5mTradeLive(cMap, {
+      symbol,
+      exchange,
+      rsiBuy,
+      rsiSell,
+      maFilters: maCfg,
+      phase,
+      lastBuyTime,
+      buyCount,
+    });
+
+    res.json(report);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // GET /services/sb/multitrade-trades?symbol=&strategy_id=&limit=50
@@ -617,6 +999,31 @@ router.get('/multitrade-suggest-exit-rsi', getUserId, async (req, res) => {
 });
 
 function parseMultitradeSuggestQuery(query) {
+  const sid = query.strategyId ?? query.strategy_id ?? null;
+  if (isSwingStrategy(sid) || query.kind === 'rsi' || query.kind === 'ma') {
+    const swingBody = {
+      kind: query.kind ?? (sid === 'swing-ma50-8h' ? 'ma' : 'rsi'),
+      entryRsi: {
+        interval: query.entryInterval ?? '1h',
+        period:   Number(query.entryPeriod ?? 14),
+        operator: query.entryOperator ?? '<',
+        value:    Number(query.entryValue ?? 30),
+      },
+      exitRsi: {
+        interval: query.exitInterval ?? '1h',
+        period:   Number(query.exitPeriod ?? 14),
+        operator: query.exitOperator ?? '>',
+        value:    Number(query.exitValue ?? 70),
+      },
+      entryMaFilter: query.entryMaFilter ? JSON.parse(query.entryMaFilter) : {
+        enabled: true, period: 50, interval: '8h', mode: 'strict_above',
+      },
+      entryMa: query.entryMa ? JSON.parse(query.entryMa) : undefined,
+      stopLoss: { enabled: query.stopLossEnabled !== 'false', maxLossPct: 5 },
+    };
+    return toAmapSuggestConfig(normalizeSwingConfig(swingBody));
+  }
+
   return buildTradeConfig({
     entryRsi: {
       interval: query.entryInterval ?? '15m',
@@ -713,9 +1120,17 @@ router.get('/multitrade-suggest-entry-ma', getUserId, async (req, res) => {
 async function fetchCandlesForEval(exchange, symbol, interval, limit) {
   if (exchange === 'gate') {
     const pair = toGateSymbol(symbol);
-    return fetchGateCandles(pair, limit, interval);
+    return fetchGateCandles(pair, Math.min(limit, 1000), interval);
   }
-  return fetchBinanceCandles(symbol, limit, interval);
+  if (limit <= 1000) return fetchBinanceCandles(symbol, limit, interval);
+  const raw = await fetchKlines(symbol, interval, limit);
+  return raw.map(k => ({
+    openTime: Number(k.openTime),
+    open:     parseFloat(k.open),
+    high:     parseFloat(k.high),
+    low:      parseFloat(k.low),
+    close:    parseFloat(k.close),
+  }));
 }
 
 // GET /services/sb/multitrade-backtest?symbol=ARUSDT&exchange=binance&capital=40
