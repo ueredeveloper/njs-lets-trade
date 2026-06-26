@@ -29,11 +29,11 @@ const INTERVAL           = '5m';
 const RSI_PERIOD         = 14;
 const RSI_BUY            = 30;
 const RSI_SELL           = 70;
-const RSI_FAST_THRESHOLD = 68;
+const RSI_FAST_MARGIN    = 4;           // ativa poll rápido quando RSI está a ≤4 do limiar
 const ENTRY_COOLDOWN_MS  = 2 * 60 * 60_000; // 2h entre entradas
 const CANDLE_LIMIT       = 100;
-const POLL_MS            = 60_000;      // 1 min
-const FAST_POLL_MS       = 30_000;      // 30s quando RSI ≥ 68
+const POLL_MS            = 3 * 60_000;  // 3 min
+const FAST_POLL_MS       = 60_000;      // 1 min quando RSI próximo de limiar
 const VOL_MIN_USDT       = 1_000_000;
 const GATE_FEE_RATE      = 0.002;
 
@@ -380,15 +380,18 @@ async function tick(rowId, adapter, log, prevRsi = null) {
   const state = rows?.[0];
   if (!state) { log('❌ Linha não encontrada no Supabase.'); return rsi; }
 
-  const rsiBuy        = Number(state.rsi_buy  ?? RSI_BUY);
-  const rsiSell       = Number(state.rsi_sell ?? RSI_SELL);
-  const fastThreshold = Math.max(rsiSell - 2, rsiBuy + 5);
+  const rsiBuy           = Number(state.rsi_buy  ?? RSI_BUY);
+  const rsiSell          = Number(state.rsi_sell ?? RSI_SELL);
+  const buyFastThreshold  = rsiBuy  + RSI_FAST_MARGIN;
+  const sellFastThreshold = rsiSell - RSI_FAST_MARGIN;
 
   if (prevRsi !== null) {
-    if (rsi >= fastThreshold && prevRsi < fastThreshold)
-      log(`⚡ RSI=${rsi.toFixed(2)} ≥ ${fastThreshold} — poll 30s`);
-    else if (rsi < fastThreshold && prevRsi >= fastThreshold)
-      log(`🔄 RSI=${rsi.toFixed(2)} < ${fastThreshold} — poll 1 min`);
+    const isNearNow  = rsi     <= buyFastThreshold || rsi     >= sellFastThreshold;
+    const wasNearPrev = prevRsi <= buyFastThreshold || prevRsi >= sellFastThreshold;
+    if (isNearNow && !wasNearPrev)
+      log(`⚡ RSI=${rsi.toFixed(2)} próximo de limiar (≤${buyFastThreshold} ou ≥${sellFastThreshold}) — poll 1min`);
+    else if (!isNearNow && wasNearPrev)
+      log(`🔄 RSI=${rsi.toFixed(2)} longe dos limiares — poll 3min`);
   }
 
   const { phase, capital, symbol } = state;
@@ -396,7 +399,9 @@ async function tick(rowId, adapter, log, prevRsi = null) {
   const buyCount        = state.buy_count || 0;
 
   const rsiColor = rsi > rsiSell ? R : rsi < rsiBuy ? G : '';
-  const fastMark = rsi >= fastThreshold ? ' ⚡' : '';
+  const nearBuy  = rsi <= buyFastThreshold;
+  const nearSell = rsi >= sellFastThreshold;
+  const fastMark = (nearBuy || nearSell) ? ' ⚡' : '';
   log(
     `${rsiColor}RSI=${rsi.toFixed(2)}${rsiColor ? X : ''}${fastMark}` +
     `  close=${close.toFixed(6)}` +
@@ -498,12 +503,13 @@ async function startSymbol(row, color) {
   const log     = makeLogger(row.symbol, color);
   const rsiBuy  = Number(row.rsi_buy  ?? RSI_BUY);
   const rsiSell = Number(row.rsi_sell ?? RSI_SELL);
-  const fastThreshold = Math.max(rsiSell - 2, rsiBuy + 5);
+  const buyFastThreshold  = rsiBuy  + RSI_FAST_MARGIN;
+  const sellFastThreshold = rsiSell - RSI_FAST_MARGIN;
 
   log(
     `=== Iniciado | ${adapter.name} | RSI(${RSI_PERIOD},${INTERVAL}) | ` +
     `compra < ${rsiBuy} | venda > ${rsiSell} | DCA cooldown ${ENTRY_COOLDOWN_MS / 3_600_000}h | ` +
-    `poll 1min / 30s (RSI≥${fastThreshold}) | fase: ${row.phase} ===`,
+    `poll 3min / 1min (RSI≤${buyFastThreshold} ou ≥${sellFastThreshold}) | fase: ${row.phase} ===`,
   );
   if (row.phase === 'BOUGHT') {
     log(
@@ -517,8 +523,9 @@ async function startSymbol(row, color) {
   let errCount = 0;
 
   const schedule = () => {
-    const fast  = lastRsi !== null && lastRsi >= fastThreshold;
-    const delay = fast ? FAST_POLL_MS : POLL_MS;
+    const nearBuy  = lastRsi !== null && lastRsi <= buyFastThreshold;
+    const nearSell = lastRsi !== null && lastRsi >= sellFastThreshold;
+    const delay    = (nearBuy || nearSell) ? FAST_POLL_MS : POLL_MS;
     setTimeout(run, delay);
   };
 
