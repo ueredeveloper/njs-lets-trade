@@ -23,6 +23,7 @@ const { fetchBinanceCandles, fetchGateCandles } = require('../prices');
 const { toGateSymbol } = require('../../utils/toGateSymbol');
 const { sendWhatsApp } = require('../whatsapp');
 const { checkMaFiltersLive, describeMaFilters } = require('./maFilter');
+const { computeStopSuggestions } = require('./suggestStopLoss');
 
 // ── Configuração ──────────────────────────────────────────────────────────────
 const INTERVAL           = '5m';
@@ -71,6 +72,26 @@ function formatCooldown(ms) {
   const h = Math.floor(ms / 3_600_000);
   const m = Math.floor((ms % 3_600_000) / 60_000);
   return h > 0 ? `${h}h${m}m` : `${m}m`;
+}
+
+function logStopSuggestions(log, stops) {
+  const { hist, ma } = stops;
+  log(`${'─'.repeat(60)}`);
+  if (hist?.ok) {
+    log(`${Y}🛡️  Stop sugerido (histórico RSI)${X}`);
+    log(`   Preço stop : ${hist.stopPrice}`);
+    log(`   Queda stop : ${hist.stopPct}%  (P75 de ${hist.episodeCount} episódios, média ${hist.avgDropPct}%)`);
+  } else {
+    log(`${Y}🛡️  Stop histórico: indisponível (${hist?.reason ?? '?'})${X}`);
+  }
+  if (ma?.ok) {
+    log(`${Y}🛡️  Stop sugerido (${ma.label} −2%)${X}`);
+    log(`   Preço stop : ${ma.stopPrice}`);
+    log(`   Queda stop : ${ma.stopPct}%  (MA=${ma.maValue}  piso adaptativo=${ma.adaptiveFloor}  dip=${ma.adaptiveDipPct}%)`);
+  } else if (ma?.reason !== 'ma_desabilitado') {
+    log(`${Y}🛡️  Stop MA: indisponível (${ma?.reason ?? '?'})${X}`);
+  }
+  log(`${'─'.repeat(60)}`);
 }
 
 // ── Binance ───────────────────────────────────────────────────────────────────
@@ -354,7 +375,7 @@ async function executeBuy(rowId, adapter, log, state, rsi, capitalPerEntry, isDc
     `USDT+: ${quoteQty.toFixed(4)} (total: ${newUsdt.toFixed(4)})\nRSI(5m): ${rsi.toFixed(2)}`,
   );
 
-  return { newQty, newUsdt, buyCount };
+  return { newQty, newUsdt, buyCount, avgPrice: avgEntry };
 }
 
 function canBuyAgain(lastBuyTime) {
@@ -364,7 +385,7 @@ function canBuyAgain(lastBuyTime) {
 }
 
 // ── Tick ──────────────────────────────────────────────────────────────────────
-async function tick(rowId, adapter, log, prevRsi = null) {
+async function tick(rowId, adapter, log, prevRsi = null, lastStops = null, setStops = null) {
   const candles = await adapter.fetchCandles(CANDLE_LIMIT, INTERVAL);
   const closes  = candles.map(c => c.close);
 
@@ -409,7 +430,9 @@ async function tick(rowId, adapter, log, prevRsi = null) {
     (state.ma_filters?.enabled ? `  ${describeMaFilters(state.ma_filters)}` : '') +
     `  capital/entrada=${capitalPerEntry.toFixed(4)} USDT` +
     `  fase=${phase}` +
-    (phase === 'BOUGHT' ? `  entradas=${buyCount}  qty=${parseFloat(state.buy_qty || 0).toFixed(6)}` : ''),
+    (phase === 'BOUGHT' ? `  entradas=${buyCount}  qty=${parseFloat(state.buy_qty || 0).toFixed(6)}` : '') +
+    (phase === 'BOUGHT' && lastStops?.hist?.ok ? `  🛡️H:${lastStops.hist.stopPrice}(${lastStops.hist.stopPct}%)` : '') +
+    (phase === 'BOUGHT' && lastStops?.ma?.ok   ? `  🛡️MA:${lastStops.ma.stopPrice}(${lastStops.ma.stopPct}%)`   : ''),
   );
 
   // ── WATCHING: primeira entrada ────────────────────────────────────────────
@@ -417,7 +440,12 @@ async function tick(rowId, adapter, log, prevRsi = null) {
     if (rsi >= rsiBuy) return rsi;
     const maCheck = await checkMaFiltersLive(adapter, state.ma_filters, log);
     if (!maCheck.ok) return rsi;
-    await executeBuy(rowId, adapter, log, state, rsi, capitalPerEntry, false, rsiBuy);
+    const buyResult = await executeBuy(rowId, adapter, log, state, rsi, capitalPerEntry, false, rsiBuy);
+    if (buyResult && setStops) {
+      computeStopSuggestions(adapter, state.ma_filters, RSI_PERIOD, rsiBuy, buyResult.avgPrice)
+        .then(stops => { setStops(stops); logStopSuggestions(log, stops); })
+        .catch(err => log(`⚠️  Stop loss: ${err.message}`));
+    }
     return rsi;
   }
 
@@ -490,7 +518,12 @@ async function tick(rowId, adapter, log, prevRsi = null) {
       }
       const maCheck = await checkMaFiltersLive(adapter, state.ma_filters, log);
       if (!maCheck.ok) return rsi;
-      await executeBuy(rowId, adapter, log, state, rsi, capitalPerEntry, true, rsiBuy);
+      const buyResult = await executeBuy(rowId, adapter, log, state, rsi, capitalPerEntry, true, rsiBuy);
+      if (buyResult && setStops) {
+        computeStopSuggestions(adapter, state.ma_filters, RSI_PERIOD, rsiBuy, buyResult.avgPrice)
+          .then(stops => { setStops(stops); logStopSuggestions(log, stops); })
+          .catch(err => log(`⚠️  Stop loss: ${err.message}`));
+      }
     }
   }
 
@@ -519,8 +552,9 @@ async function startSymbol(row, color) {
     );
   }
 
-  let lastRsi  = null;
-  let errCount = 0;
+  let lastRsi   = null;
+  let lastStops = null;
+  let errCount  = 0;
 
   const schedule = () => {
     const nearBuy  = lastRsi !== null && lastRsi <= buyFastThreshold;
@@ -531,7 +565,7 @@ async function startSymbol(row, color) {
 
   const run = async () => {
     try {
-      lastRsi  = await tick(row.id, adapter, log, lastRsi);
+      lastRsi  = await tick(row.id, adapter, log, lastRsi, lastStops, s => { lastStops = s; });
       errCount = 0;
     } catch (err) {
       errCount++;
