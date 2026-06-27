@@ -610,7 +610,7 @@ export default function MultitradeModal({
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto py-4"
       style={{ background: 'rgba(0,0,0,0.72)' }} onClick={onCancel}>
-      <div className="w-[26rem] rounded-lg shadow-2xl border mx-4 my-auto"
+      <div className="w-full max-w-[26rem] rounded-lg shadow-2xl border mx-4 my-auto"
         style={{ background: '#131722', borderColor: '#2a2d3a' }} onClick={e => e.stopPropagation()}>
 
         <div className="flex items-center justify-between px-4 py-3 border-b" style={{ borderColor: '#2a2d3a' }}>

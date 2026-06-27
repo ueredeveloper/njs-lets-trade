@@ -32,12 +32,12 @@ export default function TradeConfigModal({ symbol, isActive, currentConfig, defa
       onClick={onCancel}
     >
       <div
-        className="w-72 rounded-lg shadow-2xl border"
+        className="w-full max-w-xs mx-4 max-h-[90dvh] flex flex-col rounded-lg shadow-2xl border"
         style={{ background: '#131722', borderColor: '#2a2d3a' }}
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b" style={{ borderColor: '#2a2d3a' }}>
+        <div className="flex items-center justify-between px-4 py-3 border-b shrink-0" style={{ borderColor: '#2a2d3a' }}>
           <div>
             <span className="text-xs font-semibold text-p5">Trade Now</span>
             <span className="ml-2 text-xs font-mono font-bold" style={{ color: TRADE_COLOR }}>{symbol}</span>
@@ -46,7 +46,7 @@ export default function TradeConfigModal({ symbol, isActive, currentConfig, defa
         </div>
 
         {/* Body */}
-        <div className="px-4 py-4 space-y-3.5">
+        <div className="px-4 py-4 space-y-3.5 overflow-y-auto flex-1 min-h-0">
           {/* Exchange */}
           <div>
             <label className="block text-[10px] uppercase tracking-wider text-p5/50 mb-1.5">Corretora</label>
@@ -154,7 +154,7 @@ export default function TradeConfigModal({ symbol, isActive, currentConfig, defa
         </div>
 
         {/* Footer */}
-        <div className="flex gap-2 px-4 pb-4">
+        <div className="flex gap-2 px-4 py-3 border-t shrink-0" style={{ borderColor: '#2a2d3a' }}>
           {isActive && (
             <button
               onClick={onRemove}

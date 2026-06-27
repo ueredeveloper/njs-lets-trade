@@ -55,13 +55,13 @@ function fmtPct(v) {
   return `${v >= 0 ? '+' : ''}${v}%`;
 }
 
-function AnalysisAccordion({ id, openId, onToggle, title, subtitle, accent, children }) {
-  const open = openId === id;
+function AnalysisAccordion({ id, openIds, onToggle, title, subtitle, accent, children }) {
+  const open = openIds instanceof Set ? openIds.has(id) : false;
   return (
     <div className="rounded overflow-hidden" style={{ border: '1px solid #2a2d3a' }}>
       <button
         type="button"
-        onClick={() => onToggle(open ? null : id)}
+        onClick={() => onToggle(id)}
         className="w-full flex items-start justify-between gap-2 px-2.5 py-2 text-left hover:bg-white/[0.03] transition-colors"
       >
         <div className="min-w-0 flex-1">
@@ -434,7 +434,14 @@ export default function FiveMTradeModal({
   const [maAdapt, setMaAdapt]         = useState(null);
   const [stopSuggest, setStopSuggest] = useState(null);
   const [suggestCtx, setSuggestCtx]   = useState(null);
-  const [openSection, setOpenSection] = useState(null);
+  const [openSections, setOpenSections] = useState(() => new Set());
+  function toggleSection(id) {
+    setOpenSections(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
   const entryKey = currentEntry?.id != null ? String(currentEntry.id) : `new:${symbol}`;
 
   const inPosition = currentEntry?.phase === 'BOUGHT';
@@ -477,7 +484,11 @@ export default function FiveMTradeModal({
       ]);
       setSuggestCtx({ exchange, rsiBuy: buy, rsiSell: sell, maKey: maFiltersKey(maFilters) });
       setSuggest(r);
-      setStopSuggest(stopR?.error ? null : { ...stopR, rsiBuy: buy });
+      const stopVal = stopR?.error ? null : { ...stopR, rsiBuy: buy };
+      setStopSuggest(stopVal);
+      if (stopVal?.hist?.ok || stopVal?.ma?.ok) {
+        setOpenSections(prev => { const s = new Set(prev); s.add('stop'); return s; });
+      }
       if (maFilters.enabled) {
         setMaAdapt({ loading: true });
         try {
@@ -503,6 +514,7 @@ export default function FiveMTradeModal({
     if (!Number.isFinite(buy) || !Number.isFinite(sell) || buy >= sell) return;
 
     setLiveTest({ loading: true });
+    setOpenSections(prev => { const s = new Set(prev); s.add('live'); return s; });
     try {
       const r = await evaluateFiveMTradeLive({
         symbol,
@@ -566,7 +578,7 @@ export default function FiveMTradeModal({
     setMaAdapt(null);
     setStopSuggest(null);
     setLiveTest(null);
-    setOpenSection(null);
+    setOpenSections(new Set());
 
     let cancelled = false;
     (async () => {
@@ -702,16 +714,16 @@ export default function FiveMTradeModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center"
+      className="fixed inset-0 z-50"
       style={{ background: 'rgba(0,0,0,0.65)' }}
       onClick={onCancel}
     >
       <div
-        className="w-80 max-h-[90vh] overflow-y-auto rounded-lg shadow-2xl border"
+        className="absolute inset-x-4 top-6 bottom-6 max-w-sm mx-auto flex flex-col rounded-lg shadow-2xl border"
         style={{ background: '#131722', borderColor: '#2a2d3a' }}
         onClick={e => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between px-4 py-3 border-b sticky top-0 z-10" style={{ borderColor: '#2a2d3a', background: '#131722' }}>
+        <div className="flex items-center justify-between px-4 py-3 border-b shrink-0" style={{ borderColor: '#2a2d3a' }}>
           <div>
             <span className="text-xs font-semibold text-p5">5m Trade</span>
             <span className="ml-2 text-xs font-mono font-bold" style={{ color: FIVE_M_COLOR }}>{symbol}</span>
@@ -719,20 +731,26 @@ export default function FiveMTradeModal({
           <button onClick={onCancel} className="text-p5/40 hover:text-p5 text-lg leading-none transition-colors">×</button>
         </div>
 
-        <div className="px-4 py-4 space-y-3.5">
-          <div
-            className="rounded px-2.5 py-2 text-[10px] leading-relaxed"
-            style={{ background: '#1e2130', border: '1px solid #2a2d3a', color: '#94a3b8' }}
+        <div className="px-4 py-4 space-y-3.5 overflow-y-auto flex-1 min-h-0">
+          <AnalysisAccordion
+            id="sobre"
+            openIds={openSections}
+            onToggle={toggleSection}
+            title="Sobre a estratégia"
+            subtitle="RSI(14, 5m) · DCA a cada 2h · venda total na saída"
+            accent="#94a3b8"
           >
-            RSI(14, 5m) · DCA a cada 2h · venda total na saída
-            {maFilters.enabled && (
-              <span className="block mt-1 text-cyan-400/80">
-                Entrada só com preço {maFilters.filters.filter(f => f.enabled).map(f =>
-                  `${f.mode === 'below' ? '<' : '>'} MA${f.period} ${f.interval}${f.tolerancePct > 0 ? ` (−${f.tolerancePct}%)` : ''}`,
-                ).join(' · ') || '(nenhum filtro ativo)'}
-              </span>
-            )}
-          </div>
+            <p className="text-[10px] leading-relaxed pt-1" style={{ color: '#94a3b8' }}>
+              RSI(14, 5m) · DCA a cada 2h · venda total na saída
+              {maFilters.enabled && (
+                <span className="block mt-1 text-cyan-400/80">
+                  Entrada só com preço {maFilters.filters.filter(f => f.enabled).map(f =>
+                    `${f.mode === 'below' ? '<' : '>'} MA${f.period} ${f.interval}${f.tolerancePct > 0 ? ` (−${f.tolerancePct}%)` : ''}`,
+                  ).join(' · ') || '(nenhum filtro ativo)'}
+                </span>
+              )}
+            </p>
+          </AnalysisAccordion>
 
           {inPosition && (
             <p className="text-[10px]" style={{ color: '#f59e0b' }}>
@@ -829,11 +847,37 @@ export default function FiveMTradeModal({
             />
           </div>
 
-          <StopLossHint stop={stopSuggest?.loading ? null : stopSuggest} loading={stopSuggest?.loading} />
+          {(stopSuggest?.loading || (stopSuggest && !stopSuggest.loading && (stopSuggest.hist?.ok || stopSuggest.ma?.ok))) && (
+            <AnalysisAccordion
+              id="stop"
+              openIds={openSections}
+              onToggle={toggleSection}
+              title="Stop Loss Sugerido"
+              subtitle={
+                stopSuggest?.loading ? 'Calculando…'
+                : stopSuggest?.hist?.ok && stopSuggest?.ma?.ok
+                  ? `hist −${stopSuggest.hist.stopPct}% · MA −${stopSuggest.ma.stopPct}%`
+                  : stopSuggest?.hist?.ok ? `hist RSI −${stopSuggest.hist.stopPct}%`
+                  : stopSuggest?.ma?.ok ? `${stopSuggest.ma.label} −${stopSuggest.ma.stopPct}%`
+                  : ''
+              }
+              accent={STOP_COLOR}
+            >
+              <StopLossHint stop={stopSuggest?.loading ? null : stopSuggest} loading={stopSuggest?.loading} />
+            </AnalysisAccordion>
+          )}
 
           {/* Filtros MA */}
-          <div>
-            <div className="flex items-center justify-between mb-1.5">
+          <AnalysisAccordion
+            id="ma"
+            openIds={openSections}
+            onToggle={toggleSection}
+            title="Filtros MA"
+            subtitle={maFilters.enabled ? (describeMaFiltersLocal(maFilters) || 'habilitado') : 'desabilitado'}
+            accent={FIVE_M_COLOR}
+          >
+            <div className="pt-2 space-y-2">
+            <div className="flex items-center justify-between">
               <label className="flex items-center gap-2 cursor-pointer">
                 <input
                   type="checkbox"
@@ -842,7 +886,7 @@ export default function FiveMTradeModal({
                   className="accent-cyan-500"
                 />
                 <span className="text-[10px] uppercase tracking-wider text-p5/50">
-                  Filtro MA na entrada
+                  Ativar filtro MA na entrada
                 </span>
               </label>
               {maFilters.enabled && (
@@ -921,7 +965,8 @@ export default function FiveMTradeModal({
                 <p className="text-[9px] text-amber-500/90 mt-1">{maAdapt.error}</p>
               )}
             </div>
-          </div>
+            </div>
+          </AnalysisAccordion>
 
           {rsiInvalid && (
             <p className="text-[10px]" style={{ color: '#ef5350' }}>
@@ -934,7 +979,7 @@ export default function FiveMTradeModal({
               type="button"
               onClick={loadSuggest}
               disabled={suggest?.loading || rsiInvalid}
-              className="flex-1 py-2 text-xs rounded font-bold transition-opacity disabled:opacity-40"
+              className="flex-1 py-1 text-[11px] rounded font-bold transition-opacity disabled:opacity-40"
               style={{ background: needsRecalc ? '#f59e0b' : FIVE_M_COLOR, color: '#000' }}
             >
               {suggest?.loading
@@ -947,7 +992,7 @@ export default function FiveMTradeModal({
               type="button"
               onClick={runLiveTest}
               disabled={liveTest?.loading || rsiInvalid}
-              className="flex-1 py-2 text-xs rounded font-bold transition-opacity disabled:opacity-40"
+              className="flex-1 py-1 text-[11px] rounded font-bold transition-opacity disabled:opacity-40"
               style={{ background: '#2a2d3a', color: '#e2e8f0', border: `1px solid ${FIVE_M_COLOR}66` }}
               title="Testa com candles recentes da exchange e os parâmetros acima"
             >
@@ -955,7 +1000,20 @@ export default function FiveMTradeModal({
             </button>
           </div>
 
-          <LiveTestPanel data={liveTest} />
+          {liveTest && (
+            <AnalysisAccordion
+              id="live"
+              openIds={openSections}
+              onToggle={toggleSection}
+              title="Teste ao Vivo"
+              subtitle={liveTest.loading ? 'Consultando…' : (liveTest.actionLabel ?? liveTest.error ?? '')}
+              accent={liveTest.allowed ? '#26a69a' : '#94a3b8'}
+            >
+              <div className="pt-1">
+                <LiveTestPanel data={liveTest} />
+              </div>
+            </AnalysisAccordion>
+          )}
 
           {needsRecalc && !suggest?.loading && (
             <p className="text-[9px] text-center text-amber-500/90">
@@ -990,8 +1048,8 @@ export default function FiveMTradeModal({
 
               <AnalysisAccordion
                 id="swing"
-                openId={openSection}
-                onToggle={setOpenSection}
+                openIds={openSections}
+                onToggle={toggleSection}
                 title="Padrão de alta %"
                 subtitle={swingSubtitle()}
                 accent="#26a69a"
@@ -1001,8 +1059,8 @@ export default function FiveMTradeModal({
 
               <AnalysisAccordion
                 id="bot"
-                openId={openSection}
-                onToggle={setOpenSection}
+                openIds={openSections}
+                onToggle={toggleSection}
                 title="Simulação bot (DCA 2h)"
                 subtitle={botSubtitle()}
                 accent="#f59e0b"
@@ -1012,8 +1070,8 @@ export default function FiveMTradeModal({
 
               <AnalysisAccordion
                 id="episodes"
-                openId={openSection}
-                onToggle={setOpenSection}
+                openIds={openSections}
+                onToggle={toggleSection}
                 title="Episódios de sobrevenda"
                 subtitle={suggest.entry?.mostFrequentEpisode
                   ? `mais frequente: < ${suggest.entry.mostFrequentEpisode.value} (${suggest.entry.mostFrequentEpisode.episodes}×)`
@@ -1039,8 +1097,8 @@ export default function FiveMTradeModal({
               {suggest.summary && (
                 <AnalysisAccordion
                   id="summary"
-                  openId={openSection}
-                  onToggle={setOpenSection}
+                  openIds={openSections}
+                  onToggle={toggleSection}
                   title="Resumo"
                   subtitle="visão geral do histórico"
                   accent="#94a3b8"
@@ -1052,13 +1110,13 @@ export default function FiveMTradeModal({
           )}
         </div>
 
-        <div className="flex gap-2 px-4 pb-4">
+        <div className="flex gap-2 px-4 py-2 border-t shrink-0" style={{ borderColor: '#2a2d3a' }}>
           {isActive && (
             <button
               onClick={onRemove}
               disabled={inPosition}
               title={inPosition ? 'Aguarde venda para remover' : 'Remover dos favoritos 5m Trade'}
-              className="flex-1 py-1.5 text-xs rounded font-medium transition-colors disabled:opacity-40"
+              className="flex-1 py-1 text-[11px] rounded font-medium transition-colors disabled:opacity-40"
               style={{ border: '1px solid #ef5350', color: '#ef5350' }}
             >
               Remover
@@ -1067,7 +1125,7 @@ export default function FiveMTradeModal({
           {!isActive && (
             <button
               onClick={onCancel}
-              className="flex-1 py-1.5 text-xs rounded font-medium transition-colors text-p5/50 hover:text-p5"
+              className="flex-1 py-1 text-[11px] rounded font-medium transition-colors text-p5/50 hover:text-p5"
               style={{ border: '1px solid #2a2d3a' }}
             >
               Cancelar
@@ -1076,7 +1134,7 @@ export default function FiveMTradeModal({
           <button
             onClick={handleConfirm}
             disabled={!Number(capital) || Number(capital) <= 0 || rsiInvalid}
-            className="flex-1 py-1.5 text-xs rounded font-semibold transition-opacity disabled:opacity-40"
+            className="flex-1 py-1 text-[11px] rounded font-semibold transition-opacity disabled:opacity-40"
             style={{ background: FIVE_M_COLOR, color: '#000' }}
           >
             {isActive ? 'Atualizar' : 'Adicionar'}
