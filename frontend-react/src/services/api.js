@@ -395,6 +395,21 @@ export async function fetchFiveMTradeSuggestMaAdaptation({
   return res.json();
 }
 
+export async function fetchFiveMTradeSuggestStop({ symbol, exchange = 'binance', rsiBuy = 30, maFilters }) {
+  const params = new URLSearchParams({
+    symbol: symbol.toUpperCase(),
+    exchange,
+    rsiBuy: String(rsiBuy),
+  });
+  if (maFilters) params.set('maFilters', JSON.stringify(maFilters));
+  const res = await fetch(`/services/sb/five-m-trade-suggest-stop?${params}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `five-m-trade-suggest-stop falhou: HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 export async function evaluateFiveMTradeLive({
   symbol, exchange = 'binance', rsiBuy = 30, rsiSell = 70, maFilters,
   phase = 'WATCHING', lastBuyTime = null, buyCount = 0,

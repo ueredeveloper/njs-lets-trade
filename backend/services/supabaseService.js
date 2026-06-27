@@ -745,6 +745,66 @@ router.get('/five-m-trade-suggest-ma-adaptation', getUserId, async (req, res) =>
   }
 });
 
+// GET /services/sb/five-m-trade-suggest-stop?symbol=&exchange=&rsiBuy=&maFilters=
+router.get('/five-m-trade-suggest-stop', getUserId, async (req, res) => {
+  const symbol = req.query.symbol?.toUpperCase();
+  if (!symbol) return res.status(400).json({ error: 'symbol obrigatório' });
+
+  const exchange = req.query.exchange ?? 'binance';
+  const rsiBuy   = Number(req.query.rsiBuy ?? 30);
+
+  let maFilters = null;
+  if (req.query.maFilters) {
+    try { maFilters = JSON.parse(req.query.maFilters); } catch {
+      return res.status(400).json({ error: 'maFilters JSON inválido' });
+    }
+  }
+  const maCfg = normalizeMaFilters(maFilters);
+
+  const { historicalStopLoss } = require('../bot/5min-trade-bot/suggestStopLoss');
+  const { suggestMaTolerance } = require('../bot/5min-trade-bot/maFilter');
+
+  try {
+    const candles5m    = await fetchCandlesForEval(exchange, symbol, '5m', 514);
+    const currentPrice = candles5m.length ? candles5m[candles5m.length - 1].close : 0;
+    const hist         = historicalStopLoss(candles5m, 14, rsiBuy, currentPrice);
+
+    let ma = { ok: false, reason: 'ma_desabilitado' };
+    const activeAbove = maCfg.enabled
+      ? maCfg.filters.find(f => f.enabled && f.mode === 'above')
+      : null;
+
+    if (activeAbove) {
+      const candlesMa = await fetchCandlesForEval(exchange, symbol, activeAbove.interval, activeAbove.period + 500);
+      if (candlesMa.length >= activeAbove.period) {
+        const sug = suggestMaTolerance(candlesMa, activeAbove.period, activeAbove.interval, {
+          defaultPct: 3, maxPct: 8, minPct: 0.5, minEpisodes: 3,
+        });
+        const { currentMa, floor, suggestedTolerancePct } = sug;
+        if (currentMa && floor) {
+          const stopPrice = parseFloat((floor * 0.98).toFixed(8));
+          const stopPct   = parseFloat(((currentPrice - stopPrice) / currentPrice * 100).toFixed(2));
+          ma = {
+            ok: true, stopPrice, stopPct,
+            maValue:        parseFloat(currentMa.toFixed(8)),
+            adaptiveFloor:  parseFloat(floor.toFixed(8)),
+            adaptiveDipPct: suggestedTolerancePct,
+            label:          `MA${activeAbove.period}(${activeAbove.interval})`,
+          };
+        } else {
+          ma = { ok: false, reason: 'ma_indisponivel' };
+        }
+      } else {
+        ma = { ok: false, reason: 'dados_insuficientes' };
+      }
+    }
+
+    res.json({ symbol, exchange, rsiBuy, currentPrice, hist, ma });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /services/sb/five-m-trade-evaluate — snapshot ao vivo com parâmetros do usuário
 router.post('/five-m-trade-evaluate', getUserId, async (req, res) => {
   const symbol = req.body?.symbol?.toUpperCase();

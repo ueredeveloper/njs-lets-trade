@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { fetchFiveMTradeSuggestRsi, evaluateFiveMTradeLive, fetchFiveMTradeSuggestMaAdaptation } from '../services/api';
+import { fetchFiveMTradeSuggestRsi, evaluateFiveMTradeLive, fetchFiveMTradeSuggestMaAdaptation, fetchFiveMTradeSuggestStop } from '../services/api';
 
 const FIVE_M_COLOR  = '#06b6d4';
 const GATE_COLOR    = '#0068ff';
@@ -222,6 +222,72 @@ function MaToleranceHint({ suggestion, onApply, loading }) {
   );
 }
 
+const STOP_COLOR = '#f87171'; // red-400
+
+function StopLossHint({ stop, loading }) {
+  if (loading) return <p className="text-[9px] text-p5/40 font-mono mt-1">…</p>;
+  if (!stop) return null;
+
+  const { hist, ma } = stop;
+  const hasHist = hist?.ok;
+  const hasMa   = ma?.ok;
+  if (!hasHist && !hasMa) return null;
+
+  return (
+    <div className="mt-2 rounded px-2 py-2 space-y-2" style={{ background: '#1e2130', border: `1px solid ${STOP_COLOR}33` }}>
+      <p className="text-[9px] uppercase tracking-wider font-semibold" style={{ color: STOP_COLOR }}>
+        🛡️ Stop Loss Sugerido
+      </p>
+
+      {hasHist && (
+        <div>
+          <p className="text-[9px] font-mono text-p5/80 leading-relaxed">
+            <span style={{ color: STOP_COLOR }}>Histórico RSI:</span>{' '}
+            <span className="font-semibold">{hist.stopPrice}</span>
+            {' '}·{' '}−{hist.stopPct}% do preço atual
+          </p>
+          <p className="text-[9px] font-mono text-p5/40 leading-relaxed">
+            P75 de {hist.episodeCount} episódios RSI&lt;{stop.rsiBuy} · média {hist.avgDropPct}%
+          </p>
+        </div>
+      )}
+
+      {hasMa && (
+        <div>
+          <p className="text-[9px] font-mono text-p5/80 leading-relaxed">
+            <span style={{ color: STOP_COLOR }}>{ma.label} −2%:</span>{' '}
+            <span className="font-semibold">{ma.stopPrice}</span>
+            {' '}·{' '}−{ma.stopPct}% do preço atual
+          </p>
+          <p className="text-[9px] font-mono text-p5/40 leading-relaxed">
+            MA = {ma.maValue} · piso adaptativo = {ma.adaptiveFloor} (dip {ma.adaptiveDipPct}%)
+          </p>
+        </div>
+      )}
+
+      {!hasHist && hist && (
+        <p className="text-[9px] font-mono text-p5/30">Histórico: sem episódios suficientes ({hist.reason})</p>
+      )}
+    </div>
+  );
+}
+
+function MaStopInlineHint({ ma }) {
+  if (!ma?.ok) return null;
+  return (
+    <div className="mt-1 rounded px-2 py-1" style={{ background: '#161a28', border: `1px solid ${STOP_COLOR}33` }}>
+      <p className="text-[9px] font-mono leading-relaxed">
+        <span style={{ color: STOP_COLOR }}>Stop {ma.label} −2%</span>{' '}
+        <span className="text-p5/80 font-semibold">{ma.stopPrice}</span>
+        {' '}· −{ma.stopPct}%
+        <span className="text-p5/40">
+          {' '}· piso = {ma.adaptiveFloor} · dip {ma.adaptiveDipPct}%
+        </span>
+      </p>
+    </div>
+  );
+}
+
 function MaFilterRow({ filter, onChange, onRemove, canRemove, toleranceSuggest }) {
   const modeLabel = filter.mode === 'below' ? '<' : '>';
   return (
@@ -363,10 +429,11 @@ export default function FiveMTradeModal({
   const [rsiBuy, setRsiBuy]       = useState(currentEntry?.rsiBuy ?? 30);
   const [rsiSell, setRsiSell]     = useState(currentEntry?.rsiSell ?? 70);
   const [maFilters, setMaFilters] = useState(() => cloneMaFilters(currentEntry?.maFilters));
-  const [suggest, setSuggest]     = useState(null);
-  const [liveTest, setLiveTest]     = useState(null);
-  const [maAdapt, setMaAdapt]       = useState(null);
-  const [suggestCtx, setSuggestCtx] = useState(null);
+  const [suggest, setSuggest]         = useState(null);
+  const [liveTest, setLiveTest]       = useState(null);
+  const [maAdapt, setMaAdapt]         = useState(null);
+  const [stopSuggest, setStopSuggest] = useState(null);
+  const [suggestCtx, setSuggestCtx]   = useState(null);
   const [openSection, setOpenSection] = useState(null);
   const entryKey = currentEntry?.id != null ? String(currentEntry.id) : `new:${symbol}`;
 
@@ -402,12 +469,15 @@ export default function FiveMTradeModal({
     if (!Number.isFinite(buy) || !Number.isFinite(sell) || buy >= sell) return;
 
     setSuggest({ loading: true });
+    setStopSuggest({ loading: true });
     try {
-      const r = await fetchFiveMTradeSuggestRsi({
-        symbol, exchange, entryValue: buy, exitValue: sell, maFilters,
-      });
+      const [r, stopR] = await Promise.all([
+        fetchFiveMTradeSuggestRsi({ symbol, exchange, entryValue: buy, exitValue: sell, maFilters }),
+        fetchFiveMTradeSuggestStop({ symbol, exchange, rsiBuy: buy, maFilters }).catch(err => ({ error: err.message })),
+      ]);
       setSuggestCtx({ exchange, rsiBuy: buy, rsiSell: sell, maKey: maFiltersKey(maFilters) });
       setSuggest(r);
+      setStopSuggest(stopR?.error ? null : { ...stopR, rsiBuy: buy });
       if (maFilters.enabled) {
         setMaAdapt({ loading: true });
         try {
@@ -423,6 +493,7 @@ export default function FiveMTradeModal({
       }
     } catch (err) {
       setSuggest({ error: err.message });
+      setStopSuggest(null);
     }
   }, [symbol, exchange, rsiBuy, rsiSell, maFilters]);
 
@@ -493,6 +564,7 @@ export default function FiveMTradeModal({
     setSuggest(null);
     setSuggestCtx(null);
     setMaAdapt(null);
+    setStopSuggest(null);
     setLiveTest(null);
     setOpenSection(null);
 
@@ -503,13 +575,16 @@ export default function FiveMTradeModal({
       if (!Number.isFinite(b) || !Number.isFinite(s) || b >= s) return;
 
       setSuggest({ loading: true });
+      setStopSuggest({ loading: true });
       try {
-        const r = await fetchFiveMTradeSuggestRsi({
-          symbol, exchange: ex, entryValue: b, exitValue: s, maFilters: ma,
-        });
+        const [r, stopR] = await Promise.all([
+          fetchFiveMTradeSuggestRsi({ symbol, exchange: ex, entryValue: b, exitValue: s, maFilters: ma }),
+          fetchFiveMTradeSuggestStop({ symbol, exchange: ex, rsiBuy: b, maFilters: ma }).catch(err => ({ error: err.message })),
+        ]);
         if (cancelled) return;
         setSuggestCtx({ exchange: ex, rsiBuy: b, rsiSell: s, maKey: maFiltersKey(ma) });
         setSuggest(r);
+        setStopSuggest(stopR?.error ? null : { ...stopR, rsiBuy: b });
 
         if (ma.enabled) {
           setMaAdapt({ loading: true });
@@ -523,7 +598,10 @@ export default function FiveMTradeModal({
           }
         }
       } catch (err) {
-        if (!cancelled) setSuggest({ error: err.message });
+        if (!cancelled) {
+          setSuggest({ error: err.message });
+          setStopSuggest(null);
+        }
       }
     })();
 
@@ -751,6 +829,8 @@ export default function FiveMTradeModal({
             />
           </div>
 
+          <StopLossHint stop={stopSuggest?.loading ? null : stopSuggest} loading={stopSuggest?.loading} />
+
           {/* Filtros MA */}
           <div>
             <div className="flex items-center justify-between mb-1.5">
@@ -809,6 +889,12 @@ export default function FiveMTradeModal({
               <p className="text-[9px] text-p5/40 leading-relaxed pt-0.5">
                 Calibragem: admite compra até X% abaixo da MA. Use <strong className="text-p5/60">Sugerir adaptação</strong> para calcular pelo histórico da moeda.
               </p>
+              {maFilters.enabled && stopSuggest?.ma?.ok && (
+                <MaStopInlineHint ma={stopSuggest.ma} />
+              )}
+              {maFilters.enabled && stopSuggest?.loading && (
+                <p className="text-[9px] text-p5/30 font-mono mt-1">Calculando stop MA…</p>
+              )}
               {(maAdapt?.summary || suggest?.maAdaptSummary) && !maAdapt?.loading && (
                 <div
                   className="mt-2 rounded px-2 py-1.5 space-y-1"
