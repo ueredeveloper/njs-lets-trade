@@ -649,6 +649,9 @@ async function main() {
     process.exit(0);
   }
 
+  const symbolList = toStart.map(({ row }) => row.symbol).join(', ');
+  sendWhatsApp(`🤖 [5m Trade] Bot iniciado\nSímbolos: ${symbolList}`);
+
   await Promise.all(toStart.map(({ row, color }) => startSymbol(row, color)));
 }
 

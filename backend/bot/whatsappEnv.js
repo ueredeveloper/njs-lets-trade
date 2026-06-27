@@ -16,9 +16,9 @@ function normalizePhone(raw) {
   return String(raw ?? '').replace(/@.*$/, '').replace(/\D/g, '');
 }
 
-/** Chave X-Api-Key — .env: API_KEY */
+/** Chave X-Api-Key — .env: WHATSAPP_API_KEY */
 function getWhatsAppApiKey() {
-  const key = process.env.API_KEY || process.env.WHATSAPP_API_KEY || '';
+  const key = process.env.WHATSAPP_API_KEY || process.env.API_KEY || '';
   return String(key).trim() || null;
 }
 
