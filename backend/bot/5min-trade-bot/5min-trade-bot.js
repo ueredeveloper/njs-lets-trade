@@ -141,12 +141,24 @@ async function binanceMarketBuy(symbol, usdtAmount) {
   return { filledQty, quoteQty, avgPrice: quoteQty / filledQty };
 }
 
-async function binanceMarketSell(symbol, qty) {
+async function binanceGetTokenBalance(symbol) {
+  const base    = symbol.endsWith('USDT') ? symbol.slice(0, -4) : symbol.slice(0, -3);
+  const account = await binanceReq('GET', '/api/v3/account');
+  const asset   = account.balances.find(b => b.asset === base);
+  return asset ? parseFloat(asset.free) : 0;
+}
+
+async function binanceMarketSell(symbol, qty, log) {
+  const actualBalance = await binanceGetTokenBalance(symbol);
+  const sellQty       = Math.min(parseFloat(qty), actualBalance);
+  if (sellQty <= 0) throw new Error(`Binance: saldo insuficiente (disponível: ${actualBalance})`);
+  if (sellQty < parseFloat(qty)) log?.(`⚠️  Qty ajustada: ${qty} → ${sellQty} (saldo real Binance)`);
+
   const info      = await fetch(`${BINANCE_BASE}/api/v3/exchangeInfo?symbol=${symbol}`).then(r => r.json());
   const lotFilter = info.symbols?.[0]?.filters?.find(f => f.filterType === 'LOT_SIZE');
   const stepSize  = lotFilter ? parseFloat(lotFilter.stepSize) : 1;
   const decimals  = stepSize < 1 ? (String(stepSize).split('.')[1]?.length ?? 0) : 0;
-  const safeQty   = (Math.floor(qty / stepSize) * stepSize).toFixed(decimals);
+  const safeQty   = (Math.floor(sellQty / stepSize) * stepSize).toFixed(decimals);
   const order     = await binanceReq('POST', '/api/v3/order', {
     symbol, side: 'SELL', type: 'MARKET', quantity: safeQty,
   });
@@ -284,14 +296,9 @@ function buildAdapter(exchange, symbol) {
     pair:         symbol,
     fetchCandles: (lim, iv)  => fetchBinanceCandles(symbol, lim, iv),
     marketBuy:    (usdt)     => binanceMarketBuy(symbol, usdt),
-    marketSell:   (qty, _log) => binanceMarketSell(symbol, qty),
-    fetch24hVol:  ()          => binance24hVolume(symbol),
-    getBalance:   async () => {
-      const account = await binanceReq('GET', '/api/v3/account');
-      const base    = symbol.endsWith('USDT') ? symbol.slice(0, -4) : symbol.slice(0, -3);
-      const asset   = account.balances.find(b => b.asset === base);
-      return asset ? parseFloat(asset.free) : 0;
-    },
+    marketSell:   (qty, log) => binanceMarketSell(symbol, qty, log),
+    fetch24hVol:  ()         => binance24hVolume(symbol),
+    getBalance:   ()         => binanceGetTokenBalance(symbol),
   };
 }
 
@@ -452,8 +459,7 @@ async function tick(rowId, adapter, log, prevRsi = null, lastStops = null, setSt
   // ── BOUGHT: venda total ou DCA ────────────────────────────────────────────
   if (phase === 'BOUGHT') {
     if (rsi > rsiSell) {
-      const balance = await adapter.getBalance();
-      const sellQty = Math.max(parseFloat(state.buy_qty || 0), balance);
+      const sellQty = parseFloat(state.buy_qty || 0);
 
       log(`${R}📈 RSI(5m)=${rsi.toFixed(2)} > ${rsiSell} — vendendo tudo (${sellQty.toFixed(8)} ${symbol})${X}`);
 
