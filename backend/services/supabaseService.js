@@ -496,6 +496,12 @@ const {
   normalizeMaFilters, getRequiredIntervals, candleLimitForInterval,
 } = require('../bot/5min-trade-bot/maFilter');
 
+function normalizeStopLoss(raw) {
+  if (!raw || typeof raw !== 'object') return { type: 'none' };
+  const type = ['none', 'hist', 'ma'].includes(raw.type) ? raw.type : 'none';
+  return { type };
+}
+
 function fiveMTradeToEntry(r) {
   return {
     id:             r.id,
@@ -506,6 +512,7 @@ function fiveMTradeToEntry(r) {
     rsiBuy:         Number(r.rsi_buy  ?? 30),
     rsiSell:        Number(r.rsi_sell ?? 70),
     maFilters:      normalizeMaFilters(r.ma_filters),
+    stopLoss:       normalizeStopLoss(r.stop_loss),
     phase:          r.phase ?? 'WATCHING',
     buyCount:       r.buy_count ?? 0,
     lastBuyTime:    r.last_buy_time ?? r.buy_time ?? null,
@@ -525,7 +532,7 @@ router.get('/five-m-trade-favorites', getUserId, async (req, res) => {
 // POST /services/sb/five-m-trade-favorites  { symbol, exchange?, capital?, rsiBuy?, rsiSell?, maFilters? }
 router.post('/five-m-trade-favorites', getUserId, async (req, res) => {
   const {
-    symbol, exchange = 'binance', capital = 40, rsiBuy = 30, rsiSell = 70, maFilters,
+    symbol, exchange = 'binance', capital = 40, rsiBuy = 30, rsiSell = 70, maFilters, stopLoss,
   } = req.body;
   if (!symbol) return res.status(400).json({ error: 'symbol obrigatório' });
   const sym = symbol.toUpperCase();
@@ -537,7 +544,8 @@ router.post('/five-m-trade-favorites', getUserId, async (req, res) => {
     return res.status(400).json({ error: 'rsiBuy deve ser menor que rsiSell' });
   }
 
-  const maCfg = maFilters !== undefined ? normalizeMaFilters(maFilters) : undefined;
+  const maCfg    = maFilters !== undefined ? normalizeMaFilters(maFilters) : undefined;
+  const slCfg    = stopLoss  !== undefined ? normalizeStopLoss(stopLoss)   : undefined;
 
   const { data: existing } = await supabase
     .from('five_min_bot_state')
@@ -549,6 +557,7 @@ router.post('/five-m-trade-favorites', getUserId, async (req, res) => {
   if (existing) {
     const updates = { exchange, capital: cap, rsi_buy: buy, rsi_sell: sell, updated_at: new Date().toISOString() };
     if (maCfg !== undefined) updates.ma_filters = maCfg;
+    if (slCfg  !== undefined) updates.stop_loss  = slCfg;
     if (existing.phase === 'WATCHING') updates.initial_capital = cap;
     ({ data, error } = await supabase
       .from('five_min_bot_state')
@@ -567,6 +576,7 @@ router.post('/five-m-trade-favorites', getUserId, async (req, res) => {
         rsi_buy:         buy,
         rsi_sell:        sell,
         ma_filters:      maCfg ?? normalizeMaFilters(null),
+        ...(slCfg !== undefined ? { stop_loss: slCfg } : {}),
         phase:           'WATCHING',
         buy_count:       0,
       })
@@ -580,7 +590,7 @@ router.post('/five-m-trade-favorites', getUserId, async (req, res) => {
 
 // PATCH /services/sb/five-m-trade-favorites/:id
 router.patch('/five-m-trade-favorites/:id', getUserId, async (req, res) => {
-  const { exchange, capital, rsiBuy, rsiSell, maFilters } = req.body;
+  const { exchange, capital, rsiBuy, rsiSell, maFilters, stopLoss } = req.body;
   const { data: existing, error: findErr } = await supabase
     .from('five_min_bot_state')
     .select('*')
@@ -599,6 +609,7 @@ router.patch('/five-m-trade-favorites/:id', getUserId, async (req, res) => {
   if (rsiBuy !== undefined)  updates.rsi_buy  = Number(rsiBuy);
   if (rsiSell !== undefined) updates.rsi_sell = Number(rsiSell);
   if (maFilters !== undefined) updates.ma_filters = normalizeMaFilters(maFilters);
+  if (stopLoss  !== undefined) updates.stop_loss  = normalizeStopLoss(stopLoss);
   const nextBuy  = updates.rsi_buy  ?? Number(existing.rsi_buy  ?? 30);
   const nextSell = updates.rsi_sell ?? Number(existing.rsi_sell ?? 70);
   if (nextBuy >= nextSell) return res.status(400).json({ error: 'rsiBuy deve ser menor que rsiSell' });
@@ -763,6 +774,7 @@ router.get('/five-m-trade-suggest-stop', getUserId, async (req, res) => {
 
   const { historicalStopLoss } = require('../bot/5min-trade-bot/suggestStopLoss');
   const { suggestMaTolerance } = require('../bot/5min-trade-bot/maFilter');
+  const { checkCandlePatterns } = require('../bot/5min-trade-bot/evaluate5mTrade');
 
   try {
     const candles5m    = await fetchCandlesForEval(exchange, symbol, '5m', 514);
@@ -770,12 +782,14 @@ router.get('/five-m-trade-suggest-stop', getUserId, async (req, res) => {
     const hist         = historicalStopLoss(candles5m, 14, rsiBuy, currentPrice);
 
     let ma = { ok: false, reason: 'ma_desabilitado' };
+    let candles1h = null;
     const activeAbove = maCfg.enabled
       ? maCfg.filters.find(f => f.enabled && f.mode === 'above')
       : null;
 
     if (activeAbove) {
       const candlesMa = await fetchCandlesForEval(exchange, symbol, activeAbove.interval, activeAbove.period + 500);
+      if (activeAbove.interval === '1h') candles1h = candlesMa;
       if (candlesMa.length >= activeAbove.period) {
         const sug = suggestMaTolerance(candlesMa, activeAbove.period, activeAbove.interval, {
           defaultPct: 3, maxPct: 8, minPct: 0.5, minEpisodes: 3,
@@ -799,7 +813,13 @@ router.get('/five-m-trade-suggest-stop', getUserId, async (req, res) => {
       }
     }
 
-    res.json({ symbol, exchange, rsiBuy, currentPrice, hist, ma });
+    // Sempre busca candles 1h para o padrão 3/4 candles (se ainda não buscou)
+    if (!candles1h) {
+      candles1h = await fetchCandlesForEval(exchange, symbol, '1h', 10);
+    }
+    const candlePatterns = checkCandlePatterns({ '1h': candles1h });
+
+    res.json({ symbol, exchange, rsiBuy, currentPrice, hist, ma, candlePatterns });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -826,12 +846,14 @@ router.post('/five-m-trade-evaluate', getUserId, async (req, res) => {
 
   try {
     const intervals = getRequiredIntervals(maCfg);
+    // Sempre inclui 1h para verificação dos padrões 3/4 candles
+    const allIntervals = intervals.includes('1h') ? intervals : [...intervals, '1h'];
     const cMap = {};
     const maxPeriod = maCfg.enabled
       ? Math.max(0, ...maCfg.filters.filter(f => f.enabled).map(f => f.period))
       : 0;
 
-    for (const interval of intervals) {
+    for (const interval of allIntervals) {
       const liveLimit = interval === '5m' ? 80 : Math.min(candleLimitForInterval(interval), 120);
       cMap[interval] = await fetchCandlesForEval(exchange, symbol, interval, liveLimit + maxPeriod + 10);
     }

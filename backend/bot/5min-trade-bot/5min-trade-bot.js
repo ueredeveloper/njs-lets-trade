@@ -43,7 +43,8 @@ const BOT_DIR = path.join(__dirname, '../../data/bot');
 fs.mkdirSync(BOT_DIR, { recursive: true });
 
 const G = '\x1b[32m', R = '\x1b[31m', Y = '\x1b[33m', X = '\x1b[0m';
-const COLORS = ['\x1b[94m','\x1b[93m','\x1b[95m','\x1b[96m','\x1b[92m','\x1b[91m','\x1b[33m','\x1b[35m','\x1b[36m','\x1b[34m'];
+// Verde (\x1b[32m/\x1b[92m) e vermelho (\x1b[31m/\x1b[91m) são reservados para compra/venda
+const COLORS = ['\x1b[94m','\x1b[93m','\x1b[95m','\x1b[96m','\x1b[33m','\x1b[35m','\x1b[36m','\x1b[34m','\x1b[97m','\x1b[90m'];
 
 function nowFmt() {
   return new Date().toLocaleTimeString('pt-BR', {

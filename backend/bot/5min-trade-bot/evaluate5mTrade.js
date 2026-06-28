@@ -46,6 +46,35 @@ function cooldownRemaining(lastBuyTime) {
 }
 
 /**
+ * Verifica os padrões de 3 e 4 candles em 1h (sinal de recuperação).
+ * - 3 candles: últimos 3 candles 1h fechados são verdes (close > open)
+ * - 4 candles: últimos 4 candles 1h: 3 verdes + 1 vermelho (possível reversão)
+ */
+function checkCandlePatterns(cMap) {
+  const candles1h = cMap?.['1h'];
+  if (!candles1h || candles1h.length < 5) {
+    return { ok: false, reason: 'candles_1h_insuficientes' };
+  }
+  // Excluir o candle atual (pode estar aberto)
+  const completed = candles1h.slice(0, -1);
+  const last3 = completed.slice(-3);
+  const last4 = completed.slice(-4);
+
+  const threeCandles = last3.length >= 3 && last3.every(c => c.close > c.open);
+  const fourCandles  = last4.length >= 4 &&
+    last4.slice(0, 3).every(c => c.close > c.open) &&
+    last4[3].close < last4[3].open;
+
+  return {
+    ok:           true,
+    threeCandles,
+    fourCandles,
+    confirmed:    threeCandles || fourCandles,
+    last4Details: last4.map(c => ({ green: c.close > c.open })),
+  };
+}
+
+/**
  * @param {object} cMap — candles por intervalo ('5m', '1h', …)
  * @param {object} params — rsiBuy, rsiSell, maFilters, phase, lastBuyTime, buyCount
  */
@@ -131,6 +160,8 @@ function evaluate5mTradeLive(cMap, params = {}) {
     }
   }
 
+  const candlePatterns = checkCandlePatterns(cMap);
+
   return {
     symbol:           params.symbol ?? null,
     exchange:         params.exchange ?? null,
@@ -154,6 +185,7 @@ function evaluate5mTradeLive(cMap, params = {}) {
     allowed,
     reason,
     detail,
+    candlePatterns,
     cooldownRemainingMs: phase === 'BOUGHT' && rsiBuySignal && !canDcaAgain(params.lastBuyTime)
       ? cooldownRemaining(params.lastBuyTime)
       : 0,
@@ -169,6 +201,7 @@ function evaluate5mTradeLive(cMap, params = {}) {
 
 module.exports = {
   evaluate5mTradeLive,
+  checkCandlePatterns,
   ACTION_LABELS,
   ENTRY_COOLDOWN_MS,
 };

@@ -224,6 +224,141 @@ function MaToleranceHint({ suggestion, onApply, loading }) {
 
 const STOP_COLOR = '#f87171'; // red-400
 
+function MiniCandle({ green }) {
+  const color = green ? '#26a69a' : '#ef5350';
+  return (
+    <span className="inline-flex flex-col items-center" style={{ gap: 1 }}>
+      <span style={{ width: 2, height: 4, background: color, display: 'block', margin: '0 auto', borderRadius: 1 }} />
+      <span style={{ width: 8, height: 13, background: color, display: 'block', borderRadius: 1 }} />
+      <span style={{ width: 2, height: 3, background: color, display: 'block', margin: '0 auto', borderRadius: 1 }} />
+    </span>
+  );
+}
+
+function CandleRow({ pattern }) {
+  return (
+    <div className="flex items-end gap-1">
+      {pattern.map((green, i) => <MiniCandle key={i} green={green} />)}
+    </div>
+  );
+}
+
+function StopLossSelector({ stop, loading, maFiltersEnabled, value, onChange }) {
+  const hasHist = stop?.hist?.ok;
+  const hasMa   = stop?.ma?.ok;
+
+  const options = [
+    { type: 'none', label: 'Sem stop loss', desc: null },
+    {
+      type: 'hist',
+      label: 'Histórico RSI',
+      available: hasHist,
+      desc: hasHist
+        ? `Sair em ${stop.hist.stopPrice} · queda máxima tolerada ${stop.hist.stopPct}% · calculado sobre ${stop.hist.episodeCount} quedas históricas`
+        : 'histórico insuficiente (menos de 2 episódios)',
+    },
+    {
+      type: 'ma',
+      label: stop?.ma?.label ? `${stop.ma.label} −2%` : 'MA −2% do piso adaptativo',
+      available: hasMa,
+      recommended: true,
+      desc: hasMa
+        ? `Sair em ${stop.ma.stopPrice} · ${stop.ma.stopPct}% abaixo do preço atual · piso adaptativo ${stop.ma.adaptiveFloor} (dip histórico ${stop.ma.adaptiveDipPct}%)`
+        : maFiltersEnabled
+          ? 'ative o filtro MA "acima" para usar este stop'
+          : 'ative o Filtro MA acima para usar este stop',
+    },
+  ];
+
+  if (loading) {
+    return <p className="text-[9px] text-p5/40 font-mono mt-1">Calculando sugestões de stop…</p>;
+  }
+
+  return (
+    <div className="space-y-1.5">
+      {options.map(opt => {
+        const active = value === opt.type;
+        const color  = opt.recommended ? '#a78bfa' : STOP_COLOR;
+        return (
+          <label
+            key={opt.type}
+            className={`flex items-start gap-2 cursor-pointer rounded px-2 py-1.5 transition-colors ${active ? '' : 'opacity-60 hover:opacity-80'}`}
+            style={{
+              background: active ? `${color}14` : '#1e2130',
+              border: `1px solid ${active ? color : '#2a2d3a'}`,
+            }}
+          >
+            <input
+              type="radio"
+              name="stopLossType"
+              value={opt.type}
+              checked={active}
+              onChange={() => onChange(opt.type)}
+              className="mt-0.5 shrink-0"
+              style={{ accentColor: color }}
+            />
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5">
+                <span className="text-[9px] font-semibold" style={{ color: active ? color : '#94a3b8' }}>
+                  {opt.label}
+                </span>
+                {opt.recommended && (
+                  <span className="text-[8px] px-1 rounded font-medium" style={{ background: '#a78bfa22', color: '#a78bfa' }}>
+                    recomendado
+                  </span>
+                )}
+              </div>
+              {opt.desc && (
+                <p className="text-[9px] font-mono leading-relaxed mt-0.5"
+                  style={{ color: opt.available ? '#94a3b8' : '#4b5563' }}>
+                  {opt.desc}
+                </p>
+              )}
+            </div>
+          </label>
+        );
+      })}
+    </div>
+  );
+}
+
+function CandlePatternHint({ patterns }) {
+  if (!patterns?.ok) return null;
+  const { threeCandles, fourCandles } = patterns;
+
+  return (
+    <div className="rounded px-2 py-2 space-y-2" style={{ background: '#1e2130', border: '1px solid #2a2d3a' }}>
+      <p className="text-[9px] uppercase tracking-wider text-p5/40">Padrão 1h — moeda já se recuperando?</p>
+
+      {/* 3 candles */}
+      <div className="flex items-center gap-3">
+        <CandleRow pattern={[true, true, true]} />
+        <div>
+          <p className="text-[9px] font-mono" style={{ color: threeCandles ? '#26a69a' : '#4b5563' }}>
+            {threeCandles ? '✓' : '✗'} 3 verdes seguidos
+          </p>
+          <p className="text-[9px] text-p5/30">últimos 3 candles 1h fecharam para cima</p>
+        </div>
+      </div>
+
+      {/* 4 candles */}
+      <div className="flex items-center gap-3">
+        <CandleRow pattern={[true, true, true, false]} />
+        <div>
+          <p className="text-[9px] font-mono" style={{ color: fourCandles ? '#f59e0b' : '#4b5563' }}>
+            {fourCandles ? '✓' : '✗'} 3 verdes + 1 vermelho
+          </p>
+          <p className="text-[9px] text-p5/30">padrão de reversão — subiu, respirou, pode voltar</p>
+        </div>
+      </div>
+
+      {!threeCandles && !fourCandles && (
+        <p className="text-[9px] text-p5/40 pt-0.5">Nenhum padrão ativo — recuperação ainda não confirmada nos candles 1h</p>
+      )}
+    </div>
+  );
+}
+
 function StopLossHint({ stop, loading }) {
   if (loading) return <p className="text-[9px] text-p5/40 font-mono mt-1">…</p>;
   if (!stop) return null;
@@ -426,15 +561,20 @@ export default function FiveMTradeModal({
 }) {
   const [exchange, setExchange]   = useState(currentEntry?.exchange ?? defaultExchange ?? 'binance');
   const [capital, setCapital]     = useState(currentEntry?.capital ?? 40);
-  const [rsiBuy, setRsiBuy]       = useState(currentEntry?.rsiBuy ?? 30);
+  const [rsiBuy, setRsiBuy]       = useState(currentEntry?.rsiBuy ?? 25);
   const [rsiSell, setRsiSell]     = useState(currentEntry?.rsiSell ?? 70);
   const [maFilters, setMaFilters] = useState(() => cloneMaFilters(currentEntry?.maFilters));
-  const [suggest, setSuggest]         = useState(null);
-  const [liveTest, setLiveTest]       = useState(null);
-  const [maAdapt, setMaAdapt]         = useState(null);
-  const [stopSuggest, setStopSuggest] = useState(null);
-  const [suggestCtx, setSuggestCtx]   = useState(null);
-  const [openSections, setOpenSections] = useState(() => new Set());
+  const [suggest, setSuggest]           = useState(null);
+  const [liveTest, setLiveTest]         = useState(null);
+  const [maAdapt, setMaAdapt]           = useState(null);
+  const [stopSuggest, setStopSuggest]   = useState(null);
+  const [stopLossType, setStopLossType] = useState(currentEntry?.stopLoss?.type ?? 'none');
+  const [suggestCtx, setSuggestCtx]     = useState(null);
+  const [openSections, setOpenSections] = useState(() => {
+    const s = new Set();
+    if ((currentEntry?.stopLoss?.type ?? 'none') !== 'none') s.add('stop');
+    return s;
+  });
   function toggleSection(id) {
     setOpenSections(prev => {
       const next = new Set(prev);
@@ -486,7 +626,16 @@ export default function FiveMTradeModal({
       setSuggest(r);
       const stopVal = stopR?.error ? null : { ...stopR, rsiBuy: buy };
       setStopSuggest(stopVal);
-      if (stopVal?.hist?.ok || stopVal?.ma?.ok) {
+      // Auto-seleciona MA se disponível e nenhuma escolha foi feita
+      if (stopVal?.ma?.ok) {
+        setStopLossType(prev => prev === 'none' ? 'ma' : prev);
+        setOpenSections(prev => {
+          const s = new Set(prev);
+          s.add('stop');
+          if (stopVal?.candlePatterns?.ok) s.add('candles');
+          return s;
+        });
+      } else if (stopVal?.hist?.ok) {
         setOpenSections(prev => { const s = new Set(prev); s.add('stop'); return s; });
       }
       if (maFilters.enabled) {
@@ -573,6 +722,7 @@ export default function FiveMTradeModal({
     setRsiBuy(buy);
     setRsiSell(sell);
     setMaFilters(ma);
+    setStopLossType(currentEntry?.stopLoss?.type ?? 'none');
     setSuggest(null);
     setSuggestCtx(null);
     setMaAdapt(null);
@@ -709,7 +859,7 @@ export default function FiveMTradeModal({
     const buy  = Number(rsiBuy);
     const sell = Number(rsiSell);
     if (!Number.isFinite(cap) || cap <= 0 || buy >= sell) return;
-    onConfirm({ exchange, capital: cap, rsiBuy: buy, rsiSell: sell, maFilters });
+    onConfirm({ exchange, capital: cap, rsiBuy: buy, rsiSell: sell, maFilters, stopLoss: { type: stopLossType } });
   }
 
   return (
@@ -847,26 +997,6 @@ export default function FiveMTradeModal({
             />
           </div>
 
-          {(stopSuggest?.loading || (stopSuggest && !stopSuggest.loading && (stopSuggest.hist?.ok || stopSuggest.ma?.ok))) && (
-            <AnalysisAccordion
-              id="stop"
-              openIds={openSections}
-              onToggle={toggleSection}
-              title="Stop Loss Sugerido"
-              subtitle={
-                stopSuggest?.loading ? 'Calculando…'
-                : stopSuggest?.hist?.ok && stopSuggest?.ma?.ok
-                  ? `hist −${stopSuggest.hist.stopPct}% · MA −${stopSuggest.ma.stopPct}%`
-                  : stopSuggest?.hist?.ok ? `hist RSI −${stopSuggest.hist.stopPct}%`
-                  : stopSuggest?.ma?.ok ? `${stopSuggest.ma.label} −${stopSuggest.ma.stopPct}%`
-                  : ''
-              }
-              accent={STOP_COLOR}
-            >
-              <StopLossHint stop={stopSuggest?.loading ? null : stopSuggest} loading={stopSuggest?.loading} />
-            </AnalysisAccordion>
-          )}
-
           {/* Filtros MA */}
           <AnalysisAccordion
             id="ma"
@@ -967,6 +1097,60 @@ export default function FiveMTradeModal({
             </div>
             </div>
           </AnalysisAccordion>
+
+          {/* Stop Loss — depois dos filtros MA para o usuário ver o que está ativo */}
+          <AnalysisAccordion
+            id="stop"
+            openIds={openSections}
+            onToggle={toggleSection}
+            title="Stop Loss"
+            subtitle={
+              stopLossType === 'none' ? 'desativado'
+              : stopLossType === 'hist' && stopSuggest?.hist?.ok
+                ? `Histórico RSI − sair em ${stopSuggest.hist.stopPrice} (−${stopSuggest.hist.stopPct}%)`
+              : stopLossType === 'ma' && stopSuggest?.ma?.ok
+                ? `${stopSuggest.ma.label} − sair em ${stopSuggest.ma.stopPrice} (−${stopSuggest.ma.stopPct}%)`
+              : stopLossType !== 'none' ? 'calculando…' : ''
+            }
+            accent={stopLossType !== 'none' ? STOP_COLOR : '#4b5563'}
+          >
+            <div className="pt-2">
+              <StopLossSelector
+                stop={stopSuggest?.loading ? null : stopSuggest}
+                loading={stopSuggest?.loading}
+                maFiltersEnabled={maFilters.enabled}
+                value={stopLossType}
+                onChange={setStopLossType}
+              />
+            </div>
+          </AnalysisAccordion>
+
+          {/* Padrão 3/4 candles 1h — carrega junto com as sugestões de stop */}
+          {(stopSuggest?.loading || stopSuggest?.candlePatterns?.ok) && (
+            <AnalysisAccordion
+              id="candles"
+              openIds={openSections}
+              onToggle={toggleSection}
+              title="Padrão 1h — recuperação"
+              subtitle={
+                stopSuggest?.loading ? 'calculando…'
+                : stopSuggest?.candlePatterns?.confirmed
+                  ? (stopSuggest.candlePatterns.threeCandles ? '3 verdes ✓' : '') +
+                    (stopSuggest.candlePatterns.fourCandles
+                      ? (stopSuggest.candlePatterns.threeCandles ? ' · ' : '') + '3↑1↓ ✓'
+                      : '')
+                  : 'sem confirmação de alta 1h'
+              }
+              accent={stopSuggest?.candlePatterns?.confirmed ? '#26a69a' : '#4b5563'}
+            >
+              <div className="pt-2">
+                {stopSuggest?.loading
+                  ? <p className="text-[9px] text-p5/40 font-mono">…</p>
+                  : <CandlePatternHint patterns={stopSuggest?.candlePatterns} />
+                }
+              </div>
+            </AnalysisAccordion>
+          )}
 
           {rsiInvalid && (
             <p className="text-[10px]" style={{ color: '#ef5350' }}>

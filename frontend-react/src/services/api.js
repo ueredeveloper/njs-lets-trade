@@ -326,11 +326,11 @@ export async function fetchFiveMTradeFavorites() {
   return res.json();
 }
 
-export async function addFiveMTradeFavorite({ symbol, exchange = 'binance', capital = 40, rsiBuy = 30, rsiSell = 70, maFilters }) {
+export async function addFiveMTradeFavorite({ symbol, exchange = 'binance', capital = 40, rsiBuy = 30, rsiSell = 70, maFilters, stopLoss }) {
   const res = await fetch('/services/sb/five-m-trade-favorites', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ symbol, exchange, capital, rsiBuy, rsiSell, maFilters }),
+    body: JSON.stringify({ symbol, exchange, capital, rsiBuy, rsiSell, maFilters, stopLoss }),
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
@@ -339,11 +339,11 @@ export async function addFiveMTradeFavorite({ symbol, exchange = 'binance', capi
   return res.json();
 }
 
-export async function updateFiveMTradeFavorite(id, { exchange, capital, rsiBuy, rsiSell, maFilters }) {
+export async function updateFiveMTradeFavorite(id, { exchange, capital, rsiBuy, rsiSell, maFilters, stopLoss }) {
   const res = await fetch(`/services/sb/five-m-trade-favorites/${encodeURIComponent(id)}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ exchange, capital, rsiBuy, rsiSell, maFilters }),
+    body: JSON.stringify({ exchange, capital, rsiBuy, rsiSell, maFilters, stopLoss }),
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
