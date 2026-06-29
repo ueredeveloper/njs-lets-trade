@@ -1,5 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
-import { fetchFiveMTradeSuggestRsi, evaluateFiveMTradeLive, fetchFiveMTradeSuggestMaAdaptation, fetchFiveMTradeSuggestStop } from '../services/api';
+import { fetchFiveMTradeSuggestRsi, evaluateFiveMTradeLive, fetchFiveMTradeSuggestMaAdaptation, fetchFiveMTradeSuggestRecovery, fetchFiveMTradeSuggestEntryBelow } from '../services/api';
+import Tooltip from './Tooltip';
+import FiveMStopLossSelector, { initialStopLossTypes, stopOptionAvailable } from './FiveMStopLossSelector';
+import { stopLossTypesLabel, DEFAULT_FIVE_M_RSI_BUY, DEFAULT_FIVE_M_RSI_SELL, stopPayloadFromRecovery } from '../constants/fiveMStopLoss';
+import { ENTRY_PRICE_OPTIONS, entryPriceLabel, initialEntryPrice, normalizeEntryPriceForm, clampBelowPct, parseBelowPctInput } from '../constants/fiveMEntryPrice';
+import { getRecoveryPatternOptions, recoveryPatternTypesLabel, recoveryPatternZonesLabel } from '../constants/fiveMRecoveryPattern';
+import { SELL_SCOPE_OPTIONS, sellScopeLabel } from '../constants/fiveMSellScope';
 
 const FIVE_M_COLOR  = '#06b6d4';
 const GATE_COLOR    = '#0068ff';
@@ -55,23 +61,45 @@ function fmtPct(v) {
   return `${v >= 0 ? '+' : ''}${v}%`;
 }
 
-function AnalysisAccordion({ id, openIds, onToggle, title, subtitle, accent, children }) {
+function SuggestButton({ onClick, loading, disabled, color = FIVE_M_COLOR, title }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled || loading}
+      title={title}
+      className="text-[9px] px-1.5 py-0.5 rounded font-semibold disabled:opacity-40 shrink-0"
+      style={{ color, border: `1px solid ${color}44` }}
+    >
+      {loading ? '…' : 'Sugerir'}
+    </button>
+  );
+}
+
+function AnalysisAccordion({ id, openIds, onToggle, title, subtitle, accent, action, children }) {
   const open = openIds instanceof Set ? openIds.has(id) : false;
   return (
     <div className="rounded overflow-hidden" style={{ border: '1px solid #2a2d3a' }}>
-      <button
-        type="button"
-        onClick={() => onToggle(id)}
-        className="w-full flex items-start justify-between gap-2 px-2.5 py-2 text-left hover:bg-white/[0.03] transition-colors"
-      >
-        <div className="min-w-0 flex-1">
-          <span className="text-[10px] font-semibold block" style={{ color: accent }}>{title}</span>
-          {subtitle && (
-            <span className="text-[9px] font-mono text-p5/50 block mt-0.5 truncate">{subtitle}</span>
-          )}
-        </div>
-        <span className="text-p5/40 text-[10px] shrink-0 mt-0.5">{open ? '▾' : '▸'}</span>
-      </button>
+      <div className="flex items-start gap-1 px-2.5 py-2 hover:bg-white/[0.03] transition-colors">
+        <button
+          type="button"
+          onClick={() => onToggle(id)}
+          className="flex-1 min-w-0 flex items-start justify-between gap-2 text-left"
+        >
+          <div className="min-w-0 flex-1">
+            <span className="text-[10px] font-semibold block" style={{ color: accent }}>{title}</span>
+            {subtitle && (
+              <span className="text-[9px] font-mono text-p5/50 block mt-0.5 truncate">{subtitle}</span>
+            )}
+          </div>
+          <span className="text-p5/40 text-[10px] shrink-0 mt-0.5">{open ? '▾' : '▸'}</span>
+        </button>
+        {action && (
+          <div className="shrink-0 pt-0.5" onClick={e => e.stopPropagation()}>
+            {action}
+          </div>
+        )}
+      </div>
       {open && (
         <div className="px-2.5 pb-2.5 border-t" style={{ borderColor: '#2a2d3a' }}>
           {children}
@@ -94,7 +122,7 @@ function RsiSuggestHint({ label, suggested, current, stats, onApply, loading, st
         <p className="text-[9px] font-mono leading-relaxed text-amber-500/90">
           Última sugestão: {label} {suggested}
           {stats && <> · {stats}</>}
-          {' · '}clique <strong>Calcular</strong> para atualizar
+          {' · '}clique <strong>Sugerir</strong> para atualizar
         </p>
       </div>
     );
@@ -185,28 +213,40 @@ function PatternDetail({ data }) {
   );
 }
 
-function MaToleranceHint({ suggestion, onApply, loading }) {
-  if (loading) return <p className="text-[9px] text-p5/40 font-mono mt-1">…</p>;
+function MaToleranceHint({ suggestion, onApply, loading, stale }) {
+  if (loading) return <p className="text-[9px] text-p5/40 font-mono mt-1">Calculando calibragem MA…</p>;
   if (!suggestion) return null;
   const suggested = suggestion.recommendedTolerancePct ?? suggestion.suggestedTolerancePct;
-  const differs = suggested != null && suggested !== Number(suggestion.currentTolerancePct ?? 0);
+  if (suggested == null) return null;
+  const current = Number(suggestion.currentTolerancePct ?? 0);
+  const differs = suggested !== current;
+
+  if (stale) {
+    return (
+      <p className="text-[9px] text-amber-500/85 font-mono mt-1">
+        Parâmetros alterados — clique <strong>Sugerir</strong> para recalcular a calibragem MA.
+      </p>
+    );
+  }
+
+  const detailParts = [];
+  if (suggestion.reason) detailParts.push(suggestion.reason);
+  if (suggestion.recommendationLabel) detailParts.push(suggestion.recommendationLabel);
+  if (suggestion.entryOk != null) {
+    detailParts.push(`agora ${suggestion.entryOk ? 'OK' : 'bloqueado'} (dip ${suggestion.dipNowPct ?? '—'}%)`);
+  }
+  if (suggestion.vsCurrent?.tradeDelta != null && suggestion.vsCurrent.tradeDelta !== 0) {
+    detailParts.push(`+${suggestion.vsCurrent.tradeDelta} trades vs atual`);
+  }
+
   return (
     <div className="mt-1 rounded px-2 py-1" style={{ background: '#161a28', border: '1px solid #2a2d3a' }}>
       <p className="text-[9px] font-mono leading-relaxed text-p5/60">
-        {suggestion.reason ?? (
-          suggestion.usedDefault
-            ? `Poucos episódios (${suggestion.episodeCount ?? 0}) — padrão ${suggested}%`
-            : `${suggestion.episodeCount} dips: média ${suggestion.avgRaw}% → sugerido −${suggested}%`
+        <span style={{ color: FIVE_M_COLOR }}>Sugestão: −{suggested}%</span>
+        {detailParts.length > 0 && (
+          <span className="text-p5/50"> · {detailParts.join(' · ')}</span>
         )}
-        {suggestion.recommendationLabel && (
-          <span className="text-p5/40"> · {suggestion.recommendationLabel}</span>
-        )}
-        {suggestion.entryOk != null && (
-          <> · agora {suggestion.entryOk ? 'OK' : 'bloqueado'} (dip {suggestion.dipNowPct ?? '—'}%)</>
-        )}
-        {suggestion.vsCurrent?.tradeDelta != null && suggestion.vsCurrent.tradeDelta !== 0 && (
-          <> · +{suggestion.vsCurrent.tradeDelta} trades vs atual</>
-        )}
+        {!differs && <span className="text-p5/40"> · valor atual</span>}
       </p>
       {differs && onApply && (
         <button
@@ -221,8 +261,6 @@ function MaToleranceHint({ suggestion, onApply, loading }) {
     </div>
   );
 }
-
-const STOP_COLOR = '#f87171'; // red-400
 
 function MiniCandle({ green }) {
   const color = green ? '#26a69a' : '#ef5350';
@@ -243,76 +281,188 @@ function CandleRow({ pattern }) {
   );
 }
 
-function StopLossSelector({ stop, loading, maFiltersEnabled, value, onChange }) {
-  const hasHist = stop?.hist?.ok;
-  const hasMa   = stop?.ma?.ok;
-
-  const options = [
-    { type: 'none', label: 'Sem stop loss', desc: null },
-    {
-      type: 'hist',
-      label: 'Histórico RSI',
-      available: hasHist,
-      desc: hasHist
-        ? `Sair em ${stop.hist.stopPrice} · queda máxima tolerada ${stop.hist.stopPct}% · calculado sobre ${stop.hist.episodeCount} quedas históricas`
-        : 'histórico insuficiente (menos de 2 episódios)',
-    },
-    {
-      type: 'ma',
-      label: stop?.ma?.label ? `${stop.ma.label} −2%` : 'MA −2% do piso adaptativo',
-      available: hasMa,
-      recommended: true,
-      desc: hasMa
-        ? `Sair em ${stop.ma.stopPrice} · ${stop.ma.stopPct}% abaixo do preço atual · piso adaptativo ${stop.ma.adaptiveFloor} (dip histórico ${stop.ma.adaptiveDipPct}%)`
-        : maFiltersEnabled
-          ? 'ative o filtro MA "acima" para usar este stop'
-          : 'ative o Filtro MA acima para usar este stop',
-    },
-  ];
-
-  if (loading) {
-    return <p className="text-[9px] text-p5/40 font-mono mt-1">Calculando sugestões de stop…</p>;
+function initialRecoveryPattern(entry) {
+  const rp = entry?.recoveryPattern;
+  let types = [];
+  if (Array.isArray(rp?.types)) {
+    types = rp.types.filter(t => getRecoveryPatternOptions().some(o => o.type === t));
+  } else if (rp?.type && getRecoveryPatternOptions().some(o => o.type === rp.type)) {
+    types = [rp.type];
   }
+  const zones = Array.isArray(rp?.zones) && rp.zones.length
+    ? rp.zones
+    : ['above_ma', 'between_ma'];
+  const abovePct = Number(rp?.abovePct ?? 5) || 5;
+  return { types, zones, abovePct };
+}
+
+function togglePatternType(list, type) {
+  return list.includes(type) ? list.filter(t => t !== type) : [...list, type];
+}
+
+function MaAbovePctHint({ maZone, rsiBuy, abovePct, onApply, loading }) {
+  if (loading) {
+    return <p className="text-[9px] text-p5/40 font-mono mt-1">Calculando % acima da MA…</p>;
+  }
+  const suggested = maZone?.suggestedAbovePct;
+  if (suggested == null) return null;
+
+  const differs = suggested !== Number(abovePct);
+  const stats = [
+    maZone.signalCount != null ? `${maZone.signalCount} sinais RSI<${rsiBuy}` : null,
+    maZone.medianStretchPct != null ? `mediana +${maZone.medianStretchPct}%` : null,
+    maZone.aboveNowPct != null ? `agora +${maZone.aboveNowPct}%` : null,
+  ].filter(Boolean).join(' · ');
 
   return (
-    <div className="space-y-1.5">
+    <div className="mt-1.5 rounded px-2 py-1.5" style={{ background: '#161a28', border: '1px solid #06b6d444' }}>
+      <p className="text-[9px] font-mono leading-relaxed text-cyan-400/90">
+        Sugestão Multi-Trade: <strong>+{suggested}%</strong> acima MA{maZone.maPeriod ?? 50} {maZone.maInterval ?? '1h'}
+        {stats && <span className="block text-p5/45 mt-0.5">{stats}</span>}
+        {!differs && <span className="text-p5/40"> · atual</span>}
+      </p>
+      {differs && (
+        <button
+          type="button"
+          onClick={() => onApply(suggested)}
+          className="mt-1 text-[9px] px-1.5 py-0.5 rounded font-medium"
+          style={{ background: '#06b6d422', color: '#06b6d4', border: '1px solid #06b6d455' }}
+        >
+          Usar +{suggested}%
+        </button>
+      )}
+    </div>
+  );
+}
+
+function RecoveryPatternSelector({
+  analysis, live, maZone, loading, rsiBuy,
+  patternTypes, zones, abovePct,
+  onPatternsChange, onZonesChange, onAbovePctChange,
+}) {
+  if (loading) {
+    return <p className="text-[9px] text-p5/40 font-mono mt-1">Analisando padrões 1h…</p>;
+  }
+  const options     = getRecoveryPatternOptions(rsiBuy);
+  const recommended = analysis?.recommended;
+  const histMap     = Object.fromEntries((analysis?.patterns ?? []).map(p => [p.type, p]));
+
+  return (
+    <div className="space-y-2">
+      <p className="text-[9px] text-p5/50 leading-relaxed">
+        Escolha um ou mais padrões 1h — na zona MA marcada, basta <strong className="text-p5/70">qualquer</strong> padrão ativo.
+        Entrada bloqueada se houver <strong className="text-p5/70">3 vermelhos</strong> seguidos (queda em direção à MA).
+        {!analysis && (
+          <span className="block text-p5/40 mt-0.5">Clique em <strong className="text-p5/55">Sugerir</strong> para ver histórico e recomendações.</span>
+        )}
+        {analysis?.summary && (
+          <span className="block text-amber-500/85 mt-0.5">{analysis.summary}</span>
+        )}
+        {maZone?.ok && (
+          <span className="block text-cyan-400/80 mt-0.5">{maZone.description}</span>
+        )}
+      </p>
+
+      <div className="rounded px-2 py-2 space-y-1.5" style={{ background: '#161a28', border: '1px solid #2a2d3a' }}>
+        <p className="text-[9px] uppercase tracking-wider text-p5/40">Zonas MA (quando exigir o padrão)</p>
+        <label className="flex items-start gap-2 text-[9px] cursor-pointer flex-wrap">
+          <input
+            type="checkbox"
+            checked={zones.includes('above_ma')}
+            onChange={() => onZonesChange(
+              zones.includes('above_ma')
+                ? zones.filter(z => z !== 'above_ma')
+                : [...zones, 'above_ma'],
+            )}
+            className="accent-cyan-500 mt-0.5"
+          />
+          <span className="text-p5/70 shrink-0">Acima da MA50 1h — mínimo +</span>
+          <input
+            type="number"
+            value={abovePct}
+            onChange={e => onAbovePctChange(Math.max(0, Math.min(20, Number(e.target.value) || 0)))}
+            min={0} max={20} step={0.5}
+            className="w-12 rounded px-1 py-0.5 font-mono text-p5 outline-none"
+            style={{ background: '#1e2130', border: '1px solid #2a2d3a' }}
+          />
+          <span className="text-p5/50">%</span>
+        </label>
+        <MaAbovePctHint
+          maZone={maZone}
+          rsiBuy={rsiBuy}
+          abovePct={abovePct}
+          onApply={onAbovePctChange}
+          loading={loading}
+        />
+        <label className="flex items-center gap-2 text-[9px] cursor-pointer text-p5/70">
+          <input
+            type="checkbox"
+            checked={zones.includes('between_ma')}
+            onChange={() => onZonesChange(
+              zones.includes('between_ma')
+                ? zones.filter(z => z !== 'between_ma')
+                : [...zones, 'between_ma'],
+            )}
+            className="accent-cyan-500"
+          />
+          Entre a MA e o piso adaptativo (calibragem % do filtro MA)
+        </label>
+      </div>
+
+      {live?.threeReds && (
+        <p className="text-[9px] text-red-400/90 rounded px-2 py-1" style={{ background: '#ef535414', border: '1px solid #ef535044' }}>
+          Agora: 3 candles 1h vermelhos — entrada bloqueada nesta zona
+        </p>
+      )}
+
       {options.map(opt => {
-        const active = value === opt.type;
-        const color  = opt.recommended ? '#a78bfa' : STOP_COLOR;
+        const active    = patternTypes.includes(opt.type);
+        const hist      = histMap[opt.type];
+        const liveOn    = live?.active?.[opt.type];
+        const isRec     = recommended === opt.type;
         return (
           <label
             key={opt.type}
-            className={`flex items-start gap-2 cursor-pointer rounded px-2 py-1.5 transition-colors ${active ? '' : 'opacity-60 hover:opacity-80'}`}
+            className="flex items-start gap-2 rounded px-2 py-2 cursor-pointer hover:opacity-90 transition-colors"
             style={{
-              background: active ? `${color}14` : '#1e2130',
-              border: `1px solid ${active ? color : '#2a2d3a'}`,
+              background: active ? '#26a69a14' : '#1e2130',
+              border: `1px solid ${active ? '#26a69a' : isRec ? '#f59e0b55' : '#2a2d3a'}`,
             }}
           >
             <input
-              type="radio"
-              name="stopLossType"
-              value={opt.type}
+              type="checkbox"
               checked={active}
-              onChange={() => onChange(opt.type)}
+              onChange={() => onPatternsChange(togglePatternType(patternTypes, opt.type))}
               className="mt-0.5 shrink-0"
-              style={{ accentColor: color }}
+              style={{ accentColor: '#26a69a' }}
             />
             <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-1.5">
-                <span className="text-[9px] font-semibold" style={{ color: active ? color : '#94a3b8' }}>
-                  {opt.label}
-                </span>
-                {opt.recommended && (
-                  <span className="text-[8px] px-1 rounded font-medium" style={{ background: '#a78bfa22', color: '#a78bfa' }}>
-                    recomendado
+              <div className="flex items-center gap-2 flex-wrap">
+                <CandleRow pattern={opt.visual} />
+                <Tooltip text={opt.tooltip} maxW={300}>
+                  <span className="text-[9px] font-semibold underline decoration-dotted decoration-p5/30 underline-offset-2 text-p5/80">
+                    {opt.label}
+                  </span>
+                </Tooltip>
+                {isRec && (
+                  <span className="text-[8px] px-1 rounded font-medium" style={{ background: '#f59e0b22', color: '#f59e0b' }}>
+                    sugerido
+                  </span>
+                )}
+                {liveOn != null && (
+                  <span className="text-[8px] font-mono" style={{ color: liveOn ? '#26a69a' : '#4b5563' }}>
+                    agora {liveOn ? '✓' : '✗'}
                   </span>
                 )}
               </div>
-              {opt.desc && (
-                <p className="text-[9px] font-mono leading-relaxed mt-0.5"
-                  style={{ color: opt.available ? '#94a3b8' : '#4b5563' }}>
-                  {opt.desc}
+              <p className="text-[9px] text-p5/55 leading-relaxed mt-0.5">{opt.summary}</p>
+              {hist && (
+                <p className="text-[9px] font-mono text-p5/60 mt-0.5">
+                  {hist.entries}× RSI&lt;{rsiBuy} · win {hist.winRate}% · +{hist.avgRisePct}% médio
                 </p>
+              )}
+              {!hist && analysis?.ok && (
+                <p className="text-[9px] font-mono text-p5/35 mt-0.5">sem ocorrências no histórico</p>
               )}
             </div>
           </label>
@@ -359,71 +509,7 @@ function CandlePatternHint({ patterns }) {
   );
 }
 
-function StopLossHint({ stop, loading }) {
-  if (loading) return <p className="text-[9px] text-p5/40 font-mono mt-1">…</p>;
-  if (!stop) return null;
-
-  const { hist, ma } = stop;
-  const hasHist = hist?.ok;
-  const hasMa   = ma?.ok;
-  if (!hasHist && !hasMa) return null;
-
-  return (
-    <div className="mt-2 rounded px-2 py-2 space-y-2" style={{ background: '#1e2130', border: `1px solid ${STOP_COLOR}33` }}>
-      <p className="text-[9px] uppercase tracking-wider font-semibold" style={{ color: STOP_COLOR }}>
-        🛡️ Stop Loss Sugerido
-      </p>
-
-      {hasHist && (
-        <div>
-          <p className="text-[9px] font-mono text-p5/80 leading-relaxed">
-            <span style={{ color: STOP_COLOR }}>Histórico RSI:</span>{' '}
-            <span className="font-semibold">{hist.stopPrice}</span>
-            {' '}·{' '}−{hist.stopPct}% do preço atual
-          </p>
-          <p className="text-[9px] font-mono text-p5/40 leading-relaxed">
-            P75 de {hist.episodeCount} episódios RSI&lt;{stop.rsiBuy} · média {hist.avgDropPct}%
-          </p>
-        </div>
-      )}
-
-      {hasMa && (
-        <div>
-          <p className="text-[9px] font-mono text-p5/80 leading-relaxed">
-            <span style={{ color: STOP_COLOR }}>{ma.label} −2%:</span>{' '}
-            <span className="font-semibold">{ma.stopPrice}</span>
-            {' '}·{' '}−{ma.stopPct}% do preço atual
-          </p>
-          <p className="text-[9px] font-mono text-p5/40 leading-relaxed">
-            MA = {ma.maValue} · piso adaptativo = {ma.adaptiveFloor} (dip {ma.adaptiveDipPct}%)
-          </p>
-        </div>
-      )}
-
-      {!hasHist && hist && (
-        <p className="text-[9px] font-mono text-p5/30">Histórico: sem episódios suficientes ({hist.reason})</p>
-      )}
-    </div>
-  );
-}
-
-function MaStopInlineHint({ ma }) {
-  if (!ma?.ok) return null;
-  return (
-    <div className="mt-1 rounded px-2 py-1" style={{ background: '#161a28', border: `1px solid ${STOP_COLOR}33` }}>
-      <p className="text-[9px] font-mono leading-relaxed">
-        <span style={{ color: STOP_COLOR }}>Stop {ma.label} −2%</span>{' '}
-        <span className="text-p5/80 font-semibold">{ma.stopPrice}</span>
-        {' '}· −{ma.stopPct}%
-        <span className="text-p5/40">
-          {' '}· piso = {ma.adaptiveFloor} · dip {ma.adaptiveDipPct}%
-        </span>
-      </p>
-    </div>
-  );
-}
-
-function MaFilterRow({ filter, onChange, onRemove, canRemove, toleranceSuggest }) {
+function MaFilterRow({ filter, onChange, onRemove, canRemove, toleranceSuggest, toleranceLoading, toleranceStale }) {
   const modeLabel = filter.mode === 'below' ? '<' : '>';
   return (
     <div className="space-y-0.5">
@@ -495,6 +581,8 @@ function MaFilterRow({ filter, onChange, onRemove, canRemove, toleranceSuggest }
         <MaToleranceHint
           suggestion={toleranceSuggest}
           onApply={pct => onChange({ ...filter, tolerancePct: pct })}
+          loading={toleranceLoading}
+          stale={toleranceStale}
         />
       )}
     </div>
@@ -561,26 +649,23 @@ export default function FiveMTradeModal({
 }) {
   const [exchange, setExchange]   = useState(currentEntry?.exchange ?? defaultExchange ?? 'binance');
   const [capital, setCapital]     = useState(currentEntry?.capital ?? 40);
-  const [rsiBuy, setRsiBuy]       = useState(currentEntry?.rsiBuy ?? 25);
-  const [rsiSell, setRsiSell]     = useState(currentEntry?.rsiSell ?? 70);
+  const [rsiBuy, setRsiBuy]       = useState(currentEntry?.rsiBuy ?? DEFAULT_FIVE_M_RSI_BUY);
+  const [rsiSell, setRsiSell]     = useState(currentEntry?.rsiSell ?? DEFAULT_FIVE_M_RSI_SELL);
   const [maFilters, setMaFilters] = useState(() => cloneMaFilters(currentEntry?.maFilters));
   const [suggest, setSuggest]           = useState(null);
   const [liveTest, setLiveTest]         = useState(null);
   const [maAdapt, setMaAdapt]           = useState(null);
-  const [stopSuggest, setStopSuggest]   = useState(null);
-  const [stopLossType, setStopLossType] = useState(currentEntry?.stopLoss?.type ?? 'none');
+  const [recoverySuggest, setRecoverySuggest] = useState(null);
+  const [stopSuggest, setStopSuggest] = useState(null);
+  const [stopLossTypes, setStopLossTypes] = useState(() => initialStopLossTypes(currentEntry));
+  const [recoveryPattern, setRecoveryPattern] = useState(() => initialRecoveryPattern(currentEntry));
+  const [sellScope, setSellScope] = useState(() => currentEntry?.sellScope ?? 'bot_only');
+  const [entryPrice, setEntryPrice] = useState(() => initialEntryPrice(currentEntry));
+  const [entryBelowSuggest, setEntryBelowSuggest] = useState(null);
   const [suggestCtx, setSuggestCtx]     = useState(null);
-  const [openSections, setOpenSections] = useState(() => {
-    const s = new Set();
-    if ((currentEntry?.stopLoss?.type ?? 'none') !== 'none') s.add('stop');
-    return s;
-  });
+  const [openSections, setOpenSections] = useState(() => new Set(['candles']));
   function toggleSection(id) {
-    setOpenSections(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
-    });
+    setOpenSections(prev => (prev.has(id) ? new Set() : new Set([id])));
   }
   const entryKey = currentEntry?.id != null ? String(currentEntry.id) : `new:${symbol}`;
 
@@ -610,50 +695,82 @@ export default function FiveMTradeModal({
     Number(rsiSell) !== suggestCtx.rsiSell
   );
 
-  const loadSuggest = useCallback(async () => {
+  const recoveryPatternMissing = !recoveryPattern.types.length;
+  const recoveryZonesMissing = recoveryPattern.types.length > 0 && !recoveryPattern.zones.length;
+  const stopLossMissing = !stopLossTypes.length;
+
+  const recoverySuggestStale = recoverySuggest && !recoverySuggest.loading && !recoverySuggest.error && (
+    Number(rsiBuy) !== Number(recoverySuggest.rsiBuy) ||
+    Number(rsiSell) !== Number(recoverySuggest.rsiSell) ||
+    maFiltersKey(maFilters) !== suggestCtx?.maKey
+  );
+  const stopSuggestStale = stopSuggest && !stopSuggest.loading && !stopSuggest.error && (
+    Number(rsiBuy) !== Number(stopSuggest.rsiBuy) ||
+    Number(rsiSell) !== Number(stopSuggest.rsiSell) ||
+    maFiltersKey(maFilters) !== suggestCtx?.maKey
+  );
+
+  const stopLossNeedsSuggest = !stopSuggest || stopSuggest.loading || stopSuggest.error || stopSuggestStale;
+  const stopLossInvalid = stopLossTypes.some(t => !stopOptionAvailable(t, stopSuggest, rsiBuy));
+  const formReady = recoveryPattern.types.length > 0 && !recoveryZonesMissing && !stopLossMissing && !stopLossInvalid;
+
+  const loadRsiSuggest = useCallback(async () => {
     const buy  = Number(rsiBuy);
     const sell = Number(rsiSell);
     if (!Number.isFinite(buy) || !Number.isFinite(sell) || buy >= sell) return;
 
     setSuggest({ loading: true });
-    setStopSuggest({ loading: true });
     try {
-      const [r, stopR] = await Promise.all([
-        fetchFiveMTradeSuggestRsi({ symbol, exchange, entryValue: buy, exitValue: sell, maFilters }),
-        fetchFiveMTradeSuggestStop({ symbol, exchange, rsiBuy: buy, maFilters }).catch(err => ({ error: err.message })),
-      ]);
+      const r = await fetchFiveMTradeSuggestRsi({
+        symbol, exchange, entryValue: buy, exitValue: sell, maFilters,
+      });
       setSuggestCtx({ exchange, rsiBuy: buy, rsiSell: sell, maKey: maFiltersKey(maFilters) });
       setSuggest(r);
-      const stopVal = stopR?.error ? null : { ...stopR, rsiBuy: buy };
-      setStopSuggest(stopVal);
-      // Auto-seleciona MA se disponível e nenhuma escolha foi feita
-      if (stopVal?.ma?.ok) {
-        setStopLossType(prev => prev === 'none' ? 'ma' : prev);
-        setOpenSections(prev => {
-          const s = new Set(prev);
-          s.add('stop');
-          if (stopVal?.candlePatterns?.ok) s.add('candles');
-          return s;
-        });
-      } else if (stopVal?.hist?.ok) {
-        setOpenSections(prev => { const s = new Set(prev); s.add('stop'); return s; });
-      }
-      if (maFilters.enabled) {
-        setMaAdapt({ loading: true });
-        try {
-          const maR = await fetchFiveMTradeSuggestMaAdaptation({
-            symbol, exchange, rsiBuy: buy, rsiSell: sell, maFilters,
-          });
-          setMaAdapt(maR);
-        } catch (err) {
-          setMaAdapt({ error: err.message });
-        }
-      } else {
-        setMaAdapt(null);
-      }
     } catch (err) {
       setSuggest({ error: err.message });
-      setStopSuggest(null);
+    }
+  }, [symbol, exchange, rsiBuy, rsiSell, maFilters]);
+
+  const loadEntryBelowSuggest = useCallback(async () => {
+    const buy = Number(rsiBuy);
+    if (!Number.isFinite(buy) || rsiInvalid) return;
+
+    setEntryBelowSuggest({ loading: true });
+    try {
+      const r = await fetchFiveMTradeSuggestEntryBelow({ symbol, exchange, rsiBuy: buy });
+      setEntryBelowSuggest({ ...r, rsiBuy: buy });
+    } catch (err) {
+      setEntryBelowSuggest({ error: err.message });
+    }
+  }, [symbol, exchange, rsiBuy, rsiInvalid]);
+
+  const entryBelowStale = entryBelowSuggest && !entryBelowSuggest.loading && !entryBelowSuggest.error
+    && Number(rsiBuy) !== Number(entryBelowSuggest.rsiBuy);
+
+  const maAdaptStale = maAdapt && !maAdapt.loading && !maAdapt.error && (
+    Number(rsiBuy) !== Number(maAdapt.rsiBuy) ||
+    Number(rsiSell) !== Number(maAdapt.rsiSell) ||
+    maFiltersKey(maFilters) !== maAdapt.maKey
+  );
+
+  const loadRecoverySuggest = useCallback(async () => {
+    const buy  = Number(rsiBuy);
+    const sell = Number(rsiSell);
+    if (!Number.isFinite(buy) || !Number.isFinite(sell) || buy >= sell) return;
+
+    setRecoverySuggest({ loading: true });
+    setStopSuggest({ loading: true });
+    try {
+      const rec = await fetchFiveMTradeSuggestRecovery({
+        symbol, exchange, rsiBuy: buy, rsiSell: sell, maFilters,
+      });
+      const ctx = { exchange, rsiBuy: buy, rsiSell: sell, maKey: maFiltersKey(maFilters) };
+      setSuggestCtx(prev => ({ ...prev, ...ctx }));
+      setRecoverySuggest({ ...rec, rsiBuy: buy, rsiSell: sell });
+      setStopSuggest(stopPayloadFromRecovery({ ...rec, rsiBuy: buy, rsiSell: sell }));
+    } catch (err) {
+      setRecoverySuggest({ error: err.message });
+      setStopSuggest({ error: err.message });
     }
   }, [symbol, exchange, rsiBuy, rsiSell, maFilters]);
 
@@ -671,6 +788,10 @@ export default function FiveMTradeModal({
         rsiBuy: buy,
         rsiSell: sell,
         maFilters,
+        recoveryPattern: recoveryPattern.types.length
+          ? { types: recoveryPattern.types, zones: recoveryPattern.zones, abovePct: recoveryPattern.abovePct }
+          : undefined,
+        sellScope,
         phase: currentEntry?.phase ?? 'WATCHING',
         lastBuyTime: currentEntry?.lastBuyTime ?? null,
         buyCount: currentEntry?.buyCount ?? 0,
@@ -679,7 +800,7 @@ export default function FiveMTradeModal({
     } catch (err) {
       setLiveTest({ error: err.message });
     }
-  }, [symbol, exchange, rsiBuy, rsiSell, maFilters, currentEntry]);
+  }, [symbol, exchange, rsiBuy, rsiSell, maFilters, recoveryPattern, sellScope, currentEntry]);
 
   const loadMaAdaptation = useCallback(async () => {
     const buy  = Number(rsiBuy);
@@ -691,7 +812,12 @@ export default function FiveMTradeModal({
       const r = await fetchFiveMTradeSuggestMaAdaptation({
         symbol, exchange, rsiBuy: buy, rsiSell: sell, maFilters,
       });
-      setMaAdapt(r);
+      setMaAdapt({
+        ...r,
+        rsiBuy: buy,
+        rsiSell: sell,
+        maKey: maFiltersKey(maFilters),
+      });
     } catch (err) {
       setMaAdapt({ error: err.message });
     }
@@ -712,8 +838,8 @@ export default function FiveMTradeModal({
 
   useEffect(() => {
     const ex  = currentEntry?.exchange ?? defaultExchange ?? 'binance';
-    const buy = currentEntry?.rsiBuy ?? 30;
-    const sell = currentEntry?.rsiSell ?? 70;
+    const buy = currentEntry?.rsiBuy ?? DEFAULT_FIVE_M_RSI_BUY;
+    const sell = currentEntry?.rsiSell ?? DEFAULT_FIVE_M_RSI_SELL;
     const ma  = cloneMaFilters(currentEntry?.maFilters);
     const cap = currentEntry?.capital ?? 40;
 
@@ -722,52 +848,18 @@ export default function FiveMTradeModal({
     setRsiBuy(buy);
     setRsiSell(sell);
     setMaFilters(ma);
-    setStopLossType(currentEntry?.stopLoss?.type ?? 'none');
+    setRecoveryPattern(initialRecoveryPattern(currentEntry));
+    setStopLossTypes(initialStopLossTypes(currentEntry));
+    setSellScope(currentEntry?.sellScope ?? 'bot_only');
+    setEntryPrice(initialEntryPrice(currentEntry));
+    setEntryBelowSuggest(null);
     setSuggest(null);
     setSuggestCtx(null);
     setMaAdapt(null);
+    setRecoverySuggest(null);
     setStopSuggest(null);
     setLiveTest(null);
-    setOpenSections(new Set());
-
-    let cancelled = false;
-    (async () => {
-      const b = Number(buy);
-      const s = Number(sell);
-      if (!Number.isFinite(b) || !Number.isFinite(s) || b >= s) return;
-
-      setSuggest({ loading: true });
-      setStopSuggest({ loading: true });
-      try {
-        const [r, stopR] = await Promise.all([
-          fetchFiveMTradeSuggestRsi({ symbol, exchange: ex, entryValue: b, exitValue: s, maFilters: ma }),
-          fetchFiveMTradeSuggestStop({ symbol, exchange: ex, rsiBuy: b, maFilters: ma }).catch(err => ({ error: err.message })),
-        ]);
-        if (cancelled) return;
-        setSuggestCtx({ exchange: ex, rsiBuy: b, rsiSell: s, maKey: maFiltersKey(ma) });
-        setSuggest(r);
-        setStopSuggest(stopR?.error ? null : { ...stopR, rsiBuy: b });
-
-        if (ma.enabled) {
-          setMaAdapt({ loading: true });
-          try {
-            const maR = await fetchFiveMTradeSuggestMaAdaptation({
-              symbol, exchange: ex, rsiBuy: b, rsiSell: s, maFilters: ma,
-            });
-            if (!cancelled) setMaAdapt(maR);
-          } catch (err) {
-            if (!cancelled) setMaAdapt({ error: err.message });
-          }
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setSuggest({ error: err.message });
-          setStopSuggest(null);
-        }
-      }
-    })();
-
-    return () => { cancelled = true; };
+    setOpenSections(new Set(['candles']));
   // entryKey muda ao abrir outra moeda ou quando favoritos carregam o id
   // eslint-disable-next-line react-hooks/exhaustive-deps -- currentEntry lido no corpo; entryKey evita loop
   }, [symbol, entryKey, defaultExchange]);
@@ -787,7 +879,8 @@ export default function FiveMTradeModal({
       return maFilters.enabled ? suggest.maDescription : null;
     }
     const sample = suggest.entry?.lowSample ? ' · amostra pequena' : '';
-    return `${b.tradeCount} trades · PnL ${fmtPct(b.avgPnl)} · win ${b.winRate}%${maStatsSuffix()}${sample}`;
+    const histWarn = suggest.entry?.histStopWarning ? ' · stop hist. indisponível' : '';
+    return `${b.tradeCount} trades · PnL ${fmtPct(b.avgPnl)} · win ${b.winRate}%${maStatsSuffix()}${sample}${histWarn}`;
   }
 
   function exitStatsLine() {
@@ -844,9 +937,7 @@ export default function FiveMTradeModal({
   }
 
   function maSuggestForFilter(filterId) {
-    const fromAdapt = maAdapt?.filters?.find(s => s.filterId === filterId);
-    const fromHist  = suggest?.maToleranceSuggestions?.find(s => s.filterId === filterId);
-    const row = fromAdapt ?? fromHist;
+    const row = maAdapt?.filters?.find(s => s.filterId === filterId);
     if (!row) return null;
     return {
       ...row,
@@ -858,8 +949,18 @@ export default function FiveMTradeModal({
     const cap  = Number(capital);
     const buy  = Number(rsiBuy);
     const sell = Number(rsiSell);
-    if (!Number.isFinite(cap) || cap <= 0 || buy >= sell) return;
-    onConfirm({ exchange, capital: cap, rsiBuy: buy, rsiSell: sell, maFilters, stopLoss: { type: stopLossType } });
+    if (!Number.isFinite(cap) || cap <= 0 || buy >= sell || !formReady) return;
+    onConfirm({
+      exchange, capital: cap, rsiBuy: buy, rsiSell: sell, maFilters,
+      stopLoss: { types: stopLossTypes },
+      recoveryPattern: {
+        types: recoveryPattern.types,
+        zones: recoveryPattern.zones,
+        abovePct: recoveryPattern.abovePct,
+      },
+      sellScope,
+      entryPrice: normalizeEntryPriceForm(entryPrice),
+    });
   }
 
   return (
@@ -891,7 +992,10 @@ export default function FiveMTradeModal({
             accent="#94a3b8"
           >
             <p className="text-[10px] leading-relaxed pt-1" style={{ color: '#94a3b8' }}>
-              RSI(14, 5m) · DCA a cada 2h · venda total na saída
+              RSI(14, 5m) · DCA a cada 2h · saída por RSI
+              <span className="block mt-0.5 text-p5/45">
+                Venda: {sellScopeLabel(sellScope)}
+              </span>
               {maFilters.enabled && (
                 <span className="block mt-1 text-cyan-400/80">
                   Entrada só com preço {maFilters.filters.filter(f => f.enabled).map(f =>
@@ -947,55 +1051,265 @@ export default function FiveMTradeModal({
             />
           </div>
 
-          {/* RSI compra + sugestão colada */}
-          <div>
-            <label className="block text-[10px] uppercase tracking-wider mb-1" style={{ color: '#26a69a' }}>
-              RSI Compra (5m) — abaixo de
-            </label>
-            <input
-              type="number"
-              value={rsiBuy}
-              onChange={e => setRsiBuy(e.target.value)}
-              min={10} max={50}
-              className="w-full rounded px-2.5 py-1.5 text-xs text-p5 outline-none font-mono"
-              style={{ background: '#1e2130', border: '1px solid #2a2d3a' }}
-            />
-            <RsiSuggestHint
-              label="<"
-              suggested={ready ? suggest.entryRsiValue : null}
-              current={rsiBuy}
-              stats={entryStatsLine()}
-              onApply={() => setRsiBuy(suggest.entryRsiValue)}
-              loading={suggest?.loading}
-              stale={entryHintStale}
-              accent="#26a69a"
-            />
-          </div>
+          <AnalysisAccordion
+            id="sellScope"
+            openIds={openSections}
+            onToggle={toggleSection}
+            title="Na venda (RSI ou stop)"
+            subtitle={sellScopeLabel(sellScope)}
+            accent={FIVE_M_COLOR}
+          >
+            <div className="pt-2 space-y-1.5">
+              {SELL_SCOPE_OPTIONS.map(opt => {
+                const active = sellScope === opt.id;
+                return (
+                  <label
+                    key={opt.id}
+                    className="flex items-start gap-2 rounded px-2 py-2 cursor-pointer hover:opacity-90 transition-colors"
+                    style={{
+                      background: active ? '#06b6d414' : '#1e2130',
+                      border: `1px solid ${active ? FIVE_M_COLOR : '#2a2d3a'}`,
+                    }}
+                  >
+                    <input
+                      type="radio"
+                      name="sellScope"
+                      value={opt.id}
+                      checked={active}
+                      onChange={() => setSellScope(opt.id)}
+                      className="mt-0.5 shrink-0"
+                      style={{ accentColor: FIVE_M_COLOR }}
+                    />
+                    <span className="min-w-0">
+                      <span className="text-[10px] font-medium text-p5 block">{opt.label}</span>
+                      <span className="text-[9px] text-p5/50 block mt-0.5 leading-relaxed">{opt.summary}</span>
+                      <Tooltip text={opt.tooltip} maxW={260}>
+                        <span className="text-[8px] text-p5/35 underline decoration-dotted cursor-help mt-0.5 inline-block">
+                          detalhes
+                        </span>
+                      </Tooltip>
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+          </AnalysisAccordion>
 
-          {/* RSI venda + sugestão colada */}
-          <div>
-            <label className="block text-[10px] uppercase tracking-wider mb-1" style={{ color: '#ef5350' }}>
-              RSI Venda (5m) — acima de
-            </label>
-            <input
-              type="number"
-              value={rsiSell}
-              onChange={e => setRsiSell(e.target.value)}
-              min={50} max={95}
-              className="w-full rounded px-2.5 py-1.5 text-xs text-p5 outline-none font-mono"
-              style={{ background: '#1e2130', border: '1px solid #2a2d3a' }}
-            />
-            <RsiSuggestHint
-              label=">"
-              suggested={ready ? suggest.exitRsiValue : null}
-              current={rsiSell}
-              stats={exitStatsLine()}
-              onApply={() => setRsiSell(suggest.exitRsiValue)}
-              loading={suggest?.loading}
-              stale={exitHintStale}
-              accent="#ef5350"
-            />
-          </div>
+          <AnalysisAccordion
+            id="rsi"
+            openIds={openSections}
+            onToggle={toggleSection}
+            title="RSI entrada / saída (5m)"
+            subtitle={`compra < ${rsiBuy} · venda > ${rsiSell}`}
+            accent={FIVE_M_COLOR}
+            action={(
+              <SuggestButton
+                onClick={loadRsiSuggest}
+                loading={suggest?.loading}
+                disabled={rsiInvalid}
+                color={FIVE_M_COLOR}
+                title="Analisa histórico e sugere RSI de compra e venda"
+              />
+            )}
+          >
+            <div className="pt-2 space-y-3">
+              <div>
+                <label className="block text-[10px] uppercase tracking-wider mb-1" style={{ color: '#26a69a' }}>
+                  Compra — abaixo de
+                </label>
+                <input
+                  type="number"
+                  value={rsiBuy}
+                  onChange={e => setRsiBuy(e.target.value)}
+                  min={10} max={50}
+                  className="w-full rounded px-2.5 py-1.5 text-xs text-p5 outline-none font-mono"
+                  style={{ background: '#1e2130', border: '1px solid #2a2d3a' }}
+                />
+                <RsiSuggestHint
+                  label="<"
+                  suggested={ready ? suggest.entryRsiValue : null}
+                  current={rsiBuy}
+                  stats={entryStatsLine()}
+                  onApply={() => setRsiBuy(suggest.entryRsiValue)}
+                  loading={suggest?.loading}
+                  stale={entryHintStale}
+                  accent="#26a69a"
+                />
+                {ready && suggest.entry?.histStopWarning && !entryHintStale && (
+                  <p className="text-[9px] text-amber-500/85 mt-1 leading-relaxed">
+                    {suggest.entry.histStopWarning} — prefira stop fixo −5% ou suba o RSI de compra.
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-[10px] uppercase tracking-wider mb-1" style={{ color: '#ef5350' }}>
+                  Venda — acima de
+                </label>
+                <input
+                  type="number"
+                  value={rsiSell}
+                  onChange={e => setRsiSell(e.target.value)}
+                  min={50} max={95}
+                  className="w-full rounded px-2.5 py-1.5 text-xs text-p5 outline-none font-mono"
+                  style={{ background: '#1e2130', border: '1px solid #2a2d3a' }}
+                />
+                <RsiSuggestHint
+                  label=">"
+                  suggested={ready ? suggest.exitRsiValue : null}
+                  current={rsiSell}
+                  stats={exitStatsLine()}
+                  onApply={() => setRsiSell(suggest.exitRsiValue)}
+                  loading={suggest?.loading}
+                  stale={exitHintStale}
+                  accent="#ef5350"
+                />
+              </div>
+
+              {needsRecalc && !suggest?.loading && (
+                <p className="text-[9px] text-amber-500/80">
+                  Parâmetros RSI alterados — clique <strong>Sugerir</strong> para atualizar.
+                </p>
+              )}
+
+              {suggest?.error && (
+                <p className="text-[9px] text-amber-500/90">{suggest.error}</p>
+              )}
+            </div>
+          </AnalysisAccordion>
+
+          <AnalysisAccordion
+            id="entryPrice"
+            openIds={openSections}
+            onToggle={toggleSection}
+            title="Preço de compra"
+            subtitle={
+              entryPrice.mode === 'below'
+                ? `Um pouco abaixo do mercado · ${entryPriceLabel(entryPrice)}`
+                : 'Preço de mercado'
+            }
+            accent={FIVE_M_COLOR}
+          >
+            <div className="pt-2 space-y-1.5">
+              {ENTRY_PRICE_OPTIONS.map(opt => {
+                const active = entryPrice.mode === opt.id;
+                return (
+                  <label
+                    key={opt.id}
+                    className="flex items-start gap-2 rounded px-2 py-2 cursor-pointer hover:opacity-90 transition-colors"
+                    style={{
+                      background: active ? '#06b6d414' : '#1e2130',
+                      border: `1px solid ${active ? FIVE_M_COLOR : '#2a2d3a'}`,
+                    }}
+                  >
+                    <input
+                      type="radio"
+                      name="entryPriceMode"
+                      value={opt.id}
+                      checked={active}
+                      onChange={() => setEntryPrice(prev => ({
+                        ...prev,
+                        mode: opt.id,
+                        belowPct: opt.id === 'below' ? (prev.belowPct || 0.5) : 0,
+                      }))}
+                      className="mt-0.5 shrink-0"
+                      style={{ accentColor: FIVE_M_COLOR }}
+                    />
+                    <span className="min-w-0">
+                      <span className="text-[10px] font-medium text-p5 block">{opt.label}</span>
+                      <span className="text-[9px] text-p5/50 block mt-0.5 leading-relaxed">{opt.summary}</span>
+                      <Tooltip text={opt.tooltip} maxW={280}>
+                        <span className="text-[8px] text-p5/35 underline decoration-dotted cursor-help mt-0.5 inline-block">
+                          detalhes
+                        </span>
+                      </Tooltip>
+                    </span>
+                  </label>
+                );
+              })}
+              {entryPrice.mode === 'below' && (
+                <div className="mt-1 rounded px-2 py-2 space-y-1.5" style={{ background: '#1e2130', border: '1px solid #2a2d3a' }}>
+                  <div className="flex items-center justify-between gap-2">
+                    <label className="flex items-center gap-2 text-[9px] text-p5/70">
+                      <span>Limit</span>
+                      <span className="text-p5/40">−</span>
+                      <input
+                        type="number"
+                        value={entryPrice.belowPct}
+                        onChange={e => {
+                          const parsed = parseBelowPctInput(e.target.value);
+                          if (parsed != null) {
+                            setEntryPrice(prev => ({ ...prev, belowPct: parsed }));
+                          }
+                        }}
+                        min={0.1}
+                        max={10}
+                        step={0.01}
+                        className="w-16 rounded px-1 py-0.5 font-mono text-p5 outline-none"
+                        style={{ background: '#161a28', border: '1px solid #2a2d3a' }}
+                      />
+                      <span>%</span>
+                      <span className="text-p5/40">abaixo do mercado</span>
+                    </label>
+                    <SuggestButton
+                      onClick={loadEntryBelowSuggest}
+                      loading={entryBelowSuggest?.loading}
+                      disabled={rsiInvalid}
+                      color={FIVE_M_COLOR}
+                      title={`Histórico de quedas após RSI<${rsiBuy} até recuperar`}
+                    />
+                  </div>
+                  {entryBelowSuggest?.loading && (
+                    <p className="text-[9px] text-p5/40 font-mono">Analisando dips RSI&lt;{rsiBuy}…</p>
+                  )}
+                  {entryBelowStale && !entryBelowSuggest?.loading && (
+                    <p className="text-[9px] text-amber-500/85">
+                      RSI alterado — clique <strong>Sugerir</strong> para recalcular.
+                    </p>
+                  )}
+                  {entryBelowSuggest?.entryBelow?.ok && !entryBelowSuggest?.loading && (
+                    <div className="rounded px-2 py-1.5" style={{ background: '#161a28', border: `1px solid ${FIVE_M_COLOR}33` }}>
+                      <p className="text-[9px] font-mono leading-relaxed text-p5/70">
+                        <span style={{ color: FIVE_M_COLOR }}>
+                          Sugestão: −{entryBelowSuggest.entryBelow.suggestedBelowPct}%
+                        </span>
+                        {' · '}
+                        {entryBelowSuggest.entryBelow.episodeCount} episódios RSI&lt;{rsiBuy}
+                        {' · '}mediana −{entryBelowSuggest.entryBelow.medianDropPct}%
+                        {entryBelowSuggest.entryBelow.limitPrice != null && (
+                          <> · limit ~{entryBelowSuggest.entryBelow.limitPrice}</>
+                        )}
+                      </p>
+                      <p className="text-[9px] text-p5/45 mt-0.5 leading-relaxed">
+                        {entryBelowSuggest.entryBelow.description}
+                      </p>
+                      {Number(entryPrice.belowPct) !== Number(entryBelowSuggest.entryBelow.suggestedBelowPct) && (
+                        <button
+                          type="button"
+                        onClick={() => setEntryPrice(prev => ({
+                          ...prev,
+                          belowPct: clampBelowPct(entryBelowSuggest.entryBelow.suggestedBelowPct),
+                        }))}
+                          className="mt-1 text-[9px] px-1.5 py-0.5 rounded font-medium"
+                          style={{ background: `${FIVE_M_COLOR}22`, color: FIVE_M_COLOR, border: `1px solid ${FIVE_M_COLOR}55` }}
+                        >
+                          Usar −{entryBelowSuggest.entryBelow.suggestedBelowPct}%
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  {entryBelowSuggest?.entryBelow && !entryBelowSuggest.entryBelow.ok && !entryBelowSuggest?.loading && (
+                    <p className="text-[9px] font-mono text-p5/50">
+                      Sem histórico suficiente para RSI&lt;{rsiBuy} — ajuste % manualmente ou use mercado.
+                    </p>
+                  )}
+                  {entryBelowSuggest?.error && (
+                    <p className="text-[9px] text-amber-500/90">{entryBelowSuggest.error}</p>
+                  )}
+                </div>
+              )}
+            </div>
+          </AnalysisAccordion>
 
           {/* Filtros MA */}
           <AnalysisAccordion
@@ -1021,16 +1335,13 @@ export default function FiveMTradeModal({
               </label>
               {maFilters.enabled && (
                 <div className="flex gap-1 shrink-0">
-                  <button
-                    type="button"
+                  <SuggestButton
                     onClick={loadMaAdaptation}
-                    disabled={maAdapt?.loading || rsiInvalid}
-                    className="text-[9px] px-1.5 py-0.5 rounded font-semibold disabled:opacity-40"
-                    style={{ color: '#a78bfa', border: '1px solid #a78bfa44' }}
-                    title="Analisa dips históricos + simulação bot para sugerir calibragem %"
-                  >
-                    {maAdapt?.loading ? '…' : 'Sugerir adaptação'}
-                  </button>
+                    loading={maAdapt?.loading}
+                    disabled={rsiInvalid}
+                    color="#a78bfa"
+                    title="Analisa dips históricos e sugere calibragem % abaixo da MA"
+                  />
                   <button
                     type="button"
                     onClick={addMaFilter}
@@ -1054,39 +1365,35 @@ export default function FiveMTradeModal({
                   onRemove={() => removeMaFilter(idx)}
                   canRemove={maFilters.filters.length > 1}
                   toleranceSuggest={
-                    (ready || (maAdapt && !maAdapt.loading && !maAdapt.error))
+                    maAdapt && !maAdapt.loading && !maAdapt.error && !maAdaptStale
                       ? maSuggestForFilter(f.id)
                       : null
                   }
+                  toleranceLoading={maAdapt?.loading}
+                  toleranceStale={maAdaptStale}
                 />
               ))}
               <p className="text-[9px] text-p5/40 leading-relaxed pt-0.5">
-                Calibragem: admite compra até X% abaixo da MA. Use <strong className="text-p5/60">Sugerir adaptação</strong> para calcular pelo histórico da moeda.
+                Calibragem: admite compra até X% abaixo da MA. Clique em <strong className="text-p5/60">Sugerir</strong> para ver a sugestão — use <strong className="text-p5/60">Usar −X%</strong> para aplicar no input.
               </p>
-              {maFilters.enabled && stopSuggest?.ma?.ok && (
-                <MaStopInlineHint ma={stopSuggest.ma} />
-              )}
-              {maFilters.enabled && stopSuggest?.loading && (
-                <p className="text-[9px] text-p5/30 font-mono mt-1">Calculando stop MA…</p>
-              )}
-              {(maAdapt?.summary || suggest?.maAdaptSummary) && !maAdapt?.loading && (
+              {maAdapt?.summary && !maAdapt?.loading && (
                 <div
                   className="mt-2 rounded px-2 py-1.5 space-y-1"
                   style={{ background: '#161a28', border: '1px solid #a78bfa33' }}
                 >
                   <p className="text-[9px] font-mono text-p5/60 leading-relaxed">
-                    {maAdapt?.summary ?? suggest?.maAdaptSummary}
+                    {maAdapt.summary}
                   </p>
-                  {(maAdapt?.filters ?? suggest?.maToleranceSuggestions)?.some(
+                  {maAdapt.filters?.some(
                     s => s.recommendedTolerancePct !== s.currentTolerancePct,
                   ) && (
                     <button
                       type="button"
-                      onClick={() => applyAllMaAdaptation(maAdapt?.filters ?? suggest?.maToleranceSuggestions)}
+                      onClick={() => applyAllMaAdaptation(maAdapt.filters)}
                       className="text-[9px] px-2 py-0.5 rounded font-semibold"
                       style={{ background: '#a78bfa22', color: '#a78bfa', border: '1px solid #a78bfa55' }}
                     >
-                      Aplicar todas as sugestões MA
+                      Aplicar todas no input
                     </button>
                   )}
                 </div>
@@ -1098,59 +1405,107 @@ export default function FiveMTradeModal({
             </div>
           </AnalysisAccordion>
 
-          {/* Stop Loss — depois dos filtros MA para o usuário ver o que está ativo */}
           <AnalysisAccordion
-            id="stop"
+            id="candles"
             openIds={openSections}
             onToggle={toggleSection}
-            title="Stop Loss"
+            title="Padrão 1h — recuperação"
             subtitle={
-              stopLossType === 'none' ? 'desativado'
-              : stopLossType === 'hist' && stopSuggest?.hist?.ok
-                ? `Histórico RSI − sair em ${stopSuggest.hist.stopPrice} (−${stopSuggest.hist.stopPct}%)`
-              : stopLossType === 'ma' && stopSuggest?.ma?.ok
-                ? `${stopSuggest.ma.label} − sair em ${stopSuggest.ma.stopPrice} (−${stopSuggest.ma.stopPct}%)`
-              : stopLossType !== 'none' ? 'calculando…' : ''
+              recoverySuggest?.loading ? 'calculando…'
+                : recoverySuggestStale
+                  ? 'desatualizado — clique Sugerir'
+                : recoveryPattern.types.length
+                  ? `${recoveryPatternTypesLabel(recoveryPattern.types)} · ${recoveryPatternZonesLabel(recoveryPattern.zones, recoveryPattern.abovePct)}`
+                  : recoverySuggest?.recoveryAnalysis?.summary ?? 'obrigatório'
             }
-            accent={stopLossType !== 'none' ? STOP_COLOR : '#4b5563'}
+            accent={recoveryPattern.types.length ? '#26a69a' : '#f59e0b'}
+            action={(
+              <SuggestButton
+                onClick={loadRecoverySuggest}
+                loading={recoverySuggest?.loading}
+                disabled={rsiInvalid}
+                color="#26a69a"
+                title="Analisa padrões 1h, zonas MA e stops no histórico"
+              />
+            )}
           >
             <div className="pt-2">
-              <StopLossSelector
-                stop={stopSuggest?.loading ? null : stopSuggest}
-                loading={stopSuggest?.loading}
-                maFiltersEnabled={maFilters.enabled}
-                value={stopLossType}
-                onChange={setStopLossType}
+              {recoverySuggestStale && !recoverySuggest?.loading && (
+                <p className="text-[9px] text-amber-500/85 mb-2">
+                  Parâmetros alterados — clique <strong>Sugerir</strong> para atualizar.
+                </p>
+              )}
+              {recoverySuggest?.error && (
+                <p className="text-[9px] text-amber-500/90 mb-2">{recoverySuggest.error}</p>
+              )}
+              <RecoveryPatternSelector
+                analysis={recoverySuggest?.recoveryAnalysis}
+                live={recoverySuggest?.candlePatterns}
+                maZone={recoverySuggest?.maZone}
+                loading={recoverySuggest?.loading}
+                rsiBuy={Number(rsiBuy)}
+                patternTypes={recoveryPattern.types}
+                zones={recoveryPattern.zones}
+                abovePct={recoveryPattern.abovePct}
+                onPatternsChange={types => setRecoveryPattern(prev => ({ ...prev, types }))}
+                onZonesChange={zones => setRecoveryPattern(prev => ({ ...prev, zones }))}
+                onAbovePctChange={abovePct => setRecoveryPattern(prev => ({ ...prev, abovePct }))}
               />
             </div>
           </AnalysisAccordion>
 
-          {/* Padrão 3/4 candles 1h — carrega junto com as sugestões de stop */}
-          {(stopSuggest?.loading || stopSuggest?.candlePatterns?.ok) && (
-            <AnalysisAccordion
-              id="candles"
-              openIds={openSections}
-              onToggle={toggleSection}
-              title="Padrão 1h — recuperação"
-              subtitle={
-                stopSuggest?.loading ? 'calculando…'
-                : stopSuggest?.candlePatterns?.confirmed
-                  ? (stopSuggest.candlePatterns.threeCandles ? '3 verdes ✓' : '') +
-                    (stopSuggest.candlePatterns.fourCandles
-                      ? (stopSuggest.candlePatterns.threeCandles ? ' · ' : '') + '3↑1↓ ✓'
-                      : '')
-                  : 'sem confirmação de alta 1h'
-              }
-              accent={stopSuggest?.candlePatterns?.confirmed ? '#26a69a' : '#4b5563'}
-            >
-              <div className="pt-2">
-                {stopSuggest?.loading
-                  ? <p className="text-[9px] text-p5/40 font-mono">…</p>
-                  : <CandlePatternHint patterns={stopSuggest?.candlePatterns} />
-                }
-              </div>
-            </AnalysisAccordion>
+          {(recoveryPatternMissing || recoveryZonesMissing || stopLossMissing || stopLossInvalid || stopLossNeedsSuggest) && !recoverySuggest?.loading && !stopSuggest?.loading && (
+            <p className="text-[10px]" style={{ color: '#f59e0b' }}>
+              {recoveryPatternMissing
+                ? 'Selecione um ou mais padrões de recuperação 1h.'
+                : recoveryZonesMissing
+                  ? 'Selecione ao menos uma zona MA para os padrões 1h.'
+                  : stopLossMissing
+                    ? 'Selecione ao menos um stop loss.'
+                    : stopLossNeedsSuggest
+                      ? 'Clique em Sugerir na seção Stop loss para calcular as opções.'
+                      : 'Stop selecionado indisponível — clique Sugerir ou escolha fixo −5%.'}
+            </p>
           )}
+
+          <AnalysisAccordion
+            id="stop"
+            openIds={openSections}
+            onToggle={toggleSection}
+            title="Stop loss"
+            subtitle={
+              stopSuggest?.loading ? 'calculando…'
+                : stopSuggestStale
+                  ? 'desatualizado — clique Sugerir'
+                : stopLossTypes.length
+                  ? stopLossTypesLabel(stopLossTypes, rsiBuy)
+                  : 'obrigatório — escolha uma ou mais regras'
+            }
+            accent={stopLossTypes.length && !stopLossInvalid ? '#f87171' : '#f59e0b'}
+            action={(
+              <SuggestButton
+                onClick={loadRecoverySuggest}
+                loading={stopSuggest?.loading}
+                disabled={rsiInvalid}
+                color="#f87171"
+                title="Calcula stops fixos, histórico RSI e MA no momento"
+              />
+            )}
+          >
+            <div className="pt-2">
+              <FiveMStopLossSelector
+                stop={stopSuggest}
+                loading={stopSuggest?.loading}
+                rsiBuy={Number(rsiBuy)}
+                value={stopLossTypes}
+                onChange={setStopLossTypes}
+                stale={stopSuggestStale}
+              />
+              {stopSuggest?.error && (
+                <p className="text-[9px] text-amber-500/90 mt-1">{stopSuggest.error}</p>
+              )}
+            </div>
+          </AnalysisAccordion>
 
           {rsiInvalid && (
             <p className="text-[10px]" style={{ color: '#ef5350' }}>
@@ -1159,19 +1514,6 @@ export default function FiveMTradeModal({
           )}
 
           <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={loadSuggest}
-              disabled={suggest?.loading || rsiInvalid}
-              className="flex-1 py-1 text-[11px] rounded font-bold transition-opacity disabled:opacity-40"
-              style={{ background: needsRecalc ? '#f59e0b' : FIVE_M_COLOR, color: '#000' }}
-            >
-              {suggest?.loading
-                ? 'Calculando…'
-                : needsRecalc
-                  ? '↻ Calcular'
-                  : '↻ Histórico'}
-            </button>
             <button
               type="button"
               onClick={runLiveTest}
@@ -1197,23 +1539,6 @@ export default function FiveMTradeModal({
                 <LiveTestPanel data={liveTest} />
               </div>
             </AnalysisAccordion>
-          )}
-
-          {needsRecalc && !suggest?.loading && (
-            <p className="text-[9px] text-center text-amber-500/90">
-              Parâmetros alterados — clique para atualizar as análises
-            </p>
-          )}
-
-          {suggest?.loading && (
-            <p className="text-[10px] text-center text-p5/40">
-              Simulando RSI &lt;{rsiBuy} → &gt;{rsiSell}
-              {maFilters.enabled ? ` · ${describeMaFiltersLocal(maFilters)}` : ''}…
-            </p>
-          )}
-
-          {suggest && !suggest.loading && suggest.error && (
-            <p className="text-[10px] text-center" style={{ color: '#f59e0b' }}>{suggest.error}</p>
           )}
 
           {ready && (
@@ -1317,9 +1642,10 @@ export default function FiveMTradeModal({
           )}
           <button
             onClick={handleConfirm}
-            disabled={!Number(capital) || Number(capital) <= 0 || rsiInvalid}
+            disabled={!Number(capital) || Number(capital) <= 0 || rsiInvalid || !formReady}
             className="flex-1 py-1 text-[11px] rounded font-semibold transition-opacity disabled:opacity-40"
             style={{ background: FIVE_M_COLOR, color: '#000' }}
+            title={!formReady ? 'Selecione padrão 1h, zonas MA e stop loss' : undefined}
           >
             {isActive ? 'Atualizar' : 'Adicionar'}
           </button>

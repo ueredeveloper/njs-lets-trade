@@ -691,7 +691,7 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
           defaultExchange={fiveMModal.exchange}
           isActive={!!fiveMTradeFavorites.find(e => e.symbol === fiveMModal.symbol)}
           currentEntry={fiveMTradeFavorites.find(e => e.symbol === fiveMModal.symbol)}
-          onConfirm={async ({ exchange, capital, rsiBuy, rsiSell, maFilters, stopLoss }) => {
+          onConfirm={async ({ exchange, capital, rsiBuy, rsiSell, maFilters, stopLoss, recoveryPattern, sellScope, entryPrice }) => {
             const existing = fiveMTradeFavorites.find(e => e.symbol === fiveMModal.symbol);
             await saveFiveMTradeEntry({
               id: existing?.id,
@@ -702,6 +702,9 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
               rsiSell,
               maFilters,
               stopLoss,
+              recoveryPattern,
+              sellScope,
+              entryPrice,
             });
             setFiveMModal(null);
           }}

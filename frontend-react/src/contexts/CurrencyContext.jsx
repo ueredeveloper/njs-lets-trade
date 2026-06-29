@@ -141,14 +141,14 @@ export function CurrencyProvider({ children }) {
     }
   }, []);
 
-  const saveFiveMTradeEntry = useCallback(async ({ id, symbol, exchange, capital, rsiBuy, rsiSell, maFilters, stopLoss }) => {
+  const saveFiveMTradeEntry = useCallback(async ({ id, symbol, exchange, capital, rsiBuy, rsiSell, maFilters, stopLoss, recoveryPattern, sellScope, entryPrice }) => {
     try {
       if (id) {
-        const entry = await updateFiveMTradeFavorite(id, { exchange, capital, rsiBuy, rsiSell, maFilters, stopLoss });
+        const entry = await updateFiveMTradeFavorite(id, { exchange, capital, rsiBuy, rsiSell, maFilters, stopLoss, recoveryPattern, sellScope, entryPrice });
         setFiveMTradeFavorites(prev => prev.map(e => e.id === id ? entry : e));
         return entry;
       }
-      const entry = await addFiveMTradeFavorite({ symbol, exchange, capital, rsiBuy, rsiSell, maFilters, stopLoss });
+      const entry = await addFiveMTradeFavorite({ symbol, exchange, capital, rsiBuy, rsiSell, maFilters, stopLoss, recoveryPattern, sellScope, entryPrice });
       setFiveMTradeFavorites(prev => [...prev, entry]);
       return entry;
     } catch (err) {

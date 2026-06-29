@@ -23,7 +23,12 @@ const { fetchBinanceCandles, fetchGateCandles } = require('../prices');
 const { toGateSymbol } = require('../../utils/toGateSymbol');
 const { sendWhatsApp } = require('../whatsapp');
 const { checkMaFiltersLive, describeMaFilters } = require('./maFilter');
-const { computeStopSuggestions } = require('./suggestStopLoss');
+const { computeActiveStops } = require('./stopLossEngine');
+const { normalizeRecoveryPattern, isActiveRecoveryPattern, recoveryPatternLabel } = require('./recoveryPatternConfig');
+const { checkRecoveryPatternsLive, evaluateRecoveryEntry } = require('./recoveryPattern');
+const { isActiveStopLoss, stopLossLabel } = require('./stopLossConfig');
+const { normalizeSellScope, sellScopeLabel } = require('./sellScopeConfig');
+const { normalizeEntryPrice, entryPriceLabel } = require('./entryPriceConfig');
 
 // ── Configuração ──────────────────────────────────────────────────────────────
 const INTERVAL           = '5m';
@@ -75,22 +80,18 @@ function formatCooldown(ms) {
   return h > 0 ? `${h}h${m}m` : `${m}m`;
 }
 
-function logStopSuggestions(log, stops) {
-  const { hist, ma } = stops;
+function logActiveStop(log, stop) {
   log(`${'─'.repeat(60)}`);
-  if (hist?.ok) {
-    log(`${Y}🛡️  Stop sugerido (histórico RSI)${X}`);
-    log(`   Preço stop : ${hist.stopPrice}`);
-    log(`   Queda stop : ${hist.stopPct}%  (P75 de ${hist.episodeCount} episódios, média ${hist.avgDropPct}%)`);
+  if (!stop) {
+    log(`${Y}🛡️  Stop loss: não configurado — configure hist ou ma no painel 5m Trade${X}`);
+  } else if (!stop.ok) {
+    log(`${Y}🛡️  Stop ${stop.type}: indisponível (${stop.reason ?? '?'})${X}`);
   } else {
-    log(`${Y}🛡️  Stop histórico: indisponível (${hist?.reason ?? '?'})${X}`);
-  }
-  if (ma?.ok) {
-    log(`${Y}🛡️  Stop sugerido (${ma.label} −2%)${X}`);
-    log(`   Preço stop : ${ma.stopPrice}`);
-    log(`   Queda stop : ${ma.stopPct}%  (MA=${ma.maValue}  piso adaptativo=${ma.adaptiveFloor}  dip=${ma.adaptiveDipPct}%)`);
-  } else if (ma?.reason !== 'ma_desabilitado') {
-    log(`${Y}🛡️  Stop MA: indisponível (${ma?.reason ?? '?'})${X}`);
+    log(`${Y}🛡️  Stop ativo (${stop.label})${X}`);
+    log(`   Preço stop : ${stop.stopPrice}`);
+    log(`   Queda stop : ${stop.stopPct}%`);
+    if (stop.episodeCount != null) log(`   Episódios  : ${stop.episodeCount}`);
+    if (stop.adaptiveFloor != null) log(`   Piso MA    : ${stop.adaptiveFloor}`);
   }
   log(`${'─'.repeat(60)}`);
 }
@@ -139,6 +140,51 @@ async function binanceMarketBuy(symbol, usdtAmount) {
   });
   const filledQty = parseFloat(order.executedQty);
   const quoteQty  = parseFloat(order.cummulativeQuoteQty);
+  return { filledQty, quoteQty, avgPrice: quoteQty / filledQty };
+}
+
+async function binanceSymbolFilters(symbol) {
+  const info = await fetch(`${BINANCE_BASE}/api/v3/exchangeInfo?symbol=${symbol}`).then(r => r.json());
+  const sym  = info.symbols?.[0];
+  if (!sym) return {};
+  const priceFilter = sym.filters?.find(f => f.filterType === 'PRICE_FILTER');
+  const lotFilter   = sym.filters?.find(f => f.filterType === 'LOT_SIZE');
+  const tickSize    = priceFilter ? parseFloat(priceFilter.tickSize) : 0.00000001;
+  const stepSize    = lotFilter ? parseFloat(lotFilter.stepSize) : 0.00000001;
+  const priceDecimals = tickSize < 1 ? (String(tickSize).split('.')[1]?.length ?? 8) : 0;
+  const qtyDecimals   = stepSize < 1 ? (String(stepSize).split('.')[1]?.length ?? 8) : 0;
+  return { tickSize, stepSize, priceDecimals, qtyDecimals };
+}
+
+function roundDown(value, step) {
+  if (!step || step <= 0) return value;
+  return Math.floor(value / step) * step;
+}
+
+async function binanceBuy(symbol, usdtAmount, { belowPct = 0 } = {}) {
+  const pct = Number(belowPct);
+  if (!Number.isFinite(pct) || pct <= 0) return binanceMarketBuy(symbol, usdtAmount);
+
+  const ticker = await fetch(`${BINANCE_BASE}/api/v3/ticker/price?symbol=${symbol}`).then(r => r.json());
+  const market = parseFloat(ticker.price);
+  if (!market) throw new Error('Binance: preço inválido');
+
+  const { tickSize, stepSize, priceDecimals, qtyDecimals } = await binanceSymbolFilters(symbol);
+  const rawLimit   = market * (1 - pct / 100);
+  const limitPrice = parseFloat(roundDown(rawLimit, tickSize).toFixed(priceDecimals));
+  const rawQty     = usdtAmount / limitPrice;
+  const quantity   = parseFloat(roundDown(rawQty, stepSize).toFixed(qtyDecimals));
+  if (quantity <= 0) throw new Error('Binance: quantidade inválida para limit');
+
+  const order = await binanceReq('POST', '/api/v3/order', {
+    symbol, side: 'BUY', type: 'LIMIT', timeInForce: 'IOC',
+    price: String(limitPrice), quantity: String(quantity),
+  });
+  const filledQty = parseFloat(order.executedQty || 0);
+  const quoteQty  = parseFloat(order.cummulativeQuoteQty || 0);
+  if (filledQty <= 0) {
+    throw new Error(`Binance: limit −${pct}% @ ${limitPrice} não preenchida (mercado ${market})`);
+  }
   return { filledQty, quoteQty, avgPrice: quoteQty / filledQty };
 }
 
@@ -236,11 +282,14 @@ async function gateGetTokenBalance(pair) {
   return acc ? parseFloat(acc.available) : 0;
 }
 
-async function gateMarketBuy(pair, usdtAmount) {
+async function gateBuy(pair, usdtAmount, { belowPct = 0 } = {}) {
   const ticker     = await fetch(`${GATE_BASE}/spot/tickers?currency_pair=${pair}`).then(r => r.json());
   const price      = parseFloat(ticker[0]?.last);
   if (!price) throw new Error(`Gate.io: preço inválido para ${pair}`);
-  const limitPrice = parseFloat((price * 1.005).toFixed(8));
+  const pct        = Number(belowPct);
+  const limitPrice = parseFloat(
+    (price * (pct > 0 ? (1 - pct / 100) : 1.005)).toFixed(8),
+  );
   const qty        = parseFloat((usdtAmount / limitPrice).toFixed(8));
   const order      = await gateReq('POST', '/spot/orders', {
     currency_pair: pair, side: 'buy', type: 'limit',
@@ -251,7 +300,10 @@ async function gateMarketBuy(pair, usdtAmount) {
   const grossQty = parseFloat(filled.amount) - parseFloat(filled.left || 0);
   const quoteQty = parseFloat(filled.filled_total || 0);
   const avgPrice = parseFloat(filled.avg_deal_price || limitPrice);
-  if (grossQty <= 0) throw new Error(`Gate.io: compra não preenchida (status=${filled.status})`);
+  if (grossQty <= 0) {
+    const label = pct > 0 ? `limit −${pct}%` : 'mercado';
+    throw new Error(`Gate.io: compra ${label} @ ${limitPrice} não preenchida`);
+  }
   const netQty = parseFloat((grossQty * (1 - GATE_FEE_RATE)).toFixed(8));
   return { filledQty: netQty, quoteQty: quoteQty || grossQty * avgPrice, avgPrice };
 }
@@ -286,7 +338,7 @@ function buildAdapter(exchange, symbol) {
       name:         'Gate.io',
       pair,
       fetchCandles: (lim, iv)  => fetchGateCandles(pair, lim, iv),
-      marketBuy:    (usdt)    => gateMarketBuy(pair, usdt),
+      marketBuy:    (usdt, opts) => gateBuy(pair, usdt, opts),
       marketSell:   (qty, log) => gateMarketSell(pair, qty, log),
       fetch24hVol:  ()         => gate24hVolume(pair),
       getBalance:   ()         => gateGetTokenBalance(pair),
@@ -296,7 +348,7 @@ function buildAdapter(exchange, symbol) {
     name:         'Binance',
     pair:         symbol,
     fetchCandles: (lim, iv)  => fetchBinanceCandles(symbol, lim, iv),
-    marketBuy:    (usdt)     => binanceMarketBuy(symbol, usdt),
+    marketBuy:    (usdt, opts) => binanceBuy(symbol, usdt, opts),
     marketSell:   (qty, log) => binanceMarketSell(symbol, qty, log),
     fetch24hVol:  ()         => binance24hVolume(symbol),
     getBalance:   ()         => binanceGetTokenBalance(symbol),
@@ -333,16 +385,160 @@ async function saveTrade(trade) {
   await sbReq('POST', 'five_min_bot_trades', trade);
 }
 
-// ── Compra (primeira ou DCA) ──────────────────────────────────────────────────
-async function executeBuy(rowId, adapter, log, state, rsi, capitalPerEntry, isDca, rsiBuy) {
-  const { symbol } = state;
-  const usdtAmount = parseFloat(capitalPerEntry);
+async function checkRecoveryPatternLive(adapter, recoveryPattern, maFilters, price, log) {
+  const cfg = normalizeRecoveryPattern(recoveryPattern);
+  if (!isActiveRecoveryPattern(cfg)) return { ok: true };
 
-  log(`${G}📍 RSI(5m)=${rsi.toFixed(2)} < ${rsiBuy}${isDca ? ' [DCA]' : ''} — comprando ${usdtAmount.toFixed(4)} USDT${X}`);
+  const maCfg   = normalizeMaFilters(maFilters);
+  const active  = maCfg.enabled
+    ? maCfg.filters.find(f => f.enabled && f.mode === 'above')
+    : { period: 50, interval: '1h', tolerancePct: 3 };
+  const period  = active?.period ?? 50;
+  const interval = active?.interval ?? '1h';
+  const tol     = active?.tolerancePct ?? 3;
+
+  const candles1h = await adapter.fetchCandles(period + 30, interval);
+  const completed = candles1h?.slice(0, -1) ?? [];
+  if (completed.length < period) {
+    log(`${Y}⏳ Padrão 1h: candles insuficientes${X}`);
+    return { ok: false };
+  }
+
+  const closes = completed.map(c => c.close);
+  const maArr  = ti.SMA.calculate({ values: closes, period });
+  const ma     = maArr[maArr.length - 1];
+  const patternLive = checkRecoveryPatternsLive(candles1h, cfg.types);
+  const evalR   = evaluateRecoveryEntry(price, ma, tol, cfg, patternLive);
+
+  if (!evalR.ok && evalR.reason === 'tres_vermelhos_1h') {
+    log(`${Y}⏳ Bloqueado: 3 candles 1h vermelhos (queda em direção à MA)${X}`);
+    return { ok: false, eval: evalR, patternLive };
+  }
+
+  if (!evalR.ok) {
+    const zone = evalR.zone === 'above_ma'
+      ? `acima MA +${cfg.abovePct}%`
+      : 'entre MA e piso adaptativo';
+    log(`${Y}⏳ Padrão 1h ausente (${zone}): ${recoveryPatternLabel(cfg)}${X}`);
+    return { ok: false, eval: evalR, patternLive };
+  }
+  if (evalR.patternRequired) {
+    log(`${G}✓ Padrão 1h OK (${evalR.zone === 'above_ma' ? `+${cfg.abovePct}%` : 'zona adaptativa'})${X}`);
+  }
+  return { ok: true, eval: evalR, patternLive };
+}
+
+async function resolveSellQty(adapter, state, log) {
+  const scope  = normalizeSellScope(state.sell_scope).scope;
+  const botQty = parseFloat(state.buy_qty || 0);
+  if (scope === 'wallet') {
+    const balance = await adapter.getBalance();
+    if (balance <= 0) throw new Error(`Saldo livre insuficiente para venda (${adapter.name})`);
+    if (balance > botQty + 1e-12) {
+      log(`${Y}📦 Modo carteira — vendendo saldo ${balance.toFixed(8)} (bot rastreou ${botQty.toFixed(8)})${X}`);
+    }
+    return { sellQty: balance, scope, botQty };
+  }
+  if (botQty <= 0) throw new Error('Qty do bot zerada — nada a vender');
+  return { sellQty: botQty, scope: 'bot_only', botQty };
+}
+
+async function executeSell(rowId, adapter, log, state, rsi, reason = 'rsi') {
+  const { symbol, phase } = state;
+  if (phase !== 'BOUGHT') return false;
+
+  const buyCount      = state.buy_count || 0;
+  const capitalPerEntry = parseFloat(state.capital);
+  const reasonLabel   = reason === 'stop_loss' ? 'STOP LOSS' : 'VENDA TOTAL';
+  const reasonEmoji   = reason === 'stop_loss' ? `${Y}🛡️` : `${R}🔴`;
+  const rsiNote       = reason === 'rsi' ? `RSI(5m)=${rsi.toFixed(2)} > ${Number(state.rsi_sell ?? RSI_SELL)} — ` : '';
+
+  let sellPlan;
+  try {
+    sellPlan = await resolveSellQty(adapter, state, log);
+  } catch (err) {
+    log(`❌ ${err.message}`);
+    return false;
+  }
+  const { sellQty, scope, botQty } = sellPlan;
+  const scopeNote = scope === 'wallet' ? ' [carteira inteira]' : ' [só bot]';
+
+  log(`${reasonEmoji} ${rsiNote}vendendo${scopeNote} (${sellQty.toFixed(8)} ${symbol})${X}`);
 
   let result;
   try {
-    result = await adapter.marketBuy(usdtAmount);
+    result = await adapter.marketSell(sellQty, log);
+  } catch (err) {
+    log(`❌ Erro na venda: ${err.message}`);
+    return false;
+  }
+
+  const { soldQty, usdtOut, exitPrice } = result;
+  const totalIn       = parseFloat(state.buy_usdt);
+  let countedUsdtOut  = usdtOut;
+  if (scope === 'wallet' && soldQty > botQty && botQty > 0) {
+    countedUsdtOut = usdtOut * (botQty / soldQty);
+  }
+  const pnlUsdt       = countedUsdtOut - totalIn;
+  const pnlPct        = totalIn > 0 ? (pnlUsdt / totalIn) * 100 : 0;
+  const capitalBefore = capitalPerEntry;
+  const capitalAfter  = capitalBefore + pnlUsdt;
+  const pnlSign       = pnlUsdt >= 0 ? '+' : '';
+
+  await saveTrade({
+    symbol, exchange: state.exchange,
+    entry_time: state.buy_time, exit_time: new Date().toISOString(),
+    entry_price: parseFloat(state.buy_price), exit_price: exitPrice,
+    qty: soldQty, usdt_in: totalIn, usdt_out: usdtOut,
+    pnl_usdt: pnlUsdt, pnl_pct: pnlPct,
+    capital_before: capitalBefore, capital_after: capitalAfter,
+    buy_count: buyCount,
+    rsi_entry: parseFloat(state.rsi_entry ?? 0), rsi_exit: rsi,
+  });
+
+  await saveState(rowId, {
+    capital: capitalAfter, phase: 'WATCHING',
+    buy_price: null, buy_qty: null, buy_usdt: null,
+    buy_time: null, last_buy_time: null, buy_count: 0, rsi_entry: null,
+  });
+
+  log(`${'─'.repeat(60)}`);
+  log(`${reasonEmoji} ${reasonLabel} (${buyCount} entrada${buyCount > 1 ? 's' : ''})${X}`);
+  log(`   Preço médio saída : ${exitPrice.toFixed(6)}`);
+  log(`   Qty vendida       : ${soldQty}${scope === 'wallet' && soldQty > botQty ? ` (bot: ${botQty.toFixed(8)})` : ''}`);
+  log(`   USDT investido    : ${totalIn.toFixed(4)}`);
+  log(`   USDT recebido     : ${usdtOut.toFixed(4)}${countedUsdtOut !== usdtOut ? ` (bot: ${countedUsdtOut.toFixed(4)})` : ''}`);
+  log(`   PnL               : ${pnlSign}${pnlUsdt.toFixed(4)} USDT  (${pnlSign}${pnlPct.toFixed(2)}%)`);
+  if (reason === 'rsi') log(`   RSI saída         : ${rsi.toFixed(2)}`);
+  log(`   Capital           : ${capitalBefore.toFixed(4)} → ${capitalAfter.toFixed(4)} USDT`);
+  log(`${'─'.repeat(60)}`);
+
+  const waPrefix = reason === 'stop_loss' ? '🛡️' : '🔴';
+  const waTitle  = reason === 'stop_loss' ? 'STOP LOSS' : 'VENDA TOTAL';
+  sendWhatsApp(
+    `${waPrefix} [5m Trade] ${symbol} ${waTitle} [${adapter.name}]\n` +
+    `Entradas: ${buyCount}\nPreço saída: ${exitPrice.toFixed(6)}\n` +
+    `USDT investido: ${totalIn.toFixed(4)}\nUSDT recebido: ${usdtOut.toFixed(4)}\n` +
+    `PnL: ${pnlSign}${pnlUsdt.toFixed(4)} USDT (${pnlSign}${pnlPct.toFixed(2)}%)\n` +
+    `Capital: ${capitalBefore.toFixed(4)} → ${capitalAfter.toFixed(4)} USDT` +
+    (reason === 'rsi' ? `\nRSI(5m): ${rsi.toFixed(2)}` : ''),
+  );
+
+  return true;
+}
+
+async function executeBuy(rowId, adapter, log, state, rsi, capitalPerEntry, isDca, rsiBuy) {
+  const { symbol } = state;
+  const usdtAmount = parseFloat(capitalPerEntry);
+  const entryCfg   = normalizeEntryPrice(state.entry_price);
+  const belowPct   = entryCfg.mode === 'below' ? entryCfg.belowPct : 0;
+  const entryLabel = belowPct > 0 ? `limit −${belowPct}%` : 'mercado';
+
+  log(`${G}📍 RSI(5m)=${rsi.toFixed(2)} < ${rsiBuy}${isDca ? ' [DCA]' : ''} — comprando ${usdtAmount.toFixed(4)} USDT (${entryLabel})${X}`);
+
+  let result;
+  try {
+    result = await adapter.marketBuy(usdtAmount, { belowPct });
   } catch (err) {
     log(`❌ Erro na compra: ${err.message}`);
     return null;
@@ -392,8 +588,20 @@ function canBuyAgain(lastBuyTime) {
   return elapsed >= ENTRY_COOLDOWN_MS;
 }
 
+async function refreshActiveStop(adapter, state, rsiBuy, entryPrice, currentPrice) {
+  const stopLoss = state.stop_loss;
+  if (!isActiveStopLoss(stopLoss)) return null;
+  try {
+    return await computeActiveStops(
+      adapter, state.stop_loss, state.ma_filters, rsiBuy, entryPrice, currentPrice,
+    );
+  } catch (err) {
+    return { ok: false, reason: err.message };
+  }
+}
+
 // ── Tick ──────────────────────────────────────────────────────────────────────
-async function tick(rowId, adapter, log, prevRsi = null, lastStops = null, setStops = null) {
+async function tick(rowId, adapter, log, prevRsi = null, lastStop = null, setStop = null) {
   const candles = await adapter.fetchCandles(CANDLE_LIMIT, INTERVAL);
   const closes  = candles.map(c => c.close);
 
@@ -439,8 +647,12 @@ async function tick(rowId, adapter, log, prevRsi = null, lastStops = null, setSt
     `  capital/entrada=${capitalPerEntry.toFixed(4)} USDT` +
     `  fase=${phase}` +
     (phase === 'BOUGHT' ? `  entradas=${buyCount}  qty=${parseFloat(state.buy_qty || 0).toFixed(6)}` : '') +
-    (phase === 'BOUGHT' && lastStops?.hist?.ok ? `  🛡️H:${lastStops.hist.stopPrice}(${lastStops.hist.stopPct}%)` : '') +
-    (phase === 'BOUGHT' && lastStops?.ma?.ok   ? `  🛡️MA:${lastStops.ma.stopPrice}(${lastStops.ma.stopPct}%)`   : ''),
+    (phase === 'BOUGHT' && isActiveStopLoss(state.stop_loss)
+      ? `  🛡️${stopLossLabel(state.stop_loss)}`
+      : '') +
+    (phase === 'BOUGHT' && lastStop?.ok
+      ? `  stop@${lastStop.stopPrice}(-${lastStop.stopPct}%)`
+      : ''),
   );
 
   // ── WATCHING: primeira entrada ────────────────────────────────────────────
@@ -448,72 +660,34 @@ async function tick(rowId, adapter, log, prevRsi = null, lastStops = null, setSt
     if (rsi >= rsiBuy) return rsi;
     const maCheck = await checkMaFiltersLive(adapter, state.ma_filters, log);
     if (!maCheck.ok) return rsi;
+    const patCheck = await checkRecoveryPatternLive(adapter, state.recovery_pattern, state.ma_filters, close, log);
+    if (!patCheck.ok) return rsi;
     const buyResult = await executeBuy(rowId, adapter, log, state, rsi, capitalPerEntry, false, rsiBuy);
-    if (buyResult && setStops) {
-      computeStopSuggestions(adapter, state.ma_filters, RSI_PERIOD, rsiBuy, buyResult.avgPrice)
-        .then(stops => { setStops(stops); logStopSuggestions(log, stops); })
+    if (buyResult && setStop) {
+      refreshActiveStop(adapter, state, rsiBuy, buyResult.avgPrice, buyResult.avgPrice)
+        .then(stop => { setStop(stop); logActiveStop(log, stop); })
         .catch(err => log(`⚠️  Stop loss: ${err.message}`));
     }
     return rsi;
   }
 
-  // ── BOUGHT: venda total ou DCA ────────────────────────────────────────────
+  // ── BOUGHT: stop loss, venda total ou DCA ─────────────────────────────────
   if (phase === 'BOUGHT') {
-    if (rsi > rsiSell) {
-      const sellQty = parseFloat(state.buy_qty || 0);
+    const entryPrice = parseFloat(state.buy_price || close);
 
-      log(`${R}📈 RSI(5m)=${rsi.toFixed(2)} > ${rsiSell} — vendendo tudo (${sellQty.toFixed(8)} ${symbol})${X}`);
+    if (isActiveStopLoss(state.stop_loss)) {
+      const activeStop = await refreshActiveStop(adapter, state, rsiBuy, entryPrice, close);
+      if (setStop) setStop(activeStop);
 
-      let result;
-      try {
-        result = await adapter.marketSell(sellQty, log);
-      } catch (err) {
-        log(`❌ Erro na venda: ${err.message}`);
+      if (activeStop?.ok && close <= activeStop.stopPrice) {
+        log(`${Y}🛡️ Stop ${activeStop.label} atingido — close ${close.toFixed(6)} ≤ ${activeStop.stopPrice}${X}`);
+        await executeSell(rowId, adapter, log, state, rsi, 'stop_loss');
         return rsi;
       }
+    }
 
-      const { soldQty, usdtOut, exitPrice } = result;
-      const totalIn         = parseFloat(state.buy_usdt);
-      const pnlUsdt         = usdtOut - totalIn;
-      const pnlPct          = (pnlUsdt / totalIn) * 100;
-      const capitalBefore   = capitalPerEntry;
-      const capitalAfter    = capitalBefore + pnlUsdt;
-      const pnlSign         = pnlUsdt >= 0 ? '+' : '';
-
-      await saveTrade({
-        symbol, exchange: state.exchange,
-        entry_time: state.buy_time, exit_time: new Date().toISOString(),
-        entry_price: parseFloat(state.buy_price), exit_price: exitPrice,
-        qty: soldQty, usdt_in: totalIn, usdt_out: usdtOut,
-        pnl_usdt: pnlUsdt, pnl_pct: pnlPct,
-        capital_before: capitalBefore, capital_after: capitalAfter,
-        buy_count: buyCount,
-        rsi_entry: parseFloat(state.rsi_entry ?? 0), rsi_exit: rsi,
-      });
-
-      await saveState(rowId, {
-        capital: capitalAfter, phase: 'WATCHING',
-        buy_price: null, buy_qty: null, buy_usdt: null,
-        buy_time: null, last_buy_time: null, buy_count: 0, rsi_entry: null,
-      });
-
-      log(`${'─'.repeat(60)}`);
-      log(`${R}🔴 VENDA TOTAL (${buyCount} entrada${buyCount > 1 ? 's' : ''})${X}`);
-      log(`   Preço médio saída : ${exitPrice.toFixed(6)}`);
-      log(`   Qty vendida       : ${soldQty}`);
-      log(`   USDT investido    : ${totalIn.toFixed(4)}`);
-      log(`   USDT recebido     : ${usdtOut.toFixed(4)}`);
-      log(`   PnL               : ${pnlSign}${pnlUsdt.toFixed(4)} USDT  (${pnlSign}${pnlPct.toFixed(2)}%)`);
-      log(`   RSI saída         : ${rsi.toFixed(2)}`);
-      log(`   Capital           : ${capitalBefore.toFixed(4)} → ${capitalAfter.toFixed(4)} USDT`);
-      log(`${'─'.repeat(60)}`);
-      sendWhatsApp(
-        `🔴 [5m Trade] ${symbol} VENDA TOTAL [${adapter.name}]\n` +
-        `Entradas: ${buyCount}\nPreço saída: ${exitPrice.toFixed(6)}\n` +
-        `USDT investido: ${totalIn.toFixed(4)}\nUSDT recebido: ${usdtOut.toFixed(4)}\n` +
-        `PnL: ${pnlSign}${pnlUsdt.toFixed(4)} USDT (${pnlSign}${pnlPct.toFixed(2)}%)\n` +
-        `Capital: ${capitalBefore.toFixed(4)} → ${capitalAfter.toFixed(4)} USDT\nRSI(5m): ${rsi.toFixed(2)}`,
-      );
+    if (rsi > rsiSell) {
+      await executeSell(rowId, adapter, log, state, rsi, 'rsi');
       return rsi;
     }
 
@@ -525,10 +699,12 @@ async function tick(rowId, adapter, log, prevRsi = null, lastStops = null, setSt
       }
       const maCheck = await checkMaFiltersLive(adapter, state.ma_filters, log);
       if (!maCheck.ok) return rsi;
+      const patCheck = await checkRecoveryPatternLive(adapter, state.recovery_pattern, state.ma_filters, close, log);
+      if (!patCheck.ok) return rsi;
       const buyResult = await executeBuy(rowId, adapter, log, state, rsi, capitalPerEntry, true, rsiBuy);
-      if (buyResult && setStops) {
-        computeStopSuggestions(adapter, state.ma_filters, RSI_PERIOD, rsiBuy, buyResult.avgPrice)
-          .then(stops => { setStops(stops); logStopSuggestions(log, stops); })
+      if (buyResult && setStop) {
+        refreshActiveStop(adapter, state, rsiBuy, buyResult.avgPrice, buyResult.avgPrice)
+          .then(stop => { setStop(stop); logActiveStop(log, stop); })
           .catch(err => log(`⚠️  Stop loss: ${err.message}`));
       }
     }
@@ -548,9 +724,15 @@ async function startSymbol(row, color) {
 
   log(
     `=== Iniciado | ${adapter.name} | RSI(${RSI_PERIOD},${INTERVAL}) | ` +
-    `compra < ${rsiBuy} | venda > ${rsiSell} | DCA cooldown ${ENTRY_COOLDOWN_MS / 3_600_000}h | ` +
+    `compra < ${rsiBuy} | venda > ${rsiSell} | entrada: ${entryPriceLabel(row.entry_price)} | stop: ${stopLossLabel(row.stop_loss)} | ` +
+    `venda: ${sellScopeLabel(row.sell_scope)} | ` +
+    `padrão 1h: ${recoveryPatternLabel(row.recovery_pattern)} | ` +
+    `DCA cooldown ${ENTRY_COOLDOWN_MS / 3_600_000}h | ` +
     `poll 3min / 1min (RSI≤${buyFastThreshold} ou ≥${sellFastThreshold}) | fase: ${row.phase} ===`,
   );
+  if (!isActiveStopLoss(row.stop_loss)) {
+    log(`${Y}⚠️  Stop loss não configurado — edite no painel 5m Trade (hist ou ma)${X}`);
+  }
   if (row.phase === 'BOUGHT') {
     log(
       `♻️  Posição aberta — ${row.buy_count || 1} entrada(s) | ` +
@@ -559,9 +741,9 @@ async function startSymbol(row, color) {
     );
   }
 
-  let lastRsi   = null;
-  let lastStops = null;
-  let errCount  = 0;
+  let lastRsi  = null;
+  let lastStop = null;
+  let errCount = 0;
 
   const schedule = () => {
     const nearBuy  = lastRsi !== null && lastRsi <= buyFastThreshold;
@@ -572,7 +754,7 @@ async function startSymbol(row, color) {
 
   const run = async () => {
     try {
-      lastRsi  = await tick(row.id, adapter, log, lastRsi, lastStops, s => { lastStops = s; });
+      lastRsi = await tick(row.id, adapter, log, lastRsi, lastStop, s => { lastStop = s; });
       errCount = 0;
     } catch (err) {
       errCount++;

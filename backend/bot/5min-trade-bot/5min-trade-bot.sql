@@ -56,3 +56,15 @@ ALTER TABLE five_min_bot_state
 -- Filtros MA para entrada (ex.: preço > MA50 1h)
 ALTER TABLE five_min_bot_state
   ADD COLUMN IF NOT EXISTS ma_filters JSONB DEFAULT '{"enabled":false,"filters":[{"id":"ma50-1h","enabled":true,"period":50,"interval":"1h","mode":"above","tolerancePct":0}]}'::jsonb;
+
+-- Stop loss escolhido pelo usuário: {"type":"hist"} ou {"type":"ma"}
+ALTER TABLE five_min_bot_state
+  ADD COLUMN IF NOT EXISTS stop_loss JSONB DEFAULT '{"type":"none"}'::jsonb;
+
+-- Escopo da venda: bot_only (só buy_qty) ou wallet (saldo livre inteiro)
+ALTER TABLE five_min_bot_state
+  ADD COLUMN IF NOT EXISTS sell_scope TEXT NOT NULL DEFAULT 'bot_only';
+
+-- Preço de entrada: {"mode":"market"} ou {"mode":"below","belowPct":1.2}
+ALTER TABLE five_min_bot_state
+  ADD COLUMN IF NOT EXISTS entry_price JSONB DEFAULT '{"mode":"market","belowPct":0}'::jsonb;

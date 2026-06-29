@@ -495,12 +495,10 @@ router.delete('/multitrade-favorites/:id', getUserId, async (req, res) => {
 const {
   normalizeMaFilters, getRequiredIntervals, candleLimitForInterval,
 } = require('../bot/5min-trade-bot/maFilter');
-
-function normalizeStopLoss(raw) {
-  if (!raw || typeof raw !== 'object') return { type: 'none' };
-  const type = ['none', 'hist', 'ma'].includes(raw.type) ? raw.type : 'none';
-  return { type };
-}
+const { normalizeStopLoss } = require('../bot/5min-trade-bot/stopLossConfig');
+const { normalizeRecoveryPattern } = require('../bot/5min-trade-bot/recoveryPatternConfig');
+const { normalizeSellScope } = require('../bot/5min-trade-bot/sellScopeConfig');
+const { normalizeEntryPrice } = require('../bot/5min-trade-bot/entryPriceConfig');
 
 function fiveMTradeToEntry(r) {
   return {
@@ -513,6 +511,9 @@ function fiveMTradeToEntry(r) {
     rsiSell:        Number(r.rsi_sell ?? 70),
     maFilters:      normalizeMaFilters(r.ma_filters),
     stopLoss:       normalizeStopLoss(r.stop_loss),
+    recoveryPattern: normalizeRecoveryPattern(r.recovery_pattern),
+    sellScope:      normalizeSellScope(r.sell_scope).scope,
+    entryPrice:     normalizeEntryPrice(r.entry_price),
     phase:          r.phase ?? 'WATCHING',
     buyCount:       r.buy_count ?? 0,
     lastBuyTime:    r.last_buy_time ?? r.buy_time ?? null,
@@ -532,7 +533,7 @@ router.get('/five-m-trade-favorites', getUserId, async (req, res) => {
 // POST /services/sb/five-m-trade-favorites  { symbol, exchange?, capital?, rsiBuy?, rsiSell?, maFilters? }
 router.post('/five-m-trade-favorites', getUserId, async (req, res) => {
   const {
-    symbol, exchange = 'binance', capital = 40, rsiBuy = 30, rsiSell = 70, maFilters, stopLoss,
+    symbol, exchange = 'binance', capital = 40, rsiBuy = 30, rsiSell = 70, maFilters, stopLoss, recoveryPattern, sellScope, entryPrice,
   } = req.body;
   if (!symbol) return res.status(400).json({ error: 'symbol obrigatório' });
   const sym = symbol.toUpperCase();
@@ -544,8 +545,21 @@ router.post('/five-m-trade-favorites', getUserId, async (req, res) => {
     return res.status(400).json({ error: 'rsiBuy deve ser menor que rsiSell' });
   }
 
-  const maCfg    = maFilters !== undefined ? normalizeMaFilters(maFilters) : undefined;
-  const slCfg    = stopLoss  !== undefined ? normalizeStopLoss(stopLoss)   : undefined;
+  const maCfg = maFilters !== undefined ? normalizeMaFilters(maFilters) : undefined;
+  const slCfg = stopLoss !== undefined
+    ? normalizeStopLoss(stopLoss)
+    : undefined;
+  const rpCfg = recoveryPattern !== undefined
+    ? normalizeRecoveryPattern(recoveryPattern, { required: true })
+    : undefined;
+  const sellScopeCfg = sellScope !== undefined ? normalizeSellScope(sellScope).scope : undefined;
+  const entryPriceCfg = entryPrice !== undefined ? normalizeEntryPrice(entryPrice) : undefined;
+  if (stopLoss !== undefined && stopLoss !== null && slCfg?.types?.length === 0 && stopLoss.types?.length) {
+    return res.status(400).json({ error: 'stopLoss.types inválido' });
+  }
+  if (recoveryPattern !== undefined && !rpCfg) {
+    return res.status(400).json({ error: 'recoveryPattern.types obrigatório — escolha ao menos um padrão 1h' });
+  }
 
   const { data: existing } = await supabase
     .from('five_min_bot_state')
@@ -558,6 +572,9 @@ router.post('/five-m-trade-favorites', getUserId, async (req, res) => {
     const updates = { exchange, capital: cap, rsi_buy: buy, rsi_sell: sell, updated_at: new Date().toISOString() };
     if (maCfg !== undefined) updates.ma_filters = maCfg;
     if (slCfg  !== undefined) updates.stop_loss  = slCfg;
+    if (rpCfg  !== undefined) updates.recovery_pattern = rpCfg;
+    if (sellScopeCfg !== undefined) updates.sell_scope = sellScopeCfg;
+    if (entryPriceCfg !== undefined) updates.entry_price = entryPriceCfg;
     if (existing.phase === 'WATCHING') updates.initial_capital = cap;
     ({ data, error } = await supabase
       .from('five_min_bot_state')
@@ -566,6 +583,13 @@ router.post('/five-m-trade-favorites', getUserId, async (req, res) => {
       .select()
       .single());
   } else {
+    if (!rpCfg) {
+      return res.status(400).json({ error: 'recoveryPattern obrigatório — escolha um padrão 1h' });
+    }
+    const stopTypes = slCfg?.types ?? [];
+    if (!stopTypes.length) {
+      return res.status(400).json({ error: 'stopLoss.types obrigatório — escolha ao menos um stop' });
+    }
     ({ data, error } = await supabase
       .from('five_min_bot_state')
       .insert({
@@ -576,7 +600,10 @@ router.post('/five-m-trade-favorites', getUserId, async (req, res) => {
         rsi_buy:         buy,
         rsi_sell:        sell,
         ma_filters:      maCfg ?? normalizeMaFilters(null),
-        ...(slCfg !== undefined ? { stop_loss: slCfg } : {}),
+        stop_loss:       slCfg ?? { types: [] },
+        recovery_pattern: rpCfg,
+        sell_scope:      sellScopeCfg ?? 'bot_only',
+        entry_price:     entryPriceCfg ?? normalizeEntryPrice(null),
         phase:           'WATCHING',
         buy_count:       0,
       })
@@ -590,7 +617,7 @@ router.post('/five-m-trade-favorites', getUserId, async (req, res) => {
 
 // PATCH /services/sb/five-m-trade-favorites/:id
 router.patch('/five-m-trade-favorites/:id', getUserId, async (req, res) => {
-  const { exchange, capital, rsiBuy, rsiSell, maFilters, stopLoss } = req.body;
+  const { exchange, capital, rsiBuy, rsiSell, maFilters, stopLoss, recoveryPattern, sellScope, entryPrice } = req.body;
   const { data: existing, error: findErr } = await supabase
     .from('five_min_bot_state')
     .select('*')
@@ -609,7 +636,20 @@ router.patch('/five-m-trade-favorites/:id', getUserId, async (req, res) => {
   if (rsiBuy !== undefined)  updates.rsi_buy  = Number(rsiBuy);
   if (rsiSell !== undefined) updates.rsi_sell = Number(rsiSell);
   if (maFilters !== undefined) updates.ma_filters = normalizeMaFilters(maFilters);
-  if (stopLoss  !== undefined) updates.stop_loss  = normalizeStopLoss(stopLoss);
+  if (stopLoss !== undefined) {
+    updates.stop_loss = normalizeStopLoss(stopLoss);
+  }
+  if (recoveryPattern !== undefined) {
+    const rpCfg = normalizeRecoveryPattern(recoveryPattern, { required: true });
+    if (!rpCfg) return res.status(400).json({ error: 'recoveryPattern.types inválido' });
+    updates.recovery_pattern = rpCfg;
+  }
+  if (sellScope !== undefined) {
+    updates.sell_scope = normalizeSellScope(sellScope).scope;
+  }
+  if (entryPrice !== undefined) {
+    updates.entry_price = normalizeEntryPrice(entryPrice);
+  }
   const nextBuy  = updates.rsi_buy  ?? Number(existing.rsi_buy  ?? 30);
   const nextSell = updates.rsi_sell ?? Number(existing.rsi_sell ?? 70);
   if (nextBuy >= nextSell) return res.status(400).json({ error: 'rsiBuy deve ser menor que rsiSell' });
@@ -756,13 +796,14 @@ router.get('/five-m-trade-suggest-ma-adaptation', getUserId, async (req, res) =>
   }
 });
 
-// GET /services/sb/five-m-trade-suggest-stop?symbol=&exchange=&rsiBuy=&maFilters=
-router.get('/five-m-trade-suggest-stop', getUserId, async (req, res) => {
+// GET /services/sb/five-m-trade-suggest-recovery?symbol=&exchange=&rsiBuy=&rsiSell=&maFilters=
+router.get('/five-m-trade-suggest-recovery', getUserId, async (req, res) => {
   const symbol = req.query.symbol?.toUpperCase();
   if (!symbol) return res.status(400).json({ error: 'symbol obrigatório' });
 
   const exchange = req.query.exchange ?? 'binance';
   const rsiBuy   = Number(req.query.rsiBuy ?? 30);
+  const rsiSell  = Number(req.query.rsiSell ?? req.query.rsi_sell ?? 70);
 
   let maFilters = null;
   if (req.query.maFilters) {
@@ -772,54 +813,136 @@ router.get('/five-m-trade-suggest-stop', getUserId, async (req, res) => {
   }
   const maCfg = normalizeMaFilters(maFilters);
 
-  const { historicalStopLoss } = require('../bot/5min-trade-bot/suggestStopLoss');
-  const { suggestMaTolerance } = require('../bot/5min-trade-bot/maFilter');
-  const { checkCandlePatterns } = require('../bot/5min-trade-bot/evaluate5mTrade');
+  const { buildRecoverySuggestPayload } = require('../bot/5min-trade-bot/suggestRecoveryAnalysis');
 
   try {
-    const candles5m    = await fetchCandlesForEval(exchange, symbol, '5m', 514);
+    const payload = await buildRecoverySuggestPayload(
+      fetchCandlesForEval, exchange, symbol, rsiBuy, rsiSell, maCfg,
+    );
+    res.json(payload);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /services/sb/five-m-trade-suggest-entry-below?symbol=&exchange=&rsiBuy=
+router.get('/five-m-trade-suggest-entry-below', getUserId, async (req, res) => {
+  const symbol = req.query.symbol?.toUpperCase();
+  if (!symbol) return res.status(400).json({ error: 'symbol obrigatório' });
+
+  const exchange = req.query.exchange ?? 'binance';
+  const rsiBuy   = Number(req.query.rsiBuy ?? 30);
+
+  const { suggestEntryBelowPct } = require('../bot/5min-trade-bot/suggestEntryBelowPct');
+  const { CANDLES_5M } = require('../bot/5min-trade-bot/suggestRecoveryAnalysis');
+
+  try {
+    const candles5m    = await fetchCandlesForEval(exchange, symbol, '5m', CANDLES_5M);
+    const currentPrice = candles5m.length ? candles5m[candles5m.length - 1].close : 0;
+    const entryBelow   = suggestEntryBelowPct(candles5m, 14, rsiBuy, currentPrice);
+    res.json({
+      symbol, exchange, rsiBuy, currentPrice, entryBelow,
+      suggestedBelowPct: entryBelow.suggestedBelowPct ?? null,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /services/sb/five-m-trade-suggest-stop — legado (stop loss); preferir suggest-recovery no painel
+router.get('/five-m-trade-suggest-stop', getUserId, async (req, res) => {
+  const symbol = req.query.symbol?.toUpperCase();
+  if (!symbol) return res.status(400).json({ error: 'symbol obrigatório' });
+
+  const exchange = req.query.exchange ?? 'binance';
+  const rsiBuy   = Number(req.query.rsiBuy ?? 30);
+  const rsiSell  = Number(req.query.rsiSell ?? req.query.rsi_sell ?? 70);
+
+  let maFilters = null;
+  if (req.query.maFilters) {
+    try { maFilters = JSON.parse(req.query.maFilters); } catch {
+      return res.status(400).json({ error: 'maFilters JSON inválido' });
+    }
+  }
+  const maCfg = normalizeMaFilters(maFilters);
+
+  const { historicalStopLoss, fixedStopLoss, compareStopLossOptions, maStopFromCandles } = require('../bot/5min-trade-bot/suggestStopLoss');
+  const { analyzeRecoveryPatterns } = require('../bot/5min-trade-bot/suggestRecoveryPattern');
+  const { suggestAbovePctFor5m } = require('../bot/5min-trade-bot/suggestRecoveryMaZone');
+  const { checkRecoveryPatternsLive } = require('../bot/5min-trade-bot/recoveryPattern');
+  const { resolveMaStopFilter } = require('../bot/5min-trade-bot/maFilter');
+  const { buildExtensionAboveReport } = require('../bot/amap/suggestExtensionAbovePct');
+  const { buildTradeConfig } = require('../bot/amap/strategyEngine');
+
+  try {
+    const candles5m    = await fetchCandlesForEval(exchange, symbol, '5m', 1000);
     const currentPrice = candles5m.length ? candles5m[candles5m.length - 1].close : 0;
     const hist         = historicalStopLoss(candles5m, 14, rsiBuy, currentPrice);
+    const fixed2       = fixedStopLoss(currentPrice, 2);
+    const fixed5       = fixedStopLoss(currentPrice, 5);
 
-    let ma = { ok: false, reason: 'ma_desabilitado' };
+    let ma = { ok: false, reason: 'ma_indisponivel' };
     let candles1h = null;
-    const activeAbove = maCfg.enabled
-      ? maCfg.filters.find(f => f.enabled && f.mode === 'above')
-      : null;
+    const maStopFilter = resolveMaStopFilter(maCfg);
+    const candlesMa = await fetchCandlesForEval(exchange, symbol, maStopFilter.interval, maStopFilter.period + 500);
+    if (maStopFilter.interval === '1h') candles1h = candlesMa;
+    ma = maStopFromCandles(candlesMa, maStopFilter, currentPrice);
 
-    if (activeAbove) {
-      const candlesMa = await fetchCandlesForEval(exchange, symbol, activeAbove.interval, activeAbove.period + 500);
-      if (activeAbove.interval === '1h') candles1h = candlesMa;
-      if (candlesMa.length >= activeAbove.period) {
-        const sug = suggestMaTolerance(candlesMa, activeAbove.period, activeAbove.interval, {
-          defaultPct: 3, maxPct: 8, minPct: 0.5, minEpisodes: 3,
-        });
-        const { currentMa, floor, suggestedTolerancePct } = sug;
-        if (currentMa && floor) {
-          const stopPrice = parseFloat((floor * 0.98).toFixed(8));
-          const stopPct   = parseFloat(((currentPrice - stopPrice) / currentPrice * 100).toFixed(2));
-          ma = {
-            ok: true, stopPrice, stopPct,
-            maValue:        parseFloat(currentMa.toFixed(8)),
-            adaptiveFloor:  parseFloat(floor.toFixed(8)),
-            adaptiveDipPct: suggestedTolerancePct,
-            label:          `MA${activeAbove.period}(${activeAbove.interval})`,
-          };
-        } else {
-          ma = { ok: false, reason: 'ma_indisponivel' };
-        }
-      } else {
-        ma = { ok: false, reason: 'dados_insuficientes' };
-      }
-    }
-
-    // Sempre busca candles 1h para o padrão 3/4 candles (se ainda não buscou)
     if (!candles1h) {
-      candles1h = await fetchCandlesForEval(exchange, symbol, '1h', 10);
+      candles1h = await fetchCandlesForEval(exchange, symbol, '1h', 520);
     }
-    const candlePatterns = checkCandlePatterns({ '1h': candles1h });
+    const stopCompare      = compareStopLossOptions({ hist, ma, fixed2, fixed5 });
+    const recoveryAnalysis = analyzeRecoveryPatterns(candles5m, candles1h, rsiBuy, rsiSell);
+    const localMaZone      = suggestAbovePctFor5m(candles5m, candles1h, maCfg, rsiBuy, rsiSell);
+    const mtReport = buildExtensionAboveReport(
+      { '5m': candles5m, '1h': candles1h },
+      buildTradeConfig({
+        entryRsi: { interval: '5m', period: 14, operator: '<', value: rsiBuy },
+        exitRsi:  { interval: '5m', period: 14, operator: '>', value: rsiSell },
+        extension: {
+          enabled:       true,
+          maPeriod:      maStopFilter.period,
+          maInterval:    maStopFilter.interval,
+          abovePct:      localMaZone.suggestedAbovePct ?? 5,
+          threeCandles:  true,
+          fourCandles:   true,
+          threeInterval: '1h',
+          fourInterval:  '1h',
+          confirmLogic:  'any',
+        },
+      }),
+    );
+    const suggestedAbovePct = mtReport.suggestedAbovePct ?? localMaZone.suggestedAbovePct ?? 5;
+    const maZone = {
+      ok:                mtReport.signalCount > 0 || localMaZone.ok,
+      suggestedAbovePct,
+      maPeriod:          maStopFilter.period,
+      maInterval:        maStopFilter.interval,
+      signalCount:       mtReport.signalCount ?? localMaZone.signalCount ?? 0,
+      medianStretchPct:  mtReport.medianStretchPct ?? localMaZone.medianStretchPct,
+      aboveNowPct:       mtReport.aboveNowPct ?? localMaZone.aboveNowPct,
+      extendedNow:       mtReport.extendedNow ?? localMaZone.extendedNow,
+      usedDefault:       mtReport.usedDefault,
+      sweepSavedPct:     mtReport.sweepSavedPct,
+      sweepMissedPct:    mtReport.sweepMissedPct,
+      rsiBuy,
+      localSuggested:    localMaZone.suggestedAbovePct,
+      description:
+        `Sugerido +${suggestedAbovePct}% acima MA${maStopFilter.period} ${maStopFilter.interval} ` +
+        `(Multi-Trade · ${mtReport.signalCount ?? 0} sinais RSI<${rsiBuy} 5m)`,
+    };
+    const candlePatterns   = checkRecoveryPatternsLive(candles1h);
 
-    res.json({ symbol, exchange, rsiBuy, currentPrice, hist, ma, candlePatterns });
+    res.json({
+      symbol, exchange, rsiBuy, rsiSell, currentPrice,
+      fixed2, fixed5, hist, ma,
+      stopCompare,
+      recommended: stopCompare.recommended,
+      recoveryAnalysis,
+      recoveryRecommended: recoveryAnalysis.recommended ?? null,
+      maZone,
+      candlePatterns,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -864,6 +987,8 @@ router.post('/five-m-trade-evaluate', getUserId, async (req, res) => {
       rsiBuy,
       rsiSell,
       maFilters: maCfg,
+      recoveryPattern: normalizeRecoveryPattern(req.body.recoveryPattern),
+      sellScope: normalizeSellScope(req.body.sellScope).scope,
       phase,
       lastBuyTime,
       buyCount,

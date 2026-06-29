@@ -10,6 +10,7 @@ const { pickBestSweep, scoreTrades, percentile } = require('../amap/entrySuggest
 const {
   normalizeMaFilters, buildMaLookupMap, passesMaFilters, describeMaFilters,
 } = require('./maFilter');
+const { historicalStopLoss } = require('./suggestStopLoss');
 
 const INTERVAL           = '5m';
 const RSI_PERIOD         = 14;
@@ -112,12 +113,19 @@ function pickBestSweepFor5m(sweep, anchorKey, anchorValue, opts, simCtx) {
     .sort((a, b) => {
       if (b.avgPnl !== a.avgPnl) return b.avgPnl - a.avgPnl;
       if (b.winRate !== a.winRate) return b.winRate - a.winRate;
+      if (b.histOk !== a.histOk) return (b.histOk ? 1 : 0) - (a.histOk ? 1 : 0);
       return b.tradeCount - a.tradeCount;
     });
   if (!partial.length) return result;
 
+  let best = partial[0];
+  if (!best.histOk) {
+    const alt = partial.find(s => s.histOk && s.avgPnl >= best.avgPnl - 1);
+    if (alt) best = alt;
+  }
+
   return {
-    best: partial[0],
+    best,
     usedDefault: false,
     reason: 'poucos_trades_ma',
     lowSample: true,
@@ -374,9 +382,11 @@ function makeSimContext(cMap, maFilters) {
   return { maFilters: cfg, maLookup: buildMaLookupMap(cMap, cfg) };
 }
 
-function sweepEntry(series, exitRsi, opts, simCtx) {
+function sweepEntry(series, exitRsi, opts, simCtx, candles) {
   const candidates = buildEntryCandidates(opts.anchorEntry, opts);
   const sweep = [];
+  const lastClose = series.length ? series[series.length - 1].close : 0;
+  const histFor = (value) => historicalStopLoss(candles, RSI_PERIOD, value, lastClose);
   const maOn = simCtx?.maFilters?.enabled &&
     simCtx.maFilters.filters.some(f => f.enabled);
   const countEpisodes = maOn
@@ -384,6 +394,7 @@ function sweepEntry(series, exitRsi, opts, simCtx) {
     : (v) => countEpisodesBelow(series, v);
 
   for (const value of candidates) {
+    const hist = histFor(value);
     const { trades, rsiBuySignals, blockedByMa } = simulate5mTrades(
       series, value, exitRsi, COOLDOWN_CANDLES, simCtx,
     );
@@ -393,6 +404,9 @@ function sweepEntry(series, exitRsi, opts, simCtx) {
       episodes: countEpisodes(value),
       rsiBuySignals,
       blockedByMa,
+      histOk: !!hist.ok,
+      histEpisodes: hist.episodeCount ?? 0,
+      minRsiObserved: hist.minRsiObserved ?? null,
       maPassRate: maOn && rsiBuySignals
         ? parseFloat((((rsiBuySignals - blockedByMa) / rsiBuySignals) * 100).toFixed(1))
         : null,
@@ -404,6 +418,8 @@ function sweepEntry(series, exitRsi, opts, simCtx) {
     sweep, 'value', opts.anchorEntry, opts, simCtx,
   );
   const anchorRow = sweep.find(s => s.value === opts.anchorEntry);
+  const suggestedRsi = best?.value ?? opts.anchorEntry;
+  const histStop = histFor(suggestedRsi);
 
   let recommendation = 'manter';
   if (!usedDefault && best?.value !== opts.anchorEntry) {
@@ -428,7 +444,7 @@ function sweepEntry(series, exitRsi, opts, simCtx) {
   const mostFrequent = [...frequency].sort((a, b) => b.episodes - a.episodes)[0];
 
   return {
-    suggestedEntryRsi: best?.value ?? opts.anchorEntry,
+    suggestedEntryRsi: suggestedRsi,
     anchorValue: opts.anchorEntry,
     usedDefault,
     reason,
@@ -440,6 +456,13 @@ function sweepEntry(series, exitRsi, opts, simCtx) {
     frequency,
     mostFrequentEpisode: mostFrequent,
     maFiltered: maOn,
+    histStop,
+    histStopOk: !!histStop.ok,
+    histStopWarning: !histStop.ok
+      ? (histStop.minRsiObserved != null && histStop.minRsiObserved >= suggestedRsi
+        ? `RSI mínimo no histórico foi ${histStop.minRsiObserved} — stop histórico RSI<${suggestedRsi} indisponível`
+        : `Stop histórico RSI<${suggestedRsi} indisponível (${histStop.reason ?? 'poucos episódios'})`)
+      : null,
     vsAnchor: anchorRow && best && best.value !== opts.anchorEntry
       ? {
         pnlDelta:    parseFloat((best.avgPnl - anchorRow.avgPnl).toFixed(2)),
@@ -581,7 +604,7 @@ function build5mRsiReport(candles, opts = {}, cMap = null) {
 
   const swingPattern  = analyzeSwingPattern(series, o.anchorEntry, o.anchorExit, simCtx);
   const botSimulation = analyzeBotSimulation(series, o.anchorEntry, o.anchorExit, simCtx);
-  const entryReport   = sweepEntry(series, o.anchorExit, o, simCtx);
+  const entryReport   = sweepEntry(series, o.anchorExit, o, simCtx, candles);
   const exitReport    = sweepExit(series, entryReport.suggestedEntryRsi, o, simCtx);
 
   return {

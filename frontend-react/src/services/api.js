@@ -326,11 +326,11 @@ export async function fetchFiveMTradeFavorites() {
   return res.json();
 }
 
-export async function addFiveMTradeFavorite({ symbol, exchange = 'binance', capital = 40, rsiBuy = 30, rsiSell = 70, maFilters, stopLoss }) {
+export async function addFiveMTradeFavorite({ symbol, exchange = 'binance', capital = 40, rsiBuy = 30, rsiSell = 70, maFilters, stopLoss, recoveryPattern, sellScope, entryPrice }) {
   const res = await fetch('/services/sb/five-m-trade-favorites', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ symbol, exchange, capital, rsiBuy, rsiSell, maFilters, stopLoss }),
+    body: JSON.stringify({ symbol, exchange, capital, rsiBuy, rsiSell, maFilters, stopLoss, recoveryPattern, sellScope, entryPrice }),
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
@@ -339,11 +339,11 @@ export async function addFiveMTradeFavorite({ symbol, exchange = 'binance', capi
   return res.json();
 }
 
-export async function updateFiveMTradeFavorite(id, { exchange, capital, rsiBuy, rsiSell, maFilters, stopLoss }) {
+export async function updateFiveMTradeFavorite(id, { exchange, capital, rsiBuy, rsiSell, maFilters, stopLoss, recoveryPattern, sellScope, entryPrice }) {
   const res = await fetch(`/services/sb/five-m-trade-favorites/${encodeURIComponent(id)}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ exchange, capital, rsiBuy, rsiSell, maFilters, stopLoss }),
+    body: JSON.stringify({ exchange, capital, rsiBuy, rsiSell, maFilters, stopLoss, recoveryPattern, sellScope, entryPrice }),
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
@@ -395,11 +395,43 @@ export async function fetchFiveMTradeSuggestMaAdaptation({
   return res.json();
 }
 
-export async function fetchFiveMTradeSuggestStop({ symbol, exchange = 'binance', rsiBuy = 30, maFilters }) {
+export async function fetchFiveMTradeSuggestRecovery({ symbol, exchange = 'binance', rsiBuy = 30, rsiSell = 70, maFilters }) {
   const params = new URLSearchParams({
     symbol: symbol.toUpperCase(),
     exchange,
     rsiBuy: String(rsiBuy),
+    rsiSell: String(rsiSell),
+  });
+  if (maFilters) params.set('maFilters', JSON.stringify(maFilters));
+  const res = await fetch(`/services/sb/five-m-trade-suggest-recovery?${params}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `five-m-trade-suggest-recovery falhou: HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function fetchFiveMTradeSuggestEntryBelow({ symbol, exchange = 'binance', rsiBuy = 30 }) {
+  const params = new URLSearchParams({
+    symbol: symbol.toUpperCase(),
+    exchange,
+    rsiBuy: String(rsiBuy),
+  });
+  const res = await fetch(`/services/sb/five-m-trade-suggest-entry-below?${params}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `five-m-trade-suggest-entry-below falhou: HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+/** @deprecated painel 5m não usa mais — ver fetchFiveMTradeSuggestRecovery */
+export async function fetchFiveMTradeSuggestStop({ symbol, exchange = 'binance', rsiBuy = 30, rsiSell = 70, maFilters }) {
+  const params = new URLSearchParams({
+    symbol: symbol.toUpperCase(),
+    exchange,
+    rsiBuy: String(rsiBuy),
+    rsiSell: String(rsiSell),
   });
   if (maFilters) params.set('maFilters', JSON.stringify(maFilters));
   const res = await fetch(`/services/sb/five-m-trade-suggest-stop?${params}`);
@@ -411,7 +443,7 @@ export async function fetchFiveMTradeSuggestStop({ symbol, exchange = 'binance',
 }
 
 export async function evaluateFiveMTradeLive({
-  symbol, exchange = 'binance', rsiBuy = 30, rsiSell = 70, maFilters,
+  symbol, exchange = 'binance', rsiBuy = 30, rsiSell = 70, maFilters, recoveryPattern,
   phase = 'WATCHING', lastBuyTime = null, buyCount = 0,
 }) {
   const res = await fetch('/services/sb/five-m-trade-evaluate', {
@@ -423,6 +455,7 @@ export async function evaluateFiveMTradeLive({
       rsiBuy,
       rsiSell,
       maFilters,
+      recoveryPattern,
       phase,
       lastBuyTime,
       buyCount,

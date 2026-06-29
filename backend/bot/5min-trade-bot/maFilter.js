@@ -272,6 +272,24 @@ function suggestMaTolerance(candles, period, interval, opts = {}) {
   };
 }
 
+/** MA usada no stop adaptativo — não exige filtro de entrada ligado (padrão MA50 1h). */
+const DEFAULT_MA_STOP_FILTER = { period: 50, interval: '1h', tolerancePct: 3 };
+
+function resolveMaStopFilter(maFilters) {
+  const cfg = normalizeMaFilters(maFilters);
+  if (cfg.enabled) {
+    const f = cfg.filters.find(fi => fi.enabled && fi.mode === 'above');
+    if (f) {
+      return {
+        period: f.period,
+        interval: f.interval,
+        tolerancePct: Math.max(0, Number(f.tolerancePct ?? 3)),
+      };
+    }
+  }
+  return { ...DEFAULT_MA_STOP_FILTER };
+}
+
 function buildMaToleranceSuggestions(cMap, maFilters) {
   const cfg = normalizeMaFilters(maFilters);
   if (!cfg.enabled) return [];
@@ -307,6 +325,8 @@ module.exports = {
   candleLimitForInterval,
   formatMaFilterLabel,
   suggestMaTolerance,
+  DEFAULT_MA_STOP_FILTER,
+  resolveMaStopFilter,
   buildMaToleranceSuggestions,
   maThreshold,
   maKey,
