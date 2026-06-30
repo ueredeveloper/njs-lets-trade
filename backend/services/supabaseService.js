@@ -704,6 +704,20 @@ router.delete('/five-m-trade-favorites/:id', getUserId, async (req, res) => {
   res.json({ deleted: req.params.id });
 });
 
+// GET /services/sb/five-m-trade-signals?symbol=&limit=50&event_type=
+router.get('/five-m-trade-signals', getUserId, async (req, res) => {
+  let q = supabase
+    .from('five_min_bot_signals')
+    .select('*')
+    .order('event_time', { ascending: false });
+  if (req.query.symbol) q = q.eq('symbol', req.query.symbol.toUpperCase());
+  if (req.query.event_type) q = q.eq('event_type', req.query.event_type);
+  q = q.limit(Math.min(parseInt(req.query.limit ?? '50', 10), 200));
+  const { data, error } = await q;
+  if (error) return sbError(res, error, 'GET five-m-trade-signals');
+  res.json(data ?? []);
+});
+
 // GET /services/sb/five-m-trade-suggest-rsi?symbol=&exchange=&entryValue=30&exitValue=70&maFilters={json}
 router.get('/five-m-trade-suggest-rsi', getUserId, async (req, res) => {
   const symbol = req.query.symbol?.toUpperCase();

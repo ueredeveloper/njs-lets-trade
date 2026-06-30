@@ -30,6 +30,7 @@ const ACTION_LABELS = {
   dca_bloqueada_caminho:     '🚫 DCA bloqueada (caminho)',
   dca_path_cooldown:         '⏳ DCA — outro caminho em cooldown',
   mantem_posicao:         '📊 Mantém posição',
+  possible_stop_loss:     '🛡️ Próximo do stop loss',
 };
 
 function formatCooldown(ms) {
@@ -247,8 +248,8 @@ function evaluate5mTradeLive(cMap, params = {}) {
         reason  = `DCA via ${via} · cooldown ${entryPathsCfg.pathCooldownHours}h OK`;
       }
     } else if (rsiBuySignal) {
-      const remaining = cooldownRemaining(params.lastBuyTime);
-      if (!canDcaAgain(params.lastBuyTime)) {
+      const remaining = cooldownRemaining(params.lastBuyTime, entryPathsCfg);
+      if (!canDcaAgain(params.lastBuyTime, entryPathsCfg)) {
         action = 'dca_aguardando_cooldown';
         reason = `RSI ${rsiNow} < ${rsiBuy} mas faltam ${formatCooldown(remaining)} para DCA`;
       } else if (!maPass.ok) {
@@ -299,6 +300,8 @@ function evaluate5mTradeLive(cMap, params = {}) {
     detail,
     candlePatterns,
     recoveryEval,
+    candles5mCount:   candles5m.length,
+    candles1hCount:   cMap?.['1h']?.length ?? 0,
     cooldownRemainingMs: phase === 'BOUGHT' && !canDcaAgain(params.lastBuyTime, entryPathsCfg)
       ? cooldownRemaining(params.lastBuyTime, entryPathsCfg)
       : 0,

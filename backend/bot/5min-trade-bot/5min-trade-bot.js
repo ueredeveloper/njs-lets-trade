@@ -22,18 +22,14 @@ const ti = require('technicalindicators');
 const { fetchBinanceCandles, fetchGateCandles } = require('../prices');
 const { toGateSymbol } = require('../../utils/toGateSymbol');
 const { sendWhatsApp } = require('../whatsapp');
-const { checkMaFiltersLive, describeMaFilters, buildMaSeries, maAt, normalizeMaFilters } = require('./maFilter');
 const { computeActiveStops } = require('./stopLossEngine');
-const { normalizeRecoveryPattern, isActiveRecoveryPattern, recoveryPatternLabel } = require('./recoveryPatternConfig');
-const { checkRecoveryPatternsLive, evaluateRecoveryEntry } = require('./recoveryPattern');
+const { normalizeRecoveryPattern, recoveryPatternLabel } = require('./recoveryPatternConfig');
 const { isActiveStopLoss, stopLossLabel } = require('./stopLossConfig');
 const { normalizeSellScope, sellScopeLabel } = require('./sellScopeConfig');
 const { normalizeEntryPrice, entryPriceLabel } = require('./entryPriceConfig');
-const { normalizeEntryPaths, entryPathsLabel, applyPathAlternationCooldown, pathCooldownMs } = require('./entryPathsConfig');
-const {
-  checkMa50_5mTrigger, MA5M_PERIOD,
-  evaluateEntryPathsSignal,
-} = require('./ma5mEntryEngine');
+const { normalizeEntryPaths, entryPathsLabel } = require('./entryPathsConfig');
+const { evaluateTickForBot } = require('./evaluateTickForBot');
+const { emitSignal, eventTypeFromReport, clearSignalDedupe } = require('./fiveMinSignalLog');
 
 // ── Configuração ──────────────────────────────────────────────────────────────
 const INTERVAL           = '5m';
@@ -77,28 +73,6 @@ function askUser(question) {
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     rl.question(question, answer => { rl.close(); resolve(answer.trim().toLowerCase()); });
   });
-}
-
-function formatCooldown(ms) {
-  const h = Math.floor(ms / 3_600_000);
-  const m = Math.floor((ms % 3_600_000) / 60_000);
-  return h > 0 ? `${h}h${m}m` : `${m}m`;
-}
-
-function logActiveStop(log, stop) {
-  log(`${'─'.repeat(60)}`);
-  if (!stop) {
-    log(`${Y}🛡️  Stop loss: não configurado — configure hist ou ma no painel 5m Trade${X}`);
-  } else if (!stop.ok) {
-    log(`${Y}🛡️  Stop ${stop.type}: indisponível (${stop.reason ?? '?'})${X}`);
-  } else {
-    log(`${Y}🛡️  Stop ativo (${stop.label})${X}`);
-    log(`   Preço stop : ${stop.stopPrice}`);
-    log(`   Queda stop : ${stop.stopPct}%`);
-    if (stop.episodeCount != null) log(`   Episódios  : ${stop.episodeCount}`);
-    if (stop.adaptiveFloor != null) log(`   Piso MA    : ${stop.adaptiveFloor}`);
-  }
-  log(`${'─'.repeat(60)}`);
 }
 
 // ── Binance ───────────────────────────────────────────────────────────────────
@@ -390,49 +364,6 @@ async function saveTrade(trade) {
   await sbReq('POST', 'five_min_bot_trades', trade);
 }
 
-async function checkRecoveryPatternLive(adapter, recoveryPattern, maFilters, price, log) {
-  const cfg = normalizeRecoveryPattern(recoveryPattern);
-  if (!isActiveRecoveryPattern(cfg)) return { ok: true };
-
-  const maCfg   = normalizeMaFilters(maFilters);
-  const active  = maCfg.enabled
-    ? maCfg.filters.find(f => f.enabled && f.mode === 'above')
-    : { period: 50, interval: '1h', tolerancePct: 3 };
-  const period  = active?.period ?? 50;
-  const interval = active?.interval ?? '1h';
-  const tol     = active?.tolerancePct ?? 3;
-
-  const candles1h = await adapter.fetchCandles(period + 30, interval);
-  const completed = candles1h?.slice(0, -1) ?? [];
-  if (completed.length < period) {
-    log(`${Y}⏳ Padrão 1h: candles insuficientes${X}`);
-    return { ok: false };
-  }
-
-  const closes = completed.map(c => c.close);
-  const maArr  = ti.SMA.calculate({ values: closes, period });
-  const ma     = maArr[maArr.length - 1];
-  const patternLive = checkRecoveryPatternsLive(candles1h, cfg.types);
-  const evalR   = evaluateRecoveryEntry(price, ma, tol, cfg, patternLive);
-
-  if (!evalR.ok && evalR.reason === 'tres_vermelhos_1h') {
-    log(`${Y}⏳ Bloqueado: 3 candles 1h vermelhos (queda em direção à MA)${X}`);
-    return { ok: false, eval: evalR, patternLive };
-  }
-
-  if (!evalR.ok) {
-    const zone = evalR.zone === 'above_ma'
-      ? `acima MA +${cfg.abovePct}%`
-      : 'entre MA e piso adaptativo';
-    log(`${Y}⏳ Padrão 1h ausente (${zone}): ${recoveryPatternLabel(cfg)}${X}`);
-    return { ok: false, eval: evalR, patternLive };
-  }
-  if (evalR.patternRequired) {
-    log(`${G}✓ Padrão 1h OK (${evalR.zone === 'above_ma' ? `+${cfg.abovePct}%` : 'zona adaptativa'})${X}`);
-  }
-  return { ok: true, eval: evalR, patternLive };
-}
-
 async function resolveSellQty(adapter, state, log) {
   const scope  = normalizeSellScope(state.sell_scope).scope;
   const botQty = parseFloat(state.buy_qty || 0);
@@ -466,9 +397,6 @@ async function executeSell(rowId, adapter, log, state, rsi, reason = 'rsi') {
     return false;
   }
   const { sellQty, scope, botQty } = sellPlan;
-  const scopeNote = scope === 'wallet' ? ' [carteira inteira]' : ' [só bot]';
-
-  log(`${reasonEmoji} ${rsiNote}vendendo${scopeNote} (${sellQty.toFixed(8)} ${symbol})${X}`);
 
   let result;
   try {
@@ -505,18 +433,8 @@ async function executeSell(rowId, adapter, log, state, rsi, reason = 'rsi') {
     capital: capitalAfter, phase: 'WATCHING',
     buy_price: null, buy_qty: null, buy_usdt: null,
     buy_time: null, last_buy_time: null, buy_count: 0, rsi_entry: null,
+    entry_path: null,
   });
-
-  log(`${'─'.repeat(60)}`);
-  log(`${reasonEmoji} ${reasonLabel} (${buyCount} entrada${buyCount > 1 ? 's' : ''})${X}`);
-  log(`   Preço médio saída : ${exitPrice.toFixed(6)}`);
-  log(`   Qty vendida       : ${soldQty}${scope === 'wallet' && soldQty > botQty ? ` (bot: ${botQty.toFixed(8)})` : ''}`);
-  log(`   USDT investido    : ${totalIn.toFixed(4)}`);
-  log(`   USDT recebido     : ${usdtOut.toFixed(4)}${countedUsdtOut !== usdtOut ? ` (bot: ${countedUsdtOut.toFixed(4)})` : ''}`);
-  log(`   PnL               : ${pnlSign}${pnlUsdt.toFixed(4)} USDT  (${pnlSign}${pnlPct.toFixed(2)}%)`);
-  if (reason === 'rsi') log(`   RSI saída         : ${rsi.toFixed(2)}`);
-  log(`   Capital           : ${capitalBefore.toFixed(4)} → ${capitalAfter.toFixed(4)} USDT`);
-  log(`${'─'.repeat(60)}`);
 
   const waPrefix = reason === 'stop_loss' ? '🛡️' : '🔴';
   const waTitle  = reason === 'stop_loss' ? 'STOP LOSS' : 'VENDA TOTAL';
@@ -540,13 +458,12 @@ async function executeBuy(rowId, adapter, log, state, rsi, capitalPerEntry, isDc
   const entryLabel = belowPct > 0 ? `limit −${belowPct}%` : 'mercado';
 
   const pathLbl = entryPath === 'ma50_5m' ? 'MA50 5m' : `RSI<${rsiBuy}`;
-  log(`${G}📍 ${pathLbl}${isDca ? ' [DCA]' : ''} — comprando ${usdtAmount.toFixed(4)} USDT (${entryLabel}) · RSI=${rsi.toFixed(2)}${X}`);
 
   let result;
   try {
     result = await adapter.marketBuy(usdtAmount, { belowPct });
   } catch (err) {
-    log(`❌ Erro na compra: ${err.message}`);
+    log(`❌ Erro na compra (${pathLbl}): ${err.message}`);
     return null;
   }
 
@@ -572,14 +489,6 @@ async function executeBuy(rowId, adapter, log, state, rsi, capitalPerEntry, isDc
     entry_path:    isDca ? (state.entry_path || entryPath) : entryPath,
   });
 
-  log(`${'─'.repeat(60)}`);
-  log(`${G}🟢 COMPRA${isDca ? ' DCA' : ''} #${buyCount}${X}`);
-  log(`   Preço      : ${avgPrice.toFixed(6)}`);
-  log(`   Qty +      : ${filledQty}  (total: ${newQty.toFixed(8)})`);
-  log(`   USDT +     : ${quoteQty.toFixed(4)}  (total: ${newUsdt.toFixed(4)})`);
-  log(`   Preço méd. : ${avgEntry.toFixed(6)}`);
-  log(`   RSI        : ${rsi.toFixed(2)}`);
-  log(`${'─'.repeat(60)}`);
   sendWhatsApp(
     `🟢 [5m Trade] ${symbol} COMPRA${isDca ? ' DCA' : ''} #${buyCount} [${adapter.name}]\n` +
     `Preço: ${avgPrice.toFixed(6)}\nQty+: ${filledQty}\nTotal qty: ${newQty.toFixed(8)}\n` +
@@ -587,12 +496,6 @@ async function executeBuy(rowId, adapter, log, state, rsi, capitalPerEntry, isDc
   );
 
   return { newQty, newUsdt, buyCount, avgPrice: avgEntry };
-}
-
-function canBuyAgain(lastBuyTime, entryPaths) {
-  if (!lastBuyTime) return true;
-  const elapsed = Date.now() - new Date(lastBuyTime).getTime();
-  return elapsed >= pathCooldownMs(normalizeEntryPaths(entryPaths));
 }
 
 async function refreshActiveStop(adapter, state, rsiBuy, entryPrice, currentPrice) {
@@ -612,109 +515,62 @@ async function tick(rowId, adapter, log, prevRsi = null, lastStop = null, setSto
   const candles = await adapter.fetchCandles(CANDLE_LIMIT, INTERVAL);
   const closes  = candles.map(c => c.close);
 
-  if (closes.length < RSI_PERIOD + 2) { log('Dados insuficientes — aguardando.'); return prevRsi; }
+  if (closes.length < RSI_PERIOD + 2) return prevRsi;
 
   const rsiVals = ti.RSI.calculate({ values: closes, period: RSI_PERIOD });
   const rsi     = rsiVals[rsiVals.length - 1];
   const close   = closes[closes.length - 1];
 
-  if (rsi == null) { log('RSI insuficiente.'); return prevRsi; }
+  if (rsi == null) return prevRsi;
 
   const rows = await sbReq('GET', 'five_min_bot_state', null, `?id=eq.${rowId}&limit=1`);
   const state = rows?.[0];
   if (!state) { log('❌ Linha não encontrada no Supabase.'); return rsi; }
 
   const rsiBuy  = Number(state.rsi_buy  ?? RSI_BUY);
-  const { phase, capital, symbol } = state;
   const rsiSell = Number(state.rsi_sell ?? RSI_SELL);
-  const buyFastThreshold  = rsiBuy  + RSI_FAST_MARGIN;
-  const sellFastThreshold = rsiSell - RSI_FAST_MARGIN;
-  const entryPathsCfg = normalizeEntryPaths(state.entry_paths);
-
-  if (prevRsi !== null) {
-    const isNearNow  = rsi     <= buyFastThreshold || rsi     >= sellFastThreshold;
-    const wasNearPrev = prevRsi <= buyFastThreshold || prevRsi >= sellFastThreshold;
-    if (isNearNow && !wasNearPrev)
-      log(`⚡ RSI=${rsi.toFixed(2)} próximo de limiar (≤${buyFastThreshold} ou ≥${sellFastThreshold}) — poll 1min`);
-    else if (!isNearNow && wasNearPrev)
-      log(`🔄 RSI=${rsi.toFixed(2)} longe dos limiares — poll 3min`);
-  }
-
+  const { phase, capital, symbol } = state;
   const capitalPerEntry = parseFloat(capital);
-  const buyCount        = state.buy_count || 0;
 
-  const pathsLbl = entryPathsLabel(entryPathsCfg);
-  const rsiColor = rsi > rsiSell ? R : rsi < rsiBuy ? G : '';
-  const nearBuy  = rsi <= buyFastThreshold;
-  const nearSell = rsi >= sellFastThreshold;
-  const fastMark = (nearBuy || nearSell) ? ' ⚡' : '';
-  log(
-    `${rsiColor}RSI=${rsi.toFixed(2)}${rsiColor ? X : ''}${fastMark}` +
-    `  close=${close.toFixed(6)}` +
-    `  limiar <${rsiBuy} >${rsiSell}` +
-    `  entrada: ${pathsLbl}` +
-    (state.ma_filters?.enabled ? `  ${describeMaFilters(state.ma_filters)}` : '') +
-    `  capital/entrada=${capitalPerEntry.toFixed(4)} USDT` +
-    `  fase=${phase}` +
-    (phase === 'BOUGHT' && state.entry_path ? `  via=${state.entry_path}` : '') +
-    (phase === 'BOUGHT' ? `  entradas=${buyCount}  qty=${parseFloat(state.buy_qty || 0).toFixed(6)}` : '') +
-    (phase === 'BOUGHT' && isActiveStopLoss(state.stop_loss)
-      ? `  🛡️${stopLossLabel(state.stop_loss)}`
-      : '') +
-    (phase === 'BOUGHT' && lastStop?.ok
-      ? `  stop@${lastStop.stopPrice}(-${lastStop.stopPct}%)`
-      : ''),
-  );
-
-  async function buildMa5mTrigger() {
-    if (!entryPathsCfg.ma50_5m.enabled) return { triggered: false };
-    if (candles.length < MA5M_PERIOD + 2) return { triggered: false, reason: 'dados_insuficientes' };
-    const last = candles[candles.length - 1];
-    const prev = candles[candles.length - 2];
-    const ma5mSeries = buildMaSeries(candles, MA5M_PERIOD);
-    const ma5m = maAt(ma5mSeries, last.openTime);
-    return checkMa50_5mTrigger({
-      close: last.close,
-      low: last.low,
-      prevClose: prev?.close,
-      ma: ma5m,
-      trigger: entryPathsCfg.ma50_5m.trigger,
-    });
+  let report;
+  try {
+    report = await evaluateTickForBot(adapter, state, candles);
+  } catch (err) {
+    log(`❌ Avaliação: ${err.message}`);
+    return rsi;
   }
 
-  // ── WATCHING: primeira entrada ────────────────────────────────────────────
+  const possibleEvt = eventTypeFromReport(report);
+  const willExecuteEntry = (phase === 'WATCHING' && report.action === 'compraria' && report.allowed)
+    || (phase === 'BOUGHT' && report.action === 'dca_compraria' && report.allowed);
+  const willExecuteExit = phase === 'BOUGHT' && report.action === 'venderia' && report.allowed;
+
+  if (possibleEvt && !willExecuteEntry && !willExecuteExit) {
+    await emitSignal(sbReq, state, report, possibleEvt, log);
+  }
+
   if (phase === 'WATCHING') {
-    const maCheck = await checkMaFiltersLive(adapter, state.ma_filters, log);
-    const patCheck = await checkRecoveryPatternLive(adapter, state.recovery_pattern, state.ma_filters, close, log);
-    const ma5mTrigger = await buildMa5mTrigger();
-    const signal = applyPathAlternationCooldown(state.entry_paths, evaluateEntryPathsSignal({
-      entryPaths: state.entry_paths,
-      rsi, rsiBuy,
-      ma5mTrigger,
-      ma1hOk: maCheck.ok,
-      recoveryOk: patCheck.ok,
-    }), {
-      lastEntryPath: null,
-      lastBuyTime: null,
-    });
-    if (!signal.ok) {
-      if (entryPathsCfg.rsi.enabled && rsi < rsiBuy + 8 && !maCheck.ok) {
-        // já logado em checkMaFiltersLive
-      } else if (entryPathsCfg.ma50_5m.enabled && ma5mTrigger.triggered && !patCheck.ok) {
-        log(`${Y}MA50 5m toque mas padrão 1h bloqueou${X}`);
+    if (willExecuteEntry) {
+      const path = report.pathSignal?.path ?? 'rsi';
+      const buyResult = await executeBuy(rowId, adapter, log, state, rsi, capitalPerEntry, false, rsiBuy, path);
+      if (buyResult) {
+        clearSignalDedupe(symbol);
+        await emitSignal(sbReq, { ...state, entry_path: path }, report, 'entry', log, {
+          entryPath: path,
+          allowed: true,
+          motivation: `Compra executada · ${report.reason}`,
+          price: buyResult.avgPrice,
+        });
+        if (setStop) {
+          refreshActiveStop(adapter, state, rsiBuy, buyResult.avgPrice, buyResult.avgPrice)
+            .then(stop => { setStop(stop); })
+            .catch(() => {});
+        }
       }
-      return rsi;
-    }
-    const buyResult = await executeBuy(rowId, adapter, log, state, rsi, capitalPerEntry, false, rsiBuy, signal.path);
-    if (buyResult && setStop) {
-      refreshActiveStop(adapter, state, rsiBuy, buyResult.avgPrice, buyResult.avgPrice)
-        .then(stop => { setStop(stop); logActiveStop(log, stop); })
-        .catch(err => log(`⚠️  Stop loss: ${err.message}`));
     }
     return rsi;
   }
 
-  // ── BOUGHT: stop loss, venda total ou DCA ─────────────────────────────────
   if (phase === 'BOUGHT') {
     const entryPrice = parseFloat(state.buy_price || close);
 
@@ -723,50 +579,66 @@ async function tick(rowId, adapter, log, prevRsi = null, lastStop = null, setSto
       if (setStop) setStop(activeStop);
 
       if (activeStop?.ok && close <= activeStop.stopPrice) {
-        log(`${Y}🛡️ Stop ${activeStop.label} atingido — close ${close.toFixed(6)} ≤ ${activeStop.stopPrice}${X}`);
-        await executeSell(rowId, adapter, log, state, rsi, 'stop_loss');
+        const sold = await executeSell(rowId, adapter, log, state, rsi, 'stop_loss');
+        if (sold) {
+          clearSignalDedupe(symbol);
+          await emitSignal(sbReq, state, report, 'exit', log, {
+            exitReason: 'stop_loss',
+            allowed: true,
+            motivation: `Stop ${activeStop.label} @ ${activeStop.stopPrice}`,
+            price: close,
+          });
+        }
         return rsi;
+      }
+      if (activeStop?.ok && close <= activeStop.stopPrice * 1.015) {
+        await emitSignal(sbReq, state, report, 'possible_exit', log, {
+          actionKey: 'possible_stop_loss',
+          exitReason: 'stop_loss',
+          allowed: false,
+          motivation: `Preço ${close.toFixed(6)} próximo do stop ${activeStop.stopPrice} (−${activeStop.stopPct}%)`,
+        });
       }
     }
 
-    if (rsi > rsiSell) {
-      log(`${R}📤 RSI>${rsiSell} — vendendo${X}`);
-      await executeSell(rowId, adapter, log, state, rsi, 'rsi');
+    if (willExecuteExit) {
+      const sold = await executeSell(rowId, adapter, log, state, rsi, 'rsi');
+      if (sold) {
+        clearSignalDedupe(symbol);
+        await emitSignal(sbReq, state, report, 'exit', log, {
+          exitReason: 'rsi',
+          allowed: true,
+          motivation: report.reason,
+          price: close,
+        });
+      }
       return rsi;
     }
 
-    const dcaPaths = normalizeEntryPaths(state.entry_paths);
-    const dcaNeedsRsi = dcaPaths.rsi.enabled && (!dcaPaths.ma50_5m.enabled || dcaPaths.combine === 'all');
-    if (dcaNeedsRsi && rsi >= rsiBuy) return rsi;
-
-    if (dcaPaths.rsi.enabled || dcaPaths.ma50_5m.enabled) {
-      if (!canBuyAgain(state.last_buy_time, state.entry_paths)) {
-        const remaining = pathCooldownMs(entryPathsCfg) - (Date.now() - new Date(state.last_buy_time).getTime());
-        log(`${Y}⏳ sinal DCA mas cooldown: faltam ${formatCooldown(remaining)}${X}`);
-        return rsi;
-      }
-      const maCheck = await checkMaFiltersLive(adapter, state.ma_filters, log);
-      const patCheck = await checkRecoveryPatternLive(adapter, state.recovery_pattern, state.ma_filters, close, log);
-      const ma5mTrigger = await buildMa5mTrigger();
-      const signal = applyPathAlternationCooldown(state.entry_paths, evaluateEntryPathsSignal({
-        entryPaths: state.entry_paths,
-        rsi, rsiBuy,
-        ma5mTrigger,
-        ma1hOk: maCheck.ok,
-        recoveryOk: patCheck.ok,
-      }), {
-        lastEntryPath: state.entry_path,
-        lastBuyTime: state.last_buy_time,
+    const sellMargin = 3;
+    if (rsi > rsiSell - sellMargin && rsi <= rsiSell) {
+      await emitSignal(sbReq, state, report, 'possible_exit', log, {
+        actionKey: 'near_rsi_sell',
+        allowed: false,
+        motivation: `RSI ${rsi.toFixed(2)} aproximando venda >${rsiSell}`,
       });
-      if (signal.reason === 'path_cooldown' && signal.blockedPath) {
-        log(`${Y}⏳ Caminho ${signal.blockedPath} bloqueado — última via ${state.entry_path} · faltam ${formatCooldown(signal.remainingMs ?? 0)}${X}`);
-      }
-      if (signal.ok) {
-        const buyResult = await executeBuy(rowId, adapter, log, state, rsi, capitalPerEntry, true, rsiBuy, signal.path);
-        if (buyResult && setStop) {
+    }
+
+    if (willExecuteEntry) {
+      const path = report.pathSignal?.path ?? 'rsi';
+      const buyResult = await executeBuy(rowId, adapter, log, state, rsi, capitalPerEntry, true, rsiBuy, path);
+      if (buyResult) {
+        await emitSignal(sbReq, { ...state, entry_path: path }, report, 'entry', log, {
+          entryPath: path,
+          allowed: true,
+          motivation: `DCA executada · ${report.reason}`,
+          price: buyResult.avgPrice,
+          details: { dca: true },
+        });
+        if (setStop) {
           refreshActiveStop(adapter, state, rsiBuy, buyResult.avgPrice, buyResult.avgPrice)
-            .then(stop => { setStop(stop); logActiveStop(log, stop); })
-            .catch(err => log(`⚠️  Stop loss: ${err.message}`));
+            .then(stop => { setStop(stop); })
+            .catch(() => {});
         }
       }
     }
