@@ -67,9 +67,16 @@ const serveBundle =
 
 const FRONTEND_PORT = process.env.FRONTEND_PORT;
 if (serveBundle) {
-  app.use(express.static(BUNDLE_DIR));
+  app.use(express.static(BUNDLE_DIR, {
+    setHeaders(res, filePath) {
+      if (filePath.replace(/\\/g, '/').endsWith('/index.html')) {
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      }
+    },
+  }));
   app.get('*', (req, res, next) => {
     if (req.path.startsWith('/services')) return next();
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     res.sendFile(bundleIndex);
   });
   console.log(`[frontend] bundle estático em ${BUNDLE_DIR}`);
