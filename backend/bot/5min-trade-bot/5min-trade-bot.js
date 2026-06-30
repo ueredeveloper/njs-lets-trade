@@ -29,7 +29,7 @@ const { normalizeSellScope, sellScopeLabel } = require('./sellScopeConfig');
 const { normalizeEntryPrice, entryPriceLabel } = require('./entryPriceConfig');
 const { normalizeEntryPaths, entryPathsLabel } = require('./entryPathsConfig');
 const { evaluateTickForBot } = require('./evaluateTickForBot');
-const { emitSignal, eventTypeFromReport, clearSignalDedupe } = require('./fiveMinSignalLog');
+const { emitSignal, isReadyEntryReport, isReadyExitReport, clearSignalDedupe } = require('./fiveMinSignalLog');
 
 // ── Configuração ──────────────────────────────────────────────────────────────
 const INTERVAL           = '5m';
@@ -540,14 +540,10 @@ async function tick(rowId, adapter, log, prevRsi = null, lastStop = null, setSto
     return rsi;
   }
 
-  const possibleEvt = eventTypeFromReport(report);
-  const willExecuteEntry = (phase === 'WATCHING' && report.action === 'compraria' && report.allowed)
-    || (phase === 'BOUGHT' && report.action === 'dca_compraria' && report.allowed);
-  const willExecuteExit = phase === 'BOUGHT' && report.action === 'venderia' && report.allowed;
-
-  if (possibleEvt && !willExecuteEntry && !willExecuteExit) {
-    await emitSignal(sbReq, state, report, possibleEvt, log);
-  }
+  const willExecuteEntry = isReadyEntryReport(report)
+    && ((phase === 'WATCHING' && report.action === 'compraria')
+      || (phase === 'BOUGHT' && report.action === 'dca_compraria'));
+  const willExecuteExit = phase === 'BOUGHT' && isReadyExitReport(report);
 
   if (phase === 'WATCHING') {
     if (willExecuteEntry) {
@@ -557,7 +553,6 @@ async function tick(rowId, adapter, log, prevRsi = null, lastStop = null, setSto
         clearSignalDedupe(symbol);
         await emitSignal(sbReq, { ...state, entry_path: path }, report, 'entry', log, {
           entryPath: path,
-          allowed: true,
           motivation: `Compra executada · ${report.reason}`,
           price: buyResult.avgPrice,
         });
@@ -566,6 +561,11 @@ async function tick(rowId, adapter, log, prevRsi = null, lastStop = null, setSto
             .then(stop => { setStop(stop); })
             .catch(() => {});
         }
+      } else {
+        await emitSignal(sbReq, state, report, 'possible_entry', log, {
+          entryPath: path,
+          motivation: `Regras OK mas ordem não preencheu · ${report.reason}`,
+        });
       }
     }
     return rsi;
@@ -584,20 +584,11 @@ async function tick(rowId, adapter, log, prevRsi = null, lastStop = null, setSto
           clearSignalDedupe(symbol);
           await emitSignal(sbReq, state, report, 'exit', log, {
             exitReason: 'stop_loss',
-            allowed: true,
             motivation: `Stop ${activeStop.label} @ ${activeStop.stopPrice}`,
             price: close,
           });
         }
         return rsi;
-      }
-      if (activeStop?.ok && close <= activeStop.stopPrice * 1.015) {
-        await emitSignal(sbReq, state, report, 'possible_exit', log, {
-          actionKey: 'possible_stop_loss',
-          exitReason: 'stop_loss',
-          allowed: false,
-          motivation: `Preço ${close.toFixed(6)} próximo do stop ${activeStop.stopPrice} (−${activeStop.stopPct}%)`,
-        });
       }
     }
 
@@ -607,21 +598,16 @@ async function tick(rowId, adapter, log, prevRsi = null, lastStop = null, setSto
         clearSignalDedupe(symbol);
         await emitSignal(sbReq, state, report, 'exit', log, {
           exitReason: 'rsi',
-          allowed: true,
           motivation: report.reason,
           price: close,
         });
+      } else {
+        await emitSignal(sbReq, state, report, 'possible_exit', log, {
+          exitReason: 'rsi',
+          motivation: `Regras OK mas venda falhou · ${report.reason}`,
+        });
       }
       return rsi;
-    }
-
-    const sellMargin = 3;
-    if (rsi > rsiSell - sellMargin && rsi <= rsiSell) {
-      await emitSignal(sbReq, state, report, 'possible_exit', log, {
-        actionKey: 'near_rsi_sell',
-        allowed: false,
-        motivation: `RSI ${rsi.toFixed(2)} aproximando venda >${rsiSell}`,
-      });
     }
 
     if (willExecuteEntry) {
@@ -630,7 +616,6 @@ async function tick(rowId, adapter, log, prevRsi = null, lastStop = null, setSto
       if (buyResult) {
         await emitSignal(sbReq, { ...state, entry_path: path }, report, 'entry', log, {
           entryPath: path,
-          allowed: true,
           motivation: `DCA executada · ${report.reason}`,
           price: buyResult.avgPrice,
           details: { dca: true },
@@ -640,6 +625,12 @@ async function tick(rowId, adapter, log, prevRsi = null, lastStop = null, setSto
             .then(stop => { setStop(stop); })
             .catch(() => {});
         }
+      } else {
+        await emitSignal(sbReq, state, report, 'possible_entry', log, {
+          entryPath: path,
+          motivation: `DCA regras OK mas ordem não preencheu · ${report.reason}`,
+          details: { dca: true },
+        });
       }
     }
   }

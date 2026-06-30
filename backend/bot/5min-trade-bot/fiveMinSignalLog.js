@@ -1,18 +1,12 @@
 'use strict';
 
-const POSSIBLE_ENTRY_ACTIONS = new Set([
-  'compraria', 'dca_compraria',
-  'entrada_bloqueada_ma', 'entrada_bloqueada_padrao', 'entrada_bloqueada_caminho',
-  'dca_bloqueada_ma', 'dca_bloqueada_padrao', 'dca_bloqueada_caminho',
-  'dca_path_cooldown', 'dca_aguardando_cooldown',
-]);
-
-const POSSIBLE_EXIT_ACTIONS = new Set(['venderia', 'possible_stop_loss']);
+const READY_ENTRY_ACTIONS = new Set(['compraria', 'dca_compraria']);
+const READY_EXIT_ACTIONS  = new Set(['venderia']);
 
 const EVENT_LABELS = {
-  possible_entry: 'POSSÍVEL ENTRADA',
+  possible_entry: 'ENTRADA PRONTA',
   entry:          'ENTRADA',
-  possible_exit:  'POSSÍVEL SAÍDA',
+  possible_exit:  'SAÍDA PRONTA',
   exit:           'SAÍDA',
 };
 
@@ -44,7 +38,7 @@ function buildSignalRow(state, report, eventType, extra = {}) {
     ma5m_triggered: report.ma5mTrigger?.triggered === true,
     entry_path:     extra.entryPath ?? report.pathSignal?.path ?? state.entry_path ?? null,
     exit_reason:    extra.exitReason ?? null,
-    allowed:        extra.allowed ?? report.allowed ?? false,
+    allowed:        true,
     action_key:     extra.actionKey ?? report.action ?? null,
     motivation:     extra.motivation ?? report.reason ?? extra.reason ?? null,
     candles_5m:     report.candles5mCount ?? null,
@@ -65,16 +59,19 @@ function buildSignalRow(state, report, eventType, extra = {}) {
 
 function sigHash(row) {
   return [
-    row.event_type, row.action_key, row.allowed,
+    row.event_type, row.action_key,
     row.motivation, row.entry_path, row.exit_reason,
-    row.rsi, row.ma5m_triggered, row.ma1h_ok,
+    row.rsi, row.price,
   ].join('|');
 }
 
-function eventTypeFromReport(report) {
-  if (POSSIBLE_ENTRY_ACTIONS.has(report.action)) return 'possible_entry';
-  if (POSSIBLE_EXIT_ACTIONS.has(report.action)) return 'possible_exit';
-  return null;
+/** Só sinal com todas as regras OK (allowed + ação de compra/venda). */
+function isReadyEntryReport(report) {
+  return report?.allowed === true && READY_ENTRY_ACTIONS.has(report.action);
+}
+
+function isReadyExitReport(report) {
+  return report?.allowed === true && READY_EXIT_ACTIONS.has(report.action);
 }
 
 function formatSignalLine(symbol, eventType, row) {
@@ -85,16 +82,14 @@ function formatSignalLine(symbol, eventType, row) {
   const ma5m = row.ma50_5m != null ? row.ma50_5m.toFixed(6) : '—';
   const rsi = row.rsi != null ? Number(row.rsi).toFixed(2) : '—';
   const price = row.price != null ? Number(row.price).toFixed(6) : '—';
-  const ok = row.allowed ? 'SIM' : 'NÃO';
   const candles = `5m:${row.candles_5m ?? '?'} 1h:${row.candles_1h ?? '?'}`;
   const exit = row.exit_reason ? ` saída=${row.exit_reason}` : '';
   const path = row.entry_path ? ` via=${via}` : '';
 
   return (
     `[${lbl}] ${symbol} preço=${price} RSI=${rsi} (<${row.rsi_buy} >${row.rsi_sell})` +
-    ` MA50_1h=${ma1h} MA50_5m=${ma5m} ma_ok=${row.ma1h_ok ? 'Y' : 'N'}` +
-    ` ma5m_touch=${row.ma5m_triggered ? 'Y' : 'N'}${path}${exit}` +
-    ` executaria=${ok} · ${row.motivation ?? ''} · candles ${candles}`
+    ` MA50_1h=${ma1h} MA50_5m=${ma5m} ma_ok=Y ma5m_touch=${row.ma5m_triggered ? 'Y' : 'N'}` +
+    `${path}${exit} · ${row.motivation ?? ''} · candles ${candles}`
   );
 }
 
@@ -106,9 +101,6 @@ async function saveFiveMinSignal(sbReq, row) {
   }
 }
 
-/**
- * Imprime e grava sinal (deduplica repetição idêntica por símbolo).
- */
 async function emitSignal(sbReq, state, report, eventType, log, extra = {}) {
   const row = buildSignalRow(state, report ?? {}, eventType, extra);
   const key = `${state.symbol}:${eventType}`;
@@ -130,10 +122,9 @@ function clearSignalDedupe(symbol) {
 module.exports = {
   emitSignal,
   buildSignalRow,
-  eventTypeFromReport,
+  isReadyEntryReport,
+  isReadyExitReport,
   formatSignalLine,
   saveFiveMinSignal,
   clearSignalDedupe,
-  POSSIBLE_ENTRY_ACTIONS,
-  POSSIBLE_EXIT_ACTIONS,
 };
