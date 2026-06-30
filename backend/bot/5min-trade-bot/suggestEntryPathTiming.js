@@ -54,7 +54,7 @@ function collectRsiEntryTimes(candles5m, candles1h, maFilters, rsiBuy) {
   return times;
 }
 
-function collectMa5mTouchTimes(candles5m, candles1h, maFilters, trigger = 'touch') {
+function collectMa5mTouchTimes(candles5m, candles1h, maFilters, trigger = 'touch', tolerancePct = 0.5) {
   if (!candles5m?.length || candles5m.length < MA5M_PERIOD + 5) return [];
 
   const maCfg = normalizeMaFilters(maFilters);
@@ -83,7 +83,7 @@ function collectMa5mTouchTimes(candles5m, candles1h, maFilters, trigger = 'touch
       prevClose: prev?.close,
       ma: ma5m,
       trigger,
-      tolerancePct: 0.5,
+      tolerancePct,
     });
     if (!touch.triggered) continue;
     if (c.openTime - lastAt < 24 * BAR_MS) continue;
@@ -116,9 +116,9 @@ function fmtEveryHours(h) {
   return `${h}h em ${h}h`;
 }
 
-function suggestEntryPathTiming(candles5m, candles1h, maFilters, rsiBuy, trigger = 'touch') {
+function suggestEntryPathTiming(candles5m, candles1h, maFilters, rsiBuy, trigger = 'touch', tolerancePct = 0.5) {
   const rsiTimes = collectRsiEntryTimes(candles5m, candles1h, maFilters, rsiBuy);
-  const maTimes  = collectMa5mTouchTimes(candles5m, candles1h, maFilters, trigger);
+  const maTimes  = collectMa5mTouchTimes(candles5m, candles1h, maFilters, trigger, tolerancePct);
 
   const rsiGapH = gapsHours(rsiTimes);
   const maGapH  = gapsHours(maTimes);

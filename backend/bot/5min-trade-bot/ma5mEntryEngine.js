@@ -13,6 +13,8 @@ const { normalizeEntryPaths, hasEntryPath } = require('./entryPathsConfig');
 const MA5M_PERIOD   = 50;
 const MA1H_PERIOD   = 50;
 const MA1H_INTERVAL = '1h';
+/** Poll 1min quando preço está a ≤ este % da MA50 5m (touch usa 0,5%) */
+const MA5M_FAST_MARGIN_PCT = 2;
 const MAX_FORWARD   = 288; // ~24h em 5m
 const EXIT_MIN      = 65;
 const EXIT_MAX      = 85;
@@ -36,6 +38,73 @@ function checkMa50_5mTrigger({ close, low, prevClose, ma, trigger = 'touch', tol
   if (nearClose || wickTouch) return { triggered: true, ma, trigger };
 
   return { triggered: false, reason: 'sem_toque', ma, trigger };
+}
+
+/**
+ * Avalia gatilho MA50 5m na vela em formação.
+ * livePrice: ticker ao vivo — não espera fechamento do candle 5m.
+ */
+function buildMa5mTrigger(candles5m, entryPathsCfg, livePrice = null) {
+  const cfg = normalizeEntryPaths(entryPathsCfg);
+  const tolerancePct = cfg.ma50_5m.tolerancePct ?? 0.5;
+  if (!cfg.ma50_5m.enabled || !candles5m?.length || candles5m.length < MA5M_PERIOD + 2) {
+    return { triggered: false, tolerancePct };
+  }
+
+  const last = candles5m[candles5m.length - 1];
+  const prev = candles5m[candles5m.length - 2];
+  const ma5mSeries = buildMaSeries(candles5m, MA5M_PERIOD);
+  const ma5m = maAt(ma5mSeries, last.openTime);
+  if (ma5m == null) return { triggered: false, tolerancePct };
+
+  const live = livePrice != null && Number.isFinite(Number(livePrice)) ? Number(livePrice) : null;
+  const effectiveClose = live ?? last.close;
+  const effectiveLow = live != null
+    ? Math.min(last.low, live, effectiveClose)
+    : last.low;
+
+  const result = checkMa50_5mTrigger({
+    close: effectiveClose,
+    low: effectiveLow,
+    prevClose: prev?.close,
+    ma: ma5m,
+    trigger: cfg.ma50_5m.trigger,
+    tolerancePct,
+  });
+
+  return {
+    ...result,
+    ma: ma5m,
+    tolerancePct,
+    livePrice: live,
+    effectiveClose,
+    candleClose: last.close,
+  };
+}
+
+/** Ativa poll rápido (1min) quando MA50 5m está habilitada e preço se aproxima do toque. */
+function isNearMa50_5mForFastPoll(candles5m, entryPathsCfg, livePrice = null) {
+  const cfg = normalizeEntryPaths(entryPathsCfg);
+  if (!cfg.ma50_5m?.enabled || !candles5m?.length || candles5m.length < MA5M_PERIOD + 2) {
+    return { near: false, distPct: null, ma: null };
+  }
+
+  const triggerResult = buildMa5mTrigger(candles5m, cfg, livePrice);
+  const ma5m = triggerResult.ma;
+  if (ma5m == null) return { near: false, distPct: null, ma: null };
+
+  const refPrice = triggerResult.effectiveClose ?? candles5m[candles5m.length - 1].close;
+  const distPct = Math.abs(refPrice - ma5m) / ma5m * 100;
+  const tol = triggerResult.tolerancePct ?? 0.5;
+  const fastMargin = Math.max(MA5M_FAST_MARGIN_PCT, tol * 4);
+  const near = triggerResult.triggered === true || distPct <= fastMargin;
+  return {
+    near,
+    distPct: parseFloat(distPct.toFixed(3)),
+    ma: ma5m,
+    triggered: triggerResult.triggered === true,
+    fastMarginPct: fastMargin,
+  };
 }
 
 function isAboveMa50_1h(price, openTime, ma1hSeries, tolerancePct = 0) {
@@ -261,7 +330,10 @@ function resolveExitRsi(state) {
 
 module.exports = {
   MA5M_PERIOD,
+  MA5M_FAST_MARGIN_PCT,
   checkMa50_5mTrigger,
+  buildMa5mTrigger,
+  isNearMa50_5mForFastPoll,
   collectMa5mTouchEpisodes,
   suggestMa5mExitRsi,
   evaluateEntryPathsSignal,

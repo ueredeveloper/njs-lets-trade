@@ -56,7 +56,8 @@ const { normalizeSellScope, sellScopeLabel } = require('./sellScopeConfig');
 const { maKey, buildMaSeries, maAt } = require('./maFilter');
 const { normalizeEntryPaths, entryPathsLabel, hasEntryPath, applyPathAlternationCooldown, pathCooldownMs } = require('./entryPathsConfig');
 const {
-  checkMa50_5mTrigger, MA5M_PERIOD, evaluateEntryPathsSignal,
+  buildMa5mTrigger, MA5M_FAST_MARGIN_PCT,
+  isNearMa50_5mForFastPoll, evaluateEntryPathsSignal,
 } = require('./ma5mEntryEngine');
 
 function checkCandlePatterns(cMap, recoveryPattern = null) {
@@ -88,27 +89,6 @@ function recoveryEvalForEntry(cMap, maCfg, price, openTime, recoveryPattern) {
   return evaluateRecoveryEntry(price, ma, tol, cfg, patternLive);
 }
 
-function buildMa5mTrigger(candles5m, entryPathsCfg) {
-  if (!entryPathsCfg.ma50_5m.enabled || candles5m.length < MA5M_PERIOD + 2) {
-    return { triggered: false };
-  }
-  const last = candles5m[candles5m.length - 1];
-  const prev = candles5m[candles5m.length - 2];
-  const ma5mSeries = buildMaSeries(candles5m, MA5M_PERIOD);
-  const ma5m = maAt(ma5mSeries, last.openTime);
-  return checkMa50_5mTrigger({
-    close: last.close,
-    low: last.low,
-    prevClose: prev?.close,
-    ma: ma5m,
-    trigger: entryPathsCfg.ma50_5m.trigger,
-  });
-}
-
-/**
- * @param {object} cMap — candles por intervalo ('5m', '1h', …)
- * @param {object} params — rsiBuy, rsiSell, maFilters, phase, lastBuyTime, buyCount
- */
 function evaluate5mTradeLive(cMap, params = {}) {
   const rsiBuy   = Number(params.rsiBuy  ?? 30);
   const rsiSell  = Number(params.rsiSell ?? 70);
@@ -138,7 +118,8 @@ function evaluate5mTradeLive(cMap, params = {}) {
 
   const rsiBuySignal  = rsiNow < rsiBuy;
   const rsiSellSignal = rsiNow > rsiSell;
-  const ma5mTrigger   = buildMa5mTrigger(candles5m, entryPathsCfg);
+  const livePrice     = params.livePrice ?? null;
+  const ma5mTrigger   = buildMa5mTrigger(candles5m, entryPathsCfg, livePrice);
 
   const recoveryCfg = normalizeRecoveryPattern(params.recoveryPattern);
   const candlePatterns = checkCandlePatterns(cMap, recoveryCfg);
@@ -161,7 +142,11 @@ function evaluate5mTradeLive(cMap, params = {}) {
     : rawPathSignal;
 
   const fastThreshold = Math.max(rsiSell - 2, rsiBuy + 5);
-  const fastPoll      = rsiNow >= fastThreshold;
+  const rsiFastMargin = 4;
+  const ma5mProximity = isNearMa50_5mForFastPoll(candles5m, entryPathsCfg, livePrice);
+  const fastPoll      = rsiNow <= rsiBuy + rsiFastMargin
+    || rsiNow >= rsiSell - rsiFastMargin
+    || ma5mProximity.near;
 
   let action  = 'aguardar';
   let allowed = false;
@@ -195,7 +180,8 @@ function evaluate5mTradeLive(cMap, params = {}) {
           parts.push(`RSI ${rsiNow} ≥ ${rsiBuy}`);
         }
         if (entryPathsCfg.ma50_5m.enabled && !pathSignal.maSignal) {
-          parts.push(`sem toque MA50 5m (${entryPathsCfg.ma50_5m.trigger})`);
+          const tol = entryPathsCfg.ma50_5m.tolerancePct ?? 0.5;
+          parts.push(`sem toque MA50 5m (${entryPathsCfg.ma50_5m.trigger} ±${tol}%)`);
         }
         if (entryPathsCfg.rsi.enabled && entryPathsCfg.ma50_5m.enabled && entryPathsCfg.combine === 'all') {
           reason = `Aguardando ${parts.join(' e ')}`;
@@ -203,7 +189,8 @@ function evaluate5mTradeLive(cMap, params = {}) {
           reason = parts.length ? parts.join(' · ') : 'Aguardando sinal de entrada';
         }
         if (ma5mTrigger.ma != null) {
-          detail = `MA50 5m=${ma5mTrigger.ma.toFixed(6)} · close=${price.toFixed(6)}`;
+          const liveNote = ma5mTrigger.livePrice != null ? ` · live=${ma5mTrigger.livePrice.toFixed(6)}` : '';
+          detail = `MA50 5m=${ma5mTrigger.ma.toFixed(6)} · eff=${Number(ma5mTrigger.effectiveClose).toFixed(6)}${liveNote}`;
         }
       }
     } else {
@@ -285,6 +272,9 @@ function evaluate5mTradeLive(cMap, params = {}) {
     rsiSellSignal,
     fastPoll,
     fastThreshold,
+    nearMa5m:         ma5mProximity.near,
+    ma5mDistPct:      ma5mProximity.distPct,
+    ma5mFastMarginPct: MA5M_FAST_MARGIN_PCT,
     maFilters:        maCfg,
     maDescription:    describeMaFilters(maCfg),
     maPass:           maPass.ok,

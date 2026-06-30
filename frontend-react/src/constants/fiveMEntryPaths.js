@@ -2,11 +2,17 @@
 
 export const DEFAULT_ENTRY_PATHS = {
   rsi:     { enabled: true },
-  ma50_5m: { enabled: true, trigger: 'touch' },
+  ma50_5m: { enabled: true, trigger: 'touch', tolerancePct: 0.5 },
   combine: 'any',
   pathCooldownHours: 2,
   pathCooldownSource: 'ma',
 };
+
+export function clampMa5mTolerancePct(raw) {
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return DEFAULT_ENTRY_PATHS.ma50_5m.tolerancePct;
+  return Math.max(0.1, Math.min(3, parseFloat(n.toFixed(2))));
+}
 
 export function clampPathCooldownHours(raw) {
   const h = Number(raw);
@@ -30,6 +36,7 @@ export function normalizeEntryPathsForm(raw) {
     ma50_5m: {
       enabled: raw.ma50_5m?.enabled !== false,
       trigger,
+      tolerancePct: clampMa5mTolerancePct(raw.ma50_5m?.tolerancePct),
     },
     combine: raw.combine === 'all' ? 'all' : 'any',
     pathCooldownHours: clampPathCooldownHours(raw.pathCooldownHours ?? DEFAULT_ENTRY_PATHS.pathCooldownHours),
@@ -51,7 +58,10 @@ export function entryPathsLabel(cfg) {
   const n = normalizeEntryPathsForm(cfg);
   const parts = [];
   if (n.rsi.enabled) parts.push('RSI');
-  if (n.ma50_5m.enabled) parts.push(`MA50 5m (${n.ma50_5m.trigger})`);
+  if (n.ma50_5m.enabled) {
+    const tol = n.ma50_5m.trigger === 'touch' ? ` ±${n.ma50_5m.tolerancePct}%` : '';
+    parts.push(`MA50 5m (${n.ma50_5m.trigger}${tol})`);
+  }
   if (!parts.length) return 'nenhum';
   if (parts.length === 2) {
     const src = n.pathCooldownSource === 'rsi' ? 'RSI' : 'MA';
@@ -69,12 +79,12 @@ export const MA5M_TRIGGER_OPTIONS = [
   {
     id: 'touch',
     label: 'Toque na MA50 5m',
-    summary: 'Low ou close próximo da MA50 no candle 5m (contexto acima MA50 1h).',
+    summary: 'Low ou preço ao vivo próximo da MA50 (tolerância configurável). Avaliado a cada minuto, sem esperar fechar o candle.',
   },
   {
     id: 'cross_up',
     label: 'Cruzamento para cima',
-    summary: 'Close cruza de baixo para cima a MA50 5m.',
+    summary: 'Preço ao vivo cruza de baixo para cima a MA50 5m (close anterior vs ticker).',
   },
 ];
 

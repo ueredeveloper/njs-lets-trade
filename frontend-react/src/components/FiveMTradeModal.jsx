@@ -694,7 +694,9 @@ function LiveTestPanel({ data }) {
       <p className="text-[9px] font-mono text-p5/50">
         RSI(5m) {data.rsiNow} · preço {data.price}
         {' · '}fase {data.phase}
-        {data.fastPoll && ' · poll rápido 30s'}
+        {data.fastPoll && ' · poll rápido 1min'}
+        {data.nearMa5m && data.ma5mDistPct != null && ` · MA50 5m ${data.ma5mDistPct}%`}
+        {data.ma5mTrigger?.livePrice != null && ' · preço ao vivo'}
       </p>
       {data.maChecks?.length > 0 && (
         <div className="space-y-0.5 pt-1 border-t" style={{ borderColor: '#2a2d3a' }}>
@@ -796,6 +798,7 @@ export default function FiveMTradeModal({
   const pathCooldownStale = pathCooldownSuggest && !pathCooldownSuggest.loading && !pathCooldownSuggest.error && (
     Number(rsiBuy) !== Number(pathCooldownSuggest.rsiBuy) ||
     entryPaths.ma50_5m.trigger !== pathCooldownSuggest.trigger ||
+    Number(entryPaths.ma50_5m.tolerancePct) !== Number(pathCooldownSuggest.tolerancePct) ||
     maFiltersKey(maFilters) !== pathCooldownSuggest.maKey
   );
 
@@ -812,11 +815,13 @@ export default function FiveMTradeModal({
         rsiBuy: buy,
         maFilters,
         trigger: entryPaths.ma50_5m.trigger,
+        tolerancePct: entryPaths.ma50_5m.tolerancePct,
       });
       const payload = {
         ...r,
         rsiBuy: buy,
         trigger: entryPaths.ma50_5m.trigger,
+        tolerancePct: entryPaths.ma50_5m.tolerancePct,
         maKey: maFiltersKey(maFilters),
       };
       setPathCooldownSuggest(payload);
@@ -830,7 +835,7 @@ export default function FiveMTradeModal({
     } catch (err) {
       setPathCooldownSuggest({ error: err.message });
     }
-  }, [symbol, exchange, rsiBuy, maFilters, entryPaths.rsi.enabled, entryPaths.ma50_5m.enabled, entryPaths.ma50_5m.trigger, entryPaths.pathCooldownSource]);
+  }, [symbol, exchange, rsiBuy, maFilters, entryPaths.rsi.enabled, entryPaths.ma50_5m.enabled, entryPaths.ma50_5m.trigger, entryPaths.ma50_5m.tolerancePct, entryPaths.pathCooldownSource]);
 
   function selectPathCooldownSource(source, hours) {
     setEntryPaths(prev => ({
@@ -1382,6 +1387,7 @@ export default function FiveMTradeModal({
                           ma50_5m: {
                             enabled,
                             trigger: enabled && !prev.ma50_5m.enabled ? 'touch' : (prev.ma50_5m.trigger || 'touch'),
+                            tolerancePct: prev.ma50_5m.tolerancePct ?? 0.5,
                           },
                         }));
                         if (enabled && !maFilters.enabled) {
@@ -1421,6 +1427,27 @@ export default function FiveMTradeModal({
                             </span>
                           </label>
                         ))}
+                        {entryPaths.ma50_5m.trigger === 'touch' && (
+                          <label className="flex items-center gap-2 mt-1">
+                            <span className="text-[9px] text-p5/50 shrink-0">Tolerância toque</span>
+                            <input
+                              type="number"
+                              min={0.1}
+                              max={3}
+                              step={0.1}
+                              value={entryPaths.ma50_5m.tolerancePct ?? 0.5}
+                              onChange={e => setEntryPaths(prev => ({
+                                ...prev,
+                                ma50_5m: {
+                                  ...prev.ma50_5m,
+                                  tolerancePct: Math.max(0.1, Math.min(3, Number(e.target.value) || 0.5)),
+                                },
+                              }))}
+                              className="w-16 px-1.5 py-0.5 rounded text-[10px] font-mono bg-p2 border border-p3 text-p5"
+                            />
+                            <span className="text-[9px] text-p5/40">% · poll 1min quando ≤ {Math.max(2, (entryPaths.ma50_5m.tolerancePct ?? 0.5) * 4).toFixed(1)}%</span>
+                          </label>
+                        )}
                       </div>
                     )}
                   </span>

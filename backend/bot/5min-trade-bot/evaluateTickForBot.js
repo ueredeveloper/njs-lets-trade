@@ -7,10 +7,19 @@ const { evaluate5mTradeLive } = require('./evaluate5mTrade');
 /**
  * Avalia um tick do bot (busca 1h se necessário) — mesma lógica do painel ao vivo.
  */
-async function evaluateTickForBot(adapter, state, candles5m) {
+async function evaluateTickForBot(adapter, state, candles5m, livePrice = null) {
   const maCfg = normalizeMaFilters(state.ma_filters);
   const recoveryCfg = normalizeRecoveryPattern(state.recovery_pattern);
   const cMap = { '5m': candles5m };
+
+  let price = livePrice;
+  if (price == null && typeof adapter.fetchLastPrice === 'function') {
+    try {
+      price = await adapter.fetchLastPrice();
+    } catch {
+      price = null;
+    }
+  }
 
   const needs1h = maCfg.enabled || isActiveRecoveryPattern(recoveryCfg);
   if (needs1h) {
@@ -38,6 +47,7 @@ async function evaluateTickForBot(adapter, state, candles5m) {
     phase: state.phase,
     lastBuyTime: state.last_buy_time,
     buyCount: state.buy_count,
+    livePrice: price,
   });
 }
 

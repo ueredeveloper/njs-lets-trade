@@ -326,6 +326,19 @@ export async function fetchFiveMTradeFavorites() {
   return res.json();
 }
 
+export async function fetchFiveMTradeSignals({ symbol, limit = 80, eventType } = {}) {
+  const params = new URLSearchParams();
+  if (symbol) params.set('symbol', symbol.toUpperCase());
+  if (eventType) params.set('event_type', eventType);
+  params.set('limit', String(limit));
+  const res = await fetch(`/services/sb/five-m-trade-signals?${params}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `five-m-trade-signals falhou: HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 export async function addFiveMTradeFavorite({ symbol, exchange = 'binance', capital = 40, rsiBuy = 30, rsiSell = 70, maFilters, stopLoss, recoveryPattern, sellScope, entryPrice, entryPaths }) {
   const res = await fetch('/services/sb/five-m-trade-favorites', {
     method: 'POST',
@@ -443,13 +456,14 @@ export async function fetchFiveMTradeSuggestStop({ symbol, exchange = 'binance',
 }
 
 export async function fetchFiveMTradeSuggestPathCooldown({
-  symbol, exchange = 'binance', rsiBuy = 30, maFilters, trigger = 'touch',
+  symbol, exchange = 'binance', rsiBuy = 30, maFilters, trigger = 'touch', tolerancePct = 0.5,
 }) {
   const params = new URLSearchParams({
     symbol: symbol.toUpperCase(),
     exchange,
     rsiBuy: String(rsiBuy),
     trigger,
+    tolerancePct: String(tolerancePct),
   });
   if (maFilters) params.set('maFilters', JSON.stringify(maFilters));
   const res = await fetch(`/services/sb/five-m-trade-suggest-path-cooldown?${params}`);

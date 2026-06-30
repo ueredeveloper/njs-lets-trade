@@ -1,10 +1,16 @@
 /** Fonte que controla o gráfico — evita efeitos concorrentes resetarem zoom/markers */
 export const CHART_VIEW = {
-  DEFAULT:    'default',
-  TABLE:      'table',
-  STATISTICS: 'statistics',
-  MULTITRADE: 'multitrade',
+  DEFAULT:      'default',
+  TABLE:        'table',
+  STATISTICS:   'statistics',
+  MULTITRADE:   'multitrade',
+  FIVE_M_TRADE: 'five_m_trade',
 };
+
+/** Zoom/markers controlados por painéis de trade (Multi-Trade, 5m Trade) */
+export function isTradePanelChartView(source) {
+  return source === CHART_VIEW.MULTITRADE || source === CHART_VIEW.FIVE_M_TRADE;
+}
 
 export const INTERVAL_MS = {
   '1m': 60_000, '3m': 180_000, '5m': 300_000, '15m': 900_000, '30m': 1_800_000,

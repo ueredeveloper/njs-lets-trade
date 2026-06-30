@@ -235,6 +235,45 @@ export function CurrencyProvider({ children }) {
     setChartZoom(prev => (prev?.source === CHART_VIEW.MULTITRADE ? null : prev));
   }, []);
 
+  /** Atualização atômica do chart pela aba 5m Trade (sinal do Supabase) */
+  const applyFiveMTradeChartView = useCallback(({
+    chartData, symbol, interval, exchangeSource, markers, entryMs, exitMs,
+    fetchFromMs, candleLimit, overlaySlots,
+  }) => {
+    setChartViewSource(CHART_VIEW.FIVE_M_TRADE);
+    setChartInterval(interval);
+    setChartTradeMarkers(markers);
+    setMultitradeChartFocus({
+      signalMs: entryMs,
+      entryMs,
+      exitMs,
+      fetchFromMs,
+      candleLimit,
+      overlaySlots,
+      symbol,
+      source: exchangeSource ?? null,
+    });
+    setSelectedChart({
+      ...chartData,
+      interval,
+      symbol,
+      source: exchangeSource ?? null,
+      tradeMarkers: markers,
+    });
+    setChartZoom({
+      source: CHART_VIEW.FIVE_M_TRADE,
+      startDate: new Date(entryMs).toISOString(),
+      endDate:   new Date(exitMs).toISOString(),
+    });
+  }, []);
+
+  const clearFiveMTradeChartView = useCallback(() => {
+    setChartViewSource(prev => (prev === CHART_VIEW.FIVE_M_TRADE ? CHART_VIEW.DEFAULT : prev));
+    setChartTradeMarkers([]);
+    setMultitradeChartFocus(null);
+    setChartZoom(prev => (prev?.source === CHART_VIEW.FIVE_M_TRADE ? null : prev));
+  }, []);
+
   const dismissActiveTrade = useCallback(async (symbol) => {
     try {
       await ignoreActiveTrade(symbol);
@@ -428,6 +467,8 @@ export function CurrencyProvider({ children }) {
         setChartViewSource,
         applyMultitradeChartView,
         clearMultitradeChartView,
+        applyFiveMTradeChartView,
+        clearFiveMTradeChartView,
         multitradeChartFocus,
         chartTradeMarkers,
         setChartTradeMarkers,

@@ -1025,6 +1025,7 @@ router.get('/five-m-trade-suggest-path-cooldown', getUserId, async (req, res) =>
   const exchange = req.query.exchange ?? 'binance';
   const rsiBuy   = Number(req.query.rsiBuy ?? 30);
   const trigger  = req.query.trigger === 'cross_up' ? 'cross_up' : 'touch';
+  const tolerancePct = Number(req.query.tolerancePct ?? req.query.tolerance_pct ?? 0.5);
 
   let maFilters = null;
   if (req.query.maFilters) {
@@ -1039,7 +1040,7 @@ router.get('/five-m-trade-suggest-path-cooldown', getUserId, async (req, res) =>
   try {
     const candles5m = await fetchCandlesForEval(exchange, symbol, '5m', CANDLES_5M);
     const candles1h = await fetchCandlesForEval(exchange, symbol, '1h', 1000);
-    const report = suggestEntryPathTiming(candles5m, candles1h, maCfg, rsiBuy, trigger);
+    const report = suggestEntryPathTiming(candles5m, candles1h, maCfg, rsiBuy, trigger, tolerancePct);
     res.json({
       symbol,
       exchange,
@@ -1085,6 +1086,17 @@ router.post('/five-m-trade-evaluate', getUserId, async (req, res) => {
       cMap[interval] = await fetchCandlesForEval(exchange, symbol, interval, liveLimit + maxPeriod + 10);
     }
 
+    let livePrice = null;
+    try {
+      if (exchange === 'gate') {
+        const { fetchGateCurrentPrice } = require('../bot/prices');
+        livePrice = await fetchGateCurrentPrice(toGateSymbol(symbol));
+      } else {
+        const { fetchBinanceCurrentPrice } = require('../bot/prices');
+        livePrice = await fetchBinanceCurrentPrice(symbol);
+      }
+    } catch { /* fallback: close da vela 5m */ }
+
     const report = evaluate5mTradeLive(cMap, {
       symbol,
       exchange,
@@ -1098,6 +1110,7 @@ router.post('/five-m-trade-evaluate', getUserId, async (req, res) => {
       phase,
       lastBuyTime,
       buyCount,
+      livePrice,
     });
 
     res.json(report);

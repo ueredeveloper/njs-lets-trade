@@ -19,7 +19,7 @@ const readline = require('readline');
 require('dotenv').config({ path: path.join(__dirname, '../../../.env') });
 
 const ti = require('technicalindicators');
-const { fetchBinanceCandles, fetchGateCandles } = require('../prices');
+const { fetchBinanceCandles, fetchGateCandles, fetchBinanceCurrentPrice, fetchGateCurrentPrice } = require('../prices');
 const { toGateSymbol } = require('../../utils/toGateSymbol');
 const { sendWhatsApp } = require('../whatsapp');
 const { computeActiveStops } = require('./stopLossEngine');
@@ -28,6 +28,7 @@ const { isActiveStopLoss, stopLossLabel } = require('./stopLossConfig');
 const { normalizeSellScope, sellScopeLabel } = require('./sellScopeConfig');
 const { normalizeEntryPrice, entryPriceLabel } = require('./entryPriceConfig');
 const { normalizeEntryPaths, entryPathsLabel } = require('./entryPathsConfig');
+const { isNearMa50_5mForFastPoll, MA5M_FAST_MARGIN_PCT } = require('./ma5mEntryEngine');
 const { evaluateTickForBot } = require('./evaluateTickForBot');
 const { emitSignal, isReadyEntryReport, isReadyExitReport, clearSignalDedupe } = require('./fiveMinSignalLog');
 
@@ -317,6 +318,7 @@ function buildAdapter(exchange, symbol) {
       name:         'Gate.io',
       pair,
       fetchCandles: (lim, iv)  => fetchGateCandles(pair, lim, iv),
+      fetchLastPrice: ()       => fetchGateCurrentPrice(pair),
       marketBuy:    (usdt, opts) => gateBuy(pair, usdt, opts),
       marketSell:   (qty, log) => gateMarketSell(pair, qty, log),
       fetch24hVol:  ()         => gate24hVolume(pair),
@@ -327,6 +329,7 @@ function buildAdapter(exchange, symbol) {
     name:         'Binance',
     pair:         symbol,
     fetchCandles: (lim, iv)  => fetchBinanceCandles(symbol, lim, iv),
+    fetchLastPrice: ()       => fetchBinanceCurrentPrice(symbol),
     marketBuy:    (usdt, opts) => binanceBuy(symbol, usdt, opts),
     marketSell:   (qty, log) => binanceMarketSell(symbol, qty, log),
     fetch24hVol:  ()         => binance24hVolume(symbol),
@@ -511,33 +514,43 @@ async function refreshActiveStop(adapter, state, rsiBuy, entryPrice, currentPric
 }
 
 // ── Tick ──────────────────────────────────────────────────────────────────────
-async function tick(rowId, adapter, log, prevRsi = null, lastStop = null, setStop = null) {
+function tickPollState(rsi, nearMa5m = false) {
+  return { rsi, nearMa5m: nearMa5m === true };
+}
+
+async function tick(rowId, adapter, log, prevPoll = null, lastStop = null, setStop = null) {
   const candles = await adapter.fetchCandles(CANDLE_LIMIT, INTERVAL);
   const closes  = candles.map(c => c.close);
 
-  if (closes.length < RSI_PERIOD + 2) return prevRsi;
+  if (closes.length < RSI_PERIOD + 2) return prevPoll ?? tickPollState(null, false);
 
   const rsiVals = ti.RSI.calculate({ values: closes, period: RSI_PERIOD });
   const rsi     = rsiVals[rsiVals.length - 1];
   const close   = closes[closes.length - 1];
 
-  if (rsi == null) return prevRsi;
+  if (rsi == null) return prevPoll ?? tickPollState(null, false);
 
   const rows = await sbReq('GET', 'five_min_bot_state', null, `?id=eq.${rowId}&limit=1`);
   const state = rows?.[0];
-  if (!state) { log('❌ Linha não encontrada no Supabase.'); return rsi; }
+  if (!state) { log('❌ Linha não encontrada no Supabase.'); return tickPollState(rsi, false); }
 
   const rsiBuy  = Number(state.rsi_buy  ?? RSI_BUY);
   const rsiSell = Number(state.rsi_sell ?? RSI_SELL);
   const { phase, capital, symbol } = state;
   const capitalPerEntry = parseFloat(capital);
+  const entryPathsCfg = normalizeEntryPaths(state.entry_paths);
+  let livePrice = null;
+  if (typeof adapter.fetchLastPrice === 'function') {
+    try { livePrice = await adapter.fetchLastPrice(); } catch { /* usa close da vela */ }
+  }
+  const ma5mProximity = isNearMa50_5mForFastPoll(candles, entryPathsCfg, livePrice);
 
   let report;
   try {
-    report = await evaluateTickForBot(adapter, state, candles);
+    report = await evaluateTickForBot(adapter, state, candles, livePrice);
   } catch (err) {
     log(`❌ Avaliação: ${err.message}`);
-    return rsi;
+    return tickPollState(rsi, ma5mProximity.near);
   }
 
   const willExecuteEntry = isReadyEntryReport(report)
@@ -568,7 +581,7 @@ async function tick(rowId, adapter, log, prevRsi = null, lastStop = null, setSto
         });
       }
     }
-    return rsi;
+    return tickPollState(rsi, ma5mProximity.near);
   }
 
   if (phase === 'BOUGHT') {
@@ -588,7 +601,7 @@ async function tick(rowId, adapter, log, prevRsi = null, lastStop = null, setSto
             price: close,
           });
         }
-        return rsi;
+        return tickPollState(rsi, ma5mProximity.near);
       }
     }
 
@@ -607,7 +620,7 @@ async function tick(rowId, adapter, log, prevRsi = null, lastStop = null, setSto
           motivation: `Regras OK mas venda falhou · ${report.reason}`,
         });
       }
-      return rsi;
+      return tickPollState(rsi, ma5mProximity.near);
     }
 
     if (willExecuteEntry) {
@@ -635,7 +648,7 @@ async function tick(rowId, adapter, log, prevRsi = null, lastStop = null, setSto
     }
   }
 
-  return rsi;
+  return tickPollState(rsi, ma5mProximity.near);
 }
 
 // ── Inicialização por símbolo ─────────────────────────────────────────────────
@@ -654,7 +667,7 @@ async function startSymbol(row, color) {
     `venda: ${sellScopeLabel(row.sell_scope)} | ` +
     `padrão 1h: ${recoveryPatternLabel(row.recovery_pattern)} | ` +
     `DCA cooldown ${normalizeEntryPaths(row.entry_paths).pathCooldownHours}h | ` +
-    `poll 3min / 1min (RSI≤${buyFastThreshold} ou ≥${sellFastThreshold}) | fase: ${row.phase} ===`,
+    `poll 3min / 1min (RSI≤${buyFastThreshold} ou ≥${sellFastThreshold} ou MA50 5m ≤${MA5M_FAST_MARGIN_PCT}%) | fase: ${row.phase} ===`,
   );
   if (!isActiveStopLoss(row.stop_loss)) {
     log(`${Y}⚠️  Stop loss não configurado — edite no painel 5m Trade (hist ou ma)${X}`);
@@ -667,20 +680,22 @@ async function startSymbol(row, color) {
     );
   }
 
-  let lastRsi  = null;
+  let lastPoll = null;
   let lastStop = null;
   let errCount = 0;
 
   const schedule = () => {
+    const lastRsi = lastPoll?.rsi ?? null;
     const nearBuy  = lastRsi !== null && lastRsi <= buyFastThreshold;
     const nearSell = lastRsi !== null && lastRsi >= sellFastThreshold;
-    const delay    = (nearBuy || nearSell) ? FAST_POLL_MS : POLL_MS;
+    const nearMa5m = lastPoll?.nearMa5m === true;
+    const delay    = (nearBuy || nearSell || nearMa5m) ? FAST_POLL_MS : POLL_MS;
     setTimeout(run, delay);
   };
 
   const run = async () => {
     try {
-      lastRsi = await tick(row.id, adapter, log, lastRsi, lastStop, s => { lastStop = s; });
+      lastPoll = await tick(row.id, adapter, log, lastPoll, lastStop, s => { lastStop = s; });
       errCount = 0;
     } catch (err) {
       errCount++;

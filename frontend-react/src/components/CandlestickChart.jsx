@@ -4,7 +4,7 @@ import ReactECharts from 'echarts-for-react';
 import { useCurrency } from '../contexts/CurrencyContext';
 import { fetchCandlesticksAndCloud, fetchGateTrades, fetchBinanceTrades } from '../services/api';
 import convertOpenTime from '../utils/convertOpenTime';
-import { CHART_VIEW, computeZoomWindow, buildFixedDataZoom, computeCandleLimitFromTime } from '../utils/chartView';
+import { CHART_VIEW, computeZoomWindow, buildFixedDataZoom, computeCandleLimitFromTime, isTradePanelChartView } from '../utils/chartView';
 
 const LIMIT = 76;
 const MAX_CANDLES = 1000;
@@ -276,9 +276,11 @@ function buildMultitradeMarkLines(candlesticks, interval, markers, DL, LEFT_PAD)
     '1h': 3_600_000, '2h': 7_200_000, '4h': 14_400_000, '8h': 28_800_000, '1d': 86_400_000 }[interval] ?? 900_000;
   const offset = candlesticks.length - DL;
   const styles = {
-    signal: { color: '#f59e0b', label: '◆ Sinal' },
-    buy:    { color: '#22c55e', label: '▲ Buy' },
-    sell:   { color: '#ef4444', label: '▼ Sell' },
+    signal:         { color: '#f59e0b', label: '◆ Sinal' },
+    buy:            { color: '#22c55e', label: '▲ Buy' },
+    sell:           { color: '#ef4444', label: '▼ Sell' },
+    entry:          { color: '#ffffff', label: '▌ Entrada' },
+    possible_entry: { color: '#ffffff', label: '◌ Entrada pronta' },
   };
   return markers.flatMap(m => {
     let best = 0;
@@ -291,9 +293,10 @@ function buildMultitradeMarkLines(candlesticks, interval, markers, DL, LEFT_PAD)
     const localIdx = best - offset;
     if (localIdx < 0 || localIdx >= DL) return [];
     const st = styles[m.side] ?? { color: '#94a3b8', label: m.side };
+    const dashed = m.side === 'signal' || m.side === 'possible_entry';
     return [{
       xAxis: localIdx + LEFT_PAD,
-      lineStyle: { color: st.color, width: 1.5, type: m.side === 'signal' ? 'dashed' : 'solid' },
+      lineStyle: { color: st.color, width: m.side === 'entry' || m.side === 'possible_entry' ? 2 : 1.5, type: dashed ? 'dashed' : 'solid' },
       label: {
         show: true,
         formatter: st.label,
@@ -1023,7 +1026,7 @@ export default function CandlestickChart() {
     if (selectedChart?.interval) {
       setCurrentInterval(selectedChart.interval);
     }
-    if (chartViewSource === CHART_VIEW.MULTITRADE && chartZoom) {
+    if (isTradePanelChartView(chartViewSource) && chartZoom) {
       if (multitradeChartFocus?.candleLimit) {
         setCandleFetchLimit(multitradeChartFocus.candleLimit);
         setDisplayCandleCount(multitradeChartFocus.candleLimit);
@@ -1037,7 +1040,7 @@ export default function CandlestickChart() {
 
   // Overlays MA (1h / 4h) conforme config do trade MT selecionado
   useEffect(() => {
-    if (chartViewSource !== CHART_VIEW.MULTITRADE || !multitradeChartFocus?.overlaySlots) return;
+    if (!isTradePanelChartView(chartViewSource) || !multitradeChartFocus?.overlaySlots) return;
     setOverlaySlots(multitradeChartFocus.overlaySlots);
     setActiveIndicators(prev => {
       const next = new Set(prev);
@@ -1091,7 +1094,7 @@ export default function CandlestickChart() {
           return;
         }
         try {
-          const ovLimit = chartViewSource === CHART_VIEW.MULTITRADE && multitradeChartFocus?.fetchFromMs
+          const ovLimit = isTradePanelChartView(chartViewSource) && multitradeChartFocus?.fetchFromMs
             ? computeCandleLimitFromTime(multitradeChartFocus.fetchFromMs, slot.interval)
             : candleFetchLimit;
           next[key] = await fetchOverlayMaPoints(
@@ -1126,7 +1129,7 @@ export default function CandlestickChart() {
     if (!selectedChart?.symbol) return;
     setLoadingInterval(true);
     try {
-      const isMt = chartViewSource === CHART_VIEW.MULTITRADE && multitradeChartFocus?.fetchFromMs;
+      const isMt = isTradePanelChartView(chartViewSource) && multitradeChartFocus?.fetchFromMs;
       const limit = isMt
         ? computeCandleLimitFromTime(multitradeChartFocus.fetchFromMs, iv)
         : 500;
@@ -1177,7 +1180,7 @@ export default function CandlestickChart() {
   useEffect(() => {
     if (!chartZoom || !chartRef.current || !selectedChart?.candlesticks?.length) return;
     // Zoom embutido na option (buildFixedDataZoom); dispatchAction só como fallback legado (tabela/sem source)
-    if (chartZoom.source === CHART_VIEW.MULTITRADE || chartZoom.source === CHART_VIEW.STATISTICS) return;
+    if (isTradePanelChartView(chartZoom.source) || chartZoom.source === CHART_VIEW.STATISTICS) return;
     const win = computeZoomWindow(selectedChart.candlesticks, chartZoom);
     if (!win) return;
     const instance = chartRef.current.getEchartsInstance();
@@ -1191,7 +1194,7 @@ export default function CandlestickChart() {
 
   const displayLimit = (() => {
     const candles = selectedChart?.candlesticks;
-    if (chartZoom && (chartViewSource === CHART_VIEW.MULTITRADE || chartViewSource === CHART_VIEW.STATISTICS)) {
+    if (chartZoom && (isTradePanelChartView(chartViewSource) || chartViewSource === CHART_VIEW.STATISTICS)) {
       return candles?.length ?? displayCandleCount;
     }
     if ((chartTradeMarkers?.length || selectedChart?.tradeMarkers?.length) && candles?.length && candles.length <= 50) {

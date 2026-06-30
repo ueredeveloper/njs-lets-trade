@@ -2,11 +2,17 @@
 
 const DEFAULT_ENTRY_PATHS = {
   rsi:     { enabled: true },
-  ma50_5m: { enabled: true, trigger: 'touch' },
+  ma50_5m: { enabled: true, trigger: 'touch', tolerancePct: 0.5 },
   combine: 'any', // any = OR · all = AND (quando os dois ativos)
   pathCooldownHours: 2,
   pathCooldownSource: 'ma', // 'rsi' | 'ma' — qual mediana histórica define o período
 };
+
+function clampMa5mTolerancePct(raw) {
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return DEFAULT_ENTRY_PATHS.ma50_5m.tolerancePct;
+  return Math.max(0.1, Math.min(3, parseFloat(n.toFixed(2))));
+}
 
 function clampPathCooldownHours(raw) {
   const h = Number(raw);
@@ -30,6 +36,7 @@ function normalizeEntryPaths(raw) {
     ma50_5m: {
       enabled: raw.ma50_5m?.enabled !== false,
       trigger,
+      tolerancePct: clampMa5mTolerancePct(raw.ma50_5m?.tolerancePct),
     },
     combine: raw.combine === 'all' ? 'all' : 'any',
     pathCooldownHours: clampPathCooldownHours(raw.pathCooldownHours ?? DEFAULT_ENTRY_PATHS.pathCooldownHours),
@@ -41,7 +48,10 @@ function entryPathsLabel(cfg) {
   const n = normalizeEntryPaths(cfg);
   const parts = [];
   if (n.rsi.enabled) parts.push('RSI');
-  if (n.ma50_5m.enabled) parts.push(`MA50 5m (${n.ma50_5m.trigger})`);
+  if (n.ma50_5m.enabled) {
+    const tol = n.ma50_5m.trigger === 'touch' ? ` ±${n.ma50_5m.tolerancePct}%` : '';
+    parts.push(`MA50 5m (${n.ma50_5m.trigger}${tol})`);
+  }
   if (!parts.length) return 'nenhum';
   if (parts.length === 2) {
     return `${parts.join(n.combine === 'all' ? ' + ' : ' ou ')}`;
@@ -109,4 +119,5 @@ module.exports = {
   pathCooldownMs,
   applyPathAlternationCooldown,
   clampPathCooldownHours,
+  clampMa5mTolerancePct,
 };
