@@ -16,6 +16,12 @@ const RECOVERY_ZONE_LABELS = {
   between_ma: 'Entre MA e piso adaptativo',
 };
 
+const DEFAULT_RECOVERY_PATTERN = {
+  types:    ['two_green', 'two_one'],
+  zones:    ['above_ma', 'between_ma'],
+  abovePct: 5,
+};
+
 function recoveryPatternTypes(raw) {
   if (!raw || typeof raw !== 'object') return [];
   if (Array.isArray(raw.types)) {
@@ -28,7 +34,7 @@ function recoveryPatternTypes(raw) {
 function normalizeRecoveryPattern(raw, { required = false } = {}) {
   if (!raw || typeof raw !== 'object') {
     if (required) return null;
-    return { types: [], zones: [], abovePct: 5 };
+    return { ...DEFAULT_RECOVERY_PATTERN, types: [...DEFAULT_RECOVERY_PATTERN.types], zones: [...DEFAULT_RECOVERY_PATTERN.zones] };
   }
 
   const types = [...new Set(recoveryPatternTypes(raw))];
@@ -37,12 +43,19 @@ function normalizeRecoveryPattern(raw, { required = false } = {}) {
   let zones = Array.isArray(raw.zones)
     ? raw.zones.filter(z => RECOVERY_ZONES.includes(z))
     : [];
-  if (!zones.length && types.length) {
-    zones = raw.zone && RECOVERY_ZONES.includes(raw.zone) ? [raw.zone] : ['above_ma', 'between_ma'];
-  }
-  const abovePct = Math.max(0, Math.min(20, Number(raw.abovePct ?? 5) || 5));
+  const abovePct = Math.max(0, Math.min(20, Number(raw.abovePct ?? DEFAULT_RECOVERY_PATTERN.abovePct) || DEFAULT_RECOVERY_PATTERN.abovePct));
 
-  if (!types.length) return { types: [], zones: [], abovePct };
+  if (!types.length) {
+    return {
+      types:    [...DEFAULT_RECOVERY_PATTERN.types],
+      zones:    zones.length ? [...new Set(zones)] : [...DEFAULT_RECOVERY_PATTERN.zones],
+      abovePct,
+    };
+  }
+  if (!zones.length) {
+    zones = raw.zone && RECOVERY_ZONES.includes(raw.zone) ? [raw.zone] : [...DEFAULT_RECOVERY_PATTERN.zones];
+  }
+
   return { types, zones: [...new Set(zones)], abovePct };
 }
 
@@ -63,6 +76,7 @@ module.exports = {
   RECOVERY_ZONES,
   RECOVERY_PATTERN_LABELS,
   RECOVERY_ZONE_LABELS,
+  DEFAULT_RECOVERY_PATTERN,
   recoveryPatternTypes,
   normalizeRecoveryPattern,
   isActiveRecoveryPattern,

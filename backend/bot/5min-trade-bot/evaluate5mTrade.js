@@ -26,7 +26,9 @@ const ACTION_LABELS = {
   entrada_bloqueada_padrao: '🚫 Entrada bloqueada (padrão 1h)',
   dca_bloqueada_padrao:     '🚫 DCA bloqueada (padrão 1h)',
   dca_bloqueada_ma:       '🚫 DCA bloqueada (MA)',
-  dca_aguardando_cooldown:'⏳ DCA — cooldown 2h',
+  entrada_bloqueada_caminho: '🚫 Entrada bloqueada (caminho)',
+  dca_bloqueada_caminho:     '🚫 DCA bloqueada (caminho)',
+  dca_path_cooldown:         '⏳ DCA — outro caminho em cooldown',
   mantem_posicao:         '📊 Mantém posição',
 };
 
@@ -37,20 +39,24 @@ function formatCooldown(ms) {
   return h > 0 ? `${h}h${m > 0 ? `${m}m` : ''}` : `${m}m`;
 }
 
-function canDcaAgain(lastBuyTime) {
+function canDcaAgain(lastBuyTime, entryPathsCfg) {
   if (!lastBuyTime) return true;
-  return Date.now() - new Date(lastBuyTime).getTime() >= ENTRY_COOLDOWN_MS;
+  return Date.now() - new Date(lastBuyTime).getTime() >= pathCooldownMs(entryPathsCfg);
 }
 
-function cooldownRemaining(lastBuyTime) {
+function cooldownRemaining(lastBuyTime, entryPathsCfg) {
   if (!lastBuyTime) return 0;
-  return Math.max(0, ENTRY_COOLDOWN_MS - (Date.now() - new Date(lastBuyTime).getTime()));
+  return Math.max(0, pathCooldownMs(entryPathsCfg) - (Date.now() - new Date(lastBuyTime).getTime()));
 }
 
 const { checkRecoveryPatternsLive, evaluateRecoveryEntry } = require('./recoveryPattern');
 const { normalizeRecoveryPattern, recoveryPatternLabel } = require('./recoveryPatternConfig');
 const { normalizeSellScope, sellScopeLabel } = require('./sellScopeConfig');
-const { maKey } = require('./maFilter');
+const { maKey, buildMaSeries, maAt } = require('./maFilter');
+const { normalizeEntryPaths, entryPathsLabel, hasEntryPath, applyPathAlternationCooldown, pathCooldownMs } = require('./entryPathsConfig');
+const {
+  checkMa50_5mTrigger, MA5M_PERIOD, evaluateEntryPathsSignal,
+} = require('./ma5mEntryEngine');
 
 function checkCandlePatterns(cMap, recoveryPattern = null) {
   const cfg = normalizeRecoveryPattern(recoveryPattern);
@@ -81,6 +87,23 @@ function recoveryEvalForEntry(cMap, maCfg, price, openTime, recoveryPattern) {
   return evaluateRecoveryEntry(price, ma, tol, cfg, patternLive);
 }
 
+function buildMa5mTrigger(candles5m, entryPathsCfg) {
+  if (!entryPathsCfg.ma50_5m.enabled || candles5m.length < MA5M_PERIOD + 2) {
+    return { triggered: false };
+  }
+  const last = candles5m[candles5m.length - 1];
+  const prev = candles5m[candles5m.length - 2];
+  const ma5mSeries = buildMaSeries(candles5m, MA5M_PERIOD);
+  const ma5m = maAt(ma5mSeries, last.openTime);
+  return checkMa50_5mTrigger({
+    close: last.close,
+    low: last.low,
+    prevClose: prev?.close,
+    ma: ma5m,
+    trigger: entryPathsCfg.ma50_5m.trigger,
+  });
+}
+
 /**
  * @param {object} cMap — candles por intervalo ('5m', '1h', …)
  * @param {object} params — rsiBuy, rsiSell, maFilters, phase, lastBuyTime, buyCount
@@ -90,6 +113,7 @@ function evaluate5mTradeLive(cMap, params = {}) {
   const rsiSell  = Number(params.rsiSell ?? 70);
   const phase    = params.phase === 'BOUGHT' ? 'BOUGHT' : 'WATCHING';
   const maCfg    = normalizeMaFilters(params.maFilters);
+  const entryPathsCfg = normalizeEntryPaths(params.entryPaths);
   const buyCount = Number(params.buyCount ?? 0) || 0;
   const sellScope = normalizeSellScope(params.sellScope).scope;
 
@@ -113,6 +137,28 @@ function evaluate5mTradeLive(cMap, params = {}) {
 
   const rsiBuySignal  = rsiNow < rsiBuy;
   const rsiSellSignal = rsiNow > rsiSell;
+  const ma5mTrigger   = buildMa5mTrigger(candles5m, entryPathsCfg);
+
+  const recoveryCfg = normalizeRecoveryPattern(params.recoveryPattern);
+  const candlePatterns = checkCandlePatterns(cMap, recoveryCfg);
+  const recoveryEval   = recoveryEvalForEntry(cMap, maCfg, price, openTime, recoveryCfg);
+  const patternRequired = recoveryEval.patternRequired === true;
+
+  const rawPathSignal = evaluateEntryPathsSignal({
+    entryPaths: entryPathsCfg,
+    rsi: rsiNow,
+    rsiBuy,
+    ma5mTrigger,
+    ma1hOk: maPass.ok,
+    recoveryOk: recoveryEval.ok || !patternRequired,
+  });
+  const pathSignal = phase === 'BOUGHT'
+    ? applyPathAlternationCooldown(entryPathsCfg, rawPathSignal, {
+      lastEntryPath: params.entryPath,
+      lastBuyTime: params.lastBuyTime,
+    })
+    : rawPathSignal;
+
   const fastThreshold = Math.max(rsiSell - 2, rsiBuy + 5);
   const fastPoll      = rsiNow >= fastThreshold;
 
@@ -121,51 +167,85 @@ function evaluate5mTradeLive(cMap, params = {}) {
   let reason  = '';
   let detail  = null;
 
-  const recoveryCfg = normalizeRecoveryPattern(params.recoveryPattern);
-  const candlePatterns = checkCandlePatterns(cMap, recoveryCfg);
-  const recoveryEval   = recoveryEvalForEntry(cMap, maCfg, price, openTime, recoveryCfg);
-  const patternRequired = recoveryEval.patternRequired === true;
-
   if (phase === 'WATCHING') {
-    if (!rsiBuySignal) {
+    if (!hasEntryPath(entryPathsCfg)) {
       action = 'aguardar';
-      reason = `RSI ${rsiNow} ≥ ${rsiBuy} — sem sobrevenda no candle 5m atual`;
-      if (rsiNow >= fastThreshold) {
-        detail = `RSI próximo da saída (≥ ${fastThreshold}) — bot faria poll a cada 30s`;
-      }
-    } else if (!maPass.ok) {
-      action = 'entrada_bloqueada_ma';
-      const f = maPass.filter;
-      reason = `RSI ${rsiNow} < ${rsiBuy} mas ${formatMaFilterLabel(f)} não atendido`;
-      if (maPass.distPct != null) reason += ` (preço ${maPass.distPct}% vs MA)`;
-      if (maPass.threshold != null) {
-        detail = `Piso: ${maPass.threshold.toFixed(6)} · preço ${price.toFixed(6)}`;
-      }
-    } else if (patternRequired && !recoveryEval.ok) {
-      action  = 'entrada_bloqueada_padrao';
-      allowed = false;
-      if (recoveryEval.reason === 'tres_vermelhos_1h') {
-        reason = `RSI ${rsiNow} < ${rsiBuy} mas 3 candles 1h vermelhos — queda em direção à MA`;
+      reason = 'Nenhum caminho de entrada ativo — habilite RSI ou MA50 5m';
+    } else if (!pathSignal.ok) {
+      if (!maPass.ok) {
+        action = 'entrada_bloqueada_ma';
+        const f = maPass.filter;
+        reason = `${formatMaFilterLabel(f)} não atendido`;
+        if (maPass.distPct != null) reason += ` (preço ${maPass.distPct}% vs MA)`;
+      } else if (patternRequired && !recoveryEval.ok) {
+        action = 'entrada_bloqueada_padrao';
+        if (recoveryEval.reason === 'tres_vermelhos_1h') {
+          reason = '3 candles 1h vermelhos — queda em direção à MA';
+        } else {
+          const zone = recoveryEval.zone === 'above_ma'
+            ? `acima MA +${recoveryCfg.abovePct}%`
+            : 'entre MA e adaptação';
+          reason = `padrão 1h ausente na zona ${zone} (${recoveryPatternLabel(recoveryCfg)})`;
+        }
       } else {
-        const zone = recoveryEval.zone === 'above_ma'
-          ? `acima MA +${recoveryCfg.abovePct}%`
-          : 'entre MA e adaptação';
-        reason  = `RSI ${rsiNow} < ${rsiBuy} mas padrão 1h ausente na zona ${zone} (${recoveryPatternLabel(recoveryCfg)})`;
+        action = 'entrada_bloqueada_caminho';
+        const parts = [];
+        if (entryPathsCfg.rsi.enabled && !pathSignal.rsiSignal) {
+          parts.push(`RSI ${rsiNow} ≥ ${rsiBuy}`);
+        }
+        if (entryPathsCfg.ma50_5m.enabled && !pathSignal.maSignal) {
+          parts.push(`sem toque MA50 5m (${entryPathsCfg.ma50_5m.trigger})`);
+        }
+        if (entryPathsCfg.rsi.enabled && entryPathsCfg.ma50_5m.enabled && entryPathsCfg.combine === 'all') {
+          reason = `Aguardando ${parts.join(' e ')}`;
+        } else {
+          reason = parts.length ? parts.join(' · ') : 'Aguardando sinal de entrada';
+        }
+        if (ma5mTrigger.ma != null) {
+          detail = `MA50 5m=${ma5mTrigger.ma.toFixed(6)} · close=${price.toFixed(6)}`;
+        }
       }
     } else {
       action  = 'compraria';
       allowed = true;
-      reason  = `RSI ${rsiNow} < ${rsiBuy}`;
-      if (patternRequired && recoveryEval.ok) reason += ` e padrão 1h OK (${recoveryEval.zone})`;
-      if (maCfg.enabled) reason += ` e filtros MA OK`;
-      else if (!patternRequired) reason += ' — entrada permitida';
+      const via = pathSignal.path === 'ma50_5m' ? 'MA50 5m' : `RSI<${rsiBuy}`;
+      reason  = `Sinal ${via}`;
+      if (patternRequired && recoveryEval.ok) reason += ` · padrão 1h OK (${recoveryEval.zone})`;
+      if (maCfg.enabled) reason += ' · filtros MA OK';
     }
   } else {
     if (rsiSellSignal) {
       action  = 'venderia';
       allowed = true;
-      reason  = `RSI ${rsiNow} > ${rsiSell} — ${sellScopeLabel(sellScope).toLowerCase()}`;
+      reason  = `RSI>${rsiSell} — ${sellScopeLabel(sellScope).toLowerCase()}`;
       if (buyCount > 1) detail = `${buyCount} entradas na posição`;
+    } else if (hasEntryPath(entryPathsCfg)) {
+      const remaining = cooldownRemaining(params.lastBuyTime, entryPathsCfg);
+      if (!canDcaAgain(params.lastBuyTime, entryPathsCfg)) {
+        action = 'dca_aguardando_cooldown';
+        reason = `Aguardando ${formatCooldown(remaining)} entre entradas (${entryPathsCfg.pathCooldownHours}h)`;
+      } else if (pathSignal.reason === 'path_cooldown') {
+        action = 'dca_path_cooldown';
+        reason = `Última via ${params.entryPath} — ${pathSignal.blockedPath} bloqueado · faltam ${formatCooldown(pathSignal.remainingMs ?? 0)}`;
+      } else if (!pathSignal.ok) {
+        if (!maPass.ok) {
+          action = 'dca_bloqueada_ma';
+          reason = `Cooldown OK mas MA bloqueou (${formatMaFilterLabel(maPass.filter)})`;
+        } else if (patternRequired && !recoveryEval.ok) {
+          action = 'dca_bloqueada_padrao';
+          reason = recoveryEval.reason === 'tres_vermelhos_1h'
+            ? 'DCA bloqueada: 3 candles 1h vermelhos'
+            : `padrão 1h ausente (${recoveryPatternLabel(recoveryCfg)})`;
+        } else {
+          action = 'dca_bloqueada_caminho';
+          reason = 'Aguardando caminho de entrada (RSI ou MA50 5m)';
+        }
+      } else {
+        action  = 'dca_compraria';
+        allowed = true;
+        const via = pathSignal.path === 'ma50_5m' ? 'MA50 5m' : `RSI<${rsiBuy}`;
+        reason  = `DCA via ${via} · cooldown ${entryPathsCfg.pathCooldownHours}h OK`;
+      }
     } else if (rsiBuySignal) {
       const remaining = cooldownRemaining(params.lastBuyTime);
       if (!canDcaAgain(params.lastBuyTime)) {
@@ -208,6 +288,10 @@ function evaluate5mTradeLive(cMap, params = {}) {
     maDescription:    describeMaFilters(maCfg),
     maPass:           maPass.ok,
     maChecks,
+    entryPaths:       entryPathsCfg,
+    entryPathsLabel:  entryPathsLabel(entryPathsCfg),
+    pathSignal,
+    ma5mTrigger,
     action,
     actionLabel:      ACTION_LABELS[action] ?? action,
     allowed,
@@ -215,12 +299,13 @@ function evaluate5mTradeLive(cMap, params = {}) {
     detail,
     candlePatterns,
     recoveryEval,
-    cooldownRemainingMs: phase === 'BOUGHT' && rsiBuySignal && !canDcaAgain(params.lastBuyTime)
-      ? cooldownRemaining(params.lastBuyTime)
+    cooldownRemainingMs: phase === 'BOUGHT' && !canDcaAgain(params.lastBuyTime, entryPathsCfg)
+      ? cooldownRemaining(params.lastBuyTime, entryPathsCfg)
       : 0,
     paramsUsed: {
       rsiBuy,
       rsiSell,
+      entryPaths: entryPathsCfg,
       maFilters: maCfg,
       sellScope,
       phase,

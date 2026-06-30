@@ -316,6 +316,7 @@ module.exports = {
   TOLERANCE_OPTS,
   normalizeMaFilters,
   buildMaSeries,
+  maAt,
   buildMaLookupMap,
   passesMaFilters,
   detailMaFilters,

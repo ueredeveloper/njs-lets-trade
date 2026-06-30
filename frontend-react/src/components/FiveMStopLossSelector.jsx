@@ -29,7 +29,7 @@ export default function FiveMStopLossSelector({ stop, loading, rsiBuy, value, on
       <p className="text-[9px] text-p5/50 leading-relaxed">
         Escolha uma ou mais regras — o bot vende se <strong className="text-p5/70">qualquer</strong> stop for atingido.
         O histórico usa o <strong className="text-p5/70">RSI de compra atual</strong> (agora &lt;{rsiBuy}).
-        {!hasCalc && ' Clique em Sugerir.'}
+        {!hasCalc && !loading && ' Aguarde o cálculo automático ou clique Sugerir.'}
         {(stale || rsiMismatch || loading) && (
           <span className="block text-amber-500/85 mt-0.5">
             {loading ? 'Calculando…' : 'Desatualizado — clique Sugerir.'}

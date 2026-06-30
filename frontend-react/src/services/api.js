@@ -326,11 +326,11 @@ export async function fetchFiveMTradeFavorites() {
   return res.json();
 }
 
-export async function addFiveMTradeFavorite({ symbol, exchange = 'binance', capital = 40, rsiBuy = 30, rsiSell = 70, maFilters, stopLoss, recoveryPattern, sellScope, entryPrice }) {
+export async function addFiveMTradeFavorite({ symbol, exchange = 'binance', capital = 40, rsiBuy = 30, rsiSell = 70, maFilters, stopLoss, recoveryPattern, sellScope, entryPrice, entryPaths }) {
   const res = await fetch('/services/sb/five-m-trade-favorites', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ symbol, exchange, capital, rsiBuy, rsiSell, maFilters, stopLoss, recoveryPattern, sellScope, entryPrice }),
+    body: JSON.stringify({ symbol, exchange, capital, rsiBuy, rsiSell, maFilters, stopLoss, recoveryPattern, sellScope, entryPrice, entryPaths }),
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
@@ -339,11 +339,11 @@ export async function addFiveMTradeFavorite({ symbol, exchange = 'binance', capi
   return res.json();
 }
 
-export async function updateFiveMTradeFavorite(id, { exchange, capital, rsiBuy, rsiSell, maFilters, stopLoss, recoveryPattern, sellScope, entryPrice }) {
+export async function updateFiveMTradeFavorite(id, { exchange, capital, rsiBuy, rsiSell, maFilters, stopLoss, recoveryPattern, sellScope, entryPrice, entryPaths }) {
   const res = await fetch(`/services/sb/five-m-trade-favorites/${encodeURIComponent(id)}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ exchange, capital, rsiBuy, rsiSell, maFilters, stopLoss, recoveryPattern, sellScope, entryPrice }),
+    body: JSON.stringify({ exchange, capital, rsiBuy, rsiSell, maFilters, stopLoss, recoveryPattern, sellScope, entryPrice, entryPaths }),
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
@@ -442,9 +442,28 @@ export async function fetchFiveMTradeSuggestStop({ symbol, exchange = 'binance',
   return res.json();
 }
 
+export async function fetchFiveMTradeSuggestPathCooldown({
+  symbol, exchange = 'binance', rsiBuy = 30, maFilters, trigger = 'touch',
+}) {
+  const params = new URLSearchParams({
+    symbol: symbol.toUpperCase(),
+    exchange,
+    rsiBuy: String(rsiBuy),
+    trigger,
+  });
+  if (maFilters) params.set('maFilters', JSON.stringify(maFilters));
+  const res = await fetch(`/services/sb/five-m-trade-suggest-path-cooldown?${params}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `five-m-trade-suggest-path-cooldown falhou: HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 export async function evaluateFiveMTradeLive({
   symbol, exchange = 'binance', rsiBuy = 30, rsiSell = 70, maFilters, recoveryPattern,
-  phase = 'WATCHING', lastBuyTime = null, buyCount = 0,
+  phase = 'WATCHING', lastBuyTime = null, buyCount = 0, entryPaths, entryPath,
+  sellScope,
 }) {
   const res = await fetch('/services/sb/five-m-trade-evaluate', {
     method: 'POST',
@@ -456,9 +475,12 @@ export async function evaluateFiveMTradeLive({
       rsiSell,
       maFilters,
       recoveryPattern,
+      sellScope,
       phase,
       lastBuyTime,
       buyCount,
+      entryPaths,
+      entryPath,
     }),
   });
   if (!res.ok) {

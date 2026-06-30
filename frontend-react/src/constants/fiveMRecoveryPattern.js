@@ -1,5 +1,11 @@
 /** Padrões de recuperação 1h — espelham backend/bot/5min-trade-bot/recoveryPatternConfig.js */
 
+export const DEFAULT_RECOVERY_PATTERN = {
+  types:    ['two_green', 'two_one'],
+  zones:    ['above_ma', 'between_ma'],
+  abovePct: 5,
+};
+
 export function getRecoveryPatternOptions(rsiBuy = 30) {
   const rsi = Number(rsiBuy) || 30;
   return [

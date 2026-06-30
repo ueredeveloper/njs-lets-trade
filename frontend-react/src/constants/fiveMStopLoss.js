@@ -2,6 +2,9 @@
 export const DEFAULT_FIVE_M_RSI_BUY  = 25;
 export const DEFAULT_FIVE_M_RSI_SELL = 70;
 
+/** Stops sugeridos por padrão após cálculo (quando a moeda ainda não tem stop salvo). */
+export const DEFAULT_STOP_LOSS_TYPES = ['hist', 'ma'];
+
 export function stopPayloadFromRecovery(rec) {
   if (!rec || rec.error) return rec?.error ? { error: rec.error } : null;
   return {
@@ -79,15 +82,31 @@ export function stopTypeReady(type, stop, rsiBuy) {
   return stopOptionAvailable(type, stop, rsiBuy);
 }
 
+export function hasSavedStopLossTypes(entry) {
+  const sl = entry?.stopLoss;
+  if (Array.isArray(sl?.types) && sl.types.length) return true;
+  return !!(sl?.type && sl.type !== 'none' && getStopLossOptions().some(o => o.type === sl.type));
+}
+
+export function pickDefaultStopTypes(stop, rsiBuy) {
+  const preferred = DEFAULT_STOP_LOSS_TYPES.filter(t => stopOptionAvailable(t, stop, rsiBuy));
+  if (preferred.length) return preferred;
+  const rec = stop?.recommended;
+  if (rec && stopOptionAvailable(rec, stop, rsiBuy)) return [rec];
+  if (stopOptionAvailable('fixed_5', stop, rsiBuy)) return ['fixed_5'];
+  if (stopOptionAvailable('fixed_2', stop, rsiBuy)) return ['fixed_2'];
+  return [];
+}
+
 export function initialStopLossTypes(entry) {
   const sl = entry?.stopLoss;
-  if (Array.isArray(sl?.types)) {
+  if (Array.isArray(sl?.types) && sl.types.length) {
     return sl.types.filter(t => getStopLossOptions().some(o => o.type === t));
   }
-  if (sl?.type && getStopLossOptions().some(o => o.type === sl.type)) {
+  if (sl?.type && sl.type !== 'none' && getStopLossOptions().some(o => o.type === sl.type)) {
     return [sl.type];
   }
-  return [];
+  return [...DEFAULT_STOP_LOSS_TYPES];
 }
 
 export function toggleStopType(list, type) {

@@ -499,6 +499,7 @@ const { normalizeStopLoss } = require('../bot/5min-trade-bot/stopLossConfig');
 const { normalizeRecoveryPattern } = require('../bot/5min-trade-bot/recoveryPatternConfig');
 const { normalizeSellScope } = require('../bot/5min-trade-bot/sellScopeConfig');
 const { normalizeEntryPrice } = require('../bot/5min-trade-bot/entryPriceConfig');
+const { normalizeEntryPaths } = require('../bot/5min-trade-bot/entryPathsConfig');
 
 function fiveMTradeToEntry(r) {
   return {
@@ -514,6 +515,9 @@ function fiveMTradeToEntry(r) {
     recoveryPattern: normalizeRecoveryPattern(r.recovery_pattern),
     sellScope:      normalizeSellScope(r.sell_scope).scope,
     entryPrice:     normalizeEntryPrice(r.entry_price),
+    entryPaths:     normalizeEntryPaths(r.entry_paths),
+    rsiSellMa5m:    r.rsi_sell_ma5m != null ? Number(r.rsi_sell_ma5m) : null,
+    entryPath:      r.entry_path ?? null,
     phase:          r.phase ?? 'WATCHING',
     buyCount:       r.buy_count ?? 0,
     lastBuyTime:    r.last_buy_time ?? r.buy_time ?? null,
@@ -533,7 +537,7 @@ router.get('/five-m-trade-favorites', getUserId, async (req, res) => {
 // POST /services/sb/five-m-trade-favorites  { symbol, exchange?, capital?, rsiBuy?, rsiSell?, maFilters? }
 router.post('/five-m-trade-favorites', getUserId, async (req, res) => {
   const {
-    symbol, exchange = 'binance', capital = 40, rsiBuy = 30, rsiSell = 70, maFilters, stopLoss, recoveryPattern, sellScope, entryPrice,
+    symbol, exchange = 'binance', capital = 40, rsiBuy = 30, rsiSell = 70, maFilters, stopLoss, recoveryPattern, sellScope, entryPrice, entryPaths, rsiSellMa5m,
   } = req.body;
   if (!symbol) return res.status(400).json({ error: 'symbol obrigatório' });
   const sym = symbol.toUpperCase();
@@ -554,6 +558,10 @@ router.post('/five-m-trade-favorites', getUserId, async (req, res) => {
     : undefined;
   const sellScopeCfg = sellScope !== undefined ? normalizeSellScope(sellScope).scope : undefined;
   const entryPriceCfg = entryPrice !== undefined ? normalizeEntryPrice(entryPrice) : undefined;
+  const entryPathsCfg = entryPaths !== undefined ? normalizeEntryPaths(entryPaths) : undefined;
+  const rsiSellMa5mNum = rsiSellMa5m !== undefined && rsiSellMa5m !== null
+    ? Number(rsiSellMa5m)
+    : undefined;
   if (stopLoss !== undefined && stopLoss !== null && slCfg?.types?.length === 0 && stopLoss.types?.length) {
     return res.status(400).json({ error: 'stopLoss.types inválido' });
   }
@@ -575,6 +583,8 @@ router.post('/five-m-trade-favorites', getUserId, async (req, res) => {
     if (rpCfg  !== undefined) updates.recovery_pattern = rpCfg;
     if (sellScopeCfg !== undefined) updates.sell_scope = sellScopeCfg;
     if (entryPriceCfg !== undefined) updates.entry_price = entryPriceCfg;
+    if (entryPathsCfg !== undefined) updates.entry_paths = entryPathsCfg;
+    if (rsiSellMa5mNum !== undefined) updates.rsi_sell_ma5m = rsiSellMa5mNum;
     if (existing.phase === 'WATCHING') updates.initial_capital = cap;
     ({ data, error } = await supabase
       .from('five_min_bot_state')
@@ -604,6 +614,8 @@ router.post('/five-m-trade-favorites', getUserId, async (req, res) => {
         recovery_pattern: rpCfg,
         sell_scope:      sellScopeCfg ?? 'bot_only',
         entry_price:     entryPriceCfg ?? normalizeEntryPrice(null),
+        entry_paths:     entryPathsCfg ?? normalizeEntryPaths(null),
+        rsi_sell_ma5m:   rsiSellMa5mNum ?? null,
         phase:           'WATCHING',
         buy_count:       0,
       })
@@ -617,7 +629,7 @@ router.post('/five-m-trade-favorites', getUserId, async (req, res) => {
 
 // PATCH /services/sb/five-m-trade-favorites/:id
 router.patch('/five-m-trade-favorites/:id', getUserId, async (req, res) => {
-  const { exchange, capital, rsiBuy, rsiSell, maFilters, stopLoss, recoveryPattern, sellScope, entryPrice } = req.body;
+  const { exchange, capital, rsiBuy, rsiSell, maFilters, stopLoss, recoveryPattern, sellScope, entryPrice, entryPaths, rsiSellMa5m } = req.body;
   const { data: existing, error: findErr } = await supabase
     .from('five_min_bot_state')
     .select('*')
@@ -649,6 +661,12 @@ router.patch('/five-m-trade-favorites/:id', getUserId, async (req, res) => {
   }
   if (entryPrice !== undefined) {
     updates.entry_price = normalizeEntryPrice(entryPrice);
+  }
+  if (entryPaths !== undefined) {
+    updates.entry_paths = normalizeEntryPaths(entryPaths);
+  }
+  if (rsiSellMa5m !== undefined) {
+    updates.rsi_sell_ma5m = rsiSellMa5m === null ? null : Number(rsiSellMa5m);
   }
   const nextBuy  = updates.rsi_buy  ?? Number(existing.rsi_buy  ?? 30);
   const nextSell = updates.rsi_sell ?? Number(existing.rsi_sell ?? 70);
@@ -948,6 +966,78 @@ router.get('/five-m-trade-suggest-stop', getUserId, async (req, res) => {
   }
 });
 
+// GET /services/sb/five-m-trade-suggest-ma5m-exit?symbol=&exchange=&maFilters=&trigger=touch&anchorExit=73
+router.get('/five-m-trade-suggest-ma5m-exit', getUserId, async (req, res) => {
+  const symbol = req.query.symbol?.toUpperCase();
+  if (!symbol) return res.status(400).json({ error: 'symbol obrigatório' });
+
+  const exchange   = req.query.exchange ?? 'binance';
+  const anchorExit = Number(req.query.anchorExit ?? req.query.anchor_exit ?? 73);
+  const trigger    = req.query.trigger === 'cross_up' ? 'cross_up' : 'touch';
+
+  let maFilters = null;
+  if (req.query.maFilters) {
+    try { maFilters = JSON.parse(req.query.maFilters); } catch {
+      return res.status(400).json({ error: 'maFilters JSON inválido' });
+    }
+  }
+  const maCfg = normalizeMaFilters(maFilters);
+
+  const { suggestMa5mExitRsi } = require('../bot/5min-trade-bot/ma5mEntryEngine');
+  const { CANDLES_5M } = require('../bot/5min-trade-bot/suggestRecoveryAnalysis');
+
+  try {
+    const candles5m = await fetchCandlesForEval(exchange, symbol, '5m', CANDLES_5M);
+    const candles1h = await fetchCandlesForEval(exchange, symbol, '1h', 1000);
+    const report = suggestMa5mExitRsi(candles5m, candles1h, maCfg, trigger, anchorExit);
+    res.json({
+      symbol,
+      exchange,
+      trigger,
+      anchorExit,
+      exitRsiValue: report.suggestedExitRsi ?? anchorExit,
+      ...report,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /services/sb/five-m-trade-suggest-path-cooldown
+router.get('/five-m-trade-suggest-path-cooldown', getUserId, async (req, res) => {
+  const symbol = req.query.symbol?.toUpperCase();
+  if (!symbol) return res.status(400).json({ error: 'symbol obrigatório' });
+
+  const exchange = req.query.exchange ?? 'binance';
+  const rsiBuy   = Number(req.query.rsiBuy ?? 30);
+  const trigger  = req.query.trigger === 'cross_up' ? 'cross_up' : 'touch';
+
+  let maFilters = null;
+  if (req.query.maFilters) {
+    try { maFilters = JSON.parse(req.query.maFilters); } catch {
+      return res.status(400).json({ error: 'maFilters JSON inválido' });
+    }
+  }
+  const maCfg = normalizeMaFilters(maFilters);
+  const { suggestEntryPathTiming } = require('../bot/5min-trade-bot/suggestEntryPathTiming');
+  const { CANDLES_5M } = require('../bot/5min-trade-bot/suggestRecoveryAnalysis');
+
+  try {
+    const candles5m = await fetchCandlesForEval(exchange, symbol, '5m', CANDLES_5M);
+    const candles1h = await fetchCandlesForEval(exchange, symbol, '1h', 1000);
+    const report = suggestEntryPathTiming(candles5m, candles1h, maCfg, rsiBuy, trigger);
+    res.json({
+      symbol,
+      exchange,
+      rsiBuy,
+      trigger,
+      ...report,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /services/sb/five-m-trade-evaluate — snapshot ao vivo com parâmetros do usuário
 router.post('/five-m-trade-evaluate', getUserId, async (req, res) => {
   const symbol = req.body?.symbol?.toUpperCase();
@@ -986,6 +1076,8 @@ router.post('/five-m-trade-evaluate', getUserId, async (req, res) => {
       exchange,
       rsiBuy,
       rsiSell,
+      entryPaths: normalizeEntryPaths(req.body.entryPaths),
+      entryPath: req.body.entryPath ?? 'rsi',
       maFilters: maCfg,
       recoveryPattern: normalizeRecoveryPattern(req.body.recoveryPattern),
       sellScope: normalizeSellScope(req.body.sellScope).scope,

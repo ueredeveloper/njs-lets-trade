@@ -22,13 +22,18 @@ const ti = require('technicalindicators');
 const { fetchBinanceCandles, fetchGateCandles } = require('../prices');
 const { toGateSymbol } = require('../../utils/toGateSymbol');
 const { sendWhatsApp } = require('../whatsapp');
-const { checkMaFiltersLive, describeMaFilters } = require('./maFilter');
+const { checkMaFiltersLive, describeMaFilters, buildMaSeries, maAt } = require('./maFilter');
 const { computeActiveStops } = require('./stopLossEngine');
 const { normalizeRecoveryPattern, isActiveRecoveryPattern, recoveryPatternLabel } = require('./recoveryPatternConfig');
 const { checkRecoveryPatternsLive, evaluateRecoveryEntry } = require('./recoveryPattern');
 const { isActiveStopLoss, stopLossLabel } = require('./stopLossConfig');
 const { normalizeSellScope, sellScopeLabel } = require('./sellScopeConfig');
 const { normalizeEntryPrice, entryPriceLabel } = require('./entryPriceConfig');
+const { normalizeEntryPaths, entryPathsLabel, applyPathAlternationCooldown, pathCooldownMs } = require('./entryPathsConfig');
+const {
+  checkMa50_5mTrigger, MA5M_PERIOD,
+  evaluateEntryPathsSignal,
+} = require('./ma5mEntryEngine');
 
 // ── Configuração ──────────────────────────────────────────────────────────────
 const INTERVAL           = '5m';
@@ -527,14 +532,15 @@ async function executeSell(rowId, adapter, log, state, rsi, reason = 'rsi') {
   return true;
 }
 
-async function executeBuy(rowId, adapter, log, state, rsi, capitalPerEntry, isDca, rsiBuy) {
+async function executeBuy(rowId, adapter, log, state, rsi, capitalPerEntry, isDca, rsiBuy, entryPath = 'rsi') {
   const { symbol } = state;
   const usdtAmount = parseFloat(capitalPerEntry);
   const entryCfg   = normalizeEntryPrice(state.entry_price);
   const belowPct   = entryCfg.mode === 'below' ? entryCfg.belowPct : 0;
   const entryLabel = belowPct > 0 ? `limit −${belowPct}%` : 'mercado';
 
-  log(`${G}📍 RSI(5m)=${rsi.toFixed(2)} < ${rsiBuy}${isDca ? ' [DCA]' : ''} — comprando ${usdtAmount.toFixed(4)} USDT (${entryLabel})${X}`);
+  const pathLbl = entryPath === 'ma50_5m' ? 'MA50 5m' : `RSI<${rsiBuy}`;
+  log(`${G}📍 ${pathLbl}${isDca ? ' [DCA]' : ''} — comprando ${usdtAmount.toFixed(4)} USDT (${entryLabel}) · RSI=${rsi.toFixed(2)}${X}`);
 
   let result;
   try {
@@ -563,6 +569,7 @@ async function executeBuy(rowId, adapter, log, state, rsi, capitalPerEntry, isDc
     last_buy_time: now,
     buy_count:     buyCount,
     rsi_entry:     state.rsi_entry ?? rsi,
+    entry_path:    isDca ? (state.entry_path || entryPath) : entryPath,
   });
 
   log(`${'─'.repeat(60)}`);
@@ -582,10 +589,10 @@ async function executeBuy(rowId, adapter, log, state, rsi, capitalPerEntry, isDc
   return { newQty, newUsdt, buyCount, avgPrice: avgEntry };
 }
 
-function canBuyAgain(lastBuyTime) {
+function canBuyAgain(lastBuyTime, entryPaths) {
   if (!lastBuyTime) return true;
   const elapsed = Date.now() - new Date(lastBuyTime).getTime();
-  return elapsed >= ENTRY_COOLDOWN_MS;
+  return elapsed >= pathCooldownMs(normalizeEntryPaths(entryPaths));
 }
 
 async function refreshActiveStop(adapter, state, rsiBuy, entryPrice, currentPrice) {
@@ -617,10 +624,12 @@ async function tick(rowId, adapter, log, prevRsi = null, lastStop = null, setSto
   const state = rows?.[0];
   if (!state) { log('❌ Linha não encontrada no Supabase.'); return rsi; }
 
-  const rsiBuy           = Number(state.rsi_buy  ?? RSI_BUY);
-  const rsiSell          = Number(state.rsi_sell ?? RSI_SELL);
+  const rsiBuy  = Number(state.rsi_buy  ?? RSI_BUY);
+  const { phase, capital, symbol } = state;
+  const rsiSell = Number(state.rsi_sell ?? RSI_SELL);
   const buyFastThreshold  = rsiBuy  + RSI_FAST_MARGIN;
   const sellFastThreshold = rsiSell - RSI_FAST_MARGIN;
+  const entryPathsCfg = normalizeEntryPaths(state.entry_paths);
 
   if (prevRsi !== null) {
     const isNearNow  = rsi     <= buyFastThreshold || rsi     >= sellFastThreshold;
@@ -631,10 +640,10 @@ async function tick(rowId, adapter, log, prevRsi = null, lastStop = null, setSto
       log(`🔄 RSI=${rsi.toFixed(2)} longe dos limiares — poll 3min`);
   }
 
-  const { phase, capital, symbol } = state;
   const capitalPerEntry = parseFloat(capital);
   const buyCount        = state.buy_count || 0;
 
+  const pathsLbl = entryPathsLabel(entryPathsCfg);
   const rsiColor = rsi > rsiSell ? R : rsi < rsiBuy ? G : '';
   const nearBuy  = rsi <= buyFastThreshold;
   const nearSell = rsi >= sellFastThreshold;
@@ -643,9 +652,11 @@ async function tick(rowId, adapter, log, prevRsi = null, lastStop = null, setSto
     `${rsiColor}RSI=${rsi.toFixed(2)}${rsiColor ? X : ''}${fastMark}` +
     `  close=${close.toFixed(6)}` +
     `  limiar <${rsiBuy} >${rsiSell}` +
+    `  entrada: ${pathsLbl}` +
     (state.ma_filters?.enabled ? `  ${describeMaFilters(state.ma_filters)}` : '') +
     `  capital/entrada=${capitalPerEntry.toFixed(4)} USDT` +
     `  fase=${phase}` +
+    (phase === 'BOUGHT' && state.entry_path ? `  via=${state.entry_path}` : '') +
     (phase === 'BOUGHT' ? `  entradas=${buyCount}  qty=${parseFloat(state.buy_qty || 0).toFixed(6)}` : '') +
     (phase === 'BOUGHT' && isActiveStopLoss(state.stop_loss)
       ? `  🛡️${stopLossLabel(state.stop_loss)}`
@@ -655,14 +666,46 @@ async function tick(rowId, adapter, log, prevRsi = null, lastStop = null, setSto
       : ''),
   );
 
+  async function buildMa5mTrigger() {
+    if (!entryPathsCfg.ma50_5m.enabled) return { triggered: false };
+    if (candles.length < MA5M_PERIOD + 2) return { triggered: false, reason: 'dados_insuficientes' };
+    const last = candles[candles.length - 1];
+    const prev = candles[candles.length - 2];
+    const ma5mSeries = buildMaSeries(candles, MA5M_PERIOD);
+    const ma5m = maAt(ma5mSeries, last.openTime);
+    return checkMa50_5mTrigger({
+      close: last.close,
+      low: last.low,
+      prevClose: prev?.close,
+      ma: ma5m,
+      trigger: entryPathsCfg.ma50_5m.trigger,
+    });
+  }
+
   // ── WATCHING: primeira entrada ────────────────────────────────────────────
   if (phase === 'WATCHING') {
-    if (rsi >= rsiBuy) return rsi;
     const maCheck = await checkMaFiltersLive(adapter, state.ma_filters, log);
-    if (!maCheck.ok) return rsi;
     const patCheck = await checkRecoveryPatternLive(adapter, state.recovery_pattern, state.ma_filters, close, log);
-    if (!patCheck.ok) return rsi;
-    const buyResult = await executeBuy(rowId, adapter, log, state, rsi, capitalPerEntry, false, rsiBuy);
+    const ma5mTrigger = await buildMa5mTrigger();
+    const signal = applyPathAlternationCooldown(state.entry_paths, evaluateEntryPathsSignal({
+      entryPaths: state.entry_paths,
+      rsi, rsiBuy,
+      ma5mTrigger,
+      ma1hOk: maCheck.ok,
+      recoveryOk: patCheck.ok,
+    }), {
+      lastEntryPath: null,
+      lastBuyTime: null,
+    });
+    if (!signal.ok) {
+      if (entryPathsCfg.rsi.enabled && rsi < rsiBuy + 8 && !maCheck.ok) {
+        // já logado em checkMaFiltersLive
+      } else if (entryPathsCfg.ma50_5m.enabled && ma5mTrigger.triggered && !patCheck.ok) {
+        log(`${Y}MA50 5m toque mas padrão 1h bloqueou${X}`);
+      }
+      return rsi;
+    }
+    const buyResult = await executeBuy(rowId, adapter, log, state, rsi, capitalPerEntry, false, rsiBuy, signal.path);
     if (buyResult && setStop) {
       refreshActiveStop(adapter, state, rsiBuy, buyResult.avgPrice, buyResult.avgPrice)
         .then(stop => { setStop(stop); logActiveStop(log, stop); })
@@ -687,25 +730,44 @@ async function tick(rowId, adapter, log, prevRsi = null, lastStop = null, setSto
     }
 
     if (rsi > rsiSell) {
+      log(`${R}📤 RSI>${rsiSell} — vendendo${X}`);
       await executeSell(rowId, adapter, log, state, rsi, 'rsi');
       return rsi;
     }
 
-    if (rsi < rsiBuy) {
-      if (!canBuyAgain(state.last_buy_time)) {
-        const remaining = ENTRY_COOLDOWN_MS - (Date.now() - new Date(state.last_buy_time).getTime());
-        log(`${Y}⏳ RSI < ${rsiBuy} mas cooldown DCA: faltam ${formatCooldown(remaining)}${X}`);
+    const dcaPaths = normalizeEntryPaths(state.entry_paths);
+    const dcaNeedsRsi = dcaPaths.rsi.enabled && (!dcaPaths.ma50_5m.enabled || dcaPaths.combine === 'all');
+    if (dcaNeedsRsi && rsi >= rsiBuy) return rsi;
+
+    if (dcaPaths.rsi.enabled || dcaPaths.ma50_5m.enabled) {
+      if (!canBuyAgain(state.last_buy_time, state.entry_paths)) {
+        const remaining = pathCooldownMs(entryPathsCfg) - (Date.now() - new Date(state.last_buy_time).getTime());
+        log(`${Y}⏳ sinal DCA mas cooldown: faltam ${formatCooldown(remaining)}${X}`);
         return rsi;
       }
       const maCheck = await checkMaFiltersLive(adapter, state.ma_filters, log);
-      if (!maCheck.ok) return rsi;
       const patCheck = await checkRecoveryPatternLive(adapter, state.recovery_pattern, state.ma_filters, close, log);
-      if (!patCheck.ok) return rsi;
-      const buyResult = await executeBuy(rowId, adapter, log, state, rsi, capitalPerEntry, true, rsiBuy);
-      if (buyResult && setStop) {
-        refreshActiveStop(adapter, state, rsiBuy, buyResult.avgPrice, buyResult.avgPrice)
-          .then(stop => { setStop(stop); logActiveStop(log, stop); })
-          .catch(err => log(`⚠️  Stop loss: ${err.message}`));
+      const ma5mTrigger = await buildMa5mTrigger();
+      const signal = applyPathAlternationCooldown(state.entry_paths, evaluateEntryPathsSignal({
+        entryPaths: state.entry_paths,
+        rsi, rsiBuy,
+        ma5mTrigger,
+        ma1hOk: maCheck.ok,
+        recoveryOk: patCheck.ok,
+      }), {
+        lastEntryPath: state.entry_path,
+        lastBuyTime: state.last_buy_time,
+      });
+      if (signal.reason === 'path_cooldown' && signal.blockedPath) {
+        log(`${Y}⏳ Caminho ${signal.blockedPath} bloqueado — última via ${state.entry_path} · faltam ${formatCooldown(signal.remainingMs ?? 0)}${X}`);
+      }
+      if (signal.ok) {
+        const buyResult = await executeBuy(rowId, adapter, log, state, rsi, capitalPerEntry, true, rsiBuy, signal.path);
+        if (buyResult && setStop) {
+          refreshActiveStop(adapter, state, rsiBuy, buyResult.avgPrice, buyResult.avgPrice)
+            .then(stop => { setStop(stop); logActiveStop(log, stop); })
+            .catch(err => log(`⚠️  Stop loss: ${err.message}`));
+        }
       }
     }
   }
@@ -724,10 +786,11 @@ async function startSymbol(row, color) {
 
   log(
     `=== Iniciado | ${adapter.name} | RSI(${RSI_PERIOD},${INTERVAL}) | ` +
-    `compra < ${rsiBuy} | venda > ${rsiSell} | entrada: ${entryPriceLabel(row.entry_price)} | stop: ${stopLossLabel(row.stop_loss)} | ` +
+    `compra < ${rsiBuy} | venda > ${rsiSell} | caminhos: ${entryPathsLabel(row.entry_paths)} | ` +
+    `entrada: ${entryPriceLabel(row.entry_price)} | stop: ${stopLossLabel(row.stop_loss)} | ` +
     `venda: ${sellScopeLabel(row.sell_scope)} | ` +
     `padrão 1h: ${recoveryPatternLabel(row.recovery_pattern)} | ` +
-    `DCA cooldown ${ENTRY_COOLDOWN_MS / 3_600_000}h | ` +
+    `DCA cooldown ${normalizeEntryPaths(row.entry_paths).pathCooldownHours}h | ` +
     `poll 3min / 1min (RSI≤${buyFastThreshold} ou ≥${sellFastThreshold}) | fase: ${row.phase} ===`,
   );
   if (!isActiveStopLoss(row.stop_loss)) {

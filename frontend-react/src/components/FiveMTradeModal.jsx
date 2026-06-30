@@ -1,11 +1,15 @@
-import { useState, useEffect, useCallback } from 'react';
-import { fetchFiveMTradeSuggestRsi, evaluateFiveMTradeLive, fetchFiveMTradeSuggestMaAdaptation, fetchFiveMTradeSuggestRecovery, fetchFiveMTradeSuggestEntryBelow } from '../services/api';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { fetchFiveMTradeSuggestRsi, evaluateFiveMTradeLive, fetchFiveMTradeSuggestMaAdaptation, fetchFiveMTradeSuggestRecovery, fetchFiveMTradeSuggestEntryBelow, fetchFiveMTradeSuggestPathCooldown } from '../services/api';
 import Tooltip from './Tooltip';
 import FiveMStopLossSelector, { initialStopLossTypes, stopOptionAvailable } from './FiveMStopLossSelector';
-import { stopLossTypesLabel, DEFAULT_FIVE_M_RSI_BUY, DEFAULT_FIVE_M_RSI_SELL, stopPayloadFromRecovery } from '../constants/fiveMStopLoss';
+import { stopLossTypesLabel, DEFAULT_FIVE_M_RSI_BUY, DEFAULT_FIVE_M_RSI_SELL, stopPayloadFromRecovery, hasSavedStopLossTypes, pickDefaultStopTypes } from '../constants/fiveMStopLoss';
 import { ENTRY_PRICE_OPTIONS, entryPriceLabel, initialEntryPrice, normalizeEntryPriceForm, clampBelowPct, parseBelowPctInput } from '../constants/fiveMEntryPrice';
-import { getRecoveryPatternOptions, recoveryPatternTypesLabel, recoveryPatternZonesLabel } from '../constants/fiveMRecoveryPattern';
+import { getRecoveryPatternOptions, recoveryPatternTypesLabel, recoveryPatternZonesLabel, DEFAULT_RECOVERY_PATTERN } from '../constants/fiveMRecoveryPattern';
 import { SELL_SCOPE_OPTIONS, sellScopeLabel } from '../constants/fiveMSellScope';
+import {
+  initialEntryPaths, normalizeEntryPathsForm, entryPathsLabel, hasEntryPath, MA5M_TRIGGER_OPTIONS,
+  COMBINE_OPTIONS, pathCooldownHoursForSource, clampPathCooldownHours,
+} from '../constants/fiveMEntryPaths';
 
 const FIVE_M_COLOR  = '#06b6d4';
 const GATE_COLOR    = '#0068ff';
@@ -59,6 +63,74 @@ function describeMaFiltersLocal(cfg) {
 function fmtPct(v) {
   if (v == null || Number.isNaN(v)) return '—';
   return `${v >= 0 ? '+' : ''}${v}%`;
+}
+
+function PathCooldownSelector({ report, source, onSelectSource, loading, stale }) {
+  if (loading) {
+    return <p className="mt-1 text-[9px] text-p5/40 font-mono">Calculando intervalos…</p>;
+  }
+  if (!report || report.error) return null;
+
+  const options = [
+    {
+      id: 'rsi',
+      hours: report.rsiCooldownHours,
+      calc: report.rsiCalc,
+      title: report.rsiCooldownHours != null
+        ? `De ${report.rsiCooldownHours}h em ${report.rsiCooldownHours}h — RSI<${report.rsiBuy ?? '—'}`
+        : 'RSI — sem intervalo calculável',
+    },
+    {
+      id: 'ma',
+      hours: report.maCooldownHours,
+      calc: report.maCalc,
+      title: report.maCooldownHours != null
+        ? `De ${report.maCooldownHours}h em ${report.maCooldownHours}h — MA50 5m`
+        : 'MA50 5m — sem intervalo calculável',
+    },
+  ];
+
+  return (
+    <div className="mt-2 space-y-1.5">
+      <span className="text-[9px] uppercase tracking-wider text-p5/50 block">
+        Escolha o período (histórico 5m)
+      </span>
+      {options.map(opt => {
+        const active = source === opt.id;
+        const disabled = opt.hours == null;
+        return (
+          <label
+            key={opt.id}
+            className="flex items-start gap-2 rounded px-2 py-2 cursor-pointer"
+            style={{
+              background: active ? '#06b6d414' : '#1e2130',
+              border: `1px solid ${active ? FIVE_M_COLOR : '#2a2d3a'}`,
+              opacity: disabled ? 0.45 : 1,
+            }}
+          >
+            <input
+              type="radio"
+              name="pathCooldownSource"
+              checked={active}
+              disabled={disabled}
+              onChange={() => !disabled && onSelectSource(opt.id, opt.hours)}
+              className="mt-0.5 shrink-0"
+              style={{ accentColor: FIVE_M_COLOR }}
+            />
+            <span className="min-w-0">
+              <span className="text-[10px] font-medium text-p5 block">{opt.title}</span>
+              {opt.calc && !stale && (
+                <span className="text-[9px] text-p5/45 block mt-0.5 leading-relaxed">{opt.calc}</span>
+              )}
+            </span>
+          </label>
+        );
+      })}
+      {!report.ok && !stale && (
+        <p className="text-[9px] text-p5/40">Poucos episódios — use o padrão 2h (MA) ou aguarde mais histórico.</p>
+      )}
+    </div>
+  );
 }
 
 function SuggestButton({ onClick, loading, disabled, color = FIVE_M_COLOR, title }) {
@@ -284,15 +356,18 @@ function CandleRow({ pattern }) {
 function initialRecoveryPattern(entry) {
   const rp = entry?.recoveryPattern;
   let types = [];
-  if (Array.isArray(rp?.types)) {
+  if (Array.isArray(rp?.types) && rp.types.length) {
     types = rp.types.filter(t => getRecoveryPatternOptions().some(o => o.type === t));
-  } else if (rp?.type && getRecoveryPatternOptions().some(o => o.type === rp.type)) {
+  } else if (rp?.type && rp.type !== 'none' && getRecoveryPatternOptions().some(o => o.type === rp.type)) {
     types = [rp.type];
+  }
+  if (!types.length) {
+    types = [...DEFAULT_RECOVERY_PATTERN.types];
   }
   const zones = Array.isArray(rp?.zones) && rp.zones.length
     ? rp.zones
-    : ['above_ma', 'between_ma'];
-  const abovePct = Number(rp?.abovePct ?? 5) || 5;
+    : [...DEFAULT_RECOVERY_PATTERN.zones];
+  const abovePct = Number(rp?.abovePct ?? DEFAULT_RECOVERY_PATTERN.abovePct) || DEFAULT_RECOVERY_PATTERN.abovePct;
   return { types, zones, abovePct };
 }
 
@@ -661,16 +736,19 @@ export default function FiveMTradeModal({
   const [recoveryPattern, setRecoveryPattern] = useState(() => initialRecoveryPattern(currentEntry));
   const [sellScope, setSellScope] = useState(() => currentEntry?.sellScope ?? 'bot_only');
   const [entryPrice, setEntryPrice] = useState(() => initialEntryPrice(currentEntry));
+  const [entryPaths, setEntryPaths] = useState(() => initialEntryPaths(currentEntry));
+  const [pathCooldownSuggest, setPathCooldownSuggest] = useState(null);
   const [entryBelowSuggest, setEntryBelowSuggest] = useState(null);
   const [suggestCtx, setSuggestCtx]     = useState(null);
   const [openSections, setOpenSections] = useState(() => new Set(['candles']));
+  const entryHadSavedStopsRef = useRef(hasSavedStopLossTypes(currentEntry));
   function toggleSection(id) {
     setOpenSections(prev => (prev.has(id) ? new Set() : new Set([id])));
   }
   const entryKey = currentEntry?.id != null ? String(currentEntry.id) : `new:${symbol}`;
 
   const inPosition = currentEntry?.phase === 'BOUGHT';
-  const rsiInvalid = Number(rsiBuy) >= Number(rsiSell);
+  const rsiInvalid = entryPaths.rsi.enabled && Number(rsiBuy) >= Number(rsiSell);
   const ready      = suggest && !suggest.loading && !suggest.error;
 
   const maKeyNow = maFiltersKey(maFilters);
@@ -698,6 +776,7 @@ export default function FiveMTradeModal({
   const recoveryPatternMissing = !recoveryPattern.types.length;
   const recoveryZonesMissing = recoveryPattern.types.length > 0 && !recoveryPattern.zones.length;
   const stopLossMissing = !stopLossTypes.length;
+  const entryPathsMissing = !hasEntryPath(entryPaths);
 
   const recoverySuggestStale = recoverySuggest && !recoverySuggest.loading && !recoverySuggest.error && (
     Number(rsiBuy) !== Number(recoverySuggest.rsiBuy) ||
@@ -712,7 +791,54 @@ export default function FiveMTradeModal({
 
   const stopLossNeedsSuggest = !stopSuggest || stopSuggest.loading || stopSuggest.error || stopSuggestStale;
   const stopLossInvalid = stopLossTypes.some(t => !stopOptionAvailable(t, stopSuggest, rsiBuy));
-  const formReady = recoveryPattern.types.length > 0 && !recoveryZonesMissing && !stopLossMissing && !stopLossInvalid;
+  const formReady = recoveryPattern.types.length > 0 && !recoveryZonesMissing && !stopLossMissing && !stopLossInvalid && !entryPathsMissing;
+
+  const pathCooldownStale = pathCooldownSuggest && !pathCooldownSuggest.loading && !pathCooldownSuggest.error && (
+    Number(rsiBuy) !== Number(pathCooldownSuggest.rsiBuy) ||
+    entryPaths.ma50_5m.trigger !== pathCooldownSuggest.trigger ||
+    maFiltersKey(maFilters) !== pathCooldownSuggest.maKey
+  );
+
+  const loadPathCooldownSuggest = useCallback(async () => {
+    const buy = Number(rsiBuy);
+    if (!Number.isFinite(buy)) return;
+    if (!entryPaths.rsi.enabled || !entryPaths.ma50_5m.enabled) return;
+
+    setPathCooldownSuggest({ loading: true });
+    try {
+      const r = await fetchFiveMTradeSuggestPathCooldown({
+        symbol,
+        exchange,
+        rsiBuy: buy,
+        maFilters,
+        trigger: entryPaths.ma50_5m.trigger,
+      });
+      const payload = {
+        ...r,
+        rsiBuy: buy,
+        trigger: entryPaths.ma50_5m.trigger,
+        maKey: maFiltersKey(maFilters),
+      };
+      setPathCooldownSuggest(payload);
+
+      const src = entryPaths.pathCooldownSource === 'rsi' ? 'rsi' : 'ma';
+      const hours = pathCooldownHoursForSource(payload, src)
+        ?? pathCooldownHoursForSource(payload, src === 'rsi' ? 'ma' : 'rsi');
+      if (hours != null) {
+        setEntryPaths(prev => ({ ...prev, pathCooldownHours: hours }));
+      }
+    } catch (err) {
+      setPathCooldownSuggest({ error: err.message });
+    }
+  }, [symbol, exchange, rsiBuy, maFilters, entryPaths.rsi.enabled, entryPaths.ma50_5m.enabled, entryPaths.ma50_5m.trigger, entryPaths.pathCooldownSource]);
+
+  function selectPathCooldownSource(source, hours) {
+    setEntryPaths(prev => ({
+      ...prev,
+      pathCooldownSource: source,
+      pathCooldownHours: hours != null ? clampPathCooldownHours(hours) : prev.pathCooldownHours,
+    }));
+  }
 
   const loadRsiSuggest = useCallback(async () => {
     const buy  = Number(rsiBuy);
@@ -767,7 +893,12 @@ export default function FiveMTradeModal({
       const ctx = { exchange, rsiBuy: buy, rsiSell: sell, maKey: maFiltersKey(maFilters) };
       setSuggestCtx(prev => ({ ...prev, ...ctx }));
       setRecoverySuggest({ ...rec, rsiBuy: buy, rsiSell: sell });
-      setStopSuggest(stopPayloadFromRecovery({ ...rec, rsiBuy: buy, rsiSell: sell }));
+      const stopPayload = stopPayloadFromRecovery({ ...rec, rsiBuy: buy, rsiSell: sell });
+      setStopSuggest(stopPayload);
+      if (!entryHadSavedStopsRef.current) {
+        const picked = pickDefaultStopTypes(stopPayload, buy);
+        if (picked.length) setStopLossTypes(picked);
+      }
     } catch (err) {
       setRecoverySuggest({ error: err.message });
       setStopSuggest({ error: err.message });
@@ -792,6 +923,8 @@ export default function FiveMTradeModal({
           ? { types: recoveryPattern.types, zones: recoveryPattern.zones, abovePct: recoveryPattern.abovePct }
           : undefined,
         sellScope,
+        entryPaths: normalizeEntryPathsForm(entryPaths),
+        entryPath: currentEntry?.entryPath ?? 'rsi',
         phase: currentEntry?.phase ?? 'WATCHING',
         lastBuyTime: currentEntry?.lastBuyTime ?? null,
         buyCount: currentEntry?.buyCount ?? 0,
@@ -800,7 +933,7 @@ export default function FiveMTradeModal({
     } catch (err) {
       setLiveTest({ error: err.message });
     }
-  }, [symbol, exchange, rsiBuy, rsiSell, maFilters, recoveryPattern, sellScope, currentEntry]);
+  }, [symbol, exchange, rsiBuy, rsiSell, maFilters, recoveryPattern, sellScope, entryPaths, currentEntry]);
 
   const loadMaAdaptation = useCallback(async () => {
     const buy  = Number(rsiBuy);
@@ -849,9 +982,11 @@ export default function FiveMTradeModal({
     setRsiSell(sell);
     setMaFilters(ma);
     setRecoveryPattern(initialRecoveryPattern(currentEntry));
+    entryHadSavedStopsRef.current = hasSavedStopLossTypes(currentEntry);
     setStopLossTypes(initialStopLossTypes(currentEntry));
     setSellScope(currentEntry?.sellScope ?? 'bot_only');
     setEntryPrice(initialEntryPrice(currentEntry));
+    setEntryPaths(initialEntryPaths(currentEntry));
     setEntryBelowSuggest(null);
     setSuggest(null);
     setSuggestCtx(null);
@@ -863,6 +998,31 @@ export default function FiveMTradeModal({
   // entryKey muda ao abrir outra moeda ou quando favoritos carregam o id
   // eslint-disable-next-line react-hooks/exhaustive-deps -- currentEntry lido no corpo; entryKey evita loop
   }, [symbol, entryKey, defaultExchange]);
+
+  useEffect(() => {
+    if (!openSections.has('stop')) return;
+    const buy  = Number(rsiBuy);
+    const sell = Number(rsiSell);
+    if (!Number.isFinite(buy) || !Number.isFinite(sell) || buy >= sell) return;
+    if (stopSuggest?.loading || recoverySuggest?.loading) return;
+    if (stopLossNeedsSuggest || stopSuggestStale) {
+      loadRecoverySuggest();
+    }
+  }, [
+    openSections, rsiBuy, rsiSell, stopLossNeedsSuggest, stopSuggestStale,
+    stopSuggest?.loading, recoverySuggest?.loading, loadRecoverySuggest,
+  ]);
+
+  function entryAccordionSubtitle() {
+    const parts = [entryPathsLabel(entryPaths)];
+    if (entryPaths.rsi.enabled) parts.push(`RSI<${rsiBuy} → >${rsiSell}`);
+    if (entryPaths.ma50_5m.enabled) parts.push('MA50 5m');
+    if (entryPaths.rsi.enabled && entryPaths.ma50_5m.enabled && entryPaths.combine === 'any') {
+      const src = entryPaths.pathCooldownSource === 'rsi' ? 'RSI' : 'MA';
+      parts.push(`${entryPaths.pathCooldownHours}h (${src})`);
+    }
+    return parts.join(' · ');
+  }
 
   function maStatsSuffix() {
     if (!maFilters.enabled || !suggest?.maDescription) return '';
@@ -949,7 +1109,8 @@ export default function FiveMTradeModal({
     const cap  = Number(capital);
     const buy  = Number(rsiBuy);
     const sell = Number(rsiSell);
-    if (!Number.isFinite(cap) || cap <= 0 || buy >= sell || !formReady) return;
+    if (!Number.isFinite(cap) || cap <= 0 || !formReady) return;
+    if (entryPaths.rsi.enabled && buy >= sell) return;
     onConfirm({
       exchange, capital: cap, rsiBuy: buy, rsiSell: sell, maFilters,
       stopLoss: { types: stopLossTypes },
@@ -960,6 +1121,7 @@ export default function FiveMTradeModal({
       },
       sellScope,
       entryPrice: normalizeEntryPriceForm(entryPrice),
+      entryPaths: normalizeEntryPathsForm(entryPaths),
     });
   }
 
@@ -1096,84 +1258,241 @@ export default function FiveMTradeModal({
           </AnalysisAccordion>
 
           <AnalysisAccordion
-            id="rsi"
+            id="entry"
             openIds={openSections}
             onToggle={toggleSection}
-            title="RSI entrada / saída (5m)"
-            subtitle={`compra < ${rsiBuy} · venda > ${rsiSell}`}
+            title="Entrada (5m)"
+            subtitle={entryAccordionSubtitle()}
             accent={FIVE_M_COLOR}
-            action={(
-              <SuggestButton
-                onClick={loadRsiSuggest}
-                loading={suggest?.loading}
-                disabled={rsiInvalid}
-                color={FIVE_M_COLOR}
-                title="Analisa histórico e sugere RSI de compra e venda"
-              />
-            )}
           >
             <div className="pt-2 space-y-3">
-              <div>
-                <label className="block text-[10px] uppercase tracking-wider mb-1" style={{ color: '#26a69a' }}>
-                  Compra — abaixo de
+              <p className="text-[9px] text-p5/45 leading-relaxed">
+                Acima da MA50 1h (filtro MA): entre por RSI de sobrevenda, toque na MA50 5m, ou ambos.
+              </p>
+
+              {/* ── Caminhos ── */}
+              <div className="space-y-1.5">
+                <label
+                  className="flex items-start gap-2 rounded px-2 py-2 cursor-pointer"
+                  style={{ background: '#1e2130', border: `1px solid ${entryPaths.rsi.enabled ? FIVE_M_COLOR : '#2a2d3a'}` }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={entryPaths.rsi.enabled}
+                    onChange={e => setEntryPaths(prev => ({
+                      ...prev,
+                      rsi: { ...prev.rsi, enabled: e.target.checked },
+                    }))}
+                    className="mt-0.5 shrink-0"
+                    style={{ accentColor: FIVE_M_COLOR }}
+                  />
+                  <span className="min-w-0 flex-1">
+                    <div className="flex items-start justify-between gap-2">
+                      <span>
+                        <span className="text-[10px] font-medium text-p5 block">RSI &lt; {rsiBuy}</span>
+                        <span className="text-[9px] text-p5/50 block mt-0.5">Sobrevenda no candle 5m.</span>
+                      </span>
+                      {entryPaths.rsi.enabled && (
+                        <SuggestButton
+                          onClick={e => { e.preventDefault(); loadRsiSuggest(); }}
+                          loading={suggest?.loading}
+                          disabled={rsiInvalid}
+                          color="#26a69a"
+                          title="Histórico RSI — sugere compra e venda para entradas por sobrevenda"
+                        />
+                      )}
+                    </div>
+                    {entryPaths.rsi.enabled && (
+                      <div className="mt-2 space-y-2">
+                        <div>
+                          <label className="block text-[9px] uppercase tracking-wider mb-1" style={{ color: '#26a69a' }}>
+                            Compra — abaixo de
+                          </label>
+                          <input
+                            type="number"
+                            value={rsiBuy}
+                            onChange={e => setRsiBuy(e.target.value)}
+                            min={10} max={50}
+                            className="w-full rounded px-2.5 py-1.5 text-xs text-p5 outline-none font-mono"
+                            style={{ background: '#161a28', border: '1px solid #2a2d3a' }}
+                          />
+                          <RsiSuggestHint
+                            label="<"
+                            suggested={ready ? suggest.entryRsiValue : null}
+                            current={rsiBuy}
+                            stats={entryStatsLine()}
+                            onApply={() => setRsiBuy(suggest.entryRsiValue)}
+                            loading={suggest?.loading}
+                            stale={entryHintStale}
+                            accent="#26a69a"
+                          />
+                          {ready && suggest.entry?.histStopWarning && !entryHintStale && (
+                            <p className="text-[9px] text-amber-500/85 mt-1 leading-relaxed">
+                              {suggest.entry.histStopWarning} — prefira stop fixo −5% ou suba o RSI de compra.
+                            </p>
+                          )}
+                        </div>
+                        <div>
+                          <label className="block text-[9px] uppercase tracking-wider mb-1" style={{ color: '#ef5350' }}>
+                            Venda — acima de
+                          </label>
+                          <input
+                            type="number"
+                            value={rsiSell}
+                            onChange={e => setRsiSell(e.target.value)}
+                            min={50} max={95}
+                            className="w-full rounded px-2.5 py-1.5 text-xs text-p5 outline-none font-mono"
+                            style={{ background: '#161a28', border: '1px solid #2a2d3a' }}
+                          />
+                          <RsiSuggestHint
+                            label=">"
+                            suggested={ready ? suggest.exitRsiValue : null}
+                            current={rsiSell}
+                            stats={exitStatsLine()}
+                            onApply={() => setRsiSell(suggest.exitRsiValue)}
+                            loading={suggest?.loading}
+                            stale={exitHintStale}
+                            accent="#ef5350"
+                          />
+                        </div>
+                        {needsRecalc && !suggest?.loading && (
+                          <p className="text-[9px] text-amber-500/80">
+                            Parâmetros alterados — clique <strong>Sugerir</strong> acima.
+                          </p>
+                        )}
+                        {suggest?.error && (
+                          <p className="text-[9px] text-amber-500/90">{suggest.error}</p>
+                        )}
+                      </div>
+                    )}
+                  </span>
                 </label>
-                <input
-                  type="number"
-                  value={rsiBuy}
-                  onChange={e => setRsiBuy(e.target.value)}
-                  min={10} max={50}
-                  className="w-full rounded px-2.5 py-1.5 text-xs text-p5 outline-none font-mono"
-                  style={{ background: '#1e2130', border: '1px solid #2a2d3a' }}
-                />
-                <RsiSuggestHint
-                  label="<"
-                  suggested={ready ? suggest.entryRsiValue : null}
-                  current={rsiBuy}
-                  stats={entryStatsLine()}
-                  onApply={() => setRsiBuy(suggest.entryRsiValue)}
-                  loading={suggest?.loading}
-                  stale={entryHintStale}
-                  accent="#26a69a"
-                />
-                {ready && suggest.entry?.histStopWarning && !entryHintStale && (
-                  <p className="text-[9px] text-amber-500/85 mt-1 leading-relaxed">
-                    {suggest.entry.histStopWarning} — prefira stop fixo −5% ou suba o RSI de compra.
-                  </p>
-                )}
+
+                <label
+                  className="flex items-start gap-2 rounded px-2 py-2 cursor-pointer"
+                  style={{ background: '#1e2130', border: `1px solid ${entryPaths.ma50_5m.enabled ? FIVE_M_COLOR : '#2a2d3a'}` }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={entryPaths.ma50_5m.enabled}
+                      onChange={e => {
+                        const enabled = e.target.checked;
+                        setEntryPaths(prev => ({
+                          ...prev,
+                          ma50_5m: {
+                            enabled,
+                            trigger: enabled && !prev.ma50_5m.enabled ? 'touch' : (prev.ma50_5m.trigger || 'touch'),
+                          },
+                        }));
+                        if (enabled && !maFilters.enabled) {
+                          setMaFilters(prev => ({
+                            ...cloneMaFilters(prev),
+                            enabled: true,
+                          }));
+                        }
+                      }}
+                    className="mt-0.5 shrink-0"
+                    style={{ accentColor: FIVE_M_COLOR }}
+                  />
+                  <span className="min-w-0 flex-1">
+                    <span className="text-[10px] font-medium text-p5 block">MA50 5m</span>
+                    <span className="text-[9px] text-p5/50 block mt-0.5">
+                      Pullback / toque da MA50 5m · venda = RSI &gt; {rsiSell} (campo acima).
+                    </span>
+                    {entryPaths.ma50_5m.enabled && (
+                      <div className="mt-2 space-y-2">
+                        <span className="text-[9px] uppercase tracking-wider text-p5/50 block">Gatilho</span>
+                        {MA5M_TRIGGER_OPTIONS.map(opt => (
+                          <label key={opt.id} className="flex items-start gap-2 cursor-pointer">
+                            <input
+                              type="radio"
+                              name="ma5mTrigger"
+                              checked={entryPaths.ma50_5m.trigger === opt.id}
+                              onChange={() => setEntryPaths(prev => ({
+                                ...prev,
+                                ma50_5m: { ...prev.ma50_5m, trigger: opt.id },
+                              }))}
+                              className="mt-0.5"
+                              style={{ accentColor: FIVE_M_COLOR }}
+                            />
+                            <span className="min-w-0">
+                              <span className="text-[10px] text-p5 block">{opt.label}</span>
+                              <span className="text-[9px] text-p5/45">{opt.summary}</span>
+                            </span>
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                  </span>
+                </label>
               </div>
 
-              <div>
-                <label className="block text-[10px] uppercase tracking-wider mb-1" style={{ color: '#ef5350' }}>
-                  Venda — acima de
-                </label>
-                <input
-                  type="number"
-                  value={rsiSell}
-                  onChange={e => setRsiSell(e.target.value)}
-                  min={50} max={95}
-                  className="w-full rounded px-2.5 py-1.5 text-xs text-p5 outline-none font-mono"
-                  style={{ background: '#1e2130', border: '1px solid #2a2d3a' }}
-                />
-                <RsiSuggestHint
-                  label=">"
-                  suggested={ready ? suggest.exitRsiValue : null}
-                  current={rsiSell}
-                  stats={exitStatsLine()}
-                  onApply={() => setRsiSell(suggest.exitRsiValue)}
-                  loading={suggest?.loading}
-                  stale={exitHintStale}
-                  accent="#ef5350"
-                />
-              </div>
+              {entryPaths.rsi.enabled && entryPaths.ma50_5m.enabled && (
+                <div className="rounded px-2 py-2 space-y-2" style={{ background: '#161a28', border: '1px solid #2a2d3a' }}>
+                  <span className="text-[9px] uppercase tracking-wider text-p5/50">Quando os dois ativos</span>
+                  <div className="flex gap-2 mt-1">
+                    {COMBINE_OPTIONS.map(opt => (
+                      <label key={opt.id} className="flex items-center gap-1.5 cursor-pointer text-[9px] text-p5/70">
+                        <input
+                          type="radio"
+                          name="entryPathsCombine"
+                          checked={entryPaths.combine === opt.id}
+                          onChange={() => setEntryPaths(prev => ({ ...prev, combine: opt.id }))}
+                          style={{ accentColor: FIVE_M_COLOR }}
+                        />
+                        {opt.label}
+                      </label>
+                    ))}
+                  </div>
 
-              {needsRecalc && !suggest?.loading && (
-                <p className="text-[9px] text-amber-500/80">
-                  Parâmetros RSI alterados — clique <strong>Sugerir</strong> para atualizar.
-                </p>
+                  {entryPaths.combine === 'any' && (
+                    <div className="pt-2 border-t space-y-2" style={{ borderColor: '#2a2d3a' }}>
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <span className="text-[9px] uppercase tracking-wider text-p5/50 block">
+                            Período sem alternar caminho
+                          </span>
+                          <p className="text-[9px] text-p5/45 mt-0.5 leading-relaxed">
+                            Se entrou por RSI, não tenta MA50 5m (e vice-versa) durante este tempo.
+                          </p>
+                        </div>
+                        <SuggestButton
+                          onClick={loadPathCooldownSuggest}
+                          loading={pathCooldownSuggest?.loading}
+                          disabled={rsiInvalid}
+                          title="Mediana de intervalos entre sinais RSI e toques MA50 5m"
+                        />
+                      </div>
+
+                      {pathCooldownSuggest?.error && (
+                        <p className="text-[9px] text-amber-500/90">{pathCooldownSuggest.error}</p>
+                      )}
+                      {pathCooldownStale && !pathCooldownSuggest?.loading && (
+                        <p className="text-[9px] text-amber-500/80">
+                          RSI ou gatilho MA alterados — clique <strong>Sugerir</strong>.
+                        </p>
+                      )}
+
+                      <PathCooldownSelector
+                        report={pathCooldownSuggest}
+                        source={entryPaths.pathCooldownSource}
+                        onSelectSource={selectPathCooldownSource}
+                        loading={pathCooldownSuggest?.loading}
+                        stale={pathCooldownStale}
+                      />
+
+                      {!pathCooldownSuggest && !pathCooldownSuggest?.loading && (
+                        <p className="text-[9px] text-p5/40">
+                          Clique <strong>Sugerir</strong> para ver de quanto em quanto tempo RSI e MA batem no histórico.
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
               )}
 
-              {suggest?.error && (
-                <p className="text-[9px] text-amber-500/90">{suggest.error}</p>
+              {entryPathsMissing && (
+                <p className="text-[9px] text-amber-500/90">Selecione ao menos um caminho de entrada.</p>
               )}
             </div>
           </AnalysisAccordion>
@@ -1454,16 +1773,18 @@ export default function FiveMTradeModal({
             </div>
           </AnalysisAccordion>
 
-          {(recoveryPatternMissing || recoveryZonesMissing || stopLossMissing || stopLossInvalid || stopLossNeedsSuggest) && !recoverySuggest?.loading && !stopSuggest?.loading && (
+          {(recoveryPatternMissing || recoveryZonesMissing || stopLossMissing || entryPathsMissing || stopLossInvalid || stopLossNeedsSuggest) && !recoverySuggest?.loading && !stopSuggest?.loading && (
             <p className="text-[10px]" style={{ color: '#f59e0b' }}>
               {recoveryPatternMissing
                 ? 'Selecione um ou mais padrões de recuperação 1h.'
                 : recoveryZonesMissing
                   ? 'Selecione ao menos uma zona MA para os padrões 1h.'
+                  : entryPathsMissing
+                    ? 'Selecione ao menos um caminho de entrada (RSI ou MA50 5m).'
                   : stopLossMissing
                     ? 'Selecione ao menos um stop loss.'
                     : stopLossNeedsSuggest
-                      ? 'Clique em Sugerir na seção Stop loss para calcular as opções.'
+                      ? 'Abra Stop loss — cálculo e seleção hist+MA são automáticos.'
                       : 'Stop selecionado indisponível — clique Sugerir ou escolha fixo −5%.'}
             </p>
           )}
@@ -1482,17 +1803,20 @@ export default function FiveMTradeModal({
                   : 'obrigatório — escolha uma ou mais regras'
             }
             accent={stopLossTypes.length && !stopLossInvalid ? '#f87171' : '#f59e0b'}
-            action={(
-              <SuggestButton
-                onClick={loadRecoverySuggest}
-                loading={stopSuggest?.loading}
-                disabled={rsiInvalid}
-                color="#f87171"
-                title="Calcula stops fixos, histórico RSI e MA no momento"
-              />
-            )}
           >
             <div className="pt-2">
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <p className="text-[9px] text-p5/45 leading-relaxed flex-1">
+                  Escolha uma ou mais regras — o bot vende se qualquer stop for atingido.
+                </p>
+                <SuggestButton
+                  onClick={loadRecoverySuggest}
+                  loading={stopSuggest?.loading}
+                  disabled={rsiInvalid}
+                  color="#f87171"
+                  title="Recalcula stops fixos, histórico RSI e MA"
+                />
+              </div>
               <FiveMStopLossSelector
                 stop={stopSuggest}
                 loading={stopSuggest?.loading}
