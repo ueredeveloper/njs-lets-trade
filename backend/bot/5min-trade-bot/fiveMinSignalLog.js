@@ -1,5 +1,7 @@
 'use strict';
 
+const { buildRulesSnapshot } = require('./fiveMSignalRules');
+
 const READY_ENTRY_ACTIONS = new Set(['compraria', 'dca_compraria']);
 const READY_EXIT_ACTIONS  = new Set(['venderia']);
 
@@ -21,6 +23,13 @@ function ma50_1hFromReport(report) {
 function buildSignalRow(state, report, eventType, extra = {}) {
   const ma5m = report.ma5mTrigger?.ma ?? null;
   const ma1h = ma50_1hFromReport(report);
+  const rules = buildRulesSnapshot(report);
+  if (eventType === 'entry' || eventType === 'possible_entry') {
+    rules.order = {
+      ok: eventType === 'entry',
+      label: eventType === 'entry' ? 'Ordem executada' : 'Ordem não preencheu',
+    };
+  }
   return {
     state_id:       state.id,
     symbol:         state.symbol,
@@ -52,6 +61,7 @@ function buildSignalRow(state, report, eventType, extra = {}) {
       recoveryEval: report.recoveryEval,
       rsiBuySignal: report.rsiBuySignal,
       rsiSellSignal: report.rsiSellSignal,
+      rules,
       ...extra.details,
     },
   };

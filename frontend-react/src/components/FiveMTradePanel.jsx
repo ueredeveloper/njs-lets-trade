@@ -7,6 +7,7 @@ import {
   fiveMSignalFetchPlan,
   FIVE_M_ENTRY_EVENT_TYPES,
 } from '../utils/fiveMTradeChart';
+import { FIVE_M_RULE_COLUMNS, getSignalRules, ruleCell } from '../utils/fiveMSignalRules';
 
 const FIVE_M_COLOR = '#06b6d4';
 
@@ -42,6 +43,15 @@ function pathLabel(path) {
 function phaseBadge(phase) {
   if (phase === 'BOUGHT') return { text: 'posição', color: '#22c55e' };
   return { text: 'watch', color: '#94a3b8' };
+}
+
+function RuleGlyph({ ruleKey, rules }) {
+  const { glyph, className, title } = ruleCell(rules[ruleKey]);
+  return (
+    <span className={`inline-block w-4 text-center font-bold ${className}`} title={title}>
+      {glyph}
+    </span>
+  );
 }
 
 export default function FiveMTradePanel() {
@@ -240,14 +250,20 @@ export default function FiveMTradePanel() {
           )}
 
           {entrySignals.length > 0 && (
-            <table className="w-full text-[10px] font-mono border-collapse">
+            <div className="overflow-x-auto min-w-0">
+            <table className="w-full min-w-[640px] text-[10px] font-mono border-collapse">
               <thead>
                 <tr className="text-p5/50 text-left">
-                  <th className="pb-1 pr-2 font-normal">Quando</th>
+                  <th className="pb-1 pr-2 font-normal sticky left-0 bg-p1 z-[1]">Quando</th>
                   <th className="pb-1 pr-2 font-normal">Tipo</th>
                   <th className="pb-1 pr-2 font-normal">Via</th>
                   <th className="pb-1 pr-2 font-normal text-right">Preço</th>
-                  <th className="pb-1 font-normal text-right">RSI</th>
+                  <th className="pb-1 pr-2 font-normal text-right">RSI</th>
+                  {FIVE_M_RULE_COLUMNS.map(col => (
+                    <th key={col.key} className="pb-1 px-1 font-normal text-center" title={col.title}>
+                      {col.short}
+                    </th>
+                  ))}
                 </tr>
               </thead>
               <tbody>
@@ -255,13 +271,18 @@ export default function FiveMTradePanel() {
                   const lbl = eventLabel(sig.event_type);
                   const active = activeSignalId === sig.id;
                   const loading = chartLoading === sig.id;
+                  const rules = getSignalRules(sig);
+                  const ruleTitle = FIVE_M_RULE_COLUMNS.map(col => {
+                    const c = ruleCell(rules[col.key]);
+                    return `${col.short}: ${c.title}`;
+                  }).join('\n');
                   return (
                     <tr
                       key={sig.id}
                       onClick={() => handleSignalClick(sig)}
                       className={`cursor-pointer border-t border-p2/30 transition-colors ${active ? 'bg-white/10' : 'hover:bg-p2/30'}`}
-                      title={sig.motivation ?? ''}>
-                      <td className="py-1.5 pr-2 text-p5/80 whitespace-nowrap">
+                      title={[sig.motivation, ruleTitle].filter(Boolean).join('\n\n')}>
+                      <td className="py-1.5 pr-2 text-p5/80 whitespace-nowrap sticky left-0 bg-p1 z-[1]">
                         {loading ? '… ' : ''}{fmtDateTime(sig.event_time)}
                       </td>
                       <td className="py-1.5 pr-2 whitespace-nowrap">
@@ -277,14 +298,20 @@ export default function FiveMTradePanel() {
                       </td>
                       <td className="py-1.5 pr-2 text-p5/60">{pathLabel(sig.entry_path)}</td>
                       <td className="py-1.5 pr-2 text-right text-p5">{fmtPrice(sig.price)}</td>
-                      <td className="py-1.5 text-right text-p5/70">
+                      <td className="py-1.5 pr-2 text-right text-p5/70">
                         {sig.rsi != null ? Number(sig.rsi).toFixed(1) : '—'}
                       </td>
+                      {FIVE_M_RULE_COLUMNS.map(col => (
+                        <td key={col.key} className="py-1.5 px-1 text-center">
+                          <RuleGlyph ruleKey={col.key} rules={rules} />
+                        </td>
+                      ))}
                     </tr>
                   );
                 })}
               </tbody>
             </table>
+            </div>
           )}
         </div>
       </div>
