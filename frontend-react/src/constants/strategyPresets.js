@@ -1,16 +1,19 @@
 /** Presets AMAP + Swing — múltiplas estratégias por símbolo. */
 import { formStateFromEntry } from './tradeConfigSchema';
 import { swingFormFromEntry, normalizeSwingForm } from './swingConfigSchema';
+import { maCrossFormFromEntry, normalizeMaCrossForm } from './maCrossConfigSchema';
 
 export const AMAP_STRATEGY_IDS = ['amap-15m', 'amap-1h'];
 export const SWING_STRATEGY_IDS = ['swing-rsi-1h', 'swing-ma50-8h'];
-export const STRATEGY_IDS = [...AMAP_STRATEGY_IDS, ...SWING_STRATEGY_IDS];
+export const MA_CROSS_STRATEGY_IDS = ['ma-cross'];
+export const STRATEGY_IDS = [...AMAP_STRATEGY_IDS, ...SWING_STRATEGY_IDS, ...MA_CROSS_STRATEGY_IDS];
 
 export const STRATEGY_LABELS = {
   'amap-15m':      'AMAP 15m',
   'amap-1h':       'AMAP 1h',
   'swing-rsi-1h':  'RSI 1h',
   'swing-ma50-8h': 'MA50 8h',
+  'ma-cross':      'MA Cross',
 };
 
 export const STRATEGY_COLORS = {
@@ -18,10 +21,15 @@ export const STRATEGY_COLORS = {
   'amap-1h':       '#6366f1',
   'swing-rsi-1h':  '#f59e0b',
   'swing-ma50-8h': '#ec4899',
+  'ma-cross':      '#22d3ee',
 };
 
 export function isSwingStrategy(id) {
   return SWING_STRATEGY_IDS.includes(id);
+}
+
+export function isMaCrossStrategy(id) {
+  return MA_CROSS_STRATEGY_IDS.includes(id);
 }
 
 const AMAP_PRESETS = {
@@ -145,7 +153,45 @@ const SWING_PRESETS = {
   },
 };
 
+const MA_CROSS_PRESETS = {
+  'ma-cross': {
+    label: 'MA Cross',
+    kind: 'ma_cross',
+    entry: {
+      enabled: true,
+      ma1: { period: 9, interval: '15m' },
+      ma2: { period: 21, interval: '15m' },
+      direction: 'cross_up',
+      tolerancePct: 0.1,
+    },
+    maFiltersEnabled: true,
+    maFilters: [{
+      id: 1, enabled: true, period: 50, interval: '1h',
+      mode: 'adaptive', maxDipPct: 4,
+    }],
+    exit: {
+      logic: 'any',
+      maCross: {
+        enabled: true,
+        ma1: { period: 9, interval: '15m' },
+        ma2: { period: 21, interval: '15m' },
+        direction: 'cross_down',
+        tolerancePct: 0.1,
+      },
+      rsi: { enabled: false, logic: 'any', conditions: [{ enabled: true, interval: '15m', period: 14, operator: '>', value: 70 }] },
+    },
+    stopLoss: { enabled: true, maxLossPct: 5 },
+    execution: { immediateEntry: true, entryDiscount: 0.001, pendingTimeoutMs: 30 * 60_000 },
+    polling: { pollMs: 60_000, fastPollMs: 30_000 },
+    adaptiveOpts: { defaultPct: 3, maxPct: 8, minPct: 0.5, minEpisodes: 3 },
+    volume: { minVolumeUsdt: 1_000_000, allowLowVolume: false },
+  },
+};
+
 export function presetFormState(strategyId) {
+  if (isMaCrossStrategy(strategyId)) {
+    return normalizeMaCrossForm(MA_CROSS_PRESETS[strategyId] ?? MA_CROSS_PRESETS['ma-cross']);
+  }
   if (isSwingStrategy(strategyId)) {
     return normalizeSwingForm(SWING_PRESETS[strategyId] ?? SWING_PRESETS['swing-rsi-1h']);
   }
@@ -159,7 +205,9 @@ export function normalizeStrategyId(id) {
 }
 
 export function formForEntry(existing, strategyId) {
+  if (existing?.tradeConfig?.kind === 'ma_cross') return maCrossFormFromEntry(existing);
   if (existing?.tradeConfig?.kind) return swingFormFromEntry(existing);
+  if (isMaCrossStrategy(strategyId)) return presetFormState(strategyId);
   if (isSwingStrategy(strategyId)) return presetFormState(strategyId);
   return existing?.tradeConfig ? formStateFromEntry(existing) : presetFormState(strategyId);
 }
@@ -182,6 +230,7 @@ export function buildDualStrategyState(currentEntries, { symbol, exchange, defau
       capital: existing?.capital ?? defaultCapital,
       form: existing ? formForEntry(existing, sid) : presetFormState(sid),
       isSwing: isSwingStrategy(sid),
+      isMaCross: isMaCrossStrategy(sid),
     };
     if (!existing && defaultEnabled) strategies[sid].enabled = false;
   }
@@ -207,5 +256,6 @@ export function strategyBadgeLabel(sid) {
   if (sid === 'amap-1h') return '1h';
   if (sid === 'swing-rsi-1h') return 'RSI';
   if (sid === 'swing-ma50-8h') return 'MA';
+  if (sid === 'ma-cross') return 'X';
   return sid.slice(0, 4);
 }

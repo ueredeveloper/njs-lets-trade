@@ -23,7 +23,11 @@ const { resolveConfigBody: amapResolveConfigBody, normalizeStrategyId: amapNormS
 const {
   isSwingStrategy, resolveConfigBody: swingResolveConfigBody, buildTradeConfig: buildSwingTradeConfig,
 } = require('../bot/swing/strategyPresets');
+const {
+  isMaCrossStrategy, resolveConfigBody: maCrossResolveConfigBody, buildTradeConfig: buildMaCrossTradeConfig,
+} = require('../bot/ma-cross/strategyPresets');
 const { toFormState: swingToFormState, normalizeSwingConfig, toAmapSuggestConfig } = require('../bot/swing/tradeConfigSchema');
+const { toFormState: maCrossToFormState, normalizeMaCrossConfig } = require('../bot/ma-cross/tradeConfigSchema');
 const { getRequiredSpecs: getSwingRequiredSpecs } = require('../bot/swing/strategyEngine');
 const { toFormState, normalizeTradeConfig, flatConfigToBody, toEngineConfig } = require('../bot/amap/tradeConfigSchema');
 const { fetchBinanceCandles, fetchGateCandles } = require('../bot/prices');
@@ -261,11 +265,13 @@ router.delete('/favorites/:symbol', getUserId, async (req, res) => {
 // ============================================================
 
 function normStrategyId(id) {
+  if (isMaCrossStrategy(id)) return id;
   if (isSwingStrategy(id)) return id;
   return amapNormStrategyId(id);
 }
 
 function resolveConfigBody(r) {
+  if (isMaCrossStrategy(r?.strategy_id)) return maCrossResolveConfigBody(r);
   if (isSwingStrategy(r?.strategy_id)) return swingResolveConfigBody(r);
   return amapResolveConfigBody(r);
 }
@@ -291,6 +297,32 @@ function multitradeToEntry(r) {
       stopLoss:     form.stopLoss,
       execution:    form.execution,
       polling:      form.polling,
+      volume:       form.volume,
+      tradeConfig:  tc,
+      kind:         form.kind,
+      createdAt:    r.created_at,
+      updatedAt:    r.updated_at,
+    };
+  }
+
+  if (isMaCrossStrategy(sid)) {
+    const tc = buildMaCrossTradeConfig(configBody);
+    const form = maCrossToFormState(configBody);
+    return {
+      id:           r.id,
+      symbol:       r.symbol,
+      exchange:     r.exchange,
+      strategyId:   sid,
+      enabled:      r.enabled !== false,
+      capital:      Number(r.capital),
+      entry:        form.entry,
+      exit:         form.exit,
+      maFilters:    form.maFilters,
+      maFiltersEnabled: form.maFiltersEnabled,
+      stopLoss:     form.stopLoss,
+      execution:    form.execution,
+      polling:      form.polling,
+      adaptiveOpts: form.adaptiveOpts,
       volume:       form.volume,
       tradeConfig:  tc,
       kind:         form.kind,
@@ -354,6 +386,28 @@ function bodyToMultitradeRow(userId, body) {
       ma_conditions:   normalized.entryMaFilter?.enabled
         ? [{ mode: normalized.entryMaFilter.mode, period: normalized.entryMaFilter.period, interval: normalized.entryMaFilter.interval }]
         : [],
+      rule_3_candles:  false,
+      rule_4_candles:  false,
+      trade_config,
+    };
+  }
+
+  if (isMaCrossStrategy(sid)) {
+    const normalized = normalizeMaCrossConfig(body);
+    const trade_config = buildMaCrossTradeConfig(body);
+    const maConds = (normalized.maFilters ?? []).filter(f => f.enabled && f.mode !== 'off');
+    return {
+      user_id:         userId,
+      symbol:          sym,
+      exchange:        body.exchange ?? 'binance',
+      strategy_id:     sid,
+      enabled:         body.enabled !== false,
+      capital:         Number(body.capital ?? 100),
+      entry_rsi:       { interval: normalized.entry.ma1.interval, period: 14, operator: '<', value: 30 },
+      exit_rsi:        { interval: normalized.exit.maCross.ma1.interval, period: 14, operator: '>', value: 70 },
+      ma_conditions:   maConds.map(f => ({
+        mode: f.mode, period: f.period, interval: f.interval, fixedDipPct: f.fixedDipPct,
+      })),
       rule_3_candles:  false,
       rule_4_candles:  false,
       trade_config,

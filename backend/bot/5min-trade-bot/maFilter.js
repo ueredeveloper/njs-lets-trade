@@ -11,9 +11,12 @@ const { analyzeAdaptiveDip, lastMa } = require('../amap/adaptiveMaDip');
 const MA_INTERVALS = ['1h', '2h', '4h', '8h', '1d'];
 const MA_PERIODS   = [20, 50, 100, 200];
 
+/** Teto da calibragem % abaixo da MA (modo acima) — piso adaptativo de entrada. */
+const MA_TOLERANCE_MAX_PCT = 4;
+
 const TOLERANCE_OPTS = {
   defaultPct:  3,
-  maxPct:      8,
+  maxPct:      MA_TOLERANCE_MAX_PCT,
   minPct:      0.5,
   minEpisodes: 3,
 };
@@ -38,7 +41,7 @@ function normalizeMaFilters(raw) {
       period:   Number(f.period ?? 50),
       interval: MA_INTERVALS.includes(f.interval) ? f.interval : '1h',
       mode:     f.mode === 'below' ? 'below' : 'above',
-      tolerancePct: Math.max(0, Number(f.tolerancePct ?? 0)),
+      tolerancePct: Math.max(0, Math.min(MA_TOLERANCE_MAX_PCT, Number(f.tolerancePct ?? 0))),
     }))
     : DEFAULT_MA_FILTERS.filters.map(f => ({ ...f }));
   return {
@@ -313,6 +316,7 @@ module.exports = {
   DEFAULT_MA_FILTERS,
   MA_INTERVALS,
   MA_PERIODS,
+  MA_TOLERANCE_MAX_PCT,
   TOLERANCE_OPTS,
   normalizeMaFilters,
   buildMaSeries,

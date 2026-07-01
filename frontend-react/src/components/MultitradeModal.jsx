@@ -8,12 +8,14 @@ import {
 } from '../constants/tradeConfigSchema';
 import {
   STRATEGY_IDS, STRATEGY_LABELS, STRATEGY_COLORS,
-  buildDualStrategyState, isSwingStrategy,
+  buildDualStrategyState, isSwingStrategy, isMaCrossStrategy,
 } from '../constants/strategyPresets';
 import { swingFormToPayload } from '../constants/swingConfigSchema';
+import { maCrossFormToPayload } from '../constants/maCrossConfigSchema';
 import { MT_HELP } from '../constants/multitradeHelp';
 import { FieldLabel, FieldHint } from './MultitradeFieldHint';
 import SwingStrategyForm from './SwingStrategyForm';
+import MaCrossStrategyForm from './MaCrossStrategyForm';
 
 const MT_COLOR      = '#8b5cf6';
 const GATE_COLOR    = '#0068ff';
@@ -186,8 +188,9 @@ export default function MultitradeModal({
   }, [patchStrategy]);
 
   const isSwing = isSwingStrategy(activeStrategy);
-  const rule1On = !isSwing && form.rule1?.enabled !== false;
-  const rule2On = !isSwing && form.rule2?.enabled === true;
+  const isMaCross = isMaCrossStrategy(activeStrategy);
+  const rule1On = !isSwing && !isMaCross && form.rule1?.enabled !== false;
+  const rule2On = !isSwing && !isMaCross && form.rule2?.enabled === true;
 
   const entrySummary = rule1On
     ? `RSI(${form.rule1.entryRsi.interval}) ${form.rule1.entryRsi.operator ?? '<'} ${form.rule1.entryRsi.value}`
@@ -312,6 +315,11 @@ export default function MultitradeModal({
     };
     if (isSwingStrategy(sid)) {
       const payload = swingFormToPayload(st.form, meta);
+      payload.volume = { ...st.form.volume, allowLowVolume: volAllow };
+      return payload;
+    }
+    if (isMaCrossStrategy(sid)) {
+      const payload = maCrossFormToPayload(st.form, meta);
       payload.volume = { ...st.form.volume, allowLowVolume: volAllow };
       return payload;
     }
@@ -576,7 +584,7 @@ export default function MultitradeModal({
         setActiveStrategy(sid);
         return;
       }
-      if (st.enabled && !isSwingStrategy(sid)) {
+      if (st.enabled && !isSwingStrategy(sid) && !isMaCrossStrategy(sid)) {
         const r1 = st.form.rule1?.enabled !== false;
         const r2 = st.form.rule2?.enabled === true;
         if (!r1 && !r2) {
@@ -603,9 +611,11 @@ export default function MultitradeModal({
   const payload = buildPayload();
   const cmd      = isSwing
     ? `node backend/bot/swing/swing-bot.js --symbol ${symbol.trim().toUpperCase()}`
-    : getBacktestCmd(payload);
+    : isMaCross
+      ? `node backend/bot/ma-cross/ma-cross-bot.js --symbol ${symbol.trim().toUpperCase()}`
+      : getBacktestCmd(payload);
   const adaptCmd = getAdaptiveTestCmd(payload);
-  const showAdaptive = !isSwing && form.rule1?.maFiltersEnabled !== false && hasAdaptiveMa(form.rule1?.maConditions);
+  const showAdaptive = !isSwing && !isMaCross && form.rule1?.maFiltersEnabled !== false && hasAdaptiveMa(form.rule1?.maConditions);
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto py-4"
@@ -701,7 +711,7 @@ export default function MultitradeModal({
           </div>
 
           <div className={`flex gap-1 p-1 rounded-lg ${strategyEnabled ? '' : 'opacity-40 pointer-events-none'}`} style={{ background: '#1a1d28', border: '1px solid #2a2d3a' }}>
-            {!isSwing && [
+            {!isSwing && !isMaCross && [
               { id: 'rule1', label: 'Regra 1 — RSI', color: ENTRY_COLOR, hint: MT_HELP.rule1.group },
               { id: 'rule2', label: rule2TabLabel, color: MT_COLOR, hint: MT_HELP.rule2.group },
             ].map(tab => (
@@ -732,7 +742,11 @@ export default function MultitradeModal({
             />
           )}
 
-          {!isSwing && activeTab === 'rule1' && strategyEnabled && (
+          {isMaCross && strategyEnabled && (
+            <MaCrossStrategyForm form={form} patch={patch} />
+          )}
+
+          {!isSwing && !isMaCross && activeTab === 'rule1' && strategyEnabled && (
           <RuleGroup
             title="Regra 1 — Entrada RSI e saída"
             subtitle={MT_HELP.rule1.group}
@@ -1138,7 +1152,7 @@ export default function MultitradeModal({
           </RuleGroup>
           )}
 
-          {!isSwing && activeTab === 'rule2' && strategyEnabled && (
+          {!isSwing && !isMaCross && activeTab === 'rule2' && strategyEnabled && (
           <RuleGroup
             title="Regra 2 — Entrada MA"
             subtitle={MT_HELP.rule2.group}

@@ -10,6 +10,7 @@ import {
   initialEntryPaths, normalizeEntryPathsForm, entryPathsLabel, hasEntryPath, MA5M_TRIGGER_OPTIONS,
   COMBINE_OPTIONS, pathCooldownHoursForSource, clampPathCooldownHours,
 } from '../constants/fiveMEntryPaths';
+import { MA_TOLERANCE_MAX_PCT, clampMaTolerancePct } from '../constants/fiveMMaFilters';
 
 const FIVE_M_COLOR  = '#06b6d4';
 const GATE_COLOR    = '#0068ff';
@@ -40,7 +41,7 @@ function cloneMaFilters(src) {
       period:   Number(f.period ?? 50),
       interval: MA_INTERVALS.includes(f.interval) ? f.interval : '1h',
       mode:     f.mode === 'below' ? 'below' : 'above',
-      tolerancePct: Math.max(0, Number(f.tolerancePct ?? 0)),
+      tolerancePct: clampMaTolerancePct(f.tolerancePct ?? 0),
     })),
   };
 }
@@ -626,9 +627,9 @@ function MaFilterRow({ filter, onChange, onRemove, canRemove, toleranceSuggest, 
             <input
               type="number"
               value={filter.tolerancePct ?? 0}
-              onChange={e => onChange({ ...filter, tolerancePct: Math.max(0, Number(e.target.value) || 0) })}
+              onChange={e => onChange({ ...filter, tolerancePct: clampMaTolerancePct(e.target.value) })}
               min={0}
-              max={20}
+              max={MA_TOLERANCE_MAX_PCT}
               step={0.1}
               className="w-12 rounded px-1 py-0.5 font-mono text-p5 outline-none"
               style={{ background: '#1e2130', border: '1px solid #2a2d3a' }}
@@ -651,7 +652,7 @@ function MaFilterRow({ filter, onChange, onRemove, canRemove, toleranceSuggest, 
       {filter.mode === 'above' && filter.enabled && (
         <MaToleranceHint
           suggestion={toleranceSuggest}
-          onApply={pct => onChange({ ...filter, tolerancePct: pct })}
+          onApply={pct => onChange({ ...filter, tolerancePct: clampMaTolerancePct(pct) })}
           loading={toleranceLoading}
           stale={toleranceStale}
         />
@@ -965,7 +966,7 @@ export default function FiveMTradeModal({
       filters: prev.filters.map(f => {
         const s = list.find(x => x.filterId === f.id);
         if (!s || s.recommendedTolerancePct == null) return f;
-        return { ...f, tolerancePct: s.recommendedTolerancePct };
+        return { ...f, tolerancePct: clampMaTolerancePct(s.recommendedTolerancePct) };
       }),
     }));
   }
@@ -1776,7 +1777,7 @@ export default function FiveMTradeModal({
                 />
               ))}
               <p className="text-[9px] text-p5/40 leading-relaxed pt-0.5">
-                Calibragem: admite compra até X% abaixo da MA. Clique em <strong className="text-p5/60">Sugerir</strong> para ver a sugestão — use <strong className="text-p5/60">Usar −X%</strong> para aplicar no input.
+                Calibragem: admite compra até X% abaixo da MA (máx. {MA_TOLERANCE_MAX_PCT}%). Clique em <strong className="text-p5/60">Sugerir</strong> para ver a sugestão — use <strong className="text-p5/60">Usar −X%</strong> para aplicar no input.
               </p>
               {maAdapt?.summary && !maAdapt?.loading && (
                 <div

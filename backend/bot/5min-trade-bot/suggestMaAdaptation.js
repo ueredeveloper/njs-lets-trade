@@ -7,7 +7,7 @@
  */
 
 const { scoreTrades, pickBestSweep } = require('../amap/entrySuggestShared');
-const { suggestMaTolerance, normalizeMaFilters } = require('./maFilter');
+const { suggestMaTolerance, normalizeMaFilters, MA_TOLERANCE_MAX_PCT } = require('./maFilter');
 const {
   computeRsiSeries,
   simulate5mTrades,
@@ -16,7 +16,7 @@ const {
   RSI_PERIOD,
 } = require('./suggest5mRsi');
 
-const SWEEP_TOLERANCES = [0, 0.5, 1, 1.5, 2, 2.5, 3, 4, 5, 6, 8];
+const SWEEP_TOLERANCES = [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4];
 const MIN_TRADES       = 2;
 
 function buildToleranceSweepCandidates(dipPct) {
@@ -108,7 +108,7 @@ function suggestFilterMaAdaptation(cMap, filter, fullMaCfg, rsiBuy, rsiSell) {
     }
   }
 
-  recommendedTolerancePct = Math.max(0, Math.min(8, parseFloat(Number(recommendedTolerancePct).toFixed(1))));
+  recommendedTolerancePct = Math.max(0, Math.min(MA_TOLERANCE_MAX_PCT, parseFloat(Number(recommendedTolerancePct).toFixed(1))));
 
   const anchorRow       = sweep.find(s => s.tolerancePct === anchorTol);
   const recommendedRow  = sweep.find(s => s.tolerancePct === recommendedTolerancePct) ?? botBest ?? anchorRow;
