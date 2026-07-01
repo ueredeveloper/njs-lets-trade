@@ -443,7 +443,8 @@ async function gateMarketSell(pair, qty, log, { aggressive = false } = {}) {
   }
 
   const order = await gateReq('POST', '/spot/orders', {
-    currency_pair: pair, side: 'sell', type: 'market', amount: sellQty.toFixed(8),
+    currency_pair: pair, side: 'sell', type: 'market',
+    amount: sellQty.toFixed(8), time_in_force: 'ioc',
   });
   await new Promise(r => setTimeout(r, 2000));
   const filled    = await gateReq('GET', `/spot/orders/${order.id}`, { currency_pair: pair });

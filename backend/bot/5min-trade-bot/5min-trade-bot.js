@@ -220,7 +220,7 @@ async function binanceGetTokenBalance(symbol) {
   return asset ? parseFloat(asset.free) : 0;
 }
 
-async function binanceMarketSell(symbol, qty, log) {
+async function binanceMarketSell(symbol, qty, log, _opts = {}) {
   const actualBalance = await binanceGetTokenBalance(symbol);
   const sellQty       = Math.min(parseFloat(qty), actualBalance);
   if (sellQty <= 0) throw new Error(`Binance: saldo insuficiente (disponível: ${actualBalance})`);
@@ -372,13 +372,36 @@ async function gateBuy(pair, usdtAmount, { belowPct = 0 } = {}) {
   return { filledQty: netQty, quoteQty: quoteQty || grossQty * avgPrice, avgPrice };
 }
 
-async function gateMarketSell(pair, qty, log) {
+async function gateMarketSell(pair, qty, log, { aggressive = false } = {}) {
   const actualBalance = await gateGetTokenBalance(pair);
   const sellQty       = Math.min(parseFloat(qty), actualBalance);
   if (sellQty <= 0) throw new Error(`Gate.io: saldo insuficiente (disponível: ${actualBalance})`);
   if (sellQty < parseFloat(qty)) log(`⚠️  Qty ajustada: ${qty} → ${sellQty} (saldo real)`);
+
+  if (aggressive) {
+    try {
+      const ticker = await fetch(`${GATE_BASE}/spot/tickers?currency_pair=${pair}`).then(r => r.json());
+      const bid    = parseFloat(ticker[0]?.highest_bid || ticker[0]?.last);
+      if (bid > 0) {
+        log(`📉 Venda IOC no bid $${bid} (baixa liquidez)`);
+        const order  = await gateReq('POST', '/spot/orders', {
+          currency_pair: pair, side: 'sell', type: 'limit',
+          price: String(bid), amount: sellQty.toFixed(8), time_in_force: 'ioc',
+        });
+        await new Promise(r => setTimeout(r, 1500));
+        const filled    = await gateReq('GET', `/spot/orders/${order.id}`, { currency_pair: pair });
+        const soldQty   = parseFloat(filled.amount) - parseFloat(filled.left || 0);
+        const usdtOut   = parseFloat(filled.filled_total || 0);
+        const exitPrice = parseFloat(filled.avg_deal_price || bid);
+        if (soldQty > 0) return { soldQty, usdtOut: usdtOut || soldQty * exitPrice, exitPrice };
+        log(`⚠️  IOC parcial/zero — tentando market`);
+      }
+    } catch (err) { log(`⚠️  IOC falhou (${err.message}) — tentando market`); }
+  }
+
   const order = await gateReq('POST', '/spot/orders', {
-    currency_pair: pair, side: 'sell', type: 'market', amount: sellQty.toFixed(8),
+    currency_pair: pair, side: 'sell', type: 'market',
+    amount: sellQty.toFixed(8), time_in_force: 'ioc',
   });
   await new Promise(r => setTimeout(r, 2000));
   const filled    = await gateReq('GET', `/spot/orders/${order.id}`, { currency_pair: pair });
@@ -405,7 +428,7 @@ function buildAdapter(exchange, symbol) {
       fetchLastPrice: ()       => fetchGateCurrentPrice(pair),
       marketBuy:    (usdt, opts) => gateBuy(pair, usdt, opts),
       buyLimitGtc:  (usdt, limitPrice, log) => gateBuyLimitGtc(pair, usdt, limitPrice, log),
-      marketSell:   (qty, log) => gateMarketSell(pair, qty, log),
+      marketSell:   (qty, log, opts) => gateMarketSell(pair, qty, log, opts),
       fetch24hVol:  ()         => gate24hVolume(pair),
       getBalance:   ()         => gateGetTokenBalance(pair),
     };
@@ -417,7 +440,7 @@ function buildAdapter(exchange, symbol) {
     fetchLastPrice: ()       => fetchBinanceCurrentPrice(symbol),
     marketBuy:    (usdt, opts) => binanceBuy(symbol, usdt, opts),
     buyLimitGtc:  (usdt, limitPrice, log) => binanceBuyLimitGtc(symbol, usdt, limitPrice, log),
-    marketSell:   (qty, log) => binanceMarketSell(symbol, qty, log),
+      marketSell:   (qty, log, opts) => binanceMarketSell(symbol, qty, log, opts),
     fetch24hVol:  ()         => binance24hVolume(symbol),
     getBalance:   ()         => binanceGetTokenBalance(symbol),
   };
@@ -489,7 +512,16 @@ async function executeSell(rowId, adapter, log, state, rsi, reason = 'rsi') {
 
   let result;
   try {
-    result = await adapter.marketSell(sellQty, log);
+    let sellOpts = {};
+    if (adapter.name === 'Gate.io') {
+      let aggressive = false;
+      try {
+        const vol = await adapter.fetch24hVol();
+        aggressive = vol == null || vol < 1_000_000;
+      } catch { aggressive = true; }
+      sellOpts = { aggressive };
+    }
+    result = await adapter.marketSell(sellQty, log, sellOpts);
   } catch (err) {
     log(`❌ Erro na venda: ${err.message}`);
     return false;
