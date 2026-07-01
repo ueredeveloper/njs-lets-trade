@@ -356,17 +356,12 @@ function CandleRow({ pattern }) {
 function initialRecoveryPattern(entry) {
   const rp = entry?.recoveryPattern;
   let types = [];
-  if (Array.isArray(rp?.types) && rp.types.length) {
+  if (Array.isArray(rp?.types)) {
     types = rp.types.filter(t => getRecoveryPatternOptions().some(o => o.type === t));
   } else if (rp?.type && rp.type !== 'none' && getRecoveryPatternOptions().some(o => o.type === rp.type)) {
     types = [rp.type];
   }
-  if (!types.length) {
-    types = [...DEFAULT_RECOVERY_PATTERN.types];
-  }
-  const zones = Array.isArray(rp?.zones) && rp.zones.length
-    ? rp.zones
-    : [...DEFAULT_RECOVERY_PATTERN.zones];
+  const zones = Array.isArray(rp?.zones) ? rp.zones : [];
   const abovePct = Number(rp?.abovePct ?? DEFAULT_RECOVERY_PATTERN.abovePct) || DEFAULT_RECOVERY_PATTERN.abovePct;
   return { types, zones, abovePct };
 }
@@ -425,7 +420,8 @@ function RecoveryPatternSelector({
   return (
     <div className="space-y-2">
       <p className="text-[9px] text-p5/50 leading-relaxed">
-        Escolha um ou mais padrões 1h — na zona MA marcada, basta <strong className="text-p5/70">qualquer</strong> padrão ativo.
+        <strong className="text-p5/65">Opcional.</strong> Sem padrão selecionado, a entrada não exige confirmação 1h.
+        Com padrões ativos, na zona MA marcada basta <strong className="text-p5/70">qualquer</strong> padrão.
         Entrada bloqueada se houver <strong className="text-p5/70">3 vermelhos</strong> seguidos (queda em direção à MA).
         {!analysis && (
           <span className="block text-p5/40 mt-0.5">Clique em <strong className="text-p5/55">Sugerir</strong> para ver histórico e recomendações.</span>
@@ -775,9 +771,7 @@ export default function FiveMTradeModal({
     Number(rsiSell) !== suggestCtx.rsiSell
   );
 
-  const recoveryPatternMissing = !recoveryPattern.types.length;
   const recoveryZonesMissing = recoveryPattern.types.length > 0 && !recoveryPattern.zones.length;
-  const stopLossMissing = !stopLossTypes.length;
   const entryPathsMissing = !hasEntryPath(entryPaths);
 
   const recoverySuggestStale = recoverySuggest && !recoverySuggest.loading && !recoverySuggest.error && (
@@ -793,7 +787,7 @@ export default function FiveMTradeModal({
 
   const stopLossNeedsSuggest = !stopSuggest || stopSuggest.loading || stopSuggest.error || stopSuggestStale;
   const stopLossInvalid = stopLossTypes.some(t => !stopOptionAvailable(t, stopSuggest, rsiBuy));
-  const formReady = recoveryPattern.types.length > 0 && !recoveryZonesMissing && !stopLossMissing && !stopLossInvalid && !entryPathsMissing;
+  const formReady = !recoveryZonesMissing && !stopLossInvalid && !entryPathsMissing;
 
   const pathCooldownStale = pathCooldownSuggest && !pathCooldownSuggest.loading && !pathCooldownSuggest.error && (
     Number(rsiBuy) !== Number(pathCooldownSuggest.rsiBuy) ||
@@ -1806,9 +1800,9 @@ export default function FiveMTradeModal({
                   ? 'desatualizado — clique Sugerir'
                 : recoveryPattern.types.length
                   ? `${recoveryPatternTypesLabel(recoveryPattern.types)} · ${recoveryPatternZonesLabel(recoveryPattern.zones, recoveryPattern.abovePct)}`
-                  : recoverySuggest?.recoveryAnalysis?.summary ?? 'obrigatório'
+                  : recoverySuggest?.recoveryAnalysis?.summary ?? 'opcional — nenhum padrão selecionado'
             }
-            accent={recoveryPattern.types.length ? '#26a69a' : '#f59e0b'}
+            accent={recoveryPattern.types.length ? '#26a69a' : undefined}
             action={(
               <SuggestButton
                 onClick={loadRecoverySuggest}
@@ -1844,19 +1838,13 @@ export default function FiveMTradeModal({
             </div>
           </AnalysisAccordion>
 
-          {(recoveryPatternMissing || recoveryZonesMissing || stopLossMissing || entryPathsMissing || stopLossInvalid || stopLossNeedsSuggest) && !recoverySuggest?.loading && !stopSuggest?.loading && (
+          {(recoveryZonesMissing || entryPathsMissing || stopLossInvalid) && !recoverySuggest?.loading && !stopSuggest?.loading && (
             <p className="text-[10px]" style={{ color: '#f59e0b' }}>
-              {recoveryPatternMissing
-                ? 'Selecione um ou mais padrões de recuperação 1h.'
-                : recoveryZonesMissing
-                  ? 'Selecione ao menos uma zona MA para os padrões 1h.'
-                  : entryPathsMissing
-                    ? 'Selecione ao menos um caminho de entrada (RSI ou MA50 5m).'
-                  : stopLossMissing
-                    ? 'Selecione ao menos um stop loss.'
-                    : stopLossNeedsSuggest
-                      ? 'Abra Stop loss — cálculo e seleção hist+MA são automáticos.'
-                      : 'Stop selecionado indisponível — clique Sugerir ou escolha fixo −5%.'}
+              {recoveryZonesMissing
+                ? 'Selecione ao menos uma zona MA para os padrões 1h.'
+                : entryPathsMissing
+                  ? 'Selecione ao menos um caminho de entrada (RSI ou MA50 5m).'
+                  : 'Stop selecionado indisponível — clique Sugerir ou escolha fixo −5%.'}
             </p>
           )}
 
@@ -1871,14 +1859,14 @@ export default function FiveMTradeModal({
                   ? 'desatualizado — clique Sugerir'
                 : stopLossTypes.length
                   ? stopLossTypesLabel(stopLossTypes, rsiBuy)
-                  : 'obrigatório — escolha uma ou mais regras'
+                  : 'opcional — nenhum stop selecionado'
             }
-            accent={stopLossTypes.length && !stopLossInvalid ? '#f87171' : '#f59e0b'}
+            accent={stopLossTypes.length && !stopLossInvalid ? '#f87171' : undefined}
           >
             <div className="pt-2">
               <div className="flex items-center justify-between gap-2 mb-2">
                 <p className="text-[9px] text-p5/45 leading-relaxed flex-1">
-                  Escolha uma ou mais regras — o bot vende se qualquer stop for atingido.
+                  Opcional — escolha uma ou mais regras; o bot vende se qualquer stop for atingido.
                 </p>
                 <SuggestButton
                   onClick={loadRecoverySuggest}
@@ -2040,7 +2028,7 @@ export default function FiveMTradeModal({
             disabled={!Number(capital) || Number(capital) <= 0 || rsiInvalid || !formReady}
             className="flex-1 py-1 text-[11px] rounded font-semibold transition-opacity disabled:opacity-40"
             style={{ background: FIVE_M_COLOR, color: '#000' }}
-            title={!formReady ? 'Selecione padrão 1h, zonas MA e stop loss' : undefined}
+            title={!formReady ? 'Corrija caminhos de entrada, zonas MA ou stop inválido' : undefined}
           >
             {isActive ? 'Atualizar' : 'Adicionar'}
           </button>

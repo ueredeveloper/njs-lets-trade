@@ -32,26 +32,25 @@ function recoveryPatternTypes(raw) {
 }
 
 function normalizeRecoveryPattern(raw, { required = false } = {}) {
+  const abovePctDefault = DEFAULT_RECOVERY_PATTERN.abovePct;
+
   if (!raw || typeof raw !== 'object') {
     if (required) return null;
-    return { ...DEFAULT_RECOVERY_PATTERN, types: [...DEFAULT_RECOVERY_PATTERN.types], zones: [...DEFAULT_RECOVERY_PATTERN.zones] };
+    return { types: [], zones: [], abovePct: abovePctDefault };
   }
 
   const types = [...new Set(recoveryPatternTypes(raw))];
   if (required && !types.length) return null;
 
+  const abovePct = Math.max(0, Math.min(20, Number(raw.abovePct ?? abovePctDefault) || abovePctDefault));
+
+  if (!types.length) {
+    return { types: [], zones: [], abovePct };
+  }
+
   let zones = Array.isArray(raw.zones)
     ? raw.zones.filter(z => RECOVERY_ZONES.includes(z))
     : [];
-  const abovePct = Math.max(0, Math.min(20, Number(raw.abovePct ?? DEFAULT_RECOVERY_PATTERN.abovePct) || DEFAULT_RECOVERY_PATTERN.abovePct));
-
-  if (!types.length) {
-    return {
-      types:    [...DEFAULT_RECOVERY_PATTERN.types],
-      zones:    zones.length ? [...new Set(zones)] : [...DEFAULT_RECOVERY_PATTERN.zones],
-      abovePct,
-    };
-  }
   if (!zones.length) {
     zones = raw.zone && RECOVERY_ZONES.includes(raw.zone) ? [raw.zone] : [...DEFAULT_RECOVERY_PATTERN.zones];
   }

@@ -106,7 +106,7 @@ export function initialStopLossTypes(entry) {
   if (sl?.type && sl.type !== 'none' && getStopLossOptions().some(o => o.type === sl.type)) {
     return [sl.type];
   }
-  return [...DEFAULT_STOP_LOSS_TYPES];
+  return [];
 }
 
 export function toggleStopType(list, type) {

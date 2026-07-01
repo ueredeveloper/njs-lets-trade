@@ -554,7 +554,7 @@ router.post('/five-m-trade-favorites', getUserId, async (req, res) => {
     ? normalizeStopLoss(stopLoss)
     : undefined;
   const rpCfg = recoveryPattern !== undefined
-    ? normalizeRecoveryPattern(recoveryPattern, { required: true })
+    ? normalizeRecoveryPattern(recoveryPattern)
     : undefined;
   const sellScopeCfg = sellScope !== undefined ? normalizeSellScope(sellScope).scope : undefined;
   const entryPriceCfg = entryPrice !== undefined ? normalizeEntryPrice(entryPrice) : undefined;
@@ -565,10 +565,6 @@ router.post('/five-m-trade-favorites', getUserId, async (req, res) => {
   if (stopLoss !== undefined && stopLoss !== null && slCfg?.types?.length === 0 && stopLoss.types?.length) {
     return res.status(400).json({ error: 'stopLoss.types inválido' });
   }
-  if (recoveryPattern !== undefined && !rpCfg) {
-    return res.status(400).json({ error: 'recoveryPattern.types obrigatório — escolha ao menos um padrão 1h' });
-  }
-
   const { data: existing } = await supabase
     .from('five_min_bot_state')
     .select('id, phase')
@@ -593,13 +589,6 @@ router.post('/five-m-trade-favorites', getUserId, async (req, res) => {
       .select()
       .single());
   } else {
-    if (!rpCfg) {
-      return res.status(400).json({ error: 'recoveryPattern obrigatório — escolha um padrão 1h' });
-    }
-    const stopTypes = slCfg?.types ?? [];
-    if (!stopTypes.length) {
-      return res.status(400).json({ error: 'stopLoss.types obrigatório — escolha ao menos um stop' });
-    }
     ({ data, error } = await supabase
       .from('five_min_bot_state')
       .insert({
@@ -610,8 +599,8 @@ router.post('/five-m-trade-favorites', getUserId, async (req, res) => {
         rsi_buy:         buy,
         rsi_sell:        sell,
         ma_filters:      maCfg ?? normalizeMaFilters(null),
-        stop_loss:       slCfg ?? { types: [] },
-        recovery_pattern: rpCfg,
+        stop_loss:       slCfg ?? normalizeStopLoss(null),
+        recovery_pattern: rpCfg ?? normalizeRecoveryPattern(null),
         sell_scope:      sellScopeCfg ?? 'bot_only',
         entry_price:     entryPriceCfg ?? normalizeEntryPrice(null),
         entry_paths:     entryPathsCfg ?? normalizeEntryPaths(null),
@@ -652,9 +641,7 @@ router.patch('/five-m-trade-favorites/:id', getUserId, async (req, res) => {
     updates.stop_loss = normalizeStopLoss(stopLoss);
   }
   if (recoveryPattern !== undefined) {
-    const rpCfg = normalizeRecoveryPattern(recoveryPattern, { required: true });
-    if (!rpCfg) return res.status(400).json({ error: 'recoveryPattern.types inválido' });
-    updates.recovery_pattern = rpCfg;
+    updates.recovery_pattern = normalizeRecoveryPattern(recoveryPattern);
   }
   if (sellScope !== undefined) {
     updates.sell_scope = normalizeSellScope(sellScope).scope;
