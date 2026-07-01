@@ -9,6 +9,7 @@ const { scoreTrades, pickBestSweep, percentile } = require('../amap/entrySuggest
 const { buildMaSeries, maAt, maThreshold, normalizeMaFilters } = require('./maFilter');
 const { computeRsiSeries, RSI_PERIOD } = require('./suggest5mRsi');
 const { normalizeEntryPaths, hasEntryPath } = require('./entryPathsConfig');
+const { normalizeRecoveryPattern } = require('./recoveryPatternConfig');
 
 const MA5M_PERIOD   = 50;
 const MA1H_PERIOD   = 50;
@@ -112,6 +113,39 @@ function isAboveMa50_1h(price, openTime, ma1hSeries, tolerancePct = 0) {
   if (ma == null) return { ok: false, ma: null };
   const threshold = maThreshold(ma, 'above', tolerancePct);
   return { ok: price >= threshold, ma, threshold };
+}
+
+/**
+ * Contexto de alta para entrada MA50 5m: preço ≥ MA50 1h + abovePct%
+ * (mesmo mínimo da zona "Acima da MA" do padrão de recuperação 1h).
+ */
+function evaluateMa50_5mUptrendContext(cMap, price, openTime, recoveryPattern) {
+  const cfg = normalizeRecoveryPattern(recoveryPattern);
+  const abovePct = cfg.abovePct ?? 5;
+  const candles1h = cMap?.[MA1H_INTERVAL];
+  if (!candles1h?.length || candles1h.length < MA1H_PERIOD) {
+    return { ok: false, reason: 'candles_1h_insuficientes', abovePct };
+  }
+
+  const ma1hSeries = buildMaSeries(candles1h, MA1H_PERIOD);
+  const ma = maAt(ma1hSeries, openTime);
+  if (ma == null) {
+    return { ok: false, reason: 'ma_indisponivel', abovePct };
+  }
+
+  const aboveLine = ma * (1 + abovePct / 100);
+  const ok = price >= aboveLine;
+
+  return {
+    ok,
+    reason: ok ? null : 'abaixo_minimo_ma50_1h',
+    ma: parseFloat(ma.toFixed(8)),
+    abovePct,
+    aboveLine: parseFloat(aboveLine.toFixed(8)),
+    price,
+    distMaPct: parseFloat(((price - ma) / ma * 100).toFixed(2)),
+    distAboveLinePct: parseFloat(((price - aboveLine) / aboveLine * 100).toFixed(2)),
+  };
 }
 
 function buildExitCandidates(anchor = 73) {
@@ -287,24 +321,45 @@ function suggestMa5mExitRsi(candles5m, candles1h, maFilters, trigger = 'touch', 
 }
 
 function evaluateEntryPathsSignal({
-  entryPaths, rsi, rsiBuy, ma5mTrigger, ma1hOk, recoveryOk,
+  entryPaths, rsi, rsiBuy, ma5mTrigger, ma1hOk, recoveryOk, ma5m1hContext,
 }) {
   const cfg = normalizeEntryPaths(entryPaths);
   if (!hasEntryPath(cfg)) {
     return { ok: false, reason: 'nenhum_caminho', path: null };
   }
 
-  const baseOk = ma1hOk !== false && recoveryOk !== false;
-  const rsiSignal = cfg.rsi.enabled && Number(rsi) < Number(rsiBuy);
-  const maSignal  = cfg.ma50_5m.enabled && ma5mTrigger?.triggered === true;
+  const rsiRaw    = cfg.rsi.enabled && Number(rsi) < Number(rsiBuy);
+  const maTouch   = cfg.ma50_5m.enabled && ma5mTrigger?.triggered === true;
+  const ma1hMinOk = ma5m1hContext?.ok === true;
+  const maRaw     = maTouch && ma1hMinOk;
 
-  if (!baseOk) {
+  const rsiPathOk = ma1hOk !== false && recoveryOk !== false;
+  const rsiSignal = rsiRaw && rsiPathOk;
+  const maSignal  = maRaw;
+
+  if (rsiRaw && !rsiPathOk) {
     return {
       ok: false,
-      reason: !ma1hOk ? 'ma1h' : 'recovery',
+      reason: ma1hOk === false ? 'ma1h' : 'recovery',
+      path: null,
+      rsiSignal: false,
+      maSignal,
+      rsiRaw,
+      maTouch,
+      ma1hMinOk,
+    };
+  }
+
+  if (maTouch && !ma1hMinOk) {
+    return {
+      ok: false,
+      reason: 'ma50_5m_context',
       path: null,
       rsiSignal,
-      maSignal,
+      maSignal: false,
+      rsiRaw,
+      maTouch,
+      ma1hMinOk,
     };
   }
 
@@ -312,16 +367,16 @@ function evaluateEntryPathsSignal({
     const ok = cfg.combine === 'all' ? (rsiSignal && maSignal) : (rsiSignal || maSignal);
     let path = null;
     if (ok) path = maSignal && !rsiSignal ? 'ma50_5m' : (rsiSignal && !maSignal ? 'rsi' : (maSignal ? 'ma50_5m' : 'rsi'));
-    if (ok && cfg.combine === 'all') path = 'ma50_5m'; // prefer track ma path when both required
+    if (ok && cfg.combine === 'all') path = 'ma50_5m';
     if (ok && rsiSignal && !maSignal) path = 'rsi';
-    return { ok, path, rsiSignal, maSignal, combine: cfg.combine };
+    return { ok, path, rsiSignal, maSignal, rsiRaw, maTouch, ma1hMinOk, combine: cfg.combine };
   }
 
   if (cfg.ma50_5m.enabled) {
-    return { ok: maSignal, path: maSignal ? 'ma50_5m' : null, rsiSignal, maSignal };
+    return { ok: maSignal, path: maSignal ? 'ma50_5m' : null, rsiSignal, maSignal, rsiRaw, maTouch, ma1hMinOk };
   }
 
-  return { ok: rsiSignal, path: rsiSignal ? 'rsi' : null, rsiSignal, maSignal };
+  return { ok: rsiSignal, path: rsiSignal ? 'rsi' : null, rsiSignal, maSignal, rsiRaw, maTouch, ma1hMinOk };
 }
 
 function resolveExitRsi(state) {
@@ -334,6 +389,7 @@ module.exports = {
   checkMa50_5mTrigger,
   buildMa5mTrigger,
   isNearMa50_5mForFastPoll,
+  evaluateMa50_5mUptrendContext,
   collectMa5mTouchEpisodes,
   suggestMa5mExitRsi,
   evaluateEntryPathsSignal,

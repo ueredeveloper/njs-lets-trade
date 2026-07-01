@@ -3,6 +3,7 @@
 const { historicalStopLoss, maStopLoss, fixedStopLoss } = require('./suggestStopLoss');
 const {
   isActiveStopLoss, stopLossLabel, stopLossTypes, fixedStopPct, STOP_LOSS_LABELS,
+  MIN_STOP_LOSS_PCT,
 } = require('./stopLossConfig');
 
 const RSI_PERIOD = 14;
@@ -54,14 +55,20 @@ async function computeActiveStops(adapter, stopLoss, maFilters, rsiBuy, entryPri
     return { ok: false, parts, label: stopLossLabel(stopLoss) };
   }
   const tightest = okParts.reduce((best, p) => (p.stopPrice > best.stopPrice ? p : best), okParts[0]);
+  const minStopPrice = parseFloat((entryPrice * (1 - MIN_STOP_LOSS_PCT / 100)).toFixed(8));
+  const stopPrice = Math.min(tightest.stopPrice, minStopPrice);
+  const stopPct = parseFloat(((entryPrice - stopPrice) / entryPrice * 100).toFixed(2));
+  const minFloorApplied = stopPrice < tightest.stopPrice - 1e-10;
   return {
     ok: true,
     label: stopLossLabel(stopLoss),
-    stopPrice: tightest.stopPrice,
-    stopPct: tightest.stopPct,
+    stopPrice,
+    stopPct,
     types,
     parts: okParts,
-    triggeredBy: tightest.type,
+    triggeredBy: minFloorApplied ? 'min_2pct' : tightest.type,
+    minStopLossPct: MIN_STOP_LOSS_PCT,
+    minFloorApplied,
   };
 }
 

@@ -25,6 +25,11 @@ function buildRulesSnapshot(report) {
       tolerancePct: report?.ma5mTrigger?.tolerancePct ?? paths.ma50_5m?.tolerancePct ?? null,
       trigger: paths.ma50_5m?.trigger ?? null,
     }),
+    ma5m1hMin: cell(report?.ma5m1hContext?.ok === true, 'MA50 1h mín. (+X%)', {
+      abovePct: report?.ma5m1hContext?.abovePct ?? null,
+      aboveLine: report?.ma5m1hContext?.aboveLine ?? null,
+      distMaPct: report?.ma5m1hContext?.distMaPct ?? null,
+    }),
     pattern: cell(patternOk, 'Padrão 1h', {
       required: patternRequired,
       reason: recovery.reason ?? null,

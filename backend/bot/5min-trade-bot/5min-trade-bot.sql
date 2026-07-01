@@ -79,6 +79,12 @@ ALTER TABLE five_min_bot_state
 ALTER TABLE five_min_bot_state
   ADD COLUMN IF NOT EXISTS entry_path TEXT;
 
+ALTER TABLE five_min_bot_state
+  ADD COLUMN IF NOT EXISTS last_exit_reason TEXT;
+
+ALTER TABLE five_min_bot_state
+  ADD COLUMN IF NOT EXISTS last_exit_time TIMESTAMPTZ;
+
 -- ── five_min_bot_signals ─────────────────────────────────────────────────────
 -- Sinais: possible_entry | entry | possible_exit | exit
 CREATE TABLE IF NOT EXISTS five_min_bot_signals (

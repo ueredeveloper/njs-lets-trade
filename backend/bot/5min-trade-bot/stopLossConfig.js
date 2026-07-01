@@ -2,6 +2,12 @@
 
 const STOP_LOSS_TYPES = ['fixed_2', 'fixed_5', 'hist', 'ma'];
 
+/** Distância mínima entrada → stop (qualquer cálculo). */
+const MIN_STOP_LOSS_PCT = 2;
+
+/** Sem reentrada após stop loss antes deste prazo. */
+const STOP_LOSS_REENTRY_HOURS = 2;
+
 const STOP_LOSS_LABELS = {
   fixed_2: 'Fixo −2% da entrada',
   fixed_5: 'Fixo −5% da entrada',
@@ -49,6 +55,8 @@ function fixedStopPct(type) {
 module.exports = {
   STOP_LOSS_TYPES,
   STOP_LOSS_LABELS,
+  MIN_STOP_LOSS_PCT,
+  STOP_LOSS_REENTRY_HOURS,
   normalizeStopLoss,
   isActiveStopLoss,
   stopLossTypes,

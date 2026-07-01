@@ -521,6 +521,8 @@ function fiveMTradeToEntry(r) {
     phase:          r.phase ?? 'WATCHING',
     buyCount:       r.buy_count ?? 0,
     lastBuyTime:    r.last_buy_time ?? r.buy_time ?? null,
+    lastExitReason: r.last_exit_reason ?? null,
+    lastExitTime:   r.last_exit_time ?? null,
   };
 }
 
@@ -1046,6 +1048,8 @@ router.post('/five-m-trade-evaluate', getUserId, async (req, res) => {
   const maCfg       = normalizeMaFilters(req.body.maFilters);
   const phase       = req.body.phase === 'BOUGHT' ? 'BOUGHT' : 'WATCHING';
   const lastBuyTime = req.body.lastBuyTime ?? null;
+  const lastExitReason = req.body.lastExitReason ?? null;
+  const lastExitTime = req.body.lastExitTime ?? null;
   const buyCount    = Number(req.body.buyCount ?? 0);
 
   if (!Number.isFinite(rsiBuy) || !Number.isFinite(rsiSell) || rsiBuy >= rsiSell) {
@@ -1091,6 +1095,8 @@ router.post('/five-m-trade-evaluate', getUserId, async (req, res) => {
       sellScope: normalizeSellScope(req.body.sellScope).scope,
       phase,
       lastBuyTime,
+      lastExitReason,
+      lastExitTime,
       buyCount,
       livePrice,
     });

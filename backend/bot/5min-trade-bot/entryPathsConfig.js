@@ -1,5 +1,7 @@
 'use strict';
 
+const { STOP_LOSS_REENTRY_HOURS } = require('./stopLossConfig');
+
 const DEFAULT_ENTRY_PATHS = {
   rsi:     { enabled: true },
   ma50_5m: { enabled: true, trigger: 'touch', tolerancePct: 0.5 },
@@ -69,6 +71,16 @@ function pathCooldownMs(cfg) {
   return n.pathCooldownHours * 3_600_000;
 }
 
+function pathCooldownRemainingMs(cfg, lastBuyTime) {
+  if (!lastBuyTime) return 0;
+  const elapsed = Date.now() - new Date(lastBuyTime).getTime();
+  return Math.max(0, pathCooldownMs(cfg) - elapsed);
+}
+
+function isWithinPathCooldown(cfg, lastBuyTime) {
+  return pathCooldownRemainingMs(cfg, lastBuyTime) > 0;
+}
+
 /** Após entrada por um caminho (OR), bloqueia o outro até pathCooldownHours. */
 function applyPathAlternationCooldown(cfg, signal, { lastEntryPath, lastBuyTime } = {}) {
   if (!signal) return signal;
@@ -76,9 +88,8 @@ function applyPathAlternationCooldown(cfg, signal, { lastEntryPath, lastBuyTime 
   if (n.combine !== 'any' || !n.rsi.enabled || !n.ma50_5m.enabled) return signal;
   if (!lastEntryPath || !lastBuyTime) return signal;
 
-  const cooldownMs = pathCooldownMs(n);
-  const elapsed    = Date.now() - new Date(lastBuyTime).getTime();
-  if (elapsed >= cooldownMs) return signal;
+  const remainingMs = pathCooldownRemainingMs(n, lastBuyTime);
+  if (remainingMs <= 0) return signal;
 
   const blockedPath = lastEntryPath === 'rsi' ? 'ma50_5m' : 'rsi';
   const allowedPath = lastEntryPath;
@@ -105,10 +116,51 @@ function applyPathAlternationCooldown(cfg, signal, { lastEntryPath, lastBuyTime 
       path: null,
       reason: 'path_cooldown',
       blockedPath,
-      remainingMs: Math.max(0, cooldownMs - elapsed),
+      remainingMs,
     };
   }
   return signal;
+}
+
+function stopLossReentryRemainingMs(lastExitTime) {
+  if (!lastExitTime) return 0;
+  const elapsed = Date.now() - new Date(lastExitTime).getTime();
+  return Math.max(0, STOP_LOSS_REENTRY_HOURS * 3_600_000 - elapsed);
+}
+
+/**
+ * Cooldown entre caminhos RSI ↔ MA50 5m (combine=any).
+ * WATCHING e BOUGHT: última via bloqueia a outra até pathCooldownHours.
+ * WATCHING após stop loss: bloqueia qualquer reentrada por STOP_LOSS_REENTRY_HOURS (2h).
+ */
+function applyEntryPathCooldown(cfg, signal, {
+  lastEntryPath, lastBuyTime, phase = 'WATCHING', lastExitReason = null, lastExitTime = null,
+} = {}) {
+  if (!signal) return signal;
+
+  if (phase === 'WATCHING' && lastExitReason === 'stop_loss') {
+    const remainingMs = stopLossReentryRemainingMs(lastExitTime ?? lastBuyTime);
+    if (remainingMs > 0) {
+      return {
+        ...signal,
+        ok: false,
+        path: null,
+        reason: 'path_cooldown',
+        blockedPath: 'both',
+        remainingMs,
+        afterStopLoss: true,
+      };
+    }
+  }
+
+  const n = normalizeEntryPaths(cfg);
+  if (n.combine !== 'any' || !n.rsi.enabled || !n.ma50_5m.enabled) return signal;
+  if (!lastEntryPath || !lastBuyTime) return signal;
+
+  const remainingMs = pathCooldownRemainingMs(n, lastBuyTime);
+  if (remainingMs <= 0) return signal;
+
+  return applyPathAlternationCooldown(n, signal, { lastEntryPath, lastBuyTime });
 }
 
 module.exports = {
@@ -117,7 +169,11 @@ module.exports = {
   entryPathsLabel,
   hasEntryPath,
   pathCooldownMs,
+  pathCooldownRemainingMs,
+  isWithinPathCooldown,
+  stopLossReentryRemainingMs,
   applyPathAlternationCooldown,
+  applyEntryPathCooldown,
   clampPathCooldownHours,
   clampMa5mTolerancePct,
 };

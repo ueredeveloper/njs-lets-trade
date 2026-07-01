@@ -1,6 +1,7 @@
 'use strict';
 
 const { normalizeMaFilters } = require('./maFilter');
+const { normalizeEntryPaths } = require('./entryPathsConfig');
 const { normalizeRecoveryPattern, isActiveRecoveryPattern } = require('./recoveryPatternConfig');
 const { evaluate5mTradeLive } = require('./evaluate5mTrade');
 
@@ -10,6 +11,7 @@ const { evaluate5mTradeLive } = require('./evaluate5mTrade');
 async function evaluateTickForBot(adapter, state, candles5m, livePrice = null) {
   const maCfg = normalizeMaFilters(state.ma_filters);
   const recoveryCfg = normalizeRecoveryPattern(state.recovery_pattern);
+  const entryPathsCfg = normalizeEntryPaths(state.entry_paths);
   const cMap = { '5m': candles5m };
 
   let price = livePrice;
@@ -21,7 +23,7 @@ async function evaluateTickForBot(adapter, state, candles5m, livePrice = null) {
     }
   }
 
-  const needs1h = maCfg.enabled || isActiveRecoveryPattern(recoveryCfg);
+  const needs1h = maCfg.enabled || isActiveRecoveryPattern(recoveryCfg) || entryPathsCfg.ma50_5m.enabled;
   if (needs1h) {
     const active = maCfg.enabled
       ? maCfg.filters.find(f => f.enabled && f.mode === 'above')
@@ -46,6 +48,8 @@ async function evaluateTickForBot(adapter, state, candles5m, livePrice = null) {
     sellScope: state.sell_scope,
     phase: state.phase,
     lastBuyTime: state.last_buy_time,
+    lastExitReason: state.last_exit_reason,
+    lastExitTime: state.last_exit_time,
     buyCount: state.buy_count,
     livePrice: price,
   });

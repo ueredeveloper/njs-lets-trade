@@ -539,9 +539,11 @@ async function executeSell(rowId, adapter, log, state, rsi, reason = 'rsi') {
   const capitalAfter  = capitalBefore + pnlUsdt;
   const pnlSign       = pnlUsdt >= 0 ? '+' : '';
 
+  const exitTime = new Date().toISOString();
+
   await saveTrade({
     symbol, exchange: state.exchange,
-    entry_time: state.buy_time, exit_time: new Date().toISOString(),
+    entry_time: state.buy_time, exit_time: exitTime,
     entry_price: parseFloat(state.buy_price), exit_price: exitPrice,
     qty: soldQty, usdt_in: totalIn, usdt_out: usdtOut,
     pnl_usdt: pnlUsdt, pnl_pct: pnlPct,
@@ -553,8 +555,9 @@ async function executeSell(rowId, adapter, log, state, rsi, reason = 'rsi') {
   await saveState(rowId, {
     capital: capitalAfter, phase: 'WATCHING',
     buy_price: null, buy_qty: null, buy_usdt: null,
-    buy_time: null, last_buy_time: null, buy_count: 0, rsi_entry: null,
-    entry_path: null,
+    buy_time: null, buy_count: 0, rsi_entry: null,
+    last_exit_reason: reason,
+    last_exit_time: exitTime,
   });
 
   const waPrefix = reason === 'stop_loss' ? '🛡️' : '🔴';
@@ -624,6 +627,8 @@ async function executeBuy(rowId, adapter, log, state, rsi, capitalPerEntry, isDc
     buy_count:     buyCount,
     rsi_entry:     state.rsi_entry ?? rsi,
     entry_path:    isDca ? (state.entry_path || entryPath) : entryPath,
+    last_exit_reason: null,
+    last_exit_time: null,
   });
 
   sendWhatsApp(
@@ -733,7 +738,7 @@ async function tick(rowId, adapter, log, prevPoll = null, lastStop = null, setSt
           clearSignalDedupe(symbol);
           await emitSignal(sbReq, state, report, 'exit', log, {
             exitReason: 'stop_loss',
-            motivation: `Stop ${activeStop.label} @ ${activeStop.stopPrice}`,
+            motivation: `Stop ${activeStop.triggeredBy === 'min_2pct' ? 'mín. 2%' : activeStop.label} @ ${activeStop.stopPrice}`,
             price: close,
           });
         }

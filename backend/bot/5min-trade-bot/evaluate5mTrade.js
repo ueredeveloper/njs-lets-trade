@@ -27,6 +27,8 @@ const ACTION_LABELS = {
   dca_bloqueada_padrao:     '🚫 DCA bloqueada (padrão 1h)',
   dca_bloqueada_ma:       '🚫 DCA bloqueada (MA)',
   entrada_bloqueada_caminho: '🚫 Entrada bloqueada (caminho)',
+  entrada_path_cooldown:     '⏳ Entrada — outro caminho em cooldown',
+  entrada_stop_cooldown:     '⏳ Entrada bloqueada após stop loss',
   dca_bloqueada_caminho:     '🚫 DCA bloqueada (caminho)',
   dca_path_cooldown:         '⏳ DCA — outro caminho em cooldown',
   mantem_posicao:         '📊 Mantém posição',
@@ -42,23 +44,23 @@ function formatCooldown(ms) {
 
 function canDcaAgain(lastBuyTime, entryPathsCfg) {
   if (!lastBuyTime) return true;
-  return Date.now() - new Date(lastBuyTime).getTime() >= pathCooldownMs(entryPathsCfg);
+  return !isWithinPathCooldown(entryPathsCfg, lastBuyTime);
 }
 
 function cooldownRemaining(lastBuyTime, entryPathsCfg) {
-  if (!lastBuyTime) return 0;
-  return Math.max(0, pathCooldownMs(entryPathsCfg) - (Date.now() - new Date(lastBuyTime).getTime()));
+  return pathCooldownRemainingMs(entryPathsCfg, lastBuyTime);
 }
 
 const { checkRecoveryPatternsLive, evaluateRecoveryEntry } = require('./recoveryPattern');
 const { normalizeRecoveryPattern, recoveryPatternLabel } = require('./recoveryPatternConfig');
 const { normalizeSellScope, sellScopeLabel } = require('./sellScopeConfig');
 const { maKey, buildMaSeries, maAt } = require('./maFilter');
-const { normalizeEntryPaths, entryPathsLabel, hasEntryPath, applyPathAlternationCooldown, pathCooldownMs } = require('./entryPathsConfig');
+const { normalizeEntryPaths, entryPathsLabel, hasEntryPath, applyEntryPathCooldown, pathCooldownRemainingMs, isWithinPathCooldown } = require('./entryPathsConfig');
 const {
   buildMa5mTrigger, MA5M_FAST_MARGIN_PCT,
-  isNearMa50_5mForFastPoll, evaluateEntryPathsSignal,
+  isNearMa50_5mForFastPoll, evaluateMa50_5mUptrendContext, evaluateEntryPathsSignal,
 } = require('./ma5mEntryEngine');
+const { STOP_LOSS_REENTRY_HOURS } = require('./stopLossConfig');
 
 function checkCandlePatterns(cMap, recoveryPattern = null) {
   const cfg = normalizeRecoveryPattern(recoveryPattern);
@@ -125,6 +127,10 @@ function evaluate5mTradeLive(cMap, params = {}) {
   const candlePatterns = checkCandlePatterns(cMap, recoveryCfg);
   const recoveryEval   = recoveryEvalForEntry(cMap, maCfg, price, openTime, recoveryCfg);
   const patternRequired = recoveryEval.patternRequired === true;
+  const evalPrice = livePrice != null && Number.isFinite(Number(livePrice)) ? Number(livePrice) : price;
+  const ma5m1hContext = entryPathsCfg.ma50_5m.enabled
+    ? evaluateMa50_5mUptrendContext(cMap, evalPrice, openTime, recoveryCfg)
+    : null;
 
   const rawPathSignal = evaluateEntryPathsSignal({
     entryPaths: entryPathsCfg,
@@ -133,13 +139,15 @@ function evaluate5mTradeLive(cMap, params = {}) {
     ma5mTrigger,
     ma1hOk: maPass.ok,
     recoveryOk: recoveryEval.ok || !patternRequired,
+    ma5m1hContext,
   });
-  const pathSignal = phase === 'BOUGHT'
-    ? applyPathAlternationCooldown(entryPathsCfg, rawPathSignal, {
-      lastEntryPath: params.entryPath,
-      lastBuyTime: params.lastBuyTime,
-    })
-    : rawPathSignal;
+  const pathSignal = applyEntryPathCooldown(entryPathsCfg, rawPathSignal, {
+    lastEntryPath: params.entryPath,
+    lastBuyTime: params.lastBuyTime,
+    phase,
+    lastExitReason: params.lastExitReason ?? null,
+    lastExitTime: params.lastExitTime ?? null,
+  });
 
   const fastThreshold = Math.max(rsiSell - 2, rsiBuy + 5);
   const rsiFastMargin = 4;
@@ -158,7 +166,25 @@ function evaluate5mTradeLive(cMap, params = {}) {
       action = 'aguardar';
       reason = 'Nenhum caminho de entrada ativo — habilite RSI ou MA50 5m';
     } else if (!pathSignal.ok) {
-      if (!maPass.ok) {
+      if (pathSignal.reason === 'path_cooldown') {
+        if (pathSignal.afterStopLoss) {
+          action = 'entrada_stop_cooldown';
+          reason = `Aguardando ${formatCooldown(pathSignal.remainingMs ?? 0)} após stop loss (${STOP_LOSS_REENTRY_HOURS}h)`;
+        } else {
+          action = 'entrada_path_cooldown';
+          const viaLbl = params.entryPath === 'rsi' ? 'RSI' : 'MA50 5m';
+          const blockedLbl = pathSignal.blockedPath === 'rsi' ? 'RSI' : 'MA50 5m';
+          reason = `Última via ${viaLbl} — ${blockedLbl} bloqueado · faltam ${formatCooldown(pathSignal.remainingMs ?? 0)}`;
+        }
+      } else if (rawPathSignal.reason === 'ma50_5m_context') {
+        action = 'entrada_bloqueada_caminho';
+        const pct = ma5m1hContext?.abovePct ?? recoveryCfg.abovePct;
+        const line = ma5m1hContext?.aboveLine != null ? ma5m1hContext.aboveLine.toFixed(6) : '?';
+        reason = `MA50 5m só em alta — preço abaixo de MA50 1h +${pct}% (mín. ${line})`;
+        if (ma5mTrigger?.triggered) {
+          detail = `toque MA50 5m OK · preço=${evalPrice.toFixed(6)} · dist MA1h=${ma5m1hContext?.distMaPct ?? '?'}%`;
+        }
+      } else if (!maPass.ok) {
         action = 'entrada_bloqueada_ma';
         const f = maPass.filter;
         reason = `${formatMaFilterLabel(f)} não atendido`;
@@ -216,7 +242,11 @@ function evaluate5mTradeLive(cMap, params = {}) {
         action = 'dca_path_cooldown';
         reason = `Última via ${params.entryPath} — ${pathSignal.blockedPath} bloqueado · faltam ${formatCooldown(pathSignal.remainingMs ?? 0)}`;
       } else if (!pathSignal.ok) {
-        if (!maPass.ok) {
+        if (rawPathSignal.reason === 'ma50_5m_context') {
+          action = 'dca_bloqueada_caminho';
+          const pct = ma5m1hContext?.abovePct ?? recoveryCfg.abovePct;
+          reason = `DCA MA50 5m bloqueada — preço abaixo de MA50 1h +${pct}%`;
+        } else if (!maPass.ok) {
           action = 'dca_bloqueada_ma';
           reason = `Cooldown OK mas MA bloqueou (${formatMaFilterLabel(maPass.filter)})`;
         } else if (patternRequired && !recoveryEval.ok) {
@@ -283,6 +313,7 @@ function evaluate5mTradeLive(cMap, params = {}) {
     entryPathsLabel:  entryPathsLabel(entryPathsCfg),
     pathSignal,
     ma5mTrigger,
+    ma5m1hContext,
     action,
     actionLabel:      ACTION_LABELS[action] ?? action,
     allowed,
@@ -303,6 +334,8 @@ function evaluate5mTradeLive(cMap, params = {}) {
       sellScope,
       phase,
       lastBuyTime: params.lastBuyTime ?? null,
+      lastExitReason: params.lastExitReason ?? null,
+      lastExitTime: params.lastExitTime ?? null,
     },
   };
 }
