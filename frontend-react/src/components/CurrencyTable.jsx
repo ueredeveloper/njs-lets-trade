@@ -16,6 +16,12 @@ const ACTIVE_COLOR  = '#f59e0b';
 const MT_COLOR      = '#8b5cf6';
 const FIVE_M_COLOR  = '#06b6d4';
 
+function findFiveMEntry(favorites, symbol) {
+  const sym = symbol?.toUpperCase?.() ?? '';
+  if (!sym) return undefined;
+  return favorites?.find(e => e.symbol?.toUpperCase?.() === sym);
+}
+
 
 function formatVolume(vol) {
   if (vol == null || isNaN(vol) || vol <= 0) return '—';
@@ -469,7 +475,7 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
               const isTrade    = tradeFavorites.has(item.symbol);
               const isMT       = symbolHasMultitrade(multitradeFavorites, item.symbol);
               const mtEntries  = getEntriesForSymbol(multitradeFavorites, item.symbol);
-              const fiveMEntry = fiveMTradeFavorites.find(e => e.symbol === item.symbol);
+              const fiveMEntry = findFiveMEntry(fiveMTradeFavorites, item.symbol);
               const is5mTrade  = !!fiveMEntry;
               const activeInfo  = activeTrades.get(item.symbol);
               const isActive   = !!activeInfo;
@@ -597,7 +603,7 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
                   const isTrade  = tradeFavorites.has(item.symbol);
                   const isMTGate = symbolHasMultitrade(multitradeFavorites, item.symbol);
                   const mtEntriesGate = getEntriesForSymbol(multitradeFavorites, item.symbol);
-                  const fiveMEntryGate = fiveMTradeFavorites.find(e => e.symbol === item.symbol);
+                  const fiveMEntryGate = findFiveMEntry(fiveMTradeFavorites, item.symbol);
                   const is5mGate = !!fiveMEntryGate;
                   return (
                     <tr
@@ -686,13 +692,13 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
       {/* Modal 5m Trade */}
       {fiveMModal && (
         <FiveMTradeModal
-          key={`5m-${fiveMModal.symbol}-${fiveMTradeFavorites.find(e => e.symbol === fiveMModal.symbol)?.id ?? 'new'}`}
+          key={`5m-${fiveMModal.symbol}-${findFiveMEntry(fiveMTradeFavorites, fiveMModal.symbol)?.id ?? 'new'}`}
           symbol={fiveMModal.symbol}
           defaultExchange={fiveMModal.exchange}
-          isActive={!!fiveMTradeFavorites.find(e => e.symbol === fiveMModal.symbol)}
-          currentEntry={fiveMTradeFavorites.find(e => e.symbol === fiveMModal.symbol)}
+          isActive={!!findFiveMEntry(fiveMTradeFavorites, fiveMModal.symbol)}
+          currentEntry={findFiveMEntry(fiveMTradeFavorites, fiveMModal.symbol)}
           onConfirm={async ({ exchange, capital, rsiBuy, rsiSell, maFilters, stopLoss, recoveryPattern, sellScope, entryPrice, entryPaths }) => {
-            const existing = fiveMTradeFavorites.find(e => e.symbol === fiveMModal.symbol);
+            const existing = findFiveMEntry(fiveMTradeFavorites, fiveMModal.symbol);
             await saveFiveMTradeEntry({
               id: existing?.id,
               symbol: fiveMModal.symbol,
@@ -710,7 +716,7 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
             setFiveMModal(null);
           }}
           onRemove={async () => {
-            const existing = fiveMTradeFavorites.find(e => e.symbol === fiveMModal.symbol);
+            const existing = findFiveMEntry(fiveMTradeFavorites, fiveMModal.symbol);
             if (existing?.id) await removeFiveMTradeEntry(existing.id);
             setFiveMModal(null);
           }}

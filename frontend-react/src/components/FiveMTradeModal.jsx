@@ -786,7 +786,9 @@ export default function FiveMTradeModal({
   );
 
   const stopLossNeedsSuggest = !stopSuggest || stopSuggest.loading || stopSuggest.error || stopSuggestStale;
-  const stopLossInvalid = stopLossTypes.some(t => !stopOptionAvailable(t, stopSuggest, rsiBuy));
+  const stopLossInvalid = stopLossTypes.length > 0
+    && stopSuggest && !stopSuggest.loading && !stopSuggest.error && !stopSuggestStale
+    && stopLossTypes.some(t => !stopOptionAvailable(t, stopSuggest, rsiBuy));
   const formReady = !recoveryZonesMissing && !stopLossInvalid && !entryPathsMissing;
 
   const pathCooldownStale = pathCooldownSuggest && !pathCooldownSuggest.loading && !pathCooldownSuggest.error && (
@@ -1104,6 +1106,21 @@ export default function FiveMTradeModal({
     };
   }
 
+  async function handleRemove() {
+    if (inPosition) {
+      const ok = window.confirm(
+        'Esta moeda está em posição aberta no bot (BOUGHT).\n\n' +
+        'Remover dos favoritos 5m Trade? O bot para de monitorar; a posição na corretora não é vendida.',
+      );
+      if (!ok) return;
+    }
+    try {
+      await onRemove?.();
+    } catch (err) {
+      window.alert(err?.message ?? 'Não foi possível remover a moeda.');
+    }
+  }
+
   function handleConfirm() {
     const cap  = Number(capital);
     const buy  = Number(rsiBuy);
@@ -1170,6 +1187,7 @@ export default function FiveMTradeModal({
           {inPosition && (
             <p className="text-[10px]" style={{ color: '#f59e0b' }}>
               Em posição ({currentEntry.buyCount || 1} entrada{(currentEntry.buyCount || 1) > 1 ? 's' : ''}) — edite capital/RSI para próximos ciclos.
+              {' '}Use <strong>Remover</strong> para tirar do bot (a posição na corretora não é vendida).
             </p>
           )}
 
@@ -2003,12 +2021,12 @@ export default function FiveMTradeModal({
         </div>
 
         <div className="flex gap-2 px-4 py-2 border-t shrink-0" style={{ borderColor: '#2a2d3a' }}>
-          {isActive && (
+          {isActive && onRemove && (
             <button
-              onClick={onRemove}
-              disabled={inPosition}
-              title={inPosition ? 'Aguarde venda para remover' : 'Remover dos favoritos 5m Trade'}
-              className="flex-1 py-1 text-[11px] rounded font-medium transition-colors disabled:opacity-40"
+              type="button"
+              onClick={handleRemove}
+              title={inPosition ? 'Remove do bot (posição na corretora permanece)' : 'Remover dos favoritos 5m Trade'}
+              className="flex-1 py-1 text-[11px] rounded font-medium transition-colors hover:opacity-90"
               style={{ border: '1px solid #ef5350', color: '#ef5350' }}
             >
               Remover

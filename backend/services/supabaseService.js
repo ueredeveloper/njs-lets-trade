@@ -677,11 +677,6 @@ router.delete('/five-m-trade-favorites/:id', getUserId, async (req, res) => {
     .eq('id', req.params.id)
     .single();
   if (findErr || !existing) return res.status(404).json({ error: 'not found' });
-  if (existing.phase !== 'WATCHING') {
-    return res.status(400).json({
-      error: 'Moeda com posição aberta (BOUGHT). Aguarde a venda antes de remover.',
-    });
-  }
 
   const { error } = await supabase
     .from('five_min_bot_state')
