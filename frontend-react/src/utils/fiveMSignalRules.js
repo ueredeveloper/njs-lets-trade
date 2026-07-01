@@ -40,7 +40,9 @@ function rulesFromLegacyRow(row) {
   };
 
   if (row?.event_type === 'entry' || row?.event_type === 'possible_entry') {
-    rules.order = cell(row.event_type === 'entry', row.event_type === 'entry' ? 'Ordem executada' : 'Ordem não preencheu');
+    rules.order = cell(row.event_type === 'entry', row.event_type === 'entry' ? 'Ordem executada' : 'Ordem não preencheu', {
+      detail: d.orderError ?? d.rules?.order?.detail ?? row.motivation ?? null,
+    });
   }
 
   return rules;
@@ -65,8 +67,8 @@ export function ruleCell(rule) {
     return { glyph: '✓', className: 'text-emerald-400', title: rule.label ?? 'OK' };
   }
   if (rule.ok === false) {
-    const extra = rule.reason ? ` — ${rule.reason}` : (rule.detail ? ` — ${rule.detail}` : '');
-    return { glyph: '✗', className: 'text-red-400', title: `${rule.label ?? 'Bloqueado'}${extra}` };
+    const extra = rule.detail ?? rule.reason ?? '';
+    return { glyph: '✗', className: 'text-red-400', title: `${rule.label ?? 'Bloqueado'}${extra ? ` — ${extra}` : ''}` };
   }
   return { glyph: '?', className: 'text-amber-400/90', title: `${rule.label ?? 'Regra'} — sem dados no registro` };
 }

@@ -3,7 +3,7 @@ import { fetchFiveMTradeSuggestRsi, evaluateFiveMTradeLive, fetchFiveMTradeSugge
 import Tooltip from './Tooltip';
 import FiveMStopLossSelector, { initialStopLossTypes, stopOptionAvailable } from './FiveMStopLossSelector';
 import { stopLossTypesLabel, DEFAULT_FIVE_M_RSI_BUY, DEFAULT_FIVE_M_RSI_SELL, stopPayloadFromRecovery, hasSavedStopLossTypes, pickDefaultStopTypes } from '../constants/fiveMStopLoss';
-import { ENTRY_PRICE_OPTIONS, entryPriceLabel, initialEntryPrice, normalizeEntryPriceForm, clampBelowPct, parseBelowPctInput } from '../constants/fiveMEntryPrice';
+import { ENTRY_PRICE_OPTIONS, MA_ENTRY_PRICE_OPTIONS, entryPriceLabel, initialEntryPrice, normalizeEntryPriceForm, clampBelowPct, clampMaBelowPct, parseBelowPctInput } from '../constants/fiveMEntryPrice';
 import { getRecoveryPatternOptions, recoveryPatternTypesLabel, recoveryPatternZonesLabel, DEFAULT_RECOVERY_PATTERN } from '../constants/fiveMRecoveryPattern';
 import { SELL_SCOPE_OPTIONS, sellScopeLabel } from '../constants/fiveMSellScope';
 import {
@@ -1448,6 +1448,50 @@ export default function FiveMTradeModal({
                             <span className="text-[9px] text-p5/40">% · poll 1min quando ≤ {Math.max(2, (entryPaths.ma50_5m.tolerancePct ?? 0.5) * 4).toFixed(1)}%</span>
                           </label>
                         )}
+                        <span className="text-[9px] uppercase tracking-wider text-p5/50 block mt-2">Preço de execução (MA)</span>
+                        {MA_ENTRY_PRICE_OPTIONS.map(opt => (
+                          <label key={opt.id} className="flex items-start gap-2 cursor-pointer">
+                            <input
+                              type="radio"
+                              name="maEntryPriceMode"
+                              checked={(entryPrice.maMode ?? 'market') === opt.id}
+                              onChange={() => setEntryPrice(prev => ({
+                                ...prev,
+                                maMode: opt.id,
+                                maBelowPct: opt.id === 'ma_limit' ? (prev.maBelowPct ?? 0) : 0,
+                              }))}
+                              className="mt-0.5"
+                              style={{ accentColor: FIVE_M_COLOR }}
+                            />
+                            <span className="min-w-0">
+                              <span className="text-[10px] text-p5 block">{opt.label}</span>
+                              <span className="text-[9px] text-p5/45">{opt.summary}</span>
+                              <Tooltip text={opt.tooltip} maxW={280}>
+                                <span className="text-[8px] text-p5/35 underline decoration-dotted cursor-help mt-0.5 inline-block">
+                                  detalhes
+                                </span>
+                              </Tooltip>
+                            </span>
+                          </label>
+                        ))}
+                        {entryPrice.maMode === 'ma_limit' && (
+                          <label className="flex items-center gap-2 mt-1 pl-5">
+                            <span className="text-[9px] text-p5/50 shrink-0">Opcional abaixo da MA</span>
+                            <input
+                              type="number"
+                              min={0}
+                              max={1}
+                              step={0.1}
+                              value={entryPrice.maBelowPct ?? 0}
+                              onChange={e => setEntryPrice(prev => ({
+                                ...prev,
+                                maBelowPct: clampMaBelowPct(e.target.value),
+                              }))}
+                              className="w-14 px-1.5 py-0.5 rounded text-[10px] font-mono bg-p2 border border-p3 text-p5"
+                            />
+                            <span className="text-[9px] text-p5/40">% (0 = exatamente na MA)</span>
+                          </label>
+                        )}
                       </div>
                     )}
                   </span>
@@ -1528,11 +1572,11 @@ export default function FiveMTradeModal({
             id="entryPrice"
             openIds={openSections}
             onToggle={toggleSection}
-            title="Preço de compra"
+            title="Preço de compra (RSI)"
             subtitle={
               entryPrice.mode === 'below'
-                ? `Um pouco abaixo do mercado · ${entryPriceLabel(entryPrice)}`
-                : 'Preço de mercado'
+                ? `RSI limit −${entryPrice.belowPct}% · ${entryPriceLabel(entryPrice).split(' · ')[1] ?? 'MA mercado'}`
+                : `RSI mercado · ${entryPriceLabel(entryPrice).split(' · ')[1] ?? 'MA mercado'}`
             }
             accent={FIVE_M_COLOR}
           >

@@ -28,6 +28,7 @@ function buildSignalRow(state, report, eventType, extra = {}) {
     rules.order = {
       ok: eventType === 'entry',
       label: eventType === 'entry' ? 'Ordem executada' : 'Ordem não preencheu',
+      detail: extra.orderError ?? extra.details?.orderError ?? null,
     };
   }
   return {
@@ -62,6 +63,7 @@ function buildSignalRow(state, report, eventType, extra = {}) {
       rsiBuySignal: report.rsiBuySignal,
       rsiSellSignal: report.rsiSellSignal,
       rules,
+      orderError: extra.orderError ?? null,
       ...extra.details,
     },
   };

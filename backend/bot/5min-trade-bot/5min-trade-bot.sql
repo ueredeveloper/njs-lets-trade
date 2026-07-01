@@ -65,9 +65,9 @@ ALTER TABLE five_min_bot_state
 ALTER TABLE five_min_bot_state
   ADD COLUMN IF NOT EXISTS sell_scope TEXT NOT NULL DEFAULT 'bot_only';
 
--- Preço de entrada: {"mode":"market"} ou {"mode":"below","belowPct":1.2}
+-- Preço de entrada: {"mode":"market","belowPct":0,"maMode":"market","maBelowPct":0}
 ALTER TABLE five_min_bot_state
-  ADD COLUMN IF NOT EXISTS entry_price JSONB DEFAULT '{"mode":"market","belowPct":0}'::jsonb;
+  ADD COLUMN IF NOT EXISTS entry_price JSONB DEFAULT '{"mode":"market","belowPct":0,"maMode":"market","maBelowPct":0}'::jsonb;
 
 -- Caminhos de entrada (RSI / MA50 5m) e RSI de saída para entradas MA50 5m
 ALTER TABLE five_min_bot_state

@@ -26,7 +26,7 @@ const { computeActiveStops } = require('./stopLossEngine');
 const { normalizeRecoveryPattern, recoveryPatternLabel } = require('./recoveryPatternConfig');
 const { isActiveStopLoss, stopLossLabel } = require('./stopLossConfig');
 const { normalizeSellScope, sellScopeLabel } = require('./sellScopeConfig');
-const { normalizeEntryPrice, entryPriceLabel } = require('./entryPriceConfig');
+const { normalizeEntryPrice, entryPriceLabel, maLimitPriceFromMa } = require('./entryPriceConfig');
 const { normalizeEntryPaths, entryPathsLabel } = require('./entryPathsConfig');
 const { isNearMa50_5mForFastPoll, MA5M_FAST_MARGIN_PCT } = require('./ma5mEntryEngine');
 const { evaluateTickForBot } = require('./evaluateTickForBot');
@@ -168,6 +168,51 @@ async function binanceBuy(symbol, usdtAmount, { belowPct = 0 } = {}) {
   return { filledQty, quoteQty, avgPrice: quoteQty / filledQty };
 }
 
+const MA_LIMIT_WAIT_MS = 5000;
+
+async function binanceCancelOrder(symbol, orderId, log) {
+  try {
+    await binanceReq('DELETE', '/api/v3/order', { symbol, orderId });
+    log?.(`🚫 Ordem limit cancelada (id=${orderId})`);
+  } catch (err) {
+    log?.(`⚠️  Cancelar ordem ${orderId}: ${err.message}`);
+  }
+}
+
+/** Limit GTC no preço da MA50 5m — aguarda reteste até MA_LIMIT_WAIT_MS */
+async function binanceBuyLimitGtc(symbol, usdtAmount, limitPrice, log) {
+  const lp = Number(limitPrice);
+  if (!Number.isFinite(lp) || lp <= 0) throw new Error('Binance: preço limit MA inválido');
+
+  const { tickSize, stepSize, priceDecimals, qtyDecimals } = await binanceSymbolFilters(symbol);
+  const price = parseFloat(roundDown(lp, tickSize).toFixed(priceDecimals));
+  const rawQty = usdtAmount / price;
+  const quantity = parseFloat(roundDown(rawQty, stepSize).toFixed(qtyDecimals));
+  if (quantity <= 0) throw new Error('Binance: quantidade inválida para limit GTC');
+
+  const order = await binanceReq('POST', '/api/v3/order', {
+    symbol, side: 'BUY', type: 'LIMIT', timeInForce: 'GTC',
+    price: String(price), quantity: String(quantity),
+  });
+  await new Promise(r => setTimeout(r, MA_LIMIT_WAIT_MS));
+
+  const status = await binanceReq('GET', '/api/v3/order', { symbol, orderId: order.orderId });
+  let filledQty = parseFloat(status.executedQty || 0);
+  let quoteQty  = parseFloat(status.cummulativeQuoteQty || 0);
+
+  if (status.status !== 'FILLED' && filledQty <= 0) {
+    await binanceCancelOrder(symbol, order.orderId, log);
+    throw new Error(`Binance: limit GTC @ ${price} não preenchida em ${MA_LIMIT_WAIT_MS / 1000}s (reteste)`);
+  }
+  if (status.status !== 'FILLED' && status.status !== 'EXPIRED') {
+    await binanceCancelOrder(symbol, order.orderId, log);
+  }
+  if (filledQty <= 0) {
+    throw new Error(`Binance: limit GTC @ ${price} sem fill`);
+  }
+  return { filledQty, quoteQty, avgPrice: quoteQty / filledQty };
+}
+
 async function binanceGetTokenBalance(symbol) {
   const base    = symbol.endsWith('USDT') ? symbol.slice(0, -4) : symbol.slice(0, -3);
   const account = await binanceReq('GET', '/api/v3/account');
@@ -262,6 +307,45 @@ async function gateGetTokenBalance(pair) {
   return acc ? parseFloat(acc.available) : 0;
 }
 
+async function gateCancelOrder(orderId, pair, log) {
+  try {
+    await gateReq('DELETE', `/spot/orders/${orderId}`, { currency_pair: pair });
+    log?.(`🚫 Ordem limit cancelada (id=${orderId})`);
+  } catch (err) {
+    log?.(`⚠️  Cancelar ordem ${orderId}: ${err.message}`);
+  }
+}
+
+async function gateBuyLimitGtc(pair, usdtAmount, limitPrice, log) {
+  const lp = Number(limitPrice);
+  if (!Number.isFinite(lp) || lp <= 0) throw new Error('Gate.io: preço limit MA inválido');
+
+  const price = parseFloat(lp.toFixed(8));
+  const qty   = parseFloat((usdtAmount / price).toFixed(8));
+  if (qty <= 0) throw new Error('Gate.io: quantidade inválida para limit GTC');
+
+  const order = await gateReq('POST', '/spot/orders', {
+    currency_pair: pair, side: 'buy', type: 'limit',
+    price: String(price), amount: String(qty), time_in_force: 'gtc',
+  });
+  await new Promise(r => setTimeout(r, MA_LIMIT_WAIT_MS));
+
+  const filled = await gateReq('GET', `/spot/orders/${order.id}`, { currency_pair: pair });
+  const grossQty = parseFloat(filled.amount) - parseFloat(filled.left || 0);
+  const quoteQty = parseFloat(filled.filled_total || 0);
+  const avgPrice = parseFloat(filled.avg_deal_price || price);
+
+  if (grossQty <= 0) {
+    await gateCancelOrder(order.id, pair, log);
+    throw new Error(`Gate.io: limit GTC @ ${price} não preenchida em ${MA_LIMIT_WAIT_MS / 1000}s (reteste)`);
+  }
+  if (filled.status === 'open') {
+    await gateCancelOrder(order.id, pair, log);
+  }
+  const netQty = parseFloat((grossQty * (1 - GATE_FEE_RATE)).toFixed(8));
+  return { filledQty: netQty, quoteQty: quoteQty || grossQty * avgPrice, avgPrice };
+}
+
 async function gateBuy(pair, usdtAmount, { belowPct = 0 } = {}) {
   const ticker     = await fetch(`${GATE_BASE}/spot/tickers?currency_pair=${pair}`).then(r => r.json());
   const price      = parseFloat(ticker[0]?.last);
@@ -320,6 +404,7 @@ function buildAdapter(exchange, symbol) {
       fetchCandles: (lim, iv)  => fetchGateCandles(pair, lim, iv),
       fetchLastPrice: ()       => fetchGateCurrentPrice(pair),
       marketBuy:    (usdt, opts) => gateBuy(pair, usdt, opts),
+      buyLimitGtc:  (usdt, limitPrice, log) => gateBuyLimitGtc(pair, usdt, limitPrice, log),
       marketSell:   (qty, log) => gateMarketSell(pair, qty, log),
       fetch24hVol:  ()         => gate24hVolume(pair),
       getBalance:   ()         => gateGetTokenBalance(pair),
@@ -331,6 +416,7 @@ function buildAdapter(exchange, symbol) {
     fetchCandles: (lim, iv)  => fetchBinanceCandles(symbol, lim, iv),
     fetchLastPrice: ()       => fetchBinanceCurrentPrice(symbol),
     marketBuy:    (usdt, opts) => binanceBuy(symbol, usdt, opts),
+    buyLimitGtc:  (usdt, limitPrice, log) => binanceBuyLimitGtc(symbol, usdt, limitPrice, log),
     marketSell:   (qty, log) => binanceMarketSell(symbol, qty, log),
     fetch24hVol:  ()         => binance24hVolume(symbol),
     getBalance:   ()         => binanceGetTokenBalance(symbol),
@@ -453,21 +539,37 @@ async function executeSell(rowId, adapter, log, state, rsi, reason = 'rsi') {
   return true;
 }
 
-async function executeBuy(rowId, adapter, log, state, rsi, capitalPerEntry, isDca, rsiBuy, entryPath = 'rsi') {
+async function executeBuy(rowId, adapter, log, state, rsi, capitalPerEntry, isDca, rsiBuy, entryPath = 'rsi', maPrice = null) {
   const { symbol } = state;
   const usdtAmount = parseFloat(capitalPerEntry);
   const entryCfg   = normalizeEntryPrice(state.entry_price);
-  const belowPct   = entryCfg.mode === 'below' ? entryCfg.belowPct : 0;
-  const entryLabel = belowPct > 0 ? `limit −${belowPct}%` : 'mercado';
+  const pathLbl    = entryPath === 'ma50_5m' ? 'MA50 5m' : `RSI<${rsiBuy}`;
 
-  const pathLbl = entryPath === 'ma50_5m' ? 'MA50 5m' : `RSI<${rsiBuy}`;
-
+  let entryLabel;
   let result;
+
   try {
-    result = await adapter.marketBuy(usdtAmount, { belowPct });
+    if (entryPath === 'ma50_5m') {
+      if (entryCfg.maMode === 'ma_limit') {
+        const limitPx = maLimitPriceFromMa(maPrice, entryCfg);
+        if (limitPx == null) throw new Error('MA50 5m indisponível para limit GTC');
+        entryLabel = entryCfg.maBelowPct > 0
+          ? `limit GTC MA−${entryCfg.maBelowPct}% @ ${limitPx.toFixed(6)}`
+          : `limit GTC @ MA ${limitPx.toFixed(6)}`;
+        log(`ℹ️  MA50 5m: ${entryLabel} (aguarda ${MA_LIMIT_WAIT_MS / 1000}s)`);
+        result = await adapter.buyLimitGtc(usdtAmount, limitPx, log);
+      } else {
+        entryLabel = 'mercado';
+        result = await adapter.marketBuy(usdtAmount, { belowPct: 0 });
+      }
+    } else {
+      const belowPct = entryCfg.mode === 'below' ? entryCfg.belowPct : 0;
+      entryLabel = belowPct > 0 ? `limit −${belowPct}%` : 'mercado';
+      result = await adapter.marketBuy(usdtAmount, { belowPct });
+    }
   } catch (err) {
     log(`❌ Erro na compra (${pathLbl}): ${err.message}`);
-    return null;
+    return { error: err.message, entryLabel };
   }
 
   const { filledQty, quoteQty, avgPrice } = result;
@@ -561,8 +663,9 @@ async function tick(rowId, adapter, log, prevPoll = null, lastStop = null, setSt
   if (phase === 'WATCHING') {
     if (willExecuteEntry) {
       const path = report.pathSignal?.path ?? 'rsi';
-      const buyResult = await executeBuy(rowId, adapter, log, state, rsi, capitalPerEntry, false, rsiBuy, path);
-      if (buyResult) {
+      const maPrice = report.ma5mTrigger?.ma ?? null;
+      const buyResult = await executeBuy(rowId, adapter, log, state, rsi, capitalPerEntry, false, rsiBuy, path, maPrice);
+      if (buyResult && !buyResult.error) {
         clearSignalDedupe(symbol);
         await emitSignal(sbReq, { ...state, entry_path: path }, report, 'entry', log, {
           entryPath: path,
@@ -578,6 +681,7 @@ async function tick(rowId, adapter, log, prevPoll = null, lastStop = null, setSt
         await emitSignal(sbReq, state, report, 'possible_entry', log, {
           entryPath: path,
           motivation: `Regras OK mas ordem não preencheu · ${report.reason}`,
+          orderError: buyResult?.error ?? 'ordem não preencheu',
         });
       }
     }
@@ -625,8 +729,9 @@ async function tick(rowId, adapter, log, prevPoll = null, lastStop = null, setSt
 
     if (willExecuteEntry) {
       const path = report.pathSignal?.path ?? 'rsi';
-      const buyResult = await executeBuy(rowId, adapter, log, state, rsi, capitalPerEntry, true, rsiBuy, path);
-      if (buyResult) {
+      const maPrice = report.ma5mTrigger?.ma ?? null;
+      const buyResult = await executeBuy(rowId, adapter, log, state, rsi, capitalPerEntry, true, rsiBuy, path, maPrice);
+      if (buyResult && !buyResult.error) {
         await emitSignal(sbReq, { ...state, entry_path: path }, report, 'entry', log, {
           entryPath: path,
           motivation: `DCA executada · ${report.reason}`,
@@ -642,6 +747,7 @@ async function tick(rowId, adapter, log, prevPoll = null, lastStop = null, setSt
         await emitSignal(sbReq, state, report, 'possible_entry', log, {
           entryPath: path,
           motivation: `DCA regras OK mas ordem não preencheu · ${report.reason}`,
+          orderError: buyResult?.error ?? 'ordem não preencheu',
           details: { dca: true },
         });
       }
