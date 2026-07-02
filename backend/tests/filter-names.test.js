@@ -3,6 +3,7 @@
 const {
   buildRsiFilterName,
   buildMaFilterName,
+  buildMaCrossFilterName,
   parseCompareToken,
 } = require('../utils/filterNames');
 
@@ -45,5 +46,15 @@ describe('filterNames', () => {
     expect(parseCompareToken('b')).toBe('below');
     expect(parseCompareToken('belw')).toBe('below');
     expect(parseCompareToken('abaix')).toBe('below');
+  });
+
+  test('MA cross nome cruzamento', () => {
+    expect(buildMaCrossFilterName('15m', 9, '15m', 21, '15m', 'cross_up', { maxAgeMin: '5', tolerancePct: 0.5 }))
+      .toBe('15m|macross|9|15m|21|15m|xup|age|5|tol|0.5');
+  });
+
+  test('MA cross nome proximidade', () => {
+    expect(buildMaCrossFilterName('1m', 9, '1m', 21, '1m', 'near_up', { proximityPct: 0.5 }))
+      .toBe('1m|macross|9|1m|21|1m|nearup|prox|0.5');
   });
 });

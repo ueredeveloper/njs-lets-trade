@@ -35,7 +35,7 @@ const PRESET_BODIES = {
 };
 
 function isSwingStrategy(id) {
-  return STRATEGY_IDS.includes(normalizeStrategyId(id));
+  return id != null && STRATEGY_IDS.includes(id);
 }
 
 function normalizeStrategyId(id) {

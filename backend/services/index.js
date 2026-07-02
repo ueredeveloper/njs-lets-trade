@@ -12,6 +12,7 @@ const fetchStablecoins     = require('./fetchStablecoins')
 const fetchIndicatorSearch = require('./fetchIndicatorSearch')
 const fetchMaFilter        = require('./fetchMaFilter')
 const fetchMaTimeAboveFilter = require('./fetchMaTimeAboveFilter')
+const fetchMaCrossoverFilter = require('./fetchMaCrossoverFilter')
 const fetchRsiOversoldRecovery = require('./fetchRsiOversoldRecovery')
 const fetchReloadCandles       = require('./fetchReloadCandles')
 const fetchGateCurrencies      = require('./fetchGateCurrencies')
@@ -26,7 +27,7 @@ const multitradeService        = require('./multitradeService')
 module.exports = {
     fetchCandles, fetchIchimokuCloud, fetchAllCurrencies,
     fetchSMA, fetchRSI, fetchVWAP, fetch24HsVolume, fetchMarketCapFilter, fetchStablecoins,
-    fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchRsiOversoldRecovery, fetchReloadCandles,
+    fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchRsiOversoldRecovery, fetchReloadCandles,
     fetchGateCurrencies, fetchGatePrefetch, fetchBinanceTrades, fetchGateTrades, fetchActiveTrades,
     stgBotStatus, multitradeService }
 

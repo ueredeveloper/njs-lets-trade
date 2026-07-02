@@ -1,7 +1,8 @@
 import { useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import { useCurrency } from '../contexts/CurrencyContext';
 import SearchInput from './SearchInput';
-import { fetchCandlesticksAndCloud, fetchGateCurrencies, gatePreloadCandles, fetchBinanceTrades, fetchGateTrades } from '../services/api';
+import { fetchCandlesticksAndCloud, fetchGateCurrencies, gatePreloadCandles, fetchBinanceTrades, fetchGateTrades, fetchMaCrossoverFilter } from '../services/api';
+import { parseMaCrossFilterName } from '../utils/filterNames';
 import { useI18n } from '../i18n';
 import TradeConfigModal from './TradeConfigModal';
 import MultitradeModal from './MultitradeModal';
@@ -74,6 +75,32 @@ function resolveFavorites(favSet, binanceList, gateAll) {
   return result;
 }
 
+function macrossLiveAgeMin(meta, nowMs = Date.now(), scannedAt) {
+  if (!meta) return null;
+  if (meta.crossTime != null) return Math.max(0, (nowMs - Number(meta.crossTime)) / 60_000);
+  if (meta.ageMin != null && scannedAt) {
+    return meta.ageMin + Math.max(0, (nowMs - Number(scannedAt)) / 60_000);
+  }
+  return meta.ageMin ?? null;
+}
+
+function formatMacrossBadge(meta, t, nowMs = Date.now(), scannedAt) {
+  if (!meta) return null;
+  if (meta.kind === 'approaching') {
+    const arrow = meta.direction === 'down' ? '↓' : '↑';
+    const gap = meta.gapPct != null ? `${meta.gapPct}%` : '—';
+    return t('table.macross_near', arrow, gap);
+  }
+  let ageMin = macrossLiveAgeMin(meta, nowMs, scannedAt);
+  if (ageMin != null) {
+    const arrow = meta.direction === 'down' ? '↓' : '↑';
+    const rounded = Math.round(ageMin * 10) / 10;
+    const age = rounded < 1 ? `${Math.round(rounded * 60)}s` : `${rounded}m`;
+    return t('table.macross_crossed', arrow, age);
+  }
+  return null;
+}
+
 export default function CurrencyTable({ activeFilter, showFavorites, setShowFavorites, onSelectCurrency }) {
   const {
     currencies, findFilter, selectedQuote, selectedChart, setSelectedChart, setChartZoom, setChartTradeMarkers,
@@ -84,7 +111,7 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
     activeTrades, refreshActiveTrades, dismissActiveTrade,
     multitradeFavorites, removeMultitradeEntry, saveMultitradeSymbol,
     fiveMTradeFavorites, saveFiveMTradeEntry, removeFiveMTradeEntry,
-    filterVisibleCurrencies, isVisibleSymbol,
+    filterVisibleCurrencies, isVisibleSymbol, addFilter,
   } = useCurrency();
   const { t, formatPrice } = useI18n();
   const [loadingSymbol, setLoadingSymbol]       = useState(null);
@@ -98,6 +125,19 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
   const [gateLoading, setGateLoading]     = useState(false);
   const [gateAll, setGateAll]             = useState(null); // todas as moedas Gate (para favoritos)
   const gateCacheRef                      = useRef(null);
+  const [macrossLive, setMacrossLive]     = useState(false);
+  const [macrossRefreshing, setMacrossRefreshing] = useState(false);
+  const [macrossTick, setMacrossTick]     = useState(0);
+
+  const activeMacrossFilter = useMemo(() => {
+    if (!activeFilter || showFavorites) return null;
+    const f = findFilter(activeFilter);
+    if (!f || !parseMaCrossFilterName(f.name)) return null;
+    return f;
+  }, [activeFilter, showFavorites, findFilter]);
+
+  const macrossMeta = activeMacrossFilter?.meta ?? null;
+  const macrossScannedAt = activeMacrossFilter?.scannedAt ?? null;
 
   const cycleSort = useCallback(() => {
     setSortVolume((v) => v === 'desc' ? 'asc' : 'desc');
@@ -155,6 +195,17 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
     const byInterval = showFavorites === 'trade' || showFavorites === 'active';
 
     list = list.slice().sort((a, b) => {
+      if (activeMacrossFilter?.meta) {
+        const ma = activeMacrossFilter.meta[a.symbol];
+        const mb = activeMacrossFilter.meta[b.symbol];
+        if (ma && mb) {
+          if (ma.kind !== mb.kind) return ma.kind === 'crossed' ? -1 : 1;
+          const aa = macrossLiveAgeMin(ma, undefined, macrossScannedAt);
+          const ab = macrossLiveAgeMin(mb, undefined, macrossScannedAt);
+          if (aa != null && ab != null) return aa - ab;
+          if (ma.gapPct != null && mb.gapPct != null) return ma.gapPct - mb.gapPct;
+        }
+      }
       if (byInterval) {
         const ia = INTERVAL_ORDER.indexOf(tradeConfigs.get(a.symbol)?.interval ?? '');
         const ib = INTERVAL_ORDER.indexOf(tradeConfigs.get(b.symbol)?.interval ?? '');
@@ -168,7 +219,64 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
     });
 
     return list;
-  }, [currencies, activeFilter, selectedQuote, findFilter, search, showFavorites, gateFavorites, binanceFavorites, tradeFavorites, tradeConfigs, activeTrades, multitradeFavorites, fiveMTradeFavorites, sortVolume, gateAll, filterVisibleCurrencies, isVisibleSymbol]);
+  }, [currencies, activeFilter, selectedQuote, findFilter, search, showFavorites, gateFavorites, binanceFavorites, tradeFavorites, tradeConfigs, activeTrades, multitradeFavorites, fiveMTradeFavorites, sortVolume, gateAll, filterVisibleCurrencies, isVisibleSymbol, activeMacrossFilter, macrossScannedAt, macrossTick]);
+
+  // Atualização em tempo real de filtros macross (cruzou há N min / prestes a cruzar)
+  useEffect(() => {
+    if (!activeMacrossFilter) {
+      setMacrossLive(false);
+      return;
+    }
+
+    const params = parseMaCrossFilterName(activeMacrossFilter.name);
+    if (!params) return;
+
+    let cancelled = false;
+    setMacrossLive(true);
+
+    async function refresh() {
+      setMacrossRefreshing(true);
+      try {
+        const result = await fetchMaCrossoverFilter({
+          period1: String(params.period1),
+          interval1: params.interval1,
+          period2: String(params.period2),
+          interval2: params.interval2,
+          mode: params.mode,
+          maxAgeMin: params.maxAgeMin,
+          tolerancePct: String(params.tolerancePct),
+          proximityPct: String(params.proximityPct),
+          live: true,
+        });
+        if (!cancelled) {
+          addFilter({
+            name: result.name,
+            list: result.list,
+            meta: result.details,
+            scannedAt: result.scannedAt,
+          });
+        }
+      } catch (err) {
+        console.warn('[macross-live]', err.message);
+      } finally {
+        if (!cancelled) setMacrossRefreshing(false);
+      }
+    }
+
+    refresh();
+    const pollMs = params.mode.startsWith('near') || ['5', '15'].includes(params.maxAgeMin)
+      ? 30_000
+      : 60_000;
+    const id = setInterval(refresh, pollMs);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [activeMacrossFilter?.name, addFilter]);
+
+  // Atualiza idade exibida do badge entre polls (crossTime → agora)
+  useEffect(() => {
+    if (!activeMacrossFilter) return undefined;
+    const id = setInterval(() => setMacrossTick((n) => n + 1), 30_000);
+    return () => clearInterval(id);
+  }, [activeMacrossFilter?.name]);
 
   // Busca Gate.io sempre que o usuário digita (≥2 chars), excluindo moedas já na lista Binance
   useEffect(() => {
@@ -294,7 +402,14 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
 
       {/* Cabeçalho contador + filtros de favoritos */}
       <div className="flex items-center justify-between px-3 py-1 border-b border-p2 shrink-0">
-        <span className="text-xs text-p5 opacity-50 uppercase tracking-wider">Moedas</span>
+        <span className="text-xs text-p5 opacity-50 uppercase tracking-wider">
+          Moedas
+          {macrossLive && (
+            <span className="ml-1.5 normal-case tracking-normal text-[10px] text-emerald-400/90">
+              {macrossRefreshing ? '⟳' : '●'} live
+            </span>
+          )}
+        </span>
         <div className="flex items-center gap-2">
           <span className="text-xs font-mono text-p4">{rows.length}</span>
 
@@ -544,6 +659,11 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
                           {' · $'}{fiveMEntry.capital}/entrada
                           {' · '}{fiveMEntry.rsiBuy ?? 30}&lt;RSI&gt;{fiveMEntry.rsiSell ?? 70}
                           {fiveMEntry.phase === 'BOUGHT' ? ` · ${fiveMEntry.buyCount || 1}×` : ''}
+                        </span>
+                      )}
+                      {macrossMeta?.[item.symbol] && (
+                        <span className="text-[9px] font-bold text-emerald-400/90">
+                          {formatMacrossBadge(macrossMeta[item.symbol], t, Date.now(), macrossScannedAt)}
                         </span>
                       )}
                     </div>

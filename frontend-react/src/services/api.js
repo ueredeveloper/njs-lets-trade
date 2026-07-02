@@ -244,7 +244,7 @@ export async function fetchCandlesticksAndCloud(symbol, interval, source = null,
   }
   const candles = candlesRaw;
 
-  const [ichimokuCloud, movingAverage, ma50, rsi] = await Promise.all([
+  const [ichimokuCloud, movingAverage, ma50, ma9, ma21, rsi] = await Promise.all([
     fetch('/services/ichimoku-cloud', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -263,6 +263,18 @@ export async function fetchCandlesticksAndCloud(symbol, interval, source = null,
       body: JSON.stringify(candles.slice(-300)),
     }).then((r) => r.json()),
 
+    fetch('/services/sma?period=9', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(candles.slice(-300)),
+    }).then((r) => r.json()),
+
+    fetch('/services/sma?period=21', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(candles.slice(-300)),
+    }).then((r) => r.json()),
+
     fetch('/services/rsi', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -270,7 +282,7 @@ export async function fetchCandlesticksAndCloud(symbol, interval, source = null,
     }).then((r) => r.json()),
   ]);
 
-  return { symbol, interval, source: source ?? null, price: candles.at(-1)?.close, candlesticks: candles, ichimokuCloud, movingAverage, ma50, rsi };
+  return { symbol, interval, source: source ?? null, price: candles.at(-1)?.close, candlesticks: candles, ichimokuCloud, movingAverage, ma50, ma9, ma21, rsi };
 }
 
 /**
@@ -314,6 +326,37 @@ export async function fetchMaTimeAboveFilter({ interval, period = '50', minPct =
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error ?? `ma-time-above-filter falhou: HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+/** Moedas com cruzamento ou proximidade de cruzamento entre duas MAs. */
+export async function fetchMaCrossoverFilter({
+  period1 = '9',
+  interval1 = '15m',
+  period2 = '21',
+  interval2 = '15m',
+  mode = 'cross_up',
+  maxAgeMin = 'last',
+  tolerancePct = '0',
+  proximityPct = '1',
+  live = true,
+}) {
+  const params = new URLSearchParams({
+    period1: String(period1),
+    interval1,
+    period2: String(period2),
+    interval2,
+    mode,
+    maxAgeMin: String(maxAgeMin),
+    tolerancePct: String(tolerancePct),
+    proximityPct: String(proximityPct),
+  });
+  if (live) params.set('live', '1');
+  const res = await fetch(`/services/ma-crossover-filter?${params}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `ma-crossover-filter falhou: HTTP ${res.status}`);
   }
   return res.json();
 }

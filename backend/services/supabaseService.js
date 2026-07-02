@@ -19,6 +19,7 @@ const { buildExitRsiReport } = require('../bot/amap/suggestExitRsi');
 const { buildEntryRsiReport } = require('../bot/amap/suggestEntryRsi');
 const { buildEntryMaReport } = require('../bot/amap/suggestEntryMa');
 const { runAmapBacktest } = require('../bot/amap/amapBacktest');
+const { runMaCrossBacktest } = require('../bot/ma-cross/maCrossBacktest');
 const { resolveConfigBody: amapResolveConfigBody, normalizeStrategyId: amapNormStrategyId } = require('../bot/amap/strategyPresets');
 const {
   isSwingStrategy, resolveConfigBody: swingResolveConfigBody, buildTradeConfig: buildSwingTradeConfig,
@@ -280,31 +281,6 @@ function multitradeToEntry(r) {
   const sid = normStrategyId(r.strategy_id);
   const configBody = resolveConfigBody(r);
 
-  if (isSwingStrategy(sid)) {
-    const tc = buildSwingTradeConfig(configBody);
-    const form = swingToFormState(configBody);
-    return {
-      id:           r.id,
-      symbol:       r.symbol,
-      exchange:     r.exchange,
-      strategyId:   sid,
-      enabled:      r.enabled !== false,
-      capital:      Number(r.capital),
-      entryRsi:     form.entryRsi,
-      exitRsi:      form.exitRsi,
-      entryMaFilter: form.entryMaFilter,
-      entryMa:      form.entryMa,
-      stopLoss:     form.stopLoss,
-      execution:    form.execution,
-      polling:      form.polling,
-      volume:       form.volume,
-      tradeConfig:  tc,
-      kind:         form.kind,
-      createdAt:    r.created_at,
-      updatedAt:    r.updated_at,
-    };
-  }
-
   if (isMaCrossStrategy(sid)) {
     const tc = buildMaCrossTradeConfig(configBody);
     const form = maCrossToFormState(configBody);
@@ -323,6 +299,31 @@ function multitradeToEntry(r) {
       execution:    form.execution,
       polling:      form.polling,
       adaptiveOpts: form.adaptiveOpts,
+      volume:       form.volume,
+      tradeConfig:  tc,
+      kind:         form.kind,
+      createdAt:    r.created_at,
+      updatedAt:    r.updated_at,
+    };
+  }
+
+  if (isSwingStrategy(sid)) {
+    const tc = buildSwingTradeConfig(configBody);
+    const form = swingToFormState(configBody);
+    return {
+      id:           r.id,
+      symbol:       r.symbol,
+      exchange:     r.exchange,
+      strategyId:   sid,
+      enabled:      r.enabled !== false,
+      capital:      Number(r.capital),
+      entryRsi:     form.entryRsi,
+      exitRsi:      form.exitRsi,
+      entryMaFilter: form.entryMaFilter,
+      entryMa:      form.entryMa,
+      stopLoss:     form.stopLoss,
+      execution:    form.execution,
+      polling:      form.polling,
       volume:       form.volume,
       tradeConfig:  tc,
       kind:         form.kind,
@@ -370,6 +371,30 @@ function bodyToMultitradeRow(userId, body) {
   const sym = body.symbol?.toUpperCase();
   if (!sym) return null;
   const sid = resolveStrategyId(body);
+  const maCrossSave = isMaCrossStrategy(sid) || body.kind === 'ma_cross';
+
+  if (maCrossSave) {
+    const strategy_id = isMaCrossStrategy(sid) ? sid : 'ma-cross';
+    const normalized = normalizeMaCrossConfig(body);
+    const trade_config = buildMaCrossTradeConfig(body);
+    const maConds = (normalized.maFilters ?? []).filter(f => f.enabled && f.mode !== 'off');
+    return {
+      user_id:         userId,
+      symbol:          sym,
+      exchange:        body.exchange ?? 'binance',
+      strategy_id,
+      enabled:         body.enabled !== false,
+      capital:         Number(body.capital ?? 100),
+      entry_rsi:       { interval: normalized.entry.ma1.interval, period: 14, operator: '<', value: 30 },
+      exit_rsi:        { interval: normalized.exit.maCross.ma1.interval, period: 14, operator: '>', value: 70 },
+      ma_conditions:   maConds.map(f => ({
+        mode: f.mode, period: f.period, interval: f.interval, fixedDipPct: f.fixedDipPct,
+      })),
+      rule_3_candles:  false,
+      rule_4_candles:  false,
+      trade_config,
+    };
+  }
 
   if (isSwingStrategy(sid)) {
     const normalized = normalizeSwingConfig(body);
@@ -386,28 +411,6 @@ function bodyToMultitradeRow(userId, body) {
       ma_conditions:   normalized.entryMaFilter?.enabled
         ? [{ mode: normalized.entryMaFilter.mode, period: normalized.entryMaFilter.period, interval: normalized.entryMaFilter.interval }]
         : [],
-      rule_3_candles:  false,
-      rule_4_candles:  false,
-      trade_config,
-    };
-  }
-
-  if (isMaCrossStrategy(sid)) {
-    const normalized = normalizeMaCrossConfig(body);
-    const trade_config = buildMaCrossTradeConfig(body);
-    const maConds = (normalized.maFilters ?? []).filter(f => f.enabled && f.mode !== 'off');
-    return {
-      user_id:         userId,
-      symbol:          sym,
-      exchange:        body.exchange ?? 'binance',
-      strategy_id:     sid,
-      enabled:         body.enabled !== false,
-      capital:         Number(body.capital ?? 100),
-      entry_rsi:       { interval: normalized.entry.ma1.interval, period: 14, operator: '<', value: 30 },
-      exit_rsi:        { interval: normalized.exit.maCross.ma1.interval, period: 14, operator: '>', value: 70 },
-      ma_conditions:   maConds.map(f => ({
-        mode: f.mode, period: f.period, interval: f.interval, fixedDipPct: f.fixedDipPct,
-      })),
       rule_3_candles:  false,
       rule_4_candles:  false,
       trade_config,
@@ -1526,7 +1529,9 @@ router.get('/multitrade-backtest', getUserId, async (req, res) => {
   const capital  = Number(req.query.capital ?? entry.capital ?? 40);
 
   try {
-    const result = await runAmapBacktest({ symbol: sym, config, exchange, capital });
+    const result = isMaCrossStrategy(entry.strategyId)
+      ? await runMaCrossBacktest({ symbol: sym, config, exchange, capital })
+      : await runAmapBacktest({ symbol: sym, config, exchange, capital });
     if (result.error) return res.status(502).json(result);
     res.json(result);
   } catch (err) {

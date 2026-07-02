@@ -22,6 +22,8 @@ const { toGateSymbol } = require('../../utils/toGateSymbol');
 const { gateMarketSell: gateMarketSellCore } = require('../gate/gateMarketSell');
 const { sendWhatsApp } = require('../whatsapp');
 const { fmtVolumeUsdt } = require('../volume24h');
+const registry = require('../multitradeRegistry');
+const { startMultitradeWatch, configFingerprint } = require('../multitradeWatch');
 const { resolveStrategy } = require('./tradeConfigSchema');
 const { STRATEGY_IDS, isMaCrossStrategy } = require('./strategyPresets');
 const {
@@ -36,7 +38,8 @@ const BOT_DIR = path.join(__dirname, '../../data/bot');
 fs.mkdirSync(BOT_DIR, { recursive: true });
 
 const G = '\x1b[32m', R = '\x1b[31m', Y = '\x1b[33m', X = '\x1b[0m';
-const COLORS = ['\x1b[94m','\x1b[93m','\x1b[95m','\x1b[96m','\x1b[92m','\x1b[91m','\x1b[33m','\x1b[35m','\x1b[36m','\x1b[34m'];
+// Verde/vermelho reservados para compra/venda — não usar em tags de símbolo
+const COLORS = ['\x1b[94m','\x1b[93m','\x1b[95m','\x1b[96m','\x1b[33m','\x1b[35m','\x1b[36m','\x1b[34m','\x1b[97m','\x1b[90m'];
 
 function nowFmt() {
   return new Date().toLocaleTimeString('pt-BR', {
@@ -289,6 +292,57 @@ async function fetchCandleMap(adapter, specs) {
   return Object.fromEntries(entries);
 }
 
+async function executeSell({ rowId, adapter, strategy, log, state, exitResult, reasonLabel }) {
+  const { config } = strategy;
+  const { symbol, strategy_id: strategyId, capital } = state;
+  const buyPrice = parseFloat(state.buy_price);
+
+  const reason = reasonLabel ?? (exitResult.reason === 'STOP_LOSS'
+    ? `stop-loss ${exitResult.dropPct?.toFixed(2)}%`
+    : (exitResult.exitDesc ?? exitResult.reason ?? crossDesc(config.exit?.maCross ?? config.exit)));
+
+  log(`${R}📈 ${reason} — vendendo ${state.buy_qty} ${symbol}${X}`);
+
+  const sellOpts = adapter.name === 'Gate.io' ? { aggressive: true } : {};
+  let result;
+  try {
+    result = await adapter.marketSell(parseFloat(state.buy_qty), log, sellOpts);
+  } catch (err) {
+    log(`❌ Erro na venda: ${err.message}`);
+    throw err;
+  }
+  const { soldQty, usdtOut, exitPrice } = result;
+  const capitalBefore = parseFloat(capital);
+  const pnlUsdt       = usdtOut - parseFloat(state.buy_usdt);
+  const pnlPct        = (pnlUsdt / capitalBefore) * 100;
+  const capitalAfter  = capitalBefore + pnlUsdt;
+  const pnlSign       = pnlUsdt >= 0 ? '+' : '';
+
+  await insertTrade({
+    symbol, exchange: state.exchange, strategy_id: strategyId,
+    entry_time: state.buy_time, exit_time: new Date().toISOString(),
+    entry_price: buyPrice, exit_price: exitPrice,
+    qty: soldQty, usdt_in: parseFloat(state.buy_usdt), usdt_out: usdtOut,
+    pnl_usdt: pnlUsdt, pnl_pct: parseFloat(pnlPct.toFixed(2)),
+    capital_before: capitalBefore, capital_after: capitalAfter,
+    rsi_entry: parseFloat(state.rsi_entry ?? 0), rsi_exit: exitResult?.ma1 ?? 0,
+    exit_reason: exitResult?.reason ?? reasonLabel ?? 'PANEL_REMOVED',
+  });
+
+  await saveState(rowId, {
+    capital: capitalAfter, phase: 'WATCHING',
+    buy_price: null, buy_qty: null, buy_usdt: null, buy_time: null, rsi_entry: null,
+  });
+
+  log(`${'─'.repeat(60)}`);
+  log(`${R}🔴 VENDA EXECUTADA${X}`);
+  log(`   PnL: ${pnlSign}${pnlUsdt.toFixed(4)} USDT (${pnlSign}${pnlPct.toFixed(2)}%)`);
+  log(`   Capital: ${capitalBefore.toFixed(4)} → ${capitalAfter.toFixed(4)} USDT`);
+  log(`${'─'.repeat(60)}`);
+  sendWhatsApp(`🔴 MA-CROSS VENDA [${strategyId}] ${symbol}\nPnL: ${pnlSign}${pnlUsdt.toFixed(4)} USDT (${pnlSign}${pnlPct.toFixed(2)}%)`);
+  return { phase: 'WATCHING' };
+}
+
 // ── Tick ──────────────────────────────────────────────────────────────────────
 async function tick(rowId, adapter, strategy, log, session) {
   const { config } = strategy;
@@ -359,50 +413,13 @@ async function tick(rowId, adapter, strategy, log, session) {
     const exitResult = evaluateExit(config, cMap, buyPrice);
     if (!exitResult.exit) return { phase };
 
-    const reason = exitResult.reason === 'STOP_LOSS'
-      ? `stop-loss ${exitResult.dropPct?.toFixed(2)}%`
-      : (exitResult.exitDesc ?? exitResult.reason ?? crossDesc(config.exit?.maCross ?? config.exit));
-
-    log(`${R}📈 ${reason} — vendendo ${state.buy_qty} ${symbol}${X}`);
-
-    let result;
     try {
-      const sellOpts = adapter.name === 'Gate.io' ? { aggressive: true } : {};
-      result = await adapter.marketSell(parseFloat(state.buy_qty), log, sellOpts);
-    } catch (err) {
-      log(`❌ Erro na venda: ${err.message}`);
+      await executeSell({
+        rowId, adapter, strategy, log, state, exitResult,
+      });
+    } catch {
       return { phase };
     }
-
-    const { soldQty, usdtOut, exitPrice } = result;
-    const capitalBefore = parseFloat(capital);
-    const pnlUsdt       = usdtOut - parseFloat(state.buy_usdt);
-    const pnlPct        = (pnlUsdt / capitalBefore) * 100;
-    const capitalAfter  = capitalBefore + pnlUsdt;
-    const pnlSign       = pnlUsdt >= 0 ? '+' : '';
-
-    await insertTrade({
-      symbol, exchange: state.exchange, strategy_id: strategyId,
-      entry_time: state.buy_time, exit_time: new Date().toISOString(),
-      entry_price: buyPrice, exit_price: exitPrice,
-      qty: soldQty, usdt_in: parseFloat(state.buy_usdt), usdt_out: usdtOut,
-      pnl_usdt: pnlUsdt, pnl_pct: parseFloat(pnlPct.toFixed(2)),
-      capital_before: capitalBefore, capital_after: capitalAfter,
-      rsi_entry: parseFloat(state.rsi_entry ?? 0), rsi_exit: exitResult.ma1 ?? 0,
-      exit_reason: exitResult.reason,
-    });
-
-    await saveState(rowId, {
-      capital: capitalAfter, phase: 'WATCHING',
-      buy_price: null, buy_qty: null, buy_usdt: null, buy_time: null, rsi_entry: null,
-    });
-
-    log(`${'─'.repeat(60)}`);
-    log(`${R}🔴 VENDA EXECUTADA${X}`);
-    log(`   PnL: ${pnlSign}${pnlUsdt.toFixed(4)} USDT (${pnlSign}${pnlPct.toFixed(2)}%)`);
-    log(`   Capital: ${capitalBefore.toFixed(4)} → ${capitalAfter.toFixed(4)} USDT`);
-    log(`${'─'.repeat(60)}`);
-    sendWhatsApp(`🔴 MA-CROSS VENDA [${strategyId}] ${symbol}\nPnL: ${pnlSign}${pnlUsdt.toFixed(4)} USDT (${pnlSign}${pnlPct.toFixed(2)}%)`);
     return { phase: 'WATCHING' };
   }
 
@@ -411,7 +428,9 @@ async function tick(rowId, adapter, strategy, log, session) {
 
 // ── startSymbol ───────────────────────────────────────────────────────────────
 async function startSymbol(row, color) {
-  const strategy = resolveStrategy(row);
+  if (registry.has(row.id)) return;
+
+  let strategy = resolveStrategy(row);
   if (!strategy) {
     console.error(`❌ ${row.symbol} [${row.strategy_id}]: sem trade_config MA Cross válido`);
     return;
@@ -419,6 +438,54 @@ async function startSymbol(row, color) {
 
   const adapter = buildAdapter(row.exchange ?? 'binance', row.symbol);
   const log     = makeLogger(row.symbol, row.strategy_id, color);
+
+  const ctx = {
+    rowId: row.id,
+    symbol: row.symbol,
+    strategyId: row.strategy_id,
+    key: registry.sessionKey(row.symbol, row.strategy_id),
+    adapter,
+    log,
+    strategy,
+    stopped: false,
+    timer: null,
+    configFingerprint: configFingerprint(row),
+  };
+
+  let lastResult = { phase: row.phase };
+  let errCount   = 0;
+  const session  = { volCache: null };
+  let volIv;
+
+  const stop = async ({ reason } = {}) => {
+    if (ctx.stopped) return;
+    ctx.stopped = true;
+    if (ctx.timer) clearTimeout(ctx.timer);
+    if (volIv) clearInterval(volIv);
+    registry.unregister(ctx.rowId);
+    ctx.log(`🛑 Monitoramento encerrado (posição na corretora não é alterada)${reason ? ` — ${reason}` : ''}`);
+  };
+
+  const updateFromRow = (newRow) => {
+    const next = resolveStrategy(newRow);
+    if (!next) {
+      ctx.log(`⚠️  trade_config inválido após sync — mantendo config anterior`);
+      return;
+    }
+    ctx.strategy = next;
+    ctx.log(`🔄 Config atualizada do painel (${next.label ?? row.strategy_id})`);
+  };
+
+  registry.register(row.id, {
+    rowId: row.id,
+    symbol: row.symbol,
+    strategyId: row.strategy_id,
+    key: ctx.key,
+    stop,
+    updateFromRow,
+    configFingerprint: ctx.configFingerprint,
+  });
+
   const { config } = strategy;
 
   const filt = config.maFiltersEnabled !== false && (config.maFilters ?? []).some(f => f.enabled)
@@ -438,27 +505,26 @@ async function startSymbol(row, color) {
     log(`♻️  Posição — $${parseFloat(row.buy_price).toFixed(6)} qty=${row.buy_qty}`);
   }
 
-  let lastResult = { phase: row.phase };
-  let errCount   = 0;
-  const session  = { volCache: null };
-
   const refreshVol = async () => {
+    if (ctx.stopped) return;
     try {
       const volumeUsdt = await adapter.fetch24hVol();
       session.volCache = { ts: Date.now(), volumeUsdt };
     } catch {}
   };
   await refreshVol();
-  setInterval(refreshVol, VOL_CACHE_MS);
+  volIv = setInterval(refreshVol, VOL_CACHE_MS);
 
   const schedule = () => {
-    const delay = lastResult.phase === 'BOUGHT' ? strategy.fastPollMs : strategy.pollMs;
-    setTimeout(run, delay);
+    if (ctx.stopped) return;
+    const delay = lastResult.phase === 'BOUGHT' ? ctx.strategy.fastPollMs : ctx.strategy.pollMs;
+    ctx.timer = setTimeout(run, delay);
   };
 
   const run = async () => {
+    if (ctx.stopped) return;
     try {
-      lastResult = await tick(row.id, adapter, strategy, log, session);
+      lastResult = await tick(ctx.rowId, adapter, ctx.strategy, log, session);
       errCount = 0;
     } catch (err) {
       errCount++;
@@ -487,20 +553,27 @@ async function main() {
     : null;
 
   let rows = await loadMaCrossRows();
-  if (!rows?.length) {
-    console.error('❌ Nenhum símbolo MA Cross em rsi_multi_bot_state.');
-    console.error('   Adicione moedas no painel Multi-Trade com strategy ma-cross.');
-    process.exit(1);
-  }
-
-  rows = rows.filter(r => isMaCrossStrategy(r.strategy_id));
+  rows = (rows ?? []).filter(r => isMaCrossStrategy(r.strategy_id));
   if (symbolFilter) {
     rows = rows.filter(r => r.symbol.toUpperCase() === symbolFilter);
     if (!rows.length) {
-      console.error(`❌ ${symbolFilter} não encontrado com estratégia MA Cross.`);
-      process.exit(1);
+      console.log(`   ℹ️  ${symbolFilter} não está no state — aguardando painel (sync 5 min)`);
     }
+  } else if (!rows?.length) {
+    console.log('   ℹ️  Nenhum símbolo no state — aguardando adições no painel (sync 5 min)');
   }
+
+  startMultitradeWatch({
+    sbReq,
+    strategyIds: STRATEGY_IDS,
+    symbolFilter,
+    resolveStrategy,
+    onStartSymbol: (row) => {
+      const idx = row.symbol.charCodeAt(0) + (row.strategy_id?.length ?? 0);
+      return startSymbol(row, COLORS[idx % COLORS.length]);
+    },
+    log: console.log,
+  });
 
   console.log('\n🤖 MA Cross Bot — ma-cross-bot.js');
   console.log(`   Estratégias: ${STRATEGY_IDS.join(', ')}`);
@@ -537,7 +610,11 @@ async function main() {
   }
 
   console.log();
-  if (!toStart.length) { console.error('❌ Nenhum símbolo aprovado.'); process.exit(0); }
+  if (!toStart.length) {
+    console.log('   Aguardando moedas no painel Multi-Trade…\n');
+    await new Promise(() => {});
+    return;
+  }
 
   await Promise.all(toStart.map(({ row, color }) => startSymbol(row, color)));
 }

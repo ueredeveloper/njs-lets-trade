@@ -2,9 +2,9 @@ import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useCurrency } from '../contexts/CurrencyContext';
 import { fetchMultitradeBacktest, fetchCandlesticksAndCloud } from '../services/api';
 import { ENTRY_MA_TRIGGERS } from '../constants/tradeConfigSchema';
-import { STRATEGY_LABELS, STRATEGY_COLORS, normalizeStrategyId } from '../constants/strategyPresets';
+import { STRATEGY_LABELS, STRATEGY_COLORS, normalizeStrategyId, isMaCrossStrategy } from '../constants/strategyPresets';
 import { ruleBadgeStyle, formatBacktestOutcome } from '../utils/exitReasonFormat';
-import { tradeFetchPlan } from '../utils/multitradeChart';
+import { tradeFetchPlan, isMaCrossEntry, formatMaCrossEntrySummary } from '../utils/multitradeChart';
 
 const MT_COLOR = '#8b5cf6';
 
@@ -17,7 +17,8 @@ function fmtDateTime(isoOrMs) {
   });
 }
 
-function buildMarkersForRow(row, trades, msPerCandle) {
+function buildMarkersForRow(row, trades, msPerCandle, entry) {
+  if (isMaCrossEntry(entry)) return buildMarkersForMaCrossRow(row, trades, msPerCandle);
   const { buy, sell, signalMs } = findTradesForRow(row, trades, msPerCandle);
   const markers = [];
 
@@ -53,19 +54,45 @@ function buildMarkersForRow(row, trades, msPerCandle) {
   return { markers, focus, buy, sell, signalMs };
 }
 
+function buildMarkersForMaCrossRow(row, trades, msPerCandle) {
+  const { buy, sell, signalMs } = findTradesForRow(row, trades, msPerCandle);
+  const markers = [{
+    time: signalMs,
+    side: row.outcome === 'BOUGHT' || row.outcome === 'POSITION_OPEN' ? 'entry' : 'possible_entry',
+    price: row.price,
+    outcome: row.outcome,
+  }];
+
+  if (buy && Math.abs(buy.time - signalMs) >= msPerCandle * 0.25) {
+    markers.push({ time: buy.time, side: 'buy', price: buy.price });
+  }
+  if (sell) {
+    markers.push({ time: sell.time, side: 'sell', price: sell.price });
+  }
+
+  const focus = {
+    entry: markers.find(m => m.side === 'entry' || m.side === 'possible_entry') ?? null,
+    buy: markers.find(m => m.side === 'buy') ?? null,
+    sell: markers.find(m => m.side === 'sell') ?? null,
+  };
+  return { markers, focus, buy, sell, signalMs };
+}
+
 function isBlockedOutcome(outcome) {
   if (!outcome) return false;
   if (outcome.startsWith('MA_')) return true;
+  if (['NOT_ABOVE_MA', 'NOT_BELOW_MA', 'BELOW_ADAPTIVE_FLOOR', 'FILTER_NO_MA'].includes(outcome)) return true;
   if (outcome === 'THREE_CANDLES_BLOCKED' || outcome === 'FOUR_CANDLES_BLOCKED') return true;
   if (outcome.startsWith('CANCELLED')) return true;
   return false;
 }
 
 function TradeFocusBar({ focus }) {
-  if (!focus?.signal && !focus?.buy && !focus?.sell) return null;
+  if (!focus?.signal && !focus?.buy && !focus?.sell && !focus?.entry) return null;
   const card = (kind, m) => {
     const styles = {
       signal: { color: '#f59e0b', label: '◆ Sinal', bg: 'rgba(245,158,11,0.12)' },
+      entry:  { color: '#ffffff', label: '▌ Entrada', bg: 'rgba(255,255,255,0.08)' },
       buy:    { color: '#22c55e', label: '▲ Bought', bg: 'rgba(34,197,94,0.12)' },
       sell:   { color: '#ef4444', label: '▼ Sold', bg: 'rgba(239,68,68,0.12)' },
     }[kind];
@@ -83,6 +110,7 @@ function TradeFocusBar({ focus }) {
   };
   return (
     <div id="multitrade-backtest-focus-bar" className="multitrade-backtest-focus-bar flex flex-wrap gap-2 mb-2">
+      {focus.entry && card('entry', focus.entry)}
       {focus.signal && card('signal', focus.signal)}
       {focus.buy && card('buy', focus.buy)}
       {focus.sell && card('sell', focus.sell)}
@@ -129,6 +157,9 @@ function outcomeClass(row) {
 }
 
 function entryRuleStyle(row) {
+  if (row.entryKind === 'ma_cross') {
+    return { color: '#22d3ee', bg: 'rgba(34,211,238,0.12)', border: 'rgba(34,211,238,0.35)' };
+  }
   const ruleId = row.ruleId ?? (row.entryKind === 'ma' ? 'rule2' : row.entryKind === 'rsi' ? 'rule1' : null);
   return ruleBadgeStyle(ruleId);
 }
@@ -155,6 +186,7 @@ function formatResultadoTitle(row) {
 }
 
 function formatEntryPathsSummary(entry) {
+  if (isMaCrossEntry(entry)) return formatMaCrossEntrySummary(entry);
   if (!entry) return null;
   const parts = [];
   if (entry.entryRsiPath?.enabled !== false) {
@@ -278,7 +310,7 @@ export default function MultitradeBacktestPanel({ entry }) {
     const signalMs = new Date(row.timeISO ?? row.time).getTime();
     const plan = tradeFetchPlan(entry, row, signalMs);
     const { entryMs, exitMs } = tradeZoomDates(row, data.trades, plan.msPerCandle);
-    const { markers, focus } = buildMarkersForRow(row, data.trades, plan.msPerCandle);
+    const { markers, focus } = buildMarkersForRow(row, data.trades, plan.msPerCandle, entry);
     setFocusTrade(focus);
 
     const src = entry.exchange === 'gate' ? 'gate' : null;
@@ -310,9 +342,12 @@ export default function MultitradeBacktestPanel({ entry }) {
   if (!entry) return null;
 
   const s = data?.summary;
+  const maCross = isMaCrossStrategy(entry?.strategyId);
   const maFilterStats = data?.maFilterStats ?? [];
-  const maLabels = (entry.maConditions ?? []).map(m => `MA${m.period} ${m.interval}`);
-  const showExt  = entry.extension?.enabled !== false;
+  const maLabels = maCross
+    ? (entry.maFilters ?? []).filter(f => f.enabled !== false && f.mode !== 'off').map(f => `MA${f.period} ${f.interval}`)
+    : (entry.maConditions ?? []).map(m => `MA${m.period} ${m.interval}`);
+  const showExt  = !maCross && entry.extension?.enabled !== false;
 
   return (
     <div id="multitrade-backtest-panel" className="multitrade-backtest-panel flex flex-col flex-1 min-h-0">
@@ -369,7 +404,13 @@ export default function MultitradeBacktestPanel({ entry }) {
                   </span>
                 </>
               )}
-              {entry.entryRsi && (
+              {maCross && data?.config?.exitCross && (
+                <>
+                  <span className="text-p5/50">Saída</span>
+                  <span className="text-p5/80">{data.config.exitCross}</span>
+                </>
+              )}
+              {entry.entryRsi && !maCross && (
                 <>
                   <span className="text-p5/50">RSI entrada</span>
                   <span className="text-p5">
@@ -391,7 +432,7 @@ export default function MultitradeBacktestPanel({ entry }) {
               <span className={s.totalPnlUsdt >= 0 ? 'text-emerald-400' : 'text-red-400'}>
                 {s.totalPnlUsdt >= 0 ? '+' : ''}${s.totalPnlUsdt}
               </span>
-              <span className="text-p5/50">Sinais RSI</span>
+              <span className="text-p5/50">{maCross ? 'Cruzamentos' : 'Sinais RSI'}</span>
               <span className="text-p5">{s.entrySignals} · bloq. {s.blockedCount}</span>
               {(s.stopMaCount > 0 || s.stopAdaptCount > 0) && (
                 <>
@@ -474,8 +515,16 @@ export default function MultitradeBacktestPanel({ entry }) {
                   <tr className="multitrade-backtest-table-head" style={{ background: '#252836' }}>
                     <th className="text-left px-1.5 py-1 text-p5/50 font-normal">Entrada</th>
                     <th className="text-left px-1.5 py-1 text-p5/50 font-normal">Saída</th>
-                    <th className="text-center px-1 py-1 text-p5/50 font-normal">Regra</th>
-                    <th className="text-right px-1 py-1 text-p5/50 font-normal">RSI</th>
+                    <th className="text-center px-1 py-1 text-p5/50 font-normal">{maCross ? 'Cruz.' : 'Regra'}</th>
+                    {!maCross && (
+                      <th className="text-right px-1 py-1 text-p5/50 font-normal">RSI</th>
+                    )}
+                    {maCross && (
+                      <>
+                        <th className="text-right px-1 py-1 text-p5/50 font-normal">MA9</th>
+                        <th className="text-right px-1 py-1 text-p5/50 font-normal">MA21</th>
+                      </>
+                    )}
                     <th className="text-right px-1 py-1 text-p5/50 font-normal">Preço</th>
                     {maLabels.map(l => (
                       <th key={l} className="text-center px-1 py-1 text-p5/50 font-normal">{l.replace(' ', '\u00a0')}</th>
@@ -514,7 +563,7 @@ export default function MultitradeBacktestPanel({ entry }) {
                         {row.exitTimeISO ?? row.exitTime ? fmtDate(row.exitTimeISO ?? row.exitTime) : '—'}
                       </td>
                       <td className="px-1 py-0.5 text-center whitespace-nowrap">
-                        {row.ruleShort || row.entryKindShort ? (
+                        {row.entryKindShort || row.ruleShort || row.entryKindShort ? (
                           <span
                             className="inline-block px-1 py-px rounded text-[8px] font-bold uppercase tracking-wide"
                             style={{
@@ -523,17 +572,25 @@ export default function MultitradeBacktestPanel({ entry }) {
                               border: `1px solid ${kindStyle.border}`,
                             }}
                             title={row.entryKindLabel ?? row.ruleId ?? row.entryKind}>
-                            {row.ruleShort ?? row.entryKindShort}
+                            {row.entryKindShort ?? row.ruleShort ?? row.entryKindShort}
                           </span>
                         ) : (
                           <span className="text-p5/30">—</span>
                         )}
                       </td>
+                      {!maCross && (
                       <td
                         className="px-1 py-0.5 text-right text-p5"
                         title={rsiCell.title ?? undefined}>
                         {rsiCell.value != null ? rsiCell.value.toFixed?.(1) ?? rsiCell.value : '—'}
                       </td>
+                      )}
+                      {maCross && (
+                        <>
+                          <td className="px-1 py-0.5 text-right text-p5">{fmtPrice(row.ma1)}</td>
+                          <td className="px-1 py-0.5 text-right text-p5">{fmtPrice(row.ma2)}</td>
+                        </>
+                      )}
                       <td className="px-1 py-0.5 text-right text-p5">{fmtPrice(row.price)}</td>
                       {maLabels.map(l => {
                         const m = (row.maChecks ?? []).find(x => x.label === l);

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useCurrency } from '../contexts/CurrencyContext';
-import { fetchCandlesAndIndicators, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMarketCapFilter, fetchUserPrefs, saveUserPrefs } from '../services/api';
+import { fetchCandlesAndIndicators, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMarketCapFilter, fetchUserPrefs, saveUserPrefs } from '../services/api';
 import { useI18n } from '../i18n';
 import {
   createRsiFilter,
@@ -15,6 +15,58 @@ import {
   conversionAboveHighCandle, conversionAboveLowCandle, conversionAboveCloseCandle,
 } from '../utils/createIchimokuFilter';
 import Tooltip from './Tooltip';
+import { MA_PERIOD_PRESETS } from '../constants/maCrossConfigSchema';
+import { buildMaCrossFilterName } from '../utils/filterNames';
+
+const INTERVAL_MS = {
+  '1m': 60_000, '3m': 180_000, '5m': 300_000, '15m': 900_000, '30m': 1_800_000,
+  '1h': 3_600_000, '2h': 7_200_000, '4h': 14_400_000, '8h': 28_800_000, '1d': 86_400_000,
+};
+
+function finestInterval(a, b) {
+  return (INTERVAL_MS[a] ?? 3_600_000) <= (INTERVAL_MS[b] ?? 3_600_000) ? a : b;
+}
+
+/** Intervalos de candle das MAs (uma busca por intervalo). */
+function resolveMacrossIntervalPairs(ind) {
+  if (ind.mixedIntervals) {
+    const iv1 = ind.ma1Interval ?? ind.intervals?.[0] ?? '15m';
+    const iv2 = ind.ma2Interval ?? ind.intervals?.[0] ?? '15m';
+    return [{ iv1, iv2 }];
+  }
+  const list = ind.intervals?.length ? ind.intervals : ['15m'];
+  return list.map((iv) => ({ iv1: iv, iv2: iv }));
+}
+
+/** Janelas temporais “cruzou há” (uma busca por id; independente do intervalo de candle). */
+function resolveMacrossAgeWindows(ind) {
+  if (ind.ageWindows?.length) return ind.ageWindows;
+  if (ind.maxAgeMin != null && ind.maxAgeMin !== '') return [ind.maxAgeMin];
+  return ['last'];
+}
+
+function macrossAgeLabel(id, t) {
+  const opt = MA_CROSS_AGE_OPTIONS.find((a) => a.id === id);
+  return opt ? t(opt.labelKey) : id;
+}
+
+const MA_CROSS_MODES = [
+  { id: 'cross_up',   labelKey: 'macross.mode.cross_up' },
+  { id: 'cross_down', labelKey: 'macross.mode.cross_down' },
+  { id: 'near_up',    labelKey: 'macross.mode.near_up' },
+  { id: 'near_down',  labelKey: 'macross.mode.near_down' },
+];
+
+const MA_CROSS_AGE_OPTIONS = [
+  { id: 'last', labelKey: 'macross.age.last' },
+  { id: '1',    labelKey: 'macross.age.1' },
+  { id: '5',    labelKey: 'macross.age.5' },
+  { id: '15',   labelKey: 'macross.age.15' },
+  { id: '30',   labelKey: 'macross.age.30' },
+  { id: '60',   labelKey: 'macross.age.60' },
+  { id: '240',  labelKey: 'macross.age.240' },
+  { id: '1440', labelKey: 'macross.age.1440' },
+];
 
 const INTERVALS = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w'];
 
@@ -30,13 +82,9 @@ const INTERVAL_LABELS = {
 const EMPTY_INDICATOR = { type: '', intervals: ['8h'] };
 
 const DEFAULT_INDICATORS = [
-  { type: 'relativeStrengthIndex', intervals: ['15m'], compare1: 'above', line1: '10', compare2: 'bellow', line2: '20' },
-  { type: 'relativeStrengthIndex', intervals: ['15m'], compare1: 'above', line1: '20', compare2: 'bellow', line2: '30' },
-  { type: 'marketCap', intervals: [], metric: 'turnover', preset: 'alto' },
-  { type: 'marketCap', intervals: [], metric: 'dilution', preset: 'baixo' },
   { type: 'movingAverage', intervals: ['1h', '4h'], length: '50', compare: 'above', candle: 'close' },
   { type: 'movingAverage', intervals: ['1h', '4h'], length: '50', compare: 'bellow', candle: 'close' },
-  { type: 'maTimeAbove', intervals: ['15m', '1h', '4h'], period: '50', minPct: '70' },
+  { type: 'maCrossover', intervals: ['5m', '15m'], ma1Period: '9', ma2Period: '21', signalMode: 'cross_up', ageWindows: ['5'], tolerancePct: '0.5', mixedIntervals: false },
 ];
 
 /** Gera um resumo legível da configuração do indicador */
@@ -74,6 +122,20 @@ function buildSummary(value, t) {
     const per = value.period ?? '50';
     return t('sum.ma_time_above', per, pct, ivLabel);
   }
+  if (type === 'maCrossover') {
+    const p1 = value.ma1Period ?? '9';
+    const p2 = value.ma2Period ?? '21';
+    const mode = MA_CROSS_MODES.find(m => m.id === (value.signalMode ?? 'cross_up'));
+    const modeLabel = mode ? t(mode.labelKey) : value.signalMode;
+    const ivDisplay = value.mixedIntervals
+      ? `${value.ma1Interval ?? intervals[0] ?? '15m'} / ${value.ma2Interval ?? intervals[0] ?? '15m'}`
+      : ivLabel;
+    const ageLabel = resolveMacrossAgeWindows(value).map((id) => macrossAgeLabel(id, t)).join(', ');
+    const extra = (value.signalMode ?? '').startsWith('near')
+      ? t('sum.macross_prox', value.proximityPct ?? '1')
+      : t('sum.macross_age', ageLabel, value.tolerancePct ?? '0');
+    return t('sum.macross', p1, ivDisplay, p2, ivDisplay, modeLabel, extra);
+  }
   return null;
 }
 
@@ -92,6 +154,9 @@ function IndicatorRow({ value, onChange }) {
   const { type, intervals } = value;
   const { t } = useI18n();
   const [showPicker, setShowPicker] = useState(false);
+  const [showAgePicker, setShowAgePicker] = useState(false);
+  const ageWindows = resolveMacrossAgeWindows(value);
+  const isMacrossCross = type === 'maCrossover' && !(value.signalMode ?? 'cross_up').startsWith('near');
 
   function toggleInterval(iv) {
     onChange({
@@ -105,6 +170,20 @@ function IndicatorRow({ value, onChange }) {
   function addInterval(iv) {
     if (!intervals.includes(iv)) onChange({ ...value, intervals: [...intervals, iv] });
     setShowPicker(false);
+  }
+
+  function toggleAgeWindow(id) {
+    const next = ageWindows.includes(id)
+      ? ageWindows.filter((a) => a !== id)
+      : [...ageWindows, id];
+    onChange({ ...value, ageWindows: next, maxAgeMin: undefined });
+  }
+
+  function addAgeWindow(id) {
+    if (!ageWindows.includes(id)) {
+      onChange({ ...value, ageWindows: [...ageWindows, id], maxAgeMin: undefined });
+    }
+    setShowAgePicker(false);
   }
 
   const sel = 'bg-p2 border border-p3/40 text-p5 text-[10px] sm:text-xs rounded px-1 sm:px-2 py-0.5 sm:py-1 focus:outline-none focus:border-p4 min-w-0';
@@ -126,11 +205,12 @@ function IndicatorRow({ value, onChange }) {
             <option value="ichimokuCloud">{t('ind.ichimoku')}</option>
             <option value="movingAverage">{t('ind.ma')}</option>
             <option value="maTimeAbove">{t('ind.ma_time_above')}</option>
+            <option value="maCrossover">{t('ind.ma_crossover')}</option>
             <option value="relativeStrengthIndex">{t('ind.rsi')}</option>
             <option value="marketCap">{t('ind.marketcap')}</option>
           </select>
-          {type && t(`ind.desc.${type === 'relativeStrengthIndex' ? 'rsi' : type === 'ichimokuCloud' ? 'ichimoku' : type === 'movingAverage' ? 'ma' : type === 'maTimeAbove' ? 'ma_time_above' : 'marketcap'}`) !== `ind.desc.${type}` && (
-            <HelpIcon text={t(`ind.desc.${type === 'relativeStrengthIndex' ? 'rsi' : type === 'ichimokuCloud' ? 'ichimoku' : type === 'movingAverage' ? 'ma' : type === 'maTimeAbove' ? 'ma_time_above' : 'marketcap'}`)} />
+          {type && t(`ind.desc.${type === 'relativeStrengthIndex' ? 'rsi' : type === 'ichimokuCloud' ? 'ichimoku' : type === 'movingAverage' ? 'ma' : type === 'maTimeAbove' ? 'ma_time_above' : type === 'maCrossover' ? 'ma_crossover' : 'marketcap'}`) !== `ind.desc.${type}` && (
+            <HelpIcon text={t(`ind.desc.${type === 'relativeStrengthIndex' ? 'rsi' : type === 'ichimokuCloud' ? 'ichimoku' : type === 'movingAverage' ? 'ma' : type === 'maTimeAbove' ? 'ma_time_above' : type === 'maCrossover' ? 'ma_crossover' : 'marketcap'}`)} />
           )}
         </div>
 
@@ -287,11 +367,115 @@ function IndicatorRow({ value, onChange }) {
             </select>
           </>
         )}
+
+        {type === 'maCrossover' && (
+          <>
+            <select
+              className={sel}
+              value={value.ma1Period ?? '9'}
+              onChange={(e) => onChange({ ...value, ma1Period: e.target.value })}
+              title={t('macross.tip.ma1')}
+            >
+              {MA_PERIOD_PRESETS.map(p => (
+                <option key={p} value={String(p)}>MA{p}</option>
+              ))}
+            </select>
+            <span className="text-p5/50 text-[10px] shrink-0">×</span>
+            <select
+              className={sel}
+              value={value.ma2Period ?? '21'}
+              onChange={(e) => onChange({ ...value, ma2Period: e.target.value })}
+              title={t('macross.tip.ma2')}
+            >
+              {MA_PERIOD_PRESETS.map(p => (
+                <option key={p} value={String(p)}>MA{p}</option>
+              ))}
+            </select>
+            <select
+              className={sel}
+              value={value.signalMode ?? 'cross_up'}
+              onChange={(e) => onChange({ ...value, signalMode: e.target.value })}
+              title={t('macross.tip.mode')}
+            >
+              {MA_CROSS_MODES.map(m => (
+                <option key={m.id} value={m.id}>{t(m.labelKey)}</option>
+              ))}
+            </select>
+            {(value.signalMode ?? 'cross_up').startsWith('near') ? (
+              <select
+                className={sel}
+                value={value.proximityPct ?? '0.5'}
+                onChange={(e) => onChange({ ...value, proximityPct: e.target.value })}
+                title={t('macross.tip.proximity')}
+              >
+                {[0.2, 0.3, 0.5, 1, 1.5, 2, 3].map(v => (
+                  <option key={v} value={String(v)}>≤{v}%</option>
+                ))}
+              </select>
+            ) : (
+              <select
+                className={sel}
+                value={value.tolerancePct ?? '0.5'}
+                onChange={(e) => onChange({ ...value, tolerancePct: e.target.value })}
+                title={t('macross.tip.tolerance')}
+              >
+                {[0, 0.1, 0.3, 0.5, 1, 2].map(v => (
+                  <option key={v} value={String(v)}>±{v}%</option>
+                ))}
+              </select>
+            )}
+          </>
+        )}
       </div>
 
-      {/* Intervalos — ocultos para Market Cap */}
-      {type !== 'marketCap' && (
+      {type === 'maCrossover' && (
+        <div className="flex flex-row flex-wrap gap-2 items-center text-[10px]">
+          <label className="flex items-center gap-1 text-p5/70 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={!!value.mixedIntervals}
+              onChange={(e) => onChange({
+                ...value,
+                mixedIntervals: e.target.checked,
+                ma1Interval: value.ma1Interval ?? intervals[0] ?? '15m',
+                ma2Interval: value.ma2Interval ?? intervals[0] ?? '15m',
+              })}
+              className="accent-p4"
+            />
+            {t('macross.mixed_intervals')}
+          </label>
+          {value.mixedIntervals && (
+            <>
+              <select
+                className={sel}
+                value={value.ma1Interval ?? intervals[0] ?? '15m'}
+                onChange={(e) => onChange({ ...value, ma1Interval: e.target.value })}
+                title={t('macross.tip.iv1')}
+              >
+                {INTERVALS.map(iv => <option key={iv} value={iv}>{iv}</option>)}
+              </select>
+              <span className="text-p5/40">→</span>
+              <select
+                className={sel}
+                value={value.ma2Interval ?? intervals[0] ?? '15m'}
+                onChange={(e) => onChange({ ...value, ma2Interval: e.target.value })}
+                title={t('macross.tip.iv2')}
+              >
+                {INTERVALS.map(iv => <option key={iv} value={iv}>{iv}</option>)}
+              </select>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Intervalos de candle das MAs (≠ tempo desde o cruzamento) */}
+      {type !== 'marketCap' && !(type === 'maCrossover' && value.mixedIntervals) && (
         <div className="flex flex-row flex-wrap gap-1 items-center">
+          {type === 'maCrossover' && (
+            <span className="text-[10px] text-p5/60 shrink-0 mr-1" title={t('macross.tip.candle_iv')}>
+              {t('macross.label.candles')}:
+            </span>
+          )}
           {/* Intervalos selecionados como pills removíveis */}
           {intervals.map((iv) => (
             <button
@@ -327,6 +511,53 @@ function IndicatorRow({ value, onChange }) {
               ))}
               <button
                 onClick={() => setShowPicker(false)}
+                className="text-[10px] px-1 text-p5/40 hover:text-p5 transition-colors ml-1"
+              >
+                ✕
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Janelas temporais “cruzou há” (≠ intervalo de candle) */}
+      {isMacrossCross && (
+        <div className="flex flex-row flex-wrap gap-1 items-center">
+          <span className="text-[10px] text-p5/60 shrink-0 mr-1" title={t('macross.tip.age')}>
+            {t('macross.label.age')}:
+          </span>
+          {ageWindows.map((id) => (
+            <button
+              key={id}
+              onClick={() => toggleAgeWindow(id)}
+              title={`${t('macross.remove_age')} ${macrossAgeLabel(id, t)}`}
+              className="text-[10px] px-1.5 py-0.5 rounded bg-p4/25 border border-p4/50 text-p5 hover:bg-red-500/20 hover:border-red-500/40 transition-colors"
+            >
+              {macrossAgeLabel(id, t)} ×
+            </button>
+          ))}
+          {!showAgePicker ? (
+            <button
+              onClick={() => setShowAgePicker(true)}
+              title={t('macross.add_age')}
+              className="text-[10px] px-1.5 py-0.5 rounded bg-p2 border border-p3/40 text-p5 hover:bg-p3/60 transition-colors leading-none"
+            >
+              +
+            </button>
+          ) : (
+            <div className="flex flex-row flex-wrap gap-1 items-center border border-p3/30 rounded px-1.5 py-1 bg-p1/60">
+              {MA_CROSS_AGE_OPTIONS.filter((a) => !ageWindows.includes(a.id)).map((a) => (
+                <button
+                  key={a.id}
+                  onClick={() => addAgeWindow(a.id)}
+                  title={`${t('macross.add_age')} ${t(a.labelKey)}`}
+                  className="text-[10px] px-1.5 py-0.5 rounded bg-p2 border border-p3/40 text-p5 hover:bg-p4/30 hover:border-p4 transition-colors"
+                >
+                  {t(a.labelKey)}
+                </button>
+              ))}
+              <button
+                onClick={() => setShowAgePicker(false)}
                 className="text-[10px] px-1 text-p5/40 hover:text-p5 transition-colors ml-1"
               >
                 ✕
@@ -379,7 +610,8 @@ export default function IndicatorPanel({ open, onToggle }) {
       const mcapIndicators  = indicators.filter((ind) => ind.type === 'marketCap');
       const maIndicators    = indicators.filter((ind) => ind.type === 'movingAverage');
       const maTimeIndicators = indicators.filter((ind) => ind.type === 'maTimeAbove');
-      const otherIndicators = indicators.filter((ind) => ind.type && ind.type !== 'relativeStrengthIndex' && ind.type !== 'marketCap' && ind.type !== 'movingAverage' && ind.type !== 'maTimeAbove');
+      const maCrossIndicators = indicators.filter((ind) => ind.type === 'maCrossover');
+      const otherIndicators = indicators.filter((ind) => ind.type && ind.type !== 'relativeStrengthIndex' && ind.type !== 'marketCap' && ind.type !== 'movingAverage' && ind.type !== 'maTimeAbove' && ind.type !== 'maCrossover');
 
       // Salva intervalos e análises usadas nas preferências
       const allIntervals = [...new Set(indicators.flatMap(ind => ind.intervals ?? []))];
@@ -433,6 +665,37 @@ export default function IndicatorPanel({ open, onToggle }) {
           console.log('[frontend-react] MA tempo acima:', filter.name, '—', filter.list.length, 'moedas',
             filter.cache ? `(cache: ${filter.cache.cached} frescos, ${filter.cache.computed} calculados)` : '');
           addFilter(filter);
+        }
+      }
+
+      // Cruzamento / proximidade de MAs
+      for (const ind of maCrossIndicators) {
+        const p1 = ind.ma1Period ?? '9';
+        const p2 = ind.ma2Period ?? '21';
+        const mode = ind.signalMode ?? 'cross_up';
+        const tolerancePct = ind.tolerancePct ?? '0.5';
+        const proximityPct = ind.proximityPct ?? '0.5';
+        const ageList = mode.startsWith('near') ? ['last'] : resolveMacrossAgeWindows(ind);
+
+        for (const { iv1, iv2 } of resolveMacrossIntervalPairs(ind)) {
+          for (const maxAgeMin of ageList) {
+            const filter = await fetchMaCrossoverFilter({
+              period1: p1, interval1: iv1, period2: p2, interval2: iv2,
+              mode, maxAgeMin, tolerancePct, proximityPct, live: true,
+            });
+            const sigIv = finestInterval(iv1, iv2);
+            const nameOpts = mode.startsWith('near')
+              ? { proximityPct }
+              : { maxAgeMin, tolerancePct };
+            const expectedName = buildMaCrossFilterName(sigIv, p1, iv1, p2, iv2, mode, nameOpts);
+            const name = filter.name?.includes(`|${iv1}|`) ? filter.name : expectedName;
+            addFilter({
+              name,
+              list: filter.list,
+              meta: filter.details,
+              scannedAt: filter.scannedAt,
+            });
+          }
         }
       }
 

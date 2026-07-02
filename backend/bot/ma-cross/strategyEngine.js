@@ -16,23 +16,27 @@ function finestInterval(a, b) {
   return intervalMs(a) <= intervalMs(b) ? a : b;
 }
 
+function candleClose(c) {
+  return parseFloat(c.close);
+}
+
 function computeMa(candles, period) {
   if (!candles?.length || candles.length < period) return null;
-  const closes = candles.map(c => c.close);
+  const closes = candles.map(candleClose);
   const arr = ti.SMA.calculate({ values: closes, period });
   return arr.length ? arr[arr.length - 1] : null;
 }
 
 function computeRsi(candles, period) {
   if (!candles?.length || candles.length < period + 2) return null;
-  const closes = candles.map(c => c.close);
+  const closes = candles.map(candleClose);
   const arr = ti.RSI.calculate({ values: closes, period });
   return arr.length ? arr[arr.length - 1] : null;
 }
 
 function buildMaTimeSeries(candles, period) {
   if (!candles?.length || candles.length < period) return [];
-  const closes = candles.map(c => c.close);
+  const closes = candles.map(candleClose);
   const maArr = ti.SMA.calculate({ values: closes, period });
   return maArr.map((ma, i) => ({
     openTime: candles[period - 1 + i].openTime,
@@ -65,10 +69,160 @@ function closedCandlesOnly(candles) {
   return candles.slice(0, -1);
 }
 
+function detectCrossAtPair(prevMa1, prevMa2, ma1, ma2, direction, tolerancePct = 0) {
+  if ([prevMa1, prevMa2, ma1, ma2].some(v => v == null)) return false;
+  const tol = (tolerancePct ?? 0) / 100;
+  if (direction === 'cross_up') {
+    const wasBelow = prevMa1 <= prevMa2 * (1 + tol);
+    return wasBelow && prevMa1 <= prevMa2 && ma1 > ma2;
+  }
+  if (direction === 'cross_down') {
+    const wasAbove = prevMa1 >= prevMa2 * (1 - tol);
+    return wasAbove && prevMa1 >= prevMa2 && ma1 < ma2;
+  }
+  return false;
+}
+
+function areConsecutiveCandles(prev, candle, intervalIv) {
+  if (!prev || !candle) return false;
+  const ms = intervalMs(intervalIv);
+  return Number(candle.openTime) - Number(prev.openTime) === ms;
+}
+
+function isDirectionHeld(ma1, ma2, direction) {
+  if (ma1 == null || ma2 == null) return false;
+  if (direction === 'cross_up') return ma1 > ma2;
+  if (direction === 'cross_down') return ma1 < ma2;
+  return false;
+}
+
+/**
+ * Localiza o cruzamento MA mais recente e verifica idade temporal.
+ * maxAgeMin: 'last' = só o último candle fechado; número = cruzou há no máximo N minutos.
+ */
+function findRecentMaCross({
+  candles1, period1, interval1,
+  candles2, period2, interval2,
+  direction, tolerancePct = 0,
+  maxAgeMin = 'last',
+  closedOnly = true,
+  now = Date.now(),
+}) {
+  const lastCandleOnly = maxAgeMin === 'last' || maxAgeMin === 0 || maxAgeMin === '0';
+  const useClosed = closedOnly || lastCandleOnly;
+  const c1 = useClosed ? closedCandlesOnly(candles1) : candles1;
+  const c2 = useClosed ? closedCandlesOnly(candles2) : candles2;
+
+  const sigIv = finestInterval(interval1, interval2);
+  const sigCandles = sigIv === interval1 ? c1 : c2;
+  if (!sigCandles || sigCandles.length < 3) {
+    return { matched: false, reason: 'INSUFFICIENT_DATA' };
+  }
+
+  const series1 = buildMaTimeSeries(c1, period1);
+  const series2 = buildMaTimeSeries(c2, period2);
+  if (series1.length < 2 || series2.length < 2) {
+    return { matched: false, reason: 'INSUFFICIENT_MA' };
+  }
+
+  const lastIdx = sigCandles.length - 1;
+  const last = sigCandles[lastIdx];
+  const lastMa1 = maValueAt(series1, last.openTime);
+  const lastMa2 = maValueAt(series2, last.openTime);
+
+  const maxAgeMs = lastCandleOnly ? null : Number(maxAgeMin) * 60_000;
+
+  const scanFrom = lastCandleOnly ? lastIdx : lastIdx;
+  const scanTo = lastCandleOnly ? lastIdx : 1;
+
+  for (let i = scanFrom; i >= scanTo; i--) {
+    const candle = sigCandles[i];
+    const prev = sigCandles[i - 1];
+    if (!areConsecutiveCandles(prev, candle, sigIv)) continue;
+
+    const ma1 = maValueAt(series1, candle.openTime);
+    const ma2 = maValueAt(series2, candle.openTime);
+    const prevMa1 = maValueAt(series1, prev.openTime);
+    const prevMa2 = maValueAt(series2, prev.openTime);
+
+    if (!detectCrossAtPair(prevMa1, prevMa2, ma1, ma2, direction, tolerancePct)) continue;
+
+    const crossOpenTime = candle.openTime;
+    const crossAt = candle.closeTime ?? (crossOpenTime + intervalMs(sigIv));
+    const ageMs = Math.max(0, now - crossAt);
+
+    if (!lastCandleOnly && maxAgeMs != null && Number.isFinite(maxAgeMs) && ageMs > maxAgeMs) {
+      return {
+        matched: false,
+        reason: 'CROSS_TOO_OLD',
+        crossTime: crossAt,
+        crossOpenTime,
+        ageMs,
+        ageMin: ageMs / 60_000,
+        ma1: lastMa1,
+        ma2: lastMa2,
+      };
+    }
+
+    const held = isDirectionHeld(lastMa1, lastMa2, direction);
+    return {
+      matched: held,
+      kind: 'crossed',
+      crossTime: crossAt,
+      crossOpenTime,
+      ageMs,
+      ageMin: ageMs / 60_000,
+      ma1: lastMa1,
+      ma2: lastMa2,
+      prevMa1,
+      prevMa2,
+      close: last.close,
+      openTime: last.openTime,
+      reason: held ? null : 'REVERSED_AFTER_CROSS',
+    };
+  }
+
+  return {
+    matched: false,
+    reason: direction === 'cross_up' ? 'NO_CROSS_UP' : 'NO_CROSS_DOWN',
+    ma1: lastMa1,
+    ma2: lastMa2,
+    close: last.close,
+    openTime: last.openTime,
+  };
+}
+
 function checkMaCrossover({
   candles1, period1, interval1,
   candles2, period2, interval2,
   direction, tolerancePct = 0,
+  closedOnly = true,
+}) {
+  const r = findRecentMaCross({
+    candles1, period1, interval1,
+    candles2, period2, interval2,
+    direction,
+    tolerancePct,
+    maxAgeMin: 'last',
+    closedOnly,
+  });
+  return {
+    crossed: r.matched,
+    ma1: r.ma1,
+    ma2: r.ma2,
+    prevMa1: r.prevMa1,
+    prevMa2: r.prevMa2,
+    close: r.close,
+    openTime: r.openTime,
+    reason: r.matched ? null : (r.reason ?? (direction === 'cross_up' ? 'NO_CROSS_UP' : 'NO_CROSS_DOWN')),
+  };
+}
+
+/** Prestes a cruzar: gap encolhendo e dentro do limite % (MA ainda não cruzou). */
+function checkMaCrossApproaching({
+  candles1, period1, interval1,
+  candles2, period2, interval2,
+  mode, proximityPct = 1,
   closedOnly = true,
 }) {
   const c1 = closedOnly ? closedCandlesOnly(candles1) : candles1;
@@ -77,13 +231,13 @@ function checkMaCrossover({
   const sigIv = finestInterval(interval1, interval2);
   const sigCandles = sigIv === interval1 ? c1 : c2;
   if (!sigCandles || sigCandles.length < 3) {
-    return { crossed: false, reason: 'INSUFFICIENT_DATA' };
+    return { matched: false, reason: 'INSUFFICIENT_DATA' };
   }
 
   const series1 = buildMaTimeSeries(c1, period1);
   const series2 = buildMaTimeSeries(c2, period2);
   if (series1.length < 2 || series2.length < 2) {
-    return { crossed: false, reason: 'INSUFFICIENT_MA' };
+    return { matched: false, reason: 'INSUFFICIENT_MA' };
   }
 
   const last = sigCandles[sigCandles.length - 1];
@@ -95,25 +249,65 @@ function checkMaCrossover({
   const prevMa2 = maValueAt(series2, prev.openTime);
 
   if ([ma1, ma2, prevMa1, prevMa2].some(v => v == null)) {
-    return { crossed: false, reason: 'MA_ALIGN_FAIL', ma1, ma2, prevMa1, prevMa2 };
+    return { matched: false, reason: 'MA_ALIGN_FAIL', ma1, ma2 };
   }
 
-  const tol = (tolerancePct ?? 0) / 100;
-  let crossed = false;
+  const prox = Math.max(0, proximityPct ?? 0) / 100;
+  let matched = false;
+  let gapPct = null;
 
-  if (direction === 'cross_up') {
-    crossed = prevMa1 <= prevMa2 * (1 + tol) && ma1 > ma2;
-  } else if (direction === 'cross_down') {
-    crossed = prevMa1 >= prevMa2 * (1 - tol) && ma1 < ma2;
+  if (mode === 'near_up') {
+    if (ma1 < ma2 && ma2 > 0) {
+      gapPct = ((ma2 - ma1) / ma2) * 100;
+      const gap = ma2 - ma1;
+      const prevGap = prevMa2 - prevMa1;
+      matched = gapPct / 100 <= prox && gap < prevGap;
+    }
+  } else if (mode === 'near_down') {
+    if (ma1 > ma2 && ma2 > 0) {
+      gapPct = ((ma1 - ma2) / ma2) * 100;
+      const gap = ma1 - ma2;
+      const prevGap = prevMa1 - prevMa2;
+      matched = gapPct / 100 <= prox && gap < prevGap;
+    }
   }
 
   return {
-    crossed,
-    ma1, ma2, prevMa1, prevMa2,
+    matched,
+    kind: 'approaching',
+    ma1, ma2, gapPct,
     close: last.close,
     openTime: last.openTime,
-    reason: crossed ? null : (direction === 'cross_up' ? 'NO_CROSS_UP' : 'NO_CROSS_DOWN'),
+    reason: matched ? null : (mode === 'near_up' ? 'NOT_NEAR_UP' : 'NOT_NEAR_DOWN'),
   };
+}
+
+function evaluateMaCrossSignal({
+  candles1, period1, interval1,
+  candles2, period2, interval2,
+  mode, tolerancePct = 0, maxAgeMin = 'last', proximityPct = 1,
+  closedOnly = true,
+  now,
+}) {
+  if (mode === 'near_up' || mode === 'near_down') {
+    return checkMaCrossApproaching({
+      candles1, period1, interval1,
+      candles2, period2, interval2,
+      mode,
+      proximityPct,
+      closedOnly,
+    });
+  }
+
+  return findRecentMaCross({
+    candles1, period1, interval1,
+    candles2, period2, interval2,
+    direction: mode,
+    tolerancePct,
+    maxAgeMin,
+    closedOnly,
+    now,
+  });
 }
 
 function checkPriceFilter(close, filterCandles, filter, adaptiveDipPct, adaptiveOpts = {}) {
@@ -379,7 +573,11 @@ module.exports = {
   buildMaTimeSeries,
   maValueAt,
   closedCandlesOnly,
+  detectCrossAtPair,
+  findRecentMaCross,
   checkMaCrossover,
+  checkMaCrossApproaching,
+  evaluateMaCrossSignal,
   checkPriceFilter,
   checkRsi,
   getRequiredSpecs,

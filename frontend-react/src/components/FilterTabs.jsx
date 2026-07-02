@@ -1,6 +1,6 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
 import { useI18n } from '../i18n';
-import { parseRsiConditionToken, parseMaCompareToken } from '../utils/filterNames';
+import { parseRsiConditionToken, parseMaCompareToken, parseMaCrossModeToken } from '../utils/filterNames';
 import { useCurrency } from '../contexts/CurrencyContext';
 import SearchInput from './SearchInput';
 import { sortByTypeOfIntervals, sortFirstIncludesBinance } from '../utils/sort-firts-includes-binance';
@@ -204,6 +204,26 @@ function getFilterDescription(name, t) {
     const comp   = cmpType === 'below' ? t('filter.abaixo') : t('filter.acima');
     const candle = parts[4];
     return t('filter.ma', period, comp, candle, interval);
+  }
+
+  if (type === 'macross') {
+    const p1 = parts[2];
+    const iv1 = parts[3];
+    const p2 = parts[4];
+    const iv2 = parts[5];
+    const mode = parseMaCrossModeToken(parts[6]);
+    const modeLabel = mode ? t(`filter.macross.${mode}`) : parts[6];
+    let extra = '';
+    if (parts[7] === 'age' && parts[8] != null) {
+      extra = parts[8] === 'last' ? t('filter.macross.age_last') : t('filter.macross.age_min', parts[8]);
+    } else if (parts[7] === 'prox' && parts[8] != null) {
+      extra = `≤${parts[8]}%`;
+    }
+    if (parts.includes('tol')) {
+      const ti = parts.indexOf('tol');
+      if (parts[ti + 1] != null) extra += (extra ? ' ' : '') + `±${parts[ti + 1]}%`;
+    }
+    return t('filter.macross', p1, iv1, p2, iv2, modeLabel, extra, interval);
   }
 
   return name;

@@ -21,7 +21,7 @@ const { ichimokuCloudRouter } = require('./technicals-indicators');
 //const {client} = require('./services/fetchClient');
 const {
   fetchCandles, fetchIchimokuCloud, fetchAllCurrencies,
-  fetchSMA, fetchRSI, fetchVWAP, fetch24HsVolume, fetchMarketCapFilter, fetchStablecoins, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter,
+  fetchSMA, fetchRSI, fetchVWAP, fetch24HsVolume, fetchMarketCapFilter, fetchStablecoins, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter,
   fetchRsiOversoldRecovery, fetchReloadCandles,
   fetchGateCurrencies, fetchGatePrefetch, fetchBinanceTrades, fetchGateTrades,
   fetchActiveTrades, stgBotStatus, multitradeService } = require('./services');
@@ -46,6 +46,7 @@ app.use('/services', fetchStablecoins)
 app.use('/services', fetchIndicatorSearch)
 app.use('/services', fetchMaFilter)
 app.use('/services', fetchMaTimeAboveFilter)
+app.use('/services', fetchMaCrossoverFilter)
 app.use('/services', fetchRsiOversoldRecovery)
 app.use('/services', fetchReloadCandles)
 app.use('/services', fetchGateCurrencies)
@@ -104,6 +105,7 @@ const PORT = process.env.BACKEND_PORT || process.env.SERVER_PORT || 3000;
 async function refreshRsiCache() {
   const t0 = Date.now();
   const { list: symbols } = await getActiveUsdtPairs();
+  if (!Array.isArray(symbols) || symbols.length === 0) return;
   const stats = await rsiCache.warmup(symbols, RSI_INTERVALS);
   if (stats.refreshed > 0 || stats.purged > 0) {
     await rsiCache.saveToDisk();
@@ -120,6 +122,8 @@ async function startServer() {
   await rsiCache.loadFromDisk();
   const maTimeAboveCache = require('./cache/maTimeAboveCache');
   await maTimeAboveCache.loadFromDisk();
+  const maCrossCache = require('./cache/maCrossCache');
+  await maCrossCache.loadFromDisk();
 
   app.listen(PORT, () => {
     const boot = ((Date.now() - t0) / 1000).toFixed(2);
@@ -129,6 +133,28 @@ async function startServer() {
   // Warmup em background — só entradas com TTL expirado
   console.log(`[rsiCache] intervalos: ${RSI_INTERVALS.join(', ')} | tick ${RSI_TICK_MS / 60_000}min`);
   refreshRsiCache().catch(e => console.error('[rsiCache] erro no warmup:', e.message));
+
+  async function refreshMaCrossCache() {
+    try {
+      const { list: symbols } = await getActiveUsdtPairs();
+      if (!Array.isArray(symbols) || symbols.length === 0) return;
+      const stats = await maCrossCache.refreshAll(symbols);
+      if (stats.computed > 0) {
+        await maCrossCache.saveToDisk();
+        const m = stats.matched ?? {};
+        console.log(
+          `[maCrossCache] 5m≤5m:${m['5'] ?? 0} 15m≤15m:${m['15'] ?? 0}`
+          + ` | disco:${stats.diskHits ?? 0} stale:${stats.diskStale ?? 0} api:${stats.apiFetches ?? 0}`
+          + ` | fila:${stats.queuePending ?? 0}`,
+        );
+      }
+    } catch (e) {
+      console.error('[maCrossCache] erro no refresh:', e.message);
+    }
+  }
+
+  refreshMaCrossCache().catch(e => console.error('[maCrossCache] erro no warmup:', e.message));
+  setInterval(refreshMaCrossCache, maCrossCache.REFRESH_TICK_MS);
 
   // Tick leve — só busca na API quando o TTL do intervalo expirou (15m/1h/4h)
   setInterval(async () => {

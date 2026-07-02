@@ -204,20 +204,30 @@ export function normalizeStrategyId(id) {
   return 'amap-15m';
 }
 
-/** strategy_id do painel pode divergir do kind salvo — usa kind como fonte de verdade. */
+/** strategy_id do painel; kind só quando strategy_id ausente ou inválido. */
 export function resolveEntryStrategyId(entry) {
+  const sid = entry?.strategyId ?? entry?.strategy_id;
+  if (sid && STRATEGY_IDS.includes(sid)) return sid;
   const kind = entry?.tradeConfig?.kind;
   if (kind === 'ma_cross') return 'ma-cross';
   if (kind === 'rsi') return 'swing-rsi-1h';
   if (kind === 'ma') return 'swing-ma50-8h';
-  return normalizeStrategyId(entry?.strategyId ?? entry?.strategy_id);
+  return normalizeStrategyId(sid);
 }
 
 export function formForEntry(existing, strategyId) {
+  if (isMaCrossStrategy(strategyId)) {
+    if (existing?.tradeConfig?.kind === 'ma_cross') return maCrossFormFromEntry(existing);
+    return presetFormState(strategyId);
+  }
+  if (isSwingStrategy(strategyId)) {
+    if (existing?.tradeConfig?.kind === 'rsi' || existing?.tradeConfig?.kind === 'ma') {
+      return swingFormFromEntry(existing);
+    }
+    return presetFormState(strategyId);
+  }
   if (existing?.tradeConfig?.kind === 'ma_cross') return maCrossFormFromEntry(existing);
   if (existing?.tradeConfig?.kind) return swingFormFromEntry(existing);
-  if (isMaCrossStrategy(strategyId)) return presetFormState(strategyId);
-  if (isSwingStrategy(strategyId)) return presetFormState(strategyId);
   return existing?.tradeConfig ? formStateFromEntry(existing) : presetFormState(strategyId);
 }
 

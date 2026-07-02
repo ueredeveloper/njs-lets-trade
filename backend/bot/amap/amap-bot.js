@@ -35,6 +35,9 @@ const {
 const { fmtVolumeUsdt } = require('../volume24h');
 const { configFromRow, resolveStrategy, hasAdaptiveFilters } = require('./tradeConfigSchema');
 const { parseRulesState, isRuleActive } = require('./rulesState');
+const { STRATEGY_IDS: AMAP_STRATEGY_IDS } = require('./strategyPresets');
+const registry = require('../multitradeRegistry');
+const { startMultitradeWatch, configFingerprint } = require('../multitradeWatch');
 const { runDualRuleTick } = require('./dualRuleTick');
 const { computeRule1EntryAdaptiveDips } = require('./rule1Engine');
 const { analyzeExtensionHistory, printExtensionReport } = require('./extensionBacktest');
@@ -139,8 +142,9 @@ const VOL_CACHE_MS  = 5 * 60_000;
 const BOT_DIR = path.join(__dirname, '../../data/bot');
 fs.mkdirSync(BOT_DIR, { recursive: true });
 
-const G = '\x1b[32m', R = '\x1b[31m', Y = '\x1b[33m', X = '\x1b[0m';
-const COLORS = ['\x1b[94m','\x1b[93m','\x1b[95m','\x1b[96m','\x1b[92m','\x1b[91m','\x1b[33m','\x1b[35m','\x1b[36m','\x1b[34m'];
+const G = '\x1b[32m', R = '\x1b[31m', Y = '\x1b[33m', C = '\x1b[96m', X = '\x1b[0m';
+// Verde/vermelho reservados para compra/venda
+const COLORS = ['\x1b[94m','\x1b[93m','\x1b[95m','\x1b[96m','\x1b[33m','\x1b[35m','\x1b[36m','\x1b[34m','\x1b[97m','\x1b[90m'];
 
 function nowFmt() {
   return new Date().toLocaleTimeString('pt-BR', {
@@ -672,7 +676,7 @@ async function processRuleEvents({
       log(`${Y}⚠️  [${ruleId}] bloqueado: ${reasons[ev.reason] ?? ev.reason}${X}`);
     } else if (ev.type === 'pending') {
       const discPct = (ev.discount * 100).toFixed(1);
-      log(`${G}🎯 [${ruleId}] PENDING −${discPct}% alvo $${fmtP(ev.limitPrice)}${X}`);
+      log(`${C}🎯 [${ruleId}] PENDING −${discPct}% alvo $${fmtP(ev.limitPrice)}${X}`);
       const sigId = await insertEntrySignal({
         ...sigBase(), status: 'pending',
         trigger_price: ev.triggerPrice, limit_price: ev.limitPrice,
@@ -701,7 +705,7 @@ async function processRuleEvents({
           executed_at: now, executed_price: avgPrice, executed_qty: filledQty, executed_usdt: quoteQty,
         });
       }
-      log(`${G}✅ [${ruleId}] COMPRA $${fmtP(avgPrice)} qty=${filledQty}${X}`);
+      log(`${G}🟢 [${ruleId}] COMPRA $${fmtP(avgPrice)} qty=${filledQty}${X}`);
     } else if (ev.type === 'sell') {
       const rs = rulesState[ruleId];
       let result;
@@ -718,7 +722,7 @@ async function processRuleEvents({
       const exitReasonStored = exitDetail
         ? packExitReasonForDb(exitDetail)
         : ev.exitReason;
-      log(`${stopLossHit ? '🛑' : '🔴'} [${ruleId}] VENDA — ${exitDetail?.short ?? ev.exitReason} PnL=$${pnlUsdt.toFixed(2)}`);
+      log(`${R}${stopLossHit ? '🛑' : '🔴'} [${ruleId}] VENDA — ${exitDetail?.short ?? ev.exitReason} PnL=$${pnlUsdt.toFixed(2)}${X}`);
       await insertTrade({
         symbol: state.symbol, exchange: state.exchange, strategy_id: state.strategy_id ?? 'flex',
         entry_time: rs.buy_time, exit_time: new Date().toISOString(),
@@ -747,7 +751,9 @@ async function tick(rowId, adapter, strategy, log, prevExitRsi, session) {
 
 // ── startSymbol ───────────────────────────────────────────────────────────────
 async function startSymbol(row, color) {
-  const strategy = resolveStrategy(row);
+  if (registry.has(row.id)) return;
+
+  let strategy = resolveStrategy(row);
   if (!strategy) {
     console.error(`❌ strategy_id "${row.strategy_id}" sem trade_config para ${row.symbol}`);
     return;
@@ -755,6 +761,50 @@ async function startSymbol(row, color) {
 
   const adapter = buildAdapter(row.exchange ?? 'binance', row.symbol);
   const log     = makeLogger(row.symbol, color);
+
+  const ctx = {
+    rowId: row.id,
+    symbol: row.symbol,
+    strategyId: row.strategy_id,
+    key: registry.sessionKey(row.symbol, row.strategy_id),
+    adapter,
+    log,
+    strategy,
+    stopped: false,
+    timer: null,
+    configFingerprint: configFingerprint(row),
+  };
+
+  let adaptIv;
+
+  const stop = async ({ reason } = {}) => {
+    if (ctx.stopped) return;
+    ctx.stopped = true;
+    if (ctx.timer) clearTimeout(ctx.timer);
+    if (adaptIv) clearInterval(adaptIv);
+    registry.unregister(ctx.rowId);
+    ctx.log(`🛑 Monitoramento encerrado (posição na corretora não é alterada)${reason ? ` — ${reason}` : ''}`);
+  };
+
+  const updateFromRow = (newRow) => {
+    const next = resolveStrategy(newRow);
+    if (!next) {
+      ctx.log(`⚠️  trade_config inválido após sync — mantendo config anterior`);
+      return;
+    }
+    ctx.strategy = next;
+    ctx.log(`🔄 Config atualizada do painel (${next.label ?? row.strategy_id})`);
+  };
+
+  registry.register(row.id, {
+    rowId: row.id,
+    symbol: row.symbol,
+    strategyId: row.strategy_id,
+    key: ctx.key,
+    stop,
+    updateFromRow,
+    configFingerprint: ctx.configFingerprint,
+  });
 
   const rulesState = parseRulesState(row);
   log(
@@ -797,8 +847,9 @@ async function startSymbol(row, color) {
       session.adaptiveDips = await refreshAdaptiveDips(adapter, strategy.config);
       const dips = Object.entries(session.adaptiveDips).map(([k, v]) => `${k}:${v}%`).join(' ');
       log(`📐 Dips adaptativos: ${dips || 'nenhum'}`);
-      setInterval(async () => {
-        try { session.adaptiveDips = await refreshAdaptiveDips(adapter, strategy.config); }
+      adaptIv = setInterval(async () => {
+        if (ctx.stopped) return;
+        try { session.adaptiveDips = await refreshAdaptiveDips(adapter, ctx.strategy.config); }
         catch {}
       }, 24 * 60 * 60_000);
     } catch (err) {
@@ -807,16 +858,18 @@ async function startSymbol(row, color) {
   }
 
   const schedule = () => {
-    const { phase, exitRsi, rulesState } = lastResult;
-    const r2Pending = rulesState?.rule2?.phase === 'PENDING';
-    const r1Pending = rulesState?.rule1?.phase === 'PENDING' || phase === 'PENDING';
-    const fast  = r1Pending || r2Pending || (exitRsi !== null && exitRsi >= strategy.fastRsiThreshold);
-    setTimeout(run, fast ? strategy.fastPollMs : strategy.pollMs);
+    if (ctx.stopped) return;
+    const { phase, exitRsi, rulesState: rs } = lastResult;
+    const r2Pending = rs?.rule2?.phase === 'PENDING';
+    const r1Pending = rs?.rule1?.phase === 'PENDING' || phase === 'PENDING';
+    const fast  = r1Pending || r2Pending || (exitRsi !== null && exitRsi >= ctx.strategy.fastRsiThreshold);
+    ctx.timer = setTimeout(run, fast ? ctx.strategy.fastPollMs : ctx.strategy.pollMs);
   };
 
   const run = async () => {
+    if (ctx.stopped) return;
     try {
-      lastResult = await tick(row.id, adapter, strategy, log, lastResult.exitRsi, session);
+      lastResult = await tick(ctx.rowId, adapter, ctx.strategy, log, lastResult.exitRsi, session);
       errCount   = 0;
     } catch (err) {
       errCount++;
@@ -1011,18 +1064,27 @@ async function main() {
   setInterval(syncGateClock,    60 * 60_000);
 
   let rows = await loadAllRows();
-  if (!rows?.length) {
-    console.error('❌ Nenhum símbolo em rsi_multi_bot_state. Execute amap-bot.sql no Supabase.');
-    process.exit(1);
-  }
+  rows = (rows ?? []).filter(r => AMAP_STRATEGY_IDS.includes(r.strategy_id));
   if (symbolFilter) {
     rows = rows.filter(r => r.symbol.toUpperCase() === symbolFilter);
     if (!rows.length) {
-      console.error(`❌ Símbolo "${symbolFilter}" não encontrado em rsi_multi_bot_state.`);
-      process.exit(1);
+      console.log(`   ℹ️  ${symbolFilter} não está no state — aguardando painel (sync 5 min)`);
     }
-    console.log(`   🔎 Filtrando apenas: ${symbolFilter}`);
+  } else if (!rows?.length) {
+    console.log('   ℹ️  Nenhum símbolo AMAP no state — aguardando adições no painel (sync 5 min)');
   }
+
+  startMultitradeWatch({
+    sbReq,
+    strategyIds: AMAP_STRATEGY_IDS,
+    symbolFilter,
+    resolveStrategy,
+    onStartSymbol: (row) => {
+      const idx = row.symbol.charCodeAt(0) + (row.strategy_id?.length ?? 0);
+      return startSymbol(row, COLORS[idx % COLORS.length]);
+    },
+    log: console.log,
+  });
 
   console.log('\n🤖 Bot AMAP — amap-bot.js');
   console.log('   Config: trade_config (Supabase / painel Multi-Trade)\n');
@@ -1070,7 +1132,11 @@ async function main() {
   }
 
   console.log();
-  if (!toStart.length) { console.error('❌ Nenhum símbolo aprovado.'); process.exit(0); }
+  if (!toStart.length) {
+    console.log('   Aguardando moedas no painel Multi-Trade…\n');
+    await new Promise(() => {});
+    return;
+  }
 
   await Promise.all(toStart.map(({ row, color }) => startSymbol(row, color)));
 }

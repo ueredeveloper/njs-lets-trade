@@ -13,18 +13,35 @@ async function getActiveUsdtPairs() {
     return _cachedPairs;
   }
 
-  const url = "https://api.binance.com/api/v3/exchangeInfo";
-  const response = await fetch(url);
-  const data = await response.json();
+  try {
+    const url = 'https://api.binance.com/api/v3/exchangeInfo';
+    const response = await fetch(url);
+    const data = await response.json();
 
-  const activeUsdtPairs = data.symbols
-    .filter(s => s.symbol.endsWith("USDT"))
-    .filter(s => s.status === "TRADING")
-    .map(s => s.symbol);
+    if (!Array.isArray(data.symbols)) {
+      const msg = data.msg ?? JSON.stringify(data);
+      if (_cachedPairs) {
+        console.warn('[getActiveUsdtPairs] API indisponível — usando cache:', msg);
+        return _cachedPairs;
+      }
+      throw new Error(`exchangeInfo inesperado: ${msg}`);
+    }
 
-  _cachedPairs = { name: "Mercado|USDT", list: activeUsdtPairs };
-  _cachedAt = Date.now();
-  return _cachedPairs;
+    const activeUsdtPairs = data.symbols
+      .filter(s => s.symbol.endsWith('USDT'))
+      .filter(s => s.status === 'TRADING')
+      .map(s => s.symbol);
+
+    _cachedPairs = { name: 'Mercado|USDT', list: activeUsdtPairs };
+    _cachedAt = Date.now();
+    return _cachedPairs;
+  } catch (err) {
+    if (_cachedPairs) {
+      console.warn('[getActiveUsdtPairs] falha — usando cache:', err.message);
+      return _cachedPairs;
+    }
+    throw err;
+  }
 }
 
 module.exports = { getActiveUsdtPairs };

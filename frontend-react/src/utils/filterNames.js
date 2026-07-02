@@ -35,6 +35,69 @@ export function buildMaPctFilterName(interval, period, minPct) {
   return `${interval}|ma|${period}|pct|${minPct}`;
 }
 
+const MA_CROSS_MODE_TOKENS = {
+  cross_up: 'xup',
+  cross_down: 'xdwn',
+  near_up: 'nearup',
+  near_down: 'neardn',
+};
+
+export function parseMaCrossModeToken(token) {
+  const t = String(token).toLowerCase();
+  if (t === 'xup' || t === 'cross_up') return 'cross_up';
+  if (t === 'xdwn' || t === 'cross_down') return 'cross_down';
+  if (t === 'nearup' || t === 'near_up') return 'near_up';
+  if (t === 'neardn' || t === 'near_down') return 'near_down';
+  return null;
+}
+
+/** MA cruzamento: 15m|macross|9|15m|21|15m|xup|age|5|tol|0.5 */
+export function buildMaCrossFilterName(sigInterval, p1, iv1, p2, iv2, mode, opts = {}) {
+  const modeToken = MA_CROSS_MODE_TOKENS[mode] ?? mode;
+  let name = `${sigInterval}|macross|${p1}|${iv1}|${p2}|${iv2}|${modeToken}`;
+
+  if (mode === 'near_up' || mode === 'near_down') {
+    if (opts.proximityPct != null) name += `|prox|${opts.proximityPct}`;
+  } else {
+    const age = opts.maxAgeMin ?? 'last';
+    name += `|age|${age}`;
+    if (opts.tolerancePct != null && Number(opts.tolerancePct) > 0) {
+      name += `|tol|${opts.tolerancePct}`;
+    }
+  }
+  return name;
+}
+
+/** Parse nome macross → parâmetros para re-scan / polling. */
+export function parseMaCrossFilterName(name) {
+  const parts = String(name).split('|');
+  if (parts[1] !== 'macross' || parts.length < 7) return null;
+
+  const mode = parseMaCrossModeToken(parts[6]);
+  if (!mode) return null;
+
+  const out = {
+    period1: parseInt(parts[2], 10),
+    interval1: parts[3],
+    period2: parseInt(parts[4], 10),
+    interval2: parts[5],
+    mode,
+    maxAgeMin: 'last',
+    tolerancePct: 0,
+    proximityPct: 1,
+  };
+
+  for (let i = 7; i + 1 < parts.length; i += 2) {
+    const key = parts[i];
+    const val = parts[i + 1];
+    if (key === 'age') out.maxAgeMin = val;
+    else if (key === 'tol') out.tolerancePct = parseFloat(val) || 0;
+    else if (key === 'prox') out.proximityPct = parseFloat(val) || 1;
+  }
+
+  return out;
+}
+
 /** Constrói nome RSI a partir da query (ex: 8h|rsi|above|70|bellow|99). */
 export function buildRsiNomeFromQuery(query, lang = 'en') {
   const parts = query.trim().split('|');

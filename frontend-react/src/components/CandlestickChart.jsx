@@ -32,6 +32,8 @@ const C_UP   = '#26a69a';
 const C_DOWN = '#ef5350';
 
 const INDICATOR_GROUPS = [
+  { id: 'ma9',      label: 'MA9',   color: '#e879f9' },
+  { id: 'ma21',     label: 'MA21',  color: '#fb923c' },
   { id: 'ma50',     label: 'MA50',  color: '#22d3ee' },
   { id: 'ma200',    label: 'MA200', color: '#f59e0b' },
   { id: 'ichimoku', label: 'Ichi',  color: '#60a5fa' },
@@ -309,7 +311,9 @@ function buildMultitradeMarkLines(candlesticks, interval, markers, DL, LEFT_PAD)
   });
 }
 
-function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAverage, ma50, rsi }, colors, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = [], overlayConfigs = [], multitradeMarkers = []) {
+function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAverage, ma50, ma9, ma21, rsi }, colors, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = [], overlayConfigs = [], multitradeMarkers = []) {
+  const showMa9      = activeIndicators.includes('ma9');
+  const showMa21     = activeIndicators.includes('ma21');
   const showMa50     = activeIndicators.includes('ma50');
   const showMa200    = activeIndicators.includes('ma200');
   const showIchimoku = activeIndicators.includes('ichimoku');
@@ -491,6 +495,8 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
     return html;
   };
 
+  const ma9Data   = alignSeries(ma9);
+  const ma21Data  = alignSeries(ma21);
   const ma50Data  = alignSeries(ma50);
   const ma200Data = alignSeries(movingAverage);
   const zoomWindow = zoomPeriod ? computeZoomWindow(candlesticks, zoomPeriod) : null;
@@ -504,6 +510,22 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
       itemStyle: { color: C_UP, color0: C_DOWN, borderColor: C_UP, borderColor0: C_DOWN },
       markLine: finalMarkLine,
     },
+    ...(showMa9 && ma9?.length ? [{
+      name: 'MA9',
+      type: 'line',
+      xAxisIndex: idx, yAxisIndex: idx,
+      data: ma9Data,
+      smooth: true, showSymbol: false,
+      lineStyle: { color: '#e879f9', width: 1.5 },
+    }] : []),
+    ...(showMa21 && ma21?.length ? [{
+      name: 'MA21',
+      type: 'line',
+      xAxisIndex: idx, yAxisIndex: idx,
+      data: ma21Data,
+      smooth: true, showSymbol: false,
+      lineStyle: { color: '#fb923c', width: 1.5 },
+    }] : []),
     ...(showMa50 && ma50?.length ? [{
       name: 'MA50',
       type: 'line',
@@ -994,7 +1016,7 @@ export default function CandlestickChart() {
   const [currentInterval, setCurrentInterval] = useState(DEFAULT_INTERVAL);
   const [loadingInterval, setLoadingInterval] = useState(false);
   const [themeTick, setThemeTick] = useState(0);
-  const [activeIndicators, setActiveIndicators] = useState(['ma50', 'rsi']);
+  const [activeIndicators, setActiveIndicators] = useState(['ma9', 'ma21', 'rsi']);
   const [activeTab, setActiveTab] = useState('chart'); // 'chart' | 'matrix'
   const [overlaySlots, setOverlaySlots] = useState(DEFAULT_OVERLAY_SLOTS);
   const [overlayMaCache, setOverlayMaCache] = useState({});
@@ -1045,6 +1067,8 @@ export default function CandlestickChart() {
     setActiveIndicators(prev => {
       const next = new Set(prev);
       next.add('rsi');
+      next.add('ma9');
+      next.add('ma21');
       next.add('ma50');
       return [...next];
     });
@@ -1072,6 +1096,30 @@ export default function CandlestickChart() {
         if (slot.interval === chartIv && slot.period === '50' && activeIndicators.includes('ma50')) {
           const candles = selectedChart.candlesticks ?? [];
           const ma = selectedChart.ma50 ?? [];
+          if (ma.length && candles.length) {
+            const offset = candles.length - ma.length;
+            next[key] = ma.map((val, i) => ({
+              openTime: Number(candles[offset + i].openTime),
+              value: val,
+            }));
+          }
+          return;
+        }
+        if (slot.interval === chartIv && slot.period === '9' && activeIndicators.includes('ma9')) {
+          const candles = selectedChart.candlesticks ?? [];
+          const ma = selectedChart.ma9 ?? [];
+          if (ma.length && candles.length) {
+            const offset = candles.length - ma.length;
+            next[key] = ma.map((val, i) => ({
+              openTime: Number(candles[offset + i].openTime),
+              value: val,
+            }));
+          }
+          return;
+        }
+        if (slot.interval === chartIv && slot.period === '21' && activeIndicators.includes('ma21')) {
+          const candles = selectedChart.candlesticks ?? [];
+          const ma = selectedChart.ma21 ?? [];
           if (ma.length && candles.length) {
             const offset = candles.length - ma.length;
             next[key] = ma.map((val, i) => ({
@@ -1114,7 +1162,7 @@ export default function CandlestickChart() {
     })();
 
     return () => { cancelled = true; };
-  }, [overlaySlots, selectedChart?.symbol, selectedChart?.interval, selectedChart?.source, selectedChart?.candlesticks, selectedChart?.ma50, selectedChart?.movingAverage, currentInterval, candleFetchLimit, activeIndicators, chartViewSource, multitradeChartFocus?.fetchFromMs]);
+  }, [overlaySlots, selectedChart?.symbol, selectedChart?.interval, selectedChart?.source, selectedChart?.candlesticks, selectedChart?.ma50, selectedChart?.ma9, selectedChart?.ma21, selectedChart?.movingAverage, currentInterval, candleFetchLimit, activeIndicators, chartViewSource, multitradeChartFocus?.fetchFromMs]);
 
   const colors = useMemo(() => getThemeColors(), [themeTick]);
 
