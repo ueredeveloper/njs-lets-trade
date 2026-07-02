@@ -19,6 +19,7 @@ require('dotenv').config({ path: path.join(__dirname, '../../../.env') });
 
 const { fetchBinanceCandles, fetchGateCandles } = require('../prices');
 const { toGateSymbol } = require('../../utils/toGateSymbol');
+const { gateMarketSell: gateMarketSellCore } = require('../gate/gateMarketSell');
 const { sendWhatsApp } = require('../whatsapp');
 const { fmtVolumeUsdt } = require('../volume24h');
 const { resolveStrategy } = require('./tradeConfigSchema');
@@ -207,21 +208,11 @@ async function gateMarketBuy(pair, usdtAmount) {
   return { filledQty: grossQty * (1 - GATE_FEE_RATE), quoteQty: quoteQty || grossQty * avgPrice, avgPrice };
 }
 
-async function gateMarketSell(pair, qty, log) {
-  const actualBalance = await gateGetTokenBalance(pair);
-  const sellQty       = Math.min(parseFloat(qty), actualBalance);
-  if (sellQty <= 0) throw new Error(`Gate.io: saldo insuficiente (disponível: ${actualBalance})`);
-  if (sellQty < parseFloat(qty)) log(`⚠️  Qty ajustada: ${qty} → ${sellQty} (saldo real)`);
-  const order = await gateReq('POST', '/spot/orders', {
-    currency_pair: pair, side: 'sell', type: 'market', amount: sellQty.toFixed(8),
-  });
-  await new Promise(r => setTimeout(r, 2000));
-  const filled    = await gateReq('GET', `/spot/orders/${order.id}`, { currency_pair: pair });
-  const soldQty   = parseFloat(filled.amount) - parseFloat(filled.left || 0);
-  const usdtOut   = parseFloat(filled.filled_total || 0);
-  const exitPrice = parseFloat(filled.avg_deal_price || 0);
-  if (soldQty <= 0) throw new Error(`Gate.io: venda não preenchida (status=${filled.status})`);
-  return { soldQty, usdtOut: usdtOut || soldQty * exitPrice, exitPrice };
+async function gateMarketSell(pair, qty, log, opts = {}) {
+  return gateMarketSellCore(
+    { gateReq, getTokenBalance: gateGetTokenBalance },
+    pair, qty, log, opts,
+  );
 }
 
 async function gate24hVolume(pair) {
@@ -236,7 +227,7 @@ function buildAdapter(exchange, symbol) {
       name: 'Gate.io', pair,
       fetchCandles: (lim, iv) => fetchGateCandles(pair, lim, iv),
       marketBuy:    (usdt)     => gateMarketBuy(pair, usdt),
-      marketSell:   (qty, log) => gateMarketSell(pair, qty, log),
+      marketSell:   (qty, log, opts) => gateMarketSell(pair, qty, log, opts),
       fetch24hVol:  ()         => gate24hVolume(pair),
     };
   }
@@ -376,7 +367,8 @@ async function tick(rowId, adapter, strategy, log, session) {
 
     let result;
     try {
-      result = await adapter.marketSell(parseFloat(state.buy_qty), log);
+      const sellOpts = adapter.name === 'Gate.io' ? { aggressive: true } : {};
+      result = await adapter.marketSell(parseFloat(state.buy_qty), log, sellOpts);
     } catch (err) {
       log(`❌ Erro na venda: ${err.message}`);
       return { phase };

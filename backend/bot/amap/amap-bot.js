@@ -26,10 +26,11 @@ require('dotenv').config({ path: path.join(__dirname, '../../../.env') });
 const ti = require('technicalindicators');
 const { fetchBinanceCandles, fetchGateCandles } = require('../prices');
 const { toGateSymbol } = require('../../utils/toGateSymbol');
+const { gateMarketSell: gateMarketSellCore } = require('../gate/gateMarketSell');
 const { sendWhatsApp } = require('../whatsapp');
 const {
   buildTradeConfig, getRequiredSpecs, computeAdaptiveDips, buildMaSnapshot, buildAdaptiveReport,
-  isStopLossExit, checkRsi, needsMarketSell, maKey,
+  isStopLossExit, checkRsi, maKey,
 } = require('./strategyEngine');
 const { fmtVolumeUsdt } = require('../volume24h');
 const { configFromRow, resolveStrategy, hasAdaptiveFilters } = require('./tradeConfigSchema');
@@ -127,14 +128,8 @@ async function checkEntryVolume(adapter, config, session) {
 }
 
 async function executeMarketSell(adapter, config, session, qty, log) {
-  let aggressive = !!config.allowLowVolume;
-  if (!aggressive) {
-    try {
-      const vol = await getCached24hVolume(adapter, session);
-      aggressive = needsMarketSell(config, vol);
-    } catch {}
-  }
-  return adapter.marketSell(qty, log, { aggressive });
+  // Saída sempre agressiva na Gate — prioriza preenchimento sem erro
+  return adapter.marketSell(qty, log, { aggressive: true });
 }
 
 const GATE_FEE_RATE = 0.002;
@@ -415,44 +410,11 @@ async function gateMarketBuy(pair, usdtAmount) {
   return { filledQty: netQty, quoteQty: quoteQty || grossQty * avgPrice, avgPrice };
 }
 
-async function gateMarketSell(pair, qty, log, { aggressive = false } = {}) {
-  const actualBalance = await gateGetTokenBalance(pair);
-  const sellQty       = Math.min(parseFloat(qty), actualBalance);
-  if (sellQty <= 0) throw new Error(`Gate.io: saldo insuficiente (disponível: ${actualBalance})`);
-  if (sellQty < parseFloat(qty)) log(`⚠️  Qty ajustada: ${qty} → ${sellQty} (saldo real)`);
-
-  if (aggressive) {
-    try {
-      const ticker = await fetch(`${GATE_BASE}/spot/tickers?currency_pair=${pair}`).then(r => r.json());
-      const bid    = parseFloat(ticker[0]?.highest_bid || ticker[0]?.last);
-      if (bid > 0) {
-        log(`📉 Venda IOC no bid $${fmtP(bid)} (baixa liquidez)`);
-        const order  = await gateReq('POST', '/spot/orders', {
-          currency_pair: pair, side: 'sell', type: 'limit',
-          price: String(bid), amount: sellQty.toFixed(8), time_in_force: 'ioc',
-        });
-        await new Promise(r => setTimeout(r, 1500));
-        const filled    = await gateReq('GET', `/spot/orders/${order.id}`, { currency_pair: pair });
-        const soldQty   = parseFloat(filled.amount) - parseFloat(filled.left || 0);
-        const usdtOut   = parseFloat(filled.filled_total || 0);
-        const exitPrice = parseFloat(filled.avg_deal_price || bid);
-        if (soldQty > 0) return { soldQty, usdtOut: usdtOut || soldQty * exitPrice, exitPrice };
-        log(`⚠️  IOC parcial/zero — tentando market`);
-      }
-    } catch (err) { log(`⚠️  IOC falhou (${err.message}) — tentando market`); }
-  }
-
-  const order = await gateReq('POST', '/spot/orders', {
-    currency_pair: pair, side: 'sell', type: 'market',
-    amount: sellQty.toFixed(8), time_in_force: 'ioc',
-  });
-  await new Promise(r => setTimeout(r, 2000));
-  const filled    = await gateReq('GET', `/spot/orders/${order.id}`, { currency_pair: pair });
-  const soldQty   = parseFloat(filled.amount) - parseFloat(filled.left || 0);
-  const usdtOut   = parseFloat(filled.filled_total || 0);
-  const exitPrice = parseFloat(filled.avg_deal_price || 0);
-  if (soldQty <= 0) throw new Error(`Gate.io: venda não preenchida (status=${filled.status})`);
-  return { soldQty, usdtOut: usdtOut || soldQty * exitPrice, exitPrice };
+async function gateMarketSell(pair, qty, log, opts = {}) {
+  return gateMarketSellCore(
+    { gateReq, getTokenBalance: gateGetTokenBalance },
+    pair, qty, log, { ...opts, fmtPrice: fmtP },
+  );
 }
 
 async function gate24hVolume(pair) {

@@ -36,8 +36,9 @@ const CONFIG = toEngineConfig(normalizeMaCrossConfig({
   maFiltersEnabled: true,
   maFilters: [{
     id: 1, enabled: true, period: 50, interval: '1h',
-    mode: 'strict_above', tolerancePct: 0,
+    mode: 'adaptive', maxDipPct: 4,
   }],
+  adaptiveOpts: { defaultPct: 3, maxPct: 8, minPct: 0.5, minEpisodes: 3 },
   exit: {
     logic: 'any',
     maCross: {
@@ -217,7 +218,7 @@ function simulate(config, fullMap) {
 
 async function main() {
   console.log(`\n🔬 Backtest MA Cross — ${SYMBOL} [${EXCHANGE}] | últimos ${DAYS} dias | $${CAPITAL}\n`);
-  console.log('   Entrada : MA9(15m) cruza ↑ MA21(15m) + preço > MA50(1h)');
+  console.log('   Entrada : MA9(15m) cruza ↑ MA21(15m) + preço ≥ MA50(1h) adaptativo (máx 4%)');
   console.log('   Saída   : MA9(15m) cruza ↓ MA21(15m) | stop 5%\n');
 
   const minByIv = {};

@@ -8,7 +8,7 @@ import {
 } from '../constants/tradeConfigSchema';
 import {
   STRATEGY_IDS, STRATEGY_LABELS, STRATEGY_COLORS,
-  buildDualStrategyState, isSwingStrategy, isMaCrossStrategy,
+  buildDualStrategyState, isSwingStrategy, isMaCrossStrategy, resolveEntryStrategyId,
 } from '../constants/strategyPresets';
 import { swingFormToPayload } from '../constants/swingConfigSchema';
 import { maCrossFormToPayload } from '../constants/maCrossConfigSchema';
@@ -139,7 +139,10 @@ export default function MultitradeModal({
     symbol: initialSymbol ?? entries[0]?.symbol ?? '',
     exchange: defaultExchange ?? entries[0]?.exchange ?? 'binance',
   }));
-  const [activeStrategy, setActiveStrategy] = useState('amap-15m');
+  const [activeStrategy, setActiveStrategy] = useState(() => {
+    const first = entries.find(e => e.enabled !== false) ?? entries[0];
+    return first ? resolveEntryStrategyId(first) : 'amap-15m';
+  });
   const [activeTab, setActiveTab] = useState('rule1');
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [volCheck, setVolCheck] = useState(null);
@@ -155,8 +158,8 @@ export default function MultitradeModal({
 
   const symbol = dual.symbol;
   const exchange = dual.exchange;
-  const strat = dual.strategies[activeStrategy];
-  const form = strat.form;
+  const strat = dual.strategies[activeStrategy] ?? dual.strategies['amap-15m'];
+  const form = strat?.form ?? {};
   const capital = strat.capital;
   const strategyEnabled = strat.enabled;
 
@@ -189,17 +192,17 @@ export default function MultitradeModal({
 
   const isSwing = isSwingStrategy(activeStrategy);
   const isMaCross = isMaCrossStrategy(activeStrategy);
-  const rule1On = !isSwing && !isMaCross && form.rule1?.enabled !== false;
-  const rule2On = !isSwing && !isMaCross && form.rule2?.enabled === true;
+  const rule1On = !isSwing && !isMaCross && !!form.rule1 && form.rule1.enabled !== false;
+  const rule2On = !isSwing && !isMaCross && !!form.rule2 && form.rule2.enabled === true;
 
-  const entrySummary = rule1On
+  const entrySummary = rule1On && form.rule1?.entryRsi
     ? `RSI(${form.rule1.entryRsi.interval}) ${form.rule1.entryRsi.operator ?? '<'} ${form.rule1.entryRsi.value}`
     : '';
-  const rule2Summary = rule2On
+  const rule2Summary = rule2On && form.rule2?.entryMa
     ? `MA${form.rule2.entryMa.period} ${form.rule2.entryMa.interval} · ${form.rule2.entryMa.aboveMaCandles ?? 10} candles acima · ${ENTRY_MA_TRIGGERS.find(t => t.id === form.rule2.entryMa.trigger)?.label ?? 'toque'}`
     : '';
 
-  const rule2TabLabel = rule2On
+  const rule2TabLabel = rule2On && form.rule2?.entryMa
     ? `Regra 2 — MA${form.rule2.entryMa.period} ${form.rule2.entryMa.interval}`
     : 'Regra 2 — MA';
 
@@ -362,9 +365,9 @@ export default function MultitradeModal({
   }
 
   useEffect(() => {
-    if (isSwing) return;
+    if (isSwing || isMaCross) return;
     setDiscountSuggest(null);
-  }, [isSwing, symbol, exchange, form.rule1?.entryRsi, form.rule1?.exitRsi, form.rule1?.execution?.pendingTimeoutMs]);
+  }, [isSwing, isMaCross, symbol, exchange, form.rule1?.entryRsi, form.rule1?.exitRsi, form.rule1?.execution?.pendingTimeoutMs]);
 
   async function handleSuggestDiscount() {
     const sym = symbol.trim().toUpperCase();
@@ -386,18 +389,24 @@ export default function MultitradeModal({
   }
 
   useEffect(() => {
-    if (isSwing) return;
+    if (isSwing || isMaCross) return;
     setExitRsiSuggest(null);
-  }, [isSwing, symbol, exchange, form.rule1?.entryRsi, form.rule1?.exitRsi, form.rule1?.maConditions, form.rule1?.extension, form.rule1?.stopLoss]);
-
-  useEffect(() => { setExitRsi2Suggest(null); }, [symbol, exchange, form.rule2.entryMa, form.rule2.exitRsi, form.rule2.stopLoss]);
+  }, [isSwing, isMaCross, symbol, exchange, form.rule1?.entryRsi, form.rule1?.exitRsi, form.rule1?.maConditions, form.rule1?.extension, form.rule1?.stopLoss]);
 
   useEffect(() => {
-    if (isSwing) { setEntryRsiSuggest(null); return; }
-    setEntryRsiSuggest(null);
-  }, [isSwing, symbol, exchange, form.entryRsi, form.rule1?.entryRsi, form.rule1?.enabled, form.rule1?.maConditions, form.rule1?.extension, form.rule1?.stopLoss]);
+    if (isSwing || isMaCross) return;
+    setExitRsi2Suggest(null);
+  }, [isSwing, isMaCross, symbol, exchange, form.rule2?.entryMa, form.rule2?.exitRsi, form.rule2?.stopLoss]);
 
-  useEffect(() => { setEntryMaSuggest(null); }, [symbol, exchange, form.rule2.entryMa, form.rule2.exitRsi, form.rule2.stopLoss]);
+  useEffect(() => {
+    if (isSwing || isMaCross) { setEntryRsiSuggest(null); return; }
+    setEntryRsiSuggest(null);
+  }, [isSwing, isMaCross, symbol, exchange, form.entryRsi, form.rule1?.entryRsi, form.rule1?.enabled, form.rule1?.maConditions, form.rule1?.extension, form.rule1?.stopLoss]);
+
+  useEffect(() => {
+    if (isSwing || isMaCross) return;
+    setEntryMaSuggest(null);
+  }, [isSwing, isMaCross, symbol, exchange, form.rule2?.entryMa, form.rule2?.exitRsi, form.rule2?.stopLoss]);
 
   async function handleSuggestEntryRsi() {
     const sym = symbol.trim().toUpperCase();
@@ -1356,21 +1365,36 @@ export default function MultitradeModal({
                     </select>
                   </div>
                 </div>
+                {!isMaCross && !isSwing && (
                 <div>
                   <FieldLabel label="RSI saída ≥ valor → polling rápido" hint={MT_HELP.shared.pollFastThreshold}
                     className="block text-[10px] text-p5/40 mb-1" />
                   <NumInput value={form.polling.fastRsiThreshold} onChange={v => patch('polling.fastRsiThreshold', v)} min={50} max={95} className="w-full" title={MT_HELP.shared.pollFastThreshold} />
                 </div>
+                )}
+                {(isMaCross || (!isSwing && form.rule1)) && (
                 <div>
                   <FieldLabel label="MA adaptativa — dip padrão / máx / mín / episódios" hint={MT_HELP.shared.adaptiveOpts}
                     className="block text-[10px] text-p5/40 mb-1" />
                   <div className="grid grid-cols-4 gap-1">
-                    <NumInput value={form.rule1.adaptiveOpts.defaultPct} onChange={v => patch('rule1.adaptiveOpts.defaultPct', v)} min={0} max={20} step={0.5} className="w-full" />
-                    <NumInput value={form.rule1.adaptiveOpts.maxPct} onChange={v => patch('rule1.adaptiveOpts.maxPct', Math.min(5, v))} min={0} max={5} step={0.5} className="w-full" />
-                    <NumInput value={form.rule1.adaptiveOpts.minPct} onChange={v => patch('rule1.adaptiveOpts.minPct', v)} min={0} max={10} step={0.1} className="w-full" />
-                    <NumInput value={form.rule1.adaptiveOpts.minEpisodes} onChange={v => patch('rule1.adaptiveOpts.minEpisodes', v)} min={1} max={20} className="w-full" />
+                    {isMaCross ? (
+                      <>
+                        <NumInput value={form.adaptiveOpts?.defaultPct} onChange={v => patch('adaptiveOpts.defaultPct', v)} min={0} max={20} step={0.5} className="w-full" />
+                        <NumInput value={form.adaptiveOpts?.maxPct} onChange={v => patch('adaptiveOpts.maxPct', v)} min={0} max={20} step={0.5} className="w-full" />
+                        <NumInput value={form.adaptiveOpts?.minPct} onChange={v => patch('adaptiveOpts.minPct', v)} min={0} max={10} step={0.1} className="w-full" />
+                        <NumInput value={form.adaptiveOpts?.minEpisodes} onChange={v => patch('adaptiveOpts.minEpisodes', v)} min={1} max={20} className="w-full" />
+                      </>
+                    ) : (
+                      <>
+                        <NumInput value={form.rule1.adaptiveOpts.defaultPct} onChange={v => patch('rule1.adaptiveOpts.defaultPct', v)} min={0} max={20} step={0.5} className="w-full" />
+                        <NumInput value={form.rule1.adaptiveOpts.maxPct} onChange={v => patch('rule1.adaptiveOpts.maxPct', Math.min(5, v))} min={0} max={5} step={0.5} className="w-full" />
+                        <NumInput value={form.rule1.adaptiveOpts.minPct} onChange={v => patch('rule1.adaptiveOpts.minPct', v)} min={0} max={10} step={0.1} className="w-full" />
+                        <NumInput value={form.rule1.adaptiveOpts.minEpisodes} onChange={v => patch('rule1.adaptiveOpts.minEpisodes', v)} min={1} max={20} className="w-full" />
+                      </>
+                    )}
                   </div>
                 </div>
+                )}
               </div>
             )}
           </div>

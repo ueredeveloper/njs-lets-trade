@@ -204,6 +204,15 @@ export function normalizeStrategyId(id) {
   return 'amap-15m';
 }
 
+/** strategy_id do painel pode divergir do kind salvo — usa kind como fonte de verdade. */
+export function resolveEntryStrategyId(entry) {
+  const kind = entry?.tradeConfig?.kind;
+  if (kind === 'ma_cross') return 'ma-cross';
+  if (kind === 'rsi') return 'swing-rsi-1h';
+  if (kind === 'ma') return 'swing-ma50-8h';
+  return normalizeStrategyId(entry?.strategyId ?? entry?.strategy_id);
+}
+
 export function formForEntry(existing, strategyId) {
   if (existing?.tradeConfig?.kind === 'ma_cross') return maCrossFormFromEntry(existing);
   if (existing?.tradeConfig?.kind) return swingFormFromEntry(existing);
@@ -216,8 +225,7 @@ export function formForEntry(existing, strategyId) {
 export function buildDualStrategyState(currentEntries, { symbol, exchange, defaultCapital = 40 } = {}) {
   const byId = {};
   for (const e of currentEntries ?? []) {
-    const sid = normalizeStrategyId(e.strategyId ?? e.strategy_id);
-    byId[sid] = e;
+    byId[resolveEntryStrategyId(e)] = e;
   }
 
   const strategies = {};
