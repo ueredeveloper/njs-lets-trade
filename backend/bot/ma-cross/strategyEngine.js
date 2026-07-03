@@ -344,7 +344,7 @@ function checkPriceFilter(close, filterCandles, filter, adaptiveDipPct, adaptive
 }
 
 function crossLabel(leg) {
-  return `MA${leg.period}(${leg.interval})`;
+  return `SMA${leg.period}(${leg.interval})`;
 }
 
 function activeMaFilters(config) {
@@ -490,7 +490,7 @@ function evaluateExit(config, cMap, entryPrice, opts = {}) {
       const dirLbl = exMa.direction === 'cross_up' ? '↑' : '↓';
       signals.push({
         kind: 'ma',
-        exitDesc: `MA${exMa.ma1.period}(${exMa.ma1.interval}) ${dirLbl} MA${exMa.ma2.period}(${exMa.ma2.interval})`,
+        exitDesc: `SMA${exMa.ma1.period}(${exMa.ma1.interval}) ${dirLbl} SMA${exMa.ma2.period}(${exMa.ma2.interval})`,
         ma1: cross.ma1, ma2: cross.ma2, close: cross.close,
       });
     }

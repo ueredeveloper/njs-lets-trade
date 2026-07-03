@@ -1,7 +1,7 @@
 'use strict';
 
 const { checkMaCrossover, findRecentMaCross, checkMaCrossApproaching, checkPriceFilter } = require('../bot/ma-cross/strategyEngine');
-const { normalizeMaCrossConfig } = require('../bot/ma-cross/tradeConfigSchema');
+const { normalizeMaCrossConfig, isValidMaCrossPeriod } = require('../bot/ma-cross/tradeConfigSchema');
 
 function makeCandles(closes) {
   return closes.map((close, i) => ({
@@ -238,5 +238,21 @@ describe('MA Cross — cruzamento', () => {
       priceFilter: { enabled: true, period: 50, interval: '1h', mode: 'adaptive' },
     });
     expect(c.maFilters[0].period).toBe(50);
+  });
+});
+
+describe('MA Cross — período SMA', () => {
+  test('isValidMaCrossPeriod aceita 2–500', () => {
+    expect(isValidMaCrossPeriod(2)).toBe(true);
+    expect(isValidMaCrossPeriod(13)).toBe(true);
+    expect(isValidMaCrossPeriod(500)).toBe(true);
+    expect(isValidMaCrossPeriod(1)).toBe(false);
+    expect(isValidMaCrossPeriod(501)).toBe(false);
+  });
+
+  test('clampPeriod respeita limites', () => {
+    const c = normalizeMaCrossConfig({ entry: { ma1: { period: 1 }, ma2: { period: 600 } } });
+    expect(c.entry.ma1.period).toBe(9);
+    expect(c.entry.ma2.period).toBe(500);
   });
 });

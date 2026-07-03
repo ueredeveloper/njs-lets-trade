@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import {
-  MA_CROSS_INTERVALS, MA_PERIOD_PRESETS, CROSS_DIRECTIONS, PRICE_FILTER_MODES,
+  MA_CROSS_INTERVALS, MA_PERIOD_PRESETS, MA_CROSS_PERIOD_MIN, MA_CROSS_PERIOD_MAX,
+  CROSS_DIRECTIONS, PRICE_FILTER_MODES,
   EXIT_LOGIC_OPTIONS, RSI_INTERVALS, RSI_PERIODS, RSI_OPERATORS,
   VOLUME_OPTIONS, PENDING_TIMEOUT_OPTIONS, POLL_OPTIONS,
 } from '../constants/maCrossConfigSchema';
@@ -24,7 +25,7 @@ function MaLegInput({ label, ma1, ma2, onPatchMa1, onPatchMa2 }) {
     <div>
       <span className="text-p5/50 text-[10px] block mb-1">{title}</span>
       <div className="flex gap-1 flex-wrap">
-        <NumInput value={leg.period} onChange={v => onPatch('period', v)} min={2} max={500} step={1} className="w-14" />
+        <NumInput value={leg.period} onChange={v => onPatch('period', v)} min={MA_CROSS_PERIOD_MIN} max={MA_CROSS_PERIOD_MAX} step={1} className="w-14" />
         <select value={leg.interval} onChange={e => onPatch('interval', e.target.value)}
           className="rounded px-1 py-1 text-xs flex-1 min-w-[3.5rem]" style={sel}>
           {MA_CROSS_INTERVALS.map(iv => <option key={iv} value={iv}>{iv}</option>)}
@@ -131,7 +132,7 @@ export default function MaCrossStrategyForm({ form, patch }) {
   return (
     <div className="space-y-4">
       <CrossBlock
-        title="Compra — cruzamento MA"
+        title="Compra — cruzamento SMA"
         block={form.entry}
         prefix="entry"
         patch={patch}
@@ -172,9 +173,9 @@ export default function MaCrossStrategyForm({ form, patch }) {
                       {PRICE_FILTER_MODES.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
                     </select>
                     <div className="flex flex-wrap gap-2 items-center">
-                      <span className="text-p5/50">MA</span>
+                      <span className="text-p5/50">SMA</span>
                       <NumInput value={f.period} onChange={v => updateFilter(f.id, 'period', v)}
-                        min={2} max={500} step={1} className="w-14" />
+                        min={MA_CROSS_PERIOD_MIN} max={MA_CROSS_PERIOD_MAX} step={1} className="w-14" />
                       <select value={f.interval} onChange={e => updateFilter(f.id, 'interval', e.target.value)}
                         className="rounded px-1 py-1" style={sel}>
                         {MA_CROSS_INTERVALS.map(iv => <option key={iv} value={iv}>{iv}</option>)}
@@ -204,7 +205,7 @@ export default function MaCrossStrategyForm({ form, patch }) {
             <button type="button" onClick={addFilter}
               className="text-[10px] px-2 py-1 rounded font-semibold w-full"
               style={{ background: `${FILTER_COLOR}18`, color: FILTER_COLOR, border: `1px solid ${FILTER_COLOR}44` }}>
-              + Adicionar filtro MA
+              + Adicionar filtro SMA
             </button>
           </>
         )}
@@ -220,7 +221,7 @@ export default function MaCrossStrategyForm({ form, patch }) {
         </div>
 
         <CrossBlock
-          title="Venda — cruzamento MA"
+          title="Venda — cruzamento SMA"
           block={form.exit.maCross}
           prefix="exit.maCross"
           patch={patch}

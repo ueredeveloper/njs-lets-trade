@@ -16,13 +16,16 @@ function filterOutliers(candles) {
 }
 
 // Fire-and-forget: rejeições são logadas mas nunca crash o processo
-module.exports = function writeCandles(symbol, interval, candles) {
+module.exports = async function writeCandles(symbol, interval, candles) {
   const filePath = path.join(BASE, `${symbol}-${interval}.json`);
   const clean = filterOutliers(candles);
   if (clean.length < candles.length) {
     console.warn(`[writeCandles] ${symbol}-${interval}: descartados ${candles.length - clean.length} candle(s) com spike de preço`);
   }
-  fs.writeFile(filePath, JSON.stringify(clean)).catch(err =>
-    console.error(`[writeCandles] ${symbol}-${interval}:`, err.message)
-  );
+  try {
+    await fs.mkdir(BASE, { recursive: true });
+    await fs.writeFile(filePath, JSON.stringify(clean));
+  } catch (err) {
+    console.error(`[writeCandles] ${symbol}-${interval}:`, err.message);
+  }
 };

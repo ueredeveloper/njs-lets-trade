@@ -74,7 +74,7 @@ export function formatMaCrossEntrySummary(entry) {
   const iv1 = e.ma1?.interval ?? '15m';
   const p2 = e.ma2?.period ?? 21;
   const iv2 = e.ma2?.interval ?? iv1;
-  return `MA${p1}(${iv1}) cruza ${dir} MA${p2}(${iv2})`;
+  return `SMA${p1}(${iv1}) cruza ${dir} SMA${p2}(${iv2})`;
 }
 
 export function tradeFetchPlan(entry, row, signalMs) {

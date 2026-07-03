@@ -4,6 +4,9 @@
  * Schema MA Cross — parâmetros livres (períodos custom, múltiplos filtros, saída MA ou RSI).
  */
 
+const MA_CROSS_PERIOD_MIN = 2;
+const MA_CROSS_PERIOD_MAX = 500;
+
 const ALL_INTERVALS = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '8h', '1d'];
 const CROSS_DIRS    = ['cross_up', 'cross_down'];
 const FILTER_MODES  = ['strict_above', 'adaptive', 'below', 'off'];
@@ -71,10 +74,15 @@ const MA_CROSS_DEFAULTS = {
   },
 };
 
+function isValidMaCrossPeriod(p) {
+  const n = parseInt(p, 10);
+  return Number.isFinite(n) && n >= MA_CROSS_PERIOD_MIN && n <= MA_CROSS_PERIOD_MAX;
+}
+
 function clampPeriod(p, fb = 50) {
   const n = Number(p);
-  if (!Number.isFinite(n) || n < 2) return fb;
-  return Math.min(500, Math.round(n));
+  if (!Number.isFinite(n) || n < MA_CROSS_PERIOD_MIN) return fb;
+  return Math.min(MA_CROSS_PERIOD_MAX, Math.round(n));
 }
 
 function normalizeInterval(iv, fb) {
@@ -251,6 +259,9 @@ function formStateToPayload(form) {
 }
 
 module.exports = {
+  MA_CROSS_PERIOD_MIN,
+  MA_CROSS_PERIOD_MAX,
+  isValidMaCrossPeriod,
   MA_CROSS_DEFAULTS,
   ALL_INTERVALS,
   CROSS_DIRS,

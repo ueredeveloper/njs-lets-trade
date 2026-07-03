@@ -5,6 +5,8 @@ import {
   VOLUME_OPTIONS, PENDING_TIMEOUT_OPTIONS, POLL_OPTIONS,
 } from './tradeConfigSchema';
 
+export const MA_CROSS_PERIOD_MIN = 2;
+export const MA_CROSS_PERIOD_MAX = 500;
 export const MA_CROSS_INTERVALS = RSI_INTERVALS;
 export const MA_PERIOD_PRESETS  = [9, 12, 20, 21, 50, 100, 200];
 
@@ -14,9 +16,9 @@ export const CROSS_DIRECTIONS = [
 ];
 
 export const PRICE_FILTER_MODES = [
-  { id: 'strict_above', label: 'Preço acima da MA' },
-  { id: 'adaptive',     label: 'Pullback adaptativo (% abaixo)' },
-  { id: 'below',        label: 'Preço abaixo da MA' },
+  { id: 'strict_above', label: 'Preço acima da SMA' },
+  { id: 'adaptive',     label: 'Pullback adaptativo (% abaixo da SMA)' },
+  { id: 'below',        label: 'Preço abaixo da SMA' },
   { id: 'off',          label: 'Desligado' },
 ];
 

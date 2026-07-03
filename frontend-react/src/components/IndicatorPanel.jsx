@@ -15,7 +15,7 @@ import {
   conversionAboveHighCandle, conversionAboveLowCandle, conversionAboveCloseCandle,
 } from '../utils/createIchimokuFilter';
 import Tooltip from './Tooltip';
-import { MA_PERIOD_PRESETS } from '../constants/maCrossConfigSchema';
+import { MA_CROSS_PERIOD_MIN, MA_CROSS_PERIOD_MAX } from '../constants/maCrossConfigSchema';
 import { buildMaCrossFilterName } from '../utils/filterNames';
 
 const INTERVAL_MS = {
@@ -370,27 +370,27 @@ function IndicatorRow({ value, onChange }) {
 
         {type === 'maCrossover' && (
           <>
-            <select
+            <input
+              type="number"
               className={sel}
+              style={{ width: '3.25rem' }}
+              min={MA_CROSS_PERIOD_MIN}
+              max={MA_CROSS_PERIOD_MAX}
               value={value.ma1Period ?? '9'}
               onChange={(e) => onChange({ ...value, ma1Period: e.target.value })}
               title={t('macross.tip.ma1')}
-            >
-              {MA_PERIOD_PRESETS.map(p => (
-                <option key={p} value={String(p)}>MA{p}</option>
-              ))}
-            </select>
+            />
             <span className="text-p5/50 text-[10px] shrink-0">×</span>
-            <select
+            <input
+              type="number"
               className={sel}
+              style={{ width: '3.25rem' }}
+              min={MA_CROSS_PERIOD_MIN}
+              max={MA_CROSS_PERIOD_MAX}
               value={value.ma2Period ?? '21'}
               onChange={(e) => onChange({ ...value, ma2Period: e.target.value })}
               title={t('macross.tip.ma2')}
-            >
-              {MA_PERIOD_PRESETS.map(p => (
-                <option key={p} value={String(p)}>MA{p}</option>
-              ))}
-            </select>
+            />
             <select
               className={sel}
               value={value.signalMode ?? 'cross_up'}

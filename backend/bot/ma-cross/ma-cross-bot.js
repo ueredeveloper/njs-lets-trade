@@ -268,7 +268,7 @@ async function loadMaCrossRows() {
 
 function crossDesc(block) {
   const dir = block.direction === 'cross_down' ? '↓' : '↑';
-  return `MA${block.ma1.period}(${block.ma1.interval}) ${dir} MA${block.ma2.period}(${block.ma2.interval})`;
+  return `SMA${block.ma1.period}(${block.ma1.interval}) ${dir} SMA${block.ma2.period}(${block.ma2.interval})`;
 }
 
 async function saveState(id, update) {

@@ -25,8 +25,13 @@ Thumbs.db
 .cache/
 
 /dist
+
+# backend/data — caches e candles locais (Termux); não apagar JSON no pull
+# Ignora tudo em data/, exceto o esqueleto de candlestick/
+backend/data/**
+!backend/data/candlestick/
+!backend/data/candlestick/.gitkeep
 /data
-/backend/data/
 
 # Ignorar pasta de cobertura
 coverage/

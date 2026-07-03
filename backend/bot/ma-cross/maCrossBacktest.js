@@ -16,7 +16,7 @@ const {
 } = require('./strategyEngine');
 
 function crossLabel(leg) {
-  return `MA${leg.period}(${leg.interval})`;
+  return `SMA${leg.period}(${leg.interval})`;
 }
 
 function activeMaFilters(config) {
@@ -94,7 +94,7 @@ function formatExitLabel(config) {
 
 function buildMaChecks(config, cMap, adaptiveDips, close) {
   return activeMaFilters(config).map(f => {
-    const label = `MA${f.period} ${f.interval}`;
+    const label = `SMA${f.period} ${f.interval}`;
     const key = `${f.period}_${f.interval}`;
     const pf = checkPriceFilter(close, cMap[f.interval] ?? [], f, adaptiveDips[key], config.adaptiveOpts);
     let detail = 'OK';

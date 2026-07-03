@@ -4,6 +4,7 @@ const router = require('express').Router();
 const getCandlesForScreening = require('../utils/getCandlesForScreening');
 const { getActiveUsdtPairs } = require('../binance/getActiveUsdtPairs');
 const { evaluateMaCrossSignal, intervalMs } = require('../bot/ma-cross/strategyEngine');
+const { isValidMaCrossPeriod, MA_CROSS_PERIOD_MIN, MA_CROSS_PERIOD_MAX } = require('../bot/ma-cross/tradeConfigSchema');
 const { buildMaCrossFilterName, parseMaCrossModeToken } = require('../utils/filterNames');
 const maCrossCache = require('../cache/maCrossCache');
 
@@ -12,7 +13,6 @@ const CONCURRENCY   = 25;
 const ALLOWED_INTERVALS = new Set([
   '1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w',
 ]);
-const ALLOWED_PERIODS = new Set([9, 12, 20, 21, 50, 100, 200]);
 const ALLOWED_MODES = new Set(['cross_up', 'cross_down', 'near_up', 'near_down']);
 const ALLOWED_AGE_MIN = new Set(['last', '1', '5', '15', '30', '60', '240', '1440']);
 
@@ -74,8 +74,10 @@ router.get('/ma-crossover-filter', async (req, res) => {
     if (!ALLOWED_INTERVALS.has(interval1) || !ALLOWED_INTERVALS.has(interval2)) {
       return res.status(400).json({ error: 'intervalo não suportado' });
     }
-    if (!ALLOWED_PERIODS.has(period1) || !ALLOWED_PERIODS.has(period2)) {
-      return res.status(400).json({ error: `períodos suportados: ${[...ALLOWED_PERIODS].join(', ')}` });
+    if (!isValidMaCrossPeriod(period1) || !isValidMaCrossPeriod(period2)) {
+      return res.status(400).json({
+        error: `período SMA inválido (use ${MA_CROSS_PERIOD_MIN}–${MA_CROSS_PERIOD_MAX})`,
+      });
     }
     if (!mode || !ALLOWED_MODES.has(mode)) {
       return res.status(400).json({ error: 'mode inválido (cross_up, cross_down, near_up, near_down)' });

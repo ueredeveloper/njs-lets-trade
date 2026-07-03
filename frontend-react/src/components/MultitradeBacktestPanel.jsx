@@ -362,7 +362,7 @@ export default function MultitradeBacktestPanel({ entry }) {
   const maCross = isMaCrossStrategy(entry?.strategyId);
   const maFilterStats = data?.maFilterStats ?? [];
   const maLabels = maCross
-    ? (entry.maFilters ?? []).filter(f => f.enabled !== false && f.mode !== 'off').map(f => `MA${f.period} ${f.interval}`)
+    ? (entry.maFilters ?? []).filter(f => f.enabled !== false && f.mode !== 'off').map(f => `SMA${f.period} ${f.interval}`)
     : (entry.maConditions ?? []).map(m => `MA${m.period} ${m.interval}`);
   const showExt  = !maCross && entry.extension?.enabled !== false;
 
@@ -538,8 +538,8 @@ export default function MultitradeBacktestPanel({ entry }) {
                     )}
                     {maCross && (
                       <>
-                        <th className="text-right px-1 py-1 text-p5/50 font-normal">MA9</th>
-                        <th className="text-right px-1 py-1 text-p5/50 font-normal">MA21</th>
+                        <th className="text-right px-1 py-1 text-p5/50 font-normal">SMA9</th>
+                        <th className="text-right px-1 py-1 text-p5/50 font-normal">SMA21</th>
                       </>
                     )}
                     <th className="text-right px-1 py-1 text-p5/50 font-normal">Preço</th>

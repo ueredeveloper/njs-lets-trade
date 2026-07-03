@@ -32,10 +32,10 @@ const C_UP   = '#26a69a';
 const C_DOWN = '#ef5350';
 
 const INDICATOR_GROUPS = [
-  { id: 'ma9',      label: 'MA9',   color: '#e879f9' },
-  { id: 'ma21',     label: 'MA21',  color: '#fb923c' },
-  { id: 'ma50',     label: 'MA50',  color: '#22d3ee' },
-  { id: 'ma200',    label: 'MA200', color: '#f59e0b' },
+  { id: 'ma9',      label: 'SMA9',   color: '#e879f9' },
+  { id: 'ma21',     label: 'SMA21',  color: '#fb923c' },
+  { id: 'ma50',     label: 'SMA50',  color: '#22d3ee' },
+  { id: 'ma200',    label: 'SMA200', color: '#f59e0b' },
   { id: 'ichimoku', label: 'Ichi',  color: '#60a5fa' },
   { id: 'rsi',      label: 'RSI',   color: '#a78bfa' },
 ];
@@ -516,7 +516,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
       markLine: finalMarkLine,
     },
     ...(showMa9 && ma9?.length ? [{
-      name: 'MA9',
+      name: 'SMA9',
       type: 'line',
       xAxisIndex: idx, yAxisIndex: idx,
       data: ma9Data,
@@ -524,7 +524,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
       lineStyle: { color: '#e879f9', width: 1.5 },
     }] : []),
     ...(showMa21 && ma21?.length ? [{
-      name: 'MA21',
+      name: 'SMA21',
       type: 'line',
       xAxisIndex: idx, yAxisIndex: idx,
       data: ma21Data,
@@ -532,7 +532,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
       lineStyle: { color: '#fb923c', width: 1.5 },
     }] : []),
     ...(showMa50 && ma50?.length ? [{
-      name: 'MA50',
+      name: 'SMA50',
       type: 'line',
       xAxisIndex: idx, yAxisIndex: idx,
       data: ma50Data,
@@ -540,7 +540,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
       lineStyle: { color: '#22d3ee', width: 1.5 },
     }] : []),
     ...(showMa200 ? [{
-      name: 'MA200',
+      name: 'SMA200',
       type: 'line',
       xAxisIndex: idx, yAxisIndex: idx,
       data: ma200Data,
@@ -1267,7 +1267,7 @@ export default function CandlestickChart() {
     .map((slot, idx) => {
       const key = `${slot.period}-${slot.interval}`;
       return {
-        label: `MA${slot.period}@${slot.interval}`,
+        label: `SMA${slot.period}@${slot.interval}`,
         color: OVERLAY_MA_COLORS[idx % OVERLAY_MA_COLORS.length],
         points: overlayMaCache[key] ?? [],
         bands: {
