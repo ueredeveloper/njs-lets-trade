@@ -141,7 +141,7 @@ export default function MultitradeModal({
   }));
   const [activeStrategy, setActiveStrategy] = useState(() => {
     const first = entries.find(e => e.enabled !== false) ?? entries[0];
-    return first ? resolveEntryStrategyId(first) : 'amap-15m';
+    return first ? resolveEntryStrategyId(first) : 'ma-cross';
   });
   const [activeTab, setActiveTab] = useState('rule1');
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -158,7 +158,7 @@ export default function MultitradeModal({
 
   const symbol = dual.symbol;
   const exchange = dual.exchange;
-  const strat = dual.strategies[activeStrategy] ?? dual.strategies['amap-15m'];
+  const strat = dual.strategies[activeStrategy] ?? dual.strategies['ma-cross'];
   const form = strat?.form ?? {};
   const capital = strat.capital;
   const strategyEnabled = strat.enabled;
@@ -634,7 +634,7 @@ export default function MultitradeModal({
 
         <div className="flex items-center justify-between px-4 py-3 border-b" style={{ borderColor: '#2a2d3a' }}>
           <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold text-p5">AMAP Multi-Trade</span>
+            <span className="text-xs font-semibold text-p5">MA-Cross</span>
             {symbol && <span className="text-xs font-mono font-bold" style={{ color: MT_COLOR }}>{symbol.toUpperCase()}</span>}
           </div>
           <button onClick={onCancel} className="text-p5/40 hover:text-p5 text-lg leading-none">×</button>
@@ -669,8 +669,9 @@ export default function MultitradeModal({
             </div>
           </div>
 
+          {STRATEGY_IDS.length > 1 ? (
           <div>
-            <SectionHeader label="Estratégias" color={MT_COLOR} hint="AMAP (15m/1h) e Swing (RSI 1h / MA50 8h). Cada aba tem capital e estado independentes no bot." />
+            <SectionHeader label="Estratégias" color={MT_COLOR} hint="Cada estratégia tem capital e estado independentes no bot." />
             <div className="flex gap-1 p-1 rounded-lg mb-2" style={{ background: '#1a1d28', border: '1px solid #2a2d3a' }}>
               {STRATEGY_IDS.map(sid => {
                 const st = dual.strategies[sid];
@@ -718,6 +719,23 @@ export default function MultitradeModal({
               <FieldHint>{MT_HELP.shared.capital}</FieldHint>
             </div>
           </div>
+          ) : (
+          <div>
+            <SectionHeader label="MA-Cross" color={MT_COLOR} />
+            <label className="flex items-center gap-2 cursor-pointer mb-2">
+              <input type="checkbox" checked={strategyEnabled}
+                onChange={e => setStrategyEnabled('ma-cross', e.target.checked)}
+                className="accent-cyan-500" style={{ accentColor: STRATEGY_COLORS['ma-cross'] }} />
+              <span className="text-xs text-p5">Ativar bot nesta moeda</span>
+            </label>
+            <div className={strategyEnabled ? '' : 'opacity-40 pointer-events-none'}>
+              <FieldLabel label="Capital por entrada (USDT)" hint={MT_HELP.shared.capital}
+                className="block text-[10px] uppercase tracking-wider text-p5/50 mb-1" />
+              <input type="number" value={capital} onChange={e => setCapital(e.target.value)} min={1}
+                className="w-full rounded px-2.5 py-1.5 text-xs text-p5 outline-none font-mono mb-1" style={sel} />
+            </div>
+          </div>
+          )}
 
           <div className={`flex gap-1 p-1 rounded-lg ${strategyEnabled ? '' : 'opacity-40 pointer-events-none'}`} style={{ background: '#1a1d28', border: '1px solid #2a2d3a' }}>
             {!isSwing && !isMaCross && [

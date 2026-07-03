@@ -581,6 +581,24 @@ export async function removeMultitradeFavorite(id) {
   return res.json();
 }
 
+/** Ajuste manual de fase no rsi_multi_bot_state (WATCHING ou BOUGHT). */
+export async function patchMultitradeBotState({
+  symbol, strategyId, phase, buyPrice, buyQty, buyTime, buyUsdt,
+}) {
+  const res = await fetch('/services/sb/multitrade-bot-state', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      symbol, strategyId, phase, buyPrice, buyQty, buyTime, buyUsdt,
+    }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `patchMultitradeBotState falhou: HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 export async function fetchMultitradeTrades({ symbol, strategyId, limit } = {}) {
   const params = new URLSearchParams();
   if (symbol)      params.set('symbol', symbol);

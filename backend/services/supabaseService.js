@@ -475,8 +475,39 @@ async function enrichMultitradeEntriesWithState(entries) {
       buyTime:  st?.buy_time ?? null,
       buyPrice: st?.buy_price != null ? Number(st.buy_price) : null,
       buyQty:   st?.buy_qty != null ? Number(st.buy_qty) : null,
+      buyUsdt:  st?.buy_usdt != null ? Number(st.buy_usdt) : null,
     };
   });
+}
+
+async function enrichSingleMultitradeEntry(entry) {
+  const [enriched] = await enrichMultitradeEntriesWithState([entry]);
+  return enriched ?? entry;
+}
+
+function buildBotStatePatch(phase, { buyPrice, buyQty, buyTime, buyUsdt } = {}) {
+  const update = { phase, updated_at: new Date().toISOString() };
+  if (phase === 'WATCHING') {
+    Object.assign(update, {
+      buy_price: null, buy_qty: null, buy_usdt: null, buy_time: null, rsi_entry: null,
+      trigger_price: null, trigger_rsi: null, limit_price: null, pending_since: null,
+    });
+    return update;
+  }
+  if (phase === 'BOUGHT') {
+    const price = Number(buyPrice);
+    const qty   = Number(buyQty);
+    if (!Number.isFinite(price) || price <= 0) throw new Error('buyPrice inválido');
+    if (!Number.isFinite(qty) || qty <= 0) throw new Error('buyQty inválido');
+    if (!buyTime) throw new Error('buyTime obrigatório para BOUGHT');
+    const usdt = buyUsdt != null ? Number(buyUsdt) : price * qty;
+    Object.assign(update, {
+      buy_price: price, buy_qty: qty, buy_time: buyTime, buy_usdt: usdt,
+      trigger_price: null, trigger_rsi: null, limit_price: null, pending_since: null,
+    });
+    return update;
+  }
+  throw new Error('phase deve ser WATCHING ou BOUGHT');
 }
 
 // GET /services/sb/multitrade-favorites
@@ -513,7 +544,7 @@ router.post('/multitrade-favorites', getUserId, async (req, res) => {
     enabled:      data.enabled !== false,
   });
 
-  res.json(multitradeToEntry(data));
+  res.json(await enrichSingleMultitradeEntry(multitradeToEntry(data)));
 });
 
 // PUT|PATCH /services/sb/multitrade-favorites/:id
@@ -540,10 +571,73 @@ async function updateMultitrade(req, res) {
     enabled:      data.enabled !== false,
   });
 
-  res.json(multitradeToEntry(data));
+  res.json(await enrichSingleMultitradeEntry(multitradeToEntry(data)));
 }
 router.put('/multitrade-favorites/:id', getUserId, updateMultitrade);
 router.patch('/multitrade-favorites/:id', getUserId, updateMultitrade);
+
+// PATCH /services/sb/multitrade-bot-state — ajuste manual de fase (WATCHING / BOUGHT)
+router.patch('/multitrade-bot-state', getUserId, async (req, res) => {
+  const symbol = req.body?.symbol?.toUpperCase();
+  const strategyId = normStrategyId(req.body?.strategyId ?? req.body?.strategy_id ?? 'ma-cross');
+  const phase = req.body?.phase;
+
+  if (!symbol) return res.status(400).json({ error: 'symbol obrigatório' });
+  if (!strategyId) return res.status(400).json({ error: 'strategyId obrigatório' });
+  if (phase !== 'WATCHING' && phase !== 'BOUGHT') {
+    return res.status(400).json({ error: 'phase deve ser WATCHING ou BOUGHT' });
+  }
+
+  const { data: fav, error: favErr } = await supabase
+    .from('multitrade_favorites')
+    .select('*')
+    .eq('user_id', req.userId)
+    .eq('symbol', symbol)
+    .eq('strategy_id', strategyId)
+    .single();
+  if (favErr || !fav) return res.status(404).json({ error: 'favorito não encontrado' });
+
+  let patch;
+  try {
+    patch = buildBotStatePatch(phase, {
+      buyPrice: req.body.buyPrice ?? req.body.buy_price,
+      buyQty:   req.body.buyQty ?? req.body.buy_qty,
+      buyTime:  req.body.buyTime ?? req.body.buy_time,
+      buyUsdt:  req.body.buyUsdt ?? req.body.buy_usdt,
+    });
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
+
+  const { data: existing } = await supabase
+    .from('rsi_multi_bot_state')
+    .select('id')
+    .eq('symbol', symbol)
+    .eq('strategy_id', strategyId)
+    .maybeSingle();
+
+  if (existing?.id) {
+    const { error } = await supabase
+      .from('rsi_multi_bot_state')
+      .update(patch)
+      .eq('id', existing.id);
+    if (error) return sbError(res, error, 'PATCH multitrade-bot-state');
+  } else {
+    const { error } = await supabase.from('rsi_multi_bot_state').insert({
+      symbol,
+      exchange:        fav.exchange,
+      strategy_id:     strategyId,
+      initial_capital: Number(fav.capital),
+      capital:         Number(fav.capital),
+      trade_config:    fav.trade_config,
+      ...patch,
+    });
+    if (error) return sbError(res, error, 'PATCH multitrade-bot-state insert');
+  }
+
+  const entry = await enrichSingleMultitradeEntry(multitradeToEntry(fav));
+  res.json(entry);
+});
 
 // DELETE /services/sb/multitrade-favorites/:id
 router.delete('/multitrade-favorites/:id', getUserId, async (req, res) => {

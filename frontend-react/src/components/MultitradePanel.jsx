@@ -2,14 +2,16 @@ import { useState, useMemo, useEffect, useRef } from 'react';
 import { useCurrency } from '../contexts/CurrencyContext';
 import MultitradeModal from './MultitradeModal';
 import MultitradeBacktestPanel from './MultitradeBacktestPanel';
+import MultitradeBotStateModal from './MultitradeBotStateModal';
 import { fetchCandlesticksAndCloud, fetchMultitradeTrades } from '../services/api';
 import { loadMultitradeSymbolChart } from '../utils/multitradeChart';
+import { multitradePhaseBadge, symbolPhaseSummary, fmtBuyTimeShort } from '../utils/multitradePhase';
 import {
   STRATEGY_IDS, STRATEGY_LABELS, STRATEGY_COLORS,
   getEntriesForSymbol, normalizeStrategyId, strategyBadgeLabel,
 } from '../constants/strategyPresets';
 
-const MT_COLOR      = '#8b5cf6';
+const MT_COLOR      = '#22d3ee';
 const GATE_COLOR    = '#0068ff';
 const BINANCE_COLOR = '#f0b90b';
 
@@ -25,25 +27,21 @@ function groupBySymbol(favorites) {
 }
 
 function fmtBuyTime(iso) {
-  if (!iso) return null;
-  const d = new Date(iso);
-  return d.toLocaleString('pt-BR', {
-    timeZone: 'America/Sao_Paulo',
-    day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
-  });
+  return fmtBuyTimeShort(iso);
 }
 
 export default function MultitradePanel() {
   const {
     multitradeFavorites, selectedChart,
     saveMultitradeSymbol, removeMultitradeEntry,
-    applyMultitradeSymbolChart,
+    applyMultitradeSymbolChart, updateMultitradeBotState,
   } = useCurrency();
   const [addModal, setAddModal]           = useState(false);
   const [favOpen, setFavOpen]             = useState(false);
   const [editingSymbol, setEditingSymbol] = useState(null);
+  const [stateSymbol, setStateSymbol]     = useState(null);
   const [pickedSymbol, setPickedSymbol]   = useState(null);
-  const [pickedStrategy, setPickedStrategy] = useState('amap-15m');
+  const [pickedStrategy, setPickedStrategy] = useState('ma-cross');
 
   const chartSymbol = selectedChart?.symbol?.toUpperCase?.() ?? null;
   const grouped = useMemo(() => groupBySymbol(multitradeFavorites), [multitradeFavorites]);
@@ -89,7 +87,7 @@ export default function MultitradePanel() {
     <div id="multitrade-panel" className="multitrade-panel flex flex-col h-full min-h-0">
       <div className="multitrade-panel-header flex items-center justify-between px-3 py-2 border-b border-p2 shrink-0 gap-2">
         <div className="flex items-center gap-2 min-w-0">
-          <span className="text-xs font-semibold text-p5 uppercase tracking-wider shrink-0">Multi-Trade</span>
+          <span className="text-xs font-semibold text-p5 uppercase tracking-wider shrink-0">MA-Cross</span>
           {symbolList.length > 0 && (
             <span className="text-[10px] font-mono px-1.5 py-0.5 rounded shrink-0"
               style={{ background: `${MT_COLOR}22`, color: MT_COLOR, border: `1px solid ${MT_COLOR}44` }}>
@@ -129,7 +127,7 @@ export default function MultitradePanel() {
       {favOpen && (
         <div id="multitrade-panel-favorites" className="multitrade-panel-favorites border-b border-p2 shrink-0 max-h-48 overflow-y-auto">
           {symbolList.length === 0 ? (
-            <p className="text-[10px] text-p5/40 px-3 py-3 text-center">Nenhuma favorita MT</p>
+            <p className="text-[10px] text-p5/40 px-3 py-3 text-center">Nenhuma favorita MA-Cross</p>
           ) : (
             <ul className="multitrade-panel-favorites-list divide-y divide-p2/50">
               {symbolList.map(sym => {
@@ -137,6 +135,8 @@ export default function MultitradePanel() {
                 const active = activeSymbol === sym;
                 const ex = entries[0]?.exchange ?? 'binance';
                 const activeEntries = entries.filter(e => e.enabled !== false);
+                const summaryPhase = symbolPhaseSummary(activeEntries);
+                const ph = multitradePhaseBadge(summaryPhase);
                 const boughtEntry = activeEntries.find(e => e.phase === 'BOUGHT' && e.buyTime);
                 return (
                   <li
@@ -145,13 +145,39 @@ export default function MultitradePanel() {
                     className={`multitrade-panel-favorites-item flex items-center gap-2 px-3 py-2 cursor-pointer transition-colors ${active ? 'bg-violet-500/10' : 'hover:bg-p2/40'}`}
                     onClick={() => pickFavorite(sym)}>
                     <div className="flex flex-col flex-1 min-w-0">
-                      <span className="font-mono text-[10px] font-bold text-p5 truncate">
-                        {sym}
-                      </span>
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <span className="font-mono text-[10px] font-bold text-p5 truncate">
+                          {sym}
+                        </span>
+                        <button
+                          type="button"
+                          className="text-[7px] font-bold px-1 py-0.5 rounded shrink-0 hover:opacity-80"
+                          style={{ background: `${ph.color}22`, color: ph.color }}
+                          title={`${ph.hint} — clique para alterar`}
+                          onClick={(e) => { e.stopPropagation(); setStateSymbol(sym); }}>
+                          {ph.text}
+                        </button>
+                      </div>
                       {boughtEntry?.buyTime && (
                         <span className="text-[8px] font-mono text-white/70 truncate" title="Momento da compra">
                           ▌ {fmtBuyTime(boughtEntry.buyTime)}
+                          {boughtEntry.buyPrice != null && ` @ ${Number(boughtEntry.buyPrice).toPrecision(4)}`}
                         </span>
+                      )}
+                      {activeEntries.length > 1 && (
+                        <div className="flex gap-0.5 flex-wrap mt-0.5">
+                          {activeEntries.map(e => {
+                            const sid = normalizeStrategyId(e.strategyId);
+                            const eph = multitradePhaseBadge(e.phase);
+                            return (
+                              <span key={e.id} className="text-[6px] font-mono px-0.5 rounded"
+                                style={{ color: eph.color }}
+                                title={`${STRATEGY_LABELS[sid]}: ${eph.text}`}>
+                                {strategyBadgeLabel(sid)}:{eph.short}
+                              </span>
+                            );
+                          })}
+                        </div>
                       )}
                     </div>
                     <div className="flex gap-0.5 shrink-0">
@@ -178,6 +204,15 @@ export default function MultitradePanel() {
                     </span>
                     <button
                       type="button"
+                      id={`multitrade-fav-state-${sym}`}
+                      className="multitrade-fav-btn-state text-[8px] px-1.5 py-0.5 rounded shrink-0 font-bold"
+                      style={{ background: `${MT_COLOR}22`, color: MT_COLOR, border: `1px solid ${MT_COLOR}55` }}
+                      title="Alterar estado do bot (WATCHING / BOUGHT)"
+                      onClick={(e) => { e.stopPropagation(); setStateSymbol(sym); }}>
+                      Estado
+                    </button>
+                    <button
+                      type="button"
                       id={`multitrade-fav-edit-${sym}`}
                       className="multitrade-fav-btn-edit text-[10px] px-1.5 py-0.5 rounded text-p5/50 hover:text-p5 shrink-0"
                       style={{ background: '#2a2d3a', border: '1px solid #3a3d4a' }}
@@ -196,11 +231,11 @@ export default function MultitradePanel() {
         {symbolList.length === 0 ? (
           <div className="multitrade-panel-empty flex flex-col items-center justify-center flex-1 gap-2 py-12">
             <span className="text-xs text-p5/30">Nenhuma moeda configurada</span>
-            <span className="text-[10px] text-p5/20">Use o botão MT na tabela ou + Adicionar</span>
+            <span className="text-[10px] text-p5/20">Use o botão MC na tabela ou + Adicionar</span>
           </div>
         ) : !backtestEntry ? (
           <div className="multitrade-panel-empty flex flex-col items-center justify-center flex-1 gap-2 py-12 px-4 text-center">
-            <span className="text-xs text-p5/40">Selecione uma favorita MT</span>
+            <span className="text-xs text-p5/40">Selecione uma favorita MA-Cross</span>
             <button
               type="button"
               id="multitrade-panel-btn-open-favorites"
@@ -212,6 +247,33 @@ export default function MultitradePanel() {
           </div>
         ) : (
           <>
+          {backtestEntry && (
+            <div className="flex items-center gap-1.5 px-2 py-1 border-b border-p2 shrink-0 flex-wrap">
+              {(() => {
+                const ph = multitradePhaseBadge(backtestEntry.phase);
+                return (
+                  <>
+                    <span className="text-[9px] text-p5/50">Bot:</span>
+                    <button
+                      type="button"
+                      className="text-[8px] font-bold px-1.5 py-0.5 rounded"
+                      style={{ background: `${ph.color}22`, color: ph.color, border: `1px solid ${ph.color}44` }}
+                      onClick={() => setStateSymbol(backtestEntry.symbol)}
+                      title="Alterar WATCHING / BOUGHT">
+                      {ph.text}
+                    </button>
+                    <button
+                      type="button"
+                      className="text-[8px] font-semibold px-1.5 py-0.5 rounded"
+                      style={{ background: `${MT_COLOR}22`, color: MT_COLOR, border: `1px solid ${MT_COLOR}44` }}
+                      onClick={() => setStateSymbol(backtestEntry.symbol)}>
+                      Alterar estado
+                    </button>
+                  </>
+                );
+              })()}
+            </div>
+          )}
             {activeSymbol && (grouped.get(activeSymbol)?.filter(e => e.enabled !== false).length ?? 0) > 1 && (
               <div className="flex gap-1 px-2 py-1.5 border-b border-p2 shrink-0">
                 {(grouped.get(activeSymbol) ?? [])
@@ -258,6 +320,17 @@ export default function MultitradePanel() {
             setEditingSymbol(null);
           }}
           onCancel={() => setEditingSymbol(null)}
+        />
+      )}
+      {stateSymbol && (
+        <MultitradeBotStateModal
+          symbol={stateSymbol}
+          entries={grouped.get(stateSymbol) ?? []}
+          onConfirm={async (payload) => {
+            await updateMultitradeBotState(payload);
+            setStateSymbol(null);
+          }}
+          onCancel={() => setStateSymbol(null)}
         />
       )}
     </div>

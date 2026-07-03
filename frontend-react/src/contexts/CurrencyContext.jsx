@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useCallback, useEffect, useMemo } from 'react';
 import { addFavorite, addTradeFavorite, removeFavorite, fetchActiveTrades, ignoreActiveTrade,
   fetchMultitradeFavorites, addMultitradeFavorite, updateMultitradeFavorite, removeMultitradeFavorite,
+  patchMultitradeBotState,
   fetchFiveMTradeFavorites, addFiveMTradeFavorite, updateFiveMTradeFavorite, removeFiveMTradeFavorite } from '../services/api';
 import { CHART_VIEW } from '../utils/chartView';
 import {
@@ -139,6 +140,18 @@ export function CurrencyProvider({ children }) {
     } catch (err) {
       console.warn('[CurrencyContext] removeMultitradeEntry:', err.message);
     }
+  }, []);
+
+  const updateMultitradeBotState = useCallback(async (payload) => {
+    const strategyId = payload.strategyId ?? 'ma-cross';
+    await patchMultitradeBotState({ ...payload, strategyId });
+    const list = await fetchMultitradeFavorites();
+    setMultitradeFavorites(list);
+    const sym = payload.symbol?.toUpperCase();
+    return list.find(e =>
+      e.symbol?.toUpperCase() === sym
+      && (e.strategyId === strategyId || e.strategyId === 'ma-cross'),
+    ) ?? null;
   }, []);
 
   const saveFiveMTradeEntry = useCallback(async ({ id, symbol, exchange, capital, rsiBuy, rsiSell, maFilters, stopLoss, recoveryPattern, sellScope, entryPrice, entryPaths }) => {
@@ -406,38 +419,18 @@ export function CurrencyProvider({ children }) {
   }, [gateFavorites, addFilter, removeFilters]);
 
   useEffect(() => {
-    if (tradeFavorites.size > 0) addFilter({ name: 'Favoritos|Trade', list: Array.from(tradeFavorites) });
-    else removeFilters(['Favoritos|Trade']);
-  }, [tradeFavorites, addFilter, removeFilters]);
-
-  useEffect(() => {
-    if (activeTrades.size > 0) addFilter({ name: 'Favoritos|Ativos', list: Array.from(activeTrades.keys()) });
-    else removeFilters(['Favoritos|Ativos']);
-  }, [activeTrades, addFilter, removeFilters]);
-
-  useEffect(() => {
-    const symbols = [...new Set(multitradeFavorites.filter(e => e.enabled !== false).map(e => e.symbol))];
-    if (symbols.length > 0) addFilter({ name: 'Favoritos|MultiTrade', list: symbols });
-    else removeFilters(['Favoritos|MultiTrade']);
+    const symbols = [...new Set(
+      multitradeFavorites.filter(e => e.enabled !== false && (e.strategyId === 'ma-cross' || e.kind === 'ma_cross')).map(e => e.symbol),
+    )];
+    if (symbols.length > 0) addFilter({ name: 'Favoritos|MA-Cross', list: symbols });
+    else removeFilters(['Favoritos|MA-Cross', 'Favoritos|MultiTrade']);
   }, [multitradeFavorites, addFilter, removeFilters]);
 
-  useEffect(() => {
-    const symbols = fiveMTradeFavorites.map(e => e.symbol);
-    if (symbols.length > 0) addFilter({ name: 'Favoritos|5mTrade', list: symbols });
-    else removeFilters(['Favoritos|5mTrade']);
-  }, [fiveMTradeFavorites, addFilter, removeFilters]);
-
-  // Carrega multitrade favorites na inicialização
+  // Carrega favoritos MA-Cross na inicialização
   useEffect(() => {
     fetchMultitradeFavorites()
-      .then(list => setMultitradeFavorites(list))
+      .then(list => setMultitradeFavorites(list.filter(e => e.strategyId === 'ma-cross' || e.kind === 'ma_cross' || e.tradeConfig?.kind === 'ma_cross')))
       .catch(err => console.warn('[CurrencyContext] loadMultitradeFavorites:', err.message));
-  }, []);
-
-  useEffect(() => {
-    fetchFiveMTradeFavorites()
-      .then(list => setFiveMTradeFavorites(list))
-      .catch(err => console.warn('[CurrencyContext] loadFiveMTradeFavorites:', err.message));
   }, []);
 
   const getBinanceCurrenciesWithUsdt = useCallback(
@@ -521,6 +514,7 @@ export function CurrencyProvider({ children }) {
         updateMultitradeEntry,
         removeMultitradeEntry,
         saveMultitradeSymbol,
+        updateMultitradeBotState,
         fiveMTradeFavorites,
         setFiveMTradeFavorites,
         saveFiveMTradeEntry,

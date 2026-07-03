@@ -3,10 +3,9 @@ import { formStateFromEntry } from './tradeConfigSchema';
 import { swingFormFromEntry, normalizeSwingForm } from './swingConfigSchema';
 import { maCrossFormFromEntry, normalizeMaCrossForm } from './maCrossConfigSchema';
 
-export const AMAP_STRATEGY_IDS = ['amap-15m', 'amap-1h'];
-export const SWING_STRATEGY_IDS = ['swing-rsi-1h', 'swing-ma50-8h'];
 export const MA_CROSS_STRATEGY_IDS = ['ma-cross'];
-export const STRATEGY_IDS = [...AMAP_STRATEGY_IDS, ...SWING_STRATEGY_IDS, ...MA_CROSS_STRATEGY_IDS];
+/** Frontend MA-Cross only — backend ainda aceita outras estratégias. */
+export const STRATEGY_IDS = [...MA_CROSS_STRATEGY_IDS];
 
 export const STRATEGY_LABELS = {
   'amap-15m':      'AMAP 15m',
@@ -23,6 +22,8 @@ export const STRATEGY_COLORS = {
   'swing-ma50-8h': '#ec4899',
   'ma-cross':      '#22d3ee',
 };
+
+const SWING_STRATEGY_IDS = ['swing-rsi-1h', 'swing-ma50-8h'];
 
 export function isSwingStrategy(id) {
   return SWING_STRATEGY_IDS.includes(id);
@@ -199,9 +200,10 @@ export function presetFormState(strategyId) {
 }
 
 export function normalizeStrategyId(id) {
-  if (!id || id === 'flex') return 'amap-15m';
+  if (!id || id === 'flex') return 'ma-cross';
   if (STRATEGY_IDS.includes(id)) return id;
-  return 'amap-15m';
+  if (id === 'ma-cross' || id === 'ma_cross') return 'ma-cross';
+  return 'ma-cross';
 }
 
 /** strategy_id do painel; kind só quando strategy_id ausente ou inválido. */
@@ -241,7 +243,7 @@ export function buildDualStrategyState(currentEntries, { symbol, exchange, defau
   const strategies = {};
   for (const sid of STRATEGY_IDS) {
     const existing = byId[sid];
-    const defaultEnabled = sid === 'amap-15m' || sid === 'swing-rsi-1h';
+    const defaultEnabled = sid === 'ma-cross';
     strategies[sid] = {
       enabled: existing ? (existing.enabled !== false) : false,
       id: existing?.id ?? null,
@@ -250,7 +252,7 @@ export function buildDualStrategyState(currentEntries, { symbol, exchange, defau
       isSwing: isSwingStrategy(sid),
       isMaCross: isMaCrossStrategy(sid),
     };
-    if (!existing && defaultEnabled) strategies[sid].enabled = false;
+    if (!existing && sid === 'ma-cross') strategies[sid].enabled = true;
   }
 
   return {

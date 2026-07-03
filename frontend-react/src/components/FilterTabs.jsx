@@ -122,8 +122,7 @@ function getFilterDescription(name, t) {
     if (type === 'Gate')    return 'Favoritos Gate';
     if (type === 'Trade')   return 'Trade Now';
     if (type === 'Ativos')  return 'Trades Ativos';
-    if (type === 'MultiTrade') return 'Multi-Trade';
-    if (type === '5mTrade')    return '5m Trade';
+    if (type === 'MA-Cross') return 'MA-Cross';
     return `Favoritos: ${type}`;
   }
 

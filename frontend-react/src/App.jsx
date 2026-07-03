@@ -13,10 +13,9 @@ import RsiChart from './components/RsiChart';
 import SettingsSidebar from './components/SettingsSidebar';
 import StatisticsPanel from './components/StatisticsPanel';
 import MultitradePanel from './components/MultitradePanel';
-import FiveMTradePanel from './components/FiveMTradePanel';
 
 function AppContent() {
-  const { setCurrencies, setFilters, addFilter, setSelectedChart, setGateFavorites, setBinanceFavorites, setTradeFavorites, setTradeConfigs } = useCurrency();
+  const { setCurrencies, setFilters, addFilter, setSelectedChart, setGateFavorites, setBinanceFavorites } = useCurrency();
   const { t } = useI18n();
   const [activeFilter, setActiveFilter] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -53,16 +52,12 @@ function AppContent() {
         const btcData = await fetchCandlesticksAndCloud('BTCUSDT', '1h');
         setSelectedChart(btcData);
 
-        const [gateList, binanceList, tradeList] = await Promise.all([
+        const [gateList, binanceList] = await Promise.all([
           getFavorites('gate').catch(() => []),
           getFavorites('binance').catch(() => []),
-          getFavorites('trade').catch(() => []),
         ]);
         setGateFavorites(new Set(gateList));
         setBinanceFavorites(new Set(binanceList));
-        // tradeList é [{symbol, exchange, interval, rsiBuy, rsiSell}]
-        setTradeFavorites(new Set(tradeList.map(t => t.symbol)));
-        setTradeConfigs(new Map(tradeList.map(t => [t.symbol, { exchange: t.exchange ?? 'gate', interval: t.interval, rsiBuy: t.rsiBuy, rsiSell: t.rsiSell, sellInterval: t.sellInterval ?? null }])));
       } catch (err) {
         console.error('Erro ao inicializar:', err);
       } finally {
@@ -247,8 +242,7 @@ function AppContent() {
             {[
               { id: 'indicators', label: t('app.analyze') },
               { id: 'stats',      label: t('app.statistics') },
-              { id: 'multitrade', label: 'Multi-Trade' },
-              { id: 'fivemtrade', label: '5m Trade' },
+              { id: 'macross',    label: 'MA-Cross' },
             ].map(({ id, label }) => (
               <button
                 key={id}
@@ -257,8 +251,7 @@ function AppContent() {
                   openPanels.includes(id) ? 'text-white' : 'text-p5 hover:text-white'
                 }`}
                 style={
-                  openPanels.includes(id) && id === 'multitrade' ? { color: '#8b5cf6' }
-                  : openPanels.includes(id) && id === 'fivemtrade' ? { color: '#06b6d4' }
+                  openPanels.includes(id) && id === 'macross' ? { color: '#22d3ee' }
                   : {}
                 }
               >
@@ -281,14 +274,9 @@ function AppContent() {
               <StatisticsPanel />
             </div>
           )}
-          {openPanels.includes('multitrade') && (
+          {openPanels.includes('macross') && (
             <div className="flex-1 min-h-0 flex flex-col">
               <MultitradePanel />
-            </div>
-          )}
-          {openPanels.includes('fivemtrade') && (
-            <div className="flex-1 min-h-0 flex flex-col">
-              <FiveMTradePanel />
             </div>
           )}
         </div>
