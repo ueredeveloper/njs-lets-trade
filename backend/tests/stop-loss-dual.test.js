@@ -1,6 +1,6 @@
 'use strict';
 
-const ti = require('technicalindicators');
+const { calculateMa } = require('../utils/movingAverage');
 const {
   checkStopLossHits,
   getAdaptiveStopFloors,
@@ -22,7 +22,7 @@ function makeCandles(closes, periodMs = 3_600_000) {
 function slMaSnapFromCandles(candles, period, interval) {
   const key = `sl_${maKey(period, interval)}`;
   const closes = candles.map(c => c.close);
-  const maArr = ti.SMA.calculate({ values: closes, period });
+  const maArr = calculateMa(closes, period);
   const ma = maArr[maArr.length - 1];
   return { [key]: { ma, candles, period, interval } };
 }

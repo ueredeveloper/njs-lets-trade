@@ -7,6 +7,7 @@
  */
 
 const ti = require('technicalindicators');
+const { computeMaSeries } = require('../../utils/movingAverage');
 const {
   getRequiredSpecs, computeAdaptiveDips, evaluateEntry, evaluateExit,
   getStopLossMa, checkRsi, analyzeExtension, getExtensionIntervals, maKey,
@@ -29,12 +30,6 @@ function exitRsiAt(exitSeries, entryTime) {
     else break;
   }
   return best;
-}
-
-function computeMaSeries(candles, period) {
-  const closes = candles.map(c => c.close);
-  const maArr  = ti.SMA.calculate({ values: closes, period });
-  return maArr.map((ma, i) => ({ openTime: candles[period - 1 + i].openTime, ma }));
 }
 
 function maAt(maSeries, time) {

@@ -22,6 +22,7 @@ const { toGateSymbol } = require('../../utils/toGateSymbol');
 const { gateMarketSell: gateMarketSellCore } = require('../gate/gateMarketSell');
 const { sendWhatsApp } = require('../whatsapp');
 const { fmtVolumeUsdt } = require('../volume24h');
+const { maLabel } = require('../../utils/movingAverage');
 const registry = require('../multitradeRegistry');
 const { startMultitradeWatch, configFingerprint } = require('../multitradeWatch');
 const { resolveStrategy } = require('./tradeConfigSchema');
@@ -268,7 +269,7 @@ async function loadMaCrossRows() {
 
 function crossDesc(block) {
   const dir = block.direction === 'cross_down' ? '↓' : '↑';
-  return `SMA${block.ma1.period}(${block.ma1.interval}) ${dir} SMA${block.ma2.period}(${block.ma2.interval})`;
+  return `${maLabel(block.ma1.period, block.ma1.interval)} ${dir} ${maLabel(block.ma2.period, block.ma2.interval)}`;
 }
 
 async function saveState(id, update) {

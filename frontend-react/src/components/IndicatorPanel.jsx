@@ -84,7 +84,7 @@ const EMPTY_INDICATOR = { type: '', intervals: ['8h'] };
 const DEFAULT_INDICATORS = [
   { type: 'movingAverage', intervals: ['1h', '4h'], length: '50', compare: 'above', candle: 'close' },
   { type: 'movingAverage', intervals: ['1h', '4h'], length: '50', compare: 'bellow', candle: 'close' },
-  { type: 'maCrossover', intervals: ['5m', '15m'], ma1Period: '9', ma2Period: '21', signalMode: 'cross_up', ageWindows: ['5'], tolerancePct: '0.5', mixedIntervals: false },
+  { type: 'maCrossover', intervals: ['15m'], ma1Period: '9', ma2Period: '21', signalMode: 'cross_up', ageWindows: ['last', '1', '5'], tolerancePct: '0.5', mixedIntervals: false },
 ];
 
 /** Gera um resumo legível da configuração do indicador */

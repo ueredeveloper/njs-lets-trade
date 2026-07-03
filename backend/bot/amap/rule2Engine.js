@@ -5,7 +5,7 @@
  * Saída: uma ou mais condições RSI (OR/AND) + stop adaptativo na MA de entrada.
  */
 
-const ti = require('technicalindicators');
+const { calculateMa } = require('../../utils/movingAverage');
 const { analyzeAdaptiveDip, lastMa } = require('./adaptiveMaDip');
 const { checkRsi, checkMaEntryTrigger, checkMaFilters, resolveActiveMaFilters, maKey, capStopLossDipPct, applyEntryStopCap } = require('./strategyEngine');
 
@@ -52,7 +52,7 @@ function checkCandlesAboveMa(candles, period, interval, entryTimeMs, count, sign
       return { allowed: false, reason: 'ABOVE_MA_INSUFFICIENT_DATA', required: count };
     }
     const sliceCloses = closes.slice(0, idx + 1);
-    const maArr = ti.SMA.calculate({ values: sliceCloses, period });
+    const maArr = calculateMa(sliceCloses, period);
     const ma = maArr[maArr.length - 1];
     if (candle.close <= ma) {
       return {

@@ -1,5 +1,5 @@
 const router = require('express').Router();
-const { SMA } = require('technicalindicators');
+const { computeMa } = require('../utils/movingAverage');
 const getCandles = require('../binance/getCandles');
 const { getActiveUsdtPairs } = require('../binance/getActiveUsdtPairs');
 const { get: cacheGet, storeFromCandles } = require('../cache/rsiCache');
@@ -23,10 +23,7 @@ async function runWithConcurrency(items, fn, concurrency) {
 }
 
 function buildMaFromCandles(candles, period) {
-  const closes = candles.map(c => parseFloat(c.close));
-  if (closes.length < period) return null;
-  const arr = SMA.calculate({ values: closes, period });
-  return arr.length ? arr[arr.length - 1] : null;
+  return computeMa(candles, period);
 }
 
 router.get('/ma-filter', async (req, res) => {

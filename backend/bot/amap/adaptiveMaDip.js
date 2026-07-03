@@ -10,7 +10,7 @@
  * Responde: "quanto essa moeda costuma cair abaixo da MA50 antes de retomar a alta?"
  */
 
-const ti = require('technicalindicators');
+const { calculateMa, computeMa } = require('../../utils/movingAverage');
 
 const DEFAULT_OPTS = { defaultPct: 3.0, maxPct: 5.0, minPct: 0.5, minEpisodes: 3 };
 
@@ -25,7 +25,7 @@ function analyzeAdaptiveDip(candles, period = 50, opts = {}) {
   }
 
   const closes  = candles.map(c => c.close);
-  const maArr   = ti.SMA.calculate({ values: closes, period });
+  const maArr   = calculateMa(closes, period);
   const aligned = maArr.map((ma, i) => ({
     openTime: candles[period - 1 + i].openTime,
     close:    closes[period - 1 + i],
@@ -79,9 +79,7 @@ function computeAdaptiveDipPct(candles, period, opts) {
 }
 
 function lastMa(candles, period = 50) {
-  const closes = candles.map(c => c.close);
-  const maArr  = ti.SMA.calculate({ values: closes, period });
-  return maArr.length ? maArr[maArr.length - 1] : null;
+  return computeMa(candles, period);
 }
 
 module.exports = { analyzeAdaptiveDip, computeAdaptiveDipPct, lastMa, DEFAULT_OPTS };

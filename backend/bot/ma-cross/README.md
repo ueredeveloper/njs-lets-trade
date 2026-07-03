@@ -1,6 +1,6 @@
 # MA Cross Bot
 
-Estratégia de cruzamento entre duas médias móveis (SMA), com filtro de preço opcional.
+Estratégia de cruzamento entre duas médias móveis exponenciais (EMA), com filtro de preço opcional.
 
 ## Parâmetros
 

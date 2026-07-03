@@ -29,7 +29,9 @@ const RELOAD_INTERVALS = ['all', '1m', '5m', '15m', '30m', '1h', '2h', '4h', '8h
 export default function SettingsSidebar({ open, onClose }) {
   const { lang, setLang } = useLanguage();
   const { t } = useI18n();
-  const { selectedChart, assetDisplay, setAssetDisplayCategory, assetCategoryKeys } = useCurrency();
+  const { selectedChart, assetDisplay, setAssetDisplayCategory, assetCategoryKeys,
+    chartPanelButtons, setChartPanelButton, chartPanelButtonKeys,
+    uiPrefs, setDefaultChartInterval, setPanelVisible, chartIntervalOptions, panelKeys } = useCurrency();
   const [activeId, setActiveId]           = useState('default');
   const [reloadSymbol, setReloadSymbol]   = useState('');
   const [reloadInterval, setReloadInterval] = useState('all');
@@ -96,6 +98,63 @@ export default function SettingsSidebar({ open, onClose }) {
                   />
                   <span className="text-p5 text-xs leading-snug group-hover:text-white transition-colors">
                     {t(`settings.category.${key}`)}
+                  </span>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          {/* Intervalo padrão do gráfico */}
+          <div>
+            <p className={section}>{t('settings.chart_default_interval')}</p>
+            <p className="text-[10px] text-p5/50 mb-3 leading-relaxed">{t('settings.chart_default_interval_hint')}</p>
+            <select
+              className={`w-full ${inp}`}
+              value={uiPrefs.defaultChartInterval}
+              onChange={(e) => setDefaultChartInterval(e.target.value)}
+            >
+              {chartIntervalOptions.map((iv) => (
+                <option key={iv} value={iv}>{iv}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Painéis inferiores */}
+          <div>
+            <p className={section}>{t('settings.visible_panels')}</p>
+            <p className="text-[10px] text-p5/50 mb-3 leading-relaxed">{t('settings.visible_panels_hint')}</p>
+            <div className="flex flex-col gap-2">
+              {panelKeys.map((key) => (
+                <label key={key} className="flex items-start gap-2.5 cursor-pointer group">
+                  <input
+                    type="checkbox"
+                    checked={uiPrefs.visiblePanels[key] !== false}
+                    onChange={(e) => setPanelVisible(key, e.target.checked)}
+                    className="mt-0.5 shrink-0 accent-p4"
+                  />
+                  <span className="text-p5 text-xs leading-snug group-hover:text-white transition-colors">
+                    {t(`settings.panel.${key}`)}
+                  </span>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          {/* Botões do gráfico */}
+          <div>
+            <p className={section}>{t('settings.chart_panel')}</p>
+            <p className="text-[10px] text-p5/50 mb-3 leading-relaxed">{t('settings.chart_panel_hint')}</p>
+            <div className="flex flex-col gap-2">
+              {chartPanelButtonKeys.map((key) => (
+                <label key={key} className="flex items-start gap-2.5 cursor-pointer group">
+                  <input
+                    type="checkbox"
+                    checked={chartPanelButtons[key] !== false}
+                    onChange={(e) => setChartPanelButton(key, e.target.checked)}
+                    className="mt-0.5 shrink-0 accent-p4"
+                  />
+                  <span className="text-p5 text-xs leading-snug group-hover:text-white transition-colors">
+                    {t(`settings.chart_btn.${key}`)}
                   </span>
                 </label>
               ))}

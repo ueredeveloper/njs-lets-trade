@@ -143,7 +143,7 @@ async function startServer() {
         await maCrossCache.saveToDisk();
         const m = stats.matched ?? {};
         console.log(
-          `[maCrossCache] 5m≤5m:${m['5'] ?? 0} 15m≤15m:${m['15'] ?? 0}`
+          `[maCrossCache] 1m≤5m:${m['1m|5'] ?? 0} 5m≤5m:${m['5m|5'] ?? 0} 15m≤5m:${m['15m|5'] ?? 0}`
           + ` | disco:${stats.diskHits ?? 0} stale:${stats.diskStale ?? 0} api:${stats.apiFetches ?? 0}`
           + ` | fila:${stats.queuePending ?? 0}`,
         );
@@ -155,6 +155,28 @@ async function startServer() {
 
   refreshMaCrossCache().catch(e => console.error('[maCrossCache] erro no warmup:', e.message));
   setInterval(refreshMaCrossCache, maCrossCache.REFRESH_TICK_MS);
+
+  const candleDiskWarmup = require('./utils/candleDiskWarmup');
+  const CANDLE_WARMUP_TICK_MS = 60_000;
+
+  async function refreshCandleDisk() {
+    try {
+      const { list: symbols } = await getActiveUsdtPairs();
+      if (!Array.isArray(symbols) || symbols.length === 0) return;
+      const stats = await candleDiskWarmup.runWarmupCycle(symbols);
+      if (stats.refreshed > 0) {
+        const i1 = stats.byInterval['1m']?.refreshed ?? 0;
+        const i5 = stats.byInterval['5m']?.refreshed ?? 0;
+        console.log(`[candleWarmup] 1m:${i1} 5m:${i5} atualizados | falhas:${stats.failed}`);
+      }
+    } catch (e) {
+      console.error('[candleWarmup] erro:', e.message);
+    }
+  }
+
+  console.log(`[candleWarmup] intervalos: ${candleDiskWarmup.WARMUP_INTERVALS.join(', ')} | tick 1min`);
+  refreshCandleDisk().catch(e => console.error('[candleWarmup] erro no warmup:', e.message));
+  setInterval(refreshCandleDisk, CANDLE_WARMUP_TICK_MS);
 
   // Tick leve — só busca na API quando o TTL do intervalo expirou (15m/1h/4h)
   setInterval(async () => {

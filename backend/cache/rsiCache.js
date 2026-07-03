@@ -1,4 +1,5 @@
-const { RSI, SMA } = require('technicalindicators');
+const { RSI } = require('technicalindicators');
+const { calculateMa } = require('../utils/movingAverage');
 const getCandles = require('../binance/getCandles');
 const fs   = require('node:fs/promises');
 const path = require('path');
@@ -34,7 +35,7 @@ function buildEntry(candles) {
 
   let ma50 = null;
   if (closes.length >= 50) {
-    const maArr = SMA.calculate({ values: closes, period: 50 });
+    const maArr = calculateMa(closes, 50);
     if (maArr.length) ma50 = maArr[maArr.length - 1];
   }
 

@@ -2,6 +2,7 @@
 
 const ti = require('technicalindicators');
 const { analyzeAdaptiveDip } = require('../amap/adaptiveMaDip');
+const { computeMa, buildMaTimeSeries, maLabel } = require('../../utils/movingAverage');
 
 const INTERVAL_MS = {
   '1m': 60_000, '3m': 180_000, '5m': 300_000, '15m': 900_000, '30m': 1_800_000,
@@ -20,28 +21,11 @@ function candleClose(c) {
   return parseFloat(c.close);
 }
 
-function computeMa(candles, period) {
-  if (!candles?.length || candles.length < period) return null;
-  const closes = candles.map(candleClose);
-  const arr = ti.SMA.calculate({ values: closes, period });
-  return arr.length ? arr[arr.length - 1] : null;
-}
-
 function computeRsi(candles, period) {
   if (!candles?.length || candles.length < period + 2) return null;
   const closes = candles.map(candleClose);
   const arr = ti.RSI.calculate({ values: closes, period });
   return arr.length ? arr[arr.length - 1] : null;
-}
-
-function buildMaTimeSeries(candles, period) {
-  if (!candles?.length || candles.length < period) return [];
-  const closes = candles.map(candleClose);
-  const maArr = ti.SMA.calculate({ values: closes, period });
-  return maArr.map((ma, i) => ({
-    openTime: candles[period - 1 + i].openTime,
-    ma,
-  }));
 }
 
 function maValueAt(series, openTime) {
@@ -344,7 +328,7 @@ function checkPriceFilter(close, filterCandles, filter, adaptiveDipPct, adaptive
 }
 
 function crossLabel(leg) {
-  return `SMA${leg.period}(${leg.interval})`;
+  return maLabel(leg.period, leg.interval);
 }
 
 function activeMaFilters(config) {
@@ -490,7 +474,7 @@ function evaluateExit(config, cMap, entryPrice, opts = {}) {
       const dirLbl = exMa.direction === 'cross_up' ? '↑' : '↓';
       signals.push({
         kind: 'ma',
-        exitDesc: `SMA${exMa.ma1.period}(${exMa.ma1.interval}) ${dirLbl} SMA${exMa.ma2.period}(${exMa.ma2.interval})`,
+        exitDesc: `${maLabel(exMa.ma1.period, exMa.ma1.interval)} ${dirLbl} ${maLabel(exMa.ma2.period, exMa.ma2.interval)}`,
         ma1: cross.ma1, ma2: cross.ma2, close: cross.close,
       });
     }
@@ -565,6 +549,68 @@ function getFinestPollInterval(config) {
   return ivs.reduce((a, b) => (intervalMs(a) <= intervalMs(b) ? a : b));
 }
 
+/** Métricas para sort de favoritos: gap até cruzar ↑/↓ e idade do último cruzamento. */
+function getMaCrossMetrics({
+  candles1, period1, interval1,
+  candles2, period2, interval2,
+  tolerancePct = 0,
+  crossLookbackMin = 1440,
+  now = Date.now(),
+}) {
+  const c1 = closedCandlesOnly(candles1);
+  const c2 = closedCandlesOnly(candles2);
+  const sigIv = finestInterval(interval1, interval2);
+  const sigCandles = sigIv === interval1 ? c1 : c2;
+
+  if (!sigCandles?.length || sigCandles.length < 3) {
+    return { ok: false, reason: 'INSUFFICIENT_DATA' };
+  }
+
+  const series1 = buildMaTimeSeries(c1, period1);
+  const series2 = buildMaTimeSeries(c2, period2);
+  if (series1.length < 1 || series2.length < 1) {
+    return { ok: false, reason: 'INSUFFICIENT_MA' };
+  }
+
+  const last = sigCandles[sigCandles.length - 1];
+  const ma1 = maValueAt(series1, last.openTime);
+  const ma2 = maValueAt(series2, last.openTime);
+  if (ma1 == null || ma2 == null) {
+    return { ok: false, reason: 'INSUFFICIENT_MA' };
+  }
+
+  let gapUpPct = null;
+  let gapDownPct = null;
+  if (ma1 < ma2 && ma2 > 0) gapUpPct = ((ma2 - ma1) / ma2) * 100;
+  if (ma1 > ma2 && ma2 > 0) gapDownPct = ((ma1 - ma2) / ma2) * 100;
+
+  const crossUp = findRecentMaCross({
+    candles1: c1, period1, interval1,
+    candles2: c2, period2, interval2,
+    direction: 'cross_up', tolerancePct,
+    maxAgeMin: crossLookbackMin, closedOnly: true, now,
+  });
+  const crossDown = findRecentMaCross({
+    candles1: c1, period1, interval1,
+    candles2: c2, period2, interval2,
+    direction: 'cross_down', tolerancePct,
+    maxAgeMin: crossLookbackMin, closedOnly: true, now,
+  });
+
+  const round = (v) => (v != null ? Math.round(v * 100) / 100 : null);
+
+  return {
+    ok: true,
+    ma1, ma2,
+    gapUpPct: round(gapUpPct),
+    gapDownPct: round(gapDownPct),
+    crossUpAgeMin: crossUp.crossTime != null ? round(crossUp.ageMin) : null,
+    crossDownAgeMin: crossDown.crossTime != null ? round(crossDown.ageMin) : null,
+    crossUpHeld: crossUp.matched === true,
+    crossDownHeld: crossDown.matched === true,
+  };
+}
+
 module.exports = {
   INTERVAL_MS,
   intervalMs,
@@ -585,4 +631,5 @@ module.exports = {
   evaluateExit,
   computeAdaptiveDips,
   getFinestPollInterval,
+  getMaCrossMetrics,
 };

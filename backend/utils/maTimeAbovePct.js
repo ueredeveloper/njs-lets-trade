@@ -1,16 +1,16 @@
 'use strict';
 
-const { SMA } = require('technicalindicators');
+const { calculateMa } = require('./movingAverage');
 
 /**
- * % de velas com close > SMA(period) no histórico carregado.
+ * % de velas com close > EMA(period) no histórico carregado.
  * @returns {{ pctAboveMa: number, met: number, total: number } | null}
  */
 function computeMaTimeAbovePct(candles, period = 50) {
   if (!Array.isArray(candles) || candles.length < period) return null;
 
   const closes = candles.map(c => parseFloat(c.close));
-  const maArr  = SMA.calculate({ values: closes, period });
+  const maArr  = calculateMa(closes, period);
   if (!maArr.length) return null;
 
   let met = 0;

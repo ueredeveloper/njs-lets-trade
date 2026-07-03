@@ -5,6 +5,7 @@ const fs = require('fs');
 const { toGateSymbol } = require('../../utils/toGateSymbol');
 const { fetchBinanceCandles, fetchGateCandles } = require('../prices');
 const { compactBacktestForApi } = require('../amap/amapBacktest');
+const { maLabel } = require('../../utils/movingAverage');
 const {
   getRequiredSpecs,
   getFinestPollInterval,
@@ -16,7 +17,7 @@ const {
 } = require('./strategyEngine');
 
 function crossLabel(leg) {
-  return `SMA${leg.period}(${leg.interval})`;
+  return maLabel(leg.period, leg.interval);
 }
 
 function activeMaFilters(config) {
@@ -94,7 +95,7 @@ function formatExitLabel(config) {
 
 function buildMaChecks(config, cMap, adaptiveDips, close) {
   return activeMaFilters(config).map(f => {
-    const label = `SMA${f.period} ${f.interval}`;
+    const label = `EMA${f.period} ${f.interval}`;
     const key = `${f.period}_${f.interval}`;
     const pf = checkPriceFilter(close, cMap[f.interval] ?? [], f, adaptiveDips[key], config.adaptiveOpts);
     let detail = 'OK';

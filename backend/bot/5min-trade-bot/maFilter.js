@@ -5,8 +5,8 @@
  * Modos: above (preço > MA), below (preço < MA).
  */
 
-const ti = require('technicalindicators');
 const { analyzeAdaptiveDip, lastMa } = require('../amap/adaptiveMaDip');
+const { calculateMa } = require('../../utils/movingAverage');
 
 const MA_INTERVALS = ['1h', '2h', '4h', '8h', '1d'];
 const MA_PERIODS   = [20, 50, 100, 200];
@@ -53,7 +53,7 @@ function normalizeMaFilters(raw) {
 function buildMaSeries(candles, period) {
   if (!candles?.length || candles.length < period) return [];
   const closes = candles.map(c => c.close);
-  const maArr  = ti.SMA.calculate({ values: closes, period });
+  const maArr  = calculateMa(closes, period);
   return maArr.map((ma, i) => ({
     openTime: candles[period - 1 + i].openTime,
     ma,

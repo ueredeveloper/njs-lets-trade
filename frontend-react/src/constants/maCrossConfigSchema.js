@@ -16,9 +16,9 @@ export const CROSS_DIRECTIONS = [
 ];
 
 export const PRICE_FILTER_MODES = [
-  { id: 'strict_above', label: 'Preço acima da SMA' },
-  { id: 'adaptive',     label: 'Pullback adaptativo (% abaixo da SMA)' },
-  { id: 'below',        label: 'Preço abaixo da SMA' },
+  { id: 'strict_above', label: 'Preço acima da EMA' },
+  { id: 'adaptive',     label: 'Pullback adaptativo (% abaixo da EMA)' },
+  { id: 'below',        label: 'Preço abaixo da EMA' },
   { id: 'off',          label: 'Desligado' },
 ];
 

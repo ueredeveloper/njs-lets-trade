@@ -55,6 +55,9 @@ const W_PREFIX_NOT_WRAPPED = new Set([
   'W', 'WELL', 'WEN', 'WHITE', 'WMTX', 'WOM', 'WRX', 'WTC', 'WAN', 'WABI',
 ]);
 
+/** Tickers spot que parecem LP token mas não são (ex.: SLP = Smooth Love Potion). */
+const NOT_LP_BASES = new Set(['SLP']);
+
 export const ASSET_CATEGORY_KEYS = [
   'stablecoins',
   'leveragedLong',
@@ -120,13 +123,14 @@ function isLiquidStaking(base) {
 }
 
 function isLpToken(base) {
+  if (NOT_LP_BASES.has(base)) return false;
   if (/LP$/i.test(base)) return true;
   if (/-LP$/i.test(base)) return true;
   if (/^LP-/i.test(base)) return true;
   if (/UNI-V\d/i.test(base)) return true;
   if (/CAKE-LP/i.test(base)) return true;
   if (/BPT$/i.test(base)) return true;
-  if (/SLP$/i.test(base)) return true;
+  if (base.length > 3 && /SLP$/i.test(base)) return true;
   if (/XLP$/i.test(base)) return true;
   return false;
 }

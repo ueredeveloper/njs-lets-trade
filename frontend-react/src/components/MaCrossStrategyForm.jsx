@@ -132,7 +132,7 @@ export default function MaCrossStrategyForm({ form, patch }) {
   return (
     <div className="space-y-4">
       <CrossBlock
-        title="Compra — cruzamento SMA"
+        title="Compra — cruzamento EMA"
         block={form.entry}
         prefix="entry"
         patch={patch}
@@ -173,7 +173,7 @@ export default function MaCrossStrategyForm({ form, patch }) {
                       {PRICE_FILTER_MODES.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
                     </select>
                     <div className="flex flex-wrap gap-2 items-center">
-                      <span className="text-p5/50">SMA</span>
+                      <span className="text-p5/50">EMA</span>
                       <NumInput value={f.period} onChange={v => updateFilter(f.id, 'period', v)}
                         min={MA_CROSS_PERIOD_MIN} max={MA_CROSS_PERIOD_MAX} step={1} className="w-14" />
                       <select value={f.interval} onChange={e => updateFilter(f.id, 'interval', e.target.value)}
@@ -205,7 +205,7 @@ export default function MaCrossStrategyForm({ form, patch }) {
             <button type="button" onClick={addFilter}
               className="text-[10px] px-2 py-1 rounded font-semibold w-full"
               style={{ background: `${FILTER_COLOR}18`, color: FILTER_COLOR, border: `1px solid ${FILTER_COLOR}44` }}>
-              + Adicionar filtro SMA
+              + Adicionar filtro EMA
             </button>
           </>
         )}
@@ -221,7 +221,7 @@ export default function MaCrossStrategyForm({ form, patch }) {
         </div>
 
         <CrossBlock
-          title="Venda — cruzamento SMA"
+          title="Venda — cruzamento EMA"
           block={form.exit.maCross}
           prefix="exit.maCross"
           patch={patch}

@@ -1,6 +1,7 @@
 'use strict';
 
 const ti = require('technicalindicators');
+const { computeMa } = require('../../utils/movingAverage');
 
 const INTERVAL_MS = {
   '15m': 900_000, '30m': 1_800_000, '1h': 3_600_000, '2h': 7_200_000,
@@ -20,12 +21,6 @@ function checkRsi(rsi, spec) {
 function computeRsi(candles, period) {
   const closes = candles.map(c => c.close);
   const arr = ti.RSI.calculate({ values: closes, period });
-  return arr.length ? arr[arr.length - 1] : null;
-}
-
-function computeMa(candles, period) {
-  const closes = candles.map(c => c.close);
-  const arr = ti.SMA.calculate({ values: closes, period });
   return arr.length ? arr[arr.length - 1] : null;
 }
 

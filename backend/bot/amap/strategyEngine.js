@@ -6,6 +6,7 @@
  */
 
 const ti = require('technicalindicators');
+const { calculateMa } = require('../../utils/movingAverage');
 const { analyzeAdaptiveDip, lastMa, DEFAULT_OPTS } = require('./adaptiveMaDip');
 const { buildEntryDiscountReport } = require('./suggestEntryDiscount');
 const { normalizeTradeConfig, toEngineConfig, TRADE_CONFIG_DEFAULTS } = require('./tradeConfigSchema');
@@ -156,7 +157,7 @@ function computeMaFilterTimeStats(cMap, config, adaptiveDips = {}, window = null
     }
 
     const closes = candles.map(c => c.close);
-    const maArr  = ti.SMA.calculate({ values: closes, period });
+    const maArr  = calculateMa(closes, period);
     const dipPct = f.mode === 'adaptive'
       ? (adaptiveDips[key] ?? DEFAULT_OPTS.defaultPct)
       : null;

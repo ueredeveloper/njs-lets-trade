@@ -16,6 +16,7 @@
 
 const path = require('path');
 const ti   = require('technicalindicators');
+const { calculateMa } = require('../../utils/movingAverage');
 require('dotenv').config({ path: path.join(__dirname, '../../.env') });
 
 const { toGateSymbol } = require('../utils/toGateSymbol');
@@ -125,7 +126,7 @@ async function fetchCandles() {
 // ── Pré-calcula MA50(1h) indexado por openTime da hora ───────────────────────
 function buildMa50Map(candles1h) {
   const closes = candles1h.map(c => c.close);
-  const maArr  = ti.SMA.calculate({ values: closes, period: MA_PERIOD });
+  const maArr  = calculateMa(closes, MA_PERIOD);
   const offset = closes.length - maArr.length; // maArr[0] = MA50 at closes[offset]
   const map    = new Map();
   for (let i = 0; i < maArr.length; i++) {

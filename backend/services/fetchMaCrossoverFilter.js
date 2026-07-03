@@ -3,7 +3,7 @@
 const router = require('express').Router();
 const getCandlesForScreening = require('../utils/getCandlesForScreening');
 const { getActiveUsdtPairs } = require('../binance/getActiveUsdtPairs');
-const { evaluateMaCrossSignal, intervalMs } = require('../bot/ma-cross/strategyEngine');
+const { evaluateMaCrossSignal, intervalMs, getMaCrossMetrics } = require('../bot/ma-cross/strategyEngine');
 const { isValidMaCrossPeriod, MA_CROSS_PERIOD_MIN, MA_CROSS_PERIOD_MAX } = require('../bot/ma-cross/tradeConfigSchema');
 const { buildMaCrossFilterName, parseMaCrossModeToken } = require('../utils/filterNames');
 const maCrossCache = require('../cache/maCrossCache');
@@ -76,7 +76,7 @@ router.get('/ma-crossover-filter', async (req, res) => {
     }
     if (!isValidMaCrossPeriod(period1) || !isValidMaCrossPeriod(period2)) {
       return res.status(400).json({
-        error: `período SMA inválido (use ${MA_CROSS_PERIOD_MIN}–${MA_CROSS_PERIOD_MAX})`,
+        error: `período EMA inválido (use ${MA_CROSS_PERIOD_MIN}–${MA_CROSS_PERIOD_MAX})`,
       });
     }
     if (!mode || !ALLOWED_MODES.has(mode)) {
@@ -182,6 +182,76 @@ router.get('/ma-crossover-filter', async (req, res) => {
     });
   } catch (err) {
     console.error('[ma-crossover-filter]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/** Status MA Cross para lista de favoritos (gap + último cruzamento por símbolo). */
+router.post('/ma-cross-status', async (req, res) => {
+  try {
+    const items = Array.isArray(req.body?.items) ? req.body.items : [];
+    if (!items.length) {
+      return res.json({ details: {}, scannedAt: Date.now() });
+    }
+
+    const tolerancePct = parseFloat(req.body?.tolerancePct ?? '0.5');
+    const crossLookbackMin = parseInt(req.body?.crossLookbackMin ?? '1440', 10);
+    const now = Date.now();
+    const details = {};
+
+    const results = await runWithConcurrency(items.slice(0, 80), async (item) => {
+      const symbol = String(item.symbol ?? '').toUpperCase();
+      if (!symbol) return null;
+
+      const period1 = parseInt(item.period1 ?? '9', 10);
+      const period2 = parseInt(item.period2 ?? '21', 10);
+      const interval1 = item.interval1 ?? item.interval ?? '5m';
+      const interval2 = item.interval2 ?? interval1;
+
+      if (!isValidMaCrossPeriod(period1) || !isValidMaCrossPeriod(period2)) return null;
+      if (!ALLOWED_INTERVALS.has(interval1) || !ALLOWED_INTERVALS.has(interval2)) return null;
+
+      const minCandles = Math.max(period1, period2) + 5;
+      const limit = Math.max(CANDLES_LIMIT, minCandles + 10);
+
+      try {
+        let candles1;
+        let candles2;
+        if (interval1 === interval2) {
+          ({ candles: candles1 } = await getCandlesForScreening(symbol, interval1, limit));
+          candles2 = candles1;
+        } else {
+          const [r1, r2] = await Promise.all([
+            getCandlesForScreening(symbol, interval1, limit),
+            getCandlesForScreening(symbol, interval2, limit),
+          ]);
+          candles1 = r1.candles;
+          candles2 = r2.candles;
+        }
+
+        const m = getMaCrossMetrics({
+          candles1, period1, interval1,
+          candles2, period2, interval2,
+          tolerancePct,
+          crossLookbackMin,
+          now,
+        });
+        if (!m.ok) return { symbol, error: m.reason };
+        return { symbol, ...m };
+      } catch {
+        return { symbol, error: 'FETCH_FAIL' };
+      }
+    }, CONCURRENCY);
+
+    for (const row of results) {
+      if (!row?.symbol) continue;
+      const { symbol, ...meta } = row;
+      details[symbol] = meta;
+    }
+
+    res.json({ details, scannedAt: now });
+  } catch (err) {
+    console.error('[ma-cross-status]', err.message);
     res.status(500).json({ error: err.message });
   }
 });

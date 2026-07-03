@@ -241,7 +241,7 @@ describe('MA Cross — cruzamento', () => {
   });
 });
 
-describe('MA Cross — período SMA', () => {
+describe('MA Cross — período EMA', () => {
   test('isValidMaCrossPeriod aceita 2–500', () => {
     expect(isValidMaCrossPeriod(2)).toBe(true);
     expect(isValidMaCrossPeriod(13)).toBe(true);

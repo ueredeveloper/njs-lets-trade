@@ -21,6 +21,7 @@
 const path = require('path');
 const fs   = require('fs');
 const ti   = require('technicalindicators');
+const { calculateMa } = require('../../utils/movingAverage');
 
 const SYMBOL      = process.argv[2] || 'EDUUSDT';
 const DAYS_BACK   = parseInt(process.argv[3] || '10', 10);
@@ -169,7 +170,7 @@ function detectMA50RetestEvents(data, minSeparation = MIN_SEPARATION) {
 
   // Calcula MA50
   const closes  = candles.map(c => c.close);
-  const ma50Arr = ti.SMA.calculate({ values: closes, period: MA_PERIOD });
+  const ma50Arr = calculateMa(closes, MA_PERIOD);
   const offset  = closes.length - ma50Arr.length;
 
   // Array unificado: apenas candles com MA50 disponível

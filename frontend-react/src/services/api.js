@@ -228,7 +228,7 @@ export function gatePreloadCandles(symbol) {
 }
 
 /**
- * Busca candles + Ichimoku + SMA para exibir no gráfico.
+ * Busca candles + Ichimoku + EMA para exibir no gráfico.
  * @param {string} symbol   ex: 'BTCUSDT'
  * @param {string} interval ex: '1h'
  * @param {string} [source] 'gate' para forçar Gate.io; omitir para Binance
@@ -357,6 +357,20 @@ export async function fetchMaCrossoverFilter({
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error ?? `ma-crossover-filter falhou: HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+/** Gap e cruzamento MA por símbolo (favoritos MA-Cross). */
+export async function fetchMaCrossStatus(items, { tolerancePct = '0.5', crossLookbackMin = 1440 } = {}) {
+  const res = await fetch('/services/ma-cross-status', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ items, tolerancePct, crossLookbackMin }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `ma-cross-status falhou: HTTP ${res.status}`);
   }
   return res.json();
 }

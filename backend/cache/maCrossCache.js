@@ -11,8 +11,17 @@ const CANDLES_LIMIT = 200;
 const BATCH_SIZE    = 20;
 const CACHE_FILE    = path.join(__dirname, '..', 'data', 'ma-cross-cache.json');
 
-/** Presets cacheados: MA9×MA21 cruzou ↑ — candle 5m/15m, temporal ≤5 min */
+/** Presets cacheados: MA9×MA21 cruzou ↑ — candle 1m/5m/15m, temporal ≤5 min */
 const CACHED_PRESETS = [
+  {
+    key: '1m|5',
+    period1: 9, interval1: '1m',
+    period2: 21, interval2: '1m',
+    mode: 'cross_up',
+    maxAgeMin: '5',
+    tolerancePct: 0.5,
+    live: true,
+  },
   {
     key: '5m|5',
     period1: 9, interval1: '5m',

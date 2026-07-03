@@ -12,6 +12,18 @@ import {
   loadAssetDisplay,
   saveAssetDisplay,
 } from '../utils/assetCategories';
+import {
+  CHART_PANEL_BUTTON_KEYS,
+  loadChartPanelButtons,
+  saveChartPanelButtons,
+} from '../utils/chartPanelButtons';
+import {
+  CHART_INTERVAL_OPTIONS,
+  PANEL_KEYS,
+  loadUiPreferences,
+  saveUiPreferences,
+  normalizeOverlaySlots,
+} from '../utils/uiPreferences';
 
 const CurrencyContext = createContext(null);
 
@@ -19,6 +31,8 @@ export function CurrencyProvider({ children }) {
   // Lista completa do servidor; currencies expõe versão filtrada por categoria
   const [rawCurrencies, setRawCurrencies] = useState({ name: '1h|All', list: [] });
   const [assetDisplay, setAssetDisplayState] = useState(() => loadAssetDisplay());
+  const [chartPanelButtons, setChartPanelButtonsState] = useState(() => loadChartPanelButtons());
+  const [uiPrefs, setUiPrefsState] = useState(() => loadUiPreferences());
 
   // [{ name: '1h|Binance|USDT', list: ['BTCUSDT', ...] }, ...]
   const [filters, setFilters] = useState([]);
@@ -27,7 +41,7 @@ export function CurrencyProvider({ children }) {
   const [selectedChart, setSelectedChart] = useState(null);
 
   // Intervalo ativo no gráfico — fonte de verdade compartilhada entre chart e tabela
-  const [chartInterval, setChartInterval] = useState('30m');
+  const [chartInterval, setChartInterval] = useState(() => loadUiPreferences().defaultChartInterval);
 
   // Zoom do gráfico para um período específico: { startDate, endDate, source? } ISO strings
   const [chartZoom, setChartZoom] = useState(null);
@@ -334,6 +348,46 @@ export function CurrencyProvider({ children }) {
     });
   }, []);
 
+  const setChartPanelButton = useCallback((key, enabled) => {
+    setChartPanelButtonsState((prev) => {
+      const next = { ...prev, [key]: enabled };
+      saveChartPanelButtons(next);
+      return next;
+    });
+  }, []);
+
+  const setDefaultChartInterval = useCallback((interval) => {
+    if (!CHART_INTERVAL_OPTIONS.includes(interval)) return;
+    setUiPrefsState((prev) => {
+      const next = { ...prev, defaultChartInterval: interval };
+      saveUiPreferences(next);
+      return next;
+    });
+  }, []);
+
+  const setPanelVisible = useCallback((key, enabled) => {
+    if (!PANEL_KEYS.includes(key)) return;
+    setUiPrefsState((prev) => {
+      const next = {
+        ...prev,
+        visiblePanels: { ...prev.visiblePanels, [key]: enabled },
+      };
+      saveUiPreferences(next);
+      return next;
+    });
+  }, []);
+
+  const setOverlaySlotsPreference = useCallback((slots) => {
+    setUiPrefsState((prev) => {
+      const next = {
+        ...prev,
+        overlaySlots: normalizeOverlaySlots(slots),
+      };
+      saveUiPreferences(next);
+      return next;
+    });
+  }, []);
+
   const isVisibleSymbol = useCallback(
     (symbol) => isSymbolVisible(symbol, assetDisplay),
     [assetDisplay],
@@ -464,6 +518,15 @@ export function CurrencyProvider({ children }) {
         getBinanceCurrenciesWithUsdt,
         assetDisplay,
         setAssetDisplayCategory,
+        chartPanelButtons,
+        setChartPanelButton,
+        chartPanelButtonKeys: CHART_PANEL_BUTTON_KEYS,
+        uiPrefs,
+        setDefaultChartInterval,
+        setPanelVisible,
+        setOverlaySlotsPreference,
+        chartIntervalOptions: CHART_INTERVAL_OPTIONS,
+        panelKeys: PANEL_KEYS,
         isVisibleSymbol,
         filterVisibleSymbols,
         filterVisibleCurrencies,

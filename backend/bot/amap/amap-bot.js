@@ -24,6 +24,7 @@ const readline = require('readline');
 require('dotenv').config({ path: path.join(__dirname, '../../../.env') });
 
 const ti = require('technicalindicators');
+const { computeMaSeries } = require('../../utils/movingAverage');
 const { fetchBinanceCandles, fetchGateCandles } = require('../prices');
 const { toGateSymbol } = require('../../utils/toGateSymbol');
 const { gateMarketSell: gateMarketSellCore } = require('../gate/gateMarketSell');
@@ -572,13 +573,6 @@ function exitRsiAt(exitSeries, entryTime) {
     else break;
   }
   return best;
-}
-
-// Retorna [{openTime, ma}] — SMA[i] cobre closes[0..period-1+i].
-function computeMaSeries(candles, period) {
-  const closes = candles.map(c => c.close);
-  const maArr  = ti.SMA.calculate({ values: closes, period });
-  return maArr.map((ma, i) => ({ openTime: candles[period - 1 + i].openTime, ma }));
 }
 
 // MA mais recente disponível em ou antes de `time`.

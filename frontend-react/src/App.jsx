@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useMemo } from 'react';
 import { CurrencyProvider, useCurrency } from './contexts/CurrencyContext';
 import { LanguageProvider } from './contexts/LanguageContext';
 import { useI18n } from './i18n';
 import { fetchAllCurrencies, fetch24hVolume, fetchStablecoins, fetchCandlesticksAndCloud, getFavorites } from './services/api';
+import { loadUiPreferences, firstVisiblePanel } from './utils/uiPreferences';
 
 
 import FilterTabs from './components/FilterTabs';
@@ -15,7 +16,8 @@ import StatisticsPanel from './components/StatisticsPanel';
 import MultitradePanel from './components/MultitradePanel';
 
 function AppContent() {
-  const { setCurrencies, setFilters, addFilter, setSelectedChart, setGateFavorites, setBinanceFavorites } = useCurrency();
+  const { setCurrencies, setFilters, addFilter, setSelectedChart, setGateFavorites, setBinanceFavorites,
+    setChartInterval, uiPrefs } = useCurrency();
   const { t } = useI18n();
   const [activeFilter, setActiveFilter] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -25,10 +27,44 @@ function AppContent() {
   const [showFavorites, setShowFavorites] = useState(null); // null | 'gate' | 'binance'
   const [dragY, setDragY] = useState(0);
   const dragStartY = useRef(null);
-  const [openPanels, setOpenPanels] = useState(['indicators']);
+  const [openPanels, setOpenPanels] = useState(() => {
+    const first = firstVisiblePanel(loadUiPreferences().visiblePanels);
+    return first ? [first] : [];
+  });
+
+  const panelDefs = useMemo(() => ([
+    { id: 'indicators', label: t('app.analyze') },
+    { id: 'stats',      label: t('app.statistics') },
+    { id: 'macross',    label: 'MA-Cross' },
+  ]), [t]);
+
+  const visiblePanelDefs = useMemo(
+    () => panelDefs.filter((p) => uiPrefs.visiblePanels[p.id] !== false),
+    [panelDefs, uiPrefs.visiblePanels],
+  );
+
+  useEffect(() => {
+    setOpenPanels((prev) => {
+      const stillVisible = prev.filter((id) => uiPrefs.visiblePanels[id] !== false);
+      if (stillVisible.length) return stillVisible;
+      const first = firstVisiblePanel(uiPrefs.visiblePanels);
+      return first ? [first] : [];
+    });
+  }, [uiPrefs.visiblePanels]);
+
+  function pickPanelOnCurrencySelect() {
+    if (uiPrefs.visiblePanels.stats !== false) return 'stats';
+    return firstVisiblePanel(uiPrefs.visiblePanels);
+  }
 
   function togglePanel(id) {
-    setOpenPanels((prev) => prev.includes(id) ? ['indicators'] : [id]);
+    setOpenPanels((prev) => {
+      if (prev.includes(id)) {
+        const fallback = visiblePanelDefs.find((p) => p.id !== id)?.id;
+        return fallback ? [fallback] : [];
+      }
+      return [id];
+    });
   }
 
   useEffect(() => {
@@ -49,8 +85,10 @@ function AppContent() {
         const stableFilters = await fetchStablecoins().catch(() => []);
         stableFilters.forEach((f) => addFilter(f));
 
-        const btcData = await fetchCandlesticksAndCloud('BTCUSDT', '1h');
-        setSelectedChart(btcData);
+        const defaultIv = loadUiPreferences().defaultChartInterval;
+        const btcData = await fetchCandlesticksAndCloud('BTCUSDT', defaultIv);
+        setSelectedChart({ ...btcData, interval: defaultIv, symbol: 'BTCUSDT' });
+        setChartInterval(defaultIv);
 
         const [gateList, binanceList] = await Promise.all([
           getFavorites('gate').catch(() => []),
@@ -209,7 +247,11 @@ function AppContent() {
                 activeFilter={activeFilter}
                 showFavorites={showFavorites}
                 setShowFavorites={setShowFavorites}
-                onSelectCurrency={() => { closeCurrencyModal(); setOpenPanels(['stats']); }}
+                onSelectCurrency={() => {
+                  closeCurrencyModal();
+                  const target = pickPanelOnCurrencySelect();
+                  if (target) setOpenPanels([target]);
+                }}
               />
             </div>
           </div>
@@ -238,12 +280,9 @@ function AppContent() {
             </button>
           </div>
           {/* Barra de toggles */}
+          {visiblePanelDefs.length > 0 && (
           <div className="shrink-0 border-t border-p2 flex divide-x divide-p2">
-            {[
-              { id: 'indicators', label: t('app.analyze') },
-              { id: 'stats',      label: t('app.statistics') },
-              { id: 'macross',    label: 'MA-Cross' },
-            ].map(({ id, label }) => (
+            {visiblePanelDefs.map(({ id, label }) => (
               <button
                 key={id}
                 onClick={() => togglePanel(id)}
@@ -264,17 +303,18 @@ function AppContent() {
               </button>
             ))}
           </div>
-          {openPanels.includes('indicators') && (
+          )}
+          {openPanels.includes('indicators') && uiPrefs.visiblePanels.indicators !== false && (
             <div className="flex-1 min-h-0 flex flex-col">
               <IndicatorPanel />
             </div>
           )}
-          {openPanels.includes('stats') && (
+          {openPanels.includes('stats') && uiPrefs.visiblePanels.stats !== false && (
             <div className="flex-1 min-h-0 flex flex-col">
               <StatisticsPanel />
             </div>
           )}
-          {openPanels.includes('macross') && (
+          {openPanels.includes('macross') && uiPrefs.visiblePanels.macross !== false && (
             <div className="flex-1 min-h-0 flex flex-col">
               <MultitradePanel />
             </div>
@@ -291,7 +331,10 @@ function AppContent() {
               activeFilter={activeFilter}
               showFavorites={showFavorites}
               setShowFavorites={setShowFavorites}
-              onSelectCurrency={() => setOpenPanels(['stats'])}
+              onSelectCurrency={() => {
+                const target = pickPanelOnCurrencySelect();
+                if (target) setOpenPanels([target]);
+              }}
             />
           </div>
         </div>

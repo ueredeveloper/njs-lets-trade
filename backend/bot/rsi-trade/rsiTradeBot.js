@@ -26,6 +26,7 @@ require('dotenv').config({ path: path.join(__dirname, '../../../.env') });
 
 const { toGateSymbol }   = require('../../utils/toGateSymbol');
 const ti                 = require('technicalindicators');
+const { computeMa }      = require('../../utils/movingAverage');
 const {
   fetchBinanceCandles,
   fetchGateCandles,
@@ -261,8 +262,7 @@ async function checkMa50Filter(pair, adapter, log, currentPrice, lowerPct = MA50
       return { ok: false, ma50: null, distPct: null };
     }
 
-    const last50  = candles1h.slice(-50);
-    const ma50    = last50.reduce((s, c) => s + c.close, 0) / 50;
+    const ma50    = computeMa(candles1h, 50);
     const distPct = (currentPrice - ma50) / ma50 * 100;
 
     if (distPct >= lowerPct && distPct <= MA50_UPPER_PCT) {
@@ -295,7 +295,8 @@ async function analyzeMa50UpperLimit(pair, adapter, log) {
     let maxDist = 0;
 
     for (let i = 50; i < candles.length; i++) {
-      const ma50    = candles.slice(i - 50, i).reduce((s, c) => s + c.close, 0) / 50;
+      const ma50    = computeMa(candles.slice(0, i), 50);
+      if (ma50 == null) continue;
       const distPct = (candles[i].close - ma50) / ma50 * 100;
 
       if (distPct > 0) {

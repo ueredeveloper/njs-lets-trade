@@ -1,6 +1,6 @@
 'use strict';
 
-const ti = require('technicalindicators');
+const { calculateMa } = require('../utils/movingAverage');
 const {
   checkCandlesAboveMa,
   evaluateRule2Entry,
@@ -24,7 +24,7 @@ function makeCandles(closes, periodMs = 3_600_000) {
 function maSnapFromCandles(candles, period, interval) {
   const key = maKey(period, interval);
   const closes = candles.map(c => c.close);
-  const maArr = ti.SMA.calculate({ values: closes, period });
+  const maArr = calculateMa(closes, period);
   const ma = maArr[maArr.length - 1];
   return { [key]: { ma, candles, period, interval } };
 }

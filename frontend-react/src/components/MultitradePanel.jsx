@@ -7,9 +7,16 @@ import { fetchCandlesticksAndCloud, fetchMultitradeTrades } from '../services/ap
 import { loadMultitradeSymbolChart } from '../utils/multitradeChart';
 import { multitradePhaseBadge, symbolPhaseSummary, fmtBuyTimeShort } from '../utils/multitradePhase';
 import {
+  compareMacrossFavorites, formatMacrossStatusBadge,
+  loadMacrossFavSort, isMaCrossEntry,
+} from '../utils/macrossFavoritesSort';
+import { useMacrossFavoritesStatus } from '../hooks/useMacrossFavoritesStatus';
+import MacrossFavSortSelect from './MacrossFavSortSelect';
+import {
   STRATEGY_IDS, STRATEGY_LABELS, STRATEGY_COLORS,
   getEntriesForSymbol, normalizeStrategyId, strategyBadgeLabel,
 } from '../constants/strategyPresets';
+import { useI18n } from '../i18n';
 
 const MT_COLOR      = '#22d3ee';
 const GATE_COLOR    = '#0068ff';
@@ -31,6 +38,7 @@ function fmtBuyTime(iso) {
 }
 
 export default function MultitradePanel() {
+  const { t } = useI18n();
   const {
     multitradeFavorites, selectedChart,
     saveMultitradeSymbol, removeMultitradeEntry,
@@ -42,10 +50,30 @@ export default function MultitradePanel() {
   const [stateSymbol, setStateSymbol]     = useState(null);
   const [pickedSymbol, setPickedSymbol]   = useState(null);
   const [pickedStrategy, setPickedStrategy] = useState('ma-cross');
+  const [macrossFavSort, setMacrossFavSort] = useState(() => loadMacrossFavSort());
 
   const chartSymbol = selectedChart?.symbol?.toUpperCase?.() ?? null;
   const grouped = useMemo(() => groupBySymbol(multitradeFavorites), [multitradeFavorites]);
-  const symbolList = useMemo(() => [...grouped.keys()].sort(), [grouped]);
+
+  const macrossFavSymbols = useMemo(() => (
+    [...grouped.keys()].filter(sym =>
+      (grouped.get(sym) ?? []).some(e => e.enabled !== false && isMaCrossEntry(e)),
+    )
+  ), [grouped]);
+
+  const {
+    status: macrossFavStatus,
+    loading: macrossFavLoading,
+    entriesBySymbol: macrossEntriesBySymbol,
+  } = useMacrossFavoritesStatus(macrossFavSymbols, multitradeFavorites, favOpen);
+
+  const symbolList = useMemo(() => {
+    const list = [...macrossFavSymbols];
+    return list.sort((a, b) => compareMacrossFavorites(a, b, macrossFavSort, {
+      status: macrossFavStatus,
+      entriesBySymbol: macrossEntriesBySymbol,
+    }));
+  }, [macrossFavSymbols, macrossFavSort, macrossFavStatus, macrossEntriesBySymbol]);
 
   const backtestEntry = useMemo(() => {
     const sym = chartSymbol ?? pickedSymbol;
@@ -126,6 +154,13 @@ export default function MultitradePanel() {
 
       {favOpen && (
         <div id="multitrade-panel-favorites" className="multitrade-panel-favorites border-b border-p2 shrink-0 max-h-48 overflow-y-auto">
+          <div className="flex items-center justify-between px-3 py-1.5 border-b border-p2/50 gap-2">
+            <span className="text-[9px] text-p5/50 uppercase tracking-wider">Favoritas</span>
+            <div className="flex items-center gap-1.5">
+              {macrossFavLoading && <span className="text-[9px] text-emerald-400/80">⟳</span>}
+              <MacrossFavSortSelect value={macrossFavSort} onChange={setMacrossFavSort} />
+            </div>
+          </div>
           {symbolList.length === 0 ? (
             <p className="text-[10px] text-p5/40 px-3 py-3 text-center">Nenhuma favorita MA-Cross</p>
           ) : (
@@ -162,6 +197,11 @@ export default function MultitradePanel() {
                         <span className="text-[8px] font-mono text-white/70 truncate" title="Momento da compra">
                           ▌ {fmtBuyTime(boughtEntry.buyTime)}
                           {boughtEntry.buyPrice != null && ` @ ${Number(boughtEntry.buyPrice).toPrecision(4)}`}
+                        </span>
+                      )}
+                      {formatMacrossStatusBadge(macrossFavStatus[sym], t) && (
+                        <span className="text-[8px] font-bold text-emerald-400/90 truncate">
+                          {formatMacrossStatusBadge(macrossFavStatus[sym], t)}
                         </span>
                       )}
                       {activeEntries.length > 1 && (

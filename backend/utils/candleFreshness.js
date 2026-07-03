@@ -14,25 +14,53 @@ function hasRecentCandleGaps(disk, interval, lookback = 24) {
   return false;
 }
 
+/** Último candle fechado (descarta o candle em formação no fim do array). */
+function closedCandlesOnly(candles) {
+  if (!candles?.length || candles.length < 3) return candles ?? [];
+  return candles.slice(0, -1);
+}
+
+/** Idade do último candle fechado em ms (Infinity se indisponível). */
+function lastClosedCandleAge(disk) {
+  const closed = closedCandlesOnly(disk);
+  if (!closed.length) return Infinity;
+  const t = Number(closed[closed.length - 1]?.openTime ?? 0);
+  if (t <= 0) return Infinity;
+  return Date.now() - t;
+}
+
 /**
  * Avalia candles do disco para screening.
+ * Exige candle corrente recente e último fechado utilizável (closedOnly no macross).
  * @returns {'fresh'|'stale'|'very-stale'|'insufficient'|'missing'}
  */
 function assessDiskCandles(disk, interval, limit) {
   if (!disk?.length) return 'missing';
   if (disk.length < limit) return 'insufficient';
 
-  const lastTime = disk[disk.length - 1]?.openTime ?? 0;
+  const period = intervalMs(interval);
+  const lastTime = Number(disk[disk.length - 1]?.openTime ?? 0);
   if (lastTime <= 0) return 'very-stale';
 
-  const age = Date.now() - lastTime;
-  const period = intervalMs(interval);
-  if (age <= period * 2) {
-    if (hasRecentCandleGaps(disk, interval)) return 'stale';
-    return 'fresh';
+  const lastAge = Date.now() - lastTime;
+  if (lastAge > period * 2) {
+    if (lastAge <= period * 12) return 'stale';
+    return 'very-stale';
   }
-  if (age <= period * 12) return 'stale';
-  return 'very-stale';
+
+  const closedAge = lastClosedCandleAge(disk);
+  if (closedAge > period * 3) {
+    if (closedAge <= period * 12) return 'stale';
+    return 'very-stale';
+  }
+
+  if (hasRecentCandleGaps(disk, interval)) return 'stale';
+  return 'fresh';
 }
 
-module.exports = { assessDiskCandles, hasRecentCandleGaps };
+module.exports = {
+  assessDiskCandles,
+  hasRecentCandleGaps,
+  closedCandlesOnly,
+  lastClosedCandleAge,
+};

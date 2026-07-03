@@ -6,7 +6,7 @@ export const MT_HELP = {
     enabled: 'Liga o caminho RSI: o bot monitora o RSI de entrada e abre posição própria (estado R1 no bot). Desligado = só a regra 2 pode entrar, se estiver ativa.',
     entryRsi: 'Gatilho principal da regra 1. Ex.: RSI(15m) < 30 = candle fechou com RSI abaixo de 30. Só dispara entrada se filtros MA, extensão e volume permitirem.',
     maFilters: 'Exigem que o preço esteja acima de uma ou mais médias antes de comprar no RSI. Evita comprar oversold em queda livre longe da tendência. Desligado = entrada só pelo RSI.',
-    maPeriod: 'Período da média móvel simples (SMA). MA50 é o padrão clássico; MA200 exige tendência mais longa.',
+    maPeriod: 'Período da média móvel exponencial (EMA). EMA50 é o padrão clássico; EMA200 exige tendência mais longa.',
     maInterval: 'Timeframe em que a MA é calculada. MA em 4h filtra macro; em 1h reage mais rápido.',
     maModeStrict: 'Preço deve fechar acima da MA. Bloqueia entrada se o close estiver abaixo — típico para confirmar tendência de alta.',
     maModeAdaptive: 'Permite dip abaixo da MA até um % histórico (pullback). Calcula dips passados que recuperaram e usa esse piso em vez de exigir close estritamente acima.',

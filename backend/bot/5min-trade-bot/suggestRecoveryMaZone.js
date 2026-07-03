@@ -4,7 +4,7 @@
  * Sugere % acima da MA50 1h para padrões de recuperação (lógica Multi-Trade extension).
  */
 
-const ti = require('technicalindicators');
+const { calculateMa } = require('../../utils/movingAverage');
 const { RSI_PERIOD } = require('./suggest5mRsi');
 const { lastClosed1hIndex } = require('./recoveryPattern');
 const { maThreshold, normalizeMaFilters } = require('./maFilter');
@@ -38,7 +38,7 @@ function collectRsiEntrySignals(candles5m, candles1h, maPeriod, maInterval, rsiB
   const completed1h = candles1h.slice(0, -1);
   const closes5m    = candles5m.map(c => c.close);
   const closes1h    = completed1h.map(c => c.close);
-  const maArr       = ti.SMA.calculate({ values: closes1h, period: maPeriod });
+  const maArr       = calculateMa(closes1h, maPeriod);
   const rsiArr      = ti.RSI.calculate({ values: closes5m, period: RSI_PERIOD });
 
   const signals = [];

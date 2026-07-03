@@ -8,6 +8,7 @@
 const path = require('path');
 const fs   = require('fs');
 const ti   = require('technicalindicators');
+const { computeMaSeries } = require('../../utils/movingAverage');
 const { fetchBinanceCandles, fetchGateCandles } = require('../prices');
 const { toGateSymbol } = require('../../utils/toGateSymbol');
 const {
@@ -167,12 +168,6 @@ function pendingCancelExitMeta(exitRsiMap, config, entryKind) {
   }
   const iv = config.exitRsi?.interval;
   return { exitRsi: iv ? exitRsiMap[iv] : null, exitRsiConfig: config.exitRsi };
-}
-
-function computeMaSeries(candles, period) {
-  const closes = candles.map(c => c.close);
-  const maArr  = ti.SMA.calculate({ values: closes, period });
-  return maArr.map((ma, i) => ({ openTime: candles[period - 1 + i].openTime, ma }));
 }
 
 function maAt(maSeries, time) {

@@ -19,6 +19,7 @@
 const path = require('path');
 const fs   = require('fs');
 const ti   = require('technicalindicators');
+const { computeMa } = require('../../utils/movingAverage');
 
 // ── Parâmetros ────────────────────────────────────────────────────────────────
 const RSI_PERIOD    = 14;
@@ -118,8 +119,10 @@ function checkMa50(ts, currentPrice) {
     return { ok: false, ma50: null, distPct: null, crossCandle: null, crossAgo: null, crossTime: null };
   }
 
-  const last50  = candles1h.slice(endIdx - 49, endIdx + 1);
-  const ma50    = last50.reduce((s, c) => s + c.close, 0) / 50;
+  const ma50    = computeMa(candles1h.slice(0, endIdx + 1), 50);
+  if (ma50 == null) {
+    return { ok: false, ma50: null, distPct: null, crossCandle: null, crossAgo: null, crossTime: null };
+  }
   const distPct = (currentPrice - ma50) / ma50 * 100;
 
   if (Math.abs(distPct) <= MA50_DIST_MAX) {

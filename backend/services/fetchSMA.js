@@ -1,13 +1,13 @@
 const router = require("express").Router();
-const SMA = require('technicalindicators').SMA;
+const { calculateMa } = require('../utils/movingAverage');
 
 /**
- * Rota POST para calcular a Média Móvel Simples (SMA).
+ * Rota POST para calcular a Média Móvel Exponencial (EMA).
  * @route POST /api/sma
- * @group SMA - Operações relacionadas à Média Móvel Simples
- * @param {number} period.query.required - Período de cálculo da SMA (50 ou 200 períodos)
+ * @group EMA - Operações relacionadas à Média Móvel Exponencial
+ * @param {number} period.query.required - Período de cálculo da EMA (9, 21, 50, 200…)
  * @param {Array} req.body - Array de objetos representando velas (candles) com valores de fechamento
- * @returns {Array} results - Array contendo os valores da SMA calculada
+ * @returns {Array} results - Array contendo os valores da EMA calculada
  */
 router.post("/sma", async (req, res) => {
 
@@ -20,10 +20,10 @@ router.post("/sma", async (req, res) => {
   // Extrai os valores de fechamento das velas
   let values = candles.map(c => parseFloat(c.close));
 
-  // Calcula a SMA com base nos valores e no período especificado
-  let results = SMA.calculate({ period: parseInt(period), values: values });
+  // Calcula a EMA com base nos valores e no período especificado
+  let results = calculateMa(values, parseInt(period, 10));
 
-  // Retorna os resultados da SMA
+  // Retorna os resultados da EMA
   res.send(results);
 });
 

@@ -74,7 +74,7 @@ export function formatMaCrossEntrySummary(entry) {
   const iv1 = e.ma1?.interval ?? '15m';
   const p2 = e.ma2?.period ?? 21;
   const iv2 = e.ma2?.interval ?? iv1;
-  return `SMA${p1}(${iv1}) cruza ${dir} SMA${p2}(${iv2})`;
+  return `EMA${p1}(${iv1}) cruza ${dir} EMA${p2}(${iv2})`;
 }
 
 export function tradeFetchPlan(entry, row, signalMs) {
@@ -87,7 +87,7 @@ export function tradeFetchPlan(entry, row, signalMs) {
     msPerCandle,
     fetchFromMs,
     candleLimit,
-    overlaySlots: buildOverlaySlotsForEntry(entry, row),
+    overlaySlots: isMaCrossEntry(entry) ? null : buildOverlaySlotsForEntry(entry, row),
   };
 }
 
@@ -195,7 +195,7 @@ export async function loadMultitradeSymbolChart(entry, {
     interval,
     exchangeSource: src,
     markers,
-    overlaySlots: buildOverlaySlotsForEntry(entry, null),
+    overlaySlots: isMaCrossEntry(entry) ? null : buildOverlaySlotsForEntry(entry, null),
   });
 }
 
