@@ -296,13 +296,18 @@ function buildMultitradeMarkLines(candlesticks, interval, markers, DL, LEFT_PAD)
     if (localIdx < 0 || localIdx >= DL) return [];
     const st = styles[m.side] ?? { color: '#94a3b8', label: m.side };
     const dashed = m.side === 'signal' || m.side === 'possible_entry';
+    const label = m.label ?? (m.pnlPct != null
+      ? `▼ ${Number(m.pnlPct) >= 0 ? '+' : ''}${Number(m.pnlPct).toFixed(1)}%`
+      : st.label);
     return [{
       xAxis: localIdx + LEFT_PAD,
       lineStyle: { color: st.color, width: m.side === 'entry' || m.side === 'possible_entry' ? 2 : 1.5, type: dashed ? 'dashed' : 'solid' },
       label: {
         show: true,
-        formatter: st.label,
-        color: st.color,
+        formatter: label,
+        color: m.side === 'sell' && m.pnlPct != null
+          ? (Number(m.pnlPct) >= 0 ? '#22c55e' : '#ef4444')
+          : st.color,
         fontSize: 9,
         position: m.side === 'sell' ? 'insideEndBottom' : 'insideStartTop',
         padding: [2, 4],
@@ -389,7 +394,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
   };
 
   const tradeMarkData = (() => {
-    if (!tradeTimes.length) return [];
+    if (!tradeTimes.length || multitradeMarkers?.length) return [];
     const offset = candlesticks.length - DL;
     return tradeTimes.flatMap(tradeMs => {
       const idx = candlesticks.reduce((best, c, i) =>
@@ -400,11 +405,11 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
       if (localIdx < 0) return [];
       return [{
         xAxis: localIdx + LEFT_PAD,
-        lineStyle: { color: '#3b82f6', width: 1.5, type: 'solid' },
+        lineStyle: { color: '#ffffff', width: 2, type: 'solid' },
         label: {
           show: true,
-          formatter: `compra ${fmtTradeDate(tradeMs)}`,
-          color: '#3b82f6',
+          formatter: `▌ ${fmtTradeDate(tradeMs)}`,
+          color: '#ffffff',
           fontSize: 9,
           position: 'insideStartTop',
           padding: [3, 5],

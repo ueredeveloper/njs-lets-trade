@@ -1,7 +1,7 @@
 import { useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import { useCurrency } from '../contexts/CurrencyContext';
 import SearchInput from './SearchInput';
-import { fetchCandlesticksAndCloud, fetchGateCurrencies, gatePreloadCandles, fetchBinanceTrades, fetchGateTrades, fetchMaCrossoverFilter } from '../services/api';
+import { fetchCandlesticksAndCloud, fetchGateCurrencies, gatePreloadCandles, fetchBinanceTrades, fetchGateTrades, fetchMaCrossoverFilter, fetchMultitradeTrades } from '../services/api';
 import { parseMaCrossFilterName } from '../utils/filterNames';
 import { useI18n } from '../i18n';
 import TradeConfigModal from './TradeConfigModal';
@@ -9,6 +9,11 @@ import MultitradeModal from './MultitradeModal';
 import FiveMTradeModal from './FiveMTradeModal';
 import { getEntriesForSymbol, symbolHasMultitrade } from '../constants/strategyPresets';
 import { CHART_VIEW } from '../utils/chartView';
+import {
+  resolveTradeChartInterval,
+  buildMarkersFromExchangeTrades,
+  loadMultitradeSymbolChart,
+} from '../utils/multitradeChart';
 
 const GATE_COLOR    = '#0068ff';
 const BINANCE_COLOR = '#fcd535';
@@ -23,6 +28,15 @@ function findFiveMEntry(favorites, symbol) {
   return favorites?.find(e => e.symbol?.toUpperCase?.() === sym);
 }
 
+
+function fmtBuyTime(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  return d.toLocaleString('pt-BR', {
+    timeZone: 'America/Sao_Paulo',
+    day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+  });
+}
 
 function formatVolume(vol) {
   if (vol == null || isNaN(vol) || vol <= 0) return '—';
@@ -103,8 +117,9 @@ function formatMacrossBadge(meta, t, nowMs = Date.now(), scannedAt) {
 
 export default function CurrencyTable({ activeFilter, showFavorites, setShowFavorites, onSelectCurrency }) {
   const {
-    currencies, findFilter, selectedQuote, selectedChart, setSelectedChart, setChartZoom, setChartTradeMarkers,
-    setChartViewSource, clearMultitradeChartView,
+    currencies, findFilter, selectedQuote,     selectedChart, setSelectedChart, setChartZoom, setChartTradeMarkers,
+    setChartViewSource, clearMultitradeChartView, chartInterval, setChartInterval,
+    applyMultitradeSymbolChart,
     gateFavorites, binanceFavorites, tradeFavorites, tradeConfigs,
     toggleGateFavorite, toggleBinanceFavorite, toggleTradeFavorite, updateTradeConfig,
     setTradePurchases, setAllTrades,
@@ -336,28 +351,49 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
     onSelectCurrency?.();
     setLoadingSymbol(item.symbol);
     setActiveRow(item.symbol);
-    // Limpa trades anteriores imediatamente
     setTradePurchases([]);
     setAllTrades([]);
     try {
       setChartZoom(null);
       setChartTradeMarkers([]);
       clearMultitradeChartView();
-      setChartViewSource(CHART_VIEW.TABLE);
-      // Se source não foi informado, detecta Gate pelo fato de o símbolo não estar na lista Binance
-      // ou por ser um favorito Gate (símbolo pode existir na Binance mas sem candles disponíveis)
+
       const isGateOnly = !currencies.list.some(c => c.symbol === item.symbol);
       const isGateFav  = gateFavorites.has(item.symbol);
       const effectiveSource = source ?? ((isGateOnly || isGateFav) ? 'gate' : null);
 
-      const effectiveInterval = selectedChart?.interval || '30m';
+      const mtEntries = getEntriesForSymbol(multitradeFavorites, item.symbol).filter(e => e.enabled !== false);
+      const mtEntry = mtEntries[0] ?? null;
+      const isMT = !!mtEntry;
+      const isActive = activeTrades.has(item.symbol);
+
+      let effectiveInterval = chartInterval || selectedChart?.interval || '30m';
+      if (isMT) {
+        effectiveInterval = resolveTradeChartInterval(mtEntry, null);
+      } else if (tradeFavorites.has(item.symbol)) {
+        const tc = tradeConfigs.get(item.symbol);
+        if (tc?.interval) effectiveInterval = tc.interval;
+      }
+
+      setChartInterval(effectiveInterval);
+      setChartViewSource(isMT ? CHART_VIEW.MULTITRADE : CHART_VIEW.TABLE);
+
+      if (isMT) {
+        await loadMultitradeSymbolChart(mtEntry, {
+          fetchCandlesticksAndCloud,
+          fetchMultitradeTrades,
+          applyMultitradeSymbolChart,
+        });
+        if (effectiveSource === 'gate') gatePreloadCandles(item.symbol);
+        return;
+      }
 
       const data = await fetchCandlesticksAndCloud(item.symbol, effectiveInterval, effectiveSource);
-      setSelectedChart(data);
+      setSelectedChart({ ...data, interval: effectiveInterval, symbol: item.symbol, source: effectiveSource ?? null });
       if (effectiveSource === 'gate') gatePreloadCandles(item.symbol);
 
-      // Busca trades para trade favorites e gate favorites (para mostrar marcadores no chart)
-      if (tradeFavorites.has(item.symbol) || gateFavorites.has(item.symbol)) {
+      const needExchangeTrades = isActive || tradeFavorites.has(item.symbol) || gateFavorites.has(item.symbol);
+      if (needExchangeTrades) {
         const tradeConfig = tradeConfigs.get(item.symbol);
         const useGateTrades = (tradeConfig?.exchange !== 'binance') && (gateFavorites.has(item.symbol) || effectiveSource === 'gate');
         const fetcher = useGateTrades
@@ -367,6 +403,7 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
           .then(trades => {
             setAllTrades(trades);
             setTradePurchases(trades.filter(t => t.isBuyer));
+            setChartTradeMarkers(buildMarkersFromExchangeTrades(trades));
           })
           .catch(err => console.warn('[CurrencyTable] trades indisponíveis:', err.message));
       }
@@ -632,6 +669,11 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
                   <td className="px-2 py-1.5 font-mono font-semibold">
                     <div className="flex flex-col">
                       <span>{base}<span className="opacity-40 font-normal text-[10px]">/{quote}</span></span>
+                      {isMT && mtEntries.some(e => e.phase === 'BOUGHT' && e.buyTime) && (
+                        <span className="text-[9px] font-normal text-white/70">
+                          ▌ {fmtBuyTime(mtEntries.find(e => e.phase === 'BOUGHT' && e.buyTime)?.buyTime)}
+                        </span>
+                      )}
                       {isActive && (
                         <span className="flex items-center gap-1 text-[9px] font-normal" style={{ color: ACTIVE_COLOR }}>
                           <span>@{formatPrice(activeInfo.buyPrice)}</span>

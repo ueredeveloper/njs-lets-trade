@@ -1,7 +1,9 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { useCurrency } from '../contexts/CurrencyContext';
 import MultitradeModal from './MultitradeModal';
 import MultitradeBacktestPanel from './MultitradeBacktestPanel';
+import { fetchCandlesticksAndCloud, fetchMultitradeTrades } from '../services/api';
+import { loadMultitradeSymbolChart } from '../utils/multitradeChart';
 import {
   STRATEGY_IDS, STRATEGY_LABELS, STRATEGY_COLORS,
   getEntriesForSymbol, normalizeStrategyId, strategyBadgeLabel,
@@ -22,10 +24,20 @@ function groupBySymbol(favorites) {
   return map;
 }
 
+function fmtBuyTime(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  return d.toLocaleString('pt-BR', {
+    timeZone: 'America/Sao_Paulo',
+    day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+  });
+}
+
 export default function MultitradePanel() {
   const {
     multitradeFavorites, selectedChart,
     saveMultitradeSymbol, removeMultitradeEntry,
+    applyMultitradeSymbolChart,
   } = useCurrency();
   const [addModal, setAddModal]           = useState(false);
   const [favOpen, setFavOpen]             = useState(false);
@@ -47,6 +59,22 @@ export default function MultitradePanel() {
   }, [chartSymbol, pickedSymbol, pickedStrategy, multitradeFavorites]);
 
   const activeSymbol = backtestEntry?.symbol ?? pickedSymbol ?? chartSymbol;
+
+  const chartLoadRef = useRef(0);
+
+  useEffect(() => {
+    if (!backtestEntry?.symbol) return;
+    const loadId = ++chartLoadRef.current;
+    loadMultitradeSymbolChart(backtestEntry, {
+      fetchCandlesticksAndCloud,
+      fetchMultitradeTrades,
+      applyMultitradeSymbolChart,
+    }).catch(err => {
+      if (chartLoadRef.current === loadId) {
+        console.warn('[MultitradePanel] chart:', err.message);
+      }
+    });
+  }, [backtestEntry?.id, backtestEntry?.symbol, backtestEntry?.strategyId, backtestEntry?.buyTime, applyMultitradeSymbolChart]);
 
   function pickFavorite(sym) {
     setPickedSymbol(sym);
@@ -109,15 +137,23 @@ export default function MultitradePanel() {
                 const active = activeSymbol === sym;
                 const ex = entries[0]?.exchange ?? 'binance';
                 const activeEntries = entries.filter(e => e.enabled !== false);
+                const boughtEntry = activeEntries.find(e => e.phase === 'BOUGHT' && e.buyTime);
                 return (
                   <li
                     key={sym}
                     id={`multitrade-fav-${sym}`}
                     className={`multitrade-panel-favorites-item flex items-center gap-2 px-3 py-2 cursor-pointer transition-colors ${active ? 'bg-violet-500/10' : 'hover:bg-p2/40'}`}
                     onClick={() => pickFavorite(sym)}>
-                    <span className="font-mono text-[10px] font-bold text-p5 flex-1 min-w-0 truncate">
-                      {sym}
-                    </span>
+                    <div className="flex flex-col flex-1 min-w-0">
+                      <span className="font-mono text-[10px] font-bold text-p5 truncate">
+                        {sym}
+                      </span>
+                      {boughtEntry?.buyTime && (
+                        <span className="text-[8px] font-mono text-white/70 truncate" title="Momento da compra">
+                          ▌ {fmtBuyTime(boughtEntry.buyTime)}
+                        </span>
+                      )}
+                    </div>
                     <div className="flex gap-0.5 shrink-0">
                       {STRATEGY_IDS.map(sid => {
                         const on = activeEntries.some(e => normalizeStrategyId(e.strategyId) === sid);

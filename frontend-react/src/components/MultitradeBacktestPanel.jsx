@@ -40,10 +40,22 @@ function buildMarkersForRow(row, trades, msPerCandle, entry) {
   }
 
   if (sell) {
-    markers.push({ time: sell.time, side: 'sell', price: sell.price });
+    markers.push({
+      time: sell.time,
+      side: 'sell',
+      price: sell.price,
+      pnlPct: row.pnlPct != null ? Number(row.pnlPct) : null,
+    });
   } else if (buy && ['STOP_LOSS_MA', 'STOP_LOSS_ADAPTIVE', 'STOP_LOSS_PCT_CAP', 'SOLD_RSI'].includes(row.outcome)) {
     const fallbackSell = (trades ?? []).find(t => t.type === 'SELL' && t.time >= buy.time);
-    if (fallbackSell) markers.push({ time: fallbackSell.time, side: 'sell', price: fallbackSell.price });
+    if (fallbackSell) {
+      markers.push({
+        time: fallbackSell.time,
+        side: 'sell',
+        price: fallbackSell.price,
+        pnlPct: fallbackSell.pnlPct != null ? Number(fallbackSell.pnlPct) : (row.pnlPct != null ? Number(row.pnlPct) : null),
+      });
+    }
   }
 
   const focus = {
@@ -67,7 +79,12 @@ function buildMarkersForMaCrossRow(row, trades, msPerCandle) {
     markers.push({ time: buy.time, side: 'buy', price: buy.price });
   }
   if (sell) {
-    markers.push({ time: sell.time, side: 'sell', price: sell.price });
+    markers.push({
+      time: sell.time,
+      side: 'sell',
+      price: sell.price,
+      pnlPct: row.pnlPct != null ? Number(row.pnlPct) : null,
+    });
   }
 
   const focus = {

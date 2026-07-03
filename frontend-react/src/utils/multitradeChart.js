@@ -91,4 +91,112 @@ export function tradeFetchPlan(entry, row, signalMs) {
   };
 }
 
+/** Marcadores de trades reais (Supabase rsi_multi_bot_trades + posição aberta) */
+export function buildMarkersFromLiveTrades(trades, entry) {
+  const markers = [];
+  const openMs = entry?.buyTime ? new Date(entry.buyTime).getTime() : null;
+
+  if (entry?.phase === 'BOUGHT' && openMs) {
+    markers.push({
+      time: openMs,
+      side: 'entry',
+      price: entry.buyPrice,
+      label: '▌ Compra',
+    });
+  }
+
+  for (const t of trades ?? []) {
+    const entryMs = t.entry_time ? new Date(t.entry_time).getTime() : null;
+    const exitMs  = t.exit_time ? new Date(t.exit_time).getTime() : null;
+    if (!entryMs) continue;
+
+    const isOpenDup = openMs && Math.abs(entryMs - openMs) < 60_000;
+    if (!isOpenDup) {
+      markers.push({
+        time: entryMs,
+        side: 'buy',
+        price: t.entry_price != null ? Number(t.entry_price) : null,
+        label: '▲ Compra',
+      });
+    }
+    if (exitMs) {
+      const pnl = t.pnl_pct != null ? Number(t.pnl_pct) : null;
+      markers.push({
+        time: exitMs,
+        side: 'sell',
+        price: t.exit_price != null ? Number(t.exit_price) : null,
+        pnlPct: pnl,
+        label: pnl != null
+          ? `▼ ${pnl >= 0 ? '+' : ''}${pnl.toFixed(1)}%`
+          : '▼ Venda',
+      });
+    }
+  }
+
+  return markers;
+}
+
+/** Marcadores a partir de trades da exchange (Gate/Binance) */
+export function buildMarkersFromExchangeTrades(trades) {
+  const sorted = [...(trades ?? [])].sort((a, b) => Number(a.time) - Number(b.time));
+  const markers = [];
+  let lastBuyPrice = null;
+
+  for (const t of sorted) {
+    const time = Number(t.time);
+    const price = t.price != null ? Number(t.price) : null;
+    if (t.isBuyer) {
+      lastBuyPrice = price;
+      markers.push({ time, side: 'entry', price, label: '▌ Compra' });
+    } else {
+      let pnlPct = null;
+      if (lastBuyPrice && price) {
+        pnlPct = ((price - lastBuyPrice) / lastBuyPrice) * 100;
+      }
+      markers.push({
+        time,
+        side: 'sell',
+        price,
+        pnlPct,
+        label: pnlPct != null
+          ? `▼ ${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(1)}%`
+          : '▼ Venda',
+      });
+      lastBuyPrice = null;
+    }
+  }
+
+  return markers.slice(-12);
+}
+
+/**
+ * Carrega chart com intervalo da estratégia MT e marcadores de trades reais.
+ * Sem zoom em trade específico (uso: clique na favorita ou na tabela).
+ */
+export async function loadMultitradeSymbolChart(entry, {
+  fetchCandlesticksAndCloud,
+  fetchMultitradeTrades,
+  applyMultitradeSymbolChart,
+}) {
+  if (!entry?.symbol) return;
+  const interval = resolveTradeChartInterval(entry, null);
+  const src = entry.exchange === 'gate' ? 'gate' : null;
+  const sym = entry.symbol.toUpperCase();
+
+  const [chartData, trades] = await Promise.all([
+    fetchCandlesticksAndCloud(sym, interval, src),
+    fetchMultitradeTrades({ symbol: sym, strategyId: entry.strategyId, limit: 30 }).catch(() => []),
+  ]);
+
+  const markers = buildMarkersFromLiveTrades(trades, entry);
+  applyMultitradeSymbolChart({
+    chartData,
+    symbol: sym,
+    interval,
+    exchangeSource: src,
+    markers,
+    overlaySlots: buildOverlaySlotsForEntry(entry, null),
+  });
+}
+
 export { CANDLES_BEFORE, INTERVAL_MS, computeCandleLimitFromTime };

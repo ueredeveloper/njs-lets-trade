@@ -453,6 +453,32 @@ async function syncBotState({ symbol, exchange, strategy_id, capital, trade_conf
   if (error) console.warn('[supabase] syncBotState:', error.message);
 }
 
+async function enrichMultitradeEntriesWithState(entries) {
+  if (!entries?.length) return entries ?? [];
+  const symbols = [...new Set(entries.map(e => e.symbol))];
+  const { data: states, error } = await supabase
+    .from('rsi_multi_bot_state')
+    .select('symbol, strategy_id, phase, buy_time, buy_price, buy_qty')
+    .in('symbol', symbols);
+  if (error) {
+    console.warn('[supabase] enrichMultitradeEntriesWithState:', error.message);
+    return entries;
+  }
+  const stateByKey = new Map(
+    (states ?? []).map(s => [`${s.symbol}|${normStrategyId(s.strategy_id)}`, s]),
+  );
+  return entries.map(e => {
+    const st = stateByKey.get(`${e.symbol}|${e.strategyId}`);
+    return {
+      ...e,
+      phase:    st?.phase ?? 'WATCHING',
+      buyTime:  st?.buy_time ?? null,
+      buyPrice: st?.buy_price != null ? Number(st.buy_price) : null,
+      buyQty:   st?.buy_qty != null ? Number(st.buy_qty) : null,
+    };
+  });
+}
+
 // GET /services/sb/multitrade-favorites
 router.get('/multitrade-favorites', getUserId, async (req, res) => {
   const { data, error } = await supabase
@@ -462,7 +488,8 @@ router.get('/multitrade-favorites', getUserId, async (req, res) => {
     .order('position')
     .order('created_at');
   if (error) return sbError(res, error, 'GET multitrade-favorites');
-  res.json((data ?? []).map(multitradeToEntry));
+  const entries = await enrichMultitradeEntriesWithState((data ?? []).map(multitradeToEntry));
+  res.json(entries);
 });
 
 // POST /services/sb/multitrade-favorites

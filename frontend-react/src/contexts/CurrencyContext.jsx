@@ -196,6 +196,28 @@ export function CurrencyProvider({ children }) {
     return updated;
   }, []);
 
+  /** Chart MT por símbolo/favorita — intervalo da estratégia + marcadores, sem zoom em trade */
+  const applyMultitradeSymbolChart = useCallback(({
+    chartData, symbol, interval, exchangeSource, markers, overlaySlots,
+  }) => {
+    setChartViewSource(CHART_VIEW.MULTITRADE);
+    setChartInterval(interval);
+    setChartTradeMarkers(markers ?? []);
+    setMultitradeChartFocus({
+      overlaySlots: overlaySlots ?? null,
+      symbol,
+      source: exchangeSource ?? null,
+    });
+    setSelectedChart({
+      ...chartData,
+      interval,
+      symbol,
+      source: exchangeSource ?? null,
+      tradeMarkers: markers ?? [],
+    });
+    setChartZoom(null);
+  }, []);
+
   /** Atualização atômica do chart pela aba Multi-Trade (backtest row click) */
   const applyMultitradeChartView = useCallback(({
     chartData, symbol, interval, exchangeSource, markers, entryMs, exitMs,
@@ -466,6 +488,7 @@ export function CurrencyProvider({ children }) {
         chartViewSource,
         setChartViewSource,
         applyMultitradeChartView,
+        applyMultitradeSymbolChart,
         clearMultitradeChartView,
         applyFiveMTradeChartView,
         clearFiveMTradeChartView,
