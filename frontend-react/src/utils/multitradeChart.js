@@ -136,37 +136,99 @@ export function buildMarkersFromLiveTrades(trades, entry) {
   return markers;
 }
 
-/** Marcadores a partir de trades da exchange (Gate/Binance) */
-export function buildMarkersFromExchangeTrades(trades) {
+/**
+ * Marcadores a partir de trades da exchange (Gate/Binance).
+ * FIFO: cada venda realiza PnL contra compras anteriores.
+ * @param {Array} trades
+ * @param {{ maxMarkers?: number }} [opts]
+ */
+export function buildMarkersFromExchangeTrades(trades, opts = {}) {
+  const maxMarkers = opts.maxMarkers ?? 24;
   const sorted = [...(trades ?? [])].sort((a, b) => Number(a.time) - Number(b.time));
   const markers = [];
-  let lastBuyPrice = null;
+  const inventory = [];
 
   for (const t of sorted) {
     const time = Number(t.time);
     const price = t.price != null ? Number(t.price) : null;
+    const qty = t.qty != null ? Number(t.qty) : 0;
+    if (!Number.isFinite(time) || !Number.isFinite(price)) continue;
+
     if (t.isBuyer) {
-      lastBuyPrice = price;
-      markers.push({ time, side: 'entry', price, label: '▌ Compra' });
-    } else {
-      let pnlPct = null;
-      if (lastBuyPrice && price) {
-        pnlPct = ((price - lastBuyPrice) / lastBuyPrice) * 100;
-      }
-      markers.push({
-        time,
-        side: 'sell',
-        price,
-        pnlPct,
-        label: pnlPct != null
-          ? `▼ ${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(1)}%`
-          : '▼ Venda',
-      });
-      lastBuyPrice = null;
+      inventory.push({ qty: qty > 0 ? qty : 0, price });
+      markers.push({ time, side: 'buy', price, label: '▲ Compra' });
+      continue;
     }
+
+    let remain = qty > 0 ? qty : 0;
+    let cost = 0;
+    let matched = 0;
+    while (remain > 1e-12 && inventory.length) {
+      const lot = inventory[0];
+      const take = Math.min(lot.qty, remain);
+      cost += take * lot.price;
+      matched += take;
+      lot.qty -= take;
+      remain -= take;
+      if (lot.qty <= 1e-12) inventory.shift();
+    }
+
+    let pnlPct = null;
+    if (matched > 0 && cost > 0) {
+      pnlPct = ((matched * price - cost) / cost) * 100;
+    }
+    markers.push({
+      time,
+      side: 'sell',
+      price,
+      pnlPct,
+      label: pnlPct != null
+        ? `▼ ${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(1)}%`
+        : '▼ Venda',
+    });
   }
 
-  return markers.slice(-12);
+  return markers.slice(-maxMarkers);
+}
+
+/** PnL por trade de venda (FIFO), para o painel de histórico. */
+export function attachPnlToExchangeTrades(trades) {
+  const sorted = [...(trades ?? [])].sort((a, b) => Number(a.time) - Number(b.time));
+  const inventory = [];
+  const withPnl = [];
+
+  for (const t of sorted) {
+    const price = t.price != null ? Number(t.price) : null;
+    const qty = t.qty != null ? Number(t.qty) : 0;
+    const row = { ...t, pnlPct: null, pnlUsdt: null };
+
+    if (t.isBuyer) {
+      if (Number.isFinite(price) && qty > 0) inventory.push({ qty, price });
+      withPnl.push(row);
+      continue;
+    }
+
+    let remain = qty > 0 ? qty : 0;
+    let cost = 0;
+    let matched = 0;
+    while (remain > 1e-12 && inventory.length) {
+      const lot = inventory[0];
+      const take = Math.min(lot.qty, remain);
+      cost += take * lot.price;
+      matched += take;
+      lot.qty -= take;
+      remain -= take;
+      if (lot.qty <= 1e-12) inventory.shift();
+    }
+    if (matched > 0 && cost > 0 && Number.isFinite(price)) {
+      const pnlUsdt = matched * price - cost;
+      row.pnlUsdt = pnlUsdt;
+      row.pnlPct = (pnlUsdt / cost) * 100;
+    }
+    withPnl.push(row);
+  }
+
+  return withPnl;
 }
 
 /**

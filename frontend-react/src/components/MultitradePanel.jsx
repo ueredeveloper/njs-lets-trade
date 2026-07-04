@@ -100,7 +100,7 @@ export default function MultitradePanel() {
         console.warn('[MultitradePanel] chart:', err.message);
       }
     });
-  }, [backtestEntry?.id, backtestEntry?.symbol, backtestEntry?.strategyId, backtestEntry?.buyTime, applyMultitradeSymbolChart]);
+  }, [backtestEntry?.id, backtestEntry?.symbol, backtestEntry?.strategyId, backtestEntry?.phase, backtestEntry?.buyTime, applyMultitradeSymbolChart]);
 
   function pickFavorite(sym) {
     setPickedSymbol(sym);

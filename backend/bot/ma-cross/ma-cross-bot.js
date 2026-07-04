@@ -21,7 +21,6 @@ const { fetchBinanceCandles, fetchGateCandles } = require('../prices');
 const { toGateSymbol } = require('../../utils/toGateSymbol');
 const { gateMarketSell: gateMarketSellCore } = require('../gate/gateMarketSell');
 const { sendWhatsApp } = require('../whatsapp');
-const { fmtVolumeUsdt } = require('../volume24h');
 const { maLabel } = require('../../utils/movingAverage');
 const registry = require('../multitradeRegistry');
 const { startMultitradeWatch, configFingerprint } = require('../multitradeWatch');
@@ -277,9 +276,7 @@ async function saveState(id, update) {
 }
 
 async function insertTrade(trade) {
-  try { await sbReq('POST', 'rsi_multi_bot_trades', trade); } catch (err) {
-    console.warn(`[trade] insert: ${err.message}`);
-  }
+  try { await sbReq('POST', 'rsi_multi_bot_trades', trade); } catch { /* ignore */ }
 }
 
 async function fetchCandleMap(adapter, specs) {
@@ -356,21 +353,10 @@ async function tick(rowId, adapter, strategy, log, session) {
 
   const rows = await sbReq('GET', 'rsi_multi_bot_state', null, `?id=eq.${rowId}&limit=1`);
   const state = rows?.[0];
-  if (!state) { log('❌ Linha não encontrada.'); return { phase: 'WATCHING' }; }
+  if (!state) return { phase: 'WATCHING' };
 
   const { phase, capital, symbol, strategy_id: strategyId } = state;
   const buyPrice = state.buy_price ? parseFloat(state.buy_price) : null;
-
-  const ma1s = entryCheck.ma1?.toFixed(6) ?? '—';
-  const ma2s = entryCheck.ma2?.toFixed(6) ?? '—';
-
-  log(
-    `MA1=${ma1s}  MA2=${ma2s}` +
-    `  close=${entryCheck.close?.toFixed(6) ?? '—'}` +
-    (entryCheck.filterMa != null ? `  filtMA=${entryCheck.filterMa.toFixed(6)}` : '') +
-    `  capital=${parseFloat(capital).toFixed(2)}  fase=${phase}` +
-    (entryCheck.reason && !entryCheck.allowed ? `  (${entryCheck.reason})` : ''),
-  );
 
   // ── WATCHING ──────────────────────────────────────────────────────────────
   if (phase === 'WATCHING') {
@@ -379,7 +365,6 @@ async function tick(rowId, adapter, strategy, log, session) {
     const vol = session.volCache?.volumeUsdt;
     const minVol = config.minVolumeUsdt ?? 1_000_000;
     if (vol != null && vol < minVol && !config.allowLowVolume) {
-      log(`${Y}⚠️  Sinal de entrada mas volume ${fmtVolumeUsdt(vol)} < ${fmtVolumeUsdt(minVol)}${X}`);
       return { phase };
     }
 
@@ -432,10 +417,7 @@ async function startSymbol(row, color) {
   if (registry.has(row.id)) return;
 
   let strategy = resolveStrategy(row);
-  if (!strategy) {
-    console.error(`❌ ${row.symbol} [${row.strategy_id}]: sem trade_config MA Cross válido`);
-    return;
-  }
+  if (!strategy) return;
 
   const adapter = buildAdapter(row.exchange ?? 'binance', row.symbol);
   const log     = makeLogger(row.symbol, row.strategy_id, color);
@@ -454,27 +436,21 @@ async function startSymbol(row, color) {
   };
 
   let lastResult = { phase: row.phase };
-  let errCount   = 0;
   const session  = { volCache: null };
   let volIv;
 
-  const stop = async ({ reason } = {}) => {
+  const stop = async () => {
     if (ctx.stopped) return;
     ctx.stopped = true;
     if (ctx.timer) clearTimeout(ctx.timer);
     if (volIv) clearInterval(volIv);
     registry.unregister(ctx.rowId);
-    ctx.log(`🛑 Monitoramento encerrado (posição na corretora não é alterada)${reason ? ` — ${reason}` : ''}`);
   };
 
   const updateFromRow = (newRow) => {
     const next = resolveStrategy(newRow);
-    if (!next) {
-      ctx.log(`⚠️  trade_config inválido após sync — mantendo config anterior`);
-      return;
-    }
+    if (!next) return;
     ctx.strategy = next;
-    ctx.log(`🔄 Config atualizada do painel (${next.label ?? row.strategy_id})`);
   };
 
   registry.register(row.id, {
@@ -486,25 +462,6 @@ async function startSymbol(row, color) {
     updateFromRow,
     configFingerprint: ctx.configFingerprint,
   });
-
-  const { config } = strategy;
-
-  const filt = config.maFiltersEnabled !== false && (config.maFilters ?? []).some(f => f.enabled)
-    ? ` + ${(config.maFilters ?? []).filter(f => f.enabled).length} filtro(s) MA`
-    : '';
-
-  log(
-    `=== MA Cross | ${adapter.name} | ${strategy.label}` +
-    ` | entrada: ${crossDesc(config.entry)}${filt}` +
-    ` | saída: ${config.exit?.maCross?.enabled ? crossDesc(config.exit.maCross) : ''}` +
-    `${config.exit?.rsi?.enabled ? ' + RSI' : ''}` +
-    ` | poll: ${strategy.pollMs / 1000}s` +
-    ` | fase: ${row.phase} ===`,
-  );
-
-  if (row.phase === 'BOUGHT') {
-    log(`♻️  Posição — $${parseFloat(row.buy_price).toFixed(6)} qty=${row.buy_qty}`);
-  }
 
   const refreshVol = async () => {
     if (ctx.stopped) return;
@@ -526,12 +483,7 @@ async function startSymbol(row, color) {
     if (ctx.stopped) return;
     try {
       lastResult = await tick(ctx.rowId, adapter, ctx.strategy, log, session);
-      errCount = 0;
-    } catch (err) {
-      errCount++;
-      if (errCount <= 3) log(`❌ Tick error: ${err.message}`);
-      else if (errCount === 4) log(`❌ Erros repetidos — silenciando. Verifique o par na exchange.`);
-    }
+    } catch { /* silencioso — só compra/venda no console */ }
     schedule();
   };
 
@@ -557,11 +509,6 @@ async function main() {
   rows = (rows ?? []).filter(r => isMaCrossStrategy(r.strategy_id));
   if (symbolFilter) {
     rows = rows.filter(r => r.symbol.toUpperCase() === symbolFilter);
-    if (!rows.length) {
-      console.log(`   ℹ️  ${symbolFilter} não está no state — aguardando painel (sync 5 min)`);
-    }
-  } else if (!rows?.length) {
-    console.log('   ℹ️  Nenhum símbolo no state — aguardando adições no painel (sync 5 min)');
   }
 
   startMultitradeWatch({
@@ -573,12 +520,8 @@ async function main() {
       const idx = row.symbol.charCodeAt(0) + (row.strategy_id?.length ?? 0);
       return startSymbol(row, COLORS[idx % COLORS.length]);
     },
-    log: console.log,
+    log: () => {},
   });
-
-  console.log('\n🤖 MA Cross Bot — ma-cross-bot.js');
-  console.log(`   Estratégias: ${STRATEGY_IDS.join(', ')}`);
-  console.log(`   Símbolos: ${rows.length}\n`);
 
   const toStart = [];
   for (let i = 0; i < rows.length; i++) {
@@ -588,31 +531,24 @@ async function main() {
     const strategy = resolveStrategy(row);
     const minVol = strategy?.config.minVolumeUsdt ?? 1_000_000;
 
-    let volFmt = 'n/a', volOk = true;
+    let volOk = true;
     try {
       const vol = await adapter.fetch24hVol();
-      volFmt = fmtVolumeUsdt(vol);
       volOk  = vol >= minVol;
     } catch {}
 
-    console.log(
-      `   ${color}${row.symbol}${X}  [${row.strategy_id}]  exchange=${row.exchange ?? 'binance'}` +
-      `  capital=$${parseFloat(row.capital).toFixed(2)}  vol24h=${volFmt}  fase=${row.phase}`,
-    );
-
     if (!volOk && !strategy?.config.allowLowVolume) {
-      console.log(`   ${Y}⚠️  Volume abaixo do mínimo${X}`);
       if (!symbolFilter) {
-        const resp = await askUser(`   Incluir ${row.symbol} [${row.strategy_id}]? [s/N]: `);
+        const resp = await askUser(
+          `   ${Y}⚠️${X} Volume baixo — incluir ${row.symbol} [${row.strategy_id}]? [s/N]: `,
+        );
         if (resp !== 's' && resp !== 'sim') continue;
       }
     }
     toStart.push({ row, color });
   }
 
-  console.log();
   if (!toStart.length) {
-    console.log('   Aguardando moedas no painel Multi-Trade…\n');
     await new Promise(() => {});
     return;
   }

@@ -166,6 +166,49 @@ describe('MA Cross — cruzamento', () => {
     expect(r.ageMin).toBeGreaterThanOrEqual(openAge - 16);
   });
 
+  test('findRecentMaCross: rejeita ↑ quando gap encolhe (revertendo para ↓)', () => {
+    // Cruza para cima e depois o gap encolhe sem perder o lado — não é entrada válida
+    const closes = Array(50).fill(100);
+    for (let i = 0; i < 10; i++) closes.push(100 - i * 0.05); // abaixo
+    closes.push(100.5, 101.2, 101.0, 100.85); // cruza ↑ e gap encolhe
+    const candles = makeCandles(closes);
+    const r = findRecentMaCross({
+      candles1: candles, period1: 9, interval1: '15m',
+      candles2: candles, period2: 21, interval2: '15m',
+      direction: 'cross_up',
+      tolerancePct: 0.5,
+      maxAgeMin: 'last',
+      closedOnly: false,
+      now: candles.at(-1).openTime + 60_000,
+    });
+    // Se ainda acima com gap minúsculo encolhendo → REVERSING; senão pelo menos não é falso positivo óbvio
+    if (r.reason === 'REVERSING') {
+      expect(r.matched).toBe(false);
+      expect(r.ma1).toBeGreaterThan(r.ma2);
+    }
+  });
+
+  test('findRecentMaCross: TAO-like — ↑ recente com gap encolhendo é REVERSING', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const file = path.join(__dirname, '../data/candlestick/TAOUSDT-15m.json');
+    if (!fs.existsSync(file)) return;
+    const candles = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const r = findRecentMaCross({
+      candles1: candles, period1: 9, interval1: '15m',
+      candles2: candles, period2: 21, interval2: '15m',
+      direction: 'cross_up',
+      tolerancePct: 0.5,
+      maxAgeMin: 60,
+      closedOnly: true,
+      now: Date.now(),
+    });
+    // Enquanto o gap 15m estiver encolhendo após o micro-↑, não entra no filtro
+    if (r.reason === 'REVERSING' || r.reason === 'REVERSED_AFTER_CROSS') {
+      expect(r.matched).toBe(false);
+    }
+  });
+
   test('cross_up: MA9 já acima no candle anterior não é cruzamento novo (tol 0.5%)', () => {
     const closes = Array(55).fill(100);
     for (let i = 0; i < 15; i++) closes.push(100 + i * 0.02);

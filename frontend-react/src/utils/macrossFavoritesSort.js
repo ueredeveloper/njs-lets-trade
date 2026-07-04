@@ -10,7 +10,6 @@ export const MACROSS_SORT_OPTIONS = [
   { id: 'near_down',  labelKey: 'macross.sort.near_down',  shortKey: 'macross.sort.short.near_down' },
   { id: 'cross_up',   labelKey: 'macross.sort.cross_up',   shortKey: 'macross.sort.short.cross_up' },
   { id: 'cross_down', labelKey: 'macross.sort.cross_down', shortKey: 'macross.sort.short.cross_down' },
-  { id: 'volume',     labelKey: 'macross.sort.volume',     shortKey: 'macross.sort.short.volume' },
   { id: 'symbol',     labelKey: 'macross.sort.symbol',     shortKey: 'macross.sort.short.symbol' },
 ];
 
@@ -83,7 +82,7 @@ function numOrNegInfinity(v) {
 
 /** Compara dois símbolos/linhas para ordenação da lista de favoritos MA-Cross. */
 export function compareMacrossFavorites(a, b, sortBy, ctx = {}) {
-  const { status = {}, entriesBySymbol = new Map(), volumeBySymbol = new Map() } = ctx;
+  const { status = {}, entriesBySymbol = new Map() } = ctx;
 
   const symA = typeof a === 'string' ? a : a.symbol;
   const symB = typeof b === 'string' ? b : b.symbol;
@@ -132,12 +131,6 @@ export function compareMacrossFavorites(a, b, sortBy, ctx = {}) {
     const ab = numOrInfinity(mb?.crossDownAgeMin);
     if (aa !== ab) return aa - ab;
     return symA.localeCompare(symB);
-  }
-
-  if (sortBy === 'volume') {
-    const va = Number(volumeBySymbol.get(symA)) || 0;
-    const vb = Number(volumeBySymbol.get(symB)) || 0;
-    return vb - va;
   }
 
   return symA.localeCompare(symB);

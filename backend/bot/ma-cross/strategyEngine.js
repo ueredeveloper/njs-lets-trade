@@ -80,9 +80,13 @@ function isDirectionHeld(ma1, ma2, direction) {
   return false;
 }
 
+/** Gap máximo (%) para tratar cruzamento ainda “válido” como reversão (gap encolhendo). */
+const CROSS_REVERSE_PROXIMITY_PCT = 0.1;
+
 /**
  * Localiza o cruzamento MA mais recente e verifica idade temporal.
  * maxAgeMin: 'last' = só o último candle fechado; número = cruzou há no máximo N minutos.
+ * Rejeita se a direção ainda vale mas o gap está encolhendo (prestes a cruzar o sentido oposto).
  */
 function findRecentMaCross({
   candles1, period1, interval1,
@@ -149,8 +153,54 @@ function findRecentMaCross({
     }
 
     const held = isDirectionHeld(lastMa1, lastMa2, direction);
+    if (!held) {
+      return {
+        matched: false,
+        kind: 'crossed',
+        crossTime: crossAt,
+        crossOpenTime,
+        ageMs,
+        ageMin: ageMs / 60_000,
+        ma1: lastMa1,
+        ma2: lastMa2,
+        prevMa1,
+        prevMa2,
+        close: last.close,
+        openTime: last.openTime,
+        reason: 'REVERSED_AFTER_CROSS',
+      };
+    }
+
+    // Ainda do lado certo, mas gap encolhendo → já está virando (ex.: TAO ↑ fraco prestes a ↓)
+    const reverseMode = direction === 'cross_up' ? 'near_down' : 'near_up';
+    const reversing = checkMaCrossApproaching({
+      candles1, period1, interval1,
+      candles2, period2, interval2,
+      mode: reverseMode,
+      proximityPct: CROSS_REVERSE_PROXIMITY_PCT,
+      closedOnly: useClosed,
+    });
+    if (reversing.matched) {
+      return {
+        matched: false,
+        kind: 'crossed',
+        crossTime: crossAt,
+        crossOpenTime,
+        ageMs,
+        ageMin: ageMs / 60_000,
+        ma1: lastMa1,
+        ma2: lastMa2,
+        gapPct: reversing.gapPct,
+        prevMa1,
+        prevMa2,
+        close: last.close,
+        openTime: last.openTime,
+        reason: 'REVERSING',
+      };
+    }
+
     return {
-      matched: held,
+      matched: true,
       kind: 'crossed',
       crossTime: crossAt,
       crossOpenTime,
@@ -162,7 +212,7 @@ function findRecentMaCross({
       prevMa2,
       close: last.close,
       openTime: last.openTime,
-      reason: held ? null : 'REVERSED_AFTER_CROSS',
+      reason: null,
     };
   }
 

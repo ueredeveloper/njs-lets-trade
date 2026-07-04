@@ -3,6 +3,7 @@ import { useI18n } from '../i18n';
 import ReactECharts from 'echarts-for-react';
 import { useCurrency } from '../contexts/CurrencyContext';
 import { fetchCandlesticksAndCloud, fetchGateTrades, fetchBinanceTrades } from '../services/api';
+import { buildMarkersFromExchangeTrades, attachPnlToExchangeTrades } from '../utils/multitradeChart';
 import convertOpenTime from '../utils/convertOpenTime';
 import Tooltip from './Tooltip';
 import { hasAnyChartPanelButton } from '../utils/chartPanelButtons';
@@ -936,7 +937,10 @@ function fmtPrice(p) {
 }
 
 function TradeHistoryPanel({ symbol, gateFavorites }) {
-  const { allTrades, setAllTrades, setTradePurchases } = useCurrency();
+  const {
+    allTrades, setAllTrades, setTradePurchases,
+    setChartTradeMarkers, chartViewSource, selectedChart,
+  } = useCurrency();
   const [refreshing, setRefreshing] = useState(false);
   const [lastUpdate, setLastUpdate] = useState(null);
 
@@ -953,10 +957,13 @@ function TradeHistoryPanel({ symbol, gateFavorites }) {
     if (!symbol || refreshing) return;
     setRefreshing(true);
     try {
-      const useGate = gateFavorites.has(symbol);
+      const useGate = gateFavorites.has(symbol) || selectedChart?.source === 'gate';
       const trades  = await (useGate ? fetchGateTrades(symbol) : fetchBinanceTrades(symbol));
       setAllTrades(trades);
       setTradePurchases(trades.filter(t => t.isBuyer));
+      if (chartViewSource === CHART_VIEW.TRADES) {
+        setChartTradeMarkers(buildMarkersFromExchangeTrades(trades));
+      }
       setLastUpdate(new Date());
     } catch (e) {
       console.warn('[TradeHistoryPanel] refresh:', e.message);
@@ -966,7 +973,8 @@ function TradeHistoryPanel({ symbol, gateFavorites }) {
   }
 
   // Apenas trades executados (buys + sells), do mais recente ao mais antigo
-  const sorted = [...allTrades].sort((a, b) => Number(b.time) - Number(a.time));
+  const withPnl = attachPnlToExchangeTrades(allTrades);
+  const sorted = [...withPnl].sort((a, b) => Number(b.time) - Number(a.time));
 
   const base = symbol
     ? (symbol.endsWith('USDT') ? symbol.slice(0, -4) : symbol)
@@ -976,6 +984,7 @@ function TradeHistoryPanel({ symbol, gateFavorites }) {
   const sells = allTrades.filter(t => !t.isBuyer);
   const totalBuy  = buys.reduce((s, t)  => s + parseFloat(t.price) * parseFloat(t.qty), 0);
   const totalSell = sells.reduce((s, t) => s + parseFloat(t.price) * parseFloat(t.qty), 0);
+  const totalPnl  = withPnl.reduce((s, t) => s + (t.pnlUsdt ?? 0), 0);
 
   return (
     <div className="flex flex-col h-full bg-[#050d0a] border-l border-[#0a2a1a] font-mono select-none">
@@ -1025,6 +1034,8 @@ function TradeHistoryPanel({ symbol, gateFavorites }) {
           const color    = isBuy ? '#22c55e' : '#ef4444';
           const dimColor = isBuy ? '#14532d' : '#450a0a';
           const timeOnly = fmtDate(Number(tr.time)).slice(-5); // "14:32"
+          const pnlPct   = tr.pnlPct;
+          const pnlColor = pnlPct == null ? color : (pnlPct >= 0 ? '#22c55e' : '#ef4444');
 
           return (
             <div key={i} className="px-1.5 sm:px-3 py-1 sm:py-2 border-b" style={{ borderColor: '#0a1f14' }}>
@@ -1059,6 +1070,17 @@ function TradeHistoryPanel({ symbol, gateFavorites }) {
                 ≈ ${usdt} USDT
               </div>
 
+              {!isBuy && pnlPct != null && (
+                <div className="mt-0.5 text-[10px] font-bold" style={{ color: pnlColor }}>
+                  {pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(1)}%
+                  {tr.pnlUsdt != null && (
+                    <span className="opacity-70 font-normal">
+                      {' '}({tr.pnlUsdt >= 0 ? '+' : ''}{tr.pnlUsdt.toFixed(2)})
+                    </span>
+                  )}
+                </div>
+              )}
+
             </div>
           );
         })}
@@ -1081,6 +1103,14 @@ function TradeHistoryPanel({ symbol, gateFavorites }) {
             <span style={{ color: '#5c1a1a' }}>Vendas ({sells.length})</span>
             <span style={{ color: '#ef4444' }}>${totalSell.toFixed(2)}</span>
           </div>
+          {sells.length > 0 && (
+            <div className="hidden sm:flex justify-between text-[10px] font-semibold">
+              <span style={{ color: '#1a5c32' }}>PnL</span>
+              <span style={{ color: totalPnl >= 0 ? '#22c55e' : '#ef4444' }}>
+                {totalPnl >= 0 ? '+' : ''}{totalPnl.toFixed(2)}
+              </span>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -1330,10 +1360,17 @@ export default function CandlestickChart() {
     instance.dispatchAction({ type: 'dataZoom', start: win.startPct, end: win.endPct });
   }, [chartZoom, selectedChart, chartViewSource]);
 
-  const tradeTimes = [...tradePurchases]
-    .sort((a, b) => Number(a.time) - Number(b.time))
-    .slice(-2)
-    .map(t => Number(t.time));
+  // Linhas azuis legadas (últimas 2 compras). Na view TX usamos só chartTradeMarkers (buy/sell + PnL).
+  const tradeTimes = chartViewSource === CHART_VIEW.TRADES
+    ? []
+    : [...tradePurchases]
+      .sort((a, b) => Number(a.time) - Number(b.time))
+      .slice(-2)
+      .map(t => Number(t.time));
+
+  const markerTimesForWindow = chartViewSource === CHART_VIEW.TRADES && chartTradeMarkers?.length
+    ? chartTradeMarkers.map(m => Number(m.time)).filter(Number.isFinite)
+    : tradeTimes;
 
   const displayLimit = (() => {
     const candles = selectedChart?.candlesticks;
@@ -1345,8 +1382,8 @@ export default function CandlestickChart() {
     }
     if (chartZoom) return candles?.length ?? displayCandleCount;
     if (displayCandleCount > LIMIT) return Math.min(displayCandleCount, candles?.length ?? displayCandleCount);
-    if (!candles?.length || !tradeTimes.length) return LIMIT;
-    const oldest = Math.min(...tradeTimes);
+    if (!candles?.length || !markerTimesForWindow.length) return LIMIT;
+    const oldest = Math.min(...markerTimesForWindow);
     const idx = candles.findIndex(c => Number(c.openTime) >= oldest);
     if (idx === -1 || idx >= candles.length - LIMIT) return LIMIT;
     return Math.min(candles.length, candles.length - idx + 5);

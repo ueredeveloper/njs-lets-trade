@@ -5,6 +5,7 @@ export const CHART_VIEW = {
   STATISTICS:   'statistics',
   MULTITRADE:   'multitrade',
   FIVE_M_TRADE: 'five_m_trade',
+  TRADES:       'trades',
 };
 
 /** Zoom/markers controlados por painéis de trade (Multi-Trade, 5m Trade) */

@@ -77,6 +77,7 @@ export function parseMaCrossFilterName(name) {
   if (!mode) return null;
 
   const out = {
+    sigInterval: parts[0],
     period1: parseInt(parts[2], 10),
     interval1: parts[3],
     period2: parseInt(parts[4], 10),

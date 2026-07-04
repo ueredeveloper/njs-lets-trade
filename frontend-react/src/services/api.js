@@ -123,6 +123,22 @@ export async function ignoreActiveTrade(symbol) {
   return res.json();
 }
 
+/**
+ * Resumo de moedas compradas/vendidas (Gate + Binance) com PnL por período.
+ * @param {string[]} [extraSymbols] símbolos extras (favoritos) para buscar na Binance
+ */
+export async function fetchTradeFavorites(extraSymbols = []) {
+  const params = new URLSearchParams();
+  if (extraSymbols?.length) params.set('symbols', extraSymbols.join(','));
+  const qs = params.toString();
+  const res = await fetch(`/services/trade-favorites${qs ? `?${qs}` : ''}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 // ── Gate.io Trading ──────────────────────────────────────────────────────────
 
 /** Retorna os trades do usuário para um símbolo na Gate.io (máx 1000). */
@@ -331,6 +347,9 @@ export async function fetchMaTimeAboveFilter({ interval, period = '50', minPct =
 }
 
 /** Moedas com cruzamento ou proximidade de cruzamento entre duas MAs. */
+let _maCrossFilterLastAt = 0;
+let _maCrossFilterCount = 0;
+
 export async function fetchMaCrossoverFilter({
   period1 = '9',
   interval1 = '15m',
@@ -342,6 +361,12 @@ export async function fetchMaCrossoverFilter({
   proximityPct = '1',
   live = true,
 }) {
+  const startedAt = Date.now();
+  _maCrossFilterCount += 1;
+  const n = _maCrossFilterCount;
+  const sinceLastMs = _maCrossFilterLastAt ? startedAt - _maCrossFilterLastAt : null;
+  _maCrossFilterLastAt = startedAt;
+
   const params = new URLSearchParams({
     period1: String(period1),
     interval1,
@@ -353,12 +378,39 @@ export async function fetchMaCrossoverFilter({
     proximityPct: String(proximityPct),
   });
   if (live) params.set('live', '1');
-  const res = await fetch(`/services/ma-crossover-filter?${params}`);
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.error ?? `ma-crossover-filter falhou: HTTP ${res.status}`);
+
+  const label = `${period1}(${interval1})×${period2}(${interval2}) ${mode} age=${maxAgeMin} live=${live ? 1 : 0}`;
+  console.log(
+    `[ma-crossover-filter] #${n} start` +
+    (sinceLastMs != null ? ` | intervalo desde última: ${(sinceLastMs / 1000).toFixed(1)}s` : ' | primeira solicitação') +
+    ` | ${label}`,
+  );
+
+  try {
+    const res = await fetch(`/services/ma-crossover-filter?${params}`);
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error ?? `ma-crossover-filter falhou: HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    const durationMs = Date.now() - startedAt;
+    console.log(
+      `[ma-crossover-filter] #${n} ok` +
+      ` | duração: ${(durationMs / 1000).toFixed(1)}s` +
+      (sinceLastMs != null ? ` | intervalo: ${(sinceLastMs / 1000).toFixed(1)}s` : '') +
+      ` | símbolos: ${data?.list?.length ?? 0}`,
+    );
+    return data;
+  } catch (err) {
+    const durationMs = Date.now() - startedAt;
+    console.warn(
+      `[ma-crossover-filter] #${n} erro` +
+      ` | duração: ${(durationMs / 1000).toFixed(1)}s` +
+      (sinceLastMs != null ? ` | intervalo: ${(sinceLastMs / 1000).toFixed(1)}s` : '') +
+      ` | ${err.message}`,
+    );
+    throw err;
   }
-  return res.json();
 }
 
 /** Gap e cruzamento MA por símbolo (favoritos MA-Cross). */

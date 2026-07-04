@@ -27,6 +27,16 @@ import {
 
 const CurrencyContext = createContext(null);
 
+/** Favoritos do painel MA-Cross (fase vem de rsi_multi_bot_state). */
+function isMaCrossFavoriteEntry(e) {
+  return e?.strategyId === 'ma-cross'
+    || e?.kind === 'ma_cross'
+    || e?.tradeConfig?.kind === 'ma_cross';
+}
+
+/** Poll da fase BOUGHT/WATCHING após compra/venda do bot. */
+const MULTITRADE_STATE_POLL_MS = 30_000;
+
 export function CurrencyProvider({ children }) {
   // Lista completa do servidor; currencies expõe versão filtrada por categoria
   const [rawCurrencies, setRawCurrencies] = useState({ name: '1h|All', list: [] });
@@ -156,17 +166,27 @@ export function CurrencyProvider({ children }) {
     }
   }, []);
 
+  const refreshMultitradeFavorites = useCallback(async () => {
+    try {
+      const list = await fetchMultitradeFavorites();
+      setMultitradeFavorites(list.filter(isMaCrossFavoriteEntry));
+      return list;
+    } catch (err) {
+      console.warn('[CurrencyContext] refreshMultitradeFavorites:', err.message);
+      return null;
+    }
+  }, []);
+
   const updateMultitradeBotState = useCallback(async (payload) => {
     const strategyId = payload.strategyId ?? 'ma-cross';
     await patchMultitradeBotState({ ...payload, strategyId });
-    const list = await fetchMultitradeFavorites();
-    setMultitradeFavorites(list);
+    const list = await refreshMultitradeFavorites();
     const sym = payload.symbol?.toUpperCase();
-    return list.find(e =>
+    return (list ?? []).find(e =>
       e.symbol?.toUpperCase() === sym
       && (e.strategyId === strategyId || e.strategyId === 'ma-cross'),
     ) ?? null;
-  }, []);
+  }, [refreshMultitradeFavorites]);
 
   const saveFiveMTradeEntry = useCallback(async ({ id, symbol, exchange, capital, rsiBuy, rsiSell, maFilters, stopLoss, recoveryPattern, sellScope, entryPrice, entryPaths }) => {
     try {
@@ -480,11 +500,20 @@ export function CurrencyProvider({ children }) {
     else removeFilters(['Favoritos|MA-Cross', 'Favoritos|MultiTrade']);
   }, [multitradeFavorites, addFilter, removeFilters]);
 
-  // Carrega favoritos MA-Cross na inicialização
+  // Carrega favoritos MA-Cross e sincroniza fase (BOUGHT/WATCHING) com o bot
   useEffect(() => {
-    fetchMultitradeFavorites()
-      .then(list => setMultitradeFavorites(list.filter(e => e.strategyId === 'ma-cross' || e.kind === 'ma_cross' || e.tradeConfig?.kind === 'ma_cross')))
-      .catch(err => console.warn('[CurrencyContext] loadMultitradeFavorites:', err.message));
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const list = await fetchMultitradeFavorites();
+        if (!cancelled) setMultitradeFavorites(list.filter(isMaCrossFavoriteEntry));
+      } catch (err) {
+        if (!cancelled) console.warn('[CurrencyContext] loadMultitradeFavorites:', err.message);
+      }
+    };
+    load();
+    const id = setInterval(load, MULTITRADE_STATE_POLL_MS);
+    return () => { cancelled = true; clearInterval(id); };
   }, []);
 
   const getBinanceCurrenciesWithUsdt = useCallback(
