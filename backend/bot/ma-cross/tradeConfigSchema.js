@@ -72,6 +72,9 @@ const MA_CROSS_DEFAULTS = {
     minVolumeUsdt:  1_000_000,
     allowLowVolume: false,
   },
+
+  /** Horas sem nova entrada após venda (0 = desligado). */
+  entryCooldownHours: 4,
 };
 
 function isValidMaCrossPeriod(p) {
@@ -207,6 +210,7 @@ function normalizeMaCrossConfig(body = {}) {
       minVolumeUsdt:  Number(body.volume?.minVolumeUsdt ?? d.volume.minVolumeUsdt),
       allowLowVolume: body.volume?.allowLowVolume === true,
     },
+    entryCooldownHours: Math.max(0, Number(body.entryCooldownHours ?? d.entryCooldownHours)),
   };
 }
 

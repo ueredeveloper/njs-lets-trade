@@ -310,6 +310,39 @@ function parseRulesState(row) {
   return rs && typeof rs === 'object' ? rs : {};
 }
 
+const DEFAULT_ENTRY_COOLDOWN_HOURS = 4;
+const COOLDOWN_LOG_INTERVAL_MS = 15 * 60_000;
+
+function entryCooldownHours(config) {
+  const h = Number(config?.entryCooldownHours);
+  return Number.isFinite(h) && h >= 0 ? h : DEFAULT_ENTRY_COOLDOWN_HOURS;
+}
+
+function resolveLastExitTime(state, session) {
+  const fromRow = parseRulesState(state).lastExitTime;
+  if (fromRow) return fromRow;
+  return session?.lastExitTime ?? null;
+}
+
+function cooldownRemainingMs(lastExitTime, hours) {
+  if (!hours || !lastExitTime) return 0;
+  const end = new Date(lastExitTime).getTime() + hours * 3_600_000;
+  return Math.max(0, end - Date.now());
+}
+
+function formatCooldownRemaining(ms) {
+  const totalMin = Math.ceil(ms / 60_000);
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  if (h > 0 && m > 0) return `${h}h${m}m`;
+  if (h > 0) return `${h}h`;
+  return `${m}m`;
+}
+
+function postExitRulesState(exitTime) {
+  return { lastExitTime: exitTime };
+}
+
 function getTickPeak(cMap, config, buyPrice, storedPeak) {
   const iv = getFinestPollInterval(config);
   const last = (cMap[iv] ?? []).at(-1);
@@ -329,7 +362,7 @@ async function fetchCandleMap(adapter, specs) {
   return Object.fromEntries(entries);
 }
 
-async function executeSell({ rowId, adapter, strategy, log, state, exitResult, reasonLabel }) {
+async function executeSell({ rowId, adapter, strategy, log, state, exitResult, reasonLabel, session }) {
   const { config } = strategy;
   const { symbol, strategy_id: strategyId, capital } = state;
   const buyPrice = parseFloat(state.buy_price);
@@ -342,6 +375,7 @@ async function executeSell({ rowId, adapter, strategy, log, state, exitResult, r
 
   log(`${R}📈 ${reason} — vendendo ${state.buy_qty} ${symbol}${X}`);
 
+  const exitTime = new Date().toISOString();
   const sellOpts = adapter.name === 'Gate.io' ? { aggressive: true } : {};
   let result;
   try {
@@ -358,7 +392,7 @@ async function executeSell({ rowId, adapter, strategy, log, state, exitResult, r
 
     await insertTrade({
       symbol, exchange: state.exchange, strategy_id: strategyId,
-      entry_time: state.buy_time, exit_time: new Date().toISOString(),
+      entry_time: state.buy_time, exit_time: exitTime,
       entry_price: buyPrice, exit_price: est.exitPrice,
       qty: est.soldQty, usdt_in: parseFloat(state.buy_usdt), usdt_out: est.usdtOut,
       pnl_usdt: est.pnlUsdt, pnl_pct: parseFloat(est.pnlPct.toFixed(2)),
@@ -367,9 +401,11 @@ async function executeSell({ rowId, adapter, strategy, log, state, exitResult, r
       exit_reason: 'DUST',
     });
 
+    if (session) session.lastExitTime = exitTime;
     await saveState(rowId, {
       capital: est.capitalAfter, phase: 'WATCHING',
       buy_price: null, buy_qty: null, buy_usdt: null, buy_time: null, rsi_entry: null,
+      rules_state: postExitRulesState(exitTime),
     }, log);
 
     log(`${'─'.repeat(60)}`);
@@ -389,7 +425,7 @@ async function executeSell({ rowId, adapter, strategy, log, state, exitResult, r
 
   await insertTrade({
     symbol, exchange: state.exchange, strategy_id: strategyId,
-    entry_time: state.buy_time, exit_time: new Date().toISOString(),
+    entry_time: state.buy_time, exit_time: exitTime,
     entry_price: buyPrice, exit_price: exitPrice,
     qty: soldQty, usdt_in: parseFloat(state.buy_usdt), usdt_out: usdtOut,
     pnl_usdt: pnlUsdt, pnl_pct: parseFloat(pnlPct.toFixed(2)),
@@ -398,10 +434,16 @@ async function executeSell({ rowId, adapter, strategy, log, state, exitResult, r
     exit_reason: exitResult?.reason ?? reasonLabel ?? 'PANEL_REMOVED',
   });
 
+  if (session) session.lastExitTime = exitTime;
+  const cooldownH = entryCooldownHours(config);
   await saveState(rowId, {
     capital: capitalAfter, phase: 'WATCHING',
     buy_price: null, buy_qty: null, buy_usdt: null, buy_time: null, rsi_entry: null,
+    rules_state: postExitRulesState(exitTime),
   }, log);
+  if (cooldownH > 0) {
+    log(`${Y}⏳ Cooldown de entrada: ${cooldownH}h${X}`);
+  }
 
   log(`${'─'.repeat(60)}`);
   log(`${R}🔴 VENDA EXECUTADA${X}`);
@@ -433,6 +475,20 @@ async function tick(rowId, adapter, strategy, log, session) {
   // ── WATCHING ──────────────────────────────────────────────────────────────
   if (phase === 'WATCHING') {
     if (!entryCheck.allowed) return { phase };
+
+    const cooldownH = entryCooldownHours(config);
+    if (cooldownH > 0) {
+      const remaining = cooldownRemainingMs(resolveLastExitTime(state, session), cooldownH);
+      if (remaining > 0) {
+        const now = Date.now();
+        if (!session.lastCooldownLogAt || now - session.lastCooldownLogAt >= COOLDOWN_LOG_INTERVAL_MS) {
+          session.lastCooldownLogAt = now;
+          const kindLabel = entryCheck.entryDesc ?? crossDesc(config.entry);
+          log(`${Y}⏳ Sinal (${kindLabel}) — cooldown ${formatCooldownRemaining(remaining)} restantes${X}`);
+        }
+        return { phase };
+      }
+    }
 
     const vol = session.volCache?.volumeUsdt;
     const minVol = config.minVolumeUsdt ?? 1_000_000;
@@ -496,7 +552,7 @@ async function tick(rowId, adapter, strategy, log, session) {
 
     try {
       await executeSell({
-        rowId, adapter, strategy, log, state, exitResult,
+        rowId, adapter, strategy, log, state, exitResult, session,
       });
       session.phase = 'WATCHING';
       session.rulesState = null;
@@ -533,7 +589,13 @@ async function startSymbol(row, color) {
   };
 
   let lastResult = { phase: row.phase };
-  const session  = { volCache: null, phase: row.phase === 'BOUGHT' ? 'BOUGHT' : null, rulesState: null };
+  const session  = {
+    volCache: null,
+    phase: row.phase === 'BOUGHT' ? 'BOUGHT' : null,
+    rulesState: null,
+    lastExitTime: parseRulesState(row).lastExitTime ?? null,
+    lastCooldownLogAt: 0,
+  };
   let volIv;
 
   const stop = async () => {
