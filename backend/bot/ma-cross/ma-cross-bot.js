@@ -28,6 +28,7 @@ const { resolveStrategy } = require('./tradeConfigSchema');
 const { STRATEGY_IDS, isMaCrossStrategy } = require('./strategyPresets');
 const {
   getRequiredSpecs, evaluateEntry, evaluateExit, computeAdaptiveDips,
+  computeStopLossFloor, getFinestPollInterval,
 } = require('./strategyEngine');
 
 const GATE_FEE_RATE = 0.002;
@@ -279,6 +280,22 @@ async function insertTrade(trade) {
   try { await sbReq('POST', 'rsi_multi_bot_trades', trade); } catch { /* ignore */ }
 }
 
+function parseRulesState(row) {
+  let rs = row?.rules_state;
+  if (typeof rs === 'string') {
+    try { rs = JSON.parse(rs); } catch { rs = null; }
+  }
+  return rs && typeof rs === 'object' ? rs : {};
+}
+
+function getTickPeak(cMap, config, buyPrice, storedPeak) {
+  const iv = getFinestPollInterval(config);
+  const last = (cMap[iv] ?? []).at(-1);
+  const lastHigh = last?.high != null ? parseFloat(last.high) : parseFloat(last?.close ?? buyPrice);
+  const lastClose = last?.close != null ? parseFloat(last.close) : buyPrice;
+  return Math.max(storedPeak ?? buyPrice, lastHigh, lastClose);
+}
+
 async function fetchCandleMap(adapter, specs) {
   const maxLimits = {};
   for (const { interval, limit } of specs) {
@@ -296,7 +313,9 @@ async function executeSell({ rowId, adapter, strategy, log, state, exitResult, r
   const buyPrice = parseFloat(state.buy_price);
 
   const reason = reasonLabel ?? (exitResult.reason === 'STOP_LOSS'
-    ? `stop-loss ${exitResult.dropPct?.toFixed(2)}%`
+    ? (exitResult.dropPct >= 0
+      ? `stop trailing +${exitResult.dropPct.toFixed(2)}% (piso ${exitResult.stopFloor?.toFixed(6)})`
+      : `stop-loss ${exitResult.dropPct?.toFixed(2)}%`)
     : (exitResult.exitDesc ?? exitResult.reason ?? crossDesc(config.exit?.maCross ?? config.exit)));
 
   log(`${R}📈 ${reason} — vendendo ${state.buy_qty} ${symbol}${X}`);
@@ -330,6 +349,7 @@ async function executeSell({ rowId, adapter, strategy, log, state, exitResult, r
   await saveState(rowId, {
     capital: capitalAfter, phase: 'WATCHING',
     buy_price: null, buy_qty: null, buy_usdt: null, buy_time: null, rsi_entry: null,
+    rules_state: null,
   });
 
   log(`${'─'.repeat(60)}`);
@@ -380,10 +400,12 @@ async function tick(rowId, adapter, strategy, log, session) {
     }
 
     const { filledQty, quoteQty, avgPrice } = result;
+    const initialFloor = computeStopLossFloor(avgPrice, avgPrice, config.stopLoss);
     await saveState(rowId, {
       phase: 'BOUGHT', buy_price: avgPrice, buy_qty: filledQty,
       buy_usdt: quoteQty, buy_time: new Date().toISOString(),
       rsi_entry: entryCheck.ma1,
+      rules_state: { stopPeakPrice: avgPrice, stopFloor: initialFloor },
     });
 
     log(`${'─'.repeat(60)}`);
@@ -396,7 +418,24 @@ async function tick(rowId, adapter, strategy, log, session) {
 
   // ── BOUGHT ────────────────────────────────────────────────────────────────
   if (phase === 'BOUGHT') {
-    const exitResult = evaluateExit(config, cMap, buyPrice);
+    const rulesState = parseRulesState(state);
+    const storedPeak = rulesState.stopPeakPrice != null
+      ? parseFloat(rulesState.stopPeakPrice)
+      : buyPrice;
+    const peakPrice = getTickPeak(cMap, config, buyPrice, storedPeak);
+    const stopFloor = computeStopLossFloor(buyPrice, peakPrice, config.stopLoss);
+    const prevFloor = rulesState.stopFloor != null
+      ? parseFloat(rulesState.stopFloor)
+      : computeStopLossFloor(buyPrice, storedPeak, config.stopLoss);
+
+    if (peakPrice > storedPeak + 1e-12 || Math.abs((stopFloor ?? 0) - (prevFloor ?? 0)) > 1e-12) {
+      await saveState(rowId, { rules_state: { stopPeakPrice: peakPrice, stopFloor } });
+      if (stopFloor != null && stopFloor > prevFloor + 1e-12) {
+        log(`📈 Stop trailing: pico ${peakPrice.toFixed(6)} → piso ${stopFloor.toFixed(6)}`);
+      }
+    }
+
+    const exitResult = evaluateExit(config, cMap, buyPrice, { peakPrice });
     if (!exitResult.exit) return { phase };
 
     try {

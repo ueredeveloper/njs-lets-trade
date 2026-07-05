@@ -1,6 +1,6 @@
 'use strict';
 
-const { checkMaCrossover, findRecentMaCross, checkMaCrossApproaching, checkPriceFilter } = require('../bot/ma-cross/strategyEngine');
+const { checkMaCrossover, findRecentMaCross, checkMaCrossApproaching, checkPriceFilter, getMaCrossMetrics, computeStopLossFloor, evaluateExit } = require('../bot/ma-cross/strategyEngine');
 const { normalizeMaCrossConfig, isValidMaCrossPeriod } = require('../bot/ma-cross/tradeConfigSchema');
 
 function makeCandles(closes) {
@@ -90,7 +90,7 @@ describe('MA Cross — cruzamento', () => {
     expect(r.matched).toBe(true);
   });
 
-  test('near_up: gap encolhendo', () => {
+  test('near_up: gap encolhendo com MA rápida subindo', () => {
     const closes = Array(45).fill(100);
     for (let i = 0; i < 15; i++) closes.push(100 + i * 0.02);
     const candles = makeCandles(closes);
@@ -106,6 +106,38 @@ describe('MA Cross — cruzamento', () => {
       expect(r.gapPct).toBeLessThanOrEqual(2);
       expect(r.kind).toBe('approaching');
     }
+  });
+
+  test('near_up: rejeita quando MA rápida cai (gap encolhe por queda da lenta)', () => {
+    const closes = Array(50).fill(0.0648);
+    for (let i = 0; i < 10; i++) closes.push(0.0648 - i * 0.00005);
+    const candles = makeCandles(closes);
+    const r = checkMaCrossApproaching({
+      candles1: candles, period1: 9, interval1: '15m',
+      candles2: candles, period2: 21, interval2: '15m',
+      mode: 'near_up',
+      proximityPct: 1,
+      closedOnly: true,
+    });
+    expect(r.matched).toBe(false);
+  });
+
+  test('getMaCrossMetrics: approaching alinhado ao check live (sem duplo slice)', () => {
+    const closes = Array(50).fill(100);
+    for (let i = 0; i < 8; i++) closes.push(100 - i * 0.01);
+    closes.push(100.02);
+    const candles = makeCandles(closes);
+    const direct = checkMaCrossApproaching({
+      candles1: candles, period1: 9, interval1: '15m',
+      candles2: candles, period2: 21, interval2: '15m',
+      mode: 'near_up', proximityPct: 1, closedOnly: false,
+    });
+    const metrics = getMaCrossMetrics({
+      candles1: candles, period1: 9, interval1: '15m',
+      candles2: candles, period2: 21, interval2: '15m',
+      proximityPct: 1,
+    });
+    expect(metrics.approachingUp).toBe(direct.matched);
   });
 
   test('findRecentMaCross: ignora par com gap no histórico (15m)', () => {
@@ -297,5 +329,47 @@ describe('MA Cross — período EMA', () => {
     const c = normalizeMaCrossConfig({ entry: { ma1: { period: 1 }, ma2: { period: 600 } } });
     expect(c.entry.ma1.period).toBe(9);
     expect(c.entry.ma2.period).toBe(500);
+  });
+});
+
+describe('MA Cross — stop trailing', () => {
+  const stopLoss = { enabled: true, maxLossPct: 5, trailing: true, trailStepPct: 5 };
+
+  test('piso inicial 5% abaixo da compra', () => {
+    expect(computeStopLossFloor(100, 100, stopLoss)).toBeCloseTo(95);
+    expect(computeStopLossFloor(100, 104.9, stopLoss)).toBeCloseTo(95);
+  });
+
+  test('a cada +5% de alta o piso sobe um degrau', () => {
+    expect(computeStopLossFloor(100, 105, stopLoss)).toBeCloseTo(99.75);
+    expect(computeStopLossFloor(100, 110, stopLoss)).toBeCloseTo(104.5);
+    expect(computeStopLossFloor(100, 130, stopLoss)).toBeCloseTo(123.5);
+  });
+
+  test('+30% de alta protege ~23.5% de lucro no piso', () => {
+    const floor = computeStopLossFloor(100, 130, stopLoss);
+    expect(floor).toBeCloseTo(123.5);
+    expect(((floor - 100) / 100) * 100).toBeCloseTo(23.5);
+  });
+
+  test('evaluateExit dispara stop no piso trailing', () => {
+    const config = {
+      stopLoss,
+      entry: { ma1: { interval: '15m' }, ma2: { interval: '15m' } },
+      exit: {
+        maCross: { enabled: false, ma1: { interval: '15m' }, ma2: { interval: '15m' } },
+        rsi: { enabled: false },
+      },
+    };
+    const cMap = { '15m': [{ close: 123 }] };
+    const hit = evaluateExit(config, cMap, 100, { peakPrice: 130 });
+    expect(hit.exit).toBe(true);
+    expect(hit.reason).toBe('STOP_LOSS');
+    expect(hit.stopFloor).toBeCloseTo(123.5);
+  });
+
+  test('sem trailing mantém piso fixo na entrada', () => {
+    const fixed = { enabled: true, maxLossPct: 5, trailing: false };
+    expect(computeStopLossFloor(100, 130, fixed)).toBeCloseTo(95);
   });
 });

@@ -49,7 +49,7 @@ const MA_CROSS_DEFAULTS = {
     },
   },
 
-  stopLoss: { enabled: true, maxLossPct: 5 },
+  stopLoss: { enabled: true, maxLossPct: 5, trailing: true, trailStepPct: 5 },
 
   execution: {
     immediateEntry:       true,
@@ -182,8 +182,10 @@ function normalizeMaCrossConfig(body = {}) {
       },
     },
     stopLoss: {
-      enabled:    body.stopLoss?.enabled !== false,
-      maxLossPct: Math.max(0.5, Number(body.stopLoss?.maxLossPct ?? d.stopLoss.maxLossPct)),
+      enabled:      body.stopLoss?.enabled !== false,
+      maxLossPct:   Math.max(0.5, Number(body.stopLoss?.maxLossPct ?? d.stopLoss.maxLossPct)),
+      trailing:     body.stopLoss?.trailing !== false,
+      trailStepPct: Math.max(0.5, Number(body.stopLoss?.trailStepPct ?? body.stopLoss?.maxLossPct ?? d.stopLoss.trailStepPct)),
     },
     execution: {
       immediateEntry:         body.execution?.immediateEntry !== false,

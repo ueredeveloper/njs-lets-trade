@@ -35,7 +35,7 @@ const PRESET_BODIES = {
         conditions: [{ enabled: true, interval: '15m', period: 14, operator: '>', value: 70 }],
       },
     },
-    stopLoss:  { enabled: true, maxLossPct: 5 },
+    stopLoss:  { enabled: true, maxLossPct: 5, trailing: true, trailStepPct: 5 },
     execution: { immediateEntry: true, entryDiscount: 0.001, pendingTimeoutMs: 30 * 60_000 },
     polling:   { pollMs: 60_000, fastPollMs: 30_000 },
     adaptiveOpts: { defaultPct: 3, maxPct: 8, minPct: 0.5, minEpisodes: 3 },

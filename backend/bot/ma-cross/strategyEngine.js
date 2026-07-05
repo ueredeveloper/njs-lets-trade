@@ -295,14 +295,16 @@ function checkMaCrossApproaching({
       gapPct = ((ma2 - ma1) / ma2) * 100;
       const gap = ma2 - ma1;
       const prevGap = prevMa2 - prevMa1;
-      matched = gapPct / 100 <= prox && gap < prevGap;
+      const ma1Rising = ma1 > prevMa1;
+      matched = gapPct / 100 <= prox && gap < prevGap && ma1Rising;
     }
   } else if (mode === 'near_down') {
     if (ma1 > ma2 && ma2 > 0) {
       gapPct = ((ma1 - ma2) / ma2) * 100;
       const gap = ma1 - ma2;
       const prevGap = prevMa1 - prevMa2;
-      matched = gapPct / 100 <= prox && gap < prevGap;
+      const ma1Falling = ma1 < prevMa1;
+      matched = gapPct / 100 <= prox && gap < prevGap && ma1Falling;
     }
   }
 
@@ -501,6 +503,28 @@ function evaluateRsiExit(config, cMap) {
   };
 }
 
+/**
+ * Piso do stop-loss. Com trailing ativo, sobe a cada degrau de trailStepPct
+ * (padrão = maxLossPct): preço +5% → piso sobe para (novo degrau − maxLossPct).
+ */
+function computeStopLossFloor(entryPrice, peakPrice, stopLoss = {}) {
+  const maxLossPct = stopLoss.maxLossPct ?? 5;
+  if (!entryPrice || entryPrice <= 0) return null;
+
+  const trailing = stopLoss.trailing !== false;
+  const peak = peakPrice != null ? Math.max(entryPrice, peakPrice) : entryPrice;
+
+  if (!trailing || !stopLoss.enabled) {
+    return entryPrice * (1 - maxLossPct / 100);
+  }
+
+  const stepPct = Math.max(0.5, Number(stopLoss.trailStepPct ?? maxLossPct));
+  const risePct = ((peak - entryPrice) / entryPrice) * 100;
+  const steps = Math.floor(Math.max(0, risePct) / stepPct);
+  const anchorPrice = entryPrice * (1 + (steps * stepPct) / 100);
+  return anchorPrice * (1 - maxLossPct / 100);
+}
+
 function evaluateExit(config, cMap, entryPrice, opts = {}) {
   const closedOnly = opts.closedOnly !== false;
   const c1 = cMap[config.exit?.maCross?.ma1?.interval] ?? [];
@@ -562,15 +586,25 @@ function evaluateExit(config, cMap, entryPrice, opts = {}) {
   }
 
   if (config.stopLoss?.enabled && entryPrice && lastClose != null) {
-    const floor = entryPrice * (1 - config.stopLoss.maxLossPct / 100);
-    if (lastClose <= floor) {
+    const peakPrice = opts.peakPrice != null ? opts.peakPrice : entryPrice;
+    const floor = computeStopLossFloor(entryPrice, peakPrice, config.stopLoss);
+    if (floor != null && lastClose <= floor) {
       return {
         exit: true,
         reason: 'STOP_LOSS',
         close: lastClose,
         dropPct: ((lastClose - entryPrice) / entryPrice) * 100,
+        stopFloor: floor,
+        peakPrice,
       };
     }
+    return {
+      exit: false,
+      close: lastClose,
+      exitRsi: rsiExit.exitRsi,
+      stopFloor: floor,
+      peakPrice,
+    };
   }
 
   return { exit: false, close: lastClose, exitRsi: rsiExit.exitRsi };
@@ -604,6 +638,7 @@ function getMaCrossMetrics({
   candles1, period1, interval1,
   candles2, period2, interval2,
   tolerancePct = 0,
+  proximityPct = 1,
   crossLookbackMin = 1440,
   now = Date.now(),
 }) {
@@ -649,15 +684,43 @@ function getMaCrossMetrics({
 
   const round = (v) => (v != null ? Math.round(v * 100) / 100 : null);
 
+  const prox = Math.max(0, proximityPct ?? 1);
+  const nearUp = checkMaCrossApproaching({
+    candles1, period1, interval1,
+    candles2, period2, interval2,
+    mode: 'near_up', proximityPct: prox, closedOnly: false,
+  });
+  const nearDown = checkMaCrossApproaching({
+    candles1, period1, interval1,
+    candles2, period2, interval2,
+    mode: 'near_down', proximityPct: prox, closedOnly: false,
+  });
+
+  const liveSig = sigIv === interval1 ? candles1 : candles2;
+  const liveLast = liveSig[liveSig.length - 1];
+  const liveSeries1 = buildMaTimeSeries(candles1, period1);
+  const liveSeries2 = buildMaTimeSeries(candles2, period2);
+  const liveMa1 = maValueAt(liveSeries1, liveLast.openTime);
+  const liveMa2 = maValueAt(liveSeries2, liveLast.openTime);
+  let liveGapUpPct = null;
+  let liveGapDownPct = null;
+  if (liveMa1 != null && liveMa2 != null && liveMa2 > 0) {
+    if (liveMa1 < liveMa2) liveGapUpPct = ((liveMa2 - liveMa1) / liveMa2) * 100;
+    if (liveMa1 > liveMa2) liveGapDownPct = ((liveMa1 - liveMa2) / liveMa2) * 100;
+  }
+
   return {
     ok: true,
-    ma1, ma2,
-    gapUpPct: round(gapUpPct),
-    gapDownPct: round(gapDownPct),
+    ma1: liveMa1 ?? ma1, ma2: liveMa2 ?? ma2,
+    gapUpPct: round(nearUp.matched ? nearUp.gapPct : liveGapUpPct ?? gapUpPct),
+    gapDownPct: round(nearDown.matched ? nearDown.gapPct : liveGapDownPct ?? gapDownPct),
     crossUpAgeMin: crossUp.crossTime != null ? round(crossUp.ageMin) : null,
     crossDownAgeMin: crossDown.crossTime != null ? round(crossDown.ageMin) : null,
     crossUpHeld: crossUp.matched === true,
     crossDownHeld: crossDown.matched === true,
+    approachingUp: nearUp.matched === true,
+    approachingDown: nearDown.matched === true,
+    proximityPct: prox,
   };
 }
 
@@ -679,6 +742,7 @@ module.exports = {
   getRequiredSpecs,
   evaluateEntry,
   evaluateExit,
+  computeStopLossFloor,
   computeAdaptiveDips,
   getFinestPollInterval,
   getMaCrossMetrics,

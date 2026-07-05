@@ -195,6 +195,7 @@ router.post('/ma-cross-status', async (req, res) => {
     }
 
     const tolerancePct = parseFloat(req.body?.tolerancePct ?? '0.5');
+    const proximityPct = parseFloat(req.body?.proximityPct ?? '1');
     const crossLookbackMin = parseInt(req.body?.crossLookbackMin ?? '1440', 10);
     const now = Date.now();
     const details = {};
@@ -233,6 +234,7 @@ router.post('/ma-cross-status', async (req, res) => {
           candles1, period1, interval1,
           candles2, period2, interval2,
           tolerancePct,
+          proximityPct,
           crossLookbackMin,
           now,
         });

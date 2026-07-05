@@ -100,15 +100,21 @@ export function compareMacrossFavorites(a, b, sortBy, ctx = {}) {
   const mb = status[symB];
 
   if (sortBy === 'near_up') {
-    const ga = numOrInfinity(ma?.gapUpPct);
-    const gb = numOrInfinity(mb?.gapUpPct);
+    const appA = ma?.approachingUp ? 0 : 1;
+    const appB = mb?.approachingUp ? 0 : 1;
+    if (appA !== appB) return appA - appB;
+    const ga = ma?.approachingUp ? numOrInfinity(ma?.gapUpPct) : Infinity;
+    const gb = mb?.approachingUp ? numOrInfinity(mb?.gapUpPct) : Infinity;
     if (ga !== gb) return ga - gb;
     return symA.localeCompare(symB);
   }
 
   if (sortBy === 'near_down') {
-    const ga = numOrInfinity(ma?.gapDownPct);
-    const gb = numOrInfinity(mb?.gapDownPct);
+    const appA = ma?.approachingDown ? 0 : 1;
+    const appB = mb?.approachingDown ? 0 : 1;
+    if (appA !== appB) return appA - appB;
+    const ga = ma?.approachingDown ? numOrInfinity(ma?.gapDownPct) : Infinity;
+    const gb = mb?.approachingDown ? numOrInfinity(mb?.gapDownPct) : Infinity;
     if (ga !== gb) return ga - gb;
     return symA.localeCompare(symB);
   }
@@ -140,10 +146,11 @@ export function compareMacrossFavorites(a, b, sortBy, ctx = {}) {
 export function formatMacrossStatusBadge(meta, t) {
   if (!meta || meta.error) return null;
 
-  if (meta.gapUpPct != null && meta.gapUpPct <= 3) {
+  // Prestes a cruzar tem prioridade sobre cruzamento histórico ainda “held”
+  if (meta.approachingUp && meta.gapUpPct != null) {
     return t('table.macross_near', '↑', `${meta.gapUpPct}%`);
   }
-  if (meta.gapDownPct != null && meta.gapDownPct <= 3) {
+  if (meta.approachingDown && meta.gapDownPct != null) {
     return t('table.macross_near', '↓', `${meta.gapDownPct}%`);
   }
   if (meta.crossUpHeld && meta.crossUpAgeMin != null) {

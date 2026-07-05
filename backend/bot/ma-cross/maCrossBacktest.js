@@ -262,6 +262,7 @@ async function runMaCrossBacktest({ symbol, config, exchange = 'binance', capita
         entryPrice,
         qty: runningCapital / entryPrice,
         usdtIn: runningCapital,
+        peakPrice: cross.close,
       };
       openSignalIdx = signals.length;
       signals.push({
@@ -274,7 +275,12 @@ async function runMaCrossBacktest({ symbol, config, exchange = 'binance', capita
       trades.push({ type: 'BUY', time: c.openTime, price: cross.close });
       phase = 'BOUGHT';
     } else if (phase === 'BOUGHT' && position) {
-      const exit = evaluateExit(config, cMapSlice, position.entryPrice, evalOpts);
+      const candleHigh = c.high != null ? parseFloat(c.high) : parseFloat(c.close);
+      position.peakPrice = Math.max(position.peakPrice ?? position.entryPrice, candleHigh, parseFloat(c.close));
+      const exit = evaluateExit(config, cMapSlice, position.entryPrice, {
+        ...evalOpts,
+        peakPrice: position.peakPrice,
+      });
       if (!exit.exit) continue;
 
       const exitPrice = exit.close * (1 - FEE_RATE);
@@ -328,7 +334,11 @@ async function runMaCrossBacktest({ symbol, config, exchange = 'binance', capita
     config: {
       entryPaths: entryLabel,
       exitCross: formatExitLabel(config),
-      stopLoss: config.stopLoss?.enabled ? `−${config.stopLoss.maxLossPct}%` : 'off',
+      stopLoss: config.stopLoss?.enabled
+        ? (config.stopLoss.trailing !== false
+          ? `trailing −${config.stopLoss.maxLossPct}% / +${config.stopLoss.trailStepPct ?? config.stopLoss.maxLossPct}%`
+          : `−${config.stopLoss.maxLossPct}%`)
+        : 'off',
     },
     period,
     maFilterStats: [],

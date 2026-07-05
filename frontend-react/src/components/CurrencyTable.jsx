@@ -475,6 +475,22 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
     multitradeFavorites.filter(e => e.enabled !== false && isMaCrossEntry(e)).map(e => e.symbol),
   ).size;
 
+  /** Somatório do PnL das linhas visíveis (respeita filtro ativo). */
+  const tradePnlSum = useMemo(() => {
+    if (!isTradesFavView || !rows.length) return null;
+    let sum = 0;
+    let any = false;
+    for (const item of rows) {
+      const pnl = tradePnlForSort(tradeFavStatus[item.symbol], tradeFavSort);
+      if (pnl == null || !Number.isFinite(pnl)) continue;
+      sum += pnl;
+      any = true;
+    }
+    return any ? Math.round(sum * 100) / 100 : null;
+  }, [isTradesFavView, rows, tradeFavStatus, tradeFavSort]);
+
+  const tradePnlSumLabel = formatTradePnlBadge(tradePnlSum);
+
   return (
     <div className="flex flex-col h-full">
       {/* Barra de busca */}
@@ -729,6 +745,23 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
                 </tr>
               );
             })}
+
+            {isTradesFavView && rows.length > 0 && tradePnlSumLabel != null && (
+              <tr className="border-t border-p3 sticky bottom-0 z-10">
+                <td className="pl-2 py-1.5 bg-p1" colSpan={3}>
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-p5/70">
+                    Total PnL
+                  </span>
+                </td>
+                <td
+                  className="px-2 py-1.5 text-right font-mono text-[11px] font-bold bg-p1"
+                  style={{ color: tradePnlSum >= 0 ? '#22c55e' : '#ef4444' }}
+                >
+                  {tradePnlSumLabel}
+                </td>
+                <td className="bg-p1" />
+              </tr>
+            )}
 
             {/* Separador + resultados Gate.io */}
             {gateLoading && rows.length === 0 && (
