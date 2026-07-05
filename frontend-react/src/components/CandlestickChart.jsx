@@ -349,6 +349,140 @@ function getThemeColors() {
 }
 
 
+function fmtChartPrice(p) {
+  if (p == null || !Number.isFinite(p)) return '—';
+  return p < 0.01 ? p.toFixed(6) : p < 1 ? p.toFixed(4) : p.toFixed(2);
+}
+
+/** Preço de compra aberto para o símbolo do gráfico (multitrade, exchange, FIFO). */
+function resolveChartBuyPrice(symbol, {
+  multitradeFavorites, fiveMTradeFavorites, activeTrades,
+  allTrades, tradePurchases, chartTradeMarkers,
+}) {
+  const sym = symbol?.toUpperCase();
+  if (!sym) return null;
+
+  const mtBought = multitradeFavorites?.find(
+    e => e.symbol?.toUpperCase() === sym && e.phase === 'BOUGHT' && e.buyPrice != null,
+  );
+  if (mtBought) {
+    return {
+      price: Number(mtBought.buyPrice),
+      time: mtBought.buyTime ? new Date(mtBought.buyTime).getTime() : null,
+    };
+  }
+
+  const fmBought = fiveMTradeFavorites?.find(
+    e => e.symbol?.toUpperCase() === sym && e.phase === 'BOUGHT' && (e.buy_price != null || e.buyPrice != null),
+  );
+  if (fmBought) {
+    const price = fmBought.buy_price ?? fmBought.buyPrice;
+    const buyTime = fmBought.buy_time ?? fmBought.buyTime;
+    return {
+      price: Number(price),
+      time: buyTime ? new Date(buyTime).getTime() : null,
+    };
+  }
+
+  const at = activeTrades?.get?.(sym);
+  if (at?.buyPrice != null) return { price: Number(at.buyPrice), time: null };
+
+  const entryMarker = [...(chartTradeMarkers ?? [])].reverse().find(
+    m => (m.side === 'entry' || m.side === 'buy') && m.price != null,
+  );
+  if (entryMarker) return { price: Number(entryMarker.price), time: entryMarker.time ?? null };
+
+  if (allTrades?.length) {
+    const inv = [];
+    const sorted = [...allTrades].sort((a, b) => Number(a.time) - Number(b.time));
+    for (const t of sorted) {
+      const price = Number(t.price);
+      const qty = Number(t.qty);
+      if (!Number.isFinite(price) || !Number.isFinite(qty)) continue;
+      if (t.isBuyer) {
+        if (qty > 0) inv.push({ qty, price, time: Number(t.time) });
+      } else {
+        let remain = qty;
+        while (remain > 1e-12 && inv.length) {
+          const take = Math.min(inv[0].qty, remain);
+          inv[0].qty -= take;
+          remain -= take;
+          if (inv[0].qty <= 1e-12) inv.shift();
+        }
+      }
+    }
+    if (inv.length) {
+      const totalQty = inv.reduce((s, l) => s + l.qty, 0);
+      const avgPrice = inv.reduce((s, l) => s + l.qty * l.price, 0) / totalQty;
+      const firstLot = inv[0];
+      return { price: avgPrice, time: firstLot?.time ?? null };
+    }
+  }
+
+  if (tradePurchases?.length) {
+    const last = [...tradePurchases].sort((a, b) => Number(a.time) - Number(b.time)).pop();
+    if (last?.price != null) return { price: Number(last.price), time: Number(last.time) };
+  }
+
+  return null;
+}
+
+/** Série line do preço de compra até o fechamento atual (evita markLine coord no eixo categoria). */
+function buildBuyPnlSeries(buyInfo, candlesticks, DL, LEFT_PAD, RIGHT_PAD, lastClose) {
+  if (!buyInfo?.price || lastClose == null || !candlesticks?.length) return null;
+  const buyPrice = buyInfo.price;
+  if (!Number.isFinite(buyPrice) || buyPrice <= 0 || !Number.isFinite(lastClose)) return null;
+
+  const pct = ((lastClose - buyPrice) / buyPrice) * 100;
+  const isUp = pct >= 0;
+  const color = isUp ? C_UP : C_DOWN;
+  const pctLabel = `${isUp ? '+' : ''}${pct.toFixed(2)}%`;
+
+  const offset = candlesticks.length - DL;
+  let buyIdx = 0;
+  if (buyInfo.time != null) {
+    const absIdx = candlesticks.reduce((best, c, i) =>
+      Math.abs(Number(c.openTime) - buyInfo.time) < Math.abs(Number(candlesticks[best].openTime) - buyInfo.time)
+        ? i : best,
+    0);
+    buyIdx = Math.max(0, Math.min(DL - 1, absIdx - offset));
+  }
+
+  const x1 = buyIdx + LEFT_PAD;
+  const x2 = (DL - 1) + LEFT_PAD;
+  const totalLen = LEFT_PAD + DL + RIGHT_PAD;
+  if (x1 < 0 || x2 < 0 || x1 >= totalLen || x2 >= totalLen) return null;
+
+  const data = new Array(totalLen).fill(null);
+  data[x1] = buyPrice;
+  data[x2] = lastClose;
+
+  return {
+    name: 'PnL',
+    type: 'line',
+    data,
+    connectNulls: true,
+    showSymbol: true,
+    symbol: 'circle',
+    symbolSize: 4,
+    lineStyle: { color, width: 1.5, type: 'dotted' },
+    itemStyle: { color },
+    endLabel: {
+      show: true,
+      formatter: pctLabel,
+      color: '#fff',
+      backgroundColor: color,
+      padding: [2, 4],
+      borderRadius: 2,
+      fontSize: 8,
+      fontWeight: 'bold',
+    },
+    z: 10,
+    silent: true,
+    animation: false,
+  };
+}
+
 function buildMultitradeMarkLines(candlesticks, interval, markers, DL, LEFT_PAD) {
   if (!markers?.length || !candlesticks?.length) return [];
   const ms = { '1m': 60_000, '3m': 180_000, '5m': 300_000, '15m': 900_000, '30m': 1_800_000,
@@ -393,7 +527,7 @@ function buildMultitradeMarkLines(candlesticks, interval, markers, DL, LEFT_PAD)
   });
 }
 
-function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAverage, ma50, ma9, ma21, rsi }, colors, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = [], overlayConfigs = [], multitradeMarkers = [], chartLeftPad = CHART_LEFT_PAD) {
+function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAverage, ma50, ma9, ma21, rsi }, colors, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = [], overlayConfigs = [], multitradeMarkers = [], chartLeftPad = CHART_LEFT_PAD, buyInfo = null) {
   const showMa9      = activeIndicators.includes('ma9');
   const showMa21     = activeIndicators.includes('ma21');
   const showMa50     = activeIndicators.includes('ma50');
@@ -500,7 +634,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
   const allMarkLineData = [...dayBreakData, ...periodMarkData, ...tradeMarkData, ...mtMarkData];
 
   const lastClose = candlesticks.length ? parseFloat(candlesticks[candlesticks.length - 1].close) : null;
-  const _fmtP = (p) => p < 0.01 ? p.toFixed(6) : p < 1 ? p.toFixed(4) : p.toFixed(2);
+  const buyPnlSeries = buildBuyPnlSeries(buyInfo, candlesticks, DL, LEFT_PAD, RIGHT_PAD, lastClose);
   const finalMarkLine = {
     silent: true, symbol: 'none',
     data: [
@@ -510,7 +644,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
         lineStyle: { color: 'rgba(0,0,0,0)' },
         label: {
           show: true, position: 'end',
-          formatter: _fmtP(lastClose),
+          formatter: fmtChartPrice(lastClose),
           color: '#111', fontSize: 10, fontWeight: 'bold',
           backgroundColor: '#facc15', padding: [2, 5], borderRadius: 2,
         }
@@ -561,7 +695,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
         html += `<span style="color:#888">C</span><span style="color:${col};font-weight:bold">${_fmtV(c)}</span>`;
         html += `</div><hr style="border:none;border-top:1px solid rgba(255,255,255,0.08);margin:3px 0"/>`;
       } else {
-        if (p.seriesName === 'CL' || p.seriesName === 'BL' || p.seriesName === 'Span A' || p.seriesName === 'Span B') continue;
+        if (p.seriesName === 'CL' || p.seriesName === 'BL' || p.seriesName === 'Span A' || p.seriesName === 'Span B' || p.seriesName === 'PnL') continue;
         let col = p.color ?? '#fff';
         if (p.seriesName === 'RSI') {
           const rv = parseFloat(p.value);
@@ -641,6 +775,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
         areaStyle: { color: 'rgba(239,83,80,0.05)' } },
     ] : []),
     ...overlayLineSeries.map(s => ({ ...s, xAxisIndex: idx, yAxisIndex: idx })),
+    ...(buyPnlSeries ? [{ ...buyPnlSeries, xAxisIndex: idx, yAxisIndex: idx }] : []),
   ];
 
   if (!showRsi) {
@@ -739,7 +874,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
 
 // ── Gráfico Matrix: área de preço + RSI, tema terminal verde ─────────────────
 
-function buildMatrixOption({ symbol, interval, candlesticks, rsi }, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = [], chartLeftPad = CHART_LEFT_PAD) {
+function buildMatrixOption({ symbol, interval, candlesticks, rsi }, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = [], chartLeftPad = CHART_LEFT_PAD, buyInfo = null) {
   const showRsi   = activeIndicators.includes('rsi');
   const showRsi50 = activeIndicators.includes('rsi50');
   const showRsi80 = activeIndicators.includes('rsi80');
@@ -816,7 +951,7 @@ function buildMatrixOption({ symbol, interval, candlesticks, rsi }, activeIndica
 
   const closes    = candlesticks.slice(-DL).map(c => c.close);
   const lastClose = candlesticks.length ? parseFloat(candlesticks[candlesticks.length - 1].close) : null;
-  const _fmtP = (p) => p < 0.01 ? p.toFixed(6) : p < 1 ? p.toFixed(4) : p.toFixed(2);
+  const buyPnlSeries = buildBuyPnlSeries(buyInfo, candlesticks, DL, LEFT_PAD, RIGHT_PAD, lastClose);
   const finalMarkLine = {
     silent: true, symbol: 'none',
     data: [
@@ -826,7 +961,7 @@ function buildMatrixOption({ symbol, interval, candlesticks, rsi }, activeIndica
         lineStyle: { color: 'rgba(0,0,0,0)' },
         label: {
           show: true, position: 'end',
-          formatter: _fmtP(lastClose),
+          formatter: fmtChartPrice(lastClose),
           color: BG, fontSize: 10, fontWeight: 'bold',
           backgroundColor: G, padding: [2, 5], borderRadius: 2, fontFamily: 'monospace',
         }
@@ -899,6 +1034,7 @@ function buildMatrixOption({ symbol, interval, candlesticks, rsi }, activeIndica
         },
         markLine: finalMarkLine,
       },
+      ...(buyPnlSeries ? [{ ...buyPnlSeries, xAxisIndex: 0, yAxisIndex: 0 }] : []),
       ...(showRsi && rsiData.length ? [{
         name: 'RSI',
         type: 'line',
@@ -1121,8 +1257,8 @@ function TradeHistoryPanel({ symbol, gateFavorites }) {
 
 export default function CandlestickChart() {
   const { selectedChart, setSelectedChart, chartZoom, chartTradeMarkers, chartViewSource,
-    multitradeChartFocus, tradePurchases, gateFavorites, chartInterval: savedInterval, setChartInterval,
-    chartPanelButtons, uiPrefs, setOverlaySlotsPreference } = useCurrency();
+    multitradeChartFocus, tradePurchases, allTrades, gateFavorites, chartInterval: savedInterval, setChartInterval,
+    chartPanelButtons, uiPrefs, setOverlaySlotsPreference, multitradeFavorites, fiveMTradeFavorites, activeTrades } = useCurrency();
   const { t } = useI18n();
   const chartRef = useRef(null);
   const [currentInterval, setCurrentInterval] = useState(savedInterval || DEFAULT_INTERVAL);
@@ -1416,18 +1552,37 @@ export default function CandlestickChart() {
       };
     }), [overlaySlots, overlayMaCache, maBands, chartPanelButtons]);
 
+  const chartBuyInfo = useMemo(() => {
+    if (!selectedChart?.symbol) return null;
+    return resolveChartBuyPrice(selectedChart.symbol, {
+      multitradeFavorites,
+      fiveMTradeFavorites,
+      activeTrades,
+      allTrades,
+      tradePurchases,
+      chartTradeMarkers: chartTradeMarkers?.length
+        ? chartTradeMarkers
+        : (selectedChart.tradeMarkers ?? []),
+    });
+  }, [
+    selectedChart?.symbol, selectedChart?.tradeMarkers,
+    multitradeFavorites, fiveMTradeFavorites, activeTrades, allTrades, tradePurchases, chartTradeMarkers,
+  ]);
+
   const option = useMemo(() => {
     if (!selectedChart) return null;
     if (activeTab === 'matrix') {
-      return buildMatrixOption(selectedChart, effectiveIndicators, displayLimit, chartZoom, tradeTimes, chartLeftPad);
+      return buildMatrixOption(
+        selectedChart, effectiveIndicators, displayLimit, chartZoom, tradeTimes, chartLeftPad, chartBuyInfo,
+      );
     }
     return buildOption(
       selectedChart, colors, effectiveIndicators, displayLimit, chartZoom, tradeTimes, overlayConfigs,
       chartTradeMarkers?.length ? chartTradeMarkers : (selectedChart.tradeMarkers ?? []),
-      chartLeftPad,
+      chartLeftPad, chartBuyInfo,
     );
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedChart, colors, effectiveIndicators, chartZoom, tradePurchases, chartTradeMarkers, activeTab, overlayConfigs, displayLimit, chartLeftPad]);
+  }, [selectedChart, colors, effectiveIndicators, chartZoom, tradePurchases, chartTradeMarkers, activeTab, overlayConfigs, displayLimit, chartLeftPad, chartBuyInfo]);
 
   if (!selectedChart || !option) {
     return (
@@ -1447,6 +1602,7 @@ export default function CandlestickChart() {
   // ── Chart ECharts (usado em ambas as abas) ───────────────────────────────────
   const chartNode = (
     <ReactECharts
+      key={`${selectedChart.symbol}-${activeTab}`}
       ref={chartRef}
       option={option}
       notMerge={true}

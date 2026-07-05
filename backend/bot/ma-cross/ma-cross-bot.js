@@ -19,7 +19,11 @@ require('dotenv').config({ path: path.join(__dirname, '../../../.env') });
 
 const { fetchBinanceCandles, fetchGateCandles } = require('../prices');
 const { toGateSymbol } = require('../../utils/toGateSymbol');
-const { gateMarketSell: gateMarketSellCore } = require('../gate/gateMarketSell');
+const {
+  gateMarketSell: gateMarketSellCore,
+  isGateDustResult,
+  estimateDustClosePnl,
+} = require('../gate/gateMarketSell');
 const { sendWhatsApp } = require('../whatsapp');
 const { maLabel } = require('../../utils/movingAverage');
 const registry = require('../multitradeRegistry');
@@ -272,8 +276,26 @@ function crossDesc(block) {
   return `${maLabel(block.ma1.period, block.ma1.interval)} ${dir} ${maLabel(block.ma2.period, block.ma2.interval)}`;
 }
 
-async function saveState(id, update) {
-  await sbReq('PATCH', 'rsi_multi_bot_state', { ...update, updated_at: new Date().toISOString() }, `?id=eq.${id}`);
+let rulesStateColumnOk = true;
+
+async function saveState(id, update, log) {
+  const payload = { ...update, updated_at: new Date().toISOString() };
+  if (!rulesStateColumnOk && payload.rules_state !== undefined) {
+    delete payload.rules_state;
+  }
+  try {
+    await sbReq('PATCH', 'rsi_multi_bot_state', payload, `?id=eq.${id}`);
+  } catch (err) {
+    const msg = String(err.message ?? err);
+    if (payload.rules_state !== undefined && /rules_state/.test(msg)) {
+      rulesStateColumnOk = false;
+      const { rules_state, ...rest } = payload;
+      await sbReq('PATCH', 'rsi_multi_bot_state', rest, `?id=eq.${id}`);
+      log?.(`${Y}⚠️  Coluna rules_state ausente — rode supabase/add-rules-state-column.sql (stop trailing só em memória)${X}`);
+      return;
+    }
+    throw err;
+  }
 }
 
 async function insertTrade(trade) {
@@ -328,6 +350,36 @@ async function executeSell({ rowId, adapter, strategy, log, state, exitResult, r
     log(`❌ Erro na venda: ${err.message}`);
     throw err;
   }
+
+  if (isGateDustResult(result)) {
+    const est = estimateDustClosePnl(state, result);
+    const capitalBefore = parseFloat(capital);
+    const pnlSign = est.pnlUsdt >= 0 ? '+' : '';
+
+    await insertTrade({
+      symbol, exchange: state.exchange, strategy_id: strategyId,
+      entry_time: state.buy_time, exit_time: new Date().toISOString(),
+      entry_price: buyPrice, exit_price: est.exitPrice,
+      qty: est.soldQty, usdt_in: parseFloat(state.buy_usdt), usdt_out: est.usdtOut,
+      pnl_usdt: est.pnlUsdt, pnl_pct: parseFloat(est.pnlPct.toFixed(2)),
+      capital_before: capitalBefore, capital_after: est.capitalAfter,
+      rsi_entry: parseFloat(state.rsi_entry ?? 0), rsi_exit: exitResult?.ma1 ?? 0,
+      exit_reason: 'DUST',
+    });
+
+    await saveState(rowId, {
+      capital: est.capitalAfter, phase: 'WATCHING',
+      buy_price: null, buy_qty: null, buy_usdt: null, buy_time: null, rsi_entry: null,
+    }, log);
+
+    log(`${'─'.repeat(60)}`);
+    log(`${Y}🟡 POSIÇÃO ENCERRADA (dust residual ${result.dustQty} ≈ $${result.dustUsdt.toFixed(4)})${X}`);
+    log(`   PnL estimado: ${pnlSign}${est.pnlUsdt.toFixed(4)} USDT (${pnlSign}${est.pnlPct.toFixed(2)}%)`);
+    log(`   Capital: ${capitalBefore.toFixed(4)} → ${est.capitalAfter.toFixed(4)} USDT`);
+    log(`${'─'.repeat(60)}`);
+    return { phase: 'WATCHING' };
+  }
+
   const { soldQty, usdtOut, exitPrice } = result;
   const capitalBefore = parseFloat(capital);
   const pnlUsdt       = usdtOut - parseFloat(state.buy_usdt);
@@ -349,8 +401,7 @@ async function executeSell({ rowId, adapter, strategy, log, state, exitResult, r
   await saveState(rowId, {
     capital: capitalAfter, phase: 'WATCHING',
     buy_price: null, buy_qty: null, buy_usdt: null, buy_time: null, rsi_entry: null,
-    rules_state: null,
-  });
+  }, log);
 
   log(`${'─'.repeat(60)}`);
   log(`${R}🔴 VENDA EXECUTADA${X}`);
@@ -375,8 +426,9 @@ async function tick(rowId, adapter, strategy, log, session) {
   const state = rows?.[0];
   if (!state) return { phase: 'WATCHING' };
 
-  const { phase, capital, symbol, strategy_id: strategyId } = state;
+  const { capital, symbol, strategy_id: strategyId } = state;
   const buyPrice = state.buy_price ? parseFloat(state.buy_price) : null;
+  const phase = session.phase ?? state.phase;
 
   // ── WATCHING ──────────────────────────────────────────────────────────────
   if (phase === 'WATCHING') {
@@ -401,12 +453,15 @@ async function tick(rowId, adapter, strategy, log, session) {
 
     const { filledQty, quoteQty, avgPrice } = result;
     const initialFloor = computeStopLossFloor(avgPrice, avgPrice, config.stopLoss);
+    const buyTime = new Date().toISOString();
+    session.phase = 'BOUGHT';
+    session.rulesState = { stopPeakPrice: avgPrice, stopFloor: initialFloor };
     await saveState(rowId, {
       phase: 'BOUGHT', buy_price: avgPrice, buy_qty: filledQty,
-      buy_usdt: quoteQty, buy_time: new Date().toISOString(),
+      buy_usdt: quoteQty, buy_time: buyTime,
       rsi_entry: entryCheck.ma1,
       rules_state: { stopPeakPrice: avgPrice, stopFloor: initialFloor },
-    });
+    }, log);
 
     log(`${'─'.repeat(60)}`);
     log(`${G}🟢 COMPRA EXECUTADA${X}`);
@@ -418,7 +473,7 @@ async function tick(rowId, adapter, strategy, log, session) {
 
   // ── BOUGHT ────────────────────────────────────────────────────────────────
   if (phase === 'BOUGHT') {
-    const rulesState = parseRulesState(state);
+    const rulesState = { ...parseRulesState(state), ...(session.rulesState ?? {}) };
     const storedPeak = rulesState.stopPeakPrice != null
       ? parseFloat(rulesState.stopPeakPrice)
       : buyPrice;
@@ -429,7 +484,8 @@ async function tick(rowId, adapter, strategy, log, session) {
       : computeStopLossFloor(buyPrice, storedPeak, config.stopLoss);
 
     if (peakPrice > storedPeak + 1e-12 || Math.abs((stopFloor ?? 0) - (prevFloor ?? 0)) > 1e-12) {
-      await saveState(rowId, { rules_state: { stopPeakPrice: peakPrice, stopFloor } });
+      session.rulesState = { stopPeakPrice: peakPrice, stopFloor };
+      await saveState(rowId, { rules_state: session.rulesState }, log);
       if (stopFloor != null && stopFloor > prevFloor + 1e-12) {
         log(`📈 Stop trailing: pico ${peakPrice.toFixed(6)} → piso ${stopFloor.toFixed(6)}`);
       }
@@ -442,8 +498,10 @@ async function tick(rowId, adapter, strategy, log, session) {
       await executeSell({
         rowId, adapter, strategy, log, state, exitResult,
       });
+      session.phase = 'WATCHING';
+      session.rulesState = null;
     } catch {
-      return { phase };
+      return { phase: 'BOUGHT' };
     }
     return { phase: 'WATCHING' };
   }
@@ -475,7 +533,7 @@ async function startSymbol(row, color) {
   };
 
   let lastResult = { phase: row.phase };
-  const session  = { volCache: null };
+  const session  = { volCache: null, phase: row.phase === 'BOUGHT' ? 'BOUGHT' : null, rulesState: null };
   let volIv;
 
   const stop = async () => {
@@ -522,7 +580,9 @@ async function startSymbol(row, color) {
     if (ctx.stopped) return;
     try {
       lastResult = await tick(ctx.rowId, adapter, ctx.strategy, log, session);
-    } catch { /* silencioso — só compra/venda no console */ }
+    } catch (err) {
+      log(`❌ Tick error: ${err.message}`);
+    }
     schedule();
   };
 

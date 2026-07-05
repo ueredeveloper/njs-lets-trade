@@ -19,11 +19,12 @@ async function getGatePairMeta(pair) {
       amountPrecision: Number.isFinite(data?.amount_precision) ? data.amount_precision : 8,
       pricePrecision:  Number.isFinite(data?.precision) ? data.precision : 8,
       minBaseAmount:   parseFloat(data?.min_base_amount || 0),
+      minQuoteAmount:  parseFloat(data?.min_quote_amount || data?.min_quote || 3),
     };
     pairMetaCache.set(pair, meta);
     return meta;
   } catch {
-    const fallback = { amountPrecision: 8, pricePrecision: 8, minBaseAmount: 0 };
+    const fallback = { amountPrecision: 8, pricePrecision: 8, minBaseAmount: 0, minQuoteAmount: 3 };
     pairMetaCache.set(pair, fallback);
     return fallback;
   }
@@ -49,6 +50,41 @@ function resolveGateSellAggressive(config, volumeUsdt, minVolumeUsdt = 1_000_000
   if (volumeUsdt == null) return true;
   const min = config?.minVolumeUsdt ?? minVolumeUsdt;
   return volumeUsdt < min;
+}
+
+function isGateMinOrderError(err) {
+  const msg = String(err?.message || err);
+  return /too small|minimum is/i.test(msg);
+}
+
+async function fetchGateBidPrice(pair, meta) {
+  const ticker = await fetch(`${GATE_PUBLIC_BASE}/spot/tickers?currency_pair=${pair}`).then(r => r.json());
+  const bidRaw = parseFloat(ticker[0]?.highest_bid || ticker[0]?.last || 0);
+  if (bidRaw <= 0) return null;
+  return parseFloat(formatGatePrice(bidRaw, meta.pricePrecision) || bidRaw);
+}
+
+async function detectGateDust(pair, amountStr, meta) {
+  const price = await fetchGateBidPrice(pair, meta);
+  if (price == null) return null;
+  const dustQty  = parseFloat(amountStr);
+  const dustUsdt = dustQty * price;
+  if (dustUsdt >= meta.minQuoteAmount) return null;
+  return { dust: true, dustQty, dustUsdt, exitPrice: price };
+}
+
+function estimateDustClosePnl(state, dustResult) {
+  const buyUsdt  = parseFloat(state.buy_usdt);
+  const buyQty   = parseFloat(state.buy_qty);
+  const { dustQty, dustUsdt, exitPrice } = dustResult;
+  const soldQty          = Math.max(0, buyQty - dustQty);
+  const estimatedUsdtOut   = soldQty * exitPrice + dustUsdt;
+  const pnlUsdt            = estimatedUsdtOut - buyUsdt;
+  const capitalBefore      = parseFloat(state.capital);
+  const pnlPct             = capitalBefore > 0 ? (pnlUsdt / capitalBefore) * 100 : 0;
+  return {
+    soldQty, usdtOut: estimatedUsdtOut, exitPrice, pnlUsdt, pnlPct, capitalAfter: capitalBefore + pnlUsdt,
+  };
 }
 
 function parseFilledOrder(filled, fallbackPrice = 0) {
@@ -100,9 +136,7 @@ async function gateMarketSell(deps, pair, qty, log, { aggressive = true, fmtPric
   async function trySell(amountStr) {
     if (aggressive) {
       try {
-        const ticker = await fetch(`${GATE_PUBLIC_BASE}/spot/tickers?currency_pair=${pair}`).then(r => r.json());
-        const bidRaw = parseFloat(ticker[0]?.highest_bid || ticker[0]?.last);
-        const bid    = bidRaw > 0 ? formatGatePrice(bidRaw, meta.pricePrecision) : null;
+        const bid = await fetchGateBidPrice(pair, meta);
         if (bid) {
           log?.(`📉 Venda IOC no bid $${fmtPrice(bid)}`);
           const ioc = await postGateSellOrder(gateReq, pair, {
@@ -111,38 +145,85 @@ async function gateMarketSell(deps, pair, qty, log, { aggressive = true, fmtPric
           if (ioc.soldQty > 0) return ioc;
           log?.(`⚠️  IOC zero — tentando market`);
         }
-      } catch (err) { log?.(`⚠️  IOC falhou (${err.message}) — tentando market`); }
+      } catch (err) {
+        if (isGateMinOrderError(err)) throw err;
+        log?.(`⚠️  IOC falhou (${err.message}) — tentando market`);
+      }
     }
 
-    const market = await postGateSellOrder(gateReq, pair, { type: 'market', amountStr });
-    if (market.soldQty > 0) return market;
-
-    // Alguns pares rejeitam market+ioc — tenta sem time_in_force
     try {
-      const order = await gateReq('POST', '/spot/orders', {
-        currency_pair: pair, side: 'sell', type: 'market', amount: amountStr,
-      });
-      await new Promise(r => setTimeout(r, 2000));
-      const filled = await gateReq('GET', `/spot/orders/${order.id}`, { currency_pair: pair });
-      const retry  = parseFilledOrder(filled);
-      if (retry.soldQty > 0) return retry;
-    } catch {}
+      const market = await postGateSellOrder(gateReq, pair, { type: 'market', amountStr });
+      if (market.soldQty > 0) return market;
 
-    return market;
+      // Alguns pares rejeitam market+ioc — tenta sem time_in_force
+      try {
+        const order = await gateReq('POST', '/spot/orders', {
+          currency_pair: pair, side: 'sell', type: 'market', amount: amountStr,
+        });
+        await new Promise(r => setTimeout(r, 2000));
+        const filled = await gateReq('GET', `/spot/orders/${order.id}`, { currency_pair: pair });
+        const retry  = parseFilledOrder(filled);
+        if (retry.soldQty > 0) return retry;
+      } catch (inner) {
+        if (isGateMinOrderError(inner)) throw inner;
+      }
+
+      return market;
+    } catch (err) {
+      if (isGateMinOrderError(err)) throw err;
+      throw err;
+    }
   }
 
   let amountStr = await resolveSellAmount(qty);
-  let result    = await trySell(amountStr);
+  const dustEarly = await detectGateDust(pair, amountStr, meta);
+  if (dustEarly) {
+    log?.(`⚠️  Saldo residual ${dustEarly.dustQty} (~$${dustEarly.dustUsdt.toFixed(4)}) abaixo do mínimo Gate (${meta.minQuoteAmount} USDT) — posição encerrada como dust`);
+    return { soldQty: 0, usdtOut: 0, exitPrice: dustEarly.exitPrice, ...dustEarly };
+  }
+
+  let result;
+  try {
+    result = await trySell(amountStr);
+  } catch (err) {
+    if (isGateMinOrderError(err)) {
+      const dustLate = await detectGateDust(pair, amountStr, meta);
+      if (dustLate) {
+        log?.(`⚠️  Ordem rejeitada (mínimo ${meta.minQuoteAmount} USDT) — saldo residual ${dustLate.dustQty} tratado como dust`);
+        return { soldQty: 0, usdtOut: 0, exitPrice: dustLate.exitPrice, ...dustLate };
+      }
+    }
+    throw err;
+  }
   if (result.soldQty > 0) return result;
 
   // Retry com saldo atualizado (pode ter mudado após arredondamento ou ordem parcial)
   log?.(`⚠️  Venda não preenchida — retentando com saldo atual`);
   amountStr = await resolveSellAmount(qty);
-  result    = await trySell(amountStr);
+  const dustRetry = await detectGateDust(pair, amountStr, meta);
+  if (dustRetry) {
+    log?.(`⚠️  Saldo residual ${dustRetry.dustQty} (~$${dustRetry.dustUsdt.toFixed(4)}) abaixo do mínimo Gate (${meta.minQuoteAmount} USDT) — posição encerrada como dust`);
+    return { soldQty: 0, usdtOut: 0, exitPrice: dustRetry.exitPrice, ...dustRetry };
+  }
+  try {
+    result = await trySell(amountStr);
+  } catch (err) {
+    if (isGateMinOrderError(err)) {
+      const dustLate = await detectGateDust(pair, amountStr, meta);
+      if (dustLate) {
+        log?.(`⚠️  Ordem rejeitada (mínimo ${meta.minQuoteAmount} USDT) — saldo residual ${dustLate.dustQty} tratado como dust`);
+        return { soldQty: 0, usdtOut: 0, exitPrice: dustLate.exitPrice, ...dustLate };
+      }
+    }
+    throw err;
+  }
   if (result.soldQty <= 0) {
     throw new Error('Gate.io: venda não preenchida após retentativa');
   }
   return result;
 }
 
-module.exports = { gateMarketSell, resolveGateSellAggressive, floorGateAmount, getGatePairMeta };
+module.exports = {
+  gateMarketSell, resolveGateSellAggressive, floorGateAmount, getGatePairMeta,
+  isGateMinOrderError, isGateDustResult: (r) => r?.dust === true, estimateDustClosePnl,
+};

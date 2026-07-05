@@ -446,11 +446,25 @@ async function syncBotState({ symbol, exchange, strategy_id, capital, trade_conf
     if (error) console.warn('[supabase] syncBotState disable:', error.message);
     return;
   }
+  const { data: existing } = await supabase
+    .from('rsi_multi_bot_state')
+    .select('id')
+    .eq('symbol', symbol)
+    .eq('strategy_id', strategy_id)
+    .maybeSingle();
   const row = {
     symbol, exchange, strategy_id, initial_capital: capital, capital, trade_config,
   };
-  const { error } = await supabase.from('rsi_multi_bot_state').upsert(row, { onConflict: 'symbol,strategy_id' });
-  if (error) console.warn('[supabase] syncBotState:', error.message);
+  if (existing?.id) {
+    const { error } = await supabase
+      .from('rsi_multi_bot_state')
+      .update({ exchange, capital, trade_config })
+      .eq('id', existing.id);
+    if (error) console.warn('[supabase] syncBotState update:', error.message);
+    return;
+  }
+  const { error } = await supabase.from('rsi_multi_bot_state').insert({ ...row, phase: 'WATCHING' });
+  if (error) console.warn('[supabase] syncBotState insert:', error.message);
 }
 
 async function enrichMultitradeEntriesWithState(entries) {

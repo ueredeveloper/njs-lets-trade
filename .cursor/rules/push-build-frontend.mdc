@@ -1,29 +1,59 @@
 ---
-description: Antes de push, rebuild do frontend e commit do dist para Termux
+description: Antes de push, auditar todas as mudanças (todos os chats), build frontend e commit do dist
 alwaysApply: true
 ---
 
-# Push — build do frontend antes
+# Push — auditar tudo + build do frontend
 
-Quando o usuário pedir **push**, **faça o push**, ou equivalente, execute **sempre** este fluxo **antes** de `git push`:
+Quando o usuário pedir **push**, **faça o push**, ou equivalente, execute **sempre** este fluxo completo — **não** limitar a revisão ao chat atual.
+
+## 1. Auditar modificações de todos os chats
+
+Antes de qualquer commit ou push, levantar **todo** o estado do repositório:
+
+```bash
+git status
+git diff
+git diff --staged
+git log --oneline -10
+```
+
+Além do git, consultar transcrições recentes em `agent-transcripts/` (outros chats do Cursor) para identificar alterações feitas fora desta conversa. Cruzar com `git status` e garantir que nada relevante ficou de fora.
+
+**Apresentar ao usuário** um resumo curto do que será enviado:
+- arquivos modificados / não rastreados (agrupados por área: frontend, backend, supabase, etc.)
+- commits locais ainda não enviados (`ahead` do remote)
+- mudanças pendentes de commit (se houver)
+
+Se houver alterações não commitadas que pareçam intencionais (de qualquer chat), **perguntar** se devem entrar no push ou avisar antes de prosseguir — não fazer push “só do que este chat viu”.
+
+**Não versionar** arquivos de runtime/dados locais (`backend/data/bot/`, `backend/data/candlestick/`, `.env`, etc.) salvo pedido explícito.
+
+## 2. Build e commit do frontend (Termux)
 
 ```bash
 npm run build:frontend
 git add frontend-react/dist
 git commit -m "build frontend"
-git push
 ```
+
+Só commitar dist se houver mudanças reais (sem commit vazio).
+
+## 3. Demais commits e push
+
+4. Outros commits pendentes, se o usuário pediu incluir alterações (seguir protocolo git do usuário)
+5. `git push`
 
 ## Ordem obrigatória
 
-1. `npm run build:frontend` — gera `frontend-react/dist/` atualizado para o Termux
-2. `git add frontend-react/dist`
-3. `git commit -m "build frontend"` — só se houver mudanças no dist (não criar commit vazio)
-4. Demais commits pendentes, se o usuário pediu incluir outras alterações (seguir protocolo git do usuário)
+1. Auditar (git + transcripts) e resumir para o usuário
+2. `npm run build:frontend`
+3. `git add frontend-react/dist` + commit `"build frontend"` (se aplicável)
+4. Commits adicionais conforme solicitado
 5. `git push`
 
 ## Notas
 
-- No Termux o app usa o bundle versionado; sem este passo o pull não traz UI atualizada.
+- No Termux o app usa o bundle versionado; sem build o pull não traz UI atualizada.
 - No Windows (PowerShell), encadear com `;` se necessário, não `&&` em shells antigas.
 - Se `build:frontend` falhar (ex.: Rollup no Windows), corrigir ou avisar o usuário — **não** fazer push sem dist válido.
