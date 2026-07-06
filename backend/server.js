@@ -24,7 +24,7 @@ const {
   fetchSMA, fetchRSI, fetchVWAP, fetch24HsVolume, fetchMarketCapFilter, fetchStablecoins, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter,
   fetchRsiOversoldRecovery, fetchReloadCandles,
   fetchGateCurrencies, fetchGatePrefetch, fetchBinanceTrades, fetchGateTrades,
-  fetchActiveTrades, fetchTradeFavorites, stgBotStatus, multitradeService } = require('./services');
+  fetchActiveTrades, fetchTradeFavorites, stgBotStatus, multitradeService, fetchMarketHighlights } = require('./services');
 const supabaseService = require('./services/supabaseService');
 
 const app = express();
@@ -41,6 +41,7 @@ app.use('/services', fetchSMA);
 app.use('/services', fetchRSI);
 app.use('/services', fetchVWAP);
 app.use('/services', fetch24HsVolume)
+app.use('/services', fetchMarketHighlights)
 app.use('/services', fetchMarketCapFilter)
 app.use('/services', fetchStablecoins)
 app.use('/services', fetchIndicatorSearch)

@@ -123,6 +123,14 @@ function getFilterDescription(name, t) {
     if (type === 'Trade')   return 'Trade Now';
     if (type === 'Ativos')  return 'Trades Ativos';
     if (type === 'MA-Cross') return 'MA-Cross';
+    if (type === 'Alta') {
+      if (parts[2] === 'Binance') return t('filter.fav_gainers_binance');
+      if (parts[2] === 'Gate')    return t('filter.fav_gainers_gate');
+    }
+    if (type === 'Novas') {
+      if (parts[2] === 'Binance') return t('filter.fav_new_binance');
+      if (parts[2] === 'Gate')    return t('filter.fav_new_gate');
+    }
     return `Favoritos: ${type}`;
   }
 
@@ -228,11 +236,10 @@ function getFilterDescription(name, t) {
   return name;
 }
 
-export default function FilterTabs({ onSelectFilter }) {
-  const { filters, joinFilters, removeFilters, clearAllFilters } = useCurrency();
+export default function FilterTabs({ activeFilter, onSelectFilter }) {
+  const { filters, joinFilters, removeFilters, clearAllFilters, ensureMarketHighlights, clearFavoriteView } = useCurrency();
   const { t } = useI18n();
   const [checked, setChecked] = useState(new Set());
-  const [activeFilter, setActiveFilter] = useState(null);
   const [flashing, setFlashing] = useState(new Set());
   const [searchQuery, setSearchQuery] = useState('');
   const prevFilterNamesRef = useRef(null); // null = primeira renderização ainda não registrada
@@ -294,15 +301,26 @@ export default function FilterTabs({ onSelectFilter }) {
     });
   }
 
-  function handleClick(name) {
-    if (activeFilter === name) { setActiveFilter(null); onSelectFilter(null); return; }
-    setActiveFilter(name);
-    onSelectFilter(name);
+  async function handleClick(name) {
+    const isHighlight = name.startsWith('Favoritos|Alta|') || name.startsWith('Favoritos|Novas|');
+    if (isHighlight && !filters.some((f) => f.name === name)) {
+      try {
+        await ensureMarketHighlights();
+      } catch (err) {
+        console.warn('[FilterTabs] market-highlights:', err.message);
+      }
+    }
+    onSelectFilter(activeFilter === name ? null : name);
   }
 
   function handleJoin() { joinFilters(Array.from(checked)); setChecked(new Set()); }
   function handleRemove() { removeFilters(Array.from(checked)); setChecked(new Set()); }
-  function handleClearAll() { clearAllFilters(); setChecked(new Set()); setActiveFilter(null); onSelectFilter(null); }
+  function handleClearAll() {
+    clearAllFilters();
+    setChecked(new Set());
+    clearFavoriteView();
+    onSelectFilter(null);
+  }
 
   const btnBase = 'p-1 rounded text-p5 transition-colors hover:text-white hover:bg-p4';
 

@@ -1,4 +1,5 @@
 import { useMemo, useState, useCallback, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useCurrency } from '../contexts/CurrencyContext';
 import SearchInput from './SearchInput';
 import {
@@ -35,6 +36,15 @@ const GATE_COLOR    = '#0068ff';
 const BINANCE_COLOR = '#fcd535';
 const MT_COLOR      = '#22d3ee';
 const TRADE_COLOR   = '#00c076';
+const ALTA_COLOR    = '#f97316';
+const NOVAS_COLOR   = '#a78bfa';
+
+const HIGHLIGHT_FILTERS = {
+  ALTA_BINANCE: 'Favoritos|Alta|Binance',
+  ALTA_GATE:    'Favoritos|Alta|Gate',
+  NOVAS_BINANCE:'Favoritos|Novas|Binance',
+  NOVAS_GATE:   'Favoritos|Novas|Gate',
+};
 
 function isMaCrossEntryLocal(e) {
   return isMaCrossEntry(e);
@@ -62,6 +72,19 @@ function formatVolume(vol) {
   return vol.toFixed(0);
 }
 
+function fmtChangePct(pct) {
+  if (pct == null || !Number.isFinite(pct)) return null;
+  const sign = pct >= 0 ? '+' : '';
+  return `${sign}${pct.toFixed(2)}%`;
+}
+
+function fmtListedAt(ms) {
+  if (!ms) return null;
+  return new Date(ms).toLocaleDateString('pt-BR', {
+    day: '2-digit', month: '2-digit', year: '2-digit',
+  });
+}
+
 // Remove a quote do final do símbolo: "BTCUSDT" → "BTC", "BNBUSDT" → "BNB"
 function splitSymbol(symbol) {
   if (symbol.endsWith('USDT')) return { base: symbol.slice(0, -4), quote: 'USDT' };
@@ -71,20 +94,80 @@ function splitSymbol(symbol) {
 }
 
 
-function FavButton({ active, color, label, text, onClick }) {
+const FAV_LOG = '[Favoritos]';
+
+function FavButton({ active, color, label, text, symbol, kind, onClick, tipKey }) {
+  const { t } = useI18n();
+  const btnKind = kind ?? label;
+  const title = tipKey
+    ? t(active ? `fav.row.${tipKey}_${tipKey === 'macross' ? 'edit' : 'remove'}` : `fav.row.${tipKey}_add`)
+    : `${active ? 'Remover de' : 'Adicionar a'} favoritos ${label}`;
   return (
     <button
-      onClick={onClick}
-      title={`${active ? 'Remover de' : 'Adicionar a'} favoritos ${label}`}
-      className="flex items-center justify-center w-5 h-5 rounded text-[9px] font-bold transition-all hover:scale-110"
+      type="button"
+      onPointerDown={(e) => {
+        e.stopPropagation();
+        console.log(`${FAV_LOG} pointerdown`, { kind: btnKind, symbol, active });
+      }}
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        console.log(`${FAV_LOG} clique`, { kind: btnKind, symbol, active });
+        try {
+          const result = onClick?.(e);
+          if (result?.then) {
+            result.catch((err) => {
+              console.error(`${FAV_LOG} erro async`, { kind: btnKind, symbol }, err);
+            });
+          }
+        } catch (err) {
+          console.error(`${FAV_LOG} erro sync`, { kind: btnKind, symbol }, err);
+        }
+      }}
+      title={title}
+      className="flex items-center justify-center min-w-[26px] min-h-[26px] w-[26px] h-[26px] rounded text-[10px] font-bold transition-colors touch-manipulation active:scale-95 shrink-0"
       style={{
         background: active ? color : 'transparent',
         color: active ? '#fff' : color,
-        border: `1px solid ${color}`,
-        opacity: active ? 1 : 0.45,
+        border: `1.5px solid ${color}`,
+        opacity: active ? 1 : 0.55,
       }}
     >
       {text ?? label[0]}
+    </button>
+  );
+}
+
+function ToolbarBtn({ active, color, label, count, onClick, title, id }) {
+  const filled = active;
+  return (
+    <button
+      type="button"
+      id={id}
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        console.log(`${FAV_LOG} toolbar`, { label, active: filled, count });
+        try {
+          onClick?.();
+        } catch (err) {
+          console.error(`${FAV_LOG} toolbar erro`, { label }, err);
+        }
+      }}
+      title={title}
+      className="flex items-center shrink-0 touch-manipulation active:scale-95 transition-transform"
+    >
+      <span
+        className="text-[11px] font-bold px-2 py-1 rounded min-h-[28px] flex items-center"
+        style={{
+          background: filled ? color : 'rgba(255,255,255,0.06)',
+          color: filled ? (color === BINANCE_COLOR ? '#000' : '#fff') : color,
+          border: `1.5px solid ${color}`,
+          boxShadow: filled ? `0 0 0 1px ${color}44` : 'none',
+        }}
+      >
+        {label}{count > 0 ? ` ${count}` : ''}
+      </span>
     </button>
   );
 }
@@ -103,6 +186,26 @@ function resolveFavorites(favSet, binanceList, gateAll) {
     else if (b)  result.push(b); // volume 0 mas existe — inclui mesmo assim
   }
   return result;
+}
+
+function ModalPortal({ children }) {
+  if (typeof document === 'undefined') return null;
+  return createPortal(
+    <div className="fixed inset-0 z-[10000]">{children}</div>,
+    document.body,
+  );
+}
+
+function needsGateFallback(activeFilterName) {
+  if (!activeFilterName) return false;
+  return activeFilterName.startsWith('Mercado|')
+    || activeFilterName.startsWith('Favoritos|Alta|Gate')
+    || activeFilterName.startsWith('Favoritos|Novas|Gate')
+    || activeFilterName === 'Favoritos|Gate';
+}
+
+function isHighlightFilterName(name) {
+  return name?.startsWith('Favoritos|Alta|') || name?.startsWith('Favoritos|Novas|');
 }
 
 function macrossLiveAgeMin(meta, nowMs = Date.now(), scannedAt) {
@@ -131,7 +234,7 @@ function formatMacrossBadge(meta, t, nowMs = Date.now(), scannedAt, interval) {
   return null;
 }
 
-export default function CurrencyTable({ activeFilter, showFavorites, setShowFavorites, onSelectCurrency }) {
+export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCurrency }) {
   const {
     currencies, findFilter, selectedQuote,     selectedChart, setSelectedChart, setChartZoom, setChartTradeMarkers,
     setChartViewSource, clearMultitradeChartView, chartInterval, setChartInterval,
@@ -141,6 +244,8 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
     setTradePurchases, setAllTrades,
     multitradeFavorites, removeMultitradeEntry, saveMultitradeSymbol, updateMultitradeBotState,
     filterVisibleCurrencies, isVisibleSymbol, addFilter,
+    ensureMarketHighlights, marketHighlightsLoading,
+    favoriteView, toggleFavoriteView, clearFavoriteView,
   } = useCurrency();
   const { t, formatPrice } = useI18n();
   const [loadingSymbol, setLoadingSymbol]       = useState(null);
@@ -176,8 +281,15 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
     [gateFavorites, binanceFavorites],
   );
 
-  const isMacrossFavView = showFavorites === 'macross';
-  const isTradesFavView = showFavorites === 'trades';
+  const isMacrossFavView = favoriteView === 'macross';
+  const isTradesFavView = favoriteView === 'trades';
+  const isAltaFilter = activeFilter?.startsWith('Favoritos|Alta|') ?? false;
+  const isNovasFilter = activeFilter?.startsWith('Favoritos|Novas|') ?? false;
+  const tableColCount = isAltaFilter ? 6 : 5;
+  const highlightMeta = useMemo(() => {
+    if (!activeFilter || favoriteView) return null;
+    return findFilter(activeFilter)?.meta ?? null;
+  }, [activeFilter, favoriteView, findFilter]);
   const {
     status: macrossFavStatus,
     loading: macrossFavLoading,
@@ -190,11 +302,11 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
   } = useTradeFavoritesSummary(tradeExtraSymbols, isTradesFavView);
 
   const activeMacrossFilter = useMemo(() => {
-    if (!activeFilter || showFavorites) return null;
+    if (!activeFilter || favoriteView) return null;
     const f = findFilter(activeFilter);
     if (!f || !parseMaCrossFilterName(f.name)) return null;
     return f;
-  }, [activeFilter, showFavorites, findFilter]);
+  }, [activeFilter, favoriteView, findFilter]);
 
   const macrossFilterParams = useMemo(
     () => (activeMacrossFilter ? parseMaCrossFilterName(activeMacrossFilter.name) : null),
@@ -234,16 +346,16 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
 
     let list;
 
-    if (showFavorites === 'gate') {
+    if (favoriteView === 'gate') {
       list = resolveFavorites(gateFavorites, currencies.list, gateAll);
-    } else if (showFavorites === 'binance') {
+    } else if (favoriteView === 'binance') {
       list = currencies.list.filter((c) => binanceFavorites.has(c.symbol));
-    } else if (showFavorites === 'macross') {
+    } else if (favoriteView === 'macross') {
       const mtSymbols = new Set(
         multitradeFavorites.filter(e => e.enabled !== false && isMaCrossEntry(e)).map(e => e.symbol),
       );
       list = resolveFavorites(mtSymbols, currencies.list, gateAll);
-    } else if (showFavorites === 'trades') {
+    } else if (favoriteView === 'trades') {
       const filtered = filterTradeFavorites(tradeFavSymbols, tradeFavStatus, tradeFavSort);
       list = resolveFavorites(new Set(filtered), currencies.list, gateAll);
       const have = new Set(list.map(c => c.symbol));
@@ -253,16 +365,23 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
     } else if (activeFilter) {
       const filter = findFilter(activeFilter);
       if (filter) {
-        const isMarket = activeFilter.startsWith('Mercado|');
-        list = filter.list
+        const useGateFallback = needsGateFallback(activeFilter);
+        const mapped = filter.list
           .filter((sym) => isVisibleSymbol(sym))
           .map((sym) => {
             const binance = currencies.list.find((c) => c.symbol === sym);
             if (binance) return binance;
-            if (isMarket && gateAll) return gateAll.find((c) => c.symbol === sym) ?? null;
+            if (useGateFallback && gateAll) return gateAll.find((c) => c.symbol === sym) ?? null;
             return null;
           })
           .filter(Boolean);
+        const have = new Set(mapped.map((c) => c.symbol));
+        list = mapped;
+        for (const sym of filter.list) {
+          if (!have.has(sym) && isVisibleSymbol(sym)) {
+            list.push({ symbol: sym, price: 0, volume: 0 });
+          }
+        }
       }
     }
 
@@ -278,6 +397,16 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
     }
 
     list = list.slice().sort((a, b) => {
+      if (isAltaFilter && highlightMeta?.changePct) {
+        const ca = highlightMeta.changePct[a.symbol] ?? -Infinity;
+        const cb = highlightMeta.changePct[b.symbol] ?? -Infinity;
+        return cb - ca;
+      }
+      if (isNovasFilter && highlightMeta?.listedAt) {
+        const ta = highlightMeta.listedAt[a.symbol] ?? 0;
+        const tb = highlightMeta.listedAt[b.symbol] ?? 0;
+        return tb - ta;
+      }
       if (isMacrossFavView && !macrossSortByVolume) {
         return compareMacrossFavorites(a, b, macrossFavSort, {
           status: macrossFavStatus,
@@ -293,7 +422,7 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
     });
 
     return list;
-  }, [currencies, activeFilter, selectedQuote, findFilter, search, showFavorites, gateFavorites, binanceFavorites, multitradeFavorites, sortVolume, gateAll, filterVisibleCurrencies, isVisibleSymbol, activeMacrossFilter, macrossScannedAt, macrossTick, isMacrossFavView, macrossFavSort, macrossSortByVolume, macrossFavStatus, macrossEntriesBySymbol, isTradesFavView, tradeFavSort, tradeSortByVolume, tradeFavSymbols, tradeFavStatus]);
+  }, [currencies, activeFilter, selectedQuote, findFilter, search, favoriteView, gateFavorites, binanceFavorites, multitradeFavorites, sortVolume, gateAll, filterVisibleCurrencies, isVisibleSymbol, activeMacrossFilter, macrossScannedAt, macrossTick, isMacrossFavView, macrossFavSort, macrossSortByVolume, macrossFavStatus, macrossEntriesBySymbol, isTradesFavView, tradeFavSort, tradeSortByVolume, tradeFavSymbols, tradeFavStatus, isAltaFilter, isNovasFilter, highlightMeta]);
 
   // Atualização em tempo real de filtros macross (cruzou há N min / prestes a cruzar)
   useEffect(() => {
@@ -384,17 +513,26 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
     return () => { cancelled = true; };
   }, [search, currencies.list, isVisibleSymbol]);
 
-  // Carrega moedas Gate.io quando necessário para favoritos ou filtros de mercado
+  // Pré-carrega Gate.io — necessário para favoritos G, MC, TX e filtros Gate
   useEffect(() => {
-    const needGate = showFavorites === 'gate' || showFavorites === 'macross' || showFavorites === 'trades'
-      || (activeFilter && activeFilter.startsWith('Mercado|'));
+    if (gateCacheRef.current) { setGateAll(gateCacheRef.current); return; }
+    fetchGateCurrencies().then((items) => {
+      gateCacheRef.current = items;
+      setGateAll(items);
+    }).catch(() => {});
+  }, []);
+
+  // Recarrega Gate quando filtros de mercado/favoritos Gate exigem fallback
+  useEffect(() => {
+    const needGate = favoriteView === 'gate' || favoriteView === 'macross' || favoriteView === 'trades'
+      || needsGateFallback(activeFilter);
     if (!needGate) return;
     if (gateCacheRef.current) { setGateAll(gateCacheRef.current); return; }
     fetchGateCurrencies().then((items) => {
       gateCacheRef.current = items;
       setGateAll(items);
     }).catch(() => {});
-  }, [showFavorites, activeFilter]);
+  }, [favoriteView, activeFilter]);
 
   async function handleSelect(item, source = null) {
     onSelectCurrency?.();
@@ -463,10 +601,30 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
     }
   }
 
-  function toggleShowFavorites(type) {
-    setShowFavorites((prev) => prev === type ? null : type);
+  function handleToggleFavoriteView(type) {
+    console.log(`${FAV_LOG} toggle view`, { type, prev: favoriteView });
+    toggleFavoriteView(type);
     setSearch('');
+    onSelectFilter?.(null);
   }
+
+  async function selectHighlightFilter(name) {
+    clearFavoriteView();
+    setSearch('');
+    const next = activeFilter === name ? null : name;
+    if (next && isHighlightFilterName(next) && !findFilter(next)) {
+      try {
+        await ensureMarketHighlights();
+      } catch (err) {
+        console.warn('[CurrencyTable] market-highlights:', err.message);
+      }
+    }
+    onSelectFilter?.(next);
+  }
+
+  const highlightLoading = marketHighlightsLoading
+    && isHighlightFilterName(activeFilter)
+    && !findFilter(activeFilter);
 
   const gateCount    = gateFavorites.size;
   const binanceCount = binanceFavorites.size;
@@ -491,6 +649,11 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
 
   const tradePnlSumLabel = formatTradePnlBadge(tradePnlSum);
 
+  const showMacrossSortSelect = isMacrossFavView && !macrossSortByVolume;
+  const showTradeSortSelect = isTradesFavView && !tradeSortByVolume;
+  const showFavSortHeader = showMacrossSortSelect || showTradeSortSelect;
+  const favColWidth = showFavSortHeader ? '10.5rem' : '7.5rem';
+
   return (
     <div className="flex flex-col h-full">
       {/* Barra de busca */}
@@ -503,118 +666,164 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
       </div>
 
       {/* Cabeçalho contador + filtros de favoritos */}
-      <div className="flex items-center justify-between px-3 py-1 border-b border-p2 shrink-0">
-        <span className="text-xs text-p5 opacity-50 uppercase tracking-wider">
-          Moedas
-          {macrossLive && (
-            <span className="ml-1.5 normal-case tracking-normal text-[10px] text-emerald-400/90">
-              {macrossRefreshing ? '⟳' : '●'} live
-            </span>
-          )}
-        </span>
-        <div className="flex items-center gap-2">
-          {isMacrossFavView && (
-            <MacrossFavSortSelect value={macrossFavSort} onChange={onMacrossFavSortChange} />
-          )}
-          {isMacrossFavView && macrossFavLoading && (
-            <span className="text-[9px] text-emerald-400/80">⟳</span>
-          )}
-          {isTradesFavView && (
-            <TradeFavSortSelect value={tradeFavSort} onChange={onTradeFavSortChange} />
-          )}
-          {isTradesFavView && tradeFavLoading && (
-            <span className="text-[9px] text-emerald-400/80">⟳</span>
-          )}
-          <span className="text-xs font-mono text-p4">{rows.length}</span>
+      <div className="flex flex-col gap-1 px-2 py-1 border-b border-p2 shrink-0">
+        <div className="flex items-center justify-between">
+          <span className="text-xs text-p5 opacity-50 uppercase tracking-wider shrink-0">
+            Moedas
+            {macrossLive && (
+              <span className="ml-1.5 normal-case tracking-normal text-[10px] text-emerald-400/90">
+                {macrossRefreshing ? '⟳' : '●'} live
+              </span>
+            )}
+          </span>
+          <span className="text-xs font-mono text-p4 shrink-0">
+            {highlightLoading && <span className="text-orange-400/80 mr-1">⟳</span>}
+            {rows.length}
+          </span>
+        </div>
 
-          {/* Filtro Trades (compras/vendas) */}
-          <button
+        <div className="flex gap-1.5 overflow-x-auto pb-0.5 -mx-1 px-1 scrollbar-thin touch-pan-x">
+          <ToolbarBtn
             id="currency-table-btn-filter-trades"
-            onClick={() => toggleShowFavorites('trades')}
-            title={showFavorites === 'trades' ? 'Ver todas as moedas' : `Trades (${tradeCount})`}
-            className="currency-table-btn-filter-trades flex items-center gap-1 px-1.5 py-0.5 rounded transition-all"
-            style={{ opacity: showFavorites === 'trades' ? 1 : 0.5 }}
-          >
-            <span
-              className="text-[10px] font-bold px-1 py-0.5 rounded"
-              style={{
-                background: showFavorites === 'trades' ? TRADE_COLOR : 'transparent',
-                color: showFavorites === 'trades' ? '#000' : TRADE_COLOR,
-                border: `1px solid ${TRADE_COLOR}`,
-              }}
-            >
-              TX{tradeCount > 0 ? ` ${tradeCount}` : ''}
-            </span>
-          </button>
-
-          {/* Filtro MA-Cross */}
-          <button
+            active={favoriteView === 'trades'}
+            color={TRADE_COLOR}
+            label="TX"
+            count={tradeCount}
+            title={favoriteView === 'trades' ? t('fav.toolbar.trades_active') : t('fav.toolbar.trades', tradeCount)}
+            onClick={() => handleToggleFavoriteView('trades')}
+          />
+          <ToolbarBtn
             id="currency-table-btn-filter-macross"
-            onClick={() => toggleShowFavorites('macross')}
-            title={showFavorites === 'macross' ? 'Ver todas as moedas' : `MA-Cross (${mtCount})`}
-            className="currency-table-btn-filter-macross flex items-center gap-1 px-1.5 py-0.5 rounded transition-all"
-            style={{ opacity: showFavorites === 'macross' ? 1 : 0.5 }}
-          >
-            <span
-              className="text-[10px] font-bold px-1 py-0.5 rounded"
-              style={{
-                background: showFavorites === 'macross' ? MT_COLOR : 'transparent',
-                color: showFavorites === 'macross' ? '#000' : MT_COLOR,
-                border: `1px solid ${MT_COLOR}`,
-              }}
-            >
-              MC{mtCount > 0 ? ` ${mtCount}` : ''}
-            </span>
-          </button>
-
-          {/* Filtro Gate */}
-          <button
-            onClick={() => toggleShowFavorites('gate')}
-            title={showFavorites === 'gate' ? 'Ver todas as moedas' : `Favoritos Gate (${gateCount})`}
-            className="flex items-center gap-1 px-1.5 py-0.5 rounded transition-all"
-            style={{ opacity: showFavorites === 'gate' ? 1 : 0.5 }}
-          >
-            <span
-              className="text-[10px] font-bold px-1 py-0.5 rounded"
-              style={{
-                background: showFavorites === 'gate' ? GATE_COLOR : 'transparent',
-                color: showFavorites === 'gate' ? '#fff' : GATE_COLOR,
-                border: `1px solid ${GATE_COLOR}`,
-              }}
-            >
-              G{gateCount > 0 ? ` ${gateCount}` : ''}
-            </span>
-          </button>
-
-          {/* Filtro Binance */}
-          <button
-            onClick={() => toggleShowFavorites('binance')}
-            title={showFavorites === 'binance' ? 'Ver todas as moedas' : `Favoritos Binance (${binanceCount})`}
-            className="flex items-center gap-1 px-1.5 py-0.5 rounded transition-all"
-            style={{ opacity: showFavorites === 'binance' ? 1 : 0.5 }}
-          >
-            <span
-              className="text-[10px] font-bold px-1 py-0.5 rounded"
-              style={{
-                background: showFavorites === 'binance' ? BINANCE_COLOR : 'transparent',
-                color: showFavorites === 'binance' ? '#000' : BINANCE_COLOR,
-                border: `1px solid ${BINANCE_COLOR}`,
-              }}
-            >
-              B{binanceCount > 0 ? ` ${binanceCount}` : ''}
-            </span>
-          </button>
+            active={favoriteView === 'macross'}
+            color={MT_COLOR}
+            label="MC"
+            count={mtCount}
+            title={favoriteView === 'macross' ? t('fav.toolbar.macross_active') : t('fav.toolbar.macross', mtCount)}
+            onClick={() => handleToggleFavoriteView('macross')}
+          />
+          <ToolbarBtn
+            active={favoriteView === 'gate'}
+            color={GATE_COLOR}
+            label="G"
+            count={gateCount}
+            title={favoriteView === 'gate' ? t('fav.toolbar.gate_active') : t('fav.toolbar.gate', gateCount)}
+            onClick={() => handleToggleFavoriteView('gate')}
+          />
+          <ToolbarBtn
+            active={favoriteView === 'binance'}
+            color={BINANCE_COLOR}
+            label="B"
+            count={binanceCount}
+            title={favoriteView === 'binance' ? t('fav.toolbar.binance_active') : t('fav.toolbar.binance', binanceCount)}
+            onClick={() => handleToggleFavoriteView('binance')}
+          />
+          <ToolbarBtn
+            active={activeFilter === HIGHLIGHT_FILTERS.ALTA_BINANCE}
+            color={ALTA_COLOR}
+            label="↑B"
+            count={0}
+            title={t('filter.fav_gainers_binance')}
+            onClick={() => selectHighlightFilter(HIGHLIGHT_FILTERS.ALTA_BINANCE)}
+          />
+          <ToolbarBtn
+            active={activeFilter === HIGHLIGHT_FILTERS.ALTA_GATE}
+            color={ALTA_COLOR}
+            label="↑G"
+            count={0}
+            title={t('filter.fav_gainers_gate')}
+            onClick={() => selectHighlightFilter(HIGHLIGHT_FILTERS.ALTA_GATE)}
+          />
+          <ToolbarBtn
+            active={activeFilter === HIGHLIGHT_FILTERS.NOVAS_BINANCE}
+            color={NOVAS_COLOR}
+            label="NB"
+            count={0}
+            title={t('filter.fav_new_binance')}
+            onClick={() => selectHighlightFilter(HIGHLIGHT_FILTERS.NOVAS_BINANCE)}
+          />
+          <ToolbarBtn
+            active={activeFilter === HIGHLIGHT_FILTERS.NOVAS_GATE}
+            color={NOVAS_COLOR}
+            label="NG"
+            count={0}
+            title={t('filter.fav_new_gate')}
+            onClick={() => selectHighlightFilter(HIGHLIGHT_FILTERS.NOVAS_GATE)}
+          />
         </div>
       </div>
 
       {/* Tabela */}
       <div className="flex-1 overflow-y-auto">
-        <table className="w-full text-xs">
+        <table className="w-full text-xs table-fixed">
+          <colgroup>
+            <col style={{ width: favColWidth }} />
+            <col />
+            <col style={{ width: '4.75rem' }} />
+            {isAltaFilter && <col style={{ width: '3.75rem' }} />}
+            <col style={{ width: '3.75rem' }} />
+            <col style={{ width: '1.5rem' }} />
+          </colgroup>
           <thead className="sticky top-0 z-10 bg-p1">
             <tr className="border-b border-p2">
-              <th className="w-12" />
+              <th
+                className="text-left px-1 py-1 align-middle"
+                style={{ width: favColWidth, minWidth: favColWidth }}
+                title={
+                  showMacrossSortSelect ? t('macross.sort.label')
+                    : showTradeSortSelect ? t('trades.sort.label')
+                    : undefined
+                }
+              >
+                {showMacrossSortSelect ? (
+                  <div className="flex items-center justify-start gap-0.5">
+                    {macrossFavLoading && (
+                      <span className="text-[9px] text-emerald-400/80 shrink-0">⟳</span>
+                    )}
+                    <MacrossFavSortSelect
+                      value={macrossFavSort}
+                      onChange={onMacrossFavSortChange}
+                      className="!h-7 shrink-0"
+                    />
+                    <button
+                      type="button"
+                      className="text-[8px] font-bold text-p5/45 hover:text-p5/80 px-0.5 shrink-0 touch-manipulation"
+                      title="Ordenar por volume 24h"
+                      onClick={(e) => { e.stopPropagation(); cycleSort(); }}
+                    >
+                      Vol
+                    </button>
+                  </div>
+                ) : showTradeSortSelect ? (
+                  <div className="flex items-center justify-start gap-0.5">
+                    {tradeFavLoading && (
+                      <span className="text-[9px] text-emerald-400/80 shrink-0">⟳</span>
+                    )}
+                    <TradeFavSortSelect
+                      value={tradeFavSort}
+                      onChange={onTradeFavSortChange}
+                      className="!h-7 shrink-0"
+                    />
+                    <button
+                      type="button"
+                      className="text-[8px] font-bold text-p5/45 hover:text-p5/80 px-0.5 shrink-0 touch-manipulation"
+                      title="Ordenar por volume 24h"
+                      onClick={(e) => { e.stopPropagation(); cycleSort(); }}
+                    >
+                      Vol
+                    </button>
+                  </div>
+                ) : null}
+              </th>
               <th className="text-left px-2 py-1.5 text-p5 opacity-50 font-normal uppercase tracking-wider">Par</th>
               <th className="text-right px-2 py-1.5 text-p5 opacity-50 font-normal uppercase tracking-wider">Preço</th>
+              {isAltaFilter && (
+                <th
+                  className="text-right px-2 py-1.5 text-p5 opacity-80 font-normal uppercase tracking-wider whitespace-nowrap"
+                  title={t('table.change_24h_tip')}
+                >
+                  {t('table.change_24h')}
+                </th>
+              )}
               <th
                 className={`text-right px-2 py-1.5 text-p5 font-normal uppercase tracking-wider cursor-pointer hover:opacity-90 select-none whitespace-nowrap ${
                   (isMacrossFavView && !macrossSortByVolume) || (isTradesFavView && !tradeSortByVolume)
@@ -622,9 +831,16 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
                     : 'opacity-80'
                 }`}
                 onClick={cycleSort}
-                title={isTradesFavView && !tradeSortByVolume ? 'Clique para ordenar por volume' : 'Ordenar por volume 24h'}
+                title={
+                  isAltaFilter ? 'Volume 24h'
+                    : isNovasFilter ? 'Volume 24h (data de listagem na coluna Par)'
+                    : isTradesFavView && !tradeSortByVolume ? 'Clique para ordenar por volume'
+                    : 'Ordenar por volume 24h'
+                }
               >
-                {isTradesFavView && !tradeSortByVolume
+                {isAltaFilter || isNovasFilter
+                  ? 'Vol'
+                  : isTradesFavView && !tradeSortByVolume
                   ? 'PnL'
                   : `Vol${(!isMacrossFavView || macrossSortByVolume) && (!isTradesFavView || tradeSortByVolume) ? (sortVolume === 'desc' ? ' ↓' : ' ↑') : ''}`}
               </th>
@@ -634,11 +850,30 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
           <tbody>
             {isTradesFavView && tradeFavLoading && rows.length === 0 && (
               <tr>
-                <td colSpan={5} className="py-3 text-center">
+                <td colSpan={tableColCount} className="py-3 text-center">
                   <div className="flex items-center justify-center gap-2 text-[11px] text-p5/50">
                     <div className="w-3 h-3 border border-p4 border-t-transparent rounded-full animate-spin" />
                     Carregando trades…
                   </div>
+                </td>
+              </tr>
+            )}
+
+            {highlightLoading && rows.length === 0 && (
+              <tr>
+                <td colSpan={tableColCount} className="py-3 text-center">
+                  <div className="flex items-center justify-center gap-2 text-[11px] text-p5/50">
+                    <div className="w-3 h-3 border border-p4 border-t-transparent rounded-full animate-spin" />
+                    Carregando destaques…
+                  </div>
+                </td>
+              </tr>
+            )}
+
+            {isMacrossFavView && !macrossFavLoading && rows.length === 0 && (
+              <tr>
+                <td colSpan={tableColCount} className="py-3 text-center text-[11px] text-p5/50">
+                  Nenhum favorito MA-Cross — clique em MC numa moeda para configurar.
                 </td>
               </tr>
             )}
@@ -653,6 +888,9 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
               const tradePnl   = tradeMeta ? tradePnlForSort(tradeMeta, tradeFavSort) : null;
               const tradePnlLabel = formatTradePnlBadge(tradePnl);
               const tradeBadge = tradeMeta ? formatTradeStatusBadge(tradeMeta, tradeFavSort, t) : null;
+              const changePct = highlightMeta?.changePct?.[item.symbol];
+              const listedAt = highlightMeta?.listedAt?.[item.symbol];
+              const highlightVol = highlightMeta?.volume24h?.[item.symbol] ?? item.volume;
 
               return (
                 <tr
@@ -668,13 +906,21 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
                       : 'hover:bg-p2/40 text-p5'
                   }`}
                 >
-                  <td className="pl-2">
-                    <div className="flex items-center gap-1">
-                      <FavButton active={isGate}    color={GATE_COLOR}    label="Gate"    onClick={(e) => { e.stopPropagation(); toggleGateFavorite(item.symbol); }} />
-                      <FavButton active={isBinance} color={BINANCE_COLOR} label="Binance" onClick={(e) => { e.stopPropagation(); toggleBinanceFavorite(item.symbol); }} />
-                      <FavButton active={isMT}      color={MT_COLOR}      label="MA-Cross" text="MC" onClick={(e) => { e.stopPropagation(); setMtModal({ symbol: item.symbol, exchange: isGate && !isBinance ? 'gate' : 'binance', entries: mtEntries }); }} />
+                  <td
+                    className="pl-1 pr-0 relative z-20"
+                    style={{ width: favColWidth, minWidth: favColWidth }}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <div className="flex flex-nowrap items-center gap-0.5">
+                      <FavButton tipKey="gate" kind="G" symbol={item.symbol} active={isGate}    color={GATE_COLOR}    label="Gate"    onClick={() => toggleGateFavorite(item.symbol)} />
+                      <FavButton tipKey="binance" kind="B" symbol={item.symbol} active={isBinance} color={BINANCE_COLOR} label="Binance" onClick={() => toggleBinanceFavorite(item.symbol)} />
+                      <FavButton tipKey="macross" kind="MC" symbol={item.symbol} active={isMT}      color={MT_COLOR}      label="MA-Cross" text="MC" onClick={() => {
+                        console.log(`${FAV_LOG} MC abrir modal`, { symbol: item.symbol, entries: mtEntries.length, isMT });
+                        setMtModal({ symbol: item.symbol, exchange: isGate && !isBinance ? 'gate' : 'binance', entries: mtEntries });
+                      }} />
                     </div>
                   </td>
+
                   <td className="px-2 py-1.5 font-mono font-semibold">
                     <div className="flex flex-col">
                       <span>{base}<span className="opacity-40 font-normal text-[10px]">/{quote}</span></span>
@@ -706,6 +952,11 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
                       {isTradesFavView && tradeBadge && (
                         <span className="text-[9px] font-normal text-emerald-400/90">{tradeBadge}</span>
                       )}
+                      {isNovasFilter && listedAt && (
+                        <span className="text-[9px] font-normal text-violet-300/90">
+                          {fmtListedAt(listedAt)}
+                        </span>
+                      )}
                       {(macrossMeta?.[item.symbol] || (isMacrossFavView && macrossFavStatus[item.symbol])) && (
                         <span className="text-[9px] font-bold text-emerald-400/90">
                           {macrossMeta?.[item.symbol]
@@ -720,6 +971,14 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
                       <span>{formatPrice(item.price)}</span>
                     </div>
                   </td>
+                  {isAltaFilter && (
+                    <td
+                      className="px-2 py-1.5 text-right font-mono text-[10px] font-semibold"
+                      style={{ color: changePct == null ? 'rgba(255,255,255,0.35)' : changePct >= 0 ? '#22c55e' : '#ef4444' }}
+                    >
+                      {changePct != null ? fmtChangePct(changePct) : '—'}
+                    </td>
+                  )}
                   <td className="px-2 py-1.5 text-right font-mono text-[10px]">
                     {isTradesFavView && !tradeSortByVolume ? (
                       <span
@@ -731,6 +990,8 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
                       >
                         {tradePnlLabel ?? '—'}
                       </span>
+                    ) : (isAltaFilter || isNovasFilter) ? (
+                      <span className="opacity-60">{formatVolume(highlightVol)}</span>
                     ) : (
                       <span className="opacity-60">{formatVolume(item.volume)}</span>
                     )}
@@ -748,7 +1009,7 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
 
             {isTradesFavView && rows.length > 0 && tradePnlSumLabel != null && (
               <tr className="border-t border-p3 sticky bottom-0 z-10">
-                <td className="pl-2 py-1.5 bg-p1" colSpan={3}>
+                <td className="pl-2 py-1.5 bg-p1" colSpan={isAltaFilter ? 4 : 3}>
                   <span className="text-[10px] font-bold uppercase tracking-wider text-p5/70">
                     Total PnL
                   </span>
@@ -766,7 +1027,7 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
             {/* Separador + resultados Gate.io */}
             {gateLoading && rows.length === 0 && (
               <tr>
-                <td colSpan={5} className="py-3 text-center">
+                <td colSpan={tableColCount} className="py-3 text-center">
                   <div className="flex items-center justify-center gap-2 text-[11px] text-p5/50">
                     <div className="w-3 h-3 border border-p4 border-t-transparent rounded-full animate-spin" />
                     Buscando na Gate.io…
@@ -778,7 +1039,7 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
             {gateItems.length > 0 && (
               <>
                 <tr>
-                  <td colSpan={5} className="px-2 py-1 border-t border-p3/30">
+                  <td colSpan={tableColCount} className="px-2 py-1 border-t border-p3/30">
                     <span
                       className="text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded"
                       style={{ color: GATE_COLOR, border: `1px solid ${GATE_COLOR}` }}
@@ -804,16 +1065,25 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
                           : 'hover:bg-p2/40 text-p5'
                       }`}
                     >
-                      <td className="pl-2">
-                        <div className="flex items-center gap-1">
-                          <FavButton active={isGate}   color={GATE_COLOR}  label="Gate"     onClick={(e) => { e.stopPropagation(); toggleGateFavorite(item.symbol); }} />
-                          <FavButton active={isMTGate} color={MT_COLOR}    label="MA-Cross" text="MC" onClick={(e) => { e.stopPropagation(); setMtModal({ symbol: item.symbol, exchange: 'gate', entries: mtEntriesGate }); }} />
+                      <td
+                    className="pl-1 pr-0 relative z-20"
+                    style={{ width: favColWidth, minWidth: favColWidth }}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                        <div className="flex flex-nowrap items-center gap-0.5">
+                          <FavButton tipKey="gate" kind="G" symbol={item.symbol} active={isGate}   color={GATE_COLOR}  label="Gate"     onClick={() => toggleGateFavorite(item.symbol)} />
+                          <FavButton tipKey="macross" kind="MC" symbol={item.symbol} active={isMTGate} color={MT_COLOR}    label="MA-Cross" text="MC" onClick={() => {
+                            console.log(`${FAV_LOG} MC abrir modal (Gate)`, { symbol: item.symbol, entries: mtEntriesGate.length });
+                            setMtModal({ symbol: item.symbol, exchange: 'gate', entries: mtEntriesGate });
+                          }} />
                         </div>
                       </td>
+
                       <td className="px-2 py-1.5 font-mono font-semibold">
                         {base}<span className="opacity-40 font-normal text-[10px]">/{quote}</span>
                       </td>
                       <td className="px-2 py-1.5 text-right font-mono">{item.price > 0 ? formatPrice(item.price) : '—'}</td>
+                      {isAltaFilter && <td className="px-2 py-1.5 text-right font-mono text-[10px] opacity-35">—</td>}
                       <td className="px-2 py-1.5 text-right font-mono text-[10px] opacity-60">{formatVolume(item.volume)}</td>
                       <td className="pr-1 text-center">
                         {loadingSymbol === item.symbol
@@ -831,35 +1101,55 @@ export default function CurrencyTable({ activeFilter, showFavorites, setShowFavo
         </table>
       </div>
 
-      {/* Modal MA-Cross */}
+      {/* Modais — portal evita corte no bottom sheet mobile (transform ancestor) */}
       {mtModal && (
-        <MultitradeModal
-          symbol={mtModal.symbol}
-          defaultExchange={mtModal.exchange}
-          currentEntries={mtModal.entries}
-          onConfirm={async ({ saves }) => {
-            await saveMultitradeSymbol({ saves });
-            setMtModal(null);
-          }}
-          onRemove={mtModal.entries?.length ? async () => {
-            for (const e of mtModal.entries) await removeMultitradeEntry(e.id);
-            setMtModal(null);
-          } : undefined}
-          onCancel={() => setMtModal(null)}
-        />
+        <ModalPortal>
+          <MultitradeModal
+            symbol={mtModal.symbol}
+            defaultExchange={mtModal.exchange}
+            currentEntries={mtModal.entries}
+            onConfirm={async ({ saves }) => {
+              console.log(`${FAV_LOG} MC confirmar`, { symbol: mtModal.symbol, saves });
+              try {
+                await saveMultitradeSymbol({ saves });
+                console.log(`${FAV_LOG} MC salvo OK`, mtModal.symbol);
+                setMtModal(null);
+              } catch (err) {
+                console.error(`${FAV_LOG} MC salvar falhou`, mtModal.symbol, err);
+              }
+            }}
+            onRemove={mtModal.entries?.length ? async () => {
+              console.log(`${FAV_LOG} MC remover`, { symbol: mtModal.symbol, ids: mtModal.entries.map(e => e.id) });
+              try {
+                for (const e of mtModal.entries) await removeMultitradeEntry(e.id);
+                console.log(`${FAV_LOG} MC removido OK`, mtModal.symbol);
+                setMtModal(null);
+              } catch (err) {
+                console.error(`${FAV_LOG} MC remover falhou`, mtModal.symbol, err);
+              }
+            } : undefined}
+            onCancel={() => {
+              console.log(`${FAV_LOG} MC cancelar`, mtModal.symbol);
+              setMtModal(null);
+            }}
+          />
+        </ModalPortal>
       )}
 
       {mtStateModal && (
-        <MultitradeBotStateModal
-          symbol={mtStateModal.symbol}
-          entries={mtStateModal.entries}
-          onConfirm={async (payload) => {
-            await updateMultitradeBotState(payload);
-            setMtStateModal(null);
-          }}
-          onCancel={() => setMtStateModal(null)}
-        />
+        <ModalPortal>
+          <MultitradeBotStateModal
+            symbol={mtStateModal.symbol}
+            entries={mtStateModal.entries}
+            onConfirm={async (payload) => {
+              await updateMultitradeBotState(payload);
+              setMtStateModal(null);
+            }}
+            onCancel={() => setMtStateModal(null)}
+          />
+        </ModalPortal>
       )}
+
     </div>
   );
 }

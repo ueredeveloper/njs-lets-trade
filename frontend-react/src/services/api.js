@@ -45,6 +45,16 @@ export async function fetch24hVolume() {
   return res.json();
 }
 
+/** Top 10 em alta + novas listagens (Binance e Gate.io). */
+export async function fetchMarketHighlights(limit = 10) {
+  const res = await fetch(`/services/market-highlights?limit=${limit}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `market-highlights falhou: HTTP ${res.status}`);
+  }
+  return res.json(); // [{ name, list, meta? }]
+}
+
 /**
  * Analisa ciclos RSI sobrevenda→sobrecompra para uma moeda salva no backend.
  * @param {string} symbol    ex: 'BTCUSDT'
@@ -70,29 +80,50 @@ export async function getFavorites(type) {
 }
 
 export async function addFavorite(symbol, type) {
+  console.log('[Favoritos] API addFavorite', { symbol, type });
   const res = await fetch('/services/sb/favorites', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ symbol, type }),
   });
-  if (!res.ok) throw new Error('Falha ao adicionar favorito');
-  return res.json();
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    console.error('[Favoritos] API addFavorite falhou', { symbol, type, status: res.status, body });
+    throw new Error(body?.error || 'Falha ao adicionar favorito');
+  }
+  const data = await res.json();
+  console.log('[Favoritos] API addFavorite OK', { symbol, type });
+  return data;
 }
 
 export async function addTradeFavorite(symbol, { exchange = 'binance', interval, rsiBuy, rsiSell, sellInterval }) {
+  console.log('[Favoritos] API addTradeFavorite', { symbol, exchange, interval, rsiBuy, rsiSell });
   const res = await fetch('/services/sb/favorites', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ symbol, type: 'trade', exchange, interval, rsiBuy, rsiSell, sellInterval: sellInterval || null }),
   });
-  if (!res.ok) throw new Error('Falha ao salvar configuração de trade');
-  return res.json();
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    console.error('[Favoritos] API addTradeFavorite falhou', { symbol, status: res.status, body });
+    throw new Error(body?.error || 'Falha ao salvar configuração de trade');
+  }
+  const data = await res.json();
+  console.log('[Favoritos] API addTradeFavorite OK', symbol);
+  return data;
 }
 
 export async function removeFavorite(symbol, type) {
+  console.log('[Favoritos] API removeFavorite', { symbol, type });
   const res = await fetch(`/services/sb/favorites/${encodeURIComponent(symbol)}?type=${type}`, { method: 'DELETE' });
-  if (!res.ok) throw new Error('Falha ao remover favorito');
-  return res.json();
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    console.error('[Favoritos] API removeFavorite falhou', { symbol, type, status: res.status, body });
+    throw new Error(body?.error || 'Falha ao remover favorito');
+  }
+  const data = await res.json();
+  console.log('[Favoritos] API removeFavorite OK', { symbol, type });
+  return data;
 }
 
 // ── Active Trades (posições reais nas exchanges) ─────────────────────────────

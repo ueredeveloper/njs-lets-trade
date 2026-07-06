@@ -1261,6 +1261,7 @@ export default function CandlestickChart() {
     chartPanelButtons, uiPrefs, setOverlaySlotsPreference, multitradeFavorites, fiveMTradeFavorites, activeTrades } = useCurrency();
   const { t } = useI18n();
   const chartRef = useRef(null);
+  const chartWrapRef = useRef(null);
   const [currentInterval, setCurrentInterval] = useState(savedInterval || DEFAULT_INTERVAL);
   const [loadingInterval, setLoadingInterval] = useState(false);
   const [themeTick, setThemeTick] = useState(0);
@@ -1277,6 +1278,22 @@ export default function CandlestickChart() {
   const [candleFetchLimit, setCandleFetchLimit] = useState(500);
   const [displayCandleCount, setDisplayCandleCount] = useState(LIMIT);
   const [loadingMoreCandles, setLoadingMoreCandles] = useState(false);
+
+  useEffect(() => {
+    const el = chartWrapRef.current;
+    if (!el || !selectedChart) return undefined;
+    const resize = () => chartRef.current?.getEchartsInstance()?.resize();
+    resize();
+    const t1 = requestAnimationFrame(resize);
+    const t2 = setTimeout(resize, 120);
+    const ro = new ResizeObserver(() => resize());
+    ro.observe(el);
+    return () => {
+      cancelAnimationFrame(t1);
+      clearTimeout(t2);
+      ro.disconnect();
+    };
+  }, [selectedChart?.symbol, selectedChart?.interval, activeTab]);
 
 
   function toggleIndicator(id) {
@@ -1612,11 +1629,11 @@ export default function CandlestickChart() {
   );
 
   return (
-    <div className="flex flex-col h-full">
-      {/* Toolbar */}
-      <div className="flex flex-col px-3 pt-2 pb-1 shrink-0 gap-1 border-b border-p2/40">
+    <div className="flex flex-col h-full min-h-0">
+      {/* Toolbar — compacta no mobile (intervalos em scroll horizontal) */}
+      <div className="flex flex-col px-2 md:px-3 pt-1 md:pt-2 pb-0.5 md:pb-1 shrink-0 gap-0.5 md:gap-1 border-b border-p2/40">
         {/* Linha 0 — abas */}
-        <div className="flex items-center gap-1 border-b border-p2/20 pb-1 mb-0.5">
+        <div className="flex items-center gap-1 border-b border-p2/20 pb-0.5 md:pb-1 mb-0.5">
           {[
             { id: 'chart',  label: 'Chart' },
             { id: 'matrix', label: 'Matrix' },
@@ -1624,7 +1641,7 @@ export default function CandlestickChart() {
             <button
               key={id}
               onClick={() => setActiveTab(id)}
-              className={`px-3 py-0.5 text-xs rounded font-mono transition-colors ${
+              className={`px-2 md:px-3 py-0.5 text-[10px] md:text-xs rounded font-mono transition-colors ${
                 activeTab === id
                   ? 'bg-p4 text-white'
                   : 'text-p5/60 hover:text-p5 hover:bg-p3/20'
@@ -1635,14 +1652,14 @@ export default function CandlestickChart() {
           ))}
         </div>
 
-        {/* Linha 1 — intervalos */}
-        <div className="flex items-center gap-1 flex-wrap">
+        {/* Linha 1 — intervalos (uma linha no mobile) */}
+        <div className="flex items-center gap-1 flex-nowrap overflow-x-auto touch-pan-x scrollbar-thin md:flex-wrap md:overflow-visible">
           {INTERVALS.map((iv) => (
             <button
               key={iv}
               onClick={() => handleIntervalChange(iv)}
               disabled={loadingInterval}
-              className={`px-2 py-0.5 text-xs rounded font-mono transition-colors disabled:opacity-40 ${
+              className={`px-1.5 md:px-2 py-0.5 text-[10px] md:text-xs rounded font-mono transition-colors disabled:opacity-40 shrink-0 ${
                 currentInterval === iv
                   ? 'bg-p4 text-white'
                   : 'text-p5 hover:bg-p3/40 hover:text-white'
@@ -1652,13 +1669,13 @@ export default function CandlestickChart() {
             </button>
           ))}
           {loadingInterval && (
-            <div className="w-3 h-3 border border-p4 border-t-transparent rounded-full animate-spin ml-1" />
+            <div className="w-3 h-3 border border-p4 border-t-transparent rounded-full animate-spin ml-1 shrink-0" />
           )}
           <button
             onClick={handleLoadMoreCandles}
             disabled={loadingMoreCandles || (candleFetchLimit >= MAX_CANDLES && (selectedChart?.candlesticks?.length ?? 0) >= MAX_CANDLES)}
             title={`Carregar mais candles (até ${MAX_CANDLES})`}
-            className="ml-1 px-2 py-0.5 text-xs rounded font-mono transition-colors disabled:opacity-40 text-p5 hover:bg-p3/40 hover:text-white border border-p3/40"
+            className="ml-1 px-1.5 md:px-2 py-0.5 text-[10px] md:text-xs rounded font-mono transition-colors disabled:opacity-40 text-p5 hover:bg-p3/40 hover:text-white border border-p3/40 shrink-0"
           >
             {loadingMoreCandles ? '…' : `+${selectedChart?.candlesticks?.length ?? candleFetchLimit}/${MAX_CANDLES}`}
           </button>
@@ -1669,7 +1686,7 @@ export default function CandlestickChart() {
 
       {/* Conteúdo da aba */}
       {activeTab === 'chart' ? (
-        <div className="flex-1 min-h-0 relative">
+        <div ref={chartWrapRef} className="flex-1 min-h-0 relative">
           {chartNode}
           <ChartLeftIndicatorPanel
             activeIndicators={activeIndicators}
@@ -1685,7 +1702,7 @@ export default function CandlestickChart() {
       ) : (
         <div className="flex flex-1 min-h-0">
           {/* Gráfico (lado esquerdo) */}
-          <div className="flex-1 min-w-0 min-h-0 relative">
+          <div ref={chartWrapRef} className="flex-1 min-w-0 min-h-0 relative">
             {chartNode}
             <ChartLeftIndicatorPanel
               activeIndicators={activeIndicators}

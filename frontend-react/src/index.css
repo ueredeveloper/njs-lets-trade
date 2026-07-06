@@ -11,9 +11,21 @@
 body {
   margin: 0;
   font-family: system-ui, sans-serif;
-  font-size: 9px;
+  font-size: 12px;
   background-color: #1a0a25;
   color: #b3aca4;
+  height: 100dvh;
+  overflow: hidden;
+}
+
+html {
+  height: 100dvh;
+}
+
+#root {
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
 }
 
 @media (min-width: 640px) {

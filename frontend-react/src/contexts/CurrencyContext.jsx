@@ -1,8 +1,9 @@
 import { createContext, useContext, useState, useCallback, useEffect, useMemo } from 'react';
-import { addFavorite, addTradeFavorite, removeFavorite, fetchActiveTrades, ignoreActiveTrade,
+import { addFavorite, removeFavorite, fetchActiveTrades, ignoreActiveTrade,
   fetchMultitradeFavorites, addMultitradeFavorite, updateMultitradeFavorite, removeMultitradeFavorite,
   patchMultitradeBotState,
-  fetchFiveMTradeFavorites, addFiveMTradeFavorite, updateFiveMTradeFavorite, removeFiveMTradeFavorite } from '../services/api';
+  fetchFiveMTradeFavorites, addFiveMTradeFavorite, updateFiveMTradeFavorite, removeFiveMTradeFavorite,
+  fetchMarketHighlights } from '../services/api';
 import { CHART_VIEW } from '../utils/chartView';
 import {
   ASSET_CATEGORY_KEYS,
@@ -37,6 +38,10 @@ function isMaCrossFavoriteEntry(e) {
 /** Poll da fase BOUGHT/WATCHING após compra/venda do bot. */
 const MULTITRADE_STATE_POLL_MS = 30_000;
 
+function isAutoHighlightFilter(name) {
+  return name?.startsWith('Favoritos|Alta|') || name?.startsWith('Favoritos|Novas|');
+}
+
 export function CurrencyProvider({ children }) {
   // Lista completa do servidor; currencies expõe versão filtrada por categoria
   const [rawCurrencies, setRawCurrencies] = useState({ name: '1h|All', list: [] });
@@ -46,6 +51,7 @@ export function CurrencyProvider({ children }) {
 
   // [{ name: '1h|Binance|USDT', list: ['BTCUSDT', ...] }, ...]
   const [filters, setFilters] = useState([]);
+  const [marketHighlightsLoading, setMarketHighlightsLoading] = useState(false);
 
   // Moeda selecionada para o gráfico: { symbol, candles, ichimoku }
   const [selectedChart, setSelectedChart] = useState(null);
@@ -75,12 +81,9 @@ export function CurrencyProvider({ children }) {
   // Quote selecionada: 'USDT' | 'BTC' | 'BNB'
   const [selectedQuote, setSelectedQuote] = useState('USDT');
 
-  // Favoritos Gate (azul #0068ff), Binance (amarelo #fcd535) e Trade Now (verde #00c076)
+  // Favoritos Gate (azul #0068ff) e Binance (amarelo #fcd535)
   const [gateFavorites, setGateFavorites]       = useState(new Set());
   const [binanceFavorites, setBinanceFavorites] = useState(new Set());
-  const [tradeFavorites, setTradeFavorites]     = useState(new Set());
-  // Config por símbolo: Map<symbol, { interval, rsiBuy, rsiSell, sellInterval }>
-  const [tradeConfigs, setTradeConfigs]         = useState(new Map());
   // Saldos reais das exchanges: Map<symbol, { exchange, buyPrice, buyQty }>
   const [activeTrades, setActiveTrades]         = useState(new Map());
 
@@ -90,40 +93,59 @@ export function CurrencyProvider({ children }) {
   // 5m Trade favorites: bot RSI 5m (five_min_bot_state)
   const [fiveMTradeFavorites, setFiveMTradeFavorites] = useState([]);
 
+  /** View da tabela de moedas: gate | binance | macross | trades */
+  const [favoriteView, setFavoriteView] = useState(null);
+
+  const clearFavoriteView = useCallback(() => setFavoriteView(null), []);
+
+  const toggleFavoriteView = useCallback((type) => {
+    setFavoriteView((prev) => {
+      const next = prev === type ? null : type;
+      console.log('[Favoritos] favoriteView', { prev, next, type });
+      return next;
+    });
+  }, []);
+
   const toggleGateFavorite = useCallback(async (symbol) => {
     const sym = symbol.toUpperCase();
+    console.log('[Favoritos] Gate toggle iniciar', sym);
     setGateFavorites((prev) => {
       const next = new Set(prev);
-      if (next.has(sym)) { next.delete(sym); removeFavorite(sym, 'gate').catch(() => {}); }
-      else               { next.add(sym);    addFavorite(sym, 'gate').catch(() => {}); }
+      const removing = next.has(sym);
+      if (removing) {
+        next.delete(sym);
+        removeFavorite(sym, 'gate')
+          .then(() => console.log('[Favoritos] Gate removido OK', sym))
+          .catch((err) => console.error('[Favoritos] Gate remover falhou', sym, err));
+      } else {
+        next.add(sym);
+        addFavorite(sym, 'gate')
+          .then(() => console.log('[Favoritos] Gate adicionado OK', sym))
+          .catch((err) => console.error('[Favoritos] Gate adicionar falhou', sym, err));
+      }
+      console.log('[Favoritos] Gate toggle estado', { sym, removing, size: next.size });
       return next;
     });
   }, []);
 
   const toggleBinanceFavorite = useCallback(async (symbol) => {
     const sym = symbol.toUpperCase();
+    console.log('[Favoritos] Binance toggle iniciar', sym);
     setBinanceFavorites((prev) => {
       const next = new Set(prev);
-      if (next.has(sym)) { next.delete(sym); removeFavorite(sym, 'binance').catch(() => {}); }
-      else               { next.add(sym);    addFavorite(sym, 'binance').catch(() => {}); }
-      return next;
-    });
-  }, []);
-
-  const toggleTradeFavorite = useCallback((symbol, config = null) => {
-    const sym = symbol.toUpperCase();
-    setTradeFavorites((prev) => {
-      const next = new Set(prev);
-      if (next.has(sym)) {
+      const removing = next.has(sym);
+      if (removing) {
         next.delete(sym);
-        setTradeConfigs(m => { const n = new Map(m); n.delete(sym); return n; });
-        removeFavorite(sym, 'trade').catch((err) => console.warn('[CurrencyContext] removeTradeFavorite:', err.message));
+        removeFavorite(sym, 'binance')
+          .then(() => console.log('[Favoritos] Binance removido OK', sym))
+          .catch((err) => console.error('[Favoritos] Binance remover falhou', sym, err));
       } else {
         next.add(sym);
-        const cfg = config || { exchange: 'gate', interval: '30m', rsiBuy: 30, rsiSell: 70, sellInterval: null };
-        setTradeConfigs(m => { const n = new Map(m); n.set(sym, cfg); return n; });
-        addTradeFavorite(sym, cfg).catch((err) => console.warn('[CurrencyContext] addTradeFavorite:', err.message));
+        addFavorite(sym, 'binance')
+          .then(() => console.log('[Favoritos] Binance adicionado OK', sym))
+          .catch((err) => console.error('[Favoritos] Binance adicionar falhou', sym, err));
       }
+      console.log('[Favoritos] Binance toggle estado', { sym, removing, size: next.size });
       return next;
     });
   }, []);
@@ -352,12 +374,6 @@ export function CurrencyProvider({ children }) {
     }
   }, []);
 
-  const updateTradeConfig = useCallback((symbol, config) => {
-    const sym = symbol.toUpperCase();
-    setTradeConfigs(prev => { const next = new Map(prev); next.set(sym, config); return next; });
-    addTradeFavorite(sym, config).catch(() => {});
-  }, []);
-
   const quotes = ['USDT', 'BTC', 'BNB'];
 
   const setAssetDisplayCategory = useCallback((key, enabled) => {
@@ -445,6 +461,17 @@ export function CurrencyProvider({ children }) {
     });
   }, []);
 
+  const ensureMarketHighlights = useCallback(async () => {
+    setMarketHighlightsLoading(true);
+    try {
+      const items = await fetchMarketHighlights(10);
+      items.forEach((f) => addFilter(f));
+      return items;
+    } finally {
+      setMarketHighlightsLoading(false);
+    }
+  }, [addFilter]);
+
   const removeFilters = useCallback((filtersToRemove) => {
     setFilters((prev) => {
       const first = prev[0];
@@ -455,7 +482,7 @@ export function CurrencyProvider({ children }) {
   }, []);
 
   const clearAllFilters = useCallback(() => {
-    setFilters((prev) => prev.filter((f) => f.name === 'Mercado|USDT'));
+    setFilters((prev) => prev.filter((f) => f.name === 'Mercado|USDT' || isAutoHighlightFilter(f.name)));
   }, []);
 
   const joinFilters = useCallback((selectedFilterNames) => {
@@ -499,6 +526,12 @@ export function CurrencyProvider({ children }) {
     if (symbols.length > 0) addFilter({ name: 'Favoritos|MA-Cross', list: symbols });
     else removeFilters(['Favoritos|MA-Cross', 'Favoritos|MultiTrade']);
   }, [multitradeFavorites, addFilter, removeFilters]);
+
+  useEffect(() => {
+    ensureMarketHighlights().catch((err) => {
+      console.warn('[CurrencyContext] market-highlights:', err.message);
+    });
+  }, [ensureMarketHighlights]);
 
   // Carrega favoritos MA-Cross e sincroniza fase (BOUGHT/WATCHING) com o bot
   useEffect(() => {
@@ -544,6 +577,8 @@ export function CurrencyProvider({ children }) {
         removeFilters,
         clearAllFilters,
         joinFilters,
+        ensureMarketHighlights,
+        marketHighlightsLoading,
         getBinanceCurrenciesWithUsdt,
         assetDisplay,
         setAssetDisplayCategory,
@@ -588,14 +623,8 @@ export function CurrencyProvider({ children }) {
         setGateFavorites,
         binanceFavorites,
         setBinanceFavorites,
-        tradeFavorites,
-        setTradeFavorites,
-        tradeConfigs,
-        setTradeConfigs,
         toggleGateFavorite,
         toggleBinanceFavorite,
-        toggleTradeFavorite,
-        updateTradeConfig,
         activeTrades,
         setActiveTrades,
         refreshActiveTrades,
@@ -609,6 +638,10 @@ export function CurrencyProvider({ children }) {
         updateMultitradeBotState,
         fiveMTradeFavorites,
         setFiveMTradeFavorites,
+        favoriteView,
+        setFavoriteView,
+        clearFavoriteView,
+        toggleFavoriteView,
         saveFiveMTradeEntry,
         removeFiveMTradeEntry,
       }}

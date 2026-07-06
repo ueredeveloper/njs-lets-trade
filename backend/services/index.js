@@ -23,6 +23,7 @@ const fetchActiveTrades        = require('./fetchActiveTrades')
 const fetchTradeFavorites      = require('./fetchTradeFavorites')
 const stgBotStatus             = require('./stgBotStatus')
 const multitradeService        = require('./multitradeService')
+const fetchMarketHighlights    = require('./fetchMarketHighlights')
 
 // remove cíclical error
 module.exports = {
@@ -30,6 +31,6 @@ module.exports = {
     fetchSMA, fetchRSI, fetchVWAP, fetch24HsVolume, fetchMarketCapFilter, fetchStablecoins,
     fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchRsiOversoldRecovery, fetchReloadCandles,
     fetchGateCurrencies, fetchGatePrefetch, fetchBinanceTrades, fetchGateTrades, fetchActiveTrades,
-    fetchTradeFavorites, stgBotStatus, multitradeService }
+    fetchTradeFavorites, stgBotStatus, multitradeService, fetchMarketHighlights }
 
 
