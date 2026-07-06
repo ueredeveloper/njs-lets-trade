@@ -31,8 +31,10 @@ async function getGatePairMeta(pair) {
 }
 
 function floorGateAmount(qty, decimals) {
+  const n = parseFloat(qty);
+  if (!Number.isFinite(n) || n <= 0) return null;
   const factor  = 10 ** decimals;
-  const floored = Math.floor(parseFloat(qty) * factor + 1e-12) / factor;
+  const floored = Math.floor(n * factor + 1e-12) / factor;
   if (floored <= 0) return null;
   return floored.toFixed(decimals);
 }
@@ -77,13 +79,20 @@ function estimateDustClosePnl(state, dustResult) {
   const buyUsdt  = parseFloat(state.buy_usdt);
   const buyQty   = parseFloat(state.buy_qty);
   const { dustQty, dustUsdt, exitPrice } = dustResult;
-  const soldQty          = Math.max(0, buyQty - dustQty);
-  const estimatedUsdtOut   = soldQty * exitPrice + dustUsdt;
-  const pnlUsdt            = estimatedUsdtOut - buyUsdt;
-  const capitalBefore      = parseFloat(state.capital);
-  const pnlPct             = capitalBefore > 0 ? (pnlUsdt / capitalBefore) * 100 : 0;
+  const safeBuyQty       = Number.isFinite(buyQty) ? buyQty : 0;
+  const safeBuyUsdt      = Number.isFinite(buyUsdt) ? buyUsdt : 0;
+  const safeDustQty      = Number.isFinite(dustQty) ? dustQty : 0;
+  const safeDustUsdt     = Number.isFinite(dustUsdt) ? dustUsdt : 0;
+  const safeExitPrice    = Number.isFinite(exitPrice) ? exitPrice : 0;
+  const soldQty          = Math.max(0, safeBuyQty - safeDustQty);
+  const estimatedUsdtOut = soldQty * safeExitPrice + safeDustUsdt;
+  const pnlUsdt          = estimatedUsdtOut - safeBuyUsdt;
+  const capitalBefore    = parseFloat(state.capital);
+  const safeCapital      = Number.isFinite(capitalBefore) ? capitalBefore : safeBuyUsdt;
+  const pnlPct           = safeCapital > 0 ? (pnlUsdt / safeCapital) * 100 : 0;
   return {
-    soldQty, usdtOut: estimatedUsdtOut, exitPrice, pnlUsdt, pnlPct, capitalAfter: capitalBefore + pnlUsdt,
+    soldQty, usdtOut: estimatedUsdtOut, exitPrice: safeExitPrice, pnlUsdt, pnlPct,
+    capitalAfter: safeCapital + pnlUsdt,
   };
 }
 
@@ -118,8 +127,9 @@ async function gateMarketSell(deps, pair, qty, log, { aggressive = true, fmtPric
   async function resolveSellAmount(requestedQty) {
     const balance     = await getTokenBalance(pair);
     const tradableBal = parseFloat(floorGateAmount(balance, meta.amountPrecision) || '0');
-    const sellQty     = Math.min(parseFloat(requestedQty), tradableBal);
-    if (sellQty <= 0) {
+    const reqQty      = Number.isFinite(parseFloat(requestedQty)) ? parseFloat(requestedQty) : tradableBal;
+    const sellQty     = Math.min(reqQty, tradableBal);
+    if (!Number.isFinite(sellQty) || sellQty <= 0) {
       throw new Error(`Gate.io: saldo insuficiente (disponível: ${balance}, negociável: ${tradableBal})`);
     }
     const amountStr = floorGateAmount(sellQty, meta.amountPrecision);

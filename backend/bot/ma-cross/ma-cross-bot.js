@@ -117,11 +117,17 @@ async function binanceMarketBuy(symbol, usdtAmount) {
 }
 
 async function binanceMarketSell(symbol, qty) {
+  if (!Number.isFinite(qty) || qty <= 0) {
+    throw new Error(`quantidade inválida para venda (${qty})`);
+  }
   const info      = await fetch(`${BINANCE_BASE}/api/v3/exchangeInfo?symbol=${symbol}`).then(r => r.json());
   const lotFilter = info.symbols?.[0]?.filters?.find(f => f.filterType === 'LOT_SIZE');
   const stepSize  = lotFilter ? parseFloat(lotFilter.stepSize) : 1;
   const decimals  = stepSize < 1 ? (String(stepSize).split('.')[1]?.length ?? 0) : 0;
   const safeQty   = (Math.floor(qty / stepSize) * stepSize).toFixed(decimals);
+  if (!Number.isFinite(parseFloat(safeQty)) || parseFloat(safeQty) <= 0) {
+    throw new Error(`quantidade inválida após arredondamento (${safeQty})`);
+  }
   const order     = await binanceReq('POST', '/api/v3/order', {
     symbol, side: 'SELL', type: 'MARKET', quantity: safeQty,
   });
@@ -441,10 +447,44 @@ async function fetchCandleMap(adapter, specs) {
   for (const { interval, limit } of specs) {
     maxLimits[interval] = Math.max(maxLimits[interval] || 0, limit);
   }
-  const entries = await Promise.all(
+  const fetchAll = () => Promise.all(
     Object.entries(maxLimits).map(async ([iv, lim]) => [iv, await adapter.fetchCandles(lim, iv)]),
   );
+  let entries;
+  try {
+    entries = await fetchAll();
+  } catch (err) {
+    if (err?.cause?.code === 'UND_ERR_CONNECT_TIMEOUT' || /fetch failed/i.test(err.message)) {
+      await new Promise(r => setTimeout(r, 2000));
+      entries = await fetchAll();
+    } else {
+      throw err;
+    }
+  }
   return Object.fromEntries(entries);
+}
+
+function hasOpenPosition(state) {
+  const qty   = parseFloat(state?.buy_qty);
+  const price = parseFloat(state?.buy_price);
+  return Number.isFinite(qty) && qty > 0 && Number.isFinite(price) && price > 0;
+}
+
+async function resetOrphanPosition(rowId, log, session, state, reason) {
+  log(`${Y}⚠️  Posição órfã (${reason}) — resetando para WATCHING${X}`);
+  if (session) {
+    session.phase = 'WATCHING';
+    session.rulesState = null;
+  }
+  if (state.phase === 'BOUGHT') {
+    const exitTime = resolveLastExitTime(state, session) ?? new Date().toISOString();
+    await saveState(rowId, {
+      phase: 'WATCHING',
+      buy_price: null, buy_qty: null, buy_usdt: null, buy_time: null, rsi_entry: null,
+      rules_state: postExitRulesState(exitTime),
+    }, log);
+  }
+  return { phase: 'WATCHING' };
 }
 
 async function executeSell({ rowId, adapter, strategy, log, state, exitResult, reasonLabel, session }) {
@@ -458,13 +498,20 @@ async function executeSell({ rowId, adapter, strategy, log, state, exitResult, r
       : `stop-loss ${exitResult.dropPct?.toFixed(2)}%`)
     : (exitResult.exitDesc ?? exitResult.reason ?? crossDesc(config.exit?.maCross ?? config.exit)));
 
-  log(`${R}📈 ${reason} — vendendo ${state.buy_qty} ${symbol}${X}`);
+  const sellQty = parseFloat(state.buy_qty);
+  if (!hasOpenPosition(state)) {
+    log(`${Y}⚠️  Sinal de saída sem qty registrada — posição órfã${X}`);
+    await resetOrphanPosition(rowId, log, session, state, 'buy_qty ausente');
+    return { phase: 'WATCHING' };
+  }
+
+  log(`${R}📈 ${reason} — vendendo ${sellQty} ${symbol}${X}`);
 
   const exitTime = new Date().toISOString();
   const sellOpts = adapter.name === 'Gate.io' ? { aggressive: true } : {};
   let result;
   try {
-    result = await adapter.marketSell(parseFloat(state.buy_qty), log, sellOpts);
+    result = await adapter.marketSell(sellQty, log, sellOpts);
   } catch (err) {
     log(`❌ Erro na venda: ${err.message}`);
     throw err;
@@ -552,7 +599,14 @@ async function tick(rowId, adapter, strategy, log, session) {
 
   const { capital, symbol, strategy_id: strategyId } = state;
   const buyPrice = state.buy_price ? parseFloat(state.buy_price) : null;
-  const phase = session.phase ?? state.phase;
+  let phase = session.phase ?? state.phase;
+  if (phase === 'BOUGHT' && !hasOpenPosition(state)) {
+    return resetOrphanPosition(rowId, log, session, state, 'sem buy_qty/buy_price no Supabase');
+  }
+  if (session.phase === 'BOUGHT' && state.phase !== 'BOUGHT') {
+    session.phase = state.phase;
+    phase = state.phase;
+  }
 
   // ── PENDING (pullback após cruzamento) ───────────────────────────────────
   if (phase === 'PENDING') {
