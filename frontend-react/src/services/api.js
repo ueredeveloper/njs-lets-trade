@@ -280,7 +280,9 @@ export function gatePreloadCandles(symbol) {
  * @param {string} interval ex: '1h'
  * @param {string} [source] 'gate' para forçar Gate.io; omitir para Binance
  */
-export async function fetchCandlesticksAndCloud(symbol, interval, source = null, limit = 500) {
+export const DEFAULT_CANDLE_LIMIT = 50;
+
+export async function fetchCandlesticksAndCloud(symbol, interval, source = null, limit = DEFAULT_CANDLE_LIMIT) {
   const srcParam = source === 'gate' ? '&source=gate' : '';
   const candlesRaw = await fetch(
     `/services/candles/?symbol=${symbol}&limit=${limit}&interval=${interval}${srcParam}`,

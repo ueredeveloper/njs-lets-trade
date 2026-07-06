@@ -16,7 +16,7 @@ alwaysApply: false
 
 | Valor | Quem define | Comportamento |
 |-------|-------------|---------------|
-| `default` | init / limpeza | Chart livre, LIMIT 76 velas |
+| `default` | init / limpeza | Chart livre, LIMIT 50 velas |
 | `table` | `CurrencyTable` | Seleção manual de moeda |
 | `statistics` | `StatisticsPanel` | Clique em ciclo RSI |
 | `multitrade` | `MultitradeBacktestPanel` | Clique em linha de backtest |
@@ -52,7 +52,7 @@ Limpar com **`clearMultitradeChartView`** ao trocar favorita MT ou em erro.
 Quando `chartViewSource === 'multitrade'` **e** `chartZoom` ativo:
 
 - **Não** resetar `displayCandleCount` / `candleFetchLimit` no sync de símbolo/intervalo.
-- `displayLimit` = total de candles carregados (não LIMIT 76).
+- `displayLimit` = total de candles carregados (não LIMIT 50).
 - Marcadores MT: `markPoint` vertical acima do high (`buildTradeMarkerMarkPoint`).
 
 ## Anti-patterns

@@ -96,6 +96,12 @@ export function CurrencyProvider({ children }) {
   /** View da tabela de moedas: gate | binance | macross | trades */
   const [favoriteView, setFavoriteView] = useState(null);
 
+  /** Incrementado ao selecionar moeda na tabela — reseta janela do chart (ex.: após botão 10 velas) */
+  const [chartCandleWindowReset, setChartCandleWindowReset] = useState(0);
+  const resetChartCandleWindow = useCallback(() => {
+    setChartCandleWindowReset(n => n + 1);
+  }, []);
+
   const clearFavoriteView = useCallback(() => setFavoriteView(null), []);
 
   const toggleFavoriteView = useCallback((type) => {
@@ -605,6 +611,8 @@ export function CurrencyProvider({ children }) {
         setChartInterval,
         chartZoom,
         setChartZoom,
+        chartCandleWindowReset,
+        resetChartCandleWindow,
         chartViewSource,
         setChartViewSource,
         applyMultitradeChartView,

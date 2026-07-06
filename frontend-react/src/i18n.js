@@ -230,6 +230,8 @@ const T = {
 
     // Gráfico
     'chart.select':          'Selecione uma moeda para ver o gráfico',
+    'chart.load_last_10':    'Zoom nos últimos 10 candles (indicadores calculados com histórico completo)',
+    'chart.last_10_btn':     '10',
     'chart.tip.sma9':        'EMA exponencial (9 candles) no mesmo intervalo do gráfico (ex.: 15m). Liga/desliga a linha roxa.',
     'chart.tip.sma21':       'EMA exponencial (21 candles) no intervalo do gráfico. Usada no cruzamento MA-Cross. Linha laranja.',
     'chart.tip.sma50':       'EMA50 no intervalo do gráfico. Linha ciano.',
@@ -545,6 +547,8 @@ const T = {
 
     // Chart
     'chart.select':          'Select a currency to view the chart',
+    'chart.load_last_10':    'Zoom to last 10 candles (indicators use full history)',
+    'chart.last_10_btn':     '10',
     'chart.tip.sma9':        'Exponential MA (9 candles) on the chart interval (e.g. 15m). Toggles purple line.',
     'chart.tip.sma21':       'Exponential MA (21 candles) on chart interval. MA-Cross slow leg. Orange line.',
     'chart.tip.sma50':       'EMA50 on chart interval. Cyan line.',

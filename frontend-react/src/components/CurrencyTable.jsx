@@ -72,6 +72,10 @@ function formatVolume(vol) {
   return vol.toFixed(0);
 }
 
+function rowVolume24h(item, highlightMeta) {
+  return Number(highlightMeta?.volume24h?.[item.symbol] ?? item.volume) || 0;
+}
+
 function fmtChangePct(pct) {
   if (pct == null || !Number.isFinite(pct)) return null;
   const sign = pct >= 0 ? '+' : '';
@@ -246,6 +250,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     filterVisibleCurrencies, isVisibleSymbol, addFilter,
     ensureMarketHighlights, marketHighlightsLoading,
     favoriteView, toggleFavoriteView, clearFavoriteView,
+    resetChartCandleWindow,
   } = useCurrency();
   const { t, formatPrice } = useI18n();
   const [loadingSymbol, setLoadingSymbol]       = useState(null);
@@ -397,16 +402,6 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     }
 
     list = list.slice().sort((a, b) => {
-      if (isAltaFilter && highlightMeta?.changePct) {
-        const ca = highlightMeta.changePct[a.symbol] ?? -Infinity;
-        const cb = highlightMeta.changePct[b.symbol] ?? -Infinity;
-        return cb - ca;
-      }
-      if (isNovasFilter && highlightMeta?.listedAt) {
-        const ta = highlightMeta.listedAt[a.symbol] ?? 0;
-        const tb = highlightMeta.listedAt[b.symbol] ?? 0;
-        return tb - ta;
-      }
       if (isMacrossFavView && !macrossSortByVolume) {
         return compareMacrossFavorites(a, b, macrossFavSort, {
           status: macrossFavStatus,
@@ -416,8 +411,8 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
       if (isTradesFavView && !tradeSortByVolume) {
         return compareTradeFavorites(a, b, tradeFavSort, tradeFavStatus);
       }
-      const va = Number(a.volume) || 0;
-      const vb = Number(b.volume) || 0;
+      const va = (isAltaFilter || isNovasFilter) ? rowVolume24h(a, highlightMeta) : Number(a.volume) || 0;
+      const vb = (isAltaFilter || isNovasFilter) ? rowVolume24h(b, highlightMeta) : Number(b.volume) || 0;
       return sortVolume === 'desc' ? vb - va : va - vb;
     });
 
@@ -536,6 +531,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
 
   async function handleSelect(item, source = null) {
     onSelectCurrency?.();
+    resetChartCandleWindow();
     setLoadingSymbol(item.symbol);
     setActiveRow(item.symbol);
     setTradePurchases([]);
@@ -603,9 +599,14 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
 
   function handleToggleFavoriteView(type) {
     console.log(`${FAV_LOG} toggle view`, { type, prev: favoriteView });
+    const entering = favoriteView !== type;
     toggleFavoriteView(type);
     setSearch('');
     onSelectFilter?.(null);
+    if (entering) {
+      if (type === 'macross') setMacrossSortByVolume(false);
+      if (type === 'trades') setTradeSortByVolume(false);
+    }
   }
 
   async function selectHighlightFilter(name) {
@@ -649,10 +650,8 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
 
   const tradePnlSumLabel = formatTradePnlBadge(tradePnlSum);
 
-  const showMacrossSortSelect = isMacrossFavView && !macrossSortByVolume;
-  const showTradeSortSelect = isTradesFavView && !tradeSortByVolume;
-  const showFavSortHeader = showMacrossSortSelect || showTradeSortSelect;
-  const favColWidth = showFavSortHeader ? '10.5rem' : '7.5rem';
+  const showFavSortInHeader = isMacrossFavView || isTradesFavView;
+  const favColWidth = showFavSortInHeader ? '10.5rem' : '7.5rem';
 
   return (
     <div className="flex flex-col h-full">
@@ -769,12 +768,12 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                 className="text-left px-1 py-1 align-middle"
                 style={{ width: favColWidth, minWidth: favColWidth }}
                 title={
-                  showMacrossSortSelect ? t('macross.sort.label')
-                    : showTradeSortSelect ? t('trades.sort.label')
+                  isMacrossFavView ? t('macross.sort.label')
+                    : isTradesFavView ? t('trades.sort.label')
                     : undefined
                 }
               >
-                {showMacrossSortSelect ? (
+                {isMacrossFavView ? (
                   <div className="flex items-center justify-start gap-0.5">
                     {macrossFavLoading && (
                       <span className="text-[9px] text-emerald-400/80 shrink-0">⟳</span>
@@ -786,14 +785,16 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                     />
                     <button
                       type="button"
-                      className="text-[8px] font-bold text-p5/45 hover:text-p5/80 px-0.5 shrink-0 touch-manipulation"
+                      className={`text-[8px] font-bold px-0.5 shrink-0 touch-manipulation ${
+                        macrossSortByVolume ? 'text-p5/90' : 'text-p5/45 hover:text-p5/80'
+                      }`}
                       title="Ordenar por volume 24h"
                       onClick={(e) => { e.stopPropagation(); cycleSort(); }}
                     >
                       Vol
                     </button>
                   </div>
-                ) : showTradeSortSelect ? (
+                ) : isTradesFavView ? (
                   <div className="flex items-center justify-start gap-0.5">
                     {tradeFavLoading && (
                       <span className="text-[9px] text-emerald-400/80 shrink-0">⟳</span>
@@ -805,7 +806,9 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                     />
                     <button
                       type="button"
-                      className="text-[8px] font-bold text-p5/45 hover:text-p5/80 px-0.5 shrink-0 touch-manipulation"
+                      className={`text-[8px] font-bold px-0.5 shrink-0 touch-manipulation ${
+                        tradeSortByVolume ? 'text-p5/90' : 'text-p5/45 hover:text-p5/80'
+                      }`}
                       title="Ordenar por volume 24h"
                       onClick={(e) => { e.stopPropagation(); cycleSort(); }}
                     >
@@ -832,15 +835,13 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                 }`}
                 onClick={cycleSort}
                 title={
-                  isAltaFilter ? 'Volume 24h'
-                    : isNovasFilter ? 'Volume 24h (data de listagem na coluna Par)'
+                  isAltaFilter ? 'Ordenar por volume 24h (coluna Var% mostra a alta)'
+                    : isNovasFilter ? 'Ordenar por volume 24h (data de listagem na coluna Par)'
                     : isTradesFavView && !tradeSortByVolume ? 'Clique para ordenar por volume'
                     : 'Ordenar por volume 24h'
                 }
               >
-                {isAltaFilter || isNovasFilter
-                  ? 'Vol'
-                  : isTradesFavView && !tradeSortByVolume
+                {isTradesFavView && !tradeSortByVolume
                   ? 'PnL'
                   : `Vol${(!isMacrossFavView || macrossSortByVolume) && (!isTradesFavView || tradeSortByVolume) ? (sortVolume === 'desc' ? ' ↓' : ' ↑') : ''}`}
               </th>
@@ -922,17 +923,19 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                   </td>
 
                   <td className="px-2 py-1.5 font-mono font-semibold">
-                    <div className="flex flex-col">
-                      <span>{base}<span className="opacity-40 font-normal text-[10px]">/{quote}</span></span>
-                      {isMT && !isTradesFavView && (() => {
+                    <div className="flex flex-col gap-0.5 min-w-0">
+                      {isMT && !isTradesFavView ? (() => {
                         const mtPhase = symbolPhaseSummary(mtEntries);
                         const mtPh = multitradePhaseBadge(mtPhase);
                         const bought = mtEntries.find(e => e.phase === 'BOUGHT' && e.buyTime);
                         return (
-                          <span className="text-[9px] font-normal flex items-center gap-1 flex-wrap">
+                          <span className="flex items-center gap-1 flex-wrap min-w-0">
+                            <span className="shrink-0">
+                              {base}<span className="opacity-40 font-normal text-[10px]">/{quote}</span>
+                            </span>
                             <button
                               type="button"
-                              className="font-bold px-1 py-0 rounded hover:underline"
+                              className="text-[9px] font-bold px-1 py-0 rounded shrink-0 hover:underline"
                               style={{ color: mtPh.color, background: `${mtPh.color}18`, border: `1px solid ${mtPh.color}44` }}
                               title={`${mtPh.hint} — clique para alterar`}
                               onClick={(e) => {
@@ -942,13 +945,15 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                               {mtPh.text}
                             </button>
                             {bought?.buyTime && (
-                              <span className="text-white/70">
+                              <span className="text-[9px] font-normal text-white/70 shrink-0">
                                 ▌ {fmtBuyTime(bought.buyTime)}
                               </span>
                             )}
                           </span>
                         );
-                      })()}
+                      })() : (
+                        <span>{base}<span className="opacity-40 font-normal text-[10px]">/{quote}</span></span>
+                      )}
                       {isTradesFavView && tradeBadge && (
                         <span className="text-[9px] font-normal text-emerald-400/90">{tradeBadge}</span>
                       )}

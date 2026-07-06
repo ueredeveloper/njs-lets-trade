@@ -2,15 +2,17 @@ import { useMemo, useState, useEffect, useRef } from 'react';
 import { useI18n } from '../i18n';
 import ReactECharts from 'echarts-for-react';
 import { useCurrency } from '../contexts/CurrencyContext';
-import { fetchCandlesticksAndCloud, fetchGateTrades, fetchBinanceTrades } from '../services/api';
+import { fetchCandlesticksAndCloud, fetchGateTrades, fetchBinanceTrades, DEFAULT_CANDLE_LIMIT } from '../services/api';
 import { buildMarkersFromExchangeTrades, attachPnlToExchangeTrades } from '../utils/multitradeChart';
+import { buildTrailingStopSeries, resolveChartStopLoss } from '../utils/trailingStopLoss';
 import convertOpenTime from '../utils/convertOpenTime';
 import Tooltip from './Tooltip';
 import { hasAnyChartPanelButton } from '../utils/chartPanelButtons';
 import { DEFAULT_OVERLAY_SLOTS } from '../utils/uiPreferences';
 import { CHART_VIEW, computeZoomWindow, buildFixedDataZoom, computeCandleLimitFromTime, isTradePanelChartView } from '../utils/chartView';
 
-const LIMIT = 76;
+const LIMIT = DEFAULT_CANDLE_LIMIT;
+const LAST_CANDLES = 10;
 const MAX_CANDLES = 1000;
 const CANDLE_FETCH_STEPS = [500, 750, 1000];
 const OVERLAY_MA_INTERVALS = ['1m', '5m', '15m', '30m', '1h', '2h', '4h', '8h', '12h', '1d'];
@@ -483,6 +485,35 @@ function buildBuyPnlSeries(buyInfo, candlesticks, DL, LEFT_PAD, RIGHT_PAD, lastC
   };
 }
 
+function buildStopLossLineSeries(buyInfo, stopLossConfig, candlesticks, DL, LEFT_PAD, RIGHT_PAD) {
+  if (!buyInfo?.price || !stopLossConfig) return null;
+  const built = buildTrailingStopSeries(
+    candlesticks, buyInfo.price, buyInfo.time ?? null, stopLossConfig, DL, LEFT_PAD, RIGHT_PAD,
+  );
+  if (!built) return null;
+  const lastVal = [...built.data].reverse().find(v => v != null);
+  return {
+    name: 'Stop Loss',
+    type: 'line',
+    step: 'end',
+    data: built.data,
+    showSymbol: false,
+    z: 4,
+    lineStyle: { color: '#ef4444', width: 1.5, type: 'dashed' },
+    ...(lastVal != null ? {
+      endLabel: {
+        show: true,
+        formatter: fmtChartPrice(lastVal),
+        color: '#fff',
+        fontSize: 9,
+        backgroundColor: '#ef4444',
+        padding: [2, 4],
+        borderRadius: 2,
+      },
+    } : {}),
+  };
+}
+
 function buildMultitradeMarkLines(candlesticks, interval, markers, DL, LEFT_PAD) {
   if (!markers?.length || !candlesticks?.length) return [];
   const ms = { '1m': 60_000, '3m': 180_000, '5m': 300_000, '15m': 900_000, '30m': 1_800_000,
@@ -527,7 +558,7 @@ function buildMultitradeMarkLines(candlesticks, interval, markers, DL, LEFT_PAD)
   });
 }
 
-function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAverage, ma50, ma9, ma21, rsi }, colors, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = [], overlayConfigs = [], multitradeMarkers = [], chartLeftPad = CHART_LEFT_PAD, buyInfo = null) {
+function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAverage, ma50, ma9, ma21, rsi }, colors, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = [], overlayConfigs = [], multitradeMarkers = [], chartLeftPad = CHART_LEFT_PAD, buyInfo = null, stopLossConfig = null) {
   const showMa9      = activeIndicators.includes('ma9');
   const showMa21     = activeIndicators.includes('ma21');
   const showMa50     = activeIndicators.includes('ma50');
@@ -635,6 +666,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
 
   const lastClose = candlesticks.length ? parseFloat(candlesticks[candlesticks.length - 1].close) : null;
   const buyPnlSeries = buildBuyPnlSeries(buyInfo, candlesticks, DL, LEFT_PAD, RIGHT_PAD, lastClose);
+  const stopLossSeries = buildStopLossLineSeries(buyInfo, stopLossConfig, candlesticks, DL, LEFT_PAD, RIGHT_PAD);
   const finalMarkLine = {
     silent: true, symbol: 'none',
     data: [
@@ -776,6 +808,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
     ] : []),
     ...overlayLineSeries.map(s => ({ ...s, xAxisIndex: idx, yAxisIndex: idx })),
     ...(buyPnlSeries ? [{ ...buyPnlSeries, xAxisIndex: idx, yAxisIndex: idx }] : []),
+    ...(stopLossSeries ? [{ ...stopLossSeries, xAxisIndex: idx, yAxisIndex: idx }] : []),
   ];
 
   if (!showRsi) {
@@ -874,7 +907,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
 
 // ── Gráfico Matrix: área de preço + RSI, tema terminal verde ─────────────────
 
-function buildMatrixOption({ symbol, interval, candlesticks, rsi }, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = [], chartLeftPad = CHART_LEFT_PAD, buyInfo = null) {
+function buildMatrixOption({ symbol, interval, candlesticks, rsi }, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = [], chartLeftPad = CHART_LEFT_PAD, buyInfo = null, stopLossConfig = null) {
   const showRsi   = activeIndicators.includes('rsi');
   const showRsi50 = activeIndicators.includes('rsi50');
   const showRsi80 = activeIndicators.includes('rsi80');
@@ -952,6 +985,7 @@ function buildMatrixOption({ symbol, interval, candlesticks, rsi }, activeIndica
   const closes    = candlesticks.slice(-DL).map(c => c.close);
   const lastClose = candlesticks.length ? parseFloat(candlesticks[candlesticks.length - 1].close) : null;
   const buyPnlSeries = buildBuyPnlSeries(buyInfo, candlesticks, DL, LEFT_PAD, RIGHT_PAD, lastClose);
+  const stopLossSeries = buildStopLossLineSeries(buyInfo, stopLossConfig, candlesticks, DL, LEFT_PAD, RIGHT_PAD);
   const finalMarkLine = {
     silent: true, symbol: 'none',
     data: [
@@ -1035,6 +1069,7 @@ function buildMatrixOption({ symbol, interval, candlesticks, rsi }, activeIndica
         markLine: finalMarkLine,
       },
       ...(buyPnlSeries ? [{ ...buyPnlSeries, xAxisIndex: 0, yAxisIndex: 0 }] : []),
+      ...(stopLossSeries ? [{ ...stopLossSeries, xAxisIndex: 0, yAxisIndex: 0 }] : []),
       ...(showRsi && rsiData.length ? [{
         name: 'RSI',
         type: 'line',
@@ -1256,7 +1291,8 @@ function TradeHistoryPanel({ symbol, gateFavorites }) {
 // ── Componente principal ──────────────────────────────────────────────────────
 
 export default function CandlestickChart() {
-  const { selectedChart, setSelectedChart, chartZoom, chartTradeMarkers, chartViewSource,
+  const { selectedChart, setSelectedChart, chartZoom, setChartZoom, chartTradeMarkers, chartViewSource,
+    chartCandleWindowReset,
     multitradeChartFocus, tradePurchases, allTrades, gateFavorites, chartInterval: savedInterval, setChartInterval,
     chartPanelButtons, uiPrefs, setOverlaySlotsPreference, multitradeFavorites, fiveMTradeFavorites, activeTrades } = useCurrency();
   const { t } = useI18n();
@@ -1275,7 +1311,7 @@ export default function CandlestickChart() {
     showBelow: true,
     pct: 4,
   });
-  const [candleFetchLimit, setCandleFetchLimit] = useState(500);
+  const [candleFetchLimit, setCandleFetchLimit] = useState(DEFAULT_CANDLE_LIMIT);
   const [displayCandleCount, setDisplayCandleCount] = useState(LIMIT);
   const [loadingMoreCandles, setLoadingMoreCandles] = useState(false);
 
@@ -1320,10 +1356,10 @@ export default function CandlestickChart() {
       }
       return;
     }
-    setCandleFetchLimit(500);
+    setCandleFetchLimit(DEFAULT_CANDLE_LIMIT);
     setDisplayCandleCount(LIMIT);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedChart?.symbol, selectedChart?.interval, chartViewSource, multitradeChartFocus?.candleLimit]);
+  }, [selectedChart?.symbol, selectedChart?.interval, chartViewSource, multitradeChartFocus?.candleLimit, chartCandleWindowReset]);
 
   // Overlays MA: MA-Cross só muda intervalo do chart; demais MT podem injetar slots da estratégia
   useEffect(() => {
@@ -1458,12 +1494,12 @@ export default function CandlestickChart() {
       const isMt = isTradePanelChartView(chartViewSource) && multitradeChartFocus?.fetchFromMs;
       const limit = isMt
         ? computeCandleLimitFromTime(multitradeChartFocus.fetchFromMs, iv)
-        : 500;
+        : DEFAULT_CANDLE_LIMIT;
       if (isMt) {
         setCandleFetchLimit(limit);
         setDisplayCandleCount(limit);
       } else {
-        setCandleFetchLimit(500);
+        setCandleFetchLimit(DEFAULT_CANDLE_LIMIT);
         setDisplayCandleCount(LIMIT);
       }
       const data = await fetchCandlesticksAndCloud(
@@ -1503,6 +1539,12 @@ export default function CandlestickChart() {
     }
   }
 
+  async function handleLoadLast10Candles() {
+    if (!selectedChart?.symbol || !selectedChart?.candlesticks?.length) return;
+    setDisplayCandleCount(LAST_CANDLES);
+    setChartZoom(null);
+  }
+
   useEffect(() => {
     if (!chartZoom || !chartRef.current || !selectedChart?.candlesticks?.length) return;
     // Zoom embutido na option (buildFixedDataZoom); dispatchAction só como fallback legado (tabela/sem source)
@@ -1530,11 +1572,14 @@ export default function CandlestickChart() {
     if (chartZoom && (isTradePanelChartView(chartViewSource) || chartViewSource === CHART_VIEW.STATISTICS)) {
       return candles?.length ?? displayCandleCount;
     }
+    // Botão 10 / load more — prioridade sobre expansão automática por marcadores
+    if (displayCandleCount !== LIMIT) {
+      return Math.min(displayCandleCount, candles?.length ?? displayCandleCount);
+    }
     if ((chartTradeMarkers?.length || selectedChart?.tradeMarkers?.length) && candles?.length && candles.length <= 50) {
       return candles.length;
     }
     if (chartZoom) return candles?.length ?? displayCandleCount;
-    if (displayCandleCount > LIMIT) return Math.min(displayCandleCount, candles?.length ?? displayCandleCount);
     if (!candles?.length || !markerTimesForWindow.length) return LIMIT;
     const oldest = Math.min(...markerTimesForWindow);
     const idx = candles.findIndex(c => Number(c.openTime) >= oldest);
@@ -1586,20 +1631,25 @@ export default function CandlestickChart() {
     multitradeFavorites, fiveMTradeFavorites, activeTrades, allTrades, tradePurchases, chartTradeMarkers,
   ]);
 
+  const chartStopLossConfig = useMemo(() => {
+    if (!selectedChart?.symbol) return null;
+    return resolveChartStopLoss(selectedChart.symbol, multitradeFavorites);
+  }, [selectedChart?.symbol, multitradeFavorites]);
+
   const option = useMemo(() => {
     if (!selectedChart) return null;
     if (activeTab === 'matrix') {
       return buildMatrixOption(
-        selectedChart, effectiveIndicators, displayLimit, chartZoom, tradeTimes, chartLeftPad, chartBuyInfo,
+        selectedChart, effectiveIndicators, displayLimit, chartZoom, tradeTimes, chartLeftPad, chartBuyInfo, chartStopLossConfig,
       );
     }
     return buildOption(
       selectedChart, colors, effectiveIndicators, displayLimit, chartZoom, tradeTimes, overlayConfigs,
       chartTradeMarkers?.length ? chartTradeMarkers : (selectedChart.tradeMarkers ?? []),
-      chartLeftPad, chartBuyInfo,
+      chartLeftPad, chartBuyInfo, chartStopLossConfig,
     );
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedChart, colors, effectiveIndicators, chartZoom, tradePurchases, chartTradeMarkers, activeTab, overlayConfigs, displayLimit, chartLeftPad, chartBuyInfo]);
+  }, [selectedChart, colors, effectiveIndicators, chartZoom, tradePurchases, chartTradeMarkers, activeTab, overlayConfigs, displayLimit, chartLeftPad, chartBuyInfo, chartStopLossConfig]);
 
   if (!selectedChart || !option) {
     return (
@@ -1671,6 +1721,14 @@ export default function CandlestickChart() {
           {loadingInterval && (
             <div className="w-3 h-3 border border-p4 border-t-transparent rounded-full animate-spin ml-1 shrink-0" />
           )}
+          <button
+            onClick={handleLoadLast10Candles}
+            disabled={loadingMoreCandles || !selectedChart?.symbol || !selectedChart?.candlesticks?.length}
+            title={t('chart.load_last_10')}
+            className="ml-1 px-1.5 md:px-2 py-0.5 text-[10px] md:text-xs rounded font-mono transition-colors disabled:opacity-40 text-p5 hover:bg-p3/40 hover:text-white border border-p3/40 shrink-0"
+          >
+            {t('chart.last_10_btn')}
+          </button>
           <button
             onClick={handleLoadMoreCandles}
             disabled={loadingMoreCandles || (candleFetchLimit >= MAX_CANDLES && (selectedChart?.candlesticks?.length ?? 0) >= MAX_CANDLES)}
