@@ -1,5 +1,6 @@
 import { useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
+import { bootLog, bootError } from '../utils/bootLog';
 import { useCurrency } from '../contexts/CurrencyContext';
 import SearchInput from './SearchInput';
 import {
@@ -29,6 +30,7 @@ import {
 } from '../utils/tradeFavoritesSort';
 import { useMacrossFavoritesStatus } from '../hooks/useMacrossFavoritesStatus';
 import { useTradeFavoritesSummary } from '../hooks/useTradeFavoritesSummary';
+import { useVirtualRows } from '../hooks/useVirtualRows';
 import MacrossFavSortSelect from './MacrossFavSortSelect';
 import TradeFavSortSelect from './TradeFavSortSelect';
 
@@ -99,6 +101,9 @@ function splitSymbol(symbol) {
 
 
 const FAV_LOG = '[Favoritos]';
+
+/** Altura estimada de cada linha da tabela (px) — virtual scroll. */
+const TABLE_ROW_HEIGHT = 38;
 
 function FavButton({ active, color, label, text, symbol, kind, onClick, tipKey }) {
   const { t } = useI18n();
@@ -263,11 +268,17 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   const [gateLoading, setGateLoading]     = useState(false);
   const [gateAll, setGateAll]             = useState(null); // todas as moedas Gate (para favoritos)
   const gateCacheRef                      = useRef(null);
+  const tableScrollRef                    = useRef(null);
   const [macrossLive, setMacrossLive]     = useState(false);
   const [macrossRefreshing, setMacrossRefreshing] = useState(false);
   const [macrossTick, setMacrossTick]     = useState(0);
   const [macrossFavSort, setMacrossFavSort] = useState(() => loadMacrossFavSort());
   const [tradeFavSort, setTradeFavSort] = useState(() => loadTradeFavSort());
+
+  useEffect(() => {
+    bootLog('CurrencyTable montado');
+    return () => bootLog('CurrencyTable desmontado');
+  }, []);
 
   const macrossFavSymbols = useMemo(() => (
     [...new Set(
@@ -345,6 +356,8 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   }, []);
 
   const rows = useMemo(() => {
+    const t0 = performance.now();
+    try {
     if (!currencies.list?.length) return [];
 
     let list;
@@ -369,14 +382,13 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
       const filter = findFilter(activeFilter);
       if (filter) {
         const useGateFallback = needsGateFallback(activeFilter);
+        const binanceBySymbol = new Map(currencies.list.map((c) => [c.symbol, c]));
+        const gateBySymbol = useGateFallback && gateAll
+          ? new Map(gateAll.map((c) => [c.symbol, c]))
+          : null;
         const mapped = filter.list
           .filter((sym) => isVisibleSymbol(sym))
-          .map((sym) => {
-            const binance = currencies.list.find((c) => c.symbol === sym);
-            if (binance) return binance;
-            if (useGateFallback && gateAll) return gateAll.find((c) => c.symbol === sym) ?? null;
-            return null;
-          })
+          .map((sym) => binanceBySymbol.get(sym) ?? gateBySymbol?.get(sym) ?? null)
           .filter(Boolean);
         const have = new Set(mapped.map((c) => c.symbol));
         list = mapped;
@@ -415,7 +427,37 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     }
 
     return list;
+    } catch (err) {
+      bootError('CurrencyTable — rows useMemo ERRO', err);
+      throw err;
+    } finally {
+      const ms = Math.round(performance.now() - t0);
+      if (ms > 30) {
+        bootLog('CurrencyTable — rows useMemo lento', {
+          ms,
+          currencies: currencies.list?.length ?? 0,
+          activeFilter,
+          favoriteView,
+        });
+      }
+    }
   }, [currencies, activeFilter, selectedQuote, findFilter, search, favoriteView, gateFavorites, binanceFavorites, multitradeFavorites, sortVolume, gateAll, filterVisibleCurrencies, isVisibleSymbol, activeMacrossFilter, macrossScannedAt, macrossTick, isMacrossFavView, macrossFavSort, macrossFavStatus, macrossEntriesBySymbol, isTradesFavView, tradeFavSort, tradeFavSymbols, tradeFavStatus, isAltaFilter, isNovasFilter, highlightMeta]);
+
+  useEffect(() => {
+    bootLog('CurrencyTable — rows prontas', {
+      count: rows.length,
+      activeFilter,
+      favoriteView,
+      currencies: currencies.list?.length ?? 0,
+    });
+  }, [rows.length, activeFilter, favoriteView, currencies.list?.length]);
+
+  const { slice: visibleRows, paddingTop, paddingBottom } = useVirtualRows({
+    items: rows,
+    rowHeight: TABLE_ROW_HEIGHT,
+    containerRef: tableScrollRef,
+    overscan: 10,
+  });
 
   // Atualização em tempo real de filtros macross (cruzou há N min / prestes a cruzar)
   useEffect(() => {
@@ -754,7 +796,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
       </div>
 
       {/* Tabela */}
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto" ref={tableScrollRef}>
         <table className="w-full text-xs table-fixed">
           <colgroup>
             <col style={{ width: favColWidth }} />
@@ -879,7 +921,13 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
               </tr>
             )}
 
-            {rows.map((item) => {
+            {paddingTop > 0 && (
+              <tr aria-hidden="true">
+                <td colSpan={tableColCount} style={{ height: paddingTop, padding: 0, border: 'none' }} />
+              </tr>
+            )}
+
+            {visibleRows.map((item) => {
               const { base, quote } = splitSymbol(item.symbol);
               const isGate     = gateFavorites.has(item.symbol);
               const isBinance  = binanceFavorites.has(item.symbol);
@@ -1011,6 +1059,12 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                 </tr>
               );
             })}
+
+            {paddingBottom > 0 && (
+              <tr aria-hidden="true">
+                <td colSpan={tableColCount} style={{ height: paddingBottom, padding: 0, border: 'none' }} />
+              </tr>
+            )}
 
             {isTradesFavView && rows.length > 0 && tradePnlSumLabel != null && (
               <tr className="border-t border-p3 sticky bottom-0 z-10">

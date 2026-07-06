@@ -5,10 +5,34 @@
 
 import { buildRsiNomeFromQuery } from '../utils/filterNames';
 
+/** Evita fetch duplicado (React StrictMode / init concorrente). */
+let allCurrenciesCache = null;
+let allCurrenciesInflight = null;
+
 export async function fetchAllCurrencies() {
-  const res = await fetch('/services/currencies');
-  if (!res.ok) throw new Error('Falha ao buscar moedas');
-  return res.json();
+  if (allCurrenciesCache) return allCurrenciesCache;
+  if (allCurrenciesInflight) return allCurrenciesInflight;
+
+  allCurrenciesInflight = fetch('/services/currencies')
+    .then((res) => {
+      if (!res.ok) throw new Error('Falha ao buscar moedas');
+      return res.json();
+    })
+    .then((data) => {
+      allCurrenciesCache = data;
+      return data;
+    })
+    .finally(() => {
+      allCurrenciesInflight = null;
+    });
+
+  return allCurrenciesInflight;
+}
+
+/** Limpa cache após refresh manual (opcional). */
+export function invalidateAllCurrenciesCache() {
+  allCurrenciesCache = null;
+  allCurrenciesInflight = null;
 }
 
 export async function fetchUserPrefs() {

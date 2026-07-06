@@ -1,6 +1,7 @@
 import { useMemo, useState, useEffect, useRef } from 'react';
 import { useI18n } from '../i18n';
 import ReactECharts from 'echarts-for-react';
+import { bootLog, bootError } from '../utils/bootLog';
 import { useCurrency } from '../contexts/CurrencyContext';
 import { fetchCandlesticksAndCloud, fetchGateTrades, fetchBinanceTrades, DEFAULT_CANDLE_LIMIT } from '../services/api';
 import { buildMarkersFromExchangeTrades, attachPnlToExchangeTrades } from '../utils/multitradeChart';
@@ -1291,6 +1292,9 @@ function TradeHistoryPanel({ symbol, gateFavorites }) {
 // ── Componente principal ──────────────────────────────────────────────────────
 
 export default function CandlestickChart() {
+  const chartRender = useRef(0);
+  chartRender.current += 1;
+
   const { selectedChart, setSelectedChart, chartZoom, setChartZoom, chartTradeMarkers, chartViewSource,
     chartCandleWindowReset,
     multitradeChartFocus, tradePurchases, allTrades, gateFavorites, chartInterval: savedInterval, setChartInterval,
@@ -1314,6 +1318,33 @@ export default function CandlestickChart() {
   const [candleFetchLimit, setCandleFetchLimit] = useState(DEFAULT_CANDLE_LIMIT);
   const [displayCandleCount, setDisplayCandleCount] = useState(LIMIT);
   const [loadingMoreCandles, setLoadingMoreCandles] = useState(false);
+
+  useEffect(() => {
+    bootLog('CandlestickChart montado');
+    return () => bootLog('CandlestickChart desmontado');
+  }, []);
+
+  useEffect(() => {
+    if (chartRender.current <= 5) {
+      bootLog('CandlestickChart render', {
+        n: chartRender.current,
+        symbol: selectedChart?.symbol,
+        interval: selectedChart?.interval,
+        candles: selectedChart?.candlesticks?.length ?? 0,
+        activeTab,
+        loadingInterval,
+      });
+    }
+  });
+
+  useEffect(() => {
+    if (!selectedChart?.symbol) return;
+    bootLog('CandlestickChart — selectedChart atualizado', {
+      symbol: selectedChart.symbol,
+      interval: selectedChart.interval,
+      candles: selectedChart.candlesticks?.length ?? 0,
+    });
+  }, [selectedChart?.symbol, selectedChart?.interval, selectedChart?.candlesticks?.length]);
 
   useEffect(() => {
     const el = chartWrapRef.current;
@@ -1638,16 +1669,29 @@ export default function CandlestickChart() {
 
   const option = useMemo(() => {
     if (!selectedChart) return null;
-    if (activeTab === 'matrix') {
-      return buildMatrixOption(
-        selectedChart, effectiveIndicators, displayLimit, chartZoom, tradeTimes, chartLeftPad, chartBuyInfo, chartStopLossConfig,
-      );
+    const t0 = performance.now();
+    let result;
+    try {
+      if (activeTab === 'matrix') {
+        result = buildMatrixOption(
+          selectedChart, effectiveIndicators, displayLimit, chartZoom, tradeTimes, chartLeftPad, chartBuyInfo, chartStopLossConfig,
+        );
+      } else {
+        result = buildOption(
+          selectedChart, colors, effectiveIndicators, displayLimit, chartZoom, tradeTimes, overlayConfigs,
+          chartTradeMarkers?.length ? chartTradeMarkers : (selectedChart.tradeMarkers ?? []),
+          chartLeftPad, chartBuyInfo, chartStopLossConfig,
+        );
+      }
+      const ms = Math.round(performance.now() - t0);
+      if (ms > 50) {
+        bootLog('CandlestickChart — buildOption lento', { ms, activeTab, symbol: selectedChart.symbol });
+      }
+      return result;
+    } catch (err) {
+      bootError('CandlestickChart — buildOption ERRO', err);
+      throw err;
     }
-    return buildOption(
-      selectedChart, colors, effectiveIndicators, displayLimit, chartZoom, tradeTimes, overlayConfigs,
-      chartTradeMarkers?.length ? chartTradeMarkers : (selectedChart.tradeMarkers ?? []),
-      chartLeftPad, chartBuyInfo, chartStopLossConfig,
-    );
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedChart, colors, effectiveIndicators, chartZoom, tradePurchases, chartTradeMarkers, activeTab, overlayConfigs, displayLimit, chartLeftPad, chartBuyInfo, chartStopLossConfig]);
 
@@ -1675,6 +1719,7 @@ export default function CandlestickChart() {
       notMerge={true}
       style={{ height: '100%', width: '100%' }}
       opts={{ renderer: 'canvas' }}
+      lazyUpdate
     />
   );
 

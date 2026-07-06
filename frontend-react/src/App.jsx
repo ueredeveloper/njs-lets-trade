@@ -1,4 +1,14 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useRef, useState, useMemo, startTransition, useCallback } from 'react';
+import { bootLog, bootError, bootTimed } from './utils/bootLog';
+import {
+  BOOT_STAGE,
+  MAX_BOOT_STAGE,
+  loadBootStage,
+  saveBootStage,
+  clampStage,
+  bootStageAtLeast,
+  bootStageLabel,
+} from './utils/bootStages';
 import { CurrencyProvider, useCurrency } from './contexts/CurrencyContext';
 import { LanguageProvider } from './contexts/LanguageContext';
 import { useI18n } from './i18n';
@@ -12,21 +22,65 @@ import CandlestickChart from './components/CandlestickChart';
 import SettingsSidebar from './components/SettingsSidebar';
 import StatisticsPanel from './components/StatisticsPanel';
 import MultitradePanel from './components/MultitradePanel';
+import BootStageBar from './components/BootStageBar';
+
+const MOBILE_SHEET_HEIGHT = '88%';
+const MOBILE_SHEET_FILTERS_HEIGHT = '45%';
 
 function AppContent() {
-  const { setCurrencies, setFilters, addFilter, setSelectedChart, setGateFavorites, setBinanceFavorites,
+  const renderCount = useRef(0);
+  renderCount.current += 1;
+
+  const { setCurrencies, setFilters, setSelectedChart, setGateFavorites, setBinanceFavorites,
     setChartInterval, uiPrefs, clearFavoriteView } = useCurrency();
   const { t } = useI18n();
   const isMobile = useIsMobile();
+
+  const [bootStage, setBootStageState] = useState(() => loadBootStage());
+  const setBootStage = useCallback((next) => {
+    setBootStageState((prev) => {
+      const n = typeof next === 'function' ? next(prev) : next;
+      return clampStage(n);
+    });
+  }, []);
+
+  const show = useCallback((min) => bootStageAtLeast(bootStage, min), [bootStage]);
+  const bootDebug = bootStage < BOOT_STAGE.FULL;
+
+  useEffect(() => {
+    bootLog('AppContent montado', { isMobile, bootStage });
+    return () => bootLog('AppContent desmontado');
+  }, [isMobile, bootStage]);
+
+  useEffect(() => {
+    saveBootStage(bootStage);
+    bootLog(`bootStage ativo → ${bootStage} (${bootStageLabel(bootStage)})`);
+  }, [bootStage]);
+
+  useEffect(() => {
+    window.__bootStage = bootStage;
+    window.__bootNext = () => setBootStage((s) => s + 1);
+    window.__bootPrev = () => setBootStage((s) => s - 1);
+    window.__bootGoto = (n) => setBootStage(n);
+    window.__bootLabel = () => bootStageLabel(bootStage);
+    return () => {
+      delete window.__bootStage;
+      delete window.__bootNext;
+      delete window.__bootPrev;
+      delete window.__bootGoto;
+      delete window.__bootLabel;
+    };
+  }, [bootStage, setBootStage]);
+
   const [activeFilter, setActiveFilter] = useState(null);
   const [loading, setLoading] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  /** Mobile: moedas | indicators | stats | macross */
-  const [mobileSection, setMobileSection] = useState('moedas');
-  const [openPanels, setOpenPanels] = useState(() => {
-    const first = firstVisiblePanel(loadUiPreferences().visiblePanels);
-    return first ? [first] : [];
-  });
+  const [currencyModalOpen, setCurrencyModalOpen] = useState(false);
+  const [currencyModalVisible, setCurrencyModalVisible] = useState(false);
+  const [dragY, setDragY] = useState(0);
+  const dragStartY = useRef(null);
+  const [openPanels, setOpenPanels] = useState(() => []);
+
   const panelDefs = useMemo(() => ([
     { id: 'indicators', label: t('app.analyze') },
     { id: 'stats',      label: t('app.statistics') },
@@ -38,19 +92,15 @@ function AppContent() {
     [panelDefs, uiPrefs.visiblePanels],
   );
 
-  const mobileTabs = useMemo(
-    () => [{ id: 'moedas', label: t('app.currencies') }, ...visiblePanelDefs],
-    [visiblePanelDefs, t],
-  );
-
   useEffect(() => {
+    if (bootDebug) return;
     setOpenPanels((prev) => {
       const stillVisible = prev.filter((id) => uiPrefs.visiblePanels[id] !== false);
       if (stillVisible.length) return stillVisible;
       const first = firstVisiblePanel(uiPrefs.visiblePanels);
       return first ? [first] : [];
     });
-  }, [uiPrefs.visiblePanels]);
+  }, [uiPrefs.visiblePanels, bootDebug]);
 
   function pickPanelOnCurrencySelect() {
     if (uiPrefs.visiblePanels.stats !== false) return 'stats';
@@ -68,41 +118,76 @@ function AppContent() {
   }
 
   useEffect(() => {
+    let cancelled = false;
     async function init() {
+      bootLog('App.init → start');
       try {
-        const allCurrencies = await fetchAllCurrencies();
+        const allCurrencies = await bootTimed('fetchAllCurrencies', fetchAllCurrencies);
+        if (cancelled) return;
         setCurrencies({ name: '1h|All', list: allCurrencies });
+        bootLog('App.init — currencies set', { count: allCurrencies.length });
 
         const binanceUsdtList = allCurrencies
           .filter((c) => c.symbol.endsWith('USDT'))
           .map((c) => c.symbol);
-        setFilters([{ name: 'Mercado|USDT', list: binanceUsdtList }]);
 
         const defaultIv = loadUiPreferences().defaultChartInterval;
+        bootLog('App.init — Promise.all paralelo', { defaultIv });
         const [volumeFilters, stableFilters, btcData, gateList, binanceList] = await Promise.all([
-          fetch24hVolume(),
-          fetchStablecoins().catch(() => []),
-          fetchCandlesticksAndCloud('BTCUSDT', defaultIv),
-          getFavorites('gate').catch(() => []),
-          getFavorites('binance').catch(() => []),
+          bootTimed('fetch24hVolume', fetch24hVolume),
+          bootTimed('fetchStablecoins', () => fetchStablecoins().catch((err) => {
+            bootError('fetchStablecoins (ignorado)', err);
+            return [];
+          })),
+          bootTimed('fetchCandlesticksAndCloud', () => fetchCandlesticksAndCloud('BTCUSDT', defaultIv)),
+          bootTimed('getFavorites(gate)', () => getFavorites('gate').catch((err) => {
+            bootError('getFavorites(gate) (ignorado)', err);
+            return [];
+          })),
+          bootTimed('getFavorites(binance)', () => getFavorites('binance').catch((err) => {
+            bootError('getFavorites(binance) (ignorado)', err);
+            return [];
+          })),
         ]);
+        if (cancelled) return;
 
-        volumeFilters.forEach((f) => addFilter(f));
-        stableFilters.forEach((f) => addFilter(f));
+        setFilters([
+          { name: 'Mercado|USDT', list: binanceUsdtList },
+          ...volumeFilters,
+          ...stableFilters,
+        ]);
+        bootLog('App.init — filtros base', {
+          mercado: binanceUsdtList.length,
+          volume: volumeFilters.length,
+          stable: stableFilters.length,
+        });
+
         setSelectedChart({ ...btcData, interval: defaultIv, symbol: 'BTCUSDT' });
         setChartInterval(defaultIv);
         setGateFavorites(new Set(gateList));
         setBinanceFavorites(new Set(binanceList));
+        bootLog('App.init — chart + favoritos OK', {
+          candles: btcData?.candlesticks?.length ?? 0,
+          gateFav: gateList.length,
+          binanceFav: binanceList.length,
+        });
       } catch (err) {
-        console.error('Erro ao inicializar:', err);
+        bootError('App.init — FALHA', err);
       } finally {
-        setLoading(false);
+        if (!cancelled) {
+          bootLog('App.init — setLoading(false)');
+          startTransition(() => setLoading(false));
+        }
       }
     }
     init();
+    return () => { cancelled = true; };
   }, []);
 
   if (loading) {
+    if (renderCount.current <= 2) {
+      bootLog('AppContent render — loading spinner', { render: renderCount.current });
+    }
     return (
       <div className="flex items-center justify-center h-dvh min-h-0 bg-p1">
         <div className="flex flex-col items-center gap-3">
@@ -113,10 +198,42 @@ function AppContent() {
     );
   }
 
+  function openCurrencyModal() {
+    setCurrencyModalOpen(true);
+    setDragY(0);
+    requestAnimationFrame(() => requestAnimationFrame(() => setCurrencyModalVisible(true)));
+  }
+
+  function closeCurrencyModal() {
+    setDragY(0);
+    setCurrencyModalVisible(false);
+    setTimeout(() => setCurrencyModalOpen(false), 320);
+  }
+
+  function handleDragStart(e) {
+    dragStartY.current = e.touches[0].clientY;
+  }
+
+  function handleDragMove(e) {
+    if (dragStartY.current === null) return;
+    const delta = e.touches[0].clientY - dragStartY.current;
+    if (delta > 0) setDragY(delta);
+  }
+
+  function handleDragEnd() {
+    if (dragY > 120) {
+      closeCurrencyModal();
+    } else {
+      setDragY(0);
+    }
+    dragStartY.current = null;
+  }
+
   function handleSelectCurrency() {
     const target = pickPanelOnCurrencySelect();
     if (isMobile) {
-      if (target) setMobileSection(target);
+      closeCurrencyModal();
+      if (target) setOpenPanels([target]);
       return;
     }
     if (target) setOpenPanels([target]);
@@ -124,15 +241,20 @@ function AppContent() {
 
   function handleSelectFilter(name) {
     setActiveFilter(name);
-    // Só limpa a view de favoritos (TN/MC/G/B) ao escolher um filtro de indicador;
-    // onSelectFilter(null) vindo da toolbar não deve desfazer o toggle.
     if (name) clearFavoriteView();
   }
 
-  return (
-    <div className="flex flex-col h-dvh min-h-0 overflow-hidden">
+  const showIndicator = show(BOOT_STAGE.INDICATOR_PANEL)
+    && (bootDebug || (openPanels.includes('indicators') && uiPrefs.visiblePanels.indicators !== false));
+  const showStats = show(BOOT_STAGE.STATS_PANEL)
+    && (bootDebug || (openPanels.includes('stats') && uiPrefs.visiblePanels.stats !== false));
+  const showMacross = show(BOOT_STAGE.MACROSS_PANEL)
+    && (bootDebug || (openPanels.includes('macross') && uiPrefs.visiblePanels.macross !== false));
 
-      {/* Header */}
+  return (
+    <div className={`flex flex-col h-dvh min-h-0 overflow-hidden ${bootDebug ? 'pb-24' : ''}`}>
+
+      {/* 1 — Header */}
       <header className="flex items-center justify-between px-4 py-2 bg-p1 border-b border-p2 shrink-0">
         <h1 className="text-lg font-bold tracking-widest text-p5 uppercase">
           Let&apos;s Trade
@@ -140,6 +262,11 @@ function AppContent() {
 
         <div className="flex items-center gap-3">
           <span className="hidden sm:inline text-xs text-p4 opacity-60">{t('app.crypto_screener')}</span>
+          {bootDebug && (
+            <span className="text-[10px] font-mono text-amber-500/90">
+              boot {bootStage}/{MAX_BOOT_STAGE}
+            </span>
+          )}
           <button
             onClick={() => setSettingsOpen(true)}
             className="text-p5 hover:text-white p-1 rounded hover:bg-p2 transition-colors"
@@ -156,71 +283,120 @@ function AppContent() {
 
       <SettingsSidebar open={settingsOpen} onClose={() => setSettingsOpen(false)} />
 
-      {/* Corpo principal */}
-      <div className="flex flex-row min-h-0 flex-1 overflow-hidden">
+      {/* Mobile — bottom sheet */}
+      {currencyModalOpen && show(BOOT_STAGE.MOBILE_BTN) && (
+        <div
+          className="fixed inset-0 z-50 md:hidden"
+          onClick={closeCurrencyModal}
+        >
+          <div
+            className="absolute inset-0 bg-black/60 transition-opacity duration-300"
+            style={{ opacity: currencyModalVisible ? 1 : 0 }}
+          />
 
-        {/* Coluna esquerda — Gráfico + painéis / moedas (mobile) */}
-        <div className="flex flex-col flex-1 min-w-0 min-h-0 bg-p1 md:border-r border-p2">
-          {/* Mobile: ~42% da coluna (flex), não dvh — evita toolbar esmagar o canvas */}
-          <div className="relative min-h-0 flex-[5] min-h-[170px] md:shrink-0 md:flex-none md:h-[55vh] md:min-h-0">
-            <CandlestickChart />
-          </div>
-
-          {/* Mobile — filtros + favoritos inline (sem bottom sheet) */}
-          <div className="md:hidden flex flex-col flex-[7] min-h-0 border-t border-p2">
-            <div className="shrink-0 flex border-b border-p2 divide-x divide-p2 overflow-x-auto touch-pan-x">
-              {mobileTabs.map(({ id, label }) => (
-                <button
-                  key={id}
-                  type="button"
-                  onClick={() => setMobileSection(id)}
-                  className={`flex-1 min-w-[4.5rem] px-2 py-2.5 text-[11px] font-semibold uppercase tracking-wide whitespace-nowrap touch-manipulation ${
-                    mobileSection === id ? 'text-white bg-p2/70' : 'text-p5/70'
-                  }`}
-                  style={mobileSection === id && id === 'macross' ? { color: '#22d3ee' } : undefined}
-                >
-                  {label}
-                </button>
-              ))}
+          <div
+            className="absolute inset-x-0 bottom-0 flex flex-col bg-p1 border-t border-p2 rounded-t-2xl shadow-2xl"
+            style={{
+              height: MOBILE_SHEET_HEIGHT,
+              transform: dragY > 0
+                ? `translateY(${dragY}px)`
+                : currencyModalVisible ? 'translateY(0)' : 'translateY(100%)',
+              transition: dragY > 0 ? 'none' : 'transform 300ms ease-out',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div
+              className="flex justify-center pt-3 pb-2 shrink-0 cursor-grab active:cursor-grabbing touch-none"
+              onTouchStart={handleDragStart}
+              onTouchMove={handleDragMove}
+              onTouchEnd={handleDragEnd}
+            >
+              <div className="w-12 h-1.5 rounded-full bg-p3/60" />
             </div>
 
-            {mobileSection === 'moedas' ? (
-              <div className="flex flex-col flex-1 min-h-0">
-                <div className="shrink-0 px-2 py-1 border-b border-p2 overflow-hidden h-36 min-h-[8rem]">
-                  <FilterTabs activeFilter={activeFilter} onSelectFilter={handleSelectFilter} />
-                </div>
-                <div className="flex-1 min-h-0 overflow-hidden">
-                  <CurrencyTable
-                    activeFilter={activeFilter}
-                    onSelectFilter={handleSelectFilter}
-                    onSelectCurrency={handleSelectCurrency}
-                  />
-                </div>
+            <div
+              className="flex items-center justify-between px-4 py-2 border-b border-p2 shrink-0 cursor-grab active:cursor-grabbing touch-none"
+              onTouchStart={handleDragStart}
+              onTouchMove={handleDragMove}
+              onTouchEnd={handleDragEnd}
+            >
+              <span className="text-sm font-semibold text-p5 uppercase tracking-widest">{t('app.currencies')}</span>
+              <button
+                type="button"
+                onClick={closeCurrencyModal}
+                onTouchStart={(e) => e.stopPropagation()}
+                className="text-p5 hover:text-white w-9 h-9 flex items-center justify-center rounded-full hover:bg-p2 transition-colors text-2xl leading-none"
+              >
+                ×
+              </button>
+            </div>
+
+            {show(BOOT_STAGE.FILTER_TABS) && (
+              <div
+                className="flex flex-col min-h-0 px-2 py-1 border-b border-p2 overflow-hidden shrink-0"
+                style={{ height: MOBILE_SHEET_FILTERS_HEIGHT }}
+                onTouchStart={handleDragStart}
+                onTouchMove={handleDragMove}
+                onTouchEnd={handleDragEnd}
+              >
+                <FilterTabs activeFilter={activeFilter} onSelectFilter={handleSelectFilter} />
               </div>
-            ) : mobileSection === 'indicators' && uiPrefs.visiblePanels.indicators !== false ? (
-              <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-                <IndicatorPanel />
+            )}
+
+            {show(BOOT_STAGE.CURRENCY_TABLE) && (
+              <div className="flex-1 min-h-0 overflow-hidden">
+                <CurrencyTable
+                  activeFilter={activeFilter}
+                  onSelectFilter={handleSelectFilter}
+                  onSelectCurrency={handleSelectCurrency}
+                />
               </div>
-            ) : mobileSection === 'stats' && uiPrefs.visiblePanels.stats !== false ? (
-              <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-                <StatisticsPanel />
+            )}
+          </div>
+        </div>
+      )}
+
+      <div className="flex flex-row min-h-0 flex-1 overflow-hidden">
+
+        {/* Coluna esquerda */}
+        <div className="flex flex-col flex-1 min-w-0 min-h-0 bg-p1 md:border-r border-p2">
+          {/* 2 — Gráfico */}
+          <div className="relative min-h-0 flex-1 md:shrink-0 md:flex-none md:h-[55vh] md:min-h-0">
+            {show(BOOT_STAGE.CHART) ? (
+              <CandlestickChart />
+            ) : (
+              <div className="flex items-center justify-center h-full text-p5/30 text-xs uppercase tracking-widest">
+                estágio 2 → CandlestickChart
               </div>
-            ) : mobileSection === 'macross' && uiPrefs.visiblePanels.macross !== false ? (
-              <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-                <MultitradePanel />
-              </div>
-            ) : null}
+            )}
+
+            {/* 9 — Botão moedas mobile */}
+            {show(BOOT_STAGE.MOBILE_BTN) && (
+              <button
+                type="button"
+                onClick={openCurrencyModal}
+                title="Abrir filtros e moedas"
+                className="md:hidden absolute bottom-2 right-2 z-10 flex items-center gap-1.5 px-3 py-2 rounded-full bg-p3/90 hover:bg-p4 text-white text-xs font-mono font-semibold shadow-lg backdrop-blur-sm transition-colors touch-manipulation"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
+                  strokeWidth="2" stroke="currentColor" className="w-3.5 h-3.5 shrink-0">
+                  <path strokeLinecap="round" strokeLinejoin="round"
+                    d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25H12" />
+                </svg>
+                {t('app.currencies')}
+              </button>
+            )}
           </div>
 
-          {/* Desktop — barra de toggles + painéis */}
-          {visiblePanelDefs.length > 0 && (
-          <div className="hidden md:flex shrink-0 border-t border-p2 divide-x divide-p2">
+          {/* 3 — Barra de painéis */}
+          {show(BOOT_STAGE.PANEL_BAR) && visiblePanelDefs.length > 0 && (
+          <div className="shrink-0 border-t border-p2 flex divide-x divide-p2">
             {visiblePanelDefs.map(({ id, label }) => (
               <button
                 key={id}
                 type="button"
                 onClick={() => togglePanel(id)}
-                className={`flex items-center gap-1.5 flex-1 justify-center px-3 py-1.5 text-xs uppercase tracking-widest transition-colors ${
+                className={`flex items-center gap-1.5 flex-1 justify-center px-3 py-1.5 text-xs uppercase tracking-widest transition-colors touch-manipulation ${
                   openPanels.includes(id) ? 'text-white' : 'text-p5 hover:text-white'
                 }`}
                 style={
@@ -238,44 +414,66 @@ function AppContent() {
             ))}
           </div>
           )}
-          {openPanels.includes('indicators') && uiPrefs.visiblePanels.indicators !== false && (
-            <div className="hidden md:flex flex-1 min-h-0 flex-col">
+
+          {/* 6 — IndicatorPanel */}
+          {showIndicator && (
+            <div className="flex-1 min-h-0 flex flex-col">
               <IndicatorPanel />
             </div>
           )}
-          {openPanels.includes('stats') && uiPrefs.visiblePanels.stats !== false && (
-            <div className="hidden md:flex flex-1 min-h-0 flex-col">
+
+          {/* 7 — StatisticsPanel */}
+          {showStats && (
+            <div className="flex-1 min-h-0 flex flex-col">
               <StatisticsPanel />
             </div>
           )}
-          {openPanels.includes('macross') && uiPrefs.visiblePanels.macross !== false && (
-            <div className="hidden md:flex flex-1 min-h-0 flex-col">
+
+          {/* 8 — MultitradePanel */}
+          {showMacross && (
+            <div className="flex-1 min-h-0 flex flex-col">
               <MultitradePanel />
             </div>
           )}
         </div>
 
-        {/* Coluna direita — Moedas (desktop) */}
+        {/* 4+5 — Coluna direita desktop */}
         <div className="hidden md:flex flex-col w-[28rem] shrink-0 min-h-0 bg-p1">
-          <div className="flex flex-col min-h-0 px-2 py-1 border-b border-p2 overflow-hidden" style={{ height: '40%' }}>
-            <FilterTabs activeFilter={activeFilter} onSelectFilter={handleSelectFilter} />
-          </div>
-          <div className="flex-1 min-h-0 overflow-hidden">
-            <CurrencyTable
-              activeFilter={activeFilter}
-              onSelectFilter={handleSelectFilter}
-              onSelectCurrency={handleSelectCurrency}
-            />
-          </div>
+          {show(BOOT_STAGE.FILTER_TABS) && (
+            <div className="flex flex-col min-h-0 px-2 py-1 border-b border-p2 overflow-hidden" style={{ height: '40%' }}>
+              <FilterTabs activeFilter={activeFilter} onSelectFilter={handleSelectFilter} />
+            </div>
+          )}
+          {show(BOOT_STAGE.CURRENCY_TABLE) ? (
+            <div className="flex-1 min-h-0 overflow-hidden">
+              <CurrencyTable
+                activeFilter={activeFilter}
+                onSelectFilter={handleSelectFilter}
+                onSelectCurrency={handleSelectCurrency}
+              />
+            </div>
+          ) : show(BOOT_STAGE.FILTER_TABS) ? (
+            <div className="flex-1 flex items-center justify-center text-p5/30 text-xs uppercase tracking-widest">
+              estágio 5 → CurrencyTable
+            </div>
+          ) : (
+            <div className="flex-1 flex items-center justify-center text-p5/30 text-xs uppercase tracking-widest">
+              estágio 4 → FilterTabs
+            </div>
+          )}
         </div>
 
       </div>
 
+      {bootDebug && (
+        <BootStageBar stage={bootStage} onStageChange={setBootStage} />
+      )}
     </div>
   );
 }
 
 export default function App() {
+  bootLog('App render — providers');
   return (
     <LanguageProvider>
       <CurrencyProvider>

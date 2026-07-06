@@ -13,12 +13,13 @@ export function useMacrossFavoritesStatus(symbols, multitradeFavorites, enabled)
   const symbolsKey = symbols.slice().sort().join(',');
 
   const entriesBySymbol = useMemo(() => {
+    if (!enabled || !symbols.length) return new Map();
     const map = new Map();
     for (const sym of symbols) {
       map.set(sym, getEntriesForSymbol(multitradeFavorites, sym).filter(isMaCrossEntry));
     }
     return map;
-  }, [symbolsKey, multitradeFavorites]);
+  }, [symbolsKey, multitradeFavorites, enabled]);
 
   useEffect(() => {
     if (!enabled || !symbols.length) {

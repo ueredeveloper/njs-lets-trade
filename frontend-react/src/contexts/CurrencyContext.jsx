@@ -1,4 +1,5 @@
-import { createContext, useContext, useState, useCallback, useEffect, useMemo } from 'react';
+import { createContext, useContext, useState, useCallback, useEffect, useMemo, useRef } from 'react';
+import { bootLog, bootError } from '../utils/bootLog';
 import { addFavorite, removeFavorite, fetchActiveTrades, ignoreActiveTrade,
   fetchMultitradeFavorites, addMultitradeFavorite, updateMultitradeFavorite, removeMultitradeFavorite,
   patchMultitradeBotState,
@@ -43,6 +44,17 @@ function isAutoHighlightFilter(name) {
 }
 
 export function CurrencyProvider({ children }) {
+  const providerRender = useRef(0);
+  providerRender.current += 1;
+  if (providerRender.current <= 3) {
+    bootLog('CurrencyProvider render', { n: providerRender.current });
+  }
+
+  useEffect(() => {
+    bootLog('CurrencyProvider montado');
+    return () => bootLog('CurrencyProvider desmontado');
+  }, []);
+
   // Lista completa do servidor; currencies expõe versão filtrada por categoria
   const [rawCurrencies, setRawCurrencies] = useState({ name: '1h|All', list: [] });
   const [assetDisplay, setAssetDisplayState] = useState(() => loadAssetDisplay());
@@ -514,40 +526,63 @@ export function CurrencyProvider({ children }) {
     });
   }, []);
 
-  // Sincroniza cada lista de favoritos como filtro, permitindo intersecções no FilterTabs
+  // Sincroniza favoritos Gate + Binance como filtros (um único setFilters)
   useEffect(() => {
-    if (binanceFavorites.size > 0) addFilter({ name: 'Favoritos|Binance', list: Array.from(binanceFavorites) });
-    else removeFilters(['Favoritos|Binance']);
-  }, [binanceFavorites, addFilter, removeFilters]);
-
-  useEffect(() => {
-    if (gateFavorites.size > 0) addFilter({ name: 'Favoritos|Gate', list: Array.from(gateFavorites) });
-    else removeFilters(['Favoritos|Gate']);
-  }, [gateFavorites, addFilter, removeFilters]);
+    bootLog('CurrencyContext effect — favoritos → filters', {
+      gate: gateFavorites.size,
+      binance: binanceFavorites.size,
+    });
+    setFilters((prev) => {
+      const first = prev[0];
+      const kept = prev.filter((f) => (
+        f.name !== 'Favoritos|Binance' && f.name !== 'Favoritos|Gate'
+      ));
+      const next = [...kept];
+      if (binanceFavorites.size > 0) {
+        next.push({ name: 'Favoritos|Binance', list: Array.from(binanceFavorites) });
+      }
+      if (gateFavorites.size > 0) {
+        next.push({ name: 'Favoritos|Gate', list: Array.from(gateFavorites) });
+      }
+      if (!first) return next;
+      const withoutMarket = next.filter((f) => f.name !== first.name);
+      return [first, ...withoutMarket];
+    });
+  }, [binanceFavorites, gateFavorites]);
 
   useEffect(() => {
     const symbols = [...new Set(
       multitradeFavorites.filter(e => e.enabled !== false && (e.strategyId === 'ma-cross' || e.kind === 'ma_cross')).map(e => e.symbol),
     )];
+    bootLog('CurrencyContext effect — multitradeFavorites → filter', { symbols: symbols.length });
     if (symbols.length > 0) addFilter({ name: 'Favoritos|MA-Cross', list: symbols });
     else removeFilters(['Favoritos|MA-Cross', 'Favoritos|MultiTrade']);
   }, [multitradeFavorites, addFilter, removeFilters]);
 
   useEffect(() => {
-    ensureMarketHighlights().catch((err) => {
-      console.warn('[CurrencyContext] market-highlights:', err.message);
-    });
-  }, [ensureMarketHighlights]);
+    if (!rawCurrencies.list.length) return undefined;
+    bootLog('CurrencyContext effect — ensureMarketHighlights → start (após currencies)');
+    ensureMarketHighlights()
+      .then(() => bootLog('CurrencyContext effect — ensureMarketHighlights ← ok'))
+      .catch((err) => {
+        bootError('CurrencyContext effect — ensureMarketHighlights ← FAIL', err);
+      });
+  }, [rawCurrencies.list.length, ensureMarketHighlights]);
 
   // Carrega favoritos MA-Cross e sincroniza fase (BOUGHT/WATCHING) com o bot
   useEffect(() => {
     let cancelled = false;
+    bootLog('CurrencyContext effect — fetchMultitradeFavorites → start');
     const load = async () => {
       try {
         const list = await fetchMultitradeFavorites();
-        if (!cancelled) setMultitradeFavorites(list.filter(isMaCrossFavoriteEntry));
+        if (!cancelled) {
+          const filtered = list.filter(isMaCrossFavoriteEntry);
+          bootLog('CurrencyContext effect — fetchMultitradeFavorites ← ok', { total: list.length, macross: filtered.length });
+          setMultitradeFavorites(filtered);
+        }
       } catch (err) {
-        if (!cancelled) console.warn('[CurrencyContext] loadMultitradeFavorites:', err.message);
+        if (!cancelled) bootError('CurrencyContext effect — fetchMultitradeFavorites ← FAIL', err);
       }
     };
     load();
