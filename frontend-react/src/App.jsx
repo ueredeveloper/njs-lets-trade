@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState, useMemo, startTransition, useCallback } from 'react';
-import { bootLog, bootError, bootTimed } from './utils/bootLog';
 import {
   BOOT_STAGE,
   MAX_BOOT_STAGE,
@@ -25,12 +24,10 @@ import MultitradePanel from './components/MultitradePanel';
 import BootStageBar from './components/BootStageBar';
 
 const MOBILE_SHEET_HEIGHT = '88%';
-const MOBILE_SHEET_FILTERS_HEIGHT = '45%';
+const MOBILE_SHEET_FILTERS_HEIGHT = '30%';
+const DESKTOP_FILTERS_HEIGHT = '28%';
 
 function AppContent() {
-  const renderCount = useRef(0);
-  renderCount.current += 1;
-
   const { setCurrencies, setFilters, setSelectedChart, setGateFavorites, setBinanceFavorites,
     setChartInterval, uiPrefs, clearFavoriteView } = useCurrency();
   const { t } = useI18n();
@@ -48,13 +45,7 @@ function AppContent() {
   const bootDebug = bootStage < BOOT_STAGE.FULL;
 
   useEffect(() => {
-    bootLog('AppContent montado', { isMobile, bootStage });
-    return () => bootLog('AppContent desmontado');
-  }, [isMobile, bootStage]);
-
-  useEffect(() => {
     saveBootStage(bootStage);
-    bootLog(`bootStage ativo → ${bootStage} (${bootStageLabel(bootStage)})`);
   }, [bootStage]);
 
   useEffect(() => {
@@ -120,34 +111,22 @@ function AppContent() {
   useEffect(() => {
     let cancelled = false;
     async function init() {
-      bootLog('App.init → start');
       try {
-        const allCurrencies = await bootTimed('fetchAllCurrencies', fetchAllCurrencies);
+        const allCurrencies = await fetchAllCurrencies();
         if (cancelled) return;
         setCurrencies({ name: '1h|All', list: allCurrencies });
-        bootLog('App.init — currencies set', { count: allCurrencies.length });
 
         const binanceUsdtList = allCurrencies
           .filter((c) => c.symbol.endsWith('USDT'))
           .map((c) => c.symbol);
 
         const defaultIv = loadUiPreferences().defaultChartInterval;
-        bootLog('App.init — Promise.all paralelo', { defaultIv });
         const [volumeFilters, stableFilters, btcData, gateList, binanceList] = await Promise.all([
-          bootTimed('fetch24hVolume', fetch24hVolume),
-          bootTimed('fetchStablecoins', () => fetchStablecoins().catch((err) => {
-            bootError('fetchStablecoins (ignorado)', err);
-            return [];
-          })),
-          bootTimed('fetchCandlesticksAndCloud', () => fetchCandlesticksAndCloud('BTCUSDT', defaultIv)),
-          bootTimed('getFavorites(gate)', () => getFavorites('gate').catch((err) => {
-            bootError('getFavorites(gate) (ignorado)', err);
-            return [];
-          })),
-          bootTimed('getFavorites(binance)', () => getFavorites('binance').catch((err) => {
-            bootError('getFavorites(binance) (ignorado)', err);
-            return [];
-          })),
+          fetch24hVolume(),
+          fetchStablecoins().catch(() => []),
+          fetchCandlesticksAndCloud('BTCUSDT', defaultIv),
+          getFavorites('gate').catch(() => []),
+          getFavorites('binance').catch(() => []),
         ]);
         if (cancelled) return;
 
@@ -156,26 +135,15 @@ function AppContent() {
           ...volumeFilters,
           ...stableFilters,
         ]);
-        bootLog('App.init — filtros base', {
-          mercado: binanceUsdtList.length,
-          volume: volumeFilters.length,
-          stable: stableFilters.length,
-        });
 
         setSelectedChart({ ...btcData, interval: defaultIv, symbol: 'BTCUSDT' });
         setChartInterval(defaultIv);
         setGateFavorites(new Set(gateList));
         setBinanceFavorites(new Set(binanceList));
-        bootLog('App.init — chart + favoritos OK', {
-          candles: btcData?.candlesticks?.length ?? 0,
-          gateFav: gateList.length,
-          binanceFav: binanceList.length,
-        });
       } catch (err) {
-        bootError('App.init — FALHA', err);
+        console.error('Erro ao inicializar:', err);
       } finally {
         if (!cancelled) {
-          bootLog('App.init — setLoading(false)');
           startTransition(() => setLoading(false));
         }
       }
@@ -185,9 +153,6 @@ function AppContent() {
   }, []);
 
   if (loading) {
-    if (renderCount.current <= 2) {
-      bootLog('AppContent render — loading spinner', { render: renderCount.current });
-    }
     return (
       <div className="flex items-center justify-center h-dvh min-h-0 bg-p1">
         <div className="flex flex-col items-center gap-3">
@@ -440,7 +405,7 @@ function AppContent() {
         {/* 4+5 — Coluna direita desktop */}
         <div className="hidden md:flex flex-col w-[28rem] shrink-0 min-h-0 bg-p1">
           {show(BOOT_STAGE.FILTER_TABS) && (
-            <div className="flex flex-col min-h-0 px-2 py-1 border-b border-p2 overflow-hidden" style={{ height: '40%' }}>
+            <div className="flex flex-col min-h-0 px-2 py-1 border-b border-p2 overflow-hidden" style={{ height: DESKTOP_FILTERS_HEIGHT }}>
               <FilterTabs activeFilter={activeFilter} onSelectFilter={handleSelectFilter} />
             </div>
           )}
@@ -473,7 +438,6 @@ function AppContent() {
 }
 
 export default function App() {
-  bootLog('App render — providers');
   return (
     <LanguageProvider>
       <CurrencyProvider>

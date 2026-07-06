@@ -1,6 +1,5 @@
 import { useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { bootLog, bootError } from '../utils/bootLog';
 import { useCurrency } from '../contexts/CurrencyContext';
 import SearchInput from './SearchInput';
 import {
@@ -275,11 +274,6 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   const [macrossFavSort, setMacrossFavSort] = useState(() => loadMacrossFavSort());
   const [tradeFavSort, setTradeFavSort] = useState(() => loadTradeFavSort());
 
-  useEffect(() => {
-    bootLog('CurrencyTable montado');
-    return () => bootLog('CurrencyTable desmontado');
-  }, []);
-
   const macrossFavSymbols = useMemo(() => (
     [...new Set(
       multitradeFavorites
@@ -356,8 +350,6 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   }, []);
 
   const rows = useMemo(() => {
-    const t0 = performance.now();
-    try {
     if (!currencies.list?.length) return [];
 
     let list;
@@ -427,30 +419,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     }
 
     return list;
-    } catch (err) {
-      bootError('CurrencyTable — rows useMemo ERRO', err);
-      throw err;
-    } finally {
-      const ms = Math.round(performance.now() - t0);
-      if (ms > 30) {
-        bootLog('CurrencyTable — rows useMemo lento', {
-          ms,
-          currencies: currencies.list?.length ?? 0,
-          activeFilter,
-          favoriteView,
-        });
-      }
-    }
   }, [currencies, activeFilter, selectedQuote, findFilter, search, favoriteView, gateFavorites, binanceFavorites, multitradeFavorites, sortVolume, gateAll, filterVisibleCurrencies, isVisibleSymbol, activeMacrossFilter, macrossScannedAt, macrossTick, isMacrossFavView, macrossFavSort, macrossFavStatus, macrossEntriesBySymbol, isTradesFavView, tradeFavSort, tradeFavSymbols, tradeFavStatus, isAltaFilter, isNovasFilter, highlightMeta]);
-
-  useEffect(() => {
-    bootLog('CurrencyTable — rows prontas', {
-      count: rows.length,
-      activeFilter,
-      favoriteView,
-      currencies: currencies.list?.length ?? 0,
-    });
-  }, [rows.length, activeFilter, favoriteView, currencies.list?.length]);
 
   const { slice: visibleRows, paddingTop, paddingBottom } = useVirtualRows({
     items: rows,

@@ -1,6 +1,5 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
 import { useI18n } from '../i18n';
-import { bootLog } from '../utils/bootLog';
 import { parseRsiConditionToken, parseMaCompareToken, parseMaCrossModeToken } from '../utils/filterNames';
 import { useCurrency } from '../contexts/CurrencyContext';
 import SearchInput from './SearchInput';
@@ -245,15 +244,6 @@ export default function FilterTabs({ activeFilter, onSelectFilter }) {
   const [searchQuery, setSearchQuery] = useState('');
   const prevFilterNamesRef = useRef(null); // null = primeira renderização ainda não registrada
   const flashTimerRef = useRef(null);
-
-  useEffect(() => {
-    bootLog('FilterTabs montado');
-    return () => bootLog('FilterTabs desmontado');
-  }, []);
-
-  useEffect(() => {
-    bootLog('FilterTabs — filters atualizados', { count: filters.length, names: filters.map(f => f.name).slice(0, 8) });
-  }, [filters.length]);
 
   useEffect(() => {
     // Primeira execução: registra os filtros já existentes sem piscar
