@@ -667,7 +667,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     : 'Ordenar por volume 24h';
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full min-h-0 overflow-hidden">
       {/* Barra de busca */}
       <div className="px-2 py-1 shrink-0">
         <SearchInput
@@ -765,7 +765,8 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
       </div>
 
       {/* Tabela */}
-      <div className="flex-1 overflow-y-auto" ref={tableScrollRef}>
+      <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+        <div className="flex-1 min-h-0 overflow-y-auto" ref={tableScrollRef}>
         <table className="w-full text-xs table-fixed">
           <colgroup>
             <col style={{ width: favColWidth }} />
@@ -776,7 +777,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
             <col style={{ width: '1.5rem' }} />
           </colgroup>
           <thead className="sticky top-0 z-10 bg-p1">
-            <tr className="border-b border-p2">
+            <tr className="lt-table-head">
               <th
                 className="text-left px-1 py-1 align-middle"
                 style={{ width: favColWidth, minWidth: favColWidth }}
@@ -914,7 +915,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                 <tr
                   key={item.symbol}
                   onClick={() => handleSelect(item)}
-                  className={`border-b border-p2/30 cursor-pointer transition-colors ${
+                  className={`lt-table-row cursor-pointer transition-colors ${
                     activeRow === item.symbol
                       ? 'bg-p2/80 text-white'
                       : isTradesFavView
@@ -1035,24 +1036,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
               </tr>
             )}
 
-            {isTradesFavView && rows.length > 0 && tradePnlSumLabel != null && (
-              <tr className="border-t border-p3 sticky bottom-0 z-10">
-                <td className="pl-2 py-1.5 bg-p1" colSpan={isAltaFilter ? 4 : 3}>
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-p5/70">
-                    Total PnL
-                  </span>
-                </td>
-                <td
-                  className="px-2 py-1.5 text-right font-mono text-[11px] font-bold bg-p1"
-                  style={{ color: tradePnlSum >= 0 ? '#22c55e' : '#ef4444' }}
-                >
-                  {tradePnlSumLabel}
-                </td>
-                <td className="bg-p1" />
-              </tr>
-            )}
 
-            {/* Separador + resultados Gate.io */}
             {gateLoading && rows.length === 0 && (
               <tr>
                 <td colSpan={tableColCount} className="py-3 text-center">
@@ -1067,7 +1051,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
             {gateItems.length > 0 && (
               <>
                 <tr>
-                  <td colSpan={tableColCount} className="px-2 py-1 border-t border-p3/30">
+                  <td colSpan={tableColCount} className="px-2 py-1 border-t border-p3">
                     <span
                       className="text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded"
                       style={{ color: GATE_COLOR, border: `1px solid ${GATE_COLOR}` }}
@@ -1085,7 +1069,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                     <tr
                       key={`gate-${item.symbol}`}
                       onClick={() => handleSelect(item, 'gate')}
-                      className={`border-b border-p2/30 cursor-pointer transition-colors ${
+                      className={`lt-table-row cursor-pointer transition-colors ${
                         activeRow === item.symbol
                           ? 'bg-p2/80 text-white'
                           : isMTGate
@@ -1127,6 +1111,25 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
             )}
           </tbody>
         </table>
+        </div>
+
+        <div className="lt-table-foot">
+          {isTradesFavView && rows.length > 0 && tradePnlSumLabel != null ? (
+            <div className="flex items-center justify-between gap-2 px-2 py-0.5">
+              <span className="text-[9px] font-bold uppercase tracking-wider text-p5/70">
+                Total PnL
+              </span>
+              <span
+                className="text-[10px] font-mono font-bold leading-none"
+                style={{ color: tradePnlSum >= 0 ? '#22c55e' : '#ef4444' }}
+              >
+                {tradePnlSumLabel}
+              </span>
+            </div>
+          ) : (
+            <div className="px-2 py-0.5 min-h-[14px]" aria-hidden="true" />
+          )}
+        </div>
       </div>
 
       {/* Modais — portal evita corte no bottom sheet mobile (transform ancestor) */}

@@ -36,3 +36,14 @@ html {
 ::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track { background: #260d33; }
 ::-webkit-scrollbar-thumb { background: #157a8c; border-radius: 4px; }
+
+/* Bordas de tabela — padrão favorito TX */
+.lt-table-head {
+  @apply border-b border-p2;
+}
+.lt-table-row {
+  @apply border-b border-p2;
+}
+.lt-table-foot {
+  @apply border-t border-p3 shrink-0 bg-p1;
+}

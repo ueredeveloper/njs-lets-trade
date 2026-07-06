@@ -14,6 +14,7 @@ const PRESET_BODIES = {
       ma2: { period: 21, interval: '15m' },
       direction: 'cross_up',
       tolerancePct: 0.1,
+      maxAboveMaPct: 3,
     },
     maFiltersEnabled: true,
     maFilters: [{
@@ -36,7 +37,12 @@ const PRESET_BODIES = {
       },
     },
     stopLoss:  { enabled: true, maxLossPct: 5, trailing: true, trailStepPct: 5 },
-    execution: { immediateEntry: true, entryDiscount: 0.001, pendingTimeoutMs: 30 * 60_000 },
+    execution: {
+      immediateEntry: false,
+      entryDiscount: 0.001,
+      pendingTimeoutMs: 90 * 60_000,
+      pullbackEntry: { enabled: true, waitCandles: 2, requirePullback: true },
+    },
     polling:   { pollMs: 60_000, fastPollMs: 30_000 },
     adaptiveOpts: { defaultPct: 3, maxPct: 8, minPct: 0.5, minEpisodes: 3 },
     volume:    { minVolumeUsdt: 1_000_000, allowLowVolume: false },

@@ -139,6 +139,13 @@ export default function MaCrossStrategyForm({ form, patch }) {
         color={ENTRY_COLOR}
         showEnable
       />
+      <div className="flex flex-wrap items-center gap-2 text-xs px-1">
+        <span className="text-p5/50">Máx % acima da MA2 (param2)</span>
+        <NumInput value={form.entry.maxAboveMaPct ?? 3}
+          onChange={v => patch('entry.maxAboveMaPct', v)}
+          min={0} max={20} step={0.5} className="w-14" />
+        <span className="text-p5/40 text-[10px]">0 = desligado</span>
+      </div>
 
       <div className="rounded-md p-2 space-y-2" style={{ background: '#1a1d28', border: `1px solid ${FILTER_COLOR}33` }}>
         <div className="flex items-center justify-between">
@@ -299,11 +306,32 @@ export default function MaCrossStrategyForm({ form, patch }) {
       {advancedOpen && (
         <div className="space-y-3 rounded-md p-2" style={{ background: '#1a1d28', border: '1px solid #2a2d3a' }}>
           <div className="text-xs space-y-2">
+            <p className="text-p5/40 text-[10px] pl-1">
+              Padrão: compra imediata se close ≤ teto MA21; se esticado, pending + pullback MA21.
+            </p>
             <label className="flex items-center gap-2 text-p5">
-              <input type="checkbox" checked={form.execution.immediateEntry !== false}
+              <input type="checkbox" checked={form.execution.immediateEntry === true}
                 onChange={e => patch('execution.immediateEntry', e.target.checked)} />
-              Entrada imediata (market)
+              Só imediata (sem pending se esticado)
             </label>
+            <label className="flex items-center gap-2 text-p5">
+              <input type="checkbox" checked={form.execution.pullbackEntry?.enabled !== false}
+                onChange={e => patch('execution.pullbackEntry.enabled', e.target.checked)} />
+              Pending se não passar no teto MA21
+            </label>
+            {form.execution.pullbackEntry?.enabled !== false && (
+              <div className="flex flex-wrap items-center gap-2 pl-4">
+                <span className="text-p5/50">Candles após sinal</span>
+                <NumInput value={form.execution.pullbackEntry?.waitCandles ?? 2}
+                  onChange={v => patch('execution.pullbackEntry.waitCandles', Math.max(1, Math.round(v)))}
+                  min={1} max={6} step={1} className="w-12" />
+                <label className="flex items-center gap-2 text-p5">
+                  <input type="checkbox" checked={form.execution.pullbackEntry?.requirePullback !== false}
+                    onChange={e => patch('execution.pullbackEntry.requirePullback', e.target.checked)} />
+                  Exigir aproximação da MA21 (vs sinal)
+                </label>
+              </div>
+            )}
             <div className="flex items-center gap-2">
               <span className="text-p5/50">Desconto entrada %</span>
               <NumInput value={+(form.execution.entryDiscount * 100).toFixed(2)}

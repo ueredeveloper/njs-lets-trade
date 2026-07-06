@@ -529,7 +529,7 @@ export default function MultitradeBacktestPanel({ entry }) {
               style={{ border: '1px solid #2a2d3a' }}>
               <table id="multitrade-backtest-table" className="multitrade-backtest-table w-full text-[9px] font-mono">
                 <thead>
-                  <tr className="multitrade-backtest-table-head" style={{ background: '#252836' }}>
+                  <tr className="multitrade-backtest-table-head lt-table-head" style={{ background: '#252836' }}>
                     <th className="text-left px-1.5 py-1 text-p5/50 font-normal">Entrada</th>
                     <th className="text-left px-1.5 py-1 text-p5/50 font-normal">Saída</th>
                     <th className="text-center px-1 py-1 text-p5/50 font-normal">{maCross ? 'Cruz.' : 'Regra'}</th>
@@ -572,7 +572,7 @@ export default function MultitradeBacktestPanel({ entry }) {
                       id={`multitrade-backtest-row-${rowKey}`}
                       title="Clique para ver no gráfico"
                       onClick={() => handleRowClick(row)}
-                      className={`multitrade-backtest-table-row border-t border-p2/50 cursor-pointer transition-colors ${
+                      className={`multitrade-backtest-table-row lt-table-row cursor-pointer transition-colors ${
                         isActive ? 'bg-violet-500/10' : 'hover:bg-p2/40'
                       } ${isLoading ? 'opacity-60' : ''}`}>
                       <td className="px-1.5 py-0.5 text-p5/70 whitespace-nowrap">{fmtDate(row.timeISO ?? row.time)}</td>
@@ -650,6 +650,9 @@ export default function MultitradeBacktestPanel({ entry }) {
                     </tr>
                     );
                   })}
+                  <tr className="lt-table-foot" aria-hidden="true">
+                    <td colSpan={99} className="h-px p-0 leading-none" />
+                  </tr>
                 </tbody>
               </table>
             </div>

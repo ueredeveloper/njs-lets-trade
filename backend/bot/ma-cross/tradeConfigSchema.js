@@ -18,11 +18,13 @@ const MA_CROSS_DEFAULTS = {
   label: 'MA Cross',
 
   entry: {
-    enabled:      true,
-    ma1:          { period: 9,  interval: '15m' },
-    ma2:          { period: 21, interval: '15m' },
-    direction:    'cross_up',
-    tolerancePct: 0.1,
+    enabled:         true,
+    ma1:             { period: 9,  interval: '15m' },
+    ma2:             { period: 21, interval: '15m' },
+    direction:       'cross_up',
+    tolerancePct:    0.1,
+    /** Máx % acima da MA2 (param2) para permitir compra; 0 = desligado. */
+    maxAboveMaPct:   3,
   },
 
   maFiltersEnabled: true,
@@ -52,11 +54,17 @@ const MA_CROSS_DEFAULTS = {
   stopLoss: { enabled: true, maxLossPct: 5, trailing: true, trailStepPct: 5 },
 
   execution: {
-    immediateEntry:       true,
+    immediateEntry:       false,
     entryDiscount:        0.001,
-    pendingTimeoutMs:     30 * 60_000,
+    pendingTimeoutMs:     90 * 60_000,
     pendingCancelPct:     0.002,
     pendingCancelOnExitRsi: true,
+    /** Espera N candles após cruzamento + pullback antes de comprar. */
+    pullbackEntry: {
+      enabled:         true,
+      waitCandles:     2,
+      requirePullback: true,
+    },
   },
 
   polling: { pollMs: 60_000, fastPollMs: 30_000 },
@@ -106,8 +114,9 @@ function normalizeCrossBlock(block, fallback) {
     enabled:      block?.enabled !== false,
     ma1:          normalizeMaLeg(block?.ma1 ?? block?.param1, fb.ma1),
     ma2:          normalizeMaLeg(block?.ma2 ?? block?.param2, fb.ma2),
-    direction:    CROSS_DIRS.includes(block?.direction) ? block.direction : fb.direction,
-    tolerancePct: Math.max(0, Number(block?.tolerancePct ?? fb.tolerancePct ?? 0)),
+    direction:       CROSS_DIRS.includes(block?.direction) ? block.direction : fb.direction,
+    tolerancePct:    Math.max(0, Number(block?.tolerancePct ?? fb.tolerancePct ?? 0)),
+    maxAboveMaPct:   Math.max(0, Number(block?.maxAboveMaPct ?? fb.maxAboveMaPct ?? 0)),
   };
 }
 
@@ -122,6 +131,16 @@ function normalizeMaFilter(m, i = 0) {
     maxDipPct:   Math.max(0, Number(m?.maxDipPct ?? 4)),
     fixedDipPct: m?.fixedDipPct != null && m?.fixedDipPct !== '' ? Number(m?.fixedDipPct) : null,
     tolerancePct: Math.max(0, Number(m?.tolerancePct ?? 0)),
+  };
+}
+
+function normalizePullbackEntry(pb) {
+  const d = MA_CROSS_DEFAULTS.execution.pullbackEntry;
+  const src = pb ?? {};
+  return {
+    enabled:         src.enabled ?? d.enabled,
+    waitCandles:     Math.max(1, Math.round(Number(src.waitCandles ?? d.waitCandles))),
+    requirePullback: src.requirePullback ?? d.requirePullback,
   };
 }
 
@@ -191,11 +210,12 @@ function normalizeMaCrossConfig(body = {}) {
       trailStepPct: Math.max(0.5, Number(body.stopLoss?.trailStepPct ?? body.stopLoss?.maxLossPct ?? d.stopLoss.trailStepPct)),
     },
     execution: {
-      immediateEntry:         body.execution?.immediateEntry !== false,
+      immediateEntry:         body.execution?.immediateEntry === true,
       entryDiscount:          Number(body.execution?.entryDiscount ?? d.execution.entryDiscount),
       pendingTimeoutMs:       Number(body.execution?.pendingTimeoutMs ?? d.execution.pendingTimeoutMs),
       pendingCancelPct:       Number(body.execution?.pendingCancelPct ?? d.execution.pendingCancelPct),
       pendingCancelOnExitRsi: body.execution?.pendingCancelOnExitRsi ?? d.execution.pendingCancelOnExitRsi,
+      pullbackEntry: normalizePullbackEntry(body.execution?.pullbackEntry),
     },
     polling: {
       pollMs:     Number(body.polling?.pollMs ?? d.polling.pollMs),

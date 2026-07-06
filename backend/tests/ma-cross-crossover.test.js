@@ -373,3 +373,84 @@ describe('MA Cross — stop trailing', () => {
     expect(computeStopLossFloor(100, 130, fixed)).toBeCloseTo(95);
   });
 });
+
+describe('MA Cross — teto acima da MA2', () => {
+  const { checkEntryMaxAboveMa2 } = require('../bot/ma-cross/strategyEngine');
+
+  test('bloqueia quando preço está > maxAboveMaPct acima da MA2', () => {
+    const r = checkEntryMaxAboveMa2(0.0105, 0.01, 4);
+    expect(r.allowed).toBe(false);
+    expect(r.reason).toBe('ABOVE_MA2_MAX');
+    expect(r.aboveMa2Pct).toBeCloseTo(5, 1);
+  });
+
+  test('permite quando preço está dentro do teto', () => {
+    const r = checkEntryMaxAboveMa2(0.0103, 0.01, 4);
+    expect(r.allowed).toBe(true);
+    expect(r.aboveMa2Pct).toBeCloseTo(3, 1);
+  });
+
+  test('0% desliga o teto', () => {
+    const r = checkEntryMaxAboveMa2(0.02, 0.01, 0);
+    expect(r.allowed).toBe(true);
+  });
+});
+
+describe('MA Cross — entrada pullback', () => {
+  const { evaluatePullbackReady } = require('../bot/ma-cross/strategyEngine');
+  const { toEngineConfig, normalizeMaCrossConfig } = require('../bot/ma-cross/tradeConfigSchema');
+
+  const baseConfig = toEngineConfig(normalizeMaCrossConfig({
+    entry: {
+      ma1: { period: 9, interval: '15m' },
+      ma2: { period: 21, interval: '15m' },
+      direction: 'cross_up',
+      maxAboveMaPct: 3,
+    },
+    maFiltersEnabled: false,
+    execution: { pullbackEntry: { enabled: true, waitCandles: 2, requirePullback: true } },
+  }));
+
+  function flatCandles(closes, startOpen = 1_700_000_000_000) {
+    return closes.map((close, i) => ({
+      openTime: startOpen + i * 900_000,
+      open: close, high: close, low: close, close,
+    }));
+  }
+
+  test('aguarda N candles antes de avaliar', () => {
+    const closes = Array(25).fill(100);
+    closes.push(100, 100, 101);
+    const candles = flatCandles(closes);
+    const signalOpenTime = candles[25].openTime;
+    const pending = { signalOpenTime, signalClose: 100 };
+    const r = evaluatePullbackReady(baseConfig, { '15m': candles }, {}, pending);
+    expect(r.ready).toBe(false);
+    expect(r.reason).toBe('WAITING_CANDLES');
+    expect(r.waited).toBe(1);
+    expect(r.need).toBe(2);
+  });
+
+  test('compra quando há pullback em direção à MA21', () => {
+    const closes = Array(25).fill(100);
+    closes.push(102, 103, 101, 104);
+    const candles = flatCandles(closes);
+    const signalOpenTime = candles[25].openTime;
+    const pending = { signalOpenTime, signalClose: 102 };
+    const r = evaluatePullbackReady(baseConfig, { '15m': candles }, {}, pending);
+    expect(r.ready).toBe(true);
+    expect(r.close).toBe(101);
+    expect(r.pullbackVsMa2Pct).toBeLessThan(0);
+  });
+
+  test('cancela se entrada não aproxima da MA21 vs sinal', () => {
+    const closes = Array(25).fill(100);
+    closes.push(101, 102, 103, 104);
+    const candles = flatCandles(closes);
+    const pending = { signalOpenTime: candles[25].openTime, signalClose: 101 };
+    const r = evaluatePullbackReady(baseConfig, { '15m': candles }, {}, pending);
+    expect(r.ready).toBe(false);
+    expect(r.cancel).toBe(true);
+    expect(r.reason).toBe('NO_PULLBACK');
+  });
+});

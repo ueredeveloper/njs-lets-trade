@@ -253,7 +253,7 @@ export default function FiveMTradePanel() {
             <div className="overflow-x-auto min-w-0">
             <table className="w-full min-w-[640px] text-[10px] font-mono border-collapse">
               <thead>
-                <tr className="text-p5/50 text-left">
+                <tr className="text-p5/50 text-left lt-table-head">
                   <th className="pb-1 pr-2 font-normal sticky left-0 bg-p1 z-[1]">Quando</th>
                   <th className="pb-1 pr-2 font-normal">Tipo</th>
                   <th className="pb-1 pr-2 font-normal">Via</th>
@@ -280,7 +280,7 @@ export default function FiveMTradePanel() {
                     <tr
                       key={sig.id}
                       onClick={() => handleSignalClick(sig)}
-                      className={`cursor-pointer border-t border-p2/30 transition-colors ${active ? 'bg-white/10' : 'hover:bg-p2/30'}`}
+                      className={`cursor-pointer lt-table-row transition-colors ${active ? 'bg-white/10' : 'hover:bg-p2/30'}`}
                       title={[sig.motivation, ruleTitle].filter(Boolean).join('\n\n')}>
                       <td className="py-1.5 pr-2 text-p5/80 whitespace-nowrap sticky left-0 bg-p1 z-[1]">
                         {loading ? '… ' : ''}{fmtDateTime(sig.event_time)}
@@ -309,6 +309,9 @@ export default function FiveMTradePanel() {
                     </tr>
                   );
                 })}
+                <tr className="lt-table-foot" aria-hidden="true">
+                  <td colSpan={5 + FIVE_M_RULE_COLUMNS.length} className="h-px p-0 leading-none" />
+                </tr>
               </tbody>
             </table>
             </div>

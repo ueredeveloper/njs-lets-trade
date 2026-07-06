@@ -25,7 +25,7 @@ import BootStageBar from './components/BootStageBar';
 
 const MOBILE_SHEET_HEIGHT = '88%';
 const MOBILE_SHEET_FILTERS_HEIGHT = '30%';
-const DESKTOP_FILTERS_HEIGHT = '28%';
+const DESKTOP_FILTERS_HEIGHT = '50%';
 
 function AppContent() {
   const { setCurrencies, setFilters, setSelectedChart, setGateFavorites, setBinanceFavorites,

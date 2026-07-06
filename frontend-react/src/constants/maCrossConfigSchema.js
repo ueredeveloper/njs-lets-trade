@@ -38,6 +38,7 @@ export const MA_CROSS_DEFAULTS = {
     ma2: { period: 21, interval: '15m' },
     direction: 'cross_up',
     tolerancePct: 0.1,
+    maxAboveMaPct: 3,
   },
   maFiltersEnabled: true,
   maFilters: [{
@@ -63,13 +64,17 @@ export const MA_CROSS_DEFAULTS = {
   },
   stopLoss: { enabled: true, maxLossPct: 5 },
   execution: {
-    immediateEntry: true, entryDiscount: 0.001,
-    pendingTimeoutMs: 30 * 60_000, pendingCancelPct: 0.002,
+    immediateEntry: false,
+    entryDiscount: 0.001,
+    pendingTimeoutMs: 90 * 60_000,
+    pendingCancelPct: 0.002,
     pendingCancelOnExitRsi: true,
+    pullbackEntry: { enabled: true, waitCandles: 2, requirePullback: true },
   },
   polling: { pollMs: 60_000, fastPollMs: 30_000 },
   adaptiveOpts: { defaultPct: 3, maxPct: 8, minPct: 0.5, minEpisodes: 3 },
   volume: { minVolumeUsdt: 1_000_000, allowLowVolume: false },
+  entryCooldownHours: 4,
 };
 
 function clampPeriod(p, fb = 50) {
@@ -92,6 +97,7 @@ function normalizeCrossBlock(block, fb) {
     ma2: normalizeMaLeg(block?.ma2 ?? block?.param2, fb.ma2),
     direction: block?.direction ?? fb.direction,
     tolerancePct: Number(block?.tolerancePct ?? fb.tolerancePct ?? 0),
+    maxAboveMaPct: Math.max(0, Number(block?.maxAboveMaPct ?? fb.maxAboveMaPct ?? 0)),
   };
 }
 
@@ -160,10 +166,18 @@ export function normalizeMaCrossForm(body = {}) {
       enabled: body.stopLoss?.enabled !== false,
       maxLossPct: Number(body.stopLoss?.maxLossPct ?? d.stopLoss.maxLossPct),
     },
-    execution: { ...d.execution, ...body.execution },
+    execution: {
+      ...d.execution,
+      ...body.execution,
+      pullbackEntry: {
+        ...d.execution.pullbackEntry,
+        ...body.execution?.pullbackEntry,
+      },
+    },
     polling: { ...d.polling, ...body.polling },
     adaptiveOpts: { ...d.adaptiveOpts, ...body.adaptiveOpts },
     volume: { ...d.volume, ...body.volume },
+    entryCooldownHours: Number(body.entryCooldownHours ?? d.entryCooldownHours ?? 4),
   };
 }
 
@@ -201,5 +215,6 @@ export function maCrossFormToPayload(form, meta = {}) {
     polling: c.polling,
     adaptiveOpts: c.adaptiveOpts,
     volume: c.volume,
+    entryCooldownHours: c.entryCooldownHours,
   };
 }

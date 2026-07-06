@@ -196,7 +196,7 @@ function RsiStats() {
                 <div className="overflow-x-auto">
                   <table className="min-w-full border-collapse">
                     <thead className="sticky top-0 z-10 bg-p1">
-                      <tr className="text-[9px] sm:text-[10px] text-p5/40 uppercase tracking-wider border-b border-p3/20">
+                      <tr className="text-[9px] sm:text-[10px] text-p5/40 uppercase tracking-wider lt-table-head">
                         {showAll && <th className="text-left pb-1 pr-2">#</th>}
                         <th className="text-left pb-1 pr-2">{t('stats.start')}</th>
                         {showAll && <th className="text-right pb-1 pr-2">{t('stats.entry_p')}</th>}
@@ -216,7 +216,7 @@ function RsiStats() {
                           <tr
                             key={i}
                             title={t('stats.click_row')}
-                            className="border-b border-p3/10 hover:bg-p2/40 transition-colors cursor-pointer"
+                            className="lt-table-row hover:bg-p2/40 transition-colors cursor-pointer"
                             onClick={async () => {
                               const startMs = new Date(o.startDate).getTime();
                               const endMs   = new Date(o.endDate).getTime();
@@ -304,6 +304,10 @@ function RsiStats() {
                           </tr>
                         );
                       })()}
+
+                      <tr className="lt-table-foot" aria-hidden="true">
+                        <td colSpan={showAll ? 10 : 7} className="h-px p-0 leading-none" />
+                      </tr>
                     </tbody>
                   </table>
                 </div>

@@ -388,6 +388,24 @@ function activeMaFilters(config) {
   return (config.maFilters ?? []).filter(f => f.enabled && f.mode !== 'off');
 }
 
+function checkEntryMaxAboveMa2(close, ma2, maxAboveMaPct) {
+  const cap = Number(maxAboveMaPct);
+  if (!cap || cap <= 0 || ma2 == null || ma2 <= 0) return { allowed: true };
+
+  const cl = parseFloat(close);
+  const abovePct = ((cl / ma2) - 1) * 100;
+  if (abovePct > cap) {
+    return {
+      allowed: false,
+      reason: 'ABOVE_MA2_MAX',
+      aboveMa2Pct: abovePct,
+      maxAboveMaPct: cap,
+      ma2,
+    };
+  }
+  return { allowed: true, aboveMa2Pct: abovePct, maxAboveMaPct: cap, ma2 };
+}
+
 function getRequiredSpecs(config) {
   const specs = new Map();
   const add = (interval, limit) => {
@@ -432,7 +450,18 @@ function evaluateMaFilters(close, config, cMap, adaptiveDips) {
   return { allowed: true };
 }
 
-function evaluateEntry(config, cMap, adaptiveDips = {}, opts = {}) {
+function pullbackEntryEnabled(config) {
+  return config.execution?.pullbackEntry?.enabled !== false;
+}
+
+function signalInterval(entry) {
+  return intervalMs(entry.ma1.interval) <= intervalMs(entry.ma2.interval)
+    ? entry.ma1.interval
+    : entry.ma2.interval;
+}
+
+/** Cruzamento MA — sem teto MA2 (usado para iniciar fase PENDING). */
+function evaluateCrossSignal(config, cMap, adaptiveDips = {}, opts = {}) {
   const closedOnly = opts.closedOnly !== false;
   if (config.entry?.enabled === false) {
     return { allowed: false, reason: 'ENTRY_OFF' };
@@ -456,25 +485,161 @@ function evaluateEntry(config, cMap, adaptiveDips = {}, opts = {}) {
       reason: cross.reason,
       ma1: cross.ma1, ma2: cross.ma2,
       close: cross.close ?? c1.at(-1)?.close,
-    };
-  }
-
-  const close = cross.close;
-  const filterCheck = evaluateMaFilters(close, config, cMap, adaptiveDips);
-  if (!filterCheck.allowed) {
-    return {
-      allowed: false,
-      reason: filterCheck.reason,
-      ma1: cross.ma1, ma2: cross.ma2, close,
-      filterMa: filterCheck.ma, distPct: filterCheck.distPct, floor: filterCheck.floor,
+      crossOpenTime: cross.openTime,
     };
   }
 
   const dirLbl = entry.direction === 'cross_down' ? '↓' : '↑';
   return {
     allowed: true,
-    ma1: cross.ma1, ma2: cross.ma2, close,
+    ma1: cross.ma1, ma2: cross.ma2, close: cross.close,
+    crossOpenTime: cross.openTime,
     entryDesc: `${crossLabel(entry.ma1)} ${dirLbl} ${crossLabel(entry.ma2)}`,
+  };
+}
+
+/**
+ * Após N candles do sinal: pullback (close vs MA21) + teto MA2 + filtros MA.
+ * pending: { signalOpenTime, signalClose }
+ */
+function extensionAboveMa2(close, ma2) {
+  if (ma2 == null || ma2 <= 0) return null;
+  return ((parseFloat(close) / ma2) - 1) * 100;
+}
+
+function evaluatePullbackReady(config, cMap, adaptiveDips, pending) {
+  if (!pending?.signalOpenTime) {
+    return { ready: false, reason: 'NO_PENDING_SIGNAL', cancel: true };
+  }
+
+  const entry = config.entry;
+  const pb = config.execution?.pullbackEntry ?? {};
+  const wait = Math.max(1, Number(pb.waitCandles ?? 2));
+  const requirePullback = pb.requirePullback !== false;
+  const sigIv = signalInterval(entry);
+  const candles = closedCandlesOnly(cMap[sigIv] ?? []);
+  const signalOpenTime = Number(pending.signalOpenTime);
+  const idx = candles.findIndex(c => Number(c.openTime) === signalOpenTime);
+
+  if (idx < 0) {
+    return { ready: false, reason: 'SIGNAL_LOST', cancel: true };
+  }
+
+  const entryIdx = idx + wait;
+  const lastIdx = candles.length - 1;
+  if (lastIdx < entryIdx) {
+    return {
+      ready: false,
+      reason: 'WAITING_CANDLES',
+      waited: lastIdx - idx,
+      need: wait,
+      cancel: false,
+    };
+  }
+  if (lastIdx > entryIdx) {
+    return { ready: false, reason: 'ENTRY_WINDOW_PASSED', cancel: true };
+  }
+
+  const signal = candles[idx];
+  const entryCandle = candles[entryIdx];
+  const close = parseFloat(entryCandle.close);
+  const signalClose = parseFloat(pending.signalClose ?? signal.close);
+
+  const c2 = closedCandlesOnly(cMap[entry.ma2.interval] ?? []);
+  const ma2AtEntry = maValueAt(buildMaTimeSeries(c2, entry.ma2.period), entryCandle.openTime);
+  const ma2AtSignal = maValueAt(buildMaTimeSeries(c2, entry.ma2.period), signal.openTime);
+  const aboveEntryPct = extensionAboveMa2(close, ma2AtEntry);
+  const aboveSignalPct = extensionAboveMa2(signalClose, ma2AtSignal);
+
+  if (requirePullback) {
+    if (aboveEntryPct == null || aboveSignalPct == null) {
+      return { ready: false, reason: 'FILTER_NO_MA', cancel: true, close, ma2: ma2AtEntry };
+    }
+    // Pullback = candle de entrada mais próximo da MA21 que no sinal
+    if (aboveEntryPct >= aboveSignalPct) {
+      return {
+        ready: false,
+        reason: 'NO_PULLBACK',
+        cancel: true,
+        close,
+        ma2: ma2AtEntry,
+        aboveMa2Pct: aboveEntryPct,
+        signalAboveMa2Pct: aboveSignalPct,
+        pullbackVsMa2Pct: aboveEntryPct - aboveSignalPct,
+      };
+    }
+  }
+
+  const ma2Cap = checkEntryMaxAboveMa2(close, ma2AtEntry, entry.maxAboveMaPct);
+  if (!ma2Cap.allowed) {
+    return {
+      ready: false,
+      reason: ma2Cap.reason,
+      cancel: true,
+      close,
+      ma2: ma2AtEntry,
+      aboveMa2Pct: ma2Cap.aboveMa2Pct,
+    };
+  }
+
+  const filterCheck = evaluateMaFilters(close, config, cMap, adaptiveDips);
+  if (!filterCheck.allowed) {
+    return {
+      ready: false,
+      reason: filterCheck.reason,
+      cancel: true,
+      close,
+      filterMa: filterCheck.ma,
+    };
+  }
+
+  const dirLbl = entry.direction === 'cross_down' ? '↓' : '↑';
+  return {
+    ready: true,
+    close,
+    ma1: maValueAt(buildMaTimeSeries(closedCandlesOnly(cMap[entry.ma1.interval] ?? []), entry.ma1.period), entryCandle.openTime),
+    ma2: ma2AtEntry,
+    signalClose,
+    aboveMa2Pct: ma2Cap.aboveMa2Pct,
+    signalAboveMa2Pct: aboveSignalPct,
+    pullbackVsMa2Pct: aboveSignalPct != null && aboveEntryPct != null
+      ? aboveEntryPct - aboveSignalPct
+      : null,
+    entryDesc: `${crossLabel(entry.ma1)} ${dirLbl} ${crossLabel(entry.ma2)} (pullback)`,
+  };
+}
+
+function evaluateEntry(config, cMap, adaptiveDips = {}, opts = {}) {
+  const crossSignal = evaluateCrossSignal(config, cMap, adaptiveDips, opts);
+  if (!crossSignal.allowed) return crossSignal;
+
+  const { close, ma1, ma2 } = crossSignal;
+  const filterCheck = evaluateMaFilters(close, config, cMap, adaptiveDips);
+  if (!filterCheck.allowed) {
+    return {
+      allowed: false,
+      reason: filterCheck.reason,
+      ma1, ma2, close,
+      filterMa: filterCheck.ma, distPct: filterCheck.distPct, floor: filterCheck.floor,
+    };
+  }
+
+  const ma2Cap = checkEntryMaxAboveMa2(close, ma2, config.entry.maxAboveMaPct);
+  if (!ma2Cap.allowed) {
+    return {
+      allowed: false,
+      reason: ma2Cap.reason,
+      ma1, ma2, close,
+      aboveMa2Pct: ma2Cap.aboveMa2Pct,
+      maxAboveMaPct: ma2Cap.maxAboveMaPct,
+    };
+  }
+
+  return {
+    allowed: true,
+    ma1, ma2, close,
+    crossOpenTime: crossSignal.crossOpenTime,
+    entryDesc: crossSignal.entryDesc,
   };
 }
 
@@ -746,4 +911,8 @@ module.exports = {
   computeAdaptiveDips,
   getFinestPollInterval,
   getMaCrossMetrics,
+  checkEntryMaxAboveMa2,
+  evaluateCrossSignal,
+  evaluatePullbackReady,
+  pullbackEntryEnabled,
 };

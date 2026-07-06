@@ -31,7 +31,8 @@ const { startMultitradeWatch, configFingerprint } = require('../multitradeWatch'
 const { resolveStrategy } = require('./tradeConfigSchema');
 const { STRATEGY_IDS, isMaCrossStrategy } = require('./strategyPresets');
 const {
-  getRequiredSpecs, evaluateEntry, evaluateExit, computeAdaptiveDips,
+  getRequiredSpecs, evaluateEntry, evaluateCrossSignal, evaluatePullbackReady,
+  pullbackEntryEnabled, evaluateExit, computeAdaptiveDips,
   computeStopLossFloor, getFinestPollInterval,
 } = require('./strategyEngine');
 
@@ -312,6 +313,21 @@ function parseRulesState(row) {
 
 const DEFAULT_ENTRY_COOLDOWN_HOURS = 4;
 const COOLDOWN_LOG_INTERVAL_MS = 15 * 60_000;
+const ENTRY_CAP_LOG_REASON = 'ABOVE_MA2_MAX';
+const PENDING_LOG_INTERVAL_MS = 15 * 60_000;
+
+const PENDING_CANCEL_LABELS = {
+  NO_PULLBACK: 'sem pullback em direção à MA21',
+  ABOVE_MA2_MAX: 'acima do teto MA2',
+  ENTRY_WINDOW_PASSED: 'janela de entrada expirou',
+  SIGNAL_LOST: 'candle de sinal perdido',
+  PENDING_TIMEOUT: 'timeout',
+  NO_PENDING_SIGNAL: 'sinal pendente inválido',
+  BELOW_ADAPTIVE_FLOOR: 'filtro MA adaptativo',
+  NOT_ABOVE_MA: 'filtro MA',
+  NOT_BELOW_MA: 'filtro MA',
+  FILTER_NO_MA: 'filtro MA indisponível',
+};
 
 function entryCooldownHours(config) {
   const h = Number(config?.entryCooldownHours);
@@ -341,6 +357,75 @@ function formatCooldownRemaining(ms) {
 
 function postExitRulesState(exitTime) {
   return { lastExitTime: exitTime };
+}
+
+function parsePendingPullback(state, session) {
+  if (session?.pendingPullback) return session.pendingPullback;
+  const rs = parseRulesState(state);
+  return rs.pendingPullback ?? null;
+}
+
+function pendingPullbackPayload(crossCheck) {
+  return {
+    signalOpenTime: crossCheck.crossOpenTime,
+    signalClose:    parseFloat(crossCheck.close),
+    signalMa1:      crossCheck.ma1,
+    startedAt:      new Date().toISOString(),
+  };
+}
+
+function rulesStateWithoutPending(state, session, extra = {}) {
+  const rs = { ...parseRulesState(state), ...(session?.rulesState ?? {}), ...extra };
+  delete rs.pendingPullback;
+  return rs;
+}
+
+async function executeBuy({
+  rowId, adapter, strategy, log, session, state, entryMeta, capital, strategyId, symbol,
+}) {
+  let result;
+  try {
+    result = await adapter.marketBuy(parseFloat(capital));
+  } catch (err) {
+    log(`❌ Erro na compra: ${err.message}`);
+    return false;
+  }
+
+  const { filledQty, quoteQty, avgPrice } = result;
+  const initialFloor = computeStopLossFloor(avgPrice, avgPrice, strategy.config.stopLoss);
+  const buyTime = new Date().toISOString();
+  session.phase = 'BOUGHT';
+  session.pendingPullback = null;
+  session.rulesState = { stopPeakPrice: avgPrice, stopFloor: initialFloor };
+  await saveState(rowId, {
+    phase: 'BOUGHT', buy_price: avgPrice, buy_qty: filledQty,
+    buy_usdt: quoteQty, buy_time: buyTime,
+    rsi_entry: entryMeta.ma1,
+    rules_state: session.rulesState,
+  }, log);
+
+  log(`${'─'.repeat(60)}`);
+  log(`${G}🟢 COMPRA EXECUTADA${X}`);
+  log(`   Preço : ${avgPrice.toFixed(6)}  Qty: ${filledQty}  USDT: ${quoteQty.toFixed(4)}`);
+  if (entryMeta.pullbackVsMa2Pct != null) {
+    log(`   Pullback MA21: ${entryMeta.pullbackVsMa2Pct.toFixed(1)}pp  close +${entryMeta.aboveMa2Pct?.toFixed(1) ?? '?'}% MA21`);
+  } else if (entryMeta.pullbackPct != null) {
+    log(`   Pullback: ${entryMeta.pullbackPct.toFixed(1)}%  MA2: +${entryMeta.aboveMa2Pct?.toFixed(1) ?? '?'}%`);
+  }
+  log(`${'─'.repeat(60)}`);
+  sendWhatsApp(`🟢 MA-CROSS COMPRA [${strategyId}] ${symbol}\nPreço: ${avgPrice}\nUSDT: ${quoteQty.toFixed(4)}`);
+  return true;
+}
+
+async function cancelPendingPullback(rowId, log, session, state, reason, detail) {
+  const label = PENDING_CANCEL_LABELS[reason] ?? reason;
+  log(`${Y}⏹️  Entrada pendente cancelada — ${label}${detail ? ` (${detail})` : ''}${X}`);
+  session.phase = 'WATCHING';
+  session.pendingPullback = null;
+  await saveState(rowId, {
+    phase: 'WATCHING',
+    rules_state: rulesStateWithoutPending(state, session),
+  }, log);
 }
 
 function getTickPeak(cMap, config, buyPrice, storedPeak) {
@@ -461,9 +546,6 @@ async function tick(rowId, adapter, strategy, log, session) {
   const cMap  = await fetchCandleMap(adapter, specs);
   const adaptiveDips = computeAdaptiveDips(config, cMap);
 
-  const entryCheck = evaluateEntry(config, cMap, adaptiveDips);
-  const exitEval   = evaluateExit(config, cMap, null);
-
   const rows = await sbReq('GET', 'rsi_multi_bot_state', null, `?id=eq.${rowId}&limit=1`);
   const state = rows?.[0];
   if (!state) return { phase: 'WATCHING' };
@@ -472,9 +554,58 @@ async function tick(rowId, adapter, strategy, log, session) {
   const buyPrice = state.buy_price ? parseFloat(state.buy_price) : null;
   const phase = session.phase ?? state.phase;
 
+  // ── PENDING (pullback após cruzamento) ───────────────────────────────────
+  if (phase === 'PENDING') {
+    const pending = parsePendingPullback(state, session);
+    const timeoutMs = config.execution?.pendingTimeoutMs ?? 90 * 60_000;
+    const startedAt = pending?.startedAt ? new Date(pending.startedAt).getTime() : 0;
+    if (!pending || !startedAt) {
+      await cancelPendingPullback(rowId, log, session, state, 'NO_PENDING_SIGNAL');
+      return { phase: 'WATCHING' };
+    }
+    if (Date.now() - startedAt > timeoutMs) {
+      await cancelPendingPullback(rowId, log, session, state, 'PENDING_TIMEOUT');
+      return { phase: 'WATCHING' };
+    }
+
+    const ready = evaluatePullbackReady(config, cMap, adaptiveDips, pending);
+    if (ready.cancel) {
+      const detail = ready.pullbackVsMa2Pct != null
+        ? `+${ready.aboveMa2Pct?.toFixed?.(1) ?? '?'}% MA21 (sinal +${ready.signalAboveMa2Pct?.toFixed?.(1) ?? '?'})`
+        : (ready.aboveMa2Pct != null ? `+${ready.aboveMa2Pct.toFixed(1)}% MA21` : null);
+      await cancelPendingPullback(rowId, log, session, state, ready.reason, detail);
+      return { phase: 'WATCHING' };
+    }
+    if (!ready.ready) {
+      if (ready.reason === 'WAITING_CANDLES') {
+        const now = Date.now();
+        if (!session.lastPendingLogAt || now - session.lastPendingLogAt >= PENDING_LOG_INTERVAL_MS) {
+          session.lastPendingLogAt = now;
+          const wait = config.execution?.pullbackEntry?.waitCandles ?? 2;
+          log(`${Y}⏳ Aguardando pullback — candle ${ready.waited}/${wait} após cruzamento${X}`);
+        }
+      }
+      return { phase: 'PENDING' };
+    }
+
+    const vol = session.volCache?.volumeUsdt;
+    const minVol = config.minVolumeUsdt ?? 1_000_000;
+    if (vol != null && vol < minVol && !config.allowLowVolume) {
+      return { phase: 'PENDING' };
+    }
+
+    log(`${G}📍 Pullback confirmado (${ready.entryDesc}) — comprando ${parseFloat(capital).toFixed(2)} USDT${X}`);
+    const bought = await executeBuy({
+      rowId, adapter, strategy, log, session, state,
+      entryMeta: ready, capital, strategyId, symbol,
+    });
+    return { phase: bought ? 'BOUGHT' : 'PENDING' };
+  }
+
   // ── WATCHING ──────────────────────────────────────────────────────────────
   if (phase === 'WATCHING') {
-    if (!entryCheck.allowed) return { phase };
+    const crossCheck = evaluateCrossSignal(config, cMap, adaptiveDips);
+    if (!crossCheck.allowed) return { phase };
 
     const cooldownH = entryCooldownHours(config);
     if (cooldownH > 0) {
@@ -483,7 +614,7 @@ async function tick(rowId, adapter, strategy, log, session) {
         const now = Date.now();
         if (!session.lastCooldownLogAt || now - session.lastCooldownLogAt >= COOLDOWN_LOG_INTERVAL_MS) {
           session.lastCooldownLogAt = now;
-          const kindLabel = entryCheck.entryDesc ?? crossDesc(config.entry);
+          const kindLabel = crossCheck.entryDesc ?? crossDesc(config.entry);
           log(`${Y}⏳ Sinal (${kindLabel}) — cooldown ${formatCooldownRemaining(remaining)} restantes${X}`);
         }
         return { phase };
@@ -496,35 +627,46 @@ async function tick(rowId, adapter, strategy, log, session) {
       return { phase };
     }
 
-    const kindLabel = entryCheck.entryDesc ?? crossDesc(config.entry);
-    log(`${G}📍 Sinal de COMPRA (${kindLabel}) — comprando ${parseFloat(capital).toFixed(2)} USDT${X}`);
+    const entryCheck = evaluateEntry(config, cMap, adaptiveDips);
+    const usePendingFallback = pullbackEntryEnabled(config) && config.execution?.immediateEntry !== true;
 
-    let result;
-    try {
-      result = await adapter.marketBuy(parseFloat(capital));
-    } catch (err) {
-      log(`❌ Erro na compra: ${err.message}`);
-      return { phase };
+    if (entryCheck.allowed) {
+      const kindLabel = entryCheck.entryDesc ?? crossDesc(config.entry);
+      log(`${G}📍 COMPRA imediata (${kindLabel}) — ≤${entryCheck.maxAboveMaPct ?? 3}% MA21 — ${parseFloat(capital).toFixed(2)} USDT${X}`);
+      const bought = await executeBuy({
+        rowId, adapter, strategy, log, session, state,
+        entryMeta: entryCheck, capital, strategyId, symbol,
+      });
+      return { phase: bought ? 'BOUGHT' : 'WATCHING' };
     }
 
-    const { filledQty, quoteQty, avgPrice } = result;
-    const initialFloor = computeStopLossFloor(avgPrice, avgPrice, config.stopLoss);
-    const buyTime = new Date().toISOString();
-    session.phase = 'BOUGHT';
-    session.rulesState = { stopPeakPrice: avgPrice, stopFloor: initialFloor };
-    await saveState(rowId, {
-      phase: 'BOUGHT', buy_price: avgPrice, buy_qty: filledQty,
-      buy_usdt: quoteQty, buy_time: buyTime,
-      rsi_entry: entryCheck.ma1,
-      rules_state: { stopPeakPrice: avgPrice, stopFloor: initialFloor },
-    }, log);
+    if (usePendingFallback) {
+      const pending = pendingPullbackPayload(crossCheck);
+      const wait = config.execution?.pullbackEntry?.waitCandles ?? 2;
+      session.phase = 'PENDING';
+      session.pendingPullback = pending;
+      session.rulesState = { ...parseRulesState(state), pendingPullback: pending };
+      await saveState(rowId, { phase: 'PENDING', rules_state: session.rulesState }, log);
+      if (entryCheck.reason === ENTRY_CAP_LOG_REASON) {
+        const pct = entryCheck.aboveMa2Pct != null ? entryCheck.aboveMa2Pct.toFixed(1) : '?';
+        const cap = entryCheck.maxAboveMaPct ?? '?';
+        log(`${G}📍 Cruzamento (${crossCheck.entryDesc}) — +${pct}% MA21 (máx ${cap}%) → pending pullback (${wait} candles)${X}`);
+      } else {
+        log(`${G}📍 Cruzamento (${crossCheck.entryDesc}) — aguardando pullback (${wait} candles)${X}`);
+      }
+      return { phase: 'PENDING' };
+    }
 
-    log(`${'─'.repeat(60)}`);
-    log(`${G}🟢 COMPRA EXECUTADA${X}`);
-    log(`   Preço : ${avgPrice.toFixed(6)}  Qty: ${filledQty}  USDT: ${quoteQty.toFixed(4)}`);
-    log(`${'─'.repeat(60)}`);
-    sendWhatsApp(`🟢 MA-CROSS COMPRA [${strategyId}] ${symbol}\nPreço: ${avgPrice}\nUSDT: ${quoteQty.toFixed(4)}`);
-    return { phase: 'BOUGHT' };
+    if (entryCheck.reason === ENTRY_CAP_LOG_REASON) {
+      const now = Date.now();
+      if (!session.lastEntryCapLogAt || now - session.lastEntryCapLogAt >= COOLDOWN_LOG_INTERVAL_MS) {
+        session.lastEntryCapLogAt = now;
+        const pct = entryCheck.aboveMa2Pct != null ? entryCheck.aboveMa2Pct.toFixed(1) : '?';
+        const cap = entryCheck.maxAboveMaPct ?? '?';
+        log(`${Y}⛔ Sinal bloqueado — preço +${pct}% acima MA21 (máx ${cap}%)${X}`);
+      }
+    }
+    return { phase };
   }
 
   // ── BOUGHT ────────────────────────────────────────────────────────────────
@@ -589,12 +731,16 @@ async function startSymbol(row, color) {
   };
 
   let lastResult = { phase: row.phase };
+  const rs = parseRulesState(row);
   const session  = {
     volCache: null,
-    phase: row.phase === 'BOUGHT' ? 'BOUGHT' : null,
+    phase: ['BOUGHT', 'PENDING'].includes(row.phase) ? row.phase : null,
+    pendingPullback: rs.pendingPullback ?? null,
     rulesState: null,
-    lastExitTime: parseRulesState(row).lastExitTime ?? null,
+    lastExitTime: rs.lastExitTime ?? null,
     lastCooldownLogAt: 0,
+    lastEntryCapLogAt: 0,
+    lastPendingLogAt: 0,
   };
   let volIv;
 
