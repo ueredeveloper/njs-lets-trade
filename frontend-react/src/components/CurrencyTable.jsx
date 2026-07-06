@@ -258,7 +258,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   const [mtModal, setMtModal]       = useState(null);
   const [mtStateModal, setMtStateModal] = useState(null);
   const [search, setSearch]               = useState('');
-  const [sortVolume, setSortVolume]       = useState('desc'); // 'desc' | 'asc'
+  const [sortVolume, setSortVolume]       = useState('none'); // 'desc' | 'asc' | 'none'
   const [gateItems, setGateItems]         = useState([]);
   const [gateLoading, setGateLoading]     = useState(false);
   const [gateAll, setGateAll]             = useState(null); // todas as moedas Gate (para favoritos)
@@ -267,11 +267,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   const [macrossRefreshing, setMacrossRefreshing] = useState(false);
   const [macrossTick, setMacrossTick]     = useState(0);
   const [macrossFavSort, setMacrossFavSort] = useState(() => loadMacrossFavSort());
-  /** Na view MC favoritos: false = sort do select (fase/proximidade); true = coluna Vol. */
-  const [macrossSortByVolume, setMacrossSortByVolume] = useState(false);
   const [tradeFavSort, setTradeFavSort] = useState(() => loadTradeFavSort());
-  /** Na view TX: false = filtro de datas/PnL; true = coluna Vol. */
-  const [tradeSortByVolume, setTradeSortByVolume] = useState(false);
 
   const macrossFavSymbols = useMemo(() => (
     [...new Set(
@@ -290,6 +286,8 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   const isTradesFavView = favoriteView === 'trades';
   const isAltaFilter = activeFilter?.startsWith('Favoritos|Alta|') ?? false;
   const isNovasFilter = activeFilter?.startsWith('Favoritos|Novas|') ?? false;
+  const isFavVolumeContext = !!favoriteView || isAltaFilter || isNovasFilter;
+  const volumeSortActive = sortVolume !== 'none';
   const tableColCount = isAltaFilter ? 6 : 5;
   const highlightMeta = useMemo(() => {
     if (!activeFilter || favoriteView) return null;
@@ -325,25 +323,25 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     ?? null;
 
   const cycleSort = useCallback(() => {
-    if (isMacrossFavView && !macrossSortByVolume) {
-      setMacrossSortByVolume(true);
-      return;
-    }
-    if (isTradesFavView && !tradeSortByVolume) {
-      setTradeSortByVolume(true);
+    if (isFavVolumeContext) {
+      setSortVolume((v) => {
+        if (v === 'desc') return 'asc';
+        if (v === 'asc') return 'none';
+        return 'desc';
+      });
       return;
     }
     setSortVolume((v) => (v === 'desc' ? 'asc' : 'desc'));
-  }, [isMacrossFavView, macrossSortByVolume, isTradesFavView, tradeSortByVolume]);
+  }, [isFavVolumeContext]);
 
   const onMacrossFavSortChange = useCallback((sortBy) => {
     setMacrossFavSort(sortBy);
-    setMacrossSortByVolume(false);
+    setSortVolume('none');
   }, []);
 
   const onTradeFavSortChange = useCallback((sortBy) => {
     setTradeFavSort(sortBy);
-    setTradeSortByVolume(false);
+    setSortVolume('none');
   }, []);
 
   const rows = useMemo(() => {
@@ -401,23 +399,23 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
       list = list.filter((c) => c.symbol.includes(term));
     }
 
-    list = list.slice().sort((a, b) => {
-      if (isMacrossFavView && !macrossSortByVolume) {
-        return compareMacrossFavorites(a, b, macrossFavSort, {
-          status: macrossFavStatus,
-          entriesBySymbol: macrossEntriesBySymbol,
-        });
-      }
-      if (isTradesFavView && !tradeSortByVolume) {
-        return compareTradeFavorites(a, b, tradeFavSort, tradeFavStatus);
-      }
-      const va = (isAltaFilter || isNovasFilter) ? rowVolume24h(a, highlightMeta) : Number(a.volume) || 0;
-      const vb = (isAltaFilter || isNovasFilter) ? rowVolume24h(b, highlightMeta) : Number(b.volume) || 0;
-      return sortVolume === 'desc' ? vb - va : va - vb;
-    });
+    if (isMacrossFavView && sortVolume === 'none') {
+      list = list.slice().sort((a, b) => compareMacrossFavorites(a, b, macrossFavSort, {
+        status: macrossFavStatus,
+        entriesBySymbol: macrossEntriesBySymbol,
+      }));
+    } else if (isTradesFavView && sortVolume === 'none') {
+      list = list.slice().sort((a, b) => compareTradeFavorites(a, b, tradeFavSort, tradeFavStatus));
+    } else if (sortVolume !== 'none') {
+      list = list.slice().sort((a, b) => {
+        const va = (isAltaFilter || isNovasFilter) ? rowVolume24h(a, highlightMeta) : Number(a.volume) || 0;
+        const vb = (isAltaFilter || isNovasFilter) ? rowVolume24h(b, highlightMeta) : Number(b.volume) || 0;
+        return sortVolume === 'desc' ? vb - va : va - vb;
+      });
+    }
 
     return list;
-  }, [currencies, activeFilter, selectedQuote, findFilter, search, favoriteView, gateFavorites, binanceFavorites, multitradeFavorites, sortVolume, gateAll, filterVisibleCurrencies, isVisibleSymbol, activeMacrossFilter, macrossScannedAt, macrossTick, isMacrossFavView, macrossFavSort, macrossSortByVolume, macrossFavStatus, macrossEntriesBySymbol, isTradesFavView, tradeFavSort, tradeSortByVolume, tradeFavSymbols, tradeFavStatus, isAltaFilter, isNovasFilter, highlightMeta]);
+  }, [currencies, activeFilter, selectedQuote, findFilter, search, favoriteView, gateFavorites, binanceFavorites, multitradeFavorites, sortVolume, gateAll, filterVisibleCurrencies, isVisibleSymbol, activeMacrossFilter, macrossScannedAt, macrossTick, isMacrossFavView, macrossFavSort, macrossFavStatus, macrossEntriesBySymbol, isTradesFavView, tradeFavSort, tradeFavSymbols, tradeFavStatus, isAltaFilter, isNovasFilter, highlightMeta]);
 
   // Atualização em tempo real de filtros macross (cruzou há N min / prestes a cruzar)
   useEffect(() => {
@@ -603,15 +601,13 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     toggleFavoriteView(type);
     setSearch('');
     onSelectFilter?.(null);
-    if (entering) {
-      if (type === 'macross') setMacrossSortByVolume(false);
-      if (type === 'trades') setTradeSortByVolume(false);
-    }
+    if (entering) setSortVolume('none');
   }
 
   async function selectHighlightFilter(name) {
     clearFavoriteView();
     setSearch('');
+    if (isHighlightFilterName(name) && activeFilter !== name) setSortVolume('none');
     const next = activeFilter === name ? null : name;
     if (next && isHighlightFilterName(next) && !findFilter(next)) {
       try {
@@ -652,6 +648,12 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
 
   const showFavSortInHeader = isMacrossFavView || isTradesFavView;
   const favColWidth = showFavSortInHeader ? '10.5rem' : '7.5rem';
+
+  const volSortArrow = sortVolume === 'desc' ? ' ↓' : sortVolume === 'asc' ? ' ↑' : '';
+  const volSortTitle = volumeSortActive
+    ? (sortVolume === 'desc' ? 'Volume: maior primeiro — clique para menor'
+      : 'Volume: menor primeiro — clique para desabilitar')
+    : 'Ordenar por volume 24h';
 
   return (
     <div className="flex flex-col h-full">
@@ -781,17 +783,17 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                     <MacrossFavSortSelect
                       value={macrossFavSort}
                       onChange={onMacrossFavSortChange}
-                      className="!h-7 shrink-0"
+                      className="shrink-0"
                     />
                     <button
                       type="button"
                       className={`text-[8px] font-bold px-0.5 shrink-0 touch-manipulation ${
-                        macrossSortByVolume ? 'text-p5/90' : 'text-p5/45 hover:text-p5/80'
+                        volumeSortActive ? 'text-p5/90' : 'text-p5/45 hover:text-p5/80'
                       }`}
-                      title="Ordenar por volume 24h"
+                      title={volSortTitle}
                       onClick={(e) => { e.stopPropagation(); cycleSort(); }}
                     >
-                      Vol
+                      Vol{volSortArrow}
                     </button>
                   </div>
                 ) : isTradesFavView ? (
@@ -802,17 +804,17 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                     <TradeFavSortSelect
                       value={tradeFavSort}
                       onChange={onTradeFavSortChange}
-                      className="!h-7 shrink-0"
+                      className="shrink-0"
                     />
                     <button
                       type="button"
                       className={`text-[8px] font-bold px-0.5 shrink-0 touch-manipulation ${
-                        tradeSortByVolume ? 'text-p5/90' : 'text-p5/45 hover:text-p5/80'
+                        volumeSortActive ? 'text-p5/90' : 'text-p5/45 hover:text-p5/80'
                       }`}
-                      title="Ordenar por volume 24h"
+                      title={volSortTitle}
                       onClick={(e) => { e.stopPropagation(); cycleSort(); }}
                     >
-                      Vol
+                      Vol{volSortArrow}
                     </button>
                   </div>
                 ) : null}
@@ -829,21 +831,19 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
               )}
               <th
                 className={`text-right px-2 py-1.5 text-p5 font-normal uppercase tracking-wider cursor-pointer hover:opacity-90 select-none whitespace-nowrap ${
-                  (isMacrossFavView && !macrossSortByVolume) || (isTradesFavView && !tradeSortByVolume)
-                    ? 'opacity-50'
-                    : 'opacity-80'
+                  volumeSortActive ? 'opacity-80' : 'opacity-50'
                 }`}
                 onClick={cycleSort}
                 title={
-                  isAltaFilter ? 'Ordenar por volume 24h (coluna Var% mostra a alta)'
-                    : isNovasFilter ? 'Ordenar por volume 24h (data de listagem na coluna Par)'
-                    : isTradesFavView && !tradeSortByVolume ? 'Clique para ordenar por volume'
-                    : 'Ordenar por volume 24h'
+                  isAltaFilter ? 'Volume: maior → menor → desabilitado (Var% na coluna ao lado)'
+                    : isNovasFilter ? 'Volume: maior → menor → desabilitado (data na coluna Par)'
+                    : isTradesFavView && !volumeSortActive ? 'Clique para ordenar por volume'
+                    : volSortTitle
                 }
               >
-                {isTradesFavView && !tradeSortByVolume
+                {isTradesFavView && !volumeSortActive
                   ? 'PnL'
-                  : `Vol${(!isMacrossFavView || macrossSortByVolume) && (!isTradesFavView || tradeSortByVolume) ? (sortVolume === 'desc' ? ' ↓' : ' ↑') : ''}`}
+                  : `Vol${volSortArrow}`}
               </th>
               <th className="w-6" />
             </tr>
@@ -985,7 +985,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                     </td>
                   )}
                   <td className="px-2 py-1.5 text-right font-mono text-[10px]">
-                    {isTradesFavView && !tradeSortByVolume ? (
+                    {isTradesFavView && !volumeSortActive ? (
                       <span
                         className="font-semibold"
                         style={{

@@ -7,8 +7,8 @@ function Chevron({ dir }) {
   return (
     <svg
       viewBox="0 0 16 16"
-      width="14"
-      height="14"
+      width="12"
+      height="12"
       aria-hidden="true"
       className="block shrink-0"
     >
@@ -36,7 +36,7 @@ function Chevron({ dir }) {
 }
 
 const ARROW_BTN =
-  'inline-flex items-center justify-center w-6 h-full text-p5/70 hover:text-p5 active:text-white transition-colors shrink-0';
+  'inline-flex items-center justify-center w-5 h-full text-p5/70 hover:text-p5 active:text-white transition-colors shrink-0';
 
 export default function TradeFavSortSelect({ value, onChange, className = '' }) {
   const { t } = useI18n();
@@ -64,7 +64,7 @@ export default function TradeFavSortSelect({ value, onChange, className = '' }) 
       </button>
       <button
         type="button"
-        className="inline-flex items-center justify-center text-[10px] font-semibold leading-none text-p5/90 whitespace-nowrap min-w-[4.5rem] max-w-[7.5rem] truncate px-1 h-full hover:text-p5"
+        className="inline-flex items-center justify-center text-[9px] font-semibold leading-none text-p5/90 whitespace-nowrap min-w-[4rem] max-w-[6.5rem] truncate px-1 h-full hover:text-p5"
         title={`${t(opt.labelKey)} — ${t('trades.sort.next')}`}
         onClick={(e) => { e.stopPropagation(); step(1); }}
       >
