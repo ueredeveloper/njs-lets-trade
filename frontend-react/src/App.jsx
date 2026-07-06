@@ -25,7 +25,6 @@ import BootStageBar from './components/BootStageBar';
 
 const MOBILE_SHEET_HEIGHT = '88%';
 const MOBILE_SHEET_FILTERS_HEIGHT = '30%';
-const DESKTOP_FILTERS_HEIGHT = '50%';
 
 function AppContent() {
   const { setCurrencies, setFilters, setSelectedChart, setGateFavorites, setBinanceFavorites,
@@ -405,7 +404,7 @@ function AppContent() {
         {/* 4+5 — Coluna direita desktop */}
         <div className="hidden md:flex flex-col w-[28rem] shrink-0 min-h-0 bg-p1">
           {show(BOOT_STAGE.FILTER_TABS) && (
-            <div className="flex flex-col min-h-0 px-2 py-1 border-b border-p2 overflow-hidden" style={{ height: DESKTOP_FILTERS_HEIGHT }}>
+            <div className="flex flex-col min-h-0 px-2 py-1 border-b border-p2 overflow-hidden shrink-0 h-[44%] lg:h-[42%]">
               <FilterTabs activeFilter={activeFilter} onSelectFilter={handleSelectFilter} />
             </div>
           )}

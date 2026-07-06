@@ -776,10 +776,10 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
             <col style={{ width: '3.75rem' }} />
             <col style={{ width: '1.5rem' }} />
           </colgroup>
-          <thead className="sticky top-0 z-10 bg-p1">
+          <thead className="sticky top-0 z-30 bg-p1">
             <tr className="lt-table-head">
               <th
-                className="text-left px-1 py-1 align-middle"
+                className="text-left px-1 py-1 align-middle bg-p1"
                 style={{ width: favColWidth, minWidth: favColWidth }}
                 title={
                   isMacrossFavView ? t('macross.sort.label')
@@ -926,7 +926,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                   }`}
                 >
                   <td
-                    className="pl-1 pr-0 relative z-20"
+                    className="pl-1 pr-0"
                     style={{ width: favColWidth, minWidth: favColWidth }}
                     onClick={(e) => e.stopPropagation()}
                   >
@@ -949,7 +949,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                         return (
                           <span className="flex items-center gap-1 flex-wrap min-w-0">
                             <span className="shrink-0">
-                              {base}<span className="opacity-40 font-normal text-[10px]">/{quote}</span>
+                              {base}<span className="opacity-40 font-normal text-[8px]">/{quote}</span>
                             </span>
                             <button
                               type="button"
@@ -970,7 +970,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                           </span>
                         );
                       })() : (
-                        <span>{base}<span className="opacity-40 font-normal text-[10px]">/{quote}</span></span>
+                        <span>{base}<span className="opacity-40 font-normal text-[8px]">/{quote}</span></span>
                       )}
                       {isTradesFavView && tradeBadge && (
                         <span className="text-[9px] font-normal text-emerald-400/90">{tradeBadge}</span>
@@ -1078,7 +1078,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                       }`}
                     >
                       <td
-                    className="pl-1 pr-0 relative z-20"
+                    className="pl-1 pr-0"
                     style={{ width: favColWidth, minWidth: favColWidth }}
                     onClick={(e) => e.stopPropagation()}
                   >
@@ -1092,7 +1092,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                       </td>
 
                       <td className="px-2 py-1.5 font-mono font-semibold">
-                        {base}<span className="opacity-40 font-normal text-[10px]">/{quote}</span>
+                        {base}<span className="opacity-40 font-normal text-[8px]">/{quote}</span>
                       </td>
                       <td className="px-2 py-1.5 text-right font-mono">{item.price > 0 ? formatPrice(item.price) : '—'}</td>
                       {isAltaFilter && <td className="px-2 py-1.5 text-right font-mono text-[10px] opacity-35">—</td>}
