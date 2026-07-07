@@ -51,11 +51,38 @@ export function computeZoomWindow(candles, { startDate, endDate }, padding = CHA
   };
 }
 
-/** dataZoom ECharts com janela fixa (persiste entre notMerge) */
-export function buildFixedDataZoom(startPct, endPct, xAxisIndex = null) {
+/**
+ * dataZoom vertical (eixo de preço): zoom com Shift+scroll, arraste move na vertical.
+ * filterMode 'none' para não descartar candles ao ampliar/reduzir o preço.
+ */
+export function buildVerticalDataZoom(yAxisIndex = 0) {
+  return {
+    type: 'inside',
+    yAxisIndex: Array.isArray(yAxisIndex) ? yAxisIndex : [yAxisIndex],
+    filterMode: 'none',
+    zoomOnMouseWheel: 'shift',
+    moveOnMouseMove: true,
+    moveOnMouseWheel: false,
+  };
+}
+
+/** dataZoom horizontal (tempo) inside — arraste move, scroll amplia. */
+export function buildInsideDataZoom(xAxisIndex = null, yAxisIndex = 0) {
+  const x = xAxisIndex != null
+    ? { type: 'inside', xAxisIndex: Array.isArray(xAxisIndex) ? xAxisIndex : [xAxisIndex], filterMode: 'filter' }
+    : { type: 'inside', filterMode: 'filter' };
+  const zooms = [x];
+  if (yAxisIndex != null) zooms.push(buildVerticalDataZoom(yAxisIndex));
+  return zooms;
+}
+
+/** dataZoom ECharts com janela fixa (persiste entre notMerge) + zoom vertical opcional */
+export function buildFixedDataZoom(startPct, endPct, xAxisIndex = null, yAxisIndex = 0) {
   const base = { type: 'inside', start: startPct, end: endPct, filterMode: 'filter' };
-  if (xAxisIndex != null) {
-    return [{ ...base, xAxisIndex: Array.isArray(xAxisIndex) ? xAxisIndex : [xAxisIndex] }];
-  }
-  return [base];
+  const x = xAxisIndex != null
+    ? { ...base, xAxisIndex: Array.isArray(xAxisIndex) ? xAxisIndex : [xAxisIndex] }
+    : base;
+  const zooms = [x];
+  if (yAxisIndex != null) zooms.push(buildVerticalDataZoom(yAxisIndex));
+  return zooms;
 }

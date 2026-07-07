@@ -840,6 +840,51 @@ function getFinestPollInterval(config) {
   return ivs.reduce((a, b) => (intervalMs(a) <= intervalMs(b) ? a : b));
 }
 
+/**
+ * Detecta o último flip de lado (ma1 vs ma2) usando os candles AO VIVO, ignorando buracos na série.
+ * findRecentMaCross exige candles consecutivos e usa só candles fechados, então perde cruzamentos
+ * frescos (candle atual) e séries com gaps. Este fallback fecha essas duas lacunas para o display.
+ */
+function detectLiveSideFlip({
+  candles1, period1, interval1,
+  candles2, period2, interval2,
+  now = Date.now(),
+}) {
+  const sigIv = finestInterval(interval1, interval2);
+  const sigCandles = sigIv === interval1 ? candles1 : candles2;
+  if (!sigCandles?.length || sigCandles.length < 2) return null;
+
+  const series1 = buildMaTimeSeries(candles1, period1);
+  const series2 = buildMaTimeSeries(candles2, period2);
+  if (!series1.length || !series2.length) return null;
+
+  const points = [];
+  for (const c of sigCandles) {
+    const m1 = maValueAt(series1, c.openTime);
+    const m2 = maValueAt(series2, c.openTime);
+    if (m1 == null || m2 == null) continue;
+    const diff = m1 - m2;
+    if (diff === 0) continue;
+    points.push({
+      sign: diff > 0 ? 1 : -1,
+      closeTime: c.closeTime ?? (c.openTime + intervalMs(sigIv)),
+    });
+  }
+  if (points.length < 2) return null;
+
+  const curSign = points[points.length - 1].sign;
+  for (let i = points.length - 1; i >= 1; i--) {
+    if (points[i].sign === curSign && points[i - 1].sign !== curSign) {
+      return {
+        direction: curSign > 0 ? 'up' : 'down',
+        crossAt: points[i].closeTime,
+        ageMin: Math.max(0, now - points[i].closeTime) / 60_000,
+      };
+    }
+  }
+  return null; // mesmo lado durante toda a janela → sem cruzamento recente
+}
+
 /** Métricas para sort de favoritos: gap até cruzar ↑/↓ e idade do último cruzamento. */
 function getMaCrossMetrics({
   candles1, period1, interval1,
@@ -916,15 +961,53 @@ function getMaCrossMetrics({
     if (liveMa1 > liveMa2) liveGapDownPct = ((liveMa1 - liveMa2) / liveMa2) * 100;
   }
 
+  // Lado ao vivo manda: fecha o atraso de 1 candle entre os flags "held" (só candles fechados)
+  // e o gap/approaching (calculados ao vivo). Sem isso, um símbolo que cruzou no candle atual
+  // continua mostrando o badge do estado anterior (ex.: BEL "cruzou ↑" mesmo já estando abaixo).
+  const liveSide = (liveMa1 != null && liveMa2 != null && liveMa1 !== liveMa2)
+    ? (liveMa1 > liveMa2 ? 'up' : 'down')
+    : null;
+
+  let crossUpHeld = crossUp.matched === true;
+  let crossDownHeld = crossDown.matched === true;
+  let crossUpAgeMin = crossUp.crossTime != null ? round(crossUp.ageMin) : null;
+  let crossDownAgeMin = crossDown.crossTime != null ? round(crossDown.ageMin) : null;
+
+  if (liveSide === 'down') crossUpHeld = false;
+  if (liveSide === 'up') crossDownHeld = false;
+
+  // Fallback ao vivo para séries com buracos (candles faltando): findRecentMaCross ignora pares
+  // não consecutivos e perde o cruzamento. Aqui detectamos o flip real ignorando gaps.
+  const liveFlip = detectLiveSideFlip({
+    candles1, period1, interval1,
+    candles2, period2, interval2,
+    now,
+  });
+  if (liveFlip && liveFlip.ageMin <= crossLookbackMin) {
+    if (liveFlip.direction === 'up' && liveSide === 'up') {
+      if (!crossUpHeld || crossUpAgeMin == null || liveFlip.ageMin < crossUpAgeMin) {
+        crossUpHeld = true;
+        crossUpAgeMin = round(liveFlip.ageMin);
+      }
+      crossDownHeld = false;
+    } else if (liveFlip.direction === 'down' && liveSide === 'down') {
+      if (!crossDownHeld || crossDownAgeMin == null || liveFlip.ageMin < crossDownAgeMin) {
+        crossDownHeld = true;
+        crossDownAgeMin = round(liveFlip.ageMin);
+      }
+      crossUpHeld = false;
+    }
+  }
+
   return {
     ok: true,
     ma1: liveMa1 ?? ma1, ma2: liveMa2 ?? ma2,
     gapUpPct: round(nearUp.matched ? nearUp.gapPct : liveGapUpPct ?? gapUpPct),
     gapDownPct: round(nearDown.matched ? nearDown.gapPct : liveGapDownPct ?? gapDownPct),
-    crossUpAgeMin: crossUp.crossTime != null ? round(crossUp.ageMin) : null,
-    crossDownAgeMin: crossDown.crossTime != null ? round(crossDown.ageMin) : null,
-    crossUpHeld: crossUp.matched === true,
-    crossDownHeld: crossDown.matched === true,
+    crossUpAgeMin,
+    crossDownAgeMin,
+    crossUpHeld,
+    crossDownHeld,
     approachingUp: nearUp.matched === true,
     approachingDown: nearDown.matched === true,
     proximityPct: prox,

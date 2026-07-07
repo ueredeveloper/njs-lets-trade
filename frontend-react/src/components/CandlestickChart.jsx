@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect, useRef } from 'react';
+import { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import { useI18n } from '../i18n';
 import ReactECharts from 'echarts-for-react';
 import { useCurrency } from '../contexts/CurrencyContext';
@@ -9,7 +9,7 @@ import convertOpenTime from '../utils/convertOpenTime';
 import Tooltip from './Tooltip';
 import { hasAnyChartPanelButton } from '../utils/chartPanelButtons';
 import { DEFAULT_OVERLAY_SLOTS, BAND_PCT_OPTIONS } from '../utils/uiPreferences';
-import { CHART_VIEW, computeZoomWindow, buildFixedDataZoom, computeCandleLimitFromTime, isTradePanelChartView } from '../utils/chartView';
+import { CHART_VIEW, computeZoomWindow, buildFixedDataZoom, buildInsideDataZoom, computeCandleLimitFromTime, isTradePanelChartView } from '../utils/chartView';
 
 const LIMIT = DEFAULT_CANDLE_LIMIT;
 const LAST_CANDLES = 10;
@@ -21,12 +21,16 @@ const BAND_PANEL_KEYS = ['bandsPct', 'bandsAbove', 'bandsBelow'];
 const INTERVALS = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w'];
 const DEFAULT_INTERVAL = '15m';
 
-const CHART_LEFT_PAD = 68;
-const CHART_LEFT_PAD_NONE = 16;
-const PANEL_W = 54;
-const PANEL_GAP = 2;
-const PANEL_HALF = (PANEL_W - PANEL_GAP) / 2;
-const PANEL_QTR  = (PANEL_W - PANEL_GAP * 3) / 4;
+const CHART_PRICE_PAD = 54;        // direita: rótulos do eixo de preço
+const CHART_LEFT_MARGIN = 8;       // margem esquerda mínima
+const CHART_PANEL_COLLAPSED = 22;  // painel recolhido (só a aba)
+const PANEL_W = 56;                // largura de cada tile no masonry
+const PANEL_GAP = 4;
+const PANEL_TILE_PAD = 4;
+const PANEL_MAX_COLS = 3;
+const PANEL_MAX_WIDTH = 132;       // teto horizontal do painel masonry
+const PANEL_OUTER_PAD = 6;
+const COLLAPSE_TAB_W = 16;
 const C_UP   = '#26a69a';
 const C_DOWN = '#ef5350';
 
@@ -60,9 +64,9 @@ function filterIndicatorsByPanel(activeIndicators, panelButtons) {
   });
 }
 
-function PanelTip({ text, children, position = 'right' }) {
+function PanelTip({ text, children, position = 'left' }) {
   return (
-    <Tooltip text={text} position={position} maxW={280}>
+    <Tooltip text={text} position={position} maxW={280} portal>
       <span className="inline-flex w-full justify-center">{children}</span>
     </Tooltip>
   );
@@ -148,7 +152,7 @@ function buildOverlaySeries(overlayConfigs, candlesticks, alignSeries) {
   });
 }
 
-const panelBtn = (active, color, darkText = false, size = 'full') => ({
+const panelBtn = (active, color, darkText = false) => ({
   fontSize: 8,
   padding: '2px 0',
   borderRadius: 3,
@@ -163,10 +167,107 @@ const panelBtn = (active, color, darkText = false, size = 'full') => ({
   lineHeight: 1.3,
   boxSizing: 'border-box',
   textAlign: 'center',
-  width: size === 'full' ? PANEL_W : size === 'half' ? PANEL_HALF : PANEL_QTR,
+  width: '100%',
 });
 
-function ChartLeftIndicatorPanel({
+const panelSelect = (color) => ({
+  width: '100%',
+  fontSize: 8,
+  padding: '2px 0',
+  borderRadius: 3,
+  fontFamily: 'monospace',
+  boxSizing: 'border-box',
+  textAlign: 'center',
+  cursor: 'pointer',
+  background: '#111',
+  color,
+  border: `1px solid ${color}66`,
+});
+
+const MA_PERIOD_OPTIONS = ['50', '200'];
+
+const COMPACT_LABELS = {
+  ma9: '9', ma21: '21', ma50: '50', ma200: '200', ichimoku: 'Ich', rsi: 'RSI',
+  rsi80: 'R80', rsi50: 'R50',
+};
+
+const collapseTabBtn = {
+  pointerEvents: 'auto',
+  fontSize: 11,
+  lineHeight: 1,
+  width: 16,
+  height: 34,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  cursor: 'pointer',
+  borderRadius: 4,
+  color: '#94a3b8',
+  background: 'rgba(0,0,0,0.55)',
+  border: '1px solid #334155',
+  transition: 'all 0.15s',
+};
+
+/** Empilha alturas em N colunas (menor coluna primeiro) e retorna a altura da coluna mais alta. */
+function tallestMasonryColumn(heights, cols, gap) {
+  const colHeights = Array(cols).fill(0);
+  for (const h of heights) {
+    let minIdx = 0;
+    for (let i = 1; i < cols; i++) {
+      if (colHeights[i] < colHeights[minIdx]) minIdx = i;
+    }
+    colHeights[minIdx] += h + gap;
+  }
+  return Math.max(0, Math.max(...colHeights) - gap);
+}
+
+/** Menor número de colunas em que tudo cabe na altura; prefere empilhar (menos colunas). */
+function computeMasonryColumns(heights, containerHeight, maxPanelWidth, gap, maxCols = PANEL_MAX_COLS) {
+  const n = heights.length;
+  if (!n || containerHeight <= 0) return 1;
+  const colsCapByWidth = Math.max(1, Math.floor(maxPanelWidth / (PANEL_W + gap)));
+  const limit = Math.min(maxCols, n, colsCapByWidth);
+  for (let cols = 1; cols <= limit; cols++) {
+    if (tallestMasonryColumn(heights, cols, gap) <= containerHeight) return cols;
+  }
+  return limit;
+}
+
+function computePanelWidth(columnCount) {
+  if (columnCount < 1) return COLLAPSE_TAB_W + PANEL_OUTER_PAD * 2;
+  return (
+    columnCount * PANEL_W
+    + (columnCount - 1) * PANEL_GAP
+    + COLLAPSE_TAB_W
+    + PANEL_OUTER_PAD * 2
+    + 2
+  );
+}
+
+const panelTile = {
+  background: 'rgba(0,0,0,0.5)',
+  borderRadius: 5,
+  padding: PANEL_TILE_PAD,
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'stretch',
+  gap: 3,
+  width: PANEL_W,
+  boxSizing: 'border-box',
+  breakInside: 'avoid',
+  marginBottom: PANEL_GAP,
+};
+
+const sectionTitle = {
+  fontSize: 7,
+  letterSpacing: 0.5,
+  color: '#64748b',
+  fontFamily: 'monospace',
+  textTransform: 'uppercase',
+  textAlign: 'center',
+};
+
+function ChartIndicatorPanel({
   activeIndicators,
   toggleIndicator,
   overlaySlots,
@@ -175,176 +276,230 @@ function ChartLeftIndicatorPanel({
   setMaBands,
   overlayMaLoading,
   panelButtons,
+  collapsed,
+  onToggleCollapse,
+  onLayoutChange,
 }) {
   const { t } = useI18n();
-  const show = (key) => panelButtons[key] !== false;
-  const indicatorIds = INDICATOR_GROUPS.map(g => g.id).concat(RSI_EXTRA_INDICATORS.map(g => g.id));
-  const showIndicatorBlock = indicatorIds.some(show);
-  const visibleOverlays = overlaySlots
-    .map((slot, idx) => ({ slot, idx, key: idx === 0 ? 'ma1' : 'ma2' }))
-    .filter(({ key }) => show(key));
-  const showBandsPct = show('bandsPct');
-  const showBandsAbove = show('bandsAbove');
-  const showBandsBelow = show('bandsBelow');
-  const showBandsBlock = showBandsPct || showBandsAbove || showBandsBelow;
+  const outerRef = useRef(null);
+  const masonryRef = useRef(null);
+  const [columnCount, setColumnCount] = useState(1);
 
-  if (!showIndicatorBlock && !visibleOverlays.length && !showBandsBlock) return null;
+  const tiles = useMemo(() => {
+    const showKey = (key) => panelButtons[key] !== false;
+    const indicators = [...INDICATOR_GROUPS, ...RSI_EXTRA_INDICATORS].filter(({ id }) => showKey(id));
+    const visibleOverlays = overlaySlots
+      .map((slot, idx) => ({ slot, idx, key: idx === 0 ? 'ma1' : 'ma2' }))
+      .filter(({ key }) => showKey(key));
+    const showBandsPct = showKey('bandsPct');
+    const showBandsAbove = showKey('bandsAbove');
+    const showBandsBelow = showKey('bandsBelow');
+    const showBandsBlock = showBandsPct || showBandsAbove || showBandsBelow;
 
-  const block = {
-    background: 'rgba(0,0,0,0.5)',
-    borderRadius: 5,
-    padding: '3px 4px',
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    gap: 3,
-    width: PANEL_W + 8,
-    boxSizing: 'border-box',
-  };
-
-  return (
-    <div style={{
-      position: 'absolute',
-      top: 0,
-      bottom: 0,
-      left: 0,
-      width: PANEL_W + 12,
-      zIndex: 10,
-      display: 'flex',
-      flexDirection: 'column',
-      justifyContent: 'center',
-      alignItems: 'center',
-      padding: '4px 2px',
-      pointerEvents: 'none',
-    }}>
-      <div style={{ pointerEvents: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, maxHeight: '100%', overflowY: 'auto' }}>
-        {/* Indicadores do chart */}
-        {showIndicatorBlock && (
-        <div style={block}>
-          {INDICATOR_GROUPS.filter(({ id }) => show(id)).map(({ id, label, color, tipKey }) => {
-            const active = activeIndicators.includes(id);
-            return (
-              <PanelTip key={id} text={t(tipKey)}>
-                <button type="button" onClick={() => toggleIndicator(id)} style={panelBtn(active, color, id === 'ma200')}>
-                  {label}
-                </button>
-              </PanelTip>
-            );
-          })}
-          {RSI_EXTRA_INDICATORS.filter(({ id }) => show(id)).map(({ id, label, color, tipKey }) => {
-            const active = activeIndicators.includes(id);
-            return (
-              <PanelTip key={id} text={t(tipKey)}>
-                <button type="button" onClick={() => toggleIndicator(id)} style={panelBtn(active, color, true)}>
-                  {label}
-                </button>
-              </PanelTip>
-            );
-          })}
-        </div>
-        )}
-
-        {/* MA overlay 1 e 2 */}
-        {visibleOverlays.map(({ slot, idx }) => {
-          const maNum = idx + 1;
-          return (
-          <div key={slot.id} style={block}>
+    const list = [];
+    for (const { id, color, tipKey } of indicators) {
+      const active = activeIndicators.includes(id);
+      const darkText = id === 'ma200' || id === 'rsi80' || id === 'rsi50';
+      list.push({
+        key: `ind-${id}`,
+        estHeight: 24,
+        node: (
+          <PanelTip text={t(tipKey)}>
+            <button type="button" onClick={() => toggleIndicator(id)} style={panelBtn(active, color, darkText)}>
+              {COMPACT_LABELS[id] ?? id}
+            </button>
+          </PanelTip>
+        ),
+      });
+    }
+    for (const { slot, idx } of visibleOverlays) {
+      const maNum = idx + 1;
+      list.push({
+        key: slot.id,
+        estHeight: 108,
+        node: (
+          <>
             <PanelTip text={t('chart.tip.ma_overlay', maNum)}>
-              <span style={{ fontSize: 8, color: OVERLAY_MA_COLORS[idx], fontFamily: 'monospace', textAlign: 'center', cursor: 'help' }}>
+              <span style={{ ...sectionTitle, color: OVERLAY_MA_COLORS[idx], cursor: 'help' }}>
                 MA{maNum}
               </span>
             </PanelTip>
-            <div style={{ display: 'flex', gap: PANEL_GAP, justifyContent: 'center', width: PANEL_W }}>
-              {['50', '200'].map(p => (
-                <PanelTip key={p} text={t('chart.tip.ma_period', maNum, p)}>
-                  <button type="button" onClick={() => updateOverlaySlot(slot.id, { period: p })} style={{
-                    ...panelBtn(slot.period === p, OVERLAY_MA_COLORS[idx], true, 'half'),
-                  }}>{p}</button>
-                </PanelTip>
-              ))}
-            </div>
+            <PanelTip text={t('chart.tip.ma_period', maNum, slot.period)}>
+              <select
+                value={slot.period}
+                onChange={e => updateOverlaySlot(slot.id, { period: e.target.value })}
+                style={panelSelect(OVERLAY_MA_COLORS[idx])}
+              >
+                {MA_PERIOD_OPTIONS.map(p => <option key={p} value={p}>{p}</option>)}
+              </select>
+            </PanelTip>
             <PanelTip text={t('chart.tip.ma_interval', maNum)}>
               <select
                 value={slot.interval}
                 onChange={e => updateOverlaySlot(slot.id, { interval: e.target.value })}
-                style={{
-                  width: PANEL_W, fontSize: 8, padding: '2px 0', borderRadius: 3, fontFamily: 'monospace',
-                  boxSizing: 'border-box', textAlign: 'center',
-                  background: '#111', color: OVERLAY_MA_COLORS[idx], border: `1px solid ${OVERLAY_MA_COLORS[idx]}66`,
-                }}
+                style={panelSelect(OVERLAY_MA_COLORS[idx])}
               >
                 {OVERLAY_MA_INTERVALS.map(iv => <option key={iv} value={iv}>{iv}</option>)}
               </select>
             </PanelTip>
             <PanelTip text={t('chart.tip.ma_on', maNum)}>
               <button type="button" onClick={() => updateOverlaySlot(slot.id, { enabled: !slot.enabled })} style={{
-                ...panelBtn(slot.enabled, OVERLAY_MA_COLORS[idx], true, 'full'),
+                ...panelBtn(slot.enabled, OVERLAY_MA_COLORS[idx], true),
               }}>
                 {slot.enabled ? 'ON' : 'OFF'}
               </button>
             </PanelTip>
-          </div>
-          );
-        })}
+          </>
+        ),
+      });
+    }
+    if (showBandsBlock) {
+      let estHeight = 18;
+      if (showBandsPct) estHeight += 24;
+      if (showBandsAbove || showBandsBelow) estHeight += 24;
+      if (overlayMaLoading) estHeight += 14;
+      list.push({
+        key: 'bands',
+        estHeight,
+        node: (
+          <>
+            <PanelTip text={t('chart.tip.bands_title')}>
+              <span style={{ ...sectionTitle, color: '#94a3b8', cursor: 'help' }}>Bandas</span>
+            </PanelTip>
+            {showBandsPct && (
+            <PanelTip text={t('chart.tip.bands_pct', maBands.pct)}>
+              <select
+                value={maBands.pct}
+                onChange={e => setMaBands(b => ({ ...b, pct: Number(e.target.value) }))}
+                style={panelSelect('#94a3b8')}
+              >
+                {BAND_PCT_OPTIONS.map(p => <option key={p} value={p}>{p}%</option>)}
+              </select>
+            </PanelTip>
+            )}
+            {showBandsAbove && (
+            <PanelTip text={t('chart.tip.band_above', maBands.pct)}>
+              <button type="button" onClick={() => setMaBands(b => ({ ...b, showAbove: !b.showAbove }))} style={{
+                ...panelBtn(maBands.showAbove, '#22c55e', true),
+              }}>
+                ↑{maBands.pct}%
+              </button>
+            </PanelTip>
+            )}
+            {showBandsBelow && (
+            <PanelTip text={t('chart.tip.band_below', maBands.pct)}>
+              <button type="button" onClick={() => setMaBands(b => ({ ...b, showBelow: !b.showBelow }))} style={{
+                ...panelBtn(maBands.showBelow, '#f87171', true),
+              }}>
+                ↓{maBands.pct}%
+              </button>
+            </PanelTip>
+            )}
+            {overlayMaLoading && (
+              <div style={{ display: 'flex', justifyContent: 'center' }}>
+                <div className="animate-spin" style={{ width: 8, height: 8, borderRadius: '50%', border: '1.5px solid #94a3b8', borderTopColor: 'transparent' }} />
+              </div>
+            )}
+          </>
+        ),
+      });
+    }
+    return list;
+  }, [
+    panelButtons, overlaySlots, activeIndicators, toggleIndicator, updateOverlaySlot,
+    maBands, setMaBands, overlayMaLoading, t,
+  ]);
 
-        {/* Bandas % */}
-        {showBandsBlock && (
-        <div style={block}>
-          <PanelTip text={t('chart.tip.bands_title')}>
-            <span style={{ fontSize: 8, color: '#94a3b8', fontFamily: 'monospace', textAlign: 'center', cursor: 'help' }}>Bandas</span>
-          </PanelTip>
-          {showBandsPct && (
-          <div style={{ display: 'flex', gap: PANEL_GAP, justifyContent: 'center', width: PANEL_W, flexWrap: 'wrap' }}>
-            {BAND_PCT_OPTIONS.map(p => (
-              <PanelTip key={p} text={t('chart.tip.bands_pct', p)}>
-                <button type="button" onClick={() => setMaBands(b => ({ ...b, pct: p }))} style={{
-                  ...panelBtn(maBands.pct === p, '#64748b', maBands.pct === p, 'qtr'),
-                  color: maBands.pct === p ? '#fff' : '#94a3b8',
-                  border: `1px solid ${maBands.pct === p ? '#94a3b8' : '#475569'}`,
-                  background: maBands.pct === p ? '#64748b' : 'transparent',
-                }}>{p}</button>
-              </PanelTip>
-            ))}
-          </div>
-          )}
-          {showBandsAbove && (
-          <PanelTip text={t('chart.tip.band_above', maBands.pct)}>
-            <button type="button" onClick={() => setMaBands(b => ({ ...b, showAbove: !b.showAbove }))} style={{
-              ...panelBtn(maBands.showAbove, '#22c55e', true, 'full'),
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 4,
-              letterSpacing: 0,
-            }}>
-              <span aria-hidden>↑</span>
-              <span>{maBands.pct}%</span>
-            </button>
-          </PanelTip>
-          )}
-          {showBandsBelow && (
-          <PanelTip text={t('chart.tip.band_below', maBands.pct)}>
-            <button type="button" onClick={() => setMaBands(b => ({ ...b, showBelow: !b.showBelow }))} style={{
-              ...panelBtn(maBands.showBelow, '#f87171', true, 'full'),
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 4,
-              letterSpacing: 0,
-            }}>
-              <span aria-hidden>↓</span>
-              <span>{maBands.pct}%</span>
-            </button>
-          </PanelTip>
-          )}
-          {overlayMaLoading && (
-            <div style={{ display: 'flex', justifyContent: 'center' }}>
-              <div className="animate-spin" style={{ width: 8, height: 8, borderRadius: '50%', border: '1.5px solid #94a3b8', borderTopColor: 'transparent' }} />
+  const tileHeights = useMemo(() => tiles.map(t => t.estHeight), [tiles]);
+
+  useEffect(() => {
+    const el = masonryRef.current;
+    if (!el || collapsed || !tiles.length) {
+      const width = collapsed ? CHART_PANEL_COLLAPSED : 0;
+      onLayoutChange?.({ columnCount: 0, width });
+      return undefined;
+    }
+    const measure = () => {
+      const el = masonryRef.current;
+      const outer = outerRef.current;
+      if (!el || !outer) return;
+      const h = el.clientHeight;
+      const chartW = outer.parentElement?.clientWidth ?? 400;
+      const maxPanelWidth = Math.min(
+        PANEL_MAX_WIDTH,
+        Math.max(PANEL_W, chartW * 0.28),
+      );
+      const cols = computeMasonryColumns(tileHeights, h, maxPanelWidth, PANEL_GAP, PANEL_MAX_COLS);
+      setColumnCount(cols);
+      onLayoutChange?.({ columnCount: cols, width: computePanelWidth(cols) });
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    if (outerRef.current?.parentElement) ro.observe(outerRef.current.parentElement);
+    return () => ro.disconnect();
+  }, [collapsed, tiles.length, tileHeights, onLayoutChange]);
+
+  if (!tiles.length) {
+    return null;
+  }
+
+  const masonryWidth = columnCount * PANEL_W + (columnCount - 1) * PANEL_GAP;
+
+  return (
+    <div
+      ref={outerRef}
+      style={{
+      position: 'absolute',
+      top: 0,
+      bottom: 0,
+      right: 0,
+      zIndex: 10,
+      display: 'flex',
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'flex-end',
+      padding: `${PANEL_OUTER_PAD}px ${PANEL_OUTER_PAD}px ${PANEL_OUTER_PAD}px 0`,
+      pointerEvents: 'none',
+    }}>
+      <PanelTip text={t(collapsed ? 'chart.tip.panel_expand' : 'chart.tip.panel_collapse')} position="left">
+        <button
+          type="button"
+          onClick={onToggleCollapse}
+          style={collapseTabBtn}
+          onMouseEnter={e => { e.currentTarget.style.color = '#e2e8f0'; e.currentTarget.style.borderColor = '#64748b'; }}
+          onMouseLeave={e => { e.currentTarget.style.color = '#94a3b8'; e.currentTarget.style.borderColor = '#334155'; }}
+        >
+          {collapsed ? '‹' : '›'}
+        </button>
+      </PanelTip>
+
+      {!collapsed && (
+      <div
+        ref={masonryRef}
+        style={{
+          pointerEvents: 'auto',
+          height: '100%',
+          maxHeight: '100%',
+          overflowY: 'auto',
+          overflowX: 'hidden',
+          marginLeft: 4,
+          scrollbarWidth: 'thin',
+        }}
+      >
+        <div style={{
+          columnCount,
+          columnGap: PANEL_GAP,
+          width: masonryWidth,
+        }}>
+          {tiles.map(({ key, node }) => (
+            <div key={key} style={panelTile}>
+              {node}
             </div>
-          )}
+          ))}
         </div>
-        )}
       </div>
+      )}
     </div>
   );
 }
@@ -567,7 +722,7 @@ function buildMultitradeMarkLines(candlesticks, interval, markers, DL, LEFT_PAD)
   });
 }
 
-function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAverage, ma50, ma9, ma21, rsi }, colors, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = [], overlayConfigs = [], multitradeMarkers = [], chartLeftPad = CHART_LEFT_PAD, buyInfo = null, stopLossConfig = null) {
+function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAverage, ma50, ma9, ma21, rsi }, colors, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = [], overlayConfigs = [], multitradeMarkers = [], chartLeftPad = CHART_LEFT_MARGIN, buyInfo = null, stopLossConfig = null, chartRightPad = CHART_PRICE_PAD + CHART_LEFT_MARGIN) {
   const showMa9      = activeIndicators.includes('ma9');
   const showMa21     = activeIndicators.includes('ma21');
   const showMa50     = activeIndicators.includes('ma50');
@@ -684,7 +839,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
         yAxis: lastClose,
         lineStyle: { color: 'rgba(0,0,0,0)' },
         label: {
-          show: true, position: 'end',
+          show: true, position: 'end', align: 'right', distance: 2,
           formatter: fmtChartPrice(lastClose),
           color: '#111', fontSize: 10, fontWeight: 'bold',
           backgroundColor: '#facc15', padding: [2, 5], borderRadius: 2,
@@ -842,10 +997,10 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
         axisLine: { lineStyle: { color: colors.panel } },
         axisLabel: { color: colors.text, fontSize: 10 },
         splitLine: { lineStyle: { color: colors.panel, type: 'dashed', opacity: 0.3 } } },
-      grid: { top: 40, bottom: 12, left: chartLeftPad, right: 64 },
+      grid: { top: 40, bottom: 12, left: chartLeftPad, right: chartRightPad },
       dataZoom: zoomWindow
         ? buildFixedDataZoom(zoomWindow.startPct, zoomWindow.endPct)
-        : [{ type: 'inside' }],
+        : buildInsideDataZoom(),
       series: candleSeries(0),
     };
   }
@@ -866,8 +1021,8 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
       axisPointer: { animation: false, type: 'cross', lineStyle: { color: colors.axis, width: 1, opacity: 0.8 } },
     },
     grid: [
-      { top: 40, bottom: '24%', left: chartLeftPad, right: 64 },
-      { top: '79%', bottom: 20, left: chartLeftPad, right: 64 },
+      { top: 40, bottom: '24%', left: chartLeftPad, right: chartRightPad },
+      { top: '79%', bottom: 20, left: chartLeftPad, right: chartRightPad },
     ],
     xAxis: [
       { ...axisBase(0), axisLabel: { show: false } },
@@ -886,7 +1041,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
     ],
     dataZoom: zoomWindow
       ? buildFixedDataZoom(zoomWindow.startPct, zoomWindow.endPct, [0, 1])
-      : [{ type: 'inside', xAxisIndex: [0, 1] }],
+      : buildInsideDataZoom([0, 1]),
     series: [
       ...candleSeries(0),
       {
@@ -900,13 +1055,13 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
           silent: true, symbol: 'none',
           data: [
             { yAxis: 30, lineStyle: { color: '#ef5350', type: 'dashed', width: 1 },
-              label: { formatter: '30', color: '#ef5350', fontSize: 9, position: 'start' } },
+              label: { formatter: '30', color: '#ef5350', fontSize: 9, position: 'end' } },
             ...(showRsi50 ? [{ yAxis: 50, lineStyle: { color: '#facc15', type: 'dashed', width: 1, opacity: 0.6 },
-              label: { formatter: '50', color: '#facc15', fontSize: 9, position: 'start' } }] : []),
+              label: { formatter: '50', color: '#facc15', fontSize: 9, position: 'end' } }] : []),
             { yAxis: 70, lineStyle: { color: '#26a69a', type: 'dashed', width: 1 },
-              label: { formatter: '70', color: '#26a69a', fontSize: 9, position: 'start' } },
+              label: { formatter: '70', color: '#26a69a', fontSize: 9, position: 'end' } },
             ...(showRsi80 ? [{ yAxis: 80, lineStyle: { color: '#fb923c', type: 'dashed', width: 1 },
-              label: { formatter: '80', color: '#fb923c', fontSize: 9, position: 'start' } }] : []),
+              label: { formatter: '80', color: '#fb923c', fontSize: 9, position: 'end' } }] : []),
           ],
         },
       },
@@ -916,7 +1071,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
 
 // ── Gráfico Matrix: área de preço + RSI, tema terminal verde ─────────────────
 
-function buildMatrixOption({ symbol, interval, candlesticks, rsi }, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = [], chartLeftPad = CHART_LEFT_PAD, buyInfo = null, stopLossConfig = null) {
+function buildMatrixOption({ symbol, interval, candlesticks, rsi }, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = [], chartLeftPad = CHART_LEFT_MARGIN, buyInfo = null, stopLossConfig = null, chartRightPad = CHART_PRICE_PAD + CHART_LEFT_MARGIN) {
   const showRsi   = activeIndicators.includes('rsi');
   const showRsi50 = activeIndicators.includes('rsi50');
   const showRsi80 = activeIndicators.includes('rsi80');
@@ -1003,7 +1158,7 @@ function buildMatrixOption({ symbol, interval, candlesticks, rsi }, activeIndica
         yAxis: lastClose,
         lineStyle: { color: 'rgba(0,0,0,0)' },
         label: {
-          show: true, position: 'end',
+          show: true, position: 'end', align: 'right', distance: 2,
           formatter: fmtChartPrice(lastClose),
           color: BG, fontSize: 10, fontWeight: 'bold',
           backgroundColor: G, padding: [2, 5], borderRadius: 2, fontFamily: 'monospace',
@@ -1052,8 +1207,8 @@ function buildMatrixOption({ symbol, interval, candlesticks, rsi }, activeIndica
       axisPointer: { animation: false, type: 'cross', lineStyle: { color: 'rgba(34,197,94,0.3)', width: 1 } },
     },
     grid: showRsi
-      ? [{ top: 40, bottom: '26%', left: chartLeftPad, right: 64 }, { top: '78%', bottom: 20, left: chartLeftPad, right: 64 }]
-      : [{ top: 40, bottom: 20,    left: chartLeftPad, right: 64 }],
+      ? [{ top: 40, bottom: '26%', left: chartLeftPad, right: chartRightPad }, { top: '78%', bottom: 20, left: chartLeftPad, right: chartRightPad }]
+      : [{ top: 40, bottom: 20,    left: chartLeftPad, right: chartRightPad }],
     xAxis: showRsi
       ? [{ ...axisBase(0, false) }, { ...axisBase(1, true) }]
       : { ...axisBase(0, true) },
@@ -1062,7 +1217,7 @@ function buildMatrixOption({ symbol, interval, candlesticks, rsi }, activeIndica
       : yAxisBase(0),
     dataZoom: zoomWindow
       ? buildFixedDataZoom(zoomWindow.startPct, zoomWindow.endPct, showRsi ? [0, 1] : [0])
-      : [{ type: 'inside', xAxisIndex: showRsi ? [0, 1] : [0] }],
+      : buildInsideDataZoom(showRsi ? [0, 1] : [0]),
     series: [
       {
         name: 'Preço',
@@ -1089,10 +1244,10 @@ function buildMatrixOption({ symbol, interval, candlesticks, rsi }, activeIndica
         markLine: {
           silent: true, symbol: 'none',
           data: [
-            { yAxis: 30, lineStyle: { color: '#ef5350', type: 'dashed', width: 1 }, label: { formatter: '30', color: '#ef5350', fontSize: 9, position: 'start' } },
-            ...(showRsi50 ? [{ yAxis: 50, lineStyle: { color: '#facc15', type: 'dashed', width: 1, opacity: 0.6 }, label: { formatter: '50', color: '#facc15', fontSize: 9, position: 'start' } }] : []),
-            { yAxis: 70, lineStyle: { color: G,         type: 'dashed', width: 1 }, label: { formatter: '70', color: G,         fontSize: 9, position: 'start' } },
-            ...(showRsi80 ? [{ yAxis: 80, lineStyle: { color: '#fb923c', type: 'dashed', width: 1 }, label: { formatter: '80', color: '#fb923c', fontSize: 9, position: 'start' } }] : []),
+            { yAxis: 30, lineStyle: { color: '#ef5350', type: 'dashed', width: 1 }, label: { formatter: '30', color: '#ef5350', fontSize: 9, position: 'end' } },
+            ...(showRsi50 ? [{ yAxis: 50, lineStyle: { color: '#facc15', type: 'dashed', width: 1, opacity: 0.6 }, label: { formatter: '50', color: '#facc15', fontSize: 9, position: 'end' } }] : []),
+            { yAxis: 70, lineStyle: { color: G,         type: 'dashed', width: 1 }, label: { formatter: '70', color: G,         fontSize: 9, position: 'end' } },
+            ...(showRsi80 ? [{ yAxis: 80, lineStyle: { color: '#fb923c', type: 'dashed', width: 1 }, label: { formatter: '80', color: '#fb923c', fontSize: 9, position: 'end' } }] : []),
           ],
         },
       }] : []),
@@ -1317,6 +1472,11 @@ export default function CandlestickChart() {
   const [overlayMaLoading, setOverlayMaLoading] = useState(false);
   const [adaptiveBandOverlay, setAdaptiveBandOverlay] = useState(null);
   const [maBands, setMaBands] = useState(() => ({ ...uiPrefs.maBandsDefaults }));
+  const [panelCollapsed, setPanelCollapsed] = useState(false);
+  const [panelMasonryWidth, setPanelMasonryWidth] = useState(() => computePanelWidth(1));
+  const handlePanelLayoutChange = useCallback(({ width }) => {
+    setPanelMasonryWidth(width);
+  }, []);
   const bandsPanelEnabled = BAND_PANEL_KEYS.some((k) => chartPanelButtons[k] !== false);
   const [candleFetchLimit, setCandleFetchLimit] = useState(DEFAULT_CANDLE_LIMIT);
   const [displayCandleCount, setDisplayCandleCount] = useState(LIMIT);
@@ -1684,7 +1844,11 @@ export default function CandlestickChart() {
     return Math.min(candles.length, candles.length - idx + 5);
   })();
 
-  const chartLeftPad = hasAnyChartPanelButton(chartPanelButtons) ? CHART_LEFT_PAD : CHART_LEFT_PAD_NONE;
+  const panelPad = !hasAnyChartPanelButton(chartPanelButtons)
+    ? 0
+    : (panelCollapsed ? CHART_PANEL_COLLAPSED : panelMasonryWidth);
+  const chartLeftPad = CHART_LEFT_MARGIN;
+  const chartRightPad = CHART_PRICE_PAD + CHART_LEFT_MARGIN + panelPad;
 
   const effectiveIndicators = useMemo(
     () => filterIndicatorsByPanel(activeIndicators, chartPanelButtons),
@@ -1755,16 +1919,16 @@ export default function CandlestickChart() {
     if (!selectedChart) return null;
     if (activeTab === 'matrix') {
       return buildMatrixOption(
-        selectedChart, effectiveIndicators, displayLimit, chartZoom, tradeTimes, chartLeftPad, chartBuyInfo, chartStopLossConfig,
+        selectedChart, effectiveIndicators, displayLimit, chartZoom, tradeTimes, chartLeftPad, chartBuyInfo, chartStopLossConfig, chartRightPad,
       );
     }
     return buildOption(
       selectedChart, colors, effectiveIndicators, displayLimit, chartZoom, tradeTimes, overlayConfigs,
       chartTradeMarkers?.length ? chartTradeMarkers : (selectedChart.tradeMarkers ?? []),
-      chartLeftPad, chartBuyInfo, chartStopLossConfig,
+      chartLeftPad, chartBuyInfo, chartStopLossConfig, chartRightPad,
     );
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedChart, colors, effectiveIndicators, chartZoom, tradePurchases, chartTradeMarkers, activeTab, overlayConfigs, displayLimit, chartLeftPad, chartBuyInfo, chartStopLossConfig]);
+  }, [selectedChart, colors, effectiveIndicators, chartZoom, tradePurchases, chartTradeMarkers, activeTab, overlayConfigs, displayLimit, chartLeftPad, chartRightPad, chartBuyInfo, chartStopLossConfig]);
 
   if (!selectedChart || !option) {
     return (
@@ -1798,7 +1962,7 @@ export default function CandlestickChart() {
     <div className="flex flex-col h-full min-h-0">
       {/* Toolbar — compacta no mobile (intervalos em scroll horizontal) */}
       <div className="flex flex-col px-2 md:px-3 pt-1 md:pt-2 pb-0.5 md:pb-1 shrink-0 gap-0.5 md:gap-1 border-b border-p2/40">
-        {/* Linha 0 — abas */}
+        {/* Linha 0 — abas + botões de janela de candles (separados dos intervalos) */}
         <div className="flex items-center gap-1 border-b border-p2/20 pb-0.5 md:pb-1 mb-0.5">
           {[
             { id: 'chart',  label: 'Chart' },
@@ -1816,6 +1980,26 @@ export default function CandlestickChart() {
               {label}
             </button>
           ))}
+
+          {/* Grupo de janela de candles — alinhado à direita, isolado dos intervalos */}
+          <div className="ml-auto flex items-center gap-1 pl-2 border-l border-p2/30">
+            <button
+              onClick={handleLoadLast10Candles}
+              disabled={loadingMoreCandles || !selectedChart?.symbol || !selectedChart?.candlesticks?.length}
+              title={t('chart.load_last_10')}
+              className="px-1.5 md:px-2 py-0.5 text-[10px] md:text-xs rounded font-mono transition-colors disabled:opacity-40 text-p5 hover:bg-p3/40 hover:text-white border border-p3/40 shrink-0"
+            >
+              {t('chart.last_10_btn')}
+            </button>
+            <button
+              onClick={handleLoadMoreCandles}
+              disabled={loadingMoreCandles || (candleFetchLimit >= MAX_CANDLES && (selectedChart?.candlesticks?.length ?? 0) >= MAX_CANDLES)}
+              title={`Carregar mais candles (até ${MAX_CANDLES})`}
+              className="px-1.5 md:px-2 py-0.5 text-[10px] md:text-xs rounded font-mono transition-colors disabled:opacity-40 text-p5 hover:bg-p3/40 hover:text-white border border-p3/40 shrink-0"
+            >
+              {loadingMoreCandles ? '…' : `+${selectedChart?.candlesticks?.length ?? candleFetchLimit}/${MAX_CANDLES}`}
+            </button>
+          </div>
         </div>
 
         {/* Linha 1 — intervalos (uma linha no mobile) */}
@@ -1837,22 +2021,6 @@ export default function CandlestickChart() {
           {loadingInterval && (
             <div className="w-3 h-3 border border-p4 border-t-transparent rounded-full animate-spin ml-1 shrink-0" />
           )}
-          <button
-            onClick={handleLoadLast10Candles}
-            disabled={loadingMoreCandles || !selectedChart?.symbol || !selectedChart?.candlesticks?.length}
-            title={t('chart.load_last_10')}
-            className="ml-1 px-1.5 md:px-2 py-0.5 text-[10px] md:text-xs rounded font-mono transition-colors disabled:opacity-40 text-p5 hover:bg-p3/40 hover:text-white border border-p3/40 shrink-0"
-          >
-            {t('chart.last_10_btn')}
-          </button>
-          <button
-            onClick={handleLoadMoreCandles}
-            disabled={loadingMoreCandles || (candleFetchLimit >= MAX_CANDLES && (selectedChart?.candlesticks?.length ?? 0) >= MAX_CANDLES)}
-            title={`Carregar mais candles (até ${MAX_CANDLES})`}
-            className="ml-1 px-1.5 md:px-2 py-0.5 text-[10px] md:text-xs rounded font-mono transition-colors disabled:opacity-40 text-p5 hover:bg-p3/40 hover:text-white border border-p3/40 shrink-0"
-          >
-            {loadingMoreCandles ? '…' : `+${selectedChart?.candlesticks?.length ?? candleFetchLimit}/${MAX_CANDLES}`}
-          </button>
         </div>
 
 
@@ -1862,7 +2030,7 @@ export default function CandlestickChart() {
       {activeTab === 'chart' ? (
         <div ref={chartWrapRef} className="flex-1 min-h-0 relative">
           {chartNode}
-          <ChartLeftIndicatorPanel
+          <ChartIndicatorPanel
             activeIndicators={activeIndicators}
             toggleIndicator={toggleIndicator}
             overlaySlots={overlaySlots}
@@ -1871,6 +2039,9 @@ export default function CandlestickChart() {
             setMaBands={setMaBands}
             overlayMaLoading={overlayMaLoading}
             panelButtons={chartPanelButtons}
+            collapsed={panelCollapsed}
+            onToggleCollapse={() => setPanelCollapsed(v => !v)}
+            onLayoutChange={handlePanelLayoutChange}
           />
         </div>
       ) : (
@@ -1878,7 +2049,7 @@ export default function CandlestickChart() {
           {/* Gráfico (lado esquerdo) */}
           <div ref={chartWrapRef} className="flex-1 min-w-0 min-h-0 relative">
             {chartNode}
-            <ChartLeftIndicatorPanel
+            <ChartIndicatorPanel
               activeIndicators={activeIndicators}
               toggleIndicator={toggleIndicator}
               overlaySlots={overlaySlots}
@@ -1887,6 +2058,9 @@ export default function CandlestickChart() {
               setMaBands={setMaBands}
               overlayMaLoading={overlayMaLoading}
               panelButtons={chartPanelButtons}
+              collapsed={panelCollapsed}
+              onToggleCollapse={() => setPanelCollapsed(v => !v)}
+              onLayoutChange={handlePanelLayoutChange}
             />
           </div>
           {/* Painel de histórico (lado direito) */}

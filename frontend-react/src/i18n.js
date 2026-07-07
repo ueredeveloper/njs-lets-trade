@@ -260,6 +260,8 @@ const T = {
     'chart.tip.bands_pct':   (p) => `Seleciona ${p}% de distância para as bandas ↑/↓ (em relação à EMA overlay, não ao preço).`,
     'chart.tip.band_above':  (p) => `Mostra linha pontilhada EMA overlay × (1+${p}%). ${p}% acima da MA overlay ligada.`,
     'chart.tip.band_below':  (p) => `Mostra linha pontilhada EMA overlay × (1−${p}%). ${p}% abaixo da MA overlay ligada.`,
+    'chart.tip.panel_collapse': 'Recolher painel de indicadores (libera espaço no gráfico).',
+    'chart.tip.panel_expand':   'Mostrar painel de indicadores.',
 
     // Filtros — descrições
     'filter.usdt':           'Todos os pares USDT (Binance + Gate.io)',
@@ -589,6 +591,8 @@ const T = {
     'chart.tip.bands_pct':   (p) => `Sets ${p}% distance for ↑/↓ bands (relative to overlay EMA, not price).`,
     'chart.tip.band_above':  (p) => `Dotted line at overlay EMA × (1+${p}%). ${p}% above the overlay MA.`,
     'chart.tip.band_below':  (p) => `Dotted line at overlay EMA × (1−${p}%). ${p}% below the overlay MA.`,
+    'chart.tip.panel_collapse': 'Collapse indicator panel (frees chart space).',
+    'chart.tip.panel_expand':   'Show indicator panel.',
 
     // Filter descriptions
     'filter.usdt':           'All USDT pairs (Binance + Gate.io)',
