@@ -1,12 +1,24 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useCurrency } from '../contexts/CurrencyContext';
-import { fetchMultitradeBacktest, fetchCandlesticksAndCloud } from '../services/api';
+import { fetchMultitradeBacktest, fetchCandlesticksAndCloud, suggestMaCrossFilterBounds } from '../services/api';
 import { ENTRY_MA_TRIGGERS } from '../constants/tradeConfigSchema';
+import { maCrossFormFromEntry, maCrossFormToPayload } from '../constants/maCrossConfigSchema';
 import { STRATEGY_LABELS, STRATEGY_COLORS, normalizeStrategyId, isMaCrossStrategy } from '../constants/strategyPresets';
 import { ruleBadgeStyle, formatBacktestOutcome } from '../utils/exitReasonFormat';
-import { tradeFetchPlan, isMaCrossEntry, formatMaCrossEntrySummary } from '../utils/multitradeChart';
+import { tradeFetchPlan, isMaCrossEntry, formatMaCrossEntrySummary, buildMaCrossAdaptiveBandsConfig } from '../utils/multitradeChart';
 
 const MT_COLOR = '#8b5cf6';
+
+const FILTER_COLOR = '#a78bfa';
+
+function BoundsNumInput({ value, onChange, min = 0, max = 20, step = 0.5, className = 'w-12' }) {
+  return (
+    <input type="number" value={value ?? ''} onChange={e => onChange(Number(e.target.value))}
+      min={min} max={max} step={step}
+      className={`rounded px-1.5 py-0.5 text-[10px] text-p5 outline-none font-mono ${className}`}
+      style={{ background: '#1e2130', border: '1px solid #2a2d3a' }} />
+  );
+}
 
 function fmtDateTime(isoOrMs) {
   const d = typeof isoOrMs === 'number' ? new Date(isoOrMs) : new Date(isoOrMs);
@@ -98,7 +110,7 @@ function buildMarkersForMaCrossRow(row, trades, msPerCandle) {
 function isBlockedOutcome(outcome) {
   if (!outcome) return false;
   if (outcome.startsWith('MA_')) return true;
-  if (['NOT_ABOVE_MA', 'NOT_BELOW_MA', 'BELOW_ADAPTIVE_FLOOR', 'FILTER_NO_MA'].includes(outcome)) return true;
+  if (['NOT_ABOVE_MA', 'NOT_BELOW_MA', 'BELOW_ADAPTIVE_FLOOR', 'ABOVE_ADAPTIVE_CEILING', 'FILTER_NO_MA'].includes(outcome)) return true;
   if (outcome === 'THREE_CANDLES_BLOCKED' || outcome === 'FOUR_CANDLES_BLOCKED') return true;
   if (outcome.startsWith('CANCELLED')) return true;
   return false;
@@ -285,6 +297,41 @@ export default function MultitradeBacktestPanel({ entry }) {
   const [chartLoading, setChartLoading] = useState(null);
   const [focusTrade, setFocusTrade] = useState(null);
 
+  const maCross = isMaCrossStrategy(entry?.strategyId);
+  const adaptiveFilter = useMemo(
+    () => (entry?.maFilters ?? []).find(f => f.enabled !== false && f.mode === 'adaptive'),
+    [entry?.maFilters],
+  );
+  const savedDip = adaptiveFilter?.maxDipPct ?? 4;
+  const savedAbove = adaptiveFilter?.maxAbovePct ?? 4;
+
+  const [draftDip, setDraftDip] = useState(savedDip);
+  const [draftAbove, setDraftAbove] = useState(savedAbove);
+  const [appliedBounds, setAppliedBounds] = useState(null);
+  const [boundsSuggest, setBoundsSuggest] = useState(null);
+
+  useEffect(() => {
+    setDraftDip(savedDip);
+    setDraftAbove(savedAbove);
+    setAppliedBounds(null);
+    setBoundsSuggest(null);
+  }, [entry?.id, entry?.symbol, savedDip, savedAbove]);
+
+  const tradeConfigOverride = useMemo(() => {
+    if (!appliedBounds || !entry || !adaptiveFilter) return null;
+    const form = maCrossFormFromEntry(entry);
+    const filters = form.maFilters.map(f =>
+      f.id === adaptiveFilter.id
+        ? { ...f, maxDipPct: appliedBounds.maxDipPct, maxAbovePct: appliedBounds.maxAbovePct }
+        : f,
+    );
+    return maCrossFormToPayload({ ...form, maFilters: filters });
+  }, [appliedBounds, entry, adaptiveFilter]);
+
+  const boundsDirty = appliedBounds
+    ? appliedBounds.maxDipPct !== draftDip || appliedBounds.maxAbovePct !== draftAbove
+    : draftDip !== savedDip || draftAbove !== savedAbove;
+
   const load = useCallback(async () => {
     if (!entry?.symbol) return;
     setLoading(true);
@@ -295,6 +342,7 @@ export default function MultitradeBacktestPanel({ entry }) {
         exchange: entry.exchange,
         capital: entry.capital,
         strategyId: entry.strategyId,
+        tradeConfig: tradeConfigOverride ?? undefined,
       });
       setData(result);
     } catch (err) {
@@ -303,9 +351,54 @@ export default function MultitradeBacktestPanel({ entry }) {
     } finally {
       setLoading(false);
     }
-  }, [entry?.symbol, entry?.exchange, entry?.capital, entry?.strategyId]);
+  }, [entry?.symbol, entry?.exchange, entry?.capital, entry?.strategyId, tradeConfigOverride]);
 
   useEffect(() => { load(); }, [load]);
+
+  async function handleSuggestBounds() {
+    if (!entry?.symbol || !adaptiveFilter) return;
+    setBoundsSuggest({ loading: true });
+    try {
+      const form = maCrossFormFromEntry(entry);
+      const r = await suggestMaCrossFilterBounds({
+        symbol: entry.symbol,
+        exchange: entry.exchange,
+        form,
+        filterId: adaptiveFilter.id,
+      });
+      setBoundsSuggest(r);
+    } catch (err) {
+      setBoundsSuggest({ error: err.message });
+    }
+  }
+
+  function applySuggestedFloor() {
+    const v = boundsSuggest?.floor?.suggestedMaxDipPct;
+    if (v != null) setDraftDip(v);
+  }
+
+  function applySuggestedCeiling() {
+    const v = boundsSuggest?.ceiling?.suggestedMaxAbovePct;
+    if (v != null) setDraftAbove(v);
+  }
+
+  function applySuggestedBoth() {
+    const dip = boundsSuggest?.floor?.suggestedMaxDipPct ?? draftDip;
+    const above = boundsSuggest?.ceiling?.suggestedMaxAbovePct ?? draftAbove;
+    setDraftDip(dip);
+    setDraftAbove(above);
+    setAppliedBounds({ maxDipPct: dip, maxAbovePct: above });
+  }
+
+  function handleApplyAndRecalc() {
+    setAppliedBounds({ maxDipPct: draftDip, maxAbovePct: draftAbove });
+  }
+
+  function handleRestoreSaved() {
+    setDraftDip(savedDip);
+    setDraftAbove(savedAbove);
+    setAppliedBounds(null);
+  }
 
   useEffect(() => {
     setData(null);
@@ -346,6 +439,7 @@ export default function MultitradeBacktestPanel({ entry }) {
         fetchFromMs: plan.fetchFromMs,
         candleLimit: plan.candleLimit,
         overlaySlots: plan.overlaySlots,
+        adaptiveBands: buildMaCrossAdaptiveBandsConfig(entry, appliedBounds),
       });
     } catch (err) {
       console.warn('[MultitradeBacktest] chart zoom:', err.message);
@@ -359,7 +453,6 @@ export default function MultitradeBacktestPanel({ entry }) {
   if (!entry) return null;
 
   const s = data?.summary;
-  const maCross = isMaCrossStrategy(entry?.strategyId);
   const maFilterStats = data?.maFilterStats ?? [];
   const maLabels = maCross
     ? (entry.maFilters ?? []).filter(f => f.enabled !== false && f.mode !== 'off').map(f => `EMA${f.period} ${f.interval}`)
@@ -403,6 +496,105 @@ export default function MultitradeBacktestPanel({ entry }) {
         )}
         {error && (
           <p className="multitrade-backtest-panel-error text-[10px] text-red-400 py-2">{error}</p>
+        )}
+
+        {maCross && adaptiveFilter && (
+          <div className="mb-2 p-2 rounded space-y-2" style={{ background: '#1a1d28', border: `1px solid ${FILTER_COLOR}44` }}>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: FILTER_COLOR }}>
+                Piso / teto — EMA{adaptiveFilter.period} {adaptiveFilter.interval}
+              </span>
+              <button
+                type="button"
+                onClick={handleSuggestBounds}
+                disabled={boundsSuggest?.loading}
+                className="text-[9px] px-2 py-0.5 rounded font-semibold disabled:opacity-50"
+                style={{ background: `${FILTER_COLOR}22`, color: FILTER_COLOR, border: `1px solid ${FILTER_COLOR}55` }}>
+                {boundsSuggest?.loading ? '…' : 'Sugerir histórico'}
+              </button>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px]">
+              <label className="flex items-center gap-1 text-p5/60">
+                Piso máx %
+                <BoundsNumInput value={draftDip} onChange={setDraftDip} min={0.5} />
+              </label>
+              <label className="flex items-center gap-1 text-p5/60">
+                Teto máx %
+                <BoundsNumInput value={draftAbove} onChange={setDraftAbove} min={0} />
+              </label>
+              <button
+                type="button"
+                onClick={handleApplyAndRecalc}
+                disabled={loading || (!boundsDirty && appliedBounds != null)}
+                className="text-[9px] px-2 py-0.5 rounded font-semibold disabled:opacity-40"
+                style={{ background: '#2a2d3a', color: '#e2e8f0', border: '1px solid #3a3d4a' }}>
+                {loading ? '…' : 'Recalcular análise'}
+              </button>
+              {(appliedBounds != null || boundsDirty) && (
+                <button
+                  type="button"
+                  onClick={handleRestoreSaved}
+                  className="text-[9px] px-2 py-0.5 rounded text-p5/50 hover:text-p5/70"
+                  style={{ border: '1px solid #3a3d4a' }}>
+                  Restaurar salvo (−{savedDip}% / +{savedAbove}%)
+                </button>
+              )}
+            </div>
+
+            {boundsSuggest?.error && (
+              <p className="text-[9px] text-amber-400/90 font-mono">{boundsSuggest.error}</p>
+            )}
+            {boundsSuggest && !boundsSuggest.loading && !boundsSuggest.error && (
+              <div className="text-[9px] text-p5/50 font-mono leading-relaxed space-y-1">
+                {boundsSuggest.floor && (
+                  <p>
+                    Piso sugerido: <strong className="text-violet-300">{boundsSuggest.floor.suggestedMaxDipPct}%</strong>
+                    {boundsSuggest.floor.usedDefault
+                      ? ' (padrão — poucos episódios)'
+                      : ` · ${boundsSuggest.floor.episodeCount} episódios, média −${boundsSuggest.floor.avgRawDipPct ?? '—'}%`}
+                    <button type="button" onClick={applySuggestedFloor}
+                      className="ml-2 text-[8px] px-1 py-0.5 rounded"
+                      style={{ color: FILTER_COLOR, border: `1px solid ${FILTER_COLOR}44` }}>
+                      usar
+                    </button>
+                  </p>
+                )}
+                {boundsSuggest.ceiling && (
+                  <p>
+                    Teto sugerido: <strong className="text-violet-300">{boundsSuggest.ceiling.suggestedMaxAbovePct}%</strong>
+                    {boundsSuggest.ceiling.usedDefault
+                      ? ' (padrão — poucos sinais)'
+                      : ` · ${boundsSuggest.ceiling.signalCount} cruzamentos, mediana +${boundsSuggest.ceiling.medianStretchPct ?? '—'}%`}
+                    <button type="button" onClick={applySuggestedCeiling}
+                      className="ml-2 text-[8px] px-1 py-0.5 rounded"
+                      style={{ color: FILTER_COLOR, border: `1px solid ${FILTER_COLOR}44` }}>
+                      usar
+                    </button>
+                  </p>
+                )}
+                {boundsSuggest.signalCount != null && (
+                  <p className="text-p5/35">{boundsSuggest.signalCount} cruzamentos simulados no histórico</p>
+                )}
+                <button
+                  type="button"
+                  onClick={applySuggestedBoth}
+                  className="text-[9px] px-2 py-0.5 rounded font-semibold"
+                  style={{ background: `${FILTER_COLOR}18`, color: FILTER_COLOR, border: `1px solid ${FILTER_COLOR}44` }}>
+                  Aplicar sugestões e recalcular
+                </button>
+              </div>
+            )}
+
+            {appliedBounds && (
+              <p className="text-[9px] font-mono" style={{ color: `${FILTER_COLOR}cc` }}>
+                Análise com piso −{appliedBounds.maxDipPct}% / teto +{appliedBounds.maxAbovePct}%
+                {appliedBounds.maxDipPct !== savedDip || appliedBounds.maxAbovePct !== savedAbove
+                  ? ' (simulação — não salvo no favorito)'
+                  : ''}
+              </p>
+            )}
+          </div>
         )}
 
         {s && (

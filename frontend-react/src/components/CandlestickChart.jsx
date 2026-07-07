@@ -2,13 +2,13 @@ import { useMemo, useState, useEffect, useRef } from 'react';
 import { useI18n } from '../i18n';
 import ReactECharts from 'echarts-for-react';
 import { useCurrency } from '../contexts/CurrencyContext';
-import { fetchCandlesticksAndCloud, fetchGateTrades, fetchBinanceTrades, DEFAULT_CANDLE_LIMIT } from '../services/api';
+import { fetchCandlesticksAndCloud, fetchGateTrades, fetchBinanceTrades, fetchChartAdaptiveBands, DEFAULT_CANDLE_LIMIT } from '../services/api';
 import { buildMarkersFromExchangeTrades, attachPnlToExchangeTrades } from '../utils/multitradeChart';
 import { buildTrailingStopSeries, resolveChartStopLoss } from '../utils/trailingStopLoss';
 import convertOpenTime from '../utils/convertOpenTime';
 import Tooltip from './Tooltip';
 import { hasAnyChartPanelButton } from '../utils/chartPanelButtons';
-import { DEFAULT_OVERLAY_SLOTS } from '../utils/uiPreferences';
+import { DEFAULT_OVERLAY_SLOTS, BAND_PCT_OPTIONS } from '../utils/uiPreferences';
 import { CHART_VIEW, computeZoomWindow, buildFixedDataZoom, computeCandleLimitFromTime, isTradePanelChartView } from '../utils/chartView';
 
 const LIMIT = DEFAULT_CANDLE_LIMIT;
@@ -17,7 +17,7 @@ const MAX_CANDLES = 1000;
 const CANDLE_FETCH_STEPS = [500, 750, 1000];
 const OVERLAY_MA_INTERVALS = ['1m', '5m', '15m', '30m', '1h', '2h', '4h', '8h', '12h', '1d'];
 const OVERLAY_MA_COLORS = ['#fb923c', '#c084fc'];
-const BAND_PCT_OPTIONS = [2, 3, 4, 5];
+const BAND_PANEL_KEYS = ['bandsPct', 'bandsAbove', 'bandsBelow'];
 const INTERVALS = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w'];
 const DEFAULT_INTERVAL = '15m';
 
@@ -183,9 +183,12 @@ function ChartLeftIndicatorPanel({
   const visibleOverlays = overlaySlots
     .map((slot, idx) => ({ slot, idx, key: idx === 0 ? 'ma1' : 'ma2' }))
     .filter(({ key }) => show(key));
-  const showBands = show('bands');
+  const showBandsPct = show('bandsPct');
+  const showBandsAbove = show('bandsAbove');
+  const showBandsBelow = show('bandsBelow');
+  const showBandsBlock = showBandsPct || showBandsAbove || showBandsBelow;
 
-  if (!showIndicatorBlock && !visibleOverlays.length && !showBands) return null;
+  if (!showIndicatorBlock && !visibleOverlays.length && !showBandsBlock) return null;
 
   const block = {
     background: 'rgba(0,0,0,0.5)',
@@ -285,11 +288,12 @@ function ChartLeftIndicatorPanel({
         })}
 
         {/* Bandas % */}
-        {showBands && (
+        {showBandsBlock && (
         <div style={block}>
           <PanelTip text={t('chart.tip.bands_title')}>
             <span style={{ fontSize: 8, color: '#94a3b8', fontFamily: 'monospace', textAlign: 'center', cursor: 'help' }}>Bandas</span>
           </PanelTip>
+          {showBandsPct && (
           <div style={{ display: 'flex', gap: PANEL_GAP, justifyContent: 'center', width: PANEL_W, flexWrap: 'wrap' }}>
             {BAND_PCT_OPTIONS.map(p => (
               <PanelTip key={p} text={t('chart.tip.bands_pct', p)}>
@@ -302,6 +306,8 @@ function ChartLeftIndicatorPanel({
               </PanelTip>
             ))}
           </div>
+          )}
+          {showBandsAbove && (
           <PanelTip text={t('chart.tip.band_above', maBands.pct)}>
             <button type="button" onClick={() => setMaBands(b => ({ ...b, showAbove: !b.showAbove }))} style={{
               ...panelBtn(maBands.showAbove, '#22c55e', true, 'full'),
@@ -315,6 +321,8 @@ function ChartLeftIndicatorPanel({
               <span>{maBands.pct}%</span>
             </button>
           </PanelTip>
+          )}
+          {showBandsBelow && (
           <PanelTip text={t('chart.tip.band_below', maBands.pct)}>
             <button type="button" onClick={() => setMaBands(b => ({ ...b, showBelow: !b.showBelow }))} style={{
               ...panelBtn(maBands.showBelow, '#f87171', true, 'full'),
@@ -328,6 +336,7 @@ function ChartLeftIndicatorPanel({
               <span>{maBands.pct}%</span>
             </button>
           </PanelTip>
+          )}
           {overlayMaLoading && (
             <div style={{ display: 'flex', justifyContent: 'center' }}>
               <div className="animate-spin" style={{ width: 8, height: 8, borderRadius: '50%', border: '1.5px solid #94a3b8', borderTopColor: 'transparent' }} />
@@ -1306,11 +1315,9 @@ export default function CandlestickChart() {
   const [overlaySlots, setOverlaySlots] = useState(() => uiPrefs.overlaySlots);
   const [overlayMaCache, setOverlayMaCache] = useState({});
   const [overlayMaLoading, setOverlayMaLoading] = useState(false);
-  const [maBands, setMaBands] = useState({
-    showAbove: false,
-    showBelow: true,
-    pct: 4,
-  });
+  const [adaptiveBandOverlay, setAdaptiveBandOverlay] = useState(null);
+  const [maBands, setMaBands] = useState(() => ({ ...uiPrefs.maBandsDefaults }));
+  const bandsPanelEnabled = BAND_PANEL_KEYS.some((k) => chartPanelButtons[k] !== false);
   const [candleFetchLimit, setCandleFetchLimit] = useState(DEFAULT_CANDLE_LIMIT);
   const [displayCandleCount, setDisplayCandleCount] = useState(LIMIT);
   const [loadingMoreCandles, setLoadingMoreCandles] = useState(false);
@@ -1343,6 +1350,12 @@ export default function CandlestickChart() {
     window.addEventListener('palette-updated', handleThemeChange);
     return () => window.removeEventListener('palette-updated', handleThemeChange);
   }, []);
+
+  useEffect(() => {
+    if (multitradeChartFocus?.adaptiveBands) return;
+    setMaBands({ ...uiPrefs.maBandsDefaults });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedChart?.symbol]);
 
   // Sincroniza intervalo; não reseta limites quando o zoom veio do Multi-Trade (evita flash de velas vazias)
   useEffect(() => {
@@ -1379,8 +1392,22 @@ export default function CandlestickChart() {
       });
       return;
     }
+    if (multitradeChartFocus?.overlaySlots) {
+      setOverlaySlots(multitradeChartFocus.overlaySlots);
+      return;
+    }
     setOverlaySlots(uiPrefs.overlaySlots);
   }, [chartViewSource, multitradeChartFocus?.overlaySlots, uiPrefs.overlaySlots]);
+
+  const overlayFetchLimit = useMemo(() => {
+    if (isTradePanelChartView(chartViewSource) && multitradeChartFocus?.fetchFromMs) {
+      return computeCandleLimitFromTime(multitradeChartFocus.fetchFromMs, selectedChart?.interval ?? currentInterval);
+    }
+    return Math.max(candleFetchLimit, selectedChart?.candlesticks?.length ?? 0, DEFAULT_CANDLE_LIMIT);
+  }, [
+    chartViewSource, multitradeChartFocus?.fetchFromMs, candleFetchLimit,
+    selectedChart?.interval, selectedChart?.candlesticks?.length, currentInterval,
+  ]);
 
   useEffect(() => {
     if (!selectedChart?.symbol) {
@@ -1452,7 +1479,7 @@ export default function CandlestickChart() {
         try {
           const ovLimit = isTradePanelChartView(chartViewSource) && multitradeChartFocus?.fetchFromMs
             ? computeCandleLimitFromTime(multitradeChartFocus.fetchFromMs, slot.interval)
-            : candleFetchLimit;
+            : overlayFetchLimit;
           next[key] = await fetchOverlayMaPoints(
             selectedChart.symbol,
             slot.interval,
@@ -1470,7 +1497,77 @@ export default function CandlestickChart() {
     })();
 
     return () => { cancelled = true; };
-  }, [overlaySlots, selectedChart?.symbol, selectedChart?.interval, selectedChart?.source, selectedChart?.candlesticks, selectedChart?.ma50, selectedChart?.ma9, selectedChart?.ma21, selectedChart?.movingAverage, currentInterval, candleFetchLimit, chartPanelButtons, chartViewSource, multitradeChartFocus?.fetchFromMs]);
+  }, [overlaySlots, selectedChart?.symbol, selectedChart?.interval, selectedChart?.source, selectedChart?.candlesticks, selectedChart?.ma50, selectedChart?.ma9, selectedChart?.ma21, selectedChart?.movingAverage, currentInterval, overlayFetchLimit, chartPanelButtons, chartViewSource, multitradeChartFocus?.fetchFromMs, displayCandleCount, chartCandleWindowReset]);
+
+  // Bandas adaptativas (piso/teto) do filtro MA — MA-Cross
+  useEffect(() => {
+    const cfg = multitradeChartFocus?.adaptiveBands;
+    if (!cfg || !selectedChart?.symbol || !bandsPanelEnabled) {
+      setAdaptiveBandOverlay(null);
+      return undefined;
+    }
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const [points, bounds] = await Promise.all([
+          fetchOverlayMaPoints(
+            selectedChart.symbol,
+            cfg.interval,
+            cfg.period,
+            selectedChart.source,
+            overlayFetchLimit,
+          ),
+          fetchChartAdaptiveBands({
+            symbol: selectedChart.symbol,
+            exchange: selectedChart.source === 'gate' ? 'gate' : 'binance',
+            period: cfg.period,
+            interval: cfg.interval,
+            limit: overlayFetchLimit,
+            maxDipPct: cfg.maxDipPct,
+            maxAbovePct: cfg.maxAbovePct,
+            fixedDipPct: cfg.fixedDipPct,
+            fixedAbovePct: cfg.fixedAbovePct,
+            adaptiveOpts: cfg.adaptiveOpts,
+          }),
+        ]);
+        if (cancelled) return;
+        const dipPct = bounds.dipPct ?? cfg.maxDipPct ?? 4;
+        const stretchPct = bounds.stretchPct ?? cfg.maxAbovePct ?? 4;
+        setAdaptiveBandOverlay({
+          period: cfg.period,
+          interval: cfg.interval,
+          points,
+          dipPct,
+          stretchPct,
+        });
+        setMaBands({
+          showAbove: stretchPct > 0,
+          showBelow: dipPct > 0,
+          pct: Math.max(dipPct, stretchPct),
+          dipPct,
+          stretchPct,
+        });
+      } catch (e) {
+        if (!cancelled) {
+          console.warn('[adaptiveBands]', e.message);
+          setAdaptiveBandOverlay(null);
+        }
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [
+    multitradeChartFocus?.adaptiveBands,
+    selectedChart?.symbol,
+    selectedChart?.source,
+    overlayFetchLimit,
+    bandsPanelEnabled,
+    displayCandleCount,
+    chartCandleWindowReset,
+    selectedChart?.candlesticks?.length,
+  ]);
 
   const colors = useMemo(() => getThemeColors(), [themeTick]);
 
@@ -1594,25 +1691,43 @@ export default function CandlestickChart() {
     [activeIndicators, chartPanelButtons],
   );
 
-  const overlayConfigs = useMemo(() => overlaySlots
-    .filter(s => s.enabled && chartPanelButtons[overlayPanelKey(s)] !== false)
-    .map((slot) => {
-      const key = `${slot.period}-${slot.interval}`;
-      const isMa1 = slot.id === 'slot1';
-      const colorIdx = isMa1 ? 0 : 1;
-      const bandsOn = isMa1 && chartPanelButtons.bands !== false;
-      return {
-        label: `EMA${slot.period}@${slot.interval}`,
-        color: OVERLAY_MA_COLORS[colorIdx],
-        points: overlayMaCache[key] ?? [],
+  const overlayConfigs = useMemo(() => {
+    const slotConfigs = overlaySlots
+      .filter(s => s.enabled && chartPanelButtons[overlayPanelKey(s)] !== false)
+      .map((slot) => {
+        const key = `${slot.period}-${slot.interval}`;
+        const isMa1 = slot.id === 'slot1';
+        const colorIdx = isMa1 ? 0 : 1;
+        const bandsOn = isMa1 && bandsPanelEnabled && !adaptiveBandOverlay;
+        return {
+          label: `EMA${slot.period}@${slot.interval}`,
+          color: OVERLAY_MA_COLORS[colorIdx],
+          points: overlayMaCache[key] ?? [],
+          bands: {
+            showAbove: bandsOn && maBands.showAbove,
+            showBelow: bandsOn && maBands.showBelow,
+            abovePct: maBands.stretchPct ?? maBands.pct,
+            belowPct: maBands.dipPct ?? maBands.pct,
+          },
+        };
+      });
+
+    if (adaptiveBandOverlay?.points?.length) {
+      slotConfigs.push({
+        label: `EMA${adaptiveBandOverlay.period}@${adaptiveBandOverlay.interval}`,
+        color: '#94a3b8',
+        points: adaptiveBandOverlay.points,
         bands: {
-          showAbove: bandsOn && maBands.showAbove,
-          showBelow: bandsOn && maBands.showBelow,
-          abovePct: maBands.pct,
-          belowPct: maBands.pct,
+          showAbove: maBands.showAbove && adaptiveBandOverlay.stretchPct > 0,
+          showBelow: maBands.showBelow && adaptiveBandOverlay.dipPct > 0,
+          abovePct: adaptiveBandOverlay.stretchPct,
+          belowPct: adaptiveBandOverlay.dipPct,
         },
-      };
-    }), [overlaySlots, overlayMaCache, maBands, chartPanelButtons]);
+      });
+    }
+
+    return slotConfigs;
+  }, [overlaySlots, overlayMaCache, maBands, chartPanelButtons, adaptiveBandOverlay, bandsPanelEnabled]);
 
   const chartBuyInfo = useMemo(() => {
     if (!selectedChart?.symbol) return null;

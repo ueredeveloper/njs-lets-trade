@@ -12,6 +12,7 @@ const {
   evaluateEntry,
   evaluateExit,
   computeAdaptiveDips,
+  computeAdaptiveStretches,
   checkMaCrossover,
   checkPriceFilter,
 } = require('./strategyEngine');
@@ -36,6 +37,7 @@ const OUTCOME_LABELS = {
   NOT_ABOVE_MA: 'Bloqueado — abaixo MA filtro',
   NOT_BELOW_MA: 'Bloqueado — acima MA filtro',
   BELOW_ADAPTIVE_FLOOR: 'Bloqueado — abaixo piso adaptativo',
+  ABOVE_ADAPTIVE_CEILING: 'Bloqueado — acima teto adaptativo',
   FILTER_NO_MA: 'Bloqueado — MA filtro indisponível',
   MA_CROSS_EXIT: 'Saída cruzamento',
   STOP_LOSS: 'Stop loss',
@@ -93,15 +95,16 @@ function formatExitLabel(config) {
   return `${crossLabel(ex.ma1)} cruza ${dir} ${crossLabel(ex.ma2)}`;
 }
 
-function buildMaChecks(config, cMap, adaptiveDips, close) {
+function buildMaChecks(config, cMap, adaptiveDips, close, adaptiveStretches = {}) {
   return activeMaFilters(config).map(f => {
     const label = `EMA${f.period} ${f.interval}`;
     const key = `${f.period}_${f.interval}`;
-    const pf = checkPriceFilter(close, cMap[f.interval] ?? [], f, adaptiveDips[key], config.adaptiveOpts);
+    const pf = checkPriceFilter(close, cMap[f.interval] ?? [], f, adaptiveDips[key], config.adaptiveOpts, adaptiveStretches[key]);
     let detail = 'OK';
     if (!pf.allowed) {
       if (pf.reason === 'FILTER_NO_MA') detail = 'sem dados';
       else if (pf.reason === 'BELOW_ADAPTIVE_FLOOR') detail = `abaixo piso adaptativo (−${pf.dipPct ?? '?'}%)`;
+      else if (pf.reason === 'ABOVE_ADAPTIVE_CEILING') detail = `acima teto adaptativo (+${pf.abovePct ?? '?'}%)`;
       else if (pf.reason === 'NOT_ABOVE_MA') detail = 'preço abaixo da MA';
       else if (pf.reason === 'NOT_BELOW_MA') detail = 'preço acima da MA';
       else detail = pf.reason ?? 'bloqueado';
@@ -214,6 +217,7 @@ async function runMaCrossBacktest({ symbol, config, exchange = 'binance', capita
     const c = scanCandles[i];
     const cMapSlice = sliceCMap(cMap, c.openTime);
     const dips = computeAdaptiveDips(config, cMapSlice);
+    const stretches = computeAdaptiveStretches(config, cMapSlice);
 
     if (phase === 'WATCHING') {
       const entry = config.entry ?? {};
@@ -231,8 +235,8 @@ async function runMaCrossBacktest({ symbol, config, exchange = 'binance', capita
 
       if (!cross.crossed) continue;
 
-      const entryEval = evaluateEntry(config, cMapSlice, dips, evalOpts);
-      const maChecks = buildMaChecks(config, cMapSlice, dips, cross.close);
+      const entryEval = evaluateEntry(config, cMapSlice, dips, { closedOnly: true, adaptiveStretches: stretches });
+      const maChecks = buildMaChecks(config, cMapSlice, dips, cross.close, stretches);
       const row = {
         time: c.openTime,
         price: cross.close,

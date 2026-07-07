@@ -290,6 +290,32 @@ describe('MA Cross — cruzamento', () => {
     expect(pf.allowed).toBe(true);
   });
 
+  test('filtro adaptive bloqueia acima do teto maxAbovePct', () => {
+    const candles = makeCandles(Array(60).fill(100));
+    const pf = checkPriceFilter(105, candles, {
+      enabled: true, period: 50, mode: 'adaptive', maxDipPct: 4, maxAbovePct: 4,
+    }, 3, {}, 4);
+    expect(pf.allowed).toBe(false);
+    expect(pf.reason).toBe('ABOVE_ADAPTIVE_CEILING');
+  });
+
+  test('filtro adaptive permite dentro do piso e teto', () => {
+    const candles = makeCandles(Array(60).fill(100));
+    const pf = checkPriceFilter(102, candles, {
+      enabled: true, period: 50, mode: 'adaptive', maxDipPct: 4, maxAbovePct: 4,
+    }, 3, {}, 4);
+    expect(pf.allowed).toBe(true);
+    expect(pf.abovePct).toBe(4);
+  });
+
+  test('maxAbovePct 0 desliga teto adaptativo', () => {
+    const candles = makeCandles(Array(60).fill(100));
+    const pf = checkPriceFilter(110, candles, {
+      enabled: true, period: 50, mode: 'adaptive', maxDipPct: 4, maxAbovePct: 0,
+    }, 3);
+    expect(pf.allowed).toBe(true);
+  });
+
   test('config normaliza param1/param2 e período livre', () => {
     const c = normalizeMaCrossConfig({
       entry: { param1: { period: 34, interval: '1h' }, param2: { period: 89, interval: '4h' } },

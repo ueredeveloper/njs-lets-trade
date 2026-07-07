@@ -17,6 +17,8 @@ import {
   resolveTradeChartInterval,
   loadMultitradeSymbolChart,
   buildMarkersFromExchangeTrades,
+  buildOverlaySlotsForEntry,
+  buildMaCrossAdaptiveBandsConfig,
 } from '../utils/multitradeChart';
 import { multitradePhaseBadge, symbolPhaseSummary } from '../utils/multitradePhase';
 import {
@@ -246,7 +248,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   const {
     currencies, findFilter, selectedQuote,     selectedChart, setSelectedChart, setChartZoom, setChartTradeMarkers,
     setChartViewSource, clearMultitradeChartView, chartInterval, setChartInterval,
-    applyMultitradeSymbolChart,
+    applyMultitradeSymbolChart, applyChartMaCrossOverlay,
     gateFavorites, binanceFavorites,
     toggleGateFavorite, toggleBinanceFavorite,
     setTradePurchases, setAllTrades,
@@ -575,6 +577,12 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
         isTradesFavView ? CHART_VIEW.TRADES
           : (isMT && !macrossSigInterval ? CHART_VIEW.MULTITRADE : CHART_VIEW.TABLE),
       );
+
+      if (mtEntry) {
+        applyChartMaCrossOverlay(mtEntry, item.symbol);
+      } else {
+        applyChartMaCrossOverlay(null);
+      }
 
       // Favorito MA-Cross só manda no chart quando não há filtro macross ativo
       if (isMT && !macrossSigInterval) {

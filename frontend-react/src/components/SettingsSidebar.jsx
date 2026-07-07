@@ -3,6 +3,7 @@ import { reloadCandles } from '../services/api';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useI18n } from '../i18n';
 import { useCurrency } from '../contexts/CurrencyContext';
+import { BAND_PCT_OPTIONS } from '../utils/uiPreferences';
 
 const PALETTES = [
   { id: 'default',    name: 'Padrão / Default',
@@ -31,7 +32,8 @@ export default function SettingsSidebar({ open, onClose }) {
   const { t } = useI18n();
   const { selectedChart, assetDisplay, setAssetDisplayCategory, assetCategoryKeys,
     chartPanelButtons, setChartPanelButton, chartPanelButtonKeys,
-    uiPrefs, setDefaultChartInterval, setPanelVisible, chartIntervalOptions, panelKeys } = useCurrency();
+    uiPrefs, setDefaultChartInterval, setPanelVisible, setMaBandsDefaults,
+    chartIntervalOptions, panelKeys } = useCurrency();
   const [activeId, setActiveId]           = useState('default');
   const [reloadSymbol, setReloadSymbol]   = useState('');
   const [reloadInterval, setReloadInterval] = useState('all');
@@ -145,19 +147,82 @@ export default function SettingsSidebar({ open, onClose }) {
             <p className={section}>{t('settings.chart_panel')}</p>
             <p className="text-[10px] text-p5/50 mb-3 leading-relaxed">{t('settings.chart_panel_hint')}</p>
             <div className="flex flex-col gap-2">
-              {chartPanelButtonKeys.map((key) => (
-                <label key={key} className="flex items-start gap-2.5 cursor-pointer group">
-                  <input
-                    type="checkbox"
-                    checked={chartPanelButtons[key] !== false}
-                    onChange={(e) => setChartPanelButton(key, e.target.checked)}
-                    className="mt-0.5 shrink-0 accent-p4"
-                  />
-                  <span className="text-p5 text-xs leading-snug group-hover:text-white transition-colors">
-                    {t(`settings.chart_btn.${key}`)}
+              {chartPanelButtonKeys.map((key) => {
+                const hintKey = `settings.chart_btn_hint.${key}`;
+                const hint = t(hintKey);
+                const showHint = hint !== hintKey;
+                return (
+                  <label key={key} className="flex items-start gap-2.5 cursor-pointer group">
+                    <input
+                      type="checkbox"
+                      checked={chartPanelButtons[key] !== false}
+                      onChange={(e) => setChartPanelButton(key, e.target.checked)}
+                      className="mt-0.5 shrink-0 accent-p4"
+                    />
+                    <span className="text-p5 text-xs leading-snug group-hover:text-white transition-colors">
+                      {t(`settings.chart_btn.${key}`)}
+                      {showHint && (
+                        <span className="block text-[10px] text-p5/40 mt-0.5 font-normal">{hint}</span>
+                      )}
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Bandas % — estado padrão */}
+          <div>
+            <p className={section}>{t('settings.ma_bands_defaults')}</p>
+            <p className="text-[10px] text-p5/50 mb-3 leading-relaxed">{t('settings.ma_bands_defaults_hint')}</p>
+            <div className="flex flex-col gap-3">
+              <div>
+                <span className="text-[10px] text-p5/60 block mb-1.5">{t('settings.ma_bands_pct')}</span>
+                <div className="flex gap-1.5 flex-wrap">
+                  {BAND_PCT_OPTIONS.map((p) => (
+                    <button
+                      key={p}
+                      type="button"
+                      onClick={() => setMaBandsDefaults({ pct: p })}
+                      className={`min-w-[2.25rem] py-1 rounded text-xs font-mono border transition-all ${
+                        uiPrefs.maBandsDefaults.pct === p
+                          ? 'border-p4 bg-p4/20 text-p5 font-semibold'
+                          : 'border-p2/40 text-p5/60 hover:border-p3 hover:bg-p2/30'
+                      }`}
+                    >
+                      {p}%
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <label className="flex items-start gap-2.5 cursor-pointer group">
+                <input
+                  type="checkbox"
+                  checked={uiPrefs.maBandsDefaults.showAbove === true}
+                  onChange={(e) => setMaBandsDefaults({ showAbove: e.target.checked })}
+                  className="mt-0.5 shrink-0 accent-p4"
+                />
+                <span className="text-p5 text-xs leading-snug group-hover:text-white transition-colors">
+                  {t('settings.ma_bands_above')}
+                  <span className="block text-[10px] text-p5/40 mt-0.5">
+                    {t('settings.ma_bands_above_detail', uiPrefs.maBandsDefaults.pct)}
                   </span>
-                </label>
-              ))}
+                </span>
+              </label>
+              <label className="flex items-start gap-2.5 cursor-pointer group">
+                <input
+                  type="checkbox"
+                  checked={uiPrefs.maBandsDefaults.showBelow !== false}
+                  onChange={(e) => setMaBandsDefaults({ showBelow: e.target.checked })}
+                  className="mt-0.5 shrink-0 accent-p4"
+                />
+                <span className="text-p5 text-xs leading-snug group-hover:text-white transition-colors">
+                  {t('settings.ma_bands_below')}
+                  <span className="block text-[10px] text-p5/40 mt-0.5">
+                    {t('settings.ma_bands_below_detail', uiPrefs.maBandsDefaults.pct)}
+                  </span>
+                </span>
+              </label>
             </div>
           </div>
 

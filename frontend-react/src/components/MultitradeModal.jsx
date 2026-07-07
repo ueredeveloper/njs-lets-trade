@@ -770,7 +770,7 @@ export default function MultitradeModal({
           )}
 
           {isMaCross && strategyEnabled && (
-            <MaCrossStrategyForm form={form} patch={patch} />
+            <MaCrossStrategyForm form={form} patch={patch} symbol={symbol} exchange={exchange} />
           )}
 
           {!isSwing && !isMaCross && activeTab === 'rule1' && strategyEnabled && (

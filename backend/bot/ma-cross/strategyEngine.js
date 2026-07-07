@@ -1,7 +1,7 @@
 'use strict';
 
 const ti = require('technicalindicators');
-const { analyzeAdaptiveDip } = require('../amap/adaptiveMaDip');
+const { analyzeAdaptiveDip, analyzeAdaptiveStretch } = require('../amap/adaptiveMaDip');
 const { computeMa, buildMaTimeSeries, maLabel } = require('../../utils/movingAverage');
 
 const INTERVAL_MS = {
@@ -346,25 +346,26 @@ function evaluateMaCrossSignal({
   });
 }
 
-function checkPriceFilter(close, filterCandles, filter, adaptiveDipPct, adaptiveOpts = {}) {
+function checkPriceFilter(close, filterCandles, filter, adaptiveDipPct, adaptiveOpts = {}, adaptiveStretchPct = null) {
   if (!filter?.enabled || filter.mode === 'off') return { allowed: true };
 
   const ma = computeMa(filterCandles, filter.period);
   if (ma == null) return { allowed: false, reason: 'FILTER_NO_MA', ma, filterId: filter.id };
 
+  const distPct = ((close - ma) / ma) * 100;
   const mode = filter.mode ?? 'strict_above';
 
   if (mode === 'below') {
     const ceil = ma * (1 + (filter.tolerancePct ?? 0) / 100);
     return close < ceil
-      ? { allowed: true, ma, distPct: ((close - ma) / ma) * 100 }
+      ? { allowed: true, ma, distPct }
       : { allowed: false, reason: 'NOT_BELOW_MA', ma, filterId: filter.id };
   }
 
   if (mode === 'strict_above') {
     const floor = ma * (1 - (filter.tolerancePct ?? 0) / 100);
     return close > floor
-      ? { allowed: true, ma, distPct: ((close - ma) / ma) * 100 }
+      ? { allowed: true, ma, distPct }
       : { allowed: false, reason: 'NOT_ABOVE_MA', ma, filterId: filter.id };
   }
 
@@ -374,9 +375,30 @@ function checkPriceFilter(close, filterCandles, filter, adaptiveDipPct, adaptive
   const effectiveDip = Math.min(dip, cap);
   const floor = ma * (1 - effectiveDip / 100);
 
-  return close >= floor
-    ? { allowed: true, ma, floor, dipPct: effectiveDip, distPct: ((close - ma) / ma) * 100 }
-    : { allowed: false, reason: 'BELOW_ADAPTIVE_FLOOR', ma, floor, filterId: filter.id };
+  if (close < floor) {
+    return { allowed: false, reason: 'BELOW_ADAPTIVE_FLOOR', ma, floor, dipPct: effectiveDip, filterId: filter.id };
+  }
+
+  const fixedAbove = filter.fixedAbovePct != null ? Number(filter.fixedAbovePct) : null;
+  const capAbove = filter.maxAbovePct ?? adaptiveOpts.maxAbovePct ?? 8;
+  const stretch = fixedAbove ?? adaptiveStretchPct ?? adaptiveOpts.defaultAbovePct ?? 4;
+  const effectiveAbove = Math.min(stretch, capAbove);
+
+  if (effectiveAbove > 0) {
+    const ceiling = ma * (1 + effectiveAbove / 100);
+    if (close > ceiling) {
+      return {
+        allowed: false,
+        reason: 'ABOVE_ADAPTIVE_CEILING',
+        ma, ceiling, abovePct: effectiveAbove, distPct, filterId: filter.id,
+      };
+    }
+  }
+
+  return {
+    allowed: true, ma, floor, ceiling: effectiveAbove > 0 ? ma * (1 + effectiveAbove / 100) : null,
+    dipPct: effectiveDip, abovePct: effectiveAbove > 0 ? effectiveAbove : null, distPct,
+  };
 }
 
 function crossLabel(leg) {
@@ -440,11 +462,13 @@ function getRequiredSpecs(config) {
   return [...specs.entries()].map(([interval, limit]) => ({ interval, limit }));
 }
 
-function evaluateMaFilters(close, config, cMap, adaptiveDips) {
+function evaluateMaFilters(close, config, cMap, adaptiveDips, adaptiveStretches = {}) {
   for (const f of activeMaFilters(config)) {
     const filtCandles = cMap[f.interval] ?? [];
     const key = `${f.period}_${f.interval}`;
-    const pf = checkPriceFilter(close, filtCandles, f, adaptiveDips[key], config.adaptiveOpts);
+    const pf = checkPriceFilter(
+      close, filtCandles, f, adaptiveDips[key], config.adaptiveOpts, adaptiveStretches[key],
+    );
     if (!pf.allowed) return pf;
   }
   return { allowed: true };
@@ -507,7 +531,7 @@ function extensionAboveMa2(close, ma2) {
   return ((parseFloat(close) / ma2) - 1) * 100;
 }
 
-function evaluatePullbackReady(config, cMap, adaptiveDips, pending) {
+function evaluatePullbackReady(config, cMap, adaptiveDips, pending, adaptiveStretches = {}) {
   if (!pending?.signalOpenTime) {
     return { ready: false, reason: 'NO_PENDING_SIGNAL', cancel: true };
   }
@@ -582,7 +606,7 @@ function evaluatePullbackReady(config, cMap, adaptiveDips, pending) {
     };
   }
 
-  const filterCheck = evaluateMaFilters(close, config, cMap, adaptiveDips);
+  const filterCheck = evaluateMaFilters(close, config, cMap, adaptiveDips, adaptiveStretches);
   if (!filterCheck.allowed) {
     return {
       ready: false,
@@ -610,11 +634,12 @@ function evaluatePullbackReady(config, cMap, adaptiveDips, pending) {
 }
 
 function evaluateEntry(config, cMap, adaptiveDips = {}, opts = {}) {
+  const adaptiveStretches = opts.adaptiveStretches ?? computeAdaptiveStretches(config, cMap);
   const crossSignal = evaluateCrossSignal(config, cMap, adaptiveDips, opts);
   if (!crossSignal.allowed) return crossSignal;
 
   const { close, ma1, ma2 } = crossSignal;
-  const filterCheck = evaluateMaFilters(close, config, cMap, adaptiveDips);
+  const filterCheck = evaluateMaFilters(close, config, cMap, adaptiveDips, adaptiveStretches);
   if (!filterCheck.allowed) {
     return {
       allowed: false,
@@ -792,6 +817,23 @@ function computeAdaptiveDips(config, cMap) {
   return dips;
 }
 
+function computeAdaptiveStretches(config, cMap) {
+  const stretches = {};
+  const opts = config.adaptiveOpts ?? {};
+  for (const f of activeMaFilters(config)) {
+    if (f.mode !== 'adaptive') continue;
+    const candles = cMap[f.interval] ?? [];
+    const { stretchPct } = analyzeAdaptiveStretch(candles, f.period, {
+      defaultPct:  opts.defaultAbovePct ?? 4,
+      maxPct:      Math.min(f.maxAbovePct ?? opts.maxAbovePct ?? 8, opts.maxAbovePct ?? 8),
+      minPct:      opts.minAbovePct ?? 0.5,
+      minEpisodes: opts.minEpisodes ?? 3,
+    });
+    stretches[`${f.period}_${f.interval}`] = stretchPct;
+  }
+  return stretches;
+}
+
 function getFinestPollInterval(config) {
   const ivs = getRequiredSpecs(config).map(s => s.interval);
   if (!ivs.length) return '15m';
@@ -909,6 +951,7 @@ module.exports = {
   evaluateExit,
   computeStopLossFloor,
   computeAdaptiveDips,
+  computeAdaptiveStretches,
   getFinestPollInterval,
   getMaCrossMetrics,
   checkEntryMaxAboveMa2,

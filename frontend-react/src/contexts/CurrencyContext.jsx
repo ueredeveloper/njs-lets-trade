@@ -6,6 +6,10 @@ import { addFavorite, removeFavorite, fetchActiveTrades, ignoreActiveTrade,
   fetchMarketHighlights } from '../services/api';
 import { CHART_VIEW } from '../utils/chartView';
 import {
+  buildOverlaySlotsForEntry,
+  buildMaCrossAdaptiveBandsConfig,
+} from '../utils/multitradeChart';
+import {
   ASSET_CATEGORY_KEYS,
   filterCurrencies,
   filterSymbols,
@@ -24,6 +28,7 @@ import {
   loadUiPreferences,
   saveUiPreferences,
   normalizeOverlaySlots,
+  normalizeMaBandsDefaults,
 } from '../utils/uiPreferences';
 
 const CurrencyContext = createContext(null);
@@ -273,13 +278,14 @@ export function CurrencyProvider({ children }) {
 
   /** Chart MT por símbolo/favorita — intervalo da estratégia + marcadores, sem zoom em trade */
   const applyMultitradeSymbolChart = useCallback(({
-    chartData, symbol, interval, exchangeSource, markers, overlaySlots,
+    chartData, symbol, interval, exchangeSource, markers, overlaySlots, adaptiveBands,
   }) => {
     setChartViewSource(CHART_VIEW.MULTITRADE);
     setChartInterval(interval);
     setChartTradeMarkers(markers ?? []);
     setMultitradeChartFocus({
       overlaySlots: overlaySlots ?? null,
+      adaptiveBands: adaptiveBands ?? null,
       symbol,
       source: exchangeSource ?? null,
     });
@@ -296,7 +302,7 @@ export function CurrencyProvider({ children }) {
   /** Atualização atômica do chart pela aba Multi-Trade (backtest row click) */
   const applyMultitradeChartView = useCallback(({
     chartData, symbol, interval, exchangeSource, markers, entryMs, exitMs,
-    fetchFromMs, candleLimit, overlaySlots,
+    fetchFromMs, candleLimit, overlaySlots, adaptiveBands,
   }) => {
     setChartViewSource(CHART_VIEW.MULTITRADE);
     setChartInterval(interval);
@@ -308,6 +314,7 @@ export function CurrencyProvider({ children }) {
       fetchFromMs,
       candleLimit,
       overlaySlots,
+      adaptiveBands: adaptiveBands ?? null,
       symbol,
       source: exchangeSource ?? null,
     });
@@ -323,6 +330,24 @@ export function CurrencyProvider({ children }) {
       startDate: new Date(entryMs).toISOString(),
       endDate:   new Date(exitMs).toISOString(),
     });
+  }, []);
+
+  const applyChartMaCrossOverlay = useCallback((entry, symbol) => {
+    if (!entry?.symbol && !symbol) {
+      setMultitradeChartFocus(prev => {
+        if (!prev) return null;
+        const { overlaySlots, adaptiveBands, symbol: _s, ...rest } = prev;
+        return Object.keys(rest).length ? rest : null;
+      });
+      return;
+    }
+    const sym = (symbol ?? entry.symbol)?.toUpperCase();
+    setMultitradeChartFocus(prev => ({
+      ...(prev ?? {}),
+      symbol: sym,
+      overlaySlots: buildOverlaySlotsForEntry(entry, null),
+      adaptiveBands: buildMaCrossAdaptiveBandsConfig(entry),
+    }));
   }, []);
 
   const clearMultitradeChartView = useCallback(() => {
@@ -424,6 +449,17 @@ export function CurrencyProvider({ children }) {
       const next = {
         ...prev,
         overlaySlots: normalizeOverlaySlots(slots),
+      };
+      saveUiPreferences(next);
+      return next;
+    });
+  }, []);
+
+  const setMaBandsDefaults = useCallback((patch) => {
+    setUiPrefsState((prev) => {
+      const next = {
+        ...prev,
+        maBandsDefaults: normalizeMaBandsDefaults({ ...prev.maBandsDefaults, ...patch }),
       };
       saveUiPreferences(next);
       return next;
@@ -605,6 +641,7 @@ export function CurrencyProvider({ children }) {
         setDefaultChartInterval,
         setPanelVisible,
         setOverlaySlotsPreference,
+        setMaBandsDefaults,
         chartIntervalOptions: CHART_INTERVAL_OPTIONS,
         panelKeys: PANEL_KEYS,
         isVisibleSymbol,
@@ -627,6 +664,7 @@ export function CurrencyProvider({ children }) {
         setChartViewSource,
         applyMultitradeChartView,
         applyMultitradeSymbolChart,
+        applyChartMaCrossOverlay,
         clearMultitradeChartView,
         applyFiveMTradeChartView,
         clearFiveMTradeChartView,

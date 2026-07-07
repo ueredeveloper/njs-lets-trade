@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { suggestMaCrossFilterBounds } from '../services/api';
 import {
   MA_CROSS_INTERVALS, MA_PERIOD_PRESETS, MA_CROSS_PERIOD_MIN, MA_CROSS_PERIOD_MAX,
   CROSS_DIRECTIONS, PRICE_FILTER_MODES,
@@ -97,15 +98,16 @@ function CrossBlock({ title, block, prefix, patch, color, showEnable }) {
   );
 }
 
-export default function MaCrossStrategyForm({ form, patch }) {
+export default function MaCrossStrategyForm({ form, patch, symbol, exchange }) {
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [boundsSuggest, setBoundsSuggest] = useState({});
   const sel = { background: '#1e2130', border: '1px solid #2a2d3a', color: '#e2e8f0' };
 
   const addFilter = () => {
     const nextId = Math.max(0, ...(form.maFilters ?? []).map(f => f.id)) + 1;
     patch('maFilters', [...(form.maFilters ?? []), {
       id: nextId, enabled: true, period: 50, interval: '1h',
-      mode: 'strict_above', maxDipPct: 3, fixedDipPct: '', tolerancePct: 0,
+      mode: 'strict_above', maxDipPct: 4, fixedDipPct: '', maxAbovePct: 4, fixedAbovePct: '',
     }]);
   };
 
@@ -128,6 +130,51 @@ export default function MaCrossStrategyForm({ form, patch }) {
     patch('exit.rsi.conditions', form.exit.rsi.conditions.map(c =>
       c.id === id ? { ...c, [field]: val } : c));
   };
+
+  async function handleSuggestBounds(filterId) {
+    const sym = symbol?.trim()?.toUpperCase();
+    if (!sym) return;
+    setBoundsSuggest(prev => ({ ...prev, [filterId]: { loading: true } }));
+    try {
+      const r = await suggestMaCrossFilterBounds({
+        symbol: sym,
+        exchange,
+        form,
+        filterId,
+      });
+      setBoundsSuggest(prev => ({ ...prev, [filterId]: r }));
+      if (r.floor?.suggestedMaxDipPct != null) {
+        updateFilter(filterId, 'maxDipPct', r.floor.suggestedMaxDipPct);
+      }
+      if (r.ceiling?.suggestedMaxAbovePct != null) {
+        updateFilter(filterId, 'maxAbovePct', r.ceiling.suggestedMaxAbovePct);
+      }
+    } catch (err) {
+      setBoundsSuggest(prev => ({ ...prev, [filterId]: { error: err.message } }));
+    }
+  }
+
+  function renderBoundsSuggest(filterId) {
+    const s = boundsSuggest[filterId];
+    if (!s || s.loading) return null;
+    if (s.error) {
+      return <p className="text-[9px] text-amber-400/90 font-mono">{s.error}</p>;
+    }
+    const floor = s.floor;
+    const ceil = s.ceiling;
+    return (
+      <p className="text-[9px] text-p5/50 font-mono leading-relaxed">
+        {floor && (
+          <>Piso: {floor.usedDefault ? `padrão ${floor.suggestedMaxDipPct}%` : `${floor.suggestedMaxDipPct}% (${floor.episodeCount} episódios, média ${floor.avgRawDipPct ?? '—'}%)`}</>
+        )}
+        {floor && ceil && ' · '}
+        {ceil && (
+          <>Teto: {ceil.usedDefault ? `padrão ${ceil.suggestedMaxAbovePct}%` : `${ceil.suggestedMaxAbovePct}% (${ceil.signalCount} sinais, mediana +${ceil.medianStretchPct ?? '—'}%)`}</>
+        )}
+        {s.signalCount != null && ` · ${s.signalCount} cruzamentos analisados`}
+      </p>
+    );
+  }
 
   return (
     <div className="space-y-4">
@@ -189,13 +236,32 @@ export default function MaCrossStrategyForm({ form, patch }) {
                       </select>
                     </div>
                     {f.mode === 'adaptive' && (
-                      <div className="flex flex-wrap gap-2 items-center">
-                        <span className="text-p5/50">Máx % abaixo</span>
-                        <NumInput value={f.maxDipPct} onChange={v => updateFilter(f.id, 'maxDipPct', v)}
-                          min={0.5} max={20} step={0.5} className="w-14" />
-                        <span className="text-p5/40 text-[10px]">fixo %</span>
-                        <NumInput value={f.fixedDipPct} onChange={v => updateFilter(f.id, 'fixedDipPct', v)}
-                          min={0} max={20} step={0.5} className="w-14" placeholder="auto" />
+                      <div className="space-y-2">
+                        <div className="flex flex-wrap gap-2 items-center">
+                          <span className="text-p5/50">Piso máx % abaixo</span>
+                          <NumInput value={f.maxDipPct} onChange={v => updateFilter(f.id, 'maxDipPct', v)}
+                            min={0.5} max={20} step={0.5} className="w-14" />
+                          <span className="text-p5/40 text-[10px]">fixo %</span>
+                          <NumInput value={f.fixedDipPct} onChange={v => updateFilter(f.id, 'fixedDipPct', v)}
+                            min={0} max={20} step={0.5} className="w-14" placeholder="auto" />
+                        </div>
+                        <div className="flex flex-wrap gap-2 items-center">
+                          <span className="text-p5/50">Teto máx % acima</span>
+                          <NumInput value={f.maxAbovePct ?? 4} onChange={v => updateFilter(f.id, 'maxAbovePct', v)}
+                            min={0} max={20} step={0.5} className="w-14" />
+                          <span className="text-p5/40 text-[10px]">fixo %</span>
+                          <NumInput value={f.fixedAbovePct ?? ''} onChange={v => updateFilter(f.id, 'fixedAbovePct', v)}
+                            min={0} max={20} step={0.5} className="w-14" placeholder="auto" />
+                          <span className="text-p5/40 text-[10px]">0 = desligado</span>
+                        </div>
+                        {symbol?.trim() && (
+                          <button type="button" onClick={() => handleSuggestBounds(f.id)}
+                            className="text-[9px] px-2 py-0.5 rounded font-semibold"
+                            style={{ background: `${FILTER_COLOR}18`, color: FILTER_COLOR, border: `1px solid ${FILTER_COLOR}44` }}>
+                            Sugerir piso/teto (histórico)
+                          </button>
+                        )}
+                        {renderBoundsSuggest(f.id)}
                       </div>
                     )}
                     {(f.mode === 'strict_above' || f.mode === 'below') && (

@@ -43,7 +43,7 @@ export const MA_CROSS_DEFAULTS = {
   maFiltersEnabled: true,
   maFilters: [{
     id: 1, enabled: true, period: 50, interval: '1h',
-    mode: 'adaptive', maxDipPct: 4, fixedDipPct: '',
+    mode: 'adaptive', maxDipPct: 4, fixedDipPct: '', maxAbovePct: 4, fixedAbovePct: '',
   }],
   exit: {
     logic: 'any',
@@ -72,7 +72,7 @@ export const MA_CROSS_DEFAULTS = {
     pullbackEntry: { enabled: true, waitCandles: 2, requirePullback: true },
   },
   polling: { pollMs: 60_000, fastPollMs: 30_000 },
-  adaptiveOpts: { defaultPct: 3, maxPct: 8, minPct: 0.5, minEpisodes: 3 },
+  adaptiveOpts: { defaultPct: 3, maxPct: 8, minPct: 0.5, minEpisodes: 3, defaultAbovePct: 4, maxAbovePct: 8, minAbovePct: 0.5 },
   volume: { minVolumeUsdt: 1_000_000, allowLowVolume: false },
   entryCooldownHours: 4,
 };
@@ -111,6 +111,8 @@ function mapMaFilters(list, legacyPf) {
       mode: m.mode ?? 'strict_above',
       maxDipPct: Number(m.maxDipPct ?? 4),
       fixedDipPct: m.fixedDipPct ?? '',
+      maxAbovePct: Number(m.maxAbovePct ?? 4),
+      fixedAbovePct: m.fixedAbovePct ?? '',
       tolerancePct: Number(m.tolerancePct ?? 0),
     }));
   }
@@ -195,9 +197,10 @@ export function maCrossFormToPayload(form, meta = {}) {
     label: c.label,
     entry: c.entry,
     maFiltersEnabled: c.maFiltersEnabled,
-    maFilters: c.maFilters.map(({ id, enabled, period, interval, mode, maxDipPct, fixedDipPct, tolerancePct }) => ({
-      id, enabled, period, interval, mode, maxDipPct, tolerancePct,
+    maFilters: c.maFilters.map(({ id, enabled, period, interval, mode, maxDipPct, fixedDipPct, maxAbovePct, fixedAbovePct, tolerancePct }) => ({
+      id, enabled, period, interval, mode, maxDipPct, maxAbovePct, tolerancePct,
       ...(fixedDipPct !== '' && fixedDipPct != null ? { fixedDipPct: Number(fixedDipPct) } : {}),
+      ...(fixedAbovePct !== '' && fixedAbovePct != null ? { fixedAbovePct: Number(fixedAbovePct) } : {}),
     })),
     exit: {
       logic: c.exit.logic,

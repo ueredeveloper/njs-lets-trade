@@ -790,6 +790,47 @@ export async function suggestMultitradeAdaptive({ symbol, exchange, period, inte
   return res.json();
 }
 
+/** Piso/teto adaptativos para bandas do chart (histórico da moeda). */
+export async function fetchChartAdaptiveBands({
+  symbol, exchange, period, interval, limit,
+  maxDipPct, maxAbovePct, fixedDipPct, fixedAbovePct, adaptiveOpts,
+}) {
+  const opts = adaptiveOpts ?? {};
+  const params = new URLSearchParams({
+    symbol,
+    exchange: exchange ?? 'binance',
+    period: String(period ?? 50),
+    interval: interval ?? '1h',
+    limit: String(limit ?? 350),
+    maxDipPct: String(maxDipPct ?? 4),
+    maxAbovePct: String(maxAbovePct ?? 4),
+    defaultPct: String(opts.defaultPct ?? 3),
+    maxPct: String(opts.maxPct ?? 8),
+    minPct: String(opts.minPct ?? 0.5),
+    minEpisodes: String(opts.minEpisodes ?? 3),
+    defaultAbovePct: String(opts.defaultAbovePct ?? 4),
+    minAbovePct: String(opts.minAbovePct ?? 0.5),
+  });
+  if (fixedDipPct != null) params.set('fixedDipPct', String(fixedDipPct));
+  if (fixedAbovePct != null) params.set('fixedAbovePct', String(fixedAbovePct));
+  const res = await fetch(`/services/sb/chart-adaptive-bands?${params}`);
+  if (!res.ok) throw new Error(`chart-adaptive-bands falhou: HTTP ${res.status}`);
+  return res.json();
+}
+
+/** Sugere piso e teto adaptativos para filtro MA do MA-Cross (histórico de cruzamentos). */
+export async function suggestMaCrossFilterBounds({ symbol, exchange, form, filterId }) {
+  const params = new URLSearchParams({
+    symbol,
+    exchange: exchange ?? 'binance',
+    tradeConfig: JSON.stringify(form),
+  });
+  if (filterId != null) params.set('filterId', String(filterId));
+  const res = await fetch(`/services/sb/multitrade-suggest-ma-cross-bounds?${params}`);
+  if (!res.ok) throw new Error(`multitrade-suggest-ma-cross-bounds falhou: HTTP ${res.status}`);
+  return res.json();
+}
+
 /** Sugere % acima da MA para ativar regras 3/4 candles. */
 export async function suggestMultitradeExtensionAbove({
   symbol, exchange, entryRsi, exitRsi, extension, maConditions, stopLoss,
@@ -912,11 +953,12 @@ export async function suggestMultitradeEntryMa({
 }
 
 /** Backtest histórico AMAP (moeda deve estar no Multi-Trade). */
-export async function fetchMultitradeBacktest({ symbol, exchange, capital, strategyId } = {}) {
+export async function fetchMultitradeBacktest({ symbol, exchange, capital, strategyId, tradeConfig } = {}) {
   const params = new URLSearchParams({ symbol: symbol.toUpperCase() });
   if (exchange) params.set('exchange', exchange);
   if (capital != null) params.set('capital', String(capital));
   if (strategyId) params.set('strategy_id', strategyId);
+  if (tradeConfig) params.set('tradeConfig', JSON.stringify(tradeConfig));
   const res = await fetch(`/services/sb/multitrade-backtest?${params}`);
   if (res.status === 404) {
     const body = await res.json().catch(() => ({}));

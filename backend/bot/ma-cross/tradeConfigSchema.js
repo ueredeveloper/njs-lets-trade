@@ -30,7 +30,7 @@ const MA_CROSS_DEFAULTS = {
   maFiltersEnabled: true,
   maFilters: [{
     id: 1, enabled: true, period: 50, interval: '1h',
-    mode: 'adaptive', maxDipPct: 4, fixedDipPct: null, tolerancePct: 0,
+    mode: 'adaptive', maxDipPct: 4, fixedDipPct: null, maxAbovePct: 4, fixedAbovePct: null, tolerancePct: 0,
   }],
 
   exit: {
@@ -74,6 +74,9 @@ const MA_CROSS_DEFAULTS = {
     maxPct:      8,
     minPct:      0.5,
     minEpisodes: 3,
+    defaultAbovePct: 4,
+    maxAbovePct:     8,
+    minAbovePct:     0.5,
   },
 
   volume: {
@@ -130,6 +133,8 @@ function normalizeMaFilter(m, i = 0) {
     mode,
     maxDipPct:   Math.max(0, Number(m?.maxDipPct ?? 4)),
     fixedDipPct: m?.fixedDipPct != null && m?.fixedDipPct !== '' ? Number(m?.fixedDipPct) : null,
+    maxAbovePct: Math.max(0, Number(m?.maxAbovePct ?? 4)),
+    fixedAbovePct: m?.fixedAbovePct != null && m?.fixedAbovePct !== '' ? Number(m?.fixedAbovePct) : null,
     tolerancePct: Math.max(0, Number(m?.tolerancePct ?? 0)),
   };
 }
@@ -225,6 +230,7 @@ function normalizeMaCrossConfig(body = {}) {
       ...d.adaptiveOpts,
       ...(body.adaptiveOpts ?? {}),
       maxPct: Math.max(0.5, Number(body.adaptiveOpts?.maxPct ?? d.adaptiveOpts.maxPct)),
+      maxAbovePct: Math.max(0.5, Number(body.adaptiveOpts?.maxAbovePct ?? d.adaptiveOpts.maxAbovePct)),
     },
     volume: {
       minVolumeUsdt:  Number(body.volume?.minVolumeUsdt ?? d.volume.minVolumeUsdt),

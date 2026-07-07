@@ -12,6 +12,7 @@
  */
 
 const router    = require('express').Router();
+const { analyzeAdaptiveDip, analyzeAdaptiveStretch } = require('../bot/amap/adaptiveMaDip');
 const supabase  = require('../supabase/client');
 const { buildTradeConfig, buildAdaptiveReport, suggestAdaptiveDip, buildEntryDiscountReport, getRequiredSpecs, buildMaSnapshot, evaluateEntry, computeAdaptiveDips } = require('../bot/amap/strategyEngine');
 const { buildExtensionAboveReport } = require('../bot/amap/suggestExtensionAbovePct');
@@ -29,6 +30,8 @@ const {
 } = require('../bot/ma-cross/strategyPresets');
 const { toFormState: swingToFormState, normalizeSwingConfig, toAmapSuggestConfig } = require('../bot/swing/tradeConfigSchema');
 const { toFormState: maCrossToFormState, normalizeMaCrossConfig } = require('../bot/ma-cross/tradeConfigSchema');
+const { getRequiredSpecs: getMaCrossRequiredSpecs } = require('../bot/ma-cross/strategyEngine');
+const { buildMaCrossBoundsReport } = require('../bot/ma-cross/suggestMaCrossFilterBounds');
 const { getRequiredSpecs: getSwingRequiredSpecs } = require('../bot/swing/strategyEngine');
 const { toFormState, normalizeTradeConfig, flatConfigToBody, toEngineConfig } = require('../bot/amap/tradeConfigSchema');
 const { fetchBinanceCandles, fetchGateCandles } = require('../bot/prices');
@@ -1422,6 +1425,89 @@ router.get('/multitrade-suggest-adaptive', getUserId, async (req, res) => {
   }
 });
 
+// GET /chart-adaptive-bands?symbol=&exchange=&period=50&interval=1h&limit=&maxDipPct=4&maxAbovePct=4
+router.get('/chart-adaptive-bands', getUserId, async (req, res) => {
+  const symbol = req.query.symbol?.toUpperCase();
+  if (!symbol) return res.status(400).json({ error: 'symbol obrigatório' });
+
+  const exchange = req.query.exchange ?? 'binance';
+  const period = Number(req.query.period ?? 50);
+  const interval = req.query.interval ?? '1h';
+  const limit = Math.min(Math.max(Number(req.query.limit ?? period + 300), period + 20), 1000);
+  const maxDipPct = Number(req.query.maxDipPct ?? 4);
+  const maxAbovePct = Number(req.query.maxAbovePct ?? 4);
+  const fixedDipPct = req.query.fixedDipPct != null && req.query.fixedDipPct !== ''
+    ? Number(req.query.fixedDipPct) : null;
+  const fixedAbovePct = req.query.fixedAbovePct != null && req.query.fixedAbovePct !== ''
+    ? Number(req.query.fixedAbovePct) : null;
+
+  const dipOpts = {
+    defaultPct: Number(req.query.defaultPct ?? 3),
+    maxPct: maxDipPct,
+    minPct: Number(req.query.minPct ?? 0.5),
+    minEpisodes: Number(req.query.minEpisodes ?? 3),
+  };
+  const stretchOpts = {
+    defaultPct: Number(req.query.defaultAbovePct ?? 4),
+    maxPct: maxAbovePct,
+    minPct: Number(req.query.minAbovePct ?? 0.5),
+    minEpisodes: Number(req.query.minEpisodes ?? 3),
+  };
+
+  try {
+    const candles = await fetchCandlesForEval(exchange, symbol, interval, limit);
+    const dipResult = analyzeAdaptiveDip(candles, period, dipOpts);
+    const stretchResult = analyzeAdaptiveStretch(candles, period, stretchOpts);
+    const dipPct = fixedDipPct ?? Math.min(dipResult.dipPct, maxDipPct);
+    const stretchPct = fixedAbovePct ?? Math.min(stretchResult.stretchPct, maxAbovePct);
+    res.json({
+      symbol, exchange, period, interval,
+      dipPct,
+      stretchPct,
+      dipUsedDefault: dipResult.usedDefault,
+      stretchUsedDefault: stretchResult.usedDefault,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /multitrade-suggest-ma-cross-bounds?symbol=&exchange=&tradeConfig={...}&filterId=1
+router.get('/multitrade-suggest-ma-cross-bounds', getUserId, async (req, res) => {
+  const symbol = req.query.symbol?.toUpperCase();
+  if (!symbol) return res.status(400).json({ error: 'symbol obrigatório' });
+
+  const exchange = req.query.exchange ?? 'binance';
+  let body = {};
+  if (req.query.tradeConfig) {
+    try { body = JSON.parse(req.query.tradeConfig); } catch {
+      return res.status(400).json({ error: 'tradeConfig JSON inválido' });
+    }
+  } else {
+    body = normalizeMaCrossConfig({});
+  }
+
+  const normalized = normalizeMaCrossConfig(body);
+  const filterId = Number(req.query.filterId ?? normalized.maFilters?.[0]?.id ?? 1);
+  const filterIdx = Math.max(0, (normalized.maFilters ?? []).findIndex(f => f.id === filterId));
+
+  const config = normalized;
+  const specs = getMaCrossRequiredSpecs(config);
+
+  try {
+    const cMap = {};
+    await Promise.all(specs.map(async ({ interval, limit }) => {
+      cMap[interval] = await fetchCandlesForEval(exchange, symbol, interval, Math.max(limit, 500));
+    }));
+
+    const report = buildMaCrossBoundsReport(cMap, config, filterIdx >= 0 ? filterIdx : 0);
+    if (report.error) return res.status(400).json(report);
+    res.json({ symbol, exchange, ...report });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /multitrade-suggest-extension-above?symbol=&exchange=&maPeriod=50&maInterval=1h&entryInterval=15m&...
 router.get('/multitrade-suggest-extension-above', getUserId, async (req, res) => {
   const symbol = req.query.symbol?.toUpperCase();
@@ -1659,9 +1745,20 @@ router.get('/multitrade-backtest', getUserId, async (req, res) => {
   if (!data) return res.status(404).json({ error: 'Moeda não está no Multi-Trade' });
 
   const entry    = multitradeToEntry(data);
-  const config   = entry.tradeConfig ?? toEngineConfig(normalizeTradeConfig(resolveConfigBody(data)));
+  let config   = entry.tradeConfig ?? toEngineConfig(normalizeTradeConfig(resolveConfigBody(data)));
   const exchange = req.query.exchange ?? entry.exchange ?? 'binance';
   const capital  = Number(req.query.capital ?? entry.capital ?? 40);
+
+  if (req.query.tradeConfig) {
+    try {
+      const override = JSON.parse(req.query.tradeConfig);
+      if (isMaCrossStrategy(entry.strategyId)) {
+        config = buildMaCrossTradeConfig(override);
+      }
+    } catch {
+      return res.status(400).json({ error: 'tradeConfig JSON inválido' });
+    }
+  }
 
   try {
     const result = isMaCrossStrategy(entry.strategyId)

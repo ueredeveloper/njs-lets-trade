@@ -28,26 +28,37 @@ export function resolveTradeChartInterval(entry, row) {
   return er.interval ?? '15m';
 }
 
+/** Config das bandas adaptativas (piso/teto) do filtro MA — MA-Cross */
+export function buildMaCrossAdaptiveBandsConfig(entry, boundsOverride = null) {
+  if (!isMaCrossEntry(entry)) return null;
+  const filters = (entry?.maFilters ?? entry?.tradeConfig?.maFilters ?? [])
+    .filter(f => f.enabled !== false && f.mode === 'adaptive');
+  const filter = filters[0];
+  if (!filter) return null;
+  const opts = entry?.adaptiveOpts ?? entry?.tradeConfig?.adaptiveOpts ?? {};
+  return {
+    period: Number(filter.period ?? 50),
+    interval: filter.interval ?? '1h',
+    maxDipPct: Number(boundsOverride?.maxDipPct ?? filter.maxDipPct ?? 4),
+    maxAbovePct: Number(boundsOverride?.maxAbovePct ?? filter.maxAbovePct ?? 4),
+    fixedDipPct: filter.fixedDipPct != null && filter.fixedDipPct !== ''
+      ? Number(filter.fixedDipPct) : null,
+    fixedAbovePct: filter.fixedAbovePct != null && filter.fixedAbovePct !== ''
+      ? Number(filter.fixedAbovePct) : null,
+    adaptiveOpts: opts,
+  };
+}
+
 /** Slots MA do painel esquerdo alinhados à config do favorito */
 export function buildOverlaySlotsForEntry(entry, row) {
   if (isMaCrossEntry(entry)) {
     const e = entry.entry ?? entry.tradeConfig?.entry ?? {};
     const ma1 = e.ma1 ?? { period: 9, interval: '15m' };
     const ma2 = e.ma2 ?? { period: 21, interval: ma1.interval ?? '15m' };
-    const slots = [
+    return [
       { id: 'slot1', period: String(ma1.period ?? 9), interval: ma1.interval ?? '15m', enabled: true },
       { id: 'slot2', period: String(ma2.period ?? 21), interval: ma2.interval ?? '15m', enabled: true },
     ];
-    const filters = (entry.maFilters ?? entry.tradeConfig?.maFilters ?? []).filter(f => f.enabled && f.mode !== 'off');
-    if (filters[0]) {
-      slots.push({
-        id: 'slot3',
-        period: String(filters[0].period ?? 50),
-        interval: filters[0].interval ?? '1h',
-        enabled: true,
-      });
-    }
-    return slots.slice(0, 2);
   }
   if (isRule2Row(row)) {
     const em = entry?.rule2?.entryMa ?? entry?.entryMa ?? {};
@@ -87,7 +98,7 @@ export function tradeFetchPlan(entry, row, signalMs) {
     msPerCandle,
     fetchFromMs,
     candleLimit,
-    overlaySlots: isMaCrossEntry(entry) ? null : buildOverlaySlotsForEntry(entry, row),
+    overlaySlots: buildOverlaySlotsForEntry(entry, row),
   };
 }
 
@@ -257,7 +268,8 @@ export async function loadMultitradeSymbolChart(entry, {
     interval,
     exchangeSource: src,
     markers,
-    overlaySlots: isMaCrossEntry(entry) ? null : buildOverlaySlotsForEntry(entry, null),
+    overlaySlots: buildOverlaySlotsForEntry(entry, null),
+    adaptiveBands: buildMaCrossAdaptiveBandsConfig(entry),
   });
 }
 

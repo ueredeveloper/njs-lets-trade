@@ -6,10 +6,29 @@ export const CHART_INTERVAL_OPTIONS = [
 
 export const PANEL_KEYS = ['indicators', 'stats', 'macross'];
 
+export const BAND_PCT_OPTIONS = [2, 3, 4, 5];
+
+/** Estado inicial das bandas % no gráfico (MA overlay 1). */
+export const DEFAULT_MA_BANDS = {
+  pct: 4,
+  showAbove: false,
+  showBelow: true,
+};
+
 export const DEFAULT_OVERLAY_SLOTS = [
   { id: 'slot1', period: '50', interval: '1h', enabled: true },
   { id: 'slot2', period: '50', interval: '4h', enabled: false },
 ];
+
+export function normalizeMaBandsDefaults(raw) {
+  const d = DEFAULT_MA_BANDS;
+  const pct = Number(raw?.pct);
+  return {
+    pct: BAND_PCT_OPTIONS.includes(pct) ? pct : d.pct,
+    showAbove: typeof raw?.showAbove === 'boolean' ? raw.showAbove : d.showAbove,
+    showBelow: typeof raw?.showBelow === 'boolean' ? raw.showBelow : d.showBelow,
+  };
+}
 
 export function normalizeOverlaySlots(slots) {
   if (!Array.isArray(slots) || !slots.length) {
@@ -35,6 +54,7 @@ export const DEFAULT_UI_PREFS = {
     macross: true,
   },
   overlaySlots: normalizeOverlaySlots(DEFAULT_OVERLAY_SLOTS),
+  maBandsDefaults: normalizeMaBandsDefaults(DEFAULT_MA_BANDS),
 };
 
 function cloneDefaults() {
@@ -42,6 +62,7 @@ function cloneDefaults() {
     defaultChartInterval: DEFAULT_UI_PREFS.defaultChartInterval,
     visiblePanels: { ...DEFAULT_UI_PREFS.visiblePanels },
     overlaySlots: normalizeOverlaySlots(DEFAULT_OVERLAY_SLOTS),
+    maBandsDefaults: normalizeMaBandsDefaults(DEFAULT_MA_BANDS),
   };
 }
 
@@ -63,6 +84,9 @@ export function loadUiPreferences() {
     }
     if (parsed.overlaySlots) {
       result.overlaySlots = normalizeOverlaySlots(parsed.overlaySlots);
+    }
+    if (parsed.maBandsDefaults) {
+      result.maBandsDefaults = normalizeMaBandsDefaults(parsed.maBandsDefaults);
     }
     return result;
   } catch {

@@ -32,7 +32,7 @@ const { resolveStrategy } = require('./tradeConfigSchema');
 const { STRATEGY_IDS, isMaCrossStrategy } = require('./strategyPresets');
 const {
   getRequiredSpecs, evaluateEntry, evaluateCrossSignal, evaluatePullbackReady,
-  pullbackEntryEnabled, evaluateExit, computeAdaptiveDips,
+  pullbackEntryEnabled, evaluateExit, computeAdaptiveDips, computeAdaptiveStretches,
   computeStopLossFloor, getFinestPollInterval,
 } = require('./strategyEngine');
 
@@ -592,6 +592,8 @@ async function tick(rowId, adapter, strategy, log, session) {
   const specs = getRequiredSpecs(config);
   const cMap  = await fetchCandleMap(adapter, specs);
   const adaptiveDips = computeAdaptiveDips(config, cMap);
+  const adaptiveStretches = computeAdaptiveStretches(config, cMap);
+  const evalOpts = { adaptiveStretches };
 
   const rows = await sbReq('GET', 'rsi_multi_bot_state', null, `?id=eq.${rowId}&limit=1`);
   const state = rows?.[0];
@@ -622,7 +624,7 @@ async function tick(rowId, adapter, strategy, log, session) {
       return { phase: 'WATCHING' };
     }
 
-    const ready = evaluatePullbackReady(config, cMap, adaptiveDips, pending);
+    const ready = evaluatePullbackReady(config, cMap, adaptiveDips, pending, adaptiveStretches);
     if (ready.cancel) {
       const detail = ready.pullbackVsMa2Pct != null
         ? `+${ready.aboveMa2Pct?.toFixed?.(1) ?? '?'}% MA21 (sinal +${ready.signalAboveMa2Pct?.toFixed?.(1) ?? '?'})`
@@ -681,7 +683,7 @@ async function tick(rowId, adapter, strategy, log, session) {
       return { phase };
     }
 
-    const entryCheck = evaluateEntry(config, cMap, adaptiveDips);
+    const entryCheck = evaluateEntry(config, cMap, adaptiveDips, evalOpts);
     const usePendingFallback = pullbackEntryEnabled(config) && config.execution?.immediateEntry !== true;
 
     if (entryCheck.allowed) {
