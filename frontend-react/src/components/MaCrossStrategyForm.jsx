@@ -387,10 +387,11 @@ export default function MaCrossStrategyForm({ form, patch, symbol, exchange }) {
             </label>
             {form.execution.pullbackEntry?.enabled !== false && (
               <div className="flex flex-wrap items-center gap-2 pl-4">
-                <span className="text-p5/50">Candles após sinal</span>
+                <span className="text-p5/50">Máx. candles após sinal</span>
                 <NumInput value={form.execution.pullbackEntry?.waitCandles ?? 2}
                   onChange={v => patch('execution.pullbackEntry.waitCandles', Math.max(1, Math.round(v)))}
                   min={1} max={6} step={1} className="w-12" />
+                <span className="text-p5/40 text-[10px]">entra no 1º que passar</span>
                 <label className="flex items-center gap-2 text-p5">
                   <input type="checkbox" checked={form.execution.pullbackEntry?.requirePullback !== false}
                     onChange={e => patch('execution.pullbackEntry.requirePullback', e.target.checked)} />

@@ -297,7 +297,7 @@ export default function MultitradeBacktestPanel({ entry }) {
   const [chartLoading, setChartLoading] = useState(null);
   const [focusTrade, setFocusTrade] = useState(null);
 
-  const maCross = isMaCrossStrategy(entry?.strategyId);
+  const maCross = isMaCrossEntry(entry) || isMaCrossStrategy(entry?.strategyId);
   const adaptiveFilter = useMemo(
     () => (entry?.maFilters ?? []).find(f => f.enabled !== false && f.mode === 'adaptive'),
     [entry?.maFilters],
@@ -318,15 +318,22 @@ export default function MultitradeBacktestPanel({ entry }) {
   }, [entry?.id, entry?.symbol, savedDip, savedAbove]);
 
   const tradeConfigOverride = useMemo(() => {
-    if (!appliedBounds || !entry || !adaptiveFilter) return null;
+    if (!entry || !maCross) return null;
     const form = maCrossFormFromEntry(entry);
-    const filters = form.maFilters.map(f =>
-      f.id === adaptiveFilter.id
-        ? { ...f, maxDipPct: appliedBounds.maxDipPct, maxAbovePct: appliedBounds.maxAbovePct }
-        : f,
-    );
-    return maCrossFormToPayload({ ...form, maFilters: filters });
-  }, [appliedBounds, entry, adaptiveFilter]);
+    if (appliedBounds && adaptiveFilter) {
+      const filters = form.maFilters.map(f =>
+        f.id === adaptiveFilter.id
+          ? { ...f, maxDipPct: appliedBounds.maxDipPct, maxAbovePct: appliedBounds.maxAbovePct }
+          : f,
+      );
+      return maCrossFormToPayload({ ...form, maFilters: filters });
+    }
+    // Estudo sem favorito MC: backend exige tradeConfig ad-hoc
+    if (entry.adHoc || String(entry.id || '').startsWith('adhoc:')) {
+      return maCrossFormToPayload(form);
+    }
+    return null;
+  }, [appliedBounds, entry, adaptiveFilter, maCross]);
 
   const boundsDirty = appliedBounds
     ? appliedBounds.maxDipPct !== draftDip || appliedBounds.maxAbovePct !== draftAbove

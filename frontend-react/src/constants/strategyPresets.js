@@ -199,6 +199,39 @@ export function presetFormState(strategyId) {
   return formStateFromEntry(AMAP_PRESETS[strategyId] ?? AMAP_PRESETS['amap-15m']);
 }
 
+/**
+ * Entry virtual para análise histórica MA-Cross de qualquer moeda
+ * (filtro, lista, favorito) sem precisar salvar como MC.
+ */
+export function buildAdHocMaCrossEntry(symbol, exchange = 'binance', capital = 40) {
+  const form = presetFormState('ma-cross');
+  const sym = String(symbol || '').toUpperCase();
+  return {
+    id: `adhoc:ma-cross:${sym}`,
+    adHoc: true,
+    symbol: sym,
+    exchange: exchange === 'gate' ? 'gate' : 'binance',
+    strategyId: 'ma-cross',
+    enabled: true,
+    capital: Number(capital) || 40,
+    kind: 'ma_cross',
+    entry: form.entry,
+    exit: form.exit,
+    maFilters: form.maFilters,
+    maFiltersEnabled: form.maFiltersEnabled,
+    stopLoss: form.stopLoss,
+    execution: form.execution,
+    polling: form.polling,
+    adaptiveOpts: form.adaptiveOpts,
+    volume: form.volume,
+    tradeConfig: form,
+  };
+}
+
+export function isAdHocMaCrossEntry(entry) {
+  return !!entry?.adHoc || String(entry?.id || '').startsWith('adhoc:');
+}
+
 export function normalizeStrategyId(id) {
   if (!id || id === 'flex') return 'ma-cross';
   if (STRATEGY_IDS.includes(id)) return id;

@@ -98,7 +98,7 @@ export function CurrencyProvider({ children }) {
   // 5m Trade favorites: bot RSI 5m (five_min_bot_state)
   const [fiveMTradeFavorites, setFiveMTradeFavorites] = useState([]);
 
-  /** View da tabela de moedas: gate | binance | macross | trades */
+  /** View da tabela de moedas: gate | binance | macross | trades | active */
   const [favoriteView, setFavoriteView] = useState(null);
 
   /** Incrementado ao selecionar moeda na tabela — reseta janela do chart (ex.: após botão 10 velas) */
@@ -398,8 +398,24 @@ export function CurrencyProvider({ children }) {
 
   const dismissActiveTrade = useCallback(async (symbol) => {
     try {
-      await ignoreActiveTrade(symbol);
-      setActiveTrades(prev => { const next = new Map(prev); next.delete(symbol.toUpperCase()); return next; });
+      const sym = String(symbol ?? '').toUpperCase();
+      await ignoreActiveTrade(sym);
+      setActiveTrades((prev) => {
+        const next = new Map(prev);
+        next.delete(sym);
+        // USDT/USDC entram como chaves sintéticas por exchange — ignore é por asset
+        if (sym.startsWith('USDT_') || sym === 'USDT') {
+          for (const k of [...next.keys()]) {
+            if (k === 'USDT' || k.startsWith('USDT_')) next.delete(k);
+          }
+        }
+        if (sym.startsWith('USDC_') || sym === 'USDC') {
+          for (const k of [...next.keys()]) {
+            if (k === 'USDC' || k.startsWith('USDC_')) next.delete(k);
+          }
+        }
+        return next;
+      });
     } catch (err) {
       console.warn('[CurrencyContext] dismissActiveTrade:', err.message);
     }
@@ -569,6 +585,14 @@ export function CurrencyProvider({ children }) {
       return [first, ...withoutMarket];
     });
   }, [binanceFavorites, gateFavorites]);
+
+  useEffect(() => {
+    if (activeTrades.size > 0) {
+      addFilter({ name: 'Favoritos|Ativos', list: Array.from(activeTrades.keys()) });
+    } else {
+      removeFilters(['Favoritos|Ativos']);
+    }
+  }, [activeTrades, addFilter, removeFilters]);
 
   useEffect(() => {
     const symbols = [...new Set(

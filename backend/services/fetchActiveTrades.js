@@ -179,10 +179,17 @@ router.get('/active-trades', async (req, res) => {
   }
 });
 
+function toIgnoreAsset(symbol) {
+  const s = String(symbol ?? '').toUpperCase();
+  if (s.startsWith('USDT_') || s === 'USDT') return 'USDT';
+  if (s.startsWith('USDC_') || s === 'USDC') return 'USDC';
+  return s.replace(/USDT$/, '');
+}
+
 // POST /services/active-trades/ignore  { symbol: "HYPEUSDT" }  → adiciona à lista
 router.post('/active-trades/ignore', (req, res) => {
   try {
-    const raw    = (req.body?.symbol ?? '').toUpperCase().replace(/USDT$/, '');
+    const raw = toIgnoreAsset(req.body?.symbol);
     if (!raw) return res.status(400).json({ error: 'symbol obrigatório' });
     const list = readIgnoreList();
     list.add(raw);
@@ -197,7 +204,7 @@ router.post('/active-trades/ignore', (req, res) => {
 // DELETE /services/active-trades/ignore/:symbol  → remove da lista
 router.delete('/active-trades/ignore/:symbol', (req, res) => {
   try {
-    const raw  = req.params.symbol.toUpperCase().replace(/USDT$/, '');
+    const raw = toIgnoreAsset(req.params.symbol);
     const list = readIgnoreList();
     list.delete(raw);
     writeIgnoreList(list);

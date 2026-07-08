@@ -523,12 +523,81 @@ function evaluateCrossSignal(config, cMap, adaptiveDips = {}, opts = {}) {
 }
 
 /**
- * Após N candles do sinal: pullback (close vs MA21) + teto MA2 + filtros MA.
+ * Janela de até N candles após o sinal: entrada no 1º candle que passar
+ * (pullback vs MA21 + teto MA2 + filtros MA). Não precisa esperar o N-ésimo
+ * se o 1º (ou intermediário) já qualificar.
  * pending: { signalOpenTime, signalClose }
  */
 function extensionAboveMa2(close, ma2) {
   if (ma2 == null || ma2 <= 0) return null;
   return ((parseFloat(close) / ma2) - 1) * 100;
+}
+
+function evaluatePullbackCandle(config, cMap, adaptiveDips, adaptiveStretches, {
+  entryCandle, signal, signalClose, requirePullback,
+}) {
+  const entry = config.entry;
+  const close = parseFloat(entryCandle.close);
+  const c2 = closedCandlesOnly(cMap[entry.ma2.interval] ?? []);
+  const ma2AtEntry = maValueAt(buildMaTimeSeries(c2, entry.ma2.period), entryCandle.openTime);
+  const ma2AtSignal = maValueAt(buildMaTimeSeries(c2, entry.ma2.period), signal.openTime);
+  const aboveEntryPct = extensionAboveMa2(close, ma2AtEntry);
+  const aboveSignalPct = extensionAboveMa2(signalClose, ma2AtSignal);
+
+  if (requirePullback) {
+    if (aboveEntryPct == null || aboveSignalPct == null) {
+      return { ready: false, reason: 'FILTER_NO_MA', close, ma2: ma2AtEntry };
+    }
+    // Pullback = candle de entrada mais próximo da MA21 que no sinal
+    if (aboveEntryPct >= aboveSignalPct) {
+      return {
+        ready: false,
+        reason: 'NO_PULLBACK',
+        close,
+        ma2: ma2AtEntry,
+        aboveMa2Pct: aboveEntryPct,
+        signalAboveMa2Pct: aboveSignalPct,
+        pullbackVsMa2Pct: aboveEntryPct - aboveSignalPct,
+      };
+    }
+  }
+
+  const ma2Cap = checkEntryMaxAboveMa2(close, ma2AtEntry, entry.maxAboveMaPct);
+  if (!ma2Cap.allowed) {
+    return {
+      ready: false,
+      reason: ma2Cap.reason,
+      close,
+      ma2: ma2AtEntry,
+      aboveMa2Pct: ma2Cap.aboveMa2Pct,
+    };
+  }
+
+  const filterCheck = evaluateMaFilters(close, config, cMap, adaptiveDips, adaptiveStretches);
+  if (!filterCheck.allowed) {
+    return {
+      ready: false,
+      reason: filterCheck.reason,
+      close,
+      filterMa: filterCheck.ma,
+    };
+  }
+
+  const dirLbl = entry.direction === 'cross_down' ? '↓' : '↑';
+  return {
+    ready: true,
+    close,
+    ma1: maValueAt(buildMaTimeSeries(closedCandlesOnly(cMap[entry.ma1.interval] ?? []), entry.ma1.period), entryCandle.openTime),
+    ma2: ma2AtEntry,
+    signalClose,
+    aboveMa2Pct: ma2Cap.aboveMa2Pct,
+    signalAboveMa2Pct: aboveSignalPct,
+    pullbackVsMa2Pct: aboveSignalPct != null && aboveEntryPct != null
+      ? aboveEntryPct - aboveSignalPct
+      : null,
+    entryDesc: `${crossLabel(entry.ma1)} ${dirLbl} ${crossLabel(entry.ma2)} (pullback)`,
+    entryOpenTime: entryCandle.openTime,
+  };
 }
 
 function evaluatePullbackReady(config, cMap, adaptiveDips, pending, adaptiveStretches = {}) {
@@ -549,87 +618,71 @@ function evaluatePullbackReady(config, cMap, adaptiveDips, pending, adaptiveStre
     return { ready: false, reason: 'SIGNAL_LOST', cancel: true };
   }
 
-  const entryIdx = idx + wait;
+  const windowEnd = idx + wait;
   const lastIdx = candles.length - 1;
-  if (lastIdx < entryIdx) {
+  if (lastIdx <= idx) {
+    return {
+      ready: false,
+      reason: 'WAITING_CANDLES',
+      waited: 0,
+      need: wait,
+      cancel: false,
+    };
+  }
+  if (lastIdx > windowEnd) {
+    return { ready: false, reason: 'ENTRY_WINDOW_PASSED', cancel: true };
+  }
+
+  const signal = candles[idx];
+  const signalClose = parseFloat(pending.signalClose ?? signal.close);
+  const evalEnd = Math.min(lastIdx, windowEnd);
+  let lastReject = null;
+
+  // Entrada precoce: 1º candle da janela [idx+1 .. idx+wait] que passar
+  for (let entryIdx = idx + 1; entryIdx <= evalEnd; entryIdx++) {
+    const result = evaluatePullbackCandle(config, cMap, adaptiveDips, adaptiveStretches, {
+      entryCandle: candles[entryIdx],
+      signal,
+      signalClose,
+      requirePullback,
+    });
+    if (result.ready) {
+      return {
+        ...result,
+        waited: entryIdx - idx,
+        need: wait,
+      };
+    }
+    lastReject = result;
+  }
+
+  // Ainda faltam candles na janela → segue aguardando (não cancela no 1º rejeite)
+  if (lastIdx < windowEnd) {
     return {
       ready: false,
       reason: 'WAITING_CANDLES',
       waited: lastIdx - idx,
       need: wait,
       cancel: false,
-    };
-  }
-  if (lastIdx > entryIdx) {
-    return { ready: false, reason: 'ENTRY_WINDOW_PASSED', cancel: true };
-  }
-
-  const signal = candles[idx];
-  const entryCandle = candles[entryIdx];
-  const close = parseFloat(entryCandle.close);
-  const signalClose = parseFloat(pending.signalClose ?? signal.close);
-
-  const c2 = closedCandlesOnly(cMap[entry.ma2.interval] ?? []);
-  const ma2AtEntry = maValueAt(buildMaTimeSeries(c2, entry.ma2.period), entryCandle.openTime);
-  const ma2AtSignal = maValueAt(buildMaTimeSeries(c2, entry.ma2.period), signal.openTime);
-  const aboveEntryPct = extensionAboveMa2(close, ma2AtEntry);
-  const aboveSignalPct = extensionAboveMa2(signalClose, ma2AtSignal);
-
-  if (requirePullback) {
-    if (aboveEntryPct == null || aboveSignalPct == null) {
-      return { ready: false, reason: 'FILTER_NO_MA', cancel: true, close, ma2: ma2AtEntry };
-    }
-    // Pullback = candle de entrada mais próximo da MA21 que no sinal
-    if (aboveEntryPct >= aboveSignalPct) {
-      return {
-        ready: false,
-        reason: 'NO_PULLBACK',
-        cancel: true,
-        close,
-        ma2: ma2AtEntry,
-        aboveMa2Pct: aboveEntryPct,
-        signalAboveMa2Pct: aboveSignalPct,
-        pullbackVsMa2Pct: aboveEntryPct - aboveSignalPct,
-      };
-    }
-  }
-
-  const ma2Cap = checkEntryMaxAboveMa2(close, ma2AtEntry, entry.maxAboveMaPct);
-  if (!ma2Cap.allowed) {
-    return {
-      ready: false,
-      reason: ma2Cap.reason,
-      cancel: true,
-      close,
-      ma2: ma2AtEntry,
-      aboveMa2Pct: ma2Cap.aboveMa2Pct,
+      lastRejectReason: lastReject?.reason ?? null,
+      aboveMa2Pct: lastReject?.aboveMa2Pct,
+      signalAboveMa2Pct: lastReject?.signalAboveMa2Pct,
     };
   }
 
-  const filterCheck = evaluateMaFilters(close, config, cMap, adaptiveDips, adaptiveStretches);
-  if (!filterCheck.allowed) {
-    return {
-      ready: false,
-      reason: filterCheck.reason,
-      cancel: true,
-      close,
-      filterMa: filterCheck.ma,
-    };
-  }
-
-  const dirLbl = entry.direction === 'cross_down' ? '↓' : '↑';
+  // Último candle da janela também falhou → cancela
   return {
-    ready: true,
-    close,
-    ma1: maValueAt(buildMaTimeSeries(closedCandlesOnly(cMap[entry.ma1.interval] ?? []), entry.ma1.period), entryCandle.openTime),
-    ma2: ma2AtEntry,
-    signalClose,
-    aboveMa2Pct: ma2Cap.aboveMa2Pct,
-    signalAboveMa2Pct: aboveSignalPct,
-    pullbackVsMa2Pct: aboveSignalPct != null && aboveEntryPct != null
-      ? aboveEntryPct - aboveSignalPct
-      : null,
-    entryDesc: `${crossLabel(entry.ma1)} ${dirLbl} ${crossLabel(entry.ma2)} (pullback)`,
+    ready: false,
+    reason: lastReject?.reason ?? 'NO_PULLBACK',
+    cancel: true,
+    close: lastReject?.close,
+    ma2: lastReject?.ma2,
+    filterMa: lastReject?.filterMa,
+    aboveMa2Pct: lastReject?.aboveMa2Pct,
+    signalAboveMa2Pct: lastReject?.signalAboveMa2Pct,
+    pullbackVsMa2Pct: lastReject?.pullbackVsMa2Pct,
+    waited: wait,
+    need: wait,
   };
 }
 

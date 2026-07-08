@@ -952,7 +952,7 @@ export async function suggestMultitradeEntryMa({
   return res.json();
 }
 
-/** Backtest histórico AMAP (moeda deve estar no Multi-Trade). */
+/** Backtest histórico MA-Cross / AMAP. Com tradeConfig, funciona sem favorito MC. */
 export async function fetchMultitradeBacktest({ symbol, exchange, capital, strategyId, tradeConfig } = {}) {
   const params = new URLSearchParams({ symbol: symbol.toUpperCase() });
   if (exchange) params.set('exchange', exchange);
@@ -960,10 +960,6 @@ export async function fetchMultitradeBacktest({ symbol, exchange, capital, strat
   if (strategyId) params.set('strategy_id', strategyId);
   if (tradeConfig) params.set('tradeConfig', JSON.stringify(tradeConfig));
   const res = await fetch(`/services/sb/multitrade-backtest?${params}`);
-  if (res.status === 404) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.error ?? 'Moeda não está no Multi-Trade');
-  }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error ?? `multitrade-backtest falhou: HTTP ${res.status}`);

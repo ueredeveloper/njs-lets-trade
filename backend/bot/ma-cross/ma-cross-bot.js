@@ -638,7 +638,10 @@ async function tick(rowId, adapter, strategy, log, session) {
         if (!session.lastPendingLogAt || now - session.lastPendingLogAt >= PENDING_LOG_INTERVAL_MS) {
           session.lastPendingLogAt = now;
           const wait = config.execution?.pullbackEntry?.waitCandles ?? 2;
-          log(`${Y}⏳ Aguardando pullback — candle ${ready.waited}/${wait} após cruzamento${X}`);
+          const reject = ready.lastRejectReason
+            ? ` (último: ${PENDING_CANCEL_LABELS[ready.lastRejectReason] ?? ready.lastRejectReason})`
+            : '';
+          log(`${Y}⏳ Aguardando pullback — candle ${ready.waited}/${wait} após cruzamento${reject}${X}`);
         }
       }
       return { phase: 'PENDING' };
@@ -706,9 +709,9 @@ async function tick(rowId, adapter, strategy, log, session) {
       if (entryCheck.reason === ENTRY_CAP_LOG_REASON) {
         const pct = entryCheck.aboveMa2Pct != null ? entryCheck.aboveMa2Pct.toFixed(1) : '?';
         const cap = entryCheck.maxAboveMaPct ?? '?';
-        log(`${G}📍 Cruzamento (${crossCheck.entryDesc}) — +${pct}% MA21 (máx ${cap}%) → pending pullback (${wait} candles)${X}`);
+        log(`${G}📍 Cruzamento (${crossCheck.entryDesc}) — +${pct}% MA21 (máx ${cap}%) → pending pullback (até ${wait} candles)${X}`);
       } else {
-        log(`${G}📍 Cruzamento (${crossCheck.entryDesc}) — aguardando pullback (${wait} candles)${X}`);
+        log(`${G}📍 Cruzamento (${crossCheck.entryDesc}) — aguardando pullback (até ${wait} candles)${X}`);
       }
       return { phase: 'PENDING' };
     }

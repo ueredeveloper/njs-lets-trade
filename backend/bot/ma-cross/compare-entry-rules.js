@@ -151,25 +151,34 @@ function tryPendingOldSignal(config, cMap, _dips, crossTime, crossClose) {
     },
   };
   const wait = config.execution?.pullbackEntry?.waitCandles ?? 2;
-  const entryOpenTime = crossTime + wait * 900_000;
-  const slice = sliceAtClosed(cMap, entryOpenTime);
+  // Avalia no fim da janela (early-entry still picks 1º candle válido)
+  const windowEndOpen = crossTime + wait * 900_000;
+  const slice = sliceAtClosed(cMap, windowEndOpen);
   const ready = evaluatePullbackReady(noPb, slice, computeAdaptiveDips(config, slice), {
     signalOpenTime: crossTime, signalClose: crossClose,
   });
   if (!ready.ready) return { blocked: true, reason: ready.reason };
   if (ready.close >= crossClose) return { blocked: true, reason: 'NO_PULLBACK' };
-  return { entryTime: entryOpenTime, entryPrice: ready.close, mode: 'pending-old' };
+  return {
+    entryTime: ready.entryOpenTime ?? windowEndOpen,
+    entryPrice: ready.close,
+    mode: 'pending-old',
+  };
 }
 
 function tryPending(config, cMap, _dips, crossTime, crossClose) {
   const wait = config.execution?.pullbackEntry?.waitCandles ?? 2;
-  const entryOpenTime = crossTime + wait * 900_000;
-  const slice = sliceAtClosed(cMap, entryOpenTime);
+  const windowEndOpen = crossTime + wait * 900_000;
+  const slice = sliceAtClosed(cMap, windowEndOpen);
   const dipsAtEntry = computeAdaptiveDips(config, slice);
   const pending = { signalOpenTime: crossTime, signalClose: crossClose };
   const ready = evaluatePullbackReady(config, slice, dipsAtEntry, pending);
   if (!ready.ready) return { blocked: true, reason: ready.reason };
-  return { entryTime: entryOpenTime, entryPrice: ready.close, mode: 'pending' };
+  return {
+    entryTime: ready.entryOpenTime ?? windowEndOpen,
+    entryPrice: ready.close,
+    mode: 'pending',
+  };
 }
 
 function tryHybrid(config, cMap, dips, crossTime, crossClose) {

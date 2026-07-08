@@ -15,6 +15,7 @@ import MacrossFavSortSelect from './MacrossFavSortSelect';
 import {
   STRATEGY_IDS, STRATEGY_LABELS, STRATEGY_COLORS,
   getEntriesForSymbol, normalizeStrategyId, strategyBadgeLabel,
+  buildAdHocMaCrossEntry, isAdHocMaCrossEntry,
 } from '../constants/strategyPresets';
 import { useI18n } from '../i18n';
 
@@ -40,7 +41,7 @@ function fmtBuyTime(iso) {
 export default function MultitradePanel() {
   const { t } = useI18n();
   const {
-    multitradeFavorites, selectedChart,
+    multitradeFavorites, selectedChart, gateFavorites,
     saveMultitradeSymbol, removeMultitradeEntry,
     applyMultitradeSymbolChart, updateMultitradeBotState,
   } = useCurrency();
@@ -53,6 +54,9 @@ export default function MultitradePanel() {
   const [macrossFavSort, setMacrossFavSort] = useState(() => loadMacrossFavSort());
 
   const chartSymbol = selectedChart?.symbol?.toUpperCase?.() ?? null;
+  const chartExchange = selectedChart?.source === 'gate' || (chartSymbol && gateFavorites.has(chartSymbol))
+    ? 'gate'
+    : 'binance';
   const grouped = useMemo(() => groupBySymbol(multitradeFavorites), [multitradeFavorites]);
 
   const macrossFavSymbols = useMemo(() => (
@@ -75,21 +79,28 @@ export default function MultitradePanel() {
     }));
   }, [macrossFavSymbols, macrossFavSort, macrossFavStatus, macrossEntriesBySymbol]);
 
+  // Preferência: favorito MC salvo; senão estudo ad-hoc da moeda do gráfico / lista
   const backtestEntry = useMemo(() => {
     const sym = chartSymbol ?? pickedSymbol;
     if (!sym) return null;
-    const entries = getEntriesForSymbol(multitradeFavorites, sym).filter(e => e.enabled !== false);
-    if (!entries.length) return null;
-    return entries.find(e => normalizeStrategyId(e.strategyId) === pickedStrategy)
-      ?? entries[0];
-  }, [chartSymbol, pickedSymbol, pickedStrategy, multitradeFavorites]);
+    const entries = getEntriesForSymbol(multitradeFavorites, sym)
+      .filter(e => e.enabled !== false && isMaCrossEntry(e));
+    if (entries.length) {
+      return entries.find(e => normalizeStrategyId(e.strategyId) === pickedStrategy)
+        ?? entries[0];
+    }
+    const exchange = (chartSymbol === sym ? chartExchange : null)
+      ?? (gateFavorites.has(sym) ? 'gate' : 'binance');
+    return buildAdHocMaCrossEntry(sym, exchange);
+  }, [chartSymbol, chartExchange, pickedSymbol, pickedStrategy, multitradeFavorites, gateFavorites]);
 
   const activeSymbol = backtestEntry?.symbol ?? pickedSymbol ?? chartSymbol;
+  const isAdHocStudy = isAdHocMaCrossEntry(backtestEntry);
 
   const chartLoadRef = useRef(0);
 
   useEffect(() => {
-    if (!backtestEntry?.symbol) return;
+    if (!backtestEntry?.symbol || isAdHocStudy) return;
     const loadId = ++chartLoadRef.current;
     loadMultitradeSymbolChart(backtestEntry, {
       fetchCandlesticksAndCloud,
@@ -100,7 +111,12 @@ export default function MultitradePanel() {
         console.warn('[MultitradePanel] chart:', err.message);
       }
     });
-  }, [backtestEntry?.id, backtestEntry?.symbol, backtestEntry?.strategyId, backtestEntry?.phase, backtestEntry?.buyTime, applyMultitradeSymbolChart]);
+  }, [backtestEntry?.id, backtestEntry?.symbol, backtestEntry?.strategyId, backtestEntry?.phase, backtestEntry?.buyTime, applyMultitradeSymbolChart, isAdHocStudy]);
+
+  // Sync pickedSymbol com a moeda selecionada na tabela (qualquer filtro/favorito)
+  useEffect(() => {
+    if (chartSymbol) setPickedSymbol(chartSymbol);
+  }, [chartSymbol]);
 
   function pickFavorite(sym) {
     setPickedSymbol(sym);
@@ -268,26 +284,24 @@ export default function MultitradePanel() {
       )}
 
       <div className="multitrade-panel-body flex-1 min-h-0 flex flex-col">
-        {symbolList.length === 0 ? (
-          <div className="multitrade-panel-empty flex flex-col items-center justify-center flex-1 gap-2 py-12">
-            <span className="text-xs text-p5/30">Nenhuma moeda configurada</span>
-            <span className="text-[10px] text-p5/20">Use o botão MC na tabela ou + Adicionar</span>
-          </div>
-        ) : !backtestEntry ? (
+        {!backtestEntry ? (
           <div className="multitrade-panel-empty flex flex-col items-center justify-center flex-1 gap-2 py-12 px-4 text-center">
-            <span className="text-xs text-p5/40">Selecione uma favorita MA-Cross</span>
-            <button
-              type="button"
-              id="multitrade-panel-btn-open-favorites"
-              onClick={() => setFavOpen(true)}
-              className="text-[10px] px-3 py-1.5 rounded font-semibold"
-              style={{ background: `${MT_COLOR}22`, color: MT_COLOR, border: `1px solid ${MT_COLOR}55` }}>
-              ★ Abrir favoritas
-            </button>
+            <span className="text-xs text-p5/40">Selecione uma moeda em qualquer lista</span>
+            <span className="text-[10px] text-p5/25">Clique numa linha da tabela ou abra ★ Favoritas</span>
+            {symbolList.length > 0 && (
+              <button
+                type="button"
+                id="multitrade-panel-btn-open-favorites"
+                onClick={() => setFavOpen(true)}
+                className="text-[10px] px-3 py-1.5 rounded font-semibold mt-1"
+                style={{ background: `${MT_COLOR}22`, color: MT_COLOR, border: `1px solid ${MT_COLOR}55` }}>
+                ★ Abrir favoritas
+              </button>
+            )}
           </div>
         ) : (
           <>
-          {backtestEntry && (
+          {backtestEntry && !isAdHocStudy && (
             <div className="flex items-center gap-1.5 px-2 py-1 border-b border-p2 shrink-0 flex-wrap">
               {(() => {
                 const ph = multitradePhaseBadge(backtestEntry.phase);
@@ -314,7 +328,26 @@ export default function MultitradePanel() {
               })()}
             </div>
           )}
-            {activeSymbol && (grouped.get(activeSymbol)?.filter(e => e.enabled !== false).length ?? 0) > 1 && (
+          {isAdHocStudy && (
+            <div className="flex items-center gap-1.5 px-2 py-1 border-b border-p2 shrink-0 flex-wrap">
+              <span className="text-[8px] font-bold px-1.5 py-0.5 rounded"
+                style={{ background: 'rgba(34,211,238,0.12)', color: MT_COLOR, border: `1px solid ${MT_COLOR}44` }}>
+                Estudo
+              </span>
+              <span className="text-[9px] text-p5/45 font-mono truncate">
+                preset MA Cross — não é favorito MC
+              </span>
+              <button
+                type="button"
+                className="text-[8px] font-semibold px-1.5 py-0.5 rounded ml-auto"
+                style={{ background: MT_COLOR, color: '#0f172a' }}
+                onClick={() => setEditingSymbol(backtestEntry.symbol)}
+                title="Salvar como favorito MA-Cross">
+                + Salvar MC
+              </button>
+            </div>
+          )}
+            {activeSymbol && !isAdHocStudy && (grouped.get(activeSymbol)?.filter(e => e.enabled !== false).length ?? 0) > 1 && (
               <div className="flex gap-1 px-2 py-1.5 border-b border-p2 shrink-0">
                 {(grouped.get(activeSymbol) ?? [])
                   .filter(e => e.enabled !== false)
@@ -352,7 +385,11 @@ export default function MultitradePanel() {
       {editingSymbol && (
         <MultitradeModal
           symbol={editingSymbol}
-          defaultExchange={grouped.get(editingSymbol)?.[0]?.exchange ?? 'binance'}
+          defaultExchange={
+            grouped.get(editingSymbol)?.[0]?.exchange
+            ?? (backtestEntry?.symbol === editingSymbol ? backtestEntry.exchange : null)
+            ?? 'binance'
+          }
           currentEntries={grouped.get(editingSymbol) ?? []}
           onConfirm={async ({ saves }) => { await saveMultitradeSymbol({ saves }); setEditingSymbol(null); }}
           onRemove={async () => {

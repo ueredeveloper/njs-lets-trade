@@ -59,7 +59,7 @@ const MA_CROSS_DEFAULTS = {
     pendingTimeoutMs:     90 * 60_000,
     pendingCancelPct:     0.002,
     pendingCancelOnExitRsi: true,
-    /** Espera N candles após cruzamento + pullback antes de comprar. */
+    /** Janela de até N candles após cruzamento; compra no 1º que passar (pullback + teto). */
     pullbackEntry: {
       enabled:         true,
       waitCandles:     2,

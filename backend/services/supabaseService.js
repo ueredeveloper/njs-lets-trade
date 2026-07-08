@@ -1726,37 +1726,65 @@ async function fetchCandlesForEval(exchange, symbol, interval, limit) {
 }
 
 // GET /services/sb/multitrade-backtest?symbol=ARUSDT&exchange=binance&capital=40
+// Aceita tradeConfig ad-hoc (estudo sem favorito MC) — preferencialmente strategy ma-cross.
 router.get('/multitrade-backtest', getUserId, async (req, res) => {
   const sym = req.query.symbol?.toUpperCase();
   if (!sym) return res.status(400).json({ error: 'symbol obrigatório' });
 
-  const strategyId = req.query.strategy_id ?? req.query.strategyId ?? null;
+  const strategyIdRaw = req.query.strategy_id ?? req.query.strategyId ?? null;
+  const strategyId = strategyIdRaw === 'flex' ? 'amap-15m' : strategyIdRaw;
+
+  let parsedOverride = null;
+  if (req.query.tradeConfig) {
+    try {
+      parsedOverride = JSON.parse(req.query.tradeConfig);
+    } catch {
+      return res.status(400).json({ error: 'tradeConfig JSON inválido' });
+    }
+  }
+
   let q = supabase
     .from('multitrade_favorites')
     .select('*')
     .eq('user_id', req.userId)
     .eq('symbol', sym);
-  if (strategyId) q = q.eq('strategy_id', strategyId === 'flex' ? 'amap-15m' : strategyId);
+  if (strategyId) q = q.eq('strategy_id', strategyId);
   else q = q.eq('enabled', true).order('created_at').limit(1);
 
   const { data, error } = await q.maybeSingle();
-
   if (error) return sbError(res, error, 'GET multitrade-backtest');
-  if (!data) return res.status(404).json({ error: 'Moeda não está no Multi-Trade' });
+
+  // Estudo ad-hoc: sem favorito, mas com tradeConfig (preset ou override da UI)
+  if (!data) {
+    const sid = strategyId ?? 'ma-cross';
+    if (!isMaCrossStrategy(sid)) {
+      return res.status(404).json({ error: 'Moeda não está no Multi-Trade' });
+    }
+    if (!parsedOverride) {
+      return res.status(400).json({
+        error: 'tradeConfig obrigatório para estudo MA-Cross sem favorito',
+      });
+    }
+    const exchange = req.query.exchange ?? 'binance';
+    const capital  = Number(req.query.capital ?? 40);
+    try {
+      const config = buildMaCrossTradeConfig(parsedOverride);
+      const result = await runMaCrossBacktest({ symbol: sym, config, exchange, capital });
+      if (result.error) return res.status(502).json(result);
+      return res.json(result);
+    } catch (err) {
+      return res.status(500).json({ error: err.message });
+    }
+  }
 
   const entry    = multitradeToEntry(data);
   let config   = entry.tradeConfig ?? toEngineConfig(normalizeTradeConfig(resolveConfigBody(data)));
   const exchange = req.query.exchange ?? entry.exchange ?? 'binance';
   const capital  = Number(req.query.capital ?? entry.capital ?? 40);
 
-  if (req.query.tradeConfig) {
-    try {
-      const override = JSON.parse(req.query.tradeConfig);
-      if (isMaCrossStrategy(entry.strategyId)) {
-        config = buildMaCrossTradeConfig(override);
-      }
-    } catch {
-      return res.status(400).json({ error: 'tradeConfig JSON inválido' });
+  if (parsedOverride) {
+    if (isMaCrossStrategy(entry.strategyId)) {
+      config = buildMaCrossTradeConfig(parsedOverride);
     }
   }
 

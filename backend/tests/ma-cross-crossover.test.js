@@ -444,7 +444,7 @@ describe('MA Cross — entrada pullback', () => {
     }));
   }
 
-  test('aguarda N candles antes de avaliar', () => {
+  test('aguarda candles se janela ainda não fechou e 1º não passou', () => {
     const closes = Array(25).fill(100);
     closes.push(100, 100, 101);
     const candles = flatCandles(closes);
@@ -457,7 +457,20 @@ describe('MA Cross — entrada pullback', () => {
     expect(r.need).toBe(2);
   });
 
-  test('compra quando há pullback em direção à MA21', () => {
+  test('compra no 1º candle se já houver pullback (não espera o 2º)', () => {
+    const closes = Array(25).fill(100);
+    closes.push(102, 101, 103, 104);
+    const candles = flatCandles(closes);
+    const signalOpenTime = candles[25].openTime;
+    const pending = { signalOpenTime, signalClose: 102 };
+    const r = evaluatePullbackReady(baseConfig, { '15m': candles }, {}, pending);
+    expect(r.ready).toBe(true);
+    expect(r.close).toBe(101);
+    expect(r.waited).toBe(1);
+    expect(r.pullbackVsMa2Pct).toBeLessThan(0);
+  });
+
+  test('compra no 2º candle se o 1º não passou', () => {
     const closes = Array(25).fill(100);
     closes.push(102, 103, 101, 104);
     const candles = flatCandles(closes);
@@ -466,10 +479,11 @@ describe('MA Cross — entrada pullback', () => {
     const r = evaluatePullbackReady(baseConfig, { '15m': candles }, {}, pending);
     expect(r.ready).toBe(true);
     expect(r.close).toBe(101);
+    expect(r.waited).toBe(2);
     expect(r.pullbackVsMa2Pct).toBeLessThan(0);
   });
 
-  test('cancela se entrada não aproxima da MA21 vs sinal', () => {
+  test('cancela se nenhum candle da janela aproxima da MA21', () => {
     const closes = Array(25).fill(100);
     closes.push(101, 102, 103, 104);
     const candles = flatCandles(closes);

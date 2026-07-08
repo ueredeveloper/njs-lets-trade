@@ -39,8 +39,13 @@ const GATE_COLOR    = '#0068ff';
 const BINANCE_COLOR = '#fcd535';
 const MT_COLOR      = '#22d3ee';
 const TRADE_COLOR   = '#00c076';
+const ACTIVE_COLOR  = '#f59e0b';
 const ALTA_COLOR    = '#f97316';
 const NOVAS_COLOR   = '#a78bfa';
+
+/** Chaves sintéticas de USDT/USDC por exchange (não são pares negociáveis). */
+const STABLE_ACTIVE_KEYS = ['USDT_GATE', 'USDT_BNB', 'USDC_GATE', 'USDC_BNB'];
+const STABLE_ACTIVE_SET = new Set(STABLE_ACTIVE_KEYS);
 
 const HIGHLIGHT_FILTERS = {
   ALTA_BINANCE: 'Favoritos|Alta|Binance',
@@ -252,6 +257,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     gateFavorites, binanceFavorites,
     toggleGateFavorite, toggleBinanceFavorite,
     setTradePurchases, setAllTrades,
+    activeTrades, refreshActiveTrades, dismissActiveTrade,
     multitradeFavorites, removeMultitradeEntry, saveMultitradeSymbol, updateMultitradeBotState,
     filterVisibleCurrencies, isVisibleSymbol, addFilter,
     ensureMarketHighlights, marketHighlightsLoading,
@@ -291,6 +297,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
 
   const isMacrossFavView = favoriteView === 'macross';
   const isTradesFavView = favoriteView === 'trades';
+  const isActiveFavView = favoriteView === 'active';
   const isAltaFilter = activeFilter?.startsWith('Favoritos|Alta|') ?? false;
   const isNovasFilter = activeFilter?.startsWith('Favoritos|Novas|') ?? false;
   const isFavVolumeContext = !!favoriteView || isAltaFilter || isNovasFilter;
@@ -372,6 +379,19 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
       for (const sym of filtered) {
         if (!have.has(sym)) list.push({ symbol: sym, price: 0, volume: 0 });
       }
+    } else if (favoriteView === 'active') {
+      const activeSymbols = [...activeTrades.keys()].filter((sym) => !STABLE_ACTIVE_SET.has(sym));
+      list = resolveFavorites(new Set(activeSymbols), currencies.list, gateAll);
+      const have = new Set(list.map((c) => c.symbol));
+      for (const sym of activeSymbols) {
+        if (have.has(sym)) continue;
+        const info = activeTrades.get(sym);
+        list.push({
+          symbol: sym,
+          price: info?.buyPrice ?? 0,
+          volume: 0,
+        });
+      }
     } else if (activeFilter) {
       const filter = findFilter(activeFilter);
       if (filter) {
@@ -421,7 +441,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     }
 
     return list;
-  }, [currencies, activeFilter, selectedQuote, findFilter, search, favoriteView, gateFavorites, binanceFavorites, multitradeFavorites, sortVolume, gateAll, filterVisibleCurrencies, isVisibleSymbol, activeMacrossFilter, macrossScannedAt, macrossTick, isMacrossFavView, macrossFavSort, macrossFavStatus, macrossEntriesBySymbol, isTradesFavView, tradeFavSort, tradeFavSymbols, tradeFavStatus, isAltaFilter, isNovasFilter, highlightMeta]);
+  }, [currencies, activeFilter, selectedQuote, findFilter, search, favoriteView, gateFavorites, binanceFavorites, multitradeFavorites, sortVolume, gateAll, filterVisibleCurrencies, isVisibleSymbol, activeMacrossFilter, macrossScannedAt, macrossTick, isMacrossFavView, macrossFavSort, macrossFavStatus, macrossEntriesBySymbol, isTradesFavView, tradeFavSort, tradeFavSymbols, tradeFavStatus, isActiveFavView, activeTrades, isAltaFilter, isNovasFilter, highlightMeta]);
 
   const { slice: visibleRows, paddingTop, paddingBottom } = useVirtualRows({
     items: rows,
@@ -519,7 +539,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     return () => { cancelled = true; };
   }, [search, currencies.list, isVisibleSymbol]);
 
-  // Pré-carrega Gate.io — necessário para favoritos G, MC, TX e filtros Gate
+  // Pré-carrega Gate.io — necessário para favoritos G, MC, TX, AT e filtros Gate
   useEffect(() => {
     if (gateCacheRef.current) { setGateAll(gateCacheRef.current); return; }
     fetchGateCurrencies().then((items) => {
@@ -530,7 +550,8 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
 
   // Recarrega Gate quando filtros de mercado/favoritos Gate exigem fallback
   useEffect(() => {
-    const needGate = favoriteView === 'gate' || favoriteView === 'macross' || favoriteView === 'trades'
+    const needGate = favoriteView === 'gate' || favoriteView === 'macross'
+      || favoriteView === 'trades' || favoriteView === 'active'
       || needsGateFallback(activeFilter);
     if (!needGate) return;
     if (gateCacheRef.current) { setGateAll(gateCacheRef.current); return; }
@@ -539,6 +560,19 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
       setGateAll(items);
     }).catch(() => {});
   }, [favoriteView, activeFilter]);
+
+  // Carrega e refresca saldos reais a cada 30s enquanto o filtro AT estiver ativo
+  useEffect(() => {
+    if (favoriteView !== 'active') return undefined;
+    refreshActiveTrades();
+    const id = setInterval(refreshActiveTrades, 30_000);
+    return () => clearInterval(id);
+  }, [favoriteView, refreshActiveTrades]);
+
+  // Contagem AT no toolbar: um carregamento inicial (sem poll contínuo)
+  useEffect(() => {
+    refreshActiveTrades();
+  }, [refreshActiveTrades]);
 
   async function handleSelect(item, source = null) {
     onSelectCurrency?.();
@@ -645,6 +679,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   const gateCount    = gateFavorites.size;
   const binanceCount = binanceFavorites.size;
   const tradeCount   = tradeFavSymbols.length;
+  const activeCount  = activeTrades.size;
   const mtCount      = new Set(
     multitradeFavorites.filter(e => e.enabled !== false && isMaCrossEntry(e)).map(e => e.symbol),
   ).size;
@@ -703,6 +738,15 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
         </div>
 
         <div className="flex gap-1.5 overflow-x-auto pb-0.5 -mx-1 px-1 scrollbar-thin touch-pan-x">
+          <ToolbarBtn
+            id="currency-table-btn-filter-active"
+            active={favoriteView === 'active'}
+            color={ACTIVE_COLOR}
+            label="AT"
+            count={activeCount}
+            title={favoriteView === 'active' ? t('fav.toolbar.active_on') : t('fav.toolbar.active', activeCount)}
+            onClick={() => handleToggleFavoriteView('active')}
+          />
           <ToolbarBtn
             id="currency-table-btn-filter-trades"
             active={favoriteView === 'trades'}
@@ -905,12 +949,55 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
               </tr>
             )}
 
+            {isActiveFavView && STABLE_ACTIVE_KEYS.map((key) => {
+              const info = activeTrades.get(key);
+              if (!info) return null;
+              const label = key.startsWith('USDT') ? 'USDT' : 'USDC';
+              const exchangeLabel = info.exchange === 'gate'
+                ? t('fav.active.exchange_gate')
+                : t('fav.active.exchange_bnb');
+              return (
+                <tr key={key} className="lt-table-row border-b border-p2/30 bg-amber-500/10 text-p5">
+                  <td
+                    className="pl-1 pr-0"
+                    style={{ width: favColWidth, minWidth: favColWidth }}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <button
+                      type="button"
+                      title={t('fav.active.dismiss')}
+                      onClick={() => dismissActiveTrade(key)}
+                      className="text-[10px] opacity-40 hover:opacity-90 px-1"
+                    >
+                      ×
+                    </button>
+                  </td>
+                  <td className="px-2 py-1.5 font-mono font-semibold">
+                    <div className="flex flex-col gap-0.5 min-w-0">
+                      <span>
+                        {label}
+                        <span className="opacity-40 font-normal text-[8px]">/USDT</span>
+                      </span>
+                      <span className="text-[9px] font-normal text-p5/50">{exchangeLabel}</span>
+                    </div>
+                  </td>
+                  <td className="px-2 py-1.5 text-right font-mono">1.00</td>
+                  <td className="px-2 py-1.5 text-right font-mono text-[10px] opacity-60">
+                    {formatVolume(info.buyQty)}
+                  </td>
+                  <td />
+                </tr>
+              );
+            })}
+
             {visibleRows.map((item) => {
               const { base, quote } = splitSymbol(item.symbol);
               const isGate     = gateFavorites.has(item.symbol);
               const isBinance  = binanceFavorites.has(item.symbol);
               const mtEntries  = getMaCrossEntries(multitradeFavorites, item.symbol);
               const isMT       = mtEntries.some(e => e.enabled !== false);
+              const activeInfo = activeTrades.get(item.symbol);
+              const isActiveHolding = !!activeInfo;
               const tradeMeta  = isTradesFavView ? tradeFavStatus[item.symbol] : null;
               const tradePnl   = tradeMeta ? tradePnlForSort(tradeMeta, tradeFavSort) : null;
               const tradePnlLabel = formatTradePnlBadge(tradePnl);
@@ -918,6 +1005,9 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
               const changePct = highlightMeta?.changePct?.[item.symbol];
               const listedAt = highlightMeta?.listedAt?.[item.symbol];
               const highlightVol = highlightMeta?.volume24h?.[item.symbol] ?? item.volume;
+              const holdingUsdt = isActiveHolding && activeInfo.buyQty && item.price
+                ? activeInfo.buyQty * parseFloat(item.price)
+                : (isActiveHolding ? activeInfo.buyQty : null);
 
               return (
                 <tr
@@ -926,6 +1016,8 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                   className={`lt-table-row cursor-pointer transition-colors ${
                     activeRow === item.symbol
                       ? 'bg-p2/80 text-white'
+                      : isActiveFavView || isActiveHolding
+                      ? 'bg-amber-500/10 hover:bg-amber-500/20 text-p5'
                       : isTradesFavView
                       ? 'bg-emerald-500/10 hover:bg-emerald-500/20 text-p5'
                       : isMT
@@ -950,7 +1042,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
 
                   <td className="px-2 py-1.5 font-mono font-semibold">
                     <div className="flex flex-col gap-0.5 min-w-0">
-                      {isMT && !isTradesFavView ? (() => {
+                      {isMT && !isTradesFavView && !isActiveFavView ? (() => {
                         const mtPhase = symbolPhaseSummary(mtEntries);
                         const mtPh = multitradePhaseBadge(mtPhase);
                         const bought = mtEntries.find(e => e.phase === 'BOUGHT' && e.buyTime);
@@ -979,6 +1071,24 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                         );
                       })() : (
                         <span>{base}<span className="opacity-40 font-normal text-[8px]">/{quote}</span></span>
+                      )}
+                      {isActiveFavView && activeInfo && (
+                        <span className="flex items-center gap-1 text-[9px] font-normal" style={{ color: ACTIVE_COLOR }}>
+                          <span>
+                            {activeInfo.exchange === 'gate' ? t('fav.active.exchange_gate')
+                              : activeInfo.exchange === 'binance' ? t('fav.active.exchange_bnb')
+                              : 'Gate+Bnb'}
+                            {holdingUsdt != null ? ` · $${holdingUsdt.toFixed(2)}` : ''}
+                          </span>
+                          <button
+                            type="button"
+                            title={t('fav.active.dismiss')}
+                            onClick={(e) => { e.stopPropagation(); dismissActiveTrade(item.symbol); }}
+                            className="opacity-50 hover:opacity-100 leading-none"
+                          >
+                            ×
+                          </button>
+                        </span>
                       )}
                       {isTradesFavView && tradeBadge && (
                         <span className="text-[9px] font-normal text-emerald-400/90">{tradeBadge}</span>
@@ -1020,6 +1130,10 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                         }}
                       >
                         {tradePnlLabel ?? '—'}
+                      </span>
+                    ) : isActiveFavView && holdingUsdt != null ? (
+                      <span className="opacity-80 font-semibold" style={{ color: ACTIVE_COLOR }}>
+                        ${holdingUsdt.toFixed(2)}
                       </span>
                     ) : (isAltaFilter || isNovasFilter) ? (
                       <span className="opacity-60">{formatVolume(highlightVol)}</span>
