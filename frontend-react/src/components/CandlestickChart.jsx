@@ -8,6 +8,7 @@ import { buildTrailingStopSeries, resolveChartStopLoss } from '../utils/trailing
 import convertOpenTime from '../utils/convertOpenTime';
 import Tooltip from './Tooltip';
 import { hasAnyChartPanelButton } from '../utils/chartPanelButtons';
+import { useIsMobile } from '../hooks/useIsMobile';
 import { DEFAULT_OVERLAY_SLOTS, BAND_PCT_OPTIONS } from '../utils/uiPreferences';
 import { CHART_VIEW, INTERVAL_MS, computeZoomWindow, buildFixedDataZoom, buildInsideDataZoom, computeCandleLimitFromTime, isTradePanelChartView } from '../utils/chartView';
 
@@ -30,12 +31,12 @@ function fmtBandPct(v) {
 const CHART_PRICE_PAD = 54;        // direita: rótulos do eixo de preço
 const CHART_LEFT_MARGIN = 8;       // margem esquerda mínima
 const CHART_PANEL_COLLAPSED = 22;  // painel recolhido (só a aba)
-const PANEL_W = 56;                // largura de cada tile no masonry
-const PANEL_GAP = 4;
-const PANEL_TILE_PAD = 4;
-const PANEL_MAX_COLS = 3;
-const PANEL_MAX_WIDTH = 132;       // teto horizontal do painel masonry
-const PANEL_OUTER_PAD = 6;
+/** Espaço livre no rodapé do painel lateral (botão flutuante "Moedas" no mobile). */
+const MOBILE_PANEL_BOTTOM_INSET = 56;
+const PANEL_MIN_WIDTH = 72;
+const PANEL_MAX_WIDTH = 96;
+const PANEL_GAP = 2;
+const PANEL_TILE_PAD = 2;
 const COLLAPSE_TAB_W = 16;
 const C_UP   = '#26a69a';
 const C_DOWN = '#ef5350';
@@ -72,8 +73,8 @@ function filterIndicatorsByPanel(activeIndicators, panelButtons) {
 
 function PanelTip({ text, children, position = 'left' }) {
   return (
-    <Tooltip text={text} position={position} maxW={280} portal>
-      <span className="inline-flex w-full justify-center">{children}</span>
+    <Tooltip text={text} position={position} maxW={280} portal fill>
+      {children}
     </Tooltip>
   );
 }
@@ -183,28 +184,41 @@ function buildOverlaySeries(overlayConfigs, candlesticks, alignSeries) {
   });
 }
 
-const panelBtn = (active, color, darkText = false) => ({
-  fontSize: 8,
-  padding: '2px 0',
+function scaleFontSize(dims, ratio = 0.32, min = 10, max = 18) {
+  if (!dims) return min;
+  return Math.max(min, Math.min(max, Math.round(Math.min(dims.w, dims.h) * ratio)));
+}
+
+const panelBtn = (active, color, darkText = false, dims = null) => ({
+  fontSize: scaleFontSize(dims),
+  padding: 0,
   borderRadius: 3,
   cursor: 'pointer',
   fontFamily: 'monospace',
-  background: active ? color : 'transparent',
+  background: active ? color : 'rgba(0,0,0,0.45)',
   color: active ? (darkText ? '#000' : '#fff') : color,
   border: `1px solid ${color}`,
-  opacity: active ? 1 : 0.55,
+  opacity: active ? 1 : 0.7,
   transition: 'all 0.15s',
   whiteSpace: 'nowrap',
-  lineHeight: 1.3,
+  lineHeight: 1,
   boxSizing: 'border-box',
   textAlign: 'center',
   width: '100%',
+  height: '100%',
+  minWidth: 0,
+  minHeight: 0,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
 });
 
-const panelSelect = (color) => ({
+const panelSelect = (color, dims = null) => ({
   width: '100%',
-  fontSize: 8,
-  padding: '2px 0',
+  height: '100%',
+  minHeight: 0,
+  fontSize: scaleFontSize(dims, 0.26, 8, 14),
+  padding: 0,
   borderRadius: 3,
   fontFamily: 'monospace',
   boxSizing: 'border-box',
@@ -220,6 +234,321 @@ const MA_PERIOD_OPTIONS = ['50', '200'];
 const COMPACT_LABELS = {
   ma9: '9', ma21: '21', ma50: '50', ma200: '200', ichimoku: 'Ich', rsi: 'RSI',
   rsi80: 'R80', rsi50: 'R50',
+};
+
+/** Grid base do painel — cada botão ocupa N×M células. */
+const PANEL_GRID_COLS = 4;
+
+/** Spans por indicador: colunas × linhas (ex.: 2×2 = 4 células). */
+const INDICATOR_SPANS = {
+  ma9:      { col: 1, row: 1 },
+  ma21:     { col: 2, row: 2 },
+  ma50:     { col: 1, row: 2 },
+  ma200:    { col: 2, row: 1 },
+  ichimoku: { col: 2, row: 2 },
+  rsi:      { col: 1, row: 1 },
+  rsi80:    { col: 1, row: 2 },
+  rsi50:    { col: 2, row: 1 },
+};
+
+const OVERLAY_BLOCK_ROWS = 4;
+const BANDS_COL_SPAN = 4;
+const BANDS_GRID_COLS = 4;
+
+/** Spans internos dos controles de banda (masonry — um maior, outro menor). */
+const BAND_CONTROL_SPANS = {
+  title:    { col: 1, row: 2 },
+  pct:      { col: 2, row: 2 },
+  adaptive: { col: 2, row: 1 },
+  above:    { col: 1, row: 2 },
+  below:    { col: 2, row: 1 },
+  loading:  { col: 1, row: 1 },
+};
+
+function buildBandControlTiles(meta, overlayMaLoading) {
+  const { showBandsPct, showBandsAbove, showBandsBelow, maBands } = meta;
+  const tiles = [{ key: 'title', kind: 'title' }];
+  if (showBandsPct && !maBands.adaptive) tiles.push({ key: 'pct', kind: 'pct' });
+  if (showBandsPct && maBands.adaptive) tiles.push({ key: 'adaptive', kind: 'adaptive' });
+  if (showBandsAbove) tiles.push({ key: 'above', kind: 'above' });
+  if (showBandsBelow) tiles.push({ key: 'below', kind: 'below' });
+  if (overlayMaLoading) tiles.push({ key: 'loading', kind: 'loading' });
+  return tiles;
+}
+
+function packBandControls(meta, overlayMaLoading) {
+  const tiles = buildBandControlTiles(meta, overlayMaLoading).map((t) => {
+    const span = BAND_CONTROL_SPANS[t.kind] ?? { col: 1, row: 1 };
+    return { ...t, colSpan: span.col, rowSpan: span.row };
+  });
+  return packMasonryTiles(tiles, BANDS_GRID_COLS);
+}
+
+function bandsRowSpan(meta, loading) {
+  const { rowUnits } = packBandControls(meta, loading);
+  return Math.max(2, rowUnits);
+}
+
+function resolvePanelContentWidth(chartWidth) {
+  const target = Math.round(chartWidth * 0.09);
+  return Math.min(PANEL_MAX_WIDTH, Math.max(PANEL_MIN_WIDTH, target));
+}
+
+function computePanelWidth(contentWidth, expanded = true) {
+  if (!expanded) return CHART_PANEL_COLLAPSED;
+  return contentWidth + COLLAPSE_TAB_W + PANEL_GAP;
+}
+
+function scaleSectionTitle(dims) {
+  return {
+    fontSize: scaleFontSize(dims, 0.24, 8, 12),
+    letterSpacing: 0.4,
+    color: '#64748b',
+    fontFamily: 'monospace',
+    textTransform: 'uppercase',
+    textAlign: 'center',
+    lineHeight: 1.1,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: '100%',
+    width: '100%',
+  };
+}
+
+const BANDS_TITLE_LABEL = 'Bandas';
+
+function estimateLabelWidth(text, fontSize) {
+  return text.length * fontSize * 0.62;
+}
+
+function scaleBandsTitleFontSize(dims, vertical) {
+  if (!dims) return 11;
+  if (!vertical) {
+    return scaleFontSize(dims, 0.34, 10, 14);
+  }
+  const chars = BANDS_TITLE_LABEL.length;
+  const byWidth = dims.w * 0.88;
+  const byHeight = dims.h / (chars * 0.92);
+  return Math.max(10, Math.min(14, Math.round(Math.min(byWidth, byHeight))));
+}
+
+/** Vertical quando a célula masonry é estreita demais para o rótulo horizontal. */
+function bandsTitleUsesVertical(dims) {
+  if (!dims || dims.w <= 0) return true;
+  const fontSize = scaleBandsTitleFontSize(dims, false);
+  const minW = estimateLabelWidth(BANDS_TITLE_LABEL, fontSize) + 6;
+  return dims.w < minW || dims.h > dims.w * 1.15;
+}
+
+function scaleBandsTitle(dims) {
+  const vertical = bandsTitleUsesVertical(dims);
+  const fontSize = scaleBandsTitleFontSize(dims, vertical);
+  return {
+    fontSize,
+    letterSpacing: vertical ? 0.45 : 0.4,
+    color: '#94a3b8',
+    fontFamily: 'monospace',
+    textTransform: 'uppercase',
+    textAlign: 'center',
+    lineHeight: vertical ? 0.95 : 1.1,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: '100%',
+    width: '100%',
+    cursor: 'help',
+    ...(vertical ? { writingMode: 'vertical-rl', textOrientation: 'mixed' } : {}),
+  };
+}
+
+function cellKey(row, col) {
+  return `${row}:${col}`;
+}
+
+function canPlace(occupied, row, col, colSpan, rowSpan, gridCols) {
+  if (col + colSpan > gridCols) return false;
+  for (let r = row; r < row + rowSpan; r++) {
+    for (let c = col; c < col + colSpan; c++) {
+      if (occupied.has(cellKey(r, c))) return false;
+    }
+  }
+  return true;
+}
+
+function markPlace(occupied, row, col, colSpan, rowSpan) {
+  for (let r = row; r < row + rowSpan; r++) {
+    for (let c = col; c < col + colSpan; c++) {
+      occupied.add(cellKey(r, c));
+    }
+  }
+}
+
+/** Empacota tiles no grid (maior área primeiro) e devolve posições + linhas usadas. */
+function packMasonryTiles(tiles, gridCols) {
+  const sorted = [...tiles].sort(
+    (a, b) => (b.colSpan * b.rowSpan) - (a.colSpan * a.rowSpan),
+  );
+  const occupied = new Set();
+  const placements = [];
+  let maxRow = 0;
+
+  for (const tile of sorted) {
+    const colSpan = Math.min(tile.colSpan, gridCols);
+    const rowSpan = tile.rowSpan;
+    let placed = false;
+
+    for (let row = 0; !placed; row++) {
+      for (let col = 0; col <= gridCols - colSpan; col++) {
+        if (!canPlace(occupied, row, col, colSpan, rowSpan, gridCols)) continue;
+        markPlace(occupied, row, col, colSpan, rowSpan);
+        maxRow = Math.max(maxRow, row + rowSpan);
+        placements.push({
+          ...tile,
+          gridColumn: `${col + 1} / span ${colSpan}`,
+          gridRow: `${row + 1} / span ${rowSpan}`,
+          colSpan,
+          rowSpan,
+          startRow: row,
+          startCol: col,
+        });
+        placed = true;
+        break;
+      }
+    }
+  }
+
+  return { placements, rowUnits: maxRow };
+}
+
+function tilePixelDims(colSpan, rowSpan, rowUnits, width, height, gap, gridCols) {
+  const cellW = (width - (gridCols - 1) * gap) / gridCols;
+  const cellH = (height - (rowUnits - 1) * gap) / rowUnits;
+  return {
+    w: colSpan * cellW + (colSpan - 1) * gap,
+    h: rowSpan * cellH + (rowSpan - 1) * gap,
+  };
+}
+
+function computeMasonryLayout(tileDefs, width, height, gap, overlayMaLoading = false) {
+  if (!tileDefs.length || width <= 0 || height <= 0) {
+    return {
+      cols: PANEL_GRID_COLS,
+      indicatorRowUnits: 1,
+      indicatorPlacements: [],
+      blockPlacements: [],
+      indicatorHeight: height,
+      blockHeights: [],
+    };
+  }
+
+  const indicators = tileDefs
+    .filter((t) => t.kind === 'indicator')
+    .map((t) => {
+      const span = INDICATOR_SPANS[t.data.id] ?? { col: 1, row: 1 };
+      return {
+        ...t,
+        colSpan: span.col,
+        rowSpan: span.row,
+      };
+    });
+
+  const blocks = tileDefs
+    .filter((t) => t.kind !== 'indicator')
+    .map((t) => ({
+      ...t,
+      colSpan: t.kind === 'bands' ? BANDS_COL_SPAN : PANEL_GRID_COLS,
+      rowSpan: t.kind === 'overlay'
+        ? OVERLAY_BLOCK_ROWS
+        : bandsRowSpan(t.data, overlayMaLoading),
+    }));
+
+  const indicatorPack = packMasonryTiles(indicators, PANEL_GRID_COLS);
+  const indicatorRowUnits = indicators.length ? Math.max(1, indicatorPack.rowUnits) : 0;
+  const blockRowUnits = blocks.reduce((sum, b) => sum + b.rowSpan, 0);
+  const totalUnits = (indicators.length ? indicatorRowUnits : 0) + blockRowUnits;
+
+  const sectionCount = (indicators.length ? 1 : 0) + blocks.length;
+  const gapTotal = sectionCount > 1 ? (sectionCount - 1) * gap : 0;
+  const availableHeight = height - gapTotal;
+
+  const indicatorHeight = indicators.length && totalUnits > 0
+    ? (availableHeight * indicatorRowUnits) / totalUnits
+    : 0;
+
+  const blockTotalHeight = Math.max(0, availableHeight - indicatorHeight);
+
+  const indicatorPlacements = indicatorPack.placements.map((tile) => ({
+    ...tile,
+    dims: tilePixelDims(
+      tile.colSpan,
+      tile.rowSpan,
+      indicatorRowUnits,
+      width,
+      indicatorHeight || height,
+      gap,
+      PANEL_GRID_COLS,
+    ),
+  }));
+
+  const blockPlacements = blocks.map((tile) => {
+    const blockW = tilePixelDims(tile.colSpan, 1, 1, width, 0, gap, PANEL_GRID_COLS).w;
+    return {
+      ...tile,
+      dims: {
+        w: blockW,
+        h: blockRowUnits > 0
+          ? (blockTotalHeight * tile.rowSpan) / blockRowUnits
+          : blockTotalHeight,
+      },
+    };
+  });
+
+  return {
+    cols: PANEL_GRID_COLS,
+    indicatorRowUnits: indicators.length ? indicatorRowUnits : 0,
+    indicatorPlacements,
+    blockPlacements,
+    indicatorHeight,
+  };
+}
+
+const panelTileShell = {
+  boxSizing: 'border-box',
+  minWidth: 0,
+  minHeight: 0,
+  overflow: 'hidden',
+  display: 'flex',
+  alignItems: 'stretch',
+  width: '100%',
+  height: '100%',
+};
+
+const panelBlockShell = {
+  ...panelTileShell,
+  background: 'rgba(0,0,0,0.5)',
+  borderRadius: 4,
+  padding: PANEL_TILE_PAD,
+};
+
+const panelBandsShell = {
+  ...panelBlockShell,
+};
+
+const blockInner = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: PANEL_GAP,
+  height: '100%',
+  width: '100%',
+  minHeight: 0,
+};
+
+const blockRow = {
+  flex: 1,
+  minHeight: 0,
+  display: 'flex',
+  alignItems: 'stretch',
 };
 
 const collapseTabBtn = {
@@ -239,64 +568,186 @@ const collapseTabBtn = {
   transition: 'all 0.15s',
 };
 
-/** Empilha alturas em N colunas (menor coluna primeiro) e retorna a altura da coluna mais alta. */
-function tallestMasonryColumn(heights, cols, gap) {
-  const colHeights = Array(cols).fill(0);
-  for (const h of heights) {
-    let minIdx = 0;
-    for (let i = 1; i < cols; i++) {
-      if (colHeights[i] < colHeights[minIdx]) minIdx = i;
-    }
-    colHeights[minIdx] += h + gap;
-  }
-  return Math.max(0, Math.max(...colHeights) - gap);
-}
-
-/** Menor número de colunas em que tudo cabe na altura; prefere empilhar (menos colunas). */
-function computeMasonryColumns(heights, containerHeight, maxPanelWidth, gap, maxCols = PANEL_MAX_COLS) {
-  const n = heights.length;
-  if (!n || containerHeight <= 0) return 1;
-  const colsCapByWidth = Math.max(1, Math.floor(maxPanelWidth / (PANEL_W + gap)));
-  const limit = Math.min(maxCols, n, colsCapByWidth);
-  for (let cols = 1; cols <= limit; cols++) {
-    if (tallestMasonryColumn(heights, cols, gap) <= containerHeight) return cols;
-  }
-  return limit;
-}
-
-function computePanelWidth(columnCount) {
-  if (columnCount < 1) return COLLAPSE_TAB_W + PANEL_OUTER_PAD * 2;
+function renderIndicatorTile({ id, color, tipKey, active, darkText }, dims, t, toggleIndicator) {
   return (
-    columnCount * PANEL_W
-    + (columnCount - 1) * PANEL_GAP
-    + COLLAPSE_TAB_W
-    + PANEL_OUTER_PAD * 2
-    + 2
+    <PanelTip text={t(tipKey)}>
+      <button
+        type="button"
+        onClick={() => toggleIndicator(id)}
+        style={panelBtn(active, color, darkText, dims)}
+      >
+        {COMPACT_LABELS[id] ?? id}
+      </button>
+    </PanelTip>
   );
 }
 
-const panelTile = {
-  background: 'rgba(0,0,0,0.5)',
-  borderRadius: 5,
-  padding: PANEL_TILE_PAD,
-  display: 'flex',
-  flexDirection: 'column',
-  alignItems: 'stretch',
-  gap: 3,
-  width: PANEL_W,
-  boxSizing: 'border-box',
-  breakInside: 'avoid',
-  marginBottom: PANEL_GAP,
-};
+function renderOverlayTile({ slot, idx }, dims, t, updateOverlaySlot) {
+  const maNum = idx + 1;
+  const color = OVERLAY_MA_COLORS[idx];
+  const innerH = dims.h - PANEL_TILE_PAD * 2;
+  const rowH = (innerH - (OVERLAY_BLOCK_ROWS - 1) * PANEL_GAP) / OVERLAY_BLOCK_ROWS;
+  const rowDims = { w: dims.w - PANEL_TILE_PAD * 2, h: rowH };
+  return (
+    <div style={blockInner}>
+      <div style={blockRow}>
+        <PanelTip text={t('chart.tip.ma_overlay', maNum)}>
+          <span style={{ ...scaleSectionTitle(rowDims), color, cursor: 'help' }}>
+            MA{maNum}
+          </span>
+        </PanelTip>
+      </div>
+      <div style={blockRow}>
+        <PanelTip text={t('chart.tip.ma_period', maNum, slot.period)}>
+          <select
+            value={slot.period}
+            onChange={e => updateOverlaySlot(slot.id, { period: e.target.value })}
+            style={panelSelect(color, rowDims)}
+          >
+            {MA_PERIOD_OPTIONS.map(p => <option key={p} value={p}>{p}</option>)}
+          </select>
+        </PanelTip>
+      </div>
+      <div style={blockRow}>
+        <PanelTip text={t('chart.tip.ma_interval', maNum)}>
+          <select
+            value={slot.interval}
+            onChange={e => updateOverlaySlot(slot.id, { interval: e.target.value })}
+            style={panelSelect(color, rowDims)}
+          >
+            {OVERLAY_MA_INTERVALS.map(iv => <option key={iv} value={iv}>{iv}</option>)}
+          </select>
+        </PanelTip>
+      </div>
+      <div style={blockRow}>
+        <PanelTip text={t('chart.tip.ma_on', maNum)}>
+          <button
+            type="button"
+            onClick={() => updateOverlaySlot(slot.id, { enabled: !slot.enabled })}
+            style={panelBtn(slot.enabled, color, true, rowDims)}
+          >
+            {slot.enabled ? 'ON' : 'OFF'}
+          </button>
+        </PanelTip>
+      </div>
+    </div>
+  );
+}
 
-const sectionTitle = {
-  fontSize: 7,
-  letterSpacing: 0.5,
-  color: '#64748b',
-  fontFamily: 'monospace',
-  textTransform: 'uppercase',
-  textAlign: 'center',
-};
+function renderBandControl(tile, dims, meta, t, setMaBands) {
+  const { maBands } = meta;
+  switch (tile.kind) {
+    case 'title':
+      return (
+        <PanelTip text={t('chart.tip.bands_title')}>
+          <span style={scaleBandsTitle(dims)}>{BANDS_TITLE_LABEL}</span>
+        </PanelTip>
+      );
+    case 'pct':
+      return (
+        <PanelTip text={t('chart.tip.bands_pct', maBands.pct)}>
+          <select
+            value={maBands.pct}
+            onChange={(e) => {
+              const pct = Number(e.target.value);
+              setMaBands((b) => ({ ...b, pct, dipPct: pct, stretchPct: pct, adaptive: false }));
+            }}
+            style={panelSelect('#94a3b8', dims)}
+          >
+            {BAND_PCT_OPTIONS.map((p) => <option key={p} value={p}>{p}%</option>)}
+          </select>
+        </PanelTip>
+      );
+    case 'adaptive':
+      return (
+        <PanelTip text={t('chart.tip.bands_adaptive')}>
+          <span style={{ ...panelBtn(true, '#94a3b8', true, dims), cursor: 'default' }}>
+            adapt
+          </span>
+        </PanelTip>
+      );
+    case 'above':
+      return (
+        <PanelTip text={t('chart.tip.band_above', maBands.stretchPct ?? maBands.pct)}>
+          <button
+            type="button"
+            onClick={() => setMaBands((b) => ({ ...b, showAbove: !b.showAbove }))}
+            style={panelBtn(maBands.showAbove, '#22c55e', true, dims)}
+          >
+            ↑{fmtBandPct(maBands.stretchPct ?? maBands.pct)}%
+          </button>
+        </PanelTip>
+      );
+    case 'below':
+      return (
+        <PanelTip text={t('chart.tip.band_below', maBands.dipPct ?? maBands.pct)}>
+          <button
+            type="button"
+            onClick={() => setMaBands((b) => ({ ...b, showBelow: !b.showBelow }))}
+            style={panelBtn(maBands.showBelow, '#f87171', true, dims)}
+          >
+            ↓{fmtBandPct(maBands.dipPct ?? maBands.pct)}%
+          </button>
+        </PanelTip>
+      );
+    case 'loading':
+      return (
+        <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div className="animate-spin" style={{ width: 10, height: 10, borderRadius: '50%', border: '1.5px solid #94a3b8', borderTopColor: 'transparent' }} />
+        </div>
+      );
+    default:
+      return null;
+  }
+}
+
+function renderBandsTile(meta, dims, t, setMaBands, overlayMaLoading) {
+  const { placements, rowUnits } = packBandControls(meta, overlayMaLoading);
+  const innerW = dims.w - PANEL_TILE_PAD * 2;
+  const innerH = dims.h - PANEL_TILE_PAD * 2;
+
+  return (
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: `repeat(${BANDS_GRID_COLS}, 1fr)`,
+        gridTemplateRows: `repeat(${rowUnits}, 1fr)`,
+        gridAutoFlow: 'dense',
+        gap: PANEL_GAP,
+        width: innerW,
+        height: innerH,
+        minHeight: 0,
+      }}
+    >
+      {placements.map((tile) => {
+        const cellDims = tilePixelDims(
+          tile.colSpan,
+          tile.rowSpan,
+          rowUnits,
+          innerW,
+          innerH,
+          PANEL_GAP,
+          BANDS_GRID_COLS,
+        );
+        return (
+          <div
+            key={tile.key}
+            style={{
+              gridColumn: tile.gridColumn,
+              gridRow: tile.gridRow,
+              minWidth: 0,
+              minHeight: 0,
+              display: 'flex',
+              alignItems: 'stretch',
+            }}
+          >
+            {renderBandControl(tile, cellDims, meta, t, setMaBands)}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 function ChartIndicatorPanel({
   activeIndicators,
@@ -312,11 +763,12 @@ function ChartIndicatorPanel({
   onLayoutChange,
 }) {
   const { t } = useI18n();
+  const isMobile = useIsMobile();
   const outerRef = useRef(null);
   const masonryRef = useRef(null);
-  const [columnCount, setColumnCount] = useState(1);
+  const [panelSize, setPanelSize] = useState({ width: PANEL_MIN_WIDTH, height: 320 });
 
-  const tiles = useMemo(() => {
+  const tileDefs = useMemo(() => {
     const showKey = (key) => panelButtons[key] !== false;
     const indicators = [...INDICATOR_GROUPS, ...RSI_EXTRA_INDICATORS].filter(({ id }) => showKey(id));
     const visibleOverlays = overlaySlots
@@ -328,190 +780,95 @@ function ChartIndicatorPanel({
     const showBandsBlock = showBandsPct || showBandsAbove || showBandsBelow;
 
     const list = [];
-    for (const { id, color, tipKey } of indicators) {
-      const active = activeIndicators.includes(id);
-      const darkText = id === 'ma200' || id === 'rsi80' || id === 'rsi50';
+    for (const ind of indicators) {
       list.push({
-        key: `ind-${id}`,
-        estHeight: 24,
-        node: (
-          <PanelTip text={t(tipKey)}>
-            <button type="button" onClick={() => toggleIndicator(id)} style={panelBtn(active, color, darkText)}>
-              {COMPACT_LABELS[id] ?? id}
-            </button>
-          </PanelTip>
-        ),
+        key: `ind-${ind.id}`,
+        kind: 'indicator',
+        data: {
+          ...ind,
+          active: activeIndicators.includes(ind.id),
+          darkText: ind.id === 'ma200' || ind.id === 'rsi80' || ind.id === 'rsi50',
+        },
       });
     }
-    for (const { slot, idx } of visibleOverlays) {
-      const maNum = idx + 1;
+    for (const entry of visibleOverlays) {
       list.push({
-        key: slot.id,
-        estHeight: 108,
-        node: (
-          <>
-            <PanelTip text={t('chart.tip.ma_overlay', maNum)}>
-              <span style={{ ...sectionTitle, color: OVERLAY_MA_COLORS[idx], cursor: 'help' }}>
-                MA{maNum}
-              </span>
-            </PanelTip>
-            <PanelTip text={t('chart.tip.ma_period', maNum, slot.period)}>
-              <select
-                value={slot.period}
-                onChange={e => updateOverlaySlot(slot.id, { period: e.target.value })}
-                style={panelSelect(OVERLAY_MA_COLORS[idx])}
-              >
-                {MA_PERIOD_OPTIONS.map(p => <option key={p} value={p}>{p}</option>)}
-              </select>
-            </PanelTip>
-            <PanelTip text={t('chart.tip.ma_interval', maNum)}>
-              <select
-                value={slot.interval}
-                onChange={e => updateOverlaySlot(slot.id, { interval: e.target.value })}
-                style={panelSelect(OVERLAY_MA_COLORS[idx])}
-              >
-                {OVERLAY_MA_INTERVALS.map(iv => <option key={iv} value={iv}>{iv}</option>)}
-              </select>
-            </PanelTip>
-            <PanelTip text={t('chart.tip.ma_on', maNum)}>
-              <button type="button" onClick={() => updateOverlaySlot(slot.id, { enabled: !slot.enabled })} style={{
-                ...panelBtn(slot.enabled, OVERLAY_MA_COLORS[idx], true),
-              }}>
-                {slot.enabled ? 'ON' : 'OFF'}
-              </button>
-            </PanelTip>
-          </>
-        ),
+        key: entry.slot.id,
+        kind: 'overlay',
+        data: entry,
       });
     }
     if (showBandsBlock) {
-      let estHeight = 18;
-      if (showBandsPct) estHeight += 24;
-      if (showBandsAbove || showBandsBelow) estHeight += 24;
-      if (overlayMaLoading) estHeight += 14;
       list.push({
         key: 'bands',
-        estHeight,
-        node: (
-          <>
-            <PanelTip text={t('chart.tip.bands_title')}>
-              <span style={{ ...sectionTitle, color: '#94a3b8', cursor: 'help' }}>Bandas</span>
-            </PanelTip>
-            {showBandsPct && !maBands.adaptive && (
-            <PanelTip text={t('chart.tip.bands_pct', maBands.pct)}>
-              <select
-                value={maBands.pct}
-                onChange={e => {
-                  const pct = Number(e.target.value);
-                  setMaBands(b => ({ ...b, pct, dipPct: pct, stretchPct: pct, adaptive: false }));
-                }}
-                style={panelSelect('#94a3b8')}
-              >
-                {BAND_PCT_OPTIONS.map(p => <option key={p} value={p}>{p}%</option>)}
-              </select>
-            </PanelTip>
-            )}
-            {showBandsPct && maBands.adaptive && (
-            <PanelTip text={t('chart.tip.bands_adaptive')}>
-              <span style={{
-                ...panelBtn(true, '#94a3b8', true),
-                cursor: 'default',
-                fontSize: 8,
-              }}>
-                adapt
-              </span>
-            </PanelTip>
-            )}
-            {showBandsAbove && (
-            <PanelTip text={t('chart.tip.band_above', maBands.stretchPct ?? maBands.pct)}>
-              <button type="button" onClick={() => setMaBands(b => ({ ...b, showAbove: !b.showAbove }))} style={{
-                ...panelBtn(maBands.showAbove, '#22c55e', true),
-              }}>
-                ↑{fmtBandPct(maBands.stretchPct ?? maBands.pct)}%
-              </button>
-            </PanelTip>
-            )}
-            {showBandsBelow && (
-            <PanelTip text={t('chart.tip.band_below', maBands.dipPct ?? maBands.pct)}>
-              <button type="button" onClick={() => setMaBands(b => ({ ...b, showBelow: !b.showBelow }))} style={{
-                ...panelBtn(maBands.showBelow, '#f87171', true),
-              }}>
-                ↓{fmtBandPct(maBands.dipPct ?? maBands.pct)}%
-              </button>
-            </PanelTip>
-            )}
-            {overlayMaLoading && (
-              <div style={{ display: 'flex', justifyContent: 'center' }}>
-                <div className="animate-spin" style={{ width: 8, height: 8, borderRadius: '50%', border: '1.5px solid #94a3b8', borderTopColor: 'transparent' }} />
-              </div>
-            )}
-          </>
-        ),
+        kind: 'bands',
+        data: { showBandsPct, showBandsAbove, showBandsBelow, maBands },
       });
     }
     return list;
-  }, [
-    panelButtons, overlaySlots, activeIndicators, toggleIndicator, updateOverlaySlot,
-    maBands, setMaBands, overlayMaLoading, t,
-  ]);
+  }, [panelButtons, overlaySlots, activeIndicators, maBands, overlayMaLoading]);
 
-  const tileHeights = useMemo(() => tiles.map(t => t.estHeight), [tiles]);
+  const contentWidth = useMemo(
+    () => resolvePanelContentWidth(outerRef.current?.parentElement?.clientWidth ?? panelSize.width),
+    [panelSize.width],
+  );
+
+  const layout = useMemo(
+    () => computeMasonryLayout(tileDefs, contentWidth, panelSize.height, PANEL_GAP, overlayMaLoading),
+    [tileDefs, contentWidth, panelSize.height, overlayMaLoading],
+  );
 
   useEffect(() => {
-    const el = masonryRef.current;
-    if (!el || collapsed || !tiles.length) {
-      const width = collapsed ? CHART_PANEL_COLLAPSED : 0;
-      onLayoutChange?.({ columnCount: 0, width });
+    if (collapsed || !tileDefs.length) {
+      onLayoutChange?.({ columnCount: 0, width: collapsed ? CHART_PANEL_COLLAPSED : 0 });
       return undefined;
     }
+    onLayoutChange?.({ columnCount: layout.cols, width: computePanelWidth(contentWidth, true) });
+
+    const shell = masonryRef.current;
+    const chart = outerRef.current?.parentElement;
+    if (!shell || !chart) return undefined;
+
     const measure = () => {
-      const el = masonryRef.current;
-      const outer = outerRef.current;
-      if (!el || !outer) return;
-      const h = el.clientHeight;
-      const chartW = outer.parentElement?.clientWidth ?? 400;
-      const maxPanelWidth = Math.min(
-        PANEL_MAX_WIDTH,
-        Math.max(PANEL_W, chartW * 0.28),
-      );
-      const cols = computeMasonryColumns(tileHeights, h, maxPanelWidth, PANEL_GAP, PANEL_MAX_COLS);
-      setColumnCount(cols);
-      onLayoutChange?.({ columnCount: cols, width: computePanelWidth(cols) });
+      const w = resolvePanelContentWidth(chart.clientWidth);
+      const h = shell.clientHeight;
+      if (w > 0 && h > 0) setPanelSize({ width: w, height: h });
+      onLayoutChange?.({ columnCount: layout.cols, width: computePanelWidth(w, true) });
     };
+
     measure();
     const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    if (outerRef.current?.parentElement) ro.observe(outerRef.current.parentElement);
+    ro.observe(shell);
+    ro.observe(chart);
     return () => ro.disconnect();
-  }, [collapsed, tiles.length, tileHeights, onLayoutChange]);
+  }, [collapsed, tileDefs.length, layout.cols, contentWidth, onLayoutChange]);
 
-  if (!tiles.length) {
+  if (!tileDefs.length) {
     return null;
   }
-
-  const masonryWidth = columnCount * PANEL_W + (columnCount - 1) * PANEL_GAP;
 
   return (
     <div
       ref={outerRef}
       style={{
-      position: 'absolute',
-      top: 0,
-      bottom: 0,
-      right: 0,
-      zIndex: 10,
-      display: 'flex',
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'flex-end',
-      padding: `${PANEL_OUTER_PAD}px ${PANEL_OUTER_PAD}px ${PANEL_OUTER_PAD}px 0`,
-      pointerEvents: 'none',
-    }}>
+        position: 'absolute',
+        top: 0,
+        bottom: isMobile ? MOBILE_PANEL_BOTTOM_INSET : 0,
+        right: 0,
+        zIndex: 10,
+        display: 'flex',
+        flexDirection: 'row',
+        alignItems: 'stretch',
+        justifyContent: 'flex-end',
+        padding: 0,
+        pointerEvents: 'none',
+      }}
+    >
       <PanelTip text={t(collapsed ? 'chart.tip.panel_expand' : 'chart.tip.panel_collapse')} position="left">
         <button
           type="button"
           onClick={onToggleCollapse}
-          style={collapseTabBtn}
+          style={{ ...collapseTabBtn, alignSelf: 'center', flexShrink: 0 }}
           onMouseEnter={e => { e.currentTarget.style.color = '#e2e8f0'; e.currentTarget.style.borderColor = '#64748b'; }}
           onMouseLeave={e => { e.currentTarget.style.color = '#94a3b8'; e.currentTarget.style.borderColor = '#334155'; }}
         >
@@ -520,30 +877,64 @@ function ChartIndicatorPanel({
       </PanelTip>
 
       {!collapsed && (
-      <div
-        ref={masonryRef}
-        style={{
-          pointerEvents: 'auto',
-          height: '100%',
-          maxHeight: '100%',
-          overflowY: 'auto',
-          overflowX: 'hidden',
-          marginLeft: 4,
-          scrollbarWidth: 'thin',
-        }}
-      >
-        <div style={{
-          columnCount,
-          columnGap: PANEL_GAP,
-          width: masonryWidth,
-        }}>
-          {tiles.map(({ key, node }) => (
-            <div key={key} style={panelTile}>
-              {node}
+        <div
+          ref={masonryRef}
+          style={{
+            pointerEvents: 'auto',
+            height: '100%',
+            width: contentWidth,
+            minWidth: contentWidth,
+            overflow: 'hidden',
+            marginLeft: PANEL_GAP,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: PANEL_GAP,
+          }}
+        >
+          {layout.indicatorPlacements.length > 0 && (
+            <div style={{
+              flex: layout.blockPlacements.length > 0 ? layout.indicatorRowUnits : 1,
+              minHeight: 0,
+              display: 'grid',
+              gridTemplateColumns: `repeat(${layout.cols}, 1fr)`,
+              gridTemplateRows: `repeat(${layout.indicatorRowUnits}, 1fr)`,
+              gridAutoFlow: 'dense',
+              gap: PANEL_GAP,
+              width: '100%',
+            }}
+            >
+              {layout.indicatorPlacements.map((tile) => (
+                <div
+                  key={tile.key}
+                  style={{
+                    ...panelTileShell,
+                    gridColumn: tile.gridColumn,
+                    gridRow: tile.gridRow,
+                  }}
+                >
+                  {renderIndicatorTile(tile.data, tile.dims, t, toggleIndicator)}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {layout.blockPlacements.map((tile) => (
+            <div
+              key={tile.key}
+              style={{
+                ...(tile.kind === 'bands' ? panelBandsShell : panelBlockShell),
+                flex: tile.rowSpan,
+                minHeight: 0,
+                width: tile.kind === 'bands'
+                  ? `${(tile.colSpan / PANEL_GRID_COLS) * 100}%`
+                  : '100%',
+              }}
+            >
+              {tile.kind === 'overlay' && renderOverlayTile(tile.data, tile.dims, t, updateOverlaySlot)}
+              {tile.kind === 'bands' && renderBandsTile(tile.data, tile.dims, t, setMaBands, overlayMaLoading)}
             </div>
           ))}
         </div>
-      </div>
       )}
     </div>
   );
@@ -1518,7 +1909,7 @@ export default function CandlestickChart() {
   const [adaptiveBandOverlay, setAdaptiveBandOverlay] = useState(null);
   const [maBands, setMaBands] = useState(() => ({ ...uiPrefs.maBandsDefaults }));
   const [panelCollapsed, setPanelCollapsed] = useState(false);
-  const [panelMasonryWidth, setPanelMasonryWidth] = useState(() => computePanelWidth(1));
+  const [panelMasonryWidth, setPanelMasonryWidth] = useState(() => computePanelWidth(PANEL_MIN_WIDTH, true));
   const handlePanelLayoutChange = useCallback(({ width }) => {
     setPanelMasonryWidth(width);
   }, []);

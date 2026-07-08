@@ -1,11 +1,11 @@
 ---
-description: Antes de push, auditar todas as mudanças (todos os chats), build frontend e commit do dist
+description: Push — auditar todos os chats, commit descritivo, versionar package e push (com dist)
 alwaysApply: true
 ---
 
-# Push — auditar tudo + build do frontend
+# Push — auditar, versionar, commit descritivo e push
 
-Quando o usuário pedir **push**, **faça o push**, ou equivalente, execute **sempre** este fluxo completo — **não** limitar a revisão ao chat atual.
+Quando o usuário pedir **push**, **versione e faça push**, ou equivalente, execute **sempre** este fluxo — **não** limitar a revisão ao chat atual.
 
 ## 1. Auditar modificações de todos os chats
 
@@ -24,36 +24,81 @@ Além do git, consultar transcrições recentes em `agent-transcripts/` (outros 
 - arquivos modificados / não rastreados (agrupados por área: frontend, backend, supabase, etc.)
 - commits locais ainda não enviados (`ahead` do remote)
 - mudanças pendentes de commit (se houver)
+- nova versão planejada (`package.json`)
 
 Se houver alterações não commitadas que pareçam intencionais (de qualquer chat), **perguntar** se devem entrar no push ou avisar antes de prosseguir — não fazer push “só do que este chat viu”.
 
 **Não versionar** arquivos de runtime/dados locais (`backend/data/bot/`, `backend/data/candlestick/`, `.env`, etc.) salvo pedido explícito.
 
-## 2. Build e commit do frontend (Termux)
+## 2. Versionar o package
+
+Incrementar `version` em `package.json` (e `package-lock.json`) conforme o escopo das mudanças:
+- **patch** — correções pequenas
+- **minor** — features / melhorias visíveis
+- **major** — breaking changes (raro; confirmar com o usuário se não for óbvio)
+
+Mencionar a versão no título ou corpo do commit (ex.: `(v1.18.0)`).
+
+## 3. Build do frontend
 
 ```bash
 npm run build:frontend
-git add frontend-react/dist
-git commit -m "build frontend"
 ```
 
-Só commitar dist se houver mudanças reais (sem commit vazio).
+No Termux o app usa o bundle versionado; sem build o pull não traz UI atualizada.
 
-## 3. Demais commits e push
+Se `build:frontend` falhar (ex.: Rollup no Windows), corrigir ou avisar o usuário — **não** fazer push sem dist válido.
 
-4. Outros commits pendentes, se o usuário pediu incluir alterações (seguir protocolo git do usuário)
-5. `git push`
+## 4. Um único commit descritivo (inclui dist)
+
+**Não** criar commit separado só com `"build frontend"` — o histórico no GitHub deve contar o que mudou.
+
+Incluir no **mesmo** commit:
+- código (backend, frontend src, testes, etc.)
+- `package.json` + `package-lock.json`
+- `frontend-react/dist` (se o build gerou mudanças)
+
+### Mensagem do commit
+
+- Título curto no estilo do repo (`fix:`, `feat:`, etc.) + versão quando aplicável
+- Corpo com bullets do **porquê** e do **o que** mudou (áreas afetadas, comportamento novo/corrigido)
+- Refletir mudanças de **todos** os chats auditados, não só desta conversa
+
+Exemplo:
+
+```
+fix: filtro MA-Cross near_up por proximidade (v1.18.0)
+
+- Screening relaxado: gap pequeno sem exigir momentum
+- Cache near_up em 5m/15m para resposta rápida
+- Favoritos MA-Cross alinhados com nearUpListed
+- Destaques: API marketing Binance com fallback ticker
+```
+
+No PowerShell, usar `-m` duplo em vez de heredoc:
+
+```bash
+git add <arquivos relevantes> frontend-react/dist package.json package-lock.json
+git commit -m "feat: titulo (v1.x.x)" -m "- bullet 1`n- bullet 2"
+```
+
+Só commitar se houver mudanças reais (sem commit vazio).
+
+## 5. Push
+
+```bash
+git push
+```
 
 ## Ordem obrigatória
 
 1. Auditar (git + transcripts) e resumir para o usuário
-2. `npm run build:frontend`
-3. `git add frontend-react/dist` + commit `"build frontend"` (se aplicável)
-4. Commits adicionais conforme solicitado
+2. Versionar `package.json` / `package-lock.json`
+3. `npm run build:frontend`
+4. **Um** commit descritivo com código + dist + versão
 5. `git push`
 
 ## Notas
 
-- No Termux o app usa o bundle versionado; sem build o pull não traz UI atualizada.
 - No Windows (PowerShell), encadear com `;` se necessário, não `&&` em shells antigas.
-- Se `build:frontend` falhar (ex.: Rollup no Windows), corrigir ou avisar o usuário — **não** fazer push sem dist válido.
+- Seguir o protocolo git do usuário (não amend/force sem pedido explícito).

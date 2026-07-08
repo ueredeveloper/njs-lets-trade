@@ -39,7 +39,7 @@ const bubbleClass =
  * - padrão: CSS-only (hover no trigger)
  * - portal: renderiza em document.body — use dentro de overflow-y-auto / overflow-hidden
  */
-export default function Tooltip({ text, children, position = 'top', maxW = 220, portal = false }) {
+export default function Tooltip({ text, children, position = 'top', maxW = 220, portal = false, fill = false }) {
   const [visible, setVisible] = useState(false);
   const [coords, setCoords] = useState({ top: 0, left: 0, transform: '' });
   const triggerRef = useRef(null);
@@ -65,7 +65,7 @@ export default function Tooltip({ text, children, position = 'top', maxW = 220, 
       <>
         <span
           ref={triggerRef}
-          className="inline-flex"
+          className={fill ? 'flex w-full h-full min-h-0 min-w-0 flex-1 items-stretch' : 'inline-flex'}
           onMouseEnter={show}
           onMouseLeave={hide}
           onFocus={show}
