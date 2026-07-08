@@ -2,11 +2,15 @@
 
 const { intervalMs } = require('../bot/ma-cross/strategyEngine');
 
-/** Verifica buracos recentes no histórico (ex.: falta candle 17:00 no disco). */
+/**
+ * Verifica buracos no histórico (ex.: falta candle 17:00 no disco).
+ * lookback: nº de velas no fim a inspecionar; null/Infinity = série inteira.
+ */
 function hasRecentCandleGaps(disk, interval, lookback = 24) {
   if (!disk?.length || disk.length < 2) return false;
   const period = intervalMs(interval);
-  const start = Math.max(1, disk.length - lookback);
+  const full = lookback == null || !Number.isFinite(lookback);
+  const start = full ? 1 : Math.max(1, disk.length - lookback);
   for (let i = start; i < disk.length; i++) {
     const delta = Number(disk[i].openTime) - Number(disk[i - 1].openTime);
     if (delta !== period) return true;

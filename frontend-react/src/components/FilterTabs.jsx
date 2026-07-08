@@ -303,7 +303,7 @@ export default function FilterTabs({ activeFilter, onSelectFilter }) {
 
   async function handleClick(name) {
     const isHighlight = name.startsWith('Favoritos|Alta|') || name.startsWith('Favoritos|Novas|');
-    if (isHighlight && !filters.some((f) => f.name === name)) {
+    if (isHighlight) {
       try {
         await ensureMarketHighlights();
       } catch (err) {

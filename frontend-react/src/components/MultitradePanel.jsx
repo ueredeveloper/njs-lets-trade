@@ -7,7 +7,7 @@ import { fetchCandlesticksAndCloud, fetchMultitradeTrades } from '../services/ap
 import { loadMultitradeSymbolChart } from '../utils/multitradeChart';
 import { multitradePhaseBadge, symbolPhaseSummary, fmtBuyTimeShort } from '../utils/multitradePhase';
 import {
-  compareMacrossFavorites, formatMacrossStatusBadge,
+  compareMacrossFavorites, filterMacrossFavorites, formatMacrossStatusBadge,
   loadMacrossFavSort, isMaCrossEntry,
 } from '../utils/macrossFavoritesSort';
 import { useMacrossFavoritesStatus } from '../hooks/useMacrossFavoritesStatus';
@@ -72,7 +72,7 @@ export default function MultitradePanel() {
   } = useMacrossFavoritesStatus(macrossFavSymbols, multitradeFavorites, favOpen);
 
   const symbolList = useMemo(() => {
-    const list = [...macrossFavSymbols];
+    const list = filterMacrossFavorites(macrossFavSymbols, macrossFavStatus, macrossFavSort);
     return list.sort((a, b) => compareMacrossFavorites(a, b, macrossFavSort, {
       status: macrossFavStatus,
       entriesBySymbol: macrossEntriesBySymbol,

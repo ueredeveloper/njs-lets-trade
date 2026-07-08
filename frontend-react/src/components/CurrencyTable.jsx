@@ -17,17 +17,16 @@ import {
   resolveTradeChartInterval,
   loadMultitradeSymbolChart,
   buildMarkersFromExchangeTrades,
-  buildOverlaySlotsForEntry,
-  buildMaCrossAdaptiveBandsConfig,
 } from '../utils/multitradeChart';
 import { multitradePhaseBadge, symbolPhaseSummary } from '../utils/multitradePhase';
 import {
-  compareMacrossFavorites, formatMacrossStatusBadge,
-  loadMacrossFavSort, isMaCrossEntry,
+  compareMacrossFavorites, filterMacrossFavorites, formatMacrossStatusBadge,
+  loadMacrossFavSort, saveMacrossFavSort, isMaCrossEntry,
 } from '../utils/macrossFavoritesSort';
 import {
   compareTradeFavorites, filterTradeFavorites, formatTradePnlBadge,
   formatTradeStatusBadge, loadTradeFavSort, tradePnlForSort,
+  saveTradeFavSort,
 } from '../utils/tradeFavoritesSort';
 import { useMacrossFavoritesStatus } from '../hooks/useMacrossFavoritesStatus';
 import { useTradeFavoritesSummary } from '../hooks/useTradeFavoritesSummary';
@@ -43,9 +42,15 @@ const ACTIVE_COLOR  = '#f59e0b';
 const ALTA_COLOR    = '#f97316';
 const NOVAS_COLOR   = '#a78bfa';
 
-/** Chaves sintéticas de USDT/USDC por exchange (não são pares negociáveis). */
-const STABLE_ACTIVE_KEYS = ['USDT_GATE', 'USDT_BNB', 'USDC_GATE', 'USDC_BNB'];
-const STABLE_ACTIVE_SET = new Set(STABLE_ACTIVE_KEYS);
+/** Chaves sintéticas de caixa (USDT/USDC/BRL…) por exchange — não são pares negociáveis. */
+const CASH_ACTIVE_RE = /^([A-Z0-9]+)_(GATE|BNB)$/;
+function isCashActiveKey(symbol) {
+  return CASH_ACTIVE_RE.test(String(symbol || '').toUpperCase());
+}
+function parseCashActiveKey(symbol) {
+  const m = String(symbol || '').toUpperCase().match(CASH_ACTIVE_RE);
+  return m ? { asset: m[1], suffix: m[2] } : null;
+}
 
 const HIGHLIGHT_FILTERS = {
   ALTA_BINANCE: 'Favoritos|Alta|Binance',
@@ -368,10 +373,15 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     } else if (favoriteView === 'binance') {
       list = currencies.list.filter((c) => binanceFavorites.has(c.symbol));
     } else if (favoriteView === 'macross') {
-      const mtSymbols = new Set(
-        multitradeFavorites.filter(e => e.enabled !== false && isMaCrossEntry(e)).map(e => e.symbol),
-      );
-      list = resolveFavorites(mtSymbols, currencies.list, gateAll);
+      const mtSymbols = multitradeFavorites
+        .filter(e => e.enabled !== false && isMaCrossEntry(e))
+        .map(e => e.symbol);
+      const filtered = filterMacrossFavorites(mtSymbols, macrossFavStatus, macrossFavSort);
+      list = resolveFavorites(new Set(filtered), currencies.list, gateAll);
+      const have = new Set(list.map(c => c.symbol));
+      for (const sym of filtered) {
+        if (!have.has(sym)) list.push({ symbol: sym, price: 0, volume: 0 });
+      }
     } else if (favoriteView === 'trades') {
       const filtered = filterTradeFavorites(tradeFavSymbols, tradeFavStatus, tradeFavSort);
       list = resolveFavorites(new Set(filtered), currencies.list, gateAll);
@@ -380,7 +390,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
         if (!have.has(sym)) list.push({ symbol: sym, price: 0, volume: 0 });
       }
     } else if (favoriteView === 'active') {
-      const activeSymbols = [...activeTrades.keys()].filter((sym) => !STABLE_ACTIVE_SET.has(sym));
+      const activeSymbols = [...activeTrades.keys()].filter((sym) => !isCashActiveKey(sym));
       list = resolveFavorites(new Set(activeSymbols), currencies.list, gateAll);
       const have = new Set(list.map((c) => c.symbol));
       for (const sym of activeSymbols) {
@@ -654,7 +664,19 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     toggleFavoriteView(type);
     setSearch('');
     onSelectFilter?.(null);
-    if (entering) setSortVolume('none');
+    if (entering) {
+      setSortVolume('none');
+      // Ao abrir favoritos MC, o usuário quer “Fase” como padrão.
+      if (type === 'macross') {
+        setMacrossFavSort('phase');
+        saveMacrossFavSort('phase');
+      }
+      // Ao abrir favoritos TX, o usuário quer “PnL hoje” como padrão.
+      if (type === 'trades') {
+        setTradeFavSort('pnl_today');
+        saveTradeFavSort('pnl_today');
+      }
+    }
   }
 
   async function selectHighlightFilter(name) {
@@ -662,7 +684,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     setSearch('');
     if (isHighlightFilterName(name) && activeFilter !== name) setSortVolume('none');
     const next = activeFilter === name ? null : name;
-    if (next && isHighlightFilterName(next) && !findFilter(next)) {
+    if (next && isHighlightFilterName(next)) {
       try {
         await ensureMarketHighlights();
       } catch (err) {
@@ -699,6 +721,56 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   }, [isTradesFavView, rows, tradeFavStatus, tradeFavSort]);
 
   const tradePnlSumLabel = formatTradePnlBadge(tradePnlSum);
+
+  /** Somatório USDT dos holdings AT, separado por corretora. */
+  const activeUsdtSum = useMemo(() => {
+    if (!isActiveFavView || activeTrades.size === 0) return null;
+    const priceBySymbol = new Map(
+      currencies.list.map((c) => [c.symbol, parseFloat(c.price) || 0]),
+    );
+    let gate = 0;
+    let binance = 0;
+    let both = 0;
+    for (const [key, info] of activeTrades) {
+      const qty = Number(info?.buyQty) || 0;
+      if (qty <= 0) continue;
+      const cash = isCashActiveKey(key);
+      const price = cash
+        ? (Number(info?.buyPrice) || 1)
+        : (priceBySymbol.get(key) || Number(info?.buyPrice) || 0);
+      if (price <= 0) continue;
+      const usdt = qty * price;
+      if (info.exchange === 'gate') gate += usdt;
+      else if (info.exchange === 'binance') binance += usdt;
+      else both += usdt;
+    }
+    const total = gate + binance + both;
+    if (total <= 0) return null;
+    const round2 = (n) => Math.round(n * 100) / 100;
+    return {
+      total: round2(total),
+      gate: round2(gate),
+      binance: round2(binance),
+      both: round2(both),
+    };
+  }, [isActiveFavView, activeTrades, currencies.list]);
+
+  /** Linhas de caixa AT (USDT/USDC/BRL…), ordenadas USDT → USDC → demais. */
+  const cashActiveRows = useMemo(() => {
+    if (!isActiveFavView) return [];
+    const rank = (asset) => (asset === 'USDT' ? 0 : asset === 'USDC' ? 1 : 2);
+    return [...activeTrades.keys()]
+      .filter((key) => isCashActiveKey(key) && activeTrades.get(key))
+      .sort((a, b) => {
+        const pa = parseCashActiveKey(a);
+        const pb = parseCashActiveKey(b);
+        const ra = rank(pa?.asset);
+        const rb = rank(pb?.asset);
+        if (ra !== rb) return ra - rb;
+        if (pa.asset !== pb.asset) return pa.asset.localeCompare(pb.asset);
+        return (pa.suffix === 'GATE' ? 0 : 1) - (pb.suffix === 'GATE' ? 0 : 1);
+      });
+  }, [isActiveFavView, activeTrades]);
 
   const showFavSortInHeader = isMacrossFavView || isTradesFavView;
   const favColWidth = showFavSortInHeader ? '10.5rem' : '7.5rem';
@@ -949,10 +1021,12 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
               </tr>
             )}
 
-            {isActiveFavView && STABLE_ACTIVE_KEYS.map((key) => {
+            {isActiveFavView && cashActiveRows.map((key) => {
               const info = activeTrades.get(key);
               if (!info) return null;
-              const label = key.startsWith('USDT') ? 'USDT' : 'USDC';
+              const { asset } = parseCashActiveKey(key);
+              const price = Number(info.buyPrice) || (asset === 'USDT' || asset === 'USDC' ? 1 : 0);
+              const usdtVal = Number(info.buyQty) * price;
               const exchangeLabel = info.exchange === 'gate'
                 ? t('fav.active.exchange_gate')
                 : t('fav.active.exchange_bnb');
@@ -975,15 +1049,19 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                   <td className="px-2 py-1.5 font-mono font-semibold">
                     <div className="flex flex-col gap-0.5 min-w-0">
                       <span>
-                        {label}
+                        {asset}
                         <span className="opacity-40 font-normal text-[8px]">/USDT</span>
                       </span>
                       <span className="text-[9px] font-normal text-p5/50">{exchangeLabel}</span>
                     </div>
                   </td>
-                  <td className="px-2 py-1.5 text-right font-mono">1.00</td>
-                  <td className="px-2 py-1.5 text-right font-mono text-[10px] opacity-60">
-                    {formatVolume(info.buyQty)}
+                  <td className="px-2 py-1.5 text-right font-mono">
+                    {price > 0 ? formatPrice(price) : '—'}
+                  </td>
+                  <td className="px-2 py-1.5 text-right font-mono text-[10px]">
+                    <span className="opacity-80 font-semibold" style={{ color: ACTIVE_COLOR }}>
+                      ${usdtVal.toFixed(2)}
+                    </span>
                   </td>
                   <td />
                 </tr>
@@ -1246,6 +1324,32 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                 style={{ color: tradePnlSum >= 0 ? '#22c55e' : '#ef4444' }}
               >
                 {tradePnlSumLabel}
+              </span>
+            </div>
+          ) : isActiveFavView && activeUsdtSum ? (
+            <div className="flex items-center justify-between gap-2 px-2 py-0.5">
+              <span className="text-[9px] font-bold uppercase tracking-wider text-p5/70">
+                Total USDT
+              </span>
+              <span className="flex items-center gap-2 text-[10px] font-mono font-bold leading-none">
+                {activeUsdtSum.gate > 0 && (
+                  <span style={{ color: GATE_COLOR }} title="Gate.io">
+                    Gate ${activeUsdtSum.gate.toFixed(2)}
+                  </span>
+                )}
+                {activeUsdtSum.binance > 0 && (
+                  <span style={{ color: BINANCE_COLOR }} title="Binance">
+                    Bnb ${activeUsdtSum.binance.toFixed(2)}
+                  </span>
+                )}
+                {activeUsdtSum.both > 0 && (
+                  <span style={{ color: ACTIVE_COLOR }} title="Gate + Binance">
+                    G+B ${activeUsdtSum.both.toFixed(2)}
+                  </span>
+                )}
+                <span style={{ color: ACTIVE_COLOR }}>
+                  ${activeUsdtSum.total.toFixed(2)}
+                </span>
               </span>
             </div>
           ) : (

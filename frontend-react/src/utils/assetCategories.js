@@ -58,6 +58,21 @@ const W_PREFIX_NOT_WRAPPED = new Set([
 /** Tickers spot que parecem LP token mas não são (ex.: SLP = Smooth Love Potion). */
 const NOT_LP_BASES = new Set(['SLP']);
 
+/**
+ * bStocks da Binance: ações/ETFs tokenizados (sufixo B no ticker do ativo subjacente).
+ * Inclui ações (NVDAB, GOOGLB) e ETFs (SPYB, QQQB, SOXLB, DRAMB, EWYB…).
+ */
+const TOKENIZED_STOCK_BASES = new Set([
+  'AMDB', 'CBRSB', 'COINB', 'CRCLB', 'DRAMB', 'EWYB', 'GLWB', 'GOOGLB',
+  'INTCB', 'LITEB', 'METAB', 'MSFTB', 'MSTRB', 'MUB', 'NBISB', 'NVDAB',
+  'PLTRB', 'QCOMB', 'QQQB', 'SNDKB', 'SOXLB', 'SPCXB', 'SPYB', 'TSLAB', 'WDCB',
+]);
+
+/** Cripto spot cujo ticker termina em B e não é bStock. */
+const NOT_TOKENIZED_STOCK_BASES = new Set([
+  'ARB', 'BB', 'BNB', 'CKB', 'DGB', 'SHIB', 'TRB', 'YB',
+]);
+
 export const ASSET_CATEGORY_KEYS = [
   'stablecoins',
   'leveragedLong',
@@ -66,6 +81,7 @@ export const ASSET_CATEGORY_KEYS = [
   'liquidStaking',
   'lpTokens',
   'synthetic',
+  'tokenizedStocks',
 ];
 
 export const DEFAULT_ASSET_DISPLAY = Object.fromEntries(
@@ -139,6 +155,13 @@ function isSynthetic(base) {
   return SYNTHETIC_BASES.has(base);
 }
 
+function isTokenizedStock(base) {
+  if (NOT_TOKENIZED_STOCK_BASES.has(base)) return false;
+  if (TOKENIZED_STOCK_BASES.has(base)) return true;
+  // Heurística: ticker acionário típico (1–5 letras) + sufixo B da Binance (ex.: NVDA→NVDAB, GOOGL→GOOGLB)
+  return /^[A-Z]{1,5}B$/.test(base);
+}
+
 function isStablecoin(base) {
   return STABLE_BASES.has(base);
 }
@@ -154,6 +177,7 @@ export function getSymbolCategories(symbol) {
   if (isLiquidStaking(base)) categories.push('liquidStaking');
   if (isLpToken(base)) categories.push('lpTokens');
   if (isSynthetic(base)) categories.push('synthetic');
+  if (isTokenizedStock(base)) categories.push('tokenizedStocks');
 
   return categories;
 }

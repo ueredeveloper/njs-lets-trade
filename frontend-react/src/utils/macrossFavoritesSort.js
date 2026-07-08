@@ -80,6 +80,23 @@ function numOrNegInfinity(v) {
   return v != null && Number.isFinite(v) ? v : -Infinity;
 }
 
+/** Filtra favoritos MC: phase/symbol mantêm todos; near/cross só o estado ativo. */
+export function filterMacrossFavorites(symbols, status, sortBy) {
+  if (sortBy === 'phase' || sortBy === 'symbol') return symbols;
+  return symbols.filter((item) => {
+    const sym = typeof item === 'string' ? item : item.symbol;
+    const m = status?.[sym];
+    if (!m || m.error) return false;
+    switch (sortBy) {
+      case 'near_up':    return m.approachingUp === true;
+      case 'near_down':  return m.approachingDown === true;
+      case 'cross_up':   return m.crossUpHeld === true;
+      case 'cross_down': return m.crossDownHeld === true;
+      default:           return true;
+    }
+  });
+}
+
 /** Compara dois símbolos/linhas para ordenação da lista de favoritos MA-Cross. */
 export function compareMacrossFavorites(a, b, sortBy, ctx = {}) {
   const { status = {}, entriesBySymbol = new Map() } = ctx;

@@ -46,6 +46,7 @@ const PRESET_BODIES = {
     polling:   { pollMs: 60_000, fastPollMs: 30_000 },
     adaptiveOpts: { defaultPct: 3, maxPct: 8, minPct: 0.5, minEpisodes: 3 },
     volume:    { minVolumeUsdt: 1_000_000, allowLowVolume: false },
+    entryCooldownHours: 4,
   },
 };
 

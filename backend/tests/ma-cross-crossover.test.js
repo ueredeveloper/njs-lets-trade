@@ -284,31 +284,43 @@ describe('MA Cross — cruzamento', () => {
     expect(pf.reason).toBe('NOT_ABOVE_MA');
   });
 
-  test('filtro adaptive permite até maxDipPct', () => {
+  test('filtro adaptive usa maxDipPct fixo (não o dip histórico)', () => {
     const candles = makeCandles(Array(60).fill(100));
-    const pf = checkPriceFilter(97, candles, { enabled: true, period: 50, mode: 'adaptive', maxDipPct: 4 }, 3);
+    // adaptiveDip histórico = 1% → antes deixava 97 através; agora maxDipPct=4 é a banda fixa
+    const pf = checkPriceFilter(97, candles, { enabled: true, period: 50, mode: 'adaptive', maxDipPct: 4 }, 1);
     expect(pf.allowed).toBe(true);
+    expect(pf.dipPct).toBe(4);
+  });
+
+  test('filtro adaptive bloqueia abaixo do piso maxDipPct (fixo)', () => {
+    const candles = makeCandles(Array(60).fill(100));
+    const pf = checkPriceFilter(95, candles, { enabled: true, period: 50, mode: 'adaptive', maxDipPct: 4 }, 8);
+    expect(pf.allowed).toBe(false);
+    expect(pf.reason).toBe('BELOW_ADAPTIVE_FLOOR');
+    expect(pf.dipPct).toBe(4);
   });
 
   test('filtro adaptive bloqueia acima do teto maxAbovePct', () => {
     const candles = makeCandles(Array(60).fill(100));
     const pf = checkPriceFilter(105, candles, {
       enabled: true, period: 50, mode: 'adaptive', maxDipPct: 4, maxAbovePct: 4,
-    }, 3, {}, 4);
+    }, 3, {}, 10);
     expect(pf.allowed).toBe(false);
     expect(pf.reason).toBe('ABOVE_ADAPTIVE_CEILING');
+    expect(pf.abovePct).toBe(4);
   });
 
   test('filtro adaptive permite dentro do piso e teto', () => {
     const candles = makeCandles(Array(60).fill(100));
     const pf = checkPriceFilter(102, candles, {
       enabled: true, period: 50, mode: 'adaptive', maxDipPct: 4, maxAbovePct: 4,
-    }, 3, {}, 4);
+    }, 1, {}, 1);
     expect(pf.allowed).toBe(true);
     expect(pf.abovePct).toBe(4);
+    expect(pf.dipPct).toBe(4);
   });
 
-  test('maxAbovePct 0 desliga teto adaptativo', () => {
+  test('maxAbovePct 0 desliga teto', () => {
     const candles = makeCandles(Array(60).fill(100));
     const pf = checkPriceFilter(110, candles, {
       enabled: true, period: 50, mode: 'adaptive', maxDipPct: 4, maxAbovePct: 0,
@@ -316,6 +328,14 @@ describe('MA Cross — cruzamento', () => {
     expect(pf.allowed).toBe(true);
   });
 
+  test('fixedDipPct sobrescreve maxDipPct quando preenchido', () => {
+    const candles = makeCandles(Array(60).fill(100));
+    const pf = checkPriceFilter(97, candles, {
+      enabled: true, period: 50, mode: 'adaptive', maxDipPct: 4, fixedDipPct: 2,
+    }, 8);
+    expect(pf.allowed).toBe(false);
+    expect(pf.dipPct).toBe(2);
+  });
   test('config normaliza param1/param2 e período livre', () => {
     const c = normalizeMaCrossConfig({
       entry: { param1: { period: 34, interval: '1h' }, param2: { period: 89, interval: '4h' } },

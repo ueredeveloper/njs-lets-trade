@@ -238,27 +238,24 @@ export default function MaCrossStrategyForm({ form, patch, symbol, exchange }) {
                     {f.mode === 'adaptive' && (
                       <div className="space-y-2">
                         <div className="flex flex-wrap gap-2 items-center">
-                          <span className="text-p5/50">Piso máx % abaixo</span>
+                          <span className="text-p5/50">Piso % abaixo</span>
                           <NumInput value={f.maxDipPct} onChange={v => updateFilter(f.id, 'maxDipPct', v)}
                             min={0.5} max={20} step={0.5} className="w-14" />
-                          <span className="text-p5/40 text-[10px]">fixo %</span>
-                          <NumInput value={f.fixedDipPct} onChange={v => updateFilter(f.id, 'fixedDipPct', v)}
-                            min={0} max={20} step={0.5} className="w-14" placeholder="auto" />
                         </div>
                         <div className="flex flex-wrap gap-2 items-center">
-                          <span className="text-p5/50">Teto máx % acima</span>
+                          <span className="text-p5/50">Teto % acima</span>
                           <NumInput value={f.maxAbovePct ?? 4} onChange={v => updateFilter(f.id, 'maxAbovePct', v)}
                             min={0} max={20} step={0.5} className="w-14" />
-                          <span className="text-p5/40 text-[10px]">fixo %</span>
-                          <NumInput value={f.fixedAbovePct ?? ''} onChange={v => updateFilter(f.id, 'fixedAbovePct', v)}
-                            min={0} max={20} step={0.5} className="w-14" placeholder="auto" />
                           <span className="text-p5/40 text-[10px]">0 = desligado</span>
                         </div>
+                        <p className="text-[9px] text-p5/40 leading-relaxed">
+                          Valores fixos iguais em todas as moedas (não recalcula por histórico).
+                        </p>
                         {symbol?.trim() && (
                           <button type="button" onClick={() => handleSuggestBounds(f.id)}
                             className="text-[9px] px-2 py-0.5 rounded font-semibold"
                             style={{ background: `${FILTER_COLOR}18`, color: FILTER_COLOR, border: `1px solid ${FILTER_COLOR}44` }}>
-                            Sugerir piso/teto (histórico)
+                            Sugerir do histórico (opcional)
                           </button>
                         )}
                         {renderBoundsSuggest(f.id)}

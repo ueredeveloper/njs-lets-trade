@@ -28,7 +28,7 @@ export function resolveTradeChartInterval(entry, row) {
   return er.interval ?? '15m';
 }
 
-/** Config das bandas adaptativas (piso/teto) do filtro MA — MA-Cross */
+/** Bandas do filtro MA — MA-Cross: usa % da config (fixos), não histórico por moeda. */
 export function buildMaCrossAdaptiveBandsConfig(entry, boundsOverride = null) {
   if (!isMaCrossEntry(entry)) return null;
   const filters = (entry?.maFilters ?? entry?.tradeConfig?.maFilters ?? [])
@@ -36,30 +36,37 @@ export function buildMaCrossAdaptiveBandsConfig(entry, boundsOverride = null) {
   const filter = filters[0];
   if (!filter) return null;
   const opts = entry?.adaptiveOpts ?? entry?.tradeConfig?.adaptiveOpts ?? {};
+  const dipPct = Number(
+    boundsOverride?.maxDipPct
+    ?? (filter.fixedDipPct != null && filter.fixedDipPct !== '' ? filter.fixedDipPct : null)
+    ?? filter.maxDipPct
+    ?? 4,
+  );
+  const abovePct = Number(
+    boundsOverride?.maxAbovePct
+    ?? (filter.fixedAbovePct != null && filter.fixedAbovePct !== '' ? filter.fixedAbovePct : null)
+    ?? filter.maxAbovePct
+    ?? 4,
+  );
   return {
     period: Number(filter.period ?? 50),
     interval: filter.interval ?? '1h',
-    maxDipPct: Number(boundsOverride?.maxDipPct ?? filter.maxDipPct ?? 4),
-    maxAbovePct: Number(boundsOverride?.maxAbovePct ?? filter.maxAbovePct ?? 4),
-    fixedDipPct: filter.fixedDipPct != null && filter.fixedDipPct !== ''
-      ? Number(filter.fixedDipPct) : null,
-    fixedAbovePct: filter.fixedAbovePct != null && filter.fixedAbovePct !== ''
-      ? Number(filter.fixedAbovePct) : null,
+    maxDipPct: dipPct,
+    maxAbovePct: abovePct,
+    // Força banda fixa no chart — nunca recalcula por histórico da moeda
+    fixedDipPct: dipPct,
+    fixedAbovePct: abovePct > 0 ? abovePct : null,
     adaptiveOpts: opts,
   };
 }
 
-/** Slots MA do painel esquerdo alinhados à config do favorito */
+/**
+ * Slots MA do painel esquerdo alinhados à config do favorito.
+ * MA-Cross: null — mantém overlays do usuário (padrão MA1=50@1h); só o
+ * timeframe do candlestick segue o sinal.
+ */
 export function buildOverlaySlotsForEntry(entry, row) {
-  if (isMaCrossEntry(entry)) {
-    const e = entry.entry ?? entry.tradeConfig?.entry ?? {};
-    const ma1 = e.ma1 ?? { period: 9, interval: '15m' };
-    const ma2 = e.ma2 ?? { period: 21, interval: ma1.interval ?? '15m' };
-    return [
-      { id: 'slot1', period: String(ma1.period ?? 9), interval: ma1.interval ?? '15m', enabled: true },
-      { id: 'slot2', period: String(ma2.period ?? 21), interval: ma2.interval ?? '15m', enabled: true },
-    ];
-  }
+  if (isMaCrossEntry(entry)) return null;
   if (isRule2Row(row)) {
     const em = entry?.rule2?.entryMa ?? entry?.entryMa ?? {};
     const period = String(em.period ?? 50);
@@ -268,7 +275,8 @@ export async function loadMultitradeSymbolChart(entry, {
     interval,
     exchangeSource: src,
     markers,
-    overlaySlots: buildOverlaySlotsForEntry(entry, null),
+    // MA-Cross: bandas = % da config (fixos). Não recalcula histórico por moeda.
+    overlaySlots: null,
     adaptiveBands: buildMaCrossAdaptiveBandsConfig(entry),
   });
 }

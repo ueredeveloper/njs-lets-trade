@@ -182,6 +182,10 @@ function outcomeClass(row) {
   if (outcome.startsWith('CANCELLED')) return 'text-p5/40';
   if (outcome === 'BOUGHT' || outcome === 'POSITION_OPEN') return 'text-emerald-400';
   if (outcome === 'PENDING' || outcome === 'PENDING_OPEN') return 'text-sky-400';
+  if (outcome === 'ENTRY_COOLDOWN' || outcome === 'NO_PULLBACK' || outcome === 'ABOVE_MA2_CAP'
+    || outcome === 'ENTRY_WINDOW_PASSED' || outcome === 'PENDING_TIMEOUT') {
+    return 'text-amber-400';
+  }
   return 'text-p5/70';
 }
 
@@ -624,6 +628,34 @@ export default function MultitradeBacktestPanel({ entry }) {
                 <>
                   <span className="text-p5/50">Saída</span>
                   <span className="text-p5/80">{data.config.exitCross}</span>
+                </>
+              )}
+              {maCross && data?.config?.maxAboveMaPct != null && (
+                <>
+                  <span className="text-p5/50">Teto MA2</span>
+                  <span className="text-p5/80">≤{data.config.maxAboveMaPct}%</span>
+                </>
+              )}
+              {maCross && data?.config?.pullback && (
+                <>
+                  <span className="text-p5/50">Pullback</span>
+                  <span className="text-p5/80">{data.config.pullback}</span>
+                </>
+              )}
+              {maCross && data?.config?.cooldownHours != null && (
+                <>
+                  <span className="text-p5/50">Cooldown</span>
+                  <span className="text-p5/80">
+                    {data.config.cooldownHours === 'off' || data.config.cooldownHours === 0
+                      ? 'off'
+                      : `${data.config.cooldownHours}h`}
+                  </span>
+                </>
+              )}
+              {maCross && data?.config?.stopLoss && (
+                <>
+                  <span className="text-p5/50">Stop</span>
+                  <span className="text-p5/80">{data.config.stopLoss}</span>
                 </>
               )}
               {entry.entryRsi && !maCross && (

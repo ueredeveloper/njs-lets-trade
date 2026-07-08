@@ -62,7 +62,7 @@ export const MA_CROSS_DEFAULTS = {
       ],
     },
   },
-  stopLoss: { enabled: true, maxLossPct: 5 },
+  stopLoss: { enabled: true, maxLossPct: 5, trailing: true, trailStepPct: 5 },
   execution: {
     immediateEntry: false,
     entryDiscount: 0.001,
@@ -167,6 +167,8 @@ export function normalizeMaCrossForm(body = {}) {
     stopLoss: {
       enabled: body.stopLoss?.enabled !== false,
       maxLossPct: Number(body.stopLoss?.maxLossPct ?? d.stopLoss.maxLossPct),
+      trailing: body.stopLoss?.trailing !== false,
+      trailStepPct: Number(body.stopLoss?.trailStepPct ?? d.stopLoss.trailStepPct ?? body.stopLoss?.maxLossPct ?? 5),
     },
     execution: {
       ...d.execution,

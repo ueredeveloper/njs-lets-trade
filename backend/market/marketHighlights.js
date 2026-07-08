@@ -4,10 +4,14 @@ const fs = require('fs');
 const path = require('path');
 const getTickers = require('../binance/cachedTicker24hr');
 const { getActiveUsdtPairs } = require('../binance/getActiveUsdtPairs');
-const { filterSymbols } = require('../utils/assetCategories');
 
 const GATE_BASE = 'https://api.gateio.ws/api/v4';
 const LIMIT_DEFAULT = 10;
+/**
+ * Folga de candidatos: o frontend aplica Exibição de ativos (bStocks etc.)
+ * e corta nos 10 finais — se cortássemos no backend, a tabela NB ficaria vazia.
+ */
+const CANDIDATE_MULTIPLIER = 8;
 const MIN_VOLUME_USDT = 1_000_000;
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const BINANCE_LISTING_CACHE_FILE = path.join(__dirname, '../data/binance-listing-times.json');
@@ -112,7 +116,8 @@ function buildGainersFilter(name, items) {
   const volume24h = Object.fromEntries(
     items.filter((i) => Number.isFinite(i.volume)).map((i) => [i.symbol, i.volume]),
   );
-  return { name, list, meta: { changePct, volume24h } };
+  // candidates = lista folgada; frontend aplica assetDisplay e corta nos 10
+  return { name, list, meta: { changePct, volume24h, candidates: list } };
 }
 
 function buildNewListingsFilter(name, items) {
@@ -121,7 +126,7 @@ function buildNewListingsFilter(name, items) {
   const volume24h = Object.fromEntries(
     items.filter((i) => Number.isFinite(i.volume)).map((i) => [i.symbol, i.volume]),
   );
-  return { name, list, meta: { listedAt, volume24h } };
+  return { name, list, meta: { listedAt, volume24h, candidates: list } };
 }
 
 async function computeMarketHighlights(limit = LIMIT_DEFAULT) {
@@ -134,33 +139,31 @@ async function computeMarketHighlights(limit = LIMIT_DEFAULT) {
 
   const activeSet = new Set(activeUsdt.list ?? []);
 
-  const binanceGainers = filterSymbols(
-    binanceTickers
-      .filter((t) => isUsdtSpot(t.symbol))
-      .filter((t) => Number(t.quoteVolume) >= MIN_VOLUME_USDT)
-      .map((t) => ({
-        symbol: t.symbol,
-        changePct: Number(t.priceChangePercent),
-        volume: Number(t.quoteVolume),
-      }))
-      .filter((t) => Number.isFinite(t.changePct))
-      .sort((a, b) => b.changePct - a.changePct)
-      .slice(0, limit * 3),
-  ).slice(0, limit);
+  const candidateLimit = limit * CANDIDATE_MULTIPLIER;
 
-  const gateGainers = filterSymbols(
-    gateTickers
-      .filter((t) => t.currency_pair?.endsWith('_USDT'))
-      .filter((t) => Number(t.quote_volume) >= MIN_VOLUME_USDT)
-      .map((t) => ({
-        symbol: gatePairToSymbol(t.currency_pair),
-        changePct: Number(t.change_percentage),
-        volume: Number(t.quote_volume),
-      }))
-      .filter((t) => Number.isFinite(t.changePct))
-      .sort((a, b) => b.changePct - a.changePct)
-      .slice(0, limit * 3),
-  ).slice(0, limit);
+  const binanceGainers = binanceTickers
+    .filter((t) => isUsdtSpot(t.symbol))
+    .filter((t) => Number(t.quoteVolume) >= MIN_VOLUME_USDT)
+    .map((t) => ({
+      symbol: t.symbol,
+      changePct: Number(t.priceChangePercent),
+      volume: Number(t.quoteVolume),
+    }))
+    .filter((t) => Number.isFinite(t.changePct))
+    .sort((a, b) => b.changePct - a.changePct)
+    .slice(0, candidateLimit);
+
+  const gateGainers = gateTickers
+    .filter((t) => t.currency_pair?.endsWith('_USDT'))
+    .filter((t) => Number(t.quote_volume) >= MIN_VOLUME_USDT)
+    .map((t) => ({
+      symbol: gatePairToSymbol(t.currency_pair),
+      changePct: Number(t.change_percentage),
+      volume: Number(t.quote_volume),
+    }))
+    .filter((t) => Number.isFinite(t.changePct))
+    .sort((a, b) => b.changePct - a.changePct)
+    .slice(0, candidateLimit);
 
   const binanceVolumeBySymbol = Object.fromEntries(
     binanceTickers
@@ -175,33 +178,29 @@ async function computeMarketHighlights(limit = LIMIT_DEFAULT) {
 
   const nowMs = Date.now();
   const listingTimes = await getBinanceListingTimes([...activeSet]);
-  const binanceNew = filterSymbols(
-    [...activeSet]
-      .map((symbol) => ({
-        symbol,
-        listedAt: listingTimes[symbol] ?? null,
-        volume: binanceVolumeBySymbol[symbol] ?? null,
-      }))
-      .filter((s) => Number.isFinite(s.listedAt) && s.listedAt <= nowMs)
-      .sort((a, b) => b.listedAt - a.listedAt)
-      .slice(0, limit * 3),
-  ).slice(0, limit);
+  const binanceNew = [...activeSet]
+    .map((symbol) => ({
+      symbol,
+      listedAt: listingTimes[symbol] ?? null,
+      volume: binanceVolumeBySymbol[symbol] ?? null,
+    }))
+    .filter((s) => Number.isFinite(s.listedAt) && s.listedAt <= nowMs)
+    .sort((a, b) => b.listedAt - a.listedAt)
+    .slice(0, candidateLimit);
 
-  const gateNew = filterSymbols(
-    gatePairs
-      .filter((p) => p.id?.endsWith('_USDT') && p.trade_status === 'tradable')
-      .map((p) => {
-        const symbol = gatePairToSymbol(p.id);
-        return {
-          symbol,
-          listedAt: Number(p.sell_start) * 1000,
-          volume: gateVolumeBySymbol[symbol] ?? null,
-        };
-      })
-      .filter((s) => Number.isFinite(s.listedAt) && s.listedAt > 0 && s.listedAt <= nowMs)
-      .sort((a, b) => b.listedAt - a.listedAt)
-      .slice(0, limit * 3),
-  ).slice(0, limit);
+  const gateNew = gatePairs
+    .filter((p) => p.id?.endsWith('_USDT') && p.trade_status === 'tradable')
+    .map((p) => {
+      const symbol = gatePairToSymbol(p.id);
+      return {
+        symbol,
+        listedAt: Number(p.sell_start) * 1000,
+        volume: gateVolumeBySymbol[symbol] ?? null,
+      };
+    })
+    .filter((s) => Number.isFinite(s.listedAt) && s.listedAt > 0 && s.listedAt <= nowMs)
+    .sort((a, b) => b.listedAt - a.listedAt)
+    .slice(0, candidateLimit);
 
   return [
     buildGainersFilter('Favoritos|Alta|Binance', binanceGainers),

@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback, useEffect, useMemo } from 'react';
+import { createContext, useContext, useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { addFavorite, removeFavorite, fetchActiveTrades, ignoreActiveTrade,
   fetchMultitradeFavorites, addMultitradeFavorite, updateMultitradeFavorite, removeMultitradeFavorite,
   patchMultitradeBotState,
@@ -47,10 +47,29 @@ function isAutoHighlightFilter(name) {
   return name?.startsWith('Favoritos|Alta|') || name?.startsWith('Favoritos|Novas|');
 }
 
+const HIGHLIGHT_DISPLAY_LIMIT = 10;
+
+/** Aplica Exibição de ativos e corta nos N finais usados na UI (NB, ↑B, cards). */
+function applyAssetDisplayToHighlight(filter, assetDisplay, limit = HIGHLIGHT_DISPLAY_LIMIT) {
+  if (!filter || !isAutoHighlightFilter(filter.name)) return filter;
+  const candidates = Array.isArray(filter.meta?.candidates) && filter.meta.candidates.length > 0
+    ? filter.meta.candidates
+    : (filter.list ?? []);
+  const list = candidates.filter((sym) => isSymbolVisible(sym, assetDisplay)).slice(0, limit);
+  // Mantém listedAt/changePct/volume24h completos (candidatos) para reaplicar ao ligar categorias
+  return {
+    ...filter,
+    list,
+    meta: { ...(filter.meta || {}), candidates },
+  };
+}
+
 export function CurrencyProvider({ children }) {
   // Lista completa do servidor; currencies expõe versão filtrada por categoria
   const [rawCurrencies, setRawCurrencies] = useState({ name: '1h|All', list: [] });
   const [assetDisplay, setAssetDisplayState] = useState(() => loadAssetDisplay());
+  const assetDisplayRef = useRef(assetDisplay);
+  assetDisplayRef.current = assetDisplay;
   const [chartPanelButtons, setChartPanelButtonsState] = useState(() => loadChartPanelButtons());
   const [uiPrefs, setUiPrefsState] = useState(() => loadUiPreferences());
 
@@ -342,12 +361,19 @@ export function CurrencyProvider({ children }) {
       return;
     }
     const sym = (symbol ?? entry.symbol)?.toUpperCase();
-    setMultitradeChartFocus(prev => ({
-      ...(prev ?? {}),
-      symbol: sym,
-      overlaySlots: buildOverlaySlotsForEntry(entry, null),
-      adaptiveBands: buildMaCrossAdaptiveBandsConfig(entry),
-    }));
+    const strategySlots = buildOverlaySlotsForEntry(entry, null);
+    setMultitradeChartFocus(prev => {
+      const next = {
+        ...(prev ?? {}),
+        symbol: sym,
+        // Bandas do filtro MA: % fixos da config (ex. ±4%), iguais em todas as moedas
+        adaptiveBands: buildMaCrossAdaptiveBandsConfig(entry),
+      };
+      // MA-Cross → null: não troca MA1/MA2 do usuário (padrão 50@1h)
+      if (strategySlots) next.overlaySlots = strategySlots;
+      else delete next.overlaySlots;
+      return next;
+    });
   }, []);
 
   const clearMultitradeChartView = useCallback(() => {
@@ -403,15 +429,13 @@ export function CurrencyProvider({ children }) {
       setActiveTrades((prev) => {
         const next = new Map(prev);
         next.delete(sym);
-        // USDT/USDC entram como chaves sintéticas por exchange — ignore é por asset
-        if (sym.startsWith('USDT_') || sym === 'USDT') {
+        // Caixa (USDT/USDC/BRL…) e qualquer ASSET_GATE/_BNB — ignore remove todas as exchanges do asset
+        const cash = sym.match(/^([A-Z0-9]+)_(GATE|BNB)$/);
+        const asset = cash?.[1]
+          ?? (sym === 'USDT' || sym === 'USDC' ? sym : null);
+        if (asset) {
           for (const k of [...next.keys()]) {
-            if (k === 'USDT' || k.startsWith('USDT_')) next.delete(k);
-          }
-        }
-        if (sym.startsWith('USDC_') || sym === 'USDC') {
-          for (const k of [...next.keys()]) {
-            if (k === 'USDC' || k.startsWith('USDC_')) next.delete(k);
+            if (k === asset || k.startsWith(`${asset}_`)) next.delete(k);
           }
         }
         return next;
@@ -522,13 +546,56 @@ export function CurrencyProvider({ children }) {
   const ensureMarketHighlights = useCallback(async () => {
     setMarketHighlightsLoading(true);
     try {
-      const items = await fetchMarketHighlights(10);
-      items.forEach((f) => addFilter(f));
+      const items = await fetchMarketHighlights(HIGHLIGHT_DISPLAY_LIMIT);
+      const display = assetDisplayRef.current;
+      setFilters((prev) => {
+        let next = [...prev];
+        for (const raw of items) {
+          const withCandidates = {
+            ...raw,
+            meta: {
+              ...(raw.meta || {}),
+              candidates: Array.isArray(raw.meta?.candidates)
+                ? [...raw.meta.candidates]
+                : (Array.isArray(raw.list) ? [...raw.list] : []),
+            },
+          };
+          const item = applyAssetDisplayToHighlight(withCandidates, display);
+          const index = next.findIndex((f) => f.name === item.name);
+          if (index !== -1) {
+            next = [...next];
+            next[index] = item;
+          } else {
+            next = [...next, item];
+          }
+        }
+        return next;
+      });
       return items;
     } finally {
       setMarketHighlightsLoading(false);
     }
-  }, [addFilter]);
+  }, []);
+
+  // Recorta Alta/Novas quando o usuário liga/desliga categorias em Exibição de ativos
+  useEffect(() => {
+    setFilters((prev) => {
+      let changed = false;
+      const next = prev.map((f) => {
+        if (!isAutoHighlightFilter(f.name)) return f;
+        const pruned = applyAssetDisplayToHighlight(f, assetDisplay);
+        if (
+          pruned.list.length !== f.list.length
+          || pruned.list.some((s, i) => s !== f.list[i])
+        ) {
+          changed = true;
+          return pruned;
+        }
+        return f;
+      });
+      return changed ? next : prev;
+    });
+  }, [assetDisplay]);
 
   const removeFilters = useCallback((filtersToRemove) => {
     setFilters((prev) => {

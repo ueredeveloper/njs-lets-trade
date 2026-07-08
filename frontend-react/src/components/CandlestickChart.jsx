@@ -9,10 +9,10 @@ import convertOpenTime from '../utils/convertOpenTime';
 import Tooltip from './Tooltip';
 import { hasAnyChartPanelButton } from '../utils/chartPanelButtons';
 import { DEFAULT_OVERLAY_SLOTS, BAND_PCT_OPTIONS } from '../utils/uiPreferences';
-import { CHART_VIEW, computeZoomWindow, buildFixedDataZoom, buildInsideDataZoom, computeCandleLimitFromTime, isTradePanelChartView } from '../utils/chartView';
+import { CHART_VIEW, INTERVAL_MS, computeZoomWindow, buildFixedDataZoom, buildInsideDataZoom, computeCandleLimitFromTime, isTradePanelChartView } from '../utils/chartView';
 
 const LIMIT = DEFAULT_CANDLE_LIMIT;
-const LAST_CANDLES = 10;
+const LAST_CANDLE_PRESETS = [10, 20, 30];
 const MAX_CANDLES = 1000;
 const CANDLE_FETCH_STEPS = [500, 750, 1000];
 const OVERLAY_MA_INTERVALS = ['1m', '5m', '15m', '30m', '1h', '2h', '4h', '8h', '12h', '1d'];
@@ -20,6 +20,12 @@ const OVERLAY_MA_COLORS = ['#fb923c', '#c084fc'];
 const BAND_PANEL_KEYS = ['bandsPct', 'bandsAbove', 'bandsBelow'];
 const INTERVALS = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w'];
 const DEFAULT_INTERVAL = '15m';
+
+function fmtBandPct(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return '?';
+  return Number.isInteger(n) ? String(n) : n.toFixed(2).replace(/\.?0+$/, '');
+}
 
 const CHART_PRICE_PAD = 54;        // direita: rótulos do eixo de preço
 const CHART_LEFT_MARGIN = 8;       // margem esquerda mínima
@@ -84,6 +90,31 @@ function alignPointsToCandles(candlesticks, points) {
     }
     return best;
   });
+}
+
+/**
+ * Quantidade de candles do intervalo da overlay para cobrir o span do gráfico
+ * + período da EMA (warmup). Evita MA1/bandas só nos últimos 1–3 candles
+ * quando o overlay é um TF maior (ex.: EMA50@1h sobre chart 15m).
+ */
+function computeOverlayMaFetchLimit(chartInterval, overlayInterval, period, chartCandleCount, baseLimit = DEFAULT_CANDLE_LIMIT) {
+  const chartMs = INTERVAL_MS[chartInterval] ?? 900_000;
+  const ovMs = INTERVAL_MS[overlayInterval] ?? chartMs;
+  const spanCandles = Math.max(Number(chartCandleCount) || 0, DEFAULT_CANDLE_LIMIT);
+  const barsForSpan = Math.ceil((spanCandles * chartMs) / ovMs);
+  const periodN = Math.max(1, parseInt(period, 10) || 50);
+  return Math.min(
+    MAX_CANDLES,
+    Math.max(baseLimit || 0, barsForSpan + periodN + 30, periodN * 3, 100),
+  );
+}
+
+/** True se a série MA já tem pontos desde o início da janela visível. */
+function overlayPointsCoverWindow(points, candlesticks, displayCount) {
+  if (!points?.length || !candlesticks?.length) return false;
+  const DL = Math.min(displayCount || candlesticks.length, candlesticks.length);
+  const oldestVisible = Number(candlesticks[candlesticks.length - DL].openTime);
+  return Number(points[0].openTime) <= oldestVisible;
 }
 
 async function fetchOverlayMaPoints(symbol, interval, period, source, limit) {
@@ -366,32 +397,46 @@ function ChartIndicatorPanel({
             <PanelTip text={t('chart.tip.bands_title')}>
               <span style={{ ...sectionTitle, color: '#94a3b8', cursor: 'help' }}>Bandas</span>
             </PanelTip>
-            {showBandsPct && (
+            {showBandsPct && !maBands.adaptive && (
             <PanelTip text={t('chart.tip.bands_pct', maBands.pct)}>
               <select
                 value={maBands.pct}
-                onChange={e => setMaBands(b => ({ ...b, pct: Number(e.target.value) }))}
+                onChange={e => {
+                  const pct = Number(e.target.value);
+                  setMaBands(b => ({ ...b, pct, dipPct: pct, stretchPct: pct, adaptive: false }));
+                }}
                 style={panelSelect('#94a3b8')}
               >
                 {BAND_PCT_OPTIONS.map(p => <option key={p} value={p}>{p}%</option>)}
               </select>
             </PanelTip>
             )}
+            {showBandsPct && maBands.adaptive && (
+            <PanelTip text={t('chart.tip.bands_adaptive')}>
+              <span style={{
+                ...panelBtn(true, '#94a3b8', true),
+                cursor: 'default',
+                fontSize: 8,
+              }}>
+                adapt
+              </span>
+            </PanelTip>
+            )}
             {showBandsAbove && (
-            <PanelTip text={t('chart.tip.band_above', maBands.pct)}>
+            <PanelTip text={t('chart.tip.band_above', maBands.stretchPct ?? maBands.pct)}>
               <button type="button" onClick={() => setMaBands(b => ({ ...b, showAbove: !b.showAbove }))} style={{
                 ...panelBtn(maBands.showAbove, '#22c55e', true),
               }}>
-                ↑{maBands.pct}%
+                ↑{fmtBandPct(maBands.stretchPct ?? maBands.pct)}%
               </button>
             </PanelTip>
             )}
             {showBandsBelow && (
-            <PanelTip text={t('chart.tip.band_below', maBands.pct)}>
+            <PanelTip text={t('chart.tip.band_below', maBands.dipPct ?? maBands.pct)}>
               <button type="button" onClick={() => setMaBands(b => ({ ...b, showBelow: !b.showBelow }))} style={{
                 ...panelBtn(maBands.showBelow, '#f87171', true),
               }}>
-                ↓{maBands.pct}%
+                ↓{fmtBandPct(maBands.dipPct ?? maBands.pct)}%
               </button>
             </PanelTip>
             )}
@@ -1513,7 +1558,7 @@ export default function CandlestickChart() {
 
   useEffect(() => {
     if (multitradeChartFocus?.adaptiveBands) return;
-    setMaBands({ ...uiPrefs.maBandsDefaults });
+    setMaBands({ ...uiPrefs.maBandsDefaults, adaptive: false });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedChart?.symbol]);
 
@@ -1534,7 +1579,8 @@ export default function CandlestickChart() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedChart?.symbol, selectedChart?.interval, chartViewSource, multitradeChartFocus?.candleLimit, chartCandleWindowReset]);
 
-  // Overlays MA: MA-Cross só muda intervalo do chart; demais MT podem injetar slots da estratégia
+  // Overlays MA: prefs do usuário (padrão MA1=50@1h). Só AMAP/5m injetam slots;
+  // MA-Cross nunca sobrescreve — só muda o intervalo do candlestick.
   useEffect(() => {
     if (isTradePanelChartView(chartViewSource)) {
       if (multitradeChartFocus?.overlaySlots) {
@@ -1582,64 +1628,52 @@ export default function CandlestickChart() {
       return undefined;
     }
 
+    const chartCandles = selectedChart.candlesticks ?? [];
+    const visibleCount = Math.min(
+      displayCandleCount > 0 ? displayCandleCount : chartCandles.length,
+      chartCandles.length || DEFAULT_CANDLE_LIMIT,
+    );
+
     let cancelled = false;
     setOverlayMaLoading(true);
     (async () => {
       const next = {};
       await Promise.all(toFetch.map(async (slot, idx) => {
         const key = `${slot.period}-${slot.interval}`;
-        if (slot.interval === chartIv && slot.period === '50') {
-          const candles = selectedChart.candlesticks ?? [];
-          const ma = selectedChart.ma50 ?? [];
-          if (ma.length && candles.length) {
-            const offset = candles.length - ma.length;
-            next[key] = ma.map((val, i) => ({
-              openTime: Number(candles[offset + i].openTime),
-              value: val,
-            }));
-          }
+        const sameIv = slot.interval === chartIv;
+
+        const tryReuse = (period, maSeries) => {
+          if (!sameIv || slot.period !== period || !maSeries?.length || !chartCandles.length) return null;
+          const offset = chartCandles.length - maSeries.length;
+          const points = maSeries.map((val, i) => ({
+            openTime: Number(chartCandles[offset + i].openTime),
+            value: val,
+          }));
+          return overlayPointsCoverWindow(points, chartCandles, visibleCount) ? points : null;
+        };
+
+        const reused =
+          tryReuse('50', selectedChart.ma50)
+          ?? tryReuse('9', selectedChart.ma9)
+          ?? tryReuse('21', selectedChart.ma21)
+          ?? tryReuse('200', selectedChart.movingAverage);
+
+        if (reused) {
+          next[key] = reused;
           return;
         }
-        if (slot.interval === chartIv && slot.period === '9') {
-          const candles = selectedChart.candlesticks ?? [];
-          const ma = selectedChart.ma9 ?? [];
-          if (ma.length && candles.length) {
-            const offset = candles.length - ma.length;
-            next[key] = ma.map((val, i) => ({
-              openTime: Number(candles[offset + i].openTime),
-              value: val,
-            }));
-          }
-          return;
-        }
-        if (slot.interval === chartIv && slot.period === '21') {
-          const candles = selectedChart.candlesticks ?? [];
-          const ma = selectedChart.ma21 ?? [];
-          if (ma.length && candles.length) {
-            const offset = candles.length - ma.length;
-            next[key] = ma.map((val, i) => ({
-              openTime: Number(candles[offset + i].openTime),
-              value: val,
-            }));
-          }
-          return;
-        }
-        if (slot.interval === chartIv && slot.period === '200') {
-          const candles = selectedChart.candlesticks ?? [];
-          const ma = selectedChart.movingAverage ?? [];
-          if (ma.length && candles.length) {
-            const offset = candles.length - ma.length;
-            next[key] = ma.map((val, i) => ({
-              openTime: Number(candles[offset + i].openTime),
-              value: val,
-            }));
-          }
-          return;
-        }
+
         try {
-          const ovLimit = isTradePanelChartView(chartViewSource) && multitradeChartFocus?.fetchFromMs
+          const baseLimit = isTradePanelChartView(chartViewSource) && multitradeChartFocus?.fetchFromMs
             ? computeCandleLimitFromTime(multitradeChartFocus.fetchFromMs, slot.interval)
             : overlayFetchLimit;
+          const ovLimit = computeOverlayMaFetchLimit(
+            chartIv,
+            slot.interval,
+            slot.period,
+            Math.max(visibleCount, chartCandles.length, DEFAULT_CANDLE_LIMIT),
+            baseLimit,
+          );
           next[key] = await fetchOverlayMaPoints(
             selectedChart.symbol,
             slot.interval,
@@ -1659,11 +1693,18 @@ export default function CandlestickChart() {
     return () => { cancelled = true; };
   }, [overlaySlots, selectedChart?.symbol, selectedChart?.interval, selectedChart?.source, selectedChart?.candlesticks, selectedChart?.ma50, selectedChart?.ma9, selectedChart?.ma21, selectedChart?.movingAverage, currentInterval, overlayFetchLimit, chartPanelButtons, chartViewSource, multitradeChartFocus?.fetchFromMs, displayCandleCount, chartCandleWindowReset]);
 
-  // Bandas adaptativas (piso/teto) do filtro MA — MA-Cross
+  // Bandas adaptativas (piso/teto) — só quando o foco MT pede (ex.: clique em trade no backtest)
   useEffect(() => {
     const cfg = multitradeChartFocus?.adaptiveBands;
     if (!cfg || !selectedChart?.symbol || !bandsPanelEnabled) {
       setAdaptiveBandOverlay(null);
+      if (!cfg) {
+        setMaBands((prev) => (
+          prev.adaptive
+            ? { ...uiPrefs.maBandsDefaults, adaptive: false }
+            : prev
+        ));
+      }
       return undefined;
     }
 
@@ -1671,20 +1712,33 @@ export default function CandlestickChart() {
 
     (async () => {
       try {
+        const chartIv = selectedChart.interval ?? '15m';
+        const chartLen = selectedChart.candlesticks?.length ?? DEFAULT_CANDLE_LIMIT;
+        const visibleCount = Math.min(
+          displayCandleCount > 0 ? displayCandleCount : chartLen,
+          chartLen || DEFAULT_CANDLE_LIMIT,
+        );
+        const bandLimit = computeOverlayMaFetchLimit(
+          chartIv,
+          cfg.interval,
+          cfg.period,
+          Math.max(visibleCount, chartLen, DEFAULT_CANDLE_LIMIT),
+          overlayFetchLimit,
+        );
         const [points, bounds] = await Promise.all([
           fetchOverlayMaPoints(
             selectedChart.symbol,
             cfg.interval,
             cfg.period,
             selectedChart.source,
-            overlayFetchLimit,
+            bandLimit,
           ),
           fetchChartAdaptiveBands({
             symbol: selectedChart.symbol,
             exchange: selectedChart.source === 'gate' ? 'gate' : 'binance',
             period: cfg.period,
             interval: cfg.interval,
-            limit: overlayFetchLimit,
+            limit: bandLimit,
             maxDipPct: cfg.maxDipPct,
             maxAbovePct: cfg.maxAbovePct,
             fixedDipPct: cfg.fixedDipPct,
@@ -1708,6 +1762,7 @@ export default function CandlestickChart() {
           pct: Math.max(dipPct, stretchPct),
           dipPct,
           stretchPct,
+          adaptive: true,
         });
       } catch (e) {
         if (!cancelled) {
@@ -1722,11 +1777,13 @@ export default function CandlestickChart() {
     multitradeChartFocus?.adaptiveBands,
     selectedChart?.symbol,
     selectedChart?.source,
+    selectedChart?.interval,
     overlayFetchLimit,
     bandsPanelEnabled,
     displayCandleCount,
     chartCandleWindowReset,
     selectedChart?.candlesticks?.length,
+    uiPrefs.maBandsDefaults,
   ]);
 
   const colors = useMemo(() => getThemeColors(), [themeTick]);
@@ -1796,9 +1853,9 @@ export default function CandlestickChart() {
     }
   }
 
-  async function handleLoadLast10Candles() {
+  function handleLoadLastNCandles(n) {
     if (!selectedChart?.symbol || !selectedChart?.candlesticks?.length) return;
-    setDisplayCandleCount(LAST_CANDLES);
+    setDisplayCandleCount(n);
     setChartZoom(null);
   }
 
@@ -1829,7 +1886,7 @@ export default function CandlestickChart() {
     if (chartZoom && (isTradePanelChartView(chartViewSource) || chartViewSource === CHART_VIEW.STATISTICS)) {
       return candles?.length ?? displayCandleCount;
     }
-    // Botão 10 / load more — prioridade sobre expansão automática por marcadores
+    // Botões 10/20/30 / load more — prioridade sobre expansão automática por marcadores
     if (displayCandleCount !== LIMIT) {
       return Math.min(displayCandleCount, candles?.length ?? displayCandleCount);
     }
@@ -1983,14 +2040,24 @@ export default function CandlestickChart() {
 
           {/* Grupo de janela de candles — alinhado à direita, isolado dos intervalos */}
           <div className="ml-auto flex items-center gap-1 pl-2 border-l border-p2/30">
-            <button
-              onClick={handleLoadLast10Candles}
-              disabled={loadingMoreCandles || !selectedChart?.symbol || !selectedChart?.candlesticks?.length}
-              title={t('chart.load_last_10')}
-              className="px-1.5 md:px-2 py-0.5 text-[10px] md:text-xs rounded font-mono transition-colors disabled:opacity-40 text-p5 hover:bg-p3/40 hover:text-white border border-p3/40 shrink-0"
-            >
-              {t('chart.last_10_btn')}
-            </button>
+            {LAST_CANDLE_PRESETS.map((n) => {
+              const active = displayCandleCount === n && !chartZoom;
+              return (
+                <button
+                  key={n}
+                  onClick={() => handleLoadLastNCandles(n)}
+                  disabled={loadingMoreCandles || !selectedChart?.symbol || !selectedChart?.candlesticks?.length}
+                  title={t(`chart.load_last_${n}`)}
+                  className={`px-1.5 md:px-2 py-0.5 text-[10px] md:text-xs rounded font-mono transition-colors disabled:opacity-40 border shrink-0 ${
+                    active
+                      ? 'bg-p4 text-white border-p4'
+                      : 'text-p5 hover:bg-p3/40 hover:text-white border-p3/40'
+                  }`}
+                >
+                  {t(`chart.last_${n}_btn`)}
+                </button>
+              );
+            })}
             <button
               onClick={handleLoadMoreCandles}
               disabled={loadingMoreCandles || (candleFetchLimit >= MAX_CANDLES && (selectedChart?.candlesticks?.length ?? 0) >= MAX_CANDLES)}

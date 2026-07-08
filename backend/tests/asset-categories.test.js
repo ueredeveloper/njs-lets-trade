@@ -40,4 +40,23 @@ describe('assetCategories', () => {
   test('WIF is not classified as wrapped', () => {
     expect(getSymbolCategories('WIFUSDT')).not.toContain('wrapped');
   });
+
+  test('bStocks tokenized stocks/ETFs hidden by default', () => {
+    expect(getSymbolCategories('SOXLBUSDT')).toContain('tokenizedStocks');
+    expect(getSymbolCategories('GOOGLBUSDT')).toContain('tokenizedStocks');
+    expect(getSymbolCategories('SPYBUSDT')).toContain('tokenizedStocks');
+    expect(getSymbolCategories('NVDABUSDT')).toContain('tokenizedStocks');
+    expect(isSymbolVisible('SOXLBUSDT', DEFAULT_ASSET_DISPLAY)).toBe(false);
+    expect(isSymbolVisible('GOOGLBUSDT', {
+      ...DEFAULT_ASSET_DISPLAY,
+      tokenizedStocks: true,
+    })).toBe(true);
+  });
+
+  test('crypto ending in B is not tokenized stock', () => {
+    expect(getSymbolCategories('ARBUSDT')).not.toContain('tokenizedStocks');
+    expect(getSymbolCategories('BNBUSDT')).not.toContain('tokenizedStocks');
+    expect(getSymbolCategories('SHIBUSDT')).not.toContain('tokenizedStocks');
+    expect(isSymbolVisible('ARBUSDT', DEFAULT_ASSET_DISPLAY)).toBe(true);
+  });
 });

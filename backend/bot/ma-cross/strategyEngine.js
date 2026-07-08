@@ -369,20 +369,24 @@ function checkPriceFilter(close, filterCandles, filter, adaptiveDipPct, adaptive
       : { allowed: false, reason: 'NOT_ABOVE_MA', ma, filterId: filter.id };
   }
 
-  const fixed = filter.fixedDipPct != null ? Number(filter.fixedDipPct) : null;
-  const cap = filter.maxDipPct ?? adaptiveOpts.maxPct ?? 8;
-  const dip = fixed ?? adaptiveDipPct ?? adaptiveOpts.defaultPct ?? 3;
-  const effectiveDip = Math.min(dip, cap);
+  // mode === 'adaptive': maxDipPct / maxAbovePct são a banda escolhida (fixa),
+  // não um teto sobre cálculo histórico por moeda. fixed* sobrescreve se preenchido.
+  const fixed = filter.fixedDipPct != null && filter.fixedDipPct !== ''
+    ? Number(filter.fixedDipPct) : null;
+  const effectiveDip = Number.isFinite(fixed)
+    ? fixed
+    : Number(filter.maxDipPct ?? adaptiveOpts.defaultPct ?? 3);
   const floor = ma * (1 - effectiveDip / 100);
 
   if (close < floor) {
     return { allowed: false, reason: 'BELOW_ADAPTIVE_FLOOR', ma, floor, dipPct: effectiveDip, filterId: filter.id };
   }
 
-  const fixedAbove = filter.fixedAbovePct != null ? Number(filter.fixedAbovePct) : null;
-  const capAbove = filter.maxAbovePct ?? adaptiveOpts.maxAbovePct ?? 8;
-  const stretch = fixedAbove ?? adaptiveStretchPct ?? adaptiveOpts.defaultAbovePct ?? 4;
-  const effectiveAbove = Math.min(stretch, capAbove);
+  const fixedAbove = filter.fixedAbovePct != null && filter.fixedAbovePct !== ''
+    ? Number(filter.fixedAbovePct) : null;
+  const effectiveAbove = Number.isFinite(fixedAbove)
+    ? fixedAbove
+    : Number(filter.maxAbovePct ?? 0);
 
   if (effectiveAbove > 0) {
     const ceiling = ma * (1 + effectiveAbove / 100);

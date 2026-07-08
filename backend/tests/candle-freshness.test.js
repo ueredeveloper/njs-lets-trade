@@ -19,6 +19,18 @@ describe('candleFreshness', () => {
     expect(hasRecentCandleGaps(candles, '15m')).toBe(true);
   });
 
+  test('hasRecentCandleGaps com lookback null varre a série inteira', () => {
+    const now = Date.now();
+    const period = 900_000;
+    // 40 velas consecutivas + um buraco antigo (fora do lookback padrão de 24)
+    const candles = Array.from({ length: 40 }, (_, i) => ({
+      openTime: now - (40 - i) * period,
+    }));
+    candles.splice(5, 1); // remove velha no início
+    expect(hasRecentCandleGaps(candles, '15m', 24)).toBe(false);
+    expect(hasRecentCandleGaps(candles, '15m', null)).toBe(true);
+  });
+
   test('assessDiskCandles: disco recente com gap → stale', () => {
     const now = Date.now();
     const candles = Array.from({ length: 210 }, (_, i) => ({

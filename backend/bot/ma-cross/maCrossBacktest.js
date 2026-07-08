@@ -6,10 +6,13 @@ const { toGateSymbol } = require('../../utils/toGateSymbol');
 const { fetchBinanceCandles, fetchGateCandles } = require('../prices');
 const { compactBacktestForApi } = require('../amap/amapBacktest');
 const { maLabel } = require('../../utils/movingAverage');
+const { hasRecentCandleGaps } = require('../../utils/candleFreshness');
 const {
   getRequiredSpecs,
   getFinestPollInterval,
   evaluateEntry,
+  evaluatePullbackReady,
+  pullbackEntryEnabled,
   evaluateExit,
   computeAdaptiveDips,
   computeAdaptiveStretches,
@@ -39,11 +42,55 @@ const OUTCOME_LABELS = {
   BELOW_ADAPTIVE_FLOOR: 'Bloqueado — abaixo piso adaptativo',
   ABOVE_ADAPTIVE_CEILING: 'Bloqueado — acima teto adaptativo',
   FILTER_NO_MA: 'Bloqueado — MA filtro indisponível',
+  ABOVE_MA2_CAP: 'Bloqueado — acima teto MA2',
+  NO_PULLBACK: 'Bloqueado — sem pullback',
+  ENTRY_WINDOW_PASSED: 'Janela de pullback expirou',
+  ENTRY_COOLDOWN: 'Cooldown entre entradas',
+  PENDING_TIMEOUT: 'Timeout pending',
+  PENDING: 'Aguardando pullback',
   MA_CROSS_EXIT: 'Saída cruzamento',
   STOP_LOSS: 'Stop loss',
   RSI_EXIT: 'Saída RSI',
   ENTRY_OFF: 'Entrada desligada',
 };
+
+function entryCooldownHours(config) {
+  const h = Number(config?.entryCooldownHours);
+  return Number.isFinite(h) && h > 0 ? h : 0;
+}
+
+function openBuy({
+  close, openTime, signalTime, runningCapital, entryKindShort, entryLabel, mode,
+}) {
+  const entryPrice = close * (1 + FEE_RATE);
+  return {
+    position: {
+      entryTime: openTime,
+      signalTime: signalTime ?? openTime,
+      entryPrice,
+      qty: runningCapital / entryPrice,
+      usdtIn: runningCapital,
+      peakPrice: close,
+      mode: mode ?? 'immediate',
+    },
+    signal: {
+      entryTime: signalTime ?? openTime,
+      entryPrice: close,
+      buyTime: openTime,
+      buyPrice: close,
+      result: 'BOUGHT',
+      mode: mode ?? 'immediate',
+    },
+    trade: { type: 'BUY', time: openTime, price: close },
+    rowPatch: {
+      buyTime: openTime,
+      buyPrice: close,
+      outcome: 'BOUGHT',
+      entryKindShort,
+      entryKindLabel: entryLabel,
+    },
+  };
+}
 
 function loadLocalCandles(symbol, interval) {
   try {
@@ -72,6 +119,14 @@ async function fetchCandlesForExchange(exchange, symbol, interval, limit) {
     return fetchGateCandles(toGateSymbol(symbol), need, interval);
   }
   return fetchBinanceCandles(symbol, need, interval);
+}
+
+/** Une disco + exchange por openTime (exchange preenche buracos sem perder histórico antigo). */
+function mergeCandlesPreferRemote(local, remote) {
+  const byTime = new Map();
+  for (const c of local ?? []) byTime.set(Number(c.openTime), c);
+  for (const c of remote ?? []) byTime.set(Number(c.openTime), normalizeCandle(c));
+  return [...byTime.values()].sort((a, b) => a.openTime - b.openTime);
 }
 
 function sliceCMap(fullMap, openTime) {
@@ -184,9 +239,16 @@ async function runMaCrossBacktest({ symbol, config, exchange = 'binance', capita
     for (const { interval, limit } of specs) {
       const need = Math.max(limit, LIMIT);
       let candles = loadLocalCandles(symbol, interval);
-      if (!candles?.length || candles.length < need) {
-        const fetched = await fetchCandlesForExchange(exchange, symbol, interval, need);
-        if (!candles?.length || fetched.length > candles.length) candles = fetched.map(normalizeCandle);
+      // Gaps no meio (ex.: AUDIOUSDT 12:00/12:15 faltando) fazem areConsecutiveCandles
+      // pular o cruzamento — busca a exchange e mescla para preencher buracos.
+      const hasGaps = candles?.length ? hasRecentCandleGaps(candles, interval, null) : false;
+      const needsFetch = !candles?.length || candles.length < need || hasGaps;
+      if (needsFetch) {
+        const fetchLimit = Math.min(1000, Math.max(need, candles?.length ?? 0));
+        const fetched = await fetchCandlesForExchange(exchange, symbol, interval, fetchLimit);
+        candles = candles?.length
+          ? mergeCandlesPreferRemote(candles, fetched)
+          : fetched.map(normalizeCandle);
       }
       cMap[interval] = candles;
     }
@@ -202,7 +264,10 @@ async function runMaCrossBacktest({ symbol, config, exchange = 'binance', capita
   let runningCapital = startCapital;
   let phase = 'WATCHING';
   let position = null;
+  let pending = null;
   let openSignalIdx = null;
+  let openEntryLogIdx = null;
+  let lastExitTime = null;
   const trades = [];
   const signals = [];
   const entryLog = [];
@@ -212,12 +277,80 @@ async function runMaCrossBacktest({ symbol, config, exchange = 'binance', capita
   const evalOpts = { closedOnly: true };
   const entryLabel = formatEntryLabel(config);
   const dirShort = crossShort(config);
+  const cooldownH = entryCooldownHours(config);
+  const usePendingFallback = pullbackEntryEnabled(config) && config.execution?.immediateEntry !== true;
+  const pendingTimeoutMs = Number(config.execution?.pendingTimeoutMs ?? 90 * 60_000);
 
   for (let i = warmup; i < scanCandles.length; i++) {
     const c = scanCandles[i];
     const cMapSlice = sliceCMap(cMap, c.openTime);
     const dips = computeAdaptiveDips(config, cMapSlice);
     const stretches = computeAdaptiveStretches(config, cMapSlice);
+
+    // ── PENDING (pullback após cruzamento) ────────────────────────────────
+    if (phase === 'PENDING' && pending) {
+      if (pendingTimeoutMs > 0 && (c.openTime - pending.signalOpenTime) > pendingTimeoutMs) {
+        if (openEntryLogIdx != null) {
+          entryLog[openEntryLogIdx].outcome = 'PENDING_TIMEOUT';
+        }
+        signals.push({
+          entryTime: pending.signalOpenTime,
+          entryPrice: pending.signalClose,
+          result: 'PENDING_TIMEOUT',
+        });
+        blockedCount++;
+        pending = null;
+        openEntryLogIdx = null;
+        phase = 'WATCHING';
+        continue;
+      }
+
+      const ready = evaluatePullbackReady(config, cMapSlice, dips, pending, stretches);
+      if (ready.ready) {
+        const buy = openBuy({
+          close: ready.close,
+          openTime: ready.entryOpenTime ?? c.openTime,
+          signalTime: pending.signalOpenTime,
+          runningCapital,
+          entryKindShort: dirShort,
+          entryLabel: `${entryLabel} (pullback)`,
+          mode: 'pending',
+        });
+        position = buy.position;
+        openSignalIdx = signals.length;
+        signals.push(buy.signal);
+        trades.push(buy.trade);
+        if (openEntryLogIdx != null) {
+          Object.assign(entryLog[openEntryLogIdx], buy.rowPatch, {
+            price: ready.close,
+            ma1: ready.ma1,
+            ma2: ready.ma2,
+          });
+        }
+        pending = null;
+        openEntryLogIdx = null;
+        phase = 'BOUGHT';
+        continue;
+      }
+
+      if (ready.cancel) {
+        const reason = ready.reason ?? 'NO_PULLBACK';
+        if (openEntryLogIdx != null) {
+          entryLog[openEntryLogIdx].outcome = reason;
+          entryLog[openEntryLogIdx].exitDetail = OUTCOME_LABELS[reason] ?? reason;
+        }
+        signals.push({
+          entryTime: pending.signalOpenTime,
+          entryPrice: pending.signalClose,
+          result: reason,
+        });
+        blockedCount++;
+        pending = null;
+        openEntryLogIdx = null;
+        phase = 'WATCHING';
+      }
+      continue;
+    }
 
     if (phase === 'WATCHING') {
       const entry = config.entry ?? {};
@@ -235,7 +368,6 @@ async function runMaCrossBacktest({ symbol, config, exchange = 'binance', capita
 
       if (!cross.crossed) continue;
 
-      const entryEval = evaluateEntry(config, cMapSlice, dips, { closedOnly: true, adaptiveStretches: stretches });
       const maChecks = buildMaChecks(config, cMapSlice, dips, cross.close, stretches);
       const row = {
         time: c.openTime,
@@ -246,39 +378,74 @@ async function runMaCrossBacktest({ symbol, config, exchange = 'binance', capita
         entryKindShort: dirShort,
         entryKindLabel: entryLabel,
         maChecks,
-        outcome: entryEval.allowed ? 'BOUGHT' : (entryEval.reason ?? 'BLOCKED'),
+        outcome: 'BOUGHT',
       };
-      entryLog.push(row);
 
-      if (!entryEval.allowed) {
-        blockedCount++;
-        signals.push({
-          entryTime: c.openTime,
-          entryPrice: cross.close,
-          result: entryEval.reason,
+      if (cooldownH > 0 && lastExitTime != null) {
+        const elapsed = c.openTime - lastExitTime;
+        if (elapsed < cooldownH * 3_600_000) {
+          row.outcome = 'ENTRY_COOLDOWN';
+          entryLog.push(row);
+          blockedCount++;
+          signals.push({
+            entryTime: c.openTime,
+            entryPrice: cross.close,
+            result: 'ENTRY_COOLDOWN',
+          });
+          continue;
+        }
+      }
+
+      const entryEval = evaluateEntry(config, cMapSlice, dips, {
+        ...evalOpts,
+        adaptiveStretches: stretches,
+      });
+
+      if (entryEval.allowed) {
+        entryLog.push(row);
+        const buy = openBuy({
+          close: cross.close,
+          openTime: c.openTime,
+          signalTime: c.openTime,
+          runningCapital,
+          entryKindShort: dirShort,
+          entryLabel,
+          mode: 'immediate',
         });
+        position = buy.position;
+        openSignalIdx = signals.length;
+        signals.push(buy.signal);
+        trades.push(buy.trade);
+        Object.assign(row, buy.rowPatch);
+        phase = 'BOUGHT';
         continue;
       }
 
-      const entryPrice = cross.close * (1 + FEE_RATE);
-      position = {
-        entryTime: c.openTime,
-        entryPrice,
-        qty: runningCapital / entryPrice,
-        usdtIn: runningCapital,
-        peakPrice: cross.close,
-      };
-      openSignalIdx = signals.length;
+      // Híbrido (bot): se não comprou no cruzamento e pullback está ativo → PENDING
+      if (usePendingFallback) {
+        row.outcome = 'PENDING';
+        entryLog.push(row);
+        openEntryLogIdx = entryLog.length - 1;
+        pending = {
+          signalOpenTime: cross.openTime ?? c.openTime,
+          signalClose: cross.close,
+        };
+        phase = 'PENDING';
+        continue;
+      }
+
+      row.outcome = entryEval.reason ?? 'BLOCKED';
+      entryLog.push(row);
+      blockedCount++;
       signals.push({
         entryTime: c.openTime,
         entryPrice: cross.close,
-        buyTime: c.openTime,
-        buyPrice: cross.close,
-        result: 'BOUGHT',
+        result: entryEval.reason,
       });
-      trades.push({ type: 'BUY', time: c.openTime, price: cross.close });
-      phase = 'BOUGHT';
-    } else if (phase === 'BOUGHT' && position) {
+      continue;
+    }
+
+    if (phase === 'BOUGHT' && position) {
       const candleHigh = c.high != null ? parseFloat(c.high) : parseFloat(c.close);
       position.peakPrice = Math.max(position.peakPrice ?? position.entryPrice, candleHigh, parseFloat(c.close));
       const exit = evaluateExit(config, cMapSlice, position.entryPrice, {
@@ -291,6 +458,7 @@ async function runMaCrossBacktest({ symbol, config, exchange = 'binance', capita
       const usdtOut = exitPrice * position.qty;
       const pnlPct = ((usdtOut - position.usdtIn) / position.usdtIn) * 100;
       runningCapital = usdtOut;
+      lastExitTime = c.openTime;
 
       const exitDetail = exit.exitDesc ?? OUTCOME_LABELS[exit.reason] ?? exit.reason;
       if (openSignalIdx != null) {
@@ -320,6 +488,9 @@ async function runMaCrossBacktest({ symbol, config, exchange = 'binance', capita
   if (phase === 'BOUGHT' && openSignalIdx != null) {
     signals[openSignalIdx].result = 'POSITION_OPEN';
   }
+  if (phase === 'PENDING' && openEntryLogIdx != null) {
+    entryLog[openEntryLogIdx].outcome = 'PENDING';
+  }
 
   reconcileEntryLog(entryLog, signals);
 
@@ -338,6 +509,11 @@ async function runMaCrossBacktest({ symbol, config, exchange = 'binance', capita
     config: {
       entryPaths: entryLabel,
       exitCross: formatExitLabel(config),
+      maxAboveMaPct: config.entry?.maxAboveMaPct ?? 3,
+      pullback: usePendingFallback
+        ? `até ${config.execution?.pullbackEntry?.waitCandles ?? 2} candles`
+        : (config.execution?.immediateEntry ? 'off (só imediato)' : 'off'),
+      cooldownHours: cooldownH || 'off',
       stopLoss: config.stopLoss?.enabled
         ? (config.stopLoss.trailing !== false
           ? `trailing −${config.stopLoss.maxLossPct}% / +${config.stopLoss.trailStepPct ?? config.stopLoss.maxLossPct}%`
