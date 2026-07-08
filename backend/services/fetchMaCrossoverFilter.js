@@ -93,7 +93,7 @@ router.get('/ma-crossover-filter', async (req, res) => {
     const tolRounded  = Math.round(tolerancePct * 10) / 10;
     const proxRounded = Math.round(proximityPct * 10) / 10;
     const closedOnly  = mode.startsWith('near')
-      ? !live
+      ? true
       : true;
 
     const nameOpts = { maxAgeMin, tolerancePct: tolRounded };
@@ -105,7 +105,7 @@ router.get('/ma-crossover-filter', async (req, res) => {
 
     const presetKey = maCrossCache.matchesCachedPreset({
       period1, interval1, period2, interval2,
-      mode, maxAgeMin, tolerancePct: tolRounded, live,
+      mode, maxAgeMin, tolerancePct: tolRounded, proximityPct: proxRounded, live,
     });
     if (presetKey) {
       const cached = await maCrossCache.getCachedResult(symbols, presetKey, { force });

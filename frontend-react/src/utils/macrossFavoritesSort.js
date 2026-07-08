@@ -88,8 +88,8 @@ export function filterMacrossFavorites(symbols, status, sortBy) {
     const m = status?.[sym];
     if (!m || m.error) return false;
     switch (sortBy) {
-      case 'near_up':    return m.approachingUp === true;
-      case 'near_down':  return m.approachingDown === true;
+      case 'near_up':    return m.approachingUp === true || m.nearUpListed === true;
+      case 'near_down':  return m.approachingDown === true || m.nearDownListed === true;
       case 'cross_up':   return m.crossUpHeld === true;
       case 'cross_down': return m.crossDownHeld === true;
       default:           return true;
@@ -117,21 +117,27 @@ export function compareMacrossFavorites(a, b, sortBy, ctx = {}) {
   const mb = status[symB];
 
   if (sortBy === 'near_up') {
-    const appA = ma?.approachingUp ? 0 : 1;
-    const appB = mb?.approachingUp ? 0 : 1;
-    if (appA !== appB) return appA - appB;
-    const ga = ma?.approachingUp ? numOrInfinity(ma?.gapUpPct) : Infinity;
-    const gb = mb?.approachingUp ? numOrInfinity(mb?.gapUpPct) : Infinity;
+    const listedA = (ma?.approachingUp || ma?.nearUpListed) ? 0 : 1;
+    const listedB = (mb?.approachingUp || mb?.nearUpListed) ? 0 : 1;
+    if (listedA !== listedB) return listedA - listedB;
+    const momA = ma?.approachingUp ? 0 : 1;
+    const momB = mb?.approachingUp ? 0 : 1;
+    if (momA !== momB) return momA - momB;
+    const ga = (ma?.approachingUp || ma?.nearUpListed) ? numOrInfinity(ma?.gapUpPct) : Infinity;
+    const gb = (mb?.approachingUp || mb?.nearUpListed) ? numOrInfinity(mb?.gapUpPct) : Infinity;
     if (ga !== gb) return ga - gb;
     return symA.localeCompare(symB);
   }
 
   if (sortBy === 'near_down') {
-    const appA = ma?.approachingDown ? 0 : 1;
-    const appB = mb?.approachingDown ? 0 : 1;
-    if (appA !== appB) return appA - appB;
-    const ga = ma?.approachingDown ? numOrInfinity(ma?.gapDownPct) : Infinity;
-    const gb = mb?.approachingDown ? numOrInfinity(mb?.gapDownPct) : Infinity;
+    const listedA = (ma?.approachingDown || ma?.nearDownListed) ? 0 : 1;
+    const listedB = (mb?.approachingDown || mb?.nearDownListed) ? 0 : 1;
+    if (listedA !== listedB) return listedA - listedB;
+    const momA = ma?.approachingDown ? 0 : 1;
+    const momB = mb?.approachingDown ? 0 : 1;
+    if (momA !== momB) return momA - momB;
+    const ga = (ma?.approachingDown || ma?.nearDownListed) ? numOrInfinity(ma?.gapDownPct) : Infinity;
+    const gb = (mb?.approachingDown || mb?.nearDownListed) ? numOrInfinity(mb?.gapDownPct) : Infinity;
     if (ga !== gb) return ga - gb;
     return symA.localeCompare(symB);
   }
@@ -164,10 +170,10 @@ export function formatMacrossStatusBadge(meta, t) {
   if (!meta || meta.error) return null;
 
   // Prestes a cruzar tem prioridade sobre cruzamento histórico ainda “held”
-  if (meta.approachingUp && meta.gapUpPct != null) {
+  if ((meta.approachingUp || meta.nearUpListed) && meta.gapUpPct != null) {
     return t('table.macross_near', '↑', `${meta.gapUpPct}%`);
   }
-  if (meta.approachingDown && meta.gapDownPct != null) {
+  if ((meta.approachingDown || meta.nearDownListed) && meta.gapDownPct != null) {
     return t('table.macross_near', '↓', `${meta.gapDownPct}%`);
   }
   if (meta.crossUpHeld && meta.crossUpAgeMin != null) {

@@ -129,6 +129,46 @@ function buildNewListingsFilter(name, items) {
   return { name, list, meta: { listedAt, volume24h, candidates: list } };
 }
 
+const BINANCE_MARKETING_URL = 'https://www.binance.com/bapi/composite/v1/public/marketing/symbol/list';
+
+async function fetchBinanceMarketingSymbols() {
+  const res = await fetch(BINANCE_MARKETING_URL);
+  if (!res.ok) throw new Error(`Binance marketing symbols: HTTP ${res.status}`);
+  const body = await res.json();
+  if (body?.code !== '000000' || !Array.isArray(body.data)) {
+    throw new Error('Binance marketing symbols: resposta inesperada');
+  }
+  return body.data;
+}
+
+/** Rankeia candidatos em alta (USDT spot ativo, vol. mínimo). */
+function rankBinanceGainers(items, activeSet, candidateLimit) {
+  return items
+    .filter((t) => isUsdtSpot(t.symbol) && activeSet.has(t.symbol))
+    .filter((t) => Number(t.volume) >= MIN_VOLUME_USDT)
+    .filter((t) => Number.isFinite(t.changePct))
+    .sort((a, b) => b.changePct - a.changePct)
+    .slice(0, candidateLimit);
+}
+
+function buildBinanceGainersFromMarketing(marketingRows, activeSet, candidateLimit) {
+  const items = marketingRows.map((m) => ({
+    symbol: m.symbol,
+    changePct: Number(m.dayChange),
+    volume: Number(m.volume),
+  }));
+  return rankBinanceGainers(items, activeSet, candidateLimit);
+}
+
+function buildBinanceGainersFromTickers(binanceTickers, activeSet, candidateLimit) {
+  const items = binanceTickers.map((t) => ({
+    symbol: t.symbol,
+    changePct: Number(t.priceChangePercent),
+    volume: Number(t.quoteVolume),
+  }));
+  return rankBinanceGainers(items, activeSet, candidateLimit);
+}
+
 async function computeMarketHighlights(limit = LIMIT_DEFAULT) {
   const [binanceTickers, gateTickers, activeUsdt, gatePairs] = await Promise.all([
     getTickers(),
@@ -141,17 +181,14 @@ async function computeMarketHighlights(limit = LIMIT_DEFAULT) {
 
   const candidateLimit = limit * CANDIDATE_MULTIPLIER;
 
-  const binanceGainers = binanceTickers
-    .filter((t) => isUsdtSpot(t.symbol))
-    .filter((t) => Number(t.quoteVolume) >= MIN_VOLUME_USDT)
-    .map((t) => ({
-      symbol: t.symbol,
-      changePct: Number(t.priceChangePercent),
-      volume: Number(t.quoteVolume),
-    }))
-    .filter((t) => Number.isFinite(t.changePct))
-    .sort((a, b) => b.changePct - a.changePct)
-    .slice(0, candidateLimit);
+  let binanceGainers;
+  try {
+    const marketingRows = await fetchBinanceMarketingSymbols();
+    binanceGainers = buildBinanceGainersFromMarketing(marketingRows, activeSet, candidateLimit);
+  } catch (err) {
+    console.warn('[market-highlights] marketing API indisponível — fallback ticker/24hr:', err.message);
+    binanceGainers = buildBinanceGainersFromTickers(binanceTickers, activeSet, candidateLimit);
+  }
 
   const gateGainers = gateTickers
     .filter((t) => t.currency_pair?.endsWith('_USDT'))
@@ -232,6 +269,9 @@ async function getMarketHighlights(limit = LIMIT_DEFAULT) {
 
 module.exports = {
   getMarketHighlights,
+  rankBinanceGainers,
+  buildBinanceGainersFromMarketing,
+  buildBinanceGainersFromTickers,
   LIMIT_DEFAULT,
   MIN_VOLUME_USDT,
 };

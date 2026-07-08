@@ -252,11 +252,9 @@ function checkMaCrossover({
   };
 }
 
-/** Prestes a cruzar: gap encolhendo e dentro do limite % (MA ainda não cruzou). */
-function checkMaCrossApproaching({
+function readMaCrossPair({
   candles1, period1, interval1,
   candles2, period2, interval2,
-  mode, proximityPct = 1,
   closedOnly = true,
 }) {
   const c1 = closedOnly ? closedCandlesOnly(candles1) : candles1;
@@ -265,13 +263,13 @@ function checkMaCrossApproaching({
   const sigIv = finestInterval(interval1, interval2);
   const sigCandles = sigIv === interval1 ? c1 : c2;
   if (!sigCandles || sigCandles.length < 3) {
-    return { matched: false, reason: 'INSUFFICIENT_DATA' };
+    return { ok: false, reason: 'INSUFFICIENT_DATA' };
   }
 
   const series1 = buildMaTimeSeries(c1, period1);
   const series2 = buildMaTimeSeries(c2, period2);
   if (series1.length < 2 || series2.length < 2) {
-    return { matched: false, reason: 'INSUFFICIENT_MA' };
+    return { ok: false, reason: 'INSUFFICIENT_MA' };
   }
 
   const last = sigCandles[sigCandles.length - 1];
@@ -283,9 +281,77 @@ function checkMaCrossApproaching({
   const prevMa2 = maValueAt(series2, prev.openTime);
 
   if ([ma1, ma2, prevMa1, prevMa2].some(v => v == null)) {
-    return { matched: false, reason: 'MA_ALIGN_FAIL', ma1, ma2 };
+    return { ok: false, reason: 'MA_ALIGN_FAIL', ma1, ma2 };
   }
 
+  return {
+    ok: true,
+    ma1, ma2, prevMa1, prevMa2,
+    close: last.close,
+    openTime: last.openTime,
+  };
+}
+
+/** Screening: MA ainda do lado certo e gap dentro do limite % (sem exigir momentum). */
+function checkMaCrossNearProximity({
+  candles1, period1, interval1,
+  candles2, period2, interval2,
+  mode, proximityPct = 1,
+  closedOnly = true,
+}) {
+  const pair = readMaCrossPair({
+    candles1, period1, interval1,
+    candles2, period2, interval2,
+    closedOnly,
+  });
+  if (!pair.ok) {
+    return { matched: false, reason: pair.reason, ma1: pair.ma1, ma2: pair.ma2 };
+  }
+
+  const { ma1, ma2, close, openTime } = pair;
+  const prox = Math.max(0, proximityPct ?? 0) / 100;
+  let matched = false;
+  let gapPct = null;
+
+  if (mode === 'near_up') {
+    if (ma1 < ma2 && ma2 > 0) {
+      gapPct = ((ma2 - ma1) / ma2) * 100;
+      matched = gapPct / 100 <= prox;
+    }
+  } else if (mode === 'near_down') {
+    if (ma1 > ma2 && ma2 > 0) {
+      gapPct = ((ma1 - ma2) / ma2) * 100;
+      matched = gapPct / 100 <= prox;
+    }
+  }
+
+  return {
+    matched,
+    kind: 'approaching',
+    ma1, ma2, gapPct,
+    close,
+    openTime,
+    reason: matched ? null : (mode === 'near_up' ? 'NOT_NEAR_UP' : 'NOT_NEAR_DOWN'),
+  };
+}
+
+/** Prestes a cruzar com momentum: gap encolhendo e MA rápida na direção do cruzamento. */
+function checkMaCrossApproaching({
+  candles1, period1, interval1,
+  candles2, period2, interval2,
+  mode, proximityPct = 1,
+  closedOnly = true,
+}) {
+  const pair = readMaCrossPair({
+    candles1, period1, interval1,
+    candles2, period2, interval2,
+    closedOnly,
+  });
+  if (!pair.ok) {
+    return { matched: false, reason: pair.reason, ma1: pair.ma1, ma2: pair.ma2 };
+  }
+
+  const { ma1, ma2, prevMa1, prevMa2, close, openTime } = pair;
   const prox = Math.max(0, proximityPct ?? 0) / 100;
   let matched = false;
   let gapPct = null;
@@ -312,8 +378,8 @@ function checkMaCrossApproaching({
     matched,
     kind: 'approaching',
     ma1, ma2, gapPct,
-    close: last.close,
-    openTime: last.openTime,
+    close,
+    openTime,
     reason: matched ? null : (mode === 'near_up' ? 'NOT_NEAR_UP' : 'NOT_NEAR_DOWN'),
   };
 }
@@ -326,7 +392,7 @@ function evaluateMaCrossSignal({
   now,
 }) {
   if (mode === 'near_up' || mode === 'near_down') {
-    return checkMaCrossApproaching({
+    return checkMaCrossNearProximity({
       candles1, period1, interval1,
       candles2, period2, interval2,
       mode,
@@ -1004,6 +1070,16 @@ function getMaCrossMetrics({
     candles2, period2, interval2,
     mode: 'near_down', proximityPct: prox, closedOnly: false,
   });
+  const nearUpListed = checkMaCrossNearProximity({
+    candles1, period1, interval1,
+    candles2, period2, interval2,
+    mode: 'near_up', proximityPct: prox, closedOnly: true,
+  });
+  const nearDownListed = checkMaCrossNearProximity({
+    candles1, period1, interval1,
+    candles2, period2, interval2,
+    mode: 'near_down', proximityPct: prox, closedOnly: true,
+  });
 
   const liveSig = sigIv === interval1 ? candles1 : candles2;
   const liveLast = liveSig[liveSig.length - 1];
@@ -1059,14 +1135,16 @@ function getMaCrossMetrics({
   return {
     ok: true,
     ma1: liveMa1 ?? ma1, ma2: liveMa2 ?? ma2,
-    gapUpPct: round(nearUp.matched ? nearUp.gapPct : liveGapUpPct ?? gapUpPct),
-    gapDownPct: round(nearDown.matched ? nearDown.gapPct : liveGapDownPct ?? gapDownPct),
+    gapUpPct: round(nearUpListed.matched ? nearUpListed.gapPct : liveGapUpPct ?? gapUpPct),
+    gapDownPct: round(nearDownListed.matched ? nearDownListed.gapPct : liveGapDownPct ?? gapDownPct),
     crossUpAgeMin,
     crossDownAgeMin,
     crossUpHeld,
     crossDownHeld,
     approachingUp: nearUp.matched === true,
     approachingDown: nearDown.matched === true,
+    nearUpListed: nearUpListed.matched === true,
+    nearDownListed: nearDownListed.matched === true,
     proximityPct: prox,
   };
 }
@@ -1083,6 +1161,7 @@ module.exports = {
   findRecentMaCross,
   checkMaCrossover,
   checkMaCrossApproaching,
+  checkMaCrossNearProximity,
   evaluateMaCrossSignal,
   checkPriceFilter,
   checkRsi,

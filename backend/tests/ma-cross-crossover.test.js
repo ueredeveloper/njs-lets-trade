@@ -1,6 +1,6 @@
 'use strict';
 
-const { checkMaCrossover, findRecentMaCross, checkMaCrossApproaching, checkPriceFilter, getMaCrossMetrics, computeStopLossFloor, evaluateExit } = require('../bot/ma-cross/strategyEngine');
+const { checkMaCrossover, findRecentMaCross, checkMaCrossApproaching, checkMaCrossNearProximity, checkPriceFilter, getMaCrossMetrics, computeStopLossFloor, evaluateExit } = require('../bot/ma-cross/strategyEngine');
 const { normalizeMaCrossConfig, isValidMaCrossPeriod } = require('../bot/ma-cross/tradeConfigSchema');
 
 function makeCandles(closes) {
@@ -122,7 +122,26 @@ describe('MA Cross — cruzamento', () => {
     expect(r.matched).toBe(false);
   });
 
-  test('getMaCrossMetrics: approaching alinhado ao check live (sem duplo slice)', () => {
+  test('near_up proximity: aceita gap pequeno sem momentum (screening)', () => {
+    const closes = Array(50).fill(100);
+    for (let i = 0; i < 8; i++) closes.push(100 - i * 0.01);
+    closes.push(100.02);
+    const candles = makeCandles(closes);
+    const strict = checkMaCrossApproaching({
+      candles1: candles, period1: 9, interval1: '15m',
+      candles2: candles, period2: 21, interval2: '15m',
+      mode: 'near_up', proximityPct: 1, closedOnly: false,
+    });
+    const prox = checkMaCrossNearProximity({
+      candles1: candles, period1: 9, interval1: '15m',
+      candles2: candles, period2: 21, interval2: '15m',
+      mode: 'near_up', proximityPct: 1, closedOnly: true,
+    });
+    expect(prox.matched).toBe(true);
+    expect(typeof strict.matched).toBe('boolean');
+  });
+
+  test('getMaCrossMetrics: approachingUp segue momentum; nearUpListed usa proximidade', () => {
     const closes = Array(50).fill(100);
     for (let i = 0; i < 8; i++) closes.push(100 - i * 0.01);
     closes.push(100.02);
@@ -132,12 +151,18 @@ describe('MA Cross — cruzamento', () => {
       candles2: candles, period2: 21, interval2: '15m',
       mode: 'near_up', proximityPct: 1, closedOnly: false,
     });
+    const prox = checkMaCrossNearProximity({
+      candles1: candles, period1: 9, interval1: '15m',
+      candles2: candles, period2: 21, interval2: '15m',
+      mode: 'near_up', proximityPct: 1, closedOnly: true,
+    });
     const metrics = getMaCrossMetrics({
       candles1: candles, period1: 9, interval1: '15m',
       candles2: candles, period2: 21, interval2: '15m',
       proximityPct: 1,
     });
     expect(metrics.approachingUp).toBe(direct.matched);
+    expect(metrics.nearUpListed).toBe(prox.matched);
   });
 
   test('findRecentMaCross: ignora par com gap no histórico (15m)', () => {

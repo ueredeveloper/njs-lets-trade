@@ -11,7 +11,7 @@ const CANDLES_LIMIT = 200;
 const BATCH_SIZE    = 20;
 const CACHE_FILE    = path.join(__dirname, '..', 'data', 'ma-cross-cache.json');
 
-/** Presets cacheados: MA9×MA21 cruzou ↑ — candle 1m/5m/15m, temporal ≤5 min */
+/** Presets cacheados: MA9×MA21 — cruzou ↑ (≤5 min) e próximo de cruzar ↑ (gap ≤0.5%). */
 const CACHED_PRESETS = [
   {
     key: '1m|5',
@@ -38,6 +38,26 @@ const CACHED_PRESETS = [
     mode: 'cross_up',
     maxAgeMin: '5',
     tolerancePct: 0.5,
+    live: true,
+  },
+  {
+    key: '5m|nearup',
+    period1: 9, interval1: '5m',
+    period2: 21, interval2: '5m',
+    mode: 'near_up',
+    maxAgeMin: 'last',
+    tolerancePct: 0,
+    proximityPct: 0.5,
+    live: true,
+  },
+  {
+    key: '15m|nearup',
+    period1: 9, interval1: '15m',
+    period2: 21, interval2: '15m',
+    mode: 'near_up',
+    maxAgeMin: 'last',
+    tolerancePct: 0,
+    proximityPct: 0.5,
     live: true,
   },
 ];
@@ -70,10 +90,10 @@ function presetTtlMs(preset) {
 
 function presetFilterName(preset) {
   const sig = finestInterval(preset.interval1, preset.interval2);
-  return buildMaCrossFilterName(sig, preset.period1, preset.interval1, preset.period2, preset.interval2, preset.mode, {
-    maxAgeMin: preset.maxAgeMin,
-    tolerancePct: preset.tolerancePct,
-  });
+  const opts = preset.mode.startsWith('near')
+    ? { proximityPct: preset.proximityPct ?? 0.5 }
+    : { maxAgeMin: preset.maxAgeMin, tolerancePct: preset.tolerancePct };
+  return buildMaCrossFilterName(sig, preset.period1, preset.interval1, preset.period2, preset.interval2, preset.mode, opts);
 }
 
 function findPreset(key) {
@@ -85,16 +105,24 @@ function storeKey(presetKey, symbol) {
 }
 
 function paramsMatchPreset(params, preset) {
-  const tol = Math.round(parseFloat(params.tolerancePct ?? 0) * 10) / 10;
   const liveOk = params.live === true || params.live === '1' || params.live === 'true' || params.live == null;
-  return liveOk
+  const base = liveOk
     && params.period1 === preset.period1
     && params.period2 === preset.period2
     && params.interval1 === preset.interval1
     && params.interval2 === preset.interval2
-    && params.mode === preset.mode
-    && String(params.maxAgeMin) === preset.maxAgeMin
-    && tol === preset.tolerancePct;
+    && params.mode === preset.mode;
+
+  if (!base) return false;
+
+  if (preset.mode.startsWith('near')) {
+    const prox = Math.round(parseFloat(params.proximityPct ?? 1) * 10) / 10;
+    const presetProx = Math.round(parseFloat(preset.proximityPct ?? 1) * 10) / 10;
+    return prox === presetProx;
+  }
+
+  const tol = Math.round(parseFloat(params.tolerancePct ?? 0) * 10) / 10;
+  return String(params.maxAgeMin) === preset.maxAgeMin && tol === preset.tolerancePct;
 }
 
 function matchesCachedPreset(params) {
@@ -141,6 +169,7 @@ function evaluateSymbolWithCandles(symbol, preset, candles, now = Date.now()) {
       candles2: candles, period2: preset.period2, interval2: preset.interval2,
       mode: preset.mode,
       tolerancePct: preset.tolerancePct,
+      proximityPct: preset.proximityPct ?? 1,
       maxAgeMin: preset.maxAgeMin,
       closedOnly: true,
       now,
@@ -183,6 +212,7 @@ function buildSnapshotForPreset(preset, now = Date.now()) {
   }
 
   matched.sort((a, b) => {
+    if (a.gapPct != null && b.gapPct != null) return a.gapPct - b.gapPct;
     if (a.ageMin != null && b.ageMin != null) return a.ageMin - b.ageMin;
     return 0;
   });
@@ -199,6 +229,7 @@ function buildSnapshotForPreset(preset, now = Date.now()) {
     period2: preset.period2,
     interval2: preset.interval2,
     tolerancePct: preset.tolerancePct,
+    proximityPct: preset.proximityPct,
     scannedAt: now,
   };
   snapshots.set(preset.key, snap);
