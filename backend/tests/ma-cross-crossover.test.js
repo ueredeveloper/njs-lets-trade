@@ -1,6 +1,6 @@
 'use strict';
 
-const { checkMaCrossover, findRecentMaCross, checkMaCrossApproaching, checkMaCrossNearProximity, checkPriceFilter, getMaCrossMetrics, computeStopLossFloor, evaluateExit } = require('../bot/ma-cross/strategyEngine');
+const { checkMaCrossover, findRecentMaCross, checkMaCrossApproaching, checkMaCrossNearProximity, checkMaPosition, checkPriceFilter, getMaCrossMetrics, computeStopLossFloor, evaluateExit } = require('../bot/ma-cross/strategyEngine');
 const { normalizeMaCrossConfig, isValidMaCrossPeriod } = require('../bot/ma-cross/tradeConfigSchema');
 
 function makeCandles(closes) {
@@ -384,6 +384,70 @@ describe('MA Cross — cruzamento', () => {
       priceFilter: { enabled: true, period: 50, interval: '1h', mode: 'adaptive' },
     });
     expect(c.maFilters[0].period).toBe(50);
+  });
+});
+
+describe('MA Compare — posição EMA vs EMA', () => {
+  test('EMA9 acima EMA21 em tendência de alta', () => {
+    const closes = [];
+    for (let i = 0; i < 60; i++) closes.push(100 + i * 0.1);
+    const candles = makeCandles(closes);
+    const r = checkMaPosition({
+      candles1: candles, period1: 9, interval1: '15m',
+      candles2: candles, period2: 21, interval2: '15m',
+      compare: 'above',
+    });
+    expect(r.matched).toBe(true);
+    expect(r.ma1).toBeGreaterThan(r.ma2);
+    expect(r.kind).toBe('position');
+  });
+
+  test('EMA9 abaixo EMA21 em tendência de baixa', () => {
+    const closes = [];
+    for (let i = 0; i < 60; i++) closes.push(100 - i * 0.1);
+    const candles = makeCandles(closes);
+    const r = checkMaPosition({
+      candles1: candles, period1: 9, interval1: '15m',
+      candles2: candles, period2: 21, interval2: '15m',
+      compare: 'bellow',
+    });
+    expect(r.matched).toBe(true);
+    expect(r.ma1).toBeLessThan(r.ma2);
+  });
+});
+
+describe('MA Compare — cache presets', () => {
+  const { matchesCachedPreset, CACHED_PRESETS } = require('../cache/maCompareCache');
+
+  test('reconhece preset EMA9 acima EMA21 em 1h com tol 0.5%', () => {
+    expect(matchesCachedPreset({
+      interval: '1h', period1: 9, period2: 21, compare: 'above', tolerancePct: 0.5,
+    })).toBe('1h|9|21|acim|0.5');
+  });
+
+  test('outros parâmetros não usam cache', () => {
+    expect(matchesCachedPreset({
+      interval: '15m', period1: 9, period2: 21, compare: 'above', tolerancePct: 1,
+    })).toBeNull();
+  });
+
+  test('presets incluem 1h acima e abaixo', () => {
+    expect(CACHED_PRESETS.some(p => p.compare === 'above' && p.interval === '1h')).toBe(true);
+    expect(CACHED_PRESETS.some(p => p.compare === 'below' && p.interval === '1h')).toBe(true);
+  });
+
+  test('reconhece preset proximidade EMA9/EMA21 em 1h', () => {
+    expect(matchesCachedPreset({
+      interval: '1h', period1: 9, period2: 21, compare: 'near_up', proximityPct: 0.5,
+    })).toBe('1h|9|21|nearup|0.5');
+    expect(matchesCachedPreset({
+      interval: '1h', period1: 9, period2: 21, compare: 'near_down', proximityPct: 0.5,
+    })).toBe('1h|9|21|neardn|0.5');
+  });
+
+  test('presets incluem proximidade near_up e near_down em 1h', () => {
+    expect(CACHED_PRESETS.some(p => p.compare === 'near_up' && p.interval === '1h')).toBe(true);
+    expect(CACHED_PRESETS.some(p => p.compare === 'near_down' && p.interval === '1h')).toBe(true);
   });
 });
 

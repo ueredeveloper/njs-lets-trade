@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useCurrency } from '../contexts/CurrencyContext';
-import { fetchCandlesAndIndicators, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMarketCapFilter, fetchUserPrefs, saveUserPrefs } from '../services/api';
+import { fetchCandlesAndIndicators, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter, fetchMarketCapFilter, fetchUserPrefs, saveUserPrefs } from '../services/api';
 import { useI18n } from '../i18n';
 import {
   createRsiFilter,
@@ -16,7 +16,7 @@ import {
 } from '../utils/createIchimokuFilter';
 import Tooltip from './Tooltip';
 import { MA_CROSS_PERIOD_MIN, MA_CROSS_PERIOD_MAX } from '../constants/maCrossConfigSchema';
-import { buildMaCrossFilterName } from '../utils/filterNames';
+import { buildMaCrossFilterName, buildMaCompareFilterName } from '../utils/filterNames';
 
 const INTERVAL_MS = {
   '1m': 60_000, '3m': 180_000, '5m': 300_000, '15m': 900_000, '30m': 1_800_000,
@@ -82,8 +82,9 @@ const INTERVAL_LABELS = {
 const EMPTY_INDICATOR = { type: '', intervals: ['8h'] };
 
 const DEFAULT_INDICATORS = [
+  { type: 'maCompare', intervals: ['1h'], ma1Period: '9', ma2Period: '21', compare: 'above', tolerancePct: '0.5' },
+  { type: 'maCompare', intervals: ['1h'], ma1Period: '9', ma2Period: '21', compare: 'bellow', tolerancePct: '0.5' },
   { type: 'movingAverage', intervals: ['1h', '4h'], length: '50', compare: 'above', candle: 'close' },
-  { type: 'movingAverage', intervals: ['1h', '4h'], length: '50', compare: 'bellow', candle: 'close' },
   { type: 'maCrossover', intervals: ['15m'], ma1Period: '9', ma2Period: '21', signalMode: 'cross_up', ageWindows: ['last', '1', '5'], tolerancePct: '0.5', mixedIntervals: false },
 ];
 
@@ -122,6 +123,19 @@ function buildSummary(value, t) {
     const per = value.period ?? '50';
     return t('sum.ma_time_above', per, pct, ivLabel);
   }
+  if (type === 'maCompare') {
+    const p1 = value.ma1Period ?? '9';
+    const p2 = value.ma2Period ?? '21';
+    const cmpRaw = value.compare ?? 'above';
+    if (cmpRaw === 'near_up' || cmpRaw === 'near_down') {
+      const mode = MA_CROSS_MODES.find(m => m.id === cmpRaw);
+      const modeLabel = mode ? t(mode.labelKey) : cmpRaw;
+      return t('sum.ma_compare_near', p1, p2, modeLabel, ivLabel, value.proximityPct ?? '0.5');
+    }
+    const cmp = cmpRaw === 'above' ? t('sum.above_short') : t('sum.bellow_short');
+    const tol = value.tolerancePct ?? '0.5';
+    return t('sum.ma_compare', p1, p2, cmp, ivLabel, Number(tol) > 0 ? tol : '');
+  }
   if (type === 'maCrossover') {
     const p1 = value.ma1Period ?? '9';
     const p2 = value.ma2Period ?? '21';
@@ -149,6 +163,16 @@ function HelpIcon({ text }) {
   );
 }
 
+
+function indDescKey(type) {
+  if (type === 'relativeStrengthIndex') return 'rsi';
+  if (type === 'ichimokuCloud') return 'ichimoku';
+  if (type === 'movingAverage') return 'ma';
+  if (type === 'maTimeAbove') return 'ma_time_above';
+  if (type === 'maCrossover') return 'ma_crossover';
+  if (type === 'maCompare') return 'ma_compare';
+  return 'marketcap';
+}
 
 function IndicatorRow({ value, onChange }) {
   const { type, intervals } = value;
@@ -198,7 +222,18 @@ function IndicatorRow({ value, onChange }) {
           <select
             className={sel}
             value={type}
-            onChange={(e) => onChange({ ...value, type: e.target.value, params: {} })}
+            onChange={(e) => {
+              const newType = e.target.value;
+              const next = { ...value, type: newType, params: {} };
+              if (newType === 'maCompare') {
+                next.intervals = ['1h'];
+                next.ma1Period = '9';
+                next.ma2Period = '21';
+                next.compare = next.compare ?? 'above';
+                next.tolerancePct = '0.5';
+              }
+              onChange(next);
+            }}
             title="Escolha o indicador técnico a ser analisado"
           >
             <option value="">{t('ind.placeholder')}</option>
@@ -206,11 +241,12 @@ function IndicatorRow({ value, onChange }) {
             <option value="movingAverage">{t('ind.ma')}</option>
             <option value="maTimeAbove">{t('ind.ma_time_above')}</option>
             <option value="maCrossover">{t('ind.ma_crossover')}</option>
+            <option value="maCompare">{t('ind.ma_compare')}</option>
             <option value="relativeStrengthIndex">{t('ind.rsi')}</option>
             <option value="marketCap">{t('ind.marketcap')}</option>
           </select>
-          {type && t(`ind.desc.${type === 'relativeStrengthIndex' ? 'rsi' : type === 'ichimokuCloud' ? 'ichimoku' : type === 'movingAverage' ? 'ma' : type === 'maTimeAbove' ? 'ma_time_above' : type === 'maCrossover' ? 'ma_crossover' : 'marketcap'}`) !== `ind.desc.${type}` && (
-            <HelpIcon text={t(`ind.desc.${type === 'relativeStrengthIndex' ? 'rsi' : type === 'ichimokuCloud' ? 'ichimoku' : type === 'movingAverage' ? 'ma' : type === 'maTimeAbove' ? 'ma_time_above' : type === 'maCrossover' ? 'ma_crossover' : 'marketcap'}`)} />
+          {type && t(`ind.desc.${indDescKey(type)}`) !== `ind.desc.${indDescKey(type)}` && (
+            <HelpIcon text={t(`ind.desc.${indDescKey(type)}`)} />
           )}
         </div>
 
@@ -365,6 +401,65 @@ function IndicatorRow({ value, onChange }) {
               <option value="close">{t('candle.close_full')}</option>
               <option value="low">{t('candle.low_full')}</option>
             </select>
+          </>
+        )}
+
+        {type === 'maCompare' && (
+          <>
+            <input
+              type="number"
+              className={sel}
+              style={{ width: '3.25rem' }}
+              min={MA_CROSS_PERIOD_MIN}
+              max={MA_CROSS_PERIOD_MAX}
+              value={value.ma1Period ?? '9'}
+              onChange={(e) => onChange({ ...value, ma1Period: e.target.value })}
+              title={t('macross.tip.ma1')}
+            />
+            <select
+              className={sel}
+              value={value.compare ?? 'above'}
+              onChange={(e) => onChange({ ...value, compare: e.target.value })}
+              title="EMA rápida acima, abaixo ou próxima da EMA lenta"
+            >
+              <option value="above">{t('cmp.above')}</option>
+              <option value="bellow">{t('cmp.bellow')}</option>
+              <option value="near_up">{t('macross.mode.near_up')}</option>
+              <option value="near_down">{t('macross.mode.near_down')}</option>
+            </select>
+            <input
+              type="number"
+              className={sel}
+              style={{ width: '3.25rem' }}
+              min={MA_CROSS_PERIOD_MIN}
+              max={MA_CROSS_PERIOD_MAX}
+              value={value.ma2Period ?? '21'}
+              onChange={(e) => onChange({ ...value, ma2Period: e.target.value })}
+              title={t('macross.tip.ma2')}
+            />
+            {(value.compare ?? 'above').startsWith('near') ? (
+              <select
+                className={sel}
+                value={value.proximityPct ?? '0.5'}
+                onChange={(e) => onChange({ ...value, proximityPct: e.target.value })}
+                title={t('macross.tip.proximity')}
+              >
+                {[0.2, 0.3, 0.5, 1, 1.5, 2, 3].map(v => (
+                  <option key={v} value={String(v)}>≤{v}%</option>
+                ))}
+              </select>
+            ) : (
+              <select
+                className={sel}
+                value={value.tolerancePct ?? '0.5'}
+                onChange={(e) => onChange({ ...value, tolerancePct: e.target.value })}
+                title={t('macross.tip.tolerance')}
+              >
+                {[0, 0.1, 0.3, 0.5, 1, 2].map(v => (
+                  <option key={v} value={String(v)}>±{v}%</option>
+                ))}
+              </select>
+            )}
           </>
         )}
 
@@ -611,7 +706,8 @@ export default function IndicatorPanel({ open, onToggle }) {
       const maIndicators    = indicators.filter((ind) => ind.type === 'movingAverage');
       const maTimeIndicators = indicators.filter((ind) => ind.type === 'maTimeAbove');
       const maCrossIndicators = indicators.filter((ind) => ind.type === 'maCrossover');
-      const otherIndicators = indicators.filter((ind) => ind.type && ind.type !== 'relativeStrengthIndex' && ind.type !== 'marketCap' && ind.type !== 'movingAverage' && ind.type !== 'maTimeAbove' && ind.type !== 'maCrossover');
+      const maCompareIndicators = indicators.filter((ind) => ind.type === 'maCompare');
+      const otherIndicators = indicators.filter((ind) => ind.type && ind.type !== 'relativeStrengthIndex' && ind.type !== 'marketCap' && ind.type !== 'movingAverage' && ind.type !== 'maTimeAbove' && ind.type !== 'maCrossover' && ind.type !== 'maCompare');
 
       // Salva intervalos e análises usadas nas preferências
       const allIntervals = [...new Set(indicators.flatMap(ind => ind.intervals ?? []))];
@@ -665,6 +761,34 @@ export default function IndicatorPanel({ open, onToggle }) {
           console.log('[frontend-react] MA tempo acima:', filter.name, '—', filter.list.length, 'moedas',
             filter.cache ? `(cache: ${filter.cache.cached} frescos, ${filter.cache.computed} calculados)` : '');
           addFilter(filter);
+        }
+      }
+
+      // Posição EMA vs EMA (ex.: EMA9 acima/abaixo EMA21)
+      for (const ind of maCompareIndicators) {
+        const p1 = ind.ma1Period ?? '9';
+        const p2 = ind.ma2Period ?? '21';
+        const compare = ind.compare ?? 'above';
+        const isNear = compare === 'near_up' || compare === 'near_down';
+        const tolerancePct = ind.tolerancePct ?? '0.5';
+        const proximityPct = ind.proximityPct ?? '0.5';
+        for (const interval of ind.intervals) {
+          const filter = await fetchMaCompareFilter({
+            period1: p1, period2: p2, interval, compare,
+            tolerancePct, proximityPct, lang,
+          });
+          const nameOpts = isNear ? { proximityPct } : { tolerancePct };
+          const expectedName = buildMaCompareFilterName(interval, p1, p2, compare, lang, nameOpts);
+          addFilter({
+            name: filter.name ?? expectedName,
+            list: filter.list,
+            meta: filter.details,
+            scannedAt: filter.scannedAt,
+          });
+          if (filter.cache) {
+            console.log('[frontend-react] MA compare:', filter.name, '—', filter.list.length, 'moedas',
+              `(cache: ${filter.cache.hit ? 'hit' : 'miss'}, preset ${filter.cache.preset ?? '—'})`);
+          }
         }
       }
 

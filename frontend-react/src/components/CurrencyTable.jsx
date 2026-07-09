@@ -7,7 +7,7 @@ import {
   fetchMaCrossoverFilter, fetchMultitradeTrades,
   fetchGateTrades, fetchBinanceTrades,
 } from '../services/api';
-import { parseMaCrossFilterName } from '../utils/filterNames';
+import { parseMaCrossFilterName, parseMaCompareFilterName, parseFilterChartInterval } from '../utils/filterNames';
 import { useI18n } from '../i18n';
 import MultitradeModal from './MultitradeModal';
 import MultitradeBotStateModal from './MultitradeBotStateModal';
@@ -30,9 +30,14 @@ import {
 } from '../utils/tradeFavoritesSort';
 import { useMacrossFavoritesStatus } from '../hooks/useMacrossFavoritesStatus';
 import { useTradeFavoritesSummary } from '../hooks/useTradeFavoritesSummary';
+import {
+  compareMacmpTableRows, filterMacmpTableRows, loadMacmpTableSort, saveMacmpTableSort,
+} from '../utils/macmpTableSort';
 import { useVirtualRows } from '../hooks/useVirtualRows';
 import { useIsMobile } from '../hooks/useIsMobile';
+import { isStablesFilterName } from '../utils/assetCategories';
 import MacrossFavSortSelect from './MacrossFavSortSelect';
+import MacmpTableSortSelect from './MacmpTableSortSelect';
 import TradeFavSortSelect from './TradeFavSortSelect';
 
 const GATE_COLOR    = '#0068ff';
@@ -255,6 +260,18 @@ function formatMacrossBadge(meta, t, nowMs = Date.now(), scannedAt, interval) {
   return null;
 }
 
+function formatMacmpBadge(meta, t) {
+  if (!meta) return null;
+  if (meta.kind === 'approaching') {
+    const arrow = meta.direction === 'down' ? '↓' : '↑';
+    const gap = meta.gapPct != null ? `${meta.gapPct}%` : '—';
+    return t('table.macross_near', arrow, gap);
+  }
+  const arrow = meta.direction === 'down' ? '↓' : '↑';
+  const gap = meta.gapPct != null ? `${meta.gapPct}%` : '—';
+  return `${arrow} ${gap}`;
+}
+
 export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCurrency }) {
   const {
     currencies, findFilter, selectedQuote,     selectedChart, setSelectedChart, setChartZoom, setChartTradeMarkers,
@@ -266,6 +283,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     activeTrades, refreshActiveTrades, dismissActiveTrade,
     multitradeFavorites, removeMultitradeEntry, saveMultitradeSymbol, updateMultitradeBotState,
     filterVisibleCurrencies, isVisibleSymbol, addFilter,
+    currencyBySymbol,
     ensureMarketHighlights, marketHighlightsLoading,
     favoriteView, toggleFavoriteView, clearFavoriteView,
     resetChartCandleWindow,
@@ -286,6 +304,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   const [macrossRefreshing, setMacrossRefreshing] = useState(false);
   const [macrossTick, setMacrossTick]     = useState(0);
   const [macrossFavSort, setMacrossFavSort] = useState(() => loadMacrossFavSort());
+  const [macmpTableSort, setMacmpTableSort] = useState(() => loadMacmpTableSort());
   const [tradeFavSort, setTradeFavSort] = useState(() => loadTradeFavSort());
 
   const macrossFavSymbols = useMemo(() => (
@@ -331,6 +350,13 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     return f;
   }, [activeFilter, favoriteView, findFilter]);
 
+  const activeMacmpFilter = useMemo(() => {
+    if (!activeFilter || favoriteView) return null;
+    const f = findFilter(activeFilter);
+    if (!f || !parseMaCompareFilterName(f.name)) return null;
+    return f;
+  }, [activeFilter, favoriteView, findFilter]);
+
   const macrossFilterParams = useMemo(
     () => (activeMacrossFilter ? parseMaCrossFilterName(activeMacrossFilter.name) : null),
     [activeMacrossFilter],
@@ -338,9 +364,13 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
 
   const macrossMeta = activeMacrossFilter?.meta ?? null;
   const macrossScannedAt = activeMacrossFilter?.scannedAt ?? null;
-  const macrossSigInterval = macrossFilterParams?.sigInterval
-    ?? macrossFilterParams?.interval1
-    ?? null;
+  const macmpMeta = activeMacmpFilter?.meta ?? null;
+
+  const filterChartInterval = useMemo(() => {
+    if (!activeFilter || favoriteView) return null;
+    const f = findFilter(activeFilter);
+    return parseFilterChartInterval(f?.name ?? activeFilter);
+  }, [activeFilter, favoriteView, findFilter]);
 
   const cycleSort = useCallback(() => {
     if (isFavVolumeContext) {
@@ -361,6 +391,12 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
 
   const onTradeFavSortChange = useCallback((sortBy) => {
     setTradeFavSort(sortBy);
+    setSortVolume('none');
+  }, []);
+
+  const onMacmpTableSortChange = useCallback((sortBy) => {
+    setMacmpTableSort(sortBy);
+    saveMacmpTableSort(sortBy);
     setSortVolume('none');
   }, []);
 
@@ -406,19 +442,21 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     } else if (activeFilter) {
       const filter = findFilter(activeFilter);
       if (filter) {
+        const allowStablecoins = isStablesFilterName(activeFilter);
+        const visibilityOpts = allowStablecoins ? { allowStablecoins: true } : undefined;
         const useGateFallback = needsGateFallback(activeFilter);
-        const binanceBySymbol = new Map(currencies.list.map((c) => [c.symbol, c]));
+        const binanceBySymbol = currencyBySymbol;
         const gateBySymbol = useGateFallback && gateAll
           ? new Map(gateAll.map((c) => [c.symbol, c]))
           : null;
         const mapped = filter.list
-          .filter((sym) => isVisibleSymbol(sym))
+          .filter((sym) => isVisibleSymbol(sym, visibilityOpts))
           .map((sym) => binanceBySymbol.get(sym) ?? gateBySymbol?.get(sym) ?? null)
           .filter(Boolean);
         const have = new Set(mapped.map((c) => c.symbol));
         list = mapped;
         for (const sym of filter.list) {
-          if (!have.has(sym) && isVisibleSymbol(sym)) {
+          if (!have.has(sym) && isVisibleSymbol(sym, visibilityOpts)) {
             list.push({ symbol: sym, price: 0, volume: 0 });
           }
         }
@@ -429,7 +467,10 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
       list = currencies.list.filter((c) => c.symbol.endsWith(selectedQuote));
     }
 
-    list = filterVisibleCurrencies(list);
+    const assetDisplayOpts = isStablesFilterName(activeFilter)
+      ? { allowStablecoins: true }
+      : undefined;
+    list = filterVisibleCurrencies(list, assetDisplayOpts);
 
     if (search.trim()) {
       const term = search.trim().toUpperCase();
@@ -443,6 +484,9 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
       }));
     } else if (isTradesFavView && sortVolume === 'none') {
       list = list.slice().sort((a, b) => compareTradeFavorites(a, b, tradeFavSort, tradeFavStatus));
+    } else if (activeMacmpFilter && macmpMeta && sortVolume === 'none' && !favoriteView) {
+      list = filterMacmpTableRows(list, macmpMeta, macmpTableSort);
+      list = list.slice().sort((a, b) => compareMacmpTableRows(a, b, macmpTableSort, macmpMeta));
     } else if (sortVolume !== 'none') {
       list = list.slice().sort((a, b) => {
         const va = (isAltaFilter || isNovasFilter) ? rowVolume24h(a, highlightMeta) : Number(a.volume) || 0;
@@ -452,7 +496,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     }
 
     return list;
-  }, [currencies, activeFilter, selectedQuote, findFilter, search, favoriteView, gateFavorites, binanceFavorites, multitradeFavorites, sortVolume, gateAll, filterVisibleCurrencies, isVisibleSymbol, activeMacrossFilter, macrossScannedAt, macrossTick, isMacrossFavView, macrossFavSort, macrossFavStatus, macrossEntriesBySymbol, isTradesFavView, tradeFavSort, tradeFavSymbols, tradeFavStatus, isActiveFavView, activeTrades, isAltaFilter, isNovasFilter, highlightMeta]);
+  }, [currencies, activeFilter, selectedQuote, findFilter, search, favoriteView, gateFavorites, binanceFavorites, multitradeFavorites, sortVolume, gateAll, filterVisibleCurrencies, isVisibleSymbol, currencyBySymbol, activeMacrossFilter, macrossScannedAt, macrossTick, isMacrossFavView, macrossFavSort, macrossFavStatus, macrossEntriesBySymbol, isTradesFavView, tradeFavSort, tradeFavSymbols, tradeFavStatus, isActiveFavView, activeTrades, isAltaFilter, isNovasFilter, highlightMeta, activeMacmpFilter, macmpMeta, macmpTableSort]);
 
   const { slice: visibleRows, paddingTop, paddingBottom } = useVirtualRows({
     items: rows,
@@ -610,9 +654,8 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
       const isMT = !!mtEntry && !isTradesFavView;
 
       let effectiveInterval = chartInterval || selectedChart?.interval || '15m';
-      if (macrossSigInterval) {
-        // Mesmo timeframe do filtro — evita comparar idade EMA15m com gráfico/Binance em 5m
-        effectiveInterval = macrossSigInterval;
+      if (filterChartInterval) {
+        effectiveInterval = filterChartInterval;
       } else if (isMT) {
         effectiveInterval = resolveTradeChartInterval(mtEntry, null);
       }
@@ -620,7 +663,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
       setChartInterval(effectiveInterval);
       setChartViewSource(
         isTradesFavView ? CHART_VIEW.TRADES
-          : (isMT && !macrossSigInterval ? CHART_VIEW.MULTITRADE : CHART_VIEW.TABLE),
+          : (isMT && !filterChartInterval ? CHART_VIEW.MULTITRADE : CHART_VIEW.TABLE),
       );
 
       if (mtEntry) {
@@ -629,8 +672,8 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
         applyChartMaCrossOverlay(null);
       }
 
-      // Favorito MA-Cross só manda no chart quando não há filtro macross ativo
-      if (isMT && !macrossSigInterval) {
+      // Favorito MA-Cross só manda no chart quando não há filtro com intervalo explícito
+      if (isMT && !filterChartInterval) {
         await loadMultitradeSymbolChart(mtEntry, {
           fetchCandlesticksAndCloud,
           fetchMultitradeTrades,
@@ -927,6 +970,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                 title={
                   isMacrossFavView ? t('macross.sort.label')
                     : isTradesFavView ? t('trades.sort.label')
+                    : activeMacmpFilter ? t('macmp.sort.label')
                     : undefined
                 }
               >
@@ -959,6 +1003,24 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                     <TradeFavSortSelect
                       value={tradeFavSort}
                       onChange={onTradeFavSortChange}
+                      className="shrink-0"
+                    />
+                    <button
+                      type="button"
+                      className={`text-[8px] font-bold px-0.5 shrink-0 touch-manipulation ${
+                        volumeSortActive ? 'text-p5/90' : 'text-p5/45 hover:text-p5/80'
+                      }`}
+                      title={volSortTitle}
+                      onClick={(e) => { e.stopPropagation(); cycleSort(); }}
+                    >
+                      Vol{volSortArrow}
+                    </button>
+                  </div>
+                ) : activeMacmpFilter ? (
+                  <div className={`flex items-center gap-0.5 ${isMobile ? 'flex-wrap justify-center' : 'justify-start'}`}>
+                    <MacmpTableSortSelect
+                      value={macmpTableSort}
+                      onChange={onMacmpTableSortChange}
                       className="shrink-0"
                     />
                     <button
@@ -1215,8 +1277,13 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                       {(macrossMeta?.[item.symbol] || (isMacrossFavView && macrossFavStatus[item.symbol])) && (
                         <span className="text-[9px] font-bold text-emerald-400/90">
                           {macrossMeta?.[item.symbol]
-                            ? formatMacrossBadge(macrossMeta[item.symbol], t, Date.now(), macrossScannedAt, macrossSigInterval)
+                            ? formatMacrossBadge(macrossMeta[item.symbol], t, Date.now(), macrossScannedAt, filterChartInterval)
                             : formatMacrossStatusBadge(macrossFavStatus[item.symbol], t)}
+                        </span>
+                      )}
+                      {macmpMeta?.[item.symbol] && (
+                        <span className="text-[9px] font-bold text-amber-400/90">
+                          {formatMacmpBadge(macmpMeta[item.symbol], t)}
                         </span>
                       )}
                     </div>

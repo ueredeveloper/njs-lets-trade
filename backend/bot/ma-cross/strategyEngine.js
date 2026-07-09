@@ -384,6 +384,46 @@ function checkMaCrossApproaching({
   };
 }
 
+/** Posição relativa: EMA rápida acima ou abaixo da lenta (sem exigir cruzamento). */
+function checkMaPosition({
+  candles1, period1, interval1,
+  candles2, period2, interval2,
+  compare = 'above',
+  tolerancePct = 0,
+  closedOnly = true,
+}) {
+  const pair = readMaCrossPair({
+    candles1, period1, interval1,
+    candles2, period2, interval2,
+    closedOnly,
+  });
+  if (!pair.ok) {
+    return { matched: false, reason: pair.reason, ma1: pair.ma1, ma2: pair.ma2 };
+  }
+
+  const { ma1, ma2, close, openTime } = pair;
+  const tol = Math.max(0, tolerancePct ?? 0) / 100;
+  const gapPct = ma2 > 0 ? Math.round(((ma1 - ma2) / ma2) * 10000) / 100 : null;
+  const wantBelow = compare === 'below' || compare === 'bellow';
+
+  let matched;
+  if (wantBelow) {
+    matched = ma1 < ma2 * (1 + tol);
+  } else {
+    matched = ma1 > ma2 * (1 - tol);
+  }
+
+  return {
+    matched,
+    kind: 'position',
+    ma1, ma2, gapPct,
+    close,
+    openTime,
+    direction: ma1 >= ma2 ? 'up' : 'down',
+    reason: matched ? null : (wantBelow ? 'MA1_NOT_BELOW' : 'MA1_NOT_ABOVE'),
+  };
+}
+
 function evaluateMaCrossSignal({
   candles1, period1, interval1,
   candles2, period2, interval2,
@@ -1247,6 +1287,7 @@ module.exports = {
   checkMaCrossover,
   checkMaCrossApproaching,
   checkMaCrossNearProximity,
+  checkMaPosition,
   evaluateMaCrossSignal,
   checkPriceFilter,
   checkRsi,

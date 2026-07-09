@@ -21,7 +21,7 @@ const { ichimokuCloudRouter } = require('./technicals-indicators');
 //const {client} = require('./services/fetchClient');
 const {
   fetchCandles, fetchIchimokuCloud, fetchAllCurrencies,
-  fetchSMA, fetchRSI, fetchVWAP, fetch24HsVolume, fetchMarketCapFilter, fetchStablecoins, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter,
+  fetchSMA, fetchRSI, fetchVWAP, fetch24HsVolume, fetchMarketCapFilter, fetchStablecoins, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter,
   fetchRsiOversoldRecovery, fetchReloadCandles,
   fetchGateCurrencies, fetchGatePrefetch, fetchBinanceTrades, fetchGateTrades,
   fetchActiveTrades, fetchTradeFavorites, stgBotStatus, multitradeService, fetchMarketHighlights } = require('./services');
@@ -48,6 +48,7 @@ app.use('/services', fetchIndicatorSearch)
 app.use('/services', fetchMaFilter)
 app.use('/services', fetchMaTimeAboveFilter)
 app.use('/services', fetchMaCrossoverFilter)
+app.use('/services', fetchMaCompareFilter)
 app.use('/services', fetchRsiOversoldRecovery)
 app.use('/services', fetchReloadCandles)
 app.use('/services', fetchGateCurrencies)
@@ -126,6 +127,8 @@ async function startServer() {
   await maTimeAboveCache.loadFromDisk();
   const maCrossCache = require('./cache/maCrossCache');
   await maCrossCache.loadFromDisk();
+  const maCompareCache = require('./cache/maCompareCache');
+  await maCompareCache.loadFromDisk();
 
   app.listen(PORT, () => {
     const boot = ((Date.now() - t0) / 1000).toFixed(2);
@@ -157,6 +160,29 @@ async function startServer() {
 
   refreshMaCrossCache().catch(e => console.error('[maCrossCache] erro no warmup:', e.message));
   setInterval(refreshMaCrossCache, maCrossCache.REFRESH_TICK_MS);
+
+  async function refreshMaCompareCache() {
+    try {
+      const { list: symbols } = await getActiveUsdtPairs();
+      if (!Array.isArray(symbols) || symbols.length === 0) return;
+      const stats = await maCompareCache.refreshAll(symbols);
+      if (stats.computed > 0) {
+        await maCompareCache.saveToDisk();
+        const m = stats.matched ?? {};
+        console.log(
+          `[maCompareCache] 1h↑:${m['1h|9|21|acim|0.5'] ?? 0} 1h↓:${m['1h|9|21|abaix|0.5'] ?? 0}`
+          + ` prox↑:${m['1h|9|21|nearup|0.5'] ?? 0} prox↓:${m['1h|9|21|neardn|0.5'] ?? 0}`
+          + ` | disco:${stats.diskHits ?? 0} stale:${stats.diskStale ?? 0} api:${stats.apiFetches ?? 0}`
+          + ` | fila:${stats.queuePending ?? 0}`,
+        );
+      }
+    } catch (e) {
+      console.error('[maCompareCache] erro no refresh:', e.message);
+    }
+  }
+
+  refreshMaCompareCache().catch(e => console.error('[maCompareCache] erro no warmup:', e.message));
+  setInterval(refreshMaCompareCache, maCompareCache.REFRESH_TICK_MS);
 
   const candleDiskWarmup = require('./utils/candleDiskWarmup');
   const CANDLE_WARMUP_TICK_MS = 60_000;

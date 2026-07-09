@@ -213,6 +213,22 @@ function getFilterDescription(name, t) {
     return t('filter.ma', period, comp, candle, interval);
   }
 
+  if (type === 'macmp') {
+    const p1 = parts[2];
+    const p2 = parts[3];
+    const mode = parseMaCrossModeToken(parts[4]);
+    if (mode === 'near_up' || mode === 'near_down') {
+      let extra = '';
+      if (parts[5] === 'prox' && parts[6] != null) extra = `≤${parts[6]}%`;
+      return t('filter.ma_compare_near', p1, p2, t(`filter.macross.${mode}`), interval, extra);
+    }
+    const cmpType = parseMaCompareToken(parts[4]);
+    const comp = cmpType === 'below' ? t('filter.abaixo') : t('filter.acima');
+    let extra = '';
+    if (parts[5] === 'tol' && parts[6] != null) extra = `±${parts[6]}%`;
+    return t('filter.ma_compare', p1, p2, comp, interval) + (extra ? ` ${extra}` : '');
+  }
+
   if (type === 'macross') {
     const p1 = parts[2];
     const iv1 = parts[3];

@@ -37,6 +37,12 @@ describe('assetCategories', () => {
     expect(filterSymbols(list, DEFAULT_ASSET_DISPLAY)).toEqual(['BTCUSDT', 'ETHUSDT']);
   });
 
+  test('allowStablecoins bypasses stablecoin hiding', () => {
+    expect(isSymbolVisible('USDCUSDT', DEFAULT_ASSET_DISPLAY, { allowStablecoins: true })).toBe(true);
+    expect(filterSymbols(['BTCUSDT', 'USDCUSDT'], DEFAULT_ASSET_DISPLAY, { allowStablecoins: true }))
+      .toEqual(['BTCUSDT', 'USDCUSDT']);
+  });
+
   test('WIF is not classified as wrapped', () => {
     expect(getSymbolCategories('WIFUSDT')).not.toContain('wrapped');
   });

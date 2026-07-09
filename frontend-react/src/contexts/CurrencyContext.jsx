@@ -507,17 +507,17 @@ export function CurrencyProvider({ children }) {
   }, []);
 
   const isVisibleSymbol = useCallback(
-    (symbol) => isSymbolVisible(symbol, assetDisplay),
+    (symbol, options) => isSymbolVisible(symbol, assetDisplay, options),
     [assetDisplay],
   );
 
   const filterVisibleSymbols = useCallback(
-    (symbols) => filterSymbols(symbols, assetDisplay),
+    (symbols, options) => filterSymbols(symbols, assetDisplay, options),
     [assetDisplay],
   );
 
   const filterVisibleCurrencies = useCallback(
-    (list) => filterCurrencies(list, assetDisplay),
+    (list, options) => filterCurrencies(list, assetDisplay, options),
     [assetDisplay],
   );
 
@@ -527,6 +527,11 @@ export function CurrencyProvider({ children }) {
       list: filterCurrencies(rawCurrencies.list, assetDisplay),
     }),
     [rawCurrencies, assetDisplay],
+  );
+
+  const currencyBySymbol = useMemo(
+    () => new Map(rawCurrencies.list.map((c) => [c.symbol, c])),
+    [rawCurrencies.list],
   );
 
   const setCurrencies = setRawCurrencies;
@@ -714,6 +719,7 @@ export function CurrencyProvider({ children }) {
       value={{
         currencies,
         setCurrencies,
+        currencyBySymbol,
         filters,
         setFilters,
         addFilter,

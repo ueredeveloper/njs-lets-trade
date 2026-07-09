@@ -470,6 +470,32 @@ export async function fetchMaCrossoverFilter({
   }
 }
 
+export async function fetchMaCompareFilter({
+  period1 = '9',
+  period2 = '21',
+  interval = '1h',
+  compare = 'above',
+  tolerancePct = '0.5',
+  proximityPct = '0.5',
+  lang = 'pt',
+} = {}) {
+  const params = new URLSearchParams({
+    period1: String(period1),
+    period2: String(period2),
+    interval,
+    compare,
+    tolerancePct: String(tolerancePct),
+    proximityPct: String(proximityPct),
+    lang,
+  });
+  const res = await fetch(`/services/ma-compare-filter?${params}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `ma-compare-filter falhou: HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 /** Gap e cruzamento MA por símbolo (favoritos MA-Cross). */
 export async function fetchMaCrossStatus(items, { tolerancePct = '0.5', crossLookbackMin = 1440 } = {}) {
   const res = await fetch('/services/ma-cross-status', {

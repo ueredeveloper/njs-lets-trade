@@ -68,6 +68,67 @@ export function buildMaCrossFilterName(sigInterval, p1, iv1, p2, iv2, mode, opts
   return name;
 }
 
+/** Posição EMA vs EMA: 15m|macmp|9|21|acim — proximidade: 1h|macmp|9|21|nearup|prox|0.5 */
+export function buildMaCompareFilterName(interval, p1, p2, compare, lang = 'en', opts = {}) {
+  if (compare === 'near_up' || compare === 'near_down') {
+    const modeToken = MA_CROSS_MODE_TOKENS[compare] ?? compare;
+    let name = `${interval}|macmp|${p1}|${p2}|${modeToken}`;
+    const prox = opts.proximityPct ?? opts.tolerancePct;
+    if (prox != null && Number(prox) > 0) name += `|prox|${prox}`;
+    return name;
+  }
+  const cmp = parseCompareToken(compare) === 'above' ? compareAboveToken(lang) : compareBelowToken(lang);
+  let name = `${interval}|macmp|${p1}|${p2}|${cmp}`;
+  const tol = opts.tolerancePct;
+  if (tol != null && Number(tol) > 0) name += `|tol|${tol}`;
+  return name;
+}
+
+export function parseMaCompareFilterName(name) {
+  const parts = String(name).split('|');
+  if (parts[1] !== 'macmp' || parts.length < 5) return null;
+
+  const mode = parseMaCrossModeToken(parts[4]);
+  const posCmp = parseCompareToken(parts[4]);
+  const out = {
+    interval: parts[0],
+    period1: parseInt(parts[2], 10),
+    period2: parseInt(parts[3], 10),
+    compare: mode ?? (posCmp === 'below' ? 'below' : 'above'),
+    tolerancePct: 0,
+    proximityPct: 0.5,
+  };
+
+  for (let i = 5; i + 1 < parts.length; i += 2) {
+    const key = parts[i];
+    const val = parts[i + 1];
+    if (key === 'prox') out.proximityPct = parseFloat(val) || 0.5;
+    else if (key === 'tol') out.tolerancePct = parseFloat(val) || 0;
+  }
+
+  return out;
+}
+
+/** Intervalos de candle reconhecidos no prefixo do nome do filtro. */
+const FILTER_CHART_INTERVALS = new Set([
+  '1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w',
+]);
+
+/**
+ * Intervalo de gráfico sugerido pelo filtro (primeiro token: 1h|macmp|…, 15m|macross|…).
+ * Filtros sem prefixo de intervalo (ex. Favoritos|Alta|…) retornam null.
+ */
+export function parseFilterChartInterval(filterName) {
+  if (!filterName || typeof filterName !== 'string') return null;
+  const head = filterName.split('|')[0];
+  if (FILTER_CHART_INTERVALS.has(head)) return head;
+  const macross = parseMaCrossFilterName(filterName);
+  if (macross?.sigInterval && FILTER_CHART_INTERVALS.has(macross.sigInterval)) {
+    return macross.sigInterval;
+  }
+  return null;
+}
+
 /** Parse nome macross → parâmetros para re-scan / polling. */
 export function parseMaCrossFilterName(name) {
   const parts = String(name).split('|');

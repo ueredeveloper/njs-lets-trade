@@ -93,6 +93,15 @@ const DEFAULT_ASSET_DISPLAY = Object.fromEntries(
 
 const STORAGE_KEY = 'lets_trade_asset_display';
 
+/** Categorias dos filtros Stables|USD, Stables|Ouro, etc. */
+const STABLE_FILTER_CATEGORIES = ['USD', 'EUR', 'Ouro', 'Outras'];
+
+/** Filtro explícito de stablecoins (ou join que inclui um deles). */
+function isStablesFilterName(name) {
+  if (!name || typeof name !== 'string') return false;
+  return STABLE_FILTER_CATEGORIES.some((cat) => name.includes(`Stables|${cat}`));
+}
+
 function extractBase(symbol) {
   const s = String(symbol || '').toUpperCase();
   if (s.endsWith('USDT')) return s.slice(0, -4);
@@ -185,18 +194,22 @@ function getSymbolCategories(symbol) {
   return categories;
 }
 
-function isSymbolVisible(symbol, assetDisplay = DEFAULT_ASSET_DISPLAY) {
+function isSymbolVisible(symbol, assetDisplay = DEFAULT_ASSET_DISPLAY, options = {}) {
+  const { allowStablecoins = false } = options;
   const categories = getSymbolCategories(symbol);
   if (categories.length === 0) return true;
-  return categories.every((cat) => assetDisplay[cat] === true);
+  return categories.every((cat) => {
+    if (cat === 'stablecoins' && allowStablecoins) return true;
+    return assetDisplay[cat] === true;
+  });
 }
 
-function filterSymbols(symbols, assetDisplay = DEFAULT_ASSET_DISPLAY) {
-  return symbols.filter((sym) => isSymbolVisible(sym, assetDisplay));
+function filterSymbols(symbols, assetDisplay = DEFAULT_ASSET_DISPLAY, options = {}) {
+  return symbols.filter((sym) => isSymbolVisible(sym, assetDisplay, options));
 }
 
-function filterCurrencies(list, assetDisplay = DEFAULT_ASSET_DISPLAY) {
-  return list.filter((c) => isSymbolVisible(c.symbol, assetDisplay));
+function filterCurrencies(list, assetDisplay = DEFAULT_ASSET_DISPLAY, options = {}) {
+  return list.filter((c) => isSymbolVisible(c.symbol, assetDisplay, options));
 }
 
 function loadAssetDisplay() {
@@ -226,6 +239,7 @@ module.exports = {
   STORAGE_KEY,
   extractBase,
   getSymbolCategories,
+  isStablesFilterName,
   isSymbolVisible,
   filterSymbols,
   filterCurrencies,
