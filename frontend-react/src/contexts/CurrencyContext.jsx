@@ -29,6 +29,7 @@ import {
   saveUiPreferences,
   normalizeOverlaySlots,
   normalizeMaBandsDefaults,
+  normalizeActiveIndicators,
 } from '../utils/uiPreferences';
 
 const CurrencyContext = createContext(null);
@@ -506,6 +507,14 @@ export function CurrencyProvider({ children }) {
     });
   }, []);
 
+  const setActiveIndicatorsPreference = useCallback((indicators) => {
+    setUiPrefsState((prev) => {
+      const next = { ...prev, activeIndicators: normalizeActiveIndicators(indicators) };
+      saveUiPreferences(next);
+      return next;
+    });
+  }, []);
+
   const isVisibleSymbol = useCallback(
     (symbol, options) => isSymbolVisible(symbol, assetDisplay, options),
     [assetDisplay],
@@ -739,6 +748,7 @@ export function CurrencyProvider({ children }) {
         setPanelVisible,
         setOverlaySlotsPreference,
         setMaBandsDefaults,
+        setActiveIndicatorsPreference,
         chartIntervalOptions: CHART_INTERVAL_OPTIONS,
         panelKeys: PANEL_KEYS,
         isVisibleSymbol,

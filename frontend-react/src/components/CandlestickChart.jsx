@@ -9,7 +9,7 @@ import convertOpenTime from '../utils/convertOpenTime';
 import Tooltip from './Tooltip';
 import { hasAnyChartPanelButton } from '../utils/chartPanelButtons';
 import { useIsMobile } from '../hooks/useIsMobile';
-import { DEFAULT_OVERLAY_SLOTS, BAND_PCT_OPTIONS } from '../utils/uiPreferences';
+import { DEFAULT_OVERLAY_SLOTS, BAND_PCT_OPTIONS, MAX_OVERLAY_SLOTS, PERIOD_DEFAULT_COLORS, DEFAULT_ACTIVE_INDICATORS } from '../utils/uiPreferences';
 import { CHART_VIEW, INTERVAL_MS, computeZoomWindow, buildFixedDataZoom, buildInsideDataZoom, computeCandleLimitFromTime, isTradePanelChartView } from '../utils/chartView';
 
 const LIMIT = DEFAULT_CANDLE_LIMIT;
@@ -17,7 +17,7 @@ const LAST_CANDLE_PRESETS = [10, 20, 30];
 const MAX_CANDLES = 1000;
 const CANDLE_FETCH_STEPS = [500, 750, 1000];
 const OVERLAY_MA_INTERVALS = ['1m', '5m', '15m', '30m', '1h', '2h', '4h', '8h', '12h', '1d'];
-const OVERLAY_MA_COLORS = ['#fb923c', '#c084fc'];
+const OVERLAY_MA_COLORS = ['#fb923c', '#c084fc', '#34d399', '#60a5fa', '#f472b6', '#facc15', '#a78bfa', '#4ade80'];
 const BAND_PANEL_KEYS = ['bandsPct', 'bandsAbove', 'bandsBelow'];
 const INTERVALS = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w'];
 const DEFAULT_INTERVAL = '15m';
@@ -33,8 +33,8 @@ const CHART_LEFT_MARGIN = 8;       // margem esquerda mínima
 const CHART_PANEL_COLLAPSED = 22;  // painel recolhido (só a aba)
 /** Espaço livre no rodapé do painel lateral (botão flutuante "Moedas" no mobile). */
 const MOBILE_PANEL_BOTTOM_INSET = 56;
-const PANEL_MIN_WIDTH = 72;
-const PANEL_MAX_WIDTH = 96;
+const PANEL_MIN_WIDTH = 88;
+const PANEL_MAX_WIDTH = 164;
 const PANEL_GAP = 2;
 const PANEL_TILE_PAD = 2;
 const COLLAPSE_TAB_W = 16;
@@ -61,7 +61,8 @@ const CHART_INDICATOR_IDS = [
 ];
 
 function overlayPanelKey(slot) {
-  return slot.id === 'slot1' ? 'ma1' : 'ma2';
+  const num = parseInt(slot.id.replace('slot', ''), 10);
+  return `ma${isNaN(num) ? slot.id : num}`;
 }
 
 function filterIndicatorsByPanel(activeIndicators, panelButtons) {
@@ -229,7 +230,7 @@ const panelSelect = (color, dims = null) => ({
   border: `1px solid ${color}66`,
 });
 
-const MA_PERIOD_OPTIONS = ['50', '200'];
+const MA_PERIOD_OPTIONS = ['9', '21', '50', '200'];
 
 const COMPACT_LABELS = {
   ma9: '9', ma21: '21', ma50: '50', ma200: '200', ichimoku: 'Ich', rsi: 'RSI',
@@ -239,24 +240,99 @@ const COMPACT_LABELS = {
 /** Grid base do painel — cada botão ocupa N×M células. */
 const PANEL_GRID_COLS = 4;
 
-/** Spans por indicador: colunas × linhas (ex.: 2×2 = 4 células). */
+/**
+ * Spans por indicador: colunas × linhas.
+ * Tiles altos (1×2) preenchem o espaço ao lado dos tiles quadrados (2×2).
+ * Layout resultante em 4 colunas:
+ *   [--ma21--][--ichi--]   rows 1-2
+ *   [-ma200-][-rsi80--]    row 3
+ *   [9][50][rsi][r50]      rows 4-5  (todos 1×2, texto vertical)
+ */
 const INDICATOR_SPANS = {
-  ma9:      { col: 1, row: 1 },
+  ma9:      { col: 1, row: 2 },
   ma21:     { col: 2, row: 2 },
   ma50:     { col: 1, row: 2 },
   ma200:    { col: 2, row: 1 },
   ichimoku: { col: 2, row: 2 },
-  rsi:      { col: 1, row: 1 },
-  rsi80:    { col: 1, row: 2 },
-  rsi50:    { col: 2, row: 1 },
+  rsi:      { col: 1, row: 2 },
+  rsi80:    { col: 2, row: 1 },
+  rsi50:    { col: 1, row: 2 },
 };
 
 const OVERLAY_BLOCK_ROWS = 4;
 const BANDS_COL_SPAN = 4;
 const BANDS_GRID_COLS = 4;
 
+const OVERLAY_COLOR_PRESETS = ['#22c55e', '#eab308', '#3b82f6', '#ef4444', '#f97316'];
+
+function OverlayColorPicker({ color, slotId, updateOverlaySlot }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (e) => { if (!ref.current?.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, [open]);
+
+  return (
+    <div ref={ref} style={{ position: 'relative', width: '100%', height: '100%' }}>
+      <button
+        type="button"
+        onClick={() => setOpen(v => !v)}
+        style={{
+          width: '100%',
+          height: '100%',
+          borderRadius: 3,
+          background: color,
+          border: `1.5px solid ${open ? '#fff' : `${color}99`}`,
+          cursor: 'pointer',
+          padding: 0,
+          display: 'block',
+          boxSizing: 'border-box',
+        }}
+      />
+      {open && (
+        <div style={{
+          position: 'absolute',
+          bottom: 'calc(100% + 4px)',
+          right: 0,
+          display: 'flex',
+          gap: 3,
+          background: 'rgba(10,10,16,0.97)',
+          border: '1px solid #334155',
+          borderRadius: 4,
+          padding: 4,
+          zIndex: 200,
+          boxShadow: '0 4px 12px rgba(0,0,0,0.6)',
+        }}>
+          {OVERLAY_COLOR_PRESETS.map(c => (
+            <button
+              key={c}
+              type="button"
+              onClick={() => { updateOverlaySlot(slotId, { color: c }); setOpen(false); }}
+              style={{
+                width: 16,
+                height: 16,
+                borderRadius: 3,
+                background: c,
+                border: `1.5px solid ${color === c ? '#fff' : 'transparent'}`,
+                cursor: 'pointer',
+                padding: 0,
+                opacity: color === c ? 1 : 0.75,
+              }}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Spans internos dos controles de banda (masonry — um maior, outro menor). */
 const BAND_CONTROL_SPANS = {
+  target:   { col: 4, row: 1 },
   title:    { col: 1, row: 2 },
   pct:      { col: 2, row: 2 },
   adaptive: { col: 2, row: 1 },
@@ -266,8 +342,11 @@ const BAND_CONTROL_SPANS = {
 };
 
 function buildBandControlTiles(meta, overlayMaLoading) {
-  const { showBandsPct, showBandsAbove, showBandsBelow, maBands } = meta;
-  const tiles = [{ key: 'title', kind: 'title' }];
+  const { showBandsPct, showBandsAbove, showBandsBelow, maBands, overlaySlots } = meta;
+  const tiles = [];
+  const enabledSlots = (overlaySlots ?? []).filter(s => s.enabled);
+  if (enabledSlots.length >= 2) tiles.push({ key: 'target', kind: 'target' });
+  tiles.push({ key: 'title', kind: 'title' });
   if (showBandsPct && !maBands.adaptive) tiles.push({ key: 'pct', kind: 'pct' });
   if (showBandsPct && maBands.adaptive) tiles.push({ key: 'adaptive', kind: 'adaptive' });
   if (showBandsAbove) tiles.push({ key: 'above', kind: 'above' });
@@ -384,6 +463,90 @@ function markPlace(occupied, row, col, colSpan, rowSpan) {
   }
 }
 
+/**
+ * Alturas naturais por coluna — criam variedade: esquerda começa grande,
+ * direita começa pequena. O ciclo alterna dentro de cada coluna.
+ */
+const OVERLAY_NAT_LEFT  = [5, 3];
+const OVERLAY_NAT_RIGHT = [3, 5];
+
+/**
+ * Posiciona os tiles de overlay em duas colunas de metade do painel.
+ * Tiles de índice par → coluna esquerda, ímpares → coluna direita.
+ *
+ * Fill rule: o ÚLTIMO tile de cada coluna se expande automaticamente para
+ * preencher o espaço vertical remanescente — sem deixar lacunas, mesmo que
+ * a outra coluna tenha mais tiles (ou "o espaço de duas divs de MA").
+ *
+ * Caso especial: 1 único tile ocupa largura total (colSpan=4).
+ */
+function computeOverlayPlacements(overlayTiles, rowOffset) {
+  if (!overlayTiles.length) return { placements: [], rowUnits: 0 };
+
+  // Único tile → largura total, sem divisão de colunas
+  if (overlayTiles.length === 1) {
+    const rowSpan = OVERLAY_NAT_LEFT[0];
+    return {
+      placements: [{
+        ...overlayTiles[0],
+        colSpan: PANEL_GRID_COLS,
+        rowSpan,
+        gridColumn: `1 / span ${PANEL_GRID_COLS}`,
+        gridRow:    `${rowOffset + 1} / span ${rowSpan}`,
+        startRow:    rowOffset,
+        startCol:    0,
+      }],
+      rowUnits: rowSpan,
+    };
+  }
+
+  // 2+ tiles: dividir em coluna esquerda (par) e direita (ímpar)
+  const leftTiles  = overlayTiles.filter((_, i) => i % 2 === 0);
+  const rightTiles = overlayTiles.filter((_, i) => i % 2 === 1);
+
+  // Alturas naturais de cada coluna
+  const leftSpans  = leftTiles.map((_, i)  => OVERLAY_NAT_LEFT[i  % OVERLAY_NAT_LEFT.length]);
+  const rightSpans = rightTiles.map((_, i) => OVERLAY_NAT_RIGHT[i % OVERLAY_NAT_RIGHT.length]);
+
+  const leftTotal  = leftSpans.reduce((s, r) => s + r, 0);
+  const rightTotal = rightSpans.reduce((s, r) => s + r, 0);
+  const maxRows    = Math.max(leftTotal, rightTotal);
+
+  // Expande o último tile da coluna mais curta para preencher o espaço vazio
+  if (leftTotal < maxRows)  leftSpans[leftSpans.length   - 1] += maxRows - leftTotal;
+  if (rightTotal < maxRows) rightSpans[rightSpans.length - 1] += maxRows - rightTotal;
+
+  const placements = [];
+
+  let lr = rowOffset;
+  for (let i = 0; i < leftTiles.length; i++) {
+    const rowSpan = leftSpans[i];
+    placements.push({
+      ...leftTiles[i],
+      colSpan: 2, rowSpan,
+      gridColumn: '1 / span 2',
+      gridRow:    `${lr + 1} / span ${rowSpan}`,
+      startRow: lr, startCol: 0,
+    });
+    lr += rowSpan;
+  }
+
+  let rr = rowOffset;
+  for (let i = 0; i < rightTiles.length; i++) {
+    const rowSpan = rightSpans[i];
+    placements.push({
+      ...rightTiles[i],
+      colSpan: 2, rowSpan,
+      gridColumn: '3 / span 2',
+      gridRow:    `${rr + 1} / span ${rowSpan}`,
+      startRow: rr, startCol: 2,
+    });
+    rr += rowSpan;
+  }
+
+  return { placements, rowUnits: maxRows };
+}
+
 /** Empacota tiles no grid (maior área primeiro) e devolve posições + linhas usadas. */
 function packMasonryTiles(tiles, gridCols) {
   const sorted = [...tiles].sort(
@@ -421,6 +584,43 @@ function packMasonryTiles(tiles, gridCols) {
   return { placements, rowUnits: maxRow };
 }
 
+/**
+ * Expande tiles para baixo se houver espaço vazio abaixo deles.
+ * Garante que nenhuma linha do grid fique vazia quando há tiles vizinhos
+ * com alturas diferentes (ex.: subset de indicadores visíveis).
+ */
+function fillGapsDown(placements, gridCols, maxRow) {
+  if (!placements.length || maxRow <= 0) return placements;
+
+  const occupied = new Set();
+  placements.forEach((p) => {
+    for (let r = p.startRow; r < p.startRow + p.rowSpan; r++) {
+      for (let c = p.startCol; c < p.startCol + p.colSpan; c++) {
+        occupied.add(`${r},${c}`);
+      }
+    }
+  });
+
+  return placements.map((tile) => {
+    let ext = 0;
+    while (tile.startRow + tile.rowSpan + ext < maxRow) {
+      const nextRow = tile.startRow + tile.rowSpan + ext;
+      let free = true;
+      for (let c = tile.startCol; c < tile.startCol + tile.colSpan && free; c++) {
+        if (occupied.has(`${nextRow},${c}`)) free = false;
+      }
+      if (!free) break;
+      for (let c = tile.startCol; c < tile.startCol + tile.colSpan; c++) {
+        occupied.add(`${nextRow},${c}`);
+      }
+      ext++;
+    }
+    if (!ext) return tile;
+    const newRowSpan = tile.rowSpan + ext;
+    return { ...tile, rowSpan: newRowSpan, gridRow: `${tile.startRow + 1} / span ${newRowSpan}` };
+  });
+}
+
 function tilePixelDims(colSpan, rowSpan, rowUnits, width, height, gap, gridCols) {
   const cellW = (width - (gridCols - 1) * gap) / gridCols;
   const cellH = (height - (rowUnits - 1) * gap) / rowUnits;
@@ -438,58 +638,80 @@ function computeMasonryLayout(tileDefs, width, height, gap, overlayMaLoading = f
       indicatorPlacements: [],
       blockPlacements: [],
       indicatorHeight: height,
-      blockHeights: [],
     };
   }
 
-  const indicators = tileDefs
+  // --- Indicator buttons (masonry area-sorted) ---
+  const indTiles = tileDefs
     .filter((t) => t.kind === 'indicator')
     .map((t) => {
       const span = INDICATOR_SPANS[t.data.id] ?? { col: 1, row: 1 };
-      return {
-        ...t,
-        colSpan: span.col,
-        rowSpan: span.row,
-      };
+      return { ...t, colSpan: span.col, rowSpan: span.row };
     });
 
+  // --- Overlay tiles (staggered, preserves slot order) ---
+  const overlayTilesDefs = tileDefs.filter((t) => t.kind === 'overlay');
+
+  // --- "+ MA" button ---
+  const addOverlayDef = tileDefs.find((t) => t.kind === 'addOverlay') ?? null;
+
+  // --- Bands section (separate flex block) ---
   const blocks = tileDefs
-    .filter((t) => t.kind !== 'indicator')
+    .filter((t) => t.kind === 'bands')
     .map((t) => ({
       ...t,
-      colSpan: t.kind === 'bands' ? BANDS_COL_SPAN : PANEL_GRID_COLS,
-      rowSpan: t.kind === 'overlay'
-        ? OVERLAY_BLOCK_ROWS
-        : bandsRowSpan(t.data, overlayMaLoading),
+      colSpan: BANDS_COL_SPAN,
+      rowSpan: bandsRowSpan(t.data, overlayMaLoading),
     }));
 
-  const indicatorPack = packMasonryTiles(indicators, PANEL_GRID_COLS);
-  const indicatorRowUnits = indicators.length ? Math.max(1, indicatorPack.rowUnits) : 0;
+  // Pack indicator buttons e expande para preencher gaps verticais
+  const indPack = packMasonryTiles(indTiles, PANEL_GRID_COLS);
+  const indFilledPlacements = fillGapsDown(indPack.placements, PANEL_GRID_COLS, indPack.rowUnits);
+  const indRowUnits = indTiles.length ? Math.max(1, indPack.rowUnits) : 0;
+
+  // Stagger-pack overlays, offset below indicators
+  const overlayPack = computeOverlayPlacements(overlayTilesDefs, indRowUnits);
+  const overlayRowUnits = overlayTilesDefs.length ? overlayPack.rowUnits : 0;
+
+  // "+ MA" button row
+  const addOverlayRowOffset = indRowUnits + overlayRowUnits;
+  const addOverlayPlacements = addOverlayDef ? [{
+    ...addOverlayDef,
+    colSpan: PANEL_GRID_COLS,
+    rowSpan: 1,
+    gridColumn: `1 / span ${PANEL_GRID_COLS}`,
+    gridRow:    `${addOverlayRowOffset + 1} / span 1`,
+    startRow:    addOverlayRowOffset,
+    startCol:    0,
+  }] : [];
+
+  // Total rows for the shared CSS grid
+  const hasIndSection = indTiles.length > 0 || overlayTilesDefs.length > 0 || !!addOverlayDef;
+  const totalIndRowUnits = indRowUnits + overlayRowUnits + (addOverlayDef ? 1 : 0);
+
+  // Height split between indicator section and bands section
   const blockRowUnits = blocks.reduce((sum, b) => sum + b.rowSpan, 0);
-  const totalUnits = (indicators.length ? indicatorRowUnits : 0) + blockRowUnits;
+  const totalUnits    = (hasIndSection ? totalIndRowUnits : 0) + blockRowUnits;
+  const sectionCount  = (hasIndSection ? 1 : 0) + blocks.length;
+  const gapTotal      = sectionCount > 1 ? (sectionCount - 1) * gap : 0;
+  const availableH    = height - gapTotal;
 
-  const sectionCount = (indicators.length ? 1 : 0) + blocks.length;
-  const gapTotal = sectionCount > 1 ? (sectionCount - 1) * gap : 0;
-  const availableHeight = height - gapTotal;
-
-  const indicatorHeight = indicators.length && totalUnits > 0
-    ? (availableHeight * indicatorRowUnits) / totalUnits
+  const indicatorHeight = hasIndSection && totalUnits > 0
+    ? (availableH * totalIndRowUnits) / totalUnits
     : 0;
 
-  const blockTotalHeight = Math.max(0, availableHeight - indicatorHeight);
+  const blockTotalHeight = Math.max(0, availableH - indicatorHeight);
+  const indH = indicatorHeight || height;
 
-  const indicatorPlacements = indicatorPack.placements.map((tile) => ({
-    ...tile,
-    dims: tilePixelDims(
-      tile.colSpan,
-      tile.rowSpan,
-      indicatorRowUnits,
-      width,
-      indicatorHeight || height,
-      gap,
-      PANEL_GRID_COLS,
-    ),
-  }));
+  // Compute pixel dims now that totalIndRowUnits is known
+  const dimsFor = (colSpan, rowSpan) =>
+    tilePixelDims(colSpan, rowSpan, totalIndRowUnits, width, indH, gap, PANEL_GRID_COLS);
+
+  const indicatorPlacements = [
+    ...indFilledPlacements.map((t) => ({ ...t, dims: dimsFor(t.colSpan, t.rowSpan) })),
+    ...overlayPack.placements.map((t) => ({ ...t, dims: dimsFor(t.colSpan, t.rowSpan) })),
+    ...addOverlayPlacements.map((t) => ({ ...t, dims: dimsFor(t.colSpan, t.rowSpan) })),
+  ];
 
   const blockPlacements = blocks.map((tile) => {
     const blockW = tilePixelDims(tile.colSpan, 1, 1, width, 0, gap, PANEL_GRID_COLS).w;
@@ -506,7 +728,7 @@ function computeMasonryLayout(tileDefs, width, height, gap, overlayMaLoading = f
 
   return {
     cols: PANEL_GRID_COLS,
-    indicatorRowUnits: indicators.length ? indicatorRowUnits : 0,
+    indicatorRowUnits: hasIndSection ? totalIndRowUnits : 0,
     indicatorPlacements,
     blockPlacements,
     indicatorHeight,
@@ -569,12 +791,18 @@ const collapseTabBtn = {
 };
 
 function renderIndicatorTile({ id, color, tipKey, active, darkText }, dims, t, toggleIndicator) {
+  // Texto vertical quando o tile é significativamente mais alto do que largo
+  const isVertical = dims.h > dims.w * 1.3;
   return (
     <PanelTip text={t(tipKey)}>
       <button
         type="button"
         onClick={() => toggleIndicator(id)}
-        style={panelBtn(active, color, darkText, dims)}
+        style={{
+          ...panelBtn(active, color, darkText, dims),
+          writingMode: isVertical ? 'vertical-lr' : undefined,
+          letterSpacing: isVertical ? 1 : undefined,
+        }}
       >
         {COMPACT_LABELS[id] ?? id}
       </button>
@@ -582,34 +810,67 @@ function renderIndicatorTile({ id, color, tipKey, active, darkText }, dims, t, t
   );
 }
 
-function renderOverlayTile({ slot, idx }, dims, t, updateOverlaySlot) {
-  const maNum = idx + 1;
-  const color = OVERLAY_MA_COLORS[idx];
+function renderOverlayTile({ slot }, dims, t, updateOverlaySlot, removeOverlaySlot) {
+  const color = slot.color ?? '#94a3b8';
+
+  // 2-column internal masonry grid — sem label MA1/MA2, o select de período É a identidade do tile
+  const innerW = dims.w - PANEL_TILE_PAD * 2;
   const innerH = dims.h - PANEL_TILE_PAD * 2;
-  const rowH = (innerH - (OVERLAY_BLOCK_ROWS - 1) * PANEL_GAP) / OVERLAY_BLOCK_ROWS;
-  const rowDims = { w: dims.w - PANEL_TILE_PAD * 2, h: rowH };
+  const cellW  = (innerW - PANEL_GAP) / 2;
+  const cellH  = (innerH - (OVERLAY_BLOCK_ROWS - 1) * PANEL_GAP) / OVERLAY_BLOCK_ROWS;
+  const tallH  = cellH * 2 + PANEL_GAP; // 1×2 — altura do select de período
+  const periodDims = { w: cellW, h: tallH };
+  const cellDims   = { w: cellW, h: cellH };
+  const rowDims    = { w: innerW, h: cellH };
+
   return (
-    <div style={blockInner}>
-      <div style={blockRow}>
-        <PanelTip text={t('chart.tip.ma_overlay', maNum)}>
-          <span style={{ ...scaleSectionTitle(rowDims), color, cursor: 'help' }}>
-            MA{maNum}
-          </span>
-        </PanelTip>
-      </div>
-      <div style={blockRow}>
-        <PanelTip text={t('chart.tip.ma_period', maNum, slot.period)}>
+    <div style={{
+      display: 'grid',
+      gridTemplateColumns: '1fr 1fr',
+      gridTemplateRows: `repeat(${OVERLAY_BLOCK_ROWS}, 1fr)`,
+      gap: PANEL_GAP,
+      width: innerW,
+      height: innerH,
+      boxSizing: 'border-box',
+    }}>
+      {/* período — tall (1×2), age como identidade visual do tile */}
+      <div style={{ gridColumn: '1', gridRow: '1 / span 2', display: 'flex', alignItems: 'stretch' }}>
+        <PanelTip text={t('chart.tip.ma_period', slot.period, slot.period)}>
           <select
             value={slot.period}
-            onChange={e => updateOverlaySlot(slot.id, { period: e.target.value })}
-            style={panelSelect(color, rowDims)}
+            onChange={e => {
+              const newPeriod = e.target.value;
+              const patch = { period: newPeriod };
+              if (color === (PERIOD_DEFAULT_COLORS[slot.period] ?? null)) {
+                patch.color = PERIOD_DEFAULT_COLORS[newPeriod] ?? color;
+              }
+              updateOverlaySlot(slot.id, patch);
+            }}
+            style={{ ...panelSelect(color, periodDims), fontSize: scaleFontSize(periodDims, 0.3, 10, 18) }}
           >
             {MA_PERIOD_OPTIONS.map(p => <option key={p} value={p}>{p}</option>)}
           </select>
         </PanelTip>
       </div>
-      <div style={blockRow}>
-        <PanelTip text={t('chart.tip.ma_interval', maNum)}>
+      {/* cor — pequeno (1×1) topo direito */}
+      <div style={{ gridColumn: '2', gridRow: '1', display: 'flex', alignItems: 'stretch' }}>
+        <PanelTip text={t('chart.tip.ma_color', slot.period)}>
+          <OverlayColorPicker color={color} slotId={slot.id} updateOverlaySlot={updateOverlaySlot} />
+        </PanelTip>
+      </div>
+      {/* × remover — pequeno (1×1) abaixo da cor */}
+      <div style={{ gridColumn: '2', gridRow: '2', display: 'flex', alignItems: 'stretch' }}>
+        <button
+          type="button"
+          onClick={() => removeOverlaySlot(slot.id)}
+          style={{ ...panelBtn(false, color, false, cellDims), fontSize: 11 }}
+        >
+          ×
+        </button>
+      </div>
+      {/* intervalo — largura total (2×1) */}
+      <div style={{ gridColumn: '1 / span 2', gridRow: '3', display: 'flex', alignItems: 'stretch' }}>
+        <PanelTip text={t('chart.tip.ma_interval', slot.period)}>
           <select
             value={slot.interval}
             onChange={e => updateOverlaySlot(slot.id, { interval: e.target.value })}
@@ -619,8 +880,9 @@ function renderOverlayTile({ slot, idx }, dims, t, updateOverlaySlot) {
           </select>
         </PanelTip>
       </div>
-      <div style={blockRow}>
-        <PanelTip text={t('chart.tip.ma_on', maNum)}>
+      {/* ON/OFF — largura total (2×1) */}
+      <div style={{ gridColumn: '1 / span 2', gridRow: '4', display: 'flex', alignItems: 'stretch' }}>
+        <PanelTip text={t('chart.tip.ma_on', slot.period)}>
           <button
             type="button"
             onClick={() => updateOverlaySlot(slot.id, { enabled: !slot.enabled })}
@@ -634,9 +896,43 @@ function renderOverlayTile({ slot, idx }, dims, t, updateOverlaySlot) {
   );
 }
 
+function renderAddOverlayBtn(dims, t, addOverlaySlot) {
+  const color = '#94a3b8';
+  return (
+    <PanelTip text={t('chart.tip.add_overlay')}>
+      <button
+        type="button"
+        onClick={addOverlaySlot}
+        style={panelBtn(false, color, false, dims)}
+      >
+        + MA
+      </button>
+    </PanelTip>
+  );
+}
+
 function renderBandControl(tile, dims, meta, t, setMaBands) {
-  const { maBands } = meta;
+  const { maBands, overlaySlots } = meta;
   switch (tile.kind) {
+    case 'target': {
+      const enabled = (overlaySlots ?? []).filter(s => s.enabled);
+      const currentTarget = maBands.targetSlotId ?? enabled[0]?.id ?? '';
+      return (
+        <PanelTip text={t('chart.tip.bands_target')}>
+          <select
+            value={currentTarget}
+            onChange={e => setMaBands(b => ({ ...b, targetSlotId: e.target.value }))}
+            style={panelSelect('#94a3b8', dims)}
+          >
+            {enabled.map(s => (
+              <option key={s.id} value={s.id}>
+                EMA{s.period}@{s.interval}
+              </option>
+            ))}
+          </select>
+        </PanelTip>
+      );
+    }
     case 'title':
       return (
         <PanelTip text={t('chart.tip.bands_title')}>
@@ -754,6 +1050,8 @@ function ChartIndicatorPanel({
   toggleIndicator,
   overlaySlots,
   updateOverlaySlot,
+  addOverlaySlot,
+  removeOverlaySlot,
   maBands,
   setMaBands,
   overlayMaLoading,
@@ -772,7 +1070,10 @@ function ChartIndicatorPanel({
     const showKey = (key) => panelButtons[key] !== false;
     const indicators = [...INDICATOR_GROUPS, ...RSI_EXTRA_INDICATORS].filter(({ id }) => showKey(id));
     const visibleOverlays = overlaySlots
-      .map((slot, idx) => ({ slot, idx, key: idx === 0 ? 'ma1' : 'ma2' }))
+      .map((slot, idx) => {
+        const num = parseInt(slot.id.replace('slot', ''), 10);
+        return { slot, idx, key: isNaN(num) ? `ma${idx + 1}` : `ma${num}` };
+      })
       .filter(({ key }) => showKey(key));
     const showBandsPct = showKey('bandsPct');
     const showBandsAbove = showKey('bandsAbove');
@@ -798,11 +1099,14 @@ function ChartIndicatorPanel({
         data: entry,
       });
     }
+    if (overlaySlots.length < MAX_OVERLAY_SLOTS) {
+      list.push({ key: 'addOverlay', kind: 'addOverlay', data: {} });
+    }
     if (showBandsBlock) {
       list.push({
         key: 'bands',
         kind: 'bands',
-        data: { showBandsPct, showBandsAbove, showBandsBelow, maBands },
+        data: { showBandsPct, showBandsAbove, showBandsBelow, maBands, overlaySlots },
       });
     }
     return list;
@@ -884,13 +1188,30 @@ function ChartIndicatorPanel({
             height: '100%',
             width: contentWidth,
             minWidth: contentWidth,
-            overflow: 'hidden',
+            overflow: isMobile ? 'auto' : 'hidden',
+            WebkitOverflowScrolling: 'touch',
             marginLeft: PANEL_GAP,
             display: 'flex',
             flexDirection: 'column',
             gap: PANEL_GAP,
           }}
         >
+          {/* Cabeçalho do painel lateral */}
+          <div style={{
+            textAlign: 'center',
+            fontSize: 7,
+            fontFamily: 'monospace',
+            color: '#475569',
+            letterSpacing: 2,
+            textTransform: 'uppercase',
+            flexShrink: 0,
+            userSelect: 'none',
+            lineHeight: 1,
+            paddingBottom: 1,
+          }}>
+            {t('chart.panel.overlay_title')}
+          </div>
+
           {layout.indicatorPlacements.length > 0 && (
             <div style={{
               flex: layout.blockPlacements.length > 0 ? layout.indicatorRowUnits : 1,
@@ -907,12 +1228,14 @@ function ChartIndicatorPanel({
                 <div
                   key={tile.key}
                   style={{
-                    ...panelTileShell,
+                    ...(tile.kind === 'indicator' ? panelTileShell : panelBlockShell),
                     gridColumn: tile.gridColumn,
                     gridRow: tile.gridRow,
                   }}
                 >
-                  {renderIndicatorTile(tile.data, tile.dims, t, toggleIndicator)}
+                  {tile.kind === 'indicator' && renderIndicatorTile(tile.data, tile.dims, t, toggleIndicator)}
+                  {tile.kind === 'overlay' && renderOverlayTile(tile.data, tile.dims, t, updateOverlaySlot, removeOverlaySlot)}
+                  {tile.kind === 'addOverlay' && renderAddOverlayBtn(tile.dims, t, addOverlaySlot)}
                 </div>
               ))}
             </div>
@@ -922,15 +1245,12 @@ function ChartIndicatorPanel({
             <div
               key={tile.key}
               style={{
-                ...(tile.kind === 'bands' ? panelBandsShell : panelBlockShell),
+                ...panelBandsShell,
                 flex: tile.rowSpan,
                 minHeight: 0,
-                width: tile.kind === 'bands'
-                  ? `${(tile.colSpan / PANEL_GRID_COLS) * 100}%`
-                  : '100%',
+                width: `${(tile.colSpan / PANEL_GRID_COLS) * 100}%`,
               }}
             >
-              {tile.kind === 'overlay' && renderOverlayTile(tile.data, tile.dims, t, updateOverlaySlot)}
               {tile.kind === 'bands' && renderBandsTile(tile.data, tile.dims, t, setMaBands, overlayMaLoading)}
             </div>
           ))}
@@ -1894,14 +2214,17 @@ export default function CandlestickChart() {
   const { selectedChart, setSelectedChart, chartZoom, setChartZoom, chartTradeMarkers, chartViewSource,
     chartCandleWindowReset,
     multitradeChartFocus, tradePurchases, allTrades, gateFavorites, chartInterval: savedInterval, setChartInterval,
-    chartPanelButtons, uiPrefs, setOverlaySlotsPreference, multitradeFavorites, fiveMTradeFavorites, activeTrades } = useCurrency();
+    chartPanelButtons, uiPrefs, setOverlaySlotsPreference, setMaBandsDefaults, setActiveIndicatorsPreference,
+    multitradeFavorites, fiveMTradeFavorites, activeTrades } = useCurrency();
   const { t } = useI18n();
   const chartRef = useRef(null);
   const chartWrapRef = useRef(null);
   const [currentInterval, setCurrentInterval] = useState(savedInterval || DEFAULT_INTERVAL);
   const [loadingInterval, setLoadingInterval] = useState(false);
   const [themeTick, setThemeTick] = useState(0);
-  const [activeIndicators, setActiveIndicators] = useState(['ma9', 'ma21', 'rsi']);
+  const [activeIndicators, setActiveIndicators] = useState(
+    () => uiPrefs.activeIndicators ?? [...DEFAULT_ACTIVE_INDICATORS],
+  );
   const [activeTab, setActiveTab] = useState('chart'); // 'chart' | 'matrix'
   const [overlaySlots, setOverlaySlots] = useState(() => uiPrefs.overlaySlots);
   const [overlayMaCache, setOverlayMaCache] = useState({});
@@ -1940,6 +2263,13 @@ export default function CandlestickChart() {
       prev.includes(id) ? prev.filter((i) => i !== id) : [...prev, id]
     );
   }
+
+  // Persiste indicadores ativos no localStorage quando o usuário altera (fora do painel de trade)
+  useEffect(() => {
+    if (isTradePanelChartView(chartViewSource)) return;
+    setActiveIndicatorsPreference(activeIndicators);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeIndicators, chartViewSource]);
 
   useEffect(() => {
     const handleThemeChange = () => setThemeTick(t => t + 1);
@@ -1995,6 +2325,18 @@ export default function CandlestickChart() {
     }
     setOverlaySlots(uiPrefs.overlaySlots);
   }, [chartViewSource, multitradeChartFocus?.overlaySlots, uiPrefs.overlaySlots]);
+
+  // Persiste preferências das bandas (pct, acima/abaixo, alvo) quando o usuário altera
+  useEffect(() => {
+    if (maBands.adaptive || isTradePanelChartView(chartViewSource)) return;
+    setMaBandsDefaults({
+      pct: maBands.pct,
+      showAbove: maBands.showAbove,
+      showBelow: maBands.showBelow,
+      targetSlotId: maBands.targetSlotId ?? null,
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [maBands.pct, maBands.showAbove, maBands.showBelow, maBands.targetSlotId]);
 
   const overlayFetchLimit = useMemo(() => {
     if (isTradePanelChartView(chartViewSource) && multitradeChartFocus?.fetchFromMs) {
@@ -2189,6 +2531,31 @@ export default function CandlestickChart() {
     });
   }
 
+  function addOverlaySlot() {
+    setOverlaySlots(prev => {
+      if (prev.length >= MAX_OVERLAY_SLOTS) return prev;
+      const maxNum = prev.reduce((max, s) => {
+        const n = parseInt(s.id.replace('slot', ''), 10);
+        return isNaN(n) ? max : Math.max(max, n);
+      }, 0);
+      const next = [...prev, { id: `slot${maxNum + 1}`, period: '50', interval: '1h', enabled: true, color: PERIOD_DEFAULT_COLORS['50'] }];
+      if (!isTradePanelChartView(chartViewSource)) {
+        setOverlaySlotsPreference(next);
+      }
+      return next;
+    });
+  }
+
+  function removeOverlaySlot(id) {
+    setOverlaySlots(prev => {
+      const next = prev.filter(s => s.id !== id);
+      if (!isTradePanelChartView(chartViewSource)) {
+        setOverlaySlotsPreference(next);
+      }
+      return next;
+    });
+  }
+
   async function handleIntervalChange(iv) {
     if (iv === currentInterval) return;
     setCurrentInterval(iv);
@@ -2308,12 +2675,16 @@ export default function CandlestickChart() {
       .filter(s => s.enabled && chartPanelButtons[overlayPanelKey(s)] !== false)
       .map((slot) => {
         const key = `${slot.period}-${slot.interval}`;
-        const isMa1 = slot.id === 'slot1';
-        const colorIdx = isMa1 ? 0 : 1;
-        const bandsOn = isMa1 && bandsPanelEnabled && !adaptiveBandOverlay;
+        const slotNum = parseInt(slot.id.replace('slot', ''), 10);
+        const fallbackColor = OVERLAY_MA_COLORS[(isNaN(slotNum) ? 0 : slotNum - 1) % OVERLAY_MA_COLORS.length];
+        const color = slot.color ?? fallbackColor;
+        const effectiveBandTarget = maBands.targetSlotId
+          ?? overlaySlots.find(s => s.enabled)?.id
+          ?? 'slot1';
+        const bandsOn = slot.id === effectiveBandTarget && bandsPanelEnabled && !adaptiveBandOverlay;
         return {
           label: `EMA${slot.period}@${slot.interval}`,
-          color: OVERLAY_MA_COLORS[colorIdx],
+          color,
           points: overlayMaCache[key] ?? [],
           bands: {
             showAbove: bandsOn && maBands.showAbove,
@@ -2493,6 +2864,8 @@ export default function CandlestickChart() {
             toggleIndicator={toggleIndicator}
             overlaySlots={overlaySlots}
             updateOverlaySlot={updateOverlaySlot}
+            addOverlaySlot={addOverlaySlot}
+            removeOverlaySlot={removeOverlaySlot}
             maBands={maBands}
             setMaBands={setMaBands}
             overlayMaLoading={overlayMaLoading}
@@ -2512,6 +2885,8 @@ export default function CandlestickChart() {
               toggleIndicator={toggleIndicator}
               overlaySlots={overlaySlots}
               updateOverlaySlot={updateOverlaySlot}
+              addOverlaySlot={addOverlaySlot}
+              removeOverlaySlot={removeOverlaySlot}
               maBands={maBands}
               setMaBands={setMaBands}
               overlayMaLoading={overlayMaLoading}
