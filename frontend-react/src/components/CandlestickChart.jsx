@@ -218,7 +218,7 @@ const panelSelect = (color, dims = null) => ({
   width: '100%',
   height: '100%',
   minHeight: 0,
-  fontSize: scaleFontSize(dims, 0.26, 8, 14),
+  fontSize: scaleFontSize(dims, 0.26, 9, 14),
   padding: 0,
   borderRadius: 3,
   fontFamily: 'monospace',
@@ -240,24 +240,8 @@ const COMPACT_LABELS = {
 /** Grid base do painel — cada botão ocupa N×M células. */
 const PANEL_GRID_COLS = 4;
 
-/**
- * Spans por indicador: colunas × linhas.
- * Tiles altos (1×2) preenchem o espaço ao lado dos tiles quadrados (2×2).
- * Layout resultante em 4 colunas:
- *   [--ma21--][--ichi--]   rows 1-2
- *   [-ma200-][-rsi80--]    row 3
- *   [9][50][rsi][r50]      rows 4-5  (todos 1×2, texto vertical)
- */
-const INDICATOR_SPANS = {
-  ma9:      { col: 1, row: 2 },
-  ma21:     { col: 2, row: 2 },
-  ma50:     { col: 1, row: 2 },
-  ma200:    { col: 2, row: 1 },
-  ichimoku: { col: 2, row: 2 },
-  rsi:      { col: 1, row: 2 },
-  rsi80:    { col: 2, row: 1 },
-  rsi50:    { col: 1, row: 2 },
-};
+/** Altura em linhas de cada tile de indicador. */
+const INDICATOR_TILE_ROWS = 2;
 
 const OVERLAY_BLOCK_ROWS = 4;
 const BANDS_COL_SPAN = 4;
@@ -630,6 +614,59 @@ function tilePixelDims(colSpan, rowSpan, rowUnits, width, height, gap, gridCols)
   };
 }
 
+/**
+ * Distribui N tiles de indicadores preenchendo o grid (4 cols) sem lacunas.
+ * Cada tile tem rowSpan = INDICATOR_TILE_ROWS. As colunas variam por contagem:
+ *   1 tile  → [4]         preenche toda a largura
+ *   2 tiles → [3, 1]      big + small
+ *   3 tiles → [2, 1, 1]   big + 2 small
+ *   4 tiles → [1,1,1,1]   todos iguais
+ *   N>4: "banda de resto" no topo (cria variedade) + bandas de 4 iguais abaixo
+ */
+function _getBandCols(bandSize) {
+  if (bandSize === 1) return [4];
+  if (bandSize === 2) return [3, 1];
+  if (bandSize === 3) return [2, 1, 1];
+  return [1, 1, 1, 1];
+}
+
+function packIndicatorsFill(tiles) {
+  if (!tiles.length) return { placements: [], rowUnits: 0 };
+
+  const N = tiles.length;
+  const COLS = PANEL_GRID_COLS;
+  const ROW_H = INDICATOR_TILE_ROWS;
+
+  const firstBandSize = N % COLS || COLS;
+  const placements = [];
+  let tileIdx = 0;
+  let row = 0;
+
+  const placeBand = (bandCols) => {
+    let col = 0;
+    for (const colSpan of bandCols) {
+      if (tileIdx >= tiles.length) break;
+      placements.push({
+        ...tiles[tileIdx],
+        colSpan,
+        rowSpan: ROW_H,
+        gridColumn: `${col + 1} / span ${colSpan}`,
+        gridRow:    `${row + 1} / span ${ROW_H}`,
+        startRow: row,
+        startCol: col,
+      });
+      col += colSpan;
+      tileIdx++;
+    }
+    row += ROW_H;
+  };
+
+  placeBand(_getBandCols(firstBandSize));
+  while (tileIdx < tiles.length) placeBand([1, 1, 1, 1]);
+
+  return { placements, rowUnits: row };
+}
+
 function computeMasonryLayout(tileDefs, width, height, gap, overlayMaLoading = false) {
   if (!tileDefs.length || width <= 0 || height <= 0) {
     return {
@@ -641,13 +678,8 @@ function computeMasonryLayout(tileDefs, width, height, gap, overlayMaLoading = f
     };
   }
 
-  // --- Indicator buttons (masonry area-sorted) ---
-  const indTiles = tileDefs
-    .filter((t) => t.kind === 'indicator')
-    .map((t) => {
-      const span = INDICATOR_SPANS[t.data.id] ?? { col: 1, row: 1 };
-      return { ...t, colSpan: span.col, rowSpan: span.row };
-    });
+  // --- Indicator buttons (spans dinâmicos por contagem) ---
+  const indTiles = tileDefs.filter((t) => t.kind === 'indicator');
 
   // --- Overlay tiles (staggered, preserves slot order) ---
   const overlayTilesDefs = tileDefs.filter((t) => t.kind === 'overlay');
@@ -664,9 +696,9 @@ function computeMasonryLayout(tileDefs, width, height, gap, overlayMaLoading = f
       rowSpan: bandsRowSpan(t.data, overlayMaLoading),
     }));
 
-  // Pack indicator buttons e expande para preencher gaps verticais
-  const indPack = packMasonryTiles(indTiles, PANEL_GRID_COLS);
-  const indFilledPlacements = fillGapsDown(indPack.placements, PANEL_GRID_COLS, indPack.rowUnits);
+  // Pack indicator buttons — spans calculados dinamicamente pelo número de tiles
+  const indPack = packIndicatorsFill(indTiles);
+  const indFilledPlacements = indPack.placements;
   const indRowUnits = indTiles.length ? Math.max(1, indPack.rowUnits) : 0;
 
   // Stagger-pack overlays, offset below indicators
@@ -874,7 +906,7 @@ function renderOverlayTile({ slot }, dims, t, updateOverlaySlot, removeOverlaySl
           <select
             value={slot.interval}
             onChange={e => updateOverlaySlot(slot.id, { interval: e.target.value })}
-            style={panelSelect(color, rowDims)}
+            style={{ ...panelSelect(color, rowDims), fontSize: scaleFontSize(rowDims, 0.4, 10, 14) }}
           >
             {OVERLAY_MA_INTERVALS.map(iv => <option key={iv} value={iv}>{iv}</option>)}
           </select>

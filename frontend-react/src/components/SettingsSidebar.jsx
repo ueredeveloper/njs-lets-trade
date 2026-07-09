@@ -3,7 +3,10 @@ import { reloadCandles } from '../services/api';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useI18n } from '../i18n';
 import { useCurrency } from '../contexts/CurrencyContext';
-import { BAND_PCT_OPTIONS } from '../utils/uiPreferences';
+import { BAND_PCT_OPTIONS, PERIOD_DEFAULT_COLORS, MAX_OVERLAY_SLOTS } from '../utils/uiPreferences';
+
+const OVERLAY_SETTING_INTERVALS = ['15m', '30m', '1h', '4h', '1d'];
+const OVERLAY_SETTING_PERIODS   = ['9', '21', '50', '200'];
 
 const PALETTES = [
   { id: 'default',    name: 'Padrão / Default',
@@ -33,7 +36,33 @@ export default function SettingsSidebar({ open, onClose }) {
   const { selectedChart, assetDisplay, setAssetDisplayCategory, assetCategoryKeys,
     chartPanelButtons, setChartPanelButton, chartPanelButtonKeys,
     uiPrefs, setDefaultChartInterval, setPanelVisible, setMaBandsDefaults,
+    setOverlaySlotsPreference,
     chartIntervalOptions, panelKeys } = useCurrency();
+
+  function isOverlayActive(period, interval) {
+    return uiPrefs.overlaySlots.some(s => s.period === period && s.interval === interval);
+  }
+
+  function toggleOverlaySlot(period, interval) {
+    const active = isOverlayActive(period, interval);
+    if (active) {
+      setOverlaySlotsPreference(uiPrefs.overlaySlots.filter(
+        s => !(s.period === period && s.interval === interval),
+      ));
+    } else {
+      if (uiPrefs.overlaySlots.length >= MAX_OVERLAY_SLOTS) return;
+      const maxNum = uiPrefs.overlaySlots.reduce((max, s) => {
+        const n = parseInt(s.id.replace('slot', ''), 10);
+        return isNaN(n) ? max : Math.max(max, n);
+      }, 0);
+      const color = PERIOD_DEFAULT_COLORS[period] ?? '#94a3b8';
+      setOverlaySlotsPreference([
+        ...uiPrefs.overlaySlots,
+        { id: `slot${maxNum + 1}`, period, interval, enabled: true, color },
+      ]);
+    }
+  }
+
   const [activeId, setActiveId]           = useState('default');
   const [reloadSymbol, setReloadSymbol]   = useState('');
   const [reloadInterval, setReloadInterval] = useState('all');
@@ -169,6 +198,55 @@ export default function SettingsSidebar({ open, onClose }) {
                 );
               })}
             </div>
+          </div>
+
+          {/* Overlay MA — padrão */}
+          <div>
+            <p className={section}>{t('settings.overlay_slots')}</p>
+            <p className="text-[10px] text-p5/50 mb-3 leading-relaxed">{t('settings.overlay_slots_hint')}</p>
+            <div className="overflow-x-auto">
+              <table className="text-[10px] w-full border-collapse">
+                <thead>
+                  <tr>
+                    <th className="text-left font-normal text-p5/40 pb-1.5 w-7" />
+                    {OVERLAY_SETTING_INTERVALS.map(iv => (
+                      <th key={iv} className="text-center font-mono font-normal text-p5/40 pb-1.5">{iv}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {OVERLAY_SETTING_PERIODS.map(period => {
+                    const color = PERIOD_DEFAULT_COLORS[period] ?? '#94a3b8';
+                    return (
+                      <tr key={period} className="border-t border-p2/20">
+                        <td className="py-1.5 pr-1">
+                          <span className="font-mono font-semibold text-xs" style={{ color }}>{period}</span>
+                        </td>
+                        {OVERLAY_SETTING_INTERVALS.map(iv => {
+                          const active = isOverlayActive(period, iv);
+                          const atMax = !active && uiPrefs.overlaySlots.length >= MAX_OVERLAY_SLOTS;
+                          return (
+                            <td key={iv} className="text-center py-1.5">
+                              <input
+                                type="checkbox"
+                                checked={active}
+                                disabled={atMax}
+                                onChange={() => toggleOverlaySlot(period, iv)}
+                                className="cursor-pointer disabled:cursor-not-allowed disabled:opacity-30"
+                                style={{ accentColor: color }}
+                              />
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            {uiPrefs.overlaySlots.length >= MAX_OVERLAY_SLOTS && (
+              <p className="text-[10px] text-amber-400/70 mt-2">{t('settings.overlay_slots_max', MAX_OVERLAY_SLOTS)}</p>
+            )}
           </div>
 
           {/* Bandas % — estado padrão */}
