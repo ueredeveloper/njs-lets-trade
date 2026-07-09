@@ -4,6 +4,17 @@ const registry = require('./multitradeRegistry');
 
 const WATCH_MS = 5 * 60_000;
 
+function watchTs() {
+  const p = Object.fromEntries(
+    new Intl.DateTimeFormat('pt-BR', {
+      timeZone: 'America/Sao_Paulo',
+      day: '2-digit', month: '2-digit', year: 'numeric',
+      hour: '2-digit', minute: '2-digit', hour12: false,
+    }).formatToParts(new Date()).map(x => [x.type, x.value]),
+  );
+  return `[${p.day}-${p.month}/${p.year} ${p.hour}:${p.minute}]`;
+}
+
 function orFilter(strategyIds, field) {
   return `(${strategyIds.map(id => `${field}.eq.${id}`).join(',')})`;
 }
@@ -60,10 +71,11 @@ async function runWatchCycle({
     })
     .map(f => f.symbol.toUpperCase())
     .sort();
+  const ts = watchTs();
   if (!evaluated.length) {
-    log('📋 Moedas avaliadas: (nenhuma)');
+    log(`${ts} 📋 Moedas avaliadas: (nenhuma)`);
   } else {
-    log(`📋 Moedas avaliadas (${evaluated.length}): ${evaluated.join(', ')}`);
+    log(`${ts} 📋 Moedas avaliadas (${evaluated.length}): ${evaluated.join(', ')}`);
   }
 
   // Remover / desativar
