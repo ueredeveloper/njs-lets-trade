@@ -40,6 +40,12 @@ export const MA_CROSS_DEFAULTS = {
     tolerancePct: 0.1,
     maxAboveMaPct: 3,
   },
+  entryTrendMa: {
+    enabled: true,
+    ma1: { period: 9, interval: '1h' },
+    ma2: { period: 21, interval: '1h' },
+    tolerancePct: 1,
+  },
   maFiltersEnabled: true,
   maFilters: [{
     id: 1, enabled: true, period: 50, interval: '1h',
@@ -101,6 +107,17 @@ function normalizeCrossBlock(block, fb) {
   };
 }
 
+function normalizeEntryTrendMa(block) {
+  const d = MA_CROSS_DEFAULTS.entryTrendMa;
+  const src = block ?? {};
+  return {
+    enabled: src.enabled !== false,
+    ma1: normalizeMaLeg(src.ma1, d.ma1),
+    ma2: normalizeMaLeg(src.ma2, d.ma2),
+    tolerancePct: Math.max(0, Number(src.tolerancePct ?? d.tolerancePct ?? 0)),
+  };
+}
+
 function mapMaFilters(list, legacyPf) {
   if (Array.isArray(list) && list.length) {
     return list.map((m, i) => ({
@@ -153,6 +170,7 @@ export function normalizeMaCrossForm(body = {}) {
     label: body.label ?? d.label,
     kind: 'ma_cross',
     entry: normalizeCrossBlock(body.entry ?? d.entry, d.entry),
+    entryTrendMa: normalizeEntryTrendMa(body.entryTrendMa),
     maFiltersEnabled: body.maFiltersEnabled !== false,
     maFilters: mapMaFilters(body.maFilters, body.priceFilter),
     exit: {
@@ -198,6 +216,7 @@ export function maCrossFormToPayload(form, meta = {}) {
     kind: 'ma_cross',
     label: c.label,
     entry: c.entry,
+    entryTrendMa: c.entryTrendMa,
     maFiltersEnabled: c.maFiltersEnabled,
     maFilters: c.maFilters.map(({ id, enabled, period, interval, mode, maxDipPct, fixedDipPct, maxAbovePct, fixedAbovePct, tolerancePct }) => ({
       id, enabled, period, interval, mode, maxDipPct, maxAbovePct, tolerancePct,

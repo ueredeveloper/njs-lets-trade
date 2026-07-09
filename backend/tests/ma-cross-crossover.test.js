@@ -478,6 +478,7 @@ describe('MA Cross — entrada pullback', () => {
       direction: 'cross_up',
       maxAboveMaPct: 3,
     },
+    entryTrendMa: { enabled: false },
     maFiltersEnabled: false,
     execution: { pullbackEntry: { enabled: true, waitCandles: 2, requirePullback: true } },
   }));
@@ -537,5 +538,103 @@ describe('MA Cross — entrada pullback', () => {
     expect(r.ready).toBe(false);
     expect(r.cancel).toBe(true);
     expect(r.reason).toBe('NO_PULLBACK');
+  });
+});
+
+describe('MA Cross — tendência HTF (EMA9 > EMA21 em 1h)', () => {
+  const { evaluateEntryTrendMa, evaluateCrossSignal } = require('../bot/ma-cross/strategyEngine');
+  const { toEngineConfig, normalizeMaCrossConfig } = require('../bot/ma-cross/tradeConfigSchema');
+
+  function make1hCandles(closes) {
+    return closes.map((close, i) => ({
+      openTime: i * 3_600_000,
+      open: close, high: close, low: close, close,
+    }));
+  }
+
+  function buildUptrend1h() {
+    const closes = [];
+    for (let i = 0; i < 50; i++) closes.push(100 + i * 0.5);
+    return make1hCandles(closes);
+  }
+
+  function buildDowntrend1h() {
+    const closes = [];
+    for (let i = 0; i < 50; i++) closes.push(100 - i * 0.5);
+    return make1hCandles(closes);
+  }
+
+  const baseConfig = toEngineConfig(normalizeMaCrossConfig({
+    entry: {
+      ma1: { period: 9, interval: '15m' },
+      ma2: { period: 21, interval: '15m' },
+      direction: 'cross_up',
+    },
+    entryTrendMa: { enabled: true, ma1: { period: 9, interval: '1h' }, ma2: { period: 21, interval: '1h' } },
+    maFiltersEnabled: false,
+  }));
+
+  test('permite quando EMA9(1h) está acima de EMA21(1h)', () => {
+    const r = evaluateEntryTrendMa(baseConfig, { '1h': buildUptrend1h() });
+    expect(r.allowed).toBe(true);
+    expect(r.trendMa1).toBeGreaterThan(r.trendMa2);
+  });
+
+  test('bloqueia quando EMA9(1h) está abaixo de EMA21(1h) além da tolerância', () => {
+    const r = evaluateEntryTrendMa(baseConfig, { '1h': buildDowntrend1h() });
+    expect(r.allowed).toBe(false);
+    expect(r.reason).toBe('HTF_TREND_BELOW');
+    expect(r.gapPct).toBeLessThan(-1);
+  });
+
+  test('tolerância 1% autoriza EMA9 ligeiramente abaixo da EMA21', () => {
+    const closes = [];
+    for (let i = 0; i < 45; i++) closes.push(100);
+    for (let i = 0; i < 10; i++) closes.push(99.85 + i * 0.01);
+    const candles = make1hCandles(closes);
+    const r = evaluateEntryTrendMa(baseConfig, { '1h': candles });
+    expect(r.trendMa1).toBeLessThan(r.trendMa2);
+    expect(r.gapPct).toBeGreaterThan(-1);
+    expect(r.allowed).toBe(true);
+  });
+
+  test('tolerância 0% exige EMA9 estritamente acima', () => {
+    const closes = [];
+    for (let i = 0; i < 45; i++) closes.push(100);
+    for (let i = 0; i < 10; i++) closes.push(99.85 + i * 0.01);
+    const candles = make1hCandles(closes);
+    const strict = toEngineConfig(normalizeMaCrossConfig({
+      entryTrendMa: { enabled: true, tolerancePct: 0 },
+    }));
+    const r = evaluateEntryTrendMa(strict, { '1h': candles });
+    expect(r.allowed).toBe(false);
+    expect(r.reason).toBe('HTF_TREND_BELOW');
+  });
+
+  test('desligado ignora tendência HTF', () => {
+    const off = toEngineConfig(normalizeMaCrossConfig({
+      entry: {
+        ma1: { period: 9, interval: '15m' },
+        ma2: { period: 21, interval: '15m' },
+        direction: 'cross_up',
+      },
+      entryTrendMa: { enabled: false },
+      maFiltersEnabled: false,
+    }));
+    const r = evaluateEntryTrendMa(off, { '1h': buildDowntrend1h() });
+    expect(r.allowed).toBe(true);
+  });
+
+  test('evaluateCrossSignal bloqueia cruzamento sem tendência 1h', () => {
+    const candles15 = buildCrossUpSeries();
+    const r = evaluateCrossSignal(baseConfig, { '15m': candles15, '1h': buildDowntrend1h() });
+    expect(r.allowed).toBe(false);
+    expect(r.reason).toBe('HTF_TREND_BELOW');
+  });
+
+  test('evaluateCrossSignal permite cruzamento com tendência 1h alinhada', () => {
+    const candles15 = buildCrossUpSeries();
+    const r = evaluateCrossSignal(baseConfig, { '15m': candles15, '1h': buildUptrend1h() });
+    expect(r.allowed).toBe(true);
   });
 });

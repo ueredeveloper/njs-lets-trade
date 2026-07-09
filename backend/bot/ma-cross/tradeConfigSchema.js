@@ -27,6 +27,15 @@ const MA_CROSS_DEFAULTS = {
     maxAboveMaPct:   3,
   },
 
+  /** Tendência HTF: EMA curta acima da EMA longa (padrão EMA9 > EMA21 em 1h). */
+  entryTrendMa: {
+    enabled: true,
+    ma1: { period: 9, interval: '1h' },
+    ma2: { period: 21, interval: '1h' },
+    /** Máx % abaixo da EMA longa ainda permitido (ex.: 1 = EMA9 até 1% abaixo da EMA21). */
+    tolerancePct: 1,
+  },
+
   maFiltersEnabled: true,
   maFilters: [{
     id: 1, enabled: true, period: 50, interval: '1h',
@@ -139,6 +148,17 @@ function normalizeMaFilter(m, i = 0) {
   };
 }
 
+function normalizeEntryTrendMa(block) {
+  const d = MA_CROSS_DEFAULTS.entryTrendMa;
+  const src = block ?? {};
+  return {
+    enabled: src.enabled !== false,
+    ma1: normalizeMaLeg(src.ma1, d.ma1),
+    ma2: normalizeMaLeg(src.ma2, d.ma2),
+    tolerancePct: Math.max(0, Number(src.tolerancePct ?? d.tolerancePct ?? 0)),
+  };
+}
+
 function normalizePullbackEntry(pb) {
   const d = MA_CROSS_DEFAULTS.execution.pullbackEntry;
   const src = pb ?? {};
@@ -194,6 +214,7 @@ function normalizeMaCrossConfig(body = {}) {
     label: body.label ?? d.label,
     kind:  'ma_cross',
     entry: normalizeCrossBlock(body.entry, d.entry),
+    entryTrendMa: normalizeEntryTrendMa(body.entryTrendMa),
     maFiltersEnabled: body.maFiltersEnabled !== false,
     maFilters: migrateMaFilters(body),
     exit: {

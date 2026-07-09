@@ -31,6 +31,7 @@ import {
 import { useMacrossFavoritesStatus } from '../hooks/useMacrossFavoritesStatus';
 import { useTradeFavoritesSummary } from '../hooks/useTradeFavoritesSummary';
 import { useVirtualRows } from '../hooks/useVirtualRows';
+import { useIsMobile } from '../hooks/useIsMobile';
 import MacrossFavSortSelect from './MacrossFavSortSelect';
 import TradeFavSortSelect from './TradeFavSortSelect';
 
@@ -773,7 +774,25 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   }, [isActiveFavView, activeTrades]);
 
   const showFavSortInHeader = isMacrossFavView || isTradesFavView;
-  const favColWidth = showFavSortInHeader ? '10.5rem' : '7.5rem';
+  const isMobile = useIsMobile();
+  const favColWidth = isMobile
+    ? (showFavSortInHeader ? '7rem' : '5.25rem')
+    : (showFavSortInHeader ? '10.5rem' : '5.5rem');
+  const priceColWidth = isMobile ? '3.25rem' : '3.5rem';
+  const changeColWidth = isMobile ? '2.75rem' : '3rem';
+  const volColWidth = isMobile ? '2.5rem' : '2.75rem';
+  const spinnerColWidth = isMobile ? '1rem' : '1.25rem';
+  const parColWidth = `calc(100% - ${favColWidth} - ${priceColWidth} - ${volColWidth} - ${spinnerColWidth}${isAltaFilter ? ` - ${changeColWidth}` : ''})`;
+  const parColMinWidth = isMobile ? '0' : '12rem';
+  const parColClass = isMobile
+    ? 'currency-table-col-par px-1.5 py-1.5 font-mono font-semibold text-center'
+    : 'currency-table-col-par px-2 py-1.5 font-mono font-semibold';
+  const parContentClass = isMobile
+    ? 'currency-table-par-content flex flex-col gap-0.5 items-center text-center'
+    : 'currency-table-par-content flex flex-col gap-0.5';
+  const parRowClass = isMobile
+    ? 'currency-table-par-row flex items-center gap-1 flex-wrap justify-center'
+    : 'currency-table-par-row flex items-center gap-1 flex-wrap min-w-0';
 
   const volSortArrow = sortVolume === 'desc' ? ' ↓' : sortVolume === 'asc' ? ' ↑' : '';
   const volSortTitle = volumeSortActive
@@ -782,9 +801,9 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     : 'Ordenar por volume 24h';
 
   return (
-    <div className="flex flex-col h-full min-h-0 overflow-hidden">
+    <div id="currency-table" className="currency-table flex flex-col h-full min-h-0 overflow-hidden">
       {/* Barra de busca */}
-      <div className="px-2 py-1 shrink-0">
+      <div id="currency-table-search" className="currency-table-search px-2 py-1 shrink-0">
         <SearchInput
           value={search}
           onChange={(e) => setSearch(e.target.value)}
@@ -793,7 +812,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
       </div>
 
       {/* Cabeçalho contador + filtros de favoritos */}
-      <div className="flex flex-col gap-1 px-2 py-1 border-b border-p2 shrink-0">
+      <div id="currency-table-toolbar" className="currency-table-toolbar flex flex-col gap-1 px-2 py-1 border-b border-p2 shrink-0">
         <div className="flex items-center justify-between">
           <span className="text-xs text-p5 opacity-50 uppercase tracking-wider shrink-0">
             Moedas
@@ -889,21 +908,21 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
       </div>
 
       {/* Tabela */}
-      <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
-        <div className="flex-1 min-h-0 overflow-y-auto" ref={tableScrollRef}>
-        <table className="w-full text-xs table-fixed">
+      <div id="currency-table-body" className="currency-table-body flex-1 flex flex-col min-h-0 overflow-hidden">
+        <div id="currency-table-scroll" className="currency-table-scroll flex-1 min-h-0 overflow-y-auto" ref={tableScrollRef}>
+        <table className="currency-table-grid w-full text-xs table-fixed">
           <colgroup>
-            <col style={{ width: favColWidth }} />
-            <col />
-            <col style={{ width: '4.75rem' }} />
-            {isAltaFilter && <col style={{ width: '3.75rem' }} />}
-            <col style={{ width: '3.75rem' }} />
-            <col style={{ width: '1.5rem' }} />
+            <col className="currency-table-col-fav" style={{ width: favColWidth }} />
+            <col className="currency-table-col-par" style={{ width: parColWidth, minWidth: parColMinWidth }} />
+            <col className="currency-table-col-price" style={{ width: priceColWidth }} />
+            {isAltaFilter && <col className="currency-table-col-change" style={{ width: changeColWidth }} />}
+            <col className="currency-table-col-vol" style={{ width: volColWidth }} />
+            <col className="currency-table-col-spinner" style={{ width: spinnerColWidth }} />
           </colgroup>
           <thead className="sticky top-0 z-30 bg-p1">
             <tr className="lt-table-head">
               <th
-                className="text-left px-1 py-1 align-middle bg-p1"
+                className="currency-table-col-fav text-left px-1 py-1 align-middle bg-p1"
                 style={{ width: favColWidth, minWidth: favColWidth }}
                 title={
                   isMacrossFavView ? t('macross.sort.label')
@@ -912,7 +931,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                 }
               >
                 {isMacrossFavView ? (
-                  <div className="flex items-center justify-start gap-0.5">
+                  <div className={`flex items-center gap-0.5 ${isMobile ? 'flex-wrap justify-center' : 'justify-start'}`}>
                     {macrossFavLoading && (
                       <span className="text-[9px] text-emerald-400/80 shrink-0">⟳</span>
                     )}
@@ -933,7 +952,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                     </button>
                   </div>
                 ) : isTradesFavView ? (
-                  <div className="flex items-center justify-start gap-0.5">
+                  <div className={`flex items-center gap-0.5 ${isMobile ? 'flex-wrap justify-center' : 'justify-start'}`}>
                     {tradeFavLoading && (
                       <span className="text-[9px] text-emerald-400/80 shrink-0">⟳</span>
                     )}
@@ -955,8 +974,18 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                   </div>
                 ) : null}
               </th>
-              <th className="text-left px-2 py-1.5 text-p5 opacity-50 font-normal uppercase tracking-wider">Par</th>
-              <th className="text-right px-2 py-1.5 text-p5 opacity-50 font-normal uppercase tracking-wider">Preço</th>
+              <th
+                className="currency-table-col-par text-center px-2 py-1.5 text-p5 opacity-50 font-normal uppercase tracking-wider"
+                style={{ width: parColWidth, minWidth: parColMinWidth }}
+              >
+                Par
+              </th>
+              <th
+                className="currency-table-col-price text-center px-2 py-1.5 text-p5 opacity-50 font-normal uppercase tracking-wider"
+                style={{ width: priceColWidth }}
+              >
+                Preço
+              </th>
               {isAltaFilter && (
                 <th
                   className="text-right px-2 py-1.5 text-p5 opacity-80 font-normal uppercase tracking-wider whitespace-nowrap"
@@ -966,9 +995,10 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                 </th>
               )}
               <th
-                className={`text-right px-2 py-1.5 text-p5 font-normal uppercase tracking-wider cursor-pointer hover:opacity-90 select-none whitespace-nowrap ${
+                className={`currency-table-col-vol text-center px-2 py-1.5 text-p5 font-normal uppercase tracking-wider cursor-pointer hover:opacity-90 select-none whitespace-nowrap ${
                   volumeSortActive ? 'opacity-80' : 'opacity-50'
                 }`}
+                style={{ width: volColWidth }}
                 onClick={cycleSort}
                 title={
                   isAltaFilter ? 'Volume: maior → menor → desabilitado (Var% na coluna ao lado)'
@@ -1046,8 +1076,11 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                       ×
                     </button>
                   </td>
-                  <td className="px-2 py-1.5 font-mono font-semibold">
-                    <div className="flex flex-col gap-0.5 min-w-0">
+                  <td
+                    className={parColClass}
+                    style={{ width: parColWidth, minWidth: parColMinWidth }}
+                  >
+                    <div className={parContentClass}>
                       <span>
                         {asset}
                         <span className="opacity-40 font-normal text-[8px]">/USDT</span>
@@ -1118,14 +1151,17 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                     </div>
                   </td>
 
-                  <td className="px-2 py-1.5 font-mono font-semibold">
-                    <div className="flex flex-col gap-0.5 min-w-0">
+                  <td
+                    className={parColClass}
+                    style={{ width: parColWidth, minWidth: parColMinWidth }}
+                  >
+                    <div className={parContentClass}>
                       {isMT && !isTradesFavView && !isActiveFavView ? (() => {
                         const mtPhase = symbolPhaseSummary(mtEntries);
                         const mtPh = multitradePhaseBadge(mtPhase);
                         const bought = mtEntries.find(e => e.phase === 'BOUGHT' && e.buyTime);
                         return (
-                          <span className="flex items-center gap-1 flex-wrap min-w-0">
+                          <span className={parRowClass}>
                             <span className="shrink-0">
                               {base}<span className="opacity-40 font-normal text-[8px]">/{quote}</span>
                             </span>
@@ -1291,7 +1327,10 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                         </div>
                       </td>
 
-                      <td className="px-2 py-1.5 font-mono font-semibold">
+                      <td
+                        className={parColClass}
+                        style={{ width: parColWidth, minWidth: parColMinWidth }}
+                      >
                         {base}<span className="opacity-40 font-normal text-[8px]">/{quote}</span>
                       </td>
                       <td className="px-2 py-1.5 text-right font-mono">{item.price > 0 ? formatPrice(item.price) : '—'}</td>
@@ -1313,7 +1352,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
         </table>
         </div>
 
-        <div className="lt-table-foot">
+        <div id="currency-table-foot" className="currency-table-foot lt-table-foot">
           {isTradesFavView && rows.length > 0 && tradePnlSumLabel != null ? (
             <div className="flex items-center justify-between gap-2 px-2 py-0.5">
               <span className="text-[9px] font-bold uppercase tracking-wider text-p5/70">

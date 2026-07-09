@@ -524,12 +524,71 @@ function getRequiredSpecs(config) {
     add(f.interval, f.period + 60);
   }
 
+  const trend = config.entryTrendMa;
+  if (trend?.enabled !== false) {
+    add(trend.ma1?.interval ?? '1h', (trend.ma1?.period ?? 9) + 30);
+    if ((trend.ma2?.interval ?? '1h') !== (trend.ma1?.interval ?? '1h')) {
+      add(trend.ma2.interval, (trend.ma2?.period ?? 21) + 30);
+    }
+  }
+
   const rsiConds = (config.exit?.rsi?.conditions ?? []).filter(c => c.enabled);
   for (const c of rsiConds) {
     add(c.interval, c.period + 50);
   }
 
   return [...specs.entries()].map(([interval, limit]) => ({ interval, limit }));
+}
+
+function evaluateEntryTrendMa(config, cMap, opts = {}) {
+  const trend = config.entryTrendMa;
+  if (!trend?.enabled) return { allowed: true };
+
+  const ma1Leg = trend.ma1 ?? { period: 9, interval: '1h' };
+  const ma2Leg = trend.ma2 ?? { period: 21, interval: '1h' };
+  const closedOnly = opts.closedOnly !== false;
+
+  const c1raw = cMap[ma1Leg.interval] ?? [];
+  const c2raw = ma1Leg.interval === ma2Leg.interval ? c1raw : (cMap[ma2Leg.interval] ?? []);
+  const c1 = closedOnly ? closedCandlesOnly(c1raw) : c1raw;
+  const c2 = closedOnly ? closedCandlesOnly(c2raw) : c2raw;
+
+  const refIv = finestInterval(ma1Leg.interval, ma2Leg.interval);
+  const refCandles = refIv === ma1Leg.interval ? c1 : c2;
+  if (!refCandles?.length) {
+    return { allowed: false, reason: 'HTF_TREND_NO_DATA' };
+  }
+
+  const refTime = opts.referenceOpenTime != null
+    ? Number(opts.referenceOpenTime)
+    : Number(refCandles[refCandles.length - 1].openTime);
+
+  const series1 = buildMaTimeSeries(c1, ma1Leg.period);
+  const series2 = buildMaTimeSeries(c2, ma2Leg.period);
+  const ma1 = maValueAt(series1, refTime);
+  const ma2 = maValueAt(series2, refTime);
+
+  if (ma1 == null || ma2 == null) {
+    return { allowed: false, reason: 'HTF_TREND_NO_MA', trendMa1: ma1, trendMa2: ma2 };
+  }
+
+  const tolerancePct = Math.max(0, Number(trend.tolerancePct ?? 0));
+  const gapPct = ((ma1 / ma2) - 1) * 100;
+  const floor = ma2 * (1 - tolerancePct / 100);
+
+  if (ma1 < floor) {
+    return {
+      allowed: false,
+      reason: 'HTF_TREND_BELOW',
+      trendMa1: ma1,
+      trendMa2: ma2,
+      gapPct,
+      tolerancePct,
+      trendDesc: `${crossLabel(ma1Leg)} abaixo de ${crossLabel(ma2Leg)} (tol ${tolerancePct}%)`,
+    };
+  }
+
+  return { allowed: true, trendMa1: ma1, trendMa2: ma2, gapPct, tolerancePct };
 }
 
 function evaluateMaFilters(close, config, cMap, adaptiveDips, adaptiveStretches = {}) {
@@ -580,6 +639,20 @@ function evaluateCrossSignal(config, cMap, adaptiveDips = {}, opts = {}) {
       ma1: cross.ma1, ma2: cross.ma2,
       close: cross.close ?? c1.at(-1)?.close,
       crossOpenTime: cross.openTime,
+    };
+  }
+
+  const trendCheck = evaluateEntryTrendMa(config, cMap, opts);
+  if (!trendCheck.allowed) {
+    return {
+      allowed: false,
+      reason: trendCheck.reason,
+      ma1: cross.ma1, ma2: cross.ma2,
+      close: cross.close,
+      crossOpenTime: cross.openTime,
+      trendMa1: trendCheck.trendMa1,
+      trendMa2: trendCheck.trendMa2,
+      trendDesc: trendCheck.trendDesc,
     };
   }
 
@@ -650,6 +723,18 @@ function evaluatePullbackCandle(config, cMap, adaptiveDips, adaptiveStretches, {
       reason: filterCheck.reason,
       close,
       filterMa: filterCheck.ma,
+    };
+  }
+
+  const trendCheck = evaluateEntryTrendMa(config, cMap);
+  if (!trendCheck.allowed) {
+    return {
+      ready: false,
+      reason: trendCheck.reason,
+      close,
+      trendMa1: trendCheck.trendMa1,
+      trendMa2: trendCheck.trendMa2,
+      trendDesc: trendCheck.trendDesc,
     };
   }
 
@@ -1167,6 +1252,7 @@ module.exports = {
   checkRsi,
   getRequiredSpecs,
   evaluateEntry,
+  evaluateEntryTrendMa,
   evaluateExit,
   computeStopLossFloor,
   computeAdaptiveDips,

@@ -333,6 +333,9 @@ const PENDING_CANCEL_LABELS = {
   NOT_ABOVE_MA: 'filtro MA',
   NOT_BELOW_MA: 'filtro MA',
   FILTER_NO_MA: 'filtro MA indisponível',
+  HTF_TREND_BELOW: 'EMA9(1h) abaixo de EMA21(1h) (fora da tolerância)',
+  HTF_TREND_NO_MA: 'tendência 1h indisponível',
+  HTF_TREND_NO_DATA: 'dados 1h insuficientes',
 };
 
 function entryCooldownHours(config) {

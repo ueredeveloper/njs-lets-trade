@@ -250,16 +250,18 @@ function AppContent() {
       {/* Mobile — bottom sheet */}
       {currencyModalOpen && show(BOOT_STAGE.MOBILE_BTN) && (
         <div
-          className="fixed inset-0 z-50 md:hidden"
+          id="currency-panel-overlay"
+          className="currency-panel-overlay fixed inset-0 z-50 md:hidden"
           onClick={closeCurrencyModal}
         >
           <div
-            className="absolute inset-0 bg-black/60 transition-opacity duration-300"
+            className="currency-panel-backdrop absolute inset-0 bg-black/60 transition-opacity duration-300"
             style={{ opacity: currencyModalVisible ? 1 : 0 }}
           />
 
           <div
-            className="absolute inset-x-0 bottom-0 flex flex-col bg-p1 border-t border-p2 rounded-t-2xl shadow-2xl"
+            id="currency-panel-mobile"
+            className="currency-panel currency-panel--mobile absolute inset-x-0 bottom-0 flex flex-col bg-p1 border-t border-p2 rounded-t-2xl shadow-2xl"
             style={{
               height: MOBILE_SHEET_HEIGHT,
               transform: dragY > 0
@@ -270,7 +272,8 @@ function AppContent() {
             onClick={(e) => e.stopPropagation()}
           >
             <div
-              className="flex justify-center pt-3 pb-2 shrink-0 cursor-grab active:cursor-grabbing touch-none"
+              id="currency-panel-mobile-handle"
+              className="currency-panel-handle flex justify-center pt-1.5 pb-1 shrink-0 cursor-grab active:cursor-grabbing touch-none"
               onTouchStart={handleDragStart}
               onTouchMove={handleDragMove}
               onTouchEnd={handleDragEnd}
@@ -279,17 +282,19 @@ function AppContent() {
             </div>
 
             <div
-              className="flex items-center justify-between px-4 py-2 border-b border-p2 shrink-0 cursor-grab active:cursor-grabbing touch-none"
+              id="currency-panel-mobile-header"
+              className="currency-panel-header flex items-center justify-between px-3 py-1 border-b border-p2 shrink-0 cursor-grab active:cursor-grabbing touch-none"
               onTouchStart={handleDragStart}
               onTouchMove={handleDragMove}
               onTouchEnd={handleDragEnd}
             >
-              <span className="text-sm font-semibold text-p5 uppercase tracking-widest">{t('app.currencies')}</span>
+              <span className="text-xs font-semibold text-p5 uppercase tracking-widest">{t('app.currencies')}</span>
               <button
                 type="button"
+                id="currency-panel-mobile-close"
                 onClick={closeCurrencyModal}
                 onTouchStart={(e) => e.stopPropagation()}
-                className="text-p5 hover:text-white w-9 h-9 flex items-center justify-center rounded-full hover:bg-p2 transition-colors text-2xl leading-none"
+                className="currency-panel-close text-p5 hover:text-white w-7 h-7 flex items-center justify-center rounded-full hover:bg-p2 transition-colors text-xl leading-none"
               >
                 ×
               </button>
@@ -297,7 +302,8 @@ function AppContent() {
 
             {show(BOOT_STAGE.FILTER_TABS) && (
               <div
-                className="flex flex-col min-h-0 px-2 py-1 border-b border-p2 overflow-hidden shrink-0"
+                id="currency-panel-filters"
+                className="currency-panel-filters flex flex-col min-h-0 px-2 py-1 border-b border-p2 overflow-hidden shrink-0"
                 style={{ height: MOBILE_SHEET_FILTERS_HEIGHT }}
                 onTouchStart={handleDragStart}
                 onTouchMove={handleDragMove}
@@ -308,7 +314,7 @@ function AppContent() {
             )}
 
             {show(BOOT_STAGE.CURRENCY_TABLE) && (
-              <div className="flex-1 min-h-0 overflow-hidden">
+              <div id="currency-panel-table" className="currency-panel-table flex-1 min-h-0 overflow-hidden">
                 <CurrencyTable
                   activeFilter={activeFilter}
                   onSelectFilter={handleSelectFilter}
@@ -338,9 +344,10 @@ function AppContent() {
             {show(BOOT_STAGE.MOBILE_BTN) && (
               <button
                 type="button"
+                id="currency-panel-open-btn"
                 onClick={openCurrencyModal}
                 title="Abrir filtros e moedas"
-                className="md:hidden absolute bottom-2 right-2 z-10 flex items-center gap-1.5 px-3 py-2 rounded-full bg-p3/90 hover:bg-p4 text-white text-xs font-mono font-semibold shadow-lg backdrop-blur-sm transition-colors touch-manipulation"
+                className="currency-panel-open-btn md:hidden absolute bottom-2 right-2 z-10 flex items-center gap-1.5 px-3 py-2 rounded-full bg-p3/90 hover:bg-p4 text-white text-xs font-mono font-semibold shadow-lg backdrop-blur-sm transition-colors touch-manipulation"
               >
                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
                   strokeWidth="2" stroke="currentColor" className="w-3.5 h-3.5 shrink-0">
@@ -402,14 +409,17 @@ function AppContent() {
         </div>
 
         {/* 4+5 — Coluna direita desktop */}
-        <div className="hidden md:flex flex-col w-[28rem] shrink-0 min-h-0 bg-p1">
+        <div id="currency-panel-desktop" className="currency-panel currency-panel--desktop hidden md:flex flex-col w-[32rem] shrink-0 min-h-0 bg-p1">
           {show(BOOT_STAGE.FILTER_TABS) && (
-            <div className="flex flex-col min-h-0 px-2 py-1 border-b border-p2 overflow-hidden shrink-0 h-[44%] lg:h-[42%]">
+            <div
+              id="currency-panel-filters"
+              className="currency-panel-filters flex flex-col min-h-0 px-2 py-1 border-b border-p2 overflow-hidden shrink-0 h-[44%] lg:h-[42%]"
+            >
               <FilterTabs activeFilter={activeFilter} onSelectFilter={handleSelectFilter} />
             </div>
           )}
           {show(BOOT_STAGE.CURRENCY_TABLE) ? (
-            <div className="flex-1 min-h-0 overflow-hidden">
+            <div id="currency-panel-table" className="currency-panel-table flex-1 min-h-0 overflow-hidden">
               <CurrencyTable
                 activeFilter={activeFilter}
                 onSelectFilter={handleSelectFilter}

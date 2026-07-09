@@ -5,6 +5,7 @@ import {
   CROSS_DIRECTIONS, PRICE_FILTER_MODES,
   EXIT_LOGIC_OPTIONS, RSI_INTERVALS, RSI_PERIODS, RSI_OPERATORS,
   VOLUME_OPTIONS, PENDING_TIMEOUT_OPTIONS, POLL_OPTIONS,
+  MA_CROSS_DEFAULTS,
 } from '../constants/maCrossConfigSchema';
 
 const ENTRY_COLOR  = '#22d3ee';
@@ -103,6 +104,8 @@ export default function MaCrossStrategyForm({ form, patch, symbol, exchange }) {
   const [boundsSuggest, setBoundsSuggest] = useState({});
   const [volCheck, setVolCheck] = useState(null);
   const sel = { background: '#1e2130', border: '1px solid #2a2d3a', color: '#e2e8f0' };
+  const entryTrend = { ...MA_CROSS_DEFAULTS.entryTrendMa, ...form.entryTrendMa };
+  const entryTrendOn = entryTrend.enabled !== false;
 
   useEffect(() => {
     const sym = symbol?.trim()?.toUpperCase();
@@ -206,6 +209,35 @@ export default function MaCrossStrategyForm({ form, patch, symbol, exchange }) {
           onChange={v => patch('entry.maxAboveMaPct', v)}
           min={0} max={20} step={0.5} className="w-14" />
         <span className="text-p5/40 text-[10px]">0 = desligado</span>
+      </div>
+
+      <div className="rounded-md p-2 space-y-2" style={{ background: '#1a1d28', border: `1px solid ${ENTRY_COLOR}33` }}>
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: ENTRY_COLOR }}>
+            Tendência 1h — EMA9 / EMA21
+          </span>
+          <label className="flex items-center gap-1 text-[9px] text-p5/50 cursor-pointer">
+            <input type="checkbox" checked={entryTrendOn}
+              onChange={e => patch('entryTrendMa.enabled', e.target.checked)} style={{ accentColor: ENTRY_COLOR }} />
+            Ativo
+          </label>
+        </div>
+        {entryTrendOn && (
+          <>
+            <p className="text-[10px] text-p5/60">
+              Exigir EMA9(1h) acima de EMA21(1h) antes de entrar (imediata ou pullback).
+            </p>
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <span className="text-p5/50">Tolerância</span>
+              <NumInput
+                value={entryTrend.tolerancePct ?? 1}
+                onChange={v => patch('entryTrendMa.tolerancePct', v)}
+                min={0} max={5} step={0.1} className="w-14"
+              />
+              <span className="text-p5/40 text-[10px]">% abaixo — EMA9 até essa distância da EMA21 ainda autoriza</span>
+            </div>
+          </>
+        )}
       </div>
 
       <div className="rounded-md p-2 space-y-2" style={{ background: '#1a1d28', border: `1px solid ${FILTER_COLOR}33` }}>

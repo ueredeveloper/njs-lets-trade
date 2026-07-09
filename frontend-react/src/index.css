@@ -47,3 +47,12 @@ html {
 .lt-table-foot {
   @apply border-t border-p3 shrink-0 bg-p1;
 }
+
+/* Tabela de moedas — mobile: coluna Par mais larga e centralizada */
+@media (max-width: 767px) {
+  .currency-table .currency-table-col-par,
+  .currency-table .currency-table-par-content,
+  .currency-table .currency-table-par-row {
+    text-align: center;
+  }
+}

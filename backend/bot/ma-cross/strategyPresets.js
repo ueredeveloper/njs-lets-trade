@@ -16,6 +16,12 @@ const PRESET_BODIES = {
       tolerancePct: 0.1,
       maxAboveMaPct: 3,
     },
+    entryTrendMa: {
+      enabled: true,
+      ma1: { period: 9, interval: '1h' },
+      ma2: { period: 21, interval: '1h' },
+      tolerancePct: 1,
+    },
     maFiltersEnabled: true,
     maFilters: [{
       id: 1, enabled: true, period: 50, interval: '1h',

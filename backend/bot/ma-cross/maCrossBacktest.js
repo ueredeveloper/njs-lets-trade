@@ -52,6 +52,9 @@ const OUTCOME_LABELS = {
   STOP_LOSS: 'Stop loss',
   RSI_EXIT: 'Saída RSI',
   ENTRY_OFF: 'Entrada desligada',
+  HTF_TREND_BELOW: 'Bloqueado — EMA9(1h) abaixo de EMA21(1h) (fora da tolerância)',
+  HTF_TREND_NO_MA: 'Bloqueado — tendência 1h indisponível',
+  HTF_TREND_NO_DATA: 'Bloqueado — dados 1h insuficientes',
 };
 
 function entryCooldownHours(config) {
