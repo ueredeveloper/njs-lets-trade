@@ -25,8 +25,8 @@ const PRESET_BODIES = {
       logic: 'any',
       maCross: {
         enabled: true,
-        ma1: { period: 9, interval: '15m' },
-        ma2: { period: 21, interval: '15m' },
+        ma1: { period: 9, interval: '30m' },
+        ma2: { period: 21, interval: '30m' },
         direction: 'cross_down',
         tolerancePct: 0.1,
       },
@@ -45,7 +45,7 @@ const PRESET_BODIES = {
     },
     polling:   { pollMs: 60_000, fastPollMs: 30_000 },
     adaptiveOpts: { defaultPct: 3, maxPct: 8, minPct: 0.5, minEpisodes: 3 },
-    volume:    { minVolumeUsdt: 1_000_000, allowLowVolume: false },
+    volume:    { minVolumeUsdt: 3_000_000, allowLowVolume: false },
     entryCooldownHours: 4,
   },
 };

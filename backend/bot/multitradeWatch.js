@@ -52,6 +52,20 @@ async function runWatchCycle({
     states.map(s => [registry.sessionKey(s.symbol, s.strategy_id), s]),
   );
 
+  const evaluated = favorites
+    .filter(f => {
+      const sym = f.symbol.toUpperCase();
+      if (symbolFilter && sym !== symbolFilter) return false;
+      return stateByKey.has(registry.sessionKey(f.symbol, f.strategy_id));
+    })
+    .map(f => f.symbol.toUpperCase())
+    .sort();
+  if (!evaluated.length) {
+    log('📋 Moedas avaliadas: (nenhuma)');
+  } else {
+    log(`📋 Moedas avaliadas (${evaluated.length}): ${evaluated.join(', ')}`);
+  }
+
   // Remover / desativar
   for (const sess of registry.list()) {
     if (!strategyIds.includes(sess.strategyId)) continue;
@@ -119,7 +133,7 @@ function startMultitradeWatch(opts) {
   });
 
   logBanner(opts.log ?? console.log);
-  setTimeout(run, 15_000);
+  run();
   setInterval(run, WATCH_MS);
 }
 

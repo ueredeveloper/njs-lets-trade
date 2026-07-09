@@ -1342,6 +1342,7 @@ export default function MultitradeModal({
           </RuleGroup>
           )}
 
+          {!isMaCross && (
           <div>
             <SectionHeader label="Volume mínimo 24h (compartilhado)" hint={MT_HELP.shared.volume} />
             <select value={form.volume.minVolumeUsdt} onChange={e => patch('volume.minVolumeUsdt', Number(e.target.value))}
@@ -1359,6 +1360,7 @@ export default function MultitradeModal({
               </p>
             )}
           </div>
+          )}
 
           {/* Avançado */}
           <div>

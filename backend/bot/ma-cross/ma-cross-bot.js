@@ -4,7 +4,7 @@
  * MA Cross Bot — cruzamento de duas MAs (compra) + cruzamento inverso (venda).
  *
  * strategy_id: ma-cross
- * Exemplo: MA9(15m) cruza ↑ MA21(15m) com preço acima de MA50(1h) adaptativo (máx 4%).
+ * Exemplo: MA9(15m) cruza ↑ MA21(15m) com preço acima de MA50(1h); saída MA9/21(30m) ↓.
  *
  * Uso:
  *   node backend/bot/ma-cross/ma-cross-bot.js
@@ -648,7 +648,7 @@ async function tick(rowId, adapter, strategy, log, session) {
     }
 
     const vol = session.volCache?.volumeUsdt;
-    const minVol = config.minVolumeUsdt ?? 1_000_000;
+    const minVol = config.minVolumeUsdt ?? 3_000_000;
     if (vol != null && vol < minVol && !config.allowLowVolume) {
       return { phase: 'PENDING' };
     }
@@ -681,7 +681,7 @@ async function tick(rowId, adapter, strategy, log, session) {
     }
 
     const vol = session.volCache?.volumeUsdt;
-    const minVol = config.minVolumeUsdt ?? 1_000_000;
+    const minVol = config.minVolumeUsdt ?? 3_000_000;
     if (vol != null && vol < minVol && !config.allowLowVolume) {
       return { phase };
     }
@@ -886,7 +886,7 @@ async function main() {
       const idx = row.symbol.charCodeAt(0) + (row.strategy_id?.length ?? 0);
       return startSymbol(row, COLORS[idx % COLORS.length]);
     },
-    log: () => {},
+    log: console.log,
   });
 
   const toStart = [];
@@ -895,7 +895,7 @@ async function main() {
     const color   = COLORS[i % COLORS.length];
     const adapter = buildAdapter(row.exchange ?? 'binance', row.symbol);
     const strategy = resolveStrategy(row);
-    const minVol = strategy?.config.minVolumeUsdt ?? 1_000_000;
+    const minVol = strategy?.config.minVolumeUsdt ?? 3_000_000;
 
     let volOk = true;
     try {

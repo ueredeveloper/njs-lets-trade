@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { suggestMaCrossFilterBounds } from '../services/api';
+import { useState, useEffect } from 'react';
+import { suggestMaCrossFilterBounds, checkMultitradeVolume } from '../services/api';
 import {
   MA_CROSS_INTERVALS, MA_PERIOD_PRESETS, MA_CROSS_PERIOD_MIN, MA_CROSS_PERIOD_MAX,
   CROSS_DIRECTIONS, PRICE_FILTER_MODES,
@@ -101,7 +101,21 @@ function CrossBlock({ title, block, prefix, patch, color, showEnable }) {
 export default function MaCrossStrategyForm({ form, patch, symbol, exchange }) {
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [boundsSuggest, setBoundsSuggest] = useState({});
+  const [volCheck, setVolCheck] = useState(null);
   const sel = { background: '#1e2130', border: '1px solid #2a2d3a', color: '#e2e8f0' };
+
+  useEffect(() => {
+    const sym = symbol?.trim()?.toUpperCase();
+    if (!sym) { setVolCheck(null); return undefined; }
+    let cancelled = false;
+    setVolCheck({ loading: true });
+    const timer = setTimeout(() => {
+      checkMultitradeVolume(sym, exchange, form.volume?.minVolumeUsdt ?? 3_000_000)
+        .then(data => { if (!cancelled) setVolCheck({ ...data, loading: false }); })
+        .catch(err => { if (!cancelled) setVolCheck({ loading: false, error: err.message }); });
+    }, 400);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [symbol, exchange, form.volume?.minVolumeUsdt]);
 
   const addFilter = () => {
     const nextId = Math.max(0, ...(form.maFilters ?? []).map(f => f.id)) + 1;
@@ -361,9 +375,34 @@ export default function MaCrossStrategyForm({ form, patch, symbol, exchange }) {
         </label>
       </div>
 
+      <div className="rounded-md p-2 space-y-2" style={{ background: '#1a1d28', border: '1px solid #2a2d3a' }}>
+        <div className="flex items-center gap-2 text-xs">
+          <span className="text-p5/50">Volume mín. 24h</span>
+          <select value={form.volume.minVolumeUsdt}
+            onChange={e => patch('volume.minVolumeUsdt', Number(e.target.value))}
+            className="rounded px-1 py-1 flex-1" style={sel}>
+            {VOLUME_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label} USDT</option>)}
+          </select>
+        </div>
+        <label className="flex items-center gap-2 text-p5 text-xs">
+          <input type="checkbox" checked={form.volume.allowLowVolume}
+            onChange={e => patch('volume.allowLowVolume', e.target.checked)} />
+          Permitir volume baixo
+        </label>
+        {symbol?.trim() && (
+          <p className="text-[10px] font-mono" style={{
+            color: volCheck?.loading ? '#94a3b8' : volCheck?.meetsMin === false ? '#f59e0b' : volCheck?.meetsMin ? '#26a69a' : '#94a3b8',
+          }}>
+            {volCheck?.loading ? 'Verificando…' : volCheck?.meetsMin === false
+              ? `Atual: ${volCheck.volumeFmt} — abaixo do mínimo`
+              : volCheck?.volumeFmt ? `Atual: ${volCheck.volumeFmt}` : ''}
+          </p>
+        )}
+      </div>
+
       <button type="button" onClick={() => setAdvancedOpen(v => !v)}
         className="text-[10px] text-p5/50 w-full text-left hover:text-p5/70">
-        {advancedOpen ? '▼' : '▶'} Execução, polling, volume, adaptativo
+        {advancedOpen ? '▼' : '▶'} Execução, polling, adaptativo
       </button>
 
       {advancedOpen && (
@@ -421,21 +460,6 @@ export default function MaCrossStrategyForm({ form, patch, symbol, exchange }) {
                 {POLL_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
               </select>
             </div>
-          </div>
-          <div className="text-xs space-y-2">
-            <div className="flex items-center gap-2">
-              <span className="text-p5/50">Volume mín. 24h</span>
-              <select value={form.volume.minVolumeUsdt}
-                onChange={e => patch('volume.minVolumeUsdt', Number(e.target.value))}
-                className="rounded px-1 py-1 flex-1" style={sel}>
-                {VOLUME_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-              </select>
-            </div>
-            <label className="flex items-center gap-2 text-p5">
-              <input type="checkbox" checked={form.volume.allowLowVolume}
-                onChange={e => patch('volume.allowLowVolume', e.target.checked)} />
-              Permitir volume baixo
-            </label>
           </div>
           <div className="text-xs grid grid-cols-2 gap-2">
             <div>
