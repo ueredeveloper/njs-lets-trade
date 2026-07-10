@@ -65,6 +65,12 @@ function overlayPanelKey(slot) {
   return `ma${isNaN(num) ? slot.id : num}`;
 }
 
+function enabledOverlaySlots(overlaySlots, panelButtons) {
+  return (overlaySlots ?? []).filter(
+    (s) => s.enabled && panelButtons[overlayPanelKey(s)] !== false,
+  );
+}
+
 function filterIndicatorsByPanel(activeIndicators, panelButtons) {
   return activeIndicators.filter((id) => {
     if (!CHART_INDICATOR_IDS.includes(id)) return true;
@@ -2254,11 +2260,9 @@ export default function CandlestickChart() {
   const [currentInterval, setCurrentInterval] = useState(savedInterval || DEFAULT_INTERVAL);
   const [loadingInterval, setLoadingInterval] = useState(false);
   const [themeTick, setThemeTick] = useState(0);
-  const [activeIndicators, setActiveIndicators] = useState(
-    () => uiPrefs.activeIndicators ?? [...DEFAULT_ACTIVE_INDICATORS],
-  );
+  const activeIndicators = uiPrefs.activeIndicators ?? [...DEFAULT_ACTIVE_INDICATORS];
   const [activeTab, setActiveTab] = useState('chart'); // 'chart' | 'matrix'
-  const [overlaySlots, setOverlaySlots] = useState(() => uiPrefs.overlaySlots);
+  const [tradeOverlaySlots, setTradeOverlaySlots] = useState(null);
   const [overlayMaCache, setOverlayMaCache] = useState({});
   const [overlayMaLoading, setOverlayMaLoading] = useState(false);
   const [adaptiveBandOverlay, setAdaptiveBandOverlay] = useState(null);
@@ -2291,29 +2295,17 @@ export default function CandlestickChart() {
 
 
   function toggleIndicator(id) {
-    setActiveIndicators((prev) =>
-      prev.includes(id) ? prev.filter((i) => i !== id) : [...prev, id]
+    const current = uiPrefs.activeIndicators ?? [...DEFAULT_ACTIVE_INDICATORS];
+    setActiveIndicatorsPreference(
+      current.includes(id) ? current.filter((i) => i !== id) : [...current, id],
     );
   }
-
-  // Persiste indicadores ativos no localStorage quando o usuário altera (fora do painel de trade)
-  useEffect(() => {
-    if (isTradePanelChartView(chartViewSource)) return;
-    setActiveIndicatorsPreference(activeIndicators);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeIndicators, chartViewSource]);
 
   useEffect(() => {
     const handleThemeChange = () => setThemeTick(t => t + 1);
     window.addEventListener('palette-updated', handleThemeChange);
     return () => window.removeEventListener('palette-updated', handleThemeChange);
   }, []);
-
-  useEffect(() => {
-    if (multitradeChartFocus?.adaptiveBands) return;
-    setMaBands({ ...uiPrefs.maBandsDefaults, adaptive: false });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedChart?.symbol]);
 
   // Sincroniza intervalo; não reseta limites quando o zoom veio do Multi-Trade (evita flash de velas vazias)
   useEffect(() => {
@@ -2332,30 +2324,21 @@ export default function CandlestickChart() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedChart?.symbol, selectedChart?.interval, chartViewSource, multitradeChartFocus?.candleLimit, chartCandleWindowReset]);
 
-  // Overlays MA: prefs do usuário (padrão MA1=50@1h). Só AMAP/5m injetam slots;
-  // MA-Cross nunca sobrescreve — só muda o intervalo do candlestick.
-  useEffect(() => {
+  const overlaySlots = useMemo(() => {
     if (isTradePanelChartView(chartViewSource)) {
-      if (multitradeChartFocus?.overlaySlots) {
-        setOverlaySlots(multitradeChartFocus.overlaySlots);
-      } else {
-        setOverlaySlots(uiPrefs.overlaySlots);
-      }
-      setActiveIndicators(prev => {
-        const next = new Set(prev);
-        next.add('rsi');
-        next.add('ma9');
-        next.add('ma21');
-        next.add('ma50');
-        return [...next];
-      });
+      if (multitradeChartFocus?.overlaySlots) return multitradeChartFocus.overlaySlots;
+      if (tradeOverlaySlots) return tradeOverlaySlots;
+    }
+    return uiPrefs.overlaySlots;
+  }, [chartViewSource, multitradeChartFocus?.overlaySlots, tradeOverlaySlots, uiPrefs.overlaySlots]);
+
+  // Painel de trade: overlays locais (não persistem) — não altera indicadores do usuário.
+  useEffect(() => {
+    if (!isTradePanelChartView(chartViewSource)) {
+      setTradeOverlaySlots(null);
       return;
     }
-    if (multitradeChartFocus?.overlaySlots) {
-      setOverlaySlots(multitradeChartFocus.overlaySlots);
-      return;
-    }
-    setOverlaySlots(uiPrefs.overlaySlots);
+    setTradeOverlaySlots(multitradeChartFocus?.overlaySlots ?? uiPrefs.overlaySlots);
   }, [chartViewSource, multitradeChartFocus?.overlaySlots, uiPrefs.overlaySlots]);
 
   // Persiste preferências das bandas (pct, acima/abaixo, alvo) quando o usuário altera
@@ -2386,7 +2369,7 @@ export default function CandlestickChart() {
       return undefined;
     }
     const chartIv = selectedChart.interval ?? currentInterval;
-    const toFetch = overlaySlots.filter(s => s.enabled && chartPanelButtons[overlayPanelKey(s)] !== false);
+    const toFetch = enabledOverlaySlots(overlaySlots, chartPanelButtons);
     if (!toFetch.length) {
       setOverlayMaCache({});
       setOverlayMaLoading(false);
@@ -2553,39 +2536,33 @@ export default function CandlestickChart() {
 
   const colors = useMemo(() => getThemeColors(), [themeTick]);
 
+  function commitOverlaySlots(next) {
+    if (isTradePanelChartView(chartViewSource)) {
+      setTradeOverlaySlots(next);
+    } else {
+      setOverlaySlotsPreference(next);
+    }
+  }
+
   function updateOverlaySlot(id, patch) {
-    setOverlaySlots(prev => {
-      const next = prev.map(s => (s.id === id ? { ...s, ...patch } : s));
-      if (!isTradePanelChartView(chartViewSource)) {
-        setOverlaySlotsPreference(next);
-      }
-      return next;
-    });
+    const next = overlaySlots.map((s) => (s.id === id ? { ...s, ...patch } : s));
+    commitOverlaySlots(next);
   }
 
   function addOverlaySlot() {
-    setOverlaySlots(prev => {
-      if (prev.length >= MAX_OVERLAY_SLOTS) return prev;
-      const maxNum = prev.reduce((max, s) => {
-        const n = parseInt(s.id.replace('slot', ''), 10);
-        return isNaN(n) ? max : Math.max(max, n);
-      }, 0);
-      const next = [...prev, { id: `slot${maxNum + 1}`, period: '50', interval: '1h', enabled: true, color: PERIOD_DEFAULT_COLORS['50'] }];
-      if (!isTradePanelChartView(chartViewSource)) {
-        setOverlaySlotsPreference(next);
-      }
-      return next;
-    });
+    if (overlaySlots.length >= MAX_OVERLAY_SLOTS) return;
+    const maxNum = overlaySlots.reduce((max, s) => {
+      const n = parseInt(s.id.replace('slot', ''), 10);
+      return isNaN(n) ? max : Math.max(max, n);
+    }, 0);
+    commitOverlaySlots([
+      ...overlaySlots,
+      { id: `slot${maxNum + 1}`, period: '50', interval: '1h', enabled: true, color: PERIOD_DEFAULT_COLORS['50'] },
+    ]);
   }
 
   function removeOverlaySlot(id) {
-    setOverlaySlots(prev => {
-      const next = prev.filter(s => s.id !== id);
-      if (!isTradePanelChartView(chartViewSource)) {
-        setOverlaySlotsPreference(next);
-      }
-      return next;
-    });
+    commitOverlaySlots(overlaySlots.filter((s) => s.id !== id));
   }
 
   async function handleIntervalChange(iv) {
@@ -2703,29 +2680,32 @@ export default function CandlestickChart() {
   );
 
   const overlayConfigs = useMemo(() => {
-    const slotConfigs = overlaySlots
-      .filter(s => s.enabled && chartPanelButtons[overlayPanelKey(s)] !== false)
-      .map((slot) => {
-        const key = `${slot.period}-${slot.interval}`;
-        const slotNum = parseInt(slot.id.replace('slot', ''), 10);
-        const fallbackColor = OVERLAY_MA_COLORS[(isNaN(slotNum) ? 0 : slotNum - 1) % OVERLAY_MA_COLORS.length];
-        const color = slot.color ?? fallbackColor;
-        const effectiveBandTarget = maBands.targetSlotId
-          ?? overlaySlots.find(s => s.enabled)?.id
-          ?? 'slot1';
-        const bandsOn = slot.id === effectiveBandTarget && bandsPanelEnabled && !adaptiveBandOverlay;
-        return {
-          label: `EMA${slot.period}@${slot.interval}`,
-          color,
-          points: overlayMaCache[key] ?? [],
-          bands: {
-            showAbove: bandsOn && maBands.showAbove,
-            showBelow: bandsOn && maBands.showBelow,
-            abovePct: maBands.stretchPct ?? maBands.pct,
-            belowPct: maBands.dipPct ?? maBands.pct,
-          },
-        };
-      });
+    const activeSlots = enabledOverlaySlots(overlaySlots, chartPanelButtons);
+    if (!activeSlots.length) return [];
+
+    const targetFromPrefs = maBands.targetSlotId;
+    const bandTargetId = activeSlots.some((s) => s.id === targetFromPrefs)
+      ? targetFromPrefs
+      : activeSlots[0].id;
+
+    const slotConfigs = activeSlots.map((slot) => {
+      const key = `${slot.period}-${slot.interval}`;
+      const slotNum = parseInt(slot.id.replace('slot', ''), 10);
+      const fallbackColor = OVERLAY_MA_COLORS[(isNaN(slotNum) ? 0 : slotNum - 1) % OVERLAY_MA_COLORS.length];
+      const color = slot.color ?? fallbackColor;
+      const bandsOn = slot.id === bandTargetId && bandsPanelEnabled && !adaptiveBandOverlay;
+      return {
+        label: `EMA${slot.period}@${slot.interval}`,
+        color,
+        points: overlayMaCache[key] ?? [],
+        bands: {
+          showAbove: bandsOn && maBands.showAbove,
+          showBelow: bandsOn && maBands.showBelow,
+          abovePct: maBands.stretchPct ?? maBands.pct,
+          belowPct: maBands.dipPct ?? maBands.pct,
+        },
+      };
+    });
 
     if (adaptiveBandOverlay?.points?.length) {
       slotConfigs.push({

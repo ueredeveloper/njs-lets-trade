@@ -40,10 +40,8 @@ export const DEFAULT_MA_BANDS = {
   targetSlotId: null, // null = usa o primeiro slot habilitado
 };
 
-export const DEFAULT_OVERLAY_SLOTS = [
-  { id: 'slot1', period: '50', interval: '1h', enabled: true,  color: PERIOD_DEFAULT_COLORS['50'] },
-  { id: 'slot2', period: '50', interval: '4h', enabled: false, color: PERIOD_DEFAULT_COLORS['50'] },
-];
+/** Sem overlay por padrão — usuário adiciona via painel do gráfico ou Configurações. */
+export const DEFAULT_OVERLAY_SLOTS = [];
 
 export function normalizeActiveIndicators(arr) {
   if (!Array.isArray(arr)) return [...DEFAULT_ACTIVE_INDICATORS];

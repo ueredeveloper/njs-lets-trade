@@ -80,12 +80,31 @@ export async function fetchMarketHighlights(limit = 10) {
 }
 
 /**
- * Analisa ciclos RSI sobrevenda→sobrecompra para uma moeda salva no backend.
- * @param {string} symbol    ex: 'BTCUSDT'
- * @param {string} interval  ex: '1h'
- * @param {number} oversold    limiar de entrada (padrão 30)
- * @param {number} overbought  limiar de saída   (padrão 70)
+ * Analisa ciclos MA: entrada EMA9↑EMA21, saída EMA9↓EMA21.
  */
+export async function fetchMaCrossStats(symbol, {
+  entryInterval = '15m',
+  exitInterval = '15m',
+  period1 = 9,
+  period2 = 21,
+  source = null,
+} = {}) {
+  const params = new URLSearchParams({
+    symbol,
+    entryInterval,
+    exitInterval,
+    period1: String(period1),
+    period2: String(period2),
+  });
+  if (source) params.set('source', source);
+  const res = await fetch(`/services/ma-cross-stats?${params}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 export async function fetchRsiOversoldRecovery(symbol, interval, oversold = 30, overbought = 70, source = null) {
   const params = new URLSearchParams({ symbol, interval, oversold, overbought });
   if (source) params.set('source', source);

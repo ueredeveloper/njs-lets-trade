@@ -22,7 +22,7 @@ const { ichimokuCloudRouter } = require('./technicals-indicators');
 const {
   fetchCandles, fetchIchimokuCloud, fetchAllCurrencies,
   fetchSMA, fetchRSI, fetchVWAP, fetch24HsVolume, fetchMarketCapFilter, fetchStablecoins, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter,
-  fetchRsiOversoldRecovery, fetchReloadCandles,
+  fetchRsiOversoldRecovery, fetchMaCrossStats, fetchReloadCandles,
   fetchGateCurrencies, fetchGatePrefetch, fetchBinanceTrades, fetchGateTrades,
   fetchActiveTrades, fetchTradeFavorites, stgBotStatus, multitradeService, fetchMarketHighlights } = require('./services');
 const supabaseService = require('./services/supabaseService');
@@ -50,6 +50,7 @@ app.use('/services', fetchMaTimeAboveFilter)
 app.use('/services', fetchMaCrossoverFilter)
 app.use('/services', fetchMaCompareFilter)
 app.use('/services', fetchRsiOversoldRecovery)
+app.use('/services', fetchMaCrossStats)
 app.use('/services', fetchReloadCandles)
 app.use('/services', fetchGateCurrencies)
 app.use('/services', fetchGatePrefetch)

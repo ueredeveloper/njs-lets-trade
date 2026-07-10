@@ -666,14 +666,9 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
           : (isMT && !filterChartInterval ? CHART_VIEW.MULTITRADE : CHART_VIEW.TABLE),
       );
 
-      if (mtEntry) {
-        applyChartMaCrossOverlay(mtEntry, item.symbol);
-      } else {
-        applyChartMaCrossOverlay(null);
-      }
-
       // Favorito MA-Cross só manda no chart quando não há filtro com intervalo explícito
       if (isMT && !filterChartInterval) {
+        applyChartMaCrossOverlay(mtEntry, item.symbol);
         await loadMultitradeSymbolChart(mtEntry, {
           fetchCandlesticksAndCloud,
           fetchMultitradeTrades,
@@ -682,6 +677,8 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
         if (effectiveSource === 'gate') gatePreloadCandles(item.symbol);
         return;
       }
+
+      applyChartMaCrossOverlay(null);
 
       const data = await fetchCandlesticksAndCloud(item.symbol, effectiveInterval, effectiveSource);
       setSelectedChart({ ...data, interval: effectiveInterval, symbol: item.symbol, source: effectiveSource ?? null });
