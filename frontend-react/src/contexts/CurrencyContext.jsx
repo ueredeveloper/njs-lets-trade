@@ -7,7 +7,6 @@ import { addFavorite, removeFavorite, fetchActiveTrades, ignoreActiveTrade,
 import { CHART_VIEW } from '../utils/chartView';
 import {
   buildOverlaySlotsForEntry,
-  buildMaCrossAdaptiveBandsConfig,
 } from '../utils/multitradeChart';
 import {
   ASSET_CATEGORY_KEYS,
@@ -367,8 +366,9 @@ export function CurrencyProvider({ children }) {
       const next = {
         ...(prev ?? {}),
         symbol: sym,
-        // Bandas do filtro MA: % fixos da config (ex. ±4%), iguais em todas as moedas
-        adaptiveBands: buildMaCrossAdaptiveBandsConfig(entry),
+        // Não auto-exibe a banda do filtro MA ao apenas selecionar a moeda —
+        // só aparece quando vier explicitamente de um clique de trade no backtest.
+        adaptiveBands: null,
       };
       // MA-Cross → null: não troca MA1/MA2 do usuário (padrão 50@1h)
       if (strategySlots) next.overlaySlots = strategySlots;

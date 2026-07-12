@@ -275,9 +275,10 @@ export async function loadMultitradeSymbolChart(entry, {
     interval,
     exchangeSource: src,
     markers,
-    // MA-Cross: bandas = % da config (fixos). Não recalcula histórico por moeda.
+    // MA-Cross: sem overlay/banda automática aqui — só aparece quando vier
+    // explicitamente de um clique de trade no backtest (ver MultitradeBacktestPanel).
     overlaySlots: null,
-    adaptiveBands: buildMaCrossAdaptiveBandsConfig(entry),
+    adaptiveBands: null,
   });
 }
 
