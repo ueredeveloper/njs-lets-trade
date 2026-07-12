@@ -3,6 +3,7 @@ import { useCurrency } from '../contexts/CurrencyContext';
 import MultitradeModal from './MultitradeModal';
 import MultitradeBacktestPanel from './MultitradeBacktestPanel';
 import MultitradeBotStateModal from './MultitradeBotStateModal';
+import MultitradeSellModal from './MultitradeSellModal';
 import { fetchCandlesticksAndCloud, fetchMultitradeTrades } from '../services/api';
 import { loadMultitradeSymbolChart } from '../utils/multitradeChart';
 import { multitradePhaseBadge, symbolPhaseSummary, fmtBuyTimeShort } from '../utils/multitradePhase';
@@ -49,6 +50,7 @@ export default function MultitradePanel() {
   const [favOpen, setFavOpen]             = useState(false);
   const [editingSymbol, setEditingSymbol] = useState(null);
   const [stateSymbol, setStateSymbol]     = useState(null);
+  const [sellEntry, setSellEntry]         = useState(null);
   const [pickedSymbol, setPickedSymbol]   = useState(null);
   const [pickedStrategy, setPickedStrategy] = useState('ma-cross');
   const [macrossFavSort, setMacrossFavSort] = useState(() => loadMacrossFavSort());
@@ -189,6 +191,7 @@ export default function MultitradePanel() {
                 const summaryPhase = symbolPhaseSummary(activeEntries);
                 const ph = multitradePhaseBadge(summaryPhase);
                 const boughtEntry = activeEntries.find(e => e.phase === 'BOUGHT' && e.buyTime);
+                const sellableEntry = activeEntries.find(e => e.phase === 'BOUGHT') ?? null;
                 return (
                   <li
                     key={sym}
@@ -267,6 +270,17 @@ export default function MultitradePanel() {
                       onClick={(e) => { e.stopPropagation(); setStateSymbol(sym); }}>
                       Estado
                     </button>
+                    {sellableEntry && (
+                      <button
+                        type="button"
+                        id={`multitrade-fav-sell-${sym}`}
+                        className="multitrade-fav-btn-sell text-[8px] px-1.5 py-0.5 rounded shrink-0 font-bold"
+                        style={{ background: '#ef444422', color: '#f87171', border: '1px solid #ef444455' }}
+                        title="Vender esta moeda agora (ordem a mercado)"
+                        onClick={(e) => { e.stopPropagation(); setSellEntry(sellableEntry); }}>
+                        Vender
+                      </button>
+                    )}
                     <button
                       type="button"
                       id={`multitrade-fav-edit-${sym}`}
@@ -323,6 +337,17 @@ export default function MultitradePanel() {
                       onClick={() => setStateSymbol(backtestEntry.symbol)}>
                       Alterar estado
                     </button>
+                    {backtestEntry.phase === 'BOUGHT' && (
+                      <button
+                        type="button"
+                        id="multitrade-panel-btn-sell-active"
+                        className="text-[8px] font-bold px-1.5 py-0.5 rounded"
+                        style={{ background: '#ef444422', color: '#f87171', border: '1px solid #ef444455' }}
+                        onClick={() => setSellEntry(backtestEntry)}
+                        title="Vender esta moeda agora (ordem a mercado)">
+                        Vender
+                      </button>
+                    )}
                   </>
                 );
               })()}
@@ -408,6 +433,20 @@ export default function MultitradePanel() {
             setStateSymbol(null);
           }}
           onCancel={() => setStateSymbol(null)}
+        />
+      )}
+      {sellEntry && (
+        <MultitradeSellModal
+          entry={sellEntry}
+          onSold={async () => {
+            await updateMultitradeBotState({
+              symbol: sellEntry.symbol,
+              strategyId: normalizeStrategyId(sellEntry.strategyId),
+              phase: 'WATCHING',
+            });
+            setSellEntry(null);
+          }}
+          onCancel={() => setSellEntry(null)}
         />
       )}
     </div>

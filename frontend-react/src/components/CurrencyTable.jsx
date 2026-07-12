@@ -11,6 +11,7 @@ import { parseMaCrossFilterName, parseMaCompareFilterName, parseFilterChartInter
 import { useI18n } from '../i18n';
 import MultitradeModal from './MultitradeModal';
 import MultitradeBotStateModal from './MultitradeBotStateModal';
+import MultitradeSellModal from './MultitradeSellModal';
 import { getEntriesForSymbol } from '../constants/strategyPresets';
 import { CHART_VIEW } from '../utils/chartView';
 import {
@@ -293,6 +294,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   const [activeRow, setActiveRow]               = useState(null);
   const [mtModal, setMtModal]       = useState(null);
   const [mtStateModal, setMtStateModal] = useState(null);
+  const [mtSellEntry, setMtSellEntry] = useState(null);
   const [search, setSearch]               = useState('');
   const [sortVolume, setSortVolume]       = useState('none'); // 'desc' | 'asc' | 'none'
   const [gateItems, setGateItems]         = useState([]);
@@ -818,12 +820,12 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   const favColWidth = isMobile
     ? (showFavSortInHeader ? '7rem' : '5.25rem')
     : (showFavSortInHeader ? '10.5rem' : '5.5rem');
-  const priceColWidth = isMobile ? '3.25rem' : '3.5rem';
+  const priceColWidth = isMobile ? '3rem' : '3.25rem';
   const changeColWidth = isMobile ? '2.75rem' : '3rem';
-  const volColWidth = isMobile ? '2.5rem' : '2.75rem';
-  const spinnerColWidth = isMobile ? '1rem' : '1.25rem';
+  const volColWidth = isMobile ? '2.25rem' : '2.5rem';
+  const spinnerColWidth = isMobile ? '0.75rem' : '1rem';
   const parColWidth = `calc(100% - ${favColWidth} - ${priceColWidth} - ${volColWidth} - ${spinnerColWidth}${isAltaFilter ? ` - ${changeColWidth}` : ''})`;
-  const parColMinWidth = isMobile ? '0' : '12rem';
+  const parColMinWidth = isMobile ? '5rem' : '15.5rem';
   const parColClass = isMobile
     ? 'currency-table-col-par px-1.5 py-1.5 font-mono font-semibold text-center'
     : 'currency-table-col-par px-2 py-1.5 font-mono font-semibold';
@@ -1070,7 +1072,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                   ? 'PnL'
                   : `Vol${volSortArrow}`}
               </th>
-              <th className="w-6" />
+              <th style={{ width: spinnerColWidth }} />
             </tr>
           </thead>
           <tbody>
@@ -1239,6 +1241,16 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                               <span className="text-[9px] font-normal text-white/70 shrink-0">
                                 ▌ {fmtBuyTime(bought.buyTime)}
                               </span>
+                            )}
+                            {bought && (
+                              <button
+                                type="button"
+                                className="text-[8px] font-bold px-1 py-0 rounded shrink-0"
+                                style={{ background: 'rgba(239,68,68,0.13)', color: '#f87171', border: '1px solid rgba(239,68,68,0.33)' }}
+                                title="Vender esta moeda agora (ordem a mercado)"
+                                onClick={(e) => { e.stopPropagation(); setMtSellEntry(bought); }}>
+                                Vender
+                              </button>
                             )}
                           </span>
                         );
@@ -1506,6 +1518,23 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
               setMtStateModal(null);
             }}
             onCancel={() => setMtStateModal(null)}
+          />
+        </ModalPortal>
+      )}
+
+      {mtSellEntry && (
+        <ModalPortal>
+          <MultitradeSellModal
+            entry={mtSellEntry}
+            onSold={async () => {
+              await updateMultitradeBotState({
+                symbol: mtSellEntry.symbol,
+                strategyId: mtSellEntry.strategyId,
+                phase: 'WATCHING',
+              });
+              setMtSellEntry(null);
+            }}
+            onCancel={() => setMtSellEntry(null)}
           />
         </ModalPortal>
       )}
