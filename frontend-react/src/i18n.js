@@ -65,7 +65,6 @@ const T = {
     'settings.visible_panels_hint':      'Marque para exibir a aba abaixo do gráfico.',
     'settings.panel.indicators':         'Analisar Indicadores',
     'settings.panel.stats':              'Estatísticas',
-    'settings.panel.macross':            'MA-Cross',
 
     // Indicadores — tipos
     'ind.placeholder':       'Indicador',
@@ -253,7 +252,7 @@ const T = {
     'stats.tip.entry_rsi':   'RSI abaixo deste valor marca o início de um ciclo (zona de sobrevenda).',
     'stats.tip.exit_rsi':    'RSI acima deste valor encerra o ciclo (zona de sobrecompra).',
     'stats.tab.rsi':         'RSI',
-    'stats.tab.ma_cross':    'MA Cross',
+    'stats.tab.ma_cross':    'Cruzamento de EMAs',
     'stats.entry_iv':        'Entrada',
     'stats.exit_iv':         'Saída',
     'stats.card.entry_rule': 'Regra entrada',
@@ -264,6 +263,13 @@ const T = {
     'stats.ma_entry_col':    'EMA9↑21',
     'stats.ma_exit_col':     'EMA9↓21',
     'stats.no_cycles_ma':    'Nenhum ciclo MA encontrado.',
+    'stats.tab.bollinger_bands': 'Bollinger Bands',
+    'stats.bb_period':       'Período BB',
+    'stats.bb_stddev':       'Desvio BB',
+    'stats.tip.bb_occur':    'Ciclos completos: close toca a banda inferior (fundo) e depois toca a banda superior (topo).',
+    'stats.tip.bb_period':   'Número de candles usado para calcular a média móvel central da Bollinger Bands.',
+    'stats.tip.bb_stddev':   'Quantos desvios-padrão as bandas superior/inferior ficam distantes da média central.',
+    'stats.no_cycles_bb':    'Nenhum ciclo de Bollinger Bands encontrado.',
 
     // Gráfico
     'chart.select':          'Selecione uma moeda para ver o gráfico',
@@ -443,7 +449,6 @@ const T = {
     'settings.visible_panels_hint':      'Check to show the tab below the chart.',
     'settings.panel.indicators':         'Analyze Indicators',
     'settings.panel.stats':              'Statistics',
-    'settings.panel.macross':            'MA-Cross',
 
     // Indicator types
     'ind.placeholder':       'Indicator',
@@ -631,7 +636,7 @@ const T = {
     'stats.tip.entry_rsi':   'RSI below this value marks the start of a cycle (oversold zone).',
     'stats.tip.exit_rsi':    'RSI above this value ends the cycle (overbought zone).',
     'stats.tab.rsi':         'RSI',
-    'stats.tab.ma_cross':    'MA Cross',
+    'stats.tab.ma_cross':    'EMA Cross',
     'stats.entry_iv':        'Entry',
     'stats.exit_iv':         'Exit',
     'stats.card.entry_rule': 'Entry rule',
@@ -642,6 +647,13 @@ const T = {
     'stats.ma_entry_col':    'EMA9↑21',
     'stats.ma_exit_col':     'EMA9↓21',
     'stats.no_cycles_ma':    'No MA cycles found.',
+    'stats.tab.bollinger_bands': 'Bollinger Bands',
+    'stats.bb_period':       'BB Period',
+    'stats.bb_stddev':       'BB Std Dev',
+    'stats.tip.bb_occur':    'Complete cycles: close touches the lower band (bottom), then the upper band (top).',
+    'stats.tip.bb_period':   'Number of candles used to calculate the Bollinger Bands middle moving average.',
+    'stats.tip.bb_stddev':   'How many standard deviations the upper/lower bands are from the middle average.',
+    'stats.no_cycles_bb':    'No Bollinger Bands cycles found.',
 
     // Chart
     'chart.select':          'Select a currency to view the chart',

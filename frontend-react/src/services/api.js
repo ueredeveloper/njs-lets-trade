@@ -116,6 +116,18 @@ export async function fetchRsiOversoldRecovery(symbol, interval, oversold = 30, 
   return res.json();
 }
 
+/** Analisa ciclos fundo→topo na Bollinger Bands (4h por padrão) para uma moeda. */
+export async function fetchBollingerBandRecovery(symbol, interval = '4h', period = 20, stdDev = 2, source = null) {
+  const params = new URLSearchParams({ symbol, interval, period, stdDev });
+  if (source) params.set('source', source);
+  const res = await fetch(`/services/bollinger-band-recovery?${params}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 export async function getFavorites(type) {
   const res = await fetch(`/services/sb/favorites?type=${type}`);
   if (!res.ok) throw new Error('Falha ao buscar favoritos');

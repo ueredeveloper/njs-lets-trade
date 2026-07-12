@@ -818,14 +818,14 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   const showFavSortInHeader = isMacrossFavView || isTradesFavView;
   const isMobile = useIsMobile();
   const favColWidth = isMobile
-    ? (showFavSortInHeader ? '7rem' : '5.25rem')
-    : (showFavSortInHeader ? '10.5rem' : '5.5rem');
+    ? (showFavSortInHeader ? '6rem' : '5rem')
+    : (showFavSortInHeader ? '9rem' : '5rem');
   const priceColWidth = isMobile ? '3rem' : '3.25rem';
   const changeColWidth = isMobile ? '2.75rem' : '3rem';
   const volColWidth = isMobile ? '2.25rem' : '2.5rem';
   const spinnerColWidth = isMobile ? '0.75rem' : '1rem';
   const parColWidth = `calc(100% - ${favColWidth} - ${priceColWidth} - ${volColWidth} - ${spinnerColWidth}${isAltaFilter ? ` - ${changeColWidth}` : ''})`;
-  const parColMinWidth = isMobile ? '5rem' : '15.5rem';
+  const parColMinWidth = isMobile ? '5rem' : '13.5rem';
   const parColClass = isMobile
     ? 'currency-table-col-par px-1.5 py-1.5 font-mono font-semibold text-center'
     : 'currency-table-col-par px-2 py-1.5 font-mono font-semibold';
