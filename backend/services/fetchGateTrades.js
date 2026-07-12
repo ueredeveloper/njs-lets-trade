@@ -1,6 +1,7 @@
 const router = require('express').Router();
 const { gateRequest } = require('../gate/getGateClient');
 const { toGateSymbol } = require('../utils/toGateSymbol');
+const { getGatePairMeta, floorGateAmount } = require('../bot/gate/gateMarketSell');
 
 // GET /services/gate-trades?symbol=FARTCOINUSDT&limit=500
 router.get('/gate-trades', async (req, res) => {
@@ -65,11 +66,25 @@ router.post('/gate-order', async (req, res) => {
 
   try {
     const currencyPair = toGateSymbol(symbol.toUpperCase());
+
+    let safeAmount = Number(amount);
+    if (side.toLowerCase() === 'sell') {
+      const baseAsset = currencyPair.split('_')[0];
+      const accounts  = await gateRequest('GET', '/spot/accounts', { currency: baseAsset });
+      const free      = accounts?.[0] ? parseFloat(accounts[0].available) : safeAmount;
+      safeAmount       = Math.min(safeAmount, free);
+    }
+    const meta      = await getGatePairMeta(currencyPair);
+    const amountStr = floorGateAmount(safeAmount, meta.amountPrecision);
+    if (!amountStr) {
+      return res.status(400).json({ error: `quantidade inválida após arredondamento (${safeAmount})` });
+    }
+
     const params = {
       currency_pair: currencyPair,
       side:          side.toLowerCase(),
       type:          type.toLowerCase(),
-      amount:        String(amount),
+      amount:        amountStr,
     };
     if (type.toLowerCase() === 'limit') params.price = String(price);
 

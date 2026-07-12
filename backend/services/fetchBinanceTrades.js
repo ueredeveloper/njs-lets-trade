@@ -29,6 +29,17 @@ router.get('/binance-account', async (req, res) => {
   }
 });
 
+// Arredonda para baixo respeitando o stepSize do filtro LOT_SIZE da Binance
+// (quantity precisa ser múltiplo exato do stepSize, senão a ordem é rejeitada).
+async function roundToLotSize(client, symbol, qty) {
+  const info      = await client.exchangeInfo({ symbol });
+  const lotFilter = info.symbols?.[0]?.filters?.find(f => f.filterType === 'LOT_SIZE');
+  const stepSize  = lotFilter ? parseFloat(lotFilter.stepSize) : 0;
+  if (!stepSize) return String(qty);
+  const decimals = stepSize < 1 ? (String(stepSize).split('.')[1]?.length ?? 0) : 0;
+  return (Math.floor(qty / stepSize) * stepSize).toFixed(decimals);
+}
+
 // POST /services/binance-order
 // Body: { symbol, side: 'BUY'|'SELL', type: 'MARKET'|'LIMIT', quantity, price? }
 router.post('/binance-order', async (req, res) => {
@@ -44,12 +55,28 @@ router.post('/binance-order', async (req, res) => {
     return res.status(400).json({ error: 'price obrigatório para ordem LIMIT' });
 
   try {
-    const client = await getClient();
+    const client       = await getClient();
+    const symbolUpper  = symbol.toUpperCase();
+    const sideUpper    = side.toUpperCase();
+
+    let safeQuantity = Number(quantity);
+    if (sideUpper === 'SELL') {
+      const baseAsset = symbolUpper.replace(/USDT$|BTC$|ETH$|BNB$|BUSD$/, '');
+      const account   = await client.accountInfo();
+      const balance    = account.balances?.find(b => b.asset === baseAsset);
+      const free       = balance ? parseFloat(balance.free) : safeQuantity;
+      safeQuantity      = Math.min(safeQuantity, free);
+    }
+    const roundedQuantity = await roundToLotSize(client, symbolUpper, safeQuantity);
+    if (!Number.isFinite(parseFloat(roundedQuantity)) || parseFloat(roundedQuantity) <= 0) {
+      return res.status(400).json({ error: `quantidade inválida após arredondamento (${roundedQuantity})` });
+    }
+
     const params = {
-      symbol:   symbol.toUpperCase(),
-      side:     side.toUpperCase(),
+      symbol:   symbolUpper,
+      side:     sideUpper,
       type:     type.toUpperCase(),
-      quantity: String(quantity),
+      quantity: roundedQuantity,
     };
     if (type.toUpperCase() === 'LIMIT') {
       params.price       = String(price);
