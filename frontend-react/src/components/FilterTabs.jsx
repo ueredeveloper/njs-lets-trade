@@ -200,6 +200,15 @@ function getFilterDescription(name, t) {
     return t('filter.ichi', line1, comp, line2, interval);
   }
 
+  if (type === 'bbpos') {
+    const period = parts[2];
+    const stdDev = parts[3];
+    const posLabel = parts[4] === 'top' ? t('bb.position.top') : t('bb.position.bottom');
+    let extra = '';
+    if (parts[5] === 'prox' && parts[6] != null) extra = `≤${parts[6]}%`;
+    return t('filter.bb_position', posLabel, period, stdDev, interval, extra);
+  }
+
   if (type === 'm' || type === 'ma') {
     if (parts[3] === 'pct') {
       const period = parts[2];

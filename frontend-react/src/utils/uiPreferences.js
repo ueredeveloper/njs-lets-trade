@@ -10,6 +10,16 @@ export const BAND_PCT_OPTIONS = [2, 3, 4, 5];
 
 export const MAX_OVERLAY_SLOTS = 8;
 
+export const CURRENCY_PANEL_WIDTH_DEFAULT = 512; // px — equivale a w-[32rem]
+export const CURRENCY_PANEL_WIDTH_MIN = 320;
+export const CURRENCY_PANEL_WIDTH_MAX = 800;
+
+export function normalizeCurrencyPanelWidth(raw) {
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return CURRENCY_PANEL_WIDTH_DEFAULT;
+  return Math.min(CURRENCY_PANEL_WIDTH_MAX, Math.max(CURRENCY_PANEL_WIDTH_MIN, n));
+}
+
 const VALID_OVERLAY_PERIODS = ['9', '21', '50', '200'];
 
 /** IDs válidos de indicadores do gráfico. */
@@ -37,6 +47,7 @@ export const DEFAULT_MA_BANDS = {
   pct: 4,
   showAbove: true,
   showBelow: true,
+  showMiddle: false,
   period: '50',
   interval: '1h',
 };
@@ -78,6 +89,7 @@ export function normalizeMaBandsDefaults(raw) {
     pct: BAND_PCT_OPTIONS.includes(pct) ? pct : d.pct,
     showAbove: typeof raw?.showAbove === 'boolean' ? raw.showAbove : d.showAbove,
     showBelow: typeof raw?.showBelow === 'boolean' ? raw.showBelow : d.showBelow,
+    showMiddle: typeof raw?.showMiddle === 'boolean' ? raw.showMiddle : d.showMiddle,
     period: VALID_OVERLAY_PERIODS.includes(String(raw?.period)) ? String(raw.period) : d.period,
     interval: CHART_INTERVAL_OPTIONS.includes(raw?.interval) ? raw.interval : d.interval,
   };
@@ -111,6 +123,7 @@ export const DEFAULT_UI_PREFS = {
   maBandsDefaults: normalizeMaBandsDefaults(DEFAULT_MA_BANDS),
   bollingerBandsDefaults: normalizeBollingerBandsDefaults(DEFAULT_BOLLINGER_BANDS),
   activeIndicators: [...DEFAULT_ACTIVE_INDICATORS],
+  currencyPanelWidth: CURRENCY_PANEL_WIDTH_DEFAULT,
 };
 
 function cloneDefaults() {
@@ -121,6 +134,7 @@ function cloneDefaults() {
     maBandsDefaults: normalizeMaBandsDefaults(DEFAULT_MA_BANDS),
     bollingerBandsDefaults: normalizeBollingerBandsDefaults(DEFAULT_BOLLINGER_BANDS),
     activeIndicators: [...DEFAULT_ACTIVE_INDICATORS],
+    currencyPanelWidth: CURRENCY_PANEL_WIDTH_DEFAULT,
   };
 }
 
@@ -155,6 +169,9 @@ export function loadUiPreferences() {
       if (!result.activeIndicators.includes('stopLoss')) {
         result.activeIndicators = [...result.activeIndicators, 'stopLoss'];
       }
+    }
+    if (parsed.currencyPanelWidth !== undefined) {
+      result.currencyPanelWidth = normalizeCurrencyPanelWidth(parsed.currencyPanelWidth);
     }
     return result;
   } catch {

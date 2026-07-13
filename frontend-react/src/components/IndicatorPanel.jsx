@@ -224,8 +224,8 @@ function IndicatorRow({ value, onChange }) {
 
   return (
     <div className="flex w-full flex-col bg-p2/50 border border-p3/20 rounded p-2 gap-2">
-      {/* Seletores — linha única no mobile */}
-      <div className="flex w-full items-center gap-1 sm:gap-2 flex-nowrap sm:flex-wrap">
+      {/* Seletores — sempre em linha única, com scroll horizontal se faltar espaço */}
+      <div className="flex w-full items-center gap-1 sm:gap-2 flex-nowrap overflow-x-auto">
         {/* Tipo */}
         <div className="flex items-center gap-1 min-w-0 shrink-0">
           <select
@@ -947,7 +947,7 @@ export default function IndicatorPanel({ open, onToggle }) {
 
   return (
     <div className="flex flex-col gap-2 px-4 py-3 h-full">
-      <div className="flex-1 min-h-0 overflow-y-auto grid grid-cols-1 md:grid-cols-2 gap-2 content-start">
+      <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-2">
         {indicators.map((ind, i) => (
           <IndicatorRow key={i} value={ind} onChange={(v) => updateIndicator(i, v)} />
         ))}

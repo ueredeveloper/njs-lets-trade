@@ -12,7 +12,7 @@ import { CurrencyProvider, useCurrency } from './contexts/CurrencyContext';
 import { LanguageProvider } from './contexts/LanguageContext';
 import { useI18n } from './i18n';
 import { fetchAllCurrencies, fetch24hVolume, fetchStablecoins, fetchCandlesticksAndCloud, getFavorites } from './services/api';
-import { loadUiPreferences, firstVisiblePanel } from './utils/uiPreferences';
+import { loadUiPreferences, firstVisiblePanel, CURRENCY_PANEL_WIDTH_MIN, CURRENCY_PANEL_WIDTH_MAX } from './utils/uiPreferences';
 import { useIsMobile } from './hooks/useIsMobile';
 import FilterTabs from './components/FilterTabs';
 import CurrencyTable from './components/CurrencyTable';
@@ -27,7 +27,7 @@ const MOBILE_SHEET_FILTERS_HEIGHT = '30%';
 
 function AppContent() {
   const { setCurrencies, setFilters, setSelectedChart, setGateFavorites, setBinanceFavorites,
-    setChartInterval, uiPrefs, clearFavoriteView } = useCurrency();
+    setChartInterval, uiPrefs, clearFavoriteView, setCurrencyPanelWidth } = useCurrency();
   const { t } = useI18n();
   const isMobile = useIsMobile();
 
@@ -69,6 +69,40 @@ function AppContent() {
   const [dragY, setDragY] = useState(0);
   const dragStartY = useRef(null);
   const [openPanels, setOpenPanels] = useState(() => []);
+
+  // Redimensionamento da coluna de moedas/filtros (desktop) por arraste
+  const [panelWidthDrag, setPanelWidthDrag] = useState(null);
+  const currencyPanelWidth = panelWidthDrag ?? uiPrefs.currencyPanelWidth;
+
+  function handlePanelResizeStart(e) {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = uiPrefs.currencyPanelWidth;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    function onMove(ev) {
+      const delta = startX - ev.clientX; // arrastar para a esquerda alarga o painel
+      const next = Math.min(CURRENCY_PANEL_WIDTH_MAX, Math.max(CURRENCY_PANEL_WIDTH_MIN, startWidth + delta));
+      setPanelWidthDrag(next);
+    }
+    function onUp() {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      // setTimeout evita colidir com um render de AppContent ainda em andamento
+      // vindo da última rajada de mousemove (setPanelWidthDrag síncrono).
+      setTimeout(() => {
+        setPanelWidthDrag((w) => {
+          if (w !== null) setCurrencyPanelWidth(w);
+          return null;
+        });
+      }, 0);
+    }
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }
 
   const panelDefs = useMemo(() => ([
     { id: 'indicators', label: t('app.analyze') },
@@ -393,8 +427,20 @@ function AppContent() {
           )}
         </div>
 
+        {/* Handle de redimensionamento da coluna direita (desktop) */}
+        <div
+          id="currency-panel-resize-handle"
+          className="hidden md:flex shrink-0 w-1.5 cursor-col-resize items-stretch bg-p2 hover:bg-p4/60 active:bg-p4 transition-colors touch-none"
+          onMouseDown={handlePanelResizeStart}
+          title="Arrastar para redimensionar"
+        />
+
         {/* 4+5 — Coluna direita desktop */}
-        <div id="currency-panel-desktop" className="currency-panel currency-panel--desktop hidden md:flex flex-col w-[32rem] shrink-0 min-h-0 bg-p1">
+        <div
+          id="currency-panel-desktop"
+          className="currency-panel currency-panel--desktop hidden md:flex flex-col shrink-0 min-h-0 bg-p1"
+          style={{ width: `${currencyPanelWidth}px` }}
+        >
           {show(BOOT_STAGE.FILTER_TABS) && (
             <div
               id="currency-panel-filters"

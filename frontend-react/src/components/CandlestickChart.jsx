@@ -38,6 +38,8 @@ const PANEL_MAX_WIDTH = 320;
 const PANEL_GAP = 2;
 const PANEL_TILE_PAD = 2;
 const COLLAPSE_TAB_W = 16;
+/** Altura mínima (px) de uma "row unit" do painel — abaixo disso, o painel rola em vez de espremer os tiles. */
+const MIN_ROW_UNIT_PX = 20;
 const C_UP   = '#26a69a';
 const C_DOWN = '#ef5350';
 
@@ -217,7 +219,7 @@ function buildOverlaySeries(overlayConfigs, candlesticks, alignSeries) {
     const full = alignPointsToCandles(candlesticks, cfg.points);
     const maData = alignSeries(full);
     const bands = cfg.bands ?? {};
-    const series = [{
+    const series = cfg.showMiddle === false ? [] : [{
       name: cfg.label,
       type: 'line',
       data: maData,
@@ -396,6 +398,7 @@ const BAND_CONTROL_SPANS = {
   adaptive: { col: 2, row: 1 },
   above:    { col: 1, row: 2 },
   below:    { col: 2, row: 1 },
+  mid:      { col: 1, row: 1 },
   loading:  { col: 1, row: 1 },
 };
 
@@ -409,6 +412,7 @@ function buildBandControlTiles(meta, overlayMaLoading) {
   tiles.push({ key: 'title', kind: 'title' });
   if (showBandsPct && !maBands.adaptive) tiles.push({ key: 'pct', kind: 'pct' });
   if (showBandsPct && maBands.adaptive) tiles.push({ key: 'adaptive', kind: 'adaptive' });
+  if (showBandsPct) tiles.push({ key: 'mid', kind: 'mid' });
   if (showBandsAbove) tiles.push({ key: 'above', kind: 'above' });
   if (showBandsBelow) tiles.push({ key: 'below', kind: 'below' });
   if (overlayMaLoading) tiles.push({ key: 'loading', kind: 'loading' });
@@ -871,8 +875,12 @@ function computeMasonryLayout(tileDefs, width, height, gap, overlayMaLoading = f
   const gapTotal      = sectionCount > 1 ? (sectionCount - 1) * gap : 0;
   const availableH    = height - gapTotal;
 
-  const indicatorHeight = hasIndSection && totalUnits > 0
+  const indicatorHeightRaw = hasIndSection && totalUnits > 0
     ? (availableH * totalIndRowUnits) / totalUnits
+    : 0;
+  // Piso mínimo: evita que o painel force tiles a alturas ilegíveis quando há muitos manipuladores.
+  const indicatorHeight = hasIndSection
+    ? Math.max(indicatorHeightRaw, totalIndRowUnits * MIN_ROW_UNIT_PX)
     : 0;
 
   const blockTotalHeight = Math.max(0, availableH - indicatorHeight);
@@ -890,13 +898,14 @@ function computeMasonryLayout(tileDefs, width, height, gap, overlayMaLoading = f
 
   const blockPlacements = blocks.map((tile) => {
     const blockW = tilePixelDims(tile.colSpan, 1, 1, width, 0, gap, PANEL_GRID_COLS).w;
+    const rawH = blockRowUnits > 0
+      ? (blockTotalHeight * tile.rowSpan) / blockRowUnits
+      : blockTotalHeight;
     return {
       ...tile,
       dims: {
         w: blockW,
-        h: blockRowUnits > 0
-          ? (blockTotalHeight * tile.rowSpan) / blockRowUnits
-          : blockTotalHeight,
+        h: Math.max(rawH, tile.rowSpan * MIN_ROW_UNIT_PX),
       },
     };
   });
@@ -1142,6 +1151,18 @@ function renderBandControl(tile, dims, meta, t, setMaBands) {
           </span>
         </PanelTip>
       );
+    case 'mid':
+      return (
+        <PanelTip text={t('chart.tip.band_mid', maBands.period, maBands.interval)}>
+          <button
+            type="button"
+            onClick={() => setMaBands((b) => ({ ...b, showMiddle: !b.showMiddle }))}
+            style={panelBtn(maBands.showMiddle === true, '#94a3b8', true, dims)}
+          >
+            EMA{maBands.period}
+          </button>
+        </PanelTip>
+      );
     case 'above':
       return (
         <PanelTip text={t('chart.tip.band_above', maBands.stretchPct ?? maBands.pct)}>
@@ -1374,7 +1395,8 @@ function ChartIndicatorPanel({
             height: '100%',
             width: contentWidth,
             minWidth: contentWidth,
-            overflow: isMobile ? 'auto' : 'hidden',
+            overflowY: 'auto',
+            overflowX: 'hidden',
             WebkitOverflowScrolling: 'touch',
             marginLeft: PANEL_GAP,
             display: 'flex',
@@ -1401,7 +1423,7 @@ function ChartIndicatorPanel({
           {layout.indicatorPlacements.length > 0 && (
             <div style={{
               flex: layout.blockPlacements.length > 0 ? layout.indicatorRowUnits : 1,
-              minHeight: 0,
+              minHeight: layout.indicatorRowUnits * MIN_ROW_UNIT_PX,
               display: 'grid',
               gridTemplateColumns: `repeat(${layout.cols}, 1fr)`,
               gridTemplateRows: `repeat(${layout.indicatorRowUnits}, 1fr)`,
@@ -1433,7 +1455,7 @@ function ChartIndicatorPanel({
               style={{
                 ...panelBandsShell,
                 flex: tile.rowSpan,
-                minHeight: 0,
+                minHeight: tile.rowSpan * MIN_ROW_UNIT_PX,
                 width: `${(tile.colSpan / PANEL_GRID_COLS) * 100}%`,
               }}
             >
@@ -2921,6 +2943,7 @@ export default function CandlestickChart() {
         label: `EMA${maBands.period}@${maBands.interval}`,
         color: '#94a3b8',
         points: overlayMaCache[bandsKey] ?? [],
+        showMiddle: maBands.showMiddle === true,
         bands: {
           showAbove: maBands.showAbove,
           showBelow: maBands.showBelow,
@@ -2935,6 +2958,7 @@ export default function CandlestickChart() {
         label: `EMA${adaptiveBandOverlay.period}@${adaptiveBandOverlay.interval}`,
         color: '#94a3b8',
         points: adaptiveBandOverlay.points,
+        showMiddle: maBands.showMiddle === true,
         bands: {
           showAbove: maBands.showAbove && adaptiveBandOverlay.stretchPct > 0,
           showBelow: maBands.showBelow && adaptiveBandOverlay.dipPct > 0,

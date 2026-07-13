@@ -3,7 +3,8 @@ import { reloadCandles } from '../services/api';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useI18n } from '../i18n';
 import { useCurrency } from '../contexts/CurrencyContext';
-import { BAND_PCT_OPTIONS, PERIOD_DEFAULT_COLORS, MAX_OVERLAY_SLOTS } from '../utils/uiPreferences';
+import { BAND_PCT_OPTIONS, PERIOD_DEFAULT_COLORS, MAX_OVERLAY_SLOTS,
+  CURRENCY_PANEL_WIDTH_MIN, CURRENCY_PANEL_WIDTH_MAX, CURRENCY_PANEL_WIDTH_DEFAULT } from '../utils/uiPreferences';
 
 const OVERLAY_SETTING_INTERVALS = ['15m', '30m', '1h', '4h', '1d'];
 const OVERLAY_SETTING_PERIODS   = ['9', '21', '50', '200'];
@@ -36,7 +37,7 @@ export default function SettingsSidebar({ open, onClose }) {
   const { selectedChart, assetDisplay, setAssetDisplayCategory, assetCategoryKeys,
     chartPanelButtons, setChartPanelButton, chartPanelButtonKeys,
     uiPrefs, setDefaultChartInterval, setPanelVisible, setMaBandsDefaults,
-    setOverlaySlotsPreference,
+    setOverlaySlotsPreference, setCurrencyPanelWidth,
     chartIntervalOptions, panelKeys } = useCurrency();
 
   function isOverlayActive(period, interval) {
@@ -169,6 +170,31 @@ export default function SettingsSidebar({ open, onClose }) {
                 </label>
               ))}
             </div>
+          </div>
+
+          {/* Largura da coluna de moedas/filtros */}
+          <div>
+            <p className={section}>{t('settings.currency_panel_width')}</p>
+            <p className="text-[10px] text-p5/50 mb-3 leading-relaxed">{t('settings.currency_panel_width_hint')}</p>
+            <div className="flex items-center gap-2">
+              <input
+                type="range"
+                min={CURRENCY_PANEL_WIDTH_MIN}
+                max={CURRENCY_PANEL_WIDTH_MAX}
+                step={8}
+                value={uiPrefs.currencyPanelWidth}
+                onChange={(e) => setCurrencyPanelWidth(Number(e.target.value))}
+                className="flex-1 accent-p4"
+              />
+              <span className="text-p5 text-xs font-mono w-12 text-right shrink-0">{uiPrefs.currencyPanelWidth}px</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setCurrencyPanelWidth(CURRENCY_PANEL_WIDTH_DEFAULT)}
+              className="mt-2 text-[10px] text-p5/60 hover:text-white underline transition-colors"
+            >
+              {t('settings.currency_panel_width_reset')}
+            </button>
           </div>
 
           {/* Botões do gráfico */}

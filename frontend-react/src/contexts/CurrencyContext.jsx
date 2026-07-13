@@ -30,6 +30,7 @@ import {
   normalizeMaBandsDefaults,
   normalizeBollingerBandsDefaults,
   normalizeActiveIndicators,
+  normalizeCurrencyPanelWidth,
 } from '../utils/uiPreferences';
 
 const CurrencyContext = createContext(null);
@@ -527,6 +528,14 @@ export function CurrencyProvider({ children }) {
     });
   }, []);
 
+  const setCurrencyPanelWidth = useCallback((width) => {
+    setUiPrefsState((prev) => {
+      const next = { ...prev, currencyPanelWidth: normalizeCurrencyPanelWidth(width) };
+      saveUiPreferences(next);
+      return next;
+    });
+  }, []);
+
   const isVisibleSymbol = useCallback(
     (symbol, options) => isSymbolVisible(symbol, assetDisplay, options),
     [assetDisplay],
@@ -762,6 +771,7 @@ export function CurrencyProvider({ children }) {
         setMaBandsDefaults,
         setBollingerBandsDefaults,
         setActiveIndicatorsPreference,
+        setCurrencyPanelWidth,
         chartIntervalOptions: CHART_INTERVAL_OPTIONS,
         panelKeys: PANEL_KEYS,
         isVisibleSymbol,

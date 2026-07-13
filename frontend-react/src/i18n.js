@@ -69,6 +69,9 @@ const T = {
     'settings.visible_panels_hint':      'Marque para exibir a aba abaixo do gráfico.',
     'settings.panel.indicators':         'Analisar Indicadores',
     'settings.panel.stats':              'Estatísticas',
+    'settings.currency_panel_width':      'Largura da coluna de moedas',
+    'settings.currency_panel_width_hint': 'Arraste a borda esquerda da coluna de filtros/moedas para redimensionar, ou ajuste aqui. Salvo automaticamente.',
+    'settings.currency_panel_width_reset': 'Restaurar padrão',
 
     // Indicadores — tipos
     'ind.placeholder':       'Indicador',
@@ -313,6 +316,7 @@ const T = {
     'chart.tip.bands_adaptive': 'Piso/teto calculados do histórico desta moeda (filtro MA adaptativo). ↑ e ↓ podem ter % diferentes.',
     'chart.tip.band_above':  (p) => `Mostra linha pontilhada EMA das bandas × (1+${p}%). ${p}% acima dela.`,
     'chart.tip.band_below':  (p) => `Mostra linha pontilhada EMA das bandas × (1−${p}%). ${p}% abaixo dela.`,
+    'chart.tip.band_mid':    (period, interval) => `Liga/desliga a linha cinza da EMA${period}@${interval} usada como base das bandas.`,
     'chart.tip.bb_period':   'Período da média central da Bollinger Bands (10, 20 ou 30 candles).',
     'chart.tip.bb_stddev':   'Desvio padrão das bandas superior/inferior (±1σ, ±2σ ou ±3σ).',
     'chart.tip.bb_interval': 'Intervalo de candles usado para calcular a Bollinger Bands (ex.: 1h, 4h) — independente do intervalo do gráfico.',
@@ -334,6 +338,7 @@ const T = {
     'filter.fav_new_gate':        '10 listagens mais recentes na Gate.io',
     'filter.rsi':            (c1, v1, c2, v2, ivl) => `RSI ${c1} de ${v1} e ${c2} de ${v2} (${ivl})`,
     'filter.ichi':           (l1, cmp, l2, ivl) => `Ichimoku: ${l1} ${cmp} ${l2} (${ivl})`,
+    'filter.bb_position':    (pos, period, stdDev, ivl, extra) => `BB(${period},${stdDev}) ${pos} (${ivl})${extra ? ` ${extra}` : ''}`,
     'filter.ma':             (p, cmp, cdl, ivl) => `MA${p} ${cmp} ${cdl} (${ivl})`,
     'filter.ma_pct':         (p, pct, ivl) => `MA${p}: ≥${pct}% do histórico acima da MA (${ivl})`,
     'filter.macross':        (p1, iv1, p2, iv2, mode, extra, sigIv) => `EMA${p1}(${iv1}) × EMA${p2}(${iv2}): ${mode} ${extra} [${sigIv}]`,
@@ -470,6 +475,9 @@ const T = {
     'settings.visible_panels_hint':      'Check to show the tab below the chart.',
     'settings.panel.indicators':         'Analyze Indicators',
     'settings.panel.stats':              'Statistics',
+    'settings.currency_panel_width':      'Currency column width',
+    'settings.currency_panel_width_hint': 'Drag the left edge of the filters/currency column to resize, or adjust here. Saved automatically.',
+    'settings.currency_panel_width_reset': 'Reset to default',
 
     // Indicator types
     'ind.placeholder':       'Indicator',
@@ -714,6 +722,7 @@ const T = {
     'chart.tip.bands_adaptive': 'Floor/ceiling from this coin’s history (adaptive MA filter). ↑ and ↓ can use different %.',
     'chart.tip.band_above':  (p) => `Dotted line at the bands' EMA × (1+${p}%). ${p}% above it.`,
     'chart.tip.band_below':  (p) => `Dotted line at the bands' EMA × (1−${p}%). ${p}% below it.`,
+    'chart.tip.band_mid':    (period, interval) => `Toggles the gray EMA${period}@${interval} line used as the bands' basis.`,
     'chart.tip.bb_period':   'Period of the Bollinger Bands middle average (10, 20 or 30 candles).',
     'chart.tip.bb_stddev':   'Standard deviation of the upper/lower bands (±1σ, ±2σ or ±3σ).',
     'chart.tip.bb_interval': 'Candle interval used to compute the Bollinger Bands (e.g. 1h, 4h) — independent from the chart interval.',
@@ -735,6 +744,7 @@ const T = {
     'filter.fav_new_gate':        '10 most recent Gate.io listings',
     'filter.rsi':            (c1, v1, c2, v2, ivl) => `RSI ${c1} ${v1} and ${c2} ${v2} (${ivl})`,
     'filter.ichi':           (l1, cmp, l2, ivl) => `Ichimoku: ${l1} ${cmp} ${l2} (${ivl})`,
+    'filter.bb_position':    (pos, period, stdDev, ivl, extra) => `BB(${period},${stdDev}) ${pos} (${ivl})${extra ? ` ${extra}` : ''}`,
     'filter.ma':             (p, cmp, cdl, ivl) => `MA${p} ${cmp} ${cdl} (${ivl})`,
     'filter.ma_pct':         (p, pct, ivl) => `MA${p}: ≥${pct}% of history above MA (${ivl})`,
     'filter.macross':        (p1, iv1, p2, iv2, mode, extra, sigIv) => `EMA${p1}(${iv1}) × EMA${p2}(${iv2}): ${mode} ${extra} [${sigIv}]`,

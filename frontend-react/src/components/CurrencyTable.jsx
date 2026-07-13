@@ -152,11 +152,11 @@ function FavButton({ active, color, label, text, symbol, kind, onClick, tipKey }
         }
       }}
       title={title}
-      className="flex items-center justify-center min-w-[26px] min-h-[26px] w-[26px] h-[26px] rounded text-[10px] font-bold transition-colors touch-manipulation active:scale-95 shrink-0"
+      className="flex items-center justify-center min-w-[21px] min-h-[21px] w-[21px] h-[21px] rounded text-[9px] font-bold transition-colors touch-manipulation active:scale-95 shrink-0"
       style={{
         background: active ? color : 'transparent',
         color: active ? '#fff' : color,
-        border: `1.5px solid ${color}`,
+        border: `1.25px solid ${color}`,
         opacity: active ? 1 : 0.55,
       }}
     >
@@ -302,6 +302,9 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   const [gateAll, setGateAll]             = useState(null); // todas as moedas Gate (para favoritos)
   const gateCacheRef                      = useRef(null);
   const tableScrollRef                    = useRef(null);
+  // Largura real do container — colgroup usa px calculados em JS porque `<col>` em table-fixed
+  // não resolve CSS max()/min() de forma confiável (testado: cai para distribuição 50/50).
+  const [tableContainerWidth, setTableContainerWidth] = useState(0);
   const [macrossLive, setMacrossLive]     = useState(false);
   const [macrossRefreshing, setMacrossRefreshing] = useState(false);
   const [macrossTick, setMacrossTick]     = useState(0);
@@ -506,6 +509,18 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     containerRef: tableScrollRef,
     overscan: 10,
   });
+
+  // Mede a largura real do painel (muda com o drag de redimensionar) p/ calcular colunas em px
+  useEffect(() => {
+    const el = tableScrollRef.current;
+    if (!el) return undefined;
+    const ro = new ResizeObserver((entries) => {
+      const width = entries[0]?.contentRect?.width;
+      if (width) setTableContainerWidth(width);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   // Atualização em tempo real de filtros macross (cruzou há N min / prestes a cruzar)
   useEffect(() => {
@@ -817,18 +832,37 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
 
   const showFavSortInHeader = isMacrossFavView || isTradesFavView;
   const isMobile = useIsMobile();
-  const favColWidth = isMobile
-    ? (showFavSortInHeader ? '6rem' : '5rem')
-    : (showFavSortInHeader ? '9rem' : '5rem');
-  const priceColWidth = isMobile ? '3rem' : '3.25rem';
-  const changeColWidth = isMobile ? '2.75rem' : '3rem';
-  const volColWidth = isMobile ? '2.25rem' : '2.5rem';
-  const spinnerColWidth = isMobile ? '0.75rem' : '1rem';
-  const parColWidth = `calc(100% - ${favColWidth} - ${priceColWidth} - ${volColWidth} - ${spinnerColWidth}${isAltaFilter ? ` - ${changeColWidth}` : ''})`;
-  const parColMinWidth = isMobile ? '5rem' : '13.5rem';
+  const REM_PX = 16;
+  // Coluna de botões: acompanha o drag (%) mas com piso em px — abaixo dele os botões (G/B/MC, 21px
+  // cada) se sobrepõem ou somem. Calculado em JS porque `<col>` em table-fixed não resolve CSS
+  // max()/min() de forma confiável (testado: navegador ignora e cai para distribuição 50/50).
+  const favColPctNum = isMobile
+    ? (showFavSortInHeader ? 0.28 : 0.20)
+    : (showFavSortInHeader ? 0.26 : 0.15);
+  // Piso cobre 3 botões de 21px + gaps + padding da célula (~71px) com folga.
+  const favColMinPx = isMobile
+    ? (showFavSortInHeader ? 7 * REM_PX : 4.75 * REM_PX)
+    : (showFavSortInHeader ? 10 * REM_PX : 4.75 * REM_PX);
+  const priceColPx = (isMobile ? 3 : 3.25) * REM_PX;
+  const changeColPx = (isMobile ? 2.75 : 3) * REM_PX;
+  const volColPx = (isMobile ? 2.25 : 2.5) * REM_PX;
+  const spinnerColPx = (isMobile ? 0.75 : 1) * REM_PX;
+  const fixedColsPx = priceColPx + volColPx + spinnerColPx + (isAltaFilter ? changeColPx : 0);
+  const favColWidthPx = tableContainerWidth > 0
+    ? Math.max(tableContainerWidth * favColPctNum, favColMinPx)
+    : favColMinPx;
+  const parColWidthPx = tableContainerWidth > 0
+    ? Math.max(tableContainerWidth - favColWidthPx - fixedColsPx, 0)
+    : 0;
+  const favColWidth = `${favColWidthPx}px`;
+  const priceColWidth = `${priceColPx}px`;
+  const changeColWidth = `${changeColPx}px`;
+  const volColWidth = `${volColPx}px`;
+  const spinnerColWidth = `${spinnerColPx}px`;
+  const parColWidth = `${parColWidthPx}px`;
   const parColClass = isMobile
-    ? 'currency-table-col-par px-1.5 py-1.5 font-mono font-semibold text-center'
-    : 'currency-table-col-par px-2 py-1.5 font-mono font-semibold';
+    ? 'currency-table-col-par px-1.5 py-1.5 font-mono font-semibold text-center overflow-hidden'
+    : 'currency-table-col-par px-2 py-1.5 font-mono font-semibold overflow-hidden';
   const parContentClass = isMobile
     ? 'currency-table-par-content flex flex-col gap-0.5 items-center text-center'
     : 'currency-table-par-content flex flex-col gap-0.5';
@@ -955,7 +989,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
         <table className="currency-table-grid w-full text-xs table-fixed">
           <colgroup>
             <col className="currency-table-col-fav" style={{ width: favColWidth }} />
-            <col className="currency-table-col-par" style={{ width: parColWidth, minWidth: parColMinWidth }} />
+            <col className="currency-table-col-par" style={{ width: parColWidth }} />
             <col className="currency-table-col-price" style={{ width: priceColWidth }} />
             {isAltaFilter && <col className="currency-table-col-change" style={{ width: changeColWidth }} />}
             <col className="currency-table-col-vol" style={{ width: volColWidth }} />
@@ -964,8 +998,8 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
           <thead className="sticky top-0 z-30 bg-p1">
             <tr className="lt-table-head">
               <th
-                className="currency-table-col-fav text-left px-1 py-1 align-middle bg-p1"
-                style={{ width: favColWidth, minWidth: favColWidth }}
+                className="currency-table-col-fav text-left px-1 py-1 align-middle bg-p1 overflow-hidden"
+                style={{ width: favColWidth }}
                 title={
                   isMacrossFavView ? t('macross.sort.label')
                     : isTradesFavView ? t('trades.sort.label')
@@ -1036,8 +1070,8 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                 ) : null}
               </th>
               <th
-                className="currency-table-col-par text-center px-2 py-1.5 text-p5 opacity-50 font-normal uppercase tracking-wider"
-                style={{ width: parColWidth, minWidth: parColMinWidth }}
+                className="currency-table-col-par text-center px-2 py-1.5 text-p5 opacity-50 font-normal uppercase tracking-wider overflow-hidden"
+                style={{ width: parColWidth }}
               >
                 Par
               </th>
@@ -1124,8 +1158,8 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
               return (
                 <tr key={key} className="lt-table-row border-b border-p2/30 bg-amber-500/10 text-p5">
                   <td
-                    className="pl-1 pr-0"
-                    style={{ width: favColWidth, minWidth: favColWidth }}
+                    className="pl-1 pr-0 overflow-hidden"
+                    style={{ width: favColWidth }}
                     onClick={(e) => e.stopPropagation()}
                   >
                     <button
@@ -1139,7 +1173,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                   </td>
                   <td
                     className={parColClass}
-                    style={{ width: parColWidth, minWidth: parColMinWidth }}
+                    style={{ width: parColWidth }}
                   >
                     <div className={parContentClass}>
                       <span>
@@ -1198,8 +1232,8 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                   }`}
                 >
                   <td
-                    className="pl-1 pr-0"
-                    style={{ width: favColWidth, minWidth: favColWidth }}
+                    className="pl-1 pr-0 overflow-hidden"
+                    style={{ width: favColWidth }}
                     onClick={(e) => e.stopPropagation()}
                   >
                     <div className="flex flex-nowrap items-center gap-0.5">
@@ -1214,7 +1248,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
 
                   <td
                     className={parColClass}
-                    style={{ width: parColWidth, minWidth: parColMinWidth }}
+                    style={{ width: parColWidth }}
                   >
                     <div className={parContentClass}>
                       {isMT && !isTradesFavView && !isActiveFavView ? (() => {
@@ -1390,8 +1424,8 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                       }`}
                     >
                       <td
-                    className="pl-1 pr-0"
-                    style={{ width: favColWidth, minWidth: favColWidth }}
+                    className="pl-1 pr-0 overflow-hidden"
+                    style={{ width: favColWidth }}
                     onClick={(e) => e.stopPropagation()}
                   >
                         <div className="flex flex-nowrap items-center gap-0.5">
@@ -1405,7 +1439,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
 
                       <td
                         className={parColClass}
-                        style={{ width: parColWidth, minWidth: parColMinWidth }}
+                        style={{ width: parColWidth }}
                       >
                         {base}<span className="opacity-40 font-normal text-[8px]">/{quote}</span>
                       </td>
