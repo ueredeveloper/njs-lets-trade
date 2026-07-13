@@ -65,7 +65,7 @@ const MA_CROSS_DEFAULTS = {
       period:   20,
       stdDev:   2.0,
       /** % mínimo acima da banda superior para confirmar o rompimento (0 = basta tocar). */
-      breakoutPct: 2,
+      breakoutPct: 1,
     },
     /** Vende quando o ganho desde a entrada atinge targetPct — sugerido a partir da
      *  valorização média histórica fundo→topo da Bollinger Bands (ver analyseBollingerBandRecovery). */
