@@ -572,12 +572,69 @@ function getRequiredSpecs(config) {
     }
   }
 
+  const bbf = config.entryBbFilter;
+  if (bbf?.enabled) {
+    add(bbf.interval ?? '4h', (bbf.period ?? 20) + 10);
+  }
+
+  const exBbUpper = config.exit?.bbUpper;
+  if (exBbUpper?.enabled) {
+    add(exBbUpper.interval ?? '4h', (exBbUpper.period ?? 20) + 10);
+  }
+
   const rsiConds = (config.exit?.rsi?.conditions ?? []).filter(c => c.enabled);
   for (const c of rsiConds) {
     add(c.interval, c.period + 50);
   }
 
   return [...specs.entries()].map(([interval, limit]) => ({ interval, limit }));
+}
+
+function evaluateEntryBbFilter(config, cMap, opts = {}) {
+  const bb = config.entryBbFilter;
+  if (!bb?.enabled) return { allowed: true };
+
+  const closedOnly = opts.closedOnly !== false;
+  const iv = bb.interval ?? '4h';
+  const raw = cMap[iv] ?? [];
+  const candles = closedOnly ? closedCandlesOnly(raw) : raw;
+
+  if (candles.length < bb.period) {
+    return { allowed: false, reason: 'BB_FILTER_NO_DATA', bbInterval: iv };
+  }
+
+  const closes = candles.map(c => parseFloat(c.close));
+  const results = ti.BollingerBands.calculate({ period: bb.period, values: closes, stdDev: bb.stdDev ?? 2 });
+  if (!results.length) return { allowed: false, reason: 'BB_FILTER_NO_DATA', bbInterval: iv };
+
+  const lastBb = results[results.length - 1];
+  const close  = closes[closes.length - 1];
+  const range  = lastBb.upper - lastBb.lower;
+  if (range <= 0) return { allowed: true };
+
+  const pctB   = (close - lastBb.lower) / range;
+  const maxPctB = bb.maxPctB ?? 0.4;
+
+  if (pctB > maxPctB) {
+    return {
+      allowed: false,
+      reason:  'BB_FILTER_ABOVE',
+      pctB, maxPctB,
+      lower:   lastBb.lower,
+      upper:   lastBb.upper,
+      middle:  lastBb.middle,
+      bbInterval: iv,
+    };
+  }
+
+  return {
+    allowed: true,
+    pctB, maxPctB,
+    lower:   lastBb.lower,
+    upper:   lastBb.upper,
+    middle:  lastBb.middle,
+    bbInterval: iv,
+  };
 }
 
 function evaluateEntryTrendMa(config, cMap, opts = {}) {
@@ -696,6 +753,20 @@ function evaluateCrossSignal(config, cMap, adaptiveDips = {}, opts = {}) {
     };
   }
 
+  const bbCheck = evaluateEntryBbFilter(config, cMap, opts);
+  if (!bbCheck.allowed) {
+    return {
+      allowed: false,
+      reason: bbCheck.reason,
+      ma1: cross.ma1, ma2: cross.ma2,
+      close: cross.close,
+      crossOpenTime: cross.openTime,
+      pctB: bbCheck.pctB,
+      maxPctB: bbCheck.maxPctB,
+      bbInterval: bbCheck.bbInterval,
+    };
+  }
+
   const dirLbl = entry.direction === 'cross_down' ? '↓' : '↑';
   return {
     allowed: true,
@@ -775,6 +846,18 @@ function evaluatePullbackCandle(config, cMap, adaptiveDips, adaptiveStretches, {
       trendMa1: trendCheck.trendMa1,
       trendMa2: trendCheck.trendMa2,
       trendDesc: trendCheck.trendDesc,
+    };
+  }
+
+  const bbCheck = evaluateEntryBbFilter(config, cMap);
+  if (!bbCheck.allowed) {
+    return {
+      ready: false,
+      reason: bbCheck.reason,
+      close,
+      pctB: bbCheck.pctB,
+      maxPctB: bbCheck.maxPctB,
+      bbInterval: bbCheck.bbInterval,
     };
   }
 
@@ -941,6 +1024,43 @@ function evaluateRsiExit(config, cMap) {
   };
 }
 
+/** Preço fechando na/acima da banda superior da Bollinger Bands (topo) → sinal de venda. */
+function evaluateBbUpperExit(config, cMap, opts = {}) {
+  const bb = config.exit?.bbUpper;
+  if (!bb?.enabled) return { hit: false };
+
+  const closedOnly = opts.closedOnly !== false;
+  const iv = bb.interval ?? '4h';
+  const raw = cMap[iv] ?? [];
+  const candles = closedOnly ? closedCandlesOnly(raw) : raw;
+
+  if (candles.length < bb.period) return { hit: false };
+
+  const closes = candles.map(c => parseFloat(c.close));
+  const results = ti.BollingerBands.calculate({ period: bb.period, values: closes, stdDev: bb.stdDev ?? 2 });
+  if (!results.length) return { hit: false };
+
+  const lastBb = results[results.length - 1];
+  const close  = closes[closes.length - 1];
+
+  if (close >= lastBb.upper) {
+    return { hit: true, close, upper: lastBb.upper, lower: lastBb.lower, middle: lastBb.middle, bbInterval: iv };
+  }
+  return { hit: false, close, upper: lastBb.upper, bbInterval: iv };
+}
+
+/** Vende quando o ganho desde a entrada atinge o alvo (sugerido do histórico BB fundo→topo). */
+function evaluateBbTakeProfitExit(config, entryPrice, lastClose) {
+  const tp = config.exit?.bbTakeProfit;
+  if (!tp?.enabled || !entryPrice || lastClose == null) return { hit: false };
+
+  const gainPct = ((lastClose - entryPrice) / entryPrice) * 100;
+  if (gainPct >= tp.targetPct) {
+    return { hit: true, gainPct, targetPct: tp.targetPct };
+  }
+  return { hit: false, gainPct, targetPct: tp.targetPct };
+}
+
 /**
  * Piso do stop-loss. Com trailing ativo, sobe a cada degrau de trailStepPct
  * (padrão = maxLossPct): preço +5% → piso sobe para (novo degrau − maxLossPct).
@@ -963,11 +1083,20 @@ function computeStopLossFloor(entryPrice, peakPrice, stopLoss = {}) {
   return anchorPrice * (1 - maxLossPct / 100);
 }
 
+const EXIT_REASON_BY_KIND = {
+  ma:           'MA_CROSS_EXIT',
+  rsi:          'RSI_EXIT',
+  bbUpper:      'BB_UPPER_EXIT',
+  bbTakeProfit: 'BB_TAKE_PROFIT_EXIT',
+};
+
 function evaluateExit(config, cMap, entryPrice, opts = {}) {
   const closedOnly = opts.closedOnly !== false;
   const c1 = cMap[config.exit?.maCross?.ma1?.interval] ?? [];
   const c2 = cMap[config.exit?.maCross?.ma2?.interval] ?? [];
-  const lastClose = c1.at(-1)?.close ?? c2.at(-1)?.close;
+  const lastClose = c1.at(-1)?.close ?? c2.at(-1)?.close
+    ?? cMap[config.exit?.bbUpper?.interval]?.at(-1)?.close
+    ?? cMap[config.entry?.ma1?.interval]?.at(-1)?.close;
 
   const signals = [];
 
@@ -997,16 +1126,37 @@ function evaluateExit(config, cMap, entryPrice, opts = {}) {
     signals.push({ kind: 'rsi', exitRsi: rsiExit.exitRsi, results: rsiExit.results });
   }
 
+  const bbUpperExit = evaluateBbUpperExit(config, cMap, { closedOnly });
+  if (bbUpperExit.hit) {
+    const bbu = config.exit.bbUpper;
+    signals.push({
+      kind: 'bbUpper',
+      close: bbUpperExit.close,
+      exitDesc: `BB(${bbu.period},${bbu.stdDev}) ${bbu.interval} banda superior`,
+    });
+  }
+
+  const bbTpExit = evaluateBbTakeProfitExit(config, entryPrice, lastClose);
+  if (bbTpExit.hit) {
+    signals.push({
+      kind: 'bbTakeProfit',
+      close: lastClose,
+      gainPct: bbTpExit.gainPct,
+      exitDesc: `alvo BB histórico +${bbTpExit.targetPct}%`,
+    });
+  }
+
   const logic = config.exit?.logic ?? 'any';
-  const maOn  = exMa?.enabled;
-  const rsiOn = config.exit?.rsi?.enabled;
+  const enabledKinds = ['ma', 'rsi', 'bbUpper', 'bbTakeProfit'].filter(kind => (
+    kind === 'ma' ? exMa?.enabled : config.exit?.[kind]?.enabled
+  ));
 
   let tacticalExit = false;
-  if (maOn && rsiOn) {
+  if (enabledKinds.length > 1) {
     tacticalExit = logic === 'all'
-      ? signals.some(s => s.kind === 'ma') && signals.some(s => s.kind === 'rsi')
+      ? enabledKinds.every(kind => signals.some(s => s.kind === kind))
       : signals.length > 0;
-  } else if (maOn || rsiOn) {
+  } else if (enabledKinds.length === 1) {
     tacticalExit = signals.length > 0;
   }
 
@@ -1014,12 +1164,13 @@ function evaluateExit(config, cMap, entryPrice, opts = {}) {
     const primary = signals[0];
     return {
       exit: true,
-      reason: primary.kind === 'rsi' ? 'RSI_EXIT' : 'MA_CROSS_EXIT',
+      reason: EXIT_REASON_BY_KIND[primary.kind] ?? 'MA_CROSS_EXIT',
       close: primary.close ?? lastClose,
       exitRsi: primary.exitRsi,
       exitDesc: primary.exitDesc,
       ma1: primary.ma1,
       ma2: primary.ma2,
+      gainPct: primary.gainPct,
     };
   }
 
@@ -1293,6 +1444,7 @@ module.exports = {
   checkRsi,
   getRequiredSpecs,
   evaluateEntry,
+  evaluateEntryBbFilter,
   evaluateEntryTrendMa,
   evaluateExit,
   computeStopLossFloor,

@@ -543,6 +543,7 @@ describe('MA Cross — entrada pullback', () => {
       maxAboveMaPct: 3,
     },
     entryTrendMa: { enabled: false },
+    entryBbFilter: { enabled: false },
     maFiltersEnabled: false,
     execution: { pullbackEntry: { enabled: true, waitCandles: 2, requirePullback: true } },
   }));
@@ -635,6 +636,7 @@ describe('MA Cross — tendência HTF (EMA9 > EMA21 em 1h)', () => {
       direction: 'cross_up',
     },
     entryTrendMa: { enabled: true, ma1: { period: 9, interval: '1h' }, ma2: { period: 21, interval: '1h' } },
+    entryBbFilter: { enabled: false },
     maFiltersEnabled: false,
   }));
 

@@ -58,6 +58,19 @@ const MA_CROSS_DEFAULTS = {
         { enabled: true, interval: '15m', period: 14, operator: '>', value: 70 },
       ],
     },
+    /** Preço fecha na/acima da banda superior da Bollinger Bands (topo) → vende. */
+    bbUpper: {
+      enabled:  false,
+      interval: '4h',
+      period:   20,
+      stdDev:   2.0,
+    },
+    /** Vende quando o ganho desde a entrada atinge targetPct — sugerido a partir da
+     *  valorização média histórica fundo→topo da Bollinger Bands (ver analyseBollingerBandRecovery). */
+    bbTakeProfit: {
+      enabled:   false,
+      targetPct: 6,
+    },
   },
 
   stopLoss: { enabled: true, maxLossPct: 5, trailing: true, trailStepPct: 5 },
@@ -91,6 +104,18 @@ const MA_CROSS_DEFAULTS = {
   volume: {
     minVolumeUsdt:  3_000_000,
     allowLowVolume: false,
+  },
+
+  /** Filtro Bollinger Bands: %B do preço vs banda inferior/superior no intervalo HTF.
+   *  %B = (close − lower) / (upper − lower); 0 = toca banda inferior, 1 = toca banda superior.
+   *  Exige %B < maxPctB para permitir entrada (preço na metade inferior do range BB). */
+  entryBbFilter: {
+    enabled:  true,
+    interval: '4h',
+    period:   20,
+    stdDev:   2.0,
+    /** Máx %B permitido (0–1); padrão 0.4 = preço nos 40% inferiores do range BB. */
+    maxPctB:  0.4,
   },
 
   /** Horas sem nova entrada após venda (0 = desligado). */
@@ -145,6 +170,38 @@ function normalizeMaFilter(m, i = 0) {
     maxAbovePct: Math.max(0, Number(m?.maxAbovePct ?? 4)),
     fixedAbovePct: m?.fixedAbovePct != null && m?.fixedAbovePct !== '' ? Number(m?.fixedAbovePct) : null,
     tolerancePct: Math.max(0, Number(m?.tolerancePct ?? 0)),
+  };
+}
+
+function normalizeEntryBbFilter(block) {
+  const d = MA_CROSS_DEFAULTS.entryBbFilter;
+  const src = block ?? {};
+  return {
+    enabled:  src.enabled !== false,
+    interval: normalizeInterval(src.interval, d.interval),
+    period:   clampPeriod(src.period, d.period),
+    stdDev:   Math.max(0.5, Math.min(4, Number(src.stdDev  ?? d.stdDev))),
+    maxPctB:  Math.max(0,   Math.min(1, Number(src.maxPctB ?? d.maxPctB))),
+  };
+}
+
+function normalizeExitBbUpper(block, fallback) {
+  const fb = fallback ?? MA_CROSS_DEFAULTS.exit.bbUpper;
+  const src = block ?? {};
+  return {
+    enabled:  src.enabled === true,
+    interval: normalizeInterval(src.interval, fb.interval),
+    period:   clampPeriod(src.period, fb.period),
+    stdDev:   Math.max(0.5, Math.min(4, Number(src.stdDev ?? fb.stdDev))),
+  };
+}
+
+function normalizeExitBbTakeProfit(block, fallback) {
+  const fb = fallback ?? MA_CROSS_DEFAULTS.exit.bbTakeProfit;
+  const src = block ?? {};
+  return {
+    enabled:   src.enabled === true,
+    targetPct: Math.max(0.5, Number(src.targetPct ?? fb.targetPct)),
   };
 }
 
@@ -214,7 +271,8 @@ function normalizeMaCrossConfig(body = {}) {
     label: body.label ?? d.label,
     kind:  'ma_cross',
     entry: normalizeCrossBlock(body.entry, d.entry),
-    entryTrendMa: normalizeEntryTrendMa(body.entryTrendMa),
+    entryTrendMa:   normalizeEntryTrendMa(body.entryTrendMa),
+    entryBbFilter:  normalizeEntryBbFilter(body.entryBbFilter),
     maFiltersEnabled: body.maFiltersEnabled !== false,
     maFilters: migrateMaFilters(body),
     exit: {
@@ -228,6 +286,8 @@ function normalizeMaCrossConfig(body = {}) {
         logic:      ['any', 'all'].includes(rsiRaw.logic) ? rsiRaw.logic : d.exit.rsi.logic,
         conditions: rsiConditions,
       },
+      bbUpper:      normalizeExitBbUpper(exitBody.bbUpper, d.exit.bbUpper),
+      bbTakeProfit: normalizeExitBbTakeProfit(exitBody.bbTakeProfit, d.exit.bbTakeProfit),
     },
     stopLoss: {
       enabled:      body.stopLoss?.enabled !== false,
