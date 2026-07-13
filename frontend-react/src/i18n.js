@@ -46,9 +46,13 @@ const T = {
     'settings.chart_btn.bandsPct':       'Bandas % — seletor 2/3/4/5',
     'settings.chart_btn.bandsAbove':     'Banda acima (↑)',
     'settings.chart_btn.bandsBelow':     'Banda abaixo (↓)',
+    'settings.chart_btn.stopLoss':       'Stop Loss (SL)',
+    'settings.chart_btn.bb':             'Bollinger Bands (BB)',
     'settings.chart_btn_hint.bandsPct':  'Botões para escolher a distância % em torno da MA overlay 1.',
     'settings.chart_btn_hint.bandsAbove':'Linha pontilhada verde acima da MA overlay (teto).',
     'settings.chart_btn_hint.bandsBelow':'Linha pontilhada vermelha abaixo da MA overlay (piso).',
+    'settings.chart_btn_hint.stopLoss':  'Linha vermelha do stop loss calculada a partir da compra ativa.',
+    'settings.chart_btn_hint.bb':        'Bandas de Bollinger (período, desvio e intervalo próprios) sobre o preço.',
     'settings.overlay_slots':            'Overlay MA — padrão',
     'settings.overlay_slots_hint':       'Combinações MA+intervalo ativas por padrão ao abrir o gráfico. Máximo de 8.',
     'settings.overlay_slots_max':        (n) => `Limite de ${n} slots atingido.`,
@@ -75,6 +79,7 @@ const T = {
     'ind.ma_compare':        'EMA vs EMA',
     'ind.rsi':               'RSI',
     'ind.marketcap':         'Market Cap',
+    'ind.bb_position':       'Posição na Banda de Bollinger',
 
     // Indicadores — descrições tooltip
     'ind.desc.ichimoku':     'Sistema japonês com 5 linhas que indica tendência, suporte/resistência e momentum. Muito usado em análise técnica avançada.',
@@ -84,10 +89,15 @@ const T = {
     'ind.desc.ma_compare':    'Posição relativa entre duas EMAs no mesmo intervalo — ex.: EMA9 acima ou abaixo da EMA21. Não exige cruzamento recente; mostra moedas já alinhadas com a tendência.',
     'ind.desc.rsi':          'RSI — oscilador de 0 a 100 que mede força do movimento. Abaixo de 30 = sobrevendido (possível alta). Acima de 70 = sobrecomprado (possível queda).',
     'ind.desc.marketcap':    'Cruza dados da CoinGecko com o volume da Binance. "Giro de volume" detecta moedas com preço inflado sem sustentação real de negócios. "Diluição futura" identifica tokens com muita emissão ainda pendente.',
+    'ind.desc.bb_position':  'Posição do preço dentro da Bollinger Bands (%B). Fundo = close perto da banda inferior (possível sobrevenda). Topo = close perto da banda superior (possível sobrecompra). Padrão: 4h, BB(20,2).',
 
     // Comparadores
     'cmp.above':             'Acima',
     'cmp.bellow':            'Abaixo',
+
+    // Bollinger Bands — posição
+    'bb.position.bottom':    'Mais próximo do fundo',
+    'bb.position.top':       'Mais próximo do topo',
 
     // Linhas do candle
     'candle.high':           'Máxima',
@@ -149,6 +159,7 @@ const T = {
     'sum.macross_age':       (age, tol) => `(há ${age}, tol ±${tol}%)`,
     'sum.macross_prox':      (prox) => `(gap ≤${prox}%)`,
     'sum.mcap':              (metric, preset) => `Market Cap: ${metric} ${preset}`,
+    'sum.bb_position':       (period, stdDev, posLabel, ivl, prox) => `BB(${period},${stdDev}): ${posLabel} (≤${prox}%) → ${ivl}`,
     'sum.above':             'acima de',
     'sum.bellow':            'abaixo de',
     'sum.above_short':       'acima',
@@ -287,6 +298,7 @@ const T = {
     'chart.tip.rsi':         'Painel RSI abaixo do preço (0–100). Zonas 30/70 tracejadas.',
     'chart.tip.rsi50':       'Linha horizontal de referência no RSI em 50 (meio do range).',
     'chart.tip.rsi80':       'Linha horizontal de referência no RSI em 80 (sobrecompra forte).',
+    'chart.tip.stopLoss':    'Linha de stop loss calculada a partir da compra ativa. Liga/desliga a linha vermelha.',
     'chart.tip.ma_overlay':  (n) => `MA${n}: EMA extra em outro timeframe (ex.: 1h) desenhada por cima do gráfico.`,
     'chart.tip.ma_period':   (n, p) => `MA${n} — período EMA${p} para esta linha overlay.`,
     'chart.tip.ma_interval': (n) => `MA${n} — timeframe dos candles para calcular a EMA (pode diferir do gráfico, ex.: 1h sobre 15m).`,
@@ -294,12 +306,17 @@ const T = {
     'chart.tip.ma_on':       (n) => `MA${n} — liga (ON) ou desliga (OFF) a linha tracejada no gráfico.`,
     'chart.panel.overlay_title': 'Overlay',
     'chart.tip.add_overlay': 'Adiciona nova MA overlay (período e intervalo configuráveis). Máximo 8 overlays.',
-    'chart.tip.bands_target': 'Escolhe qual MA overlay recebe as bandas % (piso e teto).',
-    'chart.tip.bands_title': 'Bandas % em torno da MA overlay selecionada. Não afeta EMA9/21 do gráfico.',
-    'chart.tip.bands_pct':   (p) => `Seleciona ${p}% de distância para as bandas ↑/↓ (em relação à EMA overlay, não ao preço).`,
+    'chart.tip.bands_period':   'Período da EMA usada como base das bandas % (independente das MA overlay).',
+    'chart.tip.bands_interval': 'Intervalo de candles da EMA usada como base das bandas % (ex.: 1h, 4h).',
+    'chart.tip.bands_title': 'Bandas % em torno de uma EMA própria (período/intervalo escolhidos aqui). Não afeta EMA9/21 do gráfico.',
+    'chart.tip.bands_pct':   (p) => `Seleciona ${p}% de distância para as bandas ↑/↓ (em relação à EMA das bandas, não ao preço).`,
     'chart.tip.bands_adaptive': 'Piso/teto calculados do histórico desta moeda (filtro MA adaptativo). ↑ e ↓ podem ter % diferentes.',
-    'chart.tip.band_above':  (p) => `Mostra linha pontilhada EMA overlay × (1+${p}%). ${p}% acima da MA overlay ligada.`,
-    'chart.tip.band_below':  (p) => `Mostra linha pontilhada EMA overlay × (1−${p}%). ${p}% abaixo da MA overlay ligada.`,
+    'chart.tip.band_above':  (p) => `Mostra linha pontilhada EMA das bandas × (1+${p}%). ${p}% acima dela.`,
+    'chart.tip.band_below':  (p) => `Mostra linha pontilhada EMA das bandas × (1−${p}%). ${p}% abaixo dela.`,
+    'chart.tip.bb_period':   'Período da média central da Bollinger Bands (10, 20 ou 30 candles).',
+    'chart.tip.bb_stddev':   'Desvio padrão das bandas superior/inferior (±1σ, ±2σ ou ±3σ).',
+    'chart.tip.bb_interval': 'Intervalo de candles usado para calcular a Bollinger Bands (ex.: 1h, 4h) — independente do intervalo do gráfico.',
+    'chart.tip.bb_on':       'Liga (ON) ou desliga (OFF) as linhas da Bollinger Bands no gráfico.',
     'chart.tip.panel_collapse': 'Recolher painel de indicadores (libera espaço no gráfico).',
     'chart.tip.panel_expand':   'Mostrar painel de indicadores.',
 
@@ -430,9 +447,13 @@ const T = {
     'settings.chart_btn.bandsPct':       '% bands — 2/3/4/5 selector',
     'settings.chart_btn.bandsAbove':     'Band above (↑)',
     'settings.chart_btn.bandsBelow':     'Band below (↓)',
+    'settings.chart_btn.stopLoss':       'Stop Loss (SL)',
+    'settings.chart_btn.bb':             'Bollinger Bands (BB)',
     'settings.chart_btn_hint.bandsPct':  'Buttons to pick % distance around MA overlay 1.',
     'settings.chart_btn_hint.bandsAbove':'Green dotted line above overlay MA (ceiling).',
     'settings.chart_btn_hint.bandsBelow':'Red dotted line below overlay MA (floor).',
+    'settings.chart_btn_hint.stopLoss':  'Red stop-loss line computed from the active buy.',
+    'settings.chart_btn_hint.bb':        'Bollinger Bands (own period, deviation and interval) drawn over price.',
     'settings.overlay_slots':            'Overlay MA — defaults',
     'settings.overlay_slots_hint':       'Period+interval combinations active by default when opening the chart. Maximum 8.',
     'settings.overlay_slots_max':        (n) => `Limit of ${n} slots reached.`,
@@ -459,6 +480,7 @@ const T = {
     'ind.ma_compare':        'EMA vs EMA',
     'ind.rsi':               'RSI',
     'ind.marketcap':         'Market Cap',
+    'ind.bb_position':       'Bollinger Band Position',
 
     // Indicator descriptions
     'ind.desc.ichimoku':     'Japanese system with 5 lines indicating trend, support/resistance and momentum. Widely used in advanced technical analysis.',
@@ -468,10 +490,15 @@ const T = {
     'ind.desc.ma_compare':    'Relative position between two EMAs on the same interval — e.g. EMA9 above or below EMA21. No recent cross required; shows coins already aligned with the trend.',
     'ind.desc.rsi':          'RSI — oscillator from 0 to 100 measuring movement strength. Below 30 = oversold (possible rise). Above 70 = overbought (possible fall).',
     'ind.desc.marketcap':    'Cross-references CoinGecko data with Binance volume. "Volume turnover" detects coins with inflated prices. "Future dilution" identifies tokens with large pending supply.',
+    'ind.desc.bb_position':  'Price position inside the Bollinger Bands (%B). Bottom = close near the lower band (possible oversold). Top = close near the upper band (possible overbought). Default: 4h, BB(20,2).',
 
     // Comparators
     'cmp.above':             'Above',
     'cmp.bellow':            'Below',
+
+    // Bollinger Bands — position
+    'bb.position.bottom':    'Closest to bottom',
+    'bb.position.top':       'Closest to top',
 
     // Candle lines
     'candle.high':           'High',
@@ -533,6 +560,7 @@ const T = {
     'sum.macross_age':       (age, tol) => `(within ${age}, tol ±${tol}%)`,
     'sum.macross_prox':      (prox) => `(gap ≤${prox}%)`,
     'sum.mcap':              (metric, preset) => `Market Cap: ${metric} ${preset}`,
+    'sum.bb_position':       (period, stdDev, posLabel, ivl, prox) => `BB(${period},${stdDev}): ${posLabel} (≤${prox}%) → ${ivl}`,
     'sum.above':             'above',
     'sum.bellow':            'below',
     'sum.above_short':       'above',
@@ -671,6 +699,7 @@ const T = {
     'chart.tip.rsi':         'RSI panel below price (0–100). Dashed 30/70 zones.',
     'chart.tip.rsi50':       'Horizontal reference line at RSI 50.',
     'chart.tip.rsi80':       'Horizontal reference line at RSI 80.',
+    'chart.tip.stopLoss':    'Stop loss line computed from the active buy. Toggles the red line.',
     'chart.tip.ma_overlay':  (n) => `MA${n}: extra EMA on another timeframe (e.g. 1h) drawn over the chart.`,
     'chart.tip.ma_period':   (n, p) => `MA${n} — EMA${p} period for this overlay line.`,
     'chart.tip.ma_interval': (n) => `MA${n} — candle timeframe for this EMA (may differ from chart, e.g. 1h on 15m).`,
@@ -678,12 +707,17 @@ const T = {
     'chart.tip.ma_on':       (n) => `MA${n} — toggle (ON/OFF) the dashed overlay line on the chart.`,
     'chart.panel.overlay_title': 'Overlay',
     'chart.tip.add_overlay': 'Add a new MA overlay (configurable period and interval). Maximum 8 overlays.',
-    'chart.tip.bands_target': 'Choose which MA overlay the % bands (floor/ceiling) are applied to.',
-    'chart.tip.bands_title': '% bands around the selected MA overlay. Does not affect chart EMA9/21.',
-    'chart.tip.bands_pct':   (p) => `Sets ${p}% distance for ↑/↓ bands (relative to overlay EMA, not price).`,
+    'chart.tip.bands_period':   'Period of the EMA used as the % bands basis (independent from the MA overlays).',
+    'chart.tip.bands_interval': 'Candle interval of the EMA used as the % bands basis (e.g. 1h, 4h).',
+    'chart.tip.bands_title': '% bands around their own EMA (period/interval picked here). Does not affect chart EMA9/21.',
+    'chart.tip.bands_pct':   (p) => `Sets ${p}% distance for ↑/↓ bands (relative to the bands' own EMA, not price).`,
     'chart.tip.bands_adaptive': 'Floor/ceiling from this coin’s history (adaptive MA filter). ↑ and ↓ can use different %.',
-    'chart.tip.band_above':  (p) => `Dotted line at overlay EMA × (1+${p}%). ${p}% above the overlay MA.`,
-    'chart.tip.band_below':  (p) => `Dotted line at overlay EMA × (1−${p}%). ${p}% below the overlay MA.`,
+    'chart.tip.band_above':  (p) => `Dotted line at the bands' EMA × (1+${p}%). ${p}% above it.`,
+    'chart.tip.band_below':  (p) => `Dotted line at the bands' EMA × (1−${p}%). ${p}% below it.`,
+    'chart.tip.bb_period':   'Period of the Bollinger Bands middle average (10, 20 or 30 candles).',
+    'chart.tip.bb_stddev':   'Standard deviation of the upper/lower bands (±1σ, ±2σ or ±3σ).',
+    'chart.tip.bb_interval': 'Candle interval used to compute the Bollinger Bands (e.g. 1h, 4h) — independent from the chart interval.',
+    'chart.tip.bb_on':       'Toggles (ON/OFF) the Bollinger Bands lines on the chart.',
     'chart.tip.panel_collapse': 'Collapse indicator panel (frees chart space).',
     'chart.tip.panel_expand':   'Show indicator panel.',
 

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useCurrency } from '../contexts/CurrencyContext';
-import { fetchCandlesAndIndicators, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter, fetchMarketCapFilter, fetchUserPrefs, saveUserPrefs } from '../services/api';
+import { fetchCandlesAndIndicators, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter, fetchMarketCapFilter, fetchBollingerBandPositionFilter, fetchUserPrefs, saveUserPrefs } from '../services/api';
 import { useI18n } from '../i18n';
 import {
   createRsiFilter,
@@ -136,6 +136,14 @@ function buildSummary(value, t) {
     const tol = value.tolerancePct ?? '0.5';
     return t('sum.ma_compare', p1, p2, cmp, ivLabel, Number(tol) > 0 ? tol : '');
   }
+  if (type === 'bollingerPosition') {
+    const period = value.period ?? '20';
+    const stdDev = value.stdDev ?? '2';
+    const position = value.position ?? 'near_bottom';
+    const posLabel = position === 'near_top' ? t('bb.position.top') : t('bb.position.bottom');
+    const prox = value.proximityPct ?? '20';
+    return t('sum.bb_position', period, stdDev, posLabel, ivLabel, prox);
+  }
   if (type === 'maCrossover') {
     const p1 = value.ma1Period ?? '9';
     const p2 = value.ma2Period ?? '21';
@@ -171,6 +179,7 @@ function indDescKey(type) {
   if (type === 'maTimeAbove') return 'ma_time_above';
   if (type === 'maCrossover') return 'ma_crossover';
   if (type === 'maCompare') return 'ma_compare';
+  if (type === 'bollingerPosition') return 'bb_position';
   return 'marketcap';
 }
 
@@ -232,6 +241,13 @@ function IndicatorRow({ value, onChange }) {
                 next.compare = next.compare ?? 'above';
                 next.tolerancePct = '0.5';
               }
+              if (newType === 'bollingerPosition') {
+                next.intervals = ['4h'];
+                next.period = '20';
+                next.stdDev = '2';
+                next.position = next.position ?? 'near_bottom';
+                next.proximityPct = '20';
+              }
               onChange(next);
             }}
             title="Escolha o indicador técnico a ser analisado"
@@ -244,6 +260,7 @@ function IndicatorRow({ value, onChange }) {
             <option value="maCompare">{t('ind.ma_compare')}</option>
             <option value="relativeStrengthIndex">{t('ind.rsi')}</option>
             <option value="marketCap">{t('ind.marketcap')}</option>
+            <option value="bollingerPosition">{t('ind.bb_position')}</option>
           </select>
           {type && t(`ind.desc.${indDescKey(type)}`) !== `ind.desc.${indDescKey(type)}` && (
             <HelpIcon text={t(`ind.desc.${indDescKey(type)}`)} />
@@ -460,6 +477,50 @@ function IndicatorRow({ value, onChange }) {
                 ))}
               </select>
             )}
+          </>
+        )}
+
+        {type === 'bollingerPosition' && (
+          <>
+            <select
+              className={sel}
+              value={value.period ?? '20'}
+              onChange={(e) => onChange({ ...value, period: e.target.value })}
+              title="Período da Bollinger Bands"
+            >
+              <option value="10">BB10</option>
+              <option value="20">BB20</option>
+              <option value="30">BB30</option>
+            </select>
+            <select
+              className={sel}
+              value={value.stdDev ?? '2'}
+              onChange={(e) => onChange({ ...value, stdDev: e.target.value })}
+              title="Desvio padrão das bandas"
+            >
+              <option value="1">±1σ</option>
+              <option value="2">±2σ</option>
+              <option value="3">±3σ</option>
+            </select>
+            <select
+              className={sel}
+              value={value.position ?? 'near_bottom'}
+              onChange={(e) => onChange({ ...value, position: e.target.value })}
+              title="Fundo = close perto da banda inferior | Topo = close perto da banda superior"
+            >
+              <option value="near_bottom">{t('bb.position.bottom')}</option>
+              <option value="near_top">{t('bb.position.top')}</option>
+            </select>
+            <select
+              className={sel}
+              value={value.proximityPct ?? '20'}
+              onChange={(e) => onChange({ ...value, proximityPct: e.target.value })}
+              title="Distância máxima da banda, em % da largura da banda"
+            >
+              {[5, 10, 15, 20, 25, 30].map(v => (
+                <option key={v} value={String(v)}>≤{v}%</option>
+              ))}
+            </select>
           </>
         )}
 
@@ -707,7 +768,8 @@ export default function IndicatorPanel({ open, onToggle }) {
       const maTimeIndicators = indicators.filter((ind) => ind.type === 'maTimeAbove');
       const maCrossIndicators = indicators.filter((ind) => ind.type === 'maCrossover');
       const maCompareIndicators = indicators.filter((ind) => ind.type === 'maCompare');
-      const otherIndicators = indicators.filter((ind) => ind.type && ind.type !== 'relativeStrengthIndex' && ind.type !== 'marketCap' && ind.type !== 'movingAverage' && ind.type !== 'maTimeAbove' && ind.type !== 'maCrossover' && ind.type !== 'maCompare');
+      const bbPositionIndicators = indicators.filter((ind) => ind.type === 'bollingerPosition');
+      const otherIndicators = indicators.filter((ind) => ind.type && ind.type !== 'relativeStrengthIndex' && ind.type !== 'marketCap' && ind.type !== 'movingAverage' && ind.type !== 'maTimeAbove' && ind.type !== 'maCrossover' && ind.type !== 'maCompare' && ind.type !== 'bollingerPosition');
 
       // Salva intervalos e análises usadas nas preferências
       const allIntervals = [...new Set(indicators.flatMap(ind => ind.intervals ?? []))];
@@ -820,6 +882,25 @@ export default function IndicatorPanel({ open, onToggle }) {
               scannedAt: filter.scannedAt,
             });
           }
+        }
+      }
+
+      // Posição na Bollinger Bands (%B): mais próximo do fundo ou do topo
+      for (const ind of bbPositionIndicators) {
+        const period = ind.period ?? '20';
+        const stdDev = ind.stdDev ?? '2';
+        const position = ind.position ?? 'near_bottom';
+        const proximityPct = ind.proximityPct ?? '20';
+        for (const interval of ind.intervals) {
+          const filter = await fetchBollingerBandPositionFilter({
+            interval, period, stdDev, position, proximityPct,
+          });
+          addFilter({
+            name: filter.name,
+            list: filter.list,
+            meta: filter.details,
+            scannedAt: filter.scannedAt,
+          });
         }
       }
 

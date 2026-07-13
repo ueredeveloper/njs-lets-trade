@@ -28,6 +28,7 @@ import {
   saveUiPreferences,
   normalizeOverlaySlots,
   normalizeMaBandsDefaults,
+  normalizeBollingerBandsDefaults,
   normalizeActiveIndicators,
 } from '../utils/uiPreferences';
 
@@ -507,6 +508,17 @@ export function CurrencyProvider({ children }) {
     });
   }, []);
 
+  const setBollingerBandsDefaults = useCallback((patch) => {
+    setUiPrefsState((prev) => {
+      const next = {
+        ...prev,
+        bollingerBandsDefaults: normalizeBollingerBandsDefaults({ ...prev.bollingerBandsDefaults, ...patch }),
+      };
+      saveUiPreferences(next);
+      return next;
+    });
+  }, []);
+
   const setActiveIndicatorsPreference = useCallback((indicators) => {
     setUiPrefsState((prev) => {
       const next = { ...prev, activeIndicators: normalizeActiveIndicators(indicators) };
@@ -748,6 +760,7 @@ export function CurrencyProvider({ children }) {
         setPanelVisible,
         setOverlaySlotsPreference,
         setMaBandsDefaults,
+        setBollingerBandsDefaults,
         setActiveIndicatorsPreference,
         chartIntervalOptions: CHART_INTERVAL_OPTIONS,
         panelKeys: PANEL_KEYS,

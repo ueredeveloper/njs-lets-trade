@@ -71,6 +71,16 @@ function buildMaCrossFilterName(sigInterval, p1, iv1, p2, iv2, mode, opts = {}) 
   return name;
 }
 
+const BB_POSITION_TOKENS = { near_bottom: 'bot', near_top: 'top' };
+
+/** Posição na Bollinger Band: 4h|bbpos|20|2|bot|prox|20 (bot=fundo, top=topo) */
+function buildBollingerPositionFilterName(interval, period, stdDev, position, proximityPct) {
+  const token = BB_POSITION_TOKENS[position] ?? position;
+  let name = `${interval}|bbpos|${period}|${stdDev}|${token}`;
+  if (proximityPct != null) name += `|prox|${proximityPct}`;
+  return name;
+}
+
 /** Posição EMA vs EMA: 15m|macmp|9|21|acim — proximidade: 1h|macmp|9|21|nearup|prox|0.5 */
 function buildMaCompareFilterName(interval, p1, p2, compare, lang = 'en', opts = {}) {
   if (compare === 'near_up' || compare === 'near_down') {
@@ -151,6 +161,8 @@ module.exports = {
   buildRsiFilterName,
   buildMaFilterName,
   buildMaPctFilterName,
+  BB_POSITION_TOKENS,
+  buildBollingerPositionFilterName,
   MA_CROSS_MODE_TOKENS,
   parseMaCrossModeToken,
   buildMaCrossFilterName,

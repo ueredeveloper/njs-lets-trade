@@ -22,7 +22,7 @@ const { ichimokuCloudRouter } = require('./technicals-indicators');
 const {
   fetchCandles, fetchIchimokuCloud, fetchAllCurrencies,
   fetchSMA, fetchRSI, fetchVWAP, fetch24HsVolume, fetchMarketCapFilter, fetchStablecoins, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter,
-  fetchRsiOversoldRecovery, fetchMaCrossStats, fetchBollingerBandRecovery, fetchReloadCandles,
+  fetchRsiOversoldRecovery, fetchMaCrossStats, fetchBollingerBandRecovery, fetchBollingerBandPositionFilter, fetchBollingerBands, fetchSimpleMaCross, fetchReloadCandles,
   fetchGateCurrencies, fetchGatePrefetch, fetchBinanceTrades, fetchGateTrades,
   fetchActiveTrades, fetchTradeFavorites, stgBotStatus, multitradeService, fetchMarketHighlights } = require('./services');
 const supabaseService = require('./services/supabaseService');
@@ -52,6 +52,9 @@ app.use('/services', fetchMaCompareFilter)
 app.use('/services', fetchRsiOversoldRecovery)
 app.use('/services', fetchMaCrossStats)
 app.use('/services', fetchBollingerBandRecovery)
+app.use('/services', fetchBollingerBandPositionFilter)
+app.use('/services', fetchBollingerBands)
+app.use('/services', fetchSimpleMaCross)
 app.use('/services', fetchReloadCandles)
 app.use('/services', fetchGateCurrencies)
 app.use('/services', fetchGatePrefetch)
@@ -131,6 +134,8 @@ async function startServer() {
   await maCrossCache.loadFromDisk();
   const maCompareCache = require('./cache/maCompareCache');
   await maCompareCache.loadFromDisk();
+  const bbPositionCache = require('./cache/bbPositionCache');
+  await bbPositionCache.loadFromDisk();
 
   app.listen(PORT, () => {
     const boot = ((Date.now() - t0) / 1000).toFixed(2);
@@ -185,6 +190,27 @@ async function startServer() {
 
   refreshMaCompareCache().catch(e => console.error('[maCompareCache] erro no warmup:', e.message));
   setInterval(refreshMaCompareCache, maCompareCache.REFRESH_TICK_MS);
+
+  async function refreshBbPositionCache() {
+    try {
+      const { list: symbols } = await getActiveUsdtPairs();
+      if (!Array.isArray(symbols) || symbols.length === 0) return;
+      const stats = await bbPositionCache.refreshAll(symbols);
+      if (stats.computed > 0) {
+        const m = stats.matched ?? {};
+        console.log(
+          `[bbPositionCache] fundo:${m['4h|20|2|bot|20'] ?? 0} topo:${m['4h|20|2|top|20'] ?? 0}`
+          + ` | disco:${stats.diskHits ?? 0} stale:${stats.diskStale ?? 0} api:${stats.apiFetches ?? 0}`
+          + ` | fila:${stats.queuePending ?? 0}`,
+        );
+      }
+    } catch (e) {
+      console.error('[bbPositionCache] erro no refresh:', e.message);
+    }
+  }
+
+  refreshBbPositionCache().catch(e => console.error('[bbPositionCache] erro no warmup:', e.message));
+  setInterval(refreshBbPositionCache, bbPositionCache.REFRESH_TICK_MS);
 
   const candleDiskWarmup = require('./utils/candleDiskWarmup');
   const CANDLE_WARMUP_TICK_MS = 60_000;

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { suggestMaCrossFilterBounds, checkMultitradeVolume } from '../services/api';
+import { suggestMaCrossFilterBounds, checkMultitradeVolume, fetchRsiOversoldRecovery, fetchSimpleMaCross, fetchBollingerBandRecovery } from '../services/api';
 import {
   MA_CROSS_INTERVALS, MA_PERIOD_PRESETS, MA_CROSS_PERIOD_MIN, MA_CROSS_PERIOD_MAX,
   CROSS_DIRECTIONS, PRICE_FILTER_MODES,
@@ -99,13 +99,25 @@ function CrossBlock({ title, block, prefix, patch, color, showEnable }) {
   );
 }
 
-export default function MaCrossStrategyForm({ form, patch, symbol, exchange }) {
+export default function MaCrossStrategyForm({ form, patch, symbol, exchange, hasSavedConfig = false }) {
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [boundsSuggest, setBoundsSuggest] = useState({});
   const [volCheck, setVolCheck] = useState(null);
+  const [histStats, setHistStats] = useState(null);
+  const [bbTargetSuggest, setBbTargetSuggest] = useState(null);
   const sel = { background: '#1e2130', border: '1px solid #2a2d3a', color: '#e2e8f0' };
   const entryTrend = { ...MA_CROSS_DEFAULTS.entryTrendMa, ...form.entryTrendMa };
   const entryTrendOn = entryTrend.enabled !== false;
+
+  const bbFilter = { ...MA_CROSS_DEFAULTS.entryBbFilter, ...form.entryBbFilter };
+  const bbOn = bbFilter.enabled !== false;
+
+  const exitBbUpper = { ...MA_CROSS_DEFAULTS.exit.bbUpper, ...form.exit?.bbUpper };
+  const exitBbTakeProfit = { ...MA_CROSS_DEFAULTS.exit.bbTakeProfit, ...form.exit?.bbTakeProfit };
+
+  const entryIv = form.entry?.ma1?.interval ?? '15m';
+  const exitIv  = form.exit?.maCross?.ma1?.interval ?? '30m';
+  const src     = exchange === 'gate' ? 'gate' : null;
 
   useEffect(() => {
     const sym = symbol?.trim()?.toUpperCase();
@@ -119,6 +131,60 @@ export default function MaCrossStrategyForm({ form, patch, symbol, exchange }) {
     }, 400);
     return () => { cancelled = true; clearTimeout(timer); };
   }, [symbol, exchange, form.volume?.minVolumeUsdt]);
+
+  useEffect(() => {
+    const sym = symbol?.trim()?.toUpperCase();
+    if (!sym) { setHistStats(null); return undefined; }
+    let cancelled = false;
+    setHistStats({ loading: true });
+    const timer = setTimeout(() => {
+      Promise.allSettled([
+        fetchRsiOversoldRecovery(sym, entryIv, 30, 70, src),
+        fetchSimpleMaCross(sym, entryIv, exitIv, src),
+        fetchBollingerBandRecovery(sym, '4h', 20, 2, src),
+      ]).then(([rsiRes, macrossRes, bbRes]) => {
+        if (cancelled) return;
+        const rsi     = rsiRes.status     === 'fulfilled' ? rsiRes.value     : null;
+        const macross = macrossRes.status === 'fulfilled' ? macrossRes.value : null;
+        const bb      = bbRes.status      === 'fulfilled' ? bbRes.value      : null;
+        setHistStats({
+          loading: false,
+          rsi:     rsi     ? { avg: rsi.avgAppreciationPercent,     count: rsi.totalOccurrences }     : null,
+          macross: macross ? { avg: macross.avgAppreciationPercent, count: macross.totalOccurrences } : null,
+          bb:      bb      ? { avg: bb.avgAppreciationPercent,      count: bb.totalOccurrences }      : null,
+          rsiErr:     rsiRes.status     === 'rejected' ? rsiRes.reason?.message     : null,
+          macrossErr: macrossRes.status === 'rejected' ? macrossRes.reason?.message : null,
+          bbErr:      bbRes.status      === 'rejected' ? bbRes.reason?.message      : null,
+        });
+      });
+    }, 800);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [symbol, exchange, entryIv, exitIv]);
+
+  // Sugere o alvo % automaticamente ao carregar o formulário para uma moeda
+  // (mesma busca do botão "Sugerir do histórico", disparada uma vez por símbolo).
+  // Só aplica o valor sugerido no campo quando não há config salva no banco —
+  // se a estratégia já existe (hasSavedConfig), o valor persistido prevalece
+  // e a sugestão fica só como referência (ver "Média histórica" abaixo).
+  useEffect(() => {
+    const sym = symbol?.trim()?.toUpperCase();
+    if (!sym) { setBbTargetSuggest(null); return undefined; }
+    let cancelled = false;
+    setBbTargetSuggest({ loading: true });
+    const timer = setTimeout(() => {
+      fetchBollingerBandRecovery(sym, exitBbUpper.interval, exitBbUpper.period, exitBbUpper.stdDev, src)
+        .then(r => {
+          if (cancelled) return;
+          setBbTargetSuggest({ avg: r.avgAppreciationPercent, count: r.totalOccurrences });
+          if (r.avgAppreciationPercent > 0 && !hasSavedConfig) {
+            patch('exit.bbTakeProfit.targetPct', r.avgAppreciationPercent);
+          }
+        })
+        .catch(err => { if (!cancelled) setBbTargetSuggest({ loading: false, error: err.message }); });
+    }, 800);
+    return () => { cancelled = true; clearTimeout(timer); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [symbol, exchange, hasSavedConfig]);
 
   const addFilter = () => {
     const nextId = Math.max(0, ...(form.maFilters ?? []).map(f => f.id)) + 1;
@@ -168,6 +234,21 @@ export default function MaCrossStrategyForm({ form, patch, symbol, exchange }) {
       }
     } catch (err) {
       setBoundsSuggest(prev => ({ ...prev, [filterId]: { error: err.message } }));
+    }
+  }
+
+  async function handleSuggestBbTarget() {
+    const sym = symbol?.trim()?.toUpperCase();
+    if (!sym) return;
+    setBbTargetSuggest({ loading: true });
+    try {
+      const r = await fetchBollingerBandRecovery(sym, exitBbUpper.interval, exitBbUpper.period, exitBbUpper.stdDev, src);
+      setBbTargetSuggest({ avg: r.avgAppreciationPercent, count: r.totalOccurrences });
+      if (r.avgAppreciationPercent > 0) {
+        patch('exit.bbTakeProfit.targetPct', r.avgAppreciationPercent);
+      }
+    } catch (err) {
+      setBbTargetSuggest({ error: err.message });
     }
   }
 
@@ -236,6 +317,60 @@ export default function MaCrossStrategyForm({ form, patch, symbol, exchange }) {
               />
               <span className="text-p5/40 text-[10px]">% abaixo — EMA9 até essa distância da EMA21 ainda autoriza</span>
             </div>
+          </>
+        )}
+      </div>
+
+      {/* ── Filtro Bollinger Bands ── */}
+      <div className="rounded-md p-2 space-y-2" style={{ background: '#1a1d28', border: `1px solid ${ENTRY_COLOR}33` }}>
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: ENTRY_COLOR }}>
+            Filtro BB — %B ({bbFilter.interval})
+          </span>
+          <label className="flex items-center gap-1 text-[9px] text-p5/50 cursor-pointer">
+            <input type="checkbox" checked={bbOn}
+              onChange={e => patch('entryBbFilter.enabled', e.target.checked)} style={{ accentColor: ENTRY_COLOR }} />
+            Ativo
+          </label>
+        </div>
+        {bbOn && (
+          <>
+            <p className="text-[10px] text-p5/60 leading-relaxed">
+              Exige que o preço esteja nos <strong>%B&nbsp;&lt;&nbsp;{(bbFilter.maxPctB * 100).toFixed(0)}%</strong> inferiores
+              do range BB({bbFilter.period},{bbFilter.stdDev}) {bbFilter.interval} — filtra entradas com preço esticado no HTF.
+            </p>
+            <div className="flex flex-wrap gap-3 items-center text-xs">
+              <div className="flex items-center gap-1">
+                <span className="text-p5/50">Intervalo</span>
+                <select value={bbFilter.interval}
+                  onChange={e => patch('entryBbFilter.interval', e.target.value)}
+                  className="rounded px-1 py-1 text-xs" style={sel}>
+                  {MA_CROSS_INTERVALS.map(iv => <option key={iv} value={iv}>{iv}</option>)}
+                </select>
+              </div>
+              <div className="flex items-center gap-1">
+                <span className="text-p5/50">%B máx</span>
+                <NumInput value={+(bbFilter.maxPctB * 100).toFixed(0)}
+                  onChange={v => patch('entryBbFilter.maxPctB', Math.max(1, Math.min(100, v)) / 100)}
+                  min={5} max={95} step={5} className="w-14" placeholder="40" />
+                <span className="text-p5/40 text-[10px]">%</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <span className="text-p5/50">Período</span>
+                <NumInput value={bbFilter.period}
+                  onChange={v => patch('entryBbFilter.period', Math.max(5, Math.round(v)))}
+                  min={5} max={200} step={1} className="w-14" />
+              </div>
+              <div className="flex items-center gap-1">
+                <span className="text-p5/50">StdDev</span>
+                <NumInput value={bbFilter.stdDev}
+                  onChange={v => patch('entryBbFilter.stdDev', v)}
+                  min={0.5} max={4} step={0.5} className="w-14" />
+              </div>
+            </div>
+            <p className="text-[9px] text-p5/40 leading-relaxed">
+              %B = (close − banda inf) / (banda sup − banda inf). 0% = toca a banda inferior · 100% = toca a superior.
+            </p>
           </>
         )}
       </div>
@@ -395,6 +530,97 @@ export default function MaCrossStrategyForm({ form, patch, symbol, exchange }) {
             </>
           )}
         </div>
+
+        <div className="rounded-md p-2 space-y-2" style={{ background: '#1a1d28', border: `1px solid ${EXIT_COLOR}33` }}>
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: EXIT_COLOR }}>
+              Venda — Banda superior BB
+            </span>
+            <label className="flex items-center gap-1 text-[9px] text-p5/50 cursor-pointer">
+              <input type="checkbox" checked={exitBbUpper.enabled === true}
+                onChange={e => patch('exit.bbUpper.enabled', e.target.checked)} style={{ accentColor: EXIT_COLOR }} />
+              Ativo
+            </label>
+          </div>
+          {exitBbUpper.enabled === true && (
+            <>
+              <p className="text-[10px] text-p5/60 leading-relaxed">
+                Vende quando o close fecha na/acima da banda superior da BB({exitBbUpper.period},{exitBbUpper.stdDev}) {exitBbUpper.interval} — preço no topo.
+              </p>
+              <div className="flex flex-wrap gap-3 items-center text-xs">
+                <div className="flex items-center gap-1">
+                  <span className="text-p5/50">Intervalo</span>
+                  <select value={exitBbUpper.interval}
+                    onChange={e => patch('exit.bbUpper.interval', e.target.value)}
+                    className="rounded px-1 py-1 text-xs" style={sel}>
+                    {MA_CROSS_INTERVALS.map(iv => <option key={iv} value={iv}>{iv}</option>)}
+                  </select>
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="text-p5/50">Período</span>
+                  <NumInput value={exitBbUpper.period}
+                    onChange={v => patch('exit.bbUpper.period', Math.max(5, Math.round(v)))}
+                    min={5} max={200} step={1} className="w-14" />
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="text-p5/50">StdDev</span>
+                  <NumInput value={exitBbUpper.stdDev}
+                    onChange={v => patch('exit.bbUpper.stdDev', v)}
+                    min={0.5} max={4} step={0.5} className="w-14" />
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+
+        <div className="rounded-md p-2 space-y-2" style={{ background: '#1a1d28', border: `1px solid ${EXIT_COLOR}33` }}>
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: EXIT_COLOR }}>
+              Venda — Alvo % histórico BB
+            </span>
+            <label className="flex items-center gap-1 text-[9px] text-p5/50 cursor-pointer">
+              <input type="checkbox" checked={exitBbTakeProfit.enabled === true}
+                onChange={e => patch('exit.bbTakeProfit.enabled', e.target.checked)} style={{ accentColor: EXIT_COLOR }} />
+              Ativo
+            </label>
+          </div>
+          {exitBbTakeProfit.enabled === true && (
+            <>
+              <p className="text-[10px] text-p5/60 leading-relaxed">
+                Vende quando o ganho desde a compra atinge o alvo — sugerido a partir da valorização média
+                histórica fundo→topo da BB({exitBbUpper.period},{exitBbUpper.stdDev}) {exitBbUpper.interval} desta moeda.
+              </p>
+              <div className="flex flex-wrap gap-2 items-center text-xs">
+                <span className="text-p5/50">Alvo</span>
+                <NumInput value={exitBbTakeProfit.targetPct}
+                  onChange={v => patch('exit.bbTakeProfit.targetPct', Math.max(0.5, v))}
+                  min={0.5} max={100} step={0.5} className="w-16" />
+                <span className="text-p5/40 text-[10px]">%</span>
+                <button type="button" onClick={() => patch('exit.bbTakeProfit.targetPct', 9)}
+                  title="Aplica um alvo padrão de 9%, independente do histórico da moeda"
+                  className="text-[9px] px-2 py-0.5 rounded font-semibold text-p5/60 border border-p3/40 hover:text-p5 hover:border-p4 transition-colors">
+                  9%
+                </button>
+                {symbol?.trim() && (
+                  <button type="button" onClick={handleSuggestBbTarget}
+                    className="text-[9px] px-2 py-0.5 rounded font-semibold"
+                    style={{ background: `${EXIT_COLOR}18`, color: EXIT_COLOR, border: `1px solid ${EXIT_COLOR}44` }}>
+                    Sugerir do histórico
+                  </button>
+                )}
+              </div>
+              {bbTargetSuggest?.loading ? (
+                <p className="text-[9px] text-p5/40 font-mono">Calculando…</p>
+              ) : bbTargetSuggest?.error ? (
+                <p className="text-[9px] text-amber-400/90 font-mono">{bbTargetSuggest.error}</p>
+              ) : bbTargetSuggest ? (
+                <p className="text-[9px] text-p5/50 font-mono leading-relaxed">
+                  Média histórica: +{bbTargetSuggest.avg}% ({bbTargetSuggest.count} ciclos fundo→topo)
+                </p>
+              ) : null}
+            </>
+          )}
+        </div>
       </div>
 
       <div className="rounded-md p-2" style={{ background: '#1a1d28', border: '1px solid #2a2d3a' }}>
@@ -505,6 +731,57 @@ export default function MaCrossStrategyForm({ form, patch, symbol, exchange }) {
                 onChange={v => patch('adaptiveOpts.maxPct', v)} min={0.5} max={20} className="w-full" />
             </div>
           </div>
+        </div>
+      )}
+
+      {symbol?.trim() && (
+        <div className="rounded-md p-2 space-y-1.5" style={{ background: '#1a1d28', border: '1px solid #2a2d3a' }}>
+          <span className="text-[10px] font-bold uppercase tracking-wider text-p5/50">Histórico</span>
+
+          {histStats?.loading ? (
+            <p className="text-[9px] text-p5/40 font-mono">Carregando…</p>
+          ) : histStats ? (
+            <div className="space-y-1">
+              {/* RSI */}
+              {histStats.rsi ? (
+                <p className="text-[9px] font-mono leading-relaxed">
+                  <span className="text-p5/50">RSI {entryIv} </span>
+                  <span className={histStats.rsi.avg >= 0 ? 'text-green-500 font-semibold' : 'text-red-500 font-semibold'}>
+                    {histStats.rsi.avg > 0 ? '+' : ''}{histStats.rsi.avg}%
+                  </span>
+                  <span className="text-p5/40"> média ({histStats.rsi.count} ciclos, RSI &lt;30 → &gt;70)</span>
+                </p>
+              ) : histStats.rsiErr ? (
+                <p className="text-[9px] text-amber-400/70 font-mono">RSI: {histStats.rsiErr}</p>
+              ) : null}
+
+              {/* MA-Cross */}
+              {histStats.macross ? (
+                <p className="text-[9px] font-mono leading-relaxed">
+                  <span className="text-p5/50">MA-Cross </span>
+                  <span className={histStats.macross.avg >= 0 ? 'text-green-500 font-semibold' : 'text-red-500 font-semibold'}>
+                    {histStats.macross.avg > 0 ? '+' : ''}{histStats.macross.avg}%
+                  </span>
+                  <span className="text-p5/40"> média ({histStats.macross.count} ciclos, EMA9/21 {entryIv}↑ → {exitIv}↓)</span>
+                </p>
+              ) : histStats.macrossErr ? (
+                <p className="text-[9px] text-amber-400/70 font-mono">MA-Cross: {histStats.macrossErr}</p>
+              ) : null}
+
+              {/* Bollinger Bands — fundo→topo */}
+              {histStats.bb ? (
+                <p className="text-[9px] font-mono leading-relaxed">
+                  <span className="text-p5/50">BB 4h </span>
+                  <span className={histStats.bb.avg >= 0 ? 'text-green-500 font-semibold' : 'text-red-500 font-semibold'}>
+                    {histStats.bb.avg > 0 ? '+' : ''}{histStats.bb.avg}%
+                  </span>
+                  <span className="text-p5/40"> média ({histStats.bb.count} ciclos, banda inferior → superior BB(20,2))</span>
+                </p>
+              ) : histStats.bbErr ? (
+                <p className="text-[9px] text-amber-400/70 font-mono">BB: {histStats.bbErr}</p>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       )}
 

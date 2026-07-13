@@ -67,6 +67,16 @@ export const MA_CROSS_DEFAULTS = {
         { id: 1, enabled: true, interval: '15m', period: 14, operator: '>', value: 70 },
       ],
     },
+    bbUpper: {
+      enabled:  true,
+      interval: '4h',
+      period:   20,
+      stdDev:   2.0,
+    },
+    bbTakeProfit: {
+      enabled:   true,
+      targetPct: 6,
+    },
   },
   stopLoss: { enabled: true, maxLossPct: 5, trailing: true, trailStepPct: 5 },
   execution: {
@@ -79,6 +89,13 @@ export const MA_CROSS_DEFAULTS = {
   },
   polling: { pollMs: 60_000, fastPollMs: 30_000 },
   adaptiveOpts: { defaultPct: 3, maxPct: 8, minPct: 0.5, minEpisodes: 3, defaultAbovePct: 4, maxAbovePct: 8, minAbovePct: 0.5 },
+  entryBbFilter: {
+    enabled:  true,
+    interval: '4h',
+    period:   20,
+    stdDev:   2.0,
+    maxPctB:  0.4,
+  },
   volume: { minVolumeUsdt: 3_000_000, allowLowVolume: false },
   entryCooldownHours: 4,
 };
@@ -104,6 +121,38 @@ function normalizeCrossBlock(block, fb) {
     direction: block?.direction ?? fb.direction,
     tolerancePct: Number(block?.tolerancePct ?? fb.tolerancePct ?? 0),
     maxAboveMaPct: Math.max(0, Number(block?.maxAboveMaPct ?? fb.maxAboveMaPct ?? 0)),
+  };
+}
+
+function normalizeEntryBbFilter(block) {
+  const d = MA_CROSS_DEFAULTS.entryBbFilter;
+  const src = block ?? {};
+  return {
+    enabled:  src.enabled !== false,
+    interval: src.interval ?? d.interval,
+    period:   clampPeriod(src.period, d.period),
+    stdDev:   Math.max(0.5, Math.min(4, Number(src.stdDev  ?? d.stdDev))),
+    maxPctB:  Math.max(0,   Math.min(1, Number(src.maxPctB ?? d.maxPctB))),
+  };
+}
+
+function normalizeExitBbUpper(block) {
+  const d = MA_CROSS_DEFAULTS.exit.bbUpper;
+  const src = block ?? {};
+  return {
+    enabled:  src.enabled !== false,
+    interval: src.interval ?? d.interval,
+    period:   clampPeriod(src.period, d.period),
+    stdDev:   Math.max(0.5, Math.min(4, Number(src.stdDev ?? d.stdDev))),
+  };
+}
+
+function normalizeExitBbTakeProfit(block) {
+  const d = MA_CROSS_DEFAULTS.exit.bbTakeProfit;
+  const src = block ?? {};
+  return {
+    enabled:   src.enabled !== false,
+    targetPct: Math.max(0.5, Number(src.targetPct ?? d.targetPct)),
   };
 }
 
@@ -170,7 +219,7 @@ export function normalizeMaCrossForm(body = {}) {
     label: body.label ?? d.label,
     kind: 'ma_cross',
     entry: normalizeCrossBlock(body.entry ?? d.entry, d.entry),
-    entryTrendMa: normalizeEntryTrendMa(body.entryTrendMa),
+    entryTrendMa:     normalizeEntryTrendMa(body.entryTrendMa),
     maFiltersEnabled: body.maFiltersEnabled !== false,
     maFilters: mapMaFilters(body.maFilters, body.priceFilter),
     exit: {
@@ -181,6 +230,8 @@ export function normalizeMaCrossForm(body = {}) {
         logic: exit.rsi?.logic ?? d.exit.rsi.logic,
         conditions: mapRsiConditions(exit.rsi?.conditions),
       },
+      bbUpper:      normalizeExitBbUpper(exit.bbUpper),
+      bbTakeProfit: normalizeExitBbTakeProfit(exit.bbTakeProfit),
     },
     stopLoss: {
       enabled: body.stopLoss?.enabled !== false,
@@ -200,6 +251,7 @@ export function normalizeMaCrossForm(body = {}) {
     adaptiveOpts: { ...d.adaptiveOpts, ...body.adaptiveOpts },
     volume: { ...d.volume, ...body.volume },
     entryCooldownHours: Number(body.entryCooldownHours ?? d.entryCooldownHours ?? 4),
+    entryBbFilter: normalizeEntryBbFilter(body.entryBbFilter),
   };
 }
 
@@ -216,7 +268,8 @@ export function maCrossFormToPayload(form, meta = {}) {
     kind: 'ma_cross',
     label: c.label,
     entry: c.entry,
-    entryTrendMa: c.entryTrendMa,
+    entryTrendMa:  c.entryTrendMa,
+    entryBbFilter: c.entryBbFilter,
     maFiltersEnabled: c.maFiltersEnabled,
     maFilters: c.maFilters.map(({ id, enabled, period, interval, mode, maxDipPct, fixedDipPct, maxAbovePct, fixedAbovePct, tolerancePct }) => ({
       id, enabled, period, interval, mode, maxDipPct, maxAbovePct, tolerancePct,
@@ -233,6 +286,8 @@ export function maCrossFormToPayload(form, meta = {}) {
           .filter(cond => cond.enabled)
           .map(({ interval, period, operator, value }) => ({ enabled: true, interval, period, operator, value })),
       },
+      bbUpper:      c.exit.bbUpper,
+      bbTakeProfit: c.exit.bbTakeProfit,
     },
     stopLoss: c.stopLoss,
     execution: c.execution,

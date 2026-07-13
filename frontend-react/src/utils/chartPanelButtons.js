@@ -14,6 +14,8 @@ export const CHART_PANEL_BUTTON_KEYS = [
   'bandsPct',
   'bandsAbove',
   'bandsBelow',
+  'stopLoss',
+  'bb',
 ];
 
 export const DEFAULT_CHART_PANEL_BUTTONS = {
@@ -30,6 +32,8 @@ export const DEFAULT_CHART_PANEL_BUTTONS = {
   bandsPct: true,
   bandsAbove: true,
   bandsBelow: true,
+  stopLoss: true,
+  bb: true,
 };
 
 export function loadChartPanelButtons() {

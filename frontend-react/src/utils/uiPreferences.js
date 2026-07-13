@@ -4,7 +4,7 @@ export const CHART_INTERVAL_OPTIONS = [
   '1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w',
 ];
 
-export const PANEL_KEYS = ['indicators', 'stats', 'macross'];
+export const PANEL_KEYS = ['indicators', 'stats'];
 
 export const BAND_PCT_OPTIONS = [2, 3, 4, 5];
 
@@ -14,7 +14,7 @@ const VALID_OVERLAY_PERIODS = ['9', '21', '50', '200'];
 
 /** IDs válidos de indicadores do gráfico. */
 export const VALID_ACTIVE_INDICATORS = [
-  'ma9', 'ma21', 'ma50', 'ma200', 'ichimoku', 'rsi', 'rsi50', 'rsi80',
+  'ma9', 'ma21', 'ma50', 'ma200', 'ichimoku', 'rsi', 'rsi50', 'rsi80', 'stopLoss',
 ];
 
 /** Cores padrão por período (convenção TradingView / melhores práticas). */
@@ -29,19 +29,42 @@ function defaultColorForPeriod(period) {
   return PERIOD_DEFAULT_COLORS[String(period)] ?? '#94a3b8';
 }
 
-/** Indicadores ativos por padrão: ma50 ligado, restantes visíveis mas desligados. */
-export const DEFAULT_ACTIVE_INDICATORS = ['ma50'];
+/** Indicadores ativos por padrão: ma50 e stopLoss ligados, restantes desligados. */
+export const DEFAULT_ACTIVE_INDICATORS = ['ma50', 'stopLoss'];
 
 /** Estado inicial das bandas % no gráfico. */
 export const DEFAULT_MA_BANDS = {
   pct: 4,
   showAbove: true,
   showBelow: true,
-  targetSlotId: null, // null = usa o primeiro slot habilitado
+  period: '50',
+  interval: '1h',
 };
 
 /** Sem overlay por padrão — usuário adiciona via painel do gráfico ou Configurações. */
 export const DEFAULT_OVERLAY_SLOTS = [];
+
+export const BB_PERIOD_OPTIONS = ['10', '20', '30'];
+export const BB_STDDEV_OPTIONS = [1, 2, 3];
+
+/** Bandas de Bollinger no gráfico: período/intervalo próprios (como MA1/MA2), desligadas por padrão. */
+export const DEFAULT_BOLLINGER_BANDS = {
+  enabled: false,
+  period: '20',
+  stdDev: 2,
+  interval: '4h',
+};
+
+export function normalizeBollingerBandsDefaults(raw) {
+  const d = DEFAULT_BOLLINGER_BANDS;
+  const stdDev = Number(raw?.stdDev);
+  return {
+    enabled: typeof raw?.enabled === 'boolean' ? raw.enabled : d.enabled,
+    period: BB_PERIOD_OPTIONS.includes(String(raw?.period)) ? String(raw.period) : d.period,
+    stdDev: BB_STDDEV_OPTIONS.includes(stdDev) ? stdDev : d.stdDev,
+    interval: CHART_INTERVAL_OPTIONS.includes(raw?.interval) ? raw.interval : d.interval,
+  };
+}
 
 export function normalizeActiveIndicators(arr) {
   if (!Array.isArray(arr)) return [...DEFAULT_ACTIVE_INDICATORS];
@@ -55,7 +78,8 @@ export function normalizeMaBandsDefaults(raw) {
     pct: BAND_PCT_OPTIONS.includes(pct) ? pct : d.pct,
     showAbove: typeof raw?.showAbove === 'boolean' ? raw.showAbove : d.showAbove,
     showBelow: typeof raw?.showBelow === 'boolean' ? raw.showBelow : d.showBelow,
-    targetSlotId: typeof raw?.targetSlotId === 'string' ? raw.targetSlotId : null,
+    period: VALID_OVERLAY_PERIODS.includes(String(raw?.period)) ? String(raw.period) : d.period,
+    interval: CHART_INTERVAL_OPTIONS.includes(raw?.interval) ? raw.interval : d.interval,
   };
 }
 
@@ -81,11 +105,11 @@ export const DEFAULT_UI_PREFS = {
   defaultChartInterval: '15m',
   visiblePanels: {
     indicators: true,
-    stats: false,
-    macross: true,
+    stats: true,
   },
   overlaySlots: normalizeOverlaySlots(DEFAULT_OVERLAY_SLOTS),
   maBandsDefaults: normalizeMaBandsDefaults(DEFAULT_MA_BANDS),
+  bollingerBandsDefaults: normalizeBollingerBandsDefaults(DEFAULT_BOLLINGER_BANDS),
   activeIndicators: [...DEFAULT_ACTIVE_INDICATORS],
 };
 
@@ -95,6 +119,7 @@ function cloneDefaults() {
     visiblePanels: { ...DEFAULT_UI_PREFS.visiblePanels },
     overlaySlots: normalizeOverlaySlots(DEFAULT_OVERLAY_SLOTS),
     maBandsDefaults: normalizeMaBandsDefaults(DEFAULT_MA_BANDS),
+    bollingerBandsDefaults: normalizeBollingerBandsDefaults(DEFAULT_BOLLINGER_BANDS),
     activeIndicators: [...DEFAULT_ACTIVE_INDICATORS],
   };
 }
@@ -121,8 +146,15 @@ export function loadUiPreferences() {
     if (parsed.maBandsDefaults) {
       result.maBandsDefaults = normalizeMaBandsDefaults(parsed.maBandsDefaults);
     }
+    if (parsed.bollingerBandsDefaults) {
+      result.bollingerBandsDefaults = normalizeBollingerBandsDefaults(parsed.bollingerBandsDefaults);
+    }
     if (Array.isArray(parsed.activeIndicators)) {
       result.activeIndicators = normalizeActiveIndicators(parsed.activeIndicators);
+      // Migração: garante stopLoss ativo para usuários que já tinham preferências salvas
+      if (!result.activeIndicators.includes('stopLoss')) {
+        result.activeIndicators = [...result.activeIndicators, 'stopLoss'];
+      }
     }
     return result;
   } catch {

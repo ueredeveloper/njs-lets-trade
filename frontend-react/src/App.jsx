@@ -20,7 +20,6 @@ import IndicatorPanel from './components/IndicatorPanel';
 import CandlestickChart from './components/CandlestickChart';
 import SettingsSidebar from './components/SettingsSidebar';
 import StatisticsPanel from './components/StatisticsPanel';
-import MultitradePanel from './components/MultitradePanel';
 import BootStageBar from './components/BootStageBar';
 
 const MOBILE_SHEET_HEIGHT = '88%';
@@ -74,7 +73,6 @@ function AppContent() {
   const panelDefs = useMemo(() => ([
     { id: 'indicators', label: t('app.analyze') },
     { id: 'stats',      label: t('app.statistics') },
-    { id: 'macross',    label: 'MA-Cross' },
   ]), [t]);
 
   const visiblePanelDefs = useMemo(
@@ -212,8 +210,6 @@ function AppContent() {
     && (bootDebug || (openPanels.includes('indicators') && uiPrefs.visiblePanels.indicators !== false));
   const showStats = show(BOOT_STAGE.STATS_PANEL)
     && (bootDebug || (openPanels.includes('stats') && uiPrefs.visiblePanels.stats !== false));
-  const showMacross = show(BOOT_STAGE.MACROSS_PANEL)
-    && (bootDebug || (openPanels.includes('macross') && uiPrefs.visiblePanels.macross !== false));
 
   return (
     <div className={`flex flex-col h-dvh min-h-0 overflow-hidden ${bootDebug ? 'pb-24' : ''}`}>
@@ -361,7 +357,7 @@ function AppContent() {
 
           {/* 3 — Barra de painéis */}
           {show(BOOT_STAGE.PANEL_BAR) && visiblePanelDefs.length > 0 && (
-          <div className="shrink-0 border-t border-p2 flex divide-x divide-p2">
+          <div className="shrink-0 border-t border-p2 flex items-stretch divide-x divide-p2">
             {visiblePanelDefs.map(({ id, label }) => (
               <button
                 key={id}
@@ -370,10 +366,6 @@ function AppContent() {
                 className={`flex items-center gap-1.5 flex-1 justify-center px-3 py-1.5 text-xs uppercase tracking-widest transition-colors touch-manipulation ${
                   openPanels.includes(id) ? 'text-white' : 'text-p5 hover:text-white'
                 }`}
-                style={
-                  openPanels.includes(id) && id === 'macross' ? { color: '#22d3ee' }
-                  : {}
-                }
               >
                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
                   strokeWidth="1.5" stroke="currentColor"
@@ -397,13 +389,6 @@ function AppContent() {
           {showStats && (
             <div className="flex-1 min-h-0 flex flex-col">
               <StatisticsPanel />
-            </div>
-          )}
-
-          {/* 8 — MultitradePanel */}
-          {showMacross && (
-            <div className="flex-1 min-h-0 flex flex-col">
-              <MultitradePanel />
             </div>
           )}
         </div>

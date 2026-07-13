@@ -116,11 +116,35 @@ export async function fetchRsiOversoldRecovery(symbol, interval, oversold = 30, 
   return res.json();
 }
 
+export async function fetchSimpleMaCross(symbol, entryInterval = '15m', exitInterval = '30m', source = null) {
+  const params = new URLSearchParams({ symbol, entryInterval, exitInterval });
+  if (source) params.set('source', source);
+  const res = await fetch(`/services/ma-cross-simple?${params}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 /** Analisa ciclos fundo→topo na Bollinger Bands (4h por padrão) para uma moeda. */
 export async function fetchBollingerBandRecovery(symbol, interval = '4h', period = 20, stdDev = 2, source = null) {
   const params = new URLSearchParams({ symbol, interval, period, stdDev });
   if (source) params.set('source', source);
   const res = await fetch(`/services/bollinger-band-recovery?${params}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+/** Filtra moedas por posição na Bollinger Bands (%B): mais próximas do fundo ou do topo. */
+export async function fetchBollingerBandPositionFilter({
+  interval = '4h', period = '20', stdDev = '2', position = 'near_bottom', proximityPct = '20',
+} = {}) {
+  const params = new URLSearchParams({ interval, period, stdDev, position, proximityPct });
+  const res = await fetch(`/services/bollinger-band-position-filter?${params}`);
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error ?? `HTTP ${res.status}`);
@@ -519,12 +543,23 @@ export async function fetchMaCompareFilter({
     proximityPct: String(proximityPct),
     lang,
   });
-  const res = await fetch(`/services/ma-compare-filter?${params}`);
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.error ?? `ma-compare-filter falhou: HTTP ${res.status}`);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 20_000);
+  try {
+    const res = await fetch(`/services/ma-compare-filter?${params}`, { signal: controller.signal });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error ?? `ma-compare-filter falhou: HTTP ${res.status}`);
+    }
+    return await res.json();
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      throw new Error('ma-compare-filter: tempo limite excedido (20s) — cache do servidor ocupado, tente novamente');
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
   }
-  return res.json();
 }
 
 /** Gap e cruzamento MA por símbolo (favoritos MA-Cross). */
