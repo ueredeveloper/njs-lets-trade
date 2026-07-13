@@ -287,12 +287,12 @@ const T = {
 
     // Gráfico
     'chart.select':          'Selecione uma moeda para ver o gráfico',
-    'chart.load_last_10':    'Zoom nos últimos 10 candles (indicadores calculados com histórico completo)',
     'chart.load_last_20':    'Zoom nos últimos 20 candles (indicadores calculados com histórico completo)',
-    'chart.load_last_30':    'Zoom nos últimos 30 candles (indicadores calculados com histórico completo)',
-    'chart.last_10_btn':     '10',
+    'chart.load_last_50':    'Zoom nos últimos 50 candles (indicadores calculados com histórico completo)',
+    'chart.load_last_100':   'Zoom nos últimos 100 candles (indicadores calculados com histórico completo)',
     'chart.last_20_btn':     '20',
-    'chart.last_30_btn':     '30',
+    'chart.last_50_btn':     '50',
+    'chart.last_100_btn':    '100',
     'chart.tip.sma9':        'EMA exponencial (9 candles) no mesmo intervalo do gráfico (ex.: 15m). Liga/desliga a linha roxa.',
     'chart.tip.sma21':       'EMA exponencial (21 candles) no intervalo do gráfico. Usada no cruzamento MA-Cross. Linha laranja.',
     'chart.tip.sma50':       'EMA50 no intervalo do gráfico. Linha ciano.',
@@ -693,12 +693,12 @@ const T = {
 
     // Chart
     'chart.select':          'Select a currency to view the chart',
-    'chart.load_last_10':    'Zoom to last 10 candles (indicators use full history)',
     'chart.load_last_20':    'Zoom to last 20 candles (indicators use full history)',
-    'chart.load_last_30':    'Zoom to last 30 candles (indicators use full history)',
-    'chart.last_10_btn':     '10',
+    'chart.load_last_50':    'Zoom to last 50 candles (indicators use full history)',
+    'chart.load_last_100':   'Zoom to last 100 candles (indicators use full history)',
     'chart.last_20_btn':     '20',
-    'chart.last_30_btn':     '30',
+    'chart.last_50_btn':     '50',
+    'chart.last_100_btn':    '100',
     'chart.tip.sma9':        'Exponential MA (9 candles) on the chart interval (e.g. 15m). Toggles purple line.',
     'chart.tip.sma21':       'Exponential MA (21 candles) on chart interval. MA-Cross slow leg. Orange line.',
     'chart.tip.sma50':       'EMA50 on chart interval. Cyan line.',

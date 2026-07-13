@@ -13,7 +13,7 @@ import { DEFAULT_OVERLAY_SLOTS, BAND_PCT_OPTIONS, MAX_OVERLAY_SLOTS, PERIOD_DEFA
 import { CHART_VIEW, INTERVAL_MS, computeZoomWindow, buildFixedDataZoom, buildInsideDataZoom, computeCandleLimitFromTime, isTradePanelChartView } from '../utils/chartView';
 
 const LIMIT = DEFAULT_CANDLE_LIMIT;
-const LAST_CANDLE_PRESETS = [10, 20, 30];
+const LAST_CANDLE_PRESETS = [20, 50, 100];
 const MAX_CANDLES = 1000;
 const CANDLE_FETCH_STEPS = [500, 750, 1000];
 const OVERLAY_MA_INTERVALS = ['1m', '5m', '15m', '30m', '1h', '2h', '4h', '8h', '12h', '1d'];
