@@ -58,12 +58,14 @@ const MA_CROSS_DEFAULTS = {
         { enabled: true, interval: '15m', period: 14, operator: '>', value: 70 },
       ],
     },
-    /** Preço fecha na/acima da banda superior da Bollinger Bands (topo) → vende. */
+    /** Preço na/acima da banda superior da Bollinger Bands (topo) → vende. */
     bbUpper: {
       enabled:  false,
       interval: '4h',
       period:   20,
       stdDev:   2.0,
+      /** % mínimo acima da banda superior para confirmar o rompimento (0 = basta tocar). */
+      breakoutPct: 2,
     },
     /** Vende quando o ganho desde a entrada atinge targetPct — sugerido a partir da
      *  valorização média histórica fundo→topo da Bollinger Bands (ver analyseBollingerBandRecovery). */
@@ -114,8 +116,8 @@ const MA_CROSS_DEFAULTS = {
     interval: '4h',
     period:   20,
     stdDev:   2.0,
-    /** Máx %B permitido (0–1); padrão 0.4 = preço nos 40% inferiores do range BB. */
-    maxPctB:  0.4,
+    /** Máx %B permitido (0–1); padrão 0.3 = preço nos 30% inferiores do range BB. */
+    maxPctB:  0.3,
   },
 
   /** Horas sem nova entrada após venda (0 = desligado). */
@@ -189,10 +191,11 @@ function normalizeExitBbUpper(block, fallback) {
   const fb = fallback ?? MA_CROSS_DEFAULTS.exit.bbUpper;
   const src = block ?? {};
   return {
-    enabled:  src.enabled === true,
-    interval: normalizeInterval(src.interval, fb.interval),
-    period:   clampPeriod(src.period, fb.period),
-    stdDev:   Math.max(0.5, Math.min(4, Number(src.stdDev ?? fb.stdDev))),
+    enabled:     src.enabled === true,
+    interval:    normalizeInterval(src.interval, fb.interval),
+    period:      clampPeriod(src.period, fb.period),
+    stdDev:      Math.max(0.5, Math.min(4, Number(src.stdDev ?? fb.stdDev))),
+    breakoutPct: Math.max(0, Math.min(20, Number(src.breakoutPct ?? fb.breakoutPct ?? 0))),
   };
 }
 

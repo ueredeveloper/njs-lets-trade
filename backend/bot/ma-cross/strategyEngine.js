@@ -613,7 +613,7 @@ function evaluateEntryBbFilter(config, cMap, opts = {}) {
   if (range <= 0) return { allowed: true };
 
   const pctB   = (close - lastBb.lower) / range;
-  const maxPctB = bb.maxPctB ?? 0.4;
+  const maxPctB = bb.maxPctB ?? 0.3;
 
   if (pctB > maxPctB) {
     return {
@@ -689,6 +689,7 @@ function evaluateEntryTrendMa(config, cMap, opts = {}) {
 }
 
 function evaluateMaFilters(close, config, cMap, adaptiveDips, adaptiveStretches = {}) {
+  const details = [];
   for (const f of activeMaFilters(config)) {
     const filtCandles = cMap[f.interval] ?? [];
     const key = `${f.period}_${f.interval}`;
@@ -696,8 +697,9 @@ function evaluateMaFilters(close, config, cMap, adaptiveDips, adaptiveStretches 
       close, filtCandles, f, adaptiveDips[key], config.adaptiveOpts, adaptiveStretches[key],
     );
     if (!pf.allowed) return pf;
+    details.push({ filter: f, ...pf });
   }
-  return { allowed: true };
+  return { allowed: true, details };
 }
 
 function pullbackEntryEnabled(config) {
@@ -773,6 +775,9 @@ function evaluateCrossSignal(config, cMap, adaptiveDips = {}, opts = {}) {
     ma1: cross.ma1, ma2: cross.ma2, close: cross.close,
     crossOpenTime: cross.openTime,
     entryDesc: `${crossLabel(entry.ma1)} ${dirLbl} ${crossLabel(entry.ma2)}`,
+    trendMa1: trendCheck.trendMa1, trendMa2: trendCheck.trendMa2, trendGapPct: trendCheck.gapPct,
+    pctB: bbCheck.pctB, bbUpper: bbCheck.upper, bbLower: bbCheck.lower, bbMiddle: bbCheck.middle,
+    bbInterval: bbCheck.bbInterval,
   };
 }
 
@@ -875,6 +880,10 @@ function evaluatePullbackCandle(config, cMap, adaptiveDips, adaptiveStretches, {
       : null,
     entryDesc: `${crossLabel(entry.ma1)} ${dirLbl} ${crossLabel(entry.ma2)} (pullback)`,
     entryOpenTime: entryCandle.openTime,
+    maFilterDetails: filterCheck.details,
+    trendMa1: trendCheck.trendMa1, trendMa2: trendCheck.trendMa2, trendGapPct: trendCheck.gapPct,
+    pctB: bbCheck.pctB, bbUpper: bbCheck.upper, bbLower: bbCheck.lower, bbMiddle: bbCheck.middle,
+    bbInterval: bbCheck.bbInterval,
   };
 }
 
@@ -996,6 +1005,10 @@ function evaluateEntry(config, cMap, adaptiveDips = {}, opts = {}) {
     ma1, ma2, close,
     crossOpenTime: crossSignal.crossOpenTime,
     entryDesc: crossSignal.entryDesc,
+    maFilterDetails: filterCheck.details,
+    trendMa1: crossSignal.trendMa1, trendMa2: crossSignal.trendMa2, trendGapPct: crossSignal.trendGapPct,
+    pctB: crossSignal.pctB, bbUpper: crossSignal.bbUpper, bbLower: crossSignal.bbLower,
+    bbMiddle: crossSignal.bbMiddle, bbInterval: crossSignal.bbInterval,
   };
 }
 
@@ -1024,7 +1037,14 @@ function evaluateRsiExit(config, cMap) {
   };
 }
 
-/** Preço fechando na/acima da banda superior da Bollinger Bands (topo) → sinal de venda. */
+/**
+ * Preço rompendo a banda superior da Bollinger Bands (topo) → sinal de venda.
+ * A banda é ancorada nos candles já fechados (evita que ela "persiga" o preço ao
+ * vivo), mas a comparação usa o preço atual do candle em formação — não espera o
+ * fechamento do candle para reagir a um rompimento (que no timeframe 4h poderia
+ * levar horas). breakoutPct exige que o preço fique N% acima da banda (não só
+ * tocando) para confirmar o rompimento e evitar vendas por um toque raso.
+ */
 function evaluateBbUpperExit(config, cMap, opts = {}) {
   const bb = config.exit?.bbUpper;
   if (!bb?.enabled) return { hit: false };
@@ -1041,12 +1061,13 @@ function evaluateBbUpperExit(config, cMap, opts = {}) {
   if (!results.length) return { hit: false };
 
   const lastBb = results[results.length - 1];
-  const close  = closes[closes.length - 1];
+  const close  = closedOnly ? parseFloat(raw.at(-1)?.close ?? closes.at(-1)) : closes[closes.length - 1];
+  const threshold = lastBb.upper * (1 + (bb.breakoutPct ?? 0) / 100);
 
-  if (close >= lastBb.upper) {
-    return { hit: true, close, upper: lastBb.upper, lower: lastBb.lower, middle: lastBb.middle, bbInterval: iv };
+  if (close >= threshold) {
+    return { hit: true, close, upper: lastBb.upper, lower: lastBb.lower, middle: lastBb.middle, bbInterval: iv, threshold };
   }
-  return { hit: false, close, upper: lastBb.upper, bbInterval: iv };
+  return { hit: false, close, upper: lastBb.upper, threshold, bbInterval: iv };
 }
 
 /** Vende quando o ganho desde a entrada atinge o alvo (sugerido do histórico BB fundo→topo). */
@@ -1129,10 +1150,11 @@ function evaluateExit(config, cMap, entryPrice, opts = {}) {
   const bbUpperExit = evaluateBbUpperExit(config, cMap, { closedOnly });
   if (bbUpperExit.hit) {
     const bbu = config.exit.bbUpper;
+    const breakoutTxt = bbu.breakoutPct ? ` +${bbu.breakoutPct}%` : '';
     signals.push({
       kind: 'bbUpper',
       close: bbUpperExit.close,
-      exitDesc: `BB(${bbu.period},${bbu.stdDev}) ${bbu.interval} banda superior`,
+      exitDesc: `BB(${bbu.period},${bbu.stdDev}) ${bbu.interval} banda superior${breakoutTxt}`,
     });
   }
 

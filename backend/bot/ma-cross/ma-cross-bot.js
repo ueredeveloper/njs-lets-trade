@@ -283,6 +283,55 @@ function crossDesc(block) {
   return `${maLabel(block.ma1.period, block.ma1.interval)} ${dir} ${maLabel(block.ma2.period, block.ma2.interval)}`;
 }
 
+function fmtPrice(n) {
+  if (n == null || Number.isNaN(Number(n))) return '—';
+  const x = Number(n);
+  if (x < 0.01) return x.toFixed(6);
+  if (x < 1) return x.toFixed(4);
+  return x.toFixed(2);
+}
+
+function fmtPct(n, digits = 2) {
+  if (n == null || Number.isNaN(Number(n))) return '—';
+  const sign = n > 0 ? '+' : '';
+  return `${sign}${Number(n).toFixed(digits)}%`;
+}
+
+/** Resumo em texto dos cálculos que levaram à entrada (cruzamento, tendência 1h, filtros MA, Bollinger). */
+function buildEntryReasonLines(config, entryMeta) {
+  const lines = [];
+  const entry = config.entry;
+
+  lines.push(`${entryMeta.entryDesc ?? crossDesc(entry)} @ ${fmtPrice(entryMeta.close)}`);
+
+  const trend = config.entryTrendMa;
+  if (trend?.enabled && entryMeta.trendMa1 != null && entryMeta.trendMa2 != null) {
+    const ma1Leg = trend.ma1 ?? { period: 9, interval: '1h' };
+    const ma2Leg = trend.ma2 ?? { period: 21, interval: '1h' };
+    lines.push(
+      `Tendência ${maLabel(ma1Leg.period, ma1Leg.interval)} > ${maLabel(ma2Leg.period, ma2Leg.interval)}: `
+      + `${fmtPrice(entryMeta.trendMa1)} > ${fmtPrice(entryMeta.trendMa2)} (${fmtPct(entryMeta.trendGapPct)})`,
+    );
+  }
+
+  for (const d of entryMeta.maFilterDetails ?? []) {
+    const f = d.filter;
+    const distTxt = d.distPct != null ? ` (${fmtPct(d.distPct)} vs MA)` : '';
+    lines.push(`${maLabel(f.period, f.interval)}: preço ${fmtPrice(entryMeta.close)}${distTxt}`);
+  }
+
+  const bbf = config.entryBbFilter;
+  if (bbf?.enabled && entryMeta.pctB != null) {
+    const iv = entryMeta.bbInterval ?? bbf.interval ?? '4h';
+    lines.push(
+      `Bollinger ${iv}: %B ${(entryMeta.pctB * 100).toFixed(0)}% `
+      + `(banda ${fmtPrice(entryMeta.bbLower)}–${fmtPrice(entryMeta.bbUpper)})`,
+    );
+  }
+
+  return lines;
+}
+
 let rulesStateColumnOk = true;
 
 async function saveState(id, update, log) {
@@ -413,6 +462,8 @@ async function executeBuy({
     rules_state: session.rulesState,
   }, log);
 
+  const reasonLines = buildEntryReasonLines(strategy.config, entryMeta);
+
   log(`${'─'.repeat(60)}`);
   log(`${G}🟢 COMPRA EXECUTADA${X}`);
   log(`   Preço : ${avgPrice.toFixed(6)}  Qty: ${filledQty}  USDT: ${quoteQty.toFixed(4)}`);
@@ -421,8 +472,15 @@ async function executeBuy({
   } else if (entryMeta.pullbackPct != null) {
     log(`   Pullback: ${entryMeta.pullbackPct.toFixed(1)}%  MA2: +${entryMeta.aboveMa2Pct?.toFixed(1) ?? '?'}%`);
   }
+  if (reasonLines.length) {
+    log(`   Motivos da entrada:`);
+    for (const line of reasonLines) log(`     • ${line}`);
+  }
   log(`${'─'.repeat(60)}`);
-  sendWhatsApp(`🟢 MA-CROSS COMPRA [${strategyId}] ${symbol}\nPreço: ${avgPrice}\nUSDT: ${quoteQty.toFixed(4)}`);
+  sendWhatsApp(
+    `🟢 MA-CROSS COMPRA [${strategyId}] ${symbol}\nPreço: ${avgPrice}\nUSDT: ${quoteQty.toFixed(4)}`
+    + (reasonLines.length ? `\n\nMotivos:\n${reasonLines.map(l => `• ${l}`).join('\n')}` : ''),
+  );
   return true;
 }
 
