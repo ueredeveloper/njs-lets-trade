@@ -94,7 +94,7 @@ export const MA_CROSS_DEFAULTS = {
     interval: '4h',
     period:   20,
     stdDev:   2.0,
-    maxPctB:  0.4,
+    maxPctB:  0.3,
   },
   volume: { minVolumeUsdt: 3_000_000, allowLowVolume: false },
   entryCooldownHours: 4,
