@@ -43,6 +43,7 @@ function maDistPct(close, ma) {
 function simulateForwardTrade(scanCandles, startIdx, entryPrice, config, cMap) {
   const position = { entryPrice: entryPrice * (1 + FEE_RATE), peakPrice: entryPrice };
   const evalOpts = { closedOnly: true };
+  const entryOpenTime = scanCandles[startIdx].openTime;
 
   for (let j = startIdx + 1; j < scanCandles.length; j++) {
     const c = scanCandles[j];
@@ -52,6 +53,7 @@ function simulateForwardTrade(scanCandles, startIdx, entryPrice, config, cMap) {
     const exit = evaluateExit(config, slice, position.entryPrice, {
       ...evalOpts,
       peakPrice: position.peakPrice,
+      entryOpenTime,
     });
     if (!exit.exit) continue;
     const exitPrice = exit.close * (1 - FEE_RATE);

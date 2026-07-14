@@ -1105,11 +1105,84 @@ function computeStopLossFloor(entryPrice, peakPrice, stopLoss = {}) {
 }
 
 const EXIT_REASON_BY_KIND = {
-  ma:           'MA_CROSS_EXIT',
-  rsi:          'RSI_EXIT',
-  bbUpper:      'BB_UPPER_EXIT',
-  bbTakeProfit: 'BB_TAKE_PROFIT_EXIT',
+  ma:             'MA_CROSS_EXIT',
+  maHtfFallback:  'MA_CROSS_EXIT_FALLBACK',
+  rsi:            'RSI_EXIT',
+  bbUpper:        'BB_UPPER_EXIT',
+  bbTakeProfit:   'BB_TAKE_PROFIT_EXIT',
 };
+
+/**
+ * Verifica se o MA1 do exit (timeframe maior, ex. 30m) esteve do lado "confirmado"
+ * (mesmo lado da direção de entrada) em algum candle desde a entrada. Se nunca esteve,
+ * o cross_down configurado no exit nunca vai disparar (não há como cruzar pra baixo sem
+ * antes ter cruzado pra cima) — é o cenário que o fallback em LTF cobre.
+ */
+function htfNeverConfirmedSinceEntry(cMap, exMa, entryOpenTime, closedOnly = true) {
+  if (entryOpenTime == null) return false;
+
+  const c1raw = cMap[exMa.ma1.interval] ?? [];
+  const c2raw = cMap[exMa.ma2.interval] ?? [];
+  const c1 = closedOnly ? closedCandlesOnly(c1raw) : c1raw;
+  const c2 = closedOnly ? closedCandlesOnly(c2raw) : c2raw;
+  const sigIv = finestInterval(exMa.ma1.interval, exMa.ma2.interval);
+  const sigCandles = sigIv === exMa.ma1.interval ? c1 : c2;
+  if (!sigCandles?.length) return false;
+
+  const series1 = buildMaTimeSeries(c1, exMa.ma1.period);
+  const series2 = buildMaTimeSeries(c2, exMa.ma2.period);
+  if (!series1.length || !series2.length) return false;
+
+  // Lado "confirmado" é o oposto da direção de saída (ex.: saída cross_down → confirmado = ma1 > ma2).
+  const confirmAbove = exMa.direction !== 'cross_up';
+
+  for (const c of sigCandles) {
+    if (c.openTime < entryOpenTime) continue;
+    const m1 = maValueAt(series1, c.openTime);
+    const m2 = maValueAt(series2, c.openTime);
+    if (m1 == null || m2 == null) continue;
+    if (confirmAbove ? m1 > m2 : m1 < m2) return false;
+  }
+  return true;
+}
+
+/**
+ * Fallback: se o exit HTF (config.exit.maCross) nunca confirmou desde a entrada, o cross_down
+ * configurado ali nunca vai ocorrer — usa o cruzamento inverso no timeframe de ENTRADA
+ * (ex.: EMA9/21 15m cross_down) como saída alternativa.
+ */
+function evaluateHtfFallbackExit(config, cMap, entryOpenTime, closedOnly = true) {
+  const exMa = config.exit?.maCross;
+  const entry = config.entry;
+  if (!exMa?.enabled || !entry || entryOpenTime == null) return { hit: false };
+  if (!htfNeverConfirmedSinceEntry(cMap, exMa, entryOpenTime, closedOnly)) return { hit: false };
+
+  const fallbackDirection = entry.direction === 'cross_down' ? 'cross_up' : 'cross_down';
+  const maxAgeMin = Math.max(1, Math.ceil((Date.now() - entryOpenTime) / 60_000) + 5);
+
+  const cross = findRecentMaCross({
+    candles1: cMap[entry.ma1.interval] ?? [],
+    period1: entry.ma1.period, interval1: entry.ma1.interval,
+    candles2: cMap[entry.ma2.interval] ?? [],
+    period2: entry.ma2.period, interval2: entry.ma2.interval,
+    direction: fallbackDirection,
+    tolerancePct: entry.tolerancePct ?? 0,
+    maxAgeMin,
+    closedOnly,
+  });
+
+  if (!cross.matched) return { hit: false };
+  if (cross.crossOpenTime != null && cross.crossOpenTime < entryOpenTime) return { hit: false };
+
+  const dirLbl = fallbackDirection === 'cross_down' ? '↓' : '↑';
+  return {
+    hit: true,
+    close: cross.close,
+    ma1: cross.ma1,
+    ma2: cross.ma2,
+    exitDesc: `${maLabel(entry.ma1.period, entry.ma1.interval)} ${dirLbl} ${maLabel(entry.ma2.period, entry.ma2.interval)} (fallback — ${maLabel(exMa.ma1.period, exMa.ma1.interval)}/${exMa.ma2.period} nunca confirmou)`,
+  };
+}
 
 function evaluateExit(config, cMap, entryPrice, opts = {}) {
   const closedOnly = opts.closedOnly !== false;
@@ -1139,6 +1212,15 @@ function evaluateExit(config, cMap, entryPrice, opts = {}) {
         exitDesc: `${maLabel(exMa.ma1.period, exMa.ma1.interval)} ${dirLbl} ${maLabel(exMa.ma2.period, exMa.ma2.interval)}`,
         ma1: cross.ma1, ma2: cross.ma2, close: cross.close,
       });
+    } else if (opts.entryOpenTime != null) {
+      const fallback = evaluateHtfFallbackExit(config, cMap, opts.entryOpenTime, closedOnly);
+      if (fallback.hit) {
+        signals.push({
+          kind: 'maHtfFallback',
+          exitDesc: fallback.exitDesc,
+          ma1: fallback.ma1, ma2: fallback.ma2, close: fallback.close,
+        });
+      }
     }
   }
 
@@ -1181,9 +1263,12 @@ function evaluateExit(config, cMap, entryPrice, opts = {}) {
   } else if (enabledKinds.length === 1) {
     tacticalExit = signals.length > 0;
   }
+  // Fallback é uma válvula de segurança independente do any/all: dispara sempre que presente,
+  // já que existe justamente para o caso em que o exit HTF configurado nunca teria como disparar.
+  if (signals.some(s => s.kind === 'maHtfFallback')) tacticalExit = true;
 
   if (tacticalExit) {
-    const primary = signals[0];
+    const primary = signals.find(s => s.kind === 'maHtfFallback') ?? signals[0];
     return {
       exit: true,
       reason: EXIT_REASON_BY_KIND[primary.kind] ?? 'MA_CROSS_EXIT',
@@ -1469,6 +1554,8 @@ module.exports = {
   evaluateEntryBbFilter,
   evaluateEntryTrendMa,
   evaluateExit,
+  evaluateHtfFallbackExit,
+  htfNeverConfirmedSinceEntry,
   computeStopLossFloor,
   computeAdaptiveDips,
   computeAdaptiveStretches,

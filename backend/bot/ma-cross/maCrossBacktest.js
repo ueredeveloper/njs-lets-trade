@@ -456,6 +456,7 @@ async function runMaCrossBacktest({ symbol, config, exchange = 'binance', capita
       const exit = evaluateExit(config, cMapSlice, position.entryPrice, {
         ...evalOpts,
         peakPrice: position.peakPrice,
+        entryOpenTime: position.entryTime,
       });
       if (!exit.exit) continue;
 

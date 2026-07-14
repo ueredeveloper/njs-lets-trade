@@ -227,7 +227,7 @@ function simulateFiltered30m(cMap, config, fromMs, toMs) {
       const peak = Math.max(position.peak, c.high ?? c.close, c.close);
       position.peak = peak;
       const buyNet = position.entryPrice * (1 + FEE);
-      const exit = evaluateExit(config, slice, buyNet, { peakPrice: peak, closedOnly: true });
+      const exit = evaluateExit(config, slice, buyNet, { peakPrice: peak, closedOnly: true, entryOpenTime: position.entryTime });
       if (exit.exit && c.openTime >= fromMs) {
         const sellNet = exit.close * (1 - FEE);
         const pnlPct = ((sellNet - buyNet) / buyNet) * 100;

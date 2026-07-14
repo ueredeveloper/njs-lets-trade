@@ -172,7 +172,10 @@ function simulate(config, fullMap) {
       });
       phase = 'BOUGHT';
     } else if (phase === 'BOUGHT' && position) {
-      const exit = evaluateExit(config, cMap, position.entryPrice, evalOpts);
+      const exit = evaluateExit(config, cMap, position.entryPrice, {
+        ...evalOpts,
+        entryOpenTime: position.entryTime,
+      });
 
       if (exit.exit) {
         const exitPrice = exit.close * (1 - FEE_RATE);

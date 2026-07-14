@@ -809,7 +809,8 @@ async function tick(rowId, adapter, strategy, log, session) {
       }
     }
 
-    const exitResult = evaluateExit(config, cMap, buyPrice, { peakPrice });
+    const entryOpenTime = state.buy_time ? new Date(state.buy_time).getTime() : null;
+    const exitResult = evaluateExit(config, cMap, buyPrice, { peakPrice, entryOpenTime });
     if (!exitResult.exit) return { phase };
 
     try {

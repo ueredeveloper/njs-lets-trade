@@ -115,7 +115,7 @@ function simulateExit(cMap, config, entryTime, entryPrice) {
     const c = candles[i];
     const slice = sliceCMap(cMap, c.openTime);
     peak = Math.max(peak, c.high ?? c.close, c.close);
-    const exit = evaluateExit(config, slice, buyNet, { peakPrice: peak, closedOnly: true });
+    const exit = evaluateExit(config, slice, buyNet, { peakPrice: peak, closedOnly: true, entryOpenTime: entryTime });
     if (exit.exit) {
       const sellNet = exit.close * (1 - FEE);
       const pnlPct = ((sellNet - buyNet) / buyNet) * 100;
