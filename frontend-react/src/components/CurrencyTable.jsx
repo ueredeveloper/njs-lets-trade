@@ -121,7 +121,7 @@ function splitSymbol(symbol) {
 const FAV_LOG = '[Favoritos]';
 
 /** Altura estimada de cada linha da tabela (px) — virtual scroll. */
-const TABLE_ROW_HEIGHT = 38;
+const TABLE_ROW_HEIGHT = 30;
 
 function FavButton({ active, color, label, text, symbol, kind, onClick, tipKey }) {
   const { t } = useI18n();
@@ -152,11 +152,11 @@ function FavButton({ active, color, label, text, symbol, kind, onClick, tipKey }
         }
       }}
       title={title}
-      className="flex items-center justify-center min-w-[21px] min-h-[21px] w-[21px] h-[21px] rounded text-[9px] font-bold transition-colors touch-manipulation active:scale-95 shrink-0"
+      className="flex items-center justify-center min-w-[15px] min-h-[15px] w-[15px] h-[15px] rounded text-[7px] font-bold transition-colors touch-manipulation active:scale-95 shrink-0"
       style={{
         background: active ? color : 'transparent',
         color: active ? '#fff' : color,
-        border: `1.25px solid ${color}`,
+        border: `1px solid ${color}`,
         opacity: active ? 1 : 0.55,
       }}
     >
@@ -185,11 +185,11 @@ function ToolbarBtn({ active, color, label, count, onClick, title, id }) {
       className="flex items-center shrink-0 touch-manipulation active:scale-95 transition-transform"
     >
       <span
-        className="text-[11px] font-bold px-2 py-1 rounded min-h-[28px] flex items-center"
+        className="text-[9px] font-bold px-1 py-0.5 rounded min-h-[19px] flex items-center"
         style={{
           background: filled ? color : 'rgba(255,255,255,0.06)',
           color: filled ? (color === BINANCE_COLOR ? '#000' : '#fff') : color,
-          border: `1.5px solid ${color}`,
+          border: `1px solid ${color}`,
           boxShadow: filled ? `0 0 0 1px ${color}44` : 'none',
         }}
       >
@@ -833,24 +833,20 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   const showFavSortInHeader = isMacrossFavView || isTradesFavView;
   const isMobile = useIsMobile();
   const REM_PX = 16;
-  // Coluna de botões: acompanha o drag (%) mas com piso em px — abaixo dele os botões (G/B/MC, 21px
-  // cada) se sobrepõem ou somem. Calculado em JS porque `<col>` em table-fixed não resolve CSS
-  // max()/min() de forma confiável (testado: navegador ignora e cai para distribuição 50/50).
-  const favColPctNum = isMobile
-    ? (showFavSortInHeader ? 0.28 : 0.20)
-    : (showFavSortInHeader ? 0.26 : 0.15);
-  // Piso cobre 3 botões de 21px + gaps + padding da célula (~71px) com folga.
+  // Coluna de botões: largura fixa no piso (sem crescer com o drag) — abaixo dele os botões
+  // (G/B/MC, 15px cada) se sobrepõem ou somem. O espaço liberado vai para a coluna Par.
+  // Calculado em JS porque `<col>` em table-fixed não resolve CSS max()/min() de forma
+  // confiável (testado: navegador ignora e cai para distribuição 50/50).
+  // Piso cobre 3 botões de 15px + gaps + padding da célula (~53px) com folga.
   const favColMinPx = isMobile
-    ? (showFavSortInHeader ? 7 * REM_PX : 4.75 * REM_PX)
-    : (showFavSortInHeader ? 10 * REM_PX : 4.75 * REM_PX);
+    ? (showFavSortInHeader ? 4.0 * REM_PX : 3.85 * REM_PX)
+    : (showFavSortInHeader ? 5.4 * REM_PX : 3.85 * REM_PX);
   const priceColPx = (isMobile ? 3 : 3.25) * REM_PX;
   const changeColPx = (isMobile ? 2.75 : 3) * REM_PX;
   const volColPx = (isMobile ? 2.25 : 2.5) * REM_PX;
   const spinnerColPx = (isMobile ? 0.75 : 1) * REM_PX;
   const fixedColsPx = priceColPx + volColPx + spinnerColPx + (isAltaFilter ? changeColPx : 0);
-  const favColWidthPx = tableContainerWidth > 0
-    ? Math.max(tableContainerWidth * favColPctNum, favColMinPx)
-    : favColMinPx;
+  const favColWidthPx = favColMinPx;
   const parColWidthPx = tableContainerWidth > 0
     ? Math.max(tableContainerWidth - favColWidthPx - fixedColsPx, 0)
     : 0;
@@ -861,8 +857,8 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   const spinnerColWidth = `${spinnerColPx}px`;
   const parColWidth = `${parColWidthPx}px`;
   const parColClass = isMobile
-    ? 'currency-table-col-par px-1.5 py-1.5 font-mono font-semibold text-center overflow-hidden'
-    : 'currency-table-col-par px-2 py-1.5 font-mono font-semibold overflow-hidden';
+    ? 'currency-table-col-par px-1.5 py-1 font-mono font-semibold text-center overflow-hidden'
+    : 'currency-table-col-par px-2 py-1 font-mono font-semibold overflow-hidden';
   const parContentClass = isMobile
     ? 'currency-table-par-content flex flex-col gap-0.5 items-center text-center'
     : 'currency-table-par-content flex flex-col gap-0.5';
@@ -986,7 +982,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
       {/* Tabela */}
       <div id="currency-table-body" className="currency-table-body flex-1 flex flex-col min-h-0 overflow-hidden">
         <div id="currency-table-scroll" className="currency-table-scroll flex-1 min-h-0 overflow-y-auto" ref={tableScrollRef}>
-        <table className="currency-table-grid w-full text-xs table-fixed">
+        <table className="currency-table-grid w-full text-[10px] table-fixed">
           <colgroup>
             <col className="currency-table-col-fav" style={{ width: favColWidth }} />
             <col className="currency-table-col-par" style={{ width: parColWidth }} />
@@ -1017,16 +1013,6 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                       onChange={onMacrossFavSortChange}
                       className="shrink-0"
                     />
-                    <button
-                      type="button"
-                      className={`text-[8px] font-bold px-0.5 shrink-0 touch-manipulation ${
-                        volumeSortActive ? 'text-p5/90' : 'text-p5/45 hover:text-p5/80'
-                      }`}
-                      title={volSortTitle}
-                      onClick={(e) => { e.stopPropagation(); cycleSort(); }}
-                    >
-                      Vol{volSortArrow}
-                    </button>
                   </div>
                 ) : isTradesFavView ? (
                   <div className={`flex items-center gap-0.5 ${isMobile ? 'flex-wrap justify-center' : 'justify-start'}`}>
@@ -1038,16 +1024,6 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                       onChange={onTradeFavSortChange}
                       className="shrink-0"
                     />
-                    <button
-                      type="button"
-                      className={`text-[8px] font-bold px-0.5 shrink-0 touch-manipulation ${
-                        volumeSortActive ? 'text-p5/90' : 'text-p5/45 hover:text-p5/80'
-                      }`}
-                      title={volSortTitle}
-                      onClick={(e) => { e.stopPropagation(); cycleSort(); }}
-                    >
-                      Vol{volSortArrow}
-                    </button>
                   </div>
                 ) : activeMacmpFilter ? (
                   <div className={`flex items-center gap-0.5 ${isMobile ? 'flex-wrap justify-center' : 'justify-start'}`}>
@@ -1070,27 +1046,27 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                 ) : null}
               </th>
               <th
-                className="currency-table-col-par text-center px-2 py-1.5 text-p5 opacity-50 font-normal uppercase tracking-wider overflow-hidden"
+                className="currency-table-col-par text-center px-2 py-1 text-p5 opacity-50 font-normal uppercase tracking-wider overflow-hidden"
                 style={{ width: parColWidth }}
               >
                 Par
               </th>
               <th
-                className="currency-table-col-price text-center px-2 py-1.5 text-p5 opacity-50 font-normal uppercase tracking-wider"
+                className="currency-table-col-price text-center px-2 py-1 text-p5 opacity-50 font-normal uppercase tracking-wider"
                 style={{ width: priceColWidth }}
               >
                 Preço
               </th>
               {isAltaFilter && (
                 <th
-                  className="text-right px-2 py-1.5 text-p5 opacity-80 font-normal uppercase tracking-wider whitespace-nowrap"
+                  className="text-right px-2 py-1 text-p5 opacity-80 font-normal uppercase tracking-wider whitespace-nowrap"
                   title={t('table.change_24h_tip')}
                 >
                   {t('table.change_24h')}
                 </th>
               )}
               <th
-                className={`currency-table-col-vol text-center px-2 py-1.5 text-p5 font-normal uppercase tracking-wider cursor-pointer hover:opacity-90 select-none whitespace-nowrap ${
+                className={`currency-table-col-vol text-center px-2 py-1 text-p5 font-normal uppercase tracking-wider cursor-pointer hover:opacity-90 select-none whitespace-nowrap ${
                   volumeSortActive ? 'opacity-80' : 'opacity-50'
                 }`}
                 style={{ width: volColWidth }}
@@ -1132,10 +1108,23 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
               </tr>
             )}
 
+            {isMacrossFavView && macrossFavLoading && rows.length === 0 && (
+              <tr>
+                <td colSpan={tableColCount} className="py-3 text-center">
+                  <div className="flex items-center justify-center gap-2 text-[11px] text-p5/50">
+                    <div className="w-3 h-3 border border-p4 border-t-transparent rounded-full animate-spin" />
+                    Carregando favoritos…
+                  </div>
+                </td>
+              </tr>
+            )}
+
             {isMacrossFavView && !macrossFavLoading && rows.length === 0 && (
               <tr>
                 <td colSpan={tableColCount} className="py-3 text-center text-[11px] text-p5/50">
-                  Nenhum favorito MA-Cross — clique em MC numa moeda para configurar.
+                  {macrossFavSymbols.length === 0
+                    ? 'Nenhum favorito MA-Cross — clique em MC numa moeda para configurar.'
+                    : 'Nenhum favorito bate com o filtro selecionado no momento.'}
                 </td>
               </tr>
             )}
@@ -1183,10 +1172,10 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                       <span className="text-[9px] font-normal text-p5/50">{exchangeLabel}</span>
                     </div>
                   </td>
-                  <td className="px-2 py-1.5 text-right font-mono">
+                  <td className="px-2 py-1 text-right font-mono">
                     {price > 0 ? formatPrice(price) : '—'}
                   </td>
-                  <td className="px-2 py-1.5 text-right font-mono text-[10px]">
+                  <td className="px-2 py-1 text-right font-mono text-[10px]">
                     <span className="opacity-80 font-semibold" style={{ color: ACTIVE_COLOR }}>
                       ${usdtVal.toFixed(2)}
                     </span>
@@ -1331,20 +1320,20 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                       )}
                     </div>
                   </td>
-                  <td className="px-2 py-1.5 text-right font-mono">
+                  <td className="px-2 py-1 text-right font-mono">
                     <div className="flex flex-col items-end">
                       <span>{formatPrice(item.price)}</span>
                     </div>
                   </td>
                   {isAltaFilter && (
                     <td
-                      className="px-2 py-1.5 text-right font-mono text-[10px] font-semibold"
+                      className="px-2 py-1 text-right font-mono text-[10px] font-semibold"
                       style={{ color: changePct == null ? 'rgba(255,255,255,0.35)' : changePct >= 0 ? '#22c55e' : '#ef4444' }}
                     >
                       {changePct != null ? fmtChangePct(changePct) : '—'}
                     </td>
                   )}
-                  <td className="px-2 py-1.5 text-right font-mono text-[10px]">
+                  <td className="px-2 py-1 text-right font-mono text-[10px]">
                     {isTradesFavView && !volumeSortActive ? (
                       <span
                         className="font-semibold"
@@ -1443,9 +1432,9 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                       >
                         {base}<span className="opacity-40 font-normal text-[8px]">/{quote}</span>
                       </td>
-                      <td className="px-2 py-1.5 text-right font-mono">{item.price > 0 ? formatPrice(item.price) : '—'}</td>
-                      {isAltaFilter && <td className="px-2 py-1.5 text-right font-mono text-[10px] opacity-35">—</td>}
-                      <td className="px-2 py-1.5 text-right font-mono text-[10px] opacity-60">{formatVolume(item.volume)}</td>
+                      <td className="px-2 py-1 text-right font-mono">{item.price > 0 ? formatPrice(item.price) : '—'}</td>
+                      {isAltaFilter && <td className="px-2 py-1 text-right font-mono text-[10px] opacity-35">—</td>}
+                      <td className="px-2 py-1 text-right font-mono text-[10px] opacity-60">{formatVolume(item.volume)}</td>
                       <td className="pr-1 text-center">
                         {loadingSymbol === item.symbol
                           ? <div className="w-3 h-3 border border-p4 border-t-transparent rounded-full animate-spin mx-auto" />

@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useRef } from 'react';
 import { fetchMaCrossStatus } from '../services/api';
 import { buildMacrossStatusItems, isMaCrossEntry } from '../utils/macrossFavoritesSort';
 import { getEntriesForSymbol } from '../constants/strategyPresets';
@@ -21,6 +21,13 @@ export function useMacrossFavoritesStatus(symbols, multitradeFavorites, enabled)
     return map;
   }, [symbolsKey, multitradeFavorites, enabled]);
 
+  // Ref para o effect abaixo ler sempre o Map mais recente sem depender da sua referência —
+  // `multitradeFavorites` muda de identidade a cada poll do contexto, o que recriava o Map e
+  // reiniciava o fetch de 30+ símbolos antes dele terminar, cancelando-o para sempre (status
+  // nunca era salvo e a tabela de favoritos MC ficava vazia nos filtros "Próximo").
+  const entriesBySymbolRef = useRef(entriesBySymbol);
+  entriesBySymbolRef.current = entriesBySymbol;
+
   useEffect(() => {
     if (!enabled || !symbols.length) {
       setStatus({});
@@ -33,7 +40,7 @@ export function useMacrossFavoritesStatus(symbols, multitradeFavorites, enabled)
     async function refresh() {
       setLoading(true);
       try {
-        const items = buildMacrossStatusItems(symbols, entriesBySymbol);
+        const items = buildMacrossStatusItems(symbols, entriesBySymbolRef.current);
         const result = await fetchMaCrossStatus(items);
         if (!cancelled) {
           setStatus(result.details ?? {});
@@ -49,7 +56,7 @@ export function useMacrossFavoritesStatus(symbols, multitradeFavorites, enabled)
     refresh();
     const id = setInterval(refresh, 30_000);
     return () => { cancelled = true; clearInterval(id); };
-  }, [symbolsKey, enabled, entriesBySymbol]);
+  }, [symbolsKey, enabled]);
 
   return { status, loading, scannedAt, entriesBySymbol };
 }

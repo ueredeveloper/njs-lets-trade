@@ -2457,6 +2457,7 @@ export default function CandlestickChart() {
   const bandsPanelEnabled = BAND_PANEL_KEYS.some((k) => chartPanelButtons[k] !== false);
   const [candleFetchLimit, setCandleFetchLimit] = useState(DEFAULT_CANDLE_LIMIT);
   const [displayCandleCount, setDisplayCandleCount] = useState(LIMIT);
+  const [hasExplicitCandleWindow, setHasExplicitCandleWindow] = useState(false);
   const [loadingMoreCandles, setLoadingMoreCandles] = useState(false);
 
   useEffect(() => {
@@ -2498,30 +2499,35 @@ export default function CandlestickChart() {
       if (multitradeChartFocus?.candleLimit) {
         setCandleFetchLimit(multitradeChartFocus.candleLimit);
         setDisplayCandleCount(multitradeChartFocus.candleLimit);
+        setHasExplicitCandleWindow(true);
       }
       return;
     }
     setCandleFetchLimit(DEFAULT_CANDLE_LIMIT);
     setDisplayCandleCount(LIMIT);
+    setHasExplicitCandleWindow(false);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedChart?.symbol, selectedChart?.interval, chartViewSource, multitradeChartFocus?.candleLimit, chartCandleWindowReset]);
 
-  const overlaySlots = useMemo(() => {
-    if (isTradePanelChartView(chartViewSource)) {
-      if (multitradeChartFocus?.overlaySlots) return multitradeChartFocus.overlaySlots;
-      if (tradeOverlaySlots) return tradeOverlaySlots;
-    }
-    return uiPrefs.overlaySlots;
-  }, [chartViewSource, multitradeChartFocus?.overlaySlots, tradeOverlaySlots, uiPrefs.overlaySlots]);
+  // Só entra em modo "overlay forçado" quando o painel de trade realmente impõe
+  // slots (ex.: sinal de backtest com regra própria). Selecionar uma moeda que é
+  // apenas um favorito MA-Cross (que não força overlaySlots) NUNCA deve tirar os
+  // manipuladores (EMA/handlers) do usuário — eles continuam vindo de uiPrefs.
+  const hasForcedOverlaySlots = isTradePanelChartView(chartViewSource) && !!multitradeChartFocus?.overlaySlots;
 
-  // Painel de trade: overlays locais (não persistem) — não altera indicadores do usuário.
+  const overlaySlots = useMemo(() => {
+    if (hasForcedOverlaySlots) return tradeOverlaySlots ?? multitradeChartFocus.overlaySlots;
+    return uiPrefs.overlaySlots;
+  }, [hasForcedOverlaySlots, tradeOverlaySlots, multitradeChartFocus?.overlaySlots, uiPrefs.overlaySlots]);
+
+  // Painel de trade com slots forçados: overlays locais (não persistem) — não altera indicadores do usuário.
   useEffect(() => {
-    if (!isTradePanelChartView(chartViewSource)) {
+    if (!hasForcedOverlaySlots) {
       setTradeOverlaySlots(null);
       return;
     }
-    setTradeOverlaySlots(multitradeChartFocus?.overlaySlots ?? uiPrefs.overlaySlots);
-  }, [chartViewSource, multitradeChartFocus?.overlaySlots, uiPrefs.overlaySlots]);
+    setTradeOverlaySlots(multitradeChartFocus.overlaySlots);
+  }, [hasForcedOverlaySlots, multitradeChartFocus?.overlaySlots]);
 
   // Persiste preferências das bandas (pct, acima/abaixo, período/intervalo) quando o usuário altera
   useEffect(() => {
@@ -2778,7 +2784,7 @@ export default function CandlestickChart() {
   const colors = useMemo(() => getThemeColors(), [themeTick]);
 
   function commitOverlaySlots(next) {
-    if (isTradePanelChartView(chartViewSource)) {
+    if (hasForcedOverlaySlots) {
       setTradeOverlaySlots(next);
     } else {
       setOverlaySlotsPreference(next);
@@ -2820,9 +2826,11 @@ export default function CandlestickChart() {
       if (isMt) {
         setCandleFetchLimit(limit);
         setDisplayCandleCount(limit);
+        setHasExplicitCandleWindow(true);
       } else {
         setCandleFetchLimit(DEFAULT_CANDLE_LIMIT);
         setDisplayCandleCount(LIMIT);
+        setHasExplicitCandleWindow(false);
       }
       const data = await fetchCandlesticksAndCloud(
         selectedChart.symbol, iv, selectedChart.source ?? null, limit,
@@ -2856,15 +2864,30 @@ export default function CandlestickChart() {
       setSelectedChart(data);
       setCandleFetchLimit(nextLimit);
       setDisplayCandleCount(Math.min(nextLimit, data.candlesticks?.length ?? nextLimit));
+      setHasExplicitCandleWindow(true);
     } finally {
       setLoadingMoreCandles(false);
     }
   }
 
-  function handleLoadLastNCandles(n) {
+  async function handleLoadLastNCandles(n) {
     if (!selectedChart?.symbol || !selectedChart?.candlesticks?.length) return;
-    setDisplayCandleCount(n);
     setChartZoom(null);
+    setDisplayCandleCount(n);
+    setHasExplicitCandleWindow(true);
+    const currentLen = selectedChart.candlesticks.length;
+    if (n > currentLen && n > candleFetchLimit) {
+      setLoadingMoreCandles(true);
+      try {
+        const data = await fetchCandlesticksAndCloud(
+          selectedChart.symbol, currentInterval, selectedChart.source ?? null, n,
+        );
+        setSelectedChart(data);
+        setCandleFetchLimit(n);
+      } finally {
+        setLoadingMoreCandles(false);
+      }
+    }
   }
 
   useEffect(() => {
@@ -2894,8 +2917,8 @@ export default function CandlestickChart() {
     if (chartZoom && (isTradePanelChartView(chartViewSource) || chartViewSource === CHART_VIEW.STATISTICS)) {
       return candles?.length ?? displayCandleCount;
     }
-    // Botões 10/20/30 / load more — prioridade sobre expansão automática por marcadores
-    if (displayCandleCount !== LIMIT) {
+    // Botões 20/50/100 / load more — prioridade sobre expansão automática por marcadores
+    if (hasExplicitCandleWindow) {
       return Math.min(displayCandleCount, candles?.length ?? displayCandleCount);
     }
     if ((chartTradeMarkers?.length || selectedChart?.tradeMarkers?.length) && candles?.length && candles.length <= 50) {
@@ -3075,7 +3098,7 @@ export default function CandlestickChart() {
           {/* Grupo de janela de candles — alinhado à direita, isolado dos intervalos */}
           <div className="ml-auto flex items-center gap-1 pl-2 border-l border-p2/30">
             {LAST_CANDLE_PRESETS.map((n) => {
-              const active = displayCandleCount === n && !chartZoom;
+              const active = hasExplicitCandleWindow && displayCandleCount === n && !chartZoom;
               return (
                 <button
                   key={n}
