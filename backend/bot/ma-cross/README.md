@@ -13,7 +13,7 @@ Estratégia de cruzamento entre duas médias móveis exponenciais (EMA), com fil
 ## Exemplo padrão
 
 - **Compra:** MA9(15m) cruza ↑ MA21(15m)
-- **Filtro:** preço ≥ MA50(1h) − até 4% (adaptativo histórico)
+- **Filtro:** preço ≥ MA50(1h) − até 1% (adaptativo histórico)
 - **Venda:** MA9(15m) cruza ↓ MA21(15m)
 
 ## Cruzamento — como detectar

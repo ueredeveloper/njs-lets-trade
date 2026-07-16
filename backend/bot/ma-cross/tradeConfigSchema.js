@@ -39,7 +39,7 @@ const MA_CROSS_DEFAULTS = {
   maFiltersEnabled: true,
   maFilters: [{
     id: 1, enabled: true, period: 50, interval: '1h',
-    mode: 'adaptive', maxDipPct: 4, fixedDipPct: null, maxAbovePct: 4, fixedAbovePct: null, tolerancePct: 0,
+    mode: 'adaptive', maxDipPct: 1, fixedDipPct: null, maxAbovePct: 4, fixedAbovePct: null, tolerancePct: 0,
   }],
 
   exit: {
