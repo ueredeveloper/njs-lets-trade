@@ -27,13 +27,13 @@ const MA_CROSS_DEFAULTS = {
     maxAboveMaPct:   3,
   },
 
-  /** Tendência HTF: EMA curta acima da EMA longa (padrão EMA9 > EMA21 em 1h). */
+  /** Tendência HTF: EMA curta acima da EMA longa (padrão EMA9 > EMA21 em 4h). */
   entryTrendMa: {
     enabled: true,
-    ma1: { period: 9, interval: '1h' },
-    ma2: { period: 21, interval: '1h' },
-    /** Máx % abaixo da EMA longa ainda permitido (ex.: 1 = EMA9 até 1% abaixo da EMA21). */
-    tolerancePct: 1,
+    ma1: { period: 9, interval: '4h' },
+    ma2: { period: 21, interval: '4h' },
+    /** Máx % abaixo da EMA longa ainda permitido (ex.: 2 = EMA9 até 2% abaixo da EMA21). */
+    tolerancePct: 2,
   },
 
   maFiltersEnabled: true,
@@ -110,14 +110,28 @@ const MA_CROSS_DEFAULTS = {
 
   /** Filtro Bollinger Bands: %B do preço vs banda inferior/superior no intervalo HTF.
    *  %B = (close − lower) / (upper − lower); 0 = toca banda inferior, 1 = toca banda superior.
-   *  Exige %B < maxPctB para permitir entrada (preço na metade inferior do range BB). */
+   *  Exige %B < maxPctB para permitir entrada (preço na metade inferior do range BB).
+   *  Desligado por padrão — substituído pela regra entryEmaApproach (funil mostrou quase
+   *  zero sobreposição entre as duas; empilhar as duas deixava a entrada rara demais). */
   entryBbFilter: {
-    enabled:  true,
+    enabled:  false,
     interval: '4h',
     period:   20,
     stdDev:   2.0,
     /** Máx %B permitido (0–1); padrão 0.3 = preço nos 30% inferiores do range BB. */
     maxPctB:  0.3,
+  },
+
+  /** Aproximação + retomada: exige que a EMA rápida tenha formado um fundo perto da
+   *  EMA lenta nos últimos candles e já esteja subindo de volta (não basta estar acima
+   *  há muito tempo). Substitui o filtro BB 4h como filtro de entrada secundário.
+   *  approachPct sugerido a partir de dados reais (ver analyze-ema-approach-4h.js):
+   *  mediana do fundo histórico ficou em -0.85% antes da alta; 1.5% dá margem. */
+  entryEmaApproach: {
+    enabled: true,
+    ma1: { period: 9, interval: '4h' },
+    ma2: { period: 21, interval: '4h' },
+    approachPct: 1.5,
   },
 
   /** Horas sem nova entrada após venda (0 = desligado). */
@@ -179,7 +193,7 @@ function normalizeEntryBbFilter(block) {
   const d = MA_CROSS_DEFAULTS.entryBbFilter;
   const src = block ?? {};
   return {
-    enabled:  src.enabled !== false,
+    enabled:  src.enabled === true,
     interval: normalizeInterval(src.interval, d.interval),
     period:   clampPeriod(src.period, d.period),
     stdDev:   Math.max(0.5, Math.min(4, Number(src.stdDev  ?? d.stdDev))),
@@ -216,6 +230,17 @@ function normalizeEntryTrendMa(block) {
     ma1: normalizeMaLeg(src.ma1, d.ma1),
     ma2: normalizeMaLeg(src.ma2, d.ma2),
     tolerancePct: Math.max(0, Number(src.tolerancePct ?? d.tolerancePct ?? 0)),
+  };
+}
+
+function normalizeEntryEmaApproach(block) {
+  const d = MA_CROSS_DEFAULTS.entryEmaApproach;
+  const src = block ?? {};
+  return {
+    enabled: src.enabled !== false,
+    ma1: normalizeMaLeg(src.ma1, d.ma1),
+    ma2: normalizeMaLeg(src.ma2, d.ma2),
+    approachPct: Math.max(0, Number(src.approachPct ?? d.approachPct ?? 0)),
   };
 }
 
@@ -275,6 +300,7 @@ function normalizeMaCrossConfig(body = {}) {
     kind:  'ma_cross',
     entry: normalizeCrossBlock(body.entry, d.entry),
     entryTrendMa:   normalizeEntryTrendMa(body.entryTrendMa),
+    entryEmaApproach: normalizeEntryEmaApproach(body.entryEmaApproach),
     entryBbFilter:  normalizeEntryBbFilter(body.entryBbFilter),
     maFiltersEnabled: body.maFiltersEnabled !== false,
     maFilters: migrateMaFilters(body),

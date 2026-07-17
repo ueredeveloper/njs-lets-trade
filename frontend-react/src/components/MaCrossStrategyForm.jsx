@@ -109,6 +109,9 @@ export default function MaCrossStrategyForm({ form, patch, symbol, exchange, has
   const entryTrend = { ...MA_CROSS_DEFAULTS.entryTrendMa, ...form.entryTrendMa };
   const entryTrendOn = entryTrend.enabled !== false;
 
+  const entryApproach = { ...MA_CROSS_DEFAULTS.entryEmaApproach, ...form.entryEmaApproach };
+  const entryApproachOn = entryApproach.enabled !== false;
+
   const bbFilter = { ...MA_CROSS_DEFAULTS.entryBbFilter, ...form.entryBbFilter };
   const bbOn = bbFilter.enabled !== false;
 
@@ -295,7 +298,7 @@ export default function MaCrossStrategyForm({ form, patch, symbol, exchange, has
       <div className="rounded-md p-2 space-y-2" style={{ background: '#1a1d28', border: `1px solid ${ENTRY_COLOR}33` }}>
         <div className="flex items-center justify-between gap-2 flex-wrap">
           <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: ENTRY_COLOR }}>
-            Tendência 1h — EMA9 / EMA21
+            Tendência 4h — EMA9 / EMA21
           </span>
           <label className="flex items-center gap-1 text-[9px] text-p5/50 cursor-pointer">
             <input type="checkbox" checked={entryTrendOn}
@@ -306,17 +309,51 @@ export default function MaCrossStrategyForm({ form, patch, symbol, exchange, has
         {entryTrendOn && (
           <>
             <p className="text-[10px] text-p5/60">
-              Exigir EMA9(1h) acima de EMA21(1h) antes de entrar (imediata ou pullback).
+              Exigir EMA9(4h) acima de EMA21(4h) antes de entrar (imediata ou pullback).
             </p>
             <div className="flex flex-wrap items-center gap-2 text-xs">
               <span className="text-p5/50">Tolerância</span>
               <NumInput
-                value={entryTrend.tolerancePct ?? 1}
+                value={entryTrend.tolerancePct ?? 2}
                 onChange={v => patch('entryTrendMa.tolerancePct', v)}
                 min={0} max={5} step={0.1} className="w-14"
               />
               <span className="text-p5/40 text-[10px]">% abaixo — EMA9 até essa distância da EMA21 ainda autoriza</span>
             </div>
+          </>
+        )}
+      </div>
+
+      <div className="rounded-md p-2 space-y-2" style={{ background: '#1a1d28', border: `1px solid ${ENTRY_COLOR}33` }}>
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: ENTRY_COLOR }}>
+            Aproximação 4h — EMA9 encosta na EMA21 e sobe
+          </span>
+          <label className="flex items-center gap-1 text-[9px] text-p5/50 cursor-pointer">
+            <input type="checkbox" checked={entryApproachOn}
+              onChange={e => patch('entryEmaApproach.enabled', e.target.checked)} style={{ accentColor: ENTRY_COLOR }} />
+            Ativo
+          </label>
+        </div>
+        {entryApproachOn && (
+          <>
+            <p className="text-[10px] text-p5/60">
+              Exige que a EMA9(4h) tenha formado um fundo perto da EMA21(4h) nos últimos candles
+              e já esteja subindo de volta — não basta estar acima há muito tempo.
+            </p>
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <span className="text-p5/50">Aproximação máx.</span>
+              <NumInput
+                value={entryApproach.approachPct ?? 1.5}
+                onChange={v => patch('entryEmaApproach.approachPct', v)}
+                min={0} max={5} step={0.1} className="w-14"
+              />
+              <span className="text-p5/40 text-[10px]">% — quão perto o fundo da EMA9 precisa chegar da EMA21</span>
+            </div>
+            <p className="text-[9px] text-p5/40 font-mono">
+              Sugestão com base em dados reais (120 dias, 45 moedas ma-cross): o fundo histórico da
+              EMA9 antes de subir ficou em -0.85% (mediana) — 1.5% dá margem sobre esse valor.
+            </p>
           </>
         )}
       </div>

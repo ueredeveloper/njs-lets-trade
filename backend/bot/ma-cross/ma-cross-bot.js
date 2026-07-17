@@ -306,11 +306,18 @@ function buildEntryReasonLines(config, entryMeta) {
 
   const trend = config.entryTrendMa;
   if (trend?.enabled && entryMeta.trendMa1 != null && entryMeta.trendMa2 != null) {
-    const ma1Leg = trend.ma1 ?? { period: 9, interval: '1h' };
-    const ma2Leg = trend.ma2 ?? { period: 21, interval: '1h' };
+    const ma1Leg = trend.ma1 ?? { period: 9, interval: '4h' };
+    const ma2Leg = trend.ma2 ?? { period: 21, interval: '4h' };
     lines.push(
       `Tendência ${maLabel(ma1Leg.period, ma1Leg.interval)} > ${maLabel(ma2Leg.period, ma2Leg.interval)}: `
       + `${fmtPrice(entryMeta.trendMa1)} > ${fmtPrice(entryMeta.trendMa2)} (${fmtPct(entryMeta.trendGapPct)})`,
+    );
+  }
+
+  const approach = config.entryEmaApproach;
+  if (approach?.enabled && entryMeta.approachTroughGapPct != null) {
+    lines.push(
+      `Aproximação EMA9/EMA21(4h): fundo ${fmtPct(entryMeta.approachTroughGapPct)} → agora ${fmtPct(entryMeta.approachGapPct)}`,
     );
   }
 
@@ -382,9 +389,13 @@ const PENDING_CANCEL_LABELS = {
   NOT_ABOVE_MA: 'filtro MA',
   NOT_BELOW_MA: 'filtro MA',
   FILTER_NO_MA: 'filtro MA indisponível',
-  HTF_TREND_BELOW: 'EMA9(1h) abaixo de EMA21(1h) (fora da tolerância)',
-  HTF_TREND_NO_MA: 'tendência 1h indisponível',
-  HTF_TREND_NO_DATA: 'dados 1h insuficientes',
+  HTF_TREND_BELOW: 'EMA9(4h) abaixo de EMA21(4h) (fora da tolerância)',
+  HTF_TREND_NO_MA: 'tendência 4h indisponível',
+  HTF_TREND_NO_DATA: 'dados 4h insuficientes',
+  EMA_APPROACH_NOT_FOUND: 'EMA9(4h) não formou fundo perto da EMA21 e subiu',
+  EMA_APPROACH_TOO_FAR: 'fundo da EMA9(4h) longe demais da EMA21',
+  EMA_APPROACH_NO_MA: 'aproximação EMA 4h indisponível',
+  EMA_APPROACH_NO_DATA: 'dados 4h insuficientes p/ aproximação EMA',
 };
 
 function entryCooldownHours(config) {

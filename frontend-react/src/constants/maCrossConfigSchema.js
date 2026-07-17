@@ -42,9 +42,15 @@ export const MA_CROSS_DEFAULTS = {
   },
   entryTrendMa: {
     enabled: true,
-    ma1: { period: 9, interval: '1h' },
-    ma2: { period: 21, interval: '1h' },
-    tolerancePct: 1,
+    ma1: { period: 9, interval: '4h' },
+    ma2: { period: 21, interval: '4h' },
+    tolerancePct: 2,
+  },
+  entryEmaApproach: {
+    enabled: true,
+    ma1: { period: 9, interval: '4h' },
+    ma2: { period: 21, interval: '4h' },
+    approachPct: 1.5,
   },
   maFiltersEnabled: true,
   maFilters: [{
@@ -90,7 +96,7 @@ export const MA_CROSS_DEFAULTS = {
   polling: { pollMs: 60_000, fastPollMs: 30_000 },
   adaptiveOpts: { defaultPct: 3, maxPct: 8, minPct: 0.5, minEpisodes: 3, defaultAbovePct: 4, maxAbovePct: 8, minAbovePct: 0.5 },
   entryBbFilter: {
-    enabled:  true,
+    enabled:  false,
     interval: '4h',
     period:   20,
     stdDev:   2.0,
@@ -128,7 +134,7 @@ function normalizeEntryBbFilter(block) {
   const d = MA_CROSS_DEFAULTS.entryBbFilter;
   const src = block ?? {};
   return {
-    enabled:  src.enabled !== false,
+    enabled:  src.enabled === true,
     interval: src.interval ?? d.interval,
     period:   clampPeriod(src.period, d.period),
     stdDev:   Math.max(0.5, Math.min(4, Number(src.stdDev  ?? d.stdDev))),
@@ -164,6 +170,17 @@ function normalizeEntryTrendMa(block) {
     ma1: normalizeMaLeg(src.ma1, d.ma1),
     ma2: normalizeMaLeg(src.ma2, d.ma2),
     tolerancePct: Math.max(0, Number(src.tolerancePct ?? d.tolerancePct ?? 0)),
+  };
+}
+
+function normalizeEntryEmaApproach(block) {
+  const d = MA_CROSS_DEFAULTS.entryEmaApproach;
+  const src = block ?? {};
+  return {
+    enabled: src.enabled !== false,
+    ma1: normalizeMaLeg(src.ma1, d.ma1),
+    ma2: normalizeMaLeg(src.ma2, d.ma2),
+    approachPct: Math.max(0, Number(src.approachPct ?? d.approachPct ?? 0)),
   };
 }
 
@@ -220,6 +237,7 @@ export function normalizeMaCrossForm(body = {}) {
     kind: 'ma_cross',
     entry: normalizeCrossBlock(body.entry ?? d.entry, d.entry),
     entryTrendMa:     normalizeEntryTrendMa(body.entryTrendMa),
+    entryEmaApproach: normalizeEntryEmaApproach(body.entryEmaApproach),
     maFiltersEnabled: body.maFiltersEnabled !== false,
     maFilters: mapMaFilters(body.maFilters, body.priceFilter),
     exit: {
@@ -269,6 +287,7 @@ export function maCrossFormToPayload(form, meta = {}) {
     label: c.label,
     entry: c.entry,
     entryTrendMa:  c.entryTrendMa,
+    entryEmaApproach: c.entryEmaApproach,
     entryBbFilter: c.entryBbFilter,
     maFiltersEnabled: c.maFiltersEnabled,
     maFilters: c.maFilters.map(({ id, enabled, period, interval, mode, maxDipPct, fixedDipPct, maxAbovePct, fixedAbovePct, tolerancePct }) => ({

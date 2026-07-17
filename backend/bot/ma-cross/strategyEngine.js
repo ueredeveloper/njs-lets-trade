@@ -566,9 +566,17 @@ function getRequiredSpecs(config) {
 
   const trend = config.entryTrendMa;
   if (trend?.enabled !== false) {
-    add(trend.ma1?.interval ?? '1h', (trend.ma1?.period ?? 9) + 30);
-    if ((trend.ma2?.interval ?? '1h') !== (trend.ma1?.interval ?? '1h')) {
+    add(trend.ma1?.interval ?? '4h', (trend.ma1?.period ?? 9) + 30);
+    if ((trend.ma2?.interval ?? '4h') !== (trend.ma1?.interval ?? '4h')) {
       add(trend.ma2.interval, (trend.ma2?.period ?? 21) + 30);
+    }
+  }
+
+  const approach = config.entryEmaApproach;
+  if (approach?.enabled) {
+    add(approach.ma1?.interval ?? '4h', (approach.ma1?.period ?? 9) + 30);
+    if ((approach.ma2?.interval ?? '4h') !== (approach.ma1?.interval ?? '4h')) {
+      add(approach.ma2.interval, (approach.ma2?.period ?? 21) + 30);
     }
   }
 
@@ -641,8 +649,8 @@ function evaluateEntryTrendMa(config, cMap, opts = {}) {
   const trend = config.entryTrendMa;
   if (!trend?.enabled) return { allowed: true };
 
-  const ma1Leg = trend.ma1 ?? { period: 9, interval: '1h' };
-  const ma2Leg = trend.ma2 ?? { period: 21, interval: '1h' };
+  const ma1Leg = trend.ma1 ?? { period: 9, interval: '4h' };
+  const ma2Leg = trend.ma2 ?? { period: 21, interval: '4h' };
   const closedOnly = opts.closedOnly !== false;
 
   const c1raw = cMap[ma1Leg.interval] ?? [];
@@ -686,6 +694,72 @@ function evaluateEntryTrendMa(config, cMap, opts = {}) {
   }
 
   return { allowed: true, trendMa1: ma1, trendMa2: ma2, gapPct, tolerancePct };
+}
+
+/**
+ * Filtro extra (opt-in): exige que a EMA rápida tenha formado um fundo local perto
+ * da EMA lenta nos últimos candles e já esteja subindo de volta — confirma que a
+ * tendência acabou de retomar em vez de aceitar qualquer momento em que a EMA
+ * rápida já esteja distante e há muito tempo acima.
+ *
+ * Detecta: 2 candles caindo até o fundo, 2 candles subindo depois (padrão de 5
+ * candles fechados), com o fundo dentro de approachPct.
+ *
+ * approachPct sugerido a partir de dados reais (ver analyze-ema-approach-4h.js,
+ * 120 dias / 45 moedas ma-cross): mediana do fundo histórico antes da alta ficou
+ * em -0.85% (EMA9 ~0.85% abaixo da EMA21); 1.5% dá margem sobre a mediana.
+ */
+function evaluateEntryEmaApproach(config, cMap, opts = {}) {
+  const rule = config.entryEmaApproach;
+  if (!rule?.enabled) return { allowed: true };
+
+  const ma1Leg = rule.ma1 ?? { period: 9, interval: '4h' };
+  const ma2Leg = rule.ma2 ?? { period: 21, interval: '4h' };
+  const closedOnly = opts.closedOnly !== false;
+
+  const c1raw = cMap[ma1Leg.interval] ?? [];
+  const c2raw = ma1Leg.interval === ma2Leg.interval ? c1raw : (cMap[ma2Leg.interval] ?? []);
+  const c1 = closedOnly ? closedCandlesOnly(c1raw) : c1raw;
+  const c2 = closedOnly ? closedCandlesOnly(c2raw) : c2raw;
+
+  const refIv = finestInterval(ma1Leg.interval, ma2Leg.interval);
+  const refCandles = refIv === ma1Leg.interval ? c1 : c2;
+  if (!refCandles || refCandles.length < 5) {
+    return { allowed: false, reason: 'EMA_APPROACH_NO_DATA' };
+  }
+
+  const series1 = buildMaTimeSeries(c1, ma1Leg.period);
+  const series2 = buildMaTimeSeries(c2, ma2Leg.period);
+
+  const last5 = refCandles.slice(-5);
+  const gaps = last5.map(c => {
+    const ma1 = maValueAt(series1, c.openTime);
+    const ma2 = maValueAt(series2, c.openTime);
+    return (ma1 != null && ma2 != null && ma2 !== 0) ? ((ma1 / ma2) - 1) * 100 : null;
+  });
+  if (gaps.some(g => g == null)) {
+    return { allowed: false, reason: 'EMA_APPROACH_NO_MA' };
+  }
+
+  const [g0, g1, gTrough, g3, g4] = gaps;
+  const wasFalling = gTrough <= g1 && g1 <= g0;
+  const isRising = g3 > gTrough && g4 > g3;
+  if (!wasFalling || !isRising) {
+    return { allowed: false, reason: 'EMA_APPROACH_NOT_FOUND', gapPct: g4 };
+  }
+
+  const approachPct = Math.max(0, Number(rule.approachPct ?? 1.5));
+  if (gTrough > approachPct) {
+    return {
+      allowed: false,
+      reason: 'EMA_APPROACH_TOO_FAR',
+      gapPct: g4,
+      troughGapPct: gTrough,
+      approachPct,
+    };
+  }
+
+  return { allowed: true, gapPct: g4, troughGapPct: gTrough, approachPct };
 }
 
 function evaluateMaFilters(close, config, cMap, adaptiveDips, adaptiveStretches = {}) {
@@ -755,6 +829,19 @@ function evaluateCrossSignal(config, cMap, adaptiveDips = {}, opts = {}) {
     };
   }
 
+  const approachCheck = evaluateEntryEmaApproach(config, cMap, opts);
+  if (!approachCheck.allowed) {
+    return {
+      allowed: false,
+      reason: approachCheck.reason,
+      ma1: cross.ma1, ma2: cross.ma2,
+      close: cross.close,
+      crossOpenTime: cross.openTime,
+      approachGapPct: approachCheck.gapPct,
+      approachTroughGapPct: approachCheck.troughGapPct,
+    };
+  }
+
   const bbCheck = evaluateEntryBbFilter(config, cMap, opts);
   if (!bbCheck.allowed) {
     return {
@@ -776,6 +863,7 @@ function evaluateCrossSignal(config, cMap, adaptiveDips = {}, opts = {}) {
     crossOpenTime: cross.openTime,
     entryDesc: `${crossLabel(entry.ma1)} ${dirLbl} ${crossLabel(entry.ma2)}`,
     trendMa1: trendCheck.trendMa1, trendMa2: trendCheck.trendMa2, trendGapPct: trendCheck.gapPct,
+    approachGapPct: approachCheck.gapPct, approachTroughGapPct: approachCheck.troughGapPct,
     pctB: bbCheck.pctB, bbUpper: bbCheck.upper, bbLower: bbCheck.lower, bbMiddle: bbCheck.middle,
     bbInterval: bbCheck.bbInterval,
   };
@@ -854,6 +942,17 @@ function evaluatePullbackCandle(config, cMap, adaptiveDips, adaptiveStretches, {
     };
   }
 
+  const approachCheck = evaluateEntryEmaApproach(config, cMap);
+  if (!approachCheck.allowed) {
+    return {
+      ready: false,
+      reason: approachCheck.reason,
+      close,
+      approachGapPct: approachCheck.gapPct,
+      approachTroughGapPct: approachCheck.troughGapPct,
+    };
+  }
+
   const bbCheck = evaluateEntryBbFilter(config, cMap);
   if (!bbCheck.allowed) {
     return {
@@ -882,6 +981,7 @@ function evaluatePullbackCandle(config, cMap, adaptiveDips, adaptiveStretches, {
     entryOpenTime: entryCandle.openTime,
     maFilterDetails: filterCheck.details,
     trendMa1: trendCheck.trendMa1, trendMa2: trendCheck.trendMa2, trendGapPct: trendCheck.gapPct,
+    approachGapPct: approachCheck.gapPct, approachTroughGapPct: approachCheck.troughGapPct,
     pctB: bbCheck.pctB, bbUpper: bbCheck.upper, bbLower: bbCheck.lower, bbMiddle: bbCheck.middle,
     bbInterval: bbCheck.bbInterval,
   };
@@ -1007,6 +1107,7 @@ function evaluateEntry(config, cMap, adaptiveDips = {}, opts = {}) {
     entryDesc: crossSignal.entryDesc,
     maFilterDetails: filterCheck.details,
     trendMa1: crossSignal.trendMa1, trendMa2: crossSignal.trendMa2, trendGapPct: crossSignal.trendGapPct,
+    approachGapPct: crossSignal.approachGapPct, approachTroughGapPct: crossSignal.approachTroughGapPct,
     pctB: crossSignal.pctB, bbUpper: crossSignal.bbUpper, bbLower: crossSignal.bbLower,
     bbMiddle: crossSignal.bbMiddle, bbInterval: crossSignal.bbInterval,
   };
@@ -1553,6 +1654,7 @@ module.exports = {
   evaluateEntry,
   evaluateEntryBbFilter,
   evaluateEntryTrendMa,
+  evaluateEntryEmaApproach,
   evaluateExit,
   evaluateHtfFallbackExit,
   htfNeverConfirmedSinceEntry,

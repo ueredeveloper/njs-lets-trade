@@ -18,9 +18,22 @@ const PRESET_BODIES = {
     },
     entryTrendMa: {
       enabled: true,
-      ma1: { period: 9, interval: '1h' },
-      ma2: { period: 21, interval: '1h' },
-      tolerancePct: 1,
+      ma1: { period: 9, interval: '4h' },
+      ma2: { period: 21, interval: '4h' },
+      tolerancePct: 2,
+    },
+    entryEmaApproach: {
+      enabled: true,
+      ma1: { period: 9, interval: '4h' },
+      ma2: { period: 21, interval: '4h' },
+      approachPct: 1.5,
+    },
+    entryBbFilter: {
+      enabled: false,
+      interval: '4h',
+      period: 20,
+      stdDev: 2.0,
+      maxPctB: 0.3,
     },
     maFiltersEnabled: true,
     maFilters: [{

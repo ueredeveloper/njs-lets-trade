@@ -544,6 +544,7 @@ describe('MA Cross — entrada pullback', () => {
     },
     entryTrendMa: { enabled: false },
     entryBbFilter: { enabled: false },
+    entryEmaApproach: { enabled: false },
     maFiltersEnabled: false,
     execution: { pullbackEntry: { enabled: true, waitCandles: 2, requirePullback: true } },
   }));
@@ -637,6 +638,7 @@ describe('MA Cross — tendência HTF (EMA9 > EMA21 em 1h)', () => {
     },
     entryTrendMa: { enabled: true, ma1: { period: 9, interval: '1h' }, ma2: { period: 21, interval: '1h' } },
     entryBbFilter: { enabled: false },
+    entryEmaApproach: { enabled: false },
     maFiltersEnabled: false,
   }));
 
@@ -670,7 +672,11 @@ describe('MA Cross — tendência HTF (EMA9 > EMA21 em 1h)', () => {
     for (let i = 0; i < 10; i++) closes.push(99.85 + i * 0.01);
     const candles = make1hCandles(closes);
     const strict = toEngineConfig(normalizeMaCrossConfig({
-      entryTrendMa: { enabled: true, tolerancePct: 0 },
+      entryTrendMa: {
+        enabled: true, tolerancePct: 0,
+        ma1: { period: 9, interval: '1h' }, ma2: { period: 21, interval: '1h' },
+      },
+      entryEmaApproach: { enabled: false },
     }));
     const r = evaluateEntryTrendMa(strict, { '1h': candles });
     expect(r.allowed).toBe(false);
