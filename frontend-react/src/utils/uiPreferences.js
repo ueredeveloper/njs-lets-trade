@@ -165,10 +165,6 @@ export function loadUiPreferences() {
     }
     if (Array.isArray(parsed.activeIndicators)) {
       result.activeIndicators = normalizeActiveIndicators(parsed.activeIndicators);
-      // Migração: garante stopLoss ativo para usuários que já tinham preferências salvas
-      if (!result.activeIndicators.includes('stopLoss')) {
-        result.activeIndicators = [...result.activeIndicators, 'stopLoss'];
-      }
     }
     if (parsed.currencyPanelWidth !== undefined) {
       result.currencyPanelWidth = normalizeCurrencyPanelWidth(parsed.currencyPanelWidth);

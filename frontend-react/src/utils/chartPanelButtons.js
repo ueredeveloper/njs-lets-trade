@@ -11,9 +11,6 @@ export const CHART_PANEL_BUTTON_KEYS = [
   'rsi50',
   'ma1',
   'ma2',
-  'bandsPct',
-  'bandsAbove',
-  'bandsBelow',
   'stopLoss',
   'bb',
 ];
@@ -29,9 +26,6 @@ export const DEFAULT_CHART_PANEL_BUTTONS = {
   rsi50: true,
   ma1: true,
   ma2: false,
-  bandsPct: true,
-  bandsAbove: true,
-  bandsBelow: true,
   stopLoss: true,
   bb: true,
 };
@@ -44,11 +38,6 @@ export function loadChartPanelButtons() {
     const result = { ...DEFAULT_CHART_PANEL_BUTTONS };
     for (const key of CHART_PANEL_BUTTON_KEYS) {
       if (typeof parsed[key] === 'boolean') result[key] = parsed[key];
-    }
-    if (typeof parsed.bands === 'boolean') {
-      result.bandsPct = parsed.bands;
-      result.bandsAbove = parsed.bands;
-      result.bandsBelow = parsed.bands;
     }
     return result;
   } catch {

@@ -3,7 +3,7 @@ import { reloadCandles } from '../services/api';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useI18n } from '../i18n';
 import { useCurrency } from '../contexts/CurrencyContext';
-import { BAND_PCT_OPTIONS, PERIOD_DEFAULT_COLORS, MAX_OVERLAY_SLOTS,
+import { PERIOD_DEFAULT_COLORS, MAX_OVERLAY_SLOTS,
   CURRENCY_PANEL_WIDTH_MIN, CURRENCY_PANEL_WIDTH_MAX, CURRENCY_PANEL_WIDTH_DEFAULT } from '../utils/uiPreferences';
 
 const OVERLAY_SETTING_INTERVALS = ['15m', '30m', '1h', '4h', '1d'];
@@ -36,7 +36,7 @@ export default function SettingsSidebar({ open, onClose }) {
   const { t } = useI18n();
   const { selectedChart, assetDisplay, setAssetDisplayCategory, assetCategoryKeys,
     chartPanelButtons, setChartPanelButton, chartPanelButtonKeys,
-    uiPrefs, setDefaultChartInterval, setPanelVisible, setMaBandsDefaults,
+    uiPrefs, setDefaultChartInterval, setPanelVisible,
     setOverlaySlotsPreference, setCurrencyPanelWidth,
     chartIntervalOptions, panelKeys } = useCurrency();
 
@@ -273,61 +273,6 @@ export default function SettingsSidebar({ open, onClose }) {
             {uiPrefs.overlaySlots.length >= MAX_OVERLAY_SLOTS && (
               <p className="text-[10px] text-amber-400/70 mt-2">{t('settings.overlay_slots_max', MAX_OVERLAY_SLOTS)}</p>
             )}
-          </div>
-
-          {/* Bandas % — estado padrão */}
-          <div>
-            <p className={section}>{t('settings.ma_bands_defaults')}</p>
-            <p className="text-[10px] text-p5/50 mb-3 leading-relaxed">{t('settings.ma_bands_defaults_hint')}</p>
-            <div className="flex flex-col gap-3">
-              <div>
-                <span className="text-[10px] text-p5/60 block mb-1.5">{t('settings.ma_bands_pct')}</span>
-                <div className="flex gap-1.5 flex-wrap">
-                  {BAND_PCT_OPTIONS.map((p) => (
-                    <button
-                      key={p}
-                      type="button"
-                      onClick={() => setMaBandsDefaults({ pct: p })}
-                      className={`min-w-[2.25rem] py-1 rounded text-xs font-mono border transition-all ${
-                        uiPrefs.maBandsDefaults.pct === p
-                          ? 'border-p4 bg-p4/20 text-p5 font-semibold'
-                          : 'border-p2/40 text-p5/60 hover:border-p3 hover:bg-p2/30'
-                      }`}
-                    >
-                      {p}%
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <label className="flex items-start gap-2.5 cursor-pointer group">
-                <input
-                  type="checkbox"
-                  checked={uiPrefs.maBandsDefaults.showAbove === true}
-                  onChange={(e) => setMaBandsDefaults({ showAbove: e.target.checked })}
-                  className="mt-0.5 shrink-0 accent-p4"
-                />
-                <span className="text-p5 text-xs leading-snug group-hover:text-white transition-colors">
-                  {t('settings.ma_bands_above')}
-                  <span className="block text-[10px] text-p5/40 mt-0.5">
-                    {t('settings.ma_bands_above_detail', uiPrefs.maBandsDefaults.pct)}
-                  </span>
-                </span>
-              </label>
-              <label className="flex items-start gap-2.5 cursor-pointer group">
-                <input
-                  type="checkbox"
-                  checked={uiPrefs.maBandsDefaults.showBelow !== false}
-                  onChange={(e) => setMaBandsDefaults({ showBelow: e.target.checked })}
-                  className="mt-0.5 shrink-0 accent-p4"
-                />
-                <span className="text-p5 text-xs leading-snug group-hover:text-white transition-colors">
-                  {t('settings.ma_bands_below')}
-                  <span className="block text-[10px] text-p5/40 mt-0.5">
-                    {t('settings.ma_bands_below_detail', uiPrefs.maBandsDefaults.pct)}
-                  </span>
-                </span>
-              </label>
-            </div>
           </div>
 
           {/* Idioma */}

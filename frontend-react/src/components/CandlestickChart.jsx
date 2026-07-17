@@ -9,7 +9,7 @@ import convertOpenTime from '../utils/convertOpenTime';
 import Tooltip from './Tooltip';
 import { hasAnyChartPanelButton } from '../utils/chartPanelButtons';
 import { useIsMobile } from '../hooks/useIsMobile';
-import { DEFAULT_OVERLAY_SLOTS, BAND_PCT_OPTIONS, MAX_OVERLAY_SLOTS, PERIOD_DEFAULT_COLORS, DEFAULT_ACTIVE_INDICATORS, BB_PERIOD_OPTIONS, BB_STDDEV_OPTIONS } from '../utils/uiPreferences';
+import { DEFAULT_OVERLAY_SLOTS, DEFAULT_ACTIVE_INDICATORS, BB_PERIOD_OPTIONS, BB_STDDEV_OPTIONS } from '../utils/uiPreferences';
 import { CHART_VIEW, INTERVAL_MS, computeZoomWindow, buildFixedDataZoom, buildInsideDataZoom, computeCandleLimitFromTime, isTradePanelChartView } from '../utils/chartView';
 
 const LIMIT = DEFAULT_CANDLE_LIMIT;
@@ -18,15 +18,8 @@ const MAX_CANDLES = 1000;
 const CANDLE_FETCH_STEPS = [500, 750, 1000];
 const OVERLAY_MA_INTERVALS = ['1m', '5m', '15m', '30m', '1h', '2h', '4h', '8h', '12h', '1d'];
 const OVERLAY_MA_COLORS = ['#fb923c', '#c084fc', '#34d399', '#60a5fa', '#f472b6', '#facc15', '#a78bfa', '#4ade80'];
-const BAND_PANEL_KEYS = ['bandsPct', 'bandsAbove', 'bandsBelow'];
 const INTERVALS = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w'];
 const DEFAULT_INTERVAL = '15m';
-
-function fmtBandPct(v) {
-  const n = Number(v);
-  if (!Number.isFinite(n)) return '?';
-  return Number.isInteger(n) ? String(n) : n.toFixed(2).replace(/\.?0+$/, '');
-}
 
 const CHART_PRICE_PAD = 54;        // direita: rótulos do eixo de preço
 const CHART_LEFT_MARGIN = 8;       // margem esquerda mínima
@@ -57,6 +50,76 @@ const RSI_EXTRA_INDICATORS = [
   { id: 'rsi50', label: 'R50', color: '#facc15', tipKey: 'chart.tip.rsi50' },
   { id: 'stopLoss', label: 'SL', color: '#f87171', tipKey: 'chart.tip.stopLoss' },
 ];
+
+/**
+ * EMAs rápidas agrupadas por intervalo — usuário adiciona/remove intervalos
+ * livremente e liga/desliga períodos (9/21/50/200) dentro de cada intervalo.
+ * Banda % (cima/baixo) é UMA só por grupo, ancorada num período escolhido
+ * (não em todos os períodos ativos — evita duplicar linha de banda por EMA).
+ * Cada lado pode ser fixo (4/3/2/1%) ou "adaptativo": calculado do histórico
+ * real da moeda para aquele período@intervalo, igual ao filtro do ma-cross-bot.
+ * A EMA no timeframe do próprio gráfico já existe via ma9/ma21/ma50/ma200
+ * em INDICATOR_GROUPS.
+ */
+const QUICK_EMA_PERIODS = ['9', '21', '50', '200'];
+const QUICK_EMA_PERIOD_COLORS = { '9': '#34d399', '21': '#60a5fa', '50': '#c084fc', '200': '#f97316' };
+const QUICK_EMA_DEFAULT_INTERVAL = '30m';
+const QUICK_EMA_BAND_PCT_OPTIONS = [4, 3, 2, 1];
+const QUICK_EMA_DEFAULT_ABOVE_PCT = 4;
+const QUICK_EMA_DEFAULT_BELOW_PCT = 1;
+const QUICK_EMA_BAND_ADAPTIVE = 'adaptive';
+const MAX_QUICK_EMA_GROUPS = 4;
+const QUICK_EMA_STORAGE_KEY = 'lets_trade_quick_ema_groups_v4';
+
+/** Normaliza pct de banda: null = desligada, 'adaptive' = calculada do histórico, número = fixa. */
+function normalizeQuickEmaBandPct(value) {
+  if (value === null) return null;
+  if (value === QUICK_EMA_BAND_ADAPTIVE) return QUICK_EMA_BAND_ADAPTIVE;
+  const n = Number(value);
+  return QUICK_EMA_BAND_PCT_OPTIONS.includes(n) ? n : null;
+}
+
+function loadQuickEmaGroups() {
+  try {
+    const raw = localStorage.getItem(QUICK_EMA_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((g) => g && OVERLAY_MA_INTERVALS.includes(g.interval))
+      .slice(0, MAX_QUICK_EMA_GROUPS)
+      .map((g, i) => ({
+        id: typeof g.id === 'string' && g.id ? g.id : `qg${i + 1}`,
+        interval: g.interval,
+        periods: Array.isArray(g.periods) ? g.periods.filter((p) => QUICK_EMA_PERIODS.includes(p)) : [],
+        bandPeriod: QUICK_EMA_PERIODS.includes(g.bandPeriod) ? g.bandPeriod : null,
+        abovePct: normalizeQuickEmaBandPct(g.abovePct),
+        belowPct: normalizeQuickEmaBandPct(g.belowPct),
+      }));
+  } catch {
+    return [];
+  }
+}
+
+function saveQuickEmaGroups(groups) {
+  try {
+    localStorage.setItem(QUICK_EMA_STORAGE_KEY, JSON.stringify(groups));
+  } catch { /* ignore */ }
+}
+
+/** Resolve a banda %(cima/baixo) de um grupo: fixa, adaptativa (histórico real) ou desligada. */
+function resolveQuickEmaBands(group, adaptiveBounds) {
+  const aboveIsAdaptive = group.abovePct === QUICK_EMA_BAND_ADAPTIVE;
+  const belowIsAdaptive = group.belowPct === QUICK_EMA_BAND_ADAPTIVE;
+  const bounds = (aboveIsAdaptive || belowIsAdaptive) && group.bandPeriod
+    ? adaptiveBounds[`${group.bandPeriod}-${group.interval}`]
+    : null;
+  return {
+    showAbove: aboveIsAdaptive ? (bounds?.stretchPct ?? 0) > 0 : group.abovePct != null,
+    showBelow: belowIsAdaptive ? (bounds?.dipPct ?? 0) > 0 : group.belowPct != null,
+    abovePct: aboveIsAdaptive ? (bounds?.stretchPct ?? 0) : (group.abovePct ?? 0),
+    belowPct: belowIsAdaptive ? (bounds?.dipPct ?? 0) : (group.belowPct ?? 0),
+  };
+}
 
 const CHART_INDICATOR_IDS = [
   ...INDICATOR_GROUPS.map(g => g.id),
@@ -305,8 +368,6 @@ const panelSelect = (color, dims = null) => ({
   border: `1px solid ${color}66`,
 });
 
-const MA_PERIOD_OPTIONS = ['9', '21', '50', '200'];
-
 const COMPACT_LABELS = {
   ma9: '9', ma21: '21', ma50: '50', ma200: '200', ichimoku: 'Ich', rsi: 'RSI',
   rsi80: 'R80', rsi50: 'R50', stopLoss: 'SL',
@@ -318,121 +379,18 @@ const PANEL_GRID_COLS = 4;
 /** Altura em linhas de cada tile de indicador. */
 const INDICATOR_TILE_ROWS = 2;
 
-const OVERLAY_BLOCK_ROWS = 4;
 const BANDS_COL_SPAN = 4;
-const BANDS_GRID_COLS = 4;
-
-const OVERLAY_COLOR_PRESETS = ['#22c55e', '#eab308', '#3b82f6', '#ef4444', '#f97316'];
-
-function OverlayColorPicker({ color, slotId, updateOverlaySlot }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const close = (e) => { if (!ref.current?.contains(e.target)) setOpen(false); };
-    document.addEventListener('mousedown', close);
-    return () => document.removeEventListener('mousedown', close);
-  }, [open]);
-
-  return (
-    <div ref={ref} style={{ position: 'relative', width: '100%', height: '100%' }}>
-      <button
-        type="button"
-        onClick={() => setOpen(v => !v)}
-        style={{
-          width: '100%',
-          height: '100%',
-          borderRadius: 3,
-          background: color,
-          border: `1.5px solid ${open ? '#fff' : `${color}99`}`,
-          cursor: 'pointer',
-          padding: 0,
-          display: 'block',
-          boxSizing: 'border-box',
-        }}
-      />
-      {open && (
-        <div style={{
-          position: 'absolute',
-          bottom: 'calc(100% + 4px)',
-          right: 0,
-          display: 'flex',
-          gap: 3,
-          background: 'rgba(10,10,16,0.97)',
-          border: '1px solid #334155',
-          borderRadius: 4,
-          padding: 4,
-          zIndex: 200,
-          boxShadow: '0 4px 12px rgba(0,0,0,0.6)',
-        }}>
-          {OVERLAY_COLOR_PRESETS.map(c => (
-            <button
-              key={c}
-              type="button"
-              onClick={() => { updateOverlaySlot(slotId, { color: c }); setOpen(false); }}
-              style={{
-                width: 16,
-                height: 16,
-                borderRadius: 3,
-                background: c,
-                border: `1.5px solid ${color === c ? '#fff' : 'transparent'}`,
-                cursor: 'pointer',
-                padding: 0,
-                opacity: color === c ? 1 : 0.75,
-              }}
-            />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/** Spans internos dos controles de banda (masonry — um maior, outro menor). */
-const BAND_CONTROL_SPANS = {
-  period:   { col: 2, row: 1 },
-  interval: { col: 2, row: 1 },
-  title:    { col: 1, row: 2 },
-  pct:      { col: 2, row: 2 },
-  adaptive: { col: 2, row: 1 },
-  above:    { col: 1, row: 2 },
-  below:    { col: 2, row: 1 },
-  mid:      { col: 1, row: 1 },
-  loading:  { col: 1, row: 1 },
-};
-
-function buildBandControlTiles(meta, overlayMaLoading) {
-  const { showBandsPct, showBandsAbove, showBandsBelow, maBands } = meta;
-  const tiles = [];
-  if (!maBands.adaptive) {
-    tiles.push({ key: 'period', kind: 'period' });
-    tiles.push({ key: 'interval', kind: 'interval' });
-  }
-  tiles.push({ key: 'title', kind: 'title' });
-  if (showBandsPct && !maBands.adaptive) tiles.push({ key: 'pct', kind: 'pct' });
-  if (showBandsPct && maBands.adaptive) tiles.push({ key: 'adaptive', kind: 'adaptive' });
-  if (showBandsPct) tiles.push({ key: 'mid', kind: 'mid' });
-  if (showBandsAbove) tiles.push({ key: 'above', kind: 'above' });
-  if (showBandsBelow) tiles.push({ key: 'below', kind: 'below' });
-  if (overlayMaLoading) tiles.push({ key: 'loading', kind: 'loading' });
-  return tiles;
-}
-
-function packBandControls(meta, overlayMaLoading) {
-  const tiles = buildBandControlTiles(meta, overlayMaLoading).map((t) => {
-    const span = BAND_CONTROL_SPANS[t.kind] ?? { col: 1, row: 1 };
-    return { ...t, colSpan: span.col, rowSpan: span.row };
-  });
-  return packMasonryTiles(tiles, BANDS_GRID_COLS);
-}
-
-function bandsRowSpan(meta, loading) {
-  const { rowUnits } = packBandControls(meta, loading);
-  return Math.max(2, rowUnits);
-}
 
 const BOLLINGER_ROW_SPAN = 3;
+
+/** Grid interno do bloco de EMAs rápidas: intervalo+remover, 4 botões de período, banda cima/baixo. */
+const QUICK_EMA_GRID_COLS = 4;
+const QUICK_EMA_GROUP_ROWS = 4;
+
+function quickEmaRowSpan(groups) {
+  const addRow = groups.length < MAX_QUICK_EMA_GROUPS ? 1 : 0;
+  return Math.max(1, groups.length * QUICK_EMA_GROUP_ROWS + addRow);
+}
 
 function renderBollingerTile(dims, t, bollingerBands, setBollingerBands) {
   const innerW = dims.w - PANEL_TILE_PAD * 2;
@@ -524,195 +482,6 @@ function scaleSectionTitle(dims) {
     height: '100%',
     width: '100%',
   };
-}
-
-const BANDS_TITLE_LABEL = 'Bandas';
-
-function estimateLabelWidth(text, fontSize) {
-  return text.length * fontSize * 0.62;
-}
-
-function scaleBandsTitleFontSize(dims, vertical) {
-  if (!dims) return 11;
-  if (!vertical) {
-    return scaleFontSize(dims, 0.34, 10, 14);
-  }
-  const chars = BANDS_TITLE_LABEL.length;
-  const byWidth = dims.w * 0.88;
-  const byHeight = dims.h / (chars * 0.92);
-  return Math.max(10, Math.min(14, Math.round(Math.min(byWidth, byHeight))));
-}
-
-/** Vertical quando a célula masonry é estreita demais para o rótulo horizontal. */
-function bandsTitleUsesVertical(dims) {
-  if (!dims || dims.w <= 0) return true;
-  const fontSize = scaleBandsTitleFontSize(dims, false);
-  const minW = estimateLabelWidth(BANDS_TITLE_LABEL, fontSize) + 6;
-  return dims.w < minW || dims.h > dims.w * 1.15;
-}
-
-function scaleBandsTitle(dims) {
-  const vertical = bandsTitleUsesVertical(dims);
-  const fontSize = scaleBandsTitleFontSize(dims, vertical);
-  return {
-    fontSize,
-    letterSpacing: vertical ? 0.45 : 0.4,
-    color: '#94a3b8',
-    fontFamily: 'monospace',
-    textTransform: 'uppercase',
-    textAlign: 'center',
-    lineHeight: vertical ? 0.95 : 1.1,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    height: '100%',
-    width: '100%',
-    cursor: 'help',
-    ...(vertical ? { writingMode: 'vertical-rl', textOrientation: 'mixed' } : {}),
-  };
-}
-
-function cellKey(row, col) {
-  return `${row}:${col}`;
-}
-
-function canPlace(occupied, row, col, colSpan, rowSpan, gridCols) {
-  if (col + colSpan > gridCols) return false;
-  for (let r = row; r < row + rowSpan; r++) {
-    for (let c = col; c < col + colSpan; c++) {
-      if (occupied.has(cellKey(r, c))) return false;
-    }
-  }
-  return true;
-}
-
-function markPlace(occupied, row, col, colSpan, rowSpan) {
-  for (let r = row; r < row + rowSpan; r++) {
-    for (let c = col; c < col + colSpan; c++) {
-      occupied.add(cellKey(r, c));
-    }
-  }
-}
-
-/**
- * Alturas naturais por coluna — criam variedade: esquerda começa grande,
- * direita começa pequena. O ciclo alterna dentro de cada coluna.
- */
-const OVERLAY_NAT_LEFT  = [5, 3];
-const OVERLAY_NAT_RIGHT = [3, 5];
-
-/**
- * Posiciona os tiles de overlay em duas colunas de metade do painel.
- * Tiles de índice par → coluna esquerda, ímpares → coluna direita.
- *
- * Fill rule: o ÚLTIMO tile de cada coluna se expande automaticamente para
- * preencher o espaço vertical remanescente — sem deixar lacunas, mesmo que
- * a outra coluna tenha mais tiles (ou "o espaço de duas divs de MA").
- *
- * Caso especial: 1 único tile ocupa largura total (colSpan=4).
- */
-function computeOverlayPlacements(overlayTiles, rowOffset) {
-  if (!overlayTiles.length) return { placements: [], rowUnits: 0 };
-
-  // Único tile → largura total, sem divisão de colunas
-  if (overlayTiles.length === 1) {
-    const rowSpan = OVERLAY_NAT_LEFT[0];
-    return {
-      placements: [{
-        ...overlayTiles[0],
-        colSpan: PANEL_GRID_COLS,
-        rowSpan,
-        gridColumn: `1 / span ${PANEL_GRID_COLS}`,
-        gridRow:    `${rowOffset + 1} / span ${rowSpan}`,
-        startRow:    rowOffset,
-        startCol:    0,
-      }],
-      rowUnits: rowSpan,
-    };
-  }
-
-  // 2+ tiles: dividir em coluna esquerda (par) e direita (ímpar)
-  const leftTiles  = overlayTiles.filter((_, i) => i % 2 === 0);
-  const rightTiles = overlayTiles.filter((_, i) => i % 2 === 1);
-
-  // Alturas naturais de cada coluna
-  const leftSpans  = leftTiles.map((_, i)  => OVERLAY_NAT_LEFT[i  % OVERLAY_NAT_LEFT.length]);
-  const rightSpans = rightTiles.map((_, i) => OVERLAY_NAT_RIGHT[i % OVERLAY_NAT_RIGHT.length]);
-
-  const leftTotal  = leftSpans.reduce((s, r) => s + r, 0);
-  const rightTotal = rightSpans.reduce((s, r) => s + r, 0);
-  const maxRows    = Math.max(leftTotal, rightTotal);
-
-  // Expande o último tile da coluna mais curta para preencher o espaço vazio
-  if (leftTotal < maxRows)  leftSpans[leftSpans.length   - 1] += maxRows - leftTotal;
-  if (rightTotal < maxRows) rightSpans[rightSpans.length - 1] += maxRows - rightTotal;
-
-  const placements = [];
-
-  let lr = rowOffset;
-  for (let i = 0; i < leftTiles.length; i++) {
-    const rowSpan = leftSpans[i];
-    placements.push({
-      ...leftTiles[i],
-      colSpan: 2, rowSpan,
-      gridColumn: '1 / span 2',
-      gridRow:    `${lr + 1} / span ${rowSpan}`,
-      startRow: lr, startCol: 0,
-    });
-    lr += rowSpan;
-  }
-
-  let rr = rowOffset;
-  for (let i = 0; i < rightTiles.length; i++) {
-    const rowSpan = rightSpans[i];
-    placements.push({
-      ...rightTiles[i],
-      colSpan: 2, rowSpan,
-      gridColumn: '3 / span 2',
-      gridRow:    `${rr + 1} / span ${rowSpan}`,
-      startRow: rr, startCol: 2,
-    });
-    rr += rowSpan;
-  }
-
-  return { placements, rowUnits: maxRows };
-}
-
-/** Empacota tiles no grid (maior área primeiro) e devolve posições + linhas usadas. */
-function packMasonryTiles(tiles, gridCols) {
-  const sorted = [...tiles].sort(
-    (a, b) => (b.colSpan * b.rowSpan) - (a.colSpan * a.rowSpan),
-  );
-  const occupied = new Set();
-  const placements = [];
-  let maxRow = 0;
-
-  for (const tile of sorted) {
-    const colSpan = Math.min(tile.colSpan, gridCols);
-    const rowSpan = tile.rowSpan;
-    let placed = false;
-
-    for (let row = 0; !placed; row++) {
-      for (let col = 0; col <= gridCols - colSpan; col++) {
-        if (!canPlace(occupied, row, col, colSpan, rowSpan, gridCols)) continue;
-        markPlace(occupied, row, col, colSpan, rowSpan);
-        maxRow = Math.max(maxRow, row + rowSpan);
-        placements.push({
-          ...tile,
-          gridColumn: `${col + 1} / span ${colSpan}`,
-          gridRow: `${row + 1} / span ${rowSpan}`,
-          colSpan,
-          rowSpan,
-          startRow: row,
-          startCol: col,
-        });
-        placed = true;
-        break;
-      }
-    }
-  }
-
-  return { placements, rowUnits: maxRow };
 }
 
 /**
@@ -814,7 +583,7 @@ function packIndicatorsFill(tiles) {
   return { placements, rowUnits: row };
 }
 
-function computeMasonryLayout(tileDefs, width, height, gap, overlayMaLoading = false) {
+function computeMasonryLayout(tileDefs, width, height, gap) {
   if (!tileDefs.length || width <= 0 || height <= 0) {
     return {
       cols: PANEL_GRID_COLS,
@@ -828,19 +597,13 @@ function computeMasonryLayout(tileDefs, width, height, gap, overlayMaLoading = f
   // --- Indicator buttons (spans dinâmicos por contagem) ---
   const indTiles = tileDefs.filter((t) => t.kind === 'indicator');
 
-  // --- Overlay tiles (staggered, preserves slot order) ---
-  const overlayTilesDefs = tileDefs.filter((t) => t.kind === 'overlay');
-
-  // --- "+ MA" button ---
-  const addOverlayDef = tileDefs.find((t) => t.kind === 'addOverlay') ?? null;
-
-  // --- Bands / Bollinger sections (separate flex blocks) ---
+  // --- Bollinger / Quick-EMA sections (separate flex blocks) ---
   const blocks = tileDefs
-    .filter((t) => t.kind === 'bands' || t.kind === 'bb')
+    .filter((t) => t.kind === 'bb' || t.kind === 'quickEma')
     .map((t) => ({
       ...t,
       colSpan: BANDS_COL_SPAN,
-      rowSpan: t.kind === 'bands' ? bandsRowSpan(t.data, overlayMaLoading) : BOLLINGER_ROW_SPAN,
+      rowSpan: t.kind === 'bb' ? BOLLINGER_ROW_SPAN : quickEmaRowSpan(t.data.groups),
     }));
 
   // Pack indicator buttons — spans calculados dinamicamente pelo número de tiles
@@ -848,25 +611,9 @@ function computeMasonryLayout(tileDefs, width, height, gap, overlayMaLoading = f
   const indFilledPlacements = indPack.placements;
   const indRowUnits = indTiles.length ? Math.max(1, indPack.rowUnits) : 0;
 
-  // Stagger-pack overlays, offset below indicators
-  const overlayPack = computeOverlayPlacements(overlayTilesDefs, indRowUnits);
-  const overlayRowUnits = overlayTilesDefs.length ? overlayPack.rowUnits : 0;
-
-  // "+ MA" button row
-  const addOverlayRowOffset = indRowUnits + overlayRowUnits;
-  const addOverlayPlacements = addOverlayDef ? [{
-    ...addOverlayDef,
-    colSpan: PANEL_GRID_COLS,
-    rowSpan: 1,
-    gridColumn: `1 / span ${PANEL_GRID_COLS}`,
-    gridRow:    `${addOverlayRowOffset + 1} / span 1`,
-    startRow:    addOverlayRowOffset,
-    startCol:    0,
-  }] : [];
-
   // Total rows for the shared CSS grid
-  const hasIndSection = indTiles.length > 0 || overlayTilesDefs.length > 0 || !!addOverlayDef;
-  const totalIndRowUnits = indRowUnits + overlayRowUnits + (addOverlayDef ? 1 : 0);
+  const hasIndSection = indTiles.length > 0;
+  const totalIndRowUnits = indRowUnits;
 
   // Height split between indicator section and bands section
   const blockRowUnits = blocks.reduce((sum, b) => sum + b.rowSpan, 0);
@@ -892,8 +639,6 @@ function computeMasonryLayout(tileDefs, width, height, gap, overlayMaLoading = f
 
   const indicatorPlacements = [
     ...indFilledPlacements.map((t) => ({ ...t, dims: dimsFor(t.colSpan, t.rowSpan) })),
-    ...overlayPack.placements.map((t) => ({ ...t, dims: dimsFor(t.colSpan, t.rowSpan) })),
-    ...addOverlayPlacements.map((t) => ({ ...t, dims: dimsFor(t.colSpan, t.rowSpan) })),
   ];
 
   const blockPlacements = blocks.map((tile) => {
@@ -994,267 +739,167 @@ function renderIndicatorTile({ id, color, tipKey, active, darkText }, dims, t, t
   );
 }
 
-function renderOverlayTile({ slot }, dims, t, updateOverlaySlot, removeOverlaySlot) {
-  const color = slot.color ?? '#94a3b8';
-
-  // 2-column internal masonry grid — sem label MA1/MA2, o select de período É a identidade do tile
+function renderQuickEmaGroupsTile(
+  { groups },
+  dims,
+  t,
+  addQuickEmaGroup,
+  removeQuickEmaGroup,
+  updateQuickEmaGroupInterval,
+  toggleQuickEmaGroupPeriod,
+  updateQuickEmaGroupBandPct,
+  updateQuickEmaGroupBandPeriod,
+) {
   const innerW = dims.w - PANEL_TILE_PAD * 2;
   const innerH = dims.h - PANEL_TILE_PAD * 2;
-  const cellW  = (innerW - PANEL_GAP) / 2;
-  const cellH  = (innerH - (OVERLAY_BLOCK_ROWS - 1) * PANEL_GAP) / OVERLAY_BLOCK_ROWS;
-  const tallH  = cellH * 2 + PANEL_GAP; // 1×2 — altura do select de período
-  const periodDims = { w: cellW, h: tallH };
-  const cellDims   = { w: cellW, h: cellH };
-  const rowDims    = { w: innerW, h: cellH };
+  const rows = quickEmaRowSpan(groups);
+  const rowH = (innerH - (rows - 1) * PANEL_GAP) / rows;
+  const colW = (innerW - (QUICK_EMA_GRID_COLS - 1) * PANEL_GAP) / QUICK_EMA_GRID_COLS;
+  const selectDims = { w: colW * 3 + PANEL_GAP * 2, h: rowH };
+  const removeDims = { w: colW, h: rowH };
+  const periodDims = { w: colW, h: rowH };
+  const bandPeriodDims = { w: innerW, h: rowH };
+  const bandDims = { w: colW * 2 + PANEL_GAP, h: rowH };
+  const addDims = { w: innerW, h: rowH };
+
+  const cells = groups.flatMap((g, i) => {
+    const ivRow = i * QUICK_EMA_GROUP_ROWS + 1;
+    const pRow = i * QUICK_EMA_GROUP_ROWS + 2;
+    const bandSelectRow = i * QUICK_EMA_GROUP_ROWS + 3;
+    const pctRow = i * QUICK_EMA_GROUP_ROWS + 4;
+    const bandColor = g.bandPeriod ? (QUICK_EMA_PERIOD_COLORS[g.bandPeriod] ?? '#94a3b8') : '#475569';
+    return [
+      <div key={`${g.id}-iv`} style={{ gridColumn: '1 / span 3', gridRow: `${ivRow}`, display: 'flex', alignItems: 'stretch' }}>
+        <PanelTip text={t('chart.tip.quick_ema_interval')}>
+          <select
+            value={g.interval}
+            onChange={(e) => updateQuickEmaGroupInterval(g.id, e.target.value)}
+            style={{ ...panelSelect('#94a3b8', selectDims), fontSize: scaleFontSize(selectDims, 0.35, 9, 13) }}
+          >
+            {OVERLAY_MA_INTERVALS.map((iv) => <option key={iv} value={iv}>{iv}</option>)}
+          </select>
+        </PanelTip>
+      </div>,
+      <div key={`${g.id}-rm`} style={{ gridColumn: '4', gridRow: `${ivRow}`, display: 'flex', alignItems: 'stretch' }}>
+        <PanelTip text={t('chart.tip.quick_ema_remove')}>
+          <button
+            type="button"
+            onClick={() => removeQuickEmaGroup(g.id)}
+            style={{ ...panelBtn(false, '#f87171', false, removeDims), fontSize: 11 }}
+          >
+            ×
+          </button>
+        </PanelTip>
+      </div>,
+      ...QUICK_EMA_PERIODS.map((p, pi) => {
+        const active = g.periods.includes(p);
+        const color = QUICK_EMA_PERIOD_COLORS[p];
+        return (
+          <div key={`${g.id}-${p}`} style={{ gridColumn: `${pi + 1}`, gridRow: `${pRow}`, display: 'flex', alignItems: 'stretch' }}>
+            <PanelTip text={t('chart.tip.quick_ema_period', p, g.interval)}>
+              <button
+                type="button"
+                onClick={() => toggleQuickEmaGroupPeriod(g.id, p)}
+                style={panelBtn(active, color, false, periodDims)}
+              >
+                {p}
+              </button>
+            </PanelTip>
+          </div>
+        );
+      }),
+      <div key={`${g.id}-bandperiod`} style={{ gridColumn: `1 / span ${QUICK_EMA_GRID_COLS}`, gridRow: `${bandSelectRow}`, display: 'flex', alignItems: 'stretch' }}>
+        <PanelTip text={t('chart.tip.quick_ema_band_period')}>
+          <select
+            value={g.bandPeriod ?? 'off'}
+            onChange={(e) => updateQuickEmaGroupBandPeriod(g.id, e.target.value === 'off' ? null : e.target.value)}
+            style={{
+              ...panelSelect(bandColor, bandPeriodDims),
+              fontSize: scaleFontSize(bandPeriodDims, 0.35, 9, 13),
+              opacity: g.bandPeriod ? 1 : 0.6,
+            }}
+          >
+            <option value="off">OFF</option>
+            {QUICK_EMA_PERIODS.map((p) => <option key={p} value={p}>{`EMA${p}`}</option>)}
+          </select>
+        </PanelTip>
+      </div>,
+      <div key={`${g.id}-above`} style={{ gridColumn: '1 / span 2', gridRow: `${pctRow}`, display: 'flex', alignItems: 'stretch' }}>
+        <PanelTip text={t('chart.tip.quick_ema_band_above')}>
+          <select
+            value={g.abovePct ?? 'off'}
+            onChange={(e) => updateQuickEmaGroupBandPct(g.id, 'above', e.target.value === 'off' ? null : (e.target.value === QUICK_EMA_BAND_ADAPTIVE ? QUICK_EMA_BAND_ADAPTIVE : Number(e.target.value)))}
+            style={{
+              ...panelSelect(g.abovePct === QUICK_EMA_BAND_ADAPTIVE ? '#facc15' : (g.abovePct != null ? '#22c55e' : '#475569'), bandDims),
+              fontSize: scaleFontSize(bandDims, 0.35, 9, 13),
+              opacity: g.abovePct != null ? 1 : 0.6,
+            }}
+          >
+            <option value="off">OFF</option>
+            <option value={QUICK_EMA_BAND_ADAPTIVE}>ADAPT</option>
+            {QUICK_EMA_BAND_PCT_OPTIONS.map((pct) => <option key={pct} value={pct}>{`+${pct}%`}</option>)}
+          </select>
+        </PanelTip>
+      </div>,
+      <div key={`${g.id}-below`} style={{ gridColumn: '3 / span 2', gridRow: `${pctRow}`, display: 'flex', alignItems: 'stretch' }}>
+        <PanelTip text={t('chart.tip.quick_ema_band_below')}>
+          <select
+            value={g.belowPct ?? 'off'}
+            onChange={(e) => updateQuickEmaGroupBandPct(g.id, 'below', e.target.value === 'off' ? null : (e.target.value === QUICK_EMA_BAND_ADAPTIVE ? QUICK_EMA_BAND_ADAPTIVE : Number(e.target.value)))}
+            style={{
+              ...panelSelect(g.belowPct === QUICK_EMA_BAND_ADAPTIVE ? '#facc15' : (g.belowPct != null ? '#f87171' : '#475569'), bandDims),
+              fontSize: scaleFontSize(bandDims, 0.35, 9, 13),
+              opacity: g.belowPct != null ? 1 : 0.6,
+            }}
+          >
+            <option value="off">OFF</option>
+            <option value={QUICK_EMA_BAND_ADAPTIVE}>ADAPT</option>
+            {QUICK_EMA_BAND_PCT_OPTIONS.map((pct) => <option key={pct} value={pct}>{`-${pct}%`}</option>)}
+          </select>
+        </PanelTip>
+      </div>,
+    ];
+  });
 
   return (
     <div style={{
       display: 'grid',
-      gridTemplateColumns: '1fr 1fr',
-      gridTemplateRows: `repeat(${OVERLAY_BLOCK_ROWS}, 1fr)`,
+      gridTemplateColumns: `repeat(${QUICK_EMA_GRID_COLS}, 1fr)`,
+      gridTemplateRows: `repeat(${rows}, 1fr)`,
       gap: PANEL_GAP,
       width: innerW,
       height: innerH,
       boxSizing: 'border-box',
     }}>
-      {/* período — tall (1×2), age como identidade visual do tile */}
-      <div style={{ gridColumn: '1', gridRow: '1 / span 2', display: 'flex', alignItems: 'stretch' }}>
-        <PanelTip text={t('chart.tip.ma_period', slot.period, slot.period)}>
-          <select
-            value={slot.period}
-            onChange={e => {
-              const newPeriod = e.target.value;
-              const patch = { period: newPeriod };
-              if (color === (PERIOD_DEFAULT_COLORS[slot.period] ?? null)) {
-                patch.color = PERIOD_DEFAULT_COLORS[newPeriod] ?? color;
-              }
-              updateOverlaySlot(slot.id, patch);
-            }}
-            style={{ ...panelSelect(color, periodDims), fontSize: scaleFontSize(periodDims, 0.3, 10, 18) }}
-          >
-            {MA_PERIOD_OPTIONS.map(p => <option key={p} value={p}>{p}</option>)}
-          </select>
-        </PanelTip>
-      </div>
-      {/* cor — pequeno (1×1) topo direito */}
-      <div style={{ gridColumn: '2', gridRow: '1', display: 'flex', alignItems: 'stretch' }}>
-        <PanelTip text={t('chart.tip.ma_color', slot.period)}>
-          <OverlayColorPicker color={color} slotId={slot.id} updateOverlaySlot={updateOverlaySlot} />
-        </PanelTip>
-      </div>
-      {/* × remover — pequeno (1×1) abaixo da cor */}
-      <div style={{ gridColumn: '2', gridRow: '2', display: 'flex', alignItems: 'stretch' }}>
-        <button
-          type="button"
-          onClick={() => removeOverlaySlot(slot.id)}
-          style={{ ...panelBtn(false, color, false, cellDims), fontSize: 11 }}
-        >
-          ×
-        </button>
-      </div>
-      {/* intervalo — largura total (2×1) */}
-      <div style={{ gridColumn: '1 / span 2', gridRow: '3', display: 'flex', alignItems: 'stretch' }}>
-        <PanelTip text={t('chart.tip.ma_interval', slot.period)}>
-          <select
-            value={slot.interval}
-            onChange={e => updateOverlaySlot(slot.id, { interval: e.target.value })}
-            style={{ ...panelSelect(color, rowDims), fontSize: scaleFontSize(rowDims, 0.4, 10, 14) }}
-          >
-            {OVERLAY_MA_INTERVALS.map(iv => <option key={iv} value={iv}>{iv}</option>)}
-          </select>
-        </PanelTip>
-      </div>
-      {/* ON/OFF — largura total (2×1) */}
-      <div style={{ gridColumn: '1 / span 2', gridRow: '4', display: 'flex', alignItems: 'stretch' }}>
-        <PanelTip text={t('chart.tip.ma_on', slot.period)}>
-          <button
-            type="button"
-            onClick={() => updateOverlaySlot(slot.id, { enabled: !slot.enabled })}
-            style={panelBtn(slot.enabled, color, true, rowDims)}
-          >
-            {slot.enabled ? 'ON' : 'OFF'}
-          </button>
-        </PanelTip>
-      </div>
-    </div>
-  );
-}
-
-function renderAddOverlayBtn(dims, t, addOverlaySlot) {
-  const color = '#94a3b8';
-  return (
-    <PanelTip text={t('chart.tip.add_overlay')}>
-      <button
-        type="button"
-        onClick={addOverlaySlot}
-        style={panelBtn(false, color, false, dims)}
-      >
-        + MA
-      </button>
-    </PanelTip>
-  );
-}
-
-function renderBandControl(tile, dims, meta, t, setMaBands) {
-  const { maBands } = meta;
-  switch (tile.kind) {
-    case 'period':
-      return (
-        <PanelTip text={t('chart.tip.bands_period')}>
-          <select
-            value={maBands.period}
-            onChange={e => setMaBands(b => ({ ...b, period: e.target.value }))}
-            style={panelSelect('#94a3b8', dims)}
-          >
-            {MA_PERIOD_OPTIONS.map(p => <option key={p} value={p}>{p}</option>)}
-          </select>
-        </PanelTip>
-      );
-    case 'interval':
-      return (
-        <PanelTip text={t('chart.tip.bands_interval')}>
-          <select
-            value={maBands.interval}
-            onChange={e => setMaBands(b => ({ ...b, interval: e.target.value }))}
-            style={panelSelect('#94a3b8', dims)}
-          >
-            {OVERLAY_MA_INTERVALS.map(iv => <option key={iv} value={iv}>{iv}</option>)}
-          </select>
-        </PanelTip>
-      );
-    case 'title':
-      return (
-        <PanelTip text={t('chart.tip.bands_title')}>
-          <span style={scaleBandsTitle(dims)}>{BANDS_TITLE_LABEL}</span>
-        </PanelTip>
-      );
-    case 'pct':
-      return (
-        <PanelTip text={t('chart.tip.bands_pct', maBands.pct)}>
-          <select
-            value={maBands.pct}
-            onChange={(e) => {
-              const pct = Number(e.target.value);
-              setMaBands((b) => ({ ...b, pct, dipPct: pct, stretchPct: pct, adaptive: false }));
-            }}
-            style={panelSelect('#94a3b8', dims)}
-          >
-            {BAND_PCT_OPTIONS.map((p) => <option key={p} value={p}>{p}%</option>)}
-          </select>
-        </PanelTip>
-      );
-    case 'adaptive':
-      return (
-        <PanelTip text={t('chart.tip.bands_adaptive')}>
-          <span style={{ ...panelBtn(true, '#94a3b8', true, dims), cursor: 'default' }}>
-            adapt
-          </span>
-        </PanelTip>
-      );
-    case 'mid':
-      return (
-        <PanelTip text={t('chart.tip.band_mid', maBands.period, maBands.interval)}>
-          <button
-            type="button"
-            onClick={() => setMaBands((b) => ({ ...b, showMiddle: !b.showMiddle }))}
-            style={panelBtn(maBands.showMiddle === true, '#94a3b8', true, dims)}
-          >
-            EMA{maBands.period}
-          </button>
-        </PanelTip>
-      );
-    case 'above':
-      return (
-        <PanelTip text={t('chart.tip.band_above', maBands.stretchPct ?? maBands.pct)}>
-          <button
-            type="button"
-            onClick={() => setMaBands((b) => ({ ...b, showAbove: !b.showAbove }))}
-            style={panelBtn(maBands.showAbove, '#22c55e', true, dims)}
-          >
-            ↑{fmtBandPct(maBands.stretchPct ?? maBands.pct)}%
-          </button>
-        </PanelTip>
-      );
-    case 'below':
-      return (
-        <PanelTip text={t('chart.tip.band_below', maBands.dipPct ?? maBands.pct)}>
-          <button
-            type="button"
-            onClick={() => setMaBands((b) => ({ ...b, showBelow: !b.showBelow }))}
-            style={panelBtn(maBands.showBelow, '#f87171', true, dims)}
-          >
-            ↓{fmtBandPct(maBands.dipPct ?? maBands.pct)}%
-          </button>
-        </PanelTip>
-      );
-    case 'loading':
-      return (
-        <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <div className="animate-spin" style={{ width: 10, height: 10, borderRadius: '50%', border: '1.5px solid #94a3b8', borderTopColor: 'transparent' }} />
+      {cells}
+      {groups.length < MAX_QUICK_EMA_GROUPS && (
+        <div style={{ gridColumn: `1 / span ${QUICK_EMA_GRID_COLS}`, gridRow: `${rows}`, display: 'flex', alignItems: 'stretch' }}>
+          <PanelTip text={t('chart.tip.quick_ema_add')}>
+            <button
+              type="button"
+              onClick={addQuickEmaGroup}
+              style={panelBtn(false, '#94a3b8', false, addDims)}
+            >
+              + Intervalo
+            </button>
+          </PanelTip>
         </div>
-      );
-    default:
-      return null;
-  }
-}
-
-function renderBandsTile(meta, dims, t, setMaBands, overlayMaLoading) {
-  const { placements, rowUnits } = packBandControls(meta, overlayMaLoading);
-  const innerW = dims.w - PANEL_TILE_PAD * 2;
-  const innerH = dims.h - PANEL_TILE_PAD * 2;
-
-  return (
-    <div
-      style={{
-        display: 'grid',
-        gridTemplateColumns: `repeat(${BANDS_GRID_COLS}, 1fr)`,
-        gridTemplateRows: `repeat(${rowUnits}, 1fr)`,
-        gridAutoFlow: 'dense',
-        gap: PANEL_GAP,
-        width: innerW,
-        height: innerH,
-        minHeight: 0,
-      }}
-    >
-      {placements.map((tile) => {
-        const cellDims = tilePixelDims(
-          tile.colSpan,
-          tile.rowSpan,
-          rowUnits,
-          innerW,
-          innerH,
-          PANEL_GAP,
-          BANDS_GRID_COLS,
-        );
-        return (
-          <div
-            key={tile.key}
-            style={{
-              gridColumn: tile.gridColumn,
-              gridRow: tile.gridRow,
-              minWidth: 0,
-              minHeight: 0,
-              display: 'flex',
-              alignItems: 'stretch',
-            }}
-          >
-            {renderBandControl(tile, cellDims, meta, t, setMaBands)}
-          </div>
-        );
-      })}
+      )}
     </div>
   );
 }
+
 
 function ChartIndicatorPanel({
   activeIndicators,
   toggleIndicator,
-  overlaySlots,
-  updateOverlaySlot,
-  addOverlaySlot,
-  removeOverlaySlot,
-  maBands,
-  setMaBands,
+  quickEmaGroups,
+  addQuickEmaGroup,
+  removeQuickEmaGroup,
+  updateQuickEmaGroupInterval,
+  toggleQuickEmaGroupPeriod,
+  updateQuickEmaGroupBandPct,
+  updateQuickEmaGroupBandPeriod,
   bollingerBands,
   setBollingerBands,
   overlayMaLoading,
@@ -1272,16 +917,6 @@ function ChartIndicatorPanel({
   const tileDefs = useMemo(() => {
     const showKey = (key) => panelButtons[key] !== false;
     const indicators = [...INDICATOR_GROUPS, ...RSI_EXTRA_INDICATORS].filter(({ id }) => showKey(id));
-    const visibleOverlays = overlaySlots
-      .map((slot, idx) => {
-        const num = parseInt(slot.id.replace('slot', ''), 10);
-        return { slot, idx, key: isNaN(num) ? `ma${idx + 1}` : `ma${num}` };
-      })
-      .filter(({ key }) => showKey(key));
-    const showBandsPct = showKey('bandsPct');
-    const showBandsAbove = showKey('bandsAbove');
-    const showBandsBelow = showKey('bandsBelow');
-    const showBandsBlock = showBandsPct || showBandsAbove || showBandsBelow;
     const showBb = showKey('bb');
 
     const list = [];
@@ -1296,28 +931,12 @@ function ChartIndicatorPanel({
         },
       });
     }
-    for (const entry of visibleOverlays) {
-      list.push({
-        key: entry.slot.id,
-        kind: 'overlay',
-        data: entry,
-      });
-    }
-    if (overlaySlots.length < MAX_OVERLAY_SLOTS) {
-      list.push({ key: 'addOverlay', kind: 'addOverlay', data: {} });
-    }
-    if (showBandsBlock) {
-      list.push({
-        key: 'bands',
-        kind: 'bands',
-        data: { showBandsPct, showBandsAbove, showBandsBelow, maBands, overlaySlots },
-      });
-    }
     if (showBb) {
       list.push({ key: 'bb', kind: 'bb', data: {} });
     }
+    list.push({ key: 'quickEma', kind: 'quickEma', data: { groups: quickEmaGroups } });
     return list;
-  }, [panelButtons, overlaySlots, activeIndicators, maBands, overlayMaLoading]);
+  }, [panelButtons, activeIndicators, quickEmaGroups]);
 
   const contentWidth = useMemo(
     () => resolvePanelContentWidth(outerRef.current?.parentElement?.clientWidth ?? panelSize.width),
@@ -1442,8 +1061,6 @@ function ChartIndicatorPanel({
                   }}
                 >
                   {tile.kind === 'indicator' && renderIndicatorTile(tile.data, tile.dims, t, toggleIndicator)}
-                  {tile.kind === 'overlay' && renderOverlayTile(tile.data, tile.dims, t, updateOverlaySlot, removeOverlaySlot)}
-                  {tile.kind === 'addOverlay' && renderAddOverlayBtn(tile.dims, t, addOverlaySlot)}
                 </div>
               ))}
             </div>
@@ -1459,8 +1076,12 @@ function ChartIndicatorPanel({
                 width: `${(tile.colSpan / PANEL_GRID_COLS) * 100}%`,
               }}
             >
-              {tile.kind === 'bands' && renderBandsTile(tile.data, tile.dims, t, setMaBands, overlayMaLoading)}
               {tile.kind === 'bb' && renderBollingerTile(tile.dims, t, bollingerBands, setBollingerBands)}
+              {tile.kind === 'quickEma' && renderQuickEmaGroupsTile(
+                tile.data, tile.dims, t,
+                addQuickEmaGroup, removeQuickEmaGroup, updateQuickEmaGroupInterval, toggleQuickEmaGroupPeriod,
+                updateQuickEmaGroupBandPct, updateQuickEmaGroupBandPeriod,
+              )}
             </div>
           ))}
         </div>
@@ -2431,7 +2052,7 @@ export default function CandlestickChart() {
   const { selectedChart, setSelectedChart, chartZoom, setChartZoom, chartTradeMarkers, chartViewSource,
     chartCandleWindowReset,
     multitradeChartFocus, tradePurchases, allTrades, gateFavorites, chartInterval: savedInterval, setChartInterval,
-    chartPanelButtons, uiPrefs, setOverlaySlotsPreference, setMaBandsDefaults, setBollingerBandsDefaults, setActiveIndicatorsPreference,
+    chartPanelButtons, uiPrefs, setMaBandsDefaults, setBollingerBandsDefaults, setActiveIndicatorsPreference,
     multitradeFavorites, fiveMTradeFavorites, activeTrades } = useCurrency();
   const { t } = useI18n();
   const chartRef = useRef(null);
@@ -2442,6 +2063,66 @@ export default function CandlestickChart() {
   const activeIndicators = uiPrefs.activeIndicators ?? [...DEFAULT_ACTIVE_INDICATORS];
   const [activeTab, setActiveTab] = useState('chart'); // 'chart' | 'matrix'
   const [tradeOverlaySlots, setTradeOverlaySlots] = useState(null);
+  const [quickEmaGroups, setQuickEmaGroups] = useState(loadQuickEmaGroups);
+  const addQuickEmaGroup = useCallback(() => {
+    setQuickEmaGroups((prev) => {
+      if (prev.length >= MAX_QUICK_EMA_GROUPS) return prev;
+      const next = [...prev, {
+        id: `qg${Date.now()}`,
+        interval: QUICK_EMA_DEFAULT_INTERVAL,
+        periods: [],
+        bandPeriod: null,
+        abovePct: QUICK_EMA_DEFAULT_ABOVE_PCT,
+        belowPct: QUICK_EMA_DEFAULT_BELOW_PCT,
+      }];
+      saveQuickEmaGroups(next);
+      return next;
+    });
+  }, []);
+  const removeQuickEmaGroup = useCallback((id) => {
+    setQuickEmaGroups((prev) => {
+      const next = prev.filter((g) => g.id !== id);
+      saveQuickEmaGroups(next);
+      return next;
+    });
+  }, []);
+  const updateQuickEmaGroupInterval = useCallback((id, interval) => {
+    setQuickEmaGroups((prev) => {
+      const next = prev.map((g) => (g.id === id ? { ...g, interval } : g));
+      saveQuickEmaGroups(next);
+      return next;
+    });
+  }, []);
+  const toggleQuickEmaGroupPeriod = useCallback((id, period) => {
+    setQuickEmaGroups((prev) => {
+      const next = prev.map((g) => {
+        if (g.id !== id) return g;
+        const has = g.periods.includes(period);
+        const periods = has ? g.periods.filter((p) => p !== period) : [...g.periods, period];
+        // Deselecionar o período da banda também desliga a banda — senão a EMA
+        // continua sendo buscada/desenhada só pra sustentar a banda órfã.
+        const bandPeriod = has && g.bandPeriod === period ? null : g.bandPeriod;
+        return { ...g, periods, bandPeriod };
+      });
+      saveQuickEmaGroups(next);
+      return next;
+    });
+  }, []);
+  const updateQuickEmaGroupBandPct = useCallback((id, side, pct) => {
+    setQuickEmaGroups((prev) => {
+      const next = prev.map((g) => (g.id === id ? { ...g, [side === 'above' ? 'abovePct' : 'belowPct']: pct } : g));
+      saveQuickEmaGroups(next);
+      return next;
+    });
+  }, []);
+  const updateQuickEmaGroupBandPeriod = useCallback((id, period) => {
+    setQuickEmaGroups((prev) => {
+      const next = prev.map((g) => (g.id === id ? { ...g, bandPeriod: period } : g));
+      saveQuickEmaGroups(next);
+      return next;
+    });
+  }, []);
+  const [quickEmaAdaptiveBounds, setQuickEmaAdaptiveBounds] = useState({});
   const [overlayMaCache, setOverlayMaCache] = useState({});
   const [overlayMaLoading, setOverlayMaLoading] = useState(false);
   const [adaptiveBandOverlay, setAdaptiveBandOverlay] = useState(null);
@@ -2454,7 +2135,6 @@ export default function CandlestickChart() {
   const handlePanelLayoutChange = useCallback(({ width }) => {
     setPanelMasonryWidth(width);
   }, []);
-  const bandsPanelEnabled = BAND_PANEL_KEYS.some((k) => chartPanelButtons[k] !== false);
   const [candleFetchLimit, setCandleFetchLimit] = useState(DEFAULT_CANDLE_LIMIT);
   const [displayCandleCount, setDisplayCandleCount] = useState(LIMIT);
   const [hasExplicitCandleWindow, setHasExplicitCandleWindow] = useState(false);
@@ -2571,9 +2251,14 @@ export default function CandlestickChart() {
     }
     const chartIv = selectedChart.interval ?? currentInterval;
     const toFetch = enabledOverlaySlots(overlaySlots, chartPanelButtons);
-    const bandsFetchNeeded = bandsPanelEnabled && !maBands.adaptive && !adaptiveBandOverlay;
-    if (bandsFetchNeeded && !toFetch.some(s => s.period === maBands.period && s.interval === maBands.interval)) {
-      toFetch.push({ id: '__bands__', period: maBands.period, interval: maBands.interval });
+    for (const group of quickEmaGroups) {
+      for (const period of group.periods) {
+        if (toFetch.some(s => s.period === period && s.interval === group.interval)) continue;
+        toFetch.push({ id: `${group.id}-${period}`, period, interval: group.interval });
+      }
+      if (group.bandPeriod && !toFetch.some(s => s.period === group.bandPeriod && s.interval === group.interval)) {
+        toFetch.push({ id: `${group.id}-band-${group.bandPeriod}`, period: group.bandPeriod, interval: group.interval });
+      }
     }
     if (!toFetch.length) {
       setOverlayMaCache({});
@@ -2644,7 +2329,63 @@ export default function CandlestickChart() {
     })();
 
     return () => { cancelled = true; };
-  }, [overlaySlots, selectedChart?.symbol, selectedChart?.interval, selectedChart?.source, selectedChart?.candlesticks, selectedChart?.ma50, selectedChart?.ma9, selectedChart?.ma21, selectedChart?.movingAverage, currentInterval, overlayFetchLimit, chartPanelButtons, chartViewSource, multitradeChartFocus?.fetchFromMs, displayCandleCount, chartCandleWindowReset, bandsPanelEnabled, maBands.adaptive, maBands.period, maBands.interval, adaptiveBandOverlay]);
+  }, [overlaySlots, quickEmaGroups, selectedChart?.symbol, selectedChart?.interval, selectedChart?.source, selectedChart?.candlesticks, selectedChart?.ma50, selectedChart?.ma9, selectedChart?.ma21, selectedChart?.movingAverage, currentInterval, overlayFetchLimit, chartPanelButtons, chartViewSource, multitradeChartFocus?.fetchFromMs, displayCandleCount, chartCandleWindowReset, adaptiveBandOverlay]);
+
+  // Bandas adaptativas das EMAs rápidas — piso/teto reais do histórico da moeda,
+  // um por par período@intervalo usado como 'adaptive' em algum grupo.
+  useEffect(() => {
+    if (!selectedChart?.symbol) {
+      setQuickEmaAdaptiveBounds({});
+      return undefined;
+    }
+    const needed = [];
+    for (const group of quickEmaGroups) {
+      if (!group.bandPeriod) continue;
+      if (group.abovePct !== QUICK_EMA_BAND_ADAPTIVE && group.belowPct !== QUICK_EMA_BAND_ADAPTIVE) continue;
+      const key = `${group.bandPeriod}-${group.interval}`;
+      if (needed.some((n) => n.key === key)) continue;
+      needed.push({ key, period: group.bandPeriod, interval: group.interval });
+    }
+    if (!needed.length) {
+      setQuickEmaAdaptiveBounds({});
+      return undefined;
+    }
+
+    let cancelled = false;
+    (async () => {
+      const chartIv = selectedChart.interval ?? currentInterval;
+      const chartCandles = selectedChart.candlesticks ?? [];
+      const visibleCount = Math.min(
+        displayCandleCount > 0 ? displayCandleCount : chartCandles.length,
+        chartCandles.length || DEFAULT_CANDLE_LIMIT,
+      );
+      const next = {};
+      await Promise.all(needed.map(async ({ key, period, interval }) => {
+        try {
+          const limit = computeOverlayMaFetchLimit(
+            chartIv,
+            interval,
+            period,
+            Math.max(visibleCount, chartCandles.length, DEFAULT_CANDLE_LIMIT),
+            overlayFetchLimit,
+          );
+          const bounds = await fetchChartAdaptiveBands({
+            symbol: selectedChart.symbol,
+            exchange: selectedChart.source === 'gate' ? 'gate' : 'binance',
+            period,
+            interval,
+            limit,
+          });
+          next[key] = { dipPct: bounds.dipPct ?? 0, stretchPct: bounds.stretchPct ?? 0 };
+        } catch (e) {
+          console.warn('[quickEmaAdaptive]', key, e.message);
+        }
+      }));
+      if (!cancelled) setQuickEmaAdaptiveBounds(next);
+    })();
+
+    return () => { cancelled = true; };
+  }, [quickEmaGroups, selectedChart?.symbol, selectedChart?.source, selectedChart?.interval, selectedChart?.candlesticks, currentInterval, overlayFetchLimit, displayCandleCount, chartCandleWindowReset]);
 
   // Busca a série de Bandas de Bollinger (upper/middle/lower) — período/intervalo próprios, como MA1/MA2.
   useEffect(() => {
@@ -2691,7 +2432,7 @@ export default function CandlestickChart() {
   // Bandas adaptativas (piso/teto) — só quando o foco MT pede (ex.: clique em trade no backtest)
   useEffect(() => {
     const cfg = multitradeChartFocus?.adaptiveBands;
-    if (!cfg || !selectedChart?.symbol || !bandsPanelEnabled) {
+    if (!cfg || !selectedChart?.symbol) {
       setAdaptiveBandOverlay(null);
       if (!cfg) {
         setMaBands((prev) => (
@@ -2774,7 +2515,6 @@ export default function CandlestickChart() {
     selectedChart?.source,
     selectedChart?.interval,
     overlayFetchLimit,
-    bandsPanelEnabled,
     displayCandleCount,
     chartCandleWindowReset,
     selectedChart?.candlesticks?.length,
@@ -2782,35 +2522,6 @@ export default function CandlestickChart() {
   ]);
 
   const colors = useMemo(() => getThemeColors(), [themeTick]);
-
-  function commitOverlaySlots(next) {
-    if (hasForcedOverlaySlots) {
-      setTradeOverlaySlots(next);
-    } else {
-      setOverlaySlotsPreference(next);
-    }
-  }
-
-  function updateOverlaySlot(id, patch) {
-    const next = overlaySlots.map((s) => (s.id === id ? { ...s, ...patch } : s));
-    commitOverlaySlots(next);
-  }
-
-  function addOverlaySlot() {
-    if (overlaySlots.length >= MAX_OVERLAY_SLOTS) return;
-    const maxNum = overlaySlots.reduce((max, s) => {
-      const n = parseInt(s.id.replace('slot', ''), 10);
-      return isNaN(n) ? max : Math.max(max, n);
-    }, 0);
-    commitOverlaySlots([
-      ...overlaySlots,
-      { id: `slot${maxNum + 1}`, period: '50', interval: '1h', enabled: true, color: PERIOD_DEFAULT_COLORS['50'] },
-    ]);
-  }
-
-  function removeOverlaySlot(id) {
-    commitOverlaySlots(overlaySlots.filter((s) => s.id !== id));
-  }
 
   async function handleIntervalChange(iv) {
     if (iv === currentInterval) return;
@@ -2959,21 +2670,30 @@ export default function CandlestickChart() {
       };
     });
 
-    // Bandas % têm período/intervalo próprios (como MA1/MA2), independentes de overlays ativos.
-    if (bandsPanelEnabled && !maBands.adaptive && !adaptiveBandOverlay) {
-      const bandsKey = `${maBands.period}-${maBands.interval}`;
-      slotConfigs.push({
-        label: `EMA${maBands.period}@${maBands.interval}`,
-        color: '#94a3b8',
-        points: overlayMaCache[bandsKey] ?? [],
-        showMiddle: maBands.showMiddle === true,
-        bands: {
-          showAbove: maBands.showAbove,
-          showBelow: maBands.showBelow,
-          abovePct: maBands.stretchPct ?? maBands.pct,
-          belowPct: maBands.dipPct ?? maBands.pct,
-        },
-      });
+    for (const group of quickEmaGroups) {
+      const noBands = { showAbove: false, showBelow: false, abovePct: 0, belowPct: 0 };
+      for (const period of group.periods) {
+        const key = `${period}-${group.interval}`;
+        const isBandPeriod = group.bandPeriod === period;
+        slotConfigs.push({
+          label: `EMA${period}@${group.interval}`,
+          color: QUICK_EMA_PERIOD_COLORS[period] ?? '#94a3b8',
+          points: overlayMaCache[key] ?? [],
+          bands: isBandPeriod ? resolveQuickEmaBands(group, quickEmaAdaptiveBounds) : noBands,
+        });
+      }
+      // Período da banda pode não estar entre os períodos exibidos como linha —
+      // ainda assim busca a EMA (só pra banda, sem desenhar a linha principal).
+      if (group.bandPeriod && !group.periods.includes(group.bandPeriod)) {
+        const key = `${group.bandPeriod}-${group.interval}`;
+        slotConfigs.push({
+          label: `EMA${group.bandPeriod}@${group.interval}`,
+          color: QUICK_EMA_PERIOD_COLORS[group.bandPeriod] ?? '#94a3b8',
+          points: overlayMaCache[key] ?? [],
+          showMiddle: false,
+          bands: resolveQuickEmaBands(group, quickEmaAdaptiveBounds),
+        });
+      }
     }
 
     if (adaptiveBandOverlay?.points?.length) {
@@ -2992,7 +2712,7 @@ export default function CandlestickChart() {
     }
 
     return slotConfigs;
-  }, [overlaySlots, overlayMaCache, maBands, chartPanelButtons, adaptiveBandOverlay, bandsPanelEnabled]);
+  }, [overlaySlots, overlayMaCache, quickEmaGroups, quickEmaAdaptiveBounds, maBands, chartPanelButtons, adaptiveBandOverlay]);
 
   const chartBuyInfo = useMemo(() => {
     if (!selectedChart?.symbol) return null;
@@ -3157,12 +2877,13 @@ export default function CandlestickChart() {
           <ChartIndicatorPanel
             activeIndicators={activeIndicators}
             toggleIndicator={toggleIndicator}
-            overlaySlots={overlaySlots}
-            updateOverlaySlot={updateOverlaySlot}
-            addOverlaySlot={addOverlaySlot}
-            removeOverlaySlot={removeOverlaySlot}
-            maBands={maBands}
-            setMaBands={setMaBands}
+            quickEmaGroups={quickEmaGroups}
+            addQuickEmaGroup={addQuickEmaGroup}
+            removeQuickEmaGroup={removeQuickEmaGroup}
+            updateQuickEmaGroupInterval={updateQuickEmaGroupInterval}
+            toggleQuickEmaGroupPeriod={toggleQuickEmaGroupPeriod}
+            updateQuickEmaGroupBandPct={updateQuickEmaGroupBandPct}
+            updateQuickEmaGroupBandPeriod={updateQuickEmaGroupBandPeriod}
             bollingerBands={bollingerBands}
             setBollingerBands={setBollingerBands}
             overlayMaLoading={overlayMaLoading}
@@ -3180,12 +2901,13 @@ export default function CandlestickChart() {
             <ChartIndicatorPanel
               activeIndicators={activeIndicators}
               toggleIndicator={toggleIndicator}
-              overlaySlots={overlaySlots}
-              updateOverlaySlot={updateOverlaySlot}
-              addOverlaySlot={addOverlaySlot}
-              removeOverlaySlot={removeOverlaySlot}
-              maBands={maBands}
-              setMaBands={setMaBands}
+              quickEmaGroups={quickEmaGroups}
+              addQuickEmaGroup={addQuickEmaGroup}
+              removeQuickEmaGroup={removeQuickEmaGroup}
+              updateQuickEmaGroupInterval={updateQuickEmaGroupInterval}
+              toggleQuickEmaGroupPeriod={toggleQuickEmaGroupPeriod}
+              updateQuickEmaGroupBandPct={updateQuickEmaGroupBandPct}
+              updateQuickEmaGroupBandPeriod={updateQuickEmaGroupBandPeriod}
               bollingerBands={bollingerBands}
               setBollingerBands={setBollingerBands}
               overlayMaLoading={overlayMaLoading}
