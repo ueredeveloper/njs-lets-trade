@@ -654,7 +654,7 @@ async function executeSell({ rowId, adapter, strategy, log, state, exitResult, r
   log(`   PnL: ${pnlSign}${pnlUsdt.toFixed(4)} USDT (${pnlSign}${pnlPct.toFixed(2)}%)`);
   log(`   Capital: ${capitalBefore.toFixed(4)} → ${capitalAfter.toFixed(4)} USDT`);
   log(`${'─'.repeat(60)}`);
-  sendWhatsApp(`🔴 MA-CROSS VENDA [${strategyId}] ${symbol}\nPnL: ${pnlSign}${pnlUsdt.toFixed(4)} USDT (${pnlSign}${pnlPct.toFixed(2)}%)`);
+  sendWhatsApp(`🔴 MA-CROSS VENDA [${strategyId}] ${symbol}\nMotivo: ${reason}\nPnL: ${pnlSign}${pnlUsdt.toFixed(4)} USDT (${pnlSign}${pnlPct.toFixed(2)}%)`);
   return { phase: 'WATCHING' };
 }
 
