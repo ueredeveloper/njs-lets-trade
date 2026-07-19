@@ -177,8 +177,8 @@ async function startServer() {
         await maCompareCache.saveToDisk();
         const m = stats.matched ?? {};
         console.log(
-          `[maCompareCache] 1h↑:${m['1h|9|21|acim|0.5'] ?? 0} 1h↓:${m['1h|9|21|abaix|0.5'] ?? 0}`
-          + ` prox↑:${m['1h|9|21|nearup|0.5'] ?? 0} prox↓:${m['1h|9|21|neardn|0.5'] ?? 0}`
+          `[maCompareCache] 4h↑:${m['4h|9|21|acim|0.5'] ?? 0} 4h↓:${m['4h|9|21|abaix|0.5'] ?? 0}`
+          + ` prox↑:${m['4h|9|21|nearup|0.5'] ?? 0} prox↓:${m['4h|9|21|neardn|0.5'] ?? 0}`
           + ` | disco:${stats.diskHits ?? 0} stale:${stats.diskStale ?? 0} api:${stats.apiFetches ?? 0}`
           + ` | fila:${stats.queuePending ?? 0}`,
         );

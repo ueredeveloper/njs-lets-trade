@@ -419,10 +419,10 @@ describe('MA Compare — posição EMA vs EMA', () => {
 describe('MA Compare — cache presets', () => {
   const { matchesCachedPreset, CACHED_PRESETS } = require('../cache/maCompareCache');
 
-  test('reconhece preset EMA9 acima EMA21 em 1h com tol 0.5%', () => {
+  test('reconhece preset EMA9 acima EMA21 em 4h com tol 0.5%', () => {
     expect(matchesCachedPreset({
-      interval: '1h', period1: 9, period2: 21, compare: 'above', tolerancePct: 0.5,
-    })).toBe('1h|9|21|acim|0.5');
+      interval: '4h', period1: 9, period2: 21, compare: 'above', tolerancePct: 0.5,
+    })).toBe('4h|9|21|acim|0.5');
   });
 
   test('outros parâmetros não usam cache', () => {
@@ -431,23 +431,23 @@ describe('MA Compare — cache presets', () => {
     })).toBeNull();
   });
 
-  test('presets incluem 1h acima e abaixo', () => {
-    expect(CACHED_PRESETS.some(p => p.compare === 'above' && p.interval === '1h')).toBe(true);
-    expect(CACHED_PRESETS.some(p => p.compare === 'below' && p.interval === '1h')).toBe(true);
+  test('presets incluem 4h acima e abaixo', () => {
+    expect(CACHED_PRESETS.some(p => p.compare === 'above' && p.interval === '4h')).toBe(true);
+    expect(CACHED_PRESETS.some(p => p.compare === 'below' && p.interval === '4h')).toBe(true);
   });
 
-  test('reconhece preset proximidade EMA9/EMA21 em 1h', () => {
+  test('reconhece preset proximidade EMA9/EMA21 em 4h', () => {
     expect(matchesCachedPreset({
-      interval: '1h', period1: 9, period2: 21, compare: 'near_up', proximityPct: 0.5,
-    })).toBe('1h|9|21|nearup|0.5');
+      interval: '4h', period1: 9, period2: 21, compare: 'near_up', proximityPct: 0.5,
+    })).toBe('4h|9|21|nearup|0.5');
     expect(matchesCachedPreset({
-      interval: '1h', period1: 9, period2: 21, compare: 'near_down', proximityPct: 0.5,
-    })).toBe('1h|9|21|neardn|0.5');
+      interval: '4h', period1: 9, period2: 21, compare: 'near_down', proximityPct: 0.5,
+    })).toBe('4h|9|21|neardn|0.5');
   });
 
-  test('presets incluem proximidade near_up e near_down em 1h', () => {
-    expect(CACHED_PRESETS.some(p => p.compare === 'near_up' && p.interval === '1h')).toBe(true);
-    expect(CACHED_PRESETS.some(p => p.compare === 'near_down' && p.interval === '1h')).toBe(true);
+  test('presets incluem proximidade near_up e near_down em 4h', () => {
+    expect(CACHED_PRESETS.some(p => p.compare === 'near_up' && p.interval === '4h')).toBe(true);
+    expect(CACHED_PRESETS.some(p => p.compare === 'near_down' && p.interval === '4h')).toBe(true);
   });
 });
 

@@ -11,35 +11,35 @@ const CANDLES_LIMIT = 200;
 const BATCH_SIZE = 20;
 const CACHE_FILE = path.join(__dirname, '..', 'data', 'ma-compare-cache.json');
 
-/** Presets: posição EMA9 vs EMA21 em 1h (alinhado à regra entryTrendMa do bot). */
+/** Presets: posição EMA9 vs EMA21 em 4h (alinhado à regra entryTrendMa do bot). */
 const CACHED_PRESETS = [
   {
-    key: '1h|9|21|acim|0.5',
-    interval: '1h',
+    key: '4h|9|21|acim|0.5',
+    interval: '4h',
     period1: 9,
     period2: 21,
     compare: 'above',
     tolerancePct: 0.5,
   },
   {
-    key: '1h|9|21|abaix|0.5',
-    interval: '1h',
+    key: '4h|9|21|abaix|0.5',
+    interval: '4h',
     period1: 9,
     period2: 21,
     compare: 'below',
     tolerancePct: 0.5,
   },
   {
-    key: '1h|9|21|nearup|0.5',
-    interval: '1h',
+    key: '4h|9|21|nearup|0.5',
+    interval: '4h',
     period1: 9,
     period2: 21,
     compare: 'near_up',
     proximityPct: 0.5,
   },
   {
-    key: '1h|9|21|neardn|0.5',
-    interval: '1h',
+    key: '4h|9|21|neardn|0.5',
+    interval: '4h',
     period1: 9,
     period2: 21,
     compare: 'near_down',
