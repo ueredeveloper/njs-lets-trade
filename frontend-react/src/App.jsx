@@ -21,6 +21,7 @@ import CandlestickChart from './components/CandlestickChart';
 import SettingsSidebar from './components/SettingsSidebar';
 import StatisticsPanel from './components/StatisticsPanel';
 import BootStageBar from './components/BootStageBar';
+import MaximizeIcon from './components/MaximizeIcon';
 
 const MOBILE_SHEET_HEIGHT = '88%';
 const MOBILE_SHEET_FILTERS_HEIGHT = '30%';
@@ -129,14 +130,23 @@ function AppContent() {
     return firstVisiblePanel(uiPrefs.visiblePanels);
   }
 
-  function togglePanel(id) {
-    setOpenPanels((prev) => {
-      if (prev.includes(id)) {
-        const fallback = visiblePanelDefs.find((p) => p.id !== id)?.id;
-        return fallback ? [fallback] : [];
-      }
-      return [id];
-    });
+  // Aba de painel: sempre seleciona QUAL painel mostrar (indicadores/estatísticas),
+  // nunca fecha sozinha — separado do layout (split/chart/panel) abaixo.
+  function selectPanel(id) {
+    setOpenPanels([id]);
+  }
+
+  // Layout vertical da coluna esquerda: 'split' (padrão, gráfico + painel dividem
+  // altura), 'chart' (gráfico 100%, painel escondido) ou 'panel' (painel 100%,
+  // gráfico reduzido a uma tira). Cada lado tem seu próprio botão de maximizar —
+  // clicar de novo no lado já maximizado volta pro split.
+  const [layoutMode, setLayoutMode] = useState('split'); // 'split' | 'chart' | 'panel'
+
+  function toggleMaximizeChart() {
+    setLayoutMode((m) => (m === 'chart' ? 'split' : 'chart'));
+  }
+  function toggleMaximizePanel() {
+    setLayoutMode((m) => (m === 'panel' ? 'split' : 'panel'));
   }
 
   useEffect(() => {
@@ -360,8 +370,18 @@ function AppContent() {
 
         {/* Coluna esquerda */}
         <div className="flex flex-col flex-1 min-w-0 min-h-0 bg-p1 md:border-r border-p2">
-          {/* 2 — Gráfico */}
-          <div className="relative min-h-0 flex-1 md:shrink-0 md:flex-none md:h-[55vh] md:min-h-0">
+          {/* 2 — Gráfico e painel de análise dividem a altura (55/45) por padrão;
+               maximizar um leva a 100% e anima o outro até sumir — mesma técnica de
+               flex-basis + transition da referência (Tela Dividida). */}
+          <div
+            className="relative min-h-0"
+            style={{
+              flex: `1 1 ${layoutMode === 'chart' ? 100 : layoutMode === 'panel' ? 0 : 55}%`,
+              opacity: layoutMode === 'panel' ? 0 : 1,
+              overflow: 'hidden',
+              transition: 'flex-basis 0.4s ease-in-out, opacity 0.3s ease-in-out',
+            }}
+          >
             {show(BOOT_STAGE.CHART) ? (
               <CandlestickChart />
             ) : (
@@ -389,42 +409,93 @@ function AppContent() {
             )}
           </div>
 
-          {/* 3 — Barra de painéis */}
-          {show(BOOT_STAGE.PANEL_BAR) && visiblePanelDefs.length > 0 && (
-          <div className="shrink-0 border-t border-p2 flex items-stretch divide-x divide-p2">
-            {visiblePanelDefs.map(({ id, label }) => (
+          {/* 3a — Linha divisória fininha (1px) entre gráfico e painel. Os botões não
+               moram dentro dela — flutuam por cima (overlay), ancorados na mesma
+               posição vertical, então continuam sempre juntos, no mesmo lugar, sem
+               precisar de uma barra grossa pra caber. Ancoragem muda com o layout
+               pra nunca ficar "pendurada" sobre um lado com altura zero (some/corta
+               ao maximizar): fica dentro do gráfico quando ele tem altura, dentro do
+               painel quando é o painel que está maximizado. No mobile sobe acima do
+               botão flutuante "Moedas" (que fica no canto do gráfico) pra não colidir. */}
+          <div className="relative shrink-0 h-px bg-p2 z-20">
+            <div className={`absolute right-1.5 flex items-center gap-1 ${
+              layoutMode === 'panel' ? 'top-1' : 'bottom-11 md:bottom-1'
+            }`}>
               <button
-                key={id}
                 type="button"
-                onClick={() => togglePanel(id)}
-                className={`flex items-center gap-1.5 flex-1 justify-center px-3 py-1.5 text-xs uppercase tracking-widest transition-colors touch-manipulation ${
-                  openPanels.includes(id) ? 'text-white' : 'text-p5 hover:text-white'
+                onClick={toggleMaximizeChart}
+                title={layoutMode === 'chart' ? 'Dividir tela' : 'Maximizar gráfico'}
+                aria-label={layoutMode === 'chart' ? 'Dividir tela' : 'Maximizar gráfico'}
+                className={`flex items-center justify-center w-5 h-5 rounded border transition-colors touch-manipulation shadow ${
+                  layoutMode === 'chart'
+                    ? 'bg-p4 text-white border-p4'
+                    : 'text-p4 bg-p1/90 border-p2 hover:text-white hover:bg-p3/50'
                 }`}
               >
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
-                  strokeWidth="1.5" stroke="currentColor"
-                  className={`w-3 h-3 shrink-0 transition-transform ${openPanels.includes(id) ? 'rotate-180' : ''}`}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
-                </svg>
-                {label}
+                <MaximizeIcon active={layoutMode === 'chart'} className="w-3 h-3 shrink-0" />
               </button>
-            ))}
+              <button
+                type="button"
+                onClick={toggleMaximizePanel}
+                title={layoutMode === 'panel' ? 'Dividir tela' : 'Maximizar painel'}
+                aria-label={layoutMode === 'panel' ? 'Dividir tela' : 'Maximizar painel'}
+                className={`flex items-center justify-center w-5 h-5 rounded border transition-colors touch-manipulation shadow ${
+                  layoutMode === 'panel'
+                    ? 'bg-p4 text-white border-p4'
+                    : 'text-p4 bg-p1/90 border-p2 hover:text-white hover:bg-p3/50'
+                }`}
+              >
+                <MaximizeIcon active={layoutMode === 'panel'} className="w-3 h-3 shrink-0" />
+              </button>
+            </div>
           </div>
-          )}
 
-          {/* 6 — IndicatorPanel */}
-          {showIndicator && (
-            <div className="flex-1 min-h-0 flex flex-col">
-              <IndicatorPanel />
+          {/* 3b+6+7 — Painel de análise (Indicadores/Estatísticas): mesma técnica de
+               flex-basis animado do gráfico acima, em espelho. Abas só escolhem QUAL
+               painel ver (o maximizar/restaurar mora na barra compartilhada acima). */}
+          <div
+            className="flex flex-col min-h-0"
+            style={{
+              flex: `1 1 ${layoutMode === 'panel' ? 100 : layoutMode === 'chart' ? 0 : 45}%`,
+              opacity: layoutMode === 'chart' ? 0 : 1,
+              overflow: 'hidden',
+              transition: 'flex-basis 0.4s ease-in-out, opacity 0.3s ease-in-out',
+            }}
+          >
+            {show(BOOT_STAGE.PANEL_BAR) && visiblePanelDefs.length > 0 && (
+            <div className="shrink-0 border-b border-p2 flex items-stretch divide-x divide-p2">
+              {visiblePanelDefs.map(({ id, label }) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => selectPanel(id)}
+                  title={`Mostrar ${label.toLowerCase()}`}
+                  className={`flex-1 justify-center px-3 py-1.5 text-xs uppercase tracking-widest transition-colors touch-manipulation ${
+                    openPanels.includes(id)
+                      ? 'bg-p3/50 text-white font-semibold'
+                      : 'text-p5 hover:text-white hover:bg-p3/20'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
             </div>
-          )}
+            )}
 
-          {/* 7 — StatisticsPanel */}
-          {showStats && (
-            <div className="flex-1 min-h-0 flex flex-col">
-              <StatisticsPanel />
-            </div>
-          )}
+            {/* 6 — IndicatorPanel */}
+            {showIndicator && (
+              <div className="flex-1 min-h-0 flex flex-col">
+                <IndicatorPanel />
+              </div>
+            )}
+
+            {/* 7 — StatisticsPanel */}
+            {showStats && (
+              <div className="flex-1 min-h-0 flex flex-col">
+                <StatisticsPanel />
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Handle de redimensionamento da coluna direita (desktop) */}
