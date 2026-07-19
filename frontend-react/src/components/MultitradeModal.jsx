@@ -602,6 +602,25 @@ export default function MultitradeModal({
           return;
         }
       }
+      if (st.enabled && isMaCrossStrategy(sid)) {
+        const f = st.form;
+        const entryOn = f.entry?.enabled !== false;
+        const entryBbLowerOn = f.entryBbLower?.enabled === true;
+        if (!entryOn && !entryBbLowerOn) {
+          setEntryPathError(`Nenhuma opção de compra ativa em ${STRATEGY_LABELS[sid]} — ligue o cruzamento EMA ou a Banda inferior BB.`);
+          setActiveStrategy(sid);
+          return;
+        }
+        const exitMaOn = f.exit?.maCross?.enabled !== false;
+        const exitRsiOn = f.exit?.rsi?.enabled === true;
+        const exitBbUpperOn = f.exit?.bbUpper?.enabled !== false;
+        const exitBbTpOn = f.exit?.bbTakeProfit?.enabled !== false;
+        if (!exitMaOn && !exitRsiOn && !exitBbUpperOn && !exitBbTpOn) {
+          setEntryPathError(`Nenhuma opção de venda ativa em ${STRATEGY_LABELS[sid]} — ligue ao menos um sinal de saída (stop-loss sozinho não conta como saída programada).`);
+          setActiveStrategy(sid);
+          return;
+        }
+      }
     }
     setEntryPathError(null);
     if (volCheck && !volCheck.loading && volCheck.meetsMin === false && !volumeWarnOpen) {
@@ -770,7 +789,12 @@ export default function MultitradeModal({
           )}
 
           {isMaCross && strategyEnabled && (
-            <MaCrossStrategyForm form={form} patch={patch} symbol={symbol} exchange={exchange} hasSavedConfig={!!strat.id} />
+            <>
+              {entryPathError && (
+                <p className="text-[9px] text-red-400 mb-1">{entryPathError}</p>
+              )}
+              <MaCrossStrategyForm form={form} patch={patch} symbol={symbol} exchange={exchange} hasSavedConfig={!!strat.id} />
+            </>
           )}
 
           {!isSwing && !isMaCross && activeTab === 'rule1' && strategyEnabled && (

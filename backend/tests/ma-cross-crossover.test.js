@@ -710,3 +710,101 @@ describe('MA Cross — tendência HTF (EMA9 > EMA21 em 1h)', () => {
     expect(r.allowed).toBe(true);
   });
 });
+
+describe('MA Cross — entrada por banda inferior BB (gatilho imediato)', () => {
+  const {
+    evaluateEntryBbLowerSignal, evaluateBbLowerEntry, evaluateImmediateEntry,
+  } = require('../bot/ma-cross/strategyEngine');
+  const { toEngineConfig, normalizeMaCrossConfig } = require('../bot/ma-cross/tradeConfigSchema');
+
+  function make4hCandles(closes) {
+    return closes.map((close, i) => ({
+      openTime: i * 14_400_000,
+      open: close, high: close, low: close, close,
+    }));
+  }
+
+  /** 20 candles fechadas com pequena oscilação em torno de 100 (janela do BB(20,2)). */
+  function closedWindow() {
+    const closes = [];
+    for (let i = 0; i < 20; i++) closes.push(100 + (i % 2 === 0 ? 0.3 : -0.3));
+    return closes;
+  }
+
+  /** Janela fechada + candle "ao vivo" (última, ainda em formação) bem abaixo da banda inferior. */
+  function buildBbLowerTouch4h() {
+    return make4hCandles([...closedWindow(), 90]);
+  }
+
+  /** Janela fechada + candle "ao vivo" perto do centro — não toca a banda inferior. */
+  function buildBbNoTouch4h() {
+    return make4hCandles([...closedWindow(), 100.2]);
+  }
+
+  const bbOnlyConfig = toEngineConfig(normalizeMaCrossConfig({
+    entry: { enabled: false },
+    entryTrendMa: { enabled: false },
+    entryEmaApproach: { enabled: false },
+    entryBbFilter: { enabled: false },
+    maFiltersEnabled: false,
+    entryBbLower: { enabled: true, interval: '4h', period: 20, stdDev: 2 },
+  }));
+
+  test('evaluateEntryBbLowerSignal detecta toque na banda inferior', () => {
+    const r = evaluateEntryBbLowerSignal(bbOnlyConfig, { '4h': buildBbLowerTouch4h() });
+    expect(r.matched).toBe(true);
+    expect(r.close).toBeLessThanOrEqual(r.lower);
+  });
+
+  test('evaluateEntryBbLowerSignal não dispara sem toque na banda', () => {
+    const r = evaluateEntryBbLowerSignal(bbOnlyConfig, { '4h': buildBbNoTouch4h() });
+    expect(r.matched).toBe(false);
+  });
+
+  test('evaluateEntryBbLowerSignal ignora quando desligado', () => {
+    const off = toEngineConfig(normalizeMaCrossConfig({ entryBbLower: { enabled: false } }));
+    const r = evaluateEntryBbLowerSignal(off, { '4h': buildBbLowerTouch4h() });
+    expect(r.matched).toBe(false);
+  });
+
+  test('evaluateBbLowerEntry autoriza compra quando só o gatilho BB está ligado', () => {
+    const r = evaluateBbLowerEntry(bbOnlyConfig, { '4h': buildBbLowerTouch4h() }, {});
+    expect(r.allowed).toBe(true);
+    expect(r.entryDesc).toMatch(/banda inferior/);
+  });
+
+  test('evaluateBbLowerEntry respeita a tendência HTF quando ligada', () => {
+    const withTrend = toEngineConfig(normalizeMaCrossConfig({
+      entry: { enabled: false },
+      entryEmaApproach: { enabled: false },
+      entryBbFilter: { enabled: false },
+      maFiltersEnabled: false,
+      entryBbLower: { enabled: true, interval: '4h', period: 20, stdDev: 2 },
+      entryTrendMa: {
+        enabled: true, tolerancePct: 0,
+        ma1: { period: 9, interval: '4h' }, ma2: { period: 21, interval: '4h' },
+      },
+    }));
+    // Downtrend longo o bastante pra EMA9/21(4h) terem dado (EMA9 < EMA21), com um
+    // candle final bem abaixo disso tudo pra também tocar a banda inferior BB.
+    const closes = [];
+    for (let i = 0; i < 50; i++) closes.push(100 - i * 0.5);
+    closes.push(closes.at(-1) - 20);
+    const candles = make4hCandles(closes);
+    const r = evaluateBbLowerEntry(withTrend, { '4h': candles }, {});
+    expect(r.allowed).toBe(false);
+    expect(r.reason).toBe('HTF_TREND_BELOW');
+  });
+
+  test('evaluateImmediateEntry resolve o gatilho BB via registro genérico', () => {
+    const r = evaluateImmediateEntry(bbOnlyConfig, { '4h': buildBbLowerTouch4h() }, {});
+    expect(r.allowed).toBe(true);
+    expect(r.kind).toBe('bbLower');
+  });
+
+  test('evaluateImmediateEntry não autoriza nada quando nenhum gatilho imediato está ligado', () => {
+    const noneOn = toEngineConfig(normalizeMaCrossConfig({ entryBbLower: { enabled: false } }));
+    const r = evaluateImmediateEntry(noneOn, { '4h': buildBbLowerTouch4h() }, {});
+    expect(r.allowed).toBe(false);
+  });
+});

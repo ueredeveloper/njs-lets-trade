@@ -175,7 +175,7 @@ const MA_CROSS_PRESETS = {
     maFiltersEnabled: true,
     maFilters: [{
       id: 1, enabled: true, period: 50, interval: '1h',
-      mode: 'adaptive', maxDipPct: 4, maxAbovePct: 4,
+      mode: 'adaptive', maxDipPct: 0.5, maxAbovePct: 0,
     }],
     exit: {
       logic: 'any',

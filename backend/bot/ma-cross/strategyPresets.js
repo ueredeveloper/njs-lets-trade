@@ -35,10 +35,16 @@ const PRESET_BODIES = {
       stdDev: 2.0,
       maxPctB: 0.3,
     },
+    entryBbLower: {
+      enabled: false,
+      interval: '4h',
+      period: 20,
+      stdDev: 2.0,
+    },
     maFiltersEnabled: true,
     maFilters: [{
       id: 1, enabled: true, period: 50, interval: '1h',
-      mode: 'adaptive', maxDipPct: 4,
+      mode: 'adaptive', maxDipPct: 0.5, maxAbovePct: 0,
     }],
     exit: {
       logic: 'any',

@@ -590,6 +590,11 @@ function getRequiredSpecs(config) {
     add(exBbUpper.interval ?? '4h', (exBbUpper.period ?? 20) + 10);
   }
 
+  const enBbLower = config.entryBbLower;
+  if (enBbLower?.enabled) {
+    add(enBbLower.interval ?? '4h', (enBbLower.period ?? 20) + 10);
+  }
+
   const rsiConds = (config.exit?.rsi?.conditions ?? []).filter(c => c.enabled);
   for (const c of rsiConds) {
     add(c.interval, c.period + 50);
@@ -1113,6 +1118,138 @@ function evaluateEntry(config, cMap, adaptiveDips = {}, opts = {}) {
   };
 }
 
+/**
+ * Preço tocando/rompendo a banda inferior da Bollinger Bands (fundo) → sinal de compra.
+ * Espelha evaluateBbUpperExit para o lado de baixo: âncora nos candles fechados, compara
+ * contra o preço ao vivo do candle em formação, breakoutPct exige N% abaixo da banda
+ * (não só tocando) pra confirmar o toque.
+ */
+function evaluateEntryBbLowerSignal(config, cMap, opts = {}) {
+  const bb = config.entryBbLower;
+  if (!bb?.enabled) return { matched: false };
+
+  const closedOnly = opts.closedOnly !== false;
+  const iv = bb.interval ?? '4h';
+  const raw = cMap[iv] ?? [];
+  const candles = closedOnly ? closedCandlesOnly(raw) : raw;
+
+  if (candles.length < bb.period) return { matched: false, reason: 'BB_LOWER_NO_DATA' };
+
+  const closes = candles.map(c => parseFloat(c.close));
+  const results = ti.BollingerBands.calculate({ period: bb.period, values: closes, stdDev: bb.stdDev ?? 2 });
+  if (!results.length) return { matched: false, reason: 'BB_LOWER_NO_DATA' };
+
+  const lastBb = results[results.length - 1];
+  const close  = closedOnly ? parseFloat(raw.at(-1)?.close ?? closes.at(-1)) : closes[closes.length - 1];
+  const threshold = lastBb.lower * (1 - (bb.breakoutPct ?? 0) / 100);
+
+  if (close <= threshold) {
+    return { matched: true, close, upper: lastBb.upper, lower: lastBb.lower, middle: lastBb.middle, bbInterval: iv, threshold };
+  }
+  return { matched: false, reason: 'BB_LOWER_NOT_TOUCHED', close, lower: lastBb.lower, threshold, bbInterval: iv };
+}
+
+/**
+ * Gatilho de entrada alternativo ao cruzamento EMA (config.entry): compra assim que o preço
+ * toca a banda inferior da BB, sem fase PENDING/pullback (a própria banda já é o "fundo").
+ * As mesmas guardas usadas no cruzamento (tendência HTF, aproximação EMA, filtros de preço)
+ * também se aplicam aqui — desligue-as individualmente se quiser operar só pela banda.
+ */
+function evaluateBbLowerEntry(config, cMap, adaptiveDips = {}, opts = {}) {
+  const adaptiveStretches = opts.adaptiveStretches ?? computeAdaptiveStretches(config, cMap);
+  const signal = evaluateEntryBbLowerSignal(config, cMap, opts);
+  if (!signal.matched) {
+    return { allowed: false, reason: signal.reason ?? 'BB_LOWER_OFF', close: signal.close };
+  }
+
+  const { close } = signal;
+
+  const trendCheck = evaluateEntryTrendMa(config, cMap, opts);
+  if (!trendCheck.allowed) {
+    return {
+      allowed: false,
+      reason: trendCheck.reason,
+      close,
+      trendMa1: trendCheck.trendMa1,
+      trendMa2: trendCheck.trendMa2,
+      trendDesc: trendCheck.trendDesc,
+    };
+  }
+
+  const approachCheck = evaluateEntryEmaApproach(config, cMap, opts);
+  if (!approachCheck.allowed) {
+    return {
+      allowed: false,
+      reason: approachCheck.reason,
+      close,
+      approachGapPct: approachCheck.gapPct,
+      approachTroughGapPct: approachCheck.troughGapPct,
+    };
+  }
+
+  const filterCheck = evaluateMaFilters(close, config, cMap, adaptiveDips, adaptiveStretches);
+  if (!filterCheck.allowed) {
+    return {
+      allowed: false,
+      reason: filterCheck.reason,
+      close,
+      filterMa: filterCheck.ma,
+      distPct: filterCheck.distPct,
+      floor: filterCheck.floor,
+    };
+  }
+
+  const bb = config.entryBbLower;
+  return {
+    allowed: true,
+    close,
+    entryDesc: `BB(${bb.period},${bb.stdDev}) ${bb.interval} banda inferior`,
+    maFilterDetails: filterCheck.details,
+    trendMa1: trendCheck.trendMa1, trendMa2: trendCheck.trendMa2, trendGapPct: trendCheck.gapPct,
+    approachGapPct: approachCheck.gapPct, approachTroughGapPct: approachCheck.troughGapPct,
+    bbLower: signal.lower, bbUpper: signal.upper, bbMiddle: signal.middle, bbInterval: signal.bbInterval,
+  };
+}
+
+/**
+ * Registro de gatilhos de entrada "imediatos" (sem fase PENDING/pullback): cada um
+ * representa um indicador diferente atingindo um extremo (hoje só banda inferior BB).
+ * O cruzamento EMA (config.entry) fica de fora deste registro de propósito — é o único
+ * gatilho com pullback windowing (evaluateCrossSignal + evaluatePullbackReady), tratado
+ * à parte pelo bot.
+ *
+ * Para adicionar um novo gatilho imediato (ex.: entrada por RSI oversold, espelhando o
+ * exit.rsi.conditions que já existe pro lado de saída — rsi < 30/25/40 etc.):
+ *   1. Schema: bloco `entryRsi` em tradeConfigSchema.js (enabled, interval, period,
+ *      operator, value — mesmo shape de exit.rsi.conditions) + normalizeEntryRsi.
+ *   2. strategyEngine: evaluateEntryRsiSignal(config, cMap, opts) → {matched, close, ...}
+ *      (só detecta o sinal) e evaluateRsiEntry(config, cMap, adaptiveDips, opts) → {allowed, ...}
+ *      (aplica evaluateEntryTrendMa/evaluateEntryEmaApproach/evaluateMaFilters por cima,
+ *      igual evaluateBbLowerEntry faz).
+ *   3. Registre aqui: `rsi: { isEnabled: c => c.entryRsi?.enabled === true, evaluate: evaluateRsiEntry }`.
+ * Nenhuma mudança no bot (ma-cross-bot.js) é necessária — evaluateImmediateEntry já
+ * resolve qualquer gatilho novo automaticamente.
+ */
+const IMMEDIATE_ENTRY_TRIGGERS = {
+  bbLower: {
+    isEnabled: config => config.entryBbLower?.enabled === true,
+    evaluate:  evaluateBbLowerEntry,
+  },
+};
+
+/**
+ * Roda todos os gatilhos imediatos habilitados (ordem de registro em
+ * IMMEDIATE_ENTRY_TRIGGERS) e retorna o primeiro que autorizar a compra.
+ */
+function evaluateImmediateEntry(config, cMap, adaptiveDips = {}, opts = {}) {
+  for (const [kind, trigger] of Object.entries(IMMEDIATE_ENTRY_TRIGGERS)) {
+    if (!trigger.isEnabled(config)) continue;
+    const result = trigger.evaluate(config, cMap, adaptiveDips, opts);
+    if (result.allowed) return { ...result, kind };
+  }
+  return { allowed: false };
+}
+
 function evaluateRsiExit(config, cMap) {
   const rsiBlock = config.exit?.rsi;
   if (!rsiBlock?.enabled) return { hit: false };
@@ -1285,6 +1422,18 @@ function evaluateHtfFallbackExit(config, cMap, entryOpenTime, closedOnly = true)
   };
 }
 
+/**
+ * Sinais de saída "táticos" já são independentes por design: cada kind (ma, rsi, bbUpper,
+ * bbTakeProfit) tem seu próprio `enabled` em config.exit e é calculado separadamente
+ * abaixo; config.exit.logic decide se qualquer um habilitado já vende ('any', padrão) ou
+ * se todos os habilitados precisam bater juntos no mesmo tick ('all') — ver `signals` +
+ * `enabledKinds` mais abaixo. Pra adicionar um novo indicador de saída (ex.: MACD, ou uma
+ * variante de RSI diferente do exit.rsi.conditions que já existe): implemente
+ * evaluate<Kind>Exit(config, cMap, opts) → {hit, close, exitDesc, ...}, adicione o bloco
+ * de config equivalente (com `enabled`), empurre pra `signals` se `hit`, e inclua o kind
+ * em EXIT_REASON_BY_KIND + na lista `enabledKinds`. O gatilho de entrada por RSI descrito
+ * no comentário de IMMEDIATE_ENTRY_TRIGGERS (acima) seria o espelho disso do lado de compra.
+ */
 function evaluateExit(config, cMap, entryPrice, opts = {}) {
   const closedOnly = opts.closedOnly !== false;
   const c1 = cMap[config.exit?.maCross?.ma1?.interval] ?? [];
@@ -1653,6 +1802,10 @@ module.exports = {
   getRequiredSpecs,
   evaluateEntry,
   evaluateEntryBbFilter,
+  evaluateEntryBbLowerSignal,
+  evaluateBbLowerEntry,
+  IMMEDIATE_ENTRY_TRIGGERS,
+  evaluateImmediateEntry,
   evaluateEntryTrendMa,
   evaluateEntryEmaApproach,
   evaluateExit,

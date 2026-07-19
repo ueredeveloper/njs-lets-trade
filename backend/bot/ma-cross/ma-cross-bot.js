@@ -32,6 +32,7 @@ const { resolveStrategy } = require('./tradeConfigSchema');
 const { STRATEGY_IDS, isMaCrossStrategy } = require('./strategyPresets');
 const {
   getRequiredSpecs, evaluateEntry, evaluateCrossSignal, evaluatePullbackReady,
+  evaluateImmediateEntry,
   pullbackEntryEnabled, evaluateExit, computeAdaptiveDips, computeAdaptiveStretches,
   computeStopLossFloor, getFinestPollInterval,
 } = require('./strategyEngine');
@@ -332,6 +333,17 @@ function buildEntryReasonLines(config, entryMeta) {
     const iv = entryMeta.bbInterval ?? bbf.interval ?? '4h';
     lines.push(
       `Bollinger ${iv}: %B ${(entryMeta.pctB * 100).toFixed(0)}% `
+      + `(banda ${fmtPrice(entryMeta.bbLower)}–${fmtPrice(entryMeta.bbUpper)})`,
+    );
+  }
+
+  // entryMeta.kind vem do registro IMMEDIATE_ENTRY_TRIGGERS (strategyEngine.js) quando a
+  // compra veio de um gatilho imediato — hoje só 'bbLower'; novos gatilhos registrados lá
+  // ganham aqui o mesmo detalhamento se expuserem os campos correspondentes.
+  if (entryMeta.kind === 'bbLower' && entryMeta.bbLower != null) {
+    const iv = entryMeta.bbInterval ?? config.entryBbLower?.interval ?? '4h';
+    lines.push(
+      `Bollinger ${iv} banda inferior: preço ${fmtPrice(entryMeta.close)} ≤ ${fmtPrice(entryMeta.bbLower)} `
       + `(banda ${fmtPrice(entryMeta.bbLower)}–${fmtPrice(entryMeta.bbUpper)})`,
     );
   }
@@ -735,8 +747,14 @@ async function tick(rowId, adapter, strategy, log, session) {
 
   // ── WATCHING ──────────────────────────────────────────────────────────────
   if (phase === 'WATCHING') {
+    // Dois grupos de gatilho de entrada, independentes entre si: o cruzamento EMA
+    // (config.entry — o único com fase PENDING/pullback) e o registro de gatilhos
+    // imediatos (IMMEDIATE_ENTRY_TRIGGERS em strategyEngine.js — hoje só banda inferior
+    // BB, mas novos indicadores de entrada plugam ali sem tocar este arquivo). Qualquer
+    // um que disparar já é suficiente; cada um segue seu próprio fluxo de execução.
     const crossCheck = evaluateCrossSignal(config, cMap, adaptiveDips);
-    if (!crossCheck.allowed) return { phase };
+    const immediateCheck = evaluateImmediateEntry(config, cMap, adaptiveDips, evalOpts);
+    if (!crossCheck.allowed && !immediateCheck.allowed) return { phase };
 
     const cooldownH = entryCooldownHours(config);
     if (cooldownH > 0) {
@@ -745,7 +763,9 @@ async function tick(rowId, adapter, strategy, log, session) {
         const now = Date.now();
         if (!session.lastCooldownLogAt || now - session.lastCooldownLogAt >= COOLDOWN_LOG_INTERVAL_MS) {
           session.lastCooldownLogAt = now;
-          const kindLabel = crossCheck.entryDesc ?? crossDesc(config.entry);
+          const kindLabel = crossCheck.allowed
+            ? (crossCheck.entryDesc ?? crossDesc(config.entry))
+            : immediateCheck.entryDesc;
           log(`${Y}⏳ Sinal (${kindLabel}) — cooldown ${formatCooldownRemaining(remaining)} restantes${X}`);
         }
         return { phase };
@@ -756,6 +776,17 @@ async function tick(rowId, adapter, strategy, log, session) {
     const minVol = config.minVolumeUsdt ?? 3_000_000;
     if (vol != null && vol < minVol && !config.allowLowVolume) {
       return { phase };
+    }
+
+    // Gatilhos imediatos não têm janela de pullback (o próprio disparo já representa o
+    // "fundo" que o pullback do cruzamento tenta achar).
+    if (immediateCheck.allowed) {
+      log(`${G}📍 COMPRA imediata (${immediateCheck.entryDesc}) — ${parseFloat(capital).toFixed(2)} USDT${X}`);
+      const bought = await executeBuy({
+        rowId, adapter, strategy, log, session, state,
+        entryMeta: immediateCheck, capital, strategyId, symbol,
+      });
+      return { phase: bought ? 'BOUGHT' : 'WATCHING' };
     }
 
     const entryCheck = evaluateEntry(config, cMap, adaptiveDips, evalOpts);

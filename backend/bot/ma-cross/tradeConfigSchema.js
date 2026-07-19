@@ -32,14 +32,18 @@ const MA_CROSS_DEFAULTS = {
     enabled: true,
     ma1: { period: 9, interval: '4h' },
     ma2: { period: 21, interval: '4h' },
-    /** Máx % abaixo da EMA longa ainda permitido (ex.: 2 = EMA9 até 2% abaixo da EMA21). */
-    tolerancePct: 2,
+    /** Máx % abaixo da EMA longa ainda permitido (ex.: 2 = EMA9 até 2% abaixo da EMA21).
+     *  Mantido baixo de proposito: exige que a EMA9(4h) esteja praticamente cruzando
+     *  ou ja acima da EMA21(4h), nao so "perto" dela. Validado em BANKUSDT (09/07). */
+    tolerancePct: 0.3,
   },
 
   maFiltersEnabled: true,
+  /** Só adaptativa inferior (piso 0.5% abaixo da MA50 1h) — teto superior desligado
+   *  (maxAbovePct: 0) de propósito, não bloqueia entrada por preço esticado acima da MA. */
   maFilters: [{
     id: 1, enabled: true, period: 50, interval: '1h',
-    mode: 'adaptive', maxDipPct: 1, fixedDipPct: null, maxAbovePct: 4, fixedAbovePct: null, tolerancePct: 0,
+    mode: 'adaptive', maxDipPct: 0.5, fixedDipPct: null, maxAbovePct: 0, fixedAbovePct: null, tolerancePct: 0,
   }],
 
   exit: {
@@ -136,6 +140,21 @@ const MA_CROSS_DEFAULTS = {
 
   /** Horas sem nova entrada após venda (0 = desligado). */
   entryCooldownHours: 4,
+
+  /** Gatilho de entrada alternativo/independente do cruzamento EMA: compra quando o
+   *  preço toca/rompe a banda inferior da Bollinger Bands (fundo) — mesma lógica do
+   *  exit.bbUpper espelhada pra baixo. Pode ser usado sozinho (desligando entry,
+   *  entryTrendMa e entryEmaApproach) ou combinado com o cruzamento EMA: qualquer um
+   *  dos dois gatilhos dispara a compra. Entra imediatamente, sem fase PENDING/pullback
+   *  (a própria banda inferior já é o "fundo" que o pullback do cruzamento tenta achar). */
+  entryBbLower: {
+    enabled:  false,
+    interval: '4h',
+    period:   20,
+    stdDev:   2.0,
+    /** % mínimo abaixo da banda inferior para confirmar o toque (0 = basta tocar). */
+    breakoutPct: 0,
+  },
 };
 
 function isValidMaCrossPeriod(p) {
@@ -210,6 +229,18 @@ function normalizeExitBbUpper(block, fallback) {
     period:      clampPeriod(src.period, fb.period),
     stdDev:      Math.max(0.5, Math.min(4, Number(src.stdDev ?? fb.stdDev))),
     breakoutPct: Math.max(0, Math.min(20, Number(src.breakoutPct ?? fb.breakoutPct ?? 0))),
+  };
+}
+
+function normalizeEntryBbLower(block) {
+  const d = MA_CROSS_DEFAULTS.entryBbLower;
+  const src = block ?? {};
+  return {
+    enabled:     src.enabled === true,
+    interval:    normalizeInterval(src.interval, d.interval),
+    period:      clampPeriod(src.period, d.period),
+    stdDev:      Math.max(0.5, Math.min(4, Number(src.stdDev ?? d.stdDev))),
+    breakoutPct: Math.max(0, Math.min(20, Number(src.breakoutPct ?? d.breakoutPct ?? 0))),
   };
 }
 
@@ -302,6 +333,7 @@ function normalizeMaCrossConfig(body = {}) {
     entryTrendMa:   normalizeEntryTrendMa(body.entryTrendMa),
     entryEmaApproach: normalizeEntryEmaApproach(body.entryEmaApproach),
     entryBbFilter:  normalizeEntryBbFilter(body.entryBbFilter),
+    entryBbLower:   normalizeEntryBbLower(body.entryBbLower),
     maFiltersEnabled: body.maFiltersEnabled !== false,
     maFilters: migrateMaFilters(body),
     exit: {

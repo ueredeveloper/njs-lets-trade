@@ -7,10 +7,12 @@ import {
   VOLUME_OPTIONS, PENDING_TIMEOUT_OPTIONS, POLL_OPTIONS,
   MA_CROSS_DEFAULTS,
 } from '../constants/maCrossConfigSchema';
+import MaCrossRuleCheckChart from './MaCrossRuleCheckChart';
 
 const ENTRY_COLOR  = '#22d3ee';
 const EXIT_COLOR   = '#ef5350';
 const FILTER_COLOR = '#a78bfa';
+const CHECK_COLOR  = '#60a5fa';
 
 function NumInput({ value, onChange, min, max, step = 0.1, className = 'w-16', placeholder }) {
   return (
@@ -114,6 +116,9 @@ export default function MaCrossStrategyForm({ form, patch, symbol, exchange, has
 
   const bbFilter = { ...MA_CROSS_DEFAULTS.entryBbFilter, ...form.entryBbFilter };
   const bbOn = bbFilter.enabled !== false;
+
+  const entryBbLower = { ...MA_CROSS_DEFAULTS.entryBbLower, ...form.entryBbLower };
+  const entryBbLowerOn = entryBbLower.enabled === true;
 
   const exitBbUpper = { ...MA_CROSS_DEFAULTS.exit.bbUpper, ...form.exit?.bbUpper };
   const exitBbTakeProfit = { ...MA_CROSS_DEFAULTS.exit.bbTakeProfit, ...form.exit?.bbTakeProfit };
@@ -279,6 +284,17 @@ export default function MaCrossStrategyForm({ form, patch, symbol, exchange, has
 
   return (
     <div className="space-y-4">
+      {/* ════════════════ GRUPO 1 — GATILHOS DE COMPRA ════════════════ */}
+      <div className="pt-1 pb-1 border-b" style={{ borderColor: `${ENTRY_COLOR}55` }}>
+        <span className="text-xs font-black uppercase tracking-widest" style={{ color: ENTRY_COLOR }}>
+          🟢 Opções de compra — o que dispara a compra
+        </span>
+        <p className="text-[10px] text-p5/60 leading-relaxed mt-1">
+          Cada bloco abaixo é um <strong>gatilho independente</strong>: qualquer um ativo já é suficiente pra
+          comprar. Ligue só um, os dois, ou nenhum (bot fica parado sem comprar).
+        </p>
+      </div>
+
       <CrossBlock
         title="Compra — cruzamento EMA"
         block={form.entry}
@@ -295,14 +311,72 @@ export default function MaCrossStrategyForm({ form, patch, symbol, exchange, has
         <span className="text-p5/40 text-[10px]">0 = desligado</span>
       </div>
 
+      {/* ── Gatilho de entrada — Banda inferior BB ── */}
       <div className="rounded-md p-2 space-y-2" style={{ background: '#1a1d28', border: `1px solid ${ENTRY_COLOR}33` }}>
         <div className="flex items-center justify-between gap-2 flex-wrap">
           <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: ENTRY_COLOR }}>
+            Compra — Banda inferior BB
+          </span>
+          <label className="flex items-center gap-1 text-[9px] text-p5/50 cursor-pointer">
+            <input type="checkbox" checked={entryBbLowerOn}
+              onChange={e => patch('entryBbLower.enabled', e.target.checked)} style={{ accentColor: ENTRY_COLOR }} />
+            Ativo
+          </label>
+        </div>
+        {entryBbLowerOn && (
+          <>
+            <p className="text-[10px] text-p5/60 leading-relaxed">
+              Compra assim que o preço toca/rompe a banda inferior da BB({entryBbLower.period},{entryBbLower.stdDev}) {entryBbLower.interval} —
+              gatilho independente do cruzamento EMA acima, entra imediatamente (sem pending/pullback).
+              Para operar <strong>só</strong> por esta regra, desligue o cruzamento EMA (bloco acima) e as
+              exigências do grupo "Filtros de compra" abaixo que não quiser manter.
+            </p>
+            <div className="flex flex-wrap gap-3 items-center text-xs">
+              <div className="flex items-center gap-1">
+                <span className="text-p5/50">Intervalo</span>
+                <select value={entryBbLower.interval}
+                  onChange={e => patch('entryBbLower.interval', e.target.value)}
+                  className="rounded px-1 py-1 text-xs" style={sel}>
+                  {MA_CROSS_INTERVALS.map(iv => <option key={iv} value={iv}>{iv}</option>)}
+                </select>
+              </div>
+              <div className="flex items-center gap-1">
+                <span className="text-p5/50">Período</span>
+                <NumInput value={entryBbLower.period}
+                  onChange={v => patch('entryBbLower.period', Math.max(5, Math.round(v)))}
+                  min={5} max={200} step={1} className="w-14" />
+              </div>
+              <div className="flex items-center gap-1">
+                <span className="text-p5/50">StdDev</span>
+                <NumInput value={entryBbLower.stdDev}
+                  onChange={v => patch('entryBbLower.stdDev', v)}
+                  min={0.5} max={4} step={0.5} className="w-14" />
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* ════════════════ GRUPO 2 — FILTROS DE COMPRA ════════════════ */}
+      <div className="pt-2 pb-1 border-b" style={{ borderColor: `${FILTER_COLOR}55` }}>
+        <span className="text-xs font-black uppercase tracking-widest" style={{ color: FILTER_COLOR }}>
+          🔎 Filtros de compra — não compram sozinhos
+        </span>
+        <p className="text-[10px] text-p5/60 leading-relaxed mt-1">
+          Estes blocos <strong>não disparam compra por conta própria</strong> — só bloqueiam/liberam os
+          gatilhos do grupo acima. Desligue os que não quiser exigir; se todos estiverem desligados,
+          qualquer gatilho ativo compra sem restrição extra.
+        </p>
+      </div>
+
+      <div className="rounded-md p-2 space-y-2" style={{ background: '#1a1d28', border: `1px solid ${FILTER_COLOR}33` }}>
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: FILTER_COLOR }}>
             Tendência 4h — EMA9 / EMA21
           </span>
           <label className="flex items-center gap-1 text-[9px] text-p5/50 cursor-pointer">
             <input type="checkbox" checked={entryTrendOn}
-              onChange={e => patch('entryTrendMa.enabled', e.target.checked)} style={{ accentColor: ENTRY_COLOR }} />
+              onChange={e => patch('entryTrendMa.enabled', e.target.checked)} className="accent-violet-500" />
             Ativo
           </label>
         </div>
@@ -324,14 +398,14 @@ export default function MaCrossStrategyForm({ form, patch, symbol, exchange, has
         )}
       </div>
 
-      <div className="rounded-md p-2 space-y-2" style={{ background: '#1a1d28', border: `1px solid ${ENTRY_COLOR}33` }}>
+      <div className="rounded-md p-2 space-y-2" style={{ background: '#1a1d28', border: `1px solid ${FILTER_COLOR}33` }}>
         <div className="flex items-center justify-between gap-2 flex-wrap">
-          <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: ENTRY_COLOR }}>
+          <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: FILTER_COLOR }}>
             Aproximação 4h — EMA9 encosta na EMA21 e sobe
           </span>
           <label className="flex items-center gap-1 text-[9px] text-p5/50 cursor-pointer">
             <input type="checkbox" checked={entryApproachOn}
-              onChange={e => patch('entryEmaApproach.enabled', e.target.checked)} style={{ accentColor: ENTRY_COLOR }} />
+              onChange={e => patch('entryEmaApproach.enabled', e.target.checked)} className="accent-violet-500" />
             Ativo
           </label>
         </div>
@@ -358,15 +432,14 @@ export default function MaCrossStrategyForm({ form, patch, symbol, exchange, has
         )}
       </div>
 
-      {/* ── Filtro Bollinger Bands ── */}
-      <div className="rounded-md p-2 space-y-2" style={{ background: '#1a1d28', border: `1px solid ${ENTRY_COLOR}33` }}>
+      <div className="rounded-md p-2 space-y-2" style={{ background: '#1a1d28', border: `1px solid ${FILTER_COLOR}33` }}>
         <div className="flex items-center justify-between gap-2 flex-wrap">
-          <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: ENTRY_COLOR }}>
+          <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: FILTER_COLOR }}>
             Filtro BB — %B ({bbFilter.interval})
           </span>
           <label className="flex items-center gap-1 text-[9px] text-p5/50 cursor-pointer">
             <input type="checkbox" checked={bbOn}
-              onChange={e => patch('entryBbFilter.enabled', e.target.checked)} style={{ accentColor: ENTRY_COLOR }} />
+              onChange={e => patch('entryBbFilter.enabled', e.target.checked)} className="accent-violet-500" />
             Ativo
           </label>
         </div>
@@ -375,6 +448,7 @@ export default function MaCrossStrategyForm({ form, patch, symbol, exchange, has
             <p className="text-[10px] text-p5/60 leading-relaxed">
               Exige que o preço esteja nos <strong>%B&nbsp;&lt;&nbsp;{(bbFilter.maxPctB * 100).toFixed(0)}%</strong> inferiores
               do range BB({bbFilter.period},{bbFilter.stdDev}) {bbFilter.interval} — filtra entradas com preço esticado no HTF.
+              Só se aplica ao gatilho de <em>cruzamento EMA</em> (o gatilho de Banda inferior já exige %B baixo por definição).
             </p>
             <div className="flex flex-wrap gap-3 items-center text-xs">
               <div className="flex items-center gap-1">
@@ -507,6 +581,12 @@ export default function MaCrossStrategyForm({ form, patch, symbol, exchange, has
             {EXIT_LOGIC_OPTIONS.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
           </select>
         </div>
+        <p className="text-[9px] text-p5/50 leading-relaxed px-1">
+          Cada sinal abaixo (Cruzamento EMA, RSI, Banda superior BB, Alvo % histórico) liga/desliga
+          independente dos outros. "Qualquer sinal" vende no primeiro que disparar; "Todos os sinais"
+          exige que todos os ativos disparem juntos no mesmo candle. Ex.: pra vender <strong>só</strong> na
+          banda superior BB, desligue Cruzamento EMA e RSI e deixe apenas Banda superior (e/ou Alvo %) ativos.
+        </p>
 
         <CrossBlock
           title="Venda — cruzamento EMA"
@@ -824,6 +904,19 @@ export default function MaCrossStrategyForm({ form, patch, symbol, exchange, has
               ) : null}
             </div>
           ) : null}
+        </div>
+      )}
+
+      {hasSavedConfig && (
+        <div className="rounded-md p-2 space-y-1" style={{ background: '#1a1d28', border: `1px solid ${CHECK_COLOR}33` }}>
+          <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: CHECK_COLOR }}>
+            Conferência — regras no gráfico
+          </span>
+          <p className="text-[9px] text-p5/50 leading-relaxed">
+            Cada ponto é um cruzamento EMA9↑EMA21 (15m) real, colorido pela regra salva que decidiu
+            o resultado (permitida, tendência, aproximação ou outros filtros).
+          </p>
+          <MaCrossRuleCheckChart symbol={symbol} exchange={exchange} />
         </div>
       )}
 

@@ -55,7 +55,7 @@ export const MA_CROSS_DEFAULTS = {
   maFiltersEnabled: true,
   maFilters: [{
     id: 1, enabled: true, period: 50, interval: '1h',
-    mode: 'adaptive', maxDipPct: 4, fixedDipPct: '', maxAbovePct: 4, fixedAbovePct: '',
+    mode: 'adaptive', maxDipPct: 0.5, fixedDipPct: '', maxAbovePct: 0, fixedAbovePct: '',
   }],
   exit: {
     logic: 'any',
@@ -102,6 +102,12 @@ export const MA_CROSS_DEFAULTS = {
     stdDev:   2.0,
     maxPctB:  0.3,
   },
+  entryBbLower: {
+    enabled:  false,
+    interval: '4h',
+    period:   20,
+    stdDev:   2.0,
+  },
   volume: { minVolumeUsdt: 3_000_000, allowLowVolume: false },
   entryCooldownHours: 4,
 };
@@ -139,6 +145,17 @@ function normalizeEntryBbFilter(block) {
     period:   clampPeriod(src.period, d.period),
     stdDev:   Math.max(0.5, Math.min(4, Number(src.stdDev  ?? d.stdDev))),
     maxPctB:  Math.max(0,   Math.min(1, Number(src.maxPctB ?? d.maxPctB))),
+  };
+}
+
+function normalizeEntryBbLower(block) {
+  const d = MA_CROSS_DEFAULTS.entryBbLower;
+  const src = block ?? {};
+  return {
+    enabled:  src.enabled === true,
+    interval: src.interval ?? d.interval,
+    period:   clampPeriod(src.period, d.period),
+    stdDev:   Math.max(0.5, Math.min(4, Number(src.stdDev ?? d.stdDev))),
   };
 }
 
@@ -270,6 +287,7 @@ export function normalizeMaCrossForm(body = {}) {
     volume: { ...d.volume, ...body.volume },
     entryCooldownHours: Number(body.entryCooldownHours ?? d.entryCooldownHours ?? 4),
     entryBbFilter: normalizeEntryBbFilter(body.entryBbFilter),
+    entryBbLower: normalizeEntryBbLower(body.entryBbLower),
   };
 }
 
@@ -289,6 +307,7 @@ export function maCrossFormToPayload(form, meta = {}) {
     entryTrendMa:  c.entryTrendMa,
     entryEmaApproach: c.entryEmaApproach,
     entryBbFilter: c.entryBbFilter,
+    entryBbLower: c.entryBbLower,
     maFiltersEnabled: c.maFiltersEnabled,
     maFilters: c.maFilters.map(({ id, enabled, period, interval, mode, maxDipPct, fixedDipPct, maxAbovePct, fixedAbovePct, tolerancePct }) => ({
       id, enabled, period, interval, mode, maxDipPct, maxAbovePct, tolerancePct,
