@@ -5,6 +5,7 @@ import { useCurrency } from '../contexts/CurrencyContext';
 import { fetchCandlesticksAndCloud, fetchGateTrades, fetchBinanceTrades, fetchChartAdaptiveBands, DEFAULT_CANDLE_LIMIT } from '../services/api';
 import { buildMarkersFromExchangeTrades, attachPnlToExchangeTrades } from '../utils/multitradeChart';
 import { buildTrailingStopSeries, resolveChartStopLoss } from '../utils/trailingStopLoss';
+import MaCrossRuleCheckChart from './MaCrossRuleCheckChart';
 import convertOpenTime from '../utils/convertOpenTime';
 import Tooltip from './Tooltip';
 import { hasAnyChartPanelButton } from '../utils/chartPanelButtons';
@@ -2801,6 +2802,7 @@ export default function CandlestickChart() {
           {[
             { id: 'chart',  label: 'Chart' },
             { id: 'matrix', label: 'Matrix' },
+            { id: 'rules',  label: 'Regras' },
           ].map(({ id, label }) => (
             <button
               key={id}
@@ -2871,7 +2873,18 @@ export default function CandlestickChart() {
       </div>
 
       {/* Conteúdo da aba */}
-      {activeTab === 'chart' ? (
+      {activeTab === 'rules' ? (
+        <div className="flex-1 min-h-0 overflow-y-auto px-2 md:px-3 py-2">
+          {selectedChart?.symbol ? (
+            <MaCrossRuleCheckChart
+              symbol={selectedChart.symbol}
+              exchange={selectedChart.source === 'gate' ? 'gate' : 'binance'}
+            />
+          ) : (
+            <div className="text-p5/50 text-xs font-mono">Selecione uma moeda pra conferir as regras.</div>
+          )}
+        </div>
+      ) : activeTab === 'chart' ? (
         <div ref={chartWrapRef} className="flex-1 min-h-0 relative">
           {chartNode}
           <ChartIndicatorPanel

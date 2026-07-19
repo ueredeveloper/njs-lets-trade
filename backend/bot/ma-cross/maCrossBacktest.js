@@ -18,6 +18,7 @@ const {
   computeAdaptiveStretches,
   checkMaCrossover,
   checkPriceFilter,
+  INTERVAL_MS,
 } = require('./strategyEngine');
 
 function crossLabel(leg) {
@@ -42,7 +43,7 @@ const OUTCOME_LABELS = {
   BELOW_ADAPTIVE_FLOOR: 'Bloqueado — abaixo piso adaptativo',
   ABOVE_ADAPTIVE_CEILING: 'Bloqueado — acima teto adaptativo',
   FILTER_NO_MA: 'Bloqueado — MA filtro indisponível',
-  ABOVE_MA2_CAP: 'Bloqueado — acima teto MA2',
+  ABOVE_MA2_MAX: 'Bloqueado — acima teto MA2',
   NO_PULLBACK: 'Bloqueado — sem pullback',
   ENTRY_WINDOW_PASSED: 'Janela de pullback expirou',
   ENTRY_COOLDOWN: 'Cooldown entre entradas',
@@ -52,11 +53,15 @@ const OUTCOME_LABELS = {
   STOP_LOSS: 'Stop loss',
   RSI_EXIT: 'Saída RSI',
   ENTRY_OFF: 'Entrada desligada',
-  HTF_TREND_BELOW:    'Bloqueado — EMA9(1h) abaixo de EMA21(1h) (fora da tolerância)',
-  HTF_TREND_NO_MA:    'Bloqueado — tendência 1h indisponível',
-  HTF_TREND_NO_DATA:  'Bloqueado — dados 1h insuficientes',
+  HTF_TREND_BELOW:    'Bloqueado — tendência EMA9×EMA21 abaixo (fora da tolerância)',
+  HTF_TREND_NO_MA:    'Bloqueado — tendência indisponível',
+  HTF_TREND_NO_DATA:  'Bloqueado — dados de tendência insuficientes',
   BB_FILTER_ABOVE:    'Bloqueado — %B acima do limite (BB)',
   BB_FILTER_NO_DATA:  'Bloqueado — sem dados BB',
+  EMA_APPROACH_NOT_FOUND: 'Bloqueado — sem padrão de aproximação EMA9/21',
+  EMA_APPROACH_TOO_FAR:   'Bloqueado — fundo da aproximação longe demais',
+  EMA_APPROACH_NO_MA:     'Bloqueado — aproximação indisponível',
+  EMA_APPROACH_NO_DATA:   'Bloqueado — dados de aproximação insuficientes',
 };
 
 function entryCooldownHours(config) {
@@ -218,6 +223,10 @@ function serializeMaCrossRow(e) {
     pnlPct: e.pnlPct != null ? parseFloat(Number(e.pnlPct).toFixed(2)) : null,
     maChecks: e.maChecks ?? [],
     exitDetail: e.exitDetail ?? null,
+    trendMa1: e.trendMa1 != null ? parseFloat(Number(e.trendMa1).toFixed(8)) : null,
+    trendMa2: e.trendMa2 != null ? parseFloat(Number(e.trendMa2).toFixed(8)) : null,
+    approachGapPct: e.approachGapPct != null ? parseFloat(Number(e.approachGapPct).toFixed(4)) : null,
+    approachTroughGapPct: e.approachTroughGapPct != null ? parseFloat(Number(e.approachTroughGapPct).toFixed(4)) : null,
   };
 }
 
@@ -236,13 +245,20 @@ function reconcileEntryLog(entryLog, signals) {
   }
 }
 
-async function runMaCrossBacktest({ symbol, config, exchange = 'binance', capital = 100, cMap: cMapIn }) {
+async function runMaCrossBacktest({ symbol, config, exchange = 'binance', capital = 100, cMap: cMapIn, sinceMs = null }) {
   const specs = getRequiredSpecs(config);
   const cMap = cMapIn ?? {};
 
+  // Quando um inicio especifico e pedido (conferencia de regras num periodo), busca
+  // candles suficientes em cada intervalo pra cobrir sinceMs->agora (+ folga de warmup).
+  // Limitado a 1000 candles por chamada (max da Binance/Gate, sem paginacao aqui).
+  const spanMs = sinceMs ? Math.max(0, Date.now() - sinceMs) : 0;
+
   if (!cMapIn) {
     for (const { interval, limit } of specs) {
-      const need = Math.max(limit, LIMIT);
+      const ivMs = INTERVAL_MS[interval] ?? 3_600_000;
+      const spanLimit = spanMs ? Math.ceil(spanMs / ivMs) + 60 : 0;
+      const need = Math.max(limit, LIMIT, spanLimit);
       let candles = loadLocalCandles(symbol, interval);
       // Gaps no meio (ex.: AUDIOUSDT 12:00/12:15 faltando) fazem areConsecutiveCandles
       // pular o cruzamento — busca a exchange e mescla para preencher buracos.
@@ -406,6 +422,13 @@ async function runMaCrossBacktest({ symbol, config, exchange = 'binance', capita
         adaptiveStretches: stretches,
       });
 
+      // Detalhe bruto das regras HTF (tendencia/aproximacao) no momento do cruzamento —
+      // usado pelo grafico de conferencia pra mostrar o gap% no tooltip de cada ponto.
+      row.trendMa1 = entryEval.trendMa1 ?? null;
+      row.trendMa2 = entryEval.trendMa2 ?? null;
+      row.approachGapPct = entryEval.approachGapPct ?? null;
+      row.approachTroughGapPct = entryEval.approachTroughGapPct ?? null;
+
       if (entryEval.allowed) {
         entryLog.push(row);
         const buy = openBuy({
@@ -500,10 +523,21 @@ async function runMaCrossBacktest({ symbol, config, exchange = 'binance', capita
 
   reconcileEntryLog(entryLog, signals);
 
-  const sells = trades.filter(t => t.type === 'SELL');
+  // Quando sinceMs e passado (conferencia de um periodo especifico), a simulacao
+  // roda no historico completo (capital/posicao continuos), mas o que volta pro
+  // cliente (entryLog, trades, resumo) e recortado pra so a janela pedida.
+  const visibleEntryLog = sinceMs ? entryLog.filter(e => e.time >= sinceMs) : entryLog;
+  const visibleTrades = sinceMs ? trades.filter(t => t.time >= sinceMs) : trades;
+  const visibleBlockedCount = sinceMs
+    ? visibleEntryLog.filter(e => !['BOUGHT', 'POSITION_OPEN', 'PENDING'].includes(e.outcome)).length
+    : blockedCount;
+
+  const sells = visibleTrades.filter(t => t.type === 'SELL');
   const wins = sells.filter(t => t.pnlUsdt >= 0).length;
   const totalPnl = sells.reduce((s, t) => s + (t.pnlUsdt ?? 0), 0);
   const period = backtestPeriodLabel(scanCandles, scanIv);
+  const priceSeriesSource = sinceMs ? scanCandles.filter(c => c.openTime >= sinceMs) : scanCandles.slice(-1000);
+  const priceSeries = priceSeriesSource.map(c => ({ time: c.openTime, close: c.close }));
 
   return compactBacktestForApi({
     symbol: symbol.toUpperCase(),
@@ -527,6 +561,8 @@ async function runMaCrossBacktest({ symbol, config, exchange = 'binance', capita
         : 'off',
     },
     period,
+    windowSinceMs: sinceMs ?? null,
+    priceSeries,
     maFilterStats: [],
     candlesByInterval: Object.fromEntries(
       Object.entries(cMap).map(([iv, arr]) => [iv, arr?.length ?? 0]),
@@ -540,14 +576,14 @@ async function runMaCrossBacktest({ symbol, config, exchange = 'binance', capita
       wins,
       losses: sells.length - wins,
       winRate: sells.length ? parseFloat(((wins / sells.length) * 100).toFixed(1)) : null,
-      blockedCount,
+      blockedCount: visibleBlockedCount,
       stopMaCount: 0,
       stopAdaptCount: 0,
-      entrySignals: entryLog.length,
-      crossSignals: entryLog.length,
+      entrySignals: visibleEntryLog.length,
+      crossSignals: visibleEntryLog.length,
     },
-    entryLog: entryLog.map(serializeMaCrossRow),
-    trades: trades.map(t => ({
+    entryLog: visibleEntryLog.map(serializeMaCrossRow),
+    trades: visibleTrades.map(t => ({
       type: t.type,
       time: t.time,
       timeISO: new Date(t.time).toISOString(),

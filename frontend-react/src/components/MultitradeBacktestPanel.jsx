@@ -6,6 +6,7 @@ import { maCrossFormFromEntry, maCrossFormToPayload } from '../constants/maCross
 import { STRATEGY_LABELS, STRATEGY_COLORS, normalizeStrategyId, isMaCrossStrategy } from '../constants/strategyPresets';
 import { ruleBadgeStyle, formatBacktestOutcome } from '../utils/exitReasonFormat';
 import { tradeFetchPlan, isMaCrossEntry, formatMaCrossEntrySummary, buildMaCrossAdaptiveBandsConfig } from '../utils/multitradeChart';
+import MaCrossRuleCheckChart from './MaCrossRuleCheckChart';
 
 const MT_COLOR = '#8b5cf6';
 
@@ -747,6 +748,16 @@ export default function MultitradeBacktestPanel({ entry }) {
                 </>
               )}
             </div>
+
+            {maCross && (
+              <MaCrossRuleCheckChart
+                symbol={entry.symbol}
+                exchange={entry.exchange}
+                capital={entry.capital}
+                strategyId={entry.strategyId}
+                tradeConfig={tradeConfigOverride ?? undefined}
+              />
+            )}
 
             <TradeFocusBar focus={focusTrade} />
 

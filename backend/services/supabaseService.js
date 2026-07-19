@@ -1743,6 +1743,13 @@ router.get('/multitrade-backtest', getUserId, async (req, res) => {
     }
   }
 
+  // "since": inicio da janela de conferencia (ISO ou epoch ms) — so ma-cross usa.
+  let sinceMs = null;
+  if (req.query.since) {
+    const parsed = /^\d+$/.test(req.query.since) ? Number(req.query.since) : Date.parse(req.query.since);
+    if (Number.isFinite(parsed)) sinceMs = parsed;
+  }
+
   let q = supabase
     .from('multitrade_favorites')
     .select('*')
@@ -1769,7 +1776,7 @@ router.get('/multitrade-backtest', getUserId, async (req, res) => {
     const capital  = Number(req.query.capital ?? 40);
     try {
       const config = buildMaCrossTradeConfig(parsedOverride);
-      const result = await runMaCrossBacktest({ symbol: sym, config, exchange, capital });
+      const result = await runMaCrossBacktest({ symbol: sym, config, exchange, capital, sinceMs });
       if (result.error) return res.status(502).json(result);
       return res.json(result);
     } catch (err) {
@@ -1790,7 +1797,7 @@ router.get('/multitrade-backtest', getUserId, async (req, res) => {
 
   try {
     const result = isMaCrossStrategy(entry.strategyId)
-      ? await runMaCrossBacktest({ symbol: sym, config, exchange, capital })
+      ? await runMaCrossBacktest({ symbol: sym, config, exchange, capital, sinceMs })
       : await runAmapBacktest({ symbol: sym, config, exchange, capital });
     if (result.error) return res.status(502).json(result);
     res.json(result);

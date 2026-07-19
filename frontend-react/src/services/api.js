@@ -1045,12 +1045,13 @@ export async function suggestMultitradeEntryMa({
 }
 
 /** Backtest histórico MA-Cross / AMAP. Com tradeConfig, funciona sem favorito MC. */
-export async function fetchMultitradeBacktest({ symbol, exchange, capital, strategyId, tradeConfig } = {}) {
+export async function fetchMultitradeBacktest({ symbol, exchange, capital, strategyId, tradeConfig, since } = {}) {
   const params = new URLSearchParams({ symbol: symbol.toUpperCase() });
   if (exchange) params.set('exchange', exchange);
   if (capital != null) params.set('capital', String(capital));
   if (strategyId) params.set('strategy_id', strategyId);
   if (tradeConfig) params.set('tradeConfig', JSON.stringify(tradeConfig));
+  if (since) params.set('since', typeof since === 'number' ? String(since) : since);
   const res = await fetch(`/services/sb/multitrade-backtest?${params}`);
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
