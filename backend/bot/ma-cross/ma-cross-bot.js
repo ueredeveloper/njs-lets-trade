@@ -408,6 +408,8 @@ const PENDING_CANCEL_LABELS = {
   EMA_APPROACH_TOO_FAR: 'fundo da EMA9(4h) longe demais da EMA21',
   EMA_APPROACH_NO_MA: 'aproximação EMA 4h indisponível',
   EMA_APPROACH_NO_DATA: 'dados 4h insuficientes p/ aproximação EMA',
+  REVERSAL_1H_COOLDOWN: 'candle de exaustão 1h recente (cooldown de reversão)',
+  REVERSAL_GUARD_NO_DATA: 'dados 1h insuficientes p/ guard de reversão',
 };
 
 function entryCooldownHours(config) {

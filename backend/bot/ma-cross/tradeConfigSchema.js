@@ -141,6 +141,32 @@ const MA_CROSS_DEFAULTS = {
   /** Horas sem nova entrada após venda (0 = desligado). */
   entryCooldownHours: 4,
 
+  /** Guard de reversão por candle (1h): bloqueia entrada se um candle de exaustão
+   *  (vermelho, fecha no terço inferior do range, corpo grande) apareceu depois de
+   *  uma perna de alta esticada, e o preço ainda não reconquistou a máxima desse
+   *  candle. Cobre o atraso do entryTrendMa/entryEmaApproach (posição de EMA), que
+   *  ainda ficam "de lado comprado" durante a própria reversão (ver estudo ARB 17/jul,
+   *  ADA 04/jul, HOME/ALGO/KITE jul/2026). Desligado por padrão até calibrar por
+   *  símbolo — habilitar manualmente por enquanto.
+   */
+  entryReversalGuard: {
+    enabled: false,
+    interval: '1h',
+    /** Candles de histórico usados pra medir o tamanho da perna de alta antes do topo. */
+    rallyLookbackCandles: 96,
+    /** Por quantos candles, após um candle de exaustão, novas entradas ficam bloqueadas
+     *  (a menos que o preço reconquiste a máxima do candle de exaustão antes disso). */
+    cooldownCandles: 12,
+    /** Alta mínima (%) desde a mínima do lookback até a máxima do candle de exaustão
+     *  pra considerar que houve uma perna esticada (evita marcar qualquer candle
+     *  vermelho comum como reversão). */
+    minRallyPct: 8,
+    /** Fechamento do candle de exaustão no máximo neste % do próprio range (0 = mínima). */
+    maxClosePosPct: 30,
+    /** Corpo real mínimo (%) do range do candle de exaustão. */
+    minBodyPct: 45,
+  },
+
   /** Gatilho de entrada alternativo/independente do cruzamento EMA: compra quando o
    *  preço toca/rompe a banda inferior da Bollinger Bands (fundo) — mesma lógica do
    *  exit.bbUpper espelhada pra baixo. Pode ser usado sozinho (desligando entry,
@@ -275,6 +301,20 @@ function normalizeEntryEmaApproach(block) {
   };
 }
 
+function normalizeEntryReversalGuard(block) {
+  const d = MA_CROSS_DEFAULTS.entryReversalGuard;
+  const src = block ?? {};
+  return {
+    enabled:              src.enabled === true,
+    interval:             normalizeInterval(src.interval, d.interval),
+    rallyLookbackCandles: Math.max(1, Math.round(Number(src.rallyLookbackCandles ?? d.rallyLookbackCandles))),
+    cooldownCandles:      Math.max(1, Math.round(Number(src.cooldownCandles ?? d.cooldownCandles))),
+    minRallyPct:          Math.max(0, Number(src.minRallyPct ?? d.minRallyPct)),
+    maxClosePosPct:       Math.max(0, Math.min(100, Number(src.maxClosePosPct ?? d.maxClosePosPct))),
+    minBodyPct:           Math.max(0, Math.min(100, Number(src.minBodyPct ?? d.minBodyPct))),
+  };
+}
+
 function normalizePullbackEntry(pb) {
   const d = MA_CROSS_DEFAULTS.execution.pullbackEntry;
   const src = pb ?? {};
@@ -334,6 +374,7 @@ function normalizeMaCrossConfig(body = {}) {
     entryEmaApproach: normalizeEntryEmaApproach(body.entryEmaApproach),
     entryBbFilter:  normalizeEntryBbFilter(body.entryBbFilter),
     entryBbLower:   normalizeEntryBbLower(body.entryBbLower),
+    entryReversalGuard: normalizeEntryReversalGuard(body.entryReversalGuard),
     maFiltersEnabled: body.maFiltersEnabled !== false,
     maFilters: migrateMaFilters(body),
     exit: {

@@ -62,6 +62,8 @@ const OUTCOME_LABELS = {
   EMA_APPROACH_TOO_FAR:   'Bloqueado — fundo da aproximação longe demais',
   EMA_APPROACH_NO_MA:     'Bloqueado — aproximação indisponível',
   EMA_APPROACH_NO_DATA:   'Bloqueado — dados de aproximação insuficientes',
+  REVERSAL_1H_COOLDOWN:   'Bloqueado — candle de exaustão 1h recente (cooldown de reversão)',
+  REVERSAL_GUARD_NO_DATA: 'Bloqueado — dados 1h insuficientes p/ guard de reversão',
 };
 
 function entryCooldownHours(config) {

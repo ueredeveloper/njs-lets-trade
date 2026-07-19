@@ -595,6 +595,11 @@ function getRequiredSpecs(config) {
     add(enBbLower.interval ?? '4h', (enBbLower.period ?? 20) + 10);
   }
 
+  const revGuard = config.entryReversalGuard;
+  if (revGuard?.enabled) {
+    add(revGuard.interval ?? '1h', (revGuard.rallyLookbackCandles ?? 96) + (revGuard.cooldownCandles ?? 12) + 10);
+  }
+
   const rsiConds = (config.exit?.rsi?.conditions ?? []).filter(c => c.enabled);
   for (const c of rsiConds) {
     add(c.interval, c.period + 50);
@@ -767,6 +772,76 @@ function evaluateEntryEmaApproach(config, cMap, opts = {}) {
   return { allowed: true, gapPct: g4, troughGapPct: gTrough, approachPct };
 }
 
+/**
+ * Guard de reversão por candle (1h, por padrão): bloqueia entradas quando um candle
+ * de exaustão apareceu recentemente após uma perna de alta esticada, e o preço ainda
+ * não reconquistou a máxima desse candle. Cobre o caso em que entryTrendMa/entryEmaApproach
+ * (baseados em posição de EMA, atrasados por natureza) ainda estão "de lado comprado"
+ * justamente durante a reversão — ex.: ADAUSDT 04/jul (topo em 0.20, EMA9(4h) só virou
+ * negativa ~8h depois) e ARBUSDT 17/jul. Validado também em HOMEUSDT, ALGOUSDT e
+ * KITEUSDT (ver estudo de candles 1h, jul/2026): pega o candle de exaustão ~1h após o
+ * topo real e mantém o bloqueio pelo cooldown, cobrindo a maior parte da queda seguinte.
+ *
+ * Candle de exaustão = vermelho, fecha no terço inferior do próprio range (closePosPct)
+ * e tem corpo grande (bodyPct) — ex. ADA: candle que tocou 0.2000 e fechou em 0.1955
+ * (closePos 24%, body 75%). Só conta se vier depois de uma perna de alta esticada
+ * (rallyPct desde a mínima das últimas rallyLookbackCandles).
+ */
+function evaluateEntry1hReversalGuard(config, cMap, opts = {}) {
+  const rule = config.entryReversalGuard;
+  if (!rule?.enabled) return { allowed: true };
+
+  const interval = rule.interval ?? '1h';
+  const closedOnly = opts.closedOnly !== false;
+  const raw = cMap[interval] ?? [];
+  const candles = closedOnly ? closedCandlesOnly(raw) : raw;
+
+  const rallyLookback  = Math.max(1, rule.rallyLookbackCandles ?? 96);
+  const cooldown       = Math.max(1, rule.cooldownCandles ?? 12);
+  const minRallyPct    = Math.max(0, rule.minRallyPct ?? 8);
+  const maxClosePosPct = Math.max(0, rule.maxClosePosPct ?? 30);
+  const minBodyPct     = Math.max(0, rule.minBodyPct ?? 45);
+
+  if (candles.length < rallyLookback + 1) {
+    return { allowed: true, reason: 'REVERSAL_GUARD_NO_DATA' };
+  }
+
+  const window = candles.slice(-cooldown - 1);
+  const last = window[window.length - 1];
+
+  for (let i = window.length - 2; i >= 0; i--) {
+    const c = window[i];
+    const range = c.high - c.low;
+    if (range <= 0) continue;
+
+    const body = Math.abs(c.close - c.open);
+    const closePosPct = ((c.close - c.low) / range) * 100;
+    const bodyPct = (body / range) * 100;
+    const isRed = c.close < c.open;
+
+    if (!isRed || closePosPct > maxClosePosPct || bodyPct < minBodyPct) continue;
+
+    const idxInCandles = candles.length - (window.length - i);
+    const priorSlice = candles.slice(Math.max(0, idxInCandles - rallyLookback), idxInCandles + 1);
+    const lowestLow = Math.min(...priorSlice.map(k => k.low));
+    const rallyPct = ((c.high - lowestLow) / lowestLow) * 100;
+    if (rallyPct < minRallyPct) continue;
+
+    if (last.close < c.high) {
+      return {
+        allowed: false,
+        reason: 'REVERSAL_1H_COOLDOWN',
+        reversalHigh: c.high,
+        reversalOpenTime: c.openTime,
+        rallyPct,
+        closePosPct,
+      };
+    }
+  }
+
+  return { allowed: true };
+}
+
 function evaluateMaFilters(close, config, cMap, adaptiveDips, adaptiveStretches = {}) {
   const details = [];
   for (const f of activeMaFilters(config)) {
@@ -858,6 +933,20 @@ function evaluateCrossSignal(config, cMap, adaptiveDips = {}, opts = {}) {
       pctB: bbCheck.pctB,
       maxPctB: bbCheck.maxPctB,
       bbInterval: bbCheck.bbInterval,
+    };
+  }
+
+  const reversalCheck = evaluateEntry1hReversalGuard(config, cMap, opts);
+  if (!reversalCheck.allowed) {
+    return {
+      allowed: false,
+      reason: reversalCheck.reason,
+      ma1: cross.ma1, ma2: cross.ma2,
+      close: cross.close,
+      crossOpenTime: cross.openTime,
+      reversalHigh: reversalCheck.reversalHigh,
+      reversalOpenTime: reversalCheck.reversalOpenTime,
+      reversalRallyPct: reversalCheck.rallyPct,
     };
   }
 
@@ -1184,6 +1273,18 @@ function evaluateBbLowerEntry(config, cMap, adaptiveDips = {}, opts = {}) {
       close,
       approachGapPct: approachCheck.gapPct,
       approachTroughGapPct: approachCheck.troughGapPct,
+    };
+  }
+
+  const reversalCheck = evaluateEntry1hReversalGuard(config, cMap, opts);
+  if (!reversalCheck.allowed) {
+    return {
+      allowed: false,
+      reason: reversalCheck.reason,
+      close,
+      reversalHigh: reversalCheck.reversalHigh,
+      reversalOpenTime: reversalCheck.reversalOpenTime,
+      reversalRallyPct: reversalCheck.rallyPct,
     };
   }
 
@@ -1808,6 +1909,7 @@ module.exports = {
   evaluateImmediateEntry,
   evaluateEntryTrendMa,
   evaluateEntryEmaApproach,
+  evaluateEntry1hReversalGuard,
   evaluateExit,
   evaluateHtfFallbackExit,
   htfNeverConfirmedSinceEntry,
