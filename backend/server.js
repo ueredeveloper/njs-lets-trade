@@ -155,7 +155,7 @@ async function startServer() {
         await maCrossCache.saveToDisk();
         const m = stats.matched ?? {};
         console.log(
-          `[maCrossCache] 1m≤5m:${m['1m|5'] ?? 0} 5m≤5m:${m['5m|5'] ?? 0} 15m≤5m:${m['15m|5'] ?? 0}`
+          `[maCrossCache] 4h cruzou:${m['4h|last'] ?? 0} 4h prox:${m['4h|nearup'] ?? 0}`
           + ` | disco:${stats.diskHits ?? 0} stale:${stats.diskStale ?? 0} api:${stats.apiFetches ?? 0}`
           + ` | fila:${stats.queuePending ?? 0}`,
         );

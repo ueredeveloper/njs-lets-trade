@@ -1,7 +1,7 @@
 // Cache compartilhado do endpoint público /ticker/24hr
 // Usado por getAllCurrencies e get24HsVolume para evitar chamadas duplicadas
 
-const TTL_MS = 30 * 1000; // 30 segundos
+const TTL_MS = 5 * 60 * 1000; // 5 minutos — endpoint traz o mercado inteiro (~275KB/chamada), evitar refetch a cada poll de 30s do frontend
 
 let _cache     = null;
 let _cachedAt  = 0;

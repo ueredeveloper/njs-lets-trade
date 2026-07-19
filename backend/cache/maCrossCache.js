@@ -11,49 +11,21 @@ const CANDLES_LIMIT = 200;
 const BATCH_SIZE    = 20;
 const CACHE_FILE    = path.join(__dirname, '..', 'data', 'ma-cross-cache.json');
 
-/** Presets cacheados: MA9×MA21 — cruzou ↑ (≤5 min) e próximo de cruzar ↑ (gap ≤0.5%). */
+/** Preset cacheado (único): MA9×MA21 no 4h — cruzou ↑ (último candle) e próximo de cruzar ↑ (gap ≤0.5%). */
 const CACHED_PRESETS = [
   {
-    key: '1m|5',
-    period1: 9, interval1: '1m',
-    period2: 21, interval2: '1m',
+    key: '4h|last',
+    period1: 9, interval1: '4h',
+    period2: 21, interval2: '4h',
     mode: 'cross_up',
-    maxAgeMin: '5',
-    tolerancePct: 0.5,
-    live: true,
-  },
-  {
-    key: '5m|5',
-    period1: 9, interval1: '5m',
-    period2: 21, interval2: '5m',
-    mode: 'cross_up',
-    maxAgeMin: '5',
-    tolerancePct: 0.5,
-    live: true,
-  },
-  {
-    key: '15m|5',
-    period1: 9, interval1: '15m',
-    period2: 21, interval2: '15m',
-    mode: 'cross_up',
-    maxAgeMin: '5',
-    tolerancePct: 0.5,
-    live: true,
-  },
-  {
-    key: '5m|nearup',
-    period1: 9, interval1: '5m',
-    period2: 21, interval2: '5m',
-    mode: 'near_up',
     maxAgeMin: 'last',
-    tolerancePct: 0,
-    proximityPct: 0.5,
+    tolerancePct: 0.5,
     live: true,
   },
   {
-    key: '15m|nearup',
-    period1: 9, interval1: '15m',
-    period2: 21, interval2: '15m',
+    key: '4h|nearup',
+    period1: 9, interval1: '4h',
+    period2: 21, interval2: '4h',
     mode: 'near_up',
     maxAgeMin: 'last',
     tolerancePct: 0,
@@ -361,7 +333,7 @@ async function getCachedResult(symbols, presetKey, { force = false } = {}) {
 }
 
 async function getDefaultPresetResult(symbols, opts = {}) {
-  return getCachedResult(symbols, '5m|5', opts);
+  return getCachedResult(symbols, '4h|last', opts);
 }
 
 async function refreshSymbols(symbols, opts = {}) {
@@ -397,7 +369,7 @@ function migrateLegacyDiskData() {
     symbolStore.clear();
     snapshots.clear();
     dirty = true;
-    console.log('[maCrossCache] cache legado (1m) descartado — será recalculado do disco');
+    console.log('[maCrossCache] cache legado (presets antigos) descartado — será recalculado do disco');
   }
 }
 

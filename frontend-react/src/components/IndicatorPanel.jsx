@@ -82,10 +82,7 @@ const INTERVAL_LABELS = {
 const EMPTY_INDICATOR = { type: '', intervals: ['8h'] };
 
 const DEFAULT_INDICATORS = [
-  { type: 'maCompare', intervals: ['1h'], ma1Period: '9', ma2Period: '21', compare: 'above', tolerancePct: '0.5' },
-  { type: 'maCompare', intervals: ['1h'], ma1Period: '9', ma2Period: '21', compare: 'bellow', tolerancePct: '0.5' },
-  { type: 'movingAverage', intervals: ['1h', '4h'], length: '50', compare: 'above', candle: 'close' },
-  { type: 'maCrossover', intervals: ['15m'], ma1Period: '9', ma2Period: '21', signalMode: 'cross_up', ageWindows: ['last', '1', '5'], tolerancePct: '0.5', mixedIntervals: false },
+  { type: 'maCompare', intervals: ['4h'], ma1Period: '9', ma2Period: '21', compare: 'above', tolerancePct: '0.5' },
 ];
 
 /** Gera um resumo legível da configuração do indicador */
