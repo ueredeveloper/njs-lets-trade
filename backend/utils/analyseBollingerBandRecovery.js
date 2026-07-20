@@ -12,8 +12,11 @@ const LIMIT = 1000; // candles 4h — cobre bastante histórico para warmup + ci
  * Analisa ciclos de fundo→topo na Bollinger Bands de uma moeda.
  *
  * Varre a série de candles procurando ciclos completos:
- *   close toca/cruza a banda inferior  → entrada (fundo, pior close da zona)
- *   close toca/cruza a banda superior  → saída (topo)
+ *   mínima (pavio) toca/cruza a banda inferior  → entrada (fundo, menor mínima da zona)
+ *   máxima (pavio) toca/cruza a banda superior  → saída (topo)
+ * Detecta o toque pelo pavio (high/low) — igual ao que se vê visualmente no gráfico —
+ * mas registra entryPrice/exitPrice como o close do candle do toque (preço de referência
+ * realista, já que o pavio extremo não é necessariamente executável).
  * Para cada ciclo registra preço de entrada, preço de saída e valorização (%).
  *
  * @param {string} symbol              - Símbolo da moeda. Ex: 'BTCUSDT'
@@ -61,31 +64,32 @@ async function analyseBollingerBandRecovery(symbol, options = {}) {
     const offset = period - 1;
 
     // Máquina de estados sequencial:
-    //   SEEK_ENTRY → aguarda close tocar/cruzar a banda inferior → registra fundo
-    //   SEEK_EXIT  → aguarda close tocar/cruzar a banda superior → registra topo, volta ao início
+    //   SEEK_ENTRY → aguarda a mínima (pavio) tocar/cruzar a banda inferior → registra fundo
+    //   SEEK_EXIT  → aguarda a máxima (pavio) tocar/cruzar a banda superior → registra topo, volta ao início
     const occurrences = [];
     let state = 'SEEK_ENTRY';
-    let minCloseIdx = null;
+    let minLowIdx = null;
 
     for (let i = 0; i < bbSeries.length; i++) {
         const candle = candles[i + offset];
-        const close = parseFloat(candle.close);
+        const low = parseFloat(candle.low);
+        const high = parseFloat(candle.high);
 
-        if (state === 'SEEK_ENTRY' && close <= bbSeries[i].lower) {
-            minCloseIdx = i;
+        if (state === 'SEEK_ENTRY' && low <= bbSeries[i].lower) {
+            minLowIdx = i;
             state = 'SEEK_EXIT';
             continue;
         }
 
         if (state === 'SEEK_EXIT') {
-            if (close < parseFloat(candles[minCloseIdx + offset].close)) {
-                minCloseIdx = i;
+            if (low < parseFloat(candles[minLowIdx + offset].low)) {
+                minLowIdx = i;
             }
 
-            if (close >= bbSeries[i].upper) {
-                const entryCandle = candles[minCloseIdx + offset];
+            if (high >= bbSeries[i].upper) {
+                const entryCandle = candles[minLowIdx + offset];
                 const entryPrice = parseFloat(entryCandle.close);
-                const exitPrice = close;
+                const exitPrice = parseFloat(candle.close);
 
                 occurrences.push({
                     startDate: new Date(entryCandle.openTime).toISOString(),
@@ -97,16 +101,16 @@ async function analyseBollingerBandRecovery(symbol, options = {}) {
                     ),
                 });
 
-                minCloseIdx = null;
+                minLowIdx = null;
                 state = 'SEEK_ENTRY';
             }
         }
     }
 
-    // Ciclo aberto: close tocou a banda inferior mas ainda não alcançou a superior.
+    // Ciclo aberto: a mínima tocou a banda inferior mas a máxima ainda não alcançou a superior.
     let openOccurrence = null;
-    if (state === 'SEEK_EXIT' && minCloseIdx !== null) {
-        const lowestCandle = candles[minCloseIdx + offset];
+    if (state === 'SEEK_EXIT' && minLowIdx !== null) {
+        const lowestCandle = candles[minLowIdx + offset];
         const lastCandle = candles[candles.length - 1];
         const entryPrice = parseFloat(lowestCandle.close);
         const currentPrice = parseFloat(lastCandle.close);
@@ -127,6 +131,9 @@ async function analyseBollingerBandRecovery(symbol, options = {}) {
     const avgAppreciationPercent = total > 0
         ? parseFloat((occurrences.reduce((s, o) => s + o.appreciationPercent, 0) / total).toFixed(2))
         : 0;
+    const avgCycleDurationMs = total > 0
+        ? Math.round(occurrences.reduce((s, o) => s + (new Date(o.endDate).getTime() - new Date(o.startDate).getTime()), 0) / total)
+        : 0;
 
     return {
         symbol,
@@ -137,6 +144,7 @@ async function analyseBollingerBandRecovery(symbol, options = {}) {
         totalBbPeriods: bbSeries.length,
         totalOccurrences: total,
         avgAppreciationPercent,
+        avgCycleDurationMs,
         occurrences,
         openOccurrence,
     };

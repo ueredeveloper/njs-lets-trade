@@ -23,6 +23,17 @@ function formatDate(iso) {
   });
 }
 
+function formatDuration(ms) {
+  if (!ms || ms <= 0) return '—';
+  const minutes = Math.round(ms / 60000);
+  const d = Math.floor(minutes / 1440);
+  const h = Math.floor((minutes % 1440) / 60);
+  const m = minutes % 60;
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
 function SummaryCard({ label, value, highlight, tooltip }) {
   const card = (
     <div className="flex flex-col items-center justify-center bg-p2/50 border border-p3/20 rounded px-0.5 py-px sm:px-2 sm:py-1.5 min-w-[38px] sm:min-w-[80px]">
@@ -179,6 +190,7 @@ function RsiStats() {
               />
               <SummaryCard label={t('stats.card.entry_rsi')} value={`< ${result.oversoldThreshold}`}   tooltip={t('stats.tip.entry_rsi')} />
               <SummaryCard label={t('stats.card.exit_rsi')}  value={`> ${result.overboughtThreshold}`} tooltip={t('stats.tip.exit_rsi')} />
+              <SummaryCard label={t('stats.card.avg_duration')} value={formatDuration(result.avgCycleDurationMs)} tooltip={t('stats.tip.avg_duration')} />
             </div>
 
             {/* Tabela */}
@@ -333,7 +345,7 @@ function MaCrossStats() {
   const { t } = useI18n();
   const [symbol, setSymbol]               = useState(selectedChart?.symbol || 'BTCUSDT');
   const [entryInterval, setEntryInterval] = useState('15m');
-  const [exitInterval, setExitInterval]   = useState('15m');
+  const [exitInterval, setExitInterval]   = useState('30m');
   const [loading, setLoading]             = useState(false);
   const [result, setResult]               = useState(null);
   const [error, setError]                 = useState(null);
@@ -462,6 +474,7 @@ function MaCrossStats() {
               />
               <SummaryCard label={t('stats.card.entry_rule')} value={result.entryLabel} tooltip={t('stats.tip.ma_entry')} />
               <SummaryCard label={t('stats.card.exit_rule')} value={result.exitLabel} tooltip={t('stats.tip.ma_exit')} />
+              <SummaryCard label={t('stats.card.avg_duration')} value={formatDuration(result.avgCycleDurationMs)} tooltip={t('stats.tip.avg_duration')} />
             </div>
 
             {result.occurrences.length === 0 && !result.openOccurrence ? (
@@ -696,6 +709,7 @@ function BollingerBandsStats() {
               />
               <SummaryCard label={t('stats.bb_period')} value={result.period} tooltip={t('stats.tip.bb_period')} />
               <SummaryCard label={t('stats.bb_stddev')} value={result.stdDev} tooltip={t('stats.tip.bb_stddev')} />
+              <SummaryCard label={t('stats.card.avg_duration')} value={formatDuration(result.avgCycleDurationMs)} tooltip={t('stats.tip.avg_duration')} />
             </div>
 
             {result.occurrences.length === 0 && !result.openOccurrence ? (
