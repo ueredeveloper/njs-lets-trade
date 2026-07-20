@@ -1328,6 +1328,12 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
     return [...new Array(LEFT_PAD).fill(''), ...slicedDates, ...new Array(RIGHT_PAD).fill('')];
   })();
 
+  // Data/hora completa por candle (rótulo do eixo é abreviado: só minuto ou só hora) — usado no tooltip.
+  const xFullData = (() => {
+    const slicedFull = candlesticks.slice(-DL).map((c) => fmtDate(Number(c.openTime)));
+    return [...new Array(LEFT_PAD).fill(''), ...slicedFull, ...new Array(RIGHT_PAD).fill('')];
+  })();
+
   // Separadores de dia — só faz sentido em intervalos intraday (< 1d)
   const INTRADAY = !['1d', '3d', '1w'].includes(interval);
 
@@ -1466,7 +1472,8 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
   const _fmtV = v => v == null ? '—' : (v < 0.01 ? Number(v).toFixed(6) : v < 1 ? Number(v).toFixed(4) : Number(v).toFixed(2));
 
   const tooltipFormatter = (params) => {
-    const time = params[0]?.axisValue ?? '';
+    const idx = params[0]?.dataIndex;
+    const time = (idx != null ? xFullData[idx] : null) || params[0]?.axisValue || '';
     let html = `<div style="font-family:monospace;font-size:11px;min-width:150px;line-height:1.6">`;
     html += `<div style="margin-bottom:5px;opacity:0.5;font-size:10px">${time}</div>`;
     for (const p of params) {
@@ -1683,6 +1690,12 @@ function buildMatrixOption({ symbol, interval, candlesticks, rsi }, activeIndica
     return [...new Array(LEFT_PAD).fill(''), ...slicedDates, ...new Array(RIGHT_PAD).fill('')];
   })();
 
+  // Data/hora completa por candle (rótulo do eixo é abreviado) — usado no tooltip.
+  const xFullData = (() => {
+    const slicedFull = candlesticks.slice(-DL).map(c => fmtDate(Number(c.openTime)));
+    return [...new Array(LEFT_PAD).fill(''), ...slicedFull, ...new Array(RIGHT_PAD).fill('')];
+  })();
+
   // separadores de dia (em tom verde)
   const dayBreakData = (() => {
     if (!INTRADAY) return [];
@@ -1800,6 +1813,21 @@ function buildMatrixOption({ symbol, interval, candlesticks, rsi }, activeIndica
       borderColor: G_DIM,
       textStyle: { color: G, fontSize: 11 },
       axisPointer: { animation: false, type: 'cross', lineStyle: { color: 'rgba(34,197,94,0.3)', width: 1 } },
+      formatter: (params) => {
+        const idx = params[0]?.dataIndex;
+        const time = (idx != null ? xFullData[idx] : null) || params[0]?.axisValue || '';
+        let html = `<div style="font-family:monospace;font-size:11px;min-width:120px;line-height:1.6">`;
+        html += `<div style="margin-bottom:5px;opacity:0.6;font-size:10px">${time}</div>`;
+        for (const p of params) {
+          if (p.value == null) continue;
+          html += `<div style="display:flex;justify-content:space-between;gap:14px">`;
+          html += `<span style="color:${p.color ?? G};opacity:0.85">${p.seriesName}</span>`;
+          html += `<span style="color:${G};font-weight:bold">${fmtPrice(p.value)}</span>`;
+          html += `</div>`;
+        }
+        html += `</div>`;
+        return html;
+      },
     },
     grid: showRsi
       ? [{ top: 40, bottom: '26%', left: chartLeftPad, right: chartRightPad }, { top: '78%', bottom: 20, left: chartLeftPad, right: chartRightPad }]
