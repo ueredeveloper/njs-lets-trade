@@ -718,6 +718,12 @@ function evaluateEntryTrendMa(config, cMap, opts = {}) {
  * approachPct sugerido a partir de dados reais (ver analyze-ema-approach-4h.js,
  * 120 dias / 45 moedas ma-cross): mediana do fundo histórico antes da alta ficou
  * em -0.85% (EMA9 ~0.85% abaixo da EMA21); 1.5% dá margem sobre a mediana.
+ *
+ * noiseTolerancePct (padrão 0.15pp) permite pequenos solavancos contra a
+ * direção geral sem quebrar o padrão — ex.: DASHUSDT 20/jul, gap oscilando
+ * lateral entre 0.13%–0.25% (mercado de lado, sem tendência real), onde as
+ * comparações estritas rejeitavam por uma diferença de milésimos de ponto
+ * percentual mesmo com o fundo bem dentro de approachPct.
  */
 function evaluateEntryEmaApproach(config, cMap, opts = {}) {
   const rule = config.entryEmaApproach;
@@ -752,8 +758,9 @@ function evaluateEntryEmaApproach(config, cMap, opts = {}) {
   }
 
   const [g0, g1, gTrough, g3, g4] = gaps;
-  const wasFalling = gTrough <= g1 && g1 <= g0;
-  const isRising = g3 > gTrough && g4 > g3;
+  const noiseTol = Math.max(0, Number(rule.noiseTolerancePct ?? 0.15));
+  const wasFalling = gTrough <= g1 + noiseTol && g1 <= g0 + noiseTol;
+  const isRising = g3 > gTrough - noiseTol && g4 > g3 - noiseTol;
   if (!wasFalling || !isRising) {
     return { allowed: false, reason: 'EMA_APPROACH_NOT_FOUND', gapPct: g4 };
   }

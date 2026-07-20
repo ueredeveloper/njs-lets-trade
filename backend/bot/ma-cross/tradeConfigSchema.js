@@ -136,6 +136,9 @@ const MA_CROSS_DEFAULTS = {
     ma1: { period: 9, interval: '4h' },
     ma2: { period: 21, interval: '4h' },
     approachPct: 1.5,
+    /** Tolerância (pp) a solavancos contra a direção geral do fundo/retomada —
+     *  evita rejeitar por ruído quando o mercado está de lado (ver strategyEngine.js). */
+    noiseTolerancePct: 0.15,
   },
 
   /** Horas sem nova entrada após venda (0 = desligado). */
@@ -298,6 +301,7 @@ function normalizeEntryEmaApproach(block) {
     ma1: normalizeMaLeg(src.ma1, d.ma1),
     ma2: normalizeMaLeg(src.ma2, d.ma2),
     approachPct: Math.max(0, Number(src.approachPct ?? d.approachPct ?? 0)),
+    noiseTolerancePct: Math.max(0, Number(src.noiseTolerancePct ?? d.noiseTolerancePct ?? 0)),
   };
 }
 
