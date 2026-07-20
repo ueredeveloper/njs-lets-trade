@@ -2874,11 +2874,12 @@ export default function CandlestickChart() {
 
       {/* Conteúdo da aba */}
       {activeTab === 'rules' ? (
-        <div className="flex-1 min-h-0 overflow-y-auto px-2 md:px-3 py-2">
+        <div className="flex-1 min-h-0 flex flex-col px-2 md:px-3 py-2">
           {selectedChart?.symbol ? (
             <MaCrossRuleCheckChart
               symbol={selectedChart.symbol}
               exchange={selectedChart.source === 'gate' ? 'gate' : 'binance'}
+              fillHeight
             />
           ) : (
             <div className="text-p5/50 text-xs font-mono">Selecione uma moeda pra conferir as regras.</div>
