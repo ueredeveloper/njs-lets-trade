@@ -6,7 +6,7 @@ const { getGateCandles } = require('../gate/getGateCandles');
 
 // Símbolos deslistados na Binance — usar Gate.io automaticamente
 const GATE_ONLY_SYMBOLS = new Set(['SKYAIUSDT', 'SLXUSDT', 'UNIUSDT', 'ZESTUSDT', 'ONDOUSDT',
-    'VIRTUAL', 'FARTCOINUSDT', 'ARIAUSDT', 'ALLOUSDT', 'BEATUSDT', 'FILUSDT']);
+    'VIRTUAL', 'FARTCOINUSDT', 'ARIAUSDT', 'BEATUSDT', 'FILUSDT']);
 
 /**
  * Busca candles de um símbolo. Se o símbolo estiver deslistado na Binance,
