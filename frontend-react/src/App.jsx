@@ -432,7 +432,7 @@ function AppContent() {
                     : 'text-p4 bg-p1/90 border-p2 hover:text-white hover:bg-p3/50'
                 }`}
               >
-                <MaximizeIcon active={layoutMode === 'chart'} className="w-3 h-3 shrink-0" />
+                <MaximizeIcon active={layoutMode === 'chart'} kind="chart" className="w-3 h-3 shrink-0" />
               </button>
               <button
                 type="button"
@@ -445,7 +445,7 @@ function AppContent() {
                     : 'text-p4 bg-p1/90 border-p2 hover:text-white hover:bg-p3/50'
                 }`}
               >
-                <MaximizeIcon active={layoutMode === 'panel'} className="w-3 h-3 shrink-0" />
+                <MaximizeIcon active={layoutMode === 'panel'} kind="panel" className="w-3 h-3 shrink-0" />
               </button>
             </div>
           </div>
