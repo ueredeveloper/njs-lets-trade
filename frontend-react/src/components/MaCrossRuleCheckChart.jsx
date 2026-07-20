@@ -2,8 +2,35 @@ import { useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import ReactECharts from 'echarts-for-react';
 import { fetchMultitradeBacktest } from '../services/api';
 import { INTERVAL_MS } from '../utils/chartView';
+import { fetchEmaLine, fetchAdaptiveBandLine, fetchAdaptiveBandLineAuto, fetchBollingerLines, strategyLineDefsFromTradeConfig } from '../utils/overlayIndicators';
+import { BB_PERIOD_OPTIONS, BB_STDDEV_OPTIONS } from '../utils/uiPreferences';
 
 const RULE_CHECK_CANDLES = 50;
+
+const MANUAL_EMA_INTERVALS = ['1m', '5m', '15m', '30m', '1h', '2h', '4h', '8h', '12h', '1d'];
+const MANUAL_EMA_PERIODS = ['9', '21', '50', '200'];
+const MANUAL_BAND_PCT_OPTIONS = [4, 3, 2, 1];
+const MANUAL_BAND_ADAPTIVE = 'adaptive';
+const MANUAL_LINE_PALETTE = ['#e879f9', '#38bdf8', '#a3e635', '#fca5a5', '#fdba74', '#67e8f9'];
+const BAND_SIDE_COLOR = { floor: '#2bb3a3', ceiling: '#e0653f' };
+
+const LINE_SELECT_STYLE = {
+  background: '#111', color: '#c3c2b7', border: '1px solid #383835',
+  borderRadius: 3, padding: '1px 3px', fontFamily: 'monospace', fontSize: 10,
+};
+const LINE_ADD_BTN_STYLE = {
+  background: '#2a2d3a', color: '#94a3b8', border: '1px solid #3a3d4a',
+  borderRadius: 3, padding: '2px 6px', fontFamily: 'monospace', fontSize: 10, cursor: 'pointer',
+};
+
+function lineChipStyle(active, color) {
+  return {
+    fontFamily: 'monospace', fontSize: 10, padding: '2px 6px', borderRadius: 3,
+    cursor: 'pointer', border: `1px solid ${color}`,
+    background: active ? `${color}33` : 'transparent',
+    color: active ? color : '#666',
+  };
+}
 
 /**
  * Conferência visual das regras de entrada do ma-cross: para cada cruzamento
@@ -55,8 +82,8 @@ const BUCKET_LABEL = {
   approach:  'Bloqueada — aproximação EMA9/21 (4h)',
   candle:    'Bloqueada — candle de exaustão (reversão 1h)',
   pullback:  'Bloqueada — sem pullback (recuo insuficiente)',
-  maFloor:   'Bloqueada — piso adaptativo MA',
-  maCeiling: 'Bloqueada — teto MA (esticado)',
+  maFloor:   'Bloqueada — piso adapt. MA',
+  maCeiling: 'Bloqueada — teto adapt. MA',
   cooldown:  'Bloqueada — cooldown pós-venda',
   bb:        'Bloqueada — filtro Bollinger Bands',
   timeout:   'Cancelada — pullback expirou',
@@ -97,6 +124,53 @@ function bucketOutcome(outcome) {
       if (outcome?.startsWith('REVERSAL_')) return 'candle';
       return 'other';
   }
+}
+
+/** Filtro de MA que efetivamente bloqueou a linha (primeiro maCheck com ok:false). */
+function failedMaCheck(row) {
+  return (row.maChecks ?? []).find(m => m.ok === false) ?? null;
+}
+
+/** "EMA50 1h" → "1h" — intervalo do filtro de MA que bloqueou. */
+function maCheckInterval(check) {
+  const parts = check?.label?.split(' ');
+  return parts?.length > 1 ? parts[1] : null;
+}
+
+/**
+ * Chave de agrupamento do ponto: bucket base + intervalo do filtro MA quando
+ * aplicável — o mesmo bucket (piso/teto adaptativo) pode ter filtros em
+ * intervalos diferentes (ex.: EMA50 1h e EMA50 4h), então cada um vira uma
+ * série/cor distinta na legenda em vez de ficar tudo indistinguível.
+ */
+function bucketKeyForRow(row) {
+  const base = bucketOutcome(row.outcome);
+  if (base === 'maFloor' || base === 'maCeiling') {
+    const iv = maCheckInterval(failedMaCheck(row));
+    if (iv) return `${base}@${iv}`;
+  }
+  return base;
+}
+
+function bucketKeyBase(key) {
+  return key.split('@')[0];
+}
+
+function bucketKeyInterval(key) {
+  const i = key.indexOf('@');
+  return i === -1 ? null : key.slice(i + 1);
+}
+
+function bucketLabelForKey(key) {
+  const base = bucketKeyBase(key);
+  const iv = bucketKeyInterval(key);
+  return iv ? `${BUCKET_LABEL[base]} (${iv})` : BUCKET_LABEL[base];
+}
+
+function compareBucketKeys(a, b) {
+  const ai = BUCKET_ORDER.indexOf(bucketKeyBase(a));
+  const bi = BUCKET_ORDER.indexOf(bucketKeyBase(b));
+  return ai !== bi ? ai - bi : (bucketKeyInterval(a) ?? '').localeCompare(bucketKeyInterval(b) ?? '');
 }
 
 function fmtDateTime(ms) {
@@ -146,7 +220,11 @@ function buildTooltip(row) {
   if (row.approachGapPct != null) {
     lines.push(`aproximação: gap ${fmtPct(row.approachGapPct)}${row.approachTroughGapPct != null ? ` (fundo ${fmtPct(row.approachTroughGapPct)})` : ''}`);
   }
-  lines.push(`<b>${row.outcomeLabel ?? row.outcome}</b>`);
+  const blockedMa = failedMaCheck(row);
+  const maSuffix = ['maFloor', 'maCeiling'].includes(bucketOutcome(row.outcome)) && blockedMa?.label
+    ? ` — ${blockedMa.label}`
+    : '';
+  lines.push(`<b>${row.outcomeLabel ?? row.outcome}${maSuffix}</b>`);
   if (row.outcome === 'BOUGHT' && row.exitDetail) {
     lines.push(row.exitDetail);
   } else if (row.outcome !== 'BOUGHT') {
@@ -159,6 +237,63 @@ function buildTooltip(row) {
   return lines.join('<br/>');
 }
 
+/** Linhas de EMA/Bollinger buscadas pra sobrepor ao preço (ver overlayIndicators.js). */
+function buildIndicatorSeries(lineData) {
+  return Object.values(lineData).flatMap((entry) => {
+    if (entry.kind === 'ema') {
+      return [{
+        name: entry.label,
+        type: 'line',
+        data: entry.points,
+        showSymbol: false,
+        smooth: true,
+        lineStyle: { color: entry.color, width: 1.3, type: 'dashed' },
+        z: 2,
+      }];
+    }
+    if (entry.kind === 'band') {
+      return [{
+        name: entry.label,
+        type: 'line',
+        data: entry.points,
+        showSymbol: false,
+        smooth: true,
+        lineStyle: { color: entry.color, width: 1.2, type: 'dotted', opacity: 0.85 },
+        z: 2,
+      }];
+    }
+    return [
+      {
+        name: `${entry.label} sup`,
+        type: 'line',
+        data: entry.upper,
+        showSymbol: false,
+        smooth: true,
+        lineStyle: { color: entry.color, width: 1, type: 'dotted', opacity: 0.6 },
+        z: 2,
+      },
+      {
+        name: entry.label,
+        type: 'line',
+        data: entry.middle,
+        showSymbol: false,
+        smooth: true,
+        lineStyle: { color: entry.color, width: 1.3, type: 'dashed' },
+        z: 2,
+      },
+      {
+        name: `${entry.label} inf`,
+        type: 'line',
+        data: entry.lower,
+        showSymbol: false,
+        smooth: true,
+        lineStyle: { color: entry.color, width: 1, type: 'dotted', opacity: 0.6 },
+        z: 2,
+      },
+    ];
+  });
+}
+
 export default function MaCrossRuleCheckChart({ symbol, exchange, capital = 40, strategyId, tradeConfig, fillHeight = false }) {
   const [sinceInput, setSinceInput] = useState(() => defaultSinceForCandles(tradeConfig?.entry?.ma1?.interval));
   const [data, setData] = useState(null);
@@ -168,6 +303,145 @@ export default function MaCrossRuleCheckChart({ symbol, exchange, capital = 40, 
   const chartWrapRef = useRef(null);
   const summaryChartRef = useRef(null);
   const summaryWrapRef = useRef(null);
+
+  // Linhas de indicador (EMA/Bollinger) sobrepostas ao preço — as da própria
+  // estratégia entram ligadas por padrão (podem ser desligadas), mais um
+  // manipulador pra adicionar EMAs/BB manuais além das que a regra usa.
+  const strategyLineDefs = useMemo(() => strategyLineDefsFromTradeConfig(tradeConfig), [tradeConfig]);
+  const strategyLineIdsKey = strategyLineDefs.map(d => d.id).join(',');
+  const [manualLines, setManualLines] = useState([]);
+  const [activeLineIds, setActiveLineIds] = useState(() => new Set(strategyLineDefs.map(d => d.id)));
+  const [lineData, setLineData] = useState({});
+  const [linesLoading, setLinesLoading] = useState(false);
+  const [linesPanelCollapsed, setLinesPanelCollapsed] = useState(false);
+  const [addEmaInterval, setAddEmaInterval] = useState('1h');
+  const [addEmaPeriod, setAddEmaPeriod] = useState('50');
+  const [addEmaBandAbove, setAddEmaBandAbove] = useState(null);
+  const [addEmaBandBelow, setAddEmaBandBelow] = useState(null);
+  const [addBbInterval, setAddBbInterval] = useState('4h');
+  const [addBbPeriod, setAddBbPeriod] = useState(BB_PERIOD_OPTIONS[1]);
+  const [addBbStdDev, setAddBbStdDev] = useState(BB_STDDEV_OPTIONS[1]);
+
+  // Ao trocar de moeda/estratégia as linhas da regra mudam — volta todas pro padrão (ligadas)
+  // e limpa as manuais, que pertenciam ao símbolo anterior.
+  useEffect(() => {
+    setActiveLineIds(new Set(strategyLineDefs.map(d => d.id)));
+    setManualLines([]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [symbol, strategyLineIdsKey]);
+
+  const toggleLine = useCallback((id) => {
+    setActiveLineIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const addManualEma = useCallback(() => {
+    const period = Number(addEmaPeriod);
+    const interval = addEmaInterval;
+    const baseId = `manual-ema-${period}-${interval}`;
+
+    const bandDef = (side, sel) => {
+      if (sel == null) return null;
+      const isAdaptive = sel === MANUAL_BAND_ADAPTIVE;
+      return {
+        id: `manual-band-${side}-${period}-${interval}-${sel}`,
+        kind: 'band',
+        side, period, interval,
+        pct: isAdaptive ? null : Number(sel),
+        mode: isAdaptive ? 'adaptive' : 'fixed',
+        color: BAND_SIDE_COLOR[side],
+        label: isAdaptive
+          ? `${side === 'floor' ? 'Piso' : 'Teto'} ADAPT EMA${period} ${interval}`
+          : `${side === 'floor' ? 'Piso' : 'Teto'} manual EMA${period} ${interval} (${side === 'floor' ? '−' : '+'}${sel}%)`,
+      };
+    };
+    const newBands = [bandDef('floor', addEmaBandBelow), bandDef('ceiling', addEmaBandAbove)].filter(Boolean);
+
+    setManualLines(prev => {
+      const next = [...prev];
+      if (!next.some(l => l.id === baseId)) {
+        next.push({
+          id: baseId, kind: 'ema', period, interval,
+          color: MANUAL_LINE_PALETTE[next.length % MANUAL_LINE_PALETTE.length],
+          label: `EMA${period} ${interval}`,
+        });
+      }
+      for (const band of newBands) {
+        if (!next.some(l => l.id === band.id)) next.push(band);
+      }
+      return next;
+    });
+    setActiveLineIds(prev => {
+      const next = new Set(prev).add(baseId);
+      for (const band of newBands) next.add(band.id);
+      return next;
+    });
+  }, [addEmaPeriod, addEmaInterval, addEmaBandAbove, addEmaBandBelow]);
+
+  const addManualBb = useCallback(() => {
+    const period = Number(addBbPeriod);
+    const stdDev = Number(addBbStdDev);
+    const interval = addBbInterval;
+    const id = `manual-bb-${period}-${interval}-${stdDev}`;
+    setManualLines(prev => prev.some(l => l.id === id) ? prev : [...prev, {
+      id, kind: 'bb', period, stdDev, interval,
+      color: '#a78bfa',
+      label: `BB${period}@${interval} ±${stdDev}σ`,
+    }]);
+    setActiveLineIds(prev => new Set(prev).add(id));
+  }, [addBbPeriod, addBbStdDev, addBbInterval]);
+
+  const removeManualLine = useCallback((id) => {
+    setManualLines(prev => prev.filter(l => l.id !== id));
+    setActiveLineIds(prev => { const next = new Set(prev); next.delete(id); return next; });
+  }, []);
+
+  const allLineDefs = useMemo(() => [...strategyLineDefs, ...manualLines], [strategyLineDefs, manualLines]);
+  const activeLineIdsKey = [...activeLineIds].sort().join(',');
+
+  // Busca os pontos reais de EMA/Bollinger (candles + indicador no backend) pras
+  // linhas ligadas, cobrindo a janela do backtest (data.priceSeries) + warmup do período.
+  useEffect(() => {
+    if (!data || !symbol) { setLineData({}); return undefined; }
+    const activeDefs = allLineDefs.filter(d => activeLineIds.has(d.id));
+    if (!activeDefs.length) { setLineData({}); return undefined; }
+
+    const fromMs = data.priceSeries?.[0]?.time ?? Date.now();
+    let cancelled = false;
+    setLinesLoading(true);
+    (async () => {
+      const entries = await Promise.all(activeDefs.map(async (d) => {
+        try {
+          if (d.kind === 'ema') {
+            const points = await fetchEmaLine(symbol, d.interval, d.period, exchange, fromMs);
+            return [d.id, { kind: 'ema', points, color: d.color, label: d.label }];
+          }
+          if (d.kind === 'band') {
+            if (d.mode === 'adaptive') {
+              const { points, pct } = await fetchAdaptiveBandLineAuto(symbol, d.interval, d.period, d.side, exchange, fromMs);
+              const label = Number.isFinite(pct) ? `${d.label} (${d.side === 'floor' ? '−' : '+'}${pct.toFixed(2)}%)` : d.label;
+              return [d.id, { kind: 'band', points, color: d.color, label }];
+            }
+            const points = await fetchAdaptiveBandLine(symbol, d.interval, d.period, d.side, d.pct, exchange, fromMs);
+            return [d.id, { kind: 'band', points, color: d.color, label: d.label }];
+          }
+          const bb = await fetchBollingerLines(symbol, d.interval, d.period, d.stdDev, exchange, fromMs);
+          return bb ? [d.id, { kind: 'bb', ...bb, color: d.color, label: d.label }] : null;
+        } catch {
+          return null;
+        }
+      }));
+      if (!cancelled) {
+        setLineData(Object.fromEntries(entries.filter(Boolean)));
+        setLinesLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, symbol, exchange, activeLineIdsKey]);
 
   const runWithSince = useCallback(async (sinceValue) => {
     if (!symbol) return;
@@ -204,9 +478,13 @@ export default function MaCrossRuleCheckChart({ symbol, exchange, capital = 40, 
 
     const priceData = (data.priceSeries ?? []).map(p => [p.time, p.close]);
 
-    const buckets = Object.fromEntries(BUCKET_ORDER.map(key => [key, []]));
+    // Chave por bucket base + intervalo do filtro MA que bloqueou (piso/teto
+    // adaptativo podem ter filtros em 1h e 4h simultaneamente — cada um vira
+    // uma série própria em vez de ficar tudo com a mesma cor/rótulo).
+    const buckets = {};
     for (const row of data.entryLog ?? []) {
-      buckets[bucketOutcome(row.outcome)].push({
+      const key = bucketKeyForRow(row);
+      (buckets[key] ??= []).push({
         value: [row.timeISO ? new Date(row.timeISO).getTime() : row.time, row.price],
         row,
       });
@@ -217,17 +495,20 @@ export default function MaCrossRuleCheckChart({ symbol, exchange, capital = 40, 
 
     // Só entra na legenda/série quem realmente tem pontos nessa janela — evita
     // poluir o gráfico com categorias vazias quando poucos filtros bloquearam.
-    const ruleSeries = BUCKET_ORDER.filter(key => buckets[key].length > 0).map(key => ({
-      name: BUCKET_LABEL[key],
-      type: 'scatter',
-      data: buckets[key],
-      symbol: BUCKET_SYMBOL[key],
-      symbolRotate: BUCKET_ROTATE[key] ?? 0,
-      symbolSize: 10,
-      itemStyle: { color: BUCKET_COLOR[key], opacity: 0.9 },
-      emphasis: { scale: 1.4 },
-      z: 3,
-    }));
+    const ruleSeries = Object.keys(buckets).sort(compareBucketKeys).map(key => {
+      const base = bucketKeyBase(key);
+      return {
+        name: bucketLabelForKey(key),
+        type: 'scatter',
+        data: buckets[key],
+        symbol: BUCKET_SYMBOL[base],
+        symbolRotate: BUCKET_ROTATE[base] ?? 0,
+        symbolSize: 10,
+        itemStyle: { color: BUCKET_COLOR[base], opacity: 0.9 },
+        emphasis: { scale: 1.4 },
+        z: 3,
+      };
+    });
 
     const tradeSeries = [
       {
@@ -314,11 +595,12 @@ export default function MaCrossRuleCheckChart({ symbol, exchange, capital = 40, 
           lineStyle: { color: '#c3c2b7', width: 1 },
           z: 1,
         },
+        ...buildIndicatorSeries(lineData),
         ...ruleSeries,
         ...tradeSeries,
       ],
     };
-  }, [data]);
+  }, [data, lineData]);
 
   // Segundo gráfico: barra horizontal com a contagem de sinais por regra —
   // complementa o scatter/preço (que mostra QUANDO/ONDE) respondendo QUANTO
@@ -330,12 +612,12 @@ export default function MaCrossRuleCheckChart({ symbol, exchange, capital = 40, 
 
     const counts = new Map();
     for (const row of entryLog) {
-      const key = bucketOutcome(row.outcome);
+      const key = bucketKeyForRow(row);
       counts.set(key, (counts.get(key) ?? 0) + 1);
     }
     const total = entryLog.length;
-    const rows = BUCKET_ORDER
-      .filter(key => (counts.get(key) ?? 0) > 0)
+    const rows = [...counts.keys()]
+      .sort(compareBucketKeys)
       .map(key => ({ key, count: counts.get(key), pct: (counts.get(key) / total) * 100 }))
       .sort((a, b) => a.count - b.count); // ECharts categoria: primeiro item fica embaixo
 
@@ -348,7 +630,7 @@ export default function MaCrossRuleCheckChart({ symbol, exchange, capital = 40, 
         backgroundColor: '#1a1a19',
         borderColor: '#383835',
         textStyle: { color: '#ffffff', fontSize: 11 },
-        formatter: (p) => `${BUCKET_LABEL[rows[p.dataIndex].key]}<br/><b>${rows[p.dataIndex].count}</b> de ${total} sinais (${rows[p.dataIndex].pct.toFixed(0)}%)`,
+        formatter: (p) => `${bucketLabelForKey(rows[p.dataIndex].key)}<br/><b>${rows[p.dataIndex].count}</b> de ${total} sinais (${rows[p.dataIndex].pct.toFixed(0)}%)`,
       },
       xAxis: {
         type: 'value',
@@ -358,13 +640,13 @@ export default function MaCrossRuleCheckChart({ symbol, exchange, capital = 40, 
       },
       yAxis: {
         type: 'category',
-        data: rows.map(r => BUCKET_LABEL[r.key]),
+        data: rows.map(r => bucketLabelForKey(r.key)),
         axisLine: { lineStyle: { color: '#383835' } },
         axisLabel: { color: '#c3c2b7', fontSize: 10 },
       },
       series: [{
         type: 'bar',
-        data: rows.map(r => ({ value: r.count, itemStyle: { color: BUCKET_COLOR[r.key] } })),
+        data: rows.map(r => ({ value: r.count, itemStyle: { color: BUCKET_COLOR[bucketKeyBase(r.key)] } })),
         barWidth: 14,
         label: {
           show: true, position: 'right', color: '#c3c2b7', fontSize: 10,
@@ -446,6 +728,7 @@ export default function MaCrossRuleCheckChart({ symbol, exchange, capital = 40, 
           className={fillHeight ? 'flex-1 min-h-0' : ''}
           style={{
             marginTop: 8, background: '#1a1a19', borderRadius: 4, border: '1px solid #2c2c2a',
+            position: 'relative',
             ...(fillHeight ? { minHeight: 200 } : { height: 340 }),
           }}
         >
@@ -456,6 +739,118 @@ export default function MaCrossRuleCheckChart({ symbol, exchange, capital = 40, 
             notMerge
             lazyUpdate
           />
+
+          <div style={{
+            position: 'absolute', top: 0, right: 0, bottom: 0, zIndex: 10,
+            display: 'flex', flexDirection: 'row', alignItems: 'stretch', pointerEvents: 'none',
+          }}>
+            <button
+              type="button"
+              onClick={() => setLinesPanelCollapsed(v => !v)}
+              title={linesPanelCollapsed ? 'Mostrar linhas' : 'Recolher linhas'}
+              style={{
+                pointerEvents: 'auto', alignSelf: 'center', flexShrink: 0,
+                fontSize: 11, lineHeight: 1, width: 14, height: 30,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                cursor: 'pointer', borderRadius: 4, color: '#94a3b8',
+                background: 'rgba(0,0,0,0.55)', border: '1px solid #334155',
+              }}
+            >
+              {linesPanelCollapsed ? '‹' : '›'}
+            </button>
+
+            {!linesPanelCollapsed && (
+              <div style={{
+                pointerEvents: 'auto', width: 148, minWidth: 148, height: '100%',
+                overflowY: 'auto', overflowX: 'hidden', WebkitOverflowScrolling: 'touch',
+                background: 'rgba(10,10,10,0.75)', borderLeft: '1px solid #2c2c2a',
+                padding: 4, display: 'flex', flexDirection: 'column', gap: 3,
+                fontFamily: 'monospace', fontSize: 9,
+              }}>
+                <div style={{ textAlign: 'center', fontSize: 7, color: '#64748b', letterSpacing: 1.5, textTransform: 'uppercase', paddingBottom: 2 }}>
+                  Linhas
+                </div>
+
+                {strategyLineDefs.map(d => (
+                  <button
+                    key={d.id}
+                    type="button"
+                    onClick={() => toggleLine(d.id)}
+                    title={d.label}
+                    style={{ ...lineChipStyle(activeLineIds.has(d.id), d.color), width: '100%', textAlign: 'left', whiteSpace: 'normal', lineHeight: 1.25 }}
+                  >
+                    {d.label}
+                  </button>
+                ))}
+
+                {manualLines.map(d => (
+                  <div key={d.id} style={{ display: 'flex', alignItems: 'stretch', gap: 2 }}>
+                    <button
+                      type="button"
+                      onClick={() => toggleLine(d.id)}
+                      title={d.label}
+                      style={{ ...lineChipStyle(activeLineIds.has(d.id), d.color), flex: 1, minWidth: 0, textAlign: 'left', whiteSpace: 'normal', lineHeight: 1.25 }}
+                    >
+                      {d.label}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => removeManualLine(d.id)}
+                      title="Remover linha"
+                      style={{ fontFamily: 'monospace', fontSize: 11, color: '#e66767', background: 'transparent', border: 'none', cursor: 'pointer', padding: '0 2px', flexShrink: 0 }}
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+
+                {linesLoading && <span style={{ color: '#898781', fontSize: 8 }}>carregando…</span>}
+
+                <div style={{ borderTop: '1px solid #2c2c2a', marginTop: 2, paddingTop: 4, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <span style={{ color: '#898781', fontSize: 8 }}>+ EMA manual</span>
+                  <select value={addEmaPeriod} onChange={e => setAddEmaPeriod(e.target.value)} style={{ ...LINE_SELECT_STYLE, width: '100%' }}>
+                    {MANUAL_EMA_PERIODS.map(p => <option key={p} value={p}>{p}</option>)}
+                  </select>
+                  <select value={addEmaInterval} onChange={e => setAddEmaInterval(e.target.value)} style={{ ...LINE_SELECT_STYLE, width: '100%' }}>
+                    {MANUAL_EMA_INTERVALS.map(iv => <option key={iv} value={iv}>{iv}</option>)}
+                  </select>
+                  <select
+                    value={addEmaBandAbove ?? 'off'}
+                    onChange={e => setAddEmaBandAbove(e.target.value === 'off' ? null : (e.target.value === MANUAL_BAND_ADAPTIVE ? MANUAL_BAND_ADAPTIVE : Number(e.target.value)))}
+                    style={{ ...LINE_SELECT_STYLE, width: '100%', color: addEmaBandAbove != null ? BAND_SIDE_COLOR.ceiling : LINE_SELECT_STYLE.color }}
+                  >
+                    <option value="off">teto: off</option>
+                    <option value={MANUAL_BAND_ADAPTIVE}>teto: ADAPT</option>
+                    {MANUAL_BAND_PCT_OPTIONS.map(p => <option key={p} value={p}>teto: +{p}%</option>)}
+                  </select>
+                  <select
+                    value={addEmaBandBelow ?? 'off'}
+                    onChange={e => setAddEmaBandBelow(e.target.value === 'off' ? null : (e.target.value === MANUAL_BAND_ADAPTIVE ? MANUAL_BAND_ADAPTIVE : Number(e.target.value)))}
+                    style={{ ...LINE_SELECT_STYLE, width: '100%', color: addEmaBandBelow != null ? BAND_SIDE_COLOR.floor : LINE_SELECT_STYLE.color }}
+                  >
+                    <option value="off">piso: off</option>
+                    <option value={MANUAL_BAND_ADAPTIVE}>piso: ADAPT</option>
+                    {MANUAL_BAND_PCT_OPTIONS.map(p => <option key={p} value={p}>piso: −{p}%</option>)}
+                  </select>
+                  <button type="button" onClick={addManualEma} style={{ ...LINE_ADD_BTN_STYLE, width: '100%' }}>+ EMA</button>
+                </div>
+
+                <div style={{ borderTop: '1px solid #2c2c2a', marginTop: 2, paddingTop: 4, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <span style={{ color: '#898781', fontSize: 8 }}>+ BB manual</span>
+                  <select value={addBbPeriod} onChange={e => setAddBbPeriod(e.target.value)} style={{ ...LINE_SELECT_STYLE, width: '100%' }}>
+                    {BB_PERIOD_OPTIONS.map(p => <option key={p} value={p}>{p}</option>)}
+                  </select>
+                  <select value={addBbStdDev} onChange={e => setAddBbStdDev(Number(e.target.value))} style={{ ...LINE_SELECT_STYLE, width: '100%' }}>
+                    {BB_STDDEV_OPTIONS.map(s => <option key={s} value={s}>±{s}σ</option>)}
+                  </select>
+                  <select value={addBbInterval} onChange={e => setAddBbInterval(e.target.value)} style={{ ...LINE_SELECT_STYLE, width: '100%' }}>
+                    {MANUAL_EMA_INTERVALS.map(iv => <option key={iv} value={iv}>{iv}</option>)}
+                  </select>
+                  <button type="button" onClick={addManualBb} style={{ ...LINE_ADD_BTN_STYLE, width: '100%' }}>+ BB</button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       )}
 

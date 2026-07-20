@@ -2828,9 +2828,9 @@ export default function CandlestickChart() {
         {/* Linha 0 — abas + botões de janela de candles (separados dos intervalos) */}
         <div className="flex items-center gap-1 border-b border-p2/20 pb-0.5 md:pb-1 mb-0.5">
           {[
-            { id: 'chart',  label: 'Chart' },
-            { id: 'matrix', label: 'Matrix' },
-            { id: 'rules',  label: 'Regras' },
+            { id: 'chart',  label: t('chart.tab.chart') },
+            { id: 'matrix', label: t('chart.tab.matrix') },
+            { id: 'rules',  label: t('chart.tab.rules') },
           ].map(({ id, label }) => (
             <button
               key={id}
