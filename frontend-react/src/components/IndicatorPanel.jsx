@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useCurrency } from '../contexts/CurrencyContext';
-import { fetchCandlesAndIndicators, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter, fetchMarketCapFilter, fetchBollingerBandPositionFilter, fetchUserPrefs, saveUserPrefs } from '../services/api';
+import { fetchCandlesAndIndicators, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter, fetchMaDistanceFilter, fetchMarketCapFilter, fetchBollingerBandPositionFilter, fetchUserPrefs, saveUserPrefs } from '../services/api';
 import { useI18n } from '../i18n';
 import {
   createRsiFilter,
@@ -16,7 +16,7 @@ import {
 } from '../utils/createIchimokuFilter';
 import Tooltip from './Tooltip';
 import { MA_CROSS_PERIOD_MIN, MA_CROSS_PERIOD_MAX } from '../constants/maCrossConfigSchema';
-import { buildMaCrossFilterName, buildMaCompareFilterName } from '../utils/filterNames';
+import { buildMaCrossFilterName, buildMaCompareFilterName, buildMaDistanceFilterName } from '../utils/filterNames';
 
 const INTERVAL_MS = {
   '1m': 60_000, '3m': 180_000, '5m': 300_000, '15m': 900_000, '30m': 1_800_000,
@@ -133,6 +133,11 @@ function buildSummary(value, t) {
     const tol = value.tolerancePct ?? '0.5';
     return t('sum.ma_compare', p1, p2, cmp, ivLabel, Number(tol) > 0 ? tol : '');
   }
+  if (type === 'maDistance') {
+    const period = value.period ?? '21';
+    const cmp = (value.compare ?? 'above') === 'above' ? t('sum.above_short') : t('sum.bellow_short');
+    return t('sum.ma_distance', period, cmp, ivLabel);
+  }
   if (type === 'bollingerPosition') {
     const period = value.period ?? '20';
     const stdDev = value.stdDev ?? '2';
@@ -176,6 +181,7 @@ function indDescKey(type) {
   if (type === 'maTimeAbove') return 'ma_time_above';
   if (type === 'maCrossover') return 'ma_crossover';
   if (type === 'maCompare') return 'ma_compare';
+  if (type === 'maDistance') return 'ma_distance';
   if (type === 'bollingerPosition') return 'bb_position';
   return 'marketcap';
 }
@@ -245,6 +251,11 @@ function IndicatorRow({ value, onChange }) {
                 next.position = next.position ?? 'near_bottom';
                 next.proximityPct = '20';
               }
+              if (newType === 'maDistance') {
+                next.intervals = ['4h'];
+                next.period = '21';
+                next.compare = next.compare ?? 'above';
+              }
               onChange(next);
             }}
             title="Escolha o indicador técnico a ser analisado"
@@ -255,6 +266,7 @@ function IndicatorRow({ value, onChange }) {
             <option value="maTimeAbove">{t('ind.ma_time_above')}</option>
             <option value="maCrossover">{t('ind.ma_crossover')}</option>
             <option value="maCompare">{t('ind.ma_compare')}</option>
+            <option value="maDistance">{t('ind.ma_distance')}</option>
             <option value="relativeStrengthIndex">{t('ind.rsi')}</option>
             <option value="marketCap">{t('ind.marketcap')}</option>
             <option value="bollingerPosition">{t('ind.bb_position')}</option>
@@ -474,6 +486,31 @@ function IndicatorRow({ value, onChange }) {
                 ))}
               </select>
             )}
+          </>
+        )}
+
+        {type === 'maDistance' && (
+          <>
+            <select
+              className={sel}
+              value={value.period ?? '21'}
+              onChange={(e) => onChange({ ...value, period: e.target.value })}
+              title="Período da EMA (9, 21, 50 ou 200)"
+            >
+              <option value="9">EMA9</option>
+              <option value="21">EMA21</option>
+              <option value="50">EMA50</option>
+              <option value="200">EMA200</option>
+            </select>
+            <select
+              className={sel}
+              value={value.compare ?? 'above'}
+              onChange={(e) => onChange({ ...value, compare: e.target.value })}
+              title="Above = preço acima da EMA | Below = preço abaixo da EMA"
+            >
+              <option value="above">{t('cmp.above')}</option>
+              <option value="bellow">{t('cmp.bellow')}</option>
+            </select>
           </>
         )}
 
@@ -765,8 +802,9 @@ export default function IndicatorPanel({ open, onToggle }) {
       const maTimeIndicators = indicators.filter((ind) => ind.type === 'maTimeAbove');
       const maCrossIndicators = indicators.filter((ind) => ind.type === 'maCrossover');
       const maCompareIndicators = indicators.filter((ind) => ind.type === 'maCompare');
+      const maDistanceIndicators = indicators.filter((ind) => ind.type === 'maDistance');
       const bbPositionIndicators = indicators.filter((ind) => ind.type === 'bollingerPosition');
-      const otherIndicators = indicators.filter((ind) => ind.type && ind.type !== 'relativeStrengthIndex' && ind.type !== 'marketCap' && ind.type !== 'movingAverage' && ind.type !== 'maTimeAbove' && ind.type !== 'maCrossover' && ind.type !== 'maCompare' && ind.type !== 'bollingerPosition');
+      const otherIndicators = indicators.filter((ind) => ind.type && ind.type !== 'relativeStrengthIndex' && ind.type !== 'marketCap' && ind.type !== 'movingAverage' && ind.type !== 'maTimeAbove' && ind.type !== 'maCrossover' && ind.type !== 'maCompare' && ind.type !== 'maDistance' && ind.type !== 'bollingerPosition');
 
       // Salva intervalos e análises usadas nas preferências
       const allIntervals = [...new Set(indicators.flatMap(ind => ind.intervals ?? []))];
@@ -848,6 +886,22 @@ export default function IndicatorPanel({ open, onToggle }) {
             console.log('[frontend-react] MA compare:', filter.name, '—', filter.list.length, 'moedas',
               `(cache: ${filter.cache.hit ? 'hit' : 'miss'}, preset ${filter.cache.preset ?? '—'})`);
           }
+        }
+      }
+
+      // Distância do preço vs uma única EMA (ex.: acima da EMA21 no 4h)
+      for (const ind of maDistanceIndicators) {
+        const period = ind.period ?? '21';
+        const compare = ind.compare ?? 'above';
+        for (const interval of ind.intervals) {
+          const filter = await fetchMaDistanceFilter({ period, interval, compare, lang });
+          const expectedName = buildMaDistanceFilterName(interval, period, compare, lang);
+          addFilter({
+            name: filter.name ?? expectedName,
+            list: filter.list,
+            meta: filter.details,
+            scannedAt: filter.scannedAt,
+          });
         }
       }
 

@@ -84,6 +84,24 @@ export function buildMaCompareFilterName(interval, p1, p2, compare, lang = 'en',
   return name;
 }
 
+/** Distância do preço vs uma única EMA: 4h|madist|21|acim */
+export function buildMaDistanceFilterName(interval, period, compare, lang = 'en') {
+  const cmp = parseCompareToken(compare) === 'above' ? compareAboveToken(lang) : compareBelowToken(lang);
+  return `${interval}|madist|${period}|${cmp}`;
+}
+
+export function parseMaDistanceFilterName(name) {
+  const parts = String(name).split('|');
+  if (parts[1] !== 'madist' || parts.length < 4) return null;
+
+  const posCmp = parseCompareToken(parts[3]);
+  return {
+    interval: parts[0],
+    period: parseInt(parts[2], 10),
+    compare: posCmp === 'below' ? 'below' : 'above',
+  };
+}
+
 export function parseMaCompareFilterName(name) {
   const parts = String(name).split('|');
   if (parts[1] !== 'macmp' || parts.length < 5) return null;

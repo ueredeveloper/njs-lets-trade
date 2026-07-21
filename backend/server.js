@@ -21,7 +21,7 @@ const { ichimokuCloudRouter } = require('./technicals-indicators');
 //const {client} = require('./services/fetchClient');
 const {
   fetchCandles, fetchIchimokuCloud, fetchAllCurrencies,
-  fetchSMA, fetchRSI, fetchVWAP, fetch24HsVolume, fetchMarketCapFilter, fetchStablecoins, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter,
+  fetchSMA, fetchRSI, fetchVWAP, fetch24HsVolume, fetchMarketCapFilter, fetchStablecoins, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter, fetchMaDistanceFilter,
   fetchRsiOversoldRecovery, fetchMaCrossStats, fetchBollingerBandRecovery, fetchBollingerBandPositionFilter, fetchBollingerBands, fetchSimpleMaCross, fetchReloadCandles,
   fetchGateCurrencies, fetchGatePrefetch, fetchBinanceTrades, fetchGateTrades,
   fetchActiveTrades, fetchTradeFavorites, stgBotStatus, multitradeService, fetchMarketHighlights } = require('./services');
@@ -49,6 +49,7 @@ app.use('/services', fetchMaFilter)
 app.use('/services', fetchMaTimeAboveFilter)
 app.use('/services', fetchMaCrossoverFilter)
 app.use('/services', fetchMaCompareFilter)
+app.use('/services', fetchMaDistanceFilter)
 app.use('/services', fetchRsiOversoldRecovery)
 app.use('/services', fetchMaCrossStats)
 app.use('/services', fetchBollingerBandRecovery)
@@ -136,6 +137,8 @@ async function startServer() {
   await maCompareCache.loadFromDisk();
   const bbPositionCache = require('./cache/bbPositionCache');
   await bbPositionCache.loadFromDisk();
+  const maDistanceCache = require('./cache/maDistanceCache');
+  await maDistanceCache.loadFromDisk();
 
   app.listen(PORT, () => {
     const boot = ((Date.now() - t0) / 1000).toFixed(2);
@@ -211,6 +214,28 @@ async function startServer() {
 
   refreshBbPositionCache().catch(e => console.error('[bbPositionCache] erro no warmup:', e.message));
   setInterval(refreshBbPositionCache, bbPositionCache.REFRESH_TICK_MS);
+
+  async function refreshMaDistanceCache() {
+    try {
+      const { list: symbols } = await getActiveUsdtPairs();
+      if (!Array.isArray(symbols) || symbols.length === 0) return;
+      const stats = await maDistanceCache.refreshAll(symbols);
+      if (stats.computed > 0) {
+        const m = stats.matched ?? {};
+        console.log(
+          `[maDistanceCache] 21↑:${m['4h|21|acim'] ?? 0} 21↓:${m['4h|21|abaix'] ?? 0}`
+          + ` 50↑:${m['4h|50|acim'] ?? 0} 50↓:${m['4h|50|abaix'] ?? 0}`
+          + ` | disco:${stats.diskHits ?? 0} stale:${stats.diskStale ?? 0} api:${stats.apiFetches ?? 0}`
+          + ` | fila:${stats.queuePending ?? 0}`,
+        );
+      }
+    } catch (e) {
+      console.error('[maDistanceCache] erro no refresh:', e.message);
+    }
+  }
+
+  refreshMaDistanceCache().catch(e => console.error('[maDistanceCache] erro no warmup:', e.message));
+  setInterval(refreshMaDistanceCache, maDistanceCache.REFRESH_TICK_MS);
 
   const candleDiskWarmup = require('./utils/candleDiskWarmup');
   const CANDLE_WARMUP_TICK_MS = 60_000;

@@ -70,6 +70,7 @@ const T = {
     'ind.rsi':               'RSI',
     'ind.marketcap':         'Market Cap',
     'ind.bb_position':       'Posição na Banda de Bollinger',
+    'ind.ma_distance':       'Distância vs EMA',
 
     // Indicadores — descrições tooltip
     'ind.desc.ichimoku':     'Sistema japonês com 5 linhas que indica tendência, suporte/resistência e momentum. Muito usado em análise técnica avançada.',
@@ -80,6 +81,7 @@ const T = {
     'ind.desc.rsi':          'RSI — oscilador de 0 a 100 que mede força do movimento. Abaixo de 30 = sobrevendido (possível alta). Acima de 70 = sobrecomprado (possível queda).',
     'ind.desc.marketcap':    'Cruza dados da CoinGecko com o volume da Binance. "Giro de volume" detecta moedas com preço inflado sem sustentação real de negócios. "Diluição futura" identifica tokens com muita emissão ainda pendente.',
     'ind.desc.bb_position':  'Posição do preço dentro da Bollinger Bands (%B). Fundo = close perto da banda inferior (possível sobrevenda). Topo = close perto da banda superior (possível sobrecompra). Padrão: 4h, BB(20,2).',
+    'ind.desc.ma_distance':  'Quantos % o preço está acima (ou abaixo) de uma única EMA (9, 21, 50 ou 200). Mostra a distância na tabela e permite ordenar por moedas mais distantes ou mais próximas da média. Padrão: EMA21 no 4h.',
 
     // Comparadores
     'cmp.above':             'Acima',
@@ -143,6 +145,7 @@ const T = {
     'sum.ichimoku':          (l1, cmp, l2, ivl) => `Ichimoku: ${l1} ${cmp} ${l2} → ${ivl}`,
     'sum.ma':                (len, cmp, cdl, ivl) => `MA${len}: preço (${cdl}) ${cmp} da média → ${ivl}`,
     'sum.ma_time_above':     (per, pct, ivl) => `MA${per}: ≥${pct}% do histórico acima da MA → ${ivl}`,
+    'sum.ma_distance':       (period, cmp, ivl) => `Distância vs EMA${period} (${cmp}) → ${ivl}`,
     'sum.macross':           (p1, iv1, p2, iv2, mode, extra) => `EMA${p1}(${iv1}) × EMA${p2}(${iv2}): ${mode} ${extra}`,
     'sum.ma_compare':        (p1, p2, cmp, ivl, tol) => `EMA${p1} ${cmp} EMA${p2} → ${ivl}${tol ? ` (tol ±${tol}%)` : ''}`,
     'sum.ma_compare_near':   (p1, p2, mode, ivl, prox) => `EMA${p1} ${mode} EMA${p2} → ${ivl} (≤${prox}%)`,
@@ -466,6 +469,7 @@ const T = {
     'ind.rsi':               'RSI',
     'ind.marketcap':         'Market Cap',
     'ind.bb_position':       'Bollinger Band Position',
+    'ind.ma_distance':       'Distance vs EMA',
 
     // Indicator descriptions
     'ind.desc.ichimoku':     'Japanese system with 5 lines indicating trend, support/resistance and momentum. Widely used in advanced technical analysis.',
@@ -476,6 +480,7 @@ const T = {
     'ind.desc.rsi':          'RSI — oscillator from 0 to 100 measuring movement strength. Below 30 = oversold (possible rise). Above 70 = overbought (possible fall).',
     'ind.desc.marketcap':    'Cross-references CoinGecko data with Binance volume. "Volume turnover" detects coins with inflated prices. "Future dilution" identifies tokens with large pending supply.',
     'ind.desc.bb_position':  'Price position inside the Bollinger Bands (%B). Bottom = close near the lower band (possible oversold). Top = close near the upper band (possible overbought). Default: 4h, BB(20,2).',
+    'ind.desc.ma_distance':  'How far the price is above (or below) a single EMA (9, 21, 50 or 200), in %. Shown in the table, sortable by farthest or closest to the average. Default: EMA21 on 4h.',
 
     // Comparators
     'cmp.above':             'Above',
@@ -539,6 +544,7 @@ const T = {
     'sum.ichimoku':          (l1, cmp, l2, ivl) => `Ichimoku: ${l1} ${cmp} ${l2} → ${ivl}`,
     'sum.ma':                (len, cmp, cdl, ivl) => `MA${len}: price (${cdl}) ${cmp} MA → ${ivl}`,
     'sum.ma_time_above':     (per, pct, ivl) => `MA${per}: ≥${pct}% of history above MA → ${ivl}`,
+    'sum.ma_distance':       (period, cmp, ivl) => `Distance vs EMA${period} (${cmp}) → ${ivl}`,
     'sum.macross':           (p1, iv1, p2, iv2, mode, extra) => `EMA${p1}(${iv1}) × EMA${p2}(${iv2}): ${mode} ${extra}`,
     'sum.ma_compare':        (p1, p2, cmp, ivl, tol) => `EMA${p1} ${cmp} EMA${p2} → ${ivl}${tol ? ` (tol ±${tol}%)` : ''}`,
     'sum.ma_compare_near':   (p1, p2, mode, ivl, prox) => `EMA${p1} ${mode} EMA${p2} → ${ivl} (≤${prox}%)`,

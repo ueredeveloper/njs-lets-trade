@@ -7,7 +7,7 @@ import {
   fetchMaCrossoverFilter, fetchMultitradeTrades,
   fetchGateTrades, fetchBinanceTrades,
 } from '../services/api';
-import { parseMaCrossFilterName, parseMaCompareFilterName, parseFilterChartInterval } from '../utils/filterNames';
+import { parseMaCrossFilterName, parseMaCompareFilterName, parseMaDistanceFilterName, parseFilterChartInterval } from '../utils/filterNames';
 import { useI18n } from '../i18n';
 import MultitradeModal from './MultitradeModal';
 import MultitradeBotStateModal from './MultitradeBotStateModal';
@@ -310,6 +310,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   const [macrossTick, setMacrossTick]     = useState(0);
   const [macrossFavSort, setMacrossFavSort] = useState(() => loadMacrossFavSort());
   const [macmpTableSort, setMacmpTableSort] = useState(() => loadMacmpTableSort());
+  const [maDistSort, setMaDistSort] = useState('far'); // 'far' | 'near'
   const [tradeFavSort, setTradeFavSort] = useState(() => loadTradeFavSort());
 
   const macrossFavSymbols = useMemo(() => (
@@ -332,7 +333,6 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   const isNovasFilter = activeFilter?.startsWith('Favoritos|Novas|') ?? false;
   const isFavVolumeContext = !!favoriteView || isAltaFilter || isNovasFilter;
   const volumeSortActive = sortVolume !== 'none';
-  const tableColCount = isAltaFilter ? 6 : 5;
   const highlightMeta = useMemo(() => {
     if (!activeFilter || favoriteView) return null;
     return findFilter(activeFilter)?.meta ?? null;
@@ -370,6 +370,17 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   const macrossMeta = activeMacrossFilter?.meta ?? null;
   const macrossScannedAt = activeMacrossFilter?.scannedAt ?? null;
   const macmpMeta = activeMacmpFilter?.meta ?? null;
+
+  const activeMaDistanceFilter = useMemo(() => {
+    if (!activeFilter || favoriteView) return null;
+    const f = findFilter(activeFilter);
+    if (!f || !parseMaDistanceFilterName(f.name)) return null;
+    return f;
+  }, [activeFilter, favoriteView, findFilter]);
+
+  const maDistMeta = activeMaDistanceFilter?.meta ?? null;
+  const isMaDistanceFilter = !!activeMaDistanceFilter;
+  const tableColCount = isAltaFilter || isMaDistanceFilter ? 6 : 5;
 
   const filterChartInterval = useMemo(() => {
     if (!activeFilter || favoriteView) return null;
@@ -492,6 +503,12 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     } else if (activeMacmpFilter && macmpMeta && sortVolume === 'none' && !favoriteView) {
       list = filterMacmpTableRows(list, macmpMeta, macmpTableSort);
       list = list.slice().sort((a, b) => compareMacmpTableRows(a, b, macmpTableSort, macmpMeta));
+    } else if (activeMaDistanceFilter && maDistMeta && sortVolume === 'none' && !favoriteView) {
+      list = list.slice().sort((a, b) => {
+        const ga = maDistMeta[a.symbol]?.absGapPct ?? (maDistSort === 'far' ? -Infinity : Infinity);
+        const gb = maDistMeta[b.symbol]?.absGapPct ?? (maDistSort === 'far' ? -Infinity : Infinity);
+        return maDistSort === 'far' ? gb - ga : ga - gb;
+      });
     } else if (sortVolume !== 'none') {
       list = list.slice().sort((a, b) => {
         const va = (isAltaFilter || isNovasFilter) ? rowVolume24h(a, highlightMeta) : Number(a.volume) || 0;
@@ -501,7 +518,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     }
 
     return list;
-  }, [currencies, activeFilter, selectedQuote, findFilter, search, favoriteView, gateFavorites, binanceFavorites, multitradeFavorites, sortVolume, gateAll, filterVisibleCurrencies, isVisibleSymbol, currencyBySymbol, activeMacrossFilter, macrossScannedAt, macrossTick, isMacrossFavView, macrossFavSort, macrossFavStatus, macrossEntriesBySymbol, isTradesFavView, tradeFavSort, tradeFavSymbols, tradeFavStatus, isActiveFavView, activeTrades, isAltaFilter, isNovasFilter, highlightMeta, activeMacmpFilter, macmpMeta, macmpTableSort]);
+  }, [currencies, activeFilter, selectedQuote, findFilter, search, favoriteView, gateFavorites, binanceFavorites, multitradeFavorites, sortVolume, gateAll, filterVisibleCurrencies, isVisibleSymbol, currencyBySymbol, activeMacrossFilter, macrossScannedAt, macrossTick, isMacrossFavView, macrossFavSort, macrossFavStatus, macrossEntriesBySymbol, isTradesFavView, tradeFavSort, tradeFavSymbols, tradeFavStatus, isActiveFavView, activeTrades, isAltaFilter, isNovasFilter, highlightMeta, activeMacmpFilter, macmpMeta, macmpTableSort, activeMaDistanceFilter, maDistMeta, maDistSort]);
 
   const { slice: visibleRows, paddingTop, paddingBottom } = useVirtualRows({
     items: rows,
@@ -845,7 +862,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   const changeColPx = (isMobile ? 2.75 : 3) * REM_PX;
   const volColPx = (isMobile ? 2.25 : 2.5) * REM_PX;
   const spinnerColPx = (isMobile ? 0.75 : 1) * REM_PX;
-  const fixedColsPx = priceColPx + volColPx + spinnerColPx + (isAltaFilter ? changeColPx : 0);
+  const fixedColsPx = priceColPx + volColPx + spinnerColPx + (isAltaFilter || isMaDistanceFilter ? changeColPx : 0);
   const favColWidthPx = favColMinPx;
   const parColWidthPx = tableContainerWidth > 0
     ? Math.max(tableContainerWidth - favColWidthPx - fixedColsPx, 0)
@@ -987,7 +1004,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
             <col className="currency-table-col-fav" style={{ width: favColWidth }} />
             <col className="currency-table-col-par" style={{ width: parColWidth }} />
             <col className="currency-table-col-price" style={{ width: priceColWidth }} />
-            {isAltaFilter && <col className="currency-table-col-change" style={{ width: changeColWidth }} />}
+            {(isAltaFilter || isMaDistanceFilter) && <col className="currency-table-col-change" style={{ width: changeColWidth }} />}
             <col className="currency-table-col-vol" style={{ width: volColWidth }} />
             <col className="currency-table-col-spinner" style={{ width: spinnerColWidth }} />
           </colgroup>
@@ -1063,6 +1080,15 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                   title={t('table.change_24h_tip')}
                 >
                   {t('table.change_24h')}
+                </th>
+              )}
+              {isMaDistanceFilter && (
+                <th
+                  className="text-right px-2 py-1 text-p5 opacity-80 font-normal uppercase tracking-wider whitespace-nowrap cursor-pointer hover:opacity-100 select-none"
+                  title="Ordenar por distância: mais distante ↔ mais próxima"
+                  onClick={() => setMaDistSort((s) => (s === 'far' ? 'near' : 'far'))}
+                >
+                  Dist% {maDistSort === 'far' ? '↓' : '↑'}
                 </th>
               )}
               <th
@@ -1333,6 +1359,17 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                       {changePct != null ? fmtChangePct(changePct) : '—'}
                     </td>
                   )}
+                  {isMaDistanceFilter && (() => {
+                    const gapPct = maDistMeta?.[item.symbol]?.gapPct;
+                    return (
+                      <td
+                        className="px-2 py-1 text-right font-mono text-[10px] font-semibold"
+                        style={{ color: gapPct == null ? 'rgba(255,255,255,0.35)' : gapPct >= 0 ? '#22c55e' : '#ef4444' }}
+                      >
+                        {gapPct != null ? fmtChangePct(gapPct) : '—'}
+                      </td>
+                    );
+                  })()}
                   <td className="px-2 py-1 text-right font-mono text-[10px]">
                     {isTradesFavView && !volumeSortActive ? (
                       <span
@@ -1433,7 +1470,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                         {base}<span className="opacity-40 font-normal text-[8px]">/{quote}</span>
                       </td>
                       <td className="px-2 py-1 text-right font-mono">{item.price > 0 ? formatPrice(item.price) : '—'}</td>
-                      {isAltaFilter && <td className="px-2 py-1 text-right font-mono text-[10px] opacity-35">—</td>}
+                      {(isAltaFilter || isMaDistanceFilter) && <td className="px-2 py-1 text-right font-mono text-[10px] opacity-35">—</td>}
                       <td className="px-2 py-1 text-right font-mono text-[10px] opacity-60">{formatVolume(item.volume)}</td>
                       <td className="pr-1 text-center">
                         {loadingSymbol === item.symbol

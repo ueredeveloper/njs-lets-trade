@@ -562,6 +562,19 @@ export async function fetchMaCompareFilter({
   }
 }
 
+/** Filtra moedas por distância do preço vs uma única EMA (ex.: acima da EMA21 no 4h). */
+export async function fetchMaDistanceFilter({
+  interval = '4h', period = '21', compare = 'above', lang = 'pt',
+} = {}) {
+  const params = new URLSearchParams({ interval, period: String(period), compare, lang });
+  const res = await fetch(`/services/ma-distance-filter?${params}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `ma-distance-filter falhou: HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 /** Gap e cruzamento MA por símbolo (favoritos MA-Cross). */
 export async function fetchMaCrossStatus(items, { tolerancePct = '0.5', crossLookbackMin = 1440 } = {}) {
   const res = await fetch('/services/ma-cross-status', {
