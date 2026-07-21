@@ -35,6 +35,7 @@ async function get24hVolumeFilters() {
 
   return [
     activeWithVolume,
+    makeFilter("Mercado|1M⇾",     1_000_000),
     makeFilter("Mercado|3M⇾",     3_000_000),
     makeFilter("Mercado|5M⇾",     5_000_000),
     makeFilter("Mercado|5M⇿30M",  5_000_000, 30_000_000),
