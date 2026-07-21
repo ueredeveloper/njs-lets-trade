@@ -2903,16 +2903,40 @@ export default function CandlestickChart() {
 
       {/* Conteúdo da aba */}
       {activeTab === 'rules' ? (
-        <div className="flex-1 min-h-0 flex flex-col px-2 md:px-3 py-2">
+        <div className="flex-1 min-h-0 flex flex-col px-2 md:px-3 py-2 relative">
           {selectedChart?.symbol ? (
             <MaCrossRuleCheckChart
               symbol={selectedChart.symbol}
               exchange={selectedChart.source === 'gate' ? 'gate' : 'binance'}
               fillHeight
+              activeIndicators={activeIndicators}
+              quickEmaGroups={quickEmaGroups}
+              bollingerBands={bollingerBands}
+              panelButtons={chartPanelButtons}
+              candleWindowCount={hasExplicitCandleWindow ? displayCandleCount : null}
+              rightPad={panelPad}
             />
           ) : (
             <div className="text-p5/50 text-xs font-mono">Selecione uma moeda pra conferir as regras.</div>
           )}
+          <ChartIndicatorPanel
+            activeIndicators={activeIndicators}
+            toggleIndicator={toggleIndicator}
+            quickEmaGroups={quickEmaGroups}
+            addQuickEmaGroup={addQuickEmaGroup}
+            removeQuickEmaGroup={removeQuickEmaGroup}
+            updateQuickEmaGroupInterval={updateQuickEmaGroupInterval}
+            toggleQuickEmaGroupPeriod={toggleQuickEmaGroupPeriod}
+            updateQuickEmaGroupBandPct={updateQuickEmaGroupBandPct}
+            updateQuickEmaGroupBandPeriod={updateQuickEmaGroupBandPeriod}
+            bollingerBands={bollingerBands}
+            setBollingerBands={setBollingerBands}
+            overlayMaLoading={overlayMaLoading}
+            panelButtons={chartPanelButtons}
+            collapsed={panelCollapsed}
+            onToggleCollapse={() => setPanelCollapsed(v => !v)}
+            onLayoutChange={handlePanelLayoutChange}
+          />
         </div>
       ) : activeTab === 'chart' ? (
         <div ref={chartWrapRef} className="flex-1 min-h-0 relative">

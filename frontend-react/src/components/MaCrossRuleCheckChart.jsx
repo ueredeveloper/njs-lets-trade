@@ -2,26 +2,12 @@ import { useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import ReactECharts from 'echarts-for-react';
 import { fetchMultitradeBacktest } from '../services/api';
 import { INTERVAL_MS } from '../utils/chartView';
-import { fetchEmaLine, fetchAdaptiveBandLine, fetchAdaptiveBandLineAuto, fetchBollingerLines, strategyLineDefsFromTradeConfig } from '../utils/overlayIndicators';
-import { BB_PERIOD_OPTIONS, BB_STDDEV_OPTIONS } from '../utils/uiPreferences';
+import {
+  fetchEmaLine, fetchAdaptiveBandLine, fetchAdaptiveBandLineAuto, fetchBollingerLines,
+  strategyLineDefsFromTradeConfig, panelLineDefsFromSharedState,
+} from '../utils/overlayIndicators';
 
 const RULE_CHECK_CANDLES = 50;
-
-const MANUAL_EMA_INTERVALS = ['1m', '5m', '15m', '30m', '1h', '2h', '4h', '8h', '12h', '1d'];
-const MANUAL_EMA_PERIODS = ['9', '21', '50', '200'];
-const MANUAL_BAND_PCT_OPTIONS = [4, 3, 2, 1];
-const MANUAL_BAND_ADAPTIVE = 'adaptive';
-const MANUAL_LINE_PALETTE = ['#e879f9', '#38bdf8', '#a3e635', '#fca5a5', '#fdba74', '#67e8f9'];
-const BAND_SIDE_COLOR = { floor: '#2bb3a3', ceiling: '#e0653f' };
-
-const LINE_SELECT_STYLE = {
-  background: '#111', color: '#c3c2b7', border: '1px solid #383835',
-  borderRadius: 3, padding: '1px 3px', fontFamily: 'monospace', fontSize: 10,
-};
-const LINE_ADD_BTN_STYLE = {
-  background: '#2a2d3a', color: '#94a3b8', border: '1px solid #3a3d4a',
-  borderRadius: 3, padding: '2px 6px', fontFamily: 'monospace', fontSize: 10, cursor: 'pointer',
-};
 
 function lineChipStyle(active, color) {
   return {
@@ -294,7 +280,11 @@ function buildIndicatorSeries(lineData) {
   });
 }
 
-export default function MaCrossRuleCheckChart({ symbol, exchange, capital = 40, strategyId, tradeConfig, fillHeight = false }) {
+export default function MaCrossRuleCheckChart({
+  symbol, exchange, capital = 40, strategyId, tradeConfig, fillHeight = false,
+  activeIndicators, quickEmaGroups, bollingerBands, panelButtons, candleWindowCount,
+  rightPad = 0,
+}) {
   const [sinceInput, setSinceInput] = useState(() => defaultSinceForCandles(tradeConfig?.entry?.ma1?.interval));
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -304,29 +294,29 @@ export default function MaCrossRuleCheckChart({ symbol, exchange, capital = 40, 
   const summaryChartRef = useRef(null);
   const summaryWrapRef = useRef(null);
 
-  // Linhas de indicador (EMA/Bollinger) sobrepostas ao preço — as da própria
-  // estratégia entram ligadas por padrão (podem ser desligadas), mais um
-  // manipulador pra adicionar EMAs/BB manuais além das que a regra usa.
+  // Linhas de indicador sobrepostas ao preço, de duas origens:
+  // 1) as da própria estratégia (EMA/BB/bandas que o tradeConfig usa de fato),
+  //    ligadas por padrão, com chip pra desligar cada uma;
+  // 2) as do MESMO manipulador do gráfico principal (EMA9/21/50/200 rápidas,
+  //    grupos de EMA com banda fixa/ADAPT, Bollinger manual) — compartilhando
+  //    o estado (activeIndicators/quickEmaGroups/bollingerBands) já configurado
+  //    lá, sem precisar reconfigurar nada aqui.
   const strategyLineDefs = useMemo(() => strategyLineDefsFromTradeConfig(tradeConfig), [tradeConfig]);
   const strategyLineIdsKey = strategyLineDefs.map(d => d.id).join(',');
-  const [manualLines, setManualLines] = useState([]);
+  const chartInterval = tradeConfig?.entry?.ma1?.interval ?? '15m';
+  const panelDefs = useMemo(
+    () => panelLineDefsFromSharedState({ activeIndicators, quickEmaGroups, bollingerBands, panelButtons, chartInterval }),
+    [activeIndicators, quickEmaGroups, bollingerBands, panelButtons, chartInterval],
+  );
+  const panelDefIdsKey = panelDefs.map(d => d.id).join(',');
+
   const [activeLineIds, setActiveLineIds] = useState(() => new Set(strategyLineDefs.map(d => d.id)));
   const [lineData, setLineData] = useState({});
   const [linesLoading, setLinesLoading] = useState(false);
-  const [linesPanelCollapsed, setLinesPanelCollapsed] = useState(false);
-  const [addEmaInterval, setAddEmaInterval] = useState('1h');
-  const [addEmaPeriod, setAddEmaPeriod] = useState('50');
-  const [addEmaBandAbove, setAddEmaBandAbove] = useState(null);
-  const [addEmaBandBelow, setAddEmaBandBelow] = useState(null);
-  const [addBbInterval, setAddBbInterval] = useState('4h');
-  const [addBbPeriod, setAddBbPeriod] = useState(BB_PERIOD_OPTIONS[1]);
-  const [addBbStdDev, setAddBbStdDev] = useState(BB_STDDEV_OPTIONS[1]);
 
-  // Ao trocar de moeda/estratégia as linhas da regra mudam — volta todas pro padrão (ligadas)
-  // e limpa as manuais, que pertenciam ao símbolo anterior.
+  // Ao trocar de moeda/estratégia as linhas da regra mudam — volta todas pro padrão (ligadas).
   useEffect(() => {
     setActiveLineIds(new Set(strategyLineDefs.map(d => d.id)));
-    setManualLines([]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [symbol, strategyLineIdsKey]);
 
@@ -338,75 +328,18 @@ export default function MaCrossRuleCheckChart({ symbol, exchange, capital = 40, 
     });
   }, []);
 
-  const addManualEma = useCallback(() => {
-    const period = Number(addEmaPeriod);
-    const interval = addEmaInterval;
-    const baseId = `manual-ema-${period}-${interval}`;
-
-    const bandDef = (side, sel) => {
-      if (sel == null) return null;
-      const isAdaptive = sel === MANUAL_BAND_ADAPTIVE;
-      return {
-        id: `manual-band-${side}-${period}-${interval}-${sel}`,
-        kind: 'band',
-        side, period, interval,
-        pct: isAdaptive ? null : Number(sel),
-        mode: isAdaptive ? 'adaptive' : 'fixed',
-        color: BAND_SIDE_COLOR[side],
-        label: isAdaptive
-          ? `${side === 'floor' ? 'Piso' : 'Teto'} ADAPT EMA${period} ${interval}`
-          : `${side === 'floor' ? 'Piso' : 'Teto'} manual EMA${period} ${interval} (${side === 'floor' ? '−' : '+'}${sel}%)`,
-      };
-    };
-    const newBands = [bandDef('floor', addEmaBandBelow), bandDef('ceiling', addEmaBandAbove)].filter(Boolean);
-
-    setManualLines(prev => {
-      const next = [...prev];
-      if (!next.some(l => l.id === baseId)) {
-        next.push({
-          id: baseId, kind: 'ema', period, interval,
-          color: MANUAL_LINE_PALETTE[next.length % MANUAL_LINE_PALETTE.length],
-          label: `EMA${period} ${interval}`,
-        });
-      }
-      for (const band of newBands) {
-        if (!next.some(l => l.id === band.id)) next.push(band);
-      }
-      return next;
-    });
-    setActiveLineIds(prev => {
-      const next = new Set(prev).add(baseId);
-      for (const band of newBands) next.add(band.id);
-      return next;
-    });
-  }, [addEmaPeriod, addEmaInterval, addEmaBandAbove, addEmaBandBelow]);
-
-  const addManualBb = useCallback(() => {
-    const period = Number(addBbPeriod);
-    const stdDev = Number(addBbStdDev);
-    const interval = addBbInterval;
-    const id = `manual-bb-${period}-${interval}-${stdDev}`;
-    setManualLines(prev => prev.some(l => l.id === id) ? prev : [...prev, {
-      id, kind: 'bb', period, stdDev, interval,
-      color: '#a78bfa',
-      label: `BB${period}@${interval} ±${stdDev}σ`,
-    }]);
-    setActiveLineIds(prev => new Set(prev).add(id));
-  }, [addBbPeriod, addBbStdDev, addBbInterval]);
-
-  const removeManualLine = useCallback((id) => {
-    setManualLines(prev => prev.filter(l => l.id !== id));
-    setActiveLineIds(prev => { const next = new Set(prev); next.delete(id); return next; });
-  }, []);
-
-  const allLineDefs = useMemo(() => [...strategyLineDefs, ...manualLines], [strategyLineDefs, manualLines]);
   const activeLineIdsKey = [...activeLineIds].sort().join(',');
 
   // Busca os pontos reais de EMA/Bollinger (candles + indicador no backend) pras
-  // linhas ligadas, cobrindo a janela do backtest (data.priceSeries) + warmup do período.
+  // linhas ligadas (regra) + as do manipulador compartilhado (sempre ativas —
+  // seu próprio on/off já é o fato de estarem ou não em quickEmaGroups/bollingerBands),
+  // cobrindo a janela do backtest (data.priceSeries) + warmup do período.
   useEffect(() => {
     if (!data || !symbol) { setLineData({}); return undefined; }
-    const activeDefs = allLineDefs.filter(d => activeLineIds.has(d.id));
+    const activeDefs = [
+      ...strategyLineDefs.filter(d => activeLineIds.has(d.id)),
+      ...panelDefs,
+    ];
     if (!activeDefs.length) { setLineData({}); return undefined; }
 
     const fromMs = data.priceSeries?.[0]?.time ?? Date.now();
@@ -441,7 +374,7 @@ export default function MaCrossRuleCheckChart({ symbol, exchange, capital = 40, 
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, symbol, exchange, activeLineIdsKey]);
+  }, [data, symbol, exchange, activeLineIdsKey, panelDefIdsKey]);
 
   const runWithSince = useCallback(async (sinceValue) => {
     if (!symbol) return;
@@ -463,15 +396,26 @@ export default function MaCrossRuleCheckChart({ symbol, exchange, capital = 40, 
 
   const run = useCallback(() => runWithSince(sinceInput), [runWithSince, sinceInput]);
 
-  // Ao trocar de moeda com a aba Regras aberta, refaz a janela (últimas 50 candles)
-  // e roda a simulação automaticamente, sem esperar o clique em "Verificar regras".
+  // Ao trocar de moeda com a aba Regras aberta, refaz a janela (últimas 50 candles,
+  // ou a quantidade escolhida nos botões 20/50/100 do gráfico principal) e roda a
+  // simulação automaticamente, sem esperar o clique em "Verificar regras".
   useEffect(() => {
     if (!symbol) return;
-    const since = defaultSinceForCandles(tradeConfig?.entry?.ma1?.interval);
+    const since = defaultSinceForCandles(tradeConfig?.entry?.ma1?.interval, candleWindowCount || RULE_CHECK_CANDLES);
     setSinceInput(since);
     runWithSince(since);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [symbol, exchange]);
+
+  // Botões 20/50/100 candles do gráfico principal (compartilhados entre abas) —
+  // refaz a janela "Desde" e a simulação com a nova quantidade.
+  useEffect(() => {
+    if (!symbol || !candleWindowCount) return;
+    const since = defaultSinceForCandles(tradeConfig?.entry?.ma1?.interval, candleWindowCount);
+    setSinceInput(since);
+    runWithSince(since);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [candleWindowCount]);
 
   const option = useMemo(() => {
     if (!data) return null;
@@ -688,7 +632,13 @@ export default function MaCrossRuleCheckChart({ symbol, exchange, capital = 40, 
   }, [summaryOption]);
 
   return (
-    <div className={fillHeight ? 'flex flex-col h-full min-h-0' : ''} style={fillHeight ? undefined : { marginTop: 8 }}>
+    // paddingRight reserva o espaço do painel de indicadores (ChartIndicatorPanel,
+    // absoluto sobre este componente no CandlestickChart) pra ele não cobrir o
+    // gráfico do bot quando aberto — mesma ideia do chartRightPad do gráfico principal.
+    <div
+      className={fillHeight ? 'flex flex-col h-full min-h-0' : ''}
+      style={{ ...(fillHeight ? null : { marginTop: 8 }), paddingRight: rightPad }}
+    >
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontFamily: 'monospace', fontSize: 11, flexShrink: 0 }}>
         <span style={{ color: '#c3c2b7', fontWeight: 'bold' }}>{symbol ?? '—'}</span>
         <span style={{ color: '#898781' }}>Desde:</span>
@@ -718,7 +668,25 @@ export default function MaCrossRuleCheckChart({ symbol, exchange, capital = 40, 
             {data.summary.entrySignals} cruzamento(s) · {data.summary.trades} trade(s) · PnL {fmtPct(data.summary.totalPnlPct)}
           </span>
         )}
+        {linesLoading && <span style={{ color: '#898781' }}>linhas…</span>}
       </div>
+
+      {strategyLineDefs.length > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', fontFamily: 'monospace', fontSize: 10, marginTop: 6, flexShrink: 0 }}>
+          <span style={{ color: '#898781' }}>Linhas da regra:</span>
+          {strategyLineDefs.map(d => (
+            <button
+              key={d.id}
+              type="button"
+              onClick={() => toggleLine(d.id)}
+              title={d.label}
+              style={lineChipStyle(activeLineIds.has(d.id), d.color)}
+            >
+              {d.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {error && <div style={{ color: '#e66767', fontSize: 11, marginTop: 6, fontFamily: 'monospace', flexShrink: 0 }}>{error}</div>}
 
@@ -728,7 +696,6 @@ export default function MaCrossRuleCheckChart({ symbol, exchange, capital = 40, 
           className={fillHeight ? 'flex-1 min-h-0' : ''}
           style={{
             marginTop: 8, background: '#1a1a19', borderRadius: 4, border: '1px solid #2c2c2a',
-            position: 'relative',
             ...(fillHeight ? { minHeight: 200 } : { height: 340 }),
           }}
         >
@@ -739,118 +706,6 @@ export default function MaCrossRuleCheckChart({ symbol, exchange, capital = 40, 
             notMerge
             lazyUpdate
           />
-
-          <div style={{
-            position: 'absolute', top: 0, right: 0, bottom: 0, zIndex: 10,
-            display: 'flex', flexDirection: 'row', alignItems: 'stretch', pointerEvents: 'none',
-          }}>
-            <button
-              type="button"
-              onClick={() => setLinesPanelCollapsed(v => !v)}
-              title={linesPanelCollapsed ? 'Mostrar linhas' : 'Recolher linhas'}
-              style={{
-                pointerEvents: 'auto', alignSelf: 'center', flexShrink: 0,
-                fontSize: 11, lineHeight: 1, width: 14, height: 30,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                cursor: 'pointer', borderRadius: 4, color: '#94a3b8',
-                background: 'rgba(0,0,0,0.55)', border: '1px solid #334155',
-              }}
-            >
-              {linesPanelCollapsed ? '‹' : '›'}
-            </button>
-
-            {!linesPanelCollapsed && (
-              <div style={{
-                pointerEvents: 'auto', width: 148, minWidth: 148, height: '100%',
-                overflowY: 'auto', overflowX: 'hidden', WebkitOverflowScrolling: 'touch',
-                background: 'rgba(10,10,10,0.75)', borderLeft: '1px solid #2c2c2a',
-                padding: 4, display: 'flex', flexDirection: 'column', gap: 3,
-                fontFamily: 'monospace', fontSize: 9,
-              }}>
-                <div style={{ textAlign: 'center', fontSize: 7, color: '#64748b', letterSpacing: 1.5, textTransform: 'uppercase', paddingBottom: 2 }}>
-                  Linhas
-                </div>
-
-                {strategyLineDefs.map(d => (
-                  <button
-                    key={d.id}
-                    type="button"
-                    onClick={() => toggleLine(d.id)}
-                    title={d.label}
-                    style={{ ...lineChipStyle(activeLineIds.has(d.id), d.color), width: '100%', textAlign: 'left', whiteSpace: 'normal', lineHeight: 1.25 }}
-                  >
-                    {d.label}
-                  </button>
-                ))}
-
-                {manualLines.map(d => (
-                  <div key={d.id} style={{ display: 'flex', alignItems: 'stretch', gap: 2 }}>
-                    <button
-                      type="button"
-                      onClick={() => toggleLine(d.id)}
-                      title={d.label}
-                      style={{ ...lineChipStyle(activeLineIds.has(d.id), d.color), flex: 1, minWidth: 0, textAlign: 'left', whiteSpace: 'normal', lineHeight: 1.25 }}
-                    >
-                      {d.label}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => removeManualLine(d.id)}
-                      title="Remover linha"
-                      style={{ fontFamily: 'monospace', fontSize: 11, color: '#e66767', background: 'transparent', border: 'none', cursor: 'pointer', padding: '0 2px', flexShrink: 0 }}
-                    >
-                      ×
-                    </button>
-                  </div>
-                ))}
-
-                {linesLoading && <span style={{ color: '#898781', fontSize: 8 }}>carregando…</span>}
-
-                <div style={{ borderTop: '1px solid #2c2c2a', marginTop: 2, paddingTop: 4, display: 'flex', flexDirection: 'column', gap: 2 }}>
-                  <span style={{ color: '#898781', fontSize: 8 }}>+ EMA manual</span>
-                  <select value={addEmaPeriod} onChange={e => setAddEmaPeriod(e.target.value)} style={{ ...LINE_SELECT_STYLE, width: '100%' }}>
-                    {MANUAL_EMA_PERIODS.map(p => <option key={p} value={p}>{p}</option>)}
-                  </select>
-                  <select value={addEmaInterval} onChange={e => setAddEmaInterval(e.target.value)} style={{ ...LINE_SELECT_STYLE, width: '100%' }}>
-                    {MANUAL_EMA_INTERVALS.map(iv => <option key={iv} value={iv}>{iv}</option>)}
-                  </select>
-                  <select
-                    value={addEmaBandAbove ?? 'off'}
-                    onChange={e => setAddEmaBandAbove(e.target.value === 'off' ? null : (e.target.value === MANUAL_BAND_ADAPTIVE ? MANUAL_BAND_ADAPTIVE : Number(e.target.value)))}
-                    style={{ ...LINE_SELECT_STYLE, width: '100%', color: addEmaBandAbove != null ? BAND_SIDE_COLOR.ceiling : LINE_SELECT_STYLE.color }}
-                  >
-                    <option value="off">teto: off</option>
-                    <option value={MANUAL_BAND_ADAPTIVE}>teto: ADAPT</option>
-                    {MANUAL_BAND_PCT_OPTIONS.map(p => <option key={p} value={p}>teto: +{p}%</option>)}
-                  </select>
-                  <select
-                    value={addEmaBandBelow ?? 'off'}
-                    onChange={e => setAddEmaBandBelow(e.target.value === 'off' ? null : (e.target.value === MANUAL_BAND_ADAPTIVE ? MANUAL_BAND_ADAPTIVE : Number(e.target.value)))}
-                    style={{ ...LINE_SELECT_STYLE, width: '100%', color: addEmaBandBelow != null ? BAND_SIDE_COLOR.floor : LINE_SELECT_STYLE.color }}
-                  >
-                    <option value="off">piso: off</option>
-                    <option value={MANUAL_BAND_ADAPTIVE}>piso: ADAPT</option>
-                    {MANUAL_BAND_PCT_OPTIONS.map(p => <option key={p} value={p}>piso: −{p}%</option>)}
-                  </select>
-                  <button type="button" onClick={addManualEma} style={{ ...LINE_ADD_BTN_STYLE, width: '100%' }}>+ EMA</button>
-                </div>
-
-                <div style={{ borderTop: '1px solid #2c2c2a', marginTop: 2, paddingTop: 4, display: 'flex', flexDirection: 'column', gap: 2 }}>
-                  <span style={{ color: '#898781', fontSize: 8 }}>+ BB manual</span>
-                  <select value={addBbPeriod} onChange={e => setAddBbPeriod(e.target.value)} style={{ ...LINE_SELECT_STYLE, width: '100%' }}>
-                    {BB_PERIOD_OPTIONS.map(p => <option key={p} value={p}>{p}</option>)}
-                  </select>
-                  <select value={addBbStdDev} onChange={e => setAddBbStdDev(Number(e.target.value))} style={{ ...LINE_SELECT_STYLE, width: '100%' }}>
-                    {BB_STDDEV_OPTIONS.map(s => <option key={s} value={s}>±{s}σ</option>)}
-                  </select>
-                  <select value={addBbInterval} onChange={e => setAddBbInterval(e.target.value)} style={{ ...LINE_SELECT_STYLE, width: '100%' }}>
-                    {MANUAL_EMA_INTERVALS.map(iv => <option key={iv} value={iv}>{iv}</option>)}
-                  </select>
-                  <button type="button" onClick={addManualBb} style={{ ...LINE_ADD_BTN_STYLE, width: '100%' }}>+ BB</button>
-                </div>
-              </div>
-            )}
-          </div>
         </div>
       )}
 

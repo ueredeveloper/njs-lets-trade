@@ -184,5 +184,104 @@ export function strategyLineDefsFromTradeConfig(tradeConfig) {
     });
   }
 
+  // Filtro de entrada por Bollinger Bands (%B) — alternativa/complemento ao
+  // entryEmaApproach quando esse é desligado (ex.: BANKUSDT). Sem essa linha
+  // o usuário via só o ponto "bloqueada — filtro BB" no preço, sem a banda
+  // real que explica o %B.
+  const entryBbFilter = tradeConfig.entryBbFilter;
+  if (entryBbFilter?.enabled && entryBbFilter?.interval && entryBbFilter?.period) {
+    defs.push({
+      id: `bb-entry-filter-${entryBbFilter.period}-${entryBbFilter.interval}-${entryBbFilter.stdDev ?? 2}`,
+      kind: 'bb',
+      period: entryBbFilter.period,
+      stdDev: entryBbFilter.stdDev ?? 2,
+      interval: entryBbFilter.interval,
+      color: '#f472b6',
+      label: `BB${entryBbFilter.period}@${entryBbFilter.interval} (entrada, %B≤${entryBbFilter.maxPctB ?? 0.3})`,
+    });
+  }
+
+  // Nota: entryBbLower (gatilho independente pela banda inferior) NÃO entra
+  // aqui — o backtest usado pelo Hist. Bot (maCrossBacktest.js) não o simula,
+  // só o bot ao vivo o avalia. Desenhar a banda daria a entender que ela
+  // influencia o resultado mostrado neste gráfico, o que não é verdade.
+
+  return defs;
+}
+
+const PANEL_INDICATOR_PERIODS = { ma9: 9, ma21: 21, ma50: 50, ma200: 200 };
+const PANEL_EMA_PALETTE = { ma9: '#e879f9', ma21: '#fb923c', ma50: '#22d3ee', ma200: '#f59e0b' };
+const QUICK_EMA_PERIOD_COLOR = { '9': '#34d399', '21': '#60a5fa', '50': '#c084fc', '200': '#f97316' };
+const QUICK_BAND_COLOR = { floor: '#2bb3a3', ceiling: '#e0653f' };
+
+/**
+ * Deriva as mesmas linhas que o manipulador do gráfico principal desenharia
+ * (EMA9/21/50/200 rápidas, grupos de EMA rápida com banda fixa/ADAPT, e
+ * Bollinger Bands manual) a partir do MESMO estado compartilhado
+ * (activeIndicators/quickEmaGroups/bollingerBands/panelButtons) — assim o
+ * Hist. Bot usa exatamente o que o usuário já configurou no gráfico normal,
+ * sem precisar reconfigurar nada.
+ */
+export function panelLineDefsFromSharedState({ activeIndicators, quickEmaGroups, bollingerBands, panelButtons, chartInterval }) {
+  const defs = [];
+  const showKey = (key) => (panelButtons ? panelButtons[key] !== false : true);
+
+  for (const [id, period] of Object.entries(PANEL_INDICATOR_PERIODS)) {
+    if (!activeIndicators?.includes(id) || !showKey(id)) continue;
+    defs.push({
+      id: `panel-${id}-${chartInterval}`,
+      kind: 'ema',
+      period, interval: chartInterval,
+      color: PANEL_EMA_PALETTE[id],
+      label: `EMA${period} ${chartInterval}`,
+    });
+  }
+
+  for (const group of quickEmaGroups ?? []) {
+    for (const period of group.periods ?? []) {
+      defs.push({
+        id: `panel-qema-${group.id}-${period}-${group.interval}`,
+        kind: 'ema',
+        period: Number(period),
+        interval: group.interval,
+        color: QUICK_EMA_PERIOD_COLOR[period] ?? '#94a3b8',
+        label: `EMA${period} ${group.interval}`,
+      });
+    }
+    if (!group.bandPeriod) continue;
+
+    const addBand = (side, sel) => {
+      if (sel == null) return;
+      const isAdaptive = sel === 'adaptive';
+      defs.push({
+        id: `panel-qband-${side}-${group.id}-${group.bandPeriod}-${group.interval}`,
+        kind: 'band',
+        side,
+        period: Number(group.bandPeriod),
+        interval: group.interval,
+        pct: isAdaptive ? null : Number(sel),
+        mode: isAdaptive ? 'adaptive' : 'fixed',
+        color: QUICK_BAND_COLOR[side],
+        label: isAdaptive
+          ? `${side === 'floor' ? 'Piso' : 'Teto'} ADAPT EMA${group.bandPeriod} ${group.interval}`
+          : `${side === 'floor' ? 'Piso' : 'Teto'} EMA${group.bandPeriod} ${group.interval} (${side === 'floor' ? '−' : '+'}${sel}%)`,
+      });
+    };
+    addBand('floor', group.belowPct);
+    addBand('ceiling', group.abovePct);
+  }
+
+  if (bollingerBands?.enabled && showKey('bb')) {
+    defs.push({
+      id: `panel-bb-${bollingerBands.period}-${bollingerBands.interval}-${bollingerBands.stdDev}`,
+      kind: 'bb',
+      period: Number(bollingerBands.period),
+      stdDev: Number(bollingerBands.stdDev),
+      interval: bollingerBands.interval,
+      color: '#818cf8',
+      label: `BB${bollingerBands.period}@${bollingerBands.interval}`,
+    });
+  }
+
   return defs;
 }
