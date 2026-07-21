@@ -55,7 +55,7 @@ export const MA_CROSS_DEFAULTS = {
   maFiltersEnabled: true,
   maFilters: [{
     id: 1, enabled: true, period: 50, interval: '1h',
-    mode: 'strict_above', tolerancePct: 0.1, maxDipPct: 0.5, fixedDipPct: '', maxAbovePct: 0, fixedAbovePct: '',
+    mode: 'strict_above', tolerancePct: 0.5, maxDipPct: 0.5, fixedDipPct: '', maxAbovePct: 0, fixedAbovePct: '',
   }],
   exit: {
     logic: 'any',

@@ -3,7 +3,7 @@ import { suggestMaCrossFilterBounds, checkMultitradeVolume, fetchRsiOversoldReco
 import {
   MA_CROSS_INTERVALS, MA_PERIOD_PRESETS, MA_CROSS_PERIOD_MIN, MA_CROSS_PERIOD_MAX,
   CROSS_DIRECTIONS, PRICE_FILTER_MODES,
-  EXIT_LOGIC_OPTIONS, RSI_INTERVALS, RSI_PERIODS, RSI_OPERATORS,
+  EXIT_LOGIC_OPTIONS,
   VOLUME_OPTIONS, PENDING_TIMEOUT_OPTIONS, POLL_OPTIONS,
   MA_CROSS_DEFAULTS,
 } from '../constants/maCrossConfigSchema';
@@ -109,12 +109,6 @@ export default function MaCrossStrategyForm({ form, patch, symbol, exchange, has
   const entryTrend = { ...MA_CROSS_DEFAULTS.entryTrendMa, ...form.entryTrendMa };
   const entryTrendOn = entryTrend.enabled !== false;
 
-  const entryApproach = { ...MA_CROSS_DEFAULTS.entryEmaApproach, ...form.entryEmaApproach };
-  const entryApproachOn = entryApproach.enabled !== false;
-
-  const bbFilter = { ...MA_CROSS_DEFAULTS.entryBbFilter, ...form.entryBbFilter };
-  const bbOn = bbFilter.enabled !== false;
-
   const entryBbLower = { ...MA_CROSS_DEFAULTS.entryBbLower, ...form.entryBbLower };
   const entryBbLowerOn = entryBbLower.enabled === true;
 
@@ -124,6 +118,17 @@ export default function MaCrossStrategyForm({ form, patch, symbol, exchange, has
   const entryIv = form.entry?.ma1?.interval ?? '15m';
   const exitIv  = form.exit?.maCross?.ma1?.interval ?? '30m';
   const src     = exchange === 'gate' ? 'gate' : null;
+
+  // Aproximação 4h (entryEmaApproach) foi removida deste formulário — não usada.
+  // O normalize do backend trata "enabled" ausente como true (`src.enabled !== false`),
+  // então forçamos explicitamente enabled:false aqui pra garantir que moedas configuradas
+  // por este form nunca entrem com esse filtro ativo por baixo dos panos.
+  useEffect(() => {
+    if (form.entryEmaApproach?.enabled !== false) {
+      patch('entryEmaApproach.enabled', false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.entryEmaApproach?.enabled]);
 
   useEffect(() => {
     const sym = symbol?.trim()?.toUpperCase();
@@ -206,18 +211,6 @@ export default function MaCrossStrategyForm({ form, patch, symbol, exchange, has
 
   const removeFilter = (id) => {
     patch('maFilters', form.maFilters.filter(f => f.id !== id));
-  };
-
-  const addRsiCond = () => {
-    const nextId = Math.max(0, ...(form.exit.rsi.conditions ?? []).map(c => c.id)) + 1;
-    patch('exit.rsi.conditions', [...form.exit.rsi.conditions, {
-      id: nextId, enabled: true, interval: '15m', period: 14, operator: '>', value: 70,
-    }]);
-  };
-
-  const updateRsiCond = (id, field, val) => {
-    patch('exit.rsi.conditions', form.exit.rsi.conditions.map(c =>
-      c.id === id ? { ...c, [field]: val } : c));
   };
 
   async function handleSuggestBounds(filterId) {
@@ -386,7 +379,7 @@ export default function MaCrossStrategyForm({ form, patch, symbol, exchange, has
             <div className="flex flex-wrap items-center gap-2 text-xs">
               <span className="text-p5/50">Tolerância</span>
               <NumInput
-                value={entryTrend.tolerancePct ?? 2}
+                value={entryTrend.tolerancePct ?? 1}
                 onChange={v => patch('entryTrendMa.tolerancePct', v)}
                 min={0} max={5} step={0.1} className="w-14"
               />
@@ -396,98 +389,16 @@ export default function MaCrossStrategyForm({ form, patch, symbol, exchange, has
         )}
       </div>
 
-      <div className="rounded-md p-2 space-y-2" style={{ background: '#1a1d28', border: `1px solid ${FILTER_COLOR}33` }}>
-        <div className="flex items-center justify-between gap-2 flex-wrap">
-          <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: FILTER_COLOR }}>
-            Aproximação 4h — EMA9 encosta na EMA21 e sobe
-          </span>
-          <label className="flex items-center gap-1 text-[9px] text-p5/50 cursor-pointer">
-            <input type="checkbox" checked={entryApproachOn}
-              onChange={e => patch('entryEmaApproach.enabled', e.target.checked)} className="accent-violet-500" />
-            Ativo
-          </label>
-        </div>
-        {entryApproachOn && (
-          <>
-            <p className="text-[10px] text-p5/60">
-              Exige que a EMA9(4h) tenha formado um fundo perto da EMA21(4h) nos últimos candles
-              e já esteja subindo de volta — não basta estar acima há muito tempo.
-            </p>
-            <div className="flex flex-wrap items-center gap-2 text-xs">
-              <span className="text-p5/50">Aproximação máx.</span>
-              <NumInput
-                value={entryApproach.approachPct ?? 1.5}
-                onChange={v => patch('entryEmaApproach.approachPct', v)}
-                min={0} max={5} step={0.1} className="w-14"
-              />
-              <span className="text-p5/40 text-[10px]">% — quão perto o fundo da EMA9 precisa chegar da EMA21</span>
-            </div>
-            <p className="text-[9px] text-p5/40 font-mono">
-              Sugestão com base em dados reais (120 dias, 45 moedas ma-cross): o fundo histórico da
-              EMA9 antes de subir ficou em -0.85% (mediana) — 1.5% dá margem sobre esse valor.
-            </p>
-          </>
-        )}
-      </div>
-
-      <div className="rounded-md p-2 space-y-2" style={{ background: '#1a1d28', border: `1px solid ${FILTER_COLOR}33` }}>
-        <div className="flex items-center justify-between gap-2 flex-wrap">
-          <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: FILTER_COLOR }}>
-            Filtro BB — %B ({bbFilter.interval})
-          </span>
-          <label className="flex items-center gap-1 text-[9px] text-p5/50 cursor-pointer">
-            <input type="checkbox" checked={bbOn}
-              onChange={e => patch('entryBbFilter.enabled', e.target.checked)} className="accent-violet-500" />
-            Ativo
-          </label>
-        </div>
-        {bbOn && (
-          <>
-            <p className="text-[10px] text-p5/60 leading-relaxed">
-              Exige que o preço esteja nos <strong>%B&nbsp;&lt;&nbsp;{(bbFilter.maxPctB * 100).toFixed(0)}%</strong> inferiores
-              do range BB({bbFilter.period},{bbFilter.stdDev}) {bbFilter.interval} — filtra entradas com preço esticado no HTF.
-              Só se aplica ao gatilho de <em>cruzamento EMA</em> (o gatilho de Banda inferior já exige %B baixo por definição).
-            </p>
-            <div className="flex flex-wrap gap-3 items-center text-xs">
-              <div className="flex items-center gap-1">
-                <span className="text-p5/50">Intervalo</span>
-                <select value={bbFilter.interval}
-                  onChange={e => patch('entryBbFilter.interval', e.target.value)}
-                  className="rounded px-1 py-1 text-xs" style={sel}>
-                  {MA_CROSS_INTERVALS.map(iv => <option key={iv} value={iv}>{iv}</option>)}
-                </select>
-              </div>
-              <div className="flex items-center gap-1">
-                <span className="text-p5/50">%B máx</span>
-                <NumInput value={+(bbFilter.maxPctB * 100).toFixed(0)}
-                  onChange={v => patch('entryBbFilter.maxPctB', Math.max(1, Math.min(100, v)) / 100)}
-                  min={5} max={95} step={5} className="w-14" placeholder="40" />
-                <span className="text-p5/40 text-[10px]">%</span>
-              </div>
-              <div className="flex items-center gap-1">
-                <span className="text-p5/50">Período</span>
-                <NumInput value={bbFilter.period}
-                  onChange={v => patch('entryBbFilter.period', Math.max(5, Math.round(v)))}
-                  min={5} max={200} step={1} className="w-14" />
-              </div>
-              <div className="flex items-center gap-1">
-                <span className="text-p5/50">StdDev</span>
-                <NumInput value={bbFilter.stdDev}
-                  onChange={v => patch('entryBbFilter.stdDev', v)}
-                  min={0.5} max={4} step={0.5} className="w-14" />
-              </div>
-            </div>
-            <p className="text-[9px] text-p5/40 leading-relaxed">
-              %B = (close − banda inf) / (banda sup − banda inf). 0% = toca a banda inferior · 100% = toca a superior.
-            </p>
-          </>
-        )}
-      </div>
+      {/* Aproximação 4h (entryEmaApproach) e Filtro BB %B (entryBbFilter) removidos do
+          formulário a pedido do usuário — não usados. entryEmaApproach é forçado a
+          enabled:false via useEffect abaixo (ver nota no componente) porque o normalize
+          do backend trata "enabled" ausente como true por padrão. entryBbFilter já
+          tem default enabled:false no schema, então ficar oculto é seguro. */}
 
       <div className="rounded-md p-2 space-y-2" style={{ background: '#1a1d28', border: `1px solid ${FILTER_COLOR}33` }}>
         <div className="flex items-center justify-between">
           <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: FILTER_COLOR }}>
-            Filtros de preço (param3) — todos devem passar
+            Tendência MA50 1H — todos devem passar
           </span>
           <label className="flex items-center gap-1 text-[9px] text-p5/50 cursor-pointer">
             <input type="checkbox" checked={form.maFiltersEnabled !== false}
@@ -595,56 +506,8 @@ export default function MaCrossStrategyForm({ form, patch, symbol, exchange, has
           showEnable
         />
 
-        <div className="rounded-md p-2 space-y-2" style={{ background: '#1a1d28', border: `1px solid ${EXIT_COLOR}33` }}>
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: EXIT_COLOR }}>
-              Venda — RSI
-            </span>
-            <label className="flex items-center gap-1 text-[9px] text-p5/50 cursor-pointer">
-              <input type="checkbox" checked={form.exit.rsi.enabled}
-                onChange={e => patch('exit.rsi.enabled', e.target.checked)} style={{ accentColor: EXIT_COLOR }} />
-              Ativo
-            </label>
-          </div>
-          {form.exit.rsi.enabled && (
-            <>
-              <select value={form.exit.rsi.logic} onChange={e => patch('exit.rsi.logic', e.target.value)}
-                className="w-full rounded px-1.5 py-1 text-[10px] mb-2" style={sel}>
-                <option value="any">Qualquer condição RSI (OU)</option>
-                <option value="all">Todas as condições RSI (E)</option>
-              </select>
-              {(form.exit.rsi.conditions ?? []).map((cond, idx) => (
-                <div key={cond.id} className="rounded p-2 mb-2" style={{ border: '1px solid #2a2d3a', background: '#141720' }}>
-                  <label className="flex items-center gap-2 mb-1.5 cursor-pointer">
-                    <input type="checkbox" checked={cond.enabled !== false}
-                      onChange={e => updateRsiCond(cond.id, 'enabled', e.target.checked)} className="accent-red-500" />
-                    <span className="text-[10px] text-p5/50">RSI condição {idx + 1}</span>
-                  </label>
-                  <div className="grid grid-cols-4 gap-1">
-                    <select value={cond.interval} onChange={e => updateRsiCond(cond.id, 'interval', e.target.value)}
-                      className="rounded px-1 py-1 text-xs" style={sel}>
-                      {RSI_INTERVALS.map(iv => <option key={iv} value={iv}>{iv}</option>)}
-                    </select>
-                    <select value={cond.period} onChange={e => updateRsiCond(cond.id, 'period', Number(e.target.value))}
-                      className="rounded px-1 py-1 text-xs font-mono" style={sel}>
-                      {RSI_PERIODS.map(p => <option key={p} value={p}>{p}</option>)}
-                    </select>
-                    <select value={cond.operator} onChange={e => updateRsiCond(cond.id, 'operator', e.target.value)}
-                      className="rounded px-1 py-1 text-xs text-center" style={sel}>
-                      {RSI_OPERATORS.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
-                    </select>
-                    <NumInput value={cond.value} onChange={v => updateRsiCond(cond.id, 'value', v)} min={1} max={99} className="w-full" />
-                  </div>
-                </div>
-              ))}
-              <button type="button" onClick={addRsiCond}
-                className="text-[10px] px-2 py-1 rounded w-full"
-                style={{ background: `${EXIT_COLOR}18`, color: EXIT_COLOR, border: `1px solid ${EXIT_COLOR}44` }}>
-                + Condição RSI
-              </button>
-            </>
-          )}
-        </div>
+        {/* Venda — RSI (exit.rsi) removida do formulário a pedido do usuário — não usada.
+            Default já é enabled:false no schema, então ficar oculta é seguro. */}
 
         <div className="rounded-md p-2 space-y-2" style={{ background: '#1a1d28', border: `1px solid ${EXIT_COLOR}33` }}>
           <div className="flex items-center justify-between gap-2 flex-wrap">
