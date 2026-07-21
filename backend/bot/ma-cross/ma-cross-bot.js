@@ -995,7 +995,8 @@ async function main() {
     log: console.log,
   });
 
-  const toStart = [];
+  const toStart   = [];
+  const lowVolRows = [];
   for (let i = 0; i < rows.length; i++) {
     const row     = rows[i];
     const color   = COLORS[i % COLORS.length];
@@ -1009,15 +1010,18 @@ async function main() {
       volOk  = vol >= minVol;
     } catch {}
 
-    if (!volOk && !strategy?.config.allowLowVolume) {
-      if (!symbolFilter) {
-        const resp = await askUser(
-          `   ${Y}⚠️${X} Volume baixo — incluir ${row.symbol} [${row.strategy_id}]? [s/N]: `,
-        );
-        if (resp !== 's' && resp !== 'sim') continue;
-      }
+    if (!volOk && !strategy?.config.allowLowVolume && !symbolFilter) {
+      lowVolRows.push({ row, color });
+      continue;
     }
     toStart.push({ row, color });
+  }
+
+  if (lowVolRows.length) {
+    console.log(`   ${Y}⚠️${X} Volume baixo — moedas abaixo do mínimo:`);
+    lowVolRows.forEach(({ row }) => console.log(`      - ${row.symbol} [${row.strategy_id}]`));
+    const resp = await askUser(`   Incluir essas ${lowVolRows.length} moeda(s) mesmo assim? [s/N]: `);
+    if (resp === 's' || resp === 'sim') toStart.push(...lowVolRows);
   }
 
   if (!toStart.length) {
