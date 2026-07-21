@@ -38,16 +38,16 @@ export const MA_CROSS_DEFAULTS = {
     ma2: { period: 21, interval: '15m' },
     direction: 'cross_up',
     tolerancePct: 0.1,
-    maxAboveMaPct: 3,
+    maxAboveMaPct: 0,
   },
   entryTrendMa: {
     enabled: true,
     ma1: { period: 9, interval: '4h' },
     ma2: { period: 21, interval: '4h' },
-    tolerancePct: 2,
+    tolerancePct: 1,
   },
   entryEmaApproach: {
-    enabled: true,
+    enabled: false,
     ma1: { period: 9, interval: '4h' },
     ma2: { period: 21, interval: '4h' },
     approachPct: 1.5,
@@ -55,7 +55,7 @@ export const MA_CROSS_DEFAULTS = {
   maFiltersEnabled: true,
   maFilters: [{
     id: 1, enabled: true, period: 50, interval: '1h',
-    mode: 'adaptive', maxDipPct: 0.5, fixedDipPct: '', maxAbovePct: 0, fixedAbovePct: '',
+    mode: 'strict_above', tolerancePct: 0.1, maxDipPct: 0.5, fixedDipPct: '', maxAbovePct: 0, fixedAbovePct: '',
   }],
   exit: {
     logic: 'any',
@@ -74,7 +74,7 @@ export const MA_CROSS_DEFAULTS = {
       ],
     },
     bbUpper: {
-      enabled:  true,
+      enabled:  false,
       interval: '4h',
       period:   20,
       stdDev:   2.0,
@@ -108,7 +108,7 @@ export const MA_CROSS_DEFAULTS = {
     period:   20,
     stdDev:   2.0,
   },
-  volume: { minVolumeUsdt: 3_000_000, allowLowVolume: false },
+  volume: { minVolumeUsdt: 1_000_000, allowLowVolume: false },
   entryCooldownHours: 4,
 };
 
@@ -163,7 +163,7 @@ function normalizeExitBbUpper(block) {
   const d = MA_CROSS_DEFAULTS.exit.bbUpper;
   const src = block ?? {};
   return {
-    enabled:  src.enabled !== false,
+    enabled:  src.enabled === true,
     interval: src.interval ?? d.interval,
     period:   clampPeriod(src.period, d.period),
     stdDev:   Math.max(0.5, Math.min(4, Number(src.stdDev ?? d.stdDev))),
@@ -194,7 +194,7 @@ function normalizeEntryEmaApproach(block) {
   const d = MA_CROSS_DEFAULTS.entryEmaApproach;
   const src = block ?? {};
   return {
-    enabled: src.enabled !== false,
+    enabled: src.enabled === true,
     ma1: normalizeMaLeg(src.ma1, d.ma1),
     ma2: normalizeMaLeg(src.ma2, d.ma2),
     approachPct: Math.max(0, Number(src.approachPct ?? d.approachPct ?? 0)),

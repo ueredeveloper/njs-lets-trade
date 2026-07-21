@@ -24,7 +24,7 @@ const MA_CROSS_DEFAULTS = {
     direction:       'cross_up',
     tolerancePct:    0.1,
     /** Máx % acima da MA2 (param2) para permitir compra; 0 = desligado. */
-    maxAboveMaPct:   3,
+    maxAboveMaPct:   0,
   },
 
   /** Tendência HTF: EMA curta acima da EMA longa (padrão EMA9 > EMA21 em 4h). */
@@ -32,10 +32,10 @@ const MA_CROSS_DEFAULTS = {
     enabled: true,
     ma1: { period: 9, interval: '4h' },
     ma2: { period: 21, interval: '4h' },
-    /** Máx % abaixo da EMA longa ainda permitido (ex.: 2 = EMA9 até 2% abaixo da EMA21).
+    /** Máx % abaixo da EMA longa ainda permitido (ex.: 1 = EMA9 até 1% abaixo da EMA21).
      *  Mantido baixo de proposito: exige que a EMA9(4h) esteja praticamente cruzando
-     *  ou ja acima da EMA21(4h), nao so "perto" dela. Validado em BANKUSDT (09/07). */
-    tolerancePct: 0.3,
+     *  ou ja acima da EMA21(4h), nao so "perto" dela. */
+    tolerancePct: 1,
   },
 
   maFiltersEnabled: true,
@@ -108,7 +108,7 @@ const MA_CROSS_DEFAULTS = {
   },
 
   volume: {
-    minVolumeUsdt:  3_000_000,
+    minVolumeUsdt:  1_000_000,
     allowLowVolume: false,
   },
 

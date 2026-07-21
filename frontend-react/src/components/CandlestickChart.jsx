@@ -65,9 +65,10 @@ const RSI_EXTRA_INDICATORS = [
 const QUICK_EMA_PERIODS = ['9', '21', '50', '200'];
 const QUICK_EMA_PERIOD_COLORS = { '9': '#34d399', '21': '#60a5fa', '50': '#c084fc', '200': '#f97316' };
 const QUICK_EMA_DEFAULT_INTERVAL = '30m';
-const QUICK_EMA_BAND_PCT_OPTIONS = [4, 3, 2, 1];
+const QUICK_EMA_BAND_PCT_OPTIONS = [4, 3, 2, 1, 0.5];
 const QUICK_EMA_DEFAULT_ABOVE_PCT = 4;
-const QUICK_EMA_DEFAULT_BELOW_PCT = 1;
+/** Piso padrão igual ao filtro adaptativo do ma-cross (MA_CROSS_DEFAULTS.maFilters[0].maxDipPct). */
+const QUICK_EMA_DEFAULT_BELOW_PCT = 0.5;
 const QUICK_EMA_BAND_ADAPTIVE = 'adaptive';
 const MAX_QUICK_EMA_GROUPS = 4;
 const QUICK_EMA_STORAGE_KEY = 'lets_trade_quick_ema_groups_v4';

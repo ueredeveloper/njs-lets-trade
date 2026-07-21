@@ -7,12 +7,10 @@ import {
   VOLUME_OPTIONS, PENDING_TIMEOUT_OPTIONS, POLL_OPTIONS,
   MA_CROSS_DEFAULTS,
 } from '../constants/maCrossConfigSchema';
-import MaCrossRuleCheckChart from './MaCrossRuleCheckChart';
 
 const ENTRY_COLOR  = '#22d3ee';
 const EXIT_COLOR   = '#ef5350';
 const FILTER_COLOR = '#a78bfa';
-const CHECK_COLOR  = '#60a5fa';
 
 function NumInput({ value, onChange, min, max, step = 0.1, className = 'w-16', placeholder }) {
   return (
@@ -133,7 +131,7 @@ export default function MaCrossStrategyForm({ form, patch, symbol, exchange, has
     let cancelled = false;
     setVolCheck({ loading: true });
     const timer = setTimeout(() => {
-      checkMultitradeVolume(sym, exchange, form.volume?.minVolumeUsdt ?? 3_000_000)
+      checkMultitradeVolume(sym, exchange, form.volume?.minVolumeUsdt ?? 1_000_000)
         .then(data => { if (!cancelled) setVolCheck({ ...data, loading: false }); })
         .catch(err => { if (!cancelled) setVolCheck({ loading: false, error: err.message }); });
     }, 400);
@@ -305,7 +303,7 @@ export default function MaCrossStrategyForm({ form, patch, symbol, exchange, has
       />
       <div className="flex flex-wrap items-center gap-2 text-xs px-1">
         <span className="text-p5/50">Máx % acima da MA2 (param2)</span>
-        <NumInput value={form.entry.maxAboveMaPct ?? 3}
+        <NumInput value={form.entry.maxAboveMaPct ?? 0}
           onChange={v => patch('entry.maxAboveMaPct', v)}
           min={0} max={20} step={0.5} className="w-14" />
         <span className="text-p5/40 text-[10px]">0 = desligado</span>
@@ -904,19 +902,6 @@ export default function MaCrossStrategyForm({ form, patch, symbol, exchange, has
               ) : null}
             </div>
           ) : null}
-        </div>
-      )}
-
-      {hasSavedConfig && (
-        <div className="rounded-md p-2 space-y-1" style={{ background: '#1a1d28', border: `1px solid ${CHECK_COLOR}33` }}>
-          <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: CHECK_COLOR }}>
-            Conferência — regras no gráfico
-          </span>
-          <p className="text-[9px] text-p5/50 leading-relaxed">
-            Cada ponto é um cruzamento EMA9↑EMA21 (15m) real, colorido pela regra salva que decidiu
-            o resultado (permitida, tendência, aproximação ou outros filtros).
-          </p>
-          <MaCrossRuleCheckChart symbol={symbol} exchange={exchange} />
         </div>
       )}
 

@@ -164,18 +164,18 @@ const MA_CROSS_PRESETS = {
       ma2: { period: 21, interval: '15m' },
       direction: 'cross_up',
       tolerancePct: 0.1,
-      maxAboveMaPct: 3,
+      maxAboveMaPct: 0,
     },
     entryTrendMa: {
       enabled: true,
-      ma1: { period: 9, interval: '1h' },
-      ma2: { period: 21, interval: '1h' },
+      ma1: { period: 9, interval: '4h' },
+      ma2: { period: 21, interval: '4h' },
       tolerancePct: 1,
     },
     maFiltersEnabled: true,
     maFilters: [{
       id: 1, enabled: true, period: 50, interval: '1h',
-      mode: 'adaptive', maxDipPct: 0.5, maxAbovePct: 0,
+      mode: 'strict_above', tolerancePct: 0.1, maxDipPct: 0.5, maxAbovePct: 0,
     }],
     exit: {
       logic: 'any',
@@ -197,7 +197,7 @@ const MA_CROSS_PRESETS = {
     },
     polling: { pollMs: 60_000, fastPollMs: 30_000 },
     adaptiveOpts: { defaultPct: 3, maxPct: 8, minPct: 0.5, minEpisodes: 3, defaultAbovePct: 4, maxAbovePct: 8, minAbovePct: 0.5 },
-    volume: { minVolumeUsdt: 3_000_000, allowLowVolume: false },
+    volume: { minVolumeUsdt: 1_000_000, allowLowVolume: false },
     entryCooldownHours: 4,
   },
 };

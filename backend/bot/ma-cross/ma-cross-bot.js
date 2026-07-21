@@ -734,7 +734,7 @@ async function tick(rowId, adapter, strategy, log, session) {
     }
 
     const vol = session.volCache?.volumeUsdt;
-    const minVol = config.minVolumeUsdt ?? 3_000_000;
+    const minVol = config.minVolumeUsdt ?? 1_000_000;
     if (vol != null && vol < minVol && !config.allowLowVolume) {
       return { phase: 'PENDING' };
     }
@@ -775,7 +775,7 @@ async function tick(rowId, adapter, strategy, log, session) {
     }
 
     const vol = session.volCache?.volumeUsdt;
-    const minVol = config.minVolumeUsdt ?? 3_000_000;
+    const minVol = config.minVolumeUsdt ?? 1_000_000;
     if (vol != null && vol < minVol && !config.allowLowVolume) {
       return { phase };
     }
@@ -1001,7 +1001,7 @@ async function main() {
     const color   = COLORS[i % COLORS.length];
     const adapter = buildAdapter(row.exchange ?? 'binance', row.symbol);
     const strategy = resolveStrategy(row);
-    const minVol = strategy?.config.minVolumeUsdt ?? 3_000_000;
+    const minVol = strategy?.config.minVolumeUsdt ?? 1_000_000;
 
     let volOk = true;
     try {
