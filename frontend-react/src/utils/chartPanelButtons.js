@@ -6,6 +6,8 @@ export const CHART_PANEL_BUTTON_KEYS = [
   'ma50',
   'ma200',
   'ichimoku',
+  'sr',
+  'pphl',
   'rsi',
   'rsi80',
   'rsi50',
@@ -13,6 +15,7 @@ export const CHART_PANEL_BUTTON_KEYS = [
   'ma2',
   'stopLoss',
   'bb',
+  'vwap',
 ];
 
 export const DEFAULT_CHART_PANEL_BUTTONS = {
@@ -21,6 +24,8 @@ export const DEFAULT_CHART_PANEL_BUTTONS = {
   ma50: true,
   ma200: true,
   ichimoku: true,
+  sr: true,
+  pphl: true,
   rsi: true,
   rsi80: true,
   rsi50: true,
@@ -28,6 +33,7 @@ export const DEFAULT_CHART_PANEL_BUTTONS = {
   ma2: false,
   stopLoss: true,
   bb: true,
+  vwap: true,
 };
 
 export function loadChartPanelButtons() {

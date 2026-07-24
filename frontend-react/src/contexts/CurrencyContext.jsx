@@ -29,6 +29,9 @@ import {
   normalizeOverlaySlots,
   normalizeMaBandsDefaults,
   normalizeBollingerBandsDefaults,
+  normalizeSrInterval,
+  normalizePphlInterval,
+  normalizeVwapDefaults,
   normalizeActiveIndicators,
   normalizeCurrencyPanelWidth,
 } from '../utils/uiPreferences';
@@ -520,6 +523,33 @@ export function CurrencyProvider({ children }) {
     });
   }, []);
 
+  const setSrIntervalDefault = useCallback((interval) => {
+    setUiPrefsState((prev) => {
+      const next = { ...prev, srIntervalDefault: normalizeSrInterval(interval) };
+      saveUiPreferences(next);
+      return next;
+    });
+  }, []);
+
+  const setPphlIntervalDefault = useCallback((interval) => {
+    setUiPrefsState((prev) => {
+      const next = { ...prev, pphlIntervalDefault: normalizePphlInterval(interval) };
+      saveUiPreferences(next);
+      return next;
+    });
+  }, []);
+
+  const setVwapDefaults = useCallback((patch) => {
+    setUiPrefsState((prev) => {
+      const next = {
+        ...prev,
+        vwapDefaults: normalizeVwapDefaults({ ...prev.vwapDefaults, ...patch }),
+      };
+      saveUiPreferences(next);
+      return next;
+    });
+  }, []);
+
   const setActiveIndicatorsPreference = useCallback((indicators) => {
     setUiPrefsState((prev) => {
       const next = { ...prev, activeIndicators: normalizeActiveIndicators(indicators) };
@@ -770,6 +800,9 @@ export function CurrencyProvider({ children }) {
         setOverlaySlotsPreference,
         setMaBandsDefaults,
         setBollingerBandsDefaults,
+        setSrIntervalDefault,
+        setPphlIntervalDefault,
+        setVwapDefaults,
         setActiveIndicatorsPreference,
         setCurrencyPanelWidth,
         chartIntervalOptions: CHART_INTERVAL_OPTIONS,

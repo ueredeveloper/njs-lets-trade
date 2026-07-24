@@ -1,20 +1,18 @@
 const router = require("express").Router();
-const { VWAP } = require("technicalindicators");
+const { computeVwapWithBands } = require("../utils/vwapSession");
 
-// volume weigth average
+/**
+ * VWAP de sessão (diária/semanal, reset em 00:00 UTC), com bandas de desvio padrão (±1σ, ±2σ).
+ * @route POST /services/vwap
+ * @param {string} [session=daily] - 'daily' (reset 00:00 UTC) ou 'weekly' (reset segunda 00:00 UTC).
+ * @param {Array} req.body - candles ordenados por openTime crescente.
+ * @returns {Array<{openTime, value, stdDev, upper1, lower1, upper2, lower2}>}
+ */
 router.post("/vwap", async (req, res) => {
+    const candles = req.body;
+    const session = req.query.session === 'weekly' ? 'weekly' : 'daily';
 
-    // remove cíclical error
-    let candles = req.body;
-
-    let VWAPInput = {
-        high: candles.map(c => parseFloat(c.high)),
-        low: candles.map(c => parseFloat(c.low)),
-        close: candles.map(c => parseFloat(c.close)),
-        volume: candles.map(c => parseFloat(c.volume))
-    }
-
-    let results = VWAP.calculate(VWAPInput)
+    const results = computeVwapWithBands(candles, { session, bandMultipliers: [1, 2] });
 
     res.send(results);
 });

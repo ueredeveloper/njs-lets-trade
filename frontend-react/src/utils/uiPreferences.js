@@ -24,7 +24,7 @@ const VALID_OVERLAY_PERIODS = ['9', '21', '50', '200'];
 
 /** IDs válidos de indicadores do gráfico. */
 export const VALID_ACTIVE_INDICATORS = [
-  'ma9', 'ma21', 'ma50', 'ma200', 'ichimoku', 'rsi', 'rsi50', 'rsi80', 'stopLoss',
+  'ma9', 'ma21', 'ma50', 'ma200', 'ichimoku', 'sr', 'pphl', 'rsi', 'rsi50', 'rsi80', 'stopLoss',
 ];
 
 /** Cores padrão por período (convenção TradingView / melhores práticas). */
@@ -77,6 +77,45 @@ export function normalizeBollingerBandsDefaults(raw) {
   };
 }
 
+/** Sessões válidas de reset do VWAP — cripto não tem pregão, então dia/semana UTC faz esse papel. */
+export const VWAP_SESSION_OPTIONS = ['daily', 'weekly'];
+
+/**
+ * VWAP no gráfico: intervalo próprio (como MA1/MA2/BB) — usuário pode plotar o VWAP de um TF maior
+ * num gráfico menor. Sessão controla o reset (diário 00:00 UTC ou semanal segunda 00:00 UTC) —
+ * o valor não depende do intervalo escolhido, só a sessão. Bandas = ±1σ/±2σ em torno do VWAP.
+ */
+export const DEFAULT_VWAP = {
+  enabled: false,
+  interval: '4h',
+  session: 'daily',
+  bands: false,
+};
+
+export function normalizeVwapDefaults(raw) {
+  const d = DEFAULT_VWAP;
+  return {
+    enabled: typeof raw?.enabled === 'boolean' ? raw.enabled : d.enabled,
+    interval: CHART_INTERVAL_OPTIONS.includes(raw?.interval) ? raw.interval : d.interval,
+    session: VWAP_SESSION_OPTIONS.includes(raw?.session) ? raw.session : d.session,
+    bands: typeof raw?.bands === 'boolean' ? raw.bands : d.bands,
+  };
+}
+
+/** Intervalo de candles usado pra calcular o S/R (Suporte/Resistência) — independente do intervalo do gráfico, como MA1/MA2/BB. */
+export const DEFAULT_SR_INTERVAL = '4h';
+
+export function normalizeSrInterval(raw) {
+  return CHART_INTERVAL_OPTIONS.includes(raw) ? raw : DEFAULT_SR_INTERVAL;
+}
+
+/** Intervalo de candles usado pra calcular o Pivot Points High/Low — mesmo padrão do S/R, pra comparação lado a lado. */
+export const DEFAULT_PPHL_INTERVAL = '4h';
+
+export function normalizePphlInterval(raw) {
+  return CHART_INTERVAL_OPTIONS.includes(raw) ? raw : DEFAULT_PPHL_INTERVAL;
+}
+
 export function normalizeActiveIndicators(arr) {
   if (!Array.isArray(arr)) return [...DEFAULT_ACTIVE_INDICATORS];
   return arr.filter((id) => VALID_ACTIVE_INDICATORS.includes(id));
@@ -122,6 +161,9 @@ export const DEFAULT_UI_PREFS = {
   overlaySlots: normalizeOverlaySlots(DEFAULT_OVERLAY_SLOTS),
   maBandsDefaults: normalizeMaBandsDefaults(DEFAULT_MA_BANDS),
   bollingerBandsDefaults: normalizeBollingerBandsDefaults(DEFAULT_BOLLINGER_BANDS),
+  srIntervalDefault: DEFAULT_SR_INTERVAL,
+  pphlIntervalDefault: DEFAULT_PPHL_INTERVAL,
+  vwapDefaults: normalizeVwapDefaults(DEFAULT_VWAP),
   activeIndicators: [...DEFAULT_ACTIVE_INDICATORS],
   currencyPanelWidth: CURRENCY_PANEL_WIDTH_DEFAULT,
 };
@@ -133,6 +175,9 @@ function cloneDefaults() {
     overlaySlots: normalizeOverlaySlots(DEFAULT_OVERLAY_SLOTS),
     maBandsDefaults: normalizeMaBandsDefaults(DEFAULT_MA_BANDS),
     bollingerBandsDefaults: normalizeBollingerBandsDefaults(DEFAULT_BOLLINGER_BANDS),
+    srIntervalDefault: DEFAULT_SR_INTERVAL,
+    pphlIntervalDefault: DEFAULT_PPHL_INTERVAL,
+    vwapDefaults: normalizeVwapDefaults(DEFAULT_VWAP),
     activeIndicators: [...DEFAULT_ACTIVE_INDICATORS],
     currencyPanelWidth: CURRENCY_PANEL_WIDTH_DEFAULT,
   };
@@ -162,6 +207,15 @@ export function loadUiPreferences() {
     }
     if (parsed.bollingerBandsDefaults) {
       result.bollingerBandsDefaults = normalizeBollingerBandsDefaults(parsed.bollingerBandsDefaults);
+    }
+    if (parsed.srIntervalDefault !== undefined) {
+      result.srIntervalDefault = normalizeSrInterval(parsed.srIntervalDefault);
+    }
+    if (parsed.pphlIntervalDefault !== undefined) {
+      result.pphlIntervalDefault = normalizePphlInterval(parsed.pphlIntervalDefault);
+    }
+    if (parsed.vwapDefaults) {
+      result.vwapDefaults = normalizeVwapDefaults(parsed.vwapDefaults);
     }
     if (Array.isArray(parsed.activeIndicators)) {
       result.activeIndicators = normalizeActiveIndicators(parsed.activeIndicators);

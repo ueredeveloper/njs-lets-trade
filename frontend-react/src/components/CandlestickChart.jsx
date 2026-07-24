@@ -10,7 +10,7 @@ import convertOpenTime from '../utils/convertOpenTime';
 import Tooltip from './Tooltip';
 import { hasAnyChartPanelButton } from '../utils/chartPanelButtons';
 import { useIsMobile } from '../hooks/useIsMobile';
-import { DEFAULT_OVERLAY_SLOTS, DEFAULT_ACTIVE_INDICATORS, BB_PERIOD_OPTIONS, BB_STDDEV_OPTIONS } from '../utils/uiPreferences';
+import { DEFAULT_OVERLAY_SLOTS, DEFAULT_ACTIVE_INDICATORS, BB_PERIOD_OPTIONS, BB_STDDEV_OPTIONS, DEFAULT_SR_INTERVAL, DEFAULT_PPHL_INTERVAL } from '../utils/uiPreferences';
 import { CHART_VIEW, INTERVAL_MS, computeZoomWindow, buildFixedDataZoom, buildInsideDataZoom, computeCandleLimitFromTime, isTradePanelChartView } from '../utils/chartView';
 
 const LIMIT = DEFAULT_CANDLE_LIMIT;
@@ -43,6 +43,8 @@ const INDICATOR_GROUPS = [
   { id: 'ma50',     label: 'EMA50',  color: '#22d3ee', tipKey: 'chart.tip.sma50' },
   { id: 'ma200',    label: 'EMA200', color: '#f59e0b', tipKey: 'chart.tip.sma200' },
   { id: 'ichimoku', label: 'Ichi',  color: '#60a5fa', tipKey: 'chart.tip.ichimoku' },
+  { id: 'sr',       label: 'S/R',   color: '#facc15', tipKey: 'chart.tip.sr' },
+  { id: 'pphl',     label: 'PPHL',  color: '#2dd4bf', tipKey: 'chart.tip.pphl' },
   { id: 'rsi',      label: 'RSI',   color: '#a78bfa', tipKey: 'chart.tip.rsi' },
 ];
 
@@ -233,6 +235,54 @@ async function fetchBollingerOverlayPoints(symbol, interval, period, stdDev, sou
   }));
 }
 
+/**
+ * Busca VWAP de sessão (diária/semanal, reset em 00:00 UTC) num intervalo próprio
+ * (independente do gráfico) — mesmo padrão da Bollinger. Vem com bandas ±1σ/±2σ prontas.
+ */
+async function fetchVwapPoints(symbol, interval, session, source, limit) {
+  const srcParam = source === 'gate' ? '&source=gate' : '';
+  const candles = await fetch(
+    `/services/candles/?symbol=${symbol}&limit=${limit}&interval=${interval}${srcParam}`,
+  ).then(r => r.json());
+  if (!Array.isArray(candles) || !candles.length) return [];
+  const points = await fetch(`/services/vwap?session=${session}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(candles),
+  }).then(r => r.json());
+  return Array.isArray(points) ? points : [];
+}
+
+/** Busca S/R num intervalo próprio (independente do gráfico) — mesmo padrão da Bollinger. */
+async function fetchSupportResistancePoints(symbol, interval, source, limit) {
+  const srcParam = source === 'gate' ? '&source=gate' : '';
+  const candles = await fetch(
+    `/services/candles/?symbol=${symbol}&limit=${limit}&interval=${interval}${srcParam}`,
+  ).then(r => r.json());
+  if (!Array.isArray(candles) || !candles.length) return [];
+  const levels = await fetch('/services/support-resistance', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(candles),
+  }).then(r => r.json());
+  return Array.isArray(levels) ? levels : [];
+}
+
+/** Pivot Points High/Low (estilo TradingView) — intervalo próprio, mesmo padrão do S/R, mas sem agrupar pivôs em zonas. */
+async function fetchPivotPointsHighLowPoints(symbol, interval, source, limit) {
+  const srcParam = source === 'gate' ? '&source=gate' : '';
+  const candles = await fetch(
+    `/services/candles/?symbol=${symbol}&limit=${limit}&interval=${interval}${srcParam}`,
+  ).then(r => r.json());
+  if (!Array.isArray(candles) || !candles.length) return [];
+  const pivots = await fetch('/services/pivot-points-hl', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(candles),
+  }).then(r => r.json());
+  return Array.isArray(pivots) ? pivots : [];
+}
+
 function buildBollingerSeries(bbConfig, candlesticks, alignSeries) {
   if (!bbConfig?.enabled || !bbConfig.points?.length) return [];
   const color = '#818cf8';
@@ -276,6 +326,43 @@ function buildBollingerSeries(bbConfig, candlesticks, alignSeries) {
       lineStyle: { color, width: 1, type: 'dotted', opacity: 0.65 },
     },
   ];
+}
+
+function buildVwapSeries(vwapConfig, candlesticks, alignSeries) {
+  if (!vwapConfig?.enabled || !vwapConfig.points?.length) return [];
+  const color = '#facc15';
+  const sessionLabel = vwapConfig.session === 'weekly' ? 'W' : 'D';
+  const label = `VWAP@${vwapConfig.interval}(${sessionLabel})`;
+  const toLine = (field) => alignSeries(alignPointsToCandles(
+    candlesticks,
+    vwapConfig.points.map(p => ({ openTime: p.openTime, value: p[field] })),
+  ));
+  const series = [{
+    name: label,
+    type: 'line',
+    data: toLine('value'),
+    smooth: true,
+    showSymbol: false,
+    lineStyle: { color, width: 1.5, type: 'solid' },
+    endLabel: {
+      show: true,
+      formatter: label,
+      color,
+      fontSize: 9,
+      padding: [1, 4],
+      backgroundColor: 'rgba(0,0,0,0.5)',
+      borderRadius: 2,
+    },
+  }];
+  if (vwapConfig.bands) {
+    series.push(
+      { name: `${label} +1σ`, type: 'line', data: toLine('upper1'), smooth: true, showSymbol: false, lineStyle: { color, width: 1, type: 'dashed', opacity: 0.6 } },
+      { name: `${label} -1σ`, type: 'line', data: toLine('lower1'), smooth: true, showSymbol: false, lineStyle: { color, width: 1, type: 'dashed', opacity: 0.6 } },
+      { name: `${label} +2σ`, type: 'line', data: toLine('upper2'), smooth: true, showSymbol: false, lineStyle: { color, width: 1, type: 'dotted', opacity: 0.4 } },
+      { name: `${label} -2σ`, type: 'line', data: toLine('lower2'), smooth: true, showSymbol: false, lineStyle: { color, width: 1, type: 'dotted', opacity: 0.4 } },
+    );
+  }
+  return series;
 }
 
 function buildOverlaySeries(overlayConfigs, candlesticks, alignSeries) {
@@ -371,7 +458,7 @@ const panelSelect = (color, dims = null) => ({
 });
 
 const COMPACT_LABELS = {
-  ma9: '9', ma21: '21', ma50: '50', ma200: '200', ichimoku: 'Ich', rsi: 'RSI',
+  ma9: '9', ma21: '21', ma50: '50', ma200: '200', ichimoku: 'Ich', sr: 'S/R', pphl: 'PPHL', rsi: 'RSI',
   rsi80: 'R80', rsi50: 'R50', stopLoss: 'SL',
 };
 
@@ -384,6 +471,10 @@ const INDICATOR_TILE_ROWS = 2;
 const BANDS_COL_SPAN = 4;
 
 const BOLLINGER_ROW_SPAN = 3;
+
+const INTERVAL_PICKER_ROW_SPAN = 1;
+
+const VWAP_ROW_SPAN = 4;
 
 /** Grid interno do bloco de EMAs rápidas: intervalo+remover, 4 botões de período, banda cima/baixo. */
 const QUICK_EMA_GRID_COLS = 4;
@@ -455,6 +546,105 @@ function renderBollingerTile(dims, t, bollingerBands, setBollingerBands) {
           </button>
         </PanelTip>
       </div>
+    </div>
+  );
+}
+
+/**
+ * VWAP de sessão: intervalo próprio + sessão (diário/semanal) + bandas ±σ + ON/OFF —
+ * mesmo padrão da Bollinger, sem período/desvio (é um único acumulado por sessão, não uma média móvel).
+ */
+function renderVwapTile(dims, t, vwap, setVwap) {
+  const innerW = dims.w - PANEL_TILE_PAD * 2;
+  const innerH = dims.h - PANEL_TILE_PAD * 2;
+  const rowH = (innerH - PANEL_GAP * 3) / 4;
+  const rowDims = { w: innerW, h: rowH };
+  const halfDims = { w: (innerW - PANEL_GAP) / 2, h: rowH };
+  const color = '#facc15';
+  return (
+    <div style={{
+      display: 'grid',
+      gridTemplateColumns: '1fr 1fr',
+      gridTemplateRows: 'repeat(4, 1fr)',
+      gap: PANEL_GAP,
+      width: innerW,
+      height: innerH,
+      boxSizing: 'border-box',
+    }}>
+      <div style={{ gridColumn: '1 / span 2', gridRow: '1', display: 'flex', alignItems: 'stretch' }}>
+        <PanelTip text={t('chart.tip.vwap_interval')}>
+          <select
+            value={vwap.interval}
+            onChange={e => setVwap(v => ({ ...v, interval: e.target.value }))}
+            style={panelSelect(color, rowDims)}
+          >
+            {OVERLAY_MA_INTERVALS.map(iv => <option key={iv} value={iv}>{`VWAP ${iv}`}</option>)}
+          </select>
+        </PanelTip>
+      </div>
+      <div style={{ gridColumn: '1', gridRow: '2', display: 'flex', alignItems: 'stretch' }}>
+        <PanelTip text={t('chart.tip.vwap_session')}>
+          <button
+            type="button"
+            onClick={() => setVwap(v => ({ ...v, session: 'daily' }))}
+            style={panelBtn(vwap.session === 'daily', color, true, halfDims)}
+          >
+            Diário
+          </button>
+        </PanelTip>
+      </div>
+      <div style={{ gridColumn: '2', gridRow: '2', display: 'flex', alignItems: 'stretch' }}>
+        <PanelTip text={t('chart.tip.vwap_session')}>
+          <button
+            type="button"
+            onClick={() => setVwap(v => ({ ...v, session: 'weekly' }))}
+            style={panelBtn(vwap.session === 'weekly', color, true, halfDims)}
+          >
+            Semanal
+          </button>
+        </PanelTip>
+      </div>
+      <div style={{ gridColumn: '1 / span 2', gridRow: '3', display: 'flex', alignItems: 'stretch' }}>
+        <PanelTip text={t('chart.tip.vwap_bands')}>
+          <button
+            type="button"
+            onClick={() => setVwap(v => ({ ...v, bands: !v.bands }))}
+            style={panelBtn(vwap.bands, color, true, rowDims)}
+          >
+            {vwap.bands ? 'Bandas ON' : 'Bandas OFF'}
+          </button>
+        </PanelTip>
+      </div>
+      <div style={{ gridColumn: '1 / span 2', gridRow: '4', display: 'flex', alignItems: 'stretch' }}>
+        <PanelTip text={t('chart.tip.vwap_on')}>
+          <button
+            type="button"
+            onClick={() => setVwap(v => ({ ...v, enabled: !v.enabled }))}
+            style={panelBtn(vwap.enabled, color, true, rowDims)}
+          >
+            {vwap.enabled ? 'VWAP ON' : 'VWAP OFF'}
+          </button>
+        </PanelTip>
+      </div>
+    </div>
+  );
+}
+
+/** Seletor de intervalo compacto (1 linha) pra indicadores com intervalo próprio (S/R, PPHL) — mesmo padrão da Bollinger. */
+function renderIntervalPickerTile(dims, t, tipKey, labelPrefix, color, value, onChange) {
+  const innerW = dims.w - PANEL_TILE_PAD * 2;
+  const innerH = dims.h - PANEL_TILE_PAD * 2;
+  return (
+    <div style={{ display: 'flex', alignItems: 'stretch', width: innerW, height: innerH, boxSizing: 'border-box' }}>
+      <PanelTip text={t(tipKey)}>
+        <select
+          value={value}
+          onChange={e => onChange(e.target.value)}
+          style={{ ...panelSelect(color, { w: innerW, h: innerH }), fontSize: scaleFontSize({ w: innerW, h: innerH }, 0.3, 9, 13) }}
+        >
+          {OVERLAY_MA_INTERVALS.map(iv => <option key={iv} value={iv}>{`${labelPrefix} ${iv}`}</option>)}
+        </select>
+      </PanelTip>
     </div>
   );
 }
@@ -599,13 +789,14 @@ function computeMasonryLayout(tileDefs, width, height, gap) {
   // --- Indicator buttons (spans dinâmicos por contagem) ---
   const indTiles = tileDefs.filter((t) => t.kind === 'indicator');
 
-  // --- Bollinger / Quick-EMA sections (separate flex blocks) ---
+  // --- Bollinger / S/R interval / PPHL interval / Quick-EMA sections (separate flex blocks) ---
+  const INTERVAL_PICKER_KINDS = ['srInterval', 'pphlInterval'];
   const blocks = tileDefs
-    .filter((t) => t.kind === 'bb' || t.kind === 'quickEma')
+    .filter((t) => t.kind === 'bb' || t.kind === 'vwap' || INTERVAL_PICKER_KINDS.includes(t.kind) || t.kind === 'quickEma')
     .map((t) => ({
       ...t,
       colSpan: BANDS_COL_SPAN,
-      rowSpan: t.kind === 'bb' ? BOLLINGER_ROW_SPAN : quickEmaRowSpan(t.data.groups),
+      rowSpan: t.kind === 'bb' ? BOLLINGER_ROW_SPAN : t.kind === 'vwap' ? VWAP_ROW_SPAN : INTERVAL_PICKER_KINDS.includes(t.kind) ? INTERVAL_PICKER_ROW_SPAN : quickEmaRowSpan(t.data.groups),
     }));
 
   // Pack indicator buttons — spans calculados dinamicamente pelo número de tiles
@@ -904,6 +1095,12 @@ function ChartIndicatorPanel({
   updateQuickEmaGroupBandPeriod,
   bollingerBands,
   setBollingerBands,
+  srInterval,
+  setSrInterval,
+  pphlInterval,
+  setPphlInterval,
+  vwap,
+  setVwap,
   overlayMaLoading,
   panelButtons,
   collapsed,
@@ -920,6 +1117,9 @@ function ChartIndicatorPanel({
     const showKey = (key) => panelButtons[key] !== false;
     const indicators = [...INDICATOR_GROUPS, ...RSI_EXTRA_INDICATORS].filter(({ id }) => showKey(id));
     const showBb = showKey('bb');
+    const showSr = showKey('sr');
+    const showPphl = showKey('pphl');
+    const showVwap = showKey('vwap');
 
     const list = [];
     for (const ind of indicators) {
@@ -933,8 +1133,17 @@ function ChartIndicatorPanel({
         },
       });
     }
+    if (showSr) {
+      list.push({ key: 'srInterval', kind: 'srInterval', data: {} });
+    }
+    if (showPphl) {
+      list.push({ key: 'pphlInterval', kind: 'pphlInterval', data: {} });
+    }
     if (showBb) {
       list.push({ key: 'bb', kind: 'bb', data: {} });
+    }
+    if (showVwap) {
+      list.push({ key: 'vwap', kind: 'vwap', data: {} });
     }
     list.push({ key: 'quickEma', kind: 'quickEma', data: { groups: quickEmaGroups } });
     return list;
@@ -1079,6 +1288,9 @@ function ChartIndicatorPanel({
               }}
             >
               {tile.kind === 'bb' && renderBollingerTile(tile.dims, t, bollingerBands, setBollingerBands)}
+              {tile.kind === 'srInterval' && renderIntervalPickerTile(tile.dims, t, 'chart.tip.sr_interval', 'S/R', '#facc15', srInterval, setSrInterval)}
+              {tile.kind === 'pphlInterval' && renderIntervalPickerTile(tile.dims, t, 'chart.tip.pphl_interval', 'PPHL', '#2dd4bf', pphlInterval, setPphlInterval)}
+              {tile.kind === 'vwap' && renderVwapTile(tile.dims, t, vwap, setVwap)}
               {tile.kind === 'quickEma' && renderQuickEmaGroupsTile(
                 tile.data, tile.dims, t,
                 addQuickEmaGroup, removeQuickEmaGroup, updateQuickEmaGroupInterval, toggleQuickEmaGroupPeriod,
@@ -1310,12 +1522,62 @@ function buildMultitradeMarkLines(candlesticks, interval, markers, DL, LEFT_PAD)
   });
 }
 
-function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAverage, ma50, ma9, ma21, rsi }, colors, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = [], overlayConfigs = [], multitradeMarkers = [], chartLeftPad = CHART_LEFT_MARGIN, buyInfo = null, stopLossConfig = null, chartRightPad = CHART_PRICE_PAD + CHART_LEFT_MARGIN, bollingerConfig = null) {
+function buildSrMarkLines(levels) {
+  if (!levels?.length) return [];
+  const maxTouches = Math.max(...levels.map(l => l.touches ?? 1));
+  return levels.map(lvl => {
+    const isRes = lvl.type === 'resistance';
+    const color = isRes ? C_DOWN : C_UP;
+    const strengthRatio = (lvl.touches ?? 1) / maxTouches;
+    return {
+      yAxis: lvl.price,
+      lineStyle: { color, width: 1 + Math.round(strengthRatio * 2), type: 'solid', opacity: 0.35 + strengthRatio * 0.45 },
+      label: {
+        show: true,
+        formatter: `${isRes ? 'R' : 'S'} ${fmtChartPrice(lvl.price)} (${lvl.touches}x)`,
+        color,
+        fontSize: 9,
+        position: 'end',
+        padding: [2, 4],
+        backgroundColor: 'rgba(0,0,0,0.5)',
+        borderRadius: 2,
+      },
+    };
+  });
+}
+
+/** Mapeia cada pivô (time, price, type) pro candle exibido mais próximo — sem agrupar em zonas, um marcador por pivô. */
+function buildPivotMarkers(pivots, candlesticks, DL, LEFT_PAD, chartInterval) {
+  if (!pivots?.length || !candlesticks?.length) return { highs: [], lows: [] };
+  const maxDiffMs = (INTERVAL_MS[chartInterval] ?? 900_000) * 1.5;
+  const offset = candlesticks.length - DL;
+  const highs = [];
+  const lows = [];
+  pivots.forEach((p) => {
+    let best = 0;
+    let bestDiff = Infinity;
+    candlesticks.forEach((c, i) => {
+      const d = Math.abs(Number(c.openTime) - p.time);
+      if (d < bestDiff) { bestDiff = d; best = i; }
+    });
+    if (bestDiff > maxDiffMs) return;
+    const localIdx = best - offset;
+    if (localIdx < 0 || localIdx >= DL) return;
+    const point = [localIdx + LEFT_PAD, p.price];
+    if (p.type === 'high') highs.push(point);
+    else lows.push(point);
+  });
+  return { highs, lows };
+}
+
+function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAverage, ma50, ma9, ma21, rsi }, colors, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = [], overlayConfigs = [], multitradeMarkers = [], chartLeftPad = CHART_LEFT_MARGIN, buyInfo = null, stopLossConfig = null, chartRightPad = CHART_PRICE_PAD + CHART_LEFT_MARGIN, bollingerConfig = null, srConfig = null, pphlConfig = null, vwapConfig = null) {
   const showMa9      = activeIndicators.includes('ma9');
   const showMa21     = activeIndicators.includes('ma21');
   const showMa50     = activeIndicators.includes('ma50');
   const showMa200    = activeIndicators.includes('ma200');
   const showIchimoku = activeIndicators.includes('ichimoku');
+  const showSr       = activeIndicators.includes('sr');
+  const showPphl     = activeIndicators.includes('pphl');
   const showRsi      = activeIndicators.includes('rsi');
   const showRsi50    = activeIndicators.includes('rsi50');
   const showRsi80    = activeIndicators.includes('rsi80');
@@ -1419,9 +1681,11 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
     });
   })();
 
-  // Todas as markLines unificadas: separadores de dia + zoom + compras + sinais MT
+  // Todas as markLines unificadas: separadores de dia + zoom + compras + sinais MT + zonas S/R
   const mtMarkData = buildMultitradeMarkLines(candlesticks, interval, multitradeMarkers, DL, LEFT_PAD);
-  const allMarkLineData = [...dayBreakData, ...periodMarkData, ...tradeMarkData, ...mtMarkData];
+  const srMarkData = showSr ? buildSrMarkLines(srConfig?.levels) : [];
+  const pivotMarkers = showPphl ? buildPivotMarkers(pphlConfig?.points, candlesticks, DL, LEFT_PAD, interval) : { highs: [], lows: [] };
+  const allMarkLineData = [...dayBreakData, ...periodMarkData, ...tradeMarkData, ...mtMarkData, ...srMarkData];
 
   const lastClose = candlesticks.length ? parseFloat(candlesticks[candlesticks.length - 1].close) : null;
   const buyPnlSeries = buildBuyPnlSeries(buyInfo, candlesticks, DL, LEFT_PAD, RIGHT_PAD, lastClose);
@@ -1469,6 +1733,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
 
   const overlayLineSeries = buildOverlaySeries(overlayConfigs, candlesticks, alignSeries);
   const bollingerSeries = buildBollingerSeries(bollingerConfig, candlesticks, alignSeries);
+  const vwapSeries = buildVwapSeries(vwapConfig, candlesticks, alignSeries);
 
   const _fmtV = v => v == null ? '—' : (v < 0.01 ? Number(v).toFixed(6) : v < 1 ? Number(v).toFixed(4) : Number(v).toFixed(2));
 
@@ -1571,6 +1836,28 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
     ] : []),
     ...overlayLineSeries.map(s => ({ ...s, xAxisIndex: idx, yAxisIndex: idx })),
     ...bollingerSeries.map(s => ({ ...s, xAxisIndex: idx, yAxisIndex: idx })),
+    ...vwapSeries.map(s => ({ ...s, xAxisIndex: idx, yAxisIndex: idx })),
+    ...(showPphl && pivotMarkers.highs.length ? [{
+      name: 'PPHL Alta',
+      type: 'scatter',
+      xAxisIndex: idx, yAxisIndex: idx,
+      data: pivotMarkers.highs,
+      symbol: 'triangle',
+      symbolSize: 8,
+      symbolRotate: 180,
+      itemStyle: { color: C_DOWN },
+      z: 5,
+    }] : []),
+    ...(showPphl && pivotMarkers.lows.length ? [{
+      name: 'PPHL Baixa',
+      type: 'scatter',
+      xAxisIndex: idx, yAxisIndex: idx,
+      data: pivotMarkers.lows,
+      symbol: 'triangle',
+      symbolSize: 8,
+      itemStyle: { color: C_UP },
+      z: 5,
+    }] : []),
     ...(buyPnlSeries ? [{ ...buyPnlSeries, xAxisIndex: idx, yAxisIndex: idx }] : []),
     ...(stopLossSeries ? [{ ...stopLossSeries, xAxisIndex: idx, yAxisIndex: idx }] : []),
   ];
@@ -2082,7 +2369,7 @@ export default function CandlestickChart() {
   const { selectedChart, setSelectedChart, chartZoom, setChartZoom, chartTradeMarkers, chartViewSource,
     chartCandleWindowReset,
     multitradeChartFocus, tradePurchases, allTrades, gateFavorites, chartInterval: savedInterval, setChartInterval,
-    chartPanelButtons, uiPrefs, setMaBandsDefaults, setBollingerBandsDefaults, setActiveIndicatorsPreference,
+    chartPanelButtons, uiPrefs, setMaBandsDefaults, setBollingerBandsDefaults, setSrIntervalDefault, setPphlIntervalDefault, setVwapDefaults, setActiveIndicatorsPreference,
     multitradeFavorites, fiveMTradeFavorites, activeTrades } = useCurrency();
   const { t } = useI18n();
   const chartRef = useRef(null);
@@ -2160,6 +2447,15 @@ export default function CandlestickChart() {
   const [bollingerBands, setBollingerBands] = useState(() => ({ ...uiPrefs.bollingerBandsDefaults }));
   const [bollingerCache, setBollingerCache] = useState({});
   const [_bollingerLoading, setBollingerLoading] = useState(false);
+  const [srInterval, setSrInterval] = useState(() => uiPrefs.srIntervalDefault ?? DEFAULT_SR_INTERVAL);
+  const [srCache, setSrCache] = useState({});
+  const [_srLoading, setSrLoading] = useState(false);
+  const [pphlInterval, setPphlInterval] = useState(() => uiPrefs.pphlIntervalDefault ?? DEFAULT_PPHL_INTERVAL);
+  const [pphlCache, setPphlCache] = useState({});
+  const [_pphlLoading, setPphlLoading] = useState(false);
+  const [vwap, setVwap] = useState(() => ({ ...uiPrefs.vwapDefaults }));
+  const [vwapCache, setVwapCache] = useState({});
+  const [_vwapLoading, setVwapLoading] = useState(false);
   const [panelCollapsed, setPanelCollapsed] = useState(false);
   const [panelMasonryWidth, setPanelMasonryWidth] = useState(() => computePanelWidth(PANEL_MIN_WIDTH, true));
   const handlePanelLayoutChange = useCallback(({ width }) => {
@@ -2263,6 +2559,27 @@ export default function CandlestickChart() {
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bollingerBands.enabled, bollingerBands.period, bollingerBands.stdDev, bollingerBands.interval]);
+
+  // Persiste o intervalo do S/R (independente do intervalo do gráfico, como MA1/MA2/BB)
+  useEffect(() => {
+    if (isTradePanelChartView(chartViewSource)) return;
+    setSrIntervalDefault(srInterval);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [srInterval]);
+
+  // Persiste o intervalo do Pivot Points High/Low (mesmo padrão do S/R)
+  useEffect(() => {
+    if (isTradePanelChartView(chartViewSource)) return;
+    setPphlIntervalDefault(pphlInterval);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pphlInterval]);
+
+  // Persiste preferências do VWAP (ligado, intervalo, sessão, bandas) — mesmo padrão da Bollinger
+  useEffect(() => {
+    if (isTradePanelChartView(chartViewSource)) return;
+    setVwapDefaults({ enabled: vwap.enabled, interval: vwap.interval, session: vwap.session, bands: vwap.bands });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vwap.enabled, vwap.interval, vwap.session, vwap.bands]);
 
   const overlayFetchLimit = useMemo(() => {
     if (isTradePanelChartView(chartViewSource) && multitradeChartFocus?.fetchFromMs) {
@@ -2457,6 +2774,115 @@ export default function CandlestickChart() {
     selectedChart?.symbol, selectedChart?.interval, selectedChart?.source, selectedChart?.candlesticks,
     currentInterval, overlayFetchLimit, displayCandleCount, chartPanelButtons.bb,
     bollingerBands.enabled, bollingerBands.period, bollingerBands.stdDev, bollingerBands.interval,
+  ]);
+
+  // Busca as zonas de Suporte/Resistência — intervalo próprio (independente do gráfico), como a Bollinger.
+  const srShown = activeIndicators.includes('sr') && chartPanelButtons.sr !== false;
+  useEffect(() => {
+    if (!selectedChart?.symbol || !srShown) {
+      setSrLoading(false);
+      return undefined;
+    }
+    const key = srInterval;
+    let cancelled = false;
+    setSrLoading(true);
+    (async () => {
+      try {
+        const ovLimit = computeOverlayMaFetchLimit(
+          selectedChart.interval ?? currentInterval,
+          srInterval,
+          5,
+          Math.max(displayCandleCount, selectedChart.candlesticks?.length ?? 0, DEFAULT_CANDLE_LIMIT),
+          overlayFetchLimit,
+        );
+        const levels = await fetchSupportResistancePoints(
+          selectedChart.symbol, srInterval, selectedChart.source, ovLimit,
+        );
+        if (!cancelled) setSrCache({ [key]: levels });
+      } catch (e) {
+        console.warn('[sr]', key, e.message);
+        if (!cancelled) setSrCache({});
+      } finally {
+        if (!cancelled) setSrLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [
+    selectedChart?.symbol, selectedChart?.interval, selectedChart?.source, selectedChart?.candlesticks,
+    currentInterval, overlayFetchLimit, displayCandleCount, srShown, srInterval,
+  ]);
+
+  // Busca os pivôs do Pivot Points High/Low — intervalo próprio, mesmo padrão do S/R (pra comparação lado a lado).
+  const pphlShown = activeIndicators.includes('pphl') && chartPanelButtons.pphl !== false;
+  useEffect(() => {
+    if (!selectedChart?.symbol || !pphlShown) {
+      setPphlLoading(false);
+      return undefined;
+    }
+    const key = pphlInterval;
+    let cancelled = false;
+    setPphlLoading(true);
+    (async () => {
+      try {
+        const ovLimit = computeOverlayMaFetchLimit(
+          selectedChart.interval ?? currentInterval,
+          pphlInterval,
+          10,
+          Math.max(displayCandleCount, selectedChart.candlesticks?.length ?? 0, DEFAULT_CANDLE_LIMIT),
+          overlayFetchLimit,
+        );
+        const points = await fetchPivotPointsHighLowPoints(
+          selectedChart.symbol, pphlInterval, selectedChart.source, ovLimit,
+        );
+        if (!cancelled) setPphlCache({ [key]: points });
+      } catch (e) {
+        console.warn('[pphl]', key, e.message);
+        if (!cancelled) setPphlCache({});
+      } finally {
+        if (!cancelled) setPphlLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [
+    selectedChart?.symbol, selectedChart?.interval, selectedChart?.source, selectedChart?.candlesticks,
+    currentInterval, overlayFetchLimit, displayCandleCount, pphlShown, pphlInterval,
+  ]);
+
+  // Busca a série do VWAP — intervalo próprio (independente do gráfico), mesmo padrão da Bollinger.
+  useEffect(() => {
+    const vwapEnabled = vwap.enabled && chartPanelButtons.vwap !== false;
+    if (!selectedChart?.symbol || !vwapEnabled) {
+      setVwapLoading(false);
+      return undefined;
+    }
+    const key = `${vwap.interval}-${vwap.session}`;
+    let cancelled = false;
+    setVwapLoading(true);
+    (async () => {
+      try {
+        const ovLimit = computeOverlayMaFetchLimit(
+          selectedChart.interval ?? currentInterval,
+          vwap.interval,
+          1,
+          Math.max(displayCandleCount, selectedChart.candlesticks?.length ?? 0, DEFAULT_CANDLE_LIMIT),
+          overlayFetchLimit,
+        );
+        const points = await fetchVwapPoints(
+          selectedChart.symbol, vwap.interval, vwap.session, selectedChart.source, ovLimit,
+        );
+        if (!cancelled) setVwapCache({ [key]: points });
+      } catch (e) {
+        console.warn('[vwap]', key, e.message);
+        if (!cancelled) setVwapCache({});
+      } finally {
+        if (!cancelled) setVwapLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [
+    selectedChart?.symbol, selectedChart?.interval, selectedChart?.source, selectedChart?.candlesticks,
+    currentInterval, overlayFetchLimit, displayCandleCount, chartPanelButtons.vwap,
+    vwap.enabled, vwap.interval, vwap.session,
   ]);
 
   // Bandas adaptativas (piso/teto) — só quando o foco MT pede (ex.: clique em trade no backtest)
@@ -2779,6 +3205,29 @@ export default function CandlestickChart() {
     };
   }, [bollingerBands, bollingerCache, chartPanelButtons.bb]);
 
+  const chartSrConfig = useMemo(() => {
+    if (!srShown) return null;
+    return { interval: srInterval, levels: srCache[srInterval] ?? [] };
+  }, [srShown, srInterval, srCache]);
+
+  const chartPphlConfig = useMemo(() => {
+    if (!pphlShown) return null;
+    return { interval: pphlInterval, points: pphlCache[pphlInterval] ?? [] };
+  }, [pphlShown, pphlInterval, pphlCache]);
+
+  const chartVwapConfig = useMemo(() => {
+    const enabled = vwap.enabled && chartPanelButtons.vwap !== false;
+    if (!enabled) return null;
+    const key = `${vwap.interval}-${vwap.session}`;
+    return {
+      enabled: true,
+      interval: vwap.interval,
+      session: vwap.session,
+      bands: vwap.bands,
+      points: vwapCache[key] ?? [],
+    };
+  }, [vwap, vwapCache, chartPanelButtons.vwap]);
+
   const option = useMemo(() => {
     if (!selectedChart) return null;
     if (activeTab === 'matrix') {
@@ -2789,10 +3238,10 @@ export default function CandlestickChart() {
     return buildOption(
       selectedChart, colors, effectiveIndicators, displayLimit, chartZoom, tradeTimes, overlayConfigs,
       chartTradeMarkers?.length ? chartTradeMarkers : (selectedChart.tradeMarkers ?? []),
-      chartLeftPad, chartBuyInfo, chartStopLossConfig, chartRightPad, chartBollingerConfig,
+      chartLeftPad, chartBuyInfo, chartStopLossConfig, chartRightPad, chartBollingerConfig, chartSrConfig, chartPphlConfig, chartVwapConfig,
     );
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedChart, colors, effectiveIndicators, chartZoom, tradePurchases, chartTradeMarkers, activeTab, overlayConfigs, displayLimit, chartLeftPad, chartRightPad, chartBuyInfo, chartStopLossConfig, chartBollingerConfig]);
+  }, [selectedChart, colors, effectiveIndicators, chartZoom, tradePurchases, chartTradeMarkers, activeTab, overlayConfigs, displayLimit, chartLeftPad, chartRightPad, chartBuyInfo, chartStopLossConfig, chartBollingerConfig, chartSrConfig, chartPphlConfig, chartVwapConfig]);
 
   if (!selectedChart || !option) {
     return (
@@ -2931,6 +3380,12 @@ export default function CandlestickChart() {
             updateQuickEmaGroupBandPeriod={updateQuickEmaGroupBandPeriod}
             bollingerBands={bollingerBands}
             setBollingerBands={setBollingerBands}
+            srInterval={srInterval}
+            setSrInterval={setSrInterval}
+            pphlInterval={pphlInterval}
+            setPphlInterval={setPphlInterval}
+            vwap={vwap}
+            setVwap={setVwap}
             overlayMaLoading={overlayMaLoading}
             panelButtons={chartPanelButtons}
             collapsed={panelCollapsed}
@@ -2953,6 +3408,12 @@ export default function CandlestickChart() {
             updateQuickEmaGroupBandPeriod={updateQuickEmaGroupBandPeriod}
             bollingerBands={bollingerBands}
             setBollingerBands={setBollingerBands}
+            srInterval={srInterval}
+            setSrInterval={setSrInterval}
+            pphlInterval={pphlInterval}
+            setPphlInterval={setPphlInterval}
+            vwap={vwap}
+            setVwap={setVwap}
             overlayMaLoading={overlayMaLoading}
             panelButtons={chartPanelButtons}
             collapsed={panelCollapsed}
@@ -2977,6 +3438,12 @@ export default function CandlestickChart() {
               updateQuickEmaGroupBandPeriod={updateQuickEmaGroupBandPeriod}
               bollingerBands={bollingerBands}
               setBollingerBands={setBollingerBands}
+              srInterval={srInterval}
+              setSrInterval={setSrInterval}
+              pphlInterval={pphlInterval}
+              setPphlInterval={setPphlInterval}
+              vwap={vwap}
+              setVwap={setVwap}
               overlayMaLoading={overlayMaLoading}
               panelButtons={chartPanelButtons}
               collapsed={panelCollapsed}
