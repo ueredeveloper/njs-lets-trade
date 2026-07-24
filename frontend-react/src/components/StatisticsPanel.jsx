@@ -4,6 +4,8 @@ import { fetchRsiOversoldRecovery, fetchMaCrossStats, fetchBollingerBandRecovery
 import Tooltip from './Tooltip';
 import { useI18n } from '../i18n';
 import { CHART_VIEW } from '../utils/chartView';
+import { getEntriesForSymbol } from '../constants/strategyPresets';
+import { isMaCrossEntry } from '../utils/macrossFavoritesSort';
 
 
 const INTERVALS = ['1m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w'];
@@ -50,13 +52,56 @@ const TABS = [
   { id: 'bollinger_bands', labelKey: 'stats.tab.bollinger_bands' },
 ];
 
+const MC_INTERVAL_STORAGE_KEYS = {
+  rsi: 'lets_trade_stats_mc_interval_rsi',
+  ma_cross: 'lets_trade_stats_mc_interval_macross',
+  bollinger_bands: 'lets_trade_stats_mc_interval_bb',
+};
+
+function loadUseMcInterval(tab, fallback) {
+  try {
+    const v = localStorage.getItem(MC_INTERVAL_STORAGE_KEYS[tab]);
+    if (v === '1') return true;
+    if (v === '0') return false;
+  } catch {}
+  return fallback;
+}
+
+function saveUseMcInterval(tab, value) {
+  try { localStorage.setItem(MC_INTERVAL_STORAGE_KEYS[tab], value ? '1' : '0'); } catch {}
+}
+
+/** Entrada do favorito MA-Cross (multitrade_favorites) desse símbolo, se existir. */
+function mcEntryFor(multitradeFavorites, symbol) {
+  return getEntriesForSymbol(multitradeFavorites, symbol).find(isMaCrossEntry) ?? null;
+}
+
+/** Switch "Moeda MC" — usa o intervalo configurado no favorito MA-Cross da moeda em vez do
+ *  intervalo padrão fixo da aba. Estado memorizado por aba (localStorage). */
+function McIntervalSwitch({ checked, onChange }) {
+  return (
+    <div className="flex items-center gap-1 shrink-0 pb-1">
+      <span className="hidden md:inline text-[9px] text-p5/50 uppercase tracking-wider">Moeda MC</span>
+      <button
+        type="button"
+        onClick={() => onChange(!checked)}
+        title="Usa o intervalo configurado no favorito MA-Cross desta moeda em vez do padrão fixo"
+        className={`relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${checked ? 'bg-p4' : 'bg-p3/40'}`}
+      >
+        <span className={`inline-block h-3 w-3 rounded-full bg-white shadow transition-transform ${checked ? 'translate-x-3' : 'translate-x-0'}`} />
+      </button>
+    </div>
+  );
+}
+
 function RsiStats() {
-  const { selectedChart, setSelectedChart, setChartZoom, setChartViewSource } = useCurrency();
+  const { selectedChart, setSelectedChart, setChartZoom, setChartViewSource, multitradeFavorites } = useCurrency();
   const { t, formatPrice } = useI18n();
   const [symbol, setSymbol]         = useState(selectedChart?.symbol || 'BTCUSDT');
-  const [interval, setInterval]     = useState('15m');
+  const [interval, setInterval]     = useState('4h');
   const [oversold, setOversold]     = useState(30);
   const [overbought, setOverbought] = useState(70);
+  const [useMcInterval, setUseMcInterval] = useState(() => loadUseMcInterval('rsi', true));
   const [loading, setLoading]       = useState(false);
   const [result, setResult]         = useState(null);
   const rsiSeriesRef = useRef(null); // série RSI com warmup correto das estatísticas
@@ -66,9 +111,12 @@ function RsiStats() {
   const inp = 'bg-p2 border border-p3/40 text-p5 text-[10px] sm:text-xs rounded px-1 sm:px-2 py-1 focus:outline-none focus:border-p4 w-full';
   const inpNum = `${inp} [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none`;
 
-  async function handleSearch(overrideSymbol, updateChart = false, overrideInterval, overrideSource) {
+  async function handleSearch(overrideSymbol, updateChart = false, overrideInterval, overrideSource, overrideUseMc) {
     const sym    = (overrideSymbol ?? symbol).trim().toUpperCase();
-    const iv     = overrideInterval ?? interval;
+    const useMc  = overrideUseMc ?? useMcInterval;
+    const mcIv   = useMc ? mcEntryFor(multitradeFavorites, sym)?.tradeConfig?.entry?.ma1?.interval : null;
+    const iv     = overrideInterval ?? mcIv ?? interval;
+    if (mcIv) setInterval(mcIv);
     // Usa source do gráfico apenas quando o símbolo buscado é o mesmo do gráfico
     const chartSource = selectedChart?.symbol === sym ? (selectedChart?.source ?? null) : null;
     const src    = overrideSource !== undefined ? overrideSource : chartSource;
@@ -92,16 +140,23 @@ function RsiStats() {
     }
   }
 
-  // Sincroniza símbolo + intervalo com o gráfico e relança a busca
+  // Sincroniza símbolo com o gráfico e relança a busca — intervalo fica fixo em 4h por padrão,
+  // ou segue o favorito MA-Cross da moeda quando o switch "Moeda MC" está ligado.
   useEffect(() => {
     if (!selectedChart?.symbol) return;
     const sym = selectedChart.symbol;
-    const iv  = selectedChart.interval;
     const src = selectedChart.source ?? null;
     setSymbol(sym);
-    if (iv) setInterval(iv);
-    handleSearch(sym, false, iv, src);
-  }, [selectedChart?.symbol, selectedChart?.interval]);
+    handleSearch(sym, false, undefined, src);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedChart?.symbol]);
+
+  function handleToggleMc(next) {
+    setUseMcInterval(next);
+    saveUseMcInterval('rsi', next);
+    if (!next) setInterval('4h');
+    handleSearch(undefined, false, undefined, undefined, next);
+  }
 
   return (
     <div className="flex flex-col gap-2 w-full">
@@ -147,6 +202,8 @@ function RsiStats() {
           <input className={inpNum} type="number" min={1} max={99}
             value={overbought} onChange={(e) => setOverbought(Number(e.target.value))} />
         </div>
+
+        <McIntervalSwitch checked={useMcInterval} onChange={handleToggleMc} />
 
         {/* Botão */}
         <button
@@ -341,11 +398,12 @@ function RsiStats() {
 }
 
 function MaCrossStats() {
-  const { selectedChart, setSelectedChart, setChartZoom, setChartViewSource } = useCurrency();
+  const { selectedChart, setSelectedChart, setChartZoom, setChartViewSource, multitradeFavorites } = useCurrency();
   const { t } = useI18n();
   const [symbol, setSymbol]               = useState(selectedChart?.symbol || 'BTCUSDT');
-  const [entryInterval, setEntryInterval] = useState('15m');
-  const [exitInterval, setExitInterval]   = useState('30m');
+  const [entryInterval, setEntryInterval] = useState('4h');
+  const [exitInterval, setExitInterval]   = useState('4h');
+  const [useMcInterval, setUseMcInterval] = useState(() => loadUseMcInterval('ma_cross', false));
   const [loading, setLoading]             = useState(false);
   const [result, setResult]               = useState(null);
   const [error, setError]                 = useState(null);
@@ -353,10 +411,16 @@ function MaCrossStats() {
 
   const inp = 'bg-p2 border border-p3/40 text-p5 text-[10px] sm:text-xs rounded px-1 sm:px-2 py-1 focus:outline-none focus:border-p4 w-full';
 
-  async function handleSearch(overrideSymbol, updateChart = false, overrideEntryIv, overrideExitIv, overrideSource) {
+  async function handleSearch(overrideSymbol, updateChart = false, overrideEntryIv, overrideExitIv, overrideSource, overrideUseMc) {
     const sym = (overrideSymbol ?? symbol).trim().toUpperCase();
-    const entryIv = overrideEntryIv ?? entryInterval;
-    const exitIv = overrideExitIv ?? exitInterval;
+    const useMc = overrideUseMc ?? useMcInterval;
+    const mcEntry = useMc ? mcEntryFor(multitradeFavorites, sym) : null;
+    const mcEntryIv = mcEntry?.tradeConfig?.entry?.ma1?.interval ?? null;
+    const mcExitIv = mcEntry?.tradeConfig?.exit?.maCross?.ma1?.interval ?? null;
+    const entryIv = overrideEntryIv ?? mcEntryIv ?? entryInterval;
+    const exitIv = overrideExitIv ?? mcExitIv ?? exitInterval;
+    if (mcEntryIv) setEntryInterval(mcEntryIv);
+    if (mcExitIv) setExitInterval(mcExitIv);
     const chartSource = selectedChart?.symbol === sym ? (selectedChart?.source ?? null) : null;
     const src = overrideSource !== undefined ? overrideSource : chartSource;
     if (!sym) return;
@@ -386,9 +450,16 @@ function MaCrossStats() {
     const sym = selectedChart.symbol;
     const src = selectedChart.source ?? null;
     setSymbol(sym);
-    handleSearch(sym, false, entryInterval, exitInterval, src);
+    handleSearch(sym, false, undefined, undefined, src);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedChart?.symbol]);
+
+  function handleToggleMc(next) {
+    setUseMcInterval(next);
+    saveUseMcInterval('ma_cross', next);
+    if (!next) { setEntryInterval('4h'); setExitInterval('4h'); }
+    handleSearch(undefined, false, undefined, undefined, undefined, next);
+  }
 
   async function openOnChart(o, entryIv) {
     const startMs = new Date(o.startDate).getTime();
@@ -437,6 +508,7 @@ function MaCrossStats() {
             {INTERVALS.map((iv) => <option key={iv} value={iv}>{iv}</option>)}
           </select>
         </div>
+        <McIntervalSwitch checked={useMcInterval} onChange={handleToggleMc} />
         <button
           onClick={() => handleSearch(undefined, true)}
           disabled={loading}
@@ -574,12 +646,13 @@ function MaCrossStats() {
 }
 
 function BollingerBandsStats() {
-  const { selectedChart, setSelectedChart, setChartZoom, setChartViewSource } = useCurrency();
+  const { selectedChart, setSelectedChart, setChartZoom, setChartViewSource, multitradeFavorites } = useCurrency();
   const { t } = useI18n();
   const [symbol, setSymbol]     = useState(selectedChart?.symbol || 'BTCUSDT');
   const [interval, setInterval] = useState('4h');
   const [period, setPeriod]     = useState(20);
   const [stdDev, setStdDev]     = useState(2);
+  const [useMcInterval, setUseMcInterval] = useState(() => loadUseMcInterval('bollinger_bands', false));
   const [loading, setLoading]   = useState(false);
   const [result, setResult]     = useState(null);
   const [error, setError]       = useState(null);
@@ -588,9 +661,12 @@ function BollingerBandsStats() {
   const inp = 'bg-p2 border border-p3/40 text-p5 text-[10px] sm:text-xs rounded px-1 sm:px-2 py-1 focus:outline-none focus:border-p4 w-full';
   const inpNum = `${inp} [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none`;
 
-  async function handleSearch(overrideSymbol, updateChart = false, overrideInterval, overrideSource) {
+  async function handleSearch(overrideSymbol, updateChart = false, overrideInterval, overrideSource, overrideUseMc) {
     const sym = (overrideSymbol ?? symbol).trim().toUpperCase();
-    const iv  = overrideInterval ?? interval;
+    const useMc = overrideUseMc ?? useMcInterval;
+    const mcIv  = useMc ? mcEntryFor(multitradeFavorites, sym)?.tradeConfig?.entry?.ma1?.interval : null;
+    const iv  = overrideInterval ?? mcIv ?? interval;
+    if (mcIv) setInterval(mcIv);
     const chartSource = selectedChart?.symbol === sym ? (selectedChart?.source ?? null) : null;
     const src = overrideSource !== undefined ? overrideSource : chartSource;
     if (!sym) return;
@@ -611,15 +687,23 @@ function BollingerBandsStats() {
     }
   }
 
+  // Sincroniza símbolo com o gráfico e relança a busca — intervalo fica fixo em 4h por padrão,
+  // ou segue o favorito MA-Cross da moeda quando o switch "Moeda MC" está ligado.
   useEffect(() => {
     if (!selectedChart?.symbol) return;
     const sym = selectedChart.symbol;
-    const iv  = selectedChart.interval;
     const src = selectedChart.source ?? null;
     setSymbol(sym);
-    handleSearch(sym, false, iv, src);
+    handleSearch(sym, false, undefined, src);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedChart?.symbol]);
+
+  function handleToggleMc(next) {
+    setUseMcInterval(next);
+    saveUseMcInterval('bollinger_bands', next);
+    if (!next) setInterval('4h');
+    handleSearch(undefined, false, undefined, undefined, next);
+  }
 
   async function openOnChart(o, iv) {
     const startMs = new Date(o.startDate).getTime();
@@ -672,6 +756,7 @@ function BollingerBandsStats() {
           <input className={inpNum} type="number" min={0.5} max={5} step={0.1}
             value={stdDev} onChange={(e) => setStdDev(Number(e.target.value))} />
         </div>
+        <McIntervalSwitch checked={useMcInterval} onChange={handleToggleMc} />
         <button
           onClick={() => handleSearch(undefined, true)}
           disabled={loading}

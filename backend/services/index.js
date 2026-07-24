@@ -2,6 +2,8 @@
 // services/index.js
 const fetchCandles = require('./fetchCandles');
 const fetchIchimokuCloud = require('./fetchIchimokuCloud');
+const fetchSupportResistance = require('./fetchSupportResistance');
+const fetchPivotPointsHighLow = require('./fetchPivotPointsHighLow');
 const fetchAllCurrencies = require('./fetchAllCurrencies');
 const fetchSMA = require('./fetchSMA');
 const fetchRSI = require('./fetchRSI');
@@ -15,10 +17,12 @@ const fetchMaTimeAboveFilter = require('./fetchMaTimeAboveFilter')
 const fetchMaCrossoverFilter = require('./fetchMaCrossoverFilter')
 const fetchMaCompareFilter   = require('./fetchMaCompareFilter')
 const fetchMaDistanceFilter  = require('./fetchMaDistanceFilter')
+const fetchIndicatorGrowthFilter = require('./fetchIndicatorGrowthFilter')
 const fetchRsiOversoldRecovery = require('./fetchRsiOversoldRecovery')
 const fetchMaCrossStats          = require('./fetchMaCrossStats')
 const fetchBollingerBandRecovery = require('./fetchBollingerBandRecovery')
 const fetchBollingerBandPositionFilter = require('./fetchBollingerBandPositionFilter')
+const fetchVwapPositionFilter = require('./fetchVwapPositionFilter')
 const fetchBollingerBands             = require('./fetchBollingerBands')
 const fetchSimpleMaCross       = require('./fetchSimpleMaCross')
 const fetchReloadCandles       = require('./fetchReloadCandles')
@@ -34,9 +38,9 @@ const fetchMarketHighlights    = require('./fetchMarketHighlights')
 
 // remove cíclical error
 module.exports = {
-    fetchCandles, fetchIchimokuCloud, fetchAllCurrencies,
+    fetchCandles, fetchIchimokuCloud, fetchSupportResistance, fetchPivotPointsHighLow, fetchAllCurrencies,
     fetchSMA, fetchRSI, fetchVWAP, fetch24HsVolume, fetchMarketCapFilter, fetchStablecoins,
-    fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter, fetchMaDistanceFilter, fetchRsiOversoldRecovery, fetchMaCrossStats, fetchBollingerBandRecovery, fetchBollingerBandPositionFilter, fetchBollingerBands, fetchSimpleMaCross, fetchReloadCandles,
+    fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter, fetchMaDistanceFilter, fetchIndicatorGrowthFilter, fetchRsiOversoldRecovery, fetchMaCrossStats, fetchBollingerBandRecovery, fetchBollingerBandPositionFilter, fetchVwapPositionFilter, fetchBollingerBands, fetchSimpleMaCross, fetchReloadCandles,
     fetchGateCurrencies, fetchGatePrefetch, fetchBinanceTrades, fetchGateTrades, fetchActiveTrades,
     fetchTradeFavorites, stgBotStatus, multitradeService, fetchMarketHighlights }
 

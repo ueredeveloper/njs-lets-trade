@@ -152,6 +152,19 @@ export async function fetchBollingerBandPositionFilter({
   return res.json();
 }
 
+/** Filtra moedas por exaustão nas bandas de VWAP: preço perto do topo ou do fundo. */
+export async function fetchVwapPositionFilter({
+  interval = '1h', session = 'daily', bandMultiplier = '2', position = 'near_bottom', proximityPct = '20',
+} = {}) {
+  const params = new URLSearchParams({ interval, session, bandMultiplier, position, proximityPct });
+  const res = await fetch(`/services/vwap-position-filter?${params}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 export async function getFavorites(type) {
   const res = await fetch(`/services/sb/favorites?type=${type}`);
   if (!res.ok) throw new Error('Falha ao buscar favoritos');
@@ -571,6 +584,36 @@ export async function fetchMaDistanceFilter({
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error ?? `ma-distance-filter falhou: HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+/**
+ * Filtra moedas por "crescimento por ciclo" (fundo→topo): valorização média (%) entre o
+ * fundo (ex.: toque na banda inferior de Bollinger / RSI sobrevendido / cruzamento EMA↑) e
+ * o topo (banda superior / RSI sobrecomprado / cruzamento EMA↓), usando todo o histórico
+ * de candles salvo em disco.
+ */
+export async function fetchIndicatorGrowthFilter({
+  indicator = 'bollinger', interval = '4h', thresholdPct = '10',
+  period = '20', stdDev = '2', oversold = '30', overbought = '70', period1 = '9', period2 = '21',
+} = {}) {
+  const params = new URLSearchParams({ indicator, interval, thresholdPct: String(thresholdPct) });
+  if (indicator === 'bollinger') {
+    params.set('period', String(period));
+    params.set('stdDev', String(stdDev));
+  } else if (indicator === 'rsi') {
+    params.set('rsiPeriod', String(period));
+    params.set('oversold', String(oversold));
+    params.set('overbought', String(overbought));
+  } else if (indicator === 'maCross') {
+    params.set('period1', String(period1));
+    params.set('period2', String(period2));
+  }
+  const res = await fetch(`/services/indicator-growth-filter?${params}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `indicator-growth-filter falhou: HTTP ${res.status}`);
   }
   return res.json();
 }

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useCurrency } from '../contexts/CurrencyContext';
-import { fetchCandlesAndIndicators, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter, fetchMaDistanceFilter, fetchMarketCapFilter, fetchBollingerBandPositionFilter, fetchUserPrefs, saveUserPrefs } from '../services/api';
+import { fetchCandlesAndIndicators, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter, fetchMaDistanceFilter, fetchIndicatorGrowthFilter, fetchMarketCapFilter, fetchBollingerBandPositionFilter, fetchVwapPositionFilter, fetchUserPrefs, saveUserPrefs } from '../services/api';
 import { useI18n } from '../i18n';
 import {
   createRsiFilter,
@@ -16,7 +16,7 @@ import {
 } from '../utils/createIchimokuFilter';
 import Tooltip from './Tooltip';
 import { MA_CROSS_PERIOD_MIN, MA_CROSS_PERIOD_MAX } from '../constants/maCrossConfigSchema';
-import { buildMaCrossFilterName, buildMaCompareFilterName, buildMaDistanceFilterName } from '../utils/filterNames';
+import { buildMaCrossFilterName, buildMaCompareFilterName, buildMaDistanceFilterName, buildIndicatorGrowthFilterName } from '../utils/filterNames';
 
 const INTERVAL_MS = {
   '1m': 60_000, '3m': 180_000, '5m': 300_000, '15m': 900_000, '30m': 1_800_000,
@@ -146,6 +146,20 @@ function buildSummary(value, t) {
     const prox = value.proximityPct ?? '20';
     return t('sum.bb_position', period, stdDev, posLabel, ivLabel, prox);
   }
+  if (type === 'vwapPosition') {
+    const bandMultiplier = value.bandMultiplier ?? '2';
+    const session = value.session === 'weekly' ? t('vwap.session.weekly') : t('vwap.session.daily');
+    const position = value.position ?? 'near_bottom';
+    const posLabel = position === 'near_top' ? t('vwap.position.top') : t('vwap.position.bottom');
+    const prox = value.proximityPct ?? '20';
+    return t('sum.vwap_position', bandMultiplier, session, posLabel, ivLabel, prox);
+  }
+  if (type === 'indicatorGrowth') {
+    const engine = value.growthEngine ?? 'bollinger';
+    const threshold = value.thresholdPct ?? '10';
+    const engineLabel = t(`growth.engine.${engine}`);
+    return t('sum.indicator_growth', engineLabel, threshold, ivLabel);
+  }
   if (type === 'maCrossover') {
     const p1 = value.ma1Period ?? '9';
     const p2 = value.ma2Period ?? '21';
@@ -183,6 +197,8 @@ function indDescKey(type) {
   if (type === 'maCompare') return 'ma_compare';
   if (type === 'maDistance') return 'ma_distance';
   if (type === 'bollingerPosition') return 'bb_position';
+  if (type === 'vwapPosition') return 'vwap_position';
+  if (type === 'indicatorGrowth') return 'indicator_growth';
   return 'marketcap';
 }
 
@@ -251,10 +267,28 @@ function IndicatorRow({ value, onChange }) {
                 next.position = next.position ?? 'near_bottom';
                 next.proximityPct = '20';
               }
+              if (newType === 'vwapPosition') {
+                next.intervals = ['1h'];
+                next.session = next.session ?? 'daily';
+                next.bandMultiplier = '2';
+                next.position = next.position ?? 'near_bottom';
+                next.proximityPct = '20';
+              }
               if (newType === 'maDistance') {
                 next.intervals = ['4h'];
                 next.period = '21';
                 next.compare = next.compare ?? 'above';
+              }
+              if (newType === 'indicatorGrowth') {
+                next.intervals = ['4h'];
+                next.growthEngine = next.growthEngine ?? 'bollinger';
+                next.period = '20';
+                next.stdDev = '2';
+                next.oversold = '30';
+                next.overbought = '70';
+                next.period1 = '9';
+                next.period2 = '21';
+                next.thresholdPct = next.thresholdPct ?? '10';
               }
               onChange(next);
             }}
@@ -270,6 +304,8 @@ function IndicatorRow({ value, onChange }) {
             <option value="relativeStrengthIndex">{t('ind.rsi')}</option>
             <option value="marketCap">{t('ind.marketcap')}</option>
             <option value="bollingerPosition">{t('ind.bb_position')}</option>
+            <option value="vwapPosition">{t('ind.vwap_position')}</option>
+            <option value="indicatorGrowth">{t('ind.indicator_growth')}</option>
           </select>
           {type && t(`ind.desc.${indDescKey(type)}`) !== `ind.desc.${indDescKey(type)}` && (
             <HelpIcon text={t(`ind.desc.${indDescKey(type)}`)} />
@@ -558,6 +594,148 @@ function IndicatorRow({ value, onChange }) {
           </>
         )}
 
+        {type === 'vwapPosition' && (
+          <>
+            <select
+              className={sel}
+              value={value.session ?? 'daily'}
+              onChange={(e) => onChange({ ...value, session: e.target.value })}
+              title="Ancoragem do VWAP: diária (reset 00:00 UTC) ou semanal (reset segunda 00:00 UTC)"
+            >
+              <option value="daily">{t('vwap.session.daily')}</option>
+              <option value="weekly">{t('vwap.session.weekly')}</option>
+            </select>
+            <select
+              className={sel}
+              value={value.bandMultiplier ?? '2'}
+              onChange={(e) => onChange({ ...value, bandMultiplier: e.target.value })}
+              title="Desvio padrão das bandas de VWAP"
+            >
+              <option value="1">±1σ</option>
+              <option value="2">±2σ</option>
+              <option value="3">±3σ</option>
+            </select>
+            <select
+              className={sel}
+              value={value.position ?? 'near_bottom'}
+              onChange={(e) => onChange({ ...value, position: e.target.value })}
+              title="Fundo = close perto da banda inferior (exaustão de venda) | Topo = close perto da banda superior (exaustão de compra)"
+            >
+              <option value="near_bottom">{t('vwap.position.bottom')}</option>
+              <option value="near_top">{t('vwap.position.top')}</option>
+            </select>
+            <select
+              className={sel}
+              value={value.proximityPct ?? '20'}
+              onChange={(e) => onChange({ ...value, proximityPct: e.target.value })}
+              title="Distância máxima da banda, em % da largura da banda"
+            >
+              {[5, 10, 15, 20, 25, 30].map(v => (
+                <option key={v} value={String(v)}>≤{v}%</option>
+              ))}
+            </select>
+          </>
+        )}
+
+        {type === 'indicatorGrowth' && (
+          <>
+            <select
+              className={sel}
+              value={value.growthEngine ?? 'bollinger'}
+              onChange={(e) => onChange({ ...value, growthEngine: e.target.value })}
+              title="Qual indicador define o fundo (entrada) e o topo (saída) do ciclo"
+            >
+              <option value="bollinger">{t('growth.engine.bollinger')}</option>
+              <option value="rsi">{t('growth.engine.rsi')}</option>
+              <option value="maCross">{t('growth.engine.maCross')}</option>
+            </select>
+
+            {(value.growthEngine ?? 'bollinger') === 'bollinger' && (
+              <>
+                <select
+                  className={sel}
+                  value={value.period ?? '20'}
+                  onChange={(e) => onChange({ ...value, period: e.target.value })}
+                  title="Período da Bollinger Bands"
+                >
+                  <option value="10">BB10</option>
+                  <option value="20">BB20</option>
+                  <option value="30">BB30</option>
+                </select>
+                <select
+                  className={sel}
+                  value={value.stdDev ?? '2'}
+                  onChange={(e) => onChange({ ...value, stdDev: e.target.value })}
+                  title="Desvio padrão das bandas"
+                >
+                  <option value="1">±1σ</option>
+                  <option value="2">±2σ</option>
+                  <option value="3">±3σ</option>
+                </select>
+              </>
+            )}
+
+            {value.growthEngine === 'rsi' && (
+              <>
+                <select
+                  className={sel}
+                  value={value.oversold ?? '30'}
+                  onChange={(e) => onChange({ ...value, oversold: e.target.value })}
+                  title="RSI de entrada (fundo) — sobrevenda"
+                >
+                  {[10, 20, 25, 30, 35, 40].map(v => <option key={v} value={String(v)}>RSI&lt;{v}</option>)}
+                </select>
+                <select
+                  className={sel}
+                  value={value.overbought ?? '70'}
+                  onChange={(e) => onChange({ ...value, overbought: e.target.value })}
+                  title="RSI de saída (topo) — sobrecompra"
+                >
+                  {[60, 65, 70, 75, 80, 90].map(v => <option key={v} value={String(v)}>RSI&gt;{v}</option>)}
+                </select>
+              </>
+            )}
+
+            {value.growthEngine === 'maCross' && (
+              <>
+                <input
+                  type="number"
+                  className={sel}
+                  style={{ width: '3.25rem' }}
+                  min={MA_CROSS_PERIOD_MIN}
+                  max={MA_CROSS_PERIOD_MAX}
+                  value={value.period1 ?? '9'}
+                  onChange={(e) => onChange({ ...value, period1: e.target.value })}
+                  title="EMA de entrada (cruza para cima = fundo)"
+                />
+                <span className="text-p5/50 text-[10px] shrink-0">×</span>
+                <input
+                  type="number"
+                  className={sel}
+                  style={{ width: '3.25rem' }}
+                  min={MA_CROSS_PERIOD_MIN}
+                  max={MA_CROSS_PERIOD_MAX}
+                  value={value.period2 ?? '21'}
+                  onChange={(e) => onChange({ ...value, period2: e.target.value })}
+                  title="EMA de saída (cruza para baixo = topo)"
+                />
+              </>
+            )}
+
+            <input
+              type="number"
+              className={sel}
+              style={{ width: '3.5rem' }}
+              min="0"
+              step="1"
+              value={value.thresholdPct ?? '10'}
+              onChange={(e) => onChange({ ...value, thresholdPct: e.target.value })}
+              title="Valorização média mínima (%) entre fundo e topo, no período salvo"
+            />
+            <span className="text-p5/50 text-[10px] shrink-0">%</span>
+          </>
+        )}
+
         {type === 'maCrossover' && (
           <>
             <input
@@ -804,7 +982,9 @@ export default function IndicatorPanel({ open, onToggle }) {
       const maCompareIndicators = indicators.filter((ind) => ind.type === 'maCompare');
       const maDistanceIndicators = indicators.filter((ind) => ind.type === 'maDistance');
       const bbPositionIndicators = indicators.filter((ind) => ind.type === 'bollingerPosition');
-      const otherIndicators = indicators.filter((ind) => ind.type && ind.type !== 'relativeStrengthIndex' && ind.type !== 'marketCap' && ind.type !== 'movingAverage' && ind.type !== 'maTimeAbove' && ind.type !== 'maCrossover' && ind.type !== 'maCompare' && ind.type !== 'maDistance' && ind.type !== 'bollingerPosition');
+      const vwapPositionIndicators = indicators.filter((ind) => ind.type === 'vwapPosition');
+      const growthIndicators = indicators.filter((ind) => ind.type === 'indicatorGrowth');
+      const otherIndicators = indicators.filter((ind) => ind.type && ind.type !== 'relativeStrengthIndex' && ind.type !== 'marketCap' && ind.type !== 'movingAverage' && ind.type !== 'maTimeAbove' && ind.type !== 'maCrossover' && ind.type !== 'maCompare' && ind.type !== 'maDistance' && ind.type !== 'bollingerPosition' && ind.type !== 'vwapPosition' && ind.type !== 'indicatorGrowth');
 
       // Salva intervalos e análises usadas nas preferências
       const allIntervals = [...new Set(indicators.flatMap(ind => ind.intervals ?? []))];
@@ -948,6 +1128,54 @@ export default function IndicatorPanel({ open, onToggle }) {
           });
           addFilter({
             name: filter.name,
+            list: filter.list,
+            meta: filter.details,
+            scannedAt: filter.scannedAt,
+          });
+        }
+      }
+
+      // Exaustão nas bandas de VWAP (%V): preço perto do fundo ou do topo
+      for (const ind of vwapPositionIndicators) {
+        const session = ind.session ?? 'daily';
+        const bandMultiplier = ind.bandMultiplier ?? '2';
+        const position = ind.position ?? 'near_bottom';
+        const proximityPct = ind.proximityPct ?? '20';
+        for (const interval of ind.intervals) {
+          const filter = await fetchVwapPositionFilter({
+            interval, session, bandMultiplier, position, proximityPct,
+          });
+          addFilter({
+            name: filter.name,
+            list: filter.list,
+            meta: filter.details,
+            scannedAt: filter.scannedAt,
+          });
+        }
+      }
+
+      // Crescimento por ciclo (fundo→topo): Bollinger / RSI / cruzamento EMA
+      for (const ind of growthIndicators) {
+        const engine = ind.growthEngine ?? 'bollinger';
+        const thresholdPct = ind.thresholdPct ?? '10';
+        const period = ind.period ?? '20';
+        const stdDev = ind.stdDev ?? '2';
+        const oversold = ind.oversold ?? '30';
+        const overbought = ind.overbought ?? '70';
+        const period1 = ind.period1 ?? '9';
+        const period2 = ind.period2 ?? '21';
+
+        for (const interval of ind.intervals) {
+          const filter = await fetchIndicatorGrowthFilter({
+            indicator: engine, interval, thresholdPct,
+            period, stdDev, oversold, overbought, period1, period2,
+          });
+          const params = engine === 'bollinger' ? { period, stdDev }
+            : engine === 'rsi' ? { oversold, overbought }
+            : { period1, period2 };
+          const expectedName = buildIndicatorGrowthFilterName(engine, interval, params, thresholdPct);
+          addFilter({
+            name: filter.name ?? expectedName,
             list: filter.list,
             meta: filter.details,
             scannedAt: filter.scannedAt,

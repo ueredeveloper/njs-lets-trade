@@ -20,9 +20,9 @@ const { ichimokuCloudRouter } = require('./technicals-indicators');
 
 //const {client} = require('./services/fetchClient');
 const {
-  fetchCandles, fetchIchimokuCloud, fetchAllCurrencies,
-  fetchSMA, fetchRSI, fetchVWAP, fetch24HsVolume, fetchMarketCapFilter, fetchStablecoins, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter, fetchMaDistanceFilter,
-  fetchRsiOversoldRecovery, fetchMaCrossStats, fetchBollingerBandRecovery, fetchBollingerBandPositionFilter, fetchBollingerBands, fetchSimpleMaCross, fetchReloadCandles,
+  fetchCandles, fetchIchimokuCloud, fetchSupportResistance, fetchPivotPointsHighLow, fetchAllCurrencies,
+  fetchSMA, fetchRSI, fetchVWAP, fetch24HsVolume, fetchMarketCapFilter, fetchStablecoins, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter, fetchMaDistanceFilter, fetchIndicatorGrowthFilter,
+  fetchRsiOversoldRecovery, fetchMaCrossStats, fetchBollingerBandRecovery, fetchBollingerBandPositionFilter, fetchVwapPositionFilter, fetchBollingerBands, fetchSimpleMaCross, fetchReloadCandles,
   fetchGateCurrencies, fetchGatePrefetch, fetchBinanceTrades, fetchGateTrades,
   fetchActiveTrades, fetchTradeFavorites, stgBotStatus, multitradeService, fetchMarketHighlights } = require('./services');
 const supabaseService = require('./services/supabaseService');
@@ -36,6 +36,8 @@ const router = express.Router();
 
 app.use('/services', fetchCandles);
 app.use('/services', fetchIchimokuCloud);
+app.use('/services', fetchSupportResistance);
+app.use('/services', fetchPivotPointsHighLow);
 app.use('/services', fetchAllCurrencies);
 app.use('/services', fetchSMA);
 app.use('/services', fetchRSI);
@@ -50,10 +52,12 @@ app.use('/services', fetchMaTimeAboveFilter)
 app.use('/services', fetchMaCrossoverFilter)
 app.use('/services', fetchMaCompareFilter)
 app.use('/services', fetchMaDistanceFilter)
+app.use('/services', fetchIndicatorGrowthFilter)
 app.use('/services', fetchRsiOversoldRecovery)
 app.use('/services', fetchMaCrossStats)
 app.use('/services', fetchBollingerBandRecovery)
 app.use('/services', fetchBollingerBandPositionFilter)
+app.use('/services', fetchVwapPositionFilter)
 app.use('/services', fetchBollingerBands)
 app.use('/services', fetchSimpleMaCross)
 app.use('/services', fetchReloadCandles)
@@ -137,8 +141,14 @@ async function startServer() {
   await maCompareCache.loadFromDisk();
   const bbPositionCache = require('./cache/bbPositionCache');
   await bbPositionCache.loadFromDisk();
+  const vwapPositionCache = require('./cache/vwapPositionCache');
+  await vwapPositionCache.loadFromDisk();
   const maDistanceCache = require('./cache/maDistanceCache');
   await maDistanceCache.loadFromDisk();
+  const indicatorGrowthCache = require('./cache/indicatorGrowthCache');
+  await indicatorGrowthCache.loadFromDisk();
+  const mcFavoritesStatsCache = require('./cache/mcFavoritesStatsCache');
+  await mcFavoritesStatsCache.loadFromDisk();
 
   app.listen(PORT, () => {
     const boot = ((Date.now() - t0) / 1000).toFixed(2);
@@ -215,6 +225,27 @@ async function startServer() {
   refreshBbPositionCache().catch(e => console.error('[bbPositionCache] erro no warmup:', e.message));
   setInterval(refreshBbPositionCache, bbPositionCache.REFRESH_TICK_MS);
 
+  async function refreshVwapPositionCache() {
+    try {
+      const { list: symbols } = await getActiveUsdtPairs();
+      if (!Array.isArray(symbols) || symbols.length === 0) return;
+      const stats = await vwapPositionCache.refreshAll(symbols);
+      if (stats.computed > 0) {
+        const m = stats.matched ?? {};
+        console.log(
+          `[vwapPositionCache] fundo:${m['1h|d|2|bot|20'] ?? 0} topo:${m['1h|d|2|top|20'] ?? 0}`
+          + ` | disco:${stats.diskHits ?? 0} stale:${stats.diskStale ?? 0} api:${stats.apiFetches ?? 0}`
+          + ` | fila:${stats.queuePending ?? 0}`,
+        );
+      }
+    } catch (e) {
+      console.error('[vwapPositionCache] erro no refresh:', e.message);
+    }
+  }
+
+  refreshVwapPositionCache().catch(e => console.error('[vwapPositionCache] erro no warmup:', e.message));
+  setInterval(refreshVwapPositionCache, vwapPositionCache.REFRESH_TICK_MS);
+
   async function refreshMaDistanceCache() {
     try {
       const { list: symbols } = await getActiveUsdtPairs();
@@ -236,6 +267,26 @@ async function startServer() {
 
   refreshMaDistanceCache().catch(e => console.error('[maDistanceCache] erro no warmup:', e.message));
   setInterval(refreshMaDistanceCache, maDistanceCache.REFRESH_TICK_MS);
+
+  async function refreshIndicatorGrowthCache() {
+    try {
+      const { list: symbols } = await getActiveUsdtPairs();
+      if (!Array.isArray(symbols) || symbols.length === 0) return;
+      const stats = await indicatorGrowthCache.refreshAll(symbols);
+      if (stats.computed > 0) {
+        const w = stats.withCycles ?? {};
+        console.log(
+          `[indicatorGrowthCache] bb:${w['4h|growth|bb|20|2'] ?? 0} rsi:${w['4h|growth|rsi|30|70'] ?? 0}`
+          + ` macross:${w['4h|growth|macross|9|21'] ?? 0} | computados:${stats.computed}/${stats.total}`,
+        );
+      }
+    } catch (e) {
+      console.error('[indicatorGrowthCache] erro no refresh:', e.message);
+    }
+  }
+
+  refreshIndicatorGrowthCache().catch(e => console.error('[indicatorGrowthCache] erro no warmup:', e.message));
+  setInterval(refreshIndicatorGrowthCache, indicatorGrowthCache.REFRESH_TICK_MS);
 
   const candleDiskWarmup = require('./utils/candleDiskWarmup');
   const CANDLE_WARMUP_TICK_MS = 60_000;

@@ -178,6 +178,50 @@ export function parseMaCrossFilterName(name) {
   return out;
 }
 
+const GROWTH_ENGINE_TOKENS = { bollinger: 'bb', rsi: 'rsi', maCross: 'macross' };
+const GROWTH_ENGINE_FROM_TOKEN = { bb: 'bollinger', rsi: 'rsi', macross: 'maCross' };
+
+/**
+ * Filtro de crescimento por ciclo (fundo→topo): 4h|growth|bb|20|2|10
+ *   bb:      interval|growth|bb|period|stdDev|thresholdPct
+ *   rsi:     interval|growth|rsi|oversold|overbought|thresholdPct
+ *   maCross: interval|growth|macross|period1|period2|thresholdPct
+ */
+export function buildIndicatorGrowthFilterName(engine, interval, params, thresholdPct) {
+  const token = GROWTH_ENGINE_TOKENS[engine] ?? engine;
+  let paramsPart;
+  if (engine === 'bollinger') paramsPart = `${params.period}|${params.stdDev}`;
+  else if (engine === 'rsi') paramsPart = `${params.oversold}|${params.overbought}`;
+  else if (engine === 'maCross') paramsPart = `${params.period1}|${params.period2}`;
+  else paramsPart = '';
+  return `${interval}|growth|${token}|${paramsPart}|${thresholdPct}`;
+}
+
+export function parseIndicatorGrowthFilterName(name) {
+  const parts = String(name).split('|');
+  if (parts[1] !== 'growth' || parts.length < 6) return null;
+
+  const engine = GROWTH_ENGINE_FROM_TOKEN[parts[2]];
+  if (!engine) return null;
+
+  const out = {
+    interval: parts[0],
+    engine,
+    thresholdPct: parseFloat(parts[5]),
+  };
+  if (engine === 'bollinger') {
+    out.period = parseInt(parts[3], 10);
+    out.stdDev = parseFloat(parts[4]);
+  } else if (engine === 'rsi') {
+    out.oversold = parseInt(parts[3], 10);
+    out.overbought = parseInt(parts[4], 10);
+  } else if (engine === 'maCross') {
+    out.period1 = parseInt(parts[3], 10);
+    out.period2 = parseInt(parts[4], 10);
+  }
+  return out;
+}
+
 /** Constrói nome RSI a partir da query (ex: 8h|rsi|above|70|bellow|99). */
 export function buildRsiNomeFromQuery(query, lang = 'en') {
   const parts = query.trim().split('|');

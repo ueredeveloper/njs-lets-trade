@@ -209,6 +209,15 @@ function getFilterDescription(name, t) {
     return t('filter.bb_position', posLabel, period, stdDev, interval, extra);
   }
 
+  if (type === 'vwappos') {
+    const session = parts[2] === 'w' ? t('vwap.session.weekly') : t('vwap.session.daily');
+    const bandMultiplier = parts[3];
+    const posLabel = parts[4] === 'top' ? t('vwap.position.top') : t('vwap.position.bottom');
+    let extra = '';
+    if (parts[5] === 'prox' && parts[6] != null) extra = `≤${parts[6]}%`;
+    return t('filter.vwap_position', posLabel, bandMultiplier, session, interval, extra);
+  }
+
   if (type === 'm' || type === 'ma') {
     if (parts[3] === 'pct') {
       const period = parts[2];

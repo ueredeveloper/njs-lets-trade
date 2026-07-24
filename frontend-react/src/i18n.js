@@ -38,6 +38,8 @@ const T = {
     'settings.chart_btn.ma50':           'EMA50',
     'settings.chart_btn.ma200':          'EMA200',
     'settings.chart_btn.ichimoku':       'Ichimoku (Ichi)',
+    'settings.chart_btn.sr':             'Suporte/Resistência (S/R)',
+    'settings.chart_btn.pphl':           'Pivot Points High/Low (PPHL)',
     'settings.chart_btn.rsi':            'RSI',
     'settings.chart_btn.rsi80':          'RSI 80 (R80)',
     'settings.chart_btn.rsi50':          'RSI 50 (R50)',
@@ -45,8 +47,10 @@ const T = {
     'settings.chart_btn.ma2':            'MA overlay 2 (MA2)',
     'settings.chart_btn.stopLoss':       'Stop Loss (SL)',
     'settings.chart_btn.bb':             'Bollinger Bands (BB)',
+    'settings.chart_btn.vwap':           'VWAP',
     'settings.chart_btn_hint.stopLoss':  'Linha vermelha do stop loss calculada a partir da compra ativa.',
     'settings.chart_btn_hint.bb':        'Bandas de Bollinger (período, desvio e intervalo próprios) sobre o preço.',
+    'settings.chart_btn_hint.vwap':      'Preço médio ponderado por volume (VWAP), num intervalo próprio — independente do intervalo do gráfico.',
     'settings.overlay_slots':            'Overlay MA — padrão',
     'settings.overlay_slots_hint':       'Combinações MA+intervalo ativas por padrão ao abrir o gráfico. Máximo de 8.',
     'settings.overlay_slots_max':        (n) => `Limite de ${n} slots atingido.`,
@@ -70,7 +74,9 @@ const T = {
     'ind.rsi':               'RSI',
     'ind.marketcap':         'Market Cap',
     'ind.bb_position':       'Posição na Banda de Bollinger',
+    'ind.vwap_position':     'Exaustão nas Bandas de VWAP',
     'ind.ma_distance':       'Distância vs EMA',
+    'ind.indicator_growth':  'Crescimento por Ciclo (Fundo→Topo)',
 
     // Indicadores — descrições tooltip
     'ind.desc.ichimoku':     'Sistema japonês com 5 linhas que indica tendência, suporte/resistência e momentum. Muito usado em análise técnica avançada.',
@@ -81,7 +87,9 @@ const T = {
     'ind.desc.rsi':          'RSI — oscilador de 0 a 100 que mede força do movimento. Abaixo de 30 = sobrevendido (possível alta). Acima de 70 = sobrecomprado (possível queda).',
     'ind.desc.marketcap':    'Cruza dados da CoinGecko com o volume da Binance. "Giro de volume" detecta moedas com preço inflado sem sustentação real de negócios. "Diluição futura" identifica tokens com muita emissão ainda pendente.',
     'ind.desc.bb_position':  'Posição do preço dentro da Bollinger Bands (%B). Fundo = close perto da banda inferior (possível sobrevenda). Topo = close perto da banda superior (possível sobrecompra). Padrão: 4h, BB(20,2).',
+    'ind.desc.vwap_position': 'Exaustão nas bandas de desvio padrão do VWAP de sessão (diária/semanal). Fundo = preço perto da banda inferior (exaustão de venda, possível repique). Topo = preço perto da banda superior (exaustão de compra, possível correção). Padrão: 1h, sessão diária, ±2σ.',
     'ind.desc.ma_distance':  'Quantos % o preço está acima (ou abaixo) de uma única EMA (9, 21, 50 ou 200). Mostra a distância na tabela e permite ordenar por moedas mais distantes ou mais próximas da média. Padrão: EMA21 no 4h.',
+    'ind.desc.indicator_growth': 'Varre todo o histórico salvo da moeda procurando ciclos completos de fundo→topo (ex.: preço toca a banda inferior de Bollinger e sobe até a banda superior) e calcula a valorização média (%) entre entrada e saída. Filtra moedas cuja valorização média seja ≥ à porcentagem escolhida. Mesmo cálculo usado em Estatísticas.',
 
     // Comparadores
     'cmp.above':             'Acima',
@@ -90,6 +98,17 @@ const T = {
     // Bollinger Bands — posição
     'bb.position.bottom':    'Mais próximo do fundo',
     'bb.position.top':       'Mais próximo do topo',
+
+    // VWAP — sessão e posição (exaustão)
+    'vwap.session.daily':    'Sessão diária',
+    'vwap.session.weekly':   'Sessão semanal',
+    'vwap.position.bottom':  'Exaustão no fundo',
+    'vwap.position.top':     'Exaustão no topo',
+
+    // Crescimento por ciclo — motor
+    'growth.engine.bollinger': 'Banda de Bollinger (fundo→topo)',
+    'growth.engine.rsi':       'RSI (sobrevenda→sobrecompra)',
+    'growth.engine.maCross':   'Cruzamento de EMAs',
 
     // Linhas do candle
     'candle.high':           'Máxima',
@@ -153,6 +172,8 @@ const T = {
     'sum.macross_prox':      (prox) => `(gap ≤${prox}%)`,
     'sum.mcap':              (metric, preset) => `Market Cap: ${metric} ${preset}`,
     'sum.bb_position':       (period, stdDev, posLabel, ivl, prox) => `BB(${period},${stdDev}): ${posLabel} (≤${prox}%) → ${ivl}`,
+    'sum.vwap_position':     (band, session, posLabel, ivl, prox) => `VWAP(${session},±${band}σ): ${posLabel} (≤${prox}%) → ${ivl}`,
+    'sum.indicator_growth':  (engineLabel, threshold, ivl) => `${engineLabel}: valorização média ≥${threshold}% → ${ivl}`,
     'sum.above':             'acima de',
     'sum.bellow':            'abaixo de',
     'sum.above_short':       'acima',
@@ -290,6 +311,10 @@ const T = {
     'chart.tip.sma50':       'EMA50 no intervalo do gráfico. Linha ciano.',
     'chart.tip.sma200':      'EMA200 no intervalo do gráfico. Linha âmbar.',
     'chart.tip.ichimoku':    'Nuvem Ichimoku (conversão, base, spans). Sobrepõe linhas no gráfico de preço.',
+    'chart.tip.sr':          'Suporte/Resistência: pivôs de topo/fundo confirmados (candles fechados) agrupados em zonas. Verde = suporte, vermelho = resistência; linhas mais grossas = mais toques.',
+    'chart.tip.sr_interval': 'Intervalo de candles usado para calcular o S/R (ex.: 15m, 4h) — independente do intervalo do gráfico, igual à Bollinger Bands.',
+    'chart.tip.pphl':          'Pivot Points High/Low: cada pivô de topo/fundo confirmado (candles fechados) vira um marcador — sem agrupar em zonas. Compare com o S/R, que agrupa pivôs próximos numa mesma zona.',
+    'chart.tip.pphl_interval': 'Intervalo de candles usado para calcular o Pivot Points High/Low (ex.: 15m, 4h) — independente do intervalo do gráfico.',
     'chart.tip.rsi':         'Painel RSI abaixo do preço (0–100). Zonas 30/70 tracejadas.',
     'chart.tip.rsi50':       'Linha horizontal de referência no RSI em 50 (meio do range).',
     'chart.tip.rsi80':       'Linha horizontal de referência no RSI em 80 (sobrecompra forte).',
@@ -314,6 +339,10 @@ const T = {
     'chart.tip.bb_stddev':   'Desvio padrão das bandas superior/inferior (±1σ, ±2σ ou ±3σ).',
     'chart.tip.bb_interval': 'Intervalo de candles usado para calcular a Bollinger Bands (ex.: 1h, 4h) — independente do intervalo do gráfico.',
     'chart.tip.bb_on':       'Liga (ON) ou desliga (OFF) as linhas da Bollinger Bands no gráfico.',
+    'chart.tip.vwap_interval': 'Intervalo de candles usado para calcular o VWAP (ex.: 1h, 4h) — independente do intervalo do gráfico. Ex.: VWAP de 4h sobre um gráfico de 15min.',
+    'chart.tip.vwap_session':  'Ponto de reset do VWAP: Diário (00:00 UTC) ou Semanal (segunda 00:00 UTC). Cripto não tem pregão, então essa é a "sessão" — o valor não muda com o intervalo escolhido, só com a sessão.',
+    'chart.tip.vwap_bands':    'Mostra as bandas de desvio padrão (±1σ e ±2σ) em torno do VWAP.',
+    'chart.tip.vwap_on':       'Liga (ON) ou desliga (OFF) a linha do VWAP no gráfico.',
     'chart.tip.panel_collapse': 'Recolher painel de indicadores (libera espaço no gráfico).',
     'chart.tip.panel_expand':   'Mostrar painel de indicadores.',
 
@@ -332,6 +361,7 @@ const T = {
     'filter.rsi':            (c1, v1, c2, v2, ivl) => `RSI ${c1} de ${v1} e ${c2} de ${v2} (${ivl})`,
     'filter.ichi':           (l1, cmp, l2, ivl) => `Ichimoku: ${l1} ${cmp} ${l2} (${ivl})`,
     'filter.bb_position':    (pos, period, stdDev, ivl, extra) => `BB(${period},${stdDev}) ${pos} (${ivl})${extra ? ` ${extra}` : ''}`,
+    'filter.vwap_position':  (pos, band, session, ivl, extra) => `VWAP(${session},${band}σ) ${pos} (${ivl})${extra ? ` ${extra}` : ''}`,
     'filter.ma':             (p, cmp, cdl, ivl) => `MA${p} ${cmp} ${cdl} (${ivl})`,
     'filter.ma_pct':         (p, pct, ivl) => `MA${p}: ≥${pct}% do histórico acima da MA (${ivl})`,
     'filter.macross':        (p1, iv1, p2, iv2, mode, extra, sigIv) => `EMA${p1}(${iv1}) × EMA${p2}(${iv2}): ${mode} ${extra} [${sigIv}]`,
@@ -437,6 +467,8 @@ const T = {
     'settings.chart_btn.ma50':           'EMA50',
     'settings.chart_btn.ma200':          'EMA200',
     'settings.chart_btn.ichimoku':       'Ichimoku (Ichi)',
+    'settings.chart_btn.sr':             'Support/Resistance (S/R)',
+    'settings.chart_btn.pphl':           'Pivot Points High/Low (PPHL)',
     'settings.chart_btn.rsi':            'RSI',
     'settings.chart_btn.rsi80':          'RSI 80 (R80)',
     'settings.chart_btn.rsi50':          'RSI 50 (R50)',
@@ -444,8 +476,10 @@ const T = {
     'settings.chart_btn.ma2':            'MA overlay 2 (MA2)',
     'settings.chart_btn.stopLoss':       'Stop Loss (SL)',
     'settings.chart_btn.bb':             'Bollinger Bands (BB)',
+    'settings.chart_btn.vwap':           'VWAP',
     'settings.chart_btn_hint.stopLoss':  'Red stop-loss line computed from the active buy.',
     'settings.chart_btn_hint.bb':        'Bollinger Bands (own period, deviation and interval) drawn over price.',
+    'settings.chart_btn_hint.vwap':      'Volume-weighted average price (VWAP), on its own interval — independent from the chart interval.',
     'settings.overlay_slots':            'Overlay MA — defaults',
     'settings.overlay_slots_hint':       'Period+interval combinations active by default when opening the chart. Maximum 8.',
     'settings.overlay_slots_max':        (n) => `Limit of ${n} slots reached.`,
@@ -469,7 +503,9 @@ const T = {
     'ind.rsi':               'RSI',
     'ind.marketcap':         'Market Cap',
     'ind.bb_position':       'Bollinger Band Position',
+    'ind.vwap_position':     'VWAP Band Exhaustion',
     'ind.ma_distance':       'Distance vs EMA',
+    'ind.indicator_growth':  'Cycle Growth (Bottom→Top)',
 
     // Indicator descriptions
     'ind.desc.ichimoku':     'Japanese system with 5 lines indicating trend, support/resistance and momentum. Widely used in advanced technical analysis.',
@@ -480,7 +516,9 @@ const T = {
     'ind.desc.rsi':          'RSI — oscillator from 0 to 100 measuring movement strength. Below 30 = oversold (possible rise). Above 70 = overbought (possible fall).',
     'ind.desc.marketcap':    'Cross-references CoinGecko data with Binance volume. "Volume turnover" detects coins with inflated prices. "Future dilution" identifies tokens with large pending supply.',
     'ind.desc.bb_position':  'Price position inside the Bollinger Bands (%B). Bottom = close near the lower band (possible oversold). Top = close near the upper band (possible overbought). Default: 4h, BB(20,2).',
+    'ind.desc.vwap_position': 'Exhaustion inside the session VWAP standard-deviation bands (daily/weekly). Bottom = price near the lower band (sell exhaustion, possible bounce). Top = price near the upper band (buy exhaustion, possible pullback). Default: 1h, daily session, ±2σ.',
     'ind.desc.ma_distance':  'How far the price is above (or below) a single EMA (9, 21, 50 or 200), in %. Shown in the table, sortable by farthest or closest to the average. Default: EMA21 on 4h.',
+    'ind.desc.indicator_growth': 'Scans the coin\'s entire saved history looking for complete bottom→top cycles (e.g. price touches the lower Bollinger band and rises to the upper band) and computes the average appreciation (%) between entry and exit. Filters coins whose average appreciation is ≥ the chosen percentage. Same calculation used in Statistics.',
 
     // Comparators
     'cmp.above':             'Above',
@@ -489,6 +527,17 @@ const T = {
     // Bollinger Bands — position
     'bb.position.bottom':    'Closest to bottom',
     'bb.position.top':       'Closest to top',
+
+    // VWAP — session and position (exhaustion)
+    'vwap.session.daily':    'Daily session',
+    'vwap.session.weekly':   'Weekly session',
+    'vwap.position.bottom':  'Bottom exhaustion',
+    'vwap.position.top':     'Top exhaustion',
+
+    // Cycle growth — engine
+    'growth.engine.bollinger': 'Bollinger Band (bottom→top)',
+    'growth.engine.rsi':       'RSI (oversold→overbought)',
+    'growth.engine.maCross':   'EMA Crossover',
 
     // Candle lines
     'candle.high':           'High',
@@ -552,6 +601,8 @@ const T = {
     'sum.macross_prox':      (prox) => `(gap ≤${prox}%)`,
     'sum.mcap':              (metric, preset) => `Market Cap: ${metric} ${preset}`,
     'sum.bb_position':       (period, stdDev, posLabel, ivl, prox) => `BB(${period},${stdDev}): ${posLabel} (≤${prox}%) → ${ivl}`,
+    'sum.vwap_position':     (band, session, posLabel, ivl, prox) => `VWAP(${session},±${band}σ): ${posLabel} (≤${prox}%) → ${ivl}`,
+    'sum.indicator_growth':  (engineLabel, threshold, ivl) => `${engineLabel}: avg appreciation ≥${threshold}% → ${ivl}`,
     'sum.above':             'above',
     'sum.bellow':            'below',
     'sum.above_short':       'above',
@@ -689,6 +740,10 @@ const T = {
     'chart.tip.sma50':       'EMA50 on chart interval. Cyan line.',
     'chart.tip.sma200':      'EMA200 on chart interval. Amber line.',
     'chart.tip.ichimoku':    'Ichimoku cloud (conversion, base, spans) overlaid on price.',
+    'chart.tip.sr':          'Support/Resistance: confirmed swing highs/lows (closed candles) grouped into zones. Green = support, red = resistance; thicker lines = more touches.',
+    'chart.tip.sr_interval': 'Candle interval used to compute Support/Resistance (e.g. 15m, 4h) — independent from the chart interval, same as Bollinger Bands.',
+    'chart.tip.pphl':          'Pivot Points High/Low: every confirmed swing high/low (closed candles) becomes a marker — no grouping into zones. Compare with S/R, which groups nearby pivots into one zone.',
+    'chart.tip.pphl_interval': 'Candle interval used to compute Pivot Points High/Low (e.g. 15m, 4h) — independent from the chart interval.',
     'chart.tip.rsi':         'RSI panel below price (0–100). Dashed 30/70 zones.',
     'chart.tip.rsi50':       'Horizontal reference line at RSI 50.',
     'chart.tip.rsi80':       'Horizontal reference line at RSI 80.',
@@ -713,6 +768,10 @@ const T = {
     'chart.tip.bb_stddev':   'Standard deviation of the upper/lower bands (±1σ, ±2σ or ±3σ).',
     'chart.tip.bb_interval': 'Candle interval used to compute the Bollinger Bands (e.g. 1h, 4h) — independent from the chart interval.',
     'chart.tip.bb_on':       'Toggles (ON/OFF) the Bollinger Bands lines on the chart.',
+    'chart.tip.vwap_interval': 'Candle interval used to compute the VWAP (e.g. 1h, 4h) — independent from the chart interval. E.g.: 4h VWAP on a 15min chart.',
+    'chart.tip.vwap_session':  'VWAP reset anchor: Daily (00:00 UTC) or Weekly (Monday 00:00 UTC). Crypto has no trading session, so this is the closest equivalent — the value depends on the session, not on the chosen interval.',
+    'chart.tip.vwap_bands':    'Shows the standard-deviation bands (±1σ and ±2σ) around the VWAP.',
+    'chart.tip.vwap_on':       'Toggles (ON/OFF) the VWAP line on the chart.',
     'chart.tip.panel_collapse': 'Collapse indicator panel (frees chart space).',
     'chart.tip.panel_expand':   'Show indicator panel.',
 
@@ -731,6 +790,7 @@ const T = {
     'filter.rsi':            (c1, v1, c2, v2, ivl) => `RSI ${c1} ${v1} and ${c2} ${v2} (${ivl})`,
     'filter.ichi':           (l1, cmp, l2, ivl) => `Ichimoku: ${l1} ${cmp} ${l2} (${ivl})`,
     'filter.bb_position':    (pos, period, stdDev, ivl, extra) => `BB(${period},${stdDev}) ${pos} (${ivl})${extra ? ` ${extra}` : ''}`,
+    'filter.vwap_position':  (pos, band, session, ivl, extra) => `VWAP(${session},${band}σ) ${pos} (${ivl})${extra ? ` ${extra}` : ''}`,
     'filter.ma':             (p, cmp, cdl, ivl) => `MA${p} ${cmp} ${cdl} (${ivl})`,
     'filter.ma_pct':         (p, pct, ivl) => `MA${p}: ≥${pct}% of history above MA (${ivl})`,
     'filter.macross':        (p1, iv1, p2, iv2, mode, extra, sigIv) => `EMA${p1}(${iv1}) × EMA${p2}(${iv2}): ${mode} ${extra} [${sigIv}]`,
