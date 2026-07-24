@@ -91,7 +91,7 @@ export const MA_CROSS_DEFAULTS = {
     pendingTimeoutMs: 90 * 60_000,
     pendingCancelPct: 0.002,
     pendingCancelOnExitRsi: true,
-    pullbackEntry: { enabled: true, waitCandles: 2, requirePullback: true },
+    pullbackEntry: { enabled: false, waitCandles: 2, requirePullback: true },
   },
   polling: { pollMs: 60_000, fastPollMs: 30_000 },
   adaptiveOpts: { defaultPct: 3, maxPct: 8, minPct: 0.5, minEpisodes: 3, defaultAbovePct: 4, maxAbovePct: 8, minAbovePct: 0.5 },
@@ -108,9 +108,29 @@ export const MA_CROSS_DEFAULTS = {
     period:   20,
     stdDev:   2.0,
   },
-  volume: { minVolumeUsdt: 1_000_000, allowLowVolume: false },
+  entryMultiDca: {
+    enabled: false,
+    minEntryUsdt: 15,
+    reEntryGapHours: 2,
+    reapplyFilters: false,
+  },
+  volume: { minVolumeUsdt: 1_000_000 },
   entryCooldownHours: 4,
 };
+
+/** Espelho de computeDcaTiers em backend/bot/ma-cross/strategyEngine.js — mesma
+ *  fórmula, usada aqui só pra preview na UI (não afeta o que o bot de fato executa). */
+const DCA_TIER_RATIOS = { 1: [1], 2: [0.375, 0.625], 3: [0.25, 0.375, 0.375] };
+
+export function computeDcaTiers(capital, minEntryUsdt) {
+  const cap = Number(capital) || 0;
+  const minEntry = Math.max(0, Number(minEntryUsdt) || 0);
+  for (let n = 3; n >= 1; n--) {
+    const amounts = DCA_TIER_RATIOS[n].map(r => cap * r);
+    if (amounts.every(a => a >= minEntry)) return amounts;
+  }
+  return [cap];
+}
 
 function clampPeriod(p, fb = 50) {
   const n = Number(p);
@@ -156,6 +176,17 @@ function normalizeEntryBbLower(block) {
     interval: src.interval ?? d.interval,
     period:   clampPeriod(src.period, d.period),
     stdDev:   Math.max(0.5, Math.min(4, Number(src.stdDev ?? d.stdDev))),
+  };
+}
+
+function normalizeEntryMultiDca(block) {
+  const d = MA_CROSS_DEFAULTS.entryMultiDca;
+  const src = block ?? {};
+  return {
+    enabled:         src.enabled === true,
+    minEntryUsdt:    Math.max(0, Number(src.minEntryUsdt ?? d.minEntryUsdt)),
+    reEntryGapHours: Math.max(0, Number(src.reEntryGapHours ?? d.reEntryGapHours)),
+    reapplyFilters:  src.reapplyFilters === true,
   };
 }
 
@@ -288,6 +319,7 @@ export function normalizeMaCrossForm(body = {}) {
     entryCooldownHours: Number(body.entryCooldownHours ?? d.entryCooldownHours ?? 4),
     entryBbFilter: normalizeEntryBbFilter(body.entryBbFilter),
     entryBbLower: normalizeEntryBbLower(body.entryBbLower),
+    entryMultiDca: normalizeEntryMultiDca(body.entryMultiDca),
   };
 }
 
@@ -308,6 +340,7 @@ export function maCrossFormToPayload(form, meta = {}) {
     entryEmaApproach: c.entryEmaApproach,
     entryBbFilter: c.entryBbFilter,
     entryBbLower: c.entryBbLower,
+    entryMultiDca: c.entryMultiDca,
     maFiltersEnabled: c.maFiltersEnabled,
     maFilters: c.maFilters.map(({ id, enabled, period, interval, mode, maxDipPct, fixedDipPct, maxAbovePct, fixedAbovePct, tolerancePct }) => ({
       id, enabled, period, interval, mode, maxDipPct, maxAbovePct, tolerancePct,

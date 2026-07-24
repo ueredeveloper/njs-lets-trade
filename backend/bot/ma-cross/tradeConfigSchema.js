@@ -87,9 +87,10 @@ const MA_CROSS_DEFAULTS = {
     pendingTimeoutMs:     90 * 60_000,
     pendingCancelPct:     0.002,
     pendingCancelOnExitRsi: true,
-    /** Janela de até N candles após cruzamento; compra no 1º que passar (pullback + teto). */
+    /** Janela de até N candles após cruzamento; compra no 1º que passar (pullback + teto).
+     *  Desligado por padrão — só ativa se o usuário marcar explicitamente no formulário. */
     pullbackEntry: {
-      enabled:         true,
+      enabled:         false,
       waitCandles:     2,
       requirePullback: true,
     },
@@ -107,9 +108,9 @@ const MA_CROSS_DEFAULTS = {
     minAbovePct:     0.5,
   },
 
+  /** Só informativo (aviso no formulário e no log do bot) — nunca bloqueia compra/venda. */
   volume: {
     minVolumeUsdt:  1_000_000,
-    allowLowVolume: false,
   },
 
   /** Filtro Bollinger Bands: %B do preço vs banda inferior/superior no intervalo HTF.
@@ -128,11 +129,13 @@ const MA_CROSS_DEFAULTS = {
 
   /** Aproximação + retomada: exige que a EMA rápida tenha formado um fundo perto da
    *  EMA lenta nos últimos candles e já esteja subindo de volta (não basta estar acima
-   *  há muito tempo). Substitui o filtro BB 4h como filtro de entrada secundário.
+   *  há muito tempo). Chegou a substituir o filtro BB 4h como filtro de entrada
+   *  secundário, mas bloqueava pra sempre moedas em rali contínuo sem pullback
+   *  (BANKUSDT, REUSDT — nunca formam o "fundo" exigido). Desligado por padrão.
    *  approachPct sugerido a partir de dados reais (ver analyze-ema-approach-4h.js):
    *  mediana do fundo histórico ficou em -0.85% antes da alta; 1.5% dá margem. */
   entryEmaApproach: {
-    enabled: true,
+    enabled: false,
     ma1: { period: 9, interval: '4h' },
     ma2: { period: 21, interval: '4h' },
     approachPct: 1.5,
@@ -184,7 +187,27 @@ const MA_CROSS_DEFAULTS = {
     /** % mínimo abaixo da banda inferior para confirmar o toque (0 = basta tocar). */
     breakoutPct: 0,
   },
+
+  /** Entradas parceladas (DCA): compra em até MAX_DCA_ENTRIES tranches em vez de uma
+   *  vez só, cada uma disparada por um novo toque na banda inferior (entryBbLower) —
+   *  depende dela para saber qual indicador observar nas reentradas, mesmo que
+   *  entryBbLower.enabled seja false (nesse caso a 1ª entrada vem só do cruzamento EMA
+   *  e só as reentradas usam a banda). Desligado por padrão: com enabled=false o bot
+   *  se comporta exatamente como hoje (entrada única, 100% do capital). */
+  entryMultiDca: {
+    enabled: false,
+    /** Mínimo por entrada (USDT); usado pra calcular quantas tranches cabem no capital. */
+    minEntryUsdt: 15,
+    /** Horas mínimas entre uma compra e a próxima. */
+    reEntryGapHours: 2,
+    /** false = reentrada só exige o toque puro na banda inferior; true = reaplica os
+     *  mesmos filtros da entrada inicial (entryTrendMa/entryEmaApproach/entryReversalGuard/maFilters). */
+    reapplyFilters: false,
+  },
 };
+
+/** Nº máximo de tranches suportado pelo recurso de entradas parceladas (fixo por ora). */
+const MAX_DCA_ENTRIES = 3;
 
 function isValidMaCrossPeriod(p) {
   const n = parseInt(p, 10);
@@ -270,6 +293,17 @@ function normalizeEntryBbLower(block) {
     period:      clampPeriod(src.period, d.period),
     stdDev:      Math.max(0.5, Math.min(4, Number(src.stdDev ?? d.stdDev))),
     breakoutPct: Math.max(0, Math.min(20, Number(src.breakoutPct ?? d.breakoutPct ?? 0))),
+  };
+}
+
+function normalizeEntryMultiDca(block) {
+  const d = MA_CROSS_DEFAULTS.entryMultiDca;
+  const src = block ?? {};
+  return {
+    enabled:         src.enabled === true,
+    minEntryUsdt:    Math.max(0, Number(src.minEntryUsdt ?? d.minEntryUsdt)),
+    reEntryGapHours: Math.max(0, Number(src.reEntryGapHours ?? d.reEntryGapHours)),
+    reapplyFilters:  src.reapplyFilters === true,
   };
 }
 
@@ -378,6 +412,7 @@ function normalizeMaCrossConfig(body = {}) {
     entryEmaApproach: normalizeEntryEmaApproach(body.entryEmaApproach),
     entryBbFilter:  normalizeEntryBbFilter(body.entryBbFilter),
     entryBbLower:   normalizeEntryBbLower(body.entryBbLower),
+    entryMultiDca:  normalizeEntryMultiDca(body.entryMultiDca),
     entryReversalGuard: normalizeEntryReversalGuard(body.entryReversalGuard),
     maFiltersEnabled: body.maFiltersEnabled !== false,
     maFilters: migrateMaFilters(body),
@@ -420,8 +455,7 @@ function normalizeMaCrossConfig(body = {}) {
       maxAbovePct: Math.max(0.5, Number(body.adaptiveOpts?.maxAbovePct ?? d.adaptiveOpts.maxAbovePct)),
     },
     volume: {
-      minVolumeUsdt:  Number(body.volume?.minVolumeUsdt ?? d.volume.minVolumeUsdt),
-      allowLowVolume: body.volume?.allowLowVolume === true,
+      minVolumeUsdt: Number(body.volume?.minVolumeUsdt ?? d.volume.minVolumeUsdt),
     },
     entryCooldownHours: Math.max(0, Number(body.entryCooldownHours ?? d.entryCooldownHours)),
   };
@@ -432,7 +466,6 @@ function toEngineConfig(normalized) {
   return {
     ...c,
     minVolumeUsdt:    c.volume.minVolumeUsdt,
-    allowLowVolume:   c.volume.allowLowVolume,
     pollMs:           c.polling.pollMs,
     fastPollMs:       c.polling.fastPollMs,
     entryDiscount:    c.execution.entryDiscount,
@@ -482,6 +515,7 @@ module.exports = {
   MA_CROSS_PERIOD_MAX,
   isValidMaCrossPeriod,
   MA_CROSS_DEFAULTS,
+  MAX_DCA_ENTRIES,
   ALL_INTERVALS,
   CROSS_DIRS,
   FILTER_MODES,

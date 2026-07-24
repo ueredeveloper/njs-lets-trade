@@ -193,11 +193,11 @@ const MA_CROSS_PRESETS = {
       immediateEntry: false,
       entryDiscount: 0.001,
       pendingTimeoutMs: 90 * 60_000,
-      pullbackEntry: { enabled: true, waitCandles: 2, requirePullback: true },
+      pullbackEntry: { enabled: false, waitCandles: 2, requirePullback: true },
     },
     polling: { pollMs: 60_000, fastPollMs: 30_000 },
     adaptiveOpts: { defaultPct: 3, maxPct: 8, minPct: 0.5, minEpisodes: 3, defaultAbovePct: 4, maxAbovePct: 8, minAbovePct: 0.5 },
-    volume: { minVolumeUsdt: 1_000_000, allowLowVolume: false },
+    volume: { minVolumeUsdt: 1_000_000 },
     entryCooldownHours: 4,
   },
 };

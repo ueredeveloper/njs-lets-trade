@@ -296,7 +296,12 @@ export default function MultitradeModal({
   }, [symbol, exchange, form.volume?.minVolumeUsdt]);
 
   useEffect(() => { setVolumeWarnOpen(false); }, [symbol, exchange, form.volume?.minVolumeUsdt]);
-  useEffect(() => { if (volCheck?.meetsMin) patch('volume.allowLowVolume', false); }, [volCheck?.meetsMin, patch]);
+  useEffect(() => {
+    // ma-cross não tem mais o campo allowLowVolume no formulário (volume nunca bloqueia
+    // compra/venda nessa estratégia) — não faz sentido reinjetá-lo no payload aqui.
+    if (isMaCross) return;
+    if (volCheck?.meetsMin) patch('volume.allowLowVolume', false);
+  }, [isMaCross, volCheck?.meetsMin, patch]);
 
   function copy(text, key) {
     navigator.clipboard.writeText(text).then(() => {
@@ -322,8 +327,10 @@ export default function MultitradeModal({
       return payload;
     }
     if (isMaCrossStrategy(sid)) {
+      // ma-cross não tem mais allowLowVolume — volume nunca bloqueia compra/venda nessa
+      // estratégia, então não há motivo pra escrever esse campo de volta no trade_config.
       const payload = maCrossFormToPayload(st.form, meta);
-      payload.volume = { ...st.form.volume, allowLowVolume: volAllow };
+      payload.volume = { minVolumeUsdt: st.form.volume?.minVolumeUsdt };
       return payload;
     }
     const payload = formStateToPayload(st.form, {
@@ -793,7 +800,7 @@ export default function MultitradeModal({
               {entryPathError && (
                 <p className="text-[9px] text-red-400 mb-1">{entryPathError}</p>
               )}
-              <MaCrossStrategyForm form={form} patch={patch} symbol={symbol} exchange={exchange} hasSavedConfig={!!strat.id} />
+              <MaCrossStrategyForm form={form} patch={patch} symbol={symbol} exchange={exchange} hasSavedConfig={!!strat.id} capital={capital} />
             </>
           )}
 

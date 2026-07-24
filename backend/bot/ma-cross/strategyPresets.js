@@ -23,7 +23,7 @@ const PRESET_BODIES = {
       tolerancePct: 2,
     },
     entryEmaApproach: {
-      enabled: true,
+      enabled: false,
       ma1: { period: 9, interval: '4h' },
       ma2: { period: 21, interval: '4h' },
       approachPct: 1.5,
@@ -40,6 +40,12 @@ const PRESET_BODIES = {
       interval: '4h',
       period: 20,
       stdDev: 2.0,
+    },
+    entryMultiDca: {
+      enabled: false,
+      minEntryUsdt: 15,
+      reEntryGapHours: 2,
+      reapplyFilters: false,
     },
     maFiltersEnabled: true,
     maFilters: [{
@@ -66,11 +72,11 @@ const PRESET_BODIES = {
       immediateEntry: false,
       entryDiscount: 0.001,
       pendingTimeoutMs: 90 * 60_000,
-      pullbackEntry: { enabled: true, waitCandles: 2, requirePullback: true },
+      pullbackEntry: { enabled: false, waitCandles: 2, requirePullback: true },
     },
     polling:   { pollMs: 60_000, fastPollMs: 30_000 },
     adaptiveOpts: { defaultPct: 3, maxPct: 8, minPct: 0.5, minEpisodes: 3 },
-    volume:    { minVolumeUsdt: 1_000_000, allowLowVolume: false },
+    volume:    { minVolumeUsdt: 1_000_000 },
     entryCooldownHours: 4,
   },
 };

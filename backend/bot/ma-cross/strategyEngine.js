@@ -1222,7 +1222,11 @@ function evaluateEntry(config, cMap, adaptiveDips = {}, opts = {}) {
  */
 function evaluateEntryBbLowerSignal(config, cMap, opts = {}) {
   const bb = config.entryBbLower;
-  if (!bb?.enabled) return { matched: false };
+  /** Reentradas do entryMultiDca reusam este indicador mesmo com entryBbLower.enabled
+   *  desligado (caso a 1ª entrada tenha vindo do cruzamento EMA e só as reentradas
+   *  observem a banda inferior) — daí o bypass via opts.forDca. */
+  if (!bb?.enabled && !opts.forDca) return { matched: false };
+  if (!bb) return { matched: false };
 
   const closedOnly = opts.closedOnly !== false;
   const iv = bb.interval ?? '4h';
@@ -1243,6 +1247,27 @@ function evaluateEntryBbLowerSignal(config, cMap, opts = {}) {
     return { matched: true, close, upper: lastBb.upper, lower: lastBb.lower, middle: lastBb.middle, bbInterval: iv, threshold };
   }
   return { matched: false, reason: 'BB_LOWER_NOT_TOUCHED', close, lower: lastBb.lower, threshold, bbInterval: iv };
+}
+
+/** Proporção de cada tranche do capital total, por nº de entradas (1 a 3). Calibrado
+ *  pra reproduzir os exemplos do usuário com minEntryUsdt=15: capital 40 -> 2 entradas
+ *  de 15+25 (37.5%/62.5%); capital 80 -> 3 entradas de 20+30+30 (25%/37.5%/37.5%). */
+const DCA_TIER_RATIOS = { 1: [1], 2: [0.375, 0.625], 3: [0.25, 0.375, 0.375] };
+
+/**
+ * Calcula o valor USDT de cada tranche de entrada parcelada (DCA), pegando o maior nº
+ * de entradas (até 3) cujas frações do capital fiquem todas >= minEntryUsdt. Se nem uma
+ * única entrada atingir o mínimo, ainda retorna 1 tranche = capital inteiro (deixa operar,
+ * a UI é quem avisa sobre o capital insuficiente).
+ */
+function computeDcaTiers(capital, minEntryUsdt) {
+  const cap = Number(capital) || 0;
+  const minEntry = Math.max(0, Number(minEntryUsdt) || 0);
+  for (let n = 3; n >= 1; n--) {
+    const amounts = DCA_TIER_RATIOS[n].map(r => cap * r);
+    if (amounts.every(a => a >= minEntry)) return amounts;
+  }
+  return [cap];
 }
 
 /**
@@ -1912,6 +1937,7 @@ module.exports = {
   evaluateEntryBbFilter,
   evaluateEntryBbLowerSignal,
   evaluateBbLowerEntry,
+  computeDcaTiers,
   IMMEDIATE_ENTRY_TRIGGERS,
   evaluateImmediateEntry,
   evaluateEntryTrendMa,

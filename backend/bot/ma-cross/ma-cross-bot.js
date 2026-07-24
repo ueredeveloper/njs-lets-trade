@@ -14,7 +14,6 @@
 const path     = require('path');
 const crypto   = require('crypto');
 const fs       = require('fs');
-const readline = require('readline');
 require('dotenv').config({ path: path.join(__dirname, '../../../.env') });
 
 const { fetchBinanceCandles, fetchGateCandles } = require('../prices');
@@ -35,6 +34,7 @@ const {
   evaluateImmediateEntry,
   pullbackEntryEnabled, evaluateExit, computeAdaptiveDips, computeAdaptiveStretches,
   computeStopLossFloor, getFinestPollInterval,
+  computeDcaTiers, evaluateBbLowerEntry, evaluateEntryBbLowerSignal,
 } = require('./strategyEngine');
 
 const GATE_FEE_RATE = 0.002;
@@ -63,13 +63,6 @@ function makeLogger(symbol, strategyId, color = '') {
     console.log(msg);
     try { fs.appendFileSync(logFile, noAnsi + '\n'); } catch {}
   };
-}
-
-function askUser(question) {
-  return new Promise(resolve => {
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    rl.question(question, answer => { rl.close(); resolve(answer.trim().toLowerCase()); });
-  });
 }
 
 // ── Binance ───────────────────────────────────────────────────────────────────
@@ -389,6 +382,18 @@ const DEFAULT_ENTRY_COOLDOWN_HOURS = 4;
 const COOLDOWN_LOG_INTERVAL_MS = 15 * 60_000;
 const ENTRY_CAP_LOG_REASON = 'ABOVE_MA2_MAX';
 const PENDING_LOG_INTERVAL_MS = 15 * 60_000;
+const LOW_VOL_LOG_INTERVAL_MS = 15 * 60_000;
+
+/** Volume abaixo do mínimo nunca bloqueia compra/venda — só avisa no log (throttle 15min). */
+function logLowVolumeWarning(config, session, log) {
+  const vol = session.volCache?.volumeUsdt;
+  const minVol = config.minVolumeUsdt ?? 1_000_000;
+  if (vol == null || vol >= minVol) return;
+  const now = Date.now();
+  if (session.lastLowVolLogAt && now - session.lastLowVolLogAt < LOW_VOL_LOG_INTERVAL_MS) return;
+  session.lastLowVolLogAt = now;
+  log(`${Y}⚠️ Volume 24h (${vol.toFixed(0)} USDT) abaixo do mínimo (${minVol.toFixed(0)}) — operando mesmo assim${X}`);
+}
 
 const PENDING_CANCEL_LABELS = {
   NO_PULLBACK: 'sem pullback em direção à MA21',
@@ -464,7 +469,7 @@ function rulesStateWithoutPending(state, session, extra = {}) {
 }
 
 async function executeBuy({
-  rowId, adapter, strategy, log, session, state, entryMeta, capital, strategyId, symbol,
+  rowId, adapter, strategy, log, session, state, entryMeta, capital, strategyId, symbol, totalCapital,
 }) {
   let result;
   try {
@@ -479,7 +484,14 @@ async function executeBuy({
   const buyTime = new Date().toISOString();
   session.phase = 'BOUGHT';
   session.pendingPullback = null;
-  session.rulesState = { stopPeakPrice: avgPrice, stopFloor: initialFloor };
+  const dcaCfg = strategy.config.entryMultiDca;
+  session.rulesState = {
+    stopPeakPrice: avgPrice,
+    stopFloor: initialFloor,
+    ...(dcaCfg?.enabled
+      ? { dca: { entries: [{ price: avgPrice, qty: filledQty, usdt: quoteQty, time: buyTime }] } }
+      : {}),
+  };
   await saveState(rowId, {
     phase: 'BOUGHT', buy_price: avgPrice, buy_qty: filledQty,
     buy_usdt: quoteQty, buy_time: buyTime,
@@ -492,6 +504,10 @@ async function executeBuy({
   log(`${'─'.repeat(60)}`);
   log(`${G}🟢 COMPRA EXECUTADA${X}`);
   log(`   Preço : ${avgPrice.toFixed(6)}  Qty: ${filledQty}  USDT: ${quoteQty.toFixed(4)}`);
+  if (dcaCfg?.enabled) {
+    const tierCount = computeDcaTiers(parseFloat(totalCapital ?? capital), dcaCfg.minEntryUsdt).length;
+    log(`   Entradas parceladas (DCA): 1/${tierCount} — próxima após ${dcaCfg.reEntryGapHours}h no toque da banda inferior`);
+  }
   if (entryMeta.pullbackVsMa2Pct != null) {
     log(`   Pullback MA21: ${entryMeta.pullbackVsMa2Pct.toFixed(1)}pp  close +${entryMeta.aboveMa2Pct?.toFixed(1) ?? '?'}% MA21`);
   } else if (entryMeta.pullbackPct != null) {
@@ -505,6 +521,69 @@ async function executeBuy({
   sendWhatsApp(
     `🟢 MA-CROSS COMPRA [${strategyId}] ${symbol}\nPreço: ${avgPrice}\nUSDT: ${quoteQty.toFixed(4)}`
     + (reasonLines.length ? `\n\nMotivos:\n${reasonLines.map(l => `• ${l}`).join('\n')}` : ''),
+  );
+  return true;
+}
+
+/**
+ * Entradas parceladas (DCA): enquanto a posição está BOUGHT, verifica se ainda há
+ * tranches disponíveis (config.entryMultiDca) e, se o intervalo mínimo já passou e a
+ * banda inferior tocou de novo, compra mais uma tranche e recalcula o preço médio.
+ * Não mexe na fase (permanece BOUGHT) nem na saída (evaluateExit continua indiferente
+ * a quantas tranches formaram a posição, pois só olha buy_price/qty agregados).
+ */
+async function maybeExecuteDcaReEntry({
+  rowId, adapter, strategy, log, session, state, capital, symbol, cMap, evalOpts, rulesState,
+}) {
+  const { config } = strategy;
+  const dcaCfg = config.entryMultiDca;
+  const dca = rulesState.dca ?? { entries: [] };
+  const tiers = computeDcaTiers(parseFloat(capital), dcaCfg.minEntryUsdt);
+  if (dca.entries.length >= tiers.length) return false;
+
+  const lastEntryTime = dca.entries.at(-1)?.time ?? state.buy_time;
+  const gapMs = dcaCfg.reEntryGapHours * 3_600_000;
+  if (lastEntryTime && Date.now() - new Date(lastEntryTime).getTime() < gapMs) return false;
+
+  const signal = dcaCfg.reapplyFilters
+    ? evaluateBbLowerEntry(config, cMap, computeAdaptiveDips(config, cMap), evalOpts)
+    : evaluateEntryBbLowerSignal(config, cMap, { ...evalOpts, forDca: true });
+  const allowed = dcaCfg.reapplyFilters ? signal.allowed : signal.matched;
+  if (!allowed) return false;
+
+  const tierIndex = dca.entries.length;
+  const tierUsdt  = tiers[tierIndex];
+
+  let result;
+  try {
+    result = await adapter.marketBuy(tierUsdt);
+  } catch (err) {
+    log(`❌ Erro na reentrada DCA: ${err.message}`);
+    return false;
+  }
+
+  const { filledQty, quoteQty, avgPrice } = result;
+  const prevQty  = parseFloat(state.buy_qty) || 0;
+  const prevUsdt = parseFloat(state.buy_usdt) || 0;
+  const newQty   = prevQty + filledQty;
+  const newUsdt  = prevUsdt + quoteQty;
+  const newAvgPrice = newUsdt / newQty;
+  const entryTime = new Date().toISOString();
+
+  const newDca = { entries: [...dca.entries, { price: avgPrice, qty: filledQty, usdt: quoteQty, time: entryTime }] };
+  session.rulesState = { ...rulesState, dca: newDca };
+  await saveState(rowId, {
+    buy_price: newAvgPrice, buy_qty: newQty, buy_usdt: newUsdt,
+    rules_state: session.rulesState,
+  }, log);
+
+  log(`${'─'.repeat(60)}`);
+  log(`${G}🟢 REENTRADA DCA (${tierIndex + 1}/${tiers.length}) — ${tierUsdt.toFixed(2)} USDT${X}`);
+  log(`   Preço: ${avgPrice.toFixed(6)}  Preço médio: ${newAvgPrice.toFixed(6)}  Qty total: ${newQty}`);
+  log(`${'─'.repeat(60)}`);
+  sendWhatsApp(
+    `🟢 MA-CROSS REENTRADA DCA (${tierIndex + 1}/${tiers.length}) [${state.strategy_id}] ${symbol}\n`
+    + `Preço: ${avgPrice}\nPreço médio: ${newAvgPrice.toFixed(6)}`,
   );
   return true;
 }
@@ -686,6 +765,11 @@ async function tick(rowId, adapter, strategy, log, session) {
   if (!state) return { phase: 'WATCHING' };
 
   const { capital, symbol, strategy_id: strategyId } = state;
+  /** Com entryMultiDca ligado, a 1ª entrada usa só a 1ª tranche do capital (não o
+   *  capital inteiro) — as demais tranches entram depois, via reentrada na fase BOUGHT. */
+  const entryCapital = config.entryMultiDca?.enabled
+    ? computeDcaTiers(parseFloat(capital), config.entryMultiDca.minEntryUsdt)[0]
+    : capital;
   const buyPrice = state.buy_price ? parseFloat(state.buy_price) : null;
   let phase = session.phase ?? state.phase;
   if (phase === 'BOUGHT' && !hasOpenPosition(state)) {
@@ -733,16 +817,12 @@ async function tick(rowId, adapter, strategy, log, session) {
       return { phase: 'PENDING' };
     }
 
-    const vol = session.volCache?.volumeUsdt;
-    const minVol = config.minVolumeUsdt ?? 1_000_000;
-    if (vol != null && vol < minVol && !config.allowLowVolume) {
-      return { phase: 'PENDING' };
-    }
+    logLowVolumeWarning(config, session, log);
 
-    log(`${G}📍 Pullback confirmado (${ready.entryDesc}) — comprando ${parseFloat(capital).toFixed(2)} USDT${X}`);
+    log(`${G}📍 Pullback confirmado (${ready.entryDesc}) — comprando ${parseFloat(entryCapital).toFixed(2)} USDT${X}`);
     const bought = await executeBuy({
       rowId, adapter, strategy, log, session, state,
-      entryMeta: ready, capital, strategyId, symbol,
+      entryMeta: ready, capital: entryCapital, totalCapital: capital, strategyId, symbol,
     });
     return { phase: bought ? 'BOUGHT' : 'PENDING' };
   }
@@ -774,19 +854,15 @@ async function tick(rowId, adapter, strategy, log, session) {
       }
     }
 
-    const vol = session.volCache?.volumeUsdt;
-    const minVol = config.minVolumeUsdt ?? 1_000_000;
-    if (vol != null && vol < minVol && !config.allowLowVolume) {
-      return { phase };
-    }
+    logLowVolumeWarning(config, session, log);
 
     // Gatilhos imediatos não têm janela de pullback (o próprio disparo já representa o
     // "fundo" que o pullback do cruzamento tenta achar).
     if (immediateCheck.allowed) {
-      log(`${G}📍 COMPRA imediata (${immediateCheck.entryDesc}) — ${parseFloat(capital).toFixed(2)} USDT${X}`);
+      log(`${G}📍 COMPRA imediata (${immediateCheck.entryDesc}) — ${parseFloat(entryCapital).toFixed(2)} USDT${X}`);
       const bought = await executeBuy({
         rowId, adapter, strategy, log, session, state,
-        entryMeta: immediateCheck, capital, strategyId, symbol,
+        entryMeta: immediateCheck, capital: entryCapital, totalCapital: capital, strategyId, symbol,
       });
       return { phase: bought ? 'BOUGHT' : 'WATCHING' };
     }
@@ -796,10 +872,10 @@ async function tick(rowId, adapter, strategy, log, session) {
 
     if (entryCheck.allowed) {
       const kindLabel = entryCheck.entryDesc ?? crossDesc(config.entry);
-      log(`${G}📍 COMPRA imediata (${kindLabel}) — ≤${entryCheck.maxAboveMaPct ?? 3}% MA21 — ${parseFloat(capital).toFixed(2)} USDT${X}`);
+      log(`${G}📍 COMPRA imediata (${kindLabel}) — ≤${entryCheck.maxAboveMaPct ?? 3}% MA21 — ${parseFloat(entryCapital).toFixed(2)} USDT${X}`);
       const bought = await executeBuy({
         rowId, adapter, strategy, log, session, state,
-        entryMeta: entryCheck, capital, strategyId, symbol,
+        entryMeta: entryCheck, capital: entryCapital, totalCapital: capital, strategyId, symbol,
       });
       return { phase: bought ? 'BOUGHT' : 'WATCHING' };
     }
@@ -846,11 +922,18 @@ async function tick(rowId, adapter, strategy, log, session) {
       : computeStopLossFloor(buyPrice, storedPeak, config.stopLoss);
 
     if (peakPrice > storedPeak + 1e-12 || Math.abs((stopFloor ?? 0) - (prevFloor ?? 0)) > 1e-12) {
-      session.rulesState = { stopPeakPrice: peakPrice, stopFloor };
+      session.rulesState = { ...rulesState, stopPeakPrice: peakPrice, stopFloor };
       await saveState(rowId, { rules_state: session.rulesState }, log);
       if (stopFloor != null && stopFloor > prevFloor + 1e-12) {
         log(`📈 Stop trailing: pico ${peakPrice.toFixed(6)} → piso ${stopFloor.toFixed(6)}`);
       }
+    }
+
+    if (config.entryMultiDca?.enabled) {
+      const reentered = await maybeExecuteDcaReEntry({
+        rowId, adapter, strategy, log, session, state, capital, symbol, cMap, evalOpts, rulesState,
+      });
+      if (reentered) return { phase: 'BOUGHT' };
     }
 
     const entryOpenTime = state.buy_time ? new Date(state.buy_time).getTime() : null;
@@ -995,7 +1078,8 @@ async function main() {
     log: console.log,
   });
 
-  const toStart   = [];
+  // Volume baixo é só informativo — nunca impede o bot de comprar ou vender.
+  const toStart = [];
   const lowVolRows = [];
   for (let i = 0; i < rows.length; i++) {
     const row     = rows[i];
@@ -1010,18 +1094,15 @@ async function main() {
       volOk  = vol >= minVol;
     } catch {}
 
-    if (!volOk && !strategy?.config.allowLowVolume && !symbolFilter) {
-      lowVolRows.push({ row, color });
-      continue;
+    if (!volOk && !symbolFilter) {
+      lowVolRows.push(row);
     }
     toStart.push({ row, color });
   }
 
   if (lowVolRows.length) {
-    console.log(`   ${Y}⚠️${X} Volume baixo — moedas abaixo do mínimo:`);
-    lowVolRows.forEach(({ row }) => console.log(`      - ${row.symbol} [${row.strategy_id}]`));
-    const resp = await askUser(`   Incluir essas ${lowVolRows.length} moeda(s) mesmo assim? [s/N]: `);
-    if (resp === 's' || resp === 'sim') toStart.push(...lowVolRows);
+    console.log(`   ${Y}⚠️${X} Volume abaixo do mínimo (não impede compra/venda):`);
+    lowVolRows.forEach(row => console.log(`      - ${row.symbol} [${row.strategy_id}]`));
   }
 
   if (!toStart.length) {

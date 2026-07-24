@@ -6,6 +6,7 @@ import {
   EXIT_LOGIC_OPTIONS,
   VOLUME_OPTIONS, PENDING_TIMEOUT_OPTIONS, POLL_OPTIONS,
   MA_CROSS_DEFAULTS,
+  computeDcaTiers,
 } from '../constants/maCrossConfigSchema';
 
 const ENTRY_COLOR  = '#22d3ee';
@@ -99,7 +100,7 @@ function CrossBlock({ title, block, prefix, patch, color, showEnable }) {
   );
 }
 
-export default function MaCrossStrategyForm({ form, patch, symbol, exchange, hasSavedConfig = false }) {
+export default function MaCrossStrategyForm({ form, patch, symbol, exchange, hasSavedConfig = false, capital }) {
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [boundsSuggest, setBoundsSuggest] = useState({});
   const [volCheck, setVolCheck] = useState(null);
@@ -111,6 +112,11 @@ export default function MaCrossStrategyForm({ form, patch, symbol, exchange, has
 
   const entryBbLower = { ...MA_CROSS_DEFAULTS.entryBbLower, ...form.entryBbLower };
   const entryBbLowerOn = entryBbLower.enabled === true;
+
+  const entryMultiDca = { ...MA_CROSS_DEFAULTS.entryMultiDca, ...form.entryMultiDca };
+  const entryMultiDcaOn = entryMultiDca.enabled === true;
+  const dcaTiers = computeDcaTiers(capital, entryMultiDca.minEntryUsdt);
+  const dcaCapitalBelowMin = dcaTiers.length === 1 && Number(capital) > 0 && Number(capital) < entryMultiDca.minEntryUsdt;
 
   const exitBbUpper = { ...MA_CROSS_DEFAULTS.exit.bbUpper, ...form.exit?.bbUpper };
   const exitBbTakeProfit = { ...MA_CROSS_DEFAULTS.exit.bbTakeProfit, ...form.exit?.bbTakeProfit };
@@ -344,6 +350,59 @@ export default function MaCrossStrategyForm({ form, patch, symbol, exchange, has
                   min={0.5} max={4} step={0.5} className="w-14" />
               </div>
             </div>
+          </>
+        )}
+      </div>
+
+      {/* ── Entradas parceladas (DCA) ── */}
+      <div className="rounded-md p-2 space-y-2" style={{ background: '#1a1d28', border: `1px solid ${ENTRY_COLOR}33` }}>
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: ENTRY_COLOR }}>
+            Entradas parceladas (DCA)
+          </span>
+          <label className="flex items-center gap-1 text-[9px] text-p5/50 cursor-pointer">
+            <input type="checkbox" checked={entryMultiDcaOn}
+              onChange={e => patch('entryMultiDca.enabled', e.target.checked)} style={{ accentColor: ENTRY_COLOR }} />
+            Ativo
+          </label>
+        </div>
+        {entryMultiDcaOn && (
+          <>
+            <p className="text-[10px] text-p5/60 leading-relaxed">
+              Divide o capital em até 3 tranches. A 1ª entrada usa a 1ª tranche (na Banda inferior BB, que
+              precisa estar configurada acima); as demais entram depois, em novos toques na mesma banda,
+              respeitando o intervalo mínimo abaixo. Vende tudo de uma vez quando a saída disparar.
+            </p>
+            <div className="flex flex-wrap gap-3 items-center text-xs">
+              <div className="flex items-center gap-1">
+                <span className="text-p5/50">Mínimo por entrada (USDT)</span>
+                <NumInput value={entryMultiDca.minEntryUsdt}
+                  onChange={v => patch('entryMultiDca.minEntryUsdt', Math.max(0, v))}
+                  min={0} max={1000} step={1} className="w-16" />
+              </div>
+              <div className="flex items-center gap-1">
+                <span className="text-p5/50">Intervalo mínimo entre entradas (h)</span>
+                <NumInput value={entryMultiDca.reEntryGapHours}
+                  onChange={v => patch('entryMultiDca.reEntryGapHours', Math.max(0, v))}
+                  min={0} max={72} step={0.5} className="w-16" />
+              </div>
+              <label className="flex items-center gap-1 text-[10px] text-p5/60 cursor-pointer">
+                <input type="checkbox" checked={entryMultiDca.reapplyFilters}
+                  onChange={e => patch('entryMultiDca.reapplyFilters', e.target.checked)} style={{ accentColor: ENTRY_COLOR }} />
+                Reaplicar filtros de tendência/EMA nas reentradas
+              </label>
+            </div>
+            {dcaCapitalBelowMin ? (
+              <p className="text-[9px] text-amber-400/90 font-mono">
+                ⚠️ Capital ({Number(capital).toFixed(2)} USDT) abaixo do mínimo por entrada ({entryMultiDca.minEntryUsdt} USDT) —
+                vai operar com 1 entrada só de {dcaTiers[0].toFixed(2)} USDT.
+              </p>
+            ) : (
+              <p className="text-[9px] text-p5/50 font-mono">
+                Capital {Number(capital || 0).toFixed(2)} USDT → {dcaTiers.length} {dcaTiers.length === 1 ? 'entrada' : 'entradas'}:{' '}
+                {dcaTiers.map(v => v.toFixed(2)).join(' + ')} USDT
+              </p>
+            )}
           </>
         )}
       </div>
@@ -625,11 +684,6 @@ export default function MaCrossStrategyForm({ form, patch, symbol, exchange, has
             {VOLUME_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label} USDT</option>)}
           </select>
         </div>
-        <label className="flex items-center gap-2 text-p5 text-xs">
-          <input type="checkbox" checked={form.volume.allowLowVolume}
-            onChange={e => patch('volume.allowLowVolume', e.target.checked)} />
-          Permitir volume baixo
-        </label>
         {symbol?.trim() && (
           <p className="text-[10px] font-mono" style={{
             color: volCheck?.loading ? '#94a3b8' : volCheck?.meetsMin === false ? '#f59e0b' : volCheck?.meetsMin ? '#26a69a' : '#94a3b8',
@@ -637,6 +691,11 @@ export default function MaCrossStrategyForm({ form, patch, symbol, exchange, has
             {volCheck?.loading ? 'Verificando…' : volCheck?.meetsMin === false
               ? `Atual: ${volCheck.volumeFmt} — abaixo do mínimo`
               : volCheck?.volumeFmt ? `Atual: ${volCheck.volumeFmt}` : ''}
+          </p>
+        )}
+        {symbol?.trim() && volCheck?.meetsMin === false && (
+          <p className="text-[10px] text-amber-400/90 font-mono leading-relaxed">
+            ⚠️ Aviso apenas — não impede compra nem venda. Liquidez baixa pode dificultar sair da posição a um preço justo.
           </p>
         )}
       </div>
@@ -658,11 +717,11 @@ export default function MaCrossStrategyForm({ form, patch, symbol, exchange, has
               Só imediata (sem pending se esticado)
             </label>
             <label className="flex items-center gap-2 text-p5">
-              <input type="checkbox" checked={form.execution.pullbackEntry?.enabled !== false}
+              <input type="checkbox" checked={form.execution.pullbackEntry?.enabled === true}
                 onChange={e => patch('execution.pullbackEntry.enabled', e.target.checked)} />
               Pending se não passar no teto MA21
             </label>
-            {form.execution.pullbackEntry?.enabled !== false && (
+            {form.execution.pullbackEntry?.enabled === true && (
               <div className="flex flex-wrap items-center gap-2 pl-4">
                 <span className="text-p5/50">Máx. candles após sinal</span>
                 <NumInput value={form.execution.pullbackEntry?.waitCandles ?? 2}
