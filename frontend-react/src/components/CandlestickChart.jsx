@@ -899,7 +899,7 @@ const collapseTabBtn = {
   pointerEvents: 'auto',
   fontSize: 11,
   lineHeight: 1,
-  width: 16,
+  width: 24,
   height: 34,
   display: 'flex',
   alignItems: 'center',
