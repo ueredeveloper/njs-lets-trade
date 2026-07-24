@@ -17,10 +17,12 @@ async function readCandles(symbol, interval) {
         return JSON.parse(data);
     } catch (err) {
         if (err instanceof SyntaxError) {
-            // Arquivo corrompido ou truncado — sobrescreve com array vazio
-            // para que getCandles busque dados frescos na Binance
-            await fs.writeFile(filePath, '[]', 'utf8').catch(() => {});
-            const e = new Error(`Candle file corrupt, reset: ${filePath}`);
+            // JSON inválido — pode ser corrupção real ou uma leitura no meio de uma escrita
+            // concorrente (candleDiskWarmup/getCandles gravam o mesmo arquivo). Não sobrescreve
+            // o arquivo aqui: quem trata ENOENT (getCandles, getGateCandles) já busca dados
+            // frescos na API e grava o array completo — sobrescrever com [] nesta função apagaria
+            // o histórico salvo por causa de uma corrida passageira, sem nunca reidratar os dados.
+            const e = new Error(`Candle file corrupt or mid-write: ${filePath}`);
             e.code = 'ENOENT';
             throw e;
         }

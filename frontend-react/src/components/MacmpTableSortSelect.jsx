@@ -16,7 +16,7 @@ function Chevron({ dir }) {
 }
 
 const ARROW_BTN =
-  'inline-flex items-center justify-center w-5 h-full text-p5/70 hover:text-p5 active:text-white transition-colors shrink-0';
+  'inline-flex items-center justify-center w-4 h-full text-p5/70 hover:text-p5 active:text-white transition-colors shrink-0';
 
 export default function MacmpTableSortSelect({ value, onChange, className = '' }) {
   const { t } = useI18n();
@@ -44,7 +44,7 @@ export default function MacmpTableSortSelect({ value, onChange, className = '' }
       </button>
       <button
         type="button"
-        className="inline-flex items-center justify-center text-[9px] font-semibold leading-none text-p5/90 whitespace-nowrap min-w-[4rem] max-w-[6.5rem] truncate px-1 h-full hover:text-p5"
+        className="inline-flex items-center justify-center text-[8px] font-semibold leading-none text-p5/90 whitespace-nowrap min-w-[1.75rem] max-w-[3rem] truncate px-0.5 h-full hover:text-p5"
         title={`${t(opt.labelKey)} — ${t('macmp.sort.next')}`}
         onClick={(e) => { e.stopPropagation(); step(1); }}
       >
