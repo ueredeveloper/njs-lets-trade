@@ -1203,17 +1203,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                   <td
                     className="pl-1 pr-0 overflow-hidden"
                     style={{ width: favColWidth }}
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <button
-                      type="button"
-                      title={t('fav.active.dismiss')}
-                      onClick={() => dismissActiveTrade(key)}
-                      className="text-[10px] opacity-40 hover:opacity-90 px-1"
-                    >
-                      ×
-                    </button>
-                  </td>
+                  />
                   <td
                     className={parColClass}
                     style={{ width: parColWidth }}
