@@ -82,7 +82,9 @@ const INTERVAL_LABELS = {
 const EMPTY_INDICATOR = { type: '', intervals: ['8h'] };
 
 const DEFAULT_INDICATORS = [
-  { type: 'maCompare', intervals: ['4h'], ma1Period: '9', ma2Period: '21', compare: 'above', tolerancePct: '0.5' },
+  { type: 'maCompare', intervals: ['1h'], ma1Period: '9', ma2Period: '21', compare: 'near_up', proximityPct: '0.5' },
+  { type: 'bollingerPosition', intervals: ['4h'], period: '20', stdDev: '2', position: 'near_bottom', proximityPct: '20' },
+  { type: 'vwapPosition', intervals: ['4h'], session: 'daily', bandMultiplier: '2', position: 'near_bottom', proximityPct: '20' },
 ];
 
 /** Gera um resumo legível da configuração do indicador */
@@ -268,7 +270,7 @@ function IndicatorRow({ value, onChange }) {
                 next.proximityPct = '20';
               }
               if (newType === 'vwapPosition') {
-                next.intervals = ['1h'];
+                next.intervals = ['4h'];
                 next.session = next.session ?? 'daily';
                 next.bandMultiplier = '2';
                 next.position = next.position ?? 'near_bottom';

@@ -28,10 +28,10 @@ async function runWithConcurrency(items, fn, concurrency) {
   return results;
 }
 
-// GET /services/vwap-position-filter?interval=1h&session=daily&bandMultiplier=2&position=near_bottom&proximityPct=20
+// GET /services/vwap-position-filter?interval=4h&session=daily&bandMultiplier=2&position=near_bottom&proximityPct=20
 router.get('/vwap-position-filter', async (req, res) => {
   try {
-    const interval = req.query.interval ?? '1h';
+    const interval = req.query.interval ?? '4h';
     const session = req.query.session === 'weekly' ? 'weekly' : 'daily';
     const bandMultiplier = parseInt(req.query.bandMultiplier ?? '2', 10);
     const position = req.query.position === 'near_top' ? 'near_top' : 'near_bottom';

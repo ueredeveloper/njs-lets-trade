@@ -16,16 +16,16 @@ const CACHE_FILE = path.join(__dirname, '..', 'data', 'vwap-position-cache.json'
 /** Presets: exaustão nas bandas de VWAP (sessão diária, ±2σ) — igual ao default do painel Analisar Indicadores. */
 const CACHED_PRESETS = [
   {
-    key: '1h|d|2|bot|20',
-    interval: '1h',
+    key: '4h|d|2|bot|20',
+    interval: '4h',
     session: 'daily',
     bandMultiplier: 2,
     position: 'near_bottom',
     proximityPct: 20,
   },
   {
-    key: '1h|d|2|top|20',
-    interval: '1h',
+    key: '4h|d|2|top|20',
+    interval: '4h',
     session: 'daily',
     bandMultiplier: 2,
     position: 'near_top',

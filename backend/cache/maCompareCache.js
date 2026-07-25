@@ -45,6 +45,22 @@ const CACHED_PRESETS = [
     compare: 'near_down',
     proximityPct: 0.5,
   },
+  {
+    key: '1h|9|21|nearup|0.5',
+    interval: '1h',
+    period1: 9,
+    period2: 21,
+    compare: 'near_up',
+    proximityPct: 0.5,
+  },
+  {
+    key: '1h|9|21|neardn|0.5',
+    interval: '1h',
+    period1: 9,
+    period2: 21,
+    compare: 'near_down',
+    proximityPct: 0.5,
+  },
 ];
 
 const REFRESH_TICK_MS = 5 * 60_000;

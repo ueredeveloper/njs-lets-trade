@@ -154,7 +154,7 @@ export async function fetchBollingerBandPositionFilter({
 
 /** Filtra moedas por exaustão nas bandas de VWAP: preço perto do topo ou do fundo. */
 export async function fetchVwapPositionFilter({
-  interval = '1h', session = 'daily', bandMultiplier = '2', position = 'near_bottom', proximityPct = '20',
+  interval = '4h', session = 'daily', bandMultiplier = '2', position = 'near_bottom', proximityPct = '20',
 } = {}) {
   const params = new URLSearchParams({ interval, session, bandMultiplier, position, proximityPct });
   const res = await fetch(`/services/vwap-position-filter?${params}`);
