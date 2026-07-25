@@ -122,6 +122,8 @@ const FAV_LOG = '[Favoritos]';
 
 /** Altura estimada de cada linha da tabela (px) — virtual scroll. */
 const TABLE_ROW_HEIGHT = 30;
+/** No mobile a linha precisa de mais altura mínima p/ ser fácil de tocar. */
+const TABLE_ROW_HEIGHT_MOBILE = 40;
 
 function FavButton({ active, color, label, text, symbol, kind, onClick, tipKey }) {
   const { t } = useI18n();
@@ -290,6 +292,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     resetChartCandleWindow,
   } = useCurrency();
   const { t, formatPrice } = useI18n();
+  const isMobile = useIsMobile();
   const [loadingSymbol, setLoadingSymbol]       = useState(null);
   const [activeRow, setActiveRow]               = useState(null);
   const [mtModal, setMtModal]       = useState(null);
@@ -537,9 +540,11 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     return list;
   }, [currencies, activeFilter, selectedQuote, findFilter, search, favoriteView, gateFavorites, binanceFavorites, multitradeFavorites, sortVolume, gateAll, filterVisibleCurrencies, isVisibleSymbol, currencyBySymbol, activeMacrossFilter, macrossScannedAt, macrossTick, isMacrossFavView, macrossFavSort, macrossFavStatus, macrossEntriesBySymbol, isTradesFavView, tradeFavSort, tradeFavSymbols, tradeFavStatus, isActiveFavView, activeTrades, isAltaFilter, isNovasFilter, highlightMeta, activeMacmpFilter, macmpMeta, macmpTableSort, activeMaDistanceFilter, maDistMeta, maDistSort, activeGrowthFilter, growthMeta, growthSort]);
 
+  const rowHeightPx = isMobile ? TABLE_ROW_HEIGHT_MOBILE : TABLE_ROW_HEIGHT;
+
   const { slice: visibleRows, paddingTop, paddingBottom } = useVirtualRows({
     items: rows,
-    rowHeight: TABLE_ROW_HEIGHT,
+    rowHeight: rowHeightPx,
     containerRef: tableScrollRef,
     overscan: 10,
   });
@@ -865,7 +870,6 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   }, [isActiveFavView, activeTrades]);
 
   const showFavSortInHeader = isMacrossFavView || isTradesFavView || !!activeMacmpFilter;
-  const isMobile = useIsMobile();
   const REM_PX = 16;
   // Coluna de botões: largura fixa no piso (sem crescer com o drag) — abaixo dele os botões
   // (G/B/MC, 15px cada) se sobrepõem ou somem. O espaço liberado vai para a coluna Par.
@@ -1199,7 +1203,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                 ? t('fav.active.exchange_gate')
                 : t('fav.active.exchange_bnb');
               return (
-                <tr key={key} className="lt-table-row border-b border-p2/30 bg-amber-500/10 text-p5">
+                <tr key={key} className="lt-table-row border-b border-p2/30 bg-amber-500/10 text-p5" style={{ height: rowHeightPx }}>
                   <td
                     className="pl-1 pr-0 overflow-hidden"
                     style={{ width: favColWidth }}
@@ -1252,6 +1256,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                 <tr
                   key={item.symbol}
                   onClick={() => handleSelect(item)}
+                  style={{ height: rowHeightPx }}
                   className={`lt-table-row cursor-pointer transition-colors ${
                     activeRow === item.symbol
                       ? 'bg-p2/80 text-white'
