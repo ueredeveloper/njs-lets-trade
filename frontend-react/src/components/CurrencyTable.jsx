@@ -283,7 +283,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     gateFavorites, binanceFavorites,
     toggleGateFavorite, toggleBinanceFavorite,
     setTradePurchases, setAllTrades,
-    activeTrades, refreshActiveTrades, dismissActiveTrade,
+    activeTrades, refreshActiveTrades,
     multitradeFavorites, removeMultitradeEntry, saveMultitradeSymbol, updateMultitradeBotState,
     filterVisibleCurrencies, isVisibleSymbol, addFilter,
     currencyBySymbol,
@@ -1337,14 +1337,6 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                               : 'Gate+Bnb'}
                             {holdingUsdt != null ? ` · $${holdingUsdt.toFixed(2)}` : ''}
                           </span>
-                          <button
-                            type="button"
-                            title={t('fav.active.dismiss')}
-                            onClick={(e) => { e.stopPropagation(); dismissActiveTrade(item.symbol); }}
-                            className="opacity-50 hover:opacity-100 leading-none"
-                          >
-                            ×
-                          </button>
                         </span>
                       )}
                       {isTradesFavView && tradeBadge && (

@@ -38,7 +38,9 @@ export default function SettingsSidebar({ open, onClose }) {
     chartPanelButtons, setChartPanelButton, chartPanelButtonKeys,
     uiPrefs, setDefaultChartInterval, setPanelVisible,
     setOverlaySlotsPreference, setCurrencyPanelWidth,
-    chartIntervalOptions, panelKeys } = useCurrency();
+    chartIntervalOptions, panelKeys,
+    activeTrades, activeTradesSettings, updateActiveTradesSettings,
+    ignoredActiveTrades, dismissActiveTrade, restoreActiveTrade } = useCurrency();
 
   function isOverlayActive(period, interval) {
     return uiPrefs.overlaySlots.some(s => s.period === period && s.interval === interval);
@@ -69,6 +71,19 @@ export default function SettingsSidebar({ open, onClose }) {
   const [reloadInterval, setReloadInterval] = useState('all');
   const [reloadState, setReloadState]     = useState(null);
   const [reloadError, setReloadError]     = useState('');
+
+  const [minValueInput, setMinValueInput] = useState(String(activeTradesSettings.minHoldingUsdt));
+  useEffect(() => {
+    setMinValueInput(String(activeTradesSettings.minHoldingUsdt));
+  }, [activeTradesSettings.minHoldingUsdt]);
+
+  function commitMinValue() {
+    const n = Number(minValueInput);
+    if (Number.isFinite(n) && n >= 0) updateActiveTradesSettings({ minHoldingUsdt: n });
+    else setMinValueInput(String(activeTradesSettings.minHoldingUsdt));
+  }
+
+  const activeTradeSymbols = [...activeTrades.keys()].sort();
 
   useEffect(() => {
     if (open && selectedChart?.symbol) {
@@ -134,6 +149,78 @@ export default function SettingsSidebar({ open, onClose }) {
                 </label>
               ))}
             </div>
+          </div>
+
+          {/* Saldos Ativos (saldos reais nas exchanges) */}
+          <div>
+            <p className={section}>{t('settings.active_trades')}</p>
+            <p className="text-[10px] text-p5/50 mb-3 leading-relaxed">{t('settings.active_trades_hint')}</p>
+
+            <label className="flex items-start gap-2.5 cursor-pointer group mb-3">
+              <input
+                type="checkbox"
+                checked={activeTradesSettings.showCash}
+                onChange={(e) => updateActiveTradesSettings({ showCash: e.target.checked })}
+                className="mt-0.5 shrink-0 accent-p4"
+              />
+              <span className="text-p5 text-xs leading-snug group-hover:text-white transition-colors">
+                {t('settings.active_trades_show_cash')}
+              </span>
+            </label>
+
+            <div className="flex items-center gap-2 mb-3">
+              <span className="text-p5 text-xs shrink-0">{t('settings.active_trades_min_value')}</span>
+              <input
+                type="number"
+                min={0}
+                step={1}
+                value={minValueInput}
+                onChange={(e) => setMinValueInput(e.target.value)}
+                onBlur={commitMinValue}
+                onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
+                className={`w-20 ${inp}`}
+              />
+            </div>
+
+            {activeTradeSymbols.length > 0 && (
+              <div className="mb-3">
+                <p className="text-[10px] text-p5/40 mb-1.5">{t('settings.active_trades_current')}</p>
+                <div className="flex flex-col gap-1 max-h-40 overflow-y-auto">
+                  {activeTradeSymbols.map((symbol) => (
+                    <div key={symbol} className="flex items-center justify-between text-xs text-p5/80">
+                      <span className="font-mono">{symbol}</span>
+                      <button
+                        type="button"
+                        onClick={() => dismissActiveTrade(symbol)}
+                        className="text-[10px] text-p5/50 hover:text-red-400 transition-colors"
+                      >
+                        {t('settings.active_trades_ignore_btn')}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {ignoredActiveTrades.length > 0 && (
+              <div>
+                <p className="text-[10px] text-p5/40 mb-1.5">{t('settings.active_trades_ignored')}</p>
+                <div className="flex flex-col gap-1 max-h-40 overflow-y-auto">
+                  {ignoredActiveTrades.map((asset) => (
+                    <div key={asset} className="flex items-center justify-between text-xs text-p5/80">
+                      <span className="font-mono">{asset}</span>
+                      <button
+                        type="button"
+                        onClick={() => restoreActiveTrade(asset)}
+                        className="text-[10px] text-p5/50 hover:text-emerald-400 transition-colors"
+                      >
+                        {t('settings.active_trades_restore')}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Intervalo padrão do gráfico */}

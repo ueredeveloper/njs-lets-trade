@@ -5,7 +5,7 @@ const crypto          = require('crypto');
 const path            = require('path');
 const fs              = require('fs');
 
-const MIN_HOLDING_USDT = 3;
+const MIN_HOLDING_USDT_DEFAULT = 3;
 const BINANCE_BASE     = 'https://api.binance.com';
 const BALANCE_TTL_MS   = 30_000;
 const CLOCK_TTL_MS     = 60 * 60_000;
@@ -15,6 +15,23 @@ const STABLE_USD = new Set(['USDT', 'USDC']);
 
 /** Outras stablecoins ignoradas (não listar como holding). */
 const STABLE_IGNORE = new Set(['BUSD', 'TUSD', 'DAI', 'FDUSD']);
+
+/** Saldos "de caixa" que podem ser ocultados via configurações (showCash). */
+const CASH_LIKE = new Set(['USDT', 'USDC', 'BNB']);
+
+const SETTINGS_FILE = path.join(__dirname, '../data/active-trades-settings.json');
+const DEFAULT_SETTINGS = { minHoldingUsdt: MIN_HOLDING_USDT_DEFAULT, showCash: true };
+
+function readSettings() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'));
+    return { ...DEFAULT_SETTINGS, ...raw };
+  } catch { return { ...DEFAULT_SETTINGS }; }
+}
+
+function writeSettings(settings) {
+  fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
+}
 
 /**
  * Fiats spot sem par {ASSET}USDT — preço = 1 / USDT{FIAT} (ex.: USDTBRL).
@@ -140,6 +157,7 @@ router.get('/active-trades', async (req, res) => {
     if (!gateOk && !binanceOk) return res.json([]);
 
     const ignoreList = readIgnoreList();
+    const settings   = readSettings();
 
     // Preços Binance (pares *USDT + mapa bruto para fiats USDT*)
     const priceMap = new Map();
@@ -184,6 +202,7 @@ router.get('/active-trades', async (req, res) => {
     for (const asset of currencies) {
       if (STABLE_IGNORE.has(asset)) continue;
       if (ignoreList.has(asset))   continue;
+      if (!settings.showCash && CASH_LIKE.has(asset)) continue;
 
       const gateQty    = gateBalances.get(asset)    ?? 0;
       const binanceQty = binanceBalances.get(asset) ?? 0;
@@ -200,7 +219,7 @@ router.get('/active-trades', async (req, res) => {
         if (price <= 0) continue;
 
         const pushCash = (qty, exch, suffix) => {
-          if (qty * price < MIN_HOLDING_USDT) return;
+          if (qty * price < settings.minHoldingUsdt) return;
           result.push({
             symbol: `${asset}_${suffix}`,
             exchange: exch,
@@ -217,7 +236,7 @@ router.get('/active-trades', async (req, res) => {
       if (price === 0) continue;
 
       const holdingUsdt = totalQty * price;
-      if (holdingUsdt < MIN_HOLDING_USDT) continue;
+      if (holdingUsdt < settings.minHoldingUsdt) continue;
 
       result.push({ symbol: `${asset}USDT`, exchange, buyQty: totalQty, buyPrice: price });
     }
@@ -226,6 +245,35 @@ router.get('/active-trades', async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// GET /services/active-trades/settings
+router.get('/active-trades/settings', (req, res) => {
+  res.json(readSettings());
+});
+
+// POST /services/active-trades/settings  { minHoldingUsdt?, showCash? }
+router.post('/active-trades/settings', (req, res) => {
+  try {
+    const current = readSettings();
+    const { minHoldingUsdt, showCash } = req.body ?? {};
+    const next = { ...current };
+    if (minHoldingUsdt != null) {
+      const n = Number(minHoldingUsdt);
+      if (!Number.isFinite(n) || n < 0) return res.status(400).json({ error: 'minHoldingUsdt inválido' });
+      next.minHoldingUsdt = n;
+    }
+    if (showCash != null) next.showCash = Boolean(showCash);
+    writeSettings(next);
+    res.json(next);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /services/active-trades/ignore  → lista de assets ignorados
+router.get('/active-trades/ignore', (req, res) => {
+  res.json([...readIgnoreList()]);
 });
 
 function toIgnoreAsset(symbol) {

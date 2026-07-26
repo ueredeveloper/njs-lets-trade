@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { addFavorite, removeFavorite, fetchActiveTrades, ignoreActiveTrade,
+  unignoreActiveTrade, fetchIgnoredActiveTrades, fetchActiveTradesSettings, updateActiveTradesSettings,
   fetchMultitradeFavorites, addMultitradeFavorite, updateMultitradeFavorite, removeMultitradeFavorite,
   patchMultitradeBotState,
   fetchFiveMTradeFavorites, addFiveMTradeFavorite, updateFiveMTradeFavorite, removeFiveMTradeFavorite,
@@ -115,6 +116,10 @@ export function CurrencyProvider({ children }) {
   const [binanceFavorites, setBinanceFavorites] = useState(new Set());
   // Saldos reais das exchanges: Map<symbol, { exchange, buyPrice, buyQty }>
   const [activeTrades, setActiveTrades]         = useState(new Map());
+  // Configurações da lista de Ativos: valor mínimo (USDT) e exibir saldos de caixa (USDT/USDC/BNB)
+  const [activeTradesSettings, setActiveTradesSettingsState] = useState({ minHoldingUsdt: 3, showCash: true });
+  // Assets atualmente na lista de ignorados (saldo residual dispensado)
+  const [ignoredActiveTrades, setIgnoredActiveTrades] = useState([]);
 
   // Multitrade favorites: array de entradas com estratégia configurada
   const [multitradeFavorites, setMultitradeFavorites] = useState([]);
@@ -193,6 +198,44 @@ export function CurrencyProvider({ children }) {
       console.warn('[CurrencyContext] refreshActiveTrades:', err.message);
     }
   }, []);
+
+  const refreshActiveTradesSettings = useCallback(async () => {
+    try {
+      const settings = await fetchActiveTradesSettings();
+      setActiveTradesSettingsState(settings);
+    } catch (err) {
+      console.warn('[CurrencyContext] refreshActiveTradesSettings:', err.message);
+    }
+  }, []);
+
+  const updateActiveTradesSettingsAndRefresh = useCallback(async (patch) => {
+    try {
+      const settings = await updateActiveTradesSettings(patch);
+      setActiveTradesSettingsState(settings);
+      await refreshActiveTrades();
+    } catch (err) {
+      console.warn('[CurrencyContext] updateActiveTradesSettingsAndRefresh:', err.message);
+    }
+  }, [refreshActiveTrades]);
+
+  const refreshIgnoredActiveTrades = useCallback(async () => {
+    try {
+      const list = await fetchIgnoredActiveTrades();
+      setIgnoredActiveTrades(list);
+    } catch (err) {
+      console.warn('[CurrencyContext] refreshIgnoredActiveTrades:', err.message);
+    }
+  }, []);
+
+  const restoreActiveTrade = useCallback(async (asset) => {
+    try {
+      await unignoreActiveTrade(asset);
+      setIgnoredActiveTrades((prev) => prev.filter((a) => a !== String(asset).toUpperCase()));
+      await refreshActiveTrades();
+    } catch (err) {
+      console.warn('[CurrencyContext] restoreActiveTrade:', err.message);
+    }
+  }, [refreshActiveTrades]);
 
   const addMultitradeEntry = useCallback(async (data) => {
     try {
@@ -446,10 +489,11 @@ export function CurrencyProvider({ children }) {
         }
         return next;
       });
+      await refreshIgnoredActiveTrades();
     } catch (err) {
       console.warn('[CurrencyContext] dismissActiveTrade:', err.message);
     }
-  }, []);
+  }, [refreshIgnoredActiveTrades]);
 
   const quotes = ['USDT', 'BTC', 'BNB'];
 
@@ -757,6 +801,12 @@ export function CurrencyProvider({ children }) {
     return () => { cancelled = true; clearInterval(id); };
   }, []);
 
+  // Configurações da lista de Ativos (valor mínimo / mostrar caixa) e lista de ignorados
+  useEffect(() => {
+    refreshActiveTradesSettings();
+    refreshIgnoredActiveTrades();
+  }, [refreshActiveTradesSettings, refreshIgnoredActiveTrades]);
+
   const getBinanceCurrenciesWithUsdt = useCallback(
     (currenciesObj) => {
       if (!filters[0]) return [];
@@ -848,6 +898,10 @@ export function CurrencyProvider({ children }) {
         setActiveTrades,
         refreshActiveTrades,
         dismissActiveTrade,
+        activeTradesSettings,
+        updateActiveTradesSettings: updateActiveTradesSettingsAndRefresh,
+        ignoredActiveTrades,
+        restoreActiveTrade,
         multitradeFavorites,
         setMultitradeFavorites,
         addMultitradeEntry,

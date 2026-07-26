@@ -246,6 +246,49 @@ export async function ignoreActiveTrade(symbol) {
   return res.json();
 }
 
+export async function unignoreActiveTrade(symbol) {
+  const res = await fetch(`/services/active-trades/ignore/${encodeURIComponent(symbol)}`, { method: 'DELETE' });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function fetchIgnoredActiveTrades() {
+  const res = await fetch('/services/active-trades/ignore');
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+/**
+ * @returns {Promise<{minHoldingUsdt: number, showCash: boolean}>}
+ */
+export async function fetchActiveTradesSettings() {
+  const res = await fetch('/services/active-trades/settings');
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function updateActiveTradesSettings(patch) {
+  const res = await fetch('/services/active-trades/settings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 /**
  * Resumo de moedas compradas/vendidas (Gate + Binance) com PnL por período.
  * @param {string[]} [extraSymbols] símbolos extras (favoritos) para buscar na Binance
