@@ -35,6 +35,7 @@ import {
   normalizeVwapDefaults,
   normalizeActiveIndicators,
   normalizeCurrencyPanelWidth,
+  normalizeMaCrossDefaultTemplate,
 } from '../utils/uiPreferences';
 
 const CurrencyContext = createContext(null);
@@ -610,6 +611,14 @@ export function CurrencyProvider({ children }) {
     });
   }, []);
 
+  const setMaCrossDefaultTemplate = useCallback((template) => {
+    setUiPrefsState((prev) => {
+      const next = { ...prev, maCrossDefaultTemplate: normalizeMaCrossDefaultTemplate(template) };
+      saveUiPreferences(next);
+      return next;
+    });
+  }, []);
+
   const isVisibleSymbol = useCallback(
     (symbol, options) => isSymbolVisible(symbol, assetDisplay, options),
     [assetDisplay],
@@ -855,6 +864,7 @@ export function CurrencyProvider({ children }) {
         setVwapDefaults,
         setActiveIndicatorsPreference,
         setCurrencyPanelWidth,
+        setMaCrossDefaultTemplate,
         chartIntervalOptions: CHART_INTERVAL_OPTIONS,
         panelKeys: PANEL_KEYS,
         isVisibleSymbol,

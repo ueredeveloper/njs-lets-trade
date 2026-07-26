@@ -2,6 +2,7 @@
 import { formStateFromEntry } from './tradeConfigSchema';
 import { swingFormFromEntry, normalizeSwingForm } from './swingConfigSchema';
 import { maCrossFormFromEntry, normalizeMaCrossForm } from './maCrossConfigSchema';
+import { loadUiPreferences } from '../utils/uiPreferences';
 
 export const MA_CROSS_STRATEGY_IDS = ['ma-cross'];
 /** Frontend MA-Cross only — backend ainda aceita outras estratégias. */
@@ -154,7 +155,7 @@ const SWING_PRESETS = {
   },
 };
 
-const MA_CROSS_PRESETS = {
+export const MA_CROSS_PRESETS = {
   'ma-cross': {
     label: 'MA Cross',
     kind: 'ma_cross',
@@ -202,9 +203,14 @@ const MA_CROSS_PRESETS = {
   },
 };
 
+/** Preset de fábrica (hardcoded) — usado como fallback quando o usuário não salvou um
+ *  molde próprio em Configurações (ver `maCrossDefaultTemplate` em uiPreferences.js). */
+export const MA_CROSS_FACTORY_DEFAULT = MA_CROSS_PRESETS['ma-cross'];
+
 export function presetFormState(strategyId) {
   if (isMaCrossStrategy(strategyId)) {
-    return normalizeMaCrossForm(MA_CROSS_PRESETS[strategyId] ?? MA_CROSS_PRESETS['ma-cross']);
+    const userTemplate = loadUiPreferences().maCrossDefaultTemplate;
+    return normalizeMaCrossForm(userTemplate ?? MA_CROSS_PRESETS[strategyId] ?? MA_CROSS_FACTORY_DEFAULT);
   }
   if (isSwingStrategy(strategyId)) {
     return normalizeSwingForm(SWING_PRESETS[strategyId] ?? SWING_PRESETS['swing-rsi-1h']);

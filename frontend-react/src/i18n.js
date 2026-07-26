@@ -71,6 +71,9 @@ const T = {
     'settings.currency_panel_width':      'Largura da coluna de moedas',
     'settings.currency_panel_width_hint': 'Arraste a borda esquerda da coluna de filtros/moedas para redimensionar, ou ajuste aqui. Salvo automaticamente.',
     'settings.currency_panel_width_reset': 'Restaurar padrão',
+    'settings.macross_default':          'MA-Cross — padrão de nova entrada',
+    'settings.macross_default_hint':     'Compra, filtros e venda pré-preenchidos ao adicionar uma nova moeda no MA-Cross. Ex.: entrada EMA9×21 em 1h em vez de 15m. Não afeta moedas já configuradas — só novas entradas a partir de agora.',
+    'settings.macross_default_reset':    'Restaurar padrão de fábrica',
 
     // Indicadores — tipos
     'ind.placeholder':       'Indicador',
@@ -507,6 +510,9 @@ const T = {
     'settings.currency_panel_width':      'Currency column width',
     'settings.currency_panel_width_hint': 'Drag the left edge of the filters/currency column to resize, or adjust here. Saved automatically.',
     'settings.currency_panel_width_reset': 'Reset to default',
+    'settings.macross_default':          'MA-Cross — new entry defaults',
+    'settings.macross_default_hint':     'Entry, filters and exit pre-filled when adding a new coin to MA-Cross. E.g.: EMA9×21 entry on 1h instead of 15m. Does not affect already-configured coins — only new entries from now on.',
+    'settings.macross_default_reset':    'Reset to factory default',
 
     // Indicator types
     'ind.placeholder':       'Indicator',
