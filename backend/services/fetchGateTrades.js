@@ -86,7 +86,12 @@ router.post('/gate-order', async (req, res) => {
       type:          type.toLowerCase(),
       amount:        amountStr,
     };
-    if (type.toLowerCase() === 'limit') params.price = String(price);
+    if (type.toLowerCase() === 'limit') {
+      params.price = String(price);
+    } else {
+      // Gate.io rejeita ordem market com time_in_force default (gtc) — precisa ser ioc ou fok
+      params.time_in_force = 'ioc';
+    }
 
     const order = await gateRequest('POST', '/spot/orders', params);
     res.json(order);
