@@ -3,8 +3,9 @@ import { useI18n } from '../i18n';
 import ReactECharts from 'echarts-for-react';
 import { useCurrency } from '../contexts/CurrencyContext';
 import { fetchCandlesticksAndCloud, fetchGateTrades, fetchBinanceTrades, fetchChartAdaptiveBands, DEFAULT_CANDLE_LIMIT } from '../services/api';
-import { buildMarkersFromExchangeTrades, attachPnlToExchangeTrades } from '../utils/multitradeChart';
+import { buildMarkersFromExchangeTrades, attachPnlToExchangeTrades, isMaCrossEntry } from '../utils/multitradeChart';
 import { buildTrailingStopSeries, resolveChartStopLoss } from '../utils/trailingStopLoss';
+import { getEntriesForSymbol, buildAdHocMaCrossEntry } from '../constants/strategyPresets';
 import MaCrossRuleCheckChart from './MaCrossRuleCheckChart';
 import convertOpenTime from '../utils/convertOpenTime';
 import Tooltip from './Tooltip';
@@ -20,6 +21,8 @@ const CANDLE_FETCH_STEPS = [500, 750, 1000];
 const OVERLAY_MA_INTERVALS = ['1m', '5m', '15m', '30m', '1h', '2h', '4h', '8h', '12h', '1d'];
 const OVERLAY_MA_COLORS = ['#fb923c', '#c084fc', '#34d399', '#60a5fa', '#f472b6', '#facc15', '#a78bfa', '#4ade80'];
 const INTERVALS = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w'];
+/** Intervalos mais usados no gráfico — os demais ficam escondidos atrás do botão "›" (mesmo padrão do picker de intervalos em Analisar indicadores). */
+const COMMON_CHART_INTERVALS = ['5m', '15m', '30m', '1h', '4h', '1d'];
 const DEFAULT_INTERVAL = '15m';
 
 const CHART_PRICE_PAD = 54;        // direita: rótulos do eixo de preço
@@ -1735,40 +1738,10 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
   const bollingerSeries = buildBollingerSeries(bollingerConfig, candlesticks, alignSeries);
   const vwapSeries = buildVwapSeries(vwapConfig, candlesticks, alignSeries);
 
-  const _fmtV = v => v == null ? '—' : (v < 0.01 ? Number(v).toFixed(6) : v < 1 ? Number(v).toFixed(4) : Number(v).toFixed(2));
-
   const tooltipFormatter = (params) => {
     const idx = params[0]?.dataIndex;
     const time = (idx != null ? xFullData[idx] : null) || params[0]?.axisValue || '';
-    let html = `<div style="font-family:monospace;font-size:11px;min-width:150px;line-height:1.6">`;
-    html += `<div style="margin-bottom:5px;opacity:0.5;font-size:10px">${time}</div>`;
-    for (const p of params) {
-      if (p.value == null) continue;
-      if (p.seriesType === 'candlestick') {
-        const [o, c, l, h] = p.value;
-        const up = parseFloat(c) >= parseFloat(o);
-        const col = up ? '#26a69a' : '#ef5350';
-        html += `<div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 10px;margin-bottom:4px">`;
-        html += `<span style="color:#888">O</span><span style="color:${col};font-weight:bold">${_fmtV(o)}</span>`;
-        html += `<span style="color:#888">H</span><span style="color:${col}">${_fmtV(h)}</span>`;
-        html += `<span style="color:#888">L</span><span style="color:${col}">${_fmtV(l)}</span>`;
-        html += `<span style="color:#888">C</span><span style="color:${col};font-weight:bold">${_fmtV(c)}</span>`;
-        html += `</div><hr style="border:none;border-top:1px solid rgba(255,255,255,0.08);margin:3px 0"/>`;
-      } else {
-        if (p.seriesName === 'CL' || p.seriesName === 'BL' || p.seriesName === 'Span A' || p.seriesName === 'Span B' || p.seriesName === 'PnL') continue;
-        let col = p.color ?? '#fff';
-        if (p.seriesName === 'RSI') {
-          const rv = parseFloat(p.value);
-          col = rv >= 70 ? '#26a69a' : rv <= 30 ? '#ef5350' : '#a78bfa';
-        }
-        html += `<div style="display:flex;justify-content:space-between;gap:14px">`;
-        html += `<span style="color:${col};opacity:0.85">${p.seriesName}</span>`;
-        html += `<span style="color:#fff;font-weight:bold">${_fmtV(p.value)}</span>`;
-        html += `</div>`;
-      }
-    }
-    html += `</div>`;
-    return html;
+    return `<div style="font-family:monospace;font-size:11px">${time}</div>`;
   };
 
   const ma9Data   = alignSeries(ma9);
@@ -2104,17 +2077,7 @@ function buildMatrixOption({ symbol, interval, candlesticks, rsi }, activeIndica
       formatter: (params) => {
         const idx = params[0]?.dataIndex;
         const time = (idx != null ? xFullData[idx] : null) || params[0]?.axisValue || '';
-        let html = `<div style="font-family:monospace;font-size:11px;min-width:120px;line-height:1.6">`;
-        html += `<div style="margin-bottom:5px;opacity:0.6;font-size:10px">${time}</div>`;
-        for (const p of params) {
-          if (p.value == null) continue;
-          html += `<div style="display:flex;justify-content:space-between;gap:14px">`;
-          html += `<span style="color:${p.color ?? G};opacity:0.85">${p.seriesName}</span>`;
-          html += `<span style="color:${G};font-weight:bold">${fmtPrice(p.value)}</span>`;
-          html += `</div>`;
-        }
-        html += `</div>`;
-        return html;
+        return `<div style="font-family:monospace;font-size:11px">${time}</div>`;
       },
     },
     grid: showRsi
@@ -2376,6 +2339,7 @@ export default function CandlestickChart() {
   const chartWrapRef = useRef(null);
   const [currentInterval, setCurrentInterval] = useState(savedInterval || DEFAULT_INTERVAL);
   const [loadingInterval, setLoadingInterval] = useState(false);
+  const [showAllIntervals, setShowAllIntervals] = useState(false);
   const [themeTick, setThemeTick] = useState(0);
   const activeIndicators = uiPrefs.activeIndicators ?? [...DEFAULT_ACTIVE_INDICATORS];
   const [activeTab, setActiveTab] = useState('chart'); // 'chart' | 'matrix'
@@ -2465,6 +2429,8 @@ export default function CandlestickChart() {
   const [displayCandleCount, setDisplayCandleCount] = useState(LIMIT);
   const [hasExplicitCandleWindow, setHasExplicitCandleWindow] = useState(false);
   const [loadingMoreCandles, setLoadingMoreCandles] = useState(false);
+  const [measureMode, setMeasureMode] = useState(false);
+  const [measurePoints, setMeasurePoints] = useState(null);
 
   useEffect(() => {
     const el = chartWrapRef.current;
@@ -3057,6 +3023,43 @@ export default function CandlestickChart() {
     }
   }
 
+  function toggleMeasureMode() {
+    setMeasureMode((v) => !v);
+    setMeasurePoints(null);
+  }
+
+  function handleMeasureStart(e) {
+    if (!measureMode) return;
+    const wrap = chartWrapRef.current;
+    const inst = chartRef.current?.getEchartsInstance();
+    if (!wrap || !inst) return;
+    e.preventDefault();
+    const rect = wrap.getBoundingClientRect();
+    const point = e.touches?.length ? e.touches[0] : e;
+    const startX = point.clientX - rect.left;
+    const startY = point.clientY - rect.top;
+    const startPrice = inst.convertFromPixel({ yAxisIndex: 0 }, startY);
+    setMeasurePoints({ x1: startX, y1: startY, x2: startX, y2: startY, price1: startPrice, price2: startPrice });
+
+    const onMove = (ev) => {
+      const p = ev.touches?.length ? ev.touches[0] : ev;
+      const x = p.clientX - rect.left;
+      const y = p.clientY - rect.top;
+      const price = inst.convertFromPixel({ yAxisIndex: 0 }, y);
+      setMeasurePoints((prev) => (prev ? { ...prev, x2: x, y2: y, price2: price } : prev));
+    };
+    const onEnd = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onEnd);
+      window.removeEventListener('touchmove', onMove);
+      window.removeEventListener('touchend', onEnd);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onEnd);
+    window.addEventListener('touchmove', onMove, { passive: false });
+    window.addEventListener('touchend', onEnd);
+  }
+
   useEffect(() => {
     if (!chartZoom || !chartRef.current || !selectedChart?.candlesticks?.length) return;
     // Zoom embutido na option (buildFixedDataZoom); dispatchAction só como fallback legado (tabela/sem source)
@@ -3192,6 +3195,19 @@ export default function CandlestickChart() {
     return resolveChartStopLoss(selectedChart.symbol, multitradeFavorites);
   }, [selectedChart?.symbol, multitradeFavorites]);
 
+  // Aba "Bot": se a moeda não é favorito MC (MA-Cross habilitado), monta um
+  // tradeConfig ad-hoc a partir do molde padrão configurado em Configurações,
+  // pra permitir a conferência de regras em qualquer moeda do gráfico.
+  const botAdHocTradeConfig = useMemo(() => {
+    const sym = selectedChart?.symbol;
+    if (!sym) return null;
+    const hasFavorite = getEntriesForSymbol(multitradeFavorites, sym)
+      .some(e => e.enabled !== false && isMaCrossEntry(e));
+    if (hasFavorite) return null;
+    const exchange = selectedChart.source === 'gate' ? 'gate' : 'binance';
+    return buildAdHocMaCrossEntry(sym, exchange).tradeConfig;
+  }, [selectedChart?.symbol, selectedChart?.source, multitradeFavorites]);
+
   const chartBollingerConfig = useMemo(() => {
     const enabled = bollingerBands.enabled && chartPanelButtons.bb !== false;
     if (!enabled) return null;
@@ -3271,6 +3287,45 @@ export default function CandlestickChart() {
     />
   );
 
+  const measurePct = measurePoints && Number.isFinite(measurePoints.price1) && measurePoints.price1
+    ? ((measurePoints.price2 - measurePoints.price1) / measurePoints.price1) * 100
+    : null;
+  const measureColor = measurePct == null ? '#94a3b8' : measurePct >= 0 ? '#26a69a' : '#ef5350';
+  const measureOverlay = measureMode && (
+    <div
+      className="absolute inset-0 z-20 cursor-crosshair select-none"
+      onMouseDown={handleMeasureStart}
+      onTouchStart={handleMeasureStart}
+    >
+      {measurePoints && (
+        <>
+          <svg className="absolute inset-0 w-full h-full pointer-events-none">
+            <line
+              x1={measurePoints.x1} y1={measurePoints.y1} x2={measurePoints.x2} y2={measurePoints.y2}
+              stroke={measureColor} strokeWidth="1.5" strokeDasharray="4 3"
+            />
+            <circle cx={measurePoints.x1} cy={measurePoints.y1} r="3" fill={measureColor} />
+            <circle cx={measurePoints.x2} cy={measurePoints.y2} r="3" fill={measureColor} />
+          </svg>
+          {measurePct != null && (
+            <div
+              className="absolute px-2 py-1 rounded text-[11px] font-mono pointer-events-none shadow-lg"
+              style={{
+                left: measurePoints.x2 + 12, top: measurePoints.y2 - 14,
+                background: measureColor, color: '#0a0a0a', fontWeight: 'bold',
+              }}
+            >
+              {measurePct >= 0 ? '+' : ''}{measurePct.toFixed(2)}%
+              <div style={{ fontWeight: 'normal', opacity: 0.85, fontSize: '9px' }}>
+                {fmtChartPrice(measurePoints.price1)} → {fmtChartPrice(measurePoints.price2)}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+
   return (
     <div className="flex flex-col h-full min-h-0">
       {/* Toolbar — compacta no mobile (intervalos em scroll horizontal) */}
@@ -3323,12 +3378,27 @@ export default function CandlestickChart() {
             >
               {loadingMoreCandles ? '…' : `+${selectedChart?.candlesticks?.length ?? candleFetchLimit}/${MAX_CANDLES}`}
             </button>
+            <button
+              onClick={toggleMeasureMode}
+              disabled={activeTab === 'rules'}
+              title="Medir variação % — arraste de um candle a outro"
+              className={`px-1.5 md:px-2 py-0.5 text-[10px] md:text-xs rounded font-mono transition-colors disabled:opacity-40 border shrink-0 ${
+                measureMode
+                  ? 'bg-p4 text-white border-p4'
+                  : 'text-p5 hover:bg-p3/40 hover:text-white border-p3/40'
+              }`}
+            >
+              %
+            </button>
           </div>
         </div>
 
-        {/* Linha 1 — intervalos (uma linha no mobile) */}
+        {/* Linha 1 — intervalos (uma linha no mobile). Só os mais usados ficam visíveis; "›" abre os demais pro lado. */}
         <div className="flex items-center gap-1 flex-nowrap overflow-x-auto touch-pan-x scrollbar-thin md:flex-wrap md:overflow-visible">
-          {INTERVALS.map((iv) => (
+          {(showAllIntervals
+            ? INTERVALS
+            : INTERVALS.filter((iv) => COMMON_CHART_INTERVALS.includes(iv) || iv === currentInterval)
+          ).map((iv) => (
             <button
               key={iv}
               onClick={() => handleIntervalChange(iv)}
@@ -3342,6 +3412,13 @@ export default function CandlestickChart() {
               {iv}
             </button>
           ))}
+          <button
+            onClick={() => setShowAllIntervals((v) => !v)}
+            title={showAllIntervals ? 'Mostrar menos intervalos' : 'Mais intervalos'}
+            className="px-1 py-0.5 text-[10px] md:text-xs rounded font-mono text-p5/60 hover:bg-p3/40 hover:text-white transition-colors shrink-0"
+          >
+            {showAllIntervals ? '‹' : '›'}
+          </button>
           {loadingInterval && (
             <div className="w-3 h-3 border border-p4 border-t-transparent rounded-full animate-spin ml-1 shrink-0" />
           )}
@@ -3357,6 +3434,8 @@ export default function CandlestickChart() {
             <MaCrossRuleCheckChart
               symbol={selectedChart.symbol}
               exchange={selectedChart.source === 'gate' ? 'gate' : 'binance'}
+              strategyId="ma-cross"
+              tradeConfig={botAdHocTradeConfig}
               fillHeight
               activeIndicators={activeIndicators}
               quickEmaGroups={quickEmaGroups}
@@ -3396,6 +3475,7 @@ export default function CandlestickChart() {
       ) : activeTab === 'chart' ? (
         <div ref={chartWrapRef} className="flex-1 min-h-0 relative">
           {chartNode}
+          {measureOverlay}
           <ChartIndicatorPanel
             activeIndicators={activeIndicators}
             toggleIndicator={toggleIndicator}
@@ -3426,6 +3506,7 @@ export default function CandlestickChart() {
           {/* Gráfico (lado esquerdo) */}
           <div ref={chartWrapRef} className="flex-1 min-w-0 min-h-0 relative">
             {chartNode}
+            {measureOverlay}
             <ChartIndicatorPanel
               activeIndicators={activeIndicators}
               toggleIndicator={toggleIndicator}
