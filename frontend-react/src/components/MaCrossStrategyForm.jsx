@@ -638,6 +638,11 @@ export default function MaCrossStrategyForm({ form, patch, symbol, exchange, has
                   className="text-[9px] px-2 py-0.5 rounded font-semibold text-p5/60 border border-p3/40 hover:text-p5 hover:border-p4 transition-colors">
                   2%
                 </button>
+                <button type="button" onClick={() => patch('exit.bbTakeProfit.targetPct', 5)}
+                  title="Aplica um alvo padrão de 5%, independente do histórico da moeda"
+                  className="text-[9px] px-2 py-0.5 rounded font-semibold text-p5/60 border border-p3/40 hover:text-p5 hover:border-p4 transition-colors">
+                  5%
+                </button>
                 <button type="button" onClick={() => patch('exit.bbTakeProfit.targetPct', 9)}
                   title="Aplica um alvo padrão de 9%, independente do histórico da moeda"
                   className="text-[9px] px-2 py-0.5 rounded font-semibold text-p5/60 border border-p3/40 hover:text-p5 hover:border-p4 transition-colors">
