@@ -49,6 +49,7 @@ const INDICATOR_GROUPS = [
   { id: 'sr',       label: 'S/R',   color: '#facc15', tipKey: 'chart.tip.sr' },
   { id: 'pphl',     label: 'PPHL',  color: '#2dd4bf', tipKey: 'chart.tip.pphl' },
   { id: 'rsi',      label: 'RSI',   color: '#a78bfa', tipKey: 'chart.tip.rsi' },
+  { id: 'chopZone', label: 'CHOP',  color: '#f59e0b', tipKey: 'chart.tip.chopZone' },
 ];
 
 const RSI_EXTRA_INDICATORS = [
@@ -462,7 +463,7 @@ const panelSelect = (color, dims = null) => ({
 
 const COMPACT_LABELS = {
   ma9: '9', ma21: '21', ma50: '50', ma200: '200', ichimoku: 'Ich', sr: 'S/R', pphl: 'PPHL', rsi: 'RSI',
-  rsi80: 'R80', rsi50: 'R50', stopLoss: 'SL',
+  rsi80: 'R80', rsi50: 'R50', stopLoss: 'SL', chopZone: 'CHOP',
 };
 
 /** Grid base do painel — cada botão ocupa N×M células. */
@@ -1323,6 +1324,21 @@ function fmtChartPrice(p) {
   return p < 0.01 ? p.toFixed(6) : p < 1 ? p.toFixed(4) : p.toFixed(2);
 }
 
+/** Tempo decorrido (ms) em texto curto: "45m", "5h", "5h30m", "1d 3h"… */
+function fmtElapsedTime(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return null;
+  const totalMinutes = Math.round(ms / 60000);
+  if (totalMinutes < 60) return `${totalMinutes}m`;
+  const totalHours = Math.floor(totalMinutes / 60);
+  const remMinutes = totalMinutes % 60;
+  if (totalHours < 24) return remMinutes ? `${totalHours}h${remMinutes}m` : `${totalHours}h`;
+  const days = Math.floor(totalHours / 24);
+  const remHours = totalHours % 24;
+  return remHours
+    ? `${totalHours}h (${days}d ${remHours}h)`
+    : `${totalHours}h (${days}d)`;
+}
+
 /** Preço de compra aberto para o símbolo do gráfico (multitrade, exchange, FIFO). */
 function resolveChartBuyPrice(symbol, {
   multitradeFavorites, fiveMTradeFavorites, activeTrades,
@@ -1573,7 +1589,7 @@ function buildPivotMarkers(pivots, candlesticks, DL, LEFT_PAD, chartInterval) {
   return { highs, lows };
 }
 
-function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAverage, ma50, ma9, ma21, rsi }, colors, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = [], overlayConfigs = [], multitradeMarkers = [], chartLeftPad = CHART_LEFT_MARGIN, buyInfo = null, stopLossConfig = null, chartRightPad = CHART_PRICE_PAD + CHART_LEFT_MARGIN, bollingerConfig = null, srConfig = null, pphlConfig = null, vwapConfig = null) {
+function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAverage, ma50, ma9, ma21, rsi, chopZone }, colors, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = [], overlayConfigs = [], multitradeMarkers = [], chartLeftPad = CHART_LEFT_MARGIN, buyInfo = null, stopLossConfig = null, chartRightPad = CHART_PRICE_PAD + CHART_LEFT_MARGIN, bollingerConfig = null, srConfig = null, pphlConfig = null, vwapConfig = null) {
   const showMa9      = activeIndicators.includes('ma9');
   const showMa21     = activeIndicators.includes('ma21');
   const showMa50     = activeIndicators.includes('ma50');
@@ -1584,7 +1600,13 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
   const showRsi      = activeIndicators.includes('rsi');
   const showRsi50    = activeIndicators.includes('rsi50');
   const showRsi80    = activeIndicators.includes('rsi80');
+  const showChopZone = activeIndicators.includes('chopZone');
   const showStopLoss = activeIndicators.includes('stopLoss');
+  // Subpainéis empilhados abaixo do preço (RSI, CHOP...) — cada um ganha seu próprio grid,
+  // na ordem desta lista. subpanelCount define a partir de qual gridIndex os rótulos do
+  // eixo X aparecem (só no grid mais de baixo).
+  const subpanelIds  = [...(showRsi ? ['rsi'] : []), ...(showChopZone ? ['chopZone'] : [])];
+  const subpanelCount = subpanelIds.length;
   const DL = Math.min(displayLimit, candlesticks.length);
   const LEFT_PAD  = 1;
   const RIGHT_PAD = showIchimoku ? 24 : 3;
@@ -1717,7 +1739,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
     type: 'category',
     data: xData,
     axisLine: { lineStyle: { color: colors.panel } },
-    axisLabel: { color: colors.text, fontSize: 10, show: gridIndex === (showRsi ? 1 : 0) },
+    axisLabel: { color: colors.text, fontSize: 10, show: gridIndex === subpanelCount },
     splitLine: { show: false },
   });
 
@@ -1835,7 +1857,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
     ...(stopLossSeries ? [{ ...stopLossSeries, xAxisIndex: idx, yAxisIndex: idx }] : []),
   ];
 
-  if (!showRsi) {
+  if (subpanelCount === 0) {
     return {
       backgroundColor: colors.bg,
       title: {
@@ -1865,50 +1887,20 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
     };
   }
 
-  const rsiData = alignSeries(rsi);
+  // Layout dos grids: preço no topo + 1 ou 2 subpainéis empilhados embaixo.
+  // O caso de 1 subpainel preserva exatamente as % usadas antes (só RSI existia).
+  const subpanelGridRects = subpanelCount === 1
+    ? [{ top: 40, bottom: '24%' }, { top: '79%', bottom: 20 }]
+    : [{ top: 40, bottom: '46%' }, { top: '58%', bottom: '24%' }, { top: '79%', bottom: 20 }];
+  const gridLayout = subpanelGridRects.map(g => ({ ...g, left: chartLeftPad, right: chartRightPad }));
 
-  return {
-    backgroundColor: colors.bg,
-    title: {
-      text: symbol, subtext: interval, left: chartLeftPad, top: 8,
-      textStyle: { color: colors.text, fontSize: 15, fontWeight: 'bold' },
-      subtextStyle: { color: colors.axis, fontSize: 11 },
-    },
-    tooltip: {
-      trigger: 'axis', backgroundColor: '#003f69ee', borderColor: colors.axis,
-      textStyle: { color: colors.text, fontSize: 11 },
-      formatter: tooltipFormatter,
-      axisPointer: { animation: false, type: 'cross', lineStyle: { color: colors.axis, width: 1, opacity: 0.8 } },
-    },
-    grid: [
-      { top: 40, bottom: '24%', left: chartLeftPad, right: chartRightPad },
-      { top: '79%', bottom: 20, left: chartLeftPad, right: chartRightPad },
-    ],
-    xAxis: [
-      { ...axisBase(0), axisLabel: { show: false } },
-      { ...axisBase(1) },
-    ],
-    yAxis: [
-      { gridIndex: 0, scale: true, position: 'right',
-        axisLine: { lineStyle: { color: colors.panel } },
-        axisLabel: { color: colors.text, fontSize: 10 },
-        splitLine: { lineStyle: { color: colors.panel, type: 'dashed', opacity: 0.3 } } },
-      { gridIndex: 1, min: 0, max: 100, position: 'right',
-        axisLine: { lineStyle: { color: colors.panel } },
-        axisLabel: { color: colors.text, fontSize: 9 },
-        splitLine: { lineStyle: { color: colors.panel, type: 'dashed', opacity: 0.2 } },
-        interval: 30 },
-    ],
-    dataZoom: zoomWindow
-      ? buildFixedDataZoom(zoomWindow.startPct, zoomWindow.endPct, [0, 1])
-      : buildInsideDataZoom([0, 1]),
-    series: [
-      ...candleSeries(0),
-      {
+  function buildSubpanelSeries(id, gridIdx) {
+    if (id === 'rsi') {
+      return {
         name: 'RSI',
         type: 'line',
-        xAxisIndex: 1, yAxisIndex: 1,
-        data: rsiData,
+        xAxisIndex: gridIdx, yAxisIndex: gridIdx,
+        data: alignSeries(rsi),
         showSymbol: false,
         lineStyle: { color: '#a78bfa', width: 1.5 },
         markLine: {
@@ -1924,18 +1916,83 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
               label: { formatter: '80', color: '#fb923c', fontSize: 9, position: 'end' } }] : []),
           ],
         },
+      };
+    }
+    // Choppiness Index (14): <38.2 = tendência (verde), >61.8 = lateral/choppy (vermelho).
+    return {
+      name: 'CHOP',
+      type: 'line',
+      xAxisIndex: gridIdx, yAxisIndex: gridIdx,
+      data: alignSeries(chopZone),
+      showSymbol: false,
+      lineStyle: { color: '#f59e0b', width: 1.5 },
+      markLine: {
+        silent: true, symbol: 'none',
+        data: [
+          { yAxis: 38.2, lineStyle: { color: '#26a69a', type: 'dashed', width: 1 },
+            label: { formatter: '38', color: '#26a69a', fontSize: 9, position: 'end' } },
+          { yAxis: 61.8, lineStyle: { color: '#ef5350', type: 'dashed', width: 1 },
+            label: { formatter: '62', color: '#ef5350', fontSize: 9, position: 'end' } },
+        ],
       },
+    };
+  }
+
+  const subpanelYAxis = (id, gridIdx) => ({
+    gridIndex: gridIdx, min: 0, max: 100, position: 'right',
+    axisLine: { lineStyle: { color: colors.panel } },
+    axisLabel: { color: colors.text, fontSize: 9 },
+    splitLine: { lineStyle: { color: colors.panel, type: 'dashed', opacity: 0.2 } },
+    interval: id === 'chopZone' ? 20 : 30,
+  });
+
+  const dataZoomAxisIndex = [0, ...subpanelIds.map((_, i) => i + 1)];
+
+  return {
+    backgroundColor: colors.bg,
+    title: {
+      text: symbol, subtext: interval, left: chartLeftPad, top: 8,
+      textStyle: { color: colors.text, fontSize: 15, fontWeight: 'bold' },
+      subtextStyle: { color: colors.axis, fontSize: 11 },
+    },
+    tooltip: {
+      trigger: 'axis', backgroundColor: '#003f69ee', borderColor: colors.axis,
+      textStyle: { color: colors.text, fontSize: 11 },
+      formatter: tooltipFormatter,
+      axisPointer: { animation: false, type: 'cross', lineStyle: { color: colors.axis, width: 1, opacity: 0.8 } },
+    },
+    grid: gridLayout,
+    xAxis: [
+      { ...axisBase(0), axisLabel: { show: false } },
+      ...subpanelIds.map((_, i) => axisBase(i + 1)),
+    ],
+    yAxis: [
+      { gridIndex: 0, scale: true, position: 'right',
+        axisLine: { lineStyle: { color: colors.panel } },
+        axisLabel: { color: colors.text, fontSize: 10 },
+        splitLine: { lineStyle: { color: colors.panel, type: 'dashed', opacity: 0.3 } } },
+      ...subpanelIds.map((id, i) => subpanelYAxis(id, i + 1)),
+    ],
+    dataZoom: zoomWindow
+      ? buildFixedDataZoom(zoomWindow.startPct, zoomWindow.endPct, dataZoomAxisIndex)
+      : buildInsideDataZoom(dataZoomAxisIndex),
+    series: [
+      ...candleSeries(0),
+      ...subpanelIds.map((id, i) => buildSubpanelSeries(id, i + 1)),
     ],
   };
 }
 
 // ── Gráfico Matrix: área de preço + RSI, tema terminal verde ─────────────────
 
-function buildMatrixOption({ symbol, interval, candlesticks, rsi }, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = [], chartLeftPad = CHART_LEFT_MARGIN, buyInfo = null, stopLossConfig = null, chartRightPad = CHART_PRICE_PAD + CHART_LEFT_MARGIN) {
+function buildMatrixOption({ symbol, interval, candlesticks, rsi, chopZone }, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = [], chartLeftPad = CHART_LEFT_MARGIN, buyInfo = null, stopLossConfig = null, chartRightPad = CHART_PRICE_PAD + CHART_LEFT_MARGIN) {
   const showRsi   = activeIndicators.includes('rsi');
   const showRsi50 = activeIndicators.includes('rsi50');
   const showRsi80 = activeIndicators.includes('rsi80');
+  const showChopZone = activeIndicators.includes('chopZone');
   const showStopLoss = activeIndicators.includes('stopLoss');
+  const subpanelIds   = [...(showRsi ? ['rsi'] : []), ...(showChopZone ? ['chopZone'] : [])];
+  const subpanelCount = subpanelIds.length;
   const DL      = Math.min(displayLimit, candlesticks.length);
   const LEFT_PAD  = 1;
   const RIGHT_PAD = 3;
@@ -2035,10 +2092,12 @@ function buildMatrixOption({ symbol, interval, candlesticks, rsi }, activeIndica
       }] : [])
     ]
   };
-  const rsiData = (() => {
-    const raw = rsi?.slice(-DL) ?? [];
+  const alignMatrixSeries = (arr) => {
+    const raw = arr?.slice(-DL) ?? [];
     return [...new Array(LEFT_PAD + Math.max(0, DL - raw.length)).fill(null), ...raw, ...new Array(RIGHT_PAD).fill(null)];
-  })();
+  };
+  const rsiData  = alignMatrixSeries(rsi);
+  const chopData = alignMatrixSeries(chopZone);
 
   const axisBase = (gridIndex, showLabel) => ({
     gridIndex,
@@ -2080,18 +2139,30 @@ function buildMatrixOption({ symbol, interval, candlesticks, rsi }, activeIndica
         return `<div style="font-family:monospace;font-size:11px">${time}</div>`;
       },
     },
-    grid: showRsi
-      ? [{ top: 40, bottom: '26%', left: chartLeftPad, right: chartRightPad }, { top: '78%', bottom: 20, left: chartLeftPad, right: chartRightPad }]
-      : [{ top: 40, bottom: 20,    left: chartLeftPad, right: chartRightPad }],
-    xAxis: showRsi
-      ? [{ ...axisBase(0, false) }, { ...axisBase(1, true) }]
-      : { ...axisBase(0, true) },
-    yAxis: showRsi
-      ? [yAxisBase(0), yAxisBase(1, { scale: false, min: 0, max: 100, interval: 30 })]
-      : yAxisBase(0),
+    grid: (() => {
+      if (subpanelCount === 0) return [{ top: 40, bottom: 20, left: chartLeftPad, right: chartRightPad }];
+      const rects = subpanelCount === 1
+        ? [{ top: 40, bottom: '26%' }, { top: '78%', bottom: 20 }]
+        : [{ top: 40, bottom: '50%' }, { top: '58%', bottom: '26%' }, { top: '78%', bottom: 20 }];
+      return rects.map(g => ({ ...g, left: chartLeftPad, right: chartRightPad }));
+    })(),
+    xAxis: subpanelCount === 0
+      ? { ...axisBase(0, true) }
+      : [
+          { ...axisBase(0, false) },
+          ...subpanelIds.map((_, i) => axisBase(i + 1, i + 1 === subpanelCount)),
+        ],
+    yAxis: subpanelCount === 0
+      ? yAxisBase(0)
+      : [
+          yAxisBase(0),
+          ...subpanelIds.map((id, i) => yAxisBase(i + 1, {
+            scale: false, min: 0, max: 100, interval: id === 'chopZone' ? 20 : 30,
+          })),
+        ],
     dataZoom: zoomWindow
-      ? buildFixedDataZoom(zoomWindow.startPct, zoomWindow.endPct, showRsi ? [0, 1] : [0])
-      : buildInsideDataZoom(showRsi ? [0, 1] : [0]),
+      ? buildFixedDataZoom(zoomWindow.startPct, zoomWindow.endPct, [0, ...subpanelIds.map((_, i) => i + 1)])
+      : buildInsideDataZoom([0, ...subpanelIds.map((_, i) => i + 1)]),
     series: [
       {
         name: 'Preço',
@@ -2108,23 +2179,46 @@ function buildMatrixOption({ symbol, interval, candlesticks, rsi }, activeIndica
       },
       ...(buyPnlSeries ? [{ ...buyPnlSeries, xAxisIndex: 0, yAxisIndex: 0 }] : []),
       ...(stopLossSeries ? [{ ...stopLossSeries, xAxisIndex: 0, yAxisIndex: 0 }] : []),
-      ...(showRsi && rsiData.length ? [{
-        name: 'RSI',
-        type: 'line',
-        xAxisIndex: 1, yAxisIndex: 1,
-        data: rsiData,
-        showSymbol: false,
-        lineStyle: { color: '#4ade80', width: 1.2 },
-        markLine: {
-          silent: true, symbol: 'none',
-          data: [
-            { yAxis: 30, lineStyle: { color: '#ef5350', type: 'dashed', width: 1 }, label: { formatter: '30', color: '#ef5350', fontSize: 9, position: 'end' } },
-            ...(showRsi50 ? [{ yAxis: 50, lineStyle: { color: '#facc15', type: 'dashed', width: 1, opacity: 0.6 }, label: { formatter: '50', color: '#facc15', fontSize: 9, position: 'end' } }] : []),
-            { yAxis: 70, lineStyle: { color: G,         type: 'dashed', width: 1 }, label: { formatter: '70', color: G,         fontSize: 9, position: 'end' } },
-            ...(showRsi80 ? [{ yAxis: 80, lineStyle: { color: '#fb923c', type: 'dashed', width: 1 }, label: { formatter: '80', color: '#fb923c', fontSize: 9, position: 'end' } }] : []),
-          ],
-        },
-      }] : []),
+      ...subpanelIds.flatMap((id, i) => {
+        const gridIdx = i + 1;
+        if (id === 'rsi') {
+          if (!rsiData.length) return [];
+          return [{
+            name: 'RSI',
+            type: 'line',
+            xAxisIndex: gridIdx, yAxisIndex: gridIdx,
+            data: rsiData,
+            showSymbol: false,
+            lineStyle: { color: '#4ade80', width: 1.2 },
+            markLine: {
+              silent: true, symbol: 'none',
+              data: [
+                { yAxis: 30, lineStyle: { color: '#ef5350', type: 'dashed', width: 1 }, label: { formatter: '30', color: '#ef5350', fontSize: 9, position: 'end' } },
+                ...(showRsi50 ? [{ yAxis: 50, lineStyle: { color: '#facc15', type: 'dashed', width: 1, opacity: 0.6 }, label: { formatter: '50', color: '#facc15', fontSize: 9, position: 'end' } }] : []),
+                { yAxis: 70, lineStyle: { color: G,         type: 'dashed', width: 1 }, label: { formatter: '70', color: G,         fontSize: 9, position: 'end' } },
+                ...(showRsi80 ? [{ yAxis: 80, lineStyle: { color: '#fb923c', type: 'dashed', width: 1 }, label: { formatter: '80', color: '#fb923c', fontSize: 9, position: 'end' } }] : []),
+              ],
+            },
+          }];
+        }
+        // chopZone — Choppiness Index (14): <38.2 tendência (verde), >61.8 lateral/choppy (vermelho)
+        if (!chopData.length) return [];
+        return [{
+          name: 'CHOP',
+          type: 'line',
+          xAxisIndex: gridIdx, yAxisIndex: gridIdx,
+          data: chopData,
+          showSymbol: false,
+          lineStyle: { color: '#f59e0b', width: 1.2 },
+          markLine: {
+            silent: true, symbol: 'none',
+            data: [
+              { yAxis: 38.2, lineStyle: { color: G,         type: 'dashed', width: 1 }, label: { formatter: '38', color: G,         fontSize: 9, position: 'end' } },
+              { yAxis: 61.8, lineStyle: { color: '#ef5350', type: 'dashed', width: 1 }, label: { formatter: '62', color: '#ef5350', fontSize: 9, position: 'end' } },
+            ],
+          },
+        }];
+      }),
     ],
   };
 }
@@ -2409,6 +2503,12 @@ export default function CandlestickChart() {
   const [adaptiveBandOverlay, setAdaptiveBandOverlay] = useState(null);
   const [maBands, setMaBands] = useState(() => ({ ...uiPrefs.maBandsDefaults }));
   const [bollingerBands, setBollingerBands] = useState(() => ({ ...uiPrefs.bollingerBandsDefaults }));
+  // Overlay de Bollinger pedido pela aba Estatísticas (clique numa linha da lista) — sobrescreve
+  // período/desvio/intervalo locais pelos usados no cálculo daquela ocorrência e liga o overlay.
+  useEffect(() => {
+    if (!chartZoom?.bollinger) return;
+    setBollingerBands((prev) => ({ ...prev, ...chartZoom.bollinger, enabled: true }));
+  }, [chartZoom]);
   const [bollingerCache, setBollingerCache] = useState({});
   const [_bollingerLoading, setBollingerLoading] = useState(false);
   const [srInterval, setSrInterval] = useState(() => uiPrefs.srIntervalDefault ?? DEFAULT_SR_INTERVAL);
@@ -3028,6 +3128,23 @@ export default function CandlestickChart() {
     setMeasurePoints(null);
   }
 
+  // Candle sob o cursor (índice + openTime), a partir do pixel X — usado pra medir tempo/candles decorridos.
+  function candleAtPixelX(x) {
+    const inst = chartRef.current?.getEchartsInstance();
+    if (!inst) return null;
+    const candles = selectedChart?.candlesticks;
+    if (!candles?.length) return null;
+    const DL = Math.min(displayLimit, candles.length);
+    const visible = candles.slice(-DL);
+    const LEFT_PAD = 1;
+    const rawIdx = inst.convertFromPixel({ xAxisIndex: 0 }, x);
+    if (!Number.isFinite(rawIdx)) return null;
+    const candleIdx = Math.min(Math.max(Math.round(rawIdx) - LEFT_PAD, 0), visible.length - 1);
+    const candle = visible[candleIdx];
+    if (!candle) return null;
+    return { idx: candleIdx, openTime: Number(candle.openTime) };
+  }
+
   function handleMeasureStart(e) {
     if (!measureMode) return;
     const wrap = chartWrapRef.current;
@@ -3039,14 +3156,23 @@ export default function CandlestickChart() {
     const startX = point.clientX - rect.left;
     const startY = point.clientY - rect.top;
     const startPrice = inst.convertFromPixel({ yAxisIndex: 0 }, startY);
-    setMeasurePoints({ x1: startX, y1: startY, x2: startX, y2: startY, price1: startPrice, price2: startPrice });
+    const startCandle = candleAtPixelX(startX);
+    setMeasurePoints({
+      x1: startX, y1: startY, x2: startX, y2: startY, price1: startPrice, price2: startPrice,
+      candleIdx1: startCandle?.idx ?? null, candleIdx2: startCandle?.idx ?? null,
+      openTime1: startCandle?.openTime ?? null, openTime2: startCandle?.openTime ?? null,
+    });
 
     const onMove = (ev) => {
       const p = ev.touches?.length ? ev.touches[0] : ev;
       const x = p.clientX - rect.left;
       const y = p.clientY - rect.top;
       const price = inst.convertFromPixel({ yAxisIndex: 0 }, y);
-      setMeasurePoints((prev) => (prev ? { ...prev, x2: x, y2: y, price2: price } : prev));
+      const candle = candleAtPixelX(x);
+      setMeasurePoints((prev) => (prev ? {
+        ...prev, x2: x, y2: y, price2: price,
+        candleIdx2: candle?.idx ?? prev.candleIdx2, openTime2: candle?.openTime ?? prev.openTime2,
+      } : prev));
     };
     const onEnd = () => {
       window.removeEventListener('mousemove', onMove);
@@ -3291,6 +3417,12 @@ export default function CandlestickChart() {
     ? ((measurePoints.price2 - measurePoints.price1) / measurePoints.price1) * 100
     : null;
   const measureColor = measurePct == null ? '#94a3b8' : measurePct >= 0 ? '#26a69a' : '#ef5350';
+  const measureCandleCount = measurePoints && Number.isFinite(measurePoints.candleIdx1) && Number.isFinite(measurePoints.candleIdx2)
+    ? Math.abs(measurePoints.candleIdx2 - measurePoints.candleIdx1)
+    : null;
+  const measureElapsed = measurePoints && Number.isFinite(measurePoints.openTime1) && Number.isFinite(measurePoints.openTime2)
+    ? fmtElapsedTime(Math.abs(measurePoints.openTime2 - measurePoints.openTime1))
+    : null;
   const measureOverlay = measureMode && (
     <div
       className="absolute inset-0 z-20 cursor-crosshair select-none"
@@ -3319,6 +3451,12 @@ export default function CandlestickChart() {
               <div style={{ fontWeight: 'normal', opacity: 0.85, fontSize: '9px' }}>
                 {fmtChartPrice(measurePoints.price1)} → {fmtChartPrice(measurePoints.price2)}
               </div>
+              {(measureElapsed || measureCandleCount != null) && (
+                <div style={{ fontWeight: 'normal', opacity: 0.85, fontSize: '9px' }}>
+                  {measureElapsed ?? '—'}
+                  {measureCandleCount != null ? ` · ${measureCandleCount} candle${measureCandleCount === 1 ? '' : 's'}` : ''}
+                </div>
+              )}
             </div>
           )}
         </>

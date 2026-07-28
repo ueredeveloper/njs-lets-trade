@@ -428,7 +428,7 @@ export async function fetchCandlesticksAndCloud(symbol, interval, source = null,
   }
   const candles = candlesRaw;
 
-  const [ichimokuCloud, movingAverage, ma50, ma9, ma21, rsi] = await Promise.all([
+  const [ichimokuCloud, movingAverage, ma50, ma9, ma21, rsi, chopZone] = await Promise.all([
     fetch('/services/ichimoku-cloud', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -464,9 +464,15 @@ export async function fetchCandlesticksAndCloud(symbol, interval, source = null,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(candles),
     }).then((r) => r.json()),
+
+    fetch('/services/choppiness', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(candles),
+    }).then((r) => r.json()),
   ]);
 
-  return { symbol, interval, source: source ?? null, price: candles.at(-1)?.close, candlesticks: candles, ichimokuCloud, movingAverage, ma50, ma9, ma21, rsi };
+  return { symbol, interval, source: source ?? null, price: candles.at(-1)?.close, candlesticks: candles, ichimokuCloud, movingAverage, ma50, ma9, ma21, rsi, chopZone };
 }
 
 /**

@@ -36,6 +36,7 @@ import {
   normalizeActiveIndicators,
   normalizeCurrencyPanelWidth,
   normalizeMaCrossDefaultTemplate,
+  normalizeStatsDefaults,
 } from '../utils/uiPreferences';
 
 const CurrencyContext = createContext(null);
@@ -619,6 +620,21 @@ export function CurrencyProvider({ children }) {
     });
   }, []);
 
+  /** Atualiza um grupo (rsi | maCross | bollingerBands) dos padrões usados ao abrir as abas de Estatísticas. */
+  const setStatsDefaults = useCallback((group, patch) => {
+    setUiPrefsState((prev) => {
+      const next = {
+        ...prev,
+        statsDefaults: normalizeStatsDefaults({
+          ...prev.statsDefaults,
+          [group]: { ...prev.statsDefaults[group], ...patch },
+        }),
+      };
+      saveUiPreferences(next);
+      return next;
+    });
+  }, []);
+
   const isVisibleSymbol = useCallback(
     (symbol, options) => isSymbolVisible(symbol, assetDisplay, options),
     [assetDisplay],
@@ -865,6 +881,7 @@ export function CurrencyProvider({ children }) {
         setActiveIndicatorsPreference,
         setCurrencyPanelWidth,
         setMaCrossDefaultTemplate,
+        setStatsDefaults,
         chartIntervalOptions: CHART_INTERVAL_OPTIONS,
         panelKeys: PANEL_KEYS,
         isVisibleSymbol,

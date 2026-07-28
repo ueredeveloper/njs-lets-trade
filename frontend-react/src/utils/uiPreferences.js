@@ -26,7 +26,7 @@ const VALID_OVERLAY_PERIODS = ['9', '21', '50', '200'];
 
 /** IDs válidos de indicadores do gráfico. */
 export const VALID_ACTIVE_INDICATORS = [
-  'ma9', 'ma21', 'ma50', 'ma200', 'ichimoku', 'sr', 'pphl', 'rsi', 'rsi50', 'rsi80', 'stopLoss',
+  'ma9', 'ma21', 'ma50', 'ma200', 'ichimoku', 'sr', 'pphl', 'rsi', 'rsi50', 'rsi80', 'stopLoss', 'chopZone',
 ];
 
 /** Cores padrão por período (convenção TradingView / melhores práticas). */
@@ -104,6 +104,55 @@ export function normalizeVwapDefaults(raw) {
   };
 }
 
+/** Intervalos disponíveis nas abas de Estatísticas (mesma lista dos selects do painel). */
+export const STATS_INTERVAL_OPTIONS = [
+  '1m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w',
+];
+
+/**
+ * Parâmetros iniciais das abas do painel Estatísticas. Cada aba lê daqui ao montar;
+ * o usuário ainda pode mudar na hora sem alterar o padrão (isso é feito em Configurações).
+ */
+export const DEFAULT_STATS = {
+  rsi: { interval: '4h', oversold: 30, overbought: 70 },
+  maCross: { entryInterval: '4h', exitInterval: '4h' },
+  bollingerBands: { interval: '4h', period: 20, stdDev: 2 },
+};
+
+function statsInterval(raw, fallback) {
+  return STATS_INTERVAL_OPTIONS.includes(raw) ? raw : fallback;
+}
+
+/** Clamp de inteiro dentro de [min, max]; volta ao fallback se não for número. */
+function statsInt(raw, fallback, min, max) {
+  const n = Math.round(Number(raw));
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
+}
+
+export function normalizeStatsDefaults(raw) {
+  const d = DEFAULT_STATS;
+  const oversold = statsInt(raw?.rsi?.oversold, d.rsi.oversold, 1, 99);
+  const overbought = statsInt(raw?.rsi?.overbought, d.rsi.overbought, 1, 99);
+  return {
+    rsi: {
+      interval: statsInterval(raw?.rsi?.interval, d.rsi.interval),
+      // Sobrevenda tem que ficar abaixo da sobrecompra, senão a busca não retorna nada.
+      oversold: oversold < overbought ? oversold : d.rsi.oversold,
+      overbought: oversold < overbought ? overbought : d.rsi.overbought,
+    },
+    maCross: {
+      entryInterval: statsInterval(raw?.maCross?.entryInterval, d.maCross.entryInterval),
+      exitInterval: statsInterval(raw?.maCross?.exitInterval, d.maCross.exitInterval),
+    },
+    bollingerBands: {
+      interval: statsInterval(raw?.bollingerBands?.interval, d.bollingerBands.interval),
+      period: statsInt(raw?.bollingerBands?.period, d.bollingerBands.period, 2, 200),
+      stdDev: statsInt(raw?.bollingerBands?.stdDev, d.bollingerBands.stdDev, 1, 5),
+    },
+  };
+}
+
 /** Intervalo de candles usado pra calcular o S/R (Suporte/Resistência) — independente do intervalo do gráfico, como MA1/MA2/BB. */
 export const DEFAULT_SR_INTERVAL = '4h';
 
@@ -177,6 +226,7 @@ export const DEFAULT_UI_PREFS = {
   activeIndicators: [...DEFAULT_ACTIVE_INDICATORS],
   currencyPanelWidth: CURRENCY_PANEL_WIDTH_DEFAULT,
   maCrossDefaultTemplate: null,
+  statsDefaults: normalizeStatsDefaults(DEFAULT_STATS),
 };
 
 function cloneDefaults() {
@@ -192,6 +242,7 @@ function cloneDefaults() {
     activeIndicators: [...DEFAULT_ACTIVE_INDICATORS],
     currencyPanelWidth: CURRENCY_PANEL_WIDTH_DEFAULT,
     maCrossDefaultTemplate: null,
+    statsDefaults: normalizeStatsDefaults(DEFAULT_STATS),
   };
 }
 
@@ -237,6 +288,9 @@ export function loadUiPreferences() {
     }
     if (parsed.maCrossDefaultTemplate !== undefined) {
       result.maCrossDefaultTemplate = normalizeMaCrossDefaultTemplate(parsed.maCrossDefaultTemplate);
+    }
+    if (parsed.statsDefaults) {
+      result.statsDefaults = normalizeStatsDefaults(parsed.statsDefaults);
     }
     return result;
   } catch {

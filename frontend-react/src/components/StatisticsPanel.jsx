@@ -71,6 +71,21 @@ function saveUseMcInterval(tab, value) {
   try { localStorage.setItem(MC_INTERVAL_STORAGE_KEYS[tab], value ? '1' : '0'); } catch {}
 }
 
+/**
+ * fetchCandlesticksAndCloud calcula ma9/ma21 só com os últimos 300 candles — insuficiente
+ * quando o gráfico é posicionado num cruzamento antigo (fora dessa janela). Recalcula a EMA
+ * sobre TODOS os candles buscados, pra cobrir o período clicado.
+ */
+async function fetchEmaFull(candles, period) {
+  const res = await fetch(`/services/sma?period=${period}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(candles),
+  });
+  const data = await res.json();
+  return Array.isArray(data) ? data : null;
+}
+
 /** Entrada do favorito MA-Cross (multitrade_favorites) desse símbolo, se existir. */
 function mcEntryFor(multitradeFavorites, symbol) {
   return getEntriesForSymbol(multitradeFavorites, symbol).find(isMaCrossEntry) ?? null;
@@ -95,12 +110,12 @@ function McIntervalSwitch({ checked, onChange }) {
 }
 
 function RsiStats() {
-  const { selectedChart, setSelectedChart, setChartZoom, setChartViewSource, multitradeFavorites } = useCurrency();
+  const { selectedChart, setSelectedChart, setChartZoom, setChartViewSource, multitradeFavorites, uiPrefs } = useCurrency();
   const { t, formatPrice } = useI18n();
   const [symbol, setSymbol]         = useState(selectedChart?.symbol || 'BTCUSDT');
-  const [interval, setInterval]     = useState('4h');
-  const [oversold, setOversold]     = useState(30);
-  const [overbought, setOverbought] = useState(70);
+  const [interval, setInterval]     = useState(uiPrefs.statsDefaults.rsi.interval);
+  const [oversold, setOversold]     = useState(uiPrefs.statsDefaults.rsi.oversold);
+  const [overbought, setOverbought] = useState(uiPrefs.statsDefaults.rsi.overbought);
   const [useMcInterval, setUseMcInterval] = useState(() => loadUseMcInterval('rsi', true));
   const [loading, setLoading]       = useState(false);
   const [result, setResult]         = useState(null);
@@ -398,11 +413,12 @@ function RsiStats() {
 }
 
 function MaCrossStats() {
-  const { selectedChart, setSelectedChart, setChartZoom, setChartViewSource, multitradeFavorites } = useCurrency();
+  const { selectedChart, setSelectedChart, setChartZoom, setChartViewSource, multitradeFavorites,
+    uiPrefs, setActiveIndicatorsPreference } = useCurrency();
   const { t } = useI18n();
   const [symbol, setSymbol]               = useState(selectedChart?.symbol || 'BTCUSDT');
-  const [entryInterval, setEntryInterval] = useState('4h');
-  const [exitInterval, setExitInterval]   = useState('4h');
+  const [entryInterval, setEntryInterval] = useState(uiPrefs.statsDefaults.maCross.entryInterval);
+  const [exitInterval, setExitInterval]   = useState(uiPrefs.statsDefaults.maCross.exitInterval);
   const [useMcInterval, setUseMcInterval] = useState(() => loadUseMcInterval('ma_cross', false));
   const [loading, setLoading]             = useState(false);
   const [result, setResult]               = useState(null);
@@ -471,6 +487,14 @@ function MaCrossStats() {
       const sym = (symbol || selectedChart?.symbol || 'BTCUSDT').trim().toUpperCase();
       const src = selectedChart?.symbol === sym ? (selectedChart?.source ?? null) : null;
       const data = await fetchCandlesticksAndCloud(sym, entryIv, src, needed);
+      // ma9/ma21 vieram calculados só sobre os últimos 300 candles — recalcula sobre a janela
+      // inteira buscada pra cobrir o período do cruzamento clicado (pode ser bem mais antigo).
+      const [ma9Full, ma21Full] = await Promise.all([
+        fetchEmaFull(data.candlesticks, 9),
+        fetchEmaFull(data.candlesticks, 21),
+      ]);
+      if (ma9Full) data.ma9 = ma9Full;
+      if (ma21Full) data.ma21 = ma21Full;
       setSelectedChart(data);
       setChartViewSource(CHART_VIEW.STATISTICS);
       setChartZoom({
@@ -478,6 +502,10 @@ function MaCrossStats() {
         startDate: o.startDate,
         endDate: o.endDate ?? new Date(endMs).toISOString(),
       });
+      // Garante EMA9/EMA21 visíveis no gráfico — mesmas médias do cruzamento clicado, no intervalo em estudo.
+      const current = uiPrefs.activeIndicators ?? [];
+      const withEmas = Array.from(new Set([...current, 'ma9', 'ma21']));
+      if (withEmas.length !== current.length) setActiveIndicatorsPreference(withEmas);
     } catch (err) {
       console.warn('[ma-cross stats click]', err.message);
     }
@@ -646,12 +674,12 @@ function MaCrossStats() {
 }
 
 function BollingerBandsStats() {
-  const { selectedChart, setSelectedChart, setChartZoom, setChartViewSource, multitradeFavorites } = useCurrency();
+  const { selectedChart, setSelectedChart, setChartZoom, setChartViewSource, multitradeFavorites, uiPrefs } = useCurrency();
   const { t } = useI18n();
   const [symbol, setSymbol]     = useState(selectedChart?.symbol || 'BTCUSDT');
-  const [interval, setInterval] = useState('4h');
-  const [period, setPeriod]     = useState(20);
-  const [stdDev, setStdDev]     = useState(2);
+  const [interval, setInterval] = useState(uiPrefs.statsDefaults.bollingerBands.interval);
+  const [period, setPeriod]     = useState(uiPrefs.statsDefaults.bollingerBands.period);
+  const [stdDev, setStdDev]     = useState(uiPrefs.statsDefaults.bollingerBands.stdDev);
   const [useMcInterval, setUseMcInterval] = useState(() => loadUseMcInterval('bollinger_bands', false));
   const [loading, setLoading]   = useState(false);
   const [result, setResult]     = useState(null);
@@ -721,6 +749,8 @@ function BollingerBandsStats() {
         source: CHART_VIEW.STATISTICS,
         startDate: o.startDate,
         endDate: o.endDate ?? new Date(endMs).toISOString(),
+        // Overlay de Bollinger do período clicado — mesmo período/desvio/intervalo da estatística.
+        bollinger: { period: result.period, stdDev: result.stdDev, interval: iv },
       });
     } catch (err) {
       console.warn('[bollinger stats click]', err.message);

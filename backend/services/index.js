@@ -7,6 +7,7 @@ const fetchPivotPointsHighLow = require('./fetchPivotPointsHighLow');
 const fetchAllCurrencies = require('./fetchAllCurrencies');
 const fetchSMA = require('./fetchSMA');
 const fetchRSI = require('./fetchRSI');
+const fetchChopZone = require('./fetchChopZone');
 const fetchVWAP = require('./fetchVWAP');
 const fetch24HsVolume = require('./fetch24hsVolume')
 const fetchMarketCapFilter = require('./fetchMarketCapFilter')
@@ -39,7 +40,7 @@ const fetchMarketHighlights    = require('./fetchMarketHighlights')
 // remove cíclical error
 module.exports = {
     fetchCandles, fetchIchimokuCloud, fetchSupportResistance, fetchPivotPointsHighLow, fetchAllCurrencies,
-    fetchSMA, fetchRSI, fetchVWAP, fetch24HsVolume, fetchMarketCapFilter, fetchStablecoins,
+    fetchSMA, fetchRSI, fetchChopZone, fetchVWAP, fetch24HsVolume, fetchMarketCapFilter, fetchStablecoins,
     fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter, fetchMaDistanceFilter, fetchIndicatorGrowthFilter, fetchRsiOversoldRecovery, fetchMaCrossStats, fetchBollingerBandRecovery, fetchBollingerBandPositionFilter, fetchVwapPositionFilter, fetchBollingerBands, fetchSimpleMaCross, fetchReloadCandles,
     fetchGateCurrencies, fetchGatePrefetch, fetchBinanceTrades, fetchGateTrades, fetchActiveTrades,
     fetchTradeFavorites, stgBotStatus, multitradeService, fetchMarketHighlights }

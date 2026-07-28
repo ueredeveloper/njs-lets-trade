@@ -41,7 +41,7 @@ export default function SettingsSidebar({ open, onClose }) {
     chartPanelButtons, setChartPanelButton, chartPanelButtonKeys,
     uiPrefs, setDefaultChartInterval, setPanelVisible,
     setOverlaySlotsPreference, setCurrencyPanelWidth,
-    setMaCrossDefaultTemplate,
+    setMaCrossDefaultTemplate, setStatsDefaults,
     chartIntervalOptions, panelKeys,
     activeTrades, activeTradesSettings, updateActiveTradesSettings,
     ignoredActiveTrades, dismissActiveTrade, restoreActiveTrade } = useCurrency();
@@ -274,6 +274,111 @@ export default function SettingsSidebar({ open, onClose }) {
                   </span>
                 </label>
               ))}
+            </div>
+          </div>
+
+          {/* Estatísticas — padrões */}
+          <div>
+            <p className={section}>{t('settings.stats_defaults')}</p>
+            <p className="text-[10px] text-p5/50 mb-3 leading-relaxed">{t('settings.stats_defaults_hint')}</p>
+
+            <div className="flex flex-col gap-3">
+              {/* RSI */}
+              <div className="rounded-md p-2.5" style={{ background: '#0f1219', border: '1px solid #2a2d3a' }}>
+                <p className="text-p5/70 text-[10px] font-semibold uppercase tracking-wider mb-2">{t('stats.tab.rsi')}</p>
+                <div className="grid grid-cols-3 gap-2">
+                  <label className="flex flex-col gap-1">
+                    <span className="text-[9px] text-p5/40">{t('settings.stats_interval')}</span>
+                    <select
+                      className={`${inp} w-full`}
+                      value={uiPrefs.statsDefaults.rsi.interval}
+                      onChange={(e) => setStatsDefaults('rsi', { interval: e.target.value })}
+                    >
+                      {chartIntervalOptions.map((iv) => <option key={iv} value={iv}>{iv}</option>)}
+                    </select>
+                  </label>
+                  <label className="flex flex-col gap-1">
+                    <span className="text-[9px] text-p5/40">{t('settings.stats_oversold')}</span>
+                    <input
+                      type="number" min={1} max={99}
+                      className={`${inp} w-full`}
+                      value={uiPrefs.statsDefaults.rsi.oversold}
+                      onChange={(e) => setStatsDefaults('rsi', { oversold: e.target.value })}
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1">
+                    <span className="text-[9px] text-p5/40">{t('settings.stats_overbought')}</span>
+                    <input
+                      type="number" min={1} max={99}
+                      className={`${inp} w-full`}
+                      value={uiPrefs.statsDefaults.rsi.overbought}
+                      onChange={(e) => setStatsDefaults('rsi', { overbought: e.target.value })}
+                    />
+                  </label>
+                </div>
+              </div>
+
+              {/* Cruzamento de EMAs */}
+              <div className="rounded-md p-2.5" style={{ background: '#0f1219', border: '1px solid #2a2d3a' }}>
+                <p className="text-p5/70 text-[10px] font-semibold uppercase tracking-wider mb-2">{t('stats.tab.ma_cross')}</p>
+                <div className="grid grid-cols-2 gap-2">
+                  <label className="flex flex-col gap-1">
+                    <span className="text-[9px] text-p5/40">{t('settings.stats_entry_interval')}</span>
+                    <select
+                      className={`${inp} w-full`}
+                      value={uiPrefs.statsDefaults.maCross.entryInterval}
+                      onChange={(e) => setStatsDefaults('maCross', { entryInterval: e.target.value })}
+                    >
+                      {chartIntervalOptions.map((iv) => <option key={iv} value={iv}>{iv}</option>)}
+                    </select>
+                  </label>
+                  <label className="flex flex-col gap-1">
+                    <span className="text-[9px] text-p5/40">{t('settings.stats_exit_interval')}</span>
+                    <select
+                      className={`${inp} w-full`}
+                      value={uiPrefs.statsDefaults.maCross.exitInterval}
+                      onChange={(e) => setStatsDefaults('maCross', { exitInterval: e.target.value })}
+                    >
+                      {chartIntervalOptions.map((iv) => <option key={iv} value={iv}>{iv}</option>)}
+                    </select>
+                  </label>
+                </div>
+              </div>
+
+              {/* Bandas de Bollinger */}
+              <div className="rounded-md p-2.5" style={{ background: '#0f1219', border: '1px solid #2a2d3a' }}>
+                <p className="text-p5/70 text-[10px] font-semibold uppercase tracking-wider mb-2">{t('stats.tab.bollinger_bands')}</p>
+                <div className="grid grid-cols-3 gap-2">
+                  <label className="flex flex-col gap-1">
+                    <span className="text-[9px] text-p5/40">{t('settings.stats_interval')}</span>
+                    <select
+                      className={`${inp} w-full`}
+                      value={uiPrefs.statsDefaults.bollingerBands.interval}
+                      onChange={(e) => setStatsDefaults('bollingerBands', { interval: e.target.value })}
+                    >
+                      {chartIntervalOptions.map((iv) => <option key={iv} value={iv}>{iv}</option>)}
+                    </select>
+                  </label>
+                  <label className="flex flex-col gap-1">
+                    <span className="text-[9px] text-p5/40">{t('settings.stats_period')}</span>
+                    <input
+                      type="number" min={2} max={200}
+                      className={`${inp} w-full`}
+                      value={uiPrefs.statsDefaults.bollingerBands.period}
+                      onChange={(e) => setStatsDefaults('bollingerBands', { period: e.target.value })}
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1">
+                    <span className="text-[9px] text-p5/40">{t('settings.stats_stddev')}</span>
+                    <input
+                      type="number" min={1} max={5}
+                      className={`${inp} w-full`}
+                      value={uiPrefs.statsDefaults.bollingerBands.stdDev}
+                      onChange={(e) => setStatsDefaults('bollingerBands', { stdDev: e.target.value })}
+                    />
+                  </label>
+                </div>
+              </div>
             </div>
           </div>
 
