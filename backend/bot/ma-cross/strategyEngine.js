@@ -982,7 +982,7 @@ function extensionAboveMa2(close, ma2) {
 }
 
 function evaluatePullbackCandle(config, cMap, adaptiveDips, adaptiveStretches, {
-  entryCandle, signal, signalClose, requirePullback,
+  entryCandle, signal, signalClose, requirePullback, approachTolerancePct,
 }) {
   const entry = config.entry;
   const close = parseFloat(entryCandle.close);
@@ -992,7 +992,25 @@ function evaluatePullbackCandle(config, cMap, adaptiveDips, adaptiveStretches, {
   const aboveEntryPct = extensionAboveMa2(close, ma2AtEntry);
   const aboveSignalPct = extensionAboveMa2(signalClose, ma2AtSignal);
 
-  if (requirePullback) {
+  if (approachTolerancePct != null) {
+    // Regra por gap absoluto: entra assim que o preço chegar a até approachTolerancePct
+    // da MA2 — não precisa tocar/cruzar abaixo, só "chegar perto". Mais apertado que o
+    // teto normal (entry.maxAboveMaPct), usado pra não comprar moeda que deu um salto
+    // muito alto e nunca fecha o gap de verdade.
+    if (aboveEntryPct == null) {
+      return { ready: false, reason: 'FILTER_NO_MA', close, ma2: ma2AtEntry };
+    }
+    if (aboveEntryPct > approachTolerancePct) {
+      return {
+        ready: false,
+        reason: 'GAP_TOO_WIDE',
+        close,
+        ma2: ma2AtEntry,
+        aboveMa2Pct: aboveEntryPct,
+        signalAboveMa2Pct: aboveSignalPct,
+      };
+    }
+  } else if (requirePullback) {
     if (aboveEntryPct == null || aboveSignalPct == null) {
       return { ready: false, reason: 'FILTER_NO_MA', close, ma2: ma2AtEntry };
     }
@@ -1097,6 +1115,7 @@ function evaluatePullbackReady(config, cMap, adaptiveDips, pending, adaptiveStre
   const pb = config.execution?.pullbackEntry ?? {};
   const wait = Math.max(1, Number(pb.waitCandles ?? 2));
   const requirePullback = pb.requirePullback !== false;
+  const approachTolerancePct = pb.approachTolerancePct != null ? Number(pb.approachTolerancePct) : null;
   const sigIv = signalInterval(entry);
   const candles = closedCandlesOnly(cMap[sigIv] ?? []);
   const signalOpenTime = Number(pending.signalOpenTime);
@@ -1133,6 +1152,7 @@ function evaluatePullbackReady(config, cMap, adaptiveDips, pending, adaptiveStre
       signal,
       signalClose,
       requirePullback,
+      approachTolerancePct,
     });
     if (result.ready) {
       return {

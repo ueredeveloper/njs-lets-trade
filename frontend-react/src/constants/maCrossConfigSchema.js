@@ -91,7 +91,7 @@ export const MA_CROSS_DEFAULTS = {
     pendingTimeoutMs: 90 * 60_000,
     pendingCancelPct: 0.002,
     pendingCancelOnExitRsi: true,
-    pullbackEntry: { enabled: false, waitCandles: 2, requirePullback: true },
+    pullbackEntry: { enabled: false, waitCandles: 2, requirePullback: true, approachTolerancePct: null },
   },
   polling: { pollMs: 60_000, fastPollMs: 30_000 },
   adaptiveOpts: { defaultPct: 3, maxPct: 8, minPct: 0.5, minEpisodes: 3, defaultAbovePct: 4, maxAbovePct: 8, minAbovePct: 0.5 },

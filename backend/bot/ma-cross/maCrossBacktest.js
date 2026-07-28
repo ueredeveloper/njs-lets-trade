@@ -45,6 +45,7 @@ const OUTCOME_LABELS = {
   FILTER_NO_MA: 'Bloqueado — MA filtro indisponível',
   ABOVE_MA2_MAX: 'Bloqueado — acima teto MA2',
   NO_PULLBACK: 'Bloqueado — sem pullback',
+  GAP_TOO_WIDE: 'Bloqueado — gap não fechou o suficiente da MA21',
   ENTRY_WINDOW_PASSED: 'Janela de pullback expirou',
   ENTRY_COOLDOWN: 'Cooldown entre entradas',
   PENDING_TIMEOUT: 'Timeout pending',

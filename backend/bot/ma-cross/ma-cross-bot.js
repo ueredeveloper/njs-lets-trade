@@ -397,6 +397,7 @@ function logLowVolumeWarning(config, session, log) {
 
 const PENDING_CANCEL_LABELS = {
   NO_PULLBACK: 'sem pullback em direção à MA21',
+  GAP_TOO_WIDE: 'ainda longe da MA21 (gap não fechou o suficiente)',
   ABOVE_MA2_MAX: 'acima do teto MA2',
   ENTRY_WINDOW_PASSED: 'janela de entrada expirou',
   SIGNAL_LOST: 'candle de sinal perdido',

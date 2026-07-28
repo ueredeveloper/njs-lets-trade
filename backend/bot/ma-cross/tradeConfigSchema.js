@@ -93,6 +93,13 @@ const MA_CROSS_DEFAULTS = {
       enabled:         false,
       waitCandles:     2,
       requirePullback: true,
+      /** Se definido (>0), substitui o teto entry.maxAboveMaPct durante a janela de
+       *  espera: o candle só qualifica quando a extensão acima da MA2 cair a ATÉ este
+       *  valor — mais apertado que o teto normal usado pra decidir compra imediata vs
+       *  pending. Não exige tocar/cruzar a MA2, só "chegar perto" (evita comprar moeda
+       *  que deu um salto muito alto e nunca fecha o gap de verdade). null = usa
+       *  entry.maxAboveMaPct (comportamento anterior). */
+      approachTolerancePct: null,
     },
   },
 
@@ -356,10 +363,14 @@ function normalizeEntryReversalGuard(block) {
 function normalizePullbackEntry(pb) {
   const d = MA_CROSS_DEFAULTS.execution.pullbackEntry;
   const src = pb ?? {};
+  const approachTolerancePct = src.approachTolerancePct != null && src.approachTolerancePct !== ''
+    ? Math.max(0, Number(src.approachTolerancePct))
+    : (d.approachTolerancePct ?? null);
   return {
     enabled:         src.enabled ?? d.enabled,
     waitCandles:     Math.max(1, Math.round(Number(src.waitCandles ?? d.waitCandles))),
     requirePullback: src.requirePullback ?? d.requirePullback,
+    approachTolerancePct,
   };
 }
 

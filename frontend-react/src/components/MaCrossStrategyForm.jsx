@@ -738,6 +738,20 @@ export default function MaCrossStrategyForm({ form, patch, symbol, exchange, has
                     onChange={e => patch('execution.pullbackEntry.requirePullback', e.target.checked)} />
                   Exigir aproximação da MA21 (vs sinal)
                 </label>
+                <label className="flex items-center gap-2 text-p5">
+                  <input type="checkbox" checked={form.execution.pullbackEntry?.approachTolerancePct != null}
+                    onChange={e => patch('execution.pullbackEntry.approachTolerancePct', e.target.checked ? 0.5 : null)} />
+                  Entrar ao chegar perto da MA21 (gap absoluto)
+                </label>
+                {form.execution.pullbackEntry?.approachTolerancePct != null && (
+                  <>
+                    <span className="text-p5/50">Tolerância %</span>
+                    <NumInput value={form.execution.pullbackEntry?.approachTolerancePct ?? 0.5}
+                      onChange={v => patch('execution.pullbackEntry.approachTolerancePct', Math.max(0, v))}
+                      min={0} max={5} step={0.1} className="w-14" />
+                    <span className="text-p5/40 text-[10px]">entra assim que a extensão acima da MA21 cair a até esse %, sem precisar tocar</span>
+                  </>
+                )}
               </div>
             )}
             <div className="flex items-center gap-2">
