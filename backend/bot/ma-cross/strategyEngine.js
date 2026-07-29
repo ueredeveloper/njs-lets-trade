@@ -563,6 +563,7 @@ function ema50ProximitySettings(config) {
     interval: p.interval ?? '1h',
     tolerancePct: Math.max(0, Number(p.tolerancePct ?? 0.5)),
     waitCandles: Math.max(1, Math.round(Number(p.waitCandles ?? 5))),
+    maxChannelPct: Math.max(0, Number(p.maxChannelPct ?? 3)),
   };
 }
 
@@ -577,7 +578,10 @@ function inTolerance(close, ma, tolerancePct) {
   return gapPct >= -tolerancePct && gapPct <= tolerancePct;
 }
 
-/** Canal entre EMA(ma2) e a EMA alternativa (ema50Proximity) no candle de referência. */
+/** Canal entre EMA(ma2) e a EMA alternativa (ema50Proximity) no candle de referência.
+ *  Se a largura do canal passar de maxChannelPct (EMA21 e EMA50 longe demais uma da
+ *  outra), a compra imediata é recusada mesmo com o preço dentro do canal — cai pro
+ *  fluxo de pending pullback (mesma janela de espera usada pra "fora do canal"). */
 function checkEma50ProximityChannel(config, cMap, close, openTime) {
   const entry = config.entry;
   const p = ema50ProximitySettings(config);
@@ -588,11 +592,19 @@ function checkEma50ProximityChannel(config, cMap, close, openTime) {
   }
   const floor = Math.min(ma2, maAlt) * (1 - p.tolerancePct / 100);
   const ceiling = Math.max(ma2, maAlt) * (1 + p.tolerancePct / 100);
+  const widthPct = ((ceiling - floor) / floor) * 100;
+  if (p.maxChannelPct > 0 && widthPct > p.maxChannelPct) {
+    return {
+      allowed: false,
+      reason: 'EMA50_PROXIMITY_CHANNEL_TOO_WIDE',
+      ma2, maAlt, floor, ceiling, widthPct, maxChannelPct: p.maxChannelPct,
+    };
+  }
   const inChannel = close >= floor && close <= ceiling;
   return {
     allowed: inChannel,
     reason: inChannel ? null : 'EMA50_PROXIMITY_OUTSIDE_CHANNEL',
-    ma2, maAlt, floor, ceiling,
+    ma2, maAlt, floor, ceiling, widthPct,
   };
 }
 
@@ -1407,6 +1419,7 @@ function evaluateEntry(config, cMap, adaptiveDips = {}, opts = {}) {
         ma1, ma2, close,
         ema21: proximity.ma2, ema50: proximity.maAlt,
         channelFloor: proximity.floor, channelCeiling: proximity.ceiling,
+        channelWidthPct: proximity.widthPct, maxChannelPct: proximity.maxChannelPct,
       };
     }
     return {

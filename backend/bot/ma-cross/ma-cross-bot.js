@@ -417,6 +417,7 @@ const PENDING_CANCEL_LABELS = {
   REVERSAL_1H_COOLDOWN: 'candle de exaustão 1h recente (cooldown de reversão)',
   REVERSAL_GUARD_NO_DATA: 'dados 1h insuficientes p/ guard de reversão',
   EMA50_PROXIMITY_OUTSIDE_CHANNEL: 'fora do canal EMA21/EMA50',
+  EMA50_PROXIMITY_CHANNEL_TOO_WIDE: 'canal EMA21/EMA50 largo demais',
   EMA50_PROXIMITY_NOT_REACHED: 'não aproximou da EMA21 nem da EMA50',
   EMA50_PROXIMITY_NO_MA: 'EMA21/EMA50 indisponível',
 };
@@ -895,7 +896,10 @@ async function tick(rowId, adapter, strategy, log, session) {
       session.rulesState = { ...parseRulesState(state), pendingPullback: pending };
       await saveState(rowId, { phase: 'PENDING', rules_state: session.rulesState }, log);
       if (usingEma50Proximity) {
-        log(`${G}📍 Cruzamento (${crossCheck.entryDesc}) — fora do canal EMA21/EMA50 → pending pullback (até ${wait} candles)${X}`);
+        const label = entryCheck.reason === 'EMA50_PROXIMITY_CHANNEL_TOO_WIDE'
+          ? `canal EMA21/EMA50 largo demais (${entryCheck.channelWidthPct?.toFixed(2)}% > ${entryCheck.maxChannelPct}%)`
+          : 'fora do canal EMA21/EMA50';
+        log(`${G}📍 Cruzamento (${crossCheck.entryDesc}) — ${label} → pending pullback (até ${wait} candles)${X}`);
       } else if (entryCheck.reason === ENTRY_CAP_LOG_REASON) {
         const pct = entryCheck.aboveMa2Pct != null ? entryCheck.aboveMa2Pct.toFixed(1) : '?';
         const cap = entryCheck.maxAboveMaPct ?? '?';

@@ -49,6 +49,11 @@ const MA_CROSS_DEFAULTS = {
       interval:     '1h',
       tolerancePct: 0.5,
       waitCandles:  7,
+      /** Largura máxima do canal (EMA21↔EMA50, já com tolerancePct somado nas duas
+       *  pontas) pra liberar compra imediata no candle do cruzamento; 0 = sem teto.
+       *  Canal mais largo que isso não cancela a entrada, só empurra pro fluxo de
+       *  pending pullback (mesma janela de waitCandles). */
+      maxChannelPct: 3,
     },
   },
 
@@ -427,6 +432,7 @@ function normalizeEma50Proximity(block) {
     interval:     normalizeInterval(src.interval, d.interval),
     tolerancePct: Math.max(0, Number(src.tolerancePct ?? d.tolerancePct)),
     waitCandles:  Math.max(1, Math.round(Number(src.waitCandles ?? d.waitCandles))),
+    maxChannelPct: Math.max(0, Number(src.maxChannelPct ?? d.maxChannelPct)),
   };
 }
 
