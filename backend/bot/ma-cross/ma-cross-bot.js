@@ -402,7 +402,6 @@ const PENDING_CANCEL_LABELS = {
   ABOVE_MA2_MAX: 'acima do teto MA2',
   ENTRY_WINDOW_PASSED: 'janela de entrada expirou',
   SIGNAL_LOST: 'candle de sinal perdido',
-  PENDING_TIMEOUT: 'timeout',
   NO_PENDING_SIGNAL: 'sinal pendente inválido',
   BELOW_ADAPTIVE_FLOOR: 'filtro MA adaptativo',
   NOT_ABOVE_MA: 'filtro MA',
@@ -788,17 +787,13 @@ async function tick(rowId, adapter, strategy, log, session) {
   // ── PENDING (pullback após cruzamento) ───────────────────────────────────
   if (phase === 'PENDING') {
     const pending = parsePendingPullback(state, session);
-    const timeoutMs = config.execution?.pendingTimeoutMs ?? 90 * 60_000;
-    const startedAt = pending?.startedAt ? new Date(pending.startedAt).getTime() : 0;
-    if (!pending || !startedAt) {
+    if (!pending?.startedAt) {
       await cancelPendingPullback(rowId, log, session, state, 'NO_PENDING_SIGNAL');
       return { phase: 'WATCHING' };
     }
-    if (Date.now() - startedAt > timeoutMs) {
-      await cancelPendingPullback(rowId, log, session, state, 'PENDING_TIMEOUT');
-      return { phase: 'WATCHING' };
-    }
 
+    // Sem teto de tempo real — quem decide até quando esperar é evaluatePullbackReady
+    // (janela de waitCandles em cima do próprio candle do sinal, ver strategyEngine.js).
     const ready = evaluatePullbackReady(config, cMap, adaptiveDips, pending, adaptiveStretches);
     if (ready.cancel) {
       const detail = ready.pullbackVsMa2Pct != null

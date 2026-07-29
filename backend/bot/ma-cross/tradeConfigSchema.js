@@ -23,6 +23,13 @@ const MA_CROSS_DEFAULTS = {
     ma2:             { period: 21, interval: '15m' },
     direction:       'cross_up',
     tolerancePct:    0.1,
+    /** Quantos candles fechados pra trás o motor ainda aceita um cruzamento como válido
+     *  (além do último fechado), contanto que a MA1 ainda esteja do lado certo da MA2 e
+     *  não esteja revertendo — ver findRecentMaCross em strategyEngine.js. Sem isso, um
+     *  ciclo perdido do bot (processo caído, deploy) faz o cruzamento passar batido pra
+     *  sempre, já que só o candle exato do cruzamento era avaliado (caso real: PUNDIX
+     *  cruzou 1h e o bot não rodou nesse intervalo). */
+    crossLookbackCandles: 5,
     /** Máx % acima da MA2 (param2) para permitir compra; 0 = desligado. Ignorado quando
      *  ema50Proximity.enabled — a regra de proximidade assume esse papel. */
     maxAboveMaPct:   0,
@@ -33,13 +40,15 @@ const MA_CROSS_DEFAULTS = {
      *  tolerancePct%); fora do canal, espera até waitCandles candles mirando o preço
      *  voltar pra dentro da banda ±tolerancePct% de qualquer uma das duas — não volta a
      *  tempo, cancela. Ligada por padrão (ver analyze-pullback-ema21-50-2w.js, onde foi
-     *  desenhada e validada em backtest antes de entrar em produção). */
+     *  desenhada e validada em backtest antes de entrar em produção). Sem teto de tempo
+     *  real (execution.pendingTimeoutMs foi removido do fluxo) — quem baliza a espera é
+     *  só este número de candles. */
     ema50Proximity: {
       enabled:      true,
       period:       50,
       interval:     '1h',
       tolerancePct: 0.5,
-      waitCandles:  5,
+      waitCandles:  7,
     },
   },
 
@@ -404,6 +413,11 @@ function normalizeEntryChopZone(block) {
   };
 }
 
+function normalizeCrossLookback(v) {
+  const d = MA_CROSS_DEFAULTS.entry.crossLookbackCandles;
+  return Math.max(1, Math.min(10, Math.round(Number(v ?? d))));
+}
+
 function normalizeEma50Proximity(block) {
   const d = MA_CROSS_DEFAULTS.entry.ema50Proximity;
   const src = block ?? {};
@@ -476,6 +490,7 @@ function normalizeMaCrossConfig(body = {}) {
     kind:  'ma_cross',
     entry: {
       ...normalizeCrossBlock(body.entry, d.entry),
+      crossLookbackCandles: normalizeCrossLookback(body.entry?.crossLookbackCandles),
       ema50Proximity: normalizeEma50Proximity(body.entry?.ema50Proximity),
     },
     entryTrendMa:   normalizeEntryTrendMa(body.entryTrendMa),

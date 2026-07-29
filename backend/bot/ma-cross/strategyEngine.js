@@ -152,6 +152,11 @@ function findRecentMaCross({
       };
     }
 
+    // held/reversing avaliam o estado ATUAL (lastMa1/lastMa2) — confirma que o cruzamento
+    // achado (possivelmente candles atrás, via lookbackCandles) ainda vale agora. Os dados
+    // devolvidos (ma1/ma2/close/openTime), porém, são os do PRÓPRIO candle do cruzamento
+    // (não o último fechado) — em modo 'last' os dois coincidem, então isso não muda nada
+    // pra quem não usa lookbackCandles>1.
     const held = isDirectionHeld(lastMa1, lastMa2, direction);
     if (!held) {
       return {
@@ -161,12 +166,12 @@ function findRecentMaCross({
         crossOpenTime,
         ageMs,
         ageMin: ageMs / 60_000,
-        ma1: lastMa1,
-        ma2: lastMa2,
+        ma1,
+        ma2,
         prevMa1,
         prevMa2,
-        close: last.close,
-        openTime: last.openTime,
+        close: candle.close,
+        openTime: candle.openTime,
         reason: 'REVERSED_AFTER_CROSS',
       };
     }
@@ -188,13 +193,13 @@ function findRecentMaCross({
         crossOpenTime,
         ageMs,
         ageMin: ageMs / 60_000,
-        ma1: lastMa1,
-        ma2: lastMa2,
+        ma1,
+        ma2,
         gapPct: reversing.gapPct,
         prevMa1,
         prevMa2,
-        close: last.close,
-        openTime: last.openTime,
+        close: candle.close,
+        openTime: candle.openTime,
         reason: 'REVERSING',
       };
     }
@@ -206,12 +211,12 @@ function findRecentMaCross({
       crossOpenTime,
       ageMs,
       ageMin: ageMs / 60_000,
-      ma1: lastMa1,
-      ma2: lastMa2,
+      ma1,
+      ma2,
       prevMa1,
       prevMa2,
-      close: last.close,
-      openTime: last.openTime,
+      close: candle.close,
+      openTime: candle.openTime,
       reason: null,
     };
   }
@@ -226,19 +231,30 @@ function findRecentMaCross({
   };
 }
 
+/** lookbackCandles=1 (padrao) preserva o comportamento antigo (so o ultimo candle
+ *  fechado). >1 aceita um cruzamento de ate N candles atras, contanto que a MA1 ainda
+ *  esteja do lado certo da MA2 e nao esteja revertendo (ver findRecentMaCross) - sem
+ *  isso, um ciclo perdido do bot (processo caido, deploy) faz o cruzamento passar
+ *  batido pra sempre, ja que so o candle exato do cruzamento e avaliado. */
 function checkMaCrossover({
   candles1, period1, interval1,
   candles2, period2, interval2,
   direction, tolerancePct = 0,
   closedOnly = true,
+  lookbackCandles = 1,
+  now,
 }) {
+  const maxAgeMin = lookbackCandles > 1
+    ? (lookbackCandles * intervalMs(finestInterval(interval1, interval2))) / 60_000
+    : 'last';
   const r = findRecentMaCross({
     candles1, period1, interval1,
     candles2, period2, interval2,
     direction,
     tolerancePct,
-    maxAgeMin: 'last',
+    maxAgeMin,
     closedOnly,
+    ...(now != null ? { now } : {}),
   });
   return {
     crossed: r.matched,
@@ -1022,6 +1038,8 @@ function evaluateCrossSignal(config, cMap, adaptiveDips = {}, opts = {}) {
     direction: entry.direction ?? 'cross_up',
     tolerancePct: entry.tolerancePct ?? 0,
     closedOnly,
+    lookbackCandles: Math.max(1, Math.round(Number(entry.crossLookbackCandles ?? 1))),
+    now: opts.now,
   });
 
   if (!cross.crossed) {

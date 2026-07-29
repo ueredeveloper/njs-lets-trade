@@ -698,6 +698,7 @@ describe('MA Cross — tendência HTF (EMA9 > EMA21 em 1h)', () => {
       ma1: { period: 9, interval: '15m' },
       ma2: { period: 21, interval: '15m' },
       direction: 'cross_up',
+      crossLookbackCandles: 1, // fixtures usam candles com openTime epoch, nao relativos a Date.now()
     },
     entryTrendMa: { enabled: true, ma1: { period: 9, interval: '1h' }, ma2: { period: 21, interval: '1h' } },
     entryBbFilter: { enabled: false },

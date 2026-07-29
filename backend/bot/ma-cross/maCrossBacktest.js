@@ -48,7 +48,6 @@ const OUTCOME_LABELS = {
   GAP_TOO_WIDE: 'Bloqueado — gap não fechou o suficiente da MA21',
   ENTRY_WINDOW_PASSED: 'Janela de pullback expirou',
   ENTRY_COOLDOWN: 'Cooldown entre entradas',
-  PENDING_TIMEOUT: 'Timeout pending',
   PENDING: 'Aguardando pullback',
   MA_CROSS_EXIT: 'Saída cruzamento',
   STOP_LOSS: 'Stop loss',
@@ -303,32 +302,19 @@ async function runMaCrossBacktest({ symbol, config, exchange = 'binance', capita
   const dirShort = crossShort(config);
   const cooldownH = entryCooldownHours(config);
   const usePendingFallback = pullbackEntryEnabled(config) && config.execution?.immediateEntry !== true;
-  const pendingTimeoutMs = Number(config.execution?.pendingTimeoutMs ?? 90 * 60_000);
 
   for (let i = warmup; i < scanCandles.length; i++) {
     const c = scanCandles[i];
+    // "Agora" simulado = fechamento do candle sendo replayado, não o relogio real —
+    // senao findRecentMaCross (crossLookbackCandles) mede a idade do cruzamento contra
+    // Date.now() de verdade e marca CROSS_TOO_OLD pra praticamente todo o historico.
+    const simulatedNow = c.openTime + (INTERVAL_MS[scanIv] ?? 0);
     const cMapSlice = sliceCMap(cMap, c.openTime);
     const dips = computeAdaptiveDips(config, cMapSlice);
     const stretches = computeAdaptiveStretches(config, cMapSlice);
 
     // ── PENDING (pullback após cruzamento) ────────────────────────────────
     if (phase === 'PENDING' && pending) {
-      if (pendingTimeoutMs > 0 && (c.openTime - pending.signalOpenTime) > pendingTimeoutMs) {
-        if (openEntryLogIdx != null) {
-          entryLog[openEntryLogIdx].outcome = 'PENDING_TIMEOUT';
-        }
-        signals.push({
-          entryTime: pending.signalOpenTime,
-          entryPrice: pending.signalClose,
-          result: 'PENDING_TIMEOUT',
-        });
-        blockedCount++;
-        pending = null;
-        openEntryLogIdx = null;
-        phase = 'WATCHING';
-        continue;
-      }
-
       const ready = evaluatePullbackReady(config, cMapSlice, dips, pending, stretches);
       if (ready.ready) {
         const buy = openBuy({
@@ -423,6 +409,7 @@ async function runMaCrossBacktest({ symbol, config, exchange = 'binance', capita
       const entryEval = evaluateEntry(config, cMapSlice, dips, {
         ...evalOpts,
         adaptiveStretches: stretches,
+        now: simulatedNow,
       });
 
       // Detalhe bruto das regras HTF (tendencia/aproximacao) no momento do cruzamento —
