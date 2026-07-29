@@ -39,6 +39,7 @@ export const MA_CROSS_DEFAULTS = {
     direction: 'cross_up',
     tolerancePct: 0.1,
     maxAboveMaPct: 0,
+    ema50Proximity: { enabled: true, period: 50, interval: '1h', tolerancePct: 0.5, waitCandles: 5 },
   },
   entryTrendMa: {
     enabled: true,
@@ -107,6 +108,12 @@ export const MA_CROSS_DEFAULTS = {
     interval: '4h',
     period:   20,
     stdDev:   2.0,
+  },
+  entryChopZone: {
+    enabled:  true,
+    interval: '4h',
+    period:   14,
+    maxChop:  51.8,
   },
   entryMultiDca: {
     enabled: false,
@@ -179,6 +186,17 @@ function normalizeEntryBbLower(block) {
   };
 }
 
+function normalizeEntryChopZone(block) {
+  const d = MA_CROSS_DEFAULTS.entryChopZone;
+  const src = block ?? {};
+  return {
+    enabled:  src.enabled !== false,
+    interval: src.interval ?? d.interval,
+    period:   clampPeriod(src.period, d.period),
+    maxChop:  Math.max(0, Math.min(100, Number(src.maxChop ?? d.maxChop))),
+  };
+}
+
 function normalizeEntryMultiDca(block) {
   const d = MA_CROSS_DEFAULTS.entryMultiDca;
   const src = block ?? {};
@@ -207,6 +225,18 @@ function normalizeExitBbTakeProfit(block) {
   return {
     enabled:   src.enabled !== false,
     targetPct: Math.max(0.5, Number(src.targetPct ?? d.targetPct)),
+  };
+}
+
+function normalizeEma50Proximity(block) {
+  const d = MA_CROSS_DEFAULTS.entry.ema50Proximity;
+  const src = block ?? {};
+  return {
+    enabled: src.enabled !== false,
+    period: clampPeriod(src.period, d.period),
+    interval: src.interval ?? d.interval,
+    tolerancePct: Math.max(0, Number(src.tolerancePct ?? d.tolerancePct)),
+    waitCandles: Math.max(1, Math.round(Number(src.waitCandles ?? d.waitCandles))),
   };
 }
 
@@ -283,7 +313,10 @@ export function normalizeMaCrossForm(body = {}) {
   return {
     label: body.label ?? d.label,
     kind: 'ma_cross',
-    entry: normalizeCrossBlock(body.entry ?? d.entry, d.entry),
+    entry: {
+      ...normalizeCrossBlock(body.entry ?? d.entry, d.entry),
+      ema50Proximity: normalizeEma50Proximity(body.entry?.ema50Proximity),
+    },
     entryTrendMa:     normalizeEntryTrendMa(body.entryTrendMa),
     entryEmaApproach: normalizeEntryEmaApproach(body.entryEmaApproach),
     maFiltersEnabled: body.maFiltersEnabled !== false,
@@ -319,6 +352,7 @@ export function normalizeMaCrossForm(body = {}) {
     entryCooldownHours: Number(body.entryCooldownHours ?? d.entryCooldownHours ?? 4),
     entryBbFilter: normalizeEntryBbFilter(body.entryBbFilter),
     entryBbLower: normalizeEntryBbLower(body.entryBbLower),
+    entryChopZone: normalizeEntryChopZone(body.entryChopZone),
     entryMultiDca: normalizeEntryMultiDca(body.entryMultiDca),
   };
 }
@@ -340,6 +374,7 @@ export function maCrossFormToPayload(form, meta = {}) {
     entryEmaApproach: c.entryEmaApproach,
     entryBbFilter: c.entryBbFilter,
     entryBbLower: c.entryBbLower,
+    entryChopZone: c.entryChopZone,
     entryMultiDca: c.entryMultiDca,
     maFiltersEnabled: c.maFiltersEnabled,
     maFilters: c.maFilters.map(({ id, enabled, period, interval, mode, maxDipPct, fixedDipPct, maxAbovePct, fixedAbovePct, tolerancePct }) => ({

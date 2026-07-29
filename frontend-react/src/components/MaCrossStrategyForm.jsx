@@ -113,6 +113,9 @@ export default function MaCrossStrategyForm({ form, patch, symbol, exchange, has
   const entryBbLower = { ...MA_CROSS_DEFAULTS.entryBbLower, ...form.entryBbLower };
   const entryBbLowerOn = entryBbLower.enabled === true;
 
+  const entryChopZone = { ...MA_CROSS_DEFAULTS.entryChopZone, ...form.entryChopZone };
+  const entryChopZoneOn = entryChopZone.enabled === true;
+
   const entryMultiDca = { ...MA_CROSS_DEFAULTS.entryMultiDca, ...form.entryMultiDca };
   const entryMultiDcaOn = entryMultiDca.enabled === true;
   const dcaTiers = computeDcaTiers(capital, entryMultiDca.minEntryUsdt);
@@ -305,7 +308,64 @@ export default function MaCrossStrategyForm({ form, patch, symbol, exchange, has
         <NumInput value={form.entry.maxAboveMaPct ?? 0}
           onChange={v => patch('entry.maxAboveMaPct', v)}
           min={0} max={20} step={0.5} className="w-14" />
-        <span className="text-p5/40 text-[10px]">0 = desligado</span>
+        <span className="text-p5/40 text-[10px]">
+          {form.entry.ema50Proximity?.enabled !== false
+            ? 'ignorado — regra de proximidade EMA50 abaixo está ativa'
+            : '0 = desligado'}
+        </span>
+      </div>
+
+      {/* ── Regra de proximidade EMA50 (1h) — substitui o teto acima + pending pullback ── */}
+      <div className="rounded-md p-2 space-y-2" style={{ background: '#1a1d28', border: `1px solid ${ENTRY_COLOR}33` }}>
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: ENTRY_COLOR }}>
+            Regra de proximidade EMA50 (1h)
+          </span>
+          <label className="flex items-center gap-1 text-[9px] text-p5/50 cursor-pointer">
+            <input type="checkbox" checked={form.entry.ema50Proximity?.enabled !== false}
+              onChange={e => patch('entry.ema50Proximity.enabled', e.target.checked)} style={{ accentColor: ENTRY_COLOR }} />
+            Ativo
+          </label>
+        </div>
+        {form.entry.ema50Proximity?.enabled !== false && (
+          <>
+            <p className="text-[10px] text-p5/60 leading-relaxed">
+              Compra direto se o preço, no candle do cruzamento, está dentro do canal entre a MA2 (EMA21) e esta
+              EMA — piso = a menor das duas − tolerância, teto = a maior das duas + tolerância. Fora do canal,
+              aguarda até N candles mirando o preço voltar perto (±tolerância) de qualquer uma das duas; não
+              volta a tempo, cancela. Enquanto ligada, substitui o "Máx % acima da MA2" acima e o pending por
+              pullback em "Execução" abaixo.
+            </p>
+            <div className="flex flex-wrap gap-3 items-center text-xs">
+              <div className="flex items-center gap-1">
+                <span className="text-p5/50">Período</span>
+                <NumInput value={form.entry.ema50Proximity?.period ?? 50}
+                  onChange={v => patch('entry.ema50Proximity.period', Math.max(2, Math.round(v)))}
+                  min={2} max={500} step={1} className="w-14" />
+              </div>
+              <div className="flex items-center gap-1">
+                <span className="text-p5/50">Intervalo</span>
+                <select value={form.entry.ema50Proximity?.interval ?? '1h'}
+                  onChange={e => patch('entry.ema50Proximity.interval', e.target.value)}
+                  className="rounded px-1 py-1 text-xs" style={sel}>
+                  {MA_CROSS_INTERVALS.map(iv => <option key={iv} value={iv}>{iv}</option>)}
+                </select>
+              </div>
+              <div className="flex items-center gap-1">
+                <span className="text-p5/50">Tolerância %</span>
+                <NumInput value={form.entry.ema50Proximity?.tolerancePct ?? 0.5}
+                  onChange={v => patch('entry.ema50Proximity.tolerancePct', Math.max(0, v))}
+                  min={0} max={5} step={0.1} className="w-14" />
+              </div>
+              <div className="flex items-center gap-1">
+                <span className="text-p5/50">Máx. candles de espera</span>
+                <NumInput value={form.entry.ema50Proximity?.waitCandles ?? 5}
+                  onChange={v => patch('entry.ema50Proximity.waitCandles', Math.max(1, Math.round(v)))}
+                  min={1} max={10} step={1} className="w-12" />
+              </div>
+            </div>
+          </>
+        )}
       </div>
 
       {/* ── Gatilho de entrada — Banda inferior BB ── */}
@@ -443,6 +503,51 @@ export default function MaCrossStrategyForm({ form, patch, symbol, exchange, has
                 min={0} max={5} step={0.1} className="w-14"
               />
               <span className="text-p5/40 text-[10px]">% abaixo — EMA9 até essa distância da EMA21 ainda autoriza</span>
+            </div>
+          </>
+        )}
+      </div>
+
+      <div className="rounded-md p-2 space-y-2" style={{ background: '#1a1d28', border: `1px solid ${FILTER_COLOR}33` }}>
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: FILTER_COLOR }}>
+            Zona Chop (Choppiness Index)
+          </span>
+          <label className="flex items-center gap-1 text-[9px] text-p5/50 cursor-pointer">
+            <input type="checkbox" checked={entryChopZoneOn}
+              onChange={e => patch('entryChopZone.enabled', e.target.checked)} className="accent-violet-500" />
+            Ativo
+          </label>
+        </div>
+        {entryChopZoneOn && (
+          <>
+            <p className="text-[10px] text-p5/60 leading-relaxed">
+              Bloqueia a entrada quando o CHOP({entryChopZone.period}) do candle {entryChopZone.interval} fechado
+              está acima do limite abaixo — mercado lateralizado ("choppy") no timeframe maior. Corte padrão
+              (51.8) calibrado em backtest de 2 semanas / 103 trades (ver analyze-chop4h-exit-race-2w.js):
+              acima dele concentrou quase todo o prejuízo simulado do período.
+            </p>
+            <div className="flex flex-wrap gap-3 items-center text-xs">
+              <div className="flex items-center gap-1">
+                <span className="text-p5/50">Intervalo</span>
+                <select value={entryChopZone.interval}
+                  onChange={e => patch('entryChopZone.interval', e.target.value)}
+                  className="rounded px-1 py-1 text-xs" style={sel}>
+                  {MA_CROSS_INTERVALS.map(iv => <option key={iv} value={iv}>{iv}</option>)}
+                </select>
+              </div>
+              <div className="flex items-center gap-1">
+                <span className="text-p5/50">Período</span>
+                <NumInput value={entryChopZone.period}
+                  onChange={v => patch('entryChopZone.period', Math.max(2, Math.round(v)))}
+                  min={2} max={100} step={1} className="w-14" />
+              </div>
+              <div className="flex items-center gap-1">
+                <span className="text-p5/50">CHOP máx.</span>
+                <NumInput value={entryChopZone.maxChop}
+                  onChange={v => patch('entryChopZone.maxChop', Math.max(0, Math.min(100, v)))}
+                  min={0} max={100} step={0.1} className="w-16" />
+              </div>
             </div>
           </>
         )}
@@ -714,7 +819,9 @@ export default function MaCrossStrategyForm({ form, patch, symbol, exchange, has
         <div className="space-y-3 rounded-md p-2" style={{ background: '#1a1d28', border: '1px solid #2a2d3a' }}>
           <div className="text-xs space-y-2">
             <p className="text-p5/40 text-[10px] pl-1">
-              Padrão: compra imediata se close ≤ teto MA21; se esticado, pending + pullback MA21.
+              {form.entry.ema50Proximity?.enabled !== false
+                ? 'Regra de proximidade EMA50 (1h) ativa — o pending por pullback abaixo é ignorado (ver bloco EMA50 nas opções de compra).'
+                : 'Padrão: compra imediata se close ≤ teto MA21; se esticado, pending + pullback MA21.'}
             </p>
             <label className="flex items-center gap-2 text-p5">
               <input type="checkbox" checked={form.execution.immediateEntry === true}

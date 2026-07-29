@@ -23,8 +23,24 @@ const MA_CROSS_DEFAULTS = {
     ma2:             { period: 21, interval: '15m' },
     direction:       'cross_up',
     tolerancePct:    0.1,
-    /** Máx % acima da MA2 (param2) para permitir compra; 0 = desligado. */
+    /** Máx % acima da MA2 (param2) para permitir compra; 0 = desligado. Ignorado quando
+     *  ema50Proximity.enabled — a regra de proximidade assume esse papel. */
     maxAboveMaPct:   0,
+    /** Regra de proximidade EMA50 (1h): substitui maxAboveMaPct + execution.pullbackEntry
+     *  como mecanismo de entrada direta/espera. Compra direto se o close, no candle do
+     *  cruzamento, está dentro do canal entre ma2 (normalmente EMA21) e esta EMA
+     *  alternativa (piso = a menor das duas − tolerancePct%, teto = a maior das duas +
+     *  tolerancePct%); fora do canal, espera até waitCandles candles mirando o preço
+     *  voltar pra dentro da banda ±tolerancePct% de qualquer uma das duas — não volta a
+     *  tempo, cancela. Ligada por padrão (ver analyze-pullback-ema21-50-2w.js, onde foi
+     *  desenhada e validada em backtest antes de entrar em produção). */
+    ema50Proximity: {
+      enabled:      true,
+      period:       50,
+      interval:     '1h',
+      tolerancePct: 0.5,
+      waitCandles:  5,
+    },
   },
 
   /** Tendência HTF: EMA curta acima da EMA longa (padrão EMA9 > EMA21 em 4h). */
@@ -178,6 +194,23 @@ const MA_CROSS_DEFAULTS = {
     maxClosePosPct: 30,
     /** Corpo real mínimo (%) do range do candle de exaustão. */
     minBodyPct: 45,
+  },
+
+  /** Zona de Choppiness Index (CHOP) no candle HTF (padrão 4h) anterior à entrada:
+   *  bloqueia o cruzamento quando o mercado está "choppy" (lateralizado) nesse
+   *  timeframe maior. Ver backend/bot/ma-cross/analyze-chop4h-exit-race-2w.js:
+   *  CHOP(14) no 4h > ~51.8 na entrada concentrou quase todo o prejuízo simulado
+   *  num backtest de 2 semanas / 103 trades (~80% do PnL negativo em 20% dos
+   *  trades), enquanto abaixo do corte o resultado ficou levemente positivo.
+   *  Corte calibrado nessa mesma janela — amostra pequena, revisar se mudar de
+   *  regime. Ligado por padrão a pedido do usuário — qualquer config antiga sem
+   *  este campo salvo herda enabled:true na próxima normalização.
+   */
+  entryChopZone: {
+    enabled: true,
+    interval: '4h',
+    period: 14,
+    maxChop: 51.8,
   },
 
   /** Gatilho de entrada alternativo/independente do cruzamento EMA: compra quando o
@@ -360,6 +393,29 @@ function normalizeEntryReversalGuard(block) {
   };
 }
 
+function normalizeEntryChopZone(block) {
+  const d = MA_CROSS_DEFAULTS.entryChopZone;
+  const src = block ?? {};
+  return {
+    enabled:  src.enabled !== false,
+    interval: normalizeInterval(src.interval, d.interval),
+    period:   Math.max(2, Math.min(100, Math.round(Number(src.period ?? d.period)))),
+    maxChop:  Math.max(0, Math.min(100, Number(src.maxChop ?? d.maxChop))),
+  };
+}
+
+function normalizeEma50Proximity(block) {
+  const d = MA_CROSS_DEFAULTS.entry.ema50Proximity;
+  const src = block ?? {};
+  return {
+    enabled:      src.enabled !== false,
+    period:       clampPeriod(src.period, d.period),
+    interval:     normalizeInterval(src.interval, d.interval),
+    tolerancePct: Math.max(0, Number(src.tolerancePct ?? d.tolerancePct)),
+    waitCandles:  Math.max(1, Math.round(Number(src.waitCandles ?? d.waitCandles))),
+  };
+}
+
 function normalizePullbackEntry(pb) {
   const d = MA_CROSS_DEFAULTS.execution.pullbackEntry;
   const src = pb ?? {};
@@ -418,13 +474,17 @@ function normalizeMaCrossConfig(body = {}) {
   return {
     label: body.label ?? d.label,
     kind:  'ma_cross',
-    entry: normalizeCrossBlock(body.entry, d.entry),
+    entry: {
+      ...normalizeCrossBlock(body.entry, d.entry),
+      ema50Proximity: normalizeEma50Proximity(body.entry?.ema50Proximity),
+    },
     entryTrendMa:   normalizeEntryTrendMa(body.entryTrendMa),
     entryEmaApproach: normalizeEntryEmaApproach(body.entryEmaApproach),
     entryBbFilter:  normalizeEntryBbFilter(body.entryBbFilter),
     entryBbLower:   normalizeEntryBbLower(body.entryBbLower),
     entryMultiDca:  normalizeEntryMultiDca(body.entryMultiDca),
     entryReversalGuard: normalizeEntryReversalGuard(body.entryReversalGuard),
+    entryChopZone: normalizeEntryChopZone(body.entryChopZone),
     maFiltersEnabled: body.maFiltersEnabled !== false,
     maFilters: migrateMaFilters(body),
     exit: {

@@ -33,7 +33,7 @@ const { STRATEGY_IDS, isMaCrossStrategy } = require('./strategyPresets');
 const {
   getRequiredSpecs, evaluateEntry, evaluateCrossSignal, evaluatePullbackReady,
   evaluateImmediateEntry,
-  pullbackEntryEnabled, evaluateExit, computeAdaptiveDips, computeAdaptiveStretches,
+  pullbackEntryEnabled, ema50ProximityEnabled, evaluateExit, computeAdaptiveDips, computeAdaptiveStretches,
   computeStopLossFloor, getFinestPollInterval,
   computeDcaTiers, evaluateBbLowerEntry, evaluateEntryBbLowerSignal,
 } = require('./strategyEngine');
@@ -417,6 +417,9 @@ const PENDING_CANCEL_LABELS = {
   EMA_APPROACH_NO_DATA: 'dados 4h insuficientes p/ aproximação EMA',
   REVERSAL_1H_COOLDOWN: 'candle de exaustão 1h recente (cooldown de reversão)',
   REVERSAL_GUARD_NO_DATA: 'dados 1h insuficientes p/ guard de reversão',
+  EMA50_PROXIMITY_OUTSIDE_CHANNEL: 'fora do canal EMA21/EMA50',
+  EMA50_PROXIMITY_NOT_REACHED: 'não aproximou da EMA21 nem da EMA50',
+  EMA50_PROXIMITY_NO_MA: 'EMA21/EMA50 indisponível',
 };
 
 function entryCooldownHours(config) {
@@ -809,7 +812,9 @@ async function tick(rowId, adapter, strategy, log, session) {
         const now = Date.now();
         if (!session.lastPendingLogAt || now - session.lastPendingLogAt >= PENDING_LOG_INTERVAL_MS) {
           session.lastPendingLogAt = now;
-          const wait = config.execution?.pullbackEntry?.waitCandles ?? 2;
+          const wait = ready.need ?? (ema50ProximityEnabled(config)
+            ? (config.entry?.ema50Proximity?.waitCandles ?? 5)
+            : (config.execution?.pullbackEntry?.waitCandles ?? 2));
           const reject = ready.lastRejectReason
             ? ` (último: ${PENDING_CANCEL_LABELS[ready.lastRejectReason] ?? ready.lastRejectReason})`
             : '';
@@ -870,11 +875,14 @@ async function tick(rowId, adapter, strategy, log, session) {
     }
 
     const entryCheck = evaluateEntry(config, cMap, adaptiveDips, evalOpts);
-    const usePendingFallback = pullbackEntryEnabled(config) && config.execution?.immediateEntry !== true;
+    const usingEma50Proximity = ema50ProximityEnabled(config);
+    const usePendingFallback = (pullbackEntryEnabled(config) || usingEma50Proximity)
+      && config.execution?.immediateEntry !== true;
 
     if (entryCheck.allowed) {
       const kindLabel = entryCheck.entryDesc ?? crossDesc(config.entry);
-      log(`${G}📍 COMPRA imediata (${kindLabel}) — ≤${entryCheck.maxAboveMaPct ?? 3}% MA21 — ${parseFloat(entryCapital).toFixed(2)} USDT${X}`);
+      const capLabel = usingEma50Proximity ? 'canal EMA21/EMA50' : `≤${entryCheck.maxAboveMaPct ?? 3}% MA21`;
+      log(`${G}📍 COMPRA imediata (${kindLabel}) — ${capLabel} — ${parseFloat(entryCapital).toFixed(2)} USDT${X}`);
       const bought = await executeBuy({
         rowId, adapter, strategy, log, session, state,
         entryMeta: entryCheck, capital: entryCapital, totalCapital: capital, strategyId, symbol,
@@ -884,12 +892,16 @@ async function tick(rowId, adapter, strategy, log, session) {
 
     if (usePendingFallback) {
       const pending = pendingPullbackPayload(crossCheck);
-      const wait = config.execution?.pullbackEntry?.waitCandles ?? 2;
+      const wait = usingEma50Proximity
+        ? (config.entry?.ema50Proximity?.waitCandles ?? 5)
+        : (config.execution?.pullbackEntry?.waitCandles ?? 2);
       session.phase = 'PENDING';
       session.pendingPullback = pending;
       session.rulesState = { ...parseRulesState(state), pendingPullback: pending };
       await saveState(rowId, { phase: 'PENDING', rules_state: session.rulesState }, log);
-      if (entryCheck.reason === ENTRY_CAP_LOG_REASON) {
+      if (usingEma50Proximity) {
+        log(`${G}📍 Cruzamento (${crossCheck.entryDesc}) — fora do canal EMA21/EMA50 → pending pullback (até ${wait} candles)${X}`);
+      } else if (entryCheck.reason === ENTRY_CAP_LOG_REASON) {
         const pct = entryCheck.aboveMa2Pct != null ? entryCheck.aboveMa2Pct.toFixed(1) : '?';
         const cap = entryCheck.maxAboveMaPct ?? '?';
         log(`${G}📍 Cruzamento (${crossCheck.entryDesc}) — +${pct}% MA21 (máx ${cap}%) → pending pullback (até ${wait} candles)${X}`);

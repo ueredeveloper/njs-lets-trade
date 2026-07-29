@@ -541,6 +541,10 @@ describe('MA Cross — entrada pullback', () => {
       ma2: { period: 21, interval: '15m' },
       direction: 'cross_up',
       maxAboveMaPct: 3,
+      // Estes testes cobrem o mecanismo legado (approachTolerancePct/requirePullback vs
+      // MA21 só); a regra nova (canal EMA21/EMA50) é ligada por padrão pelo schema e tem
+      // sua própria cobertura — ver "MA Cross — entrada pullback EMA50 proximity".
+      ema50Proximity: { enabled: false },
     },
     entryTrendMa: { enabled: false },
     entryBbFilter: { enabled: false },
@@ -604,6 +608,65 @@ describe('MA Cross — entrada pullback', () => {
     expect(r.ready).toBe(false);
     expect(r.cancel).toBe(true);
     expect(r.reason).toBe('NO_PULLBACK');
+  });
+});
+
+describe('MA Cross — entrada pullback EMA50 proximity (regra nova, ligada por padrão)', () => {
+  const {
+    ema50ProximityEnabled, checkEma50ProximityChannel, checkEma50ProximityBand,
+  } = require('../bot/ma-cross/strategyEngine');
+  const { toEngineConfig, normalizeMaCrossConfig } = require('../bot/ma-cross/tradeConfigSchema');
+
+  const config = toEngineConfig(normalizeMaCrossConfig({
+    entry: {
+      ma1: { period: 9, interval: '1h' },
+      ma2: { period: 21, interval: '1h' },
+      direction: 'cross_up',
+    },
+  }));
+
+  function flatCandles1h(closes, startOpen = 1_700_000_000_000) {
+    return closes.map((close, i) => ({
+      openTime: startOpen + i * 3_600_000,
+      open: close, high: close, low: close, close,
+    }));
+  }
+
+  test('fica ligada por padrão depois de normalizeMaCrossConfig, mesmo sem configurar nada', () => {
+    expect(ema50ProximityEnabled(config)).toBe(true);
+  });
+
+  test('fica desligada quando config não passou pelo schema (compat com código/testes antigos)', () => {
+    expect(ema50ProximityEnabled({ entry: { ma1: {}, ma2: {} } })).toBe(false);
+  });
+
+  test('canal: close dentro do canal EMA21/EMA50 quando o preço está estável', () => {
+    const candles = flatCandles1h(Array(60).fill(100));
+    const openTime = candles.at(-1).openTime;
+    const r = checkEma50ProximityChannel(config, { '1h': candles }, 100, openTime);
+    expect(r.allowed).toBe(true);
+  });
+
+  test('canal: close bem acima de EMA21 e EMA50 fica fora do canal', () => {
+    const candles = flatCandles1h(Array(59).fill(100).concat([120]));
+    const openTime = candles.at(-1).openTime;
+    const r = checkEma50ProximityChannel(config, { '1h': candles }, 120, openTime);
+    expect(r.allowed).toBe(false);
+    expect(r.reason).toBe('EMA50_PROXIMITY_OUTSIDE_CHANNEL');
+  });
+
+  test('banda individual: close a 0.3% de uma EMA conta como perto (tolerância 0.5%)', () => {
+    const candles = flatCandles1h(Array(60).fill(100));
+    const openTime = candles.at(-1).openTime;
+    const r = checkEma50ProximityBand(config, { '1h': candles }, 100.3, openTime);
+    expect(r.allowed).toBe(true);
+  });
+
+  test('banda individual: close a 10% de distância não conta como perto', () => {
+    const candles = flatCandles1h(Array(60).fill(100));
+    const openTime = candles.at(-1).openTime;
+    const r = checkEma50ProximityBand(config, { '1h': candles }, 110, openTime);
+    expect(r.allowed).toBe(false);
   });
 });
 
@@ -746,6 +809,7 @@ describe('MA Cross — entrada por banda inferior BB (gatilho imediato)', () => 
     entryTrendMa: { enabled: false },
     entryEmaApproach: { enabled: false },
     entryBbFilter: { enabled: false },
+    entryChopZone: { enabled: false },
     maFiltersEnabled: false,
     entryBbLower: { enabled: true, interval: '4h', period: 20, stdDev: 2 },
   }));

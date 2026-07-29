@@ -520,6 +520,77 @@ function activeMaFilters(config) {
   return (config.maFilters ?? []).filter(f => f.enabled && f.mode !== 'off');
 }
 
+/**
+ * Regra de proximidade EMA50 (1h) — substitui o teto entry.maxAboveMaPct /
+ * execution.pullbackEntry quando ligada (ver analyze-pullback-ema21-50-2w.js, onde a
+ * regra foi desenhada e validada em backtest antes de entrar aqui):
+ *   - canal entre entry.ma2 (normalmente EMA21) e a EMA alternativa (default EMA50 1h),
+ *     com folga de tolerancePct pra fora dos dois lados — close dentro do canal no
+ *     próprio candle do cruzamento já libera a compra imediata;
+ *   - fora do canal, aguarda até waitCandles candles mirando o preço voltar pra dentro
+ *     da banda ±tolerancePct de QUALQUER uma das duas EMAs individualmente; não volta
+ *     a tempo → cancela.
+ * Ligada por padrão (ver MA_CROSS_DEFAULTS.entry.ema50Proximity em tradeConfigSchema.js).
+ */
+/** Só "ligada por padrão" depois de passar por normalizeMaCrossConfig (tradeConfigSchema.js),
+ *  que sempre preenche entry.ema50Proximity.enabled=true quando o campo não veio salvo.
+ *  Aqui, a ausência do campo (config montado à mão, fora do schema — testes, scripts
+ *  antigos) significa desligada, pra não mudar o comportamento de quem não passa por lá. */
+function ema50ProximityEnabled(config) {
+  return config.entry?.ema50Proximity?.enabled === true;
+}
+
+function ema50ProximitySettings(config) {
+  const p = config.entry?.ema50Proximity ?? {};
+  return {
+    period: Math.max(2, Math.round(Number(p.period ?? 50))),
+    interval: p.interval ?? '1h',
+    tolerancePct: Math.max(0, Number(p.tolerancePct ?? 0.5)),
+    waitCandles: Math.max(1, Math.round(Number(p.waitCandles ?? 5))),
+  };
+}
+
+function maAtOpenTime(cMap, interval, period, openTime) {
+  const candles = closedCandlesOnly(cMap[interval] ?? []);
+  return maValueAt(buildMaTimeSeries(candles, period), openTime);
+}
+
+function inTolerance(close, ma, tolerancePct) {
+  if (ma == null || !(ma > 0)) return false;
+  const gapPct = ((close - ma) / ma) * 100;
+  return gapPct >= -tolerancePct && gapPct <= tolerancePct;
+}
+
+/** Canal entre EMA(ma2) e a EMA alternativa (ema50Proximity) no candle de referência. */
+function checkEma50ProximityChannel(config, cMap, close, openTime) {
+  const entry = config.entry;
+  const p = ema50ProximitySettings(config);
+  const ma2 = maAtOpenTime(cMap, entry.ma2.interval, entry.ma2.period, openTime);
+  const maAlt = maAtOpenTime(cMap, p.interval, p.period, openTime);
+  if (ma2 == null || maAlt == null) {
+    return { allowed: false, reason: 'EMA50_PROXIMITY_NO_MA', ma2, maAlt };
+  }
+  const floor = Math.min(ma2, maAlt) * (1 - p.tolerancePct / 100);
+  const ceiling = Math.max(ma2, maAlt) * (1 + p.tolerancePct / 100);
+  const inChannel = close >= floor && close <= ceiling;
+  return {
+    allowed: inChannel,
+    reason: inChannel ? null : 'EMA50_PROXIMITY_OUTSIDE_CHANNEL',
+    ma2, maAlt, floor, ceiling,
+  };
+}
+
+/** Banda individual ±tolerancePct em torno de QUALQUER uma das duas EMAs — usada
+ *  durante a janela de espera (candle a candle), não o canal da entrada direta. */
+function checkEma50ProximityBand(config, cMap, close, openTime) {
+  const entry = config.entry;
+  const p = ema50ProximitySettings(config);
+  const ma2 = maAtOpenTime(cMap, entry.ma2.interval, entry.ma2.period, openTime);
+  const maAlt = maAtOpenTime(cMap, p.interval, p.period, openTime);
+  const hit = inTolerance(close, ma2, p.tolerancePct) || inTolerance(close, maAlt, p.tolerancePct);
+  return { allowed: hit, ma2, maAlt };
+}
+
 function checkEntryMaxAboveMa2(close, ma2, maxAboveMaPct) {
   const cap = Number(maxAboveMaPct);
   if (!cap || cap <= 0 || ma2 == null || ma2 <= 0) return { allowed: true };
@@ -550,6 +621,11 @@ function getRequiredSpecs(config) {
     if (entry.ma2.interval !== entry.ma1.interval) {
       add(entry.ma2.interval, entry.ma2.period + 30);
     }
+  }
+
+  if (ema50ProximityEnabled(config)) {
+    const p = ema50ProximitySettings(config);
+    add(p.interval, p.period + 30);
   }
 
   const exMa = config.exit?.maCross;
@@ -598,6 +674,11 @@ function getRequiredSpecs(config) {
   const revGuard = config.entryReversalGuard;
   if (revGuard?.enabled) {
     add(revGuard.interval ?? '1h', (revGuard.rallyLookbackCandles ?? 96) + (revGuard.cooldownCandles ?? 12) + 10);
+  }
+
+  const chopZone = config.entryChopZone;
+  if (chopZone?.enabled) {
+    add(chopZone.interval ?? '4h', (chopZone.period ?? 14) + 10);
   }
 
   const rsiConds = (config.exit?.rsi?.conditions ?? []).filter(c => c.enabled);
@@ -849,6 +930,57 @@ function evaluateEntry1hReversalGuard(config, cMap, opts = {}) {
   return { allowed: true };
 }
 
+function trueRangeSeries(candles) {
+  const tr = [null];
+  for (let i = 1; i < candles.length; i++) {
+    const c = candles[i], p = candles[i - 1];
+    tr.push(Math.max(c.high - c.low, Math.abs(c.high - p.close), Math.abs(c.low - p.close)));
+  }
+  return tr;
+}
+
+/** Choppiness Index clássico no último candle da série — mesma fórmula de
+ *  backend/services/fetchChopZone.js e analyze-chop4h-exit-race-2w.js. */
+function choppinessAt(candles, period) {
+  if (!candles || candles.length < period + 1) return null;
+  const tr = trueRangeSeries(candles);
+  const i = candles.length - 1;
+  const trWindow = tr.slice(i - period + 1, i + 1);
+  if (trWindow.some(v => v == null)) return null;
+  const window = candles.slice(i - period + 1, i + 1);
+  const sumTR = trWindow.reduce((a, b) => a + b, 0);
+  const hh = Math.max(...window.map(c => c.high));
+  const ll = Math.min(...window.map(c => c.low));
+  if (hh - ll <= 0) return null;
+  return 100 * Math.log10(sumTR / (hh - ll)) / Math.log10(period);
+}
+
+/**
+ * Zona de Choppiness Index (CHOP) na entrada: bloqueia o cruzamento quando o candle
+ * HTF (padrão 4h) fechado mais recente está "choppy" (CHOP acima de maxChop). Ver
+ * comentário em MA_CROSS_DEFAULTS.entryChopZone (tradeConfigSchema.js) para a análise
+ * que embasou o corte padrão de 51.8.
+ */
+function evaluateEntryChopZone(config, cMap, opts = {}) {
+  const rule = config.entryChopZone;
+  if (!rule?.enabled) return { allowed: true };
+
+  const interval = rule.interval ?? '4h';
+  const period = Math.max(2, Math.round(rule.period ?? 14));
+  const closedOnly = opts.closedOnly !== false;
+  const raw = cMap[interval] ?? [];
+  const candles = closedOnly ? closedCandlesOnly(raw) : raw;
+
+  const chop = choppinessAt(candles, period);
+  if (chop == null) return { allowed: true, reason: 'CHOP_ZONE_NO_DATA' };
+
+  const maxChop = Number(rule.maxChop ?? 51.8);
+  if (chop > maxChop) {
+    return { allowed: false, reason: 'CHOP_ZONE_TOO_CHOPPY', chop, maxChop, chopInterval: interval };
+  }
+  return { allowed: true, chop, maxChop, chopInterval: interval };
+}
+
 function evaluateMaFilters(close, config, cMap, adaptiveDips, adaptiveStretches = {}) {
   const details = [];
   for (const f of activeMaFilters(config)) {
@@ -957,6 +1089,19 @@ function evaluateCrossSignal(config, cMap, adaptiveDips = {}, opts = {}) {
     };
   }
 
+  const chopCheck = evaluateEntryChopZone(config, cMap, opts);
+  if (!chopCheck.allowed) {
+    return {
+      allowed: false,
+      reason: chopCheck.reason,
+      ma1: cross.ma1, ma2: cross.ma2,
+      close: cross.close,
+      crossOpenTime: cross.openTime,
+      chop: chopCheck.chop,
+      maxChop: chopCheck.maxChop,
+    };
+  }
+
   const dirLbl = entry.direction === 'cross_down' ? '↓' : '↑';
   return {
     allowed: true,
@@ -967,6 +1112,7 @@ function evaluateCrossSignal(config, cMap, adaptiveDips = {}, opts = {}) {
     approachGapPct: approachCheck.gapPct, approachTroughGapPct: approachCheck.troughGapPct,
     pctB: bbCheck.pctB, bbUpper: bbCheck.upper, bbLower: bbCheck.lower, bbMiddle: bbCheck.middle,
     bbInterval: bbCheck.bbInterval,
+    chop: chopCheck.chop, maxChop: chopCheck.maxChop,
   };
 }
 
@@ -992,51 +1138,72 @@ function evaluatePullbackCandle(config, cMap, adaptiveDips, adaptiveStretches, {
   const aboveEntryPct = extensionAboveMa2(close, ma2AtEntry);
   const aboveSignalPct = extensionAboveMa2(signalClose, ma2AtSignal);
 
-  if (approachTolerancePct != null) {
-    // Regra por gap absoluto: entra assim que o preço chegar a até approachTolerancePct
-    // da MA2 — não precisa tocar/cruzar abaixo, só "chegar perto". Mais apertado que o
-    // teto normal (entry.maxAboveMaPct), usado pra não comprar moeda que deu um salto
-    // muito alto e nunca fecha o gap de verdade.
-    if (aboveEntryPct == null) {
-      return { ready: false, reason: 'FILTER_NO_MA', close, ma2: ma2AtEntry };
-    }
-    if (aboveEntryPct > approachTolerancePct) {
-      return {
-        ready: false,
-        reason: 'GAP_TOO_WIDE',
-        close,
-        ma2: ma2AtEntry,
-        aboveMa2Pct: aboveEntryPct,
-        signalAboveMa2Pct: aboveSignalPct,
-      };
-    }
-  } else if (requirePullback) {
-    if (aboveEntryPct == null || aboveSignalPct == null) {
-      return { ready: false, reason: 'FILTER_NO_MA', close, ma2: ma2AtEntry };
-    }
-    // Pullback = candle de entrada mais próximo da MA21 que no sinal
-    if (aboveEntryPct >= aboveSignalPct) {
-      return {
-        ready: false,
-        reason: 'NO_PULLBACK',
-        close,
-        ma2: ma2AtEntry,
-        aboveMa2Pct: aboveEntryPct,
-        signalAboveMa2Pct: aboveSignalPct,
-        pullbackVsMa2Pct: aboveEntryPct - aboveSignalPct,
-      };
-    }
-  }
+  let ema50AtEntry = null;
+  let ma2Cap;
 
-  const ma2Cap = checkEntryMaxAboveMa2(close, ma2AtEntry, entry.maxAboveMaPct);
-  if (!ma2Cap.allowed) {
-    return {
-      ready: false,
-      reason: ma2Cap.reason,
-      close,
-      ma2: ma2AtEntry,
-      aboveMa2Pct: ma2Cap.aboveMa2Pct,
-    };
+  if (ema50ProximityEnabled(config)) {
+    // Substitui o par approachTolerancePct/requirePullback + teto maxAboveMaPct: pronto
+    // assim que o preço entra na banda ±tolerancePct de QUALQUER uma das duas EMAs
+    // (entry.ma2 OU a EMA alternativa) — ver checkEma50ProximityBand.
+    const proximity = checkEma50ProximityBand(config, cMap, close, entryCandle.openTime);
+    ema50AtEntry = proximity.maAlt;
+    if (!proximity.allowed) {
+      return {
+        ready: false,
+        reason: 'EMA50_PROXIMITY_NOT_REACHED',
+        close,
+        ma2: ma2AtEntry,
+        ema50: ema50AtEntry,
+      };
+    }
+    ma2Cap = { allowed: true, aboveMa2Pct: aboveEntryPct };
+  } else {
+    if (approachTolerancePct != null) {
+      // Regra por gap absoluto: entra assim que o preço chegar a até approachTolerancePct
+      // da MA2 — não precisa tocar/cruzar abaixo, só "chegar perto". Mais apertado que o
+      // teto normal (entry.maxAboveMaPct), usado pra não comprar moeda que deu um salto
+      // muito alto e nunca fecha o gap de verdade.
+      if (aboveEntryPct == null) {
+        return { ready: false, reason: 'FILTER_NO_MA', close, ma2: ma2AtEntry };
+      }
+      if (aboveEntryPct > approachTolerancePct) {
+        return {
+          ready: false,
+          reason: 'GAP_TOO_WIDE',
+          close,
+          ma2: ma2AtEntry,
+          aboveMa2Pct: aboveEntryPct,
+          signalAboveMa2Pct: aboveSignalPct,
+        };
+      }
+    } else if (requirePullback) {
+      if (aboveEntryPct == null || aboveSignalPct == null) {
+        return { ready: false, reason: 'FILTER_NO_MA', close, ma2: ma2AtEntry };
+      }
+      // Pullback = candle de entrada mais próximo da MA21 que no sinal
+      if (aboveEntryPct >= aboveSignalPct) {
+        return {
+          ready: false,
+          reason: 'NO_PULLBACK',
+          close,
+          ma2: ma2AtEntry,
+          aboveMa2Pct: aboveEntryPct,
+          signalAboveMa2Pct: aboveSignalPct,
+          pullbackVsMa2Pct: aboveEntryPct - aboveSignalPct,
+        };
+      }
+    }
+
+    ma2Cap = checkEntryMaxAboveMa2(close, ma2AtEntry, entry.maxAboveMaPct);
+    if (!ma2Cap.allowed) {
+      return {
+        ready: false,
+        reason: ma2Cap.reason,
+        close,
+        ma2: ma2AtEntry,
+        aboveMa2Pct: ma2Cap.aboveMa2Pct,
+      };
+    }
   }
 
   const filterCheck = evaluateMaFilters(close, config, cMap, adaptiveDips, adaptiveStretches);
@@ -1090,6 +1257,7 @@ function evaluatePullbackCandle(config, cMap, adaptiveDips, adaptiveStretches, {
     close,
     ma1: maValueAt(buildMaTimeSeries(closedCandlesOnly(cMap[entry.ma1.interval] ?? []), entry.ma1.period), entryCandle.openTime),
     ma2: ma2AtEntry,
+    ema50: ema50AtEntry,
     signalClose,
     aboveMa2Pct: ma2Cap.aboveMa2Pct,
     signalAboveMa2Pct: aboveSignalPct,
@@ -1113,7 +1281,9 @@ function evaluatePullbackReady(config, cMap, adaptiveDips, pending, adaptiveStre
 
   const entry = config.entry;
   const pb = config.execution?.pullbackEntry ?? {};
-  const wait = Math.max(1, Number(pb.waitCandles ?? 2));
+  const wait = ema50ProximityEnabled(config)
+    ? ema50ProximitySettings(config).waitCandles
+    : Math.max(1, Number(pb.waitCandles ?? 2));
   const requirePullback = pb.requirePullback !== false;
   const approachTolerancePct = pb.approachTolerancePct != null ? Number(pb.approachTolerancePct) : null;
   const sigIv = signalInterval(entry);
@@ -1210,6 +1380,32 @@ function evaluateEntry(config, cMap, adaptiveDips = {}, opts = {}) {
     };
   }
 
+  if (ema50ProximityEnabled(config)) {
+    const proximity = checkEma50ProximityChannel(config, cMap, close, crossSignal.crossOpenTime);
+    if (!proximity.allowed) {
+      return {
+        allowed: false,
+        reason: proximity.reason,
+        ma1, ma2, close,
+        ema21: proximity.ma2, ema50: proximity.maAlt,
+        channelFloor: proximity.floor, channelCeiling: proximity.ceiling,
+      };
+    }
+    return {
+      allowed: true,
+      ma1, ma2, close,
+      crossOpenTime: crossSignal.crossOpenTime,
+      entryDesc: crossSignal.entryDesc,
+      maFilterDetails: filterCheck.details,
+      trendMa1: crossSignal.trendMa1, trendMa2: crossSignal.trendMa2, trendGapPct: crossSignal.trendGapPct,
+      approachGapPct: crossSignal.approachGapPct, approachTroughGapPct: crossSignal.approachTroughGapPct,
+      pctB: crossSignal.pctB, bbUpper: crossSignal.bbUpper, bbLower: crossSignal.bbLower,
+      bbMiddle: crossSignal.bbMiddle, bbInterval: crossSignal.bbInterval,
+      ema21: proximity.ma2, ema50: proximity.maAlt,
+      chop: crossSignal.chop, maxChop: crossSignal.maxChop,
+    };
+  }
+
   const ma2Cap = checkEntryMaxAboveMa2(close, ma2, config.entry.maxAboveMaPct);
   if (!ma2Cap.allowed) {
     return {
@@ -1231,6 +1427,7 @@ function evaluateEntry(config, cMap, adaptiveDips = {}, opts = {}) {
     approachGapPct: crossSignal.approachGapPct, approachTroughGapPct: crossSignal.approachTroughGapPct,
     pctB: crossSignal.pctB, bbUpper: crossSignal.bbUpper, bbLower: crossSignal.bbLower,
     bbMiddle: crossSignal.bbMiddle, bbInterval: crossSignal.bbInterval,
+    chop: crossSignal.chop, maxChop: crossSignal.maxChop,
   };
 }
 
@@ -1340,6 +1537,17 @@ function evaluateBbLowerEntry(config, cMap, adaptiveDips = {}, opts = {}) {
     };
   }
 
+  const chopCheck = evaluateEntryChopZone(config, cMap, opts);
+  if (!chopCheck.allowed) {
+    return {
+      allowed: false,
+      reason: chopCheck.reason,
+      close,
+      chop: chopCheck.chop,
+      maxChop: chopCheck.maxChop,
+    };
+  }
+
   const filterCheck = evaluateMaFilters(close, config, cMap, adaptiveDips, adaptiveStretches);
   if (!filterCheck.allowed) {
     return {
@@ -1361,6 +1569,7 @@ function evaluateBbLowerEntry(config, cMap, adaptiveDips = {}, opts = {}) {
     trendMa1: trendCheck.trendMa1, trendMa2: trendCheck.trendMa2, trendGapPct: trendCheck.gapPct,
     approachGapPct: approachCheck.gapPct, approachTroughGapPct: approachCheck.troughGapPct,
     bbLower: signal.lower, bbUpper: signal.upper, bbMiddle: signal.middle, bbInterval: signal.bbInterval,
+    chop: chopCheck.chop, maxChop: chopCheck.maxChop,
   };
 }
 
@@ -1963,6 +2172,8 @@ module.exports = {
   evaluateEntryTrendMa,
   evaluateEntryEmaApproach,
   evaluateEntry1hReversalGuard,
+  evaluateEntryChopZone,
+  choppinessAt,
   evaluateExit,
   evaluateHtfFallbackExit,
   htfNeverConfirmedSinceEntry,
@@ -1975,4 +2186,8 @@ module.exports = {
   evaluateCrossSignal,
   evaluatePullbackReady,
   pullbackEntryEnabled,
+  ema50ProximityEnabled,
+  ema50ProximitySettings,
+  checkEma50ProximityChannel,
+  checkEma50ProximityBand,
 };
