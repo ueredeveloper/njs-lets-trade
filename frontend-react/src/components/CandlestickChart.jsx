@@ -11,7 +11,7 @@ import convertOpenTime from '../utils/convertOpenTime';
 import Tooltip from './Tooltip';
 import { hasAnyChartPanelButton } from '../utils/chartPanelButtons';
 import { useIsMobile } from '../hooks/useIsMobile';
-import { DEFAULT_OVERLAY_SLOTS, DEFAULT_ACTIVE_INDICATORS, BB_PERIOD_OPTIONS, BB_STDDEV_OPTIONS, DEFAULT_SR_INTERVAL, DEFAULT_PPHL_INTERVAL } from '../utils/uiPreferences';
+import { DEFAULT_OVERLAY_SLOTS, DEFAULT_ACTIVE_INDICATORS, BB_PERIOD_OPTIONS, BB_STDDEV_OPTIONS, DEFAULT_SR_INTERVAL, DEFAULT_PPHL_INTERVAL, DEFAULT_CHOP_INTERVAL, DEFAULT_COMMON_CHART_INTERVALS } from '../utils/uiPreferences';
 import { CHART_VIEW, INTERVAL_MS, computeZoomWindow, buildFixedDataZoom, buildInsideDataZoom, computeCandleLimitFromTime, isTradePanelChartView } from '../utils/chartView';
 
 const LIMIT = DEFAULT_CANDLE_LIMIT;
@@ -21,8 +21,9 @@ const CANDLE_FETCH_STEPS = [500, 750, 1000];
 const OVERLAY_MA_INTERVALS = ['1m', '5m', '15m', '30m', '1h', '2h', '4h', '8h', '12h', '1d'];
 const OVERLAY_MA_COLORS = ['#fb923c', '#c084fc', '#34d399', '#60a5fa', '#f472b6', '#facc15', '#a78bfa', '#4ade80'];
 const INTERVALS = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w'];
-/** Intervalos mais usados no gráfico — os demais ficam escondidos atrás do botão "›" (mesmo padrão do picker de intervalos em Analisar indicadores). */
-const COMMON_CHART_INTERVALS = ['5m', '15m', '30m', '1h', '4h', '1d'];
+/** Intervalos mais usados no gráfico — os demais ficam escondidos atrás do botão "›" (mesmo padrão do picker de intervalos em Analisar indicadores).
+ *  Padrão de fábrica; o usuário pode customizar em Configurações → Intervalos rápidos do gráfico (uiPrefs.commonChartIntervals). */
+const COMMON_CHART_INTERVALS = DEFAULT_COMMON_CHART_INTERVALS;
 const DEFAULT_INTERVAL = '15m';
 
 const CHART_PRICE_PAD = 54;        // direita: rótulos do eixo de preço
@@ -285,6 +286,26 @@ async function fetchPivotPointsHighLowPoints(symbol, interval, source, limit) {
     body: JSON.stringify(candles),
   }).then(r => r.json());
   return Array.isArray(pivots) ? pivots : [];
+}
+
+/** Choppiness Index (14) — intervalo próprio (independente do gráfico), mesmo padrão do S/R/PPHL. */
+async function fetchChopOverlayPoints(symbol, interval, source, limit) {
+  const srcParam = source === 'gate' ? '&source=gate' : '';
+  const candles = await fetch(
+    `/services/candles/?symbol=${symbol}&limit=${limit}&interval=${interval}${srcParam}`,
+  ).then(r => r.json());
+  if (!Array.isArray(candles) || !candles.length) return [];
+  const chop = await fetch('/services/choppiness', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(candles),
+  }).then(r => r.json());
+  if (!Array.isArray(chop)) return [];
+  const offset = candles.length - chop.length;
+  return chop.map((val, i) => ({
+    openTime: Number(candles[offset + i].openTime),
+    value: val,
+  }));
 }
 
 function buildBollingerSeries(bbConfig, candlesticks, alignSeries) {
@@ -794,7 +815,7 @@ function computeMasonryLayout(tileDefs, width, height, gap) {
   const indTiles = tileDefs.filter((t) => t.kind === 'indicator');
 
   // --- Bollinger / S/R interval / PPHL interval / Quick-EMA sections (separate flex blocks) ---
-  const INTERVAL_PICKER_KINDS = ['srInterval', 'pphlInterval'];
+  const INTERVAL_PICKER_KINDS = ['srInterval', 'pphlInterval', 'chopInterval'];
   const blocks = tileDefs
     .filter((t) => t.kind === 'bb' || t.kind === 'vwap' || INTERVAL_PICKER_KINDS.includes(t.kind) || t.kind === 'quickEma')
     .map((t) => ({
@@ -1103,6 +1124,8 @@ function ChartIndicatorPanel({
   setSrInterval,
   pphlInterval,
   setPphlInterval,
+  chopInterval,
+  setChopInterval,
   vwap,
   setVwap,
   overlayMaLoading,
@@ -1123,6 +1146,7 @@ function ChartIndicatorPanel({
     const showBb = showKey('bb');
     const showSr = showKey('sr');
     const showPphl = showKey('pphl');
+    const showChopInterval = showKey('chopZone');
     const showVwap = showKey('vwap');
 
     const list = [];
@@ -1142,6 +1166,9 @@ function ChartIndicatorPanel({
     }
     if (showPphl) {
       list.push({ key: 'pphlInterval', kind: 'pphlInterval', data: {} });
+    }
+    if (showChopInterval) {
+      list.push({ key: 'chopInterval', kind: 'chopInterval', data: {} });
     }
     if (showBb) {
       list.push({ key: 'bb', kind: 'bb', data: {} });
@@ -1294,6 +1321,7 @@ function ChartIndicatorPanel({
               {tile.kind === 'bb' && renderBollingerTile(tile.dims, t, bollingerBands, setBollingerBands)}
               {tile.kind === 'srInterval' && renderIntervalPickerTile(tile.dims, t, 'chart.tip.sr_interval', 'S/R', '#facc15', srInterval, setSrInterval)}
               {tile.kind === 'pphlInterval' && renderIntervalPickerTile(tile.dims, t, 'chart.tip.pphl_interval', 'PPHL', '#2dd4bf', pphlInterval, setPphlInterval)}
+              {tile.kind === 'chopInterval' && renderIntervalPickerTile(tile.dims, t, 'chart.tip.chop_interval', 'CHOP', '#f59e0b', chopInterval, setChopInterval)}
               {tile.kind === 'vwap' && renderVwapTile(tile.dims, t, vwap, setVwap)}
               {tile.kind === 'quickEma' && renderQuickEmaGroupsTile(
                 tile.data, tile.dims, t,
@@ -1589,7 +1617,7 @@ function buildPivotMarkers(pivots, candlesticks, DL, LEFT_PAD, chartInterval) {
   return { highs, lows };
 }
 
-function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAverage, ma50, ma9, ma21, rsi, chopZone }, colors, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = [], overlayConfigs = [], multitradeMarkers = [], chartLeftPad = CHART_LEFT_MARGIN, buyInfo = null, stopLossConfig = null, chartRightPad = CHART_PRICE_PAD + CHART_LEFT_MARGIN, bollingerConfig = null, srConfig = null, pphlConfig = null, vwapConfig = null) {
+function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAverage, ma50, ma9, ma21, rsi }, colors, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = [], overlayConfigs = [], multitradeMarkers = [], chartLeftPad = CHART_LEFT_MARGIN, buyInfo = null, stopLossConfig = null, chartRightPad = CHART_PRICE_PAD + CHART_LEFT_MARGIN, bollingerConfig = null, srConfig = null, pphlConfig = null, vwapConfig = null, chopConfig = null) {
   const showMa9      = activeIndicators.includes('ma9');
   const showMa21     = activeIndicators.includes('ma21');
   const showMa50     = activeIndicators.includes('ma50');
@@ -1918,12 +1946,13 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
         },
       };
     }
-    // Choppiness Index (14): <38.2 = tendência (verde), >61.8 = lateral/choppy (vermelho).
+    // Choppiness Index (14), intervalo próprio (independente do gráfico): <38.2 = tendência
+    // (verde), >61.8 = lateral/choppy (vermelho).
     return {
-      name: 'CHOP',
+      name: `CHOP@${chopConfig?.interval ?? ''}`,
       type: 'line',
       xAxisIndex: gridIdx, yAxisIndex: gridIdx,
-      data: alignSeries(chopZone),
+      data: alignSeries(alignPointsToCandles(candlesticks, chopConfig?.points ?? [])),
       showSymbol: false,
       lineStyle: { color: '#f59e0b', width: 1.5 },
       markLine: {
@@ -1985,7 +2014,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
 
 // ── Gráfico Matrix: área de preço + RSI, tema terminal verde ─────────────────
 
-function buildMatrixOption({ symbol, interval, candlesticks, rsi, chopZone }, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = [], chartLeftPad = CHART_LEFT_MARGIN, buyInfo = null, stopLossConfig = null, chartRightPad = CHART_PRICE_PAD + CHART_LEFT_MARGIN) {
+function buildMatrixOption({ symbol, interval, candlesticks, rsi }, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = [], chartLeftPad = CHART_LEFT_MARGIN, buyInfo = null, stopLossConfig = null, chartRightPad = CHART_PRICE_PAD + CHART_LEFT_MARGIN, chopConfig = null) {
   const showRsi   = activeIndicators.includes('rsi');
   const showRsi50 = activeIndicators.includes('rsi50');
   const showRsi80 = activeIndicators.includes('rsi80');
@@ -2097,7 +2126,7 @@ function buildMatrixOption({ symbol, interval, candlesticks, rsi, chopZone }, ac
     return [...new Array(LEFT_PAD + Math.max(0, DL - raw.length)).fill(null), ...raw, ...new Array(RIGHT_PAD).fill(null)];
   };
   const rsiData  = alignMatrixSeries(rsi);
-  const chopData = alignMatrixSeries(chopZone);
+  const chopData = alignMatrixSeries(alignPointsToCandles(candlesticks, chopConfig?.points ?? []));
 
   const axisBase = (gridIndex, showLabel) => ({
     gridIndex,
@@ -2204,7 +2233,7 @@ function buildMatrixOption({ symbol, interval, candlesticks, rsi, chopZone }, ac
         // chopZone — Choppiness Index (14): <38.2 tendência (verde), >61.8 lateral/choppy (vermelho)
         if (!chopData.length) return [];
         return [{
-          name: 'CHOP',
+          name: `CHOP@${chopConfig?.interval ?? ''}`,
           type: 'line',
           xAxisIndex: gridIdx, yAxisIndex: gridIdx,
           data: chopData,
@@ -2426,7 +2455,7 @@ export default function CandlestickChart() {
   const { selectedChart, setSelectedChart, chartZoom, setChartZoom, chartTradeMarkers, chartViewSource,
     chartCandleWindowReset,
     multitradeChartFocus, tradePurchases, allTrades, gateFavorites, chartInterval: savedInterval, setChartInterval,
-    chartPanelButtons, uiPrefs, setMaBandsDefaults, setBollingerBandsDefaults, setSrIntervalDefault, setPphlIntervalDefault, setVwapDefaults, setActiveIndicatorsPreference,
+    chartPanelButtons, uiPrefs, setMaBandsDefaults, setBollingerBandsDefaults, setSrIntervalDefault, setPphlIntervalDefault, setChopIntervalDefault, setVwapDefaults, setActiveIndicatorsPreference,
     multitradeFavorites, fiveMTradeFavorites, activeTrades } = useCurrency();
   const { t } = useI18n();
   const chartRef = useRef(null);
@@ -2517,6 +2546,9 @@ export default function CandlestickChart() {
   const [pphlInterval, setPphlInterval] = useState(() => uiPrefs.pphlIntervalDefault ?? DEFAULT_PPHL_INTERVAL);
   const [pphlCache, setPphlCache] = useState({});
   const [_pphlLoading, setPphlLoading] = useState(false);
+  const [chopInterval, setChopInterval] = useState(() => uiPrefs.chopIntervalDefault ?? DEFAULT_CHOP_INTERVAL);
+  const [chopCache, setChopCache] = useState({});
+  const [_chopLoading, setChopLoading] = useState(false);
   const [vwap, setVwap] = useState(() => ({ ...uiPrefs.vwapDefaults }));
   const [vwapCache, setVwapCache] = useState({});
   const [_vwapLoading, setVwapLoading] = useState(false);
@@ -2639,6 +2671,13 @@ export default function CandlestickChart() {
     setPphlIntervalDefault(pphlInterval);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pphlInterval]);
+
+  // Persiste o intervalo do CHOP (mesmo padrão do S/R/PPHL)
+  useEffect(() => {
+    if (isTradePanelChartView(chartViewSource)) return;
+    setChopIntervalDefault(chopInterval);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chopInterval]);
 
   // Persiste preferências do VWAP (ligado, intervalo, sessão, bandas) — mesmo padrão da Bollinger
   useEffect(() => {
@@ -2912,6 +2951,42 @@ export default function CandlestickChart() {
   }, [
     selectedChart?.symbol, selectedChart?.interval, selectedChart?.source, selectedChart?.candlesticks,
     currentInterval, overlayFetchLimit, displayCandleCount, pphlShown, pphlInterval,
+  ]);
+
+  // Busca o Choppiness Index — intervalo próprio (independente do gráfico), mesmo padrão do S/R/PPHL.
+  const chopShown = activeIndicators.includes('chopZone') && chartPanelButtons.chopZone !== false;
+  useEffect(() => {
+    if (!selectedChart?.symbol || !chopShown) {
+      setChopLoading(false);
+      return undefined;
+    }
+    const key = chopInterval;
+    let cancelled = false;
+    setChopLoading(true);
+    (async () => {
+      try {
+        const ovLimit = computeOverlayMaFetchLimit(
+          selectedChart.interval ?? currentInterval,
+          chopInterval,
+          14,
+          Math.max(displayCandleCount, selectedChart.candlesticks?.length ?? 0, DEFAULT_CANDLE_LIMIT),
+          overlayFetchLimit,
+        );
+        const points = await fetchChopOverlayPoints(
+          selectedChart.symbol, chopInterval, selectedChart.source, ovLimit,
+        );
+        if (!cancelled) setChopCache({ [key]: points });
+      } catch (e) {
+        console.warn('[chop]', key, e.message);
+        if (!cancelled) setChopCache({});
+      } finally {
+        if (!cancelled) setChopLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [
+    selectedChart?.symbol, selectedChart?.interval, selectedChart?.source, selectedChart?.candlesticks,
+    currentInterval, overlayFetchLimit, displayCandleCount, chopShown, chopInterval,
   ]);
 
   // Busca a série do VWAP — intervalo próprio (independente do gráfico), mesmo padrão da Bollinger.
@@ -3357,6 +3432,11 @@ export default function CandlestickChart() {
     return { interval: pphlInterval, points: pphlCache[pphlInterval] ?? [] };
   }, [pphlShown, pphlInterval, pphlCache]);
 
+  const chartChopConfig = useMemo(() => {
+    if (!chopShown) return null;
+    return { interval: chopInterval, points: chopCache[chopInterval] ?? [] };
+  }, [chopShown, chopInterval, chopCache]);
+
   const chartVwapConfig = useMemo(() => {
     const enabled = vwap.enabled && chartPanelButtons.vwap !== false;
     if (!enabled) return null;
@@ -3374,16 +3454,16 @@ export default function CandlestickChart() {
     if (!selectedChart) return null;
     if (activeTab === 'matrix') {
       return buildMatrixOption(
-        selectedChart, effectiveIndicators, displayLimit, chartZoom, tradeTimes, chartLeftPad, chartBuyInfo, chartStopLossConfig, chartRightPad,
+        selectedChart, effectiveIndicators, displayLimit, chartZoom, tradeTimes, chartLeftPad, chartBuyInfo, chartStopLossConfig, chartRightPad, chartChopConfig,
       );
     }
     return buildOption(
       selectedChart, colors, effectiveIndicators, displayLimit, chartZoom, tradeTimes, overlayConfigs,
       chartTradeMarkers?.length ? chartTradeMarkers : (selectedChart.tradeMarkers ?? []),
-      chartLeftPad, chartBuyInfo, chartStopLossConfig, chartRightPad, chartBollingerConfig, chartSrConfig, chartPphlConfig, chartVwapConfig,
+      chartLeftPad, chartBuyInfo, chartStopLossConfig, chartRightPad, chartBollingerConfig, chartSrConfig, chartPphlConfig, chartVwapConfig, chartChopConfig,
     );
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedChart, colors, effectiveIndicators, chartZoom, tradePurchases, chartTradeMarkers, activeTab, overlayConfigs, displayLimit, chartLeftPad, chartRightPad, chartBuyInfo, chartStopLossConfig, chartBollingerConfig, chartSrConfig, chartPphlConfig, chartVwapConfig]);
+  }, [selectedChart, colors, effectiveIndicators, chartZoom, tradePurchases, chartTradeMarkers, activeTab, overlayConfigs, displayLimit, chartLeftPad, chartRightPad, chartBuyInfo, chartStopLossConfig, chartBollingerConfig, chartSrConfig, chartPphlConfig, chartVwapConfig, chartChopConfig]);
 
   if (!selectedChart || !option) {
     return (
@@ -3535,7 +3615,7 @@ export default function CandlestickChart() {
         <div className="flex items-center gap-1 flex-nowrap overflow-x-auto touch-pan-x scrollbar-thin md:flex-wrap md:overflow-visible">
           {(showAllIntervals
             ? INTERVALS
-            : INTERVALS.filter((iv) => COMMON_CHART_INTERVALS.includes(iv) || iv === currentInterval)
+            : INTERVALS.filter((iv) => (uiPrefs.commonChartIntervals ?? COMMON_CHART_INTERVALS).includes(iv) || iv === currentInterval)
           ).map((iv) => (
             <button
               key={iv}
@@ -3601,6 +3681,8 @@ export default function CandlestickChart() {
             setSrInterval={setSrInterval}
             pphlInterval={pphlInterval}
             setPphlInterval={setPphlInterval}
+            chopInterval={chopInterval}
+            setChopInterval={setChopInterval}
             vwap={vwap}
             setVwap={setVwap}
             overlayMaLoading={overlayMaLoading}
@@ -3630,6 +3712,8 @@ export default function CandlestickChart() {
             setSrInterval={setSrInterval}
             pphlInterval={pphlInterval}
             setPphlInterval={setPphlInterval}
+            chopInterval={chopInterval}
+            setChopInterval={setChopInterval}
             vwap={vwap}
             setVwap={setVwap}
             overlayMaLoading={overlayMaLoading}
@@ -3661,6 +3745,8 @@ export default function CandlestickChart() {
               setSrInterval={setSrInterval}
               pphlInterval={pphlInterval}
               setPphlInterval={setPphlInterval}
+              chopInterval={chopInterval}
+              setChopInterval={setChopInterval}
               vwap={vwap}
               setVwap={setVwap}
               overlayMaLoading={overlayMaLoading}

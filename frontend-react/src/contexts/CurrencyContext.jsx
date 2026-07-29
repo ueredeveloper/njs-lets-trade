@@ -32,11 +32,13 @@ import {
   normalizeBollingerBandsDefaults,
   normalizeSrInterval,
   normalizePphlInterval,
+  normalizeChopInterval,
   normalizeVwapDefaults,
   normalizeActiveIndicators,
   normalizeCurrencyPanelWidth,
   normalizeMaCrossDefaultTemplate,
   normalizeStatsDefaults,
+  normalizeCommonChartIntervals,
 } from '../utils/uiPreferences';
 
 const CurrencyContext = createContext(null);
@@ -524,6 +526,14 @@ export function CurrencyProvider({ children }) {
     });
   }, []);
 
+  const setCommonChartIntervals = useCallback((intervals) => {
+    setUiPrefsState((prev) => {
+      const next = { ...prev, commonChartIntervals: normalizeCommonChartIntervals(intervals) };
+      saveUiPreferences(next);
+      return next;
+    });
+  }, []);
+
   const setPanelVisible = useCallback((key, enabled) => {
     if (!PANEL_KEYS.includes(key)) return;
     setUiPrefsState((prev) => {
@@ -580,6 +590,14 @@ export function CurrencyProvider({ children }) {
   const setPphlIntervalDefault = useCallback((interval) => {
     setUiPrefsState((prev) => {
       const next = { ...prev, pphlIntervalDefault: normalizePphlInterval(interval) };
+      saveUiPreferences(next);
+      return next;
+    });
+  }, []);
+
+  const setChopIntervalDefault = useCallback((interval) => {
+    setUiPrefsState((prev) => {
+      const next = { ...prev, chopIntervalDefault: normalizeChopInterval(interval) };
       saveUiPreferences(next);
       return next;
     });
@@ -871,12 +889,14 @@ export function CurrencyProvider({ children }) {
         chartPanelButtonKeys: CHART_PANEL_BUTTON_KEYS,
         uiPrefs,
         setDefaultChartInterval,
+        setCommonChartIntervals,
         setPanelVisible,
         setOverlaySlotsPreference,
         setMaBandsDefaults,
         setBollingerBandsDefaults,
         setSrIntervalDefault,
         setPphlIntervalDefault,
+        setChopIntervalDefault,
         setVwapDefaults,
         setActiveIndicatorsPreference,
         setCurrencyPanelWidth,

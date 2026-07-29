@@ -8,6 +8,17 @@ export const CHART_INTERVAL_OPTIONS = [
 
 export const PANEL_KEYS = ['indicators', 'stats'];
 
+/** Intervalos que ficam visíveis por padrão na linha de botões rápidos do gráfico — os demais ficam
+ *  escondidos atrás do botão "›". Editável em Configurações → Intervalos rápidos do gráfico. */
+export const DEFAULT_COMMON_CHART_INTERVALS = ['15m', '1h', '4h', '8h'];
+
+export function normalizeCommonChartIntervals(raw) {
+  if (!Array.isArray(raw)) return [...DEFAULT_COMMON_CHART_INTERVALS];
+  const valid = raw.filter((iv) => CHART_INTERVAL_OPTIONS.includes(iv));
+  const deduped = [...new Set(valid)];
+  return deduped.length ? deduped : [...DEFAULT_COMMON_CHART_INTERVALS];
+}
+
 export const BAND_PCT_OPTIONS = [2, 3, 4, 5];
 
 export const MAX_OVERLAY_SLOTS = 8;
@@ -167,6 +178,15 @@ export function normalizePphlInterval(raw) {
   return CHART_INTERVAL_OPTIONS.includes(raw) ? raw : DEFAULT_PPHL_INTERVAL;
 }
 
+/** Intervalo de candles usado pra calcular o Choppiness Index — mesmo padrão do S/R/PPHL,
+ *  independente do intervalo do gráfico. 4h por padrão (ver estudo: 1h fica contaminado pelo
+ *  próprio candle do cruzamento EMA9x21, 4h reflete a estrutura de fundo). */
+export const DEFAULT_CHOP_INTERVAL = '4h';
+
+export function normalizeChopInterval(raw) {
+  return CHART_INTERVAL_OPTIONS.includes(raw) ? raw : DEFAULT_CHOP_INTERVAL;
+}
+
 export function normalizeActiveIndicators(arr) {
   if (!Array.isArray(arr)) return [...DEFAULT_ACTIVE_INDICATORS];
   return arr.filter((id) => VALID_ACTIVE_INDICATORS.includes(id));
@@ -213,6 +233,7 @@ export function normalizeOverlaySlots(slots) {
 
 export const DEFAULT_UI_PREFS = {
   defaultChartInterval: '15m',
+  commonChartIntervals: [...DEFAULT_COMMON_CHART_INTERVALS],
   visiblePanels: {
     indicators: true,
     stats: true,
@@ -222,6 +243,7 @@ export const DEFAULT_UI_PREFS = {
   bollingerBandsDefaults: normalizeBollingerBandsDefaults(DEFAULT_BOLLINGER_BANDS),
   srIntervalDefault: DEFAULT_SR_INTERVAL,
   pphlIntervalDefault: DEFAULT_PPHL_INTERVAL,
+  chopIntervalDefault: DEFAULT_CHOP_INTERVAL,
   vwapDefaults: normalizeVwapDefaults(DEFAULT_VWAP),
   activeIndicators: [...DEFAULT_ACTIVE_INDICATORS],
   currencyPanelWidth: CURRENCY_PANEL_WIDTH_DEFAULT,
@@ -232,6 +254,7 @@ export const DEFAULT_UI_PREFS = {
 function cloneDefaults() {
   return {
     defaultChartInterval: DEFAULT_UI_PREFS.defaultChartInterval,
+    commonChartIntervals: [...DEFAULT_COMMON_CHART_INTERVALS],
     visiblePanels: { ...DEFAULT_UI_PREFS.visiblePanels },
     overlaySlots: normalizeOverlaySlots(DEFAULT_OVERLAY_SLOTS),
     maBandsDefaults: normalizeMaBandsDefaults(DEFAULT_MA_BANDS),
@@ -255,6 +278,9 @@ export function loadUiPreferences() {
     if (CHART_INTERVAL_OPTIONS.includes(parsed.defaultChartInterval)) {
       result.defaultChartInterval = parsed.defaultChartInterval;
     }
+    if (parsed.commonChartIntervals !== undefined) {
+      result.commonChartIntervals = normalizeCommonChartIntervals(parsed.commonChartIntervals);
+    }
     if (parsed.visiblePanels && typeof parsed.visiblePanels === 'object') {
       for (const key of PANEL_KEYS) {
         if (typeof parsed.visiblePanels[key] === 'boolean') {
@@ -276,6 +302,9 @@ export function loadUiPreferences() {
     }
     if (parsed.pphlIntervalDefault !== undefined) {
       result.pphlIntervalDefault = normalizePphlInterval(parsed.pphlIntervalDefault);
+    }
+    if (parsed.chopIntervalDefault !== undefined) {
+      result.chopIntervalDefault = normalizeChopInterval(parsed.chopIntervalDefault);
     }
     if (parsed.vwapDefaults) {
       result.vwapDefaults = normalizeVwapDefaults(parsed.vwapDefaults);

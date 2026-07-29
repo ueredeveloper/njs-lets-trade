@@ -39,12 +39,21 @@ export default function SettingsSidebar({ open, onClose }) {
   const { t } = useI18n();
   const { selectedChart, assetDisplay, setAssetDisplayCategory, assetCategoryKeys,
     chartPanelButtons, setChartPanelButton, chartPanelButtonKeys,
-    uiPrefs, setDefaultChartInterval, setPanelVisible,
+    uiPrefs, setDefaultChartInterval, setCommonChartIntervals, setPanelVisible,
     setOverlaySlotsPreference, setCurrencyPanelWidth,
     setMaCrossDefaultTemplate, setStatsDefaults,
     chartIntervalOptions, panelKeys,
     activeTrades, activeTradesSettings, updateActiveTradesSettings,
     ignoredActiveTrades, dismissActiveTrade, restoreActiveTrade } = useCurrency();
+
+  function toggleCommonChartInterval(interval) {
+    const current = uiPrefs.commonChartIntervals ?? [];
+    const active = current.includes(interval);
+    if (active && current.length <= 1) return; // pelo menos um intervalo rápido precisa ficar visível
+    setCommonChartIntervals(
+      active ? current.filter((iv) => iv !== interval) : [...current, interval],
+    );
+  }
 
   function isOverlayActive(period, interval) {
     return uiPrefs.overlaySlots.some(s => s.period === period && s.interval === interval);
@@ -294,6 +303,31 @@ export default function SettingsSidebar({ open, onClose }) {
                 <option key={iv} value={iv}>{iv}</option>
               ))}
             </select>
+          </div>
+
+          {/* Intervalos rápidos do gráfico */}
+          <div>
+            <p className={section}>{t('settings.chart_quick_intervals')}</p>
+            <p className="text-[10px] text-p5/50 mb-3 leading-relaxed">{t('settings.chart_quick_intervals_hint')}</p>
+            <div className="flex flex-wrap gap-1.5">
+              {chartIntervalOptions.map((iv) => {
+                const active = (uiPrefs.commonChartIntervals ?? []).includes(iv);
+                return (
+                  <button
+                    key={iv}
+                    type="button"
+                    onClick={() => toggleCommonChartInterval(iv)}
+                    className={`px-2 py-1 text-[10px] font-mono rounded border transition-colors ${
+                      active
+                        ? 'border-p4 bg-p4/20 text-p5 font-semibold'
+                        : 'border-p2/40 text-p5/60 hover:border-p3 hover:bg-p2/30'
+                    }`}
+                  >
+                    {iv}
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
           {/* Painéis inferiores */}
