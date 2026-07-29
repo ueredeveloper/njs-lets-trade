@@ -4,6 +4,7 @@ import MultitradeModal from './MultitradeModal';
 import MultitradeBacktestPanel from './MultitradeBacktestPanel';
 import MultitradeBotStateModal from './MultitradeBotStateModal';
 import MultitradeSellModal from './MultitradeSellModal';
+import MultitradeBuyModal from './MultitradeBuyModal';
 import { fetchCandlesticksAndCloud, fetchMultitradeTrades } from '../services/api';
 import { loadMultitradeSymbolChart } from '../utils/multitradeChart';
 import { multitradePhaseBadge, symbolPhaseSummary, fmtBuyTimeShort } from '../utils/multitradePhase';
@@ -44,13 +45,14 @@ export default function MultitradePanel() {
   const {
     multitradeFavorites, selectedChart, gateFavorites,
     saveMultitradeSymbol, removeMultitradeEntry,
-    applyMultitradeSymbolChart, updateMultitradeBotState,
+    applyMultitradeSymbolChart, updateMultitradeBotState, buyMultitradeNow,
   } = useCurrency();
   const [addModal, setAddModal]           = useState(false);
   const [favOpen, setFavOpen]             = useState(false);
   const [editingSymbol, setEditingSymbol] = useState(null);
   const [stateSymbol, setStateSymbol]     = useState(null);
   const [sellEntry, setSellEntry]         = useState(null);
+  const [buyEntry, setBuyEntry]           = useState(null);
   const [pickedSymbol, setPickedSymbol]   = useState(null);
   const [pickedStrategy, setPickedStrategy] = useState('ma-cross');
   const [macrossFavSort, setMacrossFavSort] = useState(() => loadMacrossFavSort());
@@ -192,6 +194,9 @@ export default function MultitradePanel() {
                 const ph = multitradePhaseBadge(summaryPhase);
                 const boughtEntry = activeEntries.find(e => e.phase === 'BOUGHT' && e.buyTime);
                 const sellableEntry = activeEntries.find(e => e.phase === 'BOUGHT') ?? null;
+                const buyableEntry = activeEntries.find(e =>
+                  normalizeStrategyId(e.strategyId) === 'ma-cross' && e.phase !== 'BOUGHT',
+                ) ?? null;
                 return (
                   <li
                     key={sym}
@@ -281,6 +286,17 @@ export default function MultitradePanel() {
                         Vender
                       </button>
                     )}
+                    {buyableEntry && (
+                      <button
+                        type="button"
+                        id={`multitrade-fav-buy-${sym}`}
+                        className="multitrade-fav-btn-buy text-[8px] px-1.5 py-0.5 rounded shrink-0 font-bold"
+                        style={{ background: '#22c55e22', color: '#4ade80', border: '1px solid #22c55e55' }}
+                        title="Comprar esta moeda agora (ordem a mercado, ignora o sinal do bot)"
+                        onClick={(e) => { e.stopPropagation(); setBuyEntry(buyableEntry); }}>
+                        Comprar
+                      </button>
+                    )}
                     <button
                       type="button"
                       id={`multitrade-fav-edit-${sym}`}
@@ -346,6 +362,17 @@ export default function MultitradePanel() {
                         onClick={() => setSellEntry(backtestEntry)}
                         title="Vender esta moeda agora (ordem a mercado)">
                         Vender
+                      </button>
+                    )}
+                    {backtestEntry.phase !== 'BOUGHT' && normalizeStrategyId(backtestEntry.strategyId) === 'ma-cross' && (
+                      <button
+                        type="button"
+                        id="multitrade-panel-btn-buy-active"
+                        className="text-[8px] font-bold px-1.5 py-0.5 rounded"
+                        style={{ background: '#22c55e22', color: '#4ade80', border: '1px solid #22c55e55' }}
+                        onClick={() => setBuyEntry(backtestEntry)}
+                        title="Comprar esta moeda agora (ordem a mercado, ignora o sinal do bot)">
+                        Comprar
                       </button>
                     )}
                   </>
@@ -447,6 +474,19 @@ export default function MultitradePanel() {
             setSellEntry(null);
           }}
           onCancel={() => setSellEntry(null)}
+        />
+      )}
+      {buyEntry && (
+        <MultitradeBuyModal
+          entry={buyEntry}
+          onBought={async () => {
+            await buyMultitradeNow({
+              symbol: buyEntry.symbol,
+              strategyId: normalizeStrategyId(buyEntry.strategyId),
+            });
+            setBuyEntry(null);
+          }}
+          onCancel={() => setBuyEntry(null)}
         />
       )}
     </div>

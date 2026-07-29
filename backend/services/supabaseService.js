@@ -38,6 +38,12 @@ const { fetchBinanceCandles, fetchGateCandles } = require('../bot/prices');
 const fetchKlines = require('../binance/fetchKlines');
 const { toGateSymbol } = require('../utils/toGateSymbol');
 const { fetch24hVolumeUsdt, fmtVolumeUsdt, DEFAULT_MIN_VOLUME_USDT } = require('../bot/volume24h');
+const getBinanceClient = require('../binance/getClient');
+const { gateMarketBuy } = require('../gate/gateMarketBuy');
+
+// Mesmo buffer conservador aplicado pelos bots (ma-cross-bot.js) na quantidade "utilizável"
+// após a compra, pra sobrar margem de segurança na hora de vender (taxa + arredondamento).
+const GATE_FEE_RATE_BUFFER = 0.002;
 
 // Se Supabase não estiver configurado, retorna 503 imediatamente para todos os
 // endpoints /services/sb/* e evita queries com URL vazia que crasham o processo.
@@ -593,6 +599,38 @@ async function updateMultitrade(req, res) {
 router.put('/multitrade-favorites/:id', getUserId, updateMultitrade);
 router.patch('/multitrade-favorites/:id', getUserId, updateMultitrade);
 
+// Busca a linha rsi_multi_bot_state (symbol+strategy_id) e aplica patch — update se já
+// existe, insert (herdando exchange/capital/trade_config do favorito) se ainda não rodou
+// nenhum tick pra essa moeda. Compartilhado entre o ajuste manual de fase e a compra agora.
+async function upsertBotStatePatch(fav, symbol, strategyId, patch) {
+  const { data: existing } = await supabase
+    .from('rsi_multi_bot_state')
+    .select('id, phase')
+    .eq('symbol', symbol)
+    .eq('strategy_id', strategyId)
+    .maybeSingle();
+
+  if (existing?.id) {
+    const { error } = await supabase
+      .from('rsi_multi_bot_state')
+      .update(patch)
+      .eq('id', existing.id);
+    if (error) throw error;
+  } else {
+    const { error } = await supabase.from('rsi_multi_bot_state').insert({
+      symbol,
+      exchange:        fav.exchange,
+      strategy_id:     strategyId,
+      initial_capital: Number(fav.capital),
+      capital:         Number(fav.capital),
+      trade_config:    fav.trade_config,
+      ...patch,
+    });
+    if (error) throw error;
+  }
+  return existing ?? null;
+}
+
 // PATCH /services/sb/multitrade-bot-state — ajuste manual de fase (WATCHING / BOUGHT)
 router.patch('/multitrade-bot-state', getUserId, async (req, res) => {
   const symbol = req.body?.symbol?.toUpperCase();
@@ -626,30 +664,81 @@ router.patch('/multitrade-bot-state', getUserId, async (req, res) => {
     return res.status(400).json({ error: err.message });
   }
 
+  try {
+    await upsertBotStatePatch(fav, symbol, strategyId, patch);
+  } catch (error) {
+    return sbError(res, error, 'PATCH multitrade-bot-state');
+  }
+
+  const entry = await enrichSingleMultitradeEntry(multitradeToEntry(fav));
+  res.json(entry);
+});
+
+// POST /services/sb/multitrade-buy-now — compra a mercado imediata, no capital
+// configurado no favorito, independente de qualquer sinal/fase do bot (WATCHING ou
+// PENDING). Ordem real na exchange (não é só bookkeeping como o PATCH acima) — por
+// isso recusa se já tiver posição BOUGHT aberta, pra não comprar em cima de novo.
+router.post('/multitrade-buy-now', getUserId, async (req, res) => {
+  const symbol = req.body?.symbol?.toUpperCase();
+  const strategyId = normStrategyId(req.body?.strategyId ?? req.body?.strategy_id ?? 'ma-cross');
+  if (!symbol) return res.status(400).json({ error: 'symbol obrigatório' });
+  if (!strategyId) return res.status(400).json({ error: 'strategyId obrigatório' });
+
+  const { data: fav, error: favErr } = await supabase
+    .from('multitrade_favorites')
+    .select('*')
+    .eq('user_id', req.userId)
+    .eq('symbol', symbol)
+    .eq('strategy_id', strategyId)
+    .single();
+  if (favErr || !fav) return res.status(404).json({ error: 'favorito não encontrado' });
+
   const { data: existing } = await supabase
     .from('rsi_multi_bot_state')
-    .select('id')
+    .select('id, phase')
     .eq('symbol', symbol)
     .eq('strategy_id', strategyId)
     .maybeSingle();
+  if (existing?.phase === 'BOUGHT') {
+    return res.status(409).json({ error: 'já tem posição aberta nessa moeda — venda antes de comprar de novo' });
+  }
 
-  if (existing?.id) {
-    const { error } = await supabase
-      .from('rsi_multi_bot_state')
-      .update(patch)
-      .eq('id', existing.id);
-    if (error) return sbError(res, error, 'PATCH multitrade-bot-state');
-  } else {
-    const { error } = await supabase.from('rsi_multi_bot_state').insert({
-      symbol,
-      exchange:        fav.exchange,
-      strategy_id:     strategyId,
-      initial_capital: Number(fav.capital),
-      capital:         Number(fav.capital),
-      trade_config:    fav.trade_config,
-      ...patch,
+  const capital = Number(fav.capital);
+  if (!Number.isFinite(capital) || capital <= 0) {
+    return res.status(400).json({ error: 'capital configurado inválido' });
+  }
+
+  let filledQty, quoteQty, avgPrice;
+  try {
+    if (fav.exchange === 'gate') {
+      const pair = toGateSymbol(symbol);
+      ({ filledQty, quoteQty, avgPrice } = await gateMarketBuy(pair, capital));
+    } else {
+      const client = await getBinanceClient();
+      const order = await client.order({
+        symbol, side: 'BUY', type: 'MARKET', quoteOrderQty: capital.toFixed(2),
+      });
+      const rawQty = parseFloat(order.executedQty);
+      quoteQty = parseFloat(order.cummulativeQuoteQty);
+      avgPrice = quoteQty / rawQty;
+      filledQty = rawQty * (1 - GATE_FEE_RATE_BUFFER);
+    }
+  } catch (err) {
+    return res.status(500).json({ error: `Erro na compra: ${err.message}` });
+  }
+
+  const buyTime = new Date().toISOString();
+  let patch;
+  try {
+    patch = buildBotStatePatch('BOUGHT', { buyPrice: avgPrice, buyQty: filledQty, buyTime, buyUsdt: quoteQty });
+    await upsertBotStatePatch(fav, symbol, strategyId, patch);
+  } catch (error) {
+    // Ordem já executou na exchange — não falha silenciosamente: devolve o resultado da
+    // compra mesmo se o bookkeeping no Supabase falhar, pra não perder o registro do preço.
+    return res.status(207).json({
+      error: `Compra executada na exchange, mas falhou salvar o estado: ${error.message}`,
+      buyPrice: avgPrice, buyQty: filledQty, buyUsdt: quoteQty, buyTime,
     });
-    if (error) return sbError(res, error, 'PATCH multitrade-bot-state insert');
   }
 
   const entry = await enrichSingleMultitradeEntry(multitradeToEntry(fav));

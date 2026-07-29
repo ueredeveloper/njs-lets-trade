@@ -940,6 +940,18 @@ export async function patchMultitradeBotState({
   return res.json();
 }
 
+/** Compra a mercado imediata no capital configurado do favorito (ordem real, não é só bookkeeping). */
+export async function buyMultitradeNow({ symbol, strategyId }) {
+  const res = await fetch('/services/sb/multitrade-buy-now', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ symbol, strategyId }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error ?? `buyMultitradeNow falhou: HTTP ${res.status}`);
+  return body;
+}
+
 export async function fetchMultitradeTrades({ symbol, strategyId, limit } = {}) {
   const params = new URLSearchParams();
   if (symbol)      params.set('symbol', symbol);
