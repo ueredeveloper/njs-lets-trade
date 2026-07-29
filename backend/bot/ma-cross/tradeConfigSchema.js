@@ -54,6 +54,17 @@ const MA_CROSS_DEFAULTS = {
        *  Canal mais largo que isso não cancela a entrada, só empurra pro fluxo de
        *  pending pullback (mesma janela de waitCandles). */
       maxChannelPct: 3,
+      /** Intervalo usado pra conferir a banda ±tolerancePct candle a candle durante o
+       *  PENDING — não precisa ser o mesmo intervalo do cruzamento (entry.ma1/ma2). Com
+       *  entrada em 1h, por exemplo, esperar o candle de 1h fechar pra conferir a banda
+       *  deixa o preço "passar batido" por até 59min depois de já ter alcançado a EMA21/
+       *  EMA50 — pollInterval mais rápido (15m) confere a cada 15min em vez de só na
+       *  hora cheia. waitCandles é sempre contado na unidade de entry.ma1/ma2 (ex.: 7 =
+       *  7h) e escalado pra candles de pollInterval em evaluatePullbackReady, então a
+       *  duração total da espera não muda — só a granularidade da checagem. Se
+       *  pollInterval for igual ou mais lento que entry.ma1/ma2, não faz diferença
+       *  (comportamento igual a antes). */
+      pollInterval: '15m',
     },
   },
 
@@ -433,6 +444,7 @@ function normalizeEma50Proximity(block) {
     tolerancePct: Math.max(0, Number(src.tolerancePct ?? d.tolerancePct)),
     waitCandles:  Math.max(1, Math.round(Number(src.waitCandles ?? d.waitCandles))),
     maxChannelPct: Math.max(0, Number(src.maxChannelPct ?? d.maxChannelPct)),
+    pollInterval: normalizeInterval(src.pollInterval, d.pollInterval),
   };
 }
 

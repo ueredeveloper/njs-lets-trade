@@ -564,6 +564,7 @@ function ema50ProximitySettings(config) {
     tolerancePct: Math.max(0, Number(p.tolerancePct ?? 0.5)),
     waitCandles: Math.max(1, Math.round(Number(p.waitCandles ?? 5))),
     maxChannelPct: Math.max(0, Number(p.maxChannelPct ?? 3)),
+    pollInterval: p.pollInterval ?? '15m',
   };
 }
 
@@ -654,6 +655,15 @@ function getRequiredSpecs(config) {
   if (ema50ProximityEnabled(config)) {
     const p = ema50ProximitySettings(config);
     add(p.interval, p.period + 30);
+    // pollInterval é usado pra conferir a banda candle a candle durante o PENDING (ver
+    // evaluatePullbackReady) — precisa de histórico suficiente pra cobrir toda a janela
+    // de espera (waitCandles, na unidade de entry.ma1/ma2) já escalada pra candles de
+    // pollInterval, senão o candle do sinal cai fora do array buscado.
+    if (entry?.enabled !== false) {
+      const sigIv = signalInterval(entry);
+      const ratio = Math.max(1, Math.round(intervalMs(sigIv) / intervalMs(p.pollInterval)));
+      add(p.pollInterval, Math.max(60, p.waitCandles * ratio + 20));
+    }
   }
 
   const exMa = config.exit?.maCross;
@@ -1311,13 +1321,32 @@ function evaluatePullbackReady(config, cMap, adaptiveDips, pending, adaptiveStre
 
   const entry = config.entry;
   const pb = config.execution?.pullbackEntry ?? {};
-  const wait = ema50ProximityEnabled(config)
+  const usingEma50Proximity = ema50ProximityEnabled(config);
+  let wait = usingEma50Proximity
     ? ema50ProximitySettings(config).waitCandles
     : Math.max(1, Number(pb.waitCandles ?? 2));
   const requirePullback = pb.requirePullback !== false;
   const approachTolerancePct = pb.approachTolerancePct != null ? Number(pb.approachTolerancePct) : null;
   const sigIv = signalInterval(entry);
-  const candles = closedCandlesOnly(cMap[sigIv] ?? []);
+
+  // pollIv é o intervalo escaneado candle a candle abaixo — por padrão o próprio intervalo
+  // do cruzamento (sigIv), mas com ema50Proximity pode ser mais rápido (pollInterval, ex.:
+  // 15m mesmo com entrada em 1h) pra não deixar o preço "passar batido" pela banda entre um
+  // fechamento de hora e outro. wait é sempre contado na unidade de sigIv (ex.: 7 = 7h) e
+  // escalado aqui pra candles de pollIv, preservando a duração real da janela de espera —
+  // só a granularidade da checagem muda. Se pollInterval for igual/mais lento que sigIv
+  // (ou a regra estiver desligada), mantém o comportamento antigo (pollIv = sigIv).
+  let pollIv = sigIv;
+  if (usingEma50Proximity) {
+    const p = ema50ProximitySettings(config);
+    if (intervalMs(p.pollInterval) < intervalMs(sigIv)) {
+      const ratio = Math.max(1, Math.round(intervalMs(sigIv) / intervalMs(p.pollInterval)));
+      pollIv = p.pollInterval;
+      wait = wait * ratio;
+    }
+  }
+
+  const candles = closedCandlesOnly(cMap[pollIv] ?? []);
   const signalOpenTime = Number(pending.signalOpenTime);
   const idx = candles.findIndex(c => Number(c.openTime) === signalOpenTime);
 
