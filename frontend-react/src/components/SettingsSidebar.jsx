@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { reloadCandles } from '../services/api';
+import { reloadCandles, getMaCrossScreenerConfig, saveMaCrossScreenerConfig } from '../services/api';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useI18n } from '../i18n';
 import { useCurrency } from '../contexts/CurrencyContext';
@@ -75,6 +75,46 @@ export default function SettingsSidebar({ open, onClose }) {
   const [reloadInterval, setReloadInterval] = useState('all');
   const [reloadState, setReloadState]     = useState(null);
   const [reloadError, setReloadError]     = useState('');
+
+  const [screenerConfig, setScreenerConfig] = useState(null);
+  const [screenerLoaded, setScreenerLoaded] = useState(false);
+  const [screenerLoadError, setScreenerLoadError] = useState('');
+  const [screenerSaveState, setScreenerSaveState] = useState(null); // null | 'saving' | 'saved' | 'error'
+  const [screenerBlacklistInput, setScreenerBlacklistInput] = useState('');
+
+  useEffect(() => {
+    if (!open || screenerLoaded) return;
+    getMaCrossScreenerConfig()
+      .then((cfg) => { setScreenerConfig(cfg); setScreenerLoaded(true); })
+      .catch((err) => { setScreenerLoadError(err.message); setScreenerLoaded(true); });
+  }, [open, screenerLoaded]);
+
+  function patchScreenerConfig(patch) {
+    setScreenerConfig((prev) => ({ ...prev, ...patch }));
+  }
+
+  async function persistScreenerConfig(next) {
+    setScreenerSaveState('saving');
+    try {
+      const saved = await saveMaCrossScreenerConfig(next);
+      setScreenerConfig(saved);
+      setScreenerSaveState('saved');
+      setTimeout(() => setScreenerSaveState((s) => (s === 'saved' ? null : s)), 2000);
+    } catch {
+      setScreenerSaveState('error');
+    }
+  }
+
+  function addScreenerBlacklistSymbol() {
+    const sym = screenerBlacklistInput.trim().toUpperCase();
+    if (!sym || !screenerConfig || screenerConfig.blacklist.includes(sym)) { setScreenerBlacklistInput(''); return; }
+    patchScreenerConfig({ blacklist: [...screenerConfig.blacklist, sym].sort() });
+    setScreenerBlacklistInput('');
+  }
+
+  function removeScreenerBlacklistSymbol(sym) {
+    patchScreenerConfig({ blacklist: screenerConfig.blacklist.filter((s) => s !== sym) });
+  }
 
   const [minValueInput, setMinValueInput] = useState(String(activeTradesSettings.minHoldingUsdt));
   useEffect(() => {
@@ -506,6 +546,129 @@ export default function SettingsSidebar({ open, onClose }) {
             >
               {t('settings.macross_default_reset')}
             </button>
+          </div>
+
+          {/* Screener automático MA-Cross (exaustão BB+VWAP 4h) */}
+          <div>
+            <p className={section}>{t('settings.screener_title')}</p>
+            <p className="text-[10px] text-p5/50 mb-3 leading-relaxed">{t('settings.screener_hint')}</p>
+
+            {!screenerLoaded && !screenerLoadError && (
+              <p className="text-[10px] text-p5/40">{t('settings.loading')}</p>
+            )}
+            {screenerLoadError && (
+              <p className="text-[10px] text-red-400">{t('settings.screener_load_error')}: {screenerLoadError}</p>
+            )}
+
+            {screenerConfig && (
+              <div className="flex flex-col gap-3">
+                <label className="flex items-start gap-2.5 cursor-pointer group">
+                  <input
+                    type="checkbox"
+                    checked={screenerConfig.enabled}
+                    onChange={(e) => patchScreenerConfig({ enabled: e.target.checked })}
+                    className="mt-0.5 shrink-0 accent-p4"
+                  />
+                  <span className="text-p5 text-xs leading-snug group-hover:text-white transition-colors">
+                    {t('settings.screener_enabled')}
+                  </span>
+                </label>
+
+                <label className="flex flex-col gap-1">
+                  <span className="text-[10px] text-p5/50">{t('settings.screener_min_volume')}</span>
+                  <select
+                    className={inp}
+                    value={String(screenerConfig.minVolume24h)}
+                    onChange={(e) => patchScreenerConfig({ minVolume24h: Number(e.target.value) })}
+                  >
+                    {[1_000_000, 3_000_000, 5_000_000, 10_000_000].map((v) => (
+                      <option key={v} value={v}>{v / 1_000_000}M</option>
+                    ))}
+                  </select>
+                </label>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <label className="flex flex-col gap-1">
+                    <span className="text-[10px] text-p5/50">{t('settings.screener_max_new')}</span>
+                    <input
+                      type="number" min={1} max={50}
+                      className={inp}
+                      value={screenerConfig.maxNewPerCycle}
+                      onChange={(e) => patchScreenerConfig({ maxNewPerCycle: Number(e.target.value) })}
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1">
+                    <span className="text-[10px] text-p5/50">{t('settings.screener_capital')}</span>
+                    <input
+                      type="number" min={0} step={5}
+                      className={inp}
+                      value={screenerConfig.capitalPerSymbol}
+                      onChange={(e) => patchScreenerConfig({ capitalPerSymbol: Number(e.target.value) })}
+                    />
+                  </label>
+                </div>
+
+                <div>
+                  <p className="text-[10px] text-p5/50 mb-1.5">{t('settings.screener_blacklist')}</p>
+                  <p className="text-[10px] text-p5/40 mb-2 leading-relaxed">{t('settings.screener_blacklist_hint')}</p>
+                  <div className="flex gap-2 mb-2">
+                    <input
+                      className={`flex-1 ${inp} placeholder-p5/30`}
+                      placeholder={t('settings.screener_blacklist_ph')}
+                      value={screenerBlacklistInput}
+                      onChange={(e) => setScreenerBlacklistInput(e.target.value.toUpperCase())}
+                      onKeyDown={(e) => e.key === 'Enter' && addScreenerBlacklistSymbol()}
+                    />
+                    <button
+                      type="button"
+                      onClick={addScreenerBlacklistSymbol}
+                      className="px-3 py-1.5 rounded text-xs text-white bg-p3 hover:bg-p4 transition-colors"
+                    >
+                      {t('settings.screener_blacklist_add')}
+                    </button>
+                  </div>
+                  {screenerConfig.blacklist.length > 0 ? (
+                    <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto">
+                      {screenerConfig.blacklist.map((sym) => (
+                        <span
+                          key={sym}
+                          className="flex items-center gap-1 px-2 py-1 text-[10px] font-mono rounded border border-p2/40 text-p5/70"
+                        >
+                          {sym}
+                          <button
+                            type="button"
+                            onClick={() => removeScreenerBlacklistSymbol(sym)}
+                            className="text-p5/40 hover:text-red-400 transition-colors"
+                            title={t('settings.screener_remove')}
+                          >
+                            ×
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-[10px] text-p5/30">{t('settings.screener_blacklist_empty')}</p>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2 mt-1">
+                  <button
+                    type="button"
+                    onClick={() => persistScreenerConfig(screenerConfig)}
+                    disabled={screenerSaveState === 'saving'}
+                    className="px-3 py-1.5 rounded text-xs text-white bg-p3 hover:bg-p4 transition-colors disabled:opacity-50"
+                  >
+                    {screenerSaveState === 'saving' ? t('settings.screener_saving') : t('settings.screener_save')}
+                  </button>
+                  {screenerSaveState === 'saved' && (
+                    <span className="text-[10px] text-emerald-400">{t('settings.screener_saved')}</span>
+                  )}
+                  {screenerSaveState === 'error' && (
+                    <span className="text-[10px] text-red-400">{t('settings.screener_save_error')}</span>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Idioma */}

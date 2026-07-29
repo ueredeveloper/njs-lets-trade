@@ -27,6 +27,7 @@ const { sendWhatsApp } = require('../whatsapp');
 const { maLabel } = require('../../utils/movingAverage');
 const registry = require('../multitradeRegistry');
 const { startMultitradeWatch, configFingerprint } = require('../multitradeWatch');
+const { startExhaustionScreener } = require('./exhaustionScreener');
 const { resolveStrategy } = require('./tradeConfigSchema');
 const { STRATEGY_IDS, isMaCrossStrategy } = require('./strategyPresets');
 const {
@@ -1078,6 +1079,12 @@ async function main() {
     },
     log: console.log,
   });
+
+  // Screener de exaustão BB+VWAP (4h) só roda no processo "full" (todas as moedas
+  // do painel) — o modo --symbol é usado pra debugar uma moeda específica.
+  if (!symbolFilter) {
+    startExhaustionScreener({ sbReq, log: console.log });
+  }
 
   // Volume baixo é só informativo — nunca impede o bot de comprar ou vender.
   const toStart = [];

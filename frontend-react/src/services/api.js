@@ -867,6 +867,33 @@ export async function evaluateFiveMTradeLive({
   return res.json();
 }
 
+// ── Screener automático BB+VWAP (4h) do ma-cross ─────────────────────────────
+
+/**
+ * @returns {Promise<{enabled: boolean, minVolume24h: number, blacklist: string[], maxNewPerCycle: number, capitalPerSymbol: number}>}
+ */
+export async function getMaCrossScreenerConfig() {
+  const res = await fetch('/services/sb/ma-cross-screener-config');
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function saveMaCrossScreenerConfig(config) {
+  const res = await fetch('/services/sb/ma-cross-screener-config', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(config),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 // ── Multitrade Favorites ─────────────────────────────────────────────────────
 
 export async function fetchMultitradeFavorites() {

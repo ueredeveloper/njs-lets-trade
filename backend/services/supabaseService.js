@@ -1946,6 +1946,52 @@ router.post('/user-prefs', getUserId, async (req, res) => {
   });
 });
 
+// ── Config do screener automático BB+VWAP (4h) do ma-cross ──────────────────────
+// enabled:false até o usuário salvar pelo menos uma vez no painel — ver mesma
+// decisão em backend/bot/ma-cross/exhaustionScreener.js.
+const SCREENER_CONFIG_DEFAULTS = {
+  enabled: false, minVolume24h: 5_000_000, blacklist: [], maxNewPerCycle: 5, capitalPerSymbol: 40,
+};
+
+function screenerConfigRowToBody(row) {
+  if (!row) return { ...SCREENER_CONFIG_DEFAULTS };
+  return {
+    enabled:          row.enabled !== false,
+    minVolume24h:     Number(row.min_volume_24h) || SCREENER_CONFIG_DEFAULTS.minVolume24h,
+    blacklist:        Array.isArray(row.blacklist) ? row.blacklist : [],
+    maxNewPerCycle:   Number(row.max_new_per_cycle) || SCREENER_CONFIG_DEFAULTS.maxNewPerCycle,
+    capitalPerSymbol: Number(row.capital_per_symbol) || SCREENER_CONFIG_DEFAULTS.capitalPerSymbol,
+  };
+}
+
+// GET /services/sb/ma-cross-screener-config
+router.get('/ma-cross-screener-config', getUserId, async (req, res) => {
+  const { data, error } = await supabase
+    .from('ma_cross_screener_config').select('*').eq('user_id', req.userId).maybeSingle();
+  if (error) return sbError(res, error, 'GET ma-cross-screener-config');
+  res.json(screenerConfigRowToBody(data));
+});
+
+// PUT /services/sb/ma-cross-screener-config
+router.put('/ma-cross-screener-config', getUserId, async (req, res) => {
+  const body = req.body ?? {};
+  const row = {
+    user_id:            req.userId,
+    enabled:            body.enabled !== false,
+    min_volume_24h:     Math.max(0, Number(body.minVolume24h ?? SCREENER_CONFIG_DEFAULTS.minVolume24h)),
+    blacklist:          Array.isArray(body.blacklist)
+      ? [...new Set(body.blacklist.map(s => String(s).toUpperCase().trim()).filter(Boolean))]
+      : [],
+    max_new_per_cycle:  Math.max(1, Math.round(Number(body.maxNewPerCycle ?? SCREENER_CONFIG_DEFAULTS.maxNewPerCycle))),
+    capital_per_symbol: Math.max(0, Number(body.capitalPerSymbol ?? SCREENER_CONFIG_DEFAULTS.capitalPerSymbol)),
+    updated_at:         new Date().toISOString(),
+  };
+  const { data, error } = await supabase
+    .from('ma_cross_screener_config').upsert(row, { onConflict: 'user_id' }).select().single();
+  if (error) return sbError(res, error, 'PUT ma-cross-screener-config');
+  res.json(screenerConfigRowToBody(data));
+});
+
 // Captura erros assíncronos que escapam dos handlers (Express 4 não faz isso automaticamente).
 // Sem este handler, um throw dentro de um async route crasharia o processo inteiro.
 // eslint-disable-next-line no-unused-vars
