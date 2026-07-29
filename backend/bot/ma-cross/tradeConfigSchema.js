@@ -95,6 +95,19 @@ const MA_CROSS_DEFAULTS = {
       ma2:          { period: 21, interval: '30m' },
       direction:    'cross_down',
       tolerancePct: 0.1,
+      /** Quando EMA9/EMA21 (intervalo acima, ex.: 30m) já estão próximas (dentro de
+       *  proximityPct uma da outra) mas ainda não cruzaram no candle fechado, passa a
+       *  também computar as MESMAS EMAs (mesmos períodos) num intervalo mais rápido
+       *  (interval, ex.: 15m) e vende assim que ESSE cruzamento fechar — não espera o
+       *  candle de 30m fechar pra confirmar algo que já era visível mais cedo no 15m.
+       *  Ligado por padrão; proximityPct apertado (0.3%) pra só acelerar quando o
+       *  cruzamento já está mesmo iminente, evitando ruído de candles de 15m longe do
+       *  cruzamento "de verdade" no intervalo configurado. */
+      fastCheck: {
+        enabled:      true,
+        proximityPct: 0.3,
+        interval:     '15m',
+      },
     },
     rsi: {
       enabled:    false,
@@ -434,6 +447,16 @@ function normalizeCrossLookback(v) {
   return Math.max(1, Math.min(10, Math.round(Number(v ?? d))));
 }
 
+function normalizeExitMaCrossFastCheck(block) {
+  const d = MA_CROSS_DEFAULTS.exit.maCross.fastCheck;
+  const src = block ?? {};
+  return {
+    enabled:      src.enabled !== false,
+    proximityPct: Math.max(0, Number(src.proximityPct ?? d.proximityPct)),
+    interval:     normalizeInterval(src.interval, d.interval),
+  };
+}
+
 function normalizeEma50Proximity(block) {
   const d = MA_CROSS_DEFAULTS.entry.ema50Proximity;
   const src = block ?? {};
@@ -525,6 +548,7 @@ function normalizeMaCrossConfig(body = {}) {
       maCross: {
         ...maCrossExit,
         enabled: exitBody.maCross?.enabled ?? (exitBody.ma1 ? true : d.exit.maCross.enabled),
+        fastCheck: normalizeExitMaCrossFastCheck(exitBody.maCross?.fastCheck ?? exitBody.fastCheck),
       },
       rsi: {
         enabled:    rsiRaw.enabled === true,

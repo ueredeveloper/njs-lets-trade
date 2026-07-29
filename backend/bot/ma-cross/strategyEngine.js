@@ -568,6 +568,20 @@ function ema50ProximitySettings(config) {
   };
 }
 
+/** Mesma convenção de ema50ProximityEnabled: ausência do campo (config montado à mão,
+ *  fora do schema) significa desligada. */
+function exitMaCrossFastCheckEnabled(exMa) {
+  return exMa?.fastCheck?.enabled === true;
+}
+
+function exitMaCrossFastCheckSettings(exMa) {
+  const f = exMa?.fastCheck ?? {};
+  return {
+    proximityPct: Math.max(0, Number(f.proximityPct ?? 0.3)),
+    interval: f.interval ?? '15m',
+  };
+}
+
 function maAtOpenTime(cMap, interval, period, openTime) {
   const candles = closedCandlesOnly(cMap[interval] ?? []);
   return maValueAt(buildMaTimeSeries(candles, period), openTime);
@@ -671,6 +685,12 @@ function getRequiredSpecs(config) {
     add(exMa.ma1.interval, exMa.ma1.period + 30);
     if (exMa.ma2.interval !== exMa.ma1.interval) {
       add(exMa.ma2.interval, exMa.ma2.period + 30);
+    }
+    // fastCheck recomputa as MESMAS EMAs num intervalo mais rápido quando elas já estão
+    // próximas — ver evaluateExit. Período usa o maior dos dois (mesma folga de warmup).
+    if (exitMaCrossFastCheckEnabled(exMa)) {
+      const fast = exitMaCrossFastCheckSettings(exMa);
+      add(fast.interval, Math.max(exMa.ma1.period, exMa.ma2.period) + 30);
     }
   }
 
@@ -1884,14 +1904,55 @@ function evaluateExit(config, cMap, entryPrice, opts = {}) {
         exitDesc: `${maLabel(exMa.ma1.period, exMa.ma1.interval)} ${dirLbl} ${maLabel(exMa.ma2.period, exMa.ma2.interval)}`,
         ma1: cross.ma1, ma2: cross.ma2, close: cross.close,
       });
-    } else if (opts.entryOpenTime != null) {
-      const fallback = evaluateHtfFallbackExit(config, cMap, opts.entryOpenTime, closedOnly);
-      if (fallback.hit) {
-        signals.push({
-          kind: 'maHtfFallback',
-          exitDesc: fallback.exitDesc,
-          ma1: fallback.ma1, ma2: fallback.ma2, close: fallback.close,
+    } else {
+      // EMAs do intervalo configurado (ex.: 30m) ainda não cruzaram no candle fechado, mas
+      // já estão próximas — recomputa as MESMAS EMAs num intervalo mais rápido (ex.: 15m) e
+      // vende assim que ESSE cruzamento fechar, sem esperar o candle de 30m fechar pra
+      // confirmar algo que já era visível mais cedo no intervalo rápido.
+      let fastHit = false;
+      if (exitMaCrossFastCheckEnabled(exMa)) {
+        const fast = exitMaCrossFastCheckSettings(exMa);
+        const nearMode = (exMa.direction ?? 'cross_down') === 'cross_up' ? 'near_up' : 'near_down';
+        const near = checkMaCrossNearProximity({
+          candles1: cMap[exMa.ma1.interval] ?? [],
+          period1: exMa.ma1.period, interval1: exMa.ma1.interval,
+          candles2: cMap[exMa.ma2.interval] ?? [],
+          period2: exMa.ma2.period, interval2: exMa.ma2.interval,
+          mode: nearMode,
+          proximityPct: fast.proximityPct,
+          closedOnly,
         });
+        if (near.matched) {
+          const fastCross = checkMaCrossover({
+            candles1: cMap[fast.interval] ?? [],
+            period1: exMa.ma1.period, interval1: fast.interval,
+            candles2: cMap[fast.interval] ?? [],
+            period2: exMa.ma2.period, interval2: fast.interval,
+            direction: exMa.direction ?? 'cross_down',
+            tolerancePct: exMa.tolerancePct ?? 0,
+            closedOnly,
+          });
+          if (fastCross.crossed) {
+            const dirLbl = exMa.direction === 'cross_up' ? '↑' : '↓';
+            signals.push({
+              kind: 'ma',
+              exitDesc: `${maLabel(exMa.ma1.period, fast.interval)} ${dirLbl} ${maLabel(exMa.ma2.period, fast.interval)}`
+                + ` (checagem rápida — EMAs próximas no ${exMa.ma1.interval})`,
+              ma1: fastCross.ma1, ma2: fastCross.ma2, close: fastCross.close,
+            });
+            fastHit = true;
+          }
+        }
+      }
+      if (!fastHit && opts.entryOpenTime != null) {
+        const fallback = evaluateHtfFallbackExit(config, cMap, opts.entryOpenTime, closedOnly);
+        if (fallback.hit) {
+          signals.push({
+            kind: 'maHtfFallback',
+            exitDesc: fallback.exitDesc,
+            ma1: fallback.ma1, ma2: fallback.ma2, close: fallback.close,
+          });
+        }
       }
     }
   }
@@ -2250,4 +2311,6 @@ module.exports = {
   ema50ProximitySettings,
   checkEma50ProximityChannel,
   checkEma50ProximityBand,
+  exitMaCrossFastCheckEnabled,
+  exitMaCrossFastCheckSettings,
 };

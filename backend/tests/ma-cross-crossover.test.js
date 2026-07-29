@@ -509,6 +509,83 @@ describe('MA Cross — stop trailing', () => {
   });
 });
 
+describe('MA Cross — saída fastCheck (EMAs próximas no intervalo normal, cruzamento confirmado no rápido)', () => {
+  function makeCandlesInterval(closes, stepMs) {
+    return closes.map((close, i) => ({
+      openTime: i * stepMs, open: close, high: close, low: close, close,
+    }));
+  }
+
+  // Mesma subida de buildCrossDownSeries, mas sem o empurrão final — EMA9 chega perto
+  // da EMA21 por cima (gapPct ~0.03%) sem cruzar de fato.
+  function buildNearButNotCrossedSeries(stepMs) {
+    const closes = [];
+    for (let i = 0; i < 60; i++) closes.push(100 + i * 0.05);
+    for (let i = 0; i < 5; i++) closes.push(closes.at(-1) - 0.28);
+    return makeCandlesInterval(closes, stepMs);
+  }
+
+  // Subida curta e íngreme — EMA9 fica bem acima da EMA21 (gapPct > 3%), longe de cruzar.
+  function buildFarSeries(stepMs) {
+    const closes = Array.from({ length: 30 }, (_, i) => 100 + i * 0.6);
+    return makeCandlesInterval(closes, stepMs);
+  }
+
+  const baseConfig = {
+    entry: { ma1: { interval: '15m' }, ma2: { interval: '15m' } },
+    exit: {
+      logic: 'any',
+      maCross: {
+        enabled: true,
+        ma1: { period: 9, interval: '30m' },
+        ma2: { period: 21, interval: '30m' },
+        direction: 'cross_down',
+        tolerancePct: 0.1,
+        fastCheck: { enabled: true, proximityPct: 0.5, interval: '15m' },
+      },
+      rsi: { enabled: false },
+    },
+    stopLoss: { enabled: false },
+  };
+
+  test('EMAs próximas no 30m (sem cruzar) + cruzamento confirmado no 15m → vende', () => {
+    const cMap = { '30m': buildNearButNotCrossedSeries(1_800_000), '15m': buildCrossDownSeries() };
+    const hit = evaluateExit(baseConfig, cMap, 100, {});
+    expect(hit.exit).toBe(true);
+    expect(hit.reason).toBe('MA_CROSS_EXIT');
+    expect(hit.exitDesc).toMatch(/checagem rápida/);
+  });
+
+  test('mesmo cenário com fastCheck desligado não vende (só o 30m conta)', () => {
+    const cfgOff = {
+      ...baseConfig,
+      exit: { ...baseConfig.exit, maCross: { ...baseConfig.exit.maCross, fastCheck: { enabled: false } } },
+    };
+    const cMap = { '30m': buildNearButNotCrossedSeries(1_800_000), '15m': buildCrossDownSeries() };
+    const hit = evaluateExit(cfgOff, cMap, 100, {});
+    expect(hit.exit).toBe(false);
+  });
+
+  test('EMAs longe uma da outra no 30m → fastCheck não acelera mesmo com cruzamento no 15m', () => {
+    const cMap = { '30m': buildFarSeries(1_800_000), '15m': buildCrossDownSeries() };
+    const hit = evaluateExit(baseConfig, cMap, 100, {});
+    expect(hit.exit).toBe(false);
+  });
+
+  test('config montada à mão (sem passar pelo schema) mantém fastCheck desligado por padrão', () => {
+    const cfgNoFastCheck = {
+      ...baseConfig,
+      exit: {
+        ...baseConfig.exit,
+        maCross: { ...baseConfig.exit.maCross, fastCheck: undefined },
+      },
+    };
+    const cMap = { '30m': buildNearButNotCrossedSeries(1_800_000), '15m': buildCrossDownSeries() };
+    const hit = evaluateExit(cfgNoFastCheck, cMap, 100, {});
+    expect(hit.exit).toBe(false);
+  });
+});
+
 describe('MA Cross — teto acima da MA2', () => {
   const { checkEntryMaxAboveMa2 } = require('../bot/ma-cross/strategyEngine');
 
