@@ -15,11 +15,14 @@ const LEVEL_LABELS = {
 
 /**
  * Escada de setups: cada um é "toque no nível de baixo → fechamento acima do nível do
- * meio → compra nesse nível (retorno) → venda no nível de cima". Restrito de propósito ao
- * degrau lower1→vwap→upper1 — o usuário não quer trades que toquem ou usem lower2/upper2
- * (nem como stop, nem como alvo), só operar dentro da faixa upper1↔vwap↔lower1.
+ * meio → compra nesse nível (retorno) → venda no nível de cima". Dois degraus:
+ *   - lower2→lower1→vwap: compra na volta à -1σ, vende na linha principal, stop na -2σ.
+ *   - lower1→vwap→upper1: compra na volta à linha principal, vende na +1σ, stop na -1σ.
+ * upper2 nunca aparece (nem como alvo, nem como stop) — o usuário não opera acima da +1σ;
+ * lower2 só é usado como stop do degrau de baixo, nunca como alvo/gatilho de entrada.
  */
 const LADDER_SETUPS = [
+  { id: 'lower2_lower1_vwap', touch: 'lower2', confirm: 'lower1', target: 'vwap' },
   { id: 'lower1_vwap_upper1', touch: 'lower1', confirm: 'vwap', target: 'upper1' },
 ];
 
