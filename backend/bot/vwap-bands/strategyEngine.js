@@ -212,17 +212,26 @@ function evaluateEntrySignal(config, cMap) {
 
   if (!best) return { allowed: false, reason: lastReason, close: lastClose };
 
+  // close/confirmOpenTime têm que ser do candle que DE FATO reconquistou o nível
+  // (best.reclaimIdx), não do último candle fechado — senão o "horário do sinal" fica
+  // avançando a cada tick em que o degrau continua válido (o `held` já garante que não
+  // fechou de volta abaixo do nível desde a reconquista), inclusive travestindo um candle
+  // de baixa qualquer (o mais recente fechado) de "o candle que armou a compra". Isso
+  // também quebraria a preempção em PENDING (freshSignal.confirmOpenTime > signalOpenTime
+  // seria sempre verdadeiro enquanto o degrau seguisse válido) e o cálculo de `waited`/
+  // `mainCloseTime` do pullback, que dependem do horário real da reconquista.
+  const reclaimCandle = candles[best.reclaimIdx];
   return {
     allowed: true,
     setupId: best.setup.id,
     touchLevel: best.setup.touch,
     confirmLevel: best.setup.confirm,
     targetLevel: best.setup.target,
-    close: lastClose,
+    close: parseFloat(reclaimCandle.close),
     confirmLevelValue: best.confirmLevelValue,
     targetLevelValue: best.targetLevelValue,
     bandDistPct: best.bandDistPct,
-    confirmOpenTime: candles[lastIdx].openTime,
+    confirmOpenTime: reclaimCandle.openTime,
     entryDesc: `VWAP(${vwapIv},${entry.session}) fechamento acima ${labelForLevel(best.setup.confirm)}`,
   };
 }
