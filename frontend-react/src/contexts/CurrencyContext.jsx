@@ -26,6 +26,7 @@ import {
 import {
   CHART_INTERVAL_OPTIONS,
   PANEL_KEYS,
+  FAVORITE_BUTTON_KEYS,
   loadUiPreferences,
   saveUiPreferences,
   normalizeOverlaySlots,
@@ -43,13 +44,6 @@ import {
 } from '../utils/uiPreferences';
 
 const CurrencyContext = createContext(null);
-
-/** Favoritos do painel MA-Cross (fase vem de rsi_multi_bot_state). */
-function isMaCrossFavoriteEntry(e) {
-  return e?.strategyId === 'ma-cross'
-    || e?.kind === 'ma_cross'
-    || e?.tradeConfig?.kind === 'ma_cross';
-}
 
 /** Poll da fase BOUGHT/WATCHING após compra/venda do bot. */
 const MULTITRADE_STATE_POLL_MS = 30_000;
@@ -274,7 +268,7 @@ export function CurrencyProvider({ children }) {
   const refreshMultitradeFavorites = useCallback(async () => {
     try {
       const list = await fetchMultitradeFavorites();
-      setMultitradeFavorites(list.filter(isMaCrossFavoriteEntry));
+      setMultitradeFavorites(list);
       return list;
     } catch (err) {
       console.warn('[CurrencyContext] refreshMultitradeFavorites:', err.message);
@@ -419,7 +413,7 @@ export function CurrencyProvider({ children }) {
     if (!entry?.symbol && !symbol) {
       setMultitradeChartFocus(prev => {
         if (!prev) return null;
-        const { overlaySlots, adaptiveBands, symbol: _s, ...rest } = prev;
+        const { overlaySlots: _o, adaptiveBands: _a, vwapOverride: _v, symbol: _s, ...rest } = prev;
         return Object.keys(rest).length ? rest : null;
       });
       return;
@@ -437,9 +431,38 @@ export function CurrencyProvider({ children }) {
       // MA-Cross → null: não troca MA1/MA2 do usuário (padrão 50@1h)
       if (strategySlots) next.overlaySlots = strategySlots;
       else delete next.overlaySlots;
+      // Troca de favorito ma-cross → vwap-bands (ou vice-versa) sem passar por "limpar":
+      // não deixa a banda de VWAP forçada da seleção anterior vazar aqui.
+      delete next.vwapOverride;
       return next;
     });
   }, []);
+
+  /** Mesma ideia do overlay do ma-cross, mas força a banda de VWAP (não os slots de MA) —
+   *  usa vwapInterval/session configurados no favorito vwap-bands, igual ao que o bot vigia. */
+  const applyChartVwapBandsOverlay = useCallback((entry, symbol) => {
+    if (!entry?.symbol && !symbol) {
+      applyChartMaCrossOverlay(null);
+      return;
+    }
+    const sym = (symbol ?? entry.symbol)?.toUpperCase();
+    const e = entry?.entry ?? entry?.tradeConfig?.entry ?? {};
+    setMultitradeChartFocus(prev => {
+      const next = {
+        ...(prev ?? {}),
+        symbol: sym,
+        adaptiveBands: null,
+        vwapOverride: {
+          enabled: true,
+          interval: e.vwapInterval ?? '4h',
+          session: e.session ?? 'weekly',
+          bands: true,
+        },
+      };
+      delete next.overlaySlots;
+      return next;
+    });
+  }, [applyChartMaCrossOverlay]);
 
   const clearMultitradeChartView = useCallback(() => {
     setChartViewSource(prev => (prev === CHART_VIEW.MULTITRADE ? CHART_VIEW.DEFAULT : prev));
@@ -552,6 +575,18 @@ export function CurrencyProvider({ children }) {
       const next = {
         ...prev,
         visiblePanels: { ...prev.visiblePanels, [key]: enabled },
+      };
+      saveUiPreferences(next);
+      return next;
+    });
+  }, []);
+
+  const setFavoriteButtonVisible = useCallback((key, enabled) => {
+    if (!FAVORITE_BUTTON_KEYS.includes(key)) return;
+    setUiPrefsState((prev) => {
+      const next = {
+        ...prev,
+        visibleFavoriteButtons: { ...prev.visibleFavoriteButtons, [key]: enabled },
       };
       saveUiPreferences(next);
       return next;
@@ -840,13 +875,14 @@ export function CurrencyProvider({ children }) {
     });
   }, [rawCurrencies.list.length, ensureMarketHighlights]);
 
-  // Carrega favoritos MA-Cross e sincroniza fase (BOUGHT/WATCHING) com o bot
+  // Carrega favoritos multi-trade (todas as estratégias: ma-cross, vwap-bands, swing, amap)
+  // e sincroniza fase (BOUGHT/WATCHING) com os bots.
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
       try {
         const list = await fetchMultitradeFavorites();
-        if (!cancelled) setMultitradeFavorites(list.filter(isMaCrossFavoriteEntry));
+        if (!cancelled) setMultitradeFavorites(list);
       } catch (err) {
         if (!cancelled) console.warn('[CurrencyContext] loadMultitradeFavorites:', err.message);
       }
@@ -903,6 +939,8 @@ export function CurrencyProvider({ children }) {
         setDefaultChartInterval,
         setCommonChartIntervals,
         setPanelVisible,
+        setFavoriteButtonVisible,
+        favoriteButtonKeys: FAVORITE_BUTTON_KEYS,
         setOverlaySlotsPreference,
         setMaBandsDefaults,
         setBollingerBandsDefaults,
@@ -937,6 +975,7 @@ export function CurrencyProvider({ children }) {
         applyMultitradeChartView,
         applyMultitradeSymbolChart,
         applyChartMaCrossOverlay,
+        applyChartVwapBandsOverlay,
         clearMultitradeChartView,
         applyFiveMTradeChartView,
         clearFiveMTradeChartView,

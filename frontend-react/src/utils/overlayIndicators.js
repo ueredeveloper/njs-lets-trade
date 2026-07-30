@@ -89,13 +89,53 @@ export async function fetchBollingerLines(symbol, interval, period, stdDev, sour
 }
 
 /**
+ * Bandas de VWAP de sessão (±bandMultiplier σ) no intervalo/sessão dados — upper/middle/lower
+ * como pares [time, value], mesma forma da fetchBollingerLines (reaproveitada pelo renderer).
+ */
+export async function fetchVwapBandsLines(symbol, interval, session, bandMultiplier, source, fromMs) {
+  // Sem "período" real aqui (a VWAP reseta por sessão, não por candles) — usa um buffer
+  // generoso o bastante pra cobrir algumas sessões semanais antes da janela visível.
+  const limit = overlayFetchLimit(fromMs, interval, 200);
+  const candles = await fetchCandlesRaw(symbol, interval, limit, source);
+  if (!Array.isArray(candles) || !candles.length) return null;
+  const points = await fetch(`/services/vwap?session=${session}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(candles),
+  }).then(r => r.json());
+  if (!Array.isArray(points)) return null;
+  const upperKey = `upper${bandMultiplier}`;
+  const lowerKey = `lower${bandMultiplier}`;
+  return {
+    upper:  trimToWindow(points.map(p => [Number(p.openTime), p[upperKey]]), fromMs, interval),
+    middle: trimToWindow(points.map(p => [Number(p.openTime), p.value]), fromMs, interval),
+    lower:  trimToWindow(points.map(p => [Number(p.openTime), p[lowerKey]]), fromMs, interval),
+  };
+}
+
+/**
  * Deriva as linhas de EMA usadas pelas regras de um tradeConfig ma-cross
  * (entrada, tendência, aproximação, filtros MA, cruzamento de saída),
  * deduplicadas por período+intervalo (várias regras podem apontar pra
  * mesma EMA), mais a Bollinger de saída se ligada.
+ * Pra vwap-bands, mostra a banda de VWAP (±2σ) do próprio favorito em vez de EMAs.
  */
 export function strategyLineDefsFromTradeConfig(tradeConfig) {
   if (!tradeConfig) return [];
+
+  if (tradeConfig.kind === 'vwap_bands') {
+    const e = tradeConfig.entry ?? {};
+    const session = e.session ?? 'weekly';
+    return [{
+      id: 'vwap-bands-2sigma',
+      kind: 'vwapBands',
+      interval: e.vwapInterval ?? e.interval ?? '4h',
+      session,
+      bandMultiplier: 2,
+      color: '#a78bfa',
+      label: `VWAP(${session === 'weekly' ? 'semanal' : 'diária'}) ±2σ`,
+    }];
+  }
 
   const emaMap = new Map();
   const addEma = (leg, purpose) => {

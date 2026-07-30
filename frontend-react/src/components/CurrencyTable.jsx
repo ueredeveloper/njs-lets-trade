@@ -12,6 +12,7 @@ import { useI18n } from '../i18n';
 import MultitradeModal from './MultitradeModal';
 import MultitradeBotStateModal from './MultitradeBotStateModal';
 import MultitradeSellModal from './MultitradeSellModal';
+import VwapBandsFavoriteModal from './VwapBandsFavoriteModal';
 import { getEntriesForSymbol } from '../constants/strategyPresets';
 import { CHART_VIEW } from '../utils/chartView';
 import {
@@ -44,6 +45,7 @@ import TradeFavSortSelect from './TradeFavSortSelect';
 const GATE_COLOR    = '#0068ff';
 const BINANCE_COLOR = '#fcd535';
 const MT_COLOR      = '#22d3ee';
+const VWAP_BANDS_COLOR = '#a78bfa';
 const TRADE_COLOR   = '#00c076';
 const ACTIVE_COLOR  = '#f59e0b';
 const ALTA_COLOR    = '#f97316';
@@ -72,6 +74,10 @@ function isMaCrossEntryLocal(e) {
 
 function getMaCrossEntries(favorites, symbol) {
   return getEntriesForSymbol(favorites, symbol).filter(isMaCrossEntryLocal);
+}
+
+function getVwapBandsEntry(favorites, symbol) {
+  return getEntriesForSymbol(favorites, symbol).find(e => e.strategyId === 'vwap-bands') ?? null;
 }
 
 
@@ -279,7 +285,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   const {
     currencies, findFilter, selectedQuote,     selectedChart, setSelectedChart, setChartZoom, setChartTradeMarkers,
     setChartViewSource, clearMultitradeChartView, chartInterval, setChartInterval,
-    applyMultitradeSymbolChart, applyChartMaCrossOverlay,
+    applyMultitradeSymbolChart, applyChartMaCrossOverlay, applyChartVwapBandsOverlay,
     gateFavorites, binanceFavorites,
     toggleGateFavorite, toggleBinanceFavorite,
     setTradePurchases, setAllTrades,
@@ -290,12 +296,14 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     ensureMarketHighlights, marketHighlightsLoading,
     favoriteView, toggleFavoriteView, clearFavoriteView,
     resetChartCandleWindow,
+    uiPrefs,
   } = useCurrency();
-  const { t, formatPrice } = useI18n();
+  const { t, lang, formatPrice } = useI18n();
   const isMobile = useIsMobile();
   const [loadingSymbol, setLoadingSymbol]       = useState(null);
   const [activeRow, setActiveRow]               = useState(null);
   const [mtModal, setMtModal]       = useState(null);
+  const [vwapModal, setVwapModal]   = useState(null);
   const [mtStateModal, setMtStateModal] = useState(null);
   const [mtSellEntry, setMtSellEntry] = useState(null);
   const [search, setSearch]               = useState('');
@@ -461,6 +469,22 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
       for (const sym of filtered) {
         if (!have.has(sym)) list.push({ symbol: sym, price: 0, volume: 0 });
       }
+    } else if (favoriteView === 'vwap-bands') {
+      const vbEntries = multitradeFavorites.filter(e => e.enabled !== false && e.strategyId === 'vwap-bands');
+      const vbSymbols = vbEntries.map(e => e.symbol);
+      const vbPhaseBySymbol = new Map(vbEntries.map(e => [e.symbol, e.phase ?? 'WATCHING']));
+      list = resolveFavorites(new Set(vbSymbols), currencies.list, gateAll);
+      const have = new Set(list.map(c => c.symbol));
+      for (const sym of vbSymbols) {
+        if (!have.has(sym)) list.push({ symbol: sym, price: 0, volume: 0 });
+      }
+      // Compradas primeiro — é o que mais importa acompanhar (posição real aberta).
+      const vbPhaseRank = { BOUGHT: 0, PENDING: 1, WATCHING: 2 };
+      list = list.slice().sort((a, b) => {
+        const ra = vbPhaseRank[vbPhaseBySymbol.get(a.symbol) ?? 'WATCHING'] ?? 2;
+        const rb = vbPhaseRank[vbPhaseBySymbol.get(b.symbol) ?? 'WATCHING'] ?? 2;
+        return ra - rb;
+      });
     } else if (favoriteView === 'trades') {
       const filtered = filterTradeFavorites(tradeFavSymbols, tradeFavStatus, tradeFavSort);
       list = resolveFavorites(new Set(filtered), currencies.list, gateAll);
@@ -680,6 +704,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   // Recarrega Gate quando filtros de mercado/favoritos Gate exigem fallback
   useEffect(() => {
     const needGate = favoriteView === 'gate' || favoriteView === 'macross'
+      || favoriteView === 'vwap-bands'
       || favoriteView === 'trades' || favoriteView === 'active'
       || needsGateFallback(activeFilter);
     if (!needGate) return;
@@ -726,24 +751,30 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
       const mtEntries = getMaCrossEntries(multitradeFavorites, item.symbol).filter(e => e.enabled !== false);
       const mtEntry = mtEntries[0] ?? null;
       const isMT = !!mtEntry && !isTradesFavView;
+      const vwapEntryRaw = getVwapBandsEntry(multitradeFavorites, item.symbol);
+      const vwapEntry = !isMT && vwapEntryRaw?.enabled !== false ? vwapEntryRaw : null;
+      const isVwapBot = !isMT && !!vwapEntry && !isTradesFavView;
+      const botEntry = isMT ? mtEntry : vwapEntry;
+      const isBotFavorite = isMT || isVwapBot;
 
       let effectiveInterval = chartInterval || selectedChart?.interval || '15m';
       if (filterChartInterval) {
         effectiveInterval = filterChartInterval;
-      } else if (isMT) {
-        effectiveInterval = resolveTradeChartInterval(mtEntry, null);
+      } else if (isBotFavorite) {
+        effectiveInterval = resolveTradeChartInterval(botEntry, null);
       }
 
       setChartInterval(effectiveInterval);
       setChartViewSource(
         isTradesFavView ? CHART_VIEW.TRADES
-          : (isMT && !filterChartInterval ? CHART_VIEW.MULTITRADE : CHART_VIEW.TABLE),
+          : (isBotFavorite && !filterChartInterval ? CHART_VIEW.MULTITRADE : CHART_VIEW.TABLE),
       );
 
-      // Favorito MA-Cross só manda no chart quando não há filtro com intervalo explícito
-      if (isMT && !filterChartInterval) {
-        applyChartMaCrossOverlay(mtEntry, item.symbol);
-        await loadMultitradeSymbolChart(mtEntry, {
+      // Favorito MA-Cross/VWAP Bands só manda no chart quando não há filtro com intervalo explícito
+      if (isBotFavorite && !filterChartInterval) {
+        if (isMT) applyChartMaCrossOverlay(botEntry, item.symbol);
+        else applyChartVwapBandsOverlay(botEntry, item.symbol);
+        await loadMultitradeSymbolChart(botEntry, {
           fetchCandlesticksAndCloud,
           fetchMultitradeTrades,
           applyMultitradeSymbolChart,
@@ -819,6 +850,9 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   const activeCount  = activeTrades.size;
   const mtCount      = new Set(
     multitradeFavorites.filter(e => e.enabled !== false && isMaCrossEntry(e)).map(e => e.symbol),
+  ).size;
+  const vwapCount    = new Set(
+    multitradeFavorites.filter(e => e.enabled !== false && e.strategyId === 'vwap-bands').map(e => e.symbol),
   ).size;
 
   /** Somatório do PnL das linhas visíveis (respeita filtro ativo). */
@@ -959,6 +993,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
         </div>
 
         <div className="flex gap-1.5 overflow-x-auto pb-0.5 -mx-1 px-1 scrollbar-thin touch-pan-x">
+          {uiPrefs.visibleFavoriteButtons.active !== false && (
           <ToolbarBtn
             id="currency-table-btn-filter-active"
             active={favoriteView === 'active'}
@@ -968,6 +1003,8 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
             title={favoriteView === 'active' ? t('fav.toolbar.active_on') : t('fav.toolbar.active', activeCount)}
             onClick={() => handleToggleFavoriteView('active')}
           />
+          )}
+          {uiPrefs.visibleFavoriteButtons.trades !== false && (
           <ToolbarBtn
             id="currency-table-btn-filter-trades"
             active={favoriteView === 'trades'}
@@ -977,6 +1014,8 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
             title={favoriteView === 'trades' ? t('fav.toolbar.trades_active') : t('fav.toolbar.trades', tradeCount)}
             onClick={() => handleToggleFavoriteView('trades')}
           />
+          )}
+          {uiPrefs.visibleFavoriteButtons.macross !== false && (
           <ToolbarBtn
             id="currency-table-btn-filter-macross"
             active={favoriteView === 'macross'}
@@ -986,6 +1025,19 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
             title={favoriteView === 'macross' ? t('fav.toolbar.macross_active') : t('fav.toolbar.macross', mtCount)}
             onClick={() => handleToggleFavoriteView('macross')}
           />
+          )}
+          {uiPrefs.visibleFavoriteButtons['vwap-bands'] !== false && (
+          <ToolbarBtn
+            id="currency-table-btn-filter-vwap-bands"
+            active={favoriteView === 'vwap-bands'}
+            color={VWAP_BANDS_COLOR}
+            label="VWAP"
+            count={vwapCount}
+            title={favoriteView === 'vwap-bands' ? 'Favoritos VWAP Bands — clique pra sair' : `Favoritos VWAP Bands (${vwapCount})`}
+            onClick={() => handleToggleFavoriteView('vwap-bands')}
+          />
+          )}
+          {uiPrefs.visibleFavoriteButtons.gate !== false && (
           <ToolbarBtn
             active={favoriteView === 'gate'}
             color={GATE_COLOR}
@@ -994,6 +1046,8 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
             title={favoriteView === 'gate' ? t('fav.toolbar.gate_active') : t('fav.toolbar.gate', gateCount)}
             onClick={() => handleToggleFavoriteView('gate')}
           />
+          )}
+          {uiPrefs.visibleFavoriteButtons.binance !== false && (
           <ToolbarBtn
             active={favoriteView === 'binance'}
             color={BINANCE_COLOR}
@@ -1002,6 +1056,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
             title={favoriteView === 'binance' ? t('fav.toolbar.binance_active') : t('fav.toolbar.binance', binanceCount)}
             onClick={() => handleToggleFavoriteView('binance')}
           />
+          )}
           <ToolbarBtn
             active={activeFilter === HIGHLIGHT_FILTERS.ALTA_BINANCE}
             color={ALTA_COLOR}
@@ -1266,6 +1321,8 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
               const isBinance  = binanceFavorites.has(item.symbol);
               const mtEntries  = getMaCrossEntries(multitradeFavorites, item.symbol);
               const isMT       = mtEntries.some(e => e.enabled !== false);
+              const vwapEntry  = getVwapBandsEntry(multitradeFavorites, item.symbol);
+              const isVwap     = vwapEntry?.enabled !== false && !!vwapEntry;
               const activeInfo = activeTrades.get(item.symbol);
               const isActiveHolding = !!activeInfo;
               const tradeMeta  = isTradesFavView ? tradeFavStatus[item.symbol] : null;
@@ -1302,12 +1359,23 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                     onClick={(e) => e.stopPropagation()}
                   >
                     <div className="flex flex-nowrap items-center gap-0.5">
+                      {uiPrefs.visibleFavoriteButtons.gate !== false && (
                       <FavButton tipKey="gate" kind="G" symbol={item.symbol} active={isGate}    color={GATE_COLOR}    label="Gate"    onClick={() => toggleGateFavorite(item.symbol)} />
+                      )}
+                      {uiPrefs.visibleFavoriteButtons.binance !== false && (
                       <FavButton tipKey="binance" kind="B" symbol={item.symbol} active={isBinance} color={BINANCE_COLOR} label="Binance" onClick={() => toggleBinanceFavorite(item.symbol)} />
+                      )}
+                      {uiPrefs.visibleFavoriteButtons.macross !== false && (
                       <FavButton tipKey="macross" kind="MC" symbol={item.symbol} active={isMT}      color={MT_COLOR}      label="MA-Cross" text="MC" onClick={() => {
                         console.log(`${FAV_LOG} MC abrir modal`, { symbol: item.symbol, entries: mtEntries.length, isMT });
                         setMtModal({ symbol: item.symbol, exchange: isGate && !isBinance ? 'gate' : 'binance', entries: mtEntries });
                       }} />
+                      )}
+                      {uiPrefs.visibleFavoriteButtons['vwap-bands'] !== false && (
+                      <FavButton kind="VWAP" text="VW" symbol={item.symbol} active={isVwap} color={VWAP_BANDS_COLOR} label="VWAP Bands" onClick={() => {
+                        setVwapModal({ symbol: item.symbol, exchange: isGate && !isBinance ? 'gate' : 'binance', entry: vwapEntry });
+                      }} />
+                      )}
                     </div>
                   </td>
 
@@ -1316,10 +1384,11 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                     style={{ width: parColWidth }}
                   >
                     <div className={parContentClass}>
-                      {isMT && !isTradesFavView && !isActiveFavView ? (() => {
-                        const mtPhase = symbolPhaseSummary(mtEntries);
-                        const mtPh = multitradePhaseBadge(mtPhase);
-                        const bought = mtEntries.find(e => e.phase === 'BOUGHT' && e.buyTime);
+                      {(isMT || isVwap) && !isTradesFavView && !isActiveFavView ? (() => {
+                        const botEntries = isMT ? mtEntries : (vwapEntry ? [vwapEntry] : []);
+                        const botPhase = symbolPhaseSummary(botEntries);
+                        const botPh = multitradePhaseBadge(botPhase, lang);
+                        const bought = botEntries.find(e => e.phase === 'BOUGHT' && e.buyTime);
                         return (
                           <span className={parRowClass}>
                             <span className="shrink-0">
@@ -1328,13 +1397,13 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                             <button
                               type="button"
                               className="text-[9px] font-bold px-1 py-0 rounded shrink-0 hover:underline"
-                              style={{ color: mtPh.color, background: `${mtPh.color}18`, border: `1px solid ${mtPh.color}44` }}
-                              title={`${mtPh.hint} — clique para alterar`}
+                              style={{ color: botPh.color, background: `${botPh.color}18`, border: `1px solid ${botPh.color}44` }}
+                              title={`${botPh.hint} — clique para alterar`}
                               onClick={(e) => {
                                 e.stopPropagation();
-                                setMtStateModal({ symbol: item.symbol, entries: mtEntries });
+                                setMtStateModal({ symbol: item.symbol, entries: botEntries });
                               }}>
-                              {mtPh.text}
+                              {botPh.text}
                             </button>
                             {bought?.buyTime && (
                               <span className="text-[9px] font-normal text-white/70 shrink-0">
@@ -1519,11 +1588,15 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                     onClick={(e) => e.stopPropagation()}
                   >
                         <div className="flex flex-nowrap items-center gap-0.5">
+                          {uiPrefs.visibleFavoriteButtons.gate !== false && (
                           <FavButton tipKey="gate" kind="G" symbol={item.symbol} active={isGate}   color={GATE_COLOR}  label="Gate"     onClick={() => toggleGateFavorite(item.symbol)} />
+                          )}
+                          {uiPrefs.visibleFavoriteButtons.macross !== false && (
                           <FavButton tipKey="macross" kind="MC" symbol={item.symbol} active={isMTGate} color={MT_COLOR}    label="MA-Cross" text="MC" onClick={() => {
                             console.log(`${FAV_LOG} MC abrir modal (Gate)`, { symbol: item.symbol, entries: mtEntriesGate.length });
                             setMtModal({ symbol: item.symbol, exchange: 'gate', entries: mtEntriesGate });
                           }} />
+                          )}
                         </div>
                       </td>
 
@@ -1627,6 +1700,32 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
             onCancel={() => {
               console.log(`${FAV_LOG} MC cancelar`, mtModal.symbol);
               setMtModal(null);
+            }}
+          />
+        </ModalPortal>
+      )}
+
+      {vwapModal && (
+        <ModalPortal>
+          <VwapBandsFavoriteModal
+            symbol={vwapModal.symbol}
+            defaultExchange={vwapModal.exchange}
+            currentEntry={vwapModal.entry}
+            onConfirm={async ({ id, payload }) => {
+              console.log(`${FAV_LOG} VWAP confirmar`, { symbol: vwapModal.symbol, id });
+              await saveMultitradeSymbol({ saves: [{ id, payload }] });
+              console.log(`${FAV_LOG} VWAP salvo OK`, vwapModal.symbol);
+              setVwapModal(null);
+            }}
+            onRemove={async (id) => {
+              console.log(`${FAV_LOG} VWAP remover`, { symbol: vwapModal.symbol, id });
+              await removeMultitradeEntry(id);
+              console.log(`${FAV_LOG} VWAP removido OK`, vwapModal.symbol);
+              setVwapModal(null);
+            }}
+            onCancel={() => {
+              console.log(`${FAV_LOG} VWAP cancelar`, vwapModal.symbol);
+              setVwapModal(null);
             }}
           />
         </ModalPortal>

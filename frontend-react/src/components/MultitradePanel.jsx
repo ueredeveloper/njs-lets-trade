@@ -41,7 +41,7 @@ function fmtBuyTime(iso) {
 }
 
 export default function MultitradePanel() {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const {
     multitradeFavorites, selectedChart, gateFavorites,
     saveMultitradeSymbol, removeMultitradeEntry,
@@ -191,7 +191,7 @@ export default function MultitradePanel() {
                 const ex = entries[0]?.exchange ?? 'binance';
                 const activeEntries = entries.filter(e => e.enabled !== false);
                 const summaryPhase = symbolPhaseSummary(activeEntries);
-                const ph = multitradePhaseBadge(summaryPhase);
+                const ph = multitradePhaseBadge(summaryPhase, lang);
                 const boughtEntry = activeEntries.find(e => e.phase === 'BOUGHT' && e.buyTime);
                 const sellableEntry = activeEntries.find(e => e.phase === 'BOUGHT') ?? null;
                 const buyableEntry = activeEntries.find(e =>
@@ -232,7 +232,7 @@ export default function MultitradePanel() {
                         <div className="flex gap-0.5 flex-wrap mt-0.5">
                           {activeEntries.map(e => {
                             const sid = normalizeStrategyId(e.strategyId);
-                            const eph = multitradePhaseBadge(e.phase);
+                            const eph = multitradePhaseBadge(e.phase, lang);
                             return (
                               <span key={e.id} className="text-[6px] font-mono px-0.5 rounded"
                                 style={{ color: eph.color }}
@@ -334,7 +334,7 @@ export default function MultitradePanel() {
           {backtestEntry && !isAdHocStudy && (
             <div className="flex items-center gap-1.5 px-2 py-1 border-b border-p2 shrink-0 flex-wrap">
               {(() => {
-                const ph = multitradePhaseBadge(backtestEntry.phase);
+                const ph = multitradePhaseBadge(backtestEntry.phase, lang);
                 return (
                   <>
                     <span className="text-[9px] text-p5/50">Bot:</span>

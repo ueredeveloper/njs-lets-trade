@@ -40,6 +40,7 @@ export default function SettingsSidebar({ open, onClose }) {
   const { selectedChart, assetDisplay, setAssetDisplayCategory, assetCategoryKeys,
     chartPanelButtons, setChartPanelButton, chartPanelButtonKeys,
     uiPrefs, setDefaultChartInterval, setCommonChartIntervals, setPanelVisible,
+    setFavoriteButtonVisible, favoriteButtonKeys,
     setOverlaySlotsPreference, setCurrencyPanelWidth,
     setMaCrossDefaultTemplate, setStatsDefaults,
     chartIntervalOptions, panelKeys,
@@ -345,6 +346,27 @@ export default function SettingsSidebar({ open, onClose }) {
                   />
                   <span className="text-p5 text-xs leading-snug group-hover:text-white transition-colors">
                     {t(`settings.panel.${key}`)}
+                  </span>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          {/* Botões de favoritos visíveis (toolbar + linhas da tabela) */}
+          <div>
+            <p className={section}>{t('settings.favorite_buttons')}</p>
+            <p className="text-[10px] text-p5/50 mb-3 leading-relaxed">{t('settings.favorite_buttons_hint')}</p>
+            <div className="flex flex-col gap-2">
+              {favoriteButtonKeys.map((key) => (
+                <label key={key} className="flex items-start gap-2.5 cursor-pointer group">
+                  <input
+                    type="checkbox"
+                    checked={uiPrefs.visibleFavoriteButtons[key] !== false}
+                    onChange={(e) => setFavoriteButtonVisible(key, e.target.checked)}
+                    className="mt-0.5 shrink-0 accent-p4"
+                  />
+                  <span className="text-p5 text-xs leading-snug group-hover:text-white transition-colors">
+                    {t(`settings.favbtn.${key}`)}
                   </span>
                 </label>
               ))}

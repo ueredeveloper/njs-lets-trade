@@ -8,6 +8,19 @@ export const CHART_INTERVAL_OPTIONS = [
 
 export const PANEL_KEYS = ['indicators', 'stats'];
 
+/** Botões de favoritos na tabela de moedas (barra de ferramentas + linhas) — editável em
+ *  Configurações pra esconder o que não está em uso no momento (ex.: MC se não usa mais
+ *  ma-cross). Todos visíveis por padrão. */
+export const FAVORITE_BUTTON_KEYS = ['gate', 'binance', 'macross', 'vwap-bands', 'active', 'trades'];
+
+export function normalizeVisibleFavoriteButtons(raw) {
+  const result = {};
+  for (const key of FAVORITE_BUTTON_KEYS) {
+    result[key] = typeof raw?.[key] === 'boolean' ? raw[key] : true;
+  }
+  return result;
+}
+
 /** Intervalos que ficam visíveis por padrão na linha de botões rápidos do gráfico — os demais ficam
  *  escondidos atrás do botão "›". Editável em Configurações → Intervalos rápidos do gráfico. */
 export const DEFAULT_COMMON_CHART_INTERVALS = ['15m', '1h', '4h', '8h'];
@@ -238,6 +251,7 @@ export const DEFAULT_UI_PREFS = {
     indicators: true,
     stats: true,
   },
+  visibleFavoriteButtons: normalizeVisibleFavoriteButtons({}),
   overlaySlots: normalizeOverlaySlots(DEFAULT_OVERLAY_SLOTS),
   maBandsDefaults: normalizeMaBandsDefaults(DEFAULT_MA_BANDS),
   bollingerBandsDefaults: normalizeBollingerBandsDefaults(DEFAULT_BOLLINGER_BANDS),
@@ -256,6 +270,7 @@ function cloneDefaults() {
     defaultChartInterval: DEFAULT_UI_PREFS.defaultChartInterval,
     commonChartIntervals: [...DEFAULT_COMMON_CHART_INTERVALS],
     visiblePanels: { ...DEFAULT_UI_PREFS.visiblePanels },
+    visibleFavoriteButtons: normalizeVisibleFavoriteButtons({}),
     overlaySlots: normalizeOverlaySlots(DEFAULT_OVERLAY_SLOTS),
     maBandsDefaults: normalizeMaBandsDefaults(DEFAULT_MA_BANDS),
     bollingerBandsDefaults: normalizeBollingerBandsDefaults(DEFAULT_BOLLINGER_BANDS),
@@ -287,6 +302,9 @@ export function loadUiPreferences() {
           result.visiblePanels[key] = parsed.visiblePanels[key];
         }
       }
+    }
+    if (parsed.visibleFavoriteButtons && typeof parsed.visibleFavoriteButtons === 'object') {
+      result.visibleFavoriteButtons = normalizeVisibleFavoriteButtons(parsed.visibleFavoriteButtons);
     }
     if (parsed.overlaySlots !== undefined) {
       result.overlaySlots = normalizeOverlaySlots(parsed.overlaySlots);

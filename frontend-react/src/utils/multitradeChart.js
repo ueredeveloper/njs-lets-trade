@@ -6,6 +6,10 @@ export function isMaCrossEntry(entry) {
   return entry?.strategyId === 'ma-cross' || entry?.kind === 'ma_cross' || entry?.tradeConfig?.kind === 'ma_cross';
 }
 
+export function isVwapBandsEntry(entry) {
+  return entry?.strategyId === 'vwap-bands' || entry?.kind === 'vwap_bands' || entry?.tradeConfig?.kind === 'vwap_bands';
+}
+
 export function isRule2Row(row) {
   return row?.ruleId === 'rule2' || row?.entryKind === 'ma';
 }
@@ -19,6 +23,10 @@ export function resolveTradeChartInterval(entry, row) {
     const ms1 = INTERVAL_MS[iv1] ?? 900_000;
     const ms2 = INTERVAL_MS[iv2] ?? 900_000;
     return ms1 <= ms2 ? iv1 : iv2;
+  }
+  if (isVwapBandsEntry(entry)) {
+    const e = entry.entry ?? entry.tradeConfig?.entry ?? {};
+    return e.interval ?? '1h';
   }
   if (isRule2Row(row)) {
     const em = entry?.rule2?.entryMa ?? entry?.entryMa ?? {};
@@ -67,6 +75,7 @@ export function buildMaCrossAdaptiveBandsConfig(entry, boundsOverride = null) {
  */
 export function buildOverlaySlotsForEntry(entry, row) {
   if (isMaCrossEntry(entry)) return null;
+  if (isVwapBandsEntry(entry)) return null;
   if (isRule2Row(row)) {
     const em = entry?.rule2?.entryMa ?? entry?.entryMa ?? {};
     const period = String(em.period ?? 50);

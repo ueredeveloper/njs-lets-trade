@@ -21,6 +21,7 @@ const { buildEntryRsiReport } = require('../bot/amap/suggestEntryRsi');
 const { buildEntryMaReport } = require('../bot/amap/suggestEntryMa');
 const { runAmapBacktest } = require('../bot/amap/amapBacktest');
 const { runMaCrossBacktest } = require('../bot/ma-cross/maCrossBacktest');
+const { runVwapBandsBacktest } = require('../bot/vwap-bands/vwapBandsBacktest');
 const { resolveConfigBody: amapResolveConfigBody, normalizeStrategyId: amapNormStrategyId } = require('../bot/amap/strategyPresets');
 const {
   isSwingStrategy, resolveConfigBody: swingResolveConfigBody, buildTradeConfig: buildSwingTradeConfig,
@@ -1901,19 +1902,20 @@ router.get('/multitrade-backtest', getUserId, async (req, res) => {
   // Estudo ad-hoc: sem favorito, mas com tradeConfig (preset ou override da UI)
   if (!data) {
     const sid = strategyId ?? 'ma-cross';
-    if (!isMaCrossStrategy(sid)) {
+    if (!isMaCrossStrategy(sid) && !isVwapBandsStrategy(sid)) {
       return res.status(404).json({ error: 'Moeda não está no Multi-Trade' });
     }
     if (!parsedOverride) {
       return res.status(400).json({
-        error: 'tradeConfig obrigatório para estudo MA-Cross sem favorito',
+        error: 'tradeConfig obrigatório para estudo sem favorito',
       });
     }
     const exchange = req.query.exchange ?? 'binance';
     const capital  = Number(req.query.capital ?? 40);
     try {
-      const config = buildMaCrossTradeConfig(parsedOverride);
-      const result = await runMaCrossBacktest({ symbol: sym, config, exchange, capital, sinceMs });
+      const result = isVwapBandsStrategy(sid)
+        ? await runVwapBandsBacktest({ symbol: sym, config: buildVwapBandsTradeConfig(parsedOverride), exchange, capital, sinceMs })
+        : await runMaCrossBacktest({ symbol: sym, config: buildMaCrossTradeConfig(parsedOverride), exchange, capital, sinceMs });
       if (result.error) return res.status(502).json(result);
       return res.json(result);
     } catch (err) {
@@ -1929,13 +1931,17 @@ router.get('/multitrade-backtest', getUserId, async (req, res) => {
   if (parsedOverride) {
     if (isMaCrossStrategy(entry.strategyId)) {
       config = buildMaCrossTradeConfig(parsedOverride);
+    } else if (isVwapBandsStrategy(entry.strategyId)) {
+      config = buildVwapBandsTradeConfig(parsedOverride);
     }
   }
 
   try {
     const result = isMaCrossStrategy(entry.strategyId)
       ? await runMaCrossBacktest({ symbol: sym, config, exchange, capital, sinceMs })
-      : await runAmapBacktest({ symbol: sym, config, exchange, capital });
+      : isVwapBandsStrategy(entry.strategyId)
+        ? await runVwapBandsBacktest({ symbol: sym, config, exchange, capital, sinceMs })
+        : await runAmapBacktest({ symbol: sym, config, exchange, capital });
     if (result.error) return res.status(502).json(result);
     res.json(result);
   } catch (err) {

@@ -3,7 +3,7 @@ import { useI18n } from '../i18n';
 import ReactECharts from 'echarts-for-react';
 import { useCurrency } from '../contexts/CurrencyContext';
 import { fetchCandlesticksAndCloud, fetchGateTrades, fetchBinanceTrades, fetchChartAdaptiveBands, DEFAULT_CANDLE_LIMIT } from '../services/api';
-import { buildMarkersFromExchangeTrades, attachPnlToExchangeTrades, isMaCrossEntry } from '../utils/multitradeChart';
+import { buildMarkersFromExchangeTrades, attachPnlToExchangeTrades, isMaCrossEntry, isVwapBandsEntry } from '../utils/multitradeChart';
 import { buildTrailingStopSeries, resolveChartStopLoss } from '../utils/trailingStopLoss';
 import { getEntriesForSymbol, buildAdHocMaCrossEntry } from '../constants/strategyPresets';
 import MaCrossRuleCheckChart from './MaCrossRuleCheckChart';
@@ -2633,6 +2633,20 @@ export default function CandlestickChart() {
     setTradeOverlaySlots(multitradeChartFocus.overlaySlots);
   }, [hasForcedOverlaySlots, multitradeChartFocus?.overlaySlots]);
 
+  // Favorito vwap-bands: força a banda de VWAP (interval/session do próprio bot) no chart —
+  // mesma ideia do overlay de MA acima, mas pro VWAP. Não persiste (o efeito de persistência do
+  // VWAP, mais abaixo, já ignora enquanto isTradePanelChartView(chartViewSource) é true); ao sair
+  // do favorito vwap-bands (seleciona moeda comum), volta pro default salvo do usuário.
+  const hasForcedVwap = isTradePanelChartView(chartViewSource) && !!multitradeChartFocus?.vwapOverride;
+  useEffect(() => {
+    if (hasForcedVwap) {
+      setVwap(multitradeChartFocus.vwapOverride);
+    } else if (!isTradePanelChartView(chartViewSource)) {
+      setVwap({ ...uiPrefs.vwapDefaults });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasForcedVwap, multitradeChartFocus?.vwapOverride, chartViewSource]);
+
   // Persiste preferências das bandas (pct, acima/abaixo, período/intervalo) quando o usuário altera
   useEffect(() => {
     if (maBands.adaptive || isTradePanelChartView(chartViewSource)) return;
@@ -3396,18 +3410,27 @@ export default function CandlestickChart() {
     return resolveChartStopLoss(selectedChart.symbol, multitradeFavorites);
   }, [selectedChart?.symbol, multitradeFavorites]);
 
-  // Aba "Bot": se a moeda não é favorito MC (MA-Cross habilitado), monta um
-  // tradeConfig ad-hoc a partir do molde padrão configurado em Configurações,
-  // pra permitir a conferência de regras em qualquer moeda do gráfico.
-  const botAdHocTradeConfig = useMemo(() => {
+  // Aba "Bot": mostra a estratégia REAL do favorito da moeda selecionada (ma-cross ou
+  // vwap-bands) — antes disso era sempre tratado como ma-cross, mostrando linhas de
+  // EMA e rodando o backtest errado até pra favoritos vwap-bands. Sem favorito nenhum,
+  // cai no molde ad-hoc de ma-cross (comportamento antigo, só pra estudo livre).
+  const botFavoriteEntry = useMemo(() => {
     const sym = selectedChart?.symbol;
     if (!sym) return null;
-    const hasFavorite = getEntriesForSymbol(multitradeFavorites, sym)
-      .some(e => e.enabled !== false && isMaCrossEntry(e));
-    if (hasFavorite) return null;
+    const entries = getEntriesForSymbol(multitradeFavorites, sym).filter(e => e.enabled !== false);
+    return entries.find(e => isMaCrossEntry(e)) ?? entries.find(e => isVwapBandsEntry(e)) ?? null;
+  }, [selectedChart?.symbol, multitradeFavorites]);
+
+  const botStrategyId = botFavoriteEntry ? (isVwapBandsEntry(botFavoriteEntry) ? 'vwap-bands' : 'ma-cross') : 'ma-cross';
+
+  const botAdHocTradeConfig = useMemo(() => {
+    const sym = selectedChart?.symbol;
+    if (!sym || botFavoriteEntry) return null;
     const exchange = selectedChart.source === 'gate' ? 'gate' : 'binance';
     return buildAdHocMaCrossEntry(sym, exchange).tradeConfig;
-  }, [selectedChart?.symbol, selectedChart?.source, multitradeFavorites]);
+  }, [selectedChart?.symbol, selectedChart?.source, botFavoriteEntry]);
+
+  const botTradeConfig = botFavoriteEntry?.tradeConfig ?? botAdHocTradeConfig;
 
   const chartBollingerConfig = useMemo(() => {
     const enabled = bollingerBands.enabled && chartPanelButtons.bb !== false;
@@ -3652,8 +3675,11 @@ export default function CandlestickChart() {
             <MaCrossRuleCheckChart
               symbol={selectedChart.symbol}
               exchange={selectedChart.source === 'gate' ? 'gate' : 'binance'}
-              strategyId="ma-cross"
-              tradeConfig={botAdHocTradeConfig}
+              strategyId={botStrategyId}
+              tradeConfig={botTradeConfig}
+              realPhase={botFavoriteEntry?.phase}
+              realBuyTime={botFavoriteEntry?.buyTime}
+              realTradeMarkers={selectedChart?.tradeMarkers ?? chartTradeMarkers ?? []}
               fillHeight
               activeIndicators={activeIndicators}
               quickEmaGroups={quickEmaGroups}

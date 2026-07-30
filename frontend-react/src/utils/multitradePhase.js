@@ -1,10 +1,9 @@
 /** Badge e resumo de fase do bot multitrade (rsi_multi_bot_state). */
 
-/** Rótulos na UI — inglês alinhado ao Supabase (phase). */
+/** Rótulos na UI — traduzidos (o valor salvo no Supabase continua em inglês: phase). */
 export const PHASE_LABELS = {
-  WATCHING: 'WATCHING',
-  BOUGHT:   'BOUGHT',
-  PENDING:  'PENDING',
+  pt: { WATCHING: 'AGUARDANDO', BOUGHT: 'COMPRADO', PENDING: 'PENDENTE' },
+  en: { WATCHING: 'WATCHING', BOUGHT: 'BOUGHT', PENDING: 'PENDING' },
 };
 
 /** Explicação em português (tooltip). */
@@ -14,14 +13,15 @@ export const PHASE_HINT_PT = {
   PENDING:  'pendente — ordem limit aguardando preço (AMAP)',
 };
 
-export function multitradePhaseBadge(phase) {
+export function multitradePhaseBadge(phase, lang = 'pt') {
+  const labels = PHASE_LABELS[lang] ?? PHASE_LABELS.pt;
   switch (phase) {
     case 'BOUGHT':
-      return { text: PHASE_LABELS.BOUGHT, short: 'BOUGHT', color: '#22c55e', hint: PHASE_HINT_PT.BOUGHT };
+      return { text: labels.BOUGHT, short: 'BOUGHT', color: '#22c55e', hint: PHASE_HINT_PT.BOUGHT };
     case 'PENDING':
-      return { text: PHASE_LABELS.PENDING, short: 'PENDING', color: '#f59e0b', hint: PHASE_HINT_PT.PENDING };
+      return { text: labels.PENDING, short: 'PENDING', color: '#f59e0b', hint: PHASE_HINT_PT.PENDING };
     default:
-      return { text: PHASE_LABELS.WATCHING, short: 'WATCHING', color: '#94a3b8', hint: PHASE_HINT_PT.WATCHING };
+      return { text: labels.WATCHING, short: 'WATCHING', color: '#94a3b8', hint: PHASE_HINT_PT.WATCHING };
   }
 }
 

@@ -4,7 +4,7 @@ import { fetchMultitradeBacktest } from '../services/api';
 import { INTERVAL_MS } from '../utils/chartView';
 import {
   fetchEmaLine, fetchAdaptiveBandLine, fetchAdaptiveBandLineAuto, fetchBollingerLines,
-  strategyLineDefsFromTradeConfig, panelLineDefsFromSharedState,
+  fetchVwapBandsLines, strategyLineDefsFromTradeConfig, panelLineDefsFromSharedState,
 } from '../utils/overlayIndicators';
 
 const RULE_CHECK_CANDLES = 50;
@@ -28,6 +28,7 @@ function lineChipStyle(active, color) {
 
 const BUCKET_COLOR = {
   allowed:    '#008300',
+  signal:     '#3987e5',
   trend:      '#3987e5',
   approach:   '#d55181',
   candle:     '#8a5fd1',
@@ -37,11 +38,13 @@ const BUCKET_COLOR = {
   cooldown:   '#7a8699',
   bb:         '#d4c62a',
   timeout:    '#a9682e',
+  cancelled:  '#a9682e',
   other:      '#999999',
 };
 
 const BUCKET_SYMBOL = {
   allowed:    'circle',
+  signal:     'diamond',
   trend:      'triangle',
   approach:   'diamond',
   candle:     'pin',
@@ -51,6 +54,7 @@ const BUCKET_SYMBOL = {
   cooldown:   'rect',
   bb:         'diamond',
   timeout:    'roundRect',
+  cancelled:  'roundRect',
   other:      'rect',
 };
 
@@ -64,6 +68,7 @@ const BUCKET_ROTATE = {
 
 const BUCKET_LABEL = {
   allowed:   'Entrada permitida',
+  signal:    'Sinal armado — aguardando retorno (vwap-bands)',
   trend:     'Bloqueada — tendência EMA9×21 (4h)',
   approach:  'Bloqueada — aproximação EMA9/21 (4h)',
   candle:    'Bloqueada — candle de exaustão (reversão 1h)',
@@ -73,10 +78,11 @@ const BUCKET_LABEL = {
   cooldown:  'Bloqueada — cooldown pós-venda',
   bb:        'Bloqueada — filtro Bollinger Bands',
   timeout:   'Cancelada — pullback expirou',
+  cancelled: 'Pendência cancelada (vwap-bands)',
   other:     'Bloqueada — outros filtros',
 };
 
-const BUCKET_ORDER = ['allowed', 'trend', 'approach', 'candle', 'pullback', 'maFloor', 'maCeiling', 'cooldown', 'bb', 'timeout', 'other'];
+const BUCKET_ORDER = ['allowed', 'signal', 'trend', 'approach', 'candle', 'pullback', 'maFloor', 'maCeiling', 'cooldown', 'bb', 'timeout', 'cancelled', 'other'];
 
 const TRADE_GOOD = '#0ca30c';
 const TRADE_CRITICAL = '#d03b3b';
@@ -86,6 +92,11 @@ function bucketOutcome(outcome) {
     case 'BOUGHT':
     case 'POSITION_OPEN':
       return 'allowed';
+    case 'SIGNAL_ARMED':
+    case 'SIGNAL_REPLACED':
+      return 'signal';
+    case 'PENDING_CANCELLED':
+      return 'cancelled';
     case 'NO_PULLBACK':
       return 'pullback';
     case 'BELOW_ADAPTIVE_FLOOR':
@@ -183,12 +194,36 @@ function localInputToISO(value) {
   return Number.isNaN(d.getTime()) ? null : d.toISOString();
 }
 
+/** Intervalo de candle de preço da estratégia — ma-cross usa entry.ma1.interval,
+ *  vwap-bands usa entry.interval diretamente (não tem ma1/ma2). */
+function resolveDefaultInterval(tradeConfig) {
+  return tradeConfig?.entry?.ma1?.interval ?? tradeConfig?.entry?.interval ?? '15m';
+}
+
 /** "Desde" default: volta o suficiente pra cobrir as últimas N candles do timeframe de entrada. */
 function defaultSinceForCandles(interval = '15m', count = RULE_CHECK_CANDLES) {
   const ms = INTERVAL_MS[interval] ?? INTERVAL_MS['15m'];
   const d = new Date(Date.now() - count * ms);
   d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
   return d.toISOString().slice(0, 16);
+}
+
+/**
+ * Igual defaultSinceForCandles, mas se a moeda tem posição REAL aberta (fase BOUGHT do
+ * bot ao vivo), garante que a janela comece um pouco antes da compra — senão a janela
+ * padrão (últimas N candles) pode nunca alcançar o momento da compra que já aconteceu,
+ * e a aba nunca mostra o ponto de entrada de uma posição que está aberta agora.
+ */
+function resolveDefaultSince(tradeConfig, count, openPhase, openBuyTimeMs) {
+  const interval = resolveDefaultInterval(tradeConfig);
+  const bySignal = defaultSinceForCandles(interval, count);
+  if (openPhase !== 'BOUGHT' || !openBuyTimeMs) return bySignal;
+
+  const ms = INTERVAL_MS[interval] ?? INTERVAL_MS['15m'];
+  const padded = new Date(openBuyTimeMs - 10 * ms);
+  padded.setMinutes(padded.getMinutes() - padded.getTimezoneOffset());
+  const byBuy = padded.toISOString().slice(0, 16);
+  return byBuy < bySignal ? byBuy : bySignal;
 }
 
 function buildTooltip(row) {
@@ -283,9 +318,12 @@ function buildIndicatorSeries(lineData) {
 export default function MaCrossRuleCheckChart({
   symbol, exchange, capital = 40, strategyId, tradeConfig, fillHeight = false,
   activeIndicators, quickEmaGroups, bollingerBands, panelButtons, candleWindowCount,
-  rightPad = 0,
+  realPhase, realBuyTime, realTradeMarkers, rightPad = 0,
 }) {
-  const [sinceInput, setSinceInput] = useState(() => defaultSinceForCandles(tradeConfig?.entry?.ma1?.interval));
+  const realBuyTimeMs = realBuyTime ? new Date(realBuyTime).getTime() : null;
+  const [sinceInput, setSinceInput] = useState(
+    () => resolveDefaultSince(tradeConfig, candleWindowCount || RULE_CHECK_CANDLES, realPhase, realBuyTimeMs),
+  );
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -303,7 +341,7 @@ export default function MaCrossRuleCheckChart({
   //    lá, sem precisar reconfigurar nada aqui.
   const strategyLineDefs = useMemo(() => strategyLineDefsFromTradeConfig(tradeConfig), [tradeConfig]);
   const strategyLineIdsKey = strategyLineDefs.map(d => d.id).join(',');
-  const chartInterval = tradeConfig?.entry?.ma1?.interval ?? '15m';
+  const chartInterval = resolveDefaultInterval(tradeConfig) ?? '15m';
   const panelDefs = useMemo(
     () => panelLineDefsFromSharedState({ activeIndicators, quickEmaGroups, bollingerBands, panelButtons, chartInterval }),
     [activeIndicators, quickEmaGroups, bollingerBands, panelButtons, chartInterval],
@@ -361,6 +399,10 @@ export default function MaCrossRuleCheckChart({
             const points = await fetchAdaptiveBandLine(symbol, d.interval, d.period, d.side, d.pct, exchange, fromMs);
             return [d.id, { kind: 'band', points, color: d.color, label: d.label }];
           }
+          if (d.kind === 'vwapBands') {
+            const bands = await fetchVwapBandsLines(symbol, d.interval, d.session, d.bandMultiplier, exchange, fromMs);
+            return bands ? [d.id, { kind: 'bb', ...bands, color: d.color, label: d.label }] : null;
+          }
           const bb = await fetchBollingerLines(symbol, d.interval, d.period, d.stdDev, exchange, fromMs);
           return bb ? [d.id, { kind: 'bb', ...bb, color: d.color, label: d.label }] : null;
         } catch {
@@ -401,17 +443,17 @@ export default function MaCrossRuleCheckChart({
   // simulação automaticamente, sem esperar o clique em "Verificar regras".
   useEffect(() => {
     if (!symbol) return;
-    const since = defaultSinceForCandles(tradeConfig?.entry?.ma1?.interval, candleWindowCount || RULE_CHECK_CANDLES);
+    const since = resolveDefaultSince(tradeConfig, candleWindowCount || RULE_CHECK_CANDLES, realPhase, realBuyTimeMs);
     setSinceInput(since);
     runWithSince(since);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [symbol, exchange]);
+  }, [symbol, exchange, realPhase, realBuyTimeMs]);
 
   // Botões 20/50/100 candles do gráfico principal (compartilhados entre abas) —
   // refaz a janela "Desde" e a simulação com a nova quantidade.
   useEffect(() => {
     if (!symbol || !candleWindowCount) return;
-    const since = defaultSinceForCandles(tradeConfig?.entry?.ma1?.interval, candleWindowCount);
+    const since = resolveDefaultSince(tradeConfig, candleWindowCount, realPhase, realBuyTimeMs);
     setSinceInput(since);
     runWithSince(since);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -434,8 +476,12 @@ export default function MaCrossRuleCheckChart({
       });
     }
 
-    const buys = (data.trades ?? []).filter(t => t.type === 'BUY');
-    const sells = (data.trades ?? []).filter(t => t.type === 'SELL');
+    // Momentos de compra/venda vêm dos trades REAIS (mesma fonte do gráfico principal —
+    // rsi_multi_bot_trades + posição aberta atual), não da simulação do backtest: o
+    // backtest re-deriva os sinais, mas o preenchimento real pode diferir em detalhes
+    // (slippage, timing de execução), e o gráfico principal é a referência confiável.
+    const buys = (realTradeMarkers ?? []).filter(m => m.side === 'buy' || m.side === 'entry');
+    const sells = (realTradeMarkers ?? []).filter(m => m.side === 'sell');
 
     // Só entra na legenda/série quem realmente tem pontos nessa janela — evita
     // poluir o gráfico com categorias vazias quando poucos filtros bloquearam.
@@ -458,7 +504,10 @@ export default function MaCrossRuleCheckChart({
       {
         name: 'Compra executada',
         type: 'scatter',
-        data: buys.map(t => ({ value: [t.time, t.price], row: t })),
+        data: buys.map(m => ({
+          value: [Number(m.time), m.price],
+          row: { type: 'BUY', time: Number(m.time), price: m.price },
+        })),
         symbol: 'arrow',
         symbolSize: 13,
         itemStyle: { color: 'transparent', borderColor: TRADE_GOOD, borderWidth: 2 },
@@ -467,9 +516,9 @@ export default function MaCrossRuleCheckChart({
       {
         name: 'Venda executada',
         type: 'scatter',
-        data: sells.map(t => ({
-          value: [t.time, t.price],
-          row: t,
+        data: sells.map(m => ({
+          value: [Number(m.time), m.price],
+          row: { type: 'SELL', time: Number(m.time), price: m.price, pnlPct: m.pnlPct ?? null },
         })),
         symbol: 'arrow',
         symbolRotate: 180,
@@ -481,7 +530,7 @@ export default function MaCrossRuleCheckChart({
     // itemStyle por ponto de venda (ganho = good, perda = critical)
     tradeSeries[1].data = tradeSeries[1].data.map(d => ({
       ...d,
-      itemStyle: { color: 'transparent', borderColor: (d.row.pnlUsdt ?? 0) >= 0 ? TRADE_GOOD : TRADE_CRITICAL, borderWidth: 2 },
+      itemStyle: { color: 'transparent', borderColor: (d.row.pnlPct ?? 0) >= 0 ? TRADE_GOOD : TRADE_CRITICAL, borderWidth: 2 },
     }));
 
     return {
@@ -544,7 +593,7 @@ export default function MaCrossRuleCheckChart({
         ...tradeSeries,
       ],
     };
-  }, [data, lineData]);
+  }, [data, lineData, realTradeMarkers]);
 
   // Segundo gráfico: barra horizontal com a contagem de sinais por regra —
   // complementa o scatter/preço (que mostra QUANDO/ONDE) respondendo QUANTO

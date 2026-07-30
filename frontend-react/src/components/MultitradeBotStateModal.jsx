@@ -3,6 +3,7 @@ import {
   STRATEGY_LABELS, STRATEGY_COLORS, normalizeStrategyId,
 } from '../constants/strategyPresets';
 import { multitradePhaseBadge, PHASE_HINT_PT, fmtBuyTimeShort } from '../utils/multitradePhase';
+import { useI18n } from '../i18n';
 
 const MT_COLOR = '#22d3ee';
 
@@ -20,7 +21,8 @@ function localInputToIso(value) {
 }
 
 function PhaseStatusCard({ phase, entry }) {
-  const ph = multitradePhaseBadge(phase);
+  const { lang } = useI18n();
+  const ph = multitradePhaseBadge(phase, lang);
   const isBought = phase === 'BOUGHT';
   const isPending = phase === 'PENDING';
 
