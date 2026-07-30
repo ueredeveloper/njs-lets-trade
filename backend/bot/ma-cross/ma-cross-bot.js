@@ -22,11 +22,6 @@ const { startMultitradeWatch, configFingerprint } = require('../multitradeWatch'
 const { startExhaustionScreener } = require('./exhaustionScreener');
 const { resolveStrategy } = require('./tradeConfigSchema');
 const { STRATEGY_IDS, isMaCrossStrategy } = require('./strategyPresets');
-// Bot vwap-bands embutido neste processo — assim `node ma-cross-bot.js` continua sendo o
-// único comando usado, sem precisar rodar `vwap-bands-bot.js` à parte (mesmos símbolos
-// aparecem no painel Multi-Trade sob strategy_id='vwap-bands'). runVwapBandsBot() agenda
-// os próprios ticks via setTimeout e não bloqueia — por isso é chamado sem `await` abaixo.
-const { runVwapBandsBot } = require('../vwap-bands/vwap-bands-bot');
 const {
   getRequiredSpecs, evaluateEntry, evaluateCrossSignal, evaluatePullbackReady,
   evaluateImmediateEntry,
@@ -671,10 +666,6 @@ async function main() {
   const symbolFilter = process.argv.includes('--symbol')
     ? process.argv[process.argv.indexOf('--symbol') + 1]?.toUpperCase()
     : null;
-
-  // vwap-bands lê o mesmo --symbol de process.argv independentemente — roda em paralelo,
-  // não bloqueia o startup do ma-cross (ver comentário no require acima).
-  runVwapBandsBot().catch(err => console.error(`❌ vwap-bands: ${err.message}`));
 
   let rows = await loadMaCrossRows();
   rows = (rows ?? []).filter(r => isMaCrossStrategy(r.strategy_id));
