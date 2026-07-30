@@ -93,6 +93,22 @@ function buildVwapPositionFilterName(interval, session, bandMultiplier, position
   return name;
 }
 
+/** Largura das bandas de VWAP (±2σ), média no período: 4h|vwapwidth|w|100 (w=weekly, d=daily) */
+function buildVwapBandWidthFilterName(interval, session, lookback) {
+  const sessionToken = VWAP_SESSION_TOKENS[session] ?? session;
+  return `${interval}|vwapwidth|${sessionToken}|${lookback}`;
+}
+
+function parseVwapBandWidthFilterName(name) {
+  const parts = String(name).split('|');
+  if (parts[1] !== 'vwapwidth' || parts.length < 4) return null;
+  return {
+    interval: parts[0],
+    session: parts[2] === 'w' ? 'weekly' : 'daily',
+    lookback: parseInt(parts[3], 10),
+  };
+}
+
 /** Posição EMA vs EMA: 15m|macmp|9|21|acim — proximidade: 1h|macmp|9|21|nearup|prox|0.5 */
 function buildMaCompareFilterName(interval, p1, p2, compare, lang = 'en', opts = {}) {
   if (compare === 'near_up' || compare === 'near_down') {
@@ -240,6 +256,8 @@ module.exports = {
   VWAP_POSITION_TOKENS,
   VWAP_SESSION_TOKENS,
   buildVwapPositionFilterName,
+  buildVwapBandWidthFilterName,
+  parseVwapBandWidthFilterName,
   MA_CROSS_MODE_TOKENS,
   parseMaCrossModeToken,
   buildMaCrossFilterName,

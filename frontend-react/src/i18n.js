@@ -115,6 +115,7 @@ const T = {
     'ind.marketcap':         'Market Cap',
     'ind.bb_position':       'Posição na Banda de Bollinger',
     'ind.vwap_position':     'Exaustão nas Bandas de VWAP',
+    'ind.vwap_band_width':   'Largura das Bandas de VWAP',
     'ind.ma_distance':       'Distância vs EMA',
     'ind.indicator_growth':  'Crescimento por Ciclo (Fundo→Topo)',
 
@@ -128,6 +129,7 @@ const T = {
     'ind.desc.marketcap':    'Cruza dados da CoinGecko com o volume da Binance. "Giro de volume" detecta moedas com preço inflado sem sustentação real de negócios. "Diluição futura" identifica tokens com muita emissão ainda pendente.',
     'ind.desc.bb_position':  'Posição do preço dentro da Bollinger Bands (%B). Fundo = close perto da banda inferior (possível sobrevenda). Topo = close perto da banda superior (possível sobrecompra). Padrão: 4h, BB(20,2).',
     'ind.desc.vwap_position': 'Exaustão nas bandas de desvio padrão do VWAP de sessão (diária/semanal). Fundo = preço perto da banda inferior (exaustão de venda, possível repique). Topo = preço perto da banda superior (exaustão de compra, possível correção). Padrão: 1h, sessão diária, ±2σ.',
+    'ind.desc.vwap_band_width': 'Quão distantes estão as bandas de VWAP (±2σ) uma da outra, em % da VWAP, na média dos últimos N candles fechados — moedas com bandas bem abertas (ex.: ~10% de distância) vs. moedas com bandas coladas. N (lookback) é configurável. Mostra a distância na tabela e permite ordenar por mais distantes ou mais próximas. Padrão: 4h, sessão semanal, 100 candles.',
     'ind.desc.ma_distance':  'Quantos % o preço está acima (ou abaixo) de uma única EMA (9, 21, 50 ou 200). Mostra a distância na tabela e permite ordenar por moedas mais distantes ou mais próximas da média. Padrão: EMA21 no 4h.',
     'ind.desc.indicator_growth': 'Varre todo o histórico salvo da moeda procurando ciclos completos de fundo→topo (ex.: preço toca a banda inferior de Bollinger e sobe até a banda superior) e calcula a valorização média (%) entre entrada e saída. Filtra moedas cuja valorização média seja ≥ à porcentagem escolhida. Mesmo cálculo usado em Estatísticas.',
 
@@ -213,6 +215,7 @@ const T = {
     'sum.mcap':              (metric, preset) => `Market Cap: ${metric} ${preset}`,
     'sum.bb_position':       (period, stdDev, posLabel, ivl, prox) => `BB(${period},${stdDev}): ${posLabel} (≤${prox}%) → ${ivl}`,
     'sum.vwap_position':     (band, session, posLabel, ivl, prox) => `VWAP(${session},±${band}σ): ${posLabel} (≤${prox}%) → ${ivl}`,
+    'sum.vwap_band_width':   (session, lookback, ivl) => `VWAP(${session},±2σ): largura média em ${lookback} candles → ${ivl}`,
     'sum.indicator_growth':  (engineLabel, threshold, ivl) => `${engineLabel}: valorização média ≥${threshold}% → ${ivl}`,
     'sum.above':             'acima de',
     'sum.bellow':            'abaixo de',
@@ -585,6 +588,7 @@ const T = {
     'ind.marketcap':         'Market Cap',
     'ind.bb_position':       'Bollinger Band Position',
     'ind.vwap_position':     'VWAP Band Exhaustion',
+    'ind.vwap_band_width':   'VWAP Band Width',
     'ind.ma_distance':       'Distance vs EMA',
     'ind.indicator_growth':  'Cycle Growth (Bottom→Top)',
 
@@ -598,6 +602,7 @@ const T = {
     'ind.desc.marketcap':    'Cross-references CoinGecko data with Binance volume. "Volume turnover" detects coins with inflated prices. "Future dilution" identifies tokens with large pending supply.',
     'ind.desc.bb_position':  'Price position inside the Bollinger Bands (%B). Bottom = close near the lower band (possible oversold). Top = close near the upper band (possible overbought). Default: 4h, BB(20,2).',
     'ind.desc.vwap_position': 'Exhaustion inside the session VWAP standard-deviation bands (daily/weekly). Bottom = price near the lower band (sell exhaustion, possible bounce). Top = price near the upper band (buy exhaustion, possible pullback). Default: 1h, daily session, ±2σ.',
+    'ind.desc.vwap_band_width': 'How far apart the VWAP bands (±2σ) are from each other, in % of the VWAP value, averaged over the last N closed candles — coins with wide-open bands (e.g. ~10% apart) vs. coins with tight bands. N (lookback) is configurable. Shown in the table, sortable by farthest or closest. Default: 4h, weekly session, 100 candles.',
     'ind.desc.ma_distance':  'How far the price is above (or below) a single EMA (9, 21, 50 or 200), in %. Shown in the table, sortable by farthest or closest to the average. Default: EMA21 on 4h.',
     'ind.desc.indicator_growth': 'Scans the coin\'s entire saved history looking for complete bottom→top cycles (e.g. price touches the lower Bollinger band and rises to the upper band) and computes the average appreciation (%) between entry and exit. Filters coins whose average appreciation is ≥ the chosen percentage. Same calculation used in Statistics.',
 
@@ -683,6 +688,7 @@ const T = {
     'sum.mcap':              (metric, preset) => `Market Cap: ${metric} ${preset}`,
     'sum.bb_position':       (period, stdDev, posLabel, ivl, prox) => `BB(${period},${stdDev}): ${posLabel} (≤${prox}%) → ${ivl}`,
     'sum.vwap_position':     (band, session, posLabel, ivl, prox) => `VWAP(${session},±${band}σ): ${posLabel} (≤${prox}%) → ${ivl}`,
+    'sum.vwap_band_width':   (session, lookback, ivl) => `VWAP(${session},±2σ): avg width over ${lookback} candles → ${ivl}`,
     'sum.indicator_growth':  (engineLabel, threshold, ivl) => `${engineLabel}: avg appreciation ≥${threshold}% → ${ivl}`,
     'sum.above':             'above',
     'sum.bellow':            'below',

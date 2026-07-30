@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useCurrency } from '../contexts/CurrencyContext';
-import { fetchCandlesAndIndicators, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter, fetchMaDistanceFilter, fetchIndicatorGrowthFilter, fetchMarketCapFilter, fetchBollingerBandPositionFilter, fetchVwapPositionFilter, fetchUserPrefs, saveUserPrefs } from '../services/api';
+import { fetchCandlesAndIndicators, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter, fetchMaDistanceFilter, fetchIndicatorGrowthFilter, fetchMarketCapFilter, fetchBollingerBandPositionFilter, fetchVwapPositionFilter, fetchVwapBandWidthFilter, fetchUserPrefs, saveUserPrefs } from '../services/api';
 import { useI18n } from '../i18n';
 import {
   createRsiFilter,
@@ -16,7 +16,7 @@ import {
 } from '../utils/createIchimokuFilter';
 import Tooltip from './Tooltip';
 import { MA_CROSS_PERIOD_MIN, MA_CROSS_PERIOD_MAX } from '../constants/maCrossConfigSchema';
-import { buildMaCrossFilterName, buildMaCompareFilterName, buildMaDistanceFilterName, buildIndicatorGrowthFilterName } from '../utils/filterNames';
+import { buildMaCrossFilterName, buildMaCompareFilterName, buildMaDistanceFilterName, buildIndicatorGrowthFilterName, buildVwapBandWidthFilterName } from '../utils/filterNames';
 
 const INTERVAL_MS = {
   '1m': 60_000, '3m': 180_000, '5m': 300_000, '15m': 900_000, '30m': 1_800_000,
@@ -156,6 +156,11 @@ function buildSummary(value, t) {
     const prox = value.proximityPct ?? '20';
     return t('sum.vwap_position', bandMultiplier, session, posLabel, ivLabel, prox);
   }
+  if (type === 'vwapBandWidth') {
+    const session = value.session === 'daily' ? t('vwap.session.daily') : t('vwap.session.weekly');
+    const lookback = value.lookback ?? '100';
+    return t('sum.vwap_band_width', session, lookback, ivLabel);
+  }
   if (type === 'indicatorGrowth') {
     const engine = value.growthEngine ?? 'bollinger';
     const threshold = value.thresholdPct ?? '10';
@@ -200,6 +205,7 @@ function indDescKey(type) {
   if (type === 'maDistance') return 'ma_distance';
   if (type === 'bollingerPosition') return 'bb_position';
   if (type === 'vwapPosition') return 'vwap_position';
+  if (type === 'vwapBandWidth') return 'vwap_band_width';
   if (type === 'indicatorGrowth') return 'indicator_growth';
   return 'marketcap';
 }
@@ -276,6 +282,11 @@ function IndicatorRow({ value, onChange }) {
                 next.position = next.position ?? 'near_bottom';
                 next.proximityPct = '20';
               }
+              if (newType === 'vwapBandWidth') {
+                next.intervals = ['4h'];
+                next.session = next.session ?? 'weekly';
+                next.lookback = next.lookback ?? '100';
+              }
               if (newType === 'maDistance') {
                 next.intervals = ['4h'];
                 next.period = '21';
@@ -307,6 +318,7 @@ function IndicatorRow({ value, onChange }) {
             <option value="marketCap">{t('ind.marketcap')}</option>
             <option value="bollingerPosition">{t('ind.bb_position')}</option>
             <option value="vwapPosition">{t('ind.vwap_position')}</option>
+            <option value="vwapBandWidth">{t('ind.vwap_band_width')}</option>
             <option value="indicatorGrowth">{t('ind.indicator_growth')}</option>
           </select>
           {type && t(`ind.desc.${indDescKey(type)}`) !== `ind.desc.${indDescKey(type)}` && (
@@ -634,6 +646,30 @@ function IndicatorRow({ value, onChange }) {
             >
               {[5, 10, 15, 20, 25, 30].map(v => (
                 <option key={v} value={String(v)}>≤{v}%</option>
+              ))}
+            </select>
+          </>
+        )}
+
+        {type === 'vwapBandWidth' && (
+          <>
+            <select
+              className={sel}
+              value={value.session ?? 'weekly'}
+              onChange={(e) => onChange({ ...value, session: e.target.value })}
+              title="Ancoragem do VWAP: diária (reset 00:00 UTC) ou semanal (reset segunda 00:00 UTC)"
+            >
+              <option value="daily">{t('vwap.session.daily')}</option>
+              <option value="weekly">{t('vwap.session.weekly')}</option>
+            </select>
+            <select
+              className={sel}
+              value={value.lookback ?? '100'}
+              onChange={(e) => onChange({ ...value, lookback: e.target.value })}
+              title="Quantidade de candles fechados usada pra calcular a largura média das bandas (±2σ)"
+            >
+              {[50, 100, 150, 200, 300].map(v => (
+                <option key={v} value={String(v)}>{v} candles</option>
               ))}
             </select>
           </>
@@ -985,8 +1021,9 @@ export default function IndicatorPanel({ open, onToggle }) {
       const maDistanceIndicators = indicators.filter((ind) => ind.type === 'maDistance');
       const bbPositionIndicators = indicators.filter((ind) => ind.type === 'bollingerPosition');
       const vwapPositionIndicators = indicators.filter((ind) => ind.type === 'vwapPosition');
+      const vwapBandWidthIndicators = indicators.filter((ind) => ind.type === 'vwapBandWidth');
       const growthIndicators = indicators.filter((ind) => ind.type === 'indicatorGrowth');
-      const otherIndicators = indicators.filter((ind) => ind.type && ind.type !== 'relativeStrengthIndex' && ind.type !== 'marketCap' && ind.type !== 'movingAverage' && ind.type !== 'maTimeAbove' && ind.type !== 'maCrossover' && ind.type !== 'maCompare' && ind.type !== 'maDistance' && ind.type !== 'bollingerPosition' && ind.type !== 'vwapPosition' && ind.type !== 'indicatorGrowth');
+      const otherIndicators = indicators.filter((ind) => ind.type && ind.type !== 'relativeStrengthIndex' && ind.type !== 'marketCap' && ind.type !== 'movingAverage' && ind.type !== 'maTimeAbove' && ind.type !== 'maCrossover' && ind.type !== 'maCompare' && ind.type !== 'maDistance' && ind.type !== 'bollingerPosition' && ind.type !== 'vwapPosition' && ind.type !== 'vwapBandWidth' && ind.type !== 'indicatorGrowth');
 
       // Salva intervalos e análises usadas nas preferências
       const allIntervals = [...new Set(indicators.flatMap(ind => ind.intervals ?? []))];
@@ -1149,6 +1186,22 @@ export default function IndicatorPanel({ open, onToggle }) {
           });
           addFilter({
             name: filter.name,
+            list: filter.list,
+            meta: filter.details,
+            scannedAt: filter.scannedAt,
+          });
+        }
+      }
+
+      // Largura das bandas de VWAP (±2σ): média nos últimos N candles — mais/menos distantes
+      for (const ind of vwapBandWidthIndicators) {
+        const session = ind.session ?? 'weekly';
+        const lookback = ind.lookback ?? '100';
+        for (const interval of ind.intervals) {
+          const filter = await fetchVwapBandWidthFilter({ interval, session, lookback });
+          const expectedName = buildVwapBandWidthFilterName(interval, session, lookback);
+          addFilter({
+            name: filter.name ?? expectedName,
             list: filter.list,
             meta: filter.details,
             scannedAt: filter.scannedAt,

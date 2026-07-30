@@ -7,7 +7,7 @@ import {
   fetchMaCrossoverFilter, fetchMultitradeTrades,
   fetchGateTrades, fetchBinanceTrades,
 } from '../services/api';
-import { parseMaCrossFilterName, parseMaCompareFilterName, parseMaDistanceFilterName, parseIndicatorGrowthFilterName, parseFilterChartInterval } from '../utils/filterNames';
+import { parseMaCrossFilterName, parseMaCompareFilterName, parseMaDistanceFilterName, parseIndicatorGrowthFilterName, parseVwapBandWidthFilterName, parseFilterChartInterval } from '../utils/filterNames';
 import { useI18n } from '../i18n';
 import MultitradeModal from './MultitradeModal';
 import MultitradeBotStateModal from './MultitradeBotStateModal';
@@ -315,6 +315,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   const [macmpTableSort, setMacmpTableSort] = useState(() => loadMacmpTableSort());
   const [maDistSort, setMaDistSort] = useState('far'); // 'far' | 'near'
   const [growthSort, setGrowthSort] = useState('high'); // 'high' | 'low'
+  const [vwapWidthSort, setVwapWidthSort] = useState('far'); // 'far' | 'near'
   const [tradeFavSort, setTradeFavSort] = useState(() => loadTradeFavSort());
 
   const macrossFavSymbols = useMemo(() => (
@@ -394,7 +395,18 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
 
   const growthMeta = activeGrowthFilter?.meta ?? null;
   const isGrowthFilter = !!activeGrowthFilter;
-  const tableColCount = isAltaFilter || isMaDistanceFilter || isGrowthFilter ? 6 : 5;
+
+  const activeVwapWidthFilter = useMemo(() => {
+    if (!activeFilter || favoriteView) return null;
+    const f = findFilter(activeFilter);
+    if (!f || !parseVwapBandWidthFilterName(f.name)) return null;
+    return f;
+  }, [activeFilter, favoriteView, findFilter]);
+
+  const vwapWidthMeta = activeVwapWidthFilter?.meta ?? null;
+  const isVwapWidthFilter = !!activeVwapWidthFilter;
+
+  const tableColCount = isAltaFilter || isMaDistanceFilter || isGrowthFilter || isVwapWidthFilter ? 6 : 5;
 
   const filterChartInterval = useMemo(() => {
     if (!activeFilter || favoriteView) return null;
@@ -529,6 +541,12 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
         const gb = growthMeta[b.symbol]?.avgAppreciationPercent ?? (growthSort === 'high' ? -Infinity : Infinity);
         return growthSort === 'high' ? gb - ga : ga - gb;
       });
+    } else if (activeVwapWidthFilter && vwapWidthMeta && sortVolume === 'none' && !favoriteView) {
+      list = list.slice().sort((a, b) => {
+        const wa = vwapWidthMeta[a.symbol]?.avgWidthPct ?? (vwapWidthSort === 'far' ? -Infinity : Infinity);
+        const wb = vwapWidthMeta[b.symbol]?.avgWidthPct ?? (vwapWidthSort === 'far' ? -Infinity : Infinity);
+        return vwapWidthSort === 'far' ? wb - wa : wa - wb;
+      });
     } else if (sortVolume !== 'none') {
       list = list.slice().sort((a, b) => {
         const va = (isAltaFilter || isNovasFilter) ? rowVolume24h(a, highlightMeta) : Number(a.volume) || 0;
@@ -538,7 +556,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     }
 
     return list;
-  }, [currencies, activeFilter, selectedQuote, findFilter, search, favoriteView, gateFavorites, binanceFavorites, multitradeFavorites, sortVolume, gateAll, filterVisibleCurrencies, isVisibleSymbol, currencyBySymbol, activeMacrossFilter, macrossScannedAt, macrossTick, isMacrossFavView, macrossFavSort, macrossFavStatus, macrossEntriesBySymbol, isTradesFavView, tradeFavSort, tradeFavSymbols, tradeFavStatus, isActiveFavView, activeTrades, isAltaFilter, isNovasFilter, highlightMeta, activeMacmpFilter, macmpMeta, macmpTableSort, activeMaDistanceFilter, maDistMeta, maDistSort, activeGrowthFilter, growthMeta, growthSort]);
+  }, [currencies, activeFilter, selectedQuote, findFilter, search, favoriteView, gateFavorites, binanceFavorites, multitradeFavorites, sortVolume, gateAll, filterVisibleCurrencies, isVisibleSymbol, currencyBySymbol, activeMacrossFilter, macrossScannedAt, macrossTick, isMacrossFavView, macrossFavSort, macrossFavStatus, macrossEntriesBySymbol, isTradesFavView, tradeFavSort, tradeFavSymbols, tradeFavStatus, isActiveFavView, activeTrades, isAltaFilter, isNovasFilter, highlightMeta, activeMacmpFilter, macmpMeta, macmpTableSort, activeMaDistanceFilter, maDistMeta, maDistSort, activeGrowthFilter, growthMeta, growthSort, activeVwapWidthFilter, vwapWidthMeta, vwapWidthSort]);
 
   const rowHeightPx = isMobile ? TABLE_ROW_HEIGHT_MOBILE : TABLE_ROW_HEIGHT;
 
@@ -885,7 +903,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   const changeColPx = (isMobile ? 2.75 : 3) * REM_PX;
   const volColPx = (isMobile ? 2.25 : 2.5) * REM_PX;
   const spinnerColPx = (isMobile ? 0.75 : 1) * REM_PX;
-  const fixedColsPx = priceColPx + volColPx + spinnerColPx + (isAltaFilter || isMaDistanceFilter || isGrowthFilter ? changeColPx : 0);
+  const fixedColsPx = priceColPx + volColPx + spinnerColPx + (isAltaFilter || isMaDistanceFilter || isGrowthFilter || isVwapWidthFilter ? changeColPx : 0);
   const favColWidthPx = favColMinPx;
   const parColWidthPx = tableContainerWidth > 0
     ? Math.max(tableContainerWidth - favColWidthPx - fixedColsPx, 0)
@@ -1027,7 +1045,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
             <col className="currency-table-col-fav" style={{ width: favColWidth }} />
             <col className="currency-table-col-par" style={{ width: parColWidth }} />
             <col className="currency-table-col-price" style={{ width: priceColWidth }} />
-            {(isAltaFilter || isMaDistanceFilter || isGrowthFilter) && <col className="currency-table-col-change" style={{ width: changeColWidth }} />}
+            {(isAltaFilter || isMaDistanceFilter || isGrowthFilter || isVwapWidthFilter) && <col className="currency-table-col-change" style={{ width: changeColWidth }} />}
             <col className="currency-table-col-vol" style={{ width: volColWidth }} />
             <col className="currency-table-col-spinner" style={{ width: spinnerColWidth }} />
           </colgroup>
@@ -1121,6 +1139,15 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                   onClick={() => setGrowthSort((s) => (s === 'high' ? 'low' : 'high'))}
                 >
                   Cresc% {growthSort === 'high' ? '↓' : '↑'}
+                </th>
+              )}
+              {isVwapWidthFilter && (
+                <th
+                  className="text-right px-2 py-1 text-p5 opacity-80 font-normal uppercase tracking-wider whitespace-nowrap cursor-pointer hover:opacity-100 select-none"
+                  title="Ordenar por largura das bandas de VWAP: mais distantes ↔ mais próximas"
+                  onClick={() => setVwapWidthSort((s) => (s === 'far' ? 'near' : 'far'))}
+                >
+                  Larg% {vwapWidthSort === 'far' ? '↓' : '↑'}
                 </th>
               )}
               <th
@@ -1396,6 +1423,17 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                       </td>
                     );
                   })()}
+                  {isVwapWidthFilter && (() => {
+                    const widthPct = vwapWidthMeta?.[item.symbol]?.avgWidthPct;
+                    return (
+                      <td
+                        className="px-2 py-1 text-right font-mono text-[10px] font-semibold"
+                        style={{ color: widthPct == null ? 'rgba(255,255,255,0.35)' : '#e2c341' }}
+                      >
+                        {widthPct != null ? `${widthPct.toFixed(2)}%` : '—'}
+                      </td>
+                    );
+                  })()}
                   <td className="px-2 py-1 text-right font-mono text-[10px]">
                     {isTradesFavView && !volumeSortActive ? (
                       <span
@@ -1496,7 +1534,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                         {base}<span className="opacity-40 font-normal text-[8px]">/{quote}</span>
                       </td>
                       <td className="px-2 py-1 text-right font-mono">{item.price > 0 ? formatPrice(item.price) : '—'}</td>
-                      {(isAltaFilter || isMaDistanceFilter || isGrowthFilter) && <td className="px-2 py-1 text-right font-mono text-[10px] opacity-35">—</td>}
+                      {(isAltaFilter || isMaDistanceFilter || isGrowthFilter || isVwapWidthFilter) && <td className="px-2 py-1 text-right font-mono text-[10px] opacity-35">—</td>}
                       <td className="px-2 py-1 text-right font-mono text-[10px] opacity-60">{formatVolume(item.volume)}</td>
                       <td className="pr-1 text-center">
                         {loadingSymbol === item.symbol

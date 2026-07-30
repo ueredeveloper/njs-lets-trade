@@ -22,7 +22,7 @@ const { ichimokuCloudRouter } = require('./technicals-indicators');
 const {
   fetchCandles, fetchIchimokuCloud, fetchSupportResistance, fetchPivotPointsHighLow, fetchAllCurrencies,
   fetchSMA, fetchRSI, fetchChopZone, fetchVWAP, fetch24HsVolume, fetchMarketCapFilter, fetchStablecoins, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter, fetchMaDistanceFilter, fetchIndicatorGrowthFilter,
-  fetchRsiOversoldRecovery, fetchMaCrossStats, fetchBollingerBandRecovery, fetchBollingerBandPositionFilter, fetchVwapPositionFilter, fetchBollingerBands, fetchSimpleMaCross, fetchReloadCandles,
+  fetchRsiOversoldRecovery, fetchMaCrossStats, fetchBollingerBandRecovery, fetchBollingerBandPositionFilter, fetchVwapPositionFilter, fetchVwapBandWidthFilter, fetchBollingerBands, fetchSimpleMaCross, fetchReloadCandles,
   fetchGateCurrencies, fetchGatePrefetch, fetchBinanceTrades, fetchGateTrades,
   fetchActiveTrades, fetchTradeFavorites, stgBotStatus, multitradeService, fetchMarketHighlights } = require('./services');
 const supabaseService = require('./services/supabaseService');
@@ -59,6 +59,7 @@ app.use('/services', fetchMaCrossStats)
 app.use('/services', fetchBollingerBandRecovery)
 app.use('/services', fetchBollingerBandPositionFilter)
 app.use('/services', fetchVwapPositionFilter)
+app.use('/services', fetchVwapBandWidthFilter)
 app.use('/services', fetchBollingerBands)
 app.use('/services', fetchSimpleMaCross)
 app.use('/services', fetchReloadCandles)
@@ -144,6 +145,8 @@ async function startServer() {
   await bbPositionCache.loadFromDisk();
   const vwapPositionCache = require('./cache/vwapPositionCache');
   await vwapPositionCache.loadFromDisk();
+  const vwapBandWidthCache = require('./cache/vwapBandWidthCache');
+  await vwapBandWidthCache.loadFromDisk();
   const maDistanceCache = require('./cache/maDistanceCache');
   await maDistanceCache.loadFromDisk();
   const indicatorGrowthCache = require('./cache/indicatorGrowthCache');
@@ -247,6 +250,27 @@ async function startServer() {
 
   refreshVwapPositionCache().catch(e => console.error('[vwapPositionCache] erro no warmup:', e.message));
   setInterval(refreshVwapPositionCache, vwapPositionCache.REFRESH_TICK_MS);
+
+  async function refreshVwapBandWidthCache() {
+    try {
+      const { list: symbols } = await getActiveUsdtPairs();
+      if (!Array.isArray(symbols) || symbols.length === 0) return;
+      const stats = await vwapBandWidthCache.refreshAll(symbols);
+      if (stats.computed > 0) {
+        const m = stats.matched ?? {};
+        console.log(
+          `[vwapBandWidthCache] 4h|w|100:${m['4h|w|100'] ?? 0} 4h|w|200:${m['4h|w|200'] ?? 0}`
+          + ` | disco:${stats.diskHits ?? 0} stale:${stats.diskStale ?? 0} api:${stats.apiFetches ?? 0}`
+          + ` | fila:${stats.queuePending ?? 0}`,
+        );
+      }
+    } catch (e) {
+      console.error('[vwapBandWidthCache] erro no refresh:', e.message);
+    }
+  }
+
+  refreshVwapBandWidthCache().catch(e => console.error('[vwapBandWidthCache] erro no warmup:', e.message));
+  setInterval(refreshVwapBandWidthCache, vwapBandWidthCache.REFRESH_TICK_MS);
 
   async function refreshMaDistanceCache() {
     try {

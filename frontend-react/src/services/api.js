@@ -165,6 +165,19 @@ export async function fetchVwapPositionFilter({
   return res.json();
 }
 
+/** Filtra moedas por largura das bandas de VWAP (±2σ), média nos últimos N candles: mais/menos distantes. */
+export async function fetchVwapBandWidthFilter({
+  interval = '4h', session = 'weekly', lookback = '100', order = 'far',
+} = {}) {
+  const params = new URLSearchParams({ interval, session, lookback, order });
+  const res = await fetch(`/services/vwap-band-width-filter?${params}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 export async function getFavorites(type) {
   const res = await fetch(`/services/sb/favorites?type=${type}`);
   if (!res.ok) throw new Error('Falha ao buscar favoritos');
