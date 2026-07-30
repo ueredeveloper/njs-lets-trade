@@ -474,15 +474,21 @@ async function loadState(id)  { const r = await sbReq('GET', 'rsi_multi_bot_stat
 /** Carrega config salva no Supabase (bot state → multitrade favorites) */
 async function loadSavedBacktestRow(symbol, exchange = null) {
   const sym = symbol.toUpperCase();
+  // Um símbolo pode ter linhas de OUTRAS estratégias (ma-cross, vwap-bands, swing) na mesma
+  // tabela — filtrar por strategy_id aqui é obrigatório, senão "order=updated_at.desc&limit=1"
+  // pode trazer a linha de outra estratégia (ex.: vwap-bands editado por último) e
+  // configFromRow tenta reinterpretar aquele trade_config como se fosse AMAP, quebrando com
+  // "Cannot read properties of undefined" mais adiante (campos como rule1.entryRsi ausentes).
+  const strategyFilter = `strategy_id=in.(${AMAP_STRATEGY_IDS.join(',')})`;
   const botQ = exchange
-    ? `?symbol=eq.${sym}&exchange=eq.${exchange}&order=updated_at.desc&limit=1`
-    : `?symbol=eq.${sym}&order=updated_at.desc&limit=1`;
+    ? `?symbol=eq.${sym}&exchange=eq.${exchange}&${strategyFilter}&order=updated_at.desc&limit=1`
+    : `?symbol=eq.${sym}&${strategyFilter}&order=updated_at.desc&limit=1`;
   const botRows = await sbReq('GET', 'rsi_multi_bot_state', null, botQ);
   if (botRows?.[0]) return botRows[0];
 
   const favQ = exchange
-    ? `?symbol=eq.${sym}&exchange=eq.${exchange}&order=updated_at.desc&limit=1`
-    : `?symbol=eq.${sym}&order=updated_at.desc&limit=1`;
+    ? `?symbol=eq.${sym}&exchange=eq.${exchange}&${strategyFilter}&order=updated_at.desc&limit=1`
+    : `?symbol=eq.${sym}&${strategyFilter}&order=updated_at.desc&limit=1`;
   const favRows = await sbReq('GET', 'multitrade_favorites', null, favQ);
   return favRows?.[0] ?? null;
 }

@@ -2,11 +2,13 @@
 import { formStateFromEntry } from './tradeConfigSchema';
 import { swingFormFromEntry, normalizeSwingForm } from './swingConfigSchema';
 import { maCrossFormFromEntry, normalizeMaCrossForm } from './maCrossConfigSchema';
+import { vwapBandsFormFromEntry, normalizeVwapBandsForm, VWAP_BANDS_DEFAULTS } from './vwapBandsConfigSchema';
 import { loadUiPreferences } from '../utils/uiPreferences';
 
 export const MA_CROSS_STRATEGY_IDS = ['ma-cross'];
-/** Frontend MA-Cross only — backend ainda aceita outras estratégias. */
-export const STRATEGY_IDS = [...MA_CROSS_STRATEGY_IDS];
+export const VWAP_BANDS_STRATEGY_IDS = ['vwap-bands'];
+/** Frontend MA-Cross + VWAP Bands — backend ainda aceita outras estratégias. */
+export const STRATEGY_IDS = [...MA_CROSS_STRATEGY_IDS, ...VWAP_BANDS_STRATEGY_IDS];
 
 export const STRATEGY_LABELS = {
   'amap-15m':      'AMAP 15m',
@@ -14,6 +16,7 @@ export const STRATEGY_LABELS = {
   'swing-rsi-1h':  'RSI 1h',
   'swing-ma50-8h': 'MA50 8h',
   'ma-cross':      'MA Cross',
+  'vwap-bands':    'VWAP Bands',
 };
 
 export const STRATEGY_COLORS = {
@@ -22,6 +25,7 @@ export const STRATEGY_COLORS = {
   'swing-rsi-1h':  '#f59e0b',
   'swing-ma50-8h': '#ec4899',
   'ma-cross':      '#22d3ee',
+  'vwap-bands':    '#a78bfa',
 };
 
 const SWING_STRATEGY_IDS = ['swing-rsi-1h', 'swing-ma50-8h'];
@@ -32,6 +36,10 @@ export function isSwingStrategy(id) {
 
 export function isMaCrossStrategy(id) {
   return MA_CROSS_STRATEGY_IDS.includes(id);
+}
+
+export function isVwapBandsStrategy(id) {
+  return VWAP_BANDS_STRATEGY_IDS.includes(id);
 }
 
 const AMAP_PRESETS = {
@@ -207,6 +215,10 @@ export const MA_CROSS_PRESETS = {
  *  molde próprio em Configurações (ver `maCrossDefaultTemplate` em uiPreferences.js). */
 export const MA_CROSS_FACTORY_DEFAULT = MA_CROSS_PRESETS['ma-cross'];
 
+export const VWAP_BANDS_PRESETS = {
+  'vwap-bands': VWAP_BANDS_DEFAULTS,
+};
+
 export function presetFormState(strategyId) {
   if (isMaCrossStrategy(strategyId)) {
     const userTemplate = loadUiPreferences().maCrossDefaultTemplate;
@@ -214,6 +226,9 @@ export function presetFormState(strategyId) {
   }
   if (isSwingStrategy(strategyId)) {
     return normalizeSwingForm(SWING_PRESETS[strategyId] ?? SWING_PRESETS['swing-rsi-1h']);
+  }
+  if (isVwapBandsStrategy(strategyId)) {
+    return normalizeVwapBandsForm(VWAP_BANDS_PRESETS[strategyId] ?? VWAP_BANDS_DEFAULTS);
   }
   return formStateFromEntry(AMAP_PRESETS[strategyId] ?? AMAP_PRESETS['amap-15m']);
 }
@@ -257,6 +272,7 @@ export function normalizeStrategyId(id) {
   if (!id || id === 'flex') return 'ma-cross';
   if (STRATEGY_IDS.includes(id)) return id;
   if (id === 'ma-cross' || id === 'ma_cross') return 'ma-cross';
+  if (id === 'vwap-bands' || id === 'vwap_bands') return 'vwap-bands';
   return 'ma-cross';
 }
 
@@ -266,6 +282,7 @@ export function resolveEntryStrategyId(entry) {
   if (sid && STRATEGY_IDS.includes(sid)) return sid;
   const kind = entry?.tradeConfig?.kind;
   if (kind === 'ma_cross') return 'ma-cross';
+  if (kind === 'vwap_bands') return 'vwap-bands';
   if (kind === 'rsi') return 'swing-rsi-1h';
   if (kind === 'ma') return 'swing-ma50-8h';
   return normalizeStrategyId(sid);
@@ -276,6 +293,10 @@ export function formForEntry(existing, strategyId) {
     if (existing?.tradeConfig?.kind === 'ma_cross') return maCrossFormFromEntry(existing);
     return presetFormState(strategyId);
   }
+  if (isVwapBandsStrategy(strategyId)) {
+    if (existing?.tradeConfig?.kind === 'vwap_bands') return vwapBandsFormFromEntry(existing);
+    return presetFormState(strategyId);
+  }
   if (isSwingStrategy(strategyId)) {
     if (existing?.tradeConfig?.kind === 'rsi' || existing?.tradeConfig?.kind === 'ma') {
       return swingFormFromEntry(existing);
@@ -283,6 +304,7 @@ export function formForEntry(existing, strategyId) {
     return presetFormState(strategyId);
   }
   if (existing?.tradeConfig?.kind === 'ma_cross') return maCrossFormFromEntry(existing);
+  if (existing?.tradeConfig?.kind === 'vwap_bands') return vwapBandsFormFromEntry(existing);
   if (existing?.tradeConfig?.kind) return swingFormFromEntry(existing);
   return existing?.tradeConfig ? formStateFromEntry(existing) : presetFormState(strategyId);
 }
@@ -305,6 +327,7 @@ export function buildDualStrategyState(currentEntries, { symbol, exchange, defau
       form: existing ? formForEntry(existing, sid) : presetFormState(sid),
       isSwing: isSwingStrategy(sid),
       isMaCross: isMaCrossStrategy(sid),
+      isVwapBands: isVwapBandsStrategy(sid),
     };
     if (!existing && sid === 'ma-cross') strategies[sid].enabled = true;
   }
@@ -331,5 +354,6 @@ export function strategyBadgeLabel(sid) {
   if (sid === 'swing-rsi-1h') return 'RSI';
   if (sid === 'swing-ma50-8h') return 'MA';
   if (sid === 'ma-cross') return 'X';
+  if (sid === 'vwap-bands') return 'VWAP';
   return sid.slice(0, 4);
 }

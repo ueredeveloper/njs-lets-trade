@@ -8,14 +8,16 @@ import {
 } from '../constants/tradeConfigSchema';
 import {
   STRATEGY_IDS, STRATEGY_LABELS, STRATEGY_COLORS,
-  buildDualStrategyState, isSwingStrategy, isMaCrossStrategy, resolveEntryStrategyId,
+  buildDualStrategyState, isSwingStrategy, isMaCrossStrategy, isVwapBandsStrategy, resolveEntryStrategyId,
 } from '../constants/strategyPresets';
 import { swingFormToPayload } from '../constants/swingConfigSchema';
 import { maCrossFormToPayload } from '../constants/maCrossConfigSchema';
+import { vwapBandsFormToPayload } from '../constants/vwapBandsConfigSchema';
 import { MT_HELP } from '../constants/multitradeHelp';
 import { FieldLabel, FieldHint } from './MultitradeFieldHint';
 import SwingStrategyForm from './SwingStrategyForm';
 import MaCrossStrategyForm from './MaCrossStrategyForm';
+import VwapBandsStrategyForm from './VwapBandsStrategyForm';
 
 const MT_COLOR      = '#8b5cf6';
 const GATE_COLOR    = '#0068ff';
@@ -140,8 +142,20 @@ export default function MultitradeModal({
     exchange: defaultExchange ?? entries[0]?.exchange ?? 'binance',
   }));
   const [activeStrategy, setActiveStrategy] = useState(() => {
-    const first = entries.find(e => e.enabled !== false) ?? entries[0];
-    return first ? resolveEntryStrategyId(first) : 'ma-cross';
+    // Entre as estratégias habilitadas, abre na que foi editada por último (updatedAt mais
+    // recente) — não na primeira da lista. Um símbolo pode ter mais de uma estratégia
+    // habilitada ao mesmo tempo (ex.: ma-cross antigo + vwap-bands novo em teste); sem isso,
+    // o modal sempre reabria na mais antiga e dava a impressão de que os últimos ajustes
+    // salvos em outra estratégia tinham sumido.
+    const enabledEntries = entries.filter(e => e.enabled !== false);
+    const mostRecent = enabledEntries.length
+      ? enabledEntries.reduce((latest, e) => {
+          const eTime = new Date(e.updatedAt ?? e.createdAt ?? 0).getTime();
+          const latestTime = new Date(latest.updatedAt ?? latest.createdAt ?? 0).getTime();
+          return eTime > latestTime ? e : latest;
+        })
+      : entries[0];
+    return mostRecent ? resolveEntryStrategyId(mostRecent) : 'ma-cross';
   });
   const [activeTab, setActiveTab] = useState('rule1');
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -192,8 +206,9 @@ export default function MultitradeModal({
 
   const isSwing = isSwingStrategy(activeStrategy);
   const isMaCross = isMaCrossStrategy(activeStrategy);
-  const rule1On = !isSwing && !isMaCross && !!form.rule1 && form.rule1.enabled !== false;
-  const rule2On = !isSwing && !isMaCross && !!form.rule2 && form.rule2.enabled === true;
+  const isVwapBands = isVwapBandsStrategy(activeStrategy);
+  const rule1On = !isSwing && !isMaCross && !isVwapBands && !!form.rule1 && form.rule1.enabled !== false;
+  const rule2On = !isSwing && !isMaCross && !isVwapBands && !!form.rule2 && form.rule2.enabled === true;
 
   const entrySummary = rule1On && form.rule1?.entryRsi
     ? `RSI(${form.rule1.entryRsi.interval}) ${form.rule1.entryRsi.operator ?? '<'} ${form.rule1.entryRsi.value}`
@@ -331,6 +346,11 @@ export default function MultitradeModal({
       // estratégia, então não há motivo pra escrever esse campo de volta no trade_config.
       const payload = maCrossFormToPayload(st.form, meta);
       payload.volume = { minVolumeUsdt: st.form.volume?.minVolumeUsdt };
+      return payload;
+    }
+    if (isVwapBandsStrategy(sid)) {
+      const payload = vwapBandsFormToPayload(st.form, meta);
+      payload.volume = { ...st.form.volume, allowLowVolume: volAllow };
       return payload;
     }
     const payload = formStateToPayload(st.form, {
@@ -650,7 +670,7 @@ export default function MultitradeModal({
       ? `node backend/bot/ma-cross/ma-cross-bot.js --symbol ${symbol.trim().toUpperCase()}`
       : getBacktestCmd(payload);
   const adaptCmd = getAdaptiveTestCmd(payload);
-  const showAdaptive = !isSwing && !isMaCross && form.rule1?.maFiltersEnabled !== false && hasAdaptiveMa(form.rule1?.maConditions);
+  const showAdaptive = !isSwing && !isMaCross && !isVwapBands && form.rule1?.maFiltersEnabled !== false && hasAdaptiveMa(form.rule1?.maConditions);
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto py-4"
@@ -702,7 +722,9 @@ export default function MultitradeModal({
               {STRATEGY_IDS.map(sid => {
                 const st = dual.strategies[sid];
                 const color = STRATEGY_COLORS[sid];
-                const stratHint = sid === 'amap-15m' ? MT_HELP.shared.strategy15m : MT_HELP.shared.strategy1h;
+                const stratHint = sid === 'amap-15m' ? MT_HELP.shared.strategy15m
+                  : sid === 'amap-1h' ? MT_HELP.shared.strategy1h
+                  : STRATEGY_LABELS[sid];
                 return (
                   <button key={sid} type="button" onClick={() => {
                     setActiveStrategy(sid);
@@ -764,7 +786,7 @@ export default function MultitradeModal({
           )}
 
           <div className={`flex gap-1 p-1 rounded-lg ${strategyEnabled ? '' : 'opacity-40 pointer-events-none'}`} style={{ background: '#1a1d28', border: '1px solid #2a2d3a' }}>
-            {!isSwing && !isMaCross && [
+            {!isSwing && !isMaCross && !isVwapBands && [
               { id: 'rule1', label: 'Regra 1 — RSI', color: ENTRY_COLOR, hint: MT_HELP.rule1.group },
               { id: 'rule2', label: rule2TabLabel, color: MT_COLOR, hint: MT_HELP.rule2.group },
             ].map(tab => (
@@ -804,7 +826,11 @@ export default function MultitradeModal({
             </>
           )}
 
-          {!isSwing && !isMaCross && activeTab === 'rule1' && strategyEnabled && (
+          {isVwapBands && strategyEnabled && (
+            <VwapBandsStrategyForm form={form} patch={patch} symbol={symbol} />
+          )}
+
+          {!isSwing && !isMaCross && !isVwapBands && activeTab === 'rule1' && strategyEnabled && (
           <RuleGroup
             title="Regra 1 — Entrada RSI e saída"
             subtitle={MT_HELP.rule1.group}
@@ -1210,7 +1236,7 @@ export default function MultitradeModal({
           </RuleGroup>
           )}
 
-          {!isSwing && !isMaCross && activeTab === 'rule2' && strategyEnabled && (
+          {!isSwing && !isMaCross && !isVwapBands && activeTab === 'rule2' && strategyEnabled && (
           <RuleGroup
             title="Regra 2 — Entrada MA"
             subtitle={MT_HELP.rule2.group}
@@ -1416,7 +1442,7 @@ export default function MultitradeModal({
                     </select>
                   </div>
                 </div>
-                {!isMaCross && !isSwing && (
+                {!isMaCross && !isSwing && !isVwapBands && (
                 <div>
                   <FieldLabel label="RSI saída ≥ valor → polling rápido" hint={MT_HELP.shared.pollFastThreshold}
                     className="block text-[10px] text-p5/40 mb-1" />

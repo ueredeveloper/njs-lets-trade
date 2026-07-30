@@ -15,7 +15,7 @@ const BINANCE_BASE = 'https://api.binance.com';
  * @param {string} symbol      - Par no formato Binance, ex: "EDUUSDT"
  * @param {number} [limit=200] - Quantidade de candles (máx 1000)
  * @param {string} [interval='1m'] - Intervalo: '1m','5m','15m','30m','1h','4h','1d'
- * @returns {Promise<Array<{openTime:number, open:number, high:number, low:number, close:number}>>}
+ * @returns {Promise<Array<{openTime:number, open:number, high:number, low:number, close:number, volume:number}>>}
  */
 async function fetchBinanceCandles(symbol, limit = 200, interval = '1m') {
   const url = `${BINANCE_BASE}/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
@@ -29,6 +29,7 @@ async function fetchBinanceCandles(symbol, limit = 200, interval = '1m') {
     high:  parseFloat(c[2]),
     low:   parseFloat(c[3]),
     close: parseFloat(c[4]),
+    volume: parseFloat(c[5]),
   }));
 }
 
@@ -37,7 +38,7 @@ async function fetchBinanceCandles(symbol, limit = 200, interval = '1m') {
  * @param {string} pair        - Par no formato Gate.io, ex: "SKYAI_USDT"
  * @param {number} [limit=200] - Quantidade de candles (máx 1000)
  * @param {string} [interval='30m'] - Intervalo: '1m','5m','15m','30m','1h','4h','1d'
- * @returns {Promise<Array<{openTime:number, open:number, high:number, low:number, close:number}>>}
+ * @returns {Promise<Array<{openTime:number, open:number, high:number, low:number, close:number, volume:number}>>}
  */
 async function fetchGateCandles(pair, limit = 200, interval = '30m') {
   const url = `${GATE_BASE}/spot/candlesticks?currency_pair=${pair}&interval=${interval}&limit=${limit}`;
@@ -51,6 +52,7 @@ async function fetchGateCandles(pair, limit = 200, interval = '30m') {
     high:  parseFloat(c[3]),
     low:   parseFloat(c[4]),
     close: parseFloat(c[2]),
+    volume: parseFloat(c[1]),
   }));
 }
 

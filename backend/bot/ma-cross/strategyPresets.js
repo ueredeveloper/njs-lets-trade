@@ -81,8 +81,13 @@ const PRESET_BODIES = {
   },
 };
 
+// Checagem EXATA — não passar por normalizeStrategyId aqui: essa função tem fallback
+// "id desconhecido → ma-cross" (pro caso de uso legítimo de getStrategyPresetBody), mas
+// isso fazia isMaCrossStrategy() responder true pra QUALQUER id (vwap-bands, amap-15m,
+// swing-rsi-1h, até undefined) — o que fazia bodyToMultitradeRow() salvar todo mundo com
+// o trade_config formato ma-cross, não importa a estratégia escolhida no painel.
 function isMaCrossStrategy(id) {
-  return STRATEGY_IDS.includes(normalizeStrategyId(id));
+  return STRATEGY_IDS.includes(id);
 }
 
 function normalizeStrategyId(id) {

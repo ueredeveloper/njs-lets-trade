@@ -1,0 +1,464 @@
+'use strict';
+
+const { computeVwapWithBands } = require('../../utils/vwapSession');
+const { computeStopLossFloor } = require('../shared/stopLossFloor');
+
+const INTERVAL_MS = {
+  '1m': 60_000, '3m': 180_000, '5m': 300_000, '15m': 900_000, '30m': 1_800_000,
+  '1h': 3_600_000, '2h': 7_200_000, '4h': 14_400_000, '8h': 28_800_000, '1d': 86_400_000,
+};
+const SESSION_HOURS = { daily: 24, weekly: 24 * 7 };
+
+const LEVEL_LABELS = {
+  lower2: '-2σ', lower1: '-1σ', vwap: 'linha principal', upper1: '+1σ', upper2: '+2σ',
+};
+
+/**
+ * Escada de setups: cada um é "toque no nível de baixo → fechamento acima do nível do
+ * meio → compra nesse nível (retorno) → venda no nível de cima". O usuário descreveu os
+ * dois primeiros degraus (lower2→lower1→vwap e lower1→vwap→upper1) como a mesma regra
+ * aplicada a bandas adjacentes diferentes — adicionar um novo degrau (ex.: vwap→upper1→
+ * upper2) é só acrescentar uma linha aqui, sem tocar no resto do motor.
+ */
+const LADDER_SETUPS = [
+  { id: 'lower2_lower1_vwap', touch: 'lower2', confirm: 'lower1', target: 'vwap' },
+  { id: 'lower1_vwap_upper1', touch: 'lower1', confirm: 'vwap', target: 'upper1' },
+];
+
+function labelForLevel(key) {
+  return LEVEL_LABELS[key] ?? key;
+}
+
+function intervalMs(iv) {
+  return INTERVAL_MS[iv] ?? 3_600_000;
+}
+
+function closedCandlesOnly(candles) {
+  if (!candles?.length || candles.length < 2) return candles ?? [];
+  return candles.slice(0, -1);
+}
+
+/** VWAP de sessão + bandas ±1σ/±2σ — mesmo cálculo do exhaustionScreener do ma-cross e
+ *  do painel VWAP do próprio gráfico (backend/services/fetchVWAP.js). */
+function computeVwapSeries(candles, session) {
+  return computeVwapWithBands(candles, { session, bandMultipliers: [1, 2] });
+}
+
+/** Nomeia os 5 níveis de preço num ponto da série VWAP. */
+function levelsAt(vwapPoint) {
+  if (!vwapPoint) return {};
+  return {
+    lower2: vwapPoint.lower2, lower1: vwapPoint.lower1,
+    vwap: vwapPoint.value,
+    upper1: vwapPoint.upper1, upper2: vwapPoint.upper2,
+  };
+}
+
+/**
+ * Ponto da série VWAP vigente num dado instante — o último ponto cujo candle (do
+ * intervalo em que a VWAP foi calculada, ex.: 4h) abriu em ou antes de `openTime` (do
+ * intervalo em que os candles de preço são avaliados, ex.: 1h). Mesma ideia do
+ * `maValueAt` do ma-cross (strategyEngine.js), usado quando dois indicadores rodam em
+ * intervalos diferentes.
+ */
+function vwapPointAt(series, openTime) {
+  if (!series?.length) return null;
+  let best = null;
+  for (const pt of series) {
+    if (pt.openTime <= openTime) best = pt;
+    else break;
+  }
+  return best;
+}
+
+/**
+ * Especificações de candles necessárias: um intervalo pros candles de preço (fechamento/
+ * toque, ex.: 1h), outro pra VWAP+bandas (ex.: 4h) e outro pra checagem rápida do retorno
+ * durante o PENDING (ex.: 15m) — podem coincidir ou ser três intervalos diferentes (o
+ * usuário usa VWAP 4h semanal, gráfico de 1h, checagem de retorno em 15m).
+ */
+function getRequiredSpecs(config) {
+  const entry = config.entry;
+  const vwapIv = entry.vwapInterval ?? entry.interval;
+  const pollIv = entry.pullback?.pollInterval ?? entry.interval;
+
+  const sessionHours = SESSION_HOURS[entry.session] ?? 24;
+  const vwapCandlesPerSession = Math.ceil((sessionHours * 3_600_000) / intervalMs(vwapIv));
+  // 3 sessões de histórico pra VWAP (reancora a cada sessão, não precisa de mais que isso).
+  const vwapLimit = vwapCandlesPerSession * 3 + 30;
+  // Candles de preço: folga pra janela de pullback e pro lookback de reconquista.
+  const priceLimit = entry.pullback.waitCandles + Math.round(Number(entry.reclaimLookbackCandles ?? 24)) + 30;
+  // pollInterval precisa cobrir a janela de espera inteira (waitCandles, contado na
+  // unidade de entry.interval) já escalada pra candles de pollInterval.
+  const pollRatio = Math.max(1, Math.round(intervalMs(entry.interval) / intervalMs(pollIv)));
+  const pollLimit = entry.pullback.waitCandles * pollRatio + 30;
+
+  const specs = new Map();
+  const add = (iv, limit) => specs.set(iv, Math.max(specs.get(iv) ?? 0, limit));
+  add(entry.interval, priceLimit);
+  add(vwapIv, vwapLimit);
+  add(pollIv, pollLimit);
+  return [...specs.entries()].map(([interval, limit]) => ({ interval, limit }));
+}
+
+/**
+ * Sinal de entrada (stateless — recalculado a cada tick a partir do histórico de candles):
+ * roda a escada (LADDER_SETUPS) em ordem procurando, dentro de `reclaimLookbackCandles`
+ * candles fechados pra trás (no intervalo de preço, ex.: 1h), a reconquista mais recente
+ * do nível de confirmação — um candle DE ALTA (close > open) que fecha acima dele, tendo o
+ * candle anterior fechado na/abaixo dele. Exigir candle de alta descarta reconquistas
+ * "fracas" (ex.: um candle vermelho que só encosta acima da linha na ponta do pavio).
+ *
+ * Os níveis (lower2/lower1/vwap/upper1/upper2) vêm da VWAP calculada no intervalo
+ * `vwapInterval` (ex.: 4h) — cada candle de preço usa o ponto vigente mais recente dessa
+ * série (vwapPointAt), não recalcula a VWAP no próprio intervalo de preço.
+ *
+ * O lookback existe pelo mesmo motivo do `crossLookbackCandles` do ma-cross
+ * (findRecentMaCross): sem ele, uma reconquista que aconteceu enquanto o bot estava
+ * ocupado (ex.: já em PENDING esperando o retorno de um degrau anterior) nunca mais seria
+ * vista. Por isso também exige que o nível tenha se "segurado" (nenhum fechamento de volta
+ * abaixo dele) desde a reconquista.
+ *
+ * NÃO verifica aqui se o preço tocou o nível de baixo (ex.: -2σ) antes — essa exaustão já
+ * é detectada pelo screener BB+VWAP do ma-cross (backend/bot/ma-cross/exhaustionScreener.js),
+ * que é quem decide se a moeda entra em observação. O vwap-bands assume que, se está
+ * vigiando o símbolo, a condição de exaustão já foi satisfeita — só reage ao fechamento
+ * de reconquista do degrau seguinte da escada.
+ */
+function evaluateEntrySignal(config, cMap) {
+  const entry = config.entry;
+  const iv = entry.interval;
+  const vwapIv = entry.vwapInterval ?? iv;
+
+  const raw = cMap[iv] ?? [];
+  const candles = closedCandlesOnly(raw);
+  if (candles.length < 2) return { allowed: false, reason: 'INSUFFICIENT_DATA' };
+
+  const vwapRaw = cMap[vwapIv] ?? [];
+  const vwapCandleSource = vwapIv === iv ? candles : closedCandlesOnly(vwapRaw);
+  if (vwapCandleSource.length < 2) return { allowed: false, reason: 'NO_VWAP' };
+  const vwapSeries = computeVwapSeries(vwapCandleSource, entry.session);
+  if (vwapSeries.length < 2) return { allowed: false, reason: 'NO_VWAP' };
+
+  const lastIdx = candles.length - 1;
+  const minDistPct = Math.max(0, Number(entry.minBandDistancePct ?? 0));
+  const lookback = Math.max(1, Math.round(Number(entry.reclaimLookbackCandles ?? 24)));
+  const fromIdx = Math.max(1, lastIdx - lookback + 1);
+  const lastClose = parseFloat(candles[lastIdx].close);
+
+  let lastReason = 'NO_LADDER_SIGNAL';
+  let best = null;
+
+  // Avalia TODOS os degraus (não para no primeiro que bater) e fica com o de reconquista
+  // MAIS RECENTE. Um degrau de baixo (ex.: lower2→lower1→vwap) fica "sempre válido" assim
+  // que o preço sobe e nunca mais fecha abaixo da lower1 — se parássemos no primeiro match
+  // da lista, ele bloquearia pra sempre um degrau de cima mais novo e mais relevante (ex.:
+  // reconquista fresca da própria vwap, lower1→vwap→upper1), mesmo o preço já tendo subido
+  // bem além dele.
+  for (const setup of LADDER_SETUPS) {
+    // Acha a reconquista mais recente dentro da janela (varre de trás pra frente — a 1ª
+    // que achar já é a mais recente).
+    let reclaimIdx = -1;
+    for (let i = lastIdx; i >= fromIdx; i--) {
+      const levels = levelsAt(vwapPointAt(vwapSeries, candles[i].openTime));
+      const prevLevels = levelsAt(vwapPointAt(vwapSeries, candles[i - 1].openTime));
+      const levelValue = levels[setup.confirm];
+      const prevLevelValue = prevLevels[setup.confirm];
+      if (levelValue == null || prevLevelValue == null) continue;
+
+      const c = candles[i];
+      const cClose = parseFloat(c.close);
+      const cOpen = parseFloat(c.open);
+      const prevClose = parseFloat(candles[i - 1].close);
+      const isBullish = cClose > cOpen;
+
+      if (isBullish && prevClose <= prevLevelValue && cClose > levelValue) {
+        reclaimIdx = i;
+        break;
+      }
+    }
+    if (reclaimIdx === -1) continue;
+
+    // Precisa ter segurado o nível desde a reconquista: nenhum fechamento de volta
+    // abaixo dele entre o candle da reconquista e o último candle fechado.
+    let held = true;
+    for (let i = reclaimIdx + 1; i <= lastIdx; i++) {
+      const lv = levelsAt(vwapPointAt(vwapSeries, candles[i].openTime))[setup.confirm];
+      if (lv != null && parseFloat(candles[i].close) <= lv) { held = false; break; }
+    }
+    if (!held) { lastReason = 'RECLAIM_LOST'; continue; }
+
+    // Bandas muito próximas dão pouco espaço de lucro entre compra (nível de confirmação)
+    // e venda (nível-alvo) — não compensa o risco/taxas. Usa os níveis ATUAIS (última VWAP
+    // vigente), não os do candle da reconquista, pra refletir a distância real de agora.
+    const lastLevels = levelsAt(vwapPointAt(vwapSeries, candles[lastIdx].openTime));
+    const confirmLevelValue = lastLevels[setup.confirm];
+    const targetLevelValue = lastLevels[setup.target];
+    const bandDistPct = targetLevelValue != null && confirmLevelValue != null
+      ? ((targetLevelValue - confirmLevelValue) / confirmLevelValue) * 100
+      : null;
+    if (bandDistPct == null || bandDistPct < minDistPct) {
+      lastReason = 'BANDS_TOO_CLOSE';
+      continue;
+    }
+
+    if (!best || reclaimIdx > best.reclaimIdx) {
+      best = {
+        reclaimIdx, setup, confirmLevelValue, targetLevelValue, bandDistPct,
+      };
+    }
+  }
+
+  if (!best) return { allowed: false, reason: lastReason, close: lastClose };
+
+  return {
+    allowed: true,
+    setupId: best.setup.id,
+    touchLevel: best.setup.touch,
+    confirmLevel: best.setup.confirm,
+    targetLevel: best.setup.target,
+    close: lastClose,
+    confirmLevelValue: best.confirmLevelValue,
+    targetLevelValue: best.targetLevelValue,
+    bandDistPct: best.bandDistPct,
+    confirmOpenTime: candles[lastIdx].openTime,
+    entryDesc: `VWAP(${vwapIv},${entry.session}) fechamento acima ${labelForLevel(best.setup.confirm)}`,
+  };
+}
+
+/**
+ * Janela de espera pelo retorno ao nível de confirmação (ex.: -1σ) após o fechamento que
+ * armou a compra — mesmo padrão do "pending pullback" do ma-cross (ema50Proximity/
+ * pullbackEntry). A compra só dispara quando um candle FECHADO reconquistar o nível de
+ * novo — de alta (close > open) e fechando acima dele, dentro da tolerância `tolerancePct`
+ * de distância — não basta o preço ao vivo tocar o nível de qualquer jeito: precisa de um
+ * segundo fechamento de força na mesma direção do sinal original (retest + reconquista).
+ *
+ * A checagem desse fechamento roda no intervalo RÁPIDO `pullback.pollInterval` (padrão
+ * 15m), não no intervalo principal (`entry.interval`, ex.: 1h) — mesmo motivo do
+ * ema50Proximity.pollInterval do ma-cross: esperar o candle de 1h fechar pra conferir o
+ * retorno deixa o preço passar batido pela banda e voltar a subir dentro da própria hora,
+ * sem o bot nunca ver o candle de 1h fechar já reconquistado. `waited`/expiração continuam
+ * contados na unidade de entry.interval (waitCandles significa o mesmo de sempre).
+ */
+function evaluatePullbackReady(config, cMap, pending) {
+  const entry = config.entry;
+  const iv = entry.interval;
+  const vwapIv = entry.vwapInterval ?? iv;
+  const pollIv = entry.pullback.pollInterval ?? iv;
+
+  const rawMain = cMap[iv] ?? [];
+  const mainCandles = closedCandlesOnly(rawMain);
+  if (mainCandles.length < 1) return { ready: false, reason: 'NO_DATA' };
+
+  const waited = mainCandles.filter(c => Number(c.openTime) > Number(pending.signalOpenTime)).length;
+  const waitCandles = Math.max(1, entry.pullback.waitCandles);
+  if (waited > waitCandles) {
+    return { ready: false, cancel: true, reason: 'PULLBACK_WINDOW_EXPIRED' };
+  }
+
+  const rawPoll = pollIv === iv ? rawMain : (cMap[pollIv] ?? []);
+  const pollCandlesAll = closedCandlesOnly(rawPoll);
+  // Só aceita candles do intervalo rápido (ex.: 15m) que comecem DEPOIS do fechamento do
+  // candle principal que confirmou a reconquista — um candle de 15m que ainda faz parte da
+  // própria hora da confirmação não é um "retorno" de verdade: nesse momento, pra quem
+  // estivesse operando ao vivo, a confirmação nem tinha fechado ainda.
+  const mainCloseTime = Number(pending.signalOpenTime) + intervalMs(iv);
+  const pollCandles = pollCandlesAll.filter(c => Number(c.openTime) >= mainCloseTime);
+  if (pollCandles.length < 1) return { ready: false, waited, need: waitCandles, reason: 'WAITING_CANDLES' };
+  const lastCandle = pollCandles[pollCandles.length - 1];
+
+  const vwapRaw = cMap[vwapIv] ?? [];
+  const vwapCandleSource = closedCandlesOnly(vwapRaw);
+  if (vwapCandleSource.length < 2) return { ready: false, reason: 'NO_BANDS' };
+  const vwapSeries = computeVwapSeries(vwapCandleSource, entry.session);
+  if (vwapSeries.length < 2) return { ready: false, reason: 'NO_BANDS' };
+
+  const lastLevels = levelsAt(vwapPointAt(vwapSeries, lastCandle.openTime));
+  const target = lastLevels[pending.confirmLevel];
+  if (target == null) return { ready: false, reason: 'NO_BANDS' };
+
+  const lastOpen = parseFloat(lastCandle.open);
+  const lastClose = parseFloat(lastCandle.close);
+
+  // Perdeu a força do repique: fechou de volta abaixo do nível que tinha sido tocado.
+  const touchLevelValue = lastLevels[pending.touchLevel];
+  if (touchLevelValue != null && lastClose <= touchLevelValue) {
+    return { ready: false, cancel: true, reason: 'BROKE_BACK_BELOW_TOUCH_LEVEL' };
+  }
+
+  const isBullish = lastClose > lastOpen;
+  const tol = Math.max(0, entry.pullback.tolerancePct) / 100;
+  const closedAboveLevel = lastClose > target;
+  // A tolerância mede se o candle CHEGOU perto do nível (usa o low — pode até romper bem
+  // abaixo, sem limite de profundidade), não se o FECHAMENTO ficou perto dele. Um repique
+  // forte pode fechar bem acima do nível depois de tocá-lo (ex.: candle de alta explosivo)
+  // — exigir o fechamento dentro da tolerância rejeitaria esses repiques válidos só por
+  // terem subido rápido demais.
+  const lastLow = parseFloat(lastCandle.low ?? lastClose);
+  const cameCloseEnough = lastLow <= target * (1 + tol);
+
+  if (!isBullish || !closedAboveLevel || !cameCloseEnough) {
+    return { ready: false, waited, need: waitCandles, reason: 'WAITING_CANDLES' };
+  }
+
+  return {
+    ready: true,
+    close: lastClose,
+    decisionTime: lastCandle.openTime,
+    targetLevelValue: target,
+    entryDesc: `reconquista de ${labelForLevel(pending.confirmLevel)} VWAP(${vwapIv}) (candle de alta, checagem ${pollIv})`,
+  };
+}
+
+/**
+ * Saída: alcançou o nível-alvo do degrau que gerou a compra (`opts.targetLevel` — vwap pro
+ * 1º degrau, +1σ pro 2º) ou rompeu o piso de stop-loss (estrutural/ladder por padrão, ou
+ * percentual/trailing compartilhado — ver backend/bot/shared/stopLossFloor.js).
+ *
+ * Confere primeiro no candle FECHADO de entry.interval (ex.: 1h) — sem espiar o candle
+ * ainda em formação. Se esse fechamento já estiver perto o suficiente do alvo ou do stop
+ * (dentro de exit.fastCheck.proximityPct), passa a conferir também os candles fechados do
+ * intervalo rápido (entry.pullback.pollInterval, ex.: 15m) a partir do fim do candle
+ * principal — mesmo padrão do exit.maCross.fastCheck do ma-cross: reage ao toque sem
+ * esperar até 1h a mais quando já estava a poucos % de distância.
+ */
+function evaluateExit(config, cMap, entryPrice, opts = {}) {
+  const entry = config.entry;
+  const iv = entry.interval;
+  const vwapIv = entry.vwapInterval ?? iv;
+  const pollIv = entry.pullback.pollInterval ?? iv;
+
+  const rawMain = cMap[iv] ?? [];
+  const mainClosed = closedCandlesOnly(rawMain);
+  if (!mainClosed.length) return { exit: false };
+  const last = mainClosed[mainClosed.length - 1];
+  const lastClose = parseFloat(last.close);
+
+  const vwapRaw = cMap[vwapIv] ?? [];
+  const vwapCandleSource = vwapIv === iv ? mainClosed : closedCandlesOnly(vwapRaw);
+  if (!vwapCandleSource.length) return { exit: false, close: lastClose };
+  const vwapSeries = computeVwapSeries(vwapCandleSource, entry.session);
+  const vwapPoint = vwapPointAt(vwapSeries, last.openTime);
+  if (!vwapPoint) return { exit: false, close: lastClose };
+
+  const levels = levelsAt(vwapPoint);
+  const targetLevel = opts.targetLevel ?? 'vwap';
+  const target = levels[targetLevel];
+  const tol = Math.max(0, config.exit?.tolerancePct ?? 0) / 100;
+
+  const stopMode = config.stopLoss?.mode ?? 'ladder';
+  const stopLevelValue = (config.stopLoss?.enabled && stopMode === 'ladder' && opts.touchLevel)
+    ? levels[opts.touchLevel] : null;
+  const stopTol = Math.max(0, config.stopLoss?.tolerancePct ?? 0) / 100;
+  const floor = stopLevelValue != null ? stopLevelValue * (1 - stopTol) : null;
+
+  if (target != null) {
+    const threshold = target * (1 - tol);
+    const high = parseFloat(last.high ?? last.close);
+    if (high >= threshold) {
+      return {
+        exit: true,
+        reason: 'VWAP_TARGET_LEVEL',
+        close: lastClose,
+        decisionTime: last.openTime,
+        targetLevel, targetLevelValue: target,
+        exitDesc: `VWAP(${vwapIv},${entry.session}) ${labelForLevel(targetLevel)}`,
+      };
+    }
+  }
+
+  if (floor != null) {
+    const low = parseFloat(last.low ?? last.close);
+    if (low <= floor) {
+      return {
+        exit: true,
+        reason: 'STOP_LOSS',
+        close: lastClose,
+        decisionTime: last.openTime,
+        dropPct: entryPrice ? ((lastClose - entryPrice) / entryPrice) * 100 : null,
+        stopFloor: floor,
+        stopLevel: opts.touchLevel,
+        exitDesc: `Stop-loss em ${labelForLevel(opts.touchLevel)}`,
+      };
+    }
+  }
+
+  const fastCheck = config.exit?.fastCheck;
+  if (fastCheck?.enabled && pollIv !== iv && (target != null || floor != null)) {
+    const proxTol = Math.max(0, fastCheck.proximityPct ?? 1) / 100;
+    const nearTarget = target != null && lastClose >= target * (1 - proxTol);
+    const nearStop = floor != null && lastClose <= floor * (1 + proxTol);
+    if (nearTarget || nearStop) {
+      const mainCloseTime = Number(last.openTime) + intervalMs(iv);
+      const rawPoll = cMap[pollIv] ?? [];
+      const pollClosed = closedCandlesOnly(rawPoll).filter(c => Number(c.openTime) >= mainCloseTime);
+      const fastLast = pollClosed[pollClosed.length - 1];
+      if (fastLast) {
+        const fastClose = parseFloat(fastLast.close);
+        if (nearTarget) {
+          const threshold = target * (1 - tol);
+          const high = parseFloat(fastLast.high ?? fastLast.close);
+          if (high >= threshold) {
+            return {
+              exit: true,
+              reason: 'VWAP_TARGET_LEVEL',
+              close: fastClose,
+              decisionTime: fastLast.openTime,
+              targetLevel, targetLevelValue: target,
+              exitDesc: `VWAP(${vwapIv},${entry.session}) ${labelForLevel(targetLevel)} `
+                + `(checagem rápida — perto do alvo no ${iv})`,
+            };
+          }
+        }
+        if (nearStop) {
+          const low = parseFloat(fastLast.low ?? fastLast.close);
+          if (low <= floor) {
+            return {
+              exit: true,
+              reason: 'STOP_LOSS',
+              close: fastClose,
+              decisionTime: fastLast.openTime,
+              dropPct: entryPrice ? ((fastClose - entryPrice) / entryPrice) * 100 : null,
+              stopFloor: floor,
+              stopLevel: opts.touchLevel,
+              exitDesc: `Stop-loss em ${labelForLevel(opts.touchLevel)} (checagem rápida — perto do stop no ${iv})`,
+            };
+          }
+        }
+      }
+    }
+  }
+
+  if (config.stopLoss?.enabled && stopMode === 'percent' && entryPrice && lastClose != null) {
+    const peakPrice = opts.peakPrice != null ? opts.peakPrice : entryPrice;
+    const stopFloor = computeStopLossFloor(entryPrice, peakPrice, config.stopLoss);
+    if (stopFloor != null && lastClose <= stopFloor) {
+      return {
+        exit: true,
+        reason: 'STOP_LOSS',
+        close: lastClose,
+        decisionTime: last.openTime,
+        dropPct: ((lastClose - entryPrice) / entryPrice) * 100,
+        stopFloor,
+        peakPrice,
+      };
+    }
+  }
+
+  return { exit: false, close: lastClose };
+}
+
+module.exports = {
+  LADDER_SETUPS,
+  labelForLevel,
+  intervalMs,
+  computeVwapSeries,
+  levelsAt,
+  vwapPointAt,
+  getRequiredSpecs,
+  evaluateEntrySignal,
+  evaluatePullbackReady,
+  evaluateExit,
+  computeStopLossFloor,
+};

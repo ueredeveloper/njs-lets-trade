@@ -12,17 +12,9 @@
  */
 
 const path     = require('path');
-const crypto   = require('crypto');
 const fs       = require('fs');
 require('dotenv').config({ path: path.join(__dirname, '../../../.env') });
 
-const { fetchBinanceCandles, fetchGateCandles } = require('../prices');
-const { toGateSymbol } = require('../../utils/toGateSymbol');
-const {
-  gateMarketSell: gateMarketSellCore,
-  isGateDustResult,
-  estimateDustClosePnl,
-} = require('../gate/gateMarketSell');
 const { sendWhatsApp } = require('../whatsapp');
 const { maLabel } = require('../../utils/movingAverage');
 const registry = require('../multitradeRegistry');
@@ -30,6 +22,11 @@ const { startMultitradeWatch, configFingerprint } = require('../multitradeWatch'
 const { startExhaustionScreener } = require('./exhaustionScreener');
 const { resolveStrategy } = require('./tradeConfigSchema');
 const { STRATEGY_IDS, isMaCrossStrategy } = require('./strategyPresets');
+// Bot vwap-bands embutido neste processo — assim `node ma-cross-bot.js` continua sendo o
+// único comando usado, sem precisar rodar `vwap-bands-bot.js` à parte (mesmos símbolos
+// aparecem no painel Multi-Trade sob strategy_id='vwap-bands'). runVwapBandsBot() agenda
+// os próprios ticks via setTimeout e não bloqueia — por isso é chamado sem `await` abaixo.
+const { runVwapBandsBot } = require('../vwap-bands/vwap-bands-bot');
 const {
   getRequiredSpecs, evaluateEntry, evaluateCrossSignal, evaluatePullbackReady,
   evaluateImmediateEntry,
@@ -38,14 +35,19 @@ const {
   computeDcaTiers, evaluateBbLowerEntry, evaluateEntryBbLowerSignal,
 } = require('./strategyEngine');
 
-const GATE_FEE_RATE = 0.002;
+// Componentes genéricos (compra/venda/execução), compartilhados com outros bots de
+// trade (e reaproveitáveis por um bot novo) — ver backend/bot/shared/*.
+const { buildAdapter, syncExchangeClocks } = require('../shared/buildAdapter');
+const { sbReq } = require('../shared/supabaseRest');
+const { createTradeExecution } = require('../shared/tradeExecution');
+
 const VOL_CACHE_MS  = 5 * 60_000;
 
 // ── Logging ───────────────────────────────────────────────────────────────────
 const BOT_DIR = path.join(__dirname, '../../data/bot');
 fs.mkdirSync(BOT_DIR, { recursive: true });
 
-const G = '\x1b[32m', R = '\x1b[31m', Y = '\x1b[33m', X = '\x1b[0m';
+const G = '\x1b[32m', Y = '\x1b[33m', X = '\x1b[0m';
 // Verde/vermelho reservados para compra/venda — não usar em tags de símbolo
 const COLORS = ['\x1b[94m','\x1b[93m','\x1b[95m','\x1b[96m','\x1b[33m','\x1b[35m','\x1b[36m','\x1b[34m','\x1b[97m','\x1b[90m'];
 
@@ -64,208 +66,6 @@ function makeLogger(symbol, strategyId, color = '') {
     console.log(msg);
     try { fs.appendFileSync(logFile, noAnsi + '\n'); } catch {}
   };
-}
-
-// ── Binance ───────────────────────────────────────────────────────────────────
-const BINANCE_BASE       = 'https://api.binance.com';
-const BINANCE_API_KEY    = process.env.BINANCE_API_KEY;
-const BINANCE_SECRET_KEY = process.env.BINANCE_SECRET_KEY;
-let   binanceClockOffsetMs = 0;
-
-async function syncBinanceClock() {
-  try {
-    const res  = await fetch(`${BINANCE_BASE}/api/v3/time`);
-    const data = await res.json();
-    binanceClockOffsetMs = data.serverTime - Date.now();
-  } catch {}
-}
-
-function binanceSign(params) {
-  const qs  = new URLSearchParams(params).toString();
-  const sig = crypto.createHmac('sha256', BINANCE_SECRET_KEY).update(qs).digest('hex');
-  return `${qs}&signature=${sig}`;
-}
-
-async function binanceReq(method, endpoint, params = {}) {
-  const ts     = Date.now() + binanceClockOffsetMs;
-  const signed = binanceSign({ ...params, timestamp: ts, recvWindow: 10000 });
-  const url    = method === 'GET' ? `${BINANCE_BASE}${endpoint}?${signed}` : `${BINANCE_BASE}${endpoint}`;
-  const res = await fetch(url, {
-    method,
-    headers: { 'X-MBX-APIKEY': BINANCE_API_KEY, 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: method !== 'GET' ? signed : undefined,
-  });
-  const text = await res.text();
-  let data;
-  try { data = JSON.parse(text); } catch { data = text; }
-  if (!res.ok) throw new Error(`Binance ${method} ${endpoint} ${res.status}: ${data?.msg ?? text}`);
-  return data;
-}
-
-async function binanceMarketBuy(symbol, usdtAmount) {
-  const order     = await binanceReq('POST', '/api/v3/order', {
-    symbol, side: 'BUY', type: 'MARKET', quoteOrderQty: usdtAmount.toFixed(2),
-  });
-  const filledQty = parseFloat(order.executedQty);
-  const quoteQty  = parseFloat(order.cummulativeQuoteQty);
-  return { filledQty: filledQty * (1 - GATE_FEE_RATE), quoteQty, avgPrice: quoteQty / filledQty };
-}
-
-async function binanceMarketSell(symbol, qty) {
-  if (!Number.isFinite(qty) || qty <= 0) {
-    throw new Error(`quantidade inválida para venda (${qty})`);
-  }
-  const info      = await fetch(`${BINANCE_BASE}/api/v3/exchangeInfo?symbol=${symbol}`).then(r => r.json());
-  const lotFilter = info.symbols?.[0]?.filters?.find(f => f.filterType === 'LOT_SIZE');
-  const stepSize  = lotFilter ? parseFloat(lotFilter.stepSize) : 1;
-  const decimals  = stepSize < 1 ? (String(stepSize).split('.')[1]?.length ?? 0) : 0;
-  const safeQty   = (Math.floor(qty / stepSize) * stepSize).toFixed(decimals);
-  if (!Number.isFinite(parseFloat(safeQty)) || parseFloat(safeQty) <= 0) {
-    throw new Error(`quantidade inválida após arredondamento (${safeQty})`);
-  }
-  const order     = await binanceReq('POST', '/api/v3/order', {
-    symbol, side: 'SELL', type: 'MARKET', quantity: safeQty,
-  });
-  const soldQty = parseFloat(order.executedQty);
-  const usdtOut = parseFloat(order.cummulativeQuoteQty);
-  return { soldQty, usdtOut, exitPrice: usdtOut / soldQty };
-}
-
-async function binance24hVolume(symbol) {
-  const data = await fetch(`${BINANCE_BASE}/api/v3/ticker/24hr?symbol=${symbol}`).then(r => r.json());
-  return parseFloat(data.quoteVolume || 0);
-}
-
-// ── Gate.io ───────────────────────────────────────────────────────────────────
-const GATE_BASE       = 'https://api.gateio.ws/api/v4';
-const GATE_API_KEY    = process.env.GATEIO_API_KEY;
-const GATE_SECRET_KEY = process.env.GATEIO_SECRET_KEY;
-let   gateClockOffsetSec = 0;
-
-async function syncGateClock() {
-  try {
-    const res  = await fetch(`${GATE_BASE}/spot/time`);
-    const data = await res.json();
-    if (!data?.server_time) return;
-    gateClockOffsetSec = Math.floor(data.server_time / 1000) - Math.floor(Date.now() / 1000);
-  } catch {}
-}
-
-function gateSign(method, endpointPath, queryString, bodyStr) {
-  const timestamp  = (Math.floor(Date.now() / 1000) + gateClockOffsetSec).toString();
-  const hashedBody = crypto.createHash('sha512').update(bodyStr || '').digest('hex');
-  const msg        = [method.toUpperCase(), `/api/v4${endpointPath}`, queryString, hashedBody, timestamp].join('\n');
-  const sign       = crypto.createHmac('sha512', GATE_SECRET_KEY).update(msg).digest('hex');
-  return { timestamp, sign };
-}
-
-async function gateReq(method, endpointPath, params = {}, _retry = true) {
-  let url  = `${GATE_BASE}${endpointPath}`;
-  let qs   = '';
-  let body = '';
-  if (method === 'GET') {
-    qs = new URLSearchParams(params).toString();
-    if (qs) url += `?${qs}`;
-  } else {
-    body = JSON.stringify(params);
-  }
-  const { timestamp, sign } = gateSign(method, endpointPath, qs, body);
-  const res = await fetch(url, {
-    method,
-    headers: { KEY: GATE_API_KEY, Timestamp: timestamp, SIGN: sign, 'Content-Type': 'application/json' },
-    body: method === 'POST' ? body : undefined,
-  });
-  const text = await res.text();
-  let data;
-  try { data = JSON.parse(text); } catch { data = text; }
-  if (!res.ok) {
-    const msg = data?.message || data?.label || text;
-    if (res.status === 403 && _retry) {
-      const match = msg.match(/current_time:(\d+).*header\.timestamp:(\d+)/);
-      if (match) {
-        gateClockOffsetSec = parseInt(match[1]) - (parseInt(match[2]) - gateClockOffsetSec);
-        return gateReq(method, endpointPath, params, false);
-      }
-    }
-    throw new Error(`Gate ${method} ${endpointPath} ${res.status}: ${msg}`);
-  }
-  return data;
-}
-
-async function gateGetTokenBalance(pair) {
-  const base     = pair.split('_')[0];
-  const accounts = await gateReq('GET', '/spot/accounts');
-  const acc      = accounts.find(a => a.currency === base);
-  return acc ? parseFloat(acc.available) : 0;
-}
-
-async function gateMarketBuy(pair, usdtAmount) {
-  const ticker     = await fetch(`${GATE_BASE}/spot/tickers?currency_pair=${pair}`).then(r => r.json());
-  const price      = parseFloat(ticker[0]?.last);
-  if (!price) throw new Error(`Gate.io: preço inválido para ${pair}`);
-  const limitPrice = parseFloat((price * 1.005).toFixed(8));
-  const qty        = parseFloat((usdtAmount / limitPrice).toFixed(8));
-  const order      = await gateReq('POST', '/spot/orders', {
-    currency_pair: pair, side: 'buy', type: 'limit',
-    price: String(limitPrice), amount: String(qty), time_in_force: 'ioc',
-  });
-  await new Promise(r => setTimeout(r, 1000));
-  const filled   = await gateReq('GET', `/spot/orders/${order.id}`, { currency_pair: pair });
-  const grossQty = parseFloat(filled.amount) - parseFloat(filled.left || 0);
-  const quoteQty = parseFloat(filled.filled_total || 0);
-  const avgPrice = parseFloat(filled.avg_deal_price || limitPrice);
-  if (grossQty <= 0) throw new Error(`Gate.io: compra não preenchida (status=${filled.status})`);
-  return { filledQty: grossQty * (1 - GATE_FEE_RATE), quoteQty: quoteQty || grossQty * avgPrice, avgPrice };
-}
-
-async function gateMarketSell(pair, qty, log, opts = {}) {
-  return gateMarketSellCore(
-    { gateReq, getTokenBalance: gateGetTokenBalance },
-    pair, qty, log, opts,
-  );
-}
-
-async function gate24hVolume(pair) {
-  const data = await fetch(`${GATE_BASE}/spot/tickers?currency_pair=${pair}`).then(r => r.json());
-  return parseFloat(data[0]?.quote_volume || 0);
-}
-
-function buildAdapter(exchange, symbol) {
-  if (exchange === 'gate') {
-    const pair = toGateSymbol(symbol);
-    return {
-      name: 'Gate.io', pair,
-      fetchCandles: (lim, iv) => fetchGateCandles(pair, lim, iv),
-      marketBuy:    (usdt)     => gateMarketBuy(pair, usdt),
-      marketSell:   (qty, log, opts) => gateMarketSell(pair, qty, log, opts),
-      fetch24hVol:  ()         => gate24hVolume(pair),
-    };
-  }
-  return {
-    name: 'Binance', pair: symbol,
-    fetchCandles: (lim, iv) => fetchBinanceCandles(symbol, lim, iv),
-    marketBuy:    (usdt)     => binanceMarketBuy(symbol, usdt),
-    marketSell:   (qty)      => binanceMarketSell(symbol, qty),
-    fetch24hVol:  ()         => binance24hVolume(symbol),
-  };
-}
-
-// ── Supabase ──────────────────────────────────────────────────────────────────
-const SB_URL = process.env.SUPABASE_URL;
-const SB_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-async function sbReq(method, table, body, query = '') {
-  const res = await fetch(`${SB_URL}/rest/v1/${table}${query}`, {
-    method,
-    headers: {
-      'apikey': SB_KEY, 'Authorization': `Bearer ${SB_KEY}`,
-      'Content-Type': 'application/json', 'Prefer': 'return=representation',
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const text = await res.text();
-  if (!res.ok) throw new Error(`Supabase ${method} ${table} ${res.status}: ${text}`);
-  return text ? JSON.parse(text) : null;
 }
 
 async function loadMaCrossRows() {
@@ -345,39 +145,25 @@ function buildEntryReasonLines(config, entryMeta) {
   return lines;
 }
 
-let rulesStateColumnOk = true;
-
-async function saveState(id, update, log) {
-  const payload = { ...update, updated_at: new Date().toISOString() };
-  if (!rulesStateColumnOk && payload.rules_state !== undefined) {
-    delete payload.rules_state;
-  }
-  try {
-    await sbReq('PATCH', 'rsi_multi_bot_state', payload, `?id=eq.${id}`);
-  } catch (err) {
-    const msg = String(err.message ?? err);
-    if (payload.rules_state !== undefined && /rules_state/.test(msg)) {
-      rulesStateColumnOk = false;
-      const { rules_state, ...rest } = payload;
-      await sbReq('PATCH', 'rsi_multi_bot_state', rest, `?id=eq.${id}`);
-      log?.(`${Y}⚠️  Coluna rules_state ausente — rode supabase/add-rules-state-column.sql (stop trailing só em memória)${X}`);
-      return;
-    }
-    throw err;
-  }
-}
-
-async function insertTrade(trade) {
-  try { await sbReq('POST', 'rsi_multi_bot_trades', trade); } catch { /* ignore */ }
-}
-
-function parseRulesState(row) {
-  let rs = row?.rules_state;
-  if (typeof rs === 'string') {
-    try { rs = JSON.parse(rs); } catch { rs = null; }
-  }
-  return rs && typeof rs === 'object' ? rs : {};
-}
+// executeBuy/executeSell/saveState/insertTrade/parseRulesState/resolveLastExitTime/
+// hasOpenPosition/resetOrphanPosition/postExitRulesState são genéricos (mecânica de
+// ordem + bookkeeping Supabase) — ver backend/bot/shared/tradeExecution.js. Aqui só
+// injetamos o que é específico do ma-cross: rótulo do bot e o texto do motivo de entrada.
+const {
+  saveState, insertTrade, hasOpenPosition, resetOrphanPosition,
+  parseRulesState, postExitRulesState, resolveLastExitTime,
+  executeBuy, executeSell,
+} = createTradeExecution({
+  botLabel: 'MA-CROSS',
+  buildReasonLines: buildEntryReasonLines,
+  computeStopLossFloor,
+  extraBuyLogLines: ({ config, capital, totalCapital }) => {
+    const dcaCfg = config.entryMultiDca;
+    if (!dcaCfg?.enabled) return null;
+    const tierCount = computeDcaTiers(parseFloat(totalCapital ?? capital), dcaCfg.minEntryUsdt).length;
+    return [`Entradas parceladas (DCA): 1/${tierCount} — próxima após ${dcaCfg.reEntryGapHours}h no toque da banda inferior`];
+  },
+});
 
 const DEFAULT_ENTRY_COOLDOWN_HOURS = 4;
 const COOLDOWN_LOG_INTERVAL_MS = 15 * 60_000;
@@ -427,12 +213,6 @@ function entryCooldownHours(config) {
   return Number.isFinite(h) && h >= 0 ? h : DEFAULT_ENTRY_COOLDOWN_HOURS;
 }
 
-function resolveLastExitTime(state, session) {
-  const fromRow = parseRulesState(state).lastExitTime;
-  if (fromRow) return fromRow;
-  return session?.lastExitTime ?? null;
-}
-
 function cooldownRemainingMs(lastExitTime, hours) {
   if (!hours || !lastExitTime) return 0;
   const end = new Date(lastExitTime).getTime() + hours * 3_600_000;
@@ -446,10 +226,6 @@ function formatCooldownRemaining(ms) {
   if (h > 0 && m > 0) return `${h}h${m}m`;
   if (h > 0) return `${h}h`;
   return `${m}m`;
-}
-
-function postExitRulesState(exitTime) {
-  return { lastExitTime: exitTime };
 }
 
 function parsePendingPullback(state, session) {
@@ -471,63 +247,6 @@ function rulesStateWithoutPending(state, session, extra = {}) {
   const rs = { ...parseRulesState(state), ...(session?.rulesState ?? {}), ...extra };
   delete rs.pendingPullback;
   return rs;
-}
-
-async function executeBuy({
-  rowId, adapter, strategy, log, session, state, entryMeta, capital, strategyId, symbol, totalCapital,
-}) {
-  let result;
-  try {
-    result = await adapter.marketBuy(parseFloat(capital));
-  } catch (err) {
-    log(`❌ Erro na compra: ${err.message}`);
-    return false;
-  }
-
-  const { filledQty, quoteQty, avgPrice } = result;
-  const initialFloor = computeStopLossFloor(avgPrice, avgPrice, strategy.config.stopLoss);
-  const buyTime = new Date().toISOString();
-  session.phase = 'BOUGHT';
-  session.pendingPullback = null;
-  const dcaCfg = strategy.config.entryMultiDca;
-  session.rulesState = {
-    stopPeakPrice: avgPrice,
-    stopFloor: initialFloor,
-    ...(dcaCfg?.enabled
-      ? { dca: { entries: [{ price: avgPrice, qty: filledQty, usdt: quoteQty, time: buyTime }] } }
-      : {}),
-  };
-  await saveState(rowId, {
-    phase: 'BOUGHT', buy_price: avgPrice, buy_qty: filledQty,
-    buy_usdt: quoteQty, buy_time: buyTime,
-    rsi_entry: entryMeta.ma1,
-    rules_state: session.rulesState,
-  }, log);
-
-  const reasonLines = buildEntryReasonLines(strategy.config, entryMeta);
-
-  log(`${'─'.repeat(60)}`);
-  log(`${G}🟢 COMPRA EXECUTADA${X}`);
-  log(`   Preço : ${avgPrice.toFixed(6)}  Qty: ${filledQty}  USDT: ${quoteQty.toFixed(4)}`);
-  if (dcaCfg?.enabled) {
-    const tierCount = computeDcaTiers(parseFloat(totalCapital ?? capital), dcaCfg.minEntryUsdt).length;
-    log(`   Entradas parceladas (DCA): 1/${tierCount} — próxima após ${dcaCfg.reEntryGapHours}h no toque da banda inferior`);
-  }
-  if (entryMeta.pullbackVsMa2Pct != null) {
-    log(`   Pullback MA21: ${entryMeta.pullbackVsMa2Pct.toFixed(1)}pp  close +${entryMeta.aboveMa2Pct?.toFixed(1) ?? '?'}% MA21`);
-  } else if (entryMeta.pullbackPct != null) {
-    log(`   Pullback: ${entryMeta.pullbackPct.toFixed(1)}%  MA2: +${entryMeta.aboveMa2Pct?.toFixed(1) ?? '?'}%`);
-  }
-  if (reasonLines.length) {
-    log(`   Motivos da entrada:`);
-    for (const line of reasonLines) log(`     • ${line}`);
-  }
-  log(`${'─'.repeat(60)}`);
-  sendWhatsApp(
-    `🟢 MA-CROSS COMPRA [${strategyId}] ${symbol}\nPreço: ${avgPrice}\nUSDT: ${quoteQty.toFixed(4)}`
-    + (reasonLines.length ? `\n\nMotivos:\n${reasonLines.map(l => `• ${l}`).join('\n')}` : ''),
-  );
-  return true;
 }
 
 /**
@@ -632,128 +351,6 @@ async function fetchCandleMap(adapter, specs) {
     }
   }
   return Object.fromEntries(entries);
-}
-
-function hasOpenPosition(state) {
-  const qty   = parseFloat(state?.buy_qty);
-  const price = parseFloat(state?.buy_price);
-  return Number.isFinite(qty) && qty > 0 && Number.isFinite(price) && price > 0;
-}
-
-async function resetOrphanPosition(rowId, log, session, state, reason) {
-  log(`${Y}⚠️  Posição órfã (${reason}) — resetando para WATCHING${X}`);
-  if (session) {
-    session.phase = 'WATCHING';
-    session.rulesState = null;
-  }
-  if (state.phase === 'BOUGHT') {
-    const exitTime = resolveLastExitTime(state, session) ?? new Date().toISOString();
-    await saveState(rowId, {
-      phase: 'WATCHING',
-      buy_price: null, buy_qty: null, buy_usdt: null, buy_time: null, rsi_entry: null,
-      rules_state: postExitRulesState(exitTime),
-    }, log);
-  }
-  return { phase: 'WATCHING' };
-}
-
-async function executeSell({ rowId, adapter, strategy, log, state, exitResult, reasonLabel, session }) {
-  const { config } = strategy;
-  const { symbol, strategy_id: strategyId, capital } = state;
-  const buyPrice = parseFloat(state.buy_price);
-
-  const reason = reasonLabel ?? (exitResult.reason === 'STOP_LOSS'
-    ? (exitResult.dropPct >= 0
-      ? `stop trailing +${exitResult.dropPct.toFixed(2)}% (piso ${exitResult.stopFloor?.toFixed(6)})`
-      : `stop-loss ${exitResult.dropPct?.toFixed(2)}%`)
-    : (exitResult.exitDesc ?? exitResult.reason ?? crossDesc(config.exit?.maCross ?? config.exit)));
-
-  const sellQty = parseFloat(state.buy_qty);
-  if (!hasOpenPosition(state)) {
-    log(`${Y}⚠️  Sinal de saída sem qty registrada — posição órfã${X}`);
-    await resetOrphanPosition(rowId, log, session, state, 'buy_qty ausente');
-    return { phase: 'WATCHING' };
-  }
-
-  log(`${R}📈 ${reason} — vendendo ${sellQty} ${symbol}${X}`);
-
-  const exitTime = new Date().toISOString();
-  const sellOpts = adapter.name === 'Gate.io' ? { aggressive: true } : {};
-  let result;
-  try {
-    result = await adapter.marketSell(sellQty, log, sellOpts);
-  } catch (err) {
-    log(`❌ Erro na venda: ${err.message}`);
-    throw err;
-  }
-
-  if (isGateDustResult(result)) {
-    const est = estimateDustClosePnl(state, result);
-    const capitalBefore = parseFloat(capital);
-    const pnlSign = est.pnlUsdt >= 0 ? '+' : '';
-
-    await insertTrade({
-      symbol, exchange: state.exchange, strategy_id: strategyId,
-      entry_time: state.buy_time, exit_time: exitTime,
-      entry_price: buyPrice, exit_price: est.exitPrice,
-      qty: est.soldQty, usdt_in: parseFloat(state.buy_usdt), usdt_out: est.usdtOut,
-      pnl_usdt: est.pnlUsdt, pnl_pct: parseFloat(est.pnlPct.toFixed(2)),
-      capital_before: capitalBefore, capital_after: est.capitalAfter,
-      rsi_entry: parseFloat(state.rsi_entry ?? 0), rsi_exit: exitResult?.ma1 ?? 0,
-      exit_reason: 'DUST',
-    });
-
-    if (session) session.lastExitTime = exitTime;
-    await saveState(rowId, {
-      capital: est.capitalAfter, phase: 'WATCHING',
-      buy_price: null, buy_qty: null, buy_usdt: null, buy_time: null, rsi_entry: null,
-      rules_state: postExitRulesState(exitTime),
-    }, log);
-
-    log(`${'─'.repeat(60)}`);
-    log(`${Y}🟡 POSIÇÃO ENCERRADA (dust residual ${result.dustQty} ≈ $${result.dustUsdt.toFixed(4)})${X}`);
-    log(`   PnL estimado: ${pnlSign}${est.pnlUsdt.toFixed(4)} USDT (${pnlSign}${est.pnlPct.toFixed(2)}%)`);
-    log(`   Capital: ${capitalBefore.toFixed(4)} → ${est.capitalAfter.toFixed(4)} USDT`);
-    log(`${'─'.repeat(60)}`);
-    return { phase: 'WATCHING' };
-  }
-
-  const { soldQty, usdtOut, exitPrice } = result;
-  const capitalBefore = parseFloat(capital);
-  const pnlUsdt       = usdtOut - parseFloat(state.buy_usdt);
-  const pnlPct        = (pnlUsdt / capitalBefore) * 100;
-  const capitalAfter  = capitalBefore + pnlUsdt;
-  const pnlSign       = pnlUsdt >= 0 ? '+' : '';
-
-  await insertTrade({
-    symbol, exchange: state.exchange, strategy_id: strategyId,
-    entry_time: state.buy_time, exit_time: exitTime,
-    entry_price: buyPrice, exit_price: exitPrice,
-    qty: soldQty, usdt_in: parseFloat(state.buy_usdt), usdt_out: usdtOut,
-    pnl_usdt: pnlUsdt, pnl_pct: parseFloat(pnlPct.toFixed(2)),
-    capital_before: capitalBefore, capital_after: capitalAfter,
-    rsi_entry: parseFloat(state.rsi_entry ?? 0), rsi_exit: exitResult?.ma1 ?? 0,
-    exit_reason: exitResult?.reason ?? reasonLabel ?? 'PANEL_REMOVED',
-  });
-
-  if (session) session.lastExitTime = exitTime;
-  const cooldownH = entryCooldownHours(config);
-  await saveState(rowId, {
-    capital: capitalAfter, phase: 'WATCHING',
-    buy_price: null, buy_qty: null, buy_usdt: null, buy_time: null, rsi_entry: null,
-    rules_state: postExitRulesState(exitTime),
-  }, log);
-  if (cooldownH > 0) {
-    log(`${Y}⏳ Cooldown de entrada: ${cooldownH}h${X}`);
-  }
-
-  log(`${'─'.repeat(60)}`);
-  log(`${R}🔴 VENDA EXECUTADA${X}`);
-  log(`   PnL: ${pnlSign}${pnlUsdt.toFixed(4)} USDT (${pnlSign}${pnlPct.toFixed(2)}%)`);
-  log(`   Capital: ${capitalBefore.toFixed(4)} → ${capitalAfter.toFixed(4)} USDT`);
-  log(`${'─'.repeat(60)}`);
-  sendWhatsApp(`🔴 MA-CROSS VENDA [${strategyId}] ${symbol}\nMotivo: ${reason}\nPnL: ${pnlSign}${pnlUsdt.toFixed(4)} USDT (${pnlSign}${pnlPct.toFixed(2)}%)`);
-  return { phase: 'WATCHING' };
 }
 
 // ── Tick ──────────────────────────────────────────────────────────────────────
@@ -956,6 +553,7 @@ async function tick(rowId, adapter, strategy, log, session) {
     try {
       await executeSell({
         rowId, adapter, strategy, log, state, exitResult, session,
+        defaultReasonDesc: crossDesc(config.exit?.maCross ?? config.exit),
       });
       session.phase = 'WATCHING';
       session.rulesState = null;
@@ -1060,18 +658,23 @@ async function startSymbol(row, color) {
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 async function main() {
-  if (!SB_URL || !SB_KEY) {
+  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
     console.error('❌ SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY ausentes no .env');
     process.exit(1);
   }
 
-  await Promise.all([syncBinanceClock(), syncGateClock()]);
-  setInterval(syncBinanceClock, 60 * 60_000);
-  setInterval(syncGateClock,    60 * 60_000);
+  // Gate.io sincroniza o próprio relógio sozinha ao carregar o módulo (ver
+  // backend/gate/getGateClient.js) — só a Binance precisa ser sincronizada aqui.
+  await syncExchangeClocks();
+  setInterval(syncExchangeClocks, 60 * 60_000);
 
   const symbolFilter = process.argv.includes('--symbol')
     ? process.argv[process.argv.indexOf('--symbol') + 1]?.toUpperCase()
     : null;
+
+  // vwap-bands lê o mesmo --symbol de process.argv independentemente — roda em paralelo,
+  // não bloqueia o startup do ma-cross (ver comentário no require acima).
+  runVwapBandsBot().catch(err => console.error(`❌ vwap-bands: ${err.message}`));
 
   let rows = await loadMaCrossRows();
   rows = (rows ?? []).filter(r => isMaCrossStrategy(r.strategy_id));

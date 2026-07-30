@@ -471,10 +471,19 @@ function flatConfigToBody(tc) {
   };
 }
 
+// trade_config de outras estratégias (ma-cross, vwap-bands, swing) sempre marca "kind" —
+// o formato AMAP (flat, legado) nunca seta esse campo. Sem essa checagem, uma linha de
+// symbol+strategy_id de outro bot que acabe caindo aqui (ex.: query sem filtro de
+// strategy_id) é reinterpretada como AMAP e produz um config com campos faltando
+// (ex.: rule1.entryRsi undefined), quebrando mais adiante em vez de falhar com uma
+// mensagem clara de "sem trade_config válido".
+const FOREIGN_TRADE_CONFIG_KINDS = new Set(['ma_cross', 'vwap_bands', 'rsi', 'ma']);
+
 function configFromRow(row) {
   if (!row) return null;
   if (row.trade_config) {
     const raw = typeof row.trade_config === 'string' ? JSON.parse(row.trade_config) : row.trade_config;
+    if (FOREIGN_TRADE_CONFIG_KINDS.has(raw?.kind)) return null;
     return toEngineConfig(flatConfigToBody(raw));
   }
   if (row.entry_rsi) {

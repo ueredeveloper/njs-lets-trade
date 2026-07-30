@@ -28,6 +28,10 @@ const {
 const {
   isMaCrossStrategy, resolveConfigBody: maCrossResolveConfigBody, buildTradeConfig: buildMaCrossTradeConfig,
 } = require('../bot/ma-cross/strategyPresets');
+const {
+  isVwapBandsStrategy, resolveConfigBody: vwapBandsResolveConfigBody, buildTradeConfig: buildVwapBandsTradeConfig,
+} = require('../bot/vwap-bands/strategyPresets');
+const { toFormState: vwapBandsToFormState, normalizeVwapBandsConfig } = require('../bot/vwap-bands/tradeConfigSchema');
 const { toFormState: swingToFormState, normalizeSwingConfig, toAmapSuggestConfig } = require('../bot/swing/tradeConfigSchema');
 const { toFormState: maCrossToFormState, normalizeMaCrossConfig } = require('../bot/ma-cross/tradeConfigSchema');
 const { getRequiredSpecs: getMaCrossRequiredSpecs } = require('../bot/ma-cross/strategyEngine');
@@ -277,12 +281,14 @@ router.delete('/favorites/:symbol', getUserId, async (req, res) => {
 function normStrategyId(id) {
   if (isMaCrossStrategy(id)) return id;
   if (isSwingStrategy(id)) return id;
+  if (isVwapBandsStrategy(id)) return id;
   return amapNormStrategyId(id);
 }
 
 function resolveConfigBody(r) {
   if (isMaCrossStrategy(r?.strategy_id)) return maCrossResolveConfigBody(r);
   if (isSwingStrategy(r?.strategy_id)) return swingResolveConfigBody(r);
+  if (isVwapBandsStrategy(r?.strategy_id)) return vwapBandsResolveConfigBody(r);
   return amapResolveConfigBody(r);
 }
 
@@ -330,6 +336,29 @@ function multitradeToEntry(r) {
       exitRsi:      form.exitRsi,
       entryMaFilter: form.entryMaFilter,
       entryMa:      form.entryMa,
+      stopLoss:     form.stopLoss,
+      execution:    form.execution,
+      polling:      form.polling,
+      volume:       form.volume,
+      tradeConfig:  tc,
+      kind:         form.kind,
+      createdAt:    r.created_at,
+      updatedAt:    r.updated_at,
+    };
+  }
+
+  if (isVwapBandsStrategy(sid)) {
+    const tc = buildVwapBandsTradeConfig(configBody);
+    const form = vwapBandsToFormState(configBody);
+    return {
+      id:           r.id,
+      symbol:       r.symbol,
+      exchange:     r.exchange,
+      strategyId:   sid,
+      enabled:      r.enabled !== false,
+      capital:      Number(r.capital),
+      entry:        form.entry,
+      exit:         form.exit,
       stopLoss:     form.stopLoss,
       execution:    form.execution,
       polling:      form.polling,
@@ -420,6 +449,25 @@ function bodyToMultitradeRow(userId, body) {
       ma_conditions:   normalized.entryMaFilter?.enabled
         ? [{ mode: normalized.entryMaFilter.mode, period: normalized.entryMaFilter.period, interval: normalized.entryMaFilter.interval }]
         : [],
+      rule_3_candles:  false,
+      rule_4_candles:  false,
+      trade_config,
+    };
+  }
+
+  if (isVwapBandsStrategy(sid)) {
+    const normalized = normalizeVwapBandsConfig(body);
+    const trade_config = buildVwapBandsTradeConfig(body);
+    return {
+      user_id:         userId,
+      symbol:          sym,
+      exchange:        body.exchange ?? 'binance',
+      strategy_id:     sid,
+      enabled:         body.enabled !== false,
+      capital:         Number(body.capital ?? 100),
+      entry_rsi:       { interval: normalized.entry.interval, period: 14, operator: '<', value: 30 },
+      exit_rsi:        { interval: normalized.entry.interval, period: 14, operator: '>', value: 70 },
+      ma_conditions:   [],
       rule_3_candles:  false,
       rule_4_candles:  false,
       trade_config,
