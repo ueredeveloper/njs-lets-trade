@@ -844,16 +844,22 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     && isHighlightFilterName(activeFilter)
     && !findFilter(activeFilter);
 
-  const gateCount    = gateFavorites.size;
-  const binanceCount = binanceFavorites.size;
-  const tradeCount   = tradeFavSymbols.length;
+  // Contagens dos botões da toolbar: precisam refletir a mesma "Exibição de
+  // ativos" (isVisibleSymbol) aplicada à lista de linhas (rows), senão o número
+  // no badge diverge da quantidade de moedas realmente exibidas ao abrir a view
+  // (ex.: favorito Gate com token alavancado 3L/3S oculto por padrão).
+  const gateCount    = [...gateFavorites].filter((sym) => isVisibleSymbol(sym)).length;
+  const binanceCount = [...binanceFavorites].filter((sym) => isVisibleSymbol(sym)).length;
+  const tradeCount   = tradeFavSymbols.filter((sym) => isVisibleSymbol(sym)).length;
   const activeCount  = activeTrades.size;
-  const mtCount      = new Set(
+  const mtSymbols    = new Set(
     multitradeFavorites.filter(e => e.enabled !== false && isMaCrossEntry(e)).map(e => e.symbol),
-  ).size;
-  const vwapCount    = new Set(
+  );
+  const mtCount      = [...mtSymbols].filter((sym) => isVisibleSymbol(sym)).length;
+  const vwapSymbols  = new Set(
     multitradeFavorites.filter(e => e.enabled !== false && e.strategyId === 'vwap-bands').map(e => e.symbol),
-  ).size;
+  );
+  const vwapCount    = [...vwapSymbols].filter((sym) => isVisibleSymbol(sym)).length;
 
   /** Somatório do PnL das linhas visíveis (respeita filtro ativo). */
   const tradePnlSum = useMemo(() => {
