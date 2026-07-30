@@ -2,9 +2,12 @@ import { useCallback, useState } from 'react';
 import {
   VWAP_BANDS_DEFAULTS, normalizeVwapBandsForm, vwapBandsFormFromEntry, vwapBandsFormToPayload,
 } from '../constants/vwapBandsConfigSchema';
+import { MT_HELP } from '../constants/multitradeHelp';
 import VwapBandsStrategyForm from './VwapBandsStrategyForm';
 
 const VWAP_COLOR = '#a78bfa';
+const GATE_COLOR = '#0068ff';
+const BINANCE_COLOR = '#f0b90b';
 
 /**
  * Modal dedicado só ao vwap-bands — sem abas de outras estratégias. O MultitradeModal
@@ -26,7 +29,7 @@ export default function VwapBandsFavoriteModal({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
 
-  const exchange = defaultExchange ?? currentEntry?.exchange ?? 'binance';
+  const [exchange, setExchange] = useState(defaultExchange ?? currentEntry?.exchange ?? 'binance');
 
   const patch = useCallback((path, value) => {
     setForm(prev => {
@@ -116,6 +119,21 @@ export default function VwapBandsFavoriteModal({
             <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} className="accent-purple-400" />
             Habilitado
           </label>
+        </div>
+
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-p5/50 mb-1.5" title={MT_HELP.shared.exchange}>Corretora</div>
+          <div className="flex gap-2">
+            {[{ id: 'gate', label: 'Gate.io', color: GATE_COLOR }, { id: 'binance', label: 'Binance', color: BINANCE_COLOR }].map(ex => (
+              <button key={ex.id} type="button" onClick={() => setExchange(ex.id)}
+                className="flex-1 py-1.5 text-xs rounded font-semibold"
+                style={{
+                  background: exchange === ex.id ? ex.color : 'transparent',
+                  color: exchange === ex.id ? (ex.id === 'binance' ? '#000' : '#fff') : ex.color,
+                  border: `1px solid ${ex.color}`, opacity: exchange === ex.id ? 1 : 0.55,
+                }}>{ex.label}</button>
+            ))}
+          </div>
         </div>
 
         <VwapBandsStrategyForm form={form} patch={patch} symbol={symbol.trim().toUpperCase()} />
