@@ -12,12 +12,12 @@
 
 const { fetchBinanceCandles, fetchGateCandles } = require('../prices');
 const { toGateSymbol } = require('../../utils/toGateSymbol');
-const { gateMarketBuy } = require('../../gate/gateMarketBuy');
+const { gateMarketBuy, gateLimitBuy } = require('../../gate/gateMarketBuy');
 const { gateGetTokenBalance, gate24hVolume } = require('../../gate/gateAccount');
 const { gateRequest } = require('../../gate/getGateClient');
 const { gateMarketSell: gateMarketSellCore } = require('../gate/gateMarketSell');
 const {
-  binanceMarketBuy, binanceMarketSell, binance24hVolume, syncBinanceClock,
+  binanceMarketBuy, binanceLimitBuy, binanceMarketSell, binance24hVolume, syncBinanceClock,
 } = require('../../binance/tradeClient');
 
 async function gateMarketSell(pair, qty, log, opts = {}) {
@@ -33,7 +33,8 @@ function buildAdapter(exchange, symbol) {
     return {
       name: 'Gate.io', pair,
       fetchCandles: (lim, iv) => fetchGateCandles(pair, lim, iv),
-      marketBuy:    (usdt)     => gateMarketBuy(pair, usdt),
+      marketBuy:    (usdt)        => gateMarketBuy(pair, usdt),
+      limitBuy:     (usdt, price) => gateLimitBuy(pair, usdt, price),
       marketSell:   (qty, log, opts) => gateMarketSell(pair, qty, log, opts),
       fetch24hVol:  ()         => gate24hVolume(pair),
     };
@@ -41,7 +42,8 @@ function buildAdapter(exchange, symbol) {
   return {
     name: 'Binance', pair: symbol,
     fetchCandles: (lim, iv) => fetchBinanceCandles(symbol, lim, iv),
-    marketBuy:    (usdt)     => binanceMarketBuy(symbol, usdt),
+    marketBuy:    (usdt)        => binanceMarketBuy(symbol, usdt),
+    limitBuy:     (usdt, price) => binanceLimitBuy(symbol, usdt, price),
     marketSell:   (qty)      => binanceMarketSell(symbol, qty),
     fetch24hVol:  ()         => binance24hVolume(symbol),
   };

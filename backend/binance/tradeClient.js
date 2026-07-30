@@ -59,6 +59,41 @@ async function binanceMarketBuy(symbol, usdtAmount) {
   return { filledQty: filledQty * (1 - GATE_FEE_RATE_EQUIV), quoteQty, avgPrice: quoteQty / filledQty };
 }
 
+/**
+ * Compra LIMITE (IOC) num preço exato (ex.: valor da lower1/vwap no vwap-bands-bot) — só
+ * preenche se o mercado estiver naquele preço ou melhor no instante do envio; o que não
+ * preencher é cancelado na hora pela própria IOC, sem ficar parado no book. Se não
+ * preencher nada, devolve `{ filled: false }` em vez de lançar erro — quem chama decide se
+ * tenta de novo no próximo tick (não é uma falha, só "ainda não chegou lá").
+ */
+async function binanceLimitBuy(symbol, usdtAmount, price) {
+  const info        = await fetch(`${BINANCE_BASE}/api/v3/exchangeInfo?symbol=${symbol}`).then(r => r.json());
+  const filters     = info.symbols?.[0]?.filters ?? [];
+  const priceFilter = filters.find(f => f.filterType === 'PRICE_FILTER');
+  const lotFilter   = filters.find(f => f.filterType === 'LOT_SIZE');
+  const tickSize    = priceFilter ? parseFloat(priceFilter.tickSize) : 0.00000001;
+  const stepSize    = lotFilter ? parseFloat(lotFilter.stepSize) : 1;
+  const priceDecimals = tickSize < 1 ? (String(tickSize).split('.')[1]?.length ?? 0) : 0;
+  const qtyDecimals   = stepSize < 1 ? (String(stepSize).split('.')[1]?.length ?? 0) : 0;
+
+  const safePrice = (Math.round(price / tickSize) * tickSize).toFixed(priceDecimals);
+  const rawQty    = usdtAmount / parseFloat(safePrice);
+  const safeQty   = (Math.floor(rawQty / stepSize) * stepSize).toFixed(qtyDecimals);
+  if (!Number.isFinite(parseFloat(safeQty)) || parseFloat(safeQty) <= 0) {
+    throw new Error(`quantidade inválida para compra limite (${safeQty})`);
+  }
+
+  const order = await binanceRequest('POST', '/api/v3/order', {
+    symbol, side: 'BUY', type: 'LIMIT', timeInForce: 'IOC', quantity: safeQty, price: safePrice,
+  });
+  const filledQty = parseFloat(order.executedQty);
+  const quoteQty  = parseFloat(order.cummulativeQuoteQty);
+  if (!(filledQty > 0)) return { filled: false };
+  return {
+    filled: true, filledQty: filledQty * (1 - GATE_FEE_RATE_EQUIV), quoteQty, avgPrice: quoteQty / filledQty,
+  };
+}
+
 async function binanceMarketSell(symbol, qty) {
   if (!Number.isFinite(qty) || qty <= 0) {
     throw new Error(`quantidade inválida para venda (${qty})`);
@@ -88,6 +123,7 @@ module.exports = {
   syncBinanceClock,
   binanceRequest,
   binanceMarketBuy,
+  binanceLimitBuy,
   binanceMarketSell,
   binance24hVolume,
 };

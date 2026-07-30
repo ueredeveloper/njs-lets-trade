@@ -15,13 +15,11 @@ const LEVEL_LABELS = {
 
 /**
  * Escada de setups: cada um é "toque no nível de baixo → fechamento acima do nível do
- * meio → compra nesse nível (retorno) → venda no nível de cima". O usuário descreveu os
- * dois primeiros degraus (lower2→lower1→vwap e lower1→vwap→upper1) como a mesma regra
- * aplicada a bandas adjacentes diferentes — adicionar um novo degrau (ex.: vwap→upper1→
- * upper2) é só acrescentar uma linha aqui, sem tocar no resto do motor.
+ * meio → compra nesse nível (retorno) → venda no nível de cima". Restrito de propósito ao
+ * degrau lower1→vwap→upper1 — o usuário não quer trades que toquem ou usem lower2/upper2
+ * (nem como stop, nem como alvo), só operar dentro da faixa upper1↔vwap↔lower1.
  */
 const LADDER_SETUPS = [
-  { id: 'lower2_lower1_vwap', touch: 'lower2', confirm: 'lower1', target: 'vwap' },
   { id: 'lower1_vwap_upper1', touch: 'lower1', confirm: 'vwap', target: 'upper1' },
 ];
 
@@ -227,19 +225,20 @@ function evaluateEntrySignal(config, cMap) {
 }
 
 /**
- * Janela de espera pelo retorno ao nível de confirmação (ex.: -1σ) após o fechamento que
- * armou a compra — mesmo padrão do "pending pullback" do ma-cross (ema50Proximity/
- * pullbackEntry). A compra só dispara quando um candle FECHADO reconquistar o nível de
- * novo — de alta (close > open) e fechando acima dele, dentro da tolerância `tolerancePct`
- * de distância — não basta o preço ao vivo tocar o nível de qualquer jeito: precisa de um
- * segundo fechamento de força na mesma direção do sinal original (retest + reconquista).
+ * Janela de espera pelo retorno ao nível de confirmação (ex.: -1σ) após o candle de 1h que
+ * armou a compra. A compra dispara assim que um candle FECHADO do intervalo rápido
+ * (`pullback.pollInterval`, padrão 15m) tocar de volta o nível — mínima (low) dentro de
+ * `tolerancePct` de distância dele — sem exigir reconquista/fechamento de força: o objetivo
+ * é comprar perto da linha, não esperar confirmação extra que só empurra o preço de compra
+ * pra mais longe dela (ver conversa com o usuário — comprar "no meio" das bandas não conta
+ * como pullback).
  *
- * A checagem desse fechamento roda no intervalo RÁPIDO `pullback.pollInterval` (padrão
- * 15m), não no intervalo principal (`entry.interval`, ex.: 1h) — mesmo motivo do
- * ema50Proximity.pollInterval do ma-cross: esperar o candle de 1h fechar pra conferir o
- * retorno deixa o preço passar batido pela banda e voltar a subir dentro da própria hora,
- * sem o bot nunca ver o candle de 1h fechar já reconquistado. `waited`/expiração continuam
- * contados na unidade de entry.interval (waitCandles significa o mesmo de sempre).
+ * A checagem roda no intervalo RÁPIDO `pullback.pollInterval` (padrão 15m), não no
+ * intervalo principal (`entry.interval`, ex.: 1h) — mesmo motivo do ema50Proximity.
+ * pollInterval do ma-cross: esperar o candle de 1h fechar pra conferir o retorno deixa o
+ * preço passar batido pela banda e voltar a subir dentro da própria hora, sem o bot nunca
+ * ver o candle de 1h fechar já tendo tocado o nível. `waited`/expiração continuam contados
+ * na unidade de entry.interval (waitCandles significa o mesmo de sempre).
  */
 function evaluatePullbackReady(config, cMap, pending) {
   const entry = config.entry;
@@ -278,7 +277,6 @@ function evaluatePullbackReady(config, cMap, pending) {
   const target = lastLevels[pending.confirmLevel];
   if (target == null) return { ready: false, reason: 'NO_BANDS' };
 
-  const lastOpen = parseFloat(lastCandle.open);
   const lastClose = parseFloat(lastCandle.close);
 
   // Perdeu a força do repique: fechou de volta abaixo do nível que tinha sido tocado.
@@ -287,18 +285,15 @@ function evaluatePullbackReady(config, cMap, pending) {
     return { ready: false, cancel: true, reason: 'BROKE_BACK_BELOW_TOUCH_LEVEL' };
   }
 
-  const isBullish = lastClose > lastOpen;
+  // Único critério de compra: o preço chegou perto da linha de confirmação (mínima do
+  // candle dentro de tolerancePct dela) — não importa se o candle fechou de alta ou não,
+  // nem se fechou acima da linha. Comprar exige só "voltou pra linha", pra sair no preço
+  // da própria linha em vez de num fechamento que já correu longe dela.
   const tol = Math.max(0, entry.pullback.tolerancePct) / 100;
-  const closedAboveLevel = lastClose > target;
-  // A tolerância mede se o candle CHEGOU perto do nível (usa o low — pode até romper bem
-  // abaixo, sem limite de profundidade), não se o FECHAMENTO ficou perto dele. Um repique
-  // forte pode fechar bem acima do nível depois de tocá-lo (ex.: candle de alta explosivo)
-  // — exigir o fechamento dentro da tolerância rejeitaria esses repiques válidos só por
-  // terem subido rápido demais.
   const lastLow = parseFloat(lastCandle.low ?? lastClose);
-  const cameCloseEnough = lastLow <= target * (1 + tol);
+  const reachedLevel = lastLow <= target * (1 + tol);
 
-  if (!isBullish || !closedAboveLevel || !cameCloseEnough) {
+  if (!reachedLevel) {
     return { ready: false, waited, need: waitCandles, reason: 'WAITING_CANDLES' };
   }
 
@@ -307,7 +302,7 @@ function evaluatePullbackReady(config, cMap, pending) {
     close: lastClose,
     decisionTime: lastCandle.openTime,
     targetLevelValue: target,
-    entryDesc: `reconquista de ${labelForLevel(pending.confirmLevel)} VWAP(${vwapIv}) (candle de alta, checagem ${pollIv})`,
+    entryDesc: `retorno a ${labelForLevel(pending.confirmLevel)} VWAP(${vwapIv}) (candle toca o nível, checagem ${pollIv})`,
   };
 }
 

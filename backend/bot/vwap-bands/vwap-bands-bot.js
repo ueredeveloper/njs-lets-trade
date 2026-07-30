@@ -203,10 +203,13 @@ async function tick(rowId, adapter, strategy, log, session) {
       return { phase: 'PENDING' };
     }
 
-    log(`${G}📍 Retorno confirmado (${ready.entryDesc}) — comprando ${parseFloat(capital).toFixed(2)} USDT${X}`);
+    log(`${G}📍 Retorno confirmado (${ready.entryDesc}) — comprando ${parseFloat(capital).toFixed(2)} USDT a ${fmtPrice(ready.targetLevelValue)} (ordem limite)${X}`);
     const bought = await executeBuy({
       rowId, adapter, strategy, log, session,
-      entryMeta: { ...pending, ...ready },
+      // limitPrice = valor exato da linha (lower1/vwap) que armou o pullback — força ordem
+      // limite nesse preço em vez de a mercado (ver tradeExecution.js), pra não comprar "no
+      // meio" das bandas quando o candle só tocou a linha de leve.
+      entryMeta: { ...pending, ...ready, limitPrice: ready.targetLevelValue },
       capital, strategyId, symbol,
     });
     return { phase: bought ? 'BOUGHT' : 'PENDING' };

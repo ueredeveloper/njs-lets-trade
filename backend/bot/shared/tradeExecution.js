@@ -107,11 +107,22 @@ function createTradeExecution({
   async function executeBuy({
     rowId, adapter, strategy, log, session, entryMeta, capital, strategyId, symbol, totalCapital,
   }) {
+    // entryMeta.limitPrice (ex.: valor exato da lower1/vwap no vwap-bands-bot) força ordem
+    // LIMITE nesse preço em vez de a mercado — evita comprar "no meio" das bandas quando o
+    // candle de confirmação só tocou a linha de leve e já fechou bem mais longe dela.
+    const useLimit = entryMeta?.limitPrice != null && typeof adapter.limitBuy === 'function';
     let result;
     try {
-      result = await adapter.marketBuy(parseFloat(capital));
+      result = useLimit
+        ? await adapter.limitBuy(parseFloat(capital), entryMeta.limitPrice)
+        : await adapter.marketBuy(parseFloat(capital));
     } catch (err) {
       log(`❌ Erro na compra: ${err.message}`);
+      return false;
+    }
+
+    if (result?.filled === false) {
+      log(`${Y}⏳ Ordem limite @ ${entryMeta.limitPrice} não preenchida — tenta de novo no próximo tick${X}`);
       return false;
     }
 
