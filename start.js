@@ -38,7 +38,19 @@ if (!useBundle) {
     process.exit(code ?? 0);
   });
 
-  process.on('exit', () => vite?.kill());
+  // No Windows, vite foi iniciado com shell:true (npm run dev via cmd.exe), então
+  // vite.kill() só mata o cmd.exe, deixando o processo real do Vite órfão. taskkill
+  // /T mata a árvore inteira. Precisa ser síncrono pois 'exit' não espera async.
+  process.on('exit', () => {
+    if (!vite || vite.killed || vite.exitCode !== null) return;
+    if (process.platform === 'win32') {
+      try {
+        require('child_process').execSync(`taskkill /PID ${vite.pid} /T /F`, { stdio: 'ignore' });
+      } catch {}
+    } else {
+      vite.kill();
+    }
+  });
   process.on('SIGINT', () => process.exit());
 } else {
   process.env.SERVE_BUNDLE = '1';
