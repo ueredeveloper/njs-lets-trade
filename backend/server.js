@@ -32,6 +32,15 @@ app.use(cors());
 app.use(bodyParser.json({ limit: '10mb' }));
 app.use(bodyParser.urlencoded({ extended: true, limit: '10mb' }));
 
+// Painel usado em sessões curtas — encerra sozinho (equivalente a Ctrl+C) para parar de
+// consumir internet com os ciclos de cache em background assim que não estiver em uso.
+// Os bots (amap-bot.js etc.) rodam em processos Node separados e não são afetados.
+let lastActivityAt = Date.now();
+app.use((req, res, next) => {
+  lastActivityAt = Date.now();
+  next();
+});
+
 const router = express.Router();
 
 app.use('/services', fetchCandles);
@@ -117,6 +126,16 @@ const RSI_INTERVALS = ['15m', '1h', '4h'];
 const RSI_TICK_MS   = 2 * 60 * 1000; // verifica a cada 2 min; TTL por intervalo decide o que buscar
 const PORT = process.env.BACKEND_PORT || process.env.SERVER_PORT || 3000;
 
+// Encerra o painel após N min sem nenhuma requisição — ver middleware de
+// `lastActivityAt` no topo do arquivo.
+const PANEL_INACTIVITY_SHUTDOWN_MS = 10 * 60 * 1000;
+const PANEL_INACTIVITY_CHECK_MS = 10 * 1000;
+
+function shutdownPanel(reason) {
+  console.log(`[server] painel encerrando automaticamente (${reason}) — bots em processos separados continuam rodando`);
+  process.exit(0);
+}
+
 async function refreshRsiCache() {
   const t0 = Date.now();
   const { list: symbols } = await getActiveUsdtPairs();
@@ -158,6 +177,13 @@ async function startServer() {
     const boot = ((Date.now() - t0) / 1000).toFixed(2);
     console.log(`Server is running on port ${PORT} (pronto em ${boot}s)`);
   });
+
+  console.log(`[server] auto-shutdown: ${PANEL_INACTIVITY_SHUTDOWN_MS / 60_000}min sem atividade`);
+  setInterval(() => {
+    if (Date.now() - lastActivityAt >= PANEL_INACTIVITY_SHUTDOWN_MS) {
+      shutdownPanel(`${PANEL_INACTIVITY_SHUTDOWN_MS / 60_000}min sem atividade`);
+    }
+  }, PANEL_INACTIVITY_CHECK_MS);
 
   // Warmup em background — só entradas com TTL expirado
   console.log(`[rsiCache] intervalos: ${RSI_INTERVALS.join(', ')} | tick ${RSI_TICK_MS / 60_000}min`);
