@@ -2563,6 +2563,7 @@ export default function CandlestickChart() {
   const [loadingMoreCandles, setLoadingMoreCandles] = useState(false);
   const [measureMode, setMeasureMode] = useState(false);
   const [measurePoints, setMeasurePoints] = useState(null);
+  const [measureOneShot, setMeasureOneShot] = useState(false);
 
   useEffect(() => {
     const el = chartWrapRef.current;
@@ -2579,6 +2580,13 @@ export default function CandlestickChart() {
       ro.disconnect();
     };
   }, [selectedChart?.symbol, selectedChart?.interval, activeTab]);
+
+  // Troca de moeda/intervalo invalida qualquer medição de % em aberto (coordenadas ficariam obsoletas).
+  useEffect(() => {
+    setMeasureMode(false);
+    setMeasurePoints(null);
+    setMeasureOneShot(false);
+  }, [selectedChart?.symbol, selectedChart?.interval]);
 
 
   function toggleIndicator(id) {
@@ -3215,6 +3223,17 @@ export default function CandlestickChart() {
   function toggleMeasureMode() {
     setMeasureMode((v) => !v);
     setMeasurePoints(null);
+    setMeasureOneShot(false);
+  }
+
+  // Igual ao toggle normal, mas a medição se desliga sozinha assim que o arraste termina.
+  function toggleMeasureModeOnce() {
+    setMeasureMode((v) => {
+      const next = !v;
+      setMeasureOneShot(next);
+      return next;
+    });
+    setMeasurePoints(null);
   }
 
   // Candle sob o cursor (índice + openTime), a partir do pixel X — usado pra medir tempo/candles decorridos.
@@ -3268,6 +3287,10 @@ export default function CandlestickChart() {
       window.removeEventListener('mouseup', onEnd);
       window.removeEventListener('touchmove', onMove);
       window.removeEventListener('touchend', onEnd);
+      if (measureOneShot) {
+        setMeasureMode(false);
+        setMeasureOneShot(false);
+      }
     };
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onEnd);
@@ -3526,11 +3549,11 @@ export default function CandlestickChart() {
   const measureElapsed = measurePoints && Number.isFinite(measurePoints.openTime1) && Number.isFinite(measurePoints.openTime2)
     ? fmtElapsedTime(Math.abs(measurePoints.openTime2 - measurePoints.openTime1))
     : null;
-  const measureOverlay = measureMode && (
+  const measureOverlay = (measureMode || measurePoints) && (
     <div
-      className="absolute inset-0 z-20 cursor-crosshair select-none"
-      onMouseDown={handleMeasureStart}
-      onTouchStart={handleMeasureStart}
+      className={`absolute inset-0 z-20 select-none ${measureMode ? 'cursor-crosshair' : 'pointer-events-none'}`}
+      onMouseDown={measureMode ? handleMeasureStart : undefined}
+      onTouchStart={measureMode ? handleMeasureStart : undefined}
     >
       {measurePoints && (
         <>
@@ -3564,6 +3587,34 @@ export default function CandlestickChart() {
           )}
         </>
       )}
+    </div>
+  );
+
+  // Botões de medir % — vivem dentro da área do gráfico, no canto superior direito.
+  const measureButtons = (
+    <div className="absolute top-2 right-2 z-30 flex items-center gap-1">
+      <button
+        onClick={toggleMeasureMode}
+        title="Medir variação % — arraste de um candle a outro (fica ligado até você clicar de novo)"
+        className={`px-1.5 md:px-2 py-0.5 text-[10px] md:text-xs rounded font-mono transition-colors border shrink-0 shadow ${
+          measureMode && !measureOneShot
+            ? 'bg-p4 text-white border-p4'
+            : 'bg-p1/85 text-p5 hover:bg-p3/40 hover:text-white border-p3/40'
+        }`}
+      >
+        %
+      </button>
+      <button
+        onClick={toggleMeasureModeOnce}
+        title="Medir variação % uma vez — desliga sozinho ao soltar o arraste"
+        className={`px-1.5 md:px-2 py-0.5 text-[10px] md:text-xs rounded font-mono transition-colors border shrink-0 shadow ${
+          measureMode && measureOneShot
+            ? 'bg-p4 text-white border-p4'
+            : 'bg-p1/85 text-p5 hover:bg-p3/40 hover:text-white border-p3/40'
+        }`}
+      >
+        %<sup>1</sup>
+      </button>
     </div>
   );
 
@@ -3618,18 +3669,6 @@ export default function CandlestickChart() {
               className="px-1.5 md:px-2 py-0.5 text-[10px] md:text-xs rounded font-mono transition-colors disabled:opacity-40 text-p5 hover:bg-p3/40 hover:text-white border border-p3/40 shrink-0"
             >
               {loadingMoreCandles ? '…' : `+${selectedChart?.candlesticks?.length ?? candleFetchLimit}/${MAX_CANDLES}`}
-            </button>
-            <button
-              onClick={toggleMeasureMode}
-              disabled={activeTab === 'rules'}
-              title="Medir variação % — arraste de um candle a outro"
-              className={`px-1.5 md:px-2 py-0.5 text-[10px] md:text-xs rounded font-mono transition-colors disabled:opacity-40 border shrink-0 ${
-                measureMode
-                  ? 'bg-p4 text-white border-p4'
-                  : 'text-p5 hover:bg-p3/40 hover:text-white border-p3/40'
-              }`}
-            >
-              %
             </button>
           </div>
         </div>
@@ -3722,6 +3761,7 @@ export default function CandlestickChart() {
         <div ref={chartWrapRef} className="flex-1 min-h-0 relative">
           {chartNode}
           {measureOverlay}
+          {measureButtons}
           <ChartIndicatorPanel
             activeIndicators={activeIndicators}
             toggleIndicator={toggleIndicator}
@@ -3755,6 +3795,7 @@ export default function CandlestickChart() {
           <div ref={chartWrapRef} className="flex-1 min-w-0 min-h-0 relative">
             {chartNode}
             {measureOverlay}
+            {measureButtons}
             <ChartIndicatorPanel
               activeIndicators={activeIndicators}
               toggleIndicator={toggleIndicator}
