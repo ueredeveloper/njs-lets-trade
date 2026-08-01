@@ -1,6 +1,7 @@
 'use strict';
 
 const { computeVwapWithBands } = require('../../utils/vwapSession');
+const { buildMaTimeSeries } = require('../../utils/movingAverage');
 const { computeStopLossFloor } = require('../shared/stopLossFloor');
 
 const INTERVAL_MS = {
@@ -15,15 +16,19 @@ const LEVEL_LABELS = {
 
 /**
  * Escada de setups: cada um é "toque no nível de baixo → fechamento acima do nível do
- * meio → compra nesse nível (retorno) → venda no nível de cima". Dois degraus:
+ * meio → compra nesse nível (retorno) → venda no nível de cima". Três degraus:
  *   - lower2→lower1→vwap: compra na volta à -1σ, vende na linha principal, stop na -2σ.
  *   - lower1→vwap→upper1: compra na volta à linha principal, vende na +1σ, stop na -1σ.
- * upper2 nunca aparece (nem como alvo, nem como stop) — o usuário não opera acima da +1σ;
+ *   - vwap→upper1→upper2: compra na volta à +1σ, vende na +2σ, stop na linha principal.
+ *     Antes o usuário não operava acima da +1σ (risco de comprar continuação de topo sem
+ *     nenhum filtro de tendência); com o emaFilter (EMA200 15m -2% por padrão, ver acima)
+ *     como guarda extra na compra, esse degrau ficou liberado.
  * lower2 só é usado como stop do degrau de baixo, nunca como alvo/gatilho de entrada.
  */
 const LADDER_SETUPS = [
   { id: 'lower2_lower1_vwap', touch: 'lower2', confirm: 'lower1', target: 'vwap' },
   { id: 'lower1_vwap_upper1', touch: 'lower1', confirm: 'vwap', target: 'upper1' },
+  { id: 'vwap_upper1_upper2', touch: 'vwap', confirm: 'upper1', target: 'upper2' },
 ];
 
 function labelForLevel(key) {
@@ -72,11 +77,23 @@ function vwapPointAt(series, openTime) {
   return best;
 }
 
+/** Último valor da série EMA (buildMaTimeSeries) cujo openTime <= alvo — mesma convenção
+ *  de vwapPointAt, mas pra uma EMA simples (usada pelo emaFilter de entrada). */
+function emaFilterValueAt(series, openTime) {
+  if (!series?.length) return null;
+  let best = null;
+  for (const pt of series) {
+    if (pt.openTime <= openTime) best = pt.ma; else break;
+  }
+  return best;
+}
+
 /**
  * Especificações de candles necessárias: um intervalo pros candles de preço (fechamento/
- * toque, ex.: 1h), outro pra VWAP+bandas (ex.: 4h) e outro pra checagem rápida do retorno
- * durante o PENDING (ex.: 15m) — podem coincidir ou ser três intervalos diferentes (o
- * usuário usa VWAP 4h semanal, gráfico de 1h, checagem de retorno em 15m).
+ * toque, ex.: 1h), outro pra VWAP+bandas (ex.: 4h), outro pra checagem rápida do retorno
+ * durante o PENDING (ex.: 15m) e outro pro emaFilter de entrada (ex.: EMA200 15m) — podem
+ * coincidir ou ser intervalos diferentes (o usuário usa VWAP 4h semanal, gráfico de 1h,
+ * checagem de retorno em 15m).
  */
 function getRequiredSpecs(config) {
   const entry = config.entry;
@@ -99,6 +116,17 @@ function getRequiredSpecs(config) {
   add(entry.interval, priceLimit);
   add(vwapIv, vwapLimit);
   add(pollIv, pollLimit);
+
+  if (entry.emaFilter?.enabled) {
+    const efIv = entry.emaFilter.interval ?? pollIv;
+    const efPeriod = Math.max(2, Math.round(Number(entry.emaFilter.period ?? 200)));
+    // Folga de 3x o período pra EMA estabilizar (mesmo critério usado no backtest de
+    // validação, ver analyze-ema200-15m-filter.js) + cobertura da janela de espera.
+    const efRatio = Math.max(1, Math.round(intervalMs(entry.interval) / intervalMs(efIv)));
+    const efLimit = entry.pullback.waitCandles * efRatio + efPeriod * 3 + 30;
+    add(efIv, efLimit);
+  }
+
   return [...specs.entries()].map(([interval, limit]) => ({ interval, limit }));
 }
 
@@ -309,6 +337,25 @@ function evaluatePullbackReady(config, cMap, pending) {
     return { ready: false, waited, need: waitCandles, reason: 'WAITING_CANDLES' };
   }
 
+  // Filtro extra: só compra se o close já estiver acima da banda inferior da EMA(period,
+  // interval) — floor = EMA * (1 - tolerancePct%). Não cancela o pending, só segura a
+  // compra: continua na mesma janela de waitCandles esperando o preço subir de volta pra
+  // cima da banda (ou a janela expirar e cancelar por PULLBACK_WINDOW_EXPIRED, como hoje).
+  if (entry.emaFilter?.enabled) {
+    const efIv = entry.emaFilter.interval ?? pollIv;
+    const efRaw = cMap[efIv] ?? [];
+    const efClosed = closedCandlesOnly(efRaw);
+    const efSeries = buildMaTimeSeries(efClosed, entry.emaFilter.period);
+    const efValue = emaFilterValueAt(efSeries, lastCandle.openTime);
+    if (efValue == null) {
+      return { ready: false, waited, need: waitCandles, reason: 'EMA_FILTER_NO_DATA' };
+    }
+    const efFloor = efValue * (1 - entry.emaFilter.tolerancePct / 100);
+    if (lastClose <= efFloor) {
+      return { ready: false, waited, need: waitCandles, reason: 'EMA_FILTER_BELOW_BAND' };
+    }
+  }
+
   return {
     ready: true,
     close: lastClose,
@@ -463,6 +510,7 @@ module.exports = {
   computeVwapSeries,
   levelsAt,
   vwapPointAt,
+  emaFilterValueAt,
   getRequiredSpecs,
   evaluateEntrySignal,
   evaluatePullbackReady,

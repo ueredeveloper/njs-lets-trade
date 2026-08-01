@@ -6,8 +6,10 @@
  *   2. Um candle fecha acima da -1σ → arma a compra.
  *   3. Espera até N candles o preço retornar perto da -1σ → compra a mercado.
  *   4. Vende quando o preço alcança de volta a linha principal da VWAP.
- * Mesma regra se repete um degrau acima: toque na -1σ, fechamento acima da linha
- * principal → compra na linha principal → venda na +1σ.
+ * Mesma regra se repete em mais dois degraus acima: toque na -1σ, fechamento acima da
+ * linha principal → compra na linha principal → venda na +1σ; toque na linha principal,
+ * fechamento acima da +1σ → compra na +1σ → venda na +2σ (liberado pelo emaFilter — EMA200
+ * 15m -2% por padrão — como guarda extra na compra).
  *
  * strategy_id: vwap-bands
  *
@@ -193,11 +195,14 @@ async function tick(rowId, adapter, strategy, log, session) {
       return { phase: 'WATCHING' };
     }
     if (!ready.ready) {
-      if (ready.reason === 'WAITING_CANDLES') {
+      if (ready.reason === 'WAITING_CANDLES' || ready.reason === 'EMA_FILTER_BELOW_BAND' || ready.reason === 'EMA_FILTER_NO_DATA') {
         const now = Date.now();
         if (!session.lastPendingLogAt || now - session.lastPendingLogAt >= PENDING_LOG_INTERVAL_MS) {
           session.lastPendingLogAt = now;
-          log(`${Y}⏳ Aguardando retorno a ${labelForLevel(pending.confirmLevel)} — candle ${ready.waited}/${ready.need}${X}`);
+          const suffix = ready.reason === 'EMA_FILTER_BELOW_BAND'
+            ? ' (preço ainda abaixo da banda do filtro EMA)'
+            : ready.reason === 'EMA_FILTER_NO_DATA' ? ' (sem dado da EMA do filtro ainda)' : '';
+          log(`${Y}⏳ Aguardando retorno a ${labelForLevel(pending.confirmLevel)} — candle ${ready.waited}/${ready.need}${suffix}${X}`);
         }
       }
       return { phase: 'PENDING' };

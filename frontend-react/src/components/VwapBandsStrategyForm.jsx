@@ -1,5 +1,6 @@
 import {
   VWAP_BANDS_ALL_INTERVALS, VWAP_BANDS_SESSIONS, VWAP_BANDS_STOP_LOSS_MODES,
+  EMA_FILTER_PERIODS, EMA_FILTER_TOLERANCES,
 } from '../constants/vwapBandsConfigSchema';
 
 const ENTRY_COLOR = '#26a69a';
@@ -26,6 +27,7 @@ function Select({ value, onChange, options, labelFor }) {
 export default function VwapBandsStrategyForm({ form, patch, symbol }) {
   const patchEntry     = (field, val) => patch(`entry.${field}`, val);
   const patchPullback  = (field, val) => patch(`entry.pullback.${field}`, val);
+  const patchEmaFilter = (field, val) => patch(`entry.emaFilter.${field}`, val);
   const patchExit      = (field, val) => patch(`exit.${field}`, val);
   const patchFastCheck = (field, val) => patch(`exit.fastCheck.${field}`, val);
   const patchStopLoss  = (field, val) => patch(`stopLoss.${field}`, val);
@@ -70,6 +72,46 @@ export default function VwapBandsStrategyForm({ form, patch, symbol }) {
           <span className="text-p5/50 ml-2">Checagem rápida</span>
           <Select value={form.entry.pullback.pollInterval} onChange={v => patchPullback('pollInterval', v)} options={VWAP_BANDS_ALL_INTERVALS} />
         </div>
+      </div>
+
+      <div className="rounded-md p-2 space-y-2" style={{ background: '#1a1d28', border: `1px solid ${ENTRY_COLOR}33` }}>
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: ENTRY_COLOR }}>
+            Filtro EMA (banda inferior)
+          </span>
+          <label className="flex items-center gap-1 text-[9px] text-p5/50 cursor-pointer">
+            <input type="checkbox" checked={form.entry.emaFilter?.enabled !== false}
+              onChange={e => patchEmaFilter('enabled', e.target.checked)} style={{ accentColor: ENTRY_COLOR }} />
+            Ativo
+          </label>
+        </div>
+        {form.entry.emaFilter?.enabled !== false && (
+          <>
+            <p className="text-[10px] text-p5/60 leading-relaxed">
+              No instante da compra (retorno confirmado), só entra se o close estiver acima
+              da banda inferior da EMA — floor = EMA × (1 − tolerância%). Se estiver abaixo,
+              o bot continua esperando o retorno (mesma janela de pullback) em vez de comprar.
+            </p>
+            <div className="flex flex-wrap gap-3 items-center text-xs">
+              <div className="flex items-center gap-1">
+                <span className="text-p5/50">EMA</span>
+                <Select value={form.entry.emaFilter?.period ?? 200}
+                  onChange={v => patchEmaFilter('period', Number(v))} options={EMA_FILTER_PERIODS} />
+              </div>
+              <div className="flex items-center gap-1">
+                <span className="text-p5/50">Intervalo</span>
+                <Select value={form.entry.emaFilter?.interval ?? '15m'}
+                  onChange={v => patchEmaFilter('interval', v)} options={VWAP_BANDS_ALL_INTERVALS} />
+              </div>
+              <div className="flex items-center gap-1">
+                <span className="text-p5/50">Banda</span>
+                <Select value={form.entry.emaFilter?.tolerancePct ?? 2}
+                  onChange={v => patchEmaFilter('tolerancePct', Number(v))} options={EMA_FILTER_TOLERANCES}
+                  labelFor={t => `-${t}%`} />
+              </div>
+            </div>
+          </>
+        )}
       </div>
 
       <div className="space-y-2">

@@ -3,6 +3,8 @@
 export const VWAP_BANDS_ALL_INTERVALS = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '8h', '1d'];
 export const VWAP_BANDS_SESSIONS = ['daily', 'weekly'];
 export const VWAP_BANDS_STOP_LOSS_MODES = ['ladder', 'percent'];
+export const EMA_FILTER_PERIODS = [9, 21, 50, 200];
+export const EMA_FILTER_TOLERANCES = [1, 2, 3];
 
 export const VWAP_BANDS_DEFAULTS = {
   label: 'VWAP Bands',
@@ -15,6 +17,8 @@ export const VWAP_BANDS_DEFAULTS = {
     minBandDistancePct: 3,
     reclaimLookbackCandles: 24,
     pullback: { waitCandles: 10, tolerancePct: 1, pollInterval: '15m' },
+    // Filtro extra: no instante da compra, exige close > EMA(period,interval) * (1 - tolerancePct%).
+    emaFilter: { enabled: true, period: 200, interval: '15m', tolerancePct: 2 },
   },
   exit: {
     tolerancePct: 0,
@@ -47,6 +51,13 @@ export function normalizeVwapBandsForm(body = {}) {
         waitCandles: Number(pb.waitCandles ?? d.entry.pullback.waitCandles),
         tolerancePct: Number(pb.tolerancePct ?? d.entry.pullback.tolerancePct),
         pollInterval: VWAP_BANDS_ALL_INTERVALS.includes(pb.pollInterval) ? pb.pollInterval : d.entry.pullback.pollInterval,
+      },
+      emaFilter: {
+        enabled: body.entry?.emaFilter?.enabled !== false,
+        period: Number(body.entry?.emaFilter?.period ?? d.entry.emaFilter.period),
+        interval: VWAP_BANDS_ALL_INTERVALS.includes(body.entry?.emaFilter?.interval)
+          ? body.entry.emaFilter.interval : d.entry.emaFilter.interval,
+        tolerancePct: Number(body.entry?.emaFilter?.tolerancePct ?? d.entry.emaFilter.tolerancePct),
       },
     },
     exit: {

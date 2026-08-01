@@ -105,6 +105,17 @@ export async function fetchMaCrossStats(symbol, {
   return res.json();
 }
 
+export async function fetchVwapBandsStats(symbol, { source = null } = {}) {
+  const params = new URLSearchParams({ symbol });
+  if (source) params.set('source', source);
+  const res = await fetch(`/services/vwap-bands-stats?${params}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 export async function fetchRsiOversoldRecovery(symbol, interval, oversold = 30, overbought = 70, source = null) {
   const params = new URLSearchParams({ symbol, interval, oversold, overbought });
   if (source) params.set('source', source);

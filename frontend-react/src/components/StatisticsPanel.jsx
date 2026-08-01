@@ -1,6 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
 import { useCurrency } from '../contexts/CurrencyContext';
-import { fetchRsiOversoldRecovery, fetchMaCrossStats, fetchBollingerBandRecovery, fetchCandlesticksAndCloud } from '../services/api';
+import {
+  fetchRsiOversoldRecovery, fetchMaCrossStats, fetchBollingerBandRecovery, fetchCandlesticksAndCloud,
+  fetchVwapBandsStats,
+} from '../services/api';
 import Tooltip from './Tooltip';
 import { useI18n } from '../i18n';
 import { CHART_VIEW } from '../utils/chartView';
@@ -50,6 +53,7 @@ const TABS = [
   { id: 'rsi', labelKey: 'stats.tab.rsi' },
   { id: 'ma_cross', labelKey: 'stats.tab.ma_cross' },
   { id: 'bollinger_bands', labelKey: 'stats.tab.bollinger_bands' },
+  { id: 'vwap_bands', labelKey: 'stats.tab.vwap_bands' },
 ];
 
 const MC_INTERVAL_STORAGE_KEYS = {
@@ -911,6 +915,233 @@ function BollingerBandsStats() {
   );
 }
 
+/**
+ * Ganho por moeda do vwap-bands — mesmo padrão das outras abas desta tela (RSI/MA-Cross/
+ * Bollinger): SIMULA a regra (escada VWAP de 3 degraus + filtro EMA200 15m -2%, mesmo motor
+ * do bot real — ver backend/bot/vwap-bands/strategyEngine.js) sobre o histórico de candles
+ * da moeda, mesmo que ela não seja favorita e o bot real nunca tenha executado esses trades.
+ * Não lê rsi_multi_bot_trades — é backend/services/fetchVwapBandsStats.js quem simula.
+ */
+function VwapBandsStats() {
+  const { selectedChart, setSelectedChart, setChartZoom, setChartViewSource, setChartTradeMarkers } = useCurrency();
+  const { t } = useI18n();
+  const [symbol, setSymbol]       = useState(selectedChart?.symbol || 'BTCUSDT');
+  const [loading, setLoading]     = useState(false);
+  const [result, setResult]       = useState(null);
+  const [error, setError]         = useState(null);
+  const [showAll, setShowAll]     = useState(false);
+  // Busca automática (sync com o gráfico) e busca manual (botão Buscar) podem disparar
+  // fetches concorrentes pra símbolos diferentes — só aplica a resposta se ainda for a
+  // busca mais recente, senão uma resposta antiga (ex.: BTCUSDT do sync) pode sobrescrever
+  // o resultado do símbolo que o usuário realmente pediu por último.
+  const latestSymbolRef = useRef(null);
+
+  const inp = 'bg-p2 border border-p3/40 text-p5 text-[10px] sm:text-xs rounded px-1 sm:px-2 py-1 focus:outline-none focus:border-p4 w-full';
+
+  async function handleSearch(overrideSymbol, overrideSource) {
+    const sym = (overrideSymbol ?? symbol).trim().toUpperCase();
+    if (!sym) return;
+    const chartSource = selectedChart?.symbol === sym ? (selectedChart?.source ?? null) : null;
+    const src = overrideSource !== undefined ? overrideSource : chartSource;
+    latestSymbolRef.current = sym;
+    setLoading(true);
+    setError(null);
+    setResult(null);
+    try {
+      const data = await fetchVwapBandsStats(sym, { source: src });
+      if (latestSymbolRef.current !== sym) return;
+      setResult(data);
+    } catch (err) {
+      if (latestSymbolRef.current !== sym) return;
+      setError(err.message);
+    } finally {
+      if (latestSymbolRef.current === sym) setLoading(false);
+    }
+  }
+
+  // Sincroniza símbolo com o gráfico e relança a busca — mesmo padrão das outras abas.
+  useEffect(() => {
+    if (!selectedChart?.symbol) return;
+    const sym = selectedChart.symbol;
+    const src = selectedChart.source ?? null;
+    setSymbol(sym);
+    handleSearch(sym, src);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedChart?.symbol]);
+
+  async function openOnChart(o) {
+    const startMs = new Date(o.startDate).getTime();
+    const endMs = o.endDate ? new Date(o.endDate).getTime() : Date.now();
+    const iv = result?.entryInterval ?? '1h';
+    const msPerCandle = INTERVAL_MS[iv] ?? 3_600_000;
+    const needed = Math.min(3000, Math.max(266,
+      Math.ceil((Date.now() - startMs) / msPerCandle) + 40));
+    try {
+      const sym = (symbol || selectedChart?.symbol || 'BTCUSDT').trim().toUpperCase();
+      const src = selectedChart?.symbol === sym ? (selectedChart?.source ?? null) : null;
+      const data = await fetchCandlesticksAndCloud(sym, iv, src, needed);
+      setSelectedChart(data);
+      setChartViewSource(CHART_VIEW.STATISTICS);
+      // Marca compra/venda simuladas (mesmo visual das outras telas de trade — ver
+      // buildMarkersFromLiveTrades) e força a VWAP+bandas do intervalo/sessão usados na
+      // simulação, pra ver exatamente a banda que gerou a entrada/saída daquele ciclo.
+      setChartTradeMarkers([
+        { time: startMs, side: 'buy', price: o.entryPrice, label: '▲ Compra' },
+        o.exitPrice != null && {
+          time: endMs, side: 'sell', price: o.exitPrice, pnlPct: o.appreciationPercent,
+          label: `▼ ${o.appreciationPercent >= 0 ? '+' : ''}${o.appreciationPercent}%`,
+        },
+      ].filter(Boolean));
+      setChartZoom({
+        source: CHART_VIEW.STATISTICS,
+        startDate: o.startDate,
+        endDate: o.endDate ?? new Date(endMs).toISOString(),
+        vwap: result?.vwapInterval ? { interval: result.vwapInterval, session: result.session } : undefined,
+      });
+    } catch (err) {
+      console.warn('[vwap-bands stats click]', err.message);
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-2 w-full">
+      <div className="flex flex-row gap-1 md:gap-2 items-end w-full md:w-auto md:shrink-0">
+        <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-0">
+          <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">Símbolo</label>
+          <input
+            className={inp}
+            value={symbol}
+            onChange={(e) => setSymbol(e.target.value.toUpperCase())}
+            placeholder="Par"
+            onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+          />
+        </div>
+        <button
+          onClick={() => handleSearch()}
+          disabled={loading}
+          className="shrink-0 flex items-center justify-center gap-1 py-1 px-1.5 md:flex-1 md:gap-1.5 rounded text-[11px] text-white bg-p4 hover:bg-p3 transition-colors disabled:opacity-50"
+        >
+          {loading
+            ? <div className="w-3 h-3 border border-white border-t-transparent rounded-full animate-spin" />
+            : <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
+                strokeWidth="2" stroke="currentColor" className="w-3 h-3">
+                <path strokeLinecap="round" strokeLinejoin="round"
+                  d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
+              </svg>
+          }
+          {t('stats.search')}
+        </button>
+      </div>
+
+      <div className="flex flex-col gap-2 flex-1 min-w-0">
+        {error && (
+          <p className="text-[11px] text-red-600 bg-red-400/10 border border-red-400/20 rounded px-2 py-1.5">
+            {error}
+          </p>
+        )}
+
+        {result && (
+          <div className="flex flex-col gap-2">
+            <div className="flex gap-1.5 flex-wrap justify-center shrink-0">
+              <SummaryCard label={t('stats.card.candles')} value={result.totalCandles} tooltip={t('stats.tip.candles')} />
+              <SummaryCard label={t('stats.card.occur')} value={result.totalOccurrences} highlight="text-p4" tooltip={t('stats.tip.vwap_occur')} />
+              <SummaryCard
+                label={t('stats.card.avg')}
+                value={`${result.avgAppreciationPercent > 0 ? '+' : ''}${result.avgAppreciationPercent}%`}
+                highlight={result.avgAppreciationPercent >= 0 ? 'text-green-600' : 'text-red-600'}
+                tooltip={t('stats.tip.avg')}
+              />
+              <SummaryCard label={t('stats.card.entry_rule')} value={result.entryLabel} tooltip={t('stats.tip.vwap_entry')} />
+              <SummaryCard label={t('stats.card.avg_duration')} value={formatDuration(result.avgCycleDurationMs)} tooltip={t('stats.tip.avg_duration')} />
+            </div>
+
+            {result.occurrences.length === 0 && !result.openOccurrence ? (
+              <p className="text-[11px] text-p5/50">{t('stats.no_cycles_vwap')}</p>
+            ) : (
+              <div className="flex flex-col gap-1">
+                <div className="flex items-center gap-2 justify-end">
+                  <span className="text-[10px] text-p5/50">{t('stats.details')}</span>
+                  <button
+                    onClick={() => setShowAll((v) => !v)}
+                    className={`relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${showAll ? 'bg-p4' : 'bg-p3/40'}`}
+                  >
+                    <span className={`inline-block h-3 w-3 rounded-full bg-white shadow transition-transform ${showAll ? 'translate-x-3' : 'translate-x-0'}`} />
+                  </button>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="min-w-full border-collapse">
+                    <thead className="sticky top-0 z-10 bg-p1">
+                      <tr className="text-[9px] sm:text-[10px] text-p5/40 uppercase tracking-wider lt-table-head">
+                        {showAll && <th className="text-left pb-1 pr-2">#</th>}
+                        <th className="text-left pb-1 pr-2">{t('stats.start')}</th>
+                        {showAll && <th className="text-right pb-1 pr-2">{t('stats.entry_p')}</th>}
+                        <th className="text-left pb-1 pr-2">{t('stats.end')}</th>
+                        {showAll && <th className="text-right pb-1 pr-2">{t('stats.exit_p')}</th>}
+                        <th className="text-left pb-1 pr-2">{t('stats.exit_reason')}</th>
+                        <th className="text-right pb-1">{t('stats.value')}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {result.occurrences.map((o, i) => {
+                        const pos = o.appreciationPercent >= 0;
+                        return (
+                          <tr
+                            key={i}
+                            title={t('stats.click_row')}
+                            className="lt-table-row hover:bg-p2/40 transition-colors cursor-pointer"
+                            onClick={() => openOnChart(o)}
+                          >
+                            {showAll && <td className="py-0.5 pr-2 text-[10px] text-p5/40">{i + 1}</td>}
+                            <td className="py-0.5 pr-2 text-[10px] sm:text-xs font-mono whitespace-nowrap">{formatDate(o.startDate)}</td>
+                            {showAll && <td className="py-0.5 pr-2 text-[10px] sm:text-xs text-right font-mono">${o.entryPrice.toLocaleString('en-US', { maximumFractionDigits: 6 })}</td>}
+                            <td className="py-0.5 pr-2 text-[10px] sm:text-xs font-mono whitespace-nowrap">{formatDate(o.endDate)}</td>
+                            {showAll && <td className="py-0.5 pr-2 text-[10px] sm:text-xs text-right font-mono">${o.exitPrice.toLocaleString('en-US', { maximumFractionDigits: 6 })}</td>}
+                            <td className="py-0.5 pr-2 text-[10px] sm:text-xs text-p5/60 whitespace-nowrap">{o.exitReason ?? '—'}</td>
+                            <td className={`py-0.5 text-[10px] sm:text-xs text-right font-bold ${pos ? 'text-green-600' : 'text-red-600'}`}>
+                              {pos ? '+' : ''}{o.appreciationPercent}%
+                            </td>
+                          </tr>
+                        );
+                      })}
+
+                      {result.openOccurrence && (() => {
+                        const o = result.openOccurrence;
+                        const pos = o.appreciationPercent >= 0;
+                        return (
+                          <tr className="border-t-2 border-amber-500/40 bg-amber-500/5">
+                            {showAll && <td className="py-1 pr-2 text-[10px] text-amber-700">↓</td>}
+                            <td className="py-1 pr-2 text-[10px] sm:text-xs font-mono whitespace-nowrap text-amber-700">{formatDate(o.startDate)}</td>
+                            {showAll && <td className="py-1 pr-2 text-[10px] sm:text-xs text-right font-mono text-amber-700">${o.entryPrice.toLocaleString('en-US', { maximumFractionDigits: 6 })}</td>}
+                            <td className="py-1 pr-2 text-[10px] sm:text-xs whitespace-nowrap text-amber-700 italic">{t('stats.open')}</td>
+                            {showAll && <td className="py-1 pr-2 text-[10px] sm:text-xs text-right text-p5/30">—</td>}
+                            <td className="py-1 pr-2 text-[10px] sm:text-xs text-p5/30">—</td>
+                            <td className={`py-1 text-[10px] sm:text-xs text-right font-bold ${pos ? 'text-green-600' : 'text-red-600'}`}>
+                              {pos ? '+' : ''}{o.appreciationPercent}%
+                            </td>
+                          </tr>
+                        );
+                      })()}
+
+                      <tr className="lt-table-foot" aria-hidden="true">
+                        <td colSpan={showAll ? 7 : 4} className="h-px p-0 leading-none" />
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {!result && !error && !loading && (
+          <p className="text-[11px] text-p5/30 italic">{t('stats.configure')}</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function StatisticsPanel() {
   const { t } = useI18n();
   const [activeTab, setActiveTab] = useState('rsi');
@@ -937,6 +1168,7 @@ export default function StatisticsPanel() {
         {activeTab === 'rsi' && <RsiStats />}
         {activeTab === 'ma_cross' && <MaCrossStats />}
         {activeTab === 'bollinger_bands' && <BollingerBandsStats />}
+        {activeTab === 'vwap_bands' && <VwapBandsStats />}
       </div>
     </div>
   );

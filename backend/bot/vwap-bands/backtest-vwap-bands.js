@@ -88,10 +88,25 @@ async function main() {
   }
   const pollStartIdx = Math.max(0, rawPoll.findIndex(c => Number(c.openTime) >= Number(testStartTime)));
 
+  // Filtro de entrada emaFilter (ex.: EMA200 15m) — busca o próprio intervalo se não
+  // coincidir com nenhum já buscado acima, com folga de 3x o período pra EMA estabilizar.
+  const efConfig = config.entry.emaFilter;
+  const efInterval = efConfig?.enabled ? (efConfig.interval ?? pollInterval) : null;
+  const efAlreadyCovered = efInterval === interval || efInterval === vwapInterval || efInterval === pollInterval;
+  let rawEma = null;
+  if (efInterval && !efAlreadyCovered) {
+    const efPeriod = Math.max(2, Math.round(Number(efConfig.period ?? 200)));
+    const testSpanMs = testEndTime - testStartTime;
+    const efNeeded = Math.ceil(testSpanMs / intervalMs(efInterval)) + efPeriod * 3 + 50;
+    const efFetch = await fetchHistory(symbol, efInterval, Math.min(1000, efNeeded));
+    rawEma = efFetch.candles;
+  }
+
   console.log(
     `${symbol} — ${rawPrice.length} candles de preço (${source}, ${interval})`
     + (vwapSameAsPrice ? '' : ` + ${rawVwap.length} candles de VWAP (${vwapInterval})`)
     + (pollSameAsPrice ? '' : ` + ${rawPoll.length} candles de checagem rápida (${pollInterval})`)
+    + (efInterval && !efAlreadyCovered ? ` + ${rawEma.length} candles do filtro EMA (${efInterval})` : '')
     + `. Horários em BRT.\n`,
   );
   console.log(`Período testado: ${fmtBRT(testStartTime)} → ${fmtBRT(rawPrice[rawPrice.length - 1].openTime)}\n`);
@@ -114,6 +129,9 @@ async function main() {
     }
     if (!pollSameAsPrice) {
       cMap[pollInterval] = rawPoll.slice(0, j + 1);
+    }
+    if (efInterval && !efAlreadyCovered) {
+      cMap[efInterval] = rawEma.filter(c => Number(c.openTime) <= Number(now));
     }
 
     if (phase === 'WATCHING') {

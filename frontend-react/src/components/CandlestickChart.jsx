@@ -2550,6 +2550,13 @@ export default function CandlestickChart() {
   const [chopCache, setChopCache] = useState({});
   const [_chopLoading, setChopLoading] = useState(false);
   const [vwap, setVwap] = useState(() => ({ ...uiPrefs.vwapDefaults }));
+  // Overlay de VWAP+bandas pedido pela aba Estatísticas (clique numa linha do vwap-bands) —
+  // mesma ideia do overlay de Bollinger acima: sobrescreve intervalo/sessão locais pelos
+  // usados na simulação daquela ocorrência e liga bandas.
+  useEffect(() => {
+    if (!chartZoom?.vwap) return;
+    setVwap((prev) => ({ ...prev, ...chartZoom.vwap, enabled: true, bands: true }));
+  }, [chartZoom]);
   const [vwapCache, setVwapCache] = useState({});
   const [_vwapLoading, setVwapLoading] = useState(false);
   const [panelCollapsed, setPanelCollapsed] = useState(false);
@@ -2644,16 +2651,18 @@ export default function CandlestickChart() {
   // Favorito vwap-bands: força a banda de VWAP (interval/session do próprio bot) no chart —
   // mesma ideia do overlay de MA acima, mas pro VWAP. Não persiste (o efeito de persistência do
   // VWAP, mais abaixo, já ignora enquanto isTradePanelChartView(chartViewSource) é true); ao sair
-  // do favorito vwap-bands (seleciona moeda comum), volta pro default salvo do usuário.
+  // do favorito vwap-bands (seleciona moeda comum), volta pro default salvo do usuário. Não reseta
+  // quando chartZoom.vwap está setado (clique na aba Estatísticas/VWAP Bands, ver useEffect acima)
+  // — senão este efeito roda no mesmo commit (chartViewSource muda junto) e sobrescreve aquele.
   const hasForcedVwap = isTradePanelChartView(chartViewSource) && !!multitradeChartFocus?.vwapOverride;
   useEffect(() => {
     if (hasForcedVwap) {
       setVwap(multitradeChartFocus.vwapOverride);
-    } else if (!isTradePanelChartView(chartViewSource)) {
+    } else if (!isTradePanelChartView(chartViewSource) && !chartZoom?.vwap) {
       setVwap({ ...uiPrefs.vwapDefaults });
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasForcedVwap, multitradeChartFocus?.vwapOverride, chartViewSource]);
+  }, [hasForcedVwap, multitradeChartFocus?.vwapOverride, chartViewSource, chartZoom?.vwap]);
 
   // Persiste preferências das bandas (pct, acima/abaixo, período/intervalo) quando o usuário altera
   useEffect(() => {

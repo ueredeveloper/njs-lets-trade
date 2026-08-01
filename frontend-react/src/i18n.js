@@ -347,6 +347,11 @@ const T = {
     'stats.tip.bb_period':   'Número de candles usado para calcular a média móvel central da Bollinger Bands.',
     'stats.tip.bb_stddev':   'Quantos desvios-padrão as bandas superior/inferior ficam distantes da média central.',
     'stats.no_cycles_bb':    'Nenhum ciclo de Bollinger Bands encontrado.',
+    'stats.tab.vwap_bands':  'VWAP Bands',
+    'stats.exit_reason':     'Saída',
+    'stats.tip.vwap_occur':  'Ciclos completos simulados: escada VWAP (reconquista de banda) até o alvo ou stop-loss, com o filtro EMA200(15m) -2% da entrada.',
+    'stats.tip.vwap_entry':  'Regra de entrada simulada (reconquista de banda VWAP + filtro EMA, se ativo).',
+    'stats.no_cycles_vwap':  'Nenhum ciclo vwap-bands encontrado no histórico desta moeda.',
 
     // Gráfico
     'chart.select':          'Selecione uma moeda para ver o gráfico',
@@ -828,6 +833,11 @@ const T = {
     'stats.tip.bb_period':   'Number of candles used to calculate the Bollinger Bands middle moving average.',
     'stats.tip.bb_stddev':   'How many standard deviations the upper/lower bands are from the middle average.',
     'stats.no_cycles_bb':    'No Bollinger Bands cycles found.',
+    'stats.tab.vwap_bands':  'VWAP Bands',
+    'stats.exit_reason':     'Exit',
+    'stats.tip.vwap_occur':  'Simulated complete cycles: VWAP ladder (band reclaim) through target or stop-loss, with the EMA200(15m) -2% entry filter.',
+    'stats.tip.vwap_entry':  'Simulated entry rule (VWAP band reclaim + EMA filter, if enabled).',
+    'stats.no_cycles_vwap':  'No vwap-bands cycles found in this coin\'s history.',
 
     // Chart
     'chart.select':          'Select a currency to view the chart',

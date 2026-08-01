@@ -9,12 +9,14 @@
  *   2. Espera até `pullback.waitCandles` candles o preço retornar perto da -1σ
  *      (tolerância `pullback.tolerancePct`) — compra a mercado nesse retorno.
  *   3. Vende quando o preço alcança de volta a linha principal da VWAP.
- * Mesma regra se repete um degrau acima (fecha acima da linha principal → compra na
- * linha principal → vende na +1σ) — ver LADDER_SETUPS em strategyEngine.js.
+ * Mesma regra se repete em mais dois degraus acima (fecha acima da linha principal →
+ * compra na linha principal → vende na +1σ; fecha acima da +1σ → compra na +1σ → vende na
+ * +2σ) — ver LADDER_SETUPS em strategyEngine.js.
  */
 
 const ALL_INTERVALS = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '8h', '1d'];
 const SESSIONS = ['daily', 'weekly'];
+const EMA_FILTER_PERIODS = [9, 21, 50, 200];
 
 const VWAP_BANDS_DEFAULTS = {
   kind: 'vwap_bands',
@@ -51,6 +53,21 @@ const VWAP_BANDS_DEFAULTS = {
        *  na hora cheia — mesmo padrão do ema50Proximity.pollInterval do ma-cross.
        *  waitCandles continua contado na unidade de entry.interval. */
       pollInterval: '15m',
+    },
+    /** Filtro extra de entrada: no instante da compra (retorno confirmado), exige que o
+     *  close esteja acima de uma banda inferior da EMA(period,interval) — floor =
+     *  EMA * (1 - tolerancePct%). Não bloqueia o sinal/pending, só a compra: se o preço
+     *  ainda estiver abaixo da banda quando tocar o nível de confirmação, o bot continua
+     *  esperando (mesma janela de pullback.waitCandles) em vez de comprar na hora.
+     *  Validado em backtest nas favoritas (backend/bot/vwap-bands/analyze-ema200-15m-filter.js):
+     *  com EMA200(15m) e banda -2%, mantém ~65% dos trades, sobe a taxa de acerto e o PnL
+     *  total (bloqueia principalmente entradas que já mergulharam fundo demais abaixo da
+     *  tendência de 15m). Ligado por padrão. */
+    emaFilter: {
+      enabled: true,
+      period: 200,
+      interval: '15m',
+      tolerancePct: 2,
     },
   },
 
@@ -117,6 +134,17 @@ function normalizeSession(s, fb) {
   return SESSIONS.includes(s) ? s : fb;
 }
 
+function normalizeEmaFilter(block) {
+  const d = VWAP_BANDS_DEFAULTS.entry.emaFilter;
+  const src = block ?? {};
+  return {
+    enabled: src.enabled !== false,
+    period: Math.max(2, Math.round(Number(src.period ?? d.period))),
+    interval: normalizeInterval(src.interval, d.interval),
+    tolerancePct: Math.max(0, Number(src.tolerancePct ?? d.tolerancePct)),
+  };
+}
+
 function normalizeEntry(block) {
   const d = VWAP_BANDS_DEFAULTS.entry;
   const src = block ?? {};
@@ -133,6 +161,7 @@ function normalizeEntry(block) {
       tolerancePct: Math.max(0, Number(pb.tolerancePct ?? d.pullback.tolerancePct)),
       pollInterval: normalizeInterval(pb.pollInterval, d.pullback.pollInterval),
     },
+    emaFilter: normalizeEmaFilter(src.emaFilter),
   };
 }
 
@@ -210,6 +239,7 @@ module.exports = {
   ALL_INTERVALS,
   SESSIONS,
   STOP_LOSS_MODES,
+  EMA_FILTER_PERIODS,
   VWAP_BANDS_DEFAULTS,
   normalizeVwapBandsConfig,
   toEngineConfig,
