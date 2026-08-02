@@ -195,14 +195,11 @@ async function tick(rowId, adapter, strategy, log, session) {
       return { phase: 'WATCHING' };
     }
     if (!ready.ready) {
-      if (ready.reason === 'WAITING_CANDLES' || ready.reason === 'EMA_FILTER_BELOW_BAND' || ready.reason === 'EMA_FILTER_NO_DATA') {
+      if (ready.reason === 'WAITING_CANDLES') {
         const now = Date.now();
         if (!session.lastPendingLogAt || now - session.lastPendingLogAt >= PENDING_LOG_INTERVAL_MS) {
           session.lastPendingLogAt = now;
-          const suffix = ready.reason === 'EMA_FILTER_BELOW_BAND'
-            ? ' (preço ainda abaixo da banda do filtro EMA)'
-            : ready.reason === 'EMA_FILTER_NO_DATA' ? ' (sem dado da EMA do filtro ainda)' : '';
-          log(`${Y}⏳ Aguardando retorno a ${labelForLevel(pending.confirmLevel)} — candle ${ready.waited}/${ready.need}${suffix}${X}`);
+          log(`${Y}⏳ Aguardando retorno a ${labelForLevel(pending.confirmLevel)} — candle ${ready.waited}/${ready.need}${X}`);
         }
       }
       return { phase: 'PENDING' };

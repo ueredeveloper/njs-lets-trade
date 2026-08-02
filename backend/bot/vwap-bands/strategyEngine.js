@@ -88,6 +88,23 @@ function emaFilterValueAt(series, openTime) {
   return best;
 }
 
+/** Inclinação da EMA (série buildMaTimeSeries) no instante `openTime`: variação % entre o
+ *  valor vigente e o valor de `lookback` candles (do intervalo do próprio emaFilter, ex.:
+ *  15m) atrás. null se não houver histórico suficiente pra olhar tão pra trás. */
+function emaFilterSlopeAt(series, openTime, lookback) {
+  if (!series?.length) return null;
+  let idx = -1;
+  for (let i = 0; i < series.length; i++) {
+    if (series[i].openTime <= openTime) idx = i; else break;
+  }
+  const pastIdx = idx - lookback;
+  if (idx < 0 || pastIdx < 0) return null;
+  const current = series[idx].ma;
+  const past = series[pastIdx].ma;
+  if (!(past > 0)) return null;
+  return ((current - past) / past) * 100;
+}
+
 /**
  * Especificações de candles necessárias: um intervalo pros candles de preço (fechamento/
  * toque, ex.: 1h), outro pra VWAP+bandas (ex.: 4h), outro pra checagem rápida do retorno
@@ -121,9 +138,13 @@ function getRequiredSpecs(config) {
     const efIv = entry.emaFilter.interval ?? pollIv;
     const efPeriod = Math.max(2, Math.round(Number(entry.emaFilter.period ?? 200)));
     // Folga de 3x o período pra EMA estabilizar (mesmo critério usado no backtest de
-    // validação, ver analyze-ema200-15m-filter.js) + cobertura da janela de espera.
+    // validação, ver analyze-ema200-15m-filter.js) + cobertura do lookback de reconquista
+    // (checagem roda no candle do SINAL, que pode estar até reclaimLookbackCandles pra trás)
+    // + folga pro slopeLookback (compara o valor vigente com o de N candles atrás na série).
     const efRatio = Math.max(1, Math.round(intervalMs(entry.interval) / intervalMs(efIv)));
-    const efLimit = entry.pullback.waitCandles * efRatio + efPeriod * 3 + 30;
+    const efReclaimLookback = Math.round(Number(entry.reclaimLookbackCandles ?? 24));
+    const efSlopeLookback = Math.max(0, Math.round(Number(entry.emaFilter.slopeLookback ?? 0)));
+    const efLimit = efReclaimLookback * efRatio + efPeriod * 3 + efSlopeLookback + 30;
     add(efIv, efLimit);
   }
 
@@ -153,7 +174,35 @@ function getRequiredSpecs(config) {
  * que é quem decide se a moeda entra em observação. O vwap-bands assume que, se está
  * vigiando o símbolo, a condição de exaustão já foi satisfeita — só reage ao fechamento
  * de reconquista do degrau seguinte da escada.
+ *
+ * Além da reconquista em si, o candle que a confirma também precisa passar no emaFilter
+ * (checkEmaFilterAt, abaixo) — banda inferior + inclinação da EMA. Se não passar, o degrau
+ * fica sem sinal válido (não vira `pending`) até um novo candle de reconquista aparecer; não
+ * é reavaliado no retorno/pullback (ver evaluatePullbackReady).
  */
+/** Confere o emaFilter (banda inferior + inclinação) no candle/preço do próprio sinal —
+ *  ver comentário de entry.emaFilter em tradeConfigSchema.js. */
+function checkEmaFilterAt(entry, cMap, openTime, closePrice) {
+  const ef = entry.emaFilter;
+  if (!ef?.enabled) return { ok: true };
+  const pollIv = entry.pullback?.pollInterval ?? entry.interval;
+  const efIv = ef.interval ?? pollIv;
+  const efRaw = cMap[efIv] ?? [];
+  const efClosed = closedCandlesOnly(efRaw);
+  const efSeries = buildMaTimeSeries(efClosed, ef.period);
+  const efValue = emaFilterValueAt(efSeries, openTime);
+  if (efValue == null) return { ok: false, reason: 'EMA_FILTER_NO_DATA' };
+  const efFloor = efValue * (1 - ef.tolerancePct / 100);
+  if (closePrice <= efFloor) return { ok: false, reason: 'EMA_FILTER_BELOW_BAND' };
+  const slopeLookback = ef.slopeLookback ?? 0;
+  if (slopeLookback > 0) {
+    const slopePct = emaFilterSlopeAt(efSeries, openTime, slopeLookback);
+    if (slopePct == null) return { ok: false, reason: 'EMA_FILTER_NO_DATA' };
+    if (slopePct < ef.minSlopePct) return { ok: false, reason: 'EMA_FILTER_FALLING' };
+  }
+  return { ok: true };
+}
+
 function evaluateEntrySignal(config, cMap) {
   const entry = config.entry;
   const iv = entry.interval;
@@ -228,6 +277,19 @@ function evaluateEntrySignal(config, cMap) {
       : null;
     if (bandDistPct == null || bandDistPct < minDistPct) {
       lastReason = 'BANDS_TOO_CLOSE';
+      continue;
+    }
+
+    // Filtro EMA (banda inferior + inclinação, ver entry.emaFilter em tradeConfigSchema.js):
+    // checado NO CANDLE DA RECONQUISTA (o candle de alta que fechou acima da linha), não no
+    // momento em que o preço volta a tocá-la depois — o candle que arma o sinal já precisa
+    // fechar acima da banda inferior da EMA e com a EMA estável/subindo. Motivo: a checagem
+    // só no retorno deixava passar sinais armados com a EMA já em queda forte, como
+    // aconteceu com a HOLO (a EMA vira antes do preço voltar pra reconquistar a linha).
+    const reclaimCandle = candles[reclaimIdx];
+    const emaCheck = checkEmaFilterAt(entry, cMap, reclaimCandle.openTime, parseFloat(reclaimCandle.close));
+    if (!emaCheck.ok) {
+      lastReason = emaCheck.reason;
       continue;
     }
 
@@ -335,25 +397,6 @@ function evaluatePullbackReady(config, cMap, pending) {
 
   if (!reachedLevel) {
     return { ready: false, waited, need: waitCandles, reason: 'WAITING_CANDLES' };
-  }
-
-  // Filtro extra: só compra se o close já estiver acima da banda inferior da EMA(period,
-  // interval) — floor = EMA * (1 - tolerancePct%). Não cancela o pending, só segura a
-  // compra: continua na mesma janela de waitCandles esperando o preço subir de volta pra
-  // cima da banda (ou a janela expirar e cancelar por PULLBACK_WINDOW_EXPIRED, como hoje).
-  if (entry.emaFilter?.enabled) {
-    const efIv = entry.emaFilter.interval ?? pollIv;
-    const efRaw = cMap[efIv] ?? [];
-    const efClosed = closedCandlesOnly(efRaw);
-    const efSeries = buildMaTimeSeries(efClosed, entry.emaFilter.period);
-    const efValue = emaFilterValueAt(efSeries, lastCandle.openTime);
-    if (efValue == null) {
-      return { ready: false, waited, need: waitCandles, reason: 'EMA_FILTER_NO_DATA' };
-    }
-    const efFloor = efValue * (1 - entry.emaFilter.tolerancePct / 100);
-    if (lastClose <= efFloor) {
-      return { ready: false, waited, need: waitCandles, reason: 'EMA_FILTER_BELOW_BAND' };
-    }
   }
 
   return {
@@ -511,6 +554,7 @@ module.exports = {
   levelsAt,
   vwapPointAt,
   emaFilterValueAt,
+  emaFilterSlopeAt,
   getRequiredSpecs,
   evaluateEntrySignal,
   evaluatePullbackReady,

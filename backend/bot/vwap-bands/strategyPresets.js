@@ -15,7 +15,7 @@ const PRESET_BODIES = {
       session: 'weekly',
       minBandDistancePct: 3,
       reclaimLookbackCandles: 24,
-      pullback: { waitCandles: 10, tolerancePct: 1, pollInterval: '15m' },
+      pullback: { waitCandles: 5, tolerancePct: 1, pollInterval: '15m' },
     },
     exit: { tolerancePct: 0, fastCheck: { enabled: true, proximityPct: 1 } },
     stopLoss: { enabled: true, mode: 'ladder', tolerancePct: 0, maxLossPct: 5, trailing: true, trailStepPct: 5 },

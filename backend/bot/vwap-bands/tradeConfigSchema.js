@@ -42,8 +42,8 @@ const VWAP_BANDS_DEFAULTS = {
     reclaimLookbackCandles: 24,
     pullback: {
       /** Quantos candles (na unidade de entry.interval) espera o preço retornar perto da
-       *  -1σ antes de cancelar. */
-      waitCandles: 10,
+       *  -1σ antes de cancelar o sinal (PULLBACK_WINDOW_EXPIRED). */
+      waitCandles: 5,
       /** Tolerância (%) em torno da -1σ pra considerar "retornou". */
       tolerancePct: 1,
       /** Intervalo usado pra conferir o retorno candle a candle durante o PENDING — não
@@ -54,20 +54,29 @@ const VWAP_BANDS_DEFAULTS = {
        *  waitCandles continua contado na unidade de entry.interval. */
       pollInterval: '15m',
     },
-    /** Filtro extra de entrada: no instante da compra (retorno confirmado), exige que o
-     *  close esteja acima de uma banda inferior da EMA(period,interval) — floor =
-     *  EMA * (1 - tolerancePct%). Não bloqueia o sinal/pending, só a compra: se o preço
-     *  ainda estiver abaixo da banda quando tocar o nível de confirmação, o bot continua
-     *  esperando (mesma janela de pullback.waitCandles) em vez de comprar na hora.
-     *  Validado em backtest nas favoritas (backend/bot/vwap-bands/analyze-ema200-15m-filter.js):
-     *  com EMA200(15m) e banda -2%, mantém ~65% dos trades, sobe a taxa de acerto e o PnL
-     *  total (bloqueia principalmente entradas que já mergulharam fundo demais abaixo da
-     *  tendência de 15m). Ligado por padrão. */
+    /** Filtro extra de entrada: checado NO CANDLE DO SINAL (o candle de alta que fecha
+     *  acima da linha — lower1/vwap/upper1/upper2, ver LADDER_SETUPS), não no retorno/
+     *  pullback que vem depois. Exige que o close desse candle já esteja acima de uma banda
+     *  inferior da EMA(period,interval) — floor = EMA * (1 - tolerancePct%) — E que a
+     *  própria EMA não esteja em queda (slopeLookback > 0: compara o valor da EMA nesse
+     *  candle com o de slopeLookback candles atrás na mesma série; bloqueia se a variação %
+     *  ficar abaixo de minSlopePct). Se alguma condição falhar, aquele candle não arma sinal
+     *  (não vira pending) — ver checkEmaFilterAt em strategyEngine.js.
+     *  A banda (tolerancePct) foi validada em backtest nas favoritas
+     *  (backend/bot/vwap-bands/analyze-ema200-15m-filter.js): com EMA200(15m) e banda -2%,
+     *  mantém ~65% dos trades, sobe a taxa de acerto e o PnL total (bloqueia principalmente
+     *  entradas que já mergulharam fundo demais abaixo da tendência de 15m). O slope foi
+     *  adicionado depois: a banda sozinha deixava passar sinais armados com a EMA em queda
+     *  acentuada (a banda desce junto), como aconteceu com a HOLO — a EMA precisa estar
+     *  estável ou subindo (slope >= minSlopePct) nos últimos slopeLookback candles.
+     *  Ligado por padrão. */
     emaFilter: {
       enabled: true,
       period: 200,
       interval: '15m',
       tolerancePct: 2,
+      slopeLookback: 20,
+      minSlopePct: 0,
     },
   },
 
@@ -142,6 +151,8 @@ function normalizeEmaFilter(block) {
     period: Math.max(2, Math.round(Number(src.period ?? d.period))),
     interval: normalizeInterval(src.interval, d.interval),
     tolerancePct: Math.max(0, Number(src.tolerancePct ?? d.tolerancePct)),
+    slopeLookback: Math.max(0, Math.round(Number(src.slopeLookback ?? d.slopeLookback))),
+    minSlopePct: Number(src.minSlopePct ?? d.minSlopePct),
   };
 }
 
