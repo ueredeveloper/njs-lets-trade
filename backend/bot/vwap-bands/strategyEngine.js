@@ -422,24 +422,32 @@ function evaluatePullbackReady(config, cMap, pending) {
  * principal — mesmo padrão do exit.maCross.fastCheck do ma-cross: reage ao toque sem
  * esperar até 1h a mais quando já estava a poucos % de distância.
  */
-function evaluateExit(config, cMap, entryPrice, opts = {}) {
+/**
+ * Preço-alvo (venda) e preço-stop (banda tocada) vigentes do degrau ativo — mesmo cálculo
+ * que `evaluateExit` faz internamente pra decidir a saída via candle fechado, mas exposto à
+ * parte (sem tolerância aplicada) pra quem precisa só do valor cru da banda: colocar/repor
+ * a ordem resting TP/SL na corretora (ver vwap-bands-bot.js) precisa do preço exato, não do
+ * "já alcançou dentro da tolerância X%" que `evaluateExit` usa pra disparar a venda a mercado.
+ * Retorna `{ targetPrice, stopPrice, targetLabel, close }` — qualquer valor pode vir `null`
+ * se não houver candle/VWAP suficiente ainda.
+ */
+function computeLadderLevelPrices(config, cMap, entryPrice, opts = {}) {
   const entry = config.entry;
   const iv = entry.interval;
   const vwapIv = entry.vwapInterval ?? iv;
-  const pollIv = entry.pullback.pollInterval ?? iv;
 
   const rawMain = cMap[iv] ?? [];
   const mainClosed = closedCandlesOnly(rawMain);
-  if (!mainClosed.length) return { exit: false };
+  if (!mainClosed.length) return { targetPrice: null, stopPrice: null, close: null };
   const last = mainClosed[mainClosed.length - 1];
   const lastClose = parseFloat(last.close);
 
   const vwapRaw = cMap[vwapIv] ?? [];
   const vwapCandleSource = vwapIv === iv ? mainClosed : closedCandlesOnly(vwapRaw);
-  if (!vwapCandleSource.length) return { exit: false, close: lastClose };
+  if (!vwapCandleSource.length) return { targetPrice: null, stopPrice: null, close: lastClose };
   const vwapSeries = computeVwapSeries(vwapCandleSource, entry.session);
   const vwapPoint = vwapPointAt(vwapSeries, last.openTime);
-  if (!vwapPoint) return { exit: false, close: lastClose };
+  if (!vwapPoint) return { targetPrice: null, stopPrice: null, close: lastClose };
 
   const levels = levelsAt(vwapPoint);
   const targetLevel = opts.targetLevel ?? 'vwap';
@@ -448,17 +456,37 @@ function evaluateExit(config, cMap, entryPrice, opts = {}) {
   const upper2FixedPct = Math.max(0, Number(config.exit?.upper2FixedPct ?? 0));
   const useFixedUpper2Target = targetLevel === 'upper2' && upper2FixedPct > 0 && entryPrice;
   const target = useFixedUpper2Target ? entryPrice * (1 + upper2FixedPct / 100) : levels[targetLevel];
-  const tol = Math.max(0, config.exit?.tolerancePct ?? 0) / 100;
 
   const stopMode = config.stopLoss?.mode ?? 'ladder';
   const stopLevelValue = (config.stopLoss?.enabled && stopMode === 'ladder' && opts.touchLevel)
     ? levels[opts.touchLevel] : null;
-  const stopTol = Math.max(0, config.stopLoss?.tolerancePct ?? 0) / 100;
-  const floor = stopLevelValue != null ? stopLevelValue * (1 - stopTol) : null;
 
   const targetLabel = useFixedUpper2Target
     ? `alvo fixo +${upper2FixedPct}% (em vez da +2σ ao vivo)`
     : `VWAP(${vwapIv},${entry.session}) ${labelForLevel(targetLevel)}`;
+
+  return { targetPrice: target ?? null, stopPrice: stopLevelValue ?? null, targetLabel, close: lastClose };
+}
+
+function evaluateExit(config, cMap, entryPrice, opts = {}) {
+  const entry = config.entry;
+  const iv = entry.interval;
+  const pollIv = entry.pullback.pollInterval ?? iv;
+
+  const rawMain = cMap[iv] ?? [];
+  const mainClosed = closedCandlesOnly(rawMain);
+  if (!mainClosed.length) return { exit: false };
+  const last = mainClosed[mainClosed.length - 1];
+  const lastClose = parseFloat(last.close);
+
+  const { targetPrice: target, stopPrice: stopLevelValue, targetLabel } =
+    computeLadderLevelPrices(config, cMap, entryPrice, opts);
+  if (target == null && stopLevelValue == null) return { exit: false, close: lastClose };
+
+  const targetLevel = opts.targetLevel ?? 'vwap';
+  const tol = Math.max(0, config.exit?.tolerancePct ?? 0) / 100;
+  const stopTol = Math.max(0, config.stopLoss?.tolerancePct ?? 0) / 100;
+  const floor = stopLevelValue != null ? stopLevelValue * (1 - stopTol) : null;
 
   if (target != null) {
     const threshold = target * (1 - tol);
@@ -471,6 +499,7 @@ function evaluateExit(config, cMap, entryPrice, opts = {}) {
         decisionTime: last.openTime,
         targetLevel, targetLevelValue: target,
         exitDesc: targetLabel,
+        viaFastCheck: false,
       };
     }
   }
@@ -487,6 +516,7 @@ function evaluateExit(config, cMap, entryPrice, opts = {}) {
         stopFloor: floor,
         stopLevel: opts.touchLevel,
         exitDesc: `Stop-loss em ${labelForLevel(opts.touchLevel)}`,
+        viaFastCheck: false,
       };
     }
   }
@@ -514,6 +544,7 @@ function evaluateExit(config, cMap, entryPrice, opts = {}) {
               decisionTime: fastLast.openTime,
               targetLevel, targetLevelValue: target,
               exitDesc: `${targetLabel} (checagem rápida — perto do alvo no ${iv})`,
+              viaFastCheck: true,
             };
           }
         }
@@ -529,6 +560,7 @@ function evaluateExit(config, cMap, entryPrice, opts = {}) {
               stopFloor: floor,
               stopLevel: opts.touchLevel,
               exitDesc: `Stop-loss em ${labelForLevel(opts.touchLevel)} (checagem rápida — perto do stop no ${iv})`,
+              viaFastCheck: true,
             };
           }
         }
@@ -569,4 +601,5 @@ module.exports = {
   evaluatePullbackReady,
   evaluateExit,
   computeStopLossFloor,
+  computeLadderLevelPrices,
 };

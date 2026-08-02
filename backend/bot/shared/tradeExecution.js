@@ -57,6 +57,20 @@ function hasOpenPosition(state) {
   return Number.isFinite(qty) && qty > 0 && Number.isFinite(price) && price > 0;
 }
 
+/** Diagnóstico do sinal de saída (hoje só o vwap-bands preenche targetLevel/
+ *  targetLevelValue/viaFastCheck — os demais engines ficam com essas colunas
+ *  null). Serve pra medir o gap entre o preço do nível que disparou a saída
+ *  (candle fechado) e o preço real da venda a mercado (exit_price). */
+function exitSignalFields(exitResult) {
+  const decisionTime = exitResult?.decisionTime;
+  return {
+    target_level: exitResult?.targetLevel ?? null,
+    target_level_value: exitResult?.targetLevelValue ?? null,
+    signal_time: decisionTime ? new Date(Number(decisionTime)).toISOString() : null,
+    via_fast_check: exitResult?.viaFastCheck ?? null,
+  };
+}
+
 function createTradeExecution({
   botLabel, buildReasonLines, computeStopLossFloor = defaultComputeStopLossFloor,
   extraBuyLogLines, extraInitialRulesState,
@@ -173,11 +187,75 @@ function createTradeExecution({
       `🟢 ${botLabel} COMPRA [${strategyId}] ${symbol}\nPreço: ${avgPrice}\nUSDT: ${quoteQty.toFixed(4)}`
       + (reasonLines.length ? `\n\nMotivos:\n${reasonLines.map(l => `• ${l}`).join('\n')}` : ''),
     );
-    return true;
+    // Objeto (truthy) em vez de `true` — bots que só conferem `if (bought)` continuam
+    // funcionando iguais; quem precisa da qty/preço preenchidos (ex.: vwap-bands-bot.js pra
+    // colocar a ordem resting TP/SL logo após a compra) lê os campos.
+    return { ok: true, filledQty, quoteQty, avgPrice };
+  }
+
+  /**
+   * Fecha o bookkeeping de uma venda já executada (PnL, insertTrade, reset de estado, log,
+   * WhatsApp) — comum a `executeSell` (venda a mercado disparada por `evaluateExit`) e a
+   * `recordBracketFill` (perna TP/SL que encheu sozinha na corretora, sem o bot ter mandado
+   * a ordem agora). `result` já vem preenchido (`soldQty`/`usdtOut`/`exitPrice`) nos dois
+   * casos — a diferença é só quem chamou `adapter.marketSell` (ou ninguém, no caso da
+   * bracket, que já executou na própria exchange).
+   */
+  async function finalizeSell({ rowId, strategy, log, state, exitResult, reasonLabel, session, reason, result, exitTime }) {
+    const { config } = strategy;
+    const { symbol, strategy_id: strategyId, capital } = state;
+    const { soldQty, usdtOut, exitPrice } = result;
+    const capitalBefore = parseFloat(capital);
+    const pnlUsdt       = usdtOut - parseFloat(state.buy_usdt);
+    const pnlPct        = (pnlUsdt / capitalBefore) * 100;
+    const capitalAfter  = capitalBefore + pnlUsdt;
+    const pnlSign       = pnlUsdt >= 0 ? '+' : '';
+
+    await insertTrade({
+      symbol, exchange: state.exchange, strategy_id: strategyId,
+      entry_time: state.buy_time, exit_time: exitTime,
+      entry_price: parseFloat(state.buy_price), exit_price: exitPrice,
+      qty: soldQty, usdt_in: parseFloat(state.buy_usdt), usdt_out: usdtOut,
+      pnl_usdt: pnlUsdt, pnl_pct: parseFloat(pnlPct.toFixed(2)),
+      capital_before: capitalBefore, capital_after: capitalAfter,
+      rsi_entry: parseFloat(state.rsi_entry ?? 0), rsi_exit: exitResult?.ma1 ?? 0,
+      exit_reason: exitResult?.reason ?? reasonLabel ?? 'PANEL_REMOVED',
+      ...exitSignalFields(exitResult),
+    });
+
+    if (session) session.lastExitTime = exitTime;
+    const cooldownH = entryCooldownHours(config);
+    await saveState(rowId, {
+      capital: capitalAfter, phase: 'WATCHING',
+      buy_price: null, buy_qty: null, buy_usdt: null, buy_time: null, rsi_entry: null,
+      rules_state: postExitRulesState(exitTime),
+    }, log);
+    if (cooldownH > 0) {
+      log(`${Y}⏳ Cooldown de entrada: ${cooldownH}h${X}`);
+    }
+
+    log(`${'─'.repeat(60)}`);
+    log(`${R}🔴 VENDA EXECUTADA${X}`);
+    log(`   PnL: ${pnlSign}${pnlUsdt.toFixed(4)} USDT (${pnlSign}${pnlPct.toFixed(2)}%)`);
+    log(`   Capital: ${capitalBefore.toFixed(4)} → ${capitalAfter.toFixed(4)} USDT`);
+    log(`${'─'.repeat(60)}`);
+    sendWhatsApp(`🔴 ${botLabel} VENDA [${strategyId}] ${symbol}\nMotivo: ${reason}\nPnL: ${pnlSign}${pnlUsdt.toFixed(4)} USDT (${pnlSign}${pnlPct.toFixed(2)}%)`);
+    return { phase: 'WATCHING' };
+  }
+
+  /**
+   * Registra o fechamento de uma posição cuja saída já foi executada por uma ordem resting
+   * (bracket TP/SL colocada na corretora logo após a compra — ver vwap-bands-bot.js) em vez
+   * de uma venda a mercado disparada agora pelo bot. `result` vem de `adapter.pollExitBracket`.
+   */
+  async function recordBracketFill({ rowId, strategy, log, state, session, exitResult, reasonLabel, result }) {
+    const exitTime = new Date().toISOString();
+    const reason = reasonLabel ?? exitResult?.exitDesc ?? exitResult?.reason ?? 'ordem resting preenchida na corretora';
+    log(`${R}📈 ${reason} (ordem resting já preenchida na corretora) — ${state.symbol}${X}`);
+    return finalizeSell({ rowId, strategy, log, state, exitResult, reasonLabel: reason, session, reason, result, exitTime });
   }
 
   async function executeSell({ rowId, adapter, strategy, log, state, exitResult, reasonLabel, session, defaultReasonDesc }) {
-    const { config } = strategy;
     const { symbol, strategy_id: strategyId, capital } = state;
     const buyPrice = parseFloat(state.buy_price);
 
@@ -220,6 +298,7 @@ function createTradeExecution({
         capital_before: capitalBefore, capital_after: est.capitalAfter,
         rsi_entry: parseFloat(state.rsi_entry ?? 0), rsi_exit: exitResult?.ma1 ?? 0,
         exit_reason: 'DUST',
+        ...exitSignalFields(exitResult),
       });
 
       if (session) session.lastExitTime = exitTime;
@@ -237,48 +316,13 @@ function createTradeExecution({
       return { phase: 'WATCHING' };
     }
 
-    const { soldQty, usdtOut, exitPrice } = result;
-    const capitalBefore = parseFloat(capital);
-    const pnlUsdt       = usdtOut - parseFloat(state.buy_usdt);
-    const pnlPct        = (pnlUsdt / capitalBefore) * 100;
-    const capitalAfter  = capitalBefore + pnlUsdt;
-    const pnlSign       = pnlUsdt >= 0 ? '+' : '';
-
-    await insertTrade({
-      symbol, exchange: state.exchange, strategy_id: strategyId,
-      entry_time: state.buy_time, exit_time: exitTime,
-      entry_price: buyPrice, exit_price: exitPrice,
-      qty: soldQty, usdt_in: parseFloat(state.buy_usdt), usdt_out: usdtOut,
-      pnl_usdt: pnlUsdt, pnl_pct: parseFloat(pnlPct.toFixed(2)),
-      capital_before: capitalBefore, capital_after: capitalAfter,
-      rsi_entry: parseFloat(state.rsi_entry ?? 0), rsi_exit: exitResult?.ma1 ?? 0,
-      exit_reason: exitResult?.reason ?? reasonLabel ?? 'PANEL_REMOVED',
-    });
-
-    if (session) session.lastExitTime = exitTime;
-    const cooldownH = entryCooldownHours(config);
-    await saveState(rowId, {
-      capital: capitalAfter, phase: 'WATCHING',
-      buy_price: null, buy_qty: null, buy_usdt: null, buy_time: null, rsi_entry: null,
-      rules_state: postExitRulesState(exitTime),
-    }, log);
-    if (cooldownH > 0) {
-      log(`${Y}⏳ Cooldown de entrada: ${cooldownH}h${X}`);
-    }
-
-    log(`${'─'.repeat(60)}`);
-    log(`${R}🔴 VENDA EXECUTADA${X}`);
-    log(`   PnL: ${pnlSign}${pnlUsdt.toFixed(4)} USDT (${pnlSign}${pnlPct.toFixed(2)}%)`);
-    log(`   Capital: ${capitalBefore.toFixed(4)} → ${capitalAfter.toFixed(4)} USDT`);
-    log(`${'─'.repeat(60)}`);
-    sendWhatsApp(`🔴 ${botLabel} VENDA [${strategyId}] ${symbol}\nMotivo: ${reason}\nPnL: ${pnlSign}${pnlUsdt.toFixed(4)} USDT (${pnlSign}${pnlPct.toFixed(2)}%)`);
-    return { phase: 'WATCHING' };
+    return finalizeSell({ rowId, strategy, log, state, exitResult, reasonLabel, session, reason, result, exitTime });
   }
 
   return {
     saveState, insertTrade, hasOpenPosition, resetOrphanPosition,
     parseRulesState, postExitRulesState, resolveLastExitTime,
-    executeBuy, executeSell,
+    executeBuy, executeSell, recordBracketFill,
   };
 }
 

@@ -28,7 +28,7 @@ const { resolveStrategy } = require('./tradeConfigSchema');
 const { STRATEGY_IDS, isVwapBandsStrategy } = require('./strategyPresets');
 const {
   labelForLevel, getRequiredSpecs, evaluateEntrySignal, evaluatePullbackReady, evaluateExit,
-  computeStopLossFloor,
+  computeStopLossFloor, computeLadderLevelPrices,
 } = require('./strategyEngine');
 
 // Componentes genéricos (compra/venda/execução), compartilhados com os outros bots de
@@ -93,7 +93,7 @@ function buildEntryReasonLines(config, entryMeta) {
 const {
   saveState, insertTrade, hasOpenPosition, resetOrphanPosition,
   parseRulesState, resolveLastExitTime,
-  executeBuy, executeSell,
+  executeBuy, executeSell, recordBracketFill,
 } = createTradeExecution({
   botLabel: 'VWAP-BANDS',
   buildReasonLines: buildEntryReasonLines,
@@ -115,6 +115,51 @@ async function cancelPending(rowId, log, session, state, reason) {
   const rs = { ...parseRulesState(state), ...(session.rulesState ?? {}) };
   delete rs.pendingSetup;
   await saveState(rowId, { phase: 'WATCHING', rules_state: rs }, log);
+}
+
+/**
+ * Coloca a bracket TP/SL resting na corretora logo após a compra confirmar (só se
+ * `exit.restingBracket.enabled`). Falha em silêncio (loga e segue) — sem a bracket, a saída
+ * continua funcionando do jeito de sempre via `evaluateExit`/venda a mercado no tick.
+ */
+async function placeInitialBracket({ rowId, adapter, config, cMap, session, log, activeSetup, filledQty, buyPrice }) {
+  if (!config.exit.restingBracket?.enabled) return;
+  const { targetPrice, stopPrice } = computeLadderLevelPrices(config, cMap, buyPrice, activeSetup);
+  if (targetPrice == null || stopPrice == null) {
+    log(`${Y}⚠️  Bracket TP/SL não colocada — níveis da VWAP indisponíveis ainda${X}`);
+    return;
+  }
+  try {
+    const bracket = await adapter.placeExitBracket(filledQty, targetPrice, stopPrice);
+    session.rulesState = { ...(session.rulesState ?? {}), exitBracket: { ...bracket, placedAt: new Date().toISOString() } };
+    await saveState(rowId, { rules_state: session.rulesState }, log);
+    log(`${G}🎯 Bracket TP/SL colocada na corretora — alvo ${fmtPrice(bracket.targetPrice)} (${labelForLevel(activeSetup.targetLevel)}) / stop ${fmtPrice(bracket.stopPrice)} (${labelForLevel(activeSetup.touchLevel)})${X}`);
+  } catch (err) {
+    log(`${Y}⚠️  Falha ao colocar bracket TP/SL (${err.message}) — segue só no candle fechado${X}`);
+  }
+}
+
+/** Recalcula alvo/stop vigentes e recria a bracket se algum desviou ≥driftPct% do preço em
+ *  que foi colocada (bandas da VWAP se movem a cada candle novo do vwapInterval). */
+async function maybeReplaceBracket({ rowId, adapter, config, cMap, session, log, activeSetup, exitBracket, buyPrice, buyQty }) {
+  const driftPct = config.exit.restingBracket?.driftPct ?? 3;
+  const { targetPrice: liveTarget, stopPrice: liveStop } = computeLadderLevelPrices(config, cMap, buyPrice, activeSetup);
+  if (liveTarget == null || liveStop == null) return;
+
+  const drifted = (livePrice, placedPrice) => placedPrice
+    ? Math.abs((livePrice - placedPrice) / placedPrice) * 100 >= driftPct
+    : false;
+  if (!drifted(liveTarget, exitBracket.targetPrice) && !drifted(liveStop, exitBracket.stopPrice)) return;
+
+  try {
+    await adapter.cancelExitBracket(exitBracket);
+    const bracket = await adapter.placeExitBracket(buyQty, liveTarget, liveStop);
+    session.rulesState = { ...(session.rulesState ?? {}), exitBracket: { ...bracket, placedAt: new Date().toISOString() } };
+    await saveState(rowId, { rules_state: session.rulesState }, log);
+    log(`🔁 Bracket TP/SL recriada (deriva ≥${driftPct}%) — alvo ${fmtPrice(bracket.targetPrice)} / stop ${fmtPrice(bracket.stopPrice)}`);
+  } catch (err) {
+    log(`${Y}⚠️  Falha ao recriar bracket TP/SL (${err.message}) — mantendo a atual${X}`);
+  }
 }
 
 async function fetchCandleMap(adapter, specs) {
@@ -214,6 +259,13 @@ async function tick(rowId, adapter, strategy, log, session) {
       entryMeta: { ...pending, ...ready, limitPrice: ready.targetLevelValue },
       capital, strategyId, symbol,
     });
+    if (bought) {
+      await placeInitialBracket({
+        rowId, adapter, config, cMap, session, log,
+        activeSetup: { targetLevel: pending.targetLevel, touchLevel: pending.touchLevel },
+        filledQty: bought.filledQty, buyPrice: bought.avgPrice,
+      });
+    }
     return { phase: bought ? 'BOUGHT' : 'PENDING' };
   }
 
@@ -244,6 +296,42 @@ async function tick(rowId, adapter, strategy, log, session) {
     const rulesState = { ...parseRulesState(state), ...(session.rulesState ?? {}) };
     const activeSetup = rulesState.activeSetup ?? { targetLevel: 'vwap', touchLevel: 'lower1' };
     const stopMode = config.stopLoss?.mode ?? 'ladder';
+
+    // Bracket TP/SL resting na corretora (se ligada pra esse símbolo) — confere ANTES de
+    // tudo: se uma perna já encheu (inclusive enquanto o bot estava offline — reconciliação
+    // de restart acontece de graça aqui, é o primeiro tick depois de subir), fecha o trade
+    // com os valores reais da corretora sem chamar `adapter.marketSell` de novo.
+    if (rulesState.exitBracket) {
+      let bracketResult;
+      try {
+        bracketResult = await adapter.pollExitBracket(rulesState.exitBracket);
+      } catch (err) {
+        log(`${Y}⚠️  Erro ao consultar bracket TP/SL: ${err.message}${X}`);
+        bracketResult = { filled: null };
+      }
+
+      if (bracketResult.filled) {
+        const kind = bracketResult.filled;
+        const exitResult = {
+          reason: kind === 'target' ? 'VWAP_TARGET_LEVEL' : 'STOP_LOSS',
+          targetLevel: activeSetup.targetLevel,
+          targetLevelValue: kind === 'target' ? rulesState.exitBracket.targetPrice : rulesState.exitBracket.stopPrice,
+          viaFastCheck: false,
+          exitDesc: kind === 'target'
+            ? `Bracket TP em ${labelForLevel(activeSetup.targetLevel)} (ordem resting)`
+            : `Bracket SL em ${labelForLevel(activeSetup.touchLevel)} (ordem resting)`,
+        };
+        await recordBracketFill({ rowId, strategy, log, state, session, exitResult, result: bracketResult });
+        session.phase = 'WATCHING';
+        session.rulesState = null;
+        return { phase: 'WATCHING' };
+      }
+
+      await maybeReplaceBracket({
+        rowId, adapter, config, cMap, session, log, activeSetup,
+        exitBracket: rulesState.exitBracket, buyPrice, buyQty: parseFloat(state.buy_qty),
+      });
+    }
 
     // Stop percentual/trailing (opt-in — padrão é o stop estrutural na própria banda
     // tocada, sem pico/piso pra rastrear): só atualiza rules_state nesse modo.
@@ -277,6 +365,17 @@ async function tick(rowId, adapter, strategy, log, session) {
     const reasonLabel = exitResult.reason === 'STOP_LOSS' && exitResult.stopLevel
       ? `Stop-loss em ${labelForLevel(exitResult.stopLevel)} (piso ${exitResult.stopFloor?.toFixed(6)})`
       : undefined;
+
+    // Rede de segurança disparou (candle fechado) com uma bracket ainda resting — cancela
+    // antes de vender a mercado, senão as duas vendem a mesma qty (a bracket pode encher
+    // entre esse cancelamento falhar e o marketSell rodar, mas nunca as duas ordens vivas
+    // ao mesmo tempo depois daqui).
+    const liveBracket = session.rulesState?.exitBracket ?? rulesState.exitBracket;
+    if (liveBracket) {
+      try { await adapter.cancelExitBracket(liveBracket); } catch (err) {
+        log(`${Y}⚠️  Falha ao cancelar bracket TP/SL antes da venda a mercado: ${err.message}${X}`);
+      }
+    }
 
     try {
       await executeSell({

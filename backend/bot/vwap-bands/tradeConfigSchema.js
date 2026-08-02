@@ -104,6 +104,20 @@ const VWAP_BANDS_DEFAULTS = {
       enabled: true,
       proximityPct: 1,
     },
+    /** Ordem TP/SL resting já na corretora, colocada logo após a compra confirmar (Binance:
+     *  OCO real; Gate.io: emulado com 2 ordens de gatilho por preço — ver
+     *  backend/bot/vwap-bands/vwap-bands-bot.js). Corrige o gap entre o candle fechado
+     *  detectar o alvo e a venda a mercado do bot executar de fato (o preço já tinha
+     *  recuado até lá) — a corretora enche no instante exato do toque, e continua valendo
+     *  mesmo se o bot cair. Como as bandas da VWAP se movem (recalculadas a cada candle
+     *  novo do vwapInterval), a ordem é recriada quando o preço-alvo ou o preço-stop
+     *  desviarem `driftPct`% do valor em que foi colocada. Ligado por padrão desde que
+     *  validado com ordens reais na Binance (OCO nativa) e na Gate.io (price_orders
+     *  emulado) — ver histórico de teste/correções na sessão que introduziu isso. */
+    restingBracket: {
+      enabled: true,
+      driftPct: 3,
+    },
   },
 
   /**
@@ -189,12 +203,17 @@ function normalizeEntry(block) {
 function normalizeExit(block) {
   const d = VWAP_BANDS_DEFAULTS.exit;
   const fc = block?.fastCheck ?? {};
+  const rb = block?.restingBracket ?? {};
   return {
     tolerancePct: Math.max(0, Number(block?.tolerancePct ?? d.tolerancePct)),
     upper2FixedPct: Math.max(0, Number(block?.upper2FixedPct ?? d.upper2FixedPct)),
     fastCheck: {
       enabled: fc.enabled !== false,
       proximityPct: Math.max(0, Number(fc.proximityPct ?? d.fastCheck.proximityPct)),
+    },
+    restingBracket: {
+      enabled: rb.enabled !== false,
+      driftPct: Math.max(0.5, Number(rb.driftPct ?? d.restingBracket.driftPct)),
     },
   };
 }

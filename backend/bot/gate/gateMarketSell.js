@@ -234,6 +234,6 @@ async function gateMarketSell(deps, pair, qty, log, { aggressive = true, fmtPric
 }
 
 module.exports = {
-  gateMarketSell, resolveGateSellAggressive, floorGateAmount, getGatePairMeta,
+  gateMarketSell, resolveGateSellAggressive, floorGateAmount, formatGatePrice, getGatePairMeta,
   isGateMinOrderError, isGateDustResult: (r) => r?.dust === true, estimateDustClosePnl,
 };

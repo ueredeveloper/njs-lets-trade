@@ -54,6 +54,20 @@ function buildAuthHeaders(method, path, queryString = '', body = '') {
 }
 
 /**
+ * IDs de ordem da Gate (ex.: `/spot/price_orders`) são inteiros de ~19 dígitos — acima de
+ * `Number.MAX_SAFE_INTEGER` (16 dígitos). `JSON.parse` arredonda esses ids pro double mais
+ * próximo, e o valor arredondado não bate com o id real guardado no servidor da Gate — uma
+ * consulta/cancelamento posterior com esse id "quebrado" volta "order not found" (confirmado
+ * na prática ao testar a bracket TP/SL). Envolve em aspas qualquer `"id":<16+ dígitos>` antes
+ * de parsear, virando string (nunca fazemos aritmética em cima de id, só repassamos como
+ * token opaco) em vez de perder precisão.
+ */
+function parseGateJson(text) {
+  const safe = text.replace(/"id":(\d{16,})/g, '"id":"$1"');
+  return JSON.parse(safe);
+}
+
+/**
  * Faz uma requisição autenticada à Gate.io API v4.
  * @param {'GET'|'POST'|'DELETE'} method
  * @param {string} endpointPath  ex: '/spot/my_trades'
@@ -71,7 +85,12 @@ async function gateRequest(method, endpointPath, params = {}, _retry = false) {
     const qs = new URLSearchParams(params).toString();
     queryString = qs;
     if (qs) url += `?${qs}`;
-  } else {
+  } else if (Object.keys(params).length > 0) {
+    // Corpo vazio ('') pra request sem params, não "{}": confirmado na prática (DELETE
+    // /spot/price_orders/{id} sem campos) que o fetch não manda corpo quando `options.body`
+    // seria só "{}" numa request sem payload de verdade — a assinatura calculada em cima de
+    // "{}" não bate com o que a Gate recebe de fato (vazio), e ela responde 401 signature
+    // mismatch. Só stringifica quando há campos reais no body.
     bodyStr = JSON.stringify(params);
   }
 
@@ -84,7 +103,7 @@ async function gateRequest(method, endpointPath, params = {}, _retry = false) {
   const text = await res.text();
 
   let data;
-  try { data = JSON.parse(text); } catch { data = text; }
+  try { data = parseGateJson(text); } catch { data = text; }
 
   if (!res.ok) {
     const msg = data?.message || data?.label || text;

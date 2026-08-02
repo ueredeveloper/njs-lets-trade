@@ -17,8 +17,12 @@ const { gateGetTokenBalance, gate24hVolume } = require('../../gate/gateAccount')
 const { gateRequest } = require('../../gate/getGateClient');
 const { gateMarketSell: gateMarketSellCore } = require('../gate/gateMarketSell');
 const {
+  gatePlaceTriggerSell, gateCancelTriggerOrder, gatePollTriggerOrders,
+} = require('../../gate/gateBracketOrders');
+const {
   binanceMarketBuy, binanceLimitBuy, binanceMarketSell, binance24hVolume, syncBinanceClock,
 } = require('../../binance/tradeClient');
+const { binancePlaceOcoSell, binanceCancelOco, binancePollOco } = require('../../binance/ocoClient');
 
 async function gateMarketSell(pair, qty, log, opts = {}) {
   return gateMarketSellCore(
@@ -37,6 +41,16 @@ function buildAdapter(exchange, symbol) {
       limitBuy:     (usdt, price) => gateLimitBuy(pair, usdt, price),
       marketSell:   (qty, log, opts) => gateMarketSell(pair, qty, log, opts),
       fetch24hVol:  ()         => gate24hVolume(pair),
+      // Bracket TP/SL emulado (sem OCO atômico nativo) — ver gateBracketOrders.js.
+      placeExitBracket: async (qty, targetPrice, stopPrice) => {
+        const r = await gatePlaceTriggerSell(pair, qty, { targetPrice, stopPrice });
+        return { exchange: 'gate', legs: r.legs, targetPrice: r.targetPrice, stopPrice: r.stopPrice };
+      },
+      cancelExitBracket: (handle) => Promise.all([
+        gateCancelTriggerOrder(handle.legs.target),
+        gateCancelTriggerOrder(handle.legs.stop),
+      ]),
+      pollExitBracket: (handle) => gatePollTriggerOrders(handle.legs),
     };
   }
   return {
@@ -46,6 +60,13 @@ function buildAdapter(exchange, symbol) {
     limitBuy:     (usdt, price) => binanceLimitBuy(symbol, usdt, price),
     marketSell:   (qty)      => binanceMarketSell(symbol, qty),
     fetch24hVol:  ()         => binance24hVolume(symbol),
+    // OCO real (uma perna cancela a outra na própria Binance) — ver binance/ocoClient.js.
+    placeExitBracket: async (qty, targetPrice, stopPrice) => {
+      const r = await binancePlaceOcoSell(symbol, qty, targetPrice, stopPrice);
+      return { exchange: 'binance', legs: r.legs, orderListId: r.orderListId, targetPrice: r.targetPrice, stopPrice: r.stopPrice };
+    },
+    cancelExitBracket: (handle) => binanceCancelOco(symbol, handle.orderListId),
+    pollExitBracket: (handle) => binancePollOco(symbol, handle.orderListId, handle.legs),
   };
 }
 
