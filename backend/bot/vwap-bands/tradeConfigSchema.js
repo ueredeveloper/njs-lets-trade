@@ -67,22 +67,31 @@ const VWAP_BANDS_DEFAULTS = {
      *  mantém ~65% dos trades, sobe a taxa de acerto e o PnL total (bloqueia principalmente
      *  entradas que já mergulharam fundo demais abaixo da tendência de 15m). O slope foi
      *  adicionado depois: a banda sozinha deixava passar sinais armados com a EMA em queda
-     *  acentuada (a banda desce junto), como aconteceu com a HOLO — a EMA precisa estar
-     *  estável ou subindo (slope >= minSlopePct) nos últimos slopeLookback candles.
-     *  Ligado por padrão. */
+     *  acentuada (a banda desce junto), como aconteceu com a HOLO — a EMA não pode cair mais
+     *  que minSlopePct nos últimos slopeLookback candles. minSlopePct = -1 (não 0) porque um
+     *  slope exatamente 0 barrou um sinal bom da KAITOUSDT (EMA caindo só -0,99% em 5h antes
+     *  de virar e disparar +7%) — -1% dá folga pra uma leve acomodação sem reabrir a porta
+     *  pra quedas mais acentuadas (a partir daí ainda bloqueia, ex.: HOLO estava bem além
+     *  disso). Ligado por padrão. */
     emaFilter: {
       enabled: true,
       period: 200,
       interval: '15m',
       tolerancePct: 2,
       slopeLookback: 20,
-      minSlopePct: 0,
+      minSlopePct: -1,
     },
   },
 
   exit: {
     /** Tolerância (%) pra considerar "alcançou" a linha principal da VWAP (0 = exata). */
     tolerancePct: 0,
+    /** Degrau vwap→upper1→upper2 (compra perto da +1σ): em vez de vender só quando o preço
+     *  alcança a +2σ ao vivo (que pode variar bastante com a volatilidade da sessão), vende
+     *  num alvo fixo = preço de compra * (1 + upper2FixedPct%) — a largura média observada
+     *  entre upper1 e upper2 é de ~3%. 0 desliga (volta a usar a +2σ ao vivo como alvo). Só
+     *  afeta esse degrau — vwap e upper1 continuam vendendo no nível VWAP ao vivo. */
+    upper2FixedPct: 3,
     /** Checagem rápida de saída (mesmo padrão do exit.maCross.fastCheck do ma-cross):
      *  o alvo/stop só é conferido no candle FECHADO de entry.interval (ex.: 1h) — sem
      *  espiar o candle ainda em formação. Quando o fechamento já está perto o suficiente
@@ -181,6 +190,7 @@ function normalizeExit(block) {
   const fc = block?.fastCheck ?? {};
   return {
     tolerancePct: Math.max(0, Number(block?.tolerancePct ?? d.tolerancePct)),
+    upper2FixedPct: Math.max(0, Number(block?.upper2FixedPct ?? d.upper2FixedPct)),
     fastCheck: {
       enabled: fc.enabled !== false,
       proximityPct: Math.max(0, Number(fc.proximityPct ?? d.fastCheck.proximityPct)),

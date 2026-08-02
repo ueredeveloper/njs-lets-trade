@@ -21,10 +21,13 @@ export const VWAP_BANDS_DEFAULTS = {
     // Filtro extra: no instante do SINAL (candle de alta que fecha acima da linha), exige
     // close > EMA(period,interval) * (1 - tolerancePct%) e a própria EMA estável/subindo
     // (slope >= minSlopePct nos últimos slopeLookback candles).
-    emaFilter: { enabled: true, period: 200, interval: '15m', tolerancePct: 2, slopeLookback: 20, minSlopePct: 0 },
+    emaFilter: { enabled: true, period: 200, interval: '15m', tolerancePct: 2, slopeLookback: 20, minSlopePct: -1 },
   },
   exit: {
     tolerancePct: 0,
+    // Degrau vwap->upper1->upper2: vende num alvo fixo (preco de compra + upper2FixedPct%)
+    // em vez da +2sigma ao vivo. 0 desliga (volta a usar a +2sigma).
+    upper2FixedPct: 3,
     fastCheck: { enabled: true, proximityPct: 1 },
   },
   stopLoss: {
@@ -67,6 +70,7 @@ export function normalizeVwapBandsForm(body = {}) {
     },
     exit: {
       tolerancePct: Number(body.exit?.tolerancePct ?? d.exit.tolerancePct),
+      upper2FixedPct: Number(body.exit?.upper2FixedPct ?? d.exit.upper2FixedPct),
       fastCheck: {
         enabled: fc.enabled !== false,
         proximityPct: Number(fc.proximityPct ?? d.exit.fastCheck.proximityPct),

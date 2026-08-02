@@ -140,6 +140,13 @@ export default function VwapBandsStrategyForm({ form, patch, symbol }) {
           <NumInput value={form.exit.tolerancePct} onChange={v => patchExit('tolerancePct', v)} min={0} max={5} step={0.1} />
           <span className="text-p5/40">%</span>
         </div>
+        <div className="flex flex-wrap gap-2 items-center text-xs text-p5">
+          <span className="text-p5/50" title="Degrau vwap→upper1→upper2: vende num alvo fixo (compra + X%) em vez da +2σ ao vivo. 0 desliga.">
+            Alvo fixo degrau upper2
+          </span>
+          <NumInput value={form.exit.upper2FixedPct ?? 3} onChange={v => patchExit('upper2FixedPct', v)} min={0} max={20} step={0.5} />
+          <span className="text-p5/40">%</span>
+        </div>
         <label className="flex items-center gap-2 text-xs text-p5">
           <input type="checkbox" checked={form.exit.fastCheck.enabled}
             onChange={e => patchFastCheck('enabled', e.target.checked)} className="accent-pink-500" />

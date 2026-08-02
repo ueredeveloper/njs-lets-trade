@@ -19,10 +19,11 @@ const LEVEL_LABELS = {
  * meio → compra nesse nível (retorno) → venda no nível de cima". Três degraus:
  *   - lower2→lower1→vwap: compra na volta à -1σ, vende na linha principal, stop na -2σ.
  *   - lower1→vwap→upper1: compra na volta à linha principal, vende na +1σ, stop na -1σ.
- *   - vwap→upper1→upper2: compra na volta à +1σ, vende na +2σ, stop na linha principal.
- *     Antes o usuário não operava acima da +1σ (risco de comprar continuação de topo sem
- *     nenhum filtro de tendência); com o emaFilter (EMA200 15m -2% por padrão, ver acima)
- *     como guarda extra na compra, esse degrau ficou liberado.
+ *   - vwap→upper1→upper2: compra na volta à +1σ, vende num alvo FIXO (preço de compra +
+ *     exit.upper2FixedPct%, padrão 3% — não na +2σ ao vivo, ver evaluateExit), stop na linha
+ *     principal. Antes o usuário não operava acima da +1σ (risco de comprar continuação de
+ *     topo sem nenhum filtro de tendência); com o emaFilter (EMA200 15m -2% por padrão, ver
+ *     acima) como guarda extra na compra, esse degrau ficou liberado.
  * lower2 só é usado como stop do degrau de baixo, nunca como alvo/gatilho de entrada.
  */
 const LADDER_SETUPS = [
@@ -441,7 +442,11 @@ function evaluateExit(config, cMap, entryPrice, opts = {}) {
 
   const levels = levelsAt(vwapPoint);
   const targetLevel = opts.targetLevel ?? 'vwap';
-  const target = levels[targetLevel];
+  // Degrau vwap→upper1→upper2: alvo fixo (preço de compra + upper2FixedPct%) em vez da +2σ
+  // ao vivo — ver comentário de exit.upper2FixedPct em tradeConfigSchema.js.
+  const upper2FixedPct = Math.max(0, Number(config.exit?.upper2FixedPct ?? 0));
+  const useFixedUpper2Target = targetLevel === 'upper2' && upper2FixedPct > 0 && entryPrice;
+  const target = useFixedUpper2Target ? entryPrice * (1 + upper2FixedPct / 100) : levels[targetLevel];
   const tol = Math.max(0, config.exit?.tolerancePct ?? 0) / 100;
 
   const stopMode = config.stopLoss?.mode ?? 'ladder';
@@ -449,6 +454,10 @@ function evaluateExit(config, cMap, entryPrice, opts = {}) {
     ? levels[opts.touchLevel] : null;
   const stopTol = Math.max(0, config.stopLoss?.tolerancePct ?? 0) / 100;
   const floor = stopLevelValue != null ? stopLevelValue * (1 - stopTol) : null;
+
+  const targetLabel = useFixedUpper2Target
+    ? `alvo fixo +${upper2FixedPct}% (em vez da +2σ ao vivo)`
+    : `VWAP(${vwapIv},${entry.session}) ${labelForLevel(targetLevel)}`;
 
   if (target != null) {
     const threshold = target * (1 - tol);
@@ -460,7 +469,7 @@ function evaluateExit(config, cMap, entryPrice, opts = {}) {
         close: lastClose,
         decisionTime: last.openTime,
         targetLevel, targetLevelValue: target,
-        exitDesc: `VWAP(${vwapIv},${entry.session}) ${labelForLevel(targetLevel)}`,
+        exitDesc: targetLabel,
       };
     }
   }
@@ -503,8 +512,7 @@ function evaluateExit(config, cMap, entryPrice, opts = {}) {
               close: fastClose,
               decisionTime: fastLast.openTime,
               targetLevel, targetLevelValue: target,
-              exitDesc: `VWAP(${vwapIv},${entry.session}) ${labelForLevel(targetLevel)} `
-                + `(checagem rápida — perto do alvo no ${iv})`,
+              exitDesc: `${targetLabel} (checagem rápida — perto do alvo no ${iv})`,
             };
           }
         }
