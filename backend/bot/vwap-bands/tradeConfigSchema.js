@@ -40,6 +40,10 @@ const VWAP_BANDS_DEFAULTS = {
      *  quando o bot está ocupado (ex.: já esperando o retorno de um degrau anterior) no
      *  exato candle em que a reconquista aconteceu. */
     reclaimLookbackCandles: 24,
+    /** Margem mínima (%) que o fechamento do candle de reconquista precisa passar do nível
+     *  (ex.: -1σ) pra contar — sem isso, um fechamento a poucos décimos de % acima da linha
+     *  (ruído) já arma o sinal, como aconteceu com a HOLOUSDT (fechou só 0,123% acima da -1σ). */
+    minReclaimMarginPct: 0.2,
     pullback: {
       /** Quantos candles (na unidade de entry.interval) espera o preço retornar perto da
        *  -1σ antes de cancelar o sinal (PULLBACK_WINDOW_EXPIRED). */
@@ -191,6 +195,7 @@ function normalizeEntry(block) {
     session: normalizeSession(src.session, d.session),
     minBandDistancePct: Math.max(0, Number(src.minBandDistancePct ?? d.minBandDistancePct)),
     reclaimLookbackCandles: Math.max(1, Math.round(Number(src.reclaimLookbackCandles ?? d.reclaimLookbackCandles))),
+    minReclaimMarginPct: Math.max(0, Number(src.minReclaimMarginPct ?? d.minReclaimMarginPct)),
     pullback: {
       waitCandles: Math.max(1, Math.round(Number(pb.waitCandles ?? d.pullback.waitCandles))),
       tolerancePct: Math.max(0, Number(pb.tolerancePct ?? d.pullback.tolerancePct)),

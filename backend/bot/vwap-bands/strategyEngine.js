@@ -222,6 +222,7 @@ function evaluateEntrySignal(config, cMap) {
 
   const lastIdx = candles.length - 1;
   const minDistPct = Math.max(0, Number(entry.minBandDistancePct ?? 0));
+  const minMarginPct = Math.max(0, Number(entry.minReclaimMarginPct ?? 0));
   const lookback = Math.max(1, Math.round(Number(entry.reclaimLookbackCandles ?? 24)));
   const fromIdx = Math.max(1, lastIdx - lookback + 1);
   const lastClose = parseFloat(candles[lastIdx].close);
@@ -251,8 +252,12 @@ function evaluateEntrySignal(config, cMap) {
       const cOpen = parseFloat(c.open);
       const prevClose = parseFloat(candles[i - 1].close);
       const isBullish = cClose > cOpen;
+      // Exige fechar minMarginPct% acima do nível, não só "acima" por qualquer valor — sem
+      // isso, um fechamento a centésimos de % da linha (ruído) já conta como reconquista
+      // (ver comentário de entry.minReclaimMarginPct em tradeConfigSchema.js).
+      const reclaimThreshold = levelValue * (1 + minMarginPct / 100);
 
-      if (isBullish && prevClose <= prevLevelValue && cClose > levelValue) {
+      if (isBullish && prevClose <= prevLevelValue && cClose > reclaimThreshold) {
         reclaimIdx = i;
         break;
       }

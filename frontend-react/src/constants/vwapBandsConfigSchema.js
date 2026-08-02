@@ -17,6 +17,7 @@ export const VWAP_BANDS_DEFAULTS = {
     session: 'weekly',
     minBandDistancePct: 3,
     reclaimLookbackCandles: 24,
+    minReclaimMarginPct: 0.2,
     pullback: { waitCandles: 5, tolerancePct: 1, pollInterval: '15m' },
     // Filtro extra: no instante do SINAL (candle de alta que fecha acima da linha), exige
     // close > EMA(period,interval) * (1 - tolerancePct%) e a própria EMA estável/subindo
@@ -53,6 +54,7 @@ export function normalizeVwapBandsForm(body = {}) {
       session: VWAP_BANDS_SESSIONS.includes(body.entry?.session) ? body.entry.session : d.entry.session,
       minBandDistancePct: Number(body.entry?.minBandDistancePct ?? d.entry.minBandDistancePct),
       reclaimLookbackCandles: Number(body.entry?.reclaimLookbackCandles ?? d.entry.reclaimLookbackCandles),
+      minReclaimMarginPct: Number(body.entry?.minReclaimMarginPct ?? d.entry.minReclaimMarginPct),
       pullback: {
         waitCandles: Number(pb.waitCandles ?? d.entry.pullback.waitCandles),
         tolerancePct: Number(pb.tolerancePct ?? d.entry.pullback.tolerancePct),
