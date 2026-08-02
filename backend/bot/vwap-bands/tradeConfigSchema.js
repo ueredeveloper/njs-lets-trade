@@ -86,12 +86,13 @@ const VWAP_BANDS_DEFAULTS = {
   exit: {
     /** Tolerância (%) pra considerar "alcançou" a linha principal da VWAP (0 = exata). */
     tolerancePct: 0,
-    /** Degrau vwap→upper1→upper2 (compra perto da +1σ): em vez de vender só quando o preço
-     *  alcança a +2σ ao vivo (que pode variar bastante com a volatilidade da sessão), vende
-     *  num alvo fixo = preço de compra * (1 + upper2FixedPct%) — a largura média observada
-     *  entre upper1 e upper2 é de ~3%. 0 desliga (volta a usar a +2σ ao vivo como alvo). Só
-     *  afeta esse degrau — vwap e upper1 continuam vendendo no nível VWAP ao vivo. */
-    upper2FixedPct: 3,
+    /** Degrau vwap→upper1→upper2 (compra perto da +1σ): por padrão vende na +2σ ao vivo,
+     *  igual aos outros dois degraus (vwap, upper1) — a +2σ é uma banda calculada em tempo
+     *  real como qualquer outra, não há motivo pra tratá-la diferente. Setar > 0 troca por
+     *  um alvo fixo = preço de compra * (1 + upper2FixedPct%) em vez da +2σ ao vivo — só
+     *  usar se um backtest específico validar essa troca (ver histórico do v1.67.0, que
+     *  ligou isso por padrão sem essa validação e foi revertido). 0 = desligado. */
+    upper2FixedPct: 0,
     /** Checagem rápida de saída (mesmo padrão do exit.maCross.fastCheck do ma-cross):
      *  o alvo/stop só é conferido no candle FECHADO de entry.interval (ex.: 1h) — sem
      *  espiar o candle ainda em formação. Quando o fechamento já está perto o suficiente

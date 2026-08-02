@@ -25,9 +25,9 @@ export const VWAP_BANDS_DEFAULTS = {
   },
   exit: {
     tolerancePct: 0,
-    // Degrau vwap->upper1->upper2: vende num alvo fixo (preco de compra + upper2FixedPct%)
-    // em vez da +2sigma ao vivo. 0 desliga (volta a usar a +2sigma).
-    upper2FixedPct: 3,
+    // Degrau vwap->upper1->upper2: por padrao vende na +2sigma ao vivo (igual aos outros
+    // degraus). > 0 troca por um alvo fixo (preco de compra + upper2FixedPct%).
+    upper2FixedPct: 0,
     fastCheck: { enabled: true, proximityPct: 1 },
   },
   stopLoss: {

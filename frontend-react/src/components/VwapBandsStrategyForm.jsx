@@ -144,7 +144,7 @@ export default function VwapBandsStrategyForm({ form, patch, symbol }) {
           <span className="text-p5/50" title="Degrau vwap→upper1→upper2: vende num alvo fixo (compra + X%) em vez da +2σ ao vivo. 0 desliga.">
             Alvo fixo degrau upper2
           </span>
-          <NumInput value={form.exit.upper2FixedPct ?? 3} onChange={v => patchExit('upper2FixedPct', v)} min={0} max={20} step={0.5} />
+          <NumInput value={form.exit.upper2FixedPct ?? 0} onChange={v => patchExit('upper2FixedPct', v)} min={0} max={20} step={0.5} />
           <span className="text-p5/40">%</span>
         </div>
         <label className="flex items-center gap-2 text-xs text-p5">

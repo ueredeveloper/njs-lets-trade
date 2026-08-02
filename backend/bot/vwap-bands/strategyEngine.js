@@ -19,11 +19,12 @@ const LEVEL_LABELS = {
  * meio → compra nesse nível (retorno) → venda no nível de cima". Três degraus:
  *   - lower2→lower1→vwap: compra na volta à -1σ, vende na linha principal, stop na -2σ.
  *   - lower1→vwap→upper1: compra na volta à linha principal, vende na +1σ, stop na -1σ.
- *   - vwap→upper1→upper2: compra na volta à +1σ, vende num alvo FIXO (preço de compra +
- *     exit.upper2FixedPct%, padrão 3% — não na +2σ ao vivo, ver evaluateExit), stop na linha
- *     principal. Antes o usuário não operava acima da +1σ (risco de comprar continuação de
- *     topo sem nenhum filtro de tendência); com o emaFilter (EMA200 15m -2% por padrão, ver
- *     acima) como guarda extra na compra, esse degrau ficou liberado.
+ *   - vwap→upper1→upper2: compra na volta à +1σ, vende na +2σ (ao vivo — igual aos outros
+ *     dois degraus; exit.upper2FixedPct permite trocar por um alvo fixo, mas 0 por padrão
+ *     desliga isso, ver evaluateExit), stop na linha principal. Antes o usuário não operava
+ *     acima da +1σ (risco de comprar continuação de topo sem nenhum filtro de tendência);
+ *     com o emaFilter (EMA200 15m -2% por padrão, ver acima) como guarda extra na compra,
+ *     esse degrau ficou liberado.
  * lower2 só é usado como stop do degrau de baixo, nunca como alvo/gatilho de entrada.
  */
 const LADDER_SETUPS = [
