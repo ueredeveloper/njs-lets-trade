@@ -1674,16 +1674,13 @@ function buildMultitradeMarkLines(candlesticks, interval, markers, DL, LEFT_PAD)
   const offset = candlesticks.length - DL;
   const styles = {
     signal:         { color: '#f59e0b', label: '◆ Sinal' },
-    buy:            { color: '#22c55e', label: '▲ Buy' },
-    sell:           { color: '#ef4444', label: '▼ Sell' },
     possible_entry: { color: '#ffffff', label: '◌ Entrada pronta' },
   };
   return markers.flatMap(m => {
-    // 'entry' (posição aberta) não desenha mais linha vertical — os quadrados
-    // compra→alvo/stoploss cobrem isso. 'buy'/'sell' (temporariamente restaurados)
-    // pra comparar visualmente com os quadrados do histórico enquanto depuramos o
-    // posicionamento.
-    if (m.side === 'entry') return [];
+    // 'entry' (posição aberta) e 'buy'/'sell' (trades fechados do histórico) não
+    // desenham mais linha vertical — os quadrados compra→alvo/stoploss (posição
+    // aberta) e compra→venda real (histórico) cobrem isso.
+    if (m.side === 'entry' || m.side === 'buy' || m.side === 'sell') return [];
     let best = 0;
     let bestDiff = Infinity;
     candlesticks.forEach((c, i) => {
@@ -3671,67 +3668,6 @@ export default function CandlestickChart() {
     }
     return resolveChartTarget(selectedChart.symbol, multitradeFavorites);
   }, [selectedChart?.symbol, multitradeFavorites, vwapLadderLevels]);
-
-  console.log('[position-squares] config resolvido', {
-    symbol: selectedChart?.symbol,
-    chartStopLossConfig, chartTargetConfig,
-    displayLimit,
-    candlesticksCount: selectedChart?.candlesticks?.length ?? 0,
-    firstCandle: selectedChart?.candlesticks?.[0]
-      ? new Date(Number(selectedChart.candlesticks[0].openTime)).toISOString() : null,
-    lastCandle: selectedChart?.candlesticks?.length
-      ? new Date(Number(selectedChart.candlesticks[selectedChart.candlesticks.length - 1].openTime)).toISOString()
-      : null,
-    // Posição de compra ATUAL (live) — usada pro quadrado verde/vermelho e pra linha
-    // de PnL. Se o símbolo não estiver comprado agora, isso deve vir null.
-    chartBuyInfo: chartBuyInfo && {
-      price: chartBuyInfo.price,
-      time: chartBuyInfo.time != null ? new Date(chartBuyInfo.time).toISOString() : null,
-      candleIdx: chartBuyInfo.time != null && selectedChart?.candlesticks?.length
-        ? nearestCandleIdx(selectedChart.candlesticks, chartBuyInfo.time) : null,
-      candleOpenTime: (() => {
-        const cs = selectedChart?.candlesticks ?? [];
-        if (chartBuyInfo.time == null || !cs.length) return null;
-        const idx = nearestCandleIdx(cs, chartBuyInfo.time);
-        return cs[idx] ? new Date(Number(cs[idx].openTime)).toISOString() : null;
-      })(),
-    },
-    // TODOS os markers (linhas antigas: buy/sell/entry/signal/possible_entry), na ordem
-    // em que chegam — pra comparar a posição de cada linha desenhada com o chartBuyInfo.
-    allMarkers: (chartTradeMarkers ?? []).map(m => {
-      const cs = selectedChart?.candlesticks ?? [];
-      const absIdx = cs.length && m.time != null ? nearestCandleIdx(cs, m.time) : null;
-      return {
-        side: m.side,
-        time: m.time != null ? new Date(m.time).toISOString() : null,
-        price: m.price,
-        entryTime: m.entryTime != null ? new Date(m.entryTime).toISOString() : null,
-        entryPrice: m.entryPrice,
-        pnlPct: m.pnlPct,
-        matchedCandleOpenTime: absIdx != null && cs[absIdx]
-          ? new Date(Number(cs[absIdx].openTime)).toISOString() : null,
-      };
-    }),
-    trades: (chartTradeMarkers ?? []).filter(m => m.side === 'sell').map(m => {
-      const cs = selectedChart?.candlesticks ?? [];
-      const DL = Math.min(displayLimit, cs.length);
-      const offset = cs.length - DL;
-      const entryAbsIdx = cs.length && m.entryTime != null ? nearestCandleIdx(cs, m.entryTime) : null;
-      const exitAbsIdx = cs.length && m.time != null ? nearestCandleIdx(cs, m.time) : null;
-      return {
-        entryTime: m.entryTime != null ? new Date(m.entryTime).toISOString() : null,
-        exitTime: m.time != null ? new Date(m.time).toISOString() : null,
-        entryPrice: m.entryPrice, exitPrice: m.price,
-        DL, offset, entryAbsIdx, exitAbsIdx,
-        entryLocal: entryAbsIdx != null ? entryAbsIdx - offset : null,
-        exitLocal: exitAbsIdx != null ? exitAbsIdx - offset : null,
-        entryCandleOpenTime: entryAbsIdx != null && cs[entryAbsIdx]
-          ? new Date(Number(cs[entryAbsIdx].openTime)).toISOString() : null,
-        exitCandleOpenTime: exitAbsIdx != null && cs[exitAbsIdx]
-          ? new Date(Number(cs[exitAbsIdx].openTime)).toISOString() : null,
-      };
-    }),
-  });
 
   // Aba "Bot": mostra a estratégia REAL do favorito da moeda selecionada (ma-cross ou
   // vwap-bands) — antes disso era sempre tratado como ma-cross, mostrando linhas de
