@@ -18,6 +18,33 @@ const GATE_FEE_RATE_EQUIV = 0.002; // mesma taxa aplicada nas outras exchanges d
 
 let binanceClockOffsetMs = 0;
 
+/**
+ * Conta as casas decimais de um tickSize/stepSize (ex.: 0.0001 -> 4). Pra valores pequenos
+ * (< 1e-6, ex.: tickSize 0.00000001 de moedas tipo XECUSDT) o `String(step)` do JS vira
+ * notação científica ("1e-8"), sem ponto decimal — o antigo `.split('.')[1]?.length ?? 0`
+ * silenciosamente virava 0 casas, arredondando o preço pra "0" e gerando
+ * `usdtAmount / 0 = Infinity` na quantidade (bug real visto em produção: "Erro na compra:
+ * quantidade inválida para compra limite (Infinity)" na XECUSDT).
+ *
+ * NÃO usa `step.toFixed(20)` pra cobrir esse caso: valores comuns tipo 0.001 não são exatos
+ * em binário, e `toFixed(20)` expõe o ruído de ponto flutuante (`(0.001).toFixed(20)` =
+ * "0.00100000000000000002"), contando casas decimais erradas pro caso comum. Em vez disso,
+ * interpreta a própria notação científica quando ela aparece (mantissa + expoente).
+ */
+function decimalsFromStep(step) {
+  if (!(step > 0) || step >= 1) return 0;
+  const str = String(step);
+  const eIdx = str.indexOf('e');
+  if (eIdx === -1) {
+    const dot = str.indexOf('.');
+    return dot === -1 ? 0 : str.length - dot - 1;
+  }
+  const exp = parseInt(str.slice(eIdx + 1), 10);
+  const mantissa = str.slice(0, eIdx);
+  const mantissaDecimals = mantissa.includes('.') ? mantissa.split('.')[1].length : 0;
+  return Math.max(0, -exp + mantissaDecimals);
+}
+
 async function syncBinanceClock() {
   try {
     const res  = await fetch(`${BINANCE_BASE}/api/v3/time`);
@@ -73,8 +100,8 @@ async function binanceLimitBuy(symbol, usdtAmount, price) {
   const lotFilter   = filters.find(f => f.filterType === 'LOT_SIZE');
   const tickSize    = priceFilter ? parseFloat(priceFilter.tickSize) : 0.00000001;
   const stepSize    = lotFilter ? parseFloat(lotFilter.stepSize) : 1;
-  const priceDecimals = tickSize < 1 ? (String(tickSize).split('.')[1]?.length ?? 0) : 0;
-  const qtyDecimals   = stepSize < 1 ? (String(stepSize).split('.')[1]?.length ?? 0) : 0;
+  const priceDecimals = decimalsFromStep(tickSize);
+  const qtyDecimals   = decimalsFromStep(stepSize);
 
   const safePrice = (Math.round(price / tickSize) * tickSize).toFixed(priceDecimals);
   const rawQty    = usdtAmount / parseFloat(safePrice);
@@ -101,7 +128,7 @@ async function binanceMarketSell(symbol, qty) {
   const info      = await fetch(`${BINANCE_BASE}/api/v3/exchangeInfo?symbol=${symbol}`).then(r => r.json());
   const lotFilter = info.symbols?.[0]?.filters?.find(f => f.filterType === 'LOT_SIZE');
   const stepSize  = lotFilter ? parseFloat(lotFilter.stepSize) : 1;
-  const decimals  = stepSize < 1 ? (String(stepSize).split('.')[1]?.length ?? 0) : 0;
+  const decimals  = decimalsFromStep(stepSize);
   const safeQty   = (Math.floor(qty / stepSize) * stepSize).toFixed(decimals);
   if (!Number.isFinite(parseFloat(safeQty)) || parseFloat(safeQty) <= 0) {
     throw new Error(`quantidade inválida após arredondamento (${safeQty})`);
@@ -126,4 +153,5 @@ module.exports = {
   binanceLimitBuy,
   binanceMarketSell,
   binance24hVolume,
+  decimalsFromStep,
 };

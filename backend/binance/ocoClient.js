@@ -16,7 +16,7 @@
  * Reaproveita binanceRequest (mesmo signer/offset de relógio de tradeClient.js).
  */
 
-const { binanceRequest } = require('./tradeClient');
+const { binanceRequest, decimalsFromStep } = require('./tradeClient');
 
 const BINANCE_BASE = 'https://api.binance.com';
 
@@ -29,8 +29,8 @@ async function getSymbolFilters(symbol) {
   const stepSize = lotFilter ? parseFloat(lotFilter.stepSize) : 1;
   return {
     tickSize, stepSize,
-    priceDecimals: tickSize < 1 ? (String(tickSize).split('.')[1]?.length ?? 0) : 0,
-    qtyDecimals: stepSize < 1 ? (String(stepSize).split('.')[1]?.length ?? 0) : 0,
+    priceDecimals: decimalsFromStep(tickSize),
+    qtyDecimals: decimalsFromStep(stepSize),
   };
 }
 

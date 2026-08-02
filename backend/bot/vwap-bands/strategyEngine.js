@@ -489,6 +489,7 @@ function evaluateExit(config, cMap, entryPrice, opts = {}) {
   if (target == null && stopLevelValue == null) return { exit: false, close: lastClose };
 
   const targetLevel = opts.targetLevel ?? 'vwap';
+  const stopMode = config.stopLoss?.mode ?? 'ladder';
   const tol = Math.max(0, config.exit?.tolerancePct ?? 0) / 100;
   const stopTol = Math.max(0, config.stopLoss?.tolerancePct ?? 0) / 100;
   const floor = stopLevelValue != null ? stopLevelValue * (1 - stopTol) : null;
