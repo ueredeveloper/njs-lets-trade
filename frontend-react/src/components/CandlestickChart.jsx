@@ -355,7 +355,7 @@ function buildBollingerSeries(bbConfig, candlesticks, alignSeries) {
 
 function buildVwapSeries(vwapConfig, candlesticks, alignSeries) {
   if (!vwapConfig?.enabled || !vwapConfig.points?.length) return [];
-  const color = '#facc15';
+  const color = '#4ade80';
   const sessionLabel = vwapConfig.session === 'weekly' ? 'W' : 'D';
   const label = `VWAP@${vwapConfig.interval}(${sessionLabel})`;
   const toLine = (field) => alignSeries(alignPointsToCandles(
@@ -585,7 +585,7 @@ function renderVwapTile(dims, t, vwap, setVwap) {
   const rowH = (innerH - PANEL_GAP * 3) / 4;
   const rowDims = { w: innerW, h: rowH };
   const halfDims = { w: (innerW - PANEL_GAP) / 2, h: rowH };
-  const color = '#facc15';
+  const color = '#4ade80';
   return (
     <div style={{
       display: 'grid',
@@ -2571,6 +2571,17 @@ export default function CandlestickChart() {
   const [measureMode, setMeasureMode] = useState(false);
   const [measurePoints, setMeasurePoints] = useState(null);
   const [measureOneShot, setMeasureOneShot] = useState(false);
+  const measureClearTimeoutRef = useRef(null);
+
+  function clearMeasureAutoHide() {
+    if (measureClearTimeoutRef.current) {
+      clearTimeout(measureClearTimeoutRef.current);
+      measureClearTimeoutRef.current = null;
+    }
+  }
+
+  // Timeout do modo "uma vez" é local a este efeito de desmontagem — evita warning de setState após unmount.
+  useEffect(() => clearMeasureAutoHide, []);
 
   useEffect(() => {
     const el = chartWrapRef.current;
@@ -2590,6 +2601,7 @@ export default function CandlestickChart() {
 
   // Troca de moeda/intervalo invalida qualquer medição de % em aberto (coordenadas ficariam obsoletas).
   useEffect(() => {
+    clearMeasureAutoHide();
     setMeasureMode(false);
     setMeasurePoints(null);
     setMeasureOneShot(false);
@@ -3230,13 +3242,16 @@ export default function CandlestickChart() {
   }
 
   function toggleMeasureMode() {
+    clearMeasureAutoHide();
     setMeasureMode((v) => !v);
     setMeasurePoints(null);
     setMeasureOneShot(false);
   }
 
-  // Igual ao toggle normal, mas a medição se desliga sozinha assim que o arraste termina.
+  // Igual ao toggle normal, mas a medição se desliga sozinha assim que o arraste termina,
+  // e o resultado some sozinho ~2s depois (ver onEnd em handleMeasureStart).
   function toggleMeasureModeOnce() {
+    clearMeasureAutoHide();
     setMeasureMode((v) => {
       const next = !v;
       setMeasureOneShot(next);
@@ -3268,6 +3283,7 @@ export default function CandlestickChart() {
     const inst = chartRef.current?.getEchartsInstance();
     if (!wrap || !inst) return;
     e.preventDefault();
+    clearMeasureAutoHide();
     const rect = wrap.getBoundingClientRect();
     const point = e.touches?.length ? e.touches[0] : e;
     const startX = point.clientX - rect.left;
@@ -3299,6 +3315,11 @@ export default function CandlestickChart() {
       if (measureOneShot) {
         setMeasureMode(false);
         setMeasureOneShot(false);
+        clearMeasureAutoHide();
+        measureClearTimeoutRef.current = setTimeout(() => {
+          measureClearTimeoutRef.current = null;
+          setMeasurePoints(null);
+        }, 1000);
       }
     };
     window.addEventListener('mousemove', onMove);
@@ -3615,7 +3636,7 @@ export default function CandlestickChart() {
       </button>
       <button
         onClick={toggleMeasureModeOnce}
-        title="Medir variação % uma vez — desliga sozinho ao soltar o arraste"
+        title="Medir variação % uma vez — desliga sozinho ao soltar o arraste e o resultado some após 1s"
         className={`px-1.5 md:px-2 py-0.5 text-[10px] md:text-xs rounded font-mono transition-colors border shrink-0 shadow ${
           measureMode && measureOneShot
             ? 'bg-p4 text-white border-p4'
