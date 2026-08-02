@@ -22,6 +22,7 @@ const readline = require('readline');
 require('dotenv').config({ path: path.join(__dirname, '../../../.env') });
 
 const { fetchBinanceCandles, fetchGateCandles } = require('../prices');
+const { decimalsFromStep } = require('../../binance/tradeClient');
 const { toGateSymbol } = require('../../utils/toGateSymbol');
 const { sendWhatsApp } = require('../whatsapp');
 const { fmtVolumeUsdt } = require('../volume24h');
@@ -115,7 +116,7 @@ async function binanceMarketSell(symbol, qty) {
   const info      = await fetch(`${BINANCE_BASE}/api/v3/exchangeInfo?symbol=${symbol}`).then(r => r.json());
   const lotFilter = info.symbols?.[0]?.filters?.find(f => f.filterType === 'LOT_SIZE');
   const stepSize  = lotFilter ? parseFloat(lotFilter.stepSize) : 1;
-  const decimals  = stepSize < 1 ? (String(stepSize).split('.')[1]?.length ?? 0) : 0;
+  const decimals  = decimalsFromStep(stepSize);
   const safeQty   = (Math.floor(qty / stepSize) * stepSize).toFixed(decimals);
   const order     = await binanceReq('POST', '/api/v3/order', {
     symbol, side: 'SELL', type: 'MARKET', quantity: safeQty,

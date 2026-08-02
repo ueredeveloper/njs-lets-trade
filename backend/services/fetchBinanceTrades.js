@@ -1,5 +1,6 @@
 const router  = require('express').Router();
 const getClient = require('../binance/getClient');
+const { decimalsFromStep } = require('../binance/tradeClient');
 
 // GET /services/binance-trades?symbol=BTCUSDT&limit=500
 router.get('/binance-trades', async (req, res) => {
@@ -36,7 +37,7 @@ async function roundToLotSize(client, symbol, qty) {
   const lotFilter = info.symbols?.[0]?.filters?.find(f => f.filterType === 'LOT_SIZE');
   const stepSize  = lotFilter ? parseFloat(lotFilter.stepSize) : 0;
   if (!stepSize) return String(qty);
-  const decimals = stepSize < 1 ? (String(stepSize).split('.')[1]?.length ?? 0) : 0;
+  const decimals = decimalsFromStep(stepSize);
   return (Math.floor(qty / stepSize) * stepSize).toFixed(decimals);
 }
 
