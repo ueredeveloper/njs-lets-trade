@@ -3,6 +3,8 @@
  * Degraus de trailStepPct (padrão 5%) acima da entrada; piso = anchor × (1 − maxLossPct%).
  */
 
+import { isMaCrossEntry } from './multitradeChart';
+
 export function computeStopLossFloor(entryPrice, peakPrice, stopLoss = {}) {
   const maxLossPct = stopLoss.maxLossPct ?? 5;
   if (!entryPrice || entryPrice <= 0) return null;
@@ -21,24 +23,53 @@ export function computeStopLossFloor(entryPrice, peakPrice, stopLoss = {}) {
   return anchorPrice * (1 - maxLossPct / 100);
 }
 
-/** Config stop-loss do favorito MC em posição aberta. */
+/** Config stop-loss percentual/trailing (modo compartilhado por ma-cross e vwap-bands
+ *  modo 'percent') do favorito — não filtra por fase (BOUGHT): é usada tanto pra
+ *  posição aberta (buildBuyPositionSquares, que já depende de buyInfo pra só desenhar
+ *  quando há posição aberta) quanto pro histórico de trades fechados
+ *  (buildHistoricalPositionSquares), que precisa do % configurado mesmo com a moeda
+ *  em WATCHING agora. O modo 'ladder' do vwap-bands (stop estrutural na banda tocada)
+ *  NÃO usa % — ver resolveVwapLadderLevels em CandlestickChart.jsx, que resolve o
+ *  preço real a partir da escada ativa (só vale pra posição aberta). */
 export function resolveChartStopLoss(symbol, multitradeFavorites) {
   const sym = symbol?.toUpperCase();
   if (!sym) return null;
 
-  const entry = multitradeFavorites?.find(
-    e => e.symbol?.toUpperCase() === sym && e.phase === 'BOUGHT',
-  );
+  const entry = multitradeFavorites?.find(e => e.symbol?.toUpperCase() === sym);
   if (!entry) return null;
 
   const sl = entry.tradeConfig?.stopLoss ?? entry.stopLoss ?? {};
   if (sl.enabled === false) return null;
+  if (sl.mode === 'ladder') return null;
 
   return {
     enabled: true,
+    mode: 'pct',
     maxLossPct: Number(sl.maxLossPct ?? 5),
     trailing: sl.trailing !== false,
     trailStepPct: Number(sl.trailStepPct ?? sl.maxLossPct ?? 5),
+  };
+}
+
+/** Alvo (take-profit) percentual — só existe pra ma-cross (exit.bbTakeProfit.targetPct,
+ *  padrão 6%, mostrado mesmo com a saída automática desligada, como referência visual).
+ *  vwap-bands NÃO tem alvo fixo por % — o alvo é sempre a próxima banda da escada, ao
+ *  vivo — ver resolveVwapLadderLevels em CandlestickChart.jsx. */
+export function resolveChartTarget(symbol, multitradeFavorites) {
+  const sym = symbol?.toUpperCase();
+  if (!sym) return null;
+
+  const entry = multitradeFavorites?.find(e => e.symbol?.toUpperCase() === sym);
+  if (!entry || !isMaCrossEntry(entry)) return null;
+
+  const tp = entry.tradeConfig?.exit?.bbTakeProfit ?? {};
+  const targetPct = Number(tp.targetPct ?? 6);
+  if (!(targetPct > 0)) return null;
+
+  return {
+    enabled: true,
+    mode: 'pct',
+    targetPct,
   };
 }
 

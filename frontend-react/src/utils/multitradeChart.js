@@ -153,6 +153,11 @@ export function buildMarkersFromLiveTrades(trades, entry) {
         side: 'sell',
         price: t.exit_price != null ? Number(t.exit_price) : null,
         pnlPct: pnl,
+        // entryTime/entryPrice: usados pra desenhar o quadrado compra→venda no
+        // histórico (buildHistoricalPositionSquares em CandlestickChart.jsx) — a
+        // largura do quadrado é a distância real (em candles) entre os dois.
+        entryTime: entryMs,
+        entryPrice: t.entry_price != null ? Number(t.entry_price) : null,
         label: pnl != null
           ? `▼ ${pnl >= 0 ? '+' : ''}${pnl.toFixed(1)}%`
           : '▼ Venda',
@@ -182,7 +187,7 @@ export function buildMarkersFromExchangeTrades(trades, opts = {}) {
     if (!Number.isFinite(time) || !Number.isFinite(price)) continue;
 
     if (t.isBuyer) {
-      inventory.push({ qty: qty > 0 ? qty : 0, price });
+      inventory.push({ qty: qty > 0 ? qty : 0, price, time });
       markers.push({ time, side: 'buy', price, label: '▲ Compra' });
       continue;
     }
@@ -190,9 +195,19 @@ export function buildMarkersFromExchangeTrades(trades, opts = {}) {
     let remain = qty > 0 ? qty : 0;
     let cost = 0;
     let matched = 0;
+    // dominantLot: o lote que mais contribuiu em quantidade pra essa venda — usado só
+    // como entryTime/visual do quadrado (não pro PnL, que segue FIFO certinho contra
+    // TODOS os lotes consumidos). Poeira sobrando de uma compra bem mais antiga (fill
+    // parcial, arredondamento) não pode "puxar" o quadrado lá pra trás — foi o bug visto
+    // na NEAR: uma venda pequena não fechava 100% do lote antigo, e a poeira restante
+    // fazia a venda seguinte (que na prática veio quase toda de uma compra recente)
+    // aparecer como se tivesse começado na compra antiga, atravessando um ciclo inteiro.
+    let dominantLotTime = null;
+    let dominantLotQty = 0;
     while (remain > 1e-12 && inventory.length) {
       const lot = inventory[0];
       const take = Math.min(lot.qty, remain);
+      if (take > dominantLotQty) { dominantLotQty = take; dominantLotTime = lot.time; }
       cost += take * lot.price;
       matched += take;
       lot.qty -= take;
@@ -201,7 +216,9 @@ export function buildMarkersFromExchangeTrades(trades, opts = {}) {
     }
 
     let pnlPct = null;
+    let avgEntryPrice = null;
     if (matched > 0 && cost > 0) {
+      avgEntryPrice = cost / matched;
       pnlPct = ((matched * price - cost) / cost) * 100;
     }
     markers.push({
@@ -209,6 +226,11 @@ export function buildMarkersFromExchangeTrades(trades, opts = {}) {
       side: 'sell',
       price,
       pnlPct,
+      // entryTime: horário do lote dominante (não o mais antigo em FIFO estrito) —
+      // usados pra desenhar o quadrado compra→venda no histórico (largura = candles
+      // entre os dois), ver buildHistoricalPositionSquares em CandlestickChart.jsx.
+      entryTime: dominantLotTime,
+      entryPrice: avgEntryPrice,
       label: pnlPct != null
         ? `▼ ${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(1)}%`
         : '▼ Venda',

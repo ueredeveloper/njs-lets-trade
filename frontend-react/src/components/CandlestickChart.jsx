@@ -4,7 +4,7 @@ import ReactECharts from 'echarts-for-react';
 import { useCurrency } from '../contexts/CurrencyContext';
 import { fetchCandlesticksAndCloud, fetchGateTrades, fetchBinanceTrades, fetchChartAdaptiveBands, DEFAULT_CANDLE_LIMIT } from '../services/api';
 import { buildMarkersFromExchangeTrades, attachPnlToExchangeTrades, isMaCrossEntry, isVwapBandsEntry } from '../utils/multitradeChart';
-import { buildTrailingStopSeries, resolveChartStopLoss } from '../utils/trailingStopLoss';
+import { buildTrailingStopSeries, resolveChartStopLoss, resolveChartTarget, computeStopLossFloor } from '../utils/trailingStopLoss';
 import { getEntriesForSymbol, buildAdHocMaCrossEntry } from '../constants/strategyPresets';
 import MaCrossRuleCheckChart from './MaCrossRuleCheckChart';
 import convertOpenTime from '../utils/convertOpenTime';
@@ -1400,20 +1400,26 @@ function resolveChartBuyPrice(symbol, {
   const at = activeTrades?.get?.(sym);
   if (at?.buyPrice != null) return { price: Number(at.buyPrice), time: null };
 
+  // Só 'entry' (posição realmente aberta — ver buildMarkersFromLiveTrades, side:'entry'
+  // só existe quando entry.phase === 'BOUGHT'). 'buy' é a entrada de um trade JÁ
+  // FECHADO do histórico (tem um 'sell' correspondente) — tratar como se fosse a
+  // posição aberta atual desenhava a linha de PnL/quadrados no lugar errado (bug visto
+  // na NEAR: pegava a compra de um trade antigo já vendido).
   const entryMarker = [...(chartTradeMarkers ?? [])].reverse().find(
-    m => (m.side === 'entry' || m.side === 'buy') && m.price != null,
+    m => m.side === 'entry' && m.price != null,
   );
   if (entryMarker) return { price: Number(entryMarker.price), time: entryMarker.time ?? null };
 
   if (allTrades?.length) {
     const inv = [];
     const sorted = [...allTrades].sort((a, b) => Number(a.time) - Number(b.time));
+    let totalBoughtQty = 0;
     for (const t of sorted) {
       const price = Number(t.price);
       const qty = Number(t.qty);
       if (!Number.isFinite(price) || !Number.isFinite(qty)) continue;
       if (t.isBuyer) {
-        if (qty > 0) inv.push({ qty, price, time: Number(t.time) });
+        if (qty > 0) { inv.push({ qty, price, time: Number(t.time) }); totalBoughtQty += qty; }
       } else {
         let remain = qty;
         while (remain > 1e-12 && inv.length) {
@@ -1424,9 +1430,12 @@ function resolveChartBuyPrice(symbol, {
         }
       }
     }
-    if (inv.length) {
-      const totalQty = inv.reduce((s, l) => s + l.qty, 0);
-      const avgPrice = inv.reduce((s, l) => s + l.qty * l.price, 0) / totalQty;
+    const remainingQty = inv.reduce((s, l) => s + l.qty, 0);
+    // Ignora poeira residual (taxa/arredondamento) — uma venda que fechou quase tudo
+    // (mas não a 100,000%) não pode deixar a posição marcada como "ainda aberta" pra
+    // sempre. Só considera aberto se sobrar mais que 1% do total comprado.
+    if (remainingQty > totalBoughtQty * 0.01) {
+      const avgPrice = inv.reduce((s, l) => s + l.qty * l.price, 0) / remainingQty;
       const firstLot = inv[0];
       return { price: avgPrice, time: firstLot?.time ?? null };
     }
@@ -1497,7 +1506,7 @@ function buildBuyPnlSeries(buyInfo, candlesticks, DL, LEFT_PAD, RIGHT_PAD, lastC
 }
 
 function buildStopLossLineSeries(buyInfo, stopLossConfig, candlesticks, DL, LEFT_PAD, RIGHT_PAD) {
-  if (!buyInfo?.price || !stopLossConfig) return null;
+  if (!buyInfo?.price || !stopLossConfig || stopLossConfig.mode === 'price') return null;
   const built = buildTrailingStopSeries(
     candlesticks, buyInfo.price, buyInfo.time ?? null, stopLossConfig, DL, LEFT_PAD, RIGHT_PAD,
   );
@@ -1525,6 +1534,139 @@ function buildStopLossLineSeries(buyInfo, stopLossConfig, candlesticks, DL, LEFT
   };
 }
 
+function formatPctFromBase(basePrice, price) {
+  const pct = ((price - basePrice) / basePrice) * 100;
+  return `${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%`;
+}
+
+/** Acha o índice do candle exibido mais próximo de um timestamp. */
+function nearestCandleIdx(candlesticks, ms) {
+  let best = 0;
+  let bestDiff = Infinity;
+  candlesticks.forEach((c, i) => {
+    const d = Math.abs(Number(c.openTime) - ms);
+    if (d < bestDiff) { bestDiff = d; best = i; }
+  });
+  return best;
+}
+
+/** Dois quadrados a partir da posição de compra ABERTA: compra→alvo (verde) e
+ *  compra→stoploss (vermelho), largura fixa de 5 candles. */
+function buildBuyPositionSquares(buyInfo, stopLossConfig, targetConfig, candlesticks, DL, LEFT_PAD) {
+  if (!buyInfo?.price || !candlesticks?.length) return null;
+  const buyPrice = buyInfo.price;
+  if (!Number.isFinite(buyPrice) || buyPrice <= 0) return null;
+
+  const offset = candlesticks.length - DL;
+  let buyIdx = 0;
+  if (buyInfo.time != null) {
+    const absIdx = nearestCandleIdx(candlesticks, buyInfo.time);
+    buyIdx = Math.max(0, Math.min(DL - 1, absIdx - offset));
+  }
+  const x1 = buyIdx + LEFT_PAD;
+  const x2 = x1 + 5;
+
+  const pctLabel = (price) => formatPctFromBase(buyPrice, price);
+
+  const areas = [];
+
+  if (targetConfig?.enabled) {
+    const targetPrice = targetConfig.mode === 'price'
+      ? targetConfig.price
+      : buyPrice * (1 + targetConfig.targetPct / 100);
+    if (Number.isFinite(targetPrice)) areas.push([
+      {
+        xAxis: x1, yAxis: buyPrice, itemStyle: { color: 'rgba(34,197,94,0.18)' },
+        label: { show: true, position: 'inside', formatter: pctLabel(targetPrice), color: '#22c55e', fontSize: 11, fontWeight: 'bold' },
+      },
+      { xAxis: x2, yAxis: targetPrice },
+    ]);
+  }
+
+  if (stopLossConfig?.enabled) {
+    const stopPrice = stopLossConfig.mode === 'price'
+      ? stopLossConfig.price
+      : computeStopLossFloor(buyPrice, buyPrice, stopLossConfig);
+    if (stopPrice != null) {
+      areas.push([
+        {
+          xAxis: x1, yAxis: buyPrice, itemStyle: { color: 'rgba(239,68,68,0.18)' },
+          label: { show: true, position: 'inside', formatter: pctLabel(stopPrice), color: '#ef4444', fontSize: 11, fontWeight: 'bold' },
+        },
+        { xAxis: x2, yAxis: stopPrice },
+      ]);
+    }
+  }
+
+  if (!areas.length) return null;
+  return { silent: true, data: areas };
+}
+
+/** Mesma ideia dos quadrados da posição aberta, mas para cada trade JÁ FECHADO do
+ *  histórico (markers 'sell' com entryTime/entryPrice — ver buildMarkersFromLiveTrades/
+ *  buildMarkersFromExchangeTrades em utils/multitradeChart.js). Largura = candles reais
+ *  entre a compra e a venda daquele trade (não fixa em 5, como na posição aberta — ali
+ *  não há venda ainda pra medir a distância real). Mostra sempre o resultado REAL
+ *  (compra→venda) — não o alvo/stop teórico configurado na estratégia: um trade que
+ *  disparou bem além do alvo (ou muito antes do stop) ficava parecendo prejuízo, já
+ *  que o quadrado teórico não tem nada a ver com onde a venda de fato aconteceu. */
+function buildHistoricalPositionSquares(candlesticks, markers, DL, LEFT_PAD) {
+  if (!markers?.length || !candlesticks?.length) return null;
+
+  const offset = candlesticks.length - DL;
+  const areas = [];
+
+  // nearestCandleIdx sempre acha "o candle mais próximo", mesmo que seja um trade de
+  // 2024 e os candles exibidos sejam só dos últimos dias — sem tolerância, isso gruda
+  // o quadrado no candle 0 (bug visto na NEAR: trades histórico com entryTime de anos
+  // atrás casavam com o primeiro candle exibido). Só aceita o casamento se o candle
+  // achado estiver a no máximo 1.5x o intervalo de distância do horário real.
+  const ivMs = candlesticks.length > 1
+    ? Math.abs(Number(candlesticks[1].openTime) - Number(candlesticks[0].openTime))
+    : Infinity;
+  const maxDiffMs = ivMs * 1.5;
+
+  markers.forEach(m => {
+    if (m.side !== 'sell' || m.entryPrice == null || m.entryTime == null || m.time == null) return;
+    const entryPrice = Number(m.entryPrice);
+    const exitPrice = Number(m.price);
+    if (!Number.isFinite(entryPrice) || entryPrice <= 0) return;
+
+    const entryAbsIdx = nearestCandleIdx(candlesticks, m.entryTime);
+    const exitAbsIdx = nearestCandleIdx(candlesticks, m.time);
+    const entryDiffMs = Math.abs(Number(candlesticks[entryAbsIdx].openTime) - m.entryTime);
+    const exitDiffMs = Math.abs(Number(candlesticks[exitAbsIdx].openTime) - m.time);
+    if (entryDiffMs > maxDiffMs || exitDiffMs > maxDiffMs) return;
+    const entryLocal = entryAbsIdx - offset;
+    const exitLocal = exitAbsIdx - offset;
+    // Só desenha se a compra E a venda estiverem dentro da janela de candles
+    // atualmente exibida — clampar um lado fora da janela pro início/fim visível
+    // fazia o quadrado aparecer numa posição/horário que não é o real.
+    if (entryLocal < 0 || exitLocal < 0 || entryLocal >= DL || exitLocal >= DL) return;
+    const x1 = entryLocal + LEFT_PAD;
+    const x2 = exitLocal + LEFT_PAD;
+    if (x2 <= x1) return;
+
+    // Resultado REAL do trade (compra→venda) — azul se deu lucro, amarelo se deu
+    // prejuízo (mesma paleta do histórico; verde/vermelho fica reservado pra posição
+    // aberta, que ainda não tem venda real pra mostrar).
+    if (!Number.isFinite(exitPrice)) return;
+    const isProfit = exitPrice >= entryPrice;
+    const color = isProfit ? 'rgba(59,130,246,0.18)' : 'rgba(234,179,8,0.18)';
+    const labelColor = isProfit ? '#3b82f6' : '#eab308';
+    areas.push([
+      {
+        xAxis: x1, yAxis: entryPrice, itemStyle: { color },
+        label: { show: true, position: 'inside', formatter: formatPctFromBase(entryPrice, exitPrice), color: labelColor, fontSize: 10, fontWeight: 'bold' },
+      },
+      { xAxis: x2, yAxis: exitPrice },
+    ]);
+  });
+
+  if (!areas.length) return null;
+  return { silent: true, data: areas };
+}
+
 function buildMultitradeMarkLines(candlesticks, interval, markers, DL, LEFT_PAD) {
   if (!markers?.length || !candlesticks?.length) return [];
   const ms = { '1m': 60_000, '3m': 180_000, '5m': 300_000, '15m': 900_000, '30m': 1_800_000,
@@ -1534,10 +1676,14 @@ function buildMultitradeMarkLines(candlesticks, interval, markers, DL, LEFT_PAD)
     signal:         { color: '#f59e0b', label: '◆ Sinal' },
     buy:            { color: '#22c55e', label: '▲ Buy' },
     sell:           { color: '#ef4444', label: '▼ Sell' },
-    entry:          { color: '#ffffff', label: '▌ Entrada' },
     possible_entry: { color: '#ffffff', label: '◌ Entrada pronta' },
   };
   return markers.flatMap(m => {
+    // 'entry' (posição aberta) não desenha mais linha vertical — os quadrados
+    // compra→alvo/stoploss cobrem isso. 'buy'/'sell' (temporariamente restaurados)
+    // pra comparar visualmente com os quadrados do histórico enquanto depuramos o
+    // posicionamento.
+    if (m.side === 'entry') return [];
     let best = 0;
     let bestDiff = Infinity;
     candlesticks.forEach((c, i) => {
@@ -1549,20 +1695,16 @@ function buildMultitradeMarkLines(candlesticks, interval, markers, DL, LEFT_PAD)
     if (localIdx < 0 || localIdx >= DL) return [];
     const st = styles[m.side] ?? { color: '#94a3b8', label: m.side };
     const dashed = m.side === 'signal' || m.side === 'possible_entry';
-    const label = m.label ?? (m.pnlPct != null
-      ? `▼ ${Number(m.pnlPct) >= 0 ? '+' : ''}${Number(m.pnlPct).toFixed(1)}%`
-      : st.label);
+    const label = m.label ?? st.label;
     return [{
       xAxis: localIdx + LEFT_PAD,
-      lineStyle: { color: st.color, width: m.side === 'entry' || m.side === 'possible_entry' ? 2 : 1.5, type: dashed ? 'dashed' : 'solid' },
+      lineStyle: { color: st.color, width: m.side === 'possible_entry' ? 2 : 1.5, type: dashed ? 'dashed' : 'solid' },
       label: {
         show: true,
         formatter: label,
-        color: m.side === 'sell' && m.pnlPct != null
-          ? (Number(m.pnlPct) >= 0 ? '#22c55e' : '#ef4444')
-          : st.color,
+        color: st.color,
         fontSize: 9,
-        position: m.side === 'sell' ? 'insideEndBottom' : 'insideStartTop',
+        position: 'insideStartTop',
         padding: [2, 4],
       },
     }];
@@ -1617,7 +1759,7 @@ function buildPivotMarkers(pivots, candlesticks, DL, LEFT_PAD, chartInterval) {
   return { highs, lows };
 }
 
-function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAverage, ma50, ma9, ma21, rsi }, colors, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = [], overlayConfigs = [], multitradeMarkers = [], chartLeftPad = CHART_LEFT_MARGIN, buyInfo = null, stopLossConfig = null, chartRightPad = CHART_PRICE_PAD + CHART_LEFT_MARGIN, bollingerConfig = null, srConfig = null, pphlConfig = null, vwapConfig = null, chopConfig = null) {
+function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAverage, ma50, ma9, ma21, rsi }, colors, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = [], overlayConfigs = [], multitradeMarkers = [], chartLeftPad = CHART_LEFT_MARGIN, buyInfo = null, stopLossConfig = null, targetConfig = null, chartRightPad = CHART_PRICE_PAD + CHART_LEFT_MARGIN, bollingerConfig = null, srConfig = null, pphlConfig = null, vwapConfig = null, chopConfig = null) {
   const showMa9      = activeIndicators.includes('ma9');
   const showMa21     = activeIndicators.includes('ma21');
   const showMa50     = activeIndicators.includes('ma50');
@@ -1745,6 +1887,12 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
   const stopLossSeries = showStopLoss
     ? buildStopLossLineSeries(buyInfo, stopLossConfig, candlesticks, DL, LEFT_PAD, RIGHT_PAD)
     : null;
+  const buyPositionSquares = buildBuyPositionSquares(buyInfo, stopLossConfig, targetConfig, candlesticks, DL, LEFT_PAD);
+  const historicalPositionSquares = buildHistoricalPositionSquares(candlesticks, multitradeMarkers, DL, LEFT_PAD);
+  const positionSquares = (() => {
+    const data = [...(buyPositionSquares?.data ?? []), ...(historicalPositionSquares?.data ?? [])];
+    return data.length ? { silent: true, data } : null;
+  })();
   const finalMarkLine = {
     silent: true, symbol: 'none',
     data: [
@@ -1808,6 +1956,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
       data: [...new Array(LEFT_PAD).fill('-'), ...candlesticks.slice(-DL).map((c) => [c.open, c.close, c.low, c.high])],
       itemStyle: { color: C_UP, color0: C_DOWN, borderColor: C_UP, borderColor0: C_DOWN },
       markLine: finalMarkLine,
+      ...(positionSquares ? { markArea: positionSquares } : {}),
     },
     ...(showMa9 && ma9?.length ? [{
       name: 'EMA9',
@@ -2293,7 +2442,12 @@ function TradeHistoryPanel({ symbol, gateFavorites }) {
       const trades  = await (useGate ? fetchGateTrades(symbol) : fetchBinanceTrades(symbol));
       setAllTrades(trades);
       setTradePurchases(trades.filter(t => t.isBuyer));
-      if (chartViewSource === CHART_VIEW.TRADES) {
+      // No MULTITRADE também substitui os markers pelos trades REAIS da exchange —
+      // os que vêm do loadMultitradeSymbolChart (rsi_multi_bot_trades) podem ter
+      // entry_time/entry_price velhos ou mal casados (visto na NEAR: trades de 2024
+      // misturados com os recentes), enquanto os fills da própria exchange são a
+      // fonte confiável de quando/a que preço a compra e a venda realmente aconteceram.
+      if (chartViewSource === CHART_VIEW.TRADES || chartViewSource === CHART_VIEW.MULTITRADE) {
         setChartTradeMarkers(buildMarkersFromExchangeTrades(trades));
       }
       setLastUpdate(new Date());
@@ -3458,10 +3612,126 @@ export default function CandlestickChart() {
     multitradeFavorites, fiveMTradeFavorites, activeTrades, allTrades, tradePurchases, chartTradeMarkers,
   ]);
 
+  // Alvo/stop reais da escada VWAP Bands (posição BOUGHT em modo ladder) — o alvo é
+  // sempre a próxima banda acima (targetLevel) e o stop a banda tocada que armou o
+  // degrau (touchLevel), ambos ao vivo (recalculados a cada tick pelo bot, não fixos
+  // no momento da compra). activeSetup vem do rules_state salvo pelo bot (ver
+  // enrichMultitradeEntriesWithState em backend/services/supabaseService.js).
+  const [vwapLadderLevels, setVwapLadderLevels] = useState(null);
+
+  useEffect(() => {
+    const sym = selectedChart?.symbol;
+    if (!sym) { setVwapLadderLevels(null); return undefined; }
+    const entry = multitradeFavorites?.find(
+      e => e.symbol?.toUpperCase() === sym.toUpperCase() && e.phase === 'BOUGHT' && isVwapBandsEntry(e),
+    );
+    const setup = entry?.activeSetup;
+    if (!entry || !setup?.targetLevel || !setup?.touchLevel) {
+      setVwapLadderLevels(null);
+      return undefined;
+    }
+    let cancelled = false;
+    const vwapInterval = entry.tradeConfig?.entry?.vwapInterval ?? '4h';
+    const session = entry.tradeConfig?.entry?.session ?? 'weekly';
+    const source = selectedChart.source === 'gate' ? 'gate' : 'binance';
+    const sessionCoverageMs = session === 'weekly' ? 14 * 86_400_000 : 2 * 86_400_000;
+    const ivMs = INTERVAL_MS[vwapInterval] ?? 4 * 3_600_000;
+    const limit = Math.min(1000, Math.max(60, Math.ceil(sessionCoverageMs / ivMs)));
+    const levelField = { lower2: 'lower2', lower1: 'lower1', vwap: 'value', upper1: 'upper1', upper2: 'upper2' };
+    fetchVwapPoints(sym, vwapInterval, session, source, limit)
+      .then(points => {
+        if (cancelled || !points?.length) return;
+        const last = points[points.length - 1];
+        const targetPrice = Number(last?.[levelField[setup.targetLevel]]);
+        const stopPrice = Number(last?.[levelField[setup.touchLevel]]);
+        setVwapLadderLevels({
+          symbol: sym,
+          targetPrice: Number.isFinite(targetPrice) ? targetPrice : null,
+          stopPrice: Number.isFinite(stopPrice) ? stopPrice : null,
+          targetLevel: setup.targetLevel,
+          touchLevel: setup.touchLevel,
+        });
+      })
+      .catch(() => { if (!cancelled) setVwapLadderLevels(null); });
+    return () => { cancelled = true; };
+  }, [selectedChart?.symbol, selectedChart?.source, multitradeFavorites]);
+
   const chartStopLossConfig = useMemo(() => {
     if (!selectedChart?.symbol) return null;
+    if (vwapLadderLevels?.symbol === selectedChart.symbol && vwapLadderLevels.stopPrice != null) {
+      return { enabled: true, mode: 'price', price: vwapLadderLevels.stopPrice, levelLabel: vwapLadderLevels.touchLevel };
+    }
     return resolveChartStopLoss(selectedChart.symbol, multitradeFavorites);
-  }, [selectedChart?.symbol, multitradeFavorites]);
+  }, [selectedChart?.symbol, multitradeFavorites, vwapLadderLevels]);
+
+  const chartTargetConfig = useMemo(() => {
+    if (!selectedChart?.symbol) return null;
+    if (vwapLadderLevels?.symbol === selectedChart.symbol && vwapLadderLevels.targetPrice != null) {
+      return { enabled: true, mode: 'price', price: vwapLadderLevels.targetPrice, levelLabel: vwapLadderLevels.targetLevel };
+    }
+    return resolveChartTarget(selectedChart.symbol, multitradeFavorites);
+  }, [selectedChart?.symbol, multitradeFavorites, vwapLadderLevels]);
+
+  console.log('[position-squares] config resolvido', {
+    symbol: selectedChart?.symbol,
+    chartStopLossConfig, chartTargetConfig,
+    displayLimit,
+    candlesticksCount: selectedChart?.candlesticks?.length ?? 0,
+    firstCandle: selectedChart?.candlesticks?.[0]
+      ? new Date(Number(selectedChart.candlesticks[0].openTime)).toISOString() : null,
+    lastCandle: selectedChart?.candlesticks?.length
+      ? new Date(Number(selectedChart.candlesticks[selectedChart.candlesticks.length - 1].openTime)).toISOString()
+      : null,
+    // Posição de compra ATUAL (live) — usada pro quadrado verde/vermelho e pra linha
+    // de PnL. Se o símbolo não estiver comprado agora, isso deve vir null.
+    chartBuyInfo: chartBuyInfo && {
+      price: chartBuyInfo.price,
+      time: chartBuyInfo.time != null ? new Date(chartBuyInfo.time).toISOString() : null,
+      candleIdx: chartBuyInfo.time != null && selectedChart?.candlesticks?.length
+        ? nearestCandleIdx(selectedChart.candlesticks, chartBuyInfo.time) : null,
+      candleOpenTime: (() => {
+        const cs = selectedChart?.candlesticks ?? [];
+        if (chartBuyInfo.time == null || !cs.length) return null;
+        const idx = nearestCandleIdx(cs, chartBuyInfo.time);
+        return cs[idx] ? new Date(Number(cs[idx].openTime)).toISOString() : null;
+      })(),
+    },
+    // TODOS os markers (linhas antigas: buy/sell/entry/signal/possible_entry), na ordem
+    // em que chegam — pra comparar a posição de cada linha desenhada com o chartBuyInfo.
+    allMarkers: (chartTradeMarkers ?? []).map(m => {
+      const cs = selectedChart?.candlesticks ?? [];
+      const absIdx = cs.length && m.time != null ? nearestCandleIdx(cs, m.time) : null;
+      return {
+        side: m.side,
+        time: m.time != null ? new Date(m.time).toISOString() : null,
+        price: m.price,
+        entryTime: m.entryTime != null ? new Date(m.entryTime).toISOString() : null,
+        entryPrice: m.entryPrice,
+        pnlPct: m.pnlPct,
+        matchedCandleOpenTime: absIdx != null && cs[absIdx]
+          ? new Date(Number(cs[absIdx].openTime)).toISOString() : null,
+      };
+    }),
+    trades: (chartTradeMarkers ?? []).filter(m => m.side === 'sell').map(m => {
+      const cs = selectedChart?.candlesticks ?? [];
+      const DL = Math.min(displayLimit, cs.length);
+      const offset = cs.length - DL;
+      const entryAbsIdx = cs.length && m.entryTime != null ? nearestCandleIdx(cs, m.entryTime) : null;
+      const exitAbsIdx = cs.length && m.time != null ? nearestCandleIdx(cs, m.time) : null;
+      return {
+        entryTime: m.entryTime != null ? new Date(m.entryTime).toISOString() : null,
+        exitTime: m.time != null ? new Date(m.time).toISOString() : null,
+        entryPrice: m.entryPrice, exitPrice: m.price,
+        DL, offset, entryAbsIdx, exitAbsIdx,
+        entryLocal: entryAbsIdx != null ? entryAbsIdx - offset : null,
+        exitLocal: exitAbsIdx != null ? exitAbsIdx - offset : null,
+        entryCandleOpenTime: entryAbsIdx != null && cs[entryAbsIdx]
+          ? new Date(Number(cs[entryAbsIdx].openTime)).toISOString() : null,
+        exitCandleOpenTime: exitAbsIdx != null && cs[exitAbsIdx]
+          ? new Date(Number(cs[exitAbsIdx].openTime)).toISOString() : null,
+      };
+    }),
+  });
 
   // Aba "Bot": mostra a estratégia REAL do favorito da moeda selecionada (ma-cross ou
   // vwap-bands) — antes disso era sempre tratado como ma-cross, mostrando linhas de
@@ -3536,10 +3806,10 @@ export default function CandlestickChart() {
     return buildOption(
       selectedChart, colors, effectiveIndicators, displayLimit, chartZoom, tradeTimes, overlayConfigs,
       chartTradeMarkers?.length ? chartTradeMarkers : (selectedChart.tradeMarkers ?? []),
-      chartLeftPad, chartBuyInfo, chartStopLossConfig, chartRightPad, chartBollingerConfig, chartSrConfig, chartPphlConfig, chartVwapConfig, chartChopConfig,
+      chartLeftPad, chartBuyInfo, chartStopLossConfig, chartTargetConfig, chartRightPad, chartBollingerConfig, chartSrConfig, chartPphlConfig, chartVwapConfig, chartChopConfig,
     );
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedChart, colors, effectiveIndicators, chartZoom, tradePurchases, chartTradeMarkers, activeTab, overlayConfigs, displayLimit, chartLeftPad, chartRightPad, chartBuyInfo, chartStopLossConfig, chartBollingerConfig, chartSrConfig, chartPphlConfig, chartVwapConfig, chartChopConfig]);
+  }, [selectedChart, colors, effectiveIndicators, chartZoom, tradePurchases, chartTradeMarkers, activeTab, overlayConfigs, displayLimit, chartLeftPad, chartRightPad, chartBuyInfo, chartStopLossConfig, chartTargetConfig, chartBollingerConfig, chartSrConfig, chartPphlConfig, chartVwapConfig, chartChopConfig]);
 
   if (!selectedChart || !option) {
     return (

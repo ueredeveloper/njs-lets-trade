@@ -525,12 +525,25 @@ async function syncBotState({ symbol, exchange, strategy_id, capital, trade_conf
   if (error) console.warn('[supabase] syncBotState insert:', error.message);
 }
 
+/** rules_state vem como JSON (ou string JSON) do Supabase — ver parseRulesState em
+ *  backend/bot/shared/tradeExecution.js. Só nos interessa activeSetup aqui (degrau
+ *  vwap-bands que gerou a compra: touchLevel = nível do stop estrutural, targetLevel =
+ *  nível de venda), pra mostrar os quadrados de compra→alvo/stoploss no gráfico com o
+ *  nível real da escada em vez de um % genérico do ma-cross. */
+function parseActiveSetup(rulesState) {
+  let rs = rulesState;
+  if (typeof rs === 'string') {
+    try { rs = JSON.parse(rs); } catch { return null; }
+  }
+  return rs?.activeSetup ?? null;
+}
+
 async function enrichMultitradeEntriesWithState(entries) {
   if (!entries?.length) return entries ?? [];
   const symbols = [...new Set(entries.map(e => e.symbol))];
   const { data: states, error } = await supabase
     .from('rsi_multi_bot_state')
-    .select('symbol, strategy_id, phase, buy_time, buy_price, buy_qty')
+    .select('symbol, strategy_id, phase, buy_time, buy_price, buy_qty, rules_state')
     .in('symbol', symbols);
   if (error) {
     console.warn('[supabase] enrichMultitradeEntriesWithState:', error.message);
@@ -543,11 +556,12 @@ async function enrichMultitradeEntriesWithState(entries) {
     const st = stateByKey.get(`${e.symbol}|${e.strategyId}`);
     return {
       ...e,
-      phase:    st?.phase ?? 'WATCHING',
-      buyTime:  st?.buy_time ?? null,
-      buyPrice: st?.buy_price != null ? Number(st.buy_price) : null,
-      buyQty:   st?.buy_qty != null ? Number(st.buy_qty) : null,
-      buyUsdt:  st?.buy_usdt != null ? Number(st.buy_usdt) : null,
+      phase:      st?.phase ?? 'WATCHING',
+      buyTime:    st?.buy_time ?? null,
+      buyPrice:   st?.buy_price != null ? Number(st.buy_price) : null,
+      buyQty:     st?.buy_qty != null ? Number(st.buy_qty) : null,
+      buyUsdt:    st?.buy_usdt != null ? Number(st.buy_usdt) : null,
+      activeSetup: parseActiveSetup(st?.rules_state),
     };
   });
 }
