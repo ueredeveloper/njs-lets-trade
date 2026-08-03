@@ -3490,12 +3490,24 @@ export default function CandlestickChart() {
     const levelField = { lower2: 'lower2', lower1: 'lower1', vwap: 'value', upper1: 'upper1', upper2: 'upper2' };
     // 'rolling' fixo — precisa espelhar exatamente o cálculo ao vivo do bot (strategyEngine.js),
     // que sempre usa VWAP contínua/rolante, independente do que o usuário escolher em Configurações.
+    const stopLossCfg = entry.tradeConfig?.stopLoss ?? entry.stopLoss ?? {};
+    const maxLossPct = Math.max(0, Number(stopLossCfg.maxLossPct ?? 5));
+    const buyPrice = Number(entry.buyPrice);
     fetchVwapPoints(sym, vwapInterval, session, 'rolling', source, limit)
       .then(points => {
         if (cancelled || !points?.length) return;
         const last = points[points.length - 1];
         const targetPrice = Number(last?.[levelField[setup.targetLevel]]);
-        const stopPrice = Number(last?.[levelField[setup.touchLevel]]);
+        let stopPrice = Number(last?.[levelField[setup.touchLevel]]);
+        // Mesmo teto do bot (ver computeLadderLevelPrices em strategyEngine.js): o stop
+        // estrutural (banda tocada) nunca fica mais de maxLossPct% abaixo da compra — sem
+        // isso o gráfico desenhava a linha de stop mais funda do que a ordem resting
+        // realmente coloca na corretora (bandas largas ficam bem além do teto).
+        if (stopLossCfg.enabled !== false && (stopLossCfg.mode ?? 'ladder') === 'ladder'
+          && Number.isFinite(stopPrice) && Number.isFinite(buyPrice) && buyPrice > 0) {
+          const stopFloor = buyPrice * (1 - maxLossPct / 100);
+          if (stopPrice < stopFloor) stopPrice = stopFloor;
+        }
         setVwapLadderLevels({
           symbol: sym,
           targetPrice: Number.isFinite(targetPrice) ? targetPrice : null,
