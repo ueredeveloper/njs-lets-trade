@@ -333,10 +333,18 @@ async function tick(rowId, adapter, strategy, log, session) {
         rowId, adapter, config, cMap, session, log, activeSetup,
         exitBracket: rulesState.exitBracket, buyPrice, buyQty: parseFloat(state.buy_qty),
       });
+
+      // Bracket ainda resting na corretora — a saída é responsabilidade exclusiva dela
+      // (OCO real na Binance, price_orders na Gate.io). Não roda mais o evaluateExit por
+      // candle fechado em paralelo enquanto ela existir: era esse "duplo caminho" (linha
+      // E bracket, cada um podendo disparar a venda) que o usuário queria eliminar — agora
+      // só a bracket vende quando restingBracket está ativo pro símbolo.
+      return { phase };
     }
 
-    // Stop percentual/trailing (opt-in — padrão é o stop estrutural na própria banda
-    // tocada, sem pico/piso pra rastrear): só atualiza rules_state nesse modo.
+    // Sem bracket resting (restingBracket desligado pra esse símbolo, ou falhou ao colocar
+    // — ver placeInitialBracket) — mantém o comportamento antigo: venda a mercado via
+    // evaluateExit no candle fechado, com stop percentual/trailing quando configurado.
     let peakPrice = buyPrice;
     if (stopMode === 'percent') {
       const storedPeak = rulesState.stopPeakPrice != null ? parseFloat(rulesState.stopPeakPrice) : buyPrice;
@@ -367,17 +375,6 @@ async function tick(rowId, adapter, strategy, log, session) {
     const reasonLabel = exitResult.reason === 'STOP_LOSS' && exitResult.stopLevel
       ? `Stop-loss em ${labelForLevel(exitResult.stopLevel)} (piso ${exitResult.stopFloor?.toFixed(6)})`
       : undefined;
-
-    // Rede de segurança disparou (candle fechado) com uma bracket ainda resting — cancela
-    // antes de vender a mercado, senão as duas vendem a mesma qty (a bracket pode encher
-    // entre esse cancelamento falhar e o marketSell rodar, mas nunca as duas ordens vivas
-    // ao mesmo tempo depois daqui).
-    const liveBracket = session.rulesState?.exitBracket ?? rulesState.exitBracket;
-    if (liveBracket) {
-      try { await adapter.cancelExitBracket(liveBracket); } catch (err) {
-        log(`${Y}⚠️  Falha ao cancelar bracket TP/SL antes da venda a mercado: ${err.message}${X}`);
-      }
-    }
 
     try {
       await executeSell({
