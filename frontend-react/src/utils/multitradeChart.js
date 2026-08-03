@@ -124,6 +124,16 @@ export function buildMarkersFromLiveTrades(trades, entry) {
   const openMs = entry?.buyTime ? new Date(entry.buyTime).getTime() : null;
 
   if (entry?.phase === 'BOUGHT' && openMs) {
+    // Candle do cruzamento/gatilho que motivou a compra (pode ser bem antes de buyTime
+    // quando o bot esperou um pullback) — ver entry_signal_time em tradeExecution.js.
+    // Só o ma-cross preenche isso hoje; outros bots ficam sem o triângulo.
+    if (entry.entrySignalTime) {
+      markers.push({
+        time: new Date(entry.entrySignalTime).getTime(),
+        side: 'signal',
+        price: entry.entrySignalPrice ?? null,
+      });
+    }
     markers.push({
       time: openMs,
       side: 'entry',
@@ -139,6 +149,13 @@ export function buildMarkersFromLiveTrades(trades, entry) {
 
     const isOpenDup = openMs && Math.abs(entryMs - openMs) < 60_000;
     if (!isOpenDup) {
+      if (t.entry_signal_time) {
+        markers.push({
+          time: new Date(t.entry_signal_time).getTime(),
+          side: 'signal',
+          price: t.entry_signal_price != null ? Number(t.entry_signal_price) : null,
+        });
+      }
       markers.push({
         time: entryMs,
         side: 'buy',

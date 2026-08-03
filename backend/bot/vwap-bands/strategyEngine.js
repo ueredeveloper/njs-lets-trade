@@ -467,8 +467,20 @@ function computeLadderLevelPrices(config, cMap, entryPrice, opts = {}) {
   const target = useFixedUpper2Target ? entryPrice * (1 + upper2FixedPct / 100) : levels[targetLevel];
 
   const stopMode = config.stopLoss?.mode ?? 'ladder';
-  const stopLevelValue = (config.stopLoss?.enabled && stopMode === 'ladder' && opts.touchLevel)
+  let stopLevelValue = (config.stopLoss?.enabled && stopMode === 'ladder' && opts.touchLevel)
     ? levels[opts.touchLevel] : null;
+
+  // Banda tocada (touchLevel) é um stop estrutural sem limite — em bandas largas (alta
+  // volatilidade) pode ficar bem mais longe do que os maxLossPct% de praxe. Como esse valor
+  // vira o stop de uma ordem OCO resting na corretora (ver placeInitialBracket em
+  // vwap-bands-bot.js), sem esse teto a corretora só venderia depois de uma queda muito maior
+  // que o stop-loss máximo configurado. Reaproveita stopLoss.maxLossPct (mesmo campo do modo
+  // 'percent') como teto: nunca deixa o stop passar de maxLossPct% abaixo do preço de compra.
+  if (stopLevelValue != null && entryPrice) {
+    const maxLossPct = Math.max(0, Number(config.stopLoss?.maxLossPct ?? 5));
+    const stopFloor = entryPrice * (1 - maxLossPct / 100);
+    if (stopLevelValue < stopFloor) stopLevelValue = stopFloor;
+  }
 
   const targetLabel = useFixedUpper2Target
     ? `alvo fixo +${upper2FixedPct}% (em vez da +2σ ao vivo)`

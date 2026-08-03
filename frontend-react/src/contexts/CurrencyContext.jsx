@@ -39,7 +39,6 @@ import {
   normalizeVwapAnchor,
   normalizeActiveIndicators,
   normalizeCurrencyPanelWidth,
-  normalizeMaCrossDefaultTemplate,
   normalizeStatsDefaults,
   normalizeCommonChartIntervals,
 } from '../utils/uiPreferences';
@@ -686,14 +685,6 @@ export function CurrencyProvider({ children }) {
     });
   }, []);
 
-  const setMaCrossDefaultTemplate = useCallback((template) => {
-    setUiPrefsState((prev) => {
-      const next = { ...prev, maCrossDefaultTemplate: normalizeMaCrossDefaultTemplate(template) };
-      saveUiPreferences(next);
-      return next;
-    });
-  }, []);
-
   /** Atualiza um grupo (rsi | maCross | bollingerBands) dos padrões usados ao abrir as abas de Estatísticas. */
   const setStatsDefaults = useCallback((group, patch) => {
     setUiPrefsState((prev) => {
@@ -960,7 +951,6 @@ export function CurrencyProvider({ children }) {
         setVwapAnchorDefault,
         setActiveIndicatorsPreference,
         setCurrencyPanelWidth,
-        setMaCrossDefaultTemplate,
         setStatsDefaults,
         chartIntervalOptions: CHART_INTERVAL_OPTIONS,
         panelKeys: PANEL_KEYS,

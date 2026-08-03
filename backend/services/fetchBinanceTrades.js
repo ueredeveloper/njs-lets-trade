@@ -1,6 +1,7 @@
 const router  = require('express').Router();
 const getClient = require('../binance/getClient');
 const { decimalsFromStep } = require('../binance/tradeClient');
+const { cancelRestingBracketIfAny } = require('../bot/shared/cancelRestingBracket');
 
 // GET /services/binance-trades?symbol=BTCUSDT&limit=500
 router.get('/binance-trades', async (req, res) => {
@@ -44,7 +45,7 @@ async function roundToLotSize(client, symbol, qty) {
 // POST /services/binance-order
 // Body: { symbol, side: 'BUY'|'SELL', type: 'MARKET'|'LIMIT', quantity, price? }
 router.post('/binance-order', async (req, res) => {
-  const { symbol, side, type = 'MARKET', quantity, price } = req.body ?? {};
+  const { symbol, side, type = 'MARKET', quantity, price, strategyId } = req.body ?? {};
 
   if (!symbol || !side || !quantity)
     return res.status(400).json({ error: 'symbol, side e quantity são obrigatórios' });
@@ -62,6 +63,14 @@ router.post('/binance-order', async (req, res) => {
 
     let safeQuantity = Number(quantity);
     if (sideUpper === 'SELL') {
+      // A quantidade da posição fica presa (locked) numa OCO resting, se houver — cancela
+      // antes de checar o saldo livre, senão a venda manual só pega o troco (ou falha).
+      try {
+        await cancelRestingBracketIfAny({ symbol: symbolUpper, exchange: 'binance', strategyId });
+      } catch (err) {
+        return res.status(500).json({ error: `Falha ao cancelar OCO resting antes da venda: ${err.message}` });
+      }
+
       const baseAsset = symbolUpper.replace(/USDT$|BTC$|ETH$|BNB$|BUSD$/, '');
       const account   = await client.accountInfo();
       const balance    = account.balances?.find(b => b.asset === baseAsset);

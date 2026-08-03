@@ -5,9 +5,6 @@ import { useI18n } from '../i18n';
 import { useCurrency } from '../contexts/CurrencyContext';
 import { PERIOD_DEFAULT_COLORS, MAX_OVERLAY_SLOTS,
   CURRENCY_PANEL_WIDTH_MIN, CURRENCY_PANEL_WIDTH_MAX, CURRENCY_PANEL_WIDTH_DEFAULT } from '../utils/uiPreferences';
-import { normalizeMaCrossForm } from '../constants/maCrossConfigSchema';
-import { MA_CROSS_FACTORY_DEFAULT } from '../constants/strategyPresets';
-import MaCrossStrategyForm from './MaCrossStrategyForm';
 
 const OVERLAY_SETTING_INTERVALS = ['15m', '30m', '1h', '4h', '1d'];
 const OVERLAY_SETTING_PERIODS   = ['9', '21', '50', '200'];
@@ -42,7 +39,7 @@ export default function SettingsSidebar({ open, onClose }) {
     uiPrefs, setDefaultChartInterval, setCommonChartIntervals, setPanelVisible,
     setFavoriteButtonVisible, favoriteButtonKeys,
     setOverlaySlotsPreference, setCurrencyPanelWidth,
-    setMaCrossDefaultTemplate, setStatsDefaults, setVwapAnchorDefault,
+    setStatsDefaults, setVwapAnchorDefault,
     chartIntervalOptions, panelKeys,
     activeTrades, activeTradesSettings, updateActiveTradesSettings,
     ignoredActiveTrades, dismissActiveTrade, restoreActiveTrade } = useCurrency();
@@ -138,20 +135,6 @@ export default function SettingsSidebar({ open, onClose }) {
   }
 
   const activeTradeSymbols = [...activeTrades.keys()].sort();
-
-  const maCrossTemplate = normalizeMaCrossForm(uiPrefs.maCrossDefaultTemplate ?? MA_CROSS_FACTORY_DEFAULT);
-
-  function patchMaCrossTemplate(path, value) {
-    const keys = path.split('.');
-    const next = { ...maCrossTemplate };
-    let obj = next;
-    for (let i = 0; i < keys.length - 1; i++) {
-      obj[keys[i]] = { ...obj[keys[i]] };
-      obj = obj[keys[i]];
-    }
-    obj[keys[keys.length - 1]] = value;
-    setMaCrossDefaultTemplate(next);
-  }
 
   useEffect(() => {
     if (open && selectedChart?.symbol) {
@@ -604,29 +587,6 @@ export default function SettingsSidebar({ open, onClose }) {
             {uiPrefs.overlaySlots.length >= MAX_OVERLAY_SLOTS && (
               <p className="text-[10px] text-amber-400/70 mt-2">{t('settings.overlay_slots_max', MAX_OVERLAY_SLOTS)}</p>
             )}
-          </div>
-
-          {/* Padrão MA-Cross para novas entradas */}
-          <div>
-            <p className={section}>{t('settings.macross_default')}</p>
-            <p className="text-[10px] text-p5/50 mb-3 leading-relaxed">{t('settings.macross_default_hint')}</p>
-            <div className="rounded-md p-2" style={{ background: '#0f1219', border: '1px solid #2a2d3a' }}>
-              <MaCrossStrategyForm
-                form={maCrossTemplate}
-                patch={patchMaCrossTemplate}
-                symbol=""
-                exchange="binance"
-                hasSavedConfig
-                capital={40}
-              />
-            </div>
-            <button
-              type="button"
-              onClick={() => setMaCrossDefaultTemplate(null)}
-              className="mt-2 text-[10px] text-p5/60 hover:text-white underline transition-colors"
-            >
-              {t('settings.macross_default_reset')}
-            </button>
           </div>
 
           {/* Screener automático MA-Cross (exaustão BB+VWAP 4h) */}

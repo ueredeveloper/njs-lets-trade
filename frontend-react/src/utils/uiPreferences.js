@@ -1,4 +1,3 @@
-import { normalizeMaCrossForm } from '../constants/maCrossConfigSchema';
 
 const STORAGE_KEY = 'lets_trade_ui_prefs';
 
@@ -231,14 +230,6 @@ export function normalizeMaBandsDefaults(raw) {
   };
 }
 
-/** Molde padrão (entrada/filtros/saída) aplicado a novas entradas MA-Cross — editável em
- *  Configurações. `null` = usar o preset de fábrica (backend/bot/ma-cross/tradeConfigSchema.js
- *  espelhado em constants/strategyPresets.js), sem override do usuário. */
-export function normalizeMaCrossDefaultTemplate(raw) {
-  if (!raw) return null;
-  return normalizeMaCrossForm(raw);
-}
-
 export function normalizeOverlaySlots(slots) {
   if (!Array.isArray(slots)) {
     return DEFAULT_OVERLAY_SLOTS.map((s) => ({ ...s }));
@@ -275,7 +266,6 @@ export const DEFAULT_UI_PREFS = {
   vwapAnchorDefault: normalizeVwapAnchor(DEFAULT_VWAP_ANCHOR),
   activeIndicators: [...DEFAULT_ACTIVE_INDICATORS],
   currencyPanelWidth: CURRENCY_PANEL_WIDTH_DEFAULT,
-  maCrossDefaultTemplate: null,
   statsDefaults: normalizeStatsDefaults(DEFAULT_STATS),
 };
 
@@ -294,7 +284,6 @@ function cloneDefaults() {
     vwapAnchorDefault: normalizeVwapAnchor(DEFAULT_VWAP_ANCHOR),
     activeIndicators: [...DEFAULT_ACTIVE_INDICATORS],
     currencyPanelWidth: CURRENCY_PANEL_WIDTH_DEFAULT,
-    maCrossDefaultTemplate: null,
     statsDefaults: normalizeStatsDefaults(DEFAULT_STATS),
   };
 }
@@ -350,9 +339,6 @@ export function loadUiPreferences() {
     }
     if (parsed.currencyPanelWidth !== undefined) {
       result.currencyPanelWidth = normalizeCurrencyPanelWidth(parsed.currencyPanelWidth);
-    }
-    if (parsed.maCrossDefaultTemplate !== undefined) {
-      result.maCrossDefaultTemplate = normalizeMaCrossDefaultTemplate(parsed.maCrossDefaultTemplate);
     }
     if (parsed.statsDefaults) {
       result.statsDefaults = normalizeStatsDefaults(parsed.statsDefaults);

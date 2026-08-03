@@ -71,6 +71,28 @@ function exitSignalFields(exitResult) {
   };
 }
 
+/** Diagnóstico do sinal de ENTRADA — preenchido pelos bots com espera de pullback entre
+ *  sinal e compra (ma-cross e vwap-bands passam entryMeta.signalOpenTime/signalPrice; ver
+ *  ma-cross-bot.js / vwap-bands-bot.js). Guarda o candle onde o cruzamento/toque de banda
+ *  aconteceu, que pode ser bem antes de buy_time. Bots sem espera (amap, swing) ficam com
+ *  essas colunas null — lá o candle da compra já é o do sinal. */
+function entrySignalFields(entryMeta) {
+  const signalTime = entryMeta?.signalOpenTime;
+  return {
+    entry_signal_time: signalTime ? new Date(Number(signalTime)).toISOString() : null,
+    entry_signal_price: entryMeta?.signalPrice ?? null,
+  };
+}
+
+/** Lê o sinal de entrada gravado no state (antes de ser resetado) pra copiar no
+ *  registro do trade fechado — ver comentário de entrySignalFields acima. */
+function entrySignalFieldsFromState(state) {
+  return {
+    entry_signal_time: state?.entry_signal_time ?? null,
+    entry_signal_price: state?.entry_signal_price != null ? parseFloat(state.entry_signal_price) : null,
+  };
+}
+
 function createTradeExecution({
   botLabel, buildReasonLines, computeStopLossFloor = defaultComputeStopLossFloor,
   extraBuyLogLines, extraInitialRulesState,
@@ -112,6 +134,7 @@ function createTradeExecution({
       await saveState(rowId, {
         phase: 'WATCHING',
         buy_price: null, buy_qty: null, buy_usdt: null, buy_time: null, rsi_entry: null,
+        entry_signal_time: null, entry_signal_price: null,
         rules_state: postExitRulesState(exitTime),
       }, log);
     }
@@ -162,6 +185,7 @@ function createTradeExecution({
       buy_usdt: quoteQty, buy_time: buyTime,
       rsi_entry: entryMeta.ma1,
       rules_state: session.rulesState,
+      ...entrySignalFields(entryMeta),
     }, log);
 
     const reasonLines = buildReasonLines ? buildReasonLines(strategy.config, entryMeta) : [];
@@ -220,6 +244,7 @@ function createTradeExecution({
       capital_before: capitalBefore, capital_after: capitalAfter,
       rsi_entry: parseFloat(state.rsi_entry ?? 0), rsi_exit: exitResult?.ma1 ?? 0,
       exit_reason: exitResult?.reason ?? reasonLabel ?? 'PANEL_REMOVED',
+      ...entrySignalFieldsFromState(state),
       ...exitSignalFields(exitResult),
     });
 
@@ -228,6 +253,7 @@ function createTradeExecution({
     await saveState(rowId, {
       capital: capitalAfter, phase: 'WATCHING',
       buy_price: null, buy_qty: null, buy_usdt: null, buy_time: null, rsi_entry: null,
+      entry_signal_time: null, entry_signal_price: null,
       rules_state: postExitRulesState(exitTime),
     }, log);
     if (cooldownH > 0) {
@@ -298,6 +324,7 @@ function createTradeExecution({
         capital_before: capitalBefore, capital_after: est.capitalAfter,
         rsi_entry: parseFloat(state.rsi_entry ?? 0), rsi_exit: exitResult?.ma1 ?? 0,
         exit_reason: 'DUST',
+        ...entrySignalFieldsFromState(state),
         ...exitSignalFields(exitResult),
       });
 
@@ -305,6 +332,7 @@ function createTradeExecution({
       await saveState(rowId, {
         capital: est.capitalAfter, phase: 'WATCHING',
         buy_price: null, buy_qty: null, buy_usdt: null, buy_time: null, rsi_entry: null,
+        entry_signal_time: null, entry_signal_price: null,
         rules_state: postExitRulesState(exitTime),
       }, log);
 

@@ -426,26 +426,26 @@ function AppContent() {
                 onClick={toggleMaximizeChart}
                 title={layoutMode === 'chart' ? 'Dividir tela' : 'Maximizar gráfico'}
                 aria-label={layoutMode === 'chart' ? 'Dividir tela' : 'Maximizar gráfico'}
-                className={`flex items-center justify-center w-9 h-9 md:w-5 md:h-5 rounded border transition-colors touch-manipulation shadow ${
+                className={`flex items-center justify-center w-9 h-9 md:w-7 md:h-7 rounded border transition-colors touch-manipulation shadow ${
                   layoutMode === 'chart'
                     ? 'bg-p4 text-white border-p4'
                     : 'text-p4 bg-p1/90 border-p2 hover:text-white hover:bg-p3/50'
                 }`}
               >
-                <MaximizeIcon active={layoutMode === 'chart'} kind="chart" className="w-5 h-5 md:w-3 md:h-3 shrink-0" />
+                <MaximizeIcon active={layoutMode === 'chart'} kind="chart" className="w-5 h-5 md:w-4 md:h-4 shrink-0" />
               </button>
               <button
                 type="button"
                 onClick={toggleMaximizePanel}
                 title={layoutMode === 'panel' ? 'Dividir tela' : 'Maximizar painel'}
                 aria-label={layoutMode === 'panel' ? 'Dividir tela' : 'Maximizar painel'}
-                className={`flex items-center justify-center w-9 h-9 md:w-5 md:h-5 rounded border transition-colors touch-manipulation shadow ${
+                className={`flex items-center justify-center w-9 h-9 md:w-7 md:h-7 rounded border transition-colors touch-manipulation shadow ${
                   layoutMode === 'panel'
                     ? 'bg-p4 text-white border-p4'
                     : 'text-p4 bg-p1/90 border-p2 hover:text-white hover:bg-p3/50'
                 }`}
               >
-                <MaximizeIcon active={layoutMode === 'panel'} kind="panel" className="w-5 h-5 md:w-3 md:h-3 shrink-0" />
+                <MaximizeIcon active={layoutMode === 'panel'} kind="panel" className="w-5 h-5 md:w-4 md:h-4 shrink-0" />
               </button>
             </div>
           </div>

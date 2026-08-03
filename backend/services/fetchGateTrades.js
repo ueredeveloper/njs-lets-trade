@@ -2,6 +2,7 @@ const router = require('express').Router();
 const { gateRequest } = require('../gate/getGateClient');
 const { toGateSymbol } = require('../utils/toGateSymbol');
 const { getGatePairMeta, floorGateAmount } = require('../bot/gate/gateMarketSell');
+const { cancelRestingBracketIfAny } = require('../bot/shared/cancelRestingBracket');
 
 // GET /services/gate-trades?symbol=FARTCOINUSDT&limit=500
 router.get('/gate-trades', async (req, res) => {
@@ -53,7 +54,7 @@ router.get('/gate-account', async (req, res) => {
 // POST /services/gate-order
 // Body: { symbol, side: 'buy'|'sell', type?: 'market'|'limit', amount, price? }
 router.post('/gate-order', async (req, res) => {
-  const { symbol, side, type = 'market', amount, price } = req.body ?? {};
+  const { symbol, side, type = 'market', amount, price, strategyId } = req.body ?? {};
 
   if (!symbol || !side || !amount)
     return res.status(400).json({ error: 'symbol, side e amount são obrigatórios' });
@@ -69,6 +70,15 @@ router.post('/gate-order', async (req, res) => {
 
     let safeAmount = Number(amount);
     if (side.toLowerCase() === 'sell') {
+      // A quantidade da posição fica presa nas ordens de gatilho (bracket TP/SL emulada),
+      // se houver — cancela antes de checar o saldo livre, senão a venda manual só pega o
+      // troco (ou falha).
+      try {
+        await cancelRestingBracketIfAny({ symbol: symbol.toUpperCase(), exchange: 'gate', strategyId });
+      } catch (err) {
+        return res.status(500).json({ error: `Falha ao cancelar bracket resting antes da venda: ${err.message}` });
+      }
+
       const baseAsset = currencyPair.split('_')[0];
       const accounts  = await gateRequest('GET', '/spot/accounts', { currency: baseAsset });
       const free      = accounts?.[0] ? parseFloat(accounts[0].available) : safeAmount;

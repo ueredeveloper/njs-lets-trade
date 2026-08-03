@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { placeBinanceOrder, placeGateOrder } from '../services/api';
+import { normalizeStrategyId } from '../constants/strategyPresets';
 
 const MT_COLOR = '#22d3ee';
 
@@ -13,14 +14,15 @@ export default function MultitradeSellModal({ entry, onSold, onCancel }) {
   const symbol = entry.symbol;
   const exchange = entry.exchange === 'gate' ? 'gate' : 'binance';
   const qty = entry.buyQty;
+  const strategyId = normalizeStrategyId(entry.strategyId);
 
   async function handleConfirm() {
     setSelling(true);
     setError(null);
     try {
       const order = exchange === 'gate'
-        ? await placeGateOrder({ symbol, side: 'sell', type: 'market', amount: qty })
-        : await placeBinanceOrder({ symbol, side: 'SELL', type: 'MARKET', quantity: qty });
+        ? await placeGateOrder({ symbol, side: 'sell', type: 'market', amount: qty, strategyId })
+        : await placeBinanceOrder({ symbol, side: 'SELL', type: 'MARKET', quantity: qty, strategyId });
       await onSold(order);
     } catch (err) {
       setError(err?.message ?? 'Falha ao enviar ordem de venda');

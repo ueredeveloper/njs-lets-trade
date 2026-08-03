@@ -543,7 +543,7 @@ async function enrichMultitradeEntriesWithState(entries) {
   const symbols = [...new Set(entries.map(e => e.symbol))];
   const { data: states, error } = await supabase
     .from('rsi_multi_bot_state')
-    .select('symbol, strategy_id, phase, buy_time, buy_price, buy_qty, rules_state')
+    .select('symbol, strategy_id, phase, buy_time, buy_price, buy_qty, entry_signal_time, entry_signal_price, rules_state')
     .in('symbol', symbols);
   if (error) {
     console.warn('[supabase] enrichMultitradeEntriesWithState:', error.message);
@@ -561,6 +561,8 @@ async function enrichMultitradeEntriesWithState(entries) {
       buyPrice:   st?.buy_price != null ? Number(st.buy_price) : null,
       buyQty:     st?.buy_qty != null ? Number(st.buy_qty) : null,
       buyUsdt:    st?.buy_usdt != null ? Number(st.buy_usdt) : null,
+      entrySignalTime:  st?.entry_signal_time ?? null,
+      entrySignalPrice: st?.entry_signal_price != null ? Number(st.entry_signal_price) : null,
       activeSetup: parseActiveSetup(st?.rules_state),
     };
   });

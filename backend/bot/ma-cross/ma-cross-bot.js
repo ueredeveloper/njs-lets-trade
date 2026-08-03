@@ -417,7 +417,15 @@ async function tick(rowId, adapter, strategy, log, session) {
     log(`${G}📍 Pullback confirmado (${ready.entryDesc}) — comprando ${parseFloat(entryCapital).toFixed(2)} USDT${X}`);
     const bought = await executeBuy({
       rowId, adapter, strategy, log, session, state,
-      entryMeta: ready, capital: entryCapital, totalCapital: capital, strategyId, symbol,
+      entryMeta: {
+        ...ready,
+        // Sinal = candle do cruzamento (pending.signalOpenTime), não o candle da compra
+        // (que só vem depois do pullback) — ver comentário de entrySignalFields em
+        // tradeExecution.js.
+        signalOpenTime: pending.signalOpenTime,
+        signalPrice: ready.signalClose ?? pending.signalClose,
+      },
+      capital: entryCapital, totalCapital: capital, strategyId, symbol,
     });
     return { phase: bought ? 'BOUGHT' : 'PENDING' };
   }
@@ -457,7 +465,12 @@ async function tick(rowId, adapter, strategy, log, session) {
       log(`${G}📍 COMPRA imediata (${immediateCheck.entryDesc}) — ${parseFloat(entryCapital).toFixed(2)} USDT${X}`);
       const bought = await executeBuy({
         rowId, adapter, strategy, log, session, state,
-        entryMeta: immediateCheck, capital: entryCapital, totalCapital: capital, strategyId, symbol,
+        entryMeta: {
+          ...immediateCheck,
+          signalOpenTime: immediateCheck.crossOpenTime ?? null,
+          signalPrice: immediateCheck.close ?? null,
+        },
+        capital: entryCapital, totalCapital: capital, strategyId, symbol,
       });
       return { phase: bought ? 'BOUGHT' : 'WATCHING' };
     }
@@ -473,7 +486,12 @@ async function tick(rowId, adapter, strategy, log, session) {
       log(`${G}📍 COMPRA imediata (${kindLabel}) — ${capLabel} — ${parseFloat(entryCapital).toFixed(2)} USDT${X}`);
       const bought = await executeBuy({
         rowId, adapter, strategy, log, session, state,
-        entryMeta: entryCheck, capital: entryCapital, totalCapital: capital, strategyId, symbol,
+        entryMeta: {
+          ...entryCheck,
+          signalOpenTime: entryCheck.crossOpenTime ?? null,
+          signalPrice: entryCheck.close ?? null,
+        },
+        capital: entryCapital, totalCapital: capital, strategyId, symbol,
       });
       return { phase: bought ? 'BOUGHT' : 'WATCHING' };
     }

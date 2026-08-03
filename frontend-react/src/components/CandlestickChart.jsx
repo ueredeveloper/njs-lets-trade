@@ -12,7 +12,7 @@ import Tooltip from './Tooltip';
 import { hasAnyChartPanelButton } from '../utils/chartPanelButtons';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { DEFAULT_OVERLAY_SLOTS, DEFAULT_ACTIVE_INDICATORS, BB_PERIOD_OPTIONS, BB_STDDEV_OPTIONS, DEFAULT_SR_INTERVAL, DEFAULT_PPHL_INTERVAL, DEFAULT_CHOP_INTERVAL, DEFAULT_COMMON_CHART_INTERVALS } from '../utils/uiPreferences';
-import { CHART_VIEW, INTERVAL_MS, computeZoomWindow, buildFixedDataZoom, buildInsideDataZoom, computeCandleLimitFromTime, isTradePanelChartView } from '../utils/chartView';
+import { CHART_VIEW, INTERVAL_MS, computeZoomWindow, buildFixedDataZoom, buildInsideDataZoom, computeCandleLimitFromTime, isTradePanelChartView, computeManualWheelZoom } from '../utils/chartView';
 
 const LIMIT = DEFAULT_CANDLE_LIMIT;
 const LAST_CANDLE_PRESETS = [20, 50, 100];
@@ -1137,9 +1137,11 @@ function ChartIndicatorPanel({
 }) {
   const { t } = useI18n();
   const isMobile = useIsMobile();
+  const { selectedChart, gateFavorites } = useCurrency();
   const outerRef = useRef(null);
   const masonryRef = useRef(null);
   const [panelSize, setPanelSize] = useState({ width: PANEL_MIN_WIDTH, height: 320 });
+  const [panelTab, setPanelTab] = useState('indicators'); // 'indicators' | 'executed'
 
   const tileDefs = useMemo(() => {
     const showKey = (key) => panelButtons[key] !== false;
@@ -1266,23 +1268,43 @@ function ChartIndicatorPanel({
             gap: PANEL_GAP,
           }}
         >
-          {/* Cabeçalho do painel lateral */}
-          <div style={{
-            textAlign: 'center',
-            fontSize: 7,
-            fontFamily: 'monospace',
-            color: '#475569',
-            letterSpacing: 2,
-            textTransform: 'uppercase',
-            flexShrink: 0,
-            userSelect: 'none',
-            lineHeight: 1,
-            paddingBottom: 1,
-          }}>
-            {t('chart.panel.overlay_title')}
+          {/* Abas do painel lateral: Indicadores / Executados */}
+          <div style={{ display: 'flex', flexShrink: 0, gap: 2 }}>
+            {[
+              { id: 'indicators', label: t('chart.panel.tab_indicators') },
+              { id: 'executed', label: t('chart.panel.tab_executed') },
+            ].map(({ id, label }) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setPanelTab(id)}
+                style={{
+                  flex: 1,
+                  textAlign: 'center',
+                  fontSize: 9,
+                  fontFamily: 'monospace',
+                  letterSpacing: 2,
+                  textTransform: 'uppercase',
+                  userSelect: 'none',
+                  lineHeight: 1,
+                  padding: '7px 2px',
+                  borderRadius: 3,
+                  border: 'none',
+                  cursor: 'pointer',
+                  color: panelTab === id ? '#e2e8f0' : '#475569',
+                  background: panelTab === id ? '#334155' : 'transparent',
+                }}
+              >
+                {label}
+              </button>
+            ))}
           </div>
 
-          {layout.indicatorPlacements.length > 0 && (
+          {panelTab === 'executed' ? (
+            <div style={{ flex: 1, minHeight: 0, width: '100%', display: 'flex', flexDirection: 'column' }}>
+              <TradeHistoryPanel symbol={selectedChart?.symbol} gateFavorites={gateFavorites} />
+            </div>
+          ) : layout.indicatorPlacements.length > 0 && (
             <div style={{
               flex: layout.blockPlacements.length > 0 ? layout.indicatorRowUnits : 1,
               minHeight: layout.indicatorRowUnits * MIN_ROW_UNIT_PX,
@@ -1309,7 +1331,7 @@ function ChartIndicatorPanel({
             </div>
           )}
 
-          {layout.blockPlacements.map((tile) => (
+          {panelTab !== 'executed' && layout.blockPlacements.map((tile) => (
             <div
               key={tile.key}
               style={{
@@ -1757,6 +1779,29 @@ function buildPivotMarkers(pivots, candlesticks, DL, LEFT_PAD, chartInterval) {
   return { highs, lows };
 }
 
+/** Triângulo apontando para baixo acima do candle do sinal (RSI/MA) que motivou a
+ *  entrada — a linha vertical tracejada de 'signal' (buildMultitradeMarkLines) cruza
+ *  a altura toda do gráfico e fica difícil de associar a um candle específico quando
+ *  há vários candles ou outras linhas na tela; o triângulo fica preso ao candle certo. */
+function buildSignalMarkers(candlesticks, markers, DL, LEFT_PAD, chartInterval) {
+  if (!markers?.length || !candlesticks?.length) return [];
+  const maxDiffMs = (INTERVAL_MS[chartInterval] ?? 900_000) * 1.5;
+  const offset = candlesticks.length - DL;
+  const points = [];
+  markers.forEach((m) => {
+    if (m.side !== 'signal' || m.time == null) return;
+    const absIdx = nearestCandleIdx(candlesticks, m.time);
+    const diff = Math.abs(Number(candlesticks[absIdx].openTime) - m.time);
+    if (diff > maxDiffMs) return;
+    const localIdx = absIdx - offset;
+    if (localIdx < 0 || localIdx >= DL) return;
+    const high = Number(candlesticks[absIdx].high);
+    if (!Number.isFinite(high)) return;
+    points.push([localIdx + LEFT_PAD, high]);
+  });
+  return points;
+}
+
 function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAverage, ma50, ma9, ma21, rsi }, colors, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = [], overlayConfigs = [], multitradeMarkers = [], chartLeftPad = CHART_LEFT_MARGIN, buyInfo = null, stopLossConfig = null, targetConfig = null, chartRightPad = CHART_PRICE_PAD + CHART_LEFT_MARGIN, bollingerConfig = null, srConfig = null, pphlConfig = null, vwapConfig = null, chopConfig = null) {
   const showMa9      = activeIndicators.includes('ma9');
   const showMa21     = activeIndicators.includes('ma21');
@@ -1878,6 +1923,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
   const mtMarkData = buildMultitradeMarkLines(candlesticks, interval, multitradeMarkers, DL, LEFT_PAD);
   const srMarkData = showSr ? buildSrMarkLines(srConfig?.levels) : [];
   const pivotMarkers = showPphl ? buildPivotMarkers(pphlConfig?.points, candlesticks, DL, LEFT_PAD, interval) : { highs: [], lows: [] };
+  const signalMarkers = buildSignalMarkers(candlesticks, multitradeMarkers, DL, LEFT_PAD, interval);
   const allMarkLineData = [...dayBreakData, ...periodMarkData, ...tradeMarkData, ...mtMarkData, ...srMarkData];
 
   const lastClose = candlesticks.length ? parseFloat(candlesticks[candlesticks.length - 1].close) : null;
@@ -2028,6 +2074,19 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
       itemStyle: { color: C_UP },
       z: 5,
     }] : []),
+    ...(signalMarkers.length ? [{
+      name: 'Sinal',
+      type: 'scatter',
+      xAxisIndex: idx, yAxisIndex: idx,
+      data: signalMarkers,
+      symbol: 'triangle',
+      symbolSize: 9,
+      symbolRotate: 180,
+      symbolOffset: [0, -10],
+      itemStyle: { color: '#f59e0b' },
+      z: 6,
+      silent: true,
+    }] : []),
     ...(buyPnlSeries ? [{ ...buyPnlSeries, xAxisIndex: idx, yAxisIndex: idx }] : []),
     ...(stopLossSeries ? [{ ...stopLossSeries, xAxisIndex: idx, yAxisIndex: idx }] : []),
   ];
@@ -2159,247 +2218,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
   };
 }
 
-// ── Gráfico Matrix: área de preço + RSI, tema terminal verde ─────────────────
-
-function buildMatrixOption({ symbol, interval, candlesticks, rsi }, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = [], chartLeftPad = CHART_LEFT_MARGIN, buyInfo = null, stopLossConfig = null, chartRightPad = CHART_PRICE_PAD + CHART_LEFT_MARGIN, chopConfig = null) {
-  const showRsi   = activeIndicators.includes('rsi');
-  const showRsi50 = activeIndicators.includes('rsi50');
-  const showRsi80 = activeIndicators.includes('rsi80');
-  const showChopZone = activeIndicators.includes('chopZone');
-  const showStopLoss = activeIndicators.includes('stopLoss');
-  const subpanelIds   = [...(showRsi ? ['rsi'] : []), ...(showChopZone ? ['chopZone'] : [])];
-  const subpanelCount = subpanelIds.length;
-  const DL      = Math.min(displayLimit, candlesticks.length);
-  const LEFT_PAD  = 1;
-  const RIGHT_PAD = 3;
-  const INTRADAY = !['1d', '3d', '1w'].includes(interval);
-
-  const G        = '#22c55e';                       // verde Matrix
-  const G_DIM    = 'rgba(34,197,94,0.08)';
-  const G_LABEL  = 'rgba(34,197,94,0.38)';
-  const BG       = '#050d0a';
-
-  const xData = (() => {
-    const slicedDates = candlesticks.slice(-DL).map(c => convertOpenTime(c.openTime, interval));
-    return [...new Array(LEFT_PAD).fill(''), ...slicedDates, ...new Array(RIGHT_PAD).fill('')];
-  })();
-
-  // Data/hora completa por candle (rótulo do eixo é abreviado) — usado no tooltip.
-  const xFullData = (() => {
-    const slicedFull = candlesticks.slice(-DL).map(c => fmtDate(Number(c.openTime)));
-    return [...new Array(LEFT_PAD).fill(''), ...slicedFull, ...new Array(RIGHT_PAD).fill('')];
-  })();
-
-  // separadores de dia (em tom verde)
-  const dayBreakData = (() => {
-    if (!INTRADAY) return [];
-    const visible = candlesticks.slice(-DL);
-    const result  = [];
-    let prevDay   = null;
-    visible.forEach((c, i) => {
-      const day = new Date(Number(c.openTime)).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
-      if (prevDay !== null && day !== prevDay) {
-        result.push({
-          xAxis: i + LEFT_PAD,
-          lineStyle: { color: 'rgba(34,197,94,0.10)', width: 1, type: 'solid' },
-          label: { show: true, formatter: day.slice(0, 5), color: 'rgba(34,197,94,0.28)', fontSize: 9, position: 'insideEndTop', padding: [2, 3] },
-        });
-      }
-      prevDay = day;
-    });
-    return result;
-  })();
-
-  // linhas de zoom de período
-  const periodMarkData = (() => {
-    if (!zoomPeriod) return [];
-    const startMs  = new Date(zoomPeriod.startDate).getTime();
-    const endMs    = new Date(zoomPeriod.endDate).getTime();
-    const startIdx = candlesticks.findIndex(c => Number(c.openTime) >= startMs);
-    const endIdx   = candlesticks.reduce((best, c, i) => Number(c.openTime) <= endMs ? i : best, -1);
-    const fmt = iso => new Date(iso).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(',', '');
-    const mk  = (idx, label) => ({ xAxis: idx + LEFT_PAD, lineStyle: { color: 'rgba(255,255,255,0.35)', width: 1, type: 'dashed' }, label: { show: true, formatter: label, color: 'rgba(255,255,255,0.65)', fontSize: 11, fontWeight: 'bold', position: 'insideEndTop', padding: [2, 4] } });
-    const data = [];
-    if (startIdx !== -1) data.push(mk(startIdx, fmt(zoomPeriod.startDate)));
-    if (endIdx   !== -1) data.push(mk(endIdx,   fmt(zoomPeriod.endDate)));
-    return data;
-  })();
-
-  // linhas de compra
-  const fmtTradeDate = ms => {
-    const d    = new Date(ms);
-    const date = d.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit' });
-    const time = d.toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit' });
-    return `${date} ${time}`;
-  };
-  const tradeMarkData = (() => {
-    if (!tradeTimes.length) return [];
-    const offset = candlesticks.length - DL;
-    return tradeTimes.flatMap(tradeMs => {
-      const idx      = candlesticks.reduce((best, c, i) => Math.abs(Number(c.openTime) - tradeMs) < Math.abs(Number(candlesticks[best].openTime) - tradeMs) ? i : best, 0);
-      const localIdx = idx - offset;
-      if (localIdx < 0) return [];
-      return [{ xAxis: localIdx + LEFT_PAD, lineStyle: { color: '#3b82f6', width: 1.5, type: 'solid' }, label: { show: true, formatter: `compra ${fmtTradeDate(tradeMs)}`, color: '#3b82f6', fontSize: 9, position: 'insideStartTop', padding: [3, 5] } }];
-    });
-  })();
-
-  const allMarkLineData = [...dayBreakData, ...periodMarkData, ...tradeMarkData];
-  const zoomWindow = zoomPeriod ? computeZoomWindow(candlesticks, zoomPeriod) : null;
-
-  const closes    = candlesticks.slice(-DL).map(c => c.close);
-  const lastClose = candlesticks.length ? parseFloat(candlesticks[candlesticks.length - 1].close) : null;
-  const buyPnlSeries = buildBuyPnlSeries(buyInfo, candlesticks, DL, LEFT_PAD, RIGHT_PAD, lastClose);
-  const stopLossSeries = showStopLoss
-    ? buildStopLossLineSeries(buyInfo, stopLossConfig, candlesticks, DL, LEFT_PAD, RIGHT_PAD)
-    : null;
-  const finalMarkLine = {
-    silent: true, symbol: 'none',
-    data: [
-      ...allMarkLineData,
-      ...(lastClose != null ? [{
-        yAxis: lastClose,
-        lineStyle: { color: 'rgba(0,0,0,0)' },
-        label: {
-          show: true, position: 'end', align: 'right', distance: 2,
-          formatter: fmtChartPrice(lastClose),
-          color: BG, fontSize: 10, fontWeight: 'bold',
-          backgroundColor: G, padding: [2, 5], borderRadius: 2, fontFamily: 'monospace',
-        }
-      }] : [])
-    ]
-  };
-  const alignMatrixSeries = (arr) => {
-    const raw = arr?.slice(-DL) ?? [];
-    return [...new Array(LEFT_PAD + Math.max(0, DL - raw.length)).fill(null), ...raw, ...new Array(RIGHT_PAD).fill(null)];
-  };
-  const rsiData  = alignMatrixSeries(rsi);
-  const chopData = alignMatrixSeries(alignPointsToCandles(candlesticks, chopConfig?.points ?? []));
-
-  const axisBase = (gridIndex, showLabel) => ({
-    gridIndex,
-    type: 'category',
-    data: xData,
-    boundaryGap: false,
-    axisLine:  { lineStyle: { color: G_DIM } },
-    axisLabel: { show: showLabel, color: G_LABEL, fontSize: 9 },
-    splitLine: { show: false },
-    axisTick:  { show: false },
-  });
-
-  const yAxisBase = (gridIndex, extra = {}) => ({
-    gridIndex,
-    scale: true,
-    position: 'right',
-    axisLine:  { lineStyle: { color: G_DIM } },
-    axisLabel: { color: G_LABEL, fontSize: 9 },
-    splitLine: { lineStyle: { color: G_DIM, type: 'dashed' } },
-    ...extra,
-  });
-
-  return {
-    backgroundColor: BG,
-    title: {
-      text: symbol, subtext: interval, left: chartLeftPad, top: 8,
-      textStyle:    { color: G,         fontSize: 15, fontWeight: 'bold', fontFamily: 'monospace' },
-      subtextStyle: { color: G_LABEL,   fontSize: 11 },
-    },
-    tooltip: {
-      trigger: 'axis',
-      backgroundColor: '#0d1f14ee',
-      borderColor: G_DIM,
-      textStyle: { color: G, fontSize: 11 },
-      axisPointer: { animation: false, type: 'cross', lineStyle: { color: 'rgba(34,197,94,0.3)', width: 1 } },
-      formatter: (params) => {
-        const idx = params[0]?.dataIndex;
-        const time = (idx != null ? xFullData[idx] : null) || params[0]?.axisValue || '';
-        return `<div style="font-family:monospace;font-size:11px">${time}</div>`;
-      },
-    },
-    grid: (() => {
-      if (subpanelCount === 0) return [{ top: 40, bottom: 20, left: chartLeftPad, right: chartRightPad }];
-      const rects = subpanelCount === 1
-        ? [{ top: 40, bottom: '26%' }, { top: '78%', bottom: 20 }]
-        : [{ top: 40, bottom: '50%' }, { top: '58%', bottom: '26%' }, { top: '78%', bottom: 20 }];
-      return rects.map(g => ({ ...g, left: chartLeftPad, right: chartRightPad }));
-    })(),
-    xAxis: subpanelCount === 0
-      ? { ...axisBase(0, true) }
-      : [
-          { ...axisBase(0, false) },
-          ...subpanelIds.map((_, i) => axisBase(i + 1, i + 1 === subpanelCount)),
-        ],
-    yAxis: subpanelCount === 0
-      ? yAxisBase(0)
-      : [
-          yAxisBase(0),
-          ...subpanelIds.map((id, i) => yAxisBase(i + 1, {
-            scale: false, min: 0, max: 100, interval: id === 'chopZone' ? 20 : 30,
-          })),
-        ],
-    dataZoom: zoomWindow
-      ? buildFixedDataZoom(zoomWindow.startPct, zoomWindow.endPct, [0, ...subpanelIds.map((_, i) => i + 1)])
-      : buildInsideDataZoom([0, ...subpanelIds.map((_, i) => i + 1)]),
-    series: [
-      {
-        name: 'Preço',
-        type: 'line',
-        xAxisIndex: 0, yAxisIndex: 0,
-        data: [...new Array(LEFT_PAD).fill(null), ...closes],
-        showSymbol: false,
-        lineStyle: { color: G, width: 1.5 },
-        areaStyle: {
-          color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
-            colorStops: [{ offset: 0, color: 'rgba(34,197,94,0.28)' }, { offset: 1, color: 'rgba(34,197,94,0.02)' }] },
-        },
-        markLine: finalMarkLine,
-      },
-      ...(buyPnlSeries ? [{ ...buyPnlSeries, xAxisIndex: 0, yAxisIndex: 0 }] : []),
-      ...(stopLossSeries ? [{ ...stopLossSeries, xAxisIndex: 0, yAxisIndex: 0 }] : []),
-      ...subpanelIds.flatMap((id, i) => {
-        const gridIdx = i + 1;
-        if (id === 'rsi') {
-          if (!rsiData.length) return [];
-          return [{
-            name: 'RSI',
-            type: 'line',
-            xAxisIndex: gridIdx, yAxisIndex: gridIdx,
-            data: rsiData,
-            showSymbol: false,
-            lineStyle: { color: '#4ade80', width: 1.2 },
-            markLine: {
-              silent: true, symbol: 'none',
-              data: [
-                { yAxis: 30, lineStyle: { color: '#ef5350', type: 'dashed', width: 1 }, label: { formatter: '30', color: '#ef5350', fontSize: 9, position: 'end' } },
-                ...(showRsi50 ? [{ yAxis: 50, lineStyle: { color: '#facc15', type: 'dashed', width: 1, opacity: 0.6 }, label: { formatter: '50', color: '#facc15', fontSize: 9, position: 'end' } }] : []),
-                { yAxis: 70, lineStyle: { color: G,         type: 'dashed', width: 1 }, label: { formatter: '70', color: G,         fontSize: 9, position: 'end' } },
-                ...(showRsi80 ? [{ yAxis: 80, lineStyle: { color: '#fb923c', type: 'dashed', width: 1 }, label: { formatter: '80', color: '#fb923c', fontSize: 9, position: 'end' } }] : []),
-              ],
-            },
-          }];
-        }
-        // chopZone — Choppiness Index (14): <38.2 tendência (verde), >61.8 lateral/choppy (vermelho)
-        if (!chopData.length) return [];
-        return [{
-          name: `CHOP@${chopConfig?.interval ?? ''}`,
-          type: 'line',
-          xAxisIndex: gridIdx, yAxisIndex: gridIdx,
-          data: chopData,
-          showSymbol: false,
-          lineStyle: { color: '#f59e0b', width: 1.2 },
-          markLine: {
-            silent: true, symbol: 'none',
-            data: [
-              { yAxis: 38.2, lineStyle: { color: G,         type: 'dashed', width: 1 }, label: { formatter: '38', color: G,         fontSize: 9, position: 'end' } },
-              { yAxis: 61.8, lineStyle: { color: '#ef5350', type: 'dashed', width: 1 }, label: { formatter: '62', color: '#ef5350', fontSize: 9, position: 'end' } },
-            ],
-          },
-        }];
-      }),
-    ],
-  };
-}
-
-// ── Painel de histórico de trades (aba Matrix) ───────────────────────────────
+// ── Painel de histórico de trades (aba Executados) ───────────────────────────
 
 function fmtDate(ms) {
   return new Date(ms).toLocaleString('pt-BR', {
@@ -2606,7 +2425,7 @@ function TradeHistoryPanel({ symbol, gateFavorites }) {
 export default function CandlestickChart() {
   const { selectedChart, setSelectedChart, chartZoom, setChartZoom, chartTradeMarkers, chartViewSource,
     chartCandleWindowReset,
-    multitradeChartFocus, tradePurchases, allTrades, gateFavorites, chartInterval: savedInterval, setChartInterval,
+    multitradeChartFocus, tradePurchases, allTrades, chartInterval: savedInterval, setChartInterval,
     chartPanelButtons, uiPrefs, setMaBandsDefaults, setBollingerBandsDefaults, setSrIntervalDefault, setPphlIntervalDefault, setChopIntervalDefault, setVwapDefaults, setActiveIndicatorsPreference,
     multitradeFavorites, fiveMTradeFavorites, activeTrades } = useCurrency();
   const { t } = useI18n();
@@ -2617,7 +2436,7 @@ export default function CandlestickChart() {
   const [showAllIntervals, setShowAllIntervals] = useState(false);
   const [themeTick, setThemeTick] = useState(0);
   const activeIndicators = uiPrefs.activeIndicators ?? [...DEFAULT_ACTIVE_INDICATORS];
-  const [activeTab, setActiveTab] = useState('chart'); // 'chart' | 'matrix'
+  const [activeTab, setActiveTab] = useState('chart'); // 'chart' | 'rules'
   const [tradeOverlaySlots, setTradeOverlaySlots] = useState(null);
   const [quickEmaGroups, setQuickEmaGroups] = useState(loadQuickEmaGroups);
   const addQuickEmaGroup = useCallback(() => {
@@ -3530,6 +3349,37 @@ export default function CandlestickChart() {
   const chartLeftPad = CHART_LEFT_MARGIN;
   const chartRightPad = CHART_PRICE_PAD + CHART_LEFT_MARGIN + panelPad;
 
+  // Zoom horizontal por scroll manual (nativo do ECharts desligado em buildInsideDataZoom/
+  // buildFixedDataZoom — ver chartView.js) — passo pequeno e fixo, ancorado no cursor, pra
+  // crescer aos poucos em vez de pular direto de 1x pra 5x.
+  useEffect(() => {
+    const wrap = chartWrapRef.current;
+    if (!wrap) return undefined;
+
+    function handleWheel(e) {
+      if (e.shiftKey) return; // shift+scroll continua sendo o zoom vertical de preço (nativo)
+      const inst = chartRef.current?.getEchartsInstance?.();
+      if (!inst) return;
+      const dz = inst.getOption?.()?.dataZoom?.[0];
+      if (!dz || !Number.isFinite(dz.start) || !Number.isFinite(dz.end)) return;
+
+      e.preventDefault();
+      const rect = wrap.getBoundingClientRect();
+      const usableWidth = Math.max(1, rect.width - chartLeftPad - chartRightPad);
+      const relX = Math.min(1, Math.max(0, (e.clientX - rect.left - chartLeftPad) / usableWidth));
+      const anchorPct = dz.start + relX * (dz.end - dz.start);
+      const { start, end } = computeManualWheelZoom(dz.start, dz.end, anchorPct, e.deltaY < 0);
+      inst.dispatchAction({ type: 'dataZoom', start, end });
+    }
+
+    // capture: true é essencial aqui — o zrender (canvas do ECharts) escuta 'wheel' no próprio
+    // container interno e chama stopPropagation ao tratar o roam nativo, o que impedia esse
+    // listener (no wrapper, um ancestral do canvas) de nunca receber o evento em fase de bubble.
+    // Em fase de captura ele roda antes disso, no caminho de descida do evento até o canvas.
+    wrap.addEventListener('wheel', handleWheel, { passive: false, capture: true });
+    return () => wrap.removeEventListener('wheel', handleWheel, { capture: true });
+  }, [chartLeftPad, chartRightPad, selectedChart?.symbol, activeTab]);
+
   const effectiveIndicators = useMemo(
     () => filterIndicatorsByPanel(activeIndicators, chartPanelButtons),
     [activeIndicators, chartPanelButtons],
@@ -3741,11 +3591,6 @@ export default function CandlestickChart() {
 
   const option = useMemo(() => {
     if (!selectedChart) return null;
-    if (activeTab === 'matrix') {
-      return buildMatrixOption(
-        selectedChart, effectiveIndicators, displayLimit, chartZoom, tradeTimes, chartLeftPad, chartBuyInfo, chartStopLossConfig, chartRightPad, chartChopConfig,
-      );
-    }
     return buildOption(
       selectedChart, colors, effectiveIndicators, displayLimit, chartZoom, tradeTimes, overlayConfigs,
       chartTradeMarkers?.length ? chartTradeMarkers : (selectedChart.tradeMarkers ?? []),
@@ -3870,7 +3715,6 @@ export default function CandlestickChart() {
         <div className="flex items-center gap-1 border-b border-p2/20 pb-0.5 md:pb-1 mb-0.5">
           {[
             { id: 'chart',  label: t('chart.tab.chart') },
-            { id: 'matrix', label: t('chart.tab.matrix') },
             { id: 'rules',  label: t('chart.tab.rules') },
           ].map(({ id, label }) => (
             <button
@@ -4001,7 +3845,7 @@ export default function CandlestickChart() {
             onLayoutChange={handlePanelLayoutChange}
           />
         </div>
-      ) : activeTab === 'chart' ? (
+      ) : (
         <div ref={chartWrapRef} className="flex-1 min-h-0 relative">
           {chartNode}
           {measureOverlay}
@@ -4032,48 +3876,6 @@ export default function CandlestickChart() {
             onToggleCollapse={() => setPanelCollapsed(v => !v)}
             onLayoutChange={handlePanelLayoutChange}
           />
-        </div>
-      ) : (
-        <div className="flex flex-1 min-h-0">
-          {/* Gráfico (lado esquerdo) */}
-          <div ref={chartWrapRef} className="flex-1 min-w-0 min-h-0 relative">
-            {chartNode}
-            {measureOverlay}
-            {measureButtons}
-            <ChartIndicatorPanel
-              activeIndicators={activeIndicators}
-              toggleIndicator={toggleIndicator}
-              quickEmaGroups={quickEmaGroups}
-              addQuickEmaGroup={addQuickEmaGroup}
-              removeQuickEmaGroup={removeQuickEmaGroup}
-              updateQuickEmaGroupInterval={updateQuickEmaGroupInterval}
-              toggleQuickEmaGroupPeriod={toggleQuickEmaGroupPeriod}
-              updateQuickEmaGroupBandPct={updateQuickEmaGroupBandPct}
-              updateQuickEmaGroupBandPeriod={updateQuickEmaGroupBandPeriod}
-              bollingerBands={bollingerBands}
-              setBollingerBands={setBollingerBands}
-              srInterval={srInterval}
-              setSrInterval={setSrInterval}
-              pphlInterval={pphlInterval}
-              setPphlInterval={setPphlInterval}
-              chopInterval={chopInterval}
-              setChopInterval={setChopInterval}
-              vwap={vwap}
-              setVwap={setVwap}
-              overlayMaLoading={overlayMaLoading}
-              panelButtons={chartPanelButtons}
-              collapsed={panelCollapsed}
-              onToggleCollapse={() => setPanelCollapsed(v => !v)}
-              onLayoutChange={handlePanelLayoutChange}
-            />
-          </div>
-          {/* Painel de histórico (lado direito) */}
-          <div className="w-24 sm:w-64 shrink-0 min-h-0 overflow-hidden">
-            <TradeHistoryPanel
-              symbol={selectedChart?.symbol}
-              gateFavorites={gateFavorites}
-            />
-          </div>
         </div>
       )}
     </div>

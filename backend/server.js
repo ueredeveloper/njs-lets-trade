@@ -24,7 +24,7 @@ const {
   fetchSMA, fetchRSI, fetchChopZone, fetchVWAP, fetch24HsVolume, fetchMarketCapFilter, fetchStablecoins, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter, fetchMaDistanceFilter, fetchIndicatorGrowthFilter,
   fetchRsiOversoldRecovery, fetchMaCrossStats, fetchVwapBandsStats, fetchBollingerBandRecovery, fetchBollingerBandPositionFilter, fetchVwapPositionFilter, fetchVwapBandWidthFilter, fetchBollingerBands, fetchSimpleMaCross, fetchReloadCandles,
   fetchGateCurrencies, fetchGatePrefetch, fetchBinanceTrades, fetchGateTrades,
-  fetchActiveTrades, fetchTradeFavorites, stgBotStatus, multitradeService, fetchMarketHighlights } = require('./services');
+  fetchActiveTrades, fetchTradeFavorites, stgBotStatus, multitradeService, fetchMarketHighlights, whatsappMessagesService } = require('./services');
 const supabaseService = require('./services/supabaseService');
 
 const app = express();
@@ -81,6 +81,7 @@ app.use('/services', fetchActiveTrades)
 app.use('/services', fetchTradeFavorites)
 app.use('/services', stgBotStatus)
 app.use('/services', multitradeService)
+app.use('/services', whatsappMessagesService)
 app.use('/services/sb', supabaseService)
 
 // Frontend: bundle estático (Termux / produção) ou proxy para dev server (Vite / Parcel).

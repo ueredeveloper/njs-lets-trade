@@ -256,7 +256,9 @@ async function tick(rowId, adapter, strategy, log, session) {
       // limitPrice = valor exato da linha (lower1/vwap) que armou o pullback — força ordem
       // limite nesse preço em vez de a mercado (ver tradeExecution.js), pra não comprar "no
       // meio" das bandas quando o candle só tocou a linha de leve.
-      entryMeta: { ...pending, ...ready, limitPrice: ready.targetLevelValue },
+      // signalPrice: preço do candle que tocou a banda (pending.signalClose) — entryMeta.close
+      // já é o preço do candle de RETORNO (mais tarde), não o do toque original.
+      entryMeta: { ...pending, ...ready, limitPrice: ready.targetLevelValue, signalPrice: pending.signalClose },
       capital, strategyId, symbol,
     });
     if (bought) {

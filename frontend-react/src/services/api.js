@@ -356,11 +356,11 @@ export async function fetchGateAccount() {
  * Envia uma ordem na Gate.io.
  * @param {{ symbol, side: 'buy'|'sell', type?: 'market'|'limit', amount, price? }} params
  */
-export async function placeGateOrder({ symbol, side, type = 'market', amount, price }) {
+export async function placeGateOrder({ symbol, side, type = 'market', amount, price, strategyId }) {
   const res = await fetch('/services/gate-order', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ symbol, side, type, amount, price }),
+    body: JSON.stringify({ symbol, side, type, amount, price, strategyId }),
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
@@ -396,11 +396,11 @@ export async function fetchBinanceAccount() {
  * Envia uma ordem na Binance.
  * @param {{ symbol, side: 'BUY'|'SELL', type?: 'MARKET'|'LIMIT', quantity, price? }} params
  */
-export async function placeBinanceOrder({ symbol, side, type = 'MARKET', quantity, price }) {
+export async function placeBinanceOrder({ symbol, side, type = 'MARKET', quantity, price, strategyId }) {
   const res = await fetch('/services/binance-order', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ symbol, side, type, quantity, price }),
+    body: JSON.stringify({ symbol, side, type, quantity, price, strategyId }),
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
