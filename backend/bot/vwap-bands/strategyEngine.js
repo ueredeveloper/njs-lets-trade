@@ -11,7 +11,7 @@ const INTERVAL_MS = {
 const SESSION_HOURS = { daily: 24, weekly: 24 * 7 };
 
 const LEVEL_LABELS = {
-  lower2: 'lw2', lower1: 'lw1', vwap: 'vwap', upper1: 'up1', upper2: 'up2',
+  lower2: 'lw2', lower1: 'lw1', vwap: 'vw', upper1: 'up1', upper2: 'up2',
 };
 
 /**
