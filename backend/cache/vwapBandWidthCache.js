@@ -2,7 +2,9 @@
 
 const fs = require('node:fs/promises');
 const path = require('path');
-const { computeVwapWithBands } = require('../utils/vwapSession');
+const { computeRollingVwapWithBands, DAY_MS } = require('../utils/vwapSession');
+
+const WEEK_MS = 7 * DAY_MS;
 const getCandlesForScreening = require('../utils/getCandlesForScreening');
 const candleUpdateQueue = require('../utils/candleUpdateQueue');
 const { closedCandlesOnly, intervalMs } = require('../bot/ma-cross/strategyEngine');
@@ -86,7 +88,7 @@ function evaluateSymbolWithCandles(symbol, preset, rawCandles, now = Date.now())
       return false;
     }
 
-    const points = computeVwapWithBands(candles, { session: preset.session, bandMultipliers: [BAND_MULTIPLIER] });
+    const points = computeRollingVwapWithBands(candles, { windowMs: preset.session === 'weekly' ? WEEK_MS : DAY_MS, bandMultipliers: [BAND_MULTIPLIER] });
     if (!points.length) {
       symbolStore.set(key, { detail: null, computedAt: now });
       dirty = true;

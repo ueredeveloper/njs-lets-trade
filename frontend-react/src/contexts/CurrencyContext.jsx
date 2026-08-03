@@ -36,6 +36,7 @@ import {
   normalizePphlInterval,
   normalizeChopInterval,
   normalizeVwapDefaults,
+  normalizeVwapAnchor,
   normalizeActiveIndicators,
   normalizeCurrencyPanelWidth,
   normalizeMaCrossDefaultTemplate,
@@ -661,6 +662,14 @@ export function CurrencyProvider({ children }) {
     });
   }, []);
 
+  const setVwapAnchorDefault = useCallback((anchor) => {
+    setUiPrefsState((prev) => {
+      const next = { ...prev, vwapAnchorDefault: normalizeVwapAnchor(anchor) };
+      saveUiPreferences(next);
+      return next;
+    });
+  }, []);
+
   const setActiveIndicatorsPreference = useCallback((indicators) => {
     setUiPrefsState((prev) => {
       const next = { ...prev, activeIndicators: normalizeActiveIndicators(indicators) };
@@ -948,6 +957,7 @@ export function CurrencyProvider({ children }) {
         setPphlIntervalDefault,
         setChopIntervalDefault,
         setVwapDefaults,
+        setVwapAnchorDefault,
         setActiveIndicatorsPreference,
         setCurrencyPanelWidth,
         setMaCrossDefaultTemplate,

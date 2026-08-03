@@ -1,7 +1,9 @@
 'use strict';
 
 const router = require('express').Router();
-const { computeVwapWithBands } = require('../utils/vwapSession');
+const { computeRollingVwapWithBands, DAY_MS } = require('../utils/vwapSession');
+
+const WEEK_MS = 7 * DAY_MS;
 const getCandlesForScreening = require('../utils/getCandlesForScreening');
 const { getActiveUsdtPairs } = require('../binance/getActiveUsdtPairs');
 const { closedCandlesOnly } = require('../bot/ma-cross/strategyEngine');
@@ -74,7 +76,7 @@ router.get('/vwap-band-width-filter', async (req, res) => {
         const candles = closedCandlesOnly(raw);
         if (!candles?.length || candles.length < MIN_CANDLES) return null;
 
-        const points = computeVwapWithBands(candles, { session, bandMultipliers: [BAND_MULTIPLIER] });
+        const points = computeRollingVwapWithBands(candles, { windowMs: session === 'weekly' ? WEEK_MS : DAY_MS, bandMultipliers: [BAND_MULTIPLIER] });
         if (!points.length) return null;
 
         const window = points.slice(-Math.min(lookback, points.length));

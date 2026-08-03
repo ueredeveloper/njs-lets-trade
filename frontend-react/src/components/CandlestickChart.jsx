@@ -241,16 +241,17 @@ async function fetchBollingerOverlayPoints(symbol, interval, period, stdDev, sou
 }
 
 /**
- * Busca VWAP de sessão (diária/semanal, reset em 00:00 UTC) num intervalo próprio
- * (independente do gráfico) — mesmo padrão da Bollinger. Vem com bandas ±1σ/±2σ prontas.
+ * Busca VWAP (diária/semanal) num intervalo próprio (independente do gráfico) — mesmo
+ * padrão da Bollinger. `anchor` = 'session' (reset de calendário, padrão) ou 'rolling'
+ * (janela móvel, sem reset). Vem com bandas ±1σ/±2σ prontas.
  */
-async function fetchVwapPoints(symbol, interval, session, source, limit) {
+async function fetchVwapPoints(symbol, interval, session, anchor, source, limit) {
   const srcParam = source === 'gate' ? '&source=gate' : '';
   const candles = await fetch(
     `/services/candles/?symbol=${symbol}&limit=${limit}&interval=${interval}${srcParam}`,
   ).then(r => r.json());
   if (!Array.isArray(candles) || !candles.length) return [];
-  const points = await fetch(`/services/vwap?session=${session}`, {
+  const points = await fetch(`/services/vwap?session=${session}&anchor=${anchor}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(candles),
@@ -356,7 +357,7 @@ function buildBollingerSeries(bbConfig, candlesticks, alignSeries) {
 function buildVwapSeries(vwapConfig, candlesticks, alignSeries) {
   if (!vwapConfig?.enabled || !vwapConfig.points?.length) return [];
   const color = '#4ade80';
-  const sessionLabel = vwapConfig.session === 'weekly' ? 'W' : 'D';
+  const sessionLabel = `${vwapConfig.session === 'weekly' ? 'W' : 'D'}${vwapConfig.anchor === 'rolling' ? '~' : ''}`;
   const label = `VWAP@${vwapConfig.interval}(${sessionLabel})`;
   const toLine = (field) => alignSeries(alignPointsToCandles(
     candlesticks,
@@ -381,10 +382,10 @@ function buildVwapSeries(vwapConfig, candlesticks, alignSeries) {
   }];
   if (vwapConfig.bands) {
     series.push(
-      { name: `${label} +1σ`, type: 'line', data: toLine('upper1'), smooth: true, showSymbol: false, lineStyle: { color, width: 1, type: 'dashed', opacity: 0.6 } },
-      { name: `${label} -1σ`, type: 'line', data: toLine('lower1'), smooth: true, showSymbol: false, lineStyle: { color, width: 1, type: 'dashed', opacity: 0.6 } },
-      { name: `${label} +2σ`, type: 'line', data: toLine('upper2'), smooth: true, showSymbol: false, lineStyle: { color, width: 1, type: 'dotted', opacity: 0.4 } },
-      { name: `${label} -2σ`, type: 'line', data: toLine('lower2'), smooth: true, showSymbol: false, lineStyle: { color, width: 1, type: 'dotted', opacity: 0.4 } },
+      { name: `${label} up1`, type: 'line', data: toLine('upper1'), smooth: true, showSymbol: false, lineStyle: { color, width: 1, type: 'dashed', opacity: 0.6 } },
+      { name: `${label} lw1`, type: 'line', data: toLine('lower1'), smooth: true, showSymbol: false, lineStyle: { color, width: 1, type: 'dashed', opacity: 0.6 } },
+      { name: `${label} up2`, type: 'line', data: toLine('upper2'), smooth: true, showSymbol: false, lineStyle: { color, width: 1, type: 'dotted', opacity: 0.4 } },
+      { name: `${label} lw2`, type: 'line', data: toLine('lower2'), smooth: true, showSymbol: false, lineStyle: { color, width: 1, type: 'dotted', opacity: 0.4 } },
     );
   }
   return series;
@@ -2873,7 +2874,8 @@ export default function CandlestickChart() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chopInterval]);
 
-  // Persiste preferências do VWAP (ligado, intervalo, sessão, bandas) — mesmo padrão da Bollinger
+  // Persiste preferências do VWAP (ligado, intervalo, sessão, bandas) — mesmo padrão da Bollinger.
+  // A âncora (ancorada/contínua) não é mais escolhida aqui — vem de Configurações (uiPrefs.vwapAnchorDefault).
   useEffect(() => {
     if (isTradePanelChartView(chartViewSource)) return;
     setVwapDefaults({ enabled: vwap.enabled, interval: vwap.interval, session: vwap.session, bands: vwap.bands });
@@ -3190,7 +3192,8 @@ export default function CandlestickChart() {
       setVwapLoading(false);
       return undefined;
     }
-    const key = `${vwap.interval}-${vwap.session}`;
+    const anchor = uiPrefs.vwapAnchorDefault;
+    const key = `${vwap.interval}-${vwap.session}-${anchor}`;
     let cancelled = false;
     setVwapLoading(true);
     (async () => {
@@ -3203,7 +3206,7 @@ export default function CandlestickChart() {
           overlayFetchLimit,
         );
         const points = await fetchVwapPoints(
-          selectedChart.symbol, vwap.interval, vwap.session, selectedChart.source, ovLimit,
+          selectedChart.symbol, vwap.interval, vwap.session, anchor, selectedChart.source, ovLimit,
         );
         if (!cancelled) setVwapCache({ [key]: points });
       } catch (e) {
@@ -3217,7 +3220,7 @@ export default function CandlestickChart() {
   }, [
     selectedChart?.symbol, selectedChart?.interval, selectedChart?.source, selectedChart?.candlesticks,
     currentInterval, overlayFetchLimit, displayCandleCount, chartPanelButtons.vwap,
-    vwap.enabled, vwap.interval, vwap.session,
+    vwap.enabled, vwap.interval, vwap.session, uiPrefs.vwapAnchorDefault,
   ]);
 
   // Bandas adaptativas (piso/teto) — só quando o foco MT pede (ex.: clique em trade no backtest)
@@ -3635,7 +3638,9 @@ export default function CandlestickChart() {
     const ivMs = INTERVAL_MS[vwapInterval] ?? 4 * 3_600_000;
     const limit = Math.min(1000, Math.max(60, Math.ceil(sessionCoverageMs / ivMs)));
     const levelField = { lower2: 'lower2', lower1: 'lower1', vwap: 'value', upper1: 'upper1', upper2: 'upper2' };
-    fetchVwapPoints(sym, vwapInterval, session, source, limit)
+    // 'rolling' fixo — precisa espelhar exatamente o cálculo ao vivo do bot (strategyEngine.js),
+    // que sempre usa VWAP contínua/rolante, independente do que o usuário escolher em Configurações.
+    fetchVwapPoints(sym, vwapInterval, session, 'rolling', source, limit)
       .then(points => {
         if (cancelled || !points?.length) return;
         const last = points[points.length - 1];
@@ -3722,15 +3727,17 @@ export default function CandlestickChart() {
   const chartVwapConfig = useMemo(() => {
     const enabled = vwap.enabled && chartPanelButtons.vwap !== false;
     if (!enabled) return null;
-    const key = `${vwap.interval}-${vwap.session}`;
+    const anchor = uiPrefs.vwapAnchorDefault;
+    const key = `${vwap.interval}-${vwap.session}-${anchor}`;
     return {
       enabled: true,
       interval: vwap.interval,
       session: vwap.session,
+      anchor,
       bands: vwap.bands,
       points: vwapCache[key] ?? [],
     };
-  }, [vwap, vwapCache, chartPanelButtons.vwap]);
+  }, [vwap, vwapCache, chartPanelButtons.vwap, uiPrefs.vwapAnchorDefault]);
 
   const option = useMemo(() => {
     if (!selectedChart) return null;
@@ -3826,9 +3833,10 @@ export default function CandlestickChart() {
     </div>
   );
 
-  // Botões de medir % — vivem dentro da área do gráfico, no canto superior direito.
+  // Botões de medir % — vivem dentro da área do gráfico, deslocados à esquerda do
+  // painel de indicadores (panelPad) pra não ficarem colados na borda direita.
   const measureButtons = (
-    <div className="absolute top-2 right-2 z-30 flex items-center gap-1">
+    <div className="absolute top-2 z-30 flex items-center gap-1" style={{ right: panelPad + 10 }}>
       <button
         onClick={toggleMeasureMode}
         title="Medir variação % — arraste de um candle a outro (fica ligado até você clicar de novo)"

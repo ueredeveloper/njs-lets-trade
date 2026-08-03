@@ -71,4 +71,56 @@ function computeVwapWithBands(candles, opts = {}) {
   return results;
 }
 
-module.exports = { computeVwapWithBands, sessionStartMs, DAY_MS };
+/**
+ * VWAP rolante (janela móvel de `windowMs`, sem reset de calendário) — mesma fórmula da
+ * VWAP de sessão, mas a soma acumulada desliza candle a candle em vez de zerar num ponto
+ * fixo. Cripto negocia 24/7, então esse reset é só convenção (ver comentário acima); a
+ * rolante evita o artefato de bandas coladas logo após virar o dia/semana.
+ * @param {Array} candles - candles ordenados por openTime crescente.
+ * @param {{windowMs?: number, bandMultipliers?: number[]}} opts
+ * @returns {Array<{openTime:number, value:number, stdDev:number, upper1?:number, lower1?:number, ...}>}
+ */
+function computeRollingVwapWithBands(candles, opts = {}) {
+  const windowMs = Number(opts.windowMs) > 0 ? Number(opts.windowMs) : DAY_MS;
+  const bandMultipliers = Array.isArray(opts.bandMultipliers) ? opts.bandMultipliers : [1, 2];
+
+  if (!Array.isArray(candles) || !candles.length) return [];
+
+  const openTimes = candles.map(c => Number(c.openTime));
+  const typicals  = candles.map(c => (parseFloat(c.high) + parseFloat(c.low) + parseFloat(c.close)) / 3);
+  const volumes   = candles.map(c => parseFloat(c.volume) || 0);
+
+  const results = [];
+  let start = 0;
+  let cumVol = 0, cumPV = 0, cumPV2 = 0;
+
+  for (let i = 0; i < candles.length; i++) {
+    cumVol += volumes[i];
+    cumPV += typicals[i] * volumes[i];
+    cumPV2 += typicals[i] * typicals[i] * volumes[i];
+
+    // Descarta pela esquerda tudo que já saiu da janela — soma continua O(n) no total.
+    const windowStart = openTimes[i] - windowMs;
+    while (start < i && openTimes[start] < windowStart) {
+      cumVol -= volumes[start];
+      cumPV -= typicals[start] * volumes[start];
+      cumPV2 -= typicals[start] * typicals[start] * volumes[start];
+      start++;
+    }
+
+    const vwap = cumVol > 0 ? cumPV / cumVol : typicals[i];
+    const variance = cumVol > 0 ? Math.max(0, (cumPV2 / cumVol) - vwap * vwap) : 0;
+    const stdDev = Math.sqrt(variance);
+
+    const point = { openTime: openTimes[i], value: vwap, stdDev };
+    for (const k of bandMultipliers) {
+      point[`upper${k}`] = vwap + k * stdDev;
+      point[`lower${k}`] = vwap - k * stdDev;
+    }
+    results.push(point);
+  }
+
+  return results;
+}
+
+module.exports = { computeVwapWithBands, computeRollingVwapWithBands, sessionStartMs, DAY_MS };

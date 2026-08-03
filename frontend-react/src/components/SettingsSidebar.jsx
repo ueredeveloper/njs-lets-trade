@@ -42,7 +42,7 @@ export default function SettingsSidebar({ open, onClose }) {
     uiPrefs, setDefaultChartInterval, setCommonChartIntervals, setPanelVisible,
     setFavoriteButtonVisible, favoriteButtonKeys,
     setOverlaySlotsPreference, setCurrencyPanelWidth,
-    setMaCrossDefaultTemplate, setStatsDefaults,
+    setMaCrossDefaultTemplate, setStatsDefaults, setVwapAnchorDefault,
     chartIntervalOptions, panelKeys,
     activeTrades, activeTradesSettings, updateActiveTradesSettings,
     ignoredActiveTrades, dismissActiveTrade, restoreActiveTrade } = useCurrency();
@@ -328,6 +328,31 @@ export default function SettingsSidebar({ open, onClose }) {
                   </button>
                 );
               })}
+            </div>
+          </div>
+
+          {/* VWAP padrão (ancorada em calendário vs rolante/contínua) */}
+          <div>
+            <p className={section}>{t('settings.vwap_anchor')}</p>
+            <p className="text-[10px] text-p5/50 mb-3 leading-relaxed">{t('settings.vwap_anchor_hint')}</p>
+            <div className="flex gap-2">
+              {[
+                { value: 'session', label: t('settings.vwap_anchor_session') },
+                { value: 'rolling', label: t('settings.vwap_anchor_rolling') },
+              ].map(({ value, label }) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => setVwapAnchorDefault(value)}
+                  className={`flex-1 py-1.5 rounded text-xs border transition-all ${
+                    uiPrefs.vwapAnchorDefault === value
+                      ? 'border-p4 bg-p4/20 text-p5 font-semibold'
+                      : 'border-p2/40 text-p5/60 hover:border-p3 hover:bg-p2/30'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
             </div>
           </div>
 

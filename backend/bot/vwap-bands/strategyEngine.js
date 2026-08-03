@@ -1,6 +1,6 @@
 'use strict';
 
-const { computeVwapWithBands } = require('../../utils/vwapSession');
+const { computeRollingVwapWithBands } = require('../../utils/vwapSession');
 const { buildMaTimeSeries } = require('../../utils/movingAverage');
 const { computeStopLossFloor } = require('../shared/stopLossFloor');
 
@@ -11,7 +11,7 @@ const INTERVAL_MS = {
 const SESSION_HOURS = { daily: 24, weekly: 24 * 7 };
 
 const LEVEL_LABELS = {
-  lower2: '-2σ', lower1: '-1σ', vwap: 'linha principal', upper1: '+1σ', upper2: '+2σ',
+  lower2: 'lw2', lower1: 'lw1', vwap: 'vwap', upper1: 'up1', upper2: 'up2',
 };
 
 /**
@@ -46,10 +46,14 @@ function closedCandlesOnly(candles) {
   return candles.slice(0, -1);
 }
 
-/** VWAP de sessão + bandas ±1σ/±2σ — mesmo cálculo do exhaustionScreener do ma-cross e
- *  do painel VWAP do próprio gráfico (backend/services/fetchVWAP.js). */
+/** VWAP rolante (janela móvel de 24h ou 7d, conforme `session`) + bandas ±1σ/±2σ — sem
+ *  reset de calendário. Cripto negocia 24/7 e não tem pregão real, então o reset ancorado
+ *  (00:00 UTC / segunda 00:00 UTC) era só convenção — e colapsava as bandas (variância ~0)
+ *  logo após cada reset, gerando sinais com distância entre bandas artificialmente estreita
+ *  ou nula justo nesse período. A rolante nunca zera, então não tem esse artefato. */
 function computeVwapSeries(candles, session) {
-  return computeVwapWithBands(candles, { session, bandMultipliers: [1, 2] });
+  const windowMs = (SESSION_HOURS[session] ?? SESSION_HOURS.daily) * 3_600_000;
+  return computeRollingVwapWithBands(candles, { windowMs, bandMultipliers: [1, 2] });
 }
 
 /** Nomeia os 5 níveis de preço num ponto da série VWAP. */

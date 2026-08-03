@@ -88,8 +88,8 @@ export default function VwapBandsStrategyForm({ form, patch, symbol }) {
         {form.entry.emaFilter?.enabled !== false && (
           <>
             <p className="text-[10px] text-p5/60 leading-relaxed">
-              No instante do SINAL (candle de alta que fecha acima da linha — lower1/vwap/
-              upper1/upper2), só arma o sinal se o close também estiver acima da banda
+              No instante do SINAL (candle de alta que fecha acima da linha — lw1/vwap/
+              up1/up2), só arma o sinal se o close também estiver acima da banda
               inferior da EMA — floor = EMA × (1 − tolerância%) — e a própria EMA não
               estiver em queda (variação % entre o valor no candle e o de N candles atrás
               ≥ inclinação mín.). Se alguma condição não bater, aquele candle não conta como
@@ -141,8 +141,8 @@ export default function VwapBandsStrategyForm({ form, patch, symbol }) {
           <span className="text-p5/40">%</span>
         </div>
         <div className="flex flex-wrap gap-2 items-center text-xs text-p5">
-          <span className="text-p5/50" title="Degrau vwap→upper1→upper2: vende num alvo fixo (compra + X%) em vez da +2σ ao vivo. 0 desliga.">
-            Alvo fixo degrau upper2
+          <span className="text-p5/50" title="Degrau vwap→up1→up2: vende num alvo fixo (compra + X%) em vez da up2 ao vivo. 0 desliga.">
+            Alvo fixo degrau up2
           </span>
           <NumInput value={form.exit.upper2FixedPct ?? 0} onChange={v => patchExit('upper2FixedPct', v)} min={0} max={20} step={0.5} />
           <span className="text-p5/40">%</span>
@@ -170,8 +170,8 @@ export default function VwapBandsStrategyForm({ form, patch, symbol }) {
         {form.stopLoss.mode === 'ladder' ? (
           <p className="text-[10px] text-p5/50 leading-relaxed">
             Padrão — sem % fixo. O stop é a própria banda abaixo da que foi tocada pra armar
-            a compra, recalculada ao vivo pela VWAP: comprou no retorno à −1σ → stop na −2σ;
-            comprou na linha principal → stop na −1σ. Vende se a mínima do candle romper
+            a compra, recalculada ao vivo pela VWAP: comprou no retorno à lw1 → stop na lw2;
+            comprou na vwap → stop na lw1. Vende se a mínima do candle romper
             essa banda.
           </p>
         ) : (

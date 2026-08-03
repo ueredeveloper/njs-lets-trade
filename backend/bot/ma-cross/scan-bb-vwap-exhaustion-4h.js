@@ -14,7 +14,7 @@ const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '../../../.env') });
 
 const { BollingerBands } = require('technicalindicators');
-const { computeVwapWithBands } = require('../../utils/vwapSession');
+const { computeRollingVwapWithBands, DAY_MS } = require('../../utils/vwapSession');
 const { getActiveUsdtPairs } = require('../../binance/getActiveUsdtPairs');
 
 const HOURS_ARG = process.argv.find((a, i) => process.argv[i - 1] === '--hours');
@@ -61,7 +61,7 @@ async function analyzeSymbol(symbol, sinceMs) {
   const closes = candles.map(c => c.close);
   const bb = BollingerBands.calculate({ period: BB_PERIOD, values: closes, stdDev: BB_STDDEV });
   const bbOffset = candles.length - bb.length;
-  const vwap = computeVwapWithBands(candles, { session: 'daily', bandMultipliers: [VWAP_BAND] });
+  const vwap = computeRollingVwapWithBands(candles, { windowMs: DAY_MS, bandMultipliers: [VWAP_BAND] });
 
   const hits = [];
   for (let i = candles.length - 1; i >= 0; i--) {

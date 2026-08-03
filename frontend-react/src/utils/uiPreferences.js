@@ -128,6 +128,19 @@ export function normalizeVwapDefaults(raw) {
   };
 }
 
+/** 'session' = reset de calendário (00:00 UTC / segunda 00:00 UTC) — bandas colam na vwap
+ *  logo após o reset. 'rolling' = janela móvel (24h ou 7d, conforme a sessão escolhida no
+ *  painel) sem reset — evita esse artefato, já que cripto negocia 24/7 e não tem fechamento
+ *  real. Escolha única e global (Configurações → VWAP padrão) — não é mais um toggle por
+ *  painel do gráfico, pra manter consistência com o que o bot vwap-bands realmente usa
+ *  (o bot sempre roda em 'rolling', ver backend/bot/vwap-bands/strategyEngine.js). */
+export const VWAP_ANCHOR_OPTIONS = ['session', 'rolling'];
+export const DEFAULT_VWAP_ANCHOR = 'rolling';
+
+export function normalizeVwapAnchor(raw) {
+  return VWAP_ANCHOR_OPTIONS.includes(raw) ? raw : DEFAULT_VWAP_ANCHOR;
+}
+
 /** Intervalos disponíveis nas abas de Estatísticas (mesma lista dos selects do painel). */
 export const STATS_INTERVAL_OPTIONS = [
   '1m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w',
@@ -259,6 +272,7 @@ export const DEFAULT_UI_PREFS = {
   pphlIntervalDefault: DEFAULT_PPHL_INTERVAL,
   chopIntervalDefault: DEFAULT_CHOP_INTERVAL,
   vwapDefaults: normalizeVwapDefaults(DEFAULT_VWAP),
+  vwapAnchorDefault: normalizeVwapAnchor(DEFAULT_VWAP_ANCHOR),
   activeIndicators: [...DEFAULT_ACTIVE_INDICATORS],
   currencyPanelWidth: CURRENCY_PANEL_WIDTH_DEFAULT,
   maCrossDefaultTemplate: null,
@@ -277,6 +291,7 @@ function cloneDefaults() {
     srIntervalDefault: DEFAULT_SR_INTERVAL,
     pphlIntervalDefault: DEFAULT_PPHL_INTERVAL,
     vwapDefaults: normalizeVwapDefaults(DEFAULT_VWAP),
+    vwapAnchorDefault: normalizeVwapAnchor(DEFAULT_VWAP_ANCHOR),
     activeIndicators: [...DEFAULT_ACTIVE_INDICATORS],
     currencyPanelWidth: CURRENCY_PANEL_WIDTH_DEFAULT,
     maCrossDefaultTemplate: null,
@@ -326,6 +341,9 @@ export function loadUiPreferences() {
     }
     if (parsed.vwapDefaults) {
       result.vwapDefaults = normalizeVwapDefaults(parsed.vwapDefaults);
+    }
+    if (parsed.vwapAnchorDefault !== undefined) {
+      result.vwapAnchorDefault = normalizeVwapAnchor(parsed.vwapAnchorDefault);
     }
     if (Array.isArray(parsed.activeIndicators)) {
       result.activeIndicators = normalizeActiveIndicators(parsed.activeIndicators);

@@ -18,7 +18,7 @@
  */
 
 const { BollingerBands } = require('technicalindicators');
-const { computeVwapWithBands } = require('../../utils/vwapSession');
+const { computeRollingVwapWithBands, DAY_MS } = require('../../utils/vwapSession');
 const { getActiveUsdtPairs } = require('../../binance/getActiveUsdtPairs');
 const getTickers = require('../../binance/cachedTicker24hr');
 const { getStrategyPresetBody, buildTradeConfig: buildMaCrossTradeConfig } = require('./strategyPresets');
@@ -100,7 +100,7 @@ async function checkExhaustion(symbol) {
   const percentB = Math.min(100, Math.max(0, ((last.close - bLast.lower) / bWidth) * 100));
   if (percentB > PROXIMITY_PCT) return null;
 
-  const vwap = computeVwapWithBands(candles, { session: 'daily', bandMultipliers: [VWAP_BAND] });
+  const vwap = computeRollingVwapWithBands(candles, { windowMs: DAY_MS, bandMultipliers: [VWAP_BAND] });
   if (!vwap.length) return null;
   const vLast = vwap[vwap.length - 1];
   const vWidth = vLast[`upper${VWAP_BAND}`] - vLast[`lower${VWAP_BAND}`];
