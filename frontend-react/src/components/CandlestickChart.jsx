@@ -1696,14 +1696,14 @@ function buildMultitradeMarkLines(candlesticks, interval, markers, DL, LEFT_PAD)
     '1h': 3_600_000, '2h': 7_200_000, '4h': 14_400_000, '8h': 28_800_000, '1d': 86_400_000 }[interval] ?? 900_000;
   const offset = candlesticks.length - DL;
   const styles = {
-    signal:         { color: '#f59e0b', label: '◆ Sinal' },
     possible_entry: { color: '#ffffff', label: '◌ Entrada pronta' },
   };
   return markers.flatMap(m => {
     // 'entry' (posição aberta) e 'buy'/'sell' (trades fechados do histórico) não
     // desenham mais linha vertical — os quadrados compra→alvo/stoploss (posição
-    // aberta) e compra→venda real (histórico) cobrem isso.
-    if (m.side === 'entry' || m.side === 'buy' || m.side === 'sell') return [];
+    // aberta) e compra→venda real (histórico) cobrem isso. 'signal' também não
+    // desenha mais linha — o triângulo (buildSignalMarkers) já marca o candle certo.
+    if (m.side === 'entry' || m.side === 'buy' || m.side === 'sell' || m.side === 'signal') return [];
     let best = 0;
     let bestDiff = Infinity;
     candlesticks.forEach((c, i) => {
@@ -1714,7 +1714,7 @@ function buildMultitradeMarkLines(candlesticks, interval, markers, DL, LEFT_PAD)
     const localIdx = best - offset;
     if (localIdx < 0 || localIdx >= DL) return [];
     const st = styles[m.side] ?? { color: '#94a3b8', label: m.side };
-    const dashed = m.side === 'signal' || m.side === 'possible_entry';
+    const dashed = m.side === 'possible_entry';
     const label = m.label ?? st.label;
     return [{
       xAxis: localIdx + LEFT_PAD,
