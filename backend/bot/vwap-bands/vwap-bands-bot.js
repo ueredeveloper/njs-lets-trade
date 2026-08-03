@@ -151,14 +151,26 @@ async function maybeReplaceBracket({ rowId, adapter, config, cMap, session, log,
     : false;
   if (!drifted(liveTarget, exitBracket.targetPrice) && !drifted(liveStop, exitBracket.stopPrice)) return;
 
+  let cancelled = false;
   try {
     await adapter.cancelExitBracket(exitBracket);
+    cancelled = true;
     const bracket = await adapter.placeExitBracket(buyQty, liveTarget, liveStop);
     session.rulesState = { ...(session.rulesState ?? {}), exitBracket: { ...bracket, placedAt: new Date().toISOString() } };
     await saveState(rowId, { rules_state: session.rulesState }, log);
     log(`🔁 Bracket TP/SL recriada (deriva ≥${driftPct}%) — alvo ${fmtPrice(bracket.targetPrice)} / stop ${fmtPrice(bracket.stopPrice)}`);
   } catch (err) {
-    log(`${Y}⚠️  Falha ao recriar bracket TP/SL (${err.message}) — mantendo a atual${X}`);
+    if (cancelled) {
+      // A bracket antiga já foi cancelada na corretora antes da nova falhar — a posição
+      // ficou sem TP/SL resting nenhuma. Limpa exitBracket pra o próximo tick cair no
+      // fallback de saída via candle fechado (evaluateExit/stop percentual) em vez de
+      // achar que uma bracket morta ainda está protegendo o trade.
+      session.rulesState = { ...(session.rulesState ?? {}), exitBracket: null };
+      await saveState(rowId, { rules_state: session.rulesState }, log);
+      log(`${Y}⚠️  Falha ao recriar bracket TP/SL (${err.message}) — bracket antiga já cancelada, voltando pra saída via candle fechado${X}`);
+    } else {
+      log(`${Y}⚠️  Falha ao recriar bracket TP/SL (${err.message}) — mantendo a atual${X}`);
+    }
   }
 }
 
