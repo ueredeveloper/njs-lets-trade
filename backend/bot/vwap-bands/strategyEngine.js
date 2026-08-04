@@ -111,6 +111,35 @@ function emaFilterSlopeAt(series, openTime, lookback) {
   return ((current - past) / past) * 100;
 }
 
+/** Inclinação (%) da própria linha VWAP (vwapSeries, ponto .value) no instante `openTime`,
+ *  comparando com o valor de `lookback` candles atrás NA MESMA SÉRIE (unidade
+ *  entry.vwapInterval, ex.: 4h) — mesma ideia de emaFilterSlopeAt, mas medindo a VWAP em si
+ *  em vez da EMA de preço (usada pelo vwapSlopeFilter de entrada). */
+function vwapSlopeAt(series, openTime, lookback) {
+  if (!series?.length) return null;
+  let idx = -1;
+  for (let i = 0; i < series.length; i++) {
+    if (series[i].openTime <= openTime) idx = i; else break;
+  }
+  const pastIdx = idx - lookback;
+  if (idx < 0 || pastIdx < 0) return null;
+  const current = series[idx].value;
+  const past = series[pastIdx].value;
+  if (!(past > 0)) return null;
+  return ((current - past) / past) * 100;
+}
+
+/** Confere o vwapSlopeFilter (inclinação da própria linha VWAP, não da EMA de preço) no
+ *  candle do sinal — ver comentário de entry.vwapSlopeFilter em tradeConfigSchema.js. */
+function checkVwapSlopeFilterAt(entry, vwapSeries, openTime) {
+  const vf = entry.vwapSlopeFilter;
+  if (!vf?.enabled) return { ok: true };
+  const slopePct = vwapSlopeAt(vwapSeries, openTime, vf.lookback);
+  if (slopePct == null) return { ok: false, reason: 'VWAP_SLOPE_FILTER_NO_DATA' };
+  if (slopePct < vf.minSlopePct) return { ok: false, reason: 'VWAP_SLOPE_FILTER_FALLING' };
+  return { ok: true };
+}
+
 /**
  * Especificações de candles necessárias: um intervalo pros candles de preço (fechamento/
  * toque, ex.: 1h), outro pra VWAP+bandas (ex.: 4h), outro pra checagem rápida do retorno
@@ -152,6 +181,13 @@ function getRequiredSpecs(config) {
     const efSlopeLookback = Math.max(0, Math.round(Number(entry.emaFilter.slopeLookback ?? 0)));
     const efLimit = efReclaimLookback * efRatio + efPeriod * 3 + efSlopeLookback + 30;
     add(efIv, efLimit);
+  }
+
+  // vwapSlopeFilter olha `lookback` candles pra trás na PRÓPRIA série de VWAP (vwapIv) —
+  // soma essa folga ao limite já calculado pra vwapIv acima (add() fica com o maior).
+  if (entry.vwapSlopeFilter?.enabled) {
+    const vfLookback = Math.max(0, Math.round(Number(entry.vwapSlopeFilter.lookback ?? 0)));
+    add(vwapIv, vwapLimit + vfLookback);
   }
 
   return [...specs.entries()].map(([interval, limit]) => ({ interval, limit }));
@@ -301,6 +337,16 @@ function evaluateEntrySignal(config, cMap) {
     const emaCheck = checkEmaFilterAt(entry, cMap, reclaimCandle.openTime, parseFloat(reclaimCandle.close));
     if (!emaCheck.ok) {
       lastReason = emaCheck.reason;
+      continue;
+    }
+
+    // Filtro de inclinação da VWAP (entry.vwapSlopeFilter): mesma ideia do emaFilter, mas
+    // medindo a queda da própria linha VWAP em vez da EMA de preço — pega casos como
+    // ALLO/PYR, onde a VWAP e as bandas em si estão em queda acentuada (a EMA200(15m) de
+    // preço pode não refletir isso a tempo). Checado no mesmo candle da reconquista.
+    const vwapSlopeCheck = checkVwapSlopeFilterAt(entry, vwapSeries, reclaimCandle.openTime);
+    if (!vwapSlopeCheck.ok) {
+      lastReason = vwapSlopeCheck.reason;
       continue;
     }
 
@@ -618,6 +664,7 @@ module.exports = {
   vwapPointAt,
   emaFilterValueAt,
   emaFilterSlopeAt,
+  vwapSlopeAt,
   getRequiredSpecs,
   evaluateEntrySignal,
   evaluatePullbackReady,

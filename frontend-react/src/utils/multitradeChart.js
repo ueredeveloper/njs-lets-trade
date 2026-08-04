@@ -123,17 +123,19 @@ export function buildMarkersFromLiveTrades(trades, entry) {
   const markers = [];
   const openMs = entry?.buyTime ? new Date(entry.buyTime).getTime() : null;
 
+  // Candle do cruzamento/toque que motivou a entrada (pode ser bem antes de buyTime
+  // quando o bot esperou um pullback) — ver entry_signal_time em tradeExecution.js.
+  // Também aparece em PENDING (aguardando pullback), antes da compra acontecer — ma-cross
+  // e vwap-bands preenchem isso hoje; outros bots ficam sem o triângulo.
+  if (entry?.entrySignalTime && (entry?.phase === 'BOUGHT' || entry?.phase === 'PENDING')) {
+    markers.push({
+      time: new Date(entry.entrySignalTime).getTime(),
+      side: 'signal',
+      price: entry.entrySignalPrice ?? null,
+    });
+  }
+
   if (entry?.phase === 'BOUGHT' && openMs) {
-    // Candle do cruzamento/gatilho que motivou a compra (pode ser bem antes de buyTime
-    // quando o bot esperou um pullback) — ver entry_signal_time em tradeExecution.js.
-    // Só o ma-cross preenche isso hoje; outros bots ficam sem o triângulo.
-    if (entry.entrySignalTime) {
-      markers.push({
-        time: new Date(entry.entrySignalTime).getTime(),
-        side: 'signal',
-        price: entry.entrySignalPrice ?? null,
-      });
-    }
     markers.push({
       time: openMs,
       side: 'entry',

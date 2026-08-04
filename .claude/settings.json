@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c ' *)",
+      "Bash(node -e ' *)",
+      "Bash(node -e \"console.log\\(new Date\\(1785754100636\\).toISOString\\(\\)\\)\")"
+    ]
+  }
+}

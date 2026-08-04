@@ -4,7 +4,8 @@ import { useLanguage } from '../contexts/LanguageContext';
 import { useI18n } from '../i18n';
 import { useCurrency } from '../contexts/CurrencyContext';
 import { PERIOD_DEFAULT_COLORS, MAX_OVERLAY_SLOTS,
-  CURRENCY_PANEL_WIDTH_MIN, CURRENCY_PANEL_WIDTH_MAX, CURRENCY_PANEL_WIDTH_DEFAULT } from '../utils/uiPreferences';
+  CURRENCY_PANEL_WIDTH_MIN, CURRENCY_PANEL_WIDTH_MAX, CURRENCY_PANEL_WIDTH_DEFAULT,
+  VWAP_SLOPE_HIGHLIGHT_LOOKBACKS } from '../utils/uiPreferences';
 
 const OVERLAY_SETTING_INTERVALS = ['15m', '30m', '1h', '4h', '1d'];
 const OVERLAY_SETTING_PERIODS   = ['9', '21', '50', '200'];
@@ -39,7 +40,7 @@ export default function SettingsSidebar({ open, onClose }) {
     uiPrefs, setDefaultChartInterval, setCommonChartIntervals, setPanelVisible,
     setFavoriteButtonVisible, favoriteButtonKeys,
     setOverlaySlotsPreference, setCurrencyPanelWidth,
-    setStatsDefaults, setVwapAnchorDefault,
+    setStatsDefaults, setVwapAnchorDefault, setVwapSlopeHighlightDefault, setChartEngineDefault,
     chartIntervalOptions, panelKeys,
     activeTrades, activeTradesSettings, updateActiveTradesSettings,
     ignoredActiveTrades, dismissActiveTrade, restoreActiveTrade } = useCurrency();
@@ -329,6 +330,76 @@ export default function SettingsSidebar({ open, onClose }) {
                   onClick={() => setVwapAnchorDefault(value)}
                   className={`flex-1 py-1.5 rounded text-xs border transition-all ${
                     uiPrefs.vwapAnchorDefault === value
+                      ? 'border-p4 bg-p4/20 text-p5 font-semibold'
+                      : 'border-p2/40 text-p5/60 hover:border-p3 hover:bg-p2/30'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Destaque visual (rosa) dos trechos com a VWAP em queda acentuada */}
+          <div>
+            <p className={section}>{t('settings.vwap_slope_highlight')}</p>
+            <p className="text-[10px] text-p5/50 mb-3 leading-relaxed">{t('settings.vwap_slope_highlight_hint')}</p>
+            <label className="flex items-center gap-2.5 cursor-pointer group mb-3">
+              <input
+                type="checkbox"
+                checked={uiPrefs.vwapSlopeHighlightDefault?.enabled === true}
+                onChange={(e) => setVwapSlopeHighlightDefault({ enabled: e.target.checked })}
+                className="shrink-0 accent-p4"
+              />
+              <span className="text-p5 text-xs leading-snug group-hover:text-white transition-colors">
+                {t('settings.vwap_slope_highlight_on')}
+              </span>
+            </label>
+            {uiPrefs.vwapSlopeHighlightDefault?.enabled === true && (
+              <div className="flex flex-wrap gap-3 items-center">
+                <div className="flex flex-col gap-1">
+                  <span className="text-[10px] text-p5/50">{t('settings.vwap_slope_highlight_lookback')}</span>
+                  <select
+                    className={inp}
+                    value={uiPrefs.vwapSlopeHighlightDefault?.lookback ?? 6}
+                    onChange={(e) => setVwapSlopeHighlightDefault({ lookback: Number(e.target.value) })}
+                  >
+                    {VWAP_SLOPE_HIGHLIGHT_LOOKBACKS.map((n) => (
+                      <option key={n} value={n}>{n}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex flex-col gap-1">
+                  <span className="text-[10px] text-p5/50">{t('settings.vwap_slope_highlight_min_slope')}</span>
+                  <input
+                    type="number"
+                    step="0.5"
+                    min="-20"
+                    max="5"
+                    className={`w-20 ${inp}`}
+                    value={uiPrefs.vwapSlopeHighlightDefault?.minSlopePct ?? -3}
+                    onChange={(e) => setVwapSlopeHighlightDefault({ minSlopePct: Number(e.target.value) })}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Motor de renderização do gráfico principal */}
+          <div>
+            <p className={section}>{t('settings.chart_engine')}</p>
+            <p className="text-[10px] text-p5/50 mb-3 leading-relaxed">{t('settings.chart_engine_hint')}</p>
+            <div className="flex gap-2">
+              {[
+                { value: 'lw', label: t('settings.chart_engine_lw') },
+                { value: 'echarts', label: t('settings.chart_engine_echarts') },
+              ].map(({ value, label }) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => setChartEngineDefault(value)}
+                  className={`flex-1 py-1.5 rounded text-xs border transition-all ${
+                    (uiPrefs.chartEngineDefault ?? 'lw') === value
                       ? 'border-p4 bg-p4/20 text-p5 font-semibold'
                       : 'border-p2/40 text-p5/60 hover:border-p3 hover:bg-p2/30'
                   }`}

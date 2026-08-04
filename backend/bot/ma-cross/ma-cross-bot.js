@@ -34,7 +34,7 @@ const {
 // trade (e reaproveitáveis por um bot novo) — ver backend/bot/shared/*.
 const { buildAdapter, syncExchangeClocks } = require('../shared/buildAdapter');
 const { sbReq } = require('../shared/supabaseRest');
-const { createTradeExecution } = require('../shared/tradeExecution');
+const { createTradeExecution, entrySignalFields } = require('../shared/tradeExecution');
 
 const VOL_CACHE_MS  = 5 * 60_000;
 
@@ -315,6 +315,8 @@ async function cancelPendingPullback(rowId, log, session, state, reason, detail)
   await saveState(rowId, {
     phase: 'WATCHING',
     rules_state: rulesStateWithoutPending(state, session),
+    entry_signal_time: null,
+    entry_signal_price: null,
   }, log);
 }
 
@@ -504,7 +506,11 @@ async function tick(rowId, adapter, strategy, log, session) {
       session.phase = 'PENDING';
       session.pendingPullback = pending;
       session.rulesState = { ...parseRulesState(state), pendingPullback: pending };
-      await saveState(rowId, { phase: 'PENDING', rules_state: session.rulesState }, log);
+      await saveState(rowId, {
+        phase: 'PENDING',
+        rules_state: session.rulesState,
+        ...entrySignalFields({ signalOpenTime: pending.signalOpenTime, signalPrice: pending.signalClose }),
+      }, log);
       if (usingEma50Proximity) {
         const label = entryCheck.reason === 'EMA50_PROXIMITY_CHANNEL_TOO_WIDE'
           ? `canal EMA21/EMA50 largo demais (${entryCheck.channelWidthPct?.toFixed(2)}% > ${entryCheck.maxChannelPct}%)`

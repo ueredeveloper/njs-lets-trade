@@ -360,4 +360,5 @@ module.exports = {
   postExitRulesState,
   resolveLastExitTime,
   hasOpenPosition,
+  entrySignalFields,
 };

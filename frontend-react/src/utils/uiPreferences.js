@@ -140,6 +140,33 @@ export function normalizeVwapAnchor(raw) {
   return VWAP_ANCHOR_OPTIONS.includes(raw) ? raw : DEFAULT_VWAP_ANCHOR;
 }
 
+/**
+ * Destaque visual (rosa) dos trechos onde a própria VWAP está em queda acentuada — espelha
+ * entry.vwapSlopeFilter do bot vwap-bands (backend/bot/vwap-bands/strategyEngine.js:
+ * vwapSlopeAt), mas aqui é só overlay no gráfico (não bloqueia nenhuma compra) pra o usuário
+ * visualizar antes de decidir ligar o filtro de verdade num símbolo. Compara o valor da VWAP
+ * em cada ponto com o de `lookback` pontos atrás (na mesma série); pinta de rosa (linha +
+ * bandas) o trecho onde a queda passa de `minSlopePct`. Desligado por padrão.
+ */
+export const VWAP_SLOPE_HIGHLIGHT_LOOKBACKS = [3, 6, 12, 24];
+
+export const DEFAULT_VWAP_SLOPE_HIGHLIGHT = {
+  enabled: false,
+  lookback: 6,
+  minSlopePct: -3,
+};
+
+export function normalizeVwapSlopeHighlight(raw) {
+  const d = DEFAULT_VWAP_SLOPE_HIGHLIGHT;
+  const lookback = Math.round(Number(raw?.lookback));
+  const minSlopePct = Number(raw?.minSlopePct);
+  return {
+    enabled: typeof raw?.enabled === 'boolean' ? raw.enabled : d.enabled,
+    lookback: VWAP_SLOPE_HIGHLIGHT_LOOKBACKS.includes(lookback) ? lookback : d.lookback,
+    minSlopePct: Number.isFinite(minSlopePct) ? minSlopePct : d.minSlopePct,
+  };
+}
+
 /** Intervalos disponíveis nas abas de Estatísticas (mesma lista dos selects do painel). */
 export const STATS_INTERVAL_OPTIONS = [
   '1m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w',
@@ -212,6 +239,18 @@ export function normalizeChopInterval(raw) {
   return CHART_INTERVAL_OPTIONS.includes(raw) ? raw : DEFAULT_CHOP_INTERVAL;
 }
 
+/** Motor de renderização do gráfico principal. 'lw' = TradingView Lightweight Charts (padrão,
+ *  só candles + EMA/VWAP); 'echarts' = motor clássico com todos os overlays/subpainéis. Quando
+ *  o gráfico usa um recurso que só existe no ECharts (Ichimoku, S/R, PPHL, RSI, CHOP, Bollinger,
+ *  marcadores de trade, régua de medição, zoom de período), o componente cai pro ECharts mesmo
+ *  com 'lw' selecionado — ver lwUnsupportedReason em CandlestickChart.jsx. */
+export const CHART_ENGINE_OPTIONS = ['lw', 'echarts'];
+export const DEFAULT_CHART_ENGINE = 'lw';
+
+export function normalizeChartEngine(raw) {
+  return CHART_ENGINE_OPTIONS.includes(raw) ? raw : DEFAULT_CHART_ENGINE;
+}
+
 export function normalizeActiveIndicators(arr) {
   if (!Array.isArray(arr)) return [...DEFAULT_ACTIVE_INDICATORS];
   return arr.filter((id) => VALID_ACTIVE_INDICATORS.includes(id));
@@ -264,9 +303,11 @@ export const DEFAULT_UI_PREFS = {
   chopIntervalDefault: DEFAULT_CHOP_INTERVAL,
   vwapDefaults: normalizeVwapDefaults(DEFAULT_VWAP),
   vwapAnchorDefault: normalizeVwapAnchor(DEFAULT_VWAP_ANCHOR),
+  vwapSlopeHighlightDefault: normalizeVwapSlopeHighlight(DEFAULT_VWAP_SLOPE_HIGHLIGHT),
   activeIndicators: [...DEFAULT_ACTIVE_INDICATORS],
   currencyPanelWidth: CURRENCY_PANEL_WIDTH_DEFAULT,
   statsDefaults: normalizeStatsDefaults(DEFAULT_STATS),
+  chartEngineDefault: DEFAULT_CHART_ENGINE,
 };
 
 function cloneDefaults() {
@@ -282,9 +323,11 @@ function cloneDefaults() {
     pphlIntervalDefault: DEFAULT_PPHL_INTERVAL,
     vwapDefaults: normalizeVwapDefaults(DEFAULT_VWAP),
     vwapAnchorDefault: normalizeVwapAnchor(DEFAULT_VWAP_ANCHOR),
+    vwapSlopeHighlightDefault: normalizeVwapSlopeHighlight(DEFAULT_VWAP_SLOPE_HIGHLIGHT),
     activeIndicators: [...DEFAULT_ACTIVE_INDICATORS],
     currencyPanelWidth: CURRENCY_PANEL_WIDTH_DEFAULT,
     statsDefaults: normalizeStatsDefaults(DEFAULT_STATS),
+    chartEngineDefault: DEFAULT_CHART_ENGINE,
   };
 }
 
@@ -334,6 +377,9 @@ export function loadUiPreferences() {
     if (parsed.vwapAnchorDefault !== undefined) {
       result.vwapAnchorDefault = normalizeVwapAnchor(parsed.vwapAnchorDefault);
     }
+    if (parsed.vwapSlopeHighlightDefault) {
+      result.vwapSlopeHighlightDefault = normalizeVwapSlopeHighlight(parsed.vwapSlopeHighlightDefault);
+    }
     if (Array.isArray(parsed.activeIndicators)) {
       result.activeIndicators = normalizeActiveIndicators(parsed.activeIndicators);
     }
@@ -342,6 +388,9 @@ export function loadUiPreferences() {
     }
     if (parsed.statsDefaults) {
       result.statsDefaults = normalizeStatsDefaults(parsed.statsDefaults);
+    }
+    if (parsed.chartEngineDefault !== undefined) {
+      result.chartEngineDefault = normalizeChartEngine(parsed.chartEngineDefault);
     }
     return result;
   } catch {

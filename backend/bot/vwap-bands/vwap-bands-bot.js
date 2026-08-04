@@ -35,7 +35,7 @@ const {
 // trade — ver backend/bot/shared/*.
 const { buildAdapter, syncExchangeClocks } = require('../shared/buildAdapter');
 const { sbReq } = require('../shared/supabaseRest');
-const { createTradeExecution } = require('../shared/tradeExecution');
+const { createTradeExecution, entrySignalFields } = require('../shared/tradeExecution');
 
 const VOL_CACHE_MS = 5 * 60_000;
 const PENDING_LOG_INTERVAL_MS = 15 * 60_000;
@@ -114,7 +114,7 @@ async function cancelPending(rowId, log, session, state, reason) {
   session.pendingSetup = null;
   const rs = { ...parseRulesState(state), ...(session.rulesState ?? {}) };
   delete rs.pendingSetup;
-  await saveState(rowId, { phase: 'WATCHING', rules_state: rs }, log);
+  await saveState(rowId, { phase: 'WATCHING', rules_state: rs, entry_signal_time: null, entry_signal_price: null }, log);
 }
 
 /**
@@ -242,7 +242,10 @@ async function tick(rowId, adapter, strategy, log, session) {
       };
       session.pendingSetup = pending;
       session.rulesState = { ...parseRulesState(state), pendingSetup: pending };
-      await saveState(rowId, { rules_state: session.rulesState }, log);
+      await saveState(rowId, {
+        rules_state: session.rulesState,
+        ...entrySignalFields({ signalOpenTime: pending.signalOpenTime, signalPrice: pending.signalClose }),
+      }, log);
       log(`${G}📍 Sinal mais recente (${freshSignal.entryDesc}) — trocando pendência, aguardando retorno a ${labelForLevel(freshSignal.confirmLevel)}${X}`);
     }
 
@@ -299,7 +302,11 @@ async function tick(rowId, adapter, strategy, log, session) {
     session.phase = 'PENDING';
     session.pendingSetup = pending;
     session.rulesState = { ...parseRulesState(state), pendingSetup: pending };
-    await saveState(rowId, { phase: 'PENDING', rules_state: session.rulesState }, log);
+    await saveState(rowId, {
+      phase: 'PENDING',
+      rules_state: session.rulesState,
+      ...entrySignalFields({ signalOpenTime: pending.signalOpenTime, signalPrice: pending.signalClose }),
+    }, log);
     const wait = config.entry.pullback.waitCandles;
     log(`${G}📍 Sinal (${signal.entryDesc}) — aguardando retorno a ${labelForLevel(signal.confirmLevel)} (até ${wait} candles)${X}`);
     return { phase: 'PENDING' };

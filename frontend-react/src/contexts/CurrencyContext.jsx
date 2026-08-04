@@ -37,10 +37,12 @@ import {
   normalizeChopInterval,
   normalizeVwapDefaults,
   normalizeVwapAnchor,
+  normalizeVwapSlopeHighlight,
   normalizeActiveIndicators,
   normalizeCurrencyPanelWidth,
   normalizeStatsDefaults,
   normalizeCommonChartIntervals,
+  normalizeChartEngine,
 } from '../utils/uiPreferences';
 
 const CurrencyContext = createContext(null);
@@ -669,6 +671,25 @@ export function CurrencyProvider({ children }) {
     });
   }, []);
 
+  const setVwapSlopeHighlightDefault = useCallback((patch) => {
+    setUiPrefsState((prev) => {
+      const next = {
+        ...prev,
+        vwapSlopeHighlightDefault: normalizeVwapSlopeHighlight({ ...prev.vwapSlopeHighlightDefault, ...patch }),
+      };
+      saveUiPreferences(next);
+      return next;
+    });
+  }, []);
+
+  const setChartEngineDefault = useCallback((engine) => {
+    setUiPrefsState((prev) => {
+      const next = { ...prev, chartEngineDefault: normalizeChartEngine(engine) };
+      saveUiPreferences(next);
+      return next;
+    });
+  }, []);
+
   const setActiveIndicatorsPreference = useCallback((indicators) => {
     setUiPrefsState((prev) => {
       const next = { ...prev, activeIndicators: normalizeActiveIndicators(indicators) };
@@ -948,10 +969,12 @@ export function CurrencyProvider({ children }) {
         setPphlIntervalDefault,
         setChopIntervalDefault,
         setVwapDefaults,
+        setVwapSlopeHighlightDefault,
         setVwapAnchorDefault,
         setActiveIndicatorsPreference,
         setCurrencyPanelWidth,
         setStatsDefaults,
+        setChartEngineDefault,
         chartIntervalOptions: CHART_INTERVAL_OPTIONS,
         panelKeys: PANEL_KEYS,
         isVisibleSymbol,

@@ -4,9 +4,11 @@ import ReactECharts from 'echarts-for-react';
 import { useCurrency } from '../contexts/CurrencyContext';
 import { fetchCandlesticksAndCloud, fetchGateTrades, fetchBinanceTrades, fetchChartAdaptiveBands, DEFAULT_CANDLE_LIMIT } from '../services/api';
 import { buildMarkersFromExchangeTrades, attachPnlToExchangeTrades, isMaCrossEntry, isVwapBandsEntry } from '../utils/multitradeChart';
+import { computeVwapSlopeFlags } from '../utils/vwapSlopeHighlight';
 import { buildTrailingStopSeries, resolveChartStopLoss, resolveChartTarget, computeStopLossFloor } from '../utils/trailingStopLoss';
 import { getEntriesForSymbol, buildAdHocMaCrossEntry } from '../constants/strategyPresets';
 import MaCrossRuleCheckChart from './MaCrossRuleCheckChart';
+import CandlestickChartLW from './CandlestickChartLW';
 import convertOpenTime from '../utils/convertOpenTime';
 import Tooltip from './Tooltip';
 import { hasAnyChartPanelButton } from '../utils/chartPanelButtons';
@@ -354,38 +356,79 @@ function buildBollingerSeries(bbConfig, candlesticks, alignSeries) {
   ];
 }
 
-function buildVwapSeries(vwapConfig, candlesticks, alignSeries) {
+/** Mesma busca binária de alignPointsToCandles, mas devolve o FLAG (declínio da VWAP) do
+ *  ponto vigente em vez do valor — usado pro destaque de queda (Configurações). */
+function alignFlagsToCandles(candlesticks, points, flags) {
+  if (!points?.length || !candlesticks?.length) return candlesticks?.map(() => false) ?? [];
+  return candlesticks.map(c => {
+    const t = Number(c.openTime);
+    let lo = 0, hi = points.length - 1, best = false;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (points[mid].openTime <= t) { best = flags[mid]; lo = mid + 1; }
+      else hi = mid - 1;
+    }
+    return best;
+  });
+}
+
+/** Separa um array denso (1 valor por candle, já alinhado por alignPointsToCandles) em dois
+ *  — trecho normal e trecho em queda (flags densos, mesmo tamanho) — duplicando o ponto de
+ *  fronteira nos dois pra a linha não abrir buraco na transição de cor. */
+function splitDenseByFlag(values, flags) {
+  const normal = values.map((v, i) => (flags[i] ? null : v));
+  const declining = values.map((v, i) => (flags[i] ? v : null));
+  for (let i = 1; i < values.length; i++) {
+    if (values[i] == null || values[i - 1] == null || flags[i] === flags[i - 1]) continue;
+    if (flags[i]) declining[i - 1] = values[i - 1]; else normal[i - 1] = values[i - 1];
+    if (flags[i - 1]) declining[i] = values[i]; else normal[i] = values[i];
+  }
+  return { normal, declining };
+}
+
+const VWAP_LINE_COLOR = '#FF4FA3';
+const VWAP_BAND_COLOR = 'rgba(255, 79, 163, 0.45)';
+
+function buildVwapSeries(vwapConfig, candlesticks, alignSeries, slopeHighlight) {
   if (!vwapConfig?.enabled || !vwapConfig.points?.length) return [];
-  const color = '#4ade80';
+  const declineColor = '#ec4899';
   const sessionLabel = `${vwapConfig.session === 'weekly' ? 'W' : 'D'}${vwapConfig.anchor === 'rolling' ? '~' : ''}`;
   const label = `VWAP@${vwapConfig.interval}(${sessionLabel})`;
-  const toLine = (field) => alignSeries(alignPointsToCandles(
+  const rawLine = (field) => alignPointsToCandles(
     candlesticks,
     vwapConfig.points.map(p => ({ openTime: p.openTime, value: p[field] })),
-  ));
-  const series = [{
-    name: label,
-    type: 'line',
-    data: toLine('value'),
-    smooth: true,
-    showSymbol: false,
-    lineStyle: { color, width: 1.5, type: 'solid' },
-    endLabel: {
-      show: true,
-      formatter: label,
-      color,
-      fontSize: 9,
-      padding: [1, 4],
-      backgroundColor: 'rgba(0,0,0,0.5)',
-      borderRadius: 2,
-    },
-  }];
+  );
+
+  const highlightOn = !!slopeHighlight?.enabled;
+  const denseFlags = highlightOn
+    ? alignFlagsToCandles(candlesticks, vwapConfig.points, computeVwapSlopeFlags(vwapConfig.points, slopeHighlight.lookback, slopeHighlight.minSlopePct))
+    : null;
+
+  /** Uma entrada vira duas (normal + rosa) quando o destaque está ligado. */
+  function lineDefs(field, name, lineColor, lineStyle, showEndLabel) {
+    const raw = rawLine(field);
+    const base = { type: 'line', smooth: true, showSymbol: false };
+    const endLabel = showEndLabel ? {
+      show: true, formatter: name, color: lineColor, fontSize: 9, padding: [1, 4],
+      backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 2,
+    } : undefined;
+    if (!highlightOn) {
+      return [{ ...base, name, data: alignSeries(raw), lineStyle: { color: lineColor, ...lineStyle }, ...(endLabel ? { endLabel } : {}) }];
+    }
+    const { normal, declining } = splitDenseByFlag(raw, denseFlags);
+    return [
+      { ...base, name, data: alignSeries(normal), lineStyle: { color: lineColor, ...lineStyle }, ...(endLabel ? { endLabel } : {}) },
+      { ...base, name: `${name} (queda)`, data: alignSeries(declining), lineStyle: { color: declineColor, ...lineStyle } },
+    ];
+  }
+
+  const series = [...lineDefs('value', label, VWAP_LINE_COLOR, { width: 1.5, type: 'solid' }, true)];
   if (vwapConfig.bands) {
     series.push(
-      { name: `${label} up1`, type: 'line', data: toLine('upper1'), smooth: true, showSymbol: false, lineStyle: { color, width: 1, type: 'dashed', opacity: 0.6 } },
-      { name: `${label} lw1`, type: 'line', data: toLine('lower1'), smooth: true, showSymbol: false, lineStyle: { color, width: 1, type: 'dashed', opacity: 0.6 } },
-      { name: `${label} up2`, type: 'line', data: toLine('upper2'), smooth: true, showSymbol: false, lineStyle: { color, width: 1, type: 'dotted', opacity: 0.4 } },
-      { name: `${label} lw2`, type: 'line', data: toLine('lower2'), smooth: true, showSymbol: false, lineStyle: { color, width: 1, type: 'dotted', opacity: 0.4 } },
+      ...lineDefs('upper1', `${label} up1`, VWAP_BAND_COLOR, { width: 1, type: 'dashed' }, false),
+      ...lineDefs('lower1', `${label} lw1`, VWAP_BAND_COLOR, { width: 1, type: 'dashed' }, false),
+      ...lineDefs('upper2', `${label} up2`, VWAP_BAND_COLOR, { width: 1, type: 'dotted' }, false),
+      ...lineDefs('lower2', `${label} lw2`, VWAP_BAND_COLOR, { width: 1, type: 'dotted' }, false),
     );
   }
   return series;
@@ -500,7 +543,7 @@ const BOLLINGER_ROW_SPAN = 3;
 
 const INTERVAL_PICKER_ROW_SPAN = 1;
 
-const VWAP_ROW_SPAN = 4;
+const VWAP_ROW_SPAN = 5;
 
 /** Grid interno do bloco de EMAs rápidas: intervalo+remover, 4 botões de período, banda cima/baixo. */
 const QUICK_EMA_GRID_COLS = 4;
@@ -580,18 +623,19 @@ function renderBollingerTile(dims, t, bollingerBands, setBollingerBands) {
  * VWAP de sessão: intervalo próprio + sessão (diário/semanal) + bandas ±σ + ON/OFF —
  * mesmo padrão da Bollinger, sem período/desvio (é um único acumulado por sessão, não uma média móvel).
  */
-function renderVwapTile(dims, t, vwap, setVwap) {
+function renderVwapTile(dims, t, vwap, setVwap, slopeHighlightOn, setSlopeHighlightOn) {
   const innerW = dims.w - PANEL_TILE_PAD * 2;
   const innerH = dims.h - PANEL_TILE_PAD * 2;
-  const rowH = (innerH - PANEL_GAP * 3) / 4;
+  const rowH = (innerH - PANEL_GAP * 4) / 5;
   const rowDims = { w: innerW, h: rowH };
   const halfDims = { w: (innerW - PANEL_GAP) / 2, h: rowH };
   const color = '#4ade80';
+  const declineColor = '#ef4444';
   return (
     <div style={{
       display: 'grid',
       gridTemplateColumns: '1fr 1fr',
-      gridTemplateRows: 'repeat(4, 1fr)',
+      gridTemplateRows: 'repeat(5, 1fr)',
       gap: PANEL_GAP,
       width: innerW,
       height: innerH,
@@ -649,6 +693,17 @@ function renderVwapTile(dims, t, vwap, setVwap) {
             style={panelBtn(vwap.enabled, color, true, rowDims)}
           >
             {vwap.enabled ? 'VWAP ON' : 'VWAP OFF'}
+          </button>
+        </PanelTip>
+      </div>
+      <div style={{ gridColumn: '1 / span 2', gridRow: '5', display: 'flex', alignItems: 'stretch' }}>
+        <PanelTip text={t('chart.tip.vwap_slope_highlight')}>
+          <button
+            type="button"
+            onClick={() => setSlopeHighlightOn(v => !v)}
+            style={panelBtn(slopeHighlightOn, declineColor, false, rowDims)}
+          >
+            {slopeHighlightOn ? 'Queda VWAP ON' : 'Queda VWAP OFF'}
           </button>
         </PanelTip>
       </div>
@@ -1129,6 +1184,8 @@ function ChartIndicatorPanel({
   setChopInterval,
   vwap,
   setVwap,
+  vwapSlopeHighlightOn,
+  setVwapSlopeHighlightOn,
   overlayMaLoading,
   panelButtons,
   collapsed,
@@ -1345,7 +1402,7 @@ function ChartIndicatorPanel({
               {tile.kind === 'srInterval' && renderIntervalPickerTile(tile.dims, t, 'chart.tip.sr_interval', 'S/R', '#facc15', srInterval, setSrInterval)}
               {tile.kind === 'pphlInterval' && renderIntervalPickerTile(tile.dims, t, 'chart.tip.pphl_interval', 'PPHL', '#2dd4bf', pphlInterval, setPphlInterval)}
               {tile.kind === 'chopInterval' && renderIntervalPickerTile(tile.dims, t, 'chart.tip.chop_interval', 'CHOP', '#f59e0b', chopInterval, setChopInterval)}
-              {tile.kind === 'vwap' && renderVwapTile(tile.dims, t, vwap, setVwap)}
+              {tile.kind === 'vwap' && renderVwapTile(tile.dims, t, vwap, setVwap, vwapSlopeHighlightOn, setVwapSlopeHighlightOn)}
               {tile.kind === 'quickEma' && renderQuickEmaGroupsTile(
                 tile.data, tile.dims, t,
                 addQuickEmaGroup, removeQuickEmaGroup, updateQuickEmaGroupInterval, toggleQuickEmaGroupPeriod,
@@ -1802,7 +1859,7 @@ function buildSignalMarkers(candlesticks, markers, DL, LEFT_PAD, chartInterval) 
   return points;
 }
 
-function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAverage, ma50, ma9, ma21, rsi }, colors, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = [], overlayConfigs = [], multitradeMarkers = [], chartLeftPad = CHART_LEFT_MARGIN, buyInfo = null, stopLossConfig = null, targetConfig = null, chartRightPad = CHART_PRICE_PAD + CHART_LEFT_MARGIN, bollingerConfig = null, srConfig = null, pphlConfig = null, vwapConfig = null, chopConfig = null) {
+function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAverage, ma50, ma9, ma21, rsi }, colors, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = [], overlayConfigs = [], multitradeMarkers = [], chartLeftPad = CHART_LEFT_MARGIN, buyInfo = null, stopLossConfig = null, targetConfig = null, chartRightPad = CHART_PRICE_PAD + CHART_LEFT_MARGIN, bollingerConfig = null, srConfig = null, pphlConfig = null, vwapConfig = null, chopConfig = null, vwapSlopeHighlight = null) {
   const showMa9      = activeIndicators.includes('ma9');
   const showMa21     = activeIndicators.includes('ma21');
   const showMa50     = activeIndicators.includes('ma50');
@@ -1978,7 +2035,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
 
   const overlayLineSeries = buildOverlaySeries(overlayConfigs, candlesticks, alignSeries);
   const bollingerSeries = buildBollingerSeries(bollingerConfig, candlesticks, alignSeries);
-  const vwapSeries = buildVwapSeries(vwapConfig, candlesticks, alignSeries);
+  const vwapSeries = buildVwapSeries(vwapConfig, candlesticks, alignSeries, vwapSlopeHighlight);
 
   const tooltipFormatter = (params) => {
     const idx = params[0]?.dataIndex;
@@ -2426,10 +2483,11 @@ export default function CandlestickChart() {
   const { selectedChart, setSelectedChart, chartZoom, setChartZoom, chartTradeMarkers, chartViewSource,
     chartCandleWindowReset,
     multitradeChartFocus, tradePurchases, allTrades, chartInterval: savedInterval, setChartInterval,
-    chartPanelButtons, uiPrefs, setMaBandsDefaults, setBollingerBandsDefaults, setSrIntervalDefault, setPphlIntervalDefault, setChopIntervalDefault, setVwapDefaults, setActiveIndicatorsPreference,
+    chartPanelButtons, uiPrefs, setMaBandsDefaults, setBollingerBandsDefaults, setSrIntervalDefault, setPphlIntervalDefault, setChopIntervalDefault, setVwapDefaults, setVwapSlopeHighlightDefault, setActiveIndicatorsPreference,
     multitradeFavorites, fiveMTradeFavorites, activeTrades } = useCurrency();
   const { t } = useI18n();
   const chartRef = useRef(null);
+  const lwChartRef = useRef(null);
   const chartWrapRef = useRef(null);
   const [currentInterval, setCurrentInterval] = useState(savedInterval || DEFAULT_INTERVAL);
   const [loadingInterval, setLoadingInterval] = useState(false);
@@ -2521,6 +2579,17 @@ export default function CandlestickChart() {
   const [chopCache, setChopCache] = useState({});
   const [_chopLoading, setChopLoading] = useState(false);
   const [vwap, setVwap] = useState(() => ({ ...uiPrefs.vwapDefaults }));
+  // Botão "Queda VWAP" (painel do gráfico, tile da VWAP) — liga/desliga a nuvem/destaque
+  // vermelho dos trechos em que a própria VWAP está caindo (vwapSlopeAt, mesmo cálculo do
+  // vwapSlopeFilter do bot vwap-bands). Só o ON/OFF é local à sessão do gráfico (mesmo padrão
+  // do vwap.enabled acima); lookback/inclinação mínima continuam vindo ao vivo de
+  // Configurações (uiPrefs.vwapSlopeHighlightDefault) — editar lá vale pro gráfico na hora.
+  const [vwapSlopeHighlightOn, setVwapSlopeHighlightOn] = useState(() => uiPrefs.vwapSlopeHighlightDefault.enabled);
+  const vwapSlopeHighlight = useMemo(() => ({
+    enabled: vwapSlopeHighlightOn,
+    lookback: uiPrefs.vwapSlopeHighlightDefault.lookback,
+    minSlopePct: uiPrefs.vwapSlopeHighlightDefault.minSlopePct,
+  }), [vwapSlopeHighlightOn, uiPrefs.vwapSlopeHighlightDefault.lookback, uiPrefs.vwapSlopeHighlightDefault.minSlopePct]);
   // Overlay de VWAP+bandas pedido pela aba Estatísticas (clique numa linha do vwap-bands) —
   // mesma ideia do overlay de Bollinger acima: sobrescreve intervalo/sessão locais pelos
   // usados na simulação daquela ocorrência e liga bandas.
@@ -2700,6 +2769,14 @@ export default function CandlestickChart() {
     setVwapDefaults({ enabled: vwap.enabled, interval: vwap.interval, session: vwap.session, bands: vwap.bands });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vwap.enabled, vwap.interval, vwap.session, vwap.bands]);
+
+  // Persiste só o ON/OFF do botão "Queda VWAP" — lookback/inclinação mínima continuam
+  // exclusivos de Configurações (não têm controle no painel do gráfico).
+  useEffect(() => {
+    if (isTradePanelChartView(chartViewSource)) return;
+    setVwapSlopeHighlightDefault({ enabled: vwapSlopeHighlightOn });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vwapSlopeHighlightOn]);
 
   const overlayFetchLimit = useMemo(() => {
     if (isTradePanelChartView(chartViewSource) && multitradeChartFocus?.fetchFromMs) {
@@ -3233,12 +3310,34 @@ export default function CandlestickChart() {
     setMeasurePoints(null);
   }
 
-  // Candle sob o cursor (índice + openTime), a partir do pixel X — usado pra medir tempo/candles decorridos.
-  function candleAtPixelX(x) {
+  // Preço sob o cursor, a partir do pixel Y — TradingView (coordinateToPrice) ou ECharts
+  // (convertFromPixel), o que estiver ativo no momento.
+  function priceAtPixelY(y) {
+    if (showLwChart && lwChartRef.current) return lwChartRef.current.coordinateToPrice(y);
     const inst = chartRef.current?.getEchartsInstance();
     if (!inst) return null;
+    return inst.convertFromPixel({ yAxisIndex: 0 }, y);
+  }
+
+  // Candle sob o cursor (índice + openTime), a partir do pixel X — usado pra medir tempo/candles
+  // decorridos. No TradingView o índice é sobre o array de candles inteiro (não uma janela
+  // fatiada como no ECharts), mas a diferença idx2-idx1 continua correta pra contar candles.
+  function candleAtPixelX(x) {
     const candles = selectedChart?.candlesticks;
     if (!candles?.length) return null;
+    if (showLwChart && lwChartRef.current) {
+      const timeSec = lwChartRef.current.coordinateToTime(x);
+      if (timeSec == null) return null;
+      const targetMs = timeSec * 1000;
+      let bestIdx = 0, bestDiff = Infinity;
+      candles.forEach((c, i) => {
+        const d = Math.abs(Number(c.openTime) - targetMs);
+        if (d < bestDiff) { bestDiff = d; bestIdx = i; }
+      });
+      return { idx: bestIdx, openTime: Number(candles[bestIdx].openTime) };
+    }
+    const inst = chartRef.current?.getEchartsInstance();
+    if (!inst) return null;
     const DL = Math.min(displayLimit, candles.length);
     const visible = candles.slice(-DL);
     const LEFT_PAD = 1;
@@ -3253,15 +3352,16 @@ export default function CandlestickChart() {
   function handleMeasureStart(e) {
     if (!measureMode) return;
     const wrap = chartWrapRef.current;
-    const inst = chartRef.current?.getEchartsInstance();
-    if (!wrap || !inst) return;
+    const usingLw = showLwChart && !!lwChartRef.current;
+    const inst = usingLw ? null : chartRef.current?.getEchartsInstance();
+    if (!wrap || (!usingLw && !inst)) return;
     e.preventDefault();
     clearMeasureAutoHide();
     const rect = wrap.getBoundingClientRect();
     const point = e.touches?.length ? e.touches[0] : e;
     const startX = point.clientX - rect.left;
     const startY = point.clientY - rect.top;
-    const startPrice = inst.convertFromPixel({ yAxisIndex: 0 }, startY);
+    const startPrice = priceAtPixelY(startY);
     const startCandle = candleAtPixelX(startX);
     setMeasurePoints({
       x1: startX, y1: startY, x2: startX, y2: startY, price1: startPrice, price2: startPrice,
@@ -3273,7 +3373,7 @@ export default function CandlestickChart() {
       const p = ev.touches?.length ? ev.touches[0] : ev;
       const x = p.clientX - rect.left;
       const y = p.clientY - rect.top;
-      const price = inst.convertFromPixel({ yAxisIndex: 0 }, y);
+      const price = priceAtPixelY(y);
       const candle = candleAtPixelX(x);
       setMeasurePoints((prev) => (prev ? {
         ...prev, x2: x, y2: y, price2: price,
@@ -3319,9 +3419,12 @@ export default function CandlestickChart() {
       .slice(-2)
       .map(t => Number(t.time));
 
-  const markerTimesForWindow = chartViewSource === CHART_VIEW.TRADES && chartTradeMarkers?.length
-    ? chartTradeMarkers.map(m => Number(m.time)).filter(Number.isFinite)
-    : tradeTimes;
+  // Só expande a janela pra caber a compra/marcador antigo na aba Trades — em qualquer outra
+  // seleção (favorito, VWAP Bands etc.) o padrão continua sendo os 50 candles de sempre, mesmo
+  // que a última compra real seja de muitos candles atrás.
+  const markerTimesForWindow = chartViewSource === CHART_VIEW.TRADES
+    ? (chartTradeMarkers?.length ? chartTradeMarkers.map(m => Number(m.time)).filter(Number.isFinite) : tradeTimes)
+    : [];
 
   const displayLimit = (() => {
     const candles = selectedChart?.candlesticks;
@@ -3606,10 +3709,10 @@ export default function CandlestickChart() {
     return buildOption(
       selectedChart, colors, effectiveIndicators, displayLimit, chartZoom, tradeTimes, overlayConfigs,
       chartTradeMarkers?.length ? chartTradeMarkers : (selectedChart.tradeMarkers ?? []),
-      chartLeftPad, chartBuyInfo, chartStopLossConfig, chartTargetConfig, chartRightPad, chartBollingerConfig, chartSrConfig, chartPphlConfig, chartVwapConfig, chartChopConfig,
+      chartLeftPad, chartBuyInfo, chartStopLossConfig, chartTargetConfig, chartRightPad, chartBollingerConfig, chartSrConfig, chartPphlConfig, chartVwapConfig, chartChopConfig, vwapSlopeHighlight,
     );
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedChart, colors, effectiveIndicators, chartZoom, tradePurchases, chartTradeMarkers, activeTab, overlayConfigs, displayLimit, chartLeftPad, chartRightPad, chartBuyInfo, chartStopLossConfig, chartTargetConfig, chartBollingerConfig, chartSrConfig, chartPphlConfig, chartVwapConfig, chartChopConfig]);
+  }, [selectedChart, colors, effectiveIndicators, chartZoom, tradePurchases, chartTradeMarkers, activeTab, overlayConfigs, displayLimit, chartLeftPad, chartRightPad, chartBuyInfo, chartStopLossConfig, chartTargetConfig, chartBollingerConfig, chartSrConfig, chartPphlConfig, chartVwapConfig, chartChopConfig, vwapSlopeHighlight]);
 
   if (!selectedChart || !option) {
     return (
@@ -3625,6 +3728,18 @@ export default function CandlestickChart() {
       </div>
     );
   }
+
+  // Só falta a nuvem Ichimoku hoje (precisa preencher a área entre spanA/spanB — sem primitive
+  // pronta no Lightweight Charts). Todo o resto (S/R, PPHL, RSI/CHOP, Bollinger, Stop/Alvo,
+  // marcadores de trade, zoom de período, régua de medição) já funciona nativamente em
+  // CandlestickChartLW.jsx — a régua usa lwChartRef (coordinateToPrice/coordinateToTime) em vez
+  // de getEchartsInstance(), então medir não força mais a troca pro ECharts.
+  const lwUnsupportedReason = [];
+  if (effectiveIndicators.includes('ichimoku')) lwUnsupportedReason.push('Ichimoku');
+  const lwSupported = lwUnsupportedReason.length === 0;
+  // Motor escolhido em Configurações → Gráfico padrão; cai pro ECharts sozinho quando um
+  // recurso não suportado pelo TradingView está ativo (ver lwUnsupportedReason acima).
+  const showLwChart = uiPrefs.chartEngineDefault !== 'echarts' && lwSupported;
 
   // ── Chart ECharts (usado em ambas as abas) ───────────────────────────────────
   const chartNode = (
@@ -3850,6 +3965,8 @@ export default function CandlestickChart() {
             setChopInterval={setChopInterval}
             vwap={vwap}
             setVwap={setVwap}
+            vwapSlopeHighlightOn={vwapSlopeHighlightOn}
+            setVwapSlopeHighlightOn={setVwapSlopeHighlightOn}
             overlayMaLoading={overlayMaLoading}
             panelButtons={chartPanelButtons}
             collapsed={panelCollapsed}
@@ -3859,7 +3976,43 @@ export default function CandlestickChart() {
         </div>
       ) : (
         <div ref={chartWrapRef} className="flex-1 min-h-0 relative">
-          {chartNode}
+          {showLwChart ? (
+            <CandlestickChartLW
+              ref={lwChartRef}
+              symbol={selectedChart.symbol}
+              interval={selectedChart.interval ?? currentInterval}
+              candlesticks={selectedChart.candlesticks}
+              colors={colors}
+              rightPad={panelPad}
+              activeIndicators={effectiveIndicators}
+              ma9={selectedChart.ma9}
+              ma21={selectedChart.ma21}
+              ma50={selectedChart.ma50}
+              ma200={selectedChart.movingAverage}
+              overlayConfigs={overlayConfigs}
+              vwapConfig={chartVwapConfig}
+              vwapSlopeHighlight={vwapSlopeHighlight}
+              bollingerConfig={chartBollingerConfig}
+              srConfig={chartSrConfig}
+              pphlConfig={chartPphlConfig}
+              rsi={selectedChart.rsi}
+              chopConfig={chartChopConfig}
+              stopLossConfig={chartStopLossConfig}
+              targetConfig={chartTargetConfig}
+              buyInfo={chartBuyInfo}
+              multitradeMarkers={chartTradeMarkers?.length ? chartTradeMarkers : (selectedChart.tradeMarkers ?? [])}
+              zoomPeriod={chartZoom}
+              focusLastN={hasExplicitCandleWindow ? displayCandleCount : null}
+            />
+          ) : chartNode}
+          {!showLwChart && !lwSupported && uiPrefs.chartEngineDefault !== 'echarts' && (
+            <div
+              className="absolute top-1 left-2 z-10 text-[10px] font-mono text-p5/50 pointer-events-none"
+              title={`TradingView indisponível agora: ${lwUnsupportedReason.join(', ')}`}
+            >
+              ECharts (auto: {lwUnsupportedReason.join(', ')})
+            </div>
+          )}
           {measureOverlay}
           {measureButtons}
           <ChartIndicatorPanel
@@ -3882,6 +4035,8 @@ export default function CandlestickChart() {
             setChopInterval={setChopInterval}
             vwap={vwap}
             setVwap={setVwap}
+            vwapSlopeHighlightOn={vwapSlopeHighlightOn}
+            setVwapSlopeHighlightOn={setVwapSlopeHighlightOn}
             overlayMaLoading={overlayMaLoading}
             panelButtons={chartPanelButtons}
             collapsed={panelCollapsed}

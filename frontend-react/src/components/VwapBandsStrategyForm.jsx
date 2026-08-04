@@ -1,6 +1,7 @@
 import {
   VWAP_BANDS_ALL_INTERVALS, VWAP_BANDS_SESSIONS, VWAP_BANDS_STOP_LOSS_MODES,
   EMA_FILTER_PERIODS, EMA_FILTER_TOLERANCES, EMA_FILTER_SLOPE_LOOKBACKS,
+  VWAP_SLOPE_FILTER_LOOKBACKS,
 } from '../constants/vwapBandsConfigSchema';
 
 const ENTRY_COLOR = '#26a69a';
@@ -28,6 +29,7 @@ export default function VwapBandsStrategyForm({ form, patch, symbol }) {
   const patchEntry     = (field, val) => patch(`entry.${field}`, val);
   const patchPullback  = (field, val) => patch(`entry.pullback.${field}`, val);
   const patchEmaFilter = (field, val) => patch(`entry.emaFilter.${field}`, val);
+  const patchVwapSlopeFilter = (field, val) => patch(`entry.vwapSlopeFilter.${field}`, val);
   const patchExit      = (field, val) => patch(`exit.${field}`, val);
   const patchFastCheck = (field, val) => patch(`exit.fastCheck.${field}`, val);
   const patchStopLoss  = (field, val) => patch(`stopLoss.${field}`, val);
@@ -88,7 +90,7 @@ export default function VwapBandsStrategyForm({ form, patch, symbol }) {
         {form.entry.emaFilter?.enabled !== false && (
           <>
             <p className="text-[10px] text-p5/60 leading-relaxed">
-              No instante do SINAL (candle de alta que fecha acima da linha — lw1/vwap/
+              No instante do SINAL (candle de alta que fecha acima da linha — lw1/vw/
               up1/up2), só arma o sinal se o close também estiver acima da banda
               inferior da EMA — floor = EMA × (1 − tolerância%) — e a própria EMA não
               estiver em queda (variação % entre o valor no candle e o de N candles atrás
@@ -124,6 +126,44 @@ export default function VwapBandsStrategyForm({ form, patch, symbol }) {
                 <span className="text-p5/50">Inclinação mín.</span>
                 <NumInput value={form.entry.emaFilter?.minSlopePct ?? 0}
                   onChange={v => patchEmaFilter('minSlopePct', v)} min={-10} max={5} step={0.1} />
+                <span className="text-p5/40">%</span>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+
+      <div className="rounded-md p-2 space-y-2" style={{ background: '#1a1d28', border: `1px solid ${ENTRY_COLOR}33` }}>
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: ENTRY_COLOR }}>
+            Filtro de inclinação da VWAP
+          </span>
+          <label className="flex items-center gap-1 text-[9px] text-p5/50 cursor-pointer">
+            <input type="checkbox" checked={form.entry.vwapSlopeFilter?.enabled === true}
+              onChange={e => patchVwapSlopeFilter('enabled', e.target.checked)} style={{ accentColor: ENTRY_COLOR }} />
+            Ativo
+          </label>
+        </div>
+        {form.entry.vwapSlopeFilter?.enabled === true && (
+          <>
+            <p className="text-[10px] text-p5/60 leading-relaxed">
+              Mesma ideia do filtro EMA acima, mas medindo a inclinação da própria linha da
+              VWAP (não a EMA de preço) — pega moedas onde a VWAP e as bandas em si estão em
+              queda acentuada. No candle do SINAL, compara o valor da VWAP com o de N candles
+              atrás (na unidade do intervalo VWAP, ex.: 4h); bloqueia o sinal se a queda passar
+              da inclinação mín.
+            </p>
+            <div className="flex flex-wrap gap-3 items-center text-xs">
+              <div className="flex items-center gap-1">
+                <span className="text-p5/50">Lookback</span>
+                <Select value={form.entry.vwapSlopeFilter?.lookback ?? 6}
+                  onChange={v => patchVwapSlopeFilter('lookback', Number(v))} options={VWAP_SLOPE_FILTER_LOOKBACKS}
+                  labelFor={n => `${n} candles`} />
+              </div>
+              <div className="flex items-center gap-1">
+                <span className="text-p5/50">Inclinação mín.</span>
+                <NumInput value={form.entry.vwapSlopeFilter?.minSlopePct ?? -3}
+                  onChange={v => patchVwapSlopeFilter('minSlopePct', v)} min={-20} max={5} step={0.5} />
                 <span className="text-p5/40">%</span>
               </div>
             </div>
@@ -171,7 +211,7 @@ export default function VwapBandsStrategyForm({ form, patch, symbol }) {
           <p className="text-[10px] text-p5/50 leading-relaxed">
             Padrão — sem % fixo. O stop é a própria banda abaixo da que foi tocada pra armar
             a compra, recalculada ao vivo pela VWAP: comprou no retorno à lw1 → stop na lw2;
-            comprou na vwap → stop na lw1. Vende se a mínima do candle romper
+            comprou na vw → stop na lw1. Vende se a mínima do candle romper
             essa banda.
           </p>
         ) : (

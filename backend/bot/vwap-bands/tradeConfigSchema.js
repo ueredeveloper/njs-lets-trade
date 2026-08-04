@@ -85,6 +85,20 @@ const VWAP_BANDS_DEFAULTS = {
       slopeLookback: 20,
       minSlopePct: -1,
     },
+    /** Filtro extra de entrada: mesma ideia do emaFilter, mas medindo a inclinação da
+     *  própria linha da VWAP (não a EMA de preço) — checado NO CANDLE DO SINAL, na série
+     *  de vwapInterval (ex.: 4h). Compara o valor da VWAP nesse candle com o de `lookback`
+     *  candles atrás (na unidade de vwapInterval); bloqueia o sinal se a variação % ficar
+     *  abaixo de minSlopePct. Existe pra pegar casos como ALLO/PYR, onde a própria VWAP e
+     *  as bandas estão em queda acentuada — o emaFilter (EMA200 de PREÇO no 15m) pode não
+     *  refletir isso a tempo, já que é uma série diferente da VWAP. Desligado por padrão
+     *  (ainda sem validação de backtest como o emaFilter teve) — ativar por símbolo quando
+     *  a VWAP estiver visivelmente caindo. */
+    vwapSlopeFilter: {
+      enabled: false,
+      lookback: 6,
+      minSlopePct: -3,
+    },
   },
 
   exit: {
@@ -184,6 +198,16 @@ function normalizeEmaFilter(block) {
   };
 }
 
+function normalizeVwapSlopeFilter(block) {
+  const d = VWAP_BANDS_DEFAULTS.entry.vwapSlopeFilter;
+  const src = block ?? {};
+  return {
+    enabled: src.enabled === true,
+    lookback: Math.max(1, Math.round(Number(src.lookback ?? d.lookback))),
+    minSlopePct: Number(src.minSlopePct ?? d.minSlopePct),
+  };
+}
+
 function normalizeEntry(block) {
   const d = VWAP_BANDS_DEFAULTS.entry;
   const src = block ?? {};
@@ -202,6 +226,7 @@ function normalizeEntry(block) {
       pollInterval: normalizeInterval(pb.pollInterval, d.pullback.pollInterval),
     },
     emaFilter: normalizeEmaFilter(src.emaFilter),
+    vwapSlopeFilter: normalizeVwapSlopeFilter(src.vwapSlopeFilter),
   };
 }
 

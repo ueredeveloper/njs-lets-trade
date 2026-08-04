@@ -6,6 +6,7 @@ export const VWAP_BANDS_STOP_LOSS_MODES = ['ladder', 'percent'];
 export const EMA_FILTER_PERIODS = [9, 21, 50, 200];
 export const EMA_FILTER_TOLERANCES = [1, 2, 3];
 export const EMA_FILTER_SLOPE_LOOKBACKS = [0, 8, 20, 48];
+export const VWAP_SLOPE_FILTER_LOOKBACKS = [3, 6, 12, 24];
 
 export const VWAP_BANDS_DEFAULTS = {
   label: 'VWAP Bands',
@@ -23,6 +24,9 @@ export const VWAP_BANDS_DEFAULTS = {
     // close > EMA(period,interval) * (1 - tolerancePct%) e a própria EMA estável/subindo
     // (slope >= minSlopePct nos últimos slopeLookback candles).
     emaFilter: { enabled: true, period: 200, interval: '15m', tolerancePct: 2, slopeLookback: 20, minSlopePct: -1 },
+    // Filtro extra: inclinação da própria linha da VWAP (não da EMA de preço) — pega
+    // símbolos onde a VWAP e as bandas em si estão em queda acentuada. Desligado por padrão.
+    vwapSlopeFilter: { enabled: false, lookback: 6, minSlopePct: -3 },
   },
   exit: {
     tolerancePct: 0,
@@ -68,6 +72,11 @@ export function normalizeVwapBandsForm(body = {}) {
         tolerancePct: Number(body.entry?.emaFilter?.tolerancePct ?? d.entry.emaFilter.tolerancePct),
         slopeLookback: Number(body.entry?.emaFilter?.slopeLookback ?? d.entry.emaFilter.slopeLookback),
         minSlopePct: Number(body.entry?.emaFilter?.minSlopePct ?? d.entry.emaFilter.minSlopePct),
+      },
+      vwapSlopeFilter: {
+        enabled: body.entry?.vwapSlopeFilter?.enabled === true,
+        lookback: Number(body.entry?.vwapSlopeFilter?.lookback ?? d.entry.vwapSlopeFilter.lookback),
+        minSlopePct: Number(body.entry?.vwapSlopeFilter?.minSlopePct ?? d.entry.vwapSlopeFilter.minSlopePct),
       },
     },
     exit: {
