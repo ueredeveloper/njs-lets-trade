@@ -478,6 +478,18 @@ function evaluatePullbackReady(config, cMap, pending) {
     return { ready: false, waited, need: waitCandles, reason: 'WAITING_CANDLES' };
   }
 
+  // Reconfere o vwapSlopeFilter aqui, no momento REAL da compra (retorno ao nível) — não só
+  // no candle que armou o sinal (checkVwapSlopeFilterAt já rodou em evaluateEntrySignal). A
+  // VWAP pode virar de subida pra queda durante a espera do pullback (PENDING); sem essa
+  // reconferência o filtro vira decorativo nesse caso — barra a entrada "cedo" (WATCHING) mas
+  // deixa passar quando o degrau já tinha armado antes da virada (caso DEXE, ver conversa com
+  // o usuário). Não cancela a pendência: só segura a compra, igual WAITING_CANDLES, até a
+  // janela expirar ou a VWAP voltar a subir.
+  const vwapSlopeCheck = checkVwapSlopeFilterAt(entry, vwapSeries, lastCandle.openTime);
+  if (!vwapSlopeCheck.ok) {
+    return { ready: false, waited, need: waitCandles, reason: vwapSlopeCheck.reason };
+  }
+
   return {
     ready: true,
     close: lastClose,

@@ -257,11 +257,15 @@ async function tick(rowId, adapter, strategy, log, session) {
       return { phase: 'WATCHING' };
     }
     if (!ready.ready) {
-      if (ready.reason === 'WAITING_CANDLES') {
-        const now = Date.now();
-        if (!session.lastPendingLogAt || now - session.lastPendingLogAt >= PENDING_LOG_INTERVAL_MS) {
-          session.lastPendingLogAt = now;
+      const now = Date.now();
+      if (!session.lastPendingLogAt || now - session.lastPendingLogAt >= PENDING_LOG_INTERVAL_MS) {
+        session.lastPendingLogAt = now;
+        if (ready.reason === 'WAITING_CANDLES') {
           log(`${Y}⏳ Aguardando retorno a ${labelForLevel(pending.confirmLevel)} — candle ${ready.waited}/${ready.need}${X}`);
+        } else if (ready.reason === 'VWAP_SLOPE_FILTER_FALLING' || ready.reason === 'VWAP_SLOPE_FILTER_NO_DATA') {
+          // Preço já retornou ao nível, mas a VWAP virou pra queda durante a espera do
+          // pullback (ver comentário em evaluatePullbackReady) — segura a compra sem cancelar.
+          log(`${Y}🟡 Retorno alcançado, mas segurando — VWAP em queda no momento da entrada (${ready.reason})${X}`);
         }
       }
       return { phase: 'PENDING' };
