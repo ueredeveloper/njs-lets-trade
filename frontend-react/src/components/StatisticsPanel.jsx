@@ -114,7 +114,7 @@ function McIntervalSwitch({ checked, onChange }) {
 }
 
 function RsiStats() {
-  const { selectedChart, setSelectedChart, setChartZoom, setChartViewSource, multitradeFavorites, uiPrefs } = useCurrency();
+  const { selectedChart, setSelectedChart, setChartZoom, setChartViewSource, setChartTradeMarkers, multitradeFavorites, uiPrefs } = useCurrency();
   const { t, formatPrice } = useI18n();
   const [symbol, setSymbol]         = useState(selectedChart?.symbol || 'BTCUSDT');
   const [interval, setInterval]     = useState(uiPrefs.statsDefaults.rsi.interval);
@@ -330,6 +330,15 @@ function RsiStats() {
 
                                 setSelectedChart(data);
                                 setChartViewSource(CHART_VIEW.STATISTICS);
+                                // Marca compra/venda do ciclo clicado — mesmo visual das outras abas.
+                                setChartTradeMarkers([
+                                  { time: startMs, side: 'buy', price: o.entryPrice, label: '▲ Compra' },
+                                  {
+                                    time: endMs, side: 'sell', price: o.exitPrice, pnlPct: o.appreciationPercent,
+                                    entryTime: startMs, entryPrice: o.entryPrice,
+                                    label: `▼ ${o.appreciationPercent >= 0 ? '+' : ''}${o.appreciationPercent}%`,
+                                  },
+                                ]);
                                 setChartZoom({
                                   source: CHART_VIEW.STATISTICS,
                                   startDate: o.startDate,
@@ -417,7 +426,7 @@ function RsiStats() {
 }
 
 function MaCrossStats() {
-  const { selectedChart, setSelectedChart, setChartZoom, setChartViewSource, multitradeFavorites,
+  const { selectedChart, setSelectedChart, setChartZoom, setChartViewSource, setChartTradeMarkers, multitradeFavorites,
     uiPrefs, setActiveIndicatorsPreference } = useCurrency();
   const { t } = useI18n();
   const [symbol, setSymbol]               = useState(selectedChart?.symbol || 'BTCUSDT');
@@ -501,6 +510,15 @@ function MaCrossStats() {
       if (ma21Full) data.ma21 = ma21Full;
       setSelectedChart(data);
       setChartViewSource(CHART_VIEW.STATISTICS);
+      // Marca compra/venda do cruzamento clicado — mesmo visual das outras abas.
+      setChartTradeMarkers([
+        { time: startMs, side: 'buy', price: o.entryPrice, label: '▲ Compra' },
+        o.exitPrice != null && {
+          time: endMs, side: 'sell', price: o.exitPrice, pnlPct: o.appreciationPercent,
+          entryTime: startMs, entryPrice: o.entryPrice,
+          label: `▼ ${o.appreciationPercent >= 0 ? '+' : ''}${o.appreciationPercent}%`,
+        },
+      ].filter(Boolean));
       setChartZoom({
         source: CHART_VIEW.STATISTICS,
         startDate: o.startDate,
@@ -678,7 +696,7 @@ function MaCrossStats() {
 }
 
 function BollingerBandsStats() {
-  const { selectedChart, setSelectedChart, setChartZoom, setChartViewSource, multitradeFavorites, uiPrefs } = useCurrency();
+  const { selectedChart, setSelectedChart, setChartZoom, setChartViewSource, setChartTradeMarkers, multitradeFavorites, uiPrefs } = useCurrency();
   const { t } = useI18n();
   const [symbol, setSymbol]     = useState(selectedChart?.symbol || 'BTCUSDT');
   const [interval, setInterval] = useState(uiPrefs.statsDefaults.bollingerBands.interval);
@@ -749,6 +767,15 @@ function BollingerBandsStats() {
       const data = await fetchCandlesticksAndCloud(sym, iv, src, needed);
       setSelectedChart(data);
       setChartViewSource(CHART_VIEW.STATISTICS);
+      // Marca compra/venda do ciclo clicado — mesmo visual das outras abas.
+      setChartTradeMarkers([
+        { time: startMs, side: 'buy', price: o.entryPrice, label: '▲ Compra' },
+        o.exitPrice != null && {
+          time: endMs, side: 'sell', price: o.exitPrice, pnlPct: o.appreciationPercent,
+          entryTime: startMs, entryPrice: o.entryPrice,
+          label: `▼ ${o.appreciationPercent >= 0 ? '+' : ''}${o.appreciationPercent}%`,
+        },
+      ].filter(Boolean));
       setChartZoom({
         source: CHART_VIEW.STATISTICS,
         startDate: o.startDate,
@@ -989,6 +1016,7 @@ function VwapBandsStats() {
         { time: startMs, side: 'buy', price: o.entryPrice, label: '▲ Compra' },
         o.exitPrice != null && {
           time: endMs, side: 'sell', price: o.exitPrice, pnlPct: o.appreciationPercent,
+          entryTime: startMs, entryPrice: o.entryPrice,
           label: `▼ ${o.appreciationPercent >= 0 ? '+' : ''}${o.appreciationPercent}%`,
         },
       ].filter(Boolean));

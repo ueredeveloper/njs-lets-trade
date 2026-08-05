@@ -84,8 +84,13 @@ const BUCKET_LABEL = {
 
 const BUCKET_ORDER = ['allowed', 'signal', 'trend', 'approach', 'candle', 'pullback', 'maFloor', 'maCeiling', 'cooldown', 'bb', 'timeout', 'cancelled', 'other'];
 
-const TRADE_GOOD = '#0ca30c';
-const TRADE_CRITICAL = '#d03b3b';
+// Mesma paleta do histórico de trades reais no gráfico principal (ver
+// buildHistoricalPositionRects em CandlestickChartLW.jsx): azul quando o ciclo fechou em
+// lucro, amarelo quando fechou em prejuízo/stop loss, cinza enquanto ainda não há venda
+// (posição aberta) — compra e venda do mesmo ciclo compartilham essa cor.
+const TRADE_PROFIT = '#3b82f6';
+const TRADE_LOSS = '#eab308';
+const TRADE_OPEN = '#94a3b8';
 
 function bucketOutcome(outcome) {
   switch (outcome) {
@@ -500,38 +505,48 @@ export default function MaCrossRuleCheckChart({
       };
     });
 
+    // Resultado do ciclo (venda) propagado de volta pra compra correspondente — sell.entryTime
+    // é o time da buy do mesmo ciclo (ver buildMarkersFromLiveTrades em multitradeChart.js).
+    const pnlByEntryTime = new Map();
+    for (const m of sells) {
+      if (m.entryTime != null && Number.isFinite(m.pnlPct)) pnlByEntryTime.set(Number(m.entryTime), m.pnlPct);
+    }
+    const colorForPnl = (pnlPct) => (pnlPct == null ? TRADE_OPEN : (pnlPct >= 0 ? TRADE_PROFIT : TRADE_LOSS));
+
     const tradeSeries = [
       {
         name: 'Compra executada',
         type: 'scatter',
-        data: buys.map(m => ({
-          value: [Number(m.time), m.price],
-          row: { type: 'BUY', time: Number(m.time), price: m.price },
-        })),
-        symbol: 'arrow',
-        symbolSize: 13,
-        itemStyle: { color: 'transparent', borderColor: TRADE_GOOD, borderWidth: 2 },
+        data: buys.map(m => {
+          const pnlPct = pnlByEntryTime.get(Number(m.time)) ?? null;
+          return {
+            value: [Number(m.time), m.price],
+            row: { type: 'BUY', time: Number(m.time), price: m.price, pnlPct },
+            itemStyle: { color: 'transparent', borderColor: colorForPnl(pnlPct), borderWidth: 2 },
+          };
+        }),
+        symbol: 'circle',
+        symbolSize: 12,
+        itemStyle: { color: 'transparent', borderColor: TRADE_OPEN, borderWidth: 2 },
         z: 4,
       },
       {
         name: 'Venda executada',
         type: 'scatter',
-        data: sells.map(m => ({
-          value: [Number(m.time), m.price],
-          row: { type: 'SELL', time: Number(m.time), price: m.price, pnlPct: m.pnlPct ?? null },
-        })),
-        symbol: 'arrow',
-        symbolRotate: 180,
-        symbolSize: 13,
-        itemStyle: { color: 'transparent', borderWidth: 2 },
+        data: sells.map(m => {
+          const pnlPct = m.pnlPct ?? null;
+          return {
+            value: [Number(m.time), m.price],
+            row: { type: 'SELL', time: Number(m.time), price: m.price, pnlPct },
+            itemStyle: { color: 'transparent', borderColor: colorForPnl(pnlPct), borderWidth: 2 },
+          };
+        }),
+        symbol: 'circle',
+        symbolSize: 12,
+        itemStyle: { color: 'transparent', borderColor: TRADE_OPEN, borderWidth: 2 },
         z: 4,
       },
     ];
-    // itemStyle por ponto de venda (ganho = good, perda = critical)
-    tradeSeries[1].data = tradeSeries[1].data.map(d => ({
-      ...d,
-      itemStyle: { color: 'transparent', borderColor: (d.row.pnlPct ?? 0) >= 0 ? TRADE_GOOD : TRADE_CRITICAL, borderWidth: 2 },
-    }));
 
     return {
       backgroundColor: 'transparent',

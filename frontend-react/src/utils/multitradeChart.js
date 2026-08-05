@@ -163,6 +163,11 @@ export function buildMarkersFromLiveTrades(trades, entry) {
         side: 'buy',
         price: t.entry_price != null ? Number(t.entry_price) : null,
         label: '▲ Compra',
+        // real: distingue compra de fato executada pelo bot (some da seta/marcador — só o
+        // quadrado compra→venda com % acima, ver buildHistoricalPositionRects em
+        // CandlestickChartLW.jsx) dos ciclos de estudo/backtest clicados na aba Estatísticas
+        // (esses continuam com seta cheia, sem essa flag).
+        real: true,
       });
     }
     if (exitMs) {
@@ -180,6 +185,7 @@ export function buildMarkersFromLiveTrades(trades, entry) {
         label: pnl != null
           ? `▼ ${pnl >= 0 ? '+' : ''}${pnl.toFixed(1)}%`
           : '▼ Venda',
+        real: true,
       });
     }
   }
@@ -207,7 +213,9 @@ export function buildMarkersFromExchangeTrades(trades, opts = {}) {
 
     if (t.isBuyer) {
       inventory.push({ qty: qty > 0 ? qty : 0, price, time });
-      markers.push({ time, side: 'buy', price, label: '▲ Compra' });
+      // real: compra de fato executada na exchange (fill real, aba TX) — some da seta/marcador,
+      // só o quadrado compra→venda com % acima (buildHistoricalPositionRects) representa o ciclo.
+      markers.push({ time, side: 'buy', price, label: '▲ Compra', real: true });
       continue;
     }
 
@@ -253,6 +261,7 @@ export function buildMarkersFromExchangeTrades(trades, opts = {}) {
       label: pnlPct != null
         ? `▼ ${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(1)}%`
         : '▼ Venda',
+      real: true,
     });
   }
 

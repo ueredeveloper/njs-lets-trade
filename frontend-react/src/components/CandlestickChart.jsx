@@ -11,8 +11,8 @@ import MaCrossRuleCheckChart from './MaCrossRuleCheckChart';
 import CandlestickChartLW from './CandlestickChartLW';
 import convertOpenTime from '../utils/convertOpenTime';
 import Tooltip from './Tooltip';
-import { hasAnyChartPanelButton } from '../utils/chartPanelButtons';
 import { useIsMobile } from '../hooks/useIsMobile';
+import { useIsNotebook } from '../hooks/useIsNotebook';
 import { DEFAULT_OVERLAY_SLOTS, DEFAULT_ACTIVE_INDICATORS, BB_PERIOD_OPTIONS, BB_STDDEV_OPTIONS, DEFAULT_SR_INTERVAL, DEFAULT_PPHL_INTERVAL, DEFAULT_CHOP_INTERVAL, DEFAULT_COMMON_CHART_INTERVALS } from '../utils/uiPreferences';
 import { CHART_VIEW, INTERVAL_MS, computeZoomWindow, buildFixedDataZoom, buildInsideDataZoom, computeCandleLimitFromTime, isTradePanelChartView, computeManualWheelZoom } from '../utils/chartView';
 
@@ -33,14 +33,16 @@ const DEFAULT_INTERVAL = '15m';
 
 const CHART_PRICE_PAD = 54;        // direita: rótulos do eixo de preço
 const CHART_LEFT_MARGIN = 8;       // margem esquerda mínima
-const CHART_PANEL_COLLAPSED = 22;  // painel recolhido (só a aba)
-/** Espaço livre no rodapé do painel lateral (botão flutuante "Moedas" no mobile). */
-const MOBILE_PANEL_BOTTOM_INSET = 56;
 const PANEL_MIN_WIDTH = 160;
-const PANEL_MAX_WIDTH = 320;
 const PANEL_GAP = 2;
 const PANEL_TILE_PAD = 2;
-const COLLAPSE_TAB_W = 16;
+const PANEL_CARD_PAD = 6;
+/** Painel de indicadores agora abre como dropdown no topo do gráfico (flutuando por cima,
+ *  sem empurrar o chart) — largura e altura limitadas, com scroll vertical pro que não couber. */
+const PANEL_WIDTH_RATIO = 0.2;      // desktop/notebook: 20% da largura do gráfico
+const PANEL_MAX_HEIGHT_RATIO = 0.45; // acima disso, rola em vez de cobrir o gráfico inteiro
+const PANEL_MAX_HEIGHT_PX = 320;    // teto absoluto, mesmo em telas bem altas
+const PANEL_ROW_PX = 26;            // altura "natural" de uma row unit no dropdown
 /** Altura mínima (px) de uma "row unit" do painel — abaixo disso, o painel rola em vez de espremer os tiles. */
 const MIN_ROW_UNIT_PX = 20;
 const C_UP   = '#26a69a';
@@ -733,16 +735,6 @@ function renderIntervalPickerTile(dims, t, tipKey, labelPrefix, color, value, on
   );
 }
 
-function resolvePanelContentWidth(chartWidth) {
-  const target = Math.round(chartWidth * 0.18);
-  return Math.min(PANEL_MAX_WIDTH, Math.max(PANEL_MIN_WIDTH, target));
-}
-
-function computePanelWidth(contentWidth, expanded = true) {
-  if (!expanded) return CHART_PANEL_COLLAPSED;
-  return contentWidth + COLLAPSE_TAB_W + PANEL_GAP;
-}
-
 function scaleSectionTitle(dims) {
   return {
     fontSize: scaleFontSize(dims, 0.24, 8, 12),
@@ -979,20 +971,21 @@ const blockRow = {
   alignItems: 'stretch',
 };
 
-const collapseTabBtn = {
+const topToggleBtn = {
   pointerEvents: 'auto',
   fontSize: 11,
   lineHeight: 1,
-  width: 24,
-  height: 34,
+  minWidth: 32,
+  height: 20,
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
   cursor: 'pointer',
-  borderRadius: 4,
+  borderRadius: '0 0 4px 4px',
   color: '#94a3b8',
   background: 'rgba(0,0,0,0.55)',
   border: '1px solid #334155',
+  borderTop: 'none',
   transition: 'all 0.15s',
 };
 
@@ -1193,14 +1186,12 @@ function ChartIndicatorPanel({
   panelButtons,
   collapsed,
   onToggleCollapse,
-  onLayoutChange,
 }) {
   const { t } = useI18n();
   const isMobile = useIsMobile();
   const { selectedChart, gateFavorites } = useCurrency();
   const outerRef = useRef(null);
-  const masonryRef = useRef(null);
-  const [panelSize, setPanelSize] = useState({ width: PANEL_MIN_WIDTH, height: 320 });
+  const [chartSize, setChartSize] = useState({ w: PANEL_MIN_WIDTH, h: 400 });
   const [panelTab, setPanelTab] = useState('indicators'); // 'indicators' | 'executed'
 
   const tileDefs = useMemo(() => {
@@ -1243,44 +1234,59 @@ function ChartIndicatorPanel({
     return list;
   }, [panelButtons, activeIndicators, quickEmaGroups]);
 
-  const contentWidth = useMemo(
-    () => resolvePanelContentWidth(outerRef.current?.parentElement?.clientWidth ?? panelSize.width),
-    [panelSize.width],
-  );
-
-  const layout = useMemo(
-    () => computeMasonryLayout(tileDefs, contentWidth, panelSize.height, PANEL_GAP, overlayMaLoading),
-    [tileDefs, contentWidth, panelSize.height, overlayMaLoading],
-  );
-
+  // Painel agora é um dropdown flutuante no topo do gráfico (não empurra mais o chart) —
+  // largura limitada (60% no desktop, full width no mobile) e altura travada em % do
+  // gráfico, com scroll interno se o conteúdo não couber.
   useEffect(() => {
-    if (collapsed || !tileDefs.length) {
-      onLayoutChange?.({ columnCount: 0, width: collapsed ? CHART_PANEL_COLLAPSED : 0 });
-      return undefined;
-    }
-    onLayoutChange?.({ columnCount: layout.cols, width: computePanelWidth(contentWidth, true) });
-
-    const shell = masonryRef.current;
     const chart = outerRef.current?.parentElement;
-    if (!shell || !chart) return undefined;
-
-    const measure = () => {
-      const w = resolvePanelContentWidth(chart.clientWidth);
-      const h = shell.clientHeight;
-      if (w > 0 && h > 0) setPanelSize({ width: w, height: h });
-      onLayoutChange?.({ columnCount: layout.cols, width: computePanelWidth(w, true) });
-    };
-
+    if (!chart) return undefined;
+    const measure = () => setChartSize({ w: chart.clientWidth || PANEL_MIN_WIDTH, h: chart.clientHeight || 400 });
     measure();
     const ro = new ResizeObserver(measure);
-    ro.observe(shell);
     ro.observe(chart);
     return () => ro.disconnect();
-  }, [collapsed, tileDefs.length, layout.cols, contentWidth, onLayoutChange]);
+  }, []);
+
+  const contentWidth = isMobile
+    ? chartSize.w
+    : Math.max(PANEL_MIN_WIDTH, Math.round(chartSize.w * PANEL_WIDTH_RATIO));
+  const maxPanelHeight = Math.min(
+    PANEL_MAX_HEIGHT_PX,
+    Math.max(160, Math.round(chartSize.h * PANEL_MAX_HEIGHT_RATIO)),
+  );
+
+  // 1ª passada: só pra descobrir quantas "row units" o conteúdo precisa (contagem de
+  // indicadores/blocos ativos), sem travar altura ainda.
+  const probeLayout = useMemo(
+    () => computeMasonryLayout(tileDefs, contentWidth, 10000, PANEL_GAP, overlayMaLoading),
+    [tileDefs, contentWidth, overlayMaLoading],
+  );
+  const totalRowUnits = probeLayout.indicatorRowUnits
+    + probeLayout.blockPlacements.reduce((sum, b) => sum + b.rowSpan, 0);
+  const panelHeight = Math.min(Math.max(MIN_ROW_UNIT_PX, totalRowUnits * PANEL_ROW_PX), maxPanelHeight);
+
+  const layout = useMemo(
+    () => computeMasonryLayout(tileDefs, contentWidth, panelHeight, PANEL_GAP, overlayMaLoading),
+    [tileDefs, contentWidth, panelHeight, overlayMaLoading],
+  );
 
   if (!tileDefs.length) {
     return null;
   }
+
+  const toggleBtn = (
+    <Tooltip text={t(collapsed ? 'chart.tip.panel_expand' : 'chart.tip.panel_collapse')} position="bottom" portal>
+      <button
+        type="button"
+        onClick={onToggleCollapse}
+        style={{ ...topToggleBtn, alignSelf: 'center', flexShrink: 0 }}
+        onMouseEnter={e => { e.currentTarget.style.color = '#e2e8f0'; e.currentTarget.style.borderColor = '#64748b'; }}
+        onMouseLeave={e => { e.currentTarget.style.color = '#94a3b8'; e.currentTarget.style.borderColor = '#334155'; }}
+      >
+        {collapsed ? '▾' : '▴'}
+      </button>
+    </Tooltip>
+  );
 
   return (
     <div
@@ -1288,47 +1294,39 @@ function ChartIndicatorPanel({
       style={{
         position: 'absolute',
         top: 0,
-        bottom: isMobile ? MOBILE_PANEL_BOTTOM_INSET : 0,
+        left: 0,
         right: 0,
-        zIndex: 10,
+        zIndex: 20,
         display: 'flex',
-        flexDirection: 'row',
-        alignItems: 'stretch',
-        justifyContent: 'flex-end',
-        padding: 0,
+        flexDirection: 'column',
+        alignItems: 'center',
         pointerEvents: 'none',
       }}
     >
-      <PanelTip text={t(collapsed ? 'chart.tip.panel_expand' : 'chart.tip.panel_collapse')} position="left">
-        <button
-          type="button"
-          onClick={onToggleCollapse}
-          style={{ ...collapseTabBtn, alignSelf: 'center', flexShrink: 0 }}
-          onMouseEnter={e => { e.currentTarget.style.color = '#e2e8f0'; e.currentTarget.style.borderColor = '#64748b'; }}
-          onMouseLeave={e => { e.currentTarget.style.color = '#94a3b8'; e.currentTarget.style.borderColor = '#334155'; }}
-        >
-          {collapsed ? '‹' : '›'}
-        </button>
-      </PanelTip>
+      {collapsed && toggleBtn}
 
       {!collapsed && (
         <div
-          ref={masonryRef}
           style={{
             pointerEvents: 'auto',
-            height: '100%',
             width: contentWidth,
-            minWidth: contentWidth,
+            maxWidth: '100%',
+            maxHeight: maxPanelHeight,
             overflowY: 'auto',
             overflowX: 'hidden',
             WebkitOverflowScrolling: 'touch',
-            marginLeft: PANEL_GAP,
+            marginTop: 0,
             display: 'flex',
             flexDirection: 'column',
             gap: PANEL_GAP,
+            padding: PANEL_CARD_PAD,
+            background: 'rgba(8,12,20,0.96)',
+            border: '1px solid #334155',
+            borderRadius: 6,
+            boxShadow: '0 10px 28px rgba(0,0,0,0.55)',
           }}
         >
-          {/* Abas do painel lateral: Indicadores / Executados */}
+          {/* Abas do painel: Indicadores / Executados */}
           <div style={{ display: 'flex', flexShrink: 0, gap: 2 }}>
             {[
               { id: 'indicators', label: t('chart.panel.tab_indicators') },
@@ -1415,6 +1413,8 @@ function ChartIndicatorPanel({
           ))}
         </div>
       )}
+
+      {!collapsed && toggleBtn}
     </div>
   );
 }
@@ -2609,11 +2609,8 @@ export default function CandlestickChart() {
   }, [chartZoom]);
   const [vwapCache, setVwapCache] = useState({});
   const [_vwapLoading, setVwapLoading] = useState(false);
-  const [panelCollapsed, setPanelCollapsed] = useState(false);
-  const [panelMasonryWidth, setPanelMasonryWidth] = useState(() => computePanelWidth(PANEL_MIN_WIDTH, true));
-  const handlePanelLayoutChange = useCallback(({ width }) => {
-    setPanelMasonryWidth(width);
-  }, []);
+  const [panelCollapsed, setPanelCollapsed] = useState(true);
+  const isNotebook = useIsNotebook();
   const [candleFetchLimit, setCandleFetchLimit] = useState(DEFAULT_CANDLE_LIMIT);
   const [displayCandleCount, setDisplayCandleCount] = useState(LIMIT);
   const [hasExplicitCandleWindow, setHasExplicitCandleWindow] = useState(false);
@@ -2684,11 +2681,21 @@ export default function CandlestickChart() {
       }
       return;
     }
+    // Favorito TX em notebook: os 160 candles buscados (ver TX_CANDLE_LIMIT em CurrencyTable.jsx)
+    // ficam finos demais numa tela estreita — foca só nos 80 mais recentes por padrão (os 80
+    // mais antigos continuam disponíveis arrastando pra trás, ver onNeedOlderCandles). No PC
+    // (tela larga o bastante pra caber os 160 com folga) mantém o comportamento padrão.
+    if (chartViewSource === CHART_VIEW.TRADES && isNotebook) {
+      setCandleFetchLimit(DEFAULT_CANDLE_LIMIT);
+      setDisplayCandleCount(80);
+      setHasExplicitCandleWindow(true);
+      return;
+    }
     setCandleFetchLimit(DEFAULT_CANDLE_LIMIT);
     setDisplayCandleCount(LIMIT);
     setHasExplicitCandleWindow(false);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedChart?.symbol, selectedChart?.interval, chartViewSource, multitradeChartFocus?.candleLimit, chartCandleWindowReset]);
+  }, [selectedChart?.symbol, selectedChart?.interval, chartViewSource, multitradeChartFocus?.candleLimit, chartCandleWindowReset, isNotebook]);
 
   // Só entra em modo "overlay forçado" quando o painel de trade realmente impõe
   // slots (ex.: sinal de backtest com regra própria). Selecionar uma moeda que é
@@ -3456,11 +3463,8 @@ export default function CandlestickChart() {
     return Math.min(candles.length, candles.length - idx + 5);
   })();
 
-  const panelPad = !hasAnyChartPanelButton(chartPanelButtons)
-    ? 0
-    : (panelCollapsed ? CHART_PANEL_COLLAPSED : panelMasonryWidth);
   const chartLeftPad = CHART_LEFT_MARGIN;
-  const chartRightPad = CHART_PRICE_PAD + CHART_LEFT_MARGIN + panelPad;
+  const chartRightPad = CHART_PRICE_PAD + CHART_LEFT_MARGIN;
 
   // Zoom horizontal por scroll manual (nativo do ECharts desligado em buildInsideDataZoom/
   // buildFixedDataZoom — ver chartView.js) — passo pequeno e fixo, ancorado no cursor, pra
@@ -3815,10 +3819,11 @@ export default function CandlestickChart() {
     </div>
   );
 
-  // Botões de medir % — vivem dentro da área do gráfico, deslocados à esquerda do
-  // painel de indicadores (panelPad) pra não ficarem colados na borda direita.
+  // Botões de medir % — vivem dentro da área do gráfico, no canto superior direito
+  // (o painel de indicadores agora abre como dropdown centralizado no topo, sem reservar
+  // espaço lateral).
   const measureButtons = (
-    <div className="absolute top-3 z-30 flex items-center gap-1" style={{ right: panelPad + 10 }}>
+    <div className="absolute top-3 right-3 z-30 flex items-center gap-1">
       <button
         onClick={toggleMeasureMode}
         title="Medir variação % — arraste de um candle a outro (fica ligado até você clicar de novo)"
@@ -3961,7 +3966,6 @@ export default function CandlestickChart() {
               bollingerBands={bollingerBands}
               panelButtons={chartPanelButtons}
               candleWindowCount={hasExplicitCandleWindow ? displayCandleCount : null}
-              rightPad={panelPad}
             />
           ) : (
             <div className="text-p5/50 text-xs font-mono">Selecione uma moeda pra conferir as regras.</div>
@@ -3992,7 +3996,6 @@ export default function CandlestickChart() {
             panelButtons={chartPanelButtons}
             collapsed={panelCollapsed}
             onToggleCollapse={() => setPanelCollapsed(v => !v)}
-            onLayoutChange={handlePanelLayoutChange}
           />
         </div>
       ) : (
@@ -4004,7 +4007,6 @@ export default function CandlestickChart() {
               interval={selectedChart.interval ?? currentInterval}
               candlesticks={selectedChart.candlesticks}
               colors={colors}
-              rightPad={panelPad}
               activeIndicators={effectiveIndicators}
               ma9={selectedChart.ma9}
               ma21={selectedChart.ma21}
@@ -4024,6 +4026,8 @@ export default function CandlestickChart() {
               multitradeMarkers={chartTradeMarkers?.length ? chartTradeMarkers : (selectedChart.tradeMarkers ?? [])}
               zoomPeriod={chartZoom}
               focusLastN={hasExplicitCandleWindow ? displayCandleCount : null}
+              onNeedOlderCandles={handleLoadMoreCandles}
+              loadingMoreCandles={loadingMoreCandles}
             />
           ) : chartNode}
           {!showLwChart && !lwSupported && uiPrefs.chartEngineDefault !== 'echarts' && (
@@ -4062,7 +4066,6 @@ export default function CandlestickChart() {
             panelButtons={chartPanelButtons}
             collapsed={panelCollapsed}
             onToggleCollapse={() => setPanelCollapsed(v => !v)}
-            onLayoutChange={handlePanelLayoutChange}
           />
         </div>
       )}

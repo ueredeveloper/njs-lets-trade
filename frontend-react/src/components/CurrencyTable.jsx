@@ -19,6 +19,7 @@ import {
   resolveTradeChartInterval,
   loadMultitradeSymbolChart,
   buildMarkersFromExchangeTrades,
+  buildMarkersFromLiveTrades,
 } from '../utils/multitradeChart';
 import { multitradePhaseBadge, symbolPhaseSummary } from '../utils/multitradePhase';
 import {
@@ -785,17 +786,34 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
 
       applyChartMaCrossOverlay(null);
 
-      const data = await fetchCandlesticksAndCloud(item.symbol, effectiveInterval, effectiveSource);
-      setSelectedChart({ ...data, interval: effectiveInterval, symbol: item.symbol, source: effectiveSource ?? null });
-      if (effectiveSource === 'gate') gatePreloadCandles(item.symbol);
-
-      // View de trades: compras/vendas + PnL no gráfico
       if (isTradesFavView) {
+        // View de trades: abre com a janela padrão (DEFAULT_CANDLE_LIMIT). Arrastar o gráfico
+        // pra trás carrega mais candles sob demanda (ver onNeedOlderCandles em
+        // CandlestickChartLW.jsx / handleLoadMoreCandles em CandlestickChart.jsx) — não tenta
+        // mais adivinhar upfront quantos candles cobririam a compra mais antiga.
         const useGate = effectiveSource === 'gate';
         const trades = await (useGate ? fetchGateTrades(item.symbol) : fetchBinanceTrades(item.symbol));
         setAllTrades(trades);
         setTradePurchases(trades.filter(t => t.isBuyer));
-        setChartTradeMarkers(buildMarkersFromExchangeTrades(trades));
+
+        const data = await fetchCandlesticksAndCloud(item.symbol, effectiveInterval, effectiveSource);
+        setSelectedChart({ ...data, interval: effectiveInterval, symbol: item.symbol, source: effectiveSource ?? null });
+        if (effectiveSource === 'gate') gatePreloadCandles(item.symbol);
+        // maxMarkers = trades.length: sem o cap padrão de 24 — carregar mais candles arrastando
+        // só revela compras mais antigas se elas também estiverem na lista de marcadores.
+        setChartTradeMarkers(buildMarkersFromExchangeTrades(trades, { maxMarkers: trades.length }));
+      } else {
+        // Moeda comum (fora de favoritos MC/VWAP e fora da aba TX): busca em paralelo o
+        // histórico real de compras já executadas pelo bot (rsi_multi_bot_trades, qualquer
+        // estratégia) pra marcar no gráfico — mesma fonte usada por loadMultitradeSymbolChart
+        // pras favoritas, só que aqui sem strategyId (pode ter vindo de qualquer bot).
+        const [data, botTrades] = await Promise.all([
+          fetchCandlesticksAndCloud(item.symbol, effectiveInterval, effectiveSource),
+          fetchMultitradeTrades({ symbol: item.symbol, limit: 30 }).catch(() => []),
+        ]);
+        setSelectedChart({ ...data, interval: effectiveInterval, symbol: item.symbol, source: effectiveSource ?? null });
+        if (effectiveSource === 'gate') gatePreloadCandles(item.symbol);
+        if (botTrades?.length) setChartTradeMarkers(buildMarkersFromLiveTrades(botTrades, null));
       }
     } catch (err) {
       console.warn(`[CurrencyTable] candles indisponíveis para ${item.symbol}:`, err.message);

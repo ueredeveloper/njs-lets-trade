@@ -59,6 +59,7 @@ class RectangleRenderer {
           ctx.textBaseline = 'middle';
           if (it.labelPos === 'top') { ctx.textBaseline = 'top'; y = top + pad; }
           else if (it.labelPos === 'bottom') { ctx.textBaseline = 'bottom'; y = bottom - pad; }
+          else if (it.labelPos === 'above') { ctx.textBaseline = 'bottom'; y = top - pad; }
           ctx.fillText(it.label, (left + right) / 2, y);
         }
       }
@@ -75,7 +76,9 @@ export class RectanglePrimitive {
     this._paneView = new RectanglePaneView(this);
   }
 
-  /** rects: [{ time1, price1, time2, price2, fillColor, label, labelColor, labelPos }] (time em segundos; labelPos: 'top'|'bottom'|undefined) */
+  /** rects: [{ time1, price1, time2, price2, fillColor, label, labelColor, labelPos }] (time em
+   *  segundos; labelPos: 'top'|'bottom' — encostado na borda, dentro do quadrado — |'above' —
+   *  fora, acima da borda superior — |undefined — centralizado) */
   setRects(rects) {
     this._rects = rects ?? [];
     this._requestUpdate?.();

@@ -5,6 +5,7 @@ import { computeStopLossFloor } from '../utils/trailingStopLoss';
 import { RectanglePrimitive } from '../utils/lwRectanglePrimitive';
 import { BandFillPrimitive } from '../utils/lwBandFillPrimitive';
 import { tickMarkFormatterBrt, crosshairTimeFormatterBrt } from '../utils/lwBrtTimeFormat';
+import { INTERVAL_MS } from '../utils/chartView';
 
 const C_UP = '#26a69a';
 const C_DOWN = '#ef5350';
@@ -93,6 +94,48 @@ function buildPositionRects(buyInfo, stopLossConfig, targetConfig, candlesticks)
   return rects;
 }
 
+/** Ancora um timestamp (ms) no openTime do candle mais próximo, em segundos. timeToCoordinate
+ *  só resolve pra tempos que batem com um ponto real da série (candle ou whitespace — ver
+ *  comentário no efeito de setData acima); o horário exato de execução de um trade quase nunca
+ *  cai na hora cheia do candle, então sem esse snap o cálculo de coordenada sempre falha
+ *  (retorna null) mesmo pra trades dentro da janela visível. Mesma técnica de buildPositionRects
+ *  (posição aberta), só que reutilizável pra qualquer lista de candles. */
+function snapToNearestCandleTimeSec(candlesticks, timeMs) {
+  if (!candlesticks?.length || !Number.isFinite(timeMs)) return null;
+  let bestIdx = 0, bestDiff = Infinity;
+  for (let i = 0; i < candlesticks.length; i++) {
+    const d = Math.abs(Number(candlesticks[i].openTime) - timeMs);
+    if (d < bestDiff) { bestDiff = d; bestIdx = i; }
+  }
+  return Math.floor(Number(candlesticks[bestIdx].openTime) / 1000);
+}
+
+/** Quadrado histórico compra→venda de um ciclo já fechado (ex.: clique numa linha de estudo
+ *  na aba Estatísticas) — precisa de entryTime/entryPrice no marcador de venda, mesmo contrato
+ *  usado por buildMarkersFromExchangeTrades/buildMarkersFromLiveTrades (multitradeChart.js).
+ *  Azul = lucro, amarelo = prejuízo — mesma paleta do buildHistoricalPositionSquares do ECharts. */
+function buildHistoricalPositionRects(multitradeMarkers, candlesticks) {
+  const out = [];
+  for (const m of multitradeMarkers ?? []) {
+    if (m.side !== 'sell' || m.entryPrice == null || m.entryTime == null || m.time == null) continue;
+    const entryPrice = Number(m.entryPrice);
+    const exitPrice = Number(m.price);
+    const time1 = snapToNearestCandleTimeSec(candlesticks, Number(m.entryTime));
+    const time2 = snapToNearestCandleTimeSec(candlesticks, Number(m.time));
+    if (!Number.isFinite(entryPrice) || entryPrice <= 0 || !Number.isFinite(exitPrice)) continue;
+    if (time1 == null || time2 == null || time2 <= time1) continue;
+    const isProfit = exitPrice >= entryPrice;
+    out.push({
+      time1, time2, price1: entryPrice, price2: exitPrice,
+      fillColor: isProfit ? 'rgba(59,130,246,0.18)' : 'rgba(234,179,8,0.18)',
+      labelColor: isProfit ? '#3b82f6' : '#eab308',
+      label: formatPctFromBase(entryPrice, exitPrice),
+      labelPos: 'above',
+    });
+  }
+  return out;
+}
+
 /** Linha pontilhada do preço de compra até o fechamento atual — verde se subiu, vermelho se
  *  caiu (mesma ideia do buildBuyPnlSeries do ECharts). buildPnlMarker desenha o % no ponto
  *  final (o marcador aceita texto; a série de linha sozinha não tem label embutido no LW). */
@@ -158,7 +201,10 @@ function alignFieldToCandles(candlesticks, points, field) {
   const out = [];
   for (const c of candlesticks) {
     const t = Number(c.openTime);
-    let lo = 0, hi = sorted.length - 1, best = null;
+    // `best` começa undefined (não null) — Number(null) é 0 (passa no isFinite abaixo e
+    // desenharia um ponto falso em 0 pra todo candle anterior ao início dos dados da EMA);
+    // Number(undefined) é NaN, corretamente filtrado, deixando a linha nascer só onde há dado.
+    let lo = 0, hi = sorted.length - 1, best;
     while (lo <= hi) {
       const mid = (lo + hi) >> 1;
       if (Number(sorted[mid].openTime) <= t) { best = sorted[mid][field]; lo = mid + 1; }
@@ -269,10 +315,14 @@ function buildPphlMarkers(pphlConfig) {
     .filter(Boolean);
 }
 
-/** Marcadores de trade (Multi-Trade/backtest): sinal (triângulo pequeno) e venda (seta
- *  azul=lucro/amarela=prejuízo com % no texto). A entrada não tem mais seta própria — os
- *  quadrados de alvo/stop (buildPositionRects) e a linha de PnL (buildPnlLineData/
- *  buildPnlMarker) já marcam onde e a que preço a posição foi aberta. */
+/** Marcadores de trade (Multi-Trade/backtest/Estatísticas): compra (seta verde), sinal
+ *  (triângulo pequeno) e venda (seta azul=lucro/amarela=prejuízo com % no texto). A posição
+ *  ATUALMENTE aberta (buyInfo) ainda ganha os quadrados de alvo/stop (buildPositionRects) e a
+ *  linha de PnL (buildPnlLineData/buildPnlMarker) por cima — a seta de compra aqui cobre o caso
+ *  de ciclos já fechados do histórico (ex.: clique numa linha de estudo em Estatísticas), que
+ *  não passam por buyInfo (ver resolveChartBuyPrice em CandlestickChart.jsx).
+ *  Compra/venda REAIS (m.real, ver buildMarkersFromLiveTrades) não passam por aqui — o quadrado
+ *  compra→venda (buildHistoricalPositionRects) com o % acima já cobre esse caso sozinho. */
 function buildTradeMarkers(multitradeMarkers) {
   const out = [];
   for (const m of multitradeMarkers ?? []) {
@@ -281,14 +331,19 @@ function buildTradeMarkers(multitradeMarkers) {
     if (!Number.isFinite(time)) continue;
     if (m.side === 'signal') {
       out.push({ time, position: 'aboveBar', shape: 'arrowDown', color: '#f59e0b', size: 0.5 });
-    } else if (m.side === 'sell') {
+    } else if (m.side === 'buy' && !m.real) {
+      const price = Number(m.price);
+      if (!Number.isFinite(price)) continue;
+      out.push({ time, position: 'atPriceBottom', price, shape: 'arrowUp', color: C_UP, size: 1, text: m.label ?? 'Compra' });
+    } else if (m.side === 'sell' && !m.real) {
       const exitPrice = Number(m.price);
       const entryPrice = Number(m.entryPrice);
       if (!Number.isFinite(exitPrice)) continue;
       const hasEntry = Number.isFinite(entryPrice) && entryPrice > 0;
-      const isProfit = hasEntry && exitPrice >= entryPrice;
-      const text = hasEntry ? `${isProfit ? '+' : ''}${(((exitPrice - entryPrice) / entryPrice) * 100).toFixed(1)}%` : 'venda';
-      out.push({ time, position: 'atPriceTop', price: exitPrice, shape: 'arrowDown', color: hasEntry ? (isProfit ? '#3b82f6' : '#eab308') : '#94a3b8', size: 1, text });
+      const pnlPct = Number.isFinite(m.pnlPct) ? m.pnlPct : (hasEntry ? ((exitPrice - entryPrice) / entryPrice) * 100 : null);
+      const isProfit = pnlPct != null ? pnlPct >= 0 : null;
+      const text = pnlPct != null ? `${isProfit ? '+' : ''}${pnlPct.toFixed(1)}%` : 'venda';
+      out.push({ time, position: 'atPriceTop', price: exitPrice, shape: 'arrowDown', color: isProfit == null ? '#94a3b8' : (isProfit ? '#3b82f6' : '#eab308'), size: 1, text });
     } else if (m.side === 'possible_entry') {
       const price = Number(m.price);
       if (!Number.isFinite(price)) continue;
@@ -310,6 +365,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
   activeIndicators = [], ma9, ma21, ma50, ma200, overlayConfigs, vwapConfig, vwapSlopeHighlight,
   bollingerConfig, srConfig, pphlConfig, rsi, chopConfig,
   stopLossConfig, targetConfig, buyInfo, multitradeMarkers, zoomPeriod, focusLastN,
+  onNeedOlderCandles, loadingMoreCandles,
 }, ref) {
   const containerRef = useRef(null);
   const chartRef = useRef(null);
@@ -321,6 +377,25 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
   const bandFillPrimitiveRef = useRef(null);
   const pnlSeriesRef = useRef(null);
   const subpanelStateRef = useRef({ key: null, series: {} });
+  // onNeedOlderCandles/loadingMoreCandles espelhados em ref pra o listener de pan (assinado uma
+  // única vez, ver efeito de criação do chart) sempre ler o valor mais recente sem precisar
+  // re-assinar a cada render. pendingRestoreRangeRef guarda o range visível ANTES de disparar o
+  // carregamento, pra restaurar depois que candlesticks crescer (ver efeito de setData abaixo)
+  // — sem isso, o fitContent()+barSpacing padrão jogava a visão de volta pros candles mais
+  // recentes assim que os dados mais antigos chegavam, cancelando o arrasto do usuário.
+  const onNeedOlderCandlesRef = useRef(onNeedOlderCandles);
+  const loadingMoreCandlesRef = useRef(loadingMoreCandles);
+  const pendingRestoreRangeRef = useRef(null);
+  const skipFocusLastNOnceRef = useRef(false);
+  const candlesticksLenRef = useRef(0);
+  // Marca o tamanho de candlesticks em que o último pedido de histórico foi disparado — evita
+  // disparar de novo repetidamente durante o mesmo arrasto (o evento de pan dispara várias
+  // vezes antes de loadingMoreCandles voltar como prop true, já que isso depende de um
+  // round-trip de estado assíncrono no componente pai).
+  const triggeredForLenRef = useRef(-1);
+  useEffect(() => { onNeedOlderCandlesRef.current = onNeedOlderCandles; }, [onNeedOlderCandles]);
+  useEffect(() => { loadingMoreCandlesRef.current = loadingMoreCandles; }, [loadingMoreCandles]);
+  useEffect(() => { candlesticksLenRef.current = candlesticks?.length ?? 0; }, [candlesticks]);
 
   // Expõe conversão pixel↔preço/tempo pro pai (régua de medição em CandlestickChart.jsx) —
   // equivalente ao convertToPixel/convertFromPixel que o ReactECharts expõe via
@@ -401,7 +476,23 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
     priceLinesRef.current = [];
     markersPluginRef.current = createSeriesMarkers(series, []);
     subpanelStateRef.current = { key: null, series: {} };
+    // Arrastar o gráfico pra trás até quase o candle mais antigo carregado (range.from perto de
+    // 0 no espaço lógico) dispara a busca de mais histórico — ver onNeedOlderCandles em
+    // CandlestickChart.jsx (reaproveita o mesmo handleLoadMoreCandles do botão "+500/1000").
+    // Guarda o range visível ANTES de disparar pra restaurar depois que candlesticks crescer
+    // (ver efeito de setData abaixo), senão o fitContent() padrão volta a visão pros candles
+    // mais recentes assim que os dados mais antigos chegam.
+    const handleVisibleLogicalRangeChange = (range) => {
+      if (!range || range.from > 5) return;
+      if (loadingMoreCandlesRef.current || !onNeedOlderCandlesRef.current) return;
+      if (triggeredForLenRef.current === candlesticksLenRef.current) return;
+      triggeredForLenRef.current = candlesticksLenRef.current;
+      pendingRestoreRangeRef.current = chart.timeScale().getVisibleRange();
+      onNeedOlderCandlesRef.current();
+    };
+    chart.timeScale().subscribeVisibleLogicalRangeChange(handleVisibleLogicalRangeChange);
     return () => {
+      chart.timeScale().unsubscribeVisibleLogicalRangeChange(handleVisibleLogicalRangeChange);
       chart.remove();
       chartRef.current = null;
       seriesRef.current = null;
@@ -436,13 +527,24 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       }
     }
     seriesRef.current.setData(data);
-    // fitContent() calcula um barSpacing pra caber TODOS os candles carregados na largura do
-    // gráfico, o que sobrescreve o barSpacing fixo do createChart e deixa os candles fininhos
-    // de novo assim que a lista de candles fica grande. Reaplicar o barSpacing depois ancora a
-    // visão nos candles mais recentes (mostra só quantos couberem naquela largura, em vez de
-    // espremer o histórico inteiro).
-    chartRef.current?.timeScale().fitContent();
-    chartRef.current?.timeScale().applyOptions({ barSpacing: 10 });
+    if (pendingRestoreRangeRef.current) {
+      // candlesticks cresceu por causa do arrasto pra trás (onNeedOlderCandles) — restaura
+      // exatamente onde o usuário estava em vez de saltar pros candles mais recentes. O efeito
+      // de focusLastN (abaixo) roda logo depois, na mesma leva de commits (também depende de
+      // candlesticks) — sem o skip ele sobrescreveria essa restauração de volta pros N mais
+      // recentes, cancelando o arrasto.
+      chartRef.current?.timeScale().setVisibleRange(pendingRestoreRangeRef.current);
+      pendingRestoreRangeRef.current = null;
+      skipFocusLastNOnceRef.current = true;
+    } else {
+      // fitContent() calcula um barSpacing pra caber TODOS os candles carregados na largura do
+      // gráfico, o que sobrescreve o barSpacing fixo do createChart e deixa os candles fininhos
+      // de novo assim que a lista de candles fica grande. Reaplicar o barSpacing depois ancora a
+      // visão nos candles mais recentes (mostra só quantos couberem naquela largura, em vez de
+      // espremer o histórico inteiro).
+      chartRef.current?.timeScale().fitContent();
+      chartRef.current?.timeScale().applyOptions({ barSpacing: 10 });
+    }
     // O chart (e a price scale) não é recriado ao trocar de moeda — só no efeito de cores acima.
     // Se o usuário arrastou o eixo de preço em algum momento, o Lightweight Charts desliga
     // autoScale e só religa com duplo clique no eixo (axisDoubleClickReset). Sem isso, trocar de
@@ -457,6 +559,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
   // o histórico completo pros indicadores, só ajusta o que aparece na tela).
   useEffect(() => {
     const chart = chartRef.current;
+    if (skipFocusLastNOnceRef.current) { skipFocusLastNOnceRef.current = false; return; }
     if (!chart || !focusLastN || !candlesticks?.length) return;
     const idx = Math.max(0, candlesticks.length - focusLastN);
     const from = Math.floor(Number(candlesticks[idx].openTime) / 1000);
@@ -479,11 +582,14 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart || !zoomPeriod?.startDate || !zoomPeriod?.endDate) return;
-    const from = Math.floor(new Date(zoomPeriod.startDate).getTime() / 1000);
-    const to = Math.floor(new Date(zoomPeriod.endDate).getTime() / 1000);
+    // Respiro de 3 candles antes/depois do período estudado — sem isso a entrada/saída
+    // ficavam coladas na borda do gráfico (mesmo respiro de 3 candles do focusLastN acima).
+    const padSec = (INTERVAL_MS[interval] ?? 0) * 3 / 1000;
+    const from = Math.floor(new Date(zoomPeriod.startDate).getTime() / 1000) - padSec;
+    const to = Math.floor(new Date(zoomPeriod.endDate).getTime() / 1000) + padSec;
     if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) return;
     chart.timeScale().setVisibleRange({ from, to }); // ver comentário no efeito de focusLastN acima — sem reaplicar barSpacing fixo depois
-  }, [zoomPeriod]);
+  }, [zoomPeriod, interval]);
 
   // Linhas: EMAs + EMAs extras + VWAP(bandas) + Bollinger.
   useEffect(() => {
@@ -606,8 +712,11 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
   // igual ao buildBuyPositionSquares do ECharts (markArea verde/vermelho com % de distância).
   useEffect(() => {
     if (!rectPrimitiveRef.current) return;
-    rectPrimitiveRef.current.setRects(buildPositionRects(buyInfo, stopLossConfig, targetConfig, candlesticks));
-  }, [buyInfo, stopLossConfig, targetConfig, candlesticks]);
+    rectPrimitiveRef.current.setRects([
+      ...buildPositionRects(buyInfo, stopLossConfig, targetConfig, candlesticks),
+      ...buildHistoricalPositionRects(multitradeMarkers, candlesticks),
+    ]);
+  }, [buyInfo, stopLossConfig, targetConfig, candlesticks, multitradeMarkers]);
 
   // Linha de PnL: entrada → preço atual, verde/vermelho conforme sobe ou cai.
   useEffect(() => {
