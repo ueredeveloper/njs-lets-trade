@@ -87,13 +87,24 @@ async function binanceMarketBuy(symbol, usdtAmount) {
 }
 
 /**
- * Compra LIMITE (IOC) num preço exato (ex.: valor da lower1/vwap no vwap-bands-bot) — só
- * preenche se o mercado estiver naquele preço ou melhor no instante do envio; o que não
- * preencher é cancelado na hora pela própria IOC, sem ficar parado no book. Se não
- * preencher nada, devolve `{ filled: false }` em vez de lançar erro — quem chama decide se
- * tenta de novo no próximo tick (não é uma falha, só "ainda não chegou lá").
+ * Compra LIMITE num preço exato (ex.: valor da lower1/vwap no vwap-bands-bot) — GTC com
+ * timeout curto (`waitMs`, default 20s, sondando a cada `pollMs`, default 2s) em vez de IOC.
+ *
+ * Motivo da troca (ver conversa com o usuário — caso PYRUSDT): o sinal só é avaliado em
+ * candle FECHADO (evaluatePullbackReady em strategyEngine.js), então quando o bot manda a
+ * ordem o toque na banda já passou — com IOC, o preço quase sempre já voltou a subir no
+ * instante exato do envio e a ordem morre sem preencher, mesmo o candle tendo tocado o nível
+ * segundos/minutos antes. GTC deixa a ordem parada no book por alguns segundos, cobrindo
+ * esse atraso entre "candle fechou e tocou o nível" e "ordem chegou na corretora" — se o
+ * preço ainda estiver oscilando perto do nível (não só um pavio único), ela pega o fill.
+ * Ainda cancela e desiste (`filled: false`, tenta de novo no próximo tick) se não encher
+ * dentro do timeout, pra não deixar capital preso indefinidamente numa ordem parada longe
+ * do preço.
  */
-async function binanceLimitBuy(symbol, usdtAmount, price) {
+async function binanceLimitBuy(symbol, usdtAmount, price, opts = {}) {
+  const waitMs = opts.waitMs ?? 20_000;
+  const pollMs = opts.pollMs ?? 2_000;
+
   const info        = await fetch(`${BINANCE_BASE}/api/v3/exchangeInfo?symbol=${symbol}`).then(r => r.json());
   const filters     = info.symbols?.[0]?.filters ?? [];
   const priceFilter = filters.find(f => f.filterType === 'PRICE_FILTER');
@@ -110,9 +121,25 @@ async function binanceLimitBuy(symbol, usdtAmount, price) {
     throw new Error(`quantidade inválida para compra limite (${safeQty})`);
   }
 
-  const order = await binanceRequest('POST', '/api/v3/order', {
-    symbol, side: 'BUY', type: 'LIMIT', timeInForce: 'IOC', quantity: safeQty, price: safePrice,
+  let order = await binanceRequest('POST', '/api/v3/order', {
+    symbol, side: 'BUY', type: 'LIMIT', timeInForce: 'GTC', quantity: safeQty, price: safePrice,
   });
+
+  const deadline = Date.now() + waitMs;
+  while (order.status !== 'FILLED' && Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, pollMs));
+    order = await binanceRequest('GET', '/api/v3/order', { symbol, orderId: order.orderId });
+  }
+
+  if (order.status !== 'FILLED') {
+    try {
+      await binanceRequest('DELETE', '/api/v3/order', { symbol, orderId: order.orderId });
+    } catch { /* já pode ter enchido ou sido cancelada sozinha entre o último poll e aqui */ }
+    // Reconfere o estado final pós-cancelamento — pode ter enchido (parcial ou total) bem
+    // no instante entre o último poll e o DELETE acima.
+    order = await binanceRequest('GET', '/api/v3/order', { symbol, orderId: order.orderId });
+  }
+
   const filledQty = parseFloat(order.executedQty);
   const quoteQty  = parseFloat(order.cummulativeQuoteQty);
   if (!(filledQty > 0)) return { filled: false };

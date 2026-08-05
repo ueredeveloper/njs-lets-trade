@@ -71,9 +71,13 @@ function parseGateJson(text) {
  * Faz uma requisição autenticada à Gate.io API v4.
  * @param {'GET'|'POST'|'DELETE'} method
  * @param {string} endpointPath  ex: '/spot/my_trades'
- * @param {Record<string,string>} [params]  query params (GET) ou campos do body (POST)
+ * @param {Record<string,string>} [params]  query params (GET) ou campos do body (POST/DELETE)
+ * @param {{_retry?: boolean, query?: Record<string,string>}} [opts]  `query` força params de
+ *   URL mesmo em POST/DELETE — necessário pra endpoints como `DELETE /spot/orders/{id}`, que a
+ *   Gate exige `currency_pair` na query string (não no body) mesmo não sendo GET.
  */
-async function gateRequest(method, endpointPath, params = {}, _retry = false) {
+async function gateRequest(method, endpointPath, params = {}, opts = {}) {
+  const { _retry = false, query = null } = opts;
 
   const apiPath = `/api/v4${endpointPath}`;
 
@@ -85,13 +89,19 @@ async function gateRequest(method, endpointPath, params = {}, _retry = false) {
     const qs = new URLSearchParams(params).toString();
     queryString = qs;
     if (qs) url += `?${qs}`;
-  } else if (Object.keys(params).length > 0) {
-    // Corpo vazio ('') pra request sem params, não "{}": confirmado na prática (DELETE
-    // /spot/price_orders/{id} sem campos) que o fetch não manda corpo quando `options.body`
-    // seria só "{}" numa request sem payload de verdade — a assinatura calculada em cima de
-    // "{}" não bate com o que a Gate recebe de fato (vazio), e ela responde 401 signature
-    // mismatch. Só stringifica quando há campos reais no body.
-    bodyStr = JSON.stringify(params);
+  } else {
+    if (query) {
+      queryString = new URLSearchParams(query).toString();
+      if (queryString) url += `?${queryString}`;
+    }
+    if (Object.keys(params).length > 0) {
+      // Corpo vazio ('') pra request sem params, não "{}": confirmado na prática (DELETE
+      // /spot/price_orders/{id} sem campos) que o fetch não manda corpo quando `options.body`
+      // seria só "{}" numa request sem payload de verdade — a assinatura calculada em cima de
+      // "{}" não bate com o que a Gate recebe de fato (vazio), e ela responde 401 signature
+      // mismatch. Só stringifica quando há campos reais no body.
+      bodyStr = JSON.stringify(params);
+    }
   }
 
   const headers = buildAuthHeaders(method, apiPath, queryString, bodyStr);
@@ -113,7 +123,7 @@ async function gateRequest(method, endpointPath, params = {}, _retry = false) {
       if (match) {
         clockOffsetSec = parseInt(match[1], 10) - Math.floor(Date.now() / 1000);
         console.log(`[getGateClient] clock corrigido: offset=${clockOffsetSec}s`);
-        return gateRequest(method, endpointPath, params, true);
+        return gateRequest(method, endpointPath, params, { _retry: true, query });
       }
     }
     throw new Error(`Gate.io ${method} ${endpointPath} → ${res.status}: ${msg}`);
