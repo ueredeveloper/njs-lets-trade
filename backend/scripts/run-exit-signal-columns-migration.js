@@ -8,10 +8,18 @@ const pool = require('../supabase/pgClient');
 async function main() {
   const sqlPath = path.join(__dirname, '../bot/shared/add-exit-signal-columns.sql');
   const raw = fs.readFileSync(sqlPath, 'utf8');
-  const statements = raw
+  // Remove linhas de comentário ANTES de dividir por ';' — senão um bloco de comentário
+  // colado (sem linha em branco) ao statement seguinte vira um único "chunk" que começa
+  // com '--' e o filtro abaixo descarta o statement real junto (bug encontrado ao rodar
+  // este script em 2026-08-04: a primeira ALTER TABLE do arquivo nunca era executada).
+  const withoutComments = raw
+    .split('\n')
+    .filter(line => !line.trim().startsWith('--'))
+    .join('\n');
+  const statements = withoutComments
     .split(';')
     .map(s => s.trim())
-    .filter(s => s && !s.startsWith('--'));
+    .filter(Boolean);
 
   for (const stmt of statements) {
     console.log('Executando:', stmt.slice(0, 60).replace(/\s+/g, ' ') + '…');
