@@ -32,6 +32,31 @@ function applyPalette(colors) {
 
 const RELOAD_INTERVALS = ['all', '1m', '5m', '15m', '30m', '1h', '2h', '4h', '8h', '1d'];
 
+function AccordionItem({ id, title, hint, openSection, setOpenSection, children }) {
+  const isOpen = openSection === id;
+  return (
+    <div className="border-b border-p2/30 last:border-b-0">
+      <button
+        type="button"
+        onClick={() => setOpenSection(isOpen ? null : id)}
+        className="w-full flex items-center justify-between py-3 text-left group"
+      >
+        <span className="text-p5 text-xs uppercase tracking-widest opacity-50 group-hover:opacity-80 transition-opacity">{title}</span>
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor"
+          className={`w-3.5 h-3.5 text-p5/40 shrink-0 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+        </svg>
+      </button>
+      {isOpen && (
+        <div className="pb-4">
+          {hint && <p className="text-[10px] text-p5/50 mb-3 leading-relaxed">{hint}</p>}
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function SettingsSidebar({ open, onClose }) {
   const { lang, setLang } = useLanguage();
   const { t } = useI18n();
@@ -78,6 +103,7 @@ export default function SettingsSidebar({ open, onClose }) {
     }
   }
 
+  const [openSection, setOpenSection]     = useState(null);
   const [activeId, setActiveId]           = useState('default');
   const [reloadSymbol, setReloadSymbol]   = useState('');
   const [reloadInterval, setReloadInterval] = useState('all');
@@ -156,7 +182,6 @@ export default function SettingsSidebar({ open, onClose }) {
     }
   }
 
-  const section = 'text-p5 text-xs uppercase tracking-widest opacity-50 mb-3';
   const inp = 'bg-p2 border border-p3/40 text-p5 text-xs rounded px-2 py-1.5 focus:outline-none focus:border-p4';
 
   return (
@@ -177,12 +202,11 @@ export default function SettingsSidebar({ open, onClose }) {
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-5">
+        <div className="flex-1 overflow-y-auto px-4 py-1 flex flex-col">
 
           {/* Exibição de ativos */}
-          <div>
-            <p className={section}>{t('settings.asset_display')}</p>
-            <p className="text-[10px] text-p5/50 mb-3 leading-relaxed">{t('settings.asset_display_hint')}</p>
+          <AccordionItem id="assets" title={t('settings.asset_display')} hint={t('settings.asset_display_hint')}
+            openSection={openSection} setOpenSection={setOpenSection}>
             <div className="flex flex-col gap-2">
               {assetCategoryKeys.map((key) => (
                 <label
@@ -201,12 +225,11 @@ export default function SettingsSidebar({ open, onClose }) {
                 </label>
               ))}
             </div>
-          </div>
+          </AccordionItem>
 
           {/* Saldos Ativos (saldos reais nas exchanges) */}
-          <div>
-            <p className={section}>{t('settings.active_trades')}</p>
-            <p className="text-[10px] text-p5/50 mb-3 leading-relaxed">{t('settings.active_trades_hint')}</p>
+          <AccordionItem id="activeTrades" title={t('settings.active_trades')} hint={t('settings.active_trades_hint')}
+            openSection={openSection} setOpenSection={setOpenSection}>
 
             <label className="flex items-start gap-2.5 cursor-pointer group mb-3">
               <input
@@ -273,12 +296,11 @@ export default function SettingsSidebar({ open, onClose }) {
                 </div>
               </div>
             )}
-          </div>
+          </AccordionItem>
 
           {/* Intervalo padrão do gráfico */}
-          <div>
-            <p className={section}>{t('settings.chart_default_interval')}</p>
-            <p className="text-[10px] text-p5/50 mb-3 leading-relaxed">{t('settings.chart_default_interval_hint')}</p>
+          <AccordionItem id="defaultInterval" title={t('settings.chart_default_interval')} hint={t('settings.chart_default_interval_hint')}
+            openSection={openSection} setOpenSection={setOpenSection}>
             <select
               className={`w-full ${inp}`}
               value={uiPrefs.defaultChartInterval}
@@ -288,12 +310,11 @@ export default function SettingsSidebar({ open, onClose }) {
                 <option key={iv} value={iv}>{iv}</option>
               ))}
             </select>
-          </div>
+          </AccordionItem>
 
           {/* Intervalos rápidos do gráfico */}
-          <div>
-            <p className={section}>{t('settings.chart_quick_intervals')}</p>
-            <p className="text-[10px] text-p5/50 mb-3 leading-relaxed">{t('settings.chart_quick_intervals_hint')}</p>
+          <AccordionItem id="quickIntervals" title={t('settings.chart_quick_intervals')} hint={t('settings.chart_quick_intervals_hint')}
+            openSection={openSection} setOpenSection={setOpenSection}>
             <div className="flex flex-wrap gap-1.5">
               {chartIntervalOptions.map((iv) => {
                 const active = (uiPrefs.commonChartIntervals ?? []).includes(iv);
@@ -313,12 +334,11 @@ export default function SettingsSidebar({ open, onClose }) {
                 );
               })}
             </div>
-          </div>
+          </AccordionItem>
 
           {/* VWAP padrão (ancorada em calendário vs rolante/contínua) */}
-          <div>
-            <p className={section}>{t('settings.vwap_anchor')}</p>
-            <p className="text-[10px] text-p5/50 mb-3 leading-relaxed">{t('settings.vwap_anchor_hint')}</p>
+          <AccordionItem id="vwapAnchor" title={t('settings.vwap_anchor')} hint={t('settings.vwap_anchor_hint')}
+            openSection={openSection} setOpenSection={setOpenSection}>
             <div className="flex gap-2">
               {[
                 { value: 'session', label: t('settings.vwap_anchor_session') },
@@ -338,12 +358,11 @@ export default function SettingsSidebar({ open, onClose }) {
                 </button>
               ))}
             </div>
-          </div>
+          </AccordionItem>
 
           {/* Destaque visual (rosa) dos trechos com a VWAP em queda acentuada */}
-          <div>
-            <p className={section}>{t('settings.vwap_slope_highlight')}</p>
-            <p className="text-[10px] text-p5/50 mb-3 leading-relaxed">{t('settings.vwap_slope_highlight_hint')}</p>
+          <AccordionItem id="vwapSlope" title={t('settings.vwap_slope_highlight')} hint={t('settings.vwap_slope_highlight_hint')}
+            openSection={openSection} setOpenSection={setOpenSection}>
             <label className="flex items-center gap-2.5 cursor-pointer group mb-3">
               <input
                 type="checkbox"
@@ -383,12 +402,11 @@ export default function SettingsSidebar({ open, onClose }) {
                 </div>
               </div>
             )}
-          </div>
+          </AccordionItem>
 
           {/* Motor de renderização do gráfico principal */}
-          <div>
-            <p className={section}>{t('settings.chart_engine')}</p>
-            <p className="text-[10px] text-p5/50 mb-3 leading-relaxed">{t('settings.chart_engine_hint')}</p>
+          <AccordionItem id="chartEngine" title={t('settings.chart_engine')} hint={t('settings.chart_engine_hint')}
+            openSection={openSection} setOpenSection={setOpenSection}>
             <div className="flex gap-2">
               {[
                 { value: 'lw', label: t('settings.chart_engine_lw') },
@@ -408,12 +426,11 @@ export default function SettingsSidebar({ open, onClose }) {
                 </button>
               ))}
             </div>
-          </div>
+          </AccordionItem>
 
           {/* Painéis inferiores */}
-          <div>
-            <p className={section}>{t('settings.visible_panels')}</p>
-            <p className="text-[10px] text-p5/50 mb-3 leading-relaxed">{t('settings.visible_panels_hint')}</p>
+          <AccordionItem id="panels" title={t('settings.visible_panels')} hint={t('settings.visible_panels_hint')}
+            openSection={openSection} setOpenSection={setOpenSection}>
             <div className="flex flex-col gap-2">
               {panelKeys.map((key) => (
                 <label key={key} className="flex items-start gap-2.5 cursor-pointer group">
@@ -429,12 +446,11 @@ export default function SettingsSidebar({ open, onClose }) {
                 </label>
               ))}
             </div>
-          </div>
+          </AccordionItem>
 
           {/* Botões de favoritos visíveis (toolbar + linhas da tabela) */}
-          <div>
-            <p className={section}>{t('settings.favorite_buttons')}</p>
-            <p className="text-[10px] text-p5/50 mb-3 leading-relaxed">{t('settings.favorite_buttons_hint')}</p>
+          <AccordionItem id="favButtons" title={t('settings.favorite_buttons')} hint={t('settings.favorite_buttons_hint')}
+            openSection={openSection} setOpenSection={setOpenSection}>
             <div className="flex flex-col gap-2">
               {favoriteButtonKeys.map((key) => (
                 <label key={key} className="flex items-start gap-2.5 cursor-pointer group">
@@ -450,12 +466,11 @@ export default function SettingsSidebar({ open, onClose }) {
                 </label>
               ))}
             </div>
-          </div>
+          </AccordionItem>
 
           {/* Estatísticas — padrões */}
-          <div>
-            <p className={section}>{t('settings.stats_defaults')}</p>
-            <p className="text-[10px] text-p5/50 mb-3 leading-relaxed">{t('settings.stats_defaults_hint')}</p>
+          <AccordionItem id="statsDefaults" title={t('settings.stats_defaults')} hint={t('settings.stats_defaults_hint')}
+            openSection={openSection} setOpenSection={setOpenSection}>
 
             <div className="flex flex-col gap-3">
               {/* RSI */}
@@ -555,12 +570,11 @@ export default function SettingsSidebar({ open, onClose }) {
                 </div>
               </div>
             </div>
-          </div>
+          </AccordionItem>
 
           {/* Largura da coluna de moedas/filtros */}
-          <div>
-            <p className={section}>{t('settings.currency_panel_width')}</p>
-            <p className="text-[10px] text-p5/50 mb-3 leading-relaxed">{t('settings.currency_panel_width_hint')}</p>
+          <AccordionItem id="panelWidth" title={t('settings.currency_panel_width')} hint={t('settings.currency_panel_width_hint')}
+            openSection={openSection} setOpenSection={setOpenSection}>
             <div className="flex items-center gap-2">
               <input
                 type="range"
@@ -580,12 +594,11 @@ export default function SettingsSidebar({ open, onClose }) {
             >
               {t('settings.currency_panel_width_reset')}
             </button>
-          </div>
+          </AccordionItem>
 
           {/* Botões do gráfico */}
-          <div>
-            <p className={section}>{t('settings.chart_panel')}</p>
-            <p className="text-[10px] text-p5/50 mb-3 leading-relaxed">{t('settings.chart_panel_hint')}</p>
+          <AccordionItem id="chartButtons" title={t('settings.chart_panel')} hint={t('settings.chart_panel_hint')}
+            openSection={openSection} setOpenSection={setOpenSection}>
             <div className="flex flex-col gap-2">
               {chartPanelButtonKeys.map((key) => {
                 const hintKey = `settings.chart_btn_hint.${key}`;
@@ -609,12 +622,11 @@ export default function SettingsSidebar({ open, onClose }) {
                 );
               })}
             </div>
-          </div>
+          </AccordionItem>
 
           {/* Overlay MA — padrão */}
-          <div>
-            <p className={section}>{t('settings.overlay_slots')}</p>
-            <p className="text-[10px] text-p5/50 mb-3 leading-relaxed">{t('settings.overlay_slots_hint')}</p>
+          <AccordionItem id="overlaySlots" title={t('settings.overlay_slots')} hint={t('settings.overlay_slots_hint')}
+            openSection={openSection} setOpenSection={setOpenSection}>
             <div className="overflow-x-auto">
               <table className="text-[10px] w-full border-collapse">
                 <thead>
@@ -658,12 +670,11 @@ export default function SettingsSidebar({ open, onClose }) {
             {uiPrefs.overlaySlots.length >= MAX_OVERLAY_SLOTS && (
               <p className="text-[10px] text-amber-400/70 mt-2">{t('settings.overlay_slots_max', MAX_OVERLAY_SLOTS)}</p>
             )}
-          </div>
+          </AccordionItem>
 
           {/* Screener automático MA-Cross (exaustão BB+VWAP 4h) */}
-          <div>
-            <p className={section}>{t('settings.screener_title')}</p>
-            <p className="text-[10px] text-p5/50 mb-3 leading-relaxed">{t('settings.screener_hint')}</p>
+          <AccordionItem id="screener" title={t('settings.screener_title')} hint={t('settings.screener_hint')}
+            openSection={openSection} setOpenSection={setOpenSection}>
 
             {!screenerLoaded && !screenerLoadError && (
               <p className="text-[10px] text-p5/40">{t('settings.loading')}</p>
@@ -781,11 +792,11 @@ export default function SettingsSidebar({ open, onClose }) {
                 </div>
               </div>
             )}
-          </div>
+          </AccordionItem>
 
           {/* Idioma */}
-          <div>
-            <p className={section}>{t('settings.language')}</p>
+          <AccordionItem id="language" title={t('settings.language')}
+            openSection={openSection} setOpenSection={setOpenSection}>
             <div className="flex gap-2">
               {[{ code: 'pt', label: '🇧🇷 Português' }, { code: 'en', label: '🇺🇸 English' }].map(({ code, label }) => (
                 <button
@@ -801,11 +812,11 @@ export default function SettingsSidebar({ open, onClose }) {
                 </button>
               ))}
             </div>
-          </div>
+          </AccordionItem>
 
           {/* Recarregar candles */}
-          <div>
-            <p className={section}>{t('settings.reload')}</p>
+          <AccordionItem id="reload" title={t('settings.reload')}
+            openSection={openSection} setOpenSection={setOpenSection}>
             <div className="flex flex-col gap-2">
               <div className="flex gap-2">
                 <input
@@ -848,11 +859,11 @@ export default function SettingsSidebar({ open, onClose }) {
               )}
               {reloadState === 'error' && <p className="text-[10px] text-red-400">{reloadError}</p>}
             </div>
-          </div>
+          </AccordionItem>
 
           {/* Paleta de cores */}
-          <div>
-            <p className={section}>{t('settings.palette')}</p>
+          <AccordionItem id="palette" title={t('settings.palette')}
+            openSection={openSection} setOpenSection={setOpenSection}>
             <div className="flex flex-col gap-2">
               {PALETTES.map((palette) => {
                 const isActive = activeId === palette.id;
@@ -872,7 +883,7 @@ export default function SettingsSidebar({ open, onClose }) {
                 );
               })}
             </div>
-          </div>
+          </AccordionItem>
 
         </div>
       </div>
