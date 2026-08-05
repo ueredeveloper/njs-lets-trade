@@ -3818,14 +3818,14 @@ export default function CandlestickChart() {
   // Botões de medir % — vivem dentro da área do gráfico, deslocados à esquerda do
   // painel de indicadores (panelPad) pra não ficarem colados na borda direita.
   const measureButtons = (
-    <div className="absolute top-2 z-30 flex items-center gap-1" style={{ right: panelPad + 10 }}>
+    <div className="absolute top-3 z-30 flex items-center gap-1" style={{ right: panelPad + 10 }}>
       <button
         onClick={toggleMeasureMode}
         title="Medir variação % — arraste de um candle a outro (fica ligado até você clicar de novo)"
-        className={`px-1.5 md:px-2 py-0.5 text-[10px] md:text-xs rounded font-mono transition-colors border shrink-0 shadow ${
+        className={`w-6 h-5 md:w-7 md:h-6 inline-flex items-center justify-center text-[10px] md:text-[11px] rounded font-mono font-bold transition-colors border shrink-0 shadow-lg ${
           measureMode && !measureOneShot
-            ? 'bg-p4 text-white border-p4'
-            : 'bg-p1/85 text-p5 hover:bg-p3/40 hover:text-white border-p3/40'
+            ? 'bg-amber-400 text-black border-amber-200 shadow-amber-400/50'
+            : 'bg-amber-500/80 text-black border-amber-400 hover:bg-amber-400'
         }`}
       >
         %
@@ -3833,13 +3833,13 @@ export default function CandlestickChart() {
       <button
         onClick={toggleMeasureModeOnce}
         title="Medir variação % uma vez — desliga sozinho ao soltar o arraste e o resultado some após 1s"
-        className={`px-1.5 md:px-2 py-0.5 text-[10px] md:text-xs rounded font-mono transition-colors border shrink-0 shadow ${
+        className={`w-6 h-5 md:w-7 md:h-6 inline-flex items-center justify-center text-[10px] md:text-[11px] rounded font-mono font-bold transition-colors border shrink-0 shadow-lg ${
           measureMode && measureOneShot
-            ? 'bg-p4 text-white border-p4'
-            : 'bg-p1/85 text-p5 hover:bg-p3/40 hover:text-white border-p3/40'
+            ? 'bg-amber-400 text-black border-amber-200 shadow-amber-400/50'
+            : 'bg-amber-500/80 text-black border-amber-400 hover:bg-amber-400'
         }`}
       >
-        %<sup>1</sup>
+        %<sup className="leading-none">1</sup>
       </button>
     </div>
   );
