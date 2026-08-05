@@ -69,12 +69,19 @@ async function fetchFromGate(binanceSymbol, interval, limit) {
  * @param {number}  limit    Quantidade de candles a retornar
  */
 async function getGateCandles(symbol, interval, limit) {
+  // Chave de cache própria (não `symbol` puro) — `getCandles.js` (Binance) usa a mesma
+  // dupla readCandles/writeCandles com `${symbol}-${interval}.json`. Sem esse sufixo, um
+  // símbolo consultado nas duas corretoras (ex.: geral pela Binance, favorito configurado
+  // pra Gate) faz os dois merges caírem no MESMO arquivo, misturando preço/volume de
+  // exchanges diferentes pro resto da vida do cache (achado investigando BANKUSDT
+  // mostrando VWAP muito diferente da que o bot realmente usa — ver git blame).
+  const cacheKey = `${symbol}_GATE`;
   let dbCandles;
   try {
-    dbCandles = await readCandles(symbol, interval);
+    dbCandles = await readCandles(cacheKey, interval);
   } catch (err) {
     if (err.code === 'ENOENT') {
-      writeCandles(symbol, interval, []);
+      writeCandles(cacheKey, interval, []);
       dbCandles = [];
     } else {
       throw err;
@@ -97,7 +104,7 @@ async function getGateCandles(symbol, interval, limit) {
   if (limit > dbCandles.length) {
     // Banco local tem menos candles do que o solicitado: faz carga completa
     const candles = await fetchFromGate(symbol, interval, Math.min(limit, GATE_MAX_LIMIT));
-    writeCandles(symbol, interval, candles);
+    writeCandles(cacheKey, interval, candles);
     return candles;
   }
 
@@ -117,7 +124,7 @@ async function getGateCandles(symbol, interval, limit) {
   dbCandles.forEach(c => { uniqueMap[c.openTime] = c; });
   const uniqueArray = Object.values(uniqueMap);
 
-  writeCandles(symbol, interval, uniqueArray);
+  writeCandles(cacheKey, interval, uniqueArray);
   return uniqueArray.slice(-limit);
 }
 
