@@ -36,7 +36,9 @@ const {
 const { buildAdapter, syncExchangeClocks } = require('../shared/buildAdapter');
 const { sbReq } = require('../shared/supabaseRest');
 const { createTradeExecution, entrySignalFields } = require('../shared/tradeExecution');
+const { sendWhatsApp } = require('../whatsapp');
 
+const BOT_LABEL = 'VWAP-BANDS';
 const VOL_CACHE_MS = 5 * 60_000;
 const PENDING_LOG_INTERVAL_MS = 15 * 60_000;
 
@@ -95,7 +97,7 @@ const {
   parseRulesState, resolveLastExitTime,
   executeBuy, executeSell, recordBracketFill,
 } = createTradeExecution({
-  botLabel: 'VWAP-BANDS',
+  botLabel: BOT_LABEL,
   buildReasonLines: buildEntryReasonLines,
   computeStopLossFloor,
   extraInitialRulesState: ({ entryMeta }) => ({
@@ -289,6 +291,22 @@ async function tick(rowId, adapter, strategy, log, session) {
   // ── WATCHING ──────────────────────────────────────────────────────────────
   if (phase === 'WATCHING') {
     const signal = evaluateEntrySignal(config, cMap);
+
+    // Aviso experimental (período de teste, ver conversa com o usuário): moeda que passaria
+    // em tudo (reconquista + held + bandDist + emaFilter) e só não comprou porque o
+    // vwapSlopeFilter bloqueou — não impede nada, só avisa via WhatsApp pra decidir depois se
+    // vale manter o filtro ligado. Dedupe por confirmOpenTime pra não repetir a cada tick
+    // enquanto o mesmo degrau continuar bloqueado.
+    if (!signal.allowed && signal.vwapSlopeBlocked
+        && session.lastVwapSlopeNotifyOpenTime !== signal.vwapSlopeBlocked.confirmOpenTime) {
+      session.lastVwapSlopeNotifyOpenTime = signal.vwapSlopeBlocked.confirmOpenTime;
+      const vb = signal.vwapSlopeBlocked;
+      log(`${Y}🟡 Só não entrou pelo filtro de queda da VWAP — ${vb.entryDesc} @ ${fmtPrice(vb.close)}${X}`);
+      sendWhatsApp(
+        `🟡 ${BOT_LABEL} [${strategyId}] ${symbol}\nPassou em todos os filtros, mas o filtro de queda da VWAP bloqueou a entrada\n${vb.entryDesc} @ ${fmtPrice(vb.close)}`,
+      );
+    }
+
     if (!signal.allowed) return { phase };
 
     const pending = {
@@ -443,6 +461,7 @@ async function startSymbol(row, color) {
     rulesState: null,
     lastExitTime: rs.lastExitTime ?? null,
     lastPendingLogAt: 0,
+    lastVwapSlopeNotifyOpenTime: null,
   };
   let volIv;
 

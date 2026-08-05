@@ -91,11 +91,11 @@ const VWAP_BANDS_DEFAULTS = {
      *  candles atrás (na unidade de vwapInterval); bloqueia o sinal se a variação % ficar
      *  abaixo de minSlopePct. Existe pra pegar casos como ALLO/PYR, onde a própria VWAP e
      *  as bandas estão em queda acentuada — o emaFilter (EMA200 de PREÇO no 15m) pode não
-     *  refletir isso a tempo, já que é uma série diferente da VWAP. Desligado por padrão
-     *  (ainda sem validação de backtest como o emaFilter teve) — ativar por símbolo quando
-     *  a VWAP estiver visivelmente caindo. */
+     *  refletir isso a tempo, já que é uma série diferente da VWAP. Ligado por padrão desde
+     *  que validado em backtest (analyze-vwap-slope-filter.js): bloqueia trades ruins sem
+     *  perder os bons, com lookback=6/minSlopePct=-3 nas favoritas vwap-bands/MC. */
     vwapSlopeFilter: {
-      enabled: false,
+      enabled: true,
       lookback: 6,
       minSlopePct: -3,
     },
@@ -202,7 +202,7 @@ function normalizeVwapSlopeFilter(block) {
   const d = VWAP_BANDS_DEFAULTS.entry.vwapSlopeFilter;
   const src = block ?? {};
   return {
-    enabled: src.enabled === true,
+    enabled: src.enabled !== false,
     lookback: Math.max(1, Math.round(Number(src.lookback ?? d.lookback))),
     minSlopePct: Number(src.minSlopePct ?? d.minSlopePct),
   };

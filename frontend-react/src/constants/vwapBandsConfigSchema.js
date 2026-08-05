@@ -25,8 +25,9 @@ export const VWAP_BANDS_DEFAULTS = {
     // (slope >= minSlopePct nos últimos slopeLookback candles).
     emaFilter: { enabled: true, period: 200, interval: '15m', tolerancePct: 2, slopeLookback: 20, minSlopePct: -1 },
     // Filtro extra: inclinação da própria linha da VWAP (não da EMA de preço) — pega
-    // símbolos onde a VWAP e as bandas em si estão em queda acentuada. Desligado por padrão.
-    vwapSlopeFilter: { enabled: false, lookback: 6, minSlopePct: -3 },
+    // símbolos onde a VWAP e as bandas em si estão em queda acentuada. Ligado por padrão
+    // (validado em backtest — analyze-vwap-slope-filter.js).
+    vwapSlopeFilter: { enabled: true, lookback: 6, minSlopePct: -3 },
   },
   exit: {
     tolerancePct: 0,
@@ -74,7 +75,7 @@ export function normalizeVwapBandsForm(body = {}) {
         minSlopePct: Number(body.entry?.emaFilter?.minSlopePct ?? d.entry.emaFilter.minSlopePct),
       },
       vwapSlopeFilter: {
-        enabled: body.entry?.vwapSlopeFilter?.enabled === true,
+        enabled: body.entry?.vwapSlopeFilter?.enabled !== false,
         lookback: Number(body.entry?.vwapSlopeFilter?.lookback ?? d.entry.vwapSlopeFilter.lookback),
         minSlopePct: Number(body.entry?.vwapSlopeFilter?.minSlopePct ?? d.entry.vwapSlopeFilter.minSlopePct),
       },

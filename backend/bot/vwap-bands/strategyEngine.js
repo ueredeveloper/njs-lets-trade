@@ -269,6 +269,11 @@ function evaluateEntrySignal(config, cMap) {
 
   let lastReason = 'NO_LADDER_SIGNAL';
   let best = null;
+  // Degrau mais recente que passaria em tudo (reconquista+held+bandDist+emaFilter) e só foi
+  // barrado pelo vwapSlopeFilter — guardado à parte de `best` pra notificar (WhatsApp, ver
+  // vwap-bands-bot.js) o caso "passou em todos os filtros, só não entrou pelo vwap em queda",
+  // mesmo quando nenhum degrau libera a compra (best fica null).
+  let vwapSlopeBlocked = null;
 
   // Avalia TODOS os degraus (não para no primeiro que bater) e fica com o de reconquista
   // MAIS RECENTE. Um degrau de baixo (ex.: lower2→lower1→vwap) fica "sempre válido" assim
@@ -347,6 +352,12 @@ function evaluateEntrySignal(config, cMap) {
     const vwapSlopeCheck = checkVwapSlopeFilterAt(entry, vwapSeries, reclaimCandle.openTime);
     if (!vwapSlopeCheck.ok) {
       lastReason = vwapSlopeCheck.reason;
+      if (!vwapSlopeBlocked || reclaimIdx > vwapSlopeBlocked.reclaimIdx) {
+        vwapSlopeBlocked = {
+          reclaimIdx, setup, close: parseFloat(reclaimCandle.close), confirmOpenTime: reclaimCandle.openTime,
+          entryDesc: `VWAP(${vwapIv},${entry.session}) fechamento acima ${labelForLevel(setup.confirm)}`,
+        };
+      }
       continue;
     }
 
@@ -357,7 +368,17 @@ function evaluateEntrySignal(config, cMap) {
     }
   }
 
-  if (!best) return { allowed: false, reason: lastReason, close: lastClose };
+  const vwapSlopeBlockedInfo = vwapSlopeBlocked ? {
+    setupId: vwapSlopeBlocked.setup.id,
+    touchLevel: vwapSlopeBlocked.setup.touch,
+    confirmLevel: vwapSlopeBlocked.setup.confirm,
+    targetLevel: vwapSlopeBlocked.setup.target,
+    close: vwapSlopeBlocked.close,
+    confirmOpenTime: vwapSlopeBlocked.confirmOpenTime,
+    entryDesc: vwapSlopeBlocked.entryDesc,
+  } : null;
+
+  if (!best) return { allowed: false, reason: lastReason, close: lastClose, vwapSlopeBlocked: vwapSlopeBlockedInfo };
 
   // close/confirmOpenTime têm que ser do candle que DE FATO reconquistou o nível
   // (best.reclaimIdx), não do último candle fechado — senão o "horário do sinal" fica
@@ -380,6 +401,7 @@ function evaluateEntrySignal(config, cMap) {
     bandDistPct: best.bandDistPct,
     confirmOpenTime: reclaimCandle.openTime,
     entryDesc: `VWAP(${vwapIv},${entry.session}) fechamento acima ${labelForLevel(best.setup.confirm)}`,
+    vwapSlopeBlocked: vwapSlopeBlockedInfo,
   };
 }
 
