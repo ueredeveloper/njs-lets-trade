@@ -2,8 +2,11 @@
  * Primitive customizado do Lightweight Charts pra desenhar retângulos preenchidos com label —
  * a lib não tem markArea/rectangle nativo (só o ECharts tem). Usado pelos quadrados de
  * alvo (verde) e stop loss (vermelho) da posição aberta, espelhando buildBuyPositionSquares
- * em CandlestickChart.jsx: um retângulo do candle de compra até 5 candles à frente, do preço
- * de compra até o preço do alvo/stop, com o % de distância como label centralizado.
+ * em CandlestickChart.jsx: um retângulo do candle de compra até o candle mais recente (largura
+ * dinâmica, sempre deixando os 2 últimos candles livres — ver buildPositionRects em
+ * CandlestickChartLW.jsx), do preço de compra até o preço do alvo/stop, com o % de distância
+ * como label — encostado no topo do quadrado (alvo) ou no fundo (stop loss), conforme
+ * r.labelPos, em vez de centralizado, pra ficar perto do preço-alvo/stop de fato.
  */
 class RectanglePaneView {
   constructor(source) {
@@ -23,7 +26,7 @@ class RectanglePaneView {
         const y1 = series.priceToCoordinate(r.price1);
         const y2 = series.priceToCoordinate(r.price2);
         if (x1 == null || x2 == null || y1 == null || y2 == null) return null;
-        return { x1, x2, y1, y2, fillColor: r.fillColor, label: r.label, labelColor: r.labelColor };
+        return { x1, x2, y1, y2, fillColor: r.fillColor, label: r.label, labelColor: r.labelColor, labelPos: r.labelPos };
       })
       .filter(Boolean);
   }
@@ -51,8 +54,12 @@ class RectangleRenderer {
           ctx.font = 'bold 11px monospace';
           ctx.fillStyle = it.labelColor;
           ctx.textAlign = 'center';
+          const pad = 3;
+          let y = (top + bottom) / 2;
           ctx.textBaseline = 'middle';
-          ctx.fillText(it.label, (left + right) / 2, (top + bottom) / 2);
+          if (it.labelPos === 'top') { ctx.textBaseline = 'top'; y = top + pad; }
+          else if (it.labelPos === 'bottom') { ctx.textBaseline = 'bottom'; y = bottom - pad; }
+          ctx.fillText(it.label, (left + right) / 2, y);
         }
       }
     });
@@ -68,7 +75,7 @@ export class RectanglePrimitive {
     this._paneView = new RectanglePaneView(this);
   }
 
-  /** rects: [{ time1, price1, time2, price2, fillColor, label, labelColor }] (time em segundos) */
+  /** rects: [{ time1, price1, time2, price2, fillColor, label, labelColor, labelPos }] (time em segundos; labelPos: 'top'|'bottom'|undefined) */
   setRects(rects) {
     this._rects = rects ?? [];
     this._requestUpdate?.();

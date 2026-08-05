@@ -1,17 +1,16 @@
 import { useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
 import { createChart, CandlestickSeries, LineSeries, ColorType, createSeriesMarkers } from 'lightweight-charts';
-import { computeVwapSlopeFlags, splitPointsByFlag } from '../utils/vwapSlopeHighlight';
+import { computeVwapSlopeFlags } from '../utils/vwapSlopeHighlight';
 import { computeStopLossFloor } from '../utils/trailingStopLoss';
 import { RectanglePrimitive } from '../utils/lwRectanglePrimitive';
 import { BandFillPrimitive } from '../utils/lwBandFillPrimitive';
+import { tickMarkFormatterBrt, crosshairTimeFormatterBrt } from '../utils/lwBrtTimeFormat';
 
 const C_UP = '#26a69a';
 const C_DOWN = '#ef5350';
 const VWAP_LINE_COLOR = '#FF4FA3';
 const VWAP_BAND_COLOR = 'rgba(255, 79, 163, 0.45)';
 const VWAP_BAND_FILL_COLOR = 'rgba(255, 79, 163, 0.08)';
-// Destaque de queda da VWAP precisa ficar visualmente distinto da própria VWAP, que agora é rosa.
-const VWAP_DECLINE_COLOR = '#ef4444';
 const VWAP_DECLINE_CLOUD_COLOR = 'rgba(239, 68, 68, 0.28)';
 const BB_COLOR = '#818cf8';
 
@@ -43,26 +42,28 @@ function formatPctFromBase(basePrice, price) {
 }
 
 /** Quadrados alvo (verde) e stop loss (vermelho) da posição aberta — mesma regra do ECharts
- *  (buildBuyPositionSquares em CandlestickChart.jsx): retângulo do candle de compra até 5
- *  candles à frente, do preço de compra até o preço do alvo/stop, com o % como label. */
+ *  (buildBuyPositionSquares em CandlestickChart.jsx): retângulo do candle de compra até o
+ *  candle mais recente, do preço de compra até o preço do alvo/stop, com o % como label.
+ *  Largura DINÂMICA: acompanha os candles que vão fechando (cresce a cada novo candle),
+ *  deixando os 2 candles mais recentes livres na frente — mas só quando há mais de 5 candles
+ *  à frente da compra; com 5 ou menos, preenche até o candle mais recente (sem faixa livre). */
 function buildPositionRects(buyInfo, stopLossConfig, targetConfig, candlesticks) {
   if (!buyInfo?.price || !candlesticks?.length) return [];
   const buyPrice = buyInfo.price;
   if (!Number.isFinite(buyPrice) || buyPrice <= 0) return [];
-  const ivSec = candlesticks.length > 1
-    ? Math.abs(Number(candlesticks[1].openTime) - Number(candlesticks[0].openTime)) / 1000
-    : 900;
-  let time1 = Math.floor(Number(candlesticks[candlesticks.length - 1].openTime) / 1000);
+  let buyIdx = candlesticks.length - 1;
   if (buyInfo.time != null) {
-    let best = candlesticks[0];
     let bestDiff = Infinity;
-    for (const c of candlesticks) {
-      const d = Math.abs(Number(c.openTime) - buyInfo.time);
-      if (d < bestDiff) { bestDiff = d; best = c; }
+    for (let i = 0; i < candlesticks.length; i++) {
+      const d = Math.abs(Number(candlesticks[i].openTime) - buyInfo.time);
+      if (d < bestDiff) { bestDiff = d; buyIdx = i; }
     }
-    time1 = Math.floor(Number(best.openTime) / 1000);
   }
-  const time2 = time1 + ivSec * 5;
+  const lastIdx = candlesticks.length - 1;
+  const candlesAhead = lastIdx - buyIdx;
+  const rightIdx = candlesAhead > 5 ? lastIdx - 2 : lastIdx;
+  const time1 = Math.floor(Number(candlesticks[buyIdx].openTime) / 1000);
+  const time2 = Math.floor(Number(candlesticks[rightIdx].openTime) / 1000);
 
   const rects = [];
   if (targetConfig?.enabled) {
@@ -73,6 +74,7 @@ function buildPositionRects(buyInfo, stopLossConfig, targetConfig, candlesticks)
       rects.push({
         time1, time2, price1: buyPrice, price2: targetPrice,
         fillColor: 'rgba(34,197,94,0.14)', labelColor: '#22c55e', label: formatPctFromBase(buyPrice, targetPrice),
+        labelPos: 'top',
       });
     }
   }
@@ -84,6 +86,7 @@ function buildPositionRects(buyInfo, stopLossConfig, targetConfig, candlesticks)
       rects.push({
         time1, time2, price1: buyPrice, price2: stopPrice,
         fillColor: 'rgba(239,68,68,0.14)', labelColor: '#ef4444', label: formatPctFromBase(buyPrice, stopPrice),
+        labelPos: 'bottom',
       });
     }
   }
@@ -143,26 +146,36 @@ function vwapFieldSeries(points, field) {
     .sort((a, b) => a.time - b.time);
 }
 
-/** Uma linha da VWAP (ou de uma banda) vira várias entradas em `desired` quando o destaque de
- *  queda está ligado — um segmento por trecho contíguo normal/em-queda (cor rosa), pra o
- *  usuário conferir visualmente onde o vwapSlopeFilter do bot vwap-bands bloquearia entrada. */
-function buildVwapFieldEntries(points, flags, field, color, width, lineStyle, highlightEnabled, keyPrefix) {
-  if (!highlightEnabled) {
-    return { [keyPrefix]: { color, width, lineStyle, data: vwapFieldSeries(points, field) } };
+/** Mesma busca binária de alignPointsToCandles (CandlestickChart.jsx/ECharts): um ponto por
+ *  candle do gráfico, pegando o valor mais recente de `points` com openTime <= o do candle.
+ *  Sem isso, um overlay num intervalo MENOR que o do gráfico (ex.: EMA200@15m sobre candle de
+ *  1h) entra no eixo com timestamps próprios — o Lightweight Charts espaça as colunas de forma
+ *  uniforme pela união dos tempos de TODAS as séries, então cada ponto extra de 15m sem candle
+ *  correspondente empurra os candles reais mais longe uns dos outros. */
+function alignFieldToCandles(candlesticks, points, field) {
+  if (!points?.length || !candlesticks?.length) return [];
+  const sorted = [...points].sort((a, b) => Number(a.openTime) - Number(b.openTime));
+  const out = [];
+  for (const c of candlesticks) {
+    const t = Number(c.openTime);
+    let lo = 0, hi = sorted.length - 1, best = null;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (Number(sorted[mid].openTime) <= t) { best = sorted[mid][field]; lo = mid + 1; }
+      else hi = mid - 1;
+    }
+    const value = Number(best);
+    if (!Number.isFinite(value)) continue;
+    out.push({ time: Math.floor(t / 1000), value });
   }
-  const segments = splitPointsByFlag(
-    points, flags, field,
-    (p, raw) => ({ time: Math.floor(Number(p.openTime) / 1000), value: Number(raw) }),
-  );
-  const entries = {};
-  segments.forEach((seg, i) => {
-    entries[`${keyPrefix}-${i}`] = {
-      color: seg.declining ? VWAP_DECLINE_COLOR : color,
-      width, lineStyle,
-      data: seg.points,
-    };
-  });
-  return entries;
+  return out;
+}
+
+/** Uma linha da VWAP (ou de uma banda). O destaque de queda (vwapSlopeFilter do bot
+ *  vwap-bands) é indicado só pela nuvem vermelha (buildDeclineCloudSegments) — a linha em si
+ *  mantém sempre a mesma cor. */
+function buildVwapFieldEntries(points, field, color, width, lineStyle, keyPrefix) {
+  return { [keyPrefix]: { color, width, lineStyle, data: vwapFieldSeries(points, field) } };
 }
 
 /** "Nuvem" vermelha de queda da VWAP — preenche a área entre up1/lw1 (mesma faixa da banda
@@ -202,12 +215,15 @@ function buildDeclineCloudSegments(points, flags) {
 
 /** EMAs extras (overlay slots de Configurações + Quick EMA groups do painel do gráfico) —
  *  cfg.points já vem como [{openTime, value}], mesmo formato usado pelo VWAP. Bandas % (cfg.bands)
- *  são a própria linha deslocada em ±pct%, igual ao cálculo do ECharts (buildOverlaySeries). */
-function buildOverlayLineEntries(overlayConfigs) {
+ *  são a própria linha deslocada em ±pct%, igual ao cálculo do ECharts (buildOverlaySeries).
+ *  Alinhado por candle (alignFieldToCandles) pra suportar overlay num intervalo diferente do
+ *  intervalo do gráfico, tanto maior (ex.: EMA50@4h sobre chart 15m) quanto menor (ex.:
+ *  EMA200@15m sobre chart 1h) sem distorcer o espaçamento dos candles. */
+function buildOverlayLineEntries(overlayConfigs, candlesticks) {
   const entries = {};
   for (const cfg of overlayConfigs ?? []) {
     if (!cfg.points?.length) continue;
-    const mainData = vwapFieldSeries(cfg.points, 'value');
+    const mainData = alignFieldToCandles(candlesticks, cfg.points, 'value');
     if (cfg.showMiddle !== false) {
       entries[`overlay-${cfg.label}`] = { color: cfg.color, width: 1.5, lineStyle: 2, data: mainData };
     }
@@ -326,9 +342,18 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
         vertLines: { color: colors?.panel || '#003f69', style: 1 },
         horzLines: { color: colors?.panel || '#003f69', style: 1 },
       },
+      // localization.timeFormatter: label de tempo do crosshair (canto inferior).
+      // A lib formata time (UTCTimestamp) em UTC por padrão — convertemos pra BRT (UTC-3).
+      localization: { timeFormatter: crosshairTimeFormatterBrt },
       // rightOffset: espaço vazio (em candles) depois do último candle — sem isso os candles e
       // as linhas terminavam colados na borda direita do gráfico.
-      timeScale: { timeVisible: true, secondsVisible: false, rightOffset: 3 },
+      // barSpacing: largura de cada candle em px — default da lib (6) fica fininho demais.
+      // tickMarkFormatter: mesmo motivo do localization.timeFormatter acima, mas pros labels
+      // do eixo de tempo.
+      timeScale: {
+        timeVisible: true, secondsVisible: false, rightOffset: 3, barSpacing: 10,
+        tickMarkFormatter: tickMarkFormatterBrt,
+      },
       autoSize: true,
       // Zoom nativo do Lightweight Charts: scroll do mouse e pinch no touch mudam quantos
       // candles ficam visíveis (mais candles ao afastar, menos ao aproximar) — mesma função
@@ -345,7 +370,11 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
         mouseWheel: false, // scroll vertical simples só dá zoom (handleScale), não arrasta
         pressedMouseMove: true,
         horzTouchDrag: true,
-        vertTouchDrag: false,
+        // true: no celular, o app não tem página pra rolar por trás do gráfico (layout é
+        // h-dvh/overflow-hidden fixo — ver App.jsx), então deixar o LW tratar o arrasto
+        // vertical como "page scroll" (default da lib) resultava num gesto morto: dedo
+        // arrasta e nada acontece, nem no gráfico nem na página.
+        vertTouchDrag: true,
       },
     });
     const series = chart.addSeries(CandlestickSeries, {
@@ -384,7 +413,6 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       pnlSeriesRef.current = null;
       subpanelStateRef.current = { key: null, series: {} };
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [colors?.bg, colors?.text, colors?.panel]);
 
   useEffect(() => {
@@ -397,9 +425,9 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       .filter((d) => Number.isFinite(d.time) && Number.isFinite(d.open) && Number.isFinite(d.close))
       .sort((a, b) => a.time - b.time);
     // Whitespace (só {time}, sem OHLC) depois do último candle real — sem isso, timeToCoordinate
-    // devolve null pra qualquer tempo além do último candle e os quadrados de alvo/stop
-    // (5 candles à frente do candle de compra) somem quando a compra é recente. Mecanismo
-    // nativo do Lightweight Charts pra estender o eixo de tempo além do último dado real.
+    // devolve null pra qualquer tempo além do último candle. Mecanismo nativo do Lightweight
+    // Charts pra estender o eixo de tempo além do último dado real (dá margem pra qualquer
+    // primitive/marcador futuro que precise de tempo além do candle mais recente).
     if (data.length > 1) {
       const ivSec = data[data.length - 1].time - data[data.length - 2].time;
       if (ivSec > 0) {
@@ -408,7 +436,19 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       }
     }
     seriesRef.current.setData(data);
+    // fitContent() calcula um barSpacing pra caber TODOS os candles carregados na largura do
+    // gráfico, o que sobrescreve o barSpacing fixo do createChart e deixa os candles fininhos
+    // de novo assim que a lista de candles fica grande. Reaplicar o barSpacing depois ancora a
+    // visão nos candles mais recentes (mostra só quantos couberem naquela largura, em vez de
+    // espremer o histórico inteiro).
     chartRef.current?.timeScale().fitContent();
+    chartRef.current?.timeScale().applyOptions({ barSpacing: 10 });
+    // O chart (e a price scale) não é recriado ao trocar de moeda — só no efeito de cores acima.
+    // Se o usuário arrastou o eixo de preço em algum momento, o Lightweight Charts desliga
+    // autoScale e só religa com duplo clique no eixo (axisDoubleClickReset). Sem isso, trocar de
+    // moeda/favorito herdava a escala manual da moeda anterior e os candles/linhas apareciam
+    // fora do range vertical até o usuário dar o duplo clique manualmente.
+    chartRef.current?.priceScale('right').applyOptions({ autoScale: true });
   }, [candlesticks]);
 
   // Botões "20/50/100 candles" da toolbar — o LW sempre carrega o array de candles inteiro (ao
@@ -426,6 +466,10 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       : 0;
     const to = lastTime + ivSec * 3; // mesmo respiro de 3 candles do rightOffset (setVisibleRange ignora rightOffset)
     if (!Number.isFinite(from) || !Number.isFinite(to) || to < from) return;
+    // Não reaplica barSpacing fixo depois — setVisibleRange já calcula o spacing certo pra caber
+    // exatamente esses N candles na largura do gráfico; forçar um valor fixo aqui sobrescrevia
+    // esse cálculo e fazia a lib readequar a janela visível de volta pra "quantos candles cabem
+    // a 10px cada", anulando o zoom (era por isso que os botões 20/50/100 pareciam não fazer nada).
     chart.timeScale().setVisibleRange({ from, to });
   }, [focusLastN, candlesticks]);
 
@@ -438,7 +482,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
     const from = Math.floor(new Date(zoomPeriod.startDate).getTime() / 1000);
     const to = Math.floor(new Date(zoomPeriod.endDate).getTime() / 1000);
     if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) return;
-    chart.timeScale().setVisibleRange({ from, to });
+    chart.timeScale().setVisibleRange({ from, to }); // ver comentário no efeito de focusLastN acima — sem reaplicar barSpacing fixo depois
   }, [zoomPeriod]);
 
   // Linhas: EMAs + EMAs extras + VWAP(bandas) + Bollinger.
@@ -452,21 +496,15 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       const arr = { ma9, ma21, ma50, ma200 }[id];
       desired[id] = { color, width: 1.5, data: alignIndicatorToCandles(candlesticks, arr) };
     }
-    Object.assign(desired, buildOverlayLineEntries(overlayConfigs));
+    Object.assign(desired, buildOverlayLineEntries(overlayConfigs, candlesticks));
     Object.assign(desired, buildBollingerEntries(bollingerConfig));
     if (vwapConfig?.enabled && vwapConfig.points?.length) {
-      const highlightEnabled = !!vwapSlopeHighlight?.enabled;
-      const flags = highlightEnabled
-        ? computeVwapSlopeFlags(vwapConfig.points, vwapSlopeHighlight.lookback, vwapSlopeHighlight.minSlopePct)
-        : null;
-      Object.assign(desired, buildVwapFieldEntries(
-        vwapConfig.points, flags, 'value', VWAP_LINE_COLOR, 1.5, 0, highlightEnabled, 'vwap',
-      ));
+      Object.assign(desired, buildVwapFieldEntries(vwapConfig.points, 'value', VWAP_LINE_COLOR, 1.5, 0, 'vwap'));
       if (vwapConfig.bands) {
-        Object.assign(desired, buildVwapFieldEntries(vwapConfig.points, flags, 'upper1', VWAP_BAND_COLOR, 1, 2, highlightEnabled, 'vwapUp1'));
-        Object.assign(desired, buildVwapFieldEntries(vwapConfig.points, flags, 'lower1', VWAP_BAND_COLOR, 1, 2, highlightEnabled, 'vwapLow1'));
-        Object.assign(desired, buildVwapFieldEntries(vwapConfig.points, flags, 'upper2', VWAP_BAND_COLOR, 1, 3, highlightEnabled, 'vwapUp2'));
-        Object.assign(desired, buildVwapFieldEntries(vwapConfig.points, flags, 'lower2', VWAP_BAND_COLOR, 1, 3, highlightEnabled, 'vwapLow2'));
+        Object.assign(desired, buildVwapFieldEntries(vwapConfig.points, 'upper1', VWAP_BAND_COLOR, 1, 2, 'vwapUp1'));
+        Object.assign(desired, buildVwapFieldEntries(vwapConfig.points, 'lower1', VWAP_BAND_COLOR, 1, 2, 'vwapLow1'));
+        Object.assign(desired, buildVwapFieldEntries(vwapConfig.points, 'upper2', VWAP_BAND_COLOR, 1, 3, 'vwapUp2'));
+        Object.assign(desired, buildVwapFieldEntries(vwapConfig.points, 'lower2', VWAP_BAND_COLOR, 1, 3, 'vwapLow2'));
       }
     }
 
@@ -537,9 +575,6 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
           priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
         });
       } else {
-        // Chaves de segmento (vwap-0, vwap-1, ...) são reaproveitadas entre renders mesmo
-        // quando o trecho que ocupam muda de normal→queda (ou vice-versa) — sem isso a cor
-        // ficaria presa na do primeiro render daquele índice.
         current[key].applyOptions({ color: def.color, lineWidth: def.width, lineStyle: def.lineStyle ?? 0 });
       }
       current[key].setData(clampToVisible(def.data));

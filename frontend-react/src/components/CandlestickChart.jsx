@@ -17,9 +17,12 @@ import { DEFAULT_OVERLAY_SLOTS, DEFAULT_ACTIVE_INDICATORS, BB_PERIOD_OPTIONS, BB
 import { CHART_VIEW, INTERVAL_MS, computeZoomWindow, buildFixedDataZoom, buildInsideDataZoom, computeCandleLimitFromTime, isTradePanelChartView, computeManualWheelZoom } from '../utils/chartView';
 
 const LIMIT = DEFAULT_CANDLE_LIMIT;
-const LAST_CANDLE_PRESETS = [20, 50, 100];
+const LAST_CANDLE_PRESETS = [10, 20, 40, 80, 160, 320];
+/** Presets mais usados da janela de candles — os demais ficam escondidos atrás do botão "›"
+ *  (mesmo padrão do picker de intervalos logo abaixo, ver COMMON_CHART_INTERVALS). */
+const COMMON_CANDLE_PRESETS = [20, 80, 160];
 const MAX_CANDLES = 1000;
-const CANDLE_FETCH_STEPS = [500, 750, 1000];
+const CANDLE_FETCH_STEPS = [500, 1000];
 const OVERLAY_MA_INTERVALS = ['1m', '5m', '15m', '30m', '1h', '2h', '4h', '8h', '12h', '1d'];
 const OVERLAY_MA_COLORS = ['#fb923c', '#c084fc', '#34d399', '#60a5fa', '#f472b6', '#facc15', '#a78bfa', '#4ade80'];
 const INTERVALS = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w'];
@@ -1631,7 +1634,11 @@ function nearestCandleIdx(candlesticks, ms) {
 }
 
 /** Dois quadrados a partir da posição de compra ABERTA: compra→alvo (verde) e
- *  compra→stoploss (vermelho), largura fixa de 5 candles. */
+ *  compra→stoploss (vermelho). Largura DINÂMICA: acompanha os candles que vão fechando
+ *  (cresce a cada novo candle), deixando os 2 candles mais recentes livres na frente — mas só
+ *  quando há mais de 5 candles à frente da compra; com 5 ou menos, preenche até o candle mais
+ *  recente (sem faixa livre). Mesma regra do LW — ver buildPositionRects em
+ *  CandlestickChartLW.jsx. */
 function buildBuyPositionSquares(buyInfo, stopLossConfig, targetConfig, candlesticks, DL, LEFT_PAD) {
   if (!buyInfo?.price || !candlesticks?.length) return null;
   const buyPrice = buyInfo.price;
@@ -1644,7 +1651,9 @@ function buildBuyPositionSquares(buyInfo, stopLossConfig, targetConfig, candlest
     buyIdx = Math.max(0, Math.min(DL - 1, absIdx - offset));
   }
   const x1 = buyIdx + LEFT_PAD;
-  const x2 = x1 + 5;
+  const lastX = LEFT_PAD + DL - 1;
+  const candlesAhead = lastX - x1;
+  const x2 = candlesAhead > 5 ? lastX - 2 : lastX;
 
   const pctLabel = (price) => formatPctFromBase(buyPrice, price);
 
@@ -1657,7 +1666,7 @@ function buildBuyPositionSquares(buyInfo, stopLossConfig, targetConfig, candlest
     if (Number.isFinite(targetPrice)) areas.push([
       {
         xAxis: x1, yAxis: buyPrice, itemStyle: { color: 'rgba(34,197,94,0.18)' },
-        label: { show: true, position: 'inside', formatter: pctLabel(targetPrice), color: '#22c55e', fontSize: 11, fontWeight: 'bold' },
+        label: { show: true, position: 'insideTop', formatter: pctLabel(targetPrice), color: '#22c55e', fontSize: 11, fontWeight: 'bold' },
       },
       { xAxis: x2, yAxis: targetPrice },
     ]);
@@ -1671,7 +1680,7 @@ function buildBuyPositionSquares(buyInfo, stopLossConfig, targetConfig, candlest
       areas.push([
         {
           xAxis: x1, yAxis: buyPrice, itemStyle: { color: 'rgba(239,68,68,0.18)' },
-          label: { show: true, position: 'inside', formatter: pctLabel(stopPrice), color: '#ef4444', fontSize: 11, fontWeight: 'bold' },
+          label: { show: true, position: 'insideBottom', formatter: pctLabel(stopPrice), color: '#ef4444', fontSize: 11, fontWeight: 'bold' },
         },
         { xAxis: x2, yAxis: stopPrice },
       ]);
@@ -2492,6 +2501,7 @@ export default function CandlestickChart() {
   const [currentInterval, setCurrentInterval] = useState(savedInterval || DEFAULT_INTERVAL);
   const [loadingInterval, setLoadingInterval] = useState(false);
   const [showAllIntervals, setShowAllIntervals] = useState(false);
+  const [showAllCandlePresets, setShowAllCandlePresets] = useState(false);
   const [themeTick, setThemeTick] = useState(0);
   const activeIndicators = uiPrefs.activeIndicators ?? [...DEFAULT_ACTIVE_INDICATORS];
   const [activeTab, setActiveTab] = useState('chart'); // 'chart' | 'rules'
@@ -3420,7 +3430,7 @@ export default function CandlestickChart() {
       .map(t => Number(t.time));
 
   // Só expande a janela pra caber a compra/marcador antigo na aba Trades — em qualquer outra
-  // seleção (favorito, VWAP Bands etc.) o padrão continua sendo os 50 candles de sempre, mesmo
+  // seleção (favorito, VWAP Bands etc.) o padrão continua sendo os LIMIT candles de sempre, mesmo
   // que a última compra real seja de muitos candles atrás.
   const markerTimesForWindow = chartViewSource === CHART_VIEW.TRADES
     ? (chartTradeMarkers?.length ? chartTradeMarkers.map(m => Number(m.time)).filter(Number.isFinite) : tradeTimes)
@@ -3435,7 +3445,7 @@ export default function CandlestickChart() {
     if (hasExplicitCandleWindow) {
       return Math.min(displayCandleCount, candles?.length ?? displayCandleCount);
     }
-    if ((chartTradeMarkers?.length || selectedChart?.tradeMarkers?.length) && candles?.length && candles.length <= 50) {
+    if ((chartTradeMarkers?.length || selectedChart?.tradeMarkers?.length) && candles?.length && candles.length <= LIMIT) {
       return candles.length;
     }
     if (chartZoom) return candles?.length ?? displayCandleCount;
@@ -3857,9 +3867,13 @@ export default function CandlestickChart() {
             </button>
           ))}
 
-          {/* Grupo de janela de candles — alinhado à direita, isolado dos intervalos */}
+          {/* Grupo de janela de candles — alinhado à direita, isolado dos intervalos. Só os mais
+              usados ficam visíveis; "›" abre os demais (mesmo padrão da linha de intervalos abaixo). */}
           <div className="ml-auto flex items-center gap-1 pl-2 border-l border-p2/30">
-            {LAST_CANDLE_PRESETS.map((n) => {
+            {(showAllCandlePresets
+              ? LAST_CANDLE_PRESETS
+              : LAST_CANDLE_PRESETS.filter((n) => COMMON_CANDLE_PRESETS.includes(n) || (hasExplicitCandleWindow && displayCandleCount === n))
+            ).map((n) => {
               const active = hasExplicitCandleWindow && displayCandleCount === n && !chartZoom;
               return (
                 <button
@@ -3877,6 +3891,13 @@ export default function CandlestickChart() {
                 </button>
               );
             })}
+            <button
+              onClick={() => setShowAllCandlePresets((v) => !v)}
+              title={showAllCandlePresets ? 'Mostrar menos opções' : 'Mais opções de candles'}
+              className="px-1 py-0.5 text-[10px] md:text-xs rounded font-mono text-p5/60 hover:bg-p3/40 hover:text-white transition-colors shrink-0"
+            >
+              {showAllCandlePresets ? '‹' : '›'}
+            </button>
             <button
               onClick={handleLoadMoreCandles}
               disabled={loadingMoreCandles || (candleFetchLimit >= MAX_CANDLES && (selectedChart?.candlesticks?.length ?? 0) >= MAX_CANDLES)}
