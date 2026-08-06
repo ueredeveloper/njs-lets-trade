@@ -189,6 +189,19 @@ export async function fetchVwapBandWidthFilter({
   return res.json();
 }
 
+/** Filtra moedas por expansão do afastamento entre -1σ e +2σ da VWAP: mínimo recente vs. atual. */
+export async function fetchVwapBandExpansionFilter({
+  interval = '15m', vwapInterval = '4h', lookback = '10', multiplier = '3',
+} = {}) {
+  const params = new URLSearchParams({ interval, vwapInterval, lookback, multiplier });
+  const res = await fetch(`/services/vwap-band-expansion-filter?${params}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 export async function getFavorites(type) {
   const res = await fetch(`/services/sb/favorites?type=${type}`);
   if (!res.ok) throw new Error('Falha ao buscar favoritos');

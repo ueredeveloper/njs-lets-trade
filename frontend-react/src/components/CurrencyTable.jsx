@@ -29,10 +29,12 @@ import {
 import {
   compareTradeFavorites, filterTradeFavorites, formatTradePnlBadge,
   formatTradeStatusBadge, loadTradeFavSort, tradePnlForSort,
-  saveTradeFavSort,
+  saveTradeFavSort, expandWeeklyTrades,
 } from '../utils/tradeFavoritesSort';
+import { compareVwapFavorites, loadVwapFavSort } from '../utils/vwapFavoritesSort';
 import { useMacrossFavoritesStatus } from '../hooks/useMacrossFavoritesStatus';
 import { useTradeFavoritesSummary } from '../hooks/useTradeFavoritesSummary';
+import { useVwapBandWidthMeta } from '../hooks/useVwapBandWidthMeta';
 import {
   compareMacmpTableRows, filterMacmpTableRows, loadMacmpTableSort, saveMacmpTableSort,
 } from '../utils/macmpTableSort';
@@ -42,6 +44,7 @@ import { isStablesFilterName } from '../utils/assetCategories';
 import MacrossFavSortSelect from './MacrossFavSortSelect';
 import MacmpTableSortSelect from './MacmpTableSortSelect';
 import TradeFavSortSelect from './TradeFavSortSelect';
+import VwapFavSortSelect from './VwapFavSortSelect';
 
 const GATE_COLOR    = '#0068ff';
 const BINANCE_COLOR = '#fcd535';
@@ -194,7 +197,7 @@ function ToolbarBtn({ active, color, label, count, onClick, title, id }) {
       className="flex items-center shrink-0 touch-manipulation active:scale-95 transition-transform"
     >
       <span
-        className="text-[9px] font-bold px-1 py-0.5 rounded min-h-[19px] flex items-center"
+        className="text-[9px] font-bold px-1 py-0.5 rounded min-h-[19px] min-w-[30px] flex items-center justify-center"
         style={{
           background: filled ? color : 'rgba(255,255,255,0.06)',
           color: filled ? (color === BINANCE_COLOR ? '#000' : '#fff') : color,
@@ -326,6 +329,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   const [growthSort, setGrowthSort] = useState('high'); // 'high' | 'low'
   const [vwapWidthSort, setVwapWidthSort] = useState('far'); // 'far' | 'near'
   const [tradeFavSort, setTradeFavSort] = useState(() => loadTradeFavSort());
+  const [vwapFavSort, setVwapFavSort] = useState(() => loadVwapFavSort());
 
   const macrossFavSymbols = useMemo(() => (
     [...new Set(
@@ -343,6 +347,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   const isMacrossFavView = favoriteView === 'macross';
   const isTradesFavView = favoriteView === 'trades';
   const isActiveFavView = favoriteView === 'active';
+  const isVwapBandsFavView = favoriteView === 'vwap-bands';
   const isAltaFilter = activeFilter?.startsWith('Favoritos|Alta|') ?? false;
   const isNovasFilter = activeFilter?.startsWith('Favoritos|Novas|') ?? false;
   const isFavVolumeContext = !!favoriteView || isAltaFilter || isNovasFilter;
@@ -361,6 +366,10 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     status: tradeFavStatus,
     loading: tradeFavLoading,
   } = useTradeFavoritesSummary(tradeExtraSymbols, isTradesFavView);
+  const {
+    meta: vwapFavWidthMeta,
+    loading: vwapFavWidthLoading,
+  } = useVwapBandWidthMeta(isVwapBandsFavView);
 
   const activeMacrossFilter = useMemo(() => {
     if (!activeFilter || favoriteView) return null;
@@ -445,6 +454,11 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     setSortVolume('none');
   }, []);
 
+  const onVwapFavSortChange = useCallback((sortBy) => {
+    setVwapFavSort(sortBy);
+    setSortVolume('none');
+  }, []);
+
   const onMacmpTableSortChange = useCallback((sortBy) => {
     setMacmpTableSort(sortBy);
     saveMacmpTableSort(sortBy);
@@ -479,13 +493,10 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
       for (const sym of vbSymbols) {
         if (!have.has(sym)) list.push({ symbol: sym, price: 0, volume: 0 });
       }
-      // Compradas primeiro — é o que mais importa acompanhar (posição real aberta).
-      const vbPhaseRank = { BOUGHT: 0, PENDING: 1, WATCHING: 2 };
-      list = list.slice().sort((a, b) => {
-        const ra = vbPhaseRank[vbPhaseBySymbol.get(a.symbol) ?? 'WATCHING'] ?? 2;
-        const rb = vbPhaseRank[vbPhaseBySymbol.get(b.symbol) ?? 'WATCHING'] ?? 2;
-        return ra - rb;
-      });
+      list = list.slice().sort((a, b) => compareVwapFavorites(a, b, vwapFavSort, {
+        phaseBySymbol: vbPhaseBySymbol,
+        widthMeta: vwapFavWidthMeta,
+      }));
     } else if (favoriteView === 'trades') {
       const filtered = filterTradeFavorites(tradeFavSymbols, tradeFavStatus, tradeFavSort);
       list = resolveFavorites(new Set(filtered), currencies.list, gateAll);
@@ -549,6 +560,9 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
         status: macrossFavStatus,
         entriesBySymbol: macrossEntriesBySymbol,
       }));
+    } else if (isTradesFavView && tradeFavSort === 'pnl_week' && sortVolume === 'none') {
+      // PnL Semanal: uma linha por trade fechado na semana (mesma moeda pode repetir).
+      list = expandWeeklyTrades(list, tradeFavStatus);
     } else if (isTradesFavView && sortVolume === 'none') {
       list = list.slice().sort((a, b) => compareTradeFavorites(a, b, tradeFavSort, tradeFavStatus));
     } else if (activeMacmpFilter && macmpMeta && sortVolume === 'none' && !favoriteView) {
@@ -581,7 +595,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     }
 
     return list;
-  }, [currencies, activeFilter, selectedQuote, findFilter, search, favoriteView, gateFavorites, binanceFavorites, multitradeFavorites, sortVolume, gateAll, filterVisibleCurrencies, isVisibleSymbol, currencyBySymbol, activeMacrossFilter, macrossScannedAt, macrossTick, isMacrossFavView, macrossFavSort, macrossFavStatus, macrossEntriesBySymbol, isTradesFavView, tradeFavSort, tradeFavSymbols, tradeFavStatus, isActiveFavView, activeTrades, isAltaFilter, isNovasFilter, highlightMeta, activeMacmpFilter, macmpMeta, macmpTableSort, activeMaDistanceFilter, maDistMeta, maDistSort, activeGrowthFilter, growthMeta, growthSort, activeVwapWidthFilter, vwapWidthMeta, vwapWidthSort]);
+  }, [currencies, activeFilter, selectedQuote, findFilter, search, favoriteView, gateFavorites, binanceFavorites, multitradeFavorites, sortVolume, gateAll, filterVisibleCurrencies, isVisibleSymbol, currencyBySymbol, activeMacrossFilter, macrossScannedAt, macrossTick, isMacrossFavView, macrossFavSort, macrossFavStatus, macrossEntriesBySymbol, isTradesFavView, tradeFavSort, tradeFavSymbols, tradeFavStatus, isActiveFavView, activeTrades, isAltaFilter, isNovasFilter, highlightMeta, activeMacmpFilter, macmpMeta, macmpTableSort, activeMaDistanceFilter, maDistMeta, maDistSort, activeGrowthFilter, growthMeta, growthSort, activeVwapWidthFilter, vwapWidthMeta, vwapWidthSort, isVwapBandsFavView, vwapFavSort, vwapFavWidthMeta]);
 
   const rowHeightPx = isMobile ? TABLE_ROW_HEIGHT_MOBILE : TABLE_ROW_HEIGHT;
 
@@ -885,7 +899,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     let sum = 0;
     let any = false;
     for (const item of rows) {
-      const pnl = tradePnlForSort(tradeFavStatus[item.symbol], tradeFavSort);
+      const pnl = item.__tradePnl != null ? item.__tradePnl : tradePnlForSort(tradeFavStatus[item.symbol], tradeFavSort);
       if (pnl == null || !Number.isFinite(pnl)) continue;
       sum += pnl;
       any = true;
@@ -945,7 +959,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
       });
   }, [isActiveFavView, activeTrades]);
 
-  const showFavSortInHeader = isMacrossFavView || isTradesFavView || !!activeMacmpFilter;
+  const showFavSortInHeader = isMacrossFavView || isTradesFavView || isVwapBandsFavView || !!activeMacmpFilter;
   const REM_PX = 16;
   // Coluna de botões: largura fixa no piso (sem crescer com o drag) — abaixo dele os botões
   // (G/B/MC, 15px cada) se sobrepõem ou somem. O espaço liberado vai para a coluna Par.
@@ -1136,6 +1150,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                 title={
                   isMacrossFavView ? t('macross.sort.label')
                     : isTradesFavView ? t('trades.sort.label')
+                    : isVwapBandsFavView ? t('vwapfav.sort.label')
                     : activeMacmpFilter ? t('macmp.sort.label')
                     : undefined
                 }
@@ -1159,6 +1174,17 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                     <TradeFavSortSelect
                       value={tradeFavSort}
                       onChange={onTradeFavSortChange}
+                      className="shrink-0"
+                    />
+                  </div>
+                ) : isVwapBandsFavView ? (
+                  <div className={`flex items-center gap-0.5 ${isMobile ? 'flex-wrap justify-center' : 'justify-start'}`}>
+                    {vwapFavWidthLoading && (
+                      <span className="text-[9px] text-emerald-400/80 shrink-0">⟳</span>
+                    )}
+                    <VwapFavSortSelect
+                      value={vwapFavSort}
+                      onChange={onVwapFavSortChange}
                       className="shrink-0"
                     />
                   </div>
@@ -1350,9 +1376,12 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
               const activeInfo = activeTrades.get(item.symbol);
               const isActiveHolding = !!activeInfo;
               const tradeMeta  = isTradesFavView ? tradeFavStatus[item.symbol] : null;
-              const tradePnl   = tradeMeta ? tradePnlForSort(tradeMeta, tradeFavSort) : null;
+              const isWeekTradeRow = isTradesFavView && item.__tradePnl != null;
+              const tradePnl   = isWeekTradeRow ? item.__tradePnl : (tradeMeta ? tradePnlForSort(tradeMeta, tradeFavSort) : null);
               const tradePnlLabel = formatTradePnlBadge(tradePnl);
-              const tradeBadge = tradeMeta ? formatTradeStatusBadge(tradeMeta, tradeFavSort, t) : null;
+              const tradeBadge = isWeekTradeRow
+                ? formatTradeStatusBadge({ lastTradeTime: item.__tradeTime }, tradeFavSort, t)
+                : (tradeMeta ? formatTradeStatusBadge(tradeMeta, tradeFavSort, t) : null);
               const changePct = highlightMeta?.changePct?.[item.symbol];
               const listedAt = highlightMeta?.listedAt?.[item.symbol];
               const highlightVol = highlightMeta?.volume24h?.[item.symbol] ?? item.volume;
@@ -1362,7 +1391,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
 
               return (
                 <tr
-                  key={item.symbol}
+                  key={item.__rowKey ?? item.symbol}
                   onClick={() => handleSelect(item)}
                   style={{ height: rowHeightPx }}
                   className={`lt-table-row cursor-pointer transition-colors ${

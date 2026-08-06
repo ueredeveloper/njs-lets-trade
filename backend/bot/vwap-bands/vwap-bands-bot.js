@@ -121,8 +121,11 @@ async function cancelPending(rowId, log, session, state, reason) {
 
 /**
  * Coloca a bracket TP/SL resting na corretora logo após a compra confirmar (só se
- * `exit.restingBracket.enabled`). Falha em silêncio (loga e segue) — sem a bracket, a saída
- * continua funcionando do jeito de sempre via `evaluateExit`/venda a mercado no tick.
+ * `exit.restingBracket.enabled`). O stop da bracket é a banda tocada, capada pelo teto
+ * `stopLoss.maxLossPct` (ver computeLadderLevelPrices em strategyEngine.js — nunca deixa o
+ * stop passar de maxLossPct% abaixo da compra, mesmo se a banda estiver mais longe). Falha
+ * em silêncio (loga e segue) — sem a bracket, a saída continua funcionando do jeito de
+ * sempre via `evaluateExit`/venda a mercado no tick.
  */
 async function placeInitialBracket({ rowId, adapter, config, cMap, session, log, activeSetup, filledQty, buyPrice }) {
   if (!config.exit.restingBracket?.enabled) return;

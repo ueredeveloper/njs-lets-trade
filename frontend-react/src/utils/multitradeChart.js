@@ -322,12 +322,22 @@ export async function loadMultitradeSymbolChart(entry, {
   const src = entry.exchange === 'gate' ? 'gate' : null;
   const sym = entry.symbol.toUpperCase();
 
-  const [chartData, trades] = await Promise.all([
-    fetchCandlesticksAndCloud(sym, interval, src),
-    fetchMultitradeTrades({ symbol: sym, strategyId: entry.strategyId, limit: 30 }).catch(() => []),
-  ]);
-
+  // Trades primeiro: o fetch de candles precisa saber até onde voltar pra cobrir o sinal/
+  // compra mais antigo retornado. Sem isso, o fetch padrão (DEFAULT_CANDLE_LIMIT) só traz
+  // candles recentes e sinais mais antigos ficam sem candle pra "grudar" — somem do gráfico
+  // mesmo estando na lista de marcadores (era o caso do favorito VWAP Bands mostrando só os
+  // 2 sinais mais recentes).
+  const trades = await fetchMultitradeTrades({ symbol: sym, strategyId: entry.strategyId, limit: 30 }).catch(() => []);
   const markers = buildMarkersFromLiveTrades(trades, entry);
+
+  const markerTimes = markers.map(m => Number(m.time)).filter(Number.isFinite);
+  const oldestMarkerMs = markerTimes.length ? Math.min(...markerTimes) : null;
+  const candleLimit = oldestMarkerMs != null
+    ? computeCandleLimitFromTime(oldestMarkerMs, interval, { max: 1000 })
+    : undefined;
+
+  const chartData = await fetchCandlesticksAndCloud(sym, interval, src, candleLimit);
+
   applyMultitradeSymbolChart({
     chartData,
     symbol: sym,

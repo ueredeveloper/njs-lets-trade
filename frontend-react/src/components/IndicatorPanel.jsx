@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useCurrency } from '../contexts/CurrencyContext';
-import { fetchCandlesAndIndicators, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter, fetchMaDistanceFilter, fetchIndicatorGrowthFilter, fetchMarketCapFilter, fetchBollingerBandPositionFilter, fetchVwapPositionFilter, fetchVwapBandWidthFilter, fetchUserPrefs, saveUserPrefs } from '../services/api';
+import { fetchCandlesAndIndicators, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter, fetchMaDistanceFilter, fetchIndicatorGrowthFilter, fetchMarketCapFilter, fetchBollingerBandPositionFilter, fetchVwapPositionFilter, fetchVwapBandWidthFilter, fetchVwapBandExpansionFilter, fetchUserPrefs, saveUserPrefs } from '../services/api';
 import { useI18n } from '../i18n';
 import {
   createRsiFilter,
@@ -16,7 +16,7 @@ import {
 } from '../utils/createIchimokuFilter';
 import Tooltip from './Tooltip';
 import { MA_CROSS_PERIOD_MIN, MA_CROSS_PERIOD_MAX } from '../constants/maCrossConfigSchema';
-import { buildMaCrossFilterName, buildMaCompareFilterName, buildMaDistanceFilterName, buildIndicatorGrowthFilterName, buildVwapBandWidthFilterName } from '../utils/filterNames';
+import { buildMaCrossFilterName, buildMaCompareFilterName, buildMaDistanceFilterName, buildIndicatorGrowthFilterName, buildVwapBandWidthFilterName, buildVwapBandExpansionFilterName } from '../utils/filterNames';
 
 const INTERVAL_MS = {
   '1m': 60_000, '3m': 180_000, '5m': 300_000, '15m': 900_000, '30m': 1_800_000,
@@ -161,6 +161,12 @@ function buildSummary(value, t) {
     const lookback = value.lookback ?? '100';
     return t('sum.vwap_band_width', session, lookback, ivLabel);
   }
+  if (type === 'vwapBandExpansion') {
+    const vwapInterval = value.vwapInterval ?? '4h';
+    const lookback = value.lookback ?? '10';
+    const multiplier = value.multiplier ?? '3';
+    return t('sum.vwap_band_expansion', vwapInterval, lookback, multiplier, ivLabel);
+  }
   if (type === 'indicatorGrowth') {
     const engine = value.growthEngine ?? 'bollinger';
     const threshold = value.thresholdPct ?? '10';
@@ -206,6 +212,7 @@ function indDescKey(type) {
   if (type === 'bollingerPosition') return 'bb_position';
   if (type === 'vwapPosition') return 'vwap_position';
   if (type === 'vwapBandWidth') return 'vwap_band_width';
+  if (type === 'vwapBandExpansion') return 'vwap_band_expansion';
   if (type === 'indicatorGrowth') return 'indicator_growth';
   return 'marketcap';
 }
@@ -287,6 +294,12 @@ function IndicatorRow({ value, onChange }) {
                 next.session = next.session ?? 'weekly';
                 next.lookback = next.lookback ?? '100';
               }
+              if (newType === 'vwapBandExpansion') {
+                next.intervals = ['15m'];
+                next.vwapInterval = next.vwapInterval ?? '4h';
+                next.lookback = next.lookback ?? '10';
+                next.multiplier = next.multiplier ?? '3';
+              }
               if (newType === 'maDistance') {
                 next.intervals = ['4h'];
                 next.period = '21';
@@ -319,6 +332,7 @@ function IndicatorRow({ value, onChange }) {
             <option value="bollingerPosition">{t('ind.bb_position')}</option>
             <option value="vwapPosition">{t('ind.vwap_position')}</option>
             <option value="vwapBandWidth">{t('ind.vwap_band_width')}</option>
+            <option value="vwapBandExpansion">{t('ind.vwap_band_expansion')}</option>
             <option value="indicatorGrowth">{t('ind.indicator_growth')}</option>
           </select>
           {type && t(`ind.desc.${indDescKey(type)}`) !== `ind.desc.${indDescKey(type)}` && (
@@ -675,6 +689,41 @@ function IndicatorRow({ value, onChange }) {
           </>
         )}
 
+        {type === 'vwapBandExpansion' && (
+          <>
+            <select
+              className={sel}
+              value={value.vwapInterval ?? '4h'}
+              onChange={(e) => onChange({ ...value, vwapInterval: e.target.value })}
+              title="Janela rolante usada pra calcular a VWAP (ex.: VWAP de 4h) — não precisa bater com o intervalo de candle"
+            >
+              {['15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d'].map(iv => (
+                <option key={iv} value={iv}>{iv}</option>
+              ))}
+            </select>
+            <select
+              className={sel}
+              value={value.lookback ?? '10'}
+              onChange={(e) => onChange({ ...value, lookback: e.target.value })}
+              title="Quantidade de candles fechados onde procurar o menor afastamento (squeeze) recente"
+            >
+              {[5, 10, 20, 30, 50, 100].map(v => (
+                <option key={v} value={String(v)}>{v} candles</option>
+              ))}
+            </select>
+            <select
+              className={sel}
+              value={value.multiplier ?? '3'}
+              onChange={(e) => onChange({ ...value, multiplier: e.target.value })}
+              title="Múltiplo mínimo: afastamento atual ÷ menor afastamento recente"
+            >
+              {[2, 3, 4, 5, 6, 8, 10].map(v => (
+                <option key={v} value={String(v)}>×{v}</option>
+              ))}
+            </select>
+          </>
+        )}
+
         {type === 'indicatorGrowth' && (
           <>
             <select
@@ -1022,8 +1071,9 @@ export default function IndicatorPanel({ open, onToggle }) {
       const bbPositionIndicators = indicators.filter((ind) => ind.type === 'bollingerPosition');
       const vwapPositionIndicators = indicators.filter((ind) => ind.type === 'vwapPosition');
       const vwapBandWidthIndicators = indicators.filter((ind) => ind.type === 'vwapBandWidth');
+      const vwapBandExpansionIndicators = indicators.filter((ind) => ind.type === 'vwapBandExpansion');
       const growthIndicators = indicators.filter((ind) => ind.type === 'indicatorGrowth');
-      const otherIndicators = indicators.filter((ind) => ind.type && ind.type !== 'relativeStrengthIndex' && ind.type !== 'marketCap' && ind.type !== 'movingAverage' && ind.type !== 'maTimeAbove' && ind.type !== 'maCrossover' && ind.type !== 'maCompare' && ind.type !== 'maDistance' && ind.type !== 'bollingerPosition' && ind.type !== 'vwapPosition' && ind.type !== 'vwapBandWidth' && ind.type !== 'indicatorGrowth');
+      const otherIndicators = indicators.filter((ind) => ind.type && ind.type !== 'relativeStrengthIndex' && ind.type !== 'marketCap' && ind.type !== 'movingAverage' && ind.type !== 'maTimeAbove' && ind.type !== 'maCrossover' && ind.type !== 'maCompare' && ind.type !== 'maDistance' && ind.type !== 'bollingerPosition' && ind.type !== 'vwapPosition' && ind.type !== 'vwapBandWidth' && ind.type !== 'vwapBandExpansion' && ind.type !== 'indicatorGrowth');
 
       // Salva intervalos e análises usadas nas preferências
       const allIntervals = [...new Set(indicators.flatMap(ind => ind.intervals ?? []))];
@@ -1200,6 +1250,23 @@ export default function IndicatorPanel({ open, onToggle }) {
         for (const interval of ind.intervals) {
           const filter = await fetchVwapBandWidthFilter({ interval, session, lookback });
           const expectedName = buildVwapBandWidthFilterName(interval, session, lookback);
+          addFilter({
+            name: filter.name ?? expectedName,
+            list: filter.list,
+            meta: filter.details,
+            scannedAt: filter.scannedAt,
+          });
+        }
+      }
+
+      // Expansão do afastamento -1σ/+2σ da VWAP: mínimo recente (squeeze) vs. atual
+      for (const ind of vwapBandExpansionIndicators) {
+        const vwapInterval = ind.vwapInterval ?? '4h';
+        const lookback = ind.lookback ?? '10';
+        const multiplier = ind.multiplier ?? '3';
+        for (const interval of ind.intervals) {
+          const filter = await fetchVwapBandExpansionFilter({ interval, vwapInterval, lookback, multiplier });
+          const expectedName = buildVwapBandExpansionFilterName(interval, vwapInterval, lookback, multiplier);
           addFilter({
             name: filter.name ?? expectedName,
             list: filter.list,

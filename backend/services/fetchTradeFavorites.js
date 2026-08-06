@@ -56,6 +56,7 @@ function summarizeTrades(rawTrades, now = Date.now()) {
   const dayStart = startOfTodaySP(now);
   const weekStart = startOfWeekSP(now);
   const inventory = [];
+  const weekTrades = [];
   let pnlToday = 0;
   let pnlWeek = 0;
   let pnlTotal = 0;
@@ -102,7 +103,12 @@ function summarizeTrades(rawTrades, now = Date.now()) {
     const pnlUsdt = matched * t.price - cost;
     pnlTotal += pnlUsdt;
     if (t.time >= dayStart) pnlToday += pnlUsdt;
-    if (t.time >= weekStart) pnlWeek += pnlUsdt;
+    if (t.time >= weekStart) {
+      pnlWeek += pnlUsdt;
+      // Cada venda realizada na semana vira uma entrada própria — permite listar
+      // a mesma moeda mais de uma vez quando houve mais de um trade fechado.
+      weekTrades.push({ time: t.time, pnl: Math.round(pnlUsdt * 100) / 100 });
+    }
   }
 
   const openQty = inventory.reduce((s, l) => s + l.qty, 0);
@@ -121,6 +127,7 @@ function summarizeTrades(rawTrades, now = Date.now()) {
     pnlToday: Math.round(pnlToday * 100) / 100,
     pnlWeek: Math.round(pnlWeek * 100) / 100,
     pnlTotal: Math.round(pnlTotal * 100) / 100,
+    weekTrades,
     openQty: openQty > 1e-12 ? openQty : 0,
     openCost: Math.round(openCost * 100) / 100,
     hasOpen: openQty > 1e-12,

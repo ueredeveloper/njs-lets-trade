@@ -99,9 +99,9 @@ export function compareTradeFavorites(a, b, sortBy, status = {}) {
   }
 
   if (sortBy === 'pnl_today') {
-    const pa = numOrNegInfinity(ma?.pnlToday);
-    const pb = numOrNegInfinity(mb?.pnlToday);
-    if (pa !== pb) return pb - pa;
+    const ta = numOrNegInfinity(ma?.lastSellTime);
+    const tb = numOrNegInfinity(mb?.lastSellTime);
+    if (ta !== tb) return tb - ta;
     return symA.localeCompare(symB);
   }
 
@@ -131,6 +131,32 @@ export function compareTradeFavorites(a, b, sortBy, status = {}) {
   const tb = numOrNegInfinity(mb?.lastTradeTime);
   if (ta !== tb) return tb - ta;
   return symA.localeCompare(symB);
+}
+
+/**
+ * PnL Semanal: expande a lista pra uma linha por trade fechado na semana — a mesma
+ * moeda aparece repetida quando teve mais de uma venda realizada no período.
+ */
+export function expandWeeklyTrades(items, status) {
+  const rows = [];
+  for (const item of items) {
+    const sym = typeof item === 'string' ? item : item.symbol;
+    const trades = status[sym]?.weekTrades ?? [];
+    trades.forEach((trade, idx) => {
+      rows.push({
+        ...(typeof item === 'string' ? { symbol: item } : item),
+        symbol: sym,
+        __rowKey: `${sym}__w${idx}`,
+        __tradeTime: trade.time,
+        __tradePnl: trade.pnl,
+      });
+    });
+  }
+  rows.sort((a, b) => {
+    if (b.__tradeTime !== a.__tradeTime) return b.__tradeTime - a.__tradeTime;
+    return a.symbol.localeCompare(b.symbol);
+  });
+  return rows;
 }
 
 export function formatTradePnlBadge(pnl) {

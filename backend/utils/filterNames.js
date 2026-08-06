@@ -109,6 +109,27 @@ function parseVwapBandWidthFilterName(name) {
   };
 }
 
+/**
+ * Expansão do afastamento entre lower1 e upper2 da VWAP (banda assimétrica -1σ/+2σ):
+ * compara o afastamento atual com o menor afastamento (squeeze) dentro do lookback —
+ * ex.: 15m|vwapexp|4h|10|3 (candle de 15m, VWAP com janela rolante de 4h, olhando os
+ * últimos 10 candles, multiplicador mínimo 3x).
+ */
+function buildVwapBandExpansionFilterName(interval, vwapInterval, lookback, multiplier) {
+  return `${interval}|vwapexp|${vwapInterval}|${lookback}|${multiplier}`;
+}
+
+function parseVwapBandExpansionFilterName(name) {
+  const parts = String(name).split('|');
+  if (parts[1] !== 'vwapexp' || parts.length < 5) return null;
+  return {
+    interval: parts[0],
+    vwapInterval: parts[2],
+    lookback: parseInt(parts[3], 10),
+    multiplier: parseFloat(parts[4]),
+  };
+}
+
 /** Posição EMA vs EMA: 15m|macmp|9|21|acim — proximidade: 1h|macmp|9|21|nearup|prox|0.5 */
 function buildMaCompareFilterName(interval, p1, p2, compare, lang = 'en', opts = {}) {
   if (compare === 'near_up' || compare === 'near_down') {
@@ -258,6 +279,8 @@ module.exports = {
   buildVwapPositionFilterName,
   buildVwapBandWidthFilterName,
   parseVwapBandWidthFilterName,
+  buildVwapBandExpansionFilterName,
+  parseVwapBandExpansionFilterName,
   MA_CROSS_MODE_TOKENS,
   parseMaCrossModeToken,
   buildMaCrossFilterName,

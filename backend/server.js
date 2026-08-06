@@ -22,7 +22,7 @@ const { ichimokuCloudRouter } = require('./technicals-indicators');
 const {
   fetchCandles, fetchIchimokuCloud, fetchSupportResistance, fetchPivotPointsHighLow, fetchAllCurrencies,
   fetchSMA, fetchRSI, fetchChopZone, fetchVWAP, fetch24HsVolume, fetchMarketCapFilter, fetchStablecoins, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter, fetchMaDistanceFilter, fetchIndicatorGrowthFilter,
-  fetchRsiOversoldRecovery, fetchMaCrossStats, fetchVwapBandsStats, fetchBollingerBandRecovery, fetchBollingerBandPositionFilter, fetchVwapPositionFilter, fetchVwapBandWidthFilter, fetchBollingerBands, fetchSimpleMaCross, fetchReloadCandles,
+  fetchRsiOversoldRecovery, fetchMaCrossStats, fetchVwapBandsStats, fetchBollingerBandRecovery, fetchBollingerBandPositionFilter, fetchVwapPositionFilter, fetchVwapBandWidthFilter, fetchVwapBandExpansionFilter, fetchBollingerBands, fetchSimpleMaCross, fetchReloadCandles,
   fetchGateCurrencies, fetchGatePrefetch, fetchBinanceTrades, fetchGateTrades,
   fetchActiveTrades, fetchTradeFavorites, stgBotStatus, multitradeService, fetchMarketHighlights, whatsappMessagesService } = require('./services');
 const supabaseService = require('./services/supabaseService');
@@ -70,6 +70,7 @@ app.use('/services', fetchBollingerBandRecovery)
 app.use('/services', fetchBollingerBandPositionFilter)
 app.use('/services', fetchVwapPositionFilter)
 app.use('/services', fetchVwapBandWidthFilter)
+app.use('/services', fetchVwapBandExpansionFilter)
 app.use('/services', fetchBollingerBands)
 app.use('/services', fetchSimpleMaCross)
 app.use('/services', fetchReloadCandles)

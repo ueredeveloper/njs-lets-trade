@@ -17,6 +17,10 @@ import { DEFAULT_OVERLAY_SLOTS, DEFAULT_ACTIVE_INDICATORS, BB_PERIOD_OPTIONS, BB
 import { CHART_VIEW, INTERVAL_MS, computeZoomWindow, buildFixedDataZoom, buildInsideDataZoom, computeCandleLimitFromTime, isTradePanelChartView, computeManualWheelZoom } from '../utils/chartView';
 
 const LIMIT = DEFAULT_CANDLE_LIMIT;
+// Filtros e favoritos comuns buscam LIMIT (160) candles mas mostram só os mais recentes por
+// padrão — exceto TX e VWAP Bands/MA-Cross, que precisam do histórico cheio pra vendas/sinais
+// antigos (ver efeito de sincronização de intervalo mais abaixo).
+const DEFAULT_DISPLAY_CANDLE_COUNT = 80;
 const LAST_CANDLE_PRESETS = [10, 20, 40, 80, 160, 320];
 /** Presets mais usados da janela de candles — os demais ficam escondidos atrás do botão "›"
  *  (mesmo padrão do picker de intervalos logo abaixo, ver COMMON_CHART_INTERVALS). */
@@ -2612,8 +2616,8 @@ export default function CandlestickChart() {
   const [panelCollapsed, setPanelCollapsed] = useState(true);
   const isNotebook = useIsNotebook();
   const [candleFetchLimit, setCandleFetchLimit] = useState(DEFAULT_CANDLE_LIMIT);
-  const [displayCandleCount, setDisplayCandleCount] = useState(LIMIT);
-  const [hasExplicitCandleWindow, setHasExplicitCandleWindow] = useState(false);
+  const [displayCandleCount, setDisplayCandleCount] = useState(DEFAULT_DISPLAY_CANDLE_COUNT);
+  const [hasExplicitCandleWindow, setHasExplicitCandleWindow] = useState(true);
   const [loadingMoreCandles, setLoadingMoreCandles] = useState(false);
   const [measureMode, setMeasureMode] = useState(false);
   const [measurePoints, setMeasurePoints] = useState(null);
@@ -2681,19 +2685,30 @@ export default function CandlestickChart() {
       }
       return;
     }
-    // Favorito TX em notebook: os 160 candles buscados (ver TX_CANDLE_LIMIT em CurrencyTable.jsx)
-    // ficam finos demais numa tela estreita — foca só nos 80 mais recentes por padrão (os 80
-    // mais antigos continuam disponíveis arrastando pra trás, ver onNeedOlderCandles). No PC
-    // (tela larga o bastante pra caber os 160 com folga) mantém o comportamento padrão.
-    if (chartViewSource === CHART_VIEW.TRADES && isNotebook) {
+    // Favoritos TX e VWAP Bands/MA-Cross mostram vendas/sinais antigos — mantêm os 160 candles
+    // buscados visíveis por padrão (não entram na padronização de 80 candles abaixo).
+    if (chartViewSource === CHART_VIEW.TRADES || isTradePanelChartView(chartViewSource)) {
+      // Favorito TX em notebook: os 160 candles buscados (ver TX_CANDLE_LIMIT em CurrencyTable.jsx)
+      // ficam finos demais numa tela estreita — foca só nos 80 mais recentes por padrão (os 80
+      // mais antigos continuam disponíveis arrastando pra trás, ver onNeedOlderCandles). No PC
+      // (tela larga o bastante pra caber os 160 com folga) mantém o comportamento padrão.
+      if (chartViewSource === CHART_VIEW.TRADES && isNotebook) {
+        setCandleFetchLimit(DEFAULT_CANDLE_LIMIT);
+        setDisplayCandleCount(DEFAULT_DISPLAY_CANDLE_COUNT);
+        setHasExplicitCandleWindow(true);
+        return;
+      }
       setCandleFetchLimit(DEFAULT_CANDLE_LIMIT);
-      setDisplayCandleCount(80);
-      setHasExplicitCandleWindow(true);
+      setDisplayCandleCount(LIMIT);
+      setHasExplicitCandleWindow(false);
       return;
     }
+    // Filtros e favoritos comuns (Favoritos|Novas|Gate, Mercado|3M, NB, NG etc.): busca os 160
+    // candles padrão mas mostra só os 80 mais recentes — os demais ficam disponíveis arrastando
+    // pra trás ou pelos presets da toolbar (20/40/80/160/320).
     setCandleFetchLimit(DEFAULT_CANDLE_LIMIT);
-    setDisplayCandleCount(LIMIT);
-    setHasExplicitCandleWindow(false);
+    setDisplayCandleCount(DEFAULT_DISPLAY_CANDLE_COUNT);
+    setHasExplicitCandleWindow(true);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedChart?.symbol, selectedChart?.interval, chartViewSource, multitradeChartFocus?.candleLimit, chartCandleWindowReset, isNotebook]);
 
@@ -3245,10 +3260,16 @@ export default function CandlestickChart() {
         setCandleFetchLimit(limit);
         setDisplayCandleCount(limit);
         setHasExplicitCandleWindow(true);
-      } else {
+      } else if (chartViewSource === CHART_VIEW.TRADES || isTradePanelChartView(chartViewSource)) {
+        // TX e VWAP Bands/MA-Cross continuam mostrando os 160 candles ao trocar de intervalo.
         setCandleFetchLimit(DEFAULT_CANDLE_LIMIT);
         setDisplayCandleCount(LIMIT);
         setHasExplicitCandleWindow(false);
+      } else {
+        // Filtros e favoritos comuns: mantém o padrão de 80 candles visíveis ao trocar de intervalo.
+        setCandleFetchLimit(DEFAULT_CANDLE_LIMIT);
+        setDisplayCandleCount(DEFAULT_DISPLAY_CANDLE_COUNT);
+        setHasExplicitCandleWindow(true);
       }
       const data = await fetchCandlesticksAndCloud(
         selectedChart.symbol, iv, selectedChart.source ?? null, limit,
@@ -3427,6 +3448,17 @@ export default function CandlestickChart() {
     const instance = chartRef.current.getEchartsInstance();
     instance.dispatchAction({ type: 'dataZoom', start: win.startPct, end: win.endPct });
   }, [chartZoom, selectedChart, chartViewSource]);
+
+  // Ao carregar um novo símbolo/intervalo (sem zoom explícito de Multi-Trade/Estatísticas), força
+  // o dataZoom pra 0-100%. Sem isso o ECharts mantém o range percentual da seleção anterior — como
+  // o array de categorias agora pode ter tamanhos diferentes entre views (80 no padrão, 160 em
+  // TX/VWAP Bands/MA-Cross), o range antigo passa a cobrir só uma fração do novo eixo, deixando
+  // as velas encostadas à esquerda em vez de preencher o gráfico.
+  useEffect(() => {
+    if (chartZoom || !chartRef.current || !selectedChart?.candlesticks?.length) return;
+    const instance = chartRef.current.getEchartsInstance();
+    instance.dispatchAction({ type: 'dataZoom', start: 0, end: 100 });
+  }, [selectedChart?.symbol, selectedChart?.interval, selectedChart?.candlesticks?.length, chartViewSource, chartZoom]);
 
   // Linhas azuis legadas (últimas 2 compras). Na view TX usamos só chartTradeMarkers (buy/sell + PnL).
   const tradeTimes = chartViewSource === CHART_VIEW.TRADES

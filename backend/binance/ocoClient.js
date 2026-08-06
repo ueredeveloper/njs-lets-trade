@@ -39,11 +39,17 @@ function roundToStep(value, step, decimals, mode = 'round') {
   return (fn(value / step) * step).toFixed(decimals);
 }
 
+// STOP_LOSS_LIMIT ativa uma ordem LIMITE quando o preço cruza stopPrice — se o limite fosse
+// o próprio stopPrice (sem folga), numa queda rápida o preço já passou daquele nível quando a
+// ordem ativa e ela fica presa no book esperando o preço VOLTAR a subir até ali (caso real:
+// XECUSDT bateu no stop 2x no 15m e não vendeu, ver conversa com o usuário). A folga abaixo do
+// stopPrice dá espaço pra ordem casar contra o book em vez de esperar um preço exato.
+const STOP_LIMIT_SLIPPAGE_PCT = 0.3;
+
 /**
  * Coloca a OCO de venda: TP em targetPrice (LIMIT_MAKER), SL disparado em stopPrice
- * (STOP_LOSS_LIMIT, vende no próprio stopPrice como limite — GTC, sem folga extra; se o
- * mercado gapear abaixo disso a ordem fica no book até preencher ou até o bot substituir no
- * próximo tick por deriva).
+ * (STOP_LOSS_LIMIT, limite STOP_LIMIT_SLIPPAGE_PCT% abaixo do stopPrice — GTC — pra ter chance
+ * de preencher numa queda rápida em vez de ficar presa no book esperando o preço exato).
  */
 async function binancePlaceOcoSell(symbol, qty, targetPrice, stopPrice) {
   const { tickSize, stepSize, priceDecimals, qtyDecimals } = await getSymbolFilters(symbol);
@@ -53,12 +59,15 @@ async function binancePlaceOcoSell(symbol, qty, targetPrice, stopPrice) {
   }
   const safeTarget = roundToStep(targetPrice, tickSize, priceDecimals);
   const safeStop = roundToStep(stopPrice, tickSize, priceDecimals);
+  const safeStopLimit = roundToStep(
+    parseFloat(safeStop) * (1 - STOP_LIMIT_SLIPPAGE_PCT / 100), tickSize, priceDecimals, 'floor',
+  );
 
   const order = await binanceRequest('POST', '/api/v3/order/oco', {
     symbol, side: 'SELL', quantity: safeQty,
     price: safeTarget,
     stopPrice: safeStop,
-    stopLimitPrice: safeStop,
+    stopLimitPrice: safeStopLimit,
     stopLimitTimeInForce: 'GTC',
   });
 

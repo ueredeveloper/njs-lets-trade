@@ -209,10 +209,12 @@ export default function VwapBandsStrategyForm({ form, patch, symbol }) {
         </div>
         {form.stopLoss.mode === 'ladder' ? (
           <p className="text-[10px] text-p5/50 leading-relaxed">
-            Padrão — sem % fixo. O stop é a própria banda abaixo da que foi tocada pra armar
-            a compra, recalculada ao vivo pela VWAP: comprou no retorno à lw1 → stop na lw2;
-            comprou na vw → stop na lw1. Vende se a mínima do candle romper
-            essa banda.
+            Sem % fixo — o stop é a própria banda abaixo da que foi tocada pra armar a compra,
+            recalculada ao vivo pela VWAP: comprou no retorno à lw1 → stop na lw2; comprou na
+            vw → stop na lw1. Vende se a mínima do candle romper essa banda. Como bandas largas
+            podem ficar bem mais longe que o normal, o limite abaixo trava um teto: a banda
+            nunca serve de stop além dele — se a banda estiver mais longe, o OCO usa o limite
+            no lugar dela (ex.: banda 14% abaixo, limite 10% → OCO com stop a -10%).
           </p>
         ) : (
           <p className="text-[10px] text-p5/50 leading-relaxed">
@@ -220,18 +222,18 @@ export default function VwapBandsStrategyForm({ form, patch, symbol }) {
             {form.stopLoss.trailing ? ' — ou do pico atingido depois da compra, já que o trailing está ligado' : ''}.
           </p>
         )}
-        {form.stopLoss.mode === 'percent' && (
-          <div className="flex flex-wrap gap-2 items-center text-xs text-p5">
-            <span className="text-p5/50">Perda máx.</span>
-            <NumInput value={form.stopLoss.maxLossPct} onChange={v => patchStopLoss('maxLossPct', v)} min={1} max={20} step={0.5} />
-            <span className="text-p5/40">%</span>
+        <div className="flex flex-wrap gap-2 items-center text-xs text-p5">
+          <span className="text-p5/50">{form.stopLoss.mode === 'ladder' ? 'Limite (teto)' : 'Perda máx.'}</span>
+          <NumInput value={form.stopLoss.maxLossPct} onChange={v => patchStopLoss('maxLossPct', v)} min={1} max={30} step={0.5} />
+          <span className="text-p5/40">%</span>
+          {form.stopLoss.mode === 'percent' && (
             <label className="flex items-center gap-1 ml-2">
               <input type="checkbox" checked={form.stopLoss.trailing}
                 onChange={e => patchStopLoss('trailing', e.target.checked)} />
               Trailing
             </label>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       <p className="text-[9px] text-p5/35">
