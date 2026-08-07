@@ -9,6 +9,7 @@ import { useI18n } from '../i18n';
 import { CHART_VIEW } from '../utils/chartView';
 import { getEntriesForSymbol } from '../constants/strategyPresets';
 import { isMaCrossEntry } from '../utils/macrossFavoritesSort';
+import { VWAP_BANDS_ALL_INTERVALS, VWAP_BANDS_SESSIONS, EMA_FILTER_PERIODS } from '../constants/vwapBandsConfigSchema';
 
 
 const INTERVALS = ['1m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w'];
@@ -73,6 +74,22 @@ function loadUseMcInterval(tab, fallback) {
 
 function saveUseMcInterval(tab, value) {
   try { localStorage.setItem(MC_INTERVAL_STORAGE_KEYS[tab], value ? '1' : '0'); } catch {}
+}
+
+const VWAP_STATS_PREFS_KEY = 'lets_trade_stats_vwap_bands_prefs';
+
+/** Preferências dos seletores da aba VWAP Bands (sessão, intervalo da VWAP, filtro EMA) —
+ *  lembradas entre buscas/sessões, mesmo padrão do useMcInterval das outras abas. */
+function loadVwapStatsPrefs() {
+  try {
+    const raw = localStorage.getItem(VWAP_STATS_PREFS_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch {}
+  return {};
+}
+
+function saveVwapStatsPrefs(prefs) {
+  try { localStorage.setItem(VWAP_STATS_PREFS_KEY, JSON.stringify(prefs)); } catch {}
 }
 
 /**
@@ -953,6 +970,21 @@ function VwapBandsStats() {
   const { selectedChart, setSelectedChart, setChartZoom, setChartViewSource, setChartTradeMarkers } = useCurrency();
   const { t } = useI18n();
   const [symbol, setSymbol]       = useState(selectedChart?.symbol || 'BTCUSDT');
+  // Candle principal da escada VWAP (entry.interval — reconquista/pullback/saída rodam nessa
+  // unidade, ex.: waitCandles=5 vira 5 candles DESSE intervalo) — e também o intervalo usado
+  // pro gráfico ao clicar numa linha da tabela. É UM SÓ campo de propósito: manter um seletor
+  // separado só pra exibição (como era antes) confundia — o usuário via "1m" no gráfico e
+  // esperava que o pullback também contasse em minutos, mas o cálculo seguia noutro intervalo
+  // por trás. Agora os dois sempre batem.
+  const [entryInterval, setEntryInterval]   = useState(() => loadVwapStatsPrefs().entryInterval ?? '1h');
+  const [session, setSession]               = useState(() => loadVwapStatsPrefs().session ?? 'weekly');
+  const [vwapInterval, setVwapInterval]     = useState(() => loadVwapStatsPrefs().vwapInterval ?? '4h');
+  const [emaFilterEnabled, setEmaFilterEnabled] = useState(() => loadVwapStatsPrefs().emaFilterEnabled ?? true);
+  const [emaFilterPeriod, setEmaFilterPeriod]   = useState(() => loadVwapStatsPrefs().emaFilterPeriod ?? 200);
+  const [emaFilterInterval, setEmaFilterInterval] = useState(() => loadVwapStatsPrefs().emaFilterInterval ?? '15m');
+  // Intervalo do pullback/checagem rápida (ex.: 15m) — mesmo campo entry.pullback.pollInterval
+  // do formulário do favorito (VwapBandsStrategyForm), aqui só como override da simulação.
+  const [pollInterval, setPollInterval]     = useState(() => loadVwapStatsPrefs().pollInterval ?? '5m');
   const [loading, setLoading]     = useState(false);
   const [result, setResult]       = useState(null);
   const [error, setError]         = useState(null);
@@ -965,6 +997,13 @@ function VwapBandsStats() {
 
   const inp = 'bg-p2 border border-p3/40 text-p5 text-[10px] sm:text-xs rounded px-1 sm:px-2 py-1 focus:outline-none focus:border-p4 w-full';
 
+  function patchPrefs(next) {
+    saveVwapStatsPrefs({
+      entryInterval, session, vwapInterval, pollInterval, emaFilterEnabled, emaFilterPeriod, emaFilterInterval,
+      ...next,
+    });
+  }
+
   async function handleSearch(overrideSymbol, overrideSource) {
     const sym = (overrideSymbol ?? symbol).trim().toUpperCase();
     if (!sym) return;
@@ -975,7 +1014,9 @@ function VwapBandsStats() {
     setError(null);
     setResult(null);
     try {
-      const data = await fetchVwapBandsStats(sym, { source: src });
+      const data = await fetchVwapBandsStats(sym, {
+        source: src, entryInterval, session, vwapInterval, pollInterval, emaFilterEnabled, emaFilterPeriod, emaFilterInterval,
+      });
       if (latestSymbolRef.current !== sym) return;
       setResult(data);
     } catch (err) {
@@ -997,22 +1038,33 @@ function VwapBandsStats() {
   }, [selectedChart?.symbol]);
 
   async function openOnChart(o) {
+    const signalMs = o.signalDate ? new Date(o.signalDate).getTime() : null;
     const startMs = new Date(o.startDate).getTime();
     const endMs = o.endDate ? new Date(o.endDate).getTime() : Date.now();
-    const iv = result?.entryInterval ?? '1h';
+    // Zoom começa no sinal (reconquista da linha) quando ele existir e for anterior à compra
+    // (retorno/pullback) — senão o candle que armou o ciclo fica de fora da janela visível.
+    const zoomStartMs = signalMs != null && signalMs < startMs ? signalMs : startMs;
+    const iv = entryInterval;
     const msPerCandle = INTERVAL_MS[iv] ?? 3_600_000;
-    const needed = Math.min(3000, Math.max(266,
-      Math.ceil((Date.now() - startMs) / msPerCandle) + 40));
+    // Teto de 10500 (não 3000) — mesmo limite do cache em disco pra 1m (RETENTION_LIMIT_BY_INTERVAL
+    // em getCandles.js): sem isso, a VWAP desenhada no gráfico ficava presa a um histórico bem menor
+    // do que o motor de verdade usou pra decidir o sinal, mostrando bandas fora do lugar.
+    const needed = Math.min(10500, Math.max(266,
+      Math.ceil((Date.now() - zoomStartMs) / msPerCandle) + 40));
     try {
       const sym = (symbol || selectedChart?.symbol || 'BTCUSDT').trim().toUpperCase();
       const src = selectedChart?.symbol === sym ? (selectedChart?.source ?? null) : null;
       const data = await fetchCandlesticksAndCloud(sym, iv, src, needed);
       setSelectedChart(data);
       setChartViewSource(CHART_VIEW.STATISTICS);
-      // Marca compra/venda simuladas (mesmo visual das outras telas de trade — ver
+      // Marca sinal/compra/venda simulados (mesmo visual das outras telas de trade — ver
       // buildMarkersFromLiveTrades) e força a VWAP+bandas do intervalo/sessão usados na
-      // simulação, pra ver exatamente a banda que gerou a entrada/saída daquele ciclo.
+      // simulação, pra ver exatamente a banda que gerou o sinal/entrada/saída daquele ciclo.
       setChartTradeMarkers([
+        signalMs != null && {
+          time: signalMs, side: 'signal', price: o.signalPrice ?? null,
+          label: o.signalLevel ? `◌ ${o.signalLevel}` : undefined,
+        },
         { time: startMs, side: 'buy', price: o.entryPrice, label: '▲ Compra' },
         o.exitPrice != null && {
           time: endMs, side: 'sell', price: o.exitPrice, pnlPct: o.appreciationPercent,
@@ -1022,7 +1074,7 @@ function VwapBandsStats() {
       ].filter(Boolean));
       setChartZoom({
         source: CHART_VIEW.STATISTICS,
-        startDate: o.startDate,
+        startDate: zoomStartMs === signalMs ? o.signalDate : o.startDate,
         endDate: o.endDate ?? new Date(endMs).toISOString(),
         vwap: result?.vwapInterval ? { interval: result.vwapInterval, session: result.session } : undefined,
       });
@@ -1033,8 +1085,8 @@ function VwapBandsStats() {
 
   return (
     <div className="flex flex-col gap-2 w-full">
-      <div className="flex flex-row gap-1 md:gap-2 items-end w-full md:w-auto md:shrink-0">
-        <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-0">
+      <div className="flex flex-row gap-1 md:gap-2 items-end w-full md:w-auto md:shrink-0 flex-wrap">
+        <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[72px]">
           <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">Símbolo</label>
           <input
             className={inp}
@@ -1044,6 +1096,70 @@ function VwapBandsStats() {
             onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
           />
         </div>
+
+        {/* Candle principal (entry.interval) — reconquista/pullback/saída rodam nessa unidade,
+            e é também o intervalo usado no gráfico ao clicar numa linha (um só campo, ver
+            comentário no useState acima). */}
+        <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[56px]">
+          <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">Candle</label>
+          <select className={inp} value={entryInterval}
+            onChange={(e) => { setEntryInterval(e.target.value); patchPrefs({ entryInterval: e.target.value }); }}>
+            {VWAP_BANDS_ALL_INTERVALS.map((iv) => <option key={iv} value={iv}>{iv}</option>)}
+          </select>
+        </div>
+
+        {/* VWAP intervalo */}
+        <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[56px]">
+          <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">VWAP</label>
+          <select className={inp} value={vwapInterval}
+            onChange={(e) => { setVwapInterval(e.target.value); patchPrefs({ vwapInterval: e.target.value }); }}>
+            {VWAP_BANDS_ALL_INTERVALS.map((iv) => <option key={iv} value={iv}>{iv}</option>)}
+          </select>
+        </div>
+
+        {/* Sessão (semanal/diária) */}
+        <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[64px]">
+          <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">Sessão</label>
+          <select className={inp} value={session}
+            onChange={(e) => { setSession(e.target.value); patchPrefs({ session: e.target.value }); }}>
+            {VWAP_BANDS_SESSIONS.map((s) => (
+              <option key={s} value={s}>{s === 'weekly' ? 'Semanal' : 'Diária'}</option>
+            ))}
+          </select>
+        </div>
+
+        {/* Pullback/checagem rápida (entry.pullback.pollInterval) */}
+        <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[56px]">
+          <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">Pullback</label>
+          <select className={inp} value={pollInterval}
+            onChange={(e) => { setPollInterval(e.target.value); patchPrefs({ pollInterval: e.target.value }); }}>
+            {VWAP_BANDS_ALL_INTERVALS.map((iv) => <option key={iv} value={iv}>{iv}</option>)}
+          </select>
+        </div>
+
+        {/* Filtro EMA200 */}
+        <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[80px]">
+          <label className="flex items-center gap-1 text-[9px] text-p5/50 uppercase tracking-wider cursor-pointer">
+            <input type="checkbox" checked={emaFilterEnabled}
+              onChange={(e) => { setEmaFilterEnabled(e.target.checked); patchPrefs({ emaFilterEnabled: e.target.checked }); }}
+              className="accent-p4" />
+            EMA
+          </label>
+          <select className={inp} value={emaFilterPeriod} disabled={!emaFilterEnabled}
+            onChange={(e) => { setEmaFilterPeriod(Number(e.target.value)); patchPrefs({ emaFilterPeriod: Number(e.target.value) }); }}>
+            {EMA_FILTER_PERIODS.map((p) => <option key={p} value={p}>{p}</option>)}
+          </select>
+        </div>
+
+        {/* Intervalo da EMA (timeframe em que ela é calculada) */}
+        <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[56px]">
+          <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">Intv. EMA</label>
+          <select className={inp} value={emaFilterInterval} disabled={!emaFilterEnabled}
+            onChange={(e) => { setEmaFilterInterval(e.target.value); patchPrefs({ emaFilterInterval: e.target.value }); }}>
+            {VWAP_BANDS_ALL_INTERVALS.map((iv) => <option key={iv} value={iv}>{iv}</option>)}
+          </select>
+        </div>
+
         <button
           onClick={() => handleSearch()}
           disabled={loading}
@@ -1102,6 +1218,7 @@ function VwapBandsStats() {
                     <thead className="sticky top-0 z-10 bg-p1">
                       <tr className="text-[9px] sm:text-[10px] text-p5/40 uppercase tracking-wider lt-table-head">
                         {showAll && <th className="text-left pb-1 pr-2">#</th>}
+                        <th className="text-left pb-1 pr-2">{t('stats.signal')}</th>
                         <th className="text-left pb-1 pr-2">{t('stats.start')}</th>
                         {showAll && <th className="text-right pb-1 pr-2">{t('stats.entry_p')}</th>}
                         <th className="text-left pb-1 pr-2">{t('stats.end')}</th>
@@ -1121,6 +1238,10 @@ function VwapBandsStats() {
                             onClick={() => openOnChart(o)}
                           >
                             {showAll && <td className="py-0.5 pr-2 text-[10px] text-p5/40">{i + 1}</td>}
+                            <td className="py-0.5 pr-2 text-[10px] sm:text-xs font-mono whitespace-nowrap text-amber-600/80">
+                              {o.signalDate ? formatDate(o.signalDate) : '—'}
+                              {o.signalLevel && <span className="text-p5/40"> ({o.signalLevel})</span>}
+                            </td>
                             <td className="py-0.5 pr-2 text-[10px] sm:text-xs font-mono whitespace-nowrap">{formatDate(o.startDate)}</td>
                             {showAll && <td className="py-0.5 pr-2 text-[10px] sm:text-xs text-right font-mono">${o.entryPrice.toLocaleString('en-US', { maximumFractionDigits: 6 })}</td>}
                             <td className="py-0.5 pr-2 text-[10px] sm:text-xs font-mono whitespace-nowrap">{formatDate(o.endDate)}</td>
@@ -1137,8 +1258,16 @@ function VwapBandsStats() {
                         const o = result.openOccurrence;
                         const pos = o.appreciationPercent >= 0;
                         return (
-                          <tr className="border-t-2 border-amber-500/40 bg-amber-500/5">
+                          <tr
+                            title={t('stats.click_row')}
+                            className="border-t-2 border-amber-500/40 bg-amber-500/5 hover:bg-amber-500/10 transition-colors cursor-pointer"
+                            onClick={() => openOnChart(o)}
+                          >
                             {showAll && <td className="py-1 pr-2 text-[10px] text-amber-700">↓</td>}
+                            <td className="py-1 pr-2 text-[10px] sm:text-xs font-mono whitespace-nowrap text-amber-600/80">
+                              {o.signalDate ? formatDate(o.signalDate) : '—'}
+                              {o.signalLevel && <span className="text-p5/40"> ({o.signalLevel})</span>}
+                            </td>
                             <td className="py-1 pr-2 text-[10px] sm:text-xs font-mono whitespace-nowrap text-amber-700">{formatDate(o.startDate)}</td>
                             {showAll && <td className="py-1 pr-2 text-[10px] sm:text-xs text-right font-mono text-amber-700">${o.entryPrice.toLocaleString('en-US', { maximumFractionDigits: 6 })}</td>}
                             <td className="py-1 pr-2 text-[10px] sm:text-xs whitespace-nowrap text-amber-700 italic">{t('stats.open')}</td>
@@ -1152,7 +1281,7 @@ function VwapBandsStats() {
                       })()}
 
                       <tr className="lt-table-foot" aria-hidden="true">
-                        <td colSpan={showAll ? 7 : 4} className="h-px p-0 leading-none" />
+                        <td colSpan={showAll ? 8 : 5} className="h-px p-0 leading-none" />
                       </tr>
                     </tbody>
                   </table>

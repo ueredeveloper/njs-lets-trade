@@ -105,9 +105,19 @@ export async function fetchMaCrossStats(symbol, {
   return res.json();
 }
 
-export async function fetchVwapBandsStats(symbol, { source = null } = {}) {
+export async function fetchVwapBandsStats(symbol, {
+  source = null, entryInterval = null, session = null, vwapInterval = null, pollInterval = null,
+  emaFilterEnabled = null, emaFilterPeriod = null, emaFilterInterval = null,
+} = {}) {
   const params = new URLSearchParams({ symbol });
   if (source) params.set('source', source);
+  if (entryInterval) params.set('entryInterval', entryInterval);
+  if (session) params.set('session', session);
+  if (vwapInterval) params.set('vwapInterval', vwapInterval);
+  if (pollInterval) params.set('pollInterval', pollInterval);
+  if (emaFilterEnabled !== null) params.set('emaFilterEnabled', emaFilterEnabled ? '1' : '0');
+  if (emaFilterPeriod !== null) params.set('emaFilterPeriod', String(emaFilterPeriod));
+  if (emaFilterInterval) params.set('emaFilterInterval', emaFilterInterval);
   const res = await fetch(`/services/vwap-bands-stats?${params}`);
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
@@ -917,6 +927,30 @@ export async function saveMaCrossScreenerConfig(config) {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(config),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+// ── Configurações de cache (liga/desliga por cache no backend) ──────────────
+
+export async function getCacheSettings() {
+  const res = await fetch('/services/cache-settings');
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function saveCacheSettings(enabled) {
+  const res = await fetch('/services/cache-settings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));

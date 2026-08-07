@@ -3,28 +3,32 @@ import { formStateFromEntry } from './tradeConfigSchema';
 import { swingFormFromEntry, normalizeSwingForm } from './swingConfigSchema';
 import { maCrossFormFromEntry, normalizeMaCrossForm } from './maCrossConfigSchema';
 import { vwapBandsFormFromEntry, normalizeVwapBandsForm, VWAP_BANDS_DEFAULTS } from './vwapBandsConfigSchema';
+import { bollingerBandsFormFromEntry, normalizeBollingerBandsForm, BOLLINGER_BANDS_DEFAULTS } from './bollingerBandsConfigSchema';
 
 export const MA_CROSS_STRATEGY_IDS = ['ma-cross'];
 export const VWAP_BANDS_STRATEGY_IDS = ['vwap-bands'];
-/** Frontend MA-Cross + VWAP Bands — backend ainda aceita outras estratégias. */
-export const STRATEGY_IDS = [...MA_CROSS_STRATEGY_IDS, ...VWAP_BANDS_STRATEGY_IDS];
+export const BOLLINGER_BANDS_STRATEGY_IDS = ['bollinger-bands'];
+/** Frontend MA-Cross + VWAP Bands + Bollinger Bands — backend ainda aceita outras estratégias. */
+export const STRATEGY_IDS = [...MA_CROSS_STRATEGY_IDS, ...VWAP_BANDS_STRATEGY_IDS, ...BOLLINGER_BANDS_STRATEGY_IDS];
 
 export const STRATEGY_LABELS = {
-  'amap-15m':      'AMAP 15m',
-  'amap-1h':       'AMAP 1h',
-  'swing-rsi-1h':  'RSI 1h',
-  'swing-ma50-8h': 'MA50 8h',
-  'ma-cross':      'MA Cross',
-  'vwap-bands':    'VWAP Bands',
+  'amap-15m':        'AMAP 15m',
+  'amap-1h':         'AMAP 1h',
+  'swing-rsi-1h':    'RSI 1h',
+  'swing-ma50-8h':   'MA50 8h',
+  'ma-cross':        'MA Cross',
+  'vwap-bands':      'VWAP Bands',
+  'bollinger-bands': 'Bollinger Bands',
 };
 
 export const STRATEGY_COLORS = {
-  'amap-15m':      '#26a69a',
-  'amap-1h':       '#6366f1',
-  'swing-rsi-1h':  '#f59e0b',
-  'swing-ma50-8h': '#ec4899',
-  'ma-cross':      '#22d3ee',
-  'vwap-bands':    '#a78bfa',
+  'amap-15m':        '#26a69a',
+  'amap-1h':         '#6366f1',
+  'swing-rsi-1h':    '#f59e0b',
+  'swing-ma50-8h':   '#ec4899',
+  'ma-cross':        '#22d3ee',
+  'vwap-bands':      '#a78bfa',
+  'bollinger-bands': '#f472b6',
 };
 
 const SWING_STRATEGY_IDS = ['swing-rsi-1h', 'swing-ma50-8h'];
@@ -39,6 +43,10 @@ export function isMaCrossStrategy(id) {
 
 export function isVwapBandsStrategy(id) {
   return VWAP_BANDS_STRATEGY_IDS.includes(id);
+}
+
+export function isBollingerBandsStrategy(id) {
+  return BOLLINGER_BANDS_STRATEGY_IDS.includes(id);
 }
 
 const AMAP_PRESETS = {
@@ -217,6 +225,10 @@ export const VWAP_BANDS_PRESETS = {
   'vwap-bands': VWAP_BANDS_DEFAULTS,
 };
 
+export const BOLLINGER_BANDS_PRESETS = {
+  'bollinger-bands': BOLLINGER_BANDS_DEFAULTS,
+};
+
 export function presetFormState(strategyId) {
   if (isMaCrossStrategy(strategyId)) {
     return normalizeMaCrossForm(MA_CROSS_PRESETS[strategyId] ?? MA_CROSS_FACTORY_DEFAULT);
@@ -226,6 +238,9 @@ export function presetFormState(strategyId) {
   }
   if (isVwapBandsStrategy(strategyId)) {
     return normalizeVwapBandsForm(VWAP_BANDS_PRESETS[strategyId] ?? VWAP_BANDS_DEFAULTS);
+  }
+  if (isBollingerBandsStrategy(strategyId)) {
+    return normalizeBollingerBandsForm(BOLLINGER_BANDS_PRESETS[strategyId] ?? BOLLINGER_BANDS_DEFAULTS);
   }
   return formStateFromEntry(AMAP_PRESETS[strategyId] ?? AMAP_PRESETS['amap-15m']);
 }
@@ -270,6 +285,7 @@ export function normalizeStrategyId(id) {
   if (STRATEGY_IDS.includes(id)) return id;
   if (id === 'ma-cross' || id === 'ma_cross') return 'ma-cross';
   if (id === 'vwap-bands' || id === 'vwap_bands') return 'vwap-bands';
+  if (id === 'bollinger-bands' || id === 'bollinger_bands') return 'bollinger-bands';
   return 'ma-cross';
 }
 
@@ -280,6 +296,7 @@ export function resolveEntryStrategyId(entry) {
   const kind = entry?.tradeConfig?.kind;
   if (kind === 'ma_cross') return 'ma-cross';
   if (kind === 'vwap_bands') return 'vwap-bands';
+  if (kind === 'bollinger_bands') return 'bollinger-bands';
   if (kind === 'rsi') return 'swing-rsi-1h';
   if (kind === 'ma') return 'swing-ma50-8h';
   return normalizeStrategyId(sid);
@@ -294,6 +311,10 @@ export function formForEntry(existing, strategyId) {
     if (existing?.tradeConfig?.kind === 'vwap_bands') return vwapBandsFormFromEntry(existing);
     return presetFormState(strategyId);
   }
+  if (isBollingerBandsStrategy(strategyId)) {
+    if (existing?.tradeConfig?.kind === 'bollinger_bands') return bollingerBandsFormFromEntry(existing);
+    return presetFormState(strategyId);
+  }
   if (isSwingStrategy(strategyId)) {
     if (existing?.tradeConfig?.kind === 'rsi' || existing?.tradeConfig?.kind === 'ma') {
       return swingFormFromEntry(existing);
@@ -302,6 +323,7 @@ export function formForEntry(existing, strategyId) {
   }
   if (existing?.tradeConfig?.kind === 'ma_cross') return maCrossFormFromEntry(existing);
   if (existing?.tradeConfig?.kind === 'vwap_bands') return vwapBandsFormFromEntry(existing);
+  if (existing?.tradeConfig?.kind === 'bollinger_bands') return bollingerBandsFormFromEntry(existing);
   if (existing?.tradeConfig?.kind) return swingFormFromEntry(existing);
   return existing?.tradeConfig ? formStateFromEntry(existing) : presetFormState(strategyId);
 }
@@ -325,6 +347,7 @@ export function buildDualStrategyState(currentEntries, { symbol, exchange, defau
       isSwing: isSwingStrategy(sid),
       isMaCross: isMaCrossStrategy(sid),
       isVwapBands: isVwapBandsStrategy(sid),
+      isBollingerBands: isBollingerBandsStrategy(sid),
     };
     if (!existing && sid === 'ma-cross') strategies[sid].enabled = true;
   }
@@ -352,5 +375,6 @@ export function strategyBadgeLabel(sid) {
   if (sid === 'swing-ma50-8h') return 'MA';
   if (sid === 'ma-cross') return 'X';
   if (sid === 'vwap-bands') return 'VWAP';
+  if (sid === 'bollinger-bands') return 'BB';
   return sid.slice(0, 4);
 }

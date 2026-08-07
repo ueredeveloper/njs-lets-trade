@@ -34,6 +34,13 @@ const {
 // Componentes genéricos (compra/venda/execução), compartilhados com os outros bots de
 // trade — ver backend/bot/shared/*.
 const { buildAdapter, syncExchangeClocks } = require('../shared/buildAdapter');
+// Candles via cache em disco paginado (mesmo usado pelo gráfico e pelas Estatísticas) — não
+// via adapter.fetchCandles (fetch direto da API, sem cache, travado em ~1000 por request):
+// getRequiredSpecs pede até ~10 mil candles em 1m pra VWAP semanal cobrir uma janela real, e
+// só esse caminho pagina/cacheia o suficiente pra atender isso sem estourar o rate limit a
+// cada tick (ver conversa sobre a KMNOUSDT/ACEUSDT).
+const getCandles = require('../../binance/getCandles');
+const { getGateCandles } = require('../../gate/getGateCandles');
 const { sbReq } = require('../shared/supabaseRest');
 const { createTradeExecution, entrySignalFields } = require('../shared/tradeExecution');
 const { sendWhatsApp } = require('../whatsapp');
@@ -179,13 +186,17 @@ async function maybeReplaceBracket({ rowId, adapter, config, cMap, session, log,
   }
 }
 
-async function fetchCandleMap(adapter, specs) {
+async function fetchCandleMap(adapter, symbol, specs) {
   const maxLimits = {};
   for (const { interval, limit } of specs) {
     maxLimits[interval] = Math.max(maxLimits[interval] || 0, limit);
   }
+  const isGate = adapter.name === 'Gate.io';
+  // symbol aqui é sempre o formato Binance (ex.: 'ACEUSDT') — getGateCandles converte pra
+  // Gate.io internamente; adapter.pair já vem convertido, não serve pra essa chamada.
+  const fetchOne = (iv, lim) => (isGate ? getGateCandles(symbol, iv, lim) : getCandles(symbol, iv, lim));
   const fetchAll = () => Promise.all(
-    Object.entries(maxLimits).map(async ([iv, lim]) => [iv, await adapter.fetchCandles(lim, iv)]),
+    Object.entries(maxLimits).map(async ([iv, lim]) => [iv, await fetchOne(iv, lim)]),
   );
   let entries;
   try {
@@ -202,10 +213,12 @@ async function fetchCandleMap(adapter, specs) {
 }
 
 // ── Tick ──────────────────────────────────────────────────────────────────────
-async function tick(rowId, adapter, strategy, log, session) {
+// symbolHint: symbol (formato Binance) já conhecido pelo chamador (ctx.symbol), usado só pra
+// buscar os candles ANTES do state (que redeclara `symbol` mais abaixo, vindo do Supabase).
+async function tick(rowId, symbolHint, adapter, strategy, log, session) {
   const { config } = strategy;
   const specs = getRequiredSpecs(config);
-  const cMap  = await fetchCandleMap(adapter, specs);
+  const cMap  = await fetchCandleMap(adapter, symbolHint, specs);
 
   const rows = await sbReq('GET', 'rsi_multi_bot_state', null, `?id=eq.${rowId}&limit=1`);
   const state = rows?.[0];
@@ -213,6 +226,7 @@ async function tick(rowId, adapter, strategy, log, session) {
 
   const { capital, symbol, strategy_id: strategyId } = state;
   const buyPrice = state.buy_price ? parseFloat(state.buy_price) : null;
+  const buyTime = state.buy_time ? new Date(state.buy_time).getTime() : null;
   let phase = session.phase ?? state.phase;
   if (phase === 'BOUGHT' && !hasOpenPosition(state)) {
     return resetOrphanPosition(rowId, log, session, state, 'sem buy_qty/buy_price no Supabase');
@@ -410,7 +424,7 @@ async function tick(rowId, adapter, strategy, log, session) {
     }
 
     const exitResult = evaluateExit(config, cMap, buyPrice, {
-      peakPrice, targetLevel: activeSetup.targetLevel, touchLevel: activeSetup.touchLevel,
+      peakPrice, targetLevel: activeSetup.targetLevel, touchLevel: activeSetup.touchLevel, buyTime,
     });
     if (!exitResult.exit) return { phase };
 
@@ -515,7 +529,7 @@ async function startSymbol(row, color) {
   const run = async () => {
     if (ctx.stopped) return;
     try {
-      lastResult = await tick(ctx.rowId, adapter, ctx.strategy, log, session);
+      lastResult = await tick(ctx.rowId, ctx.symbol, adapter, ctx.strategy, log, session);
     } catch (err) {
       log(`❌ Tick error: ${err.message}`);
     }

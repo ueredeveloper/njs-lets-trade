@@ -9,6 +9,7 @@ const getCandlesForScreening = require('../utils/getCandlesForScreening');
 const candleUpdateQueue = require('../utils/candleUpdateQueue');
 const { closedCandlesOnly, intervalMs } = require('../bot/ma-cross/strategyEngine');
 const { buildVwapPositionFilterName } = require('../utils/filterNames');
+const cacheSettings = require('./cacheSettings');
 
 const CANDLES_LIMIT = 500;
 const BATCH_SIZE = 20;
@@ -69,6 +70,7 @@ function paramsMatchPreset(params, preset) {
 }
 
 function matchesCachedPreset(params) {
+  if (!cacheSettings.isEnabled('vwapPosition')) return null;
   const interval = params.interval;
   const session = params.session === 'weekly' ? 'weekly' : 'daily';
   const bandMultiplier = parseInt(params.bandMultiplier, 10);

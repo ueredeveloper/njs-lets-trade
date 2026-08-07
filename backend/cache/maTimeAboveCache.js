@@ -4,6 +4,7 @@ const fs   = require('node:fs/promises');
 const path = require('path');
 const getCandles = require('../binance/getCandles');
 const { computeMaTimeAbovePct } = require('../utils/maTimeAbovePct');
+const cacheSettings = require('./cacheSettings');
 
 const CANDLES_LIMIT = 3000;
 const BATCH_SIZE    = 15;
@@ -35,6 +36,7 @@ function cacheKey(symbol, interval, period) {
 }
 
 function needsRefresh(symbol, interval, period) {
+  if (!cacheSettings.isEnabled('maTimeAbove')) return true;
   const entry = store.get(cacheKey(symbol, interval, period));
   if (!entry?.computedAt) return true;
   const ttl = REFRESH_TTL_MS[interval] ?? 60 * 60_000;

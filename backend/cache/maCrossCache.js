@@ -6,6 +6,7 @@ const getCandlesForScreening = require('../utils/getCandlesForScreening');
 const candleUpdateQueue = require('../utils/candleUpdateQueue');
 const { evaluateMaCrossSignal, intervalMs } = require('../bot/ma-cross/strategyEngine');
 const { buildMaCrossFilterName } = require('../utils/filterNames');
+const cacheSettings = require('./cacheSettings');
 
 const CANDLES_LIMIT = 200;
 const BATCH_SIZE    = 20;
@@ -98,6 +99,7 @@ function paramsMatchPreset(params, preset) {
 }
 
 function matchesCachedPreset(params) {
+  if (!cacheSettings.isEnabled('maCross')) return null;
   for (const preset of CACHED_PRESETS) {
     if (paramsMatchPreset(params, preset)) return preset.key;
   }

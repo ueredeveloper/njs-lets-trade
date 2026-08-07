@@ -9,6 +9,7 @@ const getCandlesForScreening = require('../utils/getCandlesForScreening');
 const candleUpdateQueue = require('../utils/candleUpdateQueue');
 const { closedCandlesOnly, intervalMs } = require('../bot/ma-cross/strategyEngine');
 const { buildVwapBandWidthFilterName } = require('../utils/filterNames');
+const cacheSettings = require('./cacheSettings');
 
 const BATCH_SIZE = 20;
 const MIN_CANDLES = 10;
@@ -57,6 +58,7 @@ function paramsMatchPreset(params, preset) {
 }
 
 function matchesCachedPreset(params) {
+  if (!cacheSettings.isEnabled('vwapBandWidth')) return null;
   const interval = params.interval;
   const session = params.session === 'daily' ? 'daily' : 'weekly';
   const lookback = parseInt(params.lookback, 10);

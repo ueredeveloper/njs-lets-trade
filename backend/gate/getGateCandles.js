@@ -2,6 +2,7 @@ const writeCandles               = require('../utils/write-candles');
 const readCandles                = require('../utils/read-candles');
 const convertIntervalToMiliseconds = require('../utils/convert-interval-to-miliseconds');
 const { toGateSymbol }           = require('../utils/toGateSymbol');
+const { retentionLimitFor }      = require('../utils/candleRetentionLimits');
 
 const GATE_BASE      = 'https://api.gateio.ws/api/v4';
 const GATE_MAX_LIMIT = 1000;
@@ -88,8 +89,9 @@ async function getGateCandles(symbol, interval, limit) {
     }
   }
 
-  if (dbCandles.length > 3000) {
-    dbCandles = dbCandles.slice(-2999);
+  const retentionLimit = retentionLimitFor(interval);
+  if (dbCandles.length > retentionLimit) {
+    dbCandles = dbCandles.slice(-(retentionLimit - 1));
   }
 
   const currentTimestamp  = Date.now();

@@ -234,6 +234,7 @@ async function backtestSymbol(row) {
     } else if (phase === 'BOUGHT') {
       const exitResult = evaluateExit(config, cMap, position.buyPrice, {
         peakPrice: position.buyPrice, targetLevel: position.targetLevel, touchLevel: position.touchLevel,
+        buyTime: position.buyTime,
       });
       if (exitResult.exit) {
         const sellTime = exitResult.decisionTime ?? now;

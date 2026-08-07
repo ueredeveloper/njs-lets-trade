@@ -9,24 +9,45 @@
  * nunca tenha executado esses trades. Não lê rsi_multi_bot_trades.
  */
 
-const { fetchBinanceCandles, fetchGateCandles } = require('../bot/prices');
+const getCandles = require('../binance/getCandles');
+const { getGateCandles } = require('../gate/getGateCandles');
 const { toGateSymbol } = require('./toGateSymbol');
+const { retentionLimitFor } = require('./candleRetentionLimits');
 const { normalizeVwapBandsConfig, toEngineConfig } = require('../bot/vwap-bands/tradeConfigSchema');
 const {
-  evaluateEntrySignal, evaluatePullbackReady, evaluateExit,
+  evaluateEntrySignal, evaluatePullbackReady, evaluateExit, intervalMs, labelForLevel,
 } = require('../bot/vwap-bands/strategyEngine');
 
-const CANDLE_LIMIT = 1000; // máx por request nas duas exchanges
+const CANDLE_LIMIT = 1000; // limite pros intervalos de preço/poll/EMA — não precisam de sessão inteira
+const SESSION_HOURS = { daily: 24, weekly: 24 * 7 };
 
-async function fetchHistory(symbol, interval, source) {
+/** Candles necessários pra a VWAP cobrir a sessão (diária/semanal) de verdade — sem isso, um
+ *  intervalo fino (ex.: 1m) com sessão semanal só tinha ~16h de histórico real (1000 candles a
+ *  1m), fazendo a "VWAP semanal" ser na prática a média de só algumas horas, super sensível a
+ *  qualquer candle de pump/dump recente — bandas instáveis, sinais que uma leitura visual do
+ *  gráfico (com mais candles carregados) não reproduz. Ver conversa sobre a KMNOUSDT. Cap por
+ *  intervalo (retentionLimitFor) — pedir mais do que o cache em disco retém é inútil, o
+ *  próximo request de qualquer outra tela que passe pelo mesmo arquivo já trunca de volta. */
+function vwapCandleLimit(vwapIv, session) {
+  const cap = retentionLimitFor(vwapIv);
+  const hours = SESSION_HOURS[session] ?? SESSION_HOURS.daily;
+  const perSession = Math.ceil((hours * 3_600_000) / intervalMs(vwapIv));
+  return Math.min(cap, Math.max(CANDLE_LIMIT, perSession + 50));
+}
+
+/** Histórico via cache em disco (getCandles/getGateCandles — mesmo usado pelo gráfico e pelo
+ *  bot real), que faz merge incremental e pagina automaticamente quando o cache local ainda não
+ *  tem `limit` candles (ver fetchKlines) — bem mais rápido e barato de API do que buscar tudo do
+ *  zero a cada request, e cresce organicamente com o uso normal do app. */
+async function fetchHistory(symbol, interval, source, limit) {
   if (source === 'gate') {
-    return fetchGateCandles(toGateSymbol(symbol), CANDLE_LIMIT, interval);
+    return getGateCandles(toGateSymbol(symbol), interval, limit);
   }
   try {
-    const c = await fetchBinanceCandles(symbol, CANDLE_LIMIT, interval);
+    const c = await getCandles(symbol, interval, limit);
     if (c?.length) return c;
   } catch { /* tenta Gate abaixo */ }
-  return fetchGateCandles(toGateSymbol(symbol), CANDLE_LIMIT, interval);
+  return getGateCandles(toGateSymbol(symbol), interval, limit);
 }
 
 function iso(ms) {
@@ -58,9 +79,11 @@ async function analyseVwapBandsStats(symbol, options = {}) {
   const efIv = efEnabled ? (entry.emaFilter.interval ?? pollIv) : null;
 
   const ivSet = new Set([priceIv, vwapIv, pollIv, ...(efIv ? [efIv] : [])]);
+  const vwapLimit = vwapCandleLimit(vwapIv, entry.session);
   const fetched = {};
   await Promise.all([...ivSet].map(async (iv) => {
-    fetched[iv] = await fetchHistory(symbol, iv, source);
+    const limit = iv === vwapIv ? vwapLimit : CANDLE_LIMIT;
+    fetched[iv] = await fetchHistory(symbol, iv, source, limit);
   }));
 
   const rawPrice = fetched[priceIv];
@@ -116,6 +139,12 @@ async function analyseVwapBandsStats(symbol, options = {}) {
         const decisionTime = ready.decisionTime ?? now;
         position = {
           buyPrice: ready.close, buyTime: decisionTime,
+          // Candle que armou o sinal (reconquista da linha) — separado do candle de compra
+          // (retorno/pullback), pra dar pra marcar os dois pontos no gráfico e na tabela.
+          // signalLevel = a linha reconquistada de fato (lw1/vw/up1) — não confundir com
+          // targetLevel, que é o degrau seguinte (o alvo de venda).
+          signalTime: pending.signalOpenTime, signalPrice: pending.signalClose,
+          signalLevel: labelForLevel(pending.confirmLevel),
           touchLevel: pending.touchLevel, targetLevel: pending.targetLevel, entryDesc: pending.entryDesc,
         };
         phase = 'BOUGHT';
@@ -124,10 +153,14 @@ async function analyseVwapBandsStats(symbol, options = {}) {
     } else if (phase === 'BOUGHT') {
       const exitResult = evaluateExit(config, cMap, position.buyPrice, {
         peakPrice: position.buyPrice, targetLevel: position.targetLevel, touchLevel: position.touchLevel,
+        buyTime: position.buyTime,
       });
       if (exitResult.exit) {
         const sellTime = exitResult.decisionTime ?? now;
         occurrences.push({
+          signalDate: iso(position.signalTime),
+          signalPrice: position.signalPrice,
+          signalLevel: position.signalLevel,
           startDate: iso(position.buyTime),
           endDate: iso(sellTime),
           entryPrice: position.buyPrice,
@@ -147,6 +180,9 @@ async function analyseVwapBandsStats(symbol, options = {}) {
     const lastClose = parseFloat(rawPrice[rawPrice.length - 1].close);
     openOccurrence = {
       isOpen: true,
+      signalDate: iso(position.signalTime),
+      signalPrice: position.signalPrice,
+      signalLevel: position.signalLevel,
       startDate: iso(position.buyTime),
       endDate: null,
       entryPrice: position.buyPrice,

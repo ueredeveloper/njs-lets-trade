@@ -9,6 +9,7 @@
 const fs = require('node:fs/promises');
 const path = require('path');
 const supabase = require('../supabase/client');
+const cacheSettings = require('./cacheSettings');
 
 const CACHE_FILE = path.join(__dirname, '..', 'data', 'mc-stats-cache.json');
 const FAVORITES_TTL_MS = 5 * 60_000;
@@ -47,6 +48,10 @@ async function ensureFavoritesFresh() {
  * recalcula (sem cachear buscas exploratórias de símbolos aleatórios digitados no formulário).
  */
 async function getOrCompute(symbol, cacheKey, ttlMs, computeFn) {
+  if (!cacheSettings.isEnabled('mcFavoritesStats')) {
+    return { value: await computeFn(), cache: { hit: false, scope: 'disabled' } };
+  }
+
   await ensureFavoritesFresh();
 
   if (!favoritesSet.has(symbol)) {

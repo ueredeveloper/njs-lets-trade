@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { reloadCandles, getMaCrossScreenerConfig, saveMaCrossScreenerConfig } from '../services/api';
+import { reloadCandles, getMaCrossScreenerConfig, saveMaCrossScreenerConfig, getCacheSettings, saveCacheSettings } from '../services/api';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useI18n } from '../i18n';
 import { useCurrency } from '../contexts/CurrencyContext';
@@ -148,6 +148,33 @@ export default function SettingsSidebar({ open, onClose }) {
 
   function removeScreenerBlacklistSymbol(sym) {
     patchScreenerConfig({ blacklist: screenerConfig.blacklist.filter((s) => s !== sym) });
+  }
+
+  const [cacheSettingsState, setCacheSettingsState] = useState(null); // { ids, enabled }
+  const [cacheSettingsLoaded, setCacheSettingsLoaded] = useState(false);
+  const [cacheSettingsLoadError, setCacheSettingsLoadError] = useState('');
+  const [cacheToggleSaving, setCacheToggleSaving] = useState(null);
+
+  useEffect(() => {
+    if (!open || cacheSettingsLoaded) return;
+    getCacheSettings()
+      .then((cfg) => { setCacheSettingsState(cfg); setCacheSettingsLoaded(true); })
+      .catch((err) => { setCacheSettingsLoadError(err.message); setCacheSettingsLoaded(true); });
+  }, [open, cacheSettingsLoaded]);
+
+  async function toggleCache(id, value) {
+    const prevEnabled = cacheSettingsState.enabled;
+    const nextEnabled = { ...prevEnabled, [id]: value };
+    setCacheSettingsState((prev) => ({ ...prev, enabled: nextEnabled }));
+    setCacheToggleSaving(id);
+    try {
+      const saved = await saveCacheSettings(nextEnabled);
+      setCacheSettingsState(saved);
+    } catch {
+      setCacheSettingsState((prev) => ({ ...prev, enabled: prevEnabled }));
+    } finally {
+      setCacheToggleSaving(null);
+    }
   }
 
   const [minValueInput, setMinValueInput] = useState(String(activeTradesSettings.minHoldingUsdt));
@@ -790,6 +817,41 @@ export default function SettingsSidebar({ open, onClose }) {
                     <span className="text-[10px] text-red-400">{t('settings.screener_save_error')}</span>
                   )}
                 </div>
+              </div>
+            )}
+          </AccordionItem>
+
+          {/* Caches de filtros/estatísticas (liga/desliga por cache) */}
+          <AccordionItem id="caches" title={t('settings.cache_title')} hint={t('settings.cache_hint')}
+            openSection={openSection} setOpenSection={setOpenSection}>
+
+            {!cacheSettingsLoaded && !cacheSettingsLoadError && (
+              <p className="text-[10px] text-p5/40">{t('settings.loading')}</p>
+            )}
+            {cacheSettingsLoadError && (
+              <p className="text-[10px] text-red-400">{t('settings.screener_load_error')}: {cacheSettingsLoadError}</p>
+            )}
+
+            {cacheSettingsState && (
+              <div className="flex flex-col gap-2">
+                {(cacheSettingsState.ids ?? []).map((id) => {
+                  const isOn = cacheSettingsState.enabled?.[id] !== false;
+                  const saving = cacheToggleSaving === id;
+                  return (
+                    <label key={id} className="flex items-start gap-2.5 cursor-pointer group">
+                      <input
+                        type="checkbox"
+                        checked={isOn}
+                        disabled={saving}
+                        onChange={(e) => toggleCache(id, e.target.checked)}
+                        className="mt-0.5 shrink-0 accent-p4 disabled:opacity-50"
+                      />
+                      <span className="text-p5 text-xs leading-snug group-hover:text-white transition-colors">
+                        {t(`settings.cache.${id}`)}
+                      </span>
+                    </label>
+                  );
+                })}
               </div>
             )}
           </AccordionItem>

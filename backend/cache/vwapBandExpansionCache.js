@@ -2,52 +2,40 @@
 
 const fs = require('node:fs/promises');
 const path = require('path');
-const { BollingerBands } = require('technicalindicators');
+const { computeRollingVwapWithBands } = require('../utils/vwapSession');
 const getCandlesForScreening = require('../utils/getCandlesForScreening');
 const candleUpdateQueue = require('../utils/candleUpdateQueue');
 const { closedCandlesOnly, intervalMs } = require('../bot/ma-cross/strategyEngine');
-const { buildBollingerPositionFilterName } = require('../utils/filterNames');
+const { buildVwapBandExpansionFilterName } = require('../utils/filterNames');
 const cacheSettings = require('./cacheSettings');
 
-const CANDLES_LIMIT = 200;
 const BATCH_SIZE = 20;
-const CACHE_FILE = path.join(__dirname, '..', 'data', 'bb-position-cache.json');
+// Afastamento assimétrico: banda inferior -1σ até banda superior +2σ (mesmo cálculo do
+// fetchVwapBandExpansionFilter.js).
+const BAND_MULTIPLIERS = [1, 2];
+const MIN_GAP_PCT = 0.05;
+const WARMUP_BUFFER_CANDLES = 20;
+const CACHE_FILE = path.join(__dirname, '..', 'data', 'vwap-band-expansion-cache.json');
 
-/** Presets: posição na Bollinger Bands 4h — igual ao default do painel Analisar Indicadores. */
+/** Preset pré-aquecido: combinação padrão do painel de indicadores (candle 15m, VWAP de 4h,
+ *  squeeze nos últimos 10 candles). O `multiplier` fica fora do preset de propósito — cada
+ *  símbolo já guarda seu ratio calculado, e o multiplier é só o corte aplicado em cima do
+ *  snapshot completo na leitura (mesmo papel do `order` em vwapBandWidthCache). */
 const CACHED_PRESETS = [
-  {
-    key: '4h|20|2|bot|20',
-    interval: '4h',
-    period: 20,
-    stdDev: 2,
-    position: 'near_bottom',
-    proximityPct: 20,
-  },
-  {
-    key: '4h|20|2|top|20',
-    interval: '4h',
-    period: 20,
-    stdDev: 2,
-    position: 'near_top',
-    proximityPct: 20,
-  },
+  { key: '15m|4h|10', interval: '15m', vwapInterval: '4h', lookback: 10 },
 ];
 
 const REFRESH_TICK_MS = 5 * 60_000;
 
-/** Map<"presetKey|symbol", { matched, percentB, detail, computedAt }> */
+/** Map<"presetKey|symbol", { detail, computedAt }> — detail é null quando não há dados suficientes. */
 const symbolStore = new Map();
-/** Map<presetKey, snapshot> */
+/** Map<presetKey, snapshot> — snapshot.list sempre ordenado do maior ratio pro menor, sem filtrar por multiplier. */
 const snapshots = new Map();
 let refreshInFlight = null;
 let dirty = false;
 
 function presetTtlMs(preset) {
   return intervalMs(preset.interval);
-}
-
-function presetFilterName(preset) {
-  return buildBollingerPositionFilterName(preset.interval, preset.period, preset.stdDev, preset.position, preset.proximityPct);
 }
 
 function findPreset(key) {
@@ -60,22 +48,19 @@ function storeKey(presetKey, symbol) {
 
 function paramsMatchPreset(params, preset) {
   return params.interval === preset.interval
-    && params.period === preset.period
-    && params.stdDev === preset.stdDev
-    && params.position === preset.position
-    && params.proximityPct === preset.proximityPct;
+    && params.vwapInterval === preset.vwapInterval
+    && params.lookback === preset.lookback;
 }
 
 function matchesCachedPreset(params) {
-  if (!cacheSettings.isEnabled('bbPosition')) return null;
+  if (!cacheSettings.isEnabled('vwapBandExpansion')) return null;
+
   const interval = params.interval;
-  const period = parseInt(params.period, 10);
-  const stdDev = Math.round(parseFloat(params.stdDev) * 10) / 10;
-  const position = params.position === 'near_top' ? 'near_top' : 'near_bottom';
-  const proximityPct = Math.round(parseFloat(params.proximityPct) * 10) / 10;
+  const vwapInterval = params.vwapInterval;
+  const lookback = parseInt(params.lookback, 10);
 
   for (const preset of CACHED_PRESETS) {
-    if (paramsMatchPreset({ interval, period, stdDev, position, proximityPct }, preset)) {
+    if (paramsMatchPreset({ interval, vwapInterval, lookback }, preset)) {
       return preset.key;
     }
   }
@@ -91,46 +76,69 @@ function needsRefresh(presetKey, symbol) {
 }
 
 function evaluateSymbolWithCandles(symbol, preset, rawCandles, now = Date.now()) {
-  const minCandles = preset.period + 5;
   const key = storeKey(preset.key, symbol);
 
   try {
     const candles = closedCandlesOnly(rawCandles);
-    if (!candles?.length || candles.length < minCandles) {
-      symbolStore.set(key, { matched: false, percentB: null, detail: null, computedAt: now });
+    const windowMs = intervalMs(preset.vwapInterval);
+    const windowCandles = Math.ceil(windowMs / intervalMs(preset.interval));
+    const minCandles = Math.min(preset.lookback, 3);
+
+    if (!candles?.length || candles.length < windowCandles + minCandles) {
+      symbolStore.set(key, { detail: null, computedAt: now });
       dirty = true;
       return false;
     }
 
-    const closes = candles.map(c => parseFloat(c.close));
-    const bb = BollingerBands.calculate({ period: preset.period, values: closes, stdDev: preset.stdDev });
-    if (!bb.length) {
-      symbolStore.set(key, { matched: false, percentB: null, detail: null, computedAt: now });
+    const points = computeRollingVwapWithBands(candles, { windowMs, bandMultipliers: BAND_MULTIPLIERS });
+    if (!points.length) {
+      symbolStore.set(key, { detail: null, computedAt: now });
       dirty = true;
       return false;
     }
 
-    const lastBb = bb[bb.length - 1];
-    const close = closes[closes.length - 1];
-    const width = lastBb.upper - lastBb.lower;
-    if (!(width > 0)) {
-      symbolStore.set(key, { matched: false, percentB: null, detail: null, computedAt: now });
+    const gaps = [];
+    for (const p of points) {
+      const upper = p.upper2;
+      const lower = p.lower1;
+      if (upper == null || lower == null || !(p.value > 0)) continue;
+      gaps.push(((upper - lower) / p.value) * 100);
+    }
+    if (gaps.length < minCandles) {
+      symbolStore.set(key, { detail: null, computedAt: now });
       dirty = true;
       return false;
     }
 
-    const percentB = Math.round(Math.min(100, Math.max(0, ((close - lastBb.lower) / width) * 100)) * 100) / 100;
-    const matched = preset.position === 'near_bottom'
-      ? percentB <= preset.proximityPct
-      : percentB >= 100 - preset.proximityPct;
+    const window = gaps.slice(-Math.min(preset.lookback, gaps.length));
+    let minGap = Infinity;
+    let minIdx = 0;
+    window.forEach((g, i) => {
+      if (g < minGap) { minGap = g; minIdx = i; }
+    });
+    const lastGap = window[window.length - 1];
 
-    const detail = matched
-      ? { symbol, percentB, close, upper: lastBb.upper, lower: lastBb.lower, middle: lastBb.middle }
-      : null;
+    if (!(minGap >= MIN_GAP_PCT)) {
+      symbolStore.set(key, { detail: null, computedAt: now });
+      dirty = true;
+      return false;
+    }
 
-    symbolStore.set(key, { matched, percentB, detail, computedAt: now });
+    const ratio = lastGap / minGap;
+    const lastCandle = candles[candles.length - 1];
+
+    const detail = {
+      symbol,
+      ratio: Math.round(ratio * 100) / 100,
+      minGapPct: Math.round(minGap * 100) / 100,
+      lastGapPct: Math.round(lastGap * 100) / 100,
+      candlesSinceMin: window.length - 1 - minIdx,
+      close: parseFloat(lastCandle.close),
+    };
+
+    symbolStore.set(key, { detail, computedAt: now });
     dirty = true;
-    return matched;
+    return true;
   } catch {
     return false;
   }
@@ -152,25 +160,21 @@ function buildSnapshotForPreset(preset, now = Date.now()) {
 
   for (const [key, entry] of symbolStore) {
     if (!key.startsWith(prefix)) continue;
-    if (!entry?.matched || !entry.detail) continue;
+    if (!entry?.detail) continue;
     matched.push(entry.detail);
     const { symbol: sym, ...meta } = entry.detail;
     details[sym] = meta;
   }
 
-  matched.sort((a, b) => (
-    preset.position === 'near_bottom' ? a.percentB - b.percentB : b.percentB - a.percentB
-  ));
+  matched.sort((a, b) => b.ratio - a.ratio);
 
   const snap = {
-    name: presetFilterName(preset),
     list: matched.map(r => r.symbol),
     details,
     interval: preset.interval,
-    period: preset.period,
-    stdDev: preset.stdDev,
-    position: preset.position,
-    proximityPct: preset.proximityPct,
+    vwapInterval: preset.vwapInterval,
+    lookback: preset.lookback,
+    bandMultipliers: BAND_MULTIPLIERS,
     scannedAt: now,
   };
   snapshots.set(preset.key, snap);
@@ -205,8 +209,8 @@ async function refreshAll(symbols, { force = false } = {}) {
       : symbols.filter(s => needsRefresh(preset.key, s));
     staleTotal += stale.length;
 
-    const minCandles = preset.period + 5;
-    const limit = Math.max(CANDLES_LIMIT, minCandles + 10);
+    const windowCandles = Math.ceil(intervalMs(preset.vwapInterval) / intervalMs(preset.interval));
+    const limit = preset.lookback + windowCandles + WARMUP_BUFFER_CANDLES;
 
     for (let i = 0; i < stale.length; i += BATCH_SIZE) {
       const batch = stale.slice(i, i + BATCH_SIZE);
@@ -258,7 +262,12 @@ async function ensureFresh(symbols, { force = false } = {}) {
   return refreshInFlight;
 }
 
-async function getCachedResult(symbols, presetKey, { force = false } = {}) {
+function applyMultiplier(snap, multiplier) {
+  const list = snap.list.filter(sym => (snap.details[sym]?.ratio ?? 0) >= multiplier);
+  return { ...snap, list };
+}
+
+async function getCachedResult(symbols, presetKey, { force = false, multiplier = 3 } = {}) {
   const key = String(presetKey);
   const preset = findPreset(key);
   if (!preset) return null;
@@ -273,8 +282,8 @@ async function getCachedResult(symbols, presetKey, { force = false } = {}) {
     const rebuilt = snapshots.get(key);
     if (rebuilt) {
       return {
-        ...rebuilt,
-        name: presetFilterName(preset),
+        ...applyMultiplier(rebuilt, multiplier),
+        name: buildVwapBandExpansionFilterName(preset.interval, preset.vwapInterval, preset.lookback, multiplier),
         cache: { hit: true, ageMs: age, preset: key, rebuilt: true },
       };
     }
@@ -283,21 +292,24 @@ async function getCachedResult(symbols, presetKey, { force = false } = {}) {
   if (force || !hasSnapshot || age >= staleMs) {
     const stats = await ensureFresh(symbols, { force: false });
     const fresh = buildSnapshotForPreset(preset, Date.now());
-    return { ...fresh, cache: { ...stats, hit: false, ageMs: 0, preset: key } };
+    return {
+      ...applyMultiplier(fresh, multiplier),
+      name: buildVwapBandExpansionFilterName(preset.interval, preset.vwapInterval, preset.lookback, multiplier),
+      cache: { ...stats, hit: false, ageMs: 0, preset: key },
+    };
   }
 
   if (age >= presetTtlMs(preset)) {
-    ensureFresh(symbols).catch(err => console.error('[bbPositionCache] refresh:', err.message));
+    ensureFresh(symbols).catch(err => console.error('[vwapBandExpansionCache] refresh:', err.message));
   }
 
   return {
-    ...snap,
-    name: presetFilterName(preset),
+    ...applyMultiplier(snap, multiplier),
+    name: buildVwapBandExpansionFilterName(preset.interval, preset.vwapInterval, preset.lookback, multiplier),
     cache: {
       hit: true,
       ageMs: age,
       preset: key,
-      matched: snap.list.length,
       total: symbols.length,
     },
   };
@@ -327,10 +339,10 @@ async function loadFromDisk() {
     const counts = CACHED_PRESETS.map(p =>
       `${p.key}:${snapshots.get(p.key)?.list?.length ?? 0}`,
     ).join(' ');
-    console.log(`[bbPositionCache] disco → ${symbolStore.size} entradas (${counts})`);
+    console.log(`[vwapBandExpansionCache] disco → ${symbolStore.size} entradas (${counts})`);
     return symbolStore.size;
   } catch {
-    console.log('[bbPositionCache] sem cache em disco');
+    console.log('[vwapBandExpansionCache] sem cache em disco');
     return 0;
   }
 }
@@ -346,7 +358,7 @@ async function saveToDisk() {
     dirty = false;
     return true;
   } catch (err) {
-    console.error('[bbPositionCache] saveToDisk:', err.message);
+    console.error('[vwapBandExpansionCache] saveToDisk:', err.message);
     return false;
   }
 }

@@ -6,6 +6,7 @@ const getCandlesForScreening = require('../utils/getCandlesForScreening');
 const candleUpdateQueue = require('../utils/candleUpdateQueue');
 const { checkMaPosition, checkMaCrossNearProximity, intervalMs } = require('../bot/ma-cross/strategyEngine');
 const { buildMaCompareFilterName, parseCompareToken } = require('../utils/filterNames');
+const cacheSettings = require('./cacheSettings');
 
 const CANDLES_LIMIT = 200;
 const BATCH_SIZE = 20;
@@ -115,6 +116,7 @@ function paramsMatchPreset(params, preset) {
 }
 
 function matchesCachedPreset(params) {
+  if (!cacheSettings.isEnabled('maCompare')) return null;
   const interval = params.interval;
   const period1 = parseInt(params.period1, 10);
   const period2 = parseInt(params.period2, 10);

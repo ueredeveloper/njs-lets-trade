@@ -10,6 +10,7 @@
 
 const fs = require('node:fs/promises');
 const path = require('path');
+const cacheSettings = require('./cacheSettings');
 const getCandlesForScreening = require('../utils/getCandlesForScreening');
 const candleUpdateQueue = require('../utils/candleUpdateQueue');
 const { intervalMs } = require('../bot/ma-cross/strategyEngine');
@@ -60,6 +61,7 @@ function paramsMatch(a, b, engine) {
 }
 
 function matchesCachedPreset({ engine, interval, params }) {
+  if (!cacheSettings.isEnabled('indicatorGrowth')) return null;
   for (const preset of CACHED_PRESETS) {
     if (preset.engine === engine && preset.interval === interval && paramsMatch(preset.params, params, engine)) {
       return preset.key;

@@ -25,7 +25,12 @@ const LAST_CANDLE_PRESETS = [10, 20, 40, 80, 160, 320];
 /** Presets mais usados da janela de candles — os demais ficam escondidos atrás do botão "›"
  *  (mesmo padrão do picker de intervalos logo abaixo, ver COMMON_CHART_INTERVALS). */
 const COMMON_CANDLE_PRESETS = [20, 80, 160];
-const MAX_CANDLES = 1000;
+// 10500 (não 1000) — mesmo teto do cache em disco pra 1m (RETENTION_LIMIT_BY_INTERVAL em
+// getCandles.js): sem isso, a VWAP semanal desenhada no gráfico (fetchVwapPoints, limitada por
+// computeOverlayMaFetchLimit abaixo) ficava presa a só ~1000 candles de histórico, bem menos
+// que o motor de verdade usa (agora até ~10130 em 1m) — a linha/bandas no gráfico não batiam
+// com o nível que realmente armou o sinal (ver conversa sobre a ACEUSDT/KMNOUSDT).
+const MAX_CANDLES = 10500;
 const CANDLE_FETCH_STEPS = [500, 1000];
 const OVERLAY_MA_INTERVALS = ['1m', '5m', '15m', '30m', '1h', '2h', '4h', '8h', '12h', '1d'];
 const OVERLAY_MA_COLORS = ['#fb923c', '#c084fc', '#34d399', '#60a5fa', '#f472b6', '#facc15', '#a78bfa', '#4ade80'];
@@ -1726,10 +1731,15 @@ function buildHistoricalPositionSquares(candlesticks, markers, DL, LEFT_PAD) {
     if (!Number.isFinite(entryPrice) || entryPrice <= 0) return;
 
     const entryAbsIdx = nearestCandleIdx(candlesticks, m.entryTime);
-    const exitAbsIdx = nearestCandleIdx(candlesticks, m.time);
+    let exitAbsIdx = nearestCandleIdx(candlesticks, m.time);
     const entryDiffMs = Math.abs(Number(candlesticks[entryAbsIdx].openTime) - m.entryTime);
     const exitDiffMs = Math.abs(Number(candlesticks[exitAbsIdx].openTime) - m.time);
     if (entryDiffMs > maxDiffMs || exitDiffMs > maxDiffMs) return;
+    // Compra e venda podem cair no mesmo candle quando o gráfico é aberto num intervalo mais
+    // grosso que o da simulação (ex.: gráfico em 1h pra um ciclo VWAP que durou 40min) — empurra
+    // pro próximo candle em vez de descartar o quadrado inteiro (era o bug: comparar x2<=x1 sem
+    // essa folga fazia o quadrado sumir e só a seta de compra/venda ficava visível).
+    if (exitAbsIdx <= entryAbsIdx) exitAbsIdx = entryAbsIdx + 1;
     const entryLocal = entryAbsIdx - offset;
     const exitLocal = exitAbsIdx - offset;
     // Só desenha se a compra E a venda estiverem dentro da janela de candles
@@ -1738,15 +1748,14 @@ function buildHistoricalPositionSquares(candlesticks, markers, DL, LEFT_PAD) {
     if (entryLocal < 0 || exitLocal < 0 || entryLocal >= DL || exitLocal >= DL) return;
     const x1 = entryLocal + LEFT_PAD;
     const x2 = exitLocal + LEFT_PAD;
-    if (x2 <= x1) return;
 
-    // Resultado REAL do trade (compra→venda) — azul se deu lucro, amarelo se deu
-    // prejuízo (mesma paleta do histórico; verde/vermelho fica reservado pra posição
-    // aberta, que ainda não tem venda real pra mostrar).
+    // Resultado REAL do trade (compra→venda) — mesma paleta verde/vermelho do alvo/stop
+    // da posição aberta (buildBuyPositionSquares): o ciclo já fechou, então só um dos dois
+    // desfechos aconteceu de fato — verde se deu lucro, vermelho se deu prejuízo.
     if (!Number.isFinite(exitPrice)) return;
     const isProfit = exitPrice >= entryPrice;
-    const color = isProfit ? 'rgba(59,130,246,0.18)' : 'rgba(234,179,8,0.18)';
-    const labelColor = isProfit ? '#3b82f6' : '#eab308';
+    const color = isProfit ? 'rgba(34,197,94,0.18)' : 'rgba(239,68,68,0.18)';
+    const labelColor = isProfit ? '#22c55e' : '#ef4444';
     areas.push([
       {
         xAxis: x1, yAxis: entryPrice, itemStyle: { color },
@@ -3294,9 +3303,14 @@ export default function CandlestickChart() {
 
     setLoadingMoreCandles(true);
     try {
+      // selectedChart.interval (não currentInterval) — o pan que dispara isso (ver
+      // onNeedOlderCandles em CandlestickChartLW) pode rodar antes do efeito que sincroniza
+      // currentInterval com um selectedChart recém-trocado (ex.: clique numa ocorrência de
+      // Estatísticas com intervalo diferente do que estava selecionado antes), fazendo esse
+      // fetch usar o intervalo ANTIGO e sobrescrever os candles corretos que acabaram de chegar.
       const data = await fetchCandlesticksAndCloud(
         selectedChart.symbol,
-        currentInterval,
+        selectedChart.interval ?? currentInterval,
         selectedChart.source ?? null,
         nextLimit,
       );
@@ -3319,7 +3333,7 @@ export default function CandlestickChart() {
       setLoadingMoreCandles(true);
       try {
         const data = await fetchCandlesticksAndCloud(
-          selectedChart.symbol, currentInterval, selectedChart.source ?? null, n,
+          selectedChart.symbol, selectedChart.interval ?? currentInterval, selectedChart.source ?? null, n,
         );
         setSelectedChart(data);
         setCandleFetchLimit(n);

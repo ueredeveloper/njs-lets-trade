@@ -6,6 +6,7 @@ const getCandlesForScreening = require('../utils/getCandlesForScreening');
 const { getActiveUsdtPairs } = require('../binance/getActiveUsdtPairs');
 const { closedCandlesOnly, intervalMs } = require('../bot/ma-cross/strategyEngine');
 const { buildVwapBandExpansionFilterName } = require('../utils/filterNames');
+const vwapBandExpansionCache = require('../cache/vwapBandExpansionCache');
 
 const CONCURRENCY = 25;
 // Afastamento assimétrico: banda inferior -1σ até banda superior +2σ.
@@ -74,6 +75,15 @@ router.get('/vwap-band-expansion-filter', async (req, res) => {
 
     const name = buildVwapBandExpansionFilterName(interval, vwapInterval, lookback, multiplier);
     const { list: symbols } = await getActiveUsdtPairs();
+    const force = req.query.force === '1';
+
+    const presetKey = vwapBandExpansionCache.matchesCachedPreset({ interval, vwapInterval, lookback });
+    if (presetKey) {
+      const cached = await vwapBandExpansionCache.getCachedResult(symbols, presetKey, { force, multiplier });
+      if (cached) {
+        return res.json({ ...cached, name });
+      }
+    }
 
     const matched = await runWithConcurrency(symbols, async (symbol) => {
       try {

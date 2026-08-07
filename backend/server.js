@@ -24,7 +24,7 @@ const {
   fetchSMA, fetchRSI, fetchChopZone, fetchVWAP, fetch24HsVolume, fetchMarketCapFilter, fetchStablecoins, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter, fetchMaDistanceFilter, fetchIndicatorGrowthFilter,
   fetchRsiOversoldRecovery, fetchMaCrossStats, fetchVwapBandsStats, fetchBollingerBandRecovery, fetchBollingerBandPositionFilter, fetchVwapPositionFilter, fetchVwapBandWidthFilter, fetchVwapBandExpansionFilter, fetchBollingerBands, fetchSimpleMaCross, fetchReloadCandles,
   fetchGateCurrencies, fetchGatePrefetch, fetchBinanceTrades, fetchGateTrades,
-  fetchActiveTrades, fetchTradeFavorites, stgBotStatus, multitradeService, fetchMarketHighlights, whatsappMessagesService } = require('./services');
+  fetchActiveTrades, fetchTradeFavorites, stgBotStatus, multitradeService, fetchMarketHighlights, whatsappMessagesService, fetchCacheSettings } = require('./services');
 const supabaseService = require('./services/supabaseService');
 
 const app = express();
@@ -71,6 +71,7 @@ app.use('/services', fetchBollingerBandPositionFilter)
 app.use('/services', fetchVwapPositionFilter)
 app.use('/services', fetchVwapBandWidthFilter)
 app.use('/services', fetchVwapBandExpansionFilter)
+app.use('/services', fetchCacheSettings)
 app.use('/services', fetchBollingerBands)
 app.use('/services', fetchSimpleMaCross)
 app.use('/services', fetchReloadCandles)
@@ -123,6 +124,7 @@ if (serveBundle) {
 
 // RSI cache: carrega do disco, sobe o servidor, depois aquece em background
 const rsiCache = require('./cache/rsiCache');
+const cacheSettings = require('./cache/cacheSettings');
 const { getActiveUsdtPairs } = require('./binance/getActiveUsdtPairs');
 
 const RSI_INTERVALS = ['15m', '1h', '4h'];
@@ -140,6 +142,7 @@ function shutdownPanel(reason) {
 }
 
 async function refreshRsiCache() {
+  if (!cacheSettings.isEnabled('rsi')) return;
   const t0 = Date.now();
   const { list: symbols } = await getActiveUsdtPairs();
   if (!Array.isArray(symbols) || symbols.length === 0) return;
@@ -169,6 +172,8 @@ async function startServer() {
   await vwapPositionCache.loadFromDisk();
   const vwapBandWidthCache = require('./cache/vwapBandWidthCache');
   await vwapBandWidthCache.loadFromDisk();
+  const vwapBandExpansionCache = require('./cache/vwapBandExpansionCache');
+  await vwapBandExpansionCache.loadFromDisk();
   const maDistanceCache = require('./cache/maDistanceCache');
   await maDistanceCache.loadFromDisk();
   const indicatorGrowthCache = require('./cache/indicatorGrowthCache');
@@ -195,6 +200,7 @@ async function startServer() {
   refreshRsiCache().catch(e => console.error('[rsiCache] erro no warmup:', e.message));
 
   async function refreshMaCrossCache() {
+    if (!cacheSettings.isEnabled('maCross')) return;
     try {
       const { list: symbols } = await getActiveUsdtPairs();
       if (!Array.isArray(symbols) || symbols.length === 0) return;
@@ -217,6 +223,7 @@ async function startServer() {
   setInterval(refreshMaCrossCache, maCrossCache.REFRESH_TICK_MS);
 
   async function refreshMaCompareCache() {
+    if (!cacheSettings.isEnabled('maCompare')) return;
     try {
       const { list: symbols } = await getActiveUsdtPairs();
       if (!Array.isArray(symbols) || symbols.length === 0) return;
@@ -241,6 +248,7 @@ async function startServer() {
   setInterval(refreshMaCompareCache, maCompareCache.REFRESH_TICK_MS);
 
   async function refreshBbPositionCache() {
+    if (!cacheSettings.isEnabled('bbPosition')) return;
     try {
       const { list: symbols } = await getActiveUsdtPairs();
       if (!Array.isArray(symbols) || symbols.length === 0) return;
@@ -262,6 +270,7 @@ async function startServer() {
   setInterval(refreshBbPositionCache, bbPositionCache.REFRESH_TICK_MS);
 
   async function refreshVwapPositionCache() {
+    if (!cacheSettings.isEnabled('vwapPosition')) return;
     try {
       const { list: symbols } = await getActiveUsdtPairs();
       if (!Array.isArray(symbols) || symbols.length === 0) return;
@@ -283,6 +292,7 @@ async function startServer() {
   setInterval(refreshVwapPositionCache, vwapPositionCache.REFRESH_TICK_MS);
 
   async function refreshVwapBandWidthCache() {
+    if (!cacheSettings.isEnabled('vwapBandWidth')) return;
     try {
       const { list: symbols } = await getActiveUsdtPairs();
       if (!Array.isArray(symbols) || symbols.length === 0) return;
@@ -303,7 +313,30 @@ async function startServer() {
   refreshVwapBandWidthCache().catch(e => console.error('[vwapBandWidthCache] erro no warmup:', e.message));
   setInterval(refreshVwapBandWidthCache, vwapBandWidthCache.REFRESH_TICK_MS);
 
+  async function refreshVwapBandExpansionCache() {
+    if (!cacheSettings.isEnabled('vwapBandExpansion')) return;
+    try {
+      const { list: symbols } = await getActiveUsdtPairs();
+      if (!Array.isArray(symbols) || symbols.length === 0) return;
+      const stats = await vwapBandExpansionCache.refreshAll(symbols);
+      if (stats.computed > 0) {
+        const m = stats.matched ?? {};
+        console.log(
+          `[vwapBandExpansionCache] 15m|4h|10:${m['15m|4h|10'] ?? 0}`
+          + ` | disco:${stats.diskHits ?? 0} stale:${stats.diskStale ?? 0} api:${stats.apiFetches ?? 0}`
+          + ` | fila:${stats.queuePending ?? 0}`,
+        );
+      }
+    } catch (e) {
+      console.error('[vwapBandExpansionCache] erro no refresh:', e.message);
+    }
+  }
+
+  refreshVwapBandExpansionCache().catch(e => console.error('[vwapBandExpansionCache] erro no warmup:', e.message));
+  setInterval(refreshVwapBandExpansionCache, vwapBandExpansionCache.REFRESH_TICK_MS);
+
   async function refreshMaDistanceCache() {
+    if (!cacheSettings.isEnabled('maDistance')) return;
     try {
       const { list: symbols } = await getActiveUsdtPairs();
       if (!Array.isArray(symbols) || symbols.length === 0) return;
@@ -326,6 +359,7 @@ async function startServer() {
   setInterval(refreshMaDistanceCache, maDistanceCache.REFRESH_TICK_MS);
 
   async function refreshIndicatorGrowthCache() {
+    if (!cacheSettings.isEnabled('indicatorGrowth')) return;
     try {
       const { list: symbols } = await getActiveUsdtPairs();
       if (!Array.isArray(symbols) || symbols.length === 0) return;

@@ -53,10 +53,10 @@ const VWAP_BANDS_DEFAULTS = {
       /** Intervalo usado pra conferir o retorno candle a candle durante o PENDING — não
        *  precisa ser o mesmo de entry.interval. Esperar o candle principal (ex.: 1h)
        *  fechar pra conferir a reconquista deixa o preço passar batido pela banda dentro
-       *  da própria hora; um intervalo mais rápido (15m) confere a cada 15min em vez de só
+       *  da própria hora; um intervalo mais rápido (5m) confere a cada 5min em vez de só
        *  na hora cheia — mesmo padrão do ema50Proximity.pollInterval do ma-cross.
        *  waitCandles continua contado na unidade de entry.interval. */
-      pollInterval: '15m',
+      pollInterval: '5m',
     },
     /** Filtro extra de entrada: checado NO CANDLE DO SINAL (o candle de alta que fecha
      *  acima da linha — lower1/vwap/upper1/upper2, ver LADDER_SETUPS), não no retorno/

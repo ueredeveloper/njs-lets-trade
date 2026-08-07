@@ -3,6 +3,7 @@
 const { computeRollingVwapWithBands } = require('../../utils/vwapSession');
 const { buildMaTimeSeries } = require('../../utils/movingAverage');
 const { computeStopLossFloor } = require('../shared/stopLossFloor');
+const { retentionLimitFor } = require('../../utils/candleRetentionLimits');
 
 const INTERVAL_MS = {
   '1m': 60_000, '3m': 180_000, '5m': 300_000, '15m': 900_000, '30m': 1_800_000,
@@ -154,8 +155,12 @@ function getRequiredSpecs(config) {
 
   const sessionHours = SESSION_HOURS[entry.session] ?? 24;
   const vwapCandlesPerSession = Math.ceil((sessionHours * 3_600_000) / intervalMs(vwapIv));
-  // 3 sessões de histórico pra VWAP (reancora a cada sessão, não precisa de mais que isso).
-  const vwapLimit = vwapCandlesPerSession * 3 + 30;
+  // 3 sessões de histórico pra VWAP (reancora a cada sessão, não precisa de mais que isso) —
+  // capado no teto de retenção do cache em disco por intervalo (retentionLimitFor): pedir mais
+  // do que o cache consegue reter (ex.: 3 semanas em 1m = ~30 mil candles) faz o bot rebuscar
+  // do zero (paginando dezenas de requests) a cada tick, já que o próximo request de qualquer
+  // outra tela trunca o arquivo de volta pro teto antes do bot conseguir reaproveitar o cache.
+  const vwapLimit = Math.min(retentionLimitFor(vwapIv), vwapCandlesPerSession * 3 + 30);
   // Candles de preço: folga pra janela de pullback e pro lookback de reconquista.
   const priceLimit = entry.pullback.waitCandles + Math.round(Number(entry.reclaimLookbackCandles ?? 24)) + 30;
   // pollInterval precisa cobrir a janela de espera inteira (waitCandles, contado na
@@ -187,7 +192,7 @@ function getRequiredSpecs(config) {
   // soma essa folga ao limite já calculado pra vwapIv acima (add() fica com o maior).
   if (entry.vwapSlopeFilter?.enabled) {
     const vfLookback = Math.max(0, Math.round(Number(entry.vwapSlopeFilter.lookback ?? 0)));
-    add(vwapIv, vwapLimit + vfLookback);
+    add(vwapIv, Math.min(retentionLimitFor(vwapIv), vwapLimit + vfLookback));
   }
 
   return [...specs.entries()].map(([interval, limit]) => ({ interval, limit }));
@@ -492,7 +497,14 @@ function evaluatePullbackReady(config, cMap, pending) {
 
   return {
     ready: true,
-    close: lastClose,
+    // Preço reportado = o próprio nível tocado (target), não o fechamento do candle de
+    // checagem rápida — o gatilho é a MÍNIMA tocando o nível (reachedLevel acima), mas o
+    // candle pode fechar bem mais alto que isso (ex.: pavio forte de reversão), fazendo a
+    // simulação registrar uma entrada bem pior que o preço real da banda (bug visto na
+    // ACEUSDT: comprou ~2% acima da linha, reduzindo a margem até o stop-loss). Já era essa
+    // a intenção documentada abaixo ("sair no preço da própria linha") — só não estava
+    // implementada.
+    close: target,
     decisionTime: lastCandle.openTime,
     targetLevelValue: target,
     entryDesc: `retorno a ${labelForLevel(pending.confirmLevel)} VWAP(${vwapIv}) (candle toca o nível, checagem ${pollIv})`,
@@ -575,7 +587,16 @@ function evaluateExit(config, cMap, entryPrice, opts = {}) {
   const pollIv = entry.pullback.pollInterval ?? iv;
 
   const rawMain = cMap[iv] ?? [];
-  const mainClosed = closedCandlesOnly(rawMain);
+  const mainClosedAll = closedCandlesOnly(rawMain);
+  // A compra pode ter sido decidida num candle de pollInterval (ex.: 15m) no MEIO de um candle
+  // de entry.interval (ex.: 1h) ainda em formação — sem esse filtro, o último candle "fechado"
+  // de entry.interval seria o ANTERIOR à compra (ainda não fechou nenhum desde então), e um
+  // stop/alvo batido ali dispararia a venda com base em preço de ANTES da posição existir
+  // (decisionTime da venda ficando mais cedo que o da própria compra — bug visto na KMNOUSDT).
+  const buyTime = opts.buyTime != null ? Number(opts.buyTime) : null;
+  const mainClosed = buyTime != null
+    ? mainClosedAll.filter((c) => Number(c.openTime) >= buyTime)
+    : mainClosedAll;
   if (!mainClosed.length) return { exit: false };
   const last = mainClosed[mainClosed.length - 1];
   const lastClose = parseFloat(last.close);
@@ -597,7 +618,13 @@ function evaluateExit(config, cMap, entryPrice, opts = {}) {
       return {
         exit: true,
         reason: 'VWAP_TARGET_LEVEL',
-        close: lastClose,
+        // Preço reportado = o nível que de fato foi tocado (threshold), não o fechamento do
+        // candle inteiro (last.close) — o gatilho é a MÁXIMA do candle, que pode ter batido
+        // no alvo bem no início de um candle longo (ex.: 1h) e despencado depois; reportar
+        // lastClose fazia a simulação mostrar prejuízo num ciclo que na prática bateu o alvo
+        // (bug visto na KMNOUSDT — bracket real na corretora executa perto do próprio nível,
+        // não no fechamento do candle inteiro).
+        close: threshold,
         decisionTime: last.openTime,
         targetLevel, targetLevelValue: target,
         exitDesc: targetLabel,
@@ -612,9 +639,11 @@ function evaluateExit(config, cMap, entryPrice, opts = {}) {
       return {
         exit: true,
         reason: 'STOP_LOSS',
-        close: lastClose,
+        // Mesmo raciocínio do alvo acima: reporta o piso que foi de fato rompido (a mínima
+        // tocou ele), não o fechamento do candle inteiro.
+        close: floor,
         decisionTime: last.openTime,
-        dropPct: entryPrice ? ((lastClose - entryPrice) / entryPrice) * 100 : null,
+        dropPct: entryPrice ? ((floor - entryPrice) / entryPrice) * 100 : null,
         stopFloor: floor,
         stopLevel: opts.touchLevel,
         exitDesc: `Stop-loss em ${labelForLevel(opts.touchLevel)}`,
@@ -634,7 +663,6 @@ function evaluateExit(config, cMap, entryPrice, opts = {}) {
       const pollClosed = closedCandlesOnly(rawPoll).filter(c => Number(c.openTime) >= mainCloseTime);
       const fastLast = pollClosed[pollClosed.length - 1];
       if (fastLast) {
-        const fastClose = parseFloat(fastLast.close);
         if (nearTarget) {
           const threshold = target * (1 - tol);
           const high = parseFloat(fastLast.high ?? fastLast.close);
@@ -642,7 +670,10 @@ function evaluateExit(config, cMap, entryPrice, opts = {}) {
             return {
               exit: true,
               reason: 'VWAP_TARGET_LEVEL',
-              close: fastClose,
+              // Mesmo motivo do path lento acima: reporta o nível tocado, não o fechamento
+              // do candle de pollInterval (a máxima é que dispara, o fechamento pode já ter
+              // recuado bem abaixo dela mesmo num candle curto de checagem rápida).
+              close: threshold,
               decisionTime: fastLast.openTime,
               targetLevel, targetLevelValue: target,
               exitDesc: `${targetLabel} (checagem rápida — perto do alvo no ${iv})`,
@@ -656,9 +687,9 @@ function evaluateExit(config, cMap, entryPrice, opts = {}) {
             return {
               exit: true,
               reason: 'STOP_LOSS',
-              close: fastClose,
+              close: floor,
               decisionTime: fastLast.openTime,
-              dropPct: entryPrice ? ((fastClose - entryPrice) / entryPrice) * 100 : null,
+              dropPct: entryPrice ? ((floor - entryPrice) / entryPrice) * 100 : null,
               stopFloor: floor,
               stopLevel: opts.touchLevel,
               exitDesc: `Stop-loss em ${labelForLevel(opts.touchLevel)} (checagem rápida — perto do stop no ${iv})`,

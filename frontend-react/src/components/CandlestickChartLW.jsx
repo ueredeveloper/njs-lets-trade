@@ -94,41 +94,48 @@ function buildPositionRects(buyInfo, stopLossConfig, targetConfig, candlesticks)
   return rects;
 }
 
-/** Ancora um timestamp (ms) no openTime do candle mais próximo, em segundos. timeToCoordinate
- *  só resolve pra tempos que batem com um ponto real da série (candle ou whitespace — ver
- *  comentário no efeito de setData acima); o horário exato de execução de um trade quase nunca
- *  cai na hora cheia do candle, então sem esse snap o cálculo de coordenada sempre falha
- *  (retorna null) mesmo pra trades dentro da janela visível. Mesma técnica de buildPositionRects
- *  (posição aberta), só que reutilizável pra qualquer lista de candles. */
-function snapToNearestCandleTimeSec(candlesticks, timeMs) {
+/** Ancora um timestamp (ms) no candle mais próximo, retornando o ÍNDICE (não o horário) — usado
+ *  pra garantir largura mínima de 1 candle no quadrado histórico (ver buildHistoricalPositionRects):
+ *  quando o gráfico é aberto num intervalo mais grosso que o da simulação (ex.: gráfico em 1h
+ *  pra um ciclo VWAP que durou 40min), compra e venda podem cair no MESMO candle — comparar só
+ *  o horário faz o quadrado desaparecer (time2 <= time1); com o índice dá pra empurrar pro
+ *  próximo candle e manter o quadrado visível. */
+function snapToNearestCandleIndex(candlesticks, timeMs) {
   if (!candlesticks?.length || !Number.isFinite(timeMs)) return null;
   let bestIdx = 0, bestDiff = Infinity;
   for (let i = 0; i < candlesticks.length; i++) {
     const d = Math.abs(Number(candlesticks[i].openTime) - timeMs);
     if (d < bestDiff) { bestDiff = d; bestIdx = i; }
   }
-  return Math.floor(Number(candlesticks[bestIdx].openTime) / 1000);
+  return bestIdx;
 }
 
 /** Quadrado histórico compra→venda de um ciclo já fechado (ex.: clique numa linha de estudo
  *  na aba Estatísticas) — precisa de entryTime/entryPrice no marcador de venda, mesmo contrato
  *  usado por buildMarkersFromExchangeTrades/buildMarkersFromLiveTrades (multitradeChart.js).
- *  Azul = lucro, amarelo = prejuízo — mesma paleta do buildHistoricalPositionSquares do ECharts. */
+ *  Mesma paleta verde/vermelho do alvo/stop da posição aberta (buildPositionRects): o ciclo já
+ *  fechou, então só um dos dois desfechos aconteceu de fato — verde (alvo) se deu lucro,
+ *  vermelho (stop) se deu prejuízo — sem motivo pra manter uma paleta separada (azul/amarelo)
+ *  só porque a venda já é real. */
 function buildHistoricalPositionRects(multitradeMarkers, candlesticks) {
   const out = [];
   for (const m of multitradeMarkers ?? []) {
     if (m.side !== 'sell' || m.entryPrice == null || m.entryTime == null || m.time == null) continue;
     const entryPrice = Number(m.entryPrice);
     const exitPrice = Number(m.price);
-    const time1 = snapToNearestCandleTimeSec(candlesticks, Number(m.entryTime));
-    const time2 = snapToNearestCandleTimeSec(candlesticks, Number(m.time));
     if (!Number.isFinite(entryPrice) || entryPrice <= 0 || !Number.isFinite(exitPrice)) continue;
-    if (time1 == null || time2 == null || time2 <= time1) continue;
+    const idx1 = snapToNearestCandleIndex(candlesticks, Number(m.entryTime));
+    let idx2 = snapToNearestCandleIndex(candlesticks, Number(m.time));
+    if (idx1 == null || idx2 == null) continue;
+    if (idx2 <= idx1) idx2 = idx1 + 1;
+    if (idx2 >= candlesticks.length) continue;
+    const time1 = Math.floor(Number(candlesticks[idx1].openTime) / 1000);
+    const time2 = Math.floor(Number(candlesticks[idx2].openTime) / 1000);
     const isProfit = exitPrice >= entryPrice;
     out.push({
       time1, time2, price1: entryPrice, price2: exitPrice,
-      fillColor: isProfit ? 'rgba(59,130,246,0.18)' : 'rgba(234,179,8,0.18)',
-      labelColor: isProfit ? '#3b82f6' : '#eab308',
+      fillColor: isProfit ? 'rgba(34,197,94,0.18)' : 'rgba(239,68,68,0.18)',
+      labelColor: isProfit ? '#22c55e' : '#ef4444',
       label: formatPctFromBase(entryPrice, exitPrice),
       labelPos: 'above',
     });
@@ -316,7 +323,8 @@ function buildPphlMarkers(pphlConfig) {
 }
 
 /** Marcadores de trade (Multi-Trade/backtest/Estatísticas): compra (seta verde), sinal
- *  (triângulo pequeno) e venda (seta azul=lucro/amarela=prejuízo com % no texto). A posição
+ *  (triângulo pequeno) e venda (seta verde=lucro/vermelha=prejuízo com % no texto, mesma
+ *  paleta do quadrado — ver buildHistoricalPositionRects). A posição
  *  ATUALMENTE aberta (buyInfo) ainda ganha os quadrados de alvo/stop (buildPositionRects) e a
  *  linha de PnL (buildPnlLineData/buildPnlMarker) por cima — a seta de compra aqui cobre o caso
  *  de ciclos já fechados do histórico (ex.: clique numa linha de estudo em Estatísticas), que
@@ -330,7 +338,7 @@ function buildTradeMarkers(multitradeMarkers) {
     const time = Math.floor(Number(m.time) / 1000);
     if (!Number.isFinite(time)) continue;
     if (m.side === 'signal') {
-      out.push({ time, position: 'aboveBar', shape: 'arrowDown', color: '#f59e0b', size: 0.5 });
+      out.push({ time, position: 'aboveBar', shape: 'arrowDown', color: '#f59e0b', size: 0.5, text: m.label });
     } else if (m.side === 'buy' && !m.real) {
       const price = Number(m.price);
       if (!Number.isFinite(price)) continue;
@@ -343,7 +351,7 @@ function buildTradeMarkers(multitradeMarkers) {
       const pnlPct = Number.isFinite(m.pnlPct) ? m.pnlPct : (hasEntry ? ((exitPrice - entryPrice) / entryPrice) * 100 : null);
       const isProfit = pnlPct != null ? pnlPct >= 0 : null;
       const text = pnlPct != null ? `${isProfit ? '+' : ''}${pnlPct.toFixed(1)}%` : 'venda';
-      out.push({ time, position: 'atPriceTop', price: exitPrice, shape: 'arrowDown', color: isProfit == null ? '#94a3b8' : (isProfit ? '#3b82f6' : '#eab308'), size: 1, text });
+      out.push({ time, position: 'atPriceTop', price: exitPrice, shape: 'arrowDown', color: isProfit == null ? '#94a3b8' : (isProfit ? '#22c55e' : '#ef4444'), size: 1, text });
     } else if (m.side === 'possible_entry') {
       const price = Number(m.price);
       if (!Number.isFinite(price)) continue;
@@ -560,6 +568,13 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
   useEffect(() => {
     const chart = chartRef.current;
     if (skipFocusLastNOnceRef.current) { skipFocusLastNOnceRef.current = false; return; }
+    // Um zoomPeriod ativo (clique numa ocorrência de Estatísticas/Multi-Trade) sempre manda mais
+    // que focusLastN — sem essa guarda, uma atualização de candlesticks que chegasse DEPOIS do
+    // zoom (ex.: overlay/indicador assíncrono terminando de carregar) disparava esse efeito de
+    // novo sozinho (zoomPeriod não mudou, então o efeito dele abaixo não reroda) e jogava a janela
+    // visível de volta pros últimos N candles, sumindo com o sinal/compra mais antigo que o zoom
+    // tinha acabado de trazer pra tela.
+    if (zoomPeriod?.startDate && zoomPeriod?.endDate) return;
     if (!chart || !focusLastN || !candlesticks?.length) return;
     const idx = Math.max(0, candlesticks.length - focusLastN);
     const from = Math.floor(Number(candlesticks[idx].openTime) / 1000);
@@ -574,7 +589,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
     // esse cálculo e fazia a lib readequar a janela visível de volta pra "quantos candles cabem
     // a 10px cada", anulando o zoom (era por isso que os botões 20/50/100 pareciam não fazer nada).
     chart.timeScale().setVisibleRange({ from, to });
-  }, [focusLastN, candlesticks]);
+  }, [focusLastN, candlesticks, zoomPeriod]);
 
   // Zoom de período (clique numa ocorrência das abas Estatísticas/Multi-Trade) — roda depois
   // do efeito acima na mesma leva de commits, então sobrescreve o fitContent quando os dois
@@ -582,9 +597,9 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart || !zoomPeriod?.startDate || !zoomPeriod?.endDate) return;
-    // Respiro de 3 candles antes/depois do período estudado — sem isso a entrada/saída
-    // ficavam coladas na borda do gráfico (mesmo respiro de 3 candles do focusLastN acima).
-    const padSec = (INTERVAL_MS[interval] ?? 0) * 3 / 1000;
+    // Respiro de 10 candles antes/depois do período estudado (sinal→venda) — sem isso a
+    // entrada/saída ficavam coladas na borda do gráfico.
+    const padSec = (INTERVAL_MS[interval] ?? 0) * 10 / 1000;
     const from = Math.floor(new Date(zoomPeriod.startDate).getTime() / 1000) - padSec;
     const to = Math.floor(new Date(zoomPeriod.endDate).getTime() / 1000) + padSec;
     if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) return;

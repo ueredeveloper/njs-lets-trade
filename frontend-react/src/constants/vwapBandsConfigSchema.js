@@ -19,7 +19,7 @@ export const VWAP_BANDS_DEFAULTS = {
     minBandDistancePct: 3,
     reclaimLookbackCandles: 24,
     minReclaimMarginPct: 0.2,
-    pullback: { waitCandles: 5, tolerancePct: 1, pollInterval: '15m' },
+    pullback: { waitCandles: 5, tolerancePct: 1, pollInterval: '5m' },
     // Filtro extra: no instante do SINAL (candle de alta que fecha acima da linha), exige
     // close > EMA(period,interval) * (1 - tolerancePct%) e a própria EMA estável/subindo
     // (slope >= minSlopePct nos últimos slopeLookback candles).

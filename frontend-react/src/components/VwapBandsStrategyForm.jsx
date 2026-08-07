@@ -202,38 +202,53 @@ export default function VwapBandsStrategyForm({ form, patch, symbol }) {
       </div>
 
       <div className="rounded-md p-2 space-y-2" style={{ background: '#1a1d28', border: '1px solid #2a2d3a' }}>
-        <span className="text-[10px] font-bold uppercase tracking-wider text-p5/70">Stop-loss</span>
-        <div className="flex flex-wrap gap-2 items-center text-xs text-p5">
-          <Select value={form.stopLoss.mode} onChange={v => patchStopLoss('mode', v)} options={VWAP_BANDS_STOP_LOSS_MODES}
-            labelFor={m => (m === 'ladder' ? 'Estrutural (banda abaixo)' : 'Percentual/trailing')} />
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-p5/70">Stop-loss</span>
+          <label className="flex items-center gap-1 text-[9px] text-p5/50 cursor-pointer">
+            <input type="checkbox" checked={form.stopLoss.enabled !== false}
+              onChange={e => patchStopLoss('enabled', e.target.checked)} />
+            Ativo
+          </label>
         </div>
-        {form.stopLoss.mode === 'ladder' ? (
+        {form.stopLoss.enabled === false ? (
           <p className="text-[10px] text-p5/50 leading-relaxed">
-            Sem % fixo — o stop é a própria banda abaixo da que foi tocada pra armar a compra,
-            recalculada ao vivo pela VWAP: comprou no retorno à lw1 → stop na lw2; comprou na
-            vw → stop na lw1. Vende se a mínima do candle romper essa banda. Como bandas largas
-            podem ficar bem mais longe que o normal, o limite abaixo trava um teto: a banda
-            nunca serve de stop além dele — se a banda estiver mais longe, o OCO usa o limite
-            no lugar dela (ex.: banda 14% abaixo, limite 10% → OCO com stop a -10%).
+            Desligado — a posição só sai pelo alvo VWAP (escada), nunca por stop-loss.
           </p>
         ) : (
-          <p className="text-[10px] text-p5/50 leading-relaxed">
-            Vende se o preço cair {form.stopLoss.maxLossPct ?? 5}% abaixo do preço de compra
-            {form.stopLoss.trailing ? ' — ou do pico atingido depois da compra, já que o trailing está ligado' : ''}.
-          </p>
+          <>
+            <div className="flex flex-wrap gap-2 items-center text-xs text-p5">
+              <Select value={form.stopLoss.mode} onChange={v => patchStopLoss('mode', v)} options={VWAP_BANDS_STOP_LOSS_MODES}
+                labelFor={m => (m === 'ladder' ? 'Estrutural (banda abaixo)' : 'Percentual/trailing')} />
+            </div>
+            {form.stopLoss.mode === 'ladder' ? (
+              <p className="text-[10px] text-p5/50 leading-relaxed">
+                Sem % fixo — o stop é a própria banda abaixo da que foi tocada pra armar a compra,
+                recalculada ao vivo pela VWAP: comprou no retorno à lw1 → stop na lw2; comprou na
+                vw → stop na lw1. Vende se a mínima do candle romper essa banda. Como bandas largas
+                podem ficar bem mais longe que o normal, o limite abaixo trava um teto: a banda
+                nunca serve de stop além dele — se a banda estiver mais longe, o OCO usa o limite
+                no lugar dela (ex.: banda 14% abaixo, limite 10% → OCO com stop a -10%).
+              </p>
+            ) : (
+              <p className="text-[10px] text-p5/50 leading-relaxed">
+                Vende se o preço cair {form.stopLoss.maxLossPct ?? 5}% abaixo do preço de compra
+                {form.stopLoss.trailing ? ' — ou do pico atingido depois da compra, já que o trailing está ligado' : ''}.
+              </p>
+            )}
+            <div className="flex flex-wrap gap-2 items-center text-xs text-p5">
+              <span className="text-p5/50">{form.stopLoss.mode === 'ladder' ? 'Limite (teto)' : 'Perda máx.'}</span>
+              <NumInput value={form.stopLoss.maxLossPct} onChange={v => patchStopLoss('maxLossPct', v)} min={1} max={30} step={0.5} />
+              <span className="text-p5/40">%</span>
+              {form.stopLoss.mode === 'percent' && (
+                <label className="flex items-center gap-1 ml-2">
+                  <input type="checkbox" checked={form.stopLoss.trailing}
+                    onChange={e => patchStopLoss('trailing', e.target.checked)} />
+                  Trailing
+                </label>
+              )}
+            </div>
+          </>
         )}
-        <div className="flex flex-wrap gap-2 items-center text-xs text-p5">
-          <span className="text-p5/50">{form.stopLoss.mode === 'ladder' ? 'Limite (teto)' : 'Perda máx.'}</span>
-          <NumInput value={form.stopLoss.maxLossPct} onChange={v => patchStopLoss('maxLossPct', v)} min={1} max={30} step={0.5} />
-          <span className="text-p5/40">%</span>
-          {form.stopLoss.mode === 'percent' && (
-            <label className="flex items-center gap-1 ml-2">
-              <input type="checkbox" checked={form.stopLoss.trailing}
-                onChange={e => patchStopLoss('trailing', e.target.checked)} />
-              Trailing
-            </label>
-          )}
-        </div>
       </div>
 
       <p className="text-[9px] text-p5/35">

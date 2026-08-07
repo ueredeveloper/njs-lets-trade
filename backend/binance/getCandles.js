@@ -3,6 +3,7 @@ const writeCandles = require('../utils/write-candles');
 const readCandles = require('../utils/read-candles');
 const convertIntervalToMiliseconds = require('../utils/convert-interval-to-miliseconds');
 const { getGateCandles } = require('../gate/getGateCandles');
+const { retentionLimitFor } = require('../utils/candleRetentionLimits');
 
 // Símbolos deslistados na Binance — usar Gate.io automaticamente
 const GATE_ONLY_SYMBOLS = new Set(['SKYAIUSDT', 'SLXUSDT', 'UNIUSDT', 'ZESTUSDT', 'ONDOUSDT',
@@ -49,8 +50,9 @@ module.exports = getCandles = async function (symbol, interval, limit) {
     let miliseconds = await convertIntervalToMiliseconds(interval);
     const limitForUpdateDb = Math.floor(timeDifference / miliseconds);
 
-    if (dbCandles.length > 3000) {
-        dbCandles = dbCandles.slice(-2999);
+    const retentionLimit = retentionLimitFor(interval);
+    if (dbCandles.length > retentionLimit) {
+        dbCandles = dbCandles.slice(-(retentionLimit - 1));
     }
 
     if (limit > dbCandles.length) {

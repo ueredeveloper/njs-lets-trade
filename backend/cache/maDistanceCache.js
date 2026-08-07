@@ -7,6 +7,7 @@ const candleUpdateQueue = require('../utils/candleUpdateQueue');
 const { computeMa } = require('../utils/movingAverage');
 const { intervalMs } = require('../bot/ma-cross/strategyEngine');
 const { buildMaDistanceFilterName, parseCompareToken } = require('../utils/filterNames');
+const cacheSettings = require('./cacheSettings');
 
 const CANDLES_LIMIT = 200;
 const BATCH_SIZE = 20;
@@ -58,6 +59,7 @@ function normalizeCompare(compare) {
 }
 
 function matchesCachedPreset(params) {
+  if (!cacheSettings.isEnabled('maDistance')) return null;
   const interval = params.interval;
   const period = parseInt(params.period, 10);
   const compare = normalizeCompare(params.compare);

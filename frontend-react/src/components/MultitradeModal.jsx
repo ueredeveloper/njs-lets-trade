@@ -8,16 +8,19 @@ import {
 } from '../constants/tradeConfigSchema';
 import {
   STRATEGY_IDS, STRATEGY_LABELS, STRATEGY_COLORS,
-  buildDualStrategyState, isSwingStrategy, isMaCrossStrategy, isVwapBandsStrategy, resolveEntryStrategyId,
+  buildDualStrategyState, isSwingStrategy, isMaCrossStrategy, isVwapBandsStrategy,
+  isBollingerBandsStrategy, resolveEntryStrategyId,
 } from '../constants/strategyPresets';
 import { swingFormToPayload } from '../constants/swingConfigSchema';
 import { maCrossFormToPayload } from '../constants/maCrossConfigSchema';
 import { vwapBandsFormToPayload } from '../constants/vwapBandsConfigSchema';
+import { bollingerBandsFormToPayload } from '../constants/bollingerBandsConfigSchema';
 import { MT_HELP } from '../constants/multitradeHelp';
 import { FieldLabel, FieldHint } from './MultitradeFieldHint';
 import SwingStrategyForm from './SwingStrategyForm';
 import MaCrossStrategyForm from './MaCrossStrategyForm';
 import VwapBandsStrategyForm from './VwapBandsStrategyForm';
+import BollingerBandsStrategyForm from './BollingerBandsStrategyForm';
 
 const MT_COLOR      = '#8b5cf6';
 const GATE_COLOR    = '#0068ff';
@@ -207,8 +210,9 @@ export default function MultitradeModal({
   const isSwing = isSwingStrategy(activeStrategy);
   const isMaCross = isMaCrossStrategy(activeStrategy);
   const isVwapBands = isVwapBandsStrategy(activeStrategy);
-  const rule1On = !isSwing && !isMaCross && !isVwapBands && !!form.rule1 && form.rule1.enabled !== false;
-  const rule2On = !isSwing && !isMaCross && !isVwapBands && !!form.rule2 && form.rule2.enabled === true;
+  const isBollingerBands = isBollingerBandsStrategy(activeStrategy);
+  const rule1On = !isSwing && !isMaCross && !isVwapBands && !isBollingerBands && !!form.rule1 && form.rule1.enabled !== false;
+  const rule2On = !isSwing && !isMaCross && !isVwapBands && !isBollingerBands && !!form.rule2 && form.rule2.enabled === true;
 
   const entrySummary = rule1On && form.rule1?.entryRsi
     ? `RSI(${form.rule1.entryRsi.interval}) ${form.rule1.entryRsi.operator ?? '<'} ${form.rule1.entryRsi.value}`
@@ -350,6 +354,11 @@ export default function MultitradeModal({
     }
     if (isVwapBandsStrategy(sid)) {
       const payload = vwapBandsFormToPayload(st.form, meta);
+      payload.volume = { ...st.form.volume, allowLowVolume: volAllow };
+      return payload;
+    }
+    if (isBollingerBandsStrategy(sid)) {
+      const payload = bollingerBandsFormToPayload(st.form, meta);
       payload.volume = { ...st.form.volume, allowLowVolume: volAllow };
       return payload;
     }
@@ -668,9 +677,11 @@ export default function MultitradeModal({
     ? `node backend/bot/swing/swing-bot.js --symbol ${symbol.trim().toUpperCase()}`
     : isMaCross
       ? `node backend/bot/ma-cross/ma-cross-bot.js --symbol ${symbol.trim().toUpperCase()}`
-      : getBacktestCmd(payload);
+      : isBollingerBands
+        ? `node backend/bot/bollinger-bands/bollinger-bands-bot.js --symbol ${symbol.trim().toUpperCase()}`
+        : getBacktestCmd(payload);
   const adaptCmd = getAdaptiveTestCmd(payload);
-  const showAdaptive = !isSwing && !isMaCross && !isVwapBands && form.rule1?.maFiltersEnabled !== false && hasAdaptiveMa(form.rule1?.maConditions);
+  const showAdaptive = !isSwing && !isMaCross && !isVwapBands && !isBollingerBands && form.rule1?.maFiltersEnabled !== false && hasAdaptiveMa(form.rule1?.maConditions);
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto py-4"
@@ -786,7 +797,7 @@ export default function MultitradeModal({
           )}
 
           <div className={`flex gap-1 p-1 rounded-lg ${strategyEnabled ? '' : 'opacity-40 pointer-events-none'}`} style={{ background: '#1a1d28', border: '1px solid #2a2d3a' }}>
-            {!isSwing && !isMaCross && !isVwapBands && [
+            {!isSwing && !isMaCross && !isVwapBands && !isBollingerBands && [
               { id: 'rule1', label: 'Regra 1 — RSI', color: ENTRY_COLOR, hint: MT_HELP.rule1.group },
               { id: 'rule2', label: rule2TabLabel, color: MT_COLOR, hint: MT_HELP.rule2.group },
             ].map(tab => (
@@ -830,7 +841,11 @@ export default function MultitradeModal({
             <VwapBandsStrategyForm form={form} patch={patch} symbol={symbol} />
           )}
 
-          {!isSwing && !isMaCross && !isVwapBands && activeTab === 'rule1' && strategyEnabled && (
+          {isBollingerBands && strategyEnabled && (
+            <BollingerBandsStrategyForm form={form} patch={patch} symbol={symbol} />
+          )}
+
+          {!isSwing && !isMaCross && !isVwapBands && !isBollingerBands && activeTab === 'rule1' && strategyEnabled && (
           <RuleGroup
             title="Regra 1 — Entrada RSI e saída"
             subtitle={MT_HELP.rule1.group}
@@ -1236,7 +1251,7 @@ export default function MultitradeModal({
           </RuleGroup>
           )}
 
-          {!isSwing && !isMaCross && !isVwapBands && activeTab === 'rule2' && strategyEnabled && (
+          {!isSwing && !isMaCross && !isVwapBands && !isBollingerBands && activeTab === 'rule2' && strategyEnabled && (
           <RuleGroup
             title="Regra 2 — Entrada MA"
             subtitle={MT_HELP.rule2.group}
@@ -1442,7 +1457,7 @@ export default function MultitradeModal({
                     </select>
                   </div>
                 </div>
-                {!isMaCross && !isSwing && !isVwapBands && (
+                {!isMaCross && !isSwing && !isVwapBands && !isBollingerBands && (
                 <div>
                   <FieldLabel label="RSI saída ≥ valor → polling rápido" hint={MT_HELP.shared.pollFastThreshold}
                     className="block text-[10px] text-p5/40 mb-1" />

@@ -3,6 +3,7 @@ const { calculateMa } = require('../utils/movingAverage');
 const getCandles = require('../binance/getCandles');
 const fs   = require('node:fs/promises');
 const path = require('path');
+const cacheSettings = require('./cacheSettings');
 
 const CANDLES_LIMIT = 200;
 const BATCH_SIZE    = 10;
@@ -68,6 +69,7 @@ async function compute(symbol, interval) {
 }
 
 function get(symbol, interval) {
+  if (!cacheSettings.isEnabled('rsi')) return null;
   return store.get(cacheKey(symbol, interval)) ?? null;
 }
 

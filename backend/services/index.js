@@ -40,6 +40,7 @@ const stgBotStatus             = require('./stgBotStatus')
 const multitradeService        = require('./multitradeService')
 const fetchMarketHighlights    = require('./fetchMarketHighlights')
 const whatsappMessagesService  = require('./whatsapp-messages/whatsappMessagesService')
+const fetchCacheSettings       = require('./fetchCacheSettings')
 
 // remove cíclical error
 module.exports = {
@@ -47,6 +48,6 @@ module.exports = {
     fetchSMA, fetchRSI, fetchChopZone, fetchVWAP, fetch24HsVolume, fetchMarketCapFilter, fetchStablecoins,
     fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter, fetchMaDistanceFilter, fetchIndicatorGrowthFilter, fetchRsiOversoldRecovery, fetchMaCrossStats, fetchVwapBandsStats, fetchBollingerBandRecovery, fetchBollingerBandPositionFilter, fetchVwapPositionFilter, fetchVwapBandWidthFilter, fetchVwapBandExpansionFilter, fetchBollingerBands, fetchSimpleMaCross, fetchReloadCandles,
     fetchGateCurrencies, fetchGatePrefetch, fetchBinanceTrades, fetchGateTrades, fetchActiveTrades,
-    fetchTradeFavorites, stgBotStatus, multitradeService, fetchMarketHighlights, whatsappMessagesService }
+    fetchTradeFavorites, stgBotStatus, multitradeService, fetchMarketHighlights, whatsappMessagesService, fetchCacheSettings }
 
 

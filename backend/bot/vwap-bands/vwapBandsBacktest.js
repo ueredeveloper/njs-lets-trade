@@ -152,6 +152,7 @@ async function runVwapBandsBacktest({ symbol, config, exchange = 'binance', capi
     } else if (phase === 'BOUGHT') {
       const exitResult = evaluateExit(config, cMap, position.buyPrice, {
         peakPrice: position.buyPrice, targetLevel: position.targetLevel, touchLevel: position.touchLevel,
+        buyTime: position.buyTime,
       });
       if (exitResult.exit) {
         const pnlPct = ((exitResult.close - position.buyPrice) / position.buyPrice) * 100;
