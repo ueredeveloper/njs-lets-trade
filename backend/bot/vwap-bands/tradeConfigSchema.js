@@ -92,12 +92,12 @@ const VWAP_BANDS_DEFAULTS = {
      *  abaixo de minSlopePct. Existe pra pegar casos como ALLO/PYR, onde a própria VWAP e
      *  as bandas estão em queda acentuada — o emaFilter (EMA200 de PREÇO no 15m) pode não
      *  refletir isso a tempo, já que é uma série diferente da VWAP. Ligado por padrão desde
-     *  que validado em backtest (analyze-vwap-slope-filter.js): bloqueia trades ruins sem
-     *  perder os bons, com lookback=6/minSlopePct=-3 nas favoritas vwap-bands/MC. */
+     *  que validado em backtest (analyze-vwap-slope-filter.js) com lookback=6/minSlopePct=-3
+     *  nas favoritas vwap-bands/MC; padrão apertado pra -2 depois (menos tolerância a queda). */
     vwapSlopeFilter: {
       enabled: true,
       lookback: 6,
-      minSlopePct: -3,
+      minSlopePct: -2,
     },
   },
 

@@ -27,7 +27,7 @@ export const VWAP_BANDS_DEFAULTS = {
     // Filtro extra: inclinação da própria linha da VWAP (não da EMA de preço) — pega
     // símbolos onde a VWAP e as bandas em si estão em queda acentuada. Ligado por padrão
     // (validado em backtest — analyze-vwap-slope-filter.js).
-    vwapSlopeFilter: { enabled: true, lookback: 6, minSlopePct: -3 },
+    vwapSlopeFilter: { enabled: true, lookback: 6, minSlopePct: -2 },
   },
   exit: {
     tolerancePct: 0,

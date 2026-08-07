@@ -162,7 +162,7 @@ export default function VwapBandsStrategyForm({ form, patch, symbol }) {
               </div>
               <div className="flex items-center gap-1">
                 <span className="text-p5/50">Inclinação mín.</span>
-                <NumInput value={form.entry.vwapSlopeFilter?.minSlopePct ?? -3}
+                <NumInput value={form.entry.vwapSlopeFilter?.minSlopePct ?? -2}
                   onChange={v => patchVwapSlopeFilter('minSlopePct', v)} min={-20} max={5} step={0.5} />
                 <span className="text-p5/40">%</span>
               </div>
