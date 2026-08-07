@@ -176,15 +176,11 @@ function RsiStats() {
     }
   }
 
-  // Sincroniza símbolo com o gráfico e relança a busca — intervalo fica fixo em 4h por padrão,
-  // ou segue o favorito MA-Cross da moeda quando o switch "Moeda MC" está ligado.
+  // Sincroniza só o campo símbolo com o gráfico — não busca automaticamente.
+  // Cálculo só roda quando o usuário clica em "Buscar".
   useEffect(() => {
     if (!selectedChart?.symbol) return;
-    const sym = selectedChart.symbol;
-    const src = selectedChart.source ?? null;
-    setSymbol(sym);
-    handleSearch(sym, false, undefined, src);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    setSymbol(selectedChart.symbol);
   }, [selectedChart?.symbol]);
 
   function handleToggleMc(next) {
@@ -491,13 +487,11 @@ function MaCrossStats() {
     }
   }
 
+  // Sincroniza só o campo símbolo com o gráfico — não busca automaticamente.
+  // Cálculo só roda quando o usuário clica em "Buscar".
   useEffect(() => {
     if (!selectedChart?.symbol) return;
-    const sym = selectedChart.symbol;
-    const src = selectedChart.source ?? null;
-    setSymbol(sym);
-    handleSearch(sym, false, undefined, undefined, src);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    setSymbol(selectedChart.symbol);
   }, [selectedChart?.symbol]);
 
   function handleToggleMc(next) {
@@ -754,15 +748,11 @@ function BollingerBandsStats() {
     }
   }
 
-  // Sincroniza símbolo com o gráfico e relança a busca — intervalo fica fixo em 4h por padrão,
-  // ou segue o favorito MA-Cross da moeda quando o switch "Moeda MC" está ligado.
+  // Sincroniza só o campo símbolo com o gráfico — não busca automaticamente.
+  // Cálculo só roda quando o usuário clica em "Buscar".
   useEffect(() => {
     if (!selectedChart?.symbol) return;
-    const sym = selectedChart.symbol;
-    const src = selectedChart.source ?? null;
-    setSymbol(sym);
-    handleSearch(sym, false, undefined, src);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    setSymbol(selectedChart.symbol);
   }, [selectedChart?.symbol]);
 
   function handleToggleMc(next) {
@@ -1027,14 +1017,11 @@ function VwapBandsStats() {
     }
   }
 
-  // Sincroniza símbolo com o gráfico e relança a busca — mesmo padrão das outras abas.
+  // Sincroniza só o campo símbolo com o gráfico — não busca automaticamente.
+  // Cálculo só roda quando o usuário clica em "Buscar".
   useEffect(() => {
     if (!selectedChart?.symbol) return;
-    const sym = selectedChart.symbol;
-    const src = selectedChart.source ?? null;
-    setSymbol(sym);
-    handleSearch(sym, src);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    setSymbol(selectedChart.symbol);
   }, [selectedChart?.symbol]);
 
   async function openOnChart(o) {
