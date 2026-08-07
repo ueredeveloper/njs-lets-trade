@@ -611,6 +611,40 @@ router.get('/multitrade-favorites', getUserId, async (req, res) => {
   res.json(entries);
 });
 
+// GET /services/sb/bot-state?symbol= — estado ao vivo do bot (rsi_multi_bot_state) pra
+// QUALQUER símbolo que o bot esteja operando, mesmo sem favorito ativo em
+// multitrade_favorites. Precisa existir separado do /multitrade-favorites acima porque um
+// símbolo pode ter sido desfavoritado no meio de um ciclo PENDING/BOUGHT — o DELETE
+// /multitrade-favorites/:id só apaga o rsi_multi_bot_state quando phase é WATCHING (linha
+// ~830), então o bot segue rodando o ciclo até fechar mesmo sem favorito. Sem isso, o
+// gráfico de uma "moeda comum" (fora da lista de favoritos, ver CurrencyTable.jsx) não tinha
+// como saber a fase/sinal ao vivo pra desenhar a seta de PENDING/compra (ver conversa com o
+// usuário sobre EPICUSDT/LAUSDT — vwap-bands, PENDING, sem linha em multitrade_favorites).
+// Sem filtro de user_id: rsi_multi_bot_state não tem essa coluna (é estado do bot, não de
+// favorito por usuário) — mesmo padrão de /multitrade-trades e /multitrade-timeline abaixo.
+router.get('/bot-state', getUserId, async (req, res) => {
+  const symbol = req.query.symbol?.toUpperCase();
+  if (!symbol) return res.status(400).json({ error: 'symbol obrigatório' });
+
+  const { data, error } = await supabase
+    .from('rsi_multi_bot_state')
+    .select('symbol, strategy_id, phase, buy_time, buy_price, buy_qty, entry_signal_time, entry_signal_price')
+    .eq('symbol', symbol);
+  if (error) return sbError(res, error, 'GET bot-state');
+
+  const entries = (data ?? []).map(st => ({
+    symbol: st.symbol,
+    strategyId: normStrategyId(st.strategy_id),
+    phase: st.phase ?? 'WATCHING',
+    buyTime: st.buy_time ?? null,
+    buyPrice: st.buy_price != null ? Number(st.buy_price) : null,
+    buyQty: st.buy_qty != null ? Number(st.buy_qty) : null,
+    entrySignalTime: st.entry_signal_time ?? null,
+    entrySignalPrice: st.entry_signal_price != null ? Number(st.entry_signal_price) : null,
+  }));
+  res.json(entries);
+});
+
 // POST /services/sb/multitrade-favorites
 router.post('/multitrade-favorites', getUserId, async (req, res) => {
   const row = bodyToMultitradeRow(req.userId, req.body);

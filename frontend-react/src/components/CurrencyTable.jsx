@@ -4,7 +4,7 @@ import { useCurrency } from '../contexts/CurrencyContext';
 import SearchInput from './SearchInput';
 import {
   fetchCandlesticksAndCloud, fetchGateCurrencies, gatePreloadCandles,
-  fetchMaCrossoverFilter, fetchMultitradeTrades,
+  fetchMaCrossoverFilter, fetchMultitradeTrades, fetchBotState,
   fetchGateTrades, fetchBinanceTrades,
 } from '../services/api';
 import { parseMaCrossFilterName, parseMaCompareFilterName, parseMaDistanceFilterName, parseIndicatorGrowthFilterName, parseVwapBandWidthFilterName, parseFilterChartInterval } from '../utils/filterNames';
@@ -820,14 +820,24 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
         // Moeda comum (fora de favoritos MC/VWAP e fora da aba TX): busca em paralelo o
         // histórico real de compras já executadas pelo bot (rsi_multi_bot_trades, qualquer
         // estratégia) pra marcar no gráfico — mesma fonte usada por loadMultitradeSymbolChart
-        // pras favoritas, só que aqui sem strategyId (pode ter vindo de qualquer bot).
-        const [data, botTrades] = await Promise.all([
+        // pras favoritas, só que aqui sem strategyId (pode ter vindo de qualquer bot) — e o
+        // estado ao vivo (rsi_multi_bot_state via /bot-state), que existe mesmo sem favorito
+        // ativo (ex.: símbolo desfavoritado no meio de um ciclo PENDING/BOUGHT — ver comentário
+        // na rota /bot-state) pra desenhar a seta de sinal enquanto ainda não virou trade
+        // fechado (sem isso, PENDING só ganhava a seta depois de comprar e a compra fechar).
+        const [data, botTrades, liveStates] = await Promise.all([
           fetchCandlesticksAndCloud(item.symbol, effectiveInterval, effectiveSource),
           fetchMultitradeTrades({ symbol: item.symbol, limit: 30 }).catch(() => []),
+          fetchBotState(item.symbol).catch(() => []),
         ]);
         setSelectedChart({ ...data, interval: effectiveInterval, symbol: item.symbol, source: effectiveSource ?? null });
         if (effectiveSource === 'gate') gatePreloadCandles(item.symbol);
-        if (botTrades?.length) setChartTradeMarkers(buildMarkersFromLiveTrades(botTrades, null));
+        // Entre as estratégias que possam estar rodando o mesmo símbolo, prioriza a que está
+        // com ciclo ativo (PENDING/BOUGHT) — WATCHING não tem sinal/compra pra marcar.
+        const liveEntry = (liveStates ?? []).find(s => s.phase === 'PENDING' || s.phase === 'BOUGHT') ?? null;
+        if (botTrades?.length || liveEntry) {
+          setChartTradeMarkers(buildMarkersFromLiveTrades(botTrades, liveEntry));
+        }
       }
     } catch (err) {
       console.warn(`[CurrencyTable] candles indisponíveis para ${item.symbol}:`, err.message);

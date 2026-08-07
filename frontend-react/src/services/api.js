@@ -967,6 +967,16 @@ export async function fetchMultitradeFavorites() {
   return res.json();
 }
 
+/** Estado ao vivo do bot (rsi_multi_bot_state) pra um símbolo, mesmo sem favorito ativo em
+ *  multitrade_favorites — cobre o caso de símbolo desfavoritado no meio de um ciclo
+ *  PENDING/BOUGHT (ver comentário na rota /bot-state em supabaseService.js). Devolve um
+ *  array (pode ter mais de uma estratégia rodando o mesmo símbolo). */
+export async function fetchBotState(symbol) {
+  const res = await fetch(`/services/sb/bot-state?symbol=${encodeURIComponent(symbol)}`);
+  if (!res.ok) throw new Error(`bot-state falhou: HTTP ${res.status}`);
+  return res.json();
+}
+
 export async function addMultitradeFavorite(data) {
   const res = await fetch('/services/sb/multitrade-favorites', {
     method: 'POST',
