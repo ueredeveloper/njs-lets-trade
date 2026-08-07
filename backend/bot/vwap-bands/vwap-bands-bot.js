@@ -231,17 +231,6 @@ async function tick(rowId, symbolHint, adapter, strategy, log, session) {
   const specs = getRequiredSpecs(config);
   const cMap  = await fetchCandleMap(adapter, symbolHint, specs);
 
-  // Log único (só no primeiro tick após iniciar/reiniciar o bot) de quantos candles a VWAP
-  // está usando de verdade — pra conferir sem precisar ir no arquivo em disco (ver conversa
-  // sobre KMNOUSDT/ACEUSDT: sem histórico suficiente a "VWAP semanal" ficava instável).
-  if (!session.loggedCandleCounts) {
-    session.loggedCandleCounts = true;
-    const vwapIv = config.entry.vwapInterval ?? config.entry.interval;
-    const vwapCount = cMap[vwapIv]?.length ?? 0;
-    const priceCount = cMap[config.entry.interval]?.length ?? 0;
-    log(`${G}📊 VWAP(${vwapIv}, ${config.entry.session}) calculada com ${vwapCount} candles | candle principal (${config.entry.interval}): ${priceCount} candles${X}`);
-  }
-
   const rows = await sbReq('GET', 'rsi_multi_bot_state', null, `?id=eq.${rowId}&limit=1`);
   const state = rows?.[0];
   if (!state) return { phase: 'WATCHING' };
@@ -505,7 +494,6 @@ async function startSymbol(row, color) {
     lastExitTime: rs.lastExitTime ?? null,
     lastPendingLogAt: 0,
     lastVwapSlopeNotifyOpenTime: null,
-    loggedCandleCounts: false,
   };
   let volIv;
 

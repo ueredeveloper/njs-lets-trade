@@ -7,6 +7,14 @@ const { retentionLimitFor }      = require('../utils/candleRetentionLimits');
 const GATE_BASE      = 'https://api.gateio.ws/api/v4';
 const GATE_MAX_LIMIT = 1000;
 
+// `${symbol}_GATE|${interval}` -> quantidade máxima de candles que a Gate.io realmente
+// devolveu numa carga completa (pode ser menor que o `limit` pedido — ver comentário no
+// bloco `if (limit > dbCandles.length)` de getGateCandles). Só em memória (por processo):
+// sem isso, um símbolo cujo histórico reachável da Gate é menor que `limit` (ex.: ~9000 em
+// 1m, contra os 10500 pedidos pra sessão semanal) nunca alcançaria `limit` no cache, e cada
+// chamada recarregaria tudo de novo do zero em vez de só buscar o delta.
+const gateHistoryCeiling = new Map();
+
 // Intervalos buscados no modo "all"
 const ALL_INTERVALS = ['1m', '5m', '15m', '30m', '1h', '2h', '4h', '8h', '1d'];
 
@@ -40,10 +48,9 @@ function normalizeCandle(raw, intervalMs) {
   };
 }
 
-/** Busca candles brutos da Gate.io e retorna normalizados. */
-async function fetchFromGate(binanceSymbol, interval, limit) {
-  const pair = toGateSymbol(binanceSymbol);
-  const url  = `${GATE_BASE}/spot/candlesticks?currency_pair=${pair}&interval=${interval}&limit=${limit}`;
+async function fetchGatePage(pair, interval, limit, toSec) {
+  let url = `${GATE_BASE}/spot/candlesticks?currency_pair=${pair}&interval=${interval}&limit=${limit}`;
+  if (toSec != null) url += `&to=${toSec}`;
 
   const res = await fetch(url);
   if (!res.ok) {
@@ -53,9 +60,59 @@ async function fetchFromGate(binanceSymbol, interval, limit) {
 
   const raw = await res.json();
   if (!Array.isArray(raw)) throw new Error(`Gate.io resposta inesperada: ${JSON.stringify(raw)}`);
+  return raw;
+}
 
+/**
+ * Busca candles brutos da Gate.io e retorna normalizados — pagina pra trás (parâmetro `to`,
+ * em segundos) quando `limit` > 1000 (teto por chamada da Gate.io, mesma ideia de
+ * backend/binance/fetchKlines.js pro lado Binance/`endTime`). Sem isso, um pedido de
+ * histórico maior nesse único intervalo (ex.: VWAP semanal em candles de 1m, ~10500 candles
+ * pra cobrir 7 dias — ver candleRetentionLimits.js) voltava truncado nos últimos ~1000
+ * candles sem erro nenhum — mesmo bug que existia do lado Binance (caso PYRUSDT/ACEUSDT).
+ *
+ * A Gate.io também tem um teto próprio de profundidade de histórico por request encadeado
+ * (erro "Candlestick too long ago", ~10000 candles pra trás em 1m — menos que os 10080 de uma
+ * semana cheia, mas próximo). Trata isso como "chegou ao início do que a Gate deixa
+ * consultar": devolve o que já foi paginado até aqui em vez de derrubar a chamada inteira.
+ */
+async function fetchFromGate(binanceSymbol, interval, limit) {
+  const pair = toGateSymbol(binanceSymbol);
   const intervalMs = await convertIntervalToMiliseconds(interval);
-  return raw.map(c => normalizeCandle(c, intervalMs));
+
+  if (limit <= GATE_MAX_LIMIT) {
+    const raw = await fetchGatePage(pair, interval, limit, null);
+    return raw.map(c => normalizeCandle(c, intervalMs));
+  }
+
+  const intervalSec = Math.floor(intervalMs / 1000);
+  const pages = [];
+  let remaining = limit;
+  let toSec = null;
+
+  while (remaining > 0) {
+    const pageSize = Math.min(remaining, GATE_MAX_LIMIT);
+    let raw;
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      raw = await fetchGatePage(pair, interval, pageSize, toSec);
+    } catch (err) {
+      if (toSec != null && /too long ago/i.test(err.message)) break;
+      throw err;
+    }
+    if (!raw.length) break;
+    pages.unshift(raw);
+    toSec = parseInt(raw[0][0], 10) - 1;
+    remaining -= raw.length;
+    if (raw.length < pageSize) break; // chegou ao início do histórico
+  }
+
+  const merged = pages.flat().map(c => normalizeCandle(c, intervalMs));
+  const unique = Object.values(
+    Object.fromEntries(merged.map(c => [c.openTime, c])),
+  ).sort((a, b) => a.openTime - b.openTime);
+
+  return unique.slice(-limit);
 }
 
 /**
@@ -103,16 +160,24 @@ async function getGateCandles(symbol, interval, limit) {
   const miliseconds      = await convertIntervalToMiliseconds(interval);
   const limitForUpdateDb = Math.floor(timeDifference / miliseconds);
 
-  if (limit > dbCandles.length) {
-    // Banco local tem menos candles do que o solicitado: faz carga completa
-    const candles = await fetchFromGate(symbol, interval, Math.min(limit, GATE_MAX_LIMIT));
+  const ceilingKey = `${cacheKey}|${interval}`;
+  const effectiveLimit = Math.min(limit, gateHistoryCeiling.get(ceilingKey) ?? limit);
+
+  if (effectiveLimit > dbCandles.length) {
+    // Banco local tem menos candles do que o solicitado: faz carga completa (pagina se
+    // effectiveLimit > 1000 — ver fetchFromGate). Se a Gate devolver menos que o pedido
+    // (bateu no teto de histórico dela), trava esse teto pra essa chave — sem isso,
+    // `effectiveLimit > dbCandles.length` ficaria sempre verdadeiro e cada chamada
+    // recarregaria tudo de novo em vez de só buscar o delta.
+    const candles = await fetchFromGate(symbol, interval, effectiveLimit);
+    if (candles.length < effectiveLimit) gateHistoryCeiling.set(ceilingKey, candles.length);
     writeCandles(cacheKey, interval, candles);
-    return candles;
+    return candles.slice(-limit);
   }
 
   if (limitForUpdateDb > 0) {
-    // Há candles novos: busca apenas o delta (respeitando o limite da Gate.io)
-    const newCandles = await fetchFromGate(symbol, interval, Math.min(limitForUpdateDb, GATE_MAX_LIMIT));
+    // Há candles novos: busca apenas o delta (fetchFromGate pagina se precisar)
+    const newCandles = await fetchFromGate(symbol, interval, Math.min(limitForUpdateDb, retentionLimit));
     newCandles.forEach(c => dbCandles.push(c));
   } else {
     // Atualiza somente o candle atual (em formação)
