@@ -322,19 +322,16 @@ export async function loadMultitradeSymbolChart(entry, {
   const src = entry.exchange === 'gate' ? 'gate' : null;
   const sym = entry.symbol.toUpperCase();
 
-  // Trades primeiro: o fetch de candles precisa saber até onde voltar pra cobrir o sinal/
-  // compra mais antigo retornado. Sem isso, o fetch padrão (DEFAULT_CANDLE_LIMIT) só traz
-  // candles recentes e sinais mais antigos ficam sem candle pra "grudar" — somem do gráfico
-  // mesmo estando na lista de marcadores (era o caso do favorito VWAP Bands mostrando só os
-  // 2 sinais mais recentes).
   const trades = await fetchMultitradeTrades({ symbol: sym, strategyId: entry.strategyId, limit: 30 }).catch(() => []);
   const markers = buildMarkersFromLiveTrades(trades, entry);
 
-  const markerTimes = markers.map(m => Number(m.time)).filter(Number.isFinite);
-  const oldestMarkerMs = markerTimes.length ? Math.min(...markerTimes) : null;
-  const candleLimit = oldestMarkerMs != null
-    ? computeCandleLimitFromTime(oldestMarkerMs, interval, { max: 1000 })
-    : undefined;
+  // Carga inicial pequena e fixa (não mais "cobrir o sinal/compra mais antigo dos 30 trades",
+  // que em intervalos rápidos tipo 1m podia passar de 900 candles e deixar o primeiro render
+  // do gráfico lento — ver conversa com o usuário sobre ACE/TUT/BICO). Sinais/marcadores mais
+  // antigos que essa janela só "grudam" no candle quando o usuário arrasta o gráfico pra trás
+  // (onNeedOlderCandles em CandlestickChartLW.jsx já cobre isso sob demanda, mesmo mecanismo
+  // usado pela view de trades em CurrencyTable.jsx) — não precisa mais adivinhar upfront.
+  const candleLimit = 80;
 
   const chartData = await fetchCandlesticksAndCloud(sym, interval, src, candleLimit);
 
