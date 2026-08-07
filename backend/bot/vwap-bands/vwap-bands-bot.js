@@ -78,6 +78,17 @@ async function loadRows() {
   return sbReq('GET', 'rsi_multi_bot_state', null, `?or=(${ids})&order=id.asc`);
 }
 
+/** Chaves (SYMBOL:strategy_id) dos favoritos atualmente ativos no painel Multi-Trade — usado
+ *  pra filtrar o carregamento inicial (loadRows trazia TODA linha que já existiu em
+ *  rsi_multi_bot_state, mesmo removida do painel há tempos; só o ciclo periódico de
+ *  startMultitradeWatch, 5 em 5 min, corrigia isso depois, deixando moedas já desfavoritadas
+ *  rodando por até 5 minutos a cada reinício do bot — ver conversa sobre limpeza do Supabase). */
+async function loadEnabledFavoriteKeys() {
+  const ids = STRATEGY_IDS.map(id => `strategy_id.eq.${id}`).join(',');
+  const favorites = await sbReq('GET', 'multitrade_favorites', null, `?or=(${ids})&enabled=eq.true&select=symbol,strategy_id`);
+  return new Set((favorites ?? []).map(f => registry.sessionKey(f.symbol, f.strategy_id)));
+}
+
 function fmtPrice(n) {
   if (n == null || Number.isNaN(Number(n))) return '—';
   const x = Number(n);
@@ -570,7 +581,14 @@ async function main() {
   let rows = await loadRows();
   rows = (rows ?? []).filter(r => isVwapBandsStrategy(r.strategy_id));
   if (symbolFilter) {
+    // --symbol força uma moeda específica pra teste manual, mesmo que não esteja favoritada.
     rows = rows.filter(r => r.symbol.toUpperCase() === symbolFilter);
+  } else {
+    // Só inicia de cara quem está favoritado e ativo — sem isso, toda linha que já existiu em
+    // rsi_multi_bot_state (inclusive removida do painel há muito tempo) começava a rodar no
+    // boot, e só era encerrada minutos depois pelo ciclo periódico do startMultitradeWatch.
+    const enabledKeys = await loadEnabledFavoriteKeys();
+    rows = rows.filter(r => enabledKeys.has(registry.sessionKey(r.symbol, r.strategy_id)));
   }
 
   startMultitradeWatch({
