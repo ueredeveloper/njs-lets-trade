@@ -271,18 +271,9 @@ function evaluateEntrySignal(config, cMap) {
   const lookback = Math.max(1, Math.round(Number(entry.reclaimLookbackCandles ?? 24)));
   const fromIdx = Math.max(1, lastIdx - lookback + 1);
   const lastClose = parseFloat(candles[lastIdx].close);
-  // Níveis vigentes (lower2/lower1/vwap/upper1/upper2) no último candle fechado — usado tanto
-  // pelo cálculo de bandDistPct abaixo quanto pro print de diagnóstico do bot (situação atual
-  // da moeda mesmo quando não há sinal, ver logWatchingStatus em vwap-bands-bot.js).
+  // Níveis vigentes (lower2/lower1/vwap/upper1/upper2) no último candle fechado — usado no
+  // cálculo de bandDistPct abaixo (distância real de agora, não a do candle da reconquista).
   const currentLevels = levelsAt(vwapPointAt(vwapSeries, candles[lastIdx].openTime));
-  // Último candle FECHADO de entry.interval — pro print de diagnóstico do bot mostrar o
-  // mesmo dado que o console.log do frontend (fetchVwapPoints em CandlestickChart.jsx):
-  // horário, fechamento e se é de alta ou de baixa (close > open).
-  const currentCandle = {
-    openTime: candles[lastIdx].openTime,
-    close: lastClose,
-    isBullish: lastClose > parseFloat(candles[lastIdx].open),
-  };
 
   let lastReason = 'NO_LADDER_SIGNAL';
   let best = null;
@@ -394,7 +385,7 @@ function evaluateEntrySignal(config, cMap) {
     entryDesc: vwapSlopeBlocked.entryDesc,
   } : null;
 
-  if (!best) return { allowed: false, reason: lastReason, close: lastClose, currentLevels, currentCandle, vwapSlopeBlocked: vwapSlopeBlockedInfo };
+  if (!best) return { allowed: false, reason: lastReason, close: lastClose, vwapSlopeBlocked: vwapSlopeBlockedInfo };
 
   // close/confirmOpenTime têm que ser do candle que DE FATO reconquistou o nível
   // (best.reclaimIdx), não do último candle fechado — senão o "horário do sinal" fica
@@ -418,9 +409,6 @@ function evaluateEntrySignal(config, cMap) {
     confirmOpenTime: reclaimCandle.openTime,
     entryDesc: `VWAP(${vwapIv},${entry.session}) fechamento acima ${labelForLevel(best.setup.confirm)}`,
     vwapSlopeBlocked: vwapSlopeBlockedInfo,
-    currentLevels,
-    currentClose: lastClose,
-    currentCandle,
   };
 }
 
