@@ -31,6 +31,29 @@ const {
   computeStopLossFloor, computeLadderLevelPrices,
 } = require('./strategyEngine');
 
+// Ordem de exibição do print de diagnóstico (WATCHING) — de cima pra baixo, mesmo padrão
+// visual do gráfico (up2/up1/vw/lw1/lw2).
+const LEVEL_PRINT_ORDER = ['upper2', 'upper1', 'vwap', 'lower1', 'lower2'];
+
+// Tradução dos códigos de `reason` de evaluateEntrySignal (strategyEngine.js) pro print de
+// diagnóstico do WATCHING — o que especificamente está barrando a compra agora.
+const ENTRY_BLOCK_REASONS = {
+  INSUFFICIENT_DATA: 'poucos candles carregados ainda',
+  NO_VWAP: 'sem histórico suficiente pra calcular a VWAP',
+  NO_LADDER_SIGNAL: 'nenhuma reconquista de linha (nem -1σ, nem vwap, nem +1σ) nos últimos candles',
+  RECLAIM_LOST: 'reconquistou uma linha mas já fechou de volta abaixo dela (perdeu a força)',
+  BANDS_TOO_CLOSE: 'reconquistou uma linha, mas a distância até a linha de venda está abaixo do mínimo configurado (bandas apertadas)',
+  EMA_FILTER_NO_DATA: 'reconquistou uma linha, mas falta histórico da EMA de filtro ainda',
+  EMA_FILTER_BELOW_BAND: 'reconquistou uma linha, mas o preço está abaixo da banda da EMA de filtro',
+  EMA_FILTER_FALLING: 'reconquistou uma linha, mas a EMA de filtro está caindo demais',
+  VWAP_SLOPE_FILTER_NO_DATA: 'reconquistou uma linha, mas falta histórico pra medir a inclinação da VWAP',
+  VWAP_SLOPE_FILTER_FALLING: 'reconquistou uma linha, mas a própria VWAP está em queda (filtro de inclinação bloqueou)',
+};
+
+function describeBlockReason(reason) {
+  return ENTRY_BLOCK_REASONS[reason] ?? reason ?? 'motivo desconhecido';
+}
+
 // Componentes genéricos (compra/venda/execução), compartilhados com os outros bots de
 // trade — ver backend/bot/shared/*.
 const { buildAdapter, syncExchangeClocks } = require('../shared/buildAdapter');
@@ -95,6 +118,28 @@ function fmtPrice(n) {
   if (x < 0.01) return x.toFixed(6);
   if (x < 1) return x.toFixed(4);
   return x.toFixed(2);
+}
+
+/** Formata os 5 níveis vigentes da VWAP no padrão up2/up1/vw/lw1/lw2 usado no print de
+ *  diagnóstico do WATCHING (ver tick()). */
+function fmtLevels(levels) {
+  if (!levels) return 'sem dados de VWAP ainda';
+  return LEVEL_PRINT_ORDER.map(k => `${labelForLevel(k)} ${fmtPrice(levels[k])}`).join(' | ');
+}
+
+/** Formata o último candle fechado (horário + fechamento + alta/baixa) — mesmo dado que o
+ *  console.log do frontend (fetchVwapPoints em CandlestickChart.jsx), pra comparação direta. */
+function fmtCandle(candle) {
+  if (!candle) return 'sem candle ainda';
+  const time = new Date(Number(candle.openTime)).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+  return `candle ${time} close=${fmtPrice(candle.close)} (${candle.isBullish ? 'alta' : 'baixa'})`;
+}
+
+/** VWAP(intervalo,sessão) vigente pra essa moeda — pra conferir de cara qual configuração o
+ *  bot está usando de fato (ex.: depois de trocar vwapInterval de 1m pra 1h no painel). */
+function fmtVwapConfig(entry) {
+  const vwapIv = entry.vwapInterval ?? entry.interval;
+  return `VWAP(${vwapIv},${entry.session})`;
 }
 
 /** Resumo em texto do motivo da entrada — mostra os dois níveis da escada envolvidos. */
@@ -323,6 +368,19 @@ async function tick(rowId, symbolHint, adapter, strategy, log, session) {
   // ── WATCHING ──────────────────────────────────────────────────────────────
   if (phase === 'WATCHING') {
     const signal = evaluateEntrySignal(config, cMap);
+
+    // Print de diagnóstico a cada tick — qual VWAP está configurada pra essa moeda agora
+    // (intervalo/sessão, pra conferir de cara depois de trocar no painel), preço + as 5
+    // linhas da VWAP no padrão up2/up1/vw/lw1/lw2 + último candle fechado, e, se não há
+    // sinal, o motivo exato que está travando a entrada (ver ENTRY_BLOCK_REASONS acima).
+    // Pedido pelo usuário pra depurar por que um bot com intervalo/VWAP em 1m não estava
+    // comprando, e pra comparar direto com o console.log equivalente do frontend
+    // (CandlestickChart.jsx).
+    log(`📊 ${fmtVwapConfig(config.entry)} ${fmtPrice(signal.currentClose ?? signal.close)} | ${fmtLevels(signal.currentLevels)} | ${fmtCandle(signal.currentCandle)} | ${
+      signal.allowed
+        ? `${G}🟢 sinal: ${signal.entryDesc}${X}`
+        : `sem compra — ${describeBlockReason(signal.reason)}`
+    }`);
 
     // Aviso experimental (período de teste, ver conversa com o usuário): moeda que passaria
     // em tudo (reconquista + held + bandDist + emaFilter) e só não comprou porque o
