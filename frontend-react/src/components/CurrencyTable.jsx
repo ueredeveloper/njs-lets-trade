@@ -7,7 +7,7 @@ import {
   fetchMaCrossoverFilter, fetchMultitradeTrades, fetchBotState,
   fetchGateTrades, fetchBinanceTrades,
 } from '../services/api';
-import { parseMaCrossFilterName, parseMaCompareFilterName, parseMaDistanceFilterName, parseIndicatorGrowthFilterName, parseVwapBandWidthFilterName, parseFilterChartInterval } from '../utils/filterNames';
+import { parseMaCrossFilterName, parseMaCompareFilterName, parseMaDistanceFilterName, parseIndicatorGrowthFilterName, parseVwapBandWidthFilterName, parseBollingerBandWidthFilterName, parseFilterChartInterval } from '../utils/filterNames';
 import { useI18n } from '../i18n';
 import MultitradeModal from './MultitradeModal';
 import MultitradeBotStateModal from './MultitradeBotStateModal';
@@ -32,10 +32,12 @@ import {
   formatTradeStatusBadge, loadTradeFavSort, tradePnlForSort,
   saveTradeFavSort, expandWeeklyTrades,
 } from '../utils/tradeFavoritesSort';
-import { compareVwapFavorites, loadVwapFavSort, PHASE_SORT_ORDER } from '../utils/vwapFavoritesSort';
+import { compareVwapFavorites, loadVwapFavSort } from '../utils/vwapFavoritesSort';
+import { compareBollingerFavorites, loadBbFavSort } from '../utils/bollingerFavoritesSort';
 import { useMacrossFavoritesStatus } from '../hooks/useMacrossFavoritesStatus';
 import { useTradeFavoritesSummary } from '../hooks/useTradeFavoritesSummary';
 import { useVwapBandWidthMeta } from '../hooks/useVwapBandWidthMeta';
+import { useBollingerBandWidthMeta } from '../hooks/useBollingerBandWidthMeta';
 import {
   compareMacmpTableRows, filterMacmpTableRows, loadMacmpTableSort, saveMacmpTableSort,
 } from '../utils/macmpTableSort';
@@ -46,6 +48,7 @@ import MacrossFavSortSelect from './MacrossFavSortSelect';
 import MacmpTableSortSelect from './MacmpTableSortSelect';
 import TradeFavSortSelect from './TradeFavSortSelect';
 import VwapFavSortSelect from './VwapFavSortSelect';
+import BollingerFavSortSelect from './BollingerFavSortSelect';
 
 const GATE_COLOR    = '#0068ff';
 const BINANCE_COLOR = '#fcd535';
@@ -335,8 +338,10 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   const [maDistSort, setMaDistSort] = useState('far'); // 'far' | 'near'
   const [growthSort, setGrowthSort] = useState('high'); // 'high' | 'low'
   const [vwapWidthSort, setVwapWidthSort] = useState('far'); // 'far' | 'near'
+  const [bbWidthSort, setBbWidthSort] = useState('far'); // 'far' | 'near'
   const [tradeFavSort, setTradeFavSort] = useState(() => loadTradeFavSort());
   const [vwapFavSort, setVwapFavSort] = useState(() => loadVwapFavSort());
+  const [bbFavSort, setBbFavSort] = useState(() => loadBbFavSort());
 
   const macrossFavSymbols = useMemo(() => (
     [...new Set(
@@ -351,10 +356,30 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     [gateFavorites, binanceFavorites],
   );
 
+  /** Combinações únicas (interval,period,stdDev) usadas pelos favoritos BB, cada uma com a
+   *  lista dos símbolos que a usam — cada favorito tem seu próprio intervalo de entrada
+   *  (config.entry), então a largura buscada precisa acompanhar isso em vez de um intervalo
+   *  fixo, e é escopada só a esses símbolos em vez de escanear o mercado inteiro (ver
+   *  useBollingerBandWidthMeta). */
+  const bbFavConfigs = useMemo(() => {
+    const seen = new Map();
+    for (const e of multitradeFavorites) {
+      if (e.enabled === false || e.strategyId !== 'bollinger-bands') continue;
+      const interval = e.entry?.interval ?? '4h';
+      const period = e.entry?.period ?? 20;
+      const stdDev = e.entry?.stdDev ?? 2;
+      const key = `${interval}|${period}|${stdDev}`;
+      if (!seen.has(key)) seen.set(key, { interval, period, stdDev, symbols: [] });
+      seen.get(key).symbols.push(e.symbol);
+    }
+    return [...seen.values()];
+  }, [multitradeFavorites]);
+
   const isMacrossFavView = favoriteView === 'macross';
   const isTradesFavView = favoriteView === 'trades';
   const isActiveFavView = favoriteView === 'active';
   const isVwapBandsFavView = favoriteView === 'vwap-bands';
+  const isBollingerBandsFavView = favoriteView === 'bollinger-bands';
   const isAltaFilter = activeFilter?.startsWith('Favoritos|Alta|') ?? false;
   const isNovasFilter = activeFilter?.startsWith('Favoritos|Novas|') ?? false;
   const isFavVolumeContext = !!favoriteView || isAltaFilter || isNovasFilter;
@@ -377,6 +402,10 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     meta: vwapFavWidthMeta,
     loading: vwapFavWidthLoading,
   } = useVwapBandWidthMeta(isVwapBandsFavView);
+  const {
+    meta: bbFavWidthMeta,
+    loading: bbFavWidthLoading,
+  } = useBollingerBandWidthMeta(isBollingerBandsFavView, bbFavConfigs);
 
   const activeMacrossFilter = useMemo(() => {
     if (!activeFilter || favoriteView) return null;
@@ -431,7 +460,20 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   const vwapWidthMeta = activeVwapWidthFilter?.meta ?? null;
   const isVwapWidthFilter = !!activeVwapWidthFilter;
 
-  const tableColCount = isAltaFilter || isMaDistanceFilter || isGrowthFilter || isVwapWidthFilter ? 6 : 5;
+  const activeBbWidthFilter = useMemo(() => {
+    if (!activeFilter || favoriteView) return null;
+    const f = findFilter(activeFilter);
+    if (!f || !parseBollingerBandWidthFilterName(f.name)) return null;
+    return f;
+  }, [activeFilter, favoriteView, findFilter]);
+
+  const bbWidthMeta = activeBbWidthFilter?.meta ?? null;
+  const isBbWidthFilter = !!activeBbWidthFilter;
+
+  const showVwapFavWidthCol = isVwapBandsFavView && (vwapFavSort === 'width_far' || vwapFavSort === 'width_near');
+  const showBbFavWidthCol = isBollingerBandsFavView && (bbFavSort === 'width_far' || bbFavSort === 'width_near');
+
+  const tableColCount = isAltaFilter || isMaDistanceFilter || isGrowthFilter || isVwapWidthFilter || isBbWidthFilter || showVwapFavWidthCol || showBbFavWidthCol ? 6 : 5;
 
   const filterChartInterval = useMemo(() => {
     if (!activeFilter || favoriteView) return null;
@@ -463,6 +505,11 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
 
   const onVwapFavSortChange = useCallback((sortBy) => {
     setVwapFavSort(sortBy);
+    setSortVolume('none');
+  }, []);
+
+  const onBbFavSortChange = useCallback((sortBy) => {
+    setBbFavSort(sortBy);
     setSortVolume('none');
   }, []);
 
@@ -513,14 +560,10 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
       for (const sym of bbSymbolsList) {
         if (!have.has(sym)) list.push({ symbol: sym, price: 0, volume: 0 });
       }
-      // Sem seletor de ordenação dedicado (ainda não há métrica tipo "largura de banda" pro
-      // BB) — mesma ordem padrão do VWAP Bands: comprado primeiro, depois alfabética.
-      list = list.slice().sort((a, b) => {
-        const pa = PHASE_SORT_ORDER[bbPhaseBySymbol.get(a.symbol) ?? 'WATCHING'] ?? 2;
-        const pb = PHASE_SORT_ORDER[bbPhaseBySymbol.get(b.symbol) ?? 'WATCHING'] ?? 2;
-        if (pa !== pb) return pa - pb;
-        return a.symbol.localeCompare(b.symbol);
-      });
+      list = list.slice().sort((a, b) => compareBollingerFavorites(a, b, bbFavSort, {
+        phaseBySymbol: bbPhaseBySymbol,
+        widthMeta: bbFavWidthMeta,
+      }));
     } else if (favoriteView === 'trades') {
       const filtered = filterTradeFavorites(tradeFavSymbols, tradeFavStatus, tradeFavSort);
       list = resolveFavorites(new Set(filtered), currencies.list, gateAll);
@@ -610,6 +653,12 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
         const wb = vwapWidthMeta[b.symbol]?.avgWidthPct ?? (vwapWidthSort === 'far' ? -Infinity : Infinity);
         return vwapWidthSort === 'far' ? wb - wa : wa - wb;
       });
+    } else if (activeBbWidthFilter && bbWidthMeta && sortVolume === 'none' && !favoriteView) {
+      list = list.slice().sort((a, b) => {
+        const wa = bbWidthMeta[a.symbol]?.avgWidthPct ?? (bbWidthSort === 'far' ? -Infinity : Infinity);
+        const wb = bbWidthMeta[b.symbol]?.avgWidthPct ?? (bbWidthSort === 'far' ? -Infinity : Infinity);
+        return bbWidthSort === 'far' ? wb - wa : wa - wb;
+      });
     } else if (sortVolume !== 'none') {
       list = list.slice().sort((a, b) => {
         const va = (isAltaFilter || isNovasFilter) ? rowVolume24h(a, highlightMeta) : Number(a.volume) || 0;
@@ -619,7 +668,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     }
 
     return list;
-  }, [currencies, activeFilter, selectedQuote, findFilter, search, favoriteView, gateFavorites, binanceFavorites, multitradeFavorites, sortVolume, gateAll, filterVisibleCurrencies, isVisibleSymbol, currencyBySymbol, activeMacrossFilter, macrossScannedAt, macrossTick, isMacrossFavView, macrossFavSort, macrossFavStatus, macrossEntriesBySymbol, isTradesFavView, tradeFavSort, tradeFavSymbols, tradeFavStatus, isActiveFavView, activeTrades, isAltaFilter, isNovasFilter, highlightMeta, activeMacmpFilter, macmpMeta, macmpTableSort, activeMaDistanceFilter, maDistMeta, maDistSort, activeGrowthFilter, growthMeta, growthSort, activeVwapWidthFilter, vwapWidthMeta, vwapWidthSort, isVwapBandsFavView, vwapFavSort, vwapFavWidthMeta]);
+  }, [currencies, activeFilter, selectedQuote, findFilter, search, favoriteView, gateFavorites, binanceFavorites, multitradeFavorites, sortVolume, gateAll, filterVisibleCurrencies, isVisibleSymbol, currencyBySymbol, activeMacrossFilter, macrossScannedAt, macrossTick, isMacrossFavView, macrossFavSort, macrossFavStatus, macrossEntriesBySymbol, isTradesFavView, tradeFavSort, tradeFavSymbols, tradeFavStatus, isActiveFavView, activeTrades, isAltaFilter, isNovasFilter, highlightMeta, activeMacmpFilter, macmpMeta, macmpTableSort, activeMaDistanceFilter, maDistMeta, maDistSort, activeGrowthFilter, growthMeta, growthSort, activeVwapWidthFilter, vwapWidthMeta, vwapWidthSort, activeBbWidthFilter, bbWidthMeta, bbWidthSort, isVwapBandsFavView, vwapFavSort, vwapFavWidthMeta, bbFavSort, bbFavWidthMeta]);
 
   const rowHeightPx = isMobile ? TABLE_ROW_HEIGHT_MOBILE : TABLE_ROW_HEIGHT;
 
@@ -1018,7 +1067,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   const changeColPx = (isMobile ? 2.75 : 3) * REM_PX;
   const volColPx = (isMobile ? 2.25 : 2.5) * REM_PX;
   const spinnerColPx = (isMobile ? 0.75 : 1) * REM_PX;
-  const fixedColsPx = priceColPx + volColPx + spinnerColPx + (isAltaFilter || isMaDistanceFilter || isGrowthFilter || isVwapWidthFilter ? changeColPx : 0);
+  const fixedColsPx = priceColPx + volColPx + spinnerColPx + (isAltaFilter || isMaDistanceFilter || isGrowthFilter || isVwapWidthFilter || isBbWidthFilter || showVwapFavWidthCol || showBbFavWidthCol ? changeColPx : 0);
   const favColWidthPx = favColMinPx;
   const parColWidthPx = tableContainerWidth > 0
     ? Math.max(tableContainerWidth - favColWidthPx - fixedColsPx, 0)
@@ -1192,7 +1241,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
             <col className="currency-table-col-fav" style={{ width: favColWidth }} />
             <col className="currency-table-col-par" style={{ width: parColWidth }} />
             <col className="currency-table-col-price" style={{ width: priceColWidth }} />
-            {(isAltaFilter || isMaDistanceFilter || isGrowthFilter || isVwapWidthFilter) && <col className="currency-table-col-change" style={{ width: changeColWidth }} />}
+            {(isAltaFilter || isMaDistanceFilter || isGrowthFilter || isVwapWidthFilter || isBbWidthFilter || showVwapFavWidthCol || showBbFavWidthCol) && <col className="currency-table-col-change" style={{ width: changeColWidth }} />}
             <col className="currency-table-col-vol" style={{ width: volColWidth }} />
             <col className="currency-table-col-spinner" style={{ width: spinnerColWidth }} />
           </colgroup>
@@ -1205,6 +1254,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                   isMacrossFavView ? t('macross.sort.label')
                     : isTradesFavView ? t('trades.sort.label')
                     : isVwapBandsFavView ? t('vwapfav.sort.label')
+                    : isBollingerBandsFavView ? t('bbfav.sort.label')
                     : activeMacmpFilter ? t('macmp.sort.label')
                     : undefined
                 }
@@ -1239,6 +1289,17 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                     <VwapFavSortSelect
                       value={vwapFavSort}
                       onChange={onVwapFavSortChange}
+                      className="shrink-0"
+                    />
+                  </div>
+                ) : isBollingerBandsFavView ? (
+                  <div className={`flex items-center gap-0.5 ${isMobile ? 'flex-wrap justify-center' : 'justify-start'}`}>
+                    {bbFavWidthLoading && (
+                      <span className="text-[9px] text-emerald-400/80 shrink-0">⟳</span>
+                    )}
+                    <BollingerFavSortSelect
+                      value={bbFavSort}
+                      onChange={onBbFavSortChange}
                       className="shrink-0"
                     />
                   </div>
@@ -1307,6 +1368,31 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                   onClick={() => setVwapWidthSort((s) => (s === 'far' ? 'near' : 'far'))}
                 >
                   Larg% {vwapWidthSort === 'far' ? '↓' : '↑'}
+                </th>
+              )}
+              {isBbWidthFilter && (
+                <th
+                  className="text-right px-2 py-1 text-p5 opacity-80 font-normal uppercase tracking-wider whitespace-nowrap cursor-pointer hover:opacity-100 select-none"
+                  title="Ordenar por largura das Bandas de Bollinger: mais distantes ↔ mais próximas"
+                  onClick={() => setBbWidthSort((s) => (s === 'far' ? 'near' : 'far'))}
+                >
+                  Larg% {bbWidthSort === 'far' ? '↓' : '↑'}
+                </th>
+              )}
+              {showVwapFavWidthCol && (
+                <th
+                  className="text-right px-2 py-1 text-p5 opacity-80 font-normal uppercase tracking-wider whitespace-nowrap"
+                  title="Largura média das bandas de VWAP nos favoritos"
+                >
+                  Larg% {vwapFavSort === 'width_far' ? '↓' : '↑'}
+                </th>
+              )}
+              {showBbFavWidthCol && (
+                <th
+                  className="text-right px-2 py-1 text-p5 opacity-80 font-normal uppercase tracking-wider whitespace-nowrap"
+                  title="Largura média das Bandas de Bollinger nos favoritos"
+                >
+                  Larg% {bbFavSort === 'width_far' ? '↓' : '↑'}
                 </th>
               )}
               <th
@@ -1617,6 +1703,39 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                       </td>
                     );
                   })()}
+                  {isBbWidthFilter && (() => {
+                    const widthPct = bbWidthMeta?.[item.symbol]?.avgWidthPct;
+                    return (
+                      <td
+                        className="px-2 py-1 text-right font-mono text-[10px] font-semibold"
+                        style={{ color: widthPct == null ? 'rgba(255,255,255,0.35)' : '#e2c341' }}
+                      >
+                        {widthPct != null ? `${widthPct.toFixed(2)}%` : '—'}
+                      </td>
+                    );
+                  })()}
+                  {showVwapFavWidthCol && (() => {
+                    const widthPct = vwapFavWidthMeta?.[item.symbol]?.avgWidthPct;
+                    return (
+                      <td
+                        className="px-2 py-1 text-right font-mono text-[10px] font-semibold"
+                        style={{ color: widthPct == null ? 'rgba(255,255,255,0.35)' : '#e2c341' }}
+                      >
+                        {widthPct != null ? `${widthPct.toFixed(2)}%` : '—'}
+                      </td>
+                    );
+                  })()}
+                  {showBbFavWidthCol && (() => {
+                    const widthPct = bbFavWidthMeta?.[item.symbol]?.avgWidthPct;
+                    return (
+                      <td
+                        className="px-2 py-1 text-right font-mono text-[10px] font-semibold"
+                        style={{ color: widthPct == null ? 'rgba(255,255,255,0.35)' : '#e2c341' }}
+                      >
+                        {widthPct != null ? `${widthPct.toFixed(2)}%` : '—'}
+                      </td>
+                    );
+                  })()}
                   <td className="px-2 py-1 text-right font-mono text-[10px]">
                     {isTradesFavView && !volumeSortActive ? (
                       <span
@@ -1721,7 +1840,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                         {base}<span className="opacity-40 font-normal text-[8px]">/{quote}</span>
                       </td>
                       <td className="px-2 py-1 text-right font-mono">{item.price > 0 ? formatPrice(item.price) : '—'}</td>
-                      {(isAltaFilter || isMaDistanceFilter || isGrowthFilter || isVwapWidthFilter) && <td className="px-2 py-1 text-right font-mono text-[10px] opacity-35">—</td>}
+                      {(isAltaFilter || isMaDistanceFilter || isGrowthFilter || isVwapWidthFilter || isBbWidthFilter || showVwapFavWidthCol || showBbFavWidthCol) && <td className="px-2 py-1 text-right font-mono text-[10px] opacity-35">—</td>}
                       <td className="px-2 py-1 text-right font-mono text-[10px] opacity-60">{formatVolume(item.volume)}</td>
                       <td className="pr-1 text-center">
                         {loadingSymbol === item.symbol

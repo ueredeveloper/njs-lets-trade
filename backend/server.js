@@ -22,7 +22,7 @@ const { ichimokuCloudRouter } = require('./technicals-indicators');
 const {
   fetchCandles, fetchIchimokuCloud, fetchSupportResistance, fetchPivotPointsHighLow, fetchAllCurrencies,
   fetchSMA, fetchRSI, fetchChopZone, fetchVWAP, fetch24HsVolume, fetchMarketCapFilter, fetchStablecoins, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter, fetchMaDistanceFilter, fetchIndicatorGrowthFilter,
-  fetchRsiOversoldRecovery, fetchMaCrossStats, fetchVwapBandsStats, fetchBollingerBandRecovery, fetchBollingerBandPositionFilter, fetchVwapPositionFilter, fetchVwapBandWidthFilter, fetchVwapBandExpansionFilter, fetchBollingerBands, fetchSimpleMaCross, fetchReloadCandles,
+  fetchRsiOversoldRecovery, fetchMaCrossStats, fetchVwapBandsStats, fetchBollingerBandRecovery, fetchBollingerBandPositionFilter, fetchVwapPositionFilter, fetchVwapBandWidthFilter, fetchBollingerBandWidthFilter, fetchVwapBandExpansionFilter, fetchBollingerBands, fetchSimpleMaCross, fetchReloadCandles,
   fetchGateCurrencies, fetchGatePrefetch, fetchBinanceTrades, fetchGateTrades,
   fetchActiveTrades, fetchTradeFavorites, stgBotStatus, multitradeService, fetchMarketHighlights, whatsappMessagesService, fetchCacheSettings } = require('./services');
 const supabaseService = require('./services/supabaseService');
@@ -70,6 +70,7 @@ app.use('/services', fetchBollingerBandRecovery)
 app.use('/services', fetchBollingerBandPositionFilter)
 app.use('/services', fetchVwapPositionFilter)
 app.use('/services', fetchVwapBandWidthFilter)
+app.use('/services', fetchBollingerBandWidthFilter)
 app.use('/services', fetchVwapBandExpansionFilter)
 app.use('/services', fetchCacheSettings)
 app.use('/services', fetchBollingerBands)
@@ -172,6 +173,8 @@ async function startServer() {
   await vwapPositionCache.loadFromDisk();
   const vwapBandWidthCache = require('./cache/vwapBandWidthCache');
   await vwapBandWidthCache.loadFromDisk();
+  const bbBandWidthCache = require('./cache/bbBandWidthCache');
+  await bbBandWidthCache.loadFromDisk();
   const vwapBandExpansionCache = require('./cache/vwapBandExpansionCache');
   await vwapBandExpansionCache.loadFromDisk();
   const maDistanceCache = require('./cache/maDistanceCache');
@@ -312,6 +315,31 @@ async function startServer() {
 
   refreshVwapBandWidthCache().catch(e => console.error('[vwapBandWidthCache] erro no warmup:', e.message));
   setInterval(refreshVwapBandWidthCache, vwapBandWidthCache.REFRESH_TICK_MS);
+
+  async function refreshBbBandWidthCache() {
+    if (!cacheSettings.isEnabled('bbBandWidth4h') && !cacheSettings.isEnabled('bbBandWidth1m') && !cacheSettings.isEnabled('bbBandWidth5m')) return;
+    try {
+      const { list: symbols } = await getActiveUsdtPairs();
+      if (!Array.isArray(symbols) || symbols.length === 0) return;
+      // ensureFresh (não refreshAll direto) — o preset de 5min pode levar minutos pra
+      // varrer os ~500 símbolos na fila global; sem isso, um tick de 5min poderia disparar
+      // uma segunda varredura por cima da primeira ainda em andamento.
+      const stats = await bbBandWidthCache.ensureFresh(symbols);
+      if (stats.computed > 0) {
+        const m = stats.matched ?? {};
+        console.log(
+          `[bbBandWidthCache] 4h|20|2|100:${m['4h|20|2|100'] ?? 0} 1m|20|2|100:${m['1m|20|2|100'] ?? 0} 5m|20|2|100:${m['5m|20|2|100'] ?? 0}`
+          + ` | disco:${stats.diskHits ?? 0} stale:${stats.diskStale ?? 0} api:${stats.apiFetches ?? 0}`
+          + ` | fila:${stats.queuePending ?? 0}`,
+        );
+      }
+    } catch (e) {
+      console.error('[bbBandWidthCache] erro no refresh:', e.message);
+    }
+  }
+
+  refreshBbBandWidthCache().catch(e => console.error('[bbBandWidthCache] erro no warmup:', e.message));
+  setInterval(refreshBbBandWidthCache, bbBandWidthCache.REFRESH_TICK_MS);
 
   async function refreshVwapBandExpansionCache() {
     if (!cacheSettings.isEnabled('vwapBandExpansion')) return;

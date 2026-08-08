@@ -86,6 +86,22 @@ export function parseVwapBandWidthFilterName(name) {
   };
 }
 
+/** Largura das Bandas de Bollinger (upper-lower como % da média), média no período: 4h|bbwidth|20|2|100 */
+export function buildBollingerBandWidthFilterName(interval, period, stdDev, lookback) {
+  return `${interval}|bbwidth|${period}|${stdDev}|${lookback}`;
+}
+
+export function parseBollingerBandWidthFilterName(name) {
+  const parts = String(name).split('|');
+  if (parts[1] !== 'bbwidth' || parts.length < 5) return null;
+  return {
+    interval: parts[0],
+    period: parseInt(parts[2], 10),
+    stdDev: parseFloat(parts[3]),
+    lookback: parseInt(parts[4], 10),
+  };
+}
+
 /**
  * Expansão do afastamento entre lower1 e upper2 da VWAP (banda assimétrica -1σ/+2σ):
  * compara o afastamento atual com o menor afastamento (squeeze) dentro do lookback —

@@ -199,6 +199,24 @@ export async function fetchVwapBandWidthFilter({
   return res.json();
 }
 
+/**
+ * Filtra moedas por largura das Bandas de Bollinger (upper-lower como % da banda inferior),
+ * média nos últimos N candles: mais/menos distantes. Com `symbols`, pula o scan do mercado
+ * inteiro e calcula só pros símbolos pedidos (resposta rápida, usado pelos favoritos BB).
+ */
+export async function fetchBollingerBandWidthFilter({
+  interval = '4h', period = '20', stdDev = '2', lookback = '100', order = 'far', symbols = null,
+} = {}) {
+  const params = new URLSearchParams({ interval, period, stdDev, lookback, order });
+  if (symbols?.length) params.set('symbols', symbols.join(','));
+  const res = await fetch(`/services/bollinger-band-width-filter?${params}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 /** Filtra moedas por expansão do afastamento entre -1σ e +2σ da VWAP: mínimo recente vs. atual. */
 export async function fetchVwapBandExpansionFilter({
   interval = '15m', vwapInterval = '4h', lookback = '10', multiplier = '3',

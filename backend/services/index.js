@@ -26,6 +26,7 @@ const fetchBollingerBandRecovery = require('./fetchBollingerBandRecovery')
 const fetchBollingerBandPositionFilter = require('./fetchBollingerBandPositionFilter')
 const fetchVwapPositionFilter = require('./fetchVwapPositionFilter')
 const fetchVwapBandWidthFilter = require('./fetchVwapBandWidthFilter')
+const fetchBollingerBandWidthFilter = require('./fetchBollingerBandWidthFilter')
 const fetchVwapBandExpansionFilter = require('./fetchVwapBandExpansionFilter')
 const fetchBollingerBands             = require('./fetchBollingerBands')
 const fetchSimpleMaCross       = require('./fetchSimpleMaCross')
@@ -46,7 +47,7 @@ const fetchCacheSettings       = require('./fetchCacheSettings')
 module.exports = {
     fetchCandles, fetchIchimokuCloud, fetchSupportResistance, fetchPivotPointsHighLow, fetchAllCurrencies,
     fetchSMA, fetchRSI, fetchChopZone, fetchVWAP, fetch24HsVolume, fetchMarketCapFilter, fetchStablecoins,
-    fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter, fetchMaDistanceFilter, fetchIndicatorGrowthFilter, fetchRsiOversoldRecovery, fetchMaCrossStats, fetchVwapBandsStats, fetchBollingerBandRecovery, fetchBollingerBandPositionFilter, fetchVwapPositionFilter, fetchVwapBandWidthFilter, fetchVwapBandExpansionFilter, fetchBollingerBands, fetchSimpleMaCross, fetchReloadCandles,
+    fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter, fetchMaDistanceFilter, fetchIndicatorGrowthFilter, fetchRsiOversoldRecovery, fetchMaCrossStats, fetchVwapBandsStats, fetchBollingerBandRecovery, fetchBollingerBandPositionFilter, fetchVwapPositionFilter, fetchVwapBandWidthFilter, fetchBollingerBandWidthFilter, fetchVwapBandExpansionFilter, fetchBollingerBands, fetchSimpleMaCross, fetchReloadCandles,
     fetchGateCurrencies, fetchGatePrefetch, fetchBinanceTrades, fetchGateTrades, fetchActiveTrades,
     fetchTradeFavorites, stgBotStatus, multitradeService, fetchMarketHighlights, whatsappMessagesService, fetchCacheSettings }
 

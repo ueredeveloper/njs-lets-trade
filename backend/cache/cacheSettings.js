@@ -21,16 +21,27 @@ const CACHE_IDS = [
   'bbPosition',
   'vwapPosition',
   'vwapBandWidth',
+  'bbBandWidth4h',
+  'bbBandWidth1m',
+  'bbBandWidth5m',
   'vwapBandExpansion',
   'indicatorGrowth',
   'mcFavoritesStats',
   'vwapFavoritesStats',
 ];
 
+/**
+ * Ids que nascem desligados: escanear os ~500 pares USDT em 1min não cabe no orçamento da
+ * fila global de candles (~24 req/min, protegendo contra ban da Binance — 1min fica stale
+ * de novo antes de uma volta completa terminar). Fica disponível pra quem quiser ligar
+ * manualmente em Configurações, ciente do trade-off.
+ */
+const DEFAULT_OFF = new Set(['bbBandWidth1m']);
+
 let settings = null;
 
 function defaults() {
-  return Object.fromEntries(CACHE_IDS.map((id) => [id, true]));
+  return Object.fromEntries(CACHE_IDS.map((id) => [id, !DEFAULT_OFF.has(id)]));
 }
 
 function loadSync() {
