@@ -10,6 +10,10 @@ export function isVwapBandsEntry(entry) {
   return entry?.strategyId === 'vwap-bands' || entry?.kind === 'vwap_bands' || entry?.tradeConfig?.kind === 'vwap_bands';
 }
 
+export function isBollingerBandsEntry(entry) {
+  return entry?.strategyId === 'bollinger-bands' || entry?.kind === 'bollinger_bands' || entry?.tradeConfig?.kind === 'bollinger_bands';
+}
+
 export function isRule2Row(row) {
   return row?.ruleId === 'rule2' || row?.entryKind === 'ma';
 }
@@ -27,6 +31,10 @@ export function resolveTradeChartInterval(entry, row) {
   if (isVwapBandsEntry(entry)) {
     const e = entry.entry ?? entry.tradeConfig?.entry ?? {};
     return e.interval ?? '1h';
+  }
+  if (isBollingerBandsEntry(entry)) {
+    const e = entry.entry ?? entry.tradeConfig?.entry ?? {};
+    return e.interval ?? '4h';
   }
   if (isRule2Row(row)) {
     const em = entry?.rule2?.entryMa ?? entry?.entryMa ?? {};
@@ -66,6 +74,39 @@ export function buildMaCrossAdaptiveBandsConfig(entry, boundsOverride = null) {
     fixedAbovePct: abovePct > 0 ? abovePct : null,
     adaptiveOpts: opts,
   };
+}
+
+/** Banda (piso) do filtro de tendência EMA do bollinger-bands — mesmo formato de
+ *  buildMaCrossAdaptiveBandsConfig (period/interval/maxDipPct + fixed*), reaproveitando o
+ *  mesmo mecanismo de overlay adaptativo do chart (EMA + linha de piso a maxDipPct% abaixo).
+ *  Sem teto (maxAbovePct: 0) — o filtro só bloqueia por baixo. null quando o filtro está
+ *  desligado no favorito, ou a entrada não é bollinger-bands. */
+export function buildBollingerEmaFilterBandsConfig(entry) {
+  if (!isBollingerBandsEntry(entry)) return null;
+  const e = entry?.entry ?? entry?.tradeConfig?.entry ?? {};
+  const ema = e.emaFilter;
+  if (!ema?.enabled) return null;
+  const dipPct = Number(ema.maxDipPct ?? 2);
+  return {
+    period: Number(ema.period ?? 50),
+    interval: ema.interval ?? e.interval ?? '1h',
+    maxDipPct: dipPct,
+    maxAbovePct: 0,
+    fixedDipPct: dipPct,
+    fixedAbovePct: null,
+    adaptiveOpts: {},
+  };
+}
+
+/** Grupo Quick EMA (painel manual do gráfico, independente de favorito — ver CandlestickChart.jsx)
+ *  pré-preenchido com a EMA do filtro de tendência do bollinger-bands selecionado: mesmo
+ *  período/intervalo/variação de buildBollingerEmaFilterBandsConfig, no formato que o painel
+ *  espera (periods: string[], bandPeriod: string). null quando o filtro está desligado. */
+export function buildBollingerQuickEmaOverride(entry) {
+  const cfg = buildBollingerEmaFilterBandsConfig(entry);
+  if (!cfg) return null;
+  const period = String(cfg.period);
+  return { period, interval: cfg.interval, belowPct: cfg.maxDipPct };
 }
 
 /**
@@ -335,6 +376,23 @@ export async function loadMultitradeSymbolChart(entry, {
 
   const chartData = await fetchCandlesticksAndCloud(sym, interval, src, candleLimit);
 
+  // Reafirma o override de VWAP/Bollinger do próprio favorito (mesmos defaults usados em
+  // applyChartVwapBandsOverlay/applyChartBollingerBandsOverlay) — precisa ser setado aqui de
+  // novo porque esta chamada roda DEPOIS daquelas (aguardou o fetch acima) e applyMultitradeSymbolChart
+  // substitui o multitradeChartFocus inteiro; sem isso, o override setado por elas era apagado
+  // e a banda sumia do gráfico logo após aparecer.
+  const e = entry.entry ?? entry.tradeConfig?.entry ?? {};
+  const vwapOverride = isVwapBandsEntry(entry)
+    ? { enabled: true, interval: e.vwapInterval ?? '4h', session: e.session ?? 'weekly', bands: true }
+    : null;
+  const bollingerOverride = isBollingerBandsEntry(entry)
+    ? { enabled: true, interval: e.interval ?? '4h', period: e.period ?? 20, stdDev: e.stdDev ?? 2 }
+    : null;
+  // Mesmo motivo do vwapOverride/bollingerOverride acima: reafirma a banda do filtro EMA do
+  // bollinger-bands (ver applyChartBollingerBandsOverlay) que essa chamada senão apagaria.
+  const adaptiveBands = buildBollingerEmaFilterBandsConfig(entry);
+  const quickEmaOverride = buildBollingerQuickEmaOverride(entry);
+
   applyMultitradeSymbolChart({
     chartData,
     symbol: sym,
@@ -344,7 +402,10 @@ export async function loadMultitradeSymbolChart(entry, {
     // MA-Cross: sem overlay/banda automática aqui — só aparece quando vier
     // explicitamente de um clique de trade no backtest (ver MultitradeBacktestPanel).
     overlaySlots: null,
-    adaptiveBands: null,
+    adaptiveBands,
+    quickEmaOverride,
+    vwapOverride,
+    bollingerOverride,
   });
 }
 

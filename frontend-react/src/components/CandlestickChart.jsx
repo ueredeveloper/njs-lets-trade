@@ -3,7 +3,7 @@ import { useI18n } from '../i18n';
 import ReactECharts from 'echarts-for-react';
 import { useCurrency } from '../contexts/CurrencyContext';
 import { fetchCandlesticksAndCloud, fetchGateTrades, fetchBinanceTrades, fetchChartAdaptiveBands, DEFAULT_CANDLE_LIMIT } from '../services/api';
-import { buildMarkersFromExchangeTrades, attachPnlToExchangeTrades, isMaCrossEntry, isVwapBandsEntry } from '../utils/multitradeChart';
+import { buildMarkersFromExchangeTrades, attachPnlToExchangeTrades, isMaCrossEntry, isVwapBandsEntry, isBollingerBandsEntry } from '../utils/multitradeChart';
 import { computeVwapSlopeFlags } from '../utils/vwapSlopeHighlight';
 import { buildTrailingStopSeries, resolveChartStopLoss, resolveChartTarget, computeStopLossFloor } from '../utils/trailingStopLoss';
 import { getEntriesForSymbol, buildAdHocMaCrossEntry } from '../constants/strategyPresets';
@@ -32,7 +32,7 @@ const COMMON_CANDLE_PRESETS = [20, 80, 160];
 // com o nível que realmente armou o sinal (ver conversa sobre a ACEUSDT/KMNOUSDT).
 const MAX_CANDLES = 10500;
 const CANDLE_FETCH_STEPS = [500, 1000];
-const OVERLAY_MA_INTERVALS = ['1m', '5m', '15m', '30m', '1h', '2h', '4h', '8h', '12h', '1d'];
+const OVERLAY_MA_INTERVALS = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '8h', '12h', '1d'];
 const OVERLAY_MA_COLORS = ['#fb923c', '#c084fc', '#34d399', '#60a5fa', '#f472b6', '#facc15', '#a78bfa', '#4ade80'];
 const INTERVALS = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w'];
 /** Intervalos mais usados no gráfico — os demais ficam escondidos atrás do botão "›" (mesmo padrão do picker de intervalos em Analisar indicadores).
@@ -95,6 +95,10 @@ const QUICK_EMA_DEFAULT_BELOW_PCT = 0.5;
 const QUICK_EMA_BAND_ADAPTIVE = 'adaptive';
 const MAX_QUICK_EMA_GROUPS = 4;
 const QUICK_EMA_STORAGE_KEY = 'lets_trade_quick_ema_groups_v4';
+/** id fixo do grupo Quick EMA sincronizado automaticamente com o filtro de tendência EMA do
+ *  favorito bollinger-bands selecionado (ver multitradeChartFocus?.quickEmaOverride abaixo) —
+ *  permite achar/atualizar/remover só esse grupo sem mexer nos que o usuário montou à mão. */
+const TRADE_EMA_GROUP_ID = 'trade-ema-filter';
 
 /** Normaliza pct de banda: null = desligada, 'adaptive' = calculada do histórico, número = fixa. */
 function normalizeQuickEmaBandPct(value) {
@@ -125,9 +129,12 @@ function loadQuickEmaGroups() {
   }
 }
 
+/** Nunca persiste o grupo auto-sincronizado do favorito bollinger-bands (TRADE_EMA_GROUP_ID)
+ *  — ele é derivado do trade selecionado, não uma escolha manual do usuário; sem esse filtro,
+ *  o valor de uma moeda vazava pro localStorage e reaparecia (errado) ao abrir outra moeda. */
 function saveQuickEmaGroups(groups) {
   try {
-    localStorage.setItem(QUICK_EMA_STORAGE_KEY, JSON.stringify(groups));
+    localStorage.setItem(QUICK_EMA_STORAGE_KEY, JSON.stringify(groups.filter((g) => g.id !== TRADE_EMA_GROUP_ID)));
   } catch { /* ignore */ }
 }
 
@@ -296,20 +303,6 @@ async function fetchVwapPoints(symbol, interval, session, anchor, source, limit)
     body: JSON.stringify(candles),
   }).then(r => r.json());
   if (!Array.isArray(points)) return [];
-
-  // Print de comparação com o print do bot (backend/bot/vwap-bands/vwap-bands-bot.js) —
-  // mesmo padrão up2/up1/vw/lw1/lw2, só o último ponto (vigente agora) + o último candle
-  // (fechamento e se é de alta ou de baixa), pra conferir também a reconquista.
-  const last = points[points.length - 1];
-  const lastCandle = candles[candles.length - 1];
-  if (last) {
-    const candleInfo = lastCandle
-      ? ` | candle ${new Date(Number(lastCandle.openTime)).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })} close=${lastCandle.close} (${parseFloat(lastCandle.close) > parseFloat(lastCandle.open) ? 'alta' : 'baixa'})`
-      : '';
-    console.log(
-      `[VWAP ${symbol} ${interval} ${session}/${anchor}] up2 ${last.upper2} | up1 ${last.upper1} | vw ${last.value} | lw1 ${last.lower1} | lw2 ${last.lower2}${candleInfo}`,
-    );
-  }
 
   return points;
 }
@@ -2760,6 +2753,48 @@ export default function CandlestickChart() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedChart?.symbol, selectedChart?.interval, chartViewSource, multitradeChartFocus?.candleLimit, chartCandleWindowReset, isNotebook]);
 
+  // Refs pra checar "fetch em andamento" de dentro do setInterval sem precisar recriá-lo
+  // a cada toggle de loading (o timer só precisa reiniciar quando símbolo/intervalo/limite mudam).
+  const autoRefreshBusyRef = useRef({ interval: false, more: false });
+  useEffect(() => { autoRefreshBusyRef.current.interval = loadingInterval; }, [loadingInterval]);
+  useEffect(() => { autoRefreshBusyRef.current.more = loadingMoreCandles; }, [loadingMoreCandles]);
+
+  // Atualização automática dos candles: 1m/3m/5m repetem no próprio período do candle (1m
+  // → a cada 60s), do 15m pra cima usa um teto de 5min — mesmo "adaptive polling" já usado
+  // pelo bot de trade (ver seção correspondente no CLAUDE.md), suficiente pra pegar o
+  // fechamento/formação do candle sem ficar batendo a API a cada segundo. Pausa quando a aba
+  // está em segundo plano (document.hidden) e quando o gráfico está travado numa janela
+  // histórica (Estatísticas/Multi-Trade/5m Trade setam chartZoom com start/end fixos —
+  // reconsultar a API ali só deslocaria a janela pra longe do trade sendo revisado).
+  useEffect(() => {
+    const symbol = selectedChart?.symbol;
+    const interval = selectedChart?.interval;
+    const source = selectedChart?.source ?? null;
+    if (!symbol || !interval || chartZoom) return undefined;
+
+    const ivMs = INTERVAL_MS[interval] ?? 60_000;
+    const pollMs = Math.min(ivMs, 5 * 60_000);
+    let cancelled = false;
+
+    const id = setInterval(async () => {
+      if (cancelled || document.hidden) return;
+      if (autoRefreshBusyRef.current.interval || autoRefreshBusyRef.current.more) return;
+      try {
+        const data = await fetchCandlesticksAndCloud(symbol, interval, source, candleFetchLimit);
+        if (cancelled) return;
+        setSelectedChart(prev => (
+          prev && prev.symbol === symbol && prev.interval === interval && (prev.source ?? null) === source
+            ? { ...prev, ...data, tradeMarkers: prev.tradeMarkers }
+            : prev
+        ));
+      } catch (e) {
+        console.warn('[CandlestickChart] auto-refresh candles:', e.message);
+      }
+    }, pollMs);
+
+    return () => { cancelled = true; clearInterval(id); };
+  }, [selectedChart?.symbol, selectedChart?.interval, selectedChart?.source, chartZoom, candleFetchLimit]);
+
   // Só entra em modo "overlay forçado" quando o painel de trade realmente impõe
   // slots (ex.: sinal de backtest com regra própria). Selecionar uma moeda que é
   // apenas um favorito MA-Cross (que não força overlaySlots) NUNCA deve tirar os
@@ -2790,11 +2825,63 @@ export default function CandlestickChart() {
   useEffect(() => {
     if (hasForcedVwap) {
       setVwap(multitradeChartFocus.vwapOverride);
-    } else if (!isTradePanelChartView(chartViewSource) && !chartZoom?.vwap) {
+    } else if (chartZoom?.vwap) {
+      // aba Estatísticas cuida do próprio overlay (useEffect acima) — não mexe aqui.
+    } else if (isTradePanelChartView(chartViewSource)) {
+      // Ainda dentro do painel de trade, mas favorito atual não é vwap-bands (ex.: trocou
+      // pra MA-Cross ou Bollinger Bands) — desliga a VWAP pra não vazar banda de outro trade.
+      setVwap((v) => (v.enabled ? { ...v, enabled: false } : v));
+    } else {
       setVwap({ ...uiPrefs.vwapDefaults });
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasForcedVwap, multitradeChartFocus?.vwapOverride, chartViewSource, chartZoom?.vwap]);
+
+  // Favorito bollinger-bands: força a banda de Bollinger (período/desvio/intervalo do
+  // próprio bot) no chart — mesma ideia do overlay de VWAP acima, mas pra Bollinger. Assim,
+  // ao selecionar uma moeda BB rodando em 5m e outra em 1m, o gráfico E a banda acompanham
+  // o intervalo configurado de cada uma, não o intervalo manual do painel (tile "BB").
+  const hasForcedBollinger = isTradePanelChartView(chartViewSource) && !!multitradeChartFocus?.bollingerOverride;
+  useEffect(() => {
+    if (hasForcedBollinger) {
+      setBollingerBands(multitradeChartFocus.bollingerOverride);
+    } else if (chartZoom?.bollinger) {
+      // aba Estatísticas cuida do próprio overlay (useEffect acima) — não mexe aqui.
+    } else if (isTradePanelChartView(chartViewSource)) {
+      // Ainda dentro do painel de trade, mas favorito atual não é bollinger-bands (ex.: trocou
+      // pra MA-Cross ou VWAP Bands) — desliga a Bollinger pra não vazar banda de outro trade.
+      setBollingerBands((b) => (b.enabled ? { ...b, enabled: false } : b));
+    } else {
+      setBollingerBands({ ...uiPrefs.bollingerBandsDefaults });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasForcedBollinger, multitradeChartFocus?.bollingerOverride, chartViewSource, chartZoom?.bollinger]);
+
+  // Favorito bollinger-bands com o filtro de tendência EMA ligado: sincroniza um grupo Quick
+  // EMA (painel manual do gráfico, TRADE_EMA_GROUP_ID) com o período/intervalo/variação
+  // daquele filtro — sem isso, o painel ficava com o que o usuário tinha configurado à mão
+  // antes, sem relação com a moeda selecionada (ex.: REUSDT com filtro EMA50@30m mostrando um
+  // grupo velho EMA50@3m). Some (sem apagar os grupos manuais do usuário) ao trocar pra um
+  // favorito sem esse filtro, ou sair do painel de trade.
+  const hasForcedQuickEma = isTradePanelChartView(chartViewSource) && !!multitradeChartFocus?.quickEmaOverride;
+  useEffect(() => {
+    setQuickEmaGroups((prev) => {
+      const withoutAuto = prev.filter((g) => g.id !== TRADE_EMA_GROUP_ID);
+      if (!hasForcedQuickEma) {
+        return withoutAuto.length === prev.length ? prev : withoutAuto;
+      }
+      const ov = multitradeChartFocus.quickEmaOverride;
+      const group = {
+        id: TRADE_EMA_GROUP_ID,
+        interval: ov.interval,
+        periods: [ov.period],
+        bandPeriod: ov.period,
+        abovePct: null,
+        belowPct: ov.belowPct ?? null,
+      };
+      return [group, ...withoutAuto].slice(0, MAX_QUICK_EMA_GROUPS);
+    });
+  }, [hasForcedQuickEma, multitradeChartFocus?.quickEmaOverride]);
 
   // Persiste preferências das bandas (pct, acima/abaixo, período/intervalo) quando o usuário altera
   useEffect(() => {
@@ -3729,6 +3816,40 @@ export default function CandlestickChart() {
     return () => { cancelled = true; };
   }, [selectedChart?.symbol, selectedChart?.source, multitradeFavorites]);
 
+  // Alvo real da Bollinger Bands (posição BOUGHT) — banda superior ao vivo (recalculada a
+  // cada tick pelo bot, não fixa no momento da compra); mesma ideia do vwapLadderLevels
+  // acima, mas sem escada (só uma banda). Sem stop especial aqui — o stop de BB já é um piso
+  // percentual simples, coberto por resolveChartStopLoss/buildTrailingStopSeries (chartStopLossConfig
+  // abaixo não precisa de override pro bollinger-bands).
+  const [bollingerTargetLevels, setBollingerTargetLevels] = useState(null);
+
+  useEffect(() => {
+    const sym = selectedChart?.symbol;
+    if (!sym) { setBollingerTargetLevels(null); return undefined; }
+    const entry = multitradeFavorites?.find(
+      e => e.symbol?.toUpperCase() === sym.toUpperCase() && e.phase === 'BOUGHT' && isBollingerBandsEntry(e),
+    );
+    if (!entry) { setBollingerTargetLevels(null); return undefined; }
+    let cancelled = false;
+    const e = entry.tradeConfig?.entry ?? entry.entry ?? {};
+    const interval = e.interval ?? '4h';
+    const period = e.period ?? 20;
+    const stdDev = e.stdDev ?? 2;
+    const source = selectedChart.source === 'gate' ? 'gate' : 'binance';
+    const limit = Math.min(1000, period * 3 + 30);
+    fetchBollingerOverlayPoints(sym, interval, period, stdDev, source, limit)
+      .then(points => {
+        if (cancelled || !points?.length) return;
+        const targetPrice = Number(points[points.length - 1]?.upper);
+        setBollingerTargetLevels({
+          symbol: sym,
+          targetPrice: Number.isFinite(targetPrice) ? targetPrice : null,
+        });
+      })
+      .catch(() => { if (!cancelled) setBollingerTargetLevels(null); });
+    return () => { cancelled = true; };
+  }, [selectedChart?.symbol, selectedChart?.source, multitradeFavorites]);
+
   const chartStopLossConfig = useMemo(() => {
     if (!selectedChart?.symbol) return null;
     if (vwapLadderLevels?.symbol === selectedChart.symbol && vwapLadderLevels.stopPrice != null) {
@@ -3742,8 +3863,11 @@ export default function CandlestickChart() {
     if (vwapLadderLevels?.symbol === selectedChart.symbol && vwapLadderLevels.targetPrice != null) {
       return { enabled: true, mode: 'price', price: vwapLadderLevels.targetPrice, levelLabel: vwapLadderLevels.targetLevel };
     }
+    if (bollingerTargetLevels?.symbol === selectedChart.symbol && bollingerTargetLevels.targetPrice != null) {
+      return { enabled: true, mode: 'price', price: bollingerTargetLevels.targetPrice, levelLabel: 'upper' };
+    }
     return resolveChartTarget(selectedChart.symbol, multitradeFavorites);
-  }, [selectedChart?.symbol, multitradeFavorites, vwapLadderLevels]);
+  }, [selectedChart?.symbol, multitradeFavorites, vwapLadderLevels, bollingerTargetLevels]);
 
   // Aba "Bot": mostra a estratégia REAL do favorito da moeda selecionada (ma-cross ou
   // vwap-bands) — antes disso era sempre tratado como ma-cross, mostrando linhas de

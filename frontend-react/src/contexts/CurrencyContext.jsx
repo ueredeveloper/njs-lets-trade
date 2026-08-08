@@ -9,6 +9,8 @@ import { addFavorite, removeFavorite, fetchActiveTrades, ignoreActiveTrade,
 import { CHART_VIEW } from '../utils/chartView';
 import {
   buildOverlaySlotsForEntry,
+  buildBollingerEmaFilterBandsConfig,
+  buildBollingerQuickEmaOverride,
 } from '../utils/multitradeChart';
 import {
   ASSET_CATEGORY_KEYS,
@@ -357,16 +359,23 @@ export function CurrencyProvider({ children }) {
 
   /** Chart MT por símbolo/favorita — intervalo da estratégia + marcadores, sem zoom em trade */
   const applyMultitradeSymbolChart = useCallback(({
-    chartData, symbol, interval, exchangeSource, markers, overlaySlots, adaptiveBands,
+    chartData, symbol, interval, exchangeSource, markers, overlaySlots, adaptiveBands, quickEmaOverride, vwapOverride, bollingerOverride,
   }) => {
     setChartViewSource(CHART_VIEW.MULTITRADE);
     setChartInterval(interval);
     setChartTradeMarkers(markers ?? []);
+    // vwapOverride/bollingerOverride: setados explicitamente (não herdados do foco anterior) —
+    // sem isso, esta chamada (que roda DEPOIS de applyChartVwapBandsOverlay/applyChartBollingerBandsOverlay,
+    // já que aguarda o fetch de candles) apagava o override recém-setado por elas, fazendo a banda
+    // sumir do gráfico logo após aparecer (ver conversa sobre favoritos Bollinger Bands).
     setMultitradeChartFocus({
       overlaySlots: overlaySlots ?? null,
       adaptiveBands: adaptiveBands ?? null,
+      quickEmaOverride: quickEmaOverride ?? null,
       symbol,
       source: exchangeSource ?? null,
+      vwapOverride: vwapOverride ?? null,
+      bollingerOverride: bollingerOverride ?? null,
     });
     setSelectedChart({
       ...chartData,
@@ -415,7 +424,7 @@ export function CurrencyProvider({ children }) {
     if (!entry?.symbol && !symbol) {
       setMultitradeChartFocus(prev => {
         if (!prev) return null;
-        const { overlaySlots: _o, adaptiveBands: _a, vwapOverride: _v, symbol: _s, ...rest } = prev;
+        const { overlaySlots: _o, adaptiveBands: _a, quickEmaOverride: _q, vwapOverride: _v, bollingerOverride: _b, symbol: _s, ...rest } = prev;
         return Object.keys(rest).length ? rest : null;
       });
       return;
@@ -433,9 +442,11 @@ export function CurrencyProvider({ children }) {
       // MA-Cross → null: não troca MA1/MA2 do usuário (padrão 50@1h)
       if (strategySlots) next.overlaySlots = strategySlots;
       else delete next.overlaySlots;
-      // Troca de favorito ma-cross → vwap-bands (ou vice-versa) sem passar por "limpar":
-      // não deixa a banda de VWAP forçada da seleção anterior vazar aqui.
+      // Troca de favorito ma-cross → vwap-bands/bollinger-bands (ou vice-versa) sem passar
+      // por "limpar": não deixa a banda forçada da seleção anterior vazar aqui.
       delete next.vwapOverride;
+      delete next.bollingerOverride;
+      delete next.quickEmaOverride;
       return next;
     });
   }, []);
@@ -462,6 +473,44 @@ export function CurrencyProvider({ children }) {
         },
       };
       delete next.overlaySlots;
+      delete next.bollingerOverride;
+      delete next.quickEmaOverride;
+      return next;
+    });
+  }, [applyChartMaCrossOverlay]);
+
+  /** Mesma ideia do overlay do vwap-bands, mas força a banda de Bollinger (período/desvio/
+   *  intervalo) configurada no favorito bollinger-bands, igual ao que o bot vigia — assim,
+   *  ao selecionar uma moeda BB rodando em 5m e outra em 1m, o gráfico e a banda acompanham
+   *  o intervalo de cada uma em vez de ficar preso ao intervalo manual do painel.
+   *  Se o favorito tem entry.emaFilter ligado, também força a banda adaptativa (EMA do
+   *  filtro + linha de piso a maxDipPct% abaixo) e o grupo Quick EMA (painel manual do
+   *  gráfico) — diferente do ma-cross, aqui aparece já ao selecionar a moeda (não só num
+   *  clique de trade no backtest), pra deixar visível o filtro que está de fato gatilhando
+   *  (ou barrando) a entrada — ver conversa sobre REUSDT mostrando EMA50@3m (grupo Quick EMA
+   *  antigo/manual) em vez do EMA50@30m configurado no favorito. */
+  const applyChartBollingerBandsOverlay = useCallback((entry, symbol) => {
+    if (!entry?.symbol && !symbol) {
+      applyChartMaCrossOverlay(null);
+      return;
+    }
+    const sym = (symbol ?? entry.symbol)?.toUpperCase();
+    const e = entry?.entry ?? entry?.tradeConfig?.entry ?? {};
+    setMultitradeChartFocus(prev => {
+      const next = {
+        ...(prev ?? {}),
+        symbol: sym,
+        adaptiveBands: buildBollingerEmaFilterBandsConfig(entry),
+        quickEmaOverride: buildBollingerQuickEmaOverride(entry),
+        bollingerOverride: {
+          enabled: true,
+          interval: e.interval ?? '4h',
+          period: e.period ?? 20,
+          stdDev: e.stdDev ?? 2,
+        },
+      };
+      delete next.overlaySlots;
+      delete next.vwapOverride;
       return next;
     });
   }, [applyChartMaCrossOverlay]);
@@ -999,6 +1048,7 @@ export function CurrencyProvider({ children }) {
         applyMultitradeSymbolChart,
         applyChartMaCrossOverlay,
         applyChartVwapBandsOverlay,
+        applyChartBollingerBandsOverlay,
         clearMultitradeChartView,
         applyFiveMTradeChartView,
         clearFiveMTradeChartView,

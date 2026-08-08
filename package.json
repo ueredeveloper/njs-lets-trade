@@ -1,6 +1,6 @@
 {
   "name": "njs-lets-trade",
-  "version": "1.74.1",
+  "version": "1.75.0",
   "description": "",
   "main": "index.js",
   "dependencies": {
@@ -20,6 +20,7 @@
     "start:dev": "node start.js",
     "start:bundle": "node start.js",
     "backend": "node backend/server.js",
+    "bots:bands": "node backend/bot/start-bands-bots.js",
     "frontend:react": "npm run dev --prefix frontend-react",
     "build:frontend": "npm run build --prefix frontend-react",
     "test": "jest"

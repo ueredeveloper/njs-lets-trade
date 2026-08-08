@@ -13,6 +13,7 @@ import MultitradeModal from './MultitradeModal';
 import MultitradeBotStateModal from './MultitradeBotStateModal';
 import MultitradeSellModal from './MultitradeSellModal';
 import VwapBandsFavoriteModal from './VwapBandsFavoriteModal';
+import BollingerBandsFavoriteModal from './BollingerBandsFavoriteModal';
 import { getEntriesForSymbol } from '../constants/strategyPresets';
 import { CHART_VIEW } from '../utils/chartView';
 import {
@@ -31,7 +32,7 @@ import {
   formatTradeStatusBadge, loadTradeFavSort, tradePnlForSort,
   saveTradeFavSort, expandWeeklyTrades,
 } from '../utils/tradeFavoritesSort';
-import { compareVwapFavorites, loadVwapFavSort } from '../utils/vwapFavoritesSort';
+import { compareVwapFavorites, loadVwapFavSort, PHASE_SORT_ORDER } from '../utils/vwapFavoritesSort';
 import { useMacrossFavoritesStatus } from '../hooks/useMacrossFavoritesStatus';
 import { useTradeFavoritesSummary } from '../hooks/useTradeFavoritesSummary';
 import { useVwapBandWidthMeta } from '../hooks/useVwapBandWidthMeta';
@@ -50,6 +51,7 @@ const GATE_COLOR    = '#0068ff';
 const BINANCE_COLOR = '#fcd535';
 const MT_COLOR      = '#22d3ee';
 const VWAP_BANDS_COLOR = '#a78bfa';
+const BOLLINGER_BANDS_COLOR = '#f472b6';
 const TRADE_COLOR   = '#00c076';
 const ACTIVE_COLOR  = '#f59e0b';
 const ALTA_COLOR    = '#f97316';
@@ -82,6 +84,10 @@ function getMaCrossEntries(favorites, symbol) {
 
 function getVwapBandsEntry(favorites, symbol) {
   return getEntriesForSymbol(favorites, symbol).find(e => e.strategyId === 'vwap-bands') ?? null;
+}
+
+function getBollingerBandsEntry(favorites, symbol) {
+  return getEntriesForSymbol(favorites, symbol).find(e => e.strategyId === 'bollinger-bands') ?? null;
 }
 
 
@@ -289,7 +295,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   const {
     currencies, findFilter, selectedQuote,     selectedChart, setSelectedChart, setChartZoom, setChartTradeMarkers,
     setChartViewSource, clearMultitradeChartView, chartInterval, setChartInterval,
-    applyMultitradeSymbolChart, applyChartMaCrossOverlay, applyChartVwapBandsOverlay,
+    applyMultitradeSymbolChart, applyChartMaCrossOverlay, applyChartVwapBandsOverlay, applyChartBollingerBandsOverlay,
     gateFavorites, binanceFavorites,
     toggleGateFavorite, toggleBinanceFavorite,
     setTradePurchases, setAllTrades,
@@ -308,6 +314,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   const [activeRow, setActiveRow]               = useState(null);
   const [mtModal, setMtModal]       = useState(null);
   const [vwapModal, setVwapModal]   = useState(null);
+  const [bbModal, setBbModal]       = useState(null);
   const [mtStateModal, setMtStateModal] = useState(null);
   const [mtSellEntry, setMtSellEntry] = useState(null);
   const [search, setSearch]               = useState('');
@@ -497,6 +504,23 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
         phaseBySymbol: vbPhaseBySymbol,
         widthMeta: vwapFavWidthMeta,
       }));
+    } else if (favoriteView === 'bollinger-bands') {
+      const bbEntries = multitradeFavorites.filter(e => e.enabled !== false && e.strategyId === 'bollinger-bands');
+      const bbSymbolsList = bbEntries.map(e => e.symbol);
+      const bbPhaseBySymbol = new Map(bbEntries.map(e => [e.symbol, e.phase ?? 'WATCHING']));
+      list = resolveFavorites(new Set(bbSymbolsList), currencies.list, gateAll);
+      const have = new Set(list.map(c => c.symbol));
+      for (const sym of bbSymbolsList) {
+        if (!have.has(sym)) list.push({ symbol: sym, price: 0, volume: 0 });
+      }
+      // Sem seletor de ordenação dedicado (ainda não há métrica tipo "largura de banda" pro
+      // BB) — mesma ordem padrão do VWAP Bands: comprado primeiro, depois alfabética.
+      list = list.slice().sort((a, b) => {
+        const pa = PHASE_SORT_ORDER[bbPhaseBySymbol.get(a.symbol) ?? 'WATCHING'] ?? 2;
+        const pb = PHASE_SORT_ORDER[bbPhaseBySymbol.get(b.symbol) ?? 'WATCHING'] ?? 2;
+        if (pa !== pb) return pa - pb;
+        return a.symbol.localeCompare(b.symbol);
+      });
     } else if (favoriteView === 'trades') {
       const filtered = filterTradeFavorites(tradeFavSymbols, tradeFavStatus, tradeFavSort);
       list = resolveFavorites(new Set(filtered), currencies.list, gateAll);
@@ -769,8 +793,11 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
       const vwapEntryRaw = getVwapBandsEntry(multitradeFavorites, item.symbol);
       const vwapEntry = !isMT && vwapEntryRaw?.enabled !== false ? vwapEntryRaw : null;
       const isVwapBot = !isMT && !!vwapEntry && !isTradesFavView;
-      const botEntry = isMT ? mtEntry : vwapEntry;
-      const isBotFavorite = isMT || isVwapBot;
+      const bbEntryRaw = !isMT && !vwapEntry ? getBollingerBandsEntry(multitradeFavorites, item.symbol) : null;
+      const bbEntry = bbEntryRaw?.enabled !== false ? bbEntryRaw : null;
+      const isBbBot = !isMT && !vwapEntry && !!bbEntry && !isTradesFavView;
+      const botEntry = isMT ? mtEntry : (vwapEntry ?? bbEntry);
+      const isBotFavorite = isMT || isVwapBot || isBbBot;
 
       let effectiveInterval = chartInterval || selectedChart?.interval || '15m';
       if (filterChartInterval) {
@@ -785,10 +812,12 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
           : (isBotFavorite && !filterChartInterval ? CHART_VIEW.MULTITRADE : CHART_VIEW.TABLE),
       );
 
-      // Favorito MA-Cross/VWAP Bands só manda no chart quando não há filtro com intervalo explícito
+      // Favorito MA-Cross/VWAP Bands/Bollinger Bands só manda no chart quando não há filtro
+      // com intervalo explícito
       if (isBotFavorite && !filterChartInterval) {
         if (isMT) applyChartMaCrossOverlay(botEntry, item.symbol);
-        else applyChartVwapBandsOverlay(botEntry, item.symbol);
+        else if (isVwapBot) applyChartVwapBandsOverlay(botEntry, item.symbol);
+        else applyChartBollingerBandsOverlay(botEntry, item.symbol);
         await loadMultitradeSymbolChart(botEntry, {
           fetchCandlesticksAndCloud,
           fetchMultitradeTrades,
@@ -902,6 +931,10 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     multitradeFavorites.filter(e => e.enabled !== false && e.strategyId === 'vwap-bands').map(e => e.symbol),
   );
   const vwapCount    = [...vwapSymbols].filter((sym) => isVisibleSymbol(sym)).length;
+  const bbSymbols    = new Set(
+    multitradeFavorites.filter(e => e.enabled !== false && e.strategyId === 'bollinger-bands').map(e => e.symbol),
+  );
+  const bbCount      = [...bbSymbols].filter((sym) => isVisibleSymbol(sym)).length;
 
   /** Somatório do PnL das linhas visíveis (respeita filtro ativo). */
   const tradePnlSum = useMemo(() => {
@@ -1083,6 +1116,17 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
             count={vwapCount}
             title={favoriteView === 'vwap-bands' ? 'Favoritos VWAP Bands — clique pra sair' : `Favoritos VWAP Bands (${vwapCount})`}
             onClick={() => handleToggleFavoriteView('vwap-bands')}
+          />
+          )}
+          {uiPrefs.visibleFavoriteButtons['bollinger-bands'] !== false && (
+          <ToolbarBtn
+            id="currency-table-btn-filter-bollinger-bands"
+            active={favoriteView === 'bollinger-bands'}
+            color={BOLLINGER_BANDS_COLOR}
+            label="BB"
+            count={bbCount}
+            title={favoriteView === 'bollinger-bands' ? 'Favoritos Bollinger Bands — clique pra sair' : `Favoritos Bollinger Bands (${bbCount})`}
+            onClick={() => handleToggleFavoriteView('bollinger-bands')}
           />
           )}
           {uiPrefs.visibleFavoriteButtons.gate !== false && (
@@ -1383,6 +1427,8 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
               const isMT       = mtEntries.some(e => e.enabled !== false);
               const vwapEntry  = getVwapBandsEntry(multitradeFavorites, item.symbol);
               const isVwap     = vwapEntry?.enabled !== false && !!vwapEntry;
+              const bbEntry    = getBollingerBandsEntry(multitradeFavorites, item.symbol);
+              const isBb       = bbEntry?.enabled !== false && !!bbEntry;
               const activeInfo = activeTrades.get(item.symbol);
               const isActiveHolding = !!activeInfo;
               const tradeMeta  = isTradesFavView ? tradeFavStatus[item.symbol] : null;
@@ -1439,6 +1485,11 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                         setVwapModal({ symbol: item.symbol, exchange: isGate && !isBinance ? 'gate' : 'binance', entry: vwapEntry });
                       }} />
                       )}
+                      {uiPrefs.visibleFavoriteButtons['bollinger-bands'] !== false && (
+                      <FavButton kind="BB" text="BB" symbol={item.symbol} active={isBb} color={BOLLINGER_BANDS_COLOR} label="Bollinger Bands" onClick={() => {
+                        setBbModal({ symbol: item.symbol, exchange: isGate && !isBinance ? 'gate' : 'binance', entry: bbEntry });
+                      }} />
+                      )}
                     </div>
                   </td>
 
@@ -1447,8 +1498,8 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                     style={{ width: parColWidth }}
                   >
                     <div className={parContentClass}>
-                      {(isMT || isVwap) && !isTradesFavView && !isActiveFavView ? (() => {
-                        const botEntries = isMT ? mtEntries : (vwapEntry ? [vwapEntry] : []);
+                      {(isMT || isVwap || isBb) && !isTradesFavView && !isActiveFavView ? (() => {
+                        const botEntries = isMT ? mtEntries : (vwapEntry ? [vwapEntry] : (bbEntry ? [bbEntry] : []));
                         const botPhase = symbolPhaseSummary(botEntries);
                         const botPh = multitradePhaseBadge(botPhase, lang);
                         const bought = botEntries.find(e => e.phase === 'BOUGHT' && e.buyTime);
@@ -1789,6 +1840,32 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
             onCancel={() => {
               console.log(`${FAV_LOG} VWAP cancelar`, vwapModal.symbol);
               setVwapModal(null);
+            }}
+          />
+        </ModalPortal>
+      )}
+
+      {bbModal && (
+        <ModalPortal>
+          <BollingerBandsFavoriteModal
+            symbol={bbModal.symbol}
+            defaultExchange={bbModal.exchange}
+            currentEntry={bbModal.entry}
+            onConfirm={async ({ id, payload }) => {
+              console.log(`${FAV_LOG} BB confirmar`, { symbol: bbModal.symbol, id });
+              await saveMultitradeSymbol({ saves: [{ id, payload }] });
+              console.log(`${FAV_LOG} BB salvo OK`, bbModal.symbol);
+              setBbModal(null);
+            }}
+            onRemove={async (id) => {
+              console.log(`${FAV_LOG} BB remover`, { symbol: bbModal.symbol, id });
+              await removeMultitradeEntry(id);
+              console.log(`${FAV_LOG} BB removido OK`, bbModal.symbol);
+              setBbModal(null);
+            }}
+            onCancel={() => {
+              console.log(`${FAV_LOG} BB cancelar`, bbModal.symbol);
+              setBbModal(null);
             }}
           />
         </ModalPortal>

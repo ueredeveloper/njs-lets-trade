@@ -10,7 +10,7 @@ export const PANEL_KEYS = ['indicators', 'stats'];
 /** Botões de favoritos na tabela de moedas (barra de ferramentas + linhas) — editável em
  *  Configurações pra esconder o que não está em uso no momento (ex.: MC se não usa mais
  *  ma-cross). Todos visíveis por padrão. */
-export const FAVORITE_BUTTON_KEYS = ['gate', 'binance', 'macross', 'vwap-bands', 'active', 'trades'];
+export const FAVORITE_BUTTON_KEYS = ['gate', 'binance', 'macross', 'vwap-bands', 'bollinger-bands', 'active', 'trades'];
 
 export function normalizeVisibleFavoriteButtons(raw) {
   const result = {};
