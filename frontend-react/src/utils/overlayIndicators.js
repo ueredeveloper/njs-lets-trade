@@ -104,6 +104,16 @@ export async function fetchVwapBandsLines(symbol, interval, session, bandMultipl
     body: JSON.stringify(candles),
   }).then(r => r.json());
   if (!Array.isArray(points)) return null;
+
+  // Print de comparação com o print do bot (backend/bot/vwap-bands/vwap-bands-bot.js) —
+  // mesmo padrão up2/up1/vw/lw1/lw2, só o último ponto (vigente agora).
+  const last = points[points.length - 1];
+  if (last) {
+    console.log(
+      `[VWAP ${symbol} ${interval} ${session}] up2 ${last.upper2} | up1 ${last.upper1} | vw ${last.value} | lw1 ${last.lower1} | lw2 ${last.lower2}`,
+    );
+  }
+
   const upperKey = `upper${bandMultiplier}`;
   const lowerKey = `lower${bandMultiplier}`;
   return {

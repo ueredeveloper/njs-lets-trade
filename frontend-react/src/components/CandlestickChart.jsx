@@ -256,6 +256,29 @@ async function fetchBollingerOverlayPoints(symbol, interval, period, stdDev, sou
   }));
 }
 
+// Mesmo teto de retenção do cache em disco usado pelo bot real (ver
+// backend/utils/candleRetentionLimits.js) — 1m precisa de mais candles pra cobrir uma janela
+// semanal de verdade (7 dias = ~10080 candles a 1m).
+const VWAP_RETENTION_LIMIT_BY_INTERVAL = { '1m': 10500 };
+const VWAP_DEFAULT_RETENTION_LIMIT = 3000;
+const VWAP_SESSION_HOURS = { daily: 24, weekly: 24 * 7 };
+
+/**
+ * Candles necessários pra uma VWAP diária/semanal REAL no intervalo dado — mesma conta de
+ * getRequiredSpecs em backend/bot/vwap-bands/strategyEngine.js (vwapLimit). Sem isso, o
+ * overlay de VWAP do gráfico usava só o limite de candles já carregados pro candlestick
+ * (ex.: 160), o que faz uma "VWAP semanal" em 1m virar, na prática, a VWAP das últimas
+ * poucas horas — bandas bem mais estreitas e deslocadas do que o bot real calcula (ver
+ * conversa sobre a BICOUSDT: bot mostrava bandas ~5x mais largas que o gráfico).
+ */
+function vwapFetchLimit(interval, session) {
+  const sessionHours = VWAP_SESSION_HOURS[session] ?? 24;
+  const ivMs = INTERVAL_MS[interval] ?? 60_000;
+  const perSession = Math.ceil((sessionHours * 3_600_000) / ivMs);
+  const retentionLimit = VWAP_RETENTION_LIMIT_BY_INTERVAL[interval] ?? VWAP_DEFAULT_RETENTION_LIMIT;
+  return Math.min(retentionLimit, perSession * 3 + 30);
+}
+
 /**
  * Busca VWAP (diária/semanal) num intervalo próprio (independente do gráfico) — mesmo
  * padrão da Bollinger. `anchor` = 'session' (reset de calendário, padrão) ou 'rolling'
@@ -272,7 +295,23 @@ async function fetchVwapPoints(symbol, interval, session, anchor, source, limit)
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(candles),
   }).then(r => r.json());
-  return Array.isArray(points) ? points : [];
+  if (!Array.isArray(points)) return [];
+
+  // Print de comparação com o print do bot (backend/bot/vwap-bands/vwap-bands-bot.js) —
+  // mesmo padrão up2/up1/vw/lw1/lw2, só o último ponto (vigente agora) + o último candle
+  // (fechamento e se é de alta ou de baixa), pra conferir também a reconquista.
+  const last = points[points.length - 1];
+  const lastCandle = candles[candles.length - 1];
+  if (last) {
+    const candleInfo = lastCandle
+      ? ` | candle ${new Date(Number(lastCandle.openTime)).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })} close=${lastCandle.close} (${parseFloat(lastCandle.close) > parseFloat(lastCandle.open) ? 'alta' : 'baixa'})`
+      : '';
+    console.log(
+      `[VWAP ${symbol} ${interval} ${session}/${anchor}] up2 ${last.upper2} | up1 ${last.upper1} | vw ${last.value} | lw1 ${last.lower1} | lw2 ${last.lower2}${candleInfo}`,
+    );
+  }
+
+  return points;
 }
 
 /** Busca S/R num intervalo próprio (independente do gráfico) — mesmo padrão da Bollinger. */
@@ -3135,12 +3174,19 @@ export default function CandlestickChart() {
     setVwapLoading(true);
     (async () => {
       try {
-        const ovLimit = computeOverlayMaFetchLimit(
-          selectedChart.interval ?? currentInterval,
-          vwap.interval,
-          1,
-          Math.max(displayCandleCount, selectedChart.candlesticks?.length ?? 0, DEFAULT_CANDLE_LIMIT),
-          overlayFetchLimit,
+        // Usa o MAIOR entre o limite que cobre o span visível do gráfico e o limite real de
+        // uma sessão diária/semanal (vwapFetchLimit) — sem isso, uma VWAP semanal em 1m
+        // ficava presa ao limite de candles do candlestick (ex.: 160), virando na prática a
+        // VWAP de só algumas horas em vez da semana inteira (ver comentário de vwapFetchLimit).
+        const ovLimit = Math.max(
+          computeOverlayMaFetchLimit(
+            selectedChart.interval ?? currentInterval,
+            vwap.interval,
+            1,
+            Math.max(displayCandleCount, selectedChart.candlesticks?.length ?? 0, DEFAULT_CANDLE_LIMIT),
+            overlayFetchLimit,
+          ),
+          vwapFetchLimit(vwap.interval, vwap.session),
         );
         const points = await fetchVwapPoints(
           selectedChart.symbol, vwap.interval, vwap.session, anchor, selectedChart.source, ovLimit,
