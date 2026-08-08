@@ -1476,6 +1476,16 @@ function fmtChartPrice(p) {
   return p < 0.01 ? p.toFixed(6) : p < 1 ? p.toFixed(4) : p.toFixed(2);
 }
 
+/** Rótulos do eixo de preço no celular: tela estreita não tem espaço pra 4-6 casas decimais
+ *  (ver fmtChartPrice) — versão compacta, só o necessário pra diferenciar o valor visualmente. */
+function fmtAxisPriceMobile(p) {
+  const n = Number(p);
+  if (!Number.isFinite(n)) return '';
+  if (n >= 1) return n.toFixed(2);
+  if (n >= 0.01) return n.toFixed(2);
+  return n.toPrecision(2);
+}
+
 /** Tempo decorrido (ms) em texto curto: "45m", "5h", "5h30m", "1d 3h"… */
 function fmtElapsedTime(ms) {
   if (!Number.isFinite(ms) || ms < 0) return null;
@@ -1913,7 +1923,7 @@ function buildSignalMarkers(candlesticks, markers, DL, LEFT_PAD, chartInterval) 
   return points;
 }
 
-function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAverage, ma50, ma9, ma21, rsi }, colors, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = [], overlayConfigs = [], multitradeMarkers = [], chartLeftPad = CHART_LEFT_MARGIN, buyInfo = null, stopLossConfig = null, targetConfig = null, chartRightPad = CHART_PRICE_PAD + CHART_LEFT_MARGIN, bollingerConfig = null, srConfig = null, pphlConfig = null, vwapConfig = null, chopConfig = null, vwapSlopeHighlight = null) {
+function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAverage, ma50, ma9, ma21, rsi }, colors, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = [], overlayConfigs = [], multitradeMarkers = [], chartLeftPad = CHART_LEFT_MARGIN, buyInfo = null, stopLossConfig = null, targetConfig = null, chartRightPad = CHART_PRICE_PAD + CHART_LEFT_MARGIN, bollingerConfig = null, srConfig = null, pphlConfig = null, vwapConfig = null, chopConfig = null, vwapSlopeHighlight = null, isMobile = false) {
   const showMa9      = activeIndicators.includes('ma9');
   const showMa21     = activeIndicators.includes('ma21');
   const showMa50     = activeIndicators.includes('ma50');
@@ -2058,8 +2068,8 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
         label: {
           show: true, position: 'end', align: 'right', distance: 2,
           formatter: fmtChartPrice(lastClose),
-          color: '#111', fontSize: 10, fontWeight: 'bold',
-          backgroundColor: '#facc15', padding: [2, 5], borderRadius: 2,
+          color: '#111', fontSize: isMobile ? 14 : 10, fontWeight: 'bold',
+          backgroundColor: '#facc15', padding: isMobile ? [4, 8] : [2, 5], borderRadius: 2,
         }
       }] : [])
     ]
@@ -2222,7 +2232,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
         splitLine: { show: false } },
       yAxis: { scale: true, position: 'right',
         axisLine: { lineStyle: { color: colors.panel } },
-        axisLabel: { color: colors.text, fontSize: 10 },
+        axisLabel: { color: colors.text, fontSize: 10, ...(isMobile ? { formatter: fmtAxisPriceMobile } : {}) },
         splitLine: { lineStyle: { color: colors.panel, type: 'dashed', opacity: 0.3 } } },
       grid: { top: 40, bottom: 12, left: chartLeftPad, right: chartRightPad },
       dataZoom: zoomWindow
@@ -2315,7 +2325,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
     yAxis: [
       { gridIndex: 0, scale: true, position: 'right',
         axisLine: { lineStyle: { color: colors.panel } },
-        axisLabel: { color: colors.text, fontSize: 10 },
+        axisLabel: { color: colors.text, fontSize: 10, ...(isMobile ? { formatter: fmtAxisPriceMobile } : {}) },
         splitLine: { lineStyle: { color: colors.panel, type: 'dashed', opacity: 0.3 } } },
       ...subpanelIds.map((id, i) => subpanelYAxis(id, i + 1)),
     ],
@@ -2540,6 +2550,7 @@ export default function CandlestickChart() {
     chartPanelButtons, uiPrefs, setMaBandsDefaults, setBollingerBandsDefaults, setSrIntervalDefault, setPphlIntervalDefault, setChopIntervalDefault, setVwapDefaults, setVwapSlopeHighlightDefault, setActiveIndicatorsPreference,
     multitradeFavorites, fiveMTradeFavorites, activeTrades } = useCurrency();
   const { t } = useI18n();
+  const isMobile = useIsMobile();
   const chartRef = useRef(null);
   const lwChartRef = useRef(null);
   const chartWrapRef = useRef(null);
@@ -3125,6 +3136,33 @@ export default function CandlestickChart() {
           selectedChart.source,
           ovLimit,
         );
+        if (points.length) {
+          const last5 = points.slice(-5);
+          const expectedGapMs = INTERVAL_MS[bollingerBands.interval] ?? null;
+          const actualGapMs = last5.length > 1 ? last5[1].openTime - last5[0].openTime : null;
+          const gapMismatch = expectedGapMs != null && actualGapMs != null && actualGapMs !== expectedGapMs;
+          console.log(
+            `[BollingerBands] ${selectedChart.symbol} — intervalo pedido: ${bollingerBands.interval}`
+            + ` (BB${bollingerBands.period}/${bollingerBands.stdDev})`
+            + (hasForcedBollinger ? ` — FORÇADO pelo favorito (bollingerOverride: ${JSON.stringify(multitradeChartFocus.bollingerOverride)})` : ''),
+          );
+          if (gapMismatch) {
+            console.warn(
+              `[BollingerBands] intervalo entre candles não bate com "${bollingerBands.interval}"`
+              + ` — esperado ${expectedGapMs}ms, veio ${actualGapMs}ms. Os pontos abaixo NÃO são desse intervalo.`,
+            );
+          }
+          console.log(
+            'últimos 5 valores (largura% = (upper-lower)/lower×100, igual à coluna Larg%):',
+            last5.map(p => ({
+              time: new Date(p.openTime).toLocaleString('pt-BR'),
+              upper: p.upper,
+              middle: p.middle,
+              lower: p.lower,
+              widthPct: p.lower > 0 ? Number((((p.upper - p.lower) / p.lower) * 100).toFixed(4)) : null,
+            })),
+          );
+        }
         if (!cancelled) setBollingerCache({ [key]: points });
       } catch (e) {
         console.warn('[bollingerBands]', key, e.message);
@@ -3939,10 +3977,10 @@ export default function CandlestickChart() {
     return buildOption(
       selectedChart, colors, effectiveIndicators, displayLimit, chartZoom, tradeTimes, overlayConfigs,
       chartTradeMarkers?.length ? chartTradeMarkers : (selectedChart.tradeMarkers ?? []),
-      chartLeftPad, chartBuyInfo, chartStopLossConfig, chartTargetConfig, chartRightPad, chartBollingerConfig, chartSrConfig, chartPphlConfig, chartVwapConfig, chartChopConfig, vwapSlopeHighlight,
+      chartLeftPad, chartBuyInfo, chartStopLossConfig, chartTargetConfig, chartRightPad, chartBollingerConfig, chartSrConfig, chartPphlConfig, chartVwapConfig, chartChopConfig, vwapSlopeHighlight, isMobile,
     );
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedChart, colors, effectiveIndicators, chartZoom, tradePurchases, chartTradeMarkers, activeTab, overlayConfigs, displayLimit, chartLeftPad, chartRightPad, chartBuyInfo, chartStopLossConfig, chartTargetConfig, chartBollingerConfig, chartSrConfig, chartPphlConfig, chartVwapConfig, chartChopConfig, vwapSlopeHighlight]);
+  }, [selectedChart, colors, effectiveIndicators, chartZoom, tradePurchases, chartTradeMarkers, activeTab, overlayConfigs, displayLimit, chartLeftPad, chartRightPad, chartBuyInfo, chartStopLossConfig, chartTargetConfig, chartBollingerConfig, chartSrConfig, chartPphlConfig, chartVwapConfig, chartChopConfig, vwapSlopeHighlight, isMobile]);
 
   if (!selectedChart || !option) {
     return (
