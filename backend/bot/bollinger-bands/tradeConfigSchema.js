@@ -15,6 +15,7 @@
 const ALL_INTERVALS = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '8h', '1d'];
 const BB_PERIODS = [10, 20, 30];
 const BB_STD_DEVS = [1, 2, 3];
+const EMA_FILTER_PERIODS = [9, 21, 50, 200];
 
 const BOLLINGER_BANDS_DEFAULTS = {
   kind: 'bollinger_bands',
@@ -29,6 +30,14 @@ const BOLLINGER_BANDS_DEFAULTS = {
      *  Ligado: exige que o preço desça belowPct% ABAIXO da banda inferior antes de comprar
      *  (entrada mais "no fundo", ao custo de poder não disparar num repique raso). */
     pullback: { enabled: false, belowPct: 2 },
+    /** Filtro de tendência (mesma ideia do maFilters adaptativo do ma-cross — ver
+     *  MA_CROSS_DEFAULTS.maFilters em backend/bot/ma-cross/tradeConfigSchema.js): só compra
+     *  se o preço estiver acima da EMA(period) do intervalo escolhido, com uma folga
+     *  "adaptação inferior" de maxDipPct% abaixo da EMA ainda contando como "acima" (evita
+     *  rejeitar por um toque raso, sem exigir estar estritamente acima). Ligado por padrão;
+     *  interval segue o mesmo intervalo da banda de Bollinger (entry.interval) quando não
+     *  informado — ver normalizeEmaFilter. */
+    emaFilter: { enabled: true, period: 50, interval: '4h', maxDipPct: 2 },
   },
 
   exit: {
@@ -40,8 +49,17 @@ const BOLLINGER_BANDS_DEFAULTS = {
     restingBracket: { enabled: true, driftPct: 3 },
   },
 
-  /** Percentual/trailing — editável pelo usuário, com teto (normalizeStopLoss trava em 30%). */
-  stopLoss: { enabled: true, maxLossPct: 5, trailing: true, trailStepPct: 5 },
+  /** Percentual/trailing — editável pelo usuário, com teto (normalizeStopLoss trava em 30%).
+   *  mode: 'fixed' (padrão, como sempre foi) usa maxLossPct/trailing abaixo; mode: 'ema' troca
+   *  o piso por uma linha de EMA que se move a cada verificação (ver computeStopPrice em
+   *  strategyEngine.js) — stop = EMA(ema.period, ema.interval) * (1 − ema.belowPct/100). Sem
+   *  trailing/peak nesse modo: o piso segue a EMA pra cima E pra baixo a cada tick. */
+  stopLoss: {
+    enabled: true, maxLossPct: 5, trailing: true, trailStepPct: 5,
+    mode: 'fixed',
+    // interval nasce igual ao entry.interval quando não informado — ver normalizeStopLoss.
+    ema: { period: 50, interval: '4h', belowPct: 2 },
+  },
 
   polling: { pollMs: 60_000, fastPollMs: 30_000 },
 
@@ -72,15 +90,36 @@ function normalizePullback(block) {
   };
 }
 
-function normalizeEntry(block) {
-  const d = BOLLINGER_BANDS_DEFAULTS.entry;
+function normalizeEmaPeriod(p, fb) {
+  const n = Number(p);
+  return EMA_FILTER_PERIODS.includes(n) ? n : fb;
+}
+
+/** entryInterval = intervalo já normalizado da banda de Bollinger (entry.interval) — usado
+ *  como fallback do intervalo da EMA quando não vier explícito, pra nascer "no mesmo
+ *  intervalo da banda de Bollinger" por padrão. */
+function normalizeEmaFilter(block, entryInterval) {
+  const d = BOLLINGER_BANDS_DEFAULTS.entry.emaFilter;
   const src = block ?? {};
   return {
     enabled: src.enabled !== false,
-    interval: normalizeInterval(src.interval, d.interval),
+    period: normalizeEmaPeriod(src.period, d.period),
+    interval: normalizeInterval(src.interval, entryInterval ?? d.interval),
+    maxDipPct: Math.max(0, Math.min(20, Number(src.maxDipPct ?? d.maxDipPct))),
+  };
+}
+
+function normalizeEntry(block) {
+  const d = BOLLINGER_BANDS_DEFAULTS.entry;
+  const src = block ?? {};
+  const interval = normalizeInterval(src.interval, d.interval);
+  return {
+    enabled: src.enabled !== false,
+    interval,
     period: normalizePeriod(src.period, d.period),
     stdDev: normalizeStdDev(src.stdDev, d.stdDev),
     pullback: normalizePullback(src.pullback),
+    emaFilter: normalizeEmaFilter(src.emaFilter, interval),
   };
 }
 
@@ -95,7 +134,21 @@ function normalizeExit(block) {
   };
 }
 
-function normalizeStopLoss(block) {
+const STOP_LOSS_MODES = ['fixed', 'ema'];
+
+function normalizeStopLossEma(block, entryInterval) {
+  const d = BOLLINGER_BANDS_DEFAULTS.stopLoss.ema;
+  const src = block ?? {};
+  return {
+    period: normalizeEmaPeriod(src.period, d.period),
+    interval: normalizeInterval(src.interval, entryInterval ?? d.interval),
+    belowPct: Math.max(0, Math.min(20, Number(src.belowPct ?? d.belowPct))),
+  };
+}
+
+/** entryInterval = intervalo já normalizado da banda de Bollinger — mesmo fallback usado por
+ *  normalizeEmaFilter, pra stopLoss.ema.interval nascer no mesmo intervalo da entrada. */
+function normalizeStopLoss(block, entryInterval) {
   const d = BOLLINGER_BANDS_DEFAULTS.stopLoss;
   const src = block ?? {};
   return {
@@ -103,17 +156,20 @@ function normalizeStopLoss(block) {
     maxLossPct: Math.max(0.5, Math.min(30, Number(src.maxLossPct ?? d.maxLossPct))),
     trailing: src.trailing !== false,
     trailStepPct: Math.max(0.5, Number(src.trailStepPct ?? src.maxLossPct ?? d.trailStepPct)),
+    mode: STOP_LOSS_MODES.includes(src.mode) ? src.mode : d.mode,
+    ema: normalizeStopLossEma(src.ema, entryInterval),
   };
 }
 
 function normalizeBollingerBandsConfig(body = {}) {
   const d = BOLLINGER_BANDS_DEFAULTS;
+  const entry = normalizeEntry(body.entry);
   return {
     label: body.label ?? d.label,
     kind: 'bollinger_bands',
-    entry: normalizeEntry(body.entry),
+    entry,
     exit: normalizeExit(body.exit),
-    stopLoss: normalizeStopLoss(body.stopLoss),
+    stopLoss: normalizeStopLoss(body.stopLoss, entry.interval),
     polling: {
       pollMs: Number(body.polling?.pollMs ?? d.polling.pollMs),
       fastPollMs: Number(body.polling?.fastPollMs ?? d.polling.fastPollMs),
@@ -164,6 +220,8 @@ module.exports = {
   ALL_INTERVALS,
   BB_PERIODS,
   BB_STD_DEVS,
+  EMA_FILTER_PERIODS,
+  STOP_LOSS_MODES,
   BOLLINGER_BANDS_DEFAULTS,
   normalizeBollingerBandsConfig,
   toEngineConfig,

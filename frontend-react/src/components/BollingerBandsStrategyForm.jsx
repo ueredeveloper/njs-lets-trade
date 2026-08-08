@@ -1,5 +1,5 @@
 import {
-  BOLLINGER_BANDS_ALL_INTERVALS, BOLLINGER_BANDS_PERIODS, BOLLINGER_BANDS_STD_DEVS,
+  BOLLINGER_BANDS_ALL_INTERVALS, BOLLINGER_BANDS_PERIODS, BOLLINGER_BANDS_STD_DEVS, BOLLINGER_BANDS_EMA_PERIODS,
 } from '../constants/bollingerBandsConfigSchema';
 
 const ENTRY_COLOR = '#26a69a';
@@ -29,10 +29,12 @@ function Select({ value, onChange, options, labelFor }) {
  * escada, sem filtros extra (ver backend/bot/bollinger-bands/strategyEngine.js).
  */
 export default function BollingerBandsStrategyForm({ form, patch, symbol }) {
-  const patchEntry    = (field, val) => patch(`entry.${field}`, val);
-  const patchPullback = (field, val) => patch(`entry.pullback.${field}`, val);
-  const patchBracket  = (field, val) => patch(`exit.restingBracket.${field}`, val);
-  const patchStopLoss = (field, val) => patch(`stopLoss.${field}`, val);
+  const patchEntry     = (field, val) => patch(`entry.${field}`, val);
+  const patchPullback  = (field, val) => patch(`entry.pullback.${field}`, val);
+  const patchEmaFilter = (field, val) => patch(`entry.emaFilter.${field}`, val);
+  const patchBracket   = (field, val) => patch(`exit.restingBracket.${field}`, val);
+  const patchStopLoss  = (field, val) => patch(`stopLoss.${field}`, val);
+  const patchStopLossEma = (field, val) => patch(`stopLoss.ema.${field}`, val);
 
   return (
     <div className="space-y-4">
@@ -79,6 +81,40 @@ export default function BollingerBandsStrategyForm({ form, patch, symbol }) {
         )}
       </div>
 
+      <div className="rounded-md p-2 space-y-2" style={{ background: '#1a1d28', border: '1px solid #2a2d3a' }}>
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-p5/70">Filtro de tendência (EMA, opcional)</span>
+          <label className="flex items-center gap-1 text-[9px] text-p5/50 cursor-pointer">
+            <input type="checkbox" checked={form.entry.emaFilter?.enabled === true}
+              onChange={e => patchEmaFilter('enabled', e.target.checked)} style={{ accentColor: ENTRY_COLOR }} />
+            Ativo
+          </label>
+        </div>
+        {form.entry.emaFilter?.enabled === true ? (
+          <>
+            <div className="flex flex-wrap gap-2 items-center text-xs">
+              <span className="text-p5/50">EMA</span>
+              <Select value={form.entry.emaFilter?.period} onChange={v => patchEmaFilter('period', Number(v))} options={BOLLINGER_BANDS_EMA_PERIODS} />
+              <span className="text-p5/50 ml-2">Intervalo</span>
+              <Select value={form.entry.emaFilter?.interval} onChange={v => patchEmaFilter('interval', v)} options={BOLLINGER_BANDS_ALL_INTERVALS} />
+            </div>
+            <div className="flex flex-wrap gap-2 items-center text-xs text-p5">
+              <span className="text-p5/50">Adaptação inferior</span>
+              <NumInput value={form.entry.emaFilter?.maxDipPct} onChange={v => patchEmaFilter('maxDipPct', v)} min={0} max={20} step={0.5} />
+              <span className="text-p5/40">% abaixo da EMA ainda conta como "acima"</span>
+            </div>
+            <p className="text-[10px] text-p5/50 leading-relaxed">
+              Só compra se o preço estiver acima da EMA{form.entry.emaFilter?.period}({form.entry.emaFilter?.interval}),
+              com folga de até {form.entry.emaFilter?.maxDipPct ?? 2}% abaixo dela (mesma regra adaptativa do ma-cross).
+            </p>
+          </>
+        ) : (
+          <p className="text-[10px] text-p5/50 leading-relaxed">
+            Desligado — a banda inferior tocada já basta pra comprar, sem checar tendência.
+          </p>
+        )}
+      </div>
+
       <div className="space-y-2">
         <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: EXIT_COLOR }}>
           Saída — banda superior
@@ -104,20 +140,57 @@ export default function BollingerBandsStrategyForm({ form, patch, symbol }) {
 
       <div className="rounded-md p-2 space-y-2" style={{ background: '#1a1d28', border: '1px solid #2a2d3a' }}>
         <span className="text-[10px] font-bold uppercase tracking-wider text-p5/70">Stop-loss</span>
-        <p className="text-[10px] text-p5/50 leading-relaxed">
-          Vende se o preço cair {form.stopLoss.maxLossPct ?? 5}% abaixo do preço de compra
-          {form.stopLoss.trailing ? ' — ou do pico atingido depois da compra, já que o trailing está ligado' : ''}.
-        </p>
-        <div className="flex flex-wrap gap-2 items-center text-xs text-p5">
-          <span className="text-p5/50">Perda máx. (limite 0,5–30%)</span>
-          <NumInput value={form.stopLoss.maxLossPct} onChange={v => patchStopLoss('maxLossPct', v)} min={0.5} max={30} step={0.5} />
-          <span className="text-p5/40">%</span>
-          <label className="flex items-center gap-1 ml-2">
-            <input type="checkbox" checked={form.stopLoss.trailing}
-              onChange={e => patchStopLoss('trailing', e.target.checked)} />
-            Trailing
-          </label>
+
+        <div className="flex gap-2">
+          {[{ id: 'fixed', label: 'Valor limite (%)' }, { id: 'ema', label: 'Linha da EMA' }].map(m => (
+            <button key={m.id} type="button" onClick={() => patchStopLoss('mode', m.id)}
+              className="flex-1 py-1 text-[10px] rounded font-semibold"
+              style={{
+                background: (form.stopLoss.mode ?? 'fixed') === m.id ? EXIT_COLOR : 'transparent',
+                color: (form.stopLoss.mode ?? 'fixed') === m.id ? '#fff' : EXIT_COLOR,
+                border: `1px solid ${EXIT_COLOR}`, opacity: (form.stopLoss.mode ?? 'fixed') === m.id ? 1 : 0.55,
+              }}>{m.label}</button>
+          ))}
         </div>
+
+        {(form.stopLoss.mode ?? 'fixed') === 'ema' ? (
+          <>
+            <div className="flex flex-wrap gap-2 items-center text-xs">
+              <span className="text-p5/50">EMA</span>
+              <Select value={form.stopLoss.ema?.period} onChange={v => patchStopLossEma('period', Number(v))} options={BOLLINGER_BANDS_EMA_PERIODS} />
+              <span className="text-p5/50 ml-2">Intervalo</span>
+              <Select value={form.stopLoss.ema?.interval} onChange={v => patchStopLossEma('interval', v)} options={BOLLINGER_BANDS_ALL_INTERVALS} />
+            </div>
+            <div className="flex flex-wrap gap-2 items-center text-xs text-p5">
+              <span className="text-p5/50">Variação</span>
+              <NumInput value={form.stopLoss.ema?.belowPct} onChange={v => patchStopLossEma('belowPct', v)} min={0} max={20} step={0.5} />
+              <span className="text-p5/40">% abaixo da EMA</span>
+            </div>
+            <p className="text-[10px] text-p5/50 leading-relaxed">
+              Vende se o preço cair até {form.stopLoss.ema?.belowPct ?? 2}% abaixo da
+              EMA{form.stopLoss.ema?.period}({form.stopLoss.ema?.interval}) — o piso é
+              recalculado a cada verificação, acompanhando a EMA pra cima e pra baixo (sem
+              trailing/pico, é sempre a EMA ao vivo menos a variação).
+            </p>
+          </>
+        ) : (
+          <>
+            <p className="text-[10px] text-p5/50 leading-relaxed">
+              Vende se o preço cair {form.stopLoss.maxLossPct ?? 5}% abaixo do preço de compra
+              {form.stopLoss.trailing ? ' — ou do pico atingido depois da compra, já que o trailing está ligado' : ''}.
+            </p>
+            <div className="flex flex-wrap gap-2 items-center text-xs text-p5">
+              <span className="text-p5/50">Perda máx. (limite 0,5–30%)</span>
+              <NumInput value={form.stopLoss.maxLossPct} onChange={v => patchStopLoss('maxLossPct', v)} min={0.5} max={30} step={0.5} />
+              <span className="text-p5/40">%</span>
+              <label className="flex items-center gap-1 ml-2">
+                <input type="checkbox" checked={form.stopLoss.trailing}
+                  onChange={e => patchStopLoss('trailing', e.target.checked)} />
+                Trailing
+              </label>
+            </div>
+          </>
+        )}
       </div>
 
       <p className="text-[9px] text-p5/35">

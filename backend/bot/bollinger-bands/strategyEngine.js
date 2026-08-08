@@ -2,6 +2,7 @@
 
 const { BollingerBands } = require('technicalindicators');
 const { computeStopLossFloor } = require('../shared/stopLossFloor');
+const { computeMa, maLabel } = require('../../utils/movingAverage');
 
 const INTERVAL_MS = {
   '1m': 60_000, '3m': 180_000, '5m': 300_000, '15m': 900_000, '30m': 1_800_000,
@@ -34,7 +35,44 @@ function computeBollingerSeries(candles, period, stdDev) {
 function getRequiredSpecs(config) {
   const entry = config.entry;
   const limit = entry.period * 3 + 30;
-  return [{ interval: entry.interval, limit }];
+  const specs = new Map([[entry.interval, limit]]);
+
+  const add = (iv, lim) => specs.set(iv, Math.max(specs.get(iv) ?? 0, lim));
+
+  const ema = entry.emaFilter;
+  if (ema?.enabled) add(ema.interval, ema.period + 30);
+
+  const slEma = config.stopLoss;
+  if (slEma?.enabled && slEma.mode === 'ema') add(slEma.ema.interval, slEma.ema.period + 30);
+
+  return [...specs.entries()].map(([interval, lim]) => ({ interval, limit: lim }));
+}
+
+/**
+ * Filtro de tendência (mesma ideia do maFilters adaptativo do ma-cross — ver
+ * checkPriceFilter em backend/bot/ma-cross/strategyEngine.js, mode 'adaptive'): só libera
+ * a compra se o close estiver acima da EMA(period) do intervalo escolhido, com uma folga de
+ * maxDipPct% abaixo da EMA ainda contando como "acima" — evita rejeitar por um toque raso.
+ * Desligado (entry.emaFilter.enabled=false) → sempre libera.
+ */
+function checkEmaFilter(config, cMap, closePrice) {
+  const ema = config.entry?.emaFilter;
+  if (!ema?.enabled) return { allowed: true };
+
+  const raw = cMap[ema.interval] ?? [];
+  const closed = closedCandlesOnly(raw);
+  const maValue = computeMa(closed, ema.period);
+  if (maValue == null) return { allowed: false, reason: 'EMA_FILTER_NO_MA' };
+
+  const floor = maValue * (1 - Math.max(0, ema.maxDipPct) / 100);
+  if (closePrice < floor) {
+    return {
+      allowed: false, reason: 'EMA_FILTER_BELOW',
+      ema: maValue, floor, dipPct: ema.maxDipPct, label: maLabel(ema.period, ema.interval),
+    };
+  }
+
+  return { allowed: true, ema: maValue, floor, dipPct: ema.maxDipPct, label: maLabel(ema.period, ema.interval) };
 }
 
 /**
@@ -68,21 +106,56 @@ function evaluateEntrySignal(config, cMap) {
     };
   }
 
+  const emaCheck = checkEmaFilter(config, cMap, liveClose);
+  if (!emaCheck.allowed) {
+    return {
+      allowed: false, reason: emaCheck.reason,
+      close: liveClose, lower: lastBb.lower, threshold, emaFilter: emaCheck,
+    };
+  }
+
+  const bbDesc = pullbackPct > 0
+    ? `BB(${entry.period},${entry.stdDev}) ${iv} banda inferior -${pullbackPct}%`
+    : `BB(${entry.period},${entry.stdDev}) ${iv} banda inferior`;
+
   return {
     allowed: true,
     close: liveClose,
     limitPrice: threshold,
     lower: lastBb.lower, middle: lastBb.middle, upper: lastBb.upper,
     threshold,
-    entryDesc: pullbackPct > 0
-      ? `BB(${entry.period},${entry.stdDev}) ${iv} banda inferior -${pullbackPct}%`
-      : `BB(${entry.period},${entry.stdDev}) ${iv} banda inferior`,
+    emaFilter: emaCheck,
+    entryDesc: emaCheck.label ? `${bbDesc} + acima ${emaCheck.label}` : bbDesc,
   };
 }
 
-/** Preço-alvo (banda superior ao vivo) e preço-stop (piso percentual) vigentes — usado
- *  tanto pra colocar/repor a bracket TP/SL resting na corretora quanto pelo evaluateExit
- *  de fallback (candle, sem bracket). */
+/**
+ * Piso do stop-loss vigente. mode 'fixed' (padrão) usa a fórmula percentual/trailing de
+ * sempre (computeStopLossFloor, compartilhada com os outros bots). mode 'ema' troca por uma
+ * linha de EMA que se move a cada verificação: stop = EMA(ema.period, ema.interval) * (1 −
+ * ema.belowPct/100) — sem trailing/peak, o piso acompanha a EMA pra cima e pra baixo a cada
+ * tick (ver MA_CROSS não tem equivalente disso; desenhado especificamente pro pedido de
+ * "stop na linha da EMA" do bollinger-bands).
+ */
+function computeStopPrice(config, cMap, entryPrice, peakPrice) {
+  const stopLoss = config.stopLoss;
+  if (!stopLoss?.enabled) return null;
+
+  if (stopLoss.mode === 'ema') {
+    const ema = stopLoss.ema;
+    const raw = cMap[ema.interval] ?? [];
+    const closed = closedCandlesOnly(raw);
+    const maValue = computeMa(closed, ema.period);
+    if (maValue == null) return null;
+    return maValue * (1 - Math.max(0, ema.belowPct) / 100);
+  }
+
+  return computeStopLossFloor(entryPrice, peakPrice ?? entryPrice, stopLoss);
+}
+
+/** Preço-alvo (banda superior ao vivo) e preço-stop (fixo % ou EMA — ver computeStopPrice)
+ *  vigentes — usado tanto pra colocar/repor a bracket TP/SL resting na corretora quanto pelo
+ *  evaluateExit de fallback (candle, sem bracket). */
 function computeBracketPrices(config, cMap, entryPrice, peakPrice) {
   const entry = config.entry;
   const iv = entry.interval;
@@ -96,9 +169,7 @@ function computeBracketPrices(config, cMap, entryPrice, peakPrice) {
   if (!series.length) return { targetPrice: null, stopPrice: null, close };
 
   const lastBb = series[series.length - 1];
-  const stopPrice = config.stopLoss?.enabled
-    ? computeStopLossFloor(entryPrice, peakPrice ?? entryPrice, config.stopLoss)
-    : null;
+  const stopPrice = computeStopPrice(config, cMap, entryPrice, peakPrice);
 
   return { targetPrice: lastBb.upper, stopPrice, close };
 }
@@ -141,8 +212,10 @@ module.exports = {
   closedCandlesOnly,
   computeBollingerSeries,
   getRequiredSpecs,
+  checkEmaFilter,
   evaluateEntrySignal,
   evaluateExit,
   computeBracketPrices,
+  computeStopPrice,
   computeStopLossFloor,
 };
