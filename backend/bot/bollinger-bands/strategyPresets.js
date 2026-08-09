@@ -14,7 +14,10 @@ const PRESET_BODIES = {
       period: 20,
       stdDev: 2,
       pullback: { enabled: false, belowPct: 2 },
-      emaFilter: { enabled: true, period: 50, interval: '4h', maxDipPct: 2 },
+      emaFilter: {
+        enabled: true, period: 50, interval: '4h', maxDipPct: 2,
+        slopeLookback: 5, minSlopePct: 0,
+      },
     },
     exit: { restingBracket: { enabled: true, driftPct: 3 } },
     stopLoss: {

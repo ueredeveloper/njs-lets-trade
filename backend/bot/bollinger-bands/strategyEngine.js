@@ -2,7 +2,7 @@
 
 const { BollingerBands } = require('technicalindicators');
 const { computeStopLossFloor } = require('../shared/stopLossFloor');
-const { computeMa, maLabel } = require('../../utils/movingAverage');
+const { computeMa, buildMaTimeSeries, maLabel } = require('../../utils/movingAverage');
 
 const INTERVAL_MS = {
   '1m': 60_000, '3m': 180_000, '5m': 300_000, '15m': 900_000, '30m': 1_800_000,
@@ -40,7 +40,10 @@ function getRequiredSpecs(config) {
   const add = (iv, lim) => specs.set(iv, Math.max(specs.get(iv) ?? 0, lim));
 
   const ema = entry.emaFilter;
-  if (ema?.enabled) add(ema.interval, ema.period + 30);
+  if (ema?.enabled) {
+    const slopeLookback = Math.max(0, Math.round(Number(ema.slopeLookback ?? 0)));
+    add(ema.interval, ema.period + slopeLookback + 30);
+  }
 
   const slEma = config.stopLoss;
   if (slEma?.enabled && slEma.mode === 'ema') add(slEma.ema.interval, slEma.ema.period + 30);
@@ -48,12 +51,24 @@ function getRequiredSpecs(config) {
   return [...specs.entries()].map(([interval, lim]) => ({ interval, limit: lim }));
 }
 
+/** Inclinação % da EMA: variação entre o valor vigente e o de `lookback` candles atrás
+ *  na mesma série (mesma ideia de emaFilterSlopeAt do vwap-bands). null se faltar histórico. */
+function emaSlopePct(series, lookback) {
+  if (!series?.length || lookback <= 0) return null;
+  const idx = series.length - 1;
+  const pastIdx = idx - lookback;
+  if (pastIdx < 0) return null;
+  const current = series[idx].ma;
+  const past = series[pastIdx].ma;
+  if (!(past > 0)) return null;
+  return ((current - past) / past) * 100;
+}
+
 /**
- * Filtro de tendência (mesma ideia do maFilters adaptativo do ma-cross — ver
- * checkPriceFilter em backend/bot/ma-cross/strategyEngine.js, mode 'adaptive'): só libera
- * a compra se o close estiver acima da EMA(period) do intervalo escolhido, com uma folga de
- * maxDipPct% abaixo da EMA ainda contando como "acima" — evita rejeitar por um toque raso.
- * Desligado (entry.emaFilter.enabled=false) → sempre libera.
+ * Filtro de tendência EMA: (1) close acima da EMA(period) do intervalo escolhido, com folga
+ * de maxDipPct% abaixo ainda contando como "acima" (mesma ideia adaptativa do ma-cross);
+ * (2) a própria linha da EMA em alta — variação % vs. slopeLookback candles atrás
+ * ≥ minSlopePct (padrão: 5 candles, ≥ 0%). Desligado (enabled=false) → sempre libera.
  */
 function checkEmaFilter(config, cMap, closePrice) {
   const ema = config.entry?.emaFilter;
@@ -61,18 +76,43 @@ function checkEmaFilter(config, cMap, closePrice) {
 
   const raw = cMap[ema.interval] ?? [];
   const closed = closedCandlesOnly(raw);
-  const maValue = computeMa(closed, ema.period);
-  if (maValue == null) return { allowed: false, reason: 'EMA_FILTER_NO_MA' };
+  const series = buildMaTimeSeries(closed, ema.period);
+  if (!series.length) return { allowed: false, reason: 'EMA_FILTER_NO_MA' };
 
+  const maValue = series[series.length - 1].ma;
+  const label = maLabel(ema.period, ema.interval);
   const floor = maValue * (1 - Math.max(0, ema.maxDipPct) / 100);
   if (closePrice < floor) {
     return {
       allowed: false, reason: 'EMA_FILTER_BELOW',
-      ema: maValue, floor, dipPct: ema.maxDipPct, label: maLabel(ema.period, ema.interval),
+      ema: maValue, floor, dipPct: ema.maxDipPct, label,
     };
   }
 
-  return { allowed: true, ema: maValue, floor, dipPct: ema.maxDipPct, label: maLabel(ema.period, ema.interval) };
+  const slopeLookback = Math.max(0, Math.round(Number(ema.slopeLookback ?? 0)));
+  const minSlopePct = Number(ema.minSlopePct ?? 0);
+  let slopePct = null;
+  if (slopeLookback > 0) {
+    slopePct = emaSlopePct(series, slopeLookback);
+    if (slopePct == null) {
+      return {
+        allowed: false, reason: 'EMA_FILTER_NO_SLOPE',
+        ema: maValue, floor, dipPct: ema.maxDipPct, slopeLookback, minSlopePct, label,
+      };
+    }
+    if (slopePct < minSlopePct) {
+      return {
+        allowed: false, reason: 'EMA_FILTER_FALLING',
+        ema: maValue, floor, dipPct: ema.maxDipPct, slopePct, slopeLookback, minSlopePct, label,
+      };
+    }
+  }
+
+  return {
+    allowed: true,
+    ema: maValue, floor, dipPct: ema.maxDipPct,
+    slopePct, slopeLookback, minSlopePct, label,
+  };
 }
 
 /**
@@ -118,6 +158,14 @@ function evaluateEntrySignal(config, cMap) {
     ? `BB(${entry.period},${entry.stdDev}) ${iv} banda inferior -${pullbackPct}%`
     : `BB(${entry.period},${entry.stdDev}) ${iv} banda inferior`;
 
+  let entryDesc = bbDesc;
+  if (emaCheck.label) {
+    const slopeBit = emaCheck.slopeLookback > 0
+      ? ` subindo (${emaCheck.slopePct >= 0 ? '+' : ''}${Number(emaCheck.slopePct).toFixed(2)}%/${emaCheck.slopeLookback})`
+      : '';
+    entryDesc = `${bbDesc} + acima ${emaCheck.label}${slopeBit}`;
+  }
+
   return {
     allowed: true,
     close: liveClose,
@@ -125,7 +173,7 @@ function evaluateEntrySignal(config, cMap) {
     lower: lastBb.lower, middle: lastBb.middle, upper: lastBb.upper,
     threshold,
     emaFilter: emaCheck,
-    entryDesc: emaCheck.label ? `${bbDesc} + acima ${emaCheck.label}` : bbDesc,
+    entryDesc,
   };
 }
 
@@ -212,6 +260,7 @@ module.exports = {
   closedCandlesOnly,
   computeBollingerSeries,
   getRequiredSpecs,
+  emaSlopePct,
   checkEmaFilter,
   evaluateEntrySignal,
   evaluateExit,

@@ -103,9 +103,20 @@ export default function BollingerBandsStrategyForm({ form, patch, symbol }) {
               <NumInput value={form.entry.emaFilter?.maxDipPct} onChange={v => patchEmaFilter('maxDipPct', v)} min={0} max={20} step={0.5} />
               <span className="text-p5/40">% abaixo da EMA ainda conta como "acima"</span>
             </div>
+            <div className="flex flex-wrap gap-2 items-center text-xs text-p5">
+              <span className="text-p5/50">Lookback inclinação</span>
+              <NumInput value={form.entry.emaFilter?.slopeLookback ?? 5} onChange={v => patchEmaFilter('slopeLookback', v)} min={0} max={48} step={1} className="w-14" />
+              <span className="text-p5/40">candles</span>
+              <span className="text-p5/50 ml-2">Inclinação mín.</span>
+              <NumInput value={form.entry.emaFilter?.minSlopePct ?? 0} onChange={v => patchEmaFilter('minSlopePct', v)} min={-10} max={5} step={0.1} className="w-14" />
+              <span className="text-p5/40">%</span>
+            </div>
             <p className="text-[10px] text-p5/50 leading-relaxed">
-              Só compra se o preço estiver acima da EMA{form.entry.emaFilter?.period}({form.entry.emaFilter?.interval}),
-              com folga de até {form.entry.emaFilter?.maxDipPct ?? 2}% abaixo dela (mesma regra adaptativa do ma-cross).
+              Só compra se o preço estiver acima da EMA{form.entry.emaFilter?.period}({form.entry.emaFilter?.interval})
+              (folga de até {form.entry.emaFilter?.maxDipPct ?? 2}% abaixo) e a própria linha da EMA estiver
+              subindo: variação ≥ {form.entry.emaFilter?.minSlopePct ?? 0}% vs. os
+              {' '}{form.entry.emaFilter?.slopeLookback ?? 5} candles anteriores. Se a EMA estiver em baixa,
+              não entra (lookback 0 = desliga a checagem de inclinação).
             </p>
           </>
         ) : (

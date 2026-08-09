@@ -16,8 +16,13 @@ export const BOLLINGER_BANDS_DEFAULTS = {
     stdDev: 2,
     pullback: { enabled: false, belowPct: 2 },
     /** Ligado por padrão; interval nasce igual ao entry.interval (mesmo intervalo da banda
-     *  de Bollinger) quando não informado — ver normalizeBollingerBandsForm. */
-    emaFilter: { enabled: true, period: 50, interval: '4h', maxDipPct: 2 },
+     *  de Bollinger) quando não informado — ver normalizeBollingerBandsForm.
+     *  slopeLookback/minSlopePct: a linha da EMA precisa estar subindo (≥ minSlopePct %
+     *  vs. N candles atrás) além do preço estar acima dela. */
+    emaFilter: {
+      enabled: true, period: 50, interval: '4h', maxDipPct: 2,
+      slopeLookback: 5, minSlopePct: 0,
+    },
   },
   exit: {
     restingBracket: { enabled: true, driftPct: 3 },
@@ -56,6 +61,8 @@ export function normalizeBollingerBandsForm(body = {}) {
         period: BOLLINGER_BANDS_EMA_PERIODS.includes(Number(ef.period)) ? Number(ef.period) : d.entry.emaFilter.period,
         interval: BOLLINGER_BANDS_ALL_INTERVALS.includes(ef.interval) ? ef.interval : interval,
         maxDipPct: Number(ef.maxDipPct ?? d.entry.emaFilter.maxDipPct),
+        slopeLookback: Number(ef.slopeLookback ?? d.entry.emaFilter.slopeLookback),
+        minSlopePct: Number(ef.minSlopePct ?? d.entry.emaFilter.minSlopePct),
       },
     },
     exit: {

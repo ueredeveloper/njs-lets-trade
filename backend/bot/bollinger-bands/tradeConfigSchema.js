@@ -8,8 +8,8 @@
  *      já colocada na corretora logo após a compra (Binance: OCO real; Gate.io: emulado),
  *      recriada quando o alvo/stop desviar exit.restingBracket.driftPct% do preço em que
  *      foi colocada (as bandas se movem a cada candle novo) — mesma mecânica do vwap-bands.
- * Sem escada, sem filtros extra (EMA/VWAP slope, tendência HTF etc.) — só as bandas do
- * próprio candle no intervalo escolhido.
+ * Sem escada — só as bandas do próprio candle no intervalo escolhido, mais o filtro opcional
+ * de tendência EMA (preço acima da EMA + inclinação da linha ≥ minSlopePct).
  */
 
 const ALL_INTERVALS = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '8h', '1d'];
@@ -30,14 +30,17 @@ const BOLLINGER_BANDS_DEFAULTS = {
      *  Ligado: exige que o preço desça belowPct% ABAIXO da banda inferior antes de comprar
      *  (entrada mais "no fundo", ao custo de poder não disparar num repique raso). */
     pullback: { enabled: false, belowPct: 2 },
-    /** Filtro de tendência (mesma ideia do maFilters adaptativo do ma-cross — ver
-     *  MA_CROSS_DEFAULTS.maFilters em backend/bot/ma-cross/tradeConfigSchema.js): só compra
-     *  se o preço estiver acima da EMA(period) do intervalo escolhido, com uma folga
-     *  "adaptação inferior" de maxDipPct% abaixo da EMA ainda contando como "acima" (evita
-     *  rejeitar por um toque raso, sem exigir estar estritamente acima). Ligado por padrão;
-     *  interval segue o mesmo intervalo da banda de Bollinger (entry.interval) quando não
-     *  informado — ver normalizeEmaFilter. */
-    emaFilter: { enabled: true, period: 50, interval: '4h', maxDipPct: 2 },
+    /** Filtro de tendência: (1) só compra se o preço estiver acima da EMA(period) do
+     *  intervalo escolhido, com folga "adaptação inferior" de maxDipPct% abaixo da EMA
+     *  ainda contando como "acima" (evita rejeitar por um toque raso); (2) a própria linha
+     *  da EMA precisa estar em alta — variação % vs. slopeLookback candles anteriores
+     *  ≥ minSlopePct (padrão 5 candles / ≥ 0%: bloqueia se a EMA estiver caindo). Ligado
+     *  por padrão; interval segue o mesmo intervalo da banda de Bollinger (entry.interval)
+     *  quando não informado — ver normalizeEmaFilter. */
+    emaFilter: {
+      enabled: true, period: 50, interval: '4h', maxDipPct: 2,
+      slopeLookback: 5, minSlopePct: 0,
+    },
   },
 
   exit: {
@@ -106,6 +109,8 @@ function normalizeEmaFilter(block, entryInterval) {
     period: normalizeEmaPeriod(src.period, d.period),
     interval: normalizeInterval(src.interval, entryInterval ?? d.interval),
     maxDipPct: Math.max(0, Math.min(20, Number(src.maxDipPct ?? d.maxDipPct))),
+    slopeLookback: Math.max(0, Math.min(48, Math.round(Number(src.slopeLookback ?? d.slopeLookback)))),
+    minSlopePct: Math.max(-10, Math.min(5, Number(src.minSlopePct ?? d.minSlopePct))),
   };
 }
 
