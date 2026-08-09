@@ -141,28 +141,9 @@ function createTradeExecution({
     return { phase: 'WATCHING' };
   }
 
-  async function executeBuy({
-    rowId, adapter, strategy, log, session, entryMeta, capital, strategyId, symbol, totalCapital,
+  async function recordBuyFill({
+    rowId, strategy, log, session, entryMeta, capital, strategyId, symbol, result,
   }) {
-    // entryMeta.limitPrice (ex.: valor exato da lower1/vwap no vwap-bands-bot) força ordem
-    // LIMITE nesse preço em vez de a mercado — evita comprar "no meio" das bandas quando o
-    // candle de confirmação só tocou a linha de leve e já fechou bem mais longe dela.
-    const useLimit = entryMeta?.limitPrice != null && typeof adapter.limitBuy === 'function';
-    let result;
-    try {
-      result = useLimit
-        ? await adapter.limitBuy(parseFloat(capital), entryMeta.limitPrice)
-        : await adapter.marketBuy(parseFloat(capital));
-    } catch (err) {
-      log(`❌ Erro na compra: ${err.message}`);
-      return false;
-    }
-
-    if (result?.filled === false) {
-      log(`${Y}⏳ Ordem limite @ ${entryMeta.limitPrice} não preenchida — tenta de novo no próximo tick${X}`);
-      return false;
-    }
-
     const { filledQty, quoteQty, avgPrice } = result;
     const initialFloor = computeStopLossFloor(avgPrice, avgPrice, strategy.config.stopLoss);
     const buyTime = new Date().toISOString();
@@ -170,7 +151,7 @@ function createTradeExecution({
     session.pendingPullback = null;
     const dcaCfg = strategy.config.entryMultiDca;
     const extraRulesState = extraInitialRulesState
-      ? extraInitialRulesState({ config: strategy.config, entryMeta, result, capital, totalCapital })
+      ? extraInitialRulesState({ config: strategy.config, entryMeta, result, capital, totalCapital: capital })
       : null;
     session.rulesState = {
       stopPeakPrice: avgPrice,
@@ -194,7 +175,7 @@ function createTradeExecution({
     log(`${G}🟢 COMPRA EXECUTADA${X}`);
     log(`   Preço : ${avgPrice.toFixed(6)}  Qty: ${filledQty}  USDT: ${quoteQty.toFixed(4)}`);
     const extraLines = extraBuyLogLines
-      ? extraBuyLogLines({ config: strategy.config, entryMeta, result, capital, totalCapital })
+      ? extraBuyLogLines({ config: strategy.config, entryMeta, result, capital, totalCapital: capital })
       : null;
     for (const line of extraLines ?? []) log(`   ${line}`);
     if (entryMeta.pullbackVsMa2Pct != null) {
@@ -211,10 +192,34 @@ function createTradeExecution({
       `🟢 ${botLabel} COMPRA [${strategyId}] ${symbol}\nPreço: ${avgPrice}\nUSDT: ${quoteQty.toFixed(4)}`
       + (reasonLines.length ? `\n\nMotivos:\n${reasonLines.map(l => `• ${l}`).join('\n')}` : ''),
     );
-    // Objeto (truthy) em vez de `true` — bots que só conferem `if (bought)` continuam
-    // funcionando iguais; quem precisa da qty/preço preenchidos (ex.: vwap-bands-bot.js pra
-    // colocar a ordem resting TP/SL logo após a compra) lê os campos.
     return { ok: true, filledQty, quoteQty, avgPrice };
+  }
+
+  async function executeBuy({
+    rowId, adapter, strategy, log, session, entryMeta, capital, strategyId, symbol, totalCapital,
+  }) {
+    // entryMeta.limitPrice (ex.: valor exato da lower1/vwap no vwap-bands-bot) força ordem
+    // LIMITE nesse preço em vez de a mercado — evita comprar "no meio" das bandas quando o
+    // candle de confirmação só tocou a linha de leve e já fechou bem mais longe dela.
+    const useLimit = entryMeta?.limitPrice != null && typeof adapter.limitBuy === 'function';
+    let result;
+    try {
+      result = useLimit
+        ? await adapter.limitBuy(parseFloat(capital), entryMeta.limitPrice)
+        : await adapter.marketBuy(parseFloat(capital));
+    } catch (err) {
+      log(`❌ Erro na compra: ${err.message}`);
+      return false;
+    }
+
+    if (result?.filled === false) {
+      log(`${Y}⏳ Ordem limite @ ${entryMeta.limitPrice} não preenchida — tenta de novo no próximo tick${X}`);
+      return false;
+    }
+
+    return recordBuyFill({
+      rowId, strategy, log, session, entryMeta, capital, strategyId, symbol, result,
+    });
   }
 
   /**
@@ -350,7 +355,7 @@ function createTradeExecution({
   return {
     saveState, insertTrade, hasOpenPosition, resetOrphanPosition,
     parseRulesState, postExitRulesState, resolveLastExitTime,
-    executeBuy, executeSell, recordBracketFill,
+    executeBuy, recordBuyFill, executeSell, recordBracketFill,
   };
 }
 

@@ -12,7 +12,7 @@
 
 const { fetchBinanceCandles, fetchGateCandles } = require('../prices');
 const { toGateSymbol } = require('../../utils/toGateSymbol');
-const { gateMarketBuy, gateLimitBuy } = require('../../gate/gateMarketBuy');
+const { gateMarketBuy, gateLimitBuy, gatePlaceRestingLimitBuy, gatePollRestingLimitBuy, gateCancelRestingLimitBuy } = require('../../gate/gateMarketBuy');
 const { gateGetTokenBalance, gate24hVolume } = require('../../gate/gateAccount');
 const { gateRequest } = require('../../gate/getGateClient');
 const { gateMarketSell: gateMarketSellCore } = require('../gate/gateMarketSell');
@@ -21,6 +21,7 @@ const {
 } = require('../../gate/gateBracketOrders');
 const {
   binanceMarketBuy, binanceLimitBuy, binanceMarketSell, binance24hVolume, syncBinanceClock,
+  binancePlaceRestingLimitBuy, binancePollRestingLimitBuy, binanceCancelRestingLimitBuy,
 } = require('../../binance/tradeClient');
 const { binancePlaceOcoSell, binanceCancelOco, binancePollOco } = require('../../binance/ocoClient');
 
@@ -39,6 +40,9 @@ function buildAdapter(exchange, symbol) {
       fetchCandles: (lim, iv) => fetchGateCandles(pair, lim, iv),
       marketBuy:    (usdt)        => gateMarketBuy(pair, usdt),
       limitBuy:     (usdt, price) => gateLimitBuy(pair, usdt, price),
+      placeRestingLimitBuy:  (usdt, price) => gatePlaceRestingLimitBuy(pair, usdt, price),
+      pollRestingLimitBuy:   (handle) => gatePollRestingLimitBuy(pair, handle),
+      cancelRestingLimitBuy: (handle) => gateCancelRestingLimitBuy(pair, handle),
       marketSell:   (qty, log, opts) => gateMarketSell(pair, qty, log, opts),
       fetch24hVol:  ()         => gate24hVolume(pair),
       // Bracket TP/SL emulado (sem OCO atômico nativo) — ver gateBracketOrders.js.
@@ -58,6 +62,9 @@ function buildAdapter(exchange, symbol) {
     fetchCandles: (lim, iv) => fetchBinanceCandles(symbol, lim, iv),
     marketBuy:    (usdt)        => binanceMarketBuy(symbol, usdt),
     limitBuy:     (usdt, price) => binanceLimitBuy(symbol, usdt, price),
+    placeRestingLimitBuy:  (usdt, price) => binancePlaceRestingLimitBuy(symbol, usdt, price),
+    pollRestingLimitBuy:   (handle) => binancePollRestingLimitBuy(symbol, handle),
+    cancelRestingLimitBuy: (handle) => binanceCancelRestingLimitBuy(symbol, handle),
     marketSell:   (qty)      => binanceMarketSell(symbol, qty),
     fetch24hVol:  ()         => binance24hVolume(symbol),
     // OCO real (uma perna cancela a outra na própria Binance) — ver binance/ocoClient.js.

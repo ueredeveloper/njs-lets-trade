@@ -17,6 +17,8 @@ export const BOLLINGER_BANDS_DEFAULTS = {
     pullback: { enabled: false, belowPct: 2 },
     /** Após saída, espera N candles do intervalo da BB antes de reavaliar compra. */
     reentryCooldownCandles: 5,
+    /** Ordem limite GTC fica no book até N candles aguardando reteste. */
+    limitWaitCandles: 5,
     /** Ligado por padrão; interval nasce igual ao entry.interval (mesmo intervalo da banda
      *  de Bollinger) quando não informado — ver normalizeBollingerBandsForm.
      *  slopeLookback/minSlopePct: a linha da EMA precisa estar subindo (≥ minSlopePct %
@@ -59,6 +61,7 @@ export function normalizeBollingerBandsForm(body = {}) {
         belowPct: Number(pb.belowPct ?? d.entry.pullback.belowPct),
       },
       reentryCooldownCandles: Number(body.entry?.reentryCooldownCandles ?? d.entry.reentryCooldownCandles),
+      limitWaitCandles: Number(body.entry?.limitWaitCandles ?? d.entry.limitWaitCandles),
       // interval nasce igual ao da banda de Bollinger (interval acima) quando não informado.
       emaFilter: {
         enabled: ef.enabled !== false,

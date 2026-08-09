@@ -140,6 +140,20 @@ export default function BollingerBandsStrategyForm({ form, patch, symbol }) {
         </p>
       </div>
 
+      <div className="rounded-md p-2 space-y-2" style={{ background: '#1a1d28', border: '1px solid #2a2d3a' }}>
+        <span className="text-[10px] font-bold uppercase tracking-wider text-p5/70">Ordem limite no toque da BB</span>
+        <div className="flex flex-wrap gap-2 items-center text-xs text-p5">
+          <span className="text-p5/50">Manter no book até</span>
+          <NumInput value={form.entry.limitWaitCandles ?? 5} onChange={v => patchEntry('limitWaitCandles', v)} min={1} max={100} step={1} className="w-14" />
+          <span className="text-p5/40">candles {form.entry.interval}</span>
+        </div>
+        <p className="text-[10px] text-p5/50 leading-relaxed">
+          No toque da banda inferior arma limite GTC no preço da banda e deixa resting —
+          se o pavio subiu (como 05:34) e o preço retestar (05:35), preenche. Sem fill em
+          {' '}{form.entry.limitWaitCandles ?? 5} candles, cancela e espera o próximo sinal.
+        </p>
+      </div>
+
       <div className="space-y-2">
         <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: EXIT_COLOR }}>
           Saída — banda superior

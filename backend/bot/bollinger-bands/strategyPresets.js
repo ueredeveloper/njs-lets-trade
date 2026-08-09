@@ -15,6 +15,7 @@ const PRESET_BODIES = {
       stdDev: 2,
       pullback: { enabled: false, belowPct: 2 },
       reentryCooldownCandles: 5,
+      limitWaitCandles: 5,
       emaFilter: {
         enabled: true, period: 50, interval: '4h', maxDipPct: 2,
         slopeLookback: 5, minSlopePct: 0,

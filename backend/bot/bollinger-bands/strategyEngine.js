@@ -35,7 +35,8 @@ function computeBollingerSeries(candles, period, stdDev) {
 function getRequiredSpecs(config) {
   const entry = config.entry;
   const cooldown = Math.max(0, Math.round(Number(entry.reentryCooldownCandles ?? 0)));
-  const limit = entry.period * 3 + cooldown + 30;
+  const limitWait = Math.max(0, Math.round(Number(entry.limitWaitCandles ?? 0)));
+  const limit = entry.period * 3 + cooldown + limitWait + 30;
   const specs = new Map([[entry.interval, limit]]);
 
   const add = (iv, lim) => specs.set(iv, Math.max(specs.get(iv) ?? 0, lim));
@@ -187,6 +188,7 @@ function evaluateEntrySignal(config, cMap) {
     threshold,
     emaFilter: emaCheck,
     emaStopFloor,
+    signalOpenTime: Number(live.openTime),
     entryDesc,
   };
 }
@@ -316,6 +318,30 @@ function checkReentryCooldown(config, cMap, lastExitTime) {
   };
 }
 
+/**
+ * Ordem limite resting (armada no toque da BB): expirou depois de
+ * entry.limitWaitCandles candles fechados com openTime >= signalOpenTime?
+ */
+function checkEntryLimitExpired(config, cMap, entryLimit) {
+  const need = Math.max(1, Math.round(Number(config.entry?.limitWaitCandles ?? 5)));
+  const sinceMs = Number(entryLimit?.signalOpenTime)
+    || (entryLimit?.placedAt ? new Date(entryLimit.placedAt).getTime() : NaN);
+  if (!Number.isFinite(sinceMs)) {
+    return { expired: false, need, have: 0, remain: need };
+  }
+  const iv = config.entry.interval;
+  const closed = closedCandlesOnly(cMap[iv] ?? []);
+  const have = closed.filter(c => Number(c.openTime) >= sinceMs).length;
+  const remain = Math.max(0, need - have);
+  return {
+    expired: remain <= 0,
+    need,
+    have,
+    remain,
+    interval: iv,
+  };
+}
+
 module.exports = {
   intervalMs,
   closedCandlesOnly,
@@ -326,6 +352,7 @@ module.exports = {
   evaluateEntrySignal,
   evaluateExit,
   checkReentryCooldown,
+  checkEntryLimitExpired,
   computeBracketPrices,
   computeStopPrice,
   computeEmaStopFloorRaw,

@@ -28,7 +28,7 @@ const { resolveStrategy } = require('./tradeConfigSchema');
 const { STRATEGY_IDS, isBollingerBandsStrategy } = require('./strategyPresets');
 const {
   getRequiredSpecs, evaluateEntrySignal, evaluateExit, computeBracketPrices, computeStopLossFloor,
-  checkReentryCooldown,
+  checkReentryCooldown, checkEntryLimitExpired,
 } = require('./strategyEngine');
 
 // Componentes genéricos (compra/venda/execução), compartilhados com os outros bots de
@@ -97,7 +97,7 @@ function buildEntryReasonLines(config, entryMeta) {
 // lembrar entre ticks como no vwap-bands.
 const {
   saveState, hasOpenPosition, resetOrphanPosition,
-  parseRulesState, executeBuy, executeSell, recordBracketFill,
+  parseRulesState, executeBuy, executeSell, recordBracketFill, recordBuyFill,
   resolveLastExitTime,
 } = createTradeExecution({
   botLabel: BOT_LABEL,
@@ -205,6 +205,65 @@ async function tick(rowId, adapter, strategy, log, session) {
 
   // ── WATCHING ──────────────────────────────────────────────────────────────
   if (phase !== 'BOUGHT') {
+    const rulesWatch = { ...parseRulesState(state), ...(session.rulesState ?? {}) };
+
+    // Ordem limite GTC já armada no toque da BB: espera fill (reteste) ou expira após
+    // limitWaitCandles — não cancela em 20s como o limitBuy bloqueante antigo.
+    if (rulesWatch.entryLimit && typeof adapter.pollRestingLimitBuy === 'function') {
+      let poll;
+      try {
+        poll = await adapter.pollRestingLimitBuy(rulesWatch.entryLimit);
+      } catch (err) {
+        log(`${Y}⚠️  Erro ao consultar ordem limite de entrada: ${err.message}${X}`);
+        return { phase: 'WATCHING' };
+      }
+
+      if (poll.filled) {
+        log(`${G}✅ Limite @ ${fmtPrice(rulesWatch.entryLimit.price)} preenchida (reteste)${X}`);
+        const bought = await recordBuyFill({
+          rowId, strategy, log, session,
+          entryMeta: rulesWatch.entryLimit.entryMeta ?? {
+            entryDesc: rulesWatch.entryLimit.entryDesc,
+            close: poll.avgPrice,
+            limitPrice: rulesWatch.entryLimit.price,
+            signalOpenTime: rulesWatch.entryLimit.signalOpenTime,
+            signalPrice: rulesWatch.entryLimit.signalPrice,
+          },
+          capital, strategyId, symbol,
+          result: {
+            filledQty: poll.filledQty,
+            quoteQty: poll.quoteQty,
+            avgPrice: poll.avgPrice,
+          },
+        });
+        if (bought) {
+          await placeInitialBracket({
+            rowId, adapter, config, cMap, session, log,
+            filledQty: bought.filledQty, buyPrice: bought.avgPrice,
+          });
+        }
+        return { phase: bought ? 'BOUGHT' : 'WATCHING' };
+      }
+
+      const expiry = checkEntryLimitExpired(config, cMap, rulesWatch.entryLimit);
+      if (expiry.expired || poll.open === false) {
+        try {
+          if (poll.open !== false) await adapter.cancelRestingLimitBuy(rulesWatch.entryLimit);
+        } catch (err) {
+          log(`${Y}⚠️  Falha ao cancelar limite expirada: ${err.message}${X}`);
+        }
+        const kept = {};
+        if (rulesWatch.lastExitTime) kept.lastExitTime = rulesWatch.lastExitTime;
+        session.rulesState = Object.keys(kept).length ? kept : null;
+        await saveState(rowId, { rules_state: session.rulesState ?? {} }, log);
+        log(`${Y}⏳ Limite @ ${fmtPrice(rulesWatch.entryLimit.price)} cancelada `
+          + `(${expiry.expired ? `${expiry.need} candles ${expiry.interval} sem fill` : `status ${poll.status}`})${X}`);
+        return { phase: 'WATCHING' };
+      }
+
+      return { phase: 'WATCHING', entryLimit: { waiting: true, ...expiry } };
+    }
+
     const lastExitTime = resolveLastExitTime(state, session);
     const cooldown = checkReentryCooldown(config, cMap, lastExitTime);
     if (cooldown.waiting) {
@@ -215,6 +274,56 @@ async function tick(rowId, adapter, strategy, log, session) {
 
     const signal = evaluateEntrySignal(config, cMap);
     if (!signal.allowed) return { phase: 'WATCHING' };
+
+    // Prefere resting GTC (fica no book até reteste / N candles). Fallback: executeBuy antigo.
+    if (typeof adapter.placeRestingLimitBuy === 'function' && signal.limitPrice != null) {
+      try {
+        const handle = await adapter.placeRestingLimitBuy(parseFloat(capital), signal.limitPrice);
+        const waitN = config.entry.limitWaitCandles ?? 5;
+        const entryLimit = {
+          ...handle,
+          price: handle.price ?? signal.limitPrice,
+          placedAt: new Date().toISOString(),
+          signalOpenTime: signal.signalOpenTime,
+          signalPrice: signal.close,
+          entryDesc: signal.entryDesc,
+          entryMeta: { ...signal, signalPrice: signal.close },
+        };
+        const nextRules = {};
+        if (rulesWatch.lastExitTime) nextRules.lastExitTime = rulesWatch.lastExitTime;
+        nextRules.entryLimit = entryLimit;
+        session.rulesState = nextRules;
+        await saveState(rowId, { rules_state: nextRules }, log);
+        log(`${G}📍 Sinal (${signal.entryDesc}) — limite GTC @ ${fmtPrice(entryLimit.price)} `
+          + `armada (espera até ${waitN} candles ${config.entry.interval} p/ reteste)${X}`);
+
+        // Fill imediato (preço já no/abaixo da banda no instante do envio)
+        const instant = await adapter.pollRestingLimitBuy(entryLimit);
+        if (instant.filled) {
+          log(`${G}✅ Limite preenchida na hora${X}`);
+          const bought = await recordBuyFill({
+            rowId, strategy, log, session,
+            entryMeta: entryLimit.entryMeta,
+            capital, strategyId, symbol,
+            result: {
+              filledQty: instant.filledQty,
+              quoteQty: instant.quoteQty,
+              avgPrice: instant.avgPrice,
+            },
+          });
+          if (bought) {
+            await placeInitialBracket({
+              rowId, adapter, config, cMap, session, log,
+              filledQty: bought.filledQty, buyPrice: bought.avgPrice,
+            });
+          }
+          return { phase: bought ? 'BOUGHT' : 'WATCHING' };
+        }
+        return { phase: 'WATCHING', entryLimit: { armed: true } };
+      } catch (err) {
+        log(`${Y}⚠️  Falha ao armar limite GTC (${err.message}) — tenta compra bloqueante${X}`);
+      }
+    }
 
     log(`${G}📍 Sinal (${signal.entryDesc}) — comprando ${parseFloat(capital).toFixed(2)} USDT a ${fmtPrice(signal.limitPrice)} (ordem limite)${X}`);
     const bought = await executeBuy({

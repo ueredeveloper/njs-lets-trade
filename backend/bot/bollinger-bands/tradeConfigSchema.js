@@ -33,6 +33,9 @@ const BOLLINGER_BANDS_DEFAULTS = {
     /** Após uma saída, espera N candles fechados do intervalo da BB antes de nova compra
      *  (reavalia BB + EMA do zero). 0 = sem espera por candle. */
     reentryCooldownCandles: 5,
+    /** Após armar ordem limite GTC no toque da banda, mantém no book por até N candles
+     *  do intervalo da BB aguardando reteste (ex.: toque 05:34 → fill em 05:35). */
+    limitWaitCandles: 5,
     /** Filtro de tendência: (1) só compra se o preço estiver acima da EMA(period) do
      *  intervalo escolhido, com folga "adaptação inferior" de maxDipPct% abaixo da EMA
      *  ainda contando como "acima" (evita rejeitar por um toque raso); (2) a própria linha
@@ -133,6 +136,9 @@ function normalizeEntry(block) {
     pullback: normalizePullback(src.pullback),
     reentryCooldownCandles: Math.max(0, Math.min(100, Math.round(Number(
       src.reentryCooldownCandles ?? d.reentryCooldownCandles,
+    )))),
+    limitWaitCandles: Math.max(1, Math.min(100, Math.round(Number(
+      src.limitWaitCandles ?? d.limitWaitCandles,
     )))),
     emaFilter: normalizeEmaFilter(src.emaFilter, interval),
   };

@@ -105,6 +105,32 @@ async function binanceLimitBuy(symbol, usdtAmount, price, opts = {}) {
   const waitMs = opts.waitMs ?? 20_000;
   const pollMs = opts.pollMs ?? 2_000;
 
+  const handle = await binancePlaceRestingLimitBuy(symbol, usdtAmount, price);
+  let order = await binanceRequest('GET', '/api/v3/order', { symbol, orderId: handle.orderId });
+
+  const deadline = Date.now() + waitMs;
+  while (order.status !== 'FILLED' && Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, pollMs));
+    order = await binanceRequest('GET', '/api/v3/order', { symbol, orderId: handle.orderId });
+  }
+
+  if (order.status !== 'FILLED') {
+    try {
+      await binanceRequest('DELETE', '/api/v3/order', { symbol, orderId: handle.orderId });
+    } catch { /* já pode ter enchido ou sido cancelada sozinha entre o último poll e aqui */ }
+    order = await binanceRequest('GET', '/api/v3/order', { symbol, orderId: handle.orderId });
+  }
+
+  const filledQty = parseFloat(order.executedQty);
+  const quoteQty  = parseFloat(order.cummulativeQuoteQty);
+  if (!(filledQty > 0)) return { filled: false };
+  return {
+    filled: true, filledQty: filledQty * (1 - GATE_FEE_RATE_EQUIV), quoteQty, avgPrice: quoteQty / filledQty,
+  };
+}
+
+/** Resolve LOT_SIZE / PRICE_FILTER e arredonda preço+qty pra uma limit buy. */
+async function binanceLimitBuySizing(symbol, usdtAmount, price) {
   const info        = await fetch(`${BINANCE_BASE}/api/v3/exchangeInfo?symbol=${symbol}`).then(r => r.json());
   const filters     = info.symbols?.[0]?.filters ?? [];
   const priceFilter = filters.find(f => f.filterType === 'PRICE_FILTER');
@@ -120,32 +146,55 @@ async function binanceLimitBuy(symbol, usdtAmount, price, opts = {}) {
   if (!Number.isFinite(parseFloat(safeQty)) || parseFloat(safeQty) <= 0) {
     throw new Error(`quantidade inválida para compra limite (${safeQty})`);
   }
+  return { safePrice, safeQty };
+}
 
-  let order = await binanceRequest('POST', '/api/v3/order', {
+/**
+ * Coloca LIMIT GTC e devolve na hora (sem esperar fill) — pra bots que deixam a ordem
+ * resting no book por N candles até um reteste (ex.: bollinger-bands toque na banda
+ * inferior + fill no candle seguinte).
+ */
+async function binancePlaceRestingLimitBuy(symbol, usdtAmount, price) {
+  const { safePrice, safeQty } = await binanceLimitBuySizing(symbol, usdtAmount, price);
+  const order = await binanceRequest('POST', '/api/v3/order', {
     symbol, side: 'BUY', type: 'LIMIT', timeInForce: 'GTC', quantity: safeQty, price: safePrice,
   });
+  return {
+    exchange: 'binance',
+    orderId: order.orderId,
+    clientOrderId: order.clientOrderId ?? null,
+    price: parseFloat(safePrice),
+    qty: parseFloat(safeQty),
+    status: order.status,
+  };
+}
 
-  const deadline = Date.now() + waitMs;
-  while (order.status !== 'FILLED' && Date.now() < deadline) {
-    await new Promise(r => setTimeout(r, pollMs));
-    order = await binanceRequest('GET', '/api/v3/order', { symbol, orderId: order.orderId });
-  }
-
-  if (order.status !== 'FILLED') {
-    try {
-      await binanceRequest('DELETE', '/api/v3/order', { symbol, orderId: order.orderId });
-    } catch { /* já pode ter enchido ou sido cancelada sozinha entre o último poll e aqui */ }
-    // Reconfere o estado final pós-cancelamento — pode ter enchido (parcial ou total) bem
-    // no instante entre o último poll e o DELETE acima.
-    order = await binanceRequest('GET', '/api/v3/order', { symbol, orderId: order.orderId });
-  }
-
+async function binancePollRestingLimitBuy(symbol, handle) {
+  const order = await binanceRequest('GET', '/api/v3/order', { symbol, orderId: handle.orderId });
   const filledQty = parseFloat(order.executedQty);
   const quoteQty  = parseFloat(order.cummulativeQuoteQty);
-  if (!(filledQty > 0)) return { filled: false };
-  return {
-    filled: true, filledQty: filledQty * (1 - GATE_FEE_RATE_EQUIV), quoteQty, avgPrice: quoteQty / filledQty,
-  };
+  if (order.status === 'FILLED' || (filledQty > 0 && (order.status === 'CANCELED' || order.status === 'EXPIRED'))) {
+    if (!(filledQty > 0)) return { filled: false, status: order.status, open: false };
+    return {
+      filled: true,
+      status: order.status,
+      open: false,
+      filledQty: filledQty * (1 - GATE_FEE_RATE_EQUIV),
+      quoteQty,
+      avgPrice: quoteQty / filledQty,
+    };
+  }
+  if (order.status === 'NEW' || order.status === 'PARTIALLY_FILLED') {
+    return { filled: false, status: order.status, open: true, filledQty, quoteQty };
+  }
+  return { filled: false, status: order.status, open: false, filledQty, quoteQty };
+}
+
+async function binanceCancelRestingLimitBuy(symbol, handle) {
+  try {
+    await binanceRequest('DELETE', '/api/v3/order', { symbol, orderId: handle.orderId });
+  } catch { /* já pode ter enchido/cancelado */ }
+  return binancePollRestingLimitBuy(symbol, handle);
 }
 
 async function binanceMarketSell(symbol, qty) {
@@ -178,6 +227,9 @@ module.exports = {
   binanceRequest,
   binanceMarketBuy,
   binanceLimitBuy,
+  binancePlaceRestingLimitBuy,
+  binancePollRestingLimitBuy,
+  binanceCancelRestingLimitBuy,
   binanceMarketSell,
   binance24hVolume,
   decimalsFromStep,
