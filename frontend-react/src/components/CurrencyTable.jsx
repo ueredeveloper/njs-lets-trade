@@ -12,6 +12,7 @@ import { useI18n } from '../i18n';
 import MultitradeModal from './MultitradeModal';
 import MultitradeBotStateModal from './MultitradeBotStateModal';
 import MultitradeSellModal from './MultitradeSellModal';
+import TradeLotSellModal from './TradeLotSellModal';
 import VwapBandsFavoriteModal from './VwapBandsFavoriteModal';
 import BollingerBandsFavoriteModal from './BollingerBandsFavoriteModal';
 import { getEntriesForSymbol } from '../constants/strategyPresets';
@@ -32,6 +33,9 @@ import {
   formatTradeStatusBadge, loadTradeFavSort, tradePnlForSort,
   saveTradeFavSort, expandWeeklyTrades,
 } from '../utils/tradeFavoritesSort';
+import {
+  loadActiveFavSort, expandActiveBuyLots, formatLotTime,
+} from '../utils/activeFavoritesSort';
 import { compareVwapFavorites, loadVwapFavSort } from '../utils/vwapFavoritesSort';
 import { compareBollingerFavorites, loadBbFavSort } from '../utils/bollingerFavoritesSort';
 import { useMacrossFavoritesStatus } from '../hooks/useMacrossFavoritesStatus';
@@ -47,6 +51,7 @@ import { isStablesFilterName } from '../utils/assetCategories';
 import MacrossFavSortSelect from './MacrossFavSortSelect';
 import MacmpTableSortSelect from './MacmpTableSortSelect';
 import TradeFavSortSelect from './TradeFavSortSelect';
+import ActiveFavSortSelect from './ActiveFavSortSelect';
 import VwapFavSortSelect from './VwapFavSortSelect';
 import BollingerFavSortSelect from './BollingerFavSortSelect';
 
@@ -320,6 +325,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   const [bbModal, setBbModal]       = useState(null);
   const [mtStateModal, setMtStateModal] = useState(null);
   const [mtSellEntry, setMtSellEntry] = useState(null);
+  const [sellLotModal, setSellLotModal] = useState(null);
   const [search, setSearch]               = useState('');
   const [sortVolume, setSortVolume]       = useState('none'); // 'desc' | 'asc' | 'none'
   const [gateItems, setGateItems]         = useState([]);
@@ -340,6 +346,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   const [vwapWidthSort, setVwapWidthSort] = useState('far'); // 'far' | 'near'
   const [bbWidthSort, setBbWidthSort] = useState('far'); // 'far' | 'near'
   const [tradeFavSort, setTradeFavSort] = useState(() => loadTradeFavSort());
+  const [activeFavSort, setActiveFavSort] = useState(() => loadActiveFavSort());
   const [vwapFavSort, setVwapFavSort] = useState(() => loadVwapFavSort());
   const [bbFavSort, setBbFavSort] = useState(() => loadBbFavSort());
 
@@ -351,16 +358,21 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     )].sort()
   ), [multitradeFavorites]);
 
-  const tradeExtraSymbols = useMemo(
-    () => [...gateFavorites, ...binanceFavorites],
-    [gateFavorites, binanceFavorites],
-  );
+  const tradeExtraSymbols = useMemo(() => {
+    // Inclui os holdings atuais (AT) na busca de trades — necessário pro seletor de
+    // "compras da semana" que expande cada holding em lotes de compra individuais.
+    const activeSymbols = [...activeTrades.keys()].filter((sym) => /^[A-Z0-9]+USDT$/.test(sym));
+    return [...new Set([...gateFavorites, ...binanceFavorites, ...activeSymbols])];
+  }, [gateFavorites, binanceFavorites, activeTrades]);
 
   /** Combinações únicas (interval,period,stdDev) usadas pelos favoritos BB, cada uma com a
    *  lista dos símbolos que a usam — cada favorito tem seu próprio intervalo de entrada
    *  (config.entry), então a largura buscada precisa acompanhar isso em vez de um intervalo
    *  fixo, e é escopada só a esses símbolos em vez de escanear o mercado inteiro (ver
-   *  useBollingerBandWidthMeta). */
+   *  useBollingerBandWidthMeta). `gateSymbols` marca quais desses símbolos são favoritos na
+   *  Gate.io — o backend precisa saber pra buscar candles via Gate em vez do pipeline
+   *  Binance-only de getCandlesForScreening, senão símbolos que só existem na Gate (fora da
+   *  lista estática GATE_ONLY_SYMBOLS) falham silenciosamente e ficam sem % de largura. */
   const bbFavConfigs = useMemo(() => {
     const seen = new Map();
     for (const e of multitradeFavorites) {
@@ -369,8 +381,10 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
       const period = e.entry?.period ?? 20;
       const stdDev = e.entry?.stdDev ?? 2;
       const key = `${interval}|${period}|${stdDev}`;
-      if (!seen.has(key)) seen.set(key, { interval, period, stdDev, symbols: [] });
-      seen.get(key).symbols.push(e.symbol);
+      if (!seen.has(key)) seen.set(key, { interval, period, stdDev, symbols: [], gateSymbols: [] });
+      const cfg = seen.get(key);
+      cfg.symbols.push(e.symbol);
+      if (e.exchange === 'gate') cfg.gateSymbols.push(e.symbol);
     }
     return [...seen.values()];
   }, [multitradeFavorites]);
@@ -397,7 +411,8 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     symbols: tradeFavSymbols,
     status: tradeFavStatus,
     loading: tradeFavLoading,
-  } = useTradeFavoritesSummary(tradeExtraSymbols, isTradesFavView);
+    refresh: refreshTradeFavStatus,
+  } = useTradeFavoritesSummary(tradeExtraSymbols, isTradesFavView || isActiveFavView);
   const {
     meta: vwapFavWidthMeta,
     loading: vwapFavWidthLoading,
@@ -500,6 +515,11 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
 
   const onTradeFavSortChange = useCallback((sortBy) => {
     setTradeFavSort(sortBy);
+    setSortVolume('none');
+  }, []);
+
+  const onActiveFavSortChange = useCallback((sortBy) => {
+    setActiveFavSort(sortBy);
     setSortVolume('none');
   }, []);
 
@@ -632,6 +652,9 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
       list = expandWeeklyTrades(list, tradeFavStatus);
     } else if (isTradesFavView && sortVolume === 'none') {
       list = list.slice().sort((a, b) => compareTradeFavorites(a, b, tradeFavSort, tradeFavStatus));
+    } else if (isActiveFavView && activeFavSort === 'buy_lots' && sortVolume === 'none') {
+      // Compras da semana: uma linha por lote de compra ainda não vendido (FIFO).
+      list = expandActiveBuyLots(list, tradeFavStatus);
     } else if (activeMacmpFilter && macmpMeta && sortVolume === 'none' && !favoriteView) {
       list = filterMacmpTableRows(list, macmpMeta, macmpTableSort);
       list = list.slice().sort((a, b) => compareMacmpTableRows(a, b, macmpTableSort, macmpMeta));
@@ -668,7 +691,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     }
 
     return list;
-  }, [currencies, activeFilter, selectedQuote, findFilter, search, favoriteView, gateFavorites, binanceFavorites, multitradeFavorites, sortVolume, gateAll, filterVisibleCurrencies, isVisibleSymbol, currencyBySymbol, activeMacrossFilter, macrossScannedAt, macrossTick, isMacrossFavView, macrossFavSort, macrossFavStatus, macrossEntriesBySymbol, isTradesFavView, tradeFavSort, tradeFavSymbols, tradeFavStatus, isActiveFavView, activeTrades, isAltaFilter, isNovasFilter, highlightMeta, activeMacmpFilter, macmpMeta, macmpTableSort, activeMaDistanceFilter, maDistMeta, maDistSort, activeGrowthFilter, growthMeta, growthSort, activeVwapWidthFilter, vwapWidthMeta, vwapWidthSort, activeBbWidthFilter, bbWidthMeta, bbWidthSort, isVwapBandsFavView, vwapFavSort, vwapFavWidthMeta, bbFavSort, bbFavWidthMeta]);
+  }, [currencies, activeFilter, selectedQuote, findFilter, search, favoriteView, gateFavorites, binanceFavorites, multitradeFavorites, sortVolume, gateAll, filterVisibleCurrencies, isVisibleSymbol, currencyBySymbol, activeMacrossFilter, macrossScannedAt, macrossTick, isMacrossFavView, macrossFavSort, macrossFavStatus, macrossEntriesBySymbol, isTradesFavView, tradeFavSort, tradeFavSymbols, tradeFavStatus, isActiveFavView, activeFavSort, activeTrades, isAltaFilter, isNovasFilter, highlightMeta, activeMacmpFilter, macmpMeta, macmpTableSort, activeMaDistanceFilter, maDistMeta, maDistSort, activeGrowthFilter, growthMeta, growthSort, activeVwapWidthFilter, vwapWidthMeta, vwapWidthSort, activeBbWidthFilter, bbWidthMeta, bbWidthSort, isVwapBandsFavView, vwapFavSort, vwapFavWidthMeta, bbFavSort, bbFavWidthMeta]);
 
   const rowHeightPx = isMobile ? TABLE_ROW_HEIGHT_MOBILE : TABLE_ROW_HEIGHT;
 
@@ -1051,7 +1074,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
       });
   }, [isActiveFavView, activeTrades]);
 
-  const showFavSortInHeader = isMacrossFavView || isTradesFavView || isVwapBandsFavView || !!activeMacmpFilter;
+  const showFavSortInHeader = isMacrossFavView || isTradesFavView || isActiveFavView || isVwapBandsFavView || isBollingerBandsFavView || !!activeMacmpFilter;
   const REM_PX = 16;
   // Coluna de botões: largura fixa no piso (sem crescer com o drag) — abaixo dele os botões
   // (G/B/MC, 15px cada) se sobrepõem ou somem. O espaço liberado vai para a coluna Par.
@@ -1061,8 +1084,8 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   // No macmp o cabeçalho tem seletor + botão "Vol" lado a lado — precisa de mais espaço
   // do que o seletor sozinho do MC Favoritos/Trades.
   const favColMinPx = isMobile
-    ? (activeMacmpFilter ? 4.6 * REM_PX : showFavSortInHeader ? 4.0 * REM_PX : 3.85 * REM_PX)
-    : (activeMacmpFilter ? 6.4 * REM_PX : showFavSortInHeader ? 5.4 * REM_PX : 3.85 * REM_PX);
+    ? (activeMacmpFilter ? 4.6 * REM_PX : showFavSortInHeader ? 4.5 * REM_PX : 3.85 * REM_PX)
+    : (activeMacmpFilter ? 6.4 * REM_PX : showFavSortInHeader ? 6.0 * REM_PX : 3.85 * REM_PX);
   const priceColPx = (isMobile ? 3 : 3.25) * REM_PX;
   const changeColPx = (isMobile ? 2.75 : 3) * REM_PX;
   const volColPx = (isMobile ? 2.25 : 2.5) * REM_PX;
@@ -1253,6 +1276,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                 title={
                   isMacrossFavView ? t('macross.sort.label')
                     : isTradesFavView ? t('trades.sort.label')
+                    : isActiveFavView ? t('activefav.sort.label')
                     : isVwapBandsFavView ? t('vwapfav.sort.label')
                     : isBollingerBandsFavView ? t('bbfav.sort.label')
                     : activeMacmpFilter ? t('macmp.sort.label')
@@ -1261,9 +1285,6 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
               >
                 {isMacrossFavView ? (
                   <div className={`flex items-center gap-0.5 ${isMobile ? 'flex-wrap justify-center' : 'justify-start'}`}>
-                    {macrossFavLoading && (
-                      <span className="text-[9px] text-emerald-400/80 shrink-0">⟳</span>
-                    )}
                     <MacrossFavSortSelect
                       value={macrossFavSort}
                       onChange={onMacrossFavSortChange}
@@ -1272,20 +1293,22 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                   </div>
                 ) : isTradesFavView ? (
                   <div className={`flex items-center gap-0.5 ${isMobile ? 'flex-wrap justify-center' : 'justify-start'}`}>
-                    {tradeFavLoading && (
-                      <span className="text-[9px] text-emerald-400/80 shrink-0">⟳</span>
-                    )}
                     <TradeFavSortSelect
                       value={tradeFavSort}
                       onChange={onTradeFavSortChange}
                       className="shrink-0"
                     />
                   </div>
+                ) : isActiveFavView ? (
+                  <div className={`flex items-center gap-0.5 ${isMobile ? 'flex-wrap justify-center' : 'justify-start'}`}>
+                    <ActiveFavSortSelect
+                      value={activeFavSort}
+                      onChange={onActiveFavSortChange}
+                      className="shrink-0"
+                    />
+                  </div>
                 ) : isVwapBandsFavView ? (
                   <div className={`flex items-center gap-0.5 ${isMobile ? 'flex-wrap justify-center' : 'justify-start'}`}>
-                    {vwapFavWidthLoading && (
-                      <span className="text-[9px] text-emerald-400/80 shrink-0">⟳</span>
-                    )}
                     <VwapFavSortSelect
                       value={vwapFavSort}
                       onChange={onVwapFavSortChange}
@@ -1294,9 +1317,6 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                   </div>
                 ) : isBollingerBandsFavView ? (
                   <div className={`flex items-center gap-0.5 ${isMobile ? 'flex-wrap justify-center' : 'justify-start'}`}>
-                    {bbFavWidthLoading && (
-                      <span className="text-[9px] text-emerald-400/80 shrink-0">⟳</span>
-                    )}
                     <BollingerFavSortSelect
                       value={bbFavSort}
                       onChange={onBbFavSortChange}
@@ -1530,6 +1550,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
               const holdingUsdt = isActiveHolding && activeInfo.buyQty && item.price
                 ? activeInfo.buyQty * parseFloat(item.price)
                 : (isActiveHolding ? activeInfo.buyQty : null);
+              const isLotRow = isActiveFavView && item.__lotTime != null;
 
               return (
                 <tr
@@ -1625,7 +1646,30 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                       })() : (
                         <span>{base}<span className="opacity-40 font-normal text-[8px]">/{quote}</span></span>
                       )}
-                      {isActiveFavView && activeInfo && (
+                      {isLotRow ? (
+                        <span className="flex items-center gap-1 text-[9px] font-normal" style={{ color: ACTIVE_COLOR }}>
+                          <span>
+                            {formatLotTime(item.__lotTime)} · {item.__lotQty} · ${(item.__lotQty * item.__lotPrice).toFixed(2)}
+                          </span>
+                          <button
+                            type="button"
+                            className="text-[8px] font-bold px-1 py-0 rounded shrink-0"
+                            style={{ background: 'rgba(239,68,68,0.13)', color: '#f87171', border: '1px solid rgba(239,68,68,0.33)' }}
+                            title="Vender esta compra agora (ordem a mercado)"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSellLotModal({
+                                symbol: item.symbol,
+                                exchange: item.__lotExchange,
+                                qty: item.__lotQty,
+                                price: item.__lotPrice,
+                                time: item.__lotTime,
+                              });
+                            }}>
+                            Vender
+                          </button>
+                        </span>
+                      ) : isActiveFavView && activeInfo && (
                         <span className="flex items-center gap-1 text-[9px] font-normal" style={{ color: ACTIVE_COLOR }}>
                           <span>
                             {activeInfo.exchange === 'gate' ? t('fav.active.exchange_gate')
@@ -2017,6 +2061,20 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
               setMtSellEntry(null);
             }}
             onCancel={() => setMtSellEntry(null)}
+          />
+        </ModalPortal>
+      )}
+
+      {sellLotModal && (
+        <ModalPortal>
+          <TradeLotSellModal
+            lot={sellLotModal}
+            onSold={async () => {
+              setSellLotModal(null);
+              await refreshActiveTrades();
+              refreshTradeFavStatus();
+            }}
+            onCancel={() => setSellLotModal(null)}
           />
         </ModalPortal>
       )}

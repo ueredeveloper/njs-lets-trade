@@ -3,7 +3,7 @@ import { fetchBollingerBandWidthFilter } from '../services/api';
 
 function configsKey(configs) {
   return configs
-    .map(c => `${c.interval}|${c.period}|${c.stdDev}|${c.symbols.slice().sort().join('.')}`)
+    .map(c => `${c.interval}|${c.period}|${c.stdDev}|${c.symbols.slice().sort().join('.')}|${(c.gateSymbols ?? []).slice().sort().join('.')}`)
     .sort()
     .join(',');
 }

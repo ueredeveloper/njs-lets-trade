@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { fetchTradeFavorites } from '../services/api';
 
 /**
@@ -8,10 +8,17 @@ export function useTradeFavoritesSummary(extraSymbols, enabled) {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
   const [scannedAt, setScannedAt] = useState(null);
+  const [refreshNonce, setRefreshNonce] = useState(0);
+  const forceFreshRef = useRef(false);
   const symbolsKey = useMemo(
     () => [...(extraSymbols ?? [])].map(s => String(s).toUpperCase()).sort().join(','),
     [extraSymbols],
   );
+  /** Força ignorar o cache de 60s do backend — usado logo após enviar uma venda. */
+  const forceRefresh = useCallback(() => {
+    forceFreshRef.current = true;
+    setRefreshNonce(n => n + 1);
+  }, []);
 
   useEffect(() => {
     if (!enabled) return undefined;
@@ -19,10 +26,13 @@ export function useTradeFavoritesSummary(extraSymbols, enabled) {
     let cancelled = false;
 
     async function refresh() {
+      const fresh = forceFreshRef.current;
+      forceFreshRef.current = false;
       setLoading(true);
       try {
         const list = await fetchTradeFavorites(
           symbolsKey ? symbolsKey.split(',').filter(Boolean) : [],
+          { fresh },
         );
         if (!cancelled) {
           setItems(list ?? []);
@@ -38,7 +48,7 @@ export function useTradeFavoritesSummary(extraSymbols, enabled) {
     refresh();
     const id = setInterval(refresh, 60_000);
     return () => { cancelled = true; clearInterval(id); };
-  }, [enabled, symbolsKey]);
+  }, [enabled, symbolsKey, refreshNonce]);
 
   const status = useMemo(() => {
     const map = {};
@@ -50,5 +60,5 @@ export function useTradeFavoritesSummary(extraSymbols, enabled) {
 
   const symbols = useMemo(() => items.map(r => r.symbol), [items]);
 
-  return { items, symbols, status, loading, scannedAt };
+  return { items, symbols, status, loading, scannedAt, refresh: forceRefresh };
 }

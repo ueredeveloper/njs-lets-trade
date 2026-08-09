@@ -334,6 +334,14 @@ const T = {
     'trades.badge.sold':   (time) => `▼ ${time}`,
     'trades.badge.open':   (cost) => `▌ $${cost}`,
 
+    'activefav.sort.label':            'Filtro',
+    'activefav.sort.prev':             'Filtro anterior',
+    'activefav.sort.next':             'Próximo filtro',
+    'activefav.sort.holdings':         'Saldo atual',
+    'activefav.sort.buy_lots':         'Compras individuais',
+    'activefav.sort.short.holdings':   'Saldo',
+    'activefav.sort.short.buy_lots':   'Compras',
+
     // Favoritos — tooltips
     'fav.row.gate_add':       'Favorito Gate.io — marque a moeda para listar na aba G e abrir o gráfico pela Gate',
     'fav.row.gate_remove':    'Remover dos favoritos Gate.io',
@@ -477,6 +485,7 @@ const T = {
     'filter.fav_gainers_gate':    'Top 10 em alta 24h na Gate.io (vol. ≥ 1M USDT)',
     'filter.fav_new_binance':     '10 listagens mais recentes na Binance',
     'filter.fav_new_gate':        '10 listagens mais recentes na Gate.io',
+    'filter.fav_ignition':        'Ignição de volume (salto nos últimos 60s)',
     'filter.rsi':            (c1, v1, c2, v2, ivl) => `RSI ${c1} de ${v1} e ${c2} de ${v2} (${ivl})`,
     'filter.ichi':           (l1, cmp, l2, ivl) => `Ichimoku: ${l1} ${cmp} ${l2} (${ivl})`,
     'filter.bb_position':    (pos, period, stdDev, ivl, extra) => `BB(${period},${stdDev}) ${pos} (${ivl})${extra ? ` ${extra}` : ''}`,
@@ -882,6 +891,14 @@ const T = {
     'trades.badge.sold':   (time) => `▼ ${time}`,
     'trades.badge.open':   (cost) => `▌ $${cost}`,
 
+    'activefav.sort.label':            'Filter',
+    'activefav.sort.prev':             'Previous filter',
+    'activefav.sort.next':             'Next filter',
+    'activefav.sort.holdings':         'Current balance',
+    'activefav.sort.buy_lots':         'Individual purchases',
+    'activefav.sort.short.holdings':   'Balance',
+    'activefav.sort.short.buy_lots':   'Buys',
+
     // Favorites — tooltips
     'fav.row.gate_add':       'Gate.io favorite — mark the coin to list under G and open the Gate chart',
     'fav.row.gate_remove':    'Remove from Gate.io favorites',
@@ -1025,6 +1042,7 @@ const T = {
     'filter.fav_gainers_gate':    'Top 10 24h gainers on Gate.io (vol. ≥ 1M USDT)',
     'filter.fav_new_binance':     '10 most recent Binance listings',
     'filter.fav_new_gate':        '10 most recent Gate.io listings',
+    'filter.fav_ignition':        'Volume ignition (spike in the last 60s)',
     'filter.rsi':            (c1, v1, c2, v2, ivl) => `RSI ${c1} ${v1} and ${c2} ${v2} (${ivl})`,
     'filter.ichi':           (l1, cmp, l2, ivl) => `Ichimoku: ${l1} ${cmp} ${l2} (${ivl})`,
     'filter.bb_position':    (pos, period, stdDev, ivl, extra) => `BB(${period},${stdDev}) ${pos} (${ivl})${extra ? ` ${extra}` : ''}`,

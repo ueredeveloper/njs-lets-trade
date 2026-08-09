@@ -79,6 +79,16 @@ export async function fetchMarketHighlights(limit = 10) {
   return res.json(); // [{ name, list, meta? }]
 }
 
+/** Pares com salto de volume em tempo real (últimos 15min), detectado pelo monitor do backend. */
+export async function fetchVolumeIgnition() {
+  const res = await fetch('/services/volume-ignition');
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `volume-ignition falhou: HTTP ${res.status}`);
+  }
+  return res.json(); // { list: [{ symbol, firedAt, ratio, priceChangePct, price }] }
+}
+
 /**
  * Analisa ciclos MA: entrada EMA9↑EMA21, saída EMA9↓EMA21.
  */
@@ -205,10 +215,11 @@ export async function fetchVwapBandWidthFilter({
  * inteiro e calcula só pros símbolos pedidos (resposta rápida, usado pelos favoritos BB).
  */
 export async function fetchBollingerBandWidthFilter({
-  interval = '4h', period = '20', stdDev = '2', lookback = '100', order = 'far', symbols = null,
+  interval = '4h', period = '20', stdDev = '2', lookback = '100', order = 'far', symbols = null, gateSymbols = null,
 } = {}) {
   const params = new URLSearchParams({ interval, period, stdDev, lookback, order });
   if (symbols?.length) params.set('symbols', symbols.join(','));
+  if (gateSymbols?.length) params.set('gateSymbols', gateSymbols.join(','));
   const res = await fetch(`/services/bollinger-band-width-filter?${params}`);
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
@@ -358,9 +369,10 @@ export async function updateActiveTradesSettings(patch) {
  * Resumo de moedas compradas/vendidas (Gate + Binance) com PnL por período.
  * @param {string[]} [extraSymbols] símbolos extras (favoritos) para buscar na Binance
  */
-export async function fetchTradeFavorites(extraSymbols = []) {
+export async function fetchTradeFavorites(extraSymbols = [], { fresh = false } = {}) {
   const params = new URLSearchParams();
   if (extraSymbols?.length) params.set('symbols', extraSymbols.join(','));
+  if (fresh) params.set('fresh', '1');
   const qs = params.toString();
   const res = await fetch(`/services/trade-favorites${qs ? `?${qs}` : ''}`);
   if (!res.ok) {
@@ -395,14 +407,27 @@ export async function fetchGateAccount() {
 
 /**
  * Envia uma ordem na Gate.io.
- * @param {{ symbol, side: 'buy'|'sell', type?: 'market'|'limit', amount, price? }} params
+ * @param {{ symbol, side: 'buy'|'sell', type?: 'market'|'limit', amount, price?, allowCancelBracket? }} params
  */
-export async function placeGateOrder({ symbol, side, type = 'market', amount, price, strategyId }) {
+export async function placeGateOrder({ symbol, side, type = 'market', amount, price, strategyId, allowCancelBracket }) {
   const res = await fetch('/services/gate-order', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ symbol, side, type, amount, price, strategyId }),
+    body: JSON.stringify({ symbol, side, type, amount, price, strategyId, allowCancelBracket }),
   });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    const err = new Error(body.error ?? `HTTP ${res.status}`);
+    err.needsBracketCancel = !!body.needsBracketCancel;
+    throw err;
+  }
+  return res.json();
+}
+
+/** Diz se vender `quantity` desse símbolo na Gate.io vai precisar cancelar uma bracket resting. */
+export async function checkGateOrderLock(symbol, quantity) {
+  const params = new URLSearchParams({ symbol: symbol.toUpperCase(), quantity: String(quantity) });
+  const res = await fetch(`/services/gate-order-lock?${params}`);
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error ?? `HTTP ${res.status}`);
@@ -435,14 +460,27 @@ export async function fetchBinanceAccount() {
 
 /**
  * Envia uma ordem na Binance.
- * @param {{ symbol, side: 'BUY'|'SELL', type?: 'MARKET'|'LIMIT', quantity, price? }} params
+ * @param {{ symbol, side: 'BUY'|'SELL', type?: 'MARKET'|'LIMIT', quantity, price?, allowCancelBracket? }} params
  */
-export async function placeBinanceOrder({ symbol, side, type = 'MARKET', quantity, price, strategyId }) {
+export async function placeBinanceOrder({ symbol, side, type = 'MARKET', quantity, price, strategyId, allowCancelBracket }) {
   const res = await fetch('/services/binance-order', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ symbol, side, type, quantity, price, strategyId }),
+    body: JSON.stringify({ symbol, side, type, quantity, price, strategyId, allowCancelBracket }),
   });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    const err = new Error(body.error ?? `HTTP ${res.status}`);
+    err.needsBracketCancel = !!body.needsBracketCancel;
+    throw err;
+  }
+  return res.json();
+}
+
+/** Diz se vender `quantity` desse símbolo na Binance vai precisar cancelar uma OCO resting. */
+export async function checkBinanceOrderLock(symbol, quantity) {
+  const params = new URLSearchParams({ symbol: symbol.toUpperCase(), quantity: String(quantity) });
+  const res = await fetch(`/services/binance-order-lock?${params}`);
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error ?? `HTTP ${res.status}`);

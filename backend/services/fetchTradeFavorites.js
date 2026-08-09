@@ -41,6 +41,7 @@ function normalizeTrade(t) {
     price: parseFloat(t.price),
     qty: parseFloat(t.qty),
     isBuyer: !!t.isBuyer,
+    exchange: t.exchange,
   };
 }
 
@@ -77,7 +78,7 @@ function summarizeTrades(rawTrades, now = Date.now()) {
       lastBuyTime = t.time;
       if (t.time >= dayStart) buysToday += 1;
       if (t.time >= weekStart) buysWeek += 1;
-      inventory.push({ qty: t.qty, price: t.price, time: t.time });
+      inventory.push({ qty: t.qty, price: t.price, time: t.time, exchange: t.exchange });
       continue;
     }
 
@@ -94,7 +95,10 @@ function summarizeTrades(rawTrades, now = Date.now()) {
       const take = Math.min(lot.qty, remain);
       cost += take * lot.price;
       matched += take;
-      lot.qty -= take;
+      // Arredonda pra evitar arruinar de ponto flutuante acumulando a cada venda parcial
+      // (ex.: 0.37 virando 0.3699999999999939) — esse qty também vai direto na ordem de
+      // venda quando o lote é vendido isoladamente (ver TradeLotSellModal.jsx).
+      lot.qty = Math.round((lot.qty - take) * 1e8) / 1e8;
       remain -= take;
       if (lot.qty <= 1e-12) inventory.shift();
     }
@@ -114,6 +118,15 @@ function summarizeTrades(rawTrades, now = Date.now()) {
   const openQty = inventory.reduce((s, l) => s + l.qty, 0);
   const openCost = inventory.reduce((s, l) => s + l.qty * l.price, 0);
 
+  // Lotes de compra ainda não vendidos (FIFO) — cada um é uma compra individual
+  // que ainda pode ser vendida isoladamente ("vender a compra do dia tal").
+  const openLots = inventory
+    .filter(l => l.qty > 1e-12)
+    .map(l => ({ time: l.time, price: l.price, qty: l.qty, exchange: l.exchange }))
+    .sort((a, b) => b.time - a.time);
+
+  const oldestTradeDays = Math.min(30, Math.max(0, Math.round((now - trades[0].time) / 86_400_000)));
+
   return {
     lastBuyTime,
     lastSellTime,
@@ -131,6 +144,8 @@ function summarizeTrades(rawTrades, now = Date.now()) {
     openQty: openQty > 1e-12 ? openQty : 0,
     openCost: Math.round(openCost * 100) / 100,
     hasOpen: openQty > 1e-12,
+    openLots,
+    oldestTradeDays,
   };
 }
 
@@ -158,6 +173,7 @@ async function fetchGateAllTrades() {
           price: t.price,
           qty: t.amount,
           isBuyer: t.side === 'buy',
+          exchange: 'gate',
         });
       }
       if (trades.length < 1000) break;
@@ -223,6 +239,7 @@ async function fetchBinanceTradesMap(symbols) {
         price: t.price,
         qty: t.qty,
         isBuyer: !!t.isBuyer,
+        exchange: 'binance',
       })));
     } catch {
       // par sem histórico / inválido
@@ -284,7 +301,8 @@ router.get('/trade-favorites', async (req, res) => {
       .map(s => s.trim().toUpperCase())
       .filter(Boolean);
     const key = extra.slice().sort().join(',');
-    if (cache && cacheKey === key && Date.now() - cacheAt < CACHE_TTL_MS) {
+    const fresh = req.query.fresh === '1';
+    if (!fresh && cache && cacheKey === key && Date.now() - cacheAt < CACHE_TTL_MS) {
       return res.json(cache);
     }
 

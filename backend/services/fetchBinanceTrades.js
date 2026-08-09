@@ -31,6 +31,25 @@ router.get('/binance-account', async (req, res) => {
   }
 });
 
+// GET /services/binance-order-lock?symbol=BTCUSDT&quantity=1.23
+// Diz se vender `quantity` desse símbolo vai precisar cancelar uma OCO resting (saldo
+// livre insuficiente) — usado pelo formulário de venda do favorito AT pra avisar o
+// usuário antes de mexer na bracket de uma posição gerenciada por bot.
+router.get('/binance-order-lock', async (req, res) => {
+  const { symbol, quantity } = req.query;
+  if (!symbol || quantity == null) return res.status(400).json({ error: 'symbol e quantity são obrigatórios' });
+  try {
+    const client = await getClient();
+    const baseAsset = symbol.toUpperCase().replace(/USDT$|BTC$|ETH$|BNB$|BUSD$/, '');
+    const account = await client.accountInfo();
+    const balance = account.balances?.find(b => b.asset === baseAsset);
+    const free = balance ? parseFloat(balance.free) : 0;
+    res.json({ free, needsBracketCancel: free < Number(quantity) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Arredonda para baixo respeitando o stepSize do filtro LOT_SIZE da Binance
 // (quantity precisa ser múltiplo exato do stepSize, senão a ordem é rejeitada).
 async function roundToLotSize(client, symbol, qty) {
@@ -45,7 +64,7 @@ async function roundToLotSize(client, symbol, qty) {
 // POST /services/binance-order
 // Body: { symbol, side: 'BUY'|'SELL', type: 'MARKET'|'LIMIT', quantity, price? }
 router.post('/binance-order', async (req, res) => {
-  const { symbol, side, type = 'MARKET', quantity, price, strategyId } = req.body ?? {};
+  const { symbol, side, type = 'MARKET', quantity, price, strategyId, allowCancelBracket } = req.body ?? {};
 
   if (!symbol || !side || !quantity)
     return res.status(400).json({ error: 'symbol, side e quantity são obrigatórios' });
@@ -63,15 +82,33 @@ router.post('/binance-order', async (req, res) => {
 
     let safeQuantity = Number(quantity);
     if (sideUpper === 'SELL') {
-      // A quantidade da posição fica presa (locked) numa OCO resting, se houver — cancela
-      // antes de checar o saldo livre, senão a venda manual só pega o troco (ou falha).
-      try {
-        await cancelRestingBracketIfAny({ symbol: symbolUpper, exchange: 'binance', strategyId });
-      } catch (err) {
-        return res.status(500).json({ error: `Falha ao cancelar OCO resting antes da venda: ${err.message}` });
+      const baseAsset = symbolUpper.replace(/USDT$|BTC$|ETH$|BNB$|BUSD$/, '');
+
+      // Só cancela a OCO resting se o saldo livre não cobrir a venda pedida — uma compra
+      // separada do mesmo ativo (ex.: outro lote comprado depois, fora de qualquer bot)
+      // pode estar totalmente livre, e nesse caso não há motivo pra mexer na bracket de
+      // uma posição BOUGHT diferente que está protegendo outro lote.
+      const accountBefore = await client.accountInfo();
+      const balanceBefore = accountBefore.balances?.find(b => b.asset === baseAsset);
+      const freeBefore    = balanceBefore ? parseFloat(balanceBefore.free) : null;
+
+      if (freeBefore == null || freeBefore < safeQuantity) {
+        // Venda sem strategyId (favorito AT) não sabe de quem é a posição travada — exige
+        // confirmação explícita do usuário antes de cancelar a OCO de um bot. Vendas com
+        // strategyId (MC/BB/VWAP) já sabem que é a própria posição e cancelam direto.
+        if (!strategyId && !allowCancelBracket) {
+          return res.status(409).json({
+            error: 'Esta venda precisa cancelar uma ordem OCO/TP-SL resting antes de prosseguir.',
+            needsBracketCancel: true,
+          });
+        }
+        try {
+          await cancelRestingBracketIfAny({ symbol: symbolUpper, exchange: 'binance', strategyId });
+        } catch (err) {
+          return res.status(500).json({ error: `Falha ao cancelar OCO resting antes da venda: ${err.message}` });
+        }
       }
 
-      const baseAsset = symbolUpper.replace(/USDT$|BTC$|ETH$|BNB$|BUSD$/, '');
       const account   = await client.accountInfo();
       const balance    = account.balances?.find(b => b.asset === baseAsset);
       const free       = balance ? parseFloat(balance.free) : safeQuantity;

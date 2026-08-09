@@ -5,7 +5,7 @@ import { addFavorite, removeFavorite, fetchActiveTrades, ignoreActiveTrade,
   patchMultitradeBotState,
   buyMultitradeNow,
   fetchFiveMTradeFavorites, addFiveMTradeFavorite, updateFiveMTradeFavorite, removeFiveMTradeFavorite,
-  fetchMarketHighlights } from '../services/api';
+  fetchMarketHighlights, fetchVolumeIgnition } from '../services/api';
 import { CHART_VIEW } from '../utils/chartView';
 import {
   buildOverlaySlotsForEntry,
@@ -51,6 +51,9 @@ const CurrencyContext = createContext(null);
 
 /** Poll da fase BOUGHT/WATCHING após compra/venda do bot. */
 const MULTITRADE_STATE_POLL_MS = 30_000;
+
+/** Poll do monitor de ignição de volume — precisa ser rápido pra pegar o salto perto do início. */
+const VOLUME_IGNITION_POLL_MS = 10_000;
 
 function isAutoHighlightFilter(name) {
   return name?.startsWith('Favoritos|Alta|') || name?.startsWith('Favoritos|Novas|');
@@ -944,6 +947,37 @@ export function CurrencyProvider({ children }) {
       console.warn('[CurrencyContext] market-highlights:', err.message);
     });
   }, [rawCurrencies.list.length, ensureMarketHighlights]);
+
+  // Ignição de volume: pares com salto de volume nos últimos 60s (ver backend/market/volumeIgnitionMonitor.js)
+  useEffect(() => {
+    let cancelled = false;
+
+    async function pollVolumeIgnition() {
+      try {
+        const { list, status } = await fetchVolumeIgnition();
+        if (cancelled) return;
+        const ratio = Object.fromEntries(list.map((i) => [i.symbol, i.ratio]));
+        const priceChangePct = Object.fromEntries(list.map((i) => [i.symbol, i.priceChangePct]));
+        const firedAt = Object.fromEntries(list.map((i) => [i.symbol, i.firedAt]));
+        // Filtro fica sempre visível (mesmo com 0 símbolos) — é a única forma de confirmar
+        // visualmente que o monitor está de fato rodando e atualizando, não só quando dispara.
+        addFilter({
+          name: 'Favoritos|Ignição',
+          list: list.map((i) => i.symbol),
+          meta: { ratio, priceChangePct, firedAt, ...status, checkedAt: Date.now() },
+        });
+      } catch (err) {
+        console.warn('[CurrencyContext] volume-ignition:', err.message);
+      }
+    }
+
+    pollVolumeIgnition();
+    const id = setInterval(pollVolumeIgnition, VOLUME_IGNITION_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [addFilter]);
 
   // Carrega favoritos multi-trade (todas as estratégias: ma-cross, vwap-bands, swing, amap)
   // e sincroniza fase (BOUGHT/WATCHING) com os bots.

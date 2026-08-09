@@ -3,6 +3,7 @@
 const router = require('express').Router();
 const { BollingerBands } = require('technicalindicators');
 const getCandlesForScreening = require('../utils/getCandlesForScreening');
+const { getGateCandles } = require('../gate/getGateCandles');
 const { getActiveUsdtPairs } = require('../binance/getActiveUsdtPairs');
 const { closedCandlesOnly } = require('../bot/ma-cross/strategyEngine');
 const { buildBollingerBandWidthFilterName } = require('../utils/filterNames');
@@ -56,6 +57,9 @@ router.get('/bollinger-band-width-filter', async (req, res) => {
     const symbolsParam = typeof req.query.symbols === 'string' && req.query.symbols.trim()
       ? req.query.symbols.split(',').map(s => s.trim()).filter(Boolean)
       : null;
+    const gateSymbols = typeof req.query.gateSymbols === 'string' && req.query.gateSymbols.trim()
+      ? new Set(req.query.gateSymbols.split(',').map(s => s.trim().toUpperCase()).filter(Boolean))
+      : null;
 
     if (!ALLOWED_INTERVALS.has(interval)) {
       return res.status(400).json({ error: `intervalo não suportado: ${interval}` });
@@ -79,7 +83,13 @@ router.get('/bollinger-band-width-filter', async (req, res) => {
 
       const matched = await runWithConcurrency(symbols, async (symbol) => {
         try {
-          const { candles: raw } = await getCandlesForScreening(symbol, interval, limit);
+          // Favoritos na Gate.io usam o pipeline de candles da Gate (própria cache
+          // `${symbol}_GATE`) — getCandlesForScreening é Binance-only (fora da lista estática
+          // GATE_ONLY_SYMBOLS) e falha silenciosamente pra símbolos que só existem na Gate,
+          // deixando o favorito sem % de largura (ver conversa sobre o seletor BB "Larg").
+          const raw = gateSymbols?.has(symbol.toUpperCase())
+            ? await getGateCandles(symbol, interval, limit)
+            : (await getCandlesForScreening(symbol, interval, limit)).candles;
           const candles = closedCandlesOnly(raw);
           if (!candles?.length || candles.length < minCandles) return null;
 
@@ -109,7 +119,8 @@ router.get('/bollinger-band-width-filter', async (req, res) => {
             samples: widths.length,
             close: parseFloat(last.close),
           };
-        } catch {
+        } catch (err) {
+          console.warn(`[bollinger-band-width-filter] ${symbol}:`, err.message);
           return null;
         }
       }, CONCURRENCY);

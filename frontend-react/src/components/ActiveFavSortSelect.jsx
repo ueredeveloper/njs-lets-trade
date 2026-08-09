@@ -1,6 +1,6 @@
 import {
-  getTradeSortOption, cycleTradeFavSort, TRADE_SORT_OPTIONS,
-} from '../utils/tradeFavoritesSort';
+  getActiveSortOption, cycleActiveFavSort, ACTIVE_SORT_OPTIONS,
+} from '../utils/activeFavoritesSort';
 import { useI18n } from '../i18n';
 
 function Chevron({ dir }) {
@@ -38,26 +38,26 @@ function Chevron({ dir }) {
 const ARROW_BTN =
   'inline-flex items-center justify-center w-3 h-full text-p5/70 hover:text-p5 active:text-white transition-colors shrink-0';
 
-export default function TradeFavSortSelect({ value, onChange, className = '' }) {
+export default function ActiveFavSortSelect({ value, onChange, className = '' }) {
   const { t } = useI18n();
-  const opt = getTradeSortOption(value);
-  const idx = TRADE_SORT_OPTIONS.findIndex(o => o.id === value);
-  const pos = `${(idx < 0 ? 0 : idx) + 1}/${TRADE_SORT_OPTIONS.length}`;
+  const opt = getActiveSortOption(value);
+  const idx = ACTIVE_SORT_OPTIONS.findIndex(o => o.id === value);
+  const pos = `${(idx < 0 ? 0 : idx) + 1}/${ACTIVE_SORT_OPTIONS.length}`;
 
   function step(direction) {
-    onChange(cycleTradeFavSort(value, direction));
+    onChange(cycleActiveFavSort(value, direction));
   }
 
   return (
     <div
       className={`inline-flex items-center h-4 rounded border border-p3 bg-p2/80 ${className}`}
-      title={`${t('trades.sort.label')}: ${t(opt.labelKey)} (${pos})`}
+      title={`${t('activefav.sort.label')}: ${t(opt.labelKey)} (${pos})`}
     >
       <button
         type="button"
         className={ARROW_BTN}
-        aria-label={t('trades.sort.prev')}
-        title={t('trades.sort.prev')}
+        aria-label={t('activefav.sort.prev')}
+        title={t('activefav.sort.prev')}
         onClick={(e) => { e.stopPropagation(); step(-1); }}
       >
         <Chevron dir="left" />
@@ -65,7 +65,7 @@ export default function TradeFavSortSelect({ value, onChange, className = '' }) 
       <button
         type="button"
         className="inline-flex items-center justify-center text-[7px] font-semibold leading-none text-p5/90 whitespace-nowrap w-9 truncate px-0.5 h-full hover:text-p5"
-        title={`${t(opt.labelKey)} — ${t('trades.sort.next')}`}
+        title={`${t(opt.labelKey)} — ${t('activefav.sort.next')}`}
         onClick={(e) => { e.stopPropagation(); step(1); }}
       >
         {t(opt.shortKey)}
@@ -73,8 +73,8 @@ export default function TradeFavSortSelect({ value, onChange, className = '' }) 
       <button
         type="button"
         className={ARROW_BTN}
-        aria-label={t('trades.sort.next')}
-        title={t('trades.sort.next')}
+        aria-label={t('activefav.sort.next')}
+        title={t('activefav.sort.next')}
         onClick={(e) => { e.stopPropagation(); step(1); }}
       >
         <Chevron dir="right" />

@@ -7,8 +7,8 @@ function Chevron({ dir }) {
   return (
     <svg
       viewBox="0 0 16 16"
-      width="12"
-      height="12"
+      width="9"
+      height="9"
       aria-hidden="true"
       className="block shrink-0"
     >
@@ -36,7 +36,7 @@ function Chevron({ dir }) {
 }
 
 const ARROW_BTN =
-  'inline-flex items-center justify-center w-4 h-full text-p5/70 hover:text-p5 active:text-white transition-colors shrink-0';
+  'inline-flex items-center justify-center w-3 h-full text-p5/70 hover:text-p5 active:text-white transition-colors shrink-0';
 
 export default function BollingerFavSortSelect({ value, onChange, className = '' }) {
   const { t } = useI18n();
@@ -50,7 +50,7 @@ export default function BollingerFavSortSelect({ value, onChange, className = ''
 
   return (
     <div
-      className={`inline-flex items-center h-5 rounded border border-p3 bg-p2/80 ${className}`}
+      className={`inline-flex items-center h-4 rounded border border-p3 bg-p2/80 ${className}`}
       title={`${t('bbfav.sort.label')}: ${t(opt.labelKey)} (${pos})`}
     >
       <button
@@ -64,7 +64,7 @@ export default function BollingerFavSortSelect({ value, onChange, className = ''
       </button>
       <button
         type="button"
-        className="inline-flex items-center justify-center text-[8px] font-semibold leading-none text-p5/90 whitespace-nowrap min-w-[1.75rem] max-w-[3rem] truncate px-0.5 h-full hover:text-p5"
+        className="inline-flex items-center justify-center text-[7px] font-semibold leading-none text-p5/90 whitespace-nowrap w-9 truncate px-0.5 h-full hover:text-p5"
         title={`${t(opt.labelKey)} — ${t('bbfav.sort.next')}`}
         onClick={(e) => { e.stopPropagation(); step(1); }}
       >
