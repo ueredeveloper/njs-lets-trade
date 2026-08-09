@@ -1528,6 +1528,7 @@ function ChartIndicatorPanel({
 
       {!collapsed && (
         <div
+          onClick={(e) => e.stopPropagation()}
           style={{
             pointerEvents: 'auto',
             width: contentWidth,
@@ -4399,7 +4400,10 @@ export default function CandlestickChart() {
 
       {/* Conteúdo da aba */}
       {activeTab === 'rules' ? (
-        <div className="flex-1 min-h-0 flex flex-col px-2 md:px-3 py-2 relative">
+        <div
+          className="flex-1 min-h-0 flex flex-col px-2 md:px-3 py-2 relative"
+          onClick={() => { if (!panelCollapsed) setPanelCollapsed(true); }}
+        >
           {selectedChart?.symbol ? (
             <MaCrossRuleCheckChart
               symbol={selectedChart.symbol}
@@ -4450,7 +4454,11 @@ export default function CandlestickChart() {
           />
         </div>
       ) : (
-        <div ref={chartWrapRef} className="flex-1 min-h-0 relative">
+        <div
+          ref={chartWrapRef}
+          className="flex-1 min-h-0 relative"
+          onClick={() => { if (!panelCollapsed) setPanelCollapsed(true); }}
+        >
           {showLwChart ? (
             <CandlestickChartLW
               ref={lwChartRef}
