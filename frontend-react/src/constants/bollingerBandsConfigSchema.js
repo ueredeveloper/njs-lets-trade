@@ -15,6 +15,8 @@ export const BOLLINGER_BANDS_DEFAULTS = {
     period: 20,
     stdDev: 2,
     pullback: { enabled: false, belowPct: 2 },
+    /** Após saída, espera N candles do intervalo da BB antes de reavaliar compra. */
+    reentryCooldownCandles: 5,
     /** Ligado por padrão; interval nasce igual ao entry.interval (mesmo intervalo da banda
      *  de Bollinger) quando não informado — ver normalizeBollingerBandsForm.
      *  slopeLookback/minSlopePct: a linha da EMA precisa estar subindo (≥ minSlopePct %
@@ -34,6 +36,7 @@ export const BOLLINGER_BANDS_DEFAULTS = {
     ema: { period: 50, interval: '4h', belowPct: 2 },
   },
   polling: { pollMs: 60_000, fastPollMs: 30_000 },
+  entryCooldownHours: 0,
   volume: { minVolumeUsdt: 1_000_000, allowLowVolume: false },
 };
 
@@ -55,6 +58,7 @@ export function normalizeBollingerBandsForm(body = {}) {
         enabled: pb.enabled === true,
         belowPct: Number(pb.belowPct ?? d.entry.pullback.belowPct),
       },
+      reentryCooldownCandles: Number(body.entry?.reentryCooldownCandles ?? d.entry.reentryCooldownCandles),
       // interval nasce igual ao da banda de Bollinger (interval acima) quando não informado.
       emaFilter: {
         enabled: ef.enabled !== false,
@@ -87,6 +91,7 @@ export function normalizeBollingerBandsForm(body = {}) {
       },
     },
     polling: { ...d.polling, ...body.polling },
+    entryCooldownHours: Number(body.entryCooldownHours ?? d.entryCooldownHours),
     volume: { ...d.volume, ...body.volume },
   };
 }

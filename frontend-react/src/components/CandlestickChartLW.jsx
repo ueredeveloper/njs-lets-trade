@@ -6,6 +6,7 @@ import { RectanglePrimitive } from '../utils/lwRectanglePrimitive';
 import { BandFillPrimitive } from '../utils/lwBandFillPrimitive';
 import { tickMarkFormatterBrt, crosshairTimeFormatterBrt } from '../utils/lwBrtTimeFormat';
 import { INTERVAL_MS } from '../utils/chartView';
+import { simulateBbTouchPath, pairBbPathCycles } from '../utils/bollingerTouchPath';
 
 const C_UP = '#26a69a';
 const C_DOWN = '#ef5350';
@@ -13,7 +14,113 @@ const VWAP_LINE_COLOR = '#FF4FA3';
 const VWAP_BAND_COLOR = 'rgba(255, 79, 163, 0.45)';
 const VWAP_BAND_FILL_COLOR = 'rgba(255, 79, 163, 0.08)';
 const VWAP_DECLINE_CLOUD_COLOR = 'rgba(239, 68, 68, 0.28)';
-const BB_COLOR = '#818cf8';
+const BB_COLOR = '#94a3b8';
+const BB_PATH_CLOUD_UP = 'rgba(38,166,154,0.22)';
+const BB_PATH_CLOUD_DOWN = 'rgba(239,83,80,0.22)';
+
+/**
+ * PATH BB no LW: só segmentos entrada→saída + nuvem (diagonal↔banda inferior) + marcadores.
+ * Não liga saída→próxima entrada.
+ */
+function buildBbPathLineAndMarkers(bollingerConfig, candlesticks) {
+  if (!bollingerConfig?.showPath || !bollingerConfig.points?.length || !candlesticks?.length) {
+    return { segments: [], clouds: [], markers: [] };
+  }
+  const nodes = simulateBbTouchPath(bollingerConfig.points);
+  const cycles = pairBbPathCycles(nodes);
+  if (!cycles.length) return { segments: [], clouds: [], markers: [] };
+
+  const ivMs = candlesticks.length > 1
+    ? Math.abs(Number(candlesticks[1].openTime) - Number(candlesticks[0].openTime))
+    : Infinity;
+  const maxDiffMs = Number.isFinite(ivMs) ? ivMs * 1.5 : Infinity;
+
+  const mapNode = (n) => {
+    let best = 0;
+    let bestDiff = Infinity;
+    for (let i = 0; i < candlesticks.length; i++) {
+      const d = Math.abs(Number(candlesticks[i].openTime) - n.openTime);
+      if (d < bestDiff) { bestDiff = d; best = i; }
+    }
+    if (bestDiff > maxDiffMs) return null;
+    const time = Math.floor(Number(candlesticks[best].openTime) / 1000);
+    if (!Number.isFinite(time) || !Number.isFinite(n.price)) return null;
+    return { time, price: n.price, absIdx: best, node: n };
+  };
+
+  const lowerByAbs = new Array(candlesticks.length).fill(null);
+  {
+    const pts = [...(bollingerConfig.points ?? [])].sort((a, b) => Number(a.openTime) - Number(b.openTime));
+    for (let i = 0; i < candlesticks.length; i++) {
+      const t = Number(candlesticks[i].openTime);
+      let lo = 0; let hi = pts.length - 1; let best = null;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        if (Number(pts[mid].openTime) <= t) { best = Number(pts[mid].lower); lo = mid + 1; }
+        else hi = mid - 1;
+      }
+      lowerByAbs[i] = Number.isFinite(best) ? best : null;
+    }
+  }
+
+  const segments = [];
+  const clouds = [];
+  const markers = [];
+
+  for (const cycle of cycles) {
+    const a = mapNode(cycle.buy);
+    const b = mapNode(cycle.exit);
+    if (!a || !b || a.time === b.time) continue;
+
+    const isUp = b.price >= a.price;
+    const color = isUp ? C_UP : C_DOWN;
+    const fill = isUp ? BB_PATH_CLOUD_UP : BB_PATH_CLOUD_DOWN;
+
+    segments.push({
+      color,
+      data: [
+        { time: a.time, value: a.price },
+        { time: b.time, value: b.price },
+      ],
+    });
+
+    const i0 = Math.min(a.absIdx, b.absIdx);
+    const i1 = Math.max(a.absIdx, b.absIdx);
+    const span = i1 - i0;
+    const cloudPts = [];
+    for (let i = i0; i <= i1; i++) {
+      const tt = span > 0 ? (i - i0) / span : 0;
+      const pathStart = a.absIdx <= b.absIdx ? a.price : b.price;
+      const pathEnd = a.absIdx <= b.absIdx ? b.price : a.price;
+      const pathY = pathStart + tt * (pathEnd - pathStart);
+      const lowerY = lowerByAbs[i];
+      if (!Number.isFinite(pathY) || !Number.isFinite(lowerY)) continue;
+      cloudPts.push({
+        time: Math.floor(Number(candlesticks[i].openTime) / 1000),
+        upper: Math.max(pathY, lowerY),
+        lower: Math.min(pathY, lowerY),
+      });
+    }
+    if (cloudPts.length >= 2) {
+      clouds.push({ points: cloudPts, fillColor: fill });
+    }
+
+    markers.push({
+      time: a.time, position: 'atPriceBottom', price: a.price,
+      shape: 'circle', color, size: 0.6, text: 'B',
+    });
+    const pnl = cycle.exit.pnlPct;
+    if (Number.isFinite(pnl)) {
+      markers.push({
+        time: b.time, position: 'atPriceTop', price: b.price,
+        shape: 'circle', color, size: 0.6,
+        text: `${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}%`,
+      });
+    }
+  }
+
+  return { segments, clouds, markers };
+}
 
 const EMA_LINE_DEFS = [
   { id: 'ma9',  color: '#e879f9' },
@@ -384,6 +491,8 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
   const rectPrimitiveRef = useRef(null);
   const bandFillPrimitiveRef = useRef(null);
   const pnlSeriesRef = useRef(null);
+  // Array de LineSeries — um por trecho do PATH (alta=verde / baixa=vermelho)
+  const bbPathSeriesRef = useRef([]);
   const subpanelStateRef = useRef({ key: null, series: {} });
   // onNeedOlderCandles/loadingMoreCandles espelhados em ref pra o listener de pan (assinado uma
   // única vez, ver efeito de criação do chart) sempre ler o valor mais recente sem precisar
@@ -480,6 +589,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       color: C_UP, lineWidth: 1.5, lineStyle: 1,
       priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
     });
+    bbPathSeriesRef.current = [];
     indicatorSeriesRef.current = {};
     priceLinesRef.current = [];
     markersPluginRef.current = createSeriesMarkers(series, []);
@@ -510,6 +620,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       rectPrimitiveRef.current = null;
       bandFillPrimitiveRef.current = null;
       pnlSeriesRef.current = null;
+      bbPathSeriesRef.current = [];
       subpanelStateRef.current = { key: null, series: {} };
     };
   }, [colors?.bg, colors?.text, colors?.panel]);
@@ -680,6 +791,10 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
           .filter((seg) => seg.points.length >= 2);
       }
       bandFillPrimitiveRef.current.replacePrefixed('vwapDecline-', cloudSegments);
+
+      // Nuvem PATH BB: entre a diagonal entrada→saída e a banda inferior
+      const { clouds: bbPathClouds } = buildBbPathLineAndMarkers(bollingerConfig, candlesticks);
+      bandFillPrimitiveRef.current.replacePrefixed('bbPath-', bbPathClouds);
     }
 
     const current = indicatorSeriesRef.current;
@@ -745,15 +860,38 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
     }
   }, [buyInfo, candlesticks]);
 
-  // Marcadores: PPHL + sinal/venda de Multi-Trade + % da linha de PnL.
+  // Trajetória BB lower→upper (simulada): um LineSeries por trecho, verde/vermelho.
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    const { segments } = buildBbPathLineAndMarkers(bollingerConfig, candlesticks);
+    for (const s of bbPathSeriesRef.current) {
+      try { chart.removeSeries(s); } catch { /* já removida */ }
+    }
+    const next = [];
+    for (const seg of segments) {
+      if (!seg.data?.length) continue;
+      const s = chart.addSeries(LineSeries, {
+        color: seg.color, lineWidth: 1.5, lineStyle: 0,
+        priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+      });
+      s.setData(seg.data);
+      next.push(s);
+    }
+    bbPathSeriesRef.current = next;
+  }, [bollingerConfig, candlesticks]);
+
+  // Marcadores: PPHL + sinal/venda de Multi-Trade + % da linha de PnL + path BB.
   useEffect(() => {
     if (!markersPluginRef.current) return;
     const markers = [...buildPphlMarkers(pphlConfig), ...buildTradeMarkers(multitradeMarkers)];
     const pnlMarker = buildPnlMarker(buyInfo, candlesticks);
     if (pnlMarker) markers.push(pnlMarker);
+    const { markers: bbPathMarkers } = buildBbPathLineAndMarkers(bollingerConfig, candlesticks);
+    markers.push(...bbPathMarkers);
     markers.sort((a, b) => a.time - b.time);
     markersPluginRef.current.setMarkers(markers);
-  }, [pphlConfig, multitradeMarkers, buyInfo, candlesticks]);
+  }, [pphlConfig, multitradeMarkers, buyInfo, candlesticks, bollingerConfig]);
 
   // Sub-painéis RSI/CHOP (panes nativos do LW v5) — reconstrói do zero só quando o CONJUNTO
   // ativo muda (ex.: liga CHOP com RSI já ligado), não a cada novo valor.

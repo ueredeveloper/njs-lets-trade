@@ -126,6 +126,20 @@ export default function BollingerBandsStrategyForm({ form, patch, symbol }) {
         )}
       </div>
 
+      <div className="rounded-md p-2 space-y-2" style={{ background: '#1a1d28', border: '1px solid #2a2d3a' }}>
+        <span className="text-[10px] font-bold uppercase tracking-wider text-p5/70">Reentrada após saída</span>
+        <div className="flex flex-wrap gap-2 items-center text-xs text-p5">
+          <span className="text-p5/50">Esperar</span>
+          <NumInput value={form.entry.reentryCooldownCandles ?? 5} onChange={v => patchEntry('reentryCooldownCandles', v)} min={0} max={100} step={1} className="w-14" />
+          <span className="text-p5/40">candles {form.entry.interval} fechados</span>
+        </div>
+        <p className="text-[10px] text-p5/50 leading-relaxed">
+          Depois de vender, não compra de novo até passarem {form.entry.reentryCooldownCandles ?? 5} candles
+          {' '}{form.entry.interval} fechados — aí refaz a análise completa (banda + filtros).
+          0 = sem espera.
+        </p>
+      </div>
+
       <div className="space-y-2">
         <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: EXIT_COLOR }}>
           Saída — banda superior
@@ -177,11 +191,17 @@ export default function BollingerBandsStrategyForm({ form, patch, symbol }) {
               <NumInput value={form.stopLoss.ema?.belowPct} onChange={v => patchStopLossEma('belowPct', v)} min={0} max={20} step={0.5} />
               <span className="text-p5/40">% abaixo da EMA</span>
             </div>
+            <div className="flex flex-wrap gap-2 items-center text-xs text-p5">
+              <span className="text-p5/50">Piso % (fallback)</span>
+              <NumInput value={form.stopLoss.maxLossPct} onChange={v => patchStopLoss('maxLossPct', v)} min={0.5} max={30} step={0.5} />
+              <span className="text-p5/40">% — usado se a EMA já estiver acima do preço de compra</span>
+            </div>
             <p className="text-[10px] text-p5/50 leading-relaxed">
               Vende se o preço cair até {form.stopLoss.ema?.belowPct ?? 2}% abaixo da
-              EMA{form.stopLoss.ema?.period}({form.stopLoss.ema?.interval}) — o piso é
-              recalculado a cada verificação, acompanhando a EMA pra cima e pra baixo (sem
-              trailing/pico, é sempre a EMA ao vivo menos a variação).
+              EMA{form.stopLoss.ema?.period}({form.stopLoss.ema?.interval}). Se essa linha
+              estiver no/acima do preço de entrada, a compra é bloqueada (lugar errado).
+              Se a posição já estiver aberta nesse cenário, o piso de
+              {' '}{form.stopLoss.maxLossPct ?? 5}% entra como fallback.
             </p>
           </>
         ) : (

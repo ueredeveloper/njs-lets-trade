@@ -10,9 +10,9 @@ const bbBandWidthCache = require('../cache/bbBandWidthCache');
 const { ALL_INTERVALS, BB_PERIODS, BB_STD_DEVS } = require('../bot/bollinger-bands/tradeConfigSchema');
 
 const CONCURRENCY = 25;
-/** avgWidthPct usa só os últimos 5 candles fechados — mais reativo que a média do lookback
- * inteiro. O lookback continua definindo a janela de minWidthPct/maxWidthPct. */
-const AVG_WINDOW = 5;
+/** avgWidthPct usa os últimos 80 candles fechados (Larg% em indicadores e favoritos BB).
+ * O lookback continua definindo a janela de minWidthPct/maxWidthPct. */
+const AVG_WINDOW = 80;
 
 // Mesmos intervalos/período/desvio padrão aceitos pelo seletor de entrada do favorito
 // Bollinger Bands (ver backend/bot/bollinger-bands/tradeConfigSchema.js) — padroniza o que

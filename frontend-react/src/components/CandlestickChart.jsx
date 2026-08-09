@@ -15,6 +15,7 @@ import { useIsMobile } from '../hooks/useIsMobile';
 import { useIsNotebook } from '../hooks/useIsNotebook';
 import { DEFAULT_OVERLAY_SLOTS, DEFAULT_ACTIVE_INDICATORS, BB_PERIOD_OPTIONS, BB_STDDEV_OPTIONS, DEFAULT_SR_INTERVAL, DEFAULT_PPHL_INTERVAL, DEFAULT_CHOP_INTERVAL, DEFAULT_COMMON_CHART_INTERVALS } from '../utils/uiPreferences';
 import { CHART_VIEW, INTERVAL_MS, computeZoomWindow, buildFixedDataZoom, buildInsideDataZoom, computeCandleLimitFromTime, isTradePanelChartView, computeManualWheelZoom } from '../utils/chartView';
+import { simulateBbTouchPath, pairBbPathCycles } from '../utils/bollingerTouchPath';
 
 const LIMIT = DEFAULT_CANDLE_LIMIT;
 // Filtros e favoritos comuns buscam LIMIT (160) candles mas mostram só os mais recentes por
@@ -56,6 +57,9 @@ const PANEL_ROW_PX = 26;            // altura "natural" de uma row unit no dropd
 const MIN_ROW_UNIT_PX = 20;
 const C_UP   = '#26a69a';
 const C_DOWN = '#ef5350';
+// BB: slate — distinto das EMAs (9 fúcsia, 21 laranja, 50 ciano, 200 âmbar)
+const BB_COLOR = '#94a3b8';
+const BB_PATH_COLOR = '#64748b';
 
 const INDICATOR_GROUPS = [
   { id: 'ma9',      label: 'EMA9',   color: '#e879f9', tipKey: 'chart.tip.sma9' },
@@ -255,12 +259,167 @@ async function fetchBollingerOverlayPoints(symbol, interval, period, stdDev, sou
   }).then(r => r.json());
   if (!Array.isArray(bb)) return [];
   const offset = candles.length - bb.length;
-  return bb.map((val, i) => ({
-    openTime: Number(candles[offset + i].openTime),
-    upper: val.upper,
-    middle: val.middle,
-    lower: val.lower,
-  }));
+  // high/low/close vêm do candle do intervalo da BB — necessários pra simular toque
+  // inferior→superior (path) sem buscar candles de novo.
+  return bb.map((val, i) => {
+    const c = candles[offset + i];
+    return {
+      openTime: Number(c.openTime),
+      upper: val.upper,
+      middle: val.middle,
+      lower: val.lower,
+      high: Number(c.high),
+      low: Number(c.low),
+      close: Number(c.close),
+    };
+  });
+}
+
+const BB_PATH_CLOUD_UP = 'rgba(38,166,154,0.22)';
+const BB_PATH_CLOUD_DOWN = 'rgba(239,83,80,0.22)';
+
+/**
+ * PATH BB: só liga entrada→saída (não liga saída→próxima entrada). Nuvem entre a
+ * diagonal do ciclo e a banda inferior — verde na alta, vermelha na baixa.
+ */
+function buildBbTouchPathSeries(pathNodes, candlesticks, DL, LEFT_PAD, RIGHT_PAD, bollingerConfig) {
+  if (!pathNodes?.length || !candlesticks?.length) return [];
+  const offset = candlesticks.length - DL;
+  const totalLen = LEFT_PAD + DL + RIGHT_PAD;
+  const ivMs = candlesticks.length > 1
+    ? Math.abs(Number(candlesticks[1].openTime) - Number(candlesticks[0].openTime))
+    : Infinity;
+  const maxDiffMs = Number.isFinite(ivMs) ? ivMs * 1.5 : Infinity;
+
+  const mapNode = (n) => {
+    const absIdx = nearestCandleIdx(candlesticks, n.openTime);
+    const diffMs = Math.abs(Number(candlesticks[absIdx].openTime) - n.openTime);
+    if (diffMs > maxDiffMs) return null;
+    const localIdx = absIdx - offset;
+    if (localIdx < 0 || localIdx >= DL) return null;
+    return { x: localIdx + LEFT_PAD, price: n.price, node: n };
+  };
+
+  const lowerAligned = alignPointsToCandles(
+    candlesticks,
+    (bollingerConfig?.points ?? []).map((p) => ({ openTime: p.openTime, value: p.lower })),
+  );
+
+  const cycles = pairBbPathCycles(pathNodes);
+  const series = [];
+  const markerData = new Array(totalLen).fill(null);
+  const cloudCycles = [];
+
+  cycles.forEach((cycle, ci) => {
+    const a = mapNode(cycle.buy);
+    const b = mapNode(cycle.exit);
+    if (!a || !b || a.x === b.x) return;
+
+    const isUp = b.price >= a.price;
+    const color = isUp ? C_UP : C_DOWN;
+    const fill = isUp ? BB_PATH_CLOUD_UP : BB_PATH_CLOUD_DOWN;
+    const x0 = Math.min(a.x, b.x);
+    const x1 = Math.max(a.x, b.x);
+    const span = x1 - x0;
+
+    const lineData = new Array(totalLen).fill(null);
+    lineData[a.x] = a.price;
+    lineData[b.x] = b.price;
+    series.push({
+      name: `BB Path ${ci}`,
+      type: 'line',
+      data: lineData,
+      connectNulls: true,
+      showSymbol: false,
+      lineStyle: { color, width: 1.5, type: 'solid', opacity: 0.95 },
+      itemStyle: { color },
+      z: 11,
+      silent: true,
+      animation: false,
+    });
+
+    cloudCycles.push({ a, b, x0, x1, span, fill });
+
+    const pnl = cycle.exit.pnlPct;
+    const hasPnl = Number.isFinite(pnl);
+    const labelExit = hasPnl ? `${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}%` : '';
+    markerData[a.x] = {
+      value: a.price,
+      itemStyle: { color },
+      label: {
+        show: true, formatter: 'B', color: '#fff', backgroundColor: color,
+        padding: [2, 4], borderRadius: 2, fontSize: 8, fontWeight: 'bold', position: 'bottom',
+      },
+    };
+    markerData[b.x] = {
+      value: b.price,
+      itemStyle: { color },
+      label: {
+        show: !!labelExit, formatter: labelExit, color: '#fff', backgroundColor: color,
+        padding: [2, 4], borderRadius: 2, fontSize: 8, fontWeight: 'bold', position: 'top',
+      },
+    };
+  });
+
+  if (cloudCycles.length) {
+    series.push({
+      name: 'BB Path Cloud',
+      type: 'custom',
+      // Um item por ciclo — renderItem desenha o polígono diagonal↔banda inferior.
+      data: cloudCycles.map((_, i) => i),
+      renderItem(params, api) {
+        const cyc = cloudCycles[params.dataIndex];
+        if (!cyc) return null;
+        const { a, b, x0, x1, span, fill } = cyc;
+        const pathPts = [];
+        const lowerPts = [];
+        for (let x = x0; x <= x1; x++) {
+          const tt = span > 0 ? (x - x0) / span : 0;
+          const pathAtStart = a.x <= b.x ? a.price : b.price;
+          const pathAtEnd = a.x <= b.x ? b.price : a.price;
+          const pathY = pathAtStart + tt * (pathAtEnd - pathAtStart);
+          const absIdx = offset + (x - LEFT_PAD);
+          const lowerY = Number(lowerAligned[absIdx]);
+          if (!Number.isFinite(pathY) || !Number.isFinite(lowerY)) continue;
+          const pPath = api.coord([x, pathY]);
+          const pLow = api.coord([x, lowerY]);
+          if (!pPath || !pLow) continue;
+          pathPts.push(pPath);
+          lowerPts.push(pLow);
+        }
+        if (pathPts.length < 2) return null;
+        const points = [...pathPts, ...lowerPts.reverse()];
+        return {
+          type: 'polygon',
+          shape: { points },
+          style: { fill, stroke: 'none' },
+          silent: true,
+        };
+      },
+      z: 9,
+      silent: true,
+      animation: false,
+    });
+  }
+
+  if (markerData.some((v) => v != null)) {
+    series.push({
+      name: 'BB Path Marks',
+      type: 'line',
+      data: markerData,
+      showSymbol: true,
+      symbol: 'circle',
+      symbolSize: 6,
+      lineStyle: { opacity: 0, width: 0 },
+      label: { show: true },
+      labelLayout: { hideOverlap: true },
+      z: 12,
+      silent: true,
+      animation: false,
+    });
+  }
+
+  return series;
 }
 
 // Mesmo teto de retenção do cache em disco usado pelo bot real (ver
@@ -359,7 +518,7 @@ async function fetchChopOverlayPoints(symbol, interval, source, limit) {
 
 function buildBollingerSeries(bbConfig, candlesticks, alignSeries) {
   if (!bbConfig?.enabled || !bbConfig.points?.length) return [];
-  const color = '#818cf8';
+  const color = BB_COLOR;
   const label = `BB${bbConfig.period}@${bbConfig.interval}`;
   const toLine = (field) => alignSeries(alignPointsToCandles(
     candlesticks,
@@ -600,13 +759,14 @@ function quickEmaRowSpan(groups) {
   return Math.max(1, groups.length * QUICK_EMA_GROUP_ROWS + addRow);
 }
 
-function renderBollingerTile(dims, t, bollingerBands, setBollingerBands) {
+function renderBollingerTile(dims, t, bollingerBands, setBollingerBands, bbPathEnabled, setBbPathEnabled) {
   const innerW = dims.w - PANEL_TILE_PAD * 2;
   const innerH = dims.h - PANEL_TILE_PAD * 2;
   const rowH = (innerH - PANEL_GAP * 2) / 3;
   const halfDims = { w: (innerW - PANEL_GAP) / 2, h: rowH };
   const rowDims = { w: innerW, h: rowH };
-  const color = '#818cf8';
+  const color = BB_COLOR;
+  const pathColor = BB_PATH_COLOR;
   return (
     <div style={{
       display: 'grid',
@@ -650,14 +810,32 @@ function renderBollingerTile(dims, t, bollingerBands, setBollingerBands) {
           </select>
         </PanelTip>
       </div>
-      <div style={{ gridColumn: '1 / span 2', gridRow: '3', display: 'flex', alignItems: 'stretch' }}>
+      <div style={{ gridColumn: '1', gridRow: '3', display: 'flex', alignItems: 'stretch' }}>
         <PanelTip text={t('chart.tip.bb_on')}>
           <button
             type="button"
             onClick={() => setBollingerBands(b => ({ ...b, enabled: !b.enabled }))}
-            style={panelBtn(bollingerBands.enabled, color, false, rowDims)}
+            style={panelBtn(bollingerBands.enabled, color, false, halfDims)}
           >
             {bollingerBands.enabled ? 'BB ON' : 'BB OFF'}
+          </button>
+        </PanelTip>
+      </div>
+      <div style={{ gridColumn: '2', gridRow: '3', display: 'flex', alignItems: 'stretch' }}>
+        <PanelTip text={t('chart.tip.bb_path')}>
+          <button
+            type="button"
+            onClick={() => {
+              setBbPathEnabled((v) => {
+                const next = !v;
+                // Liga as bandas junto com o path pra o usuário ver a referência lower/upper
+                if (next) setBollingerBands((b) => (b.enabled ? b : { ...b, enabled: true }));
+                return next;
+              });
+            }}
+            style={panelBtn(bbPathEnabled, pathColor, false, halfDims)}
+          >
+            {bbPathEnabled ? 'PATH ON' : 'PATH'}
           </button>
         </PanelTip>
       </div>
@@ -1213,6 +1391,8 @@ function ChartIndicatorPanel({
   updateQuickEmaGroupBandPeriod,
   bollingerBands,
   setBollingerBands,
+  bbPathEnabled,
+  setBbPathEnabled,
   srInterval,
   setSrInterval,
   pphlInterval,
@@ -1440,7 +1620,7 @@ function ChartIndicatorPanel({
                 width: `${(tile.colSpan / PANEL_GRID_COLS) * 100}%`,
               }}
             >
-              {tile.kind === 'bb' && renderBollingerTile(tile.dims, t, bollingerBands, setBollingerBands)}
+              {tile.kind === 'bb' && renderBollingerTile(tile.dims, t, bollingerBands, setBollingerBands, bbPathEnabled, setBbPathEnabled)}
               {tile.kind === 'srInterval' && renderIntervalPickerTile(tile.dims, t, 'chart.tip.sr_interval', 'S/R', '#facc15', srInterval, setSrInterval)}
               {tile.kind === 'pphlInterval' && renderIntervalPickerTile(tile.dims, t, 'chart.tip.pphl_interval', 'PPHL', '#2dd4bf', pphlInterval, setPphlInterval)}
               {tile.kind === 'chopInterval' && renderIntervalPickerTile(tile.dims, t, 'chart.tip.chop_interval', 'CHOP', '#f59e0b', chopInterval, setChopInterval)}
@@ -1923,7 +2103,7 @@ function buildSignalMarkers(candlesticks, markers, DL, LEFT_PAD, chartInterval) 
   return points;
 }
 
-function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAverage, ma50, ma9, ma21, rsi }, colors, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = [], overlayConfigs = [], multitradeMarkers = [], chartLeftPad = CHART_LEFT_MARGIN, buyInfo = null, stopLossConfig = null, targetConfig = null, chartRightPad = CHART_PRICE_PAD + CHART_LEFT_MARGIN, bollingerConfig = null, srConfig = null, pphlConfig = null, vwapConfig = null, chopConfig = null, vwapSlopeHighlight = null, isMobile = false) {
+function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAverage, ma50, ma9, ma21, rsi }, colors, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = [], overlayConfigs = [], multitradeMarkers = [], chartLeftPad = CHART_LEFT_MARGIN, buyInfo = null, stopLossConfig = null, targetConfig = null, chartRightPad = CHART_PRICE_PAD + CHART_LEFT_MARGIN, bollingerConfig = null, srConfig = null, pphlConfig = null, vwapConfig = null, chopConfig = null, vwapSlopeHighlight = null, isMobile = false, bbPathEnabled = false) {
   const showMa9      = activeIndicators.includes('ma9');
   const showMa21     = activeIndicators.includes('ma21');
   const showMa50     = activeIndicators.includes('ma50');
@@ -2099,6 +2279,12 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
 
   const overlayLineSeries = buildOverlaySeries(overlayConfigs, candlesticks, alignSeries);
   const bollingerSeries = buildBollingerSeries(bollingerConfig, candlesticks, alignSeries);
+  const bbPathNodes = bbPathEnabled && bollingerConfig?.points?.length
+    ? simulateBbTouchPath(bollingerConfig.points)
+    : [];
+  const bbPathSeriesList = bbPathEnabled
+    ? buildBbTouchPathSeries(bbPathNodes, candlesticks, DL, LEFT_PAD, RIGHT_PAD, bollingerConfig)
+    : [];
   const vwapSeries = buildVwapSeries(vwapConfig, candlesticks, alignSeries, vwapSlopeHighlight);
 
   const tooltipFormatter = (params) => {
@@ -2173,6 +2359,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
     ] : []),
     ...overlayLineSeries.map(s => ({ ...s, xAxisIndex: idx, yAxisIndex: idx })),
     ...bollingerSeries.map(s => ({ ...s, xAxisIndex: idx, yAxisIndex: idx })),
+    ...bbPathSeriesList.map(s => ({ ...s, xAxisIndex: idx, yAxisIndex: idx })),
     ...vwapSeries.map(s => ({ ...s, xAxisIndex: idx, yAxisIndex: idx })),
     ...(showPphl && pivotMarkers.highs.length ? [{
       name: 'PPHL Alta',
@@ -2627,6 +2814,8 @@ export default function CandlestickChart() {
   const [adaptiveBandOverlay, setAdaptiveBandOverlay] = useState(null);
   const [maBands, setMaBands] = useState(() => ({ ...uiPrefs.maBandsDefaults }));
   const [bollingerBands, setBollingerBands] = useState(() => ({ ...uiPrefs.bollingerBandsDefaults }));
+  // Trajetória teórica lower→upper (simulada no intervalo da BB) — toggle local da sessão do chart.
+  const [bbPathEnabled, setBbPathEnabled] = useState(false);
   // Overlay de Bollinger pedido pela aba Estatísticas (clique numa linha da lista) — sobrescreve
   // período/desvio/intervalo locais pelos usados no cálculo daquela ocorrência e liga o overlay.
   useEffect(() => {
@@ -3110,9 +3299,11 @@ export default function CandlestickChart() {
   }, [quickEmaGroups, selectedChart?.symbol, selectedChart?.source, selectedChart?.interval, selectedChart?.candlesticks, currentInterval, overlayFetchLimit, displayCandleCount, chartCandleWindowReset]);
 
   // Busca a série de Bandas de Bollinger (upper/middle/lower) — período/intervalo próprios, como MA1/MA2.
+  // Também busca com PATH ligado (mesmo sem as linhas BB), pra simular toques lower→upper.
   useEffect(() => {
-    const bbEnabled = bollingerBands.enabled && chartPanelButtons.bb !== false;
-    if (!selectedChart?.symbol || !bbEnabled) {
+    const bbNeeded = chartPanelButtons.bb !== false
+      && (bollingerBands.enabled || bbPathEnabled);
+    if (!selectedChart?.symbol || !bbNeeded) {
       setBollingerLoading(false);
       return undefined;
     }
@@ -3137,9 +3328,9 @@ export default function CandlestickChart() {
           ovLimit,
         );
         if (points.length) {
-          const last5 = points.slice(-5);
+          const lastAvg = points.slice(-80);
           const expectedGapMs = INTERVAL_MS[bollingerBands.interval] ?? null;
-          const actualGapMs = last5.length > 1 ? last5[1].openTime - last5[0].openTime : null;
+          const actualGapMs = lastAvg.length > 1 ? lastAvg[1].openTime - lastAvg[0].openTime : null;
           const gapMismatch = expectedGapMs != null && actualGapMs != null && actualGapMs !== expectedGapMs;
           console.log(
             `[BollingerBands] ${selectedChart.symbol} — intervalo pedido: ${bollingerBands.interval}`
@@ -3153,8 +3344,8 @@ export default function CandlestickChart() {
             );
           }
           console.log(
-            'últimos 5 valores (largura% = (upper-lower)/lower×100, igual à coluna Larg%):',
-            last5.map(p => ({
+            'últimos 80 valores (largura% = (upper-lower)/lower×100, igual à coluna Larg%):',
+            lastAvg.map(p => ({
               time: new Date(p.openTime).toLocaleString('pt-BR'),
               upper: p.upper,
               middle: p.middle,
@@ -3176,6 +3367,7 @@ export default function CandlestickChart() {
     selectedChart?.symbol, selectedChart?.interval, selectedChart?.source, selectedChart?.candlesticks,
     currentInterval, overlayFetchLimit, displayCandleCount, chartPanelButtons.bb,
     bollingerBands.enabled, bollingerBands.period, bollingerBands.stdDev, bollingerBands.interval,
+    bbPathEnabled,
   ]);
 
   // Busca as zonas de Suporte/Resistência — intervalo próprio (independente do gráfico), como a Bollinger.
@@ -3930,17 +4122,19 @@ export default function CandlestickChart() {
   const botTradeConfig = botFavoriteEntry?.tradeConfig ?? botAdHocTradeConfig;
 
   const chartBollingerConfig = useMemo(() => {
-    const enabled = bollingerBands.enabled && chartPanelButtons.bb !== false;
-    if (!enabled) return null;
+    const linesOn = bollingerBands.enabled && chartPanelButtons.bb !== false;
+    const pathOn = bbPathEnabled && chartPanelButtons.bb !== false;
+    if (!linesOn && !pathOn) return null;
     const key = `${bollingerBands.period}-${bollingerBands.stdDev}-${bollingerBands.interval}`;
     return {
-      enabled: true,
+      enabled: linesOn,
+      showPath: pathOn,
       period: bollingerBands.period,
       stdDev: bollingerBands.stdDev,
       interval: bollingerBands.interval,
       points: bollingerCache[key] ?? [],
     };
-  }, [bollingerBands, bollingerCache, chartPanelButtons.bb]);
+  }, [bollingerBands, bollingerCache, chartPanelButtons.bb, bbPathEnabled]);
 
   const chartSrConfig = useMemo(() => {
     if (!srShown) return null;
@@ -3978,9 +4172,10 @@ export default function CandlestickChart() {
       selectedChart, colors, effectiveIndicators, displayLimit, chartZoom, tradeTimes, overlayConfigs,
       chartTradeMarkers?.length ? chartTradeMarkers : (selectedChart.tradeMarkers ?? []),
       chartLeftPad, chartBuyInfo, chartStopLossConfig, chartTargetConfig, chartRightPad, chartBollingerConfig, chartSrConfig, chartPphlConfig, chartVwapConfig, chartChopConfig, vwapSlopeHighlight, isMobile,
+      bbPathEnabled,
     );
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedChart, colors, effectiveIndicators, chartZoom, tradePurchases, chartTradeMarkers, activeTab, overlayConfigs, displayLimit, chartLeftPad, chartRightPad, chartBuyInfo, chartStopLossConfig, chartTargetConfig, chartBollingerConfig, chartSrConfig, chartPphlConfig, chartVwapConfig, chartChopConfig, vwapSlopeHighlight, isMobile]);
+  }, [selectedChart, colors, effectiveIndicators, chartZoom, tradePurchases, chartTradeMarkers, activeTab, overlayConfigs, displayLimit, chartLeftPad, chartRightPad, chartBuyInfo, chartStopLossConfig, chartTargetConfig, chartBollingerConfig, chartSrConfig, chartPphlConfig, chartVwapConfig, chartChopConfig, vwapSlopeHighlight, isMobile, bbPathEnabled]);
 
   if (!selectedChart || !option) {
     return (
@@ -4236,6 +4431,8 @@ export default function CandlestickChart() {
             updateQuickEmaGroupBandPeriod={updateQuickEmaGroupBandPeriod}
             bollingerBands={bollingerBands}
             setBollingerBands={setBollingerBands}
+            bbPathEnabled={bbPathEnabled}
+            setBbPathEnabled={setBbPathEnabled}
             srInterval={srInterval}
             setSrInterval={setSrInterval}
             pphlInterval={pphlInterval}
@@ -4306,6 +4503,8 @@ export default function CandlestickChart() {
             updateQuickEmaGroupBandPeriod={updateQuickEmaGroupBandPeriod}
             bollingerBands={bollingerBands}
             setBollingerBands={setBollingerBands}
+            bbPathEnabled={bbPathEnabled}
+            setBbPathEnabled={setBbPathEnabled}
             srInterval={srInterval}
             setSrInterval={setSrInterval}
             pphlInterval={pphlInterval}

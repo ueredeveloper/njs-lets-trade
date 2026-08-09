@@ -28,6 +28,7 @@ const { resolveStrategy } = require('./tradeConfigSchema');
 const { STRATEGY_IDS, isBollingerBandsStrategy } = require('./strategyPresets');
 const {
   getRequiredSpecs, evaluateEntrySignal, evaluateExit, computeBracketPrices, computeStopLossFloor,
+  checkReentryCooldown,
 } = require('./strategyEngine');
 
 // Componentes genéricos (compra/venda/execução), compartilhados com os outros bots de
@@ -97,6 +98,7 @@ function buildEntryReasonLines(config, entryMeta) {
 const {
   saveState, hasOpenPosition, resetOrphanPosition,
   parseRulesState, executeBuy, executeSell, recordBracketFill,
+  resolveLastExitTime,
 } = createTradeExecution({
   botLabel: BOT_LABEL,
   buildReasonLines: buildEntryReasonLines,
@@ -203,6 +205,14 @@ async function tick(rowId, adapter, strategy, log, session) {
 
   // ── WATCHING ──────────────────────────────────────────────────────────────
   if (phase !== 'BOUGHT') {
+    const lastExitTime = resolveLastExitTime(state, session);
+    const cooldown = checkReentryCooldown(config, cMap, lastExitTime);
+    if (cooldown.waiting) {
+      // Não avalia entrada durante o cooldown — espera N candles fechados do intervalo
+      // da BB e só então refaz a análise completa (BB + filtros EMA).
+      return { phase: 'WATCHING', reentryCooldown: cooldown };
+    }
+
     const signal = evaluateEntrySignal(config, cMap);
     if (!signal.allowed) return { phase: 'WATCHING' };
 

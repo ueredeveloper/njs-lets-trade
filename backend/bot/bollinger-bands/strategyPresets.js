@@ -14,6 +14,7 @@ const PRESET_BODIES = {
       period: 20,
       stdDev: 2,
       pullback: { enabled: false, belowPct: 2 },
+      reentryCooldownCandles: 5,
       emaFilter: {
         enabled: true, period: 50, interval: '4h', maxDipPct: 2,
         slopeLookback: 5, minSlopePct: 0,
@@ -27,6 +28,7 @@ const PRESET_BODIES = {
     },
     polling: { pollMs: 60_000, fastPollMs: 30_000 },
     volume: { minVolumeUsdt: 1_000_000 },
+    entryCooldownHours: 0,
   },
 };
 

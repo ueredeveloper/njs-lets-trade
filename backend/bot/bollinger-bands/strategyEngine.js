@@ -34,7 +34,8 @@ function computeBollingerSeries(candles, period, stdDev) {
 
 function getRequiredSpecs(config) {
   const entry = config.entry;
-  const limit = entry.period * 3 + 30;
+  const cooldown = Math.max(0, Math.round(Number(entry.reentryCooldownCandles ?? 0)));
+  const limit = entry.period * 3 + cooldown + 30;
   const specs = new Map([[entry.interval, limit]]);
 
   const add = (iv, lim) => specs.set(iv, Math.max(specs.get(iv) ?? 0, lim));
@@ -154,6 +155,18 @@ function evaluateEntrySignal(config, cMap) {
     };
   }
 
+  // Stop mode 'ema': comprar no/abaixo do piso da EMA significa entrada do lado errado
+  // da tendência (o stop já estaria acima da compra e não protegeria). Não entra —
+  // o fallback % do computeStopPrice só cobre posição já aberta / slip.
+  const emaStopFloor = computeEmaStopFloorRaw(config, cMap);
+  if (emaStopFloor != null && threshold <= emaStopFloor) {
+    return {
+      allowed: false, reason: 'EMA_STOP_ABOVE_ENTRY',
+      close: liveClose, lower: lastBb.lower, threshold,
+      emaStopFloor, emaFilter: emaCheck,
+    };
+  }
+
   const bbDesc = pullbackPct > 0
     ? `BB(${entry.period},${entry.stdDev}) ${iv} banda inferior -${pullbackPct}%`
     : `BB(${entry.period},${entry.stdDev}) ${iv} banda inferior`;
@@ -173,29 +186,47 @@ function evaluateEntrySignal(config, cMap) {
     lower: lastBb.lower, middle: lastBb.middle, upper: lastBb.upper,
     threshold,
     emaFilter: emaCheck,
+    emaStopFloor,
     entryDesc,
   };
 }
 
+/** Piso bruto do stop em mode 'ema' (EMA × (1 − belowPct/100)), sem fallback %.
+ *  null se stop não estiver em mode ema / desligado / sem dados. */
+function computeEmaStopFloorRaw(config, cMap) {
+  const stopLoss = config.stopLoss;
+  if (!stopLoss?.enabled || stopLoss.mode !== 'ema') return null;
+  const ema = stopLoss.ema;
+  const raw = cMap[ema.interval] ?? [];
+  const closed = closedCandlesOnly(raw);
+  const maValue = computeMa(closed, ema.period);
+  if (maValue == null) return null;
+  return maValue * (1 - Math.max(0, ema.belowPct) / 100);
+}
+
 /**
  * Piso do stop-loss vigente. mode 'fixed' (padrão) usa a fórmula percentual/trailing de
- * sempre (computeStopLossFloor, compartilhada com os outros bots). mode 'ema' troca por uma
- * linha de EMA que se move a cada verificação: stop = EMA(ema.period, ema.interval) * (1 −
- * ema.belowPct/100) — sem trailing/peak, o piso acompanha a EMA pra cima e pra baixo a cada
- * tick (ver MA_CROSS não tem equivalente disso; desenhado especificamente pro pedido de
- * "stop na linha da EMA" do bollinger-bands).
+ * sempre (computeStopLossFloor, compartilhada com os outros bots). mode 'ema' usa
+ * stop = EMA(ema.period, ema.interval) * (1 − ema.belowPct/100) — sem trailing/peak, o piso
+ * acompanha a EMA pra cima e pra baixo a cada tick.
+ *
+ * Se a linha EMA (ou a EMA − belowPct) estiver no/acima do preço de compra, esse stop não
+ * protege a posição long (já está "por baixo" da linha) — e uma bracket com stop ≥ mercado
+ * falha ou fica inútil. Nesse caso cai no piso % (maxLossPct / trailing), o mesmo de mode
+ * 'fixed' — rede de segurança se a posição já estiver aberta. A entrada em si é bloqueada
+ * em evaluateEntrySignal (EMA_STOP_ABOVE_ENTRY) pra não comprar nesse cenário.
+ * Sem EMA disponível, também usa o piso %.
  */
 function computeStopPrice(config, cMap, entryPrice, peakPrice) {
   const stopLoss = config.stopLoss;
   if (!stopLoss?.enabled) return null;
 
   if (stopLoss.mode === 'ema') {
-    const ema = stopLoss.ema;
-    const raw = cMap[ema.interval] ?? [];
-    const closed = closedCandlesOnly(raw);
-    const maValue = computeMa(closed, ema.period);
-    if (maValue == null) return null;
-    return maValue * (1 - Math.max(0, ema.belowPct) / 100);
+    const fixedFloor = computeStopLossFloor(entryPrice, peakPrice ?? entryPrice, stopLoss);
+    const emaFloor = computeEmaStopFloorRaw(config, cMap);
+    if (emaFloor == null) return fixedFloor;
+    if (!(entryPrice > 0) || emaFloor >= entryPrice) return fixedFloor;
+    return emaFloor;
   }
 
   return computeStopLossFloor(entryPrice, peakPrice ?? entryPrice, stopLoss);
@@ -255,6 +286,36 @@ function evaluateExit(config, cMap, entryPrice, opts = {}) {
   return { exit: false, close };
 }
 
+/**
+ * Cooldown pós-saída em candles do intervalo da BB (entry.interval). Conta quantos
+ * candles JÁ FECHADOS abriram depois de lastExitTime; precisa de
+ * entry.reentryCooldownCandles pra liberar nova compra (aí evaluateEntrySignal roda
+ * a análise completa de novo). Sem lastExitTime ou com cooldown 0 → libera.
+ */
+function checkReentryCooldown(config, cMap, lastExitTime) {
+  const need = Math.max(0, Math.round(Number(config.entry?.reentryCooldownCandles ?? 0)));
+  if (need <= 0 || !lastExitTime) {
+    return { waiting: false, need, have: 0, remain: 0 };
+  }
+  const exitMs = new Date(lastExitTime).getTime();
+  if (!Number.isFinite(exitMs)) {
+    return { waiting: false, need, have: 0, remain: 0 };
+  }
+
+  const iv = config.entry.interval;
+  const closed = closedCandlesOnly(cMap[iv] ?? []);
+  const have = closed.filter(c => Number(c.openTime) >= exitMs).length;
+  const remain = Math.max(0, need - have);
+  return {
+    waiting: remain > 0,
+    need,
+    have,
+    remain,
+    interval: iv,
+    reason: remain > 0 ? 'REENTRY_COOLDOWN' : null,
+  };
+}
+
 module.exports = {
   intervalMs,
   closedCandlesOnly,
@@ -264,7 +325,9 @@ module.exports = {
   checkEmaFilter,
   evaluateEntrySignal,
   evaluateExit,
+  checkReentryCooldown,
   computeBracketPrices,
   computeStopPrice,
+  computeEmaStopFloorRaw,
   computeStopLossFloor,
 };

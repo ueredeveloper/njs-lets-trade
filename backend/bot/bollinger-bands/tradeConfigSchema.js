@@ -30,6 +30,9 @@ const BOLLINGER_BANDS_DEFAULTS = {
      *  Ligado: exige que o preço desça belowPct% ABAIXO da banda inferior antes de comprar
      *  (entrada mais "no fundo", ao custo de poder não disparar num repique raso). */
     pullback: { enabled: false, belowPct: 2 },
+    /** Após uma saída, espera N candles fechados do intervalo da BB antes de nova compra
+     *  (reavalia BB + EMA do zero). 0 = sem espera por candle. */
+    reentryCooldownCandles: 5,
     /** Filtro de tendência: (1) só compra se o preço estiver acima da EMA(period) do
      *  intervalo escolhido, com folga "adaptação inferior" de maxDipPct% abaixo da EMA
      *  ainda contando como "acima" (evita rejeitar por um toque raso); (2) a própria linha
@@ -53,10 +56,10 @@ const BOLLINGER_BANDS_DEFAULTS = {
   },
 
   /** Percentual/trailing — editável pelo usuário, com teto (normalizeStopLoss trava em 30%).
-   *  mode: 'fixed' (padrão, como sempre foi) usa maxLossPct/trailing abaixo; mode: 'ema' troca
-   *  o piso por uma linha de EMA que se move a cada verificação (ver computeStopPrice em
-   *  strategyEngine.js) — stop = EMA(ema.period, ema.interval) * (1 − ema.belowPct/100). Sem
-   *  trailing/peak nesse modo: o piso segue a EMA pra cima E pra baixo a cada tick. */
+   *  mode: 'fixed' (padrão) usa maxLossPct/trailing; mode: 'ema' usa
+   *  stop = EMA(ema.period, ema.interval) * (1 − ema.belowPct/100), caindo no piso %
+   *  (maxLossPct) quando essa linha fica ≥ preço de compra (não protege long — ver
+   *  computeStopPrice). */
   stopLoss: {
     enabled: true, maxLossPct: 5, trailing: true, trailStepPct: 5,
     mode: 'fixed',
@@ -65,6 +68,10 @@ const BOLLINGER_BANDS_DEFAULTS = {
   },
 
   polling: { pollMs: 60_000, fastPollMs: 30_000 },
+
+  /** Desliga o cooldown em horas do tradeExecution compartilhado (DEFAULT 4h) —
+   *  o bollinger usa reentryCooldownCandles no intervalo da BB. */
+  entryCooldownHours: 0,
 
   /** Só informativo (aviso no formulário) — nunca bloqueia compra/venda. */
   volume: { minVolumeUsdt: 1_000_000 },
@@ -124,6 +131,9 @@ function normalizeEntry(block) {
     period: normalizePeriod(src.period, d.period),
     stdDev: normalizeStdDev(src.stdDev, d.stdDev),
     pullback: normalizePullback(src.pullback),
+    reentryCooldownCandles: Math.max(0, Math.min(100, Math.round(Number(
+      src.reentryCooldownCandles ?? d.reentryCooldownCandles,
+    )))),
     emaFilter: normalizeEmaFilter(src.emaFilter, interval),
   };
 }
@@ -182,6 +192,7 @@ function normalizeBollingerBandsConfig(body = {}) {
     volume: {
       minVolumeUsdt: Number(body.volume?.minVolumeUsdt ?? d.volume.minVolumeUsdt),
     },
+    entryCooldownHours: Math.max(0, Number(body.entryCooldownHours ?? d.entryCooldownHours)),
   };
 }
 
@@ -192,6 +203,7 @@ function toEngineConfig(normalized) {
     minVolumeUsdt: c.volume.minVolumeUsdt,
     pollMs: c.polling.pollMs,
     fastPollMs: c.polling.fastPollMs,
+    entryCooldownHours: c.entryCooldownHours,
   };
 }
 

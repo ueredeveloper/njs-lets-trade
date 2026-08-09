@@ -11,9 +11,9 @@ const cacheSettings = require('./cacheSettings');
 
 const BATCH_SIZE = 20;
 const CACHE_FILE = path.join(__dirname, '..', 'data', 'bb-band-width-cache.json');
-/** avgWidthPct usa só os últimos 5 candles fechados — mais reativo que a média do lookback
- * inteiro. O lookback continua definindo a janela de minWidthPct/maxWidthPct. */
-const AVG_WINDOW = 5;
+/** avgWidthPct usa os últimos 80 candles fechados (Larg% em indicadores e favoritos BB).
+ * O lookback continua definindo a janela de minWidthPct/maxWidthPct. */
+const AVG_WINDOW = 80;
 
 /**
  * Presets pré-aquecidos: combinação padrão do painel de favoritos (4h, período 20, desvio 2,
