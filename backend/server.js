@@ -26,7 +26,6 @@ const {
   fetchGateCurrencies, fetchGatePrefetch, fetchBinanceTrades, fetchGateTrades,
   fetchActiveTrades, fetchTradeFavorites, stgBotStatus, multitradeService, fetchMarketHighlights, fetchVolumeIgnition, whatsappMessagesService, fetchCacheSettings } = require('./services');
 const supabaseService = require('./services/supabaseService');
-const volumeIgnitionMonitor = require('./market/volumeIgnitionMonitor');
 
 const app = express();
 app.use(cors());
@@ -203,8 +202,6 @@ async function startServer() {
   // Warmup em background — só entradas com TTL expirado
   console.log(`[rsiCache] intervalos: ${RSI_INTERVALS.join(', ')} | tick ${RSI_TICK_MS / 60_000}min`);
   refreshRsiCache().catch(e => console.error('[rsiCache] erro no warmup:', e.message));
-
-  volumeIgnitionMonitor.start().catch(e => console.error('[volumeIgnitionMonitor] erro ao iniciar:', e.message));
 
   async function refreshMaCrossCache() {
     if (!cacheSettings.isEnabled('maCross')) return;

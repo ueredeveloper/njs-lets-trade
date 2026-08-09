@@ -2,11 +2,20 @@
 
 // Detector de "ignição de volume" em tempo real — pega o tipo de salto que a IOTX
 // deu em 08/08 às 22:02 BRT (volume ~50x acima do normal em 1 candle de 1m).
-// Usa o stream público !miniTicker@arr (já disponível via binance-api-node,
-// sem custo extra de rate-limit — é 1 conexão WS pra todos os símbolos).
+//
+// Usa um combined stream (1 única conexão WS) assinando só os pares USDT ativos
+// via <symbol>@miniTicker — em vez do !miniTicker@arr, que traz TODO o mercado da
+// Binance (milhares de pares BTC/ETH/FDUSD/TRY/EUR/BRL etc que não usamos aqui).
+// Limite documentado: até 1024 streams por conexão — bem acima dos ~489 pares USDT.
 
-const Binance = require('binance-api-node').default;
+const WebSocket = require('ws');
 const { getActiveUsdtPairs } = require('../binance/getActiveUsdtPairs');
+const { sendWhatsApp } = require('../bot/whatsapp');
+const { sbReq } = require('../bot/shared/supabaseRest');
+
+const STREAM_BASE = 'wss://stream.binance.com:9443/stream?streams=';
+const RECONNECT_DELAY_MS = 5000;
+const HEARTBEAT_MS = 30 * 1000; // grava status no Supabase — painel roda em outra máquina (Termux), sem memória compartilhada
 
 const RECENT_WINDOW_MS = 60 * 1000; // volume "agora": últimos 60s
 const BASELINE_WINDOW_MS = 5 * 60 * 1000; // baseline: os 5 min anteriores a isso
@@ -35,13 +44,8 @@ function sampleAt(samples, now, minAgeMs) {
   return samples[0] ?? null;
 }
 
-function onTick(t) {
-  const symbol = t.symbol;
-  if (!activeSet.has(symbol)) return;
-
+function onTick(symbol, price, cumVolumeQuote) {
   const now = Date.now();
-  const price = Number(t.curDayClose);
-  const cumVolumeQuote = Number(t.volumeQuote); // volume acumulado nas últimas 24h, dado pela própria Binance
   if (!Number.isFinite(price) || !Number.isFinite(cumVolumeQuote)) return;
 
   let samples = history.get(symbol);
@@ -72,8 +76,28 @@ function onTick(t) {
   const priceChangePct = ((price - recentAnchor.price) / recentAnchor.price) * 100;
 
   if (ratio >= SPIKE_RATIO && priceChangePct >= MIN_PRICE_MOVE_PCT) {
+    const isNew = !flagged.has(symbol);
     flagged.set(symbol, { firedAt: now, ratio, priceChangePct, price });
+    if (isNew) notifyIgnition(symbol, ratio, priceChangePct, price, now);
   }
+}
+
+function notifyIgnition(symbol, ratio, priceChangePct, price, firedAt) {
+  sendWhatsApp(
+    `🚀 Ignição de volume: ${symbol}\n`
+    + `Volume ${ratio.toFixed(1)}x acima do normal\n`
+    + `Preço: ${price} (${priceChangePct >= 0 ? '+' : ''}${priceChangePct.toFixed(2)}% em 60s)`,
+  );
+
+  // Painel roda em outra máquina (PC) — sem isso ele nunca saberia que algo disparou aqui no Termux.
+  sbReq('POST', 'volume_ignition_events', {
+    symbol,
+    exchange: 'binance',
+    ratio,
+    price_change_pct: priceChangePct,
+    price,
+    fired_at: new Date(firedAt).toISOString(),
+  }).catch((err) => console.error('[volumeIgnitionMonitor] falha ao gravar evento no Supabase:', err.message));
 }
 
 function pruneFlagged() {
@@ -83,44 +107,63 @@ function pruneFlagged() {
   }
 }
 
+function buildStreamUrl(symbols) {
+  const streams = symbols.map((s) => `${s.toLowerCase()}@miniTicker`).join('/');
+  return `${STREAM_BASE}${streams}`;
+}
+
+function connect(symbols) {
+  const ws = new WebSocket(buildStreamUrl(symbols));
+
+  ws.on('message', (raw) => {
+    lastTickAt = Date.now();
+    try {
+      const msg = JSON.parse(raw);
+      const d = msg?.data;
+      if (!d || d.e !== '24hrMiniTicker') return;
+      onTick(d.s, Number(d.c), Number(d.q));
+    } catch (err) {
+      console.error('[volumeIgnitionMonitor] erro processando mensagem:', err.message);
+    }
+    pruneFlagged();
+  });
+
+  ws.on('error', (err) => {
+    console.error('[volumeIgnitionMonitor] erro no WebSocket:', err.message);
+  });
+
+  ws.on('close', () => {
+    console.warn(`[volumeIgnitionMonitor] conexão fechada — reconectando em ${RECONNECT_DELAY_MS / 1000}s`);
+    setTimeout(() => connect(symbols), RECONNECT_DELAY_MS);
+  });
+}
+
+async function sendHeartbeat() {
+  try {
+    await sbReq('PATCH', 'volume_ignition_status', {
+      monitored_pairs: activeSet.size,
+      started_at: startedAt ? new Date(startedAt).toISOString() : null,
+      last_tick_at: lastTickAt ? new Date(lastTickAt).toISOString() : null,
+      updated_at: new Date().toISOString(),
+    }, '?id=eq.1');
+  } catch (err) {
+    console.error('[volumeIgnitionMonitor] falha no heartbeat do Supabase:', err.message);
+  }
+}
+
 async function start() {
   if (started) return;
   started = true;
 
   const { list } = await getActiveUsdtPairs();
   activeSet = new Set(list);
-
   startedAt = Date.now();
 
-  const client = Binance({});
-  client.ws.allMiniTickers((tickers) => {
-    lastTickAt = Date.now();
-    for (const t of tickers) {
-      try {
-        onTick(t);
-      } catch (err) {
-        console.error(`[volumeIgnitionMonitor] erro processando ${t?.symbol}:`, err.message);
-      }
-    }
-    pruneFlagged();
-  });
+  connect(list);
+  sendHeartbeat();
+  setInterval(sendHeartbeat, HEARTBEAT_MS);
 
-  console.log(`[volumeIgnitionMonitor] monitorando ${activeSet.size} pares USDT via !miniTicker@arr`);
+  console.log(`[volumeIgnitionMonitor] monitorando ${activeSet.size} pares USDT via combined stream (miniTicker)`);
 }
 
-function getFlagged() {
-  pruneFlagged();
-  return [...flagged.entries()]
-    .map(([symbol, f]) => ({ symbol, ...f }))
-    .sort((a, b) => b.firedAt - a.firedAt);
-}
-
-function getStatus() {
-  return {
-    monitoredPairs: activeSet.size,
-    startedAt,
-    lastTickAt,
-  };
-}
-
-module.exports = { start, getFlagged, getStatus };
+module.exports = { start };
