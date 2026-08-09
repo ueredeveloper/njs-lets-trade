@@ -14,15 +14,17 @@ const BINANCE_COLOR = '#f0b90b';
  * capital+BollingerBandsStrategyForm, criar ou editar um único favorito bollinger-bands por vez.
  */
 export default function BollingerBandsFavoriteModal({
-  symbol: initialSymbol, defaultExchange, currentEntry, onConfirm, onRemove, onCancel,
+  symbol: initialSymbol, defaultExchange, currentEntry, lockInterval, onConfirm, onRemove, onCancel,
 }) {
   const isEditing = !!currentEntry;
   const [symbol, setSymbol] = useState(initialSymbol ?? '');
   const [capital, setCapital] = useState(currentEntry?.capital ?? 40);
   const [enabled, setEnabled] = useState(currentEntry?.enabled !== false);
-  const [form, setForm] = useState(() => (
-    currentEntry ? bollingerBandsFormFromEntry(currentEntry) : normalizeBollingerBandsForm(BOLLINGER_BANDS_DEFAULTS)
-  ));
+  const [form, setForm] = useState(() => {
+    const base = currentEntry ? bollingerBandsFormFromEntry(currentEntry) : normalizeBollingerBandsForm(BOLLINGER_BANDS_DEFAULTS);
+    if (!lockInterval) return base;
+    return { ...base, entry: { ...base.entry, interval: lockInterval } };
+  });
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
 
@@ -86,7 +88,7 @@ export default function BollingerBandsFavoriteModal({
       >
         <div className="flex items-center justify-between">
           <h3 className="text-sm font-bold" style={{ color: BB_COLOR }}>
-            {isEditing ? `Editar Bollinger Bands — ${symbol}` : 'Novo favorito Bollinger Bands'}
+            {isEditing ? `Editar Bollinger Bands ${lockInterval ?? ''} — ${symbol}` : `Novo favorito Bollinger Bands ${lockInterval ?? ''}`}
           </h3>
           <button type="button" onClick={onCancel} className="text-p5/40 hover:text-p5 text-lg leading-none">✕</button>
         </div>
@@ -133,7 +135,7 @@ export default function BollingerBandsFavoriteModal({
           </div>
         </div>
 
-        <BollingerBandsStrategyForm form={form} patch={patch} symbol={symbol.trim().toUpperCase()} />
+        <BollingerBandsStrategyForm form={form} patch={patch} symbol={symbol.trim().toUpperCase()} lockInterval={lockInterval} />
 
         {error && <p className="text-[11px] text-red-400">{error}</p>}
 

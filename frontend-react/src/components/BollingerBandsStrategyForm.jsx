@@ -28,7 +28,7 @@ function Select({ value, onChange, options, labelFor }) {
  * toca a banda inferior, vende quando toca a banda superior, no intervalo escolhido. Sem
  * escada, sem filtros extra (ver backend/bot/bollinger-bands/strategyEngine.js).
  */
-export default function BollingerBandsStrategyForm({ form, patch, symbol }) {
+export default function BollingerBandsStrategyForm({ form, patch, symbol, lockInterval }) {
   const patchEntry     = (field, val) => patch(`entry.${field}`, val);
   const patchPullback  = (field, val) => patch(`entry.pullback.${field}`, val);
   const patchEmaFilter = (field, val) => patch(`entry.emaFilter.${field}`, val);
@@ -45,7 +45,13 @@ export default function BollingerBandsStrategyForm({ form, patch, symbol }) {
         </span>
         <div className="flex flex-wrap gap-2 items-center text-xs">
           <span className="text-p5/50">Intervalo</span>
-          <Select value={form.entry.interval} onChange={v => patchEntry('interval', v)} options={BOLLINGER_BANDS_ALL_INTERVALS} />
+          {lockInterval ? (
+            <span className="rounded px-2 py-1 text-xs font-mono font-bold" style={{ background: '#1e2130', border: '1px solid #2a2d3a', color: ENTRY_COLOR }}>
+              {form.entry.interval}
+            </span>
+          ) : (
+            <Select value={form.entry.interval} onChange={v => patchEntry('interval', v)} options={BOLLINGER_BANDS_ALL_INTERVALS} />
+          )}
           <span className="text-p5/50 ml-2">Período</span>
           <Select value={form.entry.period} onChange={v => patchEntry('period', Number(v))} options={BOLLINGER_BANDS_PERIODS}
             labelFor={p => `BB${p}`} />

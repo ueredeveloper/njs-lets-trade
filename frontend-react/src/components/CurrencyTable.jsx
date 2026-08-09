@@ -1535,6 +1535,9 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
               const isVwap     = vwapEntry?.enabled !== false && !!vwapEntry;
               const bbEntry    = getBollingerBandsEntry(multitradeFavorites, item.symbol);
               const isBb       = bbEntry?.enabled !== false && !!bbEntry;
+              const bbInterval = bbEntry?.entry?.interval ?? bbEntry?.tradeConfig?.entry?.interval;
+              const isBb1      = isBb && bbInterval === '1m';
+              const isBb5      = isBb && bbInterval === '5m';
               const activeInfo = activeTrades.get(item.symbol);
               const isActiveHolding = !!activeInfo;
               const tradeMeta  = isTradesFavView ? tradeFavStatus[item.symbol] : null;
@@ -1593,9 +1596,14 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                       }} />
                       )}
                       {uiPrefs.visibleFavoriteButtons['bollinger-bands'] !== false && (
-                      <FavButton kind="BB" text="BB" symbol={item.symbol} active={isBb} color={BOLLINGER_BANDS_COLOR} label="Bollinger Bands" onClick={() => {
-                        setBbModal({ symbol: item.symbol, exchange: isGate && !isBinance ? 'gate' : 'binance', entry: bbEntry });
+                      <>
+                      <FavButton kind="BB1" text="B1" symbol={item.symbol} active={isBb1} color={BOLLINGER_BANDS_COLOR} label="Bollinger Bands 1m" onClick={() => {
+                        setBbModal({ symbol: item.symbol, exchange: isGate && !isBinance ? 'gate' : 'binance', entry: bbEntry, lockInterval: '1m' });
                       }} />
+                      <FavButton kind="BB5" text="B5" symbol={item.symbol} active={isBb5} color={BOLLINGER_BANDS_COLOR} label="Bollinger Bands 5m" onClick={() => {
+                        setBbModal({ symbol: item.symbol, exchange: isGate && !isBinance ? 'gate' : 'binance', entry: bbEntry, lockInterval: '5m' });
+                      }} />
+                      </>
                       )}
                     </div>
                   </td>
@@ -2014,6 +2022,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
             symbol={bbModal.symbol}
             defaultExchange={bbModal.exchange}
             currentEntry={bbModal.entry}
+            lockInterval={bbModal.lockInterval}
             onConfirm={async ({ id, payload }) => {
               console.log(`${FAV_LOG} BB confirmar`, { symbol: bbModal.symbol, id });
               await saveMultitradeSymbol({ saves: [{ id, payload }] });
