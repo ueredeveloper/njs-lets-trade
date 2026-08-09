@@ -448,8 +448,12 @@ async function startSymbol(row, color) {
 
   const updateFromRow = (newRow) => {
     const next = resolveStrategy(newRow);
-    if (!next) return;
+    if (!next) {
+      log(`${Y}⚠️  trade_config inválido após sync — mantendo config anterior${X}`);
+      return;
+    }
     ctx.strategy = next;
+    log(`🔄 ${row.symbol} — config atualizada do painel (BB ${next.config.entry.interval} ${next.config.entry.period}/${next.config.entry.stdDev})`);
   };
 
   registry.register(row.id, {

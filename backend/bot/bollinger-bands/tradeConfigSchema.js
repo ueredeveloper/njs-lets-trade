@@ -40,12 +40,12 @@ const BOLLINGER_BANDS_DEFAULTS = {
      *  intervalo escolhido, com folga "adaptação inferior" de maxDipPct% abaixo da EMA
      *  ainda contando como "acima" (evita rejeitar por um toque raso); (2) a própria linha
      *  da EMA precisa estar em alta — variação % vs. slopeLookback candles anteriores
-     *  ≥ minSlopePct (padrão 5 candles / ≥ 0%: bloqueia se a EMA estiver caindo). Ligado
+     *  ≥ minSlopePct (padrão 10 candles / ≥ 0%: bloqueia se a EMA estiver caindo). Ligado
      *  por padrão; interval segue o mesmo intervalo da banda de Bollinger (entry.interval)
      *  quando não informado — ver normalizeEmaFilter. */
     emaFilter: {
       enabled: true, period: 50, interval: '4h', maxDipPct: 2,
-      slopeLookback: 5, minSlopePct: 0,
+      slopeLookback: 10, minSlopePct: 0,
     },
   },
 
@@ -62,12 +62,15 @@ const BOLLINGER_BANDS_DEFAULTS = {
    *  mode: 'fixed' (padrão) usa maxLossPct/trailing; mode: 'ema' usa
    *  stop = EMA(ema.period, ema.interval) * (1 − ema.belowPct/100), caindo no piso %
    *  (maxLossPct) quando essa linha fica ≥ preço de compra (não protege long — ver
-   *  computeStopPrice). */
+   *  computeStopPrice); mode: 'band' usa stop = banda inferior BB(entry.period,entry.stdDev)
+   *  ao vivo * (1 − band.belowPct/100), mesma queda pro piso % se a banda ficar ≥ preço
+   *  de compra. */
   stopLoss: {
     enabled: true, maxLossPct: 5, trailing: true, trailStepPct: 5,
     mode: 'fixed',
     // interval nasce igual ao entry.interval quando não informado — ver normalizeStopLoss.
     ema: { period: 50, interval: '4h', belowPct: 2 },
+    band: { belowPct: 10 },
   },
 
   polling: { pollMs: 60_000, fastPollMs: 30_000 },
@@ -155,7 +158,7 @@ function normalizeExit(block) {
   };
 }
 
-const STOP_LOSS_MODES = ['fixed', 'ema'];
+const STOP_LOSS_MODES = ['fixed', 'ema', 'band'];
 
 function normalizeStopLossEma(block, entryInterval) {
   const d = BOLLINGER_BANDS_DEFAULTS.stopLoss.ema;
@@ -164,6 +167,14 @@ function normalizeStopLossEma(block, entryInterval) {
     period: normalizeEmaPeriod(src.period, d.period),
     interval: normalizeInterval(src.interval, entryInterval ?? d.interval),
     belowPct: Math.max(0, Math.min(20, Number(src.belowPct ?? d.belowPct))),
+  };
+}
+
+function normalizeStopLossBand(block) {
+  const d = BOLLINGER_BANDS_DEFAULTS.stopLoss.band;
+  const src = block ?? {};
+  return {
+    belowPct: Math.max(0, Math.min(50, Number(src.belowPct ?? d.belowPct))),
   };
 }
 
@@ -179,6 +190,7 @@ function normalizeStopLoss(block, entryInterval) {
     trailStepPct: Math.max(0.5, Number(src.trailStepPct ?? src.maxLossPct ?? d.trailStepPct)),
     mode: STOP_LOSS_MODES.includes(src.mode) ? src.mode : d.mode,
     ema: normalizeStopLossEma(src.ema, entryInterval),
+    band: normalizeStopLossBand(src.band),
   };
 }
 

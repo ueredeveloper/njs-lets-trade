@@ -4,7 +4,7 @@ export const BOLLINGER_BANDS_ALL_INTERVALS = ['1m', '3m', '5m', '15m', '30m', '1
 export const BOLLINGER_BANDS_PERIODS = [10, 20, 30];
 export const BOLLINGER_BANDS_STD_DEVS = [1, 2, 3];
 export const BOLLINGER_BANDS_EMA_PERIODS = [9, 21, 50, 200];
-export const BOLLINGER_BANDS_STOP_LOSS_MODES = ['fixed', 'ema'];
+export const BOLLINGER_BANDS_STOP_LOSS_MODES = ['fixed', 'ema', 'band'];
 
 export const BOLLINGER_BANDS_DEFAULTS = {
   label: 'Bollinger Bands',
@@ -36,6 +36,8 @@ export const BOLLINGER_BANDS_DEFAULTS = {
     mode: 'fixed',
     /** interval nasce igual ao entry.interval quando não informado — ver normalizeBollingerBandsForm. */
     ema: { period: 50, interval: '4h', belowPct: 2 },
+    /** mode 'band': stop = banda inferior BB(entry.period,entry.stdDev) ao vivo × (1 − belowPct/100). */
+    band: { belowPct: 10 },
   },
   polling: { pollMs: 60_000, fastPollMs: 30_000 },
   entryCooldownHours: 0,
@@ -91,6 +93,9 @@ export function normalizeBollingerBandsForm(body = {}) {
         interval: BOLLINGER_BANDS_ALL_INTERVALS.includes(body.stopLoss?.ema?.interval)
           ? body.stopLoss.ema.interval : interval,
         belowPct: Number(body.stopLoss?.ema?.belowPct ?? d.stopLoss.ema.belowPct),
+      },
+      band: {
+        belowPct: Number(body.stopLoss?.band?.belowPct ?? d.stopLoss.band.belowPct),
       },
     },
     polling: { ...d.polling, ...body.polling },

@@ -35,6 +35,7 @@ export default function BollingerBandsStrategyForm({ form, patch, symbol }) {
   const patchBracket   = (field, val) => patch(`exit.restingBracket.${field}`, val);
   const patchStopLoss  = (field, val) => patch(`stopLoss.${field}`, val);
   const patchStopLossEma = (field, val) => patch(`stopLoss.ema.${field}`, val);
+  const patchStopLossBand = (field, val) => patch(`stopLoss.band.${field}`, val);
 
   return (
     <div className="space-y-4">
@@ -181,7 +182,7 @@ export default function BollingerBandsStrategyForm({ form, patch, symbol }) {
         <span className="text-[10px] font-bold uppercase tracking-wider text-p5/70">Stop-loss</span>
 
         <div className="flex gap-2">
-          {[{ id: 'fixed', label: 'Valor limite (%)' }, { id: 'ema', label: 'Linha da EMA' }].map(m => (
+          {[{ id: 'fixed', label: 'Valor limite (%)' }, { id: 'ema', label: 'Linha da EMA' }, { id: 'band', label: 'Abaixo da banda inferior' }].map(m => (
             <button key={m.id} type="button" onClick={() => patchStopLoss('mode', m.id)}
               className="flex-1 py-1 text-[10px] rounded font-semibold"
               style={{
@@ -216,6 +217,26 @@ export default function BollingerBandsStrategyForm({ form, patch, symbol }) {
               estiver no/acima do preço de entrada, a compra é bloqueada (lugar errado).
               Se a posição já estiver aberta nesse cenário, o piso de
               {' '}{form.stopLoss.maxLossPct ?? 5}% entra como fallback.
+            </p>
+          </>
+        ) : (form.stopLoss.mode ?? 'fixed') === 'band' ? (
+          <>
+            <div className="flex flex-wrap gap-2 items-center text-xs text-p5">
+              <span className="text-p5/50">Stop</span>
+              <NumInput value={form.stopLoss.band?.belowPct ?? 10} onChange={v => patchStopLossBand('belowPct', v)} min={0} max={50} step={0.5} />
+              <span className="text-p5/40">% abaixo da banda inferior BB({form.entry.period},{form.entry.stdDev})</span>
+            </div>
+            <div className="flex flex-wrap gap-2 items-center text-xs text-p5">
+              <span className="text-p5/50">Piso % (fallback)</span>
+              <NumInput value={form.stopLoss.maxLossPct} onChange={v => patchStopLoss('maxLossPct', v)} min={0.5} max={30} step={0.5} />
+              <span className="text-p5/40">% — usado se a banda já estiver acima do preço de compra</span>
+            </div>
+            <p className="text-[10px] text-p5/50 leading-relaxed">
+              Vende se o preço cair até {form.stopLoss.band?.belowPct ?? 10}% abaixo da banda
+              inferior BB({form.entry.period},{form.entry.stdDev}) {form.entry.interval} ao vivo —
+              o piso acompanha a banda a cada candle novo. Se a banda estiver no/acima do preço
+              de entrada, a compra é bloqueada (lugar errado). Se a posição já estiver aberta
+              nesse cenário, o piso de {form.stopLoss.maxLossPct ?? 5}% entra como fallback.
             </p>
           </>
         ) : (

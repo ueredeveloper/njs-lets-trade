@@ -168,6 +168,17 @@ function evaluateEntrySignal(config, cMap) {
     };
   }
 
+  // Stop mode 'band': mesma ideia — se o piso (banda inferior − belowPct%) já estiver
+  // no/acima do preço de entrada (pullback mais raso que o belowPct do stop), não protege.
+  const bandStopFloor = computeBandStopFloorRaw(config, cMap);
+  if (bandStopFloor != null && threshold <= bandStopFloor) {
+    return {
+      allowed: false, reason: 'BAND_STOP_ABOVE_ENTRY',
+      close: liveClose, lower: lastBb.lower, threshold,
+      bandStopFloor, emaFilter: emaCheck,
+    };
+  }
+
   const bbDesc = pullbackPct > 0
     ? `BB(${entry.period},${entry.stdDev}) ${iv} banda inferior -${pullbackPct}%`
     : `BB(${entry.period},${entry.stdDev}) ${iv} banda inferior`;
@@ -206,18 +217,36 @@ function computeEmaStopFloorRaw(config, cMap) {
   return maValue * (1 - Math.max(0, ema.belowPct) / 100);
 }
 
+/** Piso bruto do stop em mode 'band' (banda inferior BB(entry.period,entry.stdDev) ao vivo
+ *  × (1 − band.belowPct/100)), sem fallback %. null se stop não estiver em mode band /
+ *  desligado / sem dados. */
+function computeBandStopFloorRaw(config, cMap) {
+  const stopLoss = config.stopLoss;
+  if (!stopLoss?.enabled || stopLoss.mode !== 'band') return null;
+  const entry = config.entry;
+  const raw = cMap[entry.interval] ?? [];
+  const closed = closedCandlesOnly(raw);
+  const series = computeBollingerSeries(closed, entry.period, entry.stdDev);
+  if (!series.length) return null;
+  const lower = series[series.length - 1].lower;
+  const belowPct = Math.max(0, stopLoss.band?.belowPct ?? 10);
+  return lower * (1 - belowPct / 100);
+}
+
 /**
  * Piso do stop-loss vigente. mode 'fixed' (padrão) usa a fórmula percentual/trailing de
  * sempre (computeStopLossFloor, compartilhada com os outros bots). mode 'ema' usa
  * stop = EMA(ema.period, ema.interval) * (1 − ema.belowPct/100) — sem trailing/peak, o piso
- * acompanha a EMA pra cima e pra baixo a cada tick.
+ * acompanha a EMA pra cima e pra baixo a cada tick. mode 'band' usa
+ * stop = banda inferior BB(entry.period,entry.stdDev) ao vivo × (1 − band.belowPct/100) —
+ * mesma ideia, acompanha a banda inferior a cada candle novo.
  *
- * Se a linha EMA (ou a EMA − belowPct) estiver no/acima do preço de compra, esse stop não
- * protege a posição long (já está "por baixo" da linha) — e uma bracket com stop ≥ mercado
- * falha ou fica inútil. Nesse caso cai no piso % (maxLossPct / trailing), o mesmo de mode
- * 'fixed' — rede de segurança se a posição já estiver aberta. A entrada em si é bloqueada
- * em evaluateEntrySignal (EMA_STOP_ABOVE_ENTRY) pra não comprar nesse cenário.
- * Sem EMA disponível, também usa o piso %.
+ * Se a linha EMA/banda (ou a linha − belowPct) estiver no/acima do preço de compra, esse
+ * stop não protege a posição long (já está "por baixo" da linha) — e uma bracket com
+ * stop ≥ mercado falha ou fica inútil. Nesse caso cai no piso % (maxLossPct / trailing), o
+ * mesmo de mode 'fixed' — rede de segurança se a posição já estiver aberta. A entrada em si
+ * é bloqueada em evaluateEntrySignal (EMA_STOP_ABOVE_ENTRY / BAND_STOP_ABOVE_ENTRY) pra não
+ * comprar nesse cenário. Sem EMA/banda disponível, também usa o piso %.
  */
 function computeStopPrice(config, cMap, entryPrice, peakPrice) {
   const stopLoss = config.stopLoss;
@@ -229,6 +258,14 @@ function computeStopPrice(config, cMap, entryPrice, peakPrice) {
     if (emaFloor == null) return fixedFloor;
     if (!(entryPrice > 0) || emaFloor >= entryPrice) return fixedFloor;
     return emaFloor;
+  }
+
+  if (stopLoss.mode === 'band') {
+    const fixedFloor = computeStopLossFloor(entryPrice, peakPrice ?? entryPrice, stopLoss);
+    const bandFloor = computeBandStopFloorRaw(config, cMap);
+    if (bandFloor == null) return fixedFloor;
+    if (!(entryPrice > 0) || bandFloor >= entryPrice) return fixedFloor;
+    return bandFloor;
   }
 
   return computeStopLossFloor(entryPrice, peakPrice ?? entryPrice, stopLoss);
@@ -356,5 +393,6 @@ module.exports = {
   computeBracketPrices,
   computeStopPrice,
   computeEmaStopFloorRaw,
+  computeBandStopFloorRaw,
   computeStopLossFloor,
 };
