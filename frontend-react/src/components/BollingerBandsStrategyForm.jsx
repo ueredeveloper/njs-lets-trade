@@ -32,6 +32,7 @@ export default function BollingerBandsStrategyForm({ form, patch, symbol, lockIn
   const patchEntry     = (field, val) => patch(`entry.${field}`, val);
   const patchPullback  = (field, val) => patch(`entry.pullback.${field}`, val);
   const patchEmaFilter = (field, val) => patch(`entry.emaFilter.${field}`, val);
+  const patchMedianTrendFilter = (field, val) => patch(`entry.medianTrendFilter.${field}`, val);
   const patchBracket   = (field, val) => patch(`exit.restingBracket.${field}`, val);
   const patchStopLoss  = (field, val) => patch(`stopLoss.${field}`, val);
   const patchStopLossEma = (field, val) => patch(`stopLoss.ema.${field}`, val);
@@ -134,17 +135,34 @@ export default function BollingerBandsStrategyForm({ form, patch, symbol, lockIn
       </div>
 
       <div className="rounded-md p-2 space-y-2" style={{ background: '#1a1d28', border: '1px solid #2a2d3a' }}>
-        <span className="text-[10px] font-bold uppercase tracking-wider text-p5/70">Reentrada após saída</span>
-        <div className="flex flex-wrap gap-2 items-center text-xs text-p5">
-          <span className="text-p5/50">Esperar</span>
-          <NumInput value={form.entry.reentryCooldownCandles ?? 5} onChange={v => patchEntry('reentryCooldownCandles', v)} min={0} max={100} step={1} className="w-14" />
-          <span className="text-p5/40">candles {form.entry.interval} fechados</span>
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-p5/70">Filtro de tendência (mediana da BB, opcional)</span>
+          <label className="flex items-center gap-1 text-[9px] text-p5/50 cursor-pointer">
+            <input type="checkbox" checked={form.entry.medianTrendFilter?.enabled === true}
+              onChange={e => patchMedianTrendFilter('enabled', e.target.checked)} style={{ accentColor: ENTRY_COLOR }} />
+            Ativo
+          </label>
         </div>
-        <p className="text-[10px] text-p5/50 leading-relaxed">
-          Depois de vender, não compra de novo até passarem {form.entry.reentryCooldownCandles ?? 5} candles
-          {' '}{form.entry.interval} fechados — aí refaz a análise completa (banda + filtros).
-          0 = sem espera.
-        </p>
+        {form.entry.medianTrendFilter?.enabled === true ? (
+          <>
+            <div className="flex flex-wrap gap-2 items-center text-xs text-p5">
+              <span className="text-p5/50">Lookback</span>
+              <NumInput value={form.entry.medianTrendFilter?.lookback ?? 10} onChange={v => patchMedianTrendFilter('lookback', v)} min={2} max={50} step={1} className="w-14" />
+              <span className="text-p5/40">candles fechados</span>
+            </div>
+            <p className="text-[10px] text-p5/50 leading-relaxed">
+              Calcula a média das variações candle-a-candle dos últimos {form.entry.medianTrendFilter?.lookback ?? 10}
+              {' '}valores fechados da linha mediana (média) da Bollinger({form.entry.period},{form.entry.stdDev})
+              {' '}{form.entry.interval}. Só compra se essa média for ≥ 0 (mediana subindo ou estável). Checado no
+              sinal e de novo a cada tick enquanto a ordem limite aguarda fill — cancela a ordem se a mediana virar
+              pra baixo antes do preenchimento.
+            </p>
+          </>
+        ) : (
+          <p className="text-[10px] text-p5/50 leading-relaxed">
+            Desligado — não checa a tendência da linha mediana antes de comprar.
+          </p>
+        )}
       </div>
 
       <div className="rounded-md p-2 space-y-2" style={{ background: '#1a1d28', border: '1px solid #2a2d3a' }}>
@@ -158,6 +176,21 @@ export default function BollingerBandsStrategyForm({ form, patch, symbol, lockIn
           No toque da banda inferior arma limite GTC no preço da banda e deixa resting —
           se o pavio subiu (como 05:34) e o preço retestar (05:35), preenche. Sem fill em
           {' '}{form.entry.limitWaitCandles ?? 5} candles, cancela e espera o próximo sinal.
+        </p>
+      </div>
+
+      <div className="rounded-md p-2 space-y-2" style={{ background: '#1a1d28', border: '1px solid #2a2d3a' }}>
+        <span className="text-[10px] font-bold uppercase tracking-wider text-p5/70">Reentrada após stop-loss</span>
+        <div className="flex flex-wrap gap-2 items-center text-xs text-p5">
+          <span className="text-p5/50">Esperar</span>
+          <NumInput value={form.entry.reentryCooldownCandles ?? 3} onChange={v => patchEntry('reentryCooldownCandles', v)} min={0} max={100} step={1} className="w-14" />
+          <span className="text-p5/40">candles {form.entry.interval} fechados</span>
+        </div>
+        <p className="text-[10px] text-p5/50 leading-relaxed">
+          Depois de vender por stop-loss, não compra de novo até passarem
+          {' '}{form.entry.reentryCooldownCandles ?? 3} candles {form.entry.interval} fechados —
+          aí refaz a análise completa (banda + filtros). Saída no alvo (banda superior) não
+          espera. 0 = sem espera.
         </p>
       </div>
 

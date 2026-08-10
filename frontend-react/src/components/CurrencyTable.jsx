@@ -1077,15 +1077,15 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   const showFavSortInHeader = isMacrossFavView || isTradesFavView || isActiveFavView || isVwapBandsFavView || isBollingerBandsFavView || !!activeMacmpFilter;
   const REM_PX = 16;
   // Coluna de botões: largura fixa no piso (sem crescer com o drag) — abaixo dele os botões
-  // (G/B/MC, 15px cada) se sobrepõem ou somem. O espaço liberado vai para a coluna Par.
+  // (G/B/MC/VW/B1/B5, 15px cada) se sobrepõem ou somem. O espaço liberado vai para a coluna Par.
   // Calculado em JS porque `<col>` em table-fixed não resolve CSS max()/min() de forma
   // confiável (testado: navegador ignora e cai para distribuição 50/50).
-  // Piso cobre 3 botões de 15px + gaps + padding da célula (~53px) com folga.
+  // Piso cobre os até 6 botões de 15px + gaps + padding da célula (~104px) com folga.
   // No macmp o cabeçalho tem seletor + botão "Vol" lado a lado — precisa de mais espaço
   // do que o seletor sozinho do MC Favoritos/Trades.
   const favColMinPx = isMobile
-    ? (activeMacmpFilter ? 4.6 * REM_PX : showFavSortInHeader ? 4.5 * REM_PX : 3.85 * REM_PX)
-    : (activeMacmpFilter ? 6.4 * REM_PX : showFavSortInHeader ? 6.0 * REM_PX : 3.85 * REM_PX);
+    ? (activeMacmpFilter ? 4.6 * REM_PX : showFavSortInHeader ? 4.5 * REM_PX : 6.6 * REM_PX)
+    : (activeMacmpFilter ? 6.4 * REM_PX : showFavSortInHeader ? 6.0 * REM_PX : 6.6 * REM_PX);
   const priceColPx = (isMobile ? 3 : 3.25) * REM_PX;
   const changeColPx = (isMobile ? 2.75 : 3) * REM_PX;
   const volColPx = (isMobile ? 2.25 : 2.5) * REM_PX;

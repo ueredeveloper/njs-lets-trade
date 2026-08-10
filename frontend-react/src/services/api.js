@@ -1061,13 +1061,13 @@ export async function removeMultitradeFavorite(id) {
 
 /** Ajuste manual de fase no rsi_multi_bot_state (WATCHING ou BOUGHT). */
 export async function patchMultitradeBotState({
-  symbol, strategyId, phase, buyPrice, buyQty, buyTime, buyUsdt,
+  symbol, strategyId, phase, buyPrice, buyQty, buyTime, buyUsdt, sell,
 }) {
   const res = await fetch('/services/sb/multitrade-bot-state', {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      symbol, strategyId, phase, buyPrice, buyQty, buyTime, buyUsdt,
+      symbol, strategyId, phase, buyPrice, buyQty, buyTime, buyUsdt, sell,
     }),
   });
   if (!res.ok) {

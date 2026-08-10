@@ -41,14 +41,22 @@ function parseRulesState(row) {
   return rs && typeof rs === 'object' ? rs : {};
 }
 
-function postExitRulesState(exitTime) {
-  return { lastExitTime: exitTime };
+function postExitRulesState(exitTime, opts = {}) {
+  const out = { lastExitTime: exitTime };
+  if (opts.lastExitReason != null) out.lastExitReason = opts.lastExitReason;
+  return out;
 }
 
 function resolveLastExitTime(state, session) {
   const fromRow = parseRulesState(state).lastExitTime;
   if (fromRow) return fromRow;
   return session?.lastExitTime ?? null;
+}
+
+function resolveLastExitReason(state, session) {
+  const fromRow = parseRulesState(state).lastExitReason;
+  if (fromRow) return fromRow;
+  return session?.lastExitReason ?? null;
 }
 
 function hasOpenPosition(state) {
@@ -95,7 +103,7 @@ function entrySignalFieldsFromState(state) {
 
 function createTradeExecution({
   botLabel, buildReasonLines, computeStopLossFloor = defaultComputeStopLossFloor,
-  extraBuyLogLines, extraInitialRulesState,
+  extraBuyLogLines, extraInitialRulesState, buildExitReasonLines,
 }) {
   let rulesStateColumnOk = true;
 
@@ -119,8 +127,17 @@ function createTradeExecution({
     }
   }
 
-  async function insertTrade(trade) {
-    try { await sbReq('POST', 'rsi_multi_bot_trades', trade); } catch { /* ignore */ }
+  async function insertTrade(trade, log) {
+    try {
+      await sbReq('POST', 'rsi_multi_bot_trades', trade);
+    } catch (err) {
+      // Erro aqui não pode ficar mudo: a posição já fechou de verdade na corretora, e se o
+      // insert falhar (RLS, coluna faltando, rede) o trade some do histórico/PnL do favorito
+      // sem deixar rastro nenhum — exatamente o sintoma que motivou registrar isso.
+      const msg = `Falha ao gravar trade fechado em rsi_multi_bot_trades (${trade.symbol}): ${err.message}`;
+      log?.(`${Y}⚠️  ${msg}${X}`);
+      sendWhatsApp(`⚠️ ${msg}`);
+    }
   }
 
   async function resetOrphanPosition(rowId, log, session, state, reason) {
@@ -251,26 +268,39 @@ function createTradeExecution({
       exit_reason: exitResult?.reason ?? reasonLabel ?? 'PANEL_REMOVED',
       ...entrySignalFieldsFromState(state),
       ...exitSignalFields(exitResult),
-    });
+    }, log);
 
-    if (session) session.lastExitTime = exitTime;
+    const lastExitReason = exitResult?.reason ?? reasonLabel ?? null;
+    if (session) {
+      session.lastExitTime = exitTime;
+      session.lastExitReason = lastExitReason;
+    }
     const cooldownH = entryCooldownHours(config);
     await saveState(rowId, {
       capital: capitalAfter, phase: 'WATCHING',
       buy_price: null, buy_qty: null, buy_usdt: null, buy_time: null, rsi_entry: null,
       entry_signal_time: null, entry_signal_price: null,
-      rules_state: postExitRulesState(exitTime),
+      rules_state: postExitRulesState(exitTime, { lastExitReason }),
     }, log);
     if (cooldownH > 0) {
       log(`${Y}⏳ Cooldown de entrada: ${cooldownH}h${X}`);
     }
 
+    const exitReasonLines = buildExitReasonLines ? buildExitReasonLines(config, state, exitResult) : [];
+
     log(`${'─'.repeat(60)}`);
     log(`${R}🔴 VENDA EXECUTADA${X}`);
     log(`   PnL: ${pnlSign}${pnlUsdt.toFixed(4)} USDT (${pnlSign}${pnlPct.toFixed(2)}%)`);
     log(`   Capital: ${capitalBefore.toFixed(4)} → ${capitalAfter.toFixed(4)} USDT`);
+    if (exitReasonLines.length) {
+      log(`   Filtro de tendência na compra:`);
+      for (const line of exitReasonLines) log(`     • ${line}`);
+    }
     log(`${'─'.repeat(60)}`);
-    sendWhatsApp(`🔴 ${botLabel} VENDA [${strategyId}] ${symbol}\nMotivo: ${reason}\nPnL: ${pnlSign}${pnlUsdt.toFixed(4)} USDT (${pnlSign}${pnlPct.toFixed(2)}%)`);
+    sendWhatsApp(
+      `🔴 ${botLabel} VENDA [${strategyId}] ${symbol}\nMotivo: ${reason}\nPnL: ${pnlSign}${pnlUsdt.toFixed(4)} USDT (${pnlSign}${pnlPct.toFixed(2)}%)`
+      + (exitReasonLines.length ? `\n\nFiltro de tendência na compra:\n${exitReasonLines.map(l => `• ${l}`).join('\n')}` : ''),
+    );
     return { phase: 'WATCHING' };
   }
 
@@ -331,14 +361,18 @@ function createTradeExecution({
         exit_reason: 'DUST',
         ...entrySignalFieldsFromState(state),
         ...exitSignalFields(exitResult),
-      });
+      }, log);
 
-      if (session) session.lastExitTime = exitTime;
+      const lastExitReason = exitResult?.reason ?? 'DUST';
+      if (session) {
+        session.lastExitTime = exitTime;
+        session.lastExitReason = lastExitReason;
+      }
       await saveState(rowId, {
         capital: est.capitalAfter, phase: 'WATCHING',
         buy_price: null, buy_qty: null, buy_usdt: null, buy_time: null, rsi_entry: null,
         entry_signal_time: null, entry_signal_price: null,
-        rules_state: postExitRulesState(exitTime),
+        rules_state: postExitRulesState(exitTime, { lastExitReason }),
       }, log);
 
       log(`${'─'.repeat(60)}`);
@@ -354,7 +388,7 @@ function createTradeExecution({
 
   return {
     saveState, insertTrade, hasOpenPosition, resetOrphanPosition,
-    parseRulesState, postExitRulesState, resolveLastExitTime,
+    parseRulesState, postExitRulesState, resolveLastExitTime, resolveLastExitReason,
     executeBuy, recordBuyFill, executeSell, recordBracketFill,
   };
 }
@@ -364,6 +398,7 @@ module.exports = {
   parseRulesState,
   postExitRulesState,
   resolveLastExitTime,
+  resolveLastExitReason,
   hasOpenPosition,
   entrySignalFields,
 };

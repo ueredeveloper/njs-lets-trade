@@ -645,6 +645,44 @@ function buildBotStatePatch(phase, { buyPrice, buyQty, buyTime, buyUsdt } = {}) 
   throw new Error('phase deve ser WATCHING ou BOUGHT');
 }
 
+// Fecha em rsi_multi_bot_trades o trade que uma venda MANUAL (botão "Vender" do painel —
+// ver MultitradeSellModal/MultitradePanel) está prestes a apagar de rsi_multi_bot_state.
+// Sem isso, `buildBotStatePatch('WATCHING')` zera buy_price/buy_qty e o trade desaparece
+// do histórico/PnL do favorito, mesmo tendo sido executado de verdade na corretora — mesmo
+// bug que faz o bot achar "posição órfã" quando a venda acontece fora do tick dele.
+// `sell` vem da resposta real da ordem (ver extractSellFill em MultitradePanel.jsx).
+async function recordManualSellTrade({ existing, fav, symbol, strategyId, sell, exitTime }) {
+  const buyPrice = existing.buy_price != null ? Number(existing.buy_price) : null;
+  const buyQty   = existing.buy_qty   != null ? Number(existing.buy_qty)   : null;
+  if (buyPrice == null || buyQty == null) return null;
+  const buyUsdt = existing.buy_usdt != null ? Number(existing.buy_usdt) : buyPrice * buyQty;
+
+  const exitPrice = Number(sell?.exitPrice);
+  const soldQty    = Number(sell?.soldQty);
+  const usdtOut    = Number.isFinite(Number(sell?.usdtOut)) ? Number(sell.usdtOut) : exitPrice * soldQty;
+  if (!Number.isFinite(exitPrice) || exitPrice <= 0 || !Number.isFinite(soldQty) || soldQty <= 0 || !Number.isFinite(usdtOut) || usdtOut <= 0) {
+    return null;
+  }
+
+  const capitalBefore = Number(existing.capital ?? fav.capital ?? 0);
+  const pnlUsdt  = usdtOut - buyUsdt;
+  const pnlPct   = capitalBefore > 0 ? (pnlUsdt / capitalBefore) * 100 : null;
+  const capitalAfter = capitalBefore + pnlUsdt;
+
+  const { error } = await supabase.from('rsi_multi_bot_trades').insert({
+    symbol, exchange: fav.exchange, strategy_id: strategyId,
+    entry_time: existing.buy_time, exit_time: exitTime,
+    entry_price: buyPrice, exit_price: exitPrice,
+    qty: soldQty, usdt_in: buyUsdt, usdt_out: usdtOut,
+    pnl_usdt: pnlUsdt, pnl_pct: pnlPct != null ? Number(pnlPct.toFixed(2)) : null,
+    capital_before: capitalBefore, capital_after: capitalAfter,
+    rsi_entry: existing.rsi_entry != null ? Number(existing.rsi_entry) : null,
+    exit_reason: 'MANUAL_SELL',
+  });
+  if (error) throw new Error(`falha ao gravar trade manual em rsi_multi_bot_trades: ${error.message}`);
+  return { capitalAfter };
+}
+
 // GET /services/sb/multitrade-favorites
 router.get('/multitrade-favorites', getUserId, async (req, res) => {
   const { data, error } = await supabase
@@ -811,6 +849,21 @@ router.patch('/multitrade-bot-state', getUserId, async (req, res) => {
   }
 
   try {
+    if (phase === 'WATCHING' && req.body.sell) {
+      const { data: existing } = await supabase
+        .from('rsi_multi_bot_state')
+        .select('id, phase, buy_price, buy_qty, buy_usdt, buy_time, capital, rsi_entry')
+        .eq('symbol', symbol)
+        .eq('strategy_id', strategyId)
+        .maybeSingle();
+      if (existing?.phase === 'BOUGHT') {
+        const result = await recordManualSellTrade({
+          existing, fav, symbol, strategyId, sell: req.body.sell,
+          exitTime: new Date().toISOString(),
+        });
+        if (result) patch.capital = result.capitalAfter;
+      }
+    }
     await upsertBotStatePatch(fav, symbol, strategyId, patch);
   } catch (error) {
     return sbError(res, error, 'PATCH multitrade-bot-state');

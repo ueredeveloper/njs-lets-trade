@@ -34,9 +34,9 @@ function computeBollingerSeries(candles, period, stdDev) {
 
 function getRequiredSpecs(config) {
   const entry = config.entry;
-  const cooldown = Math.max(0, Math.round(Number(entry.reentryCooldownCandles ?? 0)));
   const limitWait = Math.max(0, Math.round(Number(entry.limitWaitCandles ?? 0)));
-  const limit = entry.period * 3 + cooldown + limitWait + 30;
+  const cooldown = Math.max(0, Math.round(Number(entry.reentryCooldownCandles ?? 0)));
+  const limit = entry.period * 3 + limitWait + cooldown + 30;
   const specs = new Map([[entry.interval, limit]]);
 
   const add = (iv, lim) => specs.set(iv, Math.max(specs.get(iv) ?? 0, lim));
@@ -49,6 +49,12 @@ function getRequiredSpecs(config) {
 
   const slEma = config.stopLoss;
   if (slEma?.enabled && slEma.mode === 'ema') add(slEma.ema.interval, slEma.ema.period + 30);
+
+  const trend = entry.medianTrendFilter;
+  if (trend?.enabled) {
+    const lookback = Math.max(0, Math.round(Number(trend.lookback ?? 10)));
+    add(entry.interval, entry.period + lookback + 30);
+  }
 
   return [...specs.entries()].map(([interval, lim]) => ({ interval, limit: lim }));
 }
@@ -118,6 +124,41 @@ function checkEmaFilter(config, cMap, closePrice) {
 }
 
 /**
+ * Filtro de tendência da linha mediana (média) da própria Bollinger: pega os últimos
+ * `lookback` valores fechados da linha média e calcula a média das variações candle-a-candle
+ * entre eles. Média ≥ 0 → mediana em alta/estável, libera a compra. Média < 0 → mediana em
+ * baixa, bloqueia. `series` opcional reaproveita a série de BB já calculada em
+ * evaluateEntrySignal (mesmo period/stdDev/interval da entrada) pra não recomputar.
+ * Desligado (enabled=false) → sempre libera.
+ */
+function checkMedianTrendFilter(config, cMap, series) {
+  const trend = config.entry?.medianTrendFilter;
+  if (!trend?.enabled) return { allowed: true };
+
+  const lookback = Math.max(1, Math.round(Number(trend.lookback ?? 10)));
+  let bbSeries = series;
+  if (!bbSeries) {
+    const entry = config.entry;
+    const raw = cMap[entry.interval] ?? [];
+    const closed = closedCandlesOnly(raw);
+    bbSeries = computeBollingerSeries(closed, entry.period, entry.stdDev);
+  }
+  if (bbSeries.length < lookback + 1) {
+    return { allowed: false, reason: 'MEDIAN_TREND_NO_DATA', lookback };
+  }
+
+  const middles = bbSeries.slice(-(lookback + 1)).map(b => b.middle);
+  const diffs = [];
+  for (let i = 1; i < middles.length; i++) diffs.push(middles[i] - middles[i - 1]);
+  const avgDiff = diffs.reduce((a, b) => a + b, 0) / diffs.length;
+
+  if (avgDiff < 0) {
+    return { allowed: false, reason: 'MEDIAN_TREND_FALLING', avgDiff, lookback };
+  }
+  return { allowed: true, avgDiff, lookback };
+}
+
+/**
  * Sinal de entrada: a mínima do candle mais recente (ainda em formação — reage sem esperar
  * o fechamento) toca/rompe a banda inferior, calculada com candles JÁ FECHADOS.
  * entry.pullback desce esse gatilho pullback.belowPct% abaixo da banda — exige um repique
@@ -148,11 +189,21 @@ function evaluateEntrySignal(config, cMap) {
     };
   }
 
+  const signalOpenTime = Number(live.openTime);
+
+  const trendCheck = checkMedianTrendFilter(config, cMap, series);
+  if (!trendCheck.allowed) {
+    return {
+      allowed: false, reason: trendCheck.reason,
+      close: liveClose, lower: lastBb.lower, threshold, medianTrend: trendCheck, signalOpenTime,
+    };
+  }
+
   const emaCheck = checkEmaFilter(config, cMap, liveClose);
   if (!emaCheck.allowed) {
     return {
       allowed: false, reason: emaCheck.reason,
-      close: liveClose, lower: lastBb.lower, threshold, emaFilter: emaCheck,
+      close: liveClose, lower: lastBb.lower, threshold, emaFilter: emaCheck, signalOpenTime,
     };
   }
 
@@ -164,7 +215,7 @@ function evaluateEntrySignal(config, cMap) {
     return {
       allowed: false, reason: 'EMA_STOP_ABOVE_ENTRY',
       close: liveClose, lower: lastBb.lower, threshold,
-      emaStopFloor, emaFilter: emaCheck,
+      emaStopFloor, emaFilter: emaCheck, signalOpenTime,
     };
   }
 
@@ -175,7 +226,7 @@ function evaluateEntrySignal(config, cMap) {
     return {
       allowed: false, reason: 'BAND_STOP_ABOVE_ENTRY',
       close: liveClose, lower: lastBb.lower, threshold,
-      bandStopFloor, emaFilter: emaCheck,
+      bandStopFloor, emaFilter: emaCheck, signalOpenTime,
     };
   }
 
@@ -198,6 +249,7 @@ function evaluateEntrySignal(config, cMap) {
     lower: lastBb.lower, middle: lastBb.middle, upper: lastBb.upper,
     threshold,
     emaFilter: emaCheck,
+    medianTrend: trendCheck,
     emaStopFloor,
     signalOpenTime: Number(live.openTime),
     entryDesc,
@@ -326,36 +378,6 @@ function evaluateExit(config, cMap, entryPrice, opts = {}) {
 }
 
 /**
- * Cooldown pós-saída em candles do intervalo da BB (entry.interval). Conta quantos
- * candles JÁ FECHADOS abriram depois de lastExitTime; precisa de
- * entry.reentryCooldownCandles pra liberar nova compra (aí evaluateEntrySignal roda
- * a análise completa de novo). Sem lastExitTime ou com cooldown 0 → libera.
- */
-function checkReentryCooldown(config, cMap, lastExitTime) {
-  const need = Math.max(0, Math.round(Number(config.entry?.reentryCooldownCandles ?? 0)));
-  if (need <= 0 || !lastExitTime) {
-    return { waiting: false, need, have: 0, remain: 0 };
-  }
-  const exitMs = new Date(lastExitTime).getTime();
-  if (!Number.isFinite(exitMs)) {
-    return { waiting: false, need, have: 0, remain: 0 };
-  }
-
-  const iv = config.entry.interval;
-  const closed = closedCandlesOnly(cMap[iv] ?? []);
-  const have = closed.filter(c => Number(c.openTime) >= exitMs).length;
-  const remain = Math.max(0, need - have);
-  return {
-    waiting: remain > 0,
-    need,
-    have,
-    remain,
-    interval: iv,
-    reason: remain > 0 ? 'REENTRY_COOLDOWN' : null,
-  };
-}
-
-/**
  * Ordem limite resting (armada no toque da BB): expirou depois de
  * entry.limitWaitCandles candles fechados com openTime >= signalOpenTime?
  */
@@ -379,6 +401,81 @@ function checkEntryLimitExpired(config, cMap, entryLimit) {
   };
 }
 
+/**
+ * Cooldown pós-STOP_LOSS em candles do intervalo da BB (entry.interval). Conta quantos
+ * candles JÁ FECHADOS abriram depois de lastExitTime; precisa de
+ * entry.reentryCooldownCandles pra liberar nova compra. Só aplica quando
+ * lastExitReason === 'STOP_LOSS' — saída no alvo (BB_UPPER_TARGET) libera na hora.
+ * Sem lastExitTime / cooldown 0 / outro motivo → libera.
+ */
+function checkReentryCooldown(config, cMap, lastExitTime, lastExitReason) {
+  const need = Math.max(0, Math.round(Number(config.entry?.reentryCooldownCandles ?? 0)));
+  if (need <= 0 || !lastExitTime || lastExitReason !== 'STOP_LOSS') {
+    return { waiting: false, need, have: 0, remain: 0 };
+  }
+  const exitMs = new Date(lastExitTime).getTime();
+  if (!Number.isFinite(exitMs)) {
+    return { waiting: false, need, have: 0, remain: 0 };
+  }
+
+  const iv = config.entry.interval;
+  const closed = closedCandlesOnly(cMap[iv] ?? []);
+  const have = closed.filter(c => Number(c.openTime) >= exitMs).length;
+  const remain = Math.max(0, need - have);
+  return {
+    waiting: remain > 0,
+    need,
+    have,
+    remain,
+    interval: iv,
+    reason: remain > 0 ? 'REENTRY_COOLDOWN' : null,
+  };
+}
+
+// Ordem fixa de checagem em evaluateEntrySignal: toque na banda → mediana → EMA → stop
+// (ema ou band, mutuamente exclusivos conforme stopLoss.mode). Usado só pra descrever, em
+// texto, quais filtros já haviam passado quando um sinal quase entrou mas foi barrado —
+// notificação de "sinal possível" no bot (ver bollinger-bands-bot.js).
+const NEAR_MISS_FILTER_LABELS = {
+  bbTouch: 'Toque na banda inferior',
+  medianTrend: 'Tendência da mediana da BB',
+  emaFilter: 'Filtro EMA de tendência',
+  emaStop: 'Stop EMA acima da entrada',
+  bandStop: 'Stop banda acima da entrada',
+};
+// emaStop/bandStop são alternativos (dependem de stopLoss.mode, nunca os dois na mesma
+// avaliação) — por isso ficam fora da ordem sequencial: qualquer um dos dois só é alcançado
+// depois que os três filtros de NEAR_MISS_BASE_ORDER já passaram.
+const NEAR_MISS_BASE_ORDER = ['bbTouch', 'medianTrend', 'emaFilter'];
+const NEAR_MISS_REASON_TO_FILTER = {
+  MEDIAN_TREND_NO_DATA: 'medianTrend',
+  MEDIAN_TREND_FALLING: 'medianTrend',
+  EMA_FILTER_NO_MA: 'emaFilter',
+  EMA_FILTER_BELOW: 'emaFilter',
+  EMA_FILTER_NO_SLOPE: 'emaFilter',
+  EMA_FILTER_FALLING: 'emaFilter',
+  EMA_STOP_ABOVE_ENTRY: 'emaStop',
+  BAND_STOP_ABOVE_ENTRY: 'bandStop',
+};
+
+/**
+ * Descreve, pra fins de notificação, um sinal que tocou a banda inferior (passou o gatilho
+ * básico da estratégia) mas foi barrado por um dos filtros seguintes — quais filtros já
+ * haviam passado até ali e qual barrou. Retorna null para os motivos que nem chegam a tocar
+ * a banda (BB_LOWER_NOT_TOUCHED, INSUFFICIENT_DATA, NO_BANDS): não são "sinal possível".
+ */
+function describeNearMiss(reason) {
+  const failedKey = NEAR_MISS_REASON_TO_FILTER[reason];
+  if (!failedKey) return null;
+  const baseIdx = NEAR_MISS_BASE_ORDER.indexOf(failedKey);
+  // baseIdx === -1 → falhou no stop (emaStop/bandStop), depois dos três filtros de base.
+  const passedKeys = baseIdx >= 0 ? NEAR_MISS_BASE_ORDER.slice(0, baseIdx) : NEAR_MISS_BASE_ORDER;
+  return {
+    passed: passedKeys.map(k => NEAR_MISS_FILTER_LABELS[k]),
+    failed: NEAR_MISS_FILTER_LABELS[failedKey],
+  };
+}
+
 module.exports = {
   intervalMs,
   closedCandlesOnly,
@@ -386,13 +483,15 @@ module.exports = {
   getRequiredSpecs,
   emaSlopePct,
   checkEmaFilter,
+  checkMedianTrendFilter,
   evaluateEntrySignal,
   evaluateExit,
-  checkReentryCooldown,
   checkEntryLimitExpired,
+  checkReentryCooldown,
   computeBracketPrices,
   computeStopPrice,
   computeEmaStopFloorRaw,
   computeBandStopFloorRaw,
   computeStopLossFloor,
+  describeNearMiss,
 };

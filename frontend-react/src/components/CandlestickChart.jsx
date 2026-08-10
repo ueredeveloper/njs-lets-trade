@@ -12,7 +12,6 @@ import CandlestickChartLW from './CandlestickChartLW';
 import convertOpenTime from '../utils/convertOpenTime';
 import Tooltip from './Tooltip';
 import { useIsMobile } from '../hooks/useIsMobile';
-import { useIsNotebook } from '../hooks/useIsNotebook';
 import { DEFAULT_OVERLAY_SLOTS, DEFAULT_ACTIVE_INDICATORS, BB_PERIOD_OPTIONS, BB_STDDEV_OPTIONS, DEFAULT_SR_INTERVAL, DEFAULT_PPHL_INTERVAL, DEFAULT_CHOP_INTERVAL, DEFAULT_COMMON_CHART_INTERVALS } from '../utils/uiPreferences';
 import { CHART_VIEW, INTERVAL_MS, computeZoomWindow, buildFixedDataZoom, buildInsideDataZoom, computeCandleLimitFromTime, isTradePanelChartView, computeManualWheelZoom } from '../utils/chartView';
 import { simulateBbTouchPath, pairBbPathCycles } from '../utils/bollingerTouchPath';
@@ -60,6 +59,7 @@ const C_DOWN = '#ef5350';
 // BB: slate — distinto das EMAs (9 fúcsia, 21 laranja, 50 ciano, 200 âmbar)
 const BB_COLOR = '#94a3b8';
 const BB_PATH_COLOR = '#64748b';
+const MEDIAN_TREND_COLOR = '#38bdf8';
 
 const INDICATOR_GROUPS = [
   { id: 'ma9',      label: 'EMA9',   color: '#e879f9', tipKey: 'chart.tip.sma9' },
@@ -275,8 +275,10 @@ async function fetchBollingerOverlayPoints(symbol, interval, period, stdDev, sou
   });
 }
 
-const BB_PATH_CLOUD_UP = 'rgba(38,166,154,0.22)';
-const BB_PATH_CLOUD_DOWN = 'rgba(239,83,80,0.22)';
+const BB_PATH_UP = '#9C27B0';
+const BB_PATH_DOWN = '#FFC107';
+const BB_PATH_CLOUD_UP = 'rgba(156,39,176,0.22)';
+const BB_PATH_CLOUD_DOWN = 'rgba(255,193,7,0.22)';
 
 /**
  * PATH BB: só liga entrada→saída (não liga saída→próxima entrada). Nuvem entre a
@@ -316,7 +318,7 @@ function buildBbTouchPathSeries(pathNodes, candlesticks, DL, LEFT_PAD, RIGHT_PAD
     if (!a || !b || a.x === b.x) return;
 
     const isUp = b.price >= a.price;
-    const color = isUp ? C_UP : C_DOWN;
+    const color = isUp ? BB_PATH_UP : BB_PATH_DOWN;
     const fill = isUp ? BB_PATH_CLOUD_UP : BB_PATH_CLOUD_DOWN;
     const x0 = Math.min(a.x, b.x);
     const x1 = Math.max(a.x, b.x);
@@ -343,14 +345,6 @@ function buildBbTouchPathSeries(pathNodes, candlesticks, DL, LEFT_PAD, RIGHT_PAD
     const pnl = cycle.exit.pnlPct;
     const hasPnl = Number.isFinite(pnl);
     const labelExit = hasPnl ? `${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}%` : '';
-    markerData[a.x] = {
-      value: a.price,
-      itemStyle: { color },
-      label: {
-        show: true, formatter: 'B', color: '#fff', backgroundColor: color,
-        padding: [2, 4], borderRadius: 2, fontSize: 8, fontWeight: 'bold', position: 'bottom',
-      },
-    };
     markerData[b.x] = {
       value: b.price,
       itemStyle: { color },
@@ -744,7 +738,7 @@ const INDICATOR_TILE_ROWS = 2;
 
 const BANDS_COL_SPAN = 4;
 
-const BOLLINGER_ROW_SPAN = 3;
+const BOLLINGER_ROW_SPAN = 4;
 
 const INTERVAL_PICKER_ROW_SPAN = 1;
 
@@ -759,19 +753,23 @@ function quickEmaRowSpan(groups) {
   return Math.max(1, groups.length * QUICK_EMA_GROUP_ROWS + addRow);
 }
 
-function renderBollingerTile(dims, t, bollingerBands, setBollingerBands, bbPathEnabled, setBbPathEnabled) {
+function renderBollingerTile(
+  dims, t, bollingerBands, setBollingerBands, bbPathEnabled, setBbPathEnabled,
+  medianTrendEnabled, setMedianTrendEnabled,
+) {
   const innerW = dims.w - PANEL_TILE_PAD * 2;
   const innerH = dims.h - PANEL_TILE_PAD * 2;
-  const rowH = (innerH - PANEL_GAP * 2) / 3;
+  const rowH = (innerH - PANEL_GAP * 3) / 4;
   const halfDims = { w: (innerW - PANEL_GAP) / 2, h: rowH };
   const rowDims = { w: innerW, h: rowH };
   const color = BB_COLOR;
   const pathColor = BB_PATH_COLOR;
+  const trendColor = MEDIAN_TREND_COLOR;
   return (
     <div style={{
       display: 'grid',
       gridTemplateColumns: '1fr 1fr',
-      gridTemplateRows: 'repeat(3, 1fr)',
+      gridTemplateRows: 'repeat(4, 1fr)',
       gap: PANEL_GAP,
       width: innerW,
       height: innerH,
@@ -836,6 +834,17 @@ function renderBollingerTile(dims, t, bollingerBands, setBollingerBands, bbPathE
             style={panelBtn(bbPathEnabled, pathColor, false, halfDims)}
           >
             {bbPathEnabled ? 'PATH ON' : 'PATH'}
+          </button>
+        </PanelTip>
+      </div>
+      <div style={{ gridColumn: '1 / span 2', gridRow: '4', display: 'flex', alignItems: 'stretch' }}>
+        <PanelTip text={t('chart.tip.bb_median_trend')}>
+          <button
+            type="button"
+            onClick={() => setMedianTrendEnabled(v => !v)}
+            style={panelBtn(medianTrendEnabled, trendColor, false, rowDims)}
+          >
+            {medianTrendEnabled ? 'TENDÊNCIA ON' : 'TENDÊNCIA MEDIANA'}
           </button>
         </PanelTip>
       </div>
@@ -1393,6 +1402,8 @@ function ChartIndicatorPanel({
   setBollingerBands,
   bbPathEnabled,
   setBbPathEnabled,
+  medianTrendEnabled,
+  setMedianTrendEnabled,
   srInterval,
   setSrInterval,
   pphlInterval,
@@ -1621,7 +1632,10 @@ function ChartIndicatorPanel({
                 width: `${(tile.colSpan / PANEL_GRID_COLS) * 100}%`,
               }}
             >
-              {tile.kind === 'bb' && renderBollingerTile(tile.dims, t, bollingerBands, setBollingerBands, bbPathEnabled, setBbPathEnabled)}
+              {tile.kind === 'bb' && renderBollingerTile(
+                tile.dims, t, bollingerBands, setBollingerBands, bbPathEnabled, setBbPathEnabled,
+                medianTrendEnabled, setMedianTrendEnabled,
+              )}
               {tile.kind === 'srInterval' && renderIntervalPickerTile(tile.dims, t, 'chart.tip.sr_interval', 'S/R', '#facc15', srInterval, setSrInterval)}
               {tile.kind === 'pphlInterval' && renderIntervalPickerTile(tile.dims, t, 'chart.tip.pphl_interval', 'PPHL', '#2dd4bf', pphlInterval, setPphlInterval)}
               {tile.kind === 'chopInterval' && renderIntervalPickerTile(tile.dims, t, 'chart.tip.chop_interval', 'CHOP', '#f59e0b', chopInterval, setChopInterval)}
@@ -2817,6 +2831,9 @@ export default function CandlestickChart() {
   const [bollingerBands, setBollingerBands] = useState(() => ({ ...uiPrefs.bollingerBandsDefaults }));
   // Trajetória teórica lower→upper (simulada no intervalo da BB) — toggle local da sessão do chart.
   const [bbPathEnabled, setBbPathEnabled] = useState(false);
+  // Filtro de tendência da mediana da BB (linha verde/vermelha nos 10 candles antes de cada
+  // toque na banda inferior) — mesmo cálculo do bot bollinger-bands (checkMedianTrendFilter).
+  const [medianTrendEnabled, setMedianTrendEnabled] = useState(false);
   // Overlay de Bollinger pedido pela aba Estatísticas (clique numa linha da lista) — sobrescreve
   // período/desvio/intervalo locais pelos usados no cálculo daquela ocorrência e liga o overlay.
   useEffect(() => {
@@ -2856,9 +2873,13 @@ export default function CandlestickChart() {
   const [vwapCache, setVwapCache] = useState({});
   const [_vwapLoading, setVwapLoading] = useState(false);
   const [panelCollapsed, setPanelCollapsed] = useState(true);
-  const isNotebook = useIsNotebook();
   const [candleFetchLimit, setCandleFetchLimit] = useState(DEFAULT_CANDLE_LIMIT);
   const [displayCandleCount, setDisplayCandleCount] = useState(DEFAULT_DISPLAY_CANDLE_COUNT);
+  // Último preset da toolbar (10/20/40/80/160/320) escolhido explicitamente pelo usuário — ao
+  // contrário de displayCandleCount, NÃO muda quando "carregar mais" (+500/+1000) é usado, pra
+  // esse carregamento extra ficar restrito à moeda atual em vez de "vazar" pra próxima moeda
+  // selecionada (ver lastPresetCandleCount abaixo).
+  const [lastPresetCandleCount, setLastPresetCandleCount] = useState(DEFAULT_DISPLAY_CANDLE_COUNT);
   const [hasExplicitCandleWindow, setHasExplicitCandleWindow] = useState(true);
   const [loadingMoreCandles, setLoadingMoreCandles] = useState(false);
   const [measureMode, setMeasureMode] = useState(false);
@@ -2927,32 +2948,42 @@ export default function CandlestickChart() {
       }
       return;
     }
-    // Favoritos TX e VWAP Bands/MA-Cross mostram vendas/sinais antigos — mantêm os 160 candles
-    // buscados visíveis por padrão (não entram na padronização de 80 candles abaixo).
-    if (chartViewSource === CHART_VIEW.TRADES || isTradePanelChartView(chartViewSource)) {
-      // Favorito TX em notebook: os 160 candles buscados (ver TX_CANDLE_LIMIT em CurrencyTable.jsx)
-      // ficam finos demais numa tela estreita — foca só nos 80 mais recentes por padrão (os 80
-      // mais antigos continuam disponíveis arrastando pra trás, ver onNeedOlderCandles). No PC
-      // (tela larga o bastante pra caber os 160 com folga) mantém o comportamento padrão.
-      if (chartViewSource === CHART_VIEW.TRADES && isNotebook) {
-        setCandleFetchLimit(DEFAULT_CANDLE_LIMIT);
-        setDisplayCandleCount(DEFAULT_DISPLAY_CANDLE_COUNT);
-        setHasExplicitCandleWindow(true);
-        return;
-      }
-      setCandleFetchLimit(DEFAULT_CANDLE_LIMIT);
-      setDisplayCandleCount(LIMIT);
-      setHasExplicitCandleWindow(false);
-      return;
-    }
-    // Filtros e favoritos comuns (Favoritos|Novas|Gate, Mercado|3M, NB, NG etc.): busca os 160
-    // candles padrão mas mostra só os 80 mais recentes — os demais ficam disponíveis arrastando
-    // pra trás ou pelos presets da toolbar (20/40/80/160/320).
+    // Qualquer outra seleção (filtro, favorito comum, TX, VWAP Bands/MA-Cross sem zoom
+    // específico): busca os 160 candles padrão — o suficiente pra TX/VWAP Bands terem
+    // marcadores/sinais antigos disponíveis arrastando o gráfico pra trás. A janela VISÍVEL
+    // volta pro último preset da toolbar (10/20/40/80/160/320) que o usuário escolheu
+    // explicitamente — "carregar mais" (+500/+1000) é uma busca funda só da moeda atual e não
+    // deve "vazar" pra próxima moeda selecionada.
     setCandleFetchLimit(DEFAULT_CANDLE_LIMIT);
-    setDisplayCandleCount(DEFAULT_DISPLAY_CANDLE_COUNT);
+    setDisplayCandleCount(lastPresetCandleCount);
     setHasExplicitCandleWindow(true);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedChart?.symbol, selectedChart?.interval, chartViewSource, multitradeChartFocus?.candleLimit, chartCandleWindowReset, isNotebook]);
+  }, [selectedChart?.symbol, selectedChart?.interval, chartViewSource, multitradeChartFocus?.candleLimit, chartCandleWindowReset, lastPresetCandleCount]);
+
+  // A moeda recém-selecionada só vem com a busca padrão (DEFAULT_CANDLE_LIMIT=160) — se o
+  // preset ativo pede mais candles que isso (320, por ex.), completa a busca automaticamente
+  // aqui, senão a moeda nova "não sabe" quantos candles mostrar e a janela visível fica presa
+  // ao que veio na busca padrão.
+  useEffect(() => {
+    if (!hasExplicitCandleWindow || !selectedChart?.symbol) return undefined;
+    const currentLen = selectedChart.candlesticks?.length ?? 0;
+    if (displayCandleCount <= currentLen || displayCandleCount <= candleFetchLimit) return undefined;
+    let cancelled = false;
+    (async () => {
+      setLoadingMoreCandles(true);
+      try {
+        const data = await fetchCandlesticksAndCloud(
+          selectedChart.symbol, selectedChart.interval ?? currentInterval, selectedChart.source ?? null, displayCandleCount,
+        );
+        if (cancelled) return;
+        setSelectedChart(data);
+        setCandleFetchLimit(displayCandleCount);
+      } finally {
+        if (!cancelled) setLoadingMoreCandles(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [selectedChart?.symbol, selectedChart?.interval, selectedChart?.source, selectedChart?.candlesticks?.length, displayCandleCount, hasExplicitCandleWindow, candleFetchLimit, currentInterval]);
 
   // Refs pra checar "fetch em andamento" de dentro do setInterval sem precisar recriá-lo
   // a cada toggle de loading (o timer só precisa reiniciar quando símbolo/intervalo/limite mudam).
@@ -3057,6 +3088,31 @@ export default function CandlestickChart() {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasForcedBollinger, multitradeChartFocus?.bollingerOverride, chartViewSource, chartZoom?.bollinger]);
+
+  // Na primeira renderização, desliga qualquer indicador que tenha ficado ativo de uma sessão
+  // anterior (persistido em localStorage) — o gráfico sempre abre limpo. Precisa rodar DEPOIS
+  // dos efeitos "favorito vwap-bands"/"favorito bollinger-bands" acima: eles também copiam
+  // uiPrefs.vwapDefaults/bollingerBandsDefaults pro estado local no mount (ramo `else`), e como
+  // todo useEffect do primeiro commit ainda lê o uiPrefs "velho" (a limpeza abaixo só é
+  // aplicada no PRÓXIMO render), rodar antes deste ponto perdia a corrida — o valor antigo
+  // (enabled: true) sobrescrevia de volta por cima da limpeza. Ficando depois, esta é a
+  // última escrita do commit e vence.
+  useEffect(() => {
+    if (activeIndicators.length) setActiveIndicatorsPreference([]);
+    if (bollingerBands.enabled) {
+      setBollingerBands((prev) => ({ ...prev, enabled: false }));
+      setBollingerBandsDefaults({ enabled: false });
+    }
+    if (vwap.enabled) {
+      setVwap((prev) => ({ ...prev, enabled: false }));
+      setVwapDefaults({ enabled: false });
+    }
+    if (vwapSlopeHighlightOn) {
+      setVwapSlopeHighlightOn(false);
+      setVwapSlopeHighlightDefault({ enabled: false });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Favorito bollinger-bands com o filtro de tendência EMA ligado: sincroniza um grupo Quick
   // EMA (painel manual do gráfico, TRADE_EMA_GROUP_ID) com o período/intervalo/variação
@@ -3300,10 +3356,11 @@ export default function CandlestickChart() {
   }, [quickEmaGroups, selectedChart?.symbol, selectedChart?.source, selectedChart?.interval, selectedChart?.candlesticks, currentInterval, overlayFetchLimit, displayCandleCount, chartCandleWindowReset]);
 
   // Busca a série de Bandas de Bollinger (upper/middle/lower) — período/intervalo próprios, como MA1/MA2.
-  // Também busca com PATH ligado (mesmo sem as linhas BB), pra simular toques lower→upper.
+  // Também busca com PATH ou o filtro de tendência da mediana ligados (mesmo sem as linhas BB),
+  // pra simular toques lower→upper / calcular a tendência da linha mediana.
   useEffect(() => {
     const bbNeeded = chartPanelButtons.bb !== false
-      && (bollingerBands.enabled || bbPathEnabled);
+      && (bollingerBands.enabled || bbPathEnabled || medianTrendEnabled);
     if (!selectedChart?.symbol || !bbNeeded) {
       setBollingerLoading(false);
       return undefined;
@@ -3368,7 +3425,7 @@ export default function CandlestickChart() {
     selectedChart?.symbol, selectedChart?.interval, selectedChart?.source, selectedChart?.candlesticks,
     currentInterval, overlayFetchLimit, displayCandleCount, chartPanelButtons.bb,
     bollingerBands.enabled, bollingerBands.period, bollingerBands.stdDev, bollingerBands.interval,
-    bbPathEnabled,
+    bbPathEnabled, medianTrendEnabled,
   ]);
 
   // Busca as zonas de Suporte/Resistência — intervalo próprio (independente do gráfico), como a Bollinger.
@@ -3634,14 +3691,15 @@ export default function CandlestickChart() {
         setDisplayCandleCount(limit);
         setHasExplicitCandleWindow(true);
       } else if (chartViewSource === CHART_VIEW.TRADES || isTradePanelChartView(chartViewSource)) {
-        // TX e VWAP Bands/MA-Cross continuam mostrando os 160 candles ao trocar de intervalo.
+        // TX e VWAP Bands/MA-Cross: busca mais candles (LIMIT) pra manter marcadores/sinais
+        // antigos disponíveis arrastando o gráfico pra trás, mas a janela visível respeita a
+        // quantidade de velas (displayCandleCount) que o usuário já tinha escolhido.
         setCandleFetchLimit(DEFAULT_CANDLE_LIMIT);
-        setDisplayCandleCount(LIMIT);
-        setHasExplicitCandleWindow(false);
+        setHasExplicitCandleWindow(true);
       } else {
-        // Filtros e favoritos comuns: mantém o padrão de 80 candles visíveis ao trocar de intervalo.
+        // Filtros e favoritos comuns: mantém a quantidade de velas visíveis (displayCandleCount)
+        // que o usuário já tinha escolhido — trocar de intervalo não deve voltar pro padrão de 80.
         setCandleFetchLimit(DEFAULT_CANDLE_LIMIT);
-        setDisplayCandleCount(DEFAULT_DISPLAY_CANDLE_COUNT);
         setHasExplicitCandleWindow(true);
       }
       const data = await fetchCandlesticksAndCloud(
@@ -3691,6 +3749,7 @@ export default function CandlestickChart() {
     if (!selectedChart?.symbol || !selectedChart?.candlesticks?.length) return;
     setChartZoom(null);
     setDisplayCandleCount(n);
+    setLastPresetCandleCount(n);
     setHasExplicitCandleWindow(true);
     const currentLen = selectedChart.candlesticks.length;
     if (n > currentLen && n > candleFetchLimit) {
@@ -4125,17 +4184,20 @@ export default function CandlestickChart() {
   const chartBollingerConfig = useMemo(() => {
     const linesOn = bollingerBands.enabled && chartPanelButtons.bb !== false;
     const pathOn = bbPathEnabled && chartPanelButtons.bb !== false;
-    if (!linesOn && !pathOn) return null;
+    const medianTrendOn = medianTrendEnabled && chartPanelButtons.bb !== false;
+    if (!linesOn && !pathOn && !medianTrendOn) return null;
     const key = `${bollingerBands.period}-${bollingerBands.stdDev}-${bollingerBands.interval}`;
     return {
       enabled: linesOn,
       showPath: pathOn,
+      showMedianTrend: medianTrendOn,
+      medianTrendLookback: 10,
       period: bollingerBands.period,
       stdDev: bollingerBands.stdDev,
       interval: bollingerBands.interval,
       points: bollingerCache[key] ?? [],
     };
-  }, [bollingerBands, bollingerCache, chartPanelButtons.bb, bbPathEnabled]);
+  }, [bollingerBands, bollingerCache, chartPanelButtons.bb, bbPathEnabled, medianTrendEnabled]);
 
   const chartSrConfig = useMemo(() => {
     if (!srShown) return null;
@@ -4329,7 +4391,12 @@ export default function CandlestickChart() {
               ? LAST_CANDLE_PRESETS
               : LAST_CANDLE_PRESETS.filter((n) => COMMON_CANDLE_PRESETS.includes(n) || (hasExplicitCandleWindow && displayCandleCount === n))
             ).map((n) => {
-              const active = hasExplicitCandleWindow && displayCandleCount === n && !chartZoom;
+              // Mesmo critério de "o zoom manda mais que o preset" usado em displayLimit acima:
+              // fora de Estatísticas/Multi-Trade um chartZoom perdido (ex.: sobra de navegação
+              // anterior) não afeta o que é renderizado, então não pode apagar o destaque do botão.
+              const zoomOverridesWindow = chartZoom
+                && (isTradePanelChartView(chartViewSource) || chartViewSource === CHART_VIEW.STATISTICS);
+              const active = hasExplicitCandleWindow && displayCandleCount === n && !zoomOverridesWindow;
               return (
                 <button
                   key={n}
@@ -4437,6 +4504,8 @@ export default function CandlestickChart() {
             setBollingerBands={setBollingerBands}
             bbPathEnabled={bbPathEnabled}
             setBbPathEnabled={setBbPathEnabled}
+            medianTrendEnabled={medianTrendEnabled}
+            setMedianTrendEnabled={setMedianTrendEnabled}
             srInterval={srInterval}
             setSrInterval={setSrInterval}
             pphlInterval={pphlInterval}
@@ -4513,6 +4582,8 @@ export default function CandlestickChart() {
             setBollingerBands={setBollingerBands}
             bbPathEnabled={bbPathEnabled}
             setBbPathEnabled={setBbPathEnabled}
+            medianTrendEnabled={medianTrendEnabled}
+            setMedianTrendEnabled={setMedianTrendEnabled}
             srInterval={srInterval}
             setSrInterval={setSrInterval}
             pphlInterval={pphlInterval}

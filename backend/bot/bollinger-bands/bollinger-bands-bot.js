@@ -28,7 +28,7 @@ const { resolveStrategy } = require('./tradeConfigSchema');
 const { STRATEGY_IDS, isBollingerBandsStrategy } = require('./strategyPresets');
 const {
   getRequiredSpecs, evaluateEntrySignal, evaluateExit, computeBracketPrices, computeStopLossFloor,
-  checkReentryCooldown, checkEntryLimitExpired,
+  checkEntryLimitExpired, checkMedianTrendFilter, checkReentryCooldown, describeNearMiss,
 } = require('./strategyEngine');
 
 // Componentes genéricos (compra/venda/execução), compartilhados com os outros bots de
@@ -36,9 +36,43 @@ const {
 const { buildAdapter, syncExchangeClocks } = require('../shared/buildAdapter');
 const { sbReq } = require('../shared/supabaseRest');
 const { createTradeExecution } = require('../shared/tradeExecution');
+const { sendWhatsApp } = require('../whatsapp');
 
 const BOT_LABEL = 'BOLLINGER-BANDS';
 const VOL_CACHE_MS = 5 * 60_000;
+
+// ── Notificação de "sinal possível" (tocou a banda, mas barrado por um filtro) ─────────────
+// Manda em lote de NEAR_MISS_BATCH_SIZE pra não inundar o WhatsApp — cada toque na banda que
+// falhar no mesmo candle (mesmo signalOpenTime) só entra na fila uma vez.
+const NEAR_MISS_BATCH_SIZE = 5;
+const nearMissQueue = [];
+const lastNearMissByKey = new Map(); // `${symbol}|${strategyId}` -> signalOpenTime já registrado
+
+function fmtBRTDateTime(ms) {
+  const d = Number.isFinite(ms) ? new Date(ms) : new Date();
+  return d.toLocaleString('pt-BR', {
+    timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+  }).replace(',', '');
+}
+
+function flushNearMissQueue() {
+  const batch = nearMissQueue.splice(0, nearMissQueue.length);
+  if (!batch.length) return;
+  const blocks = batch.map((e, i) => (
+    `${i + 1}) ${e.symbol} [${e.interval}] ${fmtBRTDateTime(e.time)}\n`
+    + `   ✅ Passou: ${e.passed.length ? e.passed.join(', ') : '—'}\n`
+    + `   ❌ Não passou: ${e.failed}`
+  ));
+  sendWhatsApp(`🟡 ${BOT_LABEL} — ${batch.length} sinais possíveis sem confirmação\n\n${blocks.join('\n\n')}`);
+}
+
+function recordNearMiss({ symbol, strategyId, interval, time, passed, failed }) {
+  const key = `${symbol}|${strategyId}`;
+  if (lastNearMissByKey.get(key) === time) return; // já registrado nesse mesmo candle
+  lastNearMissByKey.set(key, time);
+  nearMissQueue.push({ symbol, interval, time, passed, failed });
+  if (nearMissQueue.length >= NEAR_MISS_BATCH_SIZE) flushNearMissQueue();
+}
 
 // ── Logging ───────────────────────────────────────────────────────────────────
 const BOT_DIR = path.join(__dirname, '../../data/bot');
@@ -87,22 +121,65 @@ function fmtPrice(n) {
   return x.toFixed(2);
 }
 
+/** Descreve a tendência da mediana da BB no momento da compra (mesmo filtro de
+ *  entry.medianTrendFilter — ver checkMedianTrendFilter em strategyEngine.js). `avgDiffPct`
+ *  é a variação candle-a-candle da linha mediana, normalizada pelo preço, pra ficar legível
+ *  independente da escala do ativo. Retorna null se o filtro estiver desligado ou sem dados
+ *  (ex.: sinal preenchido pelo fallback do reteste, sem entryMeta completo). */
+function medianTrendDesc(trend) {
+  if (!trend || trend.avgDiff == null) return null;
+  const dir = trend.avgDiff >= 0 ? '📈 subindo/estável' : '📉 caindo';
+  const pctPart = trend.avgDiffPct != null
+    ? `${trend.avgDiffPct >= 0 ? '+' : ''}${trend.avgDiffPct.toFixed(3)}%/candle, `
+    : '';
+  return `${dir} (${pctPart}lookback ${trend.lookback})`;
+}
+
 function buildEntryReasonLines(config, entryMeta) {
-  return [`${entryMeta.entryDesc} @ ${fmtPrice(entryMeta.close)}`];
+  const lines = [`${entryMeta.entryDesc} @ ${fmtPrice(entryMeta.close)}`];
+  if (config.entry?.medianTrendFilter?.enabled) {
+    const avgDiffPct = entryMeta.middle ? (entryMeta.medianTrend?.avgDiff / entryMeta.middle) * 100 : null;
+    const desc = medianTrendDesc({ ...entryMeta.medianTrend, avgDiffPct });
+    if (desc) lines.push(`Tendência mediana BB: ${desc}`);
+  }
+  return lines;
+}
+
+/** Espelha no log/WhatsApp de VENDA a tendência da mediana que estava vigente na COMPRA
+ *  (snapshot gravado em rules_state.entryMedianTrend por extraInitialRulesState abaixo) —
+ *  contexto de "a tendência que liberou essa entrada era essa" na hora de revisar o trade. */
+function buildExitReasonLines(config, state) {
+  if (!config.entry?.medianTrendFilter?.enabled) return [];
+  const trend = parseRulesState(state).entryMedianTrend;
+  const desc = medianTrendDesc(trend);
+  return desc ? [`Tendência mediana BB na compra: ${desc}`] : [];
 }
 
 // executeBuy/executeSell/saveState/hasOpenPosition/resetOrphanPosition/parseRulesState são
-// genéricos — ver backend/bot/shared/tradeExecution.js. Sem extraInitialRulesState: alvo e
-// stop são recalculados ao vivo a cada tick (computeBracketPrices), não há "degrau" pra
-// lembrar entre ticks como no vwap-bands.
+// genéricos — ver backend/bot/shared/tradeExecution.js.
 const {
   saveState, hasOpenPosition, resetOrphanPosition,
   parseRulesState, executeBuy, executeSell, recordBracketFill, recordBuyFill,
-  resolveLastExitTime,
+  resolveLastExitTime, resolveLastExitReason,
 } = createTradeExecution({
   botLabel: BOT_LABEL,
   buildReasonLines: buildEntryReasonLines,
+  buildExitReasonLines,
   computeStopLossFloor,
+  // Alvo e stop continuam recalculados ao vivo a cada tick (computeBracketPrices) — não há
+  // "degrau" pra lembrar entre ticks como no vwap-bands. Só o snapshot da tendência mediana
+  // na compra precisa sobreviver até a venda, pra aparecer na mensagem de VENDA.
+  extraInitialRulesState: ({ config, entryMeta }) => {
+    if (!config.entry?.medianTrendFilter?.enabled || entryMeta?.medianTrend?.avgDiff == null) return null;
+    const avgDiffPct = entryMeta.middle ? (entryMeta.medianTrend.avgDiff / entryMeta.middle) * 100 : null;
+    return {
+      entryMedianTrend: {
+        avgDiff: entryMeta.medianTrend.avgDiff,
+        avgDiffPct,
+        lookback: entryMeta.medianTrend.lookback,
+      },
+    };
+  },
 });
 
 /**
@@ -205,6 +282,15 @@ async function tick(rowId, adapter, strategy, log, session) {
 
   // ── WATCHING ──────────────────────────────────────────────────────────────
   if (phase !== 'BOUGHT') {
+    const lastExitTime = resolveLastExitTime(state, session);
+    const lastExitReason = resolveLastExitReason(state, session);
+    const cooldown = checkReentryCooldown(config, cMap, lastExitTime, lastExitReason);
+    if (cooldown.waiting) {
+      // Só após STOP_LOSS: espera N candles fechados do intervalo da BB antes de
+      // reavaliar compra (evita reentrar no mesmo dump, como BMT #347→#348).
+      return { phase: 'WATCHING', reentryCooldown: cooldown };
+    }
+
     const rulesWatch = { ...parseRulesState(state), ...(session.rulesState ?? {}) };
 
     // Ordem limite GTC já armada no toque da BB: espera fill (reteste) ou expira após
@@ -246,7 +332,12 @@ async function tick(rowId, adapter, strategy, log, session) {
       }
 
       const expiry = checkEntryLimitExpired(config, cMap, rulesWatch.entryLimit);
-      if (expiry.expired || poll.open === false) {
+      // Recheca a mediana da BB a cada tick enquanto a ordem limite aguarda reteste — se a
+      // tendência virar pra baixo antes do fill, cancela em vez de deixar preencher na
+      // direção errada ("no momento da compra" além do "no momento do sinal").
+      const trendCheck = checkMedianTrendFilter(config, cMap);
+      const trendReversed = trendCheck.allowed === false && trendCheck.reason === 'MEDIAN_TREND_FALLING';
+      if (expiry.expired || poll.open === false || trendReversed) {
         try {
           if (poll.open !== false) await adapter.cancelRestingLimitBuy(rulesWatch.entryLimit);
         } catch (err) {
@@ -254,26 +345,30 @@ async function tick(rowId, adapter, strategy, log, session) {
         }
         const kept = {};
         if (rulesWatch.lastExitTime) kept.lastExitTime = rulesWatch.lastExitTime;
+        if (rulesWatch.lastExitReason) kept.lastExitReason = rulesWatch.lastExitReason;
         session.rulesState = Object.keys(kept).length ? kept : null;
         await saveState(rowId, { rules_state: session.rulesState ?? {} }, log);
-        log(`${Y}⏳ Limite @ ${fmtPrice(rulesWatch.entryLimit.price)} cancelada `
-          + `(${expiry.expired ? `${expiry.need} candles ${expiry.interval} sem fill` : `status ${poll.status}`})${X}`);
+        const cancelReason = trendReversed
+          ? 'mediana da BB em queda'
+          : expiry.expired ? `${expiry.need} candles ${expiry.interval} sem fill` : `status ${poll.status}`;
+        log(`${Y}⏳ Limite @ ${fmtPrice(rulesWatch.entryLimit.price)} cancelada (${cancelReason})${X}`);
         return { phase: 'WATCHING' };
       }
 
       return { phase: 'WATCHING', entryLimit: { waiting: true, ...expiry } };
     }
 
-    const lastExitTime = resolveLastExitTime(state, session);
-    const cooldown = checkReentryCooldown(config, cMap, lastExitTime);
-    if (cooldown.waiting) {
-      // Não avalia entrada durante o cooldown — espera N candles fechados do intervalo
-      // da BB e só então refaz a análise completa (BB + filtros EMA).
-      return { phase: 'WATCHING', reentryCooldown: cooldown };
-    }
-
     const signal = evaluateEntrySignal(config, cMap);
-    if (!signal.allowed) return { phase: 'WATCHING' };
+    if (!signal.allowed) {
+      const nearMiss = describeNearMiss(signal.reason);
+      if (nearMiss) {
+        recordNearMiss({
+          symbol, strategyId, interval: config.entry.interval, time: signal.signalOpenTime,
+          passed: nearMiss.passed, failed: nearMiss.failed,
+        });
+      }
+      return { phase: 'WATCHING' };
+    }
 
     // Prefere resting GTC (fica no book até reteste / N candles). Fallback: executeBuy antigo.
     if (typeof adapter.placeRestingLimitBuy === 'function' && signal.limitPrice != null) {
@@ -291,6 +386,7 @@ async function tick(rowId, adapter, strategy, log, session) {
         };
         const nextRules = {};
         if (rulesWatch.lastExitTime) nextRules.lastExitTime = rulesWatch.lastExitTime;
+        if (rulesWatch.lastExitReason) nextRules.lastExitReason = rulesWatch.lastExitReason;
         nextRules.entryLimit = entryLimit;
         session.rulesState = nextRules;
         await saveState(rowId, { rules_state: nextRules }, log);
@@ -435,6 +531,7 @@ async function startSymbol(row, color) {
     phase: row.phase === 'BOUGHT' ? 'BOUGHT' : null,
     rulesState: null,
     lastExitTime: rs.lastExitTime ?? null,
+    lastExitReason: rs.lastExitReason ?? null,
   };
   let volIv;
 
@@ -501,6 +598,11 @@ async function main() {
     console.error('❌ SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY ausentes no .env');
     process.exit(1);
   }
+
+  // Marca de versão do código carregado neste processo — confirma no boot que o filtro
+  // de tendência mediana (checkMedianTrendFilter, strategyEngine.js) está no ar, sem
+  // precisar reconstruir candles manualmente pra descobrir se o bot pegou o código novo.
+  console.log('🚀 bollinger-bands-bot iniciado — filtro de tendência mediana da BB (medianTrendFilter) ativo');
 
   // Gate.io sincroniza o próprio relógio sozinha ao carregar o módulo (ver
   // backend/gate/getGateClient.js) — só a Binance precisa ser sincronizada aqui.

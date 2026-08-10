@@ -1,0 +1,19 @@
+---
+description: Sempre exibir horários em BRT (Brasília, UTC−3)
+alwaysApply: true
+---
+
+# Fuso horário — BRT
+
+Ao falar com o usuário sobre horários (sinais, entradas, saídas, stop, candles, logs, trades, timestamps do banco/API):
+
+- **Sempre converter e apresentar em BRT** (America/Sao_Paulo, UTC−3; sem horário de verão desde 2019).
+- Não usar UTC como horário principal na resposta.
+- Se a fonte for UTC (Postgres, Binance, ISO `Z`), converter antes de listar.
+- Opcional: citar UTC entre parênteses só se ajudar a cruzar com log/API bruto.
+- Formato preferido: `DD/MM HH:MM` ou `DD/MM HH:MM:SS` (BRT).
+
+Exemplos:
+
+- Banco `2026-08-10T13:29:35Z` → **10/08 10:29:35**
+- Candle `13:25:00Z` → **10:25**

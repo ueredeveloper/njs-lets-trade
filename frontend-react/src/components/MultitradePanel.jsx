@@ -40,6 +40,24 @@ function fmtBuyTime(iso) {
   return fmtBuyTimeShort(iso);
 }
 
+/** Extrai qty/preço/USDT recebido da resposta de ordem de venda a mercado — formatos
+ *  diferentes por corretora (ver /binance-order e /gate-order em backend/services/).
+ *  Usado pra fechar o trade em rsi_multi_bot_trades com os números reais da execução
+ *  em vez de descartá-los ao voltar o favorito pra WATCHING. */
+function extractSellFill(exchange, order) {
+  if (exchange === 'gate') {
+    const soldQty = parseFloat(order?.filled_amount ?? order?.amount ?? 0);
+    const usdtOut = parseFloat(order?.filled_total ?? 0);
+    const exitPrice = parseFloat(order?.avg_deal_price ?? order?.fill_price ?? 0)
+      || (soldQty > 0 ? usdtOut / soldQty : 0);
+    return { soldQty, usdtOut, exitPrice };
+  }
+  const soldQty = parseFloat(order?.executedQty ?? 0);
+  const usdtOut = parseFloat(order?.cummulativeQuoteQty ?? 0);
+  const exitPrice = soldQty > 0 ? usdtOut / soldQty : 0;
+  return { soldQty, usdtOut, exitPrice };
+}
+
 export default function MultitradePanel() {
   const { t, lang } = useI18n();
   const {
@@ -465,11 +483,17 @@ export default function MultitradePanel() {
       {sellEntry && (
         <MultitradeSellModal
           entry={sellEntry}
-          onSold={async () => {
+          onSold={async (order) => {
+            const exchange = sellEntry.exchange === 'gate' ? 'gate' : 'binance';
+            const fill = extractSellFill(exchange, order);
             await updateMultitradeBotState({
               symbol: sellEntry.symbol,
               strategyId: normalizeStrategyId(sellEntry.strategyId),
               phase: 'WATCHING',
+              // Dados reais da ordem executada — sem isso o backend não consegue fechar o
+              // trade em rsi_multi_bot_trades (só zerar o estado), e a venda manual some do
+              // histórico/PnL do favorito. Ver PATCH /services/sb/multitrade-bot-state.
+              sell: fill.soldQty > 0 && fill.usdtOut > 0 ? fill : null,
             });
             setSellEntry(null);
           }}

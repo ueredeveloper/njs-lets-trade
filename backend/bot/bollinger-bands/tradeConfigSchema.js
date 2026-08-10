@@ -30,12 +30,13 @@ const BOLLINGER_BANDS_DEFAULTS = {
      *  Ligado: exige que o preço desça belowPct% ABAIXO da banda inferior antes de comprar
      *  (entrada mais "no fundo", ao custo de poder não disparar num repique raso). */
     pullback: { enabled: false, belowPct: 2 },
-    /** Após uma saída, espera N candles fechados do intervalo da BB antes de nova compra
-     *  (reavalia BB + EMA do zero). 0 = sem espera por candle. */
-    reentryCooldownCandles: 5,
     /** Após armar ordem limite GTC no toque da banda, mantém no book por até N candles
      *  do intervalo da BB aguardando reteste (ex.: toque 05:34 → fill em 05:35). */
     limitWaitCandles: 5,
+    /** Após STOP_LOSS, espera N candles fechados do intervalo da BB antes de nova compra
+     *  (evita reentrar no mesmo dump). Saída no alvo (banda superior) não espera.
+     *  0 = sem espera por candle. */
+    reentryCooldownCandles: 3,
     /** Filtro de tendência: (1) só compra se o preço estiver acima da EMA(period) do
      *  intervalo escolhido, com folga "adaptação inferior" de maxDipPct% abaixo da EMA
      *  ainda contando como "acima" (evita rejeitar por um toque raso); (2) a própria linha
@@ -47,6 +48,13 @@ const BOLLINGER_BANDS_DEFAULTS = {
       enabled: true, period: 50, interval: '4h', maxDipPct: 2,
       slopeLookback: 10, minSlopePct: 0,
     },
+    /** Filtro de tendência da linha mediana (média) da própria Bollinger: média das
+     *  variações candle-a-candle dos últimos `lookback` valores fechados da linha média
+     *  precisa ser ≥ 0 (mediana não em queda) pra liberar a compra. Checado no sinal
+     *  (evaluateEntrySignal) e de novo a cada tick enquanto a ordem limite de entrada
+     *  aguarda fill — cancela a ordem se a mediana virar pra baixo antes do preenchimento.
+     *  Ligado por padrão. */
+    medianTrendFilter: { enabled: true, lookback: 10 },
   },
 
   exit: {
@@ -75,8 +83,8 @@ const BOLLINGER_BANDS_DEFAULTS = {
 
   polling: { pollMs: 60_000, fastPollMs: 30_000 },
 
-  /** Desliga o cooldown em horas do tradeExecution compartilhado (DEFAULT 4h) —
-   *  o bollinger usa reentryCooldownCandles no intervalo da BB. */
+  /** Desliga o cooldown em horas do tradeExecution compartilhado (DEFAULT 4h) — o
+   *  bollinger usa entry.reentryCooldownCandles (só após STOP_LOSS) no intervalo da BB. */
   entryCooldownHours: 0,
 
   /** Só informativo (aviso no formulário) — nunca bloqueia compra/venda. */
@@ -127,6 +135,15 @@ function normalizeEmaFilter(block, entryInterval) {
   };
 }
 
+function normalizeMedianTrendFilter(block) {
+  const d = BOLLINGER_BANDS_DEFAULTS.entry.medianTrendFilter;
+  const src = block ?? {};
+  return {
+    enabled: src.enabled !== false,
+    lookback: Math.max(2, Math.min(50, Math.round(Number(src.lookback ?? d.lookback)))),
+  };
+}
+
 function normalizeEntry(block) {
   const d = BOLLINGER_BANDS_DEFAULTS.entry;
   const src = block ?? {};
@@ -137,13 +154,14 @@ function normalizeEntry(block) {
     period: normalizePeriod(src.period, d.period),
     stdDev: normalizeStdDev(src.stdDev, d.stdDev),
     pullback: normalizePullback(src.pullback),
-    reentryCooldownCandles: Math.max(0, Math.min(100, Math.round(Number(
-      src.reentryCooldownCandles ?? d.reentryCooldownCandles,
-    )))),
     limitWaitCandles: Math.max(1, Math.min(100, Math.round(Number(
       src.limitWaitCandles ?? d.limitWaitCandles,
     )))),
+    reentryCooldownCandles: Math.max(0, Math.min(100, Math.round(Number(
+      src.reentryCooldownCandles ?? d.reentryCooldownCandles,
+    )))),
     emaFilter: normalizeEmaFilter(src.emaFilter, interval),
+    medianTrendFilter: normalizeMedianTrendFilter(src.medianTrendFilter),
   };
 }
 
