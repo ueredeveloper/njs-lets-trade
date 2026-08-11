@@ -187,11 +187,12 @@ const {
  * `exit.restingBracket.enabled`). Falha em silêncio (loga e segue) — sem a bracket, a
  * saída continua funcionando via evaluateExit no candle (venda a mercado).
  */
-async function placeInitialBracket({ rowId, adapter, config, cMap, session, log, filledQty, buyPrice }) {
+async function placeInitialBracket({ rowId, adapter, config, cMap, session, log, filledQty, buyPrice, symbol, strategyId }) {
   if (!config.exit.restingBracket?.enabled) return;
   const { targetPrice, stopPrice } = computeBracketPrices(config, cMap, buyPrice, buyPrice);
   if (targetPrice == null || stopPrice == null) {
     log(`${Y}⚠️  Bracket TP/SL não colocada — banda superior indisponível ainda${X}`);
+    sendWhatsApp(`⚠️ ${BOT_LABEL} [${strategyId}] ${symbol}\nBracket TP/SL NÃO colocada (banda superior indisponível) — posição sem proteção na corretora, saída depende do bot ficar rodando.`);
     return;
   }
   try {
@@ -201,6 +202,7 @@ async function placeInitialBracket({ rowId, adapter, config, cMap, session, log,
     log(`${G}🎯 Bracket TP/SL colocada na corretora — alvo (banda superior) ${fmtPrice(bracket.targetPrice)} / stop ${fmtPrice(bracket.stopPrice)}${X}`);
   } catch (err) {
     log(`${Y}⚠️  Falha ao colocar bracket TP/SL (${err.message}) — segue só no candle fechado${X}`);
+    sendWhatsApp(`⚠️ ${BOT_LABEL} [${strategyId}] ${symbol}\nFalha ao colocar bracket TP/SL na corretora: ${err.message}\nPosição sem proteção na corretora — saída depende do bot ficar rodando (candle fechado).`);
   }
 }
 
@@ -325,7 +327,7 @@ async function tick(rowId, adapter, strategy, log, session) {
         if (bought) {
           await placeInitialBracket({
             rowId, adapter, config, cMap, session, log,
-            filledQty: bought.filledQty, buyPrice: bought.avgPrice,
+            filledQty: bought.filledQty, buyPrice: bought.avgPrice, symbol, strategyId,
           });
         }
         return { phase: bought ? 'BOUGHT' : 'WATCHING' };
@@ -410,7 +412,7 @@ async function tick(rowId, adapter, strategy, log, session) {
           if (bought) {
             await placeInitialBracket({
               rowId, adapter, config, cMap, session, log,
-              filledQty: bought.filledQty, buyPrice: bought.avgPrice,
+              filledQty: bought.filledQty, buyPrice: bought.avgPrice, symbol, strategyId,
             });
           }
           return { phase: bought ? 'BOUGHT' : 'WATCHING' };
@@ -430,7 +432,7 @@ async function tick(rowId, adapter, strategy, log, session) {
     if (bought) {
       await placeInitialBracket({
         rowId, adapter, config, cMap, session, log,
-        filledQty: bought.filledQty, buyPrice: bought.avgPrice,
+        filledQty: bought.filledQty, buyPrice: bought.avgPrice, symbol, strategyId,
       });
     }
     return { phase: bought ? 'BOUGHT' : 'WATCHING' };
