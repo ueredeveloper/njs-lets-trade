@@ -30,6 +30,7 @@ const {
   getRequiredSpecs, evaluateEntrySignal, evaluateExit, computeBracketPrices, computeStopLossFloor,
   checkEntryLimitExpired, checkMedianTrendFilter, checkReentryCooldown, describeNearMiss,
 } = require('./strategyEngine');
+const { detectOrphanPosition } = require('../shared/orphanPosition');
 
 // Componentes genéricos (compra/venda/execução), compartilhados com os outros bots de
 // trade — ver backend/bot/shared/*.
@@ -47,6 +48,10 @@ const VOL_CACHE_MS = 5 * 60_000;
 const NEAR_MISS_BATCH_SIZE = 5;
 const nearMissQueue = [];
 const lastNearMissByKey = new Map(); // `${symbol}|${strategyId}` -> signalOpenTime já registrado
+
+// Evita reenviar o alerta de saldo inesperado (ver detectOrphanPosition) a cada tick — uma
+// vez por símbolo/estratégia já basta pro usuário ver e decidir.
+const orphanWarnedKeys = new Set();
 
 function fmtBRTDateTime(ms) {
   const d = Number.isFinite(ms) ? new Date(ms) : new Date();
@@ -284,6 +289,35 @@ async function tick(rowId, adapter, strategy, log, session) {
 
   // ── WATCHING ──────────────────────────────────────────────────────────────
   if (phase !== 'BOUGHT') {
+    const orphanKey = `${symbol}|${strategyId}`;
+    const liveCandles = cMap[config.entry.interval] ?? [];
+    const lastPrice = liveCandles.length ? parseFloat(liveCandles[liveCandles.length - 1].close) : null;
+    const orphan = await detectOrphanPosition({ adapter, lastPrice }).catch(() => null);
+    if (orphan?.confident) {
+      log(`${Y}⚠️  Posição órfã na corretora (${orphan.qty} ${symbol}, sem registro no Supabase) — reconciliando pela compra que os trades recentes confirmam...${X}`);
+      const entryMeta = {
+        entryDesc: 'posição órfã reconciliada (saldo na corretora sem registro no Supabase)',
+        close: orphan.avgPrice, signalPrice: orphan.avgPrice, signalOpenTime: null, limitPrice: null,
+      };
+      const bought = await recordBuyFill({
+        rowId, strategy, log, session, entryMeta, capital, strategyId, symbol,
+        result: { filledQty: orphan.qty, quoteQty: orphan.qty * orphan.avgPrice, avgPrice: orphan.avgPrice },
+      });
+      if (bought) {
+        await placeInitialBracket({
+          rowId, adapter, config, cMap, session, log,
+          filledQty: bought.filledQty, buyPrice: bought.avgPrice, symbol, strategyId,
+        });
+        sendWhatsApp(`⚠️ ${BOT_LABEL} [${strategyId}] ${symbol}\nPosição órfã detectada e reconciliada automaticamente (processo provavelmente caiu entre a compra e o registro). Preço médio ${fmtPrice(orphan.avgPrice)}, qty ${orphan.qty}.`);
+      }
+      return { phase: bought ? 'BOUGHT' : 'WATCHING' };
+    }
+    if (orphan && !orphan.confident && !orphanWarnedKeys.has(orphanKey)) {
+      orphanWarnedKeys.add(orphanKey);
+      log(`${Y}⚠️  Saldo inesperado na corretora (${orphan.qty} ${symbol}) sem trade recente confirmando a origem — NÃO reconciliado automaticamente, confira manualmente${X}`);
+      sendWhatsApp(`⚠️ ${BOT_LABEL} [${strategyId}] ${symbol}\nSaldo inesperado na corretora (${orphan.qty}) sem trade recente (24h) confirmando a origem — não reconciliei sozinho pra não adotar uma posição que pode não ser do bot. Confira manualmente.`);
+    }
+
     const lastExitTime = resolveLastExitTime(state, session);
     const lastExitReason = resolveLastExitReason(state, session);
     const cooldown = checkReentryCooldown(config, cMap, lastExitTime, lastExitReason);

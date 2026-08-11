@@ -22,4 +22,16 @@ async function gate24hVolume(pair) {
   return parseFloat(data[0]?.quote_volume || 0);
 }
 
-module.exports = { gateGetTokenBalance, gate24hVolume };
+/** Trades próprios recentes, normalizados pro mesmo formato usado em tradeClient.js
+ *  (binanceGetOwnTrades) — ver backend/bot/shared/orphanPosition.js. */
+async function gateGetOwnTrades(pair, limit = 200) {
+  const trades = await gateRequest('GET', '/spot/my_trades', { currency_pair: pair, limit: String(limit) });
+  return trades.map(t => ({
+    time: t.create_time_ms ? Number(t.create_time_ms) : Math.round(parseFloat(t.create_time) * 1000),
+    price: parseFloat(t.price),
+    qty: parseFloat(t.amount),
+    side: t.side,
+  }));
+}
+
+module.exports = { gateGetTokenBalance, gate24hVolume, gateGetOwnTrades };

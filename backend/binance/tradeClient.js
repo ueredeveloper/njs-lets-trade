@@ -224,6 +224,33 @@ async function binance24hVolume(symbol) {
   return parseFloat(data.quoteVolume || 0);
 }
 
+/** Ativo-base de um symbol Binance (ex.: "BTCUSDT" -> "BTC") — mesmo padrão usado em
+ *  fetchBinanceTrades.js pro endpoint /services/binance-order-lock. */
+function binanceBaseAsset(symbol) {
+  return symbol.toUpperCase().replace(/USDT$|BTC$|ETH$|BNB$|BUSD$/, '');
+}
+
+/** Saldo livre do ativo-base — usado por detectOrphanPosition (backend/bot/shared/
+ *  orphanPosition.js) pra descobrir se a corretora tem uma posição que o Supabase não sabe
+ *  que existe (ex.: processo caiu entre o fill da compra e o saveState que marca BOUGHT). */
+async function binanceGetAssetBalance(symbol) {
+  const account = await binanceRequest('GET', '/api/v3/account');
+  const balance = account.balances?.find(b => b.asset === binanceBaseAsset(symbol));
+  return balance ? parseFloat(balance.free) : 0;
+}
+
+/** Trades próprios recentes, normalizados pro mesmo formato usado em gateAccount.js
+ *  (getGateOwnTrades) — ver orphanPosition.js. */
+async function binanceGetOwnTrades(symbol, limit = 200) {
+  const trades = await binanceRequest('GET', '/api/v3/myTrades', { symbol, limit: String(limit) });
+  return trades.map(t => ({
+    time: Number(t.time),
+    price: parseFloat(t.price),
+    qty: parseFloat(t.qty),
+    side: t.isBuyer ? 'buy' : 'sell',
+  }));
+}
+
 module.exports = {
   syncBinanceClock,
   binanceRequest,
@@ -234,5 +261,7 @@ module.exports = {
   binanceCancelRestingLimitBuy,
   binanceMarketSell,
   binance24hVolume,
+  binanceGetAssetBalance,
+  binanceGetOwnTrades,
   decimalsFromStep,
 };
