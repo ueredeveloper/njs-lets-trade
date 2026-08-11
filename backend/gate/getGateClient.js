@@ -76,6 +76,18 @@ function parseGateJson(text) {
  *   URL mesmo em POST/DELETE — necessário pra endpoints como `DELETE /spot/orders/{id}`, que a
  *   Gate exige `currency_pair` na query string (não no body) mesmo não sendo GET.
  */
+/** Query string pra assinatura HMAC — CRUA, sem percent-encoding. Confirmado na prática com
+ *  o par 龙虾_USDT (símbolo com caracteres não-ASCII, ver `龙虾_USDT` na Gate.io): a Gate
+ *  calcula a assinatura em cima da query string literal, não da versão url-encoded — usar a
+ *  encoded (o que `URLSearchParams(...).toString()` produz) nos dois lugares, como antes,
+ *  responde 401 "Signature mismatch" pra qualquer GET com esse tipo de par na query (ex.:
+ *  `/spot/orders/{id}?currency_pair=...`, usado por gatePollTriggerOrders). A URL de fato
+ *  continua indo percent-encoded (senão o fetch não monta a request certa).
+ */
+function rawQueryString(params) {
+  return Object.entries(params).map(([k, v]) => `${k}=${v}`).join('&');
+}
+
 async function gateRequest(method, endpointPath, params = {}, opts = {}) {
   const { _retry = false, query = null } = opts;
 
@@ -86,13 +98,14 @@ async function gateRequest(method, endpointPath, params = {}, opts = {}) {
   let bodyStr     = '';
 
   if (method === 'GET') {
-    const qs = new URLSearchParams(params).toString();
-    queryString = qs;
-    if (qs) url += `?${qs}`;
+    const encodedQs = new URLSearchParams(params).toString();
+    queryString = rawQueryString(params);
+    if (encodedQs) url += `?${encodedQs}`;
   } else {
     if (query) {
-      queryString = new URLSearchParams(query).toString();
-      if (queryString) url += `?${queryString}`;
+      const encodedQs = new URLSearchParams(query).toString();
+      queryString = rawQueryString(query);
+      if (encodedQs) url += `?${encodedQs}`;
     }
     if (Object.keys(params).length > 0) {
       // Corpo vazio ('') pra request sem params, não "{}": confirmado na prática (DELETE
