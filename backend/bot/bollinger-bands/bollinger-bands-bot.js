@@ -372,6 +372,24 @@ async function tick(rowId, adapter, strategy, log, session) {
       return { phase: 'WATCHING' };
     }
 
+    // instantFill: ignora reteste — compra a mercado assim que o sinal confirma (evita
+    // perder o movimento quando o preço toca a banda e não volta mais até lá).
+    if (config.entry.instantFill) {
+      log(`${G}📍 Sinal (${signal.entryDesc}) — comprando ${parseFloat(capital).toFixed(2)} USDT a mercado (instantFill)${X}`);
+      const bought = await executeBuy({
+        rowId, adapter, strategy, log, session,
+        entryMeta: { ...signal, signalPrice: signal.close, limitPrice: null },
+        capital, strategyId, symbol,
+      });
+      if (bought) {
+        await placeInitialBracket({
+          rowId, adapter, config, cMap, session, log,
+          filledQty: bought.filledQty, buyPrice: bought.avgPrice, symbol, strategyId,
+        });
+      }
+      return { phase: bought ? 'BOUGHT' : 'WATCHING' };
+    }
+
     // Prefere resting GTC (fica no book até reteste / N candles). Fallback: executeBuy antigo.
     if (typeof adapter.placeRestingLimitBuy === 'function' && signal.limitPrice != null) {
       try {

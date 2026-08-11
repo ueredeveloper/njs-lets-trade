@@ -1,4 +1,4 @@
-import { useEffect, useRef, forwardRef, useImperativeHandle } from 'react';
+import { useEffect, useMemo, useRef, forwardRef, useImperativeHandle } from 'react';
 import { createChart, CandlestickSeries, LineSeries, ColorType, createSeriesMarkers } from 'lightweight-charts';
 import { computeVwapSlopeFlags } from '../utils/vwapSlopeHighlight';
 import { computeStopLossFloor } from '../utils/trailingStopLoss';
@@ -38,13 +38,24 @@ function buildBbPathLineAndMarkers(bollingerConfig, candlesticks) {
     : Infinity;
   const maxDiffMs = Number.isFinite(ivMs) ? ivMs * 1.5 : Infinity;
 
+  // Busca binária (candlesticks vêm ordenados por openTime crescente) em vez de varredura
+  // linear — com até MAX_CANDLES (10500) carregados e dezenas de ciclos de path, a varredura
+  // linear por ciclo somava um custo síncrono perceptível a cada atualização (ver CLAUDE.md /
+  // conversa sobre travamento ao "carregar mais" candles).
   const mapNode = (n) => {
-    let best = 0;
-    let bestDiff = Infinity;
-    for (let i = 0; i < candlesticks.length; i++) {
-      const d = Math.abs(Number(candlesticks[i].openTime) - n.openTime);
-      if (d < bestDiff) { bestDiff = d; best = i; }
+    let lo = 0, hi = candlesticks.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (Number(candlesticks[mid].openTime) < n.openTime) lo = mid + 1;
+      else hi = mid;
     }
+    let best = lo;
+    if (lo > 0) {
+      const dLo = Math.abs(Number(candlesticks[lo].openTime) - n.openTime);
+      const dPrev = Math.abs(Number(candlesticks[lo - 1].openTime) - n.openTime);
+      if (dPrev < dLo) best = lo - 1;
+    }
+    const bestDiff = Math.abs(Number(candlesticks[best].openTime) - n.openTime);
     if (bestDiff > maxDiffMs) return null;
     const time = Math.floor(Number(candlesticks[best].openTime) / 1000);
     if (!Number.isFinite(time) || !Number.isFinite(n.price)) return null;
@@ -122,10 +133,10 @@ function buildBbPathLineAndMarkers(bollingerConfig, candlesticks) {
 }
 
 const EMA_LINE_DEFS = [
-  { id: 'ma9',  color: '#e879f9' },
-  { id: 'ma21', color: '#fb923c' },
-  { id: 'ma50', color: '#22d3ee' },
-  { id: 'ma200', color: '#f59e0b' },
+  { id: 'ma9',  color: '#e879f9', label: 'EMA9' },
+  { id: 'ma21', color: '#fb923c', label: 'EMA21' },
+  { id: 'ma50', color: '#22d3ee', label: 'EMA50' },
+  { id: 'ma200', color: '#f59e0b', label: 'EMA200' },
 ];
 
 /** Array de indicador (ma9/ma21/ma50/movingAverage/rsi) é alinhado ao FIM do array de candles —
@@ -403,14 +414,20 @@ function buildOverlayLineEntries(overlayConfigs, candlesticks) {
   return entries;
 }
 
-/** Bandas de Bollinger — 3 linhas a partir de bbConfig.points [{openTime, upper, middle, lower}]. */
-function buildBollingerEntries(bollingerConfig) {
-  if (!bollingerConfig?.enabled || !bollingerConfig.points?.length) return {};
-  return {
-    bbUpper:  { color: BB_COLOR, width: 1,   lineStyle: 1, data: vwapFieldSeries(bollingerConfig.points, 'upper') },
-    bbMiddle: { color: BB_COLOR, width: 1.5, lineStyle: 2, data: vwapFieldSeries(bollingerConfig.points, 'middle') },
-    bbLower:  { color: BB_COLOR, width: 1,   lineStyle: 1, data: vwapFieldSeries(bollingerConfig.points, 'lower') },
-  };
+/** Bandas de Bollinger — até 3 linhas por grupo (superior/média/inferior, cada uma opcional)
+ *  a partir de cfg.points [{openTime, upper, middle, lower}]. Uma config por grupo BB do painel
+ *  (ver chartBollingerConfigs em CandlestickChart.jsx) — chaves prefixadas por cfg.id pra
+ *  coexistirem sem se sobrescrever. */
+function buildBollingerEntries(bollingerConfigs) {
+  const entries = {};
+  for (const cfg of bollingerConfigs ?? []) {
+    if (!cfg?.enabled || !cfg.points?.length) continue;
+    const color = cfg.color ?? BB_COLOR;
+    if (cfg.showUpper) entries[`bb-${cfg.id}-upper`] = { color, width: 1, lineStyle: 1, data: vwapFieldSeries(cfg.points, 'upper') };
+    if (cfg.showMiddle) entries[`bb-${cfg.id}-middle`] = { color, width: 1.5, lineStyle: 2, data: vwapFieldSeries(cfg.points, 'middle') };
+    if (cfg.showLower) entries[`bb-${cfg.id}-lower`] = { color, width: 1, lineStyle: 1, data: vwapFieldSeries(cfg.points, 'lower') };
+  }
+  return entries;
 }
 
 /** PPHL (pivôs de alta/baixa) — direto por timestamp, sem precisar achar o candle mais
@@ -497,7 +514,7 @@ function toValidLwCandles(candlesticks) {
 const CandlestickChartLW = forwardRef(function CandlestickChartLW({
   symbol, interval, candlesticks, colors, rightPad = 0,
   activeIndicators = [], ma9, ma21, ma50, ma200, overlayConfigs, vwapConfig, vwapSlopeHighlight,
-  bollingerConfig, srConfig, pphlConfig, rsi, chopConfig,
+  bollingerConfigs = [], srConfig, pphlConfig, rsi, chopConfig,
   stopLossConfig, targetConfig, buyInfo, multitradeMarkers, zoomPeriod, focusLastN,
   onNeedOlderCandles, loadingMoreCandles,
 }, ref) {
@@ -785,7 +802,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       desired[id] = { color, width: 1.5, data: alignIndicatorToCandles(candlesticks, arr) };
     }
     Object.assign(desired, buildOverlayLineEntries(overlayConfigs, candlesticks));
-    Object.assign(desired, buildBollingerEntries(bollingerConfig));
+    Object.assign(desired, buildBollingerEntries(bollingerConfigs));
     if (vwapConfig?.enabled && vwapConfig.points?.length) {
       Object.assign(desired, buildVwapFieldEntries(vwapConfig.points, 'value', VWAP_LINE_COLOR, 1.5, 0, 'vwap'));
       if (vwapConfig.bands) {
@@ -848,8 +865,11 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       }
       bandFillPrimitiveRef.current.replacePrefixed('vwapDecline-', cloudSegments);
 
-      // Nuvem PATH BB: entre a diagonal entrada→saída e a banda inferior
-      const { clouds: bbPathClouds } = buildBbPathLineAndMarkers(bollingerConfig, candlesticks);
+      // Nuvem PATH BB: entre a diagonal entrada→saída e a banda inferior — uma por grupo com
+      // showPath ligado, concatenadas antes de aplicar (replacePrefixed troca tudo de uma vez).
+      const bbPathClouds = bollingerConfigs
+        .filter((cfg) => cfg.showPath)
+        .flatMap((cfg) => buildBbPathLineAndMarkers(cfg, candlesticks).clouds);
       bandFillPrimitiveRef.current.replacePrefixed('bbPath-', bbPathClouds);
     }
 
@@ -871,7 +891,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       }
       current[key].setData(clampToVisible(def.data));
     }
-  }, [activeIndicators, ma9, ma21, ma50, ma200, overlayConfigs, bollingerConfig, vwapConfig, vwapSlopeHighlight, candlesticks]);
+  }, [activeIndicators, ma9, ma21, ma50, ma200, overlayConfigs, bollingerConfigs, vwapConfig, vwapSlopeHighlight, candlesticks]);
 
   // Linhas de preço: S/R. Sempre recriadas do zero (poucos níveis por vez, custo desprezível)
   // em vez de diff — mais simples que casar id estável por nível.
@@ -916,11 +936,14 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
     }
   }, [buyInfo, candlesticks]);
 
-  // Trajetória BB lower→upper (simulada): um LineSeries por trecho, verde/vermelho.
+  // Trajetória BB lower→upper (simulada): um LineSeries por trecho, verde/vermelho — de todos
+  // os grupos com showPath ligado, concatenados.
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart) return;
-    const { segments } = buildBbPathLineAndMarkers(bollingerConfig, candlesticks);
+    const segments = bollingerConfigs
+      .filter((cfg) => cfg.showPath)
+      .flatMap((cfg) => buildBbPathLineAndMarkers(cfg, candlesticks).segments);
     for (const s of bbPathSeriesRef.current) {
       try { chart.removeSeries(s); } catch { /* já removida */ }
     }
@@ -935,12 +958,13 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       next.push(s);
     }
     bbPathSeriesRef.current = next;
-  }, [bollingerConfig, candlesticks]);
+  }, [bollingerConfigs, candlesticks]);
 
   // Filtro de tendência da mediana (média): a cada toque na banda inferior, uma linha
   // verde/vermelha sobre os 10 candles anteriores mostra se a linha mediana estava subindo
   // (verde, o bot compraria) ou caindo (vermelho, o bot bloqueia/cancela a compra) — mesmo
-  // cálculo de backend/bot/bollinger-bands/strategyEngine.js#checkMedianTrendFilter.
+  // cálculo de backend/bot/bollinger-bands/strategyEngine.js#checkMedianTrendFilter. Um grupo
+  // por vez pode ter essa opção ligada; todos entram concatenados.
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart) return;
@@ -948,36 +972,42 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       try { chart.removeSeries(s); } catch { /* já removida */ }
     }
     const next = [];
-    if (bollingerConfig?.showMedianTrend && bollingerConfig.points?.length && candlesticks?.length) {
+    if (candlesticks?.length) {
       const minTime = Math.floor(Number(candlesticks[0].openTime) / 1000);
       const maxTime = Math.floor(Number(candlesticks[candlesticks.length - 1].openTime) / 1000);
-      const lookback = bollingerConfig.medianTrendLookback ?? 10;
-      const signals = computeMedianTrendSignals(bollingerConfig.points, lookback);
-      for (const sig of signals) {
-        const data = sig.data.filter(d => d.time >= minTime && d.time <= maxTime);
-        if (data.length < 2) continue;
-        const s = chart.addSeries(LineSeries, {
-          color: sig.trend === 'up' ? C_UP : C_DOWN, lineWidth: 3, lineStyle: 0,
-          priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
-        });
-        s.setData(data);
-        next.push(s);
+      for (const cfg of bollingerConfigs) {
+        if (!cfg.showMedianTrend || !cfg.points?.length) continue;
+        const lookback = cfg.medianTrendLookback ?? 10;
+        const signals = computeMedianTrendSignals(cfg.points, lookback);
+        for (const sig of signals) {
+          const data = sig.data.filter(d => d.time >= minTime && d.time <= maxTime);
+          if (data.length < 2) continue;
+          const s = chart.addSeries(LineSeries, {
+            color: sig.trend === 'up' ? C_UP : C_DOWN, lineWidth: 3, lineStyle: 0,
+            priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+          });
+          s.setData(data);
+          next.push(s);
+        }
       }
     }
     medianTrendSeriesRef.current = next;
-  }, [bollingerConfig, candlesticks]);
+  }, [bollingerConfigs, candlesticks]);
 
-  // Marcadores: PPHL + sinal/venda de Multi-Trade + % da linha de PnL + path BB.
+  // Marcadores: PPHL + sinal/venda de Multi-Trade + % da linha de PnL + path BB (de todos os
+  // grupos com showPath ligado).
   useEffect(() => {
     if (!markersPluginRef.current) return;
     const markers = [...buildPphlMarkers(pphlConfig), ...buildTradeMarkers(multitradeMarkers)];
     const pnlMarker = buildPnlMarker(buyInfo, candlesticks);
     if (pnlMarker) markers.push(pnlMarker);
-    const { markers: bbPathMarkers } = buildBbPathLineAndMarkers(bollingerConfig, candlesticks);
+    const bbPathMarkers = bollingerConfigs
+      .filter((cfg) => cfg.showPath)
+      .flatMap((cfg) => buildBbPathLineAndMarkers(cfg, candlesticks).markers);
     markers.push(...bbPathMarkers);
     markers.sort((a, b) => a.time - b.time);
     markersPluginRef.current.setMarkers(markers);
-  }, [pphlConfig, multitradeMarkers, buyInfo, candlesticks, bollingerConfig]);
+  }, [pphlConfig, multitradeMarkers, buyInfo, candlesticks, bollingerConfigs]);
 
   // Sub-painéis RSI/CHOP (panes nativos do LW v5) — reconstrói do zero só quando o CONJUNTO
   // ativo muda (ex.: liga CHOP com RSI já ligado), não a cada novo valor.
@@ -1036,11 +1066,44 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
     if (state.series.chopZone) state.series.chopZone.setData(vwapFieldSeries(chopConfig?.points ?? [], 'value'));
   }, [activeIndicators, rsi, chopConfig, candlesticks]);
 
+  // Legenda: cor + nome de cada linha sobreposta ao preço (EMA fixa/rápida, VWAP, Bollinger) —
+  // com várias Bollinger Bands e EMAs simultâneas na mesma paleta de cores, sem isso não dava
+  // pra saber o que era o quê só olhando o gráfico.
+  const legendEntries = useMemo(() => {
+    const entries = [];
+    for (const { id, color, label } of EMA_LINE_DEFS) {
+      if (activeIndicators.includes(id)) entries.push({ key: id, color, label });
+    }
+    for (const cfg of overlayConfigs ?? []) {
+      if (!cfg.points?.length) continue;
+      entries.push({ key: `overlay-${cfg.label}`, color: cfg.color, label: cfg.label });
+    }
+    if (vwapConfig?.enabled && vwapConfig.points?.length) {
+      const session = vwapConfig.session === 'weekly' ? 'semanal' : 'diária';
+      entries.push({ key: 'vwap', color: VWAP_LINE_COLOR, label: `VWAP ${vwapConfig.interval} (${session})` });
+    }
+    for (const cfg of bollingerConfigs ?? []) {
+      if (!cfg.enabled || !(cfg.showUpper || cfg.showMiddle || cfg.showLower)) continue;
+      entries.push({ key: `bb-${cfg.id}`, color: cfg.color, label: cfg.label ?? `BB${cfg.period}@${cfg.interval}` });
+    }
+    return entries;
+  }, [activeIndicators, overlayConfigs, vwapConfig, bollingerConfigs]);
+
   return (
     <div className="relative w-full h-full">
       <div className="absolute top-1 left-2 z-10 text-base font-mono font-bold text-p5/80 pointer-events-none">
         {symbol} · {interval}
       </div>
+      {legendEntries.length > 0 && (
+        <div className="absolute top-7 left-2 z-10 flex flex-wrap gap-x-2 gap-y-0.5 max-w-[75%] pointer-events-none">
+          {legendEntries.map((e) => (
+            <span key={e.key} className="flex items-center gap-1 text-[10px] font-mono text-p5/70 whitespace-nowrap">
+              <span className="inline-block w-2 h-2 rounded-full shrink-0" style={{ background: e.color }} />
+              {e.label}
+            </span>
+          ))}
+        </div>
+      )}
       <div ref={containerRef} className="absolute top-0 left-0 bottom-0" style={{ right: rightPad }} />
     </div>
   );

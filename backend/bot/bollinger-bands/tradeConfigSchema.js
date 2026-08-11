@@ -31,8 +31,15 @@ const BOLLINGER_BANDS_DEFAULTS = {
      *  (entrada mais "no fundo", ao custo de poder não disparar num repique raso). */
     pullback: { enabled: false, belowPct: 2 },
     /** Após armar ordem limite GTC no toque da banda, mantém no book por até N candles
-     *  do intervalo da BB aguardando reteste (ex.: toque 05:34 → fill em 05:35). */
+     *  do intervalo da BB aguardando reteste (ex.: toque 05:34 → fill em 05:35). Ignorado
+     *  quando instantFill está ligado. */
     limitWaitCandles: 5,
+    /** Desligado por padrão — compra por ordem limite GTC no preço da banda, esperando
+     *  reteste (limitWaitCandles). Ligado: ignora a ordem limite/reteste e compra a
+     *  mercado assim que o sinal é confirmado (evaluateEntrySignal.allowed) — evita perder
+     *  o movimento quando o preço toca a banda e sobe sem retestar, ao custo de uma entrada
+     *  pior (preço do momento, não o da banda) e mais suscetível a toques falsos. */
+    instantFill: false,
     /** Após STOP_LOSS, espera N candles fechados do intervalo da BB antes de nova compra
      *  (evita reentrar no mesmo dump). Saída no alvo (banda superior) não espera.
      *  0 = sem espera por candle. */
@@ -157,6 +164,7 @@ function normalizeEntry(block) {
     limitWaitCandles: Math.max(1, Math.min(100, Math.round(Number(
       src.limitWaitCandles ?? d.limitWaitCandles,
     )))),
+    instantFill: src.instantFill === true,
     reentryCooldownCandles: Math.max(0, Math.min(100, Math.round(Number(
       src.reentryCooldownCandles ?? d.reentryCooldownCandles,
     )))),

@@ -47,12 +47,30 @@ function buildBbSeries(candles, period, stdDev) {
     }));
 }
 
+/**
+ * Tendência da linha mediana (média) da BB nos `lookback` candles fechados imediatamente
+ * ANTERIORES ao índice `i` (o candle do toque em si fica de fora — mesma janela usada pelo bot
+ * em checkMedianTrendFilter/backend/bot/bollinger-bands/strategyEngine.js, que compara contra o
+ * último candle já fechado antes do sinal). Retorna null se não houver histórico suficiente.
+ */
+function medianTrendAvgDiff(bbSeries, i, lookback) {
+    const start = i - lookback - 1;
+    if (start < 0) return null;
+    const middles = bbSeries.slice(start, i).map(b => b.middle);
+    if (middles.length < lookback + 1) return null;
+    const diffs = [];
+    for (let k = 1; k < middles.length; k++) diffs.push(middles[k] - middles[k - 1]);
+    return diffs.reduce((a, b) => a + b, 0) / diffs.length;
+}
+
 async function analyseBollingerBandRecovery(symbol, options = {}) {
     const {
         interval = '4h',
         period   = BB_PERIOD,
         stdDev   = BB_STD_DEV,
         source   = null,
+        medianTrendFilter   = false,
+        medianTrendLookback = 10,
     } = options;
 
     const fetchCandles = source === 'gate' ? getGateCandles : getCandles;
@@ -76,6 +94,11 @@ async function analyseBollingerBandRecovery(symbol, options = {}) {
         const high = parseFloat(candle.high);
 
         if (state === 'SEEK_ENTRY' && low <= bbSeries[i].lower) {
+            if (medianTrendFilter) {
+                const avgDiff = medianTrendAvgDiff(bbSeries, i, medianTrendLookback);
+                // Sem histórico suficiente ou mediana em queda → mesmo critério do bot: bloqueia a entrada.
+                if (avgDiff === null || avgDiff < 0) continue;
+            }
             minLowIdx = i;
             state = 'SEEK_EXIT';
             continue;
@@ -140,6 +163,8 @@ async function analyseBollingerBandRecovery(symbol, options = {}) {
         interval,
         period,
         stdDev,
+        medianTrendFilter,
+        medianTrendLookback,
         totalCandles: candles.length,
         totalBbPeriods: bbSeries.length,
         totalOccurrences: total,

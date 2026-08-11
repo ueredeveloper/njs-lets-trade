@@ -159,9 +159,13 @@ export async function fetchSimpleMaCross(symbol, entryInterval = '15m', exitInte
 }
 
 /** Analisa ciclos fundo→topo na Bollinger Bands (4h por padrão) para uma moeda. */
-export async function fetchBollingerBandRecovery(symbol, interval = '4h', period = 20, stdDev = 2, source = null) {
+export async function fetchBollingerBandRecovery(symbol, interval = '4h', period = 20, stdDev = 2, source = null, medianTrendFilter = false, medianTrendLookback = 10) {
   const params = new URLSearchParams({ symbol, interval, period, stdDev });
   if (source) params.set('source', source);
+  if (medianTrendFilter) {
+    params.set('medianTrendFilter', '1');
+    params.set('medianTrendLookback', medianTrendLookback);
+  }
   const res = await fetch(`/services/bollinger-band-recovery?${params}`);
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));

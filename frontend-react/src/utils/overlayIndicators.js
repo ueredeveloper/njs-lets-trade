@@ -267,12 +267,12 @@ const QUICK_BAND_COLOR = { floor: '#2bb3a3', ceiling: '#e0653f' };
 /**
  * Deriva as mesmas linhas que o manipulador do gráfico principal desenharia
  * (EMA9/21/50/200 rápidas, grupos de EMA rápida com banda fixa/ADAPT, e
- * Bollinger Bands manual) a partir do MESMO estado compartilhado
- * (activeIndicators/quickEmaGroups/bollingerBands/panelButtons) — assim o
+ * Bollinger Bands manuais) a partir do MESMO estado compartilhado
+ * (activeIndicators/quickEmaGroups/bollingerBandsGroups/panelButtons) — assim o
  * Hist. Bot usa exatamente o que o usuário já configurou no gráfico normal,
  * sem precisar reconfigurar nada.
  */
-export function panelLineDefsFromSharedState({ activeIndicators, quickEmaGroups, bollingerBands, panelButtons, chartInterval }) {
+export function panelLineDefsFromSharedState({ activeIndicators, quickEmaGroups, bollingerBandsGroups, panelButtons, chartInterval }) {
   const defs = [];
   const showKey = (key) => (panelButtons ? panelButtons[key] !== false : true);
 
@@ -321,16 +321,19 @@ export function panelLineDefsFromSharedState({ activeIndicators, quickEmaGroups,
     addBand('ceiling', group.abovePct);
   }
 
-  if (bollingerBands?.enabled && showKey('bb')) {
-    defs.push({
-      id: `panel-bb-${bollingerBands.period}-${bollingerBands.interval}-${bollingerBands.stdDev}`,
-      kind: 'bb',
-      period: Number(bollingerBands.period),
-      stdDev: Number(bollingerBands.stdDev),
-      interval: bollingerBands.interval,
-      color: '#818cf8',
-      label: `BB${bollingerBands.period}@${bollingerBands.interval}`,
-    });
+  if (showKey('bb')) {
+    for (const g of bollingerBandsGroups ?? []) {
+      if (!g.enabled) continue;
+      defs.push({
+        id: `panel-bb-${g.id}-${g.period}-${g.interval}-${g.stdDev}`,
+        kind: 'bb',
+        period: Number(g.period),
+        stdDev: Number(g.stdDev),
+        interval: g.interval,
+        color: '#818cf8',
+        label: `BB${g.period}@${g.interval}`,
+      });
+    }
   }
 
   return defs;

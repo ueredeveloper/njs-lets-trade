@@ -83,25 +83,6 @@ export const DEFAULT_OVERLAY_SLOTS = [];
 export const BB_PERIOD_OPTIONS = ['10', '20', '30'];
 export const BB_STDDEV_OPTIONS = [1, 2, 3];
 
-/** Bandas de Bollinger no gráfico: período/intervalo próprios (como MA1/MA2), desligadas por padrão. */
-export const DEFAULT_BOLLINGER_BANDS = {
-  enabled: false,
-  period: '20',
-  stdDev: 2,
-  interval: '4h',
-};
-
-export function normalizeBollingerBandsDefaults(raw) {
-  const d = DEFAULT_BOLLINGER_BANDS;
-  const stdDev = Number(raw?.stdDev);
-  return {
-    enabled: typeof raw?.enabled === 'boolean' ? raw.enabled : d.enabled,
-    period: BB_PERIOD_OPTIONS.includes(String(raw?.period)) ? String(raw.period) : d.period,
-    stdDev: BB_STDDEV_OPTIONS.includes(stdDev) ? stdDev : d.stdDev,
-    interval: CHART_INTERVAL_OPTIONS.includes(raw?.interval) ? raw.interval : d.interval,
-  };
-}
-
 /** Sessões válidas de reset do VWAP — cripto não tem pregão, então dia/semana UTC faz esse papel. */
 export const VWAP_SESSION_OPTIONS = ['daily', 'weekly'];
 
@@ -297,7 +278,6 @@ export const DEFAULT_UI_PREFS = {
   visibleFavoriteButtons: normalizeVisibleFavoriteButtons({}),
   overlaySlots: normalizeOverlaySlots(DEFAULT_OVERLAY_SLOTS),
   maBandsDefaults: normalizeMaBandsDefaults(DEFAULT_MA_BANDS),
-  bollingerBandsDefaults: normalizeBollingerBandsDefaults(DEFAULT_BOLLINGER_BANDS),
   srIntervalDefault: DEFAULT_SR_INTERVAL,
   pphlIntervalDefault: DEFAULT_PPHL_INTERVAL,
   chopIntervalDefault: DEFAULT_CHOP_INTERVAL,
@@ -318,7 +298,6 @@ function cloneDefaults() {
     visibleFavoriteButtons: normalizeVisibleFavoriteButtons({}),
     overlaySlots: normalizeOverlaySlots(DEFAULT_OVERLAY_SLOTS),
     maBandsDefaults: normalizeMaBandsDefaults(DEFAULT_MA_BANDS),
-    bollingerBandsDefaults: normalizeBollingerBandsDefaults(DEFAULT_BOLLINGER_BANDS),
     srIntervalDefault: DEFAULT_SR_INTERVAL,
     pphlIntervalDefault: DEFAULT_PPHL_INTERVAL,
     vwapDefaults: normalizeVwapDefaults(DEFAULT_VWAP),
@@ -358,9 +337,6 @@ export function loadUiPreferences() {
     }
     if (parsed.maBandsDefaults) {
       result.maBandsDefaults = normalizeMaBandsDefaults(parsed.maBandsDefaults);
-    }
-    if (parsed.bollingerBandsDefaults) {
-      result.bollingerBandsDefaults = normalizeBollingerBandsDefaults(parsed.bollingerBandsDefaults);
     }
     if (parsed.srIntervalDefault !== undefined) {
       result.srIntervalDefault = normalizeSrInterval(parsed.srIntervalDefault);

@@ -33,7 +33,6 @@ import {
   saveUiPreferences,
   normalizeOverlaySlots,
   normalizeMaBandsDefaults,
-  normalizeBollingerBandsDefaults,
   normalizeSrInterval,
   normalizePphlInterval,
   normalizeChopInterval,
@@ -669,17 +668,6 @@ export function CurrencyProvider({ children }) {
     });
   }, []);
 
-  const setBollingerBandsDefaults = useCallback((patch) => {
-    setUiPrefsState((prev) => {
-      const next = {
-        ...prev,
-        bollingerBandsDefaults: normalizeBollingerBandsDefaults({ ...prev.bollingerBandsDefaults, ...patch }),
-      };
-      saveUiPreferences(next);
-      return next;
-    });
-  }, []);
-
   const setSrIntervalDefault = useCallback((interval) => {
     setUiPrefsState((prev) => {
       const next = { ...prev, srIntervalDefault: normalizeSrInterval(interval) };
@@ -1047,7 +1035,6 @@ export function CurrencyProvider({ children }) {
         favoriteButtonKeys: FAVORITE_BUTTON_KEYS,
         setOverlaySlotsPreference,
         setMaBandsDefaults,
-        setBollingerBandsDefaults,
         setSrIntervalDefault,
         setPphlIntervalDefault,
         setChopIntervalDefault,

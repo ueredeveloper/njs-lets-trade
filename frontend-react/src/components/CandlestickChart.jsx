@@ -31,7 +31,11 @@ const COMMON_CANDLE_PRESETS = [20, 80, 160];
 // que o motor de verdade usa (agora até ~10130 em 1m) — a linha/bandas no gráfico não batiam
 // com o nível que realmente armou o sinal (ver conversa sobre a ACEUSDT/KMNOUSDT).
 const MAX_CANDLES = 10500;
-const CANDLE_FETCH_STEPS = [500, 1000];
+// Degraus intermediários (não só 500→1000→10500 direto pro MAX_CANDLES) — sem eles, o 3º
+// clique em "carregar mais" (ou arrastar pra trás uma 3ª vez) pulava de 1000 pra 10500 candles
+// de uma vez: fetch grande + TODAS as séries do LW (EMAs, VWAP, Bollinger, BB path etc.)
+// recalculadas e re-setData()'adas de uma vez travava a renderização por um tempo perceptível.
+const CANDLE_FETCH_STEPS = [500, 1000, 2000, 3500, 5500, 8000, 10500];
 const OVERLAY_MA_INTERVALS = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '8h', '12h', '1d'];
 const OVERLAY_MA_COLORS = ['#fb923c', '#c084fc', '#34d399', '#60a5fa', '#f472b6', '#facc15', '#a78bfa', '#4ade80'];
 const INTERVALS = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w'];
@@ -46,6 +50,12 @@ const PANEL_MIN_WIDTH = 160;
 const PANEL_GAP = 2;
 const PANEL_TILE_PAD = 2;
 const PANEL_CARD_PAD = 6;
+/** Legend/título (ex.: "BOLLINGER BANDS", "VWAP") no topo de cada bloco de botões com intervalo
+ *  próprio — deixa claro pro usuário o que aquele grupo de botões é. Ocupa 1 linha inteira do
+ *  grid do próprio bloco (mesma altura de linha das demais, `rowH`) — reservada no total de
+ *  linhas do tile (bbRowSpan/quickEmaRowSpan/VWAP_ROW_SPAN), não descontada à parte, senão em
+ *  blocos pequenos (poucos grupos) a legend "comia" o espaço dos botões até sumirem. */
+const SECTION_TITLE_ROWS = 1;
 /** Painel de indicadores agora abre como dropdown no topo do gráfico (flutuando por cima,
  *  sem empurrar o chart) — largura e altura limitadas, com scroll vertical pro que não couber. */
 const PANEL_WIDTH_RATIO = 0.2;      // desktop/notebook: 20% da largura do gráfico
@@ -139,6 +149,85 @@ function loadQuickEmaGroups() {
 function saveQuickEmaGroups(groups) {
   try {
     localStorage.setItem(QUICK_EMA_STORAGE_KEY, JSON.stringify(groups.filter((g) => g.id !== TRADE_EMA_GROUP_ID)));
+  } catch { /* ignore */ }
+}
+
+/**
+ * Bollinger Bands do gráfico — mesmo padrão dos grupos de Quick EMA acima: lista de até
+ * MAX_BB_GROUPS bandas, cada uma com seu próprio intervalo/período/desvio e quais das 3 linhas
+ * (superior/média/inferior), PATH e tendência da mediana mostrar.
+ */
+const MAX_BB_GROUPS = 4;
+const BB_GROUPS_STORAGE_KEY = 'lets_trade_bb_groups_v1';
+const BB_DEFAULT_INTERVAL = '4h';
+/** Cor por posição na lista — precisa ser visualmente distinta banda a banda. */
+const BB_GROUP_PALETTE = ['#94a3b8', '#38bdf8', '#f472b6', '#facc15'];
+function bbGroupColor(index) {
+  return BB_GROUP_PALETTE[index % BB_GROUP_PALETTE.length];
+}
+/** id fixo do grupo auto-sincronizado com o favorito bollinger-bands selecionado (mesma ideia
+ *  do TRADE_EMA_GROUP_ID) — nunca persiste (ver saveBbGroups). */
+const TRADE_BB_GROUP_ID = 'trade-bb-filter';
+/** id fixo do grupo "seguido" a partir de um clique numa ocorrência da aba Estatísticas
+ *  (chartZoom.bollinger) — mesma ideia, também nunca persiste. */
+const STATS_BB_GROUP_ID = 'stats-bb-zoom';
+const AUTO_BB_GROUP_IDS = [TRADE_BB_GROUP_ID, STATS_BB_GROUP_ID];
+
+function makeBbGroup(overrides) {
+  return {
+    id: `bb${Date.now()}`,
+    interval: BB_DEFAULT_INTERVAL,
+    period: '20',
+    stdDev: 2,
+    enabled: true,
+    showUpper: true,
+    showMiddle: true,
+    showLower: true,
+    showPath: false,
+    showMedianTrend: false,
+    ...overrides,
+  };
+}
+
+/** Grupo inicial (1ª vez que o usuário abre o gráfico, sem nada salvo ainda) — igual ao Quick
+ *  EMA, começa com uma banda já visível no painel, mas com tudo desligado (linhas/PATH/
+ *  tendência), pra o usuário simplesmente clicar no que quiser em vez de ter que "+ Bollinger"
+ *  antes de configurar a primeira. */
+function defaultBbGroups() {
+  return [makeBbGroup({ enabled: false, showUpper: false, showMiddle: false, showLower: false })];
+}
+
+function loadBbGroups() {
+  try {
+    const raw = localStorage.getItem(BB_GROUPS_STORAGE_KEY);
+    if (raw == null) return defaultBbGroups();
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return defaultBbGroups();
+    return parsed
+      .filter((g) => g && OVERLAY_MA_INTERVALS.includes(g.interval))
+      .slice(0, MAX_BB_GROUPS)
+      .map((g, i) => ({
+        id: typeof g.id === 'string' && g.id ? g.id : `bb${i + 1}`,
+        interval: g.interval,
+        period: BB_PERIOD_OPTIONS.includes(String(g.period)) ? String(g.period) : '20',
+        stdDev: BB_STDDEV_OPTIONS.includes(Number(g.stdDev)) ? Number(g.stdDev) : 2,
+        enabled: typeof g.enabled === 'boolean' ? g.enabled : true,
+        showUpper: typeof g.showUpper === 'boolean' ? g.showUpper : true,
+        showMiddle: typeof g.showMiddle === 'boolean' ? g.showMiddle : true,
+        showLower: typeof g.showLower === 'boolean' ? g.showLower : true,
+        showPath: typeof g.showPath === 'boolean' ? g.showPath : false,
+        showMedianTrend: typeof g.showMedianTrend === 'boolean' ? g.showMedianTrend : false,
+      }));
+  } catch {
+    return defaultBbGroups();
+  }
+}
+
+/** Nunca persiste os grupos auto-sincronizados (AUTO_BB_GROUP_IDS) — mesmo motivo do
+ *  saveQuickEmaGroups acima. */
+function saveBbGroups(groups) {
+  try {
+    localStorage.setItem(BB_GROUPS_STORAGE_KEY, JSON.stringify(groups.filter((g) => !AUTO_BB_GROUP_IDS.includes(g.id))));
   } catch { /* ignore */ }
 }
 
@@ -738,11 +827,9 @@ const INDICATOR_TILE_ROWS = 2;
 
 const BANDS_COL_SPAN = 4;
 
-const BOLLINGER_ROW_SPAN = 4;
-
 const INTERVAL_PICKER_ROW_SPAN = 1;
 
-const VWAP_ROW_SPAN = 5;
+const VWAP_ROW_SPAN = 5 + SECTION_TITLE_ROWS;
 
 /** Grid interno do bloco de EMAs rápidas: intervalo+remover, 4 botões de período, banda cima/baixo. */
 const QUICK_EMA_GRID_COLS = 4;
@@ -750,104 +837,164 @@ const QUICK_EMA_GROUP_ROWS = 4;
 
 function quickEmaRowSpan(groups) {
   const addRow = groups.length < MAX_QUICK_EMA_GROUPS ? 1 : 0;
-  return Math.max(1, groups.length * QUICK_EMA_GROUP_ROWS + addRow);
+  return Math.max(1, SECTION_TITLE_ROWS + groups.length * QUICK_EMA_GROUP_ROWS + addRow);
 }
 
+/** Grid interno do bloco de Bollinger Bands: intervalo+remover, período+desvio, ON/LS/LM/LI,
+ *  PATH+TENDÊNCIA — mesmas 4 colunas/4 linhas por grupo do Quick EMA acima. */
+const BB_GRID_COLS = 4;
+const BB_GROUP_ROWS = 4;
+
+function bbRowSpan(groups) {
+  const addRow = groups.length < MAX_BB_GROUPS ? 1 : 0;
+  return Math.max(1, SECTION_TITLE_ROWS + groups.length * BB_GROUP_ROWS + addRow);
+}
+
+/**
+ * Bollinger Bands — lista de até MAX_BB_GROUPS bandas (mesmo padrão do Quick EMA acima), cada
+ * uma com intervalo/período/desvio próprios, ON/OFF geral, quais das 3 linhas mostrar
+ * (LS=superior, LM=média, LI=inferior) e PATH/TENDÊNCIA independentes.
+ */
 function renderBollingerTile(
-  dims, t, bollingerBands, setBollingerBands, bbPathEnabled, setBbPathEnabled,
-  medianTrendEnabled, setMedianTrendEnabled,
+  { groups },
+  dims,
+  t,
+  addBbGroup,
+  removeBbGroup,
+  updateBbGroup,
+  toggleBbGroupFlag,
 ) {
   const innerW = dims.w - PANEL_TILE_PAD * 2;
   const innerH = dims.h - PANEL_TILE_PAD * 2;
-  const rowH = (innerH - PANEL_GAP * 3) / 4;
-  const halfDims = { w: (innerW - PANEL_GAP) / 2, h: rowH };
-  const rowDims = { w: innerW, h: rowH };
-  const color = BB_COLOR;
-  const pathColor = BB_PATH_COLOR;
-  const trendColor = MEDIAN_TREND_COLOR;
+  const rows = bbRowSpan(groups);
+  const rowH = (innerH - (rows - 1) * PANEL_GAP) / rows;
+  const colW = (innerW - (BB_GRID_COLS - 1) * PANEL_GAP) / BB_GRID_COLS;
+  const ivDims = { w: colW * 3 + PANEL_GAP * 2, h: rowH };
+  const removeDims = { w: colW, h: rowH };
+  const halfDims = { w: colW * 2 + PANEL_GAP, h: rowH };
+  const quarterDims = { w: colW, h: rowH };
+  const addDims = { w: innerW, h: rowH };
+  const titleDims = { w: innerW, h: rowH };
+
+  const cells = groups.flatMap((g, i) => {
+    const color = bbGroupColor(i);
+    const ivRow = SECTION_TITLE_ROWS + i * BB_GROUP_ROWS + 1;
+    const periodRow = SECTION_TITLE_ROWS + i * BB_GROUP_ROWS + 2;
+    const lineRow = SECTION_TITLE_ROWS + i * BB_GROUP_ROWS + 3;
+    const extraRow = SECTION_TITLE_ROWS + i * BB_GROUP_ROWS + 4;
+    return [
+      <div key={`${g.id}-iv`} style={{ gridColumn: '1 / span 3', gridRow: `${ivRow}`, display: 'flex', alignItems: 'stretch' }}>
+        <PanelTip text={t('chart.tip.bb_interval')}>
+          <select
+            value={g.interval}
+            onChange={(e) => updateBbGroup(g.id, { interval: e.target.value })}
+            style={{ ...panelSelect(color, ivDims), fontSize: scaleFontSize(ivDims, 0.35, 9, 13) }}
+          >
+            {OVERLAY_MA_INTERVALS.map((iv) => <option key={iv} value={iv}>{iv}</option>)}
+          </select>
+        </PanelTip>
+      </div>,
+      <div key={`${g.id}-rm`} style={{ gridColumn: '4', gridRow: `${ivRow}`, display: 'flex', alignItems: 'stretch' }}>
+        <PanelTip text={t('chart.tip.bb_remove')}>
+          <button
+            type="button"
+            onClick={() => removeBbGroup(g.id)}
+            style={{ ...panelBtn(false, '#f87171', false, removeDims), fontSize: 11 }}
+          >
+            ×
+          </button>
+        </PanelTip>
+      </div>,
+      <div key={`${g.id}-period`} style={{ gridColumn: '1 / span 2', gridRow: `${periodRow}`, display: 'flex', alignItems: 'stretch' }}>
+        <PanelTip text={t('chart.tip.bb_period')}>
+          <select
+            value={g.period}
+            onChange={(e) => updateBbGroup(g.id, { period: e.target.value })}
+            style={{ ...panelSelect(color, halfDims), fontSize: scaleFontSize(halfDims, 0.35, 9, 13) }}
+          >
+            {BB_PERIOD_OPTIONS.map((p) => <option key={p} value={p}>{p}</option>)}
+          </select>
+        </PanelTip>
+      </div>,
+      <div key={`${g.id}-stddev`} style={{ gridColumn: '3 / span 2', gridRow: `${periodRow}`, display: 'flex', alignItems: 'stretch' }}>
+        <PanelTip text={t('chart.tip.bb_stddev')}>
+          <select
+            value={g.stdDev}
+            onChange={(e) => updateBbGroup(g.id, { stdDev: Number(e.target.value) })}
+            style={{ ...panelSelect(color, halfDims), fontSize: scaleFontSize(halfDims, 0.35, 9, 13) }}
+          >
+            {BB_STDDEV_OPTIONS.map((s) => <option key={s} value={s}>±{s}σ</option>)}
+          </select>
+        </PanelTip>
+      </div>,
+      <div key={`${g.id}-on`} style={{ gridColumn: '1', gridRow: `${lineRow}`, display: 'flex', alignItems: 'stretch' }}>
+        <PanelTip text={t('chart.tip.bb_on')}>
+          <button type="button" onClick={() => toggleBbGroupFlag(g.id, 'enabled')} style={panelBtn(g.enabled, color, false, quarterDims)}>
+            ON
+          </button>
+        </PanelTip>
+      </div>,
+      <div key={`${g.id}-ls`} style={{ gridColumn: '2', gridRow: `${lineRow}`, display: 'flex', alignItems: 'stretch' }}>
+        <PanelTip text={t('chart.tip.bb_upper')}>
+          <button type="button" onClick={() => toggleBbGroupFlag(g.id, 'showUpper')} style={panelBtn(g.showUpper, color, false, quarterDims)}>
+            LS
+          </button>
+        </PanelTip>
+      </div>,
+      <div key={`${g.id}-lm`} style={{ gridColumn: '3', gridRow: `${lineRow}`, display: 'flex', alignItems: 'stretch' }}>
+        <PanelTip text={t('chart.tip.bb_middle')}>
+          <button type="button" onClick={() => toggleBbGroupFlag(g.id, 'showMiddle')} style={panelBtn(g.showMiddle, color, false, quarterDims)}>
+            LM
+          </button>
+        </PanelTip>
+      </div>,
+      <div key={`${g.id}-li`} style={{ gridColumn: '4', gridRow: `${lineRow}`, display: 'flex', alignItems: 'stretch' }}>
+        <PanelTip text={t('chart.tip.bb_lower')}>
+          <button type="button" onClick={() => toggleBbGroupFlag(g.id, 'showLower')} style={panelBtn(g.showLower, color, false, quarterDims)}>
+            LI
+          </button>
+        </PanelTip>
+      </div>,
+      <div key={`${g.id}-path`} style={{ gridColumn: '1 / span 2', gridRow: `${extraRow}`, display: 'flex', alignItems: 'stretch' }}>
+        <PanelTip text={t('chart.tip.bb_path')}>
+          <button type="button" onClick={() => toggleBbGroupFlag(g.id, 'showPath')} style={panelBtn(g.showPath, BB_PATH_COLOR, false, halfDims)}>
+            {g.showPath ? 'PATH ON' : 'PATH'}
+          </button>
+        </PanelTip>
+      </div>,
+      <div key={`${g.id}-trend`} style={{ gridColumn: '3 / span 2', gridRow: `${extraRow}`, display: 'flex', alignItems: 'stretch' }}>
+        <PanelTip text={t('chart.tip.bb_median_trend')}>
+          <button type="button" onClick={() => toggleBbGroupFlag(g.id, 'showMedianTrend')} style={panelBtn(g.showMedianTrend, MEDIAN_TREND_COLOR, false, halfDims)}>
+            {g.showMedianTrend ? 'TEND ON' : 'TENDÊNCIA'}
+          </button>
+        </PanelTip>
+      </div>,
+    ];
+  });
+
   return (
     <div style={{
       display: 'grid',
-      gridTemplateColumns: '1fr 1fr',
-      gridTemplateRows: 'repeat(4, 1fr)',
+      gridTemplateColumns: `repeat(${BB_GRID_COLS}, 1fr)`,
+      gridTemplateRows: `repeat(${rows}, 1fr)`,
       gap: PANEL_GAP,
       width: innerW,
       height: innerH,
       boxSizing: 'border-box',
     }}>
-      <div style={{ gridColumn: '1', gridRow: '1', display: 'flex', alignItems: 'stretch' }}>
-        <PanelTip text={t('chart.tip.bb_period')}>
-          <select
-            value={bollingerBands.period}
-            onChange={e => setBollingerBands(b => ({ ...b, period: e.target.value }))}
-            style={panelSelect(color, halfDims)}
-          >
-            {BB_PERIOD_OPTIONS.map(p => <option key={p} value={p}>{p}</option>)}
-          </select>
-        </PanelTip>
+      <div style={{ gridColumn: `1 / span ${BB_GRID_COLS}`, gridRow: '1', ...scaleSectionTitle(titleDims) }}>
+        Bollinger Bands
       </div>
-      <div style={{ gridColumn: '2', gridRow: '1', display: 'flex', alignItems: 'stretch' }}>
-        <PanelTip text={t('chart.tip.bb_stddev')}>
-          <select
-            value={bollingerBands.stdDev}
-            onChange={e => setBollingerBands(b => ({ ...b, stdDev: Number(e.target.value) }))}
-            style={panelSelect(color, halfDims)}
-          >
-            {BB_STDDEV_OPTIONS.map(s => <option key={s} value={s}>±{s}σ</option>)}
-          </select>
-        </PanelTip>
-      </div>
-      <div style={{ gridColumn: '1 / span 2', gridRow: '2', display: 'flex', alignItems: 'stretch' }}>
-        <PanelTip text={t('chart.tip.bb_interval')}>
-          <select
-            value={bollingerBands.interval}
-            onChange={e => setBollingerBands(b => ({ ...b, interval: e.target.value }))}
-            style={panelSelect(color, rowDims)}
-          >
-            {OVERLAY_MA_INTERVALS.map(iv => <option key={iv} value={iv}>{iv}</option>)}
-          </select>
-        </PanelTip>
-      </div>
-      <div style={{ gridColumn: '1', gridRow: '3', display: 'flex', alignItems: 'stretch' }}>
-        <PanelTip text={t('chart.tip.bb_on')}>
-          <button
-            type="button"
-            onClick={() => setBollingerBands(b => ({ ...b, enabled: !b.enabled }))}
-            style={panelBtn(bollingerBands.enabled, color, false, halfDims)}
-          >
-            {bollingerBands.enabled ? 'BB ON' : 'BB OFF'}
-          </button>
-        </PanelTip>
-      </div>
-      <div style={{ gridColumn: '2', gridRow: '3', display: 'flex', alignItems: 'stretch' }}>
-        <PanelTip text={t('chart.tip.bb_path')}>
-          <button
-            type="button"
-            onClick={() => {
-              setBbPathEnabled((v) => {
-                const next = !v;
-                // Liga as bandas junto com o path pra o usuário ver a referência lower/upper
-                if (next) setBollingerBands((b) => (b.enabled ? b : { ...b, enabled: true }));
-                return next;
-              });
-            }}
-            style={panelBtn(bbPathEnabled, pathColor, false, halfDims)}
-          >
-            {bbPathEnabled ? 'PATH ON' : 'PATH'}
-          </button>
-        </PanelTip>
-      </div>
-      <div style={{ gridColumn: '1 / span 2', gridRow: '4', display: 'flex', alignItems: 'stretch' }}>
-        <PanelTip text={t('chart.tip.bb_median_trend')}>
-          <button
-            type="button"
-            onClick={() => setMedianTrendEnabled(v => !v)}
-            style={panelBtn(medianTrendEnabled, trendColor, false, rowDims)}
-          >
-            {medianTrendEnabled ? 'TENDÊNCIA ON' : 'TENDÊNCIA MEDIANA'}
-          </button>
-        </PanelTip>
-      </div>
+      {cells}
+      {groups.length < MAX_BB_GROUPS && (
+        <div style={{ gridColumn: `1 / span ${BB_GRID_COLS}`, gridRow: `${rows}`, display: 'flex', alignItems: 'stretch' }}>
+          <PanelTip text={t('chart.tip.bb_add')}>
+            <button type="button" onClick={addBbGroup} style={panelBtn(false, '#94a3b8', false, addDims)}>
+              + Bollinger
+            </button>
+          </PanelTip>
+        </div>
+      )}
     </div>
   );
 }
@@ -859,22 +1006,24 @@ function renderBollingerTile(
 function renderVwapTile(dims, t, vwap, setVwap, slopeHighlightOn, setSlopeHighlightOn) {
   const innerW = dims.w - PANEL_TILE_PAD * 2;
   const innerH = dims.h - PANEL_TILE_PAD * 2;
-  const rowH = (innerH - PANEL_GAP * 4) / 5;
+  const rowH = (innerH - (VWAP_ROW_SPAN - 1) * PANEL_GAP) / VWAP_ROW_SPAN;
   const rowDims = { w: innerW, h: rowH };
   const halfDims = { w: (innerW - PANEL_GAP) / 2, h: rowH };
   const color = '#4ade80';
   const declineColor = '#ef4444';
+  const r = (n) => SECTION_TITLE_ROWS + n;
   return (
     <div style={{
       display: 'grid',
       gridTemplateColumns: '1fr 1fr',
-      gridTemplateRows: 'repeat(5, 1fr)',
+      gridTemplateRows: `repeat(${VWAP_ROW_SPAN}, 1fr)`,
       gap: PANEL_GAP,
       width: innerW,
       height: innerH,
       boxSizing: 'border-box',
     }}>
-      <div style={{ gridColumn: '1 / span 2', gridRow: '1', display: 'flex', alignItems: 'stretch' }}>
+      <div style={{ gridColumn: '1 / span 2', gridRow: '1', ...scaleSectionTitle(rowDims) }}>VWAP</div>
+      <div style={{ gridColumn: '1 / span 2', gridRow: `${r(1)}`, display: 'flex', alignItems: 'stretch' }}>
         <PanelTip text={t('chart.tip.vwap_interval')}>
           <select
             value={vwap.interval}
@@ -885,7 +1034,7 @@ function renderVwapTile(dims, t, vwap, setVwap, slopeHighlightOn, setSlopeHighli
           </select>
         </PanelTip>
       </div>
-      <div style={{ gridColumn: '1', gridRow: '2', display: 'flex', alignItems: 'stretch' }}>
+      <div style={{ gridColumn: '1', gridRow: `${r(2)}`, display: 'flex', alignItems: 'stretch' }}>
         <PanelTip text={t('chart.tip.vwap_session')}>
           <button
             type="button"
@@ -896,7 +1045,7 @@ function renderVwapTile(dims, t, vwap, setVwap, slopeHighlightOn, setSlopeHighli
           </button>
         </PanelTip>
       </div>
-      <div style={{ gridColumn: '2', gridRow: '2', display: 'flex', alignItems: 'stretch' }}>
+      <div style={{ gridColumn: '2', gridRow: `${r(2)}`, display: 'flex', alignItems: 'stretch' }}>
         <PanelTip text={t('chart.tip.vwap_session')}>
           <button
             type="button"
@@ -907,7 +1056,7 @@ function renderVwapTile(dims, t, vwap, setVwap, slopeHighlightOn, setSlopeHighli
           </button>
         </PanelTip>
       </div>
-      <div style={{ gridColumn: '1 / span 2', gridRow: '3', display: 'flex', alignItems: 'stretch' }}>
+      <div style={{ gridColumn: '1 / span 2', gridRow: `${r(3)}`, display: 'flex', alignItems: 'stretch' }}>
         <PanelTip text={t('chart.tip.vwap_bands')}>
           <button
             type="button"
@@ -918,7 +1067,7 @@ function renderVwapTile(dims, t, vwap, setVwap, slopeHighlightOn, setSlopeHighli
           </button>
         </PanelTip>
       </div>
-      <div style={{ gridColumn: '1 / span 2', gridRow: '4', display: 'flex', alignItems: 'stretch' }}>
+      <div style={{ gridColumn: '1 / span 2', gridRow: `${r(4)}`, display: 'flex', alignItems: 'stretch' }}>
         <PanelTip text={t('chart.tip.vwap_on')}>
           <button
             type="button"
@@ -929,7 +1078,7 @@ function renderVwapTile(dims, t, vwap, setVwap, slopeHighlightOn, setSlopeHighli
           </button>
         </PanelTip>
       </div>
-      <div style={{ gridColumn: '1 / span 2', gridRow: '5', display: 'flex', alignItems: 'stretch' }}>
+      <div style={{ gridColumn: '1 / span 2', gridRow: `${r(5)}`, display: 'flex', alignItems: 'stretch' }}>
         <PanelTip text={t('chart.tip.vwap_slope_highlight')}>
           <button
             type="button"
@@ -1100,7 +1249,7 @@ function computeMasonryLayout(tileDefs, width, height, gap) {
     .map((t) => ({
       ...t,
       colSpan: BANDS_COL_SPAN,
-      rowSpan: t.kind === 'bb' ? BOLLINGER_ROW_SPAN : t.kind === 'vwap' ? VWAP_ROW_SPAN : INTERVAL_PICKER_KINDS.includes(t.kind) ? INTERVAL_PICKER_ROW_SPAN : quickEmaRowSpan(t.data.groups),
+      rowSpan: t.kind === 'bb' ? bbRowSpan(t.data.groups) : t.kind === 'vwap' ? VWAP_ROW_SPAN : INTERVAL_PICKER_KINDS.includes(t.kind) ? INTERVAL_PICKER_ROW_SPAN : quickEmaRowSpan(t.data.groups),
     }));
 
   // Pack indicator buttons — spans calculados dinamicamente pelo número de tiles
@@ -1259,12 +1408,13 @@ function renderQuickEmaGroupsTile(
   const bandPeriodDims = { w: innerW, h: rowH };
   const bandDims = { w: colW * 2 + PANEL_GAP, h: rowH };
   const addDims = { w: innerW, h: rowH };
+  const titleDims = { w: innerW, h: rowH };
 
   const cells = groups.flatMap((g, i) => {
-    const ivRow = i * QUICK_EMA_GROUP_ROWS + 1;
-    const pRow = i * QUICK_EMA_GROUP_ROWS + 2;
-    const bandSelectRow = i * QUICK_EMA_GROUP_ROWS + 3;
-    const pctRow = i * QUICK_EMA_GROUP_ROWS + 4;
+    const ivRow = SECTION_TITLE_ROWS + i * QUICK_EMA_GROUP_ROWS + 1;
+    const pRow = SECTION_TITLE_ROWS + i * QUICK_EMA_GROUP_ROWS + 2;
+    const bandSelectRow = SECTION_TITLE_ROWS + i * QUICK_EMA_GROUP_ROWS + 3;
+    const pctRow = SECTION_TITLE_ROWS + i * QUICK_EMA_GROUP_ROWS + 4;
     const bandColor = g.bandPeriod ? (QUICK_EMA_PERIOD_COLORS[g.bandPeriod] ?? '#94a3b8') : '#475569';
     return [
       <div key={`${g.id}-iv`} style={{ gridColumn: '1 / span 3', gridRow: `${ivRow}`, display: 'flex', alignItems: 'stretch' }}>
@@ -1369,6 +1519,9 @@ function renderQuickEmaGroupsTile(
       height: innerH,
       boxSizing: 'border-box',
     }}>
+      <div style={{ gridColumn: `1 / span ${QUICK_EMA_GRID_COLS}`, gridRow: '1', ...scaleSectionTitle(titleDims) }}>
+        EMA rápida
+      </div>
       {cells}
       {groups.length < MAX_QUICK_EMA_GROUPS && (
         <div style={{ gridColumn: `1 / span ${QUICK_EMA_GRID_COLS}`, gridRow: `${rows}`, display: 'flex', alignItems: 'stretch' }}>
@@ -1398,12 +1551,11 @@ function ChartIndicatorPanel({
   toggleQuickEmaGroupPeriod,
   updateQuickEmaGroupBandPct,
   updateQuickEmaGroupBandPeriod,
-  bollingerBands,
-  setBollingerBands,
-  bbPathEnabled,
-  setBbPathEnabled,
-  medianTrendEnabled,
-  setMedianTrendEnabled,
+  bbGroups,
+  addBbGroup,
+  removeBbGroup,
+  updateBbGroup,
+  toggleBbGroupFlag,
   srInterval,
   setSrInterval,
   pphlInterval,
@@ -1457,14 +1609,14 @@ function ChartIndicatorPanel({
       list.push({ key: 'chopInterval', kind: 'chopInterval', data: {} });
     }
     if (showBb) {
-      list.push({ key: 'bb', kind: 'bb', data: {} });
+      list.push({ key: 'bb', kind: 'bb', data: { groups: bbGroups } });
     }
     if (showVwap) {
       list.push({ key: 'vwap', kind: 'vwap', data: {} });
     }
     list.push({ key: 'quickEma', kind: 'quickEma', data: { groups: quickEmaGroups } });
     return list;
-  }, [panelButtons, activeIndicators, quickEmaGroups]);
+  }, [panelButtons, activeIndicators, quickEmaGroups, bbGroups]);
 
   // Painel agora é um dropdown flutuante no topo do gráfico (não empurra mais o chart) —
   // largura limitada (60% no desktop, full width no mobile) e altura travada em % do
@@ -1596,6 +1748,15 @@ function ChartIndicatorPanel({
               <TradeHistoryPanel symbol={selectedChart?.symbol} gateFavorites={gateFavorites} />
             </div>
           ) : layout.indicatorPlacements.length > 0 && (
+            <>
+            {/* Legend: deixa claro que este bloco acompanha o intervalo do próprio gráfico —
+                diferente das bandas abaixo (Bollinger/VWAP/EMA rápida), que têm intervalo próprio. */}
+            <div style={{
+              flexShrink: 0, fontSize: 9, letterSpacing: 1, color: '#64748b', fontFamily: 'monospace',
+              textTransform: 'uppercase', lineHeight: 1,
+            }}>
+              Indicadores · intervalo do gráfico
+            </div>
             <div style={{
               flex: layout.blockPlacements.length > 0 ? layout.indicatorRowUnits : 1,
               minHeight: layout.indicatorRowUnits * MIN_ROW_UNIT_PX,
@@ -1620,6 +1781,7 @@ function ChartIndicatorPanel({
                 </div>
               ))}
             </div>
+            </>
           )}
 
           {panelTab !== 'executed' && layout.blockPlacements.map((tile) => (
@@ -1633,8 +1795,7 @@ function ChartIndicatorPanel({
               }}
             >
               {tile.kind === 'bb' && renderBollingerTile(
-                tile.dims, t, bollingerBands, setBollingerBands, bbPathEnabled, setBbPathEnabled,
-                medianTrendEnabled, setMedianTrendEnabled,
+                tile.data, tile.dims, t, addBbGroup, removeBbGroup, updateBbGroup, toggleBbGroupFlag,
               )}
               {tile.kind === 'srInterval' && renderIntervalPickerTile(tile.dims, t, 'chart.tip.sr_interval', 'S/R', '#facc15', srInterval, setSrInterval)}
               {tile.kind === 'pphlInterval' && renderIntervalPickerTile(tile.dims, t, 'chart.tip.pphl_interval', 'PPHL', '#2dd4bf', pphlInterval, setPphlInterval)}
@@ -2749,7 +2910,7 @@ export default function CandlestickChart() {
   const { selectedChart, setSelectedChart, chartZoom, setChartZoom, chartTradeMarkers, chartViewSource,
     chartCandleWindowReset,
     multitradeChartFocus, tradePurchases, allTrades, chartInterval: savedInterval, setChartInterval,
-    chartPanelButtons, uiPrefs, setMaBandsDefaults, setBollingerBandsDefaults, setSrIntervalDefault, setPphlIntervalDefault, setChopIntervalDefault, setVwapDefaults, setVwapSlopeHighlightDefault, setActiveIndicatorsPreference,
+    chartPanelButtons, uiPrefs, setMaBandsDefaults, setSrIntervalDefault, setPphlIntervalDefault, setChopIntervalDefault, setVwapDefaults, setVwapSlopeHighlightDefault, setActiveIndicatorsPreference,
     multitradeFavorites, fiveMTradeFavorites, activeTrades } = useCurrency();
   const { t } = useI18n();
   const isMobile = useIsMobile();
@@ -2828,17 +2989,58 @@ export default function CandlestickChart() {
   const [overlayMaLoading, setOverlayMaLoading] = useState(false);
   const [adaptiveBandOverlay, setAdaptiveBandOverlay] = useState(null);
   const [maBands, setMaBands] = useState(() => ({ ...uiPrefs.maBandsDefaults }));
-  const [bollingerBands, setBollingerBands] = useState(() => ({ ...uiPrefs.bollingerBandsDefaults }));
-  // Trajetória teórica lower→upper (simulada no intervalo da BB) — toggle local da sessão do chart.
-  const [bbPathEnabled, setBbPathEnabled] = useState(false);
-  // Filtro de tendência da mediana da BB (linha verde/vermelha nos 10 candles antes de cada
-  // toque na banda inferior) — mesmo cálculo do bot bollinger-bands (checkMedianTrendFilter).
-  const [medianTrendEnabled, setMedianTrendEnabled] = useState(false);
-  // Overlay de Bollinger pedido pela aba Estatísticas (clique numa linha da lista) — sobrescreve
-  // período/desvio/intervalo locais pelos usados no cálculo daquela ocorrência e liga o overlay.
+  const [bbGroups, setBbGroups] = useState(loadBbGroups);
+  const addBbGroup = useCallback(() => {
+    setBbGroups((prev) => {
+      if (prev.length >= MAX_BB_GROUPS) return prev;
+      const next = [...prev, makeBbGroup()];
+      saveBbGroups(next);
+      return next;
+    });
+  }, []);
+  const removeBbGroup = useCallback((id) => {
+    setBbGroups((prev) => {
+      const next = prev.filter((g) => g.id !== id);
+      saveBbGroups(next);
+      return next;
+    });
+  }, []);
+  const updateBbGroup = useCallback((id, patch) => {
+    setBbGroups((prev) => {
+      const next = prev.map((g) => (g.id === id ? { ...g, ...patch } : g));
+      saveBbGroups(next);
+      return next;
+    });
+  }, []);
+  // Liga/desliga um flag booleano do grupo (enabled/showUpper/showMiddle/showLower/showPath/
+  // showMedianTrend). Ligar showPath junto liga `enabled` também — senão o usuário via só o
+  // path sem a referência visual das bandas (mesmo comportamento do botão PATH antigo).
+  const toggleBbGroupFlag = useCallback((id, key) => {
+    setBbGroups((prev) => {
+      const next = prev.map((g) => {
+        if (g.id !== id) return g;
+        const value = !g[key];
+        return key === 'showPath' && value ? { ...g, showPath: true, enabled: true } : { ...g, [key]: value };
+      });
+      saveBbGroups(next);
+      return next;
+    });
+  }, []);
+  // Overlay de Bollinger pedido pela aba Estatísticas (clique numa linha da lista) — mostra a
+  // banda usada no cálculo daquela ocorrência como um grupo próprio (STATS_BB_GROUP_ID), sem
+  // mexer nas bandas manuais que o usuário já tinha configurado no painel.
   useEffect(() => {
     if (!chartZoom?.bollinger) return;
-    setBollingerBands((prev) => ({ ...prev, ...chartZoom.bollinger, enabled: true }));
+    setBbGroups((prev) => {
+      const withoutStats = prev.filter((g) => g.id !== STATS_BB_GROUP_ID);
+      const group = makeBbGroup({
+        id: STATS_BB_GROUP_ID,
+        period: String(chartZoom.bollinger.period),
+        stdDev: Number(chartZoom.bollinger.stdDev),
+        interval: chartZoom.bollinger.interval,
+      });
+      return [group, ...withoutStats].slice(0, MAX_BB_GROUPS);
+    });
   }, [chartZoom]);
   const [bollingerCache, setBollingerCache] = useState({});
   const [_bollingerLoading, setBollingerLoading] = useState(false);
@@ -3070,39 +3272,49 @@ export default function CandlestickChart() {
   }, [hasForcedVwap, multitradeChartFocus?.vwapOverride, chartViewSource, chartZoom?.vwap]);
 
   // Favorito bollinger-bands: força a banda de Bollinger (período/desvio/intervalo do
-  // próprio bot) no chart — mesma ideia do overlay de VWAP acima, mas pra Bollinger. Assim,
-  // ao selecionar uma moeda BB rodando em 5m e outra em 1m, o gráfico E a banda acompanham
-  // o intervalo configurado de cada uma, não o intervalo manual do painel (tile "BB").
+  // próprio bot) no chart como um grupo próprio (TRADE_BB_GROUP_ID) — mesma ideia do
+  // TRADE_EMA_GROUP_ID do Quick EMA (ver efeito hasForcedQuickEma abaixo), sem mexer nas bandas
+  // manuais que o usuário já tinha configurado no painel. Assim, ao selecionar uma moeda BB
+  // rodando em 5m e outra em 1m, o gráfico E a banda acompanham o intervalo configurado de cada
+  // uma, não o intervalo manual do painel (tile "BB").
   const hasForcedBollinger = isTradePanelChartView(chartViewSource) && !!multitradeChartFocus?.bollingerOverride;
   useEffect(() => {
-    if (hasForcedBollinger) {
-      setBollingerBands(multitradeChartFocus.bollingerOverride);
-    } else if (chartZoom?.bollinger) {
-      // aba Estatísticas cuida do próprio overlay (useEffect acima) — não mexe aqui.
-    } else if (isTradePanelChartView(chartViewSource)) {
-      // Ainda dentro do painel de trade, mas favorito atual não é bollinger-bands (ex.: trocou
-      // pra MA-Cross ou VWAP Bands) — desliga a Bollinger pra não vazar banda de outro trade.
-      setBollingerBands((b) => (b.enabled ? { ...b, enabled: false } : b));
-    } else {
-      setBollingerBands({ ...uiPrefs.bollingerBandsDefaults });
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasForcedBollinger, multitradeChartFocus?.bollingerOverride, chartViewSource, chartZoom?.bollinger]);
+    setBbGroups((prev) => {
+      const withoutAuto = prev.filter((g) => g.id !== TRADE_BB_GROUP_ID);
+      if (!hasForcedBollinger) {
+        return withoutAuto.length === prev.length ? prev : withoutAuto;
+      }
+      const ov = multitradeChartFocus.bollingerOverride;
+      const group = makeBbGroup({
+        id: TRADE_BB_GROUP_ID,
+        interval: ov.interval,
+        period: String(ov.period),
+        stdDev: Number(ov.stdDev),
+        // PATH + tendência da mediana também ligados de cara — o usuário quer ver de imediato
+        // como o bot está simulando os ciclos e a tendência que alimenta o filtro dele, sem
+        // precisar clicar em nada.
+        showPath: true,
+        showMedianTrend: true,
+      });
+      return [group, ...withoutAuto].slice(0, MAX_BB_GROUPS);
+    });
+  }, [hasForcedBollinger, multitradeChartFocus?.bollingerOverride]);
 
   // Na primeira renderização, desliga qualquer indicador que tenha ficado ativo de uma sessão
   // anterior (persistido em localStorage) — o gráfico sempre abre limpo. Precisa rodar DEPOIS
-  // dos efeitos "favorito vwap-bands"/"favorito bollinger-bands" acima: eles também copiam
-  // uiPrefs.vwapDefaults/bollingerBandsDefaults pro estado local no mount (ramo `else`), e como
-  // todo useEffect do primeiro commit ainda lê o uiPrefs "velho" (a limpeza abaixo só é
-  // aplicada no PRÓXIMO render), rodar antes deste ponto perdia a corrida — o valor antigo
-  // (enabled: true) sobrescrevia de volta por cima da limpeza. Ficando depois, esta é a
-  // última escrita do commit e vence.
+  // do efeito "favorito vwap-bands" acima: ele também copia uiPrefs.vwapDefaults pro estado
+  // local no mount (ramo `else`), e como todo useEffect do primeiro commit ainda lê o uiPrefs
+  // "velho" (a limpeza abaixo só é aplicada no PRÓXIMO render), rodar antes deste ponto perdia
+  // a corrida — o valor antigo (enabled: true) sobrescrevia de volta por cima da limpeza.
+  // Ficando depois, esta é a última escrita do commit e vence.
   useEffect(() => {
     if (activeIndicators.length) setActiveIndicatorsPreference([]);
-    if (bollingerBands.enabled) {
-      setBollingerBands((prev) => ({ ...prev, enabled: false }));
-      setBollingerBandsDefaults({ enabled: false });
-    }
+    setBbGroups((prev) => {
+      if (!prev.some((g) => g.enabled || g.showPath || g.showMedianTrend)) return prev;
+      const next = prev.map((g) => ({ ...g, enabled: false, showPath: false, showMedianTrend: false }));
+      saveBbGroups(next);
+      return next;
+    });
     if (vwap.enabled) {
       setVwap((prev) => ({ ...prev, enabled: false }));
       setVwapDefaults({ enabled: false });
@@ -3152,18 +3364,6 @@ export default function CandlestickChart() {
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [maBands.pct, maBands.showAbove, maBands.showBelow, maBands.period, maBands.interval]);
-
-  // Persiste preferências da Bollinger Bands (ligado, período, desvio, intervalo)
-  useEffect(() => {
-    if (isTradePanelChartView(chartViewSource)) return;
-    setBollingerBandsDefaults({
-      enabled: bollingerBands.enabled,
-      period: bollingerBands.period,
-      stdDev: bollingerBands.stdDev,
-      interval: bollingerBands.interval,
-    });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bollingerBands.enabled, bollingerBands.period, bollingerBands.stdDev, bollingerBands.interval]);
 
   // Persiste o intervalo do S/R (independente do intervalo do gráfico, como MA1/MA2/BB)
   useEffect(() => {
@@ -3355,77 +3555,66 @@ export default function CandlestickChart() {
     return () => { cancelled = true; };
   }, [quickEmaGroups, selectedChart?.symbol, selectedChart?.source, selectedChart?.interval, selectedChart?.candlesticks, currentInterval, overlayFetchLimit, displayCandleCount, chartCandleWindowReset]);
 
-  // Busca a série de Bandas de Bollinger (upper/middle/lower) — período/intervalo próprios, como MA1/MA2.
-  // Também busca com PATH ou o filtro de tendência da mediana ligados (mesmo sem as linhas BB),
-  // pra simular toques lower→upper / calcular a tendência da linha mediana.
+  // Busca as séries de Bandas de Bollinger (upper/middle/lower) — uma por combinação única de
+  // período/desvio/intervalo entre os grupos habilitados do painel (mesmo padrão do efeito de
+  // overlayMaCache/quickEmaGroups acima). Um grupo entra na busca mesmo só com PATH ou a
+  // tendência da mediana ligados (sem as linhas BB), pra simular toques lower→upper / calcular
+  // a tendência da linha mediana.
   useEffect(() => {
     const bbNeeded = chartPanelButtons.bb !== false
-      && (bollingerBands.enabled || bbPathEnabled || medianTrendEnabled);
-    if (!selectedChart?.symbol || !bbNeeded) {
+      ? bbGroups.filter((g) => g.enabled || g.showPath || g.showMedianTrend)
+      : [];
+    if (!selectedChart?.symbol || !bbNeeded.length) {
+      setBollingerCache({});
       setBollingerLoading(false);
       return undefined;
     }
-    const key = `${bollingerBands.period}-${bollingerBands.stdDev}-${bollingerBands.interval}`;
+    const toFetch = [];
+    for (const g of bbNeeded) {
+      const key = `${g.period}-${g.stdDev}-${g.interval}`;
+      if (toFetch.some((f) => f.key === key)) continue;
+      toFetch.push({ key, period: g.period, stdDev: g.stdDev, interval: g.interval });
+    }
     let cancelled = false;
     setBollingerLoading(true);
     (async () => {
-      try {
-        const ovLimit = computeOverlayMaFetchLimit(
-          selectedChart.interval ?? currentInterval,
-          bollingerBands.interval,
-          bollingerBands.period,
-          Math.max(displayCandleCount, selectedChart.candlesticks?.length ?? 0, DEFAULT_CANDLE_LIMIT),
-          overlayFetchLimit,
-        );
-        const points = await fetchBollingerOverlayPoints(
-          selectedChart.symbol,
-          bollingerBands.interval,
-          bollingerBands.period,
-          bollingerBands.stdDev,
-          selectedChart.source,
-          ovLimit,
-        );
-        if (points.length) {
-          const lastAvg = points.slice(-80);
-          const expectedGapMs = INTERVAL_MS[bollingerBands.interval] ?? null;
-          const actualGapMs = lastAvg.length > 1 ? lastAvg[1].openTime - lastAvg[0].openTime : null;
-          const gapMismatch = expectedGapMs != null && actualGapMs != null && actualGapMs !== expectedGapMs;
-          console.log(
-            `[BollingerBands] ${selectedChart.symbol} — intervalo pedido: ${bollingerBands.interval}`
-            + ` (BB${bollingerBands.period}/${bollingerBands.stdDev})`
-            + (hasForcedBollinger ? ` — FORÇADO pelo favorito (bollingerOverride: ${JSON.stringify(multitradeChartFocus.bollingerOverride)})` : ''),
+      const next = {};
+      await Promise.all(toFetch.map(async ({ key, period, stdDev, interval }) => {
+        try {
+          const ovLimit = computeOverlayMaFetchLimit(
+            selectedChart.interval ?? currentInterval,
+            interval,
+            period,
+            Math.max(displayCandleCount, selectedChart.candlesticks?.length ?? 0, DEFAULT_CANDLE_LIMIT),
+            overlayFetchLimit,
           );
-          if (gapMismatch) {
-            console.warn(
-              `[BollingerBands] intervalo entre candles não bate com "${bollingerBands.interval}"`
-              + ` — esperado ${expectedGapMs}ms, veio ${actualGapMs}ms. Os pontos abaixo NÃO são desse intervalo.`,
-            );
+          const points = await fetchBollingerOverlayPoints(
+            selectedChart.symbol, interval, period, stdDev, selectedChart.source, ovLimit,
+          );
+          next[key] = points;
+          if (points.length > 1) {
+            const expectedGapMs = INTERVAL_MS[interval] ?? null;
+            const actualGapMs = points[points.length - 1].openTime - points[points.length - 2].openTime;
+            if (expectedGapMs != null && actualGapMs !== expectedGapMs) {
+              console.warn(
+                `[BollingerBands] ${selectedChart.symbol} — intervalo entre candles não bate com "${interval}"`
+                + ` — esperado ${expectedGapMs}ms, veio ${actualGapMs}ms.`,
+              );
+            }
           }
-          console.log(
-            'últimos 80 valores (largura% = (upper-lower)/lower×100, igual à coluna Larg%):',
-            lastAvg.map(p => ({
-              time: new Date(p.openTime).toLocaleString('pt-BR'),
-              upper: p.upper,
-              middle: p.middle,
-              lower: p.lower,
-              widthPct: p.lower > 0 ? Number((((p.upper - p.lower) / p.lower) * 100).toFixed(4)) : null,
-            })),
-          );
+        } catch (e) {
+          console.warn('[bollingerBands]', key, e.message);
         }
-        if (!cancelled) setBollingerCache({ [key]: points });
-      } catch (e) {
-        console.warn('[bollingerBands]', key, e.message);
-        if (!cancelled) setBollingerCache({});
-      } finally {
-        if (!cancelled) setBollingerLoading(false);
+      }));
+      if (!cancelled) {
+        setBollingerCache(next);
+        setBollingerLoading(false);
       }
     })();
     return () => { cancelled = true; };
   }, [
-    selectedChart?.symbol, selectedChart?.interval, selectedChart?.source, selectedChart?.candlesticks,
+    bbGroups, selectedChart?.symbol, selectedChart?.interval, selectedChart?.source, selectedChart?.candlesticks,
     currentInterval, overlayFetchLimit, displayCandleCount, chartPanelButtons.bb,
-    bollingerBands.enabled, bollingerBands.period, bollingerBands.stdDev, bollingerBands.interval,
-    bbPathEnabled, medianTrendEnabled,
   ]);
 
   // Busca as zonas de Suporte/Resistência — intervalo próprio (independente do gráfico), como a Bollinger.
@@ -4181,23 +4370,36 @@ export default function CandlestickChart() {
 
   const botTradeConfig = botFavoriteEntry?.tradeConfig ?? botAdHocTradeConfig;
 
-  const chartBollingerConfig = useMemo(() => {
-    const linesOn = bollingerBands.enabled && chartPanelButtons.bb !== false;
-    const pathOn = bbPathEnabled && chartPanelButtons.bb !== false;
-    const medianTrendOn = medianTrendEnabled && chartPanelButtons.bb !== false;
-    if (!linesOn && !pathOn && !medianTrendOn) return null;
-    const key = `${bollingerBands.period}-${bollingerBands.stdDev}-${bollingerBands.interval}`;
-    return {
-      enabled: linesOn,
-      showPath: pathOn,
-      showMedianTrend: medianTrendOn,
-      medianTrendLookback: 10,
-      period: bollingerBands.period,
-      stdDev: bollingerBands.stdDev,
-      interval: bollingerBands.interval,
-      points: bollingerCache[key] ?? [],
-    };
-  }, [bollingerBands, bollingerCache, chartPanelButtons.bb, bbPathEnabled, medianTrendEnabled]);
+  // Uma config por grupo BB habilitado (linhas e/ou PATH e/ou tendência da mediana) — motor
+  // Lightweight Charts (CandlestickChartLW) desenha todas simultaneamente, cada uma com sua cor.
+  const chartBollingerConfigs = useMemo(() => {
+    if (chartPanelButtons.bb === false) return [];
+    return bbGroups
+      .map((g, i) => {
+        if (!g.enabled && !g.showPath && !g.showMedianTrend) return null;
+        const key = `${g.period}-${g.stdDev}-${g.interval}`;
+        return {
+          id: g.id,
+          color: bbGroupColor(i),
+          label: `BB${g.period}@${g.interval}`,
+          enabled: g.enabled,
+          showUpper: g.showUpper,
+          showMiddle: g.showMiddle,
+          showLower: g.showLower,
+          showPath: g.showPath,
+          showMedianTrend: g.showMedianTrend,
+          medianTrendLookback: 10,
+          period: g.period,
+          stdDev: g.stdDev,
+          interval: g.interval,
+          points: bollingerCache[key] ?? [],
+        };
+      })
+      .filter(Boolean);
+  }, [bbGroups, bollingerCache, chartPanelButtons.bb]);
+  // Motor ECharts legado (buildOption abaixo) só sabe desenhar 1 Bollinger — usa a 1ª config
+  // habilitada como aproximação (sem multi-BB nesse motor, fora do escopo desta feature).
+  const chartBollingerConfig = chartBollingerConfigs[0] ?? null;
 
   const chartSrConfig = useMemo(() => {
     if (!srShown) return null;
@@ -4235,10 +4437,10 @@ export default function CandlestickChart() {
       selectedChart, colors, effectiveIndicators, displayLimit, chartZoom, tradeTimes, overlayConfigs,
       chartTradeMarkers?.length ? chartTradeMarkers : (selectedChart.tradeMarkers ?? []),
       chartLeftPad, chartBuyInfo, chartStopLossConfig, chartTargetConfig, chartRightPad, chartBollingerConfig, chartSrConfig, chartPphlConfig, chartVwapConfig, chartChopConfig, vwapSlopeHighlight, isMobile,
-      bbPathEnabled,
+      chartBollingerConfig?.showPath ?? false,
     );
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedChart, colors, effectiveIndicators, chartZoom, tradePurchases, chartTradeMarkers, activeTab, overlayConfigs, displayLimit, chartLeftPad, chartRightPad, chartBuyInfo, chartStopLossConfig, chartTargetConfig, chartBollingerConfig, chartSrConfig, chartPphlConfig, chartVwapConfig, chartChopConfig, vwapSlopeHighlight, isMobile, bbPathEnabled]);
+  }, [selectedChart, colors, effectiveIndicators, chartZoom, tradePurchases, chartTradeMarkers, activeTab, overlayConfigs, displayLimit, chartLeftPad, chartRightPad, chartBuyInfo, chartStopLossConfig, chartTargetConfig, chartBollingerConfig, chartSrConfig, chartPphlConfig, chartVwapConfig, chartChopConfig, vwapSlopeHighlight, isMobile]);
 
   if (!selectedChart || !option) {
     return (
@@ -4483,7 +4685,7 @@ export default function CandlestickChart() {
               fillHeight
               activeIndicators={activeIndicators}
               quickEmaGroups={quickEmaGroups}
-              bollingerBands={bollingerBands}
+              bollingerBandsGroups={bbGroups}
               panelButtons={chartPanelButtons}
               candleWindowCount={hasExplicitCandleWindow ? displayCandleCount : null}
             />
@@ -4500,12 +4702,11 @@ export default function CandlestickChart() {
             toggleQuickEmaGroupPeriod={toggleQuickEmaGroupPeriod}
             updateQuickEmaGroupBandPct={updateQuickEmaGroupBandPct}
             updateQuickEmaGroupBandPeriod={updateQuickEmaGroupBandPeriod}
-            bollingerBands={bollingerBands}
-            setBollingerBands={setBollingerBands}
-            bbPathEnabled={bbPathEnabled}
-            setBbPathEnabled={setBbPathEnabled}
-            medianTrendEnabled={medianTrendEnabled}
-            setMedianTrendEnabled={setMedianTrendEnabled}
+            bbGroups={bbGroups}
+            addBbGroup={addBbGroup}
+            removeBbGroup={removeBbGroup}
+            updateBbGroup={updateBbGroup}
+            toggleBbGroupFlag={toggleBbGroupFlag}
             srInterval={srInterval}
             setSrInterval={setSrInterval}
             pphlInterval={pphlInterval}
@@ -4543,7 +4744,7 @@ export default function CandlestickChart() {
               overlayConfigs={overlayConfigs}
               vwapConfig={chartVwapConfig}
               vwapSlopeHighlight={vwapSlopeHighlight}
-              bollingerConfig={chartBollingerConfig}
+              bollingerConfigs={chartBollingerConfigs}
               srConfig={chartSrConfig}
               pphlConfig={chartPphlConfig}
               rsi={selectedChart.rsi}
@@ -4578,12 +4779,11 @@ export default function CandlestickChart() {
             toggleQuickEmaGroupPeriod={toggleQuickEmaGroupPeriod}
             updateQuickEmaGroupBandPct={updateQuickEmaGroupBandPct}
             updateQuickEmaGroupBandPeriod={updateQuickEmaGroupBandPeriod}
-            bollingerBands={bollingerBands}
-            setBollingerBands={setBollingerBands}
-            bbPathEnabled={bbPathEnabled}
-            setBbPathEnabled={setBbPathEnabled}
-            medianTrendEnabled={medianTrendEnabled}
-            setMedianTrendEnabled={setMedianTrendEnabled}
+            bbGroups={bbGroups}
+            addBbGroup={addBbGroup}
+            removeBbGroup={removeBbGroup}
+            updateBbGroup={updateBbGroup}
+            toggleBbGroupFlag={toggleBbGroupFlag}
             srInterval={srInterval}
             setSrInterval={setSrInterval}
             pphlInterval={pphlInterval}

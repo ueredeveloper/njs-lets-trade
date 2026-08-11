@@ -322,7 +322,7 @@ function buildIndicatorSeries(lineData) {
 
 export default function MaCrossRuleCheckChart({
   symbol, exchange, capital = 40, strategyId, tradeConfig, fillHeight = false,
-  activeIndicators, quickEmaGroups, bollingerBands, panelButtons, candleWindowCount,
+  activeIndicators, quickEmaGroups, bollingerBandsGroups, panelButtons, candleWindowCount,
   realPhase, realBuyTime, realTradeMarkers, rightPad = 0,
 }) {
   const realBuyTimeMs = realBuyTime ? new Date(realBuyTime).getTime() : null;
@@ -341,15 +341,15 @@ export default function MaCrossRuleCheckChart({
   // 1) as da própria estratégia (EMA/BB/bandas que o tradeConfig usa de fato),
   //    ligadas por padrão, com chip pra desligar cada uma;
   // 2) as do MESMO manipulador do gráfico principal (EMA9/21/50/200 rápidas,
-  //    grupos de EMA com banda fixa/ADAPT, Bollinger manual) — compartilhando
-  //    o estado (activeIndicators/quickEmaGroups/bollingerBands) já configurado
+  //    grupos de EMA com banda fixa/ADAPT, Bollinger Bands manuais) — compartilhando
+  //    o estado (activeIndicators/quickEmaGroups/bollingerBandsGroups) já configurado
   //    lá, sem precisar reconfigurar nada aqui.
   const strategyLineDefs = useMemo(() => strategyLineDefsFromTradeConfig(tradeConfig), [tradeConfig]);
   const strategyLineIdsKey = strategyLineDefs.map(d => d.id).join(',');
   const chartInterval = resolveDefaultInterval(tradeConfig) ?? '15m';
   const panelDefs = useMemo(
-    () => panelLineDefsFromSharedState({ activeIndicators, quickEmaGroups, bollingerBands, panelButtons, chartInterval }),
-    [activeIndicators, quickEmaGroups, bollingerBands, panelButtons, chartInterval],
+    () => panelLineDefsFromSharedState({ activeIndicators, quickEmaGroups, bollingerBandsGroups, panelButtons, chartInterval }),
+    [activeIndicators, quickEmaGroups, bollingerBandsGroups, panelButtons, chartInterval],
   );
   const panelDefIdsKey = panelDefs.map(d => d.id).join(',');
 
@@ -375,7 +375,7 @@ export default function MaCrossRuleCheckChart({
 
   // Busca os pontos reais de EMA/Bollinger (candles + indicador no backend) pras
   // linhas ligadas (regra) + as do manipulador compartilhado (sempre ativas —
-  // seu próprio on/off já é o fato de estarem ou não em quickEmaGroups/bollingerBands),
+  // seu próprio on/off já é o fato de estarem ou não em quickEmaGroups/bollingerBandsGroups),
   // cobrindo a janela do backtest (data.priceSeries) + warmup do período.
   useEffect(() => {
     if (!data || !symbol) { setLineData({}); return undefined; }

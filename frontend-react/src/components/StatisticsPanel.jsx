@@ -76,6 +76,22 @@ function saveUseMcInterval(tab, value) {
   try { localStorage.setItem(MC_INTERVAL_STORAGE_KEYS[tab], value ? '1' : '0'); } catch {}
 }
 
+const BB_MEDIAN_TREND_STORAGE_KEY = 'lets_trade_stats_bb_median_trend_filter';
+
+/** Preferência do toggle "Filtro Mediana" da aba Bollinger Bands — lembrada entre buscas. */
+function loadMedianTrendFilterPref() {
+  try {
+    const v = localStorage.getItem(BB_MEDIAN_TREND_STORAGE_KEY);
+    if (v === '1') return true;
+    if (v === '0') return false;
+  } catch {}
+  return false;
+}
+
+function saveMedianTrendFilterPref(value) {
+  try { localStorage.setItem(BB_MEDIAN_TREND_STORAGE_KEY, value ? '1' : '0'); } catch {}
+}
+
 const VWAP_STATS_PREFS_KEY = 'lets_trade_stats_vwap_bands_prefs';
 
 /** Preferências dos seletores da aba VWAP Bands (sessão, intervalo da VWAP, filtro EMA) —
@@ -122,6 +138,26 @@ function McIntervalSwitch({ checked, onChange }) {
         type="button"
         onClick={() => onChange(!checked)}
         title="Usa o intervalo configurado no favorito MA-Cross desta moeda em vez do padrão fixo"
+        className={`relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${checked ? 'bg-p4' : 'bg-p3/40'}`}
+      >
+        <span className={`inline-block h-3 w-3 rounded-full bg-white shadow transition-transform ${checked ? 'translate-x-3' : 'translate-x-0'}`} />
+      </button>
+    </div>
+  );
+}
+
+/** Switch "Filtro Mediana" — restringe as entradas da estatística às que teriam passado pelo
+ *  filtro de tendência da mediana da BB do bot (backend/bot/bollinger-bands/strategyEngine.js
+ *  #checkMedianTrendFilter): só conta como entrada o toque na banda inferior cuja mediana,
+ *  na janela de `lookback` candles anteriores, estava subindo/estável (não em queda). */
+function MedianTrendFilterSwitch({ checked, onChange }) {
+  return (
+    <div className="flex items-center gap-1 shrink-0 pb-1">
+      <span className="hidden md:inline text-[9px] text-p5/50 uppercase tracking-wider">Filtro Mediana</span>
+      <button
+        type="button"
+        onClick={() => onChange(!checked)}
+        title="Considera só entradas com a mediana da BB em alta/estável nos candles anteriores (mesmo filtro do bot)"
         className={`relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${checked ? 'bg-p4' : 'bg-p3/40'}`}
       >
         <span className={`inline-block h-3 w-3 rounded-full bg-white shadow transition-transform ${checked ? 'translate-x-3' : 'translate-x-0'}`} />
@@ -714,6 +750,7 @@ function BollingerBandsStats() {
   const [period, setPeriod]     = useState(uiPrefs.statsDefaults.bollingerBands.period);
   const [stdDev, setStdDev]     = useState(uiPrefs.statsDefaults.bollingerBands.stdDev);
   const [useMcInterval, setUseMcInterval] = useState(() => loadUseMcInterval('bollinger_bands', false));
+  const [medianTrendFilter, setMedianTrendFilter] = useState(() => loadMedianTrendFilterPref());
   const [loading, setLoading]   = useState(false);
   const [result, setResult]     = useState(null);
   const [error, setError]       = useState(null);
@@ -722,12 +759,13 @@ function BollingerBandsStats() {
   const inp = 'bg-p2 border border-p3/40 text-p5 text-[10px] sm:text-xs rounded px-1 sm:px-2 py-1 focus:outline-none focus:border-p4 w-full';
   const inpNum = `${inp} [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none`;
 
-  async function handleSearch(overrideSymbol, updateChart = false, overrideInterval, overrideSource, overrideUseMc) {
+  async function handleSearch(overrideSymbol, updateChart = false, overrideInterval, overrideSource, overrideUseMc, overrideMedianTrendFilter) {
     const sym = (overrideSymbol ?? symbol).trim().toUpperCase();
     const useMc = overrideUseMc ?? useMcInterval;
     const mcIv  = useMc ? mcEntryFor(multitradeFavorites, sym)?.tradeConfig?.entry?.ma1?.interval : null;
     const iv  = overrideInterval ?? mcIv ?? interval;
     if (mcIv) setInterval(mcIv);
+    const useMedianTrend = overrideMedianTrendFilter ?? medianTrendFilter;
     const chartSource = selectedChart?.symbol === sym ? (selectedChart?.source ?? null) : null;
     const src = overrideSource !== undefined ? overrideSource : chartSource;
     if (!sym) return;
@@ -735,7 +773,7 @@ function BollingerBandsStats() {
     setError(null);
     setResult(null);
     try {
-      const data = await fetchBollingerBandRecovery(sym, iv, period, stdDev, src);
+      const data = await fetchBollingerBandRecovery(sym, iv, period, stdDev, src, useMedianTrend);
       setResult(data);
       if (updateChart) {
         const chartData = await fetchCandlesticksAndCloud(sym, iv, src);
@@ -760,6 +798,12 @@ function BollingerBandsStats() {
     saveUseMcInterval('bollinger_bands', next);
     if (!next) setInterval('4h');
     handleSearch(undefined, false, undefined, undefined, next);
+  }
+
+  function handleToggleMedianTrendFilter(next) {
+    setMedianTrendFilter(next);
+    saveMedianTrendFilterPref(next);
+    handleSearch(undefined, false, undefined, undefined, undefined, next);
   }
 
   async function openOnChart(o, iv) {
@@ -825,6 +869,7 @@ function BollingerBandsStats() {
             value={stdDev} onChange={(e) => setStdDev(Number(e.target.value))} />
         </div>
         <McIntervalSwitch checked={useMcInterval} onChange={handleToggleMc} />
+        <MedianTrendFilterSwitch checked={medianTrendFilter} onChange={handleToggleMedianTrendFilter} />
         <button
           onClick={() => handleSearch(undefined, true)}
           disabled={loading}
@@ -863,6 +908,9 @@ function BollingerBandsStats() {
               <SummaryCard label={t('stats.bb_period')} value={result.period} tooltip={t('stats.tip.bb_period')} />
               <SummaryCard label={t('stats.bb_stddev')} value={result.stdDev} tooltip={t('stats.tip.bb_stddev')} />
               <SummaryCard label={t('stats.card.avg_duration')} value={formatDuration(result.avgCycleDurationMs)} tooltip={t('stats.tip.avg_duration')} />
+              {result.medianTrendFilter && (
+                <SummaryCard label="Filtro Mediana" value={`${result.medianTrendLookback}c`} highlight="text-emerald-500" tooltip="Só entram ciclos com a mediana da BB em alta/estável nos candles anteriores ao toque (mesmo filtro do bot)" />
+              )}
             </div>
 
             {result.occurrences.length === 0 && !result.openOccurrence ? (

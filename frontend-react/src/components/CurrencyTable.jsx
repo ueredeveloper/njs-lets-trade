@@ -362,8 +362,15 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     // Inclui os holdings atuais (AT) na busca de trades — necessário pro seletor de
     // "compras da semana" que expande cada holding em lotes de compra individuais.
     const activeSymbols = [...activeTrades.keys()].filter((sym) => /^[A-Z0-9]+USDT$/.test(sym));
-    return [...new Set([...gateFavorites, ...binanceFavorites, ...activeSymbols])];
-  }, [gateFavorites, binanceFavorites, activeTrades]);
+    // Inclui os favoritos de bot (MA-Cross/VWAP Bands/Bollinger Bands) — sem isso, um símbolo
+    // que só existe como favorito de bot (não é estrela Gate/Binance) e já foi zerado (comprou
+    // e vendeu, saldo ~0) nunca é consultado na Binance em fetchBinanceSymbols() e some da
+    // aba TX mesmo tendo tido trade no dia.
+    const botSymbols = multitradeFavorites
+      .filter(e => e.enabled !== false)
+      .map(e => e.symbol);
+    return [...new Set([...gateFavorites, ...binanceFavorites, ...activeSymbols, ...botSymbols])];
+  }, [gateFavorites, binanceFavorites, activeTrades, multitradeFavorites]);
 
   /** Combinações únicas (interval,period,stdDev) usadas pelos favoritos BB, cada uma com a
    *  lista dos símbolos que a usam — cada favorito tem seu próprio intervalo de entrada

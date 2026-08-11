@@ -63,7 +63,8 @@ async function syncBinanceClock() {
     const data = await res.json();
     binanceClockOffset = Math.floor(data.serverTime / 1000) - Math.floor(Date.now() / 1000);
     binanceClockSyncAt = Date.now();
-  } catch {
+  } catch (err) {
+    console.error(`⚠️  syncBinanceClock falhou (offset zerado): ${err.message}`);
     binanceClockOffset = 0;
   }
 }

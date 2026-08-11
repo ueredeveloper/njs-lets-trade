@@ -278,7 +278,9 @@ async function syncBinanceClock() {
   try {
     const data = await fetch(`${BINANCE_BASE}/api/v3/time`).then(r => r.json());
     binanceClockOffsetMs = data.serverTime - Date.now();
-  } catch {}
+  } catch (err) {
+    console.error(`⚠️  syncBinanceClock falhou (offset continua em ${binanceClockOffsetMs}ms): ${err.message}`);
+  }
 }
 
 function binanceSign(params) {
