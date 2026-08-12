@@ -97,6 +97,7 @@ router.get('/bollinger-band-width-filter', async (req, res) => {
           const bb = BollingerBands.calculate({ period, values: closes, stdDev });
           if (!bb.length) return null;
 
+          const lastBb = bb[bb.length - 1];
           const window = bb.slice(-Math.min(lookback, bb.length));
           const widths = [];
           for (const p of window) {
@@ -109,6 +110,11 @@ router.get('/bollinger-band-width-filter', async (req, res) => {
           const avgWidthPct = avgWindow.reduce((s, v) => s + v, 0) / avgWindow.length;
           const lastWidthPct = widths[widths.length - 1];
           const last = candles[candles.length - 1];
+          const close = parseFloat(last.close);
+          const bandSpan = lastBb.upper - lastBb.lower;
+          const percentB = bandSpan > 0
+            ? Math.min(100, Math.max(0, ((close - lastBb.lower) / bandSpan) * 100))
+            : null;
 
           return {
             symbol,
@@ -117,7 +123,10 @@ router.get('/bollinger-band-width-filter', async (req, res) => {
             minWidthPct: Math.round(Math.min(...widths) * 100) / 100,
             maxWidthPct: Math.round(Math.max(...widths) * 100) / 100,
             samples: widths.length,
-            close: parseFloat(last.close),
+            close,
+            upper: lastBb.upper,
+            lower: lastBb.lower,
+            percentB: percentB != null ? Math.round(percentB * 100) / 100 : null,
           };
         } catch (err) {
           console.warn(`[bollinger-band-width-filter] ${symbol}:`, err.message);
@@ -170,6 +179,7 @@ router.get('/bollinger-band-width-filter', async (req, res) => {
         const bb = BollingerBands.calculate({ period, values: closes, stdDev });
         if (!bb.length) return null;
 
+        const lastBb = bb[bb.length - 1];
         const window = bb.slice(-Math.min(lookback, bb.length));
         const widths = [];
         for (const p of window) {
@@ -182,6 +192,11 @@ router.get('/bollinger-band-width-filter', async (req, res) => {
         const avgWidthPct = avgWindow.reduce((s, v) => s + v, 0) / avgWindow.length;
         const lastWidthPct = widths[widths.length - 1];
         const last = candles[candles.length - 1];
+        const close = parseFloat(last.close);
+        const bandSpan = lastBb.upper - lastBb.lower;
+        const percentB = bandSpan > 0
+          ? Math.min(100, Math.max(0, ((close - lastBb.lower) / bandSpan) * 100))
+          : null;
 
         return {
           symbol,
@@ -190,7 +205,10 @@ router.get('/bollinger-band-width-filter', async (req, res) => {
           minWidthPct: Math.round(Math.min(...widths) * 100) / 100,
           maxWidthPct: Math.round(Math.max(...widths) * 100) / 100,
           samples: widths.length,
-          close: parseFloat(last.close),
+          close,
+          upper: lastBb.upper,
+          lower: lastBb.lower,
+          percentB: percentB != null ? Math.round(percentB * 100) / 100 : null,
         };
       } catch {
         return null;

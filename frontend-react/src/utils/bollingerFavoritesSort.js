@@ -4,6 +4,8 @@ export const BB_FAV_SORT_OPTIONS = [
   { id: 'phase',      labelKey: 'bbfav.sort.phase',      shortKey: 'bbfav.sort.short.phase' },
   { id: 'width_far',  labelKey: 'bbfav.sort.width_far',  shortKey: 'bbfav.sort.short.width_far' },
   { id: 'width_near', labelKey: 'bbfav.sort.width_near', shortKey: 'bbfav.sort.short.width_near' },
+  { id: 'near_lower', labelKey: 'bbfav.sort.near_lower', shortKey: 'bbfav.sort.short.near_lower' },
+  { id: 'near_upper', labelKey: 'bbfav.sort.near_upper', shortKey: 'bbfav.sort.short.near_upper' },
 ];
 
 /** Sem persistência entre sessões (ao contrário do VWAP/MA-Cross/Trade) — cada abertura da
@@ -35,10 +37,13 @@ function numOrNegInfinity(v) {
 }
 
 /**
- * Compara dois favoritos Bollinger Bands: por fase do bot (padrão — comprado primeiro), ou
- * pela largura média das bandas (upper-lower como % da média) em % — mesma métrica
- * `avgWidthPct` usada no filtro de indicadores "largura da banda" (ver
- * fetchBollingerBandWidthFilter no backend). `sortBy`: 'phase' | 'width_far' | 'width_near'.
+ * Compara dois favoritos Bollinger Bands: por fase do bot (padrão — comprado primeiro), pela
+ * largura média das bandas (upper-lower como % da média) em % — mesma métrica `avgWidthPct`
+ * usada no filtro de indicadores "largura da banda" (ver fetchBollingerBandWidthFilter no
+ * backend) —, ou pela proximidade do preço em relação à banda inferior/superior (`percentB`:
+ * posição do close dentro da banda, 0% = na inferior, 100% = na superior — mesmo cálculo do
+ * filtro "posição na banda"). `sortBy`: 'phase' | 'width_far' | 'width_near' | 'near_lower' |
+ * 'near_upper'.
  */
 export function compareBollingerFavorites(a, b, sortBy, ctx = {}) {
   const { phaseBySymbol = new Map(), widthMeta = {} } = ctx;
@@ -52,6 +57,16 @@ export function compareBollingerFavorites(a, b, sortBy, ctx = {}) {
     const wa = sortBy === 'width_near' ? numOrInfinity(rawA) : numOrNegInfinity(rawA);
     const wb = sortBy === 'width_near' ? numOrInfinity(rawB) : numOrNegInfinity(rawB);
     if (wa !== wb) return sortBy === 'width_near' ? wa - wb : wb - wa;
+    return symA.localeCompare(symB);
+  }
+
+  if (sortBy === 'near_lower' || sortBy === 'near_upper') {
+    const rawA = widthMeta[symA]?.percentB;
+    const rawB = widthMeta[symB]?.percentB;
+    // near_lower: percentB baixo (perto de 0) primeiro. near_upper: percentB alto (perto de 100) primeiro.
+    const pa = sortBy === 'near_lower' ? numOrInfinity(rawA) : numOrNegInfinity(rawA);
+    const pb = sortBy === 'near_lower' ? numOrInfinity(rawB) : numOrNegInfinity(rawB);
+    if (pa !== pb) return sortBy === 'near_lower' ? pa - pb : pb - pa;
     return symA.localeCompare(symB);
   }
 

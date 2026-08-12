@@ -509,7 +509,9 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   const isBbTrendFilter = !!activeBbTrendFilter;
 
   const showVwapFavWidthCol = isVwapBandsFavView && (vwapFavSort === 'width_far' || vwapFavSort === 'width_near');
-  const showBbFavWidthCol = isBollingerBandsFavView && (bbFavSort === 'width_far' || bbFavSort === 'width_near');
+  const showBbFavWidthCol = isBollingerBandsFavView
+    && (bbFavSort === 'width_far' || bbFavSort === 'width_near' || bbFavSort === 'near_lower' || bbFavSort === 'near_upper');
+  const isBbFavPercentBSort = bbFavSort === 'near_lower' || bbFavSort === 'near_upper';
 
   const tableColCount = isAltaFilter || isMaDistanceFilter || isGrowthFilter || isVwapWidthFilter || isBbWidthFilter || isBbTrendFilter || showVwapFavWidthCol || showBbFavWidthCol ? 6 : 5;
 
@@ -1469,12 +1471,21 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                 </th>
               )}
               {showBbFavWidthCol && (
-                <th
-                  className="text-right px-2 py-1 text-p5 opacity-80 font-normal uppercase tracking-wider whitespace-nowrap"
-                  title="Largura média das Bandas de Bollinger nos favoritos"
-                >
-                  Larg% {bbFavSort === 'width_far' ? '↓' : '↑'}
-                </th>
+                isBbFavPercentBSort ? (
+                  <th
+                    className="text-right px-2 py-1 text-p5 opacity-80 font-normal uppercase tracking-wider whitespace-nowrap"
+                    title="Posição do preço dentro da banda (%B) — 0% = na banda inferior, 100% = na banda superior"
+                  >
+                    %B {bbFavSort === 'near_lower' ? '↑' : '↓'}
+                  </th>
+                ) : (
+                  <th
+                    className="text-right px-2 py-1 text-p5 opacity-80 font-normal uppercase tracking-wider whitespace-nowrap"
+                    title="Largura média das Bandas de Bollinger nos favoritos"
+                  >
+                    Larg% {bbFavSort === 'width_far' ? '↓' : '↑'}
+                  </th>
+                )
               )}
               <th
                 className={`currency-table-col-vol text-center px-2 py-1 text-p5 font-normal uppercase tracking-wider cursor-pointer hover:opacity-90 select-none whitespace-nowrap ${
@@ -1846,6 +1857,17 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                     );
                   })()}
                   {showBbFavWidthCol && (() => {
+                    if (isBbFavPercentBSort) {
+                      const percentB = bbFavWidthMeta?.[item.symbol]?.percentB;
+                      return (
+                        <td
+                          className="px-2 py-1 text-right font-mono text-[10px] font-semibold"
+                          style={{ color: percentB == null ? 'rgba(255,255,255,0.35)' : '#e2c341' }}
+                        >
+                          {percentB != null ? `${percentB.toFixed(1)}%` : '—'}
+                        </td>
+                      );
+                    }
                     const widthPct = bbFavWidthMeta?.[item.symbol]?.avgWidthPct;
                     return (
                       <td
