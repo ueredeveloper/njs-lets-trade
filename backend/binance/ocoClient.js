@@ -25,13 +25,25 @@ async function getSymbolFilters(symbol) {
   const filters = info.symbols?.[0]?.filters ?? [];
   const priceFilter = filters.find(f => f.filterType === 'PRICE_FILTER');
   const lotFilter = filters.find(f => f.filterType === 'LOT_SIZE');
+  // PERCENT_PRICE_BY_SIDE (símbolos novos) ou PERCENT_PRICE (legado, mesmo multiplier pros
+  // dois lados) — limita o quanto uma ordem SELL (nossas duas pernas da OCO) pode se afastar
+  // do preço médio ponderado atual da Binance. Ver validação em binancePlaceOcoSell.
+  const pctFilter = filters.find(f => f.filterType === 'PERCENT_PRICE_BY_SIDE')
+    ?? filters.find(f => f.filterType === 'PERCENT_PRICE');
   const tickSize = priceFilter ? parseFloat(priceFilter.tickSize) : 0.00000001;
   const stepSize = lotFilter ? parseFloat(lotFilter.stepSize) : 1;
   return {
     tickSize, stepSize,
     priceDecimals: decimalsFromStep(tickSize),
     qtyDecimals: decimalsFromStep(stepSize),
+    askMultiplierUp: pctFilter ? parseFloat(pctFilter.askMultiplierUp ?? pctFilter.multiplierUp) : null,
+    askMultiplierDown: pctFilter ? parseFloat(pctFilter.askMultiplierDown ?? pctFilter.multiplierDown) : null,
   };
+}
+
+async function getAvgPrice(symbol) {
+  const data = await fetch(`${BINANCE_BASE}/api/v3/avgPrice?symbol=${symbol}`).then(r => r.json());
+  return parseFloat(data.price);
 }
 
 function roundToStep(value, step, decimals, mode = 'round') {
@@ -52,7 +64,9 @@ const STOP_LIMIT_SLIPPAGE_PCT = 0.3;
  * de preencher numa queda rápida em vez de ficar presa no book esperando o preço exato).
  */
 async function binancePlaceOcoSell(symbol, qty, targetPrice, stopPrice) {
-  const { tickSize, stepSize, priceDecimals, qtyDecimals } = await getSymbolFilters(symbol);
+  const {
+    tickSize, stepSize, priceDecimals, qtyDecimals, askMultiplierUp, askMultiplierDown,
+  } = await getSymbolFilters(symbol);
   const safeQty = roundToStep(qty, stepSize, qtyDecimals, 'floor');
   if (!(parseFloat(safeQty) > 0)) {
     throw new Error(`binancePlaceOcoSell: quantidade inválida após arredondamento (${safeQty})`);
@@ -62,6 +76,34 @@ async function binancePlaceOcoSell(symbol, qty, targetPrice, stopPrice) {
   const safeStopLimit = roundToStep(
     parseFloat(safeStop) * (1 - STOP_LIMIT_SLIPPAGE_PCT / 100), tickSize, priceDecimals, 'floor',
   );
+
+  // PERCENT_PRICE_BY_SIDE: as duas pernas da OCO são ordens SELL (ask) — a Binance rejeita
+  // (400 "Filter failure: PERCENT_PRICE_BY_SIDE") se o preço estiver longe demais do preço
+  // médio ponderado ATUAL, o que acontece fácil quando alvo/stop são calculados sobre o preço
+  // de ENTRADA (venda manual OCO) e o mercado já andou bastante desde a compra. Valida aqui
+  // com uma mensagem clara em vez de deixar o erro cru da Binance estourar como 500 genérico.
+  if (askMultiplierUp != null && askMultiplierDown != null) {
+    const avgPrice = await getAvgPrice(symbol);
+    if (avgPrice > 0) {
+      const maxAsk = avgPrice * askMultiplierUp;
+      const minAsk = avgPrice * askMultiplierDown;
+      const problems = [];
+      if (parseFloat(safeTarget) > maxAsk) {
+        const maxTargetPct = ((maxAsk / avgPrice) - 1) * 100;
+        problems.push(`alvo ${safeTarget} acima do máximo permitido agora (~${maxAsk.toFixed(priceDecimals)}, até +${maxTargetPct.toFixed(1)}% do preço atual)`);
+      }
+      if (parseFloat(safeStopLimit) < minAsk) {
+        const minStopPct = (1 - (minAsk / avgPrice)) * 100;
+        problems.push(`stop ${safeStopLimit} abaixo do mínimo permitido agora (~${minAsk.toFixed(priceDecimals)}, até -${minStopPct.toFixed(1)}% do preço atual)`);
+      }
+      if (problems.length) {
+        throw new Error(
+          `binancePlaceOcoSell: ${problems.join('; ')} — preço atual ~${avgPrice.toFixed(priceDecimals)}. `
+          + 'Arraste o alvo/stop mais perto do preço de mercado e tente de novo.',
+        );
+      }
+    }
+  }
 
   const order = await binanceRequest('POST', '/api/v3/order/oco', {
     symbol, side: 'SELL', quantity: safeQty,

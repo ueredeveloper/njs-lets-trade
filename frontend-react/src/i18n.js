@@ -134,7 +134,10 @@ const T = {
     'settings.cache.vwapBandWidth':      'Largura das bandas VWAP',
     'settings.cache.bbBandWidth4h':      'Largura das Bandas de Bollinger (4h, favoritos)',
     'settings.cache.bbBandWidth1m':      'Largura das Bandas de Bollinger (1min, filtro)',
+    'settings.cache.bbBandWidth15m':     'Largura das Bandas de Bollinger (15min, filtro)',
     'settings.cache.bbBandWidth5m':      'Largura das Bandas de Bollinger (5min, filtro)',
+    'settings.cache.bbMedianTrend15m':   'Trades BB — Tendência da Mediana (15min, filtro)',
+    'settings.cache.bbMedianTrend5m':    'Trades BB — Tendência da Mediana (5min, filtro)',
     'settings.cache.vwapBandExpansion':  'Expansão das bandas VWAP',
     'settings.cache.indicatorGrowth':    'Crescimento por ciclo (fundo→topo)',
     'settings.cache.mcFavoritesStats':   'Estatísticas MA-Cross (favoritos)',
@@ -151,6 +154,7 @@ const T = {
     'ind.marketcap':         'Market Cap',
     'ind.bb_position':       'Posição na Banda de Bollinger',
     'ind.bollinger_band_width': 'Largura das Bandas de Bollinger',
+    'ind.bollinger_median_trend': 'Trades BB — Tendência da Mediana',
     'ind.vwap_position':     'Exaustão nas Bandas de VWAP',
     'ind.vwap_band_width':   'Largura das Bandas de VWAP',
     'ind.vwap_band_expansion': 'Expansão das Bandas de VWAP',
@@ -180,6 +184,11 @@ const T = {
     // Bollinger Bands — posição
     'bb.position.bottom':    'Mais próximo do fundo',
     'bb.position.top':       'Mais próximo do topo',
+
+    // Bollinger Bands — trades filtrados por tendência da mediana (side da média exibida)
+    'bbtrend.side.pos':      'Só trades positivos',
+    'bbtrend.side.neg':      'Só trades negativos',
+    'bbtrend.side.all':      'Todos os trades',
 
     // VWAP — sessão e posição (exaustão)
     'vwap.session.daily':    'Sessão diária',
@@ -255,6 +264,7 @@ const T = {
     'sum.mcap':              (metric, preset) => `Market Cap: ${metric} ${preset}`,
     'sum.bb_position':       (period, stdDev, posLabel, ivl, prox) => `BB(${period},${stdDev}): ${posLabel} (≤${prox}%) → ${ivl}`,
     'sum.bollinger_band_width': (period, stdDev, lookback, ivl) => `BB(${period},${stdDev}): largura média em ${lookback} candles → ${ivl}`,
+    'sum.bollinger_median_trend': (period, stdDev, lookback, sideLabel, ivl) => `BB(${period},${stdDev}): trades c/ tendência da mediana, ${sideLabel.toLowerCase()} em ${lookback} candles → ${ivl}`,
     'sum.vwap_position':     (band, session, posLabel, ivl, prox) => `VWAP(${session},±${band}σ): ${posLabel} (≤${prox}%) → ${ivl}`,
     'sum.vwap_band_width':   (session, lookback, ivl) => `VWAP(${session},±2σ): largura média em ${lookback} candles → ${ivl}`,
     'sum.vwap_band_expansion': (vwapIvl, lookback, mult, ivl) => `VWAP(${vwapIvl},-1σ/+2σ): afastamento ≥${mult}x em ${lookback} candles → ${ivl}`,
@@ -697,7 +707,10 @@ const T = {
     'settings.cache.vwapBandWidth':      'VWAP band width',
     'settings.cache.bbBandWidth4h':      'Bollinger Bands width (4h, favorites)',
     'settings.cache.bbBandWidth1m':      'Bollinger Bands width (1min, filter)',
+    'settings.cache.bbBandWidth15m':     'Bollinger Bands width (15min, filter)',
     'settings.cache.bbBandWidth5m':      'Bollinger Bands width (5min, filter)',
+    'settings.cache.bbMedianTrend15m':   'BB Trades — Median Trend (15min, filter)',
+    'settings.cache.bbMedianTrend5m':    'BB Trades — Median Trend (5min, filter)',
     'settings.cache.vwapBandExpansion':  'VWAP band expansion',
     'settings.cache.indicatorGrowth':    'Growth per cycle (bottom→top)',
     'settings.cache.mcFavoritesStats':   'MA-Cross statistics (favorites)',
@@ -714,6 +727,7 @@ const T = {
     'ind.marketcap':         'Market Cap',
     'ind.bb_position':       'Bollinger Band Position',
     'ind.bollinger_band_width': 'Bollinger Band Width',
+    'ind.bollinger_median_trend': 'BB Trades — Median Trend',
     'ind.vwap_position':     'VWAP Band Exhaustion',
     'ind.vwap_band_width':   'VWAP Band Width',
     'ind.vwap_band_expansion': 'VWAP Band Expansion',
@@ -743,6 +757,11 @@ const T = {
     // Bollinger Bands — position
     'bb.position.bottom':    'Closest to bottom',
     'bb.position.top':       'Closest to top',
+
+    // Bollinger Bands — median-trend-filtered trades (side of the averaged trades)
+    'bbtrend.side.pos':      'Winning trades only',
+    'bbtrend.side.neg':      'Losing trades only',
+    'bbtrend.side.all':      'All trades',
 
     // VWAP — session and position (exhaustion)
     'vwap.session.daily':    'Daily session',
@@ -818,6 +837,7 @@ const T = {
     'sum.mcap':              (metric, preset) => `Market Cap: ${metric} ${preset}`,
     'sum.bb_position':       (period, stdDev, posLabel, ivl, prox) => `BB(${period},${stdDev}): ${posLabel} (≤${prox}%) → ${ivl}`,
     'sum.bollinger_band_width': (period, stdDev, lookback, ivl) => `BB(${period},${stdDev}): avg width over ${lookback} candles → ${ivl}`,
+    'sum.bollinger_median_trend': (period, stdDev, lookback, sideLabel, ivl) => `BB(${period},${stdDev}): median-trend trades, ${sideLabel.toLowerCase()} over ${lookback} candles → ${ivl}`,
     'sum.vwap_position':     (band, session, posLabel, ivl, prox) => `VWAP(${session},±${band}σ): ${posLabel} (≤${prox}%) → ${ivl}`,
     'sum.vwap_band_width':   (session, lookback, ivl) => `VWAP(${session},±2σ): avg width over ${lookback} candles → ${ivl}`,
     'sum.vwap_band_expansion': (vwapIvl, lookback, mult, ivl) => `VWAP(${vwapIvl},-1σ/+2σ): gap ≥${mult}x over ${lookback} candles → ${ivl}`,

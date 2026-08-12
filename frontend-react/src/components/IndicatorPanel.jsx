@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useCurrency } from '../contexts/CurrencyContext';
-import { fetchCandlesAndIndicators, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter, fetchMaDistanceFilter, fetchIndicatorGrowthFilter, fetchMarketCapFilter, fetchBollingerBandPositionFilter, fetchBollingerBandWidthFilter, fetchVwapPositionFilter, fetchVwapBandWidthFilter, fetchVwapBandExpansionFilter, fetchUserPrefs, saveUserPrefs } from '../services/api';
+import { fetchCandlesAndIndicators, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter, fetchMaDistanceFilter, fetchIndicatorGrowthFilter, fetchMarketCapFilter, fetchBollingerBandPositionFilter, fetchBollingerBandWidthFilter, fetchBollingerMedianTrendFilter, fetchVwapPositionFilter, fetchVwapBandWidthFilter, fetchVwapBandExpansionFilter, fetchUserPrefs, saveUserPrefs } from '../services/api';
 import { useI18n } from '../i18n';
 import {
   createRsiFilter,
@@ -16,7 +16,7 @@ import {
 } from '../utils/createIchimokuFilter';
 import Tooltip from './Tooltip';
 import { MA_CROSS_PERIOD_MIN, MA_CROSS_PERIOD_MAX } from '../constants/maCrossConfigSchema';
-import { buildMaCrossFilterName, buildMaCompareFilterName, buildMaDistanceFilterName, buildIndicatorGrowthFilterName, buildBollingerBandWidthFilterName, buildVwapBandWidthFilterName, buildVwapBandExpansionFilterName } from '../utils/filterNames';
+import { buildMaCrossFilterName, buildMaCompareFilterName, buildMaDistanceFilterName, buildIndicatorGrowthFilterName, buildBollingerBandWidthFilterName, buildBollingerMedianTrendFilterName, buildVwapBandWidthFilterName, buildVwapBandExpansionFilterName } from '../utils/filterNames';
 
 const INTERVAL_MS = {
   '1m': 60_000, '3m': 180_000, '5m': 300_000, '15m': 900_000, '30m': 1_800_000,
@@ -82,7 +82,7 @@ const INTERVAL_LABELS = {
 const EMPTY_INDICATOR = { type: '', intervals: ['8h'] };
 
 const DEFAULT_INDICATORS = [
-  { type: 'bollingerBandWidth', intervals: ['5m'], period: '20', stdDev: '2', lookback: '100' },
+  { type: 'bollingerBandWidth', intervals: ['15m'], period: '20', stdDev: '2', lookback: '300' },
 ];
 
 /** Gera um resumo legível da configuração do indicador */
@@ -149,8 +149,16 @@ function buildSummary(value, t) {
   if (type === 'bollingerBandWidth') {
     const period = value.period ?? '20';
     const stdDev = value.stdDev ?? '2';
-    const lookback = value.lookback ?? '100';
+    const lookback = value.lookback ?? '300';
     return t('sum.bollinger_band_width', period, stdDev, lookback, ivLabel);
+  }
+  if (type === 'bollingerMedianTrend') {
+    const period = value.period ?? '20';
+    const stdDev = value.stdDev ?? '2';
+    const lookback = value.lookback ?? '700';
+    const side = value.side ?? 'pos';
+    const sideLabel = t(`bbtrend.side.${side}`);
+    return t('sum.bollinger_median_trend', period, stdDev, lookback, sideLabel, ivLabel);
   }
   if (type === 'vwapPosition') {
     const bandMultiplier = value.bandMultiplier ?? '2';
@@ -215,6 +223,7 @@ function indDescKey(type) {
   if (type === 'maDistance') return 'ma_distance';
   if (type === 'bollingerPosition') return 'bb_position';
   if (type === 'bollingerBandWidth') return 'bollinger_band_width';
+  if (type === 'bollingerMedianTrend') return 'bollinger_median_trend';
   if (type === 'vwapPosition') return 'vwap_position';
   if (type === 'vwapBandWidth') return 'vwap_band_width';
   if (type === 'vwapBandExpansion') return 'vwap_band_expansion';
@@ -288,10 +297,17 @@ function IndicatorRow({ value, onChange }) {
                 next.proximityPct = '20';
               }
               if (newType === 'bollingerBandWidth') {
-                next.intervals = ['5m'];
+                next.intervals = ['15m'];
                 next.period = next.period ?? '20';
                 next.stdDev = next.stdDev ?? '2';
-                next.lookback = next.lookback ?? '100';
+                next.lookback = next.lookback ?? '300';
+              }
+              if (newType === 'bollingerMedianTrend') {
+                next.intervals = ['15m'];
+                next.period = next.period ?? '20';
+                next.stdDev = next.stdDev ?? '2';
+                next.lookback = next.lookback ?? '700';
+                next.side = next.side ?? 'pos';
               }
               if (newType === 'vwapPosition') {
                 next.intervals = ['4h'];
@@ -342,6 +358,7 @@ function IndicatorRow({ value, onChange }) {
             <option value="marketCap">{t('ind.marketcap')}</option>
             <option value="bollingerPosition">{t('ind.bb_position')}</option>
             <option value="bollingerBandWidth">{t('ind.bollinger_band_width')}</option>
+            <option value="bollingerMedianTrend">{t('ind.bollinger_median_trend')}</option>
             <option value="vwapPosition">{t('ind.vwap_position')}</option>
             <option value="vwapBandWidth">{t('ind.vwap_band_width')}</option>
             <option value="vwapBandExpansion">{t('ind.vwap_band_expansion')}</option>
@@ -658,13 +675,58 @@ function IndicatorRow({ value, onChange }) {
             </select>
             <select
               className={sel}
-              value={value.lookback ?? '100'}
+              value={value.lookback ?? '300'}
               onChange={(e) => onChange({ ...value, lookback: e.target.value })}
               title="Quantidade de candles fechados usada pra calcular a largura média das bandas (upper-lower)"
             >
-              {[50, 100, 150, 200, 300].map(v => (
+              {[50, 100, 150, 200, 300, 700].map(v => (
                 <option key={v} value={String(v)}>{v} candles</option>
               ))}
+            </select>
+          </>
+        )}
+
+        {type === 'bollingerMedianTrend' && (
+          <>
+            <select
+              className={sel}
+              value={value.period ?? '20'}
+              onChange={(e) => onChange({ ...value, period: e.target.value })}
+              title="Período da Bollinger Bands"
+            >
+              <option value="10">BB10</option>
+              <option value="20">BB20</option>
+              <option value="30">BB30</option>
+            </select>
+            <select
+              className={sel}
+              value={value.stdDev ?? '2'}
+              onChange={(e) => onChange({ ...value, stdDev: e.target.value })}
+              title="Desvio padrão das bandas"
+            >
+              <option value="1">±1σ</option>
+              <option value="2">±2σ</option>
+              <option value="3">±3σ</option>
+            </select>
+            <select
+              className={sel}
+              value={value.lookback ?? '700'}
+              onChange={(e) => onChange({ ...value, lookback: e.target.value })}
+              title="Quantidade de candles fechados usada pra simular os trades (compra na banda inferior, venda na superior, filtrados pela tendência da linha mediana)"
+            >
+              {[50, 100, 150, 200, 300, 700].map(v => (
+                <option key={v} value={String(v)}>{v} candles</option>
+              ))}
+            </select>
+            <select
+              className={sel}
+              value={value.side ?? 'pos'}
+              onChange={(e) => onChange({ ...value, side: e.target.value })}
+              title="Quais trades entram na média exibida/ordenada: só ganhos, só perdas ou todos"
+            >
+              <option value="pos">{t('bbtrend.side.pos')}</option>
+              <option value="neg">{t('bbtrend.side.neg')}</option>
+              <option value="all">{t('bbtrend.side.all')}</option>
             </select>
           </>
         )}
@@ -1117,11 +1179,12 @@ export default function IndicatorPanel({ open, onToggle }) {
       const maDistanceIndicators = indicators.filter((ind) => ind.type === 'maDistance');
       const bbPositionIndicators = indicators.filter((ind) => ind.type === 'bollingerPosition');
       const bbBandWidthIndicators = indicators.filter((ind) => ind.type === 'bollingerBandWidth');
+      const bbMedianTrendIndicators = indicators.filter((ind) => ind.type === 'bollingerMedianTrend');
       const vwapPositionIndicators = indicators.filter((ind) => ind.type === 'vwapPosition');
       const vwapBandWidthIndicators = indicators.filter((ind) => ind.type === 'vwapBandWidth');
       const vwapBandExpansionIndicators = indicators.filter((ind) => ind.type === 'vwapBandExpansion');
       const growthIndicators = indicators.filter((ind) => ind.type === 'indicatorGrowth');
-      const otherIndicators = indicators.filter((ind) => ind.type && ind.type !== 'relativeStrengthIndex' && ind.type !== 'marketCap' && ind.type !== 'movingAverage' && ind.type !== 'maTimeAbove' && ind.type !== 'maCrossover' && ind.type !== 'maCompare' && ind.type !== 'maDistance' && ind.type !== 'bollingerPosition' && ind.type !== 'bollingerBandWidth' && ind.type !== 'vwapPosition' && ind.type !== 'vwapBandWidth' && ind.type !== 'vwapBandExpansion' && ind.type !== 'indicatorGrowth');
+      const otherIndicators = indicators.filter((ind) => ind.type && ind.type !== 'relativeStrengthIndex' && ind.type !== 'marketCap' && ind.type !== 'movingAverage' && ind.type !== 'maTimeAbove' && ind.type !== 'maCrossover' && ind.type !== 'maCompare' && ind.type !== 'maDistance' && ind.type !== 'bollingerPosition' && ind.type !== 'bollingerBandWidth' && ind.type !== 'bollingerMedianTrend' && ind.type !== 'vwapPosition' && ind.type !== 'vwapBandWidth' && ind.type !== 'vwapBandExpansion' && ind.type !== 'indicatorGrowth');
 
       // Salva intervalos e análises usadas nas preferências
       const allIntervals = [...new Set(indicators.flatMap(ind => ind.intervals ?? []))];
@@ -1276,10 +1339,29 @@ export default function IndicatorPanel({ open, onToggle }) {
       for (const ind of bbBandWidthIndicators) {
         const period = ind.period ?? '20';
         const stdDev = ind.stdDev ?? '2';
-        const lookback = ind.lookback ?? '100';
+        const lookback = ind.lookback ?? '300';
         for (const interval of ind.intervals) {
           const filter = await fetchBollingerBandWidthFilter({ interval, period, stdDev, lookback });
           const expectedName = buildBollingerBandWidthFilterName(interval, period, stdDev, lookback);
+          addFilter({
+            name: filter.name ?? expectedName,
+            list: filter.list,
+            meta: filter.details,
+            scannedAt: filter.scannedAt,
+          });
+        }
+      }
+
+      // Trades teóricos na Bollinger Band (compra na inferior, vende na superior) filtrados
+      // pela regra de tendência da linha mediana — quantidade de trades + média de ganho/perda
+      for (const ind of bbMedianTrendIndicators) {
+        const period = ind.period ?? '20';
+        const stdDev = ind.stdDev ?? '2';
+        const lookback = ind.lookback ?? '700';
+        const side = ind.side ?? 'pos';
+        for (const interval of ind.intervals) {
+          const filter = await fetchBollingerMedianTrendFilter({ interval, period, stdDev, lookback, side });
+          const expectedName = buildBollingerMedianTrendFilterName(interval, period, stdDev, lookback, side);
           addFilter({
             name: filter.name ?? expectedName,
             list: filter.list,

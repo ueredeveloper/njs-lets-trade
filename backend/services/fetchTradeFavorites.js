@@ -1,6 +1,7 @@
 const router = require('express').Router();
 const { gateRequest } = require('../gate/getGateClient');
 const getClient = require('../binance/getClient');
+const { toGateSymbol } = require('../utils/toGateSymbol');
 
 const STABLE = new Set(['USDT', 'USDC', 'BUSD', 'TUSD', 'DAI', 'FDUSD', 'BNB']);
 const CACHE_TTL_MS = 60_000;
@@ -184,6 +185,42 @@ async function fetchGateAllTrades() {
   return bySymbol;
 }
 
+/**
+ * Busca trades por par específico na Gate (sem `from`) — o scan de conta inteira em
+ * fetchGateAllTrades() usa `from` sem `currency_pair`, combinação que na prática a Gate
+ * responde com uma amostra pequena e incompleta (visto empiricamente: ~12 trades cobrindo
+ * meses, ignorando trades recentes) em vez do histórico paginado esperado. Para os símbolos
+ * que já sabemos ser relevantes (favoritos/bots), complementamos com uma consulta escopada
+ * por par — o mesmo padrão usado por /services/gate-trades, que sempre retorna certo.
+ */
+async function fetchGateTradesForSymbols(symbols) {
+  const bySymbol = new Map();
+  if (!symbols.length) return bySymbol;
+
+  await mapPool(symbols, BINANCE_CONCURRENCY, async (symbol) => {
+    try {
+      const currencyPair = toGateSymbol(symbol);
+      const trades = await gateRequest('GET', '/spot/my_trades', {
+        currency_pair: currencyPair,
+        limit: '1000',
+      });
+      if (!Array.isArray(trades) || !trades.length) return;
+      bySymbol.set(symbol, trades.map(t => ({
+        time: t.create_time_ms
+          ? Number(t.create_time_ms)
+          : Math.round(parseFloat(t.create_time) * 1000),
+        price: t.price,
+        qty: t.amount,
+        isBuyer: t.side === 'buy',
+        exchange: 'gate',
+      })));
+    } catch (err) {
+      console.warn('[trade-favorites] Gate trades', symbol, ':', err.message);
+    }
+  });
+  return bySymbol;
+}
+
 async function fetchBinanceSymbols(extraSymbols = []) {
   const symbols = new Set(
     (extraSymbols ?? []).map(s => String(s).toUpperCase()).filter(s => s.endsWith('USDT')),
@@ -306,10 +343,14 @@ router.get('/trade-favorites', async (req, res) => {
       return res.json(cache);
     }
 
-    const [gateMap, binanceSymbols] = await Promise.all([
+    const [gateMap, gateExtraMap, binanceSymbols] = await Promise.all([
       fetchGateAllTrades(),
+      fetchGateTradesForSymbols(extra),
       fetchBinanceSymbols(extra),
     ]);
+    // Consulta escopada por par (gateExtraMap) é mais confiável que o scan de conta
+    // inteira pra esses símbolos — sobrescreve em vez de só complementar.
+    for (const [symbol, trades] of gateExtraMap) gateMap.set(symbol, trades);
     // Também buscar na Binance símbolos que só aparecem na Gate (vendidos lá)
     // e extras (favoritos) — já em binanceSymbols via extra
     const binanceMap = await fetchBinanceTradesMap(binanceSymbols);

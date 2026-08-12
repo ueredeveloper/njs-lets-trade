@@ -4,6 +4,7 @@ const readCandles = require('../utils/read-candles');
 const convertIntervalToMiliseconds = require('../utils/convert-interval-to-miliseconds');
 const { getGateCandles } = require('../gate/getGateCandles');
 const { retentionLimitFor } = require('../utils/candleRetentionLimits');
+const { withFileLock } = require('../utils/fileLock');
 
 // Símbolos deslistados na Binance — usar Gate.io automaticamente
 const GATE_ONLY_SYMBOLS = new Set(['SKYAIUSDT', 'SLXUSDT', 'UNIUSDT', 'ZESTUSDT', 'ONDOUSDT',
@@ -25,62 +26,64 @@ module.exports = getCandles = async function (symbol, interval, limit) {
 
     // limit = 1000;
 
-    let dbCandles;
-    try {
-        dbCandles = await readCandles(symbol, interval);
-    } catch (error) {
-        if (error.code === 'ENOENT') {
-            writeCandles(symbol, interval, []);
-            dbCandles = [];
-        } else {
-            throw error;
+    return withFileLock(`${symbol}-${interval}`, async () => {
+        let dbCandles;
+        try {
+            dbCandles = await readCandles(symbol, interval);
+        } catch (error) {
+            if (error.code === 'ENOENT') {
+                await writeCandles(symbol, interval, []);
+                dbCandles = [];
+            } else {
+                throw error;
+            }
         }
-    }
 
-    const currentTimestamp = Date.now();
-    let dbLastItemOpenTime;
+        const currentTimestamp = Date.now();
+        let dbLastItemOpenTime;
 
-    if (dbCandles.length > 0) {
-        dbLastItemOpenTime = dbCandles.slice(-1)[0].openTime;
-    } else {
-        dbLastItemOpenTime = Date.now();
-    }
+        if (dbCandles.length > 0) {
+            dbLastItemOpenTime = dbCandles.slice(-1)[0].openTime;
+        } else {
+            dbLastItemOpenTime = Date.now();
+        }
 
-    const timeDifference = currentTimestamp - dbLastItemOpenTime;
-    let miliseconds = await convertIntervalToMiliseconds(interval);
-    const limitForUpdateDb = Math.floor(timeDifference / miliseconds);
+        const timeDifference = currentTimestamp - dbLastItemOpenTime;
+        let miliseconds = await convertIntervalToMiliseconds(interval);
+        const limitForUpdateDb = Math.floor(timeDifference / miliseconds);
 
-    const retentionLimit = retentionLimitFor(interval);
-    if (dbCandles.length > retentionLimit) {
-        dbCandles = dbCandles.slice(-(retentionLimit - 1));
-    }
+        const retentionLimit = retentionLimitFor(interval);
+        if (dbCandles.length > retentionLimit) {
+            dbCandles = dbCandles.slice(-(retentionLimit - 1));
+        }
 
-    if (limit > dbCandles.length) {
+        if (limit > dbCandles.length) {
 
-        const candles = await fetchKlines(symbol, interval, limit);
-        writeCandles(symbol, interval, candles);
-        return candles;
-
-    } else {
-
-        if (limitForUpdateDb > 0) {
-
-            const candles = await fetchKlines(symbol, interval, limitForUpdateDb);
-            candles.forEach(candle => dbCandles.push(candle));
+            const candles = await fetchKlines(symbol, interval, limit);
+            await writeCandles(symbol, interval, candles);
+            return candles;
 
         } else {
 
-            const candles = await fetchKlines(symbol, interval, 1);
-            dbCandles.pop();
-            candles.forEach(candle => dbCandles.push(candle));
+            if (limitForUpdateDb > 0) {
+
+                const candles = await fetchKlines(symbol, interval, limitForUpdateDb);
+                candles.forEach(candle => dbCandles.push(candle));
+
+            } else {
+
+                const candles = await fetchKlines(symbol, interval, 1);
+                dbCandles.pop();
+                candles.forEach(candle => dbCandles.push(candle));
+            }
+
+            // Deduplica por openTime
+            const uniqueItems = {};
+            dbCandles.forEach(item => { uniqueItems[item.openTime] = item; });
+            const uniqueArray = Object.values(uniqueItems);
+
+            await writeCandles(symbol, interval, uniqueArray);
+            return uniqueArray.slice(-limit);
         }
-
-        // Deduplica por openTime
-        const uniqueItems = {};
-        dbCandles.forEach(item => { uniqueItems[item.openTime] = item; });
-        const uniqueArray = Object.values(uniqueItems);
-
-        writeCandles(symbol, interval, uniqueArray);
-        return uniqueArray.slice(-limit);
-    }
+    });
 };

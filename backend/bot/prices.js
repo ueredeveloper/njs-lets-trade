@@ -12,6 +12,7 @@ const readCandles  = require('../utils/read-candles');
 const writeCandles = require('../utils/write-candles');
 const convertIntervalToMiliseconds = require('../utils/convert-interval-to-miliseconds');
 const { retentionLimitFor } = require('../utils/candleRetentionLimits');
+const { withFileLock } = require('../utils/fileLock');
 
 const GATE_BASE    = 'https://api.gateio.ws/api/v4';
 const BINANCE_BASE = 'https://api.binance.com';
@@ -74,58 +75,60 @@ async function fetchBinanceCandles(symbol, limit = 200, interval = '1m') {
 async function fetchGateCandles(pair, limit = 200, interval = '30m') {
   const intervalMs = await convertIntervalToMiliseconds(interval);
 
-  let dbCandles;
-  try {
-    dbCandles = await readCandles(pair, interval);
-  } catch (err) {
-    if (err.code === 'ENOENT') {
-      dbCandles = [];
-    } else {
-      throw err;
+  return withFileLock(`${pair}-${interval}`, async () => {
+    let dbCandles;
+    try {
+      dbCandles = await readCandles(pair, interval);
+    } catch (err) {
+      if (err.code === 'ENOENT') {
+        dbCandles = [];
+      } else {
+        throw err;
+      }
     }
-  }
 
-  const retentionLimit = retentionLimitFor(interval);
-  if (dbCandles.length > retentionLimit) {
-    dbCandles = dbCandles.slice(-(retentionLimit - 1));
-  }
+    const retentionLimit = retentionLimitFor(interval);
+    if (dbCandles.length > retentionLimit) {
+      dbCandles = dbCandles.slice(-(retentionLimit - 1));
+    }
 
-  // A Gate.io tem um teto próprio de profundidade de histórico por request encadeado (bem
-  // menor que a retenção que queremos, ex.: ~9000 candles pra trás em 1m, contra os 10500
-  // que uma sessão semanal pediria) — fetchGateKlines já trata isso (para de paginar sem
-  // erro ao bater no teto, ver comentário lá). Sem o cache abaixo, `limit > dbCandles.length`
-  // ficaria sempre verdadeiro pra esse par (nunca alcança `limit`, mesmo símbolo, mesmo
-  // intervalo), e cada tick recarregaria o histórico inteiro do zero (~9 páginas) em vez de
-  // só buscar o delta. Lembra, por processo, o teto real já descoberto pra não repetir.
-  const ceilingKey = `${pair}|${interval}`;
-  const effectiveLimit = Math.min(limit, gateHistoryCeiling.get(ceilingKey) ?? limit);
+    // A Gate.io tem um teto próprio de profundidade de histórico por request encadeado (bem
+    // menor que a retenção que queremos, ex.: ~9000 candles pra trás em 1m, contra os 10500
+    // que uma sessão semanal pediria) — fetchGateKlines já trata isso (para de paginar sem
+    // erro ao bater no teto, ver comentário lá). Sem o cache abaixo, `limit > dbCandles.length`
+    // ficaria sempre verdadeiro pra esse par (nunca alcança `limit`, mesmo símbolo, mesmo
+    // intervalo), e cada tick recarregaria o histórico inteiro do zero (~9 páginas) em vez de
+    // só buscar o delta. Lembra, por processo, o teto real já descoberto pra não repetir.
+    const ceilingKey = `${pair}|${interval}`;
+    const effectiveLimit = Math.min(limit, gateHistoryCeiling.get(ceilingKey) ?? limit);
 
-  if (effectiveLimit > dbCandles.length) {
-    // Banco local tem menos candles do que o pedido: carga completa (pagina se limit > 1000).
-    const candles = await fetchGateKlines(pair, interval, intervalMs, effectiveLimit);
-    if (candles.length < effectiveLimit) gateHistoryCeiling.set(ceilingKey, candles.length);
-    writeCandles(pair, interval, candles);
-    return candles.slice(-limit);
-  }
+    if (effectiveLimit > dbCandles.length) {
+      // Banco local tem menos candles do que o pedido: carga completa (pagina se limit > 1000).
+      const candles = await fetchGateKlines(pair, interval, intervalMs, effectiveLimit);
+      if (candles.length < effectiveLimit) gateHistoryCeiling.set(ceilingKey, candles.length);
+      await writeCandles(pair, interval, candles);
+      return candles.slice(-limit);
+    }
 
-  const dbLastItemOpenTime = dbCandles.length > 0 ? dbCandles[dbCandles.length - 1].openTime : Date.now();
-  const limitForUpdateDb   = Math.floor((Date.now() - dbLastItemOpenTime) / intervalMs);
+    const dbLastItemOpenTime = dbCandles.length > 0 ? dbCandles[dbCandles.length - 1].openTime : Date.now();
+    const limitForUpdateDb   = Math.floor((Date.now() - dbLastItemOpenTime) / intervalMs);
 
-  if (limitForUpdateDb > 0) {
-    const newCandles = await fetchGateKlines(pair, interval, intervalMs, Math.min(limitForUpdateDb, retentionLimit));
-    newCandles.forEach(c => dbCandles.push(c));
-  } else {
-    const [latest] = await fetchGateKlines(pair, interval, intervalMs, 1);
-    if (latest) { dbCandles.pop(); dbCandles.push(latest); }
-  }
+    if (limitForUpdateDb > 0) {
+      const newCandles = await fetchGateKlines(pair, interval, intervalMs, Math.min(limitForUpdateDb, retentionLimit));
+      newCandles.forEach(c => dbCandles.push(c));
+    } else {
+      const [latest] = await fetchGateKlines(pair, interval, intervalMs, 1);
+      if (latest) { dbCandles.pop(); dbCandles.push(latest); }
+    }
 
-  // Deduplica por openTime (mesmo padrão do getCandles.js)
-  const uniqueMap = {};
-  dbCandles.forEach(c => { uniqueMap[c.openTime] = c; });
-  const uniqueArray = Object.values(uniqueMap).sort((a, b) => a.openTime - b.openTime);
+    // Deduplica por openTime (mesmo padrão do getCandles.js)
+    const uniqueMap = {};
+    dbCandles.forEach(c => { uniqueMap[c.openTime] = c; });
+    const uniqueArray = Object.values(uniqueMap).sort((a, b) => a.openTime - b.openTime);
 
-  writeCandles(pair, interval, uniqueArray);
-  return uniqueArray.slice(-limit);
+    await writeCandles(pair, interval, uniqueArray);
+    return uniqueArray.slice(-limit);
+  });
 }
 
 /**

@@ -5,8 +5,9 @@
  *   1. A mínima do candle toca a banda inferior BB(period,stdDev) do intervalo escolhido
  *      (pullback opcional: exige tocar `belowPct`% ainda mais abaixo dela) → compra (ordem
  *      limite no preço exato da banda/pullback).
- *   2. Coloca bracket TP/SL resting na corretora: alvo = banda superior ao vivo, stop =
- *      piso percentual (stopLoss.maxLossPct) — recriada quando o alvo ou o stop desviarem
+ *   2. Coloca bracket TP/SL resting na corretora: alvo = banda superior ao vivo (ou % de
+ *      lucro fixo manual, se exit.restingBracket.targetMode === 'fixed'), stop = piso
+ *      percentual (stopLoss.maxLossPct) — recriada quando o alvo ou o stop desviarem
  *      driftPct% do preço em que foi colocada. Mesma mecânica do vwap-bands-bot.js.
  *
  * Sem fase PENDING/escada — só WATCHING → BOUGHT.
@@ -128,23 +129,20 @@ function fmtPrice(n) {
 
 /** Descreve a tendência da mediana da BB no momento da compra (mesmo filtro de
  *  entry.medianTrendFilter — ver checkMedianTrendFilter em strategyEngine.js). `avgDiffPct`
- *  é a variação candle-a-candle da linha mediana, normalizada pelo preço, pra ficar legível
- *  independente da escala do ativo. Retorna null se o filtro estiver desligado ou sem dados
- *  (ex.: sinal preenchido pelo fallback do reteste, sem entryMeta completo). */
+ *  é a variação % candle-a-candle da linha mediana, já normalizada pelo preço em
+ *  checkMedianTrendFilter, pra ficar legível independente da escala do ativo. Retorna null se
+ *  o filtro estiver desligado ou sem dados (ex.: sinal preenchido pelo fallback do reteste,
+ *  sem entryMeta completo). */
 function medianTrendDesc(trend) {
-  if (!trend || trend.avgDiff == null) return null;
-  const dir = trend.avgDiff >= 0 ? '📈 subindo/estável' : '📉 caindo';
-  const pctPart = trend.avgDiffPct != null
-    ? `${trend.avgDiffPct >= 0 ? '+' : ''}${trend.avgDiffPct.toFixed(3)}%/candle, `
-    : '';
-  return `${dir} (${pctPart}lookback ${trend.lookback})`;
+  if (!trend || trend.avgDiffPct == null) return null;
+  const dir = trend.avgDiffPct >= 0 ? '📈 subindo/estável' : '📉 caindo';
+  return `${dir} (${trend.avgDiffPct >= 0 ? '+' : ''}${trend.avgDiffPct.toFixed(3)}%/candle, lookback ${trend.lookback})`;
 }
 
 function buildEntryReasonLines(config, entryMeta) {
   const lines = [`${entryMeta.entryDesc} @ ${fmtPrice(entryMeta.close)}`];
   if (config.entry?.medianTrendFilter?.enabled) {
-    const avgDiffPct = entryMeta.middle ? (entryMeta.medianTrend?.avgDiff / entryMeta.middle) * 100 : null;
-    const desc = medianTrendDesc({ ...entryMeta.medianTrend, avgDiffPct });
+    const desc = medianTrendDesc(entryMeta.medianTrend);
     if (desc) lines.push(`Tendência mediana BB: ${desc}`);
   }
   return lines;
@@ -175,17 +173,22 @@ const {
   // "degrau" pra lembrar entre ticks como no vwap-bands. Só o snapshot da tendência mediana
   // na compra precisa sobreviver até a venda, pra aparecer na mensagem de VENDA.
   extraInitialRulesState: ({ config, entryMeta }) => {
-    if (!config.entry?.medianTrendFilter?.enabled || entryMeta?.medianTrend?.avgDiff == null) return null;
-    const avgDiffPct = entryMeta.middle ? (entryMeta.medianTrend.avgDiff / entryMeta.middle) * 100 : null;
+    if (!config.entry?.medianTrendFilter?.enabled || entryMeta?.medianTrend?.avgDiffPct == null) return null;
     return {
       entryMedianTrend: {
-        avgDiff: entryMeta.medianTrend.avgDiff,
-        avgDiffPct,
+        avgDiffPct: entryMeta.medianTrend.avgDiffPct,
         lookback: entryMeta.medianTrend.lookback,
       },
     };
   },
 });
+
+/** Rótulo do alvo (TP) da bracket pra logs/WhatsApp — 'banda superior' (padrão) ou
+ *  '% manual' quando exit.restingBracket.targetMode === 'fixed'. */
+function targetLabel(config) {
+  const rb = config.exit?.restingBracket;
+  return rb?.targetMode === 'fixed' ? `manual +${rb.targetPct}%` : 'banda superior';
+}
 
 /**
  * Coloca a bracket TP/SL resting na corretora logo após a compra confirmar (só se
@@ -196,15 +199,15 @@ async function placeInitialBracket({ rowId, adapter, config, cMap, session, log,
   if (!config.exit.restingBracket?.enabled) return;
   const { targetPrice, stopPrice } = computeBracketPrices(config, cMap, buyPrice, buyPrice);
   if (targetPrice == null || stopPrice == null) {
-    log(`${Y}⚠️  Bracket TP/SL não colocada — banda superior indisponível ainda${X}`);
-    sendWhatsApp(`⚠️ ${BOT_LABEL} [${strategyId}] ${symbol}\nBracket TP/SL NÃO colocada (banda superior indisponível) — posição sem proteção na corretora, saída depende do bot ficar rodando.`);
+    log(`${Y}⚠️  Bracket TP/SL não colocada — alvo (${targetLabel(config)}) indisponível ainda${X}`);
+    sendWhatsApp(`⚠️ ${BOT_LABEL} [${strategyId}] ${symbol}\nBracket TP/SL NÃO colocada (alvo indisponível) — posição sem proteção na corretora, saída depende do bot ficar rodando.`);
     return;
   }
   try {
     const bracket = await adapter.placeExitBracket(filledQty, targetPrice, stopPrice);
     session.rulesState = { ...(session.rulesState ?? {}), exitBracket: { ...bracket, placedAt: new Date().toISOString() } };
     await saveState(rowId, { rules_state: session.rulesState }, log);
-    log(`${G}🎯 Bracket TP/SL colocada na corretora — alvo (banda superior) ${fmtPrice(bracket.targetPrice)} / stop ${fmtPrice(bracket.stopPrice)}${X}`);
+    log(`${G}🎯 Bracket TP/SL colocada na corretora — alvo (${targetLabel(config)}) ${fmtPrice(bracket.targetPrice)} / stop ${fmtPrice(bracket.stopPrice)}${X}`);
   } catch (err) {
     log(`${Y}⚠️  Falha ao colocar bracket TP/SL (${err.message}) — segue só no candle fechado${X}`);
     sendWhatsApp(`⚠️ ${BOT_LABEL} [${strategyId}] ${symbol}\nFalha ao colocar bracket TP/SL na corretora: ${err.message}\nPosição sem proteção na corretora — saída depende do bot ficar rodando (candle fechado).`);
@@ -214,6 +217,10 @@ async function placeInitialBracket({ rowId, adapter, config, cMap, session, log,
 /** Recalcula alvo/stop vigentes e recria a bracket se algum desviou ≥driftPct% do preço em
  *  que foi colocada (a banda superior se move a cada candle novo). */
 async function maybeReplaceBracket({ rowId, adapter, config, cMap, session, log, exitBracket, buyPrice, buyQty, peakPrice }) {
+  // Bracket colocada manualmente pelo botão de vender (OCO com TP/SL escolhidos pelo usuário)
+  // — não mexe até preencher ou o usuário trocar de novo, senão o valor manual seria
+  // substituído de volta pro cálculo automático da estratégia no próximo tick.
+  if (exitBracket.manual) return;
   const driftPct = config.exit.restingBracket?.driftPct ?? 3;
   const { targetPrice: liveTarget, stopPrice: liveStop } = computeBracketPrices(config, cMap, buyPrice, peakPrice);
   if (liveTarget == null || liveStop == null) return;
@@ -230,7 +237,7 @@ async function maybeReplaceBracket({ rowId, adapter, config, cMap, session, log,
     const bracket = await adapter.placeExitBracket(buyQty, liveTarget, liveStop);
     session.rulesState = { ...(session.rulesState ?? {}), exitBracket: { ...bracket, placedAt: new Date().toISOString() } };
     await saveState(rowId, { rules_state: session.rulesState }, log);
-    log(`🔁 Bracket TP/SL recriada (deriva ≥${driftPct}%) — alvo ${fmtPrice(bracket.targetPrice)} / stop ${fmtPrice(bracket.stopPrice)}`);
+    log(`🔁 Bracket TP/SL recriada (deriva ≥${driftPct}%) — alvo (${targetLabel(config)}) ${fmtPrice(bracket.targetPrice)} / stop ${fmtPrice(bracket.stopPrice)}`);
   } catch (err) {
     if (cancelled) {
       // A bracket antiga já foi cancelada na corretora antes da nova falhar — limpa

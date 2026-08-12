@@ -483,18 +483,23 @@ export default function MultitradePanel() {
       {sellEntry && (
         <MultitradeSellModal
           entry={sellEntry}
-          onSold={async (order) => {
-            const exchange = sellEntry.exchange === 'gate' ? 'gate' : 'binance';
-            const fill = extractSellFill(exchange, order);
-            await updateMultitradeBotState({
-              symbol: sellEntry.symbol,
-              strategyId: normalizeStrategyId(sellEntry.strategyId),
-              phase: 'WATCHING',
-              // Dados reais da ordem executada — sem isso o backend não consegue fechar o
-              // trade em rsi_multi_bot_trades (só zerar o estado), e a venda manual some do
-              // histórico/PnL do favorito. Ver PATCH /services/sb/multitrade-bot-state.
-              sell: fill.soldQty > 0 && fill.usdtOut > 0 ? fill : null,
-            });
+          onSold={async (order, { oco } = {}) => {
+            // OCO só coloca a ordem resting na corretora (nada preenchido ainda) — a posição
+            // continua BOUGHT até o bot ou o próximo poll detectar o fill, não fecha o trade
+            // aqui nem tenta extrair fill de uma ordem que não executou.
+            if (!oco) {
+              const exchange = sellEntry.exchange === 'gate' ? 'gate' : 'binance';
+              const fill = extractSellFill(exchange, order);
+              await updateMultitradeBotState({
+                symbol: sellEntry.symbol,
+                strategyId: normalizeStrategyId(sellEntry.strategyId),
+                phase: 'WATCHING',
+                // Dados reais da ordem executada — sem isso o backend não consegue fechar o
+                // trade em rsi_multi_bot_trades (só zerar o estado), e a venda manual some do
+                // histórico/PnL do favorito. Ver PATCH /services/sb/multitrade-bot-state.
+                sell: fill.soldQty > 0 && fill.usdtOut > 0 ? fill : null,
+              });
+            }
             setSellEntry(null);
           }}
           onCancel={() => setSellEntry(null)}

@@ -28,7 +28,7 @@ function Select({ value, onChange, options, labelFor }) {
  * toca a banda inferior, vende quando toca a banda superior, no intervalo escolhido. Sem
  * escada, sem filtros extra (ver backend/bot/bollinger-bands/strategyEngine.js).
  */
-export default function BollingerBandsStrategyForm({ form, patch, symbol, lockInterval }) {
+export default function BollingerBandsStrategyForm({ form, patch, symbol }) {
   const patchEntry     = (field, val) => patch(`entry.${field}`, val);
   const patchPullback  = (field, val) => patch(`entry.pullback.${field}`, val);
   const patchEmaFilter = (field, val) => patch(`entry.emaFilter.${field}`, val);
@@ -46,13 +46,7 @@ export default function BollingerBandsStrategyForm({ form, patch, symbol, lockIn
         </span>
         <div className="flex flex-wrap gap-2 items-center text-xs">
           <span className="text-p5/50">Intervalo</span>
-          {lockInterval ? (
-            <span className="rounded px-2 py-1 text-xs font-mono font-bold" style={{ background: '#1e2130', border: '1px solid #2a2d3a', color: ENTRY_COLOR }}>
-              {form.entry.interval}
-            </span>
-          ) : (
-            <Select value={form.entry.interval} onChange={v => patchEntry('interval', v)} options={BOLLINGER_BANDS_ALL_INTERVALS} />
-          )}
+          <Select value={form.entry.interval} onChange={v => patchEntry('interval', v)} options={BOLLINGER_BANDS_ALL_INTERVALS} />
           <span className="text-p5/50 ml-2">Período</span>
           <Select value={form.entry.period} onChange={v => patchEntry('period', Number(v))} options={BOLLINGER_BANDS_PERIODS}
             labelFor={p => `BB${p}`} />
@@ -166,17 +160,39 @@ export default function BollingerBandsStrategyForm({ form, patch, symbol, lockIn
       </div>
 
       <div className="rounded-md p-2 space-y-2" style={{ background: '#1a1d28', border: '1px solid #2a2d3a' }}>
-        <span className="text-[10px] font-bold uppercase tracking-wider text-p5/70">Ordem limite no toque da BB</span>
-        <div className="flex flex-wrap gap-2 items-center text-xs text-p5">
-          <span className="text-p5/50">Manter no book até</span>
-          <NumInput value={form.entry.limitWaitCandles ?? 5} onChange={v => patchEntry('limitWaitCandles', v)} min={1} max={100} step={1} className="w-14" />
-          <span className="text-p5/40">candles {form.entry.interval}</span>
+        <span className="text-[10px] font-bold uppercase tracking-wider text-p5/70">Execução no toque da BB</span>
+        <div className="flex gap-2">
+          {[{ id: false, label: 'Ordem limite (GTC)' }, { id: true, label: 'A mercado (instantânea)' }].map(o => (
+            <button key={String(o.id)} type="button" onClick={() => patchEntry('instantFill', o.id)}
+              className="flex-1 py-1 text-[10px] rounded font-semibold"
+              style={{
+                background: (form.entry.instantFill === true) === o.id ? ENTRY_COLOR : 'transparent',
+                color: (form.entry.instantFill === true) === o.id ? '#fff' : ENTRY_COLOR,
+                border: `1px solid ${ENTRY_COLOR}`, opacity: (form.entry.instantFill === true) === o.id ? 1 : 0.55,
+              }}>{o.label}</button>
+          ))}
         </div>
-        <p className="text-[10px] text-p5/50 leading-relaxed">
-          No toque da banda inferior arma limite GTC no preço da banda e deixa resting —
-          se o pavio subiu (como 05:34) e o preço retestar (05:35), preenche. Sem fill em
-          {' '}{form.entry.limitWaitCandles ?? 5} candles, cancela e espera o próximo sinal.
-        </p>
+        {form.entry.instantFill === true ? (
+          <p className="text-[10px] text-p5/50 leading-relaxed">
+            No toque da banda inferior, compra a mercado assim que o sinal confirma (checagem a
+            cada {' '}minuto) — sem esperar reteste. Evita perder o movimento quando o preço toca a
+            banda e sobe sem voltar, ao custo de uma entrada pior (preço do momento, não o exato
+            da banda) e mais suscetível a toques falsos.
+          </p>
+        ) : (
+          <>
+            <div className="flex flex-wrap gap-2 items-center text-xs text-p5">
+              <span className="text-p5/50">Manter no book até</span>
+              <NumInput value={form.entry.limitWaitCandles ?? 5} onChange={v => patchEntry('limitWaitCandles', v)} min={1} max={100} step={1} className="w-14" />
+              <span className="text-p5/40">candles {form.entry.interval}</span>
+            </div>
+            <p className="text-[10px] text-p5/50 leading-relaxed">
+              No toque da banda inferior arma limite GTC no preço da banda e deixa resting —
+              se o pavio subiu (como 05:34) e o preço retestar (05:35), preenche. Sem fill em
+              {' '}{form.entry.limitWaitCandles ?? 5} candles, cancela e espera o próximo sinal.
+            </p>
+          </>
+        )}
       </div>
 
       <div className="rounded-md p-2 space-y-2" style={{ background: '#1a1d28', border: '1px solid #2a2d3a' }}>
@@ -196,7 +212,7 @@ export default function BollingerBandsStrategyForm({ form, patch, symbol, lockIn
 
       <div className="space-y-2">
         <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: EXIT_COLOR }}>
-          Saída — banda superior
+          Saída
         </span>
         <label className="flex items-center gap-2 cursor-pointer text-xs text-p5">
           <input type="checkbox" checked={form.exit.restingBracket?.enabled !== false}
@@ -205,15 +221,49 @@ export default function BollingerBandsStrategyForm({ form, patch, symbol, lockIn
         </label>
         <p className="text-[10px] text-p5/50 leading-relaxed">
           {form.exit.restingBracket?.enabled !== false
-            ? 'Logo após a compra, coloca alvo (banda superior) e stop (piso do stop-loss abaixo) já na corretora — igual ao VWAP Bands. Recriada quando a banda se mover o suficiente.'
-            : 'Desligado — venda a mercado só quando o bot detectar o toque na banda superior ou o stop-loss no próprio tick (menos preciso que a ordem resting).'}
+            ? 'Logo após a compra, coloca alvo (TP) e stop (SL) já na corretora — protegido mesmo se o bot cair. Recriada quando o alvo ou o stop se moverem o suficiente.'
+            : 'Desligado — venda direta a mercado só quando o bot detectar o toque na banda superior ou o stop-loss no próprio tick (menos preciso que a ordem resting, e sem proteção se o bot cair).'}
         </p>
         {form.exit.restingBracket?.enabled !== false && (
-          <div className="flex flex-wrap gap-2 items-center text-xs text-p5">
-            <span className="text-p5/50">Recria a bracket se desviar</span>
-            <NumInput value={form.exit.restingBracket?.driftPct} onChange={v => patchBracket('driftPct', v)} min={0.5} max={20} step={0.5} />
-            <span className="text-p5/40">%</span>
-          </div>
+          <>
+            <div className="flex gap-2">
+              {[{ id: 'band', label: 'Alvo = banda superior' }, { id: 'fixed', label: 'Alvo = % de lucro manual' }].map(m => (
+                <button key={m.id} type="button" onClick={() => patchBracket('targetMode', m.id)}
+                  className="flex-1 py-1 text-[10px] rounded font-semibold"
+                  style={{
+                    background: (form.exit.restingBracket?.targetMode ?? 'band') === m.id ? EXIT_COLOR : 'transparent',
+                    color: (form.exit.restingBracket?.targetMode ?? 'band') === m.id ? '#fff' : EXIT_COLOR,
+                    border: `1px solid ${EXIT_COLOR}`, opacity: (form.exit.restingBracket?.targetMode ?? 'band') === m.id ? 1 : 0.55,
+                  }}>{m.label}</button>
+              ))}
+            </div>
+            {(form.exit.restingBracket?.targetMode ?? 'band') === 'fixed' ? (
+              <>
+                <div className="flex flex-wrap gap-2 items-center text-xs text-p5">
+                  <span className="text-p5/50">Lucro alvo</span>
+                  <NumInput value={form.exit.restingBracket?.targetPct} onChange={v => patchBracket('targetPct', v)} min={0.1} max={100} step={0.5} />
+                  <span className="text-p5/40">% acima do preço de compra</span>
+                </div>
+                <p className="text-[10px] text-p5/50 leading-relaxed">
+                  Alvo fixo: coloca a ordem OCO com TP em +{form.exit.restingBracket?.targetPct ?? 3}% sobre o
+                  preço de compra — não depende do bot recalcular a banda, então a posição continua
+                  protegida na corretora mesmo se o bot cair ou perder conexão. Combine com o
+                  stop-loss abaixo (modo "Valor limite (%)") pra montar a estratégia de compra e
+                  venda manualmente.
+                </p>
+              </>
+            ) : (
+              <p className="text-[10px] text-p5/50 leading-relaxed">
+                Alvo = banda superior BB({form.entry.period},{form.entry.stdDev}) {form.entry.interval} ao vivo —
+                acompanha a banda, mas exige o bot rodando pra recriar a ordem a cada desvio.
+              </p>
+            )}
+            <div className="flex flex-wrap gap-2 items-center text-xs text-p5">
+              <span className="text-p5/50">Recria a bracket se desviar</span>
+              <NumInput value={form.exit.restingBracket?.driftPct} onChange={v => patchBracket('driftPct', v)} min={0.5} max={20} step={0.5} />
+              <span className="text-p5/40">%</span>
+            </div>
+          </>
         )}
       </div>
 

@@ -165,6 +165,10 @@ async function placeInitialBracket({ rowId, adapter, config, cMap, session, log,
 /** Recalcula alvo/stop vigentes e recria a bracket se algum desviou ≥driftPct% do preço em
  *  que foi colocada (bandas da VWAP se movem a cada candle novo do vwapInterval). */
 async function maybeReplaceBracket({ rowId, adapter, config, cMap, session, log, activeSetup, exitBracket, buyPrice, buyQty }) {
+  // Bracket colocada manualmente pelo botão de vender (OCO com TP/SL escolhidos pelo usuário)
+  // — não mexe até preencher ou o usuário trocar de novo, senão o valor manual seria
+  // substituído de volta pro cálculo automático da estratégia no próximo tick.
+  if (exitBracket.manual) return;
   const driftPct = config.exit.restingBracket?.driftPct ?? 3;
   const { targetPrice: liveTarget, stopPrice: liveStop } = computeLadderLevelPrices(config, cMap, buyPrice, activeSetup);
   if (liveTarget == null || liveStop == null) return;

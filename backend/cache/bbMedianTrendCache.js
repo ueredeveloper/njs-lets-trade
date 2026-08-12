@@ -2,46 +2,35 @@
 
 const fs = require('node:fs/promises');
 const path = require('path');
-const { BollingerBands } = require('technicalindicators');
 const getCandlesForScreening = require('../utils/getCandlesForScreening');
 const candleUpdateQueue = require('../utils/candleUpdateQueue');
 const { closedCandlesOnly, intervalMs } = require('../bot/ma-cross/strategyEngine');
-const { buildBollingerBandWidthFilterName } = require('../utils/filterNames');
+const { simulateBbMedianTrendTrades, DEFAULT_MEDIAN_LOOKBACK } = require('../utils/bbMedianTrendTrades');
+const { buildBollingerMedianTrendFilterName } = require('../utils/filterNames');
 const cacheSettings = require('./cacheSettings');
 
 const BATCH_SIZE = 20;
-const CACHE_FILE = path.join(__dirname, '..', 'data', 'bb-band-width-cache.json');
-/** avgWidthPct usa os últimos 80 candles fechados (Larg% em indicadores e favoritos BB).
- * O lookback continua definindo a janela de minWidthPct/maxWidthPct. */
-const AVG_WINDOW = 80;
+const CACHE_FILE = path.join(__dirname, '..', 'data', 'bb-median-trend-cache.json');
+/** Abaixo disso a média não é confiável (1-2 trades podem ser puro outlier). */
+const MIN_TRADES = 2;
 
 /**
- * Presets pré-aquecidos: combinação padrão do painel de favoritos (4h, período 20, desvio 2,
- * 100 candles) e a combinação padrão do filtro de busca de indicadores (15min e 5min, mesmo
- * BB(20,2), 300 candles) — trade BB entra na banda inferior e sai na superior. O preset de
- * 4h (favoritos) e 1min existem mas nascem desligados (ver DEFAULT_ON em cacheSettings.js):
- * escanear os ~500 pares USDT em 1min não cabe no orçamento da fila global de candles
- * (~24 req/min) sem ficar constantemente atrasado.
- */
-/**
- * ttlMs é independente do intervalo do candle: manter a MÉTRICA (largura média em janela de
- * candles) "fresca" a cada fechamento de candle de 1min/15min exigiria re-varrer os ~500
- * pares dentro dessa mesma janela — muito acima do orçamento da fila global (~24 req/min).
- * Um ttl mais folgado evita reprocessar o mercado inteiro sem parar; a métrica em si não
- * muda tão rápido a ponto de precisar disso.
+ * Presets pré-aquecidos: combinação padrão do filtro de trades BB c/ tendência da mediana —
+ * 700 candles, período 20, desvio 2, nos dois intervalos mais usados pro mean-reversion
+ * (15min e 5min). O snapshot guarda os stats "crus" (ganhos/perdas/todos) por símbolo, sem
+ * `side` — a escolha de só ganhos/só perdas/todos é aplicada na leitura (getCachedResult),
+ * não na varredura, pra não precisar re-varrer o mercado 3x pra cada side.
  */
 const CACHED_PRESETS = [
-  { key: '4h|20|2|100', interval: '4h', period: 20, stdDev: 2, lookback: 100, settingId: 'bbBandWidth4h' },
-  { key: '1m|20|2|100', interval: '1m', period: 20, stdDev: 2, lookback: 100, settingId: 'bbBandWidth1m', ttlMs: 60 * 60_000 },
-  { key: '15m|20|2|300', interval: '15m', period: 20, stdDev: 2, lookback: 300, settingId: 'bbBandWidth15m', ttlMs: 30 * 60_000 },
-  { key: '5m|20|2|300', interval: '5m', period: 20, stdDev: 2, lookback: 300, settingId: 'bbBandWidth5m', ttlMs: 20 * 60_000 },
+  { key: '15m|20|2|700', interval: '15m', period: 20, stdDev: 2, lookback: 700, settingId: 'bbMedianTrend15m', ttlMs: 30 * 60_000 },
+  { key: '5m|20|2|700', interval: '5m', period: 20, stdDev: 2, lookback: 700, settingId: 'bbMedianTrend5m', ttlMs: 20 * 60_000 },
 ];
 
 const REFRESH_TICK_MS = 5 * 60_000;
 
 /** Map<"presetKey|symbol", { detail, computedAt }> — detail é null quando não há dados suficientes. */
 const symbolStore = new Map();
-/** Map<presetKey, snapshot> — snapshot.list sempre ordenado das bandas mais distantes pras mais próximas. */
+/** Map<presetKey, snapshot> — snapshot.details guarda os stats crus (sem side aplicado). */
 const snapshots = new Map();
 let refreshInFlight = null;
 let dirty = false;
@@ -50,8 +39,8 @@ function presetTtlMs(preset) {
   return preset.ttlMs ?? intervalMs(preset.interval);
 }
 
-function presetFilterName(preset) {
-  return buildBollingerBandWidthFilterName(preset.interval, preset.period, preset.stdDev, preset.lookback);
+function presetFilterName(preset, side = 'pos') {
+  return buildBollingerMedianTrendFilterName(preset.interval, preset.period, preset.stdDev, preset.lookback, side);
 }
 
 function findPreset(key) {
@@ -91,8 +80,17 @@ function needsRefresh(presetKey, symbol) {
   return Date.now() - entry.computedAt >= presetTtlMs(preset);
 }
 
+function round2(n) {
+  return n == null ? null : Math.round(n * 100) / 100;
+}
+
+function avgPct(list) {
+  if (!list.length) return null;
+  return list.reduce((s, v) => s + v, 0) / list.length;
+}
+
 function evaluateSymbolWithCandles(symbol, preset, rawCandles, now = Date.now()) {
-  const minCandles = preset.period + 5;
+  const minCandles = preset.period + DEFAULT_MEDIAN_LOOKBACK + 5;
   const key = storeKey(preset.key, symbol);
 
   try {
@@ -103,38 +101,28 @@ function evaluateSymbolWithCandles(symbol, preset, rawCandles, now = Date.now())
       return false;
     }
 
-    const closes = candles.map(c => parseFloat(c.close));
-    const bb = BollingerBands.calculate({ period: preset.period, values: closes, stdDev: preset.stdDev });
-    if (!bb.length) {
+    const trades = simulateBbMedianTrendTrades(candles, { period: preset.period, stdDev: preset.stdDev, tradeWindow: preset.lookback });
+    if (!trades.length) {
       symbolStore.set(key, { detail: null, computedAt: now });
       dirty = true;
       return false;
     }
 
-    const window = bb.slice(-Math.min(preset.lookback, bb.length));
-    const widths = [];
-    for (const p of window) {
-      if (!(p.lower > 0)) continue;
-      widths.push(((p.upper - p.lower) / p.lower) * 100);
-    }
-    if (!widths.length) {
-      symbolStore.set(key, { detail: null, computedAt: now });
-      dirty = true;
-      return false;
-    }
-
-    const avgWindow = widths.slice(-AVG_WINDOW);
-    const avgWidthPct = avgWindow.reduce((s, v) => s + v, 0) / avgWindow.length;
-    const lastCandle = candles[candles.length - 1];
+    const pnls = trades.map(t => t.pnlPct);
+    const wins = pnls.filter(p => p > 0);
+    const losses = pnls.filter(p => p <= 0);
+    const last = candles[candles.length - 1];
 
     const detail = {
       symbol,
-      avgWidthPct: Math.round(avgWidthPct * 100) / 100,
-      lastWidthPct: Math.round(widths[widths.length - 1] * 100) / 100,
-      minWidthPct: Math.round(Math.min(...widths) * 100) / 100,
-      maxWidthPct: Math.round(Math.max(...widths) * 100) / 100,
-      samples: widths.length,
-      close: parseFloat(lastCandle.close),
+      avgWinPct: round2(avgPct(wins)),
+      avgLossPct: round2(avgPct(losses)),
+      avgAllPct: round2(avgPct(pnls)),
+      totalTrades: trades.length,
+      winTrades: wins.length,
+      lossTrades: losses.length,
+      winRatePct: round2((wins.length / trades.length) * 100),
+      close: parseFloat(last.close),
     };
 
     symbolStore.set(key, { detail, computedAt: now });
@@ -154,24 +142,20 @@ async function loadCandlesForScreening(symbol, interval, limit, sessionCache) {
   return result;
 }
 
+/** Snapshot guarda TODOS os símbolos com detail (independente de side) — a filtragem por
+ *  MIN_TRADES e a ordenação por avgPct do side escolhido acontecem em applySide/getCachedResult. */
 function buildSnapshotForPreset(preset, now = Date.now()) {
-  const matched = [];
   const details = {};
   const prefix = `${preset.key}|`;
 
   for (const [key, entry] of symbolStore) {
     if (!key.startsWith(prefix)) continue;
     if (!entry?.detail) continue;
-    matched.push(entry.detail);
     const { symbol: sym, ...meta } = entry.detail;
     details[sym] = meta;
   }
 
-  matched.sort((a, b) => b.avgWidthPct - a.avgWidthPct);
-
   const snap = {
-    name: presetFilterName(preset),
-    list: matched.map(r => r.symbol),
     details,
     interval: preset.interval,
     period: preset.period,
@@ -195,6 +179,38 @@ function snapshotAgeMs(presetKey) {
   return Date.now() - snap.scannedAt;
 }
 
+/** Aplica o `side` escolhido sobre os stats crus do snapshot: monta list/details finais
+ *  (avgPct = média do side), descarta símbolos sem trades suficientes desse side, ordena. */
+function applySide(snap, side, order) {
+  const field = side === 'pos' ? 'avgWinPct' : side === 'neg' ? 'avgLossPct' : 'avgAllPct';
+  const countField = side === 'pos' ? 'winTrades' : side === 'neg' ? 'lossTrades' : 'totalTrades';
+
+  const rows = [];
+  for (const [symbol, meta] of Object.entries(snap.details)) {
+    if ((meta[countField] ?? 0) < MIN_TRADES || meta[field] == null) continue;
+    rows.push({ symbol, avgPct: meta[field], ...meta });
+  }
+  rows.sort((a, b) => (order === 'worst' ? a.avgPct - b.avgPct : b.avgPct - a.avgPct));
+
+  const details = {};
+  for (const row of rows) {
+    const { symbol, ...meta } = row;
+    details[symbol] = meta;
+  }
+
+  return {
+    list: rows.map(r => r.symbol),
+    details,
+    interval: snap.interval,
+    period: snap.period,
+    stdDev: snap.stdDev,
+    lookback: snap.lookback,
+    side,
+    order,
+    scannedAt: snap.scannedAt,
+  };
+}
+
 async function refreshAll(symbols, { force = false } = {}) {
   const now = Date.now();
   let computed = 0;
@@ -213,7 +229,7 @@ async function refreshAll(symbols, { force = false } = {}) {
       : symbols.filter(s => needsRefresh(preset.key, s));
     staleTotal += stale.length;
 
-    const minCandles = preset.period + 5;
+    const minCandles = preset.period + DEFAULT_MEDIAN_LOOKBACK + 5;
     const limit = preset.lookback + minCandles;
     for (let i = 0; i < stale.length; i += BATCH_SIZE) {
       const batch = stale.slice(i, i + BATCH_SIZE);
@@ -233,9 +249,6 @@ async function refreshAll(symbols, { force = false } = {}) {
         else failed++;
       }
 
-      // Reconstrói o snapshot a cada lote — sem isso, uma varredura de ~500 símbolos
-      // (minutos, dado o rate-limit da fila global) deixa o endpoint devolvendo lista vazia
-      // o tempo todo, em vez de ir preenchendo aos poucos conforme cada lote termina.
       buildSnapshotForPreset(preset, Date.now());
       if (computed > 0) await saveToDisk();
     }
@@ -243,7 +256,7 @@ async function refreshAll(symbols, { force = false } = {}) {
 
   const counts = {};
   for (const preset of CACHED_PRESETS) {
-    counts[preset.key] = snapshots.get(preset.key)?.list?.length ?? 0;
+    counts[preset.key] = Object.keys(snapshots.get(preset.key)?.details ?? {}).length;
   }
 
   return {
@@ -268,20 +281,14 @@ async function ensureFresh(symbols, { force = false } = {}) {
   return refreshInFlight;
 }
 
-/** @param {'far'|'near'} order */
-function applyOrder(snap, order) {
-  if (order !== 'near') return snap;
-  return { ...snap, list: snap.list.slice().reverse() };
-}
-
-async function getCachedResult(symbols, presetKey, { force = false, order = 'far' } = {}) {
+async function getCachedResult(symbols, presetKey, { force = false, side = 'pos', order = 'best' } = {}) {
   const key = String(presetKey);
   const preset = findPreset(key);
   if (!preset) return null;
 
   const age = snapshotAgeMs(key);
   const snap = snapshots.get(key);
-  const hasSnapshot = snap && Array.isArray(snap.list);
+  const hasSnapshot = snap && snap.details;
   const staleMs = presetTtlMs(preset) * 2;
 
   if (!hasSnapshot && symbolStore.size > 0) {
@@ -289,8 +296,8 @@ async function getCachedResult(symbols, presetKey, { force = false, order = 'far
     const rebuilt = snapshots.get(key);
     if (rebuilt) {
       return {
-        ...applyOrder(rebuilt, order),
-        name: presetFilterName(preset),
+        ...applySide(rebuilt, side, order),
+        name: presetFilterName(preset, side),
         cache: { hit: true, ageMs: age, preset: key, rebuilt: true },
       };
     }
@@ -299,21 +306,22 @@ async function getCachedResult(symbols, presetKey, { force = false, order = 'far
   if (force || !hasSnapshot || age >= staleMs) {
     const stats = await ensureFresh(symbols, { force: false });
     const fresh = buildSnapshotForPreset(preset, Date.now());
-    return { ...applyOrder(fresh, order), cache: { ...stats, hit: false, ageMs: 0, preset: key } };
+    return { ...applySide(fresh, side, order), name: presetFilterName(preset, side), cache: { ...stats, hit: false, ageMs: 0, preset: key } };
   }
 
   if (age >= presetTtlMs(preset)) {
-    ensureFresh(symbols).catch(err => console.error('[bbBandWidthCache] refresh:', err.message));
+    ensureFresh(symbols).catch(err => console.error('[bbMedianTrendCache] refresh:', err.message));
   }
 
+  const applied = applySide(snap, side, order);
   return {
-    ...applyOrder(snap, order),
-    name: presetFilterName(preset),
+    ...applied,
+    name: presetFilterName(preset, side),
     cache: {
       hit: true,
       ageMs: age,
       preset: key,
-      matched: snap.list.length,
+      matched: applied.list.length,
       total: symbols.length,
     },
   };
@@ -341,12 +349,12 @@ async function loadFromDisk() {
 
     dirty = false;
     const counts = CACHED_PRESETS.map(p =>
-      `${p.key}:${snapshots.get(p.key)?.list?.length ?? 0}`,
+      `${p.key}:${Object.keys(snapshots.get(p.key)?.details ?? {}).length}`,
     ).join(' ');
-    console.log(`[bbBandWidthCache] disco → ${symbolStore.size} entradas (${counts})`);
+    console.log(`[bbMedianTrendCache] disco → ${symbolStore.size} entradas (${counts})`);
     return symbolStore.size;
   } catch {
-    console.log('[bbBandWidthCache] sem cache em disco');
+    console.log('[bbMedianTrendCache] sem cache em disco');
     return 0;
   }
 }
@@ -362,7 +370,7 @@ async function saveToDisk() {
     dirty = false;
     return true;
   } catch (err) {
-    console.error('[bbBandWidthCache] saveToDisk:', err.message);
+    console.error('[bbMedianTrendCache] saveToDisk:', err.message);
     return false;
   }
 }

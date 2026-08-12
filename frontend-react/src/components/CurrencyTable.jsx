@@ -7,7 +7,7 @@ import {
   fetchMaCrossoverFilter, fetchMultitradeTrades, fetchBotState,
   fetchGateTrades, fetchBinanceTrades,
 } from '../services/api';
-import { parseMaCrossFilterName, parseMaCompareFilterName, parseMaDistanceFilterName, parseIndicatorGrowthFilterName, parseVwapBandWidthFilterName, parseBollingerBandWidthFilterName, parseFilterChartInterval } from '../utils/filterNames';
+import { parseMaCrossFilterName, parseMaCompareFilterName, parseMaDistanceFilterName, parseIndicatorGrowthFilterName, parseVwapBandWidthFilterName, parseBollingerBandWidthFilterName, parseBollingerMedianTrendFilterName, parseFilterChartInterval } from '../utils/filterNames';
 import { useI18n } from '../i18n';
 import MultitradeModal from './MultitradeModal';
 import MultitradeBotStateModal from './MultitradeBotStateModal';
@@ -345,6 +345,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   const [growthSort, setGrowthSort] = useState('high'); // 'high' | 'low'
   const [vwapWidthSort, setVwapWidthSort] = useState('far'); // 'far' | 'near'
   const [bbWidthSort, setBbWidthSort] = useState('far'); // 'far' | 'near'
+  const [bbTrendSort, setBbTrendSort] = useState('best'); // 'best' | 'worst'
   const [tradeFavSort, setTradeFavSort] = useState(() => loadTradeFavSort());
   const [activeFavSort, setActiveFavSort] = useState(() => loadActiveFavSort());
   const [vwapFavSort, setVwapFavSort] = useState(() => loadVwapFavSort());
@@ -492,10 +493,25 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   const bbWidthMeta = activeBbWidthFilter?.meta ?? null;
   const isBbWidthFilter = !!activeBbWidthFilter;
 
+  const bbWidthFilterParams = useMemo(() => {
+    if (!activeBbWidthFilter) return null;
+    return parseBollingerBandWidthFilterName(activeBbWidthFilter.name);
+  }, [activeBbWidthFilter]);
+
+  const activeBbTrendFilter = useMemo(() => {
+    if (!activeFilter || favoriteView) return null;
+    const f = findFilter(activeFilter);
+    if (!f || !parseBollingerMedianTrendFilterName(f.name)) return null;
+    return f;
+  }, [activeFilter, favoriteView, findFilter]);
+
+  const bbTrendMeta = activeBbTrendFilter?.meta ?? null;
+  const isBbTrendFilter = !!activeBbTrendFilter;
+
   const showVwapFavWidthCol = isVwapBandsFavView && (vwapFavSort === 'width_far' || vwapFavSort === 'width_near');
   const showBbFavWidthCol = isBollingerBandsFavView && (bbFavSort === 'width_far' || bbFavSort === 'width_near');
 
-  const tableColCount = isAltaFilter || isMaDistanceFilter || isGrowthFilter || isVwapWidthFilter || isBbWidthFilter || showVwapFavWidthCol || showBbFavWidthCol ? 6 : 5;
+  const tableColCount = isAltaFilter || isMaDistanceFilter || isGrowthFilter || isVwapWidthFilter || isBbWidthFilter || isBbTrendFilter || showVwapFavWidthCol || showBbFavWidthCol ? 6 : 5;
 
   const filterChartInterval = useMemo(() => {
     if (!activeFilter || favoriteView) return null;
@@ -689,6 +705,12 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
         const wb = bbWidthMeta[b.symbol]?.avgWidthPct ?? (bbWidthSort === 'far' ? -Infinity : Infinity);
         return bbWidthSort === 'far' ? wb - wa : wa - wb;
       });
+    } else if (activeBbTrendFilter && bbTrendMeta && sortVolume === 'none' && !favoriteView) {
+      list = list.slice().sort((a, b) => {
+        const pa = bbTrendMeta[a.symbol]?.avgPct ?? (bbTrendSort === 'best' ? -Infinity : Infinity);
+        const pb = bbTrendMeta[b.symbol]?.avgPct ?? (bbTrendSort === 'best' ? -Infinity : Infinity);
+        return bbTrendSort === 'best' ? pb - pa : pa - pb;
+      });
     } else if (sortVolume !== 'none') {
       list = list.slice().sort((a, b) => {
         const va = (isAltaFilter || isNovasFilter) ? rowVolume24h(a, highlightMeta) : Number(a.volume) || 0;
@@ -698,7 +720,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     }
 
     return list;
-  }, [currencies, activeFilter, selectedQuote, findFilter, search, favoriteView, gateFavorites, binanceFavorites, multitradeFavorites, sortVolume, gateAll, filterVisibleCurrencies, isVisibleSymbol, currencyBySymbol, activeMacrossFilter, macrossScannedAt, macrossTick, isMacrossFavView, macrossFavSort, macrossFavStatus, macrossEntriesBySymbol, isTradesFavView, tradeFavSort, tradeFavSymbols, tradeFavStatus, isActiveFavView, activeFavSort, activeTrades, isAltaFilter, isNovasFilter, highlightMeta, activeMacmpFilter, macmpMeta, macmpTableSort, activeMaDistanceFilter, maDistMeta, maDistSort, activeGrowthFilter, growthMeta, growthSort, activeVwapWidthFilter, vwapWidthMeta, vwapWidthSort, activeBbWidthFilter, bbWidthMeta, bbWidthSort, isVwapBandsFavView, vwapFavSort, vwapFavWidthMeta, bbFavSort, bbFavWidthMeta]);
+  }, [currencies, activeFilter, selectedQuote, findFilter, search, favoriteView, gateFavorites, binanceFavorites, multitradeFavorites, sortVolume, gateAll, filterVisibleCurrencies, isVisibleSymbol, currencyBySymbol, activeMacrossFilter, macrossScannedAt, macrossTick, isMacrossFavView, macrossFavSort, macrossFavStatus, macrossEntriesBySymbol, isTradesFavView, tradeFavSort, tradeFavSymbols, tradeFavStatus, isActiveFavView, activeFavSort, activeTrades, isAltaFilter, isNovasFilter, highlightMeta, activeMacmpFilter, macmpMeta, macmpTableSort, activeMaDistanceFilter, maDistMeta, maDistSort, activeGrowthFilter, growthMeta, growthSort, activeVwapWidthFilter, vwapWidthMeta, vwapWidthSort, activeBbWidthFilter, bbWidthMeta, bbWidthSort, activeBbTrendFilter, bbTrendMeta, bbTrendSort, isVwapBandsFavView, vwapFavSort, vwapFavWidthMeta, bbFavSort, bbFavWidthMeta]);
 
   const rowHeightPx = isMobile ? TABLE_ROW_HEIGHT_MOBILE : TABLE_ROW_HEIGHT;
 
@@ -908,6 +930,29 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
 
       applyChartMaCrossOverlay(null);
 
+      // Filtro de largura de Bollinger (ex.: 15m|bbwidth|20|2|100) ativo: força a banda no
+      // gráfico com período/desvio/intervalo do próprio filtro, com linhas + PATH + tendência
+      // da mediana já ligados — mesma ideia do favorito bollinger-bands (applyChartBollingerBandsOverlay
+      // acima), só que aqui o gatilho é o filtro selecionado em vez de um favorito.
+      if (isBbWidthFilter && bbWidthFilterParams) {
+        applyChartBollingerBandsOverlay(
+          { entry: { interval: bbWidthFilterParams.interval, period: bbWidthFilterParams.period, stdDev: bbWidthFilterParams.stdDev } },
+          item.symbol,
+        );
+      }
+
+      // Mesma ideia acima, agora pro filtro de trades BB c/ tendência da mediana (ex.:
+      // 15m|bbtrend|20|2|700|pos).
+      if (isBbTrendFilter && activeBbTrendFilter) {
+        const trendParams = parseBollingerMedianTrendFilterName(activeBbTrendFilter.name);
+        if (trendParams) {
+          applyChartBollingerBandsOverlay(
+            { entry: { interval: trendParams.interval, period: trendParams.period, stdDev: trendParams.stdDev } },
+            item.symbol,
+          );
+        }
+      }
+
       if (isTradesFavView) {
         // View de trades: abre com a janela padrão (DEFAULT_CANDLE_LIMIT). Arrastar o gráfico
         // pra trás carrega mais candles sob demanda (ver onNeedOlderCandles em
@@ -1084,7 +1129,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   const showFavSortInHeader = isMacrossFavView || isTradesFavView || isActiveFavView || isVwapBandsFavView || isBollingerBandsFavView || !!activeMacmpFilter;
   const REM_PX = 16;
   // Coluna de botões: largura fixa no piso (sem crescer com o drag) — abaixo dele os botões
-  // (G/B/MC/VW/B1/B5, 15px cada) se sobrepõem ou somem. O espaço liberado vai para a coluna Par.
+  // (G/B/MC/VW/BB, 15px cada) se sobrepõem ou somem. O espaço liberado vai para a coluna Par.
   // Calculado em JS porque `<col>` em table-fixed não resolve CSS max()/min() de forma
   // confiável (testado: navegador ignora e cai para distribuição 50/50).
   // Piso cobre os até 6 botões de 15px + gaps + padding da célula (~104px) com folga.
@@ -1097,7 +1142,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   const changeColPx = (isMobile ? 2.75 : 3) * REM_PX;
   const volColPx = (isMobile ? 2.25 : 2.5) * REM_PX;
   const spinnerColPx = (isMobile ? 0.75 : 1) * REM_PX;
-  const fixedColsPx = priceColPx + volColPx + spinnerColPx + (isAltaFilter || isMaDistanceFilter || isGrowthFilter || isVwapWidthFilter || isBbWidthFilter || showVwapFavWidthCol || showBbFavWidthCol ? changeColPx : 0);
+  const fixedColsPx = priceColPx + volColPx + spinnerColPx + (isAltaFilter || isMaDistanceFilter || isGrowthFilter || isVwapWidthFilter || isBbWidthFilter || isBbTrendFilter || showVwapFavWidthCol || showBbFavWidthCol ? changeColPx : 0);
   const favColWidthPx = favColMinPx;
   const parColWidthPx = tableContainerWidth > 0
     ? Math.max(tableContainerWidth - favColWidthPx - fixedColsPx, 0)
@@ -1271,7 +1316,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
             <col className="currency-table-col-fav" style={{ width: favColWidth }} />
             <col className="currency-table-col-par" style={{ width: parColWidth }} />
             <col className="currency-table-col-price" style={{ width: priceColWidth }} />
-            {(isAltaFilter || isMaDistanceFilter || isGrowthFilter || isVwapWidthFilter || isBbWidthFilter || showVwapFavWidthCol || showBbFavWidthCol) && <col className="currency-table-col-change" style={{ width: changeColWidth }} />}
+            {(isAltaFilter || isMaDistanceFilter || isGrowthFilter || isVwapWidthFilter || isBbWidthFilter || isBbTrendFilter || showVwapFavWidthCol || showBbFavWidthCol) && <col className="currency-table-col-change" style={{ width: changeColWidth }} />}
             <col className="currency-table-col-vol" style={{ width: volColWidth }} />
             <col className="currency-table-col-spinner" style={{ width: spinnerColWidth }} />
           </colgroup>
@@ -1404,6 +1449,15 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                   onClick={() => setBbWidthSort((s) => (s === 'far' ? 'near' : 'far'))}
                 >
                   Larg% {bbWidthSort === 'far' ? '↓' : '↑'}
+                </th>
+              )}
+              {isBbTrendFilter && (
+                <th
+                  className="text-right px-2 py-1 text-p5 opacity-80 font-normal uppercase tracking-wider whitespace-nowrap cursor-pointer hover:opacity-100 select-none"
+                  title="Ordenar por média de ganho/perda dos trades simulados (BB + tendência da mediana)"
+                  onClick={() => setBbTrendSort((s) => (s === 'best' ? 'worst' : 'best'))}
+                >
+                  Méd% {bbTrendSort === 'best' ? '↓' : '↑'}
                 </th>
               )}
               {showVwapFavWidthCol && (
@@ -1543,8 +1597,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
               const bbEntry    = getBollingerBandsEntry(multitradeFavorites, item.symbol);
               const isBb       = bbEntry?.enabled !== false && !!bbEntry;
               const bbInterval = bbEntry?.entry?.interval ?? bbEntry?.tradeConfig?.entry?.interval;
-              const isBb1      = isBb && bbInterval === '1m';
-              const isBb5      = isBb && bbInterval === '5m';
+              const bbButtonText = isBb && bbInterval ? `B${bbInterval.replace(/m$/, '')}` : 'BB';
               const activeInfo = activeTrades.get(item.symbol);
               const isActiveHolding = !!activeInfo;
               const tradeMeta  = isTradesFavView ? tradeFavStatus[item.symbol] : null;
@@ -1603,14 +1656,9 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                       }} />
                       )}
                       {uiPrefs.visibleFavoriteButtons['bollinger-bands'] !== false && (
-                      <>
-                      <FavButton kind="BB1" text="B1" symbol={item.symbol} active={isBb1} color={BOLLINGER_BANDS_COLOR} label="Bollinger Bands 1m" onClick={() => {
-                        setBbModal({ symbol: item.symbol, exchange: isGate && !isBinance ? 'gate' : 'binance', entry: bbEntry, lockInterval: '1m' });
+                      <FavButton kind="BB" text={bbButtonText} symbol={item.symbol} active={isBb} color={BOLLINGER_BANDS_COLOR} label={`Bollinger Bands${isBb && bbInterval ? ` ${bbInterval}` : ''}`} onClick={() => {
+                        setBbModal({ symbol: item.symbol, exchange: isGate && !isBinance ? 'gate' : 'binance', entry: bbEntry });
                       }} />
-                      <FavButton kind="BB5" text="B5" symbol={item.symbol} active={isBb5} color={BOLLINGER_BANDS_COLOR} label="Bollinger Bands 5m" onClick={() => {
-                        setBbModal({ symbol: item.symbol, exchange: isGate && !isBinance ? 'gate' : 'binance', entry: bbEntry, lockInterval: '5m' });
-                      }} />
-                      </>
                       )}
                     </div>
                   </td>
@@ -1773,6 +1821,19 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                       </td>
                     );
                   })()}
+                  {isBbTrendFilter && (() => {
+                    const avgPct = bbTrendMeta?.[item.symbol]?.avgPct;
+                    const totalTrades = bbTrendMeta?.[item.symbol]?.totalTrades;
+                    return (
+                      <td
+                        className="px-2 py-1 text-right font-mono text-[10px] font-semibold"
+                        style={{ color: avgPct == null ? 'rgba(255,255,255,0.35)' : avgPct >= 0 ? '#22c55e' : '#ef4444' }}
+                        title={totalTrades != null ? `${totalTrades} trade${totalTrades === 1 ? '' : 's'}` : undefined}
+                      >
+                        {avgPct != null ? fmtChangePct(avgPct) : '—'}
+                      </td>
+                    );
+                  })()}
                   {showVwapFavWidthCol && (() => {
                     const widthPct = vwapFavWidthMeta?.[item.symbol]?.avgWidthPct;
                     return (
@@ -1899,7 +1960,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                         {base}<span className="opacity-40 font-normal text-[8px]">/{quote}</span>
                       </td>
                       <td className="px-2 py-1 text-right font-mono">{item.price > 0 ? formatPrice(item.price) : '—'}</td>
-                      {(isAltaFilter || isMaDistanceFilter || isGrowthFilter || isVwapWidthFilter || isBbWidthFilter || showVwapFavWidthCol || showBbFavWidthCol) && <td className="px-2 py-1 text-right font-mono text-[10px] opacity-35">—</td>}
+                      {(isAltaFilter || isMaDistanceFilter || isGrowthFilter || isVwapWidthFilter || isBbWidthFilter || isBbTrendFilter || showVwapFavWidthCol || showBbFavWidthCol) && <td className="px-2 py-1 text-right font-mono text-[10px] opacity-35">—</td>}
                       <td className="px-2 py-1 text-right font-mono text-[10px] opacity-60">{formatVolume(item.volume)}</td>
                       <td className="pr-1 text-center">
                         {loadingSymbol === item.symbol
@@ -2029,7 +2090,6 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
             symbol={bbModal.symbol}
             defaultExchange={bbModal.exchange}
             currentEntry={bbModal.entry}
-            lockInterval={bbModal.lockInterval}
             onConfirm={async ({ id, payload }) => {
               console.log(`${FAV_LOG} BB confirmar`, { symbol: bbModal.symbol, id });
               await saveMultitradeSymbol({ saves: [{ id, payload }] });
@@ -2068,12 +2128,16 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
         <ModalPortal>
           <MultitradeSellModal
             entry={mtSellEntry}
-            onSold={async () => {
-              await updateMultitradeBotState({
-                symbol: mtSellEntry.symbol,
-                strategyId: mtSellEntry.strategyId,
-                phase: 'WATCHING',
-              });
+            onSold={async (order, { oco } = {}) => {
+              // OCO só coloca a ordem resting na corretora — a posição continua BOUGHT até
+              // o bot (ou o próprio usuário) detectar o fill, não zera a fase aqui.
+              if (!oco) {
+                await updateMultitradeBotState({
+                  symbol: mtSellEntry.symbol,
+                  strategyId: mtSellEntry.strategyId,
+                  phase: 'WATCHING',
+                });
+              }
               setMtSellEntry(null);
             }}
             onCancel={() => setMtSellEntry(null)}

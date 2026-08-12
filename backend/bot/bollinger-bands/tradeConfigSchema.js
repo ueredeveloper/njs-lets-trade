@@ -66,11 +66,14 @@ const BOLLINGER_BANDS_DEFAULTS = {
 
   exit: {
     /** Ordem TP/SL resting já na corretora, colocada logo após a compra confirmar (Binance:
-     *  OCO real; Gate.io: emulado com 2 ordens de gatilho por preço). Alvo = banda superior
-     *  ao vivo, stop = piso percentual (stopLoss.maxLossPct). Recriada quando o alvo ou o
+     *  OCO real; Gate.io: emulado com 2 ordens de gatilho por preço). Stop = piso percentual
+     *  (stopLoss.maxLossPct) ou EMA/banda conforme stopLoss.mode. Alvo (TP) conforme
+     *  targetMode: 'band' (padrão) = banda superior ao vivo, recriada quando o alvo ou o
      *  stop desviarem driftPct% do valor em que foi colocada — mesma mecânica do
-     *  backend/bot/vwap-bands/vwap-bands-bot.js. */
-    restingBracket: { enabled: true, driftPct: 3 },
+     *  backend/bot/vwap-bands/vwap-bands-bot.js; 'fixed' = targetPct% de lucro fixo sobre o
+     *  preço de compra, constante — não depende do bot recalcular, então a posição continua
+     *  protegida na corretora mesmo se o bot cair. */
+    restingBracket: { enabled: true, driftPct: 3, targetMode: 'band', targetPct: 3 },
   },
 
   /** Percentual/trailing — editável pelo usuário, com teto (normalizeStopLoss trava em 30%).
@@ -88,7 +91,10 @@ const BOLLINGER_BANDS_DEFAULTS = {
     band: { belowPct: 10 },
   },
 
-  polling: { pollMs: 60_000, fastPollMs: 30_000 },
+  /** BB(4h/1h) não precisa da granularidade de 1m do vwap-bands — pollMs mais espaçado
+   *  evita competir com o frontend pelas mesmas chamadas de candles na corretora (mesmo
+   *  padrão do swing-bot/amap-bot: 5min parado, 1min com posição aberta). */
+  polling: { pollMs: 5 * 60_000, fastPollMs: 60_000 },
 
   /** Desliga o cooldown em horas do tradeExecution compartilhado (DEFAULT 4h) — o
    *  bollinger usa entry.reentryCooldownCandles (só após STOP_LOSS) no intervalo da BB. */
@@ -173,6 +179,8 @@ function normalizeEntry(block) {
   };
 }
 
+const RESTING_BRACKET_TARGET_MODES = ['band', 'fixed'];
+
 function normalizeExit(block) {
   const d = BOLLINGER_BANDS_DEFAULTS.exit;
   const rb = block?.restingBracket ?? {};
@@ -180,6 +188,8 @@ function normalizeExit(block) {
     restingBracket: {
       enabled: rb.enabled !== false,
       driftPct: Math.max(0.5, Number(rb.driftPct ?? d.restingBracket.driftPct)),
+      targetMode: RESTING_BRACKET_TARGET_MODES.includes(rb.targetMode) ? rb.targetMode : d.restingBracket.targetMode,
+      targetPct: Math.max(0.1, Math.min(100, Number(rb.targetPct ?? d.restingBracket.targetPct))),
     },
   };
 }
@@ -283,6 +293,7 @@ module.exports = {
   BB_STD_DEVS,
   EMA_FILTER_PERIODS,
   STOP_LOSS_MODES,
+  RESTING_BRACKET_TARGET_MODES,
   BOLLINGER_BANDS_DEFAULTS,
   normalizeBollingerBandsConfig,
   toEngineConfig,

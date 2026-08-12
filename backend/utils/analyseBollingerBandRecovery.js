@@ -47,20 +47,29 @@ function buildBbSeries(candles, period, stdDev) {
     }));
 }
 
+/** Limiar mínimo (%) da inclinação média da mediana pro medianTrendFilter liberar a entrada —
+ *  mesmo valor de MEDIAN_TREND_MIN_AVG_DIFF_PCT em
+ *  backend/bot/bollinger-bands/strategyEngine.js, pra manter bot e estatísticas espelhados. */
+const MEDIAN_TREND_MIN_AVG_DIFF_PCT = 0.4;
+
 /**
- * Tendência da linha mediana (média) da BB nos `lookback` candles fechados imediatamente
+ * Tendência % da linha mediana (média) da BB nos `lookback` candles fechados imediatamente
  * ANTERIORES ao índice `i` (o candle do toque em si fica de fora — mesma janela usada pelo bot
  * em checkMedianTrendFilter/backend/bot/bollinger-bands/strategyEngine.js, que compara contra o
  * último candle já fechado antes do sinal). Retorna null se não houver histórico suficiente.
  */
-function medianTrendAvgDiff(bbSeries, i, lookback) {
+function medianTrendAvgDiffPct(bbSeries, i, lookback) {
     const start = i - lookback - 1;
     if (start < 0) return null;
     const middles = bbSeries.slice(start, i).map(b => b.middle);
     if (middles.length < lookback + 1) return null;
-    const diffs = [];
-    for (let k = 1; k < middles.length; k++) diffs.push(middles[k] - middles[k - 1]);
-    return diffs.reduce((a, b) => a + b, 0) / diffs.length;
+    const diffPcts = [];
+    for (let k = 1; k < middles.length; k++) {
+        if (!(middles[k - 1] > 0)) continue;
+        diffPcts.push(((middles[k] - middles[k - 1]) / middles[k - 1]) * 100);
+    }
+    if (!diffPcts.length) return null;
+    return diffPcts.reduce((a, b) => a + b, 0) / diffPcts.length;
 }
 
 async function analyseBollingerBandRecovery(symbol, options = {}) {
@@ -95,9 +104,9 @@ async function analyseBollingerBandRecovery(symbol, options = {}) {
 
         if (state === 'SEEK_ENTRY' && low <= bbSeries[i].lower) {
             if (medianTrendFilter) {
-                const avgDiff = medianTrendAvgDiff(bbSeries, i, medianTrendLookback);
-                // Sem histórico suficiente ou mediana em queda → mesmo critério do bot: bloqueia a entrada.
-                if (avgDiff === null || avgDiff < 0) continue;
+                const avgDiffPct = medianTrendAvgDiffPct(bbSeries, i, medianTrendLookback);
+                // Sem histórico suficiente ou mediana em queda/subindo devagar demais → mesmo critério do bot: bloqueia a entrada.
+                if (avgDiffPct === null || avgDiffPct < MEDIAN_TREND_MIN_AVG_DIFF_PCT) continue;
             }
             minLowIdx = i;
             state = 'SEEK_EXIT';

@@ -232,6 +232,24 @@ export async function fetchBollingerBandWidthFilter({
   return res.json();
 }
 
+/**
+ * Simula trades teóricos na Bollinger Band (compra na banda inferior, vende na superior)
+ * filtrados pela regra de tendência da linha mediana, nos últimos N candles fechados —
+ * retorna quantidade de trades e média de ganho/perda (`side`: pos=só ganhos, neg=só perdas,
+ * all=todos).
+ */
+export async function fetchBollingerMedianTrendFilter({
+  interval = '15m', period = '20', stdDev = '2', lookback = '700', side = 'pos', order = 'best',
+} = {}) {
+  const params = new URLSearchParams({ interval, period, stdDev, lookback, side, order });
+  const res = await fetch(`/services/bollinger-median-trend-filter?${params}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 /** Filtra moedas por expansão do afastamento entre -1σ e +2σ da VWAP: mínimo recente vs. atual. */
 export async function fetchVwapBandExpansionFilter({
   interval = '15m', vwapInterval = '4h', lookback = '10', multiplier = '3',
@@ -428,6 +446,39 @@ export async function placeGateOrder({ symbol, side, type = 'market', amount, pr
   return res.json();
 }
 
+/**
+ * Coloca uma OCO de venda na Gate.io (TP em entryPrice*(1+targetPct/100), SL em
+ * entryPrice*(1-stopPct/100)) em vez de vender a mercado — mesma bracket que o bot coloca
+ * sozinho, disparada manualmente pelo botão de vender (venda direta vs. OCO).
+ * @param {{ symbol, quantity, entryPrice, targetPct, stopPct, strategyId?, allowCancelBracket? }} params
+ */
+export async function placeGateBracketSell({ symbol, quantity, entryPrice, targetPct, stopPct, strategyId, allowCancelBracket }) {
+  const res = await fetch('/services/gate-bracket-sell', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ symbol, quantity, entryPrice, targetPct, stopPct, strategyId, allowCancelBracket }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    const err = new Error(body.error ?? `HTTP ${res.status}`);
+    err.needsBracketCancel = !!body.needsBracketCancel;
+    throw err;
+  }
+  return res.json();
+}
+
+/** Último preço negociado na Gate.io — usado pelo slider OCO do botão de vender pra avisar
+ *  quando o alvo/stop arrastado (sobre o preço de compra) está longe do preço atual. */
+export async function fetchGatePrice(symbol) {
+  const params = new URLSearchParams({ symbol: symbol.toUpperCase() });
+  const res = await fetch(`/services/gate-price?${params}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 /** Diz se vender `quantity` desse símbolo na Gate.io vai precisar cancelar uma bracket resting. */
 export async function checkGateOrderLock(symbol, quantity) {
   const params = new URLSearchParams({ symbol: symbol.toUpperCase(), quantity: String(quantity) });
@@ -477,6 +528,39 @@ export async function placeBinanceOrder({ symbol, side, type = 'MARKET', quantit
     const err = new Error(body.error ?? `HTTP ${res.status}`);
     err.needsBracketCancel = !!body.needsBracketCancel;
     throw err;
+  }
+  return res.json();
+}
+
+/**
+ * Coloca uma OCO de venda na Binance (TP em entryPrice*(1+targetPct/100), SL em
+ * entryPrice*(1-stopPct/100)) em vez de vender a mercado — mesma bracket que o bot coloca
+ * sozinho, disparada manualmente pelo botão de vender (venda direta vs. OCO).
+ * @param {{ symbol, quantity, entryPrice, targetPct, stopPct, strategyId?, allowCancelBracket? }} params
+ */
+export async function placeBinanceBracketSell({ symbol, quantity, entryPrice, targetPct, stopPct, strategyId, allowCancelBracket }) {
+  const res = await fetch('/services/binance-bracket-sell', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ symbol, quantity, entryPrice, targetPct, stopPct, strategyId, allowCancelBracket }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    const err = new Error(body.error ?? `HTTP ${res.status}`);
+    err.needsBracketCancel = !!body.needsBracketCancel;
+    throw err;
+  }
+  return res.json();
+}
+
+/** Último preço negociado na Binance — usado pelo slider OCO do botão de vender pra avisar
+ *  quando o alvo/stop arrastado (sobre o preço de compra) está longe do preço atual. */
+export async function fetchBinancePrice(symbol) {
+  const params = new URLSearchParams({ symbol: symbol.toUpperCase() });
+  const res = await fetch(`/services/binance-price?${params}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `HTTP ${res.status}`);
   }
   return res.json();
 }

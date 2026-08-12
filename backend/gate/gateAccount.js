@@ -22,6 +22,13 @@ async function gate24hVolume(pair) {
   return parseFloat(data[0]?.quote_volume || 0);
 }
 
+/** Último preço negociado — usado pelo aviso de faixa válida no slider OCO do botão de
+ *  vender (ver /gate-price em fetchGateTrades.js). */
+async function gateLastPrice(pair) {
+  const data = await fetch(`${GATE_PUBLIC_BASE}/spot/tickers?currency_pair=${pair}`).then(r => r.json());
+  return parseFloat(data[0]?.last || 0);
+}
+
 /** Trades próprios recentes, normalizados pro mesmo formato usado em tradeClient.js
  *  (binanceGetOwnTrades) — ver backend/bot/shared/orphanPosition.js. */
 async function gateGetOwnTrades(pair, limit = 200) {
@@ -34,4 +41,4 @@ async function gateGetOwnTrades(pair, limit = 200) {
   }));
 }
 
-module.exports = { gateGetTokenBalance, gate24hVolume, gateGetOwnTrades };
+module.exports = { gateGetTokenBalance, gate24hVolume, gateGetOwnTrades, gateLastPrice };

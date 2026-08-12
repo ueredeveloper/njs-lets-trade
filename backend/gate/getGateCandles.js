@@ -3,6 +3,7 @@ const readCandles                = require('../utils/read-candles');
 const convertIntervalToMiliseconds = require('../utils/convert-interval-to-miliseconds');
 const { toGateSymbol }           = require('../utils/toGateSymbol');
 const { retentionLimitFor }      = require('../utils/candleRetentionLimits');
+const { withFileLock }           = require('../utils/fileLock');
 
 const GATE_BASE      = 'https://api.gateio.ws/api/v4';
 const GATE_MAX_LIMIT = 1000;
@@ -134,65 +135,68 @@ async function getGateCandles(symbol, interval, limit) {
   // exchanges diferentes pro resto da vida do cache (achado investigando BANKUSDT
   // mostrando VWAP muito diferente da que o bot realmente usa — ver git blame).
   const cacheKey = `${symbol}_GATE`;
-  let dbCandles;
-  try {
-    dbCandles = await readCandles(cacheKey, interval);
-  } catch (err) {
-    if (err.code === 'ENOENT') {
-      writeCandles(cacheKey, interval, []);
-      dbCandles = [];
-    } else {
-      throw err;
+
+  return withFileLock(`${cacheKey}-${interval}`, async () => {
+    let dbCandles;
+    try {
+      dbCandles = await readCandles(cacheKey, interval);
+    } catch (err) {
+      if (err.code === 'ENOENT') {
+        await writeCandles(cacheKey, interval, []);
+        dbCandles = [];
+      } else {
+        throw err;
+      }
     }
-  }
 
-  const retentionLimit = retentionLimitFor(interval);
-  if (dbCandles.length > retentionLimit) {
-    dbCandles = dbCandles.slice(-(retentionLimit - 1));
-  }
+    const retentionLimit = retentionLimitFor(interval);
+    if (dbCandles.length > retentionLimit) {
+      dbCandles = dbCandles.slice(-(retentionLimit - 1));
+    }
 
-  const currentTimestamp  = Date.now();
-  const dbLastItemOpenTime = dbCandles.length > 0
-    ? dbCandles.slice(-1)[0].openTime
-    : Date.now();
+    const currentTimestamp  = Date.now();
+    const dbLastItemOpenTime = dbCandles.length > 0
+      ? dbCandles.slice(-1)[0].openTime
+      : Date.now();
 
-  const timeDifference   = currentTimestamp - dbLastItemOpenTime;
-  const miliseconds      = await convertIntervalToMiliseconds(interval);
-  const limitForUpdateDb = Math.floor(timeDifference / miliseconds);
+    const timeDifference   = currentTimestamp - dbLastItemOpenTime;
+    const miliseconds      = await convertIntervalToMiliseconds(interval);
+    const limitForUpdateDb = Math.floor(timeDifference / miliseconds);
 
-  const ceilingKey = `${cacheKey}|${interval}`;
-  const effectiveLimit = Math.min(limit, gateHistoryCeiling.get(ceilingKey) ?? limit);
+    const ceilingKey = `${cacheKey}|${interval}`;
+    const effectiveLimit = Math.min(limit, gateHistoryCeiling.get(ceilingKey) ?? limit);
 
-  if (effectiveLimit > dbCandles.length) {
-    // Banco local tem menos candles do que o solicitado: faz carga completa (pagina se
-    // effectiveLimit > 1000 — ver fetchFromGate). Se a Gate devolver menos que o pedido
-    // (bateu no teto de histórico dela), trava esse teto pra essa chave — sem isso,
-    // `effectiveLimit > dbCandles.length` ficaria sempre verdadeiro e cada chamada
-    // recarregaria tudo de novo em vez de só buscar o delta.
-    const candles = await fetchFromGate(symbol, interval, effectiveLimit);
-    if (candles.length < effectiveLimit) gateHistoryCeiling.set(ceilingKey, candles.length);
-    writeCandles(cacheKey, interval, candles);
-    return candles.slice(-limit);
-  }
+    if (effectiveLimit > dbCandles.length) {
+      // Banco local tem menos candles do que o solicitado: faz carga completa (pagina se
+      // effectiveLimit > 1000 — ver fetchFromGate). Se a Gate devolver menos que o pedido
+      // (bateu no teto de histórico dela), trava esse teto pra essa chave — sem isso,
+      // `effectiveLimit > dbCandles.length` ficaria sempre verdadeiro e cada chamada
+      // recarregaria tudo de novo em vez de só buscar o delta.
+      const candles = await fetchFromGate(symbol, interval, effectiveLimit);
+      if (candles.length < effectiveLimit) gateHistoryCeiling.set(ceilingKey, candles.length);
+      await writeCandles(cacheKey, interval, candles);
+      return candles.slice(-limit);
+    }
 
-  if (limitForUpdateDb > 0) {
-    // Há candles novos: busca apenas o delta (fetchFromGate pagina se precisar)
-    const newCandles = await fetchFromGate(symbol, interval, Math.min(limitForUpdateDb, retentionLimit));
-    newCandles.forEach(c => dbCandles.push(c));
-  } else {
-    // Atualiza somente o candle atual (em formação)
-    const [latest] = await fetchFromGate(symbol, interval, 1);
-    dbCandles.pop();
-    dbCandles.push(latest);
-  }
+    if (limitForUpdateDb > 0) {
+      // Há candles novos: busca apenas o delta (fetchFromGate pagina se precisar)
+      const newCandles = await fetchFromGate(symbol, interval, Math.min(limitForUpdateDb, retentionLimit));
+      newCandles.forEach(c => dbCandles.push(c));
+    } else {
+      // Atualiza somente o candle atual (em formação)
+      const [latest] = await fetchFromGate(symbol, interval, 1);
+      dbCandles.pop();
+      dbCandles.push(latest);
+    }
 
-  // Deduplica por openTime (mesmo padrão do getCandles)
-  const uniqueMap = {};
-  dbCandles.forEach(c => { uniqueMap[c.openTime] = c; });
-  const uniqueArray = Object.values(uniqueMap);
+    // Deduplica por openTime (mesmo padrão do getCandles)
+    const uniqueMap = {};
+    dbCandles.forEach(c => { uniqueMap[c.openTime] = c; });
+    const uniqueArray = Object.values(uniqueMap);
 
-  writeCandles(cacheKey, interval, uniqueArray);
-  return uniqueArray.slice(-limit);
+    await writeCandles(cacheKey, interval, uniqueArray);
+    return uniqueArray.slice(-limit);
+  });
 }
 
 module.exports = { getGateCandles };

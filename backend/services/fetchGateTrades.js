@@ -3,6 +3,9 @@ const { gateRequest } = require('../gate/getGateClient');
 const { toGateSymbol } = require('../utils/toGateSymbol');
 const { getGatePairMeta, floorGateAmount } = require('../bot/gate/gateMarketSell');
 const { cancelRestingBracketIfAny } = require('../bot/shared/cancelRestingBracket');
+const { buildAdapter } = require('../bot/shared/buildAdapter');
+const { gateLastPrice } = require('../gate/gateAccount');
+const supabase = require('../supabase/client');
 
 // GET /services/gate-trades?symbol=FARTCOINUSDT&limit=500
 router.get('/gate-trades', async (req, res) => {
@@ -64,6 +67,20 @@ router.get('/gate-order-lock', async (req, res) => {
     const accounts = await gateRequest('GET', '/spot/accounts', { currency: baseAsset });
     const free = accounts?.[0] ? parseFloat(accounts[0].available) : 0;
     res.json({ free, needsBracketCancel: free < Number(quantity) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /services/gate-price?symbol=BTCUSDT — último preço negociado, usado pelo slider OCO do
+// botão de vender pra avisar quando o alvo/stop arrastado (calculado sobre o preço de compra)
+// está fora da faixa que a corretora aceitaria agora.
+router.get('/gate-price', async (req, res) => {
+  const { symbol } = req.query;
+  if (!symbol) return res.status(400).json({ error: 'symbol obrigatório' });
+  try {
+    const price = await gateLastPrice(toGateSymbol(symbol.toUpperCase()));
+    res.json({ price });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -139,6 +156,79 @@ router.post('/gate-order', async (req, res) => {
 
     const order = await gateRequest('POST', '/spot/orders', params);
     res.json(order);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /services/gate-bracket-sell
+// Body: { symbol, quantity, entryPrice, targetPct, stopPct, strategyId?, allowCancelBracket? }
+// Equivalente Gate.io do /binance-bracket-sell acima — ver comentário lá (mesma bracket
+// TP/SL emulada com 2 ordens de gatilho que o bot coloca sozinho, disparada manualmente).
+router.post('/gate-bracket-sell', async (req, res) => {
+  const {
+    symbol, quantity, entryPrice, targetPct, stopPct, strategyId, allowCancelBracket,
+  } = req.body ?? {};
+
+  if (!symbol || !quantity || !entryPrice || !targetPct || !stopPct)
+    return res.status(400).json({ error: 'symbol, quantity, entryPrice, targetPct e stopPct são obrigatórios' });
+
+  try {
+    const symbolUpper  = symbol.toUpperCase();
+    const currencyPair = toGateSymbol(symbolUpper);
+    const baseAsset    = currencyPair.split('_')[0];
+
+    let safeQuantity = Number(quantity);
+
+    const accountsBefore = await gateRequest('GET', '/spot/accounts', { currency: baseAsset });
+    const freeBefore     = accountsBefore?.[0] ? parseFloat(accountsBefore[0].available) : null;
+
+    if (freeBefore == null || freeBefore < safeQuantity) {
+      if (!strategyId && !allowCancelBracket) {
+        return res.status(409).json({
+          error: 'Esta venda precisa cancelar uma ordem resting (TP/SL) antes de prosseguir.',
+          needsBracketCancel: true,
+        });
+      }
+      try {
+        await cancelRestingBracketIfAny({ symbol: symbolUpper, exchange: 'gate', strategyId });
+      } catch (err) {
+        return res.status(500).json({ error: `Falha ao cancelar bracket resting antes da venda: ${err.message}` });
+      }
+    }
+
+    const accounts = await gateRequest('GET', '/spot/accounts', { currency: baseAsset });
+    const free     = accounts?.[0] ? parseFloat(accounts[0].available) : safeQuantity;
+    safeQuantity   = Math.min(safeQuantity, free);
+    if (!(safeQuantity > 0)) {
+      return res.status(400).json({ error: `quantidade inválida (${safeQuantity})` });
+    }
+
+    const targetPrice = Number(entryPrice) * (1 + Number(targetPct) / 100);
+    const stopPrice   = Number(entryPrice) * (1 - Number(stopPct) / 100);
+
+    const adapter = buildAdapter('gate', symbolUpper);
+    const bracket = await adapter.placeExitBracket(safeQuantity, targetPrice, stopPrice);
+
+    if (strategyId) {
+      const { data: row } = await supabase.from('rsi_multi_bot_state')
+        .select('id, rules_state')
+        .eq('symbol', symbolUpper).eq('strategy_id', strategyId).eq('phase', 'BOUGHT')
+        .maybeSingle();
+      if (row) {
+        // manual:true — o bot NÃO deve substituir essa bracket por deriva (maybeReplaceBracket
+        // em bollinger-bands-bot.js/vwap-bands-bot.js pula brackets manuais), senão o TP/SL
+        // escolhido aqui pelo usuário seria trocado de volta pro cálculo automático da
+        // estratégia no próximo tick.
+        await supabase.from('rsi_multi_bot_state')
+          .update({
+            rules_state: { ...(row.rules_state ?? {}), exitBracket: { ...bracket, manual: true, placedAt: new Date().toISOString() } },
+          })
+          .eq('id', row.id);
+      }
+    }
+
+    res.json(bracket);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

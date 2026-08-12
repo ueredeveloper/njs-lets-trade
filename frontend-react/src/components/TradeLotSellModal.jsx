@@ -1,10 +1,14 @@
 import { useEffect, useState } from 'react';
 import {
   placeBinanceOrder, placeGateOrder, checkBinanceOrderLock, checkGateOrderLock,
+  placeBinanceBracketSell, placeGateBracketSell, fetchBinancePrice, fetchGatePrice,
 } from '../services/api';
+import BracketDragSlider from './BracketDragSlider';
 
 const ACTIVE_COLOR = '#f59e0b';
 const LOCK_CHECK_DEBOUNCE_MS = 400;
+const DEFAULT_TARGET_PCT = 3;
+const DEFAULT_STOP_PCT = 5;
 
 function formatLotDateTime(ms) {
   return new Date(ms).toLocaleString('pt-BR', {
@@ -33,6 +37,10 @@ export default function TradeLotSellModal({ lot, onSold, onCancel }) {
   const [lockInfo, setLockInfo] = useState(null);
   const [lockChecking, setLockChecking] = useState(false);
   const [confirmCancelOco, setConfirmCancelOco] = useState(false);
+  const [mode, setMode] = useState('direct'); // 'direct' | 'oco'
+  const [targetPct, setTargetPct] = useState(DEFAULT_TARGET_PCT);
+  const [stopPct, setStopPct] = useState(DEFAULT_STOP_PCT);
+  const [currentPrice, setCurrentPrice] = useState(null);
 
   const symbol = lot?.symbol;
   const exchange = lot?.exchange;
@@ -40,6 +48,18 @@ export default function TradeLotSellModal({ lot, onSold, onCancel }) {
   const isGate = exchange === 'gate';
   const sellQty = Number(sellQtyInput);
   const isValidQty = Number.isFinite(sellQty) && sellQty > 0 && qty != null && sellQty <= qty;
+  const isOcoMode = mode === 'oco';
+
+  // Preço atual só importa no modo OCO (aviso de faixa no BracketDragSlider) — busca uma vez
+  // ao ligar o modo, não fica repollando enquanto o usuário arrasta.
+  useEffect(() => {
+    if (!isOcoMode || !symbol) return;
+    let cancelled = false;
+    (isGate ? fetchGatePrice(symbol) : fetchBinancePrice(symbol))
+      .then(({ price }) => { if (!cancelled) setCurrentPrice(price); })
+      .catch(() => { if (!cancelled) setCurrentPrice(null); });
+    return () => { cancelled = true; };
+  }, [isOcoMode, symbol, isGate]);
 
   useEffect(() => {
     if (!symbol || !isValidQty) {
@@ -82,9 +102,13 @@ export default function TradeLotSellModal({ lot, onSold, onCancel }) {
     setSelling(true);
     setError(null);
     try {
-      const order = isGate
-        ? await placeGateOrder({ symbol, side: 'sell', type: 'market', amount: sellQty, allowCancelBracket: confirmCancelOco })
-        : await placeBinanceOrder({ symbol, side: 'SELL', type: 'MARKET', quantity: sellQty, allowCancelBracket: confirmCancelOco });
+      const order = isOcoMode
+        ? await (isGate
+          ? placeGateBracketSell({ symbol, quantity: sellQty, entryPrice: price, targetPct, stopPct, allowCancelBracket: confirmCancelOco })
+          : placeBinanceBracketSell({ symbol, quantity: sellQty, entryPrice: price, targetPct, stopPct, allowCancelBracket: confirmCancelOco }))
+        : await (isGate
+          ? placeGateOrder({ symbol, side: 'sell', type: 'market', amount: sellQty, allowCancelBracket: confirmCancelOco })
+          : placeBinanceOrder({ symbol, side: 'SELL', type: 'MARKET', quantity: sellQty, allowCancelBracket: confirmCancelOco }));
       await onSold(order);
     } catch (err) {
       if (err?.needsBracketCancel) setLockInfo({ needsBracketCancel: true });
@@ -100,14 +124,24 @@ export default function TradeLotSellModal({ lot, onSold, onCancel }) {
         style={{ background: '#131722', borderColor: '#2a2d3a' }}
         onClick={e => e.stopPropagation()}
       >
-        <div className="px-4 py-3 border-b" style={{ borderColor: '#2a2d3a' }}>
+        <div className="px-3 py-2 border-b" style={{ borderColor: '#2a2d3a' }}>
           <span className="text-sm font-bold text-p5">Confirmar venda desta compra</span>
         </div>
 
-        <div className="px-4 py-3 space-y-3">
-          <p className="text-[11px] text-p5/70">Enviar ordem de venda a mercado (irreversível):</p>
+        <div className="px-3 py-2 space-y-2">
+          <div className="flex gap-2">
+            {[{ id: 'direct', label: 'Venda direta' }, { id: 'oco', label: 'OCO (alvo + stop)' }].map(m => (
+              <button key={m.id} type="button" disabled={selling} onClick={() => setMode(m.id)}
+                className="flex-1 py-1 text-[10px] rounded font-semibold disabled:opacity-50"
+                style={{
+                  background: mode === m.id ? ACTIVE_COLOR : 'transparent',
+                  color: mode === m.id ? '#000' : ACTIVE_COLOR,
+                  border: `1px solid ${ACTIVE_COLOR}`, opacity: mode === m.id ? 1 : 0.55,
+                }}>{m.label}</button>
+            ))}
+          </div>
 
-          <div className="rounded-lg p-3 space-y-1" style={{ background: '#0f1219', border: '1px solid #2a2d3a' }}>
+          <div className="rounded-lg px-3 py-1.5 space-y-0.5" style={{ background: '#0f1219', border: '1px solid #2a2d3a' }}>
             <div className="flex justify-between text-[11px]">
               <span className="text-p5/50">Símbolo</span>
               <span className="font-mono font-bold" style={{ color: ACTIVE_COLOR }}>{symbol}</span>
@@ -135,7 +169,7 @@ export default function TradeLotSellModal({ lot, onSold, onCancel }) {
               Quantidade desta compra não disponível — não é possível vender.
             </p>
           ) : (
-            <div className="space-y-1.5">
+            <div className="space-y-1">
               <div className="flex justify-between items-center">
                 <span className="text-[11px] text-p5/50">Quantidade a vender</span>
                 <span className="text-[9px] text-p5/40">máx. {qty}</span>
@@ -149,7 +183,7 @@ export default function TradeLotSellModal({ lot, onSold, onCancel }) {
                 disabled={selling}
                 value={sellQtyInput}
                 onChange={(e) => setSellQtyInput(e.target.value)}
-                className="w-full rounded px-2 py-1.5 text-[12px] font-mono disabled:opacity-50"
+                className="w-full rounded px-2 py-1 text-[12px] font-mono disabled:opacity-50"
                 style={{ background: '#0f1219', border: `1px solid ${isValidQty ? '#2a2d3a' : '#ef444488'}`, color: '#e5e7eb' }}
               />
               <div className="flex gap-1">
@@ -159,7 +193,7 @@ export default function TradeLotSellModal({ lot, onSold, onCancel }) {
                     type="button"
                     disabled={selling}
                     onClick={() => setPct(pct)}
-                    className="flex-1 py-1 rounded text-[9px] font-semibold text-p5/60 hover:text-p5 disabled:opacity-50"
+                    className="flex-1 py-0.5 rounded text-[9px] font-semibold text-p5/60 hover:text-p5 disabled:opacity-50"
                     style={{ background: '#1a1d2a', border: '1px solid #2a2d3a' }}
                   >
                     {pct === 1 ? 'Tudo' : `${pct * 100}%`}
@@ -171,12 +205,25 @@ export default function TradeLotSellModal({ lot, onSold, onCancel }) {
                   Quantidade precisa ser maior que 0 e no máximo {qty}.
                 </p>
               )}
+              {isOcoMode && (
+                <div className="rounded px-2 py-1" style={{ background: '#0f1219', border: '1px solid #2a2d3a' }}>
+                  <BracketDragSlider
+                    entryPrice={price}
+                    targetPct={targetPct}
+                    stopPct={stopPct}
+                    onChangeTarget={setTargetPct}
+                    onChangeStop={setStopPct}
+                    disabled={selling}
+                    currentPrice={currentPrice}
+                  />
+                </div>
+              )}
               {isValidQty && lockChecking && (
                 <p className="text-[10px] text-p5/40">Checando saldo livre…</p>
               )}
               {isValidQty && !lockChecking && needsBracketCancel && (
                 <label
-                  className="flex items-start gap-2 rounded p-2 cursor-pointer"
+                  className="flex items-start gap-2 rounded p-1.5 cursor-pointer"
                   style={{ background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.35)' }}
                 >
                   <input
@@ -197,16 +244,16 @@ export default function TradeLotSellModal({ lot, onSold, onCancel }) {
           )}
           {error && <p className="text-[10px] text-red-400">{error}</p>}
 
-          <div className="flex gap-2 pt-1">
+          <div className="flex gap-2 pt-0.5">
             <button type="button" disabled={selling} onClick={onCancel}
-              className="flex-1 py-2 rounded text-[10px] font-semibold text-p5/60 disabled:opacity-50"
+              className="flex-1 py-1.5 rounded text-[10px] font-semibold text-p5/60 disabled:opacity-50"
               style={{ background: '#2a2d3a', border: '1px solid #3a3d4a' }}>
               Cancelar
             </button>
             <button type="button" disabled={selling || !qty || !canConfirm} onClick={handleConfirm}
-              className="flex-1 py-2 rounded text-[10px] font-bold disabled:opacity-50"
+              className="flex-1 py-1.5 rounded text-[10px] font-bold disabled:opacity-50"
               style={{ background: '#ef444422', color: '#f87171', border: '1px solid #ef444455' }}>
-              {selling ? 'Vendendo…' : 'Confirmar venda'}
+              {selling ? (isOcoMode ? 'Colocando OCO…' : 'Vendendo…') : (isOcoMode ? 'Colocar OCO' : 'Confirmar venda')}
             </button>
           </div>
         </div>

@@ -22,7 +22,7 @@ const { ichimokuCloudRouter } = require('./technicals-indicators');
 const {
   fetchCandles, fetchIchimokuCloud, fetchSupportResistance, fetchPivotPointsHighLow, fetchAllCurrencies,
   fetchSMA, fetchRSI, fetchChopZone, fetchVWAP, fetch24HsVolume, fetchMarketCapFilter, fetchStablecoins, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter, fetchMaDistanceFilter, fetchIndicatorGrowthFilter,
-  fetchRsiOversoldRecovery, fetchMaCrossStats, fetchVwapBandsStats, fetchBollingerBandRecovery, fetchBollingerBandPositionFilter, fetchVwapPositionFilter, fetchVwapBandWidthFilter, fetchBollingerBandWidthFilter, fetchVwapBandExpansionFilter, fetchBollingerBands, fetchSimpleMaCross, fetchReloadCandles,
+  fetchRsiOversoldRecovery, fetchMaCrossStats, fetchVwapBandsStats, fetchBollingerBandRecovery, fetchBollingerBandPositionFilter, fetchVwapPositionFilter, fetchVwapBandWidthFilter, fetchBollingerBandWidthFilter, fetchBollingerMedianTrendFilter, fetchVwapBandExpansionFilter, fetchBollingerBands, fetchSimpleMaCross, fetchReloadCandles,
   fetchGateCurrencies, fetchGatePrefetch, fetchBinanceTrades, fetchGateTrades,
   fetchActiveTrades, fetchTradeFavorites, stgBotStatus, multitradeService, fetchMarketHighlights, fetchVolumeIgnition, whatsappMessagesService, fetchCacheSettings } = require('./services');
 const supabaseService = require('./services/supabaseService');
@@ -72,6 +72,7 @@ app.use('/services', fetchBollingerBandPositionFilter)
 app.use('/services', fetchVwapPositionFilter)
 app.use('/services', fetchVwapBandWidthFilter)
 app.use('/services', fetchBollingerBandWidthFilter)
+app.use('/services', fetchBollingerMedianTrendFilter)
 app.use('/services', fetchVwapBandExpansionFilter)
 app.use('/services', fetchCacheSettings)
 app.use('/services', fetchBollingerBands)
@@ -176,6 +177,8 @@ async function startServer() {
   await vwapBandWidthCache.loadFromDisk();
   const bbBandWidthCache = require('./cache/bbBandWidthCache');
   await bbBandWidthCache.loadFromDisk();
+  const bbMedianTrendCache = require('./cache/bbMedianTrendCache');
+  await bbMedianTrendCache.loadFromDisk();
   const vwapBandExpansionCache = require('./cache/vwapBandExpansionCache');
   await vwapBandExpansionCache.loadFromDisk();
   const maDistanceCache = require('./cache/maDistanceCache');
@@ -318,18 +321,18 @@ async function startServer() {
   setInterval(refreshVwapBandWidthCache, vwapBandWidthCache.REFRESH_TICK_MS);
 
   async function refreshBbBandWidthCache() {
-    if (!cacheSettings.isEnabled('bbBandWidth4h') && !cacheSettings.isEnabled('bbBandWidth1m') && !cacheSettings.isEnabled('bbBandWidth5m')) return;
+    if (!cacheSettings.isEnabled('bbBandWidth4h') && !cacheSettings.isEnabled('bbBandWidth1m') && !cacheSettings.isEnabled('bbBandWidth15m') && !cacheSettings.isEnabled('bbBandWidth5m')) return;
     try {
       const { list: symbols } = await getActiveUsdtPairs();
       if (!Array.isArray(symbols) || symbols.length === 0) return;
-      // ensureFresh (não refreshAll direto) — o preset de 5min pode levar minutos pra
+      // ensureFresh (não refreshAll direto) — o preset de 15min pode levar minutos pra
       // varrer os ~500 símbolos na fila global; sem isso, um tick de 5min poderia disparar
       // uma segunda varredura por cima da primeira ainda em andamento.
       const stats = await bbBandWidthCache.ensureFresh(symbols);
       if (stats.computed > 0) {
         const m = stats.matched ?? {};
         console.log(
-          `[bbBandWidthCache] 4h|20|2|100:${m['4h|20|2|100'] ?? 0} 1m|20|2|100:${m['1m|20|2|100'] ?? 0} 5m|20|2|100:${m['5m|20|2|100'] ?? 0}`
+          `[bbBandWidthCache] 4h|20|2|100:${m['4h|20|2|100'] ?? 0} 1m|20|2|100:${m['1m|20|2|100'] ?? 0} 15m|20|2|300:${m['15m|20|2|300'] ?? 0} 5m|20|2|300:${m['5m|20|2|300'] ?? 0}`
           + ` | disco:${stats.diskHits ?? 0} stale:${stats.diskStale ?? 0} api:${stats.apiFetches ?? 0}`
           + ` | fila:${stats.queuePending ?? 0}`,
         );
@@ -341,6 +344,28 @@ async function startServer() {
 
   refreshBbBandWidthCache().catch(e => console.error('[bbBandWidthCache] erro no warmup:', e.message));
   setInterval(refreshBbBandWidthCache, bbBandWidthCache.REFRESH_TICK_MS);
+
+  async function refreshBbMedianTrendCache() {
+    if (!cacheSettings.isEnabled('bbMedianTrend15m') && !cacheSettings.isEnabled('bbMedianTrend5m')) return;
+    try {
+      const { list: symbols } = await getActiveUsdtPairs();
+      if (!Array.isArray(symbols) || symbols.length === 0) return;
+      const stats = await bbMedianTrendCache.ensureFresh(symbols);
+      if (stats.computed > 0) {
+        const m = stats.matched ?? {};
+        console.log(
+          `[bbMedianTrendCache] 15m|20|2|700:${m['15m|20|2|700'] ?? 0} 5m|20|2|700:${m['5m|20|2|700'] ?? 0}`
+          + ` | disco:${stats.diskHits ?? 0} stale:${stats.diskStale ?? 0} api:${stats.apiFetches ?? 0}`
+          + ` | fila:${stats.queuePending ?? 0}`,
+        );
+      }
+    } catch (e) {
+      console.error('[bbMedianTrendCache] erro no refresh:', e.message);
+    }
+  }
+
+  refreshBbMedianTrendCache().catch(e => console.error('[bbMedianTrendCache] erro no warmup:', e.message));
+  setInterval(refreshBbMedianTrendCache, bbMedianTrendCache.REFRESH_TICK_MS);
 
   async function refreshVwapBandExpansionCache() {
     if (!cacheSettings.isEnabled('vwapBandExpansion')) return;

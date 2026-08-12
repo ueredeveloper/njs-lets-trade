@@ -1,11 +1,17 @@
+/** Limiar mínimo (%) da inclinação média da mediana pro filtro liberar a entrada — mesmo
+ *  valor de MEDIAN_TREND_MIN_AVG_DIFF_PCT em
+ *  backend/bot/bollinger-bands/strategyEngine.js, pra manter o gráfico espelhado com o bot. */
+const MEDIAN_TREND_MIN_AVG_DIFF_PCT = 0.4;
+
 /**
  * Sinais de toque na banda inferior da Bollinger (mesmo gatilho de entrada do bot
  * bollinger-bands) + tendência da linha mediana (média): pra cada toque, olha os
  * `lookback` candles fechados imediatamente anteriores — mesma janela de
  * backend/bot/bollinger-bands/strategyEngine.js#checkMedianTrendFilter — e calcula a média
- * das variações candle-a-candle da linha mediana (middle) nesse trecho.
- * avgDiff >= 0 → mediana subindo/estável (verde, libera a compra no bot);
- * avgDiff < 0 → mediana em queda (vermelho, o bot bloqueia/cancela a compra).
+ * das variações % candle-a-candle da linha mediana (middle) nesse trecho.
+ * avgDiffPct >= MEDIAN_TREND_MIN_AVG_DIFF_PCT → mediana subindo/estável (verde, libera a
+ * compra no bot); abaixo disso → mediana em queda/estagnada (vermelho, o bot bloqueia/cancela
+ * a compra).
  */
 export function computeMedianTrendSignals(bbPoints, lookback = 10) {
   if (!bbPoints?.length) return [];
@@ -25,9 +31,13 @@ export function computeMedianTrendSignals(bbPoints, lookback = 10) {
     const middles = pts.slice(start, i).map(w => Number(w.middle));
     if (middles.length < lookback + 1 || middles.some(m => !Number.isFinite(m))) continue;
 
-    const diffs = [];
-    for (let k = 1; k < middles.length; k++) diffs.push(middles[k] - middles[k - 1]);
-    const avgDiff = diffs.reduce((a, b) => a + b, 0) / diffs.length;
+    const diffPcts = [];
+    for (let k = 1; k < middles.length; k++) {
+      if (!(middles[k - 1] > 0)) continue;
+      diffPcts.push(((middles[k] - middles[k - 1]) / middles[k - 1]) * 100);
+    }
+    if (!diffPcts.length) continue;
+    const avgDiffPct = diffPcts.reduce((a, b) => a + b, 0) / diffPcts.length;
 
     // Linha desenhada sobre os `lookback` candles imediatamente anteriores ao sinal.
     const data = pts.slice(i - lookback, i)
@@ -37,8 +47,8 @@ export function computeMedianTrendSignals(bbPoints, lookback = 10) {
 
     signals.push({
       signalOpenTime: Number(p.openTime),
-      avgDiff,
-      trend: avgDiff >= 0 ? 'up' : 'down',
+      avgDiffPct,
+      trend: avgDiffPct >= MEDIAN_TREND_MIN_AVG_DIFF_PCT ? 'up' : 'down',
       data,
     });
   }

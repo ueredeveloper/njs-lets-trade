@@ -13,6 +13,11 @@ function intervalMs(iv) {
   return INTERVAL_MS[iv] ?? 3_600_000;
 }
 
+/** Limiar mínimo (%) da inclinação média da mediana da BB pro medianTrendFilter liberar a
+ *  compra — ver checkMedianTrendFilter. Mesmo valor usado em
+ *  backend/utils/bbMedianTrendTrades.js pra manter bot e simulação de estatísticas espelhados. */
+const MEDIAN_TREND_MIN_AVG_DIFF_PCT = 0.4;
+
 function closedCandlesOnly(candles) {
   if (!candles?.length || candles.length < 2) return candles ?? [];
   return candles.slice(0, -1);
@@ -125,9 +130,10 @@ function checkEmaFilter(config, cMap, closePrice) {
 
 /**
  * Filtro de tendência da linha mediana (média) da própria Bollinger: pega os últimos
- * `lookback` valores fechados da linha média e calcula a média das variações candle-a-candle
- * entre eles. Média ≥ 0 → mediana em alta/estável, libera a compra. Média < 0 → mediana em
- * baixa, bloqueia. `series` opcional reaproveita a série de BB já calculada em
+ * `lookback` valores fechados da linha média e calcula a média das variações % candle-a-candle
+ * entre eles (cada variação relativa ao valor anterior). Média ≥ MEDIAN_TREND_MIN_AVG_DIFF_PCT
+ * → mediana em alta/estável, libera a compra. Abaixo disso → mediana em baixa (ou subindo
+ * devagar demais), bloqueia. `series` opcional reaproveita a série de BB já calculada em
  * evaluateEntrySignal (mesmo period/stdDev/interval da entrada) pra não recomputar.
  * Desligado (enabled=false) → sempre libera.
  */
@@ -148,14 +154,17 @@ function checkMedianTrendFilter(config, cMap, series) {
   }
 
   const middles = bbSeries.slice(-(lookback + 1)).map(b => b.middle);
-  const diffs = [];
-  for (let i = 1; i < middles.length; i++) diffs.push(middles[i] - middles[i - 1]);
-  const avgDiff = diffs.reduce((a, b) => a + b, 0) / diffs.length;
-
-  if (avgDiff < 0) {
-    return { allowed: false, reason: 'MEDIAN_TREND_FALLING', avgDiff, lookback };
+  const diffPcts = [];
+  for (let i = 1; i < middles.length; i++) {
+    if (!(middles[i - 1] > 0)) continue;
+    diffPcts.push(((middles[i] - middles[i - 1]) / middles[i - 1]) * 100);
   }
-  return { allowed: true, avgDiff, lookback };
+  const avgDiffPct = diffPcts.length ? diffPcts.reduce((a, b) => a + b, 0) / diffPcts.length : 0;
+
+  if (avgDiffPct < MEDIAN_TREND_MIN_AVG_DIFF_PCT) {
+    return { allowed: false, reason: 'MEDIAN_TREND_FALLING', avgDiffPct, lookback };
+  }
+  return { allowed: true, avgDiffPct, lookback };
 }
 
 /**
@@ -323,24 +332,33 @@ function computeStopPrice(config, cMap, entryPrice, peakPrice) {
   return computeStopLossFloor(entryPrice, peakPrice ?? entryPrice, stopLoss);
 }
 
-/** Preço-alvo (banda superior ao vivo) e preço-stop (fixo % ou EMA — ver computeStopPrice)
- *  vigentes — usado tanto pra colocar/repor a bracket TP/SL resting na corretora quanto pelo
- *  evaluateExit de fallback (candle, sem bracket). */
+/** Preço-alvo e preço-stop (fixo % ou EMA — ver computeStopPrice) vigentes — usado tanto pra
+ *  colocar/repor a bracket TP/SL resting na corretora quanto pelo evaluateExit de fallback
+ *  (candle, sem bracket). Alvo conforme exit.restingBracket.targetMode: 'band' (padrão) =
+ *  banda superior ao vivo; 'fixed' = targetPct% de lucro fixo sobre entryPrice, constante
+ *  (não precisa do bot recalcular pra continuar válido na corretora). */
 function computeBracketPrices(config, cMap, entryPrice, peakPrice) {
   const entry = config.entry;
   const iv = entry.interval;
   const raw = cMap[iv] ?? [];
   if (!raw.length) return { targetPrice: null, stopPrice: null, close: null };
 
-  const closed = closedCandlesOnly(raw);
-  const series = computeBollingerSeries(closed, entry.period, entry.stdDev);
   const live = raw[raw.length - 1];
   const close = parseFloat(live.close);
+  const stopPrice = computeStopPrice(config, cMap, entryPrice, peakPrice);
+
+  const bracket = config.exit?.restingBracket;
+  if (bracket?.targetMode === 'fixed') {
+    const targetPct = Math.max(0, Number(bracket.targetPct ?? 3));
+    const targetPrice = entryPrice > 0 ? entryPrice * (1 + targetPct / 100) : null;
+    return { targetPrice, stopPrice, close };
+  }
+
+  const closed = closedCandlesOnly(raw);
+  const series = computeBollingerSeries(closed, entry.period, entry.stdDev);
   if (!series.length) return { targetPrice: null, stopPrice: null, close };
 
   const lastBb = series[series.length - 1];
-  const stopPrice = computeStopPrice(config, cMap, entryPrice, peakPrice);
-
   return { targetPrice: lastBb.upper, stopPrice, close };
 }
 
@@ -361,10 +379,13 @@ function evaluateExit(config, cMap, entryPrice, opts = {}) {
   const { targetPrice, stopPrice } = computeBracketPrices(config, cMap, entryPrice, opts.peakPrice);
 
   if (targetPrice != null && high >= targetPrice) {
+    const isFixedTarget = config.exit?.restingBracket?.targetMode === 'fixed';
     return {
       exit: true, reason: 'BB_UPPER_TARGET', close,
       targetLevelValue: targetPrice,
-      exitDesc: `BB(${entry.period},${entry.stdDev}) ${iv} banda superior`,
+      exitDesc: isFixedTarget
+        ? `Alvo manual +${config.exit.restingBracket.targetPct}% de lucro`
+        : `BB(${entry.period},${entry.stdDev}) ${iv} banda superior`,
     };
   }
   if (stopPrice != null && low <= stopPrice) {

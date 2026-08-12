@@ -277,6 +277,31 @@ export function parseIndicatorGrowthFilterName(name) {
   return out;
 }
 
+const BB_TREND_SIDE_TOKENS = { pos: 'pos', neg: 'neg', all: 'all' };
+
+/**
+ * Trades teóricos na Bollinger Band (compra na banda inferior, vende na superior) filtrados
+ * pela regra de tendência da linha mediana, média nos últimos `lookback` candles fechados:
+ * 15m|bbtrend|20|2|700|pos (side: pos=só ganhos, neg=só perdas, all=todos)
+ */
+export function buildBollingerMedianTrendFilterName(interval, period, stdDev, lookback, side) {
+  const token = BB_TREND_SIDE_TOKENS[side] ?? 'pos';
+  return `${interval}|bbtrend|${period}|${stdDev}|${lookback}|${token}`;
+}
+
+export function parseBollingerMedianTrendFilterName(name) {
+  const parts = String(name).split('|');
+  if (parts[1] !== 'bbtrend' || parts.length < 6) return null;
+  const side = BB_TREND_SIDE_TOKENS[parts[5]] ?? 'pos';
+  return {
+    interval: parts[0],
+    period: parseInt(parts[2], 10),
+    stdDev: parseFloat(parts[3]),
+    lookback: parseInt(parts[4], 10),
+    side,
+  };
+}
+
 /** Constrói nome RSI a partir da query (ex: 8h|rsi|above|70|bellow|99). */
 export function buildRsiNomeFromQuery(query, lang = 'en') {
   const parts = query.trim().split('|');

@@ -3276,8 +3276,12 @@ export default function CandlestickChart() {
   // TRADE_EMA_GROUP_ID do Quick EMA (ver efeito hasForcedQuickEma abaixo), sem mexer nas bandas
   // manuais que o usuário já tinha configurado no painel. Assim, ao selecionar uma moeda BB
   // rodando em 5m e outra em 1m, o gráfico E a banda acompanham o intervalo configurado de cada
-  // uma, não o intervalo manual do painel (tile "BB").
-  const hasForcedBollinger = isTradePanelChartView(chartViewSource) && !!multitradeChartFocus?.bollingerOverride;
+  // uma, não o intervalo manual do painel (tile "BB"). Também vale pra CHART_VIEW.TABLE: é o
+  // view usado ao selecionar uma moeda comum sob um filtro de largura de Bollinger (ex.:
+  // 15m|bbwidth|20|2|100 — ver isBbWidthFilter em CurrencyTable), que reaproveita o mesmo
+  // bollingerOverride pra forçar a banda do próprio filtro em vez de um favorito.
+  const hasForcedBollinger = (isTradePanelChartView(chartViewSource) || chartViewSource === CHART_VIEW.TABLE)
+    && !!multitradeChartFocus?.bollingerOverride;
   useEffect(() => {
     setBbGroups((prev) => {
       const withoutAuto = prev.filter((g) => g.id !== TRADE_BB_GROUP_ID);

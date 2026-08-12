@@ -279,6 +279,31 @@ function parseIndicatorGrowthFilterName(name) {
   return out;
 }
 
+const BB_TREND_SIDE_TOKENS = { pos: 'pos', neg: 'neg', all: 'all' };
+
+/**
+ * Trades teóricos na Bollinger Band (compra na banda inferior, vende na superior) filtrados
+ * pela regra de tendência da linha mediana, média nos últimos `lookback` candles fechados:
+ * 15m|bbtrend|20|2|700|pos (side: pos=só ganhos, neg=só perdas, all=todos)
+ */
+function buildBollingerMedianTrendFilterName(interval, period, stdDev, lookback, side) {
+  const token = BB_TREND_SIDE_TOKENS[side] ?? 'pos';
+  return `${interval}|bbtrend|${period}|${stdDev}|${lookback}|${token}`;
+}
+
+function parseBollingerMedianTrendFilterName(name) {
+  const parts = String(name).split('|');
+  if (parts[1] !== 'bbtrend' || parts.length < 6) return null;
+  const side = BB_TREND_SIDE_TOKENS[parts[5]] ?? 'pos';
+  return {
+    interval: parts[0],
+    period: parseInt(parts[2], 10),
+    stdDev: parseFloat(parts[3]),
+    lookback: parseInt(parts[4], 10),
+    side,
+  };
+}
+
 module.exports = {
   compareAboveToken,
   compareBelowToken,
@@ -310,4 +335,7 @@ module.exports = {
   GROWTH_ENGINE_TOKENS,
   buildIndicatorGrowthFilterName,
   parseIndicatorGrowthFilterName,
+  BB_TREND_SIDE_TOKENS,
+  buildBollingerMedianTrendFilterName,
+  parseBollingerMedianTrendFilterName,
 };

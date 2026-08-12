@@ -21,7 +21,7 @@ const AVG_WINDOW = 80;
 const ALLOWED_INTERVALS = new Set(ALL_INTERVALS);
 const ALLOWED_PERIODS = new Set(BB_PERIODS);
 const ALLOWED_STD_DEVS = new Set(BB_STD_DEVS);
-const ALLOWED_LOOKBACKS = new Set([50, 100, 150, 200, 300]);
+const ALLOWED_LOOKBACKS = new Set([50, 100, 150, 200, 300, 700]);
 
 async function runWithConcurrency(items, fn, concurrency) {
   const results = [];
@@ -71,7 +71,7 @@ router.get('/bollinger-band-width-filter', async (req, res) => {
       return res.status(400).json({ error: 'desvio padrão suportado: 1, 2 ou 3' });
     }
     if (!ALLOWED_LOOKBACKS.has(lookback)) {
-      return res.status(400).json({ error: 'lookback suportado: 50, 100, 150, 200 ou 300' });
+      return res.status(400).json({ error: 'lookback suportado: 50, 100, 150, 200, 300 ou 700' });
     }
 
     const name = buildBollingerBandWidthFilterName(interval, period, stdDev, lookback);

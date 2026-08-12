@@ -5,6 +5,7 @@ export const BOLLINGER_BANDS_PERIODS = [10, 20, 30];
 export const BOLLINGER_BANDS_STD_DEVS = [1, 2, 3];
 export const BOLLINGER_BANDS_EMA_PERIODS = [9, 21, 50, 200];
 export const BOLLINGER_BANDS_STOP_LOSS_MODES = ['fixed', 'ema', 'band'];
+export const BOLLINGER_BANDS_RESTING_BRACKET_TARGET_MODES = ['band', 'fixed'];
 
 export const BOLLINGER_BANDS_DEFAULTS = {
   label: 'Bollinger Bands',
@@ -17,6 +18,10 @@ export const BOLLINGER_BANDS_DEFAULTS = {
     pullback: { enabled: false, belowPct: 2 },
     /** Ordem limite GTC fica no book até N candles aguardando reteste. */
     limitWaitCandles: 5,
+    /** false (padrão) = ordem limite GTC no preço da banda, aguardando reteste
+     *  (limitWaitCandles). true = ignora o reteste e compra a mercado assim que
+     *  o sinal confirma. */
+    instantFill: false,
     /** Após STOP_LOSS, espera N candles fechados do intervalo da BB antes de reavaliar compra.
      *  Saída no alvo não espera. 0 = sem espera. */
     reentryCooldownCandles: 3,
@@ -35,7 +40,11 @@ export const BOLLINGER_BANDS_DEFAULTS = {
     medianTrendFilter: { enabled: true, lookback: 10 },
   },
   exit: {
-    restingBracket: { enabled: true, driftPct: 3 },
+    /** targetMode 'band' (padrão) = alvo (TP) na banda superior ao vivo, recriada quando
+     *  desviar; 'fixed' = targetPct% de lucro fixo sobre o preço de compra, direto na ordem
+     *  OCO — não depende do bot recalcular, então continua protegido na corretora mesmo se
+     *  o bot cair. */
+    restingBracket: { enabled: true, driftPct: 3, targetMode: 'band', targetPct: 3 },
   },
   stopLoss: {
     enabled: true, maxLossPct: 5, trailing: true, trailStepPct: 5,
@@ -45,7 +54,10 @@ export const BOLLINGER_BANDS_DEFAULTS = {
     /** mode 'band': stop = banda inferior BB(entry.period,entry.stdDev) ao vivo × (1 − belowPct/100). */
     band: { belowPct: 10 },
   },
-  polling: { pollMs: 60_000, fastPollMs: 30_000 },
+  /** BB(4h/1h) não precisa da granularidade de 1m do vwap-bands — pollMs mais espaçado
+   *  evita competir com o frontend pelas mesmas chamadas de candles na corretora (mesmo
+   *  padrão do swing-bot/amap-bot: 5min parado, 1min com posição aberta). */
+  polling: { pollMs: 5 * 60_000, fastPollMs: 60_000 },
   entryCooldownHours: 0,
   volume: { minVolumeUsdt: 1_000_000, allowLowVolume: false },
 };
@@ -70,6 +82,7 @@ export function normalizeBollingerBandsForm(body = {}) {
         belowPct: Number(pb.belowPct ?? d.entry.pullback.belowPct),
       },
       limitWaitCandles: Number(body.entry?.limitWaitCandles ?? d.entry.limitWaitCandles),
+      instantFill: body.entry?.instantFill === true,
       reentryCooldownCandles: Number(body.entry?.reentryCooldownCandles ?? d.entry.reentryCooldownCandles),
       // interval nasce igual ao da banda de Bollinger (interval acima) quando não informado.
       emaFilter: {
@@ -89,6 +102,8 @@ export function normalizeBollingerBandsForm(body = {}) {
       restingBracket: {
         enabled: rb.enabled !== false,
         driftPct: Number(rb.driftPct ?? d.exit.restingBracket.driftPct),
+        targetMode: BOLLINGER_BANDS_RESTING_BRACKET_TARGET_MODES.includes(rb.targetMode) ? rb.targetMode : d.exit.restingBracket.targetMode,
+        targetPct: Number(rb.targetPct ?? d.exit.restingBracket.targetPct),
       },
     },
     stopLoss: {

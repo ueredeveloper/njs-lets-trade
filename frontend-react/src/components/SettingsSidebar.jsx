@@ -32,6 +32,19 @@ function applyPalette(colors) {
 
 const RELOAD_INTERVALS = ['all', '1m', '5m', '15m', '30m', '1h', '2h', '4h', '8h', '1d'];
 
+/** Monta um subtítulo legível (intervalo · período/desvio · candles) a partir do meta de
+ *  preset devolvido por /services/cache-settings — só os caches com preset granular por id
+ *  (ver PRESET_MODULES em backend/services/fetchCacheSettings.js) têm esse detalhe; os demais
+ *  ficam só com o rótulo, sem quebrar nada. */
+function formatCacheMeta(meta) {
+  if (!meta) return null;
+  const parts = [];
+  if (meta.interval) parts.push(meta.interval);
+  if (meta.period != null && meta.stdDev != null) parts.push(`BB(${meta.period},${meta.stdDev})`);
+  if (meta.lookback != null) parts.push(`${meta.lookback} candles`);
+  return parts.length ? parts.join(' · ') : null;
+}
+
 function AccordionItem({ id, title, hint, openSection, setOpenSection, children }) {
   const isOpen = openSection === id;
   return (
@@ -837,6 +850,7 @@ export default function SettingsSidebar({ open, onClose }) {
                 {(cacheSettingsState.ids ?? []).map((id) => {
                   const isOn = cacheSettingsState.enabled?.[id] !== false;
                   const saving = cacheToggleSaving === id;
+                  const metaLabel = formatCacheMeta(cacheSettingsState.meta?.[id]);
                   return (
                     <label key={id} className="flex items-start gap-2.5 cursor-pointer group">
                       <input
@@ -848,6 +862,9 @@ export default function SettingsSidebar({ open, onClose }) {
                       />
                       <span className="text-p5 text-xs leading-snug group-hover:text-white transition-colors">
                         {t(`settings.cache.${id}`)}
+                        {metaLabel && (
+                          <span className="block text-[10px] text-p5/40 mt-0.5 font-mono font-normal">{metaLabel}</span>
+                        )}
                       </span>
                     </label>
                   );
