@@ -2285,6 +2285,40 @@ router.put('/ma-cross-screener-config', getUserId, async (req, res) => {
   res.json(screenerConfigRowToBody(data));
 });
 
+// ── Config global do filtro de tendência da mediana da Bollinger (bollinger-bands) ──────────
+// Valor único (não por moeda) — ver checkMedianTrendFilter em
+// backend/bot/bollinger-bands/strategyEngine.js. Relido pelo bot a cada 5min.
+const BOLLINGER_MEDIAN_TREND_DEFAULTS = { minAvgDiffPct: 0.2 };
+
+function bollingerMedianTrendRowToBody(row) {
+  if (!row) return { ...BOLLINGER_MEDIAN_TREND_DEFAULTS };
+  return {
+    minAvgDiffPct: Number(row.min_avg_diff_pct) || BOLLINGER_MEDIAN_TREND_DEFAULTS.minAvgDiffPct,
+  };
+}
+
+// GET /services/sb/bollinger-median-trend-config
+router.get('/bollinger-median-trend-config', getUserId, async (req, res) => {
+  const { data, error } = await supabase
+    .from('bollinger_median_trend_config').select('*').eq('user_id', req.userId).maybeSingle();
+  if (error) return sbError(res, error, 'GET bollinger-median-trend-config');
+  res.json(bollingerMedianTrendRowToBody(data));
+});
+
+// PUT /services/sb/bollinger-median-trend-config
+router.put('/bollinger-median-trend-config', getUserId, async (req, res) => {
+  const body = req.body ?? {};
+  const row = {
+    user_id:          req.userId,
+    min_avg_diff_pct: Math.max(0, Number(body.minAvgDiffPct ?? BOLLINGER_MEDIAN_TREND_DEFAULTS.minAvgDiffPct)),
+    updated_at:       new Date().toISOString(),
+  };
+  const { data, error } = await supabase
+    .from('bollinger_median_trend_config').upsert(row, { onConflict: 'user_id' }).select().single();
+  if (error) return sbError(res, error, 'PUT bollinger-median-trend-config');
+  res.json(bollingerMedianTrendRowToBody(data));
+});
+
 // Captura erros assíncronos que escapam dos handlers (Express 4 não faz isso automaticamente).
 // Sem este handler, um throw dentro de um async route crasharia o processo inteiro.
 // eslint-disable-next-line no-unused-vars

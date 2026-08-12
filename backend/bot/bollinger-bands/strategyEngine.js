@@ -13,10 +13,18 @@ function intervalMs(iv) {
   return INTERVAL_MS[iv] ?? 3_600_000;
 }
 
-/** Limiar mínimo (%) da inclinação média da mediana da BB pro medianTrendFilter liberar a
- *  compra — ver checkMedianTrendFilter. Mesmo valor usado em
+/** Limiar mínimo (%, padrão global — vale para toda moeda) da inclinação média da mediana da
+ *  BB pro medianTrendFilter liberar a compra — ver checkMedianTrendFilter. Editável em
+ *  Configurações → Filtro de tendência da Bollinger (tabela bollinger_median_trend_config);
+ *  bollinger-bands-bot.js relê essa tabela a cada 5min e atualiza este valor via
+ *  setMedianTrendDefaultThreshold. Mesmo valor-padrão usado em
  *  backend/utils/bbMedianTrendTrades.js pra manter bot e simulação de estatísticas espelhados. */
-const MEDIAN_TREND_MIN_AVG_DIFF_PCT = 0.4;
+let MEDIAN_TREND_MIN_AVG_DIFF_PCT = 0.2;
+
+function setMedianTrendDefaultThreshold(value) {
+  const n = Number(value);
+  if (Number.isFinite(n) && n >= 0) MEDIAN_TREND_MIN_AVG_DIFF_PCT = n;
+}
 
 function closedCandlesOnly(candles) {
   if (!candles?.length || candles.length < 2) return candles ?? [];
@@ -505,6 +513,7 @@ module.exports = {
   emaSlopePct,
   checkEmaFilter,
   checkMedianTrendFilter,
+  setMedianTrendDefaultThreshold,
   evaluateEntrySignal,
   evaluateExit,
   checkEntryLimitExpired,

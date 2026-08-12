@@ -9,7 +9,7 @@ const DEFAULT_MEDIAN_LOOKBACK = 10;
 /** Limiar mínimo (%) da inclinação média da mediana pro filtro liberar a entrada — mesmo
  *  valor de MEDIAN_TREND_MIN_AVG_DIFF_PCT em strategyEngine.js, pra manter bot e simulação
  *  de estatísticas espelhados. */
-const MEDIAN_TREND_MIN_AVG_DIFF_PCT = 0.4;
+const MEDIAN_TREND_MIN_AVG_DIFF_PCT = 0.2;
 
 /**
  * Simula trades teóricos de mean-reversion na Bollinger Band (compra no toque da banda

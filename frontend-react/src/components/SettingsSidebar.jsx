@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
-import { reloadCandles, getMaCrossScreenerConfig, saveMaCrossScreenerConfig, getCacheSettings, saveCacheSettings } from '../services/api';
+import { reloadCandles, getMaCrossScreenerConfig, saveMaCrossScreenerConfig,
+  getBollingerMedianTrendConfig, saveBollingerMedianTrendConfig,
+  getCacheSettings, saveCacheSettings } from '../services/api';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useI18n } from '../i18n';
 import { useCurrency } from '../contexts/CurrencyContext';
@@ -161,6 +163,34 @@ export default function SettingsSidebar({ open, onClose }) {
 
   function removeScreenerBlacklistSymbol(sym) {
     patchScreenerConfig({ blacklist: screenerConfig.blacklist.filter((s) => s !== sym) });
+  }
+
+  const [bbMedianConfig, setBbMedianConfig]         = useState(null); // { minAvgDiffPct }
+  const [bbMedianLoaded, setBbMedianLoaded]         = useState(false);
+  const [bbMedianLoadError, setBbMedianLoadError]   = useState('');
+  const [bbMedianSaveState, setBbMedianSaveState]   = useState(null); // null | 'saving' | 'saved' | 'error'
+  const [bbMedianInput, setBbMedianInput]           = useState('');
+
+  useEffect(() => {
+    if (!open || bbMedianLoaded) return;
+    getBollingerMedianTrendConfig()
+      .then((cfg) => { setBbMedianConfig(cfg); setBbMedianInput(String(cfg.minAvgDiffPct)); setBbMedianLoaded(true); })
+      .catch((err) => { setBbMedianLoadError(err.message); setBbMedianLoaded(true); });
+  }, [open, bbMedianLoaded]);
+
+  async function saveBbMedianConfig() {
+    const n = Number(bbMedianInput);
+    if (!Number.isFinite(n) || n < 0) { setBbMedianInput(String(bbMedianConfig.minAvgDiffPct)); return; }
+    setBbMedianSaveState('saving');
+    try {
+      const saved = await saveBollingerMedianTrendConfig({ minAvgDiffPct: n });
+      setBbMedianConfig(saved);
+      setBbMedianInput(String(saved.minAvgDiffPct));
+      setBbMedianSaveState('saved');
+      setTimeout(() => setBbMedianSaveState((s) => (s === 'saved' ? null : s)), 2000);
+    } catch {
+      setBbMedianSaveState('error');
+    }
   }
 
   const [cacheSettingsState, setCacheSettingsState] = useState(null); // { ids, enabled }
@@ -828,6 +858,51 @@ export default function SettingsSidebar({ open, onClose }) {
                   )}
                   {screenerSaveState === 'error' && (
                     <span className="text-[10px] text-red-400">{t('settings.screener_save_error')}</span>
+                  )}
+                </div>
+              </div>
+            )}
+          </AccordionItem>
+
+          {/* Filtro de tendência da mediana da Bollinger — limiar padrão global */}
+          <AccordionItem id="bbMedian" title={t('settings.bbmedian_title')} hint={t('settings.bbmedian_hint')}
+            openSection={openSection} setOpenSection={setOpenSection}>
+
+            {!bbMedianLoaded && !bbMedianLoadError && (
+              <p className="text-[10px] text-p5/40">{t('settings.loading')}</p>
+            )}
+            {bbMedianLoadError && (
+              <p className="text-[10px] text-red-400">{t('settings.bbmedian_load_error')}: {bbMedianLoadError}</p>
+            )}
+
+            {bbMedianConfig && (
+              <div className="flex flex-col gap-2">
+                <label className="flex flex-col gap-1">
+                  <span className="text-[10px] text-p5/50">{t('settings.bbmedian_min_avg_diff')}</span>
+                  <input
+                    type="number"
+                    min={0}
+                    step={0.1}
+                    className={`w-24 ${inp}`}
+                    value={bbMedianInput}
+                    onChange={(e) => setBbMedianInput(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && saveBbMedianConfig()}
+                  />
+                </label>
+                <div className="flex items-center gap-2 mt-1">
+                  <button
+                    type="button"
+                    onClick={saveBbMedianConfig}
+                    disabled={bbMedianSaveState === 'saving'}
+                    className="px-3 py-1.5 rounded text-xs text-white bg-p3 hover:bg-p4 transition-colors disabled:opacity-50"
+                  >
+                    {bbMedianSaveState === 'saving' ? t('settings.bbmedian_saving') : t('settings.bbmedian_save')}
+                  </button>
+                  {bbMedianSaveState === 'saved' && (
+                    <span className="text-[10px] text-emerald-400">{t('settings.bbmedian_saved')}</span>
+                  )}
+                  {bbMedianSaveState === 'error' && (
+                    <span className="text-[10px] text-red-400">{t('settings.bbmedian_save_error')}</span>
                   )}
                 </div>
               </div>

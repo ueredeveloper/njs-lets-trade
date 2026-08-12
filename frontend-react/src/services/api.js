@@ -1079,6 +1079,30 @@ export async function saveMaCrossScreenerConfig(config) {
   return res.json();
 }
 
+// ── Filtro de tendência da mediana da Bollinger — limiar padrão (global, toda moeda) ────────
+
+export async function getBollingerMedianTrendConfig() {
+  const res = await fetch('/services/sb/bollinger-median-trend-config');
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function saveBollingerMedianTrendConfig(config) {
+  const res = await fetch('/services/sb/bollinger-median-trend-config', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(config),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 // ── Configurações de cache (liga/desliga por cache no backend) ──────────────
 
 export async function getCacheSettings() {

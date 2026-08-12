@@ -1,7 +1,7 @@
 /** Limiar mínimo (%) da inclinação média da mediana pro filtro liberar a entrada — mesmo
  *  valor de MEDIAN_TREND_MIN_AVG_DIFF_PCT em
  *  backend/bot/bollinger-bands/strategyEngine.js, pra manter o gráfico espelhado com o bot. */
-const MEDIAN_TREND_MIN_AVG_DIFF_PCT = 0.4;
+const MEDIAN_TREND_MIN_AVG_DIFF_PCT = 0.2;
 
 /**
  * Sinais de toque na banda inferior da Bollinger (mesmo gatilho de entrada do bot

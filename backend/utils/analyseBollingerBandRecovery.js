@@ -50,7 +50,7 @@ function buildBbSeries(candles, period, stdDev) {
 /** Limiar mínimo (%) da inclinação média da mediana pro medianTrendFilter liberar a entrada —
  *  mesmo valor de MEDIAN_TREND_MIN_AVG_DIFF_PCT em
  *  backend/bot/bollinger-bands/strategyEngine.js, pra manter bot e estatísticas espelhados. */
-const MEDIAN_TREND_MIN_AVG_DIFF_PCT = 0.4;
+const MEDIAN_TREND_MIN_AVG_DIFF_PCT = 0.2;
 
 /**
  * Tendência % da linha mediana (média) da BB nos `lookback` candles fechados imediatamente

@@ -30,6 +30,7 @@ const { STRATEGY_IDS, isBollingerBandsStrategy } = require('./strategyPresets');
 const {
   getRequiredSpecs, evaluateEntrySignal, evaluateExit, computeBracketPrices, computeStopLossFloor,
   checkEntryLimitExpired, checkMedianTrendFilter, checkReentryCooldown, describeNearMiss,
+  setMedianTrendDefaultThreshold,
 } = require('./strategyEngine');
 const { detectOrphanPosition } = require('../shared/orphanPosition');
 
@@ -653,6 +654,22 @@ async function startSymbol(row, color) {
   await run();
 }
 
+// ── Config global do filtro de tendência da mediana da BB (Configurações → toda moeda) ─────
+// Lê bollinger_median_trend_config (1 linha, sem user_id filtrado por linha única real —
+// mesmo padrão single-user do restante do painel) e atualiza o limiar padrão usado por
+// checkMedianTrendFilter para todas as moedas deste bot.
+async function refreshMedianTrendConfig() {
+  const userId = process.env.SUPABASE_DEFAULT_USER_ID;
+  if (!userId) return;
+  try {
+    const rows = await sbReq('GET', 'bollinger_median_trend_config', null, `?user_id=eq.${userId}&limit=1`);
+    const value = rows?.[0]?.min_avg_diff_pct;
+    if (value != null) setMedianTrendDefaultThreshold(value);
+  } catch (err) {
+    console.log(`⚠️  Falha ao ler bollinger_median_trend_config (mantendo valor anterior): ${err.message}`);
+  }
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 async function main() {
   if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
@@ -669,6 +686,9 @@ async function main() {
   // backend/gate/getGateClient.js) — só a Binance precisa ser sincronizada aqui.
   await syncExchangeClocks();
   setInterval(syncExchangeClocks, 60 * 60_000);
+
+  await refreshMedianTrendConfig();
+  setInterval(refreshMedianTrendConfig, VOL_CACHE_MS);
 
   const symbolFilter = process.argv.includes('--symbol')
     ? process.argv[process.argv.indexOf('--symbol') + 1]?.toUpperCase()
