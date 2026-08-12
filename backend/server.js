@@ -26,6 +26,7 @@ const {
   fetchGateCurrencies, fetchGatePrefetch, fetchBinanceTrades, fetchGateTrades,
   fetchActiveTrades, fetchTradeFavorites, stgBotStatus, multitradeService, fetchMarketHighlights, fetchVolumeIgnition, whatsappMessagesService, fetchCacheSettings } = require('./services');
 const supabaseService = require('./services/supabaseService');
+const { refreshMedianTrendThreshold } = require('./utils/bollingerMedianTrendConfig');
 
 const app = express();
 app.use(cors());
@@ -344,6 +345,12 @@ async function startServer() {
 
   refreshBbBandWidthCache().catch(e => console.error('[bbBandWidthCache] erro no warmup:', e.message));
   setInterval(refreshBbBandWidthCache, bbBandWidthCache.REFRESH_TICK_MS);
+
+  // Limiar (%) do filtro de tendência da mediana — mesma fonte única do bot real
+  // (backend/utils/bollingerMedianTrendConfig.js), editável em Configurações. Relido antes do
+  // warmup do bbMedianTrendCache pra ele já simular com o valor atual, e depois a cada 5min.
+  refreshMedianTrendThreshold().catch(e => console.error('[bollingerMedianTrendConfig] erro no warmup:', e.message));
+  setInterval(refreshMedianTrendThreshold, 5 * 60_000);
 
   async function refreshBbMedianTrendCache() {
     if (!cacheSettings.isEnabled('bbMedianTrend15m') && !cacheSettings.isEnabled('bbMedianTrend5m')) return;

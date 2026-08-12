@@ -1,7 +1,9 @@
-/** Limiar mínimo (%) da inclinação média da mediana pro filtro liberar a entrada — mesmo
- *  valor de MEDIAN_TREND_MIN_AVG_DIFF_PCT em
- *  backend/bot/bollinger-bands/strategyEngine.js, pra manter o gráfico espelhado com o bot. */
-const MEDIAN_TREND_MIN_AVG_DIFF_PCT = 0.2;
+/** Limiar mínimo (%) padrão da inclinação média da mediana pro filtro liberar a entrada —
+ *  só usado se o chamador não passar `threshold` explicitamente. O valor real vem do limiar
+ *  global editável em Configurações (bollinger_median_trend_config), buscado uma vez em
+ *  CandlestickChart.jsx e repassado via bollingerConfig.medianTrendThreshold, pra manter o
+ *  gráfico espelhado com o bot (backend/bot/bollinger-bands/strategyEngine.js). */
+const MEDIAN_TREND_MIN_AVG_DIFF_PCT_DEFAULT = 0.2;
 
 /**
  * Sinais de toque na banda inferior da Bollinger (mesmo gatilho de entrada do bot
@@ -9,11 +11,10 @@ const MEDIAN_TREND_MIN_AVG_DIFF_PCT = 0.2;
  * `lookback` candles fechados imediatamente anteriores — mesma janela de
  * backend/bot/bollinger-bands/strategyEngine.js#checkMedianTrendFilter — e calcula a média
  * das variações % candle-a-candle da linha mediana (middle) nesse trecho.
- * avgDiffPct >= MEDIAN_TREND_MIN_AVG_DIFF_PCT → mediana subindo/estável (verde, libera a
- * compra no bot); abaixo disso → mediana em queda/estagnada (vermelho, o bot bloqueia/cancela
- * a compra).
+ * avgDiffPct >= threshold → mediana subindo/estável (verde, libera a compra no bot); abaixo
+ * disso → mediana em queda/estagnada (vermelho, o bot bloqueia/cancela a compra).
  */
-export function computeMedianTrendSignals(bbPoints, lookback = 10) {
+export function computeMedianTrendSignals(bbPoints, lookback = 10, threshold = MEDIAN_TREND_MIN_AVG_DIFF_PCT_DEFAULT) {
   if (!bbPoints?.length) return [];
   const pts = [...bbPoints].sort((a, b) => Number(a.openTime) - Number(b.openTime));
   const signals = [];
@@ -48,7 +49,7 @@ export function computeMedianTrendSignals(bbPoints, lookback = 10) {
     signals.push({
       signalOpenTime: Number(p.openTime),
       avgDiffPct,
-      trend: avgDiffPct >= MEDIAN_TREND_MIN_AVG_DIFF_PCT ? 'up' : 'down',
+      trend: avgDiffPct >= threshold ? 'up' : 'down',
       data,
     });
   }

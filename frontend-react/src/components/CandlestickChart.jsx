@@ -2,7 +2,7 @@ import { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import { useI18n } from '../i18n';
 import ReactECharts from 'echarts-for-react';
 import { useCurrency } from '../contexts/CurrencyContext';
-import { fetchCandlesticksAndCloud, fetchGateTrades, fetchBinanceTrades, fetchChartAdaptiveBands, DEFAULT_CANDLE_LIMIT } from '../services/api';
+import { fetchCandlesticksAndCloud, fetchGateTrades, fetchBinanceTrades, fetchChartAdaptiveBands, DEFAULT_CANDLE_LIMIT, getBollingerMedianTrendConfig } from '../services/api';
 import { buildMarkersFromExchangeTrades, attachPnlToExchangeTrades, isMaCrossEntry, isVwapBandsEntry, isBollingerBandsEntry } from '../utils/multitradeChart';
 import { computeVwapSlopeFlags } from '../utils/vwapSlopeHighlight';
 import { buildTrailingStopSeries, resolveChartStopLoss, resolveChartTarget, computeStopLossFloor } from '../utils/trailingStopLoss';
@@ -4374,6 +4374,16 @@ export default function CandlestickChart() {
 
   const botTradeConfig = botFavoriteEntry?.tradeConfig ?? botAdHocTradeConfig;
 
+  // Limiar (%) do filtro de tendência da mediana — mesmo valor global editável em
+  // Configurações (bollinger_median_trend_config), lido uma vez e reaproveitado pra colorir
+  // a linha da mediana no gráfico igual ao bot real (ver checkMedianTrendFilter no backend).
+  const [bbMedianTrendThreshold, setBbMedianTrendThreshold] = useState(0.2);
+  useEffect(() => {
+    getBollingerMedianTrendConfig()
+      .then((cfg) => { if (Number.isFinite(cfg?.minAvgDiffPct)) setBbMedianTrendThreshold(cfg.minAvgDiffPct); })
+      .catch(() => {});
+  }, []);
+
   // Uma config por grupo BB habilitado (linhas e/ou PATH e/ou tendência da mediana) — motor
   // Lightweight Charts (CandlestickChartLW) desenha todas simultaneamente, cada uma com sua cor.
   const chartBollingerConfigs = useMemo(() => {
@@ -4393,6 +4403,7 @@ export default function CandlestickChart() {
           showPath: g.showPath,
           showMedianTrend: g.showMedianTrend,
           medianTrendLookback: 10,
+          medianTrendThreshold: bbMedianTrendThreshold,
           period: g.period,
           stdDev: g.stdDev,
           interval: g.interval,
@@ -4400,7 +4411,7 @@ export default function CandlestickChart() {
         };
       })
       .filter(Boolean);
-  }, [bbGroups, bollingerCache, chartPanelButtons.bb]);
+  }, [bbGroups, bollingerCache, chartPanelButtons.bb, bbMedianTrendThreshold]);
   // Motor ECharts legado (buildOption abaixo) só sabe desenhar 1 Bollinger — usa a 1ª config
   // habilitada como aproximação (sem multi-BB nesse motor, fora do escopo desta feature).
   const chartBollingerConfig = chartBollingerConfigs[0] ?? null;

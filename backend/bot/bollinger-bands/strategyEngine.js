@@ -3,6 +3,7 @@
 const { BollingerBands } = require('technicalindicators');
 const { computeStopLossFloor } = require('../shared/stopLossFloor');
 const { computeMa, buildMaTimeSeries, maLabel } = require('../../utils/movingAverage');
+const { getMedianTrendThreshold } = require('../../utils/bollingerMedianTrendConfig');
 
 const INTERVAL_MS = {
   '1m': 60_000, '3m': 180_000, '5m': 300_000, '15m': 900_000, '30m': 1_800_000,
@@ -13,18 +14,11 @@ function intervalMs(iv) {
   return INTERVAL_MS[iv] ?? 3_600_000;
 }
 
-/** Limiar mínimo (%, padrão global — vale para toda moeda) da inclinação média da mediana da
- *  BB pro medianTrendFilter liberar a compra — ver checkMedianTrendFilter. Editável em
- *  Configurações → Filtro de tendência da Bollinger (tabela bollinger_median_trend_config);
- *  bollinger-bands-bot.js relê essa tabela a cada 5min e atualiza este valor via
- *  setMedianTrendDefaultThreshold. Mesmo valor-padrão usado em
- *  backend/utils/bbMedianTrendTrades.js pra manter bot e simulação de estatísticas espelhados. */
-let MEDIAN_TREND_MIN_AVG_DIFF_PCT = 0.2;
-
-function setMedianTrendDefaultThreshold(value) {
-  const n = Number(value);
-  if (Number.isFinite(n) && n >= 0) MEDIAN_TREND_MIN_AVG_DIFF_PCT = n;
-}
+// Limiar mínimo (%, padrão global — vale para toda moeda) da inclinação média da mediana da
+// BB pro medianTrendFilter liberar a compra — ver checkMedianTrendFilter. Fonte única em
+// backend/utils/bollingerMedianTrendConfig.js (editável em Configurações → Filtro de
+// tendência da Bollinger), compartilhada com backend/utils/bbMedianTrendTrades.js e
+// analyseBollingerBandRecovery.js pra manter bot e simulação de estatísticas espelhados.
 
 function closedCandlesOnly(candles) {
   if (!candles?.length || candles.length < 2) return candles ?? [];
@@ -169,7 +163,7 @@ function checkMedianTrendFilter(config, cMap, series) {
   }
   const avgDiffPct = diffPcts.length ? diffPcts.reduce((a, b) => a + b, 0) / diffPcts.length : 0;
 
-  if (avgDiffPct < MEDIAN_TREND_MIN_AVG_DIFF_PCT) {
+  if (avgDiffPct < getMedianTrendThreshold()) {
     return { allowed: false, reason: 'MEDIAN_TREND_FALLING', avgDiffPct, lookback };
   }
   return { allowed: true, avgDiffPct, lookback };
@@ -513,7 +507,6 @@ module.exports = {
   emaSlopePct,
   checkEmaFilter,
   checkMedianTrendFilter,
-  setMedianTrendDefaultThreshold,
   evaluateEntrySignal,
   evaluateExit,
   checkEntryLimitExpired,

@@ -1,22 +1,18 @@
 'use strict';
 
 const { BollingerBands } = require('technicalindicators');
+const { getMedianTrendThreshold } = require('./bollingerMedianTrendConfig');
 
 /** Mesmo padrão do bot real (entry.medianTrendFilter.lookback, ver
  *  backend/bot/bollinger-bands/strategyEngine.js#checkMedianTrendFilter). */
 const DEFAULT_MEDIAN_LOOKBACK = 10;
-
-/** Limiar mínimo (%) da inclinação média da mediana pro filtro liberar a entrada — mesmo
- *  valor de MEDIAN_TREND_MIN_AVG_DIFF_PCT em strategyEngine.js, pra manter bot e simulação
- *  de estatísticas espelhados. */
-const MEDIAN_TREND_MIN_AVG_DIFF_PCT = 0.2;
 
 /**
  * Simula trades teóricos de mean-reversion na Bollinger Band (compra no toque da banda
  * inferior, vende no toque da superior — mesma lógica de
  * frontend-react/src/utils/bollingerTouchPath.js#simulateBbTouchPath) filtrados pela regra de
  * tendência da linha mediana: só entra se a média das variações % candle-a-candle da linha
- * média (últimos `medianLookback` valores fechados) for >= MEDIAN_TREND_MIN_AVG_DIFF_PCT —
+ * média (últimos `medianLookback` valores fechados) for >= getMedianTrendThreshold() —
  * mesma regra do bot real (checkMedianTrendFilter). `candles` precisa vir só com candles JÁ
  * FECHADOS.
  *
@@ -58,7 +54,7 @@ function simulateBbMedianTrendTrades(candles, { period, stdDev, medianLookback =
         countPct++;
       }
       const avgDiffPct = countPct ? sumPct / countPct : 0;
-      if (avgDiffPct < MEDIAN_TREND_MIN_AVG_DIFF_PCT) continue; // mediana em baixa/estagnada: entrada bloqueada, mesma regra do bot
+      if (avgDiffPct < getMedianTrendThreshold()) continue; // mediana em baixa/estagnada: entrada bloqueada, mesma regra do bot
 
       buy = { entryTime: Number(candle.openTime), entryPrice: lower };
       if (high >= upper) {

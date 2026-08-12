@@ -3,6 +3,7 @@
 const BollingerBands = require('technicalindicators').BollingerBands;
 const getCandles = require('../binance/getCandles');
 const { getGateCandles } = require('../gate/getGateCandles');
+const { getMedianTrendThreshold } = require('./bollingerMedianTrendConfig');
 
 const BB_PERIOD = 20;
 const BB_STD_DEV = 2;
@@ -46,11 +47,6 @@ function buildBbSeries(candles, period, stdDev) {
         upper: b.upper,
     }));
 }
-
-/** Limiar mínimo (%) da inclinação média da mediana pro medianTrendFilter liberar a entrada —
- *  mesmo valor de MEDIAN_TREND_MIN_AVG_DIFF_PCT em
- *  backend/bot/bollinger-bands/strategyEngine.js, pra manter bot e estatísticas espelhados. */
-const MEDIAN_TREND_MIN_AVG_DIFF_PCT = 0.2;
 
 /**
  * Tendência % da linha mediana (média) da BB nos `lookback` candles fechados imediatamente
@@ -106,7 +102,7 @@ async function analyseBollingerBandRecovery(symbol, options = {}) {
             if (medianTrendFilter) {
                 const avgDiffPct = medianTrendAvgDiffPct(bbSeries, i, medianTrendLookback);
                 // Sem histórico suficiente ou mediana em queda/subindo devagar demais → mesmo critério do bot: bloqueia a entrada.
-                if (avgDiffPct === null || avgDiffPct < MEDIAN_TREND_MIN_AVG_DIFF_PCT) continue;
+                if (avgDiffPct === null || avgDiffPct < getMedianTrendThreshold()) continue;
             }
             minLowIdx = i;
             state = 'SEEK_EXIT';

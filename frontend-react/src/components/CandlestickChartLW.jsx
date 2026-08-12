@@ -978,7 +978,8 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       for (const cfg of bollingerConfigs) {
         if (!cfg.showMedianTrend || !cfg.points?.length) continue;
         const lookback = cfg.medianTrendLookback ?? 10;
-        const signals = computeMedianTrendSignals(cfg.points, lookback);
+        const threshold = cfg.medianTrendThreshold ?? 0.2;
+        const signals = computeMedianTrendSignals(cfg.points, lookback, threshold);
         for (const sig of signals) {
           const data = sig.data.filter(d => d.time >= minTime && d.time <= maxTime);
           if (data.length < 2) continue;
