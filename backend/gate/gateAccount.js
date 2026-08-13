@@ -41,4 +41,11 @@ async function gateGetOwnTrades(pair, limit = 200) {
   }));
 }
 
-module.exports = { gateGetTokenBalance, gate24hVolume, gateGetOwnTrades, gateLastPrice };
+/** Ordens abertas pro par — mesmo propósito de binanceGetOpenOrders em tradeClient.js
+ *  (ver backend/bot/shared/orphanPosition.js). */
+async function gateGetOpenOrders(pair) {
+  const data = await gateRequest('GET', '/spot/orders', { currency_pair: pair, status: 'open' });
+  return Array.isArray(data) ? data : [];
+}
+
+module.exports = { gateGetTokenBalance, gate24hVolume, gateGetOwnTrades, gateGetOpenOrders, gateLastPrice };

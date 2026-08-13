@@ -53,17 +53,32 @@ function reconstructOpenLotFifo(trades) {
 /**
  * @param {object} opts
  * @param {object} opts.adapter       adapter da corretora (buildAdapter) — precisa expor
- *                                     getBaseBalance()/getOwnTrades(limit)
+ *                                     getBaseBalance()/getOwnTrades(limit); getOpenOrders()
+ *                                     é opcional (ver hasOpenOrders abaixo)
  * @param {number} opts.lastPrice     preço atual, pra converter saldo em USDT
  * @param {number} [opts.minOrphanUsdt=3]  saldo abaixo disso é poeira (taxa/arredondamento),
  *                                     não posição órfã
- * @returns {Promise<null|{confident:boolean, qty:number, avgPrice?:number}>}
+ * @returns {Promise<null|{confident:boolean, qty:number, avgPrice?:number, hasOpenOrders?:boolean}>}
  */
 async function detectOrphanPosition({ adapter, lastPrice, minOrphanUsdt = 3 }) {
   if (typeof adapter.getBaseBalance !== 'function') return null;
   const balance = await adapter.getBaseBalance();
   if (!Number.isFinite(balance) || balance <= 0) return null;
   if (!(lastPrice > 0) || balance * lastPrice < minOrphanUsdt) return null;
+
+  // Se já existe ordem de venda aberta pro símbolo direto na corretora (fora do painel), o
+  // chamador não deve colocar bracket automática em cima — o usuário está gerenciando a saída
+  // sozinho. `true` também quando a consulta falha (não dá pra confirmar que está livre): mais
+  // seguro tratar como "pode ter ordem" do que arriscar duplicar/conflitar com uma que existe.
+  let hasOpenOrders = false;
+  if (typeof adapter.getOpenOrders === 'function') {
+    try {
+      const orders = await adapter.getOpenOrders();
+      hasOpenOrders = Array.isArray(orders) && orders.some(o => String(o.side ?? '').toLowerCase() === 'sell');
+    } catch {
+      hasOpenOrders = true;
+    }
+  }
 
   if (typeof adapter.getOwnTrades === 'function') {
     try {
@@ -72,12 +87,12 @@ async function detectOrphanPosition({ adapter, lastPrice, minOrphanUsdt = 3 }) {
       const lot = reconstructOpenLotFifo(recent);
       // Só confia na reconstrução se ela bater com o saldo real (~5% de folga pra taxas).
       if (lot && Math.abs(lot.qty - balance) / balance <= 0.05) {
-        return { confident: true, qty: balance, avgPrice: lot.avgPrice };
+        return { confident: true, qty: balance, avgPrice: lot.avgPrice, hasOpenOrders };
       }
     } catch { /* segue pro caso não-confiável abaixo */ }
   }
 
-  return { confident: false, qty: balance };
+  return { confident: false, qty: balance, hasOpenOrders };
 }
 
 module.exports = { detectOrphanPosition, reconstructOpenLotFifo };

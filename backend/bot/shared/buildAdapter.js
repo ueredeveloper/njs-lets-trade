@@ -13,7 +13,7 @@
 const { fetchBinanceCandles, fetchGateCandles } = require('../prices');
 const { toGateSymbol } = require('../../utils/toGateSymbol');
 const { gateMarketBuy, gateLimitBuy, gatePlaceRestingLimitBuy, gatePollRestingLimitBuy, gateCancelRestingLimitBuy } = require('../../gate/gateMarketBuy');
-const { gateGetTokenBalance, gate24hVolume, gateGetOwnTrades } = require('../../gate/gateAccount');
+const { gateGetTokenBalance, gate24hVolume, gateGetOwnTrades, gateGetOpenOrders } = require('../../gate/gateAccount');
 const { gateRequest } = require('../../gate/getGateClient');
 const { gateMarketSell: gateMarketSellCore } = require('../gate/gateMarketSell');
 const {
@@ -22,7 +22,7 @@ const {
 const {
   binanceMarketBuy, binanceLimitBuy, binanceMarketSell, binance24hVolume, syncBinanceClock,
   binancePlaceRestingLimitBuy, binancePollRestingLimitBuy, binanceCancelRestingLimitBuy,
-  binanceGetAssetBalance, binanceGetOwnTrades,
+  binanceGetAssetBalance, binanceGetOwnTrades, binanceGetOpenOrders,
 } = require('../../binance/tradeClient');
 const { binancePlaceOcoSell, binanceCancelOco, binancePollOco } = require('../../binance/ocoClient');
 
@@ -51,6 +51,7 @@ function buildAdapter(exchange, symbol) {
       // mas o Supabase não sabe (ex.: processo caiu entre o fill e o saveState que marca BOUGHT).
       getBaseBalance: () => gateGetTokenBalance(pair),
       getOwnTrades:   (limit) => gateGetOwnTrades(pair, limit),
+      getOpenOrders:  () => gateGetOpenOrders(pair),
       // Bracket TP/SL emulado (sem OCO atômico nativo) — ver gateBracketOrders.js.
       placeExitBracket: async (qty, targetPrice, stopPrice) => {
         const r = await gatePlaceTriggerSell(pair, qty, { targetPrice, stopPrice });
@@ -75,6 +76,7 @@ function buildAdapter(exchange, symbol) {
     fetch24hVol:  ()         => binance24hVolume(symbol),
     getBaseBalance: () => binanceGetAssetBalance(symbol),
     getOwnTrades:   (limit) => binanceGetOwnTrades(symbol, limit),
+    getOpenOrders:  () => binanceGetOpenOrders(symbol),
     // OCO real (uma perna cancela a outra na própria Binance) — ver binance/ocoClient.js.
     placeExitBracket: async (qty, targetPrice, stopPrice) => {
       const r = await binancePlaceOcoSell(symbol, qty, targetPrice, stopPrice);

@@ -251,6 +251,13 @@ async function binanceGetOwnTrades(symbol, limit = 200) {
   }));
 }
 
+/** Ordens abertas (qualquer tipo/lado) pro símbolo — usado por detectOrphanPosition
+ *  (backend/bot/shared/orphanPosition.js) pra não colocar bracket automática em cima de
+ *  uma posição que o usuário já está gerenciando com ordem própria direto na corretora. */
+async function binanceGetOpenOrders(symbol) {
+  return binanceRequest('GET', '/api/v3/openOrders', { symbol });
+}
+
 module.exports = {
   syncBinanceClock,
   binanceRequest,
@@ -263,5 +270,6 @@ module.exports = {
   binance24hVolume,
   binanceGetAssetBalance,
   binanceGetOwnTrades,
+  binanceGetOpenOrders,
   decimalsFromStep,
 };

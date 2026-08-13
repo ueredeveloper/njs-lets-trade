@@ -191,28 +191,87 @@ function targetLabel(config) {
   return rb?.targetMode === 'fixed' ? `manual +${rb.targetPct}%` : 'banda superior';
 }
 
+// Falha ao colocar a bracket não manda WhatsApp a cada tentativa (spam) — só na 1ª falha e
+// depois a cada N tentativas, enquanto o retry automático (ver bloco BOUGHT) continua tentando.
+const BRACKET_RETRY_ALERT_EVERY = 10;
+
+/** Grava a falha em rules_state.exitBracketError (attempts/firstAt/lastAt) — antes só ia pro
+ *  WhatsApp e se perdia, sem dar pra consultar depois qual foi o motivo real da rejeição. */
+async function recordBracketError({ rowId, session, log, symbol, strategyId, message, retry }) {
+  const prev = session.rulesState?.exitBracketError ?? null;
+  const attempt = (prev?.attempts ?? 0) + 1;
+  const exitBracketError = {
+    message, attempts: attempt,
+    firstAt: prev?.firstAt ?? new Date().toISOString(),
+    lastAt: new Date().toISOString(),
+  };
+  session.rulesState = { ...(session.rulesState ?? {}), exitBracket: null, exitBracketError };
+  await saveState(rowId, { rules_state: session.rulesState }, log);
+  log(`${Y}⚠️  Falha ao colocar bracket TP/SL (${message}) — tentativa ${attempt}${retry ? ', retry automático segue tentando' : ''}${X}`);
+  if (attempt === 1 || attempt % BRACKET_RETRY_ALERT_EVERY === 0) {
+    sendWhatsApp(`⚠️ ${BOT_LABEL} [${strategyId}] ${symbol}\nFalha ao colocar bracket TP/SL na corretora (tentativa ${attempt}): ${message}\nPosição sem proteção na corretora — bot segue tentando automaticamente a cada tick; saída também depende do candle fechado (evaluateExit) enquanto isso.`);
+  }
+}
+
 /**
  * Coloca a bracket TP/SL resting na corretora logo após a compra confirmar (só se
- * `exit.restingBracket.enabled`). Falha em silêncio (loga e segue) — sem a bracket, a
- * saída continua funcionando via evaluateExit no candle (venda a mercado).
+ * `exit.restingBracket.enabled`). Se falhar, grava o erro em rules_state.exitBracketError em
+ * vez de desistir — o bloco BOUGHT do tick chama de novo com `retry: true` a cada ciclo
+ * enquanto exitBracket continuar null (ver linha ~546). Enquanto isso, a saída continua
+ * funcionando via evaluateExit no candle (venda a mercado).
  */
-async function placeInitialBracket({ rowId, adapter, config, cMap, session, log, filledQty, buyPrice, symbol, strategyId }) {
+async function placeInitialBracket({ rowId, adapter, config, cMap, session, log, filledQty, buyPrice, symbol, strategyId, retry = false }) {
   if (!config.exit.restingBracket?.enabled) return;
   const { targetPrice, stopPrice } = computeBracketPrices(config, cMap, buyPrice, buyPrice);
   if (targetPrice == null || stopPrice == null) {
-    log(`${Y}⚠️  Bracket TP/SL não colocada — alvo (${targetLabel(config)}) indisponível ainda${X}`);
-    sendWhatsApp(`⚠️ ${BOT_LABEL} [${strategyId}] ${symbol}\nBracket TP/SL NÃO colocada (alvo indisponível) — posição sem proteção na corretora, saída depende do bot ficar rodando.`);
+    await recordBracketError({
+      rowId, session, log, symbol, strategyId, retry,
+      message: `alvo (${targetLabel(config)}) indisponível ainda`,
+    });
     return;
   }
+  const prevError = session.rulesState?.exitBracketError ?? null;
   try {
     const bracket = await adapter.placeExitBracket(filledQty, targetPrice, stopPrice);
-    session.rulesState = { ...(session.rulesState ?? {}), exitBracket: { ...bracket, placedAt: new Date().toISOString() } };
+    session.rulesState = { ...(session.rulesState ?? {}), exitBracket: { ...bracket, placedAt: new Date().toISOString() }, exitBracketError: null };
     await saveState(rowId, { rules_state: session.rulesState }, log);
-    log(`${G}🎯 Bracket TP/SL colocada na corretora — alvo (${targetLabel(config)}) ${fmtPrice(bracket.targetPrice)} / stop ${fmtPrice(bracket.stopPrice)}${X}`);
+    log(`${G}🎯 Bracket TP/SL colocada na corretora${retry ? ' (retry)' : ''} — alvo (${targetLabel(config)}) ${fmtPrice(bracket.targetPrice)} / stop ${fmtPrice(bracket.stopPrice)}${X}`);
+    if (retry && prevError) {
+      sendWhatsApp(`✅ ${BOT_LABEL} [${strategyId}] ${symbol}\nBracket TP/SL colocada na corretora após ${prevError.attempts} tentativa(s) falha(s) (primeira falha ${prevError.firstAt}).`);
+    }
   } catch (err) {
-    log(`${Y}⚠️  Falha ao colocar bracket TP/SL (${err.message}) — segue só no candle fechado${X}`);
-    sendWhatsApp(`⚠️ ${BOT_LABEL} [${strategyId}] ${symbol}\nFalha ao colocar bracket TP/SL na corretora: ${err.message}\nPosição sem proteção na corretora — saída depende do bot ficar rodando (candle fechado).`);
+    await recordBracketError({ rowId, session, log, symbol, strategyId, retry, message: err.message });
   }
+}
+
+/** true/false se há ordem de venda aberta na corretora pro símbolo; `true` também quando a
+ *  consulta falha (não dá pra confirmar que está livre) — mais seguro tratar como "pode ter
+ *  ordem" e não mexer do que agir sobre um estado incerto. Usado pelo rulesState.externalOrders
+ *  (posição com ordem colocada fora do painel, ver reconciliação de órfã acima). */
+async function hasOpenSellOrder(adapter, log) {
+  if (typeof adapter.getOpenOrders !== 'function') return true;
+  try {
+    const orders = await adapter.getOpenOrders();
+    return Array.isArray(orders) && orders.some(o => String(o.side ?? '').toLowerCase() === 'sell');
+  } catch (err) {
+    log(`${Y}⚠️  Erro ao consultar ordens abertas (externalOrders): ${err.message}${X}`);
+    return true;
+  }
+}
+
+/** Reconstrói qty/preço médio de saída pelos trades de venda recentes desde a compra — mesma
+ *  ideia de reconstructOpenLotFifo (orphanPosition.js), só que pro lado da venda. Usado quando
+ *  uma ordem externa (fora do painel) fecha a posição, pra registrar o PnL real em vez de
+ *  estimar pelo preço do candle. */
+async function reconstructExternalExit(adapter, state) {
+  if (typeof adapter.getOwnTrades !== 'function') return null;
+  const trades = await adapter.getOwnTrades(50);
+  const buyTimeMs = new Date(state.buy_time).getTime();
+  const sells = trades.filter(t => t.side === 'sell' && t.time >= buyTimeMs);
+  const qty = sells.reduce((s, t) => s + t.qty, 0);
+  if (!(qty > 0)) return null;
+  const usdtOut = sells.reduce((s, t) => s + t.qty * t.price, 0);
+  return { soldQty: qty, usdtOut, exitPrice: usdtOut / qty };
 }
 
 /** Recalcula alvo/stop vigentes e recria a bracket se algum desviou ≥driftPct% do preço em
@@ -311,7 +370,16 @@ async function tick(rowId, adapter, strategy, log, session) {
         rowId, strategy, log, session, entryMeta, capital, strategyId, symbol,
         result: { filledQty: orphan.qty, quoteQty: orphan.qty * orphan.avgPrice, avgPrice: orphan.avgPrice },
       });
-      if (bought) {
+      if (bought && orphan.hasOpenOrders) {
+        // Já existe ordem de venda aberta na corretora (colocada fora do painel) — não coloca
+        // bracket em cima dela. Só adota a posição (pra não tentar comprar de novo) e marca
+        // externalOrders: o bloco BOUGHT do tick (linha ~530) para de mexer em bracket/venda
+        // e só observa o saldo até a ordem do usuário fechar sozinha.
+        session.rulesState = { ...(session.rulesState ?? {}), externalOrders: true };
+        await saveState(rowId, { rules_state: session.rulesState }, log);
+        log(`${Y}⚠️  Ordem de venda já aberta na corretora pra ${symbol} — bot NÃO vai colocar bracket nem vender, só observando o saldo${X}`);
+        sendWhatsApp(`⚠️ ${BOT_LABEL} [${strategyId}] ${symbol}\nPosição órfã reconciliada, mas já existe ordem de venda aberta na corretora (fora do painel). Bot NÃO vai colocar bracket nem vender por conta própria — só observa o saldo até você fechar manualmente.`);
+      } else if (bought) {
         await placeInitialBracket({
           rowId, adapter, config, cMap, session, log,
           filledQty: bought.filledQty, buyPrice: bought.avgPrice, symbol, strategyId,
@@ -501,6 +569,33 @@ async function tick(rowId, adapter, strategy, log, session) {
   // ── BOUGHT ────────────────────────────────────────────────────────────────
   const rulesState = { ...parseRulesState(state), ...(session.rulesState ?? {}) };
 
+  // Posição com ordem de venda colocada fora do painel (ver reconciliação de órfã acima) —
+  // bot só observa, nunca coloca bracket nem vende a mercado por conta própria. Sai desse
+  // bloco assim que a ordem sumir do book (preenchida ou cancelada pelo usuário).
+  if (rulesState.externalOrders) {
+    const stillOpen = await hasOpenSellOrder(adapter, log);
+    if (stillOpen) return { phase: 'BOUGHT' };
+
+    const lastPriceExt = parseFloat((cMap[config.entry.interval] ?? []).at(-1)?.close ?? buyPrice);
+    const balance = typeof adapter.getBaseBalance === 'function' ? await adapter.getBaseBalance().catch(() => null) : null;
+    if (balance != null && lastPriceExt > 0 && balance * lastPriceExt >= 3) {
+      // Ordem sumiu mas o saldo continua lá — foi cancelada, não preenchida. Segue observando.
+      return { phase: 'BOUGHT' };
+    }
+
+    const exitEst = (await reconstructExternalExit(adapter, state).catch(() => null))
+      ?? { soldQty: parseFloat(state.buy_qty), usdtOut: parseFloat(state.buy_qty) * lastPriceExt, exitPrice: lastPriceExt };
+    log(`${Y}⚠️  Ordem externa em ${symbol} sumiu do book e o saldo zerou — encerrando registro (venda feita fora do bot)${X}`);
+    await recordBracketFill({
+      rowId, strategy, log, state, session,
+      exitResult: { reason: 'EXTERNAL_ORDER', exitDesc: 'Ordem de venda aberta direto na corretora (fora do painel)' },
+      result: exitEst,
+    });
+    session.phase = 'WATCHING';
+    session.rulesState = null;
+    return { phase: 'WATCHING' };
+  }
+
   // Trailing do stop percentual: acompanha o pico de preço desde a compra (usado tanto pra
   // recalcular o stop da bracket quanto pro fallback via candle).
   const storedPeak = rulesState.stopPeakPrice != null ? parseFloat(rulesState.stopPeakPrice) : buyPrice;
@@ -545,8 +640,17 @@ async function tick(rowId, adapter, strategy, log, session) {
     return { phase: 'BOUGHT' };
   }
 
-  // Sem bracket resting (desligada pra esse símbolo, ou falhou ao colocar) — venda a
-  // mercado via evaluateExit no candle em formação (alvo = banda superior, stop = piso %).
+  // Sem bracket resting — desligada pra esse símbolo, ou falhou ao colocar (nesse caso
+  // tenta de novo aqui, a cada tick, até conseguir; ver placeInitialBracket/recordBracketError).
+  // Em qualquer um dos casos, a saída cai no fallback via evaluateExit no candle em formação
+  // (alvo = banda superior, stop = piso %) enquanto não houver bracket na corretora.
+  if (config.exit.restingBracket?.enabled) {
+    await placeInitialBracket({
+      rowId, adapter, config, cMap, session, log, symbol, strategyId, buyPrice,
+      filledQty: parseFloat(state.buy_qty), retry: true,
+    });
+  }
+
   const exitResult = evaluateExit(config, cMap, buyPrice, { peakPrice });
   if (!exitResult.exit) return { phase: 'BOUGHT' };
 
