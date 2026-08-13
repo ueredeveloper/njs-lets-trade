@@ -29,7 +29,7 @@ const { resolveStrategy } = require('./tradeConfigSchema');
 const { STRATEGY_IDS, isBollingerBandsStrategy } = require('./strategyPresets');
 const {
   getRequiredSpecs, evaluateEntrySignal, evaluateExit, computeBracketPrices, computeStopLossFloor,
-  checkEntryLimitExpired, checkMedianTrendFilter, checkReentryCooldown, describeNearMiss,
+  checkEntryLimitExpired, checkReentryCooldown, describeNearMiss,
 } = require('./strategyEngine');
 const { refreshMedianTrendThreshold } = require('../../utils/bollingerMedianTrendConfig');
 const { detectOrphanPosition } = require('../shared/orphanPosition');
@@ -443,13 +443,12 @@ async function tick(rowId, adapter, strategy, log, session) {
         return { phase: bought ? 'BOUGHT' : 'WATCHING' };
       }
 
+      // Mediana da BB só é checada no momento do sinal (evaluateEntrySignal) — enquanto a
+      // ordem limite espera reteste, não recheca: com pullback ligado o preço cair mais é
+      // esperado (é o próprio gatilho), então rechecar tendência aqui cancelaria entradas
+      // que a estratégia queria justamente esperar.
       const expiry = checkEntryLimitExpired(config, cMap, rulesWatch.entryLimit);
-      // Recheca a mediana da BB a cada tick enquanto a ordem limite aguarda reteste — se a
-      // tendência virar pra baixo antes do fill, cancela em vez de deixar preencher na
-      // direção errada ("no momento da compra" além do "no momento do sinal").
-      const trendCheck = checkMedianTrendFilter(config, cMap);
-      const trendReversed = trendCheck.allowed === false && trendCheck.reason === 'MEDIAN_TREND_FALLING';
-      if (expiry.expired || poll.open === false || trendReversed) {
+      if (expiry.expired || poll.open === false) {
         try {
           if (poll.open !== false) await adapter.cancelRestingLimitBuy(rulesWatch.entryLimit);
         } catch (err) {
@@ -460,9 +459,8 @@ async function tick(rowId, adapter, strategy, log, session) {
         if (rulesWatch.lastExitReason) kept.lastExitReason = rulesWatch.lastExitReason;
         session.rulesState = Object.keys(kept).length ? kept : null;
         await saveState(rowId, { rules_state: session.rulesState ?? {} }, log);
-        const cancelReason = trendReversed
-          ? 'mediana da BB em queda'
-          : expiry.expired ? `${expiry.need} candles ${expiry.interval} sem fill` : `status ${poll.status}`;
+        const cancelReason = expiry.expired
+          ? `${expiry.need} candles ${expiry.interval} sem fill` : `status ${poll.status}`;
         log(`${Y}⏳ Limite @ ${fmtPrice(rulesWatch.entryLimit.price)} cancelada (${cancelReason})${X}`);
         return { phase: 'WATCHING' };
       }
