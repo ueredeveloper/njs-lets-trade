@@ -12,7 +12,7 @@ import CandlestickChartLW from './CandlestickChartLW';
 import convertOpenTime from '../utils/convertOpenTime';
 import Tooltip from './Tooltip';
 import { useIsMobile } from '../hooks/useIsMobile';
-import { DEFAULT_OVERLAY_SLOTS, DEFAULT_ACTIVE_INDICATORS, BB_PERIOD_OPTIONS, BB_STDDEV_OPTIONS, DEFAULT_SR_INTERVAL, DEFAULT_PPHL_INTERVAL, DEFAULT_CHOP_INTERVAL, DEFAULT_COMMON_CHART_INTERVALS } from '../utils/uiPreferences';
+import { DEFAULT_OVERLAY_SLOTS, DEFAULT_ACTIVE_INDICATORS, BB_PERIOD_OPTIONS, BB_STDDEV_OPTIONS, DEFAULT_SR_INTERVAL, DEFAULT_PPHL_INTERVAL, DEFAULT_CHOP_INTERVAL, DEFAULT_EMA_PERSIST_CLOUD_INTERVAL, DEFAULT_BARS_SINCE_CROSS_INTERVAL, DEFAULT_TD_SEQUENTIAL_INTERVAL, DEFAULT_COMMON_CHART_INTERVALS } from '../utils/uiPreferences';
 import { CHART_VIEW, INTERVAL_MS, computeZoomWindow, buildFixedDataZoom, buildInsideDataZoom, computeCandleLimitFromTime, isTradePanelChartView, computeManualWheelZoom } from '../utils/chartView';
 import { simulateBbTouchPath, pairBbPathCycles } from '../utils/bollingerTouchPath';
 
@@ -76,6 +76,9 @@ const INDICATOR_GROUPS = [
   { id: 'ma21',     label: 'EMA21',  color: '#fb923c', tipKey: 'chart.tip.sma21' },
   { id: 'ma50',     label: 'EMA50',  color: '#22d3ee', tipKey: 'chart.tip.sma50' },
   { id: 'ma200',    label: 'EMA200', color: '#f59e0b', tipKey: 'chart.tip.sma200' },
+  { id: 'emaPersistCloud', label: 'Perman.', color: '#4ade80', tipKey: 'chart.tip.emaPersistCloud' },
+  { id: 'barsSinceCross', label: 'Bars×',  color: '#38bdf8', tipKey: 'chart.tip.barsSinceCross' },
+  { id: 'tdSequential',   label: 'TD Seq', color: '#fb7185', tipKey: 'chart.tip.tdSequential' },
   { id: 'ichimoku', label: 'Ichi',  color: '#60a5fa', tipKey: 'chart.tip.ichimoku' },
   { id: 'sr',       label: 'S/R',   color: '#facc15', tipKey: 'chart.tip.sr' },
   { id: 'pphl',     label: 'PPHL',  color: '#2dd4bf', tipKey: 'chart.tip.pphl' },
@@ -250,6 +253,14 @@ const CHART_INDICATOR_IDS = [
   ...INDICATOR_GROUPS.map(g => g.id),
   ...RSI_EXTRA_INDICATORS.map(g => g.id),
 ];
+
+/** Indicadores que sobrevivem à troca manual de intervalo do gráfico (botões 1m/5m/15m/...):
+ *  RSI e CHOP abrem em subpainel próprio (embaixo do candle, com seu próprio eixo/dados), então
+ *  continuam válidos no novo intervalo. R50/R80 são só marcações dentro desse subpainel de RSI.
+ *  Todo o resto (EMA9/21/50/200, Ichimoku, S/R, PPHL, SL, Bollinger, Quick EMA, VWAP) é desenhado
+ *  em cima do candle a partir de dados buscados pro intervalo antigo — ficaria "colado" no
+ *  intervalo errado até recarregar, por isso some ao trocar. */
+const INTERVAL_CHANGE_KEEP_INDICATORS = new Set(['rsi', 'chopZone', 'rsi50', 'rsi80']);
 
 function overlayPanelKey(slot) {
   const num = parseInt(slot.id.replace('slot', ''), 10);
@@ -599,6 +610,41 @@ async function fetchChopOverlayPoints(symbol, interval, source, limit) {
   }));
 }
 
+/** Candles + EMA9 + EMA21 num intervalo próprio (independente do gráfico), mesmo padrão do
+ *  S/R/PPHL/CHOP — usado pela nuvem de permanência (PERM) e pelo Bars Since MA Cross (BARS).
+ *  Os pontos resultantes (candles no intervalo escolhido) são depois "encaixados" nos candles
+ *  REALMENTE exibidos no gráfico via snapPointsToChartCandles (CandlestickChartLW.jsx). */
+async function fetchEmaCrossOverlayData(symbol, interval, source, limit) {
+  const srcParam = source === 'gate' ? '&source=gate' : '';
+  const candles = await fetch(
+    `/services/candles/?symbol=${symbol}&limit=${limit}&interval=${interval}${srcParam}`,
+  ).then(r => r.json());
+  if (!Array.isArray(candles) || !candles.length) return { candlesticks: [], ma9: [], ma21: [] };
+  const [ma9, ma21] = await Promise.all([
+    fetch('/services/sma?period=9', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(candles),
+    }).then(r => r.json()),
+    fetch('/services/sma?period=21', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(candles),
+    }).then(r => r.json()),
+  ]);
+  return {
+    candlesticks: candles,
+    ma9: Array.isArray(ma9) ? ma9 : [],
+    ma21: Array.isArray(ma21) ? ma21 : [],
+  };
+}
+
+/** Só os candles, num intervalo próprio — usado pelo TD Sequential (não precisa de EMA, só do
+ *  fechamento de cada candle vs. o de 4 candles atrás). Mesmo padrão de fetchEmaCrossOverlayData. */
+async function fetchIntervalCandlesOnly(symbol, interval, source, limit) {
+  const srcParam = source === 'gate' ? '&source=gate' : '';
+  const candles = await fetch(
+    `/services/candles/?symbol=${symbol}&limit=${limit}&interval=${interval}${srcParam}`,
+  ).then(r => r.json());
+  return Array.isArray(candles) ? candles : [];
+}
+
 function buildBollingerSeries(bbConfig, candlesticks, alignSeries) {
   if (!bbConfig?.enabled || !bbConfig.points?.length) return [];
   const color = BB_COLOR;
@@ -816,7 +862,8 @@ const panelSelect = (color, dims = null) => ({
 
 const COMPACT_LABELS = {
   ma9: '9', ma21: '21', ma50: '50', ma200: '200', ichimoku: 'Ich', sr: 'S/R', pphl: 'PPHL', rsi: 'RSI',
-  rsi80: 'R80', rsi50: 'R50', stopLoss: 'SL', chopZone: 'CHOP',
+  rsi80: 'R80', rsi50: 'R50', stopLoss: 'SL', chopZone: 'CHOP', emaPersistCloud: 'PERM',
+  barsSinceCross: 'BARS', tdSequential: 'TDSEQ',
 };
 
 /** Grid base do painel — cada botão ocupa N×M células. */
@@ -1243,7 +1290,7 @@ function computeMasonryLayout(tileDefs, width, height, gap) {
   const indTiles = tileDefs.filter((t) => t.kind === 'indicator');
 
   // --- Bollinger / S/R interval / PPHL interval / Quick-EMA sections (separate flex blocks) ---
-  const INTERVAL_PICKER_KINDS = ['srInterval', 'pphlInterval', 'chopInterval'];
+  const INTERVAL_PICKER_KINDS = ['srInterval', 'pphlInterval', 'chopInterval', 'emaPersistCloudInterval', 'barsSinceCrossInterval', 'tdSequentialInterval'];
   const blocks = tileDefs
     .filter((t) => t.kind === 'bb' || t.kind === 'vwap' || INTERVAL_PICKER_KINDS.includes(t.kind) || t.kind === 'quickEma')
     .map((t) => ({
@@ -1562,6 +1609,12 @@ function ChartIndicatorPanel({
   setPphlInterval,
   chopInterval,
   setChopInterval,
+  emaPersistCloudInterval,
+  setEmaPersistCloudInterval,
+  barsSinceCrossInterval,
+  setBarsSinceCrossInterval,
+  tdSequentialInterval,
+  setTdSequentialInterval,
   vwap,
   setVwap,
   vwapSlopeHighlightOn,
@@ -1585,6 +1638,9 @@ function ChartIndicatorPanel({
     const showSr = showKey('sr');
     const showPphl = showKey('pphl');
     const showChopInterval = showKey('chopZone');
+    const showEmaPersistCloudInterval = showKey('emaPersistCloud');
+    const showBarsSinceCrossInterval = showKey('barsSinceCross');
+    const showTdSequentialInterval = showKey('tdSequential');
     const showVwap = showKey('vwap');
 
     const list = [];
@@ -1595,7 +1651,7 @@ function ChartIndicatorPanel({
         data: {
           ...ind,
           active: activeIndicators.includes(ind.id),
-          darkText: ind.id === 'ma200' || ind.id === 'rsi80' || ind.id === 'rsi50',
+          darkText: ind.id === 'ma200' || ind.id === 'rsi80' || ind.id === 'rsi50' || ind.id === 'emaPersistCloud' || ind.id === 'tdSequential',
         },
       });
     }
@@ -1607,6 +1663,15 @@ function ChartIndicatorPanel({
     }
     if (showChopInterval) {
       list.push({ key: 'chopInterval', kind: 'chopInterval', data: {} });
+    }
+    if (showEmaPersistCloudInterval) {
+      list.push({ key: 'emaPersistCloudInterval', kind: 'emaPersistCloudInterval', data: {} });
+    }
+    if (showBarsSinceCrossInterval) {
+      list.push({ key: 'barsSinceCrossInterval', kind: 'barsSinceCrossInterval', data: {} });
+    }
+    if (showTdSequentialInterval) {
+      list.push({ key: 'tdSequentialInterval', kind: 'tdSequentialInterval', data: {} });
     }
     if (showBb) {
       list.push({ key: 'bb', kind: 'bb', data: { groups: bbGroups } });
@@ -1800,6 +1865,9 @@ function ChartIndicatorPanel({
               {tile.kind === 'srInterval' && renderIntervalPickerTile(tile.dims, t, 'chart.tip.sr_interval', 'S/R', '#facc15', srInterval, setSrInterval)}
               {tile.kind === 'pphlInterval' && renderIntervalPickerTile(tile.dims, t, 'chart.tip.pphl_interval', 'PPHL', '#2dd4bf', pphlInterval, setPphlInterval)}
               {tile.kind === 'chopInterval' && renderIntervalPickerTile(tile.dims, t, 'chart.tip.chop_interval', 'CHOP', '#f59e0b', chopInterval, setChopInterval)}
+              {tile.kind === 'emaPersistCloudInterval' && renderIntervalPickerTile(tile.dims, t, 'chart.tip.emaPersistCloud_interval', 'PERM', '#4ade80', emaPersistCloudInterval, setEmaPersistCloudInterval)}
+              {tile.kind === 'barsSinceCrossInterval' && renderIntervalPickerTile(tile.dims, t, 'chart.tip.barsSinceCross_interval', 'BARS', '#38bdf8', barsSinceCrossInterval, setBarsSinceCrossInterval)}
+              {tile.kind === 'tdSequentialInterval' && renderIntervalPickerTile(tile.dims, t, 'chart.tip.tdSequential_interval', 'TD SEQ', '#fb7185', tdSequentialInterval, setTdSequentialInterval)}
               {tile.kind === 'vwap' && renderVwapTile(tile.dims, t, vwap, setVwap, vwapSlopeHighlightOn, setVwapSlopeHighlightOn)}
               {tile.kind === 'quickEma' && renderQuickEmaGroupsTile(
                 tile.data, tile.dims, t,
@@ -2073,7 +2141,7 @@ function buildBuyPositionSquares(buyInfo, stopLossConfig, targetConfig, candlest
     if (Number.isFinite(targetPrice)) areas.push([
       {
         xAxis: x1, yAxis: buyPrice, itemStyle: { color: 'rgba(34,197,94,0.18)' },
-        label: { show: true, position: 'insideTop', formatter: pctLabel(targetPrice), color: '#22c55e', fontSize: 11, fontWeight: 'bold' },
+        label: { show: true, position: 'insideTop', formatter: pctLabel(targetPrice) + (targetConfig.simulated ? ' (simulado)' : ''), color: '#22c55e', fontSize: 11, fontWeight: 'bold' },
       },
       { xAxis: x2, yAxis: targetPrice },
     ]);
@@ -2087,7 +2155,7 @@ function buildBuyPositionSquares(buyInfo, stopLossConfig, targetConfig, candlest
       areas.push([
         {
           xAxis: x1, yAxis: buyPrice, itemStyle: { color: 'rgba(239,68,68,0.18)' },
-          label: { show: true, position: 'insideBottom', formatter: pctLabel(stopPrice), color: '#ef4444', fontSize: 11, fontWeight: 'bold' },
+          label: { show: true, position: 'insideBottom', formatter: pctLabel(stopPrice) + (stopLossConfig.simulated ? ' (simulado)' : ''), color: '#ef4444', fontSize: 11, fontWeight: 'bold' },
         },
         { xAxis: x2, yAxis: stopPrice },
       ]);
@@ -2910,7 +2978,9 @@ export default function CandlestickChart() {
   const { selectedChart, setSelectedChart, chartZoom, setChartZoom, chartTradeMarkers, chartViewSource,
     chartCandleWindowReset,
     multitradeChartFocus, tradePurchases, allTrades, chartInterval: savedInterval, setChartInterval,
-    chartPanelButtons, uiPrefs, setMaBandsDefaults, setSrIntervalDefault, setPphlIntervalDefault, setChopIntervalDefault, setVwapDefaults, setVwapSlopeHighlightDefault, setActiveIndicatorsPreference,
+    chartPanelButtons, uiPrefs, setMaBandsDefaults, setSrIntervalDefault, setPphlIntervalDefault, setChopIntervalDefault,
+    setEmaPersistCloudIntervalDefault, setBarsSinceCrossIntervalDefault, setTdSequentialIntervalDefault,
+    setVwapDefaults, setVwapSlopeHighlightDefault, setActiveIndicatorsPreference,
     multitradeFavorites, fiveMTradeFavorites, activeTrades } = useCurrency();
   const { t } = useI18n();
   const isMobile = useIsMobile();
@@ -3053,6 +3123,15 @@ export default function CandlestickChart() {
   const [chopInterval, setChopInterval] = useState(() => uiPrefs.chopIntervalDefault ?? DEFAULT_CHOP_INTERVAL);
   const [chopCache, setChopCache] = useState({});
   const [_chopLoading, setChopLoading] = useState(false);
+  const [emaPersistCloudInterval, setEmaPersistCloudInterval] = useState(() => uiPrefs.emaPersistCloudIntervalDefault ?? DEFAULT_EMA_PERSIST_CLOUD_INTERVAL);
+  const [emaPersistCloudCache, setEmaPersistCloudCache] = useState({});
+  const [_emaPersistCloudLoading, setEmaPersistCloudLoading] = useState(false);
+  const [barsSinceCrossInterval, setBarsSinceCrossInterval] = useState(() => uiPrefs.barsSinceCrossIntervalDefault ?? DEFAULT_BARS_SINCE_CROSS_INTERVAL);
+  const [barsSinceCrossCache, setBarsSinceCrossCache] = useState({});
+  const [_barsSinceCrossLoading, setBarsSinceCrossLoading] = useState(false);
+  const [tdSequentialInterval, setTdSequentialInterval] = useState(() => uiPrefs.tdSequentialIntervalDefault ?? DEFAULT_TD_SEQUENTIAL_INTERVAL);
+  const [tdSequentialCache, setTdSequentialCache] = useState({});
+  const [_tdSequentialLoading, setTdSequentialLoading] = useState(false);
   const [vwap, setVwap] = useState(() => ({ ...uiPrefs.vwapDefaults }));
   // Botão "Queda VWAP" (painel do gráfico, tile da VWAP) — liga/desliga a nuvem/destaque
   // vermelho dos trechos em que a própria VWAP está caindo (vwapSlopeAt, mesmo cálculo do
@@ -3389,6 +3468,27 @@ export default function CandlestickChart() {
     setChopIntervalDefault(chopInterval);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chopInterval]);
+
+  // Persiste o intervalo da nuvem de permanência EMA9×EMA21 — PERM (mesmo padrão do S/R/PPHL/CHOP)
+  useEffect(() => {
+    if (isTradePanelChartView(chartViewSource)) return;
+    setEmaPersistCloudIntervalDefault(emaPersistCloudInterval);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [emaPersistCloudInterval]);
+
+  // Persiste o intervalo do Bars Since MA Cross — BARS (mesmo padrão acima)
+  useEffect(() => {
+    if (isTradePanelChartView(chartViewSource)) return;
+    setBarsSinceCrossIntervalDefault(barsSinceCrossInterval);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [barsSinceCrossInterval]);
+
+  // Persiste o intervalo do TD Sequential — TD SEQ (mesmo padrão acima)
+  useEffect(() => {
+    if (isTradePanelChartView(chartViewSource)) return;
+    setTdSequentialIntervalDefault(tdSequentialInterval);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tdSequentialInterval]);
 
   // Persiste preferências do VWAP (ligado, intervalo, sessão, bandas) — mesmo padrão da Bollinger.
   // A âncora (ancorada/contínua) não é mais escolhida aqui — vem de Configurações (uiPrefs.vwapAnchorDefault).
@@ -3729,6 +3829,115 @@ export default function CandlestickChart() {
     currentInterval, overlayFetchLimit, displayCandleCount, chopShown, chopInterval,
   ]);
 
+  // Busca candles + EMA9/21 pra nuvem de permanência (PERM) — intervalo próprio (independente
+  // do gráfico), mesmo padrão do S/R/PPHL/CHOP.
+  const emaPersistCloudShown = activeIndicators.includes('emaPersistCloud') && chartPanelButtons.emaPersistCloud !== false;
+  useEffect(() => {
+    if (!selectedChart?.symbol || !emaPersistCloudShown) {
+      setEmaPersistCloudLoading(false);
+      return undefined;
+    }
+    const key = emaPersistCloudInterval;
+    let cancelled = false;
+    setEmaPersistCloudLoading(true);
+    (async () => {
+      try {
+        const ovLimit = computeOverlayMaFetchLimit(
+          selectedChart.interval ?? currentInterval,
+          emaPersistCloudInterval,
+          21,
+          Math.max(displayCandleCount, selectedChart.candlesticks?.length ?? 0, DEFAULT_CANDLE_LIMIT),
+          overlayFetchLimit,
+        );
+        const data = await fetchEmaCrossOverlayData(
+          selectedChart.symbol, emaPersistCloudInterval, selectedChart.source, ovLimit,
+        );
+        if (!cancelled) setEmaPersistCloudCache({ [key]: data });
+      } catch (e) {
+        console.warn('[emaPersistCloud]', key, e.message);
+        if (!cancelled) setEmaPersistCloudCache({});
+      } finally {
+        if (!cancelled) setEmaPersistCloudLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [
+    selectedChart?.symbol, selectedChart?.interval, selectedChart?.source, selectedChart?.candlesticks,
+    currentInterval, overlayFetchLimit, displayCandleCount, emaPersistCloudShown, emaPersistCloudInterval,
+  ]);
+
+  // Busca candles + EMA9/21 pro Bars Since MA Cross (BARS) — mesmo padrão acima.
+  const barsSinceCrossShown = activeIndicators.includes('barsSinceCross') && chartPanelButtons.barsSinceCross !== false;
+  useEffect(() => {
+    if (!selectedChart?.symbol || !barsSinceCrossShown) {
+      setBarsSinceCrossLoading(false);
+      return undefined;
+    }
+    const key = barsSinceCrossInterval;
+    let cancelled = false;
+    setBarsSinceCrossLoading(true);
+    (async () => {
+      try {
+        const ovLimit = computeOverlayMaFetchLimit(
+          selectedChart.interval ?? currentInterval,
+          barsSinceCrossInterval,
+          21,
+          Math.max(displayCandleCount, selectedChart.candlesticks?.length ?? 0, DEFAULT_CANDLE_LIMIT),
+          overlayFetchLimit,
+        );
+        const data = await fetchEmaCrossOverlayData(
+          selectedChart.symbol, barsSinceCrossInterval, selectedChart.source, ovLimit,
+        );
+        if (!cancelled) setBarsSinceCrossCache({ [key]: data });
+      } catch (e) {
+        console.warn('[barsSinceCross]', key, e.message);
+        if (!cancelled) setBarsSinceCrossCache({});
+      } finally {
+        if (!cancelled) setBarsSinceCrossLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [
+    selectedChart?.symbol, selectedChart?.interval, selectedChart?.source, selectedChart?.candlesticks,
+    currentInterval, overlayFetchLimit, displayCandleCount, barsSinceCrossShown, barsSinceCrossInterval,
+  ]);
+
+  // Busca só os candles pro TD Sequential (TD SEQ) — não precisa de EMA, mesmo padrão acima.
+  const tdSequentialShown = activeIndicators.includes('tdSequential') && chartPanelButtons.tdSequential !== false;
+  useEffect(() => {
+    if (!selectedChart?.symbol || !tdSequentialShown) {
+      setTdSequentialLoading(false);
+      return undefined;
+    }
+    const key = tdSequentialInterval;
+    let cancelled = false;
+    setTdSequentialLoading(true);
+    (async () => {
+      try {
+        const ovLimit = computeOverlayMaFetchLimit(
+          selectedChart.interval ?? currentInterval,
+          tdSequentialInterval,
+          10,
+          Math.max(displayCandleCount, selectedChart.candlesticks?.length ?? 0, DEFAULT_CANDLE_LIMIT),
+          overlayFetchLimit,
+        );
+        const candlesticks = await fetchIntervalCandlesOnly(
+          selectedChart.symbol, tdSequentialInterval, selectedChart.source, ovLimit,
+        );
+        if (!cancelled) setTdSequentialCache({ [key]: candlesticks });
+      } catch (e) {
+        console.warn('[tdSequential]', key, e.message);
+        if (!cancelled) setTdSequentialCache({});
+      } finally {
+        if (!cancelled) setTdSequentialLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [
+    selectedChart?.symbol, selectedChart?.interval, selectedChart?.source, selectedChart?.candlesticks,
+    currentInterval, overlayFetchLimit, displayCandleCount, tdSequentialShown, tdSequentialInterval,
+  ]);
+
   // Busca a série do VWAP — intervalo próprio (independente do gráfico), mesmo padrão da Bollinger.
   useEffect(() => {
     const vwapEnabled = vwap.enabled && chartPanelButtons.vwap !== false;
@@ -3872,6 +4081,36 @@ export default function CandlestickChart() {
     if (iv === currentInterval) return;
     setCurrentInterval(iv);
     setChartInterval(iv);
+
+    // Overlays desenhados sobre o candle (EMA, Ichimoku, S/R, PPHL, SL, Bollinger, Quick EMA,
+    // VWAP) ficam presos ao intervalo em que foram buscados — trocar o intervalo pelos botões
+    // do gráfico limpa esses overlays. RSI/CHOP continuam: abrem em subpainel próprio, que já
+    // recalcula sozinho pro novo intervalo.
+    const keptIndicators = activeIndicators.filter((id) => INTERVAL_CHANGE_KEEP_INDICATORS.has(id));
+    if (keptIndicators.length !== activeIndicators.length) {
+      setActiveIndicatorsPreference(keptIndicators);
+    }
+    setBbGroups((prev) => {
+      if (!prev.some((g) => g.enabled || g.showPath || g.showMedianTrend)) return prev;
+      const next = prev.map((g) => ({ ...g, enabled: false, showPath: false, showMedianTrend: false }));
+      saveBbGroups(next);
+      return next;
+    });
+    setQuickEmaGroups((prev) => {
+      if (!prev.some((g) => g.periods.length || g.bandPeriod)) return prev;
+      const next = prev.map((g) => ({ ...g, periods: [], bandPeriod: null }));
+      saveQuickEmaGroups(next);
+      return next;
+    });
+    if (vwap.enabled) {
+      setVwap((prev) => ({ ...prev, enabled: false }));
+      setVwapDefaults({ enabled: false });
+    }
+    if (vwapSlopeHighlightOn) {
+      setVwapSlopeHighlightOn(false);
+      setVwapSlopeHighlightDefault({ enabled: false });
+    }
+
     if (!selectedChart?.symbol) return;
     setLoadingInterval(true);
     try {
@@ -4333,24 +4572,48 @@ export default function CandlestickChart() {
     return () => { cancelled = true; };
   }, [selectedChart?.symbol, selectedChart?.source, multitradeFavorites]);
 
+  // Bracket TP/SL REAL travado na corretora (rules_state.exitBracket — ver
+  // parseExitBracket em backend/services/supabaseService.js, gravado por
+  // vwap-bands-bot.js/bollinger-bands-bot.js ao colocar o OCO/price_orders). Tem PRIORIDADE
+  // sobre qualquer recálculo ao vivo (vwapLadderLevels/bollingerTargetLevels) ou % simulado
+  // (resolveChartStopLoss/resolveChartTarget) — sem isso o quadrado do gráfico mostra a banda
+  // recalculada agora, que diverge do preço real da ordem resting até o bot decidir substituí-la
+  // (maybeReplaceBracket só troca se o desvio passar de um limiar).
+  const realExitBracket = useMemo(() => {
+    const sym = selectedChart?.symbol;
+    if (!sym) return null;
+    const entry = multitradeFavorites?.find(
+      e => e.symbol?.toUpperCase() === sym.toUpperCase() && e.phase === 'BOUGHT' && e.exitBracket,
+    );
+    return entry?.exitBracket ?? null;
+  }, [selectedChart?.symbol, multitradeFavorites]);
+
   const chartStopLossConfig = useMemo(() => {
     if (!selectedChart?.symbol) return null;
-    if (vwapLadderLevels?.symbol === selectedChart.symbol && vwapLadderLevels.stopPrice != null) {
-      return { enabled: true, mode: 'price', price: vwapLadderLevels.stopPrice, levelLabel: vwapLadderLevels.touchLevel };
+    if (realExitBracket?.stopPrice != null) {
+      return { enabled: true, mode: 'price', price: realExitBracket.stopPrice, real: true };
     }
-    return resolveChartStopLoss(selectedChart.symbol, multitradeFavorites);
-  }, [selectedChart?.symbol, multitradeFavorites, vwapLadderLevels]);
+    if (vwapLadderLevels?.symbol === selectedChart.symbol && vwapLadderLevels.stopPrice != null) {
+      return { enabled: true, mode: 'price', price: vwapLadderLevels.stopPrice, levelLabel: vwapLadderLevels.touchLevel, simulated: true };
+    }
+    const resolved = resolveChartStopLoss(selectedChart.symbol, multitradeFavorites);
+    return resolved ? { ...resolved, simulated: true } : resolved;
+  }, [selectedChart?.symbol, multitradeFavorites, vwapLadderLevels, realExitBracket]);
 
   const chartTargetConfig = useMemo(() => {
     if (!selectedChart?.symbol) return null;
+    if (realExitBracket?.targetPrice != null) {
+      return { enabled: true, mode: 'price', price: realExitBracket.targetPrice, real: true };
+    }
     if (vwapLadderLevels?.symbol === selectedChart.symbol && vwapLadderLevels.targetPrice != null) {
-      return { enabled: true, mode: 'price', price: vwapLadderLevels.targetPrice, levelLabel: vwapLadderLevels.targetLevel };
+      return { enabled: true, mode: 'price', price: vwapLadderLevels.targetPrice, levelLabel: vwapLadderLevels.targetLevel, simulated: true };
     }
     if (bollingerTargetLevels?.symbol === selectedChart.symbol && bollingerTargetLevels.targetPrice != null) {
-      return { enabled: true, mode: 'price', price: bollingerTargetLevels.targetPrice, levelLabel: 'upper' };
+      return { enabled: true, mode: 'price', price: bollingerTargetLevels.targetPrice, levelLabel: 'upper', simulated: true };
     }
-    return resolveChartTarget(selectedChart.symbol, multitradeFavorites);
-  }, [selectedChart?.symbol, multitradeFavorites, vwapLadderLevels, bollingerTargetLevels]);
+    const resolved = resolveChartTarget(selectedChart.symbol, multitradeFavorites);
+    return resolved ? { ...resolved, simulated: true } : resolved;
+  }, [selectedChart?.symbol, multitradeFavorites, vwapLadderLevels, bollingerTargetLevels, realExitBracket]);
 
   // Aba "Bot": mostra a estratégia REAL do favorito da moeda selecionada (ma-cross ou
   // vwap-bands) — antes disso era sempre tratado como ma-cross, mostrando linhas de
@@ -4430,6 +4693,22 @@ export default function CandlestickChart() {
     if (!chopShown) return null;
     return { interval: chopInterval, points: chopCache[chopInterval] ?? [] };
   }, [chopShown, chopInterval, chopCache]);
+
+  const chartEmaPersistCloudData = useMemo(() => {
+    if (!emaPersistCloudShown) return null;
+    return emaPersistCloudCache[emaPersistCloudInterval] ?? null;
+  }, [emaPersistCloudShown, emaPersistCloudInterval, emaPersistCloudCache]);
+
+  const chartBarsSinceCrossData = useMemo(() => {
+    if (!barsSinceCrossShown) return null;
+    return barsSinceCrossCache[barsSinceCrossInterval] ?? null;
+  }, [barsSinceCrossShown, barsSinceCrossInterval, barsSinceCrossCache]);
+
+  const chartTdSequentialData = useMemo(() => {
+    if (!tdSequentialShown) return null;
+    const candlesticks = tdSequentialCache[tdSequentialInterval];
+    return candlesticks ? { candlesticks } : null;
+  }, [tdSequentialShown, tdSequentialInterval, tdSequentialCache]);
 
   const chartVwapConfig = useMemo(() => {
     const enabled = vwap.enabled && chartPanelButtons.vwap !== false;
@@ -4728,6 +5007,12 @@ export default function CandlestickChart() {
             setPphlInterval={setPphlInterval}
             chopInterval={chopInterval}
             setChopInterval={setChopInterval}
+            emaPersistCloudInterval={emaPersistCloudInterval}
+            setEmaPersistCloudInterval={setEmaPersistCloudInterval}
+            barsSinceCrossInterval={barsSinceCrossInterval}
+            setBarsSinceCrossInterval={setBarsSinceCrossInterval}
+            tdSequentialInterval={tdSequentialInterval}
+            setTdSequentialInterval={setTdSequentialInterval}
             vwap={vwap}
             setVwap={setVwap}
             vwapSlopeHighlightOn={vwapSlopeHighlightOn}
@@ -4764,6 +5049,9 @@ export default function CandlestickChart() {
               pphlConfig={chartPphlConfig}
               rsi={selectedChart.rsi}
               chopConfig={chartChopConfig}
+              emaPersistCloudData={chartEmaPersistCloudData}
+              barsSinceCrossData={chartBarsSinceCrossData}
+              tdSequentialData={chartTdSequentialData}
               stopLossConfig={chartStopLossConfig}
               targetConfig={chartTargetConfig}
               buyInfo={chartBuyInfo}
@@ -4805,6 +5093,12 @@ export default function CandlestickChart() {
             setPphlInterval={setPphlInterval}
             chopInterval={chopInterval}
             setChopInterval={setChopInterval}
+            emaPersistCloudInterval={emaPersistCloudInterval}
+            setEmaPersistCloudInterval={setEmaPersistCloudInterval}
+            barsSinceCrossInterval={barsSinceCrossInterval}
+            setBarsSinceCrossInterval={setBarsSinceCrossInterval}
+            tdSequentialInterval={tdSequentialInterval}
+            setTdSequentialInterval={setTdSequentialInterval}
             vwap={vwap}
             setVwap={setVwap}
             vwapSlopeHighlightOn={vwapSlopeHighlightOn}

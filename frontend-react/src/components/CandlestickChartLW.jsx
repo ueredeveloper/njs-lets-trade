@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, forwardRef, useImperativeHandle } from 'react';
-import { createChart, CandlestickSeries, LineSeries, ColorType, createSeriesMarkers } from 'lightweight-charts';
+import { createChart, CandlestickSeries, LineSeries, HistogramSeries, ColorType, createSeriesMarkers } from 'lightweight-charts';
 import { computeVwapSlopeFlags } from '../utils/vwapSlopeHighlight';
 import { computeStopLossFloor } from '../utils/trailingStopLoss';
 import { RectanglePrimitive } from '../utils/lwRectanglePrimitive';
@@ -8,6 +8,10 @@ import { tickMarkFormatterBrt, crosshairTimeFormatterBrt } from '../utils/lwBrtT
 import { INTERVAL_MS } from '../utils/chartView';
 import { simulateBbTouchPath, pairBbPathCycles } from '../utils/bollingerTouchPath';
 import { computeMedianTrendSignals } from '../utils/bollingerMedianTrend';
+import { buildEmaCrossPersistenceClouds } from '../utils/emaCrossPersistenceCloud';
+import { computeBarsSinceMaCross } from '../utils/barsSinceMaCross';
+import { computeTdSequentialSetup } from '../utils/tdSequentialSetup';
+import { snapPointsToChartCandles } from '../utils/snapToChartCandles';
 
 const C_UP = '#26a69a';
 const C_DOWN = '#ef5350';
@@ -191,7 +195,8 @@ function buildPositionRects(buyInfo, stopLossConfig, targetConfig, candlesticks)
     if (Number.isFinite(targetPrice)) {
       rects.push({
         time1, time2, price1: buyPrice, price2: targetPrice,
-        fillColor: 'rgba(34,197,94,0.14)', labelColor: '#22c55e', label: formatPctFromBase(buyPrice, targetPrice),
+        fillColor: 'rgba(34,197,94,0.14)', labelColor: '#22c55e',
+        label: formatPctFromBase(buyPrice, targetPrice) + (targetConfig.simulated ? ' (simulado)' : ''),
         labelPos: 'top',
       });
     }
@@ -203,7 +208,8 @@ function buildPositionRects(buyInfo, stopLossConfig, targetConfig, candlesticks)
     if (Number.isFinite(stopPrice)) {
       rects.push({
         time1, time2, price1: buyPrice, price2: stopPrice,
-        fillColor: 'rgba(239,68,68,0.14)', labelColor: '#ef4444', label: formatPctFromBase(buyPrice, stopPrice),
+        fillColor: 'rgba(239,68,68,0.14)', labelColor: '#ef4444',
+        label: formatPctFromBase(buyPrice, stopPrice) + (stopLossConfig.simulated ? ' (simulado)' : ''),
         labelPos: 'bottom',
       });
     }
@@ -445,6 +451,25 @@ function buildPphlMarkers(pphlConfig) {
     .filter(Boolean);
 }
 
+/** Marcadores numéricos do TD Sequential Setup (ver computeTdSequentialSetup) — número 1-9
+ *  abaixo do candle (Buy Setup, possível fundo) ou acima (Sell Setup, possível topo). A
+ *  contagem 9 (setup completo) ganha marcador maior e cor sólida; as demais ficam translúcidas
+ *  pra não competir visualmente com o preço. */
+function buildTdSequentialMarkers(chartCandlesticks, tdSeqCandlesticks) {
+  const seq = computeTdSequentialSetup(tdSeqCandlesticks).filter(Boolean);
+  const snapped = snapPointsToChartCandles(chartCandlesticks, seq);
+  return snapped.map((s) => ({
+    time: s.time,
+    position: s.state === 'buy' ? 'belowBar' : 'aboveBar',
+    shape: 'circle',
+    size: s.count === 9 ? 0.7 : 0.25,
+    color: s.state === 'buy'
+      ? (s.count === 9 ? '#22c55e' : 'rgba(74,222,128,0.55)')
+      : (s.count === 9 ? '#ef4444' : 'rgba(251,113,133,0.55)'),
+    text: String(s.count),
+  }));
+}
+
 /** Marcadores de trade (Multi-Trade/backtest/Estatísticas): compra (seta verde), sinal
  *  (triângulo pequeno) e venda (seta verde=lucro/vermelha=prejuízo com % no texto, mesma
  *  paleta do quadrado — ver buildHistoricalPositionRects). A posição
@@ -515,6 +540,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
   symbol, interval, candlesticks, colors, rightPad = 0,
   activeIndicators = [], ma9, ma21, ma50, ma200, overlayConfigs, vwapConfig, vwapSlopeHighlight,
   bollingerConfigs = [], srConfig, pphlConfig, rsi, chopConfig,
+  emaPersistCloudData, barsSinceCrossData, tdSequentialData,
   stopLossConfig, targetConfig, buyInfo, multitradeMarkers, zoomPeriod, focusLastN,
   onNeedOlderCandles, loadingMoreCandles,
 }, ref) {
@@ -666,9 +692,26 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
     // (ouvidos no window, não só no container, pra pegar o "soltar" mesmo se o ponteiro sair da
     // área do gráfico antes de soltar) = fim do gesto. Esse é o único sinal confiável de "o
     // usuário está de fato arrastando" — ver comentário do isUserPanningRef acima.
+    // No touch, a lib tem kinetic/momentum scroll (default) — o gráfico continua "deslizando"
+    // por inércia depois que o dedo já soltou a tela, então o range change que finalmente cruza
+    // a borda (from<=5, ver handleVisibleLogicalRangeChange) só chega DEPOIS do touchend. Por
+    // isso handlePanEnd não desliga a flag na hora: espera uma folga (bastante acima da duração
+    // típica do momentum) pra ainda contar esses range changes tardios como arrasto real. No
+    // mouse (notebook) não há inércia — o range final já chega antes do pointerup, então a folga
+    // não muda nada ali, só cobre o caso do touch.
     const el = containerRef.current;
-    const handlePanStart = () => { isUserPanningRef.current = true; };
-    const handlePanEnd = () => { isUserPanningRef.current = false; };
+    let panEndTimeoutId = null;
+    const handlePanStart = () => {
+      if (panEndTimeoutId) { clearTimeout(panEndTimeoutId); panEndTimeoutId = null; }
+      isUserPanningRef.current = true;
+    };
+    const handlePanEnd = () => {
+      if (panEndTimeoutId) clearTimeout(panEndTimeoutId);
+      panEndTimeoutId = setTimeout(() => {
+        isUserPanningRef.current = false;
+        panEndTimeoutId = null;
+      }, 600);
+    };
     el?.addEventListener('pointerdown', handlePanStart);
     el?.addEventListener('touchstart', handlePanStart, { passive: true });
     window.addEventListener('pointerup', handlePanEnd);
@@ -676,6 +719,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
     window.addEventListener('touchend', handlePanEnd);
     window.addEventListener('touchcancel', handlePanEnd);
     return () => {
+      if (panEndTimeoutId) clearTimeout(panEndTimeoutId);
       chart.timeScale().unsubscribeVisibleLogicalRangeChange(handleVisibleLogicalRangeChange);
       el?.removeEventListener('pointerdown', handlePanStart);
       el?.removeEventListener('touchstart', handlePanStart);
@@ -871,6 +915,21 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
         .filter((cfg) => cfg.showPath)
         .flatMap((cfg) => buildBbPathLineAndMarkers(cfg, candlesticks).clouds);
       bandFillPrimitiveRef.current.replacePrefixed('bbPath-', bbPathClouds);
+
+      // Nuvem de permanência EMA9×EMA21 — botão "Perman." do painel (ver
+      // buildEmaCrossPersistenceClouds). Intervalo PRÓPRIO (independente do gráfico, ver
+      // fetchEmaCrossOverlayData em CandlestickChart.jsx) — os candles/EMAs vêm do intervalo
+      // escolhido no painel (ex.: PERM em 1h sobre um gráfico em 15m), depois "encaixados" nos
+      // candles REALMENTE exibidos via snapPointsToChartCandles.
+      let emaPersistClouds = [];
+      if (activeIndicators.includes('emaPersistCloud')
+        && emaPersistCloudData?.candlesticks?.length && emaPersistCloudData?.ma9?.length && emaPersistCloudData?.ma21?.length) {
+        emaPersistClouds = buildEmaCrossPersistenceClouds(emaPersistCloudData.candlesticks, emaPersistCloudData.ma9, emaPersistCloudData.ma21).segments
+          .map((seg) => ({ ...seg, points: snapPointsToChartCandles(candlesticks, seg.points) }))
+          .map((seg) => ({ ...seg, points: seg.points.filter((p) => p.time >= minTime && p.time <= maxTime) }))
+          .filter((seg) => seg.points.length >= 2);
+      }
+      bandFillPrimitiveRef.current.replacePrefixed('emaPersist-', emaPersistClouds);
     }
 
     const current = indicatorSeriesRef.current;
@@ -891,7 +950,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       }
       current[key].setData(clampToVisible(def.data));
     }
-  }, [activeIndicators, ma9, ma21, ma50, ma200, overlayConfigs, bollingerConfigs, vwapConfig, vwapSlopeHighlight, candlesticks]);
+  }, [activeIndicators, ma9, ma21, ma50, ma200, overlayConfigs, bollingerConfigs, vwapConfig, vwapSlopeHighlight, candlesticks, emaPersistCloudData]);
 
   // Linhas de preço: S/R. Sempre recriadas do zero (poucos níveis por vez, custo desprezível)
   // em vez de diff — mais simples que casar id estável por nível.
@@ -1006,9 +1065,12 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       .filter((cfg) => cfg.showPath)
       .flatMap((cfg) => buildBbPathLineAndMarkers(cfg, candlesticks).markers);
     markers.push(...bbPathMarkers);
+    if (activeIndicators.includes('tdSequential') && tdSequentialData?.candlesticks?.length) {
+      markers.push(...buildTdSequentialMarkers(candlesticks, tdSequentialData.candlesticks));
+    }
     markers.sort((a, b) => a.time - b.time);
     markersPluginRef.current.setMarkers(markers);
-  }, [pphlConfig, multitradeMarkers, buyInfo, candlesticks, bollingerConfigs]);
+  }, [pphlConfig, multitradeMarkers, buyInfo, candlesticks, bollingerConfigs, activeIndicators, tdSequentialData]);
 
   // Sub-painéis RSI/CHOP (panes nativos do LW v5) — reconstrói do zero só quando o CONJUNTO
   // ativo muda (ex.: liga CHOP com RSI já ligado), não a cada novo valor.
@@ -1017,7 +1079,8 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
     if (!chart) return;
     const showRsi = activeIndicators.includes('rsi');
     const showChop = activeIndicators.includes('chopZone');
-    const ids = [...(showRsi ? ['rsi'] : []), ...(showChop ? ['chopZone'] : [])];
+    const showBarsCross = activeIndicators.includes('barsSinceCross');
+    const ids = [...(showRsi ? ['rsi'] : []), ...(showChop ? ['chopZone'] : []), ...(showBarsCross ? ['barsSinceCross'] : [])];
     const key = ids.join(',');
     const state = subpanelStateRef.current;
 
@@ -1037,6 +1100,17 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
         // que cada série vá pra sua própria pane; adivinhar o índice fazia RSI e CHOP caírem
         // na mesma pane, compartilhando escala.
         const pane = chart.addPane();
+        if (id === 'barsSinceCross') {
+          // Histograma (não linha): "Bars Since MA Cross" oscila em torno de zero e cada barra
+          // já traz sua própria cor (verde/vermelho) — HistogramSeries aceita `color` por ponto.
+          const s = chart.addSeries(HistogramSeries, {
+            priceLineVisible: false, lastValueVisible: false,
+          }, pane.paneIndex());
+          s.createPriceLine({ price: 0, color: '#64748b', lineWidth: 1, lineStyle: 2, axisLabelVisible: false, title: '' });
+          newSeries[id] = s;
+          newPanes.push(pane);
+          return;
+        }
         const s = chart.addSeries(LineSeries, {
           color: id === 'rsi' ? '#a78bfa' : '#f59e0b', lineWidth: 1.5,
           priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
@@ -1065,7 +1139,19 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
 
     if (state.series.rsi) state.series.rsi.setData(alignIndicatorToCandles(candlesticks, rsi));
     if (state.series.chopZone) state.series.chopZone.setData(vwapFieldSeries(chopConfig?.points ?? [], 'value'));
-  }, [activeIndicators, rsi, chopConfig, candlesticks]);
+    if (state.series.barsSinceCross) {
+      // Intervalo PRÓPRIO (ex.: BARS em 1h sobre gráfico em 15m) — mesmo padrão da nuvem PERM:
+      // calcula sobre os candles do intervalo escolhido, depois encaixa nos candles do gráfico.
+      let data = [];
+      if (barsSinceCrossData?.candlesticks?.length && barsSinceCrossData?.ma9?.length && barsSinceCrossData?.ma21?.length) {
+        const raw = computeBarsSinceMaCross(barsSinceCrossData.candlesticks, barsSinceCrossData.ma9, barsSinceCrossData.ma21);
+        data = snapPointsToChartCandles(candlesticks, raw).map((p) => ({
+          time: p.time, value: p.value, color: p.value >= 0 ? 'rgba(38,166,154,0.9)' : 'rgba(239,83,80,0.9)',
+        }));
+      }
+      state.series.barsSinceCross.setData(data);
+    }
+  }, [activeIndicators, rsi, chopConfig, candlesticks, barsSinceCrossData]);
 
   // Legenda: cor + nome de cada linha sobreposta ao preço (EMA fixa/rápida, VWAP, Bollinger) —
   // com várias Bollinger Bands e EMAs simultâneas na mesma paleta de cores, sem isso não dava

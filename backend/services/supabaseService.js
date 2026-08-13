@@ -585,6 +585,22 @@ function parseActiveSetup(rulesState) {
   return rs?.activeSetup ?? null;
 }
 
+/** Bracket TP/SL REAL colocado na corretora (ver placeExitBracket em buildAdapter.js —
+ *  OCO atômico na Binance, duas price_orders na Gate.io), gravado em rules_state.exitBracket
+ *  por vwap-bands-bot.js/bollinger-bands-bot.js. Exposto pro frontend desenhar os quadrados
+ *  verde/vermelho do gráfico com o preço REAL da ordem resting, em vez de só recalcular a
+ *  banda/degrau ao vivo (que diverge do preço travado na corretora até o bot substituir a
+ *  ordem — ver maybeReplaceBracket). */
+function parseExitBracket(rulesState) {
+  let rs = rulesState;
+  if (typeof rs === 'string') {
+    try { rs = JSON.parse(rs); } catch { return null; }
+  }
+  const eb = rs?.exitBracket;
+  if (!eb || !Number.isFinite(Number(eb.targetPrice)) || !Number.isFinite(Number(eb.stopPrice))) return null;
+  return { targetPrice: Number(eb.targetPrice), stopPrice: Number(eb.stopPrice) };
+}
+
 async function enrichMultitradeEntriesWithState(entries) {
   if (!entries?.length) return entries ?? [];
   const symbols = [...new Set(entries.map(e => e.symbol))];
@@ -611,6 +627,7 @@ async function enrichMultitradeEntriesWithState(entries) {
       entrySignalTime:  st?.entry_signal_time ?? null,
       entrySignalPrice: st?.entry_signal_price != null ? Number(st.entry_signal_price) : null,
       activeSetup: parseActiveSetup(st?.rules_state),
+      exitBracket: parseExitBracket(st?.rules_state),
     };
   });
 }

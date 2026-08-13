@@ -36,6 +36,9 @@ import {
   normalizeSrInterval,
   normalizePphlInterval,
   normalizeChopInterval,
+  normalizeEmaPersistCloudInterval,
+  normalizeBarsSinceCrossInterval,
+  normalizeTdSequentialInterval,
   normalizeVwapDefaults,
   normalizeVwapAnchor,
   normalizeVwapSlopeHighlight,
@@ -692,6 +695,30 @@ export function CurrencyProvider({ children }) {
     });
   }, []);
 
+  const setEmaPersistCloudIntervalDefault = useCallback((interval) => {
+    setUiPrefsState((prev) => {
+      const next = { ...prev, emaPersistCloudIntervalDefault: normalizeEmaPersistCloudInterval(interval) };
+      saveUiPreferences(next);
+      return next;
+    });
+  }, []);
+
+  const setBarsSinceCrossIntervalDefault = useCallback((interval) => {
+    setUiPrefsState((prev) => {
+      const next = { ...prev, barsSinceCrossIntervalDefault: normalizeBarsSinceCrossInterval(interval) };
+      saveUiPreferences(next);
+      return next;
+    });
+  }, []);
+
+  const setTdSequentialIntervalDefault = useCallback((interval) => {
+    setUiPrefsState((prev) => {
+      const next = { ...prev, tdSequentialIntervalDefault: normalizeTdSequentialInterval(interval) };
+      saveUiPreferences(next);
+      return next;
+    });
+  }, []);
+
   const setVwapDefaults = useCallback((patch) => {
     setUiPrefsState((prev) => {
       const next = {
@@ -1038,6 +1065,9 @@ export function CurrencyProvider({ children }) {
         setSrIntervalDefault,
         setPphlIntervalDefault,
         setChopIntervalDefault,
+        setEmaPersistCloudIntervalDefault,
+        setBarsSinceCrossIntervalDefault,
+        setTdSequentialIntervalDefault,
         setVwapDefaults,
         setVwapSlopeHighlightDefault,
         setVwapAnchorDefault,

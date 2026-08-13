@@ -49,7 +49,8 @@ const VALID_OVERLAY_PERIODS = ['9', '21', '50', '200'];
 
 /** IDs válidos de indicadores do gráfico. */
 export const VALID_ACTIVE_INDICATORS = [
-  'ma9', 'ma21', 'ma50', 'ma200', 'ichimoku', 'sr', 'pphl', 'rsi', 'rsi50', 'rsi80', 'stopLoss', 'chopZone',
+  'ma9', 'ma21', 'ma50', 'ma200', 'emaPersistCloud', 'barsSinceCross', 'tdSequential',
+  'ichimoku', 'sr', 'pphl', 'rsi', 'rsi50', 'rsi80', 'stopLoss', 'chopZone',
 ];
 
 /** Cores padrão por período (convenção TradingView / melhores práticas). */
@@ -220,6 +221,29 @@ export function normalizeChopInterval(raw) {
   return CHART_INTERVAL_OPTIONS.includes(raw) ? raw : DEFAULT_CHOP_INTERVAL;
 }
 
+/** Intervalo de candles usado pela nuvem de permanência EMA9×EMA21 (PERM) — independente do
+ *  intervalo do gráfico, mesmo padrão do S/R/PPHL/CHOP (ex.: gráfico em 15m, nuvem calculada
+ *  sobre candles de 1h). */
+export const DEFAULT_EMA_PERSIST_CLOUD_INTERVAL = '1h';
+
+export function normalizeEmaPersistCloudInterval(raw) {
+  return CHART_INTERVAL_OPTIONS.includes(raw) ? raw : DEFAULT_EMA_PERSIST_CLOUD_INTERVAL;
+}
+
+/** Intervalo de candles usado pelo "Bars Since MA Cross" (BARS) — mesmo padrão acima. */
+export const DEFAULT_BARS_SINCE_CROSS_INTERVAL = '1h';
+
+export function normalizeBarsSinceCrossInterval(raw) {
+  return CHART_INTERVAL_OPTIONS.includes(raw) ? raw : DEFAULT_BARS_SINCE_CROSS_INTERVAL;
+}
+
+/** Intervalo de candles usado pelo TD Sequential (TD SEQ) — mesmo padrão acima. */
+export const DEFAULT_TD_SEQUENTIAL_INTERVAL = '1h';
+
+export function normalizeTdSequentialInterval(raw) {
+  return CHART_INTERVAL_OPTIONS.includes(raw) ? raw : DEFAULT_TD_SEQUENTIAL_INTERVAL;
+}
+
 /** Motor de renderização do gráfico principal. 'lw' = TradingView Lightweight Charts (padrão,
  *  só candles + EMA/VWAP); 'echarts' = motor clássico com todos os overlays/subpainéis. Quando
  *  o gráfico usa um recurso que só existe no ECharts (Ichimoku, S/R, PPHL, RSI, CHOP, Bollinger,
@@ -281,6 +305,9 @@ export const DEFAULT_UI_PREFS = {
   srIntervalDefault: DEFAULT_SR_INTERVAL,
   pphlIntervalDefault: DEFAULT_PPHL_INTERVAL,
   chopIntervalDefault: DEFAULT_CHOP_INTERVAL,
+  emaPersistCloudIntervalDefault: DEFAULT_EMA_PERSIST_CLOUD_INTERVAL,
+  barsSinceCrossIntervalDefault: DEFAULT_BARS_SINCE_CROSS_INTERVAL,
+  tdSequentialIntervalDefault: DEFAULT_TD_SEQUENTIAL_INTERVAL,
   vwapDefaults: normalizeVwapDefaults(DEFAULT_VWAP),
   vwapAnchorDefault: normalizeVwapAnchor(DEFAULT_VWAP_ANCHOR),
   vwapSlopeHighlightDefault: normalizeVwapSlopeHighlight(DEFAULT_VWAP_SLOPE_HIGHLIGHT),
@@ -300,6 +327,10 @@ function cloneDefaults() {
     maBandsDefaults: normalizeMaBandsDefaults(DEFAULT_MA_BANDS),
     srIntervalDefault: DEFAULT_SR_INTERVAL,
     pphlIntervalDefault: DEFAULT_PPHL_INTERVAL,
+    chopIntervalDefault: DEFAULT_CHOP_INTERVAL,
+    emaPersistCloudIntervalDefault: DEFAULT_EMA_PERSIST_CLOUD_INTERVAL,
+    barsSinceCrossIntervalDefault: DEFAULT_BARS_SINCE_CROSS_INTERVAL,
+    tdSequentialIntervalDefault: DEFAULT_TD_SEQUENTIAL_INTERVAL,
     vwapDefaults: normalizeVwapDefaults(DEFAULT_VWAP),
     vwapAnchorDefault: normalizeVwapAnchor(DEFAULT_VWAP_ANCHOR),
     vwapSlopeHighlightDefault: normalizeVwapSlopeHighlight(DEFAULT_VWAP_SLOPE_HIGHLIGHT),
@@ -346,6 +377,15 @@ export function loadUiPreferences() {
     }
     if (parsed.chopIntervalDefault !== undefined) {
       result.chopIntervalDefault = normalizeChopInterval(parsed.chopIntervalDefault);
+    }
+    if (parsed.emaPersistCloudIntervalDefault !== undefined) {
+      result.emaPersistCloudIntervalDefault = normalizeEmaPersistCloudInterval(parsed.emaPersistCloudIntervalDefault);
+    }
+    if (parsed.barsSinceCrossIntervalDefault !== undefined) {
+      result.barsSinceCrossIntervalDefault = normalizeBarsSinceCrossInterval(parsed.barsSinceCrossIntervalDefault);
+    }
+    if (parsed.tdSequentialIntervalDefault !== undefined) {
+      result.tdSequentialIntervalDefault = normalizeTdSequentialInterval(parsed.tdSequentialIntervalDefault);
     }
     if (parsed.vwapDefaults) {
       result.vwapDefaults = normalizeVwapDefaults(parsed.vwapDefaults);
