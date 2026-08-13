@@ -1,6 +1,8 @@
+import { useEffect, useState } from 'react';
 import {
   BOLLINGER_BANDS_ALL_INTERVALS, BOLLINGER_BANDS_PERIODS, BOLLINGER_BANDS_STD_DEVS, BOLLINGER_BANDS_EMA_PERIODS,
 } from '../constants/bollingerBandsConfigSchema';
+import { fetchBinancePercentPriceFilter } from '../services/api';
 
 const ENTRY_COLOR = '#26a69a';
 const EXIT_COLOR  = '#ef5350';
@@ -28,7 +30,7 @@ function Select({ value, onChange, options, labelFor }) {
  * toca a banda inferior, vende quando toca a banda superior, no intervalo escolhido. Sem
  * escada, sem filtros extra (ver backend/bot/bollinger-bands/strategyEngine.js).
  */
-export default function BollingerBandsStrategyForm({ form, patch, symbol }) {
+export default function BollingerBandsStrategyForm({ form, patch, symbol, exchange }) {
   const patchEntry     = (field, val) => patch(`entry.${field}`, val);
   const patchPullback  = (field, val) => patch(`entry.pullback.${field}`, val);
   const patchEmaFilter = (field, val) => patch(`entry.emaFilter.${field}`, val);
@@ -37,6 +39,22 @@ export default function BollingerBandsStrategyForm({ form, patch, symbol }) {
   const patchStopLoss  = (field, val) => patch(`stopLoss.${field}`, val);
   const patchStopLossEma = (field, val) => patch(`stopLoss.ema.${field}`, val);
   const patchStopLossBand = (field, val) => patch(`stopLoss.band.${field}`, val);
+
+  // Limite que a Binance aceita pro pullback (quantos % uma ordem LIMIT de compra pode ficar
+  // abaixo do preço atual antes de ser rejeitada por PERCENT_PRICE_BY_SIDE) — só faz sentido
+  // pra corretora Binance, e só busca quando o pullback está ligado (evita bater na API à toa).
+  const [binanceMaxBelowPct, setBinanceMaxBelowPct] = useState(null);
+  const [binanceLimitError, setBinanceLimitError] = useState(null);
+  useEffect(() => {
+    setBinanceMaxBelowPct(null);
+    setBinanceLimitError(null);
+    if (exchange !== 'binance' || !symbol || form.entry.pullback?.enabled !== true) return;
+    let cancelled = false;
+    fetchBinancePercentPriceFilter(symbol)
+      .then(data => { if (!cancelled) setBinanceMaxBelowPct(data.maxBelowPct); })
+      .catch(err => { if (!cancelled) setBinanceLimitError(err.message); });
+    return () => { cancelled = true; };
+  }, [exchange, symbol, form.entry.pullback?.enabled]);
 
   return (
     <div className="space-y-4">
@@ -70,11 +88,31 @@ export default function BollingerBandsStrategyForm({ form, patch, symbol }) {
           </label>
         </div>
         {form.entry.pullback?.enabled === true ? (
-          <div className="flex flex-wrap gap-2 items-center text-xs text-p5">
-            <span className="text-p5/50">Compra</span>
-            <NumInput value={form.entry.pullback?.belowPct} onChange={v => patchPullback('belowPct', v)} min={0.1} max={20} step={0.5} />
-            <span className="text-p5/40">% abaixo da banda inferior</span>
-          </div>
+          <>
+            <div className="flex flex-wrap gap-2 items-center text-xs text-p5">
+              <span className="text-p5/50">Compra</span>
+              <NumInput value={form.entry.pullback?.belowPct} onChange={v => patchPullback('belowPct', v)} min={0.1} max={20} step={0.5} />
+              <span className="text-p5/40">% abaixo da banda inferior</span>
+            </div>
+            {exchange === 'binance' && (
+              binanceLimitError ? (
+                <p className="text-[10px] text-red-400/80 leading-relaxed">
+                  Não foi possível checar o limite da Binance para {symbol || 'este símbolo'}: {binanceLimitError}
+                </p>
+              ) : binanceMaxBelowPct != null ? (
+                <p className="text-[10px] text-p5/50 leading-relaxed">
+                  A Binance aceita ordem LIMIT de compra até <strong>{binanceMaxBelowPct}%</strong> abaixo
+                  do preço atual de {symbol} agora (filtro PERCENT_PRICE_BY_SIDE — varia por símbolo e
+                  muda com a volatilidade). Isso é medido a partir do preço de mercado, não da banda —
+                  como a banda inferior já fica abaixo do preço, a distância real até o preço de mercado
+                  no momento da compra é a soma dessa diferença com os {form.entry.pullback?.belowPct ?? 0}%
+                  de pullback configurados acima.
+                </p>
+              ) : (
+                <p className="text-[10px] text-p5/40 leading-relaxed">Checando limite da Binance para {symbol || 'este símbolo'}…</p>
+              )
+            )}
+          </>
         ) : (
           <p className="text-[10px] text-p5/50 leading-relaxed">
             Desligado (padrão) — compra assim que a banda inferior é tocada, sem exigir um

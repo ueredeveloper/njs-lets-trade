@@ -133,7 +133,7 @@ export default function BollingerBandsFavoriteModal({
           </div>
         </div>
 
-        <BollingerBandsStrategyForm form={form} patch={patch} symbol={symbol.trim().toUpperCase()} />
+        <BollingerBandsStrategyForm form={form} patch={patch} symbol={symbol.trim().toUpperCase()} exchange={exchange} />
 
         {error && <p className="text-[11px] text-red-400">{error}</p>}
 

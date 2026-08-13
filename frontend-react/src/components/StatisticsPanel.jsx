@@ -92,6 +92,28 @@ function saveMedianTrendFilterPref(value) {
   try { localStorage.setItem(BB_MEDIAN_TREND_STORAGE_KEY, value ? '1' : '0'); } catch {}
 }
 
+const BB_PULLBACK_STORAGE_KEY = 'lets_trade_stats_bb_pullback_pct';
+const BB_PULLBACK_DEFAULT = -5;
+
+/** Preferência do campo "Entrada" (pullback %) da aba Bollinger Bands — lembrada entre buscas.
+ *  Guardado como número negativo (ex.: -5 = compra 5% abaixo da banda inferior), igual ao
+ *  `entry.pullback.belowPct` do favorito de bot, só que exibido com o sinal pra ficar claro que
+ *  é "abaixo" do sinal. 0 = desligado (entra assim que a banda é tocada). */
+function loadPullbackPct() {
+  try {
+    const v = localStorage.getItem(BB_PULLBACK_STORAGE_KEY);
+    if (v !== null) {
+      const n = Number(v);
+      if (Number.isFinite(n)) return n;
+    }
+  } catch {}
+  return BB_PULLBACK_DEFAULT;
+}
+
+function savePullbackPct(value) {
+  try { localStorage.setItem(BB_PULLBACK_STORAGE_KEY, String(value)); } catch {}
+}
+
 const VWAP_STATS_PREFS_KEY = 'lets_trade_stats_vwap_bands_prefs';
 
 /** Preferências dos seletores da aba VWAP Bands (sessão, intervalo da VWAP, filtro EMA) —
@@ -751,6 +773,7 @@ function BollingerBandsStats() {
   const [stdDev, setStdDev]     = useState(uiPrefs.statsDefaults.bollingerBands.stdDev);
   const [useMcInterval, setUseMcInterval] = useState(() => loadUseMcInterval('bollinger_bands', false));
   const [medianTrendFilter, setMedianTrendFilter] = useState(() => loadMedianTrendFilterPref());
+  const [pullbackPct, setPullbackPct] = useState(() => loadPullbackPct());
   const [loading, setLoading]   = useState(false);
   const [result, setResult]     = useState(null);
   const [error, setError]       = useState(null);
@@ -759,13 +782,14 @@ function BollingerBandsStats() {
   const inp = 'bg-p2 border border-p3/40 text-p5 text-[10px] sm:text-xs rounded px-1 sm:px-2 py-1 focus:outline-none focus:border-p4 w-full';
   const inpNum = `${inp} [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none`;
 
-  async function handleSearch(overrideSymbol, updateChart = false, overrideInterval, overrideSource, overrideUseMc, overrideMedianTrendFilter) {
+  async function handleSearch(overrideSymbol, updateChart = false, overrideInterval, overrideSource, overrideUseMc, overrideMedianTrendFilter, overridePullbackPct) {
     const sym = (overrideSymbol ?? symbol).trim().toUpperCase();
     const useMc = overrideUseMc ?? useMcInterval;
     const mcIv  = useMc ? mcEntryFor(multitradeFavorites, sym)?.tradeConfig?.entry?.ma1?.interval : null;
     const iv  = overrideInterval ?? mcIv ?? interval;
     if (mcIv) setInterval(mcIv);
     const useMedianTrend = overrideMedianTrendFilter ?? medianTrendFilter;
+    const pullback = Math.abs(overridePullbackPct ?? pullbackPct);
     const chartSource = selectedChart?.symbol === sym ? (selectedChart?.source ?? null) : null;
     const src = overrideSource !== undefined ? overrideSource : chartSource;
     if (!sym) return;
@@ -773,7 +797,7 @@ function BollingerBandsStats() {
     setError(null);
     setResult(null);
     try {
-      const data = await fetchBollingerBandRecovery(sym, iv, period, stdDev, src, useMedianTrend);
+      const data = await fetchBollingerBandRecovery(sym, iv, period, stdDev, src, useMedianTrend, 10, pullback);
       setResult(data);
       if (updateChart) {
         const chartData = await fetchCandlesticksAndCloud(sym, iv, src);
@@ -868,6 +892,16 @@ function BollingerBandsStats() {
           <input className={inpNum} type="number" min={0.5} max={5} step={0.1}
             value={stdDev} onChange={(e) => setStdDev(Number(e.target.value))} />
         </div>
+        <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[56px]" title={t('stats.tip.bb_pullback')}>
+          <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.bb_pullback')}</label>
+          <input className={inpNum} type="number" max={0} min={-20} step={0.5}
+            value={pullbackPct}
+            onChange={(e) => {
+              const v = Number(e.target.value);
+              setPullbackPct(v);
+              savePullbackPct(v);
+            }} />
+        </div>
         <McIntervalSwitch checked={useMcInterval} onChange={handleToggleMc} />
         <MedianTrendFilterSwitch checked={medianTrendFilter} onChange={handleToggleMedianTrendFilter} />
         <button
@@ -910,6 +944,9 @@ function BollingerBandsStats() {
               <SummaryCard label={t('stats.card.avg_duration')} value={formatDuration(result.avgCycleDurationMs)} tooltip={t('stats.tip.avg_duration')} />
               {result.medianTrendFilter && (
                 <SummaryCard label="Filtro Mediana" value={`${result.medianTrendLookback}c`} highlight="text-emerald-500" tooltip="Só entram ciclos com a mediana da BB em alta/estável nos candles anteriores ao toque (mesmo filtro do bot)" />
+              )}
+              {result.pullbackPct > 0 && (
+                <SummaryCard label={t('stats.bb_pullback')} value={`-${result.pullbackPct}%`} highlight="text-amber-500" tooltip={t('stats.tip.bb_pullback')} />
               )}
             </div>
 

@@ -5,6 +5,7 @@ const { cancelRestingBracketIfAny } = require('../bot/shared/cancelRestingBracke
 const { buildAdapter } = require('../bot/shared/buildAdapter');
 const getTickers = require('../binance/cachedTicker24hr');
 const supabase = require('../supabase/client');
+const { getSymbolFilters, getAvgPrice } = require('../binance/ocoClient');
 
 // GET /services/binance-trades?symbol=BTCUSDT&limit=500
 router.get('/binance-trades', async (req, res) => {
@@ -31,6 +32,30 @@ router.get('/binance-price', async (req, res) => {
     const ticker = tickers.find(t => t.symbol === symbol.toUpperCase());
     if (!ticker) return res.status(404).json({ error: `símbolo ${symbol} não encontrado` });
     res.json({ price: parseFloat(ticker.lastPrice) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /services/binance-percent-price-filter?symbol=BTCUSDT — até quantos % abaixo do preço
+// médio ponderado ATUAL a Binance aceita numa ordem LIMIT de compra (filtro
+// PERCENT_PRICE_BY_SIDE, lado bid — mesmo filtro que binancePlaceOcoSell valida pro lado ask
+// em ocoClient.js). Usado pelo campo "Pullback" do formulário Bollinger Bands pra avisar o
+// limite da corretora antes de salvar o favorito. Não precisa de API key (exchangeInfo/avgPrice
+// são endpoints públicos).
+router.get('/binance-percent-price-filter', async (req, res) => {
+  const { symbol } = req.query;
+  if (!symbol) return res.status(400).json({ error: 'symbol obrigatório' });
+  try {
+    const symbolUpper = symbol.toUpperCase();
+    const [{ bidMultiplierDown }, avgPrice] = await Promise.all([
+      getSymbolFilters(symbolUpper),
+      getAvgPrice(symbolUpper),
+    ]);
+    const maxBelowPct = bidMultiplierDown != null
+      ? parseFloat(((1 - bidMultiplierDown) * 100).toFixed(2))
+      : null;
+    res.json({ symbol: symbolUpper, avgPrice, bidMultiplierDown, maxBelowPct });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

@@ -38,6 +38,10 @@ async function getSymbolFilters(symbol) {
     qtyDecimals: decimalsFromStep(stepSize),
     askMultiplierUp: pctFilter ? parseFloat(pctFilter.askMultiplierUp ?? pctFilter.multiplierUp) : null,
     askMultiplierDown: pctFilter ? parseFloat(pctFilter.askMultiplierDown ?? pctFilter.multiplierDown) : null,
+    // Lado bid (ordens BUY, ex.: pullback do favorito Bollinger Bands) — mesmo filtro, ver
+    // getSymbolPercentPriceFilter em fetchBinanceTrades.js.
+    bidMultiplierUp: pctFilter ? parseFloat(pctFilter.bidMultiplierUp ?? pctFilter.multiplierUp) : null,
+    bidMultiplierDown: pctFilter ? parseFloat(pctFilter.bidMultiplierDown ?? pctFilter.multiplierDown) : null,
   };
 }
 
@@ -151,4 +155,4 @@ async function binancePollOco(symbol, orderListId, legs) {
   return { filled: null };
 }
 
-module.exports = { binancePlaceOcoSell, binanceCancelOco, binancePollOco };
+module.exports = { binancePlaceOcoSell, binanceCancelOco, binancePollOco, getSymbolFilters, getAvgPrice };

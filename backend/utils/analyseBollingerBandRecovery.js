@@ -26,6 +26,10 @@ const LIMIT = 1000; // candles 4h — cobre bastante histórico para warmup + ci
  * @param {number} [options.period=20]      Período da Bollinger Bands.
  * @param {number} [options.stdDev=2]       Desvio padrão das bandas.
  * @param {string|null} [options.source=null] 'gate' ou null (Binance).
+ * @param {number} [options.pullbackPct=0] Exige que o preço caia esse tanto % ABAIXO da banda
+ *   inferior (não só toque nela) antes de contar a entrada — simula uma ordem limite de compra
+ *   nesse preço (mesmo `entry.pullback.belowPct` do bot, ver strategyEngine.js). 0 = desligado,
+ *   entra assim que a banda é tocada (comportamento padrão, preço de entrada = close do fundo).
  *
  * @returns {Promise<object>}
  *  - symbol / interval / period / stdDev
@@ -76,7 +80,9 @@ async function analyseBollingerBandRecovery(symbol, options = {}) {
         source   = null,
         medianTrendFilter   = false,
         medianTrendLookback = 10,
+        pullbackPct = 0,
     } = options;
+    const pullback = Math.max(0, parseFloat(pullbackPct) || 0);
 
     const fetchCandles = source === 'gate' ? getGateCandles : getCandles;
     const candles = await fetchCandles(symbol, interval, LIMIT);
@@ -92,31 +98,39 @@ async function analyseBollingerBandRecovery(symbol, options = {}) {
     const occurrences = [];
     let state = 'SEEK_ENTRY';
     let minLowIdx = null;
+    let pullbackEntryPrice = null; // preço exato do limite de pullback (só usado quando pullback > 0)
 
     for (let i = 0; i < bbSeries.length; i++) {
         const candle = candles[i + offset];
         const low = parseFloat(candle.low);
         const high = parseFloat(candle.high);
 
-        if (state === 'SEEK_ENTRY' && low <= bbSeries[i].lower) {
+        // Com pullback, exige que o preço rompa esse tanto % abaixo da banda (não só toque nela)
+        // — mesmo threshold que o bot arma como ordem limite (strategyEngine.js#evaluateEntrySignal).
+        const entryThreshold = bbSeries[i].lower * (1 - pullback / 100);
+
+        if (state === 'SEEK_ENTRY' && low <= entryThreshold) {
             if (medianTrendFilter) {
                 const avgDiffPct = medianTrendAvgDiffPct(bbSeries, i, medianTrendLookback);
                 // Sem histórico suficiente ou mediana em queda/subindo devagar demais → mesmo critério do bot: bloqueia a entrada.
                 if (avgDiffPct === null || avgDiffPct < getMedianTrendThreshold()) continue;
             }
             minLowIdx = i;
+            // Sem pullback, a entrada usa o close do fundo real (rastreado abaixo em SEEK_EXIT) —
+            // com pullback, o preço de entrada já é conhecido: o próprio limite que teria enchido.
+            pullbackEntryPrice = pullback > 0 ? entryThreshold : null;
             state = 'SEEK_EXIT';
             continue;
         }
 
         if (state === 'SEEK_EXIT') {
-            if (low < parseFloat(candles[minLowIdx + offset].low)) {
+            if (pullback === 0 && low < parseFloat(candles[minLowIdx + offset].low)) {
                 minLowIdx = i;
             }
 
             if (high >= bbSeries[i].upper) {
                 const entryCandle = candles[minLowIdx + offset];
-                const entryPrice = parseFloat(entryCandle.close);
+                const entryPrice = pullback > 0 ? pullbackEntryPrice : parseFloat(entryCandle.close);
                 const exitPrice = parseFloat(candle.close);
 
                 occurrences.push({
@@ -130,6 +144,7 @@ async function analyseBollingerBandRecovery(symbol, options = {}) {
                 });
 
                 minLowIdx = null;
+                pullbackEntryPrice = null;
                 state = 'SEEK_ENTRY';
             }
         }
@@ -140,7 +155,7 @@ async function analyseBollingerBandRecovery(symbol, options = {}) {
     if (state === 'SEEK_EXIT' && minLowIdx !== null) {
         const lowestCandle = candles[minLowIdx + offset];
         const lastCandle = candles[candles.length - 1];
-        const entryPrice = parseFloat(lowestCandle.close);
+        const entryPrice = pullback > 0 ? pullbackEntryPrice : parseFloat(lowestCandle.close);
         const currentPrice = parseFloat(lastCandle.close);
 
         openOccurrence = {
@@ -170,6 +185,7 @@ async function analyseBollingerBandRecovery(symbol, options = {}) {
         stdDev,
         medianTrendFilter,
         medianTrendLookback,
+        pullbackPct: pullback,
         totalCandles: candles.length,
         totalBbPeriods: bbSeries.length,
         totalOccurrences: total,

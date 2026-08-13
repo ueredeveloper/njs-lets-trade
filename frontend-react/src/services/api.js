@@ -158,14 +158,18 @@ export async function fetchSimpleMaCross(symbol, entryInterval = '15m', exitInte
   return res.json();
 }
 
-/** Analisa ciclos fundo→topo na Bollinger Bands (4h por padrão) para uma moeda. */
-export async function fetchBollingerBandRecovery(symbol, interval = '4h', period = 20, stdDev = 2, source = null, medianTrendFilter = false, medianTrendLookback = 10) {
+/** Analisa ciclos fundo→topo na Bollinger Bands (4h por padrão) para uma moeda.
+ *  `pullbackPct` (>0) exige que o preço caia esse tanto % abaixo da banda inferior antes de
+ *  contar a entrada — simula um limite de compra nesse preço (mesmo `entry.pullback.belowPct`
+ *  do bot). 0 = desligado, entra assim que a banda é tocada (padrão). */
+export async function fetchBollingerBandRecovery(symbol, interval = '4h', period = 20, stdDev = 2, source = null, medianTrendFilter = false, medianTrendLookback = 10, pullbackPct = 0) {
   const params = new URLSearchParams({ symbol, interval, period, stdDev });
   if (source) params.set('source', source);
   if (medianTrendFilter) {
     params.set('medianTrendFilter', '1');
     params.set('medianTrendLookback', medianTrendLookback);
   }
+  if (pullbackPct > 0) params.set('pullbackPct', pullbackPct);
   const res = await fetch(`/services/bollinger-band-recovery?${params}`);
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
@@ -558,6 +562,19 @@ export async function placeBinanceBracketSell({ symbol, quantity, entryPrice, ta
 export async function fetchBinancePrice(symbol) {
   const params = new URLSearchParams({ symbol: symbol.toUpperCase() });
   const res = await fetch(`/services/binance-price?${params}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+/** Até quantos % abaixo do preço atual a Binance aceita numa ordem LIMIT de compra desse
+ *  símbolo (filtro PERCENT_PRICE_BY_SIDE, lado bid) — usado pelo campo "Pullback" do
+ *  formulário Bollinger Bands. */
+export async function fetchBinancePercentPriceFilter(symbol) {
+  const params = new URLSearchParams({ symbol: symbol.toUpperCase() });
+  const res = await fetch(`/services/binance-percent-price-filter?${params}`);
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error ?? `HTTP ${res.status}`);
