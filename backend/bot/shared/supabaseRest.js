@@ -4,23 +4,69 @@
  * Cliente REST genérico pro Supabase usado pelos bots de trade (rsi_multi_bot_state,
  * rsi_multi_bot_trades, etc.) — extraído de ma-cross-bot.js (mesma função existia colada,
  * idêntica, em amap-bot.js e swing-bot.js).
+ *
+ * Timeout + retry: madrugada de 13→14/08/2026 teve ~3400 "Tick error: fetch failed" em
+ * vários bots/símbolos (falha de rede/DNS transitória, sem status HTTP), cada uma perdendo
+ * o tick inteiro sem nova tentativa — causou pelo menos 10 "posição órfã" (compra executada
+ * na corretora mas o PATCH/GET em rsi_multi_bot_state falhou e o bot perdeu o rastro da
+ * posição). GET/PATCH são idempotentes (PATCH sempre por `id=eq.`), então dá pra reter com
+ * segurança. POST (insert de trade/sinal) NÃO é retentado — se a falha for depois do commit
+ * no servidor mas antes da resposta chegar, reter duplicaria o registro.
  */
 
 const SB_URL = process.env.SUPABASE_URL;
 const SB_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
+const TIMEOUT_MS = 10_000;
+const MAX_RETRIES = 2;
+const RETRY_DELAYS_MS = [500, 1500];
+const RETRYABLE_METHODS = new Set(['GET', 'PATCH']);
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 async function sbReq(method, table, body, query = '') {
-  const res = await fetch(`${SB_URL}/rest/v1/${table}${query}`, {
+  const url = `${SB_URL}/rest/v1/${table}${query}`;
+  const opts = {
     method,
     headers: {
       'apikey': SB_KEY, 'Authorization': `Bearer ${SB_KEY}`,
       'Content-Type': 'application/json', 'Prefer': 'return=representation',
     },
     body: body ? JSON.stringify(body) : undefined,
-  });
-  const text = await res.text();
-  if (!res.ok) throw new Error(`Supabase ${method} ${table} ${res.status}: ${text}`);
-  return text ? JSON.parse(text) : null;
+  };
+  const canRetry = RETRYABLE_METHODS.has(method);
+
+  for (let attempt = 0; ; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+    let res, text;
+    try {
+      res = await fetch(url, { ...opts, signal: controller.signal });
+      text = await res.text();
+    } catch (err) {
+      clearTimeout(timer);
+      if (canRetry && attempt < MAX_RETRIES) {
+        await sleep(RETRY_DELAYS_MS[attempt]);
+        continue;
+      }
+      throw err.name === 'AbortError'
+        ? new Error(`Supabase ${method} ${table}: timeout após ${TIMEOUT_MS}ms`)
+        : err;
+    }
+    clearTimeout(timer);
+
+    if (!res.ok) {
+      const retryableStatus = res.status >= 500 || res.status === 429;
+      if (canRetry && retryableStatus && attempt < MAX_RETRIES) {
+        await sleep(RETRY_DELAYS_MS[attempt]);
+        continue;
+      }
+      throw new Error(`Supabase ${method} ${table} ${res.status}: ${text}`);
+    }
+    return text ? JSON.parse(text) : null;
+  }
 }
 
 module.exports = { sbReq };

@@ -666,7 +666,7 @@ async function tick(rowId, adapter, strategy, log, session) {
 }
 
 // ── startSymbol ───────────────────────────────────────────────────────────────
-async function startSymbol(row, color) {
+async function startSymbol(row, color, startupIndex = null) {
   if (registry.has(row.id)) return;
 
   let strategy = resolveStrategy(row);
@@ -753,6 +753,12 @@ async function startSymbol(row, color) {
     schedule();
   };
 
+  if (startupIndex !== null) {
+    // Espalha a primeira leitura de estado de cada símbolo no boot — sem isso, o
+    // Promise.all abaixo dispara todos os GET em rsi_multi_bot_state em rajada simultânea.
+    await new Promise(resolve => setTimeout(resolve, startupIndex * 400 + Math.floor(Math.random() * 300)));
+    if (ctx.stopped) return;
+  }
   await run();
 }
 
@@ -807,7 +813,7 @@ async function main() {
     return;
   }
 
-  await Promise.all(rows.map((row, i) => startSymbol(row, COLORS[i % COLORS.length])));
+  await Promise.all(rows.map((row, i) => startSymbol(row, COLORS[i % COLORS.length], i)));
 }
 
 if (require.main === module) {
