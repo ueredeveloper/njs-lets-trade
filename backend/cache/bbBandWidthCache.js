@@ -17,9 +17,9 @@ const AVG_WINDOW = 80;
 
 /**
  * Presets pré-aquecidos: combinação padrão do painel de favoritos (4h, período 20, desvio 2,
- * 100 candles) e a combinação padrão do filtro de busca de indicadores (15min e 5min, mesmo
- * BB(20,2), 300 candles) — trade BB entra na banda inferior e sai na superior. O preset de
- * 4h (favoritos) e 1min existem mas nascem desligados (ver DEFAULT_ON em cacheSettings.js):
+ * 100 candles) e a combinação padrão do filtro de busca de indicadores (1h, 15min e 5min,
+ * mesmo BB(20,2), 300 candles) — trade BB entra na banda inferior e sai na superior. O preset
+ * de 4h (favoritos) e 1min existem mas nascem desligados (ver DEFAULT_ON em cacheSettings.js):
  * escanear os ~500 pares USDT em 1min não cabe no orçamento da fila global de candles
  * (~24 req/min) sem ficar constantemente atrasado.
  */
@@ -33,6 +33,7 @@ const AVG_WINDOW = 80;
 const CACHED_PRESETS = [
   { key: '4h|20|2|100', interval: '4h', period: 20, stdDev: 2, lookback: 100, settingId: 'bbBandWidth4h' },
   { key: '1m|20|2|100', interval: '1m', period: 20, stdDev: 2, lookback: 100, settingId: 'bbBandWidth1m', ttlMs: 60 * 60_000 },
+  { key: '1h|20|2|300', interval: '1h', period: 20, stdDev: 2, lookback: 300, settingId: 'bbBandWidth1h' },
   { key: '15m|20|2|300', interval: '15m', period: 20, stdDev: 2, lookback: 300, settingId: 'bbBandWidth15m', ttlMs: 30 * 60_000 },
   { key: '5m|20|2|300', interval: '5m', period: 20, stdDev: 2, lookback: 300, settingId: 'bbBandWidth5m', ttlMs: 20 * 60_000 },
 ];

@@ -1,6 +1,6 @@
 /**
  * Base compartilhada por todos os indicadores derivados do cruzamento EMA9×EMA21 no gráfico
- * (nuvem de permanência em emaCrossPersistenceCloud.js, "Bars Since MA Cross" em
+ * (nuvem PERM / inclinação EMA9 em emaCrossPersistenceCloud.js, "Bars Since MA Cross" em
  * barsSinceMaCross.js): alinha as duas séries de EMA aos candles pelo openTime e devolve só os
  * pontos em que as DUAS já têm valor (a EMA de período maior nasce mais tarde).
  */

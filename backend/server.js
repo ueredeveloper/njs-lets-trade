@@ -322,7 +322,7 @@ async function startServer() {
   setInterval(refreshVwapBandWidthCache, vwapBandWidthCache.REFRESH_TICK_MS);
 
   async function refreshBbBandWidthCache() {
-    if (!cacheSettings.isEnabled('bbBandWidth4h') && !cacheSettings.isEnabled('bbBandWidth1m') && !cacheSettings.isEnabled('bbBandWidth15m') && !cacheSettings.isEnabled('bbBandWidth5m')) return;
+    if (!cacheSettings.isEnabled('bbBandWidth4h') && !cacheSettings.isEnabled('bbBandWidth1m') && !cacheSettings.isEnabled('bbBandWidth1h') && !cacheSettings.isEnabled('bbBandWidth15m') && !cacheSettings.isEnabled('bbBandWidth5m')) return;
     try {
       const { list: symbols } = await getActiveUsdtPairs();
       if (!Array.isArray(symbols) || symbols.length === 0) return;
@@ -333,7 +333,7 @@ async function startServer() {
       if (stats.computed > 0) {
         const m = stats.matched ?? {};
         console.log(
-          `[bbBandWidthCache] 4h|20|2|100:${m['4h|20|2|100'] ?? 0} 1m|20|2|100:${m['1m|20|2|100'] ?? 0} 15m|20|2|300:${m['15m|20|2|300'] ?? 0} 5m|20|2|300:${m['5m|20|2|300'] ?? 0}`
+          `[bbBandWidthCache] 4h|20|2|100:${m['4h|20|2|100'] ?? 0} 1m|20|2|100:${m['1m|20|2|100'] ?? 0} 1h|20|2|300:${m['1h|20|2|300'] ?? 0} 15m|20|2|300:${m['15m|20|2|300'] ?? 0} 5m|20|2|300:${m['5m|20|2|300'] ?? 0}`
           + ` | disco:${stats.diskHits ?? 0} stale:${stats.diskStale ?? 0} api:${stats.apiFetches ?? 0}`
           + ` | fila:${stats.queuePending ?? 0}`,
         );
@@ -353,7 +353,7 @@ async function startServer() {
   setInterval(refreshMedianTrendThreshold, 5 * 60_000);
 
   async function refreshBbMedianTrendCache() {
-    if (!cacheSettings.isEnabled('bbMedianTrend15m') && !cacheSettings.isEnabled('bbMedianTrend5m')) return;
+    if (!cacheSettings.isEnabled('bbMedianTrend1h') && !cacheSettings.isEnabled('bbMedianTrend15m') && !cacheSettings.isEnabled('bbMedianTrend5m')) return;
     try {
       const { list: symbols } = await getActiveUsdtPairs();
       if (!Array.isArray(symbols) || symbols.length === 0) return;
@@ -361,7 +361,7 @@ async function startServer() {
       if (stats.computed > 0) {
         const m = stats.matched ?? {};
         console.log(
-          `[bbMedianTrendCache] 15m|20|2|700:${m['15m|20|2|700'] ?? 0} 5m|20|2|700:${m['5m|20|2|700'] ?? 0}`
+          `[bbMedianTrendCache] 1h|20|2|700:${m['1h|20|2|700'] ?? 0} 15m|20|2|700:${m['15m|20|2|700'] ?? 0} 5m|20|2|700:${m['5m|20|2|700'] ?? 0}`
           + ` | disco:${stats.diskHits ?? 0} stale:${stats.diskStale ?? 0} api:${stats.apiFetches ?? 0}`
           + ` | fila:${stats.queuePending ?? 0}`,
         );

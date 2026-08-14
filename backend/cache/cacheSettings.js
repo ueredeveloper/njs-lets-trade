@@ -23,8 +23,10 @@ const CACHE_IDS = [
   'vwapBandWidth',
   'bbBandWidth4h',
   'bbBandWidth1m',
+  'bbBandWidth1h',
   'bbBandWidth15m',
   'bbBandWidth5m',
+  'bbMedianTrend1h',
   'bbMedianTrend15m',
   'bbMedianTrend5m',
   'vwapBandExpansion',
@@ -35,12 +37,15 @@ const CACHE_IDS = [
 
 /**
  * Só os caches realmente em uso agora ficam ligados por padrão: largura de Bollinger e
- * trades BB c/ tendência da mediana, em 15min e 5min. O resto nasce desligado — cada
+ * trades BB c/ tendência da mediana, em 1h, 15min e 5min. O resto nasce desligado — cada
  * endpoint já tem um caminho de cálculo ao vivo (usado hoje em qualquer combinação fora do
  * preset padrão), então desligar aqui não quebra nenhum filtro, só deixa de pré-aquecer.
  * Fica disponível pra quem quiser religar manualmente em Configurações.
  */
-const DEFAULT_ON = new Set(['bbBandWidth15m', 'bbBandWidth5m', 'bbMedianTrend15m', 'bbMedianTrend5m']);
+const DEFAULT_ON = new Set([
+  'bbBandWidth1h', 'bbBandWidth15m', 'bbBandWidth5m',
+  'bbMedianTrend1h', 'bbMedianTrend15m', 'bbMedianTrend5m',
+]);
 
 let settings = null;
 

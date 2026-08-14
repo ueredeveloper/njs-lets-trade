@@ -7,7 +7,7 @@ const { getMedianTrendThreshold } = require('./bollingerMedianTrendConfig');
 
 const BB_PERIOD = 20;
 const BB_STD_DEV = 2;
-const LIMIT = 1000; // candles 4h — cobre bastante histórico para warmup + ciclos
+const DEFAULT_CANDLE_COUNT = 1000; // candles 4h — cobre bastante histórico para warmup + ciclos
 
 /**
  * Analisa ciclos de fundo→topo na Bollinger Bands de uma moeda.
@@ -30,6 +30,7 @@ const LIMIT = 1000; // candles 4h — cobre bastante histórico para warmup + ci
  *   inferior (não só toque nela) antes de contar a entrada — simula uma ordem limite de compra
  *   nesse preço (mesmo `entry.pullback.belowPct` do bot, ver strategyEngine.js). 0 = desligado,
  *   entra assim que a banda é tocada (comportamento padrão, preço de entrada = close do fundo).
+ * @param {number} [options.candleCount=1000] Quantidade de candles buscados para a análise.
  *
  * @returns {Promise<object>}
  *  - symbol / interval / period / stdDev
@@ -81,11 +82,13 @@ async function analyseBollingerBandRecovery(symbol, options = {}) {
         medianTrendFilter   = false,
         medianTrendLookback = 10,
         pullbackPct = 0,
+        candleCount = DEFAULT_CANDLE_COUNT,
     } = options;
     const pullback = Math.max(0, parseFloat(pullbackPct) || 0);
+    const limit = parseInt(candleCount) || DEFAULT_CANDLE_COUNT;
 
     const fetchCandles = source === 'gate' ? getGateCandles : getCandles;
-    const candles = await fetchCandles(symbol, interval, LIMIT);
+    const candles = await fetchCandles(symbol, interval, limit);
 
     const bbSeries = buildBbSeries(candles, period, stdDev);
     if (!bbSeries) throw new Error(`Candles insuficientes para BB(${period}) em ${interval}`);

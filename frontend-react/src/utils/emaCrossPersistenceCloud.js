@@ -1,144 +1,173 @@
 /**
- * Nuvem de "permanência" EMA9×EMA21 — botão "Perman." no painel de indicadores do gráfico
- * (INDICATOR_GROUPS em CandlestickChart.jsx). Duas regras diferentes por lado — sempre em verde,
- * já que as duas marcam um momento "bullish" (início de alta / fim provável de queda), nunca um
- * momento vermelho:
+ * Nuvem PERM — botão "Perman." no painel de indicadores do gráfico
+ * (INDICATOR_GROUPS em CandlestickChart.jsx).
  *
- * Em vez de medir quantos CANDLES a moeda fica de um lado ou de outro, mede o quanto a
- * DISTÂNCIA (%) entre EMA9 e EMA21 diverge em cada perna antes de reverter — o pico de
- * afastamento (gap%) tipicamente alcançado antes do cruzamento voltar. A média histórica desses
- * picos vira o valor "normal" de reversão de cada lado:
+ * Não espera o cruzamento EMA9×EMA21 (atrasado). Dois sinais antecipados, simétricos:
  *
- *  - Pernas de ALTA (ema9 > ema21): pinta do início do cruzamento (gap ≈ 0) até o gap% atingir o
- *    maior valor médio histórico (o pico médio de afastamento das pernas de alta).
+ *  - Fundo (EMA9 < EMA21): a EMA9 para de cair e começa a subir → nuvem verde.
+ *  - Topo (EMA9 > EMA21): a EMA9 para de subir e começa a cair → nuvem vermelha
+ *    (prever o fim da alta, ainda acima da EMA21).
  *
- *  - Pernas de BAIXA (ema9 < ema21): o INVERSO — só começa quando o gap% (em módulo) atinge o
- *    maior valor médio histórico das pernas de baixa, e vai diminuindo até o possível cruzamento
- *    de volta (ema9 cruzando acima da ema21 de novo). Não pinta o início da queda, só a reta final
- *    de volta ao cruzamento.
- *
- * As médias são calculadas só sobre os últimos MAX_HISTORY_CANDLES candles (não o histórico
- * inteiro carregado no gráfico) — pra pegar o modelo RECENTE de movimento da moeda; regime
- * antigo (ex.: bull run de meses atrás) não deve puxar a média de um par que agora está em
- * lateralização. Ex.: se em média o gap chega a 3.5% nas pernas de alta antes de reverter, a
- * nuvem de alta cobre do início (gap ≈ 0) até o candle em que o gap atinge 3.5%. Se em média
- * chega a -2.4% nas pernas de baixa, a nuvem de baixa começa no candle em que o gap atinge -2.4%
- * e vai até o candle imediatamente antes do cruzamento de volta pra cima. Pernas que nunca
- * alcançam o pico médio não pintam nada (lado alta pinta só até onde a divergência chegou de
- * fato; lado baixa não pinta nenhum candle).
+ * Inclinação (2 candles, pra um solavanco isolado não parecer virada):
+ *   d1[i]      = (EMA9[i] − EMA9[i−1]) / EMA9[i−1] × 100
+ *   slopePct[i] = média dos últimos SLOPE_LOOKBACK (2) valores de d1
  */
 
 import { buildEmaCrossMergedSeries } from './emaCrossSeries';
 
-const CLOUD_COLOR = 'rgba(38, 166, 154, 0.22)'; // mesmo verde do candle de alta (C_UP) — os dois lados usam a mesma cor
+export const SLOPE_LOOKBACK = 2;
+/** |slope%| abaixo disto = "quase estabilizando" (lado de baixa e de alta). */
+export const STABILIZE_PCT = 0.03;
 
-// Teto de candles usados pra calcular a média/pico do gap% — mantém o modelo de reversão
-// baseado no comportamento RECENTE do par, não no histórico inteiro que o gráfico carregou
-// (que pode remontar a regimes de mercado bem diferentes do atual).
+export const PERM_CLOUD_TONES = ['red', 'orange', 'yellow', 'green'];
+
+export const PERM_TONE_SWATCH = {
+  red: '#ef5350',
+  orange: '#fb923c',
+  yellow: '#facc15',
+  green: '#26a69a',
+};
+
+export const DEFAULT_PERM_CLOUD_TONES = {
+  red: true, orange: true, yellow: true, green: true,
+};
+
+export function normalizeEmaPersistCloudTones(raw) {
+  const out = { ...DEFAULT_PERM_CLOUD_TONES };
+  if (!raw || typeof raw !== 'object') return out;
+  for (const k of PERM_CLOUD_TONES) {
+    if (typeof raw[k] === 'boolean') out[k] = raw[k];
+  }
+  return out;
+}
+
+export const SLOPE_STATE_META = {
+  fallAccel: { tone: 'red',    fillColor: 'rgba(239, 83, 80, 0.26)',  emoji: '🔴', label: 'queda forte' },
+  fallDecel: { tone: 'orange', fillColor: 'rgba(251, 146, 60, 0.24)', emoji: '🟠', label: 'queda perdendo força' },
+  fallFlat:  { tone: 'yellow', fillColor: 'rgba(250, 204, 21, 0.22)', emoji: '🟡', label: 'quase estabilizando' },
+  turnUp:    { tone: 'green',  fillColor: 'rgba(38, 166, 154, 0.28)', emoji: '🟢', label: 'EMA9 subindo' },
+  riseAccel: { tone: 'green',  fillColor: 'rgba(38, 166, 154, 0.26)', emoji: '🟢', label: 'alta forte' },
+  riseDecel: { tone: 'orange', fillColor: 'rgba(251, 146, 60, 0.24)', emoji: '🟠', label: 'alta perdendo força' },
+  riseFlat:  { tone: 'yellow', fillColor: 'rgba(250, 204, 21, 0.22)', emoji: '🟡', label: 'alta quase no topo' },
+  turnDown:  { tone: 'red',    fillColor: 'rgba(239, 83, 80, 0.30)',  emoji: '🔴', label: 'EMA9 virando pra baixo' },
+};
+
 const MAX_HISTORY_CANDLES = 700;
 
-const EMPTY_RESULT = { segments: [], avgAbove: 0, avgBelow: 0, halfAbove: 0, halfBelow: 0 };
+const EMPTY_RESULT = {
+  segments: [],
+  lastSlopePct: null,
+  lastState: null,
+};
 
 /**
- * @param {Array} candlesticks candles do gráfico (mesmo array passado pra CandlestickChartLW)
- * @param {Array} ma9  série EMA9 alinhada ao fim de `candlesticks` (mesmo formato do prop `ma9`)
- * @param {Array} ma21 série EMA21, idem
+ * @param {number} slopePct média das últimas variações % da EMA9
+ * @param {number|null} prevSlopePct slope do candle anterior (pra ver se acelera)
+ * @param {'below'|'above'} side EMA9 abaixo ou acima da EMA21
+ * @returns {null|keyof typeof SLOPE_STATE_META}
+ */
+export function classifyEma9SlopeState(slopePct, prevSlopePct, side) {
+  if (!side || slopePct == null || !Number.isFinite(slopePct)) return null;
+  if (side === 'below') {
+    if (slopePct > 0) return 'turnUp';
+    const accelerating = prevSlopePct == null || slopePct < prevSlopePct;
+    if (accelerating) return 'fallAccel';
+    if (slopePct <= -STABILIZE_PCT) return 'fallDecel';
+    return 'fallFlat';
+  }
+  if (slopePct < 0) return 'turnDown';
+  const accelerating = prevSlopePct == null || slopePct > prevSlopePct;
+  if (accelerating) return 'riseAccel';
+  if (slopePct >= STABILIZE_PCT) return 'riseDecel';
+  return 'riseFlat';
+}
+
+export function formatEma9SlopeLegend(slopePct, state) {
+  if (slopePct == null || !Number.isFinite(slopePct) || !state) return null;
+  const meta = SLOPE_STATE_META[state];
+  if (!meta) return null;
+  const sign = slopePct > 0 ? '+' : '';
+  return `${meta.emoji} ${sign}${slopePct.toFixed(2)}% — ${meta.label}`;
+}
+
+function oneBarPct(curr, prev) {
+  if (!(prev > 0) || !Number.isFinite(curr)) return null;
+  return ((curr - prev) / prev) * 100;
+}
+
+function smoothSlopeAt(d1, i, lookback) {
+  if (i < lookback) return null;
+  let sum = 0;
+  for (let k = 0; k < lookback; k++) {
+    const v = d1[i - k];
+    if (v == null || !Number.isFinite(v)) return null;
+    sum += v;
+  }
+  return sum / lookback;
+}
+
+function sideOf(fast, slow) {
+  if (fast < slow) return 'below';
+  if (fast > slow) return 'above';
+  return null;
+}
+
+/**
+ * @param {Array} candlesticks
+ * @param {Array} ma9
+ * @param {Array} ma21
  * @returns {{ segments: Array<{points: Array<{time:number, upper:number, lower:number}>, fillColor: string}>,
- *             avgAbove: number, avgBelow: number, halfAbove: number, halfBelow: number }}
- *          avgAbove/avgBelow: pico médio histórico do gap% (distância EMA9↔EMA21 normalizada
- *          pela EMA21) de cada lado — limiar usado pra recortar as duas nuvens (alta: do início
- *          do cruzamento até avgAbove; baixa: de avgBelow até o cruzamento de volta).
- *          halfAbove/halfBelow (metade desses picos) são devolvidos só por completude — não são
- *          mais usados no recorte de nenhuma das duas nuvens.
+ *             lastSlopePct: number|null, lastState: string|null }}
  */
 export function buildEmaCrossPersistenceClouds(candlesticks, ma9, ma21) {
   const fullMerged = buildEmaCrossMergedSeries(candlesticks, ma9, ma21);
-  if (fullMerged.length < 2) return EMPTY_RESULT;
-  // Só os últimos MAX_HISTORY_CANDLES candles entram no cálculo (média/pico e nuvem) — ver
-  // comentário do módulo.
+  if (fullMerged.length < SLOPE_LOOKBACK + 1) return EMPTY_RESULT;
   const merged = fullMerged.length > MAX_HISTORY_CANDLES
     ? fullMerged.slice(-MAX_HISTORY_CANDLES)
     : fullMerged;
 
-  // Gap% por candle — distância EMA9↔EMA21 normalizada pelo preço (EMA21), pra comparar moedas
-  // de escalas diferentes. Positivo com EMA9 acima (alta), negativo com EMA9 abaixo (baixa).
-  const gapPct = merged.map((m) => ((m.fast - m.slow) / m.slow) * 100);
+  const d1 = merged.map((m, i) => (
+    i === 0 ? null : oneBarPct(m.fast, merged[i - 1].fast)
+  ));
+  const slopePct = merged.map((_, i) => smoothSlopeAt(d1, i, SLOPE_LOOKBACK));
 
-  // Runs (sequências consecutivas) de "acima"/"abaixo", guardando início/fim (fim exclusivo)
-  // em `merged` pra recortar a nuvem depois.
-  const runs = [];
-  let state = null;
-  let start = 0;
-  for (let i = 0; i < merged.length; i++) {
-    if (merged[i].fast === merged[i].slow) continue; // empate exato: não pertence a nenhum lado
-    const s = merged[i].fast > merged[i].slow ? 'above' : 'below';
-    if (s !== state) {
-      if (state) runs.push({ state, start, end: i });
-      state = s;
-      start = i;
-    }
-  }
-  if (state) runs.push({ state, start, end: merged.length });
+  const states = merged.map((m, i) => (
+    classifyEma9SlopeState(slopePct[i], i > 0 ? slopePct[i - 1] : null, sideOf(m.fast, m.slow))
+  ));
 
-  // Pico de divergência (%) alcançado em cada perna antes de reverter — o "quanto chegou a
-  // afastar" antes do cruzamento voltar. Sempre um valor positivo (módulo), dos dois lados.
-  const peakOf = (run) => {
-    let peak = 0;
-    const sign = run.state === 'above' ? 1 : -1;
-    for (let i = run.start; i < run.end; i++) {
-      const g = sign * gapPct[i];
-      if (g > peak) peak = g;
-    }
-    return peak;
-  };
-
-  const avg = (list) => (list.length ? list.reduce((a, r) => a + peakOf(r), 0) / list.length : 0);
-  const avgAbove = avg(runs.filter((r) => r.state === 'above'));
-  const avgBelow = avg(runs.filter((r) => r.state === 'below'));
-  const halfAbove = avgAbove / 2;
-  const halfBelow = avgBelow / 2;
-
-  const buildPoints = (from, to) => {
-    const points = [];
-    for (let i = from; i < to; i++) {
-      const m = merged[i];
-      points.push({ time: m.time, upper: Math.max(m.fast, m.slow), lower: Math.min(m.fast, m.slow) });
-    }
-    return points;
-  };
-
-  // Primeiro índice do run (em módulo, com o sinal do lado) em que o gap% atinge `threshold`.
-  // null se o run inteiro nunca alcança o limiar.
-  const firstIndexReaching = (run, threshold) => {
-    const sign = run.state === 'above' ? 1 : -1;
-    for (let i = run.start; i < run.end; i++) {
-      if (sign * gapPct[i] >= threshold) return i;
-    }
-    return null;
-  };
+  const cloudPoint = (m) => ({
+    time: m.time,
+    upper: Math.max(m.fast, m.slow),
+    lower: Math.min(m.fast, m.slow),
+  });
 
   const segments = [];
-  for (const run of runs) {
-    let points;
-    if (run.state === 'above') {
-      if (avgAbove <= 0) continue;
-      // Perna de alta inteira: do início do cruzamento (menor valor, gap ≈ 0) até o gap%
-      // atingir o maior valor médio histórico (pico médio das pernas de alta) — ou até onde
-      // o run chegou, se ainda não atingiu.
-      const reachedAt = firstIndexReaching(run, avgAbove);
-      const to = reachedAt != null ? reachedAt + 1 : run.end;
-      points = buildPoints(run.start, to);
-    } else {
-      if (avgBelow <= 0) continue;
-      // Inverso da nuvem de alta: só começa quando o gap% (em módulo) atinge o maior valor
-      // médio histórico das pernas de baixa, e vai até o fim do run (o candle logo antes do
-      // cruzamento de volta pra cima). Runs que nunca atingem o pico médio não pintam nada.
-      const fromIdx = firstIndexReaching(run, avgBelow);
-      if (fromIdx == null) continue;
-      points = buildPoints(fromIdx, run.end);
-    }
-    if (points.length >= 2) segments.push({ points, fillColor: CLOUD_COLOR });
-  }
+  let runState = null;
+  let runStart = -1;
 
-  return { segments, avgAbove, avgBelow, halfAbove, halfBelow };
+  const flush = (endExclusive) => {
+    if (runState == null || runStart < 0) return;
+    const meta = SLOPE_STATE_META[runState];
+    if (!meta) return;
+    const from = Math.max(0, runStart - (endExclusive - runStart < 2 ? 1 : 0));
+    const points = [];
+    for (let i = from; i < endExclusive; i++) points.push(cloudPoint(merged[i]));
+    if (points.length >= 2) segments.push({ points, fillColor: meta.fillColor, tone: meta.tone });
+  };
+
+  for (let i = 0; i < merged.length; i++) {
+    const s = states[i];
+    if (s === runState) continue;
+    flush(i);
+    runState = s;
+    runStart = s == null ? -1 : i;
+  }
+  flush(merged.length);
+
+  const lastIdx = merged.length - 1;
+  return {
+    segments,
+    lastSlopePct: slopePct[lastIdx],
+    lastState: states[lastIdx],
+  };
 }

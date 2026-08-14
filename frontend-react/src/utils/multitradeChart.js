@@ -364,7 +364,13 @@ export async function loadMultitradeSymbolChart(entry, {
   const sym = entry.symbol.toUpperCase();
 
   const trades = await fetchMultitradeTrades({ symbol: sym, strategyId: entry.strategyId, limit: 30 }).catch(() => []);
-  const markers = buildMarkersFromLiveTrades(trades, entry);
+  // Descarta trades fechados fora do intervalo configurado atualmente no favorito (ex.:
+  // favorito reconfigurado de 5m pra 1h, mesmo strategy_id) — misturar os dois no mesmo
+  // gráfico não faz sentido. Trades sem `interval` gravado (antes da coluna existir, ou de
+  // antes do bot reiniciar após a migration) também são descartados — sem essa marcação não
+  // dá pra confirmar que são do intervalo atual.
+  const sameIntervalTrades = trades.filter(t => t.interval === interval);
+  const markers = buildMarkersFromLiveTrades(sameIntervalTrades, entry);
 
   // Carga inicial pequena e fixa (não mais "cobrir o sinal/compra mais antigo dos 30 trades",
   // que em intervalos rápidos tipo 1m podia passar de 900 candles e deixar o primeiro render

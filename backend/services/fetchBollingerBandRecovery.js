@@ -3,9 +3,9 @@ const analyseBollingerBandRecovery = require('../utils/analyseBollingerBandRecov
 const mcFavoritesStatsCache = require('../cache/mcFavoritesStatsCache');
 const { intervalMs } = require('../bot/ma-cross/strategyEngine');
 
-// GET /services/bollinger-band-recovery?symbol=BTCUSDT&interval=4h&period=20&stdDev=2&source=gate&medianTrendFilter=1&medianTrendLookback=10&pullbackPct=5
+// GET /services/bollinger-band-recovery?symbol=BTCUSDT&interval=4h&period=20&stdDev=2&source=gate&medianTrendFilter=1&medianTrendLookback=10&pullbackPct=5&candleCount=1000
 router.get('/bollinger-band-recovery', async (req, res) => {
-    const { symbol, interval = '4h', period, stdDev, source, medianTrendFilter, medianTrendLookback, pullbackPct } = req.query;
+    const { symbol, interval = '4h', period, stdDev, source, medianTrendFilter, medianTrendLookback, pullbackPct, candleCount } = req.query;
     if (!symbol) return res.status(400).json({ error: 'Parâmetro obrigatório: symbol' });
 
     const sym = symbol.toUpperCase();
@@ -17,8 +17,9 @@ router.get('/bollinger-band-recovery', async (req, res) => {
         medianTrendFilter: medianTrendFilter === '1' || medianTrendFilter === 'true',
         medianTrendLookback: medianTrendLookback ? parseInt(medianTrendLookback) : 10,
         pullbackPct: pullbackPct ? Math.max(0, parseFloat(pullbackPct)) : 0,
+        candleCount: candleCount ? Math.min(3000, Math.max(100, parseInt(candleCount))) : 1000,
     };
-    const cacheKey = `bb|${sym}|${options.interval}|${options.period}|${options.stdDev}|${options.source ?? 'binance'}|${options.medianTrendFilter ? `mt${options.medianTrendLookback}` : 'nomt'}|pb${options.pullbackPct}`;
+    const cacheKey = `bb|${sym}|${options.interval}|${options.period}|${options.stdDev}|${options.source ?? 'binance'}|${options.medianTrendFilter ? `mt${options.medianTrendLookback}` : 'nomt'}|pb${options.pullbackPct}|c${options.candleCount}`;
 
     try {
         const { value, cache } = await mcFavoritesStatsCache.getOrCompute(

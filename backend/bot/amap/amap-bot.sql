@@ -129,6 +129,7 @@ CREATE TABLE IF NOT EXISTS rsi_multi_bot_trades (
   fee_usdt        NUMERIC(12,4),
   entry_signal_id BIGINT,
   exit_signal_id  BIGINT,
+  interval        TEXT, -- ver backend/bot/shared/add-trade-interval-column.sql
   created_at      TIMESTAMPTZ DEFAULT NOW()
 );
 

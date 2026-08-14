@@ -37,6 +37,7 @@ import {
   normalizePphlInterval,
   normalizeChopInterval,
   normalizeEmaPersistCloudInterval,
+  normalizeEmaPersistCloudTones,
   normalizeBarsSinceCrossInterval,
   normalizeTdSequentialInterval,
   normalizeVwapDefaults,
@@ -703,6 +704,14 @@ export function CurrencyProvider({ children }) {
     });
   }, []);
 
+  const setEmaPersistCloudTonesDefault = useCallback((tones) => {
+    setUiPrefsState((prev) => {
+      const next = { ...prev, emaPersistCloudTonesDefault: normalizeEmaPersistCloudTones(tones) };
+      saveUiPreferences(next);
+      return next;
+    });
+  }, []);
+
   const setBarsSinceCrossIntervalDefault = useCallback((interval) => {
     setUiPrefsState((prev) => {
       const next = { ...prev, barsSinceCrossIntervalDefault: normalizeBarsSinceCrossInterval(interval) };
@@ -1066,6 +1075,7 @@ export function CurrencyProvider({ children }) {
         setPphlIntervalDefault,
         setChopIntervalDefault,
         setEmaPersistCloudIntervalDefault,
+        setEmaPersistCloudTonesDefault,
         setBarsSinceCrossIntervalDefault,
         setTdSequentialIntervalDefault,
         setVwapDefaults,

@@ -33,6 +33,17 @@ function entryCooldownHours(config) {
   return Number.isFinite(h) && h >= 0 ? h : DEFAULT_ENTRY_COOLDOWN_HOURS;
 }
 
+/** Intervalo de entrada da estratégia no momento do fechamento do trade — grava em
+ *  rsi_multi_bot_trades.interval pra distinguir, no histórico, trades feitos sob uma
+ *  config antiga (ex.: favorito reconfigurado de 5m pra 1h mantém o mesmo strategy_id,
+ *  então sem essa coluna os trades de intervalos diferentes ficavam misturados no mesmo
+ *  histórico). entry.interval cobre vwap-bands/bollinger-bands; entry.ma1.interval cobre
+ *  ma-cross (duas médias, cada uma com seu intervalo — ma1 é o gatilho do cruzamento).
+ */
+function resolveConfigInterval(config) {
+  return config?.entry?.interval ?? config?.entry?.ma1?.interval ?? null;
+}
+
 function parseRulesState(row) {
   let rs = row?.rules_state;
   if (typeof rs === 'string') {
@@ -266,6 +277,7 @@ function createTradeExecution({
       capital_before: capitalBefore, capital_after: capitalAfter,
       rsi_entry: parseFloat(state.rsi_entry ?? 0), rsi_exit: exitResult?.ma1 ?? 0,
       exit_reason: exitResult?.reason ?? reasonLabel ?? 'PANEL_REMOVED',
+      interval: resolveConfigInterval(config),
       ...entrySignalFieldsFromState(state),
       ...exitSignalFields(exitResult),
     }, log);
@@ -359,6 +371,7 @@ function createTradeExecution({
         capital_before: capitalBefore, capital_after: est.capitalAfter,
         rsi_entry: parseFloat(state.rsi_entry ?? 0), rsi_exit: exitResult?.ma1 ?? 0,
         exit_reason: 'DUST',
+        interval: resolveConfigInterval(strategy.config),
         ...entrySignalFieldsFromState(state),
         ...exitSignalFields(exitResult),
       }, log);

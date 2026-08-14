@@ -12,7 +12,8 @@ import CandlestickChartLW from './CandlestickChartLW';
 import convertOpenTime from '../utils/convertOpenTime';
 import Tooltip from './Tooltip';
 import { useIsMobile } from '../hooks/useIsMobile';
-import { DEFAULT_OVERLAY_SLOTS, DEFAULT_ACTIVE_INDICATORS, BB_PERIOD_OPTIONS, BB_STDDEV_OPTIONS, DEFAULT_SR_INTERVAL, DEFAULT_PPHL_INTERVAL, DEFAULT_CHOP_INTERVAL, DEFAULT_EMA_PERSIST_CLOUD_INTERVAL, DEFAULT_BARS_SINCE_CROSS_INTERVAL, DEFAULT_TD_SEQUENTIAL_INTERVAL, DEFAULT_COMMON_CHART_INTERVALS } from '../utils/uiPreferences';
+import { DEFAULT_OVERLAY_SLOTS, DEFAULT_ACTIVE_INDICATORS, BB_PERIOD_OPTIONS, BB_STDDEV_OPTIONS, DEFAULT_SR_INTERVAL, DEFAULT_PPHL_INTERVAL, DEFAULT_CHOP_INTERVAL, DEFAULT_EMA_PERSIST_CLOUD_INTERVAL, DEFAULT_PERM_CLOUD_TONES, DEFAULT_BARS_SINCE_CROSS_INTERVAL, DEFAULT_TD_SEQUENTIAL_INTERVAL, DEFAULT_COMMON_CHART_INTERVALS } from '../utils/uiPreferences';
+import { PERM_CLOUD_TONES, PERM_TONE_SWATCH } from '../utils/emaCrossPersistenceCloud';
 import { CHART_VIEW, INTERVAL_MS, computeZoomWindow, buildFixedDataZoom, buildInsideDataZoom, computeCandleLimitFromTime, isTradePanelChartView, computeManualWheelZoom } from '../utils/chartView';
 import { simulateBbTouchPath, pairBbPathCycles } from '../utils/bollingerTouchPath';
 
@@ -611,7 +612,7 @@ async function fetchChopOverlayPoints(symbol, interval, source, limit) {
 }
 
 /** Candles + EMA9 + EMA21 num intervalo próprio (independente do gráfico), mesmo padrão do
- *  S/R/PPHL/CHOP — usado pela nuvem de permanência (PERM) e pelo Bars Since MA Cross (BARS).
+ *  S/R/PPHL/CHOP — usado pela nuvem PERM (inclinação EMA9) e pelo Bars Since MA Cross (BARS).
  *  Os pontos resultantes (candles no intervalo escolhido) são depois "encaixados" nos candles
  *  REALMENTE exibidos no gráfico via snapPointsToChartCandles (CandlestickChartLW.jsx). */
 async function fetchEmaCrossOverlayData(symbol, interval, source, limit) {
@@ -1159,6 +1160,59 @@ function renderIntervalPickerTile(dims, t, tipKey, labelPrefix, color, value, on
   );
 }
 
+function renderPermIntervalTile(dims, t, interval, setInterval, tones, setTones) {
+  const innerW = dims.w - PANEL_TILE_PAD * 2;
+  const innerH = dims.h - PANEL_TILE_PAD * 2;
+  const swatchGap = 3;
+  const swatchSize = Math.max(10, Math.min(18, innerH - 4));
+  const swatchesW = PERM_CLOUD_TONES.length * swatchSize + (PERM_CLOUD_TONES.length - 1) * swatchGap + 4;
+  const selectW = Math.max(72, innerW - swatchesW);
+  const toggleTone = (id) => {
+    setTones((prev) => ({ ...prev, [id]: prev?.[id] === false }));
+  };
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 4, width: innerW, height: innerH, boxSizing: 'border-box' }}>
+      <PanelTip text={t('chart.tip.emaPersistCloud_interval')}>
+        <select
+          value={interval}
+          onChange={e => setInterval(e.target.value)}
+          style={{ ...panelSelect('#4ade80', { w: selectW, h: innerH }), fontSize: scaleFontSize({ w: selectW, h: innerH }, 0.3, 9, 13), flex: 1, minWidth: 0 }}
+        >
+          {OVERLAY_MA_INTERVALS.map(iv => <option key={iv} value={iv}>{`PERM ${iv}`}</option>)}
+        </select>
+      </PanelTip>
+      <PanelTip text={t('chart.tip.emaPersistCloud_tones')}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: swatchGap, flexShrink: 0 }}>
+          {PERM_CLOUD_TONES.map((id) => {
+            const on = tones?.[id] !== false;
+            const color = PERM_TONE_SWATCH[id];
+            return (
+              <button
+                key={id}
+                type="button"
+                aria-pressed={on}
+                title={id}
+                onClick={(e) => { e.stopPropagation(); toggleTone(id); }}
+                style={{
+                  width: swatchSize,
+                  height: swatchSize,
+                  padding: 0,
+                  borderRadius: '50%',
+                  border: on ? `2px solid ${color}` : '2px solid #334155',
+                  background: on ? color : 'transparent',
+                  opacity: on ? 1 : 0.35,
+                  cursor: 'pointer',
+                  boxSizing: 'border-box',
+                }}
+              />
+            );
+          })}
+        </div>
+      </PanelTip>
+    </div>
+  );
+}
+
 function scaleSectionTitle(dims) {
   return {
     fontSize: scaleFontSize(dims, 0.24, 8, 12),
@@ -1611,6 +1665,8 @@ function ChartIndicatorPanel({
   setChopInterval,
   emaPersistCloudInterval,
   setEmaPersistCloudInterval,
+  emaPersistCloudTones,
+  setEmaPersistCloudTones,
   barsSinceCrossInterval,
   setBarsSinceCrossInterval,
   tdSequentialInterval,
@@ -1865,7 +1921,7 @@ function ChartIndicatorPanel({
               {tile.kind === 'srInterval' && renderIntervalPickerTile(tile.dims, t, 'chart.tip.sr_interval', 'S/R', '#facc15', srInterval, setSrInterval)}
               {tile.kind === 'pphlInterval' && renderIntervalPickerTile(tile.dims, t, 'chart.tip.pphl_interval', 'PPHL', '#2dd4bf', pphlInterval, setPphlInterval)}
               {tile.kind === 'chopInterval' && renderIntervalPickerTile(tile.dims, t, 'chart.tip.chop_interval', 'CHOP', '#f59e0b', chopInterval, setChopInterval)}
-              {tile.kind === 'emaPersistCloudInterval' && renderIntervalPickerTile(tile.dims, t, 'chart.tip.emaPersistCloud_interval', 'PERM', '#4ade80', emaPersistCloudInterval, setEmaPersistCloudInterval)}
+              {tile.kind === 'emaPersistCloudInterval' && renderPermIntervalTile(tile.dims, t, emaPersistCloudInterval, setEmaPersistCloudInterval, emaPersistCloudTones, setEmaPersistCloudTones)}
               {tile.kind === 'barsSinceCrossInterval' && renderIntervalPickerTile(tile.dims, t, 'chart.tip.barsSinceCross_interval', 'BARS', '#38bdf8', barsSinceCrossInterval, setBarsSinceCrossInterval)}
               {tile.kind === 'tdSequentialInterval' && renderIntervalPickerTile(tile.dims, t, 'chart.tip.tdSequential_interval', 'TD SEQ', '#fb7185', tdSequentialInterval, setTdSequentialInterval)}
               {tile.kind === 'vwap' && renderVwapTile(tile.dims, t, vwap, setVwap, vwapSlopeHighlightOn, setVwapSlopeHighlightOn)}
@@ -2979,7 +3035,7 @@ export default function CandlestickChart() {
     chartCandleWindowReset,
     multitradeChartFocus, tradePurchases, allTrades, chartInterval: savedInterval, setChartInterval,
     chartPanelButtons, uiPrefs, setMaBandsDefaults, setSrIntervalDefault, setPphlIntervalDefault, setChopIntervalDefault,
-    setEmaPersistCloudIntervalDefault, setBarsSinceCrossIntervalDefault, setTdSequentialIntervalDefault,
+    setEmaPersistCloudIntervalDefault, setEmaPersistCloudTonesDefault, setBarsSinceCrossIntervalDefault, setTdSequentialIntervalDefault,
     setVwapDefaults, setVwapSlopeHighlightDefault, setActiveIndicatorsPreference,
     multitradeFavorites, fiveMTradeFavorites, activeTrades } = useCurrency();
   const { t } = useI18n();
@@ -3124,6 +3180,10 @@ export default function CandlestickChart() {
   const [chopCache, setChopCache] = useState({});
   const [_chopLoading, setChopLoading] = useState(false);
   const [emaPersistCloudInterval, setEmaPersistCloudInterval] = useState(() => uiPrefs.emaPersistCloudIntervalDefault ?? DEFAULT_EMA_PERSIST_CLOUD_INTERVAL);
+  const [emaPersistCloudTones, setEmaPersistCloudTones] = useState(() => ({
+    ...DEFAULT_PERM_CLOUD_TONES,
+    ...(uiPrefs.emaPersistCloudTonesDefault ?? {}),
+  }));
   const [emaPersistCloudCache, setEmaPersistCloudCache] = useState({});
   const [_emaPersistCloudLoading, setEmaPersistCloudLoading] = useState(false);
   const [barsSinceCrossInterval, setBarsSinceCrossInterval] = useState(() => uiPrefs.barsSinceCrossIntervalDefault ?? DEFAULT_BARS_SINCE_CROSS_INTERVAL);
@@ -3469,12 +3529,18 @@ export default function CandlestickChart() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chopInterval]);
 
-  // Persiste o intervalo da nuvem de permanência EMA9×EMA21 — PERM (mesmo padrão do S/R/PPHL/CHOP)
+  // Persiste o intervalo da nuvem PERM (inclinação EMA9) — mesmo padrão do S/R/PPHL/CHOP
   useEffect(() => {
     if (isTradePanelChartView(chartViewSource)) return;
     setEmaPersistCloudIntervalDefault(emaPersistCloudInterval);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [emaPersistCloudInterval]);
+
+  useEffect(() => {
+    if (isTradePanelChartView(chartViewSource)) return;
+    setEmaPersistCloudTonesDefault(emaPersistCloudTones);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [emaPersistCloudTones]);
 
   // Persiste o intervalo do Bars Since MA Cross — BARS (mesmo padrão acima)
   useEffect(() => {
@@ -3829,7 +3895,7 @@ export default function CandlestickChart() {
     currentInterval, overlayFetchLimit, displayCandleCount, chopShown, chopInterval,
   ]);
 
-  // Busca candles + EMA9/21 pra nuvem de permanência (PERM) — intervalo próprio (independente
+  // Busca candles + EMA9/21 pra nuvem PERM (inclinação EMA9) — intervalo próprio (independente
   // do gráfico), mesmo padrão do S/R/PPHL/CHOP.
   const emaPersistCloudShown = activeIndicators.includes('emaPersistCloud') && chartPanelButtons.emaPersistCloud !== false;
   useEffect(() => {
@@ -5009,6 +5075,8 @@ export default function CandlestickChart() {
             setChopInterval={setChopInterval}
             emaPersistCloudInterval={emaPersistCloudInterval}
             setEmaPersistCloudInterval={setEmaPersistCloudInterval}
+            emaPersistCloudTones={emaPersistCloudTones}
+            setEmaPersistCloudTones={setEmaPersistCloudTones}
             barsSinceCrossInterval={barsSinceCrossInterval}
             setBarsSinceCrossInterval={setBarsSinceCrossInterval}
             tdSequentialInterval={tdSequentialInterval}
@@ -5050,6 +5118,7 @@ export default function CandlestickChart() {
               rsi={selectedChart.rsi}
               chopConfig={chartChopConfig}
               emaPersistCloudData={chartEmaPersistCloudData}
+              emaPersistCloudTones={emaPersistCloudTones}
               barsSinceCrossData={chartBarsSinceCrossData}
               tdSequentialData={chartTdSequentialData}
               stopLossConfig={chartStopLossConfig}
@@ -5095,6 +5164,8 @@ export default function CandlestickChart() {
             setChopInterval={setChopInterval}
             emaPersistCloudInterval={emaPersistCloudInterval}
             setEmaPersistCloudInterval={setEmaPersistCloudInterval}
+            emaPersistCloudTones={emaPersistCloudTones}
+            setEmaPersistCloudTones={setEmaPersistCloudTones}
             barsSinceCrossInterval={barsSinceCrossInterval}
             setBarsSinceCrossInterval={setBarsSinceCrossInterval}
             tdSequentialInterval={tdSequentialInterval}

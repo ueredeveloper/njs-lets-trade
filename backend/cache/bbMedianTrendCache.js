@@ -16,12 +16,13 @@ const MIN_TRADES = 2;
 
 /**
  * Presets pré-aquecidos: combinação padrão do filtro de trades BB c/ tendência da mediana —
- * 700 candles, período 20, desvio 2, nos dois intervalos mais usados pro mean-reversion
- * (15min e 5min). O snapshot guarda os stats "crus" (ganhos/perdas/todos) por símbolo, sem
+ * 700 candles, período 20, desvio 2, nos intervalos mais usados pro mean-reversion (1h,
+ * 15min e 5min). O snapshot guarda os stats "crus" (ganhos/perdas/todos) por símbolo, sem
  * `side` — a escolha de só ganhos/só perdas/todos é aplicada na leitura (getCachedResult),
  * não na varredura, pra não precisar re-varrer o mercado 3x pra cada side.
  */
 const CACHED_PRESETS = [
+  { key: '1h|20|2|700', interval: '1h', period: 20, stdDev: 2, lookback: 700, settingId: 'bbMedianTrend1h' },
   { key: '15m|20|2|700', interval: '15m', period: 20, stdDev: 2, lookback: 700, settingId: 'bbMedianTrend15m', ttlMs: 30 * 60_000 },
   { key: '5m|20|2|700', interval: '5m', period: 20, stdDev: 2, lookback: 700, settingId: 'bbMedianTrend5m', ttlMs: 20 * 60_000 },
 ];

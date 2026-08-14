@@ -8,7 +8,7 @@ import { tickMarkFormatterBrt, crosshairTimeFormatterBrt } from '../utils/lwBrtT
 import { INTERVAL_MS } from '../utils/chartView';
 import { simulateBbTouchPath, pairBbPathCycles } from '../utils/bollingerTouchPath';
 import { computeMedianTrendSignals } from '../utils/bollingerMedianTrend';
-import { buildEmaCrossPersistenceClouds } from '../utils/emaCrossPersistenceCloud';
+import { buildEmaCrossPersistenceClouds, formatEma9SlopeLegend, SLOPE_STATE_META } from '../utils/emaCrossPersistenceCloud';
 import { computeBarsSinceMaCross } from '../utils/barsSinceMaCross';
 import { computeTdSequentialSetup } from '../utils/tdSequentialSetup';
 import { snapPointsToChartCandles } from '../utils/snapToChartCandles';
@@ -540,7 +540,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
   symbol, interval, candlesticks, colors, rightPad = 0,
   activeIndicators = [], ma9, ma21, ma50, ma200, overlayConfigs, vwapConfig, vwapSlopeHighlight,
   bollingerConfigs = [], srConfig, pphlConfig, rsi, chopConfig,
-  emaPersistCloudData, barsSinceCrossData, tdSequentialData,
+  emaPersistCloudData, emaPersistCloudTones, barsSinceCrossData, tdSequentialData,
   stopLossConfig, targetConfig, buyInfo, multitradeMarkers, zoomPeriod, focusLastN,
   onNeedOlderCandles, loadingMoreCandles,
 }, ref) {
@@ -916,15 +916,16 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
         .flatMap((cfg) => buildBbPathLineAndMarkers(cfg, candlesticks).clouds);
       bandFillPrimitiveRef.current.replacePrefixed('bbPath-', bbPathClouds);
 
-      // Nuvem de permanência EMA9×EMA21 — botão "Perman." do painel (ver
+      // Nuvem PERM (inclinação EMA9) — botão "Perman." do painel (ver
       // buildEmaCrossPersistenceClouds). Intervalo PRÓPRIO (independente do gráfico, ver
       // fetchEmaCrossOverlayData em CandlestickChart.jsx) — os candles/EMAs vêm do intervalo
-      // escolhido no painel (ex.: PERM em 1h sobre um gráfico em 15m), depois "encaixados" nos
+      // escolhido no painel (ex.: PERM em 15m sobre um gráfico em 15m), depois "encaixados" nos
       // candles REALMENTE exibidos via snapPointsToChartCandles.
       let emaPersistClouds = [];
       if (activeIndicators.includes('emaPersistCloud')
         && emaPersistCloudData?.candlesticks?.length && emaPersistCloudData?.ma9?.length && emaPersistCloudData?.ma21?.length) {
         emaPersistClouds = buildEmaCrossPersistenceClouds(emaPersistCloudData.candlesticks, emaPersistCloudData.ma9, emaPersistCloudData.ma21).segments
+          .filter((seg) => emaPersistCloudTones?.[seg.tone] !== false)
           .map((seg) => ({ ...seg, points: snapPointsToChartCandles(candlesticks, seg.points) }))
           .map((seg) => ({ ...seg, points: seg.points.filter((p) => p.time >= minTime && p.time <= maxTime) }))
           .filter((seg) => seg.points.length >= 2);
@@ -950,7 +951,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       }
       current[key].setData(clampToVisible(def.data));
     }
-  }, [activeIndicators, ma9, ma21, ma50, ma200, overlayConfigs, bollingerConfigs, vwapConfig, vwapSlopeHighlight, candlesticks, emaPersistCloudData]);
+  }, [activeIndicators, ma9, ma21, ma50, ma200, overlayConfigs, bollingerConfigs, vwapConfig, vwapSlopeHighlight, candlesticks, emaPersistCloudData, emaPersistCloudTones]);
 
   // Linhas de preço: S/R. Sempre recriadas do zero (poucos níveis por vez, custo desprezível)
   // em vez de diff — mais simples que casar id estável por nível.
@@ -1156,6 +1157,22 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
   // Legenda: cor + nome de cada linha sobreposta ao preço (EMA fixa/rápida, VWAP, Bollinger) —
   // com várias Bollinger Bands e EMAs simultâneas na mesma paleta de cores, sem isso não dava
   // pra saber o que era o quê só olhando o gráfico.
+  const emaPersistLegend = useMemo(() => {
+    if (!activeIndicators.includes('emaPersistCloud')
+      || !emaPersistCloudData?.candlesticks?.length || !emaPersistCloudData?.ma9?.length || !emaPersistCloudData?.ma21?.length) {
+      return null;
+    }
+    const { lastSlopePct, lastState } = buildEmaCrossPersistenceClouds(
+      emaPersistCloudData.candlesticks, emaPersistCloudData.ma9, emaPersistCloudData.ma21,
+    );
+    const text = formatEma9SlopeLegend(lastSlopePct, lastState);
+    if (!text) return null;
+    const tone = SLOPE_STATE_META[lastState]?.tone;
+    if (tone && emaPersistCloudTones?.[tone] === false) return null;
+    const fill = SLOPE_STATE_META[lastState]?.fillColor ?? '#4ade80';
+    return { text, fill };
+  }, [activeIndicators, emaPersistCloudData, emaPersistCloudTones]);
+
   const legendEntries = useMemo(() => {
     const entries = [];
     for (const { id, color, label } of EMA_LINE_DEFS) {
@@ -1173,8 +1190,11 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       if (!cfg.enabled || !(cfg.showUpper || cfg.showMiddle || cfg.showLower)) continue;
       entries.push({ key: `bb-${cfg.id}`, color: cfg.color, label: cfg.label ?? `BB${cfg.period}@${cfg.interval}` });
     }
+    if (emaPersistLegend) {
+      entries.push({ key: 'emaPersistCloud', color: emaPersistLegend.fill, label: emaPersistLegend.text });
+    }
     return entries;
-  }, [activeIndicators, overlayConfigs, vwapConfig, bollingerConfigs]);
+  }, [activeIndicators, overlayConfigs, vwapConfig, bollingerConfigs, emaPersistLegend]);
 
   return (
     <div className="relative w-full h-full">

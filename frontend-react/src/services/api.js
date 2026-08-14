@@ -162,8 +162,8 @@ export async function fetchSimpleMaCross(symbol, entryInterval = '15m', exitInte
  *  `pullbackPct` (>0) exige que o preço caia esse tanto % abaixo da banda inferior antes de
  *  contar a entrada — simula um limite de compra nesse preço (mesmo `entry.pullback.belowPct`
  *  do bot). 0 = desligado, entra assim que a banda é tocada (padrão). */
-export async function fetchBollingerBandRecovery(symbol, interval = '4h', period = 20, stdDev = 2, source = null, medianTrendFilter = false, medianTrendLookback = 10, pullbackPct = 0) {
-  const params = new URLSearchParams({ symbol, interval, period, stdDev });
+export async function fetchBollingerBandRecovery(symbol, interval = '4h', period = 20, stdDev = 2, source = null, medianTrendFilter = false, medianTrendLookback = 10, pullbackPct = 0, candleCount = 1000) {
+  const params = new URLSearchParams({ symbol, interval, period, stdDev, candleCount });
   if (source) params.set('source', source);
   if (medianTrendFilter) {
     params.set('medianTrendFilter', '1');

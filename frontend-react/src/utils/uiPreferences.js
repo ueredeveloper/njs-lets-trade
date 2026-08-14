@@ -1,3 +1,4 @@
+import { DEFAULT_PERM_CLOUD_TONES, normalizeEmaPersistCloudTones } from './emaCrossPersistenceCloud';
 
 const STORAGE_KEY = 'lets_trade_ui_prefs';
 
@@ -221,7 +222,7 @@ export function normalizeChopInterval(raw) {
   return CHART_INTERVAL_OPTIONS.includes(raw) ? raw : DEFAULT_CHOP_INTERVAL;
 }
 
-/** Intervalo de candles usado pela nuvem de permanência EMA9×EMA21 (PERM) — independente do
+/** Intervalo de candles usado pela nuvem PERM (inclinação EMA9 vs EMA21) — independente do
  *  intervalo do gráfico, mesmo padrão do S/R/PPHL/CHOP (ex.: gráfico em 15m, nuvem calculada
  *  sobre candles de 1h). */
 export const DEFAULT_EMA_PERSIST_CLOUD_INTERVAL = '1h';
@@ -229,6 +230,9 @@ export const DEFAULT_EMA_PERSIST_CLOUD_INTERVAL = '1h';
 export function normalizeEmaPersistCloudInterval(raw) {
   return CHART_INTERVAL_OPTIONS.includes(raw) ? raw : DEFAULT_EMA_PERSIST_CLOUD_INTERVAL;
 }
+
+/** Quais tons da nuvem PERM aparecem no gráfico (vermelho/laranja/amarelo/verde). */
+export { DEFAULT_PERM_CLOUD_TONES, normalizeEmaPersistCloudTones };
 
 /** Intervalo de candles usado pelo "Bars Since MA Cross" (BARS) — mesmo padrão acima. */
 export const DEFAULT_BARS_SINCE_CROSS_INTERVAL = '1h';
@@ -306,6 +310,7 @@ export const DEFAULT_UI_PREFS = {
   pphlIntervalDefault: DEFAULT_PPHL_INTERVAL,
   chopIntervalDefault: DEFAULT_CHOP_INTERVAL,
   emaPersistCloudIntervalDefault: DEFAULT_EMA_PERSIST_CLOUD_INTERVAL,
+  emaPersistCloudTonesDefault: { ...DEFAULT_PERM_CLOUD_TONES },
   barsSinceCrossIntervalDefault: DEFAULT_BARS_SINCE_CROSS_INTERVAL,
   tdSequentialIntervalDefault: DEFAULT_TD_SEQUENTIAL_INTERVAL,
   vwapDefaults: normalizeVwapDefaults(DEFAULT_VWAP),
@@ -329,6 +334,7 @@ function cloneDefaults() {
     pphlIntervalDefault: DEFAULT_PPHL_INTERVAL,
     chopIntervalDefault: DEFAULT_CHOP_INTERVAL,
     emaPersistCloudIntervalDefault: DEFAULT_EMA_PERSIST_CLOUD_INTERVAL,
+    emaPersistCloudTonesDefault: { ...DEFAULT_PERM_CLOUD_TONES },
     barsSinceCrossIntervalDefault: DEFAULT_BARS_SINCE_CROSS_INTERVAL,
     tdSequentialIntervalDefault: DEFAULT_TD_SEQUENTIAL_INTERVAL,
     vwapDefaults: normalizeVwapDefaults(DEFAULT_VWAP),
@@ -380,6 +386,9 @@ export function loadUiPreferences() {
     }
     if (parsed.emaPersistCloudIntervalDefault !== undefined) {
       result.emaPersistCloudIntervalDefault = normalizeEmaPersistCloudInterval(parsed.emaPersistCloudIntervalDefault);
+    }
+    if (parsed.emaPersistCloudTonesDefault !== undefined) {
+      result.emaPersistCloudTonesDefault = normalizeEmaPersistCloudTones(parsed.emaPersistCloudTonesDefault);
     }
     if (parsed.barsSinceCrossIntervalDefault !== undefined) {
       result.barsSinceCrossIntervalDefault = normalizeBarsSinceCrossInterval(parsed.barsSinceCrossIntervalDefault);
