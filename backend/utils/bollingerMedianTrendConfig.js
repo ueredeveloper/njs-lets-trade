@@ -22,7 +22,7 @@ function getMedianTrendThreshold() {
 
 function setMedianTrendThreshold(value) {
   const n = Number(value);
-  if (Number.isFinite(n) && n >= 0) current = n;
+  if (Number.isFinite(n)) current = n;
 }
 
 async function refreshMedianTrendThreshold() {

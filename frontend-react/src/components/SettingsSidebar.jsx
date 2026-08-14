@@ -180,7 +180,7 @@ export default function SettingsSidebar({ open, onClose }) {
 
   async function saveBbMedianConfig() {
     const n = Number(bbMedianInput);
-    if (!Number.isFinite(n) || n < 0) { setBbMedianInput(String(bbMedianConfig.minAvgDiffPct)); return; }
+    if (!Number.isFinite(n)) { setBbMedianInput(String(bbMedianConfig.minAvgDiffPct)); return; }
     setBbMedianSaveState('saving');
     try {
       const saved = await saveBollingerMedianTrendConfig({ minAvgDiffPct: n });
@@ -881,7 +881,6 @@ export default function SettingsSidebar({ open, onClose }) {
                   <span className="text-[10px] text-p5/50">{t('settings.bbmedian_min_avg_diff')}</span>
                   <input
                     type="number"
-                    min={0}
                     step={0.1}
                     className={`w-24 ${inp}`}
                     value={bbMedianInput}

@@ -2309,8 +2309,9 @@ const BOLLINGER_MEDIAN_TREND_DEFAULTS = { minAvgDiffPct: 0.2 };
 
 function bollingerMedianTrendRowToBody(row) {
   if (!row) return { ...BOLLINGER_MEDIAN_TREND_DEFAULTS };
+  const n = Number(row.min_avg_diff_pct);
   return {
-    minAvgDiffPct: Number(row.min_avg_diff_pct) || BOLLINGER_MEDIAN_TREND_DEFAULTS.minAvgDiffPct,
+    minAvgDiffPct: Number.isFinite(n) ? n : BOLLINGER_MEDIAN_TREND_DEFAULTS.minAvgDiffPct,
   };
 }
 
@@ -2327,7 +2328,10 @@ router.put('/bollinger-median-trend-config', getUserId, async (req, res) => {
   const body = req.body ?? {};
   const row = {
     user_id:          req.userId,
-    min_avg_diff_pct: Math.max(0, Number(body.minAvgDiffPct ?? BOLLINGER_MEDIAN_TREND_DEFAULTS.minAvgDiffPct)),
+    min_avg_diff_pct: (() => {
+      const n = Number(body.minAvgDiffPct);
+      return Number.isFinite(n) ? n : BOLLINGER_MEDIAN_TREND_DEFAULTS.minAvgDiffPct;
+    })(),
     updated_at:       new Date().toISOString(),
   };
   const { data, error } = await supabase

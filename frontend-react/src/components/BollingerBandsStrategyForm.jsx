@@ -185,9 +185,10 @@ export default function BollingerBandsStrategyForm({ form, patch, symbol, exchan
             <p className="text-[10px] text-p5/50 leading-relaxed">
               Calcula a média das variações candle-a-candle dos últimos {form.entry.medianTrendFilter?.lookback ?? 10}
               {' '}valores fechados da linha mediana (média) da Bollinger({form.entry.period},{form.entry.stdDev})
-              {' '}{form.entry.interval}. Só compra se essa média for ≥ 0 (mediana subindo ou estável). Checado no
-              sinal e de novo a cada tick enquanto a ordem limite aguarda fill — cancela a ordem se a mediana virar
-              pra baixo antes do preenchimento.
+              {' '}{form.entry.interval}. Só compra se essa média for ≥ ao limiar configurado em Configurações →
+              Filtro de tendência da Bollinger (padrão 0.2%, aceita valor negativo pra tolerar uma pequena queda
+              da mediana). Checado no sinal e de novo a cada tick enquanto a ordem limite aguarda fill — cancela a
+              ordem se a mediana virar pra baixo do limiar antes do preenchimento.
             </p>
           </>
         ) : (
