@@ -152,7 +152,7 @@ export function normalizeVwapSlopeHighlight(raw) {
 
 /** Intervalos disponíveis nas abas de Estatísticas (mesma lista dos selects do painel). */
 export const STATS_INTERVAL_OPTIONS = [
-  '1m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w',
+  '1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w',
 ];
 
 /**
