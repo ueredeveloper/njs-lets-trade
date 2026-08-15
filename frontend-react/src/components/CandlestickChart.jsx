@@ -3323,7 +3323,13 @@ export default function CandlestickChart() {
         if (!cancelled) setLoadingMoreCandles(false);
       }
     })();
-    return () => { cancelled = true; };
+    // Se esse fetch for cancelado (ex.: troca de intervalo no meio do caminho), desliga a flag
+    // aqui — sem isso, quando a nova execução do efeito cai no `return undefined` antecipado
+    // acima (janela padrão do novo intervalo já cobre displayCandleCount), ninguém liga nem
+    // desliga loadingMoreCandles de novo e ela fica travada em `true` pra sempre, desabilitando
+    // os botões de quantidade de candles e bloqueando o gatilho de "carregar mais" ao arrastar
+    // o gráfico pra trás (loadingMoreCandlesRef em CandlestickChartLW.jsx).
+    return () => { cancelled = true; setLoadingMoreCandles(false); };
   }, [selectedChart?.symbol, selectedChart?.interval, selectedChart?.source, selectedChart?.candlesticks?.length, displayCandleCount, hasExplicitCandleWindow, candleFetchLimit, currentInterval]);
 
   // Refs pra checar "fetch em andamento" de dentro do setInterval sem precisar recriá-lo

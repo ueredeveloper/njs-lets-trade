@@ -590,6 +590,11 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
   useEffect(() => { onNeedOlderCandlesRef.current = onNeedOlderCandles; }, [onNeedOlderCandles]);
   useEffect(() => { loadingMoreCandlesRef.current = loadingMoreCandles; }, [loadingMoreCandles]);
   useEffect(() => { candlesticksLenRef.current = candlesticks?.length ?? 0; }, [candlesticks]);
+  // Sem isso, trocar de moeda/intervalo depois de já ter arrastado-carregado histórico uma vez
+  // deixa o guard de "já disparei pra esse tamanho" (triggeredForLenRef, ver handleVisibleLogicalRangeChange
+  // abaixo) travado: a busca nova volta a caber exatamente no mesmo tamanho (DEFAULT_CANDLE_LIMIT)
+  // que já tinha disparado antes, e o guard bloqueia pra sempre o próximo arrasto pra trás.
+  useEffect(() => { triggeredForLenRef.current = -1; }, [symbol, interval]);
 
   // Expõe conversão pixel↔preço/tempo pro pai (régua de medição em CandlestickChart.jsx) —
   // equivalente ao convertToPixel/convertFromPixel que o ReactECharts expõe via
