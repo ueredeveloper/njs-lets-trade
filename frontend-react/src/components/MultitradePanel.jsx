@@ -63,7 +63,7 @@ export default function MultitradePanel() {
   const {
     multitradeFavorites, selectedChart, gateFavorites,
     saveMultitradeSymbol, removeMultitradeEntry,
-    applyMultitradeSymbolChart, updateMultitradeBotState, buyMultitradeNow,
+    applyMultitradeSymbolChart, updateMultitradeBotState, buyMultitradeNow, buyMultitradeMore,
   } = useCurrency();
   const [addModal, setAddModal]           = useState(false);
   const [favOpen, setFavOpen]             = useState(false);
@@ -477,6 +477,9 @@ export default function MultitradePanel() {
             await updateMultitradeBotState(payload);
             setStateSymbol(null);
           }}
+          onBuyMore={({ strategyId, amountUsdt, mode, pullbackPct, oco }) => buyMultitradeMore({
+            symbol: stateSymbol, strategyId, amountUsdt, mode, pullbackPct, oco,
+          })}
           onCancel={() => setStateSymbol(null)}
         />
       )}

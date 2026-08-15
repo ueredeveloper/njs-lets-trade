@@ -4,8 +4,12 @@ import {
 } from '../constants/strategyPresets';
 import { multitradePhaseBadge, PHASE_HINT_PT, fmtBuyTimeShort } from '../utils/multitradePhase';
 import { useI18n } from '../i18n';
+import { fetchBinancePrice, fetchGatePrice } from '../services/api';
+import BracketDragSlider from './BracketDragSlider';
 
 const MT_COLOR = '#22d3ee';
+const DEFAULT_OCO_TARGET_PCT = 3;
+const DEFAULT_OCO_STOP_PCT = 5;
 
 function toLocalInputValue(iso) {
   if (!iso) return '';
@@ -73,6 +77,158 @@ function ActionCard({ number, title, when, children, accent = MT_COLOR }) {
   );
 }
 
+const PULLBACK_PRESETS = [1, 2, 3, 5];
+
+/** Comprar mais (média de preço) numa posição BOUGHT — mercado (imediato, atualiza
+ *  buy_price/buy_qty na hora) ou pullback (ordem LIMIT resting X% abaixo do preço atual,
+ *  só preenche depois — bookkeeping não muda até lá, ver /multitrade-buy-more). No modo
+ *  mercado dá pra já configurar a OCO (alvo+stop) que o backend coloca logo depois da compra
+ *  preencher, sobre a posição já com a média/quantidade atualizadas — no modo pullback isso
+ *  não é oferecido porque a ordem fica resting e pode nunca encher (não dá pra saber a posição
+ *  final na hora de montar a OCO). */
+function BuyMoreCard({ symbol, exchange, strategyId, defaultAmount, currentBuyPrice, onBuyMore }) {
+  const [mode, setMode] = useState('market'); // 'market' | 'pullback'
+  const [pullbackPct, setPullbackPct] = useState(PULLBACK_PRESETS[0]);
+  const [amount, setAmount] = useState(defaultAmount != null ? String(defaultAmount) : '');
+  const [wantsOco, setWantsOco] = useState(false);
+  const [ocoTargetPct, setOcoTargetPct] = useState(DEFAULT_OCO_TARGET_PCT);
+  const [ocoStopPct, setOcoStopPct] = useState(DEFAULT_OCO_STOP_PCT);
+  const [currentPrice, setCurrentPrice] = useState(null);
+  const [buying, setBuying] = useState(false);
+  const [error, setError] = useState(null);
+  const [result, setResult] = useState(null);
+
+  const amountNum = Number(amount);
+  const isValidAmount = Number.isFinite(amountNum) && amountNum > 0;
+  const showOco = mode === 'market';
+
+  // Preço atual só importa pro aviso de faixa do slider (mesma ideia do modo OCO em
+  // MultitradeSellModal) — busca uma vez ao ligar, não repolla enquanto o usuário arrasta.
+  useEffect(() => {
+    if (!showOco || !wantsOco || !symbol) return;
+    let cancelled = false;
+    (exchange === 'gate' ? fetchGatePrice(symbol) : fetchBinancePrice(symbol))
+      .then(({ price }) => { if (!cancelled) setCurrentPrice(price); })
+      .catch(() => { if (!cancelled) setCurrentPrice(null); });
+    return () => { cancelled = true; };
+  }, [showOco, wantsOco, symbol, exchange]);
+
+  async function handleConfirm() {
+    if (!isValidAmount) return;
+    setBuying(true);
+    setError(null);
+    setResult(null);
+    try {
+      const res = await onBuyMore({
+        strategyId,
+        amountUsdt: amountNum,
+        mode,
+        pullbackPct: mode === 'pullback' ? pullbackPct : undefined,
+        oco: showOco && wantsOco ? { targetPct: ocoTargetPct, stopPct: ocoStopPct } : undefined,
+      });
+      setResult(res);
+    } catch (err) {
+      setError(err?.message ?? 'Falha ao comprar mais');
+    } finally {
+      setBuying(false);
+    }
+  }
+
+  return (
+    <>
+      <div className="flex gap-2">
+        {[{ id: 'market', label: 'Preço de mercado' }, { id: 'pullback', label: 'Pullback' }].map(m => (
+          <button key={m.id} type="button" disabled={buying} onClick={() => { setMode(m.id); setResult(null); }}
+            className="flex-1 py-1 text-[10px] rounded font-semibold disabled:opacity-50"
+            style={{
+              background: mode === m.id ? '#22c55e' : 'transparent',
+              color: mode === m.id ? '#000' : '#4ade80',
+              border: '1px solid #22c55e', opacity: mode === m.id ? 1 : 0.55,
+            }}>
+            {m.label}
+          </button>
+        ))}
+      </div>
+
+      {mode === 'pullback' && (
+        <div className="flex gap-1">
+          {PULLBACK_PRESETS.map(pct => (
+            <button key={pct} type="button" disabled={buying} onClick={() => setPullbackPct(pct)}
+              className="flex-1 py-1 rounded text-[9px] font-semibold disabled:opacity-50"
+              style={{
+                background: pullbackPct === pct ? '#22c55e22' : '#1a1d2a',
+                color: pullbackPct === pct ? '#4ade80' : '#94a3b8',
+                border: `1px solid ${pullbackPct === pct ? '#22c55e55' : '#2a2d3a'}`,
+              }}>
+              -{pct}%
+            </button>
+          ))}
+        </div>
+      )}
+
+      <label className="block">
+        <span className="text-[9px] text-p5/40">Valor a comprar (USDT)</span>
+        <input type="number" step="any" min="0" disabled={buying} value={amount}
+          onChange={e => { setAmount(e.target.value); setResult(null); }}
+          className="w-full mt-0.5 px-2 py-1.5 rounded text-[11px] font-mono bg-p1 border border-p2 text-p5" />
+      </label>
+
+      {mode === 'pullback' && (
+        <p className="text-[9px] text-p5/40 leading-relaxed">
+          Ordem LIMIT fica parada na corretora {pullbackPct}% abaixo do preço atual — só executa se o preço cair até lá.
+          OCO não dá pra configurar aqui nesse modo (a posição final só se sabe quando/se a ordem encher) — coloque
+          depois em "Vender → OCO" se preencher.
+        </p>
+      )}
+
+      {showOco && (
+        <div className="rounded-lg overflow-hidden" style={{ border: '1px solid #2a2d3a' }}>
+          <label className="flex items-center gap-2 px-2 py-1.5 cursor-pointer" style={{ background: '#1a1d2a' }}>
+            <input type="checkbox" checked={wantsOco} disabled={buying}
+              onChange={e => { setWantsOco(e.target.checked); setResult(null); }}
+              className="shrink-0 accent-cyan-500" />
+            <span className="text-[10px] font-semibold text-p5/80">Colocar OCO (alvo + stop) logo após a compra</span>
+          </label>
+          {wantsOco && (
+            <div className="px-2 py-2" style={{ background: '#0f1219' }}>
+              <BracketDragSlider
+                entryPrice={currentBuyPrice}
+                targetPct={ocoTargetPct}
+                stopPct={ocoStopPct}
+                onChangeTarget={setOcoTargetPct}
+                onChangeStop={setOcoStopPct}
+                disabled={buying}
+                currentPrice={currentPrice}
+              />
+              <p className="text-[9px] text-p5/40 leading-relaxed mt-1">
+                Alvo/stop calculados sobre a média de preço DEPOIS dessa compra (não sobre o preço de compra atual
+                mostrado no eixo, que é só referência).
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {error && <p className="text-[10px] text-red-400">{error}</p>}
+      {result && !error && (
+        <p className="text-[10px] text-emerald-400">
+          {result.order?.mode === 'pullback'
+            ? `Ordem LIMIT colocada a ${Number(result.order.price ?? result.order.referencePrice).toFixed(6)} — aguardando preenchimento.`
+            : `Comprado mais ${Number(result.order?.filledQty ?? 0).toFixed(6)} a ${Number(result.order?.avgPrice ?? 0).toFixed(6)}.`}
+          {result.oco && ' OCO colocada.'}
+        </p>
+      )}
+      {result?.ocoError && <p className="text-[10px] text-amber-400">{result.ocoError}</p>}
+
+      <button type="button" disabled={buying || !isValidAmount} onClick={handleConfirm}
+        className="w-full py-2 rounded text-[10px] font-bold disabled:opacity-50"
+        style={{ background: '#22c55e22', color: '#22c55e', border: '1px solid #22c55e55' }}>
+        {buying ? 'Comprando…' : mode === 'pullback' ? `Colocar ordem -${pullbackPct}%` : 'Comprar mais agora'}
+      </button>
+    </>
+  );
+}
+
 function BoughtFormFields({ buyPrice, buyQty, buyTime, onPrice, onQty, onTime }) {
   return (
     <>
@@ -100,6 +256,7 @@ export default function MultitradeBotStateModal({
   entries,
   onConfirm,
   onCancel,
+  onBuyMore,
 }) {
   const activeEntries = useMemo(
     () => (entries ?? []).filter(e => e.enabled !== false),
@@ -278,6 +435,24 @@ export default function MultitradeBotStateModal({
                       </>
                     )}
                   </ActionCard>
+
+                  {onBuyMore && (
+                    <ActionCard
+                      number={3}
+                      title="Comprar mais (média de preço)"
+                      when="Adiciona à posição atual — a mercado (imediato) ou pullback (ordem limite abaixo do preço atual, só executa se cair até lá)."
+                      accent="#22c55e"
+                    >
+                      <BuyMoreCard
+                        symbol={symbol}
+                        exchange={entry?.exchange}
+                        strategyId={normalizeStrategyId(entry.strategyId)}
+                        defaultAmount={entry?.capital}
+                        currentBuyPrice={entry?.buyPrice}
+                        onBuyMore={onBuyMore}
+                      />
+                    </ActionCard>
+                  )}
                 </>
               )}
 

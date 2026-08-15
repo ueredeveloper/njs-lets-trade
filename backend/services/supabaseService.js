@@ -48,7 +48,11 @@ const fetchKlines = require('../binance/fetchKlines');
 const { toGateSymbol } = require('../utils/toGateSymbol');
 const { fetch24hVolumeUsdt, fmtVolumeUsdt, DEFAULT_MIN_VOLUME_USDT } = require('../bot/volume24h');
 const getBinanceClient = require('../binance/getClient');
-const { gateMarketBuy } = require('../gate/gateMarketBuy');
+const { gateMarketBuy, gatePlaceRestingLimitBuy } = require('../gate/gateMarketBuy');
+const { binancePlaceRestingLimitBuy } = require('../binance/tradeClient');
+const { getAvgPrice } = require('../binance/ocoClient');
+const { gateLastPrice } = require('../gate/gateAccount');
+const { buildAdapter: buildTradeAdapter, syncExchangeClocks } = require('../bot/shared/buildAdapter');
 
 // Mesmo buffer conservador aplicado pelos bots (ma-cross-bot.js) na quantidade "utilizável"
 // após a compra, pra sobrar margem de segurança na hora de vender (taxa + arredondamento).
@@ -959,6 +963,159 @@ router.post('/multitrade-buy-now', getUserId, async (req, res) => {
 
   const entry = await enrichSingleMultitradeEntry(multitradeToEntry(fav));
   res.json(entry);
+});
+
+// POST /services/sb/multitrade-buy-more — compra adicional (média de preço) numa posição já
+// BOUGHT, fora do sinal do bot. Dois modos:
+//  - 'market': compra a mercado imediata — preenche na hora, então já atualiza buy_price
+//    (média ponderada com a posição existente) e buy_qty aqui mesmo.
+//  - 'pullback': ordem LIMIT GTC resting `pullbackPct`% abaixo do preço atual — só preenche
+//    depois (ou nunca), então o bookkeeping NÃO muda aqui, mesmo padrão do modo OCO do botão
+//    de vender (MultitradeSellModal) que também não fecha/altera a posição até o fill ser
+//    detectado depois. Preço médio/quantidade dessa ordem precisam ser corrigidos manualmente
+//    (card "Corrigir dados da compra" do modal de estado) quando ela encher.
+router.post('/multitrade-buy-more', getUserId, async (req, res) => {
+  const symbol = req.body?.symbol?.toUpperCase();
+  const strategyId = normStrategyId(req.body?.strategyId ?? req.body?.strategy_id ?? 'ma-cross');
+  const amountUsdt = Number(req.body?.amountUsdt);
+  const mode = req.body?.mode === 'pullback' ? 'pullback' : 'market';
+  const pullbackPct = Number(req.body?.pullbackPct);
+
+  if (!symbol) return res.status(400).json({ error: 'symbol obrigatório' });
+  if (!strategyId) return res.status(400).json({ error: 'strategyId obrigatório' });
+  if (!Number.isFinite(amountUsdt) || amountUsdt <= 0) {
+    return res.status(400).json({ error: 'amountUsdt inválido' });
+  }
+  if (mode === 'pullback' && (!Number.isFinite(pullbackPct) || pullbackPct <= 0)) {
+    return res.status(400).json({ error: 'pullbackPct inválido' });
+  }
+
+  const { data: fav, error: favErr } = await supabase
+    .from('multitrade_favorites')
+    .select('*')
+    .eq('user_id', req.userId)
+    .eq('symbol', symbol)
+    .eq('strategy_id', strategyId)
+    .single();
+  if (favErr || !fav) return res.status(404).json({ error: 'favorito não encontrado' });
+
+  const { data: existing } = await supabase
+    .from('rsi_multi_bot_state')
+    .select('id, phase, buy_price, buy_qty, buy_usdt, buy_time, rules_state')
+    .eq('symbol', symbol)
+    .eq('strategy_id', strategyId)
+    .maybeSingle();
+  if (existing?.phase !== 'BOUGHT' || existing.buy_price == null || existing.buy_qty == null) {
+    return res.status(409).json({ error: 'sem posição aberta nessa moeda — não é possível comprar mais' });
+  }
+
+  // OCO (alvo + stop) pra colocar sobre a posição JÁ atualizada (média + qty nova) assim que
+  // a compra preencher — só faz sentido no modo 'market' (preenche na hora); no 'pullback' a
+  // ordem fica resting e pode nunca encher, então não dá pra saber a posição final agora.
+  const ocoReq = req.body?.oco;
+  const ocoTargetPct = Number(ocoReq?.targetPct);
+  const ocoStopPct = Number(ocoReq?.stopPct);
+  const wantsOco = mode === 'market' && !!ocoReq && Number.isFinite(ocoTargetPct) && ocoTargetPct > 0
+    && Number.isFinite(ocoStopPct) && ocoStopPct > 0;
+
+  const pair = fav.exchange === 'gate' ? toGateSymbol(symbol) : symbol;
+
+  if (mode === 'pullback') {
+    let currentPrice;
+    try {
+      currentPrice = fav.exchange === 'gate' ? await gateLastPrice(pair) : await getAvgPrice(symbol);
+    } catch (err) {
+      return res.status(500).json({ error: `Falha ao buscar preço atual: ${err.message}` });
+    }
+    if (!Number.isFinite(currentPrice) || currentPrice <= 0) {
+      return res.status(500).json({ error: 'preço atual inválido' });
+    }
+    const limitPrice = currentPrice * (1 - pullbackPct / 100);
+
+    let handle;
+    try {
+      handle = fav.exchange === 'gate'
+        ? await gatePlaceRestingLimitBuy(pair, amountUsdt, limitPrice)
+        : await binancePlaceRestingLimitBuy(symbol, amountUsdt, limitPrice);
+    } catch (err) {
+      return res.status(500).json({ error: `Erro ao colocar ordem limite: ${err.message}` });
+    }
+
+    const entry = await enrichSingleMultitradeEntry(multitradeToEntry(fav));
+    return res.json({
+      entry,
+      order: { mode: 'pullback', ...handle, referencePrice: currentPrice, pullbackPct },
+      note: 'Ordem LIMIT colocada na corretora, ainda não preenchida — o preço médio/quantidade só serão atualizados quando a ordem encher (corrija manualmente em "Corrigir dados da compra" se necessário).',
+    });
+  }
+
+  let filledQty, quoteQty, avgPrice;
+  try {
+    if (fav.exchange === 'gate') {
+      ({ filledQty, quoteQty, avgPrice } = await gateMarketBuy(pair, amountUsdt));
+    } else {
+      const client = await getBinanceClient();
+      const order = await client.order({
+        symbol, side: 'BUY', type: 'MARKET', quoteOrderQty: amountUsdt.toFixed(2),
+      });
+      const rawQty = parseFloat(order.executedQty);
+      quoteQty = parseFloat(order.cummulativeQuoteQty);
+      avgPrice = quoteQty / rawQty;
+      filledQty = rawQty * (1 - GATE_FEE_RATE_BUFFER);
+    }
+  } catch (err) {
+    return res.status(500).json({ error: `Erro na compra: ${err.message}` });
+  }
+
+  const prevQty      = Number(existing.buy_qty);
+  const prevPrice    = Number(existing.buy_price);
+  const prevUsdt     = existing.buy_usdt != null ? Number(existing.buy_usdt) : prevQty * prevPrice;
+  const newQty       = prevQty + filledQty;
+  const newUsdt       = prevUsdt + quoteQty;
+  const newAvgPrice  = newUsdt / newQty;
+
+  let patch;
+  try {
+    patch = buildBotStatePatch('BOUGHT', {
+      buyPrice: newAvgPrice, buyQty: newQty, buyTime: existing.buy_time, buyUsdt: newUsdt,
+    });
+    await upsertBotStatePatch(fav, symbol, strategyId, patch);
+  } catch (error) {
+    // Ordem já executou na exchange — devolve o resultado da compra mesmo se o bookkeeping
+    // no Supabase falhar, pra não perder o registro do preço (mesmo padrão do buy-now acima).
+    return res.status(207).json({
+      error: `Compra executada na exchange, mas falhou salvar o estado: ${error.message}`,
+      buyPrice: newAvgPrice, buyQty: newQty, buyUsdt: newUsdt,
+    });
+  }
+
+  let oco = null;
+  let ocoError = null;
+  if (wantsOco) {
+    try {
+      if (fav.exchange !== 'gate') await syncExchangeClocks();
+      const adapter = buildTradeAdapter(fav.exchange, symbol);
+      const targetPrice = newAvgPrice * (1 + ocoTargetPct / 100);
+      const stopPrice = newAvgPrice * (1 - ocoStopPct / 100);
+      const bracket = await adapter.placeExitBracket(newQty, targetPrice, stopPrice);
+      oco = { ...bracket, targetPct: ocoTargetPct, stopPct: ocoStopPct };
+      // manual:true — mesmo motivo do /binance-bracket-sell e /gate-bracket-sell: o bot não
+      // deve substituir essa bracket por deriva no próximo tick (maybeReplaceBracket em
+      // bollinger-bands-bot.js/vwap-bands-bot.js pula brackets manuais).
+      await supabase.from('rsi_multi_bot_state')
+        .update({
+          rules_state: { ...(existing.rules_state ?? {}), exitBracket: { ...bracket, manual: true, placedAt: new Date().toISOString() } },
+        })
+        .eq('id', existing.id);
+    } catch (err) {
+      // Compra já executou e o estado já foi salvo — não falha a resposta por causa da OCO,
+      // só avisa o front pra o usuário colocar manualmente (Vender > OCO) se precisar.
+      ocoError = `Compra feita, mas falha ao colocar OCO: ${err.message}`;
+    }
+  }
+
+  const entry = await enrichSingleMultitradeEntry(multitradeToEntry(fav));
+  res.json({ entry, order: { mode: 'market', filledQty, quoteQty, avgPrice }, oco, ocoError });
 });
 
 // DELETE /services/sb/multitrade-favorites/:id

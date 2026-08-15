@@ -1218,6 +1218,21 @@ export async function buyMultitradeNow({ symbol, strategyId }) {
   return body;
 }
 
+/** Compra adicional (média de preço) numa posição já BOUGHT — mercado ou LIMIT com pullback
+ *  (%, ordem resting que só preenche depois). Ordem real, não é só bookkeeping. No modo
+ *  mercado, `oco` ({ targetPct, stopPct }) é opcional — se enviado, coloca a OCO de saída
+ *  (sobre a posição já com a média/quantidade atualizadas) logo depois da compra preencher. */
+export async function buyMultitradeMore({ symbol, strategyId, amountUsdt, mode, pullbackPct, oco }) {
+  const res = await fetch('/services/sb/multitrade-buy-more', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ symbol, strategyId, amountUsdt, mode, pullbackPct, oco }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error ?? `buyMultitradeMore falhou: HTTP ${res.status}`);
+  return body;
+}
+
 export async function fetchMultitradeTrades({ symbol, strategyId, limit } = {}) {
   const params = new URLSearchParams();
   if (symbol)      params.set('symbol', symbol);

@@ -4,6 +4,7 @@ import { addFavorite, removeFavorite, fetchActiveTrades, ignoreActiveTrade,
   fetchMultitradeFavorites, addMultitradeFavorite, updateMultitradeFavorite, removeMultitradeFavorite,
   patchMultitradeBotState,
   buyMultitradeNow,
+  buyMultitradeMore,
   fetchFiveMTradeFavorites, addFiveMTradeFavorite, updateFiveMTradeFavorite, removeFiveMTradeFavorite,
   fetchMarketHighlights, fetchVolumeIgnition } from '../services/api';
 import { CHART_VIEW } from '../utils/chartView';
@@ -306,6 +307,13 @@ export function CurrencyProvider({ children }) {
       e.symbol?.toUpperCase() === sym
       && (e.strategyId === sid || e.strategyId === 'ma-cross'),
     ) ?? null;
+  }, [refreshMultitradeFavorites]);
+
+  const buyMultitradeMoreAction = useCallback(async ({ symbol, strategyId, amountUsdt, mode, pullbackPct, oco }) => {
+    const sid = strategyId ?? 'ma-cross';
+    const result = await buyMultitradeMore({ symbol, strategyId: sid, amountUsdt, mode, pullbackPct, oco });
+    await refreshMultitradeFavorites();
+    return result;
   }, [refreshMultitradeFavorites]);
 
   const saveFiveMTradeEntry = useCallback(async ({ id, symbol, exchange, capital, rsiBuy, rsiSell, maFilters, stopLoss, recoveryPattern, sellScope, entryPrice, entryPaths }) => {
@@ -1142,6 +1150,7 @@ export function CurrencyProvider({ children }) {
         saveMultitradeSymbol,
         updateMultitradeBotState,
         buyMultitradeNow: buyMultitradeNowAction,
+        buyMultitradeMore: buyMultitradeMoreAction,
         fiveMTradeFavorites,
         setFiveMTradeFavorites,
         favoriteView,

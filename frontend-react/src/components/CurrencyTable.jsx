@@ -75,6 +75,11 @@ function parseCashActiveKey(symbol) {
   return m ? { asset: m[1], suffix: m[2] } : null;
 }
 
+// Rótulo de 1 letra pro botão de fase na coluna de ações (à direita, ver td actionsColWidth)
+// — coluna estreita demais pro texto completo (AGUARDANDO/PENDENTE/COMPRADO) do badge cheio
+// usado no resto da UI (modal de estado, MultitradePanel).
+const BOT_PHASE_ACTION_LABEL = { WATCHING: 'A', PENDING: 'P', BOUGHT: 'C' };
+
 const HIGHLIGHT_FILTERS = {
   ALTA_BINANCE: 'Favoritos|Alta|Binance',
   ALTA_GATE:    'Favoritos|Alta|Gate',
@@ -308,7 +313,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     toggleGateFavorite, toggleBinanceFavorite,
     setTradePurchases, setAllTrades,
     activeTrades, refreshActiveTrades,
-    multitradeFavorites, removeMultitradeEntry, saveMultitradeSymbol, updateMultitradeBotState,
+    multitradeFavorites, removeMultitradeEntry, saveMultitradeSymbol, updateMultitradeBotState, buyMultitradeMore,
     filterVisibleCurrencies, isVisibleSymbol, addFilter,
     currencyBySymbol,
     ensureMarketHighlights, marketHighlightsLoading,
@@ -513,7 +518,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     && (bbFavSort === 'width_far' || bbFavSort === 'width_near' || bbFavSort === 'near_lower' || bbFavSort === 'near_upper');
   const isBbFavPercentBSort = bbFavSort === 'near_lower' || bbFavSort === 'near_upper';
 
-  const tableColCount = isAltaFilter || isMaDistanceFilter || isGrowthFilter || isVwapWidthFilter || isBbWidthFilter || isBbTrendFilter || showVwapFavWidthCol || showBbFavWidthCol ? 6 : 5;
+  const tableColCount = isAltaFilter || isMaDistanceFilter || isGrowthFilter || isVwapWidthFilter || isBbWidthFilter || isBbTrendFilter || showVwapFavWidthCol || showBbFavWidthCol ? 7 : 6;
 
   const filterChartInterval = useMemo(() => {
     if (!activeFilter || favoriteView) return null;
@@ -1144,7 +1149,11 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   const changeColPx = (isMobile ? 2.75 : 3) * REM_PX;
   const volColPx = (isMobile ? 2.25 : 2.5) * REM_PX;
   const spinnerColPx = (isMobile ? 0.75 : 1) * REM_PX;
-  const fixedColsPx = priceColPx + volColPx + spinnerColPx + (isAltaFilter || isMaDistanceFilter || isGrowthFilter || isVwapWidthFilter || isBbWidthFilter || isBbTrendFilter || showVwapFavWidthCol || showBbFavWidthCol ? changeColPx : 0);
+  // Coluna de ações (C = comprado / V = vender) do lado direito — mesma lógica de piso fixo
+  // da coluna de favoritos à esquerda (favColMinPx acima): não cresce com o drag, o espaço
+  // liberado vai pra coluna Par. Rótulos de 1 letra — piso bem menor que o da coluna de favoritos.
+  const actionsColPx = (isMobile ? 3.0 : 3.6) * REM_PX;
+  const fixedColsPx = priceColPx + volColPx + spinnerColPx + actionsColPx + (isAltaFilter || isMaDistanceFilter || isGrowthFilter || isVwapWidthFilter || isBbWidthFilter || isBbTrendFilter || showVwapFavWidthCol || showBbFavWidthCol ? changeColPx : 0);
   const favColWidthPx = favColMinPx;
   const parColWidthPx = tableContainerWidth > 0
     ? Math.max(tableContainerWidth - favColWidthPx - fixedColsPx, 0)
@@ -1154,6 +1163,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   const changeColWidth = `${changeColPx}px`;
   const volColWidth = `${volColPx}px`;
   const spinnerColWidth = `${spinnerColPx}px`;
+  const actionsColWidth = `${actionsColPx}px`;
   const parColWidth = `${parColWidthPx}px`;
   const parColClass = isMobile
     ? 'currency-table-col-par px-1.5 py-1 font-mono font-semibold text-center overflow-hidden'
@@ -1320,6 +1330,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
             <col className="currency-table-col-price" style={{ width: priceColWidth }} />
             {(isAltaFilter || isMaDistanceFilter || isGrowthFilter || isVwapWidthFilter || isBbWidthFilter || isBbTrendFilter || showVwapFavWidthCol || showBbFavWidthCol) && <col className="currency-table-col-change" style={{ width: changeColWidth }} />}
             <col className="currency-table-col-vol" style={{ width: volColWidth }} />
+            <col className="currency-table-col-actions" style={{ width: actionsColWidth }} />
             <col className="currency-table-col-spinner" style={{ width: spinnerColWidth }} />
           </colgroup>
           <thead className="sticky top-0 z-30 bg-p1">
@@ -1504,6 +1515,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                   ? 'PnL'
                   : `Vol${volSortArrow}`}
               </th>
+              <th style={{ width: actionsColWidth }} />
               <th style={{ width: spinnerColWidth }} />
             </tr>
           </thead>
@@ -1592,6 +1604,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                       ${usdtVal.toFixed(2)}
                     </span>
                   </td>
+                  <td style={{ width: actionsColWidth }} />
                   <td />
                 </tr>
               );
@@ -1625,6 +1638,12 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                 ? activeInfo.buyQty * parseFloat(item.price)
                 : (isActiveHolding ? activeInfo.buyQty : null);
               const isLotRow = isActiveFavView && item.__lotTime != null;
+
+              const isBotFavRow = (isMT || isVwap || isBb) && !isTradesFavView && !isActiveFavView;
+              const botEntries = isBotFavRow ? (isMT ? mtEntries : (vwapEntry ? [vwapEntry] : (bbEntry ? [bbEntry] : []))) : null;
+              const botPhase = botEntries ? symbolPhaseSummary(botEntries) : null;
+              const botPh = botPhase ? multitradePhaseBadge(botPhase, lang) : null;
+              const boughtEntry = botEntries ? botEntries.find(e => e.phase === 'BOUGHT' && e.buyTime) : null;
 
               return (
                 <tr
@@ -1679,45 +1698,18 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                     style={{ width: parColWidth }}
                   >
                     <div className={parContentClass}>
-                      {(isMT || isVwap || isBb) && !isTradesFavView && !isActiveFavView ? (() => {
-                        const botEntries = isMT ? mtEntries : (vwapEntry ? [vwapEntry] : (bbEntry ? [bbEntry] : []));
-                        const botPhase = symbolPhaseSummary(botEntries);
-                        const botPh = multitradePhaseBadge(botPhase, lang);
-                        const bought = botEntries.find(e => e.phase === 'BOUGHT' && e.buyTime);
-                        return (
-                          <span className={parRowClass}>
-                            <span className="shrink-0">
-                              {base}<span className="opacity-40 font-normal text-[8px]">/{quote}</span>
-                            </span>
-                            <button
-                              type="button"
-                              className="text-[9px] font-bold px-1 py-0 rounded shrink-0 hover:underline"
-                              style={{ color: botPh.color, background: `${botPh.color}18`, border: `1px solid ${botPh.color}44` }}
-                              title={`${botPh.hint} — clique para alterar`}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setMtStateModal({ symbol: item.symbol, entries: botEntries });
-                              }}>
-                              {botPh.text}
-                            </button>
-                            {bought?.buyTime && (
-                              <span className="text-[9px] font-normal text-white/70 shrink-0">
-                                ▌ {fmtBuyTime(bought.buyTime)}
-                              </span>
-                            )}
-                            {bought && (
-                              <button
-                                type="button"
-                                className="text-[8px] font-bold px-1 py-0 rounded shrink-0"
-                                style={{ background: 'rgba(239,68,68,0.13)', color: '#f87171', border: '1px solid rgba(239,68,68,0.33)' }}
-                                title="Vender esta moeda agora (ordem a mercado)"
-                                onClick={(e) => { e.stopPropagation(); setMtSellEntry(bought); }}>
-                                Vender
-                              </button>
-                            )}
+                      {isBotFavRow ? (
+                        <span className={parRowClass}>
+                          <span className="shrink-0">
+                            {base}<span className="opacity-40 font-normal text-[8px]">/{quote}</span>
                           </span>
-                        );
-                      })() : (
+                          {boughtEntry?.buyTime && (
+                            <span className="text-[9px] font-normal text-white/70 shrink-0">
+                              ▌ {fmtBuyTime(boughtEntry.buyTime)}
+                            </span>
+                          )}
+                        </span>
+                      ) : (
                         <span>{base}<span className="opacity-40 font-normal text-[8px]">/{quote}</span></span>
                       )}
                       {isLotRow ? (
@@ -1899,6 +1891,37 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                       <span className="opacity-60">{formatVolume(item.volume)}</span>
                     )}
                   </td>
+                  <td
+                    className="pl-1 pr-0.5 overflow-hidden"
+                    style={{ width: actionsColWidth }}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    {isBotFavRow && botPh && (
+                      <div className="flex flex-nowrap items-center justify-end gap-0.5">
+                        <button
+                          type="button"
+                          className="text-[8px] font-bold px-1 py-0.5 rounded shrink-0 hover:underline"
+                          style={{ color: botPh.color, background: `${botPh.color}18`, border: `1px solid ${botPh.color}44` }}
+                          title={`${botPh.hint} — clique para alterar`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setMtStateModal({ symbol: item.symbol, entries: botEntries });
+                          }}>
+                          {BOT_PHASE_ACTION_LABEL[botPhase] ?? botPh.text}
+                        </button>
+                        {boughtEntry && (
+                          <button
+                            type="button"
+                            className="text-[8px] font-bold px-1 py-0.5 rounded shrink-0"
+                            style={{ background: 'rgba(239,68,68,0.13)', color: '#f87171', border: '1px solid rgba(239,68,68,0.33)' }}
+                            title="Vender esta moeda agora (ordem a mercado)"
+                            onClick={(e) => { e.stopPropagation(); setMtSellEntry(boughtEntry); }}>
+                            V
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </td>
                   <td className="pr-1 text-center">
                     {loadingSymbol === item.symbol
                       ? <div className="w-3 h-3 border border-p4 border-t-transparent rounded-full animate-spin mx-auto" />
@@ -1984,6 +2007,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                       <td className="px-2 py-1 text-right font-mono">{item.price > 0 ? formatPrice(item.price) : '—'}</td>
                       {(isAltaFilter || isMaDistanceFilter || isGrowthFilter || isVwapWidthFilter || isBbWidthFilter || isBbTrendFilter || showVwapFavWidthCol || showBbFavWidthCol) && <td className="px-2 py-1 text-right font-mono text-[10px] opacity-35">—</td>}
                       <td className="px-2 py-1 text-right font-mono text-[10px] opacity-60">{formatVolume(item.volume)}</td>
+                      <td style={{ width: actionsColWidth }} />
                       <td className="pr-1 text-center">
                         {loadingSymbol === item.symbol
                           ? <div className="w-3 h-3 border border-p4 border-t-transparent rounded-full animate-spin mx-auto" />
@@ -2141,6 +2165,9 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
               await updateMultitradeBotState(payload);
               setMtStateModal(null);
             }}
+            onBuyMore={({ strategyId, amountUsdt, mode, pullbackPct, oco }) => buyMultitradeMore({
+              symbol: mtStateModal.symbol, strategyId, amountUsdt, mode, pullbackPct, oco,
+            })}
             onCancel={() => setMtStateModal(null)}
           />
         </ModalPortal>
