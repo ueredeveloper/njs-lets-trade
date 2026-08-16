@@ -140,11 +140,37 @@ function medianTrendDesc(trend) {
   return `${dir} (${trend.avgDiffPct >= 0 ? '+' : ''}${trend.avgDiffPct.toFixed(3)}%/candle, lookback ${trend.lookback})`;
 }
 
-/** Descreve o estado da nuvem PERM que confirmou a compra (mesmo filtro de
- *  entry.permFilter — ver checkPermFilter em strategyEngine.js). null se o filtro estiver
- *  desligado ou sem contexto (ex.: sinal preenchido pelo fallback do reteste). */
+// Tom (verde/vermelha) e rótulo de cada estado da nuvem PERM — espelha STATE_META de
+// frontend-react/src/utils/emaCrossPersistenceCloud.js, só que resumido pro log/WhatsApp.
+const PERM_STATE_TONE = {
+  fallAccel: 'vermelha', fallDecel: 'vermelha', turnDown: 'vermelha', riseDecel: 'vermelha',
+  fallFlat: 'verde', turnUp: 'verde', riseAccel: 'verde', riseFlat: 'verde',
+};
+const PERM_STATE_LABEL = {
+  fallAccel: 'queda forte', fallDecel: 'queda perdendo força', turnDown: 'EMA9 virando pra baixo',
+  riseDecel: 'alta perdendo força', fallFlat: 'quase estabilizando', turnUp: 'EMA9 virando pra cima',
+  riseAccel: 'alta forte', riseFlat: 'alta quase no topo',
+};
+
+/** Estado de UM intervalo da cascata PERM em texto — "neutra (sem dado)" quando a nuvem
+ *  estava vazia nesse intervalo (cascata caiu pro próximo), senão "verde (alta forte)" etc. */
+function permStateDesc(state) {
+  if (state == null) return 'neutra (sem dado)';
+  const tone = PERM_STATE_TONE[state] ?? state;
+  const label = PERM_STATE_LABEL[state];
+  return label ? `${tone} (${label})` : tone;
+}
+
+/** Descreve a cascata inteira da nuvem PERM checada na compra (1h → 30m → 15m, por exemplo):
+ *  um trecho por intervalo visitado, na ordem, até o que decidiu — ver checked em
+ *  checkPermFilter (strategyEngine.js). null se o filtro estiver desligado ou sem contexto
+ *  (ex.: sinal preenchido pelo fallback do reteste, sem entryMeta completo). */
 function permDesc(perm) {
-  if (!perm || !perm.state) return null;
+  if (!perm) return null;
+  if (Array.isArray(perm.checked) && perm.checked.length) {
+    return perm.checked.map(c => `${c.interval} ${permStateDesc(c.state)}`).join(', ');
+  }
+  if (!perm.state) return null;
   const sign = perm.slopePct != null && perm.slopePct >= 0 ? '+' : '';
   const slope = perm.slopePct != null ? ` (${sign}${Number(perm.slopePct).toFixed(2)}%)` : '';
   return `🟢 verde em ${perm.interval}${slope}`;

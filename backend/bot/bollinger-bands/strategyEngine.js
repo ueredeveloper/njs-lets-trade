@@ -219,19 +219,28 @@ function checkPermFilter(config, cMap) {
   if (!perm?.enabled) return { allowed: true };
 
   const chain = permIntervalChain(perm.interval);
+  // `checked` registra o estado de CADA intervalo visitado na cascata (inclusive os vazios
+  // que só serviram pra cair pro próximo) — usado pra montar a linha de log/WhatsApp que
+  // mostra "1h neutra, 30m verde" etc., não só o intervalo que decidiu (ver permDesc em
+  // bollinger-bands-bot.js).
+  const checked = [];
   for (const iv of chain) {
     const closed = closedCandlesOnly(cMap[iv] ?? []);
     const last = latestPermState(closed);
-    if (!last || last.state == null) continue; // nuvem vazia nesse intervalo — cai pro próximo
+    if (!last || last.state == null) {
+      checked.push({ interval: iv, state: null });
+      continue; // nuvem vazia nesse intervalo — cai pro próximo
+    }
     const bullish = isEntryBullishState(last.state);
+    checked.push({ interval: iv, state: last.state, slopePct: last.slopePct });
     return {
       allowed: bullish,
       reason: bullish ? null : 'PERM_NOT_BULLISH',
-      interval: iv, state: last.state, slopePct: last.slopePct, chain,
+      interval: iv, state: last.state, slopePct: last.slopePct, chain, checked,
     };
   }
   // Nenhum intervalo da cadeia teve estado disponível — sem dado suficiente pra confirmar.
-  return { allowed: false, reason: 'PERM_NO_DATA', chain };
+  return { allowed: false, reason: 'PERM_NO_DATA', chain, checked };
 }
 
 /**
