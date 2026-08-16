@@ -205,6 +205,20 @@ function targetLabel(config) {
   return rb?.targetMode === 'fixed' ? `manual +${rb.targetPct}%` : 'banda superior';
 }
 
+/** Mensagem explicando que a Binance rejeitaria o alvo/stop calculado pela estratégia (longe
+ *  demais do preço atual, filtro PERCENT_PRICE_BY_SIDE) e por isso o bot prendeu (clamp) o
+ *  valor na borda permitida pra OCO ainda assim ser aceita — ver binancePlaceOcoSell. */
+function describeClamp(bracket) {
+  const parts = [];
+  if (bracket.clamped?.stop) {
+    parts.push(`stop ${fmtPrice(bracket.requestedStopPrice)} → ${fmtPrice(bracket.stopPrice)} (fora da distância máxima permitida pela Binance)`);
+  }
+  if (bracket.clamped?.target) {
+    parts.push(`alvo ${fmtPrice(bracket.requestedTargetPrice)} → ${fmtPrice(bracket.targetPrice)} (fora da distância máxima permitida pela Binance)`);
+  }
+  return `Bracket colocada com ajuste: ${parts.join('; ')}`;
+}
+
 // Falha ao colocar a bracket não manda WhatsApp a cada tentativa (spam) — só na 1ª falha e
 // depois a cada N tentativas, enquanto o retry automático (ver bloco BOUGHT) continua tentando.
 const BRACKET_RETRY_ALERT_EVERY = 10;
@@ -250,6 +264,11 @@ async function placeInitialBracket({ rowId, adapter, config, cMap, session, log,
     session.rulesState = { ...(session.rulesState ?? {}), exitBracket: { ...bracket, placedAt: new Date().toISOString() }, exitBracketError: null };
     await saveState(rowId, { rules_state: session.rulesState }, log);
     log(`${G}🎯 Bracket TP/SL colocada na corretora${retry ? ' (retry)' : ''} — alvo (${targetLabel(config)}) ${fmtPrice(bracket.targetPrice)} / stop ${fmtPrice(bracket.stopPrice)}${X}`);
+    if (bracket.clamped) {
+      const clampMsg = describeClamp(bracket);
+      log(`${Y}⚠️  ${clampMsg}${X}`);
+      sendWhatsApp(`⚠️ ${BOT_LABEL} [${strategyId}] ${symbol}\n${clampMsg}`);
+    }
     if (retry && prevError) {
       sendWhatsApp(`✅ ${BOT_LABEL} [${strategyId}] ${symbol}\nBracket TP/SL colocada na corretora após ${prevError.attempts} tentativa(s) falha(s) (primeira falha ${prevError.firstAt}).`);
     }
@@ -312,6 +331,7 @@ async function maybeReplaceBracket({ rowId, adapter, config, cMap, session, log,
     session.rulesState = { ...(session.rulesState ?? {}), exitBracket: { ...bracket, placedAt: new Date().toISOString() } };
     await saveState(rowId, { rules_state: session.rulesState }, log);
     log(`🔁 Bracket TP/SL recriada (deriva ≥${driftPct}%) — alvo (${targetLabel(config)}) ${fmtPrice(bracket.targetPrice)} / stop ${fmtPrice(bracket.stopPrice)}`);
+    if (bracket.clamped) log(`${Y}⚠️  ${describeClamp(bracket)}${X}`);
   } catch (err) {
     if (cancelled) {
       // A bracket antiga já foi cancelada na corretora antes da nova falhar — limpa

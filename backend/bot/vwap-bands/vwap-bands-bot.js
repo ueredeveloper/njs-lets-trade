@@ -137,6 +137,20 @@ async function cancelPending(rowId, log, session, state, reason) {
   await saveState(rowId, { phase: 'WATCHING', rules_state: rs, entry_signal_time: null, entry_signal_price: null }, log);
 }
 
+/** Mensagem explicando que a Binance rejeitaria o alvo/stop calculado pela estratégia (longe
+ *  demais do preço atual, filtro PERCENT_PRICE_BY_SIDE) e por isso o bot prendeu (clamp) o
+ *  valor na borda permitida pra OCO ainda assim ser aceita — ver binancePlaceOcoSell. */
+function describeClamp(bracket) {
+  const parts = [];
+  if (bracket.clamped?.stop) {
+    parts.push(`stop ${fmtPrice(bracket.requestedStopPrice)} → ${fmtPrice(bracket.stopPrice)} (fora da distância máxima permitida pela Binance)`);
+  }
+  if (bracket.clamped?.target) {
+    parts.push(`alvo ${fmtPrice(bracket.requestedTargetPrice)} → ${fmtPrice(bracket.targetPrice)} (fora da distância máxima permitida pela Binance)`);
+  }
+  return `Bracket colocada com ajuste: ${parts.join('; ')}`;
+}
+
 /**
  * Coloca a bracket TP/SL resting na corretora logo após a compra confirmar (só se
  * `exit.restingBracket.enabled`). O stop da bracket é a banda tocada, capada pelo teto
@@ -145,7 +159,7 @@ async function cancelPending(rowId, log, session, state, reason) {
  * em silêncio (loga e segue) — sem a bracket, a saída continua funcionando do jeito de
  * sempre via `evaluateExit`/venda a mercado no tick.
  */
-async function placeInitialBracket({ rowId, adapter, config, cMap, session, log, activeSetup, filledQty, buyPrice }) {
+async function placeInitialBracket({ rowId, adapter, config, cMap, session, log, activeSetup, filledQty, buyPrice, symbol }) {
   if (!config.exit.restingBracket?.enabled) return;
   const { targetPrice, stopPrice } = computeLadderLevelPrices(config, cMap, buyPrice, activeSetup);
   if (targetPrice == null || stopPrice == null) {
@@ -157,6 +171,11 @@ async function placeInitialBracket({ rowId, adapter, config, cMap, session, log,
     session.rulesState = { ...(session.rulesState ?? {}), exitBracket: { ...bracket, placedAt: new Date().toISOString() } };
     await saveState(rowId, { rules_state: session.rulesState }, log);
     log(`${G}🎯 Bracket TP/SL colocada na corretora — alvo ${fmtPrice(bracket.targetPrice)} (${labelForLevel(activeSetup.targetLevel)}) / stop ${fmtPrice(bracket.stopPrice)} (${labelForLevel(activeSetup.touchLevel)})${X}`);
+    if (bracket.clamped) {
+      const clampMsg = describeClamp(bracket);
+      log(`${Y}⚠️  ${clampMsg}${X}`);
+      sendWhatsApp(`⚠️ ${BOT_LABEL} ${symbol}\n${clampMsg}`);
+    }
   } catch (err) {
     log(`${Y}⚠️  Falha ao colocar bracket TP/SL (${err.message}) — segue só no candle fechado${X}`);
   }
@@ -186,6 +205,7 @@ async function maybeReplaceBracket({ rowId, adapter, config, cMap, session, log,
     session.rulesState = { ...(session.rulesState ?? {}), exitBracket: { ...bracket, placedAt: new Date().toISOString() } };
     await saveState(rowId, { rules_state: session.rulesState }, log);
     log(`🔁 Bracket TP/SL recriada (deriva ≥${driftPct}%) — alvo ${fmtPrice(bracket.targetPrice)} / stop ${fmtPrice(bracket.stopPrice)}`);
+    if (bracket.clamped) log(`${Y}⚠️  ${describeClamp(bracket)}${X}`);
   } catch (err) {
     if (cancelled) {
       // A bracket antiga já foi cancelada na corretora antes da nova falhar — a posição
@@ -318,7 +338,7 @@ async function tick(rowId, symbolHint, adapter, strategy, log, session) {
       await placeInitialBracket({
         rowId, adapter, config, cMap, session, log,
         activeSetup: { targetLevel: pending.targetLevel, touchLevel: pending.touchLevel },
-        filledQty: bought.filledQty, buyPrice: bought.avgPrice,
+        filledQty: bought.filledQty, buyPrice: bought.avgPrice, symbol,
       });
     }
     return { phase: bought ? 'BOUGHT' : 'PENDING' };

@@ -80,7 +80,11 @@ function buildAdapter(exchange, symbol) {
     // OCO real (uma perna cancela a outra na própria Binance) — ver binance/ocoClient.js.
     placeExitBracket: async (qty, targetPrice, stopPrice) => {
       const r = await binancePlaceOcoSell(symbol, qty, targetPrice, stopPrice);
-      return { exchange: 'binance', legs: r.legs, orderListId: r.orderListId, targetPrice: r.targetPrice, stopPrice: r.stopPrice };
+      return {
+        exchange: 'binance', legs: r.legs, orderListId: r.orderListId,
+        targetPrice: r.targetPrice, stopPrice: r.stopPrice,
+        clamped: r.clamped, requestedTargetPrice: r.requestedTargetPrice, requestedStopPrice: r.requestedStopPrice,
+      };
     },
     cancelExitBracket: (handle) => binanceCancelOco(symbol, handle.orderListId),
     pollExitBracket: (handle) => binancePollOco(symbol, handle.orderListId, handle.legs),
