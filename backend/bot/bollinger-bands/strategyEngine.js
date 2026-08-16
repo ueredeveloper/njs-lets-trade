@@ -92,8 +92,9 @@ function getRequiredSpecs(config) {
 
   const perm = entry.permFilter;
   if (perm?.enabled) {
+    // Intervalo do PERM é independente do intervalo da banda de Bollinger (entry.interval).
     // EMA21 + folga pro slope (SLOPE_LOOKBACK=2) e o candle ainda em formação.
-    for (const iv of permIntervalChain(entry.interval)) add(iv, 21 + 10);
+    for (const iv of permIntervalChain(perm.interval)) add(iv, 21 + 10);
   }
 
   return [...specs.entries()].map(([interval, lim]) => ({ interval, limit: lim }));
@@ -207,15 +208,17 @@ function checkMedianTrendFilter(config, cMap, series) {
  * libera a compra com a EMA9 já ACIMA da EMA21 e subindo (riseAccel/riseFlat). O verde
  * "antecipado" do lado abaixo da EMA21 (fallFlat/turnUp — a EMA9 só começou a virar, ainda não
  * cruzou) NÃO libera: o bot segue um fluxo de alta já estabelecido, nunca antecipa o fim de
- * uma baixa. Cascata quando o intervalo mais alto está sem estado disponível no momento
- * (candle ausente, histórico curto, ou hora recém-aberta): entry.interval → metade → um quarto
- * (ex.: 1h → 30m → 15m — ver permIntervalChain). Desligado (enabled=false) → sempre libera.
+ * uma baixa. `permFilter.interval` é INDEPENDENTE do intervalo da banda de Bollinger
+ * (entry.interval) — ex.: BB em 15m com PERM checado em 4h. Cascata quando o intervalo mais
+ * alto está sem estado disponível no momento (candle ausente, histórico curto, ou hora recém-
+ * aberta): interval → metade → um quarto (ex.: 4h → 2h → 1h — ver permIntervalChain).
+ * Desligado (enabled=false) → sempre libera.
  */
 function checkPermFilter(config, cMap) {
   const perm = config.entry?.permFilter;
   if (!perm?.enabled) return { allowed: true };
 
-  const chain = permIntervalChain(config.entry.interval);
+  const chain = permIntervalChain(perm.interval);
   for (const iv of chain) {
     const closed = closedCandlesOnly(cMap[iv] ?? []);
     const last = latestPermState(closed);

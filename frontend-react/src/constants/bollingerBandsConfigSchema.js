@@ -40,9 +40,12 @@ export const BOLLINGER_BANDS_DEFAULTS = {
     medianTrendFilter: { enabled: true, lookback: 10 },
     /** Filtro PERM (nuvem de inclinação EMA9×EMA21 — ver o indicador "Perman." do gráfico e
      *  backend/utils/emaPersistCloud.js): só compra com a EMA9 já acima da EMA21 e subindo.
-     *  Cascata quando o intervalo mais alto está sem estado disponível: entry.interval →
-     *  metade → um quarto (ex.: 1h → 30m → 15m). Ligado por padrão. */
-    permFilter: { enabled: true },
+     *  `interval` é INDEPENDENTE do intervalo da banda de Bollinger (entry.interval) — dá pra
+     *  operar BB em 15m e checar o PERM em 4h. Padrão fixo '1h' (não nasce igual ao
+     *  entry.interval, diferente do emaFilter). Cascata quando o intervalo mais alto está sem
+     *  estado disponível: interval → metade → um quarto (ex.: 4h → 2h → 1h). Ligado por
+     *  padrão. */
+    permFilter: { enabled: true, interval: '1h' },
   },
   exit: {
     /** targetMode 'band' (padrão) = alvo (TP) na banda superior ao vivo, recriada quando
@@ -72,6 +75,7 @@ export function normalizeBollingerBandsForm(body = {}) {
   const pb = body.entry?.pullback ?? {};
   const ef = body.entry?.emaFilter ?? {};
   const mt = body.entry?.medianTrendFilter ?? {};
+  const pf = body.entry?.permFilter ?? {};
   const rb = body.exit?.restingBracket ?? {};
   const interval = BOLLINGER_BANDS_ALL_INTERVALS.includes(body.entry?.interval) ? body.entry.interval : d.entry.interval;
   return {
@@ -103,7 +107,10 @@ export function normalizeBollingerBandsForm(body = {}) {
         lookback: Number(mt.lookback ?? d.entry.medianTrendFilter.lookback),
       },
       permFilter: {
-        enabled: (body.entry?.permFilter ?? {}).enabled !== false,
+        enabled: pf.enabled !== false,
+        // Independente do intervalo da BB (interval acima) — não cai pro entry.interval como
+        // o emaFilter, fica fixo em d.entry.permFilter.interval ('1h') quando não informado.
+        interval: BOLLINGER_BANDS_ALL_INTERVALS.includes(pf.interval) ? pf.interval : d.entry.permFilter.interval,
       },
     },
     exit: {

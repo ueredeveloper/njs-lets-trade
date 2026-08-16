@@ -65,11 +65,13 @@ const BOLLINGER_BANDS_DEFAULTS = {
     /** Filtro PERM (nuvem de inclinação EMA9×EMA21 — ver backend/utils/emaPersistCloud.js e o
      *  indicador "Perman." do gráfico): só compra com a EMA9 já acima da EMA21 e subindo
      *  (riseAccel/riseFlat — não conta o verde antecipado com EMA9 ainda abaixo da EMA21, que
-     *  seguiria o fluxo de baixa). Cascata quando o intervalo mais alto está sem estado
-     *  disponível no momento (candle ausente/estado nulo/ainda não fechou): entry.interval →
-     *  metade → um quarto do intervalo (ex.: 1h → 30m → 15m — mesma fórmula de
-     *  getEmaPersistCloudConfirmInterval no frontend). Ligado por padrão. */
-    permFilter: { enabled: true },
+     *  seguiria o fluxo de baixa). `interval` é INDEPENDENTE do intervalo da banda de Bollinger
+     *  (entry.interval) — o usuário pode operar BB em 15m e checar o PERM em 4h, por exemplo.
+     *  Padrão fixo '1h', não nasce igual ao entry.interval (diferente do emaFilter). Cascata
+     *  quando o intervalo mais alto está sem estado disponível no momento (candle ausente/
+     *  estado nulo/ainda não fechou): interval → metade → um quarto (ex.: 4h → 2h → 1h — mesma
+     *  fórmula de getEmaPersistCloudConfirmInterval no frontend). Ligado por padrão. */
+    permFilter: { enabled: true, interval: '1h' },
   },
 
   exit: {
@@ -165,10 +167,14 @@ function normalizeMedianTrendFilter(block) {
   };
 }
 
+/** Diferente de normalizeEmaFilter: NÃO cai pro intervalo da banda de Bollinger quando não
+ *  informado — o PERM é intencionalmente independente (padrão fixo '1h', ver defaults). */
 function normalizePermFilter(block) {
+  const d = BOLLINGER_BANDS_DEFAULTS.entry.permFilter;
   const src = block ?? {};
   return {
     enabled: src.enabled !== false,
+    interval: normalizeInterval(src.interval, d.interval),
   };
 }
 

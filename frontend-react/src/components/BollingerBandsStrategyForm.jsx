@@ -208,13 +208,20 @@ export default function BollingerBandsStrategyForm({ form, patch, symbol, exchan
             Ativo
           </label>
         </div>
+        {form.entry.permFilter?.enabled !== false && (
+          <div className="flex flex-wrap gap-2 items-center text-xs">
+            <span className="text-p5/50">Intervalo</span>
+            <Select value={form.entry.permFilter?.interval ?? '1h'} onChange={v => patchPermFilter('interval', v)} options={BOLLINGER_BANDS_ALL_INTERVALS} />
+          </div>
+        )}
         <p className="text-[10px] text-p5/50 leading-relaxed">
           {form.entry.permFilter?.enabled !== false
             ? <>Só compra com a nuvem PERM (mesmo indicador "Perman." do gráfico) verde — EMA9
                 {' '}já acima da EMA21 e subindo, não o verde antecipado com a EMA9 ainda abaixo
-                {' '}(evita seguir o fluxo de baixa). Checa o intervalo {form.entry.interval} da
-                {' '}entrada; se estiver sem nuvem disponível no momento, cai pra metade do
-                {' '}intervalo e depois um quarto (ex.: 1h → 30m → 15m).</>
+                {' '}(evita seguir o fluxo de baixa). Intervalo independente da entrada — dá pra
+                {' '}operar BB em {form.entry.interval} e checar o PERM em {form.entry.permFilter?.interval ?? '1h'}.
+                {' '}Se estiver sem nuvem disponível no momento, cai pra metade do intervalo
+                {' '}escolhido e depois um quarto (ex.: 4h → 2h → 1h).</>
             : 'Desligado — não checa a nuvem PERM antes de comprar.'}
         </p>
       </div>
