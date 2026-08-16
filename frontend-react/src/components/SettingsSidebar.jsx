@@ -32,7 +32,7 @@ function applyPalette(colors) {
   window.dispatchEvent(new Event('palette-updated'));
 }
 
-const RELOAD_INTERVALS = ['all', '1m', '5m', '15m', '30m', '1h', '2h', '4h', '8h', '1d'];
+const RELOAD_INTERVALS = ['all', '1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '8h', '1d'];
 
 /** Monta um subtítulo legível (intervalo · período/desvio · candles) a partir do meta de
  *  preset devolvido por /services/cache-settings — só os caches com preset granular por id

@@ -2,7 +2,7 @@ const router      = require('express').Router();
 const fetchKlines = require('../binance/fetchKlines');
 const writeCandles = require('../utils/write-candles');
 
-const ALL_INTERVALS = ['1m', '5m', '15m', '30m', '1h', '2h', '4h', '8h', '1d'];
+const ALL_INTERVALS = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '8h', '1d'];
 const FORCE_LIMIT   = 1000;
 
 // GET /services/reload-candles?symbol=BTCUSDT&interval=1h
