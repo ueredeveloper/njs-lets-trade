@@ -1,4 +1,5 @@
 import { DEFAULT_PERM_CLOUD_TONES, normalizeEmaPersistCloudTones } from './emaCrossPersistenceCloud';
+import { INTERVAL_MS } from './chartView';
 
 const STORAGE_KEY = 'lets_trade_ui_prefs';
 
@@ -231,8 +232,30 @@ export function normalizeEmaPersistCloudInterval(raw) {
   return CHART_INTERVAL_OPTIONS.includes(raw) ? raw : DEFAULT_EMA_PERSIST_CLOUD_INTERVAL;
 }
 
-/** Quais tons da nuvem PERM aparecem no gráfico (vermelho/laranja/amarelo/verde). */
+/** Quais tons da nuvem PERM aparecem no gráfico (vermelho/verde). */
 export { DEFAULT_PERM_CLOUD_TONES, normalizeEmaPersistCloudTones };
+
+/** Intervalo menor usado pra confirmar/preencher a nuvem da PERM (ver
+ *  buildEmaCrossPersistenceClouds em emaCrossPersistenceCloud.js): a EMA9 do intervalo principal
+ *  virou pra cima, mas só é "firme" se a EMA9 desse intervalo menor também estiver subindo no
+ *  candle correspondente; o mesmo intervalo menor também preenche por baixo os buracos da nuvem
+ *  principal (candle ausente, estado nulo, ou a hora mais recente que ainda não fechou).
+ *  Calculado como ~1/2 do intervalo principal, arredondado pro intervalo padrão mais próximo
+ *  (sempre estritamente menor): 1h→30m, 2h→1h, 4h→2h, 8h→4h, 1d→12h. Sem intervalo menor
+ *  disponível (ex.: já é '1m'), não há confirmação/preenchimento. */
+export function getEmaPersistCloudConfirmInterval(interval) {
+  const primaryMs = INTERVAL_MS[interval];
+  if (!primaryMs) return null;
+  const targetMs = primaryMs / 2;
+  let best = null;
+  let bestDiff = Infinity;
+  for (const [iv, ms] of Object.entries(INTERVAL_MS)) {
+    if (ms >= primaryMs) continue; // precisa ser estritamente menor que o principal
+    const diff = Math.abs(ms - targetMs);
+    if (diff < bestDiff) { bestDiff = diff; best = iv; }
+  }
+  return best;
+}
 
 /** Intervalo de candles usado pelo "Bars Since MA Cross" (BARS) — mesmo padrão acima. */
 export const DEFAULT_BARS_SINCE_CROSS_INTERVAL = '1h';

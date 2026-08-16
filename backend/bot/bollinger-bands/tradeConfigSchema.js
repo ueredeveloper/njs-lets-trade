@@ -62,6 +62,14 @@ const BOLLINGER_BANDS_DEFAULTS = {
      *  aguarda fill — cancela a ordem se a mediana virar pra baixo antes do preenchimento.
      *  Ligado por padrão. */
     medianTrendFilter: { enabled: true, lookback: 10 },
+    /** Filtro PERM (nuvem de inclinação EMA9×EMA21 — ver backend/utils/emaPersistCloud.js e o
+     *  indicador "Perman." do gráfico): só compra com a EMA9 já acima da EMA21 e subindo
+     *  (riseAccel/riseFlat — não conta o verde antecipado com EMA9 ainda abaixo da EMA21, que
+     *  seguiria o fluxo de baixa). Cascata quando o intervalo mais alto está sem estado
+     *  disponível no momento (candle ausente/estado nulo/ainda não fechou): entry.interval →
+     *  metade → um quarto do intervalo (ex.: 1h → 30m → 15m — mesma fórmula de
+     *  getEmaPersistCloudConfirmInterval no frontend). Ligado por padrão. */
+    permFilter: { enabled: true },
   },
 
   exit: {
@@ -157,6 +165,13 @@ function normalizeMedianTrendFilter(block) {
   };
 }
 
+function normalizePermFilter(block) {
+  const src = block ?? {};
+  return {
+    enabled: src.enabled !== false,
+  };
+}
+
 function normalizeEntry(block) {
   const d = BOLLINGER_BANDS_DEFAULTS.entry;
   const src = block ?? {};
@@ -176,6 +191,7 @@ function normalizeEntry(block) {
     )))),
     emaFilter: normalizeEmaFilter(src.emaFilter, interval),
     medianTrendFilter: normalizeMedianTrendFilter(src.medianTrendFilter),
+    permFilter: normalizePermFilter(src.permFilter),
   };
 }
 

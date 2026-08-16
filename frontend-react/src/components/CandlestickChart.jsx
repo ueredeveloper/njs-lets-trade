@@ -12,7 +12,7 @@ import CandlestickChartLW from './CandlestickChartLW';
 import convertOpenTime from '../utils/convertOpenTime';
 import Tooltip from './Tooltip';
 import { useIsMobile } from '../hooks/useIsMobile';
-import { DEFAULT_OVERLAY_SLOTS, DEFAULT_ACTIVE_INDICATORS, BB_PERIOD_OPTIONS, BB_STDDEV_OPTIONS, DEFAULT_SR_INTERVAL, DEFAULT_PPHL_INTERVAL, DEFAULT_CHOP_INTERVAL, DEFAULT_EMA_PERSIST_CLOUD_INTERVAL, DEFAULT_PERM_CLOUD_TONES, DEFAULT_BARS_SINCE_CROSS_INTERVAL, DEFAULT_TD_SEQUENTIAL_INTERVAL, DEFAULT_COMMON_CHART_INTERVALS } from '../utils/uiPreferences';
+import { DEFAULT_OVERLAY_SLOTS, DEFAULT_ACTIVE_INDICATORS, BB_PERIOD_OPTIONS, BB_STDDEV_OPTIONS, DEFAULT_SR_INTERVAL, DEFAULT_PPHL_INTERVAL, DEFAULT_CHOP_INTERVAL, DEFAULT_EMA_PERSIST_CLOUD_INTERVAL, DEFAULT_PERM_CLOUD_TONES, DEFAULT_BARS_SINCE_CROSS_INTERVAL, DEFAULT_TD_SEQUENTIAL_INTERVAL, DEFAULT_COMMON_CHART_INTERVALS, getEmaPersistCloudConfirmInterval } from '../utils/uiPreferences';
 import { PERM_CLOUD_TONES, PERM_TONE_SWATCH } from '../utils/emaCrossPersistenceCloud';
 import { CHART_VIEW, INTERVAL_MS, computeZoomWindow, buildFixedDataZoom, buildInsideDataZoom, computeCandleLimitFromTime, isTradePanelChartView, computeManualWheelZoom } from '../utils/chartView';
 import { simulateBbTouchPath, pairBbPathCycles } from '../utils/bollingerTouchPath';
@@ -3186,6 +3186,9 @@ export default function CandlestickChart() {
   }));
   const [emaPersistCloudCache, setEmaPersistCloudCache] = useState({});
   const [_emaPersistCloudLoading, setEmaPersistCloudLoading] = useState(false);
+  // Dados do intervalo de confirmação da nuvem verde (ex.: 15m quando emaPersistCloudInterval é
+  // 1h — ver EMA_PERSIST_CLOUD_CONFIRM_INTERVAL). Cache separado, mesma chave (intervalo principal).
+  const [emaPersistCloudConfirmCache, setEmaPersistCloudConfirmCache] = useState({});
   const [barsSinceCrossInterval, setBarsSinceCrossInterval] = useState(() => uiPrefs.barsSinceCrossIntervalDefault ?? DEFAULT_BARS_SINCE_CROSS_INTERVAL);
   const [barsSinceCrossCache, setBarsSinceCrossCache] = useState({});
   const [_barsSinceCrossLoading, setBarsSinceCrossLoading] = useState(false);
@@ -3902,8 +3905,11 @@ export default function CandlestickChart() {
   ]);
 
   // Busca candles + EMA9/21 pra nuvem PERM (inclinação EMA9) — intervalo próprio (independente
-  // do gráfico), mesmo padrão do S/R/PPHL/CHOP.
+  // do gráfico), mesmo padrão do S/R/PPHL/CHOP. Quando o intervalo escolhido tem um intervalo de
+  // confirmação (ex.: 1h → 15m), busca junto os mesmos dados no intervalo menor pra reforçar a
+  // nuvem verde (ver EMA_PERSIST_CLOUD_CONFIRM_INTERVAL / buildEmaCrossPersistenceClouds).
   const emaPersistCloudShown = activeIndicators.includes('emaPersistCloud') && chartPanelButtons.emaPersistCloud !== false;
+  const emaPersistCloudConfirmInterval = getEmaPersistCloudConfirmInterval(emaPersistCloudInterval);
   useEffect(() => {
     if (!selectedChart?.symbol || !emaPersistCloudShown) {
       setEmaPersistCloudLoading(false);
@@ -3921,13 +3927,31 @@ export default function CandlestickChart() {
           Math.max(displayCandleCount, selectedChart.candlesticks?.length ?? 0, DEFAULT_CANDLE_LIMIT),
           overlayFetchLimit,
         );
-        const data = await fetchEmaCrossOverlayData(
+        const fetches = [fetchEmaCrossOverlayData(
           selectedChart.symbol, emaPersistCloudInterval, selectedChart.source, ovLimit,
-        );
-        if (!cancelled) setEmaPersistCloudCache({ [key]: data });
+        )];
+        if (emaPersistCloudConfirmInterval) {
+          const confirmLimit = computeOverlayMaFetchLimit(
+            selectedChart.interval ?? currentInterval,
+            emaPersistCloudConfirmInterval,
+            21,
+            Math.max(displayCandleCount, selectedChart.candlesticks?.length ?? 0, DEFAULT_CANDLE_LIMIT),
+            overlayFetchLimit,
+          );
+          fetches.push(fetchEmaCrossOverlayData(
+            selectedChart.symbol, emaPersistCloudConfirmInterval, selectedChart.source, confirmLimit,
+          ));
+        }
+        const [data, confirmData] = await Promise.all(fetches);
+        if (cancelled) return;
+        setEmaPersistCloudCache({ [key]: data });
+        setEmaPersistCloudConfirmCache(emaPersistCloudConfirmInterval ? { [key]: confirmData } : {});
       } catch (e) {
         console.warn('[emaPersistCloud]', key, e.message);
-        if (!cancelled) setEmaPersistCloudCache({});
+        if (!cancelled) {
+          setEmaPersistCloudCache({});
+          setEmaPersistCloudConfirmCache({});
+        }
       } finally {
         if (!cancelled) setEmaPersistCloudLoading(false);
       }
@@ -3936,6 +3960,7 @@ export default function CandlestickChart() {
   }, [
     selectedChart?.symbol, selectedChart?.interval, selectedChart?.source, selectedChart?.candlesticks,
     currentInterval, overlayFetchLimit, displayCandleCount, emaPersistCloudShown, emaPersistCloudInterval,
+    emaPersistCloudConfirmInterval,
   ]);
 
   // Busca candles + EMA9/21 pro Bars Since MA Cross (BARS) — mesmo padrão acima.
@@ -4771,6 +4796,11 @@ export default function CandlestickChart() {
     return emaPersistCloudCache[emaPersistCloudInterval] ?? null;
   }, [emaPersistCloudShown, emaPersistCloudInterval, emaPersistCloudCache]);
 
+  const chartEmaPersistCloudConfirmData = useMemo(() => {
+    if (!emaPersistCloudShown || !emaPersistCloudConfirmInterval) return null;
+    return emaPersistCloudConfirmCache[emaPersistCloudInterval] ?? null;
+  }, [emaPersistCloudShown, emaPersistCloudConfirmInterval, emaPersistCloudInterval, emaPersistCloudConfirmCache]);
+
   const chartBarsSinceCrossData = useMemo(() => {
     if (!barsSinceCrossShown) return null;
     return barsSinceCrossCache[barsSinceCrossInterval] ?? null;
@@ -5124,6 +5154,7 @@ export default function CandlestickChart() {
               rsi={selectedChart.rsi}
               chopConfig={chartChopConfig}
               emaPersistCloudData={chartEmaPersistCloudData}
+              emaPersistCloudConfirmData={chartEmaPersistCloudConfirmData}
               emaPersistCloudTones={emaPersistCloudTones}
               barsSinceCrossData={chartBarsSinceCrossData}
               tdSequentialData={chartTdSequentialData}

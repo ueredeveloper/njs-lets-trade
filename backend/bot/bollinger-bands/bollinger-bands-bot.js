@@ -140,11 +140,25 @@ function medianTrendDesc(trend) {
   return `${dir} (${trend.avgDiffPct >= 0 ? '+' : ''}${trend.avgDiffPct.toFixed(3)}%/candle, lookback ${trend.lookback})`;
 }
 
+/** Descreve o estado da nuvem PERM que confirmou a compra (mesmo filtro de
+ *  entry.permFilter — ver checkPermFilter em strategyEngine.js). null se o filtro estiver
+ *  desligado ou sem contexto (ex.: sinal preenchido pelo fallback do reteste). */
+function permDesc(perm) {
+  if (!perm || !perm.state) return null;
+  const sign = perm.slopePct != null && perm.slopePct >= 0 ? '+' : '';
+  const slope = perm.slopePct != null ? ` (${sign}${Number(perm.slopePct).toFixed(2)}%)` : '';
+  return `🟢 verde em ${perm.interval}${slope}`;
+}
+
 function buildEntryReasonLines(config, entryMeta) {
   const lines = [`${entryMeta.entryDesc} @ ${fmtPrice(entryMeta.close)}`];
   if (config.entry?.medianTrendFilter?.enabled) {
     const desc = medianTrendDesc(entryMeta.medianTrend);
     if (desc) lines.push(`Tendência mediana BB: ${desc}`);
+  }
+  if (config.entry?.permFilter?.enabled) {
+    const desc = permDesc(entryMeta.perm);
+    if (desc) lines.push(`Nuvem PERM: ${desc}`);
   }
   return lines;
 }

@@ -540,7 +540,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
   symbol, interval, candlesticks, colors, rightPad = 0,
   activeIndicators = [], ma9, ma21, ma50, ma200, overlayConfigs, vwapConfig, vwapSlopeHighlight,
   bollingerConfigs = [], srConfig, pphlConfig, rsi, chopConfig,
-  emaPersistCloudData, emaPersistCloudTones, barsSinceCrossData, tdSequentialData,
+  emaPersistCloudData, emaPersistCloudConfirmData, emaPersistCloudTones, barsSinceCrossData, tdSequentialData,
   stopLossConfig, targetConfig, buyInfo, multitradeMarkers, zoomPeriod, focusLastN,
   onNeedOlderCandles, loadingMoreCandles,
 }, ref) {
@@ -925,15 +925,37 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       // buildEmaCrossPersistenceClouds). Intervalo PRÓPRIO (independente do gráfico, ver
       // fetchEmaCrossOverlayData em CandlestickChart.jsx) — os candles/EMAs vêm do intervalo
       // escolhido no painel (ex.: PERM em 15m sobre um gráfico em 15m), depois "encaixados" nos
-      // candles REALMENTE exibidos via snapPointsToChartCandles.
+      // candles REALMENTE exibidos via snapPointsToChartCandles. Quando há intervalo de
+      // confirmação (ex.: 1h → 15m), o array de segmentos já vem com uma extensão "preview" além
+      // do último candle fechado do intervalo principal — flui pelo mesmo filter/map abaixo.
       let emaPersistClouds = [];
       if (activeIndicators.includes('emaPersistCloud')
         && emaPersistCloudData?.candlesticks?.length && emaPersistCloudData?.ma9?.length && emaPersistCloudData?.ma21?.length) {
-        emaPersistClouds = buildEmaCrossPersistenceClouds(emaPersistCloudData.candlesticks, emaPersistCloudData.ma9, emaPersistCloudData.ma21).segments
-          .filter((seg) => emaPersistCloudTones?.[seg.tone] !== false)
-          .map((seg) => ({ ...seg, points: snapPointsToChartCandles(candlesticks, seg.points) }))
-          .map((seg) => ({ ...seg, points: seg.points.filter((p) => p.time >= minTime && p.time <= maxTime) }))
-          .filter((seg) => seg.points.length >= 2);
+        const raw = buildEmaCrossPersistenceClouds(
+          emaPersistCloudData.candlesticks, emaPersistCloudData.ma9, emaPersistCloudData.ma21, emaPersistCloudConfirmData,
+        ).segments;
+        const afterTone = raw.filter((seg) => emaPersistCloudTones?.[seg.tone] !== false);
+        const afterSnap = afterTone.map((seg) => ({ ...seg, points: snapPointsToChartCandles(candlesticks, seg.points) }));
+        const afterClip = afterSnap.map((seg) => ({ ...seg, points: seg.points.filter((p) => p.time >= minTime && p.time <= maxTime) }));
+        emaPersistClouds = afterClip.filter((seg) => seg.points.length >= 2);
+        // DEBUG TEMPORARIO — remover depois de achar o motivo dos buracos.
+        if (window.__PERM_DEBUG__) {
+          const fmt = (t) => new Date(t * 1000).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+          console.log('[PERM debug] raw segments:', raw.length, '-> afterTone:', afterTone.length,
+            '-> afterSnap(pontos>0):', afterSnap.filter(s => s.points.length).length,
+            '-> afterClip(pontos>0):', afterClip.filter(s => s.points.length).length,
+            '-> final:', emaPersistClouds.length);
+          console.log('[PERM debug] candlesticks(chart) range:', candlesticks?.length ? fmt(minTime) + ' -> ' + fmt(maxTime) : 'vazio', 'total:', candlesticks?.length);
+          console.log('[PERM debug] emaPersistCloudData.candlesticks range:',
+            emaPersistCloudData.candlesticks.length,
+            fmt(Math.floor(Number(emaPersistCloudData.candlesticks[0].openTime) / 1000)), '->',
+            fmt(Math.floor(Number(emaPersistCloudData.candlesticks[emaPersistCloudData.candlesticks.length - 1].openTime) / 1000)));
+          console.log('[PERM debug] confirmData?', !!emaPersistCloudConfirmData, emaPersistCloudConfirmData?.candlesticks?.length ?? 0, 'candles');
+          console.table(raw.map((s, i) => ({
+            i, tone: s.tone, preview: !!s.preview, confirmed: s.confirmed, pontos: s.points.length,
+            de: fmt(s.points[0].time), ate: fmt(s.points[s.points.length - 1].time),
+          })));
+        }
       }
       bandFillPrimitiveRef.current.replacePrefixed('emaPersist-', emaPersistClouds);
     }
@@ -956,7 +978,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       }
       current[key].setData(clampToVisible(def.data));
     }
-  }, [activeIndicators, ma9, ma21, ma50, ma200, overlayConfigs, bollingerConfigs, vwapConfig, vwapSlopeHighlight, candlesticks, emaPersistCloudData, emaPersistCloudTones]);
+  }, [activeIndicators, ma9, ma21, ma50, ma200, overlayConfigs, bollingerConfigs, vwapConfig, vwapSlopeHighlight, candlesticks, emaPersistCloudData, emaPersistCloudConfirmData, emaPersistCloudTones]);
 
   // Linhas de preço: S/R. Sempre recriadas do zero (poucos níveis por vez, custo desprezível)
   // em vez de diff — mais simples que casar id estável por nível.
@@ -1167,16 +1189,16 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       || !emaPersistCloudData?.candlesticks?.length || !emaPersistCloudData?.ma9?.length || !emaPersistCloudData?.ma21?.length) {
       return null;
     }
-    const { lastSlopePct, lastState } = buildEmaCrossPersistenceClouds(
-      emaPersistCloudData.candlesticks, emaPersistCloudData.ma9, emaPersistCloudData.ma21,
+    const { lastSlopePct, lastState, lastConfirmed, lastIsPreview } = buildEmaCrossPersistenceClouds(
+      emaPersistCloudData.candlesticks, emaPersistCloudData.ma9, emaPersistCloudData.ma21, emaPersistCloudConfirmData,
     );
-    const text = formatEma9SlopeLegend(lastSlopePct, lastState);
+    const text = formatEma9SlopeLegend(lastSlopePct, lastState, lastConfirmed, lastIsPreview);
     if (!text) return null;
     const tone = SLOPE_STATE_META[lastState]?.tone;
     if (tone && emaPersistCloudTones?.[tone] === false) return null;
     const fill = SLOPE_STATE_META[lastState]?.fillColor ?? '#4ade80';
     return { text, fill };
-  }, [activeIndicators, emaPersistCloudData, emaPersistCloudTones]);
+  }, [activeIndicators, emaPersistCloudData, emaPersistCloudConfirmData, emaPersistCloudTones]);
 
   const legendEntries = useMemo(() => {
     const entries = [];

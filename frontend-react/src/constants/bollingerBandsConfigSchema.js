@@ -38,6 +38,11 @@ export const BOLLINGER_BANDS_DEFAULTS = {
      *  precisa ser ≥ 0 pra liberar a compra — checado no sinal e de novo a cada tick
      *  enquanto a ordem limite de entrada aguarda fill. */
     medianTrendFilter: { enabled: true, lookback: 10 },
+    /** Filtro PERM (nuvem de inclinação EMA9×EMA21 — ver o indicador "Perman." do gráfico e
+     *  backend/utils/emaPersistCloud.js): só compra com a EMA9 já acima da EMA21 e subindo.
+     *  Cascata quando o intervalo mais alto está sem estado disponível: entry.interval →
+     *  metade → um quarto (ex.: 1h → 30m → 15m). Ligado por padrão. */
+    permFilter: { enabled: true },
   },
   exit: {
     /** targetMode 'band' (padrão) = alvo (TP) na banda superior ao vivo, recriada quando
@@ -96,6 +101,9 @@ export function normalizeBollingerBandsForm(body = {}) {
       medianTrendFilter: {
         enabled: mt.enabled !== false,
         lookback: Number(mt.lookback ?? d.entry.medianTrendFilter.lookback),
+      },
+      permFilter: {
+        enabled: (body.entry?.permFilter ?? {}).enabled !== false,
       },
     },
     exit: {

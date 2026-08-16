@@ -4,6 +4,7 @@ const { BollingerBands } = require('technicalindicators');
 const { computeStopLossFloor } = require('../shared/stopLossFloor');
 const { computeMa, buildMaTimeSeries, maLabel } = require('../../utils/movingAverage');
 const { getMedianTrendThreshold } = require('../../utils/bollingerMedianTrendConfig');
+const { latestPermState, isEntryBullishState } = require('../../utils/emaPersistCloud');
 
 const INTERVAL_MS = {
   '1m': 60_000, '3m': 180_000, '5m': 300_000, '15m': 900_000, '30m': 1_800_000,
@@ -12,6 +13,32 @@ const INTERVAL_MS = {
 
 function intervalMs(iv) {
   return INTERVAL_MS[iv] ?? 3_600_000;
+}
+
+/** Intervalo padrão mais próximo de metade de `iv`, sempre estritamente menor — mesma fórmula
+ *  de getEmaPersistCloudConfirmInterval em frontend-react/src/utils/uiPreferences.js (1h→30m,
+ *  30m→15m, etc.), mantida em espelho aqui pro bot não depender do bundle do frontend. */
+function halfInterval(iv) {
+  const primaryMs = INTERVAL_MS[iv];
+  if (!primaryMs) return null;
+  const targetMs = primaryMs / 2;
+  let best = null;
+  let bestDiff = Infinity;
+  for (const [k, ms] of Object.entries(INTERVAL_MS)) {
+    if (ms >= primaryMs) continue;
+    const diff = Math.abs(ms - targetMs);
+    if (diff < bestDiff) { bestDiff = diff; best = k; }
+  }
+  return best;
+}
+
+/** Cadeia de intervalos do filtro PERM a partir do intervalo de entrada: ele mesmo, metade,
+ *  um quarto (ex.: 1h → 30m → 15m) — sem duplicar/repetir quando não houver intervalo menor
+ *  disponível (ex.: entrada já em '15m' → cadeia só tem '15m'). */
+function permIntervalChain(entryInterval) {
+  const level1 = halfInterval(entryInterval);
+  const level2 = level1 ? halfInterval(level1) : null;
+  return [entryInterval, level1, level2].filter(Boolean);
 }
 
 // Limiar mínimo (%, padrão global — vale para toda moeda) da inclinação média da mediana da
@@ -61,6 +88,12 @@ function getRequiredSpecs(config) {
   if (trend?.enabled) {
     const lookback = Math.max(0, Math.round(Number(trend.lookback ?? 10)));
     add(entry.interval, entry.period + lookback + 30);
+  }
+
+  const perm = entry.permFilter;
+  if (perm?.enabled) {
+    // EMA21 + folga pro slope (SLOPE_LOOKBACK=2) e o candle ainda em formação.
+    for (const iv of permIntervalChain(entry.interval)) add(iv, 21 + 10);
   }
 
   return [...specs.entries()].map(([interval, lim]) => ({ interval, limit: lim }));
@@ -170,6 +203,35 @@ function checkMedianTrendFilter(config, cMap, series) {
 }
 
 /**
+ * Filtro PERM (nuvem de inclinação EMA9×EMA21 — ver backend/utils/emaPersistCloud.js): só
+ * libera a compra com a EMA9 já ACIMA da EMA21 e subindo (riseAccel/riseFlat). O verde
+ * "antecipado" do lado abaixo da EMA21 (fallFlat/turnUp — a EMA9 só começou a virar, ainda não
+ * cruzou) NÃO libera: o bot segue um fluxo de alta já estabelecido, nunca antecipa o fim de
+ * uma baixa. Cascata quando o intervalo mais alto está sem estado disponível no momento
+ * (candle ausente, histórico curto, ou hora recém-aberta): entry.interval → metade → um quarto
+ * (ex.: 1h → 30m → 15m — ver permIntervalChain). Desligado (enabled=false) → sempre libera.
+ */
+function checkPermFilter(config, cMap) {
+  const perm = config.entry?.permFilter;
+  if (!perm?.enabled) return { allowed: true };
+
+  const chain = permIntervalChain(config.entry.interval);
+  for (const iv of chain) {
+    const closed = closedCandlesOnly(cMap[iv] ?? []);
+    const last = latestPermState(closed);
+    if (!last || last.state == null) continue; // nuvem vazia nesse intervalo — cai pro próximo
+    const bullish = isEntryBullishState(last.state);
+    return {
+      allowed: bullish,
+      reason: bullish ? null : 'PERM_NOT_BULLISH',
+      interval: iv, state: last.state, slopePct: last.slopePct, chain,
+    };
+  }
+  // Nenhum intervalo da cadeia teve estado disponível — sem dado suficiente pra confirmar.
+  return { allowed: false, reason: 'PERM_NO_DATA', chain };
+}
+
+/**
  * Sinal de entrada: a mínima do candle mais recente (ainda em formação — reage sem esperar
  * o fechamento) toca/rompe a banda inferior, calculada com candles JÁ FECHADOS.
  * entry.pullback desce esse gatilho pullback.belowPct% abaixo da banda — exige um repique
@@ -218,6 +280,15 @@ function evaluateEntrySignal(config, cMap) {
     };
   }
 
+  const permCheck = checkPermFilter(config, cMap);
+  if (!permCheck.allowed) {
+    return {
+      allowed: false, reason: permCheck.reason,
+      close: liveClose, lower: lastBb.lower, threshold,
+      emaFilter: emaCheck, perm: permCheck, signalOpenTime,
+    };
+  }
+
   // Stop mode 'ema': comprar no/abaixo do piso da EMA significa entrada do lado errado
   // da tendência (o stop já estaria acima da compra e não protegeria). Não entra —
   // o fallback % do computeStopPrice só cobre posição já aberta / slip.
@@ -252,6 +323,9 @@ function evaluateEntrySignal(config, cMap) {
       : '';
     entryDesc = `${bbDesc} + acima ${emaCheck.label}${slopeBit}`;
   }
+  if (permCheck.state) {
+    entryDesc = `${entryDesc} + PERM verde (${permCheck.interval})`;
+  }
 
   return {
     allowed: true,
@@ -261,6 +335,7 @@ function evaluateEntrySignal(config, cMap) {
     threshold,
     emaFilter: emaCheck,
     medianTrend: trendCheck,
+    perm: permCheck,
     emaStopFloor,
     signalOpenTime: Number(live.openTime),
     entryDesc,
@@ -455,7 +530,7 @@ function checkReentryCooldown(config, cMap, lastExitTime, lastExitReason) {
   };
 }
 
-// Ordem fixa de checagem em evaluateEntrySignal: toque na banda → mediana → EMA → stop
+// Ordem fixa de checagem em evaluateEntrySignal: toque na banda → mediana → EMA → PERM → stop
 // (ema ou band, mutuamente exclusivos conforme stopLoss.mode). Usado só pra descrever, em
 // texto, quais filtros já haviam passado quando um sinal quase entrou mas foi barrado —
 // notificação de "sinal possível" no bot (ver bollinger-bands-bot.js).
@@ -463,13 +538,14 @@ const NEAR_MISS_FILTER_LABELS = {
   bbTouch: 'Toque na banda inferior',
   medianTrend: 'Tendência da mediana da BB',
   emaFilter: 'Filtro EMA de tendência',
+  permFilter: 'Nuvem PERM (EMA9×EMA21)',
   emaStop: 'Stop EMA acima da entrada',
   bandStop: 'Stop banda acima da entrada',
 };
 // emaStop/bandStop são alternativos (dependem de stopLoss.mode, nunca os dois na mesma
 // avaliação) — por isso ficam fora da ordem sequencial: qualquer um dos dois só é alcançado
-// depois que os três filtros de NEAR_MISS_BASE_ORDER já passaram.
-const NEAR_MISS_BASE_ORDER = ['bbTouch', 'medianTrend', 'emaFilter'];
+// depois que os quatro filtros de NEAR_MISS_BASE_ORDER já passaram.
+const NEAR_MISS_BASE_ORDER = ['bbTouch', 'medianTrend', 'emaFilter', 'permFilter'];
 const NEAR_MISS_REASON_TO_FILTER = {
   MEDIAN_TREND_NO_DATA: 'medianTrend',
   MEDIAN_TREND_FALLING: 'medianTrend',
@@ -477,6 +553,8 @@ const NEAR_MISS_REASON_TO_FILTER = {
   EMA_FILTER_BELOW: 'emaFilter',
   EMA_FILTER_NO_SLOPE: 'emaFilter',
   EMA_FILTER_FALLING: 'emaFilter',
+  PERM_NOT_BULLISH: 'permFilter',
+  PERM_NO_DATA: 'permFilter',
   EMA_STOP_ABOVE_ENTRY: 'emaStop',
   BAND_STOP_ABOVE_ENTRY: 'bandStop',
 };
@@ -507,6 +585,8 @@ module.exports = {
   emaSlopePct,
   checkEmaFilter,
   checkMedianTrendFilter,
+  checkPermFilter,
+  permIntervalChain,
   evaluateEntrySignal,
   evaluateExit,
   checkEntryLimitExpired,

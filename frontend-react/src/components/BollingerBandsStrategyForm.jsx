@@ -35,6 +35,7 @@ export default function BollingerBandsStrategyForm({ form, patch, symbol, exchan
   const patchPullback  = (field, val) => patch(`entry.pullback.${field}`, val);
   const patchEmaFilter = (field, val) => patch(`entry.emaFilter.${field}`, val);
   const patchMedianTrendFilter = (field, val) => patch(`entry.medianTrendFilter.${field}`, val);
+  const patchPermFilter = (field, val) => patch(`entry.permFilter.${field}`, val);
   const patchBracket   = (field, val) => patch(`exit.restingBracket.${field}`, val);
   const patchStopLoss  = (field, val) => patch(`stopLoss.${field}`, val);
   const patchStopLossEma = (field, val) => patch(`stopLoss.ema.${field}`, val);
@@ -196,6 +197,26 @@ export default function BollingerBandsStrategyForm({ form, patch, symbol, exchan
             Desligado — não checa a tendência da linha mediana antes de comprar.
           </p>
         )}
+      </div>
+
+      <div className="rounded-md p-2 space-y-2" style={{ background: '#1a1d28', border: '1px solid #2a2d3a' }}>
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-p5/70">Filtro PERM (EMA9×EMA21, opcional)</span>
+          <label className="flex items-center gap-1 text-[9px] text-p5/50 cursor-pointer">
+            <input type="checkbox" checked={form.entry.permFilter?.enabled !== false}
+              onChange={e => patchPermFilter('enabled', e.target.checked)} style={{ accentColor: ENTRY_COLOR }} />
+            Ativo
+          </label>
+        </div>
+        <p className="text-[10px] text-p5/50 leading-relaxed">
+          {form.entry.permFilter?.enabled !== false
+            ? <>Só compra com a nuvem PERM (mesmo indicador "Perman." do gráfico) verde — EMA9
+                {' '}já acima da EMA21 e subindo, não o verde antecipado com a EMA9 ainda abaixo
+                {' '}(evita seguir o fluxo de baixa). Checa o intervalo {form.entry.interval} da
+                {' '}entrada; se estiver sem nuvem disponível no momento, cai pra metade do
+                {' '}intervalo e depois um quarto (ex.: 1h → 30m → 15m).</>
+            : 'Desligado — não checa a nuvem PERM antes de comprar.'}
+        </p>
       </div>
 
       <div className="rounded-md p-2 space-y-2" style={{ background: '#1a1d28', border: '1px solid #2a2d3a' }}>
