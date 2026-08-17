@@ -70,6 +70,6 @@ describe('getCandlesForScreening', () => {
 
     const { source } = await getCandlesForScreening('ETHUSDT', '5m', 200);
     expect(source).toBe('api');
-    expect(candleUpdateQueue.fetch).toHaveBeenCalledWith('ETHUSDT', '5m', 200, { priority: 5 });
+    expect(candleUpdateQueue.fetch).toHaveBeenCalledWith('ETHUSDT', '5m', 200, { priority: 8 });
   });
 });

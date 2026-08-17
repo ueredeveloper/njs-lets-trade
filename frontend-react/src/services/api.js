@@ -161,8 +161,11 @@ export async function fetchSimpleMaCross(symbol, entryInterval = '15m', exitInte
 /** Analisa ciclos fundo→topo na Bollinger Bands (4h por padrão) para uma moeda.
  *  `pullbackPct` (>0) exige que o preço caia esse tanto % abaixo da banda inferior antes de
  *  contar a entrada — simula um limite de compra nesse preço (mesmo `entry.pullback.belowPct`
- *  do bot). 0 = desligado, entra assim que a banda é tocada (padrão). */
-export async function fetchBollingerBandRecovery(symbol, interval = '4h', period = 20, stdDev = 2, source = null, medianTrendFilter = false, medianTrendLookback = 10, pullbackPct = 0, candleCount = 1000) {
+ *  do bot). 0 = desligado, entra assim que a banda é tocada (padrão).
+ *  `permFilter` ({h1,m30,m15}, cada um opcional/independente): só conta a entrada se a nuvem
+ *  PERM (EMA9×EMA21) de TODOS os níveis habilitados já estiver verde/fechada nesse instante (sem
+ *  look-ahead — ver analyseBollingerBandRecovery.js no backend). Ausente/todos false = não filtra. */
+export async function fetchBollingerBandRecovery(symbol, interval = '4h', period = 20, stdDev = 2, source = null, medianTrendFilter = false, medianTrendLookback = 10, pullbackPct = 0, candleCount = 1000, permFilter = null) {
   const params = new URLSearchParams({ symbol, interval, period, stdDev, candleCount });
   if (source) params.set('source', source);
   if (medianTrendFilter) {
@@ -170,6 +173,9 @@ export async function fetchBollingerBandRecovery(symbol, interval = '4h', period
     params.set('medianTrendLookback', medianTrendLookback);
   }
   if (pullbackPct > 0) params.set('pullbackPct', pullbackPct);
+  if (permFilter?.h1) params.set('permH1', '1');
+  if (permFilter?.m30) params.set('permM30', '1');
+  if (permFilter?.m15) params.set('permM15', '1');
   const res = await fetch(`/services/bollinger-band-recovery?${params}`);
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));

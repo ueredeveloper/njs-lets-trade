@@ -35,8 +35,11 @@ async function getCandlesForScreening(symbol, interval, limit) {
     }
   }
 
-  // missing ou insufficient — precisa de API, mas pela fila (urgente)
-  const candles = await candleUpdateQueue.fetch(symbol, interval, limit, { priority: 5 });
+  // missing ou insufficient — sem fallback em disco (diferente de "stale"), então precisa de
+  // pelo menos a mesma urgência da fila que o caso "stale" (8), senão fica atrás de refreshes
+  // de dados já existentes e estoura o timeout em fila congestionada — símbolo nunca aparece
+  // (ver conversa sobre % de largura sumindo pra símbolos recém-favoritados nos favoritos BB).
+  const candles = await candleUpdateQueue.fetch(symbol, interval, limit, { priority: 8 });
   return { candles, source: 'api' };
 }
 

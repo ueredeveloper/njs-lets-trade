@@ -76,6 +76,25 @@ export function buildMaCrossAdaptiveBandsConfig(entry, boundsOverride = null) {
   };
 }
 
+/** Os 3 níveis do filtro PERM (EMA9×EMA21 — ver backend/utils/emaPersistCloud.js) com
+ *  equivalente nos switches independentes da aba Estatísticas / botão PERM do gráfico (ver
+ *  backend/utils/analyseBollingerBandRecovery.js#PERM_LEVELS). O manipulador (bot ao vivo)
+ *  aceita qualquer intervalo em entry.permFilter.interval (backend/bot/bollinger-bands/
+ *  tradeConfigSchema.js), mas só estes 3 têm contrapartida aqui. */
+export const BB_PERM_INTERVAL_TO_KEY = { '1h': 'h1', '30m': 'm30', '15m': 'm15' };
+
+/** Nível do filtro PERM configurado no favorito bollinger-bands (multitrade) do manipulador
+ *  dessa moeda — 'h1'|'m30'|'m15', ou null se o filtro está desligado no bot, a entrada não é
+ *  bollinger-bands, ou o intervalo configurado não tem equivalente aqui (ex.: 4h, 2h, 5m). Usado
+ *  pra fazer a aba Estatísticas e o botão PERM do gráfico seguirem o MESMO nível que o bot
+ *  realmente usa pra essa moeda, em vez de uma combinação escolhida à mão. */
+export function resolveBollingerBandsPermFilter(entry) {
+  if (!isBollingerBandsEntry(entry)) return null;
+  const e = entry?.entry ?? entry?.tradeConfig?.entry ?? {};
+  if (!e.permFilter?.enabled) return null;
+  return BB_PERM_INTERVAL_TO_KEY[e.permFilter.interval] ?? null;
+}
+
 /** Banda (piso) do filtro de tendência EMA do bollinger-bands — mesmo formato de
  *  buildMaCrossAdaptiveBandsConfig (period/interval/maxDipPct + fixed*), reaproveitando o
  *  mesmo mecanismo de overlay adaptativo do chart (EMA + linha de piso a maxDipPct% abaixo).

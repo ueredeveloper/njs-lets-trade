@@ -37,7 +37,7 @@ import {
   loadActiveFavSort, expandActiveBuyLots, formatLotTime,
 } from '../utils/activeFavoritesSort';
 import { compareVwapFavorites, loadVwapFavSort } from '../utils/vwapFavoritesSort';
-import { compareBollingerFavorites, loadBbFavSort } from '../utils/bollingerFavoritesSort';
+import { compareBollingerFavorites, loadBbFavSort, saveBbFavSort } from '../utils/bollingerFavoritesSort';
 import { useMacrossFavoritesStatus } from '../hooks/useMacrossFavoritesStatus';
 import { useTradeFavoritesSummary } from '../hooks/useTradeFavoritesSummary';
 import { useVwapBandWidthMeta } from '../hooks/useVwapBandWidthMeta';
@@ -560,6 +560,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
 
   const onBbFavSortChange = useCallback((sortBy) => {
     setBbFavSort(sortBy);
+    saveBbFavSort(sortBy);
     setSortVolume('none');
   }, []);
 

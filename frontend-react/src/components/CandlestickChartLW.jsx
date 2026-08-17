@@ -30,10 +30,17 @@ const BB_PATH_CLOUD_DOWN = 'rgba(255,193,7,0.22)';
  * Não liga saída→próxima entrada.
  */
 function buildBbPathLineAndMarkers(bollingerConfig, candlesticks) {
-  if (!bollingerConfig?.showPath || !bollingerConfig.points?.length || !candlesticks?.length) {
+  if (!bollingerConfig?.showPath || !candlesticks?.length) {
     return { segments: [], clouds: [], markers: [] };
   }
-  const nodes = simulateBbTouchPath(bollingerConfig.points);
+  // PERM ligado: ciclos já vêm filtrados pela nuvem PERM do manipulador (occurrencesToBbPathNodes
+  // em CandlestickChart.jsx) — usa esses em vez de simular do zero. Sem dado ainda carregado
+  // (fetch em andamento/sem favorito com PERM equivalente), fica sem path até chegar/permanece
+  // vazio (não cai pra simulação simples — misturaria ciclos filtrados com não filtrados).
+  const nodes = bollingerConfig.showPermFilter
+    ? (bollingerConfig.permPathNodes ?? [])
+    : (bollingerConfig.points?.length ? simulateBbTouchPath(bollingerConfig.points) : []);
+  if (!nodes.length) return { segments: [], clouds: [], markers: [] };
   const cycles = pairBbPathCycles(nodes);
   if (!cycles.length) return { segments: [], clouds: [], markers: [] };
 
@@ -540,7 +547,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
   symbol, interval, candlesticks, colors, rightPad = 0,
   activeIndicators = [], ma9, ma21, ma50, ma200, overlayConfigs, vwapConfig, vwapSlopeHighlight,
   bollingerConfigs = [], srConfig, pphlConfig, rsi, chopConfig,
-  emaPersistCloudData, emaPersistCloudConfirmData, emaPersistCloudTones, barsSinceCrossData, tdSequentialData,
+  emaPersistCloudData, emaPersistCloudConfirmData, emaPersistCloudConfirm2Data, emaPersistCloudLayers, emaPersistCloudTones, barsSinceCrossData, tdSequentialData,
   stopLossConfig, targetConfig, buyInfo, multitradeMarkers, zoomPeriod, focusLastN,
   onNeedOlderCandles, loadingMoreCandles,
 }, ref) {
@@ -932,7 +939,8 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       if (activeIndicators.includes('emaPersistCloud')
         && emaPersistCloudData?.candlesticks?.length && emaPersistCloudData?.ma9?.length && emaPersistCloudData?.ma21?.length) {
         const raw = buildEmaCrossPersistenceClouds(
-          emaPersistCloudData.candlesticks, emaPersistCloudData.ma9, emaPersistCloudData.ma21, emaPersistCloudConfirmData,
+          emaPersistCloudData.candlesticks, emaPersistCloudData.ma9, emaPersistCloudData.ma21,
+          emaPersistCloudConfirmData, emaPersistCloudConfirm2Data, emaPersistCloudLayers,
         ).segments;
         const afterTone = raw.filter((seg) => emaPersistCloudTones?.[seg.tone] !== false);
         const afterSnap = afterTone.map((seg) => ({ ...seg, points: snapPointsToChartCandles(candlesticks, seg.points) }));
@@ -978,7 +986,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       }
       current[key].setData(clampToVisible(def.data));
     }
-  }, [activeIndicators, ma9, ma21, ma50, ma200, overlayConfigs, bollingerConfigs, vwapConfig, vwapSlopeHighlight, candlesticks, emaPersistCloudData, emaPersistCloudConfirmData, emaPersistCloudTones]);
+  }, [activeIndicators, ma9, ma21, ma50, ma200, overlayConfigs, bollingerConfigs, vwapConfig, vwapSlopeHighlight, candlesticks, emaPersistCloudData, emaPersistCloudConfirmData, emaPersistCloudConfirm2Data, emaPersistCloudLayers, emaPersistCloudTones]);
 
   // Linhas de preço: S/R. Sempre recriadas do zero (poucos níveis por vez, custo desprezível)
   // em vez de diff — mais simples que casar id estável por nível.
@@ -1190,7 +1198,8 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       return null;
     }
     const { lastSlopePct, lastState, lastConfirmed, lastIsPreview } = buildEmaCrossPersistenceClouds(
-      emaPersistCloudData.candlesticks, emaPersistCloudData.ma9, emaPersistCloudData.ma21, emaPersistCloudConfirmData,
+      emaPersistCloudData.candlesticks, emaPersistCloudData.ma9, emaPersistCloudData.ma21,
+      emaPersistCloudConfirmData, emaPersistCloudConfirm2Data,
     );
     const text = formatEma9SlopeLegend(lastSlopePct, lastState, lastConfirmed, lastIsPreview);
     if (!text) return null;
@@ -1198,7 +1207,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
     if (tone && emaPersistCloudTones?.[tone] === false) return null;
     const fill = SLOPE_STATE_META[lastState]?.fillColor ?? '#4ade80';
     return { text, fill };
-  }, [activeIndicators, emaPersistCloudData, emaPersistCloudConfirmData, emaPersistCloudTones]);
+  }, [activeIndicators, emaPersistCloudData, emaPersistCloudConfirmData, emaPersistCloudConfirm2Data, emaPersistCloudTones]);
 
   const legendEntries = useMemo(() => {
     const entries = [];

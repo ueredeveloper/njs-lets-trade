@@ -4,10 +4,25 @@ const BollingerBands = require('technicalindicators').BollingerBands;
 const getCandles = require('../binance/getCandles');
 const { getGateCandles } = require('../gate/getGateCandles');
 const { getMedianTrendThreshold } = require('./bollingerMedianTrendConfig');
+const { permStateSeries, lastClosedPermStateAt, isEntryBullishState } = require('./emaPersistCloud');
 
 const BB_PERIOD = 20;
 const BB_STD_DEV = 2;
 const DEFAULT_CANDLE_COUNT = 1000; // candles 4h — cobre bastante histórico para warmup + ciclos
+
+const PERM_INTERVAL_MS = { '15m': 900_000, '30m': 1_800_000, '1h': 3_600_000 };
+/** Teto de candles buscados por nível do filtro PERM (ver PERM_LEVELS/buildPermSeries abaixo) —
+ *  entradas mais antigas que esse histórico ficam sem estado disponível (tratadas como
+ *  bloqueadas quando o nível está habilitado, mesmo critério do bot quando falta dado). */
+const PERM_MAX_CANDLES = 5000;
+/** Cada chave de `options.permFilter` (ver analyseBollingerBandRecovery) e o intervalo real que
+ *  ela liga — mesmos 3 níveis fixos do seletor da aba Estatísticas (não é a cascata dinâmica do
+ *  bot ao vivo/gráfico; aqui os 3 são independentes e todos os habilitados precisam concordar). */
+const PERM_LEVELS = [
+  { key: 'h1', interval: '1h' },
+  { key: 'm30', interval: '30m' },
+  { key: 'm15', interval: '15m' },
+];
 
 /**
  * Analisa ciclos de fundo→topo na Bollinger Bands de uma moeda.
@@ -73,6 +88,41 @@ function medianTrendAvgDiffPct(bbSeries, i, lookback) {
     return diffPcts.reduce((a, b) => a + b, 0) / diffPcts.length;
 }
 
+/**
+ * Busca candles + calcula a série de estados PERM (EMA9×EMA21, ver backend/utils/emaPersistCloud.js)
+ * pra cada nível habilitado em `permFilter` (ex.: `{ h1: true, m30: true, m15: false }`) —
+ * intervalo PRÓPRIO, independente do intervalo/período da Bollinger Band sendo analisada (mesma
+ * ideia do permFilter do bot ao vivo). `primaryCandles` só serve pra dimensionar quantos candles
+ * de cada nível são necessários pra cobrir o período todo da análise (ver PERM_MAX_CANDLES).
+ * Retorna um Map<key, {states, intervalMs}> só com os níveis habilitados.
+ */
+async function buildPermSeriesByLevel(fetchCandles, symbol, permFilter, primaryCandles, primaryIntervalMs) {
+    const enabled = PERM_LEVELS.filter(l => permFilter?.[l.key]);
+    if (!enabled.length || !primaryCandles?.length) return new Map();
+
+    const spanMs = primaryCandles[primaryCandles.length - 1].openTime - primaryCandles[0].openTime + primaryIntervalMs;
+    const out = new Map();
+    await Promise.all(enabled.map(async ({ key, interval: iv }) => {
+        const ms = PERM_INTERVAL_MS[iv];
+        const count = Math.min(PERM_MAX_CANDLES, Math.max(100, Math.ceil(spanMs / ms) + 50));
+        const candles = await fetchCandles(symbol, iv, count);
+        out.set(key, { states: permStateSeries(candles), intervalMs: ms });
+    }));
+    return out;
+}
+
+/** true só se TODOS os níveis habilitados em `permByLevel` estiverem com nuvem verde (bullish)
+ *  já fechada em `atTime` — sem look-ahead (ver lastClosedPermStateAt). Sem nenhum nível
+ *  habilitado (`permByLevel` vazio), não filtra nada (comportamento igual a "não usar PERM"). */
+function isPermBullishAt(permByLevel, atTime) {
+    if (!permByLevel.size) return true;
+    for (const { states, intervalMs } of permByLevel.values()) {
+        const state = lastClosedPermStateAt(states, intervalMs, atTime);
+        if (!state || !isEntryBullishState(state.state)) return false;
+    }
+    return true;
+}
+
 async function analyseBollingerBandRecovery(symbol, options = {}) {
     const {
         interval = '4h',
@@ -83,6 +133,7 @@ async function analyseBollingerBandRecovery(symbol, options = {}) {
         medianTrendLookback = 10,
         pullbackPct = 0,
         candleCount = DEFAULT_CANDLE_COUNT,
+        permFilter = null,
     } = options;
     const pullback = Math.max(0, parseFloat(pullbackPct) || 0);
     const limit = parseInt(candleCount) || DEFAULT_CANDLE_COUNT;
@@ -92,6 +143,11 @@ async function analyseBollingerBandRecovery(symbol, options = {}) {
 
     const bbSeries = buildBbSeries(candles, period, stdDev);
     if (!bbSeries) throw new Error(`Candles insuficientes para BB(${period}) em ${interval}`);
+
+    const primaryIntervalMs = candles.length > 1
+        ? candles[1].openTime - candles[0].openTime
+        : PERM_INTERVAL_MS[interval] ?? 3_600_000;
+    const permByLevel = await buildPermSeriesByLevel(fetchCandles, symbol, permFilter, candles, primaryIntervalMs);
 
     const offset = period - 1;
 
@@ -118,6 +174,10 @@ async function analyseBollingerBandRecovery(symbol, options = {}) {
                 // Sem histórico suficiente ou mediana em queda/subindo devagar demais → mesmo critério do bot: bloqueia a entrada.
                 if (avgDiffPct === null || avgDiffPct < getMedianTrendThreshold()) continue;
             }
+            // Filtro PERM (ver buildPermSeriesByLevel acima): TODOS os níveis habilitados
+            // (1h/30m/15m) precisam estar com a nuvem verde já fechada nesse instante — sem
+            // nenhum habilitado, não bloqueia nada.
+            if (!isPermBullishAt(permByLevel, Number(candle.openTime))) continue;
             minLowIdx = i;
             // Sem pullback, a entrada usa o close do fundo real (rastreado abaixo em SEEK_EXIT) —
             // com pullback, o preço de entrada já é conhecido: o próprio limite que teria enchido.
@@ -189,6 +249,7 @@ async function analyseBollingerBandRecovery(symbol, options = {}) {
         medianTrendFilter,
         medianTrendLookback,
         pullbackPct: pullback,
+        permFilter: permByLevel.size ? Object.fromEntries(PERM_LEVELS.filter(l => permFilter?.[l.key]).map(l => [l.key, true])) : null,
         totalCandles: candles.length,
         totalBbPeriods: bbSeries.length,
         totalOccurrences: total,

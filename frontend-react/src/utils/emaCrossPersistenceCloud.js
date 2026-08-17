@@ -245,24 +245,55 @@ function inferBucketSec(states) {
   return Number.isFinite(min) ? min : null;
 }
 
+/** Constrói a camada de prévia (nuvem inteira, reamostrada pro grid do principal) de UM
+ *  intervalo de confirmação — mesma lógica usada tanto pra camada 2 (confirmData) quanto pra
+ *  camada 3 (confirmData2), só muda de onde vêm os `states`. */
+function buildPreviewLayer(states, confirmStates, bucketSec) {
+  if (!confirmStates.length || !bucketSec || !states.length) return [];
+  const firstTime = states[0].time;
+  const lastConfirmTime = confirmStates[confirmStates.length - 1].time;
+  const resampled = [];
+  for (let t = firstTime; t <= lastConfirmTime; t += bucketSec) {
+    const at = lastStateAtOrBefore(confirmStates, t);
+    resampled.push(at
+      ? { time: t, fast: at.fast, slow: at.slow, slopePct: at.slopePct, state: at.state }
+      : { time: t, fast: null, slow: null, slopePct: null, state: null });
+  }
+  return buildSegmentsFromStates(resampled, () => true).map((seg) => ({ ...seg, preview: true }));
+}
+
 /**
  * @param {Array} candlesticks
  * @param {Array} ma9
  * @param {Array} ma21
  * @param {{candlesticks:Array, ma9:Array, ma21:Array}|null} [confirmData] dados (candles + EMA9 +
  *   EMA21) de um intervalo menor — usado pra (1) confirmar os estados bullish do intervalo
- *   principal (ex.: 1h confirmado em 15m) e (2) preencher, como prévia, os buracos do intervalo
- *   principal (ver EMA_PERSIST_CLOUD_CONFIRM_INTERVAL). Opcional: sem isso o comportamento é o
- *   de antes.
+ *   principal (ex.: 1h confirmado em 15m) e (2) preencher, como prévia (2ª nuvem), os buracos do
+ *   intervalo principal (ver EMA_PERSIST_CLOUD_CONFIRM_INTERVAL). Opcional: sem isso o
+ *   comportamento é o de antes (1 nuvem só).
+ * @param {{candlesticks:Array, ma9:Array, ma21:Array}|null} [confirmData2] dados de mais um nível
+ *   abaixo (a confirmação DA confirmação — ex.: se confirmData é 30m, confirmData2 é 15m),
+ *   desenhado como uma 3ª nuvem, sempre esmaecida, por baixo das outras duas — puramente visual,
+ *   NÃO participa da confirmação/esmaecimento da camada principal (só confirmData faz isso).
+ * @param {{layer1?:boolean, layer2?:boolean, layer3?:boolean}} [layerVisibility] quais camadas
+ *   entram no `segments` retornado (switches da UI — ver renderPermIntervalTile). Todas true por
+ *   padrão. NÃO afeta os cálculos (confirmação/legenda continuam usando confirmData mesmo com
+ *   layer2 desligado na tela) — só filtra o que é desenhado.
  * @returns {{ segments: Array<{points: Array<{time:number, upper:number, lower:number}>, fillColor: string, tone: string, confirmed: boolean, preview?: boolean}>,
  *             lastSlopePct: number|null, lastState: string|null, lastConfirmed: boolean|null, lastIsPreview: boolean }}
  */
-export function buildEmaCrossPersistenceClouds(candlesticks, ma9, ma21, confirmData) {
+export function buildEmaCrossPersistenceClouds(candlesticks, ma9, ma21, confirmData, confirmData2, layerVisibility) {
+  const showLayer1 = layerVisibility?.layer1 !== false;
+  const showLayer2 = layerVisibility?.layer2 !== false;
+  const showLayer3 = layerVisibility?.layer3 !== false;
   const states = computeSlopeStates(candlesticks, ma9, ma21);
   if (states.length < 2) return EMPTY_RESULT;
 
   const confirmStates = confirmData?.candlesticks?.length
     ? computeSlopeStates(confirmData.candlesticks, confirmData.ma9, confirmData.ma21)
+    : [];
+  const confirmStates2 = confirmData2?.candlesticks?.length
+    ? computeSlopeStates(confirmData2.candlesticks, confirmData2.ma9, confirmData2.ma21)
     : [];
 
   // Sem dado de confirmação (intervalo já é o menor, ou ainda carregando): não penaliza a nuvem.
@@ -286,19 +317,11 @@ export function buildEmaCrossPersistenceClouds(candlesticks, ma9, ma21, confirmD
   // no gráfico de 1h — cada ponto da prévia precisa da sua própria posição no grid do principal
   // pra sobreviver ao encaixe.
   const bucketSec = inferBucketSec(states);
-  let previewSegments = [];
-  if (confirmStates.length && bucketSec) {
-    const firstTime = states[0].time;
-    const lastConfirmTime = confirmStates[confirmStates.length - 1].time;
-    const resampled = [];
-    for (let t = firstTime; t <= lastConfirmTime; t += bucketSec) {
-      const at = lastStateAtOrBefore(confirmStates, t);
-      resampled.push(at
-        ? { time: t, fast: at.fast, slow: at.slow, slopePct: at.slopePct, state: at.state }
-        : { time: t, fast: null, slow: null, slopePct: null, state: null });
-    }
-    previewSegments = buildSegmentsFromStates(resampled, () => true).map((seg) => ({ ...seg, preview: true }));
-  }
+  const previewSegments = buildPreviewLayer(states, confirmStates, bucketSec);
+  // 3ª nuvem (opcional, ver emaPersistCloudLayers em uiPreferences.js): confirmação DA
+  // confirmação (ex.: 15m quando o principal é 1h e confirmData já é 30m). Puramente visual —
+  // entra ANTES de tudo (mais no fundo), nunca participa do esmaecimento da camada principal.
+  const previewSegments2 = buildPreviewLayer(states, confirmStates2, bucketSec);
 
   const lastPrimaryIdx = states.length - 1;
   const lastPrimaryState = states[lastPrimaryIdx].state;
@@ -307,7 +330,11 @@ export function buildEmaCrossPersistenceClouds(candlesticks, ma9, ma21, confirmD
   const lastIsPreview = !!lastConfirm && lastConfirm.time > lastPrimaryTime;
 
   return {
-    segments: [...previewSegments, ...primarySegments],
+    segments: [
+      ...(showLayer3 ? previewSegments2 : []),
+      ...(showLayer2 ? previewSegments : []),
+      ...(showLayer1 ? primarySegments : []),
+    ],
     lastSlopePct: lastIsPreview ? lastConfirm.slopePct : states[lastPrimaryIdx].slopePct,
     lastState: lastIsPreview ? lastConfirm.state : lastPrimaryState,
     lastConfirmed: lastIsPreview

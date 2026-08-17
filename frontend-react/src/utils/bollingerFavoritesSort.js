@@ -8,11 +8,20 @@ export const BB_FAV_SORT_OPTIONS = [
   { id: 'near_upper', labelKey: 'bbfav.sort.near_upper', shortKey: 'bbfav.sort.short.near_upper' },
 ];
 
-/** Sem persistência entre sessões (ao contrário do VWAP/MA-Cross/Trade) — cada abertura da
- *  view de favoritos BB deve sempre começar em "Fase", nunca lembrar a última escolha de
- *  largura de uma sessão anterior. */
+const STORAGE_KEY = 'lets_trade_bb_fav_sort';
+
+/** Persiste entre sessões/reaberturas, igual VWAP/MA-Cross/Trade — no mobile a tela de
+ *  favoritos fecha ao selecionar uma moeda, e reabrir não deve resetar a ordenação escolhida. */
 export function loadBbFavSort() {
+  try {
+    const v = localStorage.getItem(STORAGE_KEY);
+    if (v && BB_FAV_SORT_OPTIONS.some(o => o.id === v)) return v;
+  } catch {}
   return 'phase';
+}
+
+export function saveBbFavSort(sortBy) {
+  try { localStorage.setItem(STORAGE_KEY, sortBy); } catch {}
 }
 
 export function getBbFavSortOption(sortBy) {
@@ -25,6 +34,7 @@ export function cycleBbFavSort(current, direction = 1) {
   const i = idx < 0 ? 0 : idx;
   const n = BB_FAV_SORT_OPTIONS.length;
   const next = BB_FAV_SORT_OPTIONS[(i + direction + n * 10) % n];
+  saveBbFavSort(next.id);
   return next.id;
 }
 

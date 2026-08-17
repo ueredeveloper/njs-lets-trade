@@ -9,6 +9,7 @@ import { useI18n } from '../i18n';
 import { CHART_VIEW } from '../utils/chartView';
 import { getEntriesForSymbol } from '../constants/strategyPresets';
 import { isMaCrossEntry } from '../utils/macrossFavoritesSort';
+import { isBollingerBandsEntry, resolveBollingerBandsPermFilter } from '../utils/multitradeChart';
 import { VWAP_BANDS_ALL_INTERVALS, VWAP_BANDS_SESSIONS, EMA_FILTER_PERIODS } from '../constants/vwapBandsConfigSchema';
 
 
@@ -90,6 +91,59 @@ function loadMedianTrendFilterPref() {
 
 function saveMedianTrendFilterPref(value) {
   try { localStorage.setItem(BB_MEDIAN_TREND_STORAGE_KEY, value ? '1' : '0'); } catch {}
+}
+
+const BB_PERM_FILTER_STORAGE_KEY = 'lets_trade_stats_bb_perm_filter';
+
+/** Preferência dos 3 switches "Filtro PERM" (1h/30m/15m) da aba Bollinger Bands — cada um
+ *  independente, lembrados entre buscas. Todos false = comportamento igual a "não usar PERM". */
+function loadPermFilterPref() {
+  try {
+    const raw = localStorage.getItem(BB_PERM_FILTER_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return { h1: !!parsed.h1, m30: !!parsed.m30, m15: !!parsed.m15 };
+    }
+  } catch {}
+  return { h1: false, m30: false, m15: false };
+}
+
+function savePermFilterPref(value) {
+  try { localStorage.setItem(BB_PERM_FILTER_STORAGE_KEY, JSON.stringify(value)); } catch {}
+}
+
+const BB_PERM_BOT_STORAGE_KEY = 'lets_trade_stats_bb_perm_bot';
+
+/** Preferência do switch "Perm Bot" — quando ligado, os 3 switches manuais de PERM são
+ *  ignorados e a estatística usa o MESMO nível (1h/30m/15m) configurado no favorito
+ *  Bollinger Bands (multitrade) dessa moeda, em vez de uma combinação escolhida à mão. */
+function loadUsePermBotPref() {
+  try {
+    const v = localStorage.getItem(BB_PERM_BOT_STORAGE_KEY);
+    if (v === '1') return true;
+    if (v === '0') return false;
+  } catch {}
+  return false;
+}
+
+function saveUsePermBotPref(value) {
+  try { localStorage.setItem(BB_PERM_BOT_STORAGE_KEY, value ? '1' : '0'); } catch {}
+}
+
+/** Favorito Bollinger Bands (multitrade_favorites) desse símbolo, se existir — de onde vem o
+ *  `entry.permFilter` real usado pelo bot ao vivo (backend/bot/bollinger-bands/tradeConfigSchema.js). */
+function bbEntryFor(multitradeFavorites, symbol) {
+  return getEntriesForSymbol(multitradeFavorites, symbol).find(isBollingerBandsEntry) ?? null;
+}
+
+/** Converte o `entry.permFilter` do manipulador (bot) — um único intervalo, ex. `{ enabled: true,
+ *  interval: '30m' }` — pro formato dos 3 switches independentes da aba Estatísticas, via
+ *  resolveBollingerBandsPermFilter (multitradeChart.js, mesma resolução usada pelo botão PERM
+ *  do gráfico). PERM desligado no bot ou configurado num intervalo sem equivalente (4h, 2h,
+ *  5m…) cai pra "sem PERM" (nenhum switch ligado). */
+function permFilterFromBotEntry(entry) {
+  const key = resolveBollingerBandsPermFilter(entry);
+  return { h1: key === 'h1', m30: key === 'm30', m15: key === 'm15' };
 }
 
 const BB_PULLBACK_STORAGE_KEY = 'lets_trade_stats_bb_pullback_pct';
@@ -231,6 +285,69 @@ function MedianTrendFilterSwitch({ checked, onChange }) {
         type="button"
         onClick={() => onChange(!checked)}
         title="Considera só entradas com a mediana da BB em alta/estável nos candles anteriores (mesmo filtro do bot)"
+        className={`relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${checked ? 'bg-p4' : 'bg-p3/40'}`}
+      >
+        <span className={`inline-block h-3 w-3 rounded-full bg-white shadow transition-transform ${checked ? 'translate-x-3' : 'translate-x-0'}`} />
+      </button>
+    </div>
+  );
+}
+
+const PERM_FILTER_LEVELS = [
+  { key: 'h1', label: '1h' },
+  { key: 'm30', label: '30m' },
+  { key: 'm15', label: '15m' },
+];
+
+/** 3 switches "Filtro PERM" (1h/30m/15m) — independentes entre si, ver
+ *  backend/utils/analyseBollingerBandRecovery.js#isPermBullishAt: só conta a entrada se a nuvem
+ *  PERM (EMA9×EMA21, backend/utils/emaPersistCloud.js) de TODOS os níveis habilitados já estiver
+ *  verde/fechada nesse instante (sem look-ahead). Nenhum habilitado = não filtra ("sem PERM"),
+ *  qualquer combinação (só 1h, 1h+30m, só 30m, os 3 juntos etc.) é válida. */
+function PermFilterSwitches({ value, onToggle, disabled = false }) {
+  return (
+    <div className="flex items-center gap-1.5 shrink-0 pb-1">
+      <span className="hidden md:inline text-[9px] text-p5/50 uppercase tracking-wider">PERM</span>
+      <div className="flex items-center gap-1">
+        {PERM_FILTER_LEVELS.map(({ key, label }) => {
+          const on = !!value?.[key];
+          return (
+            <button
+              key={key}
+              type="button"
+              aria-pressed={on}
+              disabled={disabled}
+              onClick={() => onToggle(key, !on)}
+              title={disabled
+                ? 'Controlado pelo switch "Perm Bot" — desligue-o para escolher manualmente'
+                : `Exige a nuvem PERM (${label}) verde/fechada no momento do toque (mesmo indicador do gráfico e do bot) — pode combinar com os outros níveis`}
+              className={`px-1.5 py-0.5 rounded text-[9px] font-mono border transition-colors ${
+                on ? 'border-emerald-500 bg-emerald-500/20 text-emerald-400' : 'border-p3/40 text-p5/50'
+              } ${disabled ? 'opacity-40 cursor-not-allowed' : ''}`}
+            >
+              {label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/** Switch "Perm Bot" — em vez de escolher manualmente os níveis do filtro PERM (1h/30m/15m),
+ *  usa o MESMO nível configurado no favorito Bollinger Bands (multitrade) dessa moeda
+ *  (entry.permFilter.interval do manipulador — ver backend/bot/bollinger-bands/tradeConfigSchema.js).
+ *  Ex.: se o bot está com o PERM ativado em 30m pra essa moeda, ligar esse switch ativa o
+ *  mesmo nível 30m aqui. Sem favorito BB pra essa moeda, ou PERM desligado/num intervalo sem
+ *  equivalente (4h, 2h, 5m…), cai pra "sem PERM" (ver permFilterFromBotEntry). */
+function PermBotSwitch({ checked, onChange }) {
+  return (
+    <div className="flex items-center gap-1 shrink-0 pb-1">
+      <span className="hidden md:inline text-[9px] text-p5/50 uppercase tracking-wider">Perm Bot</span>
+      <button
+        type="button"
+        onClick={() => onChange(!checked)}
+        title="Usa o mesmo nível de PERM (1h/30m/15m) configurado no favorito Bollinger Bands desta moeda, em vez de escolher manualmente"
         className={`relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${checked ? 'bg-p4' : 'bg-p3/40'}`}
       >
         <span className={`inline-block h-3 w-3 rounded-full bg-white shadow transition-transform ${checked ? 'translate-x-3' : 'translate-x-0'}`} />
@@ -824,6 +941,8 @@ function BollingerBandsStats() {
   const [stdDev, setStdDev]     = useState(uiPrefs.statsDefaults.bollingerBands.stdDev);
   const [useMcInterval, setUseMcInterval] = useState(() => loadUseMcInterval('bollinger_bands', false));
   const [medianTrendFilter, setMedianTrendFilter] = useState(() => loadMedianTrendFilterPref());
+  const [permFilter, setPermFilter] = useState(() => loadPermFilterPref());
+  const [usePermBot, setUsePermBot] = useState(() => loadUsePermBotPref());
   const [pullbackPct, setPullbackPct] = useState(() => loadPullbackPct());
   const [pullbackEnabled, setPullbackEnabled] = useState(() => loadPullbackEnabled());
   const [candleCount, setCandleCount] = useState(() => loadCandleCount());
@@ -835,7 +954,7 @@ function BollingerBandsStats() {
   const inp = 'bg-p2 border border-p3/40 text-p5 text-[10px] sm:text-xs rounded px-1 sm:px-2 py-1 focus:outline-none focus:border-p4 w-full';
   const inpNum = `${inp} [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none`;
 
-  async function handleSearch(overrideSymbol, updateChart = false, overrideInterval, overrideSource, overrideUseMc, overrideMedianTrendFilter, overridePullbackPct, overridePullbackEnabled, overrideCandleCount) {
+  async function handleSearch(overrideSymbol, updateChart = false, overrideInterval, overrideSource, overrideUseMc, overrideMedianTrendFilter, overridePullbackPct, overridePullbackEnabled, overrideCandleCount, overridePermFilter, overrideUsePermBot) {
     const sym = (overrideSymbol ?? symbol).trim().toUpperCase();
     const useMc = overrideUseMc ?? useMcInterval;
     const mcIv  = useMc ? mcEntryFor(multitradeFavorites, sym)?.tradeConfig?.entry?.ma1?.interval : null;
@@ -845,6 +964,12 @@ function BollingerBandsStats() {
     const usePullback = overridePullbackEnabled ?? pullbackEnabled;
     const pullback = usePullback ? Math.abs(overridePullbackPct ?? pullbackPct) : 0;
     const candles = overrideCandleCount ?? candleCount;
+    // "Perm Bot" ligado: ignora os switches manuais e usa o mesmo nível PERM do favorito
+    // Bollinger Bands do manipulador pra essa moeda (ver permFilterFromBotEntry acima).
+    const usePermBotFlag = overrideUsePermBot ?? usePermBot;
+    const usePermFilter = usePermBotFlag
+      ? permFilterFromBotEntry(bbEntryFor(multitradeFavorites, sym))
+      : (overridePermFilter ?? permFilter);
     const chartSource = selectedChart?.symbol === sym ? (selectedChart?.source ?? null) : null;
     const src = overrideSource !== undefined ? overrideSource : chartSource;
     if (!sym) return;
@@ -852,7 +977,7 @@ function BollingerBandsStats() {
     setError(null);
     setResult(null);
     try {
-      const data = await fetchBollingerBandRecovery(sym, iv, period, stdDev, src, useMedianTrend, 10, pullback, candles);
+      const data = await fetchBollingerBandRecovery(sym, iv, period, stdDev, src, useMedianTrend, 10, pullback, candles, usePermFilter);
       setResult(data);
       if (updateChart) {
         const chartData = await fetchCandlesticksAndCloud(sym, iv, src);
@@ -889,6 +1014,26 @@ function BollingerBandsStats() {
     setPullbackEnabled(next);
     savePullbackEnabled(next);
     handleSearch(undefined, false, undefined, undefined, undefined, undefined, undefined, next);
+  }
+
+  function handleTogglePermFilter(key, next) {
+    const merged = { ...permFilter, [key]: next };
+    setPermFilter(merged);
+    savePermFilterPref(merged);
+    handleSearch(undefined, false, undefined, undefined, undefined, undefined, undefined, undefined, undefined, merged);
+  }
+
+  function handleTogglePermBot(next) {
+    setUsePermBot(next);
+    saveUsePermBotPref(next);
+    if (next) {
+      // Reflete visualmente os switches manuais com o nível vindo do manipulador, mesmo
+      // desabilitados — assim o usuário vê qual nível está de fato em uso na busca.
+      const botPerm = permFilterFromBotEntry(bbEntryFor(multitradeFavorites, symbol.trim().toUpperCase()));
+      setPermFilter(botPerm);
+      savePermFilterPref(botPerm);
+    }
+    handleSearch(undefined, false, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, next);
   }
 
   async function openOnChart(o, iv) {
@@ -978,6 +1123,8 @@ function BollingerBandsStats() {
         <McIntervalSwitch checked={useMcInterval} onChange={handleToggleMc} />
         <PullbackSwitch checked={pullbackEnabled} onChange={handleTogglePullbackEnabled} />
         <MedianTrendFilterSwitch checked={medianTrendFilter} onChange={handleToggleMedianTrendFilter} />
+        <PermFilterSwitches value={permFilter} onToggle={handleTogglePermFilter} disabled={usePermBot} />
+        <PermBotSwitch checked={usePermBot} onChange={handleTogglePermBot} />
         <button
           onClick={() => handleSearch(undefined, true)}
           disabled={loading}
@@ -1018,6 +1165,14 @@ function BollingerBandsStats() {
               <SummaryCard label={t('stats.card.avg_duration')} value={formatDuration(result.avgCycleDurationMs)} tooltip={t('stats.tip.avg_duration')} />
               {result.medianTrendFilter && (
                 <SummaryCard label="Filtro Mediana" value={`${result.medianTrendLookback}c`} highlight="text-emerald-500" tooltip="Só entram ciclos com a mediana da BB em alta/estável nos candles anteriores ao toque (mesmo filtro do bot)" />
+              )}
+              {result.permFilter && (
+                <SummaryCard
+                  label="Filtro PERM"
+                  value={PERM_FILTER_LEVELS.filter(l => result.permFilter[l.key]).map(l => l.label).join('+')}
+                  highlight="text-emerald-500"
+                  tooltip="Só entram ciclos com a nuvem PERM (EMA9×EMA21) verde/fechada em TODOS os níveis marcados nesse instante (mesmo indicador do gráfico e do bot)"
+                />
               )}
               {result.pullbackPct > 0 && (
                 <SummaryCard label={t('stats.bb_pullback')} value={`-${result.pullbackPct}%`} highlight="text-amber-500" tooltip={t('stats.tip.bb_pullback')} />

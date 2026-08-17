@@ -39,6 +39,7 @@ import {
   normalizeChopInterval,
   normalizeEmaPersistCloudInterval,
   normalizeEmaPersistCloudTones,
+  normalizeEmaPersistCloudLayers,
   normalizeBarsSinceCrossInterval,
   normalizeTdSequentialInterval,
   normalizeVwapDefaults,
@@ -49,6 +50,7 @@ import {
   normalizeStatsDefaults,
   normalizeCommonChartIntervals,
   normalizeChartEngine,
+  normalizeCandleCountDisplay,
 } from '../utils/uiPreferences';
 
 const CurrencyContext = createContext(null);
@@ -720,6 +722,14 @@ export function CurrencyProvider({ children }) {
     });
   }, []);
 
+  const setEmaPersistCloudLayersDefault = useCallback((layers) => {
+    setUiPrefsState((prev) => {
+      const next = { ...prev, emaPersistCloudLayersDefault: normalizeEmaPersistCloudLayers(layers) };
+      saveUiPreferences(next);
+      return next;
+    });
+  }, []);
+
   const setBarsSinceCrossIntervalDefault = useCallback((interval) => {
     setUiPrefsState((prev) => {
       const next = { ...prev, barsSinceCrossIntervalDefault: normalizeBarsSinceCrossInterval(interval) };
@@ -769,6 +779,14 @@ export function CurrencyProvider({ children }) {
   const setChartEngineDefault = useCallback((engine) => {
     setUiPrefsState((prev) => {
       const next = { ...prev, chartEngineDefault: normalizeChartEngine(engine) };
+      saveUiPreferences(next);
+      return next;
+    });
+  }, []);
+
+  const setCandleCountDisplayDefault = useCallback((count) => {
+    setUiPrefsState((prev) => {
+      const next = { ...prev, candleCountDisplayDefault: normalizeCandleCountDisplay(count) };
       saveUiPreferences(next);
       return next;
     });
@@ -1084,6 +1102,7 @@ export function CurrencyProvider({ children }) {
         setChopIntervalDefault,
         setEmaPersistCloudIntervalDefault,
         setEmaPersistCloudTonesDefault,
+        setEmaPersistCloudLayersDefault,
         setBarsSinceCrossIntervalDefault,
         setTdSequentialIntervalDefault,
         setVwapDefaults,
@@ -1093,6 +1112,7 @@ export function CurrencyProvider({ children }) {
         setCurrencyPanelWidth,
         setStatsDefaults,
         setChartEngineDefault,
+        setCandleCountDisplayDefault,
         chartIntervalOptions: CHART_INTERVAL_OPTIONS,
         panelKeys: PANEL_KEYS,
         isVisibleSymbol,

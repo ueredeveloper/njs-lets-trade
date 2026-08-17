@@ -119,6 +119,37 @@ function latestPermState(candles, period9 = 9, period21 = 21) {
   return states[states.length - 1];
 }
 
+/** Série COMPLETA de estados PERM pra um array de candles — usada em backtest/estatísticas
+ *  (ver analyseBollingerBandRecovery.js), onde é preciso o estado em CADA ponto do histórico,
+ *  não só o mais recente (diferença pra latestPermState). */
+function permStateSeries(candles, period9 = 9, period21 = 21) {
+  const ema9 = buildMaTimeSeries(candles, period9);
+  const ema21 = buildMaTimeSeries(candles, period21);
+  return computeSlopeStates(ema9, ema21);
+}
+
+/** Busca binária pelo último ponto de `states` com `time <= alvo` (série ordenada por tempo). */
+function lastStateAtOrBefore(states, time) {
+  let lo = 0;
+  let hi = states.length - 1;
+  let idx = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (states[mid].time <= time) { idx = mid; lo = mid + 1; } else hi = mid - 1;
+  }
+  return idx < 0 ? null : states[idx];
+}
+
+/** Estado PERM já FECHADO em `atTime` (ms) — sem look-ahead: só considera candles cujo
+ *  fechamento (openTime + intervalMs) já tenha acontecido até `atTime`, igual ao
+ *  `closedCandlesOnly` que o bot ao vivo aplica antes de checar o filtro PERM (ver
+ *  checkPermFilter em backend/bot/bollinger-bands/strategyEngine.js). null se ainda não havia
+ *  candle fechado suficiente nesse ponto do histórico. */
+function lastClosedPermStateAt(states, intervalMs, atTime) {
+  if (!states?.length) return null;
+  return lastStateAtOrBefore(states, atTime - intervalMs);
+}
+
 module.exports = {
   SLOPE_LOOKBACK,
   STABILIZE_PCT,
@@ -127,4 +158,7 @@ module.exports = {
   isEntryBullishState,
   computeSlopeStates,
   latestPermState,
+  permStateSeries,
+  lastStateAtOrBefore,
+  lastClosedPermStateAt,
 };

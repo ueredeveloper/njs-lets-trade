@@ -7,7 +7,7 @@ import { useI18n } from '../i18n';
 import { useCurrency } from '../contexts/CurrencyContext';
 import { PERIOD_DEFAULT_COLORS, MAX_OVERLAY_SLOTS,
   CURRENCY_PANEL_WIDTH_MIN, CURRENCY_PANEL_WIDTH_MAX, CURRENCY_PANEL_WIDTH_DEFAULT,
-  VWAP_SLOPE_HIGHLIGHT_LOOKBACKS } from '../utils/uiPreferences';
+  VWAP_SLOPE_HIGHLIGHT_LOOKBACKS, CANDLE_COUNT_DISPLAY_OPTIONS } from '../utils/uiPreferences';
 
 const OVERLAY_SETTING_INTERVALS = ['15m', '30m', '1h', '4h', '1d'];
 const OVERLAY_SETTING_PERIODS   = ['9', '21', '50', '200'];
@@ -81,6 +81,7 @@ export default function SettingsSidebar({ open, onClose }) {
     setFavoriteButtonVisible, favoriteButtonKeys,
     setOverlaySlotsPreference, setCurrencyPanelWidth,
     setStatsDefaults, setVwapAnchorDefault, setVwapSlopeHighlightDefault, setChartEngineDefault,
+    setCandleCountDisplayDefault,
     chartIntervalOptions, panelKeys,
     activeTrades, activeTradesSettings, updateActiveTradesSettings,
     ignoredActiveTrades, dismissActiveTrade, restoreActiveTrade } = useCurrency();
@@ -380,6 +381,30 @@ export default function SettingsSidebar({ open, onClose }) {
                 <option key={iv} value={iv}>{iv}</option>
               ))}
             </select>
+          </AccordionItem>
+
+          {/* Quantidade de candles padrão ao abrir o gráfico */}
+          <AccordionItem id="defaultCandleCount" title={t('settings.chart_default_candle_count')} hint={t('settings.chart_default_candle_count_hint')}
+            openSection={openSection} setOpenSection={setOpenSection}>
+            <div className="flex flex-wrap gap-1.5">
+              {CANDLE_COUNT_DISPLAY_OPTIONS.map((n) => {
+                const active = (uiPrefs.candleCountDisplayDefault ?? 40) === n;
+                return (
+                  <button
+                    key={n}
+                    type="button"
+                    onClick={() => setCandleCountDisplayDefault(n)}
+                    className={`px-2.5 py-1 text-[10px] font-mono rounded border transition-colors ${
+                      active
+                        ? 'border-p4 bg-p4/20 text-p5 font-semibold'
+                        : 'border-p2/40 text-p5/60 hover:border-p3 hover:bg-p2/30'
+                    }`}
+                  >
+                    {n}
+                  </button>
+                );
+              })}
+            </div>
           </AccordionItem>
 
           {/* Intervalos rápidos do gráfico */}

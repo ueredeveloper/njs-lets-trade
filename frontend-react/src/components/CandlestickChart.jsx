@@ -2,8 +2,8 @@ import { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import { useI18n } from '../i18n';
 import ReactECharts from 'echarts-for-react';
 import { useCurrency } from '../contexts/CurrencyContext';
-import { fetchCandlesticksAndCloud, fetchGateTrades, fetchBinanceTrades, fetchChartAdaptiveBands, DEFAULT_CANDLE_LIMIT, getBollingerMedianTrendConfig } from '../services/api';
-import { buildMarkersFromExchangeTrades, attachPnlToExchangeTrades, isMaCrossEntry, isVwapBandsEntry, isBollingerBandsEntry } from '../utils/multitradeChart';
+import { fetchCandlesticksAndCloud, fetchGateTrades, fetchBinanceTrades, fetchChartAdaptiveBands, fetchBollingerBandRecovery, DEFAULT_CANDLE_LIMIT, getBollingerMedianTrendConfig } from '../services/api';
+import { buildMarkersFromExchangeTrades, attachPnlToExchangeTrades, isMaCrossEntry, isVwapBandsEntry, isBollingerBandsEntry, resolveBollingerBandsPermFilter } from '../utils/multitradeChart';
 import { computeVwapSlopeFlags } from '../utils/vwapSlopeHighlight';
 import { buildTrailingStopSeries, resolveChartStopLoss, resolveChartTarget, computeStopLossFloor } from '../utils/trailingStopLoss';
 import { getEntriesForSymbol, buildAdHocMaCrossEntry } from '../constants/strategyPresets';
@@ -12,7 +12,7 @@ import CandlestickChartLW from './CandlestickChartLW';
 import convertOpenTime from '../utils/convertOpenTime';
 import Tooltip from './Tooltip';
 import { useIsMobile } from '../hooks/useIsMobile';
-import { DEFAULT_OVERLAY_SLOTS, DEFAULT_ACTIVE_INDICATORS, BB_PERIOD_OPTIONS, BB_STDDEV_OPTIONS, DEFAULT_SR_INTERVAL, DEFAULT_PPHL_INTERVAL, DEFAULT_CHOP_INTERVAL, DEFAULT_EMA_PERSIST_CLOUD_INTERVAL, DEFAULT_PERM_CLOUD_TONES, DEFAULT_BARS_SINCE_CROSS_INTERVAL, DEFAULT_TD_SEQUENTIAL_INTERVAL, DEFAULT_COMMON_CHART_INTERVALS, getEmaPersistCloudConfirmInterval } from '../utils/uiPreferences';
+import { DEFAULT_OVERLAY_SLOTS, DEFAULT_ACTIVE_INDICATORS, BB_PERIOD_OPTIONS, BB_STDDEV_OPTIONS, DEFAULT_SR_INTERVAL, DEFAULT_PPHL_INTERVAL, DEFAULT_CHOP_INTERVAL, DEFAULT_EMA_PERSIST_CLOUD_INTERVAL, DEFAULT_PERM_CLOUD_TONES, DEFAULT_EMA_PERSIST_CLOUD_LAYERS, DEFAULT_BARS_SINCE_CROSS_INTERVAL, DEFAULT_TD_SEQUENTIAL_INTERVAL, DEFAULT_COMMON_CHART_INTERVALS, getEmaPersistCloudConfirmInterval } from '../utils/uiPreferences';
 import { PERM_CLOUD_TONES, PERM_TONE_SWATCH } from '../utils/emaCrossPersistenceCloud';
 import { CHART_VIEW, INTERVAL_MS, computeZoomWindow, buildFixedDataZoom, buildInsideDataZoom, computeCandleLimitFromTime, isTradePanelChartView, computeManualWheelZoom } from '../utils/chartView';
 import { simulateBbTouchPath, pairBbPathCycles } from '../utils/bollingerTouchPath';
@@ -71,6 +71,9 @@ const C_DOWN = '#ef5350';
 const BB_COLOR = '#94a3b8';
 const BB_PATH_COLOR = '#64748b';
 const MEDIAN_TREND_COLOR = '#38bdf8';
+/** Mesma cor do botão "Perman." (INDICATOR_GROUPS abaixo) — mesmo indicador, aqui como
+ *  variante que filtra o PATH em vez de desenhar a nuvem inteira. */
+const PERM_FILTER_COLOR = '#4ade80';
 
 const INDICATOR_GROUPS = [
   { id: 'ma9',      label: 'EMA9',   color: '#e879f9', tipKey: 'chart.tip.sma9' },
@@ -177,6 +180,33 @@ const TRADE_BB_GROUP_ID = 'trade-bb-filter';
 const STATS_BB_GROUP_ID = 'stats-bb-zoom';
 const AUTO_BB_GROUP_IDS = [TRADE_BB_GROUP_ID, STATS_BB_GROUP_ID];
 
+/** Converte a resposta de /services/bollinger-band-recovery (occurrences[] + openOccurrence,
+ *  ver backend/utils/analyseBollingerBandRecovery.js) pro mesmo formato de nó que
+ *  simulateBbTouchPath produz (bollingerTouchPath.js) — {openTime, price, side, pnlPct} — pra
+ *  poder alimentar o MESMO pipeline de desenho do PATH (pairBbPathCycles, buildBbTouchPathSeries
+ *  no motor ECharts, buildBbPathLineAndMarkers no motor Lightweight Charts) sem duplicar nada
+ *  lá. Usado só pro botão PERM (ciclos já filtrados pela nuvem PERM do manipulador no backend —
+ *  ver botPermInterval), em vez da simulação pura no cliente. */
+function occurrencesToBbPathNodes(data) {
+  const nodes = [];
+  for (const o of data?.occurrences ?? []) {
+    nodes.push({ openTime: new Date(o.startDate).getTime(), price: o.entryPrice, side: 'buy', pnlPct: null });
+    nodes.push({ openTime: new Date(o.endDate).getTime(), price: o.exitPrice, side: 'sell', pnlPct: o.appreciationPercent });
+  }
+  const open = data?.openOccurrence;
+  if (open) {
+    const entryPrice = Number(open.entryPrice);
+    nodes.push({ openTime: new Date(open.startDate).getTime(), price: entryPrice, side: 'buy', pnlPct: null });
+    nodes.push({
+      openTime: Date.now(),
+      price: entryPrice * (1 + Number(open.appreciationPercent) / 100),
+      side: 'open',
+      pnlPct: open.appreciationPercent,
+    });
+  }
+  return nodes;
+}
+
 function makeBbGroup(overrides) {
   return {
     id: `bb${Date.now()}`,
@@ -189,6 +219,7 @@ function makeBbGroup(overrides) {
     showLower: true,
     showPath: false,
     showMedianTrend: false,
+    showPermFilter: false,
     ...overrides,
   };
 }
@@ -221,6 +252,7 @@ function loadBbGroups() {
         showLower: typeof g.showLower === 'boolean' ? g.showLower : true,
         showPath: typeof g.showPath === 'boolean' ? g.showPath : false,
         showMedianTrend: typeof g.showMedianTrend === 'boolean' ? g.showMedianTrend : false,
+        showPermFilter: typeof g.showPermFilter === 'boolean' ? g.showPermFilter : false,
       }));
   } catch {
     return defaultBbGroups();
@@ -889,9 +921,10 @@ function quickEmaRowSpan(groups) {
 }
 
 /** Grid interno do bloco de Bollinger Bands: intervalo+remover, período+desvio, ON/LS/LM/LI,
- *  PATH+TENDÊNCIA — mesmas 4 colunas/4 linhas por grupo do Quick EMA acima. */
+ *  PATH+TENDÊNCIA, PERM — 4 colunas/5 linhas por grupo do Quick EMA acima (PERM ganhou linha
+ *  própria: a linha PATH+TENDÊNCIA já ocupa as 4 colunas inteiras, sem espaço pra um 3º botão). */
 const BB_GRID_COLS = 4;
-const BB_GROUP_ROWS = 4;
+const BB_GROUP_ROWS = 5;
 
 function bbRowSpan(groups) {
   const addRow = groups.length < MAX_BB_GROUPS ? 1 : 0;
@@ -901,7 +934,13 @@ function bbRowSpan(groups) {
 /**
  * Bollinger Bands — lista de até MAX_BB_GROUPS bandas (mesmo padrão do Quick EMA acima), cada
  * uma com intervalo/período/desvio próprios, ON/OFF geral, quais das 3 linhas mostrar
- * (LS=superior, LM=média, LI=inferior) e PATH/TENDÊNCIA independentes.
+ * (LS=superior, LM=média, LI=inferior), PATH/TENDÊNCIA e PERM independentes.
+ *
+ * `botPermInterval` ('h1'|'m30'|'m15'|null, ver botPermInterval no componente principal): nível
+ * de PERM configurado no favorito Bollinger Bands do manipulador (bot ao vivo) pra moeda atual.
+ * O botão PERM some liga o filtro, mas só tem efeito enquanto isso não for null (sem favorito
+ * BB com PERM habilitado num nível 1h/30m/15m pra essa moeda, o botão fica sem dado pra mostrar
+ * — ver bbPermPathCache/occurrencesToBbPathNodes).
  */
 function renderBollingerTile(
   { groups },
@@ -911,6 +950,7 @@ function renderBollingerTile(
   removeBbGroup,
   updateBbGroup,
   toggleBbGroupFlag,
+  botPermInterval,
 ) {
   const innerW = dims.w - PANEL_TILE_PAD * 2;
   const innerH = dims.h - PANEL_TILE_PAD * 2;
@@ -930,6 +970,11 @@ function renderBollingerTile(
     const periodRow = SECTION_TITLE_ROWS + i * BB_GROUP_ROWS + 2;
     const lineRow = SECTION_TITLE_ROWS + i * BB_GROUP_ROWS + 3;
     const extraRow = SECTION_TITLE_ROWS + i * BB_GROUP_ROWS + 4;
+    const permRow = SECTION_TITLE_ROWS + i * BB_GROUP_ROWS + 5;
+    const permAvailable = !!botPermInterval;
+    const permTip = permAvailable
+      ? `Mostra só os ciclos do PATH que passariam pelo filtro PERM (nuvem EMA9×EMA21) do manipulador dessa moeda, no nível ${botPermInterval === 'h1' ? '1h' : botPermInterval === 'm30' ? '30m' : '15m'} — mesmo nível configurado no favorito Bollinger Bands (bot ao vivo)`
+      : 'Sem favorito Bollinger Bands com PERM habilitado (1h/30m/15m) pra essa moeda — sem dado pra filtrar';
     return [
       <div key={`${g.id}-iv`} style={{ gridColumn: '1 / span 3', gridRow: `${ivRow}`, display: 'flex', alignItems: 'stretch' }}>
         <PanelTip text={t('chart.tip.bb_interval')}>
@@ -1014,6 +1059,19 @@ function renderBollingerTile(
         <PanelTip text={t('chart.tip.bb_median_trend')}>
           <button type="button" onClick={() => toggleBbGroupFlag(g.id, 'showMedianTrend')} style={panelBtn(g.showMedianTrend, MEDIAN_TREND_COLOR, false, halfDims)}>
             {g.showMedianTrend ? 'TEND ON' : 'TENDÊNCIA'}
+          </button>
+        </PanelTip>
+      </div>,
+      <div key={`${g.id}-perm`} style={{ gridColumn: `1 / span ${BB_GRID_COLS}`, gridRow: `${permRow}`, display: 'flex', alignItems: 'stretch' }}>
+        <PanelTip text={permTip}>
+          <button
+            type="button"
+            onClick={() => toggleBbGroupFlag(g.id, 'showPermFilter')}
+            style={!permAvailable
+              ? { ...panelBtn(g.showPermFilter, PERM_FILTER_COLOR, false, addDims), opacity: 0.4 }
+              : panelBtn(g.showPermFilter, PERM_FILTER_COLOR, false, addDims)}
+          >
+            {g.showPermFilter ? 'PERM ON' : 'PERM'}
           </button>
         </PanelTip>
       </div>,
@@ -1160,53 +1218,98 @@ function renderIntervalPickerTile(dims, t, tipKey, labelPrefix, color, value, on
   );
 }
 
-function renderPermIntervalTile(dims, t, interval, setInterval, tones, setTones) {
+function renderPermIntervalTile(dims, t, interval, setInterval, tones, setTones, layers, setLayers) {
   const innerW = dims.w - PANEL_TILE_PAD * 2;
   const innerH = dims.h - PANEL_TILE_PAD * 2;
+  const rowGap = 3;
+  const rowH = (innerH - rowGap) / 2;
   const swatchGap = 3;
-  const swatchSize = Math.max(10, Math.min(18, innerH - 4));
+  const swatchSize = Math.max(10, Math.min(18, rowH - 4));
   const swatchesW = PERM_CLOUD_TONES.length * swatchSize + (PERM_CLOUD_TONES.length - 1) * swatchGap + 4;
-  const selectW = Math.max(72, innerW - swatchesW);
   const toggleTone = (id) => {
     setTones((prev) => ({ ...prev, [id]: prev?.[id] === false }));
   };
+  const toggleLayer = (key) => {
+    setLayers((prev) => ({ ...prev, [key]: !prev?.[key] }));
+  };
+  // Rótulo dinâmico: cada switch mostra o intervalo REAL que ele liga, calculado a partir do
+  // principal escolhido no select (ex.: principal 1h → layer1 "1h" → layer2 "30m" → layer3
+  // "15m"). layer2/layer3 somem se não houver intervalo menor disponível (ex.: principal já é
+  // '1m'). Ficam numa 2ª linha, embaixo do select+tons — 6 controles não cabem lado a lado numa
+  // linha só sem sobrepor (ver rowSpan +1 pra esse tile em computeMasonryLayout).
+  const confirm1Iv = getEmaPersistCloudConfirmInterval(interval);
+  const confirm2Iv = confirm1Iv ? getEmaPersistCloudConfirmInterval(confirm1Iv) : null;
+  const selectW = Math.max(72, innerW - swatchesW);
+  const renderLayerToggle = (key, label, on) => (
+    <button
+      key={key}
+      type="button"
+      aria-pressed={on}
+      onClick={(e) => { e.stopPropagation(); toggleLayer(key); }}
+      style={{
+        flex: 1,
+        minWidth: 0,
+        height: rowH,
+        padding: 0,
+        borderRadius: 4,
+        border: on ? '1px solid #4ade80' : '1px solid #334155',
+        background: on ? 'rgba(74,222,128,0.18)' : 'transparent',
+        color: on ? '#4ade80' : '#64748b',
+        fontSize: scaleFontSize({ w: 34, h: rowH }, 0.28, 8, 11),
+        fontFamily: 'monospace',
+        cursor: 'pointer',
+        boxSizing: 'border-box',
+      }}
+    >
+      {label}
+    </button>
+  );
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 4, width: innerW, height: innerH, boxSizing: 'border-box' }}>
-      <PanelTip text={t('chart.tip.emaPersistCloud_interval')}>
-        <select
-          value={interval}
-          onChange={e => setInterval(e.target.value)}
-          style={{ ...panelSelect('#4ade80', { w: selectW, h: innerH }), fontSize: scaleFontSize({ w: selectW, h: innerH }, 0.3, 9, 13), flex: 1, minWidth: 0 }}
-        >
-          {OVERLAY_MA_INTERVALS.map(iv => <option key={iv} value={iv}>{`PERM ${iv}`}</option>)}
-        </select>
-      </PanelTip>
-      <PanelTip text={t('chart.tip.emaPersistCloud_tones')}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: swatchGap, flexShrink: 0 }}>
-          {PERM_CLOUD_TONES.map((id) => {
-            const on = tones?.[id] !== false;
-            const color = PERM_TONE_SWATCH[id];
-            return (
-              <button
-                key={id}
-                type="button"
-                aria-pressed={on}
-                title={id}
-                onClick={(e) => { e.stopPropagation(); toggleTone(id); }}
-                style={{
-                  width: swatchSize,
-                  height: swatchSize,
-                  padding: 0,
-                  borderRadius: '50%',
-                  border: on ? `2px solid ${color}` : '2px solid #334155',
-                  background: on ? color : 'transparent',
-                  opacity: on ? 1 : 0.35,
-                  cursor: 'pointer',
-                  boxSizing: 'border-box',
-                }}
-              />
-            );
-          })}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: rowGap, width: innerW, height: innerH, boxSizing: 'border-box' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4, width: innerW, height: rowH, boxSizing: 'border-box' }}>
+        <PanelTip text={t('chart.tip.emaPersistCloud_interval')}>
+          <select
+            value={interval}
+            onChange={e => setInterval(e.target.value)}
+            style={{ ...panelSelect('#4ade80', { w: selectW, h: rowH }), fontSize: scaleFontSize({ w: selectW, h: rowH }, 0.3, 9, 13), flex: 1, minWidth: 0 }}
+          >
+            {OVERLAY_MA_INTERVALS.map(iv => <option key={iv} value={iv}>{`PERM ${iv}`}</option>)}
+          </select>
+        </PanelTip>
+        <PanelTip text={t('chart.tip.emaPersistCloud_tones')}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: swatchGap, flexShrink: 0 }}>
+            {PERM_CLOUD_TONES.map((id) => {
+              const on = tones?.[id] !== false;
+              const color = PERM_TONE_SWATCH[id];
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  aria-pressed={on}
+                  title={id}
+                  onClick={(e) => { e.stopPropagation(); toggleTone(id); }}
+                  style={{
+                    width: swatchSize,
+                    height: swatchSize,
+                    padding: 0,
+                    borderRadius: '50%',
+                    border: on ? `2px solid ${color}` : '2px solid #334155',
+                    background: on ? color : 'transparent',
+                    opacity: on ? 1 : 0.35,
+                    cursor: 'pointer',
+                    boxSizing: 'border-box',
+                  }}
+                />
+              );
+            })}
+          </div>
+        </PanelTip>
+      </div>
+      <PanelTip text={t('chart.tip.emaPersistCloud_layers')}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: swatchGap, width: innerW, height: rowH, boxSizing: 'border-box' }}>
+          {renderLayerToggle('layer1', interval, layers?.layer1 !== false)}
+          {confirm1Iv && renderLayerToggle('layer2', confirm1Iv, layers?.layer2 !== false)}
+          {confirm2Iv && renderLayerToggle('layer3', confirm2Iv, layers?.layer3 === true)}
         </div>
       </PanelTip>
     </div>
@@ -1350,7 +1453,12 @@ function computeMasonryLayout(tileDefs, width, height, gap) {
     .map((t) => ({
       ...t,
       colSpan: BANDS_COL_SPAN,
-      rowSpan: t.kind === 'bb' ? bbRowSpan(t.data.groups) : t.kind === 'vwap' ? VWAP_ROW_SPAN : INTERVAL_PICKER_KINDS.includes(t.kind) ? INTERVAL_PICKER_ROW_SPAN : quickEmaRowSpan(t.data.groups),
+      rowSpan: t.kind === 'bb' ? bbRowSpan(t.data.groups) : t.kind === 'vwap' ? VWAP_ROW_SPAN
+        // PERM tem 1 linha a mais que os outros interval-pickers: select + tons numa linha,
+        // os 3 switches de camada (1h/30m/15m) na linha de baixo — não cabe tudo lado a lado
+        // sem sobrepor (ver renderPermIntervalTile).
+        : t.kind === 'emaPersistCloudInterval' ? INTERVAL_PICKER_ROW_SPAN + 1
+        : INTERVAL_PICKER_KINDS.includes(t.kind) ? INTERVAL_PICKER_ROW_SPAN : quickEmaRowSpan(t.data.groups),
     }));
 
   // Pack indicator buttons — spans calculados dinamicamente pelo número de tiles
@@ -1657,6 +1765,7 @@ function ChartIndicatorPanel({
   removeBbGroup,
   updateBbGroup,
   toggleBbGroupFlag,
+  botPermInterval,
   srInterval,
   setSrInterval,
   pphlInterval,
@@ -1667,6 +1776,8 @@ function ChartIndicatorPanel({
   setEmaPersistCloudInterval,
   emaPersistCloudTones,
   setEmaPersistCloudTones,
+  emaPersistCloudLayers,
+  setEmaPersistCloudLayers,
   barsSinceCrossInterval,
   setBarsSinceCrossInterval,
   tdSequentialInterval,
@@ -1916,12 +2027,12 @@ function ChartIndicatorPanel({
               }}
             >
               {tile.kind === 'bb' && renderBollingerTile(
-                tile.data, tile.dims, t, addBbGroup, removeBbGroup, updateBbGroup, toggleBbGroupFlag,
+                tile.data, tile.dims, t, addBbGroup, removeBbGroup, updateBbGroup, toggleBbGroupFlag, botPermInterval,
               )}
               {tile.kind === 'srInterval' && renderIntervalPickerTile(tile.dims, t, 'chart.tip.sr_interval', 'S/R', '#facc15', srInterval, setSrInterval)}
               {tile.kind === 'pphlInterval' && renderIntervalPickerTile(tile.dims, t, 'chart.tip.pphl_interval', 'PPHL', '#2dd4bf', pphlInterval, setPphlInterval)}
               {tile.kind === 'chopInterval' && renderIntervalPickerTile(tile.dims, t, 'chart.tip.chop_interval', 'CHOP', '#f59e0b', chopInterval, setChopInterval)}
-              {tile.kind === 'emaPersistCloudInterval' && renderPermIntervalTile(tile.dims, t, emaPersistCloudInterval, setEmaPersistCloudInterval, emaPersistCloudTones, setEmaPersistCloudTones)}
+              {tile.kind === 'emaPersistCloudInterval' && renderPermIntervalTile(tile.dims, t, emaPersistCloudInterval, setEmaPersistCloudInterval, emaPersistCloudTones, setEmaPersistCloudTones, emaPersistCloudLayers, setEmaPersistCloudLayers)}
               {tile.kind === 'barsSinceCrossInterval' && renderIntervalPickerTile(tile.dims, t, 'chart.tip.barsSinceCross_interval', 'BARS', '#38bdf8', barsSinceCrossInterval, setBarsSinceCrossInterval)}
               {tile.kind === 'tdSequentialInterval' && renderIntervalPickerTile(tile.dims, t, 'chart.tip.tdSequential_interval', 'TD SEQ', '#fb7185', tdSequentialInterval, setTdSequentialInterval)}
               {tile.kind === 'vwap' && renderVwapTile(tile.dims, t, vwap, setVwap, vwapSlopeHighlightOn, setVwapSlopeHighlightOn)}
@@ -2579,9 +2690,11 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
 
   const overlayLineSeries = buildOverlaySeries(overlayConfigs, candlesticks, alignSeries);
   const bollingerSeries = buildBollingerSeries(bollingerConfig, candlesticks, alignSeries);
-  const bbPathNodes = bbPathEnabled && bollingerConfig?.points?.length
-    ? simulateBbTouchPath(bollingerConfig.points)
-    : [];
+  const bbPathNodes = !bbPathEnabled ? [] : (
+    bollingerConfig?.showPermFilter
+      ? (bollingerConfig.permPathNodes ?? [])
+      : (bollingerConfig?.points?.length ? simulateBbTouchPath(bollingerConfig.points) : [])
+  );
   const bbPathSeriesList = bbPathEnabled
     ? buildBbTouchPathSeries(bbPathNodes, candlesticks, DL, LEFT_PAD, RIGHT_PAD, bollingerConfig)
     : [];
@@ -3035,7 +3148,7 @@ export default function CandlestickChart() {
     chartCandleWindowReset,
     multitradeChartFocus, tradePurchases, allTrades, chartInterval: savedInterval, setChartInterval,
     chartPanelButtons, uiPrefs, setMaBandsDefaults, setSrIntervalDefault, setPphlIntervalDefault, setChopIntervalDefault,
-    setEmaPersistCloudIntervalDefault, setEmaPersistCloudTonesDefault, setBarsSinceCrossIntervalDefault, setTdSequentialIntervalDefault,
+    setEmaPersistCloudIntervalDefault, setEmaPersistCloudTonesDefault, setEmaPersistCloudLayersDefault, setBarsSinceCrossIntervalDefault, setTdSequentialIntervalDefault,
     setVwapDefaults, setVwapSlopeHighlightDefault, setActiveIndicatorsPreference,
     multitradeFavorites, fiveMTradeFavorites, activeTrades } = useCurrency();
   const { t } = useI18n();
@@ -3116,6 +3229,18 @@ export default function CandlestickChart() {
   const [adaptiveBandOverlay, setAdaptiveBandOverlay] = useState(null);
   const [maBands, setMaBands] = useState(() => ({ ...uiPrefs.maBandsDefaults }));
   const [bbGroups, setBbGroups] = useState(loadBbGroups);
+  // Nível do filtro PERM (1h/30m/15m) configurado no favorito Bollinger Bands do manipulador
+  // (bot ao vivo) pra essa moeda — ver resolveBollingerBandsPermFilter (multitradeChart.js).
+  // Usado tanto pelo botão PERM manual (renderBollingerTile) quanto pra ligar showPermFilter
+  // sozinho no grupo auto-sincronizado (TRADE_BB_GROUP_ID, ver hasForcedBollinger abaixo).
+  // null = sem favorito BB pra essa moeda, filtro desligado no bot, ou intervalo sem
+  // equivalente aqui (4h, 2h, 5m…) — o botão PERM fica sem efeito nesse caso.
+  const botPermInterval = useMemo(() => {
+    const sym = selectedChart?.symbol;
+    if (!sym) return null;
+    const entry = getEntriesForSymbol(multitradeFavorites, sym).find(isBollingerBandsEntry) ?? null;
+    return resolveBollingerBandsPermFilter(entry);
+  }, [selectedChart?.symbol, multitradeFavorites]);
   const addBbGroup = useCallback(() => {
     setBbGroups((prev) => {
       if (prev.length >= MAX_BB_GROUPS) return prev;
@@ -3139,14 +3264,18 @@ export default function CandlestickChart() {
     });
   }, []);
   // Liga/desliga um flag booleano do grupo (enabled/showUpper/showMiddle/showLower/showPath/
-  // showMedianTrend). Ligar showPath junto liga `enabled` também — senão o usuário via só o
-  // path sem a referência visual das bandas (mesmo comportamento do botão PATH antigo).
+  // showMedianTrend/showPermFilter). Ligar showPath junto liga `enabled` também — senão o
+  // usuário via só o path sem a referência visual das bandas (mesmo comportamento do botão
+  // PATH antigo). Ligar showPermFilter liga showPath+enabled junto pelo mesmo motivo — o PERM
+  // é uma variante filtrada do PATH (troca a fonte dos ciclos, não desenha nada sozinho).
   const toggleBbGroupFlag = useCallback((id, key) => {
     setBbGroups((prev) => {
       const next = prev.map((g) => {
         if (g.id !== id) return g;
         const value = !g[key];
-        return key === 'showPath' && value ? { ...g, showPath: true, enabled: true } : { ...g, [key]: value };
+        if (key === 'showPath' && value) return { ...g, showPath: true, enabled: true };
+        if (key === 'showPermFilter' && value) return { ...g, showPermFilter: true, showPath: true, enabled: true };
+        return { ...g, [key]: value };
       });
       saveBbGroups(next);
       return next;
@@ -3170,6 +3299,14 @@ export default function CandlestickChart() {
   }, [chartZoom]);
   const [bollingerCache, setBollingerCache] = useState({});
   const [_bollingerLoading, setBollingerLoading] = useState(false);
+  // Ciclos PATH pré-filtrados pelo PERM do manipulador (ver botPermInterval acima) — só
+  // buscado pros grupos com showPermFilter ligado, chave `${period}-${stdDev}-${interval}-
+  // ${botPermInterval}`. Ao contrário de bollingerCache (linhas superior/média/inferior,
+  // calculadas no cliente por simulateBbTouchPath), esses ciclos vêm prontos do backend
+  // (mesma rota /services/bollinger-band-recovery da aba Estatísticas — ver
+  // backend/utils/analyseBollingerBandRecovery.js), já que reproduzir a nuvem PERM
+  // (EMA9×EMA21) inteira no cliente duplicaria a lógica de backend/utils/emaPersistCloud.js.
+  const [bbPermPathCache, setBbPermPathCache] = useState({});
   const [srInterval, setSrInterval] = useState(() => uiPrefs.srIntervalDefault ?? DEFAULT_SR_INTERVAL);
   const [srCache, setSrCache] = useState({});
   const [_srLoading, setSrLoading] = useState(false);
@@ -3186,9 +3323,14 @@ export default function CandlestickChart() {
   }));
   const [emaPersistCloudCache, setEmaPersistCloudCache] = useState({});
   const [_emaPersistCloudLoading, setEmaPersistCloudLoading] = useState(false);
+  // Quantas nuvens PERM mostrar: 1 (só o principal), 2 (+ confirmação, padrão) ou 3 (+ mais um
+  // nível — a confirmação DA confirmação, ex.: 1h+30m+15m). Ver renderPermIntervalTile.
+  const [emaPersistCloudLayers, setEmaPersistCloudLayers] = useState(() => uiPrefs.emaPersistCloudLayersDefault ?? DEFAULT_EMA_PERSIST_CLOUD_LAYERS);
   // Dados do intervalo de confirmação da nuvem verde (ex.: 15m quando emaPersistCloudInterval é
   // 1h — ver EMA_PERSIST_CLOUD_CONFIRM_INTERVAL). Cache separado, mesma chave (intervalo principal).
   const [emaPersistCloudConfirmCache, setEmaPersistCloudConfirmCache] = useState({});
+  // Dados de mais um nível de confirmação (3ª nuvem, só quando emaPersistCloudLayers === 3).
+  const [emaPersistCloudConfirm2Cache, setEmaPersistCloudConfirm2Cache] = useState({});
   const [barsSinceCrossInterval, setBarsSinceCrossInterval] = useState(() => uiPrefs.barsSinceCrossIntervalDefault ?? DEFAULT_BARS_SINCE_CROSS_INTERVAL);
   const [barsSinceCrossCache, setBarsSinceCrossCache] = useState({});
   const [_barsSinceCrossLoading, setBarsSinceCrossLoading] = useState(false);
@@ -3218,12 +3360,12 @@ export default function CandlestickChart() {
   const [_vwapLoading, setVwapLoading] = useState(false);
   const [panelCollapsed, setPanelCollapsed] = useState(true);
   const [candleFetchLimit, setCandleFetchLimit] = useState(DEFAULT_CANDLE_LIMIT);
-  const [displayCandleCount, setDisplayCandleCount] = useState(DEFAULT_DISPLAY_CANDLE_COUNT);
+  const [displayCandleCount, setDisplayCandleCount] = useState(() => uiPrefs.candleCountDisplayDefault ?? DEFAULT_DISPLAY_CANDLE_COUNT);
   // Último preset da toolbar (10/20/40/80/160/320) escolhido explicitamente pelo usuário — ao
   // contrário de displayCandleCount, NÃO muda quando "carregar mais" (+500/+1000) é usado, pra
   // esse carregamento extra ficar restrito à moeda atual em vez de "vazar" pra próxima moeda
   // selecionada (ver lastPresetCandleCount abaixo).
-  const [lastPresetCandleCount, setLastPresetCandleCount] = useState(DEFAULT_DISPLAY_CANDLE_COUNT);
+  const [lastPresetCandleCount, setLastPresetCandleCount] = useState(() => uiPrefs.candleCountDisplayDefault ?? DEFAULT_DISPLAY_CANDLE_COUNT);
   const [hasExplicitCandleWindow, setHasExplicitCandleWindow] = useState(true);
   const [loadingMoreCandles, setLoadingMoreCandles] = useState(false);
   const [measureMode, setMeasureMode] = useState(false);
@@ -3444,13 +3586,16 @@ export default function CandlestickChart() {
         stdDev: Number(ov.stdDev),
         // PATH + tendência da mediana também ligados de cara — o usuário quer ver de imediato
         // como o bot está simulando os ciclos e a tendência que alimenta o filtro dele, sem
-        // precisar clicar em nada.
+        // precisar clicar em nada. PERM entra junto quando o próprio bot dessa moeda tem o
+        // filtro PERM ligado num nível com equivalente aqui (ver botPermInterval acima) — o
+        // ciclo mostrado passa a ser exatamente o que o bot real teria aceitado.
         showPath: true,
         showMedianTrend: true,
+        showPermFilter: !!botPermInterval,
       });
       return [group, ...withoutAuto].slice(0, MAX_BB_GROUPS);
     });
-  }, [hasForcedBollinger, multitradeChartFocus?.bollingerOverride]);
+  }, [hasForcedBollinger, multitradeChartFocus?.bollingerOverride, botPermInterval]);
 
   // Na primeira renderização, desliga qualquer indicador que tenha ficado ativo de uma sessão
   // anterior (persistido em localStorage) — o gráfico sempre abre limpo. Precisa rodar DEPOIS
@@ -3462,8 +3607,8 @@ export default function CandlestickChart() {
   useEffect(() => {
     if (activeIndicators.length) setActiveIndicatorsPreference([]);
     setBbGroups((prev) => {
-      if (!prev.some((g) => g.enabled || g.showPath || g.showMedianTrend)) return prev;
-      const next = prev.map((g) => ({ ...g, enabled: false, showPath: false, showMedianTrend: false }));
+      if (!prev.some((g) => g.enabled || g.showPath || g.showMedianTrend || g.showPermFilter)) return prev;
+      const next = prev.map((g) => ({ ...g, enabled: false, showPath: false, showMedianTrend: false, showPermFilter: false }));
       saveBbGroups(next);
       return next;
     });
@@ -3544,6 +3689,13 @@ export default function CandlestickChart() {
     setEmaPersistCloudIntervalDefault(emaPersistCloudInterval);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [emaPersistCloudInterval]);
+
+  // Persiste a quantidade de nuvens PERM (1/2/3) — mesmo padrão do intervalo acima.
+  useEffect(() => {
+    if (isTradePanelChartView(chartViewSource)) return;
+    setEmaPersistCloudLayersDefault(emaPersistCloudLayers);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [emaPersistCloudLayers]);
 
   useEffect(() => {
     if (isTradePanelChartView(chartViewSource)) return;
@@ -3741,7 +3893,7 @@ export default function CandlestickChart() {
   // a tendência da linha mediana.
   useEffect(() => {
     const bbNeeded = chartPanelButtons.bb !== false
-      ? bbGroups.filter((g) => g.enabled || g.showPath || g.showMedianTrend)
+      ? bbGroups.filter((g) => g.enabled || g.showPath || g.showMedianTrend || g.showPermFilter)
       : [];
     if (!selectedChart?.symbol || !bbNeeded.length) {
       setBollingerCache({});
@@ -3794,6 +3946,53 @@ export default function CandlestickChart() {
   }, [
     bbGroups, selectedChart?.symbol, selectedChart?.interval, selectedChart?.source, selectedChart?.candlesticks,
     currentInterval, overlayFetchLimit, displayCandleCount, chartPanelButtons.bb,
+  ]);
+
+  // Busca os ciclos PATH pré-filtrados pelo PERM do manipulador (ver bbPermPathCache acima) —
+  // só roda pros grupos com showPermFilter ligado, e só quando a moeda atual tem um favorito
+  // Bollinger Bands com PERM habilitado num nível com equivalente aqui (botPermInterval).
+  useEffect(() => {
+    const needed = chartPanelButtons.bb !== false ? bbGroups.filter((g) => g.showPermFilter) : [];
+    if (!selectedChart?.symbol || !needed.length || !botPermInterval) {
+      setBbPermPathCache({});
+      return undefined;
+    }
+    const toFetch = [];
+    for (const g of needed) {
+      const key = `${g.period}-${g.stdDev}-${g.interval}-${botPermInterval}`;
+      if (toFetch.some((f) => f.key === key)) continue;
+      toFetch.push({ key, period: g.period, stdDev: g.stdDev, interval: g.interval });
+    }
+    const permFilterParam = {
+      h1: botPermInterval === 'h1', m30: botPermInterval === 'm30', m15: botPermInterval === 'm15',
+    };
+    let cancelled = false;
+    (async () => {
+      const next = {};
+      await Promise.all(toFetch.map(async ({ key, period, stdDev, interval }) => {
+        try {
+          const ovLimit = computeOverlayMaFetchLimit(
+            selectedChart.interval ?? currentInterval,
+            interval,
+            Number(period),
+            Math.max(displayCandleCount, selectedChart.candlesticks?.length ?? 0, DEFAULT_CANDLE_LIMIT),
+            overlayFetchLimit,
+          );
+          const data = await fetchBollingerBandRecovery(
+            selectedChart.symbol, interval, Number(period), Number(stdDev), selectedChart.source,
+            false, 10, 0, ovLimit, permFilterParam,
+          );
+          next[key] = occurrencesToBbPathNodes(data);
+        } catch (e) {
+          console.warn('[bollingerBandsPerm]', key, e.message);
+        }
+      }));
+      if (!cancelled) setBbPermPathCache(next);
+    })();
+    return () => { cancelled = true; };
+  }, [
+    bbGroups, selectedChart?.symbol, selectedChart?.interval, selectedChart?.source, selectedChart?.candlesticks,
+    currentInterval, overlayFetchLimit, displayCandleCount, chartPanelButtons.bb, botPermInterval,
   ]);
 
   // Busca as zonas de Suporte/Resistência — intervalo próprio (independente do gráfico), como a Bollinger.
@@ -3905,11 +4104,18 @@ export default function CandlestickChart() {
   ]);
 
   // Busca candles + EMA9/21 pra nuvem PERM (inclinação EMA9) — intervalo próprio (independente
-  // do gráfico), mesmo padrão do S/R/PPHL/CHOP. Quando o intervalo escolhido tem um intervalo de
-  // confirmação (ex.: 1h → 15m), busca junto os mesmos dados no intervalo menor pra reforçar a
-  // nuvem verde (ver EMA_PERSIST_CLOUD_CONFIRM_INTERVAL / buildEmaCrossPersistenceClouds).
+  // do gráfico), mesmo padrão do S/R/PPHL/CHOP. 3 switches independentes em emaPersistCloudLayers
+  // controlam o que é DESENHADO (ver renderPermIntervalTile/buildEmaCrossPersistenceClouds):
+  // layer1 é o próprio intervalo principal, layer2 o de confirmação (ex.: 1h → 30m), layer3 mais
+  // um nível abaixo (ex.: 1h → 30m → 15m). O intervalo de confirmação (layer2) é SEMPRE buscado
+  // — mesmo com o switch desligado na tela — porque também é usado pra confirmar/esmaecer o
+  // layer1 (ver isBullishConfirmedAt); só o de layer3 é opcional de buscar, já que só serve pra
+  // desenho (ver EMA_PERSIST_CLOUD_CONFIRM_INTERVAL).
   const emaPersistCloudShown = activeIndicators.includes('emaPersistCloud') && chartPanelButtons.emaPersistCloud !== false;
   const emaPersistCloudConfirmInterval = getEmaPersistCloudConfirmInterval(emaPersistCloudInterval);
+  const emaPersistCloudConfirm2IntervalRaw = emaPersistCloudConfirmInterval
+    ? getEmaPersistCloudConfirmInterval(emaPersistCloudConfirmInterval) : null;
+  const emaPersistCloudConfirm2Interval = emaPersistCloudLayers?.layer3 ? emaPersistCloudConfirm2IntervalRaw : null;
   useEffect(() => {
     if (!selectedChart?.symbol || !emaPersistCloudShown) {
       setEmaPersistCloudLoading(false);
@@ -3942,15 +4148,29 @@ export default function CandlestickChart() {
             selectedChart.symbol, emaPersistCloudConfirmInterval, selectedChart.source, confirmLimit,
           ));
         }
-        const [data, confirmData] = await Promise.all(fetches);
+        if (emaPersistCloudConfirm2Interval) {
+          const confirm2Limit = computeOverlayMaFetchLimit(
+            selectedChart.interval ?? currentInterval,
+            emaPersistCloudConfirm2Interval,
+            21,
+            Math.max(displayCandleCount, selectedChart.candlesticks?.length ?? 0, DEFAULT_CANDLE_LIMIT),
+            overlayFetchLimit,
+          );
+          fetches.push(fetchEmaCrossOverlayData(
+            selectedChart.symbol, emaPersistCloudConfirm2Interval, selectedChart.source, confirm2Limit,
+          ));
+        }
+        const [data, confirmData, confirmData2] = await Promise.all(fetches);
         if (cancelled) return;
         setEmaPersistCloudCache({ [key]: data });
         setEmaPersistCloudConfirmCache(emaPersistCloudConfirmInterval ? { [key]: confirmData } : {});
+        setEmaPersistCloudConfirm2Cache(emaPersistCloudConfirm2Interval ? { [key]: confirmData2 } : {});
       } catch (e) {
         console.warn('[emaPersistCloud]', key, e.message);
         if (!cancelled) {
           setEmaPersistCloudCache({});
           setEmaPersistCloudConfirmCache({});
+          setEmaPersistCloudConfirm2Cache({});
         }
       } finally {
         if (!cancelled) setEmaPersistCloudLoading(false);
@@ -3960,7 +4180,7 @@ export default function CandlestickChart() {
   }, [
     selectedChart?.symbol, selectedChart?.interval, selectedChart?.source, selectedChart?.candlesticks,
     currentInterval, overlayFetchLimit, displayCandleCount, emaPersistCloudShown, emaPersistCloudInterval,
-    emaPersistCloudConfirmInterval,
+    emaPersistCloudConfirmInterval, emaPersistCloudConfirm2Interval,
   ]);
 
   // Busca candles + EMA9/21 pro Bars Since MA Cross (BARS) — mesmo padrão acima.
@@ -4188,8 +4408,8 @@ export default function CandlestickChart() {
       setActiveIndicatorsPreference(keptIndicators);
     }
     setBbGroups((prev) => {
-      if (!prev.some((g) => g.enabled || g.showPath || g.showMedianTrend)) return prev;
-      const next = prev.map((g) => ({ ...g, enabled: false, showPath: false, showMedianTrend: false }));
+      if (!prev.some((g) => g.enabled || g.showPath || g.showMedianTrend || g.showPermFilter)) return prev;
+      const next = prev.map((g) => ({ ...g, enabled: false, showPath: false, showMedianTrend: false, showPermFilter: false }));
       saveBbGroups(next);
       return next;
     });
@@ -4750,8 +4970,9 @@ export default function CandlestickChart() {
     if (chartPanelButtons.bb === false) return [];
     return bbGroups
       .map((g, i) => {
-        if (!g.enabled && !g.showPath && !g.showMedianTrend) return null;
+        if (!g.enabled && !g.showPath && !g.showMedianTrend && !g.showPermFilter) return null;
         const key = `${g.period}-${g.stdDev}-${g.interval}`;
+        const permKey = `${key}-${botPermInterval}`;
         return {
           id: g.id,
           color: bbGroupColor(i),
@@ -4762,16 +4983,20 @@ export default function CandlestickChart() {
           showLower: g.showLower,
           showPath: g.showPath,
           showMedianTrend: g.showMedianTrend,
+          showPermFilter: g.showPermFilter,
           medianTrendLookback: 10,
           medianTrendThreshold: bbMedianTrendThreshold,
           period: g.period,
           stdDev: g.stdDev,
           interval: g.interval,
           points: bollingerCache[key] ?? [],
+          // Só populado quando showPermFilter está ligado E o manipulador dessa moeda tem PERM
+          // configurado num nível com equivalente aqui (ver botPermInterval/bbPermPathCache).
+          permPathNodes: g.showPermFilter ? (bbPermPathCache[permKey] ?? []) : null,
         };
       })
       .filter(Boolean);
-  }, [bbGroups, bollingerCache, chartPanelButtons.bb, bbMedianTrendThreshold]);
+  }, [bbGroups, bollingerCache, bbPermPathCache, botPermInterval, chartPanelButtons.bb, bbMedianTrendThreshold]);
   // Motor ECharts legado (buildOption abaixo) só sabe desenhar 1 Bollinger — usa a 1ª config
   // habilitada como aproximação (sem multi-BB nesse motor, fora do escopo desta feature).
   const chartBollingerConfig = chartBollingerConfigs[0] ?? null;
@@ -4800,6 +5025,11 @@ export default function CandlestickChart() {
     if (!emaPersistCloudShown || !emaPersistCloudConfirmInterval) return null;
     return emaPersistCloudConfirmCache[emaPersistCloudInterval] ?? null;
   }, [emaPersistCloudShown, emaPersistCloudConfirmInterval, emaPersistCloudInterval, emaPersistCloudConfirmCache]);
+
+  const chartEmaPersistCloudConfirm2Data = useMemo(() => {
+    if (!emaPersistCloudShown || !emaPersistCloudConfirm2Interval) return null;
+    return emaPersistCloudConfirm2Cache[emaPersistCloudInterval] ?? null;
+  }, [emaPersistCloudShown, emaPersistCloudConfirm2Interval, emaPersistCloudInterval, emaPersistCloudConfirm2Cache]);
 
   const chartBarsSinceCrossData = useMemo(() => {
     if (!barsSinceCrossShown) return null;
@@ -5103,6 +5333,7 @@ export default function CandlestickChart() {
             removeBbGroup={removeBbGroup}
             updateBbGroup={updateBbGroup}
             toggleBbGroupFlag={toggleBbGroupFlag}
+            botPermInterval={botPermInterval}
             srInterval={srInterval}
             setSrInterval={setSrInterval}
             pphlInterval={pphlInterval}
@@ -5113,6 +5344,8 @@ export default function CandlestickChart() {
             setEmaPersistCloudInterval={setEmaPersistCloudInterval}
             emaPersistCloudTones={emaPersistCloudTones}
             setEmaPersistCloudTones={setEmaPersistCloudTones}
+            emaPersistCloudLayers={emaPersistCloudLayers}
+            setEmaPersistCloudLayers={setEmaPersistCloudLayers}
             barsSinceCrossInterval={barsSinceCrossInterval}
             setBarsSinceCrossInterval={setBarsSinceCrossInterval}
             tdSequentialInterval={tdSequentialInterval}
@@ -5155,6 +5388,8 @@ export default function CandlestickChart() {
               chopConfig={chartChopConfig}
               emaPersistCloudData={chartEmaPersistCloudData}
               emaPersistCloudConfirmData={chartEmaPersistCloudConfirmData}
+              emaPersistCloudConfirm2Data={chartEmaPersistCloudConfirm2Data}
+              emaPersistCloudLayers={emaPersistCloudLayers}
               emaPersistCloudTones={emaPersistCloudTones}
               barsSinceCrossData={chartBarsSinceCrossData}
               tdSequentialData={chartTdSequentialData}
@@ -5193,6 +5428,7 @@ export default function CandlestickChart() {
             removeBbGroup={removeBbGroup}
             updateBbGroup={updateBbGroup}
             toggleBbGroupFlag={toggleBbGroupFlag}
+            botPermInterval={botPermInterval}
             srInterval={srInterval}
             setSrInterval={setSrInterval}
             pphlInterval={pphlInterval}
@@ -5203,6 +5439,8 @@ export default function CandlestickChart() {
             setEmaPersistCloudInterval={setEmaPersistCloudInterval}
             emaPersistCloudTones={emaPersistCloudTones}
             setEmaPersistCloudTones={setEmaPersistCloudTones}
+            emaPersistCloudLayers={emaPersistCloudLayers}
+            setEmaPersistCloudLayers={setEmaPersistCloudLayers}
             barsSinceCrossInterval={barsSinceCrossInterval}
             setBarsSinceCrossInterval={setBarsSinceCrossInterval}
             tdSequentialInterval={tdSequentialInterval}

@@ -257,6 +257,24 @@ export function getEmaPersistCloudConfirmInterval(interval) {
   return best;
 }
 
+/** Quais nuvens PERM aparecem no gráfico — 3 switches independentes, um por nível: layer1 é o
+ *  próprio intervalo principal escolhido (ex.: 1h — ON por padrão), layer2 é o intervalo de
+ *  confirmação (ex.: 1h→30m — ON por padrão), layer3 é mais um nível abaixo (a confirmação DA
+ *  confirmação, ex.: 1h→30m→15m — OFF por padrão). Só controla o que é DESENHADO — o layer2
+ *  continua sendo calculado e usado pra confirmar/esmaecer o layer1 mesmo se estiver desligado
+ *  na tela (ver checkPermFilter-like isBullishConfirmedAt em emaCrossPersistenceCloud.js).
+ *  Rótulos mostrados na UI são calculados a partir do intervalo principal (ver
+ *  getEmaPersistCloudConfirmInterval), não fixos. */
+export const DEFAULT_EMA_PERSIST_CLOUD_LAYERS = { layer1: true, layer2: true, layer3: false };
+
+export function normalizeEmaPersistCloudLayers(raw) {
+  return {
+    layer1: typeof raw?.layer1 === 'boolean' ? raw.layer1 : DEFAULT_EMA_PERSIST_CLOUD_LAYERS.layer1,
+    layer2: typeof raw?.layer2 === 'boolean' ? raw.layer2 : DEFAULT_EMA_PERSIST_CLOUD_LAYERS.layer2,
+    layer3: typeof raw?.layer3 === 'boolean' ? raw.layer3 : DEFAULT_EMA_PERSIST_CLOUD_LAYERS.layer3,
+  };
+}
+
 /** Intervalo de candles usado pelo "Bars Since MA Cross" (BARS) — mesmo padrão acima. */
 export const DEFAULT_BARS_SINCE_CROSS_INTERVAL = '1h';
 
@@ -281,6 +299,17 @@ export const DEFAULT_CHART_ENGINE = 'lw';
 
 export function normalizeChartEngine(raw) {
   return CHART_ENGINE_OPTIONS.includes(raw) ? raw : DEFAULT_CHART_ENGINE;
+}
+
+/** Quantidade de candles visíveis ao abrir o gráfico (janela inicial) — mesmos presets da
+ *  toolbar do gráfico (ver LAST_CANDLE_PRESETS em CandlestickChart.jsx). Editável em
+ *  Configurações → Quantidade de candles padrão. */
+export const CANDLE_COUNT_DISPLAY_OPTIONS = [10, 20, 40, 80, 160, 320];
+export const DEFAULT_CANDLE_COUNT_DISPLAY = 40;
+
+export function normalizeCandleCountDisplay(raw) {
+  const n = Number(raw);
+  return CANDLE_COUNT_DISPLAY_OPTIONS.includes(n) ? n : DEFAULT_CANDLE_COUNT_DISPLAY;
 }
 
 export function normalizeActiveIndicators(arr) {
@@ -334,6 +363,7 @@ export const DEFAULT_UI_PREFS = {
   chopIntervalDefault: DEFAULT_CHOP_INTERVAL,
   emaPersistCloudIntervalDefault: DEFAULT_EMA_PERSIST_CLOUD_INTERVAL,
   emaPersistCloudTonesDefault: { ...DEFAULT_PERM_CLOUD_TONES },
+  emaPersistCloudLayersDefault: { ...DEFAULT_EMA_PERSIST_CLOUD_LAYERS },
   barsSinceCrossIntervalDefault: DEFAULT_BARS_SINCE_CROSS_INTERVAL,
   tdSequentialIntervalDefault: DEFAULT_TD_SEQUENTIAL_INTERVAL,
   vwapDefaults: normalizeVwapDefaults(DEFAULT_VWAP),
@@ -343,6 +373,7 @@ export const DEFAULT_UI_PREFS = {
   currencyPanelWidth: CURRENCY_PANEL_WIDTH_DEFAULT,
   statsDefaults: normalizeStatsDefaults(DEFAULT_STATS),
   chartEngineDefault: DEFAULT_CHART_ENGINE,
+  candleCountDisplayDefault: DEFAULT_CANDLE_COUNT_DISPLAY,
 };
 
 function cloneDefaults() {
@@ -358,6 +389,7 @@ function cloneDefaults() {
     chopIntervalDefault: DEFAULT_CHOP_INTERVAL,
     emaPersistCloudIntervalDefault: DEFAULT_EMA_PERSIST_CLOUD_INTERVAL,
     emaPersistCloudTonesDefault: { ...DEFAULT_PERM_CLOUD_TONES },
+    emaPersistCloudLayersDefault: { ...DEFAULT_EMA_PERSIST_CLOUD_LAYERS },
     barsSinceCrossIntervalDefault: DEFAULT_BARS_SINCE_CROSS_INTERVAL,
     tdSequentialIntervalDefault: DEFAULT_TD_SEQUENTIAL_INTERVAL,
     vwapDefaults: normalizeVwapDefaults(DEFAULT_VWAP),
@@ -367,6 +399,7 @@ function cloneDefaults() {
     currencyPanelWidth: CURRENCY_PANEL_WIDTH_DEFAULT,
     statsDefaults: normalizeStatsDefaults(DEFAULT_STATS),
     chartEngineDefault: DEFAULT_CHART_ENGINE,
+    candleCountDisplayDefault: DEFAULT_CANDLE_COUNT_DISPLAY,
   };
 }
 
@@ -413,6 +446,9 @@ export function loadUiPreferences() {
     if (parsed.emaPersistCloudTonesDefault !== undefined) {
       result.emaPersistCloudTonesDefault = normalizeEmaPersistCloudTones(parsed.emaPersistCloudTonesDefault);
     }
+    if (parsed.emaPersistCloudLayersDefault !== undefined) {
+      result.emaPersistCloudLayersDefault = normalizeEmaPersistCloudLayers(parsed.emaPersistCloudLayersDefault);
+    }
     if (parsed.barsSinceCrossIntervalDefault !== undefined) {
       result.barsSinceCrossIntervalDefault = normalizeBarsSinceCrossInterval(parsed.barsSinceCrossIntervalDefault);
     }
@@ -439,6 +475,9 @@ export function loadUiPreferences() {
     }
     if (parsed.chartEngineDefault !== undefined) {
       result.chartEngineDefault = normalizeChartEngine(parsed.chartEngineDefault);
+    }
+    if (parsed.candleCountDisplayDefault !== undefined) {
+      result.candleCountDisplayDefault = normalizeCandleCountDisplay(parsed.candleCountDisplayDefault);
     }
     return result;
   } catch {
