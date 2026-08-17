@@ -204,11 +204,11 @@ function checkMedianTrendFilter(config, cMap, series) {
 }
 
 /**
- * Filtro PERM (nuvem de inclinação EMA9×EMA21 — ver backend/utils/emaPersistCloud.js): só
- * libera a compra com a EMA9 já ACIMA da EMA21 e subindo (riseAccel/riseFlat). O verde
- * "antecipado" do lado abaixo da EMA21 (fallFlat/turnUp — a EMA9 só começou a virar, ainda não
- * cruzou) NÃO libera: o bot segue um fluxo de alta já estabelecido, nunca antecipa o fim de
- * uma baixa. `permFilter.interval` é INDEPENDENTE do intervalo da banda de Bollinger
+ * Filtro PERM (nuvem de inclinação EMA9×EMA21 — ver backend/utils/emaPersistCloud.js): libera
+ * a compra sempre que a nuvem estiver VERDE (isEntryBullishState/isGreenState) — inclusive o
+ * verde "antecipado" do lado abaixo da EMA21 (fallFlat/turnUp, EMA9 ainda abaixo mas já
+ * estabilizando/virando), desde que as demais regras de entrada do bot Bollinger Bands também
+ * sejam atendidas. `permFilter.interval` é INDEPENDENTE do intervalo da banda de Bollinger
  * (entry.interval) — ex.: BB em 15m com PERM checado em 4h. Cascata quando o intervalo mais
  * alto está sem estado disponível no momento (candle ausente, histórico curto, ou hora recém-
  * aberta): interval → metade → um quarto (ex.: 4h → 2h → 1h — ver permIntervalChain).
@@ -241,6 +241,48 @@ function checkPermFilter(config, cMap) {
   }
   // Nenhum intervalo da cadeia teve estado disponível — sem dado suficiente pra confirmar.
   return { allowed: false, reason: 'PERM_NO_DATA', chain, checked };
+}
+
+/**
+ * Saída por CRUZAMENTO real da nuvem PERM depois da compra (não só "está abaixo agora" — como
+ * a entrada pode acontecer com a EMA9 já abaixo da EMA21, no verde antecipado fallFlat/turnUp,
+ * ver isEntryBullishState/isGreenState, só "estar abaixo" não seria cruzamento nenhum nesse
+ * caso). Rastreia em `guardState.wasAbove` se a EMA9 já esteve ACIMA da EMA21 (side 'above') em
+ * algum tick desde a compra; só dispara quando, tendo confirmado o lado de cima ao menos uma
+ * vez, o lado volta pra baixo — o cruzamento em si. Ex.: comprou 10:00 com EMA9 já acima,
+ * 10:10 cruza abaixo → vende. Comprou 10:00 com EMA9 ainda abaixo (fallFlat/turnUp) → só passa
+ * a vigiar depois que cruzar pra CIMA (confirmando a reversão) e then voltar pra baixo.
+ * `guardState` é o snapshot persistido no tick anterior (rules_state.permGuard — ver
+ * bollinger-bands-bot.js); undefined/null no primeiro tick após a compra, auto-inicializa a
+ * partir do lado atual (equivalente a checar o lado no instante da compra, sem precisar
+ * snapshot separado no momento do buy). guardState do retorno só muda pra wasAbove:false
+ * quando ainda não disparou saída — depois de exit:true o guardState não é resetado (fica
+ * wasAbove:true), pra continuar tentando vender de novo no próximo tick se essa tentativa
+ * falhar, em vez de "perder" o gatilho.
+ * Cascata igual ao checkPermFilter (mesmo intervalo/ordem, primeiro com estado disponível);
+ * sem dado em nenhum intervalo → não decide.
+ */
+function checkPermCrossExit(config, cMap, guardState) {
+  const perm = config.entry?.permFilter;
+  if (!perm?.enabled || perm.exitOnCrossDown === false) return { exit: false, guardState };
+
+  const chain = permIntervalChain(perm.interval);
+  for (const iv of chain) {
+    const closed = closedCandlesOnly(cMap[iv] ?? []);
+    const last = latestPermState(closed);
+    if (!last || last.state == null) continue; // nuvem vazia nesse intervalo — cai pro próximo
+
+    if (last.fast > last.slow) {
+      return { exit: false, guardState: { wasAbove: true, interval: iv } };
+    }
+    const wasAbove = guardState?.wasAbove === true;
+    return {
+      exit: wasAbove,
+      guardState: wasAbove ? guardState : { wasAbove: false, interval: iv },
+      interval: iv, state: last.state, slopePct: last.slopePct,
+    };
+  }
+  return { exit: false, guardState };
 }
 
 /**
@@ -598,6 +640,7 @@ module.exports = {
   checkEmaFilter,
   checkMedianTrendFilter,
   checkPermFilter,
+  checkPermCrossExit,
   permIntervalChain,
   evaluateEntrySignal,
   evaluateExit,

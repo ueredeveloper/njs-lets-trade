@@ -29,7 +29,7 @@ const { resolveStrategy } = require('./tradeConfigSchema');
 const { STRATEGY_IDS, isBollingerBandsStrategy } = require('./strategyPresets');
 const {
   getRequiredSpecs, evaluateEntrySignal, evaluateExit, computeBracketPrices, computeStopLossFloor,
-  checkEntryLimitExpired, checkReentryCooldown, describeNearMiss,
+  checkEntryLimitExpired, checkReentryCooldown, describeNearMiss, checkPermCrossExit,
 } = require('./strategyEngine');
 const { refreshMedianTrendThreshold } = require('../../utils/bollingerMedianTrendConfig');
 const { detectOrphanPosition } = require('../shared/orphanPosition');
@@ -663,6 +663,48 @@ async function tick(rowId, adapter, strategy, log, session) {
   if (peakPrice > (storedPeak ?? buyPrice) + 1e-12) {
     session.rulesState = { ...rulesState, stopPeakPrice: peakPrice };
     await saveState(rowId, { rules_state: session.rulesState }, log);
+  }
+
+  // Reversão da nuvem PERM (EMA9 cruzou pra baixo da EMA21 DEPOIS da compra — não só "está
+  // abaixo agora", ver checkPermCrossExit — entry.permFilter.exitOnCrossDown): sai na hora a
+  // mercado, cancelando a bracket TP/SL resting antes (se houver), em vez de esperar o preço
+  // alcançar o alvo/stop. permGuard rastreia entre ticks se a EMA9 já esteve acima da EMA21
+  // desde a compra (rules_state.permGuard).
+  const prevPermGuard = rulesState.permGuard ?? null;
+  const crossExit = checkPermCrossExit(config, cMap, prevPermGuard);
+  if (crossExit.guardState?.wasAbove !== prevPermGuard?.wasAbove) {
+    if (crossExit.guardState?.wasAbove === true && prevPermGuard?.wasAbove !== true) {
+      log(`🔵 EMA9 confirmou acima da EMA21 em ${crossExit.guardState.interval} — guarda de cruzamento pra saída ativa`);
+    }
+    rulesState.permGuard = crossExit.guardState;
+    session.rulesState = { ...rulesState, permGuard: crossExit.guardState };
+    await saveState(rowId, { rules_state: session.rulesState }, log);
+  }
+  if (crossExit.exit) {
+    if (rulesState.exitBracket) {
+      try {
+        await adapter.cancelExitBracket(rulesState.exitBracket);
+      } catch (err) {
+        log(`${Y}⚠️  Erro ao cancelar bracket TP/SL pra sair no cruzamento PERM: ${err.message}${X}`);
+      }
+      session.rulesState = { ...rulesState, exitBracket: null };
+      await saveState(rowId, { rules_state: session.rulesState }, log);
+    }
+    const exitResult = {
+      reason: 'PERM_CROSS_DOWN',
+      exitDesc: `Nuvem PERM cruzou pra baixo (EMA9 < EMA21) em ${crossExit.interval}`,
+    };
+    try {
+      await executeSell({
+        rowId, adapter, strategy, log, state, exitResult, session,
+        defaultReasonDesc: 'Nuvem PERM reverteu',
+      });
+      session.phase = 'WATCHING';
+      session.rulesState = null;
+    } catch {
+      return { phase: 'BOUGHT' };
+    }
+    return { phase: 'WATCHING' };
   }
 
   if (rulesState.exitBracket) {

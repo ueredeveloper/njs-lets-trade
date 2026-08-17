@@ -63,15 +63,23 @@ const BOLLINGER_BANDS_DEFAULTS = {
      *  Ligado por padrão. */
     medianTrendFilter: { enabled: true, lookback: 10 },
     /** Filtro PERM (nuvem de inclinação EMA9×EMA21 — ver backend/utils/emaPersistCloud.js e o
-     *  indicador "Perman." do gráfico): só compra com a EMA9 já acima da EMA21 e subindo
-     *  (riseAccel/riseFlat — não conta o verde antecipado com EMA9 ainda abaixo da EMA21, que
-     *  seguiria o fluxo de baixa). `interval` é INDEPENDENTE do intervalo da banda de Bollinger
-     *  (entry.interval) — o usuário pode operar BB em 15m e checar o PERM em 4h, por exemplo.
-     *  Padrão fixo '1h', não nasce igual ao entry.interval (diferente do emaFilter). Cascata
-     *  quando o intervalo mais alto está sem estado disponível no momento (candle ausente/
-     *  estado nulo/ainda não fechou): interval → metade → um quarto (ex.: 4h → 2h → 1h — mesma
-     *  fórmula de getEmaPersistCloudConfirmInterval no frontend). Ligado por padrão. */
-    permFilter: { enabled: true, interval: '1h' },
+     *  indicador "Perman." do gráfico): nuvem VERDE sempre libera a compra — inclusive o verde
+     *  "antecipado" com a EMA9 ainda abaixo da EMA21 (fallFlat/turnUp, já estabilizando/virando),
+     *  desde que as demais regras de entrada do bot também sejam atendidas (ver
+     *  isEntryBullishState/isGreenState em backend/utils/emaPersistCloud.js). `interval` é
+     *  INDEPENDENTE do intervalo da banda de Bollinger (entry.interval) — o usuário pode operar
+     *  BB em 15m e checar o PERM em 4h, por exemplo. Padrão fixo '1h', não nasce igual ao
+     *  entry.interval (diferente do emaFilter). Cascata quando o intervalo mais alto está sem
+     *  estado disponível no momento (candle ausente/estado nulo/ainda não fechou): interval →
+     *  metade → um quarto (ex.: 4h → 2h → 1h — mesma fórmula de getEmaPersistCloudConfirmInterval
+     *  no frontend). Ligado por padrão.
+     *  `exitOnCrossDown`: com a posição já comprada, se a EMA9 CRUZAR pra BAIXO da EMA21 depois
+     *  da compra (não só "estar abaixo" — rastreia se já esteve acima em algum tick desde a
+     *  compra antes de contar como cruzamento; cobre também o caso de entrada no verde
+     *  antecipado, que só passa a vigiar depois de confirmar o lado de cima uma vez) vende a
+     *  mercado na hora — cancela a bracket TP/SL resting antes, se houver — em vez de esperar o
+     *  alvo/stop de preço. Ligado por padrão. Ver checkPermCrossExit em strategyEngine.js. */
+    permFilter: { enabled: true, interval: '1h', exitOnCrossDown: true },
   },
 
   exit: {
@@ -175,6 +183,7 @@ function normalizePermFilter(block) {
   return {
     enabled: src.enabled !== false,
     interval: normalizeInterval(src.interval, d.interval),
+    exitOnCrossDown: src.exitOnCrossDown !== false,
   };
 }
 

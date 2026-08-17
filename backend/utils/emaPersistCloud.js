@@ -39,12 +39,23 @@ function classifyEma9SlopeState(slopePct, prevSlopePct, side) {
   return 'riseFlat';
 }
 
-/** Estados "verde com a EMA9 já acima da EMA21" (alta em curso) — os únicos que contam como
- *  confirmação de entrada no bot. Os estados verdes do lado 'below' (fallFlat/turnUp, EMA9
- *  ainda abaixo da EMA21 — antecipando uma reversão que ainda não aconteceu) NÃO contam: o bot
- *  só entra seguindo um fluxo de alta já estabelecido, nunca antecipando o fim de uma baixa. */
+/** Estados com tom VERDE — mesmo mapeamento de `tone` de SLOPE_STATE_META em
+ *  frontend-react/src/utils/emaCrossPersistenceCloud.js. Inclui os dois lados: fallFlat/turnUp
+ *  (EMA9 ainda ABAIXO da EMA21, mas quase estabilizando/já virando — reversão antecipada) e
+ *  riseAccel/riseFlat (EMA9 já ACIMA, subindo). fallAccel/fallDecel/riseDecel/turnDown são
+ *  vermelhos. */
+const GREEN_STATES = new Set(['fallFlat', 'turnUp', 'riseAccel', 'riseFlat']);
+
+function isGreenState(state) {
+  return GREEN_STATES.has(state);
+}
+
+/** Libera a compra no filtro PERM: nuvem verde SEMPRE libera, mesmo o verde "antecipado" do
+ *  lado abaixo da EMA21 (fallFlat/turnUp) — desde que as demais regras do bot Bollinger Bands
+ *  também sejam atendidas (ver checkPermFilter em backend/bot/bollinger-bands/strategyEngine.js).
+ *  Alias de isGreenState — nome mantido por compat com quem já importa esta função. */
 function isEntryBullishState(state) {
-  return state === 'riseAccel' || state === 'riseFlat';
+  return isGreenState(state);
 }
 
 function sideOf(fast, slow) {
@@ -112,6 +123,7 @@ module.exports = {
   SLOPE_LOOKBACK,
   STABILIZE_PCT,
   classifyEma9SlopeState,
+  isGreenState,
   isEntryBullishState,
   computeSlopeStates,
   latestPermState,
