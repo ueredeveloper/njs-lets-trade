@@ -12,7 +12,7 @@ export const BOLLINGER_BANDS_DEFAULTS = {
   kind: 'bollinger_bands',
   entry: {
     enabled: true,
-    interval: '4h',
+    interval: '1m',
     period: 20,
     stdDev: 2,
     pullback: { enabled: false, belowPct: 2 },
@@ -25,27 +25,28 @@ export const BOLLINGER_BANDS_DEFAULTS = {
     /** Após STOP_LOSS, espera N candles fechados do intervalo da BB antes de reavaliar compra.
      *  Saída no alvo não espera. 0 = sem espera. */
     reentryCooldownCandles: 3,
-    /** Ligado por padrão; interval nasce igual ao entry.interval (mesmo intervalo da banda
-     *  de Bollinger) quando não informado — ver normalizeBollingerBandsForm.
+    /** Desligado por padrão (formulário nasce com os 3 filtros de tendência desmarcados —
+     *  usuário liga manualmente o que quiser); interval nasce igual ao entry.interval (mesmo
+     *  intervalo da banda de Bollinger) quando não informado — ver normalizeBollingerBandsForm.
      *  slopeLookback/minSlopePct: a linha da EMA precisa estar subindo (≥ minSlopePct %
      *  vs. N candles atrás) além do preço estar acima dela. */
     emaFilter: {
-      enabled: true, period: 50, interval: '4h', maxDipPct: 2,
+      enabled: false, period: 50, interval: '1m', maxDipPct: 2,
       slopeLookback: 5, minSlopePct: 0,
     },
     /** Filtro de tendência da linha mediana (média) da própria Bollinger: média das
      *  variações candle-a-candle dos últimos `lookback` valores fechados da linha média
      *  precisa ser ≥ 0 pra liberar a compra — checado no sinal e de novo a cada tick
      *  enquanto a ordem limite de entrada aguarda fill. */
-    medianTrendFilter: { enabled: true, lookback: 10 },
+    medianTrendFilter: { enabled: false, lookback: 10 },
     /** Filtro PERM (nuvem de inclinação EMA9×EMA21 — ver o indicador "Perman." do gráfico e
      *  backend/utils/emaPersistCloud.js): só compra com a EMA9 já acima da EMA21 e subindo.
      *  `interval` é INDEPENDENTE do intervalo da banda de Bollinger (entry.interval) — dá pra
      *  operar BB em 15m e checar o PERM em 4h. Padrão fixo '1h' (não nasce igual ao
      *  entry.interval, diferente do emaFilter). Cascata quando o intervalo mais alto está sem
-     *  estado disponível: interval → metade → um quarto (ex.: 4h → 2h → 1h). Ligado por
-     *  padrão. */
-    permFilter: { enabled: true, interval: '1h' },
+     *  estado disponível: interval → metade → um quarto (ex.: 4h → 2h → 1h). Desligado por
+     *  padrão (ver comentário do emaFilter acima). */
+    permFilter: { enabled: false, interval: '1h' },
   },
   exit: {
     /** targetMode 'band' (padrão) = alvo (TP) na banda superior ao vivo, recriada quando
@@ -58,13 +59,13 @@ export const BOLLINGER_BANDS_DEFAULTS = {
     enabled: true, maxLossPct: 5, trailing: true, trailStepPct: 5,
     mode: 'fixed',
     /** interval nasce igual ao entry.interval quando não informado — ver normalizeBollingerBandsForm. */
-    ema: { period: 50, interval: '4h', belowPct: 2 },
+    ema: { period: 50, interval: '1m', belowPct: 2 },
     /** mode 'band': stop = banda inferior BB(entry.period,entry.stdDev) ao vivo × (1 − belowPct/100). */
     band: { belowPct: 10 },
   },
-  /** BB(4h/1h) não precisa da granularidade de 1m do vwap-bands — pollMs mais espaçado
-   *  evita competir com o frontend pelas mesmas chamadas de candles na corretora (mesmo
-   *  padrão do swing-bot/amap-bot: 5min parado, 1min com posição aberta). */
+  /** pollMs espaçado evita competir com o frontend pelas mesmas chamadas de candles na
+   *  corretora (mesmo padrão do swing-bot/amap-bot: 5min parado, 1min com posição aberta) —
+   *  mesmo com o padrão do formulário em 1m, o candle só fecha a cada 1min de qualquer forma. */
   polling: { pollMs: 5 * 60_000, fastPollMs: 60_000 },
   entryCooldownHours: 0,
   volume: { minVolumeUsdt: 1_000_000, allowLowVolume: false },
