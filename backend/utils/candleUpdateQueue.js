@@ -2,8 +2,12 @@
 
 const getCandles = require('../binance/getCandles');
 
-/** ~24 klines/min → ~48 weight/min (bem abaixo do limite de 1200) */
-const REQUEST_GAP_MS = 2_500;
+/** ~120 klines/min → ~240 weight/min (~20% do limite de 1200/min da Binance).
+ * Antes era 2500ms (~24 req/min, ~4% do limite) — orçamento tão apertado que a fila
+ * nunca dava conta dos ciclos de warmup (todos disparam juntos no boot/tick), e a maioria
+ * dos fetches estourava o timeout antes de ser atendida (ver conversa sobre 1min/15min
+ * "muito lento" — log mostrou 59 de 60 refreshes de candle 1m/5m falhando por timeout). */
+const REQUEST_GAP_MS = 500;
 const FETCH_TIMEOUT_MS = 60_000;
 
 const queue = [];

@@ -3,6 +3,7 @@ const { calculateMa } = require('../utils/movingAverage');
 const getCandles = require('../binance/getCandles');
 const fs   = require('node:fs/promises');
 const path = require('path');
+const atomicWriteFile = require('../utils/atomicWriteFile');
 const cacheSettings = require('./cacheSettings');
 
 const CANDLES_LIMIT = 200;
@@ -124,7 +125,7 @@ async function saveToDisk() {
   const t0 = Date.now();
   try {
     const snapshot = Object.fromEntries(store);
-    await fs.writeFile(CACHE_FILE, JSON.stringify(snapshot));
+    await atomicWriteFile(CACHE_FILE, JSON.stringify(snapshot));
     const kb = (Buffer.byteLength(JSON.stringify(snapshot)) / 1024).toFixed(0);
     const elapsed = ((Date.now() - t0) / 1000).toFixed(2);
     console.log(`[rsiCache] salvo em disco — ${store.size} entradas, ${kb} KB, ${elapsed}s`);

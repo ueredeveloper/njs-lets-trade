@@ -8,6 +8,7 @@
 const fs = require('node:fs/promises');
 const fsSync = require('node:fs');
 const path = require('path');
+const atomicWriteFile = require('../utils/atomicWriteFile');
 
 const SETTINGS_FILE = path.join(__dirname, '..', 'data', 'cache-settings.json');
 
@@ -41,9 +42,9 @@ const CACHE_IDS = [
  * cada endpoint já tem um caminho de cálculo ao vivo (usado hoje em qualquer combinação fora
  * do preset padrão), então desligar aqui não quebra nenhum filtro, só deixa de pré-aquecer.
  * Mantido enxuto de propósito: o 1min de largura de Bollinger sozinho já consome boa parte do
- * orçamento da fila global de candles (~24 req/min) pra varrer os ~500 pares USDT — ligar
- * caches extras aqui volta a atrasá-lo. Fica disponível pra quem quiser religar manualmente
- * em Configurações.
+ * orçamento da fila global de candles (~120 req/min, ver candleUpdateQueue.js) pra varrer os
+ * ~500 pares USDT — ligar caches extras aqui volta a atrasá-lo. Fica disponível pra quem
+ * quiser religar manualmente em Configurações.
  */
 const DEFAULT_ON = new Set(['rsi', 'bbBandWidth1m', 'bbBandWidth5m', 'bbPosition']);
 
@@ -76,7 +77,7 @@ function isEnabled(id) {
 
 async function save(next) {
   const merged = { ...defaults(), ...get(), ...next };
-  await fs.writeFile(SETTINGS_FILE, JSON.stringify(merged, null, 2));
+  await atomicWriteFile(SETTINGS_FILE, JSON.stringify(merged, null, 2));
   settings = merged;
   return settings;
 }

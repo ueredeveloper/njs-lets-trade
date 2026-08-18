@@ -10,9 +10,10 @@ const BATCH_SIZE = 15;
 /** Intervalos usados no screening de cruzamento de MAs (1m/5m). */
 const WARMUP_INTERVALS = ['1m', '5m'];
 
-/** Símbolos atualizados por ciclo — respeita ~24 req/min da fila. */
+/** Símbolos atualizados por ciclo — respeita ~120 req/min da fila (ver candleUpdateQueue.js).
+ * Deixa ~30/min de folga pra os demais caches e buscas ao vivo não ficarem atrás da fila. */
 const MAX_REFRESH_PER_TICK = {
-  '1m': 20,
+  '1m': 50,
   '5m': 40,
 };
 

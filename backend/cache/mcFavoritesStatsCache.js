@@ -8,6 +8,7 @@
 
 const fs = require('node:fs/promises');
 const path = require('path');
+const atomicWriteFile = require('../utils/atomicWriteFile');
 const supabase = require('../supabase/client');
 const cacheSettings = require('./cacheSettings');
 
@@ -87,7 +88,7 @@ async function loadFromDisk() {
 async function saveToDisk() {
   if (!dirty) return false;
   try {
-    await fs.writeFile(CACHE_FILE, JSON.stringify({ entries: Object.fromEntries(store) }));
+    await atomicWriteFile(CACHE_FILE, JSON.stringify({ entries: Object.fromEntries(store) }));
     dirty = false;
     return true;
   } catch (err) {

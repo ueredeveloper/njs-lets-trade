@@ -2,6 +2,7 @@
 
 const fs = require('node:fs/promises');
 const path = require('path');
+const atomicWriteFile = require('../utils/atomicWriteFile');
 const { computeRollingVwapWithBands, DAY_MS } = require('../utils/vwapSession');
 
 const WEEK_MS = 7 * DAY_MS;
@@ -352,7 +353,7 @@ async function loadFromDisk() {
 async function saveToDisk() {
   if (!dirty) return false;
   try {
-    await fs.writeFile(CACHE_FILE, JSON.stringify({
+    await atomicWriteFile(CACHE_FILE, JSON.stringify({
       presets: CACHED_PRESETS,
       symbols: Object.fromEntries(symbolStore),
       snapshots: Object.fromEntries(snapshots),

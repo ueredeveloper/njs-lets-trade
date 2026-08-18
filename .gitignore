@@ -3,6 +3,7 @@ node_modules/
 
 # Ignore npm debug log
 npm-debug.log
+.dev-server.log
 
 # Ignore yarn debug log
 yarn-debug.log

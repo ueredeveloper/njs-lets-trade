@@ -2,6 +2,7 @@
 
 const fs   = require('node:fs/promises');
 const path = require('path');
+const atomicWriteFile = require('../utils/atomicWriteFile');
 const getCandles = require('../binance/getCandles');
 const { computeMaTimeAbovePct } = require('../utils/maTimeAbovePct');
 const cacheSettings = require('./cacheSettings');
@@ -84,7 +85,7 @@ async function saveToDisk() {
   if (!dirty) return false;
   try {
     const snapshot = Object.fromEntries(store);
-    await fs.writeFile(CACHE_FILE, JSON.stringify(snapshot));
+    await atomicWriteFile(CACHE_FILE, JSON.stringify(snapshot));
     dirty = false;
     return true;
   } catch (err) {

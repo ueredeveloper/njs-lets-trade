@@ -2,6 +2,7 @@
 
 const fs = require('node:fs/promises');
 const path = require('path');
+const atomicWriteFile = require('../utils/atomicWriteFile');
 const { BollingerBands } = require('technicalindicators');
 const getCandlesForScreening = require('../utils/getCandlesForScreening');
 const candleUpdateQueue = require('../utils/candleUpdateQueue');
@@ -384,7 +385,7 @@ async function loadFromDisk() {
 async function saveToDisk() {
   if (!dirty) return false;
   try {
-    await fs.writeFile(CACHE_FILE, JSON.stringify({
+    await atomicWriteFile(CACHE_FILE, JSON.stringify({
       presets: CACHED_PRESETS,
       symbols: Object.fromEntries(symbolStore),
       snapshots: Object.fromEntries(snapshots),
