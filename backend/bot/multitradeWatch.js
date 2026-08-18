@@ -2,7 +2,7 @@
 
 const registry = require('./multitradeRegistry');
 
-const WATCH_MS = 5 * 60_000;
+const WATCH_MS = 3 * 60_000;
 
 function watchTs() {
   const p = Object.fromEntries(
@@ -28,7 +28,7 @@ function configFingerprint(row) {
 }
 
 /**
- * Sincroniza bots com multitrade_favorites + rsi_multi_bot_state a cada 5 min.
+ * Sincroniza bots com multitrade_favorites + rsi_multi_bot_state a cada WATCH_MS (3 min).
  * - Moeda removida/desativada → para o loop (sem comprar nem vender).
  * - Moeda nova → inicia monitoramento.
  * - trade_config alterado no painel → atualiza estratégia em memória.

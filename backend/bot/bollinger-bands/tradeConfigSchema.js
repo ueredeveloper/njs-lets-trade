@@ -22,6 +22,9 @@ const BOLLINGER_BANDS_DEFAULTS = {
   label: 'Bollinger Bands',
 
   entry: {
+    /** false = pausa só NOVAS entradas (evaluateEntrySignal retorna ENTRY_OFF) — posição já
+     *  comprada continua sendo gerenciada/vendida normalmente (bracket TP/SL, cruzamento PERM
+     *  etc.). Botão "Pausar entradas" no painel (BollingerBandsFavoriteModal/CurrencyTable). */
     enabled: true,
     interval: '4h',
     period: 20,

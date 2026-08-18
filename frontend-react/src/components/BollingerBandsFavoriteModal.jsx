@@ -116,6 +116,15 @@ export default function BollingerBandsFavoriteModal({
             <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} className="accent-pink-400" />
             Habilitado
           </label>
+          <label className="flex items-center gap-1 ml-2 text-p5/70" title="Pausa só novas entradas — posição já comprada continua sendo gerenciada/vendida normalmente">
+            <input
+              type="checkbox"
+              checked={form.entry.enabled !== false}
+              onChange={(e) => patch('entry.enabled', e.target.checked)}
+              className="accent-pink-400"
+            />
+            Comprar
+          </label>
         </div>
 
         <div>

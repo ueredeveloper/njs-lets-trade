@@ -38,6 +38,7 @@ import {
 } from '../utils/activeFavoritesSort';
 import { compareVwapFavorites, loadVwapFavSort } from '../utils/vwapFavoritesSort';
 import { compareBollingerFavorites, loadBbFavSort, saveBbFavSort } from '../utils/bollingerFavoritesSort';
+import { bollingerBandsFormFromEntry, bollingerBandsFormToPayload } from '../constants/bollingerBandsConfigSchema';
 import { useMacrossFavoritesStatus } from '../hooks/useMacrossFavoritesStatus';
 import { useTradeFavoritesSummary } from '../hooks/useTradeFavoritesSummary';
 import { useVwapBandWidthMeta } from '../hooks/useVwapBandWidthMeta';
@@ -328,6 +329,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   const [mtModal, setMtModal]       = useState(null);
   const [vwapModal, setVwapModal]   = useState(null);
   const [bbModal, setBbModal]       = useState(null);
+  const [bbPausingId, setBbPausingId] = useState(null);
   const [mtStateModal, setMtStateModal] = useState(null);
   const [mtSellEntry, setMtSellEntry] = useState(null);
   const [sellLotModal, setSellLotModal] = useState(null);
@@ -875,6 +877,36 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   useEffect(() => {
     refreshActiveTrades();
   }, [refreshActiveTrades]);
+
+  /** Pausa/retoma novas entradas de um favorito Bollinger Bands sem abrir o modal de edição —
+   *  reaproveita entry.enabled (backend/bot/bollinger-bands/strategyEngine.js: entry.enabled
+   *  === false → evaluateEntrySignal nunca sinaliza compra), preservando o resto da config.
+   *  Posição já comprada continua sendo gerenciada/vendida normalmente. */
+  async function handleToggleBbEntryPaused(bbEntry) {
+    if (!bbEntry?.id || bbPausingId) return;
+    setBbPausingId(bbEntry.id);
+    try {
+      const form = bollingerBandsFormFromEntry(bbEntry);
+      const nextEnabled = form.entry.enabled === false;
+      const payload = bollingerBandsFormToPayload(
+        { ...form, entry: { ...form.entry, enabled: nextEnabled } },
+        {
+          symbol: bbEntry.symbol,
+          exchange: bbEntry.exchange,
+          capital: bbEntry.capital,
+          strategyId: 'bollinger-bands',
+          strategy_id: 'bollinger-bands',
+          enabled: bbEntry.enabled,
+          label: 'Bollinger Bands',
+        },
+      );
+      await saveMultitradeSymbol({ saves: [{ id: bbEntry.id, payload }] });
+    } catch (err) {
+      console.error(`${FAV_LOG} BB toggle pausa erro`, { symbol: bbEntry.symbol }, err);
+    } finally {
+      setBbPausingId(null);
+    }
+  }
 
   async function handleSelect(item, source = null) {
     onSelectCurrency?.();
@@ -1691,6 +1723,30 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                         setBbModal({ symbol: item.symbol, exchange: isGate && !isBinance ? 'gate' : 'binance', entry: bbEntry });
                       }} />
                       )}
+                      {uiPrefs.visibleFavoriteButtons['bollinger-bands'] !== false && isBb && (() => {
+                        const bbPaused = bbEntry?.entry?.enabled === false;
+                        return (
+                          <button
+                            type="button"
+                            disabled={bbPausingId === bbEntry.id}
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              handleToggleBbEntryPaused(bbEntry);
+                            }}
+                            title={bbPaused ? 'Retomar novas entradas (Bollinger Bands)' : 'Pausar novas entradas (Bollinger Bands) — posição já comprada continua sendo gerenciada'}
+                            className="flex items-center justify-center min-w-[15px] min-h-[15px] w-[15px] h-[15px] rounded text-[8px] font-bold transition-colors touch-manipulation active:scale-95 shrink-0 disabled:opacity-40"
+                            style={{
+                              background: bbPaused ? '#f59e0b' : 'transparent',
+                              color: bbPaused ? '#000' : '#f59e0b',
+                              border: '1px solid #f59e0b',
+                              opacity: bbPaused ? 1 : 0.55,
+                            }}
+                          >
+                            {bbPaused ? '▶' : '⏸'}
+                          </button>
+                        );
+                      })()}
                     </div>
                   </td>
 

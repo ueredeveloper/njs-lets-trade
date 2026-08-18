@@ -293,6 +293,11 @@ function checkPermCrossExit(config, cMap, guardState) {
  */
 function evaluateEntrySignal(config, cMap) {
   const entry = config.entry;
+  // Pausa de entradas (entry.enabled=false, botão "Pausar entradas" no painel): bloqueia só
+  // NOVAS compras — não mexe no bloco BOUGHT do tick (bollinger-bands-bot.js), que segue
+  // gerenciando/vendendo posição já aberta normalmente. Mesmo padrão de config.entry?.enabled
+  // em backend/bot/ma-cross/strategyEngine.js (reason ENTRY_OFF).
+  if (entry.enabled === false) return { allowed: false, reason: 'ENTRY_OFF' };
   const iv = entry.interval;
   const raw = cMap[iv] ?? [];
   if (raw.length < 2) return { allowed: false, reason: 'INSUFFICIENT_DATA' };
