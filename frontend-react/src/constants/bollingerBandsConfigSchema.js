@@ -15,7 +15,10 @@ export const BOLLINGER_BANDS_DEFAULTS = {
     interval: '1m',
     period: 20,
     stdDev: 2,
-    pullback: { enabled: false, belowPct: 2 },
+    /** Ligado por padrão no formulário de criação, com 1% — exige repique abaixo da banda
+     *  inferior antes de comprar. Default do bot (tradeConfigSchema.js) continua desligado
+     *  pra favoritos antigos sem esse campo salvo. */
+    pullback: { enabled: true, belowPct: 1 },
     /** Ordem limite GTC fica no book até N candles aguardando reteste. */
     limitWaitCandles: 5,
     /** false (padrão) = ordem limite GTC no preço da banda, aguardando reteste
@@ -57,11 +60,14 @@ export const BOLLINGER_BANDS_DEFAULTS = {
   },
   stopLoss: {
     enabled: true, maxLossPct: 5, trailing: true, trailStepPct: 5,
-    mode: 'fixed',
+    /** 'band' (abaixo da banda inferior) por padrão no formulário de criação — acompanha a
+     *  banda ao vivo em vez de um piso % fixo. Default do bot (tradeConfigSchema.js) continua
+     *  'fixed' pra favoritos antigos sem esse campo salvo. */
+    mode: 'band',
     /** interval nasce igual ao entry.interval quando não informado — ver normalizeBollingerBandsForm. */
     ema: { period: 50, interval: '1m', belowPct: 2 },
     /** mode 'band': stop = banda inferior BB(entry.period,entry.stdDev) ao vivo × (1 − belowPct/100). */
-    band: { belowPct: 10 },
+    band: { belowPct: 5 },
   },
   /** pollMs espaçado evita competir com o frontend pelas mesmas chamadas de candles na
    *  corretora (mesmo padrão do swing-bot/amap-bot: 5min parado, 1min com posição aberta) —
@@ -96,7 +102,7 @@ export function normalizeBollingerBandsForm(body = {}) {
       reentryCooldownCandles: Number(body.entry?.reentryCooldownCandles ?? d.entry.reentryCooldownCandles),
       // interval nasce igual ao da banda de Bollinger (interval acima) quando não informado.
       emaFilter: {
-        enabled: ef.enabled !== false,
+        enabled: ef.enabled === true,
         period: BOLLINGER_BANDS_EMA_PERIODS.includes(Number(ef.period)) ? Number(ef.period) : d.entry.emaFilter.period,
         interval: BOLLINGER_BANDS_ALL_INTERVALS.includes(ef.interval) ? ef.interval : interval,
         maxDipPct: Number(ef.maxDipPct ?? d.entry.emaFilter.maxDipPct),
@@ -104,11 +110,11 @@ export function normalizeBollingerBandsForm(body = {}) {
         minSlopePct: Number(ef.minSlopePct ?? d.entry.emaFilter.minSlopePct),
       },
       medianTrendFilter: {
-        enabled: mt.enabled !== false,
+        enabled: mt.enabled === true,
         lookback: Number(mt.lookback ?? d.entry.medianTrendFilter.lookback),
       },
       permFilter: {
-        enabled: pf.enabled !== false,
+        enabled: pf.enabled === true,
         // Independente do intervalo da BB (interval acima) — não cai pro entry.interval como
         // o emaFilter, fica fixo em d.entry.permFilter.interval ('1h') quando não informado.
         interval: BOLLINGER_BANDS_ALL_INTERVALS.includes(pf.interval) ? pf.interval : d.entry.permFilter.interval,

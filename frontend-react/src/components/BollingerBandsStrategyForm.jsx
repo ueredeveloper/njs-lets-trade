@@ -7,12 +7,40 @@ import { fetchBinancePercentPriceFilter } from '../services/api';
 const ENTRY_COLOR = '#26a69a';
 const EXIT_COLOR  = '#ef5350';
 
+/**
+ * Spinner nativo do <input type="number"> é minúsculo demais pra tocar no celular — em vez
+ * dele, botões +/- grandes (touch-manipulation, sem highlight de tap) flanqueiam o campo.
+ * inputMode escolhido a partir do step: valores fracionários (0.5, 0.1…) abrem teclado
+ * numérico com vírgula/ponto ("decimal"); passos inteiros (1) abrem só dígitos ("numeric").
+ */
 function NumInput({ value, onChange, min, max, step = 1, className = 'w-16' }) {
+  const clamp = (n) => {
+    let v = n;
+    if (min != null) v = Math.max(min, v);
+    if (max != null) v = Math.min(max, v);
+    return v;
+  };
+  const bump = (delta) => {
+    const base = Number(value) || 0;
+    // arredonda pra evitar sobra de ponto flutuante (ex.: 0.1 + 0.2 = 0.30000000000000004)
+    onChange(clamp(Math.round((base + delta) * 1000) / 1000));
+  };
+  const inputMode = Number.isInteger(step) ? 'numeric' : 'decimal';
   return (
-    <input type="number" value={value ?? ''} onChange={e => onChange(Number(e.target.value))}
-      min={min} max={max} step={step}
-      className={`rounded px-2 py-1 text-xs text-p5 outline-none font-mono ${className}`}
-      style={{ background: '#1e2130', border: '1px solid #2a2d3a' }} />
+    <div className="inline-flex items-stretch rounded overflow-hidden select-none" style={{ border: '1px solid #2a2d3a' }}>
+      <button type="button" onClick={() => bump(-step)} tabIndex={-1}
+        className="px-2.5 text-sm font-bold text-p5/60 active:bg-p3/50 active:text-p5 touch-manipulation"
+        style={{ background: '#1e2130' }}>−</button>
+      <input type="number" inputMode={inputMode} value={value ?? ''}
+        onChange={e => onChange(Number(e.target.value))}
+        onWheel={e => e.currentTarget.blur()}
+        min={min} max={max} step={step}
+        className={`px-1 py-1.5 text-xs text-p5 text-center outline-none font-mono [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${className}`}
+        style={{ background: '#1e2130', border: 'none', borderLeft: '1px solid #2a2d3a', borderRight: '1px solid #2a2d3a' }} />
+      <button type="button" onClick={() => bump(step)} tabIndex={-1}
+        className="px-2.5 text-sm font-bold text-p5/60 active:bg-p3/50 active:text-p5 touch-manipulation"
+        style={{ background: '#1e2130' }}>+</button>
+    </div>
   );
 }
 
@@ -379,7 +407,7 @@ export default function BollingerBandsStrategyForm({ form, patch, symbol, exchan
           <>
             <div className="flex flex-wrap gap-2 items-center text-xs text-p5">
               <span className="text-p5/50">Stop</span>
-              <NumInput value={form.stopLoss.band?.belowPct ?? 10} onChange={v => patchStopLossBand('belowPct', v)} min={0} max={50} step={0.5} />
+              <NumInput value={form.stopLoss.band?.belowPct ?? 5} onChange={v => patchStopLossBand('belowPct', v)} min={0} max={50} step={0.5} />
               <span className="text-p5/40">% abaixo da banda inferior BB({form.entry.period},{form.entry.stdDev})</span>
             </div>
             <div className="flex flex-wrap gap-2 items-center text-xs text-p5">
@@ -388,7 +416,7 @@ export default function BollingerBandsStrategyForm({ form, patch, symbol, exchan
               <span className="text-p5/40">% — usado se a banda já estiver acima do preço de compra</span>
             </div>
             <p className="text-[10px] text-p5/50 leading-relaxed">
-              Vende se o preço cair até {form.stopLoss.band?.belowPct ?? 10}% abaixo da banda
+              Vende se o preço cair até {form.stopLoss.band?.belowPct ?? 5}% abaixo da banda
               inferior BB({form.entry.period},{form.entry.stdDev}) {form.entry.interval} ao vivo —
               o piso acompanha a banda a cada candle novo. Se a banda estiver no/acima do preço
               de entrada, a compra é bloqueada (lugar errado). Se a posição já estiver aberta

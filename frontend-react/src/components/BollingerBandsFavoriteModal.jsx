@@ -48,7 +48,10 @@ export default function BollingerBandsFavoriteModal({
     setSaving(true);
     setError(null);
     try {
-      const payload = bollingerBandsFormToPayload(form, {
+      // entry.enabled forçado true: campo do antigo botão "pausar só novas entradas",
+      // removido a pedido do usuário (um único controle "Habilitado" basta). Self-heal
+      // pra qualquer favorito antigo que tenha ficado com entry.enabled=false daquela feature.
+      const payload = bollingerBandsFormToPayload({ ...form, entry: { ...form.entry, enabled: true } }, {
         symbol: sym,
         exchange,
         capital: Number(capital) || 40,
@@ -112,18 +115,9 @@ export default function BollingerBandsFavoriteModal({
             style={{ background: '#1e2130', border: '1px solid #2a2d3a', color: '#e2e8f0' }}
           />
           <span className="text-p5/40">USDT</span>
-          <label className="flex items-center gap-1 ml-2 text-p5/70">
+          <label className="flex items-center gap-1 ml-2 text-p5/70" title="Desabilitado = bot para de acompanhar o símbolo (posição já comprada continua sendo gerenciada/vendida normalmente)">
             <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} className="accent-pink-400" />
             Habilitado
-          </label>
-          <label className="flex items-center gap-1 ml-2 text-p5/70" title="Pausa só novas entradas — posição já comprada continua sendo gerenciada/vendida normalmente">
-            <input
-              type="checkbox"
-              checked={form.entry.enabled !== false}
-              onChange={(e) => patch('entry.enabled', e.target.checked)}
-              className="accent-pink-400"
-            />
-            Comprar
           </label>
         </div>
 

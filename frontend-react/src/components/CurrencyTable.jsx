@@ -605,7 +605,10 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
         widthMeta: vwapFavWidthMeta,
       }));
     } else if (favoriteView === 'bollinger-bands') {
-      const bbEntries = multitradeFavorites.filter(e => e.enabled !== false && e.strategyId === 'bollinger-bands');
+      // Inclui também favoritos desabilitados (e.enabled === false): continuam sendo do
+      // favorito BB, só temporariamente pausados — ficam listados com cor diferenciada
+      // (ver isBbDisabledRow mais abaixo) em vez de somem da lista.
+      const bbEntries = multitradeFavorites.filter(e => e.strategyId === 'bollinger-bands');
       const bbSymbolsList = bbEntries.map(e => e.symbol);
       const bbPhaseBySymbol = new Map(bbEntries.map(e => [e.symbol, e.phase ?? 'WATCHING']));
       list = resolveFavorites(new Set(bbSymbolsList), currencies.list, gateAll);
@@ -878,31 +881,34 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     refreshActiveTrades();
   }, [refreshActiveTrades]);
 
-  /** Pausa/retoma novas entradas de um favorito Bollinger Bands sem abrir o modal de edição —
-   *  reaproveita entry.enabled (backend/bot/bollinger-bands/strategyEngine.js: entry.enabled
-   *  === false → evaluateEntrySignal nunca sinaliza compra), preservando o resto da config.
-   *  Posição já comprada continua sendo gerenciada/vendida normalmente. */
-  async function handleToggleBbEntryPaused(bbEntry) {
+  /** Único botão liga/desliga um favorito Bollinger Bands (bbEntry.enabled) sem abrir o modal —
+   *  desabilitado = bot para de acompanhar o símbolo (remove de rsi_multi_bot_state se ainda
+   *  estiver em WATCHING; posição já comprada continua sendo gerenciada/vendida normalmente).
+   *  Força entry.enabled=true junto (self-heal): esse campo aninhado era usado pelo antigo botão
+   *  de "pausar só novas entradas", removido a pedido do usuário por ser confuso ter dois
+   *  controles fazendo praticamente a mesma coisa — se algum favorito antigo ficou com
+   *  entry.enabled=false daquela feature, volta a true assim que o usuário mexer no toggle. */
+  async function handleToggleBbFavoriteEnabled(bbEntry) {
     if (!bbEntry?.id || bbPausingId) return;
     setBbPausingId(bbEntry.id);
     try {
       const form = bollingerBandsFormFromEntry(bbEntry);
-      const nextEnabled = form.entry.enabled === false;
+      const nextEnabled = bbEntry.enabled === false;
       const payload = bollingerBandsFormToPayload(
-        { ...form, entry: { ...form.entry, enabled: nextEnabled } },
+        { ...form, entry: { ...form.entry, enabled: true } },
         {
           symbol: bbEntry.symbol,
           exchange: bbEntry.exchange,
           capital: bbEntry.capital,
           strategyId: 'bollinger-bands',
           strategy_id: 'bollinger-bands',
-          enabled: bbEntry.enabled,
+          enabled: nextEnabled,
           label: 'Bollinger Bands',
         },
       );
       await saveMultitradeSymbol({ saves: [{ id: bbEntry.id, payload }] });
     } catch (err) {
-      console.error(`${FAV_LOG} BB toggle pausa erro`, { symbol: bbEntry.symbol }, err);
+      console.error(`${FAV_LOG} BB toggle habilitado erro`, { symbol: bbEntry.symbol }, err);
     } finally {
       setBbPausingId(null);
     }
@@ -1096,7 +1102,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   );
   const vwapCount    = [...vwapSymbols].filter((sym) => isVisibleSymbol(sym)).length;
   const bbSymbols    = new Set(
-    multitradeFavorites.filter(e => e.enabled !== false && e.strategyId === 'bollinger-bands').map(e => e.symbol),
+    multitradeFavorites.filter(e => e.strategyId === 'bollinger-bands').map(e => e.symbol),
   );
   const bbCount      = [...bbSymbols].filter((sym) => isVisibleSymbol(sym)).length;
 
@@ -1653,6 +1659,11 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
               const isVwap     = vwapEntry?.enabled !== false && !!vwapEntry;
               const bbEntry    = getBollingerBandsEntry(multitradeFavorites, item.symbol);
               const isBb       = bbEntry?.enabled !== false && !!bbEntry;
+              // Favorito BB desabilitado (bbEntry.enabled === false): ainda pertence ao
+              // favorito BB, só temporariamente pausado — na aba "Favoritos Bollinger Bands"
+              // continua listado, com a linha em cor diferenciada (ver isBbDisabledRow abaixo)
+              // em vez de sumir da lista.
+              const bbDisabled = !!bbEntry && bbEntry.enabled === false;
               const bbInterval = bbEntry?.entry?.interval ?? bbEntry?.tradeConfig?.entry?.interval;
               const bbButtonText = isBb && bbInterval ? `B${bbInterval.replace(/m$/, '')}` : 'BB';
               const activeInfo = activeTrades.get(item.symbol);
@@ -1672,11 +1683,12 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                 : (isActiveHolding ? activeInfo.buyQty : null);
               const isLotRow = isActiveFavView && item.__lotTime != null;
 
-              const isBotFavRow = (isMT || isVwap || isBb) && !isTradesFavView && !isActiveFavView;
+              const isBotFavRow = (isMT || isVwap || isBb || (isBollingerBandsFavView && bbDisabled)) && !isTradesFavView && !isActiveFavView;
               const botEntries = isBotFavRow ? (isMT ? mtEntries : (vwapEntry ? [vwapEntry] : (bbEntry ? [bbEntry] : []))) : null;
               const botPhase = botEntries ? symbolPhaseSummary(botEntries) : null;
               const botPh = botPhase ? multitradePhaseBadge(botPhase, lang) : null;
               const boughtEntry = botEntries ? botEntries.find(e => e.phase === 'BOUGHT' && e.buyTime) : null;
+              const isBbDisabledRow = isBollingerBandsFavView && bbDisabled;
 
               return (
                 <tr
@@ -1690,6 +1702,8 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                       ? 'bg-amber-500/10 hover:bg-amber-500/20 text-p5'
                       : isTradesFavView
                       ? 'bg-emerald-500/10 hover:bg-emerald-500/20 text-p5'
+                      : isBbDisabledRow
+                      ? 'bg-p2/30 hover:bg-p2/50 text-p5/50 opacity-60'
                       : isMT
                       ? 'bg-cyan-500/10 hover:bg-cyan-500/20 text-p5'
                       : 'hover:bg-p2/40 text-p5'
@@ -1723,30 +1737,27 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                         setBbModal({ symbol: item.symbol, exchange: isGate && !isBinance ? 'gate' : 'binance', entry: bbEntry });
                       }} />
                       )}
-                      {uiPrefs.visibleFavoriteButtons['bollinger-bands'] !== false && isBb && (() => {
-                        const bbPaused = bbEntry?.entry?.enabled === false;
-                        return (
-                          <button
-                            type="button"
-                            disabled={bbPausingId === bbEntry.id}
-                            onClick={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              handleToggleBbEntryPaused(bbEntry);
-                            }}
-                            title={bbPaused ? 'Retomar novas entradas (Bollinger Bands)' : 'Pausar novas entradas (Bollinger Bands) — posição já comprada continua sendo gerenciada'}
-                            className="flex items-center justify-center min-w-[15px] min-h-[15px] w-[15px] h-[15px] rounded text-[8px] font-bold transition-colors touch-manipulation active:scale-95 shrink-0 disabled:opacity-40"
-                            style={{
-                              background: bbPaused ? '#f59e0b' : 'transparent',
-                              color: bbPaused ? '#000' : '#f59e0b',
-                              border: '1px solid #f59e0b',
-                              opacity: bbPaused ? 1 : 0.55,
-                            }}
-                          >
-                            {bbPaused ? '▶' : '⏸'}
-                          </button>
-                        );
-                      })()}
+                      {uiPrefs.visibleFavoriteButtons['bollinger-bands'] !== false && !!bbEntry && (
+                        <button
+                          type="button"
+                          disabled={bbPausingId === bbEntry.id}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            handleToggleBbFavoriteEnabled(bbEntry);
+                          }}
+                          title={bbDisabled ? 'Habilitar favorito Bollinger Bands (bot volta a acompanhar e operar)' : 'Desabilitar favorito Bollinger Bands (bot para de acompanhar — posição já comprada continua sendo gerenciada)'}
+                          className="flex items-center justify-center min-w-[15px] min-h-[15px] w-[15px] h-[15px] rounded text-[8px] font-bold transition-colors touch-manipulation active:scale-95 shrink-0 disabled:opacity-40"
+                          style={{
+                            background: bbDisabled ? 'transparent' : '#f59e0b',
+                            color: bbDisabled ? '#94a3b8' : '#000',
+                            border: `1px solid ${bbDisabled ? '#94a3b8' : '#f59e0b'}`,
+                            opacity: bbDisabled ? 0.7 : 1,
+                          }}
+                        >
+                          {bbDisabled ? '▶' : '⏸'}
+                        </button>
+                      )}
                     </div>
                   </td>
 
