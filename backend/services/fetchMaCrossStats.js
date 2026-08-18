@@ -13,6 +13,7 @@ router.get('/ma-cross-stats', async (req, res) => {
     period2,
     tolerancePct,
     source,
+    candleCount,
   } = req.query;
 
   if (!symbol) {
@@ -27,8 +28,9 @@ router.get('/ma-cross-stats', async (req, res) => {
     period2: period2 ? parseInt(period2, 10) : 21,
     tolerancePct: tolerancePct ? parseFloat(tolerancePct) : 0,
     source: source ?? null,
+    candleCount: candleCount ? parseInt(candleCount, 10) : undefined,
   };
-  const cacheKey = `macross|${sym}|${options.entryInterval}|${options.exitInterval}|${options.period1}|${options.period2}|${options.tolerancePct}|${options.source ?? 'binance'}`;
+  const cacheKey = `macross|${sym}|${options.entryInterval}|${options.exitInterval}|${options.period1}|${options.period2}|${options.tolerancePct}|${options.source ?? 'binance'}|${options.candleCount ?? 'default'}`;
   const ttlMs = Math.min(intervalMs(options.entryInterval), intervalMs(options.exitInterval));
 
   try {

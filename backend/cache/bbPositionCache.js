@@ -13,7 +13,8 @@ const CANDLES_LIMIT = 200;
 const BATCH_SIZE = 20;
 const CACHE_FILE = path.join(__dirname, '..', 'data', 'bb-position-cache.json');
 
-/** Presets: posição na Bollinger Bands 4h — igual ao default do painel Analisar Indicadores. */
+/** Presets: posição na Bollinger Bands 4h (default do painel Analisar Indicadores) e 15min
+ * (fundo/topo — formulários prontos do painel). */
 const CACHED_PRESETS = [
   {
     key: '4h|20|2|bot|20',
@@ -26,6 +27,22 @@ const CACHED_PRESETS = [
   {
     key: '4h|20|2|top|20',
     interval: '4h',
+    period: 20,
+    stdDev: 2,
+    position: 'near_top',
+    proximityPct: 20,
+  },
+  {
+    key: '15m|20|2|bot|20',
+    interval: '15m',
+    period: 20,
+    stdDev: 2,
+    position: 'near_bottom',
+    proximityPct: 20,
+  },
+  {
+    key: '15m|20|2|top|20',
+    interval: '15m',
     period: 20,
     stdDev: 2,
     position: 'near_top',
@@ -189,7 +206,20 @@ function snapshotAgeMs(presetKey) {
   return Date.now() - snap.scannedAt;
 }
 
-async function refreshAll(symbols, { force = false } = {}) {
+/** Existe ao menos 1 entrada em symbolStore pra ESTE preset específico (não só pra algum
+ * outro preset do módulo) — usado pra não confundir "cache do módulo já aquecido" com
+ * "este preset específico já foi varrido alguma vez". */
+function presetHasEntries(presetKey) {
+  const prefix = `${presetKey}|`;
+  for (const key of symbolStore.keys()) {
+    if (key.startsWith(prefix)) return true;
+  }
+  return false;
+}
+
+/** presetKey: quando informado, restringe force/varredura a ESSE preset só — sem isso, um
+ *  "recalcule agora" pedido pra 1 combinação forçaria todos os presets do módulo inteiro. */
+async function refreshAll(symbols, { force = false, presetKey = null } = {}) {
   const now = Date.now();
   let computed = 0;
   let failed = 0;
@@ -200,6 +230,7 @@ async function refreshAll(symbols, { force = false } = {}) {
   const candleSession = new Map();
 
   for (const preset of CACHED_PRESETS) {
+    if (presetKey && preset.key !== presetKey) continue;
     const stale = force
       ? symbols
       : symbols.filter(s => needsRefresh(preset.key, s));
@@ -225,11 +256,15 @@ async function refreshAll(symbols, { force = false } = {}) {
         if (r.status === 'fulfilled') computed++;
         else failed++;
       }
+
+      // Reconstrói o snapshot deste preset a cada lote — sem isso, um preset novo (sem
+      // nenhuma entrada ainda em symbolStore) fica com snapshot vazio até TODOS os presets
+      // da lista terminarem sua varredura completa, o que a fila global de candles
+      // (~24 req/min) pode levar dezenas de minutos pra fazer.
+      buildSnapshotForPreset(preset, Date.now());
+      if (computed > 0) await saveToDisk();
     }
   }
-
-  rebuildAllSnapshots(now);
-  if (computed > 0) await saveToDisk();
 
   const counts = {};
   for (const preset of CACHED_PRESETS) {
@@ -250,9 +285,9 @@ async function refreshAll(symbols, { force = false } = {}) {
   };
 }
 
-async function ensureFresh(symbols, { force = false } = {}) {
+async function ensureFresh(symbols, { force = false, presetKey = null } = {}) {
   if (refreshInFlight) return refreshInFlight;
-  refreshInFlight = refreshAll(symbols, { force }).finally(() => {
+  refreshInFlight = refreshAll(symbols, { force, presetKey }).finally(() => {
     refreshInFlight = null;
   });
   return refreshInFlight;
@@ -268,7 +303,7 @@ async function getCachedResult(symbols, presetKey, { force = false } = {}) {
   const hasSnapshot = snap && Array.isArray(snap.list);
   const staleMs = presetTtlMs(preset) * 2;
 
-  if (!hasSnapshot && symbolStore.size > 0) {
+  if (!hasSnapshot && presetHasEntries(key)) {
     rebuildAllSnapshots();
     const rebuilt = snapshots.get(key);
     if (rebuilt) {
@@ -281,7 +316,7 @@ async function getCachedResult(symbols, presetKey, { force = false } = {}) {
   }
 
   if (force || !hasSnapshot || age >= staleMs) {
-    const stats = await ensureFresh(symbols, { force: false });
+    const stats = await ensureFresh(symbols, { force, presetKey: key });
     const fresh = buildSnapshotForPreset(preset, Date.now());
     return { ...fresh, cache: { ...stats, hit: false, ageMs: 0, preset: key } };
   }

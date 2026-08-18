@@ -180,6 +180,17 @@ function snapshotAgeMs(presetKey) {
   return Date.now() - snap.scannedAt;
 }
 
+/** Existe ao menos 1 entrada em symbolStore pra ESTE preset específico (não só pra algum
+ * outro preset do módulo) — evita que um preset novo, sem nenhuma entrada própria ainda,
+ * vire snapshot vazio permanente por causa de outro preset já aquecido no mesmo store. */
+function presetHasEntries(presetKey) {
+  const prefix = `${presetKey}|`;
+  for (const key of symbolStore.keys()) {
+    if (key.startsWith(prefix)) return true;
+  }
+  return false;
+}
+
 /** Aplica o `side` escolhido sobre os stats crus do snapshot: monta list/details finais
  *  (avgPct = média do side), descarta símbolos sem trades suficientes desse side, ordena. */
 function applySide(snap, side, order) {
@@ -212,7 +223,9 @@ function applySide(snap, side, order) {
   };
 }
 
-async function refreshAll(symbols, { force = false } = {}) {
+/** presetKey: quando informado, restringe force/varredura a ESSE preset só — sem isso, um
+ *  "recalcule agora" pedido pra 1 combinação forçaria todos os presets do módulo inteiro. */
+async function refreshAll(symbols, { force = false, presetKey = null } = {}) {
   const now = Date.now();
   let computed = 0;
   let failed = 0;
@@ -224,6 +237,7 @@ async function refreshAll(symbols, { force = false } = {}) {
 
   for (const preset of CACHED_PRESETS) {
     if (!cacheSettings.isEnabled(preset.settingId)) continue;
+    if (presetKey && preset.key !== presetKey) continue;
 
     const stale = force
       ? symbols
@@ -274,9 +288,9 @@ async function refreshAll(symbols, { force = false } = {}) {
   };
 }
 
-async function ensureFresh(symbols, { force = false } = {}) {
+async function ensureFresh(symbols, { force = false, presetKey = null } = {}) {
   if (refreshInFlight) return refreshInFlight;
-  refreshInFlight = refreshAll(symbols, { force }).finally(() => {
+  refreshInFlight = refreshAll(symbols, { force, presetKey }).finally(() => {
     refreshInFlight = null;
   });
   return refreshInFlight;
@@ -292,7 +306,7 @@ async function getCachedResult(symbols, presetKey, { force = false, side = 'pos'
   const hasSnapshot = snap && snap.details;
   const staleMs = presetTtlMs(preset) * 2;
 
-  if (!hasSnapshot && symbolStore.size > 0) {
+  if (!hasSnapshot && presetHasEntries(key)) {
     rebuildAllSnapshots();
     const rebuilt = snapshots.get(key);
     if (rebuilt) {
@@ -305,7 +319,7 @@ async function getCachedResult(symbols, presetKey, { force = false, side = 'pos'
   }
 
   if (force || !hasSnapshot || age >= staleMs) {
-    const stats = await ensureFresh(symbols, { force: false });
+    const stats = await ensureFresh(symbols, { force, presetKey: key });
     const fresh = buildSnapshotForPreset(preset, Date.now());
     return { ...applySide(fresh, side, order), name: presetFilterName(preset, side), cache: { ...stats, hit: false, ageMs: 0, preset: key } };
   }

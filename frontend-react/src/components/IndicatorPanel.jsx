@@ -85,6 +85,35 @@ const DEFAULT_INDICATORS = [
   { type: 'bollingerBandWidth', intervals: ['15m'], period: '20', stdDev: '2', lookback: '300' },
 ];
 
+/** Formulários prontos — cada um substitui a lista de indicadores por uma única busca pré-configurada. */
+const QUICK_PRESETS = [
+  {
+    labelKey: 'ip.preset_bb1m',
+    tipKey: 'ip.preset_bb1m_tip',
+    build: () => [{ type: 'bollingerBandWidth', intervals: ['1m'], period: '20', stdDev: '2', lookback: '300' }],
+  },
+  {
+    labelKey: 'ip.preset_bb5m',
+    tipKey: 'ip.preset_bb5m_tip',
+    build: () => [{ type: 'bollingerBandWidth', intervals: ['5m'], period: '20', stdDev: '2', lookback: '300' }],
+  },
+  {
+    labelKey: 'ip.preset_rsi7099',
+    tipKey: 'ip.preset_rsi7099_tip',
+    build: () => [{ type: 'relativeStrengthIndex', intervals: ['15m'], compare1: 'above', line1: '70', compare2: 'bellow', line2: '99' }],
+  },
+  {
+    labelKey: 'ip.preset_bbpos15m_bottom',
+    tipKey: 'ip.preset_bbpos15m_bottom_tip',
+    build: () => [{ type: 'bollingerPosition', intervals: ['15m'], period: '20', stdDev: '2', position: 'near_bottom', proximityPct: '20' }],
+  },
+  {
+    labelKey: 'ip.preset_bbpos15m_top',
+    tipKey: 'ip.preset_bbpos15m_top_tip',
+    build: () => [{ type: 'bollingerPosition', intervals: ['15m'], period: '20', stdDev: '2', position: 'near_top', proximityPct: '20' }],
+  },
+];
+
 /** Gera um resumo legível da configuração do indicador */
 function buildSummary(value, t) {
   const { type, intervals } = value;
@@ -1163,6 +1192,10 @@ export default function IndicatorPanel({ open, onToggle }) {
     setIndicators((prev) => [...prev, { type: '', intervals: [...savedIntervals] }]);
   }
 
+  function applyPreset(preset) {
+    setIndicators(preset.build());
+  }
+
   function removeLastRow() {
     setIndicators((prev) => (prev.length > 1 ? prev.slice(0, -1) : prev));
   }
@@ -1341,7 +1374,7 @@ export default function IndicatorPanel({ open, onToggle }) {
         const stdDev = ind.stdDev ?? '2';
         const lookback = ind.lookback ?? '300';
         for (const interval of ind.intervals) {
-          const filter = await fetchBollingerBandWidthFilter({ interval, period, stdDev, lookback });
+          const filter = await fetchBollingerBandWidthFilter({ interval, period, stdDev, lookback, force: true });
           const expectedName = buildBollingerBandWidthFilterName(interval, period, stdDev, lookback);
           addFilter({
             name: filter.name ?? expectedName,
@@ -1495,6 +1528,20 @@ export default function IndicatorPanel({ open, onToggle }) {
 
   return (
     <div className="flex flex-col gap-2 px-4 py-3 h-full">
+      <div className="flex flex-row flex-wrap gap-1.5 items-center shrink-0">
+        <span className="text-[10px] text-p5/60">{t('ip.presets_label')}</span>
+        {QUICK_PRESETS.map((preset) => (
+          <Tooltip key={preset.labelKey} text={t(preset.tipKey)}>
+            <button
+              onClick={() => applyPreset(preset)}
+              className="text-[10px] px-2 py-1 rounded bg-p2 border border-p3/40 text-p5 hover:bg-p4/30 hover:border-p4 transition-colors"
+            >
+              {t(preset.labelKey)}
+            </button>
+          </Tooltip>
+        ))}
+      </div>
+
       <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-2">
         {indicators.map((ind, i) => (
           <IndicatorRow key={i} value={ind} onChange={(v) => updateIndicator(i, v)} />

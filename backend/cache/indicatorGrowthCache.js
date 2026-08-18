@@ -101,7 +101,9 @@ function needsRefresh(presetKey, symbol) {
   return Date.now() - entry.computedAt >= presetTtlMs(preset);
 }
 
-async function refreshAll(symbols, { force = false } = {}) {
+/** presetKey: quando informado, restringe force/varredura a ESSE preset só — sem isso, um
+ *  "recalcule agora" pedido pra 1 combinação forçaria todos os presets do módulo inteiro. */
+async function refreshAll(symbols, { force = false, presetKey = null } = {}) {
   const now = Date.now();
   let computed = 0;
   let failed = 0;
@@ -111,6 +113,7 @@ async function refreshAll(symbols, { force = false } = {}) {
   const candleSession = new Map();
 
   for (const preset of CACHED_PRESETS) {
+    if (presetKey && preset.key !== presetKey) continue;
     const stale = force ? symbols : symbols.filter(s => needsRefresh(preset.key, s));
 
     for (let i = 0; i < stale.length; i += BATCH_SIZE) {
@@ -157,9 +160,9 @@ async function refreshAll(symbols, { force = false } = {}) {
   };
 }
 
-async function ensureFresh(symbols, { force = false } = {}) {
+async function ensureFresh(symbols, { force = false, presetKey = null } = {}) {
   if (refreshInFlight) return refreshInFlight;
-  refreshInFlight = refreshAll(symbols, { force }).finally(() => { refreshInFlight = null; });
+  refreshInFlight = refreshAll(symbols, { force, presetKey }).finally(() => { refreshInFlight = null; });
   return refreshInFlight;
 }
 
@@ -214,7 +217,7 @@ async function getCachedResult(symbols, presetKey, thresholdPct, { force = false
   const staleMs = presetTtlMs(preset) * 2;
 
   if (force || age >= staleMs) {
-    const refreshPromise = ensureFresh(symbols, { force });
+    const refreshPromise = ensureFresh(symbols, { force, presetKey: preset.key });
     const timedOut = await Promise.race([
       refreshPromise.then(() => false),
       new Promise(resolve => setTimeout(() => resolve(true), BLOCKING_WAIT_MS)),

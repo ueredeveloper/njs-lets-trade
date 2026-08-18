@@ -77,6 +77,32 @@ function saveUseMcInterval(tab, value) {
   try { localStorage.setItem(MC_INTERVAL_STORAGE_KEYS[tab], value ? '1' : '0'); } catch {}
 }
 
+const CANDLE_COUNT_STORAGE_KEYS = {
+  rsi: 'lets_trade_stats_candle_count_rsi',
+  ma_cross: 'lets_trade_stats_candle_count_macross',
+};
+const STATS_CANDLE_COUNT_DEFAULT = 1000;
+
+/** Preferência do campo "Candles" das abas RSI/MA Cross — mesmo padrão do campo já existente
+ *  na aba Bollinger Bands (BB_CANDLE_COUNT_STORAGE_KEY/loadCandleCount), só que compartilhado
+ *  entre as 2 abas via uma chave por aba em vez de um único par de funções. A aba VWAP Bands
+ *  guarda o candleCount dentro do próprio blob de prefs (loadVwapStatsPrefs/patchPrefs), não
+ *  aqui — segue o padrão que já existia nela. */
+function loadCandleCountFor(tab) {
+  try {
+    const v = localStorage.getItem(CANDLE_COUNT_STORAGE_KEYS[tab]);
+    if (v !== null) {
+      const n = Number(v);
+      if (Number.isFinite(n)) return n;
+    }
+  } catch {}
+  return STATS_CANDLE_COUNT_DEFAULT;
+}
+
+function saveCandleCountFor(tab, value) {
+  try { localStorage.setItem(CANDLE_COUNT_STORAGE_KEYS[tab], String(value)); } catch {}
+}
+
 const BB_MEDIAN_TREND_STORAGE_KEY = 'lets_trade_stats_bb_median_trend_filter';
 
 /** Preferência do toggle "Filtro Mediana" da aba Bollinger Bands — lembrada entre buscas. */
@@ -201,6 +227,24 @@ function loadCandleCount() {
 
 function saveCandleCount(value) {
   try { localStorage.setItem(BB_CANDLE_COUNT_STORAGE_KEY, String(value)); } catch {}
+}
+
+const STATS_AUTO_CALC_STORAGE_KEY = 'lets_trade_stats_auto_calc';
+
+/** Preferência do switch "Cálculo Automático" (barra de abas) — quando ligado, clicar numa
+ *  moeda (fora do painel, ex.: tabela principal) sincroniza o símbolo E já dispara o cálculo
+ *  na aba ativa, usando os critérios atuais do formulário dessa aba (sem mexer no gráfico). */
+function loadAutoCalcPref() {
+  try {
+    const v = localStorage.getItem(STATS_AUTO_CALC_STORAGE_KEY);
+    if (v === '1') return true;
+    if (v === '0') return false;
+  } catch {}
+  return false;
+}
+
+function saveAutoCalcPref(value) {
+  try { localStorage.setItem(STATS_AUTO_CALC_STORAGE_KEY, value ? '1' : '0'); } catch {}
 }
 
 const VWAP_STATS_PREFS_KEY = 'lets_trade_stats_vwap_bands_prefs';
@@ -356,7 +400,26 @@ function PermBotSwitch({ checked, onChange }) {
   );
 }
 
-function RsiStats() {
+/** Switch "Cálculo Automático" — na barra de abas do painel de Estatísticas, não por aba.
+ *  Ligado: ao clicar numa moeda (o que sincroniza selectedChart.symbol), a aba ativa já
+ *  recalcula sozinha com os critérios atuais do formulário — sem precisar clicar em "Buscar". */
+function AutoCalcSwitch({ checked, onChange }) {
+  return (
+    <div className="flex items-center gap-1.5 shrink-0 pl-2">
+      <span className="hidden sm:inline text-[9px] text-p5/50 uppercase tracking-wider">Cálculo Automático</span>
+      <button
+        type="button"
+        onClick={() => onChange(!checked)}
+        title="Ao clicar numa moeda, calcula automaticamente na aba ativa com os critérios atuais do formulário"
+        className={`relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${checked ? 'bg-p4' : 'bg-p3/40'}`}
+      >
+        <span className={`inline-block h-3 w-3 rounded-full bg-white shadow transition-transform ${checked ? 'translate-x-3' : 'translate-x-0'}`} />
+      </button>
+    </div>
+  );
+}
+
+function RsiStats({ autoCalc }) {
   const { selectedChart, setSelectedChart, setChartZoom, setChartViewSource, setChartTradeMarkers, multitradeFavorites, uiPrefs } = useCurrency();
   const { t, formatPrice } = useI18n();
   const [symbol, setSymbol]         = useState(selectedChart?.symbol || 'BTCUSDT');
@@ -364,6 +427,7 @@ function RsiStats() {
   const [oversold, setOversold]     = useState(uiPrefs.statsDefaults.rsi.oversold);
   const [overbought, setOverbought] = useState(uiPrefs.statsDefaults.rsi.overbought);
   const [useMcInterval, setUseMcInterval] = useState(() => loadUseMcInterval('rsi', true));
+  const [candleCount, setCandleCount] = useState(() => loadCandleCountFor('rsi'));
   const [loading, setLoading]       = useState(false);
   const [result, setResult]         = useState(null);
   const rsiSeriesRef = useRef(null); // série RSI com warmup correto das estatísticas
@@ -373,7 +437,7 @@ function RsiStats() {
   const inp = 'bg-p2 border border-p3/40 text-p5 text-[10px] sm:text-xs rounded px-1 sm:px-2 py-1 focus:outline-none focus:border-p4 w-full';
   const inpNum = `${inp} [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none`;
 
-  async function handleSearch(overrideSymbol, updateChart = false, overrideInterval, overrideSource, overrideUseMc) {
+  async function handleSearch(overrideSymbol, updateChart = false, overrideInterval, overrideSource, overrideUseMc, overrideCandleCount) {
     const sym    = (overrideSymbol ?? symbol).trim().toUpperCase();
     const useMc  = overrideUseMc ?? useMcInterval;
     const mcIv   = useMc ? mcEntryFor(multitradeFavorites, sym)?.tradeConfig?.entry?.ma1?.interval : null;
@@ -382,12 +446,13 @@ function RsiStats() {
     // Usa source do gráfico apenas quando o símbolo buscado é o mesmo do gráfico
     const chartSource = selectedChart?.symbol === sym ? (selectedChart?.source ?? null) : null;
     const src    = overrideSource !== undefined ? overrideSource : chartSource;
+    const candles = overrideCandleCount ?? candleCount;
     if (!sym) return;
     setLoading(true);
     setError(null);
     setResult(null);
     try {
-      const data = await fetchRsiOversoldRecovery(sym, iv, oversold, overbought, src);
+      const data = await fetchRsiOversoldRecovery(sym, iv, oversold, overbought, src, candles);
       setResult(data);
       // Guarda a série RSI calculada com warmup completo (1500 candles)
       rsiSeriesRef.current = data.rsiSeries ?? null;
@@ -402,12 +467,14 @@ function RsiStats() {
     }
   }
 
-  // Sincroniza só o campo símbolo com o gráfico — não busca automaticamente.
-  // Cálculo só roda quando o usuário clica em "Buscar".
+  // Sincroniza o campo símbolo com o gráfico. Com "Cálculo Automático" ligado (switch da
+  // barra de abas), também dispara o cálculo nessa hora — senão só sincroniza o campo e o
+  // cálculo espera o clique em "Buscar", como sempre foi.
   useEffect(() => {
     if (!selectedChart?.symbol) return;
     setSymbol(selectedChart.symbol);
-  }, [selectedChart?.symbol]);
+    if (autoCalc) handleSearch(selectedChart.symbol);
+  }, [selectedChart?.symbol, autoCalc]);
 
   function handleToggleMc(next) {
     setUseMcInterval(next);
@@ -459,6 +526,18 @@ function RsiStats() {
           <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">Sobrcp.</label>
           <input className={inpNum} type="number" min={1} max={99}
             value={overbought} onChange={(e) => setOverbought(Number(e.target.value))} />
+        </div>
+
+        {/* Candles */}
+        <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-0" title={t('stats.tip.bb_candle_count')}>
+          <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.card.candles')}</label>
+          <input className={inpNum} type="number" min={200} max={3000} step={100}
+            value={candleCount}
+            onChange={(e) => {
+              const v = Number(e.target.value);
+              setCandleCount(v);
+              saveCandleCountFor('rsi', v);
+            }} />
         </div>
 
         <McIntervalSwitch checked={useMcInterval} onChange={handleToggleMc} />
@@ -664,7 +743,7 @@ function RsiStats() {
   );
 }
 
-function MaCrossStats() {
+function MaCrossStats({ autoCalc }) {
   const { selectedChart, setSelectedChart, setChartZoom, setChartViewSource, setChartTradeMarkers, multitradeFavorites,
     uiPrefs, setActiveIndicatorsPreference } = useCurrency();
   const { t } = useI18n();
@@ -672,14 +751,16 @@ function MaCrossStats() {
   const [entryInterval, setEntryInterval] = useState(uiPrefs.statsDefaults.maCross.entryInterval);
   const [exitInterval, setExitInterval]   = useState(uiPrefs.statsDefaults.maCross.exitInterval);
   const [useMcInterval, setUseMcInterval] = useState(() => loadUseMcInterval('ma_cross', false));
+  const [candleCount, setCandleCount]     = useState(() => loadCandleCountFor('ma_cross'));
   const [loading, setLoading]             = useState(false);
   const [result, setResult]               = useState(null);
   const [error, setError]                 = useState(null);
   const [showAll, setShowAll]             = useState(false);
 
   const inp = 'bg-p2 border border-p3/40 text-p5 text-[10px] sm:text-xs rounded px-1 sm:px-2 py-1 focus:outline-none focus:border-p4 w-full';
+  const inpNum = `${inp} [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none`;
 
-  async function handleSearch(overrideSymbol, updateChart = false, overrideEntryIv, overrideExitIv, overrideSource, overrideUseMc) {
+  async function handleSearch(overrideSymbol, updateChart = false, overrideEntryIv, overrideExitIv, overrideSource, overrideUseMc, overrideCandleCount) {
     const sym = (overrideSymbol ?? symbol).trim().toUpperCase();
     const useMc = overrideUseMc ?? useMcInterval;
     const mcEntry = useMc ? mcEntryFor(multitradeFavorites, sym) : null;
@@ -691,6 +772,7 @@ function MaCrossStats() {
     if (mcExitIv) setExitInterval(mcExitIv);
     const chartSource = selectedChart?.symbol === sym ? (selectedChart?.source ?? null) : null;
     const src = overrideSource !== undefined ? overrideSource : chartSource;
+    const candles = overrideCandleCount ?? candleCount;
     if (!sym) return;
     setLoading(true);
     setError(null);
@@ -700,6 +782,7 @@ function MaCrossStats() {
         entryInterval: entryIv,
         exitInterval: exitIv,
         source: src,
+        candleCount: candles,
       });
       setResult(data);
       if (updateChart) {
@@ -713,12 +796,14 @@ function MaCrossStats() {
     }
   }
 
-  // Sincroniza só o campo símbolo com o gráfico — não busca automaticamente.
-  // Cálculo só roda quando o usuário clica em "Buscar".
+  // Sincroniza o campo símbolo com o gráfico. Com "Cálculo Automático" ligado (switch da
+  // barra de abas), também dispara o cálculo nessa hora — senão só sincroniza o campo e o
+  // cálculo espera o clique em "Buscar", como sempre foi.
   useEffect(() => {
     if (!selectedChart?.symbol) return;
     setSymbol(selectedChart.symbol);
-  }, [selectedChart?.symbol]);
+    if (autoCalc) handleSearch(selectedChart.symbol);
+  }, [selectedChart?.symbol, autoCalc]);
 
   function handleToggleMc(next) {
     setUseMcInterval(next);
@@ -794,6 +879,16 @@ function MaCrossStats() {
           <select className={inp} value={exitInterval} onChange={(e) => setExitInterval(e.target.value)}>
             {INTERVALS.map((iv) => <option key={iv} value={iv}>{iv}</option>)}
           </select>
+        </div>
+        <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[56px]" title={t('stats.tip.bb_candle_count')}>
+          <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.card.candles')}</label>
+          <input className={inpNum} type="number" min={200} max={3000} step={100}
+            value={candleCount}
+            onChange={(e) => {
+              const v = Number(e.target.value);
+              setCandleCount(v);
+              saveCandleCountFor('ma_cross', v);
+            }} />
         </div>
         <McIntervalSwitch checked={useMcInterval} onChange={handleToggleMc} />
         <button
@@ -932,7 +1027,7 @@ function MaCrossStats() {
   );
 }
 
-function BollingerBandsStats() {
+function BollingerBandsStats({ autoCalc }) {
   const { selectedChart, setSelectedChart, setChartZoom, setChartViewSource, setChartTradeMarkers, multitradeFavorites, uiPrefs } = useCurrency();
   const { t } = useI18n();
   const [symbol, setSymbol]     = useState(selectedChart?.symbol || 'BTCUSDT');
@@ -990,12 +1085,14 @@ function BollingerBandsStats() {
     }
   }
 
-  // Sincroniza só o campo símbolo com o gráfico — não busca automaticamente.
-  // Cálculo só roda quando o usuário clica em "Buscar".
+  // Sincroniza o campo símbolo com o gráfico. Com "Cálculo Automático" ligado (switch da
+  // barra de abas), também dispara o cálculo nessa hora — senão só sincroniza o campo e o
+  // cálculo espera o clique em "Buscar", como sempre foi.
   useEffect(() => {
     if (!selectedChart?.symbol) return;
     setSymbol(selectedChart.symbol);
-  }, [selectedChart?.symbol]);
+    if (autoCalc) handleSearch(selectedChart.symbol);
+  }, [selectedChart?.symbol, autoCalc]);
 
   function handleToggleMc(next) {
     setUseMcInterval(next);
@@ -1270,7 +1367,7 @@ function BollingerBandsStats() {
  * da moeda, mesmo que ela não seja favorita e o bot real nunca tenha executado esses trades.
  * Não lê rsi_multi_bot_trades — é backend/services/fetchVwapBandsStats.js quem simula.
  */
-function VwapBandsStats() {
+function VwapBandsStats({ autoCalc }) {
   const { selectedChart, setSelectedChart, setChartZoom, setChartViewSource, setChartTradeMarkers } = useCurrency();
   const { t } = useI18n();
   const [symbol, setSymbol]       = useState(selectedChart?.symbol || 'BTCUSDT');
@@ -1289,6 +1386,7 @@ function VwapBandsStats() {
   // Intervalo do pullback/checagem rápida (ex.: 15m) — mesmo campo entry.pullback.pollInterval
   // do formulário do favorito (VwapBandsStrategyForm), aqui só como override da simulação.
   const [pollInterval, setPollInterval]     = useState(() => loadVwapStatsPrefs().pollInterval ?? '5m');
+  const [candleCount, setCandleCount]       = useState(() => loadVwapStatsPrefs().candleCount ?? STATS_CANDLE_COUNT_DEFAULT);
   const [loading, setLoading]     = useState(false);
   const [result, setResult]       = useState(null);
   const [error, setError]         = useState(null);
@@ -1300,10 +1398,11 @@ function VwapBandsStats() {
   const latestSymbolRef = useRef(null);
 
   const inp = 'bg-p2 border border-p3/40 text-p5 text-[10px] sm:text-xs rounded px-1 sm:px-2 py-1 focus:outline-none focus:border-p4 w-full';
+  const inpNum = `${inp} [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none`;
 
   function patchPrefs(next) {
     saveVwapStatsPrefs({
-      entryInterval, session, vwapInterval, pollInterval, emaFilterEnabled, emaFilterPeriod, emaFilterInterval,
+      entryInterval, session, vwapInterval, pollInterval, emaFilterEnabled, emaFilterPeriod, emaFilterInterval, candleCount,
       ...next,
     });
   }
@@ -1320,6 +1419,7 @@ function VwapBandsStats() {
     try {
       const data = await fetchVwapBandsStats(sym, {
         source: src, entryInterval, session, vwapInterval, pollInterval, emaFilterEnabled, emaFilterPeriod, emaFilterInterval,
+        candleCount,
       });
       if (latestSymbolRef.current !== sym) return;
       setResult(data);
@@ -1331,12 +1431,14 @@ function VwapBandsStats() {
     }
   }
 
-  // Sincroniza só o campo símbolo com o gráfico — não busca automaticamente.
-  // Cálculo só roda quando o usuário clica em "Buscar".
+  // Sincroniza o campo símbolo com o gráfico. Com "Cálculo Automático" ligado (switch da
+  // barra de abas), também dispara o cálculo nessa hora — senão só sincroniza o campo e o
+  // cálculo espera o clique em "Buscar", como sempre foi.
   useEffect(() => {
     if (!selectedChart?.symbol) return;
     setSymbol(selectedChart.symbol);
-  }, [selectedChart?.symbol]);
+    if (autoCalc) handleSearch(selectedChart.symbol);
+  }, [selectedChart?.symbol, autoCalc]);
 
   async function openOnChart(o) {
     const signalMs = o.signalDate ? new Date(o.signalDate).getTime() : null;
@@ -1459,6 +1561,18 @@ function VwapBandsStats() {
             onChange={(e) => { setEmaFilterInterval(e.target.value); patchPrefs({ emaFilterInterval: e.target.value }); }}>
             {VWAP_BANDS_ALL_INTERVALS.map((iv) => <option key={iv} value={iv}>{iv}</option>)}
           </select>
+        </div>
+
+        {/* Candles */}
+        <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[56px]" title={t('stats.tip.bb_candle_count')}>
+          <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.card.candles')}</label>
+          <input className={inpNum} type="number" min={200} max={3000} step={100}
+            value={candleCount}
+            onChange={(e) => {
+              const v = Number(e.target.value);
+              setCandleCount(v);
+              patchPrefs({ candleCount: v });
+            }} />
         </div>
 
         <button
@@ -1603,30 +1717,39 @@ function VwapBandsStats() {
 export default function StatisticsPanel() {
   const { t } = useI18n();
   const [activeTab, setActiveTab] = useState('rsi');
+  const [autoCalc, setAutoCalc] = useState(() => loadAutoCalcPref());
+
+  function handleToggleAutoCalc(next) {
+    setAutoCalc(next);
+    saveAutoCalcPref(next);
+  }
 
   return (
     <div className="flex flex-col h-full">
 
       {/* Abas */}
-      <div className="flex gap-1 border-b border-p3/20 px-4 pt-3 shrink-0">
-        {TABS.map((tab) => (
-          <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
-            className={`px-3 py-1 text-xs rounded-t transition-colors ${
-              activeTab === tab.id ? 'bg-p4 text-white' : 'text-p5/60 hover:text-p5'
-            }`}
-          >
-            {t(tab.labelKey)}
-          </button>
-        ))}
+      <div className="flex items-center gap-1 border-b border-p3/20 px-4 pt-3 shrink-0">
+        <div className="flex gap-1 flex-1 min-w-0 overflow-x-auto">
+          {TABS.map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`px-3 py-1 text-xs rounded-t transition-colors shrink-0 ${
+                activeTab === tab.id ? 'bg-p4 text-white' : 'text-p5/60 hover:text-p5'
+              }`}
+            >
+              {t(tab.labelKey)}
+            </button>
+          ))}
+        </div>
+        <AutoCalcSwitch checked={autoCalc} onChange={handleToggleAutoCalc} />
       </div>
 
       <div className="flex-1 min-h-0 overflow-auto px-4 pb-3 pt-2">
-        {activeTab === 'rsi' && <RsiStats />}
-        {activeTab === 'ma_cross' && <MaCrossStats />}
-        {activeTab === 'bollinger_bands' && <BollingerBandsStats />}
-        {activeTab === 'vwap_bands' && <VwapBandsStats />}
+        {activeTab === 'rsi' && <RsiStats autoCalc={autoCalc} />}
+        {activeTab === 'ma_cross' && <MaCrossStats autoCalc={autoCalc} />}
+        {activeTab === 'bollinger_bands' && <BollingerBandsStats autoCalc={autoCalc} />}
+        {activeTab === 'vwap_bands' && <VwapBandsStats autoCalc={autoCalc} />}
       </div>
     </div>
   );

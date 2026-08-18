@@ -176,14 +176,16 @@ async function analyseMaCrossStats(symbol, options = {}) {
     period2 = 21,
     tolerancePct = 0,
     source = null,
+    candleCount,
   } = options;
 
   const fetchCandles = source === 'gate' ? getGateCandles : getCandles;
   const sameIv = entryInterval === exitInterval;
+  const limit = candleCount ?? CANDLE_LIMIT;
 
   const [entryResult, exitResult] = await Promise.allSettled([
-    fetchCandles(symbol, entryInterval, CANDLE_LIMIT),
-    sameIv ? Promise.resolve(null) : fetchCandles(symbol, exitInterval, CANDLE_LIMIT),
+    fetchCandles(symbol, entryInterval, limit),
+    sameIv ? Promise.resolve(null) : fetchCandles(symbol, exitInterval, limit),
   ]);
 
   if (entryResult.status === 'rejected') throw entryResult.reason;

@@ -43,7 +43,7 @@ function formatCacheMeta(meta) {
   const parts = [];
   if (meta.interval) parts.push(meta.interval);
   if (meta.period != null && meta.stdDev != null) parts.push(`BB(${meta.period},${meta.stdDev})`);
-  if (meta.lookback != null) parts.push(`${meta.lookback} candles`);
+  if (meta.lookbacks?.length) parts.push(`${meta.lookbacks.join('/')} candles`);
   return parts.length ? parts.join(' · ') : null;
 }
 

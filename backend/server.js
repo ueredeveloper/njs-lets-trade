@@ -263,8 +263,11 @@ async function startServer() {
       const stats = await bbPositionCache.refreshAll(symbols);
       if (stats.computed > 0) {
         const m = stats.matched ?? {};
+        const perPreset = bbPositionCache.CACHED_PRESETS
+          .map(p => `${p.key}:${m[p.key] ?? 0}`)
+          .join(' ');
         console.log(
-          `[bbPositionCache] fundo:${m['4h|20|2|bot|20'] ?? 0} topo:${m['4h|20|2|top|20'] ?? 0}`
+          `[bbPositionCache] ${perPreset}`
           + ` | disco:${stats.diskHits ?? 0} stale:${stats.diskStale ?? 0} api:${stats.apiFetches ?? 0}`
           + ` | fila:${stats.queuePending ?? 0}`,
         );
@@ -332,8 +335,11 @@ async function startServer() {
       const stats = await bbBandWidthCache.ensureFresh(symbols);
       if (stats.computed > 0) {
         const m = stats.matched ?? {};
+        const perPreset = bbBandWidthCache.CACHED_PRESETS
+          .map(p => `${p.key}:${m[p.key] ?? 0}`)
+          .join(' ');
         console.log(
-          `[bbBandWidthCache] 4h|20|2|100:${m['4h|20|2|100'] ?? 0} 1m|20|2|100:${m['1m|20|2|100'] ?? 0} 1h|20|2|300:${m['1h|20|2|300'] ?? 0} 15m|20|2|300:${m['15m|20|2|300'] ?? 0} 5m|20|2|300:${m['5m|20|2|300'] ?? 0}`
+          `[bbBandWidthCache] ${perPreset}`
           + ` | disco:${stats.diskHits ?? 0} stale:${stats.diskStale ?? 0} api:${stats.apiFetches ?? 0}`
           + ` | fila:${stats.queuePending ?? 0}`,
         );

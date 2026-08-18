@@ -17,11 +17,15 @@ const AVG_WINDOW = 80;
 
 /**
  * Presets pré-aquecidos: combinação padrão do painel de favoritos (4h, período 20, desvio 2,
- * 100 candles) e a combinação padrão do filtro de busca de indicadores (1h, 15min e 5min,
- * mesmo BB(20,2), 300 candles) — trade BB entra na banda inferior e sai na superior. O preset
- * de 4h (favoritos) e 1min existem mas nascem desligados (ver DEFAULT_ON em cacheSettings.js):
- * escanear os ~500 pares USDT em 1min não cabe no orçamento da fila global de candles
- * (~24 req/min) sem ficar constantemente atrasado.
+ * 100 candles) e a combinação padrão do filtro de busca de indicadores (1h, 15min, 5min e 1min,
+ * mesmo BB(20,2), 300 candles) — trade BB entra na banda inferior e sai na superior. Cada um
+ * desses quatro intervalos também tem uma variante gêmea com 100 candles, sob o mesmo
+ * settingId (liga/desliga junto com a de 300 — não é um toggle separado em Configurações),
+ * pra quem escolher "100 candles" no formulário de indicadores também cair no cache em vez de
+ * calcular ao vivo. O preset de 4h (favoritos) existe mas nasce desligado (ver DEFAULT_ON em
+ * cacheSettings.js). O 1min nasce ligado por decisão explícita — cabe no orçamento da fila
+ * global de candles (~24 req/min) porque os demais caches de mercado foram desligados por
+ * padrão pra abrir espaço pra ele.
  */
 /**
  * ttlMs é independente do intervalo do candle: manter a MÉTRICA (largura média em janela de
@@ -30,12 +34,20 @@ const AVG_WINDOW = 80;
  * Um ttl mais folgado evita reprocessar o mercado inteiro sem parar; a métrica em si não
  * muda tão rápido a ponto de precisar disso.
  */
+// Dentro do mesmo intervalo, o preset de lookback maior vem sempre antes do menor: o
+// session cache de candles em refreshAll (loadCandlesForScreening) é indexado só por
+// "symbol|interval" — se o de menor lookback rodasse primeiro, o de maior herdaria
+// candles insuficientes pra sua janela em vez de refetchar.
 const CACHED_PRESETS = [
   { key: '4h|20|2|100', interval: '4h', period: 20, stdDev: 2, lookback: 100, settingId: 'bbBandWidth4h' },
+  { key: '1m|20|2|300', interval: '1m', period: 20, stdDev: 2, lookback: 300, settingId: 'bbBandWidth1m', ttlMs: 60 * 60_000 },
   { key: '1m|20|2|100', interval: '1m', period: 20, stdDev: 2, lookback: 100, settingId: 'bbBandWidth1m', ttlMs: 60 * 60_000 },
   { key: '1h|20|2|300', interval: '1h', period: 20, stdDev: 2, lookback: 300, settingId: 'bbBandWidth1h' },
+  { key: '1h|20|2|100', interval: '1h', period: 20, stdDev: 2, lookback: 100, settingId: 'bbBandWidth1h' },
   { key: '15m|20|2|300', interval: '15m', period: 20, stdDev: 2, lookback: 300, settingId: 'bbBandWidth15m', ttlMs: 30 * 60_000 },
+  { key: '15m|20|2|100', interval: '15m', period: 20, stdDev: 2, lookback: 100, settingId: 'bbBandWidth15m', ttlMs: 30 * 60_000 },
   { key: '5m|20|2|300', interval: '5m', period: 20, stdDev: 2, lookback: 300, settingId: 'bbBandWidth5m', ttlMs: 20 * 60_000 },
+  { key: '5m|20|2|100', interval: '5m', period: 20, stdDev: 2, lookback: 100, settingId: 'bbBandWidth5m', ttlMs: 20 * 60_000 },
 ];
 
 const REFRESH_TICK_MS = 5 * 60_000;
@@ -196,7 +208,23 @@ function snapshotAgeMs(presetKey) {
   return Date.now() - snap.scannedAt;
 }
 
-async function refreshAll(symbols, { force = false } = {}) {
+/** Existe ao menos 1 entrada em symbolStore pra ESTE preset específico (não só pra algum
+ * outro preset do módulo) — usado pra não confundir "cache do módulo já aquecido" com
+ * "este preset específico já foi varrido alguma vez" (ver bug do bbPositionCache: um preset
+ * novo sem nenhuma entrada própria caía nesse atalho e virava snapshot vazio permanente). */
+function presetHasEntries(presetKey) {
+  const prefix = `${presetKey}|`;
+  for (const key of symbolStore.keys()) {
+    if (key.startsWith(prefix)) return true;
+  }
+  return false;
+}
+
+/** presetKey: quando informado, restringe force/varredura a ESSE preset só — sem isso, um
+ *  "recalcule agora" pedido pelo usuário pra 1 combinação (ex.: 1m/100 candles) forçaria os 9
+ *  presets do módulo inteiro (~484 símbolos cada), muito além do que foi pedido e muito mais
+ *  lento (ver conversa sobre "recalcule sempre que clicar"). */
+async function refreshAll(symbols, { force = false, presetKey = null } = {}) {
   const now = Date.now();
   let computed = 0;
   let failed = 0;
@@ -208,6 +236,7 @@ async function refreshAll(symbols, { force = false } = {}) {
 
   for (const preset of CACHED_PRESETS) {
     if (!cacheSettings.isEnabled(preset.settingId)) continue;
+    if (presetKey && preset.key !== presetKey) continue;
 
     const stale = force
       ? symbols
@@ -261,9 +290,9 @@ async function refreshAll(symbols, { force = false } = {}) {
   };
 }
 
-async function ensureFresh(symbols, { force = false } = {}) {
+async function ensureFresh(symbols, { force = false, presetKey = null } = {}) {
   if (refreshInFlight) return refreshInFlight;
-  refreshInFlight = refreshAll(symbols, { force }).finally(() => {
+  refreshInFlight = refreshAll(symbols, { force, presetKey }).finally(() => {
     refreshInFlight = null;
   });
   return refreshInFlight;
@@ -285,7 +314,7 @@ async function getCachedResult(symbols, presetKey, { force = false, order = 'far
   const hasSnapshot = snap && Array.isArray(snap.list);
   const staleMs = presetTtlMs(preset) * 2;
 
-  if (!hasSnapshot && symbolStore.size > 0) {
+  if (!hasSnapshot && presetHasEntries(key)) {
     rebuildAllSnapshots();
     const rebuilt = snapshots.get(key);
     if (rebuilt) {
@@ -298,7 +327,7 @@ async function getCachedResult(symbols, presetKey, { force = false, order = 'far
   }
 
   if (force || !hasSnapshot || age >= staleMs) {
-    const stats = await ensureFresh(symbols, { force: false });
+    const stats = await ensureFresh(symbols, { force, presetKey: key });
     const fresh = buildSnapshotForPreset(preset, Date.now());
     return { ...applyOrder(fresh, order), cache: { ...stats, hit: false, ageMs: 0, preset: key } };
   }

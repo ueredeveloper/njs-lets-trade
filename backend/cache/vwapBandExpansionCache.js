@@ -193,6 +193,17 @@ function snapshotAgeMs(presetKey) {
   return Date.now() - snap.scannedAt;
 }
 
+/** Existe ao menos 1 entrada em symbolStore pra ESTE preset específico (não só pra algum
+ * outro preset do módulo) — evita que um preset novo, sem nenhuma entrada própria ainda,
+ * vire snapshot vazio permanente por causa de outro preset já aquecido no mesmo store. */
+function presetHasEntries(presetKey) {
+  const prefix = `${presetKey}|`;
+  for (const key of symbolStore.keys()) {
+    if (key.startsWith(prefix)) return true;
+  }
+  return false;
+}
+
 async function refreshAll(symbols, { force = false } = {}) {
   const now = Date.now();
   let computed = 0;
@@ -277,7 +288,7 @@ async function getCachedResult(symbols, presetKey, { force = false, multiplier =
   const hasSnapshot = snap && Array.isArray(snap.list);
   const staleMs = presetTtlMs(preset) * 2;
 
-  if (!hasSnapshot && symbolStore.size > 0) {
+  if (!hasSnapshot && presetHasEntries(key)) {
     rebuildAllSnapshots();
     const rebuilt = snapshots.get(key);
     if (rebuilt) {
@@ -290,7 +301,7 @@ async function getCachedResult(symbols, presetKey, { force = false, multiplier =
   }
 
   if (force || !hasSnapshot || age >= staleMs) {
-    const stats = await ensureFresh(symbols, { force: false });
+    const stats = await ensureFresh(symbols, { force });
     const fresh = buildSnapshotForPreset(preset, Date.now());
     return {
       ...applyMultiplier(fresh, multiplier),

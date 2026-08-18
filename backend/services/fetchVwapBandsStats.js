@@ -8,7 +8,7 @@ const supabase = require('../supabase/client');
 router.get('/vwap-bands-stats', async (req, res) => {
   const {
     symbol, source, entryInterval, session, vwapInterval, pollInterval,
-    emaFilterEnabled, emaFilterPeriod, emaFilterInterval,
+    emaFilterEnabled, emaFilterPeriod, emaFilterInterval, candleCount,
   } = req.query;
   if (!symbol) {
     return res.status(400).json({ error: 'Parâmetro obrigatório: symbol' });
@@ -51,8 +51,12 @@ router.get('/vwap-bands-stats', async (req, res) => {
     }
   }
 
-  const options = { source: source ?? null, tradeConfig };
-  const cacheKey = `vwap-bands|${sym}|${source ?? 'binance'}|${entryInterval ?? ''}|${session ?? ''}|${vwapInterval ?? ''}|${pollInterval ?? ''}|${emaFilterEnabled ?? ''}|${emaFilterPeriod ?? ''}|${emaFilterInterval ?? ''}`;
+  const options = {
+    source: source ?? null,
+    tradeConfig,
+    candleCount: candleCount ? parseInt(candleCount, 10) : undefined,
+  };
+  const cacheKey = `vwap-bands|${sym}|${source ?? 'binance'}|${entryInterval ?? ''}|${session ?? ''}|${vwapInterval ?? ''}|${pollInterval ?? ''}|${emaFilterEnabled ?? ''}|${emaFilterPeriod ?? ''}|${emaFilterInterval ?? ''}|${options.candleCount ?? 'default'}`;
   const ttlMs = intervalMs('15m'); // intervalo mais rápido usado pela simulação (poll/emaFilter)
 
   try {

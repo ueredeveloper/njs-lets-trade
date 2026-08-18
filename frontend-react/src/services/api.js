@@ -98,6 +98,7 @@ export async function fetchMaCrossStats(symbol, {
   period1 = 9,
   period2 = 21,
   source = null,
+  candleCount = null,
 } = {}) {
   const params = new URLSearchParams({
     symbol,
@@ -107,6 +108,7 @@ export async function fetchMaCrossStats(symbol, {
     period2: String(period2),
   });
   if (source) params.set('source', source);
+  if (candleCount) params.set('candleCount', String(candleCount));
   const res = await fetch(`/services/ma-cross-stats?${params}`);
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
@@ -117,7 +119,7 @@ export async function fetchMaCrossStats(symbol, {
 
 export async function fetchVwapBandsStats(symbol, {
   source = null, entryInterval = null, session = null, vwapInterval = null, pollInterval = null,
-  emaFilterEnabled = null, emaFilterPeriod = null, emaFilterInterval = null,
+  emaFilterEnabled = null, emaFilterPeriod = null, emaFilterInterval = null, candleCount = null,
 } = {}) {
   const params = new URLSearchParams({ symbol });
   if (source) params.set('source', source);
@@ -128,6 +130,7 @@ export async function fetchVwapBandsStats(symbol, {
   if (emaFilterEnabled !== null) params.set('emaFilterEnabled', emaFilterEnabled ? '1' : '0');
   if (emaFilterPeriod !== null) params.set('emaFilterPeriod', String(emaFilterPeriod));
   if (emaFilterInterval) params.set('emaFilterInterval', emaFilterInterval);
+  if (candleCount) params.set('candleCount', String(candleCount));
   const res = await fetch(`/services/vwap-bands-stats?${params}`);
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
@@ -136,9 +139,10 @@ export async function fetchVwapBandsStats(symbol, {
   return res.json();
 }
 
-export async function fetchRsiOversoldRecovery(symbol, interval, oversold = 30, overbought = 70, source = null) {
+export async function fetchRsiOversoldRecovery(symbol, interval, oversold = 30, overbought = 70, source = null, candleCount = null) {
   const params = new URLSearchParams({ symbol, interval, oversold, overbought });
   if (source) params.set('source', source);
+  if (candleCount) params.set('candleCount', String(candleCount));
   const res = await fetch(`/services/rsi-oversold-recovery?${params}`);
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
@@ -230,10 +234,12 @@ export async function fetchVwapBandWidthFilter({
  */
 export async function fetchBollingerBandWidthFilter({
   interval = '4h', period = '20', stdDev = '2', lookback = '100', order = 'far', symbols = null, gateSymbols = null,
+  force = false,
 } = {}) {
   const params = new URLSearchParams({ interval, period, stdDev, lookback, order });
   if (symbols?.length) params.set('symbols', symbols.join(','));
   if (gateSymbols?.length) params.set('gateSymbols', gateSymbols.join(','));
+  if (force) params.set('force', '1');
   const res = await fetch(`/services/bollinger-band-width-filter?${params}`);
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));

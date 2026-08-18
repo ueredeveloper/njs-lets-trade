@@ -17,8 +17,12 @@ function buildPresetMeta() {
   for (const mod of PRESET_MODULES) {
     for (const preset of mod.CACHED_PRESETS ?? []) {
       if (!preset.settingId) continue;
-      const { key, settingId, ttlMs, ...rest } = preset;
-      meta[settingId] = rest;
+      const { key, settingId, ttlMs, lookback, ...rest } = preset;
+      // Um settingId pode cobrir mais de um preset (ex.: 300 e 100 candles no mesmo
+      // intervalo, ligados/desligados juntos) — acumula os lookbacks em vez de sobrescrever.
+      const existing = meta[settingId];
+      const lookbacks = existing ? [...existing.lookbacks, lookback] : [lookback];
+      meta[settingId] = { ...rest, lookbacks };
     }
   }
   return meta;

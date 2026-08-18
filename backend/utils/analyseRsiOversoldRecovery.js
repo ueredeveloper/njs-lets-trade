@@ -81,11 +81,12 @@ function findRsiAt(series, targetTime) {
 }
 
 async function analyseRsiOversoldRecovery(symbol, interval, options = {}) {
-    const { oversold = 30, overbought = 70, source } = options;
+    const { oversold = 30, overbought = 70, source, candleCount } = options;
     const fetchCandles = source === 'gate' ? getGateCandles : getCandles;
+    const mainLimit = candleCount ?? MAIN_LIMIT;
 
     const settled = await Promise.allSettled([
-        fetchCandles(symbol, interval, MAIN_LIMIT),
+        fetchCandles(symbol, interval, mainLimit),
         fetchCandles(symbol, '4h', HTF_LIMIT),
         fetchCandles(symbol, '8h', HTF_LIMIT),
     ]);

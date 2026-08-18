@@ -36,16 +36,16 @@ const CACHE_IDS = [
 ];
 
 /**
- * Só os caches realmente em uso agora ficam ligados por padrão: largura de Bollinger e
- * trades BB c/ tendência da mediana, em 1h, 15min e 5min. O resto nasce desligado — cada
- * endpoint já tem um caminho de cálculo ao vivo (usado hoje em qualquer combinação fora do
- * preset padrão), então desligar aqui não quebra nenhum filtro, só deixa de pré-aquecer.
- * Fica disponível pra quem quiser religar manualmente em Configurações.
+ * Só os caches realmente em uso agora ficam ligados por padrão: RSI (15min/1h/4h), largura
+ * de Bollinger em 1min e 5min, e posição na Bollinger (fundo/topo). O resto nasce desligado —
+ * cada endpoint já tem um caminho de cálculo ao vivo (usado hoje em qualquer combinação fora
+ * do preset padrão), então desligar aqui não quebra nenhum filtro, só deixa de pré-aquecer.
+ * Mantido enxuto de propósito: o 1min de largura de Bollinger sozinho já consome boa parte do
+ * orçamento da fila global de candles (~24 req/min) pra varrer os ~500 pares USDT — ligar
+ * caches extras aqui volta a atrasá-lo. Fica disponível pra quem quiser religar manualmente
+ * em Configurações.
  */
-const DEFAULT_ON = new Set([
-  'bbBandWidth1h', 'bbBandWidth15m', 'bbBandWidth5m',
-  'bbMedianTrend1h', 'bbMedianTrend15m', 'bbMedianTrend5m',
-]);
+const DEFAULT_ON = new Set(['rsi', 'bbBandWidth1m', 'bbBandWidth5m', 'bbPosition']);
 
 let settings = null;
 

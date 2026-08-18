@@ -66,6 +66,10 @@ function pctChange(entryPrice, exitPrice) {
  * @param {object|null} [options.tradeConfig] — trade_config salvo do favorito (se a moeda for
  *   favorita vwap-bands), pra simular com a config REAL configurada pra ela; senão usa o
  *   preset padrão de produção.
+ * @param {number} [options.candleCount] — override do histórico dos intervalos de
+ *   preço/poll/EMA (padrão CANDLE_LIMIT). NÃO reduz o intervalo da VWAP abaixo do mínimo que
+ *   cobre a sessão inteira (vwapCandleLimit) — só pode alargar esse mínimo, nunca encolhê-lo,
+ *   senão a "VWAP semanal" vira média de poucas horas (ver comentário de vwapCandleLimin).
  */
 async function analyseVwapBandsStats(symbol, options = {}) {
   const source = options.source ?? null;
@@ -79,10 +83,11 @@ async function analyseVwapBandsStats(symbol, options = {}) {
   const efIv = efEnabled ? (entry.emaFilter.interval ?? pollIv) : null;
 
   const ivSet = new Set([priceIv, vwapIv, pollIv, ...(efIv ? [efIv] : [])]);
-  const vwapLimit = vwapCandleLimit(vwapIv, entry.session);
+  const otherLimit = options.candleCount ?? CANDLE_LIMIT;
+  const vwapLimit = Math.max(vwapCandleLimit(vwapIv, entry.session), otherLimit);
   const fetched = {};
   await Promise.all([...ivSet].map(async (iv) => {
-    const limit = iv === vwapIv ? vwapLimit : CANDLE_LIMIT;
+    const limit = iv === vwapIv ? vwapLimit : otherLimit;
     fetched[iv] = await fetchHistory(symbol, iv, source, limit);
   }));
 
