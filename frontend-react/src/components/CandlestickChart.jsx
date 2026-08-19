@@ -12,7 +12,7 @@ import CandlestickChartLW from './CandlestickChartLW';
 import convertOpenTime from '../utils/convertOpenTime';
 import Tooltip from './Tooltip';
 import { useIsMobile } from '../hooks/useIsMobile';
-import { DEFAULT_OVERLAY_SLOTS, DEFAULT_ACTIVE_INDICATORS, BB_PERIOD_OPTIONS, BB_STDDEV_OPTIONS, DEFAULT_SR_INTERVAL, DEFAULT_PPHL_INTERVAL, DEFAULT_CHOP_INTERVAL, DEFAULT_EMA_PERSIST_CLOUD_INTERVAL, DEFAULT_PERM_CLOUD_TONES, DEFAULT_EMA_PERSIST_CLOUD_LAYERS, DEFAULT_BARS_SINCE_CROSS_INTERVAL, DEFAULT_TD_SEQUENTIAL_INTERVAL, DEFAULT_COMMON_CHART_INTERVALS, getEmaPersistCloudConfirmInterval } from '../utils/uiPreferences';
+import { DEFAULT_OVERLAY_SLOTS, DEFAULT_ACTIVE_INDICATORS, VALID_ACTIVE_INDICATORS, BB_PERIOD_OPTIONS, BB_STDDEV_OPTIONS, DEFAULT_SR_INTERVAL, DEFAULT_PPHL_INTERVAL, DEFAULT_CHOP_INTERVAL, DEFAULT_EMA_PERSIST_CLOUD_INTERVAL, DEFAULT_PERM_CLOUD_TONES, DEFAULT_EMA_PERSIST_CLOUD_LAYERS, DEFAULT_BARS_SINCE_CROSS_INTERVAL, DEFAULT_TD_SEQUENTIAL_INTERVAL, DEFAULT_COMMON_CHART_INTERVALS, getEmaPersistCloudConfirmInterval } from '../utils/uiPreferences';
 import { PERM_CLOUD_TONES, PERM_TONE_SWATCH } from '../utils/emaCrossPersistenceCloud';
 import { CHART_VIEW, INTERVAL_MS, computeZoomWindow, buildFixedDataZoom, buildInsideDataZoom, computeCandleLimitFromTime, isTradePanelChartView, computeManualWheelZoom } from '../utils/chartView';
 import { simulateBbTouchPath, pairBbPathCycles } from '../utils/bollingerTouchPath';
@@ -2863,6 +2863,8 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
           data: [
             { yAxis: 30, lineStyle: { color: '#ef5350', type: 'dashed', width: 1 },
               label: { formatter: '30', color: '#ef5350', fontSize: 9, position: 'end' } },
+            { yAxis: 50, lineStyle: { color: '#ffffff', type: 'dashed', width: 1, opacity: 0.5 },
+              label: { formatter: '50', color: '#ffffff', fontSize: 9, position: 'end' } },
             ...(showRsi50 ? [{ yAxis: 50, lineStyle: { color: '#facc15', type: 'dashed', width: 1, opacity: 0.6 },
               label: { formatter: '50', color: '#facc15', fontSize: 9, position: 'end' } }] : []),
             { yAxis: 70, lineStyle: { color: '#26a69a', type: 'dashed', width: 1 },
@@ -3597,15 +3599,23 @@ export default function CandlestickChart() {
     });
   }, [hasForcedBollinger, multitradeChartFocus?.bollingerOverride, botPermInterval]);
 
-  // Na primeira renderização, desliga qualquer indicador que tenha ficado ativo de uma sessão
-  // anterior (persistido em localStorage) — o gráfico sempre abre limpo. Precisa rodar DEPOIS
-  // do efeito "favorito vwap-bands" acima: ele também copia uiPrefs.vwapDefaults pro estado
-  // local no mount (ramo `else`), e como todo useEffect do primeiro commit ainda lê o uiPrefs
-  // "velho" (a limpeza abaixo só é aplicada no PRÓXIMO render), rodar antes deste ponto perdia
-  // a corrida — o valor antigo (enabled: true) sobrescrevia de volta por cima da limpeza.
-  // Ficando depois, esta é a última escrita do commit e vence.
+  // Na primeira renderização, o gráfico abre com os indicadores marcados como "habilitado por
+  // padrão" em Configurações → Botões do gráfico (uiPrefs.defaultActiveIndicators) — ignora
+  // qualquer estado ativo de uma sessão anterior (persistido em localStorage). Só entra o que
+  // ainda está visível (chartPanelButtons). Precisa rodar DEPOIS do efeito "favorito vwap-bands"
+  // acima: ele também copia uiPrefs.vwapDefaults pro estado local no mount (ramo `else`), e como
+  // todo useEffect do primeiro commit ainda lê o uiPrefs "velho" (a normalização abaixo só é
+  // aplicada no PRÓXIMO render), rodar antes deste ponto perdia a corrida — o valor antigo
+  // (enabled: true) sobrescrevia de volta por cima. Ficando depois, esta é a última escrita do
+  // commit e vence.
   useEffect(() => {
-    if (activeIndicators.length) setActiveIndicatorsPreference([]);
+    const defaults = uiPrefs.defaultActiveIndicators ?? {};
+    const initialIndicators = VALID_ACTIVE_INDICATORS.filter(
+      (key) => defaults[key] && chartPanelButtons[key] !== false,
+    );
+    const sameAsInitial = activeIndicators.length === initialIndicators.length
+      && activeIndicators.every((id) => initialIndicators.includes(id));
+    if (!sameAsInitial) setActiveIndicatorsPreference(initialIndicators);
     setBbGroups((prev) => {
       if (!prev.some((g) => g.enabled || g.showPath || g.showMedianTrend || g.showPermFilter)) return prev;
       const next = prev.map((g) => ({ ...g, enabled: false, showPath: false, showMedianTrend: false, showPermFilter: false }));

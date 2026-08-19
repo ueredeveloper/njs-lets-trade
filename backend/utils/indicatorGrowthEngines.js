@@ -9,17 +9,23 @@
 const { BollingerBands, RSI } = require('technicalindicators');
 const { buildMaTimeSeries } = require('./movingAverage');
 const { maValueAt, detectCrossAtPair, intervalMs } = require('../bot/ma-cross/strategyEngine');
+const { averageWithoutOutliers } = require('./removeOutliersIQR');
 
 function summarize(occurrences) {
   const total = occurrences.length;
   const avgAppreciationPercent = total > 0
-    ? parseFloat((occurrences.reduce((s, o) => s + o, 0) / total).toFixed(2))
+    ? parseFloat(averageWithoutOutliers(occurrences).toFixed(2))
     : 0;
   return { totalOccurrences: total, avgAppreciationPercent };
 }
 
-/** Ciclo: mínima toca/cruza a banda inferior (fundo) → máxima toca/cruza a banda superior (topo). */
-function computeBollingerGrowth(candles, { period = 20, stdDev = 2 } = {}) {
+/** Ciclo: mínima toca/cruza a banda inferior (fundo) → máxima toca/cruza a banda superior (topo).
+ * @returns {number[]|null} valorização (%) de cada ciclo completo, ou null se candles insuficientes.
+ *  Reaproveitado pelo filtro de Largura de Banda (fetchBollingerBandWidthFilter.js/bbBandWidthCache.js) —
+ *  a "largura" de uma moeda é definida como quanto ela sobe do fundo até o topo da banda, não a
+ *  distância instantânea entre as bandas (que fica artificialmente alta por vários candles após um
+ *  crash/pump pontual, mesmo já sem o preço estar de fato subindo rumo ao topo). */
+function bollingerCycleOccurrences(candles, { period = 20, stdDev = 2 } = {}) {
   if (!candles?.length || candles.length < period + 1) return null;
 
   const closes = candles.map(c => parseFloat(c.close));
@@ -54,7 +60,12 @@ function computeBollingerGrowth(candles, { period = 20, stdDev = 2 } = {}) {
     }
   }
 
-  return summarize(occurrences);
+  return occurrences;
+}
+
+function computeBollingerGrowth(candles, params) {
+  const occurrences = bollingerCycleOccurrences(candles, params);
+  return occurrences === null ? null : summarize(occurrences);
 }
 
 /** Ciclo: RSI cai abaixo de `oversold` (fundo) → RSI sobe acima de `overbought` (topo). */
@@ -151,4 +162,5 @@ module.exports = {
   computeBollingerGrowth,
   computeRsiGrowth,
   computeMaCrossGrowth,
+  bollingerCycleOccurrences,
 };

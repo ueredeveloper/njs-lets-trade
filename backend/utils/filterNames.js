@@ -109,20 +109,37 @@ function parseVwapBandWidthFilterName(name) {
   };
 }
 
-/** Largura das Bandas de Bollinger (upper-lower como % da média), média no período: 4h|bbwidth|20|2|100 */
-function buildBollingerBandWidthFilterName(interval, period, stdDev, lookback) {
-  return `${interval}|bbwidth|${period}|${stdDev}|${lookback}`;
+/**
+ * Largura das Bandas de Bollinger (upper-lower como % da média), média no período:
+ * 4h|bbwidth|20|2|100 — com faixa de largura (%): 4h|bbwidth|20|2|100|wmin|5|wmax|20
+ * (wmin = largura mínima aceita, wmax = largura máxima aceita — ambos opcionais).
+ */
+function buildBollingerBandWidthFilterName(interval, period, stdDev, lookback, opts = {}) {
+  let name = `${interval}|bbwidth|${period}|${stdDev}|${lookback}`;
+  if (opts.widthMinPct != null && opts.widthMinPct !== '') name += `|wmin|${opts.widthMinPct}`;
+  if (opts.widthMaxPct != null && opts.widthMaxPct !== '') name += `|wmax|${opts.widthMaxPct}`;
+  return name;
 }
 
 function parseBollingerBandWidthFilterName(name) {
   const parts = String(name).split('|');
   if (parts[1] !== 'bbwidth' || parts.length < 5) return null;
-  return {
+  const out = {
     interval: parts[0],
     period: parseInt(parts[2], 10),
     stdDev: parseFloat(parts[3]),
     lookback: parseInt(parts[4], 10),
+    widthMinPct: null,
+    widthMaxPct: null,
   };
+  for (let i = 5; i + 1 < parts.length; i += 2) {
+    const key = parts[i];
+    const val = parseFloat(parts[i + 1]);
+    if (Number.isNaN(val)) continue;
+    if (key === 'wmin') out.widthMinPct = val;
+    else if (key === 'wmax') out.widthMaxPct = val;
+  }
+  return out;
 }
 
 /**

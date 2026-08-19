@@ -100,7 +100,7 @@ const QUICK_PRESETS = [
   {
     labelKey: 'ip.preset_rsi7099',
     tipKey: 'ip.preset_rsi7099_tip',
-    build: () => [{ type: 'relativeStrengthIndex', intervals: ['15m'], compare1: 'above', line1: '70', compare2: 'bellow', line2: '99' }],
+    build: () => [{ type: 'relativeStrengthIndex', intervals: ['15m', '1h', '4h'], compare1: 'above', line1: '70', compare2: 'bellow', line2: '99' }],
   },
   {
     labelKey: 'ip.preset_bbpos15m_bottom',
@@ -179,7 +179,11 @@ function buildSummary(value, t) {
     const period = value.period ?? '20';
     const stdDev = value.stdDev ?? '2';
     const lookback = value.lookback ?? '300';
-    return t('sum.bollinger_band_width', period, stdDev, lookback, ivLabel);
+    const base = t('sum.bollinger_band_width', period, stdDev, lookback, ivLabel);
+    const range = [];
+    if (value.widthMinPct) range.push(`≥${value.widthMinPct}%`);
+    if (value.widthMaxPct) range.push(`≤${value.widthMaxPct}%`);
+    return range.length ? `${base} (${range.join(', ')})` : base;
   }
   if (type === 'bollingerMedianTrend') {
     const period = value.period ?? '20';
@@ -710,6 +714,28 @@ function IndicatorRow({ value, onChange }) {
             >
               {[50, 100, 150, 200, 300, 700].map(v => (
                 <option key={v} value={String(v)}>{v} candles</option>
+              ))}
+            </select>
+            <select
+              className={sel}
+              value={value.widthMinPct ?? ''}
+              onChange={(e) => onChange({ ...value, widthMinPct: e.target.value })}
+              title="Largura mínima da banda, em % — exclui símbolos com banda mais estreita que isso"
+            >
+              <option value="">Larg cima: —</option>
+              {[1, 2, 3, 5, 7, 10, 15, 20, 30, 50].map(v => (
+                <option key={v} value={String(v)}>Larg ≥{v}%</option>
+              ))}
+            </select>
+            <select
+              className={sel}
+              value={value.widthMaxPct ?? ''}
+              onChange={(e) => onChange({ ...value, widthMaxPct: e.target.value })}
+              title="Largura máxima da banda, em % — exclui símbolos com banda mais larga que isso"
+            >
+              <option value="">Larg baixo: —</option>
+              {[1, 2, 3, 5, 7, 10, 15, 20, 30, 50].map(v => (
+                <option key={v} value={String(v)}>Larg ≤{v}%</option>
               ))}
             </select>
           </>
@@ -1373,6 +1399,8 @@ export default function IndicatorPanel({ open, onToggle }) {
         const period = ind.period ?? '20';
         const stdDev = ind.stdDev ?? '2';
         const lookback = ind.lookback ?? '300';
+        const widthMinPct = ind.widthMinPct || null;
+        const widthMaxPct = ind.widthMaxPct || null;
         for (const interval of ind.intervals) {
           // force:true recalcula do zero (~484 símbolos) a cada clique — inviável em 1m/5m/15m,
           // onde manter todo o mercado fresco esbarra no rate-limit da Binance (fila global de
@@ -1382,8 +1410,10 @@ export default function IndicatorPanel({ open, onToggle }) {
           // devagar, quase tudo já está fresco em disco), então force:true continua valendo
           // a pena ali pra garantir dado sempre atual.
           const force = !['1m', '5m', '15m'].includes(interval);
-          const filter = await fetchBollingerBandWidthFilter({ interval, period, stdDev, lookback, force });
-          const expectedName = buildBollingerBandWidthFilterName(interval, period, stdDev, lookback);
+          const filter = await fetchBollingerBandWidthFilter({
+            interval, period, stdDev, lookback, force, widthMinPct, widthMaxPct,
+          });
+          const expectedName = buildBollingerBandWidthFilterName(interval, period, stdDev, lookback, { widthMinPct, widthMaxPct });
           addFilter({
             name: filter.name ?? expectedName,
             list: filter.list,

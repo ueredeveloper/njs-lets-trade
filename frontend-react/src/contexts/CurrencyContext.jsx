@@ -46,6 +46,7 @@ import {
   normalizeVwapAnchor,
   normalizeVwapSlopeHighlight,
   normalizeActiveIndicators,
+  normalizeDefaultActiveIndicators,
   normalizeCurrencyPanelWidth,
   normalizeStatsDefaults,
   normalizeCommonChartIntervals,
@@ -800,6 +801,17 @@ export function CurrencyProvider({ children }) {
     });
   }, []);
 
+  const setDefaultActiveIndicator = useCallback((key, enabled) => {
+    setUiPrefsState((prev) => {
+      const next = {
+        ...prev,
+        defaultActiveIndicators: normalizeDefaultActiveIndicators({ ...prev.defaultActiveIndicators, [key]: !!enabled }),
+      };
+      saveUiPreferences(next);
+      return next;
+    });
+  }, []);
+
   const setCurrencyPanelWidth = useCallback((width) => {
     setUiPrefsState((prev) => {
       const next = { ...prev, currencyPanelWidth: normalizeCurrencyPanelWidth(width) };
@@ -1109,6 +1121,7 @@ export function CurrencyProvider({ children }) {
         setVwapSlopeHighlightDefault,
         setVwapAnchorDefault,
         setActiveIndicatorsPreference,
+        setDefaultActiveIndicator,
         setCurrencyPanelWidth,
         setStatsDefaults,
         setChartEngineDefault,

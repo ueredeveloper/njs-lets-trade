@@ -55,8 +55,16 @@ function numOrNegInfinity(v) {
  * filtro "posição na banda"). `sortBy`: 'phase' | 'width_far' | 'width_near' | 'near_lower' |
  * 'near_upper'.
  */
+/** comprados (BOUGHT) primeiro, depois ativos (habilitados mas ainda PENDING/WATCHING), por
+ *  último os inativos (favorito pausado, enabled === false) — independente da fase. */
+function bbActivityRank(enabled, phase) {
+  if (enabled === false) return 2;
+  if (phase === 'BOUGHT') return 0;
+  return 1;
+}
+
 export function compareBollingerFavorites(a, b, sortBy, ctx = {}) {
-  const { phaseBySymbol = new Map(), widthMeta = {} } = ctx;
+  const { phaseBySymbol = new Map(), widthMeta = {}, enabledBySymbol = new Map() } = ctx;
 
   const symA = typeof a === 'string' ? a : a.symbol;
   const symB = typeof b === 'string' ? b : b.symbol;
@@ -80,9 +88,17 @@ export function compareBollingerFavorites(a, b, sortBy, ctx = {}) {
     return symA.localeCompare(symB);
   }
 
-  // phase (default)
-  const pa = PHASE_SORT_ORDER[phaseBySymbol.get(symA) ?? 'WATCHING'] ?? 2;
-  const pb = PHASE_SORT_ORDER[phaseBySymbol.get(symB) ?? 'WATCHING'] ?? 2;
+  // phase (default): comprados > ativos (pending/watching) > inativos (desabilitados)
+  const phaseA = phaseBySymbol.get(symA) ?? 'WATCHING';
+  const phaseB = phaseBySymbol.get(symB) ?? 'WATCHING';
+  const enabledA = enabledBySymbol.get(symA) ?? true;
+  const enabledB = enabledBySymbol.get(symB) ?? true;
+  const rankA = bbActivityRank(enabledA, phaseA);
+  const rankB = bbActivityRank(enabledB, phaseB);
+  if (rankA !== rankB) return rankA - rankB;
+
+  const pa = PHASE_SORT_ORDER[phaseA] ?? 2;
+  const pb = PHASE_SORT_ORDER[phaseB] ?? 2;
   if (pa !== pb) return pa - pb;
   return symA.localeCompare(symB);
 }

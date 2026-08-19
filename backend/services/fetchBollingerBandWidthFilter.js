@@ -7,13 +7,12 @@ const { getGateCandles } = require('../gate/getGateCandles');
 const { getActiveUsdtPairs } = require('../binance/getActiveUsdtPairs');
 const { closedCandlesOnly } = require('../bot/ma-cross/strategyEngine');
 const { buildBollingerBandWidthFilterName } = require('../utils/filterNames');
+const { averageWithoutOutliers } = require('../utils/removeOutliersIQR');
+const { bollingerCycleOccurrences } = require('../utils/indicatorGrowthEngines');
 const bbBandWidthCache = require('../cache/bbBandWidthCache');
 const { ALL_INTERVALS, BB_PERIODS, BB_STD_DEVS } = require('../bot/bollinger-bands/tradeConfigSchema');
 
 const CONCURRENCY = 25;
-/** avgWidthPct usa os últimos 80 candles fechados (Larg% em indicadores e favoritos BB).
- * O lookback continua definindo a janela de minWidthPct/maxWidthPct. */
-const AVG_WINDOW = 80;
 
 // Mesmos intervalos/período/desvio padrão aceitos pelo seletor de entrada do favorito
 // Bollinger Bands (ver backend/bot/bollinger-bands/tradeConfigSchema.js) — padroniza o que
@@ -22,6 +21,77 @@ const ALLOWED_INTERVALS = new Set(ALL_INTERVALS);
 const ALLOWED_PERIODS = new Set(BB_PERIODS);
 const ALLOWED_STD_DEVS = new Set(BB_STD_DEVS);
 const ALLOWED_LOOKBACKS = new Set([50, 100, 150, 200, 300, 700]);
+
+function parsePctParam(raw) {
+  if (raw === undefined || raw === null || raw === '') return null;
+  const v = parseFloat(raw);
+  return Number.isFinite(v) ? v : null;
+}
+
+/**
+ * Largura de uma moeda = quanto ela sobe em cada ciclo fundo→topo (mínima toca a banda
+ * inferior → máxima toca a banda superior), média dos ciclos completos dentro dos `candles`
+ * buscados (mesmo motor de ciclos usado pelo filtro Cresc%, ver bollingerCycleOccurrences em
+ * indicatorGrowthEngines.js). Substituiu a distância instantânea (upper-lower)/lower porque essa
+ * ficava artificialmente alta por vários candles após um crash/pump pontual — mesmo com o preço
+ * já não subindo mais rumo ao topo, a janela rolante do período ainda carregava a volatilidade
+ * do evento. Ciclos isolados exageradamente altos são descartados da média (ver averageWithoutOutliers).
+ */
+function computeBandGrowthRow(symbol, candles, { period, stdDev }) {
+  const closes = candles.map(c => parseFloat(c.close));
+  const bb = BollingerBands.calculate({ period, values: closes, stdDev });
+  if (!bb.length) return null;
+
+  const occurrences = bollingerCycleOccurrences(candles, { period, stdDev });
+  if (!occurrences || !occurrences.length) return null;
+
+  const avgWidthPct = averageWithoutOutliers(occurrences);
+  const lastBb = bb[bb.length - 1];
+  const last = candles[candles.length - 1];
+  const close = parseFloat(last.close);
+  const bandSpan = lastBb.upper - lastBb.lower;
+  const percentB = bandSpan > 0
+    ? Math.min(100, Math.max(0, ((close - lastBb.lower) / bandSpan) * 100))
+    : null;
+
+  return {
+    symbol,
+    avgWidthPct: Math.round(avgWidthPct * 100) / 100,
+    lastWidthPct: Math.round(occurrences[occurrences.length - 1] * 100) / 100,
+    minWidthPct: Math.round(Math.min(...occurrences) * 100) / 100,
+    maxWidthPct: Math.round(Math.max(...occurrences) * 100) / 100,
+    samples: occurrences.length,
+    close,
+    upper: lastBb.upper,
+    lower: lastBb.lower,
+    percentB: percentB != null ? Math.round(percentB * 100) / 100 : null,
+  };
+}
+
+/** Filtra uma lista já calculada (`{symbol, avgWidthPct, ...}[]`) pela faixa de largura pedida. */
+function filterByWidthRange(rows, widthMinPct, widthMaxPct) {
+  if (widthMinPct == null && widthMaxPct == null) return rows;
+  return rows.filter((r) => {
+    if (widthMinPct != null && r.avgWidthPct < widthMinPct) return false;
+    if (widthMaxPct != null && r.avgWidthPct > widthMaxPct) return false;
+    return true;
+  });
+}
+
+/** Mesmo filtro, mas sobre um snapshot pronto do cache ({list, details}) — preserva a ordem. */
+function filterSnapshotByWidthRange(snap, widthMinPct, widthMaxPct) {
+  if (widthMinPct == null && widthMaxPct == null) return snap;
+  const list = snap.list.filter((sym) => {
+    const meta = snap.details?.[sym];
+    if (!meta) return false;
+    if (widthMinPct != null && meta.avgWidthPct < widthMinPct) return false;
+    if (widthMaxPct != null && meta.avgWidthPct > widthMaxPct) return false;
+    return true;
+  });
+  const details = {};
+  for (const sym of list) details[sym] = snap.details[sym];
+  return { ...snap, list, details };
+}
 
 async function runWithConcurrency(items, fn, concurrency) {
   const results = [];
@@ -36,10 +106,10 @@ async function runWithConcurrency(items, fn, concurrency) {
 }
 
 /**
- * Largura das Bandas de Bollinger: variação percentual da banda inferior até a superior
- * ((upper-lower)/lower × 100), em média nos últimos `lookback` candles fechados — ex.:
- * moeda em squeeze (bandas bem próximas) vs. moeda em expansão de volatilidade (bandas
- * bem distantes).
+ * Largura das Bandas de Bollinger: valorização (%) média de cada ciclo fundo→topo (mínima
+ * toca a banda inferior → máxima toca a banda superior) encontrado nos últimos `lookback`
+ * candles fechados — ver computeBandGrowthRow acima. Ex.: moeda em squeeze (sobe pouco entre
+ * fundo e topo) vs. moeda em expansão de volatilidade (sobe muito a cada ciclo).
  *
  * GET /services/bollinger-band-width-filter?interval=4h&period=20&stdDev=2&lookback=100&order=far
  *
@@ -54,6 +124,8 @@ router.get('/bollinger-band-width-filter', async (req, res) => {
     const stdDev = parseFloat(req.query.stdDev ?? '2');
     const lookback = parseInt(req.query.lookback ?? '100', 10);
     const order = req.query.order === 'near' ? 'near' : 'far';
+    const widthMinPct = parsePctParam(req.query.widthMinPct);
+    const widthMaxPct = parsePctParam(req.query.widthMaxPct);
     const symbolsParam = typeof req.query.symbols === 'string' && req.query.symbols.trim()
       ? req.query.symbols.split(',').map(s => s.trim()).filter(Boolean)
       : null;
@@ -73,8 +145,11 @@ router.get('/bollinger-band-width-filter', async (req, res) => {
     if (!ALLOWED_LOOKBACKS.has(lookback)) {
       return res.status(400).json({ error: 'lookback suportado: 50, 100, 150, 200, 300 ou 700' });
     }
+    if (widthMinPct != null && widthMaxPct != null && widthMinPct > widthMaxPct) {
+      return res.status(400).json({ error: 'widthMinPct não pode ser maior que widthMaxPct' });
+    }
 
-    const name = buildBollingerBandWidthFilterName(interval, period, stdDev, lookback);
+    const name = buildBollingerBandWidthFilterName(interval, period, stdDev, lookback, { widthMinPct, widthMaxPct });
 
     if (symbolsParam) {
       const symbols = symbolsParam;
@@ -93,58 +168,25 @@ router.get('/bollinger-band-width-filter', async (req, res) => {
           const candles = closedCandlesOnly(raw);
           if (!candles?.length || candles.length < minCandles) return null;
 
-          const closes = candles.map(c => parseFloat(c.close));
-          const bb = BollingerBands.calculate({ period, values: closes, stdDev });
-          if (!bb.length) return null;
-
-          const lastBb = bb[bb.length - 1];
-          const window = bb.slice(-Math.min(lookback, bb.length));
-          const widths = [];
-          for (const p of window) {
-            if (!(p.lower > 0)) continue;
-            widths.push(((p.upper - p.lower) / p.lower) * 100);
-          }
-          if (!widths.length) return null;
-
-          const avgWindow = widths.slice(-AVG_WINDOW);
-          const avgWidthPct = avgWindow.reduce((s, v) => s + v, 0) / avgWindow.length;
-          const lastWidthPct = widths[widths.length - 1];
-          const last = candles[candles.length - 1];
-          const close = parseFloat(last.close);
-          const bandSpan = lastBb.upper - lastBb.lower;
-          const percentB = bandSpan > 0
-            ? Math.min(100, Math.max(0, ((close - lastBb.lower) / bandSpan) * 100))
-            : null;
-
-          return {
-            symbol,
-            avgWidthPct: Math.round(avgWidthPct * 100) / 100,
-            lastWidthPct: Math.round(lastWidthPct * 100) / 100,
-            minWidthPct: Math.round(Math.min(...widths) * 100) / 100,
-            maxWidthPct: Math.round(Math.max(...widths) * 100) / 100,
-            samples: widths.length,
-            close,
-            upper: lastBb.upper,
-            lower: lastBb.lower,
-            percentB: percentB != null ? Math.round(percentB * 100) / 100 : null,
-          };
+          return computeBandGrowthRow(symbol, candles, { period, stdDev });
         } catch (err) {
           console.warn(`[bollinger-band-width-filter] ${symbol}:`, err.message);
           return null;
         }
       }, CONCURRENCY);
 
-      matched.sort((a, b) => (order === 'far' ? b.avgWidthPct - a.avgWidthPct : a.avgWidthPct - b.avgWidthPct));
+      const withinWidth = filterByWidthRange(matched, widthMinPct, widthMaxPct);
+      withinWidth.sort((a, b) => (order === 'far' ? b.avgWidthPct - a.avgWidthPct : a.avgWidthPct - b.avgWidthPct));
 
       const details = {};
-      for (const row of matched) {
+      for (const row of withinWidth) {
         const { symbol, ...meta } = row;
         details[symbol] = meta;
       }
 
       return res.json({
         name,
-        list: matched.map(r => r.symbol),
+        list: withinWidth.map(r => r.symbol),
         details,
         interval,
         period,
@@ -162,7 +204,7 @@ router.get('/bollinger-band-width-filter', async (req, res) => {
     if (presetKey) {
       const cached = await bbBandWidthCache.getCachedResult(symbols, presetKey, { force, order });
       if (cached) {
-        return res.json({ ...cached, name });
+        return res.json({ ...filterSnapshotByWidthRange(cached, widthMinPct, widthMaxPct), name });
       }
     }
 
@@ -175,57 +217,24 @@ router.get('/bollinger-band-width-filter', async (req, res) => {
         const candles = closedCandlesOnly(raw);
         if (!candles?.length || candles.length < minCandles) return null;
 
-        const closes = candles.map(c => parseFloat(c.close));
-        const bb = BollingerBands.calculate({ period, values: closes, stdDev });
-        if (!bb.length) return null;
-
-        const lastBb = bb[bb.length - 1];
-        const window = bb.slice(-Math.min(lookback, bb.length));
-        const widths = [];
-        for (const p of window) {
-          if (!(p.lower > 0)) continue;
-          widths.push(((p.upper - p.lower) / p.lower) * 100);
-        }
-        if (!widths.length) return null;
-
-        const avgWindow = widths.slice(-AVG_WINDOW);
-        const avgWidthPct = avgWindow.reduce((s, v) => s + v, 0) / avgWindow.length;
-        const lastWidthPct = widths[widths.length - 1];
-        const last = candles[candles.length - 1];
-        const close = parseFloat(last.close);
-        const bandSpan = lastBb.upper - lastBb.lower;
-        const percentB = bandSpan > 0
-          ? Math.min(100, Math.max(0, ((close - lastBb.lower) / bandSpan) * 100))
-          : null;
-
-        return {
-          symbol,
-          avgWidthPct: Math.round(avgWidthPct * 100) / 100,
-          lastWidthPct: Math.round(lastWidthPct * 100) / 100,
-          minWidthPct: Math.round(Math.min(...widths) * 100) / 100,
-          maxWidthPct: Math.round(Math.max(...widths) * 100) / 100,
-          samples: widths.length,
-          close,
-          upper: lastBb.upper,
-          lower: lastBb.lower,
-          percentB: percentB != null ? Math.round(percentB * 100) / 100 : null,
-        };
+        return computeBandGrowthRow(symbol, candles, { period, stdDev });
       } catch {
         return null;
       }
     }, CONCURRENCY);
 
-    matched.sort((a, b) => (order === 'far' ? b.avgWidthPct - a.avgWidthPct : a.avgWidthPct - b.avgWidthPct));
+    const withinWidth = filterByWidthRange(matched, widthMinPct, widthMaxPct);
+    withinWidth.sort((a, b) => (order === 'far' ? b.avgWidthPct - a.avgWidthPct : a.avgWidthPct - b.avgWidthPct));
 
     const details = {};
-    for (const row of matched) {
+    for (const row of withinWidth) {
       const { symbol, ...meta } = row;
       details[symbol] = meta;
     }
 
     res.json({
       name,
-      list: matched.map(r => r.symbol),
+      list: withinWidth.map(r => r.symbol),
       details,
       interval,
       period,

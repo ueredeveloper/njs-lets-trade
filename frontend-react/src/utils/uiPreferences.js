@@ -317,6 +317,18 @@ export function normalizeActiveIndicators(arr) {
   return arr.filter((id) => VALID_ACTIVE_INDICATORS.includes(id));
 }
 
+/** Quais indicadores (botões on/off do gráfico) já nascem ATIVOS quando o gráfico abre —
+ *  complementar a chartPanelButtons.js (que só controla se o botão APARECE). Editável em
+ *  Configurações → Botões do gráfico. Só cobre VALID_ACTIVE_INDICATORS — MA1/MA2/BB/VWAP têm
+ *  o próprio controle de "ligado por padrão" nas seções deles (overlaySlots/bbGroups/vwapDefaults). */
+export function normalizeDefaultActiveIndicators(raw) {
+  const result = {};
+  for (const key of VALID_ACTIVE_INDICATORS) {
+    result[key] = typeof raw?.[key] === 'boolean' ? raw[key] : DEFAULT_ACTIVE_INDICATORS.includes(key);
+  }
+  return result;
+}
+
 export function normalizeMaBandsDefaults(raw) {
   const d = DEFAULT_MA_BANDS;
   const pct = Number(raw?.pct);
@@ -370,6 +382,7 @@ export const DEFAULT_UI_PREFS = {
   vwapAnchorDefault: normalizeVwapAnchor(DEFAULT_VWAP_ANCHOR),
   vwapSlopeHighlightDefault: normalizeVwapSlopeHighlight(DEFAULT_VWAP_SLOPE_HIGHLIGHT),
   activeIndicators: [...DEFAULT_ACTIVE_INDICATORS],
+  defaultActiveIndicators: normalizeDefaultActiveIndicators({}),
   currencyPanelWidth: CURRENCY_PANEL_WIDTH_DEFAULT,
   statsDefaults: normalizeStatsDefaults(DEFAULT_STATS),
   chartEngineDefault: DEFAULT_CHART_ENGINE,
@@ -396,6 +409,7 @@ function cloneDefaults() {
     vwapAnchorDefault: normalizeVwapAnchor(DEFAULT_VWAP_ANCHOR),
     vwapSlopeHighlightDefault: normalizeVwapSlopeHighlight(DEFAULT_VWAP_SLOPE_HIGHLIGHT),
     activeIndicators: [...DEFAULT_ACTIVE_INDICATORS],
+    defaultActiveIndicators: normalizeDefaultActiveIndicators({}),
     currencyPanelWidth: CURRENCY_PANEL_WIDTH_DEFAULT,
     statsDefaults: normalizeStatsDefaults(DEFAULT_STATS),
     chartEngineDefault: DEFAULT_CHART_ENGINE,
@@ -466,6 +480,9 @@ export function loadUiPreferences() {
     }
     if (Array.isArray(parsed.activeIndicators)) {
       result.activeIndicators = normalizeActiveIndicators(parsed.activeIndicators);
+    }
+    if (parsed.defaultActiveIndicators) {
+      result.defaultActiveIndicators = normalizeDefaultActiveIndicators(parsed.defaultActiveIndicators);
     }
     if (parsed.currencyPanelWidth !== undefined) {
       result.currencyPanelWidth = normalizeCurrencyPanelWidth(parsed.currencyPanelWidth);

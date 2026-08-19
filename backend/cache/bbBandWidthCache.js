@@ -3,18 +3,16 @@
 const fs = require('node:fs/promises');
 const path = require('path');
 const atomicWriteFile = require('../utils/atomicWriteFile');
-const { BollingerBands } = require('technicalindicators');
 const getCandlesForScreening = require('../utils/getCandlesForScreening');
 const candleUpdateQueue = require('../utils/candleUpdateQueue');
 const { closedCandlesOnly, intervalMs } = require('../bot/ma-cross/strategyEngine');
 const { buildBollingerBandWidthFilterName } = require('../utils/filterNames');
+const { averageWithoutOutliers } = require('../utils/removeOutliersIQR');
+const { bollingerCycleOccurrences } = require('../utils/indicatorGrowthEngines');
 const cacheSettings = require('./cacheSettings');
 
 const BATCH_SIZE = 20;
 const CACHE_FILE = path.join(__dirname, '..', 'data', 'bb-band-width-cache.json');
-/** avgWidthPct usa os últimos 80 candles fechados (Larg% em indicadores e favoritos BB).
- * O lookback continua definindo a janela de minWidthPct/maxWidthPct. */
-const AVG_WINDOW = 80;
 
 /**
  * Presets pré-aquecidos: combinação padrão do painel de favoritos (4h, período 20, desvio 2,
@@ -120,37 +118,27 @@ function evaluateSymbolWithCandles(symbol, preset, rawCandles, now = Date.now())
       return false;
     }
 
-    const closes = candles.map(c => parseFloat(c.close));
-    const bb = BollingerBands.calculate({ period: preset.period, values: closes, stdDev: preset.stdDev });
-    if (!bb.length) {
+    // Largura de uma moeda = quanto ela sobe em cada ciclo fundo→topo (mínima toca a banda
+    // inferior → máxima toca a banda superior), não a distância instantânea (upper-lower)/lower
+    // — essa ficava artificialmente alta por vários candles após um crash/pump pontual (ver
+    // bollingerCycleOccurrences em indicatorGrowthEngines.js, mesmo motor do filtro Cresc%).
+    const occurrences = bollingerCycleOccurrences(candles, { period: preset.period, stdDev: preset.stdDev });
+    if (!occurrences?.length) {
       symbolStore.set(key, { detail: null, computedAt: now });
       dirty = true;
       return false;
     }
 
-    const window = bb.slice(-Math.min(preset.lookback, bb.length));
-    const widths = [];
-    for (const p of window) {
-      if (!(p.lower > 0)) continue;
-      widths.push(((p.upper - p.lower) / p.lower) * 100);
-    }
-    if (!widths.length) {
-      symbolStore.set(key, { detail: null, computedAt: now });
-      dirty = true;
-      return false;
-    }
-
-    const avgWindow = widths.slice(-AVG_WINDOW);
-    const avgWidthPct = avgWindow.reduce((s, v) => s + v, 0) / avgWindow.length;
+    const avgWidthPct = averageWithoutOutliers(occurrences);
     const lastCandle = candles[candles.length - 1];
 
     const detail = {
       symbol,
       avgWidthPct: Math.round(avgWidthPct * 100) / 100,
-      lastWidthPct: Math.round(widths[widths.length - 1] * 100) / 100,
-      minWidthPct: Math.round(Math.min(...widths) * 100) / 100,
-      maxWidthPct: Math.round(Math.max(...widths) * 100) / 100,
-      samples: widths.length,
+      lastWidthPct: Math.round(occurrences[occurrences.length - 1] * 100) / 100,
+      minWidthPct: Math.round(Math.min(...occurrences) * 100) / 100,
+      maxWidthPct: Math.round(Math.max(...occurrences) * 100) / 100,
+      samples: occurrences.length,
       close: parseFloat(lastCandle.close),
     };
 

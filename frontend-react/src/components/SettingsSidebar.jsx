@@ -7,7 +7,7 @@ import { useI18n } from '../i18n';
 import { useCurrency } from '../contexts/CurrencyContext';
 import { PERIOD_DEFAULT_COLORS, MAX_OVERLAY_SLOTS,
   CURRENCY_PANEL_WIDTH_MIN, CURRENCY_PANEL_WIDTH_MAX, CURRENCY_PANEL_WIDTH_DEFAULT,
-  VWAP_SLOPE_HIGHLIGHT_LOOKBACKS, CANDLE_COUNT_DISPLAY_OPTIONS } from '../utils/uiPreferences';
+  VWAP_SLOPE_HIGHLIGHT_LOOKBACKS, CANDLE_COUNT_DISPLAY_OPTIONS, VALID_ACTIVE_INDICATORS } from '../utils/uiPreferences';
 
 const OVERLAY_SETTING_INTERVALS = ['15m', '30m', '1h', '4h', '1d'];
 const OVERLAY_SETTING_PERIODS   = ['9', '21', '50', '200'];
@@ -81,7 +81,7 @@ export default function SettingsSidebar({ open, onClose }) {
     setFavoriteButtonVisible, favoriteButtonKeys,
     setOverlaySlotsPreference, setCurrencyPanelWidth,
     setStatsDefaults, setVwapAnchorDefault, setVwapSlopeHighlightDefault, setChartEngineDefault,
-    setCandleCountDisplayDefault,
+    setCandleCountDisplayDefault, setDefaultActiveIndicator,
     chartIntervalOptions, panelKeys,
     activeTrades, activeTradesSettings, updateActiveTradesSettings,
     ignoredActiveTrades, dismissActiveTrade, restoreActiveTrade } = useCurrency();
@@ -699,21 +699,39 @@ export default function SettingsSidebar({ open, onClose }) {
                 const hintKey = `settings.chart_btn_hint.${key}`;
                 const hint = t(hintKey);
                 const showHint = hint !== hintKey;
+                const visible = chartPanelButtons[key] !== false;
+                const canDefaultActive = VALID_ACTIVE_INDICATORS.includes(key);
                 return (
-                  <label key={key} className="flex items-start gap-2.5 cursor-pointer group">
-                    <input
-                      type="checkbox"
-                      checked={chartPanelButtons[key] !== false}
-                      onChange={(e) => setChartPanelButton(key, e.target.checked)}
-                      className="mt-0.5 shrink-0 accent-p4"
-                    />
-                    <span className="text-p5 text-xs leading-snug group-hover:text-white transition-colors">
-                      {t(`settings.chart_btn.${key}`)}
-                      {showHint && (
-                        <span className="block text-[10px] text-p5/40 mt-0.5 font-normal">{hint}</span>
-                      )}
-                    </span>
-                  </label>
+                  <div key={key} className="flex items-start justify-between gap-2.5">
+                    <label className="flex items-start gap-2.5 cursor-pointer group">
+                      <input
+                        type="checkbox"
+                        checked={visible}
+                        onChange={(e) => setChartPanelButton(key, e.target.checked)}
+                        className="mt-0.5 shrink-0 accent-p4"
+                      />
+                      <span className="text-p5 text-xs leading-snug group-hover:text-white transition-colors">
+                        {t(`settings.chart_btn.${key}`)}
+                        {showHint && (
+                          <span className="block text-[10px] text-p5/40 mt-0.5 font-normal">{hint}</span>
+                        )}
+                      </span>
+                    </label>
+                    {canDefaultActive && (
+                      <label className={`flex items-center gap-1.5 shrink-0 cursor-pointer group ${!visible ? 'opacity-30 pointer-events-none' : ''}`}>
+                        <span className="text-[10px] text-p5/50 group-hover:text-white transition-colors whitespace-nowrap">
+                          {t('settings.chart_btn_default_active')}
+                        </span>
+                        <input
+                          type="checkbox"
+                          checked={!!uiPrefs.defaultActiveIndicators?.[key]}
+                          disabled={!visible}
+                          onChange={(e) => setDefaultActiveIndicator(key, e.target.checked)}
+                          className="shrink-0 accent-p4"
+                        />
+                      </label>
+                    )}
+                  </div>
                 );
               })}
             </div>

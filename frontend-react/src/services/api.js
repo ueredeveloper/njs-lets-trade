@@ -234,12 +234,14 @@ export async function fetchVwapBandWidthFilter({
  */
 export async function fetchBollingerBandWidthFilter({
   interval = '4h', period = '20', stdDev = '2', lookback = '100', order = 'far', symbols = null, gateSymbols = null,
-  force = false,
+  force = false, widthMinPct = null, widthMaxPct = null,
 } = {}) {
   const params = new URLSearchParams({ interval, period, stdDev, lookback, order });
   if (symbols?.length) params.set('symbols', symbols.join(','));
   if (gateSymbols?.length) params.set('gateSymbols', gateSymbols.join(','));
   if (force) params.set('force', '1');
+  if (widthMinPct != null && widthMinPct !== '') params.set('widthMinPct', widthMinPct);
+  if (widthMaxPct != null && widthMaxPct !== '') params.set('widthMaxPct', widthMaxPct);
   const res = await fetch(`/services/bollinger-band-width-filter?${params}`);
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));

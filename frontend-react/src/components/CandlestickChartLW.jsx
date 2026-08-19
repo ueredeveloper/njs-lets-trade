@@ -1153,6 +1153,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
         }, pane.paneIndex());
         if (id === 'rsi') {
           s.createPriceLine({ price: 30, color: '#ef5350', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: '30' });
+          s.createPriceLine({ price: 50, color: '#ffffff', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: '50' });
           s.createPriceLine({ price: 70, color: '#26a69a', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: '70' });
           if (activeIndicators.includes('rsi50')) s.createPriceLine({ price: 50, color: '#facc15', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: '50' });
           if (activeIndicators.includes('rsi80')) s.createPriceLine({ price: 80, color: '#fb923c', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: '80' });
