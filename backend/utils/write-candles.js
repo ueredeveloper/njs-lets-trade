@@ -1,5 +1,6 @@
 const fs   = require('node:fs/promises');
 const path = require('path');
+const atomicWriteFile = require('./atomicWriteFile');
 
 const BASE = path.join(__dirname, '..', 'data', 'candlestick');
 
@@ -24,7 +25,7 @@ module.exports = async function writeCandles(symbol, interval, candles) {
   }
   try {
     await fs.mkdir(BASE, { recursive: true });
-    await fs.writeFile(filePath, JSON.stringify(clean));
+    await atomicWriteFile(filePath, JSON.stringify(clean));
   } catch (err) {
     console.error(`[writeCandles] ${symbol}-${interval}:`, err.message);
   }
