@@ -29,11 +29,14 @@ const AVG_WINDOW = 80;
  * padrão pra abrir espaço pra ele.
  */
 /**
- * ttlMs é independente do intervalo do candle: manter a MÉTRICA (largura média em janela de
- * candles) "fresca" a cada fechamento de candle de 1min/15min exigiria re-varrer os ~500
- * pares dentro dessa mesma janela — muito acima do orçamento da fila global (~24 req/min).
- * Um ttl mais folgado evita reprocessar o mercado inteiro sem parar; a métrica em si não
- * muda tão rápido a ponto de precisar disso.
+ * ttlMs é independente do intervalo do candle. 1min/5min ficam em 5min: o refresh em
+ * background já roda nesse ritmo (REFRESH_TICK_MS) e não bloqueia clique nenhum — o
+ * endpoint sempre devolve o snapshot em memória na hora, só dispara o recálculo assíncrono
+ * quando o TTL vence (ver getCachedResult). O front também parou de mandar force:true pra
+ * esses dois intervalos (IndicatorPanel.jsx) exatamente por isso: sem essa mudança, um clique
+ * forçava reprocessar os ~484 pares na hora, o que nesses dois intervalos nunca é rápido (ver
+ * orçamento da fila global em candleUpdateQueue.js). 15min continua mais folgado (30min) por
+ * não ter sido pedido tão em cima.
  */
 // Dentro do mesmo intervalo, o preset de lookback maior vem sempre antes do menor: o
 // session cache de candles em refreshAll (loadCandlesForScreening) é indexado só por
@@ -41,14 +44,14 @@ const AVG_WINDOW = 80;
 // candles insuficientes pra sua janela em vez de refetchar.
 const CACHED_PRESETS = [
   { key: '4h|20|2|100', interval: '4h', period: 20, stdDev: 2, lookback: 100, settingId: 'bbBandWidth4h' },
-  { key: '1m|20|2|300', interval: '1m', period: 20, stdDev: 2, lookback: 300, settingId: 'bbBandWidth1m', ttlMs: 60 * 60_000 },
-  { key: '1m|20|2|100', interval: '1m', period: 20, stdDev: 2, lookback: 100, settingId: 'bbBandWidth1m', ttlMs: 60 * 60_000 },
+  { key: '1m|20|2|300', interval: '1m', period: 20, stdDev: 2, lookback: 300, settingId: 'bbBandWidth1m', ttlMs: 5 * 60_000 },
+  { key: '1m|20|2|100', interval: '1m', period: 20, stdDev: 2, lookback: 100, settingId: 'bbBandWidth1m', ttlMs: 5 * 60_000 },
   { key: '1h|20|2|300', interval: '1h', period: 20, stdDev: 2, lookback: 300, settingId: 'bbBandWidth1h' },
   { key: '1h|20|2|100', interval: '1h', period: 20, stdDev: 2, lookback: 100, settingId: 'bbBandWidth1h' },
   { key: '15m|20|2|300', interval: '15m', period: 20, stdDev: 2, lookback: 300, settingId: 'bbBandWidth15m', ttlMs: 30 * 60_000 },
   { key: '15m|20|2|100', interval: '15m', period: 20, stdDev: 2, lookback: 100, settingId: 'bbBandWidth15m', ttlMs: 30 * 60_000 },
-  { key: '5m|20|2|300', interval: '5m', period: 20, stdDev: 2, lookback: 300, settingId: 'bbBandWidth5m', ttlMs: 20 * 60_000 },
-  { key: '5m|20|2|100', interval: '5m', period: 20, stdDev: 2, lookback: 100, settingId: 'bbBandWidth5m', ttlMs: 20 * 60_000 },
+  { key: '5m|20|2|300', interval: '5m', period: 20, stdDev: 2, lookback: 300, settingId: 'bbBandWidth5m', ttlMs: 5 * 60_000 },
+  { key: '5m|20|2|100', interval: '5m', period: 20, stdDev: 2, lookback: 100, settingId: 'bbBandWidth5m', ttlMs: 5 * 60_000 },
 ];
 
 const REFRESH_TICK_MS = 5 * 60_000;
@@ -313,7 +316,6 @@ async function getCachedResult(symbols, presetKey, { force = false, order = 'far
   const age = snapshotAgeMs(key);
   const snap = snapshots.get(key);
   const hasSnapshot = snap && Array.isArray(snap.list);
-  const staleMs = presetTtlMs(preset) * 2;
 
   if (!hasSnapshot && presetHasEntries(key)) {
     rebuildAllSnapshots();
@@ -327,7 +329,13 @@ async function getCachedResult(symbols, presetKey, { force = false, order = 'far
     }
   }
 
-  if (force || !hasSnapshot || age >= staleMs) {
+  // Só bloqueia esperando a revarredura completa quando não existe NENHUM dado ainda
+  // (primeira vez que esse preset roda) ou quando force=true foi pedido explicitamente. Um
+  // snapshot velho (mesmo bem além do TTL) sempre volta na hora — a atualização acontece em
+  // segundo plano logo abaixo. Sem isso, um preset que o ciclo de 5min ainda não tocou (ex.:
+  // logo após reiniciar o servidor) travava a resposta esperando a fila global de candles,
+  // reintroduzindo a mesma demora que motivou tirar o force:true do 1m/5m no front.
+  if (force || !hasSnapshot) {
     const stats = await ensureFresh(symbols, { force, presetKey: key });
     const fresh = buildSnapshotForPreset(preset, Date.now());
     return { ...applyOrder(fresh, order), cache: { ...stats, hit: false, ageMs: 0, preset: key } };

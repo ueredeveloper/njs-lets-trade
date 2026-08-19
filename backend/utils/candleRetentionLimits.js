@@ -2,15 +2,20 @@
 
 /**
  * Teto de retenção do cache de candles em disco (backend/data/candlestick/*.json) e de quanto
- * histórico faz sentido pedir pra VWAP Bands por intervalo. 1m precisa de mais espaço que o
- * padrão pra cobrir uma janela semanal de verdade (7 dias = ~10080 candles a 1m) — sem isso,
- * "VWAP semanal" em 1m nunca tinha histórico suficiente e a banda ficava instável/deslocada do
- * que o gráfico e o motor real usam pra decidir o sinal (ver conversa sobre a KMNOUSDT/ACEUSDT).
- * Usado por getCandles.js (Binance), getGateCandles.js (Gate.io), analyseVwapBandsStats.js
- * (Estatísticas) e strategyEngine.js/getRequiredSpecs (bot real) — mesmo teto nos quatro
- * lugares, senão um busca mais do que o outro consegue reter e fica re-buscando à toa.
+ * histórico faz sentido pedir pra VWAP Bands por intervalo. Usado por getCandles.js (Binance),
+ * getGateCandles.js (Gate.io), analyseVwapBandsStats.js (Estatísticas) e
+ * strategyEngine.js/getRequiredSpecs (bot real) — mesmo teto nos quatro lugares, senão um busca
+ * mais do que o outro consegue reter e fica re-buscando à toa.
+ *
+ * 1m já teve um teto maior (10500) pra cobrir uma janela semanal de VWAP (7 dias = ~10080
+ * candles) — voltou pro padrão de 3000 a pedido do usuário (12000 registros por símbolo era
+ * considerado exagero de espaço em disco). Efeito colateral aceito conscientemente: o VWAP
+ * Bands semanal (session='weekly') no bot real, em símbolos configurados com vwapInterval=1m,
+ * passa a ter só ~2 dias de histórico em vez de 7 — pode voltar a ficar instável/deslocado
+ * como no caso KMNOUSDT/ACEUSDT que motivou o teto maior originalmente. Se isso voltar a dar
+ * problema, a correção é reverter só o '1m' aqui pra 10500 de novo.
  */
-const RETENTION_LIMIT_BY_INTERVAL = { '1m': 10500 };
+const RETENTION_LIMIT_BY_INTERVAL = {};
 const DEFAULT_RETENTION_LIMIT = 3000;
 
 function retentionLimitFor(interval) {

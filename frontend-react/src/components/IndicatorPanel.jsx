@@ -1374,7 +1374,15 @@ export default function IndicatorPanel({ open, onToggle }) {
         const stdDev = ind.stdDev ?? '2';
         const lookback = ind.lookback ?? '300';
         for (const interval of ind.intervals) {
-          const filter = await fetchBollingerBandWidthFilter({ interval, period, stdDev, lookback, force: true });
+          // force:true recalcula do zero (~484 símbolos) a cada clique — inviável em 1m/5m/15m,
+          // onde manter todo o mercado fresco esbarra no rate-limit da Binance (fila global de
+          // candles) e o clique passa minutos esperando. Nesses três, usa o cache normal:
+          // responde na hora, e o próprio backend atualiza em segundo plano (ver ttlMs em
+          // bbBandWidthCache.js). Em 1h/4h a varredura completa já é rápida (candles mudam
+          // devagar, quase tudo já está fresco em disco), então force:true continua valendo
+          // a pena ali pra garantir dado sempre atual.
+          const force = !['1m', '5m', '15m'].includes(interval);
+          const filter = await fetchBollingerBandWidthFilter({ interval, period, stdDev, lookback, force });
           const expectedName = buildBollingerBandWidthFilterName(interval, period, stdDev, lookback);
           addFilter({
             name: filter.name ?? expectedName,
