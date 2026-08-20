@@ -131,7 +131,7 @@ const rsiCache = require('./cache/rsiCache');
 const cacheSettings = require('./cache/cacheSettings');
 const { getActiveUsdtPairs } = require('./binance/getActiveUsdtPairs');
 
-const RSI_INTERVALS = ['15m', '1h', '4h'];
+const RSI_INTERVALS = ['5m', '15m'];
 const RSI_TICK_MS   = 2 * 60 * 1000; // verifica a cada 2 min; TTL por intervalo decide o que buscar
 const PORT = process.env.BACKEND_PORT || process.env.SERVER_PORT || 3000;
 

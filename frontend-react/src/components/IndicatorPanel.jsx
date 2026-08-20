@@ -100,7 +100,12 @@ const QUICK_PRESETS = [
   {
     labelKey: 'ip.preset_rsi7099',
     tipKey: 'ip.preset_rsi7099_tip',
-    build: () => [{ type: 'relativeStrengthIndex', intervals: ['15m', '1h', '4h'], compare1: 'above', line1: '70', compare2: 'bellow', line2: '99' }],
+    build: () => [{ type: 'relativeStrengthIndex', intervals: ['5m', '15m'], compare1: 'above', line1: '70', compare2: 'bellow', line2: '99' }],
+  },
+  {
+    labelKey: 'ip.preset_rsi6099',
+    tipKey: 'ip.preset_rsi6099_tip',
+    build: () => [{ type: 'relativeStrengthIndex', intervals: ['5m', '15m'], compare1: 'above', line1: '60', compare2: 'bellow', line2: '99' }],
   },
   {
     labelKey: 'ip.preset_bbpos15m_bottom',

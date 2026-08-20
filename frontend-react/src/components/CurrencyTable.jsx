@@ -7,7 +7,7 @@ import {
   fetchMaCrossoverFilter, fetchMultitradeTrades, fetchBotState,
   fetchGateTrades, fetchBinanceTrades,
 } from '../services/api';
-import { parseMaCrossFilterName, parseMaCompareFilterName, parseMaDistanceFilterName, parseIndicatorGrowthFilterName, parseVwapBandWidthFilterName, parseBollingerBandWidthFilterName, parseBollingerMedianTrendFilterName, parseFilterChartInterval } from '../utils/filterNames';
+import { parseMaCrossFilterName, parseMaCompareFilterName, parseMaDistanceFilterName, parseIndicatorGrowthFilterName, parseVwapBandWidthFilterName, parseBollingerBandWidthFilterName, parseBollingerMedianTrendFilterName, parseRsiFilterName, parseFilterChartInterval } from '../utils/filterNames';
 import { useI18n } from '../i18n';
 import MultitradeModal from './MultitradeModal';
 import MultitradeBotStateModal from './MultitradeBotStateModal';
@@ -354,6 +354,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   const [growthSort, setGrowthSort] = useState('high'); // 'high' | 'low'
   const [vwapWidthSort, setVwapWidthSort] = useState('far'); // 'far' | 'near'
   const [bbWidthSort, setBbWidthSort] = useState('far'); // 'far' | 'near'
+  const [rsiSort, setRsiSort] = useState('high'); // 'high' | 'low'
   // Largura BB "genérica": disponível pra qualquer filtro sem coluna de largura própria (ex.:
   // RSI) — 'off' até o usuário ativar, depois alterna cima/baixo (ver botão "Larg BB" na
   // coluna de favoritos). 'far' = bandas mais distantes primeiro ("Larg cima"), 'near' = mais
@@ -522,6 +523,16 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   const bbTrendMeta = activeBbTrendFilter?.meta ?? null;
   const isBbTrendFilter = !!activeBbTrendFilter;
 
+  const activeRsiFilter = useMemo(() => {
+    if (!activeFilter || favoriteView) return null;
+    const f = findFilter(activeFilter);
+    if (!f || !parseRsiFilterName(f.name)) return null;
+    return f;
+  }, [activeFilter, favoriteView, findFilter]);
+
+  const rsiMeta = activeRsiFilter?.meta ?? null;
+  const isRsiFilter = !!activeRsiFilter;
+
   const showVwapFavWidthCol = isVwapBandsFavView && (vwapFavSort === 'width_far' || vwapFavSort === 'width_near');
   const showBbFavWidthCol = isBollingerBandsFavView
     && (bbFavSort === 'width_far' || bbFavSort === 'width_near' || bbFavSort === 'near_lower' || bbFavSort === 'near_upper');
@@ -529,12 +540,16 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
 
   // Largura BB genérica: só oferecida em filtros "simples" que ainda não têm sua própria
   // coluna de largura/distância/crescimento — evita duas colunas de largura conflitantes.
+  // Exceção: RSI mantém a coluna própria (valor atual) *e* pode somar a largura BB genérica
+  // ao lado, já que as duas informações são complementares nesse filtro.
   const showGenericWidthToggle = !favoriteView && !!activeFilter
     && !isAltaFilter && !isNovasFilter && !isMaDistanceFilter && !isGrowthFilter
     && !isVwapWidthFilter && !isBbWidthFilter && !isBbTrendFilter && !activeMacmpFilter;
   const showGenericWidthCol = showGenericWidthToggle && genericWidthSort !== 'off';
 
-  const tableColCount = isAltaFilter || isMaDistanceFilter || isGrowthFilter || isVwapWidthFilter || isBbWidthFilter || isBbTrendFilter || showVwapFavWidthCol || showBbFavWidthCol || showGenericWidthCol ? 7 : 6;
+  const hasDedicatedExtraCol = isAltaFilter || isMaDistanceFilter || isGrowthFilter || isVwapWidthFilter || isBbWidthFilter || isBbTrendFilter || isRsiFilter || showVwapFavWidthCol || showBbFavWidthCol;
+  const extraColCount = (hasDedicatedExtraCol ? 1 : 0) + (showGenericWidthCol ? 1 : 0);
+  const tableColCount = 6 + extraColCount;
 
   const filterChartInterval = useMemo(() => {
     if (!activeFilter || favoriteView) return null;
@@ -552,7 +567,10 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
 
   const genericWidthConfigs = useMemo(() => {
     if (!genericWidthSymbols.length) return [];
-    return [{ interval: filterChartInterval ?? '4h', period: 20, stdDev: 2, symbols: genericWidthSymbols, gateSymbols: [] }];
+    // lookback 300: mesmo padrão do filtro dedicado "Largura BB" e do painel de Estatísticas
+    // (ver comentário em StatisticsPanel.jsx BB_CANDLE_COUNT_DEFAULT), pra "Larg" bater com
+    // "Valor. média" com os campos padrão.
+    return [{ interval: filterChartInterval ?? '4h', period: 20, stdDev: 2, lookback: 300, symbols: genericWidthSymbols, gateSymbols: [] }];
   }, [genericWidthSymbols, filterChartInterval]);
 
   const { meta: genericWidthMeta } = useBollingerBandWidthMeta(showGenericWidthCol, genericWidthConfigs);
@@ -756,10 +774,18 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
         return bbTrendSort === 'best' ? pb - pa : pa - pb;
       });
     } else if (showGenericWidthCol && genericWidthMeta && sortVolume === 'none' && !favoriteView) {
+      // Toggle explícito do usuário (Larg cima/baixo) tem prioridade sobre a ordenação
+      // padrão do filtro (ex.: RSI) — só é alcançado quando ele sai do 'off'.
       list = list.slice().sort((a, b) => {
         const wa = genericWidthMeta[a.symbol]?.avgWidthPct ?? (genericWidthSort === 'far' ? -Infinity : Infinity);
         const wb = genericWidthMeta[b.symbol]?.avgWidthPct ?? (genericWidthSort === 'far' ? -Infinity : Infinity);
         return genericWidthSort === 'far' ? wb - wa : wa - wb;
+      });
+    } else if (activeRsiFilter && rsiMeta && sortVolume === 'none' && !favoriteView) {
+      list = list.slice().sort((a, b) => {
+        const ra = rsiMeta[a.symbol]?.rsi ?? (rsiSort === 'high' ? -Infinity : Infinity);
+        const rb = rsiMeta[b.symbol]?.rsi ?? (rsiSort === 'high' ? -Infinity : Infinity);
+        return rsiSort === 'high' ? rb - ra : ra - rb;
       });
     } else if (sortVolume !== 'none') {
       list = list.slice().sort((a, b) => {
@@ -770,7 +796,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     }
 
     return list;
-  }, [currencies, activeFilter, selectedQuote, findFilter, search, favoriteView, gateFavorites, binanceFavorites, multitradeFavorites, sortVolume, gateAll, filterVisibleCurrencies, isVisibleSymbol, currencyBySymbol, activeMacrossFilter, macrossScannedAt, macrossTick, isMacrossFavView, macrossFavSort, macrossFavStatus, macrossEntriesBySymbol, isTradesFavView, tradeFavSort, tradeFavSymbols, tradeFavStatus, isActiveFavView, activeFavSort, activeTrades, isAltaFilter, isNovasFilter, highlightMeta, activeMacmpFilter, macmpMeta, macmpTableSort, activeMaDistanceFilter, maDistMeta, maDistSort, activeGrowthFilter, growthMeta, growthSort, activeVwapWidthFilter, vwapWidthMeta, vwapWidthSort, activeBbWidthFilter, bbWidthMeta, bbWidthSort, activeBbTrendFilter, bbTrendMeta, bbTrendSort, isVwapBandsFavView, vwapFavSort, vwapFavWidthMeta, bbFavSort, bbFavWidthMeta, showGenericWidthCol, genericWidthMeta, genericWidthSort]);
+  }, [currencies, activeFilter, selectedQuote, findFilter, search, favoriteView, gateFavorites, binanceFavorites, multitradeFavorites, sortVolume, gateAll, filterVisibleCurrencies, isVisibleSymbol, currencyBySymbol, activeMacrossFilter, macrossScannedAt, macrossTick, isMacrossFavView, macrossFavSort, macrossFavStatus, macrossEntriesBySymbol, isTradesFavView, tradeFavSort, tradeFavSymbols, tradeFavStatus, isActiveFavView, activeFavSort, activeTrades, isAltaFilter, isNovasFilter, highlightMeta, activeMacmpFilter, macmpMeta, macmpTableSort, activeMaDistanceFilter, maDistMeta, maDistSort, activeGrowthFilter, growthMeta, growthSort, activeVwapWidthFilter, vwapWidthMeta, vwapWidthSort, activeBbWidthFilter, bbWidthMeta, bbWidthSort, activeBbTrendFilter, bbTrendMeta, bbTrendSort, activeRsiFilter, rsiMeta, rsiSort, isVwapBandsFavView, vwapFavSort, vwapFavWidthMeta, bbFavSort, bbFavWidthMeta, showGenericWidthCol, genericWidthMeta, genericWidthSort]);
 
   const rowHeightPx = isMobile ? TABLE_ROW_HEIGHT_MOBILE : TABLE_ROW_HEIGHT;
 
@@ -1229,7 +1255,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   // da coluna de favoritos à esquerda (favColMinPx acima): não cresce com o drag, o espaço
   // liberado vai pra coluna Par. Rótulos de 1 letra — piso bem menor que o da coluna de favoritos.
   const actionsColPx = (isMobile ? 3.0 : 3.6) * REM_PX;
-  const fixedColsPx = priceColPx + volColPx + spinnerColPx + actionsColPx + (isAltaFilter || isMaDistanceFilter || isGrowthFilter || isVwapWidthFilter || isBbWidthFilter || isBbTrendFilter || showVwapFavWidthCol || showBbFavWidthCol || showGenericWidthCol ? changeColPx : 0);
+  const fixedColsPx = priceColPx + volColPx + spinnerColPx + actionsColPx + (extraColCount * changeColPx);
   const favColWidthPx = favColMinPx;
   const parColWidthPx = tableContainerWidth > 0
     ? Math.max(tableContainerWidth - favColWidthPx - fixedColsPx, 0)
@@ -1404,7 +1430,9 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
             <col className="currency-table-col-fav" style={{ width: favColWidth }} />
             <col className="currency-table-col-par" style={{ width: parColWidth }} />
             <col className="currency-table-col-price" style={{ width: priceColWidth }} />
-            {(isAltaFilter || isMaDistanceFilter || isGrowthFilter || isVwapWidthFilter || isBbWidthFilter || isBbTrendFilter || showVwapFavWidthCol || showBbFavWidthCol || showGenericWidthCol) && <col className="currency-table-col-change" style={{ width: changeColWidth }} />}
+            {Array.from({ length: extraColCount }).map((_, i) => (
+              <col key={`change-col-${i}`} className="currency-table-col-change" style={{ width: changeColWidth }} />
+            ))}
             <col className="currency-table-col-vol" style={{ width: volColWidth }} />
             <col className="currency-table-col-actions" style={{ width: actionsColWidth }} />
             <col className="currency-table-col-spinner" style={{ width: spinnerColWidth }} />
@@ -1556,6 +1584,15 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                   onClick={() => setBbTrendSort((s) => (s === 'best' ? 'worst' : 'best'))}
                 >
                   Méd% {bbTrendSort === 'best' ? '↓' : '↑'}
+                </th>
+              )}
+              {isRsiFilter && (
+                <th
+                  className="text-right px-2 py-1 text-p5 opacity-80 font-normal uppercase tracking-wider whitespace-nowrap cursor-pointer hover:opacity-100 select-none"
+                  title="Ordenar por RSI: maior ↔ menor"
+                  onClick={() => setRsiSort((s) => (s === 'high' ? 'low' : 'high'))}
+                >
+                  RSI {rsiSort === 'high' ? '↓' : '↑'}
                 </th>
               )}
               {showGenericWidthCol && (
@@ -1959,6 +1996,17 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                       </td>
                     );
                   })()}
+                  {isRsiFilter && (() => {
+                    const rsi = rsiMeta?.[item.symbol]?.rsi;
+                    return (
+                      <td
+                        className="px-2 py-1 text-right font-mono text-[10px] font-semibold"
+                        style={{ color: rsi == null ? 'rgba(255,255,255,0.35)' : rsi >= 70 ? '#ef4444' : rsi <= 30 ? '#22c55e' : '#e2c341' }}
+                      >
+                        {rsi != null ? rsi.toFixed(2) : '—'}
+                      </td>
+                    );
+                  })()}
                   {showGenericWidthCol && (() => {
                     const widthPct = genericWidthMeta?.[item.symbol]?.avgWidthPct;
                     return (
@@ -2138,7 +2186,9 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                         {base}<span className="opacity-40 font-normal text-[8px]">/{quote}</span>
                       </td>
                       <td className="px-2 py-1 text-right font-mono">{item.price > 0 ? formatPrice(item.price) : '—'}</td>
-                      {(isAltaFilter || isMaDistanceFilter || isGrowthFilter || isVwapWidthFilter || isBbWidthFilter || isBbTrendFilter || showVwapFavWidthCol || showBbFavWidthCol || showGenericWidthCol) && <td className="px-2 py-1 text-right font-mono text-[10px] opacity-35">—</td>}
+                      {Array.from({ length: extraColCount }).map((_, i) => (
+                        <td key={`change-placeholder-${i}`} className="px-2 py-1 text-right font-mono text-[10px] opacity-35">—</td>
+                      ))}
                       <td className="px-2 py-1 text-right font-mono text-[10px] opacity-60">{formatVolume(item.volume)}</td>
                       <td style={{ width: actionsColWidth }} />
                       <td className="pr-1 text-center">

@@ -3,9 +3,9 @@ const analyseBollingerBandRecovery = require('../utils/analyseBollingerBandRecov
 const mcFavoritesStatsCache = require('../cache/mcFavoritesStatsCache');
 const { intervalMs } = require('../bot/ma-cross/strategyEngine');
 
-// GET /services/bollinger-band-recovery?symbol=BTCUSDT&interval=4h&period=20&stdDev=2&source=gate&medianTrendFilter=1&medianTrendLookback=10&pullbackPct=5&candleCount=1000&permH1=1&permM30=1&permM15=0
+// GET /services/bollinger-band-recovery?symbol=BTCUSDT&interval=4h&period=20&stdDev=2&source=gate&medianTrendFilter=1&medianTrendLookback=10&pullbackPct=5&candleCount=1000&lookback=300&permH1=1&permM30=1&permM15=0
 router.get('/bollinger-band-recovery', async (req, res) => {
-    const { symbol, interval = '4h', period, stdDev, source, medianTrendFilter, medianTrendLookback, pullbackPct, candleCount, permH1, permM30, permM15 } = req.query;
+    const { symbol, interval = '4h', period, stdDev, source, medianTrendFilter, medianTrendLookback, pullbackPct, candleCount, lookback, permH1, permM30, permM15 } = req.query;
     if (!symbol) return res.status(400).json({ error: 'Parâmetro obrigatório: symbol' });
 
     const sym = symbol.toUpperCase();
@@ -18,7 +18,10 @@ router.get('/bollinger-band-recovery', async (req, res) => {
         medianTrendFilter: medianTrendFilter === '1' || medianTrendFilter === 'true',
         medianTrendLookback: medianTrendLookback ? parseInt(medianTrendLookback) : 10,
         pullbackPct: pullbackPct ? Math.max(0, parseFloat(pullbackPct)) : 0,
-        candleCount: candleCount ? Math.min(3000, Math.max(100, parseInt(candleCount))) : 1000,
+        candleCount: candleCount ? Math.min(3000, Math.max(100, parseInt(candleCount))) : 300,
+        // 0 = desligado (usa todo o candleCount pra buscar ciclos, comportamento padrão) — ver
+        // analyseBollingerBandRecovery.js. Mesmos valores fixos oferecidos pela coluna "Larg".
+        lookback: lookback ? Math.max(0, parseInt(lookback)) : 0,
         // Filtro PERM (nuvem EMA9×EMA21) na aba Estatísticas — 3 níveis independentes (1h/30m/15m),
         // TODOS os habilitados precisam concordar (ver analyseBollingerBandRecovery.js). Diferente
         // do bot ao vivo (cascata pra 1 único intervalo configurado).
@@ -29,7 +32,7 @@ router.get('/bollinger-band-recovery', async (req, res) => {
         },
     };
     const permKey = ['h1', 'm30', 'm15'].filter(k => options.permFilter[k]).join('+') || 'off';
-    const cacheKey = `bb|${sym}|${options.interval}|${options.period}|${options.stdDev}|${options.source ?? 'binance'}|${options.medianTrendFilter ? `mt${options.medianTrendLookback}` : 'nomt'}|pb${options.pullbackPct}|c${options.candleCount}|perm${permKey}`;
+    const cacheKey = `bb|${sym}|${options.interval}|${options.period}|${options.stdDev}|${options.source ?? 'binance'}|${options.medianTrendFilter ? `mt${options.medianTrendLookback}` : 'nomt'}|pb${options.pullbackPct}|c${options.candleCount}|lb${options.lookback}|perm${permKey}`;
 
     try {
         const { value, cache } = await mcFavoritesStatsCache.getOrCompute(

@@ -87,6 +87,7 @@ router.get('/indicator-search', async (req, res) => {
           nome,
           data: timestamp,
           coin: { symbol: symbol.replace('USDT', '/USDT'), ...entry.lastCandle },
+          rsi: entry.rsi,
           values: entry.values,
         });
       }
@@ -116,6 +117,7 @@ router.get('/indicator-search', async (req, res) => {
               symbol: symbol.replace('USDT', '/USDT'),
               open: last.open, high: last.high, low: last.low, close: last.close,
             },
+            rsi: lastValue,
             values: indicatorValues.slice(-20),
           };
         } catch {

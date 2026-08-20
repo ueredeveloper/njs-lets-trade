@@ -5,10 +5,13 @@ const getCandles = require('../binance/getCandles');
 const { getGateCandles } = require('../gate/getGateCandles');
 const { getMedianTrendThreshold } = require('./bollingerMedianTrendConfig');
 const { permStateSeries, lastClosedPermStateAt, isEntryBullishState } = require('./emaPersistCloud');
+const { averageWithoutOutliers } = require('./removeOutliersIQR');
 
 const BB_PERIOD = 20;
 const BB_STD_DEV = 2;
-const DEFAULT_CANDLE_COUNT = 1000; // candles 4h — cobre bastante histórico para warmup + ciclos
+// Mesmo padrão da coluna "Larg" (fetchBollingerBandWidthFilter.js — lookback: 300), pra
+// "Valor. média" bater com "Larg" quando nenhum parâmetro custom é passado.
+const DEFAULT_CANDLE_COUNT = 300;
 
 const PERM_INTERVAL_MS = { '15m': 900_000, '30m': 1_800_000, '1h': 3_600_000 };
 /** Teto de candles buscados por nível do filtro PERM (ver PERM_LEVELS/buildPermSeries abaixo) —
@@ -46,6 +49,11 @@ const PERM_LEVELS = [
  *   nesse preço (mesmo `entry.pullback.belowPct` do bot, ver strategyEngine.js). 0 = desligado,
  *   entra assim que a banda é tocada (comportamento padrão, preço de entrada = close do fundo).
  * @param {number} [options.candleCount=1000] Quantidade de candles buscados para a análise.
+ * @param {number} [options.lookback=0] Restringe a busca de ciclos aos últimos N candles
+ *   fechados (mesmo parâmetro `lookback` da coluna "Larg" — fetchBollingerBandWidthFilter.js)
+ *   — o restante de `candleCount` continua sendo buscado só para aquecer a média móvel da BB,
+ *   sem perder precisão do período logo no início da janela. 0 = desligado, usa todo o
+ *   `candleCount` buscado (comportamento padrão, igual antes deste parâmetro existir).
  *
  * @returns {Promise<object>}
  *  - symbol / interval / period / stdDev
@@ -133,10 +141,12 @@ async function analyseBollingerBandRecovery(symbol, options = {}) {
         medianTrendLookback = 10,
         pullbackPct = 0,
         candleCount = DEFAULT_CANDLE_COUNT,
+        lookback = 0,
         permFilter = null,
     } = options;
     const pullback = Math.max(0, parseFloat(pullbackPct) || 0);
     const limit = parseInt(candleCount) || DEFAULT_CANDLE_COUNT;
+    const lookbackCandles = Math.max(0, parseInt(lookback) || 0);
 
     const fetchCandles = source === 'gate' ? getGateCandles : getCandles;
     const candles = await fetchCandles(symbol, interval, limit);
@@ -159,7 +169,13 @@ async function analyseBollingerBandRecovery(symbol, options = {}) {
     let minLowIdx = null;
     let pullbackEntryPrice = null; // preço exato do limite de pullback (só usado quando pullback > 0)
 
-    for (let i = 0; i < bbSeries.length; i++) {
+    // Com lookback > 0, só começa a procurar ENTRADAS nos últimos `lookback` candles fechados —
+    // a média móvel da BB continua aquecida com o histórico completo buscado (candleCount),
+    // só a janela de busca de ciclos é que fica restrita (mesmo efeito de reduzir candleCount
+    // pra `lookback`, mas sem perder precisão do período logo no início da janela).
+    const searchStartIdx = lookbackCandles > 0 ? Math.max(0, bbSeries.length - lookbackCandles) : 0;
+
+    for (let i = searchStartIdx; i < bbSeries.length; i++) {
         const candle = candles[i + offset];
         const low = parseFloat(candle.low);
         const high = parseFloat(candle.high);
@@ -234,8 +250,11 @@ async function analyseBollingerBandRecovery(symbol, options = {}) {
     }
 
     const total = occurrences.length;
+    // Mesmo método de média da coluna "Larg" (fetchBollingerBandWidthFilter.js /
+    // indicatorGrowthEngines.js): descarta outliers (IQR) antes de tirar a média, pra que os
+    // dois números fiquem comparáveis sob os mesmos parâmetros de ciclo.
     const avgAppreciationPercent = total > 0
-        ? parseFloat((occurrences.reduce((s, o) => s + o.appreciationPercent, 0) / total).toFixed(2))
+        ? parseFloat(averageWithoutOutliers(occurrences.map(o => o.appreciationPercent)).toFixed(2))
         : 0;
     const avgCycleDurationMs = total > 0
         ? Math.round(occurrences.reduce((s, o) => s + (new Date(o.endDate).getTime() - new Date(o.startDate).getTime()), 0) / total)
@@ -249,6 +268,7 @@ async function analyseBollingerBandRecovery(symbol, options = {}) {
         medianTrendFilter,
         medianTrendLookback,
         pullbackPct: pullback,
+        lookback: lookbackCandles,
         permFilter: permByLevel.size ? Object.fromEntries(PERM_LEVELS.filter(l => permFilter?.[l.key]).map(l => [l.key, true])) : null,
         totalCandles: candles.length,
         totalBbPeriods: bbSeries.length,

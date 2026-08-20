@@ -15,10 +15,10 @@ export const BOLLINGER_BANDS_DEFAULTS = {
     interval: '1m',
     period: 20,
     stdDev: 2,
-    /** Ligado por padrão no formulário de criação, com 1% — exige repique abaixo da banda
+    /** Ligado por padrão no formulário de criação, com 2% — exige repique abaixo da banda
      *  inferior antes de comprar. Default do bot (tradeConfigSchema.js) continua desligado
      *  pra favoritos antigos sem esse campo salvo. */
-    pullback: { enabled: true, belowPct: 1 },
+    pullback: { enabled: true, belowPct: 2 },
     /** Ordem limite GTC fica no book até N candles aguardando reteste. */
     limitWaitCandles: 5,
     /** false (padrão) = ordem limite GTC no preço da banda, aguardando reteste
@@ -67,7 +67,7 @@ export const BOLLINGER_BANDS_DEFAULTS = {
     /** interval nasce igual ao entry.interval quando não informado — ver normalizeBollingerBandsForm. */
     ema: { period: 50, interval: '1m', belowPct: 2 },
     /** mode 'band': stop = banda inferior BB(entry.period,entry.stdDev) ao vivo × (1 − belowPct/100). */
-    band: { belowPct: 5 },
+    band: { belowPct: 10 },
   },
   /** pollMs espaçado evita competir com o frontend pelas mesmas chamadas de candles na
    *  corretora (mesmo padrão do swing-bot/amap-bot: 5min parado, 1min com posição aberta) —

@@ -109,7 +109,7 @@ const BOLLINGER_BANDS_DEFAULTS = {
     mode: 'fixed',
     // interval nasce igual ao entry.interval quando não informado — ver normalizeStopLoss.
     ema: { period: 50, interval: '4h', belowPct: 2 },
-    band: { belowPct: 5 },
+    band: { belowPct: 10 },
   },
 
   /** BB(4h/1h) não precisa da granularidade de 1m do vwap-bands — pollMs mais espaçado

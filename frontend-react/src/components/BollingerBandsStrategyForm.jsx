@@ -407,7 +407,7 @@ export default function BollingerBandsStrategyForm({ form, patch, symbol, exchan
           <>
             <div className="flex flex-wrap gap-2 items-center text-xs text-p5">
               <span className="text-p5/50">Stop</span>
-              <NumInput value={form.stopLoss.band?.belowPct ?? 5} onChange={v => patchStopLossBand('belowPct', v)} min={0} max={50} step={0.5} />
+              <NumInput value={form.stopLoss.band?.belowPct ?? 10} onChange={v => patchStopLossBand('belowPct', v)} min={0} max={50} step={0.5} />
               <span className="text-p5/40">% abaixo da banda inferior BB({form.entry.period},{form.entry.stdDev})</span>
             </div>
             <div className="flex flex-wrap gap-2 items-center text-xs text-p5">
@@ -416,7 +416,7 @@ export default function BollingerBandsStrategyForm({ form, patch, symbol, exchan
               <span className="text-p5/40">% — usado se a banda já estiver acima do preço de compra</span>
             </div>
             <p className="text-[10px] text-p5/50 leading-relaxed">
-              Vende se o preço cair até {form.stopLoss.band?.belowPct ?? 5}% abaixo da banda
+              Vende se o preço cair até {form.stopLoss.band?.belowPct ?? 10}% abaixo da banda
               inferior BB({form.entry.period},{form.entry.stdDev}) {form.entry.interval} ao vivo —
               o piso acompanha a banda a cada candle novo. Se a banda estiver no/acima do preço
               de entrada, a compra é bloqueada (lugar errado). Se a posição já estiver aberta

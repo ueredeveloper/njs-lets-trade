@@ -82,6 +82,9 @@ const CANDLE_COUNT_STORAGE_KEYS = {
   ma_cross: 'lets_trade_stats_candle_count_macross',
 };
 const STATS_CANDLE_COUNT_DEFAULT = 1000;
+/** Valores selecionáveis do campo "Candles" — compartilhado por todas as abas da aba
+ *  Estatísticas (RSI, MA Cross, Bollinger Bands, VWAP Bands). */
+const STATS_CANDLE_COUNT_OPTIONS = [100, 200, 300, 600, 1000, 2000, 3000];
 
 /** Preferência do campo "Candles" das abas RSI/MA Cross — mesmo padrão do campo já existente
  *  na aba Bollinger Bands (BB_CANDLE_COUNT_STORAGE_KEY/loadCandleCount), só que compartilhado
@@ -93,7 +96,7 @@ function loadCandleCountFor(tab) {
     const v = localStorage.getItem(CANDLE_COUNT_STORAGE_KEYS[tab]);
     if (v !== null) {
       const n = Number(v);
-      if (Number.isFinite(n)) return n;
+      if (Number.isFinite(n) && STATS_CANDLE_COUNT_OPTIONS.includes(n)) return n;
     }
   } catch {}
   return STATS_CANDLE_COUNT_DEFAULT;
@@ -173,18 +176,22 @@ function permFilterFromBotEntry(entry) {
 }
 
 const BB_PULLBACK_STORAGE_KEY = 'lets_trade_stats_bb_pullback_pct';
-const BB_PULLBACK_DEFAULT = -5;
+/** Valores selecionáveis do campo "Entrada" (pullback %, negativo = % abaixo da banda
+ *  inferior) — mesma granularidade do `entry.pullback.belowPct` do favorito de bot. */
+const BB_PULLBACK_OPTIONS = [0, -1, -2, -3, -5, -8, -10, -15, -20];
+const BB_PULLBACK_DEFAULT = 0;
 
 /** Preferência do campo "Entrada" (pullback %) da aba Bollinger Bands — lembrada entre buscas.
  *  Guardado como número negativo (ex.: -5 = compra 5% abaixo da banda inferior), igual ao
  *  `entry.pullback.belowPct` do favorito de bot, só que exibido com o sinal pra ficar claro que
- *  é "abaixo" do sinal. 0 = desligado (entra assim que a banda é tocada). */
+ *  é "abaixo" do sinal. 0 = desligado (entra assim que a banda é tocada, comportamento padrão —
+ *  mesmo critério que a coluna "Larg" da tabela principal, que não conhece pullback). */
 function loadPullbackPct() {
   try {
     const v = localStorage.getItem(BB_PULLBACK_STORAGE_KEY);
     if (v !== null) {
       const n = Number(v);
-      if (Number.isFinite(n)) return n;
+      if (Number.isFinite(n) && BB_PULLBACK_OPTIONS.includes(n)) return n;
     }
   } catch {}
   return BB_PULLBACK_DEFAULT;
@@ -194,24 +201,10 @@ function savePullbackPct(value) {
   try { localStorage.setItem(BB_PULLBACK_STORAGE_KEY, String(value)); } catch {}
 }
 
-const BB_PULLBACK_ENABLED_STORAGE_KEY = 'lets_trade_stats_bb_pullback_enabled';
-
-/** Preferência do toggle "Pullback" (liga/desliga o campo de %) da aba Bollinger Bands. */
-function loadPullbackEnabled() {
-  try {
-    const v = localStorage.getItem(BB_PULLBACK_ENABLED_STORAGE_KEY);
-    if (v === '1') return true;
-    if (v === '0') return false;
-  } catch {}
-  return true;
-}
-
-function savePullbackEnabled(value) {
-  try { localStorage.setItem(BB_PULLBACK_ENABLED_STORAGE_KEY, value ? '1' : '0'); } catch {}
-}
-
 const BB_CANDLE_COUNT_STORAGE_KEY = 'lets_trade_stats_bb_candle_count';
-const BB_CANDLE_COUNT_DEFAULT = 1000;
+// Mesmo padrão da coluna "Larg" (fetchBollingerBandWidthFilter.js — lookback: '300' no preset
+// e no seletor do formulário), pra "Valor. média" bater com "Larg" com os campos padrão.
+const BB_CANDLE_COUNT_DEFAULT = 300;
 
 /** Preferência da quantidade de candles buscados pela aba Bollinger Bands — lembrada entre buscas. */
 function loadCandleCount() {
@@ -219,7 +212,7 @@ function loadCandleCount() {
     const v = localStorage.getItem(BB_CANDLE_COUNT_STORAGE_KEY);
     if (v !== null) {
       const n = Number(v);
-      if (Number.isFinite(n)) return n;
+      if (Number.isFinite(n) && STATS_CANDLE_COUNT_OPTIONS.includes(n)) return n;
     }
   } catch {}
   return BB_CANDLE_COUNT_DEFAULT;
@@ -227,6 +220,31 @@ function loadCandleCount() {
 
 function saveCandleCount(value) {
   try { localStorage.setItem(BB_CANDLE_COUNT_STORAGE_KEY, String(value)); } catch {}
+}
+
+const BB_LOOKBACK_STORAGE_KEY = 'lets_trade_stats_bb_lookback';
+/** Valores selecionáveis do campo "Lookback" — mesmos oferecidos pelo filtro dedicado
+ *  "Largura BB" (ver ALLOWED_LOOKBACKS em fetchBollingerBandWidthFilter.js), mais o 0
+ *  ("Desligado": usa todo o candleCount buscado pra procurar ciclos, comportamento padrão). */
+const BB_LOOKBACK_OPTIONS = [0, 50, 100, 150, 200, 300, 700];
+const BB_LOOKBACK_DEFAULT = 0;
+
+/** Preferência do campo "Lookback" (restringe a busca de ciclos aos últimos N candles
+ *  fechados, independente de quantos candles foram buscados via "Candles") — lembrada entre
+ *  buscas. 0 = desligado. */
+function loadLookback() {
+  try {
+    const v = localStorage.getItem(BB_LOOKBACK_STORAGE_KEY);
+    if (v !== null) {
+      const n = Number(v);
+      if (Number.isFinite(n) && BB_LOOKBACK_OPTIONS.includes(n)) return n;
+    }
+  } catch {}
+  return BB_LOOKBACK_DEFAULT;
+}
+
+function saveLookback(value) {
+  try { localStorage.setItem(BB_LOOKBACK_STORAGE_KEY, String(value)); } catch {}
 }
 
 const STATS_AUTO_CALC_STORAGE_KEY = 'lets_trade_stats_auto_calc';
@@ -305,22 +323,6 @@ function McIntervalSwitch({ checked, onChange }) {
  *  filtro de tendência da mediana da BB do bot (backend/bot/bollinger-bands/strategyEngine.js
  *  #checkMedianTrendFilter): só conta como entrada o toque na banda inferior cuja mediana,
  *  na janela de `lookback` candles anteriores, estava subindo/estável (não em queda). */
-function PullbackSwitch({ checked, onChange }) {
-  return (
-    <div className="flex items-center gap-1 shrink-0 pb-1">
-      <span className="hidden md:inline text-[9px] text-p5/50 uppercase tracking-wider">Pullback</span>
-      <button
-        type="button"
-        onClick={() => onChange(!checked)}
-        title="Exige que o preço caia esse tanto % abaixo da banda inferior antes de contar a entrada (senão entra assim que a banda é tocada)"
-        className={`relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${checked ? 'bg-p4' : 'bg-p3/40'}`}
-      >
-        <span className={`inline-block h-3 w-3 rounded-full bg-white shadow transition-transform ${checked ? 'translate-x-3' : 'translate-x-0'}`} />
-      </button>
-    </div>
-  );
-}
-
 function MedianTrendFilterSwitch({ checked, onChange }) {
   return (
     <div className="flex items-center gap-1 shrink-0 pb-1">
@@ -531,13 +533,15 @@ function RsiStats({ autoCalc }) {
         {/* Candles */}
         <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-0" title={t('stats.tip.bb_candle_count')}>
           <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.card.candles')}</label>
-          <input className={inpNum} type="number" min={200} max={3000} step={100}
+          <select className={inp}
             value={candleCount}
             onChange={(e) => {
               const v = Number(e.target.value);
               setCandleCount(v);
               saveCandleCountFor('rsi', v);
-            }} />
+            }}>
+            {STATS_CANDLE_COUNT_OPTIONS.map((v) => <option key={v} value={v}>{v}</option>)}
+          </select>
         </div>
 
         <McIntervalSwitch checked={useMcInterval} onChange={handleToggleMc} />
@@ -882,13 +886,15 @@ function MaCrossStats({ autoCalc }) {
         </div>
         <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[56px]" title={t('stats.tip.bb_candle_count')}>
           <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.card.candles')}</label>
-          <input className={inpNum} type="number" min={200} max={3000} step={100}
+          <select className={inp}
             value={candleCount}
             onChange={(e) => {
               const v = Number(e.target.value);
               setCandleCount(v);
               saveCandleCountFor('ma_cross', v);
-            }} />
+            }}>
+            {STATS_CANDLE_COUNT_OPTIONS.map((v) => <option key={v} value={v}>{v}</option>)}
+          </select>
         </div>
         <McIntervalSwitch checked={useMcInterval} onChange={handleToggleMc} />
         <button
@@ -1039,8 +1045,8 @@ function BollingerBandsStats({ autoCalc }) {
   const [permFilter, setPermFilter] = useState(() => loadPermFilterPref());
   const [usePermBot, setUsePermBot] = useState(() => loadUsePermBotPref());
   const [pullbackPct, setPullbackPct] = useState(() => loadPullbackPct());
-  const [pullbackEnabled, setPullbackEnabled] = useState(() => loadPullbackEnabled());
   const [candleCount, setCandleCount] = useState(() => loadCandleCount());
+  const [lookback, setLookback] = useState(() => loadLookback());
   const [loading, setLoading]   = useState(false);
   const [result, setResult]     = useState(null);
   const [error, setError]       = useState(null);
@@ -1049,16 +1055,16 @@ function BollingerBandsStats({ autoCalc }) {
   const inp = 'bg-p2 border border-p3/40 text-p5 text-[10px] sm:text-xs rounded px-1 sm:px-2 py-1 focus:outline-none focus:border-p4 w-full';
   const inpNum = `${inp} [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none`;
 
-  async function handleSearch(overrideSymbol, updateChart = false, overrideInterval, overrideSource, overrideUseMc, overrideMedianTrendFilter, overridePullbackPct, overridePullbackEnabled, overrideCandleCount, overridePermFilter, overrideUsePermBot) {
+  async function handleSearch(overrideSymbol, updateChart = false, overrideInterval, overrideSource, overrideUseMc, overrideMedianTrendFilter, overridePullbackPct, overrideCandleCount, overridePermFilter, overrideUsePermBot, overrideLookback) {
     const sym = (overrideSymbol ?? symbol).trim().toUpperCase();
     const useMc = overrideUseMc ?? useMcInterval;
     const mcIv  = useMc ? mcEntryFor(multitradeFavorites, sym)?.tradeConfig?.entry?.ma1?.interval : null;
     const iv  = overrideInterval ?? mcIv ?? interval;
     if (mcIv) setInterval(mcIv);
     const useMedianTrend = overrideMedianTrendFilter ?? medianTrendFilter;
-    const usePullback = overridePullbackEnabled ?? pullbackEnabled;
-    const pullback = usePullback ? Math.abs(overridePullbackPct ?? pullbackPct) : 0;
+    const pullback = Math.abs(overridePullbackPct ?? pullbackPct);
     const candles = overrideCandleCount ?? candleCount;
+    const lb = overrideLookback ?? lookback;
     // "Perm Bot" ligado: ignora os switches manuais e usa o mesmo nível PERM do favorito
     // Bollinger Bands do manipulador pra essa moeda (ver permFilterFromBotEntry acima).
     const usePermBotFlag = overrideUsePermBot ?? usePermBot;
@@ -1072,7 +1078,7 @@ function BollingerBandsStats({ autoCalc }) {
     setError(null);
     setResult(null);
     try {
-      const data = await fetchBollingerBandRecovery(sym, iv, period, stdDev, src, useMedianTrend, 10, pullback, candles, usePermFilter);
+      const data = await fetchBollingerBandRecovery(sym, iv, period, stdDev, src, useMedianTrend, 10, pullback, candles, usePermFilter, lb);
       setResult(data);
       if (updateChart) {
         const chartData = await fetchCandlesticksAndCloud(sym, iv, src);
@@ -1107,17 +1113,11 @@ function BollingerBandsStats({ autoCalc }) {
     handleSearch(undefined, false, undefined, undefined, undefined, next);
   }
 
-  function handleTogglePullbackEnabled(next) {
-    setPullbackEnabled(next);
-    savePullbackEnabled(next);
-    handleSearch(undefined, false, undefined, undefined, undefined, undefined, undefined, next);
-  }
-
   function handleTogglePermFilter(key, next) {
     const merged = { ...permFilter, [key]: next };
     setPermFilter(merged);
     savePermFilterPref(merged);
-    handleSearch(undefined, false, undefined, undefined, undefined, undefined, undefined, undefined, undefined, merged);
+    handleSearch(undefined, false, undefined, undefined, undefined, undefined, undefined, undefined, merged);
   }
 
   function handleTogglePermBot(next) {
@@ -1130,7 +1130,7 @@ function BollingerBandsStats({ autoCalc }) {
       setPermFilter(botPerm);
       savePermFilterPref(botPerm);
     }
-    handleSearch(undefined, false, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, next);
+    handleSearch(undefined, false, undefined, undefined, undefined, undefined, undefined, undefined, undefined, next);
   }
 
   async function openOnChart(o, iv) {
@@ -1187,13 +1187,29 @@ function BollingerBandsStats({ autoCalc }) {
         </div>
         <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[56px]" title={t('stats.tip.bb_candle_count')}>
           <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.card.candles')}</label>
-          <input className={inpNum} type="number" min={200} max={3000} step={100}
+          <select className={inp}
             value={candleCount}
             onChange={(e) => {
               const v = Number(e.target.value);
               setCandleCount(v);
               saveCandleCount(v);
-            }} />
+            }}>
+            {STATS_CANDLE_COUNT_OPTIONS.map((v) => <option key={v} value={v}>{v}</option>)}
+          </select>
+        </div>
+        <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[56px]" title="Restringe a busca de ciclos aos últimos N candles fechados, independente de quantos candles foram buscados em Candles (mesmo parâmetro da coluna Larg da tabela principal). Desligado = usa todos os candles buscados.">
+          <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">Lookback</label>
+          <select className={inp}
+            value={lookback}
+            onChange={(e) => {
+              const v = Number(e.target.value);
+              setLookback(v);
+              saveLookback(v);
+            }}>
+            {BB_LOOKBACK_OPTIONS.map((v) => (
+              <option key={v} value={v}>{v === 0 ? 'Desligado' : v}</option>
+            ))}
+          </select>
         </div>
         <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]">
           <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.bb_period')}</label>
@@ -1207,18 +1223,19 @@ function BollingerBandsStats({ autoCalc }) {
         </div>
         <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[56px]" title={t('stats.tip.bb_pullback')}>
           <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.bb_pullback')}</label>
-          <input className={inpNum} type="number" max={0} min={-20} step={0.5}
-            disabled={!pullbackEnabled}
+          <select className={inp}
             value={pullbackPct}
             onChange={(e) => {
               const v = Number(e.target.value);
               setPullbackPct(v);
               savePullbackPct(v);
-            }}
-            style={!pullbackEnabled ? { opacity: 0.4 } : undefined} />
+            }}>
+            {BB_PULLBACK_OPTIONS.map((v) => (
+              <option key={v} value={v}>{v === 0 ? 'Desligado' : `${v}%`}</option>
+            ))}
+          </select>
         </div>
         <McIntervalSwitch checked={useMcInterval} onChange={handleToggleMc} />
-        <PullbackSwitch checked={pullbackEnabled} onChange={handleTogglePullbackEnabled} />
         <MedianTrendFilterSwitch checked={medianTrendFilter} onChange={handleToggleMedianTrendFilter} />
         <PermFilterSwitches value={permFilter} onToggle={handleTogglePermFilter} disabled={usePermBot} />
         <PermBotSwitch checked={usePermBot} onChange={handleTogglePermBot} />
@@ -1273,6 +1290,9 @@ function BollingerBandsStats({ autoCalc }) {
               )}
               {result.pullbackPct > 0 && (
                 <SummaryCard label={t('stats.bb_pullback')} value={`-${result.pullbackPct}%`} highlight="text-amber-500" tooltip={t('stats.tip.bb_pullback')} />
+              )}
+              {result.lookback > 0 && (
+                <SummaryCard label="Lookback" value={`${result.lookback}c`} highlight="text-amber-500" tooltip="Ciclos restritos aos últimos N candles fechados (mesmo parâmetro da coluna Larg)" />
               )}
             </div>
 
@@ -1566,13 +1586,15 @@ function VwapBandsStats({ autoCalc }) {
         {/* Candles */}
         <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[56px]" title={t('stats.tip.bb_candle_count')}>
           <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.card.candles')}</label>
-          <input className={inpNum} type="number" min={200} max={3000} step={100}
+          <select className={inp}
             value={candleCount}
             onChange={(e) => {
               const v = Number(e.target.value);
               setCandleCount(v);
               patchPrefs({ candleCount: v });
-            }} />
+            }}>
+            {STATS_CANDLE_COUNT_OPTIONS.map((v) => <option key={v} value={v}>{v}</option>)}
+          </select>
         </div>
 
         <button

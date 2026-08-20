@@ -169,7 +169,7 @@ export async function fetchSimpleMaCross(symbol, entryInterval = '15m', exitInte
  *  `permFilter` ({h1,m30,m15}, cada um opcional/independente): só conta a entrada se a nuvem
  *  PERM (EMA9×EMA21) de TODOS os níveis habilitados já estiver verde/fechada nesse instante (sem
  *  look-ahead — ver analyseBollingerBandRecovery.js no backend). Ausente/todos false = não filtra. */
-export async function fetchBollingerBandRecovery(symbol, interval = '4h', period = 20, stdDev = 2, source = null, medianTrendFilter = false, medianTrendLookback = 10, pullbackPct = 0, candleCount = 1000, permFilter = null) {
+export async function fetchBollingerBandRecovery(symbol, interval = '4h', period = 20, stdDev = 2, source = null, medianTrendFilter = false, medianTrendLookback = 10, pullbackPct = 0, candleCount = 1000, permFilter = null, lookback = 0) {
   const params = new URLSearchParams({ symbol, interval, period, stdDev, candleCount });
   if (source) params.set('source', source);
   if (medianTrendFilter) {
@@ -177,6 +177,7 @@ export async function fetchBollingerBandRecovery(symbol, interval = '4h', period
     params.set('medianTrendLookback', medianTrendLookback);
   }
   if (pullbackPct > 0) params.set('pullbackPct', pullbackPct);
+  if (lookback > 0) params.set('lookback', lookback);
   if (permFilter?.h1) params.set('permH1', '1');
   if (permFilter?.m30) params.set('permM30', '1');
   if (permFilter?.m15) params.set('permM15', '1');
@@ -648,7 +649,15 @@ export async function fetchCandlesticksAndCloud(symbol, interval, source = null,
   if (!Array.isArray(candlesRaw)) {
     throw new Error(`Candles indisponíveis para ${symbol} ${interval}`);
   }
-  const candles = candlesRaw;
+  // Dedup por openTime + ordenação ascendente — o cache local de candles (backend) já tenta
+  // manter isso, mas paginação/merge de histórico grande (arrasto pra carregar mais) ocasionalmente
+  // devolve fora de ordem, e o Lightweight Charts derruba a página inteira (assert "data must be
+  // asc ordered by time") quando isso chega no RSI (alignIndicatorToCandles usa esse array cru).
+  // Ordenar aqui, antes de mandar pros services de indicador, garante que candlesticks e os
+  // indicadores calculados em cima dele fiquem sempre alinhados e em ordem.
+  const candles = Array.from(
+    new Map(candlesRaw.map((c) => [c.openTime, c])).values(),
+  ).sort((a, b) => a.openTime - b.openTime);
 
   const [ichimokuCloud, movingAverage, ma50, ma9, ma21, rsi] = await Promise.all([
     fetch('/services/ichimoku-cloud', {
@@ -708,9 +717,15 @@ export async function fetchIndicatorSearch(query, lang = 'en') {
 
   const nome = data.length > 0 ? data[0].nome : buildRsiNomeFromQuery(query, lang);
   const list = data.map((r) => r.coin.symbol.replace('/USDT', 'USDT'));
+  const meta = {};
+  data.forEach((r) => {
+    const symbol = r.coin.symbol.replace('/USDT', 'USDT');
+    const rsi = r.rsi ?? r.values?.at(-1) ?? null;
+    meta[symbol] = { rsi };
+  });
 
   console.log('[frontend-react] filtro criado:', nome, '→', list.length, 'símbolos:', list);
-  return { name: nome, list };
+  return { name: nome, list, meta };
 }
 
 export async function fetchMaFilter({ interval, period = '50', compare = 'above', candle = 'close', lang = 'en' }) {

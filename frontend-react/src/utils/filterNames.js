@@ -25,6 +25,13 @@ export function buildRsiFilterName(interval, conditions, lang = 'en') {
   return `${interval}|rsi|${condStr}`;
 }
 
+/** Reconhece um nome de filtro de RSI (ex.: 8h|rsi|abov|70|belw|99) → { interval }. */
+export function parseRsiFilterName(name) {
+  const parts = String(name).split('|');
+  if (parts[1] !== 'rsi' || parts.length < 4) return null;
+  return { interval: parts[0] };
+}
+
 export function buildMaFilterName(interval, period, compare, candle, lang = 'en') {
   const isAbove = parseCompareToken(compare) === 'above';
   const cmp = isAbove ? compareAboveToken(lang) : compareBelowToken(lang);

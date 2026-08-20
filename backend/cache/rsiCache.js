@@ -12,6 +12,7 @@ const CACHE_FILE    = path.join(__dirname, '..', 'data', 'rsi-cache.json');
 
 // TTL ≈ duração do candle — só refetch quando o RSI pode ter mudado
 const REFRESH_TTL_MS = {
+  '5m':  5 * 60_000,
   '15m': 15 * 60_000,
   '1h':  60 * 60_000,
   '4h':  4 * 60 * 60_000,
