@@ -65,17 +65,21 @@ module.exports = getCandles = async function (symbol, interval, limit) {
 
         } else {
 
-            if (limitForUpdateDb > 0) {
-
-                const candles = await fetchKlines(symbol, interval, limitForUpdateDb);
-                candles.forEach(candle => dbCandles.push(candle));
-
-            } else {
-
-                const candles = await fetchKlines(symbol, interval, 1);
-                dbCandles.pop();
-                candles.forEach(candle => dbCandles.push(candle));
-            }
+            // Margem de segurança: NÃO confiar em limitForUpdateDb como o número exato de
+            // candles a buscar. Math.floor(timeDifference/miliseconds) subestima 1 candle
+            // sempre que o gap entre polls não é múltiplo exato do intervalo (jitter do loop
+            // do bot, awaits, latência de rede) — ex.: poll a cada 5min num candle de 3m com
+            // gap real de 5min58s dá floor(358/180)=1 quando 2 candles já fecharam. Buscar só
+            // 1 candle nesse caso pula o candle intermediário pra sempre (nunca é buscado de
+            // novo) e, no caminho antigo, o dbCandles.pop() ainda descartava o candle anterior
+            // congelado no meio da formação — banda calculada sobre dado desatualizado (ver
+            // caso BOME/HEMI: bot comprando sem o desconto de pullback configurado porque a
+            // banda inferior usada vinha de 1-2 candles atrás da real). Buscar sempre alguns
+            // candles a mais que o necessário e deixar a deduplicação por openTime abaixo
+            // corrigir/preencher qualquer buraco resolve sem precisar acertar o cálculo exato.
+            const fetchCount = Math.max(5, limitForUpdateDb + 3);
+            const candles = await fetchKlines(symbol, interval, fetchCount);
+            candles.forEach(candle => dbCandles.push(candle));
 
             // Deduplica por openTime
             const uniqueItems = {};
