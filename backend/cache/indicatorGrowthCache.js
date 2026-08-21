@@ -17,6 +17,7 @@ const candleUpdateQueue = require('../utils/candleUpdateQueue');
 const { intervalMs } = require('../bot/ma-cross/strategyEngine');
 const { computeIndicatorGrowth } = require('../utils/indicatorGrowthEngines');
 const { buildIndicatorGrowthFilterName } = require('../utils/filterNames');
+const { passesThrustFilter, compareThrustRows } = require('../utils/rsiThrustRanking');
 
 const CACHE_FILE = path.join(__dirname, '..', 'data', 'indicator-growth-cache.json');
 const CANDLES_LIMIT = 1000;
@@ -28,11 +29,14 @@ const MIN_OCCURRENCES = 3;
  *  com pouco histórico em disco) não pode travar a resposta HTTP indefinidamente. */
 const BLOCKING_WAIT_MS = 8_000;
 
-/** Presets padrão (interval 4h, mesmos defaults do painel Analisar Indicadores). */
+/** Presets padrão (interval 4h, mesmos defaults do painel Analisar Indicadores).
+ *  rsiThrust roda em 15m (é o timeframe do "explodiu" — arranque de RSI, ver
+ *  indicatorGrowthEngines.computeRsiThrust) e usa `threshold` como maxMinutes, não %. */
 const CACHED_PRESETS = [
   { key: '4h|growth|bb|20|2', engine: 'bollinger', interval: '4h', params: { period: 20, stdDev: 2 } },
   { key: '4h|growth|rsi|30|70', engine: 'rsi', interval: '4h', params: { period: 14, oversold: 30, overbought: 70 } },
   { key: '4h|growth|macross|9|21', engine: 'maCross', interval: '4h', params: { period1: 9, period2: 21, interval: '4h' } },
+  { key: '15m|growth|rsithrust|50|70', engine: 'rsiThrust', interval: '15m', params: { period: 14, from: 50, to: 70, interval: '15m' } },
 ];
 
 const REFRESH_TICK_MS = 5 * 60_000;
@@ -58,6 +62,7 @@ function paramsMatch(a, b, engine) {
   if (engine === 'bollinger') return a.period === b.period && a.stdDev === b.stdDev;
   if (engine === 'rsi') return a.oversold === b.oversold && a.overbought === b.overbought;
   if (engine === 'maCross') return a.period1 === b.period1 && a.period2 === b.period2;
+  if (engine === 'rsiThrust') return a.from === b.from && a.to === b.to;
   return false;
 }
 
@@ -86,7 +91,7 @@ function evaluateSymbolWithCandles(symbol, preset, candles, now = Date.now()) {
     const result = computeIndicatorGrowth(preset.engine, candles, preset.params);
     symbolStore.set(key, result
       ? { ...result, computedAt: now }
-      : { avgAppreciationPercent: null, totalOccurrences: 0, computedAt: now });
+      : { totalOccurrences: 0, computedAt: now });
   } catch (err) {
     console.error(`[indicatorGrowthCache] ${symbol}:`, err.message);
     symbolStore.set(key, { avgAppreciationPercent: null, totalOccurrences: 0, computedAt: now });
@@ -177,18 +182,31 @@ function oldestComputedAt(presetKey, symbols) {
   return oldest ?? 0;
 }
 
-function buildSnapshotForPreset(preset, symbols, thresholdPct) {
+/** `threshold`: % de valorização mínima pros motores clássicos (bollinger/rsi/maCross), ou
+ *  minutos máximos do arranque (maxMinutes) pro rsiThrust — mesma convenção do endpoint ao vivo. */
+function buildSnapshotForPreset(preset, symbols, threshold) {
+  const isThrust = preset.engine === 'rsiThrust';
   const matched = [];
 
   for (const symbol of symbols) {
     const entry = symbolStore.get(storeKey(preset.key, symbol));
-    if (!entry || entry.avgAppreciationPercent == null) continue;
-    if (entry.totalOccurrences < MIN_OCCURRENCES) continue;
-    if (entry.avgAppreciationPercent < thresholdPct) continue;
+    if (!entry) continue;
+
+    if (isThrust) {
+      if (!passesThrustFilter(entry, threshold, MIN_OCCURRENCES)) continue;
+    } else {
+      if (entry.avgAppreciationPercent == null) continue;
+      if (entry.totalOccurrences < MIN_OCCURRENCES) continue;
+      if (entry.avgAppreciationPercent < threshold) continue;
+    }
     matched.push({ symbol, ...entry });
   }
 
-  matched.sort((a, b) => b.avgAppreciationPercent - a.avgAppreciationPercent);
+  if (isThrust) {
+    matched.sort((a, b) => compareThrustRows(a, b, preset.params.from, preset.params.to));
+  } else {
+    matched.sort((a, b) => b.avgAppreciationPercent - a.avgAppreciationPercent);
+  }
 
   const details = {};
   for (const row of matched) {
@@ -197,13 +215,13 @@ function buildSnapshotForPreset(preset, symbols, thresholdPct) {
   }
 
   return {
-    name: buildIndicatorGrowthFilterName(preset.engine, preset.interval, preset.params, thresholdPct),
+    name: buildIndicatorGrowthFilterName(preset.engine, preset.interval, preset.params, threshold),
     list: matched.map(r => r.symbol),
     details,
     engine: preset.engine,
     interval: preset.interval,
     params: preset.params,
-    thresholdPct,
+    thresholdPct: threshold,
     minOccurrences: MIN_OCCURRENCES,
     scannedAt: Date.now(),
   };

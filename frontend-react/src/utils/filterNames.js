@@ -257,14 +257,15 @@ export function parseMaCrossFilterName(name) {
   return out;
 }
 
-const GROWTH_ENGINE_TOKENS = { bollinger: 'bb', rsi: 'rsi', maCross: 'macross' };
-const GROWTH_ENGINE_FROM_TOKEN = { bb: 'bollinger', rsi: 'rsi', macross: 'maCross' };
+const GROWTH_ENGINE_TOKENS = { bollinger: 'bb', rsi: 'rsi', maCross: 'macross', rsiThrust: 'rsithrust' };
+const GROWTH_ENGINE_FROM_TOKEN = { bb: 'bollinger', rsi: 'rsi', macross: 'maCross', rsithrust: 'rsiThrust' };
 
 /**
  * Filtro de crescimento por ciclo (fundo→topo): 4h|growth|bb|20|2|10
- *   bb:      interval|growth|bb|period|stdDev|thresholdPct
- *   rsi:     interval|growth|rsi|oversold|overbought|thresholdPct
- *   maCross: interval|growth|macross|period1|period2|thresholdPct
+ *   bb:        interval|growth|bb|period|stdDev|thresholdPct
+ *   rsi:       interval|growth|rsi|oversold|overbought|thresholdPct
+ *   maCross:   interval|growth|macross|period1|period2|thresholdPct
+ *   rsiThrust: interval|growth|rsithrust|from|to|maxMinutes (arranque de RSI, ex.: 50→70)
  */
 export function buildIndicatorGrowthFilterName(engine, interval, params, thresholdPct) {
   const token = GROWTH_ENGINE_TOKENS[engine] ?? engine;
@@ -272,6 +273,7 @@ export function buildIndicatorGrowthFilterName(engine, interval, params, thresho
   if (engine === 'bollinger') paramsPart = `${params.period}|${params.stdDev}`;
   else if (engine === 'rsi') paramsPart = `${params.oversold}|${params.overbought}`;
   else if (engine === 'maCross') paramsPart = `${params.period1}|${params.period2}`;
+  else if (engine === 'rsiThrust') paramsPart = `${params.from}|${params.to}`;
   else paramsPart = '';
   return `${interval}|growth|${token}|${paramsPart}|${thresholdPct}`;
 }
@@ -297,6 +299,9 @@ export function parseIndicatorGrowthFilterName(name) {
   } else if (engine === 'maCross') {
     out.period1 = parseInt(parts[3], 10);
     out.period2 = parseInt(parts[4], 10);
+  } else if (engine === 'rsiThrust') {
+    out.from = parseInt(parts[3], 10);
+    out.to = parseInt(parts[4], 10);
   }
   return out;
 }

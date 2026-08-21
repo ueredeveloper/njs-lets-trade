@@ -877,6 +877,8 @@ export async function fetchMaDistanceFilter({
 export async function fetchIndicatorGrowthFilter({
   indicator = 'bollinger', interval = '4h', thresholdPct = '10',
   period = '20', stdDev = '2', oversold = '30', overbought = '70', period1 = '9', period2 = '21',
+  from = '50', to = '70', maxMinutes = '60',
+  confluenceInterval, confluenceThresholdPct = '0', bbPeriod = '20', bbStdDev = '2',
 } = {}) {
   const params = new URLSearchParams({ indicator, interval, thresholdPct: String(thresholdPct) });
   if (indicator === 'bollinger') {
@@ -889,6 +891,17 @@ export async function fetchIndicatorGrowthFilter({
   } else if (indicator === 'maCross') {
     params.set('period1', String(period1));
     params.set('period2', String(period2));
+  } else if (indicator === 'rsiThrust') {
+    params.set('rsiPeriod', String(period));
+    params.set('from', String(from));
+    params.set('to', String(to));
+    params.set('maxMinutes', String(maxMinutes));
+    if (confluenceInterval) {
+      params.set('confluenceInterval', String(confluenceInterval));
+      params.set('confluenceThresholdPct', String(confluenceThresholdPct));
+      params.set('bbPeriod', String(bbPeriod));
+      params.set('bbStdDev', String(bbStdDev));
+    }
   }
   const res = await fetch(`/services/indicator-growth-filter?${params}`);
   if (!res.ok) {

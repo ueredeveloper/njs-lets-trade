@@ -3,9 +3,10 @@
 const router = require('express').Router();
 const getCandlesForScreening = require('../utils/getCandlesForScreening');
 const { getActiveUsdtPairs } = require('../binance/getActiveUsdtPairs');
-const { computeIndicatorGrowth } = require('../utils/indicatorGrowthEngines');
+const { computeIndicatorGrowth, computeBollingerGrowth } = require('../utils/indicatorGrowthEngines');
 const { buildIndicatorGrowthFilterName } = require('../utils/filterNames');
 const indicatorGrowthCache = require('../cache/indicatorGrowthCache');
+const { thrustVelocity, passesThrustFilter, compareThrustRows } = require('../utils/rsiThrustRanking');
 
 const CANDLES_LIMIT = 1000;
 const BATCH_SIZE = 20;
@@ -14,7 +15,7 @@ const MIN_OCCURRENCES = indicatorGrowthCache.MIN_OCCURRENCES;
 const ALLOWED_INTERVALS = new Set([
   '1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w',
 ]);
-const ALLOWED_ENGINES = new Set(['bollinger', 'rsi', 'maCross']);
+const ALLOWED_ENGINES = new Set(['bollinger', 'rsi', 'maCross', 'rsiThrust']);
 
 function parseParams(engine, query) {
   if (engine === 'bollinger') {
@@ -28,6 +29,14 @@ function parseParams(engine, query) {
       period: parseInt(query.rsiPeriod ?? '14', 10),
       oversold: parseInt(query.oversold ?? '30', 10),
       overbought: parseInt(query.overbought ?? '70', 10),
+    };
+  }
+  if (engine === 'rsiThrust') {
+    return {
+      period: parseInt(query.rsiPeriod ?? '14', 10),
+      from: parseInt(query.from ?? '50', 10),
+      to: parseInt(query.to ?? '70', 10),
+      interval: query.interval ?? '4h',
     };
   }
   // maCross
@@ -51,11 +60,19 @@ async function runInBatches(items, fn, batchSize) {
 }
 
 // GET /services/indicator-growth-filter?indicator=bollinger&interval=4h&period=20&stdDev=2&thresholdPct=10
+//
+// rsiThrust (arranque do RSI, ex.: 50→70 em poucos minutos — "explosão"):
+//   /indicator-growth-filter?indicator=rsiThrust&interval=15m&from=50&to=70&maxMinutes=45
+// Confluência opcional com amplitude de Bollinger em outro timeframe (ex.: entrada em 5m):
+//   ...&confluenceInterval=5m&confluenceThresholdPct=5
+//   → ordena o resultado por score = velocidade do RSI thrust × amplitude média da banda 5m
 router.get('/indicator-growth-filter', async (req, res) => {
   try {
     const engine = req.query.indicator;
     const interval = req.query.interval ?? '4h';
+    const isThrust = engine === 'rsiThrust';
     const thresholdPct = parseFloat(req.query.thresholdPct ?? '10');
+    const maxMinutes = parseFloat(req.query.maxMinutes ?? '60');
 
     if (!ALLOWED_ENGINES.has(engine)) {
       return res.status(400).json({ error: `indicador não suportado: ${engine}` });
@@ -63,35 +80,84 @@ router.get('/indicator-growth-filter', async (req, res) => {
     if (!ALLOWED_INTERVALS.has(interval)) {
       return res.status(400).json({ error: `intervalo não suportado: ${interval}` });
     }
-    if (!Number.isFinite(thresholdPct)) {
-      return res.status(400).json({ error: 'thresholdPct inválido' });
+    if (!Number.isFinite(isThrust ? maxMinutes : thresholdPct)) {
+      return res.status(400).json({ error: 'thresholdPct/maxMinutes inválido' });
     }
 
     const params = parseParams(engine, req.query);
-    const name = buildIndicatorGrowthFilterName(engine, interval, params, thresholdPct);
+    const name = buildIndicatorGrowthFilterName(engine, interval, params, isThrust ? maxMinutes : thresholdPct);
     const { list: symbols } = await getActiveUsdtPairs();
     const force = req.query.force === '1';
 
+    let matched = null;
+    let cacheInfo = null;
     const presetKey = indicatorGrowthCache.matchesCachedPreset({ engine, interval, params });
     if (presetKey) {
-      const cached = await indicatorGrowthCache.getCachedResult(symbols, presetKey, thresholdPct, { force });
-      if (cached) return res.json({ ...cached, name });
+      const cached = await indicatorGrowthCache.getCachedResult(
+        symbols, presetKey, isThrust ? maxMinutes : thresholdPct, { force },
+      );
+      if (cached) {
+        matched = cached.list.map((symbol) => ({ symbol, ...cached.details[symbol] }));
+        cacheInfo = cached.cache;
+      }
     }
 
-    const matched = await runInBatches(symbols, async (symbol) => {
-      try {
-        const { candles } = await getCandlesForScreening(symbol, interval, CANDLES_LIMIT);
-        const result = computeIndicatorGrowth(engine, candles, params);
-        if (!result || result.totalOccurrences < MIN_OCCURRENCES) return null;
-        if (result.avgAppreciationPercent < thresholdPct) return null;
-        return { symbol, ...result };
-      } catch (err) {
-        console.error(`[indicator-growth-filter] ${symbol}:`, err.message);
-        return null;
-      }
-    }, BATCH_SIZE);
+    if (!matched) {
+      matched = await runInBatches(symbols, async (symbol) => {
+        try {
+          const { candles } = await getCandlesForScreening(symbol, interval, CANDLES_LIMIT);
+          const result = computeIndicatorGrowth(engine, candles, params);
+          if (!result) return null;
 
-    matched.sort((a, b) => b.avgAppreciationPercent - a.avgAppreciationPercent);
+          if (isThrust) {
+            if (!passesThrustFilter(result, maxMinutes, MIN_OCCURRENCES)) return null;
+            return { symbol, ...result };
+          }
+
+          if (result.totalOccurrences < MIN_OCCURRENCES) return null;
+          if (result.avgAppreciationPercent < thresholdPct) return null;
+          return { symbol, ...result };
+        } catch (err) {
+          console.error(`[indicator-growth-filter] ${symbol}:`, err.message);
+          return null;
+        }
+      }, BATCH_SIZE);
+    }
+
+    let confluence = null;
+    if (isThrust) {
+      matched.sort((a, b) => compareThrustRows(a, b, params.from, params.to));
+
+      const confluenceInterval = req.query.confluenceInterval;
+      if (confluenceInterval && ALLOWED_INTERVALS.has(confluenceInterval)) {
+        const bbPeriod = parseInt(req.query.bbPeriod ?? '20', 10);
+        const bbStdDev = parseFloat(req.query.bbStdDev ?? '2');
+        const confluenceThresholdPct = parseFloat(req.query.confluenceThresholdPct ?? '0');
+        confluence = { interval: confluenceInterval, period: bbPeriod, stdDev: bbStdDev, thresholdPct: confluenceThresholdPct };
+
+        matched = await runInBatches(matched, async (row) => {
+          try {
+            const { candles } = await getCandlesForScreening(row.symbol, confluenceInterval, CANDLES_LIMIT);
+            const bb = computeBollingerGrowth(candles, { period: bbPeriod, stdDev: bbStdDev });
+            if (!bb || bb.totalOccurrences < MIN_OCCURRENCES) return null;
+            if (bb.avgAppreciationPercent < confluenceThresholdPct) return null;
+            return {
+              ...row,
+              bbAmplitudePercent: bb.avgAppreciationPercent,
+              bbOccurrences: bb.totalOccurrences,
+              score: parseFloat((thrustVelocity(row, params.from, params.to) * bb.avgAppreciationPercent).toFixed(3)),
+            };
+          } catch (err) {
+            console.error(`[indicator-growth-filter] confluência ${row.symbol}:`, err.message);
+            return null;
+          }
+        }, BATCH_SIZE);
+
+        matched.sort((a, b) => b.score - a.score);
+      }
+    } else {
+      matched.sort((a, b) => b.avgAppreciationPercent - a.avgAppreciationPercent);
+    }
 
     const details = {};
     for (const row of matched) {
@@ -106,7 +172,10 @@ router.get('/indicator-growth-filter', async (req, res) => {
       engine,
       interval,
       params,
-      thresholdPct,
+      thresholdPct: isThrust ? undefined : thresholdPct,
+      maxMinutes: isThrust ? maxMinutes : undefined,
+      confluence,
+      cache: cacheInfo,
       scannedAt: Date.now(),
     });
   } catch (err) {

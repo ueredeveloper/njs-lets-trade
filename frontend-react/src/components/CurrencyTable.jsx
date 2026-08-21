@@ -488,6 +488,20 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   const growthMeta = activeGrowthFilter?.meta ?? null;
   const isGrowthFilter = !!activeGrowthFilter;
 
+  const growthFilterParams = useMemo(
+    () => (activeGrowthFilter ? parseIndicatorGrowthFilterName(activeGrowthFilter.name) : null),
+    [activeGrowthFilter],
+  );
+  const isRsiThrustFilter = growthFilterParams?.engine === 'rsiThrust';
+
+  /** rsiThrust ordena por explosividade (score de confluência, senão velocidade do RSI);
+   *  os demais motores de crescimento ordenam pela valorização média do ciclo fundo→topo. */
+  function growthSortValue(meta) {
+    if (!meta) return null;
+    if (isRsiThrustFilter) return meta.score ?? meta.avgVelocity ?? null;
+    return meta.avgAppreciationPercent;
+  }
+
   const activeVwapWidthFilter = useMemo(() => {
     if (!activeFilter || favoriteView) return null;
     const f = findFilter(activeFilter);
@@ -751,8 +765,8 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
       });
     } else if (activeGrowthFilter && growthMeta && sortVolume === 'none' && !favoriteView) {
       list = list.slice().sort((a, b) => {
-        const ga = growthMeta[a.symbol]?.avgAppreciationPercent ?? (growthSort === 'high' ? -Infinity : Infinity);
-        const gb = growthMeta[b.symbol]?.avgAppreciationPercent ?? (growthSort === 'high' ? -Infinity : Infinity);
+        const ga = growthSortValue(growthMeta[a.symbol]) ?? (growthSort === 'high' ? -Infinity : Infinity);
+        const gb = growthSortValue(growthMeta[b.symbol]) ?? (growthSort === 'high' ? -Infinity : Infinity);
         return growthSort === 'high' ? gb - ga : ga - gb;
       });
     } else if (activeVwapWidthFilter && vwapWidthMeta && sortVolume === 'none' && !favoriteView) {
@@ -1185,6 +1199,13 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
 
   const tradePnlSumLabel = formatTradePnlBadge(tradePnlSum);
 
+  /** Mensagem exibida quando o favorito TX está vazio para o filtro atual (ex.: sem trade hoje). */
+  const tradeEmptyKey = tradeCount === 0
+    ? 'trades.empty.none'
+    : ['bought_today', 'sold_today', 'pnl_today', 'bought_week', 'sold_week', 'pnl_week', 'open'].includes(tradeFavSort)
+      ? `trades.empty.${tradeFavSort}`
+      : 'trades.empty.default';
+
   /** Somatório USDT dos holdings AT, separado por corretora. */
   const activeUsdtSum = useMemo(() => {
     if (!isActiveFavView || activeTrades.size === 0) return null;
@@ -1553,10 +1574,12 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
               {isGrowthFilter && (
                 <th
                   className="text-right px-2 py-1 text-p5 opacity-80 font-normal uppercase tracking-wider whitespace-nowrap cursor-pointer hover:opacity-100 select-none"
-                  title="Ordenar por valorização média do ciclo fundo→topo"
+                  title={isRsiThrustFilter
+                    ? 'Ordenar por explosão do RSI: velocidade (e amplitude da Bollinger, se combinada) — mais rápido primeiro'
+                    : 'Ordenar por valorização média do ciclo fundo→topo'}
                   onClick={() => setGrowthSort((s) => (s === 'high' ? 'low' : 'high'))}
                 >
-                  Cresc% {growthSort === 'high' ? '↓' : '↑'}
+                  {isRsiThrustFilter ? 'RSI 🔥' : 'Cresc%'} {growthSort === 'high' ? '↓' : '↑'}
                 </th>
               )}
               {isVwapWidthFilter && (
@@ -1657,6 +1680,14 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                     <div className="w-3 h-3 border border-p4 border-t-transparent rounded-full animate-spin" />
                     Carregando trades…
                   </div>
+                </td>
+              </tr>
+            )}
+
+            {isTradesFavView && !tradeFavLoading && rows.length === 0 && (
+              <tr>
+                <td colSpan={tableColCount} className="py-3 text-center text-[11px] text-p5/50">
+                  {t(tradeEmptyKey)}
                 </td>
               </tr>
             )}
@@ -1950,7 +1981,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                       </td>
                     );
                   })()}
-                  {isGrowthFilter && (() => {
+                  {isGrowthFilter && !isRsiThrustFilter && (() => {
                     const avgPct = growthMeta?.[item.symbol]?.avgAppreciationPercent;
                     return (
                       <td
@@ -1958,6 +1989,28 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                         style={{ color: avgPct == null ? 'rgba(255,255,255,0.35)' : '#22c55e' }}
                       >
                         {avgPct != null ? fmtChangePct(avgPct) : '—'}
+                      </td>
+                    );
+                  })()}
+                  {isGrowthFilter && isRsiThrustFilter && (() => {
+                    const meta = growthMeta?.[item.symbol];
+                    const inProgress = meta?.current?.inProgress;
+                    const label = inProgress
+                      ? `🔥 ${meta.current.minutesElapsed}min`
+                      : meta?.avgMinutes != null ? `${meta.avgMinutes}min` : '—';
+                    const bb = meta?.bbAmplitudePercent;
+                    const title = [
+                      inProgress ? `Explodindo agora: RSI ${meta.current.currentRsi} há ${meta.current.minutesElapsed}min` : null,
+                      meta?.totalOccurrences ? `Histórico: ${meta.totalOccurrences} arranques, média ${meta.avgMinutes}min (${meta.avgVelocity} pts RSI/min)` : null,
+                      bb != null ? `Amplitude Bollinger na confluência: ${bb.toFixed(2)}%` : null,
+                    ].filter(Boolean).join(' — ') || undefined;
+                    return (
+                      <td
+                        className="px-2 py-1 text-right font-mono text-[10px] font-semibold"
+                        title={title}
+                        style={{ color: label === '—' ? 'rgba(255,255,255,0.35)' : inProgress ? '#f97316' : '#22c55e' }}
+                      >
+                        {label}{bb != null ? ` · BB ${bb.toFixed(1)}%` : ''}
                       </td>
                     );
                   })()}

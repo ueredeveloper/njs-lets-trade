@@ -219,6 +219,13 @@ function buildSummary(value, t) {
   }
   if (type === 'indicatorGrowth') {
     const engine = value.growthEngine ?? 'bollinger';
+    if (engine === 'rsiThrust') {
+      const from = value.from ?? '50';
+      const to = value.to ?? '70';
+      const maxMinutes = value.maxMinutes ?? '45';
+      const conf = value.useConfluence ? t('sum.rsi_thrust_confluence', value.confluenceInterval ?? '5m') : '';
+      return t('sum.rsi_thrust', from, to, maxMinutes, ivLabel, conf);
+    }
     const threshold = value.thresholdPct ?? '10';
     const engineLabel = t(`growth.engine.${engine}`);
     return t('sum.indicator_growth', engineLabel, threshold, ivLabel);
@@ -380,6 +387,9 @@ function IndicatorRow({ value, onChange }) {
                 next.period1 = '9';
                 next.period2 = '21';
                 next.thresholdPct = next.thresholdPct ?? '10';
+                next.from = next.from ?? '50';
+                next.to = next.to ?? '70';
+                next.maxMinutes = next.maxMinutes ?? '45';
               }
               onChange(next);
             }}
@@ -898,12 +908,27 @@ function IndicatorRow({ value, onChange }) {
             <select
               className={sel}
               value={value.growthEngine ?? 'bollinger'}
-              onChange={(e) => onChange({ ...value, growthEngine: e.target.value })}
+              onChange={(e) => {
+                const engine = e.target.value;
+                const next = { ...value, growthEngine: engine };
+                // arranque de RSI é um conceito de curto prazo — troca o intervalo padrão (4h,
+                // usado pelos outros motores) pra 15m só se o usuário ainda não tiver mexido nele,
+                // e devolve pra 4h se ele sair do rsiThrust mantendo o 15m intocado.
+                const intervals = value.intervals ?? [];
+                if (engine === 'rsiThrust' && intervals.length === 1 && intervals[0] === '4h') {
+                  next.intervals = ['15m'];
+                } else if (engine !== 'rsiThrust' && (value.growthEngine ?? 'bollinger') === 'rsiThrust'
+                  && intervals.length === 1 && intervals[0] === '15m') {
+                  next.intervals = ['4h'];
+                }
+                onChange(next);
+              }}
               title="Qual indicador define o fundo (entrada) e o topo (saída) do ciclo"
             >
               <option value="bollinger">{t('growth.engine.bollinger')}</option>
               <option value="rsi">{t('growth.engine.rsi')}</option>
               <option value="maCross">{t('growth.engine.maCross')}</option>
+              <option value="rsiThrust">{t('growth.engine.rsiThrust')}</option>
             </select>
 
             {(value.growthEngine ?? 'bollinger') === 'bollinger' && (
@@ -978,17 +1003,91 @@ function IndicatorRow({ value, onChange }) {
               </>
             )}
 
-            <input
-              type="number"
-              className={sel}
-              style={{ width: '3.5rem' }}
-              min="0"
-              step="1"
-              value={value.thresholdPct ?? '10'}
-              onChange={(e) => onChange({ ...value, thresholdPct: e.target.value })}
-              title="Valorização média mínima (%) entre fundo e topo, no período salvo"
-            />
-            <span className="text-p5/50 text-[10px] shrink-0">%</span>
+            {value.growthEngine === 'rsiThrust' && (
+              <>
+                <select
+                  className={sel}
+                  value={value.from ?? '50'}
+                  onChange={(e) => onChange({ ...value, from: e.target.value })}
+                  title="RSI de entrada do arranque — cruza pra cima a partir daqui"
+                >
+                  {[40, 45, 50, 55, 60].map(v => <option key={v} value={String(v)}>RSI≥{v}</option>)}
+                </select>
+                <span className="text-p5/50 text-[10px] shrink-0">→</span>
+                <select
+                  className={sel}
+                  value={value.to ?? '70'}
+                  onChange={(e) => onChange({ ...value, to: e.target.value })}
+                  title="RSI alvo do arranque — 'explodiu' quando chega aqui"
+                >
+                  {[60, 65, 70, 75, 80, 85].map(v => <option key={v} value={String(v)}>RSI≥{v}</option>)}
+                </select>
+                <input
+                  type="number"
+                  className={sel}
+                  style={{ width: '3.25rem' }}
+                  min="1"
+                  step="1"
+                  value={value.maxMinutes ?? '45'}
+                  onChange={(e) => onChange({ ...value, maxMinutes: e.target.value })}
+                  title="Só considera arranque rápido: no máximo esses minutos do RSI de entrada até o alvo"
+                />
+                <span className="text-p5/50 text-[10px] shrink-0">min</span>
+
+                <label className="flex items-center gap-1 text-p5/70 text-[10px] shrink-0 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={!!value.useConfluence}
+                    onChange={(e) => onChange({
+                      ...value,
+                      useConfluence: e.target.checked,
+                      confluenceInterval: value.confluenceInterval ?? '5m',
+                      confluenceThresholdPct: value.confluenceThresholdPct ?? '5',
+                    })}
+                  />
+                  {t('growth.rsithrust.confluence')}
+                </label>
+                {value.useConfluence && (
+                  <>
+                    <select
+                      className={sel}
+                      value={value.confluenceInterval ?? '5m'}
+                      onChange={(e) => onChange({ ...value, confluenceInterval: e.target.value })}
+                      title="Timeframe onde mede a amplitude da banda de Bollinger (fundo→topo) — ex.: entrada em 5m"
+                    >
+                      {['1m', '3m', '5m', '15m', '30m'].map(iv => <option key={iv} value={iv}>{iv}</option>)}
+                    </select>
+                    <input
+                      type="number"
+                      className={sel}
+                      style={{ width: '3.25rem' }}
+                      min="0"
+                      step="1"
+                      value={value.confluenceThresholdPct ?? '5'}
+                      onChange={(e) => onChange({ ...value, confluenceThresholdPct: e.target.value })}
+                      title="Amplitude média mínima (%) da banda de Bollinger nesse timeframe"
+                    />
+                    <span className="text-p5/50 text-[10px] shrink-0">%</span>
+                  </>
+                )}
+              </>
+            )}
+
+            {value.growthEngine !== 'rsiThrust' && (
+              <>
+                <input
+                  type="number"
+                  className={sel}
+                  style={{ width: '3.5rem' }}
+                  min="0"
+                  step="1"
+                  value={value.thresholdPct ?? '10'}
+                  onChange={(e) => onChange({ ...value, thresholdPct: e.target.value })}
+                  title="Valorização média mínima (%) entre fundo e topo, no período salvo"
+                />
+                <span className="text-p5/50 text-[10px] shrink-0">%</span>
+              </>
+            )}
           </>
         )}
 
@@ -1499,7 +1598,7 @@ export default function IndicatorPanel({ open, onToggle }) {
         }
       }
 
-      // Crescimento por ciclo (fundo→topo): Bollinger / RSI / cruzamento EMA
+      // Crescimento por ciclo (fundo→topo): Bollinger / RSI / cruzamento EMA / arranque RSI (thrust)
       for (const ind of growthIndicators) {
         const engine = ind.growthEngine ?? 'bollinger';
         const thresholdPct = ind.thresholdPct ?? '10';
@@ -1509,16 +1608,24 @@ export default function IndicatorPanel({ open, onToggle }) {
         const overbought = ind.overbought ?? '70';
         const period1 = ind.period1 ?? '9';
         const period2 = ind.period2 ?? '21';
+        const from = ind.from ?? '50';
+        const to = ind.to ?? '70';
+        const maxMinutes = ind.maxMinutes ?? '45';
+        const confluenceInterval = ind.useConfluence ? (ind.confluenceInterval ?? '5m') : undefined;
+        const confluenceThresholdPct = ind.confluenceThresholdPct ?? '5';
 
         for (const interval of ind.intervals) {
           const filter = await fetchIndicatorGrowthFilter({
             indicator: engine, interval, thresholdPct,
             period, stdDev, oversold, overbought, period1, period2,
+            from, to, maxMinutes, confluenceInterval, confluenceThresholdPct,
           });
           const params = engine === 'bollinger' ? { period, stdDev }
             : engine === 'rsi' ? { oversold, overbought }
+            : engine === 'rsiThrust' ? { from, to }
             : { period1, period2 };
-          const expectedName = buildIndicatorGrowthFilterName(engine, interval, params, thresholdPct);
+          const thresholdForName = engine === 'rsiThrust' ? maxMinutes : thresholdPct;
+          const expectedName = buildIndicatorGrowthFilterName(engine, interval, params, thresholdForName);
           addFilter({
             name: filter.name ?? expectedName,
             list: filter.list,

@@ -947,7 +947,12 @@ export function CurrencyProvider({ children }) {
   const joinFilters = useCallback((selectedFilterNames) => {
     setFilters((prev) => {
       const name = selectedFilterNames.join('|');
-      const chosen = prev.filter((f) => selectedFilterNames.includes(f.name));
+      // Mantém a ordem de seleção (não a ordem de `prev`) pra que chosen[0] seja sempre o
+      // primeiro filtro marcado — é dele que herdamos meta/colunas logo abaixo, e o nome
+      // combinado (`name`) também começa com o nome desse primeiro filtro.
+      const chosen = selectedFilterNames
+        .map((n) => prev.find((f) => f.name === n))
+        .filter(Boolean);
 
       if (chosen.length === 0) return prev;
 
@@ -956,7 +961,11 @@ export function CurrencyProvider({ children }) {
         common = common.filter((sym) => chosen[i].list.includes(sym));
       }
 
-      const newFilter = { name, list: common };
+      // Herda tudo do primeiro filtro escolhido (meta com valores de RSI/largura, scannedAt,
+      // etc.) — só o nome e a lista mudam pra refletir a interseção. Sem isso as colunas
+      // RSI/Larg da primeira tabela ficavam vazias após o join (meta não existia no filtro
+      // combinado).
+      const newFilter = { ...chosen[0], name, list: common };
       const index = prev.findIndex((f) => f.name === name);
       if (index !== -1) {
         const next = [...prev];

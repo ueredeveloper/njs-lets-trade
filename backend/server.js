@@ -435,7 +435,8 @@ async function startServer() {
         const w = stats.withCycles ?? {};
         console.log(
           `[indicatorGrowthCache] bb:${w['4h|growth|bb|20|2'] ?? 0} rsi:${w['4h|growth|rsi|30|70'] ?? 0}`
-          + ` macross:${w['4h|growth|macross|9|21'] ?? 0} | computados:${stats.computed}/${stats.total}`,
+          + ` macross:${w['4h|growth|macross|9|21'] ?? 0} rsiThrust:${w['15m|growth|rsithrust|50|70'] ?? 0}`
+          + ` | computados:${stats.computed}/${stats.total}`,
         );
       }
     } catch (e) {

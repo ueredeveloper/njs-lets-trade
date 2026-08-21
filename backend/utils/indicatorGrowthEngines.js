@@ -143,10 +143,72 @@ function computeMaCrossGrowth(candles, { period1 = 9, period2 = 21, interval, to
   return summarize(occurrences);
 }
 
+/** Ciclo: RSI cruza de baixo pra cima do nível `from` (ex.: 50) → atinge `to` (ex.: 70) sem
+ * antes recuar abaixo de `from` — mede quantos minutos o "arranque" (thrust) levou, e a
+ * velocidade média (pontos de RSI por minuto). Diferente de computeRsiGrowth: aqui o que
+ * importa é o TEMPO do movimento do RSI, não a valorização de preço do ciclo fundo→topo.
+ * Se o ciclo mais recente ainda está em andamento (RSI entre from e to, sem ter recuado),
+ * isso fica exposto em `current` — é o sinal de "explodindo agora". */
+function computeRsiThrust(candles, { period = 14, from = 50, to = 70, interval } = {}) {
+  if (!candles?.length || candles.length < period + 2) return null;
+  if (to <= from) throw new Error('rsiThrust: "to" deve ser maior que "from"');
+
+  const closes = candles.map(c => parseFloat(c.close));
+  const rsiValues = RSI.calculate({ values: closes, period });
+  if (rsiValues.length < 2) return null;
+
+  const minutesPerCandle = intervalMs(interval) / 60_000;
+  const occurrencesMinutes = [];
+  let state = 'SEEK_ENTRY';
+  let entryIdx = null;
+
+  for (let i = 1; i < rsiValues.length; i++) {
+    if (state === 'SEEK_ENTRY') {
+      if (rsiValues[i - 1] < from && rsiValues[i] >= from) {
+        entryIdx = i;
+        state = 'SEEK_EXIT';
+      }
+      continue;
+    }
+
+    if (rsiValues[i] < from) {
+      state = 'SEEK_ENTRY';
+      entryIdx = null;
+      continue;
+    }
+
+    if (rsiValues[i] >= to) {
+      occurrencesMinutes.push((i - entryIdx) * minutesPerCandle);
+      state = 'SEEK_ENTRY';
+      entryIdx = null;
+    }
+  }
+
+  const lastIdx = rsiValues.length - 1;
+  const current = state === 'SEEK_EXIT'
+    ? {
+      inProgress: true,
+      minutesElapsed: parseFloat(((lastIdx - entryIdx) * minutesPerCandle).toFixed(1)),
+      currentRsi: parseFloat(rsiValues[lastIdx].toFixed(2)),
+    }
+    : { inProgress: false, minutesElapsed: null, currentRsi: parseFloat(rsiValues[lastIdx].toFixed(2)) };
+
+  const totalOccurrences = occurrencesMinutes.length;
+  if (totalOccurrences === 0) {
+    return { totalOccurrences: 0, avgMinutes: null, avgVelocity: null, current };
+  }
+
+  const avgMinutes = parseFloat(averageWithoutOutliers(occurrencesMinutes).toFixed(1));
+  const avgVelocity = avgMinutes > 0 ? parseFloat(((to - from) / avgMinutes).toFixed(3)) : null;
+
+  return { totalOccurrences, avgMinutes, avgVelocity, current };
+}
+
 const ENGINES = {
   bollinger: computeBollingerGrowth,
   rsi: computeRsiGrowth,
   maCross: computeMaCrossGrowth,
+  rsiThrust: computeRsiThrust,
 };
 
 /** @returns {{totalOccurrences:number, avgAppreciationPercent:number}|null} */
@@ -162,5 +224,6 @@ module.exports = {
   computeBollingerGrowth,
   computeRsiGrowth,
   computeMaCrossGrowth,
+  computeRsiThrust,
   bollingerCycleOccurrences,
 };
