@@ -44,6 +44,8 @@ function buildRsiOption({ interval, candlesticks, rsi }, colors, show50) {
     yAxis: {
       min: 0, max: 100, scale: false,
       position: 'right',
+      // A cada 10 (não o default ~20) — mais linhas de referência horizontais pra ler o valor.
+      interval: 10,
       axisLine: { lineStyle: { color: colors.panel } },
       axisLabel: { color: colors.text, fontSize: 9 },
       splitLine: { lineStyle: { color: colors.panel, type: 'dashed', opacity: 0.3 } },

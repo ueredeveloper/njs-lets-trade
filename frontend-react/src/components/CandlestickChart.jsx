@@ -2830,7 +2830,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
         axisLine: { lineStyle: { color: colors.panel } },
         axisLabel: { color: colors.text, fontSize: 10 },
         splitLine: { show: false } },
-      yAxis: { scale: true, position: 'right',
+      yAxis: { scale: true, position: 'right', splitNumber: 8,
         axisLine: { lineStyle: { color: colors.panel } },
         axisLabel: { color: colors.text, fontSize: 10, ...(isMobile ? { formatter: fmtAxisPriceMobile } : {}) },
         splitLine: { lineStyle: { color: colors.panel, type: 'dashed', opacity: 0.3 } } },
@@ -2862,15 +2862,15 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
           silent: true, symbol: 'none',
           data: [
             { yAxis: 30, lineStyle: { color: '#ef5350', type: 'dashed', width: 1 },
-              label: { formatter: '30', color: '#ef5350', fontSize: 9, position: 'end' } },
+              label: { formatter: '30', color: '#ef5350', fontSize: 6, position: 'end' } },
             { yAxis: 50, lineStyle: { color: '#ffffff', type: 'dashed', width: 1, opacity: 0.5 },
-              label: { formatter: '50', color: '#ffffff', fontSize: 9, position: 'end' } },
+              label: { formatter: '50', color: '#ffffff', fontSize: 6, position: 'end' } },
             ...(showRsi50 ? [{ yAxis: 50, lineStyle: { color: '#facc15', type: 'dashed', width: 1, opacity: 0.6 },
-              label: { formatter: '50', color: '#facc15', fontSize: 9, position: 'end' } }] : []),
+              label: { formatter: '50', color: '#facc15', fontSize: 6, position: 'end' } }] : []),
             { yAxis: 70, lineStyle: { color: '#26a69a', type: 'dashed', width: 1 },
-              label: { formatter: '70', color: '#26a69a', fontSize: 9, position: 'end' } },
+              label: { formatter: '70', color: '#26a69a', fontSize: 6, position: 'end' } },
             ...(showRsi80 ? [{ yAxis: 80, lineStyle: { color: '#fb923c', type: 'dashed', width: 1 },
-              label: { formatter: '80', color: '#fb923c', fontSize: 9, position: 'end' } }] : []),
+              label: { formatter: '80', color: '#fb923c', fontSize: 6, position: 'end' } }] : []),
           ],
         },
       };
@@ -2899,9 +2899,11 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
   const subpanelYAxis = (id, gridIdx) => ({
     gridIndex: gridIdx, min: 0, max: 100, position: 'right',
     axisLine: { lineStyle: { color: colors.panel } },
-    axisLabel: { color: colors.text, fontSize: 9 },
+    // RSI ganhou mais linhas de grade (10/20/40/60/90) — fonte menor pra não sobrepor números.
+    axisLabel: { color: colors.text, fontSize: id === 'rsi' ? 6 : 9 },
     splitLine: { lineStyle: { color: colors.panel, type: 'dashed', opacity: 0.2 } },
-    interval: id === 'chopZone' ? 20 : 30,
+    // RSI a cada 10 (não 30) — mais linhas de referência pra ler o valor depois de dar zoom.
+    interval: id === 'chopZone' ? 20 : 10,
   });
 
   const dataZoomAxisIndex = [0, ...subpanelIds.map((_, i) => i + 1)];
@@ -2925,7 +2927,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
       ...subpanelIds.map((_, i) => axisBase(i + 1)),
     ],
     yAxis: [
-      { gridIndex: 0, scale: true, position: 'right',
+      { gridIndex: 0, scale: true, position: 'right', splitNumber: 8,
         axisLine: { lineStyle: { color: colors.panel } },
         axisLabel: { color: colors.text, fontSize: 10, ...(isMobile ? { formatter: fmtAxisPriceMobile } : {}) },
         splitLine: { lineStyle: { color: colors.panel, type: 'dashed', opacity: 0.3 } } },

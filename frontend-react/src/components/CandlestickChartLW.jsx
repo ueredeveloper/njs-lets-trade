@@ -618,6 +618,11 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       layout: {
         background: { type: ColorType.Solid, color: colors?.bg || '#1a0a25' },
         textColor: colors?.text || '#b3aca4',
+        // Default da lib é 12 — reduzido pra caber as linhas de grade extras do RSI (10/20/
+        // 40/60/90) sem os números se sobreporem. Vale pro chart inteiro (não dá pra fixar só
+        // por pane na Lightweight Charts), mas no preço principal também ajuda a caber mais
+        // marcações no eixo.
+        fontSize: 8,
       },
       grid: {
         vertLines: { color: colors?.panel || '#003f69', style: 1 },
@@ -827,6 +832,13 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       // moeda/favorito herdava a escala manual da moeda anterior e os candles/linhas apareciam
       // fora do range vertical até o usuário dar o duplo clique manualmente.
       chart?.priceScale('right').applyOptions({ autoScale: true });
+      // Mesmo religamento pras price scales dos sub-painéis (RSI/CHOP/BARS) — cada pane tem sua
+      // própria escala independente da principal, então arrastar o eixo do RSI pra ver mais
+      // variação (ver createPriceLine acima) travava autoScale só ali, e sem isso ficava preso
+      // fora do range ao trocar de moeda.
+      Object.values(subpanelStateRef.current.series).forEach((s) => {
+        try { s.priceScale().applyOptions({ autoScale: true }); } catch { /* pane já removida */ }
+      });
     });
     return () => cancelAnimationFrame(rafId);
   }, [candlesticks, focusLastN, zoomPeriod]);
@@ -1152,11 +1164,22 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
           priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
         }, pane.paneIndex());
         if (id === 'rsi') {
+          // Linhas de grade extras (10/20/40/60/90 e 80 quando R80 não está ligado) — sem elas
+          // só havia referência visual em 30/50/70, deixando buracos grandes pra ler o valor
+          // depois de arrastar/zoomar o eixo (autoScale reajusta o range vertical visível).
+          const gridColor = colors?.panel || '#003f69';
+          [10, 20, 40, 60, 90].forEach((lvl) => {
+            s.createPriceLine({ price: lvl, color: gridColor, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: '' });
+          });
           s.createPriceLine({ price: 30, color: '#ef5350', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: '30' });
           s.createPriceLine({ price: 50, color: '#ffffff', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: '50' });
           s.createPriceLine({ price: 70, color: '#26a69a', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: '70' });
           if (activeIndicators.includes('rsi50')) s.createPriceLine({ price: 50, color: '#facc15', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: '50' });
-          if (activeIndicators.includes('rsi80')) s.createPriceLine({ price: 80, color: '#fb923c', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: '80' });
+          if (activeIndicators.includes('rsi80')) {
+            s.createPriceLine({ price: 80, color: '#fb923c', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: '80' });
+          } else {
+            s.createPriceLine({ price: 80, color: gridColor, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: '' });
+          }
         } else {
           s.createPriceLine({ price: 38.2, color: '#26a69a', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: '38' });
           s.createPriceLine({ price: 61.8, color: '#ef5350', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: '62' });
