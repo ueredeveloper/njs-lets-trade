@@ -30,7 +30,7 @@ import {
 } from '../utils/macrossFavoritesSort';
 import {
   compareTradeFavorites, filterTradeFavorites, formatTradePnlBadge,
-  formatTradeStatusBadge, loadTradeFavSort, tradePnlForSort,
+  formatTradeStatusBadge, loadTradeFavSort, tradePnlForSort, tradeCarryoverForSort,
   saveTradeFavSort, expandWeeklyTrades,
 } from '../utils/tradeFavoritesSort';
 import {
@@ -1794,6 +1794,10 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
               const isWeekTradeRow = isTradesFavView && item.__tradePnl != null;
               const tradePnl   = isWeekTradeRow ? item.__tradePnl : (tradeMeta ? tradePnlForSort(tradeMeta, tradeFavSort) : null);
               const tradePnlLabel = formatTradePnlBadge(tradePnl);
+              const tradeCarryover = isWeekTradeRow ? item.__tradeCarryover : (tradeMeta ? tradeCarryoverForSort(tradeMeta, tradeFavSort) : null);
+              const tradeCarryoverTitle = tradeCarryover
+                ? `Inclui ${formatTradePnlBadge(tradeCarryover)} de posição antiga (lote comprado há mais de 7 dias, casado agora pelo FIFO) — não é resultado de trade recente.`
+                : undefined;
               const tradeBadge = isWeekTradeRow
                 ? formatTradeStatusBadge({ lastTradeTime: item.__tradeTime }, tradeFavSort, t)
                 : (tradeMeta ? formatTradeStatusBadge(tradeMeta, tradeFavSort, t) : null);
@@ -2108,12 +2112,14 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                     {isTradesFavView && !volumeSortActive ? (
                       <span
                         className="font-semibold"
+                        title={tradeCarryoverTitle}
                         style={{
                           color: tradePnl == null ? 'rgba(255,255,255,0.35)'
                             : tradePnl >= 0 ? '#22c55e' : '#ef4444',
                         }}
                       >
                         {tradePnlLabel ?? '—'}
+                        {tradeCarryoverTitle ? <sup>*</sup> : null}
                       </span>
                     ) : isActiveFavView && holdingUsdt != null ? (
                       <span className="opacity-80 font-semibold" style={{ color: ACTIVE_COLOR }}>

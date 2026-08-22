@@ -56,6 +56,22 @@ export function tradePnlForSort(meta, sortBy) {
   return meta.pnlTotal;
 }
 
+/**
+ * Parcela do PnL relevante que veio de lotes "carryover" (comprados há mais de 7 dias,
+ * casados pelo FIFO só agora) — não é resultado de trades recentes, é a realização
+ * tardia de uma posição antiga esquecida. `null`/`0` quando não há carryover.
+ */
+export function tradeCarryoverForSort(meta, sortBy) {
+  if (!meta) return null;
+  if (sortBy === 'pnl_today' || sortBy === 'bought_today' || sortBy === 'sold_today') {
+    return meta.carryoverToday || null;
+  }
+  if (sortBy === 'pnl_week' || sortBy === 'bought_week' || sortBy === 'sold_week') {
+    return meta.carryoverWeek || null;
+  }
+  return null;
+}
+
 /** Filtra símbolos conforme o modo de data/status. */
 export function filterTradeFavorites(symbols, status, sortBy) {
   return symbols.filter((item) => {
@@ -149,6 +165,7 @@ export function expandWeeklyTrades(items, status) {
         __rowKey: `${sym}__w${idx}`,
         __tradeTime: trade.time,
         __tradePnl: trade.pnl,
+        __tradeCarryover: trade.carryover ?? null,
       });
     });
   }

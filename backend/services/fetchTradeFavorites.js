@@ -13,6 +13,11 @@ let cacheAt = 0;
 let cacheKey = '';
 
 const SP_OFFSET = '-03:00';
+// Lote parado há mais desse prazo quando finalmente é vendido conta como "carryover"
+// (posição antiga esquecida) em vez de resultado do dia/semana — ver caso SCUSDT: 336
+// unidades compradas em 29/02/2024 que só foram casadas pelo FIFO em uma venda de 2026,
+// inflando o "PnL hoje" com uma perda de anos atrás.
+const DUST_LOT_AGE_MS = 7 * 86_400_000;
 
 function startOfTodaySP(now = Date.now()) {
   const dateStr = new Intl.DateTimeFormat('en-CA', {
@@ -62,6 +67,8 @@ function summarizeTrades(rawTrades, now = Date.now()) {
   let pnlToday = 0;
   let pnlWeek = 0;
   let pnlTotal = 0;
+  let carryoverToday = 0;
+  let carryoverWeek = 0;
   let buysToday = 0;
   let buysWeek = 0;
   let sellsToday = 0;
@@ -91,11 +98,17 @@ function summarizeTrades(rawTrades, now = Date.now()) {
     let remain = t.qty;
     let cost = 0;
     let matched = 0;
+    let staleCost = 0;
+    let staleMatched = 0;
     while (remain > 1e-12 && inventory.length) {
       const lot = inventory[0];
       const take = Math.min(lot.qty, remain);
       cost += take * lot.price;
       matched += take;
+      if (t.time - lot.time > DUST_LOT_AGE_MS) {
+        staleCost += take * lot.price;
+        staleMatched += take;
+      }
       // Arredonda pra evitar arruinar de ponto flutuante acumulando a cada venda parcial
       // (ex.: 0.37 virando 0.3699999999999939) — esse qty também vai direto na ordem de
       // venda quando o lote é vendido isoladamente (ver TradeLotSellModal.jsx).
@@ -106,13 +119,26 @@ function summarizeTrades(rawTrades, now = Date.now()) {
     if (matched <= 0) continue;
 
     const pnlUsdt = matched * t.price - cost;
+    // Parte do PnL vinda de lotes "velhos" (comprados há mais de DUST_LOT_AGE_MS) —
+    // não é resultado da atividade de hoje/semana, é a realização tardia de uma posição
+    // antiga que o FIFO casou primeiro por ser o lote mais antigo em aberto.
+    const stalePnlUsdt = staleMatched > 0 ? staleMatched * t.price - staleCost : 0;
+    const freshPnlUsdt = pnlUsdt - stalePnlUsdt;
     pnlTotal += pnlUsdt;
-    if (t.time >= dayStart) pnlToday += pnlUsdt;
+    if (t.time >= dayStart) {
+      pnlToday += freshPnlUsdt;
+      carryoverToday += stalePnlUsdt;
+    }
     if (t.time >= weekStart) {
-      pnlWeek += pnlUsdt;
+      pnlWeek += freshPnlUsdt;
+      carryoverWeek += stalePnlUsdt;
       // Cada venda realizada na semana vira uma entrada própria — permite listar
       // a mesma moeda mais de uma vez quando houve mais de um trade fechado.
-      weekTrades.push({ time: t.time, pnl: Math.round(pnlUsdt * 100) / 100 });
+      weekTrades.push({
+        time: t.time,
+        pnl: Math.round(freshPnlUsdt * 100) / 100,
+        ...(stalePnlUsdt !== 0 ? { carryover: Math.round(stalePnlUsdt * 100) / 100 } : {}),
+      });
     }
   }
 
@@ -141,6 +167,8 @@ function summarizeTrades(rawTrades, now = Date.now()) {
     pnlToday: Math.round(pnlToday * 100) / 100,
     pnlWeek: Math.round(pnlWeek * 100) / 100,
     pnlTotal: Math.round(pnlTotal * 100) / 100,
+    carryoverToday: Math.round(carryoverToday * 100) / 100,
+    carryoverWeek: Math.round(carryoverWeek * 100) / 100,
     weekTrades,
     openQty: openQty > 1e-12 ? openQty : 0,
     openCost: Math.round(openCost * 100) / 100,
