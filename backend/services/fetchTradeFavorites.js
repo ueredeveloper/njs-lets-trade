@@ -1,7 +1,10 @@
+const fs = require('fs');
+const path = require('path');
 const router = require('express').Router();
 const { gateRequest } = require('../gate/getGateClient');
 const getClient = require('../binance/getClient');
 const { toGateSymbol } = require('../utils/toGateSymbol');
+const atomicWriteFile = require('../utils/atomicWriteFile');
 
 const STABLE = new Set(['USDT', 'USDC', 'BUSD', 'TUSD', 'DAI', 'FDUSD', 'BNB']);
 const CACHE_TTL_MS = 60_000;
@@ -11,6 +14,35 @@ const TRADE_LIMIT = 200;
 let cache = null;
 let cacheAt = 0;
 let cacheKey = '';
+
+// Symbol so aparece em fetchBinanceSymbols() se tiver saldo>0 agora ou vier em `extra`
+// (favoritos/holdings do front). Um símbolo negociado hoje mas comprado E vendido por
+// completo (saldo zera) some do resultado se não for favorito — a Binance não tem
+// endpoint de "todos os trades recentes da conta", só myTrades(symbol), então sem lembrar
+// o símbolo em algum lugar não tem como redescobri-lo depois do saldo zerar (caso real:
+// SCUSDT comprado e vendido no mesmo dia, sumiu da aba TX assim que a última sobra foi
+// vendida). Esse arquivo guarda `{ symbol: lastTradeTimeMs }` de todo símbolo já visto com
+// trade, e RECENT_SYMBOLS_RETENTION_MS mantém ele entrando na busca mesmo com saldo zerado.
+const RECENT_SYMBOLS_FILE = path.join(__dirname, '../data/trade-favorites-recent-symbols.json');
+const RECENT_SYMBOLS_RETENTION_MS = 7 * 86_400_000;
+
+function loadRecentSymbols() {
+  try {
+    return JSON.parse(fs.readFileSync(RECENT_SYMBOLS_FILE, 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+function pruneRecentSymbols(map, now) {
+  const pruned = {};
+  for (const [symbol, lastTradeTime] of Object.entries(map)) {
+    if (now - lastTradeTime <= RECENT_SYMBOLS_RETENTION_MS) pruned[symbol] = lastTradeTime;
+  }
+  return pruned;
+}
+
+let recentSymbols = loadRecentSymbols();
 
 const SP_OFFSET = '-03:00';
 // Lote parado há mais desse prazo quando finalmente é vendido conta como "carryover"
@@ -371,10 +403,17 @@ router.get('/trade-favorites', async (req, res) => {
       return res.json(cache);
     }
 
+    const now = Date.now();
+    recentSymbols = pruneRecentSymbols(recentSymbols, now);
+    // Une `extra` com símbolos vistos com trade nos últimos RECENT_SYMBOLS_RETENTION_MS —
+    // sem isso um símbolo não-favorito que zerou o saldo hoje (comprou e vendeu tudo)
+    // nunca mais seria consultado na Binance (ver comentário acima de RECENT_SYMBOLS_FILE).
+    const extraWithRecent = [...new Set([...extra, ...Object.keys(recentSymbols)])];
+
     const [gateMap, gateExtraMap, binanceSymbols] = await Promise.all([
       fetchGateAllTrades(),
-      fetchGateTradesForSymbols(extra),
-      fetchBinanceSymbols(extra),
+      fetchGateTradesForSymbols(extraWithRecent),
+      fetchBinanceSymbols(extraWithRecent),
     ]);
     // Consulta escopada por par (gateExtraMap) é mais confiável que o scan de conta
     // inteira pra esses símbolos — sobrescreve em vez de só complementar.
@@ -383,6 +422,18 @@ router.get('/trade-favorites', async (req, res) => {
     // e extras (favoritos) — já em binanceSymbols via extra
     const binanceMap = await fetchBinanceTradesMap(binanceSymbols);
     const list = mergeExchange(gateMap, binanceMap);
+
+    let recentChanged = false;
+    for (const item of list) {
+      if (item.lastTradeTime && recentSymbols[item.symbol] !== item.lastTradeTime) {
+        recentSymbols[item.symbol] = item.lastTradeTime;
+        recentChanged = true;
+      }
+    }
+    if (recentChanged) {
+      atomicWriteFile(RECENT_SYMBOLS_FILE, JSON.stringify(recentSymbols))
+        .catch(err => console.warn('[trade-favorites] falha ao salvar recent-symbols:', err.message));
+    }
 
     cache = list;
     cacheAt = Date.now();
