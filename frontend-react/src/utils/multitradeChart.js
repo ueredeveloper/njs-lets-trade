@@ -193,6 +193,15 @@ export function buildMarkersFromLiveTrades(trades, entry) {
       side: 'signal',
       price: entry.entrySignalPrice ?? null,
     });
+  } else if (entry?.phase === 'WATCHING' && entry?.entryLimit?.signalOpenTime) {
+    // bollinger-bands-bot.js não tem fase PENDING (só WATCHING → BOUGHT) — o toque na banda
+    // que já armou a ordem limite GTC fica em rules_state.entryLimit em vez de
+    // entry_signal_time/phase=PENDING. Sem este ramo a seta só aparecia depois de comprar.
+    markers.push({
+      time: entry.entryLimit.signalOpenTime,
+      side: 'signal',
+      price: entry.entryLimit.signalPrice ?? null,
+    });
   }
 
   if (entry?.phase === 'BOUGHT' && openMs) {

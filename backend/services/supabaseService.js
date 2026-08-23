@@ -605,6 +605,26 @@ function parseExitBracket(rulesState) {
   return { targetPrice: Number(eb.targetPrice), stopPrice: Number(eb.stopPrice) };
 }
 
+/** Ordem limite GTC armada aguardando reteste (bollinger-bands-bot.js placeRestingLimitBuy),
+ *  gravada em rules_state.entryLimit. Esse bot não tem fase PENDING (só WATCHING → BOUGHT —
+ *  ver comentário no topo de bollinger-bands-bot.js), então sem isso o toque na banda que já
+ *  armou a compra ficava sem seta de sinal no gráfico (só ma-cross/vwap-bands, que usam
+ *  PENDING, ganhavam a seta antes de comprar — ver buildMarkersFromLiveTrades). */
+function parseEntryLimit(rulesState) {
+  let rs = rulesState;
+  if (typeof rs === 'string') {
+    try { rs = JSON.parse(rs); } catch { return null; }
+  }
+  const el = rs?.entryLimit;
+  if (!el || !Number.isFinite(Number(el.signalOpenTime))) return null;
+  return {
+    signalOpenTime: Number(el.signalOpenTime),
+    signalPrice: el.signalPrice != null ? Number(el.signalPrice) : null,
+    price: el.price != null ? Number(el.price) : null,
+    entryDesc: el.entryDesc ?? null,
+  };
+}
+
 async function enrichMultitradeEntriesWithState(entries) {
   if (!entries?.length) return entries ?? [];
   const symbols = [...new Set(entries.map(e => e.symbol))];
@@ -632,6 +652,7 @@ async function enrichMultitradeEntriesWithState(entries) {
       entrySignalPrice: st?.entry_signal_price != null ? Number(st.entry_signal_price) : null,
       activeSetup: parseActiveSetup(st?.rules_state),
       exitBracket: parseExitBracket(st?.rules_state),
+      entryLimit: parseEntryLimit(st?.rules_state),
     };
   });
 }
@@ -734,7 +755,7 @@ router.get('/bot-state', getUserId, async (req, res) => {
 
   const { data, error } = await supabase
     .from('rsi_multi_bot_state')
-    .select('symbol, strategy_id, phase, buy_time, buy_price, buy_qty, entry_signal_time, entry_signal_price')
+    .select('symbol, strategy_id, phase, buy_time, buy_price, buy_qty, entry_signal_time, entry_signal_price, rules_state')
     .eq('symbol', symbol);
   if (error) return sbError(res, error, 'GET bot-state');
 
@@ -747,6 +768,7 @@ router.get('/bot-state', getUserId, async (req, res) => {
     buyQty: st.buy_qty != null ? Number(st.buy_qty) : null,
     entrySignalTime: st.entry_signal_time ?? null,
     entrySignalPrice: st.entry_signal_price != null ? Number(st.entry_signal_price) : null,
+    entryLimit: parseEntryLimit(st.rules_state),
   }));
   res.json(entries);
 });

@@ -1109,8 +1109,11 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
         setSelectedChart({ ...data, interval: effectiveInterval, symbol: item.symbol, source: effectiveSource ?? null });
         if (effectiveSource === 'gate') gatePreloadCandles(item.symbol);
         // Entre as estratégias que possam estar rodando o mesmo símbolo, prioriza a que está
-        // com ciclo ativo (PENDING/BOUGHT) — WATCHING não tem sinal/compra pra marcar.
-        const liveEntry = (liveStates ?? []).find(s => s.phase === 'PENDING' || s.phase === 'BOUGHT') ?? null;
+        // com ciclo ativo (PENDING/BOUGHT) ou com ordem limite armada (WATCHING + entryLimit —
+        // caso do bollinger-bands-bot.js, que não tem fase PENDING) — WATCHING puro não tem
+        // sinal/compra pra marcar.
+        const liveEntry = (liveStates ?? []).find(s => s.phase === 'PENDING' || s.phase === 'BOUGHT'
+          || (s.phase === 'WATCHING' && s.entryLimit)) ?? null;
         if (botTrades?.length || liveEntry) {
           setChartTradeMarkers(buildMarkersFromLiveTrades(botTrades, liveEntry));
         }
