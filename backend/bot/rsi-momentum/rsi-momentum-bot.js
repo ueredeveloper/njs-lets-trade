@@ -112,13 +112,26 @@ async function loadTrackedSymbols() {
  * Cria o favorito + a linha de estado assim que o scanner de mercado encontra um sinal novo
  * (ver marketScanner.js). A partir daqui a moeda segue o ciclo normal do tick() — o próprio
  * bot decide, no primeiro tick, se compra a mercado, arma pullback ou falha.
+ *
+ * Self-heal: só chega aqui depois de loadTrackedSymbols() dizer que o símbolo NÃO tem linha em
+ * rsi_multi_bot_state — então um 409 (duplicate key) no insert de multitrade_favorites só pode
+ * ser um favorito órfão (sem estado correspondente), sobrado de um retireAutoFavorite anterior
+ * que falhou no meio (ver comentário de ordem em retireAutoFavorite). Em vez de martelar esse
+ * erro a cada ciclo do scanner pra sempre, apaga o órfão e tenta o insert de novo uma vez.
  */
 async function createAutoFavorite(symbol) {
   const presetBody = getStrategyPresetBody('rsi-momentum');
-  await sbReq('POST', 'multitrade_favorites', {
+  const favoritePayload = {
     user_id: DEFAULT_USER_ID, symbol, exchange: 'binance', strategy_id: 'rsi-momentum',
     enabled: true, capital: DEFAULT_CAPITAL_USDT, trade_config: presetBody,
-  });
+  };
+  try {
+    await sbReq('POST', 'multitrade_favorites', favoritePayload);
+  } catch (err) {
+    if (!/\b409\b/.test(err.message) || !/duplicate key/i.test(err.message)) throw err;
+    await sbReq('DELETE', 'multitrade_favorites', null, `?user_id=eq.${DEFAULT_USER_ID}&symbol=eq.${symbol}&strategy_id=eq.rsi-momentum`);
+    await sbReq('POST', 'multitrade_favorites', favoritePayload);
+  }
   const [row] = await sbReq('POST', 'rsi_multi_bot_state', {
     symbol, exchange: 'binance', strategy_id: 'rsi-momentum',
     initial_capital: DEFAULT_CAPITAL_USDT, capital: DEFAULT_CAPITAL_USDT,
@@ -130,18 +143,25 @@ async function createAutoFavorite(symbol) {
 /** Remove o favorito automático (multitrade_favorites + rsi_multi_bot_state) e encerra a
  *  sessão — chamado quando o ciclo termina sem posição aberta: trade fechado (alvo/stop),
  *  pullback expirou sem preencher, ou o sinal não se confirmou mais no primeiro tick. A moeda
- *  volta pro "pool" — o scanner pode sinalizá-la de novo no futuro, do zero. */
+ *  volta pro "pool" — o scanner pode sinalizá-la de novo no futuro, do zero.
+ *
+ *  Ordem importa: apaga multitrade_favorites PRIMEIRO. Não há transação entre os dois deletes
+ *  (2 tabelas, 2 requests), então se um falhar depois de retentado (ver RETRYABLE_METHODS em
+ *  supabaseRest.js) o órfão que sobra precisa ser o inofensivo — rsi_multi_bot_state sozinho
+ *  ainda marca o símbolo como "tracked" pro loadTrackedSymbols, então o scanner não tenta
+ *  recriar o sinal. Na ordem inversa (usada até a v1.111.0) o órfão era o favorito, e o
+ *  scanner martelava POST duplicado (409) nesse símbolo a cada ciclo, pra sempre. */
 async function retireAutoFavorite({ rowId, symbol, log, stopSelf, reason }) {
   if (reason) log(`🗑️  ${symbol} removido do favorito automático (${reason})`);
-  try {
-    await sbReq('DELETE', 'rsi_multi_bot_state', null, `?id=eq.${rowId}`);
-  } catch (err) {
-    log(`${Y}⚠️  Falha ao remover estado do favorito automático: ${err.message}${X}`);
-  }
   try {
     await sbReq('DELETE', 'multitrade_favorites', null, `?symbol=eq.${symbol}&strategy_id=eq.rsi-momentum`);
   } catch (err) {
     log(`${Y}⚠️  Falha ao remover favorito automático: ${err.message}${X}`);
+  }
+  try {
+    await sbReq('DELETE', 'rsi_multi_bot_state', null, `?id=eq.${rowId}`);
+  } catch (err) {
+    log(`${Y}⚠️  Falha ao remover estado do favorito automático: ${err.message}${X}`);
   }
   if (stopSelf) await stopSelf();
   return { phase: 'RETIRED' };

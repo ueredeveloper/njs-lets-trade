@@ -11,7 +11,12 @@
  * na corretora mas o PATCH/GET em rsi_multi_bot_state falhou e o bot perdeu o rastro da
  * posição). GET/PATCH são idempotentes (PATCH sempre por `id=eq.`), então dá pra reter com
  * segurança. POST (insert de trade/sinal) NÃO é retentado — se a falha for depois do commit
- * no servidor mas antes da resposta chegar, reter duplicaria o registro.
+ * no servidor mas antes da resposta chegar, reter duplicaria o registro. DELETE também é
+ * idempotente (sempre por filtro id=eq./symbol=eq., repetir só encontra 0 linhas na 2ª vez) —
+ * ver o caso real do rsi-momentum-bot: retireAutoFavorite faz 2 deletes em sequência (estado +
+ * favorito) sem transação; uma falha transitória de rede no 2º delete (sem retry) deixava
+ * `multitrade_favorites` órfão pra sempre, e o scanner batia 409 (duplicate key) tentando
+ * recriar o sinal daquele símbolo a cada ciclo, indefinidamente.
  */
 
 const SB_URL = process.env.SUPABASE_URL;
@@ -20,7 +25,7 @@ const SB_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const TIMEOUT_MS = 10_000;
 const MAX_RETRIES = 2;
 const RETRY_DELAYS_MS = [500, 1500];
-const RETRYABLE_METHODS = new Set(['GET', 'PATCH']);
+const RETRYABLE_METHODS = new Set(['GET', 'PATCH', 'DELETE']);
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
