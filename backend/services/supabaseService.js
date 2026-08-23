@@ -37,6 +37,10 @@ const {
   isBollingerBandsStrategy, resolveConfigBody: bollingerBandsResolveConfigBody, buildTradeConfig: buildBollingerBandsTradeConfig,
 } = require('../bot/bollinger-bands/strategyPresets');
 const { toFormState: bollingerBandsToFormState, normalizeBollingerBandsConfig } = require('../bot/bollinger-bands/tradeConfigSchema');
+const {
+  isRsiMomentumStrategy, resolveConfigBody: rsiMomentumResolveConfigBody, buildTradeConfig: buildRsiMomentumTradeConfig,
+} = require('../bot/rsi-momentum/strategyPresets');
+const { toFormState: rsiMomentumToFormState, normalizeRsiMomentumConfig } = require('../bot/rsi-momentum/tradeConfigSchema');
 const { toFormState: swingToFormState, normalizeSwingConfig, toAmapSuggestConfig } = require('../bot/swing/tradeConfigSchema');
 const { toFormState: maCrossToFormState, normalizeMaCrossConfig } = require('../bot/ma-cross/tradeConfigSchema');
 const { getRequiredSpecs: getMaCrossRequiredSpecs } = require('../bot/ma-cross/strategyEngine');
@@ -292,6 +296,7 @@ function normStrategyId(id) {
   if (isSwingStrategy(id)) return id;
   if (isVwapBandsStrategy(id)) return id;
   if (isBollingerBandsStrategy(id)) return id;
+  if (isRsiMomentumStrategy(id)) return id;
   return amapNormStrategyId(id);
 }
 
@@ -300,6 +305,7 @@ function resolveConfigBody(r) {
   if (isSwingStrategy(r?.strategy_id)) return swingResolveConfigBody(r);
   if (isVwapBandsStrategy(r?.strategy_id)) return vwapBandsResolveConfigBody(r);
   if (isBollingerBandsStrategy(r?.strategy_id)) return bollingerBandsResolveConfigBody(r);
+  if (isRsiMomentumStrategy(r?.strategy_id)) return rsiMomentumResolveConfigBody(r);
   return amapResolveConfigBody(r);
 }
 
@@ -384,6 +390,28 @@ function multitradeToEntry(r) {
   if (isBollingerBandsStrategy(sid)) {
     const tc = buildBollingerBandsTradeConfig(configBody);
     const form = bollingerBandsToFormState(configBody);
+    return {
+      id:           r.id,
+      symbol:       r.symbol,
+      exchange:     r.exchange,
+      strategyId:   sid,
+      enabled:      r.enabled !== false,
+      capital:      Number(r.capital),
+      entry:        form.entry,
+      exit:         form.exit,
+      stopLoss:     form.stopLoss,
+      polling:      form.polling,
+      volume:       form.volume,
+      tradeConfig:  tc,
+      kind:         form.kind,
+      createdAt:    r.created_at,
+      updatedAt:    r.updated_at,
+    };
+  }
+
+  if (isRsiMomentumStrategy(sid)) {
+    const tc = buildRsiMomentumTradeConfig(configBody);
+    const form = rsiMomentumToFormState(configBody);
     return {
       id:           r.id,
       symbol:       r.symbol,
@@ -519,6 +547,25 @@ function bodyToMultitradeRow(userId, body) {
       capital:         Number(body.capital ?? 100),
       entry_rsi:       { interval: normalized.entry.interval, period: 14, operator: '<', value: 30 },
       exit_rsi:        { interval: normalized.entry.interval, period: 14, operator: '>', value: 70 },
+      ma_conditions:   [],
+      rule_3_candles:  false,
+      rule_4_candles:  false,
+      trade_config,
+    };
+  }
+
+  if (isRsiMomentumStrategy(sid)) {
+    const normalized = normalizeRsiMomentumConfig(body);
+    const trade_config = buildRsiMomentumTradeConfig(body);
+    return {
+      user_id:         userId,
+      symbol:          sym,
+      exchange:        body.exchange ?? 'binance',
+      strategy_id:     sid,
+      enabled:         body.enabled !== false,
+      capital:         Number(body.capital ?? 100),
+      entry_rsi:       { interval: normalized.entry.interval, period: 14, operator: '>', value: normalized.entry.rsiThreshold },
+      exit_rsi:        { interval: normalized.entry.interval, period: 14, operator: '>', value: normalized.entry.rsiThreshold },
       ma_conditions:   [],
       rule_3_candles:  false,
       rule_4_candles:  false,

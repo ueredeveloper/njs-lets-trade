@@ -63,6 +63,7 @@ const BINANCE_COLOR = '#fcd535';
 const MT_COLOR      = '#22d3ee';
 const VWAP_BANDS_COLOR = '#a78bfa';
 const BOLLINGER_BANDS_COLOR = '#f472b6';
+const RSI_MOMENTUM_COLOR = '#38bdf8';
 const TRADE_COLOR   = '#00c076';
 const ACTIVE_COLOR  = '#f59e0b';
 const ALTA_COLOR    = '#f97316';
@@ -81,7 +82,7 @@ function parseCashActiveKey(symbol) {
 // Rótulo de 1 letra pro botão de fase na coluna de ações (à direita, ver td actionsColWidth)
 // — coluna estreita demais pro texto completo (AGUARDANDO/PENDENTE/COMPRADO) do badge cheio
 // usado no resto da UI (modal de estado, MultitradePanel).
-const BOT_PHASE_ACTION_LABEL = { WATCHING: 'A', PENDING: 'P', BOUGHT: 'C' };
+const BOT_PHASE_ACTION_LABEL = { WATCHING: 'A', PENDING: 'P', BOUGHT: 'C', FAILED: 'F' };
 
 const HIGHLIGHT_FILTERS = {
   ALTA_BINANCE: 'Favoritos|Alta|Binance',
@@ -104,6 +105,14 @@ function getVwapBandsEntry(favorites, symbol) {
 
 function getBollingerBandsEntry(favorites, symbol) {
   return getEntriesForSymbol(favorites, symbol).find(e => e.strategyId === 'bollinger-bands') ?? null;
+}
+
+/** Diferente dos outros: essa entrada não é curada pelo usuário — o próprio bot cria/remove
+ *  o favorito quando o scanner de mercado encontra (e depois resolve) um sinal de RSI Momentum
+ *  (ver backend/bot/rsi-momentum/*). Por isso não há modal de configuração pra essa estratégia
+ *  aqui no front — só exibição do que o bot está fazendo agora. */
+function getRsiMomentumEntry(favorites, symbol) {
+  return getEntriesForSymbol(favorites, symbol).find(e => e.strategyId === 'rsi-momentum') ?? null;
 }
 
 
@@ -684,6 +693,25 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
         widthMeta: bbFavWidthMeta,
         enabledBySymbol: bbEnabledBySymbol,
       }));
+    } else if (favoriteView === 'rsi-momentum') {
+      // Lista sempre "moedas com sinal ativo agora" — o próprio bot cria/remove essas linhas
+      // (ver getRsiMomentumEntry acima), não há curadoria manual. Ordena por fase (comprada >
+      // pendente > falha) e depois por símbolo — sem util de sort dedicado, não há "largura"
+      // nem outro critério pra essa estratégia ainda.
+      const rmEntries = multitradeFavorites.filter(e => e.strategyId === 'rsi-momentum');
+      const rmSymbolsList = rmEntries.map(e => e.symbol);
+      const rmPhaseBySymbol = new Map(rmEntries.map(e => [e.symbol, e.phase ?? 'WATCHING']));
+      list = resolveFavorites(new Set(rmSymbolsList), currencies.list, gateAll);
+      const have = new Set(list.map(c => c.symbol));
+      for (const sym of rmSymbolsList) {
+        if (!have.has(sym)) list.push({ symbol: sym, price: 0, volume: 0 });
+      }
+      const RM_PHASE_ORDER = { BOUGHT: 0, PENDING: 1, FAILED: 2, WATCHING: 3 };
+      list = list.slice().sort((a, b) => {
+        const pa = RM_PHASE_ORDER[rmPhaseBySymbol.get(a.symbol) ?? 'WATCHING'] ?? 9;
+        const pb = RM_PHASE_ORDER[rmPhaseBySymbol.get(b.symbol) ?? 'WATCHING'] ?? 9;
+        return pa !== pb ? pa - pb : a.symbol.localeCompare(b.symbol);
+      });
     } else if (favoriteView === 'trades') {
       const filtered = filterTradeFavorites(tradeFavSymbols, tradeFavStatus, tradeFavSort);
       list = resolveFavorites(new Set(filtered), currencies.list, gateAll);
@@ -1197,6 +1225,10 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     multitradeFavorites.filter(e => e.strategyId === 'bollinger-bands').map(e => e.symbol),
   );
   const bbCount      = [...bbSymbols].filter((sym) => isVisibleSymbol(sym)).length;
+  const rmSymbols    = new Set(
+    multitradeFavorites.filter(e => e.strategyId === 'rsi-momentum').map(e => e.symbol),
+  );
+  const rmCount      = [...rmSymbols].filter((sym) => isVisibleSymbol(sym)).length;
 
   /** Somatório do PnL das linhas visíveis (respeita filtro ativo). */
   const tradePnlSum = useMemo(() => {
@@ -1401,6 +1433,17 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
             count={bbCount}
             title={favoriteView === 'bollinger-bands' ? 'Favoritos Bollinger Bands — clique pra sair' : `Favoritos Bollinger Bands (${bbCount})`}
             onClick={() => handleToggleFavoriteView('bollinger-bands')}
+          />
+          )}
+          {uiPrefs.visibleFavoriteButtons['rsi-momentum'] !== false && (
+          <ToolbarBtn
+            id="currency-table-btn-filter-rsi-momentum"
+            active={favoriteView === 'rsi-momentum'}
+            color={RSI_MOMENTUM_COLOR}
+            label="RSI"
+            count={rmCount}
+            title={favoriteView === 'rsi-momentum' ? 'Moedas RSI Momentum (pending/comprada/falha) — clique pra sair' : `Moedas RSI Momentum ativas agora (${rmCount})`}
+            onClick={() => handleToggleFavoriteView('rsi-momentum')}
           />
           )}
           {uiPrefs.visibleFavoriteButtons.gate !== false && (
@@ -1803,6 +1846,11 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
               const bbDisabled = !!bbEntry && bbEntry.enabled === false;
               const bbInterval = bbEntry?.entry?.interval ?? bbEntry?.tradeConfig?.entry?.interval;
               const bbButtonText = isBb && bbInterval ? `B${bbInterval.replace(/m$/, '')}` : 'BB';
+              // RSI Momentum não tem "enabled" pausável pelo usuário (favorito é efêmero, o
+              // bot cria/remove sozinho) — presença da entrada já basta pra considerar ativa.
+              const rmEntry    = getRsiMomentumEntry(multitradeFavorites, item.symbol);
+              const isRm       = !!rmEntry;
+              const rmFailed   = rmEntry?.phase === 'FAILED';
               const activeInfo = activeTrades.get(item.symbol);
               const isActiveHolding = !!activeInfo;
               const tradeMeta  = isTradesFavView ? tradeFavStatus[item.symbol] : null;
@@ -1824,8 +1872,8 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                 : (isActiveHolding ? activeInfo.buyQty : null);
               const isLotRow = isActiveFavView && item.__lotTime != null;
 
-              const isBotFavRow = (isMT || isVwap || isBb || (isBollingerBandsFavView && bbDisabled)) && !isTradesFavView && !isActiveFavView;
-              const botEntries = isBotFavRow ? (isMT ? mtEntries : (vwapEntry ? [vwapEntry] : (bbEntry ? [bbEntry] : []))) : null;
+              const isBotFavRow = (isMT || isVwap || isBb || isRm || (isBollingerBandsFavView && bbDisabled)) && !isTradesFavView && !isActiveFavView;
+              const botEntries = isBotFavRow ? (isMT ? mtEntries : (vwapEntry ? [vwapEntry] : (bbEntry ? [bbEntry] : (rmEntry ? [rmEntry] : [])))) : null;
               const botPhase = botEntries ? symbolPhaseSummary(botEntries) : null;
               const botPh = botPhase ? multitradePhaseBadge(botPhase, lang) : null;
               const boughtEntry = botEntries ? botEntries.find(e => e.phase === 'BOUGHT' && e.buyTime) : null;
@@ -1877,6 +1925,13 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                       <FavButton kind="BB" text={bbButtonText} symbol={item.symbol} active={isBb} color={BOLLINGER_BANDS_COLOR} label={`Bollinger Bands${isBb && bbInterval ? ` ${bbInterval}` : ''}`} onClick={() => {
                         setBbModal({ symbol: item.symbol, exchange: isGate && !isBinance ? 'gate' : 'binance', entry: bbEntry });
                       }} />
+                      )}
+                      {uiPrefs.visibleFavoriteButtons['rsi-momentum'] !== false && isRm && (
+                      <FavButton
+                        kind="RSI" text="RSI" symbol={item.symbol} active={isRm}
+                        color={rmFailed ? '#ef4444' : RSI_MOMENTUM_COLOR}
+                        label={`RSI Momentum — ${rmEntry?.phase ?? 'aguardando'}${rmFailed && rmEntry?.tradeConfig ? ' (falha ao entrar)' : ''} — criado automaticamente pelo scanner, sem edição manual`}
+                      />
                       )}
                       {uiPrefs.visibleFavoriteButtons['bollinger-bands'] !== false && !!bbEntry && (
                         <button

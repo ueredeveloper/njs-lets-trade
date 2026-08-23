@@ -24,6 +24,7 @@ const BOTS = [
   { label: 'VWAP Bands',       script: path.join(__dirname, 'vwap-bands', 'vwap-bands-bot.js') },
   { label: 'Bollinger Bands',  script: path.join(__dirname, 'bollinger-bands', 'bollinger-bands-bot.js') },
   { label: 'Ignição de Volume', script: path.join(__dirname, 'volume-ignition', 'volume-ignition-bot.js') },
+  { label: 'RSI Momentum',     script: path.join(__dirname, 'rsi-momentum', 'rsi-momentum-bot.js') },
 ];
 
 const MAX_RESTARTS = 3;
