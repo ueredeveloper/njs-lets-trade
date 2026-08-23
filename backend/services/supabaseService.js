@@ -1204,12 +1204,16 @@ router.delete('/multitrade-favorites/:id', getUserId, async (req, res) => {
     .eq('user_id', req.userId);
   if (error) return sbError(res, error, 'DELETE multitrade-favorites');
 
+  // WATCHING: sem posição/ordem, sempre seguro apagar. FAILED (só existe hoje no
+  // rsi-momentum): tentativa de compra/ordem rejeitada pela corretora — também sem nada
+  // pendente na exchange, mesma segurança pra apagar. PENDING/BOUGHT ficam de fora de
+  // propósito: têm ordem/posição real na corretora que este endpoint não cancela nem vende.
   await supabase
     .from('rsi_multi_bot_state')
     .delete()
     .eq('symbol', existing.symbol)
     .eq('strategy_id', existing.strategy_id)
-    .eq('phase', 'WATCHING');
+    .in('phase', ['WATCHING', 'FAILED']);
 
   res.json({ deleted: req.params.id });
 });

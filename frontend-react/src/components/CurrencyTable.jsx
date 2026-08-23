@@ -342,6 +342,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   const [vwapModal, setVwapModal]   = useState(null);
   const [bbModal, setBbModal]       = useState(null);
   const [bbPausingId, setBbPausingId] = useState(null);
+  const [rmRemovingId, setRmRemovingId] = useState(null);
   const [mtStateModal, setMtStateModal] = useState(null);
   const [mtSellEntry, setMtSellEntry] = useState(null);
   const [sellLotModal, setSellLotModal] = useState(null);
@@ -1028,6 +1029,21 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
       console.error(`${FAV_LOG} BB toggle habilitado erro`, { symbol: bbEntry.symbol }, err);
     } finally {
       setBbPausingId(null);
+    }
+  }
+
+  /** Remove um favorito RSI Momentum em fase FAILED (compra rejeitada pela corretora — nada
+   *  pendente pra cancelar/vender). É o único jeito de tirar essa moeda da lista sem SQL manual;
+   *  o backend também limpa o rsi_multi_bot_state pra liberar o símbolo de volta pro scanner. */
+  async function handleRemoveRsiMomentumFailed(rmEntry) {
+    if (!rmEntry?.id || rmRemovingId) return;
+    setRmRemovingId(rmEntry.id);
+    try {
+      await removeMultitradeEntry(rmEntry.id);
+    } catch (err) {
+      console.error(`${FAV_LOG} RSI Momentum remover falha erro`, { symbol: rmEntry.symbol }, err);
+    } finally {
+      setRmRemovingId(null);
     }
   }
 
@@ -2227,6 +2243,17 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                             title="Vender esta moeda agora (ordem a mercado)"
                             onClick={(e) => { e.stopPropagation(); setMtSellEntry(boughtEntry); }}>
                             V
+                          </button>
+                        )}
+                        {isRm && rmFailed && (
+                          <button
+                            type="button"
+                            disabled={rmRemovingId === rmEntry.id}
+                            className="text-[8px] font-bold px-1 py-0.5 rounded shrink-0 disabled:opacity-40"
+                            style={{ background: 'rgba(239,68,68,0.13)', color: '#f87171', border: '1px solid rgba(239,68,68,0.33)' }}
+                            title="Remover falha RSI Momentum (libera a moeda pro scanner sinalizar de novo)"
+                            onClick={(e) => { e.stopPropagation(); handleRemoveRsiMomentumFailed(rmEntry); }}>
+                            ✕
                           </button>
                         )}
                       </div>
