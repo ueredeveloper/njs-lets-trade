@@ -55,7 +55,7 @@ const { detectOrphanPosition } = require('../shared/orphanPosition');
 // trade (bollinger-bands, ma-cross, vwap-bands) — ver backend/bot/shared/*.
 const { buildAdapter, syncExchangeClocks } = require('../shared/buildAdapter');
 const { sbReq } = require('../shared/supabaseRest');
-const { createTradeExecution } = require('../shared/tradeExecution');
+const { createTradeExecution, entrySignalFields } = require('../shared/tradeExecution');
 const { sendWhatsApp } = require('../whatsapp');
 
 const BOT_LABEL = 'RSI-MOMENTUM';
@@ -482,7 +482,14 @@ async function tick(rowId, adapter, strategy, log, session, stopSelf) {
       entryMeta: { ...signal, signalPrice: signal.close },
     };
     session.rulesState = { entryLimit };
-    await saveState(rowId, { phase: 'PENDING', rules_state: session.rulesState }, log);
+    // entry_signal_time/price precisam ser gravados JÁ aqui (candle do cruzamento RSI, não o
+    // candle da compra) — é o que o gráfico usa pra desenhar a seta do sinal (ver
+    // multitradeChart.js) enquanto a moeda ainda está PENDING, antes do pullback preencher.
+    await saveState(rowId, {
+      phase: 'PENDING',
+      rules_state: session.rulesState,
+      ...entrySignalFields({ signalOpenTime: signal.signalOpenTime, signalPrice: signal.close }),
+    }, log);
     log(`${G}📍 Sinal (${signal.entryDesc}) — limite GTC @ ${fmtPrice(entryLimit.price)} `
       + `armada (espera até ${waitN} candles de 1min p/ reteste)${X}`);
 
