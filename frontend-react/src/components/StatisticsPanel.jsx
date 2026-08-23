@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useCurrency } from '../contexts/CurrencyContext';
 import {
-  fetchRsiOversoldRecovery, fetchMaCrossStats, fetchBollingerBandRecovery, fetchCandlesticksAndCloud,
+  fetchRsiOversoldRecovery, fetchRsiThresholdBacktest, fetchRsiThresholdBacktestMarket, fetchMaCrossStats, fetchBollingerBandRecovery, fetchCandlesticksAndCloud,
   fetchVwapBandsStats,
 } from '../services/api';
 import Tooltip from './Tooltip';
@@ -53,6 +53,7 @@ function SummaryCard({ label, value, highlight, tooltip }) {
 
 const TABS = [
   { id: 'rsi', labelKey: 'stats.tab.rsi' },
+  { id: 'rsi_momentum', labelKey: 'stats.tab.rsi_momentum' },
   { id: 'ma_cross', labelKey: 'stats.tab.ma_cross' },
   { id: 'bollinger_bands', labelKey: 'stats.tab.bollinger_bands' },
   { id: 'vwap_bands', labelKey: 'stats.tab.vwap_bands' },
@@ -60,6 +61,7 @@ const TABS = [
 
 const MC_INTERVAL_STORAGE_KEYS = {
   rsi: 'lets_trade_stats_mc_interval_rsi',
+  rsi_momentum: 'lets_trade_stats_mc_interval_rsi_momentum',
   ma_cross: 'lets_trade_stats_mc_interval_macross',
   bollinger_bands: 'lets_trade_stats_mc_interval_bb',
 };
@@ -79,6 +81,7 @@ function saveUseMcInterval(tab, value) {
 
 const CANDLE_COUNT_STORAGE_KEYS = {
   rsi: 'lets_trade_stats_candle_count_rsi',
+  rsi_momentum: 'lets_trade_stats_candle_count_rsi_momentum',
   ma_cross: 'lets_trade_stats_candle_count_macross',
 };
 const STATS_CANDLE_COUNT_DEFAULT = 1000;
@@ -247,6 +250,79 @@ function loadLookback() {
 
 function saveLookback(value) {
   try { localStorage.setItem(BB_LOOKBACK_STORAGE_KEY, String(value)); } catch {}
+}
+
+/** Valores selecionáveis do campo "Pullback" da aba Momentum RSI — 0 = compra assim que o RSI
+ *  cruza o limiar (sem esperar reteste). Negativo = compra só se o preço cair esse % abaixo do
+ *  preço do sinal (ordem limite), mesma ideia do pullback da aba Bollinger Bands. */
+const RSI_MOM_PULLBACK_OPTIONS = [0, -1, -2, -3, -5, -8, -10];
+/** Valores selecionáveis dos campos "Alvo %" e "Stop %" — 1% a 10%. */
+const RSI_MOM_PCT_OPTIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+/** Valores selecionáveis do campo "Larg. mín %" do filtro de largura de banda. */
+const RSI_MOM_BANDWIDTH_OPTIONS = [1, 2, 3, 4, 5, 8, 10];
+/** Valores selecionáveis do campo "Janela" — restringe os SINAIS às últimas N horas (ex.:
+ *  "moedas que atingiram RSI 70 nas últimas 6/7/8 horas"). 0 = desligado, usa todo o histórico
+ *  definido em Candles. */
+const RSI_MOM_LOOKBACK_HOURS_OPTIONS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 12, 24, 48, 72];
+
+const RSI_MOM_PREFS_KEY = 'lets_trade_stats_rsi_momentum_prefs';
+const RSI_MOM_DEFAULT_PREFS = {
+  rsiThreshold: 70,
+  pullbackPct: 0,
+  targetPct: 5,
+  stopLossPct: 5,
+  positionSizeUsd: 40,
+  lookbackHours: 0,
+  bandWidthEnabled: false,
+  bandWidthInterval: '5m',
+  bandWidthMinPct: 2,
+  allCoins: false,
+};
+
+/** Quantidade de candles × duração do intervalo, formatado em horas/dias — mostrado ao lado do
+ *  campo "Candles" pra dar noção imediata de quanto histórico aquele número representa (ex.:
+ *  1000 candles em 15m = 250h ≈ 10,4 dias). */
+function formatCandleSpan(candleCount, interval) {
+  const ms = (INTERVAL_MS[interval] ?? 0) * candleCount;
+  if (!ms) return null;
+  const hours = ms / 3600000;
+  if (hours < 48) return `≈ ${hours % 1 === 0 ? hours : hours.toFixed(1)}h`;
+  return `≈ ${(hours / 24).toFixed(1)}d`;
+}
+
+/** Marcas redondas de tempo (horas) usadas para gerar as opções do campo "Candles" da aba
+ *  Momentum RSI — em vez de uma contagem fixa de candles (que representa tempos diferentes
+ *  em cada intervalo), cada opção é convertida pro número de candles equivalente ao intervalo
+ *  escolhido (ex.: 15m → 1h=4 candles, 2h=8, 6h=24, 12h=48; 5m → 1h=30, 2h=60, 4h=120). */
+const RSI_MOM_HOUR_MARKS = [1, 2, 3, 4, 6, 8, 12, 24, 48, 72, 96, 168];
+
+function buildCandleCountOptions(interval) {
+  const ms = INTERVAL_MS[interval];
+  if (!ms) return STATS_CANDLE_COUNT_OPTIONS.map((v) => ({ value: v, label: String(v) }));
+  const seen = new Set();
+  const opts = [];
+  for (const h of RSI_MOM_HOUR_MARKS) {
+    const count = Math.round((h * 3600000) / ms);
+    if (count < 1 || count > 3000 || seen.has(count)) continue;
+    seen.add(count);
+    const label = h % 24 === 0 ? `${h / 24}d` : `${h}h`;
+    opts.push({ value: count, label: `${label} · ${count}` });
+  }
+  return opts;
+}
+
+/** Preferências da aba Momentum RSI — lembradas entre buscas (mesmo padrão dos outros
+ *  campos persistidos desta tela, ver loadPullbackPct/loadLookback acima). */
+function loadRsiMomPrefs() {
+  try {
+    const raw = localStorage.getItem(RSI_MOM_PREFS_KEY);
+    if (raw) return { ...RSI_MOM_DEFAULT_PREFS, ...JSON.parse(raw) };
+  } catch {}
+  return { ...RSI_MOM_DEFAULT_PREFS };
+}
+
+function saveRsiMomPrefs(prefs) {
+  try { localStorage.setItem(RSI_MOM_PREFS_KEY, JSON.stringify(prefs)); } catch {}
 }
 
 const STATS_AUTO_CALC_STORAGE_KEY = 'lets_trade_stats_auto_calc';
@@ -738,6 +814,516 @@ function RsiStats({ autoCalc }) {
                 </div>
               </div>
             )}
+          </div>
+        )}
+
+        {!result && !error && !loading && (
+          <p className="text-[11px] text-p5/30 italic">{t('stats.configure')}</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const OUTCOME_STYLE = {
+  target:     { key: 'stats.outcome.target',     className: 'text-green-600' },
+  stop:       { key: 'stats.outcome.stop',       className: 'text-red-600' },
+  open:       { key: 'stats.outcome.open',       className: 'text-amber-600' },
+  not_filled: { key: 'stats.outcome.not_filled', className: 'text-p5/40 italic' },
+};
+
+/**
+ * Momentum RSI: entra COMPRADO quando o RSI cruza para cima de um limiar (padrão 70 —
+ * sobrecompra), com saída simulada por alvo de lucro % ou stop-loss %, o que vier primeiro.
+ * Cada cruzamento é avaliado de forma independente (mostra o resultado hipotético de CADA
+ * sinal, não uma carteira com 1 posição por vez) — ver backend/utils/analyseRsiThresholdBacktest.js.
+ * Opcionalmente só simula entradas se a largura média de banda (Bollinger, ciclo fundo→topo)
+ * desta moeda, num intervalo à parte, for ≥ um mínimo — mesmo motor da coluna "Larg%" do
+ * mercado (fetchBollingerBandWidthFilter.js).
+ */
+
+/** Cabeçalho de coluna clicável — alterna asc/desc no mesmo campo, ou começa em asc num campo
+ *  novo. Usado pela tabela de ocorrências da aba Momentum RSI (Par, Sinal, RSI, Saída, Fim, P&L). */
+function SortTh({ label, sortKey, sort, onSort, align = 'left', className = '' }) {
+  const active = sort.key === sortKey;
+  return (
+    <th
+      className={`${align === 'right' ? 'text-right' : 'text-left'} pb-1 pr-2 cursor-pointer select-none hover:text-p5 transition-colors whitespace-nowrap ${className}`}
+      onClick={() => onSort(sortKey)}
+    >
+      {label}
+      <span className={active ? 'text-p4' : 'text-transparent'}>{sort.dir === 'asc' ? ' ▲' : ' ▼'}</span>
+    </th>
+  );
+}
+
+function RsiMomentumStats({ autoCalc }) {
+  const { selectedChart, setSelectedChart, setChartZoom, setChartViewSource, setChartTradeMarkers, multitradeFavorites } = useCurrency();
+  const { t } = useI18n();
+  const [symbol, setSymbol]     = useState(selectedChart?.symbol || 'BTCUSDT');
+  const [interval, setInterval] = useState('15m');
+  const [useMcInterval, setUseMcInterval] = useState(() => loadUseMcInterval('rsi_momentum', false));
+  const [candleCount, setCandleCount] = useState(() => loadCandleCountFor('rsi_momentum'));
+  const [prefs, setPrefs] = useState(() => loadRsiMomPrefs());
+  const [sort, setSort] = useState({ key: null, dir: 'asc' });
+  // Opções do campo "Candles" nas marcas redondas de hora do intervalo escolhido (ver
+  // buildCandleCountOptions) — inclui o valor atualmente salvo mesmo que não seja uma marca
+  // redonda, pra nunca deixar o <select> num estado sem opção correspondente.
+  const candleCountOptions = (() => {
+    const base = buildCandleCountOptions(interval);
+    if (base.some((o) => o.value === candleCount)) return base;
+    const extra = { value: candleCount, label: formatCandleSpan(candleCount, interval) ? `${formatCandleSpan(candleCount, interval)} · ${candleCount}` : String(candleCount) };
+    return [...base, extra].sort((a, b) => a.value - b.value);
+  })();
+  const [loading, setLoading] = useState(false);
+  const [result, setResult]   = useState(null);
+  const [error, setError]     = useState(null);
+  const [showAll, setShowAll] = useState(false);
+  const [closedOnly, setClosedOnly] = useState(false);
+
+  const inp = 'bg-p2 border border-p3/40 text-p5 text-[10px] sm:text-xs rounded px-1 sm:px-2 py-1 focus:outline-none focus:border-p4 w-full';
+  const inpNum = `${inp} [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none`;
+
+  function patchPrefs(patch) {
+    const next = { ...prefs, ...patch };
+    setPrefs(next);
+    saveRsiMomPrefs(next);
+    return next;
+  }
+
+  function toggleSort(key) {
+    setSort((prev) => (prev.key === key ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' }));
+  }
+
+  /** Ordena as ocorrências pela coluna clicada (ver toggleSort/SortTh) — sort.key === null
+   *  mantém a ordem original devolvida pelo backend (cronológica no modo 1 moeda, mais recente
+   *  primeiro no modo Todas as moedas). */
+  function sortOccurrences(occurrences) {
+    if (!sort.key) return occurrences;
+    const dirMul = sort.dir === 'asc' ? 1 : -1;
+    const getValue = {
+      symbol: (o) => o.symbol ?? '',
+      signalDate: (o) => new Date(o.signalDate).getTime(),
+      signalRsi: (o) => o.signalRsi,
+      entryPrice: (o) => o.entryPrice ?? -Infinity,
+      outcome: (o) => o.outcome ?? '',
+      exitDate: (o) => (o.exitDate ? new Date(o.exitDate).getTime() : -Infinity),
+      pnl: (o) => o.pnlUsd ?? -Infinity,
+    }[sort.key];
+    if (!getValue) return occurrences;
+    return [...occurrences].sort((a, b) => {
+      const av = getValue(a);
+      const bv = getValue(b);
+      if (typeof av === 'string') return av.localeCompare(bv) * dirMul;
+      return (av - bv) * dirMul;
+    });
+  }
+
+  async function handleSearch(overrideSymbol, updateChart = false, overrideInterval, overrideSource, overrideUseMc, overrideCandleCount, overridePrefs) {
+    const p = overridePrefs ?? prefs;
+    const useMc = overrideUseMc ?? useMcInterval;
+    const sym  = (overrideSymbol ?? symbol).trim().toUpperCase();
+    const mcIv  = (!p.allCoins && useMc) ? mcEntryFor(multitradeFavorites, sym)?.tradeConfig?.entry?.ma1?.interval : null;
+    const iv    = overrideInterval ?? mcIv ?? interval;
+    if (mcIv) setInterval(mcIv);
+    const chartSource = selectedChart?.symbol === sym ? (selectedChart?.source ?? null) : null;
+    const src   = overrideSource !== undefined ? overrideSource : chartSource;
+    const candles = overrideCandleCount ?? candleCount;
+    if (!p.allCoins && !sym) return;
+    setLoading(true);
+    setError(null);
+    setResult(null);
+    try {
+      const commonOptions = {
+        rsiThreshold: p.rsiThreshold,
+        pullbackPct: p.pullbackPct,
+        targetPct: p.targetPct,
+        stopLossPct: p.stopLossPct,
+        positionSizeUsd: p.positionSizeUsd,
+        candleCount: candles,
+        lookbackHours: p.lookbackHours,
+        bandWidth: p.bandWidthEnabled ? {
+          enabled: true,
+          interval: p.bandWidthInterval,
+          minPct: p.bandWidthMinPct,
+        } : null,
+      };
+      const data = p.allCoins
+        ? await fetchRsiThresholdBacktestMarket(iv, commonOptions)
+        : await fetchRsiThresholdBacktest(sym, iv, { ...commonOptions, source: src });
+      setResult(data);
+      if (updateChart && !p.allCoins) {
+        const chartData = await fetchCandlesticksAndCloud(sym, iv, src);
+        setSelectedChart(chartData);
+      }
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!selectedChart?.symbol) return;
+    setSymbol(selectedChart.symbol);
+    if (autoCalc && !prefs.allCoins) handleSearch(selectedChart.symbol);
+  }, [selectedChart?.symbol, autoCalc]);
+
+  function handleToggleMc(next) {
+    setUseMcInterval(next);
+    saveUseMcInterval('rsi_momentum', next);
+    if (!next) setInterval('15m');
+    handleSearch(undefined, false, undefined, undefined, next);
+  }
+
+  async function openOnChart(o, iv) {
+    const startMs = new Date(o.signalDate).getTime();
+    const endMs   = o.exitDate ? new Date(o.exitDate).getTime() : Date.now();
+    const msPerCandle = INTERVAL_MS[iv] ?? 900000;
+    const needed = Math.min(3000, Math.max(266,
+      Math.ceil((Date.now() - startMs) / msPerCandle) + 40));
+    try {
+      const sym = (o.symbol || symbol || selectedChart?.symbol || 'BTCUSDT').trim().toUpperCase();
+      const src = selectedChart?.symbol === sym ? (selectedChart?.source ?? null) : null;
+      const data = await fetchCandlesticksAndCloud(sym, iv, src, needed);
+      setSelectedChart(data);
+      setChartViewSource(CHART_VIEW.STATISTICS);
+      setChartTradeMarkers([
+        { time: startMs, side: 'buy', price: o.entryPrice ?? o.signalPrice, label: '▲ Sinal' },
+        o.filled && o.exitPrice != null && {
+          time: endMs, side: 'sell', price: o.exitPrice, pnlPct: o.pnlPct,
+          entryTime: startMs, entryPrice: o.entryPrice,
+          label: `▼ ${o.pnlPct >= 0 ? '+' : ''}${o.pnlPct}%`,
+        },
+      ].filter(Boolean));
+      setChartZoom({
+        source: CHART_VIEW.STATISTICS,
+        startDate: o.signalDate,
+        endDate: o.exitDate ?? new Date(endMs).toISOString(),
+      });
+    } catch (err) {
+      console.warn('[rsi momentum stats click]', err.message);
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-2 w-full">
+      <div className="flex flex-row gap-1 md:gap-2 items-end w-full md:w-auto md:shrink-0 flex-wrap">
+        {/* Todas as moedas — desliga o campo Símbolo e roda o cálculo em todos os pares USDT
+            ativos de uma vez (ver backend/utils/analyseRsiThresholdBacktestMarket.js). */}
+        <div className="flex items-center gap-1 shrink-0 pb-1" title={t('stats.tip.all_coins')}>
+          <span className="hidden md:inline text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.all_coins')}</span>
+          <button
+            type="button"
+            onClick={() => patchPrefs({ allCoins: !prefs.allCoins })}
+            className={`relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${prefs.allCoins ? 'bg-p4' : 'bg-p3/40'}`}
+          >
+            <span className={`inline-block h-3 w-3 rounded-full bg-white shadow transition-transform ${prefs.allCoins ? 'translate-x-3' : 'translate-x-0'}`} />
+          </button>
+        </div>
+
+        {!prefs.allCoins && (
+          <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[72px]">
+            <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">Símbolo</label>
+            <input
+              className={inp}
+              value={symbol}
+              onChange={(e) => setSymbol(e.target.value.toUpperCase())}
+              placeholder="Par"
+              onKeyDown={(e) => e.key === 'Enter' && handleSearch(undefined, true)}
+            />
+          </div>
+        )}
+
+        <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[56px]">
+          <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">Intervalo</label>
+          <select className={inp} value={interval} onChange={(e) => setInterval(e.target.value)}>
+            {INTERVALS.map((iv) => <option key={iv} value={iv}>{iv}</option>)}
+          </select>
+        </div>
+
+        <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.rsi_threshold')}>
+          <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.rsi_threshold')}</label>
+          <input className={inpNum} type="number" min={1} max={99}
+            value={prefs.rsiThreshold} onChange={(e) => patchPrefs({ rsiThreshold: Number(e.target.value) })} />
+        </div>
+
+        <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[56px]" title={t('stats.tip.pullback')}>
+          <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.pullback')}</label>
+          <select className={inp}
+            value={prefs.pullbackPct}
+            onChange={(e) => patchPrefs({ pullbackPct: Number(e.target.value) })}>
+            {RSI_MOM_PULLBACK_OPTIONS.map((v) => (
+              <option key={v} value={v}>{v === 0 ? 'Desligado' : `${v}%`}</option>
+            ))}
+          </select>
+        </div>
+
+        <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.target_pct')}>
+          <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.target_pct')}</label>
+          <select className={inp}
+            value={prefs.targetPct}
+            onChange={(e) => patchPrefs({ targetPct: Number(e.target.value) })}>
+            {RSI_MOM_PCT_OPTIONS.map((v) => <option key={v} value={v}>{v}%</option>)}
+          </select>
+        </div>
+
+        <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.stop_pct')}>
+          <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.stop_pct')}</label>
+          <select className={inp}
+            value={prefs.stopLossPct}
+            onChange={(e) => patchPrefs({ stopLossPct: Number(e.target.value) })}>
+            {RSI_MOM_PCT_OPTIONS.map((v) => <option key={v} value={v}>{v}%</option>)}
+          </select>
+        </div>
+
+        <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[56px]" title={t('stats.tip.position_size')}>
+          <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.position_size')}</label>
+          <input className={inpNum} type="number" min={1} step={1}
+            value={prefs.positionSizeUsd} onChange={(e) => patchPrefs({ positionSizeUsd: Number(e.target.value) })} />
+        </div>
+
+        <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[72px]" title={t('stats.tip.bb_candle_count')}>
+          <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">
+            {t('stats.card.candles')}
+            {formatCandleSpan(candleCount, interval) && (
+              <span className="normal-case tracking-normal text-p5/40"> ({formatCandleSpan(candleCount, interval)})</span>
+            )}
+          </label>
+          <select className={inp}
+            value={candleCount}
+            onChange={(e) => {
+              const v = Number(e.target.value);
+              setCandleCount(v);
+              saveCandleCountFor('rsi_momentum', v);
+            }}>
+            {candleCountOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+        </div>
+
+        <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[56px]" title={t('stats.tip.lookback_hours')}>
+          <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.lookback_hours')}</label>
+          <select className={inp}
+            value={prefs.lookbackHours}
+            onChange={(e) => patchPrefs({ lookbackHours: Number(e.target.value) })}>
+            {RSI_MOM_LOOKBACK_HOURS_OPTIONS.map((v) => (
+              <option key={v} value={v}>{v === 0 ? 'Desligado' : `${v}h`}</option>
+            ))}
+          </select>
+        </div>
+
+        {/* Filtro de largura de banda */}
+        <div className="flex items-center gap-1 shrink-0 pb-1" title={t('stats.tip.bandwidth_filter')}>
+          <span className="hidden md:inline text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.bandwidth_filter')}</span>
+          <button
+            type="button"
+            onClick={() => patchPrefs({ bandWidthEnabled: !prefs.bandWidthEnabled })}
+            className={`relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${prefs.bandWidthEnabled ? 'bg-p4' : 'bg-p3/40'}`}
+          >
+            <span className={`inline-block h-3 w-3 rounded-full bg-white shadow transition-transform ${prefs.bandWidthEnabled ? 'translate-x-3' : 'translate-x-0'}`} />
+          </button>
+        </div>
+
+        {prefs.bandWidthEnabled && (
+          <>
+            <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[56px]">
+              <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.bandwidth_interval')}</label>
+              <select className={inp}
+                value={prefs.bandWidthInterval}
+                onChange={(e) => patchPrefs({ bandWidthInterval: e.target.value })}>
+                {INTERVALS.map((iv) => <option key={iv} value={iv}>{iv}</option>)}
+              </select>
+            </div>
+            <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.bandwidth_min')}>
+              <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.bandwidth_min')}</label>
+              <select className={inp}
+                value={prefs.bandWidthMinPct}
+                onChange={(e) => patchPrefs({ bandWidthMinPct: Number(e.target.value) })}>
+                {RSI_MOM_BANDWIDTH_OPTIONS.map((v) => <option key={v} value={v}>{v}%</option>)}
+              </select>
+            </div>
+          </>
+        )}
+
+        {!prefs.allCoins && <McIntervalSwitch checked={useMcInterval} onChange={handleToggleMc} />}
+
+        <button
+          onClick={() => handleSearch(undefined, true)}
+          disabled={loading}
+          className="shrink-0 flex items-center justify-center gap-1 py-1 px-1.5 md:flex-1 md:gap-1.5 rounded text-[11px] text-white bg-p4 hover:bg-p3 transition-colors disabled:opacity-50"
+        >
+          {loading
+            ? <div className="w-3 h-3 border border-white border-t-transparent rounded-full animate-spin" />
+            : <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
+                strokeWidth="2" stroke="currentColor" className="w-3 h-3">
+                <path strokeLinecap="round" strokeLinejoin="round"
+                  d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
+              </svg>
+          }
+          {t('stats.search')}
+        </button>
+      </div>
+
+      <div className="flex flex-col gap-2 flex-1 min-w-0">
+        {error && (
+          <p className="text-[11px] text-red-600 bg-red-400/10 border border-red-400/20 rounded px-2 py-1.5">
+            {error}
+          </p>
+        )}
+
+        {result && (
+          <div className="flex flex-col gap-2">
+            <div className="flex gap-1.5 flex-wrap justify-center shrink-0">
+              {prefs.allCoins ? (
+                <SummaryCard
+                  label={t('stats.card.symbols_scanned')}
+                  value={`${result.symbolsScanned}/${result.symbolsTotal}`}
+                  tooltip={t('stats.tip.symbols_scanned')}
+                />
+              ) : (
+                <SummaryCard
+                  label={t('stats.card.candles')}
+                  value={formatCandleSpan(result.totalCandles, result.interval)
+                    ? `${result.totalCandles} (${formatCandleSpan(result.totalCandles, result.interval)})`
+                    : result.totalCandles}
+                  tooltip={t('stats.tip.candles')}
+                />
+              )}
+              <SummaryCard label={t('stats.card.signals')} value={result.totalSignals} highlight="text-p4" tooltip={t('stats.tip.signals')} />
+              <SummaryCard label={t('stats.card.filled')} value={result.totalFilled} tooltip={t('stats.tip.filled')} />
+              <SummaryCard label={t('stats.card.hit_target')} value={result.totalTarget} highlight="text-green-600" />
+              <SummaryCard label={t('stats.card.hit_stop')} value={result.totalStop} highlight="text-red-600" />
+              <SummaryCard label={t('stats.card.still_open')} value={result.totalOpen} highlight="text-amber-600" />
+              <SummaryCard label={t('stats.card.win_rate')} value={`${result.winRatePct}%`} highlight="text-p4" tooltip={t('stats.tip.win_rate')} />
+              <SummaryCard label={t('stats.card.invested')} value={`$${result.totalInvestedUsd}`} />
+              <SummaryCard
+                label={t('stats.card.total_pnl')}
+                value={`${result.totalPnlUsd >= 0 ? '+' : ''}$${result.totalPnlUsd}`}
+                highlight={result.totalPnlUsd >= 0 ? 'text-green-600' : 'text-red-600'}
+                tooltip={t('stats.tip.total_pnl')}
+              />
+              <SummaryCard
+                label={t('stats.card.avg_pnl')}
+                value={`${result.avgPnlPct > 0 ? '+' : ''}${result.avgPnlPct}%`}
+                highlight={result.avgPnlPct >= 0 ? 'text-green-600' : 'text-red-600'}
+              />
+              {!prefs.allCoins && result.bandWidth && (
+                <SummaryCard
+                  label={t('stats.card.avg_width')}
+                  value={result.bandWidth.avgWidthPct != null ? `${result.bandWidth.avgWidthPct}%` : '—'}
+                  highlight={result.bandWidth.passed ? 'text-emerald-500' : 'text-red-600'}
+                  tooltip={`${result.bandWidth.interval} · BB${result.bandWidth.period} · mín ${result.bandWidth.minPct}%`}
+                />
+              )}
+              {prefs.allCoins && result.bandWidthEnabled && (
+                <SummaryCard
+                  label={t('stats.card.blocked_by_width')}
+                  value={`${result.symbolsBlockedByBandWidth}/${result.symbolsScanned}`}
+                  highlight="text-amber-500"
+                  tooltip={t('stats.tip.blocked_by_width')}
+                />
+              )}
+              {result.lookbackHours > 0 && (
+                <SummaryCard label={t('stats.lookback_hours')} value={`${result.lookbackHours}h`} highlight="text-amber-500" tooltip={t('stats.tip.lookback_hours')} />
+              )}
+            </div>
+
+            {result.bandWidth && !result.bandWidth.passed && (
+              <p className="text-[11px] text-amber-600 bg-amber-400/10 border border-amber-400/20 rounded px-2 py-1.5">
+                Largura de banda média ({result.bandWidth.avgWidthPct ?? '—'}%) abaixo do mínimo exigido ({result.bandWidth.minPct}%) — nenhuma entrada simulada.
+              </p>
+            )}
+
+            {result.occurrencesTruncated && (
+              <p className="text-[11px] text-p5/50 italic">
+                Mostrando os {result.occurrences.length} sinais mais recentes de {result.totalSignals} encontrados.
+              </p>
+            )}
+
+            {(() => {
+              const visibleOccurrences = closedOnly
+                ? result.occurrences.filter((o) => o.outcome === 'target' || o.outcome === 'stop')
+                : result.occurrences;
+
+              return visibleOccurrences.length === 0 ? (
+                <p className="text-[11px] text-p5/50">
+                  {closedOnly ? t('stats.no_closed_trades') : t('stats.no_cycles_rsi_momentum')}
+                </p>
+              ) : (
+              <div className="flex flex-col gap-1">
+                <div className="flex items-center gap-3 justify-end">
+                  <div className="flex items-center gap-2" title={t('stats.tip.closed_only')}>
+                    <span className="text-[10px] text-p5/50">{t('stats.closed_only')}</span>
+                    <button
+                      onClick={() => setClosedOnly((v) => !v)}
+                      className={`relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${closedOnly ? 'bg-p4' : 'bg-p3/40'}`}
+                    >
+                      <span className={`inline-block h-3 w-3 rounded-full bg-white shadow transition-transform ${closedOnly ? 'translate-x-3' : 'translate-x-0'}`} />
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] text-p5/50">{t('stats.details')}</span>
+                    <button
+                      onClick={() => setShowAll((v) => !v)}
+                      className={`relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${showAll ? 'bg-p4' : 'bg-p3/40'}`}
+                    >
+                      <span className={`inline-block h-3 w-3 rounded-full bg-white shadow transition-transform ${showAll ? 'translate-x-3' : 'translate-x-0'}`} />
+                    </button>
+                  </div>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="min-w-full border-collapse">
+                    <thead className="sticky top-0 z-10 bg-p1">
+                      <tr className="text-[9px] sm:text-[10px] text-p5/40 uppercase tracking-wider lt-table-head">
+                        {showAll && <th className="text-left pb-1 pr-2">#</th>}
+                        {prefs.allCoins && <SortTh label={t('stats.card.par')} sortKey="symbol" sort={sort} onSort={toggleSort} />}
+                        <SortTh label={t('stats.signal')} sortKey="signalDate" sort={sort} onSort={toggleSort} />
+                        <SortTh label="RSI" sortKey="signalRsi" sort={sort} onSort={toggleSort} align="right" />
+                        {showAll && <SortTh label={t('stats.entry_p')} sortKey="entryPrice" sort={sort} onSort={toggleSort} align="right" />}
+                        <SortTh label={t('stats.exit_reason')} sortKey="outcome" sort={sort} onSort={toggleSort} />
+                        <SortTh label={t('stats.end')} sortKey="exitDate" sort={sort} onSort={toggleSort} />
+                        <SortTh label="P&L" sortKey="pnl" sort={sort} onSort={toggleSort} align="right" />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sortOccurrences(visibleOccurrences).map((o, i) => {
+                        const outcome = OUTCOME_STYLE[o.outcome] ?? OUTCOME_STYLE.not_filled;
+                        const pos = o.pnlPct != null && o.pnlPct >= 0;
+                        return (
+                          <tr
+                            key={i}
+                            title={t('stats.click_row')}
+                            className="lt-table-row hover:bg-p2/40 transition-colors cursor-pointer"
+                            onClick={() => openOnChart(o, result.interval)}
+                          >
+                            {showAll && <td className="py-0.5 pr-2 text-[10px] text-p5/40">{i + 1}</td>}
+                            {prefs.allCoins && <td className="py-0.5 pr-2 text-[10px] sm:text-xs font-bold whitespace-nowrap">{o.symbol}</td>}
+                            <td className="py-0.5 pr-2 text-[10px] sm:text-xs font-mono whitespace-nowrap">{formatDate(o.signalDate)}</td>
+                            <td className="py-0.5 pr-2 text-[10px] sm:text-xs text-right text-yellow-600">{o.signalRsi}</td>
+                            {showAll && (
+                              <td className="py-0.5 pr-2 text-[10px] sm:text-xs text-right font-mono">
+                                {o.entryPrice != null ? `$${o.entryPrice.toLocaleString('en-US', { maximumFractionDigits: 6 })}` : '—'}
+                              </td>
+                            )}
+                            <td className={`py-0.5 pr-2 text-[10px] sm:text-xs whitespace-nowrap ${outcome.className}`}>{t(outcome.key)}</td>
+                            <td className="py-0.5 pr-2 text-[10px] sm:text-xs font-mono whitespace-nowrap">{o.exitDate ? formatDate(o.exitDate) : '—'}</td>
+                            <td className={`py-0.5 text-[10px] sm:text-xs text-right font-bold ${o.pnlUsd == null ? 'text-p5/30' : pos ? 'text-green-600' : 'text-red-600'}`}>
+                              {o.pnlUsd != null ? `${pos ? '+' : ''}$${o.pnlUsd} (${pos ? '+' : ''}${o.pnlPct}%)` : '—'}
+                            </td>
+                          </tr>
+                        );
+                      })}
+
+                      <tr className="lt-table-foot" aria-hidden="true">
+                        <td colSpan={(showAll ? 7 : 5) + (prefs.allCoins ? 1 : 0)} className="h-px p-0 leading-none" />
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              );
+            })()}
           </div>
         )}
 
@@ -1771,6 +2357,7 @@ export default function StatisticsPanel() {
 
       <div className="flex-1 min-h-0 overflow-auto px-4 pb-3 pt-2">
         {activeTab === 'rsi' && <RsiStats autoCalc={autoCalc} />}
+        {activeTab === 'rsi_momentum' && <RsiMomentumStats autoCalc={autoCalc} />}
         {activeTab === 'ma_cross' && <MaCrossStats autoCalc={autoCalc} />}
         {activeTab === 'bollinger_bands' && <BollingerBandsStats autoCalc={autoCalc} />}
         {activeTab === 'vwap_bands' && <VwapBandsStats autoCalc={autoCalc} />}

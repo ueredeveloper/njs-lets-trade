@@ -22,7 +22,7 @@ const { ichimokuCloudRouter } = require('./technicals-indicators');
 const {
   fetchCandles, fetchIchimokuCloud, fetchSupportResistance, fetchPivotPointsHighLow, fetchAllCurrencies,
   fetchSMA, fetchRSI, fetchChopZone, fetchVWAP, fetch24HsVolume, fetchMarketCapFilter, fetchStablecoins, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter, fetchMaDistanceFilter, fetchIndicatorGrowthFilter,
-  fetchRsiOversoldRecovery, fetchMaCrossStats, fetchVwapBandsStats, fetchBollingerBandRecovery, fetchBollingerBandPositionFilter, fetchVwapPositionFilter, fetchVwapBandWidthFilter, fetchBollingerBandWidthFilter, fetchBollingerMedianTrendFilter, fetchVwapBandExpansionFilter, fetchBollingerBands, fetchSimpleMaCross, fetchReloadCandles,
+  fetchRsiOversoldRecovery, fetchRsiThresholdBacktest, fetchRsiThresholdBacktestMarket, fetchMaCrossStats, fetchVwapBandsStats, fetchBollingerBandRecovery, fetchBollingerBandPositionFilter, fetchVwapPositionFilter, fetchVwapBandWidthFilter, fetchBollingerBandWidthFilter, fetchBollingerMedianTrendFilter, fetchVwapBandExpansionFilter, fetchBollingerBands, fetchSimpleMaCross, fetchReloadCandles,
   fetchGateCurrencies, fetchGatePrefetch, fetchBinanceTrades, fetchGateTrades,
   fetchActiveTrades, fetchTradeFavorites, stgBotStatus, multitradeService, fetchMarketHighlights, fetchVolumeIgnition, whatsappMessagesService, fetchCacheSettings } = require('./services');
 const supabaseService = require('./services/supabaseService');
@@ -66,6 +66,8 @@ app.use('/services', fetchMaCompareFilter)
 app.use('/services', fetchMaDistanceFilter)
 app.use('/services', fetchIndicatorGrowthFilter)
 app.use('/services', fetchRsiOversoldRecovery)
+app.use('/services', fetchRsiThresholdBacktest)
+app.use('/services', fetchRsiThresholdBacktestMarket)
 app.use('/services', fetchMaCrossStats)
 app.use('/services', fetchVwapBandsStats)
 app.use('/services', fetchBollingerBandRecovery)

@@ -151,6 +151,61 @@ export async function fetchRsiOversoldRecovery(symbol, interval, oversold = 30, 
   return res.json();
 }
 
+export async function fetchRsiThresholdBacktest(symbol, interval, options = {}) {
+  const {
+    rsiThreshold = 70, pullbackPct = 0, targetPct = 5, stopLossPct = 5, positionSizeUsd = 40,
+    source = null, candleCount = null, lookbackHours = 0, bandWidth = null,
+  } = options;
+  const params = new URLSearchParams({
+    symbol, interval, rsiThreshold, pullbackPct, targetPct, stopLossPct, positionSizeUsd,
+  });
+  if (source) params.set('source', source);
+  if (candleCount) params.set('candleCount', String(candleCount));
+  if (lookbackHours) params.set('lookbackHours', String(lookbackHours));
+  if (bandWidth?.enabled) {
+    params.set('bandWidthEnabled', '1');
+    params.set('bandWidthInterval', bandWidth.interval ?? '5m');
+    params.set('bandWidthMinPct', String(bandWidth.minPct ?? 2));
+    if (bandWidth.period) params.set('bandWidthPeriod', String(bandWidth.period));
+    if (bandWidth.stdDev) params.set('bandWidthStdDev', String(bandWidth.stdDev));
+    if (bandWidth.lookback) params.set('bandWidthLookback', String(bandWidth.lookback));
+  }
+  const res = await fetch(`/services/rsi-threshold-backtest?${params}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function fetchRsiThresholdBacktestMarket(interval, options = {}) {
+  const {
+    rsiThreshold = 70, pullbackPct = 0, targetPct = 5, stopLossPct = 5, positionSizeUsd = 40,
+    source = null, candleCount = null, lookbackHours = 0, bandWidth = null, maxRows = null,
+  } = options;
+  const params = new URLSearchParams({
+    interval, rsiThreshold, pullbackPct, targetPct, stopLossPct, positionSizeUsd,
+  });
+  if (source) params.set('source', source);
+  if (candleCount) params.set('candleCount', String(candleCount));
+  if (lookbackHours) params.set('lookbackHours', String(lookbackHours));
+  if (maxRows) params.set('maxRows', String(maxRows));
+  if (bandWidth?.enabled) {
+    params.set('bandWidthEnabled', '1');
+    params.set('bandWidthInterval', bandWidth.interval ?? '5m');
+    params.set('bandWidthMinPct', String(bandWidth.minPct ?? 2));
+    if (bandWidth.period) params.set('bandWidthPeriod', String(bandWidth.period));
+    if (bandWidth.stdDev) params.set('bandWidthStdDev', String(bandWidth.stdDev));
+    if (bandWidth.lookback) params.set('bandWidthLookback', String(bandWidth.lookback));
+  }
+  const res = await fetch(`/services/rsi-threshold-backtest-market?${params}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 export async function fetchSimpleMaCross(symbol, entryInterval = '15m', exitInterval = '30m', source = null) {
   const params = new URLSearchParams({ symbol, entryInterval, exitInterval });
   if (source) params.set('source', source);
