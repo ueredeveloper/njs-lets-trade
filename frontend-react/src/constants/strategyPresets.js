@@ -16,6 +16,7 @@ export const STRATEGY_LABELS = {
   'amap-1h':         'AMAP 1h',
   'swing-rsi-1h':    'RSI 1h',
   'swing-ma50-8h':   'MA50 8h',
+  'rsi-momentum':    'RSI Momentum',
   'ma-cross':        'MA Cross',
   'vwap-bands':      'VWAP Bands',
   'bollinger-bands': 'Bollinger Bands',
@@ -26,6 +27,7 @@ export const STRATEGY_COLORS = {
   'amap-1h':         '#6366f1',
   'swing-rsi-1h':    '#f59e0b',
   'swing-ma50-8h':   '#ec4899',
+  'rsi-momentum':    '#eab308',
   'ma-cross':        '#22d3ee',
   'vwap-bands':      '#a78bfa',
   'bollinger-bands': '#f472b6',
@@ -282,11 +284,16 @@ export function isAdHocMaCrossEntry(entry) {
 
 export function normalizeStrategyId(id) {
   if (!id || id === 'flex') return 'ma-cross';
-  if (STRATEGY_IDS.includes(id)) return id;
-  if (id === 'ma-cross' || id === 'ma_cross') return 'ma-cross';
-  if (id === 'vwap-bands' || id === 'vwap_bands') return 'vwap-bands';
-  if (id === 'bollinger-bands' || id === 'bollinger_bands') return 'bollinger-bands';
-  return 'ma-cross';
+  if (id === 'ma_cross') return 'ma-cross';
+  if (id === 'vwap_bands') return 'vwap-bands';
+  if (id === 'bollinger_bands') return 'bollinger-bands';
+  // Qualquer id já válido (ma-cross/vwap-bands/bollinger-bands ou outra estratégia real como
+  // rsi-momentum, amap-15m, swing-rsi-1h…) passa direto. Cair pra 'ma-cross' aqui mascarava a
+  // estratégia dona da posição — o botão "Vender" do painel Multi-Trade mandava esse id pro
+  // backend pra achar a OCO resting a cancelar antes da venda, e uma posição do RSI Momentum
+  // virava uma busca por strategy_id='ma-cross' (nunca encontrava a OCO, saldo livre ficava
+  // 0 e a venda falhava com "quantidade inválida após arredondamento (0)").
+  return id;
 }
 
 /** strategy_id do painel; kind só quando strategy_id ausente ou inválido. */
@@ -373,6 +380,7 @@ export function strategyBadgeLabel(sid) {
   if (sid === 'amap-1h') return '1h';
   if (sid === 'swing-rsi-1h') return 'RSI';
   if (sid === 'swing-ma50-8h') return 'MA';
+  if (sid === 'rsi-momentum') return 'RSIM';
   if (sid === 'ma-cross') return 'X';
   if (sid === 'vwap-bands') return 'VWAP';
   if (sid === 'bollinger-bands') return 'BB';
