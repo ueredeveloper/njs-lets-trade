@@ -179,7 +179,9 @@ const BB_PULLBACK_STORAGE_KEY = 'lets_trade_stats_bb_pullback_pct';
 /** Valores selecionáveis do campo "Entrada" (pullback %, negativo = % abaixo da banda
  *  inferior) — mesma granularidade do `entry.pullback.belowPct` do favorito de bot. */
 const BB_PULLBACK_OPTIONS = [0, -1, -2, -3, -5, -8, -10, -15, -20];
-const BB_PULLBACK_DEFAULT = 0;
+/** -2% por padrão pra bater com o default do favorito de bot (entry.pullback.belowPct, ver
+ *  bollingerBandsConfigSchema.js) — usuário liga 0 manualmente se quiser ver sem pullback. */
+const BB_PULLBACK_DEFAULT = -2;
 
 /** Preferência do campo "Entrada" (pullback %) da aba Bollinger Bands — lembrada entre buscas.
  *  Guardado como número negativo (ex.: -5 = compra 5% abaixo da banda inferior), igual ao

@@ -4,7 +4,7 @@ import { fetchMultitradeBacktest } from '../services/api';
 import { INTERVAL_MS } from '../utils/chartView';
 import {
   fetchEmaLine, fetchAdaptiveBandLine, fetchAdaptiveBandLineAuto, fetchBollingerLines,
-  fetchVwapBandsLines, strategyLineDefsFromTradeConfig, panelLineDefsFromSharedState,
+  fetchBollingerPullbackLine, fetchVwapBandsLines, strategyLineDefsFromTradeConfig, panelLineDefsFromSharedState,
 } from '../utils/overlayIndicators';
 
 const RULE_CHECK_CANDLES = 50;
@@ -407,6 +407,10 @@ export default function MaCrossRuleCheckChart({
           if (d.kind === 'vwapBands') {
             const bands = await fetchVwapBandsLines(symbol, d.interval, d.session, d.bandMultiplier, exchange, fromMs);
             return bands ? [d.id, { kind: 'bb', ...bands, color: d.color, label: d.label }] : null;
+          }
+          if (d.kind === 'bbPullback') {
+            const points = await fetchBollingerPullbackLine(symbol, d.interval, d.period, d.stdDev, d.belowPct, exchange, fromMs);
+            return points ? [d.id, { kind: 'band', points, color: d.color, label: d.label }] : null;
           }
           const bb = await fetchBollingerLines(symbol, d.interval, d.period, d.stdDev, exchange, fromMs);
           return bb ? [d.id, { kind: 'bb', ...bb, color: d.color, label: d.label }] : null;

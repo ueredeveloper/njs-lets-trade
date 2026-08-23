@@ -89,6 +89,18 @@ export async function fetchBollingerLines(symbol, interval, period, stdDev, sour
 }
 
 /**
+ * Linha de gatilho do pullback de entrada (banda inferior BB − belowPct%) — mesma conta do
+ * bot (evaluateEntrySignal, backend/bot/bollinger-bands/strategyEngine.js: threshold =
+ * lower*(1-belowPct/100)), pra mostrar no gráfico o preço real que precisa ser tocado quando
+ * entry.pullback está ligado, não só a banda "crua".
+ */
+export async function fetchBollingerPullbackLine(symbol, interval, period, stdDev, belowPct, source, fromMs) {
+  const bb = await fetchBollingerLines(symbol, interval, period, stdDev, source, fromMs);
+  if (!bb) return null;
+  return deriveBandPoints(bb.lower, belowPct, 'floor');
+}
+
+/**
  * Bandas de VWAP de sessão (±bandMultiplier σ) no intervalo/sessão dados — upper/middle/lower
  * como pares [time, value], mesma forma da fetchBollingerLines (reaproveitada pelo renderer).
  */
@@ -145,6 +157,39 @@ export function strategyLineDefsFromTradeConfig(tradeConfig) {
       color: '#a78bfa',
       label: `VWAP(${session === 'weekly' ? 'semanal' : 'diária'}) ±2σ`,
     }];
+  }
+
+  if (tradeConfig.kind === 'bollinger_bands') {
+    const e = tradeConfig.entry ?? {};
+    if (!e.interval || !e.period) return [];
+
+    const defs = [{
+      id: 'bb-entry',
+      kind: 'bb',
+      period: e.period,
+      stdDev: e.stdDev ?? 2,
+      interval: e.interval,
+      color: '#818cf8',
+      label: `BB${e.period}@${e.interval}`,
+    }];
+
+    // entry.pullback exige um repique belowPct% abaixo da banda inferior antes de comprar
+    // (default 2%, ver bollingerBandsConfigSchema.js) — desenha o gatilho real, não só a banda.
+    const belowPct = Number(e.pullback?.belowPct ?? 2);
+    if (e.pullback?.enabled && belowPct > 0) {
+      defs.push({
+        id: 'bb-pullback',
+        kind: 'bbPullback',
+        period: e.period,
+        stdDev: e.stdDev ?? 2,
+        interval: e.interval,
+        belowPct,
+        color: '#f59e0b',
+        label: `BB${e.period}@${e.interval} banda inferior −${belowPct}% (pullback)`,
+      });
+    }
+
+    return defs;
   }
 
   const emaMap = new Map();
