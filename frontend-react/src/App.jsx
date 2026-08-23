@@ -27,8 +27,9 @@ const MOBILE_SHEET_HEIGHT = '88%';
 const MOBILE_SHEET_FILTERS_HEIGHT = '30%';
 
 function AppContent() {
-  const { setCurrencies, setFilters, setSelectedChart, setGateFavorites, setBinanceFavorites,
-    setChartInterval, uiPrefs, clearFavoriteView, setCurrencyPanelWidth } = useCurrency();
+  const { setCurrencies, setFilters, selectedChart, setSelectedChart, setGateFavorites, setBinanceFavorites,
+    setChartInterval, uiPrefs, clearFavoriteView, setCurrencyPanelWidth,
+    visibleCurrencyRows, selectAdjacentCurrency } = useCurrency();
   const { t } = useI18n();
   const isMobile = useIsMobile();
 
@@ -418,35 +419,68 @@ function AppContent() {
                painel quando é o painel que está maximizado. No mobile sobe acima do
                botão flutuante "Moedas" (que fica no canto do gráfico) pra não colidir. */}
           <div className="relative shrink-0 h-px bg-p2 z-20">
-            <div className={`absolute right-1.5 flex items-center gap-1 ${
+            <div className={`absolute right-1.5 flex flex-col items-end gap-1 ${
               layoutMode === 'panel' ? 'top-1' : 'bottom-11 md:bottom-1'
             }`}>
-              <button
-                type="button"
-                onClick={toggleMaximizeChart}
-                title={layoutMode === 'chart' ? 'Dividir tela' : 'Maximizar gráfico'}
-                aria-label={layoutMode === 'chart' ? 'Dividir tela' : 'Maximizar gráfico'}
-                className={`flex items-center justify-center w-9 h-9 md:w-7 md:h-7 rounded border transition-colors touch-manipulation shadow ${
-                  layoutMode === 'chart'
-                    ? 'bg-p4 text-white border-p4'
-                    : 'text-p4 bg-p1/90 border-p2 hover:text-white hover:bg-p3/50'
-                }`}
-              >
-                <MaximizeIcon active={layoutMode === 'chart'} kind="chart" className="w-5 h-5 md:w-4 md:h-4 shrink-0" />
-              </button>
-              <button
-                type="button"
-                onClick={toggleMaximizePanel}
-                title={layoutMode === 'panel' ? 'Dividir tela' : 'Maximizar painel'}
-                aria-label={layoutMode === 'panel' ? 'Dividir tela' : 'Maximizar painel'}
-                className={`flex items-center justify-center w-9 h-9 md:w-7 md:h-7 rounded border transition-colors touch-manipulation shadow ${
-                  layoutMode === 'panel'
-                    ? 'bg-p4 text-white border-p4'
-                    : 'text-p4 bg-p1/90 border-p2 hover:text-white hover:bg-p3/50'
-                }`}
-              >
-                <MaximizeIcon active={layoutMode === 'panel'} kind="panel" className="w-5 h-5 md:w-4 md:h-4 shrink-0" />
-              </button>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={toggleMaximizeChart}
+                  title={layoutMode === 'chart' ? 'Dividir tela' : 'Maximizar gráfico'}
+                  aria-label={layoutMode === 'chart' ? 'Dividir tela' : 'Maximizar gráfico'}
+                  className={`flex items-center justify-center w-9 h-9 md:w-7 md:h-7 rounded border transition-colors touch-manipulation shadow ${
+                    layoutMode === 'chart'
+                      ? 'bg-p4 text-white border-p4'
+                      : 'text-p4 bg-p1/90 border-p2 hover:text-white hover:bg-p3/50'
+                  }`}
+                >
+                  <MaximizeIcon active={layoutMode === 'chart'} kind="chart" className="w-5 h-5 md:w-4 md:h-4 shrink-0" />
+                </button>
+                <button
+                  type="button"
+                  onClick={toggleMaximizePanel}
+                  title={layoutMode === 'panel' ? 'Dividir tela' : 'Maximizar painel'}
+                  aria-label={layoutMode === 'panel' ? 'Dividir tela' : 'Maximizar painel'}
+                  className={`flex items-center justify-center w-9 h-9 md:w-7 md:h-7 rounded border transition-colors touch-manipulation shadow ${
+                    layoutMode === 'panel'
+                      ? 'bg-p4 text-white border-p4'
+                      : 'text-p4 bg-p1/90 border-p2 hover:text-white hover:bg-p3/50'
+                  }`}
+                >
+                  <MaximizeIcon active={layoutMode === 'panel'} kind="panel" className="w-5 h-5 md:w-4 md:h-4 shrink-0" />
+                </button>
+              </div>
+
+              {/* Ir/voltar pelas moedas da lista/filtro atual, na mesma ordem exibida em
+                  CurrencyTable — sem precisar clicar em cada uma (ver visibleCurrencyRows/
+                  selectAdjacentCurrency em CurrencyContext). */}
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => selectAdjacentCurrency(-1)}
+                  disabled={visibleCurrencyRows.length < 2}
+                  title="Moeda anterior da lista"
+                  aria-label="Moeda anterior da lista"
+                  className="flex items-center justify-center w-9 h-9 md:w-7 md:h-7 rounded border transition-colors touch-manipulation shadow disabled:opacity-40 text-p4 bg-p1/90 border-p2 hover:text-white hover:bg-p3/50"
+                >
+                  <span className="text-sm md:text-xs font-bold leading-none">‹</span>
+                </button>
+                {visibleCurrencyRows.length > 0 && (
+                  <span className="text-[9px] md:text-[10px] font-mono text-p5/70 tabular-nums px-1 py-0.5 rounded bg-p1/90 border border-p2 shadow">
+                    {(visibleCurrencyRows.findIndex((c) => c.symbol === selectedChart?.symbol) + 1) || '–'}/{visibleCurrencyRows.length}
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={() => selectAdjacentCurrency(1)}
+                  disabled={visibleCurrencyRows.length < 2}
+                  title="Próxima moeda da lista"
+                  aria-label="Próxima moeda da lista"
+                  className="flex items-center justify-center w-9 h-9 md:w-7 md:h-7 rounded border transition-colors touch-manipulation shadow disabled:opacity-40 text-p4 bg-p1/90 border-p2 hover:text-white hover:bg-p3/50"
+                >
+                  <span className="text-sm md:text-xs font-bold leading-none">›</span>
+                </button>
+              </div>
             </div>
           </div>
 

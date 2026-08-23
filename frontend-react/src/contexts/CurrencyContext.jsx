@@ -149,6 +149,29 @@ export function CurrencyProvider({ children }) {
     setChartCandleWindowReset(n => n + 1);
   }, []);
 
+  // Lista atualmente exibida na tabela de moedas (mesma ordem visível, já filtrada/ordenada) —
+  // usada pelos botões ‹ › do gráfico pra passar pra moeda anterior/seguinte sem precisar abrir
+  // a lista e clicar. selectCurrencyHandlerRef guarda a função de seleção real (handleSelect da
+  // CurrencyTable, que já trata favorito de bot, fonte Gate/Binance etc.) registrada por ela.
+  const [visibleCurrencyRows, setVisibleCurrencyRows] = useState([]);
+  const selectCurrencyHandlerRef = useRef(null);
+
+  const registerSelectCurrencyHandler = useCallback((fn) => {
+    selectCurrencyHandlerRef.current = fn;
+  }, []);
+
+  const selectAdjacentCurrency = useCallback((direction) => {
+    const list = visibleCurrencyRows;
+    if (!list.length || !selectCurrencyHandlerRef.current) return;
+    const symbol = selectedChart?.symbol;
+    const idx = list.findIndex((c) => c.symbol === symbol);
+    const nextIdx = idx === -1
+      ? (direction > 0 ? 0 : list.length - 1)
+      : (idx + direction + list.length) % list.length;
+    const item = list[nextIdx];
+    if (item) selectCurrencyHandlerRef.current(item);
+  }, [visibleCurrencyRows, selectedChart?.symbol]);
+
   const clearFavoriteView = useCallback(() => setFavoriteView(null), []);
 
   const toggleFavoriteView = useCallback((type) => {
@@ -1199,6 +1222,10 @@ export function CurrencyProvider({ children }) {
         setFavoriteView,
         clearFavoriteView,
         toggleFavoriteView,
+        visibleCurrencyRows,
+        setVisibleCurrencyRows,
+        registerSelectCurrencyHandler,
+        selectAdjacentCurrency,
         saveFiveMTradeEntry,
         removeFiveMTradeEntry,
       }}

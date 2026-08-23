@@ -323,6 +323,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     favoriteView, toggleFavoriteView, clearFavoriteView,
     resetChartCandleWindow,
     uiPrefs,
+    setVisibleCurrencyRows, registerSelectCurrencyHandler,
   } = useCurrency();
   const { t, lang, formatPrice } = useI18n();
   const isMobile = useIsMobile();
@@ -811,6 +812,17 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
 
     return list;
   }, [currencies, activeFilter, selectedQuote, findFilter, search, favoriteView, gateFavorites, binanceFavorites, multitradeFavorites, sortVolume, gateAll, filterVisibleCurrencies, isVisibleSymbol, currencyBySymbol, activeMacrossFilter, macrossScannedAt, macrossTick, isMacrossFavView, macrossFavSort, macrossFavStatus, macrossEntriesBySymbol, isTradesFavView, tradeFavSort, tradeFavSymbols, tradeFavStatus, isActiveFavView, activeFavSort, activeTrades, isAltaFilter, isNovasFilter, highlightMeta, activeMacmpFilter, macmpMeta, macmpTableSort, activeMaDistanceFilter, maDistMeta, maDistSort, activeGrowthFilter, growthMeta, growthSort, activeVwapWidthFilter, vwapWidthMeta, vwapWidthSort, activeBbWidthFilter, bbWidthMeta, bbWidthSort, activeBbTrendFilter, bbTrendMeta, bbTrendSort, activeRsiFilter, rsiMeta, rsiSort, isVwapBandsFavView, vwapFavSort, vwapFavWidthMeta, bbFavSort, bbFavWidthMeta, showGenericWidthCol, genericWidthMeta, genericWidthSort]);
+
+  // Publica a lista visível (já filtrada/ordenada) e a função de seleção real pro contexto —
+  // os botões ‹ › do gráfico usam isso pra passar pra moeda anterior/seguinte na mesma ordem
+  // que aparece aqui, sem precisar abrir a lista e clicar (ver App.jsx/CandlestickChart.jsx).
+  useEffect(() => {
+    setVisibleCurrencyRows(rows);
+  }, [rows, setVisibleCurrencyRows]);
+
+  useEffect(() => {
+    registerSelectCurrencyHandler((item) => handleSelect(item));
+  });
 
   const rowHeightPx = isMobile ? TABLE_ROW_HEIGHT_MOBILE : TABLE_ROW_HEIGHT;
 
