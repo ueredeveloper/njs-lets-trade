@@ -26,23 +26,23 @@ const RSI_MOMENTUM_DEFAULTS = {
     enabled: true,
     interval: '15m',
     rsiThreshold: 70,
-    /** Desligado por padrão — compra a mercado assim que o RSI confirma o cruzamento (candle
-     *  fechado). Ligado: arma ordem limite GTC em signalPrice*(1-belowPct/100) e espera até
+    /** Ligado por padrão — arma ordem limite GTC em signalPrice*(1-belowPct/100) e espera até
      *  limitWaitCandles candles de 1 MINUTO por reteste — ver checkEntryLimitExpired em
      *  strategyEngine.js. Preenchimento e expiração são checados minuto a minuto
-     *  (polling.pollMs), não no candle do entry.interval. */
-    pullback: { enabled: false, belowPct: 1 },
+     *  (polling.pollMs), não no candle do entry.interval. Desligar volta a comprar a mercado
+     *  assim que o RSI confirma o cruzamento (candle fechado). */
+    pullback: { enabled: true, belowPct: 1 },
     limitWaitCandles: 20,
     /** Após STOP_LOSS, espera N candles fechados do entry.interval antes de nova compra
      *  (evita reentrar no mesmo dump). Saída no alvo libera na hora. 0 = sem espera. */
     reentryCooldownCandles: 3,
-    /** Filtro opcional de largura de banda (mesmo motor do filtro de mercado "Larg%" — ver
+    /** Filtro de largura de banda (mesmo motor do filtro de mercado "Larg%" — ver
      *  backend/utils/indicatorGrowthEngines.js#bollingerCycleOccurrences e o backtest): só
      *  libera entradas se a valorização média dos ciclos fundo→topo BB(period,stdDev) da
      *  moeda, no intervalo escolhido (pode ser diferente do entry.interval), for ≥ minPct.
-     *  Desligado por padrão. */
+     *  Ligado por padrão (mín. 2% no 5m). */
     bandWidth: {
-      enabled: false, interval: '5m', period: 20, stdDev: 2, lookback: 300, minPct: 2,
+      enabled: true, interval: '5m', period: 20, stdDev: 2, lookback: 300, minPct: 2,
     },
   },
 
