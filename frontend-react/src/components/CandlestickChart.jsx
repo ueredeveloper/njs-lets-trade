@@ -483,7 +483,7 @@ function buildBbTouchPathSeries(pathNodes, candlesticks, DL, LEFT_PAD, RIGHT_PAD
       itemStyle: { color },
       label: {
         show: !!labelExit, formatter: labelExit, color: '#fff', backgroundColor: color,
-        padding: [2, 4], borderRadius: 2, fontSize: 8, fontWeight: 'bold', position: 'top',
+        padding: [2, 4], borderRadius: 2, fontSize: 14, fontWeight: 'bold', position: 'top',
       },
     };
   });
@@ -2671,7 +2671,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
     type: 'category',
     data: xData,
     axisLine: { lineStyle: { color: colors.panel } },
-    axisLabel: { color: colors.text, fontSize: 10, show: gridIndex === subpanelCount },
+    axisLabel: { color: colors.text, fontSize: 14, show: gridIndex === subpanelCount },
     splitLine: { show: false },
   });
 
@@ -2828,11 +2828,11 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
       },
       xAxis: { type: 'category', data: xData,
         axisLine: { lineStyle: { color: colors.panel } },
-        axisLabel: { color: colors.text, fontSize: 10 },
+        axisLabel: { color: colors.text, fontSize: 14 },
         splitLine: { show: false } },
       yAxis: { scale: true, position: 'right', splitNumber: 8,
         axisLine: { lineStyle: { color: colors.panel } },
-        axisLabel: { color: colors.text, fontSize: 10, ...(isMobile ? { formatter: fmtAxisPriceMobile } : {}) },
+        axisLabel: { color: colors.text, fontSize: 14, ...(isMobile ? { formatter: fmtAxisPriceMobile } : {}) },
         splitLine: { lineStyle: { color: colors.panel, type: 'dashed', opacity: 0.3 } } },
       grid: { top: 40, bottom: 12, left: chartLeftPad, right: chartRightPad },
       dataZoom: zoomWindow
@@ -2929,7 +2929,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
     yAxis: [
       { gridIndex: 0, scale: true, position: 'right', splitNumber: 8,
         axisLine: { lineStyle: { color: colors.panel } },
-        axisLabel: { color: colors.text, fontSize: 10, ...(isMobile ? { formatter: fmtAxisPriceMobile } : {}) },
+        axisLabel: { color: colors.text, fontSize: 14, ...(isMobile ? { formatter: fmtAxisPriceMobile } : {}) },
         splitLine: { lineStyle: { color: colors.panel, type: 'dashed', opacity: 0.3 } } },
       ...subpanelIds.map((id, i) => subpanelYAxis(id, i + 1)),
     ],
