@@ -62,7 +62,12 @@ const { sendWhatsApp } = require('../whatsapp');
 
 const BOT_LABEL = 'RSI-MOMENTUM';
 const VOL_CACHE_MS = 5 * 60_000;
-const SCAN_INTERVAL_MS = 60_000;
+// Sinal (RSI cruzando no entry.interval, tipicamente 15m) só pode mudar uma vez por candle
+// fechado — escanear a cada 60s martelava a Binance com ~800 klines calls/min (2 por símbolo:
+// entry.interval + bandWidth 5m, pra ~400 pares USDT ativos) mesmo sem candle novo nenhum,
+// estourando o peso de IP e causando ban 418. 5min alinha com o mesmo teto de polling adaptativo
+// já usado pros outros bots em intervalos ≥15m (ver CLAUDE.md).
+const SCAN_INTERVAL_MS = 5 * 60_000;
 // Sem form por moeda ainda (favorito é criado pelo próprio bot) — capital fixo por trade até
 // existir uma tela de configuração global no painel.
 const DEFAULT_CAPITAL_USDT = 40;
