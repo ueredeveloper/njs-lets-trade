@@ -68,6 +68,18 @@ async function loadMaCrossRows() {
   return sbReq('GET', 'rsi_multi_bot_state', null, `?or=(${ids})&order=id.asc`);
 }
 
+/** Chaves (SYMBOL:strategy_id) dos favoritos atualmente ativos no painel Multi-Trade — usado
+ *  pra filtrar o carregamento inicial (loadMaCrossRows trazia TODA linha que já existiu em
+ *  rsi_multi_bot_state, mesmo desfavoritada/desativada há tempos; só o ciclo periódico de
+ *  startMultitradeWatch, 3 em 3 min, corrigia isso depois, deixando moedas já desfavoritadas
+ *  martelando a Binance por até 3min a cada restart do bot — mesmo bug já corrigido no
+ *  vwap-bands-bot.js, ver loadEnabledFavoriteKeys lá). */
+async function loadEnabledFavoriteKeys() {
+  const ids = STRATEGY_IDS.map(id => `strategy_id.eq.${id}`).join(',');
+  const favorites = await sbReq('GET', 'multitrade_favorites', null, `?or=(${ids})&enabled=eq.true&select=symbol,strategy_id`);
+  return new Set((favorites ?? []).map(f => registry.sessionKey(f.symbol, f.strategy_id)));
+}
+
 function crossDesc(block) {
   const dir = block.direction === 'cross_down' ? '↓' : '↑';
   return `${maLabel(block.ma1.period, block.ma1.interval)} ${dir} ${maLabel(block.ma2.period, block.ma2.interval)}`;
@@ -694,7 +706,12 @@ async function main() {
   let rows = await loadMaCrossRows();
   rows = (rows ?? []).filter(r => isMaCrossStrategy(r.strategy_id));
   if (symbolFilter) {
+    // --symbol força uma moeda específica pra teste manual, mesmo que não esteja favoritada.
     rows = rows.filter(r => r.symbol.toUpperCase() === symbolFilter);
+  } else {
+    // Só inicia de cara quem está favoritado e ativo — ver comentário de loadEnabledFavoriteKeys.
+    const enabledKeys = await loadEnabledFavoriteKeys();
+    rows = rows.filter(r => enabledKeys.has(registry.sessionKey(r.symbol, r.strategy_id)));
   }
 
   startMultitradeWatch({
