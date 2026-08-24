@@ -66,7 +66,9 @@ const RSI_MOMENTUM_DEFAULTS = {
   polling: { pollMs: 60_000, fastPollMs: 20_000 },
 
   /** Desliga o cooldown em horas do tradeExecution compartilhado (default 4h) — usa
-   *  entry.reentryCooldownCandles (só após STOP_LOSS) no entry.interval, como o bollinger. */
+   *  entry.reentryCooldownCandles no entry.interval após QUALQUER venda (diferente do
+   *  bollinger-bands, que só aplica após STOP_LOSS — ver checkReentryCooldown em
+   *  strategyEngine.js). */
   entryCooldownHours: 0,
 
   /** Só informativo (aviso no formulário) — nunca bloqueia compra/venda. */

@@ -47,7 +47,7 @@ const { STRATEGY_IDS, getStrategyPresetBody } = require('./strategyPresets');
 const { startMarketScanner } = require('./marketScanner');
 const {
   getRequiredSpecs, evaluateEntrySignal, evaluateExit, computeBracketPrices,
-  checkEntryLimitExpired,
+  checkEntryLimitExpired, checkReentryCooldown,
 } = require('./strategyEngine');
 const { detectOrphanPosition } = require('../shared/orphanPosition');
 
@@ -55,7 +55,9 @@ const { detectOrphanPosition } = require('../shared/orphanPosition');
 // trade (bollinger-bands, ma-cross, vwap-bands) — ver backend/bot/shared/*.
 const { buildAdapter, syncExchangeClocks } = require('../shared/buildAdapter');
 const { sbReq } = require('../shared/supabaseRest');
-const { createTradeExecution, entrySignalFields } = require('../shared/tradeExecution');
+const {
+  createTradeExecution, entrySignalFields, resolveLastExitTime, resolveLastExitReason,
+} = require('../shared/tradeExecution');
 const { sendWhatsApp } = require('../whatsapp');
 
 const BOT_LABEL = 'RSI-MOMENTUM';
@@ -371,6 +373,16 @@ async function tick(rowId, adapter, strategy, log, session, stopSelf) {
       orphanWarnedKeys.add(orphanKey);
       log(`${Y}⚠️  Saldo inesperado na corretora (${orphan.qty} ${symbol}) sem trade recente confirmando a origem — NÃO reconciliado automaticamente, confira manualmente${X}`);
       sendWhatsApp(`⚠️ ${BOT_LABEL} [${strategyId}] ${symbol}\nSaldo inesperado na corretora (${orphan.qty}) sem trade recente (24h) confirmando a origem — não reconciliei sozinho pra não adotar uma posição que pode não ser do bot. Confira manualmente.`);
+    }
+
+    const lastExitTime = resolveLastExitTime(state, session);
+    const lastExitReason = resolveLastExitReason(state, session);
+    const cooldown = checkReentryCooldown(config, cMap, lastExitTime, lastExitReason);
+    if (cooldown.waiting) {
+      // Standby de reentryCooldownCandles candles do entry.interval após QUALQUER venda (alvo,
+      // stop ou manual) — sem isso um take-profit rápido reentra minutos depois com o RSI
+      // ainda perto do threshold, sem esfriar o momentum.
+      return { phase: 'WATCHING', reentryCooldown: cooldown };
     }
 
     const rulesWatch = { ...parseRulesState(state), ...(session.rulesState ?? {}) };

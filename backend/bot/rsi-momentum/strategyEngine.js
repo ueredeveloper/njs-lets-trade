@@ -139,12 +139,16 @@ function checkEntryLimitExpired(config, cMap, entryLimit) {
 }
 
 /**
- * Cooldown pós-STOP_LOSS em candles do entry.interval — mesma lógica do bollinger-bands
- * (ver checkReentryCooldown em backend/bot/bollinger-bands/strategyEngine.js).
+ * Cooldown pós-venda (qualquer motivo — alvo, stop, manual) em candles do entry.interval.
+ * Diferente do bollinger-bands (que só aplica após STOP_LOSS, ver checkReentryCooldown em
+ * backend/bot/bollinger-bands/strategyEngine.js): no RSI Momentum um take-profit rápido pode
+ * disparar um novo cruzamento de RSI poucos minutos depois (RSI ainda alto) e reentrar sem
+ * pausa, então a moeda fica sempre `reentryCooldownCandles` candles em standby após qualquer
+ * saída, não só após stop-loss.
  */
 function checkReentryCooldown(config, cMap, lastExitTime, lastExitReason) {
     const need = Math.max(0, Math.round(Number(config.entry?.reentryCooldownCandles ?? 0)));
-    if (need <= 0 || !lastExitTime || lastExitReason !== 'STOP_LOSS') {
+    if (need <= 0 || !lastExitTime) {
         return { waiting: false, need, have: 0, remain: 0 };
     }
     const exitMs = new Date(lastExitTime).getTime();

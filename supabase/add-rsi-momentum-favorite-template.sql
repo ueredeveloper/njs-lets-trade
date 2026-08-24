@@ -16,7 +16,7 @@
 --                            signalPrice*(1-belowPct%), avaliada minuto a minuto
 --   entry.limitWaitCandles  candles de 1 MINUTO de espera pro pullback preencher (não é
 --                            candles do entry.interval)
---   entry.reentryCooldownCandles  candles do entry.interval de espera após um STOP_LOSS
+--   entry.reentryCooldownCandles  candles do entry.interval de espera após QUALQUER venda
 --   entry.bandWidth         filtro opcional de largura de banda (mesmo motor do "Larg%" do
 --                            mercado) — só entra se a moeda estiver "andando o suficiente"
 --   exit.restingBracket.targetPct  alvo de lucro fixo (%) — bracket OCO real (Binance) ou
