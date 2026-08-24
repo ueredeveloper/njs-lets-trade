@@ -232,8 +232,12 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
     // continua em 15m/etc.), sem resolver ainda pullback/saída.
     const rawSignals = [];
     if (!bandWidthBlocksEntries) {
-        for (let i = 1; i < rsiValues.length; i++) {
+        for (let i = 3; i < rsiValues.length; i++) {
             if (rsiValues[i - 1] >= rsiThreshold || rsiValues[i] < rsiThreshold) continue;
+            // Mesmo filtro de "não é repique de volatilidade" do bot ao vivo (ver
+            // evaluateEntrySignal em backend/bot/rsi-momentum/strategyEngine.js, entry.priorRsiFilter):
+            // os 3 valores de RSI anteriores ao cruzamento também precisam estar <= threshold.
+            if (rsiValues[i - 2] > rsiThreshold || rsiValues[i - 3] > rsiThreshold) continue;
 
             const idx = i + offset;
             const signalCandle = candles[idx];

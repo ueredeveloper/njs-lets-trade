@@ -68,9 +68,10 @@ function checkBandWidthFilter(config, cMap) {
 /**
  * Sinal de entrada: RSI(14) do entry.interval cruza para CIMA de entry.rsiThreshold no último
  * candle FECHADO — mesma detecção do backtest (ver analyseRsiThresholdBacktest.js). Sem
- * pullback (padrão), a entrada é a mercado no preço do fechamento (limitPrice: null). Com
- * pullback, `limitPrice` é o preço-limite (signalPrice × (1 − belowPct/100)) — o chamador arma
- * uma ordem GTC nesse preço e espera reteste minuto a minuto (ver checkEntryLimitExpired).
+ * pullback (desligado), a entrada é a mercado no preço do fechamento (limitPrice: null). Com
+ * pullback (padrão), `limitPrice` é o preço-limite (signalPrice × (1 − belowPct/100)) — o
+ * chamador arma uma ordem GTC nesse preço e espera reteste minuto a minuto (ver
+ * checkEntryLimitExpired).
  */
 function evaluateEntrySignal(config, cMap) {
     const entry = config.entry;
@@ -80,8 +81,11 @@ function evaluateEntrySignal(config, cMap) {
     const closed = closedCandlesOnly(cMap[iv] ?? []);
     if (closed.length < RSI_PERIOD + 2) return { allowed: false, reason: 'INSUFFICIENT_DATA' };
 
+    const priorCount = entry.priorRsiFilter?.enabled
+        ? Math.max(1, Math.round(Number(entry.priorRsiFilter.count ?? 3)))
+        : 0;
     const rsiValues = computeRsiSeries(closed);
-    if (rsiValues.length < 2) return { allowed: false, reason: 'INSUFFICIENT_DATA' };
+    if (rsiValues.length < Math.max(2, priorCount + 1)) return { allowed: false, reason: 'INSUFFICIENT_DATA' };
 
     const last = rsiValues[rsiValues.length - 1];
     const prev = rsiValues[rsiValues.length - 2];
@@ -89,6 +93,17 @@ function evaluateEntrySignal(config, cMap) {
 
     if (!(prev < threshold && last >= threshold)) {
         return { allowed: false, reason: 'RSI_NOT_CROSSING', rsi: last, threshold };
+    }
+
+    // Confirma que não é apenas um repique de volatilidade: os `priorCount` VALORES de RSI
+    // anteriores ao cruzamento (prev + os de antes dele — não candles) precisam ter ficado <=
+    // threshold. Evita entrar quando o RSI está oscilando em torno do limiar (cruza, recua,
+    // cruza de novo) — desligável em entry.priorRsiFilter.
+    if (priorCount > 0) {
+        const priorWindow = rsiValues.slice(rsiValues.length - 1 - priorCount, rsiValues.length - 1);
+        if (!priorWindow.every(v => v <= threshold)) {
+            return { allowed: false, reason: 'RSI_VOLATILE_NEAR_THRESHOLD', rsi: last, threshold, priorWindow };
+        }
     }
 
     const bandWidthCheck = checkBandWidthFilter(config, cMap);

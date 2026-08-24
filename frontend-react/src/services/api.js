@@ -1217,6 +1217,30 @@ export async function saveBollingerMedianTrendConfig(config) {
   return res.json();
 }
 
+// ── Config global do bot RSI Momentum (entry/exit/stopLoss/polling/volume) ──────────────────
+
+export async function getRsiMomentumConfig() {
+  const res = await fetch('/services/sb/rsi-momentum-config');
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function saveRsiMomentumConfig(config) {
+  const res = await fetch('/services/sb/rsi-momentum-config', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(config),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 // ── Configurações de cache (liga/desliga por cache no backend) ──────────────
 
 export async function getCacheSettings() {

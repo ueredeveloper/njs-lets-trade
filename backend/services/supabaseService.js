@@ -2570,6 +2570,33 @@ router.put('/bollinger-median-trend-config', getUserId, async (req, res) => {
   res.json(bollingerMedianTrendRowToBody(data));
 });
 
+// ── Config global do RSI Momentum (entry/exit/stopLoss/polling/volume) ──────────────────────
+// Valor único (não por moeda, não há form por favorito — ver rsi-momentum-bot.js). Relido pelo
+// bot a cada ciclo do scanner (ver strategyPresets.js#loadGlobalConfigBody), então uma mudança
+// salva aqui vale sem precisar reiniciar o processo.
+
+// GET /services/sb/rsi-momentum-config
+router.get('/rsi-momentum-config', getUserId, async (req, res) => {
+  const { data, error } = await supabase
+    .from('rsi_momentum_global_config').select('*').eq('user_id', req.userId).maybeSingle();
+  if (error) return sbError(res, error, 'GET rsi-momentum-config');
+  res.json(normalizeRsiMomentumConfig(data?.trade_config ?? {}));
+});
+
+// PUT /services/sb/rsi-momentum-config
+router.put('/rsi-momentum-config', getUserId, async (req, res) => {
+  const normalized = normalizeRsiMomentumConfig(req.body ?? {});
+  const row = {
+    user_id: req.userId,
+    trade_config: normalized,
+    updated_at: new Date().toISOString(),
+  };
+  const { data, error } = await supabase
+    .from('rsi_momentum_global_config').upsert(row, { onConflict: 'user_id' }).select().single();
+  if (error) return sbError(res, error, 'PUT rsi-momentum-config');
+  res.json(normalizeRsiMomentumConfig(data.trade_config));
+});
+
 // Captura erros assíncronos que escapam dos handlers (Express 4 não faz isso automaticamente).
 // Sem este handler, um throw dentro de um async route crasharia o processo inteiro.
 // eslint-disable-next-line no-unused-vars

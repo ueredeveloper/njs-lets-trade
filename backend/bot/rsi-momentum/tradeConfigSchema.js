@@ -2,7 +2,7 @@
 
 /**
  * Schema RSI Momentum: entra COMPRADO quando o RSI(14) do `entry.interval` cruza para cima de
- * `entry.rsiThreshold` (ex.: 70 — sobrecompra, aposta de continuação, não reversão) — mesmo
+ * `entry.rsiThreshold` (padrão 69 — sobrecompra, aposta de continuação, não reversão) — mesmo
  * motor de sinal do backtest (ver backend/utils/analyseRsiThresholdBacktest.js). Pullback
  * opcional (ordem limite `belowPct`% abaixo do preço do sinal) é avaliado minuto a minuto
  * (candles de 1m), independente do `entry.interval` do sinal — não espera o próximo candle de
@@ -25,13 +25,19 @@ const RSI_MOMENTUM_DEFAULTS = {
      *  normalmente (bracket TP/SL, venda). */
     enabled: true,
     interval: '15m',
-    rsiThreshold: 70,
+    rsiThreshold: 69,
+    /** Ligado por padrão — confirma que o cruzamento não é só um repique de volatilidade: os
+     *  `count` VALORES de RSI anteriores ao cruzamento (não candles — um valor de RSI por
+     *  candle fechado do entry.interval) precisam ter ficado <= rsiThreshold. Sem isso, um RSI
+     *  oscilando em torno do limiar (cruza, recua, cruza de novo) dispararia sinal a cada
+     *  repique — ver evaluateEntrySignal em strategyEngine.js. */
+    priorRsiFilter: { enabled: true, count: 3 },
     /** Ligado por padrão — arma ordem limite GTC em signalPrice*(1-belowPct/100) e espera até
      *  limitWaitCandles candles de 1 MINUTO por reteste — ver checkEntryLimitExpired em
      *  strategyEngine.js. Preenchimento e expiração são checados minuto a minuto
      *  (polling.pollMs), não no candle do entry.interval. Desligar volta a comprar a mercado
      *  assim que o RSI confirma o cruzamento (candle fechado). */
-    pullback: { enabled: true, belowPct: 1 },
+    pullback: { enabled: true, belowPct: 0.5 },
     limitWaitCandles: 20,
     /** Após STOP_LOSS, espera N candles fechados do entry.interval antes de nova compra
      *  (evita reentrar no mesmo dump). Saída no alvo libera na hora. 0 = sem espera. */
@@ -79,11 +85,20 @@ function normalizeInterval(iv, fb) {
   return ALL_INTERVALS.includes(iv) ? iv : fb;
 }
 
+function normalizePriorRsiFilter(block) {
+  const d = RSI_MOMENTUM_DEFAULTS.entry.priorRsiFilter;
+  const src = block ?? {};
+  return {
+    enabled: src.enabled !== false,
+    count: Math.max(1, Math.min(10, Math.round(Number(src.count ?? d.count)))),
+  };
+}
+
 function normalizePullback(block) {
   const d = RSI_MOMENTUM_DEFAULTS.entry.pullback;
   const src = block ?? {};
   return {
-    enabled: src.enabled === true,
+    enabled: src.enabled !== false,
     belowPct: Math.max(0.1, Math.min(20, Number(src.belowPct ?? d.belowPct))),
   };
 }
@@ -92,7 +107,7 @@ function normalizeBandWidth(block) {
   const d = RSI_MOMENTUM_DEFAULTS.entry.bandWidth;
   const src = block ?? {};
   return {
-    enabled: src.enabled === true,
+    enabled: src.enabled !== false,
     interval: normalizeInterval(src.interval, d.interval),
     period: BB_PERIODS.includes(Number(src.period)) ? Number(src.period) : d.period,
     stdDev: BB_STD_DEVS.includes(Number(src.stdDev)) ? Number(src.stdDev) : d.stdDev,
@@ -108,6 +123,7 @@ function normalizeEntry(block) {
     enabled: src.enabled !== false,
     interval: normalizeInterval(src.interval, d.interval),
     rsiThreshold: Math.max(50, Math.min(95, Number(src.rsiThreshold ?? d.rsiThreshold))),
+    priorRsiFilter: normalizePriorRsiFilter(src.priorRsiFilter),
     pullback: normalizePullback(src.pullback),
     limitWaitCandles: Math.max(1, Math.min(300, Math.round(Number(
       src.limitWaitCandles ?? d.limitWaitCandles,

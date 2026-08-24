@@ -8,10 +8,10 @@
  * preencheu), o favorito é removido — a lista de favoritos rsi-momentum é sempre "moedas com
  * sinal ativo agora" (pending/comprada/falha), nunca uma lista curada manualmente.
  *
- *   1. RSI(14) do entry.interval (ex.: 15m) cruza para CIMA de entry.rsiThreshold (ex.: 70,
+ *   1. RSI(14) do entry.interval (ex.: 15m) cruza para CIMA de entry.rsiThreshold (padrão 69,
  *      sobrecompra — aposta de CONTINUAÇÃO, não reversão) → sinal. Pullback opcional (ordem
- *      limite `belowPct`% abaixo do preço do sinal) é avaliado minuto a minuto, não no
- *      candle do entry.interval — ver PULLBACK_INTERVAL em strategyEngine.js.
+ *      limite `belowPct`% abaixo do preço do sinal, padrão -0.5%) é avaliado minuto a minuto,
+ *      não no candle do entry.interval — ver PULLBACK_INTERVAL em strategyEngine.js.
  *   2. Coloca bracket TP/SL resting na corretora logo após a compra confirmar (Binance: OCO
  *      real; Gate.io: emulado) — alvo e stop FIXOS a partir do preço de entrada, sem
  *      trailing/deriva (diferente do bollinger-bands: aqui não há banda/EMA pra perseguir, o
@@ -34,6 +34,9 @@
  *   node backend/bot/rsi-momentum/rsi-momentum-bot.js
  *   node backend/bot/rsi-momentum/rsi-momentum-bot.js --symbol BTCUSDT   (só gerencia essa
  *     moeda se ela já tiver uma linha pending/comprada — não restringe o scanner)
+ *   node backend/bot/rsi-momentum/rsi-momentum-bot.js --verbose   (imprime uma linha por moeda
+ *     analisada em cada ciclo do scanner — símbolo, motivo do bloqueio, RSI/limiar; sem a flag
+ *     cada ciclo só imprime o resumo — ver marketScanner.js#scanMarketOnce)
  */
 
 const path = require('path');
@@ -43,7 +46,7 @@ require('dotenv').config({ path: path.join(__dirname, '../../../.env') });
 const registry = require('../multitradeRegistry');
 const { startMultitradeWatch, configFingerprint } = require('../multitradeWatch');
 const { resolveStrategy } = require('./tradeConfigSchema');
-const { STRATEGY_IDS, getStrategyPresetBody } = require('./strategyPresets');
+const { STRATEGY_IDS, loadGlobalConfigBody } = require('./strategyPresets');
 const { startMarketScanner } = require('./marketScanner');
 const {
   getRequiredSpecs, evaluateEntrySignal, evaluateExit, computeBracketPrices,
@@ -127,7 +130,7 @@ async function loadTrackedSymbols() {
  * erro a cada ciclo do scanner pra sempre, apaga o órfão e tenta o insert de novo uma vez.
  */
 async function createAutoFavorite(symbol) {
-  const presetBody = getStrategyPresetBody('rsi-momentum');
+  const presetBody = await loadGlobalConfigBody(sbReq, DEFAULT_USER_ID);
   const favoritePayload = {
     user_id: DEFAULT_USER_ID, symbol, exchange: 'binance', strategy_id: 'rsi-momentum',
     enabled: true, capital: DEFAULT_CAPITAL_USDT, trade_config: presetBody,
@@ -193,6 +196,30 @@ function fmtPrice(n) {
   if (x < 0.01) return x.toFixed(6);
   if (x < 1) return x.toFixed(4);
   return x.toFixed(2);
+}
+
+/** Imprime no boot as regras vigentes (config global lida de rsi_momentum_global_config, ou o
+ *  preset estático se o usuário nunca abriu o formulário — ver loadGlobalConfigBody) pra ficar
+ *  claro no log qual pullback/cooldown/alvo/stop o scanner vai aplicar nos próximos sinais, sem
+ *  precisar abrir o painel. Config lida só uma vez aqui (snapshot do boot) — o scanner relê a
+ *  cada ciclo por conta própria (ver main()#loadConfig), então mudanças salvas depois valem sem
+ *  reiniciar mesmo sem aparecer de novo neste log. */
+function logStartupConfig(body) {
+  const e = body.entry, x = body.exit, sl = body.stopLoss, bw = e.bandWidth, pb = e.pullback;
+  console.log('📋 Config ativa (RSI Momentum):');
+  console.log(`   Entrada: RSI(14) ${e.interval} cruza >= ${e.rsiThreshold} (${e.enabled ? 'ativa' : 'PAUSADA'})`);
+  console.log(pb.enabled
+    ? `   Pullback: -${pb.belowPct}% do sinal, espera até ${e.limitWaitCandles} candles de 1min por reteste`
+    : '   Pullback: desligado (compra a mercado na hora do sinal)');
+  console.log(`   Cooldown de reentrada: ${e.reentryCooldownCandles} candles ${e.interval} após qualquer venda`);
+  console.log(bw.enabled
+    ? `   Filtro largura de banda: ${bw.interval} BB(${bw.period},${bw.stdDev}) ≥ ${bw.minPct}% (lookback ${bw.lookback})`
+    : '   Filtro largura de banda: desligado');
+  const bracketNote = x.restingBracket.enabled ? '' : ' (bracket OFF, só fallback por candle)';
+  const stopNote = sl.enabled ? '' : ' (OFF)';
+  console.log(`   Saída: alvo +${x.restingBracket.targetPct}%${bracketNote} | stop -${sl.maxLossPct}%${stopNote}`);
+  console.log(`   Volume mín 24h: ${Number(body.volume.minVolumeUsdt).toLocaleString('pt-BR')} USDT (informativo)`);
+  console.log(`   Cooldown global entre entradas: ${body.entryCooldownHours}h | Polling: ${body.polling.pollMs / 1000}s aguardando sinal, ${body.polling.fastPollMs / 1000}s posição aberta`);
 }
 
 function buildEntryReasonLines(config, entryMeta) {
@@ -709,6 +736,7 @@ async function main() {
   }
 
   console.log('🚀 rsi-momentum-bot iniciado — scanner de mercado + pullback/OCO avaliados minuto a minuto');
+  logStartupConfig(await loadGlobalConfigBody(sbReq, DEFAULT_USER_ID));
 
   await syncExchangeClocks();
   setInterval(syncExchangeClocks, 60 * 60_000);
@@ -716,6 +744,10 @@ async function main() {
   const symbolFilter = process.argv.includes('--symbol')
     ? process.argv[process.argv.indexOf('--symbol') + 1]?.toUpperCase()
     : null;
+  // --verbose: imprime uma linha por moeda analisada em cada ciclo do scanner (símbolo, motivo
+  // do bloqueio, RSI/limiar) — ver marketScanner.js#scanMarketOnce. Sem a flag, cada ciclo só
+  // imprime o resumo (total analisado, sinais, contagem de motivos de bloqueio).
+  const verbose = process.argv.includes('--verbose');
 
   // Retoma linhas pending/comprada de um restart — nunca perde uma posição/ordem já aberta na
   // corretora só porque o processo caiu e voltou.
@@ -747,7 +779,10 @@ async function main() {
 
   let colorCursor = resumable.length;
   startMarketScanner({
-    config: resolveStrategy({ strategy_id: 'rsi-momentum', trade_config: getStrategyPresetBody('rsi-momentum') }).config,
+    loadConfig: async () => {
+      const body = await loadGlobalConfigBody(sbReq, DEFAULT_USER_ID);
+      return resolveStrategy({ strategy_id: 'rsi-momentum', trade_config: body }).config;
+    },
     loadTrackedSymbols,
     onSignal: async (symbol) => {
       if (registry.getByKey(symbol, 'rsi-momentum')) return; // corrida: sessão já rodando
@@ -757,6 +792,7 @@ async function main() {
     },
     log: console.log,
     intervalMs: SCAN_INTERVAL_MS,
+    verbose,
   });
 
   await new Promise(() => {});

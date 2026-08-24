@@ -11,8 +11,9 @@ const PRESET_BODIES = {
     entry: {
       enabled: true,
       interval: '15m',
-      rsiThreshold: 70,
-      pullback: { enabled: true, belowPct: 1 },
+      rsiThreshold: 69,
+      priorRsiFilter: { enabled: true, count: 3 },
+      pullback: { enabled: true, belowPct: 0.5 },
       limitWaitCandles: 20,
       reentryCooldownCandles: 3,
       bandWidth: { enabled: true, interval: '5m', period: 20, stdDev: 2, lookback: 300, minPct: 2 },
@@ -37,6 +38,25 @@ function getStrategyPresetBody(strategyId) {
   return PRESET_BODIES[normalizeStrategyId(strategyId)] ?? PRESET_BODIES['rsi-momentum'];
 }
 
+/**
+ * Config global do RSI Momentum editável em Configurações → RSI Momentum no painel (ver
+ * rsi_momentum_global_config, backend/services/supabaseService.js). Relida do banco a cada
+ * ciclo do scanner (ver marketScanner.js#scanMarketOnce) e a cada novo sinal — mudanças salvas
+ * no painel valem sem precisar reiniciar o bot. Sem linha salva ainda (usuário nunca abriu o
+ * formulário), cai no preset estático de PRESET_BODIES.
+ */
+async function loadGlobalConfigBody(sbReq, userId) {
+  let rows;
+  try {
+    rows = await sbReq('GET', 'rsi_momentum_global_config', null, `?user_id=eq.${userId}&limit=1`);
+  } catch {
+    return getStrategyPresetBody('rsi-momentum');
+  }
+  const row = rows?.[0];
+  if (!row?.trade_config) return getStrategyPresetBody('rsi-momentum');
+  return normalizeRsiMomentumConfig(row.trade_config);
+}
+
 function resolveConfigBody(row) {
   if (row?.trade_config?.kind) return row.trade_config;
   const sid = row?.strategy_id;
@@ -54,6 +74,7 @@ module.exports = {
   isRsiMomentumStrategy,
   normalizeStrategyId,
   getStrategyPresetBody,
+  loadGlobalConfigBody,
   resolveConfigBody,
   buildTradeConfig,
 };
