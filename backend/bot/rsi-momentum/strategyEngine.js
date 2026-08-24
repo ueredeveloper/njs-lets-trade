@@ -14,6 +14,10 @@ const RSI_PERIOD = 14;
 // e a granularidade mínima que o bot considera pra notar/expirar o pedido.
 const PULLBACK_INTERVAL = '1m';
 const BB_MIN_CANDLES_PADDING = 5;
+// Intervalo fixo do filtro entry.rsi5mFilter — sempre 5m independente do entry.interval do
+// sinal (diferente do bandWidth, que deixa o intervalo configurável).
+const RSI5M_INTERVAL = '5m';
+const RSI5M_WARMUP_PADDING = 10;
 
 function computeRsiSeries(closedCandles) {
     const closes = closedCandles.map(c => parseFloat(c.close));
@@ -36,6 +40,10 @@ function getRequiredSpecs(config) {
     const bw = entry.bandWidth;
     if (bw?.enabled) {
         add(bw.interval, bw.lookback + bw.period + BB_MIN_CANDLES_PADDING);
+    }
+
+    if (entry.rsi5mFilter?.enabled) {
+        add(RSI5M_INTERVAL, RSI_PERIOD + RSI5M_WARMUP_PADDING);
     }
 
     return [...specs.entries()].map(([interval, lim]) => ({ interval, limit: lim }));
@@ -63,6 +71,28 @@ function checkBandWidthFilter(config, cMap) {
         return { allowed: false, reason: 'BANDWIDTH_TOO_LOW', avgWidthPct, minPct: bw.minPct };
     }
     return { allowed: true, avgWidthPct, minPct: bw.minPct };
+}
+
+/**
+ * Filtro opcional (desligado por padrão — ver comentário em tradeConfigSchema.js): exige RSI(14)
+ * do candle 5m FECHADO mais recente no momento do sinal > threshold, além do cruzamento no
+ * entry.interval. Mesmo padrão do checkBandWidthFilter acima, mas sempre no intervalo fixo 5m.
+ */
+function checkRsi5mFilter(config, cMap) {
+    const f = config.entry?.rsi5mFilter;
+    if (!f?.enabled) return { allowed: true };
+
+    const closed = closedCandlesOnly(cMap[RSI5M_INTERVAL] ?? []);
+    if (closed.length < RSI_PERIOD + 2) return { allowed: false, reason: 'RSI5M_NO_DATA' };
+
+    const rsiValues = computeRsiSeries(closed);
+    if (!rsiValues.length) return { allowed: false, reason: 'RSI5M_NO_DATA' };
+
+    const rsi5m = rsiValues[rsiValues.length - 1];
+    if (rsi5m <= f.threshold) {
+        return { allowed: false, reason: 'RSI5M_TOO_LOW', rsi5m, threshold: f.threshold };
+    }
+    return { allowed: true, rsi5m, threshold: f.threshold };
 }
 
 /**
@@ -111,6 +141,11 @@ function evaluateEntrySignal(config, cMap) {
         return { allowed: false, reason: bandWidthCheck.reason, rsi: last, threshold, bandWidth: bandWidthCheck };
     }
 
+    const rsi5mCheck = checkRsi5mFilter(config, cMap);
+    if (!rsi5mCheck.allowed) {
+        return { allowed: false, reason: rsi5mCheck.reason, rsi: last, threshold, rsi5m: rsi5mCheck };
+    }
+
     const signalCandle = closed[closed.length - 1];
     const signalPrice = parseFloat(signalCandle.close);
     const signalOpenTime = Number(signalCandle.openTime);
@@ -128,6 +163,7 @@ function evaluateEntrySignal(config, cMap) {
         rsi: last,
         threshold,
         bandWidth: bandWidthCheck,
+        rsi5m: rsi5mCheck,
         signalOpenTime,
         signalPrice,
         entryDesc,
@@ -238,8 +274,10 @@ module.exports = {
     PULLBACK_INTERVAL,
     intervalMs,
     closedCandlesOnly,
+    computeRsiSeries,
     getRequiredSpecs,
     checkBandWidthFilter,
+    checkRsi5mFilter,
     evaluateEntrySignal,
     evaluateExit,
     checkEntryLimitExpired,

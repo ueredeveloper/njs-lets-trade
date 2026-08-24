@@ -255,11 +255,11 @@ function saveLookback(value) {
 /** Valores selecionáveis do campo "Pullback" da aba Momentum RSI — 0 = compra assim que o RSI
  *  cruza o limiar (sem esperar reteste). Negativo = compra só se o preço cair esse % abaixo do
  *  preço do sinal (ordem limite), mesma ideia do pullback da aba Bollinger Bands. */
-const RSI_MOM_PULLBACK_OPTIONS = [0, -1, -2, -3, -5, -8, -10];
+const RSI_MOM_PULLBACK_OPTIONS = [0, -0.1, -0.2, -0.3, -0.4, -0.5, -1, -2, -3, -5, -8, -10];
 /** Valores selecionáveis dos campos "Alvo %" e "Stop %" — 1% a 10%. */
 const RSI_MOM_PCT_OPTIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 /** Valores selecionáveis do campo "Larg. mín %" do filtro de largura de banda. */
-const RSI_MOM_BANDWIDTH_OPTIONS = [1, 2, 3, 4, 5, 8, 10];
+const RSI_MOM_BANDWIDTH_OPTIONS = [1, 1.5, 2, 2.5, 3, 4, 5, 8, 10];
 /** Valores selecionáveis do campo "Janela" — restringe os SINAIS às últimas N horas (ex.:
  *  "moedas que atingiram RSI 70 nas últimas 6/7/8 horas"). 0 = desligado, usa todo o histórico
  *  definido em Candles. */

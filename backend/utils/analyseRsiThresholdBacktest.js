@@ -153,6 +153,13 @@ function buildOccurrence(signalCandle, signalPrice, signalRsi, resolved, positio
  *   todo o histórico buscado (candleCount). Não afeta o cálculo da largura de banda, que já tem
  *   sua própria janela (bandWidth.lookback).
  * @param {string|null} [options.source]       'gate' ou null (Binance).
+ * @param {object} [options.priorRsiFilter]    Mesmo filtro "não é repique" do bot ao vivo (ver
+ *   entry.priorRsiFilter em backend/bot/rsi-momentum/strategyEngine.js) — os `count` valores de
+ *   RSI anteriores ao cruzamento precisam estar <= threshold. Default bate com o preset estático
+ *   (backend/bot/rsi-momentum/strategyPresets.js): o chamador deve passar a config GLOBAL real
+ *   (rsi_momentum_global_config) pra estatística ficar fiel ao que o bot realmente exige.
+ * @param {boolean} [options.priorRsiFilter.enabled=true]
+ * @param {number}  [options.priorRsiFilter.count=3]
  * @param {object} [options.bandWidth]         Filtro opcional de largura de banda (Bollinger).
  * @param {boolean} [options.bandWidth.enabled=false]
  * @param {string}  [options.bandWidth.interval='5m']
@@ -171,8 +178,13 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
         candleCount,
         lookbackHours   = 0,
         source          = null,
+        priorRsiFilter  = null,
         bandWidth       = null,
     } = options;
+
+    const priorRsiCount = priorRsiFilter?.enabled === false
+        ? 0
+        : Math.max(1, Math.round(Number(priorRsiFilter?.count ?? 3)));
 
     const signalCutoffMs = lookbackHours > 0 ? Date.now() - lookbackHours * 60 * 60 * 1000 : 0;
 
@@ -231,13 +243,19 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
     // Fase 1 — detecta os cruzamentos de RSI no candle do `interval` principal (o "pensamento"
     // continua em 15m/etc.), sem resolver ainda pullback/saída.
     const rawSignals = [];
+    const minI = Math.max(1, priorRsiCount);
     if (!bandWidthBlocksEntries) {
-        for (let i = 3; i < rsiValues.length; i++) {
+        for (let i = minI; i < rsiValues.length; i++) {
             if (rsiValues[i - 1] >= rsiThreshold || rsiValues[i] < rsiThreshold) continue;
             // Mesmo filtro de "não é repique de volatilidade" do bot ao vivo (ver
             // evaluateEntrySignal em backend/bot/rsi-momentum/strategyEngine.js, entry.priorRsiFilter):
-            // os 3 valores de RSI anteriores ao cruzamento também precisam estar <= threshold.
-            if (rsiValues[i - 2] > rsiThreshold || rsiValues[i - 3] > rsiThreshold) continue;
+            // os `priorRsiCount` valores de RSI anteriores ao cruzamento também precisam estar
+            // <= threshold (rsiValues[i-1] já garantido pela checagem do cruzamento acima).
+            let priorRsiBlocked = false;
+            for (let k = 2; k <= priorRsiCount; k++) {
+                if (rsiValues[i - k] > rsiThreshold) { priorRsiBlocked = true; break; }
+            }
+            if (priorRsiBlocked) continue;
 
             const idx = i + offset;
             const signalCandle = candles[idx];
@@ -308,6 +326,7 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
         interval,
         rsiPeriod: RSI_PERIOD,
         rsiThreshold,
+        priorRsiCount,
         pullbackPct,
         targetPct,
         stopLossPct,

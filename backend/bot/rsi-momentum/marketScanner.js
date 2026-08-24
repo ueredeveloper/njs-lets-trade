@@ -18,6 +18,8 @@
 const { getActiveUsdtPairs } = require('../../binance/getActiveUsdtPairs');
 const { fetchBinanceCandles } = require('../prices');
 const { getRequiredSpecs, evaluateEntrySignal } = require('./strategyEngine');
+const { getSymbolCategories } = require('../../utils/assetCategories');
+const getTickers = require('../../binance/cachedTicker24hr');
 
 const SCAN_CONCURRENCY = 15;
 
@@ -33,6 +35,7 @@ function buildReasonLabels(config) {
     const threshold = config.entry.rsiThreshold;
     const priorCount = config.entry.priorRsiFilter?.count ?? 3;
     const minPct = config.entry.bandWidth?.minPct;
+    const rsi5mThreshold = config.entry.rsi5mFilter?.threshold;
     return {
         ENTRY_OFF: 'entradas pausadas na configuração',
         INSUFFICIENT_DATA: 'histórico de candles insuficiente pra calcular o RSI',
@@ -40,6 +43,8 @@ function buildReasonLabels(config) {
         RSI_VOLATILE_NEAR_THRESHOLD: `cruzou ${threshold}, mas algum dos ${priorCount} valores de RSI anteriores já tinha passado de ${threshold} (repique, não cruzamento limpo)`,
         BANDWIDTH_NO_DATA: 'candles insuficientes pra calcular a largura de banda',
         BANDWIDTH_TOO_LOW: `largura de banda média abaixo do mínimo exigido (${minPct}%)`,
+        RSI5M_NO_DATA: 'candles 5m insuficientes pra calcular o RSI 5m',
+        RSI5M_TOO_LOW: `RSI(14) do candle 5m abaixo do mínimo exigido (${rsi5mThreshold})`,
     };
 }
 
@@ -70,6 +75,9 @@ function shortSymbolDetail(signal) {
     if (signal.reason === 'BANDWIDTH_TOO_LOW' && signal.bandWidth?.avgWidthPct != null) {
         return `(${signal.bandWidth.avgWidthPct}%)`;
     }
+    if (signal.reason === 'RSI5M_TOO_LOW' && signal.rsi5m?.rsi5m != null) {
+        return `(${Number(signal.rsi5m.rsi5m).toFixed(2)})`;
+    }
     return '';
 }
 
@@ -83,6 +91,8 @@ function fmtSignalReason(symbol, signal, reasonLabels) {
         }
     } else if (signal.reason === 'BANDWIDTH_TOO_LOW' && signal.bandWidth?.avgWidthPct != null) {
         detail = ` (essa moeda: ${signal.bandWidth.avgWidthPct}%)`;
+    } else if (signal.reason === 'RSI5M_TOO_LOW' && signal.rsi5m?.rsi5m != null) {
+        detail = ` (RSI 5m atual: ${Number(signal.rsi5m.rsi5m).toFixed(2)})`;
     }
     return `   ${symbol}: ${reasonLabels[signal.reason] ?? signal.reason}${detail}`;
 }
@@ -109,7 +119,32 @@ async function scanMarketOnce({ loadConfig, loadTrackedSymbols, onSignal, log, v
     ]);
     const tracked = new Set(trackedRaw);
     const specs = getRequiredSpecs(config);
-    const candidates = symbols.filter((sym) => !tracked.has(sym));
+
+    // Filtro de volume 24h (config.volume.minVolumeUsdt, editável em Configurações → RSI
+    // Momentum — padrão 1M USDT): pares com pouca liquidez têm spread/slippage altos demais pra
+    // um bracket de alvo/stop estreito funcionar direito. Usa o mesmo cache de /ticker/24hr
+    // compartilhado com a tela de volume (cachedTicker24hr.js, TTL 5min) — sem chamada extra à
+    // Binance. Falha ao buscar o ticker não trava o scan: o filtro de volume só fica desativado
+    // NESTE ciclo (fail-open), o resto do scan segue normal.
+    const minVolumeUsdt = Number(config.volume?.minVolumeUsdt ?? 0);
+    let volumeMap = null;
+    if (minVolumeUsdt > 0) {
+        try {
+            const tickers = await getTickers();
+            volumeMap = new Map(tickers.map((t) => [t.symbol, Number(t.quoteVolume)]));
+        } catch (err) {
+            log(`⚠️  [rsi-momentum-scanner] falha ao buscar volume 24h — filtro de volume desativado neste ciclo (${err.message})`);
+        }
+    }
+
+    // Stablecoin (USDCUSDT, USD1USDT, XAUTUSDT etc.) não faz sentido pra uma estratégia de
+    // momentum de RSI — o preço é pareado a $1 (ou ouro/outra moeda), sem tendência real pra
+    // "cruzar RSI" perseguir. Fora do scan, nunca chega a martelar candles/avaliar à toa.
+    const afterBasicFilters = symbols.filter((sym) => !tracked.has(sym) && !getSymbolCategories(sym).includes('stablecoins'));
+    const candidates = volumeMap
+        ? afterBasicFilters.filter((sym) => (volumeMap.get(sym) ?? 0) >= minVolumeUsdt)
+        : afterBasicFilters;
+    const blockedByVolume = afterBasicFilters.length - candidates.length;
     const reasonLabels = buildReasonLabels(config);
 
     // RSI_NOT_CROSSING é disparado por praticamente toda moeda que não deu sinal (centenas por
@@ -148,6 +183,7 @@ async function scanMarketOnce({ loadConfig, loadTrackedSymbols, onSignal, log, v
     }, SCAN_CONCURRENCY);
 
     log(`🔎 Scan RSI Momentum: ${candidates.length} moeda(s) analisadas`);
+    if (blockedByVolume) log(`   bloqueadas — volume 24h abaixo de ${minVolumeUsdt.toLocaleString('pt-BR')} USDT: ${blockedByVolume}`);
     if (signalSymbols.length) log(`   sinais (${signalSymbols.length}): ${signalSymbols.join(', ')}`);
     if (evalErrors) log(`   erros: ${evalErrors}`);
 

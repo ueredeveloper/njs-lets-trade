@@ -18,6 +18,7 @@ export const RSI_MOMENTUM_DEFAULTS = {
     bandWidth: {
       enabled: true, interval: '5m', period: 20, stdDev: 2, lookback: 300, minPct: 2,
     },
+    rsi5mFilter: { enabled: false, threshold: 70 },
   },
   exit: {
     restingBracket: { enabled: true, targetPct: 5 },

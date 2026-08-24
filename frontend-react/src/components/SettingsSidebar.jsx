@@ -1196,6 +1196,31 @@ export default function SettingsSidebar({ open, onClose }) {
                   </div>
                 </div>
 
+                <div className="rounded-md p-2.5" style={{ background: '#0f1219', border: '1px solid #2a2d3a' }}>
+                  <p className="text-p5/70 text-[10px] font-semibold uppercase tracking-wider mb-1">{t('settings.rsimomentum_rsi5m_title')}</p>
+                  <p className="text-[10px] text-p5/40 mb-2 leading-relaxed">{t('settings.rsimomentum_rsi5m_hint')}</p>
+                  <label className="flex items-start gap-2.5 cursor-pointer group mb-2">
+                    <input
+                      type="checkbox"
+                      checked={rsiMomentumConfig.entry.rsi5mFilter.enabled}
+                      onChange={(e) => patchRsiMomentumNested('entry', 'rsi5mFilter', { enabled: e.target.checked })}
+                      className="mt-0.5 shrink-0 accent-p4"
+                    />
+                    <span className="text-p5 text-xs leading-snug group-hover:text-white transition-colors">
+                      {t('settings.rsimomentum_rsi5m_enabled')}
+                    </span>
+                  </label>
+                  <label className="flex flex-col gap-1 w-1/2">
+                    <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_rsi5m_threshold')}</span>
+                    <input
+                      type="number" min={50} max={95}
+                      className={`${inp} w-full`}
+                      value={rsiMomentumConfig.entry.rsi5mFilter.threshold}
+                      onChange={(e) => patchRsiMomentumNested('entry', 'rsi5mFilter', { threshold: Number(e.target.value) })}
+                    />
+                  </label>
+                </div>
+
                 <label className="flex flex-col gap-1">
                   <span className="text-[10px] text-p5/50">{t('settings.rsimomentum_min_volume')}</span>
                   <input

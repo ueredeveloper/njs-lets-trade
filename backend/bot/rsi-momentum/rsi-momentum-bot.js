@@ -205,7 +205,7 @@ function fmtPrice(n) {
  *  cada ciclo por conta própria (ver main()#loadConfig), então mudanças salvas depois valem sem
  *  reiniciar mesmo sem aparecer de novo neste log. */
 function logStartupConfig(body) {
-  const e = body.entry, x = body.exit, sl = body.stopLoss, bw = e.bandWidth, pb = e.pullback;
+  const e = body.entry, x = body.exit, sl = body.stopLoss, bw = e.bandWidth, pb = e.pullback, r5 = e.rsi5mFilter;
   console.log('📋 Config ativa (RSI Momentum):');
   console.log(`   Entrada: RSI(14) ${e.interval} cruza >= ${e.rsiThreshold} (${e.enabled ? 'ativa' : 'PAUSADA'})`);
   console.log(pb.enabled
@@ -215,10 +215,13 @@ function logStartupConfig(body) {
   console.log(bw.enabled
     ? `   Filtro largura de banda: ${bw.interval} BB(${bw.period},${bw.stdDev}) ≥ ${bw.minPct}% (lookback ${bw.lookback})`
     : '   Filtro largura de banda: desligado');
+  console.log(r5?.enabled
+    ? `   Filtro RSI 5min: RSI(14) 5m > ${r5.threshold}`
+    : '   Filtro RSI 5min: desligado');
   const bracketNote = x.restingBracket.enabled ? '' : ' (bracket OFF, só fallback por candle)';
   const stopNote = sl.enabled ? '' : ' (OFF)';
   console.log(`   Saída: alvo +${x.restingBracket.targetPct}%${bracketNote} | stop -${sl.maxLossPct}%${stopNote}`);
-  console.log(`   Volume mín 24h: ${Number(body.volume.minVolumeUsdt).toLocaleString('pt-BR')} USDT (informativo)`);
+  console.log(`   Volume mín 24h: ${Number(body.volume.minVolumeUsdt).toLocaleString('pt-BR')} USDT (filtra o scan de mercado)`);
   console.log(`   Cooldown global entre entradas: ${body.entryCooldownHours}h | Polling: ${body.polling.pollMs / 1000}s aguardando sinal, ${body.polling.fastPollMs / 1000}s posição aberta`);
 }
 
@@ -226,6 +229,9 @@ function buildEntryReasonLines(config, entryMeta) {
   const lines = [`${entryMeta.entryDesc} @ ${fmtPrice(entryMeta.close)}`];
   if (config.entry?.bandWidth?.enabled && entryMeta.bandWidth?.avgWidthPct != null) {
     lines.push(`Largura de banda média: ${entryMeta.bandWidth.avgWidthPct}% (mín ${entryMeta.bandWidth.minPct}%)`);
+  }
+  if (config.entry?.rsi5mFilter?.enabled && entryMeta.rsi5m?.rsi5m != null) {
+    lines.push(`RSI 5min: ${entryMeta.rsi5m.rsi5m.toFixed(2)} (mín ${entryMeta.rsi5m.threshold})`);
   }
   return lines;
 }

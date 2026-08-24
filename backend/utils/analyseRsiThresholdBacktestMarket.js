@@ -78,6 +78,9 @@ async function analyseRsiThresholdBacktestMarket(options = {}) {
     return {
         interval,
         rsiThreshold: perSymbolOptions.rsiThreshold ?? 70,
+        priorRsiCount: perSymbolOptions.priorRsiFilter?.enabled === false
+            ? 0
+            : Math.max(1, Math.round(Number(perSymbolOptions.priorRsiFilter?.count ?? 3))),
         pullbackPct: perSymbolOptions.pullbackPct ?? 0,
         targetPct: perSymbolOptions.targetPct ?? 5,
         stopLossPct: perSymbolOptions.stopLossPct ?? 5,

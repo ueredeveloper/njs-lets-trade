@@ -1,5 +1,9 @@
 const router = require('express').Router();
 const analyseRsiThresholdBacktestMarket = require('../utils/analyseRsiThresholdBacktestMarket');
+const { loadGlobalConfigBody } = require('../bot/rsi-momentum/strategyPresets');
+const { sbReq } = require('../bot/shared/supabaseRest');
+
+const DEFAULT_USER_ID = process.env.SUPABASE_DEFAULT_USER_ID ?? 'ueredeveloper';
 
 // GET /services/rsi-threshold-backtest-market?interval=15m&rsiThreshold=70
 //     &pullbackPct=-2&targetPct=5&stopLossPct=5&positionSizeUsd=40&lookbackHours=6
@@ -19,8 +23,13 @@ router.get('/rsi-threshold-backtest-market', async (req, res) => {
         return res.status(400).json({ error: 'Parâmetro obrigatório: interval' });
     }
 
+    // Mesma regra "não é repique de volatilidade" do bot ao vivo (entry.priorRsiFilter) — ver
+    // fetchRsiThresholdBacktest.js.
+    const globalConfig = await loadGlobalConfigBody(sbReq, DEFAULT_USER_ID);
+
     const options = {
         interval,
+        priorRsiFilter:  globalConfig?.entry?.priorRsiFilter ?? null,
         rsiThreshold:    rsiThreshold    != null ? parseFloat(rsiThreshold)    : 70,
         pullbackPct:     pullbackPct     != null ? parseFloat(pullbackPct)     : 0,
         targetPct:       targetPct       != null ? parseFloat(targetPct)      : 5,

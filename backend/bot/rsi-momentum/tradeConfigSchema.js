@@ -50,6 +50,12 @@ const RSI_MOMENTUM_DEFAULTS = {
     bandWidth: {
       enabled: true, interval: '5m', period: 20, stdDev: 2, lookback: 300, minPct: 2,
     },
+    /** Desligado por padrão — ainda não validado com trades reais o suficiente (ver análise em
+     *  backend/bot/rsi-momentum/analyze-rsi5m-filter.js). Exige RSI(14) do candle 5m FECHADO no
+     *  momento do sinal > threshold, além do cruzamento no entry.interval — tese: um RSI 5m já
+     *  alto confirma que o momentum de curtíssimo prazo está junto com o sinal do entry.interval,
+     *  em vez de ser só o 15m cruzando sozinho. */
+    rsi5mFilter: { enabled: false, threshold: 70 },
   },
 
   exit: {
@@ -116,6 +122,15 @@ function normalizeBandWidth(block) {
   };
 }
 
+function normalizeRsi5mFilter(block) {
+  const d = RSI_MOMENTUM_DEFAULTS.entry.rsi5mFilter;
+  const src = block ?? {};
+  return {
+    enabled: src.enabled === true,
+    threshold: Math.max(50, Math.min(95, Number(src.threshold ?? d.threshold))),
+  };
+}
+
 function normalizeEntry(block) {
   const d = RSI_MOMENTUM_DEFAULTS.entry;
   const src = block ?? {};
@@ -132,6 +147,7 @@ function normalizeEntry(block) {
       src.reentryCooldownCandles ?? d.reentryCooldownCandles,
     )))),
     bandWidth: normalizeBandWidth(src.bandWidth),
+    rsi5mFilter: normalizeRsi5mFilter(src.rsi5mFilter),
   };
 }
 

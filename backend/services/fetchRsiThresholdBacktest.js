@@ -2,6 +2,10 @@ const router = require('express').Router();
 const analyseRsiThresholdBacktest = require('../utils/analyseRsiThresholdBacktest');
 const mcFavoritesStatsCache = require('../cache/mcFavoritesStatsCache');
 const { intervalMs } = require('../bot/ma-cross/strategyEngine');
+const { loadGlobalConfigBody } = require('../bot/rsi-momentum/strategyPresets');
+const { sbReq } = require('../bot/shared/supabaseRest');
+
+const DEFAULT_USER_ID = process.env.SUPABASE_DEFAULT_USER_ID ?? 'ueredeveloper';
 
 // GET /services/rsi-threshold-backtest?symbol=BTCUSDT&interval=15m&rsiThreshold=70
 //     &pullbackPct=-2&targetPct=5&stopLossPct=5&positionSizeUsd=40
@@ -18,7 +22,13 @@ router.get('/rsi-threshold-backtest', async (req, res) => {
         return res.status(400).json({ error: 'Parâmetros obrigatórios: symbol, interval' });
     }
 
+    // Mesma regra "não é repique de volatilidade" do bot ao vivo (entry.priorRsiFilter, ver
+    // evaluateEntrySignal em backend/bot/rsi-momentum/strategyEngine.js) — lida da config GLOBAL
+    // real pra estatística ficar fiel ao que o bot realmente exige, em vez de um valor fixo.
+    const globalConfig = await loadGlobalConfigBody(sbReq, DEFAULT_USER_ID);
+
     const options = {
+        priorRsiFilter:  globalConfig?.entry?.priorRsiFilter ?? null,
         rsiThreshold:    rsiThreshold    != null ? parseFloat(rsiThreshold)    : 70,
         pullbackPct:     pullbackPct     != null ? parseFloat(pullbackPct)     : 0,
         targetPct:       targetPct       != null ? parseFloat(targetPct)      : 5,
