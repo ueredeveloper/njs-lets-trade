@@ -1,8 +1,12 @@
 'use strict';
 
 /**
- * Liga VWAP Bands + Bollinger Bands de uma vez só — pensado pro Termux, pra não precisar
+ * Liga Bollinger Bands + RSI Momentum de uma vez só — pensado pro Termux, pra não precisar
  * abrir duas sessões/telas separadas (uma pra cada bot).
+ *
+ * VWAP Bands e Ignição de Volume saíram da lista (v1.111.7) — usuário não usa nenhum dos
+ * dois no momento; tirar do launcher evita processo ocioso e sync de relógio desnecessário
+ * a cada restart. Reative aqui se voltar a usar algum dos dois.
  *
  * Cada bot roda no PRÓPRIO processo filho (spawn), não no mesmo processo Node — assim um
  * erro fatal (ex.: env do Supabase ausente, exceção não tratada) que mataria o processo só
@@ -21,9 +25,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 
 const BOTS = [
-  { label: 'VWAP Bands',       script: path.join(__dirname, 'vwap-bands', 'vwap-bands-bot.js') },
   { label: 'Bollinger Bands',  script: path.join(__dirname, 'bollinger-bands', 'bollinger-bands-bot.js') },
-  { label: 'Ignição de Volume', script: path.join(__dirname, 'volume-ignition', 'volume-ignition-bot.js') },
   { label: 'RSI Momentum',     script: path.join(__dirname, 'rsi-momentum', 'rsi-momentum-bot.js') },
 ];
 
