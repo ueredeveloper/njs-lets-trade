@@ -61,6 +61,18 @@ async function runWithConcurrency(items, worker, concurrency) {
     await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, next));
 }
 
+/** Valor curto pra identificar a moeda dentro da lista compacta do resumo por motivo (ex.:
+ *  "BTCUSDT(69.80)") — versão enxuta do detalhe completo usado em fmtSignalReason (verbose). */
+function shortSymbolDetail(signal) {
+    if (signal.reason === 'RSI_NOT_CROSSING' || signal.reason === 'RSI_VOLATILE_NEAR_THRESHOLD') {
+        return signal.rsi != null ? `(${Number(signal.rsi).toFixed(2)})` : '';
+    }
+    if (signal.reason === 'BANDWIDTH_TOO_LOW' && signal.bandWidth?.avgWidthPct != null) {
+        return `(${signal.bandWidth.avgWidthPct}%)`;
+    }
+    return '';
+}
+
 function fmtSignalReason(symbol, signal, reasonLabels) {
     let detail = '';
     if (signal.reason === 'RSI_NOT_CROSSING') {
@@ -100,7 +112,11 @@ async function scanMarketOnce({ loadConfig, loadTrackedSymbols, onSignal, log, v
     const candidates = symbols.filter((sym) => !tracked.has(sym));
     const reasonLabels = buildReasonLabels(config);
 
+    // RSI_NOT_CROSSING é disparado por praticamente toda moeda que não deu sinal (centenas por
+    // ciclo) — listar símbolo não ajuda em nada, só conta. Os demais motivos são raros (poucas
+    // moedas por ciclo) e o símbolo é útil pra conferir na hora, então ficam com lista.
     const reasonCounts = {};
+    const reasonSymbols = {};
     const signalSymbols = [];
     let evalErrors = 0;
 
@@ -116,6 +132,9 @@ async function scanMarketOnce({ loadConfig, loadTrackedSymbols, onSignal, log, v
         }
         if (!signal.allowed) {
             reasonCounts[signal.reason] = (reasonCounts[signal.reason] ?? 0) + 1;
+            if (signal.reason !== 'RSI_NOT_CROSSING') {
+                (reasonSymbols[signal.reason] ??= []).push(`${symbol}${shortSymbolDetail(signal)}`);
+            }
             if (verbose) log(fmtSignalReason(symbol, signal, reasonLabels));
             return;
         }
@@ -128,12 +147,23 @@ async function scanMarketOnce({ loadConfig, loadTrackedSymbols, onSignal, log, v
         }
     }, SCAN_CONCURRENCY);
 
-    const reasonSummary = Object.entries(reasonCounts).map(([r, n]) => `${reasonLabels[r] ?? r}=${n}`).join(', ');
-    let summary = `🔎 Scan RSI Momentum: ${candidates.length} moeda(s) analisadas`;
-    if (signalSymbols.length) summary += ` | ${signalSymbols.length} sinal(is): ${signalSymbols.join(', ')}`;
-    if (reasonSummary) summary += ` | bloqueadas: ${reasonSummary}`;
-    if (evalErrors) summary += ` | ${evalErrors} erro(s)`;
-    log(summary);
+    log(`🔎 Scan RSI Momentum: ${candidates.length} moeda(s) analisadas`);
+    if (signalSymbols.length) log(`   sinais (${signalSymbols.length}): ${signalSymbols.join(', ')}`);
+    if (evalErrors) log(`   erros: ${evalErrors}`);
+
+    // Uma linha por motivo de bloqueio — símbolos até MAX_SYMBOLS_SHOWN (com "+N mais" se
+    // passar disso); RSI_NOT_CROSSING só com a contagem (praticamente toda moeda cai nele).
+    const MAX_SYMBOLS_SHOWN = 20;
+    for (const [r, n] of Object.entries(reasonCounts)) {
+        const syms = reasonSymbols[r];
+        if (!syms) {
+            log(`   bloqueadas — ${reasonLabels[r] ?? r}: ${n}`);
+            continue;
+        }
+        const shown = syms.slice(0, MAX_SYMBOLS_SHOWN).join(', ');
+        const rest = syms.length > MAX_SYMBOLS_SHOWN ? `, +${syms.length - MAX_SYMBOLS_SHOWN} mais` : '';
+        log(`   bloqueadas — ${reasonLabels[r] ?? r} (${n}): ${shown}${rest}`);
+    }
 }
 
 function startMarketScanner({ loadConfig, loadTrackedSymbols, onSignal, log, intervalMs = 60_000, verbose = false }) {
