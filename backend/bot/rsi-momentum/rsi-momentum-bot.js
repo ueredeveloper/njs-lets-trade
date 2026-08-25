@@ -244,9 +244,14 @@ function fmtPrice(n) {
  *  cada ciclo por conta própria (ver main()#loadConfig), então mudanças salvas depois valem sem
  *  reiniciar mesmo sem aparecer de novo neste log. */
 function logStartupConfig(body) {
-  const e = body.entry, x = body.exit, sl = body.stopLoss, bw = e.bandWidth, pb = e.pullback, r5 = e.rsi5mFilter, sg = e.spikeGuard, ec = e.earlyConfirm;
+  const e = body.entry, x = body.exit, sl = body.stopLoss;
+  const bw = e.bandWidth, pb = e.pullback, r5 = e.rsi5mFilter, sg = e.spikeGuard, ec = e.earlyConfirm;
+  const pr = e.priorRsiFilter, pdc = e.prevDayCloud;
   console.log('📋 Config ativa (RSI Momentum):');
   console.log(`   Entrada: RSI(14) ${e.interval} cruza >= ${e.rsiThreshold} (${e.enabled ? 'ativa' : 'PAUSADA'})`);
+  console.log(pr?.enabled !== false
+    ? `   Filtro anti-repique: últimos ${pr?.count ?? 3} valores de RSI anteriores ao cruzamento precisam estar <= ${e.rsiThreshold}`
+    : '   Filtro anti-repique: desligado');
   console.log(ec?.enabled
     ? `   Confirmação adiantada: checkpoint de ${ec.interval} dentro da janela do candle de ${e.interval} (não espera fechar)`
     : '   Confirmação adiantada: desligada (só candle fechado)');
@@ -263,6 +268,9 @@ function logStartupConfig(body) {
   console.log(sg?.enabled
     ? `   Guarda de pico: recusa sinal se o candle já subiu mais que ${sg.maxMovePct}% (abertura→fechamento)`
     : '   Guarda de pico: desligada');
+  console.log(pdc?.enabled
+    ? `   Nuvem D-1: preço precisa estar na faixa até ${pdc.maxPct}% da nuvem (abertura/fechamento do candle diário anterior)`
+    : '   Nuvem D-1: desligada (novo, ainda não validado)');
   const bracketNote = x.restingBracket.enabled ? '' : ' (bracket OFF, só fallback por candle)';
   const stopNote = sl.enabled ? '' : ' (OFF)';
   console.log(`   Saída: alvo +${x.restingBracket.targetPct}%${bracketNote} | stop -${sl.maxLossPct}%${stopNote}`);
