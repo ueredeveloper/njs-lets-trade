@@ -186,8 +186,10 @@ export function buildMarkersFromLiveTrades(trades, entry) {
   // Candle do cruzamento/toque que motivou a entrada (pode ser bem antes de buyTime
   // quando o bot esperou um pullback) — ver entry_signal_time em tradeExecution.js.
   // Também aparece em PENDING (aguardando pullback), antes da compra acontecer — ma-cross
-  // e vwap-bands preenchem isso hoje; outros bots ficam sem o triângulo.
-  if (entry?.entrySignalTime && (entry?.phase === 'BOUGHT' || entry?.phase === 'PENDING')) {
+  // e vwap-bands preenchem isso hoje; outros bots ficam sem o triângulo. FAILED também entra
+  // aqui — o rsi-momentum-bot grava entry_signal_time antes de marcar falha (ver markFailed em
+  // rsi-momentum-bot.js), pra mostrar no gráfico o momento do sinal mesmo quando a compra falhou.
+  if (entry?.entrySignalTime && (entry?.phase === 'BOUGHT' || entry?.phase === 'PENDING' || entry?.phase === 'FAILED')) {
     markers.push({
       time: new Date(entry.entrySignalTime).getTime(),
       side: 'signal',

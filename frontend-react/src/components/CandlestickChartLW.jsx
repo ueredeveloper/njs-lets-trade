@@ -18,6 +18,9 @@ const C_DOWN = '#ef5350';
 const VWAP_LINE_COLOR = '#FF4FA3';
 const VWAP_BAND_COLOR = 'rgba(255, 79, 163, 0.45)';
 const VWAP_BAND_FILL_COLOR = 'rgba(255, 79, 163, 0.08)';
+// Verde/vermelho igual ao candle (C_UP/C_DOWN) — dia anterior fechou em alta ou em queda.
+const PREV_DAY_CLOUD_UP_FILL_COLOR = 'rgba(38, 166, 154, 0.18)';
+const PREV_DAY_CLOUD_DOWN_FILL_COLOR = 'rgba(239, 83, 80, 0.18)';
 const VWAP_DECLINE_CLOUD_COLOR = 'rgba(239, 68, 68, 0.28)';
 const BB_COLOR = '#94a3b8';
 const BB_PATH_UP = '#9C27B0';
@@ -546,7 +549,7 @@ function toValidLwCandles(candlesticks) {
 const CandlestickChartLW = forwardRef(function CandlestickChartLW({
   symbol, interval, candlesticks, colors, rightPad = 0,
   activeIndicators = [], ma9, ma21, ma50, ma200, overlayConfigs, vwapConfig, vwapSlopeHighlight,
-  bollingerConfigs = [], srConfig, pphlConfig, rsi, chopConfig,
+  bollingerConfigs = [], srConfig, pphlConfig, prevDayCloudConfig, rsi, chopConfig,
   emaPersistCloudData, emaPersistCloudConfirmData, emaPersistCloudConfirm2Data, emaPersistCloudLayers, emaPersistCloudTones, barsSinceCrossData, tdSequentialData,
   stopLossConfig, targetConfig, buyInfo, multitradeMarkers, zoomPeriod, focusLastN,
   onNeedOlderCandles, loadingMoreCandles,
@@ -978,6 +981,31 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
         }
       }
       bandFillPrimitiveRef.current.replacePrefixed('emaPersist-', emaPersistClouds);
+
+      // Nuvem D-1: um "degrau" por candle diário nativo (1d, mesmo candle da Binance/Gate),
+      // cada um com a faixa abertura/fechamento do candle ANTERIOR a ele, verde ou vermelho
+      // conforme o dia anterior fechou em alta ou queda (ver buildPrevDayCloudSegments em
+      // CandlestickChart.jsx) — arrastando o gráfico pra trás, cada dia antigo mostra a nuvem
+      // que valia NAQUELE dia, não uma faixa única fixa esticada por todo o histórico.
+      let prevDayCloudBand = [];
+      if (activeIndicators.includes('prevDayCloud')
+        && prevDayCloudConfig?.segments?.length && Number.isFinite(minTime) && Number.isFinite(maxTime)) {
+        prevDayCloudBand = prevDayCloudConfig.segments
+          .map((seg) => {
+            if (!Number.isFinite(seg.upper) || !Number.isFinite(seg.lower)) return null;
+            const segStart = Math.floor(seg.startTime / 1000);
+            const segEnd = seg.endTime != null ? Math.floor(seg.endTime / 1000) : maxTime;
+            const start = Math.max(segStart, minTime);
+            const end = Math.min(segEnd, maxTime);
+            if (end <= start) return null;
+            return {
+              points: [{ time: start, upper: seg.upper, lower: seg.lower }, { time: end, upper: seg.upper, lower: seg.lower }],
+              fillColor: seg.bullish ? PREV_DAY_CLOUD_UP_FILL_COLOR : PREV_DAY_CLOUD_DOWN_FILL_COLOR,
+            };
+          })
+          .filter(Boolean);
+      }
+      bandFillPrimitiveRef.current.replacePrefixed('prevDayCloud-', prevDayCloudBand);
     }
 
     const current = indicatorSeriesRef.current;
@@ -998,7 +1026,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       }
       current[key].setData(clampToVisible(def.data));
     }
-  }, [activeIndicators, ma9, ma21, ma50, ma200, overlayConfigs, bollingerConfigs, vwapConfig, vwapSlopeHighlight, candlesticks, emaPersistCloudData, emaPersistCloudConfirmData, emaPersistCloudConfirm2Data, emaPersistCloudLayers, emaPersistCloudTones]);
+  }, [activeIndicators, ma9, ma21, ma50, ma200, overlayConfigs, bollingerConfigs, vwapConfig, vwapSlopeHighlight, candlesticks, emaPersistCloudData, emaPersistCloudConfirmData, emaPersistCloudConfirm2Data, emaPersistCloudLayers, emaPersistCloudTones, prevDayCloudConfig]);
 
   // Linhas de preço: S/R. Sempre recriadas do zero (poucos níveis por vez, custo desprezível)
   // em vez de diff — mais simples que casar id estável por nível.
@@ -1253,8 +1281,18 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
     if (emaPersistLegend) {
       entries.push({ key: 'emaPersistCloud', color: emaPersistLegend.fill, label: emaPersistLegend.text });
     }
+    if (activeIndicators.includes('prevDayCloud') && prevDayCloudConfig?.segments?.length) {
+      // Último degrau = nuvem vigente agora (dia mais recente carregado); os degraus mais
+      // antigos ficam só no próprio gráfico, sem entrada de legenda separada pra cada um.
+      const last = prevDayCloudConfig.segments[prevDayCloudConfig.segments.length - 1];
+      entries.push({
+        key: 'prevDayCloud',
+        color: last.bullish ? C_UP : C_DOWN,
+        label: `D-1 A ${last.openPrice} / F ${last.closePrice}`,
+      });
+    }
     return entries;
-  }, [activeIndicators, overlayConfigs, vwapConfig, bollingerConfigs, emaPersistLegend]);
+  }, [activeIndicators, overlayConfigs, vwapConfig, bollingerConfigs, emaPersistLegend, prevDayCloudConfig]);
 
   return (
     <div className="relative w-full h-full">

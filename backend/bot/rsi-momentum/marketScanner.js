@@ -36,15 +36,19 @@ function buildReasonLabels(config) {
     const priorCount = config.entry.priorRsiFilter?.count ?? 3;
     const minPct = config.entry.bandWidth?.minPct;
     const rsi5mThreshold = config.entry.rsi5mFilter?.threshold;
+    const maxMovePct = config.entry.spikeGuard?.maxMovePct;
+    const prevDayCloudMaxPct = config.entry.prevDayCloud?.maxPct;
     return {
         ENTRY_OFF: 'entradas pausadas na configuração',
         INSUFFICIENT_DATA: 'histórico de candles insuficiente pra calcular o RSI',
         RSI_NOT_CROSSING: `RSI não cruzou o valor ${threshold}`,
         RSI_VOLATILE_NEAR_THRESHOLD: `cruzou ${threshold}, mas algum dos ${priorCount} valores de RSI anteriores já tinha passado de ${threshold} (repique, não cruzamento limpo)`,
+        SPIKE_TOO_LARGE: `candle do sinal já subiu mais que o máximo permitido (${maxMovePct}%) — provável pico`,
         BANDWIDTH_NO_DATA: 'candles insuficientes pra calcular a largura de banda',
         BANDWIDTH_TOO_LOW: `largura de banda média abaixo do mínimo exigido (${minPct}%)`,
         RSI5M_NO_DATA: 'candles 5m insuficientes pra calcular o RSI 5m',
         RSI5M_TOO_LOW: `RSI(14) do candle 5m abaixo do mínimo exigido (${rsi5mThreshold})`,
+        PREVDAY_CLOUD_OUT_OF_RANGE: `preço fora da nuvem D-1 (faixa até ${prevDayCloudMaxPct}% da nuvem)`,
     };
 }
 
@@ -78,6 +82,12 @@ function shortSymbolDetail(signal) {
     if (signal.reason === 'RSI5M_TOO_LOW' && signal.rsi5m?.rsi5m != null) {
         return `(${Number(signal.rsi5m.rsi5m).toFixed(2)})`;
     }
+    if (signal.reason === 'SPIKE_TOO_LARGE' && signal.spikeGuard?.movePct != null) {
+        return `(+${signal.spikeGuard.movePct}%)`;
+    }
+    if (signal.reason === 'PREVDAY_CLOUD_OUT_OF_RANGE' && signal.prevDayCloud?.price != null) {
+        return `(${signal.prevDayCloud.price})`;
+    }
     return '';
 }
 
@@ -93,6 +103,11 @@ function fmtSignalReason(symbol, signal, reasonLabels) {
         detail = ` (essa moeda: ${signal.bandWidth.avgWidthPct}%)`;
     } else if (signal.reason === 'RSI5M_TOO_LOW' && signal.rsi5m?.rsi5m != null) {
         detail = ` (RSI 5m atual: ${Number(signal.rsi5m.rsi5m).toFixed(2)})`;
+    } else if (signal.reason === 'SPIKE_TOO_LARGE' && signal.spikeGuard?.movePct != null) {
+        detail = ` (candle subiu +${signal.spikeGuard.movePct}%)`;
+    } else if (signal.reason === 'PREVDAY_CLOUD_OUT_OF_RANGE' && signal.prevDayCloud) {
+        const pdc = signal.prevDayCloud;
+        detail = ` (preço ${pdc.price}, faixa [${pdc.lower}, ${pdc.limit}])`;
     }
     return `   ${symbol}: ${reasonLabels[signal.reason] ?? signal.reason}${detail}`;
 }

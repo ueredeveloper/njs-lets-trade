@@ -2,6 +2,7 @@
 
 const { getActiveUsdtPairs } = require('../binance/getActiveUsdtPairs');
 const analyseRsiThresholdBacktest = require('./analyseRsiThresholdBacktest');
+const getTickers = require('../binance/cachedTicker24hr');
 
 const CONCURRENCY = 15;
 const DEFAULT_MAX_ROWS = 300;
@@ -32,11 +33,28 @@ async function runWithConcurrency(items, worker, concurrency) {
  * @param {number} [options.maxRows=300] Máximo de ocorrências devolvidas na tabela (a mais
  *   recente primeiro) — os agregados (totais, P&L, taxa de acerto) sempre consideram TODAS as
  *   ocorrências encontradas, não só as retornadas.
+ * @param {number} [options.minVolumeUsdt=0] Filtro de volume 24h (mesmo campo do bot ao vivo) —
+ *   filtra a LISTA de símbolos ANTES de rodar o backtest em cada um (mais barato que deixar cada
+ *   chamada individual se autobloquear), em vez de ser repassado a analyseRsiThresholdBacktest.
  */
 async function analyseRsiThresholdBacktestMarket(options = {}) {
-    const { interval, maxRows = DEFAULT_MAX_ROWS, ...perSymbolOptions } = options;
+    const { interval, maxRows = DEFAULT_MAX_ROWS, minVolumeUsdt = 0, ...perSymbolOptions } = options;
 
-    const { list: symbols } = await getActiveUsdtPairs();
+    const { list: allSymbols } = await getActiveUsdtPairs();
+
+    let symbols = allSymbols;
+    let symbolsBlockedByVolume = 0;
+    if (Number(minVolumeUsdt) > 0 && perSymbolOptions.source !== 'gate') {
+        try {
+            const tickers = await getTickers();
+            const volumeMap = new Map(tickers.map((t) => [t.symbol, Number(t.quoteVolume)]));
+            const filtered = allSymbols.filter((sym) => (volumeMap.get(sym) ?? 0) >= Number(minVolumeUsdt));
+            symbolsBlockedByVolume = allSymbols.length - filtered.length;
+            symbols = filtered;
+        } catch {
+            // fail-open: falha ao buscar o ticker não bloqueia o backtest, só desativa o filtro.
+        }
+    }
 
     const perSymbolResults = await runWithConcurrency(symbols, async (symbol) => {
         try {
@@ -87,7 +105,13 @@ async function analyseRsiThresholdBacktestMarket(options = {}) {
         positionSizeUsd,
         lookbackHours: perSymbolOptions.lookbackHours ?? 0,
         bandWidthEnabled: !!perSymbolOptions.bandWidth?.enabled,
-        symbolsTotal: symbols.length,
+        minVolumeUsdt: Number(minVolumeUsdt) > 0 ? Number(minVolumeUsdt) : 0,
+        excludeOpenExits: !!perSymbolOptions.excludeOpenExits,
+        prevCandleStop: !!perSymbolOptions.prevCandleStop,
+        adxFilterEnabled: !!perSymbolOptions.adxFilter?.enabled,
+        macdFilterEnabled: !!perSymbolOptions.macdFilter?.enabled,
+        symbolsTotal: allSymbols.length,
+        symbolsBlockedByVolume,
         symbolsScanned: valid.length,
         symbolsBlockedByBandWidth,
         totalSignals: allOccurrences.length,

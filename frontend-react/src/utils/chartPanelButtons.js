@@ -20,6 +20,7 @@ export const CHART_PANEL_BUTTON_KEYS = [
   'stopLoss',
   'bb',
   'vwap',
+  'prevDayCloud',
 ];
 
 export const DEFAULT_CHART_PANEL_BUTTONS = {
@@ -42,6 +43,7 @@ export const DEFAULT_CHART_PANEL_BUTTONS = {
   stopLoss: true,
   bb: true,
   vwap: true,
+  prevDayCloud: true,
 };
 
 export function loadChartPanelButtons() {

@@ -154,7 +154,9 @@ export async function fetchRsiOversoldRecovery(symbol, interval, oversold = 30, 
 export async function fetchRsiThresholdBacktest(symbol, interval, options = {}) {
   const {
     rsiThreshold = 70, pullbackPct = 0, targetPct = 5, stopLossPct = 5, positionSizeUsd = 40,
-    source = null, candleCount = null, lookbackHours = 0, bandWidth = null,
+    source = null, candleCount = null, lookbackHours = 0, bandWidth = null, prevDayCloud = null,
+    minVolumeUsdt = 0, excludeOpenExits = false, prevCandleStop = false,
+    adxFilter = null, macdFilter = null,
   } = options;
   const params = new URLSearchParams({
     symbol, interval, rsiThreshold, pullbackPct, targetPct, stopLossPct, positionSizeUsd,
@@ -170,6 +172,22 @@ export async function fetchRsiThresholdBacktest(symbol, interval, options = {}) 
     if (bandWidth.stdDev) params.set('bandWidthStdDev', String(bandWidth.stdDev));
     if (bandWidth.lookback) params.set('bandWidthLookback', String(bandWidth.lookback));
   }
+  if (prevDayCloud?.enabled) {
+    params.set('prevDayCloudEnabled', '1');
+    params.set('prevDayCloudMaxPct', String(prevDayCloud.maxPct ?? 100));
+  }
+  if (minVolumeUsdt) params.set('minVolumeUsdt', String(minVolumeUsdt));
+  if (excludeOpenExits) params.set('excludeOpenExits', '1');
+  if (prevCandleStop) params.set('prevCandleStopEnabled', '1');
+  if (adxFilter?.enabled) {
+    params.set('adxFilterEnabled', '1');
+    params.set('adxFilterInterval', adxFilter.interval ?? '1h');
+    params.set('adxFilterMinAdx', String(adxFilter.minAdx ?? 25));
+  }
+  if (macdFilter?.enabled) {
+    params.set('macdFilterEnabled', '1');
+    params.set('macdFilterInterval', macdFilter.interval ?? '1h');
+  }
   const res = await fetch(`/services/rsi-threshold-backtest?${params}`);
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
@@ -182,6 +200,8 @@ export async function fetchRsiThresholdBacktestMarket(interval, options = {}) {
   const {
     rsiThreshold = 70, pullbackPct = 0, targetPct = 5, stopLossPct = 5, positionSizeUsd = 40,
     source = null, candleCount = null, lookbackHours = 0, bandWidth = null, maxRows = null,
+    prevDayCloud = null, minVolumeUsdt = 0, excludeOpenExits = false, prevCandleStop = false,
+    adxFilter = null, macdFilter = null,
   } = options;
   const params = new URLSearchParams({
     interval, rsiThreshold, pullbackPct, targetPct, stopLossPct, positionSizeUsd,
@@ -197,6 +217,22 @@ export async function fetchRsiThresholdBacktestMarket(interval, options = {}) {
     if (bandWidth.period) params.set('bandWidthPeriod', String(bandWidth.period));
     if (bandWidth.stdDev) params.set('bandWidthStdDev', String(bandWidth.stdDev));
     if (bandWidth.lookback) params.set('bandWidthLookback', String(bandWidth.lookback));
+  }
+  if (prevDayCloud?.enabled) {
+    params.set('prevDayCloudEnabled', '1');
+    params.set('prevDayCloudMaxPct', String(prevDayCloud.maxPct ?? 100));
+  }
+  if (minVolumeUsdt) params.set('minVolumeUsdt', String(minVolumeUsdt));
+  if (excludeOpenExits) params.set('excludeOpenExits', '1');
+  if (prevCandleStop) params.set('prevCandleStopEnabled', '1');
+  if (adxFilter?.enabled) {
+    params.set('adxFilterEnabled', '1');
+    params.set('adxFilterInterval', adxFilter.interval ?? '1h');
+    params.set('adxFilterMinAdx', String(adxFilter.minAdx ?? 25));
+  }
+  if (macdFilter?.enabled) {
+    params.set('macdFilterEnabled', '1');
+    params.set('macdFilterInterval', macdFilter.interval ?? '1h');
   }
   const res = await fetch(`/services/rsi-threshold-backtest-market?${params}`);
   if (!res.ok) {

@@ -3,7 +3,7 @@ import { reloadCandles, getMaCrossScreenerConfig, saveMaCrossScreenerConfig,
   getBollingerMedianTrendConfig, saveBollingerMedianTrendConfig,
   getRsiMomentumConfig, saveRsiMomentumConfig,
   getCacheSettings, saveCacheSettings } from '../services/api';
-import { RSI_MOMENTUM_ALL_INTERVALS, RSI_MOMENTUM_BB_PERIODS, RSI_MOMENTUM_BB_STD_DEVS }
+import { RSI_MOMENTUM_ALL_INTERVALS, RSI_MOMENTUM_BB_PERIODS, RSI_MOMENTUM_BB_STD_DEVS, RSI_MOMENTUM_CLOUD_PCT_OPTIONS }
   from '../constants/rsiMomentumConfigSchema';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useI18n } from '../i18n';
@@ -1098,6 +1098,32 @@ export default function SettingsSidebar({ open, onClose }) {
                   </div>
                 </div>
 
+                <div className="rounded-md p-2.5" style={{ background: '#0f1219', border: '1px solid #2a2d3a' }}>
+                  <p className="text-p5/70 text-[10px] font-semibold uppercase tracking-wider mb-1">{t('settings.rsimomentum_earlyconfirm_title')}</p>
+                  <p className="text-[10px] text-p5/40 mb-2 leading-relaxed">{t('settings.rsimomentum_earlyconfirm_hint')}</p>
+                  <label className="flex items-start gap-2.5 cursor-pointer group mb-2">
+                    <input
+                      type="checkbox"
+                      checked={rsiMomentumConfig.entry.earlyConfirm.enabled}
+                      onChange={(e) => patchRsiMomentumNested('entry', 'earlyConfirm', { enabled: e.target.checked })}
+                      className="mt-0.5 shrink-0 accent-p4"
+                    />
+                    <span className="text-p5 text-xs leading-snug group-hover:text-white transition-colors">
+                      {t('settings.rsimomentum_earlyconfirm_enabled')}
+                    </span>
+                  </label>
+                  <label className="flex flex-col gap-1 w-1/2">
+                    <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_earlyconfirm_interval')}</span>
+                    <select
+                      className={`${inp} w-full`}
+                      value={rsiMomentumConfig.entry.earlyConfirm.interval}
+                      onChange={(e) => patchRsiMomentumNested('entry', 'earlyConfirm', { interval: e.target.value })}
+                    >
+                      {RSI_MOMENTUM_ALL_INTERVALS.map((iv) => <option key={iv} value={iv}>{iv}</option>)}
+                    </select>
+                  </label>
+                </div>
+
                 <label className="flex flex-col gap-1">
                   <span className="text-[10px] text-p5/50">{t('settings.rsimomentum_reentry_cooldown')}</span>
                   <input
@@ -1218,6 +1244,57 @@ export default function SettingsSidebar({ open, onClose }) {
                       value={rsiMomentumConfig.entry.rsi5mFilter.threshold}
                       onChange={(e) => patchRsiMomentumNested('entry', 'rsi5mFilter', { threshold: Number(e.target.value) })}
                     />
+                  </label>
+                </div>
+
+                <div className="rounded-md p-2.5" style={{ background: '#0f1219', border: '1px solid #2a2d3a' }}>
+                  <p className="text-p5/70 text-[10px] font-semibold uppercase tracking-wider mb-1">{t('settings.rsimomentum_spikeguard_title')}</p>
+                  <p className="text-[10px] text-p5/40 mb-2 leading-relaxed">{t('settings.rsimomentum_spikeguard_hint')}</p>
+                  <label className="flex items-start gap-2.5 cursor-pointer group mb-2">
+                    <input
+                      type="checkbox"
+                      checked={rsiMomentumConfig.entry.spikeGuard.enabled}
+                      onChange={(e) => patchRsiMomentumNested('entry', 'spikeGuard', { enabled: e.target.checked })}
+                      className="mt-0.5 shrink-0 accent-p4"
+                    />
+                    <span className="text-p5 text-xs leading-snug group-hover:text-white transition-colors">
+                      {t('settings.rsimomentum_spikeguard_enabled')}
+                    </span>
+                  </label>
+                  <label className="flex flex-col gap-1 w-1/2">
+                    <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_spikeguard_max_move_pct')}</span>
+                    <input
+                      type="number" min={0.5} max={50} step={0.5}
+                      className={`${inp} w-full`}
+                      value={rsiMomentumConfig.entry.spikeGuard.maxMovePct}
+                      onChange={(e) => patchRsiMomentumNested('entry', 'spikeGuard', { maxMovePct: Number(e.target.value) })}
+                    />
+                  </label>
+                </div>
+
+                <div className="rounded-md p-2.5" style={{ background: '#0f1219', border: '1px solid #2a2d3a' }}>
+                  <p className="text-p5/70 text-[10px] font-semibold uppercase tracking-wider mb-1">{t('settings.rsimomentum_prevdaycloud_title')}</p>
+                  <p className="text-[10px] text-p5/40 mb-2 leading-relaxed">{t('settings.rsimomentum_prevdaycloud_hint')}</p>
+                  <label className="flex items-start gap-2.5 cursor-pointer group mb-2">
+                    <input
+                      type="checkbox"
+                      checked={rsiMomentumConfig.entry.prevDayCloud.enabled}
+                      onChange={(e) => patchRsiMomentumNested('entry', 'prevDayCloud', { enabled: e.target.checked })}
+                      className="mt-0.5 shrink-0 accent-p4"
+                    />
+                    <span className="text-p5 text-xs leading-snug group-hover:text-white transition-colors">
+                      {t('settings.rsimomentum_prevdaycloud_enabled')}
+                    </span>
+                  </label>
+                  <label className="flex flex-col gap-1 w-1/2">
+                    <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_prevdaycloud_max_pct')}</span>
+                    <select
+                      className={`${inp} w-full`}
+                      value={rsiMomentumConfig.entry.prevDayCloud.maxPct}
+                      onChange={(e) => patchRsiMomentumNested('entry', 'prevDayCloud', { maxPct: Number(e.target.value) })}
+                    >
+                      {RSI_MOMENTUM_CLOUD_PCT_OPTIONS.map((v) => <option key={v} value={v}>{v}%</option>)}
+                    </select>
                   </label>
                 </div>
 

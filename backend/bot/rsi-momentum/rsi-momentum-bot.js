@@ -102,12 +102,19 @@ function makeLogger(symbol, strategyId, color = '') {
   };
 }
 
-/** Linhas resumíveis no boot: pending (ordem armada) ou comprada — nunca FAILED (sem ordem
- *  ativa, não há nada a retomar) nem WATCHING (transitório, não deveria sobreviver a um
- *  restart; se sobreviver por algum erro raro, cai no bloco WATCHING do tick e se resolve
- *  sozinho no próximo ciclo). */
+/** Linhas resumíveis no boot: pending (ordem armada), comprada, ou watching (cooldown de
+ *  reentrada em andamento — ver retireOrCooldown — ou o raro race condition entre o scanner
+ *  criar a linha e a sessão rodar o 1º tick) — nunca FAILED (sem ordem ativa, não há nada a
+ *  retomar). WATCHING entra aqui desde que retireOrCooldown passou a MANTER a linha (com
+ *  rules_state.lastExitTime) durante o cooldown em vez de apagar — sem resumir essas linhas no
+ *  boot, um restart no meio do cooldown deixava a moeda travada pra sempre: a linha sobrevive
+ *  no banco (então o scanner nunca re-sinaliza aquele símbolo, ver loadTrackedSymbols), mas
+ *  nenhuma sessão está rodando o tick() que eventualmente resolveria/apagaria ela. O bloco
+ *  WATCHING do tick() já lida com os dois casos (cooldown ainda ativo ou sinal já sumiu),
+ *  então resumir é seguro — self-resolve em 1 ciclo no caso raro, ou continua a espera de
+ *  cooldown de onde parou no caso comum. */
 async function loadResumableRows() {
-  const rows = await sbReq('GET', 'rsi_multi_bot_state', null, `?strategy_id=eq.rsi-momentum&phase=in.(PENDING,BOUGHT)&order=id.asc`);
+  const rows = await sbReq('GET', 'rsi_multi_bot_state', null, `?strategy_id=eq.rsi-momentum&phase=in.(WATCHING,PENDING,BOUGHT)&order=id.asc`);
   return rows ?? [];
 }
 
@@ -177,13 +184,45 @@ async function retireAutoFavorite({ rowId, symbol, log, stopSelf, reason }) {
   return { phase: 'RETIRED' };
 }
 
+/**
+ * Chamado nos 3 pontos em que um trade acabou de FECHAR (alvo/stop/venda externa) — diferente
+ * de "pullback expirou"/"sinal sumiu" (que retiram direto, sem cooldown a proteger: nenhuma
+ * venda aconteceu ali). Só retira (apaga a linha) se NÃO há cooldown de reentrada pendente
+ * (entry.reentryCooldownCandles, após QUALQUER venda) — com cooldown ativo, mantém a linha em
+ * WATCHING (rules_state.lastExitTime já foi gravado por finalizeSell, ver tradeExecution.js) e
+ * deixa o bloco WATCHING do tick() (linha ~424) aplicar checkReentryCooldown normalmente nos
+ * próximos ciclos, só liberando a moeda de volta pro pool quando o cooldown expirar de verdade.
+ *
+ * Bug real que motivou isso: STORJUSDT 24/08/2026 — retireAutoFavorite apagava a linha (e o
+ * lastExitTime junto) no exato momento em que o stop fechava, então o scanner (que só pula
+ * símbolos com linha em rsi_multi_bot_state) recriava um favorito do ZERO no ciclo seguinte
+ * (~1min depois), sem nenhuma memória do cooldown configurado — comprou de novo no mesmo sinal
+ * ~2min depois do 1º stop, também levando stop.
+ */
+async function retireOrCooldown({ rowId, symbol, log, stopSelf, reason, config, cMap, state, session }) {
+  const lastExitTime = resolveLastExitTime(state, session);
+  const lastExitReason = resolveLastExitReason(state, session);
+  const cooldown = checkReentryCooldown(config, cMap, lastExitTime, lastExitReason);
+  if (cooldown.waiting) {
+    log(`⏸️  ${symbol} fechado (${reason}) — cooldown de reentrada: ${cooldown.have}/${cooldown.need} candles ${cooldown.interval}, aguardando antes de voltar pro pool`);
+    return { phase: 'WATCHING', reentryCooldown: cooldown };
+  }
+  return retireAutoFavorite({ rowId, symbol, log, stopSelf, reason });
+}
+
 /** Marca a linha como FAILED (visível na lista, com o motivo) e encerra a sessão — não tenta
  *  de novo sozinho (ex.: saldo insuficiente continuaria falhando a cada tick, martelando a
  *  corretora). Fica registrada até o usuário remover manualmente. */
-async function markFailed({ rowId, session, log, symbol, strategyId, message, stopSelf }) {
+async function markFailed({ rowId, session, log, symbol, strategyId, message, stopSelf, signal }) {
   session.phase = 'FAILED';
   session.rulesState = { ...(session.rulesState ?? {}), entryFailure: { message, at: new Date().toISOString() } };
-  await saveState(rowId, { phase: 'FAILED', rules_state: session.rulesState }, log);
+  // signal (quando a falha acontece depois do sinal já confirmado) grava entry_signal_time/price
+  // JÁ aqui — sem isso o gráfico não tem o candle do sinal pra desenhar a seta em trades FAILED
+  // que nunca chegaram a passar pela fase PENDING (ver entrySignalFields em tradeExecution.js).
+  const signalFields = signal
+    ? entrySignalFields({ signalOpenTime: signal.signalOpenTime, signalPrice: signal.close })
+    : {};
+  await saveState(rowId, { phase: 'FAILED', rules_state: session.rulesState, ...signalFields }, log);
   log(`${R}❌ Entrada falhou (${symbol}): ${message}${X}`);
   sendWhatsApp(`❌ ${BOT_LABEL} ${symbol}\nFalha ao entrar: ${message}\nA moeda fica marcada como "falha" na lista — não vou tentar de novo sozinho.`);
   if (stopSelf) await stopSelf();
@@ -205,9 +244,12 @@ function fmtPrice(n) {
  *  cada ciclo por conta própria (ver main()#loadConfig), então mudanças salvas depois valem sem
  *  reiniciar mesmo sem aparecer de novo neste log. */
 function logStartupConfig(body) {
-  const e = body.entry, x = body.exit, sl = body.stopLoss, bw = e.bandWidth, pb = e.pullback, r5 = e.rsi5mFilter;
+  const e = body.entry, x = body.exit, sl = body.stopLoss, bw = e.bandWidth, pb = e.pullback, r5 = e.rsi5mFilter, sg = e.spikeGuard, ec = e.earlyConfirm;
   console.log('📋 Config ativa (RSI Momentum):');
   console.log(`   Entrada: RSI(14) ${e.interval} cruza >= ${e.rsiThreshold} (${e.enabled ? 'ativa' : 'PAUSADA'})`);
+  console.log(ec?.enabled
+    ? `   Confirmação adiantada: checkpoint de ${ec.interval} dentro da janela do candle de ${e.interval} (não espera fechar)`
+    : '   Confirmação adiantada: desligada (só candle fechado)');
   console.log(pb.enabled
     ? `   Pullback: -${pb.belowPct}% do sinal, espera até ${e.limitWaitCandles} candles de 1min por reteste`
     : '   Pullback: desligado (compra a mercado na hora do sinal)');
@@ -218,6 +260,9 @@ function logStartupConfig(body) {
   console.log(r5?.enabled
     ? `   Filtro RSI 5min: RSI(14) 5m > ${r5.threshold}`
     : '   Filtro RSI 5min: desligado');
+  console.log(sg?.enabled
+    ? `   Guarda de pico: recusa sinal se o candle já subiu mais que ${sg.maxMovePct}% (abertura→fechamento)`
+    : '   Guarda de pico: desligada');
   const bracketNote = x.restingBracket.enabled ? '' : ' (bracket OFF, só fallback por candle)';
   const stopNote = sl.enabled ? '' : ' (OFF)';
   console.log(`   Saída: alvo +${x.restingBracket.targetPct}%${bracketNote} | stop -${sl.maxLossPct}%${stopNote}`);
@@ -492,10 +537,10 @@ async function tick(rowId, adapter, strategy, log, session, stopSelf) {
       try {
         buyResult = await adapter.marketBuy(parseFloat(capital));
       } catch (err) {
-        return markFailed({ rowId, session, log, symbol, strategyId, message: err.message, stopSelf });
+        return markFailed({ rowId, session, log, symbol, strategyId, message: err.message, stopSelf, signal });
       }
       if (buyResult?.filled === false) {
-        return markFailed({ rowId, session, log, symbol, strategyId, message: 'ordem a mercado não preenchida', stopSelf });
+        return markFailed({ rowId, session, log, symbol, strategyId, message: 'ordem a mercado não preenchida', stopSelf, signal });
       }
       const bought = await recordBuyFill({
         rowId, strategy, log, session,
@@ -519,7 +564,7 @@ async function tick(rowId, adapter, strategy, log, session, stopSelf) {
     try {
       handle = await adapter.placeRestingLimitBuy(parseFloat(capital), signal.limitPrice);
     } catch (err) {
-      return markFailed({ rowId, session, log, symbol, strategyId, message: err.message, stopSelf });
+      return markFailed({ rowId, session, log, symbol, strategyId, message: err.message, stopSelf, signal });
     }
     const waitN = config.entry.limitWaitCandles ?? 20;
     const entryLimit = {
@@ -587,7 +632,7 @@ async function tick(rowId, adapter, strategy, log, session, stopSelf) {
       exitResult: { reason: 'EXTERNAL_ORDER', exitDesc: 'Ordem de venda aberta direto na corretora (fora do painel)' },
       result: exitEst,
     });
-    return retireAutoFavorite({ rowId, symbol, log, stopSelf, reason: 'venda executada fora do bot' });
+    return retireOrCooldown({ rowId, symbol, log, stopSelf, config, cMap, state, session, reason: 'venda executada fora do bot' });
   }
 
   if (rulesState.exitBracket) {
@@ -609,7 +654,7 @@ async function tick(rowId, adapter, strategy, log, session, stopSelf) {
           : 'Bracket SL no stop fixo (ordem resting)',
       };
       await recordBracketFill({ rowId, strategy, log, state, session, exitResult, result: bracketResult });
-      return retireAutoFavorite({ rowId, symbol, log, stopSelf, reason: `trade fechado (${exitResult.reason})` });
+      return retireOrCooldown({ rowId, symbol, log, stopSelf, config, cMap, state, session, reason: `trade fechado (${exitResult.reason})` });
     }
 
     // Bracket é FIXA (sem trailing/deriva) — nada a recriar, só espera preencher.
@@ -636,7 +681,7 @@ async function tick(rowId, adapter, strategy, log, session, stopSelf) {
   } catch {
     return { phase: 'BOUGHT' };
   }
-  return retireAutoFavorite({ rowId, symbol, log, stopSelf, reason: `trade fechado (${exitResult.reason})` });
+  return retireOrCooldown({ rowId, symbol, log, stopSelf, config, cMap, state, session, reason: `trade fechado (${exitResult.reason})` });
 }
 
 // ── startSymbol ───────────────────────────────────────────────────────────────
@@ -755,13 +800,14 @@ async function main() {
   // imprime o resumo (total analisado, sinais, contagem de motivos de bloqueio).
   const verbose = process.argv.includes('--verbose');
 
-  // Retoma linhas pending/comprada de um restart — nunca perde uma posição/ordem já aberta na
-  // corretora só porque o processo caiu e voltou.
+  // Retoma linhas pending/comprada/watching (cooldown de reentrada) de um restart — nunca perde
+  // uma posição/ordem já aberta na corretora, nem esquece um cooldown em andamento, só porque o
+  // processo caiu e voltou (ver loadResumableRows).
   let resumable = await loadResumableRows();
   if (symbolFilter) resumable = resumable.filter(r => r.symbol.toUpperCase() === symbolFilter);
   await Promise.all(resumable.map((row, i) => startSymbol(row, COLORS[i % COLORS.length], i)));
   if (resumable.length) {
-    console.log(`🔁 ${resumable.length} moeda(s) retomada(s) do restart (pending/comprada)`);
+    console.log(`🔁 ${resumable.length} moeda(s) retomada(s) do restart (pending/comprada/watching)`);
   }
 
   // Sync manual: se o usuário desativar/apagar o favorito automático de uma moeda pending/

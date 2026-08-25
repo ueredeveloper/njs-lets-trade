@@ -260,6 +260,18 @@ const RSI_MOM_PULLBACK_OPTIONS = [0, -0.1, -0.2, -0.3, -0.4, -0.5, -1, -2, -3, -
 const RSI_MOM_PCT_OPTIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 /** Valores selecionáveis do campo "Larg. mín %" do filtro de largura de banda. */
 const RSI_MOM_BANDWIDTH_OPTIONS = [1, 1.5, 2, 2.5, 3, 4, 5, 8, 10];
+/** Valores selecionáveis do filtro "Nuvem D-1" — % da altura da nuvem (candle 1d anterior),
+ *  contado do fundo (lower) pra cima, que o preço do sinal pode ocupar. 100% = preço só precisa
+ *  estar dentro da nuvem inteira (entre abertura e fechamento de ontem); valores menores
+ *  restringem à parte de baixo dela — ver checkPrevDayCloudFilter em
+ *  backend/utils/analyseRsiThresholdBacktest.js. */
+const RSI_MOM_CLOUD_PCT_OPTIONS = [50, 60, 70, 80, 90, 100];
+/** Valores selecionáveis do filtro "Volume 24h" — mesmo campo do bot ao vivo
+ *  (config.volume.minVolumeUsdt, ver backend/bot/rsi-momentum/marketScanner.js). 0 = desligado. */
+const RSI_MOM_VOLUME_OPTIONS = [0, 1_000_000, 2_000_000, 5_000_000, 30_000_000];
+/** Valores selecionáveis do filtro ADX — mínimo exigido pra considerar tendência confirmada
+ *  (20/25 são os limiares mais citados na literatura pra distinguir tendência de range). */
+const RSI_MOM_ADX_MIN_OPTIONS = [15, 20, 25, 30];
 /** Valores selecionáveis do campo "Janela" — restringe os SINAIS às últimas N horas (ex.:
  *  "moedas que atingiram RSI 70 nas últimas 6/7/8 horas"). 0 = desligado, usa todo o histórico
  *  definido em Candles. */
@@ -276,6 +288,16 @@ const RSI_MOM_DEFAULT_PREFS = {
   bandWidthEnabled: false,
   bandWidthInterval: '5m',
   bandWidthMinPct: 2,
+  prevDayCloudEnabled: false,
+  prevDayCloudMaxPct: 100,
+  minVolumeUsdt: 0,
+  excludeOpenExits: false,
+  prevCandleStopEnabled: false,
+  adxFilterEnabled: false,
+  adxFilterInterval: '1h',
+  adxFilterMinAdx: 25,
+  macdFilterEnabled: false,
+  macdFilterInterval: '1h',
   allCoins: false,
 };
 
@@ -947,6 +969,22 @@ function RsiMomentumStats({ autoCalc }) {
           interval: p.bandWidthInterval,
           minPct: p.bandWidthMinPct,
         } : null,
+        prevDayCloud: p.prevDayCloudEnabled ? {
+          enabled: true,
+          maxPct: p.prevDayCloudMaxPct,
+        } : null,
+        minVolumeUsdt: p.minVolumeUsdt,
+        excludeOpenExits: p.excludeOpenExits,
+        prevCandleStop: p.prevCandleStopEnabled,
+        adxFilter: p.adxFilterEnabled ? {
+          enabled: true,
+          interval: p.adxFilterInterval,
+          minAdx: p.adxFilterMinAdx,
+        } : null,
+        macdFilter: p.macdFilterEnabled ? {
+          enabled: true,
+          interval: p.macdFilterInterval,
+        } : null,
       };
       const data = p.allCoins
         ? await fetchRsiThresholdBacktestMarket(iv, commonOptions)
@@ -1068,14 +1106,31 @@ function RsiMomentumStats({ autoCalc }) {
           </select>
         </div>
 
-        <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.stop_pct')}>
-          <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.stop_pct')}</label>
-          <select className={inp}
-            value={prefs.stopLossPct}
-            onChange={(e) => patchPrefs({ stopLossPct: Number(e.target.value) })}>
-            {RSI_MOM_PCT_OPTIONS.map((v) => <option key={v} value={v}>{v}%</option>)}
-          </select>
+        {/* Stop pelo candle 4h anterior — troca o stop fixo (%) por um preço absoluto derivado
+            do candle de 4h anterior ao sinal (ver JSDoc de options.prevCandleStop e
+            resolvePrevCandleStopPrice em analyseRsiThresholdBacktest.js): candle em alta usa a
+            abertura, candle em baixa usa o fechamento. */}
+        <div className="flex items-center gap-1 shrink-0 pb-1" title={t('stats.tip.prev_candle_stop')}>
+          <span className="hidden md:inline text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.prev_candle_stop')}</span>
+          <button
+            type="button"
+            onClick={() => patchPrefs({ prevCandleStopEnabled: !prefs.prevCandleStopEnabled })}
+            className={`relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${prefs.prevCandleStopEnabled ? 'bg-p4' : 'bg-p3/40'}`}
+          >
+            <span className={`inline-block h-3 w-3 rounded-full bg-white shadow transition-transform ${prefs.prevCandleStopEnabled ? 'translate-x-3' : 'translate-x-0'}`} />
+          </button>
         </div>
+
+        {!prefs.prevCandleStopEnabled && (
+          <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.stop_pct')}>
+            <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.stop_pct')}</label>
+            <select className={inp}
+              value={prefs.stopLossPct}
+              onChange={(e) => patchPrefs({ stopLossPct: Number(e.target.value) })}>
+              {RSI_MOM_PCT_OPTIONS.map((v) => <option key={v} value={v}>{v}%</option>)}
+            </select>
+          </div>
+        )}
 
         <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[56px]" title={t('stats.tip.position_size')}>
           <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.position_size')}</label>
@@ -1143,6 +1198,110 @@ function RsiMomentumStats({ autoCalc }) {
               </select>
             </div>
           </>
+        )}
+
+        {/* Filtro pela nuvem D-1 (candle diário anterior — mesmo indicador do gráfico) */}
+        <div className="flex items-center gap-1 shrink-0 pb-1" title={t('stats.tip.prevday_cloud_filter')}>
+          <span className="hidden md:inline text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.prevday_cloud_filter')}</span>
+          <button
+            type="button"
+            onClick={() => patchPrefs({ prevDayCloudEnabled: !prefs.prevDayCloudEnabled })}
+            className={`relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${prefs.prevDayCloudEnabled ? 'bg-p4' : 'bg-p3/40'}`}
+          >
+            <span className={`inline-block h-3 w-3 rounded-full bg-white shadow transition-transform ${prefs.prevDayCloudEnabled ? 'translate-x-3' : 'translate-x-0'}`} />
+          </button>
+        </div>
+
+        {prefs.prevDayCloudEnabled && (
+          <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.prevday_cloud_max')}>
+            <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.prevday_cloud_max')}</label>
+            <select className={inp}
+              value={prefs.prevDayCloudMaxPct}
+              onChange={(e) => patchPrefs({ prevDayCloudMaxPct: Number(e.target.value) })}>
+              {RSI_MOM_CLOUD_PCT_OPTIONS.map((v) => <option key={v} value={v}>{v}%</option>)}
+            </select>
+          </div>
+        )}
+
+        {/* Filtro de volume 24h (mesmo campo do bot ao vivo, config.volume.minVolumeUsdt) */}
+        <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[56px]" title={t('stats.tip.min_volume')}>
+          <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.min_volume')}</label>
+          <select className={inp}
+            value={prefs.minVolumeUsdt}
+            onChange={(e) => patchPrefs({ minVolumeUsdt: Number(e.target.value) })}>
+            {RSI_MOM_VOLUME_OPTIONS.map((v) => (
+              <option key={v} value={v}>{v === 0 ? 'Desligado' : `>${v / 1_000_000}M`}</option>
+            ))}
+          </select>
+        </div>
+
+        {/* Remove da tabela e dos agregados (P&L, contagens) os sinais ainda "em aberto" (não bateram alvo nem stop até agora) */}
+        <div className="flex items-center gap-1 shrink-0 pb-1" title={t('stats.tip.exclude_open_exits')}>
+          <span className="hidden md:inline text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.exclude_open_exits')}</span>
+          <button
+            type="button"
+            onClick={() => patchPrefs({ excludeOpenExits: !prefs.excludeOpenExits })}
+            className={`relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${prefs.excludeOpenExits ? 'bg-p4' : 'bg-p3/40'}`}
+          >
+            <span className={`inline-block h-3 w-3 rounded-full bg-white shadow transition-transform ${prefs.excludeOpenExits ? 'translate-x-3' : 'translate-x-0'}`} />
+          </button>
+        </div>
+
+        {/* Filtro de força de tendência (ADX de Wilder, período fixo 14) — só o intervalo e o
+            mínimo exigido são configuráveis */}
+        <div className="flex items-center gap-1 shrink-0 pb-1" title={t('stats.tip.adx_filter')}>
+          <span className="hidden md:inline text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.adx_filter')}</span>
+          <button
+            type="button"
+            onClick={() => patchPrefs({ adxFilterEnabled: !prefs.adxFilterEnabled })}
+            className={`relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${prefs.adxFilterEnabled ? 'bg-p4' : 'bg-p3/40'}`}
+          >
+            <span className={`inline-block h-3 w-3 rounded-full bg-white shadow transition-transform ${prefs.adxFilterEnabled ? 'translate-x-3' : 'translate-x-0'}`} />
+          </button>
+        </div>
+
+        {prefs.adxFilterEnabled && (
+          <>
+            <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[56px]">
+              <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.adx_interval')}</label>
+              <select className={inp}
+                value={prefs.adxFilterInterval}
+                onChange={(e) => patchPrefs({ adxFilterInterval: e.target.value })}>
+                {INTERVALS.map((iv) => <option key={iv} value={iv}>{iv}</option>)}
+              </select>
+            </div>
+            <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.adx_min')}>
+              <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.adx_min')}</label>
+              <select className={inp}
+                value={prefs.adxFilterMinAdx}
+                onChange={(e) => patchPrefs({ adxFilterMinAdx: Number(e.target.value) })}>
+                {RSI_MOM_ADX_MIN_OPTIONS.map((v) => <option key={v} value={v}>{v}</option>)}
+              </select>
+            </div>
+          </>
+        )}
+
+        {/* Confirmação de momentum por MACD (12/26/9 padrão) — só o intervalo é configurável */}
+        <div className="flex items-center gap-1 shrink-0 pb-1" title={t('stats.tip.macd_filter')}>
+          <span className="hidden md:inline text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.macd_filter')}</span>
+          <button
+            type="button"
+            onClick={() => patchPrefs({ macdFilterEnabled: !prefs.macdFilterEnabled })}
+            className={`relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${prefs.macdFilterEnabled ? 'bg-p4' : 'bg-p3/40'}`}
+          >
+            <span className={`inline-block h-3 w-3 rounded-full bg-white shadow transition-transform ${prefs.macdFilterEnabled ? 'translate-x-3' : 'translate-x-0'}`} />
+          </button>
+        </div>
+
+        {prefs.macdFilterEnabled && (
+          <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[56px]">
+            <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.macd_interval')}</label>
+            <select className={inp}
+              value={prefs.macdFilterInterval}
+              onChange={(e) => patchPrefs({ macdFilterInterval: e.target.value })}>
+              {INTERVALS.map((iv) => <option key={iv} value={iv}>{iv}</option>)}
+            </select>
+          </div>
         )}
 
         {!prefs.allCoins && <McIntervalSwitch checked={useMcInterval} onChange={handleToggleMc} />}
@@ -1221,6 +1380,22 @@ function RsiMomentumStats({ autoCalc }) {
                   value={`${result.symbolsBlockedByBandWidth}/${result.symbolsScanned}`}
                   highlight="text-amber-500"
                   tooltip={t('stats.tip.blocked_by_width')}
+                />
+              )}
+              {!prefs.allCoins && result.volume && (
+                <SummaryCard
+                  label={t('stats.card.volume_24h')}
+                  value={result.volume.quoteVolume != null ? `$${(result.volume.quoteVolume / 1_000_000).toFixed(1)}M` : '—'}
+                  highlight={result.volume.passed ? 'text-emerald-500' : 'text-red-600'}
+                  tooltip={`mín $${(result.volume.minVolumeUsdt / 1_000_000)}M`}
+                />
+              )}
+              {prefs.allCoins && result.minVolumeUsdt > 0 && (
+                <SummaryCard
+                  label={t('stats.card.blocked_by_volume')}
+                  value={`${result.symbolsBlockedByVolume}/${result.symbolsTotal}`}
+                  highlight="text-amber-500"
+                  tooltip={t('stats.tip.blocked_by_volume')}
                 />
               )}
               {result.lookbackHours > 0 && (

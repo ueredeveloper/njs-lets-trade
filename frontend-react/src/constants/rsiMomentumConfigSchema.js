@@ -3,6 +3,9 @@
 export const RSI_MOMENTUM_ALL_INTERVALS = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '8h', '1d'];
 export const RSI_MOMENTUM_BB_PERIODS = [10, 20, 30];
 export const RSI_MOMENTUM_BB_STD_DEVS = [1, 2, 3];
+/** Valores selecionáveis do filtro entry.prevDayCloud.maxPct — mesmas opções do backtest
+ *  (StatisticsPanel.jsx, RSI_MOM_CLOUD_PCT_OPTIONS). */
+export const RSI_MOMENTUM_CLOUD_PCT_OPTIONS = [50, 60, 70, 80, 90, 100];
 
 export const RSI_MOMENTUM_DEFAULTS = {
   kind: 'rsi_momentum',
@@ -13,12 +16,15 @@ export const RSI_MOMENTUM_DEFAULTS = {
     rsiThreshold: 69,
     priorRsiFilter: { enabled: true, count: 3 },
     pullback: { enabled: true, belowPct: 0.5 },
+    earlyConfirm: { enabled: true, interval: '5m' },
     limitWaitCandles: 20,
     reentryCooldownCandles: 3,
     bandWidth: {
       enabled: true, interval: '5m', period: 20, stdDev: 2, lookback: 300, minPct: 2,
     },
     rsi5mFilter: { enabled: false, threshold: 70 },
+    spikeGuard: { enabled: true, maxMovePct: 5 },
+    prevDayCloud: { enabled: false, maxPct: 100 },
   },
   exit: {
     restingBracket: { enabled: true, targetPct: 5 },

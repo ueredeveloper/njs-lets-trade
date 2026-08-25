@@ -86,6 +86,7 @@ const INDICATOR_GROUPS = [
   { id: 'ichimoku', label: 'Ichi',  color: '#60a5fa', tipKey: 'chart.tip.ichimoku' },
   { id: 'sr',       label: 'S/R',   color: '#facc15', tipKey: 'chart.tip.sr' },
   { id: 'pphl',     label: 'PPHL',  color: '#2dd4bf', tipKey: 'chart.tip.pphl' },
+  { id: 'prevDayCloud', label: 'D-1', color: '#94a3b8', tipKey: 'chart.tip.prevDayCloud' },
   { id: 'rsi',      label: 'RSI',   color: '#a78bfa', tipKey: 'chart.tip.rsi' },
   { id: 'chopZone', label: 'CHOP',  color: '#f59e0b', tipKey: 'chart.tip.chopZone' },
 ];
@@ -621,6 +622,66 @@ async function fetchPivotPointsHighLowPoints(symbol, interval, source, limit) {
     body: JSON.stringify(candles),
   }).then(r => r.json());
   return Array.isArray(pivots) ? pivots : [];
+}
+
+/**
+ * Candles DIÁRIOS nativos (1d) da Binance/Gate pra nuvem "D-1" — de propósito o candle NATIVO
+ * (janela UTC), não um agregado por dia de Brasília: precisa bater exatamente com o candle "1d"
+ * que o usuário vê na própria Binance/Gate (cor e valores), mesmo que isso desloque o início
+ * visual de cada degrau pra 21:00 (não meia-noite) no horário de Brasília — confirmado com dados
+ * reais da ONTUSDT (dia 23/08 nativo: abertura 0.04786, fechamento 0.04827, alta; batia com o
+ * app só quando calculado sobre o candle nativo, não sobre um agregado de 1h por dia BRT).
+ */
+async function fetchPrevDayCloudCandles(symbol, source, limit) {
+  const srcParam = source === 'gate' ? '&source=gate' : '';
+  const candles = await fetch(
+    `/services/candles/?symbol=${symbol}&limit=${limit}&interval=1d${srcParam}`,
+  ).then(r => r.json());
+  return Array.isArray(candles) ? candles : [];
+}
+
+/** Quantos candles diários buscar pra cobrir a janela do gráfico principal (chartInterval ×
+ *  candleCount) + folga de 3 dias (o dia anterior ao mais antigo visível também precisa ter
+ *  nuvem). Cresce conforme o usuário arrasta o gráfico pra trás (candleCount sobe via
+ *  onNeedOlderCandles). Teto de 500 dias — bem além do que faz sentido arrastar na prática. */
+function computePrevDayCloudFetchLimit(chartInterval, candleCount) {
+  const chartMs = INTERVAL_MS[chartInterval] ?? 900_000;
+  const dayMs = INTERVAL_MS['1d'] ?? 86_400_000;
+  const spanCandles = Math.max(Number(candleCount) || 0, DEFAULT_CANDLE_LIMIT);
+  const spanDays = Math.ceil((spanCandles * chartMs) / dayMs);
+  return Math.min(500, Math.max(10, spanDays + 3));
+}
+
+/**
+ * Degraus da nuvem D-1: cada candle diário nativo i usa a abertura/fechamento do candle diário
+ * i-1 como faixa (upper/lower) e cor (verde se o dia anterior fechou em alta, vermelho se
+ * fechou em baixa), valendo do início do candle i até o início do candle i+1 (ou até "agora",
+ * endTime null, pro candle mais recente/ainda em formação). Arrastando o gráfico pra trás, cada
+ * dia antigo mostra a nuvem que valia NAQUELE dia — sem isso, uma única faixa fixa (D-1 de hoje)
+ * ficaria esticada por trás de todo o histórico, mostrando o valor errado nos dias antigos.
+ */
+function buildPrevDayCloudSegments(dailyCandles) {
+  if (!Array.isArray(dailyCandles) || dailyCandles.length < 2) return [];
+  const segments = [];
+  for (let i = 1; i < dailyCandles.length; i++) {
+    const prev = dailyCandles[i - 1];
+    const cur = dailyCandles[i];
+    const next = dailyCandles[i + 1];
+    const openPrice = Number(prev.open);
+    const closePrice = Number(prev.close);
+    const startTime = Number(cur.openTime);
+    if (!Number.isFinite(openPrice) || !Number.isFinite(closePrice) || !Number.isFinite(startTime)) continue;
+    segments.push({
+      startTime,
+      endTime: next ? Number(next.openTime) : null,
+      openPrice,
+      closePrice,
+      upper: Math.max(openPrice, closePrice),
+      lower: Math.min(openPrice, closePrice),
+      bullish: closePrice >= openPrice,
+    });
+  }
+  return segments;
 }
 
 /** Choppiness Index (14) — intervalo próprio (independente do gráfico), mesmo padrão do S/R/PPHL. */
@@ -3317,6 +3378,8 @@ export default function CandlestickChart() {
   const [pphlInterval, setPphlInterval] = useState(() => uiPrefs.pphlIntervalDefault ?? DEFAULT_PPHL_INTERVAL);
   const [pphlCache, setPphlCache] = useState({});
   const [_pphlLoading, setPphlLoading] = useState(false);
+  // Cache por símbolo (não por intervalo — a nuvem D-1 é sempre 1d, sem picker próprio).
+  const [prevDayCloudCache, setPrevDayCloudCache] = useState({});
   const [chopInterval, setChopInterval] = useState(() => uiPrefs.chopIntervalDefault ?? DEFAULT_CHOP_INTERVAL);
   const [chopCache, setChopCache] = useState({});
   const [_chopLoading, setChopLoading] = useState(false);
@@ -4077,6 +4140,34 @@ export default function CandlestickChart() {
   }, [
     selectedChart?.symbol, selectedChart?.interval, selectedChart?.source, selectedChart?.candlesticks,
     currentInterval, overlayFetchLimit, displayCandleCount, pphlShown, pphlInterval,
+  ]);
+
+  // Busca os candles diários pra nuvem D-1 — botão "D-1" do painel. Sempre 1d, sem picker de
+  // intervalo próprio (diferente do S/R/PPHL). Refaz quando o gráfico carrega mais candles
+  // (arrastar pra trás via onNeedOlderCandles) pra cobrir os dias mais antigos também — ver
+  // computePrevDayCloudFetchLimit.
+  const prevDayCloudShown = activeIndicators.includes('prevDayCloud') && chartPanelButtons.prevDayCloud !== false;
+  useEffect(() => {
+    if (!selectedChart?.symbol || !prevDayCloudShown) return undefined;
+    const key = selectedChart.symbol;
+    const limit = computePrevDayCloudFetchLimit(
+      selectedChart.interval ?? currentInterval,
+      Math.max(displayCandleCount, selectedChart.candlesticks?.length ?? 0, DEFAULT_CANDLE_LIMIT),
+    );
+    let cancelled = false;
+    (async () => {
+      try {
+        const candles = await fetchPrevDayCloudCandles(selectedChart.symbol, selectedChart.source, limit);
+        if (!cancelled) setPrevDayCloudCache((prev) => ({ ...prev, [key]: candles }));
+      } catch (e) {
+        console.warn('[prevDayCloud]', key, e.message);
+        if (!cancelled) setPrevDayCloudCache((prev) => ({ ...prev, [key]: [] }));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [
+    selectedChart?.symbol, selectedChart?.interval, selectedChart?.source, selectedChart?.candlesticks,
+    currentInterval, displayCandleCount, prevDayCloudShown,
   ]);
 
   // Busca o Choppiness Index — intervalo próprio (independente do gráfico), mesmo padrão do S/R/PPHL.
@@ -5023,6 +5114,12 @@ export default function CandlestickChart() {
     return { interval: pphlInterval, points: pphlCache[pphlInterval] ?? [] };
   }, [pphlShown, pphlInterval, pphlCache]);
 
+  const chartPrevDayCloudConfig = useMemo(() => {
+    if (!prevDayCloudShown || !selectedChart?.symbol) return null;
+    const segments = buildPrevDayCloudSegments(prevDayCloudCache[selectedChart.symbol] ?? []);
+    return segments.length ? { segments } : null;
+  }, [prevDayCloudShown, selectedChart?.symbol, prevDayCloudCache]);
+
   const chartChopConfig = useMemo(() => {
     if (!chopShown) return null;
     return { interval: chopInterval, points: chopCache[chopInterval] ?? [] };
@@ -5396,6 +5493,7 @@ export default function CandlestickChart() {
               bollingerConfigs={chartBollingerConfigs}
               srConfig={chartSrConfig}
               pphlConfig={chartPphlConfig}
+              prevDayCloudConfig={chartPrevDayCloudConfig}
               rsi={selectedChart.rsi}
               chopConfig={chartChopConfig}
               emaPersistCloudData={chartEmaPersistCloudData}

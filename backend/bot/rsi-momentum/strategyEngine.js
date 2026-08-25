@@ -18,6 +18,15 @@ const BB_MIN_CANDLES_PADDING = 5;
 // sinal (diferente do bandWidth, que deixa o intervalo configurável).
 const RSI5M_INTERVAL = '5m';
 const RSI5M_WARMUP_PADDING = 10;
+// entry.earlyConfirm só precisa dos últimos candles fechados do intervalo curto pra achar o
+// checkpoint dentro da janela do candle de entry.interval ainda em formação — não calcula RSI
+// nesse intervalo, só lê o preço de fechamento, então o limite pode ser pequeno.
+const EARLY_CONFIRM_WARMUP_PADDING = 10;
+// Intervalo fixo do filtro entry.prevDayCloud — sempre 1d, sem seletor próprio (o "dia anterior"
+// só faz sentido em 1d). 5 candles bastam pra sempre ter pelo menos 2 fechados (o de ontem e o
+// anterior a ele) mesmo com algum atraso/gap pontual do candle diário.
+const PREV_DAY_CLOUD_INTERVAL = '1d';
+const PREV_DAY_CLOUD_LIMIT = 5;
 
 function computeRsiSeries(closedCandles) {
     const closes = closedCandles.map(c => parseFloat(c.close));
@@ -44,6 +53,14 @@ function getRequiredSpecs(config) {
 
     if (entry.rsi5mFilter?.enabled) {
         add(RSI5M_INTERVAL, RSI_PERIOD + RSI5M_WARMUP_PADDING);
+    }
+
+    if (entry.earlyConfirm?.enabled) {
+        add(entry.earlyConfirm.interval, EARLY_CONFIRM_WARMUP_PADDING);
+    }
+
+    if (entry.prevDayCloud?.enabled) {
+        add(PREV_DAY_CLOUD_INTERVAL, PREV_DAY_CLOUD_LIMIT);
     }
 
     return [...specs.entries()].map(([interval, lim]) => ({ interval, limit: lim }));
@@ -96,9 +113,101 @@ function checkRsi5mFilter(config, cMap) {
 }
 
 /**
- * Sinal de entrada: RSI(14) do entry.interval cruza para CIMA de entry.rsiThreshold no último
- * candle FECHADO — mesma detecção do backtest (ver analyseRsiThresholdBacktest.js). Sem
- * pullback (desligado), a entrada é a mercado no preço do fechamento (limitPrice: null). Com
+ * Ligado por padrão — recusa o sinal se o PRÓPRIO candle do cruzamento (abertura→fechamento) já
+ * subiu mais que maxMovePct%. Sem isso, um candle-pico (ex.: STORJUSDT 24/08/2026, +11% sozinho
+ * num candle de 15m) passa no cruzamento de RSI normalmente, e o pullback de belowPct% (tipicamente
+ * <1%) só protege do fechamento já inflado — a compra sai perto do topo do próprio candle do sinal,
+ * não do preço de antes do pump. Filtra pelo candle em si, não pela série — barato, sem lookback.
+ */
+function checkSpikeGuardFilter(config, signalCandle) {
+    const sg = config.entry?.spikeGuard;
+    if (!sg?.enabled) return { allowed: true };
+
+    const open = parseFloat(signalCandle.open);
+    if (!(open > 0)) return { allowed: true };
+
+    const movePct = Math.round(((parseFloat(signalCandle.close) - open) / open) * 10000) / 100;
+    if (movePct > sg.maxMovePct) {
+        return { allowed: false, reason: 'SPIKE_TOO_LARGE', movePct, maxMovePct: sg.maxMovePct };
+    }
+    return { allowed: true, movePct, maxMovePct: sg.maxMovePct };
+}
+
+/**
+ * Filtro opcional (desligado por padrão — ver comentário em tradeConfigSchema.js): exige que o
+ * preço do sinal esteja DENTRO da nuvem D-1 — banda entre abertura/fechamento do candle DIÁRIO
+ * (1d) nativo imediatamente anterior ao dia do sinal, mesmo indicador do gráfico (ver
+ * buildPrevDayCloudSegments em frontend-react/src/components/CandlestickChart.jsx) e do backtest
+ * (ver checkPrevDayCloudFilter em backend/utils/analyseRsiThresholdBacktest.js). A faixa aceita é
+ * [lower, lower + maxPct% × (upper-lower)] — não importa se o dia anterior fechou em alta ou
+ * baixa. maxPct=100 exige só estar dentro da nuvem inteira; valores menores restringem à parte de
+ * baixo dela. Sem candle diário anterior suficiente ainda (favorito recém-criado), libera —
+ * fail-open, como os demais filtros baseados em série própria.
+ */
+function checkPrevDayCloudFilter(config, cMap, signalCandle) {
+    const pdc = config.entry?.prevDayCloud;
+    if (!pdc?.enabled) return { allowed: true };
+
+    // closedCandlesOnly já descarta o candle diário de HOJE (ainda em formação) — diferente do
+    // backtest (que busca um histórico com vários sinais passados e por isso precisa achar o
+    // candle "anterior ao do sinal" dentro do array inteiro), aqui o sinal é sempre "agora": o
+    // último candle diário FECHADO já É a referência de ontem, sem precisar de nenhum índice-1.
+    const closed = closedCandlesOnly(cMap[PREV_DAY_CLOUD_INTERVAL] ?? []);
+    if (!closed.length) return { allowed: true };
+
+    const prevDaily = closed[closed.length - 1];
+    const open = parseFloat(prevDaily.open);
+    const close = parseFloat(prevDaily.close);
+    if (!(open > 0) || !(close > 0)) return { allowed: true };
+
+    const lower = Math.min(open, close);
+    const upper = Math.max(open, close);
+    if (upper <= lower) return { allowed: true }; // nuvem "achatada" — sem restrição possível
+
+    const price = parseFloat(signalCandle.close);
+    const limit = lower + (pdc.maxPct / 100) * (upper - lower);
+    if (price < lower || price > limit) {
+        return { allowed: false, reason: 'PREVDAY_CLOUD_OUT_OF_RANGE', price, lower, upper, limit, maxPct: pdc.maxPct };
+    }
+    return { allowed: true, price, lower, upper, limit, maxPct: pdc.maxPct };
+}
+
+/**
+ * Checkpoint de confirmação adiantada: procura, dentro do intervalo curto (entry.earlyConfirm.
+ * interval, ex.: 5m), o candle já FECHADO mais recente cujo openTime cai dentro da janela do
+ * candle de entry.interval que ainda está se formando (openTime >= forming.openTime). Devolve
+ * null se nenhum candle curto fechou ainda dentro dessa janela (início da janela, sem dado novo
+ * pra adiantar nada). É sempre o fechamento de um candle real — nunca um preço em movimento.
+ */
+function findEarlyConfirmCheckpoint(entry, cMap, forming) {
+    if (!entry.earlyConfirm?.enabled || !forming) return null;
+    const confirmIv = entry.earlyConfirm.interval;
+    if (intervalMs(confirmIv) >= intervalMs(entry.interval)) return null;
+
+    const confirmClosed = closedCandlesOnly(cMap[confirmIv] ?? []);
+    const checkpoints = confirmClosed.filter(c => Number(c.openTime) >= Number(forming.openTime));
+    const checkpoint = checkpoints[checkpoints.length - 1];
+    return checkpoint ?? null;
+}
+
+/**
+ * Sinal de entrada: RSI(14) do entry.interval cruza para CIMA de entry.rsiThreshold — mesma
+ * detecção do backtest (ver analyseRsiThresholdBacktest.js), com uma confirmação ADIANTADA
+ * opcional (entry.earlyConfirm, ligado por padrão): em vez de só reavaliar o RSI quando o candle
+ * de entry.interval fecha (podendo levar até `interval` inteiro, ex. 15min), recalcula o mesmo
+ * RSI de entry.interval usando o fechamento do candle mais recente do intervalo curto (checkpoint
+ * de earlyConfirm.interval, ex. 5m) como preço provisório do candle ainda em formação — se isso já
+ * cruza o threshold, o sinal dispara ali (2-3 checkpoints antes do fechamento cheio), sem esperar
+ * o candle inteiro fechar. O threshold e o intervalo do RSI continuam os mesmos (entry.interval);
+ * só o MOMENTO em que a confirmação é aceita muda. Sem checkpoint disponível ainda (início da
+ * janela) ou com earlyConfirm desligado, cai no comportamento original (só candle FECHADO).
+ *
+ * Caso real que motivou isso: STORJUSDT 24/08/2026, candle de 15m que só terminou de cruzar no
+ * próprio fechamento, já tendo subido +11% sozinho — adiantar pro 1º/2º checkpoint de 5m dentro
+ * da janela pega o cruzamento mais cedo, antes do candle de 15m ter subido tudo que subiu (ver
+ * também checkSpikeGuardFilter, que passa a comparar contra esse preço de confirmação adiantada).
+ *
+ * Sem pullback (desligado), a entrada é a mercado no preço de confirmação (limitPrice: null). Com
  * pullback (padrão), `limitPrice` é o preço-limite (signalPrice × (1 − belowPct/100)) — o
  * chamador arma uma ordem GTC nesse preço e espera reteste minuto a minuto (ver
  * checkEntryLimitExpired).
@@ -108,32 +217,63 @@ function evaluateEntrySignal(config, cMap) {
     if (entry.enabled === false) return { allowed: false, reason: 'ENTRY_OFF' };
 
     const iv = entry.interval;
-    const closed = closedCandlesOnly(cMap[iv] ?? []);
+    const raw = cMap[iv] ?? [];
+    const closed = closedCandlesOnly(raw);
     if (closed.length < RSI_PERIOD + 2) return { allowed: false, reason: 'INSUFFICIENT_DATA' };
 
     const priorCount = entry.priorRsiFilter?.enabled
         ? Math.max(1, Math.round(Number(entry.priorRsiFilter.count ?? 3)))
         : 0;
-    const rsiValues = computeRsiSeries(closed);
-    if (rsiValues.length < Math.max(2, priorCount + 1)) return { allowed: false, reason: 'INSUFFICIENT_DATA' };
+    const rsiClosed = computeRsiSeries(closed);
+    if (rsiClosed.length < Math.max(2, priorCount + 1)) return { allowed: false, reason: 'INSUFFICIENT_DATA' };
 
-    const last = rsiValues[rsiValues.length - 1];
-    const prev = rsiValues[rsiValues.length - 2];
     const threshold = entry.rsiThreshold;
+    const lastClosedRsi = rsiClosed[rsiClosed.length - 1];
+    const prevClosedRsi = rsiClosed[rsiClosed.length - 2];
 
-    if (!(prev < threshold && last >= threshold)) {
+    // Caso 1 (original): o candle de entry.interval JÁ fechou com o cruzamento confirmado.
+    let crossed = prevClosedRsi < threshold && lastClosedRsi >= threshold;
+    let last = lastClosedRsi;
+    let signalCandle = closed[closed.length - 1];
+    let priorWindow = rsiClosed.slice(rsiClosed.length - 1 - priorCount, rsiClosed.length - 1);
+    let earlyCheckpoint = null;
+
+    // Caso 2 (adiantado): candle de entry.interval ainda se formando, mas já tem checkpoint de
+    // earlyConfirm.interval fechado dentro da janela — só tenta se o Caso 1 ainda não confirmou.
+    if (!crossed) {
+        const forming = raw[raw.length - 1];
+        const checkpoint = findEarlyConfirmCheckpoint(entry, cMap, forming);
+        if (checkpoint && lastClosedRsi < threshold) {
+            const closesWithCheckpoint = [...closed.map(c => parseFloat(c.close)), parseFloat(checkpoint.close)];
+            const rsiWithCheckpoint = RSI.calculate({ values: closesWithCheckpoint, period: RSI_PERIOD });
+            const earlyRsi = rsiWithCheckpoint[rsiWithCheckpoint.length - 1];
+            if (earlyRsi != null && earlyRsi >= threshold) {
+                crossed = true;
+                last = earlyRsi;
+                signalCandle = { open: forming.open, close: checkpoint.close, openTime: forming.openTime };
+                priorWindow = rsiClosed.slice(rsiClosed.length - priorCount, rsiClosed.length);
+                earlyCheckpoint = { openTime: Number(checkpoint.openTime), price: parseFloat(checkpoint.close) };
+            }
+        }
+    }
+
+    if (!crossed) {
         return { allowed: false, reason: 'RSI_NOT_CROSSING', rsi: last, threshold };
     }
 
     // Confirma que não é apenas um repique de volatilidade: os `priorCount` VALORES de RSI
-    // anteriores ao cruzamento (prev + os de antes dele — não candles) precisam ter ficado <=
-    // threshold. Evita entrar quando o RSI está oscilando em torno do limiar (cruza, recua,
-    // cruza de novo) — desligável em entry.priorRsiFilter.
+    // anteriores ao cruzamento (não candles) precisam ter ficado <= threshold. Evita entrar
+    // quando o RSI já estava oscilando em torno do limiar (cruza, recua, cruza de novo) —
+    // desligável em entry.priorRsiFilter.
     if (priorCount > 0) {
-        const priorWindow = rsiValues.slice(rsiValues.length - 1 - priorCount, rsiValues.length - 1);
         if (!priorWindow.every(v => v <= threshold)) {
             return { allowed: false, reason: 'RSI_VOLATILE_NEAR_THRESHOLD', rsi: last, threshold, priorWindow };
         }
+    }
+
+    const spikeGuardCheck = checkSpikeGuardFilter(config, signalCandle);
+    if (!spikeGuardCheck.allowed) {
+        return { allowed: false, reason: spikeGuardCheck.reason, rsi: last, threshold, spikeGuard: spikeGuardCheck };
     }
 
     const bandWidthCheck = checkBandWidthFilter(config, cMap);
@@ -146,15 +286,20 @@ function evaluateEntrySignal(config, cMap) {
         return { allowed: false, reason: rsi5mCheck.reason, rsi: last, threshold, rsi5m: rsi5mCheck };
     }
 
-    const signalCandle = closed[closed.length - 1];
+    const prevDayCloudCheck = checkPrevDayCloudFilter(config, cMap, signalCandle);
+    if (!prevDayCloudCheck.allowed) {
+        return { allowed: false, reason: prevDayCloudCheck.reason, rsi: last, threshold, prevDayCloud: prevDayCloudCheck };
+    }
+
     const signalPrice = parseFloat(signalCandle.close);
     const signalOpenTime = Number(signalCandle.openTime);
     const pullbackPct = entry.pullback?.enabled ? Math.max(0.01, entry.pullback.belowPct) : 0;
     const limitPrice = pullbackPct > 0 ? signalPrice * (1 - pullbackPct / 100) : null;
 
+    const confirmNote = earlyCheckpoint ? ` — confirmação adiantada (checkpoint ${entry.earlyConfirm.interval})` : '';
     const entryDesc = pullbackPct > 0
-        ? `RSI(${RSI_PERIOD}) ${iv} cruzou ${threshold} (${last.toFixed(2)}) — pullback -${pullbackPct}%`
-        : `RSI(${RSI_PERIOD}) ${iv} cruzou ${threshold} (${last.toFixed(2)})`;
+        ? `RSI(${RSI_PERIOD}) ${iv} cruzou ${threshold} (${last.toFixed(2)})${confirmNote} — pullback -${pullbackPct}%`
+        : `RSI(${RSI_PERIOD}) ${iv} cruzou ${threshold} (${last.toFixed(2)})${confirmNote}`;
 
     return {
         allowed: true,
@@ -164,6 +309,9 @@ function evaluateEntrySignal(config, cMap) {
         threshold,
         bandWidth: bandWidthCheck,
         rsi5m: rsi5mCheck,
+        spikeGuard: spikeGuardCheck,
+        prevDayCloud: prevDayCloudCheck,
+        earlyCheckpoint,
         signalOpenTime,
         signalPrice,
         entryDesc,
@@ -278,6 +426,7 @@ module.exports = {
     getRequiredSpecs,
     checkBandWidthFilter,
     checkRsi5mFilter,
+    checkPrevDayCloudFilter,
     evaluateEntrySignal,
     evaluateExit,
     checkEntryLimitExpired,

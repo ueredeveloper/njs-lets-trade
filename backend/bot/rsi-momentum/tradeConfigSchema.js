@@ -39,6 +39,15 @@ const RSI_MOMENTUM_DEFAULTS = {
      *  assim que o RSI confirma o cruzamento (candle fechado). */
     pullback: { enabled: true, belowPct: 0.5 },
     limitWaitCandles: 20,
+    /** Ligado por padrão — confirmação ADIANTADA do cruzamento: em vez de só reavaliar o RSI de
+     *  entry.interval quando esse candle fecha (podendo levar até `interval` inteiro), recalcula
+     *  o mesmo RSI usando o fechamento do candle mais recente de `interval` (aqui, um intervalo
+     *  mais curto, ex. 5m) já fechado DENTRO da janela do candle de entry.interval ainda em
+     *  formação como preço provisório — se isso já cruza rsiThreshold, o sinal dispara ali (2-3
+     *  checkpoints antes do fechamento cheio). O threshold e o RSI continuam sendo os de
+     *  entry.interval — só o momento em que a confirmação é aceita adianta. Ver
+     *  findEarlyConfirmCheckpoint/evaluateEntrySignal em strategyEngine.js. */
+    earlyConfirm: { enabled: true, interval: '5m' },
     /** Após STOP_LOSS, espera N candles fechados do entry.interval antes de nova compra
      *  (evita reentrar no mesmo dump). Saída no alvo libera na hora. 0 = sem espera. */
     reentryCooldownCandles: 3,
@@ -56,6 +65,19 @@ const RSI_MOMENTUM_DEFAULTS = {
      *  alto confirma que o momentum de curtíssimo prazo está junto com o sinal do entry.interval,
      *  em vez de ser só o 15m cruzando sozinho. */
     rsi5mFilter: { enabled: false, threshold: 70 },
+    /** Ligado por padrão — recusa o sinal se o PRÓPRIO candle do cruzamento (abertura→fechamento)
+     *  já subiu mais que maxMovePct%. Caso real que motivou o filtro: STORJUSDT 24/08/2026, candle
+     *  de 15m que subiu +11% sozinho — o pullback de belowPct% (tipicamente <1%) protege só do
+     *  fechamento já inflado, não do preço de antes do pump, então a compra saiu perto do topo do
+     *  próprio candle do sinal. Ver checkSpikeGuardFilter em strategyEngine.js. */
+    spikeGuard: { enabled: true, maxMovePct: 5 },
+    /** Desligado por padrão (novo, ainda sem validação com trades reais — mesma cautela do
+     *  rsi5mFilter). Exige que o preço do sinal esteja DENTRO da nuvem D-1 (banda entre
+     *  abertura/fechamento do candle DIÁRIO nativo anterior ao dia do sinal — mesmo indicador do
+     *  gráfico e do backtest, ver checkPrevDayCloudFilter em strategyEngine.js), na faixa
+     *  [lower, lower + maxPct% × altura]. maxPct=100 (padrão) só exige estar dentro da nuvem
+     *  inteira; valores menores restringem à parte de baixo dela. Sempre intervalo 1d, fixo. */
+    prevDayCloud: { enabled: false, maxPct: 100 },
   },
 
   exit: {
@@ -131,6 +153,36 @@ function normalizeRsi5mFilter(block) {
   };
 }
 
+function normalizeEarlyConfirm(block) {
+  const d = RSI_MOMENTUM_DEFAULTS.entry.earlyConfirm;
+  const src = block ?? {};
+  return {
+    enabled: src.enabled !== false,
+    // Precisa ser mais curto que entry.interval pra fazer sentido como checkpoint — se não for
+    // (config incoerente), evaluateEntrySignal (ver findEarlyConfirmCheckpoint) simplesmente não
+    // encontra checkpoint e cai no comportamento original (só candle fechado), sem quebrar nada.
+    interval: normalizeInterval(src.interval, d.interval),
+  };
+}
+
+function normalizeSpikeGuard(block) {
+  const d = RSI_MOMENTUM_DEFAULTS.entry.spikeGuard;
+  const src = block ?? {};
+  return {
+    enabled: src.enabled !== false,
+    maxMovePct: Math.max(0.5, Math.min(50, Number(src.maxMovePct ?? d.maxMovePct))),
+  };
+}
+
+function normalizePrevDayCloud(block) {
+  const d = RSI_MOMENTUM_DEFAULTS.entry.prevDayCloud;
+  const src = block ?? {};
+  return {
+    enabled: src.enabled === true,
+    maxPct: Math.max(1, Math.min(100, Number(src.maxPct ?? d.maxPct))),
+  };
+}
+
 function normalizeEntry(block) {
   const d = RSI_MOMENTUM_DEFAULTS.entry;
   const src = block ?? {};
@@ -140,6 +192,7 @@ function normalizeEntry(block) {
     rsiThreshold: Math.max(50, Math.min(95, Number(src.rsiThreshold ?? d.rsiThreshold))),
     priorRsiFilter: normalizePriorRsiFilter(src.priorRsiFilter),
     pullback: normalizePullback(src.pullback),
+    earlyConfirm: normalizeEarlyConfirm(src.earlyConfirm),
     limitWaitCandles: Math.max(1, Math.min(300, Math.round(Number(
       src.limitWaitCandles ?? d.limitWaitCandles,
     )))),
@@ -148,6 +201,8 @@ function normalizeEntry(block) {
     )))),
     bandWidth: normalizeBandWidth(src.bandWidth),
     rsi5mFilter: normalizeRsi5mFilter(src.rsi5mFilter),
+    spikeGuard: normalizeSpikeGuard(src.spikeGuard),
+    prevDayCloud: normalizePrevDayCloud(src.prevDayCloud),
   };
 }
 

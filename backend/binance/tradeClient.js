@@ -61,7 +61,7 @@ function binanceSign(params, secretKey) {
   return `${qs}&signature=${sig}`;
 }
 
-async function binanceRequest(method, endpoint, params = {}) {
+async function binanceRequestOnce(method, endpoint, params) {
   const apiKey    = process.env.BINANCE_API_KEY;
   const secretKey = process.env.BINANCE_SECRET_KEY;
   const ts        = Date.now() + binanceClockOffsetMs;
@@ -77,6 +77,25 @@ async function binanceRequest(method, endpoint, params = {}) {
   try { data = JSON.parse(text); } catch { data = text; }
   if (!res.ok) throw new Error(`Binance ${method} ${endpoint} ${res.status}: ${data?.msg ?? text}`);
   return data;
+}
+
+// Relógio do Windows deste host derrapa dezenas de segundos entre resyncs (ver seção "Gate.io
+// clock synchronization" do CLAUDE.md — mesmo sintoma, outra corretora) e o w32tm às vezes
+// corrige o relógio DE REPENTE no meio da hora, bem antes do próximo setInterval(syncBinanceClock,
+// 60min): o offset em memória, calculado pra um relógio ainda atrasado, passa a SOMAR em cima de
+// um relógio já corrigido e o timestamp assinado fica adiantado — "Timestamp for this request was
+// Nms ahead of the server's time" (visto em produção nos polls de bracket TP/SL do rsi-momentum,
+// repetindo por ~50min sem se autocorrigir). Em vez de esperar o resync horário, ressincroniza e
+// tenta de novo uma única vez ao ver esse erro específico — não intercepta outros 400 (ex.: LOT_SIZE,
+// insufficient balance) que resync nenhum resolve.
+async function binanceRequest(method, endpoint, params = {}) {
+  try {
+    return await binanceRequestOnce(method, endpoint, params);
+  } catch (err) {
+    if (!/Timestamp for this request/i.test(err.message)) throw err;
+    await syncBinanceClock();
+    return binanceRequestOnce(method, endpoint, params);
+  }
 }
 
 async function binanceMarketBuy(symbol, usdtAmount) {
