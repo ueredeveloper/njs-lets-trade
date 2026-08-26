@@ -644,8 +644,9 @@ async function fetchPrevDayCloudCandles(symbol, source, limit, interval = '1d') 
 }
 
 /** Quantos candles (1d ou 3d, ver interval) buscar pra cobrir a janela do gráfico principal
- *  (chartInterval × candleCount) + folga de windowSize+3 candles (a janela de windowSize
- *  candles anteriores ao mais antigo visível também precisa estar completa pra ter nuvem — ver
+ *  (chartInterval × candleCount) + folga de 2×windowSize+3 candles (o bloco de windowSize
+ *  candles anterior ao mais antigo visível também precisa estar completo pra ter nuvem, e o
+ *  alinhamento à grade fixa pode "desperdiçar" até windowSize-1 candles no início — ver
  *  buildPrevDayCloudSegments). Cresce conforme o usuário arrasta o gráfico pra trás (candleCount
  *  sobe via onNeedOlderCandles). Teto de 500 candles — bem além do que faz sentido arrastar na
  *  prática. */
@@ -654,38 +655,60 @@ function computePrevDayCloudFetchLimit(chartInterval, candleCount, interval = '1
   const cloudMs = INTERVAL_MS[interval] ?? 86_400_000;
   const spanCandles = Math.max(Number(candleCount) || 0, DEFAULT_CANDLE_LIMIT);
   const spanSteps = Math.ceil((spanCandles * chartMs) / cloudMs);
-  return Math.min(500, Math.max(10, spanSteps + windowSize + 3));
+  return Math.min(500, Math.max(10, spanSteps + windowSize * 2 + 3));
 }
 
 /**
- * Degraus da nuvem D-1: cada candle nativo i usa como VALOR (upper/lower) o "envelope" dos
- * últimos `windowSize` candles ANTERIORES a ele — min/max de todos os opens e closes dessa janela
- * (não só o candle i-1), NUNCA incluindo o próprio candle i (evita que o preço do sinal "vaze"
- * pro cálculo do próprio filtro que o usa, ver checkPrevDayCloudFilter no bot/backtest).
- * windowSize=1 (padrão) é exatamente o comportamento original: upper/lower = abertura/fechamento
- * do único candle anterior. Cor (bullish) compara a abertura do candle mais antigo da janela com
- * o fechamento do mais recente — direção do trecho inteiro, não só de um candle.
+ * Degraus da nuvem D-1: a faixa DESENHADA de cada degrau cobre exatamente 1 candle nativo do
+ * intervalo D-1 escolhido (ex.: 4h → degraus de 4h) — largura igual ao passo com que o VALOR
+ * muda de verdade (ver abaixo). Contados de trás pra frente a partir do candle mais recente — o
+ * degrau mais novo sempre termina exatamente no candle mais recente (em formação), então a
+ * largura não depende de quantos candles foram buscados (arrastar o gráfico pra trás só soma
+ * mais degraus antigos).
  *
- * Faixa DESENHADA: sempre a largura de 1 candle (do início do candle i até o início do candle i+1,
- * ou até "agora" com endTime null pro candle mais recente ainda em formação) — independente de
- * windowSize. Isso garante que os degraus nunca se sobrepõem: um sempre termina exatamente onde o
- * próximo começa, só o VALOR (envelope) muda a cada passo conforme windowSize. Arrastando o
- * gráfico pra trás, cada trecho antigo mostra a nuvem que valia NAQUELE momento — sem isso, uma
- * única faixa fixa (D-1 de hoje) ficaria esticada por trás de todo o histórico, mostrando o valor
- * errado nos candles antigos.
+ * IMPORTANTE: a largura desenhada precisa ser igual ao passo do valor (1 candle) — usar
+ * `windowSize - 1` aqui (como antes) desalinha os dois depois de poucos degraus: o valor anda 1
+ * candle por degrau, mas o desenho andava `windowSize-1` candles por degrau, então a partir do
+ * 2º degrau pra trás o índice do VALOR passa a ficar à FRENTE do índice do próprio degrau
+ * desenhado — o bloco acaba mostrando candles do FUTURO em vez do passado (caso real: ZRO,
+ * bloco desenhado em 18/08 21:00 mostrando candles de 22/08, ver conversa). Ver
+ * resolvePrevDayCloud em backend/utils/analyseRsiThresholdBacktest.js, que usa a mesma ideia
+ * (1 degrau = 1 candle) — gráfico e backtest/bot ficam consistentes.
+ *
+ * O VALOR (upper/lower/open/close) é uma janela de `windowSize` candles JÁ FECHADOS — pro degrau
+ * k passos atrás do mais recente (k=0 é o degrau "ao vivo"), a janela termina no candle
+ * (últimoFechado - k). Ou seja, o valor anda 1 candle pra trás a cada degrau mais antigo — o
+ * degrau "ao vivo" sempre reflete os últimos candles fechados, atualizando a cada novo
+ * fechamento. Cor (bullish) compara a abertura do primeiro candle da janela com o fechamento do
+ * último.
+ *
+ * endTime é sempre o fim matemático do bloco (mesmo se ele ainda não fechou de verdade) — o
+ * render (CandlestickChartLW.jsx) já clampa em "agora", então o degrau em formação aparece
+ * corretamente cortado sem precisar de um caso especial aqui.
  */
 function buildPrevDayCloudSegments(dailyCandles, windowSize = 1) {
   if (!Array.isArray(dailyCandles) || dailyCandles.length < 2) return [];
   const n = Math.max(1, Math.round(Number(windowSize) || 1));
+  const w = 1;
+  const nativeMs = Number(dailyCandles[1]?.openTime) - Number(dailyCandles[0]?.openTime);
+  if (!Number.isFinite(nativeMs) || nativeMs <= 0) return [];
+
+  const lastIndex = dailyCandles.length - 1;
+  const lastClosedIndex = dailyCandles.length - 2;
+  if (lastClosedIndex < 0) return [];
+
   const segments = [];
-  for (let i = 1; i < dailyCandles.length; i++) {
-    const valueWindow = dailyCandles.slice(Math.max(0, i - n), i);
-    if (!valueWindow.length) continue;
-    const cur = dailyCandles[i];
-    const next = dailyCandles[i + 1];
-    const startTime = Number(cur.openTime);
-    if (!Number.isFinite(startTime)) continue;
-    const endTime = next ? Number(next.openTime) : null;
+  for (let k = 0, hi = lastIndex; ; k++, hi -= w) {
+    const startIndex = hi - w + 1;
+    if (startIndex < 0) break;
+    const startTime = Number(dailyCandles[startIndex].openTime);
+    if (!Number.isFinite(startTime)) break;
+    const endTime = startTime + w * nativeMs;
+
+    const valueEnd = lastClosedIndex - k;
+    const valueStart = valueEnd - n + 1;
+    if (valueStart < 0) break;
+    const valueWindow = dailyCandles.slice(valueStart, valueEnd + 1);
     let lower = Infinity;
     let upper = -Infinity;
     for (const c of valueWindow) {
@@ -708,6 +731,7 @@ function buildPrevDayCloudSegments(dailyCandles, windowSize = 1) {
       bullish: closePrice >= openPrice,
     });
   }
+  segments.reverse();
   return segments;
 }
 
@@ -1945,6 +1969,10 @@ function ChartIndicatorPanel({
         kind: 'indicator',
         data: {
           ...ind,
+          // "D-1" fixo confundia quando o intervalo escolhido não era 1 dia (padrão é 4h) — o
+          // botão agora reflete o intervalo atual (D 4h / D 1d / D 3d…), mesmo prefixo já usado
+          // no seletor de intervalo da nuvem (renderPrevDayCloudTile).
+          label: ind.id === 'prevDayCloud' ? `D ${prevDayCloudInterval}` : ind.label,
           active: activeIndicators.includes(ind.id),
           darkText: ind.id === 'ma200' || ind.id === 'rsi80' || ind.id === 'rsi50' || ind.id === 'emaPersistCloud' || ind.id === 'tdSequential',
         },
@@ -1979,7 +2007,7 @@ function ChartIndicatorPanel({
     }
     list.push({ key: 'quickEma', kind: 'quickEma', data: { groups: quickEmaGroups } });
     return list;
-  }, [panelButtons, activeIndicators, quickEmaGroups, bbGroups]);
+  }, [panelButtons, activeIndicators, quickEmaGroups, bbGroups, prevDayCloudInterval]);
 
   // Painel agora é um dropdown flutuante no topo do gráfico (não empurra mais o chart) —
   // largura limitada (60% no desktop, full width no mobile) e altura travada em % do

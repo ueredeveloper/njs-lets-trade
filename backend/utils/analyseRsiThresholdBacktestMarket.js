@@ -3,6 +3,8 @@
 const { getActiveUsdtPairs } = require('../binance/getActiveUsdtPairs');
 const analyseRsiThresholdBacktest = require('./analyseRsiThresholdBacktest');
 const getTickers = require('../binance/cachedTicker24hr');
+const { computeDailyEntryStats } = require('./dailyEntryStats');
+const { computeAvgTradeDurationMs } = require('./tradeDurationStats');
 
 const CONCURRENCY = 15;
 const DEFAULT_MAX_ROWS = 300;
@@ -110,6 +112,9 @@ async function analyseRsiThresholdBacktestMarket(options = {}) {
         prevCandleStop: !!perSymbolOptions.prevCandleStop,
         adxFilterEnabled: !!perSymbolOptions.adxFilter?.enabled,
         macdFilterEnabled: !!perSymbolOptions.macdFilter?.enabled,
+        trailingStop: perSymbolOptions.trailingStop?.enabled ? { ...perSymbolOptions.trailingStop } : null,
+        dailyEntryStats: computeDailyEntryStats(filledOccurrences, positionSizeUsd, perSymbolOptions.entriesDayRange ?? null),
+        tradeDuration: computeAvgTradeDurationMs(filledOccurrences),
         symbolsTotal: allSymbols.length,
         symbolsBlockedByVolume,
         symbolsScanned: valid.length,

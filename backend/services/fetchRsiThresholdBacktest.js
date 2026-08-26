@@ -15,6 +15,7 @@ const DEFAULT_USER_ID = process.env.SUPABASE_DEFAULT_USER_ID ?? 'ueredeveloper';
 //     &prevCandleStopEnabled=1
 //     &adxFilterEnabled=1&adxFilterInterval=1h&adxFilterMinAdx=25
 //     &macdFilterEnabled=1&macdFilterInterval=1h
+//     &trailingStopEnabled=1&trailingStopStartPct=5&trailingStopCoinStepPct=1&trailingStopStopStepPct=1
 router.get('/rsi-threshold-backtest', async (req, res) => {
     const {
         symbol, interval, source, candleCount, lookbackHours,
@@ -26,6 +27,8 @@ router.get('/rsi-threshold-backtest', async (req, res) => {
         prevCandleStopEnabled,
         adxFilterEnabled, adxFilterInterval, adxFilterMinAdx,
         macdFilterEnabled, macdFilterInterval,
+        trailingStopEnabled, trailingStopStartPct, trailingStopCoinStepPct, trailingStopStopStepPct,
+        entriesDayRangeMin, entriesDayRangeMax,
     } = req.query;
 
     if (!symbol || !interval) {
@@ -72,6 +75,16 @@ router.get('/rsi-threshold-backtest', async (req, res) => {
         macdFilter: macdFilterEnabled === '1' ? {
             enabled:  true,
             interval: macdFilterInterval ?? '1h',
+        } : null,
+        trailingStop: trailingStopEnabled === '1' ? {
+            enabled:  true,
+            startPct:    trailingStopStartPct    ? parseFloat(trailingStopStartPct)    : (stopLossPct != null ? parseFloat(stopLossPct) : 5),
+            coinStepPct: trailingStopCoinStepPct ? parseFloat(trailingStopCoinStepPct) : 1,
+            stopStepPct: trailingStopStopStepPct ? parseFloat(trailingStopStopStepPct) : 1,
+        } : null,
+        entriesDayRange: entriesDayRangeMax != null ? {
+            min: entriesDayRangeMin != null ? parseInt(entriesDayRangeMin, 10) : 2,
+            max: parseInt(entriesDayRangeMax, 10),
         } : null,
     };
 

@@ -1,6 +1,6 @@
 'use strict';
 
-const RSI = require('technicalindicators').RSI;
+const { RSI, MACD } = require('technicalindicators');
 const { closedCandlesOnly, intervalMs } = require('../ma-cross/strategyEngine');
 const { computeStopLossFloor } = require('../shared/stopLossFloor');
 const { bollingerCycleOccurrences } = require('../../utils/indicatorGrowthEngines');
@@ -29,6 +29,13 @@ const EARLY_CONFIRM_WARMUP_PADDING = 10;
 // Gate.io tem no backtest/gráfico.
 const PREV_DAY_CLOUD_INTERVAL = '1d';
 const PREV_DAY_CLOUD_LIMIT = 5;
+// MACD (12/26/9 padrão) — mesmos períodos fixos do backtest (ver analyseRsiThresholdBacktest.js),
+// só o intervalo é configurável (entry.macdFilter.interval). Warmup generoso o bastante pro
+// primeiro valor de histograma ficar disponível bem antes do candle mais recente.
+const MACD_FAST_PERIOD = 12;
+const MACD_SLOW_PERIOD = 26;
+const MACD_SIGNAL_PERIOD = 9;
+const MACD_WARMUP_BARS = MACD_SLOW_PERIOD + MACD_SIGNAL_PERIOD + 10;
 
 function computeRsiSeries(closedCandles) {
     const closes = closedCandles.map(c => parseFloat(c.close));
@@ -64,6 +71,10 @@ function getRequiredSpecs(config) {
     if (entry.prevDayCloud?.enabled) {
         const pdcCandleCount = Math.max(1, Math.round(Number(entry.prevDayCloud.candleCount ?? 1)));
         add(entry.prevDayCloud.interval ?? PREV_DAY_CLOUD_INTERVAL, Math.max(PREV_DAY_CLOUD_LIMIT, pdcCandleCount + 3));
+    }
+
+    if (entry.macdFilter?.enabled) {
+        add(entry.macdFilter.interval ?? '1h', MACD_WARMUP_BARS);
     }
 
     return [...specs.entries()].map(([interval, lim]) => ({ interval, limit: lim }));
@@ -143,11 +154,13 @@ function checkSpikeGuardFilter(config, signalCandle) {
  * indicador do gráfico (ver buildPrevDayCloudSegments em
  * frontend-react/src/components/CandlestickChart.jsx) e do backtest (ver checkPrevDayCloudFilter
  * em backend/utils/analyseRsiThresholdBacktest.js). candleCount=1 (padrão) é só o candle anterior
- * sozinho. A faixa aceita é [lower, lower + maxPct% × (upper-lower)] — não importa se o(s)
- * candle(s) anterior(es) fecharam em alta ou baixa. maxPct=100 exige só estar dentro da nuvem
- * inteira; valores menores restringem à parte de baixo dela. Sem candle(s) anterior(es)
- * suficiente(s) ainda (favorito recém-criado), libera — fail-open, como os demais filtros
- * baseados em série própria.
+ * sozinho. A faixa aceita é (-∞, lower + maxPct% × (upper-lower)] — não importa se o(s) candle(s)
+ * anterior(es) fecharam em alta ou baixa. maxPct=100 exige só estar até o topo da nuvem; valores
+ * menores restringem até a parte de baixo dela. Preço ABAIXO da nuvem inteira (price < lower)
+ * também libera — desconto ainda maior que a própria nuvem, mesmo racional de "quanto mais perto
+ * do fundo, melhor" que já vale pra faixa de dentro da nuvem. Só bloqueia acima do limite (preço
+ * caro demais). Sem candle(s) anterior(es) suficiente(s) ainda (favorito recém-criado), libera —
+ * fail-open, como os demais filtros baseados em série própria.
  */
 function checkPrevDayCloudFilter(config, cMap, signalCandle) {
     const pdc = config.entry?.prevDayCloud;
@@ -174,10 +187,45 @@ function checkPrevDayCloudFilter(config, cMap, signalCandle) {
 
     const price = parseFloat(signalCandle.close);
     const limit = lower + (pdc.maxPct / 100) * (upper - lower);
-    if (price < lower || price > limit) {
+    if (price > limit) {
         return { allowed: false, reason: 'PREVDAY_CLOUD_OUT_OF_RANGE', price, lower, upper, limit, maxPct: pdc.maxPct };
     }
     return { allowed: true, price, lower, upper, limit, maxPct: pdc.maxPct };
+}
+
+/**
+ * Filtro opcional de confirmação por MACD (12/26/9, mesmos períodos do backtest — ver
+ * analyseRsiThresholdBacktest.js) — só libera o sinal se o histograma (MACD − linha de sinal),
+ * no intervalo próprio escolhido (entry.macdFilter.interval, ex.: 1h — não precisa ser o mesmo
+ * intervalo do RSI de entrada), estiver POSITIVO no candle FECHADO mais recente. Segunda
+ * confirmação independente do RSI: reduz repiques onde o RSI cruzou no entry.interval mas o
+ * momentum de fundo (timeframe maior) ainda não virou. Sem candles suficientes pro warmup do
+ * MACD ainda, libera — fail-open, como os demais filtros baseados em série própria.
+ */
+function checkMacdFilter(config, cMap) {
+    const f = config.entry?.macdFilter;
+    if (!f?.enabled) return { allowed: true };
+
+    const closed = closedCandlesOnly(cMap[f.interval ?? '1h'] ?? []);
+    if (closed.length < MACD_WARMUP_BARS) return { allowed: true };
+
+    const closes = closed.map(c => parseFloat(c.close));
+    const series = MACD.calculate({
+        values: closes,
+        fastPeriod: MACD_FAST_PERIOD,
+        slowPeriod: MACD_SLOW_PERIOD,
+        signalPeriod: MACD_SIGNAL_PERIOD,
+        SimpleMAOscillator: false,
+        SimpleMASignal: false,
+    });
+    if (!series.length) return { allowed: true };
+
+    const histogram = series[series.length - 1]?.histogram;
+    if (!Number.isFinite(histogram)) return { allowed: true };
+    if (histogram <= 0) {
+        return { allowed: false, reason: 'MACD_HISTOGRAM_NEGATIVE', histogram, interval: f.interval };
+    }
+    return { allowed: true, histogram, interval: f.interval };
 }
 
 /**
@@ -299,6 +347,11 @@ function evaluateEntrySignal(config, cMap) {
         return { allowed: false, reason: prevDayCloudCheck.reason, rsi: last, threshold, prevDayCloud: prevDayCloudCheck };
     }
 
+    const macdCheck = checkMacdFilter(config, cMap);
+    if (!macdCheck.allowed) {
+        return { allowed: false, reason: macdCheck.reason, rsi: last, threshold, macd: macdCheck };
+    }
+
     const signalPrice = parseFloat(signalCandle.close);
     const signalOpenTime = Number(signalCandle.openTime);
     const pullbackPct = entry.pullback?.enabled ? Math.max(0.01, entry.pullback.belowPct) : 0;
@@ -319,6 +372,7 @@ function evaluateEntrySignal(config, cMap) {
         rsi5m: rsi5mCheck,
         spikeGuard: spikeGuardCheck,
         prevDayCloud: prevDayCloudCheck,
+        macd: macdCheck,
         earlyCheckpoint,
         signalOpenTime,
         signalPrice,
@@ -378,25 +432,55 @@ function checkReentryCooldown(config, cMap, lastExitTime, lastExitReason) {
 }
 
 /**
- * Alvo/stop FIXOS a partir do preço de entrada — entryPrice*(1+targetPct%) /
- * entryPrice*(1-maxLossPct%). Sem trailing, sem ancorar em EMA/banda (diferente do
- * bollinger-bands): não há "nível" nenhum que se mova a cada candle novo pra perseguir, então
- * a bracket colocada na corretora nunca precisa ser recriada por deriva.
+ * Stop contínuo (trailing, mesma matemática de dois degraus INDEPENDENTES do backtest — ver
+ * options.trailingStop em analyseRsiThresholdBacktest.js#resolveFromSignal): a cada
+ * `coinStepPct`% de alta do PICO de preço desde a entrada, o stop (originalmente `startPct`%
+ * abaixo da entrada) sobe `stopStepPct` pontos percentuais — os dois não precisam ser iguais
+ * (ex.: coinStepPct=3/stopStepPct=2: moeda subiu 3% → stop de -5% vira -3%; subiu 6% → vira
+ * -1%; e assim por diante, podendo virar positivo e travar lucro).
  */
-function computeBracketPrices(config, entryPrice) {
+function computeTrailingStopPrice(entryPrice, peakPrice, trailingStop) {
+    if (!(entryPrice > 0)) return null;
+    const startPct = Math.max(0.1, Number(trailingStop?.startPct ?? 5));
+    const coinStepPct = Math.max(0.1, Number(trailingStop?.coinStepPct ?? 1));
+    const stopStepPct = Math.max(0.1, Number(trailingStop?.stopStepPct ?? 1));
+    const peak = Math.max(entryPrice, Number(peakPrice) || entryPrice);
+    const gainPct = ((peak / entryPrice) - 1) * 100;
+    const steps = Math.floor(gainPct / coinStepPct);
+    const currentStopPct = startPct - steps * stopStepPct;
+    return entryPrice * (1 - currentStopPct / 100);
+}
+
+/**
+ * Alvo/stop a partir do preço de entrada. O ALVO é sempre fixo — entryPrice*(1+targetPct%),
+ * constante desde a entrada — em qualquer um dos dois modos de STOP:
+ *  - Fixo (padrão): stop = entryPrice*(1-maxLossPct%), constante — a bracket colocada na
+ *    corretora nunca precisa ser recriada por deriva.
+ *  - Stop contínuo (exit.trailingStop.enabled): o stop sobe em degraus conforme `peakPrice`
+ *    (maior preço visto desde a compra, rastreado tick a tick pelo bot) sobe, ver
+ *    computeTrailingStopPrice — só essa perna da bracket precisa ser recriada quando sobe.
+ *    `peakPrice` é opcional — sem ele (ex.: 1º cálculo antes de qualquer tick), usa entryPrice
+ *    como pico inicial (sem degrau ainda, stop = startPct%).
+ */
+function computeBracketPrices(config, entryPrice, peakPrice) {
     if (!(entryPrice > 0)) return { targetPrice: null, stopPrice: null };
     const targetPct = Math.max(0.1, Number(config.exit?.restingBracket?.targetPct ?? 5));
     const targetPrice = entryPrice * (1 + targetPct / 100);
-    const stopPrice = config.stopLoss?.enabled
-        ? computeStopLossFloor(entryPrice, entryPrice, { ...config.stopLoss, trailing: false })
-        : null;
+    const trailingStop = config.exit?.trailingStop;
+    const stopPrice = trailingStop?.enabled
+        ? computeTrailingStopPrice(entryPrice, peakPrice ?? entryPrice, trailingStop)
+        : (config.stopLoss?.enabled
+            ? computeStopLossFloor(entryPrice, entryPrice, { ...config.stopLoss, trailing: false })
+            : null);
     return { targetPrice, stopPrice };
 }
 
 /** Saída via candle — fallback usado só quando não há bracket resting (desligada ou falhou ao
  *  colocar): máxima do candle em formação alcança o alvo, ou mínima rompe o stop. No empate
- *  (mesmo candle) assume o pior caso (stop primeiro), mesmo critério do backtest. */
-function evaluateExit(config, cMap, entryPrice) {
+ *  (mesmo candle) assume o pior caso (stop primeiro), mesmo critério do backtest.
+ *  opts.peakPrice: maior preço visto desde a compra — só relevante com exit.trailingStop
+ *  ligado (ver computeBracketPrices); ignorado no modo fixo. */
+function evaluateExit(config, cMap, entryPrice, opts = {}) {
     const iv = config.entry.interval;
     const raw = cMap[iv] ?? [];
     if (!raw.length) return { exit: false };
@@ -406,7 +490,7 @@ function evaluateExit(config, cMap, entryPrice) {
     const high = parseFloat(live.high ?? live.close);
     const low = parseFloat(live.low ?? live.close);
 
-    const { targetPrice, stopPrice } = computeBracketPrices(config, entryPrice);
+    const { targetPrice, stopPrice } = computeBracketPrices(config, entryPrice, opts.peakPrice);
 
     if (stopPrice != null && low <= stopPrice) {
         return {
@@ -435,10 +519,12 @@ module.exports = {
     checkBandWidthFilter,
     checkRsi5mFilter,
     checkPrevDayCloudFilter,
+    checkMacdFilter,
     evaluateEntrySignal,
     evaluateExit,
     checkEntryLimitExpired,
     checkReentryCooldown,
     computeBracketPrices,
     computeStopLossFloor,
+    computeTrailingStopPrice,
 };

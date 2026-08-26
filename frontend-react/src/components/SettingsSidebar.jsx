@@ -1152,8 +1152,56 @@ export default function SettingsSidebar({ open, onClose }) {
                       className={inp}
                       value={rsiMomentumConfig.stopLoss.maxLossPct}
                       onChange={(e) => patchRsiMomentum('stopLoss', { maxLossPct: Number(e.target.value) })}
+                      disabled={rsiMomentumConfig.exit.trailingStop.enabled}
                     />
                   </label>
+                </div>
+
+                <div className="rounded-md p-2.5" style={{ background: '#0f1219', border: '1px solid #2a2d3a' }}>
+                  <p className="text-p5/70 text-[10px] font-semibold uppercase tracking-wider mb-1">{t('settings.rsimomentum_trailingstop_title')}</p>
+                  <p className="text-[10px] text-p5/40 mb-2 leading-relaxed">{t('settings.rsimomentum_trailingstop_hint')}</p>
+                  <label className="flex items-start gap-2.5 cursor-pointer group mb-2">
+                    <input
+                      type="checkbox"
+                      checked={rsiMomentumConfig.exit.trailingStop.enabled}
+                      onChange={(e) => patchRsiMomentumNested('exit', 'trailingStop', { enabled: e.target.checked })}
+                      className="mt-0.5 shrink-0 accent-p4"
+                    />
+                    <span className="text-p5 text-xs leading-snug group-hover:text-white transition-colors">
+                      {t('settings.rsimomentum_trailingstop_enabled')}
+                    </span>
+                  </label>
+                  {rsiMomentumConfig.exit.trailingStop.enabled && (
+                    <div className="grid grid-cols-3 gap-2">
+                      <label className="flex flex-col gap-1">
+                        <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_trailingstop_start_pct')}</span>
+                        <input
+                          type="number" min={0.5} max={50} step={0.5}
+                          className={`${inp} w-full`}
+                          value={rsiMomentumConfig.exit.trailingStop.startPct}
+                          onChange={(e) => patchRsiMomentumNested('exit', 'trailingStop', { startPct: Number(e.target.value) })}
+                        />
+                      </label>
+                      <label className="flex flex-col gap-1">
+                        <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_trailingstop_coin_step')}</span>
+                        <input
+                          type="number" min={0.1} max={50} step={0.1}
+                          className={`${inp} w-full`}
+                          value={rsiMomentumConfig.exit.trailingStop.coinStepPct}
+                          onChange={(e) => patchRsiMomentumNested('exit', 'trailingStop', { coinStepPct: Number(e.target.value) })}
+                        />
+                      </label>
+                      <label className="flex flex-col gap-1">
+                        <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_trailingstop_stop_step')}</span>
+                        <input
+                          type="number" min={0.1} max={50} step={0.1}
+                          className={`${inp} w-full`}
+                          value={rsiMomentumConfig.exit.trailingStop.stopStepPct}
+                          onChange={(e) => patchRsiMomentumNested('exit', 'trailingStop', { stopStepPct: Number(e.target.value) })}
+                        />
+                      </label>
+                    </div>
+                  )}
                 </div>
 
                 <div className="rounded-md p-2.5" style={{ background: '#0f1219', border: '1px solid #2a2d3a' }}>
@@ -1318,6 +1366,34 @@ export default function SettingsSidebar({ open, onClose }) {
                       </select>
                     </label>
                   </div>
+                </div>
+
+                <div className="rounded-md p-2.5" style={{ background: '#0f1219', border: '1px solid #2a2d3a' }}>
+                  <p className="text-p5/70 text-[10px] font-semibold uppercase tracking-wider mb-1">{t('settings.rsimomentum_macdfilter_title')}</p>
+                  <p className="text-[10px] text-p5/40 mb-2 leading-relaxed">{t('settings.rsimomentum_macdfilter_hint')}</p>
+                  <label className="flex items-start gap-2.5 cursor-pointer group mb-2">
+                    <input
+                      type="checkbox"
+                      checked={rsiMomentumConfig.entry.macdFilter.enabled}
+                      onChange={(e) => patchRsiMomentumNested('entry', 'macdFilter', { enabled: e.target.checked })}
+                      className="mt-0.5 shrink-0 accent-p4"
+                    />
+                    <span className="text-p5 text-xs leading-snug group-hover:text-white transition-colors">
+                      {t('settings.rsimomentum_macdfilter_enabled')}
+                    </span>
+                  </label>
+                  {rsiMomentumConfig.entry.macdFilter.enabled && (
+                    <label className="flex flex-col gap-1 w-1/2">
+                      <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_macdfilter_interval')}</span>
+                      <select
+                        className={`${inp} w-full`}
+                        value={rsiMomentumConfig.entry.macdFilter.interval}
+                        onChange={(e) => patchRsiMomentumNested('entry', 'macdFilter', { interval: e.target.value })}
+                      >
+                        {RSI_MOMENTUM_ALL_INTERVALS.map((iv) => <option key={iv} value={iv}>{iv}</option>)}
+                      </select>
+                    </label>
+                  )}
                 </div>
 
                 <label className="flex flex-col gap-1">

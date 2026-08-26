@@ -156,7 +156,7 @@ export async function fetchRsiThresholdBacktest(symbol, interval, options = {}) 
     rsiThreshold = 70, pullbackPct = 0, targetPct = 5, stopLossPct = 5, positionSizeUsd = 40,
     source = null, candleCount = null, lookbackHours = 0, bandWidth = null, prevDayCloud = null,
     minVolumeUsdt = 0, excludeOpenExits = false, prevCandleStop = false,
-    adxFilter = null, macdFilter = null,
+    adxFilter = null, macdFilter = null, trailingStop = null, entriesDayRange = null,
   } = options;
   const params = new URLSearchParams({
     symbol, interval, rsiThreshold, pullbackPct, targetPct, stopLossPct, positionSizeUsd,
@@ -190,6 +190,16 @@ export async function fetchRsiThresholdBacktest(symbol, interval, options = {}) 
     params.set('macdFilterEnabled', '1');
     params.set('macdFilterInterval', macdFilter.interval ?? '1h');
   }
+  if (trailingStop?.enabled) {
+    params.set('trailingStopEnabled', '1');
+    params.set('trailingStopStartPct', String(trailingStop.startPct ?? stopLossPct));
+    params.set('trailingStopCoinStepPct', String(trailingStop.coinStepPct ?? 1));
+    params.set('trailingStopStopStepPct', String(trailingStop.stopStepPct ?? 1));
+  }
+  if (entriesDayRange?.max != null) {
+    params.set('entriesDayRangeMin', String(entriesDayRange.min ?? 2));
+    params.set('entriesDayRangeMax', String(entriesDayRange.max));
+  }
   const res = await fetch(`/services/rsi-threshold-backtest?${params}`);
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
@@ -203,7 +213,7 @@ export async function fetchRsiThresholdBacktestMarket(interval, options = {}) {
     rsiThreshold = 70, pullbackPct = 0, targetPct = 5, stopLossPct = 5, positionSizeUsd = 40,
     source = null, candleCount = null, lookbackHours = 0, bandWidth = null, maxRows = null,
     prevDayCloud = null, minVolumeUsdt = 0, excludeOpenExits = false, prevCandleStop = false,
-    adxFilter = null, macdFilter = null,
+    adxFilter = null, macdFilter = null, trailingStop = null, entriesDayRange = null,
   } = options;
   const params = new URLSearchParams({
     interval, rsiThreshold, pullbackPct, targetPct, stopLossPct, positionSizeUsd,
@@ -237,6 +247,16 @@ export async function fetchRsiThresholdBacktestMarket(interval, options = {}) {
   if (macdFilter?.enabled) {
     params.set('macdFilterEnabled', '1');
     params.set('macdFilterInterval', macdFilter.interval ?? '1h');
+  }
+  if (trailingStop?.enabled) {
+    params.set('trailingStopEnabled', '1');
+    params.set('trailingStopStartPct', String(trailingStop.startPct ?? stopLossPct));
+    params.set('trailingStopCoinStepPct', String(trailingStop.coinStepPct ?? 1));
+    params.set('trailingStopStopStepPct', String(trailingStop.stopStepPct ?? 1));
+  }
+  if (entriesDayRange?.max != null) {
+    params.set('entriesDayRangeMin', String(entriesDayRange.min ?? 2));
+    params.set('entriesDayRangeMax', String(entriesDayRange.max));
   }
   const res = await fetch(`/services/rsi-threshold-backtest-market?${params}`);
   if (!res.ok) {

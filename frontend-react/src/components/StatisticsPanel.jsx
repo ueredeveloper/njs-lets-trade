@@ -261,10 +261,10 @@ const RSI_MOM_PCT_OPTIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 /** Valores selecionáveis do campo "Larg. mín %" do filtro de largura de banda. */
 const RSI_MOM_BANDWIDTH_OPTIONS = [1, 1.5, 2, 2.5, 3, 4, 5, 8, 10];
 /** Valores selecionáveis do filtro "Nuvem D-1" — % da altura da nuvem (candle 1d anterior),
- *  contado do fundo (lower) pra cima, que o preço do sinal pode ocupar. 100% = preço só precisa
- *  estar dentro da nuvem inteira (entre abertura e fechamento de ontem); valores menores
- *  restringem à parte de baixo dela — ver checkPrevDayCloudFilter em
- *  backend/utils/analyseRsiThresholdBacktest.js. */
+ *  contado do fundo (lower) pra cima, até onde o preço do sinal pode ocupar (limite superior).
+ *  100% = até o topo da nuvem inteira (entre abertura e fechamento de ontem); valores menores
+ *  restringem até a parte de baixo dela. Preço abaixo da nuvem inteira também libera (desconto
+ *  maior ainda) — ver checkPrevDayCloudFilter em backend/utils/analyseRsiThresholdBacktest.js. */
 const RSI_MOM_CLOUD_PCT_OPTIONS = [50, 60, 70, 80, 90, 100];
 /** Valores selecionáveis do intervalo da nuvem D-1 — mesmo seletor do gráfico (ver
  *  prevDayCloudInterval em CandlestickChart.jsx), padrão 4h. Com source='gate' e um intervalo sem
@@ -284,6 +284,17 @@ const RSI_MOM_ADX_MIN_OPTIONS = [15, 20, 25, 30];
  *  "moedas que atingiram RSI 70 nas últimas 6/7/8 horas"). 0 = desligado, usa todo o histórico
  *  definido em Candles. */
 const RSI_MOM_LOOKBACK_HOURS_OPTIONS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 12, 24, 48, 72];
+/** Valores selecionáveis dos degraus do "Stop contínuo" (Alvo % = "Stop contínuo") — quanto a
+ *  moeda precisa subir pra render 1 degrau (coinStepPct) e quanto o stop sobe por degrau
+ *  (stopStepPct). Independentes: ex. coinStepPct=1/stopStepPct=2 sobe o stop 2% a cada 1% de alta
+ *  da moeda (mais agressivo); coinStepPct=2/stopStepPct=1 sobe 1% a cada 2% (mais conservador). */
+const RSI_MOM_TRAILING_STEP_OPTIONS = [0.5, 1, 2, 3, 4, 5];
+/** Teto selecionável do card "Dias c/ 2+ entradas" — null (padrão) = sem teto, mesmo cálculo de
+ *  sempre (>=2, qualquer quantidade). Um valor aqui troca o card por "% de dias com 2 a N
+ *  entradas", medindo especificamente a frequência de dias DENTRO dessa faixa (2 pode virar 10
+ *  sem aparecer nesse % se o teto for, por ex., 3) — ver computeDailyEntryStats em
+ *  backend/utils/dailyEntryStats.js. */
+const RSI_MOM_ENTRIES_RANGE_MAX_OPTIONS = [null, 3, 5, 7, 10];
 
 const RSI_MOM_PREFS_KEY = 'lets_trade_stats_rsi_momentum_prefs';
 const RSI_MOM_DEFAULT_PREFS = {
@@ -308,7 +319,10 @@ const RSI_MOM_DEFAULT_PREFS = {
   adxFilterMinAdx: 25,
   macdFilterEnabled: false,
   macdFilterInterval: '1h',
+  trailingCoinStepPct: 1,
+  trailingStopStepPct: 1,
   allCoins: false,
+  entriesDayRangeMax: null,
 };
 
 /** Quantidade de candles × duração do intervalo, formatado em horas/dias — mostrado ao lado do
@@ -966,11 +980,21 @@ function RsiMomentumStats({ autoCalc }) {
     setError(null);
     setResult(null);
     try {
+      // targetPct === 0 = "Stop contínuo" selecionado no select Alvo: sem alvo programado, o
+      // Stop % vira o ponto de partida do stop que sobe 1% a cada 1% de alta da moeda (ver JSDoc
+      // de options.trailingStop em analyseRsiThresholdBacktest.js).
+      const trailingStopActive = p.targetPct === 0;
       const commonOptions = {
         rsiThreshold: p.rsiThreshold,
         pullbackPct: p.pullbackPct,
         targetPct: p.targetPct,
         stopLossPct: p.stopLossPct,
+        trailingStop: trailingStopActive ? {
+          enabled: true,
+          startPct: p.stopLossPct,
+          coinStepPct: p.trailingCoinStepPct,
+          stopStepPct: p.trailingStopStepPct,
+        } : null,
         positionSizeUsd: p.positionSizeUsd,
         candleCount: candles,
         lookbackHours: p.lookbackHours,
@@ -997,6 +1021,7 @@ function RsiMomentumStats({ autoCalc }) {
           enabled: true,
           interval: p.macdFilterInterval,
         } : null,
+        entriesDayRange: p.entriesDayRangeMax != null ? { min: 2, max: p.entriesDayRangeMax } : null,
       };
       const data = p.allCoins
         ? await fetchRsiThresholdBacktestMarket(iv, commonOptions)
@@ -1109,11 +1134,12 @@ function RsiMomentumStats({ autoCalc }) {
           </select>
         </div>
 
-        <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.target_pct')}>
+        <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={prefs.targetPct === 0 ? t('stats.tip.target_trailing') : t('stats.tip.target_pct')}>
           <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.target_pct')}</label>
           <select className={inp}
             value={prefs.targetPct}
             onChange={(e) => patchPrefs({ targetPct: Number(e.target.value) })}>
+            <option value={0}>{t('stats.target_trailing')}</option>
             {RSI_MOM_PCT_OPTIONS.map((v) => <option key={v} value={v}>{v}%</option>)}
           </select>
         </div>
@@ -1134,14 +1160,41 @@ function RsiMomentumStats({ autoCalc }) {
         </div>
 
         {!prefs.prevCandleStopEnabled && (
-          <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.stop_pct')}>
-            <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.stop_pct')}</label>
+          <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={prefs.targetPct === 0 ? t('stats.tip.trailing_start_pct') : t('stats.tip.stop_pct')}>
+            <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">
+              {prefs.targetPct === 0 ? t('stats.trailing_start_pct') : t('stats.stop_pct')}
+            </label>
             <select className={inp}
               value={prefs.stopLossPct}
               onChange={(e) => patchPrefs({ stopLossPct: Number(e.target.value) })}>
               {RSI_MOM_PCT_OPTIONS.map((v) => <option key={v} value={v}>{v}%</option>)}
             </select>
           </div>
+        )}
+
+        {/* Degraus do Stop contínuo (só com Alvo % = "Stop contínuo") — independentes: quanto a
+            moeda precisa subir pra render 1 degrau (coinStepPct) e quanto o stop sobe por degrau
+            (stopStepPct). Ex.: 1%/2% sobe o stop 2% a cada 1% de alta da moeda (mais agressivo);
+            2%/1% sobe 1% a cada 2% (mais conservador). */}
+        {prefs.targetPct === 0 && (
+          <>
+            <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.trailing_coin_step')}>
+              <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.trailing_coin_step')}</label>
+              <select className={inp}
+                value={prefs.trailingCoinStepPct}
+                onChange={(e) => patchPrefs({ trailingCoinStepPct: Number(e.target.value) })}>
+                {RSI_MOM_TRAILING_STEP_OPTIONS.map((v) => <option key={v} value={v}>{v}%</option>)}
+              </select>
+            </div>
+            <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.trailing_stop_step')}>
+              <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.trailing_stop_step')}</label>
+              <select className={inp}
+                value={prefs.trailingStopStepPct}
+                onChange={(e) => patchPrefs({ trailingStopStepPct: Number(e.target.value) })}>
+                {RSI_MOM_TRAILING_STEP_OPTIONS.map((v) => <option key={v} value={v}>{v}%</option>)}
+              </select>
+            </div>
+          </>
         )}
 
         <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[56px]" title={t('stats.tip.position_size')}>
@@ -1261,6 +1314,19 @@ function RsiMomentumStats({ autoCalc }) {
             onChange={(e) => patchPrefs({ minVolumeUsdt: Number(e.target.value) })}>
             {RSI_MOM_VOLUME_OPTIONS.map((v) => (
               <option key={v} value={v}>{v === 0 ? 'Desligado' : `>${v / 1_000_000}M`}</option>
+            ))}
+          </select>
+        </div>
+
+        {/* Teto opcional do card "Dias c/ 2+ entradas" — sem teto, 2 e 10 entradas no mesmo dia
+            contam igual nesse %; escolher um teto troca o card por "% de dias com 2 a N" */}
+        <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[64px]" title={t('stats.tip.entries_day_range')}>
+          <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.entries_day_range')}</label>
+          <select className={inp}
+            value={prefs.entriesDayRangeMax ?? ''}
+            onChange={(e) => patchPrefs({ entriesDayRangeMax: e.target.value === '' ? null : Number(e.target.value) })}>
+            {RSI_MOM_ENTRIES_RANGE_MAX_OPTIONS.map((v) => (
+              <option key={v ?? 'none'} value={v ?? ''}>{v == null ? t('stats.entries_day_range_none') : `2–${v}`}</option>
             ))}
           </select>
         </div>
@@ -1396,6 +1462,49 @@ function RsiMomentumStats({ autoCalc }) {
                 value={`${result.avgPnlPct > 0 ? '+' : ''}${result.avgPnlPct}%`}
                 highlight={result.avgPnlPct >= 0 ? 'text-green-600' : 'text-red-600'}
               />
+              {result.dailyEntryStats?.daysWithEntries > 0 && (
+                <>
+                  <SummaryCard
+                    label={t('stats.card.max_entries_day')}
+                    value={result.dailyEntryStats.maxEntriesPerDay}
+                    highlight="text-p4"
+                    tooltip={t('stats.tip.max_entries_day')}
+                  />
+                  <SummaryCard
+                    label={t('stats.card.avg_entries_day')}
+                    value={result.dailyEntryStats.avgEntriesPerDay}
+                    tooltip={t('stats.tip.avg_entries_day')}
+                  />
+                  <SummaryCard
+                    label={t('stats.card.multi_entry_days_pct')}
+                    value={`${result.dailyEntryStats.multiEntryDaysPct}%`}
+                    highlight="text-amber-600"
+                    tooltip={t('stats.tip.multi_entry_days_pct')}
+                  />
+                  {result.dailyEntryStats.entriesRange?.max != null && (
+                    <SummaryCard
+                      label={`${t('stats.card.entries_range_days_pct')} (2–${result.dailyEntryStats.entriesRange.max})`}
+                      value={`${result.dailyEntryStats.entriesRangeDaysPct}%`}
+                      highlight="text-amber-600"
+                      tooltip={t('stats.tip.entries_range_days_pct')}
+                    />
+                  )}
+                  <SummaryCard
+                    label={t('stats.card.daily_capital')}
+                    value={`$${result.dailyEntryStats.suggestedDailyCapitalUsd}`}
+                    highlight="text-p4"
+                    tooltip={t('stats.tip.daily_capital')}
+                  />
+                </>
+              )}
+              {result.tradeDuration?.count > 0 && (
+                <SummaryCard
+                  label={t('stats.card.avg_duration')}
+                  value={formatDuration(result.tradeDuration.avgDurationMs)}
+                  highlight="text-p4"
+                  tooltip={`${t('stats.tip.avg_duration')} (mín ${formatDuration(result.tradeDuration.minDurationMs)} · máx ${formatDuration(result.tradeDuration.maxDurationMs)})`}
+                />
+              )}
               {!prefs.allCoins && result.bandWidth && (
                 <SummaryCard
                   label={t('stats.card.avg_width')}
