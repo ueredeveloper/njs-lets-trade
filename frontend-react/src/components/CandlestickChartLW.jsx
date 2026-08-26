@@ -21,6 +21,18 @@ const VWAP_BAND_FILL_COLOR = 'rgba(255, 79, 163, 0.08)';
 // Verde/vermelho igual ao candle (C_UP/C_DOWN) — dia anterior fechou em alta ou em queda.
 const PREV_DAY_CLOUD_UP_FILL_COLOR = 'rgba(38, 166, 154, 0.18)';
 const PREV_DAY_CLOUD_DOWN_FILL_COLOR = 'rgba(239, 83, 80, 0.18)';
+// Cores randomizadas em ciclo pra cada degrau da nuvem D-1, em vez do verde/vermelho por
+// alta/baixa — facilita distinguir visualmente onde um degrau termina e o próximo começa.
+const PREV_DAY_CLOUD_RANDOM_COLORS = [
+  'rgba(156, 39, 176, 0.35)', // roxo
+  'rgba(76, 175, 80, 0.35)',  // verde
+  'rgba(33, 150, 243, 0.35)', // azul
+  'rgba(255, 193, 7, 0.35)',  // amarelo
+  'rgba(233, 30, 99, 0.35)',  // rosa
+  'rgba(0, 188, 212, 0.35)',  // ciano
+  'rgba(255, 87, 34, 0.35)',  // laranja
+  'rgba(121, 85, 72, 0.35)',  // marrom
+];
 const VWAP_DECLINE_CLOUD_COLOR = 'rgba(239, 68, 68, 0.28)';
 const BB_COLOR = '#94a3b8';
 const BB_PATH_UP = '#9C27B0';
@@ -983,15 +995,16 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       bandFillPrimitiveRef.current.replacePrefixed('emaPersist-', emaPersistClouds);
 
       // Nuvem D-1: um "degrau" por candle nativo (intervalo escolhido no seletor "D"), cada um
-      // com o envelope abertura/fechamento dos candles ANTERIORES a ele, verde ou vermelho
-      // conforme o trecho anterior fechou em alta ou queda (ver buildPrevDayCloudSegments em
-      // CandlestickChart.jsx) — arrastando o gráfico pra trás, cada trecho antigo mostra a nuvem
-      // que valia NAQUELE momento, não uma faixa única fixa esticada por todo o histórico.
+      // com o envelope abertura/fechamento dos candles ANTERIORES a ele (ver
+      // buildPrevDayCloudSegments em CandlestickChart.jsx) — arrastando o gráfico pra trás, cada
+      // trecho antigo mostra a nuvem que valia NAQUELE momento, não uma faixa única fixa esticada
+      // por todo o histórico. Cor em ciclo randomizado (PREV_DAY_CLOUD_RANDOM_COLORS), não
+      // verde/vermelho por alta/baixa — só pra distinguir visualmente onde cada degrau termina.
       let prevDayCloudBand = [];
       if (activeIndicators.includes('prevDayCloud')
         && prevDayCloudConfig?.segments?.length && Number.isFinite(minTime) && Number.isFinite(maxTime)) {
         prevDayCloudBand = prevDayCloudConfig.segments
-          .map((seg) => {
+          .map((seg, idx) => {
             if (!Number.isFinite(seg.upper) || !Number.isFinite(seg.lower)) return null;
             const segStart = Math.floor(seg.startTime / 1000);
             const segEnd = seg.endTime != null ? Math.floor(seg.endTime / 1000) : maxTime;
@@ -1000,7 +1013,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
             if (end <= start) return null;
             return {
               points: [{ time: start, upper: seg.upper, lower: seg.lower }, { time: end, upper: seg.upper, lower: seg.lower }],
-              fillColor: seg.bullish ? PREV_DAY_CLOUD_UP_FILL_COLOR : PREV_DAY_CLOUD_DOWN_FILL_COLOR,
+              fillColor: PREV_DAY_CLOUD_RANDOM_COLORS[idx % PREV_DAY_CLOUD_RANDOM_COLORS.length],
             };
           })
           .filter(Boolean);
