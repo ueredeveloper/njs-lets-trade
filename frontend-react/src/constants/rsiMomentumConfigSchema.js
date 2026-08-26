@@ -6,6 +6,13 @@ export const RSI_MOMENTUM_BB_STD_DEVS = [1, 2, 3];
 /** Valores selecionáveis do filtro entry.prevDayCloud.maxPct — mesmas opções do backtest
  *  (StatisticsPanel.jsx, RSI_MOM_CLOUD_PCT_OPTIONS). */
 export const RSI_MOMENTUM_CLOUD_PCT_OPTIONS = [50, 60, 70, 80, 90, 100];
+/** Valores selecionáveis do filtro entry.prevDayCloud.interval — mesmo leque de entry.interval
+ *  (o bot só opera Binance, sem a limitação de intervalos que a Gate.io tem no gráfico/backtest). */
+export const RSI_MOMENTUM_CLOUD_INTERVAL_OPTIONS = RSI_MOMENTUM_ALL_INTERVALS;
+/** Valores selecionáveis do filtro entry.prevDayCloud.candleCount — mesmo seletor do gráfico e do
+ *  backtest (StatisticsPanel.jsx, RSI_MOM_CLOUD_CANDLE_COUNT_OPTIONS). 1 (padrão) = só o candle
+ *  anterior; N>1 = envelope [menor open/close, maior open/close] dos últimos N candles. */
+export const RSI_MOMENTUM_CLOUD_CANDLE_COUNT_OPTIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 
 export const RSI_MOMENTUM_DEFAULTS = {
   kind: 'rsi_momentum',
@@ -24,7 +31,7 @@ export const RSI_MOMENTUM_DEFAULTS = {
     },
     rsi5mFilter: { enabled: false, threshold: 70 },
     spikeGuard: { enabled: true, maxMovePct: 5 },
-    prevDayCloud: { enabled: false, maxPct: 100 },
+    prevDayCloud: { enabled: false, maxPct: 100, interval: '4h', candleCount: 3 },
   },
   exit: {
     restingBracket: { enabled: true, targetPct: 5 },

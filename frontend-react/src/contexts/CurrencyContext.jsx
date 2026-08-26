@@ -37,6 +37,8 @@ import {
   normalizeSrInterval,
   normalizePphlInterval,
   normalizeChopInterval,
+  normalizePrevDayCloudInterval,
+  normalizePrevDayCloudCandleCount,
   normalizeEmaPersistCloudInterval,
   normalizeEmaPersistCloudTones,
   normalizeEmaPersistCloudLayers,
@@ -730,6 +732,22 @@ export function CurrencyProvider({ children }) {
     });
   }, []);
 
+  const setPrevDayCloudIntervalDefault = useCallback((interval) => {
+    setUiPrefsState((prev) => {
+      const next = { ...prev, prevDayCloudIntervalDefault: normalizePrevDayCloudInterval(interval) };
+      saveUiPreferences(next);
+      return next;
+    });
+  }, []);
+
+  const setPrevDayCloudCandleCountDefault = useCallback((count) => {
+    setUiPrefsState((prev) => {
+      const next = { ...prev, prevDayCloudCandleCountDefault: normalizePrevDayCloudCandleCount(count) };
+      saveUiPreferences(next);
+      return next;
+    });
+  }, []);
+
   const setEmaPersistCloudIntervalDefault = useCallback((interval) => {
     setUiPrefsState((prev) => {
       const next = { ...prev, emaPersistCloudIntervalDefault: normalizeEmaPersistCloudInterval(interval) };
@@ -1144,6 +1162,8 @@ export function CurrencyProvider({ children }) {
         setSrIntervalDefault,
         setPphlIntervalDefault,
         setChopIntervalDefault,
+        setPrevDayCloudIntervalDefault,
+        setPrevDayCloudCandleCountDefault,
         setEmaPersistCloudIntervalDefault,
         setEmaPersistCloudTonesDefault,
         setEmaPersistCloudLayersDefault,

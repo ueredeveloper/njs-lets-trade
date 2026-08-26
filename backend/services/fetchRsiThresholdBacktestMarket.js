@@ -8,7 +8,7 @@ const DEFAULT_USER_ID = process.env.SUPABASE_DEFAULT_USER_ID ?? 'ueredeveloper';
 // GET /services/rsi-threshold-backtest-market?interval=15m&rsiThreshold=70
 //     &pullbackPct=-2&targetPct=5&stopLossPct=5&positionSizeUsd=40&lookbackHours=6
 //     &bandWidthEnabled=1&bandWidthInterval=5m&bandWidthMinPct=2
-//     &prevDayCloudEnabled=1&prevDayCloudMaxPct=70
+//     &prevDayCloudEnabled=1&prevDayCloudMaxPct=70&prevDayCloudInterval=1d&prevDayCloudCandleCount=1
 //     &minVolumeUsdt=1000000&excludeOpenExits=1
 //     &prevCandleStopEnabled=1
 //     &adxFilterEnabled=1&adxFilterInterval=1h&adxFilterMinAdx=25
@@ -22,7 +22,7 @@ router.get('/rsi-threshold-backtest-market', async (req, res) => {
         rsiThreshold, pullbackPct, targetPct, stopLossPct, positionSizeUsd,
         bandWidthEnabled, bandWidthInterval, bandWidthPeriod, bandWidthStdDev,
         bandWidthLookback, bandWidthMinPct,
-        prevDayCloudEnabled, prevDayCloudMaxPct,
+        prevDayCloudEnabled, prevDayCloudMaxPct, prevDayCloudInterval, prevDayCloudCandleCount,
         minVolumeUsdt, excludeOpenExits,
         prevCandleStopEnabled,
         adxFilterEnabled, adxFilterInterval, adxFilterMinAdx,
@@ -60,6 +60,8 @@ router.get('/rsi-threshold-backtest-market', async (req, res) => {
         prevDayCloud: prevDayCloudEnabled === '1' ? {
             enabled: true,
             maxPct:  prevDayCloudMaxPct ? parseFloat(prevDayCloudMaxPct) : 100,
+            interval: prevDayCloudInterval ?? '4h',
+            candleCount: prevDayCloudCandleCount ? parseInt(prevDayCloudCandleCount, 10) : 3,
         } : null,
         minVolumeUsdt:    minVolumeUsdt ? parseFloat(minVolumeUsdt) : 0,
         excludeOpenExits: excludeOpenExits === '1',

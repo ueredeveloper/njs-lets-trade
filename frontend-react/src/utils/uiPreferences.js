@@ -223,6 +223,35 @@ export function normalizeChopInterval(raw) {
   return CHART_INTERVAL_OPTIONS.includes(raw) ? raw : DEFAULT_CHOP_INTERVAL;
 }
 
+/** Intervalo do candle usado pela nuvem D-1 — mesmo leque de intervalos do S/R/PPHL/CHOP (a
+ *  nuvem é a abertura/fechamento do candle NATIVO nesse intervalo, ver buildPrevDayCloudSegments
+ *  em CandlestickChart.jsx). Padrão 4h analisando os 3 candles anteriores (ver
+ *  DEFAULT_PREV_DAY_CLOUD_CANDLE_COUNT) — trade-off entre reagir rápido e ter uma faixa estável.
+ *  Nem todo intervalo existe nativamente na Gate.io (só 1m/5m/15m/30m/1h/2h/4h/8h/1d, ver
+ *  CLAUDE.md) — com o gráfico em Gate.io e um intervalo não suportado, o backend/frontend caem
+ *  pra '1d' (ver prevDayCloudEffectiveInterval em CandlestickChart.jsx). */
+export const DEFAULT_PREV_DAY_CLOUD_INTERVAL = '4h';
+export const PREV_DAY_CLOUD_INTERVAL_OPTIONS = CHART_INTERVAL_OPTIONS;
+/** Intervalos com candle nativo na Gate.io — subconjunto de PREV_DAY_CLOUD_INTERVAL_OPTIONS. */
+export const GATE_PREV_DAY_CLOUD_INTERVALS = ['1m', '5m', '15m', '30m', '1h', '2h', '4h', '8h', '1d'];
+
+export function normalizePrevDayCloudInterval(raw) {
+  return PREV_DAY_CLOUD_INTERVAL_OPTIONS.includes(raw) ? raw : DEFAULT_PREV_DAY_CLOUD_INTERVAL;
+}
+
+/** Quantos candles (do intervalo escolhido acima) entram no "envelope" da nuvem D-1: em vez de só
+ *  o candle imediatamente anterior, junta os últimos N — nuvem = [min(todo open/close da janela),
+ *  max(todo open/close da janela)]. N=1 é exatamente o candle anterior sozinho; padrão 3 (ver
+ *  DEFAULT_PREV_DAY_CLOUD_INTERVAL). bullish/cor compara a abertura do candle mais antigo da
+ *  janela com o fechamento do mais recente (direção do trecho todo). */
+export const DEFAULT_PREV_DAY_CLOUD_CANDLE_COUNT = 3;
+export const PREV_DAY_CLOUD_CANDLE_COUNT_OPTIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+
+export function normalizePrevDayCloudCandleCount(raw) {
+  const n = Math.round(Number(raw));
+  return PREV_DAY_CLOUD_CANDLE_COUNT_OPTIONS.includes(n) ? n : DEFAULT_PREV_DAY_CLOUD_CANDLE_COUNT;
+}
+
 /** Intervalo de candles usado pela nuvem PERM (inclinação EMA9 vs EMA21) — independente do
  *  intervalo do gráfico, mesmo padrão do S/R/PPHL/CHOP (ex.: gráfico em 15m, nuvem calculada
  *  sobre candles de 1h). */
@@ -373,6 +402,8 @@ export const DEFAULT_UI_PREFS = {
   srIntervalDefault: DEFAULT_SR_INTERVAL,
   pphlIntervalDefault: DEFAULT_PPHL_INTERVAL,
   chopIntervalDefault: DEFAULT_CHOP_INTERVAL,
+  prevDayCloudIntervalDefault: DEFAULT_PREV_DAY_CLOUD_INTERVAL,
+  prevDayCloudCandleCountDefault: DEFAULT_PREV_DAY_CLOUD_CANDLE_COUNT,
   emaPersistCloudIntervalDefault: DEFAULT_EMA_PERSIST_CLOUD_INTERVAL,
   emaPersistCloudTonesDefault: { ...DEFAULT_PERM_CLOUD_TONES },
   emaPersistCloudLayersDefault: { ...DEFAULT_EMA_PERSIST_CLOUD_LAYERS },
@@ -400,6 +431,8 @@ function cloneDefaults() {
     srIntervalDefault: DEFAULT_SR_INTERVAL,
     pphlIntervalDefault: DEFAULT_PPHL_INTERVAL,
     chopIntervalDefault: DEFAULT_CHOP_INTERVAL,
+    prevDayCloudIntervalDefault: DEFAULT_PREV_DAY_CLOUD_INTERVAL,
+  prevDayCloudCandleCountDefault: DEFAULT_PREV_DAY_CLOUD_CANDLE_COUNT,
     emaPersistCloudIntervalDefault: DEFAULT_EMA_PERSIST_CLOUD_INTERVAL,
     emaPersistCloudTonesDefault: { ...DEFAULT_PERM_CLOUD_TONES },
     emaPersistCloudLayersDefault: { ...DEFAULT_EMA_PERSIST_CLOUD_LAYERS },
@@ -453,6 +486,12 @@ export function loadUiPreferences() {
     }
     if (parsed.chopIntervalDefault !== undefined) {
       result.chopIntervalDefault = normalizeChopInterval(parsed.chopIntervalDefault);
+    }
+    if (parsed.prevDayCloudIntervalDefault !== undefined) {
+      result.prevDayCloudIntervalDefault = normalizePrevDayCloudInterval(parsed.prevDayCloudIntervalDefault);
+    }
+    if (parsed.prevDayCloudCandleCountDefault !== undefined) {
+      result.prevDayCloudCandleCountDefault = normalizePrevDayCloudCandleCount(parsed.prevDayCloudCandleCountDefault);
     }
     if (parsed.emaPersistCloudIntervalDefault !== undefined) {
       result.emaPersistCloudIntervalDefault = normalizeEmaPersistCloudInterval(parsed.emaPersistCloudIntervalDefault);

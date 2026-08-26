@@ -13,6 +13,12 @@ const DEFAULT_CANDLE_COUNT = 1000;
 const BB_PERIOD = 20;
 const BB_STDDEV = 2;
 const BB_MIN_CANDLES_PADDING = 5;
+// Intervalos aceitos pelo seletor da nuvem D-1 (options.prevDayCloud.interval) — mesmo leque do
+// gráfico (ver PREV_DAY_CLOUD_INTERVAL_OPTIONS em frontend-react/src/utils/uiPreferences.js).
+const PREV_DAY_CLOUD_INTERVALS = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w'];
+// Subconjunto com candle nativo na Gate.io (ver CLAUDE.md) — com source='gate' e um interval fora
+// dessa lista, cai pra '1d'.
+const GATE_PREV_DAY_CLOUD_INTERVALS = ['1m', '5m', '15m', '30m', '1h', '2h', '4h', '8h', '1d'];
 // ADX/MACD: períodos fixos, sem seletor próprio — só o intervalo é configurável (mesmo padrão
 // "1 detalhe configurável por filtro" dos demais). 14 (ADX) e 12/26/9 (MACD) são os valores
 // padrão de mercado, os mesmos usados na literatura consultada (Wilder pro ADX, Appel pro MACD).
@@ -141,27 +147,37 @@ function resolveOwnIntervalValueAt(ownCandles, ownSeries, ownOffset, timeMs, pic
 }
 
 /**
- * Nuvem D-1 válida no instante do sinal: candle diário NATIVO imediatamente anterior ao dia do
- * sinal (mesma regra do indicador do gráfico — não é o dia "civil" do sinal, é o candle anterior
- * a ele). null se não houver candle diário suficiente antes do sinal (início da amostra).
+ * Nuvem D-1 válida no instante do sinal: envelope [menor open/close, maior open/close] dos
+ * `candleCount` candles NATIVOS imediatamente anteriores ao dia do sinal (mesma regra do
+ * indicador do gráfico — não é o dia "civil" do sinal, são os candles anteriores a ele).
+ * candleCount=1 (padrão) é exatamente o candle anterior sozinho (comportamento original). null se
+ * não houver candle suficiente antes do sinal (início da amostra).
  */
-function resolvePrevDayCloud(dailyCandles, signalTimeMs) {
+function resolvePrevDayCloud(dailyCandles, signalTimeMs, candleCount = 1) {
     const curIdx = findCandleIndexAtOrBefore(dailyCandles, signalTimeMs);
     if (curIdx < 1) return null;
-    const prev = dailyCandles[curIdx - 1];
-    const open = parseFloat(prev.open);
-    const close = parseFloat(prev.close);
-    if (!(open > 0) || !(close > 0)) return null;
-    return { lower: Math.min(open, close), upper: Math.max(open, close) };
+    const n = Math.max(1, Math.round(Number(candleCount) || 1));
+    const window = dailyCandles.slice(Math.max(0, curIdx - n), curIdx);
+    if (!window.length) return null;
+    let lower = Infinity, upper = -Infinity;
+    for (const c of window) {
+        const open = parseFloat(c.open);
+        const close = parseFloat(c.close);
+        if (open > 0) { lower = Math.min(lower, open); upper = Math.max(upper, open); }
+        if (close > 0) { lower = Math.min(lower, close); upper = Math.max(upper, close); }
+    }
+    if (!(upper > 0) || !Number.isFinite(lower)) return null;
+    return { lower, upper };
 }
 
 /**
  * Preço do sinal precisa estar DENTRO da nuvem D-1, na faixa [lower, lower + maxPct% × altura] —
- * não importa se o dia anterior fechou em alta ou baixa (ver JSDoc de analyseRsiThresholdBacktest,
- * options.prevDayCloud). Sem nuvem de referência disponível (início da amostra), não bloqueia.
+ * não importa se o(s) candle(s) anterior(es) fecharam em alta ou baixa (ver JSDoc de
+ * analyseRsiThresholdBacktest, options.prevDayCloud). Sem nuvem de referência disponível (início
+ * da amostra), não bloqueia.
  */
-function checkPrevDayCloudFilter(dailyCandles, signalTimeMs, price, maxPct) {
-    const cloud = resolvePrevDayCloud(dailyCandles, signalTimeMs);
+function checkPrevDayCloudFilter(dailyCandles, signalTimeMs, price, maxPct, candleCount = 1) {
+    const cloud = resolvePrevDayCloud(dailyCandles, signalTimeMs, candleCount);
     if (!cloud) return true;
     const { lower, upper } = cloud;
     if (upper <= lower) return true; // nuvem "achatada" (abertura == fechamento) — sem restrição possível
@@ -280,6 +296,13 @@ function buildOccurrence(signalCandle, signalPrice, signalRsi, resolved, positio
  *   à parte de baixo dela (ex.: 70% = só a faixa entre o fundo e 70% da altura da nuvem).
  * @param {boolean} [options.prevDayCloud.enabled=false]
  * @param {number}  [options.prevDayCloud.maxPct=100]
+ * @param {string}  [options.prevDayCloud.interval='4h']  Mesmo seletor do gráfico (ver
+ *   prevDayCloudInterval em CandlestickChart.jsx). Com source='gate' e um interval sem candle
+ *   nativo na Gate.io (só 1m/5m/15m/30m/1h/2h/4h/8h/1d), cai pra '1d'.
+ * @param {number}  [options.prevDayCloud.candleCount=3]  Quantos candles anteriores (do interval
+ *   acima) entram no envelope da nuvem — 1 é só o candle imediatamente anterior; N>1 junta os
+ *   últimos N: nuvem = [menor open/close, maior open/close] entre todos eles (mesmo parâmetro do
+ *   gráfico, ver buildPrevDayCloudSegments em CandlestickChart.jsx).
  * @param {number}  [options.minVolumeUsdt=0]  Filtro opcional de volume 24h (mesmo campo do bot
  *   ao vivo, config.volume.minVolumeUsdt — ver marketScanner.js). 0 = desligado. Usa o mesmo
  *   cache de /ticker/24hr da Binance (cachedTicker24hr.js) — sem efeito quando source='gate'
@@ -359,11 +382,21 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
 
     const pdcEnabled = !!prevDayCloud?.enabled;
     const pdcMaxPct  = Math.max(1, Math.min(100, Number(prevDayCloud?.maxPct ?? 100)));
-    // Dias cobertos pelo intervalo principal (mainLimit candles) + folga de 3 dias, pro dia mais
-    // antigo da amostra também ter um "dia anterior" completo pra servir de referência — mesma
-    // conta de computePrevDayCloudFetchLimit no frontend.
+    const pdcRequestedInterval = PREV_DAY_CLOUD_INTERVALS.includes(prevDayCloud?.interval) ? prevDayCloud.interval : '4h';
+    // Nem todo intervalo tem candle nativo na Gate.io (ver CLAUDE.md) — com source='gate' e um
+    // interval fora de GATE_PREV_DAY_CLOUD_INTERVALS, cai pra '1d'.
+    const pdcInterval = (source === 'gate' && !GATE_PREV_DAY_CLOUD_INTERVALS.includes(pdcRequestedInterval))
+        ? '1d'
+        : pdcRequestedInterval;
+    // Quantos candles (do pdcInterval) entram no envelope da nuvem — 1 (padrão) é só o candle
+    // anterior, ver resolvePrevDayCloud/checkPrevDayCloudFilter.
+    const pdcCandleCount = Math.max(1, Math.min(10, Math.round(Number(prevDayCloud?.candleCount ?? 3))));
+    // Dias/períodos cobertos pelo intervalo principal (mainLimit candles) + folga de
+    // pdcCandleCount+3, pro sinal mais antigo da amostra também ter uma janela completa de
+    // candles anteriores pra servir de referência — mesma conta de computePrevDayCloudFetchLimit
+    // no frontend.
     const pdcDayLimit = Math.min(500, Math.max(10,
-        Math.ceil((mainLimit * (interval === '1m' ? 60_000 : intervalMs(interval))) / 86_400_000) + 3,
+        Math.ceil((mainLimit * (interval === '1m' ? 60_000 : intervalMs(interval))) / intervalMs(pdcInterval)) + pdcCandleCount + 3,
     ));
 
     // Candles de 4h cobertos pela janela do intervalo principal + folga de 3 candles (o candle
@@ -388,7 +421,7 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
             ? fetchCandles(symbol, bwInterval, bwLookback + bwPeriod + BB_MIN_CANDLES_PADDING)
             : Promise.resolve(null),
         pdcEnabled
-            ? fetchCandles(symbol, '1d', pdcDayLimit)
+            ? fetchCandles(symbol, pdcInterval, pdcDayLimit)
             : Promise.resolve(null),
         volEnabled ? getTickers() : Promise.resolve(null),
         pcsEnabled
@@ -519,7 +552,7 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
             if (signalCandle.openTime < signalCutoffMs) continue;
 
             const signalPrice = parseFloat(signalCandle.close);
-            if (pdcEnabled && !checkPrevDayCloudFilter(dailyCandles, signalCandle.openTime, signalPrice, pdcMaxPct)) continue;
+            if (pdcEnabled && !checkPrevDayCloudFilter(dailyCandles, signalCandle.openTime, signalPrice, pdcMaxPct, pdcCandleCount)) continue;
 
             // ADX: só passa com tendência confirmada (>= mínimo) no instante do sinal. Sem valor
             // disponível ainda (warmup do indicador), não bloqueia.
@@ -629,7 +662,7 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
         totalPnlUsd,
         avgPnlPct,
         bandWidth: bandWidthResult,
-        prevDayCloud: pdcEnabled ? { maxPct: pdcMaxPct } : null,
+        prevDayCloud: pdcEnabled ? { maxPct: pdcMaxPct, interval: pdcInterval, candleCount: pdcCandleCount } : null,
         volume: volumeResult,
         excludeOpenExits,
         prevCandleStop: pcsEnabled,

@@ -266,6 +266,14 @@ const RSI_MOM_BANDWIDTH_OPTIONS = [1, 1.5, 2, 2.5, 3, 4, 5, 8, 10];
  *  restringem à parte de baixo dela — ver checkPrevDayCloudFilter em
  *  backend/utils/analyseRsiThresholdBacktest.js. */
 const RSI_MOM_CLOUD_PCT_OPTIONS = [50, 60, 70, 80, 90, 100];
+/** Valores selecionáveis do intervalo da nuvem D-1 — mesmo seletor do gráfico (ver
+ *  prevDayCloudInterval em CandlestickChart.jsx), padrão 4h. Com source='gate' e um intervalo sem
+ *  candle nativo lá, o backend cai pra '1d'. */
+const RSI_MOM_CLOUD_INTERVAL_OPTIONS = INTERVALS;
+/** Valores selecionáveis da quantidade de candles do envelope da nuvem D-1 — mesmo seletor do
+ *  gráfico (ver prevDayCloudCandleCount em CandlestickChart.jsx), padrão 3. 1 = só o candle
+ *  anterior; N>1 = envelope [menor open/close, maior open/close] dos últimos N candles. */
+const RSI_MOM_CLOUD_CANDLE_COUNT_OPTIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 /** Valores selecionáveis do filtro "Volume 24h" — mesmo campo do bot ao vivo
  *  (config.volume.minVolumeUsdt, ver backend/bot/rsi-momentum/marketScanner.js). 0 = desligado. */
 const RSI_MOM_VOLUME_OPTIONS = [0, 1_000_000, 2_000_000, 5_000_000, 30_000_000];
@@ -290,6 +298,8 @@ const RSI_MOM_DEFAULT_PREFS = {
   bandWidthMinPct: 2,
   prevDayCloudEnabled: false,
   prevDayCloudMaxPct: 100,
+  prevDayCloudInterval: '4h',
+  prevDayCloudCandleCount: 3,
   minVolumeUsdt: 0,
   excludeOpenExits: false,
   prevCandleStopEnabled: false,
@@ -972,6 +982,8 @@ function RsiMomentumStats({ autoCalc }) {
         prevDayCloud: p.prevDayCloudEnabled ? {
           enabled: true,
           maxPct: p.prevDayCloudMaxPct,
+          interval: p.prevDayCloudInterval,
+          candleCount: p.prevDayCloudCandleCount,
         } : null,
         minVolumeUsdt: p.minVolumeUsdt,
         excludeOpenExits: p.excludeOpenExits,
@@ -1213,14 +1225,32 @@ function RsiMomentumStats({ autoCalc }) {
         </div>
 
         {prefs.prevDayCloudEnabled && (
-          <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.prevday_cloud_max')}>
-            <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.prevday_cloud_max')}</label>
-            <select className={inp}
-              value={prefs.prevDayCloudMaxPct}
-              onChange={(e) => patchPrefs({ prevDayCloudMaxPct: Number(e.target.value) })}>
-              {RSI_MOM_CLOUD_PCT_OPTIONS.map((v) => <option key={v} value={v}>{v}%</option>)}
-            </select>
-          </div>
+          <>
+            <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.prevday_cloud_max')}>
+              <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.prevday_cloud_max')}</label>
+              <select className={inp}
+                value={prefs.prevDayCloudMaxPct}
+                onChange={(e) => patchPrefs({ prevDayCloudMaxPct: Number(e.target.value) })}>
+                {RSI_MOM_CLOUD_PCT_OPTIONS.map((v) => <option key={v} value={v}>{v}%</option>)}
+              </select>
+            </div>
+            <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.prevday_cloud_interval')}>
+              <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.prevday_cloud_interval')}</label>
+              <select className={inp}
+                value={prefs.prevDayCloudInterval}
+                onChange={(e) => patchPrefs({ prevDayCloudInterval: e.target.value })}>
+                {RSI_MOM_CLOUD_INTERVAL_OPTIONS.map((v) => <option key={v} value={v}>{v}</option>)}
+              </select>
+            </div>
+            <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.prevday_cloud_candle_count')}>
+              <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.prevday_cloud_candle_count')}</label>
+              <select className={inp}
+                value={prefs.prevDayCloudCandleCount}
+                onChange={(e) => patchPrefs({ prevDayCloudCandleCount: Number(e.target.value) })}>
+                {RSI_MOM_CLOUD_CANDLE_COUNT_OPTIONS.map((v) => <option key={v} value={v}>{`x${v}`}</option>)}
+              </select>
+            </div>
+          </>
         )}
 
         {/* Filtro de volume 24h (mesmo campo do bot ao vivo, config.volume.minVolumeUsdt) */}

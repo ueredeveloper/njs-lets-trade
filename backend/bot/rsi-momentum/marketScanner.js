@@ -38,6 +38,8 @@ function buildReasonLabels(config) {
     const rsi5mThreshold = config.entry.rsi5mFilter?.threshold;
     const maxMovePct = config.entry.spikeGuard?.maxMovePct;
     const prevDayCloudMaxPct = config.entry.prevDayCloud?.maxPct;
+    const prevDayCloudLabel = (config.entry.prevDayCloud?.interval === '3d' ? 'D-3' : 'D-1')
+        + (config.entry.prevDayCloud?.candleCount > 1 ? `×${config.entry.prevDayCloud.candleCount}` : '');
     return {
         ENTRY_OFF: 'entradas pausadas na configuração',
         INSUFFICIENT_DATA: 'histórico de candles insuficiente pra calcular o RSI',
@@ -48,7 +50,7 @@ function buildReasonLabels(config) {
         BANDWIDTH_TOO_LOW: `largura de banda média abaixo do mínimo exigido (${minPct}%)`,
         RSI5M_NO_DATA: 'candles 5m insuficientes pra calcular o RSI 5m',
         RSI5M_TOO_LOW: `RSI(14) do candle 5m abaixo do mínimo exigido (${rsi5mThreshold})`,
-        PREVDAY_CLOUD_OUT_OF_RANGE: `preço fora da nuvem D-1 (faixa até ${prevDayCloudMaxPct}% da nuvem)`,
+        PREVDAY_CLOUD_OUT_OF_RANGE: `preço fora da nuvem ${prevDayCloudLabel} (faixa até ${prevDayCloudMaxPct}% da nuvem)`,
     };
 }
 

@@ -76,8 +76,11 @@ const RSI_MOMENTUM_DEFAULTS = {
      *  abertura/fechamento do candle DIÁRIO nativo anterior ao dia do sinal — mesmo indicador do
      *  gráfico e do backtest, ver checkPrevDayCloudFilter em strategyEngine.js), na faixa
      *  [lower, lower + maxPct% × altura]. maxPct=100 (padrão) só exige estar dentro da nuvem
-     *  inteira; valores menores restringem à parte de baixo dela. Sempre intervalo 1d, fixo. */
-    prevDayCloud: { enabled: false, maxPct: 100 },
+     *  inteira; valores menores restringem à parte de baixo dela. interval: mesmo seletor do
+     *  gráfico e do backtest em Estatísticas (padrão 4h). candleCount: quantos candles anteriores
+     *  entram no envelope da nuvem — 1 é só o candle anterior; N>1 junta os últimos N (menor/maior
+     *  open+close entre eles); padrão 3. */
+    prevDayCloud: { enabled: false, maxPct: 100, interval: '4h', candleCount: 3 },
   },
 
   exit: {
@@ -180,6 +183,8 @@ function normalizePrevDayCloud(block) {
   return {
     enabled: src.enabled === true,
     maxPct: Math.max(1, Math.min(100, Number(src.maxPct ?? d.maxPct))),
+    interval: ALL_INTERVALS.includes(src.interval) ? src.interval : d.interval,
+    candleCount: Math.max(1, Math.min(10, Math.round(Number(src.candleCount ?? d.candleCount)))),
   };
 }
 

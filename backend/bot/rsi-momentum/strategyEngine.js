@@ -22,9 +22,11 @@ const RSI5M_WARMUP_PADDING = 10;
 // checkpoint dentro da janela do candle de entry.interval ainda em formação — não calcula RSI
 // nesse intervalo, só lê o preço de fechamento, então o limite pode ser pequeno.
 const EARLY_CONFIRM_WARMUP_PADDING = 10;
-// Intervalo fixo do filtro entry.prevDayCloud — sempre 1d, sem seletor próprio (o "dia anterior"
-// só faz sentido em 1d). 5 candles bastam pra sempre ter pelo menos 2 fechados (o de ontem e o
-// anterior a ele) mesmo com algum atraso/gap pontual do candle diário.
+// Intervalo do filtro entry.prevDayCloud — '1d' (padrão) ou '3d', mesmo seletor do gráfico e do
+// backtest (ver prevDayCloudInterval em CandlestickChart.jsx). 5 candles bastam pra sempre ter
+// pelo menos 2 fechados (o "de ontem"/"dos últimos 3 dias" e o anterior a ele) mesmo com algum
+// atraso/gap pontual do candle. Bot RSI Momentum só opera Binance — sem a limitação de 3d que a
+// Gate.io tem no backtest/gráfico.
 const PREV_DAY_CLOUD_INTERVAL = '1d';
 const PREV_DAY_CLOUD_LIMIT = 5;
 
@@ -60,7 +62,8 @@ function getRequiredSpecs(config) {
     }
 
     if (entry.prevDayCloud?.enabled) {
-        add(PREV_DAY_CLOUD_INTERVAL, PREV_DAY_CLOUD_LIMIT);
+        const pdcCandleCount = Math.max(1, Math.round(Number(entry.prevDayCloud.candleCount ?? 1)));
+        add(entry.prevDayCloud.interval ?? PREV_DAY_CLOUD_INTERVAL, Math.max(PREV_DAY_CLOUD_LIMIT, pdcCandleCount + 3));
     }
 
     return [...specs.entries()].map(([interval, lim]) => ({ interval, limit: lim }));
@@ -135,33 +138,38 @@ function checkSpikeGuardFilter(config, signalCandle) {
 
 /**
  * Filtro opcional (desligado por padrão — ver comentário em tradeConfigSchema.js): exige que o
- * preço do sinal esteja DENTRO da nuvem D-1 — banda entre abertura/fechamento do candle DIÁRIO
- * (1d) nativo imediatamente anterior ao dia do sinal, mesmo indicador do gráfico (ver
- * buildPrevDayCloudSegments em frontend-react/src/components/CandlestickChart.jsx) e do backtest
- * (ver checkPrevDayCloudFilter em backend/utils/analyseRsiThresholdBacktest.js). A faixa aceita é
- * [lower, lower + maxPct% × (upper-lower)] — não importa se o dia anterior fechou em alta ou
- * baixa. maxPct=100 exige só estar dentro da nuvem inteira; valores menores restringem à parte de
- * baixo dela. Sem candle diário anterior suficiente ainda (favorito recém-criado), libera —
- * fail-open, como os demais filtros baseados em série própria.
+ * preço do sinal esteja DENTRO da nuvem D-1 — envelope [menor open/close, maior open/close] dos
+ * últimos `candleCount` candles NATIVOS (no interval acima, padrão 4h) anteriores ao sinal, mesmo
+ * indicador do gráfico (ver buildPrevDayCloudSegments em
+ * frontend-react/src/components/CandlestickChart.jsx) e do backtest (ver checkPrevDayCloudFilter
+ * em backend/utils/analyseRsiThresholdBacktest.js). candleCount=1 (padrão) é só o candle anterior
+ * sozinho. A faixa aceita é [lower, lower + maxPct% × (upper-lower)] — não importa se o(s)
+ * candle(s) anterior(es) fecharam em alta ou baixa. maxPct=100 exige só estar dentro da nuvem
+ * inteira; valores menores restringem à parte de baixo dela. Sem candle(s) anterior(es)
+ * suficiente(s) ainda (favorito recém-criado), libera — fail-open, como os demais filtros
+ * baseados em série própria.
  */
 function checkPrevDayCloudFilter(config, cMap, signalCandle) {
     const pdc = config.entry?.prevDayCloud;
     if (!pdc?.enabled) return { allowed: true };
 
-    // closedCandlesOnly já descarta o candle diário de HOJE (ainda em formação) — diferente do
-    // backtest (que busca um histórico com vários sinais passados e por isso precisa achar o
-    // candle "anterior ao do sinal" dentro do array inteiro), aqui o sinal é sempre "agora": o
-    // último candle diário FECHADO já É a referência de ontem, sem precisar de nenhum índice-1.
-    const closed = closedCandlesOnly(cMap[PREV_DAY_CLOUD_INTERVAL] ?? []);
-    if (!closed.length) return { allowed: true };
+    // closedCandlesOnly já descarta o candle de HOJE (ainda em formação) — diferente do backtest
+    // (que busca um histórico com vários sinais passados e por isso precisa achar os candles
+    // "anteriores ao do sinal" dentro do array inteiro), aqui o sinal é sempre "agora": os últimos
+    // candles FECHADOS já SÃO a referência, sem precisar de nenhum índice-1.
+    const closed = closedCandlesOnly(cMap[pdc.interval ?? PREV_DAY_CLOUD_INTERVAL] ?? []);
+    const n = Math.max(1, Math.round(Number(pdc.candleCount ?? 1)));
+    if (closed.length < n) return { allowed: true };
 
-    const prevDaily = closed[closed.length - 1];
-    const open = parseFloat(prevDaily.open);
-    const close = parseFloat(prevDaily.close);
-    if (!(open > 0) || !(close > 0)) return { allowed: true };
-
-    const lower = Math.min(open, close);
-    const upper = Math.max(open, close);
+    const window = closed.slice(closed.length - n);
+    let lower = Infinity, upper = -Infinity;
+    for (const c of window) {
+        const open = parseFloat(c.open);
+        const close = parseFloat(c.close);
+        if (open > 0) { lower = Math.min(lower, open); upper = Math.max(upper, open); }
+        if (close > 0) { lower = Math.min(lower, close); upper = Math.max(upper, close); }
+    }
+    if (!(upper > 0) || !Number.isFinite(lower)) return { allowed: true };
     if (upper <= lower) return { allowed: true }; // nuvem "achatada" — sem restrição possível
 
     const price = parseFloat(signalCandle.close);

@@ -175,6 +175,8 @@ export async function fetchRsiThresholdBacktest(symbol, interval, options = {}) 
   if (prevDayCloud?.enabled) {
     params.set('prevDayCloudEnabled', '1');
     params.set('prevDayCloudMaxPct', String(prevDayCloud.maxPct ?? 100));
+    params.set('prevDayCloudInterval', prevDayCloud.interval ?? '1d');
+    params.set('prevDayCloudCandleCount', String(prevDayCloud.candleCount ?? 1));
   }
   if (minVolumeUsdt) params.set('minVolumeUsdt', String(minVolumeUsdt));
   if (excludeOpenExits) params.set('excludeOpenExits', '1');
@@ -221,6 +223,8 @@ export async function fetchRsiThresholdBacktestMarket(interval, options = {}) {
   if (prevDayCloud?.enabled) {
     params.set('prevDayCloudEnabled', '1');
     params.set('prevDayCloudMaxPct', String(prevDayCloud.maxPct ?? 100));
+    params.set('prevDayCloudInterval', prevDayCloud.interval ?? '1d');
+    params.set('prevDayCloudCandleCount', String(prevDayCloud.candleCount ?? 1));
   }
   if (minVolumeUsdt) params.set('minVolumeUsdt', String(minVolumeUsdt));
   if (excludeOpenExits) params.set('excludeOpenExits', '1');

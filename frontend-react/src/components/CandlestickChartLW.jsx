@@ -982,11 +982,11 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       }
       bandFillPrimitiveRef.current.replacePrefixed('emaPersist-', emaPersistClouds);
 
-      // Nuvem D-1: um "degrau" por candle diário nativo (1d, mesmo candle da Binance/Gate),
-      // cada um com a faixa abertura/fechamento do candle ANTERIOR a ele, verde ou vermelho
-      // conforme o dia anterior fechou em alta ou queda (ver buildPrevDayCloudSegments em
-      // CandlestickChart.jsx) — arrastando o gráfico pra trás, cada dia antigo mostra a nuvem
-      // que valia NAQUELE dia, não uma faixa única fixa esticada por todo o histórico.
+      // Nuvem D-1: um "degrau" por candle nativo (intervalo escolhido no seletor "D"), cada um
+      // com o envelope abertura/fechamento dos candles ANTERIORES a ele, verde ou vermelho
+      // conforme o trecho anterior fechou em alta ou queda (ver buildPrevDayCloudSegments em
+      // CandlestickChart.jsx) — arrastando o gráfico pra trás, cada trecho antigo mostra a nuvem
+      // que valia NAQUELE momento, não uma faixa única fixa esticada por todo o histórico.
       let prevDayCloudBand = [];
       if (activeIndicators.includes('prevDayCloud')
         && prevDayCloudConfig?.segments?.length && Number.isFinite(minTime) && Number.isFinite(maxTime)) {
@@ -1285,10 +1285,11 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       // Último degrau = nuvem vigente agora (dia mais recente carregado); os degraus mais
       // antigos ficam só no próprio gráfico, sem entrada de legenda separada pra cada um.
       const last = prevDayCloudConfig.segments[prevDayCloudConfig.segments.length - 1];
+      const pdSuffix = prevDayCloudConfig.candleCount > 1 ? `×${prevDayCloudConfig.candleCount}` : '';
       entries.push({
         key: 'prevDayCloud',
         color: last.bullish ? C_UP : C_DOWN,
-        label: `D-1 A ${last.openPrice} / F ${last.closePrice}`,
+        label: `D-1 ${prevDayCloudConfig.interval}${pdSuffix} A ${last.openPrice} / F ${last.closePrice}`,
       });
     }
     return entries;

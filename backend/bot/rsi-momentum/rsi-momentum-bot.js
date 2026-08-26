@@ -269,7 +269,7 @@ function logStartupConfig(body) {
     ? `   Guarda de pico: recusa sinal se o candle já subiu mais que ${sg.maxMovePct}% (abertura→fechamento)`
     : '   Guarda de pico: desligada');
   console.log(pdc?.enabled
-    ? `   Nuvem D-1: preço precisa estar na faixa até ${pdc.maxPct}% da nuvem (abertura/fechamento do candle diário anterior)`
+    ? `   Nuvem D-${pdc.interval === '3d' ? '3' : '1'}${pdc.candleCount > 1 ? `×${pdc.candleCount}` : ''}: preço precisa estar na faixa até ${pdc.maxPct}% da nuvem (envelope dos últimos ${pdc.candleCount ?? 1} candle(s) ${pdc.interval ?? '1d'})`
     : '   Nuvem D-1: desligada (novo, ainda não validado)');
   const bracketNote = x.restingBracket.enabled ? '' : ' (bracket OFF, só fallback por candle)';
   const stopNote = sl.enabled ? '' : ' (OFF)';

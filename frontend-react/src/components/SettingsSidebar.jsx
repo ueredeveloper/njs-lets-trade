@@ -3,7 +3,7 @@ import { reloadCandles, getMaCrossScreenerConfig, saveMaCrossScreenerConfig,
   getBollingerMedianTrendConfig, saveBollingerMedianTrendConfig,
   getRsiMomentumConfig, saveRsiMomentumConfig,
   getCacheSettings, saveCacheSettings } from '../services/api';
-import { RSI_MOMENTUM_ALL_INTERVALS, RSI_MOMENTUM_BB_PERIODS, RSI_MOMENTUM_BB_STD_DEVS, RSI_MOMENTUM_CLOUD_PCT_OPTIONS }
+import { RSI_MOMENTUM_ALL_INTERVALS, RSI_MOMENTUM_BB_PERIODS, RSI_MOMENTUM_BB_STD_DEVS, RSI_MOMENTUM_CLOUD_PCT_OPTIONS, RSI_MOMENTUM_CLOUD_INTERVAL_OPTIONS, RSI_MOMENTUM_CLOUD_CANDLE_COUNT_OPTIONS }
   from '../constants/rsiMomentumConfigSchema';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useI18n } from '../i18n';
@@ -1286,16 +1286,38 @@ export default function SettingsSidebar({ open, onClose }) {
                       {t('settings.rsimomentum_prevdaycloud_enabled')}
                     </span>
                   </label>
-                  <label className="flex flex-col gap-1 w-1/2">
-                    <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_prevdaycloud_max_pct')}</span>
-                    <select
-                      className={`${inp} w-full`}
-                      value={rsiMomentumConfig.entry.prevDayCloud.maxPct}
-                      onChange={(e) => patchRsiMomentumNested('entry', 'prevDayCloud', { maxPct: Number(e.target.value) })}
-                    >
-                      {RSI_MOMENTUM_CLOUD_PCT_OPTIONS.map((v) => <option key={v} value={v}>{v}%</option>)}
-                    </select>
-                  </label>
+                  <div className="grid grid-cols-3 gap-2">
+                    <label className="flex flex-col gap-1">
+                      <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_prevdaycloud_max_pct')}</span>
+                      <select
+                        className={`${inp} w-full`}
+                        value={rsiMomentumConfig.entry.prevDayCloud.maxPct}
+                        onChange={(e) => patchRsiMomentumNested('entry', 'prevDayCloud', { maxPct: Number(e.target.value) })}
+                      >
+                        {RSI_MOMENTUM_CLOUD_PCT_OPTIONS.map((v) => <option key={v} value={v}>{v}%</option>)}
+                      </select>
+                    </label>
+                    <label className="flex flex-col gap-1">
+                      <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_prevdaycloud_interval')}</span>
+                      <select
+                        className={`${inp} w-full`}
+                        value={rsiMomentumConfig.entry.prevDayCloud.interval}
+                        onChange={(e) => patchRsiMomentumNested('entry', 'prevDayCloud', { interval: e.target.value })}
+                      >
+                        {RSI_MOMENTUM_CLOUD_INTERVAL_OPTIONS.map((v) => <option key={v} value={v}>{v}</option>)}
+                      </select>
+                    </label>
+                    <label className="flex flex-col gap-1">
+                      <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_prevdaycloud_candle_count')}</span>
+                      <select
+                        className={`${inp} w-full`}
+                        value={rsiMomentumConfig.entry.prevDayCloud.candleCount}
+                        onChange={(e) => patchRsiMomentumNested('entry', 'prevDayCloud', { candleCount: Number(e.target.value) })}
+                      >
+                        {RSI_MOMENTUM_CLOUD_CANDLE_COUNT_OPTIONS.map((v) => <option key={v} value={v}>{`x${v}`}</option>)}
+                      </select>
+                    </label>
+                  </div>
                 </div>
 
                 <label className="flex flex-col gap-1">
