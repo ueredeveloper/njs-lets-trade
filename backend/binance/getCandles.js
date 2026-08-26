@@ -81,10 +81,18 @@ module.exports = getCandles = async function (symbol, interval, limit) {
             const candles = await fetchKlines(symbol, interval, fetchCount);
             candles.forEach(candle => dbCandles.push(candle));
 
-            // Deduplica por openTime
+            // Deduplica por openTime — Object.values() NÃO garante ordem cronológica aqui:
+            // openTime (timestamp em ms, ~1.7 trilhão) excede o range de "array index" da spec
+            // JS (até 2^32-2), então as chaves seguem ordem de INSERÇÃO, não ordem numérica. Sem
+            // o sort abaixo, um dbCandles antigo com buraco (candles descartados por spike, ver
+            // filterOutliers em write-candles.js) seguido do lote recém-buscado (que preenche
+            // esse buraco) gera um array só PARCIALMENTE cronológico — o final do array mistura
+            // candles antigos com novos fora de ordem, corrompendo qualquer cálculo que assuma
+            // candles em sequência (RSI, nuvem D-1 etc.) — caso real: BICOUSDT.
             const uniqueItems = {};
             dbCandles.forEach(item => { uniqueItems[item.openTime] = item; });
-            const uniqueArray = Object.values(uniqueItems);
+            const uniqueArray = Object.values(uniqueItems)
+                .sort((a, b) => Number(a.openTime) - Number(b.openTime));
 
             await writeCandles(symbol, interval, uniqueArray);
             return uniqueArray.slice(-limit);
