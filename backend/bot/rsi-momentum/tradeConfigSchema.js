@@ -6,10 +6,12 @@
  * motor de sinal do backtest (ver backend/utils/analyseRsiThresholdBacktest.js). Pullback
  * opcional (ordem limite `belowPct`% abaixo do preço do sinal) é avaliado minuto a minuto
  * (candles de 1m), independente do `entry.interval` do sinal — não espera o próximo candle de
- * 15m/1h fechar pra notar o preenchimento. Saída via bracket TP/SL FIXO (Binance: OCO real;
- * Gate.io: emulado) a partir do preço de entrada — sem trailing, sem ancorar em EMA/banda:
- * alvo = entryPrice*(1+targetPct%), stop = entryPrice*(1-maxLossPct%), constantes até o fill
- * (não precisa recriar por deriva, ao contrário do bollinger-bands/vwap-bands).
+ * 15m/1h fechar pra notar o preenchimento. Saída via bracket TP/SL (Binance: OCO real; Gate.io:
+ * emulado) a partir do preço de entrada. Alvo e stop podem ser FIXOS (alvo = entryPrice*(1+
+ * targetPct%), stop = entryPrice*(1-maxLossPct%), constantes até o fill) ou CONTÍNUOS: o stop
+ * contínuo (exit.trailingStop) sobe em degraus com o pico de preço, e o alvo contínuo
+ * (exit.trailingTarget, só junto do stop contínuo) sobe no mesmo contador de degraus — nesses
+ * casos a perna que subiu é recriada na corretora.
  */
 
 const ALL_INTERVALS = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '8h', '1d'];
@@ -79,8 +81,10 @@ const RSI_MOMENTUM_DEFAULTS = {
      *  também libera — desconto ainda maior que a própria nuvem; só bloqueia acima do limite
      *  (caro demais). interval: mesmo seletor do gráfico e do backtest em Estatísticas (padrão
      *  4h). candleCount: quantos candles anteriores entram no envelope da nuvem — 1 é só o
-     *  candle anterior; N>1 junta os últimos N (menor/maior open+close entre eles); padrão 3. */
-    prevDayCloud: { enabled: true, maxPct: 90, interval: '4h', candleCount: 3 },
+     *  candle anterior; N>1 junta os últimos N (menor/maior open+close entre eles); padrão 3.
+     *  useHighLow: aumenta a nuvem usando máxima/mínima (pavios) em vez de abertura/fechamento
+     *  (corpo) dos candles da janela — faixa mais larga; padrão ligado. */
+    prevDayCloud: { enabled: true, maxPct: 90, interval: '4h', candleCount: 3, useHighLow: true },
     /** Ligado por padrão (1h) — confirmação de momentum por MACD (12/26/9 fixo, só o intervalo é
      *  configurável): só libera o sinal se o histograma (MACD − linha de sinal), no intervalo
      *  escolhido, estiver POSITIVO no candle fechado mais recente — mesma regra do backtest (ver
@@ -89,20 +93,27 @@ const RSI_MOMENTUM_DEFAULTS = {
   },
 
   exit: {
-    /** Ordem TP/SL resting na corretora, colocada logo após a compra confirmar (Binance: OCO
-     *  real; Gate.io: emulado). O ALVO é sempre FIXO (% sobre o preço de entrada) nos dois modos
-     *  de stop abaixo. */
-    restingBracket: { enabled: true, targetPct: 9 },
-    /** Desligado por padrão (stop fixo). Ligado: o STOP passa a subir em degraus conforme o
-     *  preço sobe desde a entrada, em vez de ficar fixo em stopLoss.maxLossPct — mesma
-     *  matemática de dois degraus INDEPENDENTES do backtest (ver options.trailingStop em
-     *  analyseRsiThresholdBacktest.js#resolveFromSignal e computeTrailingStopPrice em
-     *  strategyEngine.js): a cada `coinStepPct`% de alta do PICO de preço desde a entrada, o
-     *  stop sobe `stopStepPct` pontos percentuais (não precisam ser iguais). O ALVO continua
-     *  fixo (restingBracket.targetPct) — só o STOP é recriado na corretora quando sobe de
-     *  degrau (ver maybeReplaceBracket em rsi-momentum-bot.js). startPct = distância inicial do
-     *  stop (%) a partir da entrada, antes de qualquer degrau — cai em stopLoss.maxLossPct se
-     *  não informado. */
+    /** Modo do ALVO — INDEPENDENTE do stop:
+     *   'fixed'      (padrão) — alvo constante em restingBracket.targetPct% acima da entrada.
+     *   'continuous' — alvo sobe em degraus com o pico de preço (contador próprio
+     *                  trailingTarget.coinStepPct), base = restingBracket.targetPct.
+     *   'off'        — sem alvo; a posição só sai pelo stop (na corretora o alvo é colocado
+     *                  no teto permitido pela Binance, ~+100%, e na prática nunca é atingido). */
+    targetMode: 'fixed',
+    /** Ordem TP/SL resting na corretora (Binance: OCO real; Gate.io: emulado). targetPct = alvo
+     *  em % sobre o preço de entrada — valor do alvo FIXO e base do alvo CONTÍNUO. */
+    restingBracket: { enabled: true, targetPct: 5 },
+    /** Degraus do ALVO contínuo (targetMode === 'continuous') — contador PRÓPRIO, independente
+     *  do stop: a cada `coinStepPct`% de alta do PICO desde a entrada, o alvo sobe `stepPct`
+     *  pontos percentuais acima da base (restingBracket.targetPct) — ver computeTrailingTargetPrice
+     *  em strategyEngine.js. A perna do alvo é recriada na corretora quando sobe de degrau; a
+     *  Binance limita a distância do alvo ao preço médio (PERCENT_PRICE_BY_SIDE), então um alvo
+     *  que sobe muito acaba preso (clamp) na borda permitida — ver ocoClient.js. */
+    trailingTarget: { coinStepPct: 3, stepPct: 3 },
+    /** Desligado por padrão (stop fixo em stopLoss.maxLossPct). Ligado: o STOP sobe em degraus
+     *  com o PICO de preço — contador PRÓPRIO (`coinStepPct`), a cada `coinStepPct`% de alta o
+     *  stop sobe `stopStepPct` pontos percentuais. startPct = distância inicial do stop (%),
+     *  cai em stopLoss.maxLossPct se não informado. Ver computeTrailingStopPrice. */
     trailingStop: { enabled: true, startPct: 5, coinStepPct: 3, stopStepPct: 2 },
   },
 
@@ -204,6 +215,7 @@ function normalizePrevDayCloud(block) {
     maxPct: Math.max(1, Math.min(100, Number(src.maxPct ?? d.maxPct))),
     interval: ALL_INTERVALS.includes(src.interval) ? src.interval : d.interval,
     candleCount: Math.max(1, Math.min(10, Math.round(Number(src.candleCount ?? d.candleCount)))),
+    useHighLow: typeof src.useHighLow === 'boolean' ? src.useHighLow : d.useHighLow,
   };
 }
 
@@ -251,14 +263,33 @@ function normalizeTrailingStop(block) {
   };
 }
 
+function normalizeTrailingTarget(block) {
+  const d = RSI_MOMENTUM_DEFAULTS.exit.trailingTarget;
+  const src = block ?? {};
+  return {
+    coinStepPct: Math.max(0.1, Math.min(50, Number(src.coinStepPct ?? d.coinStepPct))),
+    stepPct: Math.max(0.1, Math.min(50, Number(src.stepPct ?? d.stepPct))),
+  };
+}
+
+/** Modo do alvo — independente do stop. Sem `targetMode` salvo (config antiga), deriva do
+ *  `trailingTarget.enabled` legado (true → contínuo, senão fixo). */
+function normalizeTargetMode(block) {
+  const m = block?.targetMode;
+  if (m === 'fixed' || m === 'continuous' || m === 'off') return m;
+  return block?.trailingTarget?.enabled === true ? 'continuous' : RSI_MOMENTUM_DEFAULTS.exit.targetMode;
+}
+
 function normalizeExit(block) {
   const d = RSI_MOMENTUM_DEFAULTS.exit;
   const rb = block?.restingBracket ?? {};
   return {
+    targetMode: normalizeTargetMode(block),
     restingBracket: {
       enabled: rb.enabled !== false,
       targetPct: Math.max(0.1, Math.min(100, Number(rb.targetPct ?? d.restingBracket.targetPct))),
     },
+    trailingTarget: normalizeTrailingTarget(block?.trailingTarget),
     trailingStop: normalizeTrailingStop(block?.trailingStop),
   };
 }

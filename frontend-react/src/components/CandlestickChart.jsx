@@ -12,7 +12,7 @@ import CandlestickChartLW from './CandlestickChartLW';
 import convertOpenTime from '../utils/convertOpenTime';
 import Tooltip from './Tooltip';
 import { useIsMobile } from '../hooks/useIsMobile';
-import { DEFAULT_OVERLAY_SLOTS, DEFAULT_ACTIVE_INDICATORS, VALID_ACTIVE_INDICATORS, BB_PERIOD_OPTIONS, BB_STDDEV_OPTIONS, DEFAULT_SR_INTERVAL, DEFAULT_PPHL_INTERVAL, DEFAULT_CHOP_INTERVAL, DEFAULT_PREV_DAY_CLOUD_INTERVAL, PREV_DAY_CLOUD_INTERVAL_OPTIONS, GATE_PREV_DAY_CLOUD_INTERVALS, DEFAULT_PREV_DAY_CLOUD_CANDLE_COUNT, PREV_DAY_CLOUD_CANDLE_COUNT_OPTIONS, DEFAULT_EMA_PERSIST_CLOUD_INTERVAL, DEFAULT_PERM_CLOUD_TONES, DEFAULT_EMA_PERSIST_CLOUD_LAYERS, DEFAULT_BARS_SINCE_CROSS_INTERVAL, DEFAULT_TD_SEQUENTIAL_INTERVAL, DEFAULT_COMMON_CHART_INTERVALS, getEmaPersistCloudConfirmInterval } from '../utils/uiPreferences';
+import { DEFAULT_OVERLAY_SLOTS, DEFAULT_ACTIVE_INDICATORS, VALID_ACTIVE_INDICATORS, BB_PERIOD_OPTIONS, BB_STDDEV_OPTIONS, DEFAULT_SR_INTERVAL, DEFAULT_PPHL_INTERVAL, DEFAULT_CHOP_INTERVAL, DEFAULT_PREV_DAY_CLOUD_INTERVAL, PREV_DAY_CLOUD_INTERVAL_OPTIONS, GATE_PREV_DAY_CLOUD_INTERVALS, DEFAULT_PREV_DAY_CLOUD_CANDLE_COUNT, PREV_DAY_CLOUD_CANDLE_COUNT_OPTIONS, DEFAULT_PREV_DAY_CLOUD_USE_HIGH_LOW, DEFAULT_EMA_PERSIST_CLOUD_INTERVAL, DEFAULT_PERM_CLOUD_TONES, DEFAULT_EMA_PERSIST_CLOUD_LAYERS, DEFAULT_BARS_SINCE_CROSS_INTERVAL, DEFAULT_TD_SEQUENTIAL_INTERVAL, DEFAULT_COMMON_CHART_INTERVALS, getEmaPersistCloudConfirmInterval } from '../utils/uiPreferences';
 import { PERM_CLOUD_TONES, PERM_TONE_SWATCH } from '../utils/emaCrossPersistenceCloud';
 import { CHART_VIEW, INTERVAL_MS, computeZoomWindow, buildFixedDataZoom, buildInsideDataZoom, computeCandleLimitFromTime, isTradePanelChartView, computeManualWheelZoom } from '../utils/chartView';
 import { simulateBbTouchPath, pairBbPathCycles } from '../utils/bollingerTouchPath';
@@ -686,7 +686,7 @@ function computePrevDayCloudFetchLimit(chartInterval, candleCount, interval = '1
  * render (CandlestickChartLW.jsx) já clampa em "agora", então o degrau em formação aparece
  * corretamente cortado sem precisar de um caso especial aqui.
  */
-function buildPrevDayCloudSegments(dailyCandles, windowSize = 1) {
+function buildPrevDayCloudSegments(dailyCandles, windowSize = 1, useHighLow = false) {
   if (!Array.isArray(dailyCandles) || dailyCandles.length < 2) return [];
   const n = Math.max(1, Math.round(Number(windowSize) || 1));
   const w = 1;
@@ -712,10 +712,18 @@ function buildPrevDayCloudSegments(dailyCandles, windowSize = 1) {
     let lower = Infinity;
     let upper = -Infinity;
     for (const c of valueWindow) {
-      const o = Number(c.open);
-      const cl = Number(c.close);
-      if (Number.isFinite(o)) { lower = Math.min(lower, o); upper = Math.max(upper, o); }
-      if (Number.isFinite(cl)) { lower = Math.min(lower, cl); upper = Math.max(upper, cl); }
+      if (useHighLow) {
+        // Aumenta a nuvem: máxima/mínima (pavios) em vez de abertura/fechamento (corpo).
+        const hi2 = Number(c.high);
+        const lo2 = Number(c.low);
+        if (Number.isFinite(lo2)) lower = Math.min(lower, lo2);
+        if (Number.isFinite(hi2)) upper = Math.max(upper, hi2);
+      } else {
+        const o = Number(c.open);
+        const cl = Number(c.close);
+        if (Number.isFinite(o)) { lower = Math.min(lower, o); upper = Math.max(upper, o); }
+        if (Number.isFinite(cl)) { lower = Math.min(lower, cl); upper = Math.max(upper, cl); }
+      }
     }
     if (!Number.isFinite(lower) || !Number.isFinite(upper)) continue;
     const openPrice = Number(valueWindow[0].open);
@@ -1335,12 +1343,13 @@ function renderIntervalPickerTile(dims, t, tipKey, labelPrefix, color, value, on
 /** Seletor da nuvem D-1: intervalo (1d/3d) + quantidade de candles do envelope (1 = só o candle
  *  anterior, N = min/max de open/close dos últimos N candles) lado a lado, mesmo padrão compacto
  *  de renderIntervalPickerTile — ver buildPrevDayCloudSegments. */
-function renderPrevDayCloudTile(dims, t, interval, setInterval, candleCount, setCandleCount) {
+function renderPrevDayCloudTile(dims, t, interval, setInterval, candleCount, setCandleCount, useHighLow, setUseHighLow) {
   const innerW = dims.w - PANEL_TILE_PAD * 2;
   const innerH = dims.h - PANEL_TILE_PAD * 2;
   const gap = 3;
-  const ivW = Math.max(40, innerW * 0.55 - gap / 2);
-  const ccW = Math.max(34, innerW - ivW - gap);
+  const ivW = Math.max(36, innerW * 0.4 - gap);
+  const ccW = Math.max(30, innerW * 0.28 - gap);
+  const hlW = Math.max(30, innerW - ivW - ccW - gap * 2);
   return (
     <div style={{ display: 'flex', alignItems: 'stretch', width: innerW, height: innerH, boxSizing: 'border-box', gap }}>
       <PanelTip text={t('chart.tip.prevDayCloud_interval')}>
@@ -1359,6 +1368,16 @@ function renderPrevDayCloudTile(dims, t, interval, setInterval, candleCount, set
           style={{ ...panelSelect('#94a3b8', { w: ccW, h: innerH }), fontSize: scaleFontSize({ w: ccW, h: innerH }, 0.3, 9, 13) }}
         >
           {PREV_DAY_CLOUD_CANDLE_COUNT_OPTIONS.map(n => <option key={n} value={n}>{`x${n}`}</option>)}
+        </select>
+      </PanelTip>
+      <PanelTip text={t('chart.tip.prevDayCloud_source')}>
+        <select
+          value={useHighLow ? 'hl' : 'oc'}
+          onChange={e => setUseHighLow(e.target.value === 'hl')}
+          style={{ ...panelSelect('#94a3b8', { w: hlW, h: innerH }), fontSize: scaleFontSize({ w: hlW, h: innerH }, 0.3, 9, 13) }}
+        >
+          <option value="oc">{t('chart.prevDayCloud_source_oc')}</option>
+          <option value="hl">{t('chart.prevDayCloud_source_hl')}</option>
         </select>
       </PanelTip>
     </div>
@@ -1923,6 +1942,8 @@ function ChartIndicatorPanel({
   setPrevDayCloudInterval,
   prevDayCloudCandleCount,
   setPrevDayCloudCandleCount,
+  prevDayCloudUseHighLow,
+  setPrevDayCloudUseHighLow,
   emaPersistCloudInterval,
   setEmaPersistCloudInterval,
   emaPersistCloudTones,
@@ -2191,7 +2212,7 @@ function ChartIndicatorPanel({
               {tile.kind === 'srInterval' && renderIntervalPickerTile(tile.dims, t, 'chart.tip.sr_interval', 'S/R', '#facc15', srInterval, setSrInterval)}
               {tile.kind === 'pphlInterval' && renderIntervalPickerTile(tile.dims, t, 'chart.tip.pphl_interval', 'PPHL', '#2dd4bf', pphlInterval, setPphlInterval)}
               {tile.kind === 'chopInterval' && renderIntervalPickerTile(tile.dims, t, 'chart.tip.chop_interval', 'CHOP', '#f59e0b', chopInterval, setChopInterval)}
-              {tile.kind === 'prevDayCloudInterval' && renderPrevDayCloudTile(tile.dims, t, prevDayCloudInterval, setPrevDayCloudInterval, prevDayCloudCandleCount, setPrevDayCloudCandleCount)}
+              {tile.kind === 'prevDayCloudInterval' && renderPrevDayCloudTile(tile.dims, t, prevDayCloudInterval, setPrevDayCloudInterval, prevDayCloudCandleCount, setPrevDayCloudCandleCount, prevDayCloudUseHighLow, setPrevDayCloudUseHighLow)}
               {tile.kind === 'emaPersistCloudInterval' && renderPermIntervalTile(tile.dims, t, emaPersistCloudInterval, setEmaPersistCloudInterval, emaPersistCloudTones, setEmaPersistCloudTones, emaPersistCloudLayers, setEmaPersistCloudLayers)}
               {tile.kind === 'barsSinceCrossInterval' && renderIntervalPickerTile(tile.dims, t, 'chart.tip.barsSinceCross_interval', 'BARS', '#38bdf8', barsSinceCrossInterval, setBarsSinceCrossInterval)}
               {tile.kind === 'tdSequentialInterval' && renderIntervalPickerTile(tile.dims, t, 'chart.tip.tdSequential_interval', 'TD SEQ', '#fb7185', tdSequentialInterval, setTdSequentialInterval)}
@@ -3312,7 +3333,7 @@ export default function CandlestickChart() {
     chartCandleWindowReset,
     multitradeChartFocus, tradePurchases, allTrades, chartInterval: savedInterval, setChartInterval,
     chartPanelButtons, uiPrefs, setMaBandsDefaults, setSrIntervalDefault, setPphlIntervalDefault, setChopIntervalDefault,
-    setPrevDayCloudIntervalDefault, setPrevDayCloudCandleCountDefault,
+    setPrevDayCloudIntervalDefault, setPrevDayCloudCandleCountDefault, setPrevDayCloudUseHighLowDefault,
     setEmaPersistCloudIntervalDefault, setEmaPersistCloudTonesDefault, setEmaPersistCloudLayersDefault, setBarsSinceCrossIntervalDefault, setTdSequentialIntervalDefault,
     setVwapDefaults, setVwapSlopeHighlightDefault, setActiveIndicatorsPreference,
     multitradeFavorites, fiveMTradeFavorites, activeTrades } = useCurrency();
@@ -3480,6 +3501,7 @@ export default function CandlestickChart() {
   const [_pphlLoading, setPphlLoading] = useState(false);
   const [prevDayCloudInterval, setPrevDayCloudInterval] = useState(() => uiPrefs.prevDayCloudIntervalDefault ?? DEFAULT_PREV_DAY_CLOUD_INTERVAL);
   const [prevDayCloudCandleCount, setPrevDayCloudCandleCount] = useState(() => uiPrefs.prevDayCloudCandleCountDefault ?? DEFAULT_PREV_DAY_CLOUD_CANDLE_COUNT);
+  const [prevDayCloudUseHighLow, setPrevDayCloudUseHighLow] = useState(() => uiPrefs.prevDayCloudUseHighLowDefault ?? DEFAULT_PREV_DAY_CLOUD_USE_HIGH_LOW);
   // Cache por símbolo + intervalo (1d/3d) — ver prevDayCloudEffectiveInterval.
   const [prevDayCloudCache, setPrevDayCloudCache] = useState({});
   const [chopInterval, setChopInterval] = useState(() => uiPrefs.chopIntervalDefault ?? DEFAULT_CHOP_INTERVAL);
@@ -3873,6 +3895,13 @@ export default function CandlestickChart() {
     setPrevDayCloudCandleCountDefault(prevDayCloudCandleCount);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prevDayCloudCandleCount]);
+
+  // Persiste o modo da nuvem D-1 (corpo open/close vs. pavios high/low) — mesmo padrão acima.
+  useEffect(() => {
+    if (isTradePanelChartView(chartViewSource)) return;
+    setPrevDayCloudUseHighLowDefault(prevDayCloudUseHighLow);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prevDayCloudUseHighLow]);
 
   // Persiste o intervalo da nuvem PERM (inclinação EMA9) — mesmo padrão do S/R/PPHL/CHOP
   useEffect(() => {
@@ -5241,9 +5270,9 @@ export default function CandlestickChart() {
   const chartPrevDayCloudConfig = useMemo(() => {
     if (!prevDayCloudShown || !selectedChart?.symbol) return null;
     const key = `${selectedChart.symbol}|${prevDayCloudEffectiveInterval}`;
-    const segments = buildPrevDayCloudSegments(prevDayCloudCache[key] ?? [], prevDayCloudCandleCount);
-    return segments.length ? { segments, interval: prevDayCloudEffectiveInterval, candleCount: prevDayCloudCandleCount } : null;
-  }, [prevDayCloudShown, selectedChart?.symbol, prevDayCloudCache, prevDayCloudEffectiveInterval, prevDayCloudCandleCount]);
+    const segments = buildPrevDayCloudSegments(prevDayCloudCache[key] ?? [], prevDayCloudCandleCount, prevDayCloudUseHighLow);
+    return segments.length ? { segments, interval: prevDayCloudEffectiveInterval, candleCount: prevDayCloudCandleCount, useHighLow: prevDayCloudUseHighLow } : null;
+  }, [prevDayCloudShown, selectedChart?.symbol, prevDayCloudCache, prevDayCloudEffectiveInterval, prevDayCloudCandleCount, prevDayCloudUseHighLow]);
 
   const chartChopConfig = useMemo(() => {
     if (!chopShown) return null;
@@ -5578,6 +5607,8 @@ export default function CandlestickChart() {
             setPrevDayCloudInterval={setPrevDayCloudInterval}
             prevDayCloudCandleCount={prevDayCloudCandleCount}
             setPrevDayCloudCandleCount={setPrevDayCloudCandleCount}
+            prevDayCloudUseHighLow={prevDayCloudUseHighLow}
+            setPrevDayCloudUseHighLow={setPrevDayCloudUseHighLow}
             emaPersistCloudInterval={emaPersistCloudInterval}
             setEmaPersistCloudInterval={setEmaPersistCloudInterval}
             emaPersistCloudTones={emaPersistCloudTones}
@@ -5678,6 +5709,8 @@ export default function CandlestickChart() {
             setPrevDayCloudInterval={setPrevDayCloudInterval}
             prevDayCloudCandleCount={prevDayCloudCandleCount}
             setPrevDayCloudCandleCount={setPrevDayCloudCandleCount}
+            prevDayCloudUseHighLow={prevDayCloudUseHighLow}
+            setPrevDayCloudUseHighLow={setPrevDayCloudUseHighLow}
             emaPersistCloudInterval={emaPersistCloudInterval}
             setEmaPersistCloudInterval={setEmaPersistCloudInterval}
             emaPersistCloudTones={emaPersistCloudTones}

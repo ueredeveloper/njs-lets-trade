@@ -13,9 +13,10 @@
  *      limite `belowPct`% abaixo do preço do sinal, padrão -0.5%) é avaliado minuto a minuto,
  *      não no candle do entry.interval — ver PULLBACK_INTERVAL em strategyEngine.js.
  *   2. Coloca bracket TP/SL resting na corretora logo após a compra confirmar (Binance: OCO
- *      real; Gate.io: emulado) — alvo e stop FIXOS a partir do preço de entrada, sem
- *      trailing/deriva (diferente do bollinger-bands: aqui não há banda/EMA pra perseguir, o
- *      nível nunca muda depois de colocado).
+ *      real; Gate.io: emulado) a partir do preço de entrada. Alvo e stop podem ser FIXOS ou
+ *      CONTÍNUOS (sobem em degraus com o pico de preço — exit.trailingStop / exit.trailingTarget);
+ *      quando sobem de degrau, a perna correspondente da bracket é recriada (maybeReplaceTrailingStop).
+ *      Não persegue banda/EMA como o bollinger-bands — os degraus são % sobre o preço de entrada.
  *
  * Fases persistidas em rsi_multi_bot_state.phase: WATCHING (transitório, só entre a criação da
  * linha e a primeira tentativa de entrada) → PENDING (ordem limite de pullback armada na
@@ -50,8 +51,16 @@ const { STRATEGY_IDS, loadGlobalConfigBody } = require('./strategyPresets');
 const { startMarketScanner } = require('./marketScanner');
 const {
   getRequiredSpecs, evaluateEntrySignal, evaluateExit, computeBracketPrices,
-  checkEntryLimitExpired, checkReentryCooldown,
+  checkEntryLimitExpired, checkReentryCooldown, resolveTargetMode,
 } = require('./strategyEngine');
+
+// Alvo "desligado" (exit.targetMode === 'off'): a OCO da corretora precisa das duas pernas, então
+// coloca o TP num teto absurdo (+500%) — a Binance PRENDE (clamp) em ~+100% do preço médio e, na
+// prática, a posição só sai pelo stop. Gate.io não tem esse filtro; o trigger fica parado inofensivo.
+const OFF_TARGET_MULT = 6;
+function bracketOrderTarget(buyPrice, liveTarget) {
+  return liveTarget != null ? liveTarget : buyPrice * OFF_TARGET_MULT;
+}
 const { detectOrphanPosition } = require('../shared/orphanPosition');
 
 // Componentes genéricos (compra/venda/execução/OCO), compartilhados com os outros bots de
@@ -276,10 +285,16 @@ function logStartupConfig(body) {
     : '   Filtro MACD: desligado');
   const bracketNote = x.restingBracket.enabled ? '' : ' (bracket OFF, só fallback por candle)';
   const ts = x.trailingStop;
+  const tt = x.trailingTarget;
   const stopDesc = ts?.enabled
     ? `stop CONTÍNUO -${ts.startPct}% inicial, sobe ${ts.stopStepPct}pp a cada ${ts.coinStepPct}% de alta do pico`
     : `stop -${sl.maxLossPct}%${sl.enabled ? '' : ' (OFF)'}`;
-  console.log(`   Saída: alvo +${x.restingBracket.targetPct}%${bracketNote} | ${stopDesc}`);
+  const targetDesc = x.targetMode === 'off'
+    ? 'alvo DESLIGADO (só sai pelo stop)'
+    : x.targetMode === 'continuous'
+      ? `alvo CONTÍNUO +${x.restingBracket.targetPct}% base, sobe ${tt.stepPct}pp a cada ${tt.coinStepPct}% de alta do pico`
+      : `alvo FIXO +${x.restingBracket.targetPct}%`;
+  console.log(`   Saída: ${targetDesc}${bracketNote} | ${stopDesc}`);
   console.log(`   Volume mín 24h: ${Number(body.volume.minVolumeUsdt).toLocaleString('pt-BR')} USDT (filtra o scan de mercado)`);
   console.log(`   Cooldown global entre entradas: ${body.entryCooldownHours}h | Polling: ${body.polling.pollMs / 1000}s aguardando sinal, ${body.polling.fastPollMs / 1000}s posição aberta`);
 }
@@ -340,24 +355,26 @@ async function recordBracketError({ rowId, session, log, symbol, strategyId, mes
 }
 
 /**
- * Coloca a bracket TP/SL resting na corretora logo após a compra confirmar. Alvo/stop são
- * FIXOS a partir do preço de entrada (computeBracketPrices) — diferente do bollinger-bands,
- * nunca precisa ser recriada por deriva (o nível não se move).
+ * Coloca a bracket TP/SL resting na corretora logo após a compra confirmar. Alvo e stop saem de
+ * computeBracketPrices (fixos, contínuos ou alvo 'off') — recriada por maybeReplaceTrailingStop
+ * quando um lado sobe de degrau.
  */
 async function placeInitialBracket({ rowId, adapter, config, session, log, filledQty, buyPrice, symbol, strategyId, retry = false }) {
   if (!config.exit.restingBracket?.enabled) return;
   const { targetPrice, stopPrice } = computeBracketPrices(config, buyPrice);
-  if (targetPrice == null || stopPrice == null) {
+  const targetOff = resolveTargetMode(config) === 'off';
+  if ((targetPrice == null && !targetOff) || stopPrice == null) {
     await recordBracketError({ rowId, session, log, symbol, strategyId, retry, message: 'alvo/stop indisponível' });
     return;
   }
   const prevError = session.rulesState?.exitBracketError ?? null;
   try {
-    const bracket = await adapter.placeExitBracket(filledQty, targetPrice, stopPrice);
+    const bracket = await adapter.placeExitBracket(filledQty, bracketOrderTarget(buyPrice, targetPrice), stopPrice);
     session.rulesState = { ...(session.rulesState ?? {}), exitBracket: { ...bracket, placedAt: new Date().toISOString() }, exitBracketError: null };
     await saveState(rowId, { rules_state: session.rulesState }, log);
-    log(`${G}🎯 Bracket TP/SL colocada na corretora${retry ? ' (retry)' : ''} — alvo +${config.exit.restingBracket.targetPct}% ${fmtPrice(bracket.targetPrice)} / stop ${fmtPrice(bracket.stopPrice)}${X}`);
-    if (bracket.clamped) {
+    const alvoDesc = targetOff ? 'alvo OFF (só stop)' : `alvo ${fmtPrice(bracket.targetPrice)}`;
+    log(`${G}🎯 Bracket TP/SL colocada na corretora${retry ? ' (retry)' : ''} — ${alvoDesc} / stop ${fmtPrice(bracket.stopPrice)}${X}`);
+    if (bracket.clamped && (bracket.clamped.stop || !targetOff)) {
       const clampMsg = describeClamp(bracket);
       log(`${Y}⚠️  ${clampMsg}${X}`);
       sendWhatsApp(`⚠️ ${BOT_LABEL} [${strategyId}] ${symbol}\n${clampMsg}`);
@@ -370,29 +387,41 @@ async function placeInitialBracket({ rowId, adapter, config, session, log, fille
   }
 }
 
-/** Stop contínuo (exit.trailingStop): recalcula o stop vigente a partir de `peakPrice` (maior
- *  preço visto desde a compra) e recria a bracket na corretora se ele subiu de degrau — só a
- *  perna do STOP muda (o alvo é sempre fixo, ver computeBracketPrices em strategyEngine.js).
- *  Sem trailingStop ligado, liveStop nunca difere do que já está resting (stop fixo), então
- *  isso não faz nada nesse modo — mesmo padrão de maybeReplaceBracket do bollinger-bands-bot.js,
- *  adaptado (aqui só o stop se move; lá também o alvo, ancorado na banda). */
+/** Recria a bracket na corretora quando o STOP contínuo (exit.trailingStop) ou o ALVO contínuo
+ *  (exit.targetMode === 'continuous') sobe de degrau — cada um com contador próprio, ver
+ *  computeBracketPrices em strategyEngine.js. Nenhum dos dois contínuo → nada a recriar (níveis
+ *  fixos). Comparação contra o preço PEDIDO (requestedTargetPrice/requestedStopPrice — antes do
+ *  clamp da Binance), não contra o que ficou resting: senão uma perna prendida na borda do
+ *  PERCENT_PRICE_BY_SIDE divergiria do live a cada tick e a bracket seria recriada em loop. */
 async function maybeReplaceTrailingStop({ rowId, adapter, config, session, log, exitBracket, buyPrice, buyQty, peakPrice, symbol, strategyId }) {
-  if (!config.exit.trailingStop?.enabled) return;
+  const stopTrailingOn = !!config.exit.trailingStop?.enabled;
+  const targetMode = resolveTargetMode(config);
+  if (!stopTrailingOn && targetMode !== 'continuous') return;
+
   const { targetPrice: liveTarget, stopPrice: liveStop } = computeBracketPrices(config, buyPrice, peakPrice);
   if (liveStop == null) return;
-  // Degraus discretos (ver computeTrailingStopPrice) — só recria quando o stop de fato mudou de
-  // degrau, não a cada tick por ruído de ponto flutuante.
-  if (Math.abs(liveStop - Number(exitBracket.stopPrice)) < 1e-9) return;
+  // Degraus discretos (ver computeTrailingStopPrice/computeTrailingTargetPrice) — só recria
+  // quando stop ou alvo de fato mudou de degrau, não a cada tick por ruído de ponto flutuante.
+  const restingStop = Number(exitBracket.requestedStopPrice ?? exitBracket.stopPrice);
+  const restingTarget = Number(exitBracket.requestedTargetPrice ?? exitBracket.targetPrice);
+  const stopChanged = stopTrailingOn && Math.abs(liveStop - restingStop) >= 1e-9;
+  const targetChanged = targetMode === 'continuous' && liveTarget != null
+    && Number.isFinite(restingTarget) && Math.abs(liveTarget - restingTarget) >= 1e-9;
+  if (!stopChanged && !targetChanged) return;
+
+  const moved = stopChanged && targetChanged ? 'Stop e alvo contínuos subiram'
+    : targetChanged ? 'Alvo contínuo subiu' : 'Stop contínuo subiu';
 
   let cancelled = false;
   try {
     await adapter.cancelExitBracket(exitBracket);
     cancelled = true;
-    const bracket = await adapter.placeExitBracket(buyQty, liveTarget, liveStop);
+    const bracket = await adapter.placeExitBracket(buyQty, bracketOrderTarget(buyPrice, liveTarget), liveStop);
     session.rulesState = { ...(session.rulesState ?? {}), exitBracket: { ...bracket, placedAt: new Date().toISOString() } };
     await saveState(rowId, { rules_state: session.rulesState }, log);
-    log(`${G}🔁 Stop contínuo subiu de degrau — bracket recriada: alvo +${config.exit.restingBracket.targetPct}% ${fmtPrice(bracket.targetPrice)} / stop ${fmtPrice(bracket.stopPrice)}${X}`);
-    if (bracket.clamped) {
+    const alvoDesc = targetMode === 'off' ? 'alvo OFF' : fmtPrice(bracket.targetPrice);
+    log(`${G}🔁 ${moved} de degrau — bracket recriada: alvo ${alvoDesc} / stop ${fmtPrice(bracket.stopPrice)}${X}`);
+    if (bracket.clamped && (bracket.clamped.stop || targetMode !== 'off')) {
       const clampMsg = describeClamp(bracket);
       log(`${Y}⚠️  ${clampMsg}${X}`);
       sendWhatsApp(`⚠️ ${BOT_LABEL} [${strategyId}] ${symbol}\n${clampMsg}`);
@@ -403,10 +432,10 @@ async function maybeReplaceTrailingStop({ rowId, adapter, config, session, log, 
       // pra o próximo tick cair no fallback de saída via candle (evaluateExit).
       session.rulesState = { ...(session.rulesState ?? {}), exitBracket: null };
       await saveState(rowId, { rules_state: session.rulesState }, log);
-      log(`${Y}⚠️  Falha ao recriar bracket do stop contínuo (${err.message}) — bracket antiga já cancelada, voltando pra saída via candle${X}`);
-      sendWhatsApp(`⚠️ ${BOT_LABEL} [${strategyId}] ${symbol}\nStop contínuo subiu, mas falhou ao recriar a bracket na corretora (${err.message}). A bracket antiga já foi cancelada — posição sem proteção resting até o próximo tick conseguir recriar; saída também depende do candle fechado (evaluateExit) enquanto isso.`);
+      log(`${Y}⚠️  Falha ao recriar bracket contínua (${err.message}) — bracket antiga já cancelada, voltando pra saída via candle${X}`);
+      sendWhatsApp(`⚠️ ${BOT_LABEL} [${strategyId}] ${symbol}\nStop/alvo contínuo subiu, mas falhou ao recriar a bracket na corretora (${err.message}). A bracket antiga já foi cancelada — posição sem proteção resting até o próximo tick conseguir recriar; saída também depende do candle fechado (evaluateExit) enquanto isso.`);
     } else {
-      log(`${Y}⚠️  Falha ao recriar bracket do stop contínuo (${err.message}) — mantendo a atual${X}`);
+      log(`${Y}⚠️  Falha ao recriar bracket contínua (${err.message}) — mantendo a atual${X}`);
     }
   }
 }
@@ -690,10 +719,10 @@ async function tick(rowId, adapter, strategy, log, session, stopSelf) {
     return retireOrCooldown({ rowId, symbol, log, stopSelf, config, cMap, state, session, reason: 'venda executada fora do bot' });
   }
 
-  // Trailing do stop contínuo (exit.trailingStop): acompanha o pico de preço desde a compra —
-  // usado tanto pra recriar o stop da bracket (maybeReplaceTrailingStop) quanto pro fallback via
-  // candle (evaluateExit). Sem trailingStop ligado, computeBracketPrices ignora peakPrice (stop
-  // fixo) — inofensivo manter o rastreio ligado sempre, mesmo padrão do bollinger-bands-bot.js.
+  // Pico de preço desde a compra — alimenta o stop contínuo E o alvo contínuo (cada um com seu
+  // contador de degraus), tanto pra recriar a bracket (maybeReplaceTrailingStop) quanto pro
+  // fallback via candle (evaluateExit). Com stop e alvo fixos, computeBracketPrices ignora o
+  // peakPrice — inofensivo rastrear sempre, mesmo padrão do bollinger-bands-bot.js.
   const storedPeak = rulesState.stopPeakPrice != null ? parseFloat(rulesState.stopPeakPrice) : buyPrice;
   const lastCandleNow = (cMap[config.entry.interval] ?? []).at(-1);
   const lastHighNow = lastCandleNow?.high != null ? parseFloat(lastCandleNow.high) : buyPrice;
@@ -718,15 +747,17 @@ async function tick(rowId, adapter, strategy, log, session, stopSelf) {
         reason: kind === 'target' ? 'RSI_TARGET' : 'STOP_LOSS',
         targetLevelValue: kind === 'target' ? rulesState.exitBracket.targetPrice : rulesState.exitBracket.stopPrice,
         exitDesc: kind === 'target'
-          ? 'Bracket TP no alvo fixo (ordem resting)'
+          ? (resolveTargetMode(config) === 'continuous'
+            ? 'Bracket TP no alvo contínuo (ordem resting)'
+            : 'Bracket TP no alvo fixo (ordem resting)')
           : (config.exit.trailingStop?.enabled ? 'Bracket SL no stop contínuo (ordem resting)' : 'Bracket SL no stop fixo (ordem resting)'),
       };
       await recordBracketFill({ rowId, strategy, log, state, session, exitResult, result: bracketResult });
       return retireOrCooldown({ rowId, symbol, log, stopSelf, config, cMap, state, session, reason: `trade fechado (${exitResult.reason})` });
     }
 
-    // exit.trailingStop desligado: bracket é FIXA, nada a recriar. Ligado: recria só a perna do
-    // stop se ele subiu de degrau desde que a bracket atual foi colocada.
+    // Recria a bracket se o stop contínuo e/ou o alvo contínuo subiu de degrau (cada um com
+    // contador próprio). Níveis fixos → no-op.
     await maybeReplaceTrailingStop({
       rowId, adapter, config, session, log, symbol, strategyId,
       exitBracket: rulesState.exitBracket, buyPrice, buyQty: parseFloat(state.buy_qty), peakPrice,

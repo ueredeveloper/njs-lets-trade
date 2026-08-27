@@ -3,7 +3,8 @@ import { reloadCandles, getMaCrossScreenerConfig, saveMaCrossScreenerConfig,
   getBollingerMedianTrendConfig, saveBollingerMedianTrendConfig,
   getRsiMomentumConfig, saveRsiMomentumConfig,
   getCacheSettings, saveCacheSettings } from '../services/api';
-import { RSI_MOMENTUM_ALL_INTERVALS, RSI_MOMENTUM_BB_PERIODS, RSI_MOMENTUM_BB_STD_DEVS, RSI_MOMENTUM_CLOUD_PCT_OPTIONS, RSI_MOMENTUM_CLOUD_INTERVAL_OPTIONS, RSI_MOMENTUM_CLOUD_CANDLE_COUNT_OPTIONS }
+import { RSI_MOMENTUM_ALL_INTERVALS, RSI_MOMENTUM_BB_PERIODS, RSI_MOMENTUM_BB_STD_DEVS, RSI_MOMENTUM_CLOUD_PCT_OPTIONS, RSI_MOMENTUM_CLOUD_INTERVAL_OPTIONS, RSI_MOMENTUM_CLOUD_CANDLE_COUNT_OPTIONS, RSI_MOMENTUM_TRAILING_TARGET_STEP_OPTIONS, RSI_MOMENTUM_BANDWIDTH_LOOKBACK_OPTIONS,
+  RSI_MOMENTUM_TARGET_MODE_OPTIONS, RSI_MOMENTUM_STOP_MODE_OPTIONS, RSI_MOMENTUM_TARGET_PCT_OPTIONS, RSI_MOMENTUM_COIN_STEP_OPTIONS, RSI_MOMENTUM_STOP_STEP_OPTIONS, RSI_MOMENTUM_STOP_PCT_OPTIONS }
   from '../constants/rsiMomentumConfigSchema';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useI18n } from '../i18n';
@@ -1135,73 +1136,155 @@ export default function SettingsSidebar({ open, onClose }) {
                   <span className="text-[10px] text-p5/40">{t('settings.rsimomentum_reentry_cooldown_hint')}</span>
                 </label>
 
-                <div className="grid grid-cols-2 gap-2">
-                  <label className="flex flex-col gap-1">
-                    <span className="text-[10px] text-p5/50">{t('settings.rsimomentum_target_pct')}</span>
-                    <input
-                      type="number" min={0.1} step={0.1}
-                      className={inp}
-                      value={rsiMomentumConfig.exit.restingBracket.targetPct}
-                      onChange={(e) => patchRsiMomentumNested('exit', 'restingBracket', { targetPct: Number(e.target.value) })}
-                    />
-                  </label>
-                  <label className="flex flex-col gap-1">
-                    <span className="text-[10px] text-p5/50">{t('settings.rsimomentum_stop_loss_pct')}</span>
-                    <input
-                      type="number" min={0.5} step={0.1}
-                      className={inp}
-                      value={rsiMomentumConfig.stopLoss.maxLossPct}
-                      onChange={(e) => patchRsiMomentum('stopLoss', { maxLossPct: Number(e.target.value) })}
-                      disabled={rsiMomentumConfig.exit.trailingStop.enabled}
-                    />
-                  </label>
+                {/* ALVO — independente do stop */}
+                <div className="rounded-md p-2.5" style={{ background: '#0f1219', border: '1px solid #2a2d3a' }}>
+                  <p className="text-p5/70 text-[10px] font-semibold uppercase tracking-wider mb-2">{t('settings.rsimomentum_target_title')}</p>
+                  {(() => {
+                    const targetMode = rsiMomentumConfig.exit.targetMode ?? 'fixed';
+                    const tt = rsiMomentumConfig.exit.trailingTarget ?? { coinStepPct: 3, stepPct: 3 };
+                    return (
+                      <>
+                        <label className="flex flex-col gap-1 mb-2">
+                          <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_target_mode')}</span>
+                          <select
+                            className={`${inp} w-full`}
+                            value={targetMode}
+                            onChange={(e) => patchRsiMomentum('exit', { targetMode: e.target.value })}
+                          >
+                            {RSI_MOMENTUM_TARGET_MODE_OPTIONS.map((m) => (
+                              <option key={m} value={m}>{t(`settings.rsimomentum_target_mode_${m}`)}</option>
+                            ))}
+                          </select>
+                        </label>
+                        {targetMode === 'off' && (
+                          <p className="text-[9px] text-p5/40 leading-relaxed">{t('settings.rsimomentum_target_off_hint')}</p>
+                        )}
+                        {targetMode === 'fixed' && (
+                          <label className="flex flex-col gap-1">
+                            <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_target_pct')}</span>
+                            <select
+                              className={`${inp} w-full`}
+                              value={rsiMomentumConfig.exit.restingBracket.targetPct}
+                              onChange={(e) => patchRsiMomentumNested('exit', 'restingBracket', { targetPct: Number(e.target.value) })}
+                            >
+                              {RSI_MOMENTUM_TARGET_PCT_OPTIONS.map((v) => <option key={v} value={v}>+{v}%</option>)}
+                            </select>
+                          </label>
+                        )}
+                        {targetMode === 'continuous' && (
+                          <>
+                            <div className="grid grid-cols-3 gap-2">
+                              <label className="flex flex-col gap-1">
+                                <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_target_base_pct')}</span>
+                                <select
+                                  className={`${inp} w-full`}
+                                  value={rsiMomentumConfig.exit.restingBracket.targetPct}
+                                  onChange={(e) => patchRsiMomentumNested('exit', 'restingBracket', { targetPct: Number(e.target.value) })}
+                                >
+                                  {RSI_MOMENTUM_TARGET_PCT_OPTIONS.map((v) => <option key={v} value={v}>+{v}%</option>)}
+                                </select>
+                              </label>
+                              <label className="flex flex-col gap-1">
+                                <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_target_step_pp')}</span>
+                                <select
+                                  className={`${inp} w-full`}
+                                  value={tt.stepPct ?? 3}
+                                  onChange={(e) => patchRsiMomentumNested('exit', 'trailingTarget', { stepPct: Number(e.target.value) })}
+                                >
+                                  {RSI_MOMENTUM_TRAILING_TARGET_STEP_OPTIONS.map((v) => <option key={v} value={v}>{v} pp</option>)}
+                                </select>
+                              </label>
+                              <label className="flex flex-col gap-1">
+                                <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_target_coin_step')}</span>
+                                <select
+                                  className={`${inp} w-full`}
+                                  value={tt.coinStepPct ?? 3}
+                                  onChange={(e) => patchRsiMomentumNested('exit', 'trailingTarget', { coinStepPct: Number(e.target.value) })}
+                                >
+                                  {RSI_MOMENTUM_COIN_STEP_OPTIONS.map((v) => <option key={v} value={v}>{v}%</option>)}
+                                </select>
+                              </label>
+                            </div>
+                            <p className="text-[9px] text-p5/40 mt-1 leading-relaxed">{t('settings.rsimomentum_target_continuous_hint')}</p>
+                          </>
+                        )}
+                      </>
+                    );
+                  })()}
                 </div>
 
+                {/* STOP — independente do alvo */}
                 <div className="rounded-md p-2.5" style={{ background: '#0f1219', border: '1px solid #2a2d3a' }}>
-                  <p className="text-p5/70 text-[10px] font-semibold uppercase tracking-wider mb-1">{t('settings.rsimomentum_trailingstop_title')}</p>
-                  <p className="text-[10px] text-p5/40 mb-2 leading-relaxed">{t('settings.rsimomentum_trailingstop_hint')}</p>
-                  <label className="flex items-start gap-2.5 cursor-pointer group mb-2">
-                    <input
-                      type="checkbox"
-                      checked={rsiMomentumConfig.exit.trailingStop.enabled}
-                      onChange={(e) => patchRsiMomentumNested('exit', 'trailingStop', { enabled: e.target.checked })}
-                      className="mt-0.5 shrink-0 accent-p4"
-                    />
-                    <span className="text-p5 text-xs leading-snug group-hover:text-white transition-colors">
-                      {t('settings.rsimomentum_trailingstop_enabled')}
-                    </span>
-                  </label>
-                  {rsiMomentumConfig.exit.trailingStop.enabled && (
-                    <div className="grid grid-cols-3 gap-2">
-                      <label className="flex flex-col gap-1">
-                        <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_trailingstop_start_pct')}</span>
-                        <input
-                          type="number" min={0.5} max={50} step={0.5}
-                          className={`${inp} w-full`}
-                          value={rsiMomentumConfig.exit.trailingStop.startPct}
-                          onChange={(e) => patchRsiMomentumNested('exit', 'trailingStop', { startPct: Number(e.target.value) })}
-                        />
-                      </label>
-                      <label className="flex flex-col gap-1">
-                        <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_trailingstop_coin_step')}</span>
-                        <input
-                          type="number" min={0.1} max={50} step={0.1}
-                          className={`${inp} w-full`}
-                          value={rsiMomentumConfig.exit.trailingStop.coinStepPct}
-                          onChange={(e) => patchRsiMomentumNested('exit', 'trailingStop', { coinStepPct: Number(e.target.value) })}
-                        />
-                      </label>
-                      <label className="flex flex-col gap-1">
-                        <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_trailingstop_stop_step')}</span>
-                        <input
-                          type="number" min={0.1} max={50} step={0.1}
-                          className={`${inp} w-full`}
-                          value={rsiMomentumConfig.exit.trailingStop.stopStepPct}
-                          onChange={(e) => patchRsiMomentumNested('exit', 'trailingStop', { stopStepPct: Number(e.target.value) })}
-                        />
-                      </label>
-                    </div>
-                  )}
+                  <p className="text-p5/70 text-[10px] font-semibold uppercase tracking-wider mb-2">{t('settings.rsimomentum_stop_title')}</p>
+                  {(() => {
+                    const ts = rsiMomentumConfig.exit.trailingStop;
+                    const stopMode = ts.enabled ? 'continuous' : 'fixed';
+                    return (
+                      <>
+                        <label className="flex flex-col gap-1 mb-2">
+                          <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_stop_mode')}</span>
+                          <select
+                            className={`${inp} w-full`}
+                            value={stopMode}
+                            onChange={(e) => patchRsiMomentumNested('exit', 'trailingStop', { enabled: e.target.value === 'continuous' })}
+                          >
+                            {RSI_MOMENTUM_STOP_MODE_OPTIONS.map((m) => (
+                              <option key={m} value={m}>{t(`settings.rsimomentum_stop_mode_${m}`)}</option>
+                            ))}
+                          </select>
+                        </label>
+                        {stopMode === 'fixed' && (
+                          <label className="flex flex-col gap-1">
+                            <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_stop_loss_pct')}</span>
+                            <select
+                              className={`${inp} w-full`}
+                              value={rsiMomentumConfig.stopLoss.maxLossPct}
+                              onChange={(e) => patchRsiMomentum('stopLoss', { maxLossPct: Number(e.target.value) })}
+                            >
+                              {RSI_MOMENTUM_STOP_PCT_OPTIONS.map((v) => <option key={v} value={v}>-{v}%</option>)}
+                            </select>
+                          </label>
+                        )}
+                        {stopMode === 'continuous' && (
+                          <>
+                            <div className="grid grid-cols-3 gap-2">
+                              <label className="flex flex-col gap-1">
+                                <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_trailingstop_start_pct')}</span>
+                                <select
+                                  className={`${inp} w-full`}
+                                  value={ts.startPct}
+                                  onChange={(e) => patchRsiMomentumNested('exit', 'trailingStop', { startPct: Number(e.target.value) })}
+                                >
+                                  {RSI_MOMENTUM_STOP_PCT_OPTIONS.map((v) => <option key={v} value={v}>-{v}%</option>)}
+                                </select>
+                              </label>
+                              <label className="flex flex-col gap-1">
+                                <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_trailingstop_stop_step')}</span>
+                                <select
+                                  className={`${inp} w-full`}
+                                  value={ts.stopStepPct}
+                                  onChange={(e) => patchRsiMomentumNested('exit', 'trailingStop', { stopStepPct: Number(e.target.value) })}
+                                >
+                                  {RSI_MOMENTUM_STOP_STEP_OPTIONS.map((v) => <option key={v} value={v}>{v} pp</option>)}
+                                </select>
+                              </label>
+                              <label className="flex flex-col gap-1">
+                                <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_trailingstop_coin_step')}</span>
+                                <select
+                                  className={`${inp} w-full`}
+                                  value={ts.coinStepPct}
+                                  onChange={(e) => patchRsiMomentumNested('exit', 'trailingStop', { coinStepPct: Number(e.target.value) })}
+                                >
+                                  {RSI_MOMENTUM_COIN_STEP_OPTIONS.map((v) => <option key={v} value={v}>{v}%</option>)}
+                                </select>
+                              </label>
+                            </div>
+                            <p className="text-[9px] text-p5/40 mt-1 leading-relaxed">{t('settings.rsimomentum_trailingstop_hint')}</p>
+                          </>
+                        )}
+                      </>
+                    );
+                  })()}
                 </div>
 
                 <div className="rounded-md p-2.5" style={{ background: '#0f1219', border: '1px solid #2a2d3a' }}>
@@ -1251,12 +1334,13 @@ export default function SettingsSidebar({ open, onClose }) {
                     </label>
                     <label className="flex flex-col gap-1">
                       <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_bandwidth_lookback')}</span>
-                      <input
-                        type="number" min={20} max={1000}
+                      <select
                         className={`${inp} w-full`}
                         value={rsiMomentumConfig.entry.bandWidth.lookback}
                         onChange={(e) => patchRsiMomentumNested('entry', 'bandWidth', { lookback: Number(e.target.value) })}
-                      />
+                      >
+                        {RSI_MOMENTUM_BANDWIDTH_LOOKBACK_OPTIONS.map((v) => <option key={v} value={v}>{v}</option>)}
+                      </select>
                     </label>
                     <label className="flex flex-col gap-1 col-span-2">
                       <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_bandwidth_min_pct')}</span>
@@ -1366,6 +1450,17 @@ export default function SettingsSidebar({ open, onClose }) {
                       </select>
                     </label>
                   </div>
+                  <label className="flex items-start gap-2.5 cursor-pointer group mt-2">
+                    <input
+                      type="checkbox"
+                      checked={rsiMomentumConfig.entry.prevDayCloud.useHighLow}
+                      onChange={(e) => patchRsiMomentumNested('entry', 'prevDayCloud', { useHighLow: e.target.checked })}
+                      className="mt-0.5 shrink-0 accent-p4"
+                    />
+                    <span className="text-p5 text-xs leading-snug group-hover:text-white transition-colors">
+                      {t('settings.rsimomentum_prevdaycloud_use_high_low')}
+                    </span>
+                  </label>
                 </div>
 
                 <div className="rounded-md p-2.5" style={{ background: '#0f1219', border: '1px solid #2a2d3a' }}>

@@ -156,7 +156,7 @@ export async function fetchRsiThresholdBacktest(symbol, interval, options = {}) 
     rsiThreshold = 70, pullbackPct = 0, targetPct = 5, stopLossPct = 5, positionSizeUsd = 40,
     source = null, candleCount = null, lookbackHours = 0, bandWidth = null, prevDayCloud = null,
     minVolumeUsdt = 0, excludeOpenExits = false, prevCandleStop = false,
-    adxFilter = null, macdFilter = null, trailingStop = null, entriesDayRange = null,
+    adxFilter = null, macdFilter = null, trailingStop = null, trailingTarget = null, targetMode = null, entriesDayRange = null,
   } = options;
   const params = new URLSearchParams({
     symbol, interval, rsiThreshold, pullbackPct, targetPct, stopLossPct, positionSizeUsd,
@@ -177,6 +177,7 @@ export async function fetchRsiThresholdBacktest(symbol, interval, options = {}) 
     params.set('prevDayCloudMaxPct', String(prevDayCloud.maxPct ?? 100));
     params.set('prevDayCloudInterval', prevDayCloud.interval ?? '1d');
     params.set('prevDayCloudCandleCount', String(prevDayCloud.candleCount ?? 1));
+    params.set('prevDayCloudUseHighLow', prevDayCloud.useHighLow === false ? '0' : '1');
   }
   if (minVolumeUsdt) params.set('minVolumeUsdt', String(minVolumeUsdt));
   if (excludeOpenExits) params.set('excludeOpenExits', '1');
@@ -196,6 +197,11 @@ export async function fetchRsiThresholdBacktest(symbol, interval, options = {}) 
     params.set('trailingStopCoinStepPct', String(trailingStop.coinStepPct ?? 1));
     params.set('trailingStopStopStepPct', String(trailingStop.stopStepPct ?? 1));
   }
+  if (targetMode && targetMode !== 'fixed') params.set('targetMode', targetMode);
+  if (targetMode === 'continuous' && trailingTarget) {
+    params.set('trailingTargetCoinStepPct', String(trailingTarget.coinStepPct ?? 3));
+    params.set('trailingTargetStepPct', String(trailingTarget.stepPct ?? 3));
+  }
   if (entriesDayRange?.max != null) {
     params.set('entriesDayRangeMin', String(entriesDayRange.min ?? 2));
     params.set('entriesDayRangeMax', String(entriesDayRange.max));
@@ -213,7 +219,7 @@ export async function fetchRsiThresholdBacktestMarket(interval, options = {}) {
     rsiThreshold = 70, pullbackPct = 0, targetPct = 5, stopLossPct = 5, positionSizeUsd = 40,
     source = null, candleCount = null, lookbackHours = 0, bandWidth = null, maxRows = null,
     prevDayCloud = null, minVolumeUsdt = 0, excludeOpenExits = false, prevCandleStop = false,
-    adxFilter = null, macdFilter = null, trailingStop = null, entriesDayRange = null,
+    adxFilter = null, macdFilter = null, trailingStop = null, trailingTarget = null, targetMode = null, entriesDayRange = null,
   } = options;
   const params = new URLSearchParams({
     interval, rsiThreshold, pullbackPct, targetPct, stopLossPct, positionSizeUsd,
@@ -235,6 +241,7 @@ export async function fetchRsiThresholdBacktestMarket(interval, options = {}) {
     params.set('prevDayCloudMaxPct', String(prevDayCloud.maxPct ?? 100));
     params.set('prevDayCloudInterval', prevDayCloud.interval ?? '1d');
     params.set('prevDayCloudCandleCount', String(prevDayCloud.candleCount ?? 1));
+    params.set('prevDayCloudUseHighLow', prevDayCloud.useHighLow === false ? '0' : '1');
   }
   if (minVolumeUsdt) params.set('minVolumeUsdt', String(minVolumeUsdt));
   if (excludeOpenExits) params.set('excludeOpenExits', '1');
@@ -254,6 +261,11 @@ export async function fetchRsiThresholdBacktestMarket(interval, options = {}) {
     params.set('trailingStopCoinStepPct', String(trailingStop.coinStepPct ?? 1));
     params.set('trailingStopStopStepPct', String(trailingStop.stopStepPct ?? 1));
   }
+  if (targetMode && targetMode !== 'fixed') params.set('targetMode', targetMode);
+  if (targetMode === 'continuous' && trailingTarget) {
+    params.set('trailingTargetCoinStepPct', String(trailingTarget.coinStepPct ?? 3));
+    params.set('trailingTargetStepPct', String(trailingTarget.stepPct ?? 3));
+  }
   if (entriesDayRange?.max != null) {
     params.set('entriesDayRangeMin', String(entriesDayRange.min ?? 2));
     params.set('entriesDayRangeMax', String(entriesDayRange.max));
@@ -263,6 +275,32 @@ export async function fetchRsiThresholdBacktestMarket(interval, options = {}) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error ?? `HTTP ${res.status}`);
   }
+  return res.json();
+}
+
+/** Salva uma pesquisa da tela Estatísticas → Momentum RSI (config + resumo do resultado) num
+ *  JSON no backend, pra comparar combinações depois. Fire-and-forget — não deve quebrar a UI. */
+export async function saveRsiMomentumStatsSearch(payload) {
+  const res = await fetch('/services/rsi-momentum-stats-searches', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+/** Lista as pesquisas salvas (mais recente primeiro). */
+export async function getRsiMomentumStatsSearches() {
+  const res = await fetch('/services/rsi-momentum-stats-searches');
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+/** Apaga TODAS as pesquisas salvas do log. */
+export async function clearRsiMomentumStatsSearches() {
+  const res = await fetch('/services/rsi-momentum-stats-searches', { method: 'DELETE' });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 }
 

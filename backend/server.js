@@ -24,7 +24,7 @@ const {
   fetchSMA, fetchRSI, fetchChopZone, fetchVWAP, fetch24HsVolume, fetchMarketCapFilter, fetchStablecoins, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter, fetchMaDistanceFilter, fetchIndicatorGrowthFilter,
   fetchRsiOversoldRecovery, fetchRsiThresholdBacktest, fetchRsiThresholdBacktestMarket, fetchMaCrossStats, fetchVwapBandsStats, fetchBollingerBandRecovery, fetchBollingerBandPositionFilter, fetchVwapPositionFilter, fetchVwapBandWidthFilter, fetchBollingerBandWidthFilter, fetchBollingerMedianTrendFilter, fetchVwapBandExpansionFilter, fetchBollingerBands, fetchSimpleMaCross, fetchReloadCandles,
   fetchGateCurrencies, fetchGatePrefetch, fetchBinanceTrades, fetchGateTrades,
-  fetchActiveTrades, fetchTradeFavorites, stgBotStatus, multitradeService, fetchMarketHighlights, fetchVolumeIgnition, whatsappMessagesService, fetchCacheSettings } = require('./services');
+  fetchActiveTrades, fetchTradeFavorites, stgBotStatus, multitradeService, fetchMarketHighlights, fetchVolumeIgnition, whatsappMessagesService, fetchCacheSettings, rsiMomentumStatsSearchLog } = require('./services');
 const supabaseService = require('./services/supabaseService');
 const { refreshMedianTrendThreshold } = require('./utils/bollingerMedianTrendConfig');
 
@@ -90,6 +90,7 @@ app.use('/services', fetchTradeFavorites)
 app.use('/services', stgBotStatus)
 app.use('/services', multitradeService)
 app.use('/services', whatsappMessagesService)
+app.use('/services', rsiMomentumStatsSearchLog)
 app.use('/services/sb', supabaseService)
 
 // Frontend: bundle estático (Termux / produção) ou proxy para dev server (Vite / Parcel).

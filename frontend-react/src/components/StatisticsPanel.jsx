@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useCurrency } from '../contexts/CurrencyContext';
 import {
   fetchRsiOversoldRecovery, fetchRsiThresholdBacktest, fetchRsiThresholdBacktestMarket, fetchMaCrossStats, fetchBollingerBandRecovery, fetchCandlesticksAndCloud,
-  fetchVwapBandsStats,
+  fetchVwapBandsStats, saveRsiMomentumStatsSearch, getRsiMomentumStatsSearches, clearRsiMomentumStatsSearches,
 } from '../services/api';
 import Tooltip from './Tooltip';
 import { useI18n } from '../i18n';
@@ -39,6 +39,15 @@ function formatDuration(ms) {
   if (d > 0) return `${d}d ${h}h`;
   if (h > 0) return `${h}h ${m}m`;
   return `${m}m`;
+}
+
+/** Volume 24h em notação compacta: 3.2M, 1.1B, 850K. */
+function formatVolume(v) {
+  if (v == null || !Number.isFinite(v)) return '—';
+  if (v >= 1e9) return `$${(v / 1e9).toFixed(1)}B`;
+  if (v >= 1e6) return `$${(v / 1e6).toFixed(1)}M`;
+  if (v >= 1e3) return `$${(v / 1e3).toFixed(0)}K`;
+  return `$${Math.round(v)}`;
 }
 
 function SummaryCard({ label, value, highlight, tooltip }) {
@@ -259,7 +268,10 @@ const RSI_MOM_PULLBACK_OPTIONS = [0, -0.1, -0.2, -0.3, -0.4, -0.5, -1, -2, -3, -
 /** Valores selecionáveis dos campos "Alvo %" e "Stop %" — 1% a 10%. */
 const RSI_MOM_PCT_OPTIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 /** Valores selecionáveis do campo "Larg. mín %" do filtro de largura de banda. */
-const RSI_MOM_BANDWIDTH_OPTIONS = [1, 1.5, 2, 2.5, 3, 4, 5, 8, 10];
+const RSI_MOM_BANDWIDTH_OPTIONS = [1, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2, 2.5, 3, 4, 5, 8, 10];
+/** Valores selecionáveis do campo "Lookback" do filtro de largura de banda — quantos candles
+ *  fechados entram no cálculo da largura média dos ciclos Bollinger. */
+const RSI_MOM_BANDWIDTH_LOOKBACK_OPTIONS = [300, 200, 100];
 /** Valores selecionáveis do filtro "Nuvem D-1" — % da altura da nuvem (candle 1d anterior),
  *  contado do fundo (lower) pra cima, até onde o preço do sinal pode ocupar (limite superior).
  *  100% = até o topo da nuvem inteira (entre abertura e fechamento de ontem); valores menores
@@ -284,11 +296,14 @@ const RSI_MOM_ADX_MIN_OPTIONS = [15, 20, 25, 30];
  *  "moedas que atingiram RSI 70 nas últimas 6/7/8 horas"). 0 = desligado, usa todo o histórico
  *  definido em Candles. */
 const RSI_MOM_LOOKBACK_HOURS_OPTIONS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 12, 24, 48, 72];
-/** Valores selecionáveis dos degraus do "Stop contínuo" (Alvo % = "Stop contínuo") — quanto a
- *  moeda precisa subir pra render 1 degrau (coinStepPct) e quanto o stop sobe por degrau
- *  (stopStepPct). Independentes: ex. coinStepPct=1/stopStepPct=2 sobe o stop 2% a cada 1% de alta
- *  da moeda (mais agressivo); coinStepPct=2/stopStepPct=1 sobe 1% a cada 2% (mais conservador). */
-const RSI_MOM_TRAILING_STEP_OPTIONS = [0.5, 1, 2, 3, 4, 5];
+/** "A cada X% de alta do pico" — passo do contador do stop contínuo E do alvo contínuo (cada um
+ *  com o seu, independentes). */
+const RSI_MOM_TRAILING_STEP_OPTIONS = [1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6];
+/** Quantos p.p. o alvo/stop contínuo sobe a cada degrau. */
+const RSI_MOM_TRAILING_TARGET_STEP_OPTIONS = [1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6, 8, 10];
+/** Modos do ALVO / do STOP — independentes um do outro. */
+const RSI_MOM_TARGET_MODE_OPTIONS = ['fixed', 'continuous', 'off'];
+const RSI_MOM_STOP_MODE_OPTIONS = ['fixed', 'continuous'];
 /** Teto selecionável do card "Dias c/ 2+ entradas" — null (padrão) = sem teto, mesmo cálculo de
  *  sempre (>=2, qualquer quantidade). Um valor aqui troca o card por "% de dias com 2 a N
  *  entradas", medindo especificamente a frequência de dias DENTRO dessa faixa (2 pode virar 10
@@ -300,27 +315,32 @@ const RSI_MOM_PREFS_KEY = 'lets_trade_stats_rsi_momentum_prefs';
 const RSI_MOM_DEFAULT_PREFS = {
   rsiThreshold: 70,
   pullbackPct: 0,
+  targetMode: 'fixed',
   targetPct: 5,
+  stopMode: 'continuous',
   stopLossPct: 5,
   positionSizeUsd: 40,
   lookbackHours: 0,
   bandWidthEnabled: false,
   bandWidthInterval: '5m',
   bandWidthMinPct: 2,
+  bandWidthLookback: 300,
   prevDayCloudEnabled: false,
   prevDayCloudMaxPct: 100,
   prevDayCloudInterval: '4h',
   prevDayCloudCandleCount: 3,
+  prevDayCloudUseHighLow: true,
   minVolumeUsdt: 0,
   excludeOpenExits: false,
-  prevCandleStopEnabled: false,
   adxFilterEnabled: false,
   adxFilterInterval: '1h',
   adxFilterMinAdx: 25,
   macdFilterEnabled: false,
   macdFilterInterval: '1h',
-  trailingCoinStepPct: 1,
-  trailingStopStepPct: 1,
+  trailingCoinStepPct: 3,
+  trailingStopStepPct: 2,
+  trailingTargetCoinStepPct: 3,
+  trailingTargetStepPct: 3,
   allCoins: false,
   entriesDayRangeMax: null,
 };
@@ -362,7 +382,16 @@ function buildCandleCountOptions(interval) {
 function loadRsiMomPrefs() {
   try {
     const raw = localStorage.getItem(RSI_MOM_PREFS_KEY);
-    if (raw) return { ...RSI_MOM_DEFAULT_PREFS, ...JSON.parse(raw) };
+    if (raw) {
+      const saved = JSON.parse(raw);
+      // Migração: no formato antigo `targetPct === 0` no select Alvo significava "stop contínuo,
+      // sem alvo". Agora alvo e stop são separados — mapeia pra targetMode 'off' + stop contínuo.
+      if (saved.targetMode === undefined) {
+        if (saved.targetPct === 0) { saved.targetMode = 'off'; saved.stopMode = 'continuous'; saved.targetPct = RSI_MOM_DEFAULT_PREFS.targetPct; }
+        else { saved.targetMode = 'fixed'; if (saved.stopMode === undefined) saved.stopMode = 'fixed'; }
+      }
+      return { ...RSI_MOM_DEFAULT_PREFS, ...saved };
+    }
   } catch {}
   return { ...RSI_MOM_DEFAULT_PREFS };
 }
@@ -926,6 +955,20 @@ function RsiMomentumStats({ autoCalc }) {
   const [error, setError]     = useState(null);
   const [showAll, setShowAll] = useState(false);
   const [closedOnly, setClosedOnly] = useState(false);
+  const [savedSearchCount, setSavedSearchCount] = useState(null);
+
+  useEffect(() => {
+    getRsiMomentumStatsSearches().then((arr) => setSavedSearchCount(Array.isArray(arr) ? arr.length : 0)).catch(() => {});
+  }, []);
+
+  async function handleClearSavedSearches() {
+    if (savedSearchCount === 0) return;
+    if (!window.confirm(t('stats.searchlog_clear_confirm'))) return;
+    try {
+      await clearRsiMomentumStatsSearches();
+      setSavedSearchCount(0);
+    } catch { /* silencioso */ }
+  }
 
   const inp = 'bg-p2 border border-p3/40 text-p5 text-[10px] sm:text-xs rounded px-1 sm:px-2 py-1 focus:outline-none focus:border-p4 w-full';
   const inpNum = `${inp} [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none`;
@@ -955,6 +998,7 @@ function RsiMomentumStats({ autoCalc }) {
       outcome: (o) => o.outcome ?? '',
       exitDate: (o) => (o.exitDate ? new Date(o.exitDate).getTime() : -Infinity),
       pnl: (o) => o.pnlUsd ?? -Infinity,
+      volumeUsd: (o) => o.volumeUsd ?? -Infinity,
     }[sort.key];
     if (!getValue) return occurrences;
     return [...occurrences].sort((a, b) => {
@@ -980,20 +1024,25 @@ function RsiMomentumStats({ autoCalc }) {
     setError(null);
     setResult(null);
     try {
-      // targetPct === 0 = "Stop contínuo" selecionado no select Alvo: sem alvo programado, o
-      // Stop % vira o ponto de partida do stop que sobe 1% a cada 1% de alta da moeda (ver JSDoc
-      // de options.trailingStop em analyseRsiThresholdBacktest.js).
-      const trailingStopActive = p.targetPct === 0;
+      // Alvo e stop são INDEPENDENTES (ver options.targetMode / options.trailingStop em
+      // analyseRsiThresholdBacktest.js). Alvo: 'fixed' | 'continuous' (base targetPct% + degraus
+      // com contador próprio) | 'off' (sem alvo). Stop: 'fixed' (stopLossPct) | 'continuous'.
+      const stopContinuous = p.stopMode === 'continuous';
       const commonOptions = {
         rsiThreshold: p.rsiThreshold,
         pullbackPct: p.pullbackPct,
         targetPct: p.targetPct,
         stopLossPct: p.stopLossPct,
-        trailingStop: trailingStopActive ? {
+        targetMode: p.targetMode,
+        trailingStop: stopContinuous ? {
           enabled: true,
           startPct: p.stopLossPct,
           coinStepPct: p.trailingCoinStepPct,
           stopStepPct: p.trailingStopStepPct,
+        } : null,
+        trailingTarget: p.targetMode === 'continuous' ? {
+          coinStepPct: p.trailingTargetCoinStepPct,
+          stepPct: p.trailingTargetStepPct,
         } : null,
         positionSizeUsd: p.positionSizeUsd,
         candleCount: candles,
@@ -1002,16 +1051,17 @@ function RsiMomentumStats({ autoCalc }) {
           enabled: true,
           interval: p.bandWidthInterval,
           minPct: p.bandWidthMinPct,
+          lookback: p.bandWidthLookback,
         } : null,
         prevDayCloud: p.prevDayCloudEnabled ? {
           enabled: true,
           maxPct: p.prevDayCloudMaxPct,
           interval: p.prevDayCloudInterval,
           candleCount: p.prevDayCloudCandleCount,
+          useHighLow: p.prevDayCloudUseHighLow,
         } : null,
         minVolumeUsdt: p.minVolumeUsdt,
         excludeOpenExits: p.excludeOpenExits,
-        prevCandleStop: p.prevCandleStopEnabled,
         adxFilter: p.adxFilterEnabled ? {
           enabled: true,
           interval: p.adxFilterInterval,
@@ -1027,6 +1077,19 @@ function RsiMomentumStats({ autoCalc }) {
         ? await fetchRsiThresholdBacktestMarket(iv, commonOptions)
         : await fetchRsiThresholdBacktest(sym, iv, { ...commonOptions, source: src });
       setResult(data);
+      // Grava a pesquisa (config + resumo) no log do backend — só nas buscas deliberadas
+      // (botão "Buscar" / Enter, updateChart=true), não nos recálculos automáticos por clique
+      // no gráfico. Fire-and-forget: falha aqui não pode quebrar a tela.
+      if (updateChart) {
+        saveRsiMomentumStatsSearch({
+          scope: p.allCoins ? 'market' : sym,
+          interval: iv,
+          config: { ...commonOptions, allCoins: !!p.allCoins, source: p.allCoins ? null : (src ?? null) },
+          result: data,
+        })
+          .then((r) => { if (r?.total != null) setSavedSearchCount(r.total); })
+          .catch(() => {});
+      }
       if (updateChart && !p.allCoins) {
         const chartData = await fetchCandlesticksAndCloud(sym, iv, src);
         setSelectedChart(chartData);
@@ -1134,63 +1197,82 @@ function RsiMomentumStats({ autoCalc }) {
           </select>
         </div>
 
-        <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={prefs.targetPct === 0 ? t('stats.tip.target_trailing') : t('stats.tip.target_pct')}>
-          <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.target_pct')}</label>
+        {/* ALVO — modo (fixo/contínuo/desligado) + valores, INDEPENDENTE do stop */}
+        <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[64px]" title={t('stats.tip.target_mode')}>
+          <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.target_mode')}</label>
           <select className={inp}
-            value={prefs.targetPct}
-            onChange={(e) => patchPrefs({ targetPct: Number(e.target.value) })}>
-            <option value={0}>{t('stats.target_trailing')}</option>
-            {RSI_MOM_PCT_OPTIONS.map((v) => <option key={v} value={v}>{v}%</option>)}
+            value={prefs.targetMode}
+            onChange={(e) => patchPrefs({ targetMode: e.target.value })}>
+            {RSI_MOM_TARGET_MODE_OPTIONS.map((m) => <option key={m} value={m}>{t(`stats.target_mode_${m}`)}</option>)}
           </select>
         </div>
-
-        {/* Stop pelo candle 4h anterior — troca o stop fixo (%) por um preço absoluto derivado
-            do candle de 4h anterior ao sinal (ver JSDoc de options.prevCandleStop e
-            resolvePrevCandleStopPrice em analyseRsiThresholdBacktest.js): candle em alta usa a
-            abertura, candle em baixa usa o fechamento. */}
-        <div className="flex items-center gap-1 shrink-0 pb-1" title={t('stats.tip.prev_candle_stop')}>
-          <span className="hidden md:inline text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.prev_candle_stop')}</span>
-          <button
-            type="button"
-            onClick={() => patchPrefs({ prevCandleStopEnabled: !prefs.prevCandleStopEnabled })}
-            className={`relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${prefs.prevCandleStopEnabled ? 'bg-p4' : 'bg-p3/40'}`}
-          >
-            <span className={`inline-block h-3 w-3 rounded-full bg-white shadow transition-transform ${prefs.prevCandleStopEnabled ? 'translate-x-3' : 'translate-x-0'}`} />
-          </button>
-        </div>
-
-        {!prefs.prevCandleStopEnabled && (
-          <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={prefs.targetPct === 0 ? t('stats.tip.trailing_start_pct') : t('stats.tip.stop_pct')}>
+        {prefs.targetMode !== 'off' && (
+          <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.target_pct')}>
             <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">
-              {prefs.targetPct === 0 ? t('stats.trailing_start_pct') : t('stats.stop_pct')}
+              {prefs.targetMode === 'continuous' ? t('stats.target_base_pct') : t('stats.target_pct')}
             </label>
             <select className={inp}
-              value={prefs.stopLossPct}
-              onChange={(e) => patchPrefs({ stopLossPct: Number(e.target.value) })}>
-              {RSI_MOM_PCT_OPTIONS.map((v) => <option key={v} value={v}>{v}%</option>)}
+              value={prefs.targetPct}
+              onChange={(e) => patchPrefs({ targetPct: Number(e.target.value) })}>
+              {RSI_MOM_PCT_OPTIONS.map((v) => <option key={v} value={v}>+{v}%</option>)}
             </select>
           </div>
         )}
-
-        {/* Degraus do Stop contínuo (só com Alvo % = "Stop contínuo") — independentes: quanto a
-            moeda precisa subir pra render 1 degrau (coinStepPct) e quanto o stop sobe por degrau
-            (stopStepPct). Ex.: 1%/2% sobe o stop 2% a cada 1% de alta da moeda (mais agressivo);
-            2%/1% sobe 1% a cada 2% (mais conservador). */}
-        {prefs.targetPct === 0 && (
+        {prefs.targetMode === 'continuous' && (
           <>
-            <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.trailing_coin_step')}>
-              <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.trailing_coin_step')}</label>
+            <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.target_step_pp')}>
+              <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.target_step_pp')}</label>
               <select className={inp}
-                value={prefs.trailingCoinStepPct}
-                onChange={(e) => patchPrefs({ trailingCoinStepPct: Number(e.target.value) })}>
+                value={prefs.trailingTargetStepPct}
+                onChange={(e) => patchPrefs({ trailingTargetStepPct: Number(e.target.value) })}>
+                {RSI_MOM_TRAILING_TARGET_STEP_OPTIONS.map((v) => <option key={v} value={v}>{v}pp</option>)}
+              </select>
+            </div>
+            <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.target_coin_step')}>
+              <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.target_coin_step')}</label>
+              <select className={inp}
+                value={prefs.trailingTargetCoinStepPct}
+                onChange={(e) => patchPrefs({ trailingTargetCoinStepPct: Number(e.target.value) })}>
                 {RSI_MOM_TRAILING_STEP_OPTIONS.map((v) => <option key={v} value={v}>{v}%</option>)}
               </select>
             </div>
+          </>
+        )}
+
+        {/* STOP — modo (fixo/contínuo) + valores, INDEPENDENTE do alvo */}
+        <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[56px]" title={t('stats.tip.stop_mode')}>
+          <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.stop_mode')}</label>
+          <select className={inp}
+            value={prefs.stopMode}
+            onChange={(e) => patchPrefs({ stopMode: e.target.value })}>
+            {RSI_MOM_STOP_MODE_OPTIONS.map((m) => <option key={m} value={m}>{t(`stats.stop_mode_${m}`)}</option>)}
+          </select>
+        </div>
+        <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={prefs.stopMode === 'continuous' ? t('stats.tip.trailing_start_pct') : t('stats.tip.stop_pct')}>
+          <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">
+            {prefs.stopMode === 'continuous' ? t('stats.trailing_start_pct') : t('stats.stop_pct')}
+          </label>
+          <select className={inp}
+            value={prefs.stopLossPct}
+            onChange={(e) => patchPrefs({ stopLossPct: Number(e.target.value) })}>
+            {RSI_MOM_PCT_OPTIONS.map((v) => <option key={v} value={v}>-{v}%</option>)}
+          </select>
+        </div>
+        {prefs.stopMode === 'continuous' && (
+          <>
             <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.trailing_stop_step')}>
               <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.trailing_stop_step')}</label>
               <select className={inp}
                 value={prefs.trailingStopStepPct}
                 onChange={(e) => patchPrefs({ trailingStopStepPct: Number(e.target.value) })}>
+                {RSI_MOM_TRAILING_TARGET_STEP_OPTIONS.map((v) => <option key={v} value={v}>{v}pp</option>)}
+              </select>
+            </div>
+            <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.trailing_coin_step')}>
+              <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.trailing_coin_step')}</label>
+              <select className={inp}
+                value={prefs.trailingCoinStepPct}
+                onChange={(e) => patchPrefs({ trailingCoinStepPct: Number(e.target.value) })}>
                 {RSI_MOM_TRAILING_STEP_OPTIONS.map((v) => <option key={v} value={v}>{v}%</option>)}
               </select>
             </div>
@@ -1262,6 +1344,14 @@ function RsiMomentumStats({ autoCalc }) {
                 {RSI_MOM_BANDWIDTH_OPTIONS.map((v) => <option key={v} value={v}>{v}%</option>)}
               </select>
             </div>
+            <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.bandwidth_lookback')}>
+              <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.bandwidth_lookback')}</label>
+              <select className={inp}
+                value={prefs.bandWidthLookback}
+                onChange={(e) => patchPrefs({ bandWidthLookback: Number(e.target.value) })}>
+                {RSI_MOM_BANDWIDTH_LOOKBACK_OPTIONS.map((v) => <option key={v} value={v}>{v}</option>)}
+              </select>
+            </div>
           </>
         )}
 
@@ -1301,6 +1391,15 @@ function RsiMomentumStats({ autoCalc }) {
                 value={prefs.prevDayCloudCandleCount}
                 onChange={(e) => patchPrefs({ prevDayCloudCandleCount: Number(e.target.value) })}>
                 {RSI_MOM_CLOUD_CANDLE_COUNT_OPTIONS.map((v) => <option key={v} value={v}>{`x${v}`}</option>)}
+              </select>
+            </div>
+            <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.prevday_cloud_source')}>
+              <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.prevday_cloud_source')}</label>
+              <select className={inp}
+                value={prefs.prevDayCloudUseHighLow ? 'hl' : 'oc'}
+                onChange={(e) => patchPrefs({ prevDayCloudUseHighLow: e.target.value === 'hl' })}>
+                <option value="oc">{t('stats.prevday_cloud_source_oc')}</option>
+                <option value="hl">{t('stats.prevday_cloud_source_hl')}</option>
               </select>
             </div>
           </>
@@ -1417,6 +1516,19 @@ function RsiMomentumStats({ autoCalc }) {
           }
           {t('stats.search')}
         </button>
+
+        <div className="shrink-0 flex items-center gap-1.5 text-[10px] text-p5/50" title={t('stats.tip.searchlog')}>
+          <span className="hidden md:inline">{t('stats.searchlog')}: {savedSearchCount ?? '…'}</span>
+          <span className="md:hidden">📁 {savedSearchCount ?? '…'}</span>
+          <button
+            type="button"
+            onClick={handleClearSavedSearches}
+            disabled={!savedSearchCount}
+            className="rounded border border-p3/40 px-1.5 py-0.5 text-[10px] text-p5/60 hover:text-red-400 hover:border-red-400/40 transition-colors disabled:opacity-40 disabled:cursor-default"
+          >
+            {t('stats.searchlog_clear')}
+          </button>
+        </div>
       </div>
 
       <div className="flex flex-col gap-2 flex-1 min-w-0">
@@ -1447,7 +1559,23 @@ function RsiMomentumStats({ autoCalc }) {
               <SummaryCard label={t('stats.card.signals')} value={result.totalSignals} highlight="text-p4" tooltip={t('stats.tip.signals')} />
               <SummaryCard label={t('stats.card.filled')} value={result.totalFilled} tooltip={t('stats.tip.filled')} />
               <SummaryCard label={t('stats.card.hit_target')} value={result.totalTarget} highlight="text-green-600" />
+              {result.totalTarget > 0 && result.targetBaseCount != null && (
+                <SummaryCard
+                  label={t('stats.card.target_base')}
+                  value={`${result.targetBaseCount}/${result.totalTarget}`}
+                  highlight="text-emerald-500"
+                  tooltip={t('stats.tip.target_base_count')}
+                />
+              )}
               <SummaryCard label={t('stats.card.hit_stop')} value={result.totalStop} highlight="text-red-600" />
+              {result.totalStop > 0 && result.stopBaseCount != null && (
+                <SummaryCard
+                  label={t('stats.card.stop_base')}
+                  value={`${result.stopBaseCount}/${result.totalStop}`}
+                  highlight="text-red-500"
+                  tooltip={t('stats.tip.stop_base_count')}
+                />
+              )}
               <SummaryCard label={t('stats.card.still_open')} value={result.totalOpen} highlight="text-amber-600" />
               <SummaryCard label={t('stats.card.win_rate')} value={`${result.winRatePct}%`} highlight="text-p4" tooltip={t('stats.tip.win_rate')} />
               <SummaryCard label={t('stats.card.invested')} value={`$${result.totalInvestedUsd}`} />
@@ -1548,6 +1676,42 @@ function RsiMomentumStats({ autoCalc }) {
               </p>
             )}
 
+            {prefs.allCoins && Array.isArray(result.volumeBreakdown) && result.volumeBreakdown.some((b) => b.trades > 0) && (
+              <div className="rounded-md p-2" style={{ background: '#0f1219', border: '1px solid #2a2d3a' }}>
+                <p className="text-p5/70 text-[10px] font-semibold uppercase tracking-wider mb-1" title={t('stats.tip.volume_breakdown')}>
+                  {t('stats.volume_breakdown')}
+                </p>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-[10px] sm:text-[11px]">
+                    <thead>
+                      <tr className="text-p5/50 text-left">
+                        <th className="pb-1 pr-2">{t('stats.vb_bucket')}</th>
+                        <th className="pb-1 pr-2 text-right">{t('stats.vb_trades')}</th>
+                        <th className="pb-1 pr-2 text-right">{t('stats.vb_winrate')}</th>
+                        <th className="pb-1 pr-2 text-right">{t('stats.vb_avg_pnl')}</th>
+                        <th className="pb-1 text-right">{t('stats.vb_total_pnl')}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {result.volumeBreakdown.map((b) => (
+                        <tr key={b.label} className={b.trades === 0 ? 'text-p5/25' : 'text-p5/80'}>
+                          <td className="py-0.5 pr-2 font-mono whitespace-nowrap">{b.label}</td>
+                          <td className="py-0.5 pr-2 text-right">{b.trades}{b.trades > 0 ? ` (${b.wins}✓/${b.stops}✗)` : ''}</td>
+                          <td className="py-0.5 pr-2 text-right">{b.winRatePct != null ? `${b.winRatePct}%` : '—'}</td>
+                          <td className={`py-0.5 pr-2 text-right font-mono ${b.avgPnlPct == null ? '' : b.avgPnlPct >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                            {b.avgPnlPct != null ? `${b.avgPnlPct >= 0 ? '+' : ''}${b.avgPnlPct}%` : '—'}
+                          </td>
+                          <td className={`py-0.5 text-right font-mono ${b.trades === 0 ? '' : b.totalPnlUsd >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                            {b.trades > 0 ? `${b.totalPnlUsd >= 0 ? '+' : ''}$${b.totalPnlUsd}` : '—'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
             {result.occurrencesTruncated && (
               <p className="text-[11px] text-p5/50 italic">
                 Mostrando os {result.occurrences.length} sinais mais recentes de {result.totalSignals} encontrados.
@@ -1592,6 +1756,7 @@ function RsiMomentumStats({ autoCalc }) {
                       <tr className="text-[9px] sm:text-[10px] text-p5/40 uppercase tracking-wider lt-table-head">
                         {showAll && <th className="text-left pb-1 pr-2">#</th>}
                         {prefs.allCoins && <SortTh label={t('stats.card.par')} sortKey="symbol" sort={sort} onSort={toggleSort} />}
+                        {prefs.allCoins && <SortTh label={t('stats.vb_vol')} sortKey="volumeUsd" sort={sort} onSort={toggleSort} align="right" />}
                         <SortTh label={t('stats.signal')} sortKey="signalDate" sort={sort} onSort={toggleSort} />
                         <SortTh label="RSI" sortKey="signalRsi" sort={sort} onSort={toggleSort} align="right" />
                         {showAll && <SortTh label={t('stats.entry_p')} sortKey="entryPrice" sort={sort} onSort={toggleSort} align="right" />}
@@ -1613,6 +1778,7 @@ function RsiMomentumStats({ autoCalc }) {
                           >
                             {showAll && <td className="py-0.5 pr-2 text-[10px] text-p5/40">{i + 1}</td>}
                             {prefs.allCoins && <td className="py-0.5 pr-2 text-[10px] sm:text-xs font-bold whitespace-nowrap">{o.symbol}</td>}
+                            {prefs.allCoins && <td className="py-0.5 pr-2 text-[10px] sm:text-xs text-right font-mono text-p5/60 whitespace-nowrap">{formatVolume(o.volumeUsd)}</td>}
                             <td className="py-0.5 pr-2 text-[10px] sm:text-xs font-mono whitespace-nowrap">{formatDate(o.signalDate)}</td>
                             <td className="py-0.5 pr-2 text-[10px] sm:text-xs text-right text-yellow-600">{o.signalRsi}</td>
                             {showAll && (
@@ -1630,7 +1796,7 @@ function RsiMomentumStats({ autoCalc }) {
                       })}
 
                       <tr className="lt-table-foot" aria-hidden="true">
-                        <td colSpan={(showAll ? 7 : 5) + (prefs.allCoins ? 1 : 0)} className="h-px p-0 leading-none" />
+                        <td colSpan={(showAll ? 7 : 5) + (prefs.allCoins ? 2 : 0)} className="h-px p-0 leading-none" />
                       </tr>
                     </tbody>
                   </table>

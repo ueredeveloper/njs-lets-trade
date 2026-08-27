@@ -2,12 +2,48 @@
 
 const { getActiveUsdtPairs } = require('../binance/getActiveUsdtPairs');
 const analyseRsiThresholdBacktest = require('./analyseRsiThresholdBacktest');
+const { countBaseVsEvolvedExits } = require('./analyseRsiThresholdBacktest');
 const getTickers = require('../binance/cachedTicker24hr');
 const { computeDailyEntryStats } = require('./dailyEntryStats');
 const { computeAvgTradeDurationMs } = require('./tradeDurationStats');
 
 const CONCURRENCY = 15;
 const DEFAULT_MAX_ROWS = 300;
+
+/** Faixas de volume 24h (quoteVolume USDT) pro breakdown "volume × resultado". */
+const VOLUME_BUCKETS = [
+    { label: '< 1M',       max: 1e6 },
+    { label: '1M – 5M',    max: 5e6 },
+    { label: '5M – 20M',   max: 20e6 },
+    { label: '20M – 100M', max: 100e6 },
+    { label: '≥ 100M',     max: Infinity },
+];
+
+/** Agrupa os trades preenchidos pela faixa de volume 24h da moeda e devolve win-rate / P&L médio
+ *  / P&L total por faixa — pra ver se moeda com mais volume dá resultado melhor ou pior. */
+function computeVolumeBreakdown(filledOccurrences, volumeMap) {
+    const buckets = VOLUME_BUCKETS.map((b) => ({ ...b, list: [] }));
+    for (const o of filledOccurrences) {
+        const vol = Number(volumeMap.get(o.symbol)) || 0;
+        (buckets.find((bk) => vol < bk.max) ?? buckets[buckets.length - 1]).list.push(o);
+    }
+    return buckets.map((b) => {
+        const closed = b.list.filter((o) => o.outcome === 'target' || o.outcome === 'stop');
+        const wins = closed.filter((o) => o.outcome === 'target').length;
+        const stops = closed.length - wins;
+        const pnlPctSum = b.list.reduce((s, o) => s + o.pnlPct, 0);
+        const pnlUsdSum = b.list.reduce((s, o) => s + o.pnlUsd, 0);
+        return {
+            label: b.label,
+            trades: b.list.length,
+            wins,
+            stops,
+            winRatePct: closed.length ? parseFloat(((wins / closed.length) * 100).toFixed(1)) : null,
+            avgPnlPct: b.list.length ? parseFloat((pnlPctSum / b.list.length).toFixed(2)) : null,
+            totalPnlUsd: parseFloat(pnlUsdSum.toFixed(2)),
+        };
+    });
+}
 
 async function runWithConcurrency(items, worker, concurrency) {
     const results = [];
@@ -46,16 +82,19 @@ async function analyseRsiThresholdBacktestMarket(options = {}) {
 
     let symbols = allSymbols;
     let symbolsBlockedByVolume = 0;
-    if (Number(minVolumeUsdt) > 0 && perSymbolOptions.source !== 'gate') {
+    // Volume 24h de cada moeda (quoteVolume USDT) — usado tanto pro filtro minVolumeUsdt quanto
+    // pro breakdown "volume × resultado" no fim. Cache de /ticker/24hr; fail-open.
+    let volumeMap = new Map();
+    if (perSymbolOptions.source !== 'gate') {
         try {
             const tickers = await getTickers();
-            const volumeMap = new Map(tickers.map((t) => [t.symbol, Number(t.quoteVolume)]));
-            const filtered = allSymbols.filter((sym) => (volumeMap.get(sym) ?? 0) >= Number(minVolumeUsdt));
-            symbolsBlockedByVolume = allSymbols.length - filtered.length;
-            symbols = filtered;
-        } catch {
-            // fail-open: falha ao buscar o ticker não bloqueia o backtest, só desativa o filtro.
-        }
+            volumeMap = new Map(tickers.map((t) => [t.symbol, Number(t.quoteVolume)]));
+        } catch { /* fail-open: sem dado de volume, filtro e breakdown ficam vazios */ }
+    }
+    if (Number(minVolumeUsdt) > 0 && volumeMap.size > 0) {
+        const filtered = allSymbols.filter((sym) => (volumeMap.get(sym) ?? 0) >= Number(minVolumeUsdt));
+        symbolsBlockedByVolume = allSymbols.length - filtered.length;
+        symbols = filtered;
     }
 
     const perSymbolResults = await runWithConcurrency(symbols, async (symbol) => {
@@ -74,8 +113,9 @@ async function analyseRsiThresholdBacktestMarket(options = {}) {
 
     for (const { symbol, result } of valid) {
         if (result.bandWidth && !result.bandWidth.passed) symbolsBlockedByBandWidth++;
+        const volumeUsd = volumeMap.has(symbol) ? Number(volumeMap.get(symbol)) || 0 : null;
         for (const occ of result.occurrences) {
-            allOccurrences.push({ symbol, ...occ });
+            allOccurrences.push({ symbol, volumeUsd, ...occ });
         }
     }
 
@@ -88,6 +128,8 @@ async function analyseRsiThresholdBacktestMarket(options = {}) {
     const totalNotFilled = allOccurrences.length - filledOccurrences.length;
     const closedCount = totalTarget + totalStop;
     const winRatePct = closedCount > 0 ? parseFloat(((totalTarget / closedCount) * 100).toFixed(1)) : 0;
+    const baseVsEvolved = countBaseVsEvolvedExits(filledOccurrences);
+    const volumeBreakdown = volumeMap.size > 0 ? computeVolumeBreakdown(filledOccurrences, volumeMap) : null;
     const positionSizeUsd = perSymbolOptions.positionSizeUsd ?? 40;
     const totalInvestedUsd = parseFloat((filledOccurrences.length * positionSizeUsd).toFixed(2));
     const totalPnlUsd = parseFloat(filledOccurrences.reduce((s, o) => s + o.pnlUsd, 0).toFixed(2));
@@ -113,6 +155,10 @@ async function analyseRsiThresholdBacktestMarket(options = {}) {
         adxFilterEnabled: !!perSymbolOptions.adxFilter?.enabled,
         macdFilterEnabled: !!perSymbolOptions.macdFilter?.enabled,
         trailingStop: perSymbolOptions.trailingStop?.enabled ? { ...perSymbolOptions.trailingStop } : null,
+        targetMode: (perSymbolOptions.targetMode === 'fixed' || perSymbolOptions.targetMode === 'continuous' || perSymbolOptions.targetMode === 'off')
+            ? perSymbolOptions.targetMode
+            : (perSymbolOptions.trailingTarget?.enabled ? 'continuous' : 'fixed'),
+        trailingTarget: perSymbolOptions.targetMode === 'continuous' ? { ...perSymbolOptions.trailingTarget } : null,
         dailyEntryStats: computeDailyEntryStats(filledOccurrences, positionSizeUsd, perSymbolOptions.entriesDayRange ?? null),
         tradeDuration: computeAvgTradeDurationMs(filledOccurrences),
         symbolsTotal: allSymbols.length,
@@ -125,6 +171,11 @@ async function analyseRsiThresholdBacktestMarket(options = {}) {
         totalStop,
         totalOpen,
         totalNotFilled,
+        stopBaseCount: baseVsEvolved.stopBase,
+        stopEvolvedCount: baseVsEvolved.stopEvolved,
+        targetBaseCount: baseVsEvolved.targetBase,
+        targetEvolvedCount: baseVsEvolved.targetEvolved,
+        volumeBreakdown,
         winRatePct,
         totalInvestedUsd,
         totalPnlUsd,

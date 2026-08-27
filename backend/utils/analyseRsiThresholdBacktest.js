@@ -45,7 +45,7 @@ const MAX_ONE_MINUTE_CANDLES = 3000;
  * assim que a posição entra, arma alvo E stop simultaneamente; o que for tocado primeiro
  * encerra a operação. `scanCandles` deve conter só candles com openTime > signalCloseMs.
  */
-function resolveFromSignal(scanCandles, signalPrice, { pullbackPct, targetPct, stopLossPct, stopPriceOverride, trailingStop }) {
+function resolveFromSignal(scanCandles, signalPrice, { pullbackPct, targetPct, stopLossPct, stopPriceOverride, trailingStop, trailingTarget, targetMode }) {
     let filled = pullbackPct === 0;
     let entryTime = null;
     let entryPrice = signalPrice;
@@ -66,20 +66,26 @@ function resolveFromSignal(scanCandles, signalPrice, { pullbackPct, targetPct, s
         if (!filled) return { filled: false };
     }
 
-    // Stop contínuo (trailing): sem alvo — a posição só sai pelo stop, que sobe em degraus de
-    // trailingStop.stepPct a cada novo topo de preço (ver loop abaixo). Ignora tanto o alvo fixo
-    // (targetPct) quanto o stopPriceOverride do candle 4h anterior — não fazem sentido combinados
-    // com um stop que já sobe sozinho.
-    const trailingEnabled = !!trailingStop?.enabled;
-    const targetPrice = trailingEnabled ? null : entryPrice * (1 + targetPct / 100);
+    // ALVO e STOP são INDEPENDENTES.
+    //   Stop: 'trailing' (trailingStop.enabled) sobe em degraus com o pico (contador próprio
+    //         trailingStop.coinStepPct); senão é fixo (stopLossPct / stopPriceOverride 4h).
+    //   Alvo (targetMode): 'fixed' = entry*(1+targetPct%); 'continuous' = base targetPct% subindo
+    //         em degraus com contador PRÓPRIO (trailingTarget.coinStepPct), `stepPct` p.p. por
+    //         degrau; 'off' = sem alvo, só sai pelo stop. Sem targetMode explícito → 'fixed'
+    //         (compat: 'continuous' se veio trailingTarget.enabled do formato antigo).
+    const stopTrailingOn = !!trailingStop?.enabled;
+    const tMode = (targetMode === 'fixed' || targetMode === 'continuous' || targetMode === 'off')
+        ? targetMode
+        : (trailingTarget?.enabled ? 'continuous' : 'fixed');
+    const ttCoinStepPct = Math.max(0.1, Number(trailingTarget?.coinStepPct ?? 3));
+    const ttStepPct = Math.max(0.1, Number(trailingTarget?.stepPct ?? 3));
+    let targetPrice = tMode === 'off' ? null : entryPrice * (1 + targetPct / 100);
 
     // Stop pelo candle 4h anterior (ver resolvePrevCandleStopPrice): preço absoluto, não %. Só
-    // usa o override se fizer sentido pra uma compra (abaixo do preço de entrada) — sem isso, um
-    // candle 4h anterior cujo fundo já ficou acima da entrada geraria um "stop" que dispara na
-    // hora. Sem override válido, cai de volta pro stop fixo (stopLossPct ou trailingStop.startPct
-    // no modo contínuo), como sempre.
-    const startStopPct = trailingEnabled ? Number(trailingStop.startPct ?? stopLossPct) : stopLossPct;
-    let stopPrice = (!trailingEnabled && Number.isFinite(stopPriceOverride) && stopPriceOverride > 0 && stopPriceOverride < entryPrice)
+    // usa o override se fizer sentido pra uma compra (abaixo do preço de entrada). Sem override
+    // válido, cai no stop fixo (stopLossPct ou trailingStop.startPct no modo contínuo).
+    const startStopPct = stopTrailingOn ? Number(trailingStop.startPct ?? stopLossPct) : stopLossPct;
+    let stopPrice = (!stopTrailingOn && Number.isFinite(stopPriceOverride) && stopPriceOverride > 0 && stopPriceOverride < entryPrice)
         ? stopPriceOverride
         : entryPrice * (1 - startStopPct / 100);
 
@@ -87,39 +93,50 @@ function resolveFromSignal(scanCandles, signalPrice, { pullbackPct, targetPct, s
     let exitTime = null;
     let exitPrice = null;
     let peakPrice = entryPrice;
-    // Dois degraus INDEPENDENTES: a cada `coinStepPct`% de alta da moeda desde a entrada, o stop
-    // sobe `stopStepPct`% — não precisam ser iguais (ex.: moeda sobe 1% → stop sobe 2%; ou moeda
-    // sobe 2% → stop sobe 1%).
-    const coinStepPct = trailingEnabled ? Math.max(0.1, Number(trailingStop.coinStepPct ?? 1)) : null;
-    const stopStepPct = trailingEnabled ? Math.max(0.1, Number(trailingStop.stopStepPct ?? 1)) : null;
+    const stopCoinStepPct = stopTrailingOn ? Math.max(0.1, Number(trailingStop.coinStepPct ?? 1)) : null;
+    const stopStepPct = stopTrailingOn ? Math.max(0.1, Number(trailingStop.stopStepPct ?? 1)) : null;
+    const anyTrailing = stopTrailingOn || tMode === 'continuous';
 
     for (let j = startScanIdx; j < scanCandles.length; j++) {
         const low = parseFloat(scanCandles[j].low);
         const high = parseFloat(scanCandles[j].high);
 
-        // A cada novo topo, o stop sobe em degraus de stopStepPct% por cada coinStepPct% de alta
-        // da moeda — ex.: startPct=5, coinStepPct=1, stopStepPct=2: a moeda subindo 1% desde a
-        // entrada leva o stop de -5% pra -3%, subindo 2% leva pra -1%, e assim por diante (pode
-        // virar positivo, travando lucro). Atualiza o topo/stop ANTES de checar o próprio candle —
-        // mesmo critério conservador de sempre (assume o pior caso pro sinal: a subida acontece
-        // antes da queda dentro do candle).
-        if (trailingEnabled && high > peakPrice) {
-            peakPrice = high;
-            const gainPct = ((peakPrice / entryPrice) - 1) * 100;
-            const steps = Math.floor(gainPct / coinStepPct);
-            const currentStopPct = startStopPct - steps * stopStepPct;
-            stopPrice = entryPrice * (1 - currentStopPct / 100);
+        // Alvo contínuo: a ordem resting reflete o pico ATÉ o candle anterior. Checa o nível
+        // VIGENTE antes de subir o degrau com o high DESTE candle — pra o alvo subir o preço
+        // precisa ter passado pelo nível antigo, que já teria enchido a ordem lá (um alvo que
+        // sobe rápido demais nunca preenche). Fica antes do stop no empate: o alvo é uma ordem
+        // limite que casa na subida; o stop só sobe DEPOIS.
+        if (tMode === 'continuous' && targetPrice != null && high >= targetPrice) {
+            outcome = 'target';
+            exitTime = scanCandles[j].openTime;
+            exitPrice = targetPrice;
+            break;
         }
 
-        // Ordem intra-candle desconhecida (só temos OHLC) — no empate assume o pior caso
-        // (stop primeiro), mesmo critério conservador de sempre.
+        // A cada novo topo: stop contínuo sobe `stopStepPct` p.p. por `stopCoinStepPct`% de alta;
+        // alvo contínuo sobe `ttStepPct` p.p. por `ttCoinStepPct`% de alta (contadores separados).
+        // Atualiza ANTES de checar o candle — critério conservador de sempre (subida antes da queda).
+        if (anyTrailing && high > peakPrice) {
+            peakPrice = high;
+            const gainPct = ((peakPrice / entryPrice) - 1) * 100;
+            if (stopTrailingOn) {
+                const steps = Math.floor(gainPct / stopCoinStepPct);
+                stopPrice = entryPrice * (1 - (startStopPct - steps * stopStepPct) / 100);
+            }
+            if (tMode === 'continuous') {
+                const steps = Math.floor(gainPct / ttCoinStepPct);
+                targetPrice = entryPrice * (1 + (targetPct + steps * ttStepPct) / 100);
+            }
+        }
+
+        // Ordem intra-candle desconhecida (só OHLC) — no empate assume o pior caso (stop primeiro).
         if (low <= stopPrice) {
             outcome = 'stop';
             exitTime = scanCandles[j].openTime;
             exitPrice = stopPrice;
             break;
         }
-        if (!trailingEnabled && high >= targetPrice) {
+        if (tMode === 'fixed' && high >= targetPrice) {
             outcome = 'target';
             exitTime = scanCandles[j].openTime;
             exitPrice = targetPrice;
@@ -133,7 +150,17 @@ function resolveFromSignal(scanCandles, signalPrice, { pullbackPct, targetPct, s
             : entryPrice;
     }
 
-    return { filled: true, entryTime, entryPrice, targetPrice, stopPrice, outcome, exitTime, exitPrice };
+    // Quantos degraus o stop / o alvo tinham subido no momento da saída (0 = ainda na base —
+    // stop no -startPct%, alvo no +targetPct%). Serve pra separar "stop base / não evoluiu" de
+    // "stop que já tinha subido" nas estatísticas.
+    const peakGainPct = ((peakPrice / entryPrice) - 1) * 100;
+    const stopSteps = stopTrailingOn ? Math.max(0, Math.floor(peakGainPct / stopCoinStepPct)) : 0;
+    const targetSteps = tMode === 'continuous' ? Math.max(0, Math.floor(peakGainPct / ttCoinStepPct)) : 0;
+
+    return {
+        filled: true, entryTime, entryPrice, targetPrice, stopPrice, outcome, exitTime, exitPrice,
+        stopSteps, targetSteps, peakGainPct: parseFloat(peakGainPct.toFixed(2)),
+    };
 }
 
 /** Maior índice i tal que candles[i].openTime <= timeMs (busca binária — candles vem ordenado
@@ -190,7 +217,7 @@ function resolveOwnIntervalValueAt(ownCandles, ownSeries, ownOffset, timeMs, pic
  * enxergando candles de 22/08 — ver conversa). null se não houver candle suficiente antes do
  * sinal (início da amostra).
  */
-function resolvePrevDayCloud(dailyCandles, signalTimeMs, candleCount = 1) {
+function resolvePrevDayCloud(dailyCandles, signalTimeMs, candleCount = 1, useHighLow = false) {
     const n = Math.max(1, Math.round(Number(candleCount) || 1));
     const lastIndex = dailyCandles.length - 1;
     const lastClosedIndex = dailyCandles.length - 2;
@@ -205,10 +232,17 @@ function resolvePrevDayCloud(dailyCandles, signalTimeMs, candleCount = 1) {
     if (!window.length) return null;
     let lower = Infinity, upper = -Infinity;
     for (const c of window) {
-        const open = parseFloat(c.open);
-        const close = parseFloat(c.close);
-        if (open > 0) { lower = Math.min(lower, open); upper = Math.max(upper, open); }
-        if (close > 0) { lower = Math.min(lower, close); upper = Math.max(upper, close); }
+        if (useHighLow) {
+            const high = parseFloat(c.high);
+            const low = parseFloat(c.low);
+            if (low > 0) lower = Math.min(lower, low);
+            if (high > 0) upper = Math.max(upper, high);
+        } else {
+            const open = parseFloat(c.open);
+            const close = parseFloat(c.close);
+            if (open > 0) { lower = Math.min(lower, open); upper = Math.max(upper, open); }
+            if (close > 0) { lower = Math.min(lower, close); upper = Math.max(upper, close); }
+        }
     }
     if (!(upper > 0) || !Number.isFinite(lower)) return null;
     return { lower, upper };
@@ -221,8 +255,8 @@ function resolvePrevDayCloud(dailyCandles, signalTimeMs, candleCount = 1) {
  * (desconto maior ainda que a própria nuvem); só bloqueia acima do limite (preço caro demais). Sem
  * nuvem de referência disponível (início da amostra), não bloqueia.
  */
-function checkPrevDayCloudFilter(dailyCandles, signalTimeMs, price, maxPct, candleCount = 1) {
-    const cloud = resolvePrevDayCloud(dailyCandles, signalTimeMs, candleCount);
+function checkPrevDayCloudFilter(dailyCandles, signalTimeMs, price, maxPct, candleCount = 1, useHighLow = false) {
+    const cloud = resolvePrevDayCloud(dailyCandles, signalTimeMs, candleCount, useHighLow);
     if (!cloud) return true;
     const { lower, upper } = cloud;
     if (upper <= lower) return true; // nuvem "achatada" (abertura == fechamento) — sem restrição possível
@@ -284,7 +318,20 @@ function buildOccurrence(signalCandle, signalPrice, signalRsi, resolved, positio
         exitPrice,
         pnlPct,
         pnlUsd,
+        stopSteps: resolved.stopSteps ?? 0,
+        targetSteps: resolved.targetSteps ?? 0,
+        peakGainPct: resolved.peakGainPct ?? null,
     };
+}
+
+/** Contagem "base × evoluiu" das saídas: stops que saíram no -startPct% (stopSteps 0, o stop
+ *  nunca subiu) vs stops que já tinham subido de degrau; idem pros alvos contínuos. */
+function countBaseVsEvolvedExits(filledOccurrences) {
+    const stopBase = filledOccurrences.filter(o => o.outcome === 'stop' && (o.stopSteps ?? 0) === 0).length;
+    const stopEvolved = filledOccurrences.filter(o => o.outcome === 'stop' && (o.stopSteps ?? 0) > 0).length;
+    const targetBase = filledOccurrences.filter(o => o.outcome === 'target' && (o.targetSteps ?? 0) === 0).length;
+    const targetEvolved = filledOccurrences.filter(o => o.outcome === 'target' && (o.targetSteps ?? 0) > 0).length;
+    return { stopBase, stopEvolved, targetBase, targetEvolved };
 }
 
 /**
@@ -349,6 +396,10 @@ function buildOccurrence(signalCandle, signalPrice, signalRsi, resolved, positio
  *   acima) entram no envelope da nuvem — 1 é só o candle imediatamente anterior; N>1 junta os
  *   últimos N: nuvem = [menor open/close, maior open/close] entre todos eles (mesmo parâmetro do
  *   gráfico, ver buildPrevDayCloudSegments em CandlestickChart.jsx).
+ * @param {boolean} [options.prevDayCloud.useHighLow=true]  Aumenta a nuvem: em vez de
+ *   abertura/fechamento (corpo do candle), usa máxima/mínima (pavios) dos candles da janela —
+ *   faixa mais larga, mesmo parâmetro do gráfico e do bot ao vivo. Padrão máx/mín; passe
+ *   explicitamente `false` pra voltar ao corpo (abertura/fechamento).
  * @param {number}  [options.minVolumeUsdt=0]  Filtro opcional de volume 24h (mesmo campo do bot
  *   ao vivo, config.volume.minVolumeUsdt — ver marketScanner.js). 0 = desligado. Usa o mesmo
  *   cache de /ticker/24hr da Binance (cachedTicker24hr.js) — sem efeito quando source='gate'
@@ -367,18 +418,24 @@ function buildOccurrence(signalCandle, signalPrice, signalRsi, resolved, positio
  *   só o stop muda de mecânica. Sempre 4h, fixo (sem intervalo configurável). Sinal sem candle
  *   de 4h suficiente antes dele (início da amostra), ou cujo stop calculado ficaria ACIMA do
  *   preço de entrada (inválido pra uma compra), cai de volta pro stop fixo automaticamente.
- * @param {object} [options.trailingStop]  Stop contínuo: SEM alvo programado — a posição só sai
- *   pelo stop, que sobe em degraus de `stopStepPct`% a cada `coinStepPct`% de novo topo de preço
- *   desde a entrada (ex.: startPct=5, coinStepPct=1, stopStepPct=1 — moeda subiu 1%: stop de -5%
- *   vira -4%; subiu 2%: vira -3%; e assim por diante, podendo virar positivo e travar lucro). Os
- *   dois degraus são independentes — coinStepPct=1/stopStepPct=2 sobe o stop 2% a cada 1% de alta
- *   da moeda (mais agressivo); coinStepPct=2/stopStepPct=1 sobe 1% a cada 2% (mais conservador).
- *   Ignora tanto `targetPct` quanto `prevCandleStop` (não fazem sentido combinados com um stop
- *   que já sobe sozinho) — ver resolveFromSignal.
+ * @param {string} [options.targetMode='fixed']  Modo do ALVO, INDEPENDENTE do stop:
+ *   'fixed' = alvo constante em `targetPct`%; 'continuous' = base `targetPct`% subindo em degraus
+ *   com o pico (contador próprio `trailingTarget.coinStepPct`), `trailingTarget.stepPct` p.p. por
+ *   degrau; 'off' = sem alvo, a posição só sai pelo stop. Sem valor explícito, deriva do
+ *   `trailingTarget.enabled` legado e cai em 'fixed'.
+ * @param {object} [options.trailingStop]  Stop contínuo — INDEPENDENTE do alvo: sobe em degraus de
+ *   `stopStepPct`% a cada `coinStepPct`% de novo topo de preço desde a entrada (ex.: startPct=5,
+ *   coinStepPct=1, stopStepPct=1 — moeda subiu 1%: stop de -5% vira -4%; subiu 2%: vira -3%; pode
+ *   virar positivo e travar lucro). Os dois degraus são independentes. Ignora `prevCandleStop`.
  * @param {boolean} [options.trailingStop.enabled=false]
  * @param {number}  [options.trailingStop.startPct=stopLossPct]  Distância inicial do stop (%).
  * @param {number}  [options.trailingStop.coinStepPct=1]  Cada quantos % de alta do preço o stop sobe um degrau.
  * @param {number}  [options.trailingStop.stopStepPct=1]  Quantos % o stop sobe a cada degrau.
+ * @param {object} [options.trailingTarget]  Degraus do alvo contínuo (targetMode='continuous') —
+ *   contador PRÓPRIO, independente do stop. Um alvo que sobe mais rápido do que o preço acaba
+ *   nunca preenchendo, e a posição sai pelo stop — ver resolveFromSignal.
+ * @param {number}  [options.trailingTarget.coinStepPct=3]  Cada quantos % de alta do pico o alvo sobe um degrau.
+ * @param {number}  [options.trailingTarget.stepPct=3]  Quantos p.p. o alvo sobe a cada degrau.
  * @param {object} [options.adxFilter]  Filtro de força de tendência (ADX de Wilder, período fixo
  *   14) — só permite o sinal se o ADX, no intervalo escolhido, estiver NA OU ACIMA do mínimo
  *   exigido no instante do sinal. Mercado em range (ADX baixo) costuma gerar cruzamentos de RSI
@@ -420,6 +477,8 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
         adxFilter       = null,
         macdFilter      = null,
         trailingStop    = null,
+        trailingTarget  = null,
+        targetMode      = null,
         entriesDayRange = null,
     } = options;
 
@@ -427,6 +486,14 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
     const trailingStopStartPct = Math.max(0.5, Math.min(50, Number(trailingStop?.startPct ?? stopLossPct)));
     const trailingStopCoinStepPct = Math.max(0.1, Math.min(20, Number(trailingStop?.coinStepPct ?? 1)));
     const trailingStopStopStepPct = Math.max(0.1, Math.min(20, Number(trailingStop?.stopStepPct ?? 1)));
+    // Modo do alvo — INDEPENDENTE do stop. Sem targetMode explícito, deriva do trailingTarget
+    // legado (compat) e cai em 'fixed'.
+    const targetModeResolved = (targetMode === 'fixed' || targetMode === 'continuous' || targetMode === 'off')
+        ? targetMode
+        : (trailingTarget?.enabled ? 'continuous' : 'fixed');
+    // Alvo contínuo tem contador PRÓPRIO (independente do stop).
+    const trailingTargetCoinStepPct = Math.max(0.1, Math.min(20, Number(trailingTarget?.coinStepPct ?? 3)));
+    const trailingTargetStepPct = Math.max(0.1, Math.min(50, Number(trailingTarget?.stepPct ?? 3)));
 
     const pcsEnabled = !!prevCandleStop;
     const adxEnabled = !!adxFilter?.enabled;
@@ -462,6 +529,10 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
     // Quantos candles (do pdcInterval) entram no envelope da nuvem — 1 (padrão) é só o candle
     // anterior, ver resolvePrevDayCloud/checkPrevDayCloudFilter.
     const pdcCandleCount = Math.max(1, Math.min(10, Math.round(Number(prevDayCloud?.candleCount ?? 3))));
+    // Aumenta a nuvem: máxima/mínima (pavios) em vez de abertura/fechamento (corpo) — ver
+    // resolvePrevDayCloud e buildPrevDayCloudSegments no frontend. Padrão máx/mín; só `false`
+    // explícito volta pro corpo.
+    const pdcUseHighLow = prevDayCloud?.useHighLow !== false;
     // Dias/períodos cobertos pelo intervalo principal (mainLimit candles) + folga de
     // pdcCandleCount+3, pro sinal mais antigo da amostra também ter uma janela completa de
     // candles anteriores pra servir de referência — mesma conta de computePrevDayCloudFetchLimit
@@ -623,7 +694,7 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
             if (signalCandle.openTime < signalCutoffMs) continue;
 
             const signalPrice = parseFloat(signalCandle.close);
-            if (pdcEnabled && !checkPrevDayCloudFilter(dailyCandles, signalCandle.openTime, signalPrice, pdcMaxPct, pdcCandleCount)) continue;
+            if (pdcEnabled && !checkPrevDayCloudFilter(dailyCandles, signalCandle.openTime, signalPrice, pdcMaxPct, pdcCandleCount, pdcUseHighLow)) continue;
 
             // ADX: só passa com tendência confirmada (>= mínimo) no instante do sinal. Sem valor
             // disponível ainda (warmup do indicador), não bloqueia.
@@ -689,6 +760,7 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
 
         const resolved = resolveFromSignal(scanCandles, signalPrice, {
             pullbackPct, targetPct, stopLossPct, stopPriceOverride,
+            targetMode: targetModeResolved,
             trailingStop: trailingStopEnabled
                 ? {
                     enabled: true,
@@ -696,6 +768,9 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
                     coinStepPct: trailingStopCoinStepPct,
                     stopStepPct: trailingStopStopStepPct,
                 }
+                : null,
+            trailingTarget: targetModeResolved === 'continuous'
+                ? { coinStepPct: trailingTargetCoinStepPct, stepPct: trailingTargetStepPct }
                 : null,
         });
         occurrences.push(buildOccurrence(signalCandle, signalPrice, signalRsi, resolved, positionSizeUsd));
@@ -712,6 +787,7 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
     const totalOpen = filledOccurrences.filter(o => o.outcome === 'open').length;
     const totalNotFilled = finalOccurrences.length - filledOccurrences.length;
     const closedCount = totalTarget + totalStop;
+    const baseVsEvolved = countBaseVsEvolvedExits(filledOccurrences);
     const winRatePct = closedCount > 0 ? parseFloat(((totalTarget / closedCount) * 100).toFixed(1)) : 0;
     const totalInvestedUsd = parseFloat((filledOccurrences.length * positionSizeUsd).toFixed(2));
     const totalPnlUsd = parseFloat(filledOccurrences.reduce((s, o) => s + o.pnlUsd, 0).toFixed(2));
@@ -738,12 +814,16 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
         totalStop,
         totalOpen,
         totalNotFilled,
+        stopBaseCount: baseVsEvolved.stopBase,
+        stopEvolvedCount: baseVsEvolved.stopEvolved,
+        targetBaseCount: baseVsEvolved.targetBase,
+        targetEvolvedCount: baseVsEvolved.targetEvolved,
         winRatePct,
         totalInvestedUsd,
         totalPnlUsd,
         avgPnlPct,
         bandWidth: bandWidthResult,
-        prevDayCloud: pdcEnabled ? { maxPct: pdcMaxPct, interval: pdcInterval, candleCount: pdcCandleCount } : null,
+        prevDayCloud: pdcEnabled ? { maxPct: pdcMaxPct, interval: pdcInterval, candleCount: pdcCandleCount, useHighLow: pdcUseHighLow } : null,
         volume: volumeResult,
         excludeOpenExits,
         prevCandleStop: pcsEnabled,
@@ -754,6 +834,12 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
             coinStepPct: trailingStopCoinStepPct,
             stopStepPct: trailingStopStopStepPct,
         } : null,
+        targetMode: targetModeResolved,
+        trailingTarget: targetModeResolved === 'continuous' ? {
+            basePct: targetPct,
+            coinStepPct: trailingTargetCoinStepPct,
+            stepPct: trailingTargetStepPct,
+        } : null,
         dailyEntryStats: computeDailyEntryStats(filledOccurrences, positionSizeUsd, entriesDayRange),
         tradeDuration: computeAvgTradeDurationMs(filledOccurrences),
         occurrences: finalOccurrences,
@@ -761,3 +847,4 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
 }
 
 module.exports = analyseRsiThresholdBacktest;
+module.exports.countBaseVsEvolvedExits = countBaseVsEvolvedExits;

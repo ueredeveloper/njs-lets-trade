@@ -1299,10 +1299,13 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       // antigos ficam só no próprio gráfico, sem entrada de legenda separada pra cada um.
       const last = prevDayCloudConfig.segments[prevDayCloudConfig.segments.length - 1];
       const pdSuffix = prevDayCloudConfig.candleCount > 1 ? `×${prevDayCloudConfig.candleCount}` : '';
+      const pdSrc = prevDayCloudConfig.useHighLow
+        ? ` máx/mín [${last.lower} / ${last.upper}]`
+        : ` A ${last.openPrice} / F ${last.closePrice}`;
       entries.push({
         key: 'prevDayCloud',
         color: last.bullish ? C_UP : C_DOWN,
-        label: `D-1 ${prevDayCloudConfig.interval}${pdSuffix} A ${last.openPrice} / F ${last.closePrice}`,
+        label: `D-1 ${prevDayCloudConfig.interval}${pdSuffix}${pdSrc}`,
       });
     }
     return entries;

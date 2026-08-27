@@ -252,6 +252,14 @@ export function normalizePrevDayCloudCandleCount(raw) {
   return PREV_DAY_CLOUD_CANDLE_COUNT_OPTIONS.includes(n) ? n : DEFAULT_PREV_DAY_CLOUD_CANDLE_COUNT;
 }
 
+/** Aumenta a nuvem D-1: usa máxima/mínima (pavios) dos candles da janela em vez de
+ *  abertura/fechamento (corpo) — faixa mais larga. Padrão ligado (máx/mín). */
+export const DEFAULT_PREV_DAY_CLOUD_USE_HIGH_LOW = true;
+
+export function normalizePrevDayCloudUseHighLow(raw) {
+  return typeof raw === 'boolean' ? raw : DEFAULT_PREV_DAY_CLOUD_USE_HIGH_LOW;
+}
+
 /** Intervalo de candles usado pela nuvem PERM (inclinação EMA9 vs EMA21) — independente do
  *  intervalo do gráfico, mesmo padrão do S/R/PPHL/CHOP (ex.: gráfico em 15m, nuvem calculada
  *  sobre candles de 1h). */
@@ -404,6 +412,7 @@ export const DEFAULT_UI_PREFS = {
   chopIntervalDefault: DEFAULT_CHOP_INTERVAL,
   prevDayCloudIntervalDefault: DEFAULT_PREV_DAY_CLOUD_INTERVAL,
   prevDayCloudCandleCountDefault: DEFAULT_PREV_DAY_CLOUD_CANDLE_COUNT,
+  prevDayCloudUseHighLowDefault: DEFAULT_PREV_DAY_CLOUD_USE_HIGH_LOW,
   emaPersistCloudIntervalDefault: DEFAULT_EMA_PERSIST_CLOUD_INTERVAL,
   emaPersistCloudTonesDefault: { ...DEFAULT_PERM_CLOUD_TONES },
   emaPersistCloudLayersDefault: { ...DEFAULT_EMA_PERSIST_CLOUD_LAYERS },
@@ -433,6 +442,7 @@ function cloneDefaults() {
     chopIntervalDefault: DEFAULT_CHOP_INTERVAL,
     prevDayCloudIntervalDefault: DEFAULT_PREV_DAY_CLOUD_INTERVAL,
   prevDayCloudCandleCountDefault: DEFAULT_PREV_DAY_CLOUD_CANDLE_COUNT,
+    prevDayCloudUseHighLowDefault: DEFAULT_PREV_DAY_CLOUD_USE_HIGH_LOW,
     emaPersistCloudIntervalDefault: DEFAULT_EMA_PERSIST_CLOUD_INTERVAL,
     emaPersistCloudTonesDefault: { ...DEFAULT_PERM_CLOUD_TONES },
     emaPersistCloudLayersDefault: { ...DEFAULT_EMA_PERSIST_CLOUD_LAYERS },
@@ -492,6 +502,9 @@ export function loadUiPreferences() {
     }
     if (parsed.prevDayCloudCandleCountDefault !== undefined) {
       result.prevDayCloudCandleCountDefault = normalizePrevDayCloudCandleCount(parsed.prevDayCloudCandleCountDefault);
+    }
+    if (parsed.prevDayCloudUseHighLowDefault !== undefined) {
+      result.prevDayCloudUseHighLowDefault = normalizePrevDayCloudUseHighLow(parsed.prevDayCloudUseHighLowDefault);
     }
     if (parsed.emaPersistCloudIntervalDefault !== undefined) {
       result.emaPersistCloudIntervalDefault = normalizeEmaPersistCloudInterval(parsed.emaPersistCloudIntervalDefault);

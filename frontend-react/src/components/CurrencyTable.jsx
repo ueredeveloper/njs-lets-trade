@@ -1762,7 +1762,16 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
             {isTradesFavView && !tradeFavLoading && rows.length === 0 && (
               <tr>
                 <td colSpan={tableColCount} className="py-3 text-center text-[11px] text-p5/50">
-                  {t(tradeEmptyKey)}
+                  <span>{t(tradeEmptyKey)}</span>
+                  {tradeEmptyKey === 'trades.empty.pnl_today' && (
+                    <button
+                      type="button"
+                      onClick={() => refreshTradeFavStatus()}
+                      className="ml-2 px-1.5 py-0.5 rounded border border-p4/40 text-p5/70 hover:text-p5 hover:border-p4 transition-colors"
+                    >
+                      {t('trades.empty.reload')}
+                    </button>
+                  )}
                 </td>
               </tr>
             )}

@@ -14,6 +14,7 @@ const DEFAULT_USER_ID = process.env.SUPABASE_DEFAULT_USER_ID ?? 'ueredeveloper';
 //     &adxFilterEnabled=1&adxFilterInterval=1h&adxFilterMinAdx=25
 //     &macdFilterEnabled=1&macdFilterInterval=1h
 //     &trailingStopEnabled=1&trailingStopStartPct=5&trailingStopCoinStepPct=1&trailingStopStopStepPct=1
+//     &targetMode=continuous&trailingTargetCoinStepPct=3&trailingTargetStepPct=3
 //
 // Mesmo cálculo de /rsi-threshold-backtest, mas rodado em TODOS os pares USDT ativos da
 // Binance de uma vez (sem `symbol`) — ver backend/utils/analyseRsiThresholdBacktestMarket.js.
@@ -24,11 +25,13 @@ router.get('/rsi-threshold-backtest-market', async (req, res) => {
         bandWidthEnabled, bandWidthInterval, bandWidthPeriod, bandWidthStdDev,
         bandWidthLookback, bandWidthMinPct,
         prevDayCloudEnabled, prevDayCloudMaxPct, prevDayCloudInterval, prevDayCloudCandleCount,
+        prevDayCloudUseHighLow,
         minVolumeUsdt, excludeOpenExits,
         prevCandleStopEnabled,
         adxFilterEnabled, adxFilterInterval, adxFilterMinAdx,
         macdFilterEnabled, macdFilterInterval,
         trailingStopEnabled, trailingStopStartPct, trailingStopCoinStepPct, trailingStopStopStepPct,
+        targetMode, trailingTargetCoinStepPct, trailingTargetStepPct,
         entriesDayRangeMin, entriesDayRangeMax,
     } = req.query;
 
@@ -65,6 +68,8 @@ router.get('/rsi-threshold-backtest-market', async (req, res) => {
             maxPct:  prevDayCloudMaxPct ? parseFloat(prevDayCloudMaxPct) : 100,
             interval: prevDayCloudInterval ?? '4h',
             candleCount: prevDayCloudCandleCount ? parseInt(prevDayCloudCandleCount, 10) : 3,
+            useHighLow: prevDayCloudUseHighLow !== '0', // padrão máx/mín; só '0' explícito desliga
+
         } : null,
         minVolumeUsdt:    minVolumeUsdt ? parseFloat(minVolumeUsdt) : 0,
         excludeOpenExits: excludeOpenExits === '1',
@@ -83,6 +88,11 @@ router.get('/rsi-threshold-backtest-market', async (req, res) => {
             startPct:    trailingStopStartPct    ? parseFloat(trailingStopStartPct)    : (stopLossPct != null ? parseFloat(stopLossPct) : 5),
             coinStepPct: trailingStopCoinStepPct ? parseFloat(trailingStopCoinStepPct) : 1,
             stopStepPct: trailingStopStopStepPct ? parseFloat(trailingStopStopStepPct) : 1,
+        } : null,
+        targetMode: (targetMode === 'fixed' || targetMode === 'continuous' || targetMode === 'off') ? targetMode : 'fixed',
+        trailingTarget: targetMode === 'continuous' ? {
+            coinStepPct: trailingTargetCoinStepPct ? parseFloat(trailingTargetCoinStepPct) : 3,
+            stepPct:     trailingTargetStepPct     ? parseFloat(trailingTargetStepPct)     : 3,
         } : null,
         entriesDayRange: entriesDayRangeMax != null ? {
             min: entriesDayRangeMin != null ? parseInt(entriesDayRangeMin, 10) : 2,

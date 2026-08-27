@@ -177,10 +177,18 @@ function checkPrevDayCloudFilter(config, cMap, signalCandle) {
     const window = closed.slice(closed.length - n);
     let lower = Infinity, upper = -Infinity;
     for (const c of window) {
-        const open = parseFloat(c.open);
-        const close = parseFloat(c.close);
-        if (open > 0) { lower = Math.min(lower, open); upper = Math.max(upper, open); }
-        if (close > 0) { lower = Math.min(lower, close); upper = Math.max(upper, close); }
+        if (pdc.useHighLow) {
+            // Aumenta a nuvem: máxima/mínima (pavios) em vez de abertura/fechamento (corpo).
+            const high = parseFloat(c.high);
+            const low = parseFloat(c.low);
+            if (low > 0) lower = Math.min(lower, low);
+            if (high > 0) upper = Math.max(upper, high);
+        } else {
+            const open = parseFloat(c.open);
+            const close = parseFloat(c.close);
+            if (open > 0) { lower = Math.min(lower, open); upper = Math.max(upper, open); }
+            if (close > 0) { lower = Math.min(lower, close); upper = Math.max(upper, close); }
+        }
     }
     if (!(upper > 0) || !Number.isFinite(lower)) return { allowed: true };
     if (upper <= lower) return { allowed: true }; // nuvem "achatada" — sem restrição possível
@@ -452,21 +460,65 @@ function computeTrailingStopPrice(entryPrice, peakPrice, trailingStop) {
 }
 
 /**
- * Alvo/stop a partir do preço de entrada. O ALVO é sempre fixo — entryPrice*(1+targetPct%),
- * constante desde a entrada — em qualquer um dos dois modos de STOP:
- *  - Fixo (padrão): stop = entryPrice*(1-maxLossPct%), constante — a bracket colocada na
- *    corretora nunca precisa ser recriada por deriva.
- *  - Stop contínuo (exit.trailingStop.enabled): o stop sobe em degraus conforme `peakPrice`
- *    (maior preço visto desde a compra, rastreado tick a tick pelo bot) sobe, ver
- *    computeTrailingStopPrice — só essa perna da bracket precisa ser recriada quando sobe.
- *    `peakPrice` é opcional — sem ele (ex.: 1º cálculo antes de qualquer tick), usa entryPrice
- *    como pico inicial (sem degrau ainda, stop = startPct%).
+ * Modo do ALVO — independente do stop. 'fixed' (padrão) | 'continuous' | 'off'. Sem
+ * `exit.targetMode` salvo (config antiga), deriva do `exit.trailingTarget.enabled` legado.
+ */
+function resolveTargetMode(config) {
+    const m = config?.exit?.targetMode;
+    if (m === 'fixed' || m === 'continuous' || m === 'off') return m;
+    return config?.exit?.trailingTarget?.enabled ? 'continuous' : 'fixed';
+}
+
+/**
+ * Alvo contínuo (exit.targetMode === 'continuous') — tem o PRÓPRIO contador de degraus
+ * (`exit.trailingTarget.coinStepPct`), independente do stop. A cada `coinStepPct`% de novo pico
+ * de preço desde a entrada, o alvo (originalmente `baseTargetPct`% acima da entrada — o mesmo
+ * `restingBracket.targetPct`) sobe `stepPct` pontos percentuais — ex.: base +5%, coinStepPct=4,
+ * stepPct=3: pico +4% → alvo vira +8%; pico +8% → +11%. Como a Binance limita o quão longe do
+ * preço médio atual uma ordem SELL pode ficar (PERCENT_PRICE_BY_SIDE), um alvo que sobe muito
+ * acaba PRESO (clamp) na borda permitida por binancePlaceOcoSell — ver ocoClient.js.
+ */
+function computeTrailingTargetPrice(entryPrice, peakPrice, trailingTarget, baseTargetPct) {
+    if (!(entryPrice > 0)) return null;
+    const coinStepPct = Math.max(0.1, Number(trailingTarget?.coinStepPct ?? 3));
+    const stepPct = Math.max(0.1, Number(trailingTarget?.stepPct ?? 3));
+    const base = Math.max(0.1, Number(baseTargetPct ?? 5));
+    const peak = Math.max(entryPrice, Number(peakPrice) || entryPrice);
+    const gainPct = ((peak / entryPrice) - 1) * 100;
+    const steps = Math.floor(gainPct / coinStepPct);
+    return entryPrice * (1 + (base + steps * stepPct) / 100);
+}
+
+/**
+ * Alvo e stop a partir do preço de entrada — os dois modos são INDEPENDENTES.
+ *
+ * STOP:
+ *  - Fixo (`exit.trailingStop.enabled === false`): stop = entryPrice*(1-maxLossPct%), constante.
+ *  - Contínuo (`exit.trailingStop.enabled`): sobe em degraus com o `peakPrice`, ver
+ *    computeTrailingStopPrice (contador próprio `trailingStop.coinStepPct`).
+ *
+ * ALVO (`exit.targetMode`):
+ *  - 'fixed' (padrão): entryPrice*(1+targetPct%), constante desde a entrada.
+ *  - 'continuous': sobe em degraus com o `peakPrice`, contador PRÓPRIO
+ *    (`trailingTarget.coinStepPct`), base = `restingBracket.targetPct` — ver computeTrailingTargetPrice.
+ *  - 'off': sem alvo (targetPrice === null) — a posição só sai pelo stop.
+ *
+ * `peakPrice` é opcional — sem ele usa entryPrice como pico inicial. Quando alvo ou stop sobe de
+ * degrau, essa perna da bracket é recriada na corretora (ver maybeReplaceTrailingStop).
  */
 function computeBracketPrices(config, entryPrice, peakPrice) {
     if (!(entryPrice > 0)) return { targetPrice: null, stopPrice: null };
-    const targetPct = Math.max(0.1, Number(config.exit?.restingBracket?.targetPct ?? 5));
-    const targetPrice = entryPrice * (1 + targetPct / 100);
+    const baseTargetPct = Math.max(0.1, Number(config.exit?.restingBracket?.targetPct ?? 5));
     const trailingStop = config.exit?.trailingStop;
+    const trailingTarget = config.exit?.trailingTarget;
+    const targetMode = resolveTargetMode(config);
+
+    let targetPrice;
+    if (targetMode === 'off') targetPrice = null;
+    else if (targetMode === 'continuous') {
+        targetPrice = computeTrailingTargetPrice(entryPrice, peakPrice ?? entryPrice, trailingTarget, baseTargetPct);
+    } else targetPrice = entryPrice * (1 + baseTargetPct / 100);
+
     const stopPrice = trailingStop?.enabled
         ? computeTrailingStopPrice(entryPrice, peakPrice ?? entryPrice, trailingStop)
         : (config.stopLoss?.enabled
@@ -500,10 +552,13 @@ function evaluateExit(config, cMap, entryPrice, opts = {}) {
         };
     }
     if (targetPrice != null && high >= targetPrice) {
+        const hitPct = entryPrice ? ((targetPrice - entryPrice) / entryPrice) * 100 : null;
         return {
             exit: true, reason: 'RSI_TARGET', close,
             targetLevelValue: targetPrice,
-            exitDesc: `Alvo fixo +${config.exit.restingBracket.targetPct}% de lucro`,
+            exitDesc: resolveTargetMode(config) === 'continuous'
+                ? `Alvo contínuo +${hitPct != null ? hitPct.toFixed(1) : '?'}% de lucro`
+                : `Alvo fixo +${config.exit.restingBracket.targetPct}% de lucro`,
         };
     }
     return { exit: false, close };
@@ -527,4 +582,6 @@ module.exports = {
     computeBracketPrices,
     computeStopLossFloor,
     computeTrailingStopPrice,
+    computeTrailingTargetPrice,
+    resolveTargetMode,
 };

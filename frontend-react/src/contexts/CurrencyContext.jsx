@@ -39,6 +39,7 @@ import {
   normalizeChopInterval,
   normalizePrevDayCloudInterval,
   normalizePrevDayCloudCandleCount,
+  normalizePrevDayCloudUseHighLow,
   normalizeEmaPersistCloudInterval,
   normalizeEmaPersistCloudTones,
   normalizeEmaPersistCloudLayers,
@@ -748,6 +749,14 @@ export function CurrencyProvider({ children }) {
     });
   }, []);
 
+  const setPrevDayCloudUseHighLowDefault = useCallback((useHighLow) => {
+    setUiPrefsState((prev) => {
+      const next = { ...prev, prevDayCloudUseHighLowDefault: normalizePrevDayCloudUseHighLow(useHighLow) };
+      saveUiPreferences(next);
+      return next;
+    });
+  }, []);
+
   const setEmaPersistCloudIntervalDefault = useCallback((interval) => {
     setUiPrefsState((prev) => {
       const next = { ...prev, emaPersistCloudIntervalDefault: normalizeEmaPersistCloudInterval(interval) };
@@ -1164,6 +1173,7 @@ export function CurrencyProvider({ children }) {
         setChopIntervalDefault,
         setPrevDayCloudIntervalDefault,
         setPrevDayCloudCandleCountDefault,
+        setPrevDayCloudUseHighLowDefault,
         setEmaPersistCloudIntervalDefault,
         setEmaPersistCloudTonesDefault,
         setEmaPersistCloudLayersDefault,
