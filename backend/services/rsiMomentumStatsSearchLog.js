@@ -54,6 +54,9 @@ function summarizeResult(r = {}) {
     dailyEntryStats: r.dailyEntryStats ?? null,
     tradeDuration: r.tradeDuration ?? null,
     cloudZoneStats: r.cloudZoneStats ?? null,
+    rsi1hBreakdown: r.rsi1hBreakdown ?? null,
+    higherRsiFilter: r.higherRsiFilter ?? null,
+    higherRsiBlockedCount: r.higherRsiBlockedCount ?? null,
     // só no modo mercado (allCoins)
     symbolsTotal: r.symbolsTotal ?? null,
     symbolsScanned: r.symbolsScanned ?? null,

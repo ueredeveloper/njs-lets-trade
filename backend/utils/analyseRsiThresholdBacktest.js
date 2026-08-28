@@ -1,6 +1,6 @@
 'use strict';
 
-const { RSI, ADX, MACD } = require('technicalindicators');
+const { RSI, ADX, MACD, ATR } = require('technicalindicators');
 const getCandles = require('../binance/getCandles');
 const { getGateCandles } = require('../gate/getGateCandles');
 const { closedCandlesOnly, intervalMs } = require('../bot/ma-cross/strategyEngine');
@@ -25,6 +25,9 @@ const GATE_PREV_DAY_CLOUD_INTERVALS = ['1m', '5m', '15m', '30m', '1h', '2h', '4h
 // "1 detalhe configurável por filtro" dos demais). 14 (ADX) e 12/26/9 (MACD) são os valores
 // padrão de mercado, os mesmos usados na literatura consultada (Wilder pro ADX, Appel pro MACD).
 const ADX_PERIOD = 14;
+// ATR de Wilder — usado só pelo stop contínuo modo 'atrTrail' (largura da fase B = atrMult × ATR%).
+// Período fixo 14 (padrão Wilder, mesmo do ADX), calculado no PRÓPRIO intervalo do sinal.
+const ATR_PERIOD = 14;
 const MACD_FAST_PERIOD = 12;
 const MACD_SLOW_PERIOD = 26;
 const MACD_SIGNAL_PERIOD = 9;
@@ -32,6 +35,13 @@ const MACD_SIGNAL_PERIOD = 9;
 // pra dimensionar o fetch (computeOwnIntervalFetchLimit), com folga generosa.
 const ADX_WARMUP_BARS = ADX_PERIOD * 2 + 10;
 const MACD_WARMUP_BARS = MACD_SLOW_PERIOD + MACD_SIGNAL_PERIOD + 10;
+const RSI_WARMUP_BARS = RSI_PERIOD * 3 + 10;
+// RSI de referência num intervalo FIXO (1h), só INFORMATIVO — não filtra nada. Serve pra
+// conferir o RSI num timeframe maior que o do sinal de entrada (ex.: sinal em 15m, leitura de
+// apoio em 1h) direto na tabela de ocorrências. Mesma mecânica "intervalo próprio" de ADX/MACD
+// (computeOwnIntervalFetchLimit + resolveOwnIntervalValueAt). Com o intervalo do sinal já em
+// 1h, reaproveita a série de RSI principal em vez de buscar candles de novo.
+const REF_RSI_INTERVAL = '1h';
 // Mesmo teto de retenção do cache de candles de 1m (ver backend/utils/candleRetentionLimits.js)
 // — não faz sentido pedir mais 1m do que o resto do sistema mantém aquecido. Sinais mais
 // antigos que essa janela (~50h) caem no fallback de resolução pelo candle do intervalo
@@ -45,7 +55,7 @@ const MAX_ONE_MINUTE_CANDLES = 3000;
  * assim que a posição entra, arma alvo E stop simultaneamente; o que for tocado primeiro
  * encerra a operação. `scanCandles` deve conter só candles com openTime > signalCloseMs.
  */
-function resolveFromSignal(scanCandles, signalPrice, { pullbackPct, targetPct, stopLossPct, stopPriceOverride, trailingStop, trailingTarget, targetMode }) {
+function resolveFromSignal(scanCandles, signalPrice, { pullbackPct, targetPct, stopLossPct, stopPriceOverride, trailingStop, trailingTarget, targetMode, hardTakeProfitPct }) {
     let filled = pullbackPct === 0;
     let entryTime = null;
     let entryPrice = signalPrice;
@@ -79,7 +89,12 @@ function resolveFromSignal(scanCandles, signalPrice, { pullbackPct, targetPct, s
         : (trailingTarget?.enabled ? 'continuous' : 'fixed');
     const ttCoinStepPct = Math.max(0.1, Number(trailingTarget?.coinStepPct ?? 3));
     const ttStepPct = Math.max(0.1, Number(trailingTarget?.stepPct ?? 3));
-    let targetPrice = tMode === 'off' ? null : entryPrice * (1 + targetPct / 100);
+    // Teto de lucro (venda forçada) — mesmo do bot (exit.hardTakeProfit em tradeConfigSchema.js):
+    // o alvo efetivo é min(alvo, cap). Com alvo 'off' ou contínuo (que persegue o pico e pode
+    // nunca casar), o cap garante a saída ao tocar +hardTakeProfitPct%.
+    const capPrice = hardTakeProfitPct > 0 ? entryPrice * (1 + hardTakeProfitPct / 100) : null;
+    const clampTarget = (tp) => capPrice == null ? tp : (tp == null ? capPrice : Math.min(tp, capPrice));
+    let targetPrice = clampTarget(tMode === 'off' ? null : entryPrice * (1 + targetPct / 100));
 
     // Stop pelo candle 4h anterior (ver resolvePrevCandleStopPrice): preço absoluto, não %. Só
     // usa o override se fizer sentido pra uma compra (abaixo do preço de entrada). Sem override
@@ -96,6 +111,62 @@ function resolveFromSignal(scanCandles, signalPrice, { pullbackPct, targetPct, s
     const stopCoinStepPct = stopTrailingOn ? Math.max(0.1, Number(trailingStop.coinStepPct ?? 1)) : null;
     const stopStepPct = stopTrailingOn ? Math.max(0.1, Number(trailingStop.stopStepPct ?? 1)) : null;
     const anyTrailing = stopTrailingOn || tMode === 'continuous';
+
+    // Modo do stop contínuo (todos INDEPENDENTES do alvo) — ver JSDoc de options.trailingStop:
+    //   'continuous' (padrão): rampa linear única, ancorada na ENTRADA — stop sobe `stopStepPct` p.p.
+    //       a cada `stopCoinStepPct`% de alta do pico.
+    //   'twoPhase' (Escada Dupla): ancorada na ENTRADA, DUAS inclinações — fase A (agressiva,
+    //       aStopStepPct/aCoinStepPct) até o stop travar `pivotPct`% de lucro; depois fase B (suave,
+    //       bStopStepPct/bCoinStepPct) contando a partir desse ponto.
+    //   'peakTrail' (Trilha do Topo): ancorada no PICO — stop a `wNearPct`% abaixo do topo enquanto
+    //       o ganho do pico < `pivotGainPct`%, e a `wFarPct`% abaixo depois. Chandelier de % em 2 fases.
+    //   'atrTrail' (Trilha ATR): igual à Trilha do Topo, mas a largura da fase B = `atrMult` × ATR%
+    //       (ATR de Wilder no instante do sinal, em `trailingStop.atrPct`), limitada a `atrMaxPct`%.
+    //       Sem ATR disponível (warmup) usa `wNearPct` o tempo todo.
+    // Todos MONOTÔNICOS: stopPrice = max(stopPrice, candidato) — o stop nunca desce.
+    const tsMode = ['continuous', 'twoPhase', 'peakTrail', 'atrTrail'].includes(trailingStop?.mode)
+        ? trailingStop.mode : 'continuous';
+    // pivotPct = LUCRO travado no fim da fase A (positivo = acima da entrada; 0 = breakeven).
+    const tsPivotPct     = Math.max(-5, Math.min(20, Number(trailingStop?.pivotPct ?? 1)));
+    const tsACoinStepPct = Math.max(0.1, Number(trailingStop?.aCoinStepPct ?? 3));
+    const tsAStopStepPct = Math.max(0.1, Number(trailingStop?.aStopStepPct ?? 2.5));
+    const tsBCoinStepPct = Math.max(0.1, Number(trailingStop?.bCoinStepPct ?? 3));
+    const tsBStopStepPct = Math.max(0.1, Number(trailingStop?.bStopStepPct ?? 1));
+    const tsPivotGainPct = Math.max(0.1, Number(trailingStop?.pivotGainPct ?? 5));
+    const tsWNearPct     = Math.max(0.1, Number(trailingStop?.wNearPct ?? 4));
+    const tsWFarPct      = Math.max(0.1, Number(trailingStop?.wFarPct ?? 9));
+    const tsAtrMult      = Math.max(0.1, Number(trailingStop?.atrMult ?? 2));
+    const tsAtrMaxPct    = Math.max(0.5, Number(trailingStop?.atrMaxPct ?? 12));
+    const tsAtrPct       = Number(trailingStop?.atrPct);
+
+    // Preço candidato do stop dado o ganho % do pico corrente — aplicado sempre como max() (monotônico).
+    function trailingStopCandidate(gainPct) {
+        if (tsMode === 'twoPhase') {
+            // Distância do stop à entrada em p.p. (positiva = abaixo/prejuízo). O pivô, em lucro
+            // travado `tsPivotPct`%, corresponde à distância -tsPivotPct.
+            const pivotDistPct = -tsPivotPct;
+            const stepsA = Math.floor(gainPct / tsACoinStepPct);
+            const stopPctA = startStopPct - stepsA * tsAStopStepPct;
+            if (stopPctA > pivotDistPct) return entryPrice * (1 - stopPctA / 100);
+            // ganho (aprox., contínuo) em que a fase A cruza o pivô — a fase B conta a partir dele
+            const gainAtPivot = ((startStopPct - pivotDistPct) / tsAStopStepPct) * tsACoinStepPct;
+            const stepsB = Math.floor(Math.max(0, gainPct - gainAtPivot) / tsBCoinStepPct);
+            return entryPrice * (1 - (pivotDistPct - stepsB * tsBStopStepPct) / 100);
+        }
+        if (tsMode === 'peakTrail') {
+            const w = gainPct < tsPivotGainPct ? tsWNearPct : tsWFarPct;
+            return peakPrice * (1 - w / 100);
+        }
+        if (tsMode === 'atrTrail') {
+            if (gainPct < tsPivotGainPct || !Number.isFinite(tsAtrPct)) {
+                return peakPrice * (1 - tsWNearPct / 100);
+            }
+            return peakPrice * (1 - Math.min(tsAtrMaxPct, tsAtrMult * tsAtrPct) / 100);
+        }
+        // 'continuous'
+        const steps = Math.floor(gainPct / stopCoinStepPct);
+        return entryPrice * (1 - (startStopPct - steps * stopStepPct) / 100);
+    }
 
     for (let j = startScanIdx; j < scanCandles.length; j++) {
         const low = parseFloat(scanCandles[j].low);
@@ -120,13 +191,16 @@ function resolveFromSignal(scanCandles, signalPrice, { pullbackPct, targetPct, s
             peakPrice = high;
             const gainPct = ((peakPrice / entryPrice) - 1) * 100;
             if (stopTrailingOn) {
-                const steps = Math.floor(gainPct / stopCoinStepPct);
-                stopPrice = entryPrice * (1 - (startStopPct - steps * stopStepPct) / 100);
+                stopPrice = Math.max(stopPrice, trailingStopCandidate(gainPct));
             }
             if (tMode === 'continuous') {
                 const steps = Math.floor(gainPct / ttCoinStepPct);
-                targetPrice = entryPrice * (1 + (targetPct + steps * ttStepPct) / 100);
+                targetPrice = clampTarget(entryPrice * (1 + (targetPct + steps * ttStepPct) / 100));
             }
+        } else if (stopTrailingOn && (tsMode === 'peakTrail' || tsMode === 'atrTrail')) {
+            // Trilha ancorada no pico: mesmo sem novo topo, a largura da fase A (`wNearPct`) pode já
+            // ser mais apertada que o stop base — aplica na 1ª passada (max() garante a monotonia).
+            stopPrice = Math.max(stopPrice, trailingStopCandidate(((peakPrice / entryPrice) - 1) * 100));
         }
 
         // Ordem intra-candle desconhecida (só OHLC) — no empate assume o pior caso (stop primeiro).
@@ -136,7 +210,8 @@ function resolveFromSignal(scanCandles, signalPrice, { pullbackPct, targetPct, s
             exitPrice = stopPrice;
             break;
         }
-        if (tMode === 'fixed' && high >= targetPrice) {
+        // 'fixed' e também 'off'-com-teto (targetPrice = capPrice) — continuous já foi checado no topo.
+        if (tMode !== 'continuous' && targetPrice != null && high >= targetPrice) {
             outcome = 'target';
             exitTime = scanCandles[j].openTime;
             exitPrice = targetPrice;
@@ -154,7 +229,18 @@ function resolveFromSignal(scanCandles, signalPrice, { pullbackPct, targetPct, s
     // stop no -startPct%, alvo no +targetPct%). Serve pra separar "stop base / não evoluiu" de
     // "stop que já tinha subido" nas estatísticas.
     const peakGainPct = ((peakPrice / entryPrice) - 1) * 100;
-    const stopSteps = stopTrailingOn ? Math.max(0, Math.floor(peakGainPct / stopCoinStepPct)) : 0;
+    // Nos modos ancorados no pico (peakTrail/atrTrail) não há degrau discreto: 0 = stop ainda no
+    // piso inicial, 1 = já subiu. twoPhase reaproveita o contador da fase A; continuous, o de sempre.
+    let stopSteps = 0;
+    if (stopTrailingOn) {
+        if (tsMode === 'twoPhase') {
+            stopSteps = Math.max(0, Math.floor(peakGainPct / tsACoinStepPct));
+        } else if (tsMode === 'peakTrail' || tsMode === 'atrTrail') {
+            stopSteps = stopPrice > entryPrice * (1 - startStopPct / 100) * (1 + 1e-9) ? 1 : 0;
+        } else {
+            stopSteps = Math.max(0, Math.floor(peakGainPct / stopCoinStepPct));
+        }
+    }
     const targetSteps = tMode === 'continuous' ? Math.max(0, Math.floor(peakGainPct / ttCoinStepPct)) : 0;
 
     return {
@@ -310,6 +396,54 @@ function computeCloudZoneStats(occurrences) {
     return { total: withZone.length, zones };
 }
 
+// Faixas de RSI 1h (REF_RSI_INTERVAL) pro breakdown "RSI 1h × resultado" — mesma ideia do
+// volumeBreakdown/cloudZone, só que agrupando pelo RSI de um timeframe MAIOR que o do sinal.
+// Faixa 0 = RSI 1h mais BAIXO; faixa 4 = mais ALTO (sobrecompra também no 1h).
+const RSI_1H_BANDS = [
+    { label: '< 40',   min: -Infinity, max: 40 },
+    { label: '40 – 50', min: 40, max: 50 },
+    { label: '50 – 60', min: 50, max: 60 },
+    { label: '60 – 70', min: 60, max: 70 },
+    { label: '≥ 70',   min: 70, max: Infinity },
+];
+
+/**
+ * Distribuição dos sinais pelas faixas de RSI 1h (RSI_1H_BANDS) no instante do sinal — quantos
+ * caíram em cada faixa e, dos preenchidos, alvo/stop, taxa de acerto e P&L médio por faixa.
+ * Responde "quantos stops tiveram RSI 1h baixo? quantos alvos tiveram RSI 1h alto?". Conta só os
+ * sinais com signalRsi1h numérico (warmup do 1h resolvido). null se nenhum tem valor.
+ */
+function computeRsi1hBreakdown(occurrences) {
+    const withRsi = occurrences.filter(o => Number.isFinite(o.signalRsi1h));
+    if (!withRsi.length) return null;
+    const bands = RSI_1H_BANDS.map((b, i) => {
+        const list = withRsi.filter(o => o.signalRsi1h >= b.min && o.signalRsi1h < b.max);
+        const filled = list.filter(o => o.filled);
+        const target = filled.filter(o => o.outcome === 'target').length;
+        const stop = filled.filter(o => o.outcome === 'stop').length;
+        const open = filled.filter(o => o.outcome === 'open').length;
+        const closed = target + stop;
+        const pnlPctSum = filled.reduce((s, o) => s + o.pnlPct, 0);
+        const pnlUsdSum = filled.reduce((s, o) => s + o.pnlUsd, 0);
+        return {
+            band: i,
+            label: b.label,
+            signals: list.length,
+            sharePct: parseFloat(((list.length / withRsi.length) * 100).toFixed(1)),
+            filled: filled.length,
+            target,
+            stop,
+            open,
+            notFilled: list.length - filled.length,
+            winRatePct: closed > 0 ? parseFloat(((target / closed) * 100).toFixed(1)) : null,
+            avgPnlPct: filled.length ? parseFloat((pnlPctSum / filled.length).toFixed(2)) : null,
+            totalPnlUsd: parseFloat(pnlUsdSum.toFixed(2)),
+        };
+    });
+    const avgRsi1h = parseFloat((withRsi.reduce((s, o) => s + o.signalRsi1h, 0) / withRsi.length).toFixed(1));
+    return { total: withRsi.length, interval: REF_RSI_INTERVAL, avgRsi1h, bands };
+}
+
 /**
  * Stop pelo candle de 4h ANTERIOR ao instante do sinal (mesmo critério de "candle anterior" do
  * findCandleIndexAtOrBefore acima, só que em 4h em vez de 1d): se aquele candle fechou em alta, o
@@ -327,12 +461,13 @@ function resolvePrevCandleStopPrice(fourHCandles, signalTimeMs) {
     return close >= open ? open : close;
 }
 
-function buildOccurrence(signalCandle, signalPrice, signalRsi, resolved, positionSizeUsd, cloudZone = null) {
+function buildOccurrence(signalCandle, signalPrice, signalRsi, resolved, positionSizeUsd, cloudZone = null, signalRsi1h = null) {
     if (!resolved.filled) {
         return {
             signalDate: new Date(signalCandle.openTime).toISOString(),
             signalPrice,
             signalRsi,
+            signalRsi1h,
             cloudZone,
             filled: false,
             entryDate: null,
@@ -355,6 +490,7 @@ function buildOccurrence(signalCandle, signalPrice, signalRsi, resolved, positio
         signalDate: new Date(signalCandle.openTime).toISOString(),
         signalPrice,
         signalRsi,
+        signalRsi1h,
         cloudZone,
         filled: true,
         entryDate: new Date(entryTime ?? signalCandle.openTime).toISOString(),
@@ -476,9 +612,26 @@ function countBaseVsEvolvedExits(filledOccurrences) {
  *   coinStepPct=1, stopStepPct=1 — moeda subiu 1%: stop de -5% vira -4%; subiu 2%: vira -3%; pode
  *   virar positivo e travar lucro). Os dois degraus são independentes. Ignora `prevCandleStop`.
  * @param {boolean} [options.trailingStop.enabled=false]
- * @param {number}  [options.trailingStop.startPct=stopLossPct]  Distância inicial do stop (%).
- * @param {number}  [options.trailingStop.coinStepPct=1]  Cada quantos % de alta do preço o stop sobe um degrau.
- * @param {number}  [options.trailingStop.stopStepPct=1]  Quantos % o stop sobe a cada degrau.
+ * @param {string}  [options.trailingStop.mode='continuous']  Mecânica do stop contínuo:
+ *   'continuous' — rampa linear única ancorada na ENTRADA (params abaixo: startPct/coinStepPct/stopStepPct).
+ *   'twoPhase' (Escada Dupla) — ancorada na ENTRADA, DUAS inclinações: fase A agressiva
+ *     (aStopStepPct/aCoinStepPct) até o stop travar `pivotPct`% de lucro; depois fase B suave
+ *     (bStopStepPct/bCoinStepPct), contada a partir do pivô.
+ *   'peakTrail' (Trilha do Topo) — ancorada no PICO: stop a `wNearPct`% abaixo do topo enquanto o
+ *     ganho do pico < `pivotGainPct`%, e a `wFarPct`% abaixo depois (Chandelier de % em 2 fases).
+ *   'atrTrail' (Trilha ATR) — como peakTrail, mas largura da fase B = `atrMult` × ATR% (ATR de
+ *     Wilder período 14, no intervalo do sinal), limitada a `atrMaxPct`%. Fase A = `wNearPct`% fixo.
+ *   Todos os modos são MONOTÔNICOS (o stop nunca desce). Ignora `prevCandleStop`.
+ * @param {number}  [options.trailingStop.startPct=stopLossPct]  Distância inicial do stop (%). Piso de todos os modos.
+ * @param {number}  [options.trailingStop.coinStepPct=1]  ['continuous'] Cada quantos % de alta o stop sobe um degrau.
+ * @param {number}  [options.trailingStop.stopStepPct=1]  ['continuous'] Quantos p.p. o stop sobe a cada degrau.
+ * @param {number}  [options.trailingStop.pivotPct=1]  ['twoPhase'] LUCRO travado (%) no fim da fase A (0 = breakeven, positivo = já no lucro).
+ * @param {number}  [options.trailingStop.aCoinStepPct=3] [options.trailingStop.aStopStepPct=2.5]  ['twoPhase'] Degrau da fase A.
+ * @param {number}  [options.trailingStop.bCoinStepPct=3] [options.trailingStop.bStopStepPct=1]  ['twoPhase'] Degrau da fase B.
+ * @param {number}  [options.trailingStop.pivotGainPct=5]  ['peakTrail'/'atrTrail'] Ganho do pico (%) que troca de fase.
+ * @param {number}  [options.trailingStop.wNearPct=4]  ['peakTrail'/'atrTrail'] Largura da fase A (% abaixo do pico).
+ * @param {number}  [options.trailingStop.wFarPct=9]  ['peakTrail'] Largura da fase B (% abaixo do pico).
+ * @param {number}  [options.trailingStop.atrMult=2] [options.trailingStop.atrMaxPct=12]  ['atrTrail'] Fase B = min(atrMaxPct, atrMult×ATR%).
  * @param {object} [options.trailingTarget]  Degraus do alvo contínuo (targetMode='continuous') —
  *   contador PRÓPRIO, independente do stop. Um alvo que sobe mais rápido do que o preço acaba
  *   nunca preenchendo, e a posição sai pelo stop — ver resolveFromSignal.
@@ -499,6 +652,16 @@ function countBaseVsEvolvedExits(filledOccurrences) {
  *   momentum de fundo ainda não virou. Sem valor de MACD disponível ainda (warmup), NÃO bloqueia.
  * @param {boolean} [options.macdFilter.enabled=false]
  * @param {string}  [options.macdFilter.interval='1h']
+ * @param {object} [options.higherRsiFilter]  Confirmação multi-timeframe pelo RSI de 1h (fixo, o
+ *   mesmo REF_RSI_INTERVAL da coluna "RSI 1h") — só permite o sinal se o RSI de 1h vigente no
+ *   instante do sinal estiver NA OU ACIMA de `minRsi`. O gatilho de entrada é de um intervalo
+ *   menor (ex.: 15m); este filtro evita comprar o rompimento enquanto o timeframe maior ainda
+ *   está fraco. Base: Elder Triple Screen (tendência no TF maior antes da entrada no menor),
+ *   linha 50 do RSI como filtro de regime, "range rules" de Brown/Cardwell (em alta o RSI fica
+ *   na faixa ~40-90; abaixo de 50 = ainda em faixa de baixa). Sem RSI 1h ainda (warmup), NÃO
+ *   bloqueia (fail-open, igual ADX/MACD).
+ * @param {boolean} [options.higherRsiFilter.enabled=false]
+ * @param {number}  [options.higherRsiFilter.minRsi=50]  RSI 1h mínimo exigido no instante do sinal.
  * @param {object} [options.entriesDayRange]  Faixa opcional de entradas/dia pro card extra em
  *   dailyEntryStats.entriesRangeDaysPct (ver computeDailyEntryStats em dailyEntryStats.js) — ex.:
  *   {min:2, max:3} = "% de dias com 2 a 3 entradas". Sem isso, só multiEntryDaysPct (>=2, sem
@@ -524,16 +687,38 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
         prevCandleStop  = false,
         adxFilter       = null,
         macdFilter      = null,
+        higherRsiFilter = null,
         trailingStop    = null,
         trailingTarget  = null,
         targetMode      = null,
+        hardTakeProfit  = null,
         entriesDayRange = null,
     } = options;
 
+    // Teto de lucro (venda forçada em +pct%) — mesmo do bot (exit.hardTakeProfit). 0/null = off.
+    const hardTakeProfitPct = hardTakeProfit?.enabled
+        ? Math.max(1, Math.min(200, Number(hardTakeProfit.pct ?? 15)))
+        : 0;
+
     const trailingStopEnabled = !!trailingStop?.enabled;
+    const trailingStopMode = ['continuous', 'twoPhase', 'peakTrail', 'atrTrail'].includes(trailingStop?.mode)
+        ? trailingStop.mode : 'continuous';
     const trailingStopStartPct = Math.max(0.5, Math.min(50, Number(trailingStop?.startPct ?? stopLossPct)));
     const trailingStopCoinStepPct = Math.max(0.1, Math.min(20, Number(trailingStop?.coinStepPct ?? 1)));
     const trailingStopStopStepPct = Math.max(0.1, Math.min(20, Number(trailingStop?.stopStepPct ?? 1)));
+    // Params dos modos novos do stop contínuo (twoPhase / peakTrail / atrTrail) — ver
+    // trailingStopCandidate em resolveFromSignal. Clamp aqui, uma vez.
+    const tsPivotPct       = Math.max(-5, Math.min(20, Number(trailingStop?.pivotPct ?? 1)));
+    const tsPhaseACoinStep = Math.max(0.1, Math.min(20, Number(trailingStop?.aCoinStepPct ?? 3)));
+    const tsPhaseAStopStep = Math.max(0.1, Math.min(20, Number(trailingStop?.aStopStepPct ?? 2.5)));
+    const tsPhaseBCoinStep = Math.max(0.1, Math.min(20, Number(trailingStop?.bCoinStepPct ?? 3)));
+    const tsPhaseBStopStep = Math.max(0.1, Math.min(20, Number(trailingStop?.bStopStepPct ?? 1)));
+    const tsPivotGainPct   = Math.max(0.1, Math.min(50, Number(trailingStop?.pivotGainPct ?? 5)));
+    const tsWNearPct       = Math.max(0.1, Math.min(50, Number(trailingStop?.wNearPct ?? 4)));
+    const tsWFarPct        = Math.max(0.1, Math.min(50, Number(trailingStop?.wFarPct ?? 9)));
+    const tsAtrMult        = Math.max(0.1, Math.min(10, Number(trailingStop?.atrMult ?? 2)));
+    const tsAtrMaxPct      = Math.max(0.5, Math.min(50, Number(trailingStop?.atrMaxPct ?? 12)));
+    const trailingStopNeedsAtr = trailingStopEnabled && trailingStopMode === 'atrTrail';
     // Modo do alvo — INDEPENDENTE do stop. Sem targetMode explícito, deriva do trailingTarget
     // legado (compat) e cai em 'fixed'.
     const targetModeResolved = (targetMode === 'fixed' || targetMode === 'continuous' || targetMode === 'off')
@@ -549,6 +734,10 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
     const adxMinAdx  = Math.max(1, Number(adxFilter?.minAdx ?? 25));
     const macdEnabled = !!macdFilter?.enabled;
     const macdInterval = macdFilter?.interval ?? '1h';
+    // Filtro de confirmação pelo RSI de 1h (mesmo REF_RSI_INTERVAL da coluna informativa) — ver
+    // JSDoc de options.higherRsiFilter. minRsi entre 1 e 99.
+    const higherRsiEnabled = !!higherRsiFilter?.enabled;
+    const higherRsiMin = Math.max(1, Math.min(99, Number(higherRsiFilter?.minRsi ?? 50)));
 
     const priorRsiCount = priorRsiFilter?.enabled === false
         ? 0
@@ -605,6 +794,13 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
         ? computeOwnIntervalFetchLimit(interval, mainLimit, macdInterval, MACD_WARMUP_BARS)
         : 0;
 
+    // RSI 1h de referência (informativo, ver REF_RSI_INTERVAL) — só busca candles próprios quando
+    // o intervalo do sinal não é já 1h.
+    const refRsiNeedsFetch = interval !== REF_RSI_INTERVAL;
+    const refRsiLimit = refRsiNeedsFetch
+        ? computeOwnIntervalFetchLimit(interval, mainLimit, REF_RSI_INTERVAL, RSI_WARMUP_BARS)
+        : 0;
+
     const settled = await Promise.allSettled([
         fetchCandles(symbol, interval, mainLimit),
         bwEnabled
@@ -623,9 +819,12 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
         macdEnabled
             ? fetchCandles(symbol, macdInterval, macdLimit)
             : Promise.resolve(null),
+        refRsiNeedsFetch
+            ? fetchCandles(symbol, REF_RSI_INTERVAL, refRsiLimit)
+            : Promise.resolve(null),
     ]);
 
-    const [candlesResult, bwCandlesResult, pdcCandlesResult, tickersResult, pcsCandlesResult, adxCandlesResult, macdCandlesResult] = settled;
+    const [candlesResult, bwCandlesResult, pdcCandlesResult, tickersResult, pcsCandlesResult, adxCandlesResult, macdCandlesResult, refRsiCandlesResult] = settled;
     if (candlesResult.status === 'rejected') throw candlesResult.reason;
     const candles = candlesResult.value;
 
@@ -720,9 +919,40 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
     const rsiValues = RSI.calculate({ values: closes, period: RSI_PERIOD });
     const offset = RSI_PERIOD;
 
+    // ATR de Wilder no PRÓPRIO intervalo do sinal — só pro stop contínuo modo 'atrTrail'.
+    // atrSeries[k] corresponde a candles[k + atrOffset]; resolvido por sinal via atrPct abaixo.
+    let atrSeries = [];
+    let atrOffset = 0;
+    if (trailingStopNeedsAtr) {
+        atrSeries = ATR.calculate({
+            high: candles.map(c => parseFloat(c.high)),
+            low: candles.map(c => parseFloat(c.low)),
+            close: closes,
+            period: ATR_PERIOD,
+        });
+        atrOffset = candles.length - atrSeries.length;
+    }
+
+    // RSI 1h de referência (informativo — ver REF_RSI_INTERVAL): série calculada no intervalo
+    // próprio, resolvida no instante de cada sinal por resolveOwnIntervalValueAt (mesmo padrão de
+    // ADX/MACD). Com o sinal já em 1h, é a própria série principal.
+    let refRsiCandles = [];
+    let refRsiSeries = [];
+    let refRsiOffset = 0;
+    if (!refRsiNeedsFetch) {
+        refRsiCandles = candles;
+        refRsiSeries = rsiValues;
+        refRsiOffset = offset;
+    } else if (refRsiCandlesResult.status === 'fulfilled' && refRsiCandlesResult.value?.length) {
+        refRsiCandles = refRsiCandlesResult.value;
+        refRsiSeries = RSI.calculate({ values: refRsiCandles.map(c => parseFloat(c.close)), period: RSI_PERIOD });
+        refRsiOffset = refRsiCandles.length - refRsiSeries.length;
+    }
+
     // Fase 1 — detecta os cruzamentos de RSI no candle do `interval` principal (o "pensamento"
     // continua em 15m/etc.), sem resolver ainda pullback/saída.
     const rawSignals = [];
+    let higherRsiBlocked = 0; // sinais cortados pelo filtro de RSI 1h (só conta com ele ligado)
     const minI = Math.max(1, priorRsiCount);
     if (!bandWidthBlocksEntries && !volumeBlocksEntries) {
         for (let i = minI; i < rsiValues.length; i++) {
@@ -768,6 +998,18 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
                 if (macdHist != null && macdHist <= 0) continue;
             }
 
+            // RSI 1h vigente no instante do sinal — informativo (coluna "RSI 1h" / gráfico de
+            // faixas) E base do filtro higherRsiFilter. null enquanto não há candle 1h suficiente
+            // antes do sinal (início da amostra / warmup).
+            const rsi1hAtSignal = resolveOwnIntervalValueAt(refRsiCandles, refRsiSeries, refRsiOffset, signalCandle.openTime, (v) => v);
+
+            // Confirmação multi-timeframe: só entra se o RSI 1h >= o mínimo. Fail-open no warmup
+            // (rsi1hAtSignal == null), igual ADX/MACD. Ver JSDoc de options.higherRsiFilter.
+            if (higherRsiEnabled && rsi1hAtSignal != null && rsi1hAtSignal < higherRsiMin) {
+                higherRsiBlocked++;
+                continue;
+            }
+
             const stopPriceOverride = pcsEnabled
                 ? resolvePrevCandleStopPrice(fourHCandles, signalCandle.openTime)
                 : null;
@@ -776,6 +1018,7 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
                 signalCandle,
                 signalPrice,
                 signalRsi: parseFloat(rsiValues[i].toFixed(2)),
+                signalRsi1h: rsi1hAtSignal != null ? parseFloat(rsi1hAtSignal.toFixed(2)) : null,
                 idx,
                 stopPriceOverride,
                 cloudZone,
@@ -800,7 +1043,7 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
     }
 
     const occurrences = [];
-    for (const { signalCandle, signalPrice, signalRsi, idx, stopPriceOverride, cloudZone } of rawSignals) {
+    for (const { signalCandle, signalPrice, signalRsi, signalRsi1h, idx, stopPriceOverride, cloudZone } of rawSignals) {
         const ivMs = interval === '1m' ? 60_000 : intervalMs(interval);
         const signalCloseMs = signalCandle.openTime + ivMs;
 
@@ -817,22 +1060,44 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
             scanCandles = candles.slice(idx + 1);
         }
 
+        // ATR% no instante do sinal (só usado pelo modo 'atrTrail'). null enquanto não há série
+        // suficiente antes do sinal (warmup) — nesse caso o modo cai na largura wNearPct.
+        let atrPctAtSignal = null;
+        if (trailingStopNeedsAtr && atrSeries.length) {
+            const k = idx - atrOffset;
+            if (k >= 0 && k < atrSeries.length && signalPrice > 0) {
+                atrPctAtSignal = (atrSeries[k] / signalPrice) * 100;
+            }
+        }
+
         const resolved = resolveFromSignal(scanCandles, signalPrice, {
-            pullbackPct, targetPct, stopLossPct, stopPriceOverride,
+            pullbackPct, targetPct, stopLossPct, stopPriceOverride, hardTakeProfitPct,
             targetMode: targetModeResolved,
             trailingStop: trailingStopEnabled
                 ? {
                     enabled: true,
+                    mode: trailingStopMode,
                     startPct: trailingStopStartPct,
                     coinStepPct: trailingStopCoinStepPct,
                     stopStepPct: trailingStopStopStepPct,
+                    pivotPct: tsPivotPct,
+                    aCoinStepPct: tsPhaseACoinStep,
+                    aStopStepPct: tsPhaseAStopStep,
+                    bCoinStepPct: tsPhaseBCoinStep,
+                    bStopStepPct: tsPhaseBStopStep,
+                    pivotGainPct: tsPivotGainPct,
+                    wNearPct: tsWNearPct,
+                    wFarPct: tsWFarPct,
+                    atrMult: tsAtrMult,
+                    atrMaxPct: tsAtrMaxPct,
+                    atrPct: atrPctAtSignal,
                 }
                 : null,
             trailingTarget: targetModeResolved === 'continuous'
                 ? { coinStepPct: trailingTargetCoinStepPct, stepPct: trailingTargetStepPct }
                 : null,
         });
-        occurrences.push(buildOccurrence(signalCandle, signalPrice, signalRsi, resolved, positionSizeUsd, cloudZone));
+        occurrences.push(buildOccurrence(signalCandle, signalPrice, signalRsi, resolved, positionSizeUsd, cloudZone, signalRsi1h));
     }
 
     // "Remover saída aberta": tira da amostra (tabela E agregados) os sinais ainda não resolvidos
@@ -858,6 +1123,7 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
         symbol,
         interval,
         rsiPeriod: RSI_PERIOD,
+        refRsiInterval: REF_RSI_INTERVAL,
         rsiThreshold,
         priorRsiCount,
         pullbackPct,
@@ -884,15 +1150,31 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
         bandWidth: bandWidthResult,
         prevDayCloud: pdcEnabled ? { maxPct: pdcMaxPct, interval: pdcInterval, candleCount: pdcCandleCount, useHighLow: pdcUseHighLow } : null,
         cloudZoneStats: pdcEnabled ? computeCloudZoneStats(finalOccurrences) : null,
+        rsi1hBreakdown: computeRsi1hBreakdown(finalOccurrences),
         volume: volumeResult,
         excludeOpenExits,
         prevCandleStop: pcsEnabled,
         adxFilter: adxEnabled ? { interval: adxInterval, minAdx: adxMinAdx } : null,
         macdFilter: macdEnabled ? { interval: macdInterval } : null,
+        higherRsiFilter: higherRsiEnabled ? { interval: REF_RSI_INTERVAL, minRsi: higherRsiMin } : null,
+        higherRsiBlockedCount: higherRsiEnabled ? higherRsiBlocked : 0,
         trailingStop: trailingStopEnabled ? {
+            mode: trailingStopMode,
             startPct: trailingStopStartPct,
             coinStepPct: trailingStopCoinStepPct,
             stopStepPct: trailingStopStopStepPct,
+            ...(trailingStopMode === 'twoPhase' ? {
+                pivotPct: tsPivotPct,
+                aCoinStepPct: tsPhaseACoinStep, aStopStepPct: tsPhaseAStopStep,
+                bCoinStepPct: tsPhaseBCoinStep, bStopStepPct: tsPhaseBStopStep,
+            } : {}),
+            ...(trailingStopMode === 'peakTrail' ? {
+                pivotGainPct: tsPivotGainPct, wNearPct: tsWNearPct, wFarPct: tsWFarPct,
+            } : {}),
+            ...(trailingStopMode === 'atrTrail' ? {
+                pivotGainPct: tsPivotGainPct, wNearPct: tsWNearPct,
+                atrPeriod: ATR_PERIOD, atrMult: tsAtrMult, atrMaxPct: tsAtrMaxPct,
+            } : {}),
         } : null,
         targetMode: targetModeResolved,
         trailingTarget: targetModeResolved === 'continuous' ? {
@@ -900,6 +1182,7 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
             coinStepPct: trailingTargetCoinStepPct,
             stepPct: trailingTargetStepPct,
         } : null,
+        hardTakeProfit: hardTakeProfitPct > 0 ? { pct: hardTakeProfitPct } : null,
         dailyEntryStats: computeDailyEntryStats(filledOccurrences, positionSizeUsd, entriesDayRange),
         tradeDuration: computeAvgTradeDurationMs(filledOccurrences),
         occurrences: finalOccurrences,
@@ -909,3 +1192,4 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
 module.exports = analyseRsiThresholdBacktest;
 module.exports.countBaseVsEvolvedExits = countBaseVsEvolvedExits;
 module.exports.computeCloudZoneStats = computeCloudZoneStats;
+module.exports.computeRsi1hBreakdown = computeRsi1hBreakdown;

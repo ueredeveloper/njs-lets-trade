@@ -17,6 +17,17 @@
 const ALL_INTERVALS = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '8h', '1d'];
 const BB_PERIODS = [10, 20, 30];
 const BB_STD_DEVS = [1, 2, 3];
+/** Modos do STOP contínuo (exit.trailingStop.mode) — mesmos do backtest/Estatísticas, ver
+ *  trailingStopCandidate em backend/utils/analyseRsiThresholdBacktest.js e computeTrailingStopPrice
+ *  em strategyEngine.js:
+ *    'continuous' — rampa linear única ancorada na entrada (coinStepPct/stopStepPct).
+ *    'twoPhase'   — Escada Dupla: 2 inclinações ancoradas na entrada (fase A agressiva até travar
+ *                   pivotPct% de lucro, depois fase B suave).
+ *    'peakTrail'  — Trilha do Topo: stop a wNearPct% abaixo do PICO enquanto o ganho < pivotGainPct%,
+ *                   e a wFarPct% depois (Chandelier de % em 2 fases).
+ *    'atrTrail'   — como Trilha do Topo, mas a fase B = atrMult × ATR% (ATR de Wilder 14 no
+ *                   entry.interval no momento da compra, limitada a atrMaxPct%). */
+const TRAILING_STOP_MODES = ['continuous', 'twoPhase', 'peakTrail', 'atrTrail'];
 
 const RSI_MOMENTUM_DEFAULTS = {
   kind: 'rsi_momentum',
@@ -90,6 +101,14 @@ const RSI_MOMENTUM_DEFAULTS = {
      *  escolhido, estiver POSITIVO no candle fechado mais recente — mesma regra do backtest (ver
      *  checkMacdFilter em strategyEngine.js). Sem warmup suficiente ainda, libera (fail-open). */
     macdFilter: { enabled: true, interval: '1h' },
+    /** Desligado por padrão — confirmação multi-timeframe pelo RSI de 1h (intervalo FIXO, o mesmo
+     *  da coluna "RSI 1h" e do gráfico "Resultado por faixa de RSI 1h" em Estatísticas). Só libera
+     *  o sinal se o RSI(14) do candle de 1h FECHADO mais recente estiver >= minRsi — o gatilho de
+     *  entrada é de um intervalo menor (ex.: 15m), este filtro evita comprar o rompimento
+     *  enquanto o timeframe maior ainda está fraco. Base: Elder Triple Screen, linha 50 do RSI,
+     *  range rules de Brown/Cardwell. Sem candles de 1h suficientes ainda, libera (fail-open, como
+     *  ADX/MACD). Ver checkHigherRsiFilter em strategyEngine.js. */
+    higherRsiFilter: { enabled: false, minRsi: 50 },
   },
 
   exit: {
@@ -110,11 +129,26 @@ const RSI_MOMENTUM_DEFAULTS = {
      *  Binance limita a distância do alvo ao preço médio (PERCENT_PRICE_BY_SIDE), então um alvo
      *  que sobe muito acaba preso (clamp) na borda permitida — ver ocoClient.js. */
     trailingTarget: { coinStepPct: 3, stepPct: 3 },
-    /** Desligado por padrão (stop fixo em stopLoss.maxLossPct). Ligado: o STOP sobe em degraus
-     *  com o PICO de preço — contador PRÓPRIO (`coinStepPct`), a cada `coinStepPct`% de alta o
-     *  stop sobe `stopStepPct` pontos percentuais. startPct = distância inicial do stop (%),
-     *  cai em stopLoss.maxLossPct se não informado. Ver computeTrailingStopPrice. */
-    trailingStop: { enabled: true, startPct: 5, coinStepPct: 3, stopStepPct: 2 },
+    /** TETO DE LUCRO — venda FORÇADA em +pct%, independente do targetMode. Ligado por padrão
+     *  (+15%): garante a saída em grandes altas que revertem antes do alvo contínuo preencher
+     *  (o alvo contínuo persegue o pico ~5pp acima e pode nunca casar — ver EDENUSDT 28/08). Na
+     *  corretora vira `min(alvo, entryPrice*(1+pct%))` na perna de alvo da bracket. Ver
+     *  computeBracketPrices em strategyEngine.js. */
+    hardTakeProfit: { enabled: true, pct: 15 },
+    /** Desligado por padrão (stop fixo em stopLoss.maxLossPct). Ligado: STOP contínuo — sobe em
+     *  degraus com o PICO de preço, sem nunca descer (monotônico). `mode` escolhe a mecânica (ver
+     *  TRAILING_STOP_MODES acima e computeTrailingStopPrice em strategyEngine.js):
+     *    'continuous' (padrão) — startPct/coinStepPct/stopStepPct.
+     *    'twoPhase'  — pivotPct + degraus das fases A (aCoinStepPct/aStopStepPct) e B (bCoinStepPct/bStopStepPct).
+     *    'peakTrail' — pivotGainPct + wNearPct/wFarPct (largura % abaixo do pico).
+     *    'atrTrail'  — pivotGainPct + wNearPct (fase A) + atrMult/atrMaxPct (fase B por ATR%).
+     *  startPct = distância inicial do stop (%), piso de todos os modos; cai em stopLoss.maxLossPct
+     *  se não informado. */
+    trailingStop: {
+      enabled: true, mode: 'continuous', startPct: 5, coinStepPct: 3, stopStepPct: 2,
+      pivotPct: 1, aCoinStepPct: 3, aStopStepPct: 2.5, bCoinStepPct: 3, bStopStepPct: 1,
+      pivotGainPct: 5, wNearPct: 4, wFarPct: 9, atrMult: 2, atrMaxPct: 12,
+    },
   },
 
   /** Modo percentual fixo (com trailing opcional injetado via exit.trailingStop acima, que tem
@@ -228,6 +262,17 @@ function normalizeMacdFilter(block) {
   };
 }
 
+/** Filtro RSI 1h (confirmação multi-timeframe) — intervalo FIXO 1h, só `enabled` + `minRsi`
+ *  (1..99). Mesmo shape do backtest (options.higherRsiFilter). */
+function normalizeHigherRsiFilter(block) {
+  const d = RSI_MOMENTUM_DEFAULTS.entry.higherRsiFilter;
+  const src = block ?? {};
+  return {
+    enabled: typeof src.enabled === 'boolean' ? src.enabled : d.enabled,
+    minRsi: Math.max(1, Math.min(99, Number(src.minRsi ?? d.minRsi))),
+  };
+}
+
 function normalizeEntry(block) {
   const d = RSI_MOMENTUM_DEFAULTS.entry;
   const src = block ?? {};
@@ -249,17 +294,33 @@ function normalizeEntry(block) {
     spikeGuard: normalizeSpikeGuard(src.spikeGuard),
     prevDayCloud: normalizePrevDayCloud(src.prevDayCloud),
     macdFilter: normalizeMacdFilter(src.macdFilter),
+    higherRsiFilter: normalizeHigherRsiFilter(src.higherRsiFilter),
   };
 }
 
 function normalizeTrailingStop(block) {
   const d = RSI_MOMENTUM_DEFAULTS.exit.trailingStop;
   const src = block ?? {};
+  const clamp = (v, lo, hi, dflt) => Math.max(lo, Math.min(hi, Number(v ?? dflt)));
   return {
     enabled: typeof src.enabled === 'boolean' ? src.enabled : d.enabled,
-    startPct: Math.max(0.5, Math.min(50, Number(src.startPct ?? d.startPct))),
-    coinStepPct: Math.max(0.1, Math.min(50, Number(src.coinStepPct ?? d.coinStepPct))),
-    stopStepPct: Math.max(0.1, Math.min(50, Number(src.stopStepPct ?? d.stopStepPct))),
+    mode: TRAILING_STOP_MODES.includes(src.mode) ? src.mode : d.mode,
+    startPct: clamp(src.startPct, 0.5, 50, d.startPct),
+    // continuous
+    coinStepPct: clamp(src.coinStepPct, 0.1, 50, d.coinStepPct),
+    stopStepPct: clamp(src.stopStepPct, 0.1, 50, d.stopStepPct),
+    // twoPhase (Escada Dupla) — pivotPct = lucro travado no fim da fase A (pode ser negativo)
+    pivotPct: clamp(src.pivotPct, -5, 20, d.pivotPct),
+    aCoinStepPct: clamp(src.aCoinStepPct, 0.1, 20, d.aCoinStepPct),
+    aStopStepPct: clamp(src.aStopStepPct, 0.1, 20, d.aStopStepPct),
+    bCoinStepPct: clamp(src.bCoinStepPct, 0.1, 20, d.bCoinStepPct),
+    bStopStepPct: clamp(src.bStopStepPct, 0.1, 20, d.bStopStepPct),
+    // peakTrail (Trilha do Topo) / atrTrail (Trilha ATR)
+    pivotGainPct: clamp(src.pivotGainPct, 0.1, 50, d.pivotGainPct),
+    wNearPct: clamp(src.wNearPct, 0.1, 50, d.wNearPct),
+    wFarPct: clamp(src.wFarPct, 0.1, 50, d.wFarPct),
+    atrMult: clamp(src.atrMult, 0.1, 10, d.atrMult),
+    atrMaxPct: clamp(src.atrMaxPct, 0.5, 50, d.atrMaxPct),
   };
 }
 
@@ -269,6 +330,16 @@ function normalizeTrailingTarget(block) {
   return {
     coinStepPct: Math.max(0.1, Math.min(50, Number(src.coinStepPct ?? d.coinStepPct))),
     stepPct: Math.max(0.1, Math.min(50, Number(src.stepPct ?? d.stepPct))),
+  };
+}
+
+/** Teto de lucro (venda forçada) — { enabled, pct } (pct 1..200). */
+function normalizeHardTakeProfit(block) {
+  const d = RSI_MOMENTUM_DEFAULTS.exit.hardTakeProfit;
+  const src = block ?? {};
+  return {
+    enabled: typeof src.enabled === 'boolean' ? src.enabled : d.enabled,
+    pct: Math.max(1, Math.min(200, Number(src.pct ?? d.pct))),
   };
 }
 
@@ -291,6 +362,7 @@ function normalizeExit(block) {
     },
     trailingTarget: normalizeTrailingTarget(block?.trailingTarget),
     trailingStop: normalizeTrailingStop(block?.trailingStop),
+    hardTakeProfit: normalizeHardTakeProfit(block?.hardTakeProfit),
   };
 }
 

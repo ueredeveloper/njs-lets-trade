@@ -4,6 +4,7 @@ const mcFavoritesStatsCache = require('../cache/mcFavoritesStatsCache');
 const { intervalMs } = require('../bot/ma-cross/strategyEngine');
 const { loadGlobalConfigBody } = require('../bot/rsi-momentum/strategyPresets');
 const { sbReq } = require('../bot/shared/supabaseRest');
+const { parseTrailingStopQuery } = require('../utils/parseTrailingStopQuery');
 
 const DEFAULT_USER_ID = process.env.SUPABASE_DEFAULT_USER_ID ?? 'ueredeveloper';
 
@@ -15,7 +16,11 @@ const DEFAULT_USER_ID = process.env.SUPABASE_DEFAULT_USER_ID ?? 'ueredeveloper';
 //     &prevCandleStopEnabled=1
 //     &adxFilterEnabled=1&adxFilterInterval=1h&adxFilterMinAdx=25
 //     &macdFilterEnabled=1&macdFilterInterval=1h
-//     &trailingStopEnabled=1&trailingStopStartPct=5&trailingStopCoinStepPct=1&trailingStopStopStepPct=1
+//     &higherRsiFilterEnabled=1&higherRsiFilterMinRsi=50   (RSI 1h mínimo — confirmação multi-timeframe)
+//     &trailingStopEnabled=1&trailingStopMode=continuous&trailingStopStartPct=5&trailingStopCoinStepPct=1&trailingStopStopStepPct=1
+//     &trailingStopMode=twoPhase&trailingStopPivotPct=1&trailingStopACoinStepPct=3&trailingStopAStopStepPct=2.5&trailingStopBCoinStepPct=3&trailingStopBStopStepPct=1
+//     &trailingStopMode=peakTrail&trailingStopPivotGainPct=5&trailingStopWNearPct=4&trailingStopWFarPct=9
+//     &trailingStopMode=atrTrail&trailingStopPivotGainPct=5&trailingStopWNearPct=4&trailingStopAtrMult=2&trailingStopAtrMaxPct=12
 //     &targetMode=continuous&trailingTargetCoinStepPct=3&trailingTargetStepPct=3
 router.get('/rsi-threshold-backtest', async (req, res) => {
     const {
@@ -29,7 +34,8 @@ router.get('/rsi-threshold-backtest', async (req, res) => {
         prevCandleStopEnabled,
         adxFilterEnabled, adxFilterInterval, adxFilterMinAdx,
         macdFilterEnabled, macdFilterInterval,
-        trailingStopEnabled, trailingStopStartPct, trailingStopCoinStepPct, trailingStopStopStepPct,
+        higherRsiFilterEnabled, higherRsiFilterMinRsi,
+        hardTakeProfitEnabled, hardTakeProfitPct,
         targetMode, trailingTargetCoinStepPct, trailingTargetStepPct,
         entriesDayRangeMin, entriesDayRangeMax,
     } = req.query;
@@ -81,12 +87,15 @@ router.get('/rsi-threshold-backtest', async (req, res) => {
             enabled:  true,
             interval: macdFilterInterval ?? '1h',
         } : null,
-        trailingStop: trailingStopEnabled === '1' ? {
-            enabled:  true,
-            startPct:    trailingStopStartPct    ? parseFloat(trailingStopStartPct)    : (stopLossPct != null ? parseFloat(stopLossPct) : 5),
-            coinStepPct: trailingStopCoinStepPct ? parseFloat(trailingStopCoinStepPct) : 1,
-            stopStepPct: trailingStopStopStepPct ? parseFloat(trailingStopStopStepPct) : 1,
+        higherRsiFilter: higherRsiFilterEnabled === '1' ? {
+            enabled: true,
+            minRsi:  higherRsiFilterMinRsi ? parseFloat(higherRsiFilterMinRsi) : 50,
         } : null,
+        hardTakeProfit: hardTakeProfitEnabled === '1' ? {
+            enabled: true,
+            pct:     hardTakeProfitPct ? parseFloat(hardTakeProfitPct) : 15,
+        } : null,
+        trailingStop: parseTrailingStopQuery(req.query, stopLossPct != null ? parseFloat(stopLossPct) : null),
         targetMode: (targetMode === 'fixed' || targetMode === 'continuous' || targetMode === 'off') ? targetMode : 'fixed',
         trailingTarget: targetMode === 'continuous' ? {
             coinStepPct: trailingTargetCoinStepPct ? parseFloat(trailingTargetCoinStepPct) : 3,

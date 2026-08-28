@@ -40,6 +40,8 @@ function buildReasonLabels(config) {
     const prevDayCloudMaxPct = config.entry.prevDayCloud?.maxPct;
     const prevDayCloudLabel = (config.entry.prevDayCloud?.interval === '3d' ? 'D-3' : 'D-1')
         + (config.entry.prevDayCloud?.candleCount > 1 ? `×${config.entry.prevDayCloud.candleCount}` : '');
+    const macdIv = config.entry.macdFilter?.interval ?? '1h';
+    const higherRsiMin = config.entry.higherRsiFilter?.minRsi ?? 50;
     return {
         ENTRY_OFF: 'entradas pausadas na configuração',
         INSUFFICIENT_DATA: 'histórico de candles insuficiente pra calcular o RSI',
@@ -51,6 +53,8 @@ function buildReasonLabels(config) {
         RSI5M_NO_DATA: 'candles 5m insuficientes pra calcular o RSI 5m',
         RSI5M_TOO_LOW: `RSI(14) do candle 5m abaixo do mínimo exigido (${rsi5mThreshold})`,
         PREVDAY_CLOUD_OUT_OF_RANGE: `preço fora da nuvem ${prevDayCloudLabel} (faixa até ${prevDayCloudMaxPct}% da nuvem)`,
+        MACD_HISTOGRAM_NEGATIVE: `histograma do MACD (${macdIv}) não está positivo`,
+        HIGHER_RSI_TOO_LOW: `RSI de 1h abaixo do mínimo exigido (${higherRsiMin})`,
     };
 }
 
@@ -90,6 +94,9 @@ function shortSymbolDetail(signal) {
     if (signal.reason === 'PREVDAY_CLOUD_OUT_OF_RANGE' && signal.prevDayCloud?.price != null) {
         return `(${signal.prevDayCloud.price})`;
     }
+    if (signal.reason === 'HIGHER_RSI_TOO_LOW' && signal.higherRsi?.rsi1h != null) {
+        return `(1h ${Number(signal.higherRsi.rsi1h).toFixed(1)})`;
+    }
     return '';
 }
 
@@ -110,6 +117,8 @@ function fmtSignalReason(symbol, signal, reasonLabels) {
     } else if (signal.reason === 'PREVDAY_CLOUD_OUT_OF_RANGE' && signal.prevDayCloud) {
         const pdc = signal.prevDayCloud;
         detail = ` (preço ${pdc.price}, faixa [${pdc.lower}, ${pdc.limit}])`;
+    } else if (signal.reason === 'HIGHER_RSI_TOO_LOW' && signal.higherRsi?.rsi1h != null) {
+        detail = ` (RSI 1h atual: ${Number(signal.higherRsi.rsi1h).toFixed(2)})`;
     }
     return `   ${symbol}: ${reasonLabels[signal.reason] ?? signal.reason}${detail}`;
 }

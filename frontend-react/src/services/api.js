@@ -151,12 +151,42 @@ export async function fetchRsiOversoldRecovery(symbol, interval, oversold = 30, 
   return res.json();
 }
 
+/** Serializa options.trailingStop pros query params compartilhados pelos dois endpoints de
+ *  backtest RSI Momentum. Modos: 'continuous' (rampa única) | 'twoPhase' (Escada Dupla) |
+ *  'peakTrail' (Trilha do Topo) | 'atrTrail' (Trilha ATR) — ver backend/utils/parseTrailingStopQuery.js. */
+function appendTrailingStopParams(params, trailingStop, stopLossPct) {
+  if (!trailingStop?.enabled) return;
+  const ts = trailingStop;
+  params.set('trailingStopEnabled', '1');
+  params.set('trailingStopMode', ts.mode ?? 'continuous');
+  params.set('trailingStopStartPct', String(ts.startPct ?? stopLossPct));
+  if ((ts.mode ?? 'continuous') === 'continuous') {
+    params.set('trailingStopCoinStepPct', String(ts.coinStepPct ?? 1));
+    params.set('trailingStopStopStepPct', String(ts.stopStepPct ?? 1));
+  } else if (ts.mode === 'twoPhase') {
+    params.set('trailingStopPivotPct', String(ts.pivotPct ?? 1));
+    params.set('trailingStopACoinStepPct', String(ts.aCoinStepPct ?? 3));
+    params.set('trailingStopAStopStepPct', String(ts.aStopStepPct ?? 2.5));
+    params.set('trailingStopBCoinStepPct', String(ts.bCoinStepPct ?? 3));
+    params.set('trailingStopBStopStepPct', String(ts.bStopStepPct ?? 1));
+  } else if (ts.mode === 'peakTrail') {
+    params.set('trailingStopPivotGainPct', String(ts.pivotGainPct ?? 5));
+    params.set('trailingStopWNearPct', String(ts.wNearPct ?? 4));
+    params.set('trailingStopWFarPct', String(ts.wFarPct ?? 9));
+  } else if (ts.mode === 'atrTrail') {
+    params.set('trailingStopPivotGainPct', String(ts.pivotGainPct ?? 5));
+    params.set('trailingStopWNearPct', String(ts.wNearPct ?? 4));
+    params.set('trailingStopAtrMult', String(ts.atrMult ?? 2));
+    params.set('trailingStopAtrMaxPct', String(ts.atrMaxPct ?? 12));
+  }
+}
+
 export async function fetchRsiThresholdBacktest(symbol, interval, options = {}) {
   const {
     rsiThreshold = 70, pullbackPct = 0, targetPct = 5, stopLossPct = 5, positionSizeUsd = 40,
     source = null, candleCount = null, lookbackHours = 0, bandWidth = null, prevDayCloud = null,
     minVolumeUsdt = 0, excludeOpenExits = false, prevCandleStop = false,
-    adxFilter = null, macdFilter = null, trailingStop = null, trailingTarget = null, targetMode = null, entriesDayRange = null,
+    adxFilter = null, macdFilter = null, higherRsiFilter = null, hardTakeProfit = null, trailingStop = null, trailingTarget = null, targetMode = null, entriesDayRange = null,
   } = options;
   const params = new URLSearchParams({
     symbol, interval, rsiThreshold, pullbackPct, targetPct, stopLossPct, positionSizeUsd,
@@ -191,12 +221,15 @@ export async function fetchRsiThresholdBacktest(symbol, interval, options = {}) 
     params.set('macdFilterEnabled', '1');
     params.set('macdFilterInterval', macdFilter.interval ?? '1h');
   }
-  if (trailingStop?.enabled) {
-    params.set('trailingStopEnabled', '1');
-    params.set('trailingStopStartPct', String(trailingStop.startPct ?? stopLossPct));
-    params.set('trailingStopCoinStepPct', String(trailingStop.coinStepPct ?? 1));
-    params.set('trailingStopStopStepPct', String(trailingStop.stopStepPct ?? 1));
+  if (higherRsiFilter?.enabled) {
+    params.set('higherRsiFilterEnabled', '1');
+    params.set('higherRsiFilterMinRsi', String(higherRsiFilter.minRsi ?? 50));
   }
+  if (hardTakeProfit?.enabled) {
+    params.set('hardTakeProfitEnabled', '1');
+    params.set('hardTakeProfitPct', String(hardTakeProfit.pct ?? 15));
+  }
+  appendTrailingStopParams(params, trailingStop, stopLossPct);
   if (targetMode && targetMode !== 'fixed') params.set('targetMode', targetMode);
   if (targetMode === 'continuous' && trailingTarget) {
     params.set('trailingTargetCoinStepPct', String(trailingTarget.coinStepPct ?? 3));
@@ -219,7 +252,7 @@ export async function fetchRsiThresholdBacktestMarket(interval, options = {}) {
     rsiThreshold = 70, pullbackPct = 0, targetPct = 5, stopLossPct = 5, positionSizeUsd = 40,
     source = null, candleCount = null, lookbackHours = 0, bandWidth = null, maxRows = null,
     prevDayCloud = null, minVolumeUsdt = 0, excludeOpenExits = false, prevCandleStop = false,
-    adxFilter = null, macdFilter = null, trailingStop = null, trailingTarget = null, targetMode = null, entriesDayRange = null,
+    adxFilter = null, macdFilter = null, higherRsiFilter = null, hardTakeProfit = null, trailingStop = null, trailingTarget = null, targetMode = null, entriesDayRange = null,
   } = options;
   const params = new URLSearchParams({
     interval, rsiThreshold, pullbackPct, targetPct, stopLossPct, positionSizeUsd,
@@ -255,12 +288,15 @@ export async function fetchRsiThresholdBacktestMarket(interval, options = {}) {
     params.set('macdFilterEnabled', '1');
     params.set('macdFilterInterval', macdFilter.interval ?? '1h');
   }
-  if (trailingStop?.enabled) {
-    params.set('trailingStopEnabled', '1');
-    params.set('trailingStopStartPct', String(trailingStop.startPct ?? stopLossPct));
-    params.set('trailingStopCoinStepPct', String(trailingStop.coinStepPct ?? 1));
-    params.set('trailingStopStopStepPct', String(trailingStop.stopStepPct ?? 1));
+  if (higherRsiFilter?.enabled) {
+    params.set('higherRsiFilterEnabled', '1');
+    params.set('higherRsiFilterMinRsi', String(higherRsiFilter.minRsi ?? 50));
   }
+  if (hardTakeProfit?.enabled) {
+    params.set('hardTakeProfitEnabled', '1');
+    params.set('hardTakeProfitPct', String(hardTakeProfit.pct ?? 15));
+  }
+  appendTrailingStopParams(params, trailingStop, stopLossPct);
   if (targetMode && targetMode !== 'fixed') params.set('targetMode', targetMode);
   if (targetMode === 'continuous' && trailingTarget) {
     params.set('trailingTargetCoinStepPct', String(trailingTarget.coinStepPct ?? 3));

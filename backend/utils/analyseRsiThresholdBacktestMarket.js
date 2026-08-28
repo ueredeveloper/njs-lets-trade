@@ -2,7 +2,7 @@
 
 const { getActiveUsdtPairs } = require('../binance/getActiveUsdtPairs');
 const analyseRsiThresholdBacktest = require('./analyseRsiThresholdBacktest');
-const { countBaseVsEvolvedExits, computeCloudZoneStats } = require('./analyseRsiThresholdBacktest');
+const { countBaseVsEvolvedExits, computeCloudZoneStats, computeRsi1hBreakdown } = require('./analyseRsiThresholdBacktest');
 const getTickers = require('../binance/cachedTicker24hr');
 const { computeDailyEntryStats } = require('./dailyEntryStats');
 const { computeAvgTradeDurationMs } = require('./tradeDurationStats');
@@ -131,6 +131,11 @@ async function analyseRsiThresholdBacktestMarket(options = {}) {
     const baseVsEvolved = countBaseVsEvolvedExits(filledOccurrences);
     const pdcOpts = perSymbolOptions.prevDayCloud;
     const cloudZoneStats = pdcOpts?.enabled ? computeCloudZoneStats(allOccurrences) : null;
+    const rsi1hBreakdown = computeRsi1hBreakdown(allOccurrences);
+    const higherRsiEnabled = !!perSymbolOptions.higherRsiFilter?.enabled;
+    const higherRsiBlockedCount = higherRsiEnabled
+        ? valid.reduce((s, { result }) => s + (result.higherRsiBlockedCount || 0), 0)
+        : 0;
     const volumeBreakdown = volumeMap.size > 0 ? computeVolumeBreakdown(filledOccurrences, volumeMap) : null;
     const positionSizeUsd = perSymbolOptions.positionSizeUsd ?? 40;
     const totalInvestedUsd = parseFloat((filledOccurrences.length * positionSizeUsd).toFixed(2));
@@ -141,6 +146,7 @@ async function analyseRsiThresholdBacktestMarket(options = {}) {
 
     return {
         interval,
+        refRsiInterval: valid[0]?.result?.refRsiInterval ?? '1h',
         rsiThreshold: perSymbolOptions.rsiThreshold ?? 70,
         priorRsiCount: perSymbolOptions.priorRsiFilter?.enabled === false
             ? 0
@@ -158,16 +164,24 @@ async function analyseRsiThresholdBacktestMarket(options = {}) {
             useHighLow: pdcOpts.useHighLow !== false,
         } : null,
         cloudZoneStats,
+        rsi1hBreakdown,
         minVolumeUsdt: Number(minVolumeUsdt) > 0 ? Number(minVolumeUsdt) : 0,
         excludeOpenExits: !!perSymbolOptions.excludeOpenExits,
         prevCandleStop: !!perSymbolOptions.prevCandleStop,
         adxFilterEnabled: !!perSymbolOptions.adxFilter?.enabled,
         macdFilterEnabled: !!perSymbolOptions.macdFilter?.enabled,
+        higherRsiFilter: higherRsiEnabled
+            ? { interval: '1h', minRsi: Math.max(1, Math.min(99, Number(perSymbolOptions.higherRsiFilter.minRsi ?? 50))) }
+            : null,
+        higherRsiBlockedCount,
         trailingStop: perSymbolOptions.trailingStop?.enabled ? { ...perSymbolOptions.trailingStop } : null,
         targetMode: (perSymbolOptions.targetMode === 'fixed' || perSymbolOptions.targetMode === 'continuous' || perSymbolOptions.targetMode === 'off')
             ? perSymbolOptions.targetMode
             : (perSymbolOptions.trailingTarget?.enabled ? 'continuous' : 'fixed'),
         trailingTarget: perSymbolOptions.targetMode === 'continuous' ? { ...perSymbolOptions.trailingTarget } : null,
+        hardTakeProfit: perSymbolOptions.hardTakeProfit?.enabled
+            ? { pct: Math.max(1, Math.min(200, Number(perSymbolOptions.hardTakeProfit.pct ?? 15))) }
+            : null,
         dailyEntryStats: computeDailyEntryStats(filledOccurrences, positionSizeUsd, perSymbolOptions.entriesDayRange ?? null),
         tradeDuration: computeAvgTradeDurationMs(filledOccurrences),
         symbolsTotal: allSymbols.length,

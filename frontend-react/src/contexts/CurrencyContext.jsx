@@ -37,6 +37,7 @@ import {
   normalizeSrInterval,
   normalizePphlInterval,
   normalizeChopInterval,
+  normalizeMacdInterval,
   normalizePrevDayCloudInterval,
   normalizePrevDayCloudCandleCount,
   normalizePrevDayCloudUseHighLow,
@@ -733,6 +734,14 @@ export function CurrencyProvider({ children }) {
     });
   }, []);
 
+  const setMacdIntervalDefault = useCallback((interval) => {
+    setUiPrefsState((prev) => {
+      const next = { ...prev, macdIntervalDefault: normalizeMacdInterval(interval) };
+      saveUiPreferences(next);
+      return next;
+    });
+  }, []);
+
   const setPrevDayCloudIntervalDefault = useCallback((interval) => {
     setUiPrefsState((prev) => {
       const next = { ...prev, prevDayCloudIntervalDefault: normalizePrevDayCloudInterval(interval) };
@@ -1171,6 +1180,7 @@ export function CurrencyProvider({ children }) {
         setSrIntervalDefault,
         setPphlIntervalDefault,
         setChopIntervalDefault,
+        setMacdIntervalDefault,
         setPrevDayCloudIntervalDefault,
         setPrevDayCloudCandleCountDefault,
         setPrevDayCloudUseHighLowDefault,

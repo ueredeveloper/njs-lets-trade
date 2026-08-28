@@ -52,7 +52,7 @@ const VALID_OVERLAY_PERIODS = ['9', '21', '50', '200'];
 /** IDs válidos de indicadores do gráfico. */
 export const VALID_ACTIVE_INDICATORS = [
   'ma9', 'ma21', 'ma50', 'ma200', 'emaPersistCloud', 'barsSinceCross', 'tdSequential',
-  'ichimoku', 'sr', 'pphl', 'rsi', 'rsi50', 'rsi80', 'stopLoss', 'chopZone', 'prevDayCloud',
+  'ichimoku', 'sr', 'pphl', 'rsi', 'rsi50', 'rsi80', 'stopLoss', 'chopZone', 'prevDayCloud', 'macd',
 ];
 
 /** Cores padrão por período (convenção TradingView / melhores práticas). */
@@ -221,6 +221,15 @@ export const DEFAULT_CHOP_INTERVAL = '4h';
 
 export function normalizeChopInterval(raw) {
   return CHART_INTERVAL_OPTIONS.includes(raw) ? raw : DEFAULT_CHOP_INTERVAL;
+}
+
+/** Intervalo de candles usado pra calcular o MACD (12/26/9, períodos fixos) — independente do
+ *  intervalo do gráfico, mesmo padrão do S/R/PPHL/CHOP. Padrão 1h: mesmo default do filtro MACD
+ *  do bot RSI Momentum (ver backend/bot/rsi-momentum/strategyEngine.js). */
+export const DEFAULT_MACD_INTERVAL = '1h';
+
+export function normalizeMacdInterval(raw) {
+  return CHART_INTERVAL_OPTIONS.includes(raw) ? raw : DEFAULT_MACD_INTERVAL;
 }
 
 /** Intervalo do candle usado pela nuvem D-1 — mesmo leque de intervalos do S/R/PPHL/CHOP (a
@@ -410,6 +419,7 @@ export const DEFAULT_UI_PREFS = {
   srIntervalDefault: DEFAULT_SR_INTERVAL,
   pphlIntervalDefault: DEFAULT_PPHL_INTERVAL,
   chopIntervalDefault: DEFAULT_CHOP_INTERVAL,
+  macdIntervalDefault: DEFAULT_MACD_INTERVAL,
   prevDayCloudIntervalDefault: DEFAULT_PREV_DAY_CLOUD_INTERVAL,
   prevDayCloudCandleCountDefault: DEFAULT_PREV_DAY_CLOUD_CANDLE_COUNT,
   prevDayCloudUseHighLowDefault: DEFAULT_PREV_DAY_CLOUD_USE_HIGH_LOW,
@@ -440,6 +450,7 @@ function cloneDefaults() {
     srIntervalDefault: DEFAULT_SR_INTERVAL,
     pphlIntervalDefault: DEFAULT_PPHL_INTERVAL,
     chopIntervalDefault: DEFAULT_CHOP_INTERVAL,
+    macdIntervalDefault: DEFAULT_MACD_INTERVAL,
     prevDayCloudIntervalDefault: DEFAULT_PREV_DAY_CLOUD_INTERVAL,
   prevDayCloudCandleCountDefault: DEFAULT_PREV_DAY_CLOUD_CANDLE_COUNT,
     prevDayCloudUseHighLowDefault: DEFAULT_PREV_DAY_CLOUD_USE_HIGH_LOW,
@@ -496,6 +507,9 @@ export function loadUiPreferences() {
     }
     if (parsed.chopIntervalDefault !== undefined) {
       result.chopIntervalDefault = normalizeChopInterval(parsed.chopIntervalDefault);
+    }
+    if (parsed.macdIntervalDefault !== undefined) {
+      result.macdIntervalDefault = normalizeMacdInterval(parsed.macdIntervalDefault);
     }
     if (parsed.prevDayCloudIntervalDefault !== undefined) {
       result.prevDayCloudIntervalDefault = normalizePrevDayCloudInterval(parsed.prevDayCloudIntervalDefault);

@@ -51,7 +51,7 @@ const { STRATEGY_IDS, loadGlobalConfigBody } = require('./strategyPresets');
 const { startMarketScanner } = require('./marketScanner');
 const {
   getRequiredSpecs, evaluateEntrySignal, evaluateExit, computeBracketPrices,
-  checkEntryLimitExpired, checkReentryCooldown, resolveTargetMode,
+  checkEntryLimitExpired, checkReentryCooldown, resolveTargetMode, computeAtrPct,
 } = require('./strategyEngine');
 
 // Alvo "desligado" (exit.targetMode === 'off'): a OCO da corretora precisa das duas pernas, então
@@ -283,18 +283,40 @@ function logStartupConfig(body) {
   console.log(macd?.enabled
     ? `   Filtro MACD: histograma (12,26,9) ${macd.interval} precisa estar positivo`
     : '   Filtro MACD: desligado');
-  const bracketNote = x.restingBracket.enabled ? '' : ' (bracket OFF, só fallback por candle)';
+  console.log(e.higherRsiFilter?.enabled
+    ? `   Filtro RSI 1h: RSI(14) do candle de 1h fechado precisa estar >= ${e.higherRsiFilter.minRsi} (confirmação multi-timeframe)`
+    : '   Filtro RSI 1h: desligado');
+  const bracketNote = x.restingBracket.enabled ? '' : '  (ordem resting OFF — só fallback por candle fechado)';
   const ts = x.trailingStop;
   const tt = x.trailingTarget;
-  const stopDesc = ts?.enabled
-    ? `stop CONTÍNUO -${ts.startPct}% inicial, sobe ${ts.stopStepPct}pp a cada ${ts.coinStepPct}% de alta do pico`
-    : `stop -${sl.maxLossPct}%${sl.enabled ? '' : ' (OFF)'}`;
+  const tsMode = ['continuous', 'twoPhase', 'peakTrail', 'atrTrail'].includes(ts?.mode) ? ts.mode : 'continuous';
+
+  // ── ALVO (para de subir o preço e realiza o lucro) ──
   const targetDesc = x.targetMode === 'off'
-    ? 'alvo DESLIGADO (só sai pelo stop)'
+    ? 'DESLIGADO — a posição só é encerrada pelo stop loss'
     : x.targetMode === 'continuous'
-      ? `alvo CONTÍNUO +${x.restingBracket.targetPct}% base, sobe ${tt.stepPct}pp a cada ${tt.coinStepPct}% de alta do pico`
-      : `alvo FIXO +${x.restingBracket.targetPct}%`;
-  console.log(`   Saída: ${targetDesc}${bracketNote} | ${stopDesc}`);
+      ? `contínuo — começa em +${x.restingBracket.targetPct}% e sobe ${tt.stepPct}pp a cada ${tt.coinStepPct}% de alta do pico de preço (deixa o lucro correr)`
+      : `fixo +${x.restingBracket.targetPct}% acima do preço de entrada`;
+  console.log(`   Alvo: ${targetDesc}${bracketNote}`);
+  if (x.hardTakeProfit?.enabled) {
+    console.log(`   Teto de lucro: venda FORÇADA se o preço tocar +${x.hardTakeProfit.pct}% (garante a saída em altas que revertem antes do alvo)`);
+  }
+
+  // ── STOP LOSS (limita a perda; nos modos contínuos sobe com o pico e pode travar lucro) ──
+  let stopDesc;
+  if (!ts?.enabled) {
+    stopDesc = `-${sl.maxLossPct}% fixo abaixo do preço de entrada${sl.enabled ? '' : ' (DESLIGADO)'}`;
+  } else if (tsMode === 'twoPhase') {
+    const lucro = ts.pivotPct === 0 ? 'empate (breakeven)' : `${ts.pivotPct > 0 ? '+' : ''}${ts.pivotPct}% de lucro`;
+    stopDesc = `Escada Dupla — começa em -${ts.startPct}%; fase A sobe ${ts.aStopStepPct}pp a cada ${ts.aCoinStepPct}% de alta do pico até travar ${lucro}; depois fase B sobe ${ts.bStopStepPct}pp a cada ${ts.bCoinStepPct}%. Nunca desce.`;
+  } else if (tsMode === 'peakTrail') {
+    stopDesc = `Trilha do Topo — fica ${ts.wNearPct}% abaixo do pico de preço até o pico ganhar +${ts.pivotGainPct}%, depois ${ts.wFarPct}% abaixo. Nunca desce.`;
+  } else if (tsMode === 'atrTrail') {
+    stopDesc = `Trilha ATR — ${ts.wNearPct}% abaixo do pico até +${ts.pivotGainPct}%, depois ${ts.atrMult}× o ATR% travado na compra (teto ${ts.atrMaxPct}%). Nunca desce.`;
+  } else {
+    stopDesc = `contínuo linear — começa em -${ts.startPct}% e sobe ${ts.stopStepPct}pp a cada ${ts.coinStepPct}% de alta do pico. Nunca desce.`;
+  }
+  console.log(`   Stop loss: ${stopDesc}`);
   console.log(`   Volume mín 24h: ${Number(body.volume.minVolumeUsdt).toLocaleString('pt-BR')} USDT (filtra o scan de mercado)`);
   console.log(`   Cooldown global entre entradas: ${body.entryCooldownHours}h | Polling: ${body.polling.pollMs / 1000}s aguardando sinal, ${body.polling.fastPollMs / 1000}s posição aberta`);
 }
@@ -404,7 +426,10 @@ async function maybeReplaceTrailingStop({ rowId, adapter, config, session, log, 
   // quando stop ou alvo de fato mudou de degrau, não a cada tick por ruído de ponto flutuante.
   const restingStop = Number(exitBracket.requestedStopPrice ?? exitBracket.stopPrice);
   const restingTarget = Number(exitBracket.requestedTargetPrice ?? exitBracket.targetPrice);
-  const stopChanged = stopTrailingOn && Math.abs(liveStop - restingStop) >= 1e-9;
+  // Só recria pra CIMA — todos os modos de computeTrailingStopPrice são monotônicos, então o stop
+  // nunca deve descer; o `>` (em vez de Math.abs) blinda contra ruído de ponto flutuante afrouxar
+  // a proteção na corretora.
+  const stopChanged = stopTrailingOn && Number.isFinite(restingStop) && liveStop > restingStop + 1e-9;
   const targetChanged = targetMode === 'continuous' && liveTarget != null
     && Number.isFinite(restingTarget) && Math.abs(liveTarget - restingTarget) >= 1e-9;
   if (!stopChanged && !targetChanged) return;
@@ -730,6 +755,27 @@ async function tick(rowId, adapter, strategy, log, session, stopSelf) {
   if (peakPrice > (storedPeak ?? buyPrice) + 1e-12) {
     session.rulesState = { ...rulesState, stopPeakPrice: peakPrice };
     await saveState(rowId, { rules_state: session.rulesState }, log);
+  }
+
+  // Stop contínuo modo 'atrTrail' — precisa do ATR% "do momento da compra". Calcula uma vez por
+  // posição (no 1º tick BOUGHT em que dá), guarda em rules_state atrelado ao buyPrice desta
+  // posição (stopAtrForBuy) pra não reaproveitar um ATR de trade anterior, e injeta em
+  // config.exit.trailingStop.atrPct (ver computeTrailingStopPrice). Fora do modo atrTrail é ignorado.
+  if (config.exit?.trailingStop?.enabled && config.exit.trailingStop.mode === 'atrTrail') {
+    const sameBuy = rulesState.stopAtrForBuy != null && buyPrice != null
+      && Math.abs(Number(rulesState.stopAtrForBuy) - buyPrice) < 1e-9;
+    let atrPct = sameBuy && rulesState.stopAtrPct != null ? Number(rulesState.stopAtrPct) : null;
+    if (!Number.isFinite(atrPct)) {
+      atrPct = computeAtrPct(cMap[config.entry.interval] ?? []);
+      if (Number.isFinite(atrPct)) {
+        session.rulesState = { ...(session.rulesState ?? rulesState), stopAtrPct: atrPct, stopAtrForBuy: buyPrice };
+        await saveState(rowId, { rules_state: session.rulesState }, log);
+        log(`${G}📐 ATR% da compra travado em ${atrPct.toFixed(2)}% (stop Trilha ATR)${X}`);
+      }
+    }
+    if (Number.isFinite(atrPct)) {
+      config.exit = { ...config.exit, trailingStop: { ...config.exit.trailingStop, atrPct } };
+    }
   }
 
   if (rulesState.exitBracket) {

@@ -1,6 +1,6 @@
 'use strict';
 
-const { RSI, MACD } = require('technicalindicators');
+const { RSI, MACD, ATR } = require('technicalindicators');
 const { closedCandlesOnly, intervalMs } = require('../ma-cross/strategyEngine');
 const { computeStopLossFloor } = require('../shared/stopLossFloor');
 const { bollingerCycleOccurrences } = require('../../utils/indicatorGrowthEngines');
@@ -36,6 +36,12 @@ const MACD_FAST_PERIOD = 12;
 const MACD_SLOW_PERIOD = 26;
 const MACD_SIGNAL_PERIOD = 9;
 const MACD_WARMUP_BARS = MACD_SLOW_PERIOD + MACD_SIGNAL_PERIOD + 10;
+// Filtro RSI 1h (entry.higherRsiFilter) — intervalo FIXO, o mesmo da coluna "RSI 1h" das
+// Estatísticas (REF_RSI_INTERVAL em analyseRsiThresholdBacktest.js).
+const HIGHER_RSI_INTERVAL = '1h';
+// ATR de Wilder (período 14, padrão) — usado só pelo stop contínuo modo 'atrTrail', calculado no
+// entry.interval no momento da compra (ver computeAtrPct / rsi-momentum-bot.js).
+const ATR_PERIOD = 14;
 
 function computeRsiSeries(closedCandles) {
     const closes = closedCandles.map(c => parseFloat(c.close));
@@ -75,6 +81,10 @@ function getRequiredSpecs(config) {
 
     if (entry.macdFilter?.enabled) {
         add(entry.macdFilter.interval ?? '1h', MACD_WARMUP_BARS);
+    }
+
+    if (entry.higherRsiFilter?.enabled) {
+        add(HIGHER_RSI_INTERVAL, RSI_PERIOD * 3 + 20);
     }
 
     return [...specs.entries()].map(([interval, lim]) => ({ interval, limit: lim }));
@@ -237,6 +247,52 @@ function checkMacdFilter(config, cMap) {
 }
 
 /**
+ * Filtro opcional de confirmação multi-timeframe pelo RSI de 1h (intervalo FIXO — o mesmo da
+ * coluna "RSI 1h" e do gráfico "Resultado por faixa de RSI 1h" em Estatísticas): só libera o
+ * sinal se o RSI(14) do candle de 1h FECHADO mais recente estiver >= entry.higherRsiFilter.minRsi.
+ * O gatilho de entrada é de um intervalo menor (entry.interval, ex. 15m) — este filtro evita
+ * comprar o rompimento enquanto o timeframe maior ainda está fraco. Mesma regra do backtest
+ * (options.higherRsiFilter em analyseRsiThresholdBacktest.js). Sem candles de 1h suficientes ainda,
+ * libera (fail-open, como o MACD).
+ */
+function checkHigherRsiFilter(config, cMap) {
+    const f = config.entry?.higherRsiFilter;
+    if (!f?.enabled) return { allowed: true };
+
+    const closed = closedCandlesOnly(cMap[HIGHER_RSI_INTERVAL] ?? []);
+    if (closed.length < RSI_PERIOD + 2) return { allowed: true };
+
+    const rsiValues = computeRsiSeries(closed);
+    const rsi1h = rsiValues[rsiValues.length - 1];
+    if (!Number.isFinite(rsi1h)) return { allowed: true };
+
+    const minRsi = Math.max(1, Math.min(99, Number(f.minRsi ?? 50)));
+    if (rsi1h < minRsi) {
+        return { allowed: false, reason: 'HIGHER_RSI_TOO_LOW', rsi1h: Math.round(rsi1h * 100) / 100, minRsi, interval: HIGHER_RSI_INTERVAL };
+    }
+    return { allowed: true, rsi1h: Math.round(rsi1h * 100) / 100, minRsi, interval: HIGHER_RSI_INTERVAL };
+}
+
+/** ATR de Wilder (período 14) em % do último fechamento — usado pelo stop contínuo modo
+ *  'atrTrail'. Calculado uma vez, no momento da compra, a partir dos candles FECHADOS do
+ *  entry.interval (ver rsi-momentum-bot.js, guardado em rules_state.stopAtrPct). null sem candles
+ *  suficientes. */
+function computeAtrPct(closedCandles) {
+    const closed = closedCandlesOnly(closedCandles ?? []);
+    if (closed.length < ATR_PERIOD + 2) return null;
+    const series = ATR.calculate({
+        high: closed.map(c => parseFloat(c.high)),
+        low: closed.map(c => parseFloat(c.low)),
+        close: closed.map(c => parseFloat(c.close)),
+        period: ATR_PERIOD,
+    });
+    const atr = series[series.length - 1];
+    const lastClose = parseFloat(closed[closed.length - 1].close);
+    if (!Number.isFinite(atr) || !(lastClose > 0)) return null;
+    return (atr / lastClose) * 100;
+}
+
+/**
  * Checkpoint de confirmação adiantada: procura, dentro do intervalo curto (entry.earlyConfirm.
  * interval, ex.: 5m), o candle já FECHADO mais recente cujo openTime cai dentro da janela do
  * candle de entry.interval que ainda está se formando (openTime >= forming.openTime). Devolve
@@ -360,6 +416,11 @@ function evaluateEntrySignal(config, cMap) {
         return { allowed: false, reason: macdCheck.reason, rsi: last, threshold, macd: macdCheck };
     }
 
+    const higherRsiCheck = checkHigherRsiFilter(config, cMap);
+    if (!higherRsiCheck.allowed) {
+        return { allowed: false, reason: higherRsiCheck.reason, rsi: last, threshold, higherRsi: higherRsiCheck };
+    }
+
     const signalPrice = parseFloat(signalCandle.close);
     const signalOpenTime = Number(signalCandle.openTime);
     const pullbackPct = entry.pullback?.enabled ? Math.max(0.01, entry.pullback.belowPct) : 0;
@@ -381,6 +442,7 @@ function evaluateEntrySignal(config, cMap) {
         spikeGuard: spikeGuardCheck,
         prevDayCloud: prevDayCloudCheck,
         macd: macdCheck,
+        higherRsi: higherRsiCheck,
         earlyCheckpoint,
         signalOpenTime,
         signalPrice,
@@ -440,23 +502,70 @@ function checkReentryCooldown(config, cMap, lastExitTime, lastExitReason) {
 }
 
 /**
- * Stop contínuo (trailing, mesma matemática de dois degraus INDEPENDENTES do backtest — ver
- * options.trailingStop em analyseRsiThresholdBacktest.js#resolveFromSignal): a cada
- * `coinStepPct`% de alta do PICO de preço desde a entrada, o stop (originalmente `startPct`%
- * abaixo da entrada) sobe `stopStepPct` pontos percentuais — os dois não precisam ser iguais
- * (ex.: coinStepPct=3/stopStepPct=2: moeda subiu 3% → stop de -5% vira -3%; subiu 6% → vira
- * -1%; e assim por diante, podendo virar positivo e travar lucro).
+ * Preço do stop contínuo — mesma matemática do backtest (ver trailingStopCandidate em
+ * backend/utils/analyseRsiThresholdBacktest.js#resolveFromSignal), função pura do PICO de preço
+ * desde a entrada. `trailingStop.mode` escolhe a mecânica (ver TRAILING_STOP_MODES em
+ * tradeConfigSchema.js). Todas as fórmulas são MONOTÔNICAS aqui por construção (o `peak` só
+ * cresce e, nas trilhas de 2 fases, a fase B nunca fica acima do stop travado no fim da fase A) —
+ * o stop na corretora nunca é afrouxado (ver maybeReplaceTrailingStop, que só recria pra cima).
+ *
+ * 'atrTrail': precisa do ATR% do momento da compra em `trailingStop.atrPct` (injetado pelo
+ * rsi-momentum-bot.js a partir de rules_state.stopAtrPct). Sem ele, a fase B usa `wNearPct` (cai
+ * no comportamento da Trilha do Topo com largura única).
  */
 function computeTrailingStopPrice(entryPrice, peakPrice, trailingStop) {
     if (!(entryPrice > 0)) return null;
-    const startPct = Math.max(0.1, Number(trailingStop?.startPct ?? 5));
-    const coinStepPct = Math.max(0.1, Number(trailingStop?.coinStepPct ?? 1));
-    const stopStepPct = Math.max(0.1, Number(trailingStop?.stopStepPct ?? 1));
+    const num = (v, lo, dflt) => Math.max(lo, Number(v ?? dflt));
+    const mode = ['continuous', 'twoPhase', 'peakTrail', 'atrTrail'].includes(trailingStop?.mode)
+        ? trailingStop.mode : 'continuous';
+    const startPct = num(trailingStop?.startPct, 0.1, 5);
     const peak = Math.max(entryPrice, Number(peakPrice) || entryPrice);
     const gainPct = ((peak / entryPrice) - 1) * 100;
+    const baseStop = entryPrice * (1 - startPct / 100);
+
+    if (mode === 'twoPhase') {
+        // Distância do stop à entrada, em p.p. (positiva = abaixo/prejuízo). O pivô (lucro travado
+        // pivotPct%) fica na distância -pivotPct.
+        const pivotPct = Math.max(-5, Math.min(20, Number(trailingStop?.pivotPct ?? 1)));
+        const aCoin = num(trailingStop?.aCoinStepPct, 0.1, 3);
+        const aStop = num(trailingStop?.aStopStepPct, 0.1, 2.5);
+        const bCoin = num(trailingStop?.bCoinStepPct, 0.1, 3);
+        const bStop = num(trailingStop?.bStopStepPct, 0.1, 1);
+        const pivotDistPct = -pivotPct;
+        const stepsA = Math.floor(gainPct / aCoin);
+        const stopPctA = startPct - stepsA * aStop;
+        if (stopPctA > pivotDistPct) return entryPrice * (1 - stopPctA / 100);
+        const gainAtPivot = ((startPct - pivotDistPct) / aStop) * aCoin;
+        const stepsB = Math.floor(Math.max(0, gainPct - gainAtPivot) / bCoin);
+        return entryPrice * (1 - (pivotDistPct - stepsB * bStop) / 100);
+    }
+
+    if (mode === 'peakTrail' || mode === 'atrTrail') {
+        const pivotGainPct = num(trailingStop?.pivotGainPct, 0.1, 5);
+        const wNear = num(trailingStop?.wNearPct, 0.1, 4);
+        let wFar;
+        if (mode === 'atrTrail') {
+            const atrPct = Number(trailingStop?.atrPct);
+            const atrMult = num(trailingStop?.atrMult, 0.1, 2);
+            const atrMaxPct = num(trailingStop?.atrMaxPct, 0.5, 12);
+            wFar = Number.isFinite(atrPct) ? Math.min(atrMaxPct, atrMult * atrPct) : wNear;
+        } else {
+            wFar = num(trailingStop?.wFarPct, 0.1, 9);
+        }
+        if (gainPct < pivotGainPct) {
+            return Math.max(baseStop, peak * (1 - wNear / 100));
+        }
+        // Fase B: piso = stop que a fase A teria travado no limite do pivô (mantém a monotonia
+        // quando wFar > wNear afrouxaria o stop no cruzamento de fase).
+        const floorAtPivot = entryPrice * (1 + pivotGainPct / 100) * (1 - wNear / 100);
+        return Math.max(baseStop, floorAtPivot, peak * (1 - wFar / 100));
+    }
+
+    // 'continuous' — rampa linear única ancorada na entrada.
+    const coinStepPct = num(trailingStop?.coinStepPct, 0.1, 1);
+    const stopStepPct = num(trailingStop?.stopStepPct, 0.1, 1);
     const steps = Math.floor(gainPct / coinStepPct);
-    const currentStopPct = startPct - steps * stopStepPct;
-    return entryPrice * (1 - currentStopPct / 100);
+    return entryPrice * (1 - (startPct - steps * stopStepPct) / 100);
 }
 
 /**
@@ -501,13 +610,18 @@ function computeTrailingTargetPrice(entryPrice, peakPrice, trailingTarget, baseT
  *  - 'fixed' (padrão): entryPrice*(1+targetPct%), constante desde a entrada.
  *  - 'continuous': sobe em degraus com o `peakPrice`, contador PRÓPRIO
  *    (`trailingTarget.coinStepPct`), base = `restingBracket.targetPct` — ver computeTrailingTargetPrice.
- *  - 'off': sem alvo (targetPrice === null) — a posição só sai pelo stop.
+ *  - 'off': sem alvo — a posição só sai pelo stop (targetPrice === null, salvo pelo teto abaixo).
+ *
+ * TETO DE LUCRO (`exit.hardTakeProfit`) — venda FORÇADA, independente do targetMode: se ligado, o
+ * alvo efetivo é `min(alvo, entryPrice*(1+pct%))`. Com alvo 'off' ou contínuo (que persegue o
+ * pico e pode nunca preencher numa alta que reverte — ver EDENUSDT 28/08), o teto garante a
+ * saída ao tocar +pct%. `targetCapped` = true quando é o teto que está valendo.
  *
  * `peakPrice` é opcional — sem ele usa entryPrice como pico inicial. Quando alvo ou stop sobe de
  * degrau, essa perna da bracket é recriada na corretora (ver maybeReplaceTrailingStop).
  */
 function computeBracketPrices(config, entryPrice, peakPrice) {
-    if (!(entryPrice > 0)) return { targetPrice: null, stopPrice: null };
+    if (!(entryPrice > 0)) return { targetPrice: null, stopPrice: null, targetCapped: false };
     const baseTargetPct = Math.max(0.1, Number(config.exit?.restingBracket?.targetPct ?? 5));
     const trailingStop = config.exit?.trailingStop;
     const trailingTarget = config.exit?.trailingTarget;
@@ -519,12 +633,23 @@ function computeBracketPrices(config, entryPrice, peakPrice) {
         targetPrice = computeTrailingTargetPrice(entryPrice, peakPrice ?? entryPrice, trailingTarget, baseTargetPct);
     } else targetPrice = entryPrice * (1 + baseTargetPct / 100);
 
+    // Teto de lucro — clampa o alvo (ou cria um se targetMode='off').
+    let targetCapped = false;
+    const htp = config.exit?.hardTakeProfit;
+    if (htp?.enabled) {
+        const cap = entryPrice * (1 + Math.max(1, Math.min(200, Number(htp.pct ?? 15))) / 100);
+        if (targetPrice == null || cap < targetPrice) {
+            targetPrice = cap;
+            targetCapped = true;
+        }
+    }
+
     const stopPrice = trailingStop?.enabled
         ? computeTrailingStopPrice(entryPrice, peakPrice ?? entryPrice, trailingStop)
         : (config.stopLoss?.enabled
             ? computeStopLossFloor(entryPrice, entryPrice, { ...config.stopLoss, trailing: false })
             : null);
-    return { targetPrice, stopPrice };
+    return { targetPrice, stopPrice, targetCapped };
 }
 
 /** Saída via candle — fallback usado só quando não há bracket resting (desligada ou falhou ao
@@ -542,7 +667,7 @@ function evaluateExit(config, cMap, entryPrice, opts = {}) {
     const high = parseFloat(live.high ?? live.close);
     const low = parseFloat(live.low ?? live.close);
 
-    const { targetPrice, stopPrice } = computeBracketPrices(config, entryPrice, opts.peakPrice);
+    const { targetPrice, stopPrice, targetCapped } = computeBracketPrices(config, entryPrice, opts.peakPrice);
 
     if (stopPrice != null && low <= stopPrice) {
         return {
@@ -553,13 +678,12 @@ function evaluateExit(config, cMap, entryPrice, opts = {}) {
     }
     if (targetPrice != null && high >= targetPrice) {
         const hitPct = entryPrice ? ((targetPrice - entryPrice) / entryPrice) * 100 : null;
-        return {
-            exit: true, reason: 'RSI_TARGET', close,
-            targetLevelValue: targetPrice,
-            exitDesc: resolveTargetMode(config) === 'continuous'
+        const exitDesc = targetCapped
+            ? `Teto de lucro +${config.exit.hardTakeProfit.pct}% (venda forçada)`
+            : resolveTargetMode(config) === 'continuous'
                 ? `Alvo contínuo +${hitPct != null ? hitPct.toFixed(1) : '?'}% de lucro`
-                : `Alvo fixo +${config.exit.restingBracket.targetPct}% de lucro`,
-        };
+                : `Alvo fixo +${config.exit.restingBracket.targetPct}% de lucro`;
+        return { exit: true, reason: 'RSI_TARGET', close, targetLevelValue: targetPrice, exitDesc };
     }
     return { exit: false, close };
 }
@@ -575,6 +699,8 @@ module.exports = {
     checkRsi5mFilter,
     checkPrevDayCloudFilter,
     checkMacdFilter,
+    checkHigherRsiFilter,
+    computeAtrPct,
     evaluateEntrySignal,
     evaluateExit,
     checkEntryLimitExpired,

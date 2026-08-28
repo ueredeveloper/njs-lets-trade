@@ -4,7 +4,8 @@ import { reloadCandles, getMaCrossScreenerConfig, saveMaCrossScreenerConfig,
   getRsiMomentumConfig, saveRsiMomentumConfig,
   getCacheSettings, saveCacheSettings } from '../services/api';
 import { RSI_MOMENTUM_ALL_INTERVALS, RSI_MOMENTUM_BB_PERIODS, RSI_MOMENTUM_BB_STD_DEVS, RSI_MOMENTUM_CLOUD_PCT_OPTIONS, RSI_MOMENTUM_CLOUD_INTERVAL_OPTIONS, RSI_MOMENTUM_CLOUD_CANDLE_COUNT_OPTIONS, RSI_MOMENTUM_TRAILING_TARGET_STEP_OPTIONS, RSI_MOMENTUM_BANDWIDTH_LOOKBACK_OPTIONS,
-  RSI_MOMENTUM_TARGET_MODE_OPTIONS, RSI_MOMENTUM_STOP_MODE_OPTIONS, RSI_MOMENTUM_TARGET_PCT_OPTIONS, RSI_MOMENTUM_COIN_STEP_OPTIONS, RSI_MOMENTUM_STOP_STEP_OPTIONS, RSI_MOMENTUM_STOP_PCT_OPTIONS }
+  RSI_MOMENTUM_TARGET_MODE_OPTIONS, RSI_MOMENTUM_STOP_MODE_OPTIONS, RSI_MOMENTUM_TARGET_PCT_OPTIONS, RSI_MOMENTUM_COIN_STEP_OPTIONS, RSI_MOMENTUM_STOP_STEP_OPTIONS, RSI_MOMENTUM_STOP_PCT_OPTIONS,
+  RSI_MOMENTUM_PIVOT_PCT_OPTIONS, RSI_MOMENTUM_PIVOT_GAIN_OPTIONS, RSI_MOMENTUM_WIDTH_PCT_OPTIONS, RSI_MOMENTUM_ATR_MULT_OPTIONS, RSI_MOMENTUM_HARD_TP_OPTIONS }
   from '../constants/rsiMomentumConfigSchema';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useI18n } from '../i18n';
@@ -1208,6 +1209,39 @@ export default function SettingsSidebar({ open, onClose }) {
                             <p className="text-[9px] text-p5/40 mt-1 leading-relaxed">{t('settings.rsimomentum_target_continuous_hint')}</p>
                           </>
                         )}
+
+                        {/* Teto de lucro — venda forçada, independente do modo do alvo */}
+                        {(() => {
+                          const htp = rsiMomentumConfig.exit.hardTakeProfit ?? { enabled: true, pct: 15 };
+                          return (
+                            <div className="mt-2 pt-2 border-t border-p3/30">
+                              <label className="flex items-start gap-2.5 cursor-pointer group mb-1">
+                                <input
+                                  type="checkbox"
+                                  checked={htp.enabled}
+                                  onChange={(e) => patchRsiMomentumNested('exit', 'hardTakeProfit', { enabled: e.target.checked })}
+                                  className="mt-0.5 shrink-0 accent-p4"
+                                />
+                                <span className="text-p5 text-xs leading-snug group-hover:text-white transition-colors">
+                                  {t('settings.rsimomentum_hardtp_enabled')}
+                                </span>
+                              </label>
+                              {htp.enabled && (
+                                <label className="flex flex-col gap-1 w-1/2">
+                                  <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_hardtp_pct')}</span>
+                                  <select
+                                    className={`${inp} w-full`}
+                                    value={htp.pct}
+                                    onChange={(e) => patchRsiMomentumNested('exit', 'hardTakeProfit', { pct: Number(e.target.value) })}
+                                  >
+                                    {RSI_MOMENTUM_HARD_TP_OPTIONS.map((v) => <option key={v} value={v}>+{v}%</option>)}
+                                  </select>
+                                </label>
+                              )}
+                              <p className="text-[9px] text-p5/40 mt-1 leading-relaxed">{t('settings.rsimomentum_hardtp_hint')}</p>
+                            </div>
+                          );
+                        })()}
                       </>
                     );
                   })()}
@@ -1218,68 +1252,84 @@ export default function SettingsSidebar({ open, onClose }) {
                   <p className="text-p5/70 text-[10px] font-semibold uppercase tracking-wider mb-2">{t('settings.rsimomentum_stop_title')}</p>
                   {(() => {
                     const ts = rsiMomentumConfig.exit.trailingStop;
-                    const stopMode = ts.enabled ? 'continuous' : 'fixed';
+                    const stopMode = !ts.enabled ? 'fixed' : (ts.mode ?? 'continuous');
+                    const patchTs = (patch) => patchRsiMomentumNested('exit', 'trailingStop', patch);
+                    const onModeChange = (v) => patchTs(v === 'fixed' ? { enabled: false } : { enabled: true, mode: v });
+                    const Fld = ({ label, value, opts, onChange, fmt = (x) => x }) => (
+                      <label className="flex flex-col gap-1">
+                        <span className="text-[9px] text-p5/40">{label}</span>
+                        <select className={`${inp} w-full`} value={value} onChange={(e) => onChange(Number(e.target.value))}>
+                          {opts.map((v) => <option key={v} value={v}>{fmt(v)}</option>)}
+                        </select>
+                      </label>
+                    );
                     return (
                       <>
                         <label className="flex flex-col gap-1 mb-2">
                           <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_stop_mode')}</span>
-                          <select
-                            className={`${inp} w-full`}
-                            value={stopMode}
-                            onChange={(e) => patchRsiMomentumNested('exit', 'trailingStop', { enabled: e.target.value === 'continuous' })}
-                          >
+                          <select className={`${inp} w-full`} value={stopMode} onChange={(e) => onModeChange(e.target.value)}>
                             {RSI_MOMENTUM_STOP_MODE_OPTIONS.map((m) => (
                               <option key={m} value={m}>{t(`settings.rsimomentum_stop_mode_${m}`)}</option>
                             ))}
                           </select>
                         </label>
+
                         {stopMode === 'fixed' && (
-                          <label className="flex flex-col gap-1">
-                            <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_stop_loss_pct')}</span>
-                            <select
-                              className={`${inp} w-full`}
-                              value={rsiMomentumConfig.stopLoss.maxLossPct}
-                              onChange={(e) => patchRsiMomentum('stopLoss', { maxLossPct: Number(e.target.value) })}
-                            >
-                              {RSI_MOMENTUM_STOP_PCT_OPTIONS.map((v) => <option key={v} value={v}>-{v}%</option>)}
-                            </select>
-                          </label>
+                          <Fld label={t('settings.rsimomentum_stop_loss_pct')}
+                            value={rsiMomentumConfig.stopLoss.maxLossPct}
+                            opts={RSI_MOMENTUM_STOP_PCT_OPTIONS}
+                            onChange={(v) => patchRsiMomentum('stopLoss', { maxLossPct: v })}
+                            fmt={(v) => `-${v}%`} />
                         )}
+
                         {stopMode === 'continuous' && (
                           <>
                             <div className="grid grid-cols-3 gap-2">
-                              <label className="flex flex-col gap-1">
-                                <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_trailingstop_start_pct')}</span>
-                                <select
-                                  className={`${inp} w-full`}
-                                  value={ts.startPct}
-                                  onChange={(e) => patchRsiMomentumNested('exit', 'trailingStop', { startPct: Number(e.target.value) })}
-                                >
-                                  {RSI_MOMENTUM_STOP_PCT_OPTIONS.map((v) => <option key={v} value={v}>-{v}%</option>)}
-                                </select>
-                              </label>
-                              <label className="flex flex-col gap-1">
-                                <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_trailingstop_stop_step')}</span>
-                                <select
-                                  className={`${inp} w-full`}
-                                  value={ts.stopStepPct}
-                                  onChange={(e) => patchRsiMomentumNested('exit', 'trailingStop', { stopStepPct: Number(e.target.value) })}
-                                >
-                                  {RSI_MOMENTUM_STOP_STEP_OPTIONS.map((v) => <option key={v} value={v}>{v} pp</option>)}
-                                </select>
-                              </label>
-                              <label className="flex flex-col gap-1">
-                                <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_trailingstop_coin_step')}</span>
-                                <select
-                                  className={`${inp} w-full`}
-                                  value={ts.coinStepPct}
-                                  onChange={(e) => patchRsiMomentumNested('exit', 'trailingStop', { coinStepPct: Number(e.target.value) })}
-                                >
-                                  {RSI_MOMENTUM_COIN_STEP_OPTIONS.map((v) => <option key={v} value={v}>{v}%</option>)}
-                                </select>
-                              </label>
+                              <Fld label={t('settings.rsimomentum_trailingstop_start_pct')} value={ts.startPct} opts={RSI_MOMENTUM_STOP_PCT_OPTIONS} onChange={(v) => patchTs({ startPct: v })} fmt={(v) => `-${v}%`} />
+                              <Fld label={t('settings.rsimomentum_trailingstop_stop_step')} value={ts.stopStepPct} opts={RSI_MOMENTUM_STOP_STEP_OPTIONS} onChange={(v) => patchTs({ stopStepPct: v })} fmt={(v) => `${v} pp`} />
+                              <Fld label={t('settings.rsimomentum_trailingstop_coin_step')} value={ts.coinStepPct} opts={RSI_MOMENTUM_COIN_STEP_OPTIONS} onChange={(v) => patchTs({ coinStepPct: v })} fmt={(v) => `${v}%`} />
                             </div>
                             <p className="text-[9px] text-p5/40 mt-1 leading-relaxed">{t('settings.rsimomentum_trailingstop_hint')}</p>
+                          </>
+                        )}
+
+                        {stopMode === 'twoPhase' && (
+                          <>
+                            <div className="grid grid-cols-2 gap-2">
+                              <Fld label={t('settings.rsimomentum_trailingstop_start_pct')} value={ts.startPct} opts={RSI_MOMENTUM_STOP_PCT_OPTIONS} onChange={(v) => patchTs({ startPct: v })} fmt={(v) => `-${v}%`} />
+                              <Fld label={t('settings.rsimomentum_ts_pivot_pct')} value={ts.pivotPct} opts={RSI_MOMENTUM_PIVOT_PCT_OPTIONS} onChange={(v) => patchTs({ pivotPct: v })} fmt={(v) => (v === 0 ? '0 (BE)' : `${v > 0 ? '+' : ''}${v}%`)} />
+                            </div>
+                            <div className="grid grid-cols-2 gap-2 mt-2">
+                              <Fld label={t('settings.rsimomentum_ts_phase_a_stop')} value={ts.aStopStepPct} opts={RSI_MOMENTUM_STOP_STEP_OPTIONS} onChange={(v) => patchTs({ aStopStepPct: v })} fmt={(v) => `${v} pp`} />
+                              <Fld label={t('settings.rsimomentum_ts_phase_a_coin')} value={ts.aCoinStepPct} opts={RSI_MOMENTUM_COIN_STEP_OPTIONS} onChange={(v) => patchTs({ aCoinStepPct: v })} fmt={(v) => `/ ${v}%`} />
+                              <Fld label={t('settings.rsimomentum_ts_phase_b_stop')} value={ts.bStopStepPct} opts={RSI_MOMENTUM_STOP_STEP_OPTIONS} onChange={(v) => patchTs({ bStopStepPct: v })} fmt={(v) => `${v} pp`} />
+                              <Fld label={t('settings.rsimomentum_ts_phase_b_coin')} value={ts.bCoinStepPct} opts={RSI_MOMENTUM_COIN_STEP_OPTIONS} onChange={(v) => patchTs({ bCoinStepPct: v })} fmt={(v) => `/ ${v}%`} />
+                            </div>
+                            <p className="text-[9px] text-p5/40 mt-1 leading-relaxed">{t('settings.rsimomentum_ts_twophase_hint')}</p>
+                          </>
+                        )}
+
+                        {(stopMode === 'peakTrail' || stopMode === 'atrTrail') && (
+                          <>
+                            <div className="grid grid-cols-3 gap-2">
+                              <Fld label={t('settings.rsimomentum_trailingstop_start_pct')} value={ts.startPct} opts={RSI_MOMENTUM_STOP_PCT_OPTIONS} onChange={(v) => patchTs({ startPct: v })} fmt={(v) => `-${v}%`} />
+                              <Fld label={t('settings.rsimomentum_ts_pivot_gain')} value={ts.pivotGainPct} opts={RSI_MOMENTUM_PIVOT_GAIN_OPTIONS} onChange={(v) => patchTs({ pivotGainPct: v })} fmt={(v) => `+${v}%`} />
+                              <Fld label={t('settings.rsimomentum_ts_w_near')} value={ts.wNearPct} opts={RSI_MOMENTUM_WIDTH_PCT_OPTIONS} onChange={(v) => patchTs({ wNearPct: v })} fmt={(v) => `-${v}%`} />
+                            </div>
+                            {stopMode === 'peakTrail' && (
+                              <div className="grid grid-cols-3 gap-2 mt-2">
+                                <Fld label={t('settings.rsimomentum_ts_w_far')} value={ts.wFarPct} opts={RSI_MOMENTUM_WIDTH_PCT_OPTIONS} onChange={(v) => patchTs({ wFarPct: v })} fmt={(v) => `-${v}%`} />
+                              </div>
+                            )}
+                            {stopMode === 'atrTrail' && (
+                              <div className="grid grid-cols-3 gap-2 mt-2">
+                                <Fld label={t('settings.rsimomentum_ts_atr_mult')} value={ts.atrMult} opts={RSI_MOMENTUM_ATR_MULT_OPTIONS} onChange={(v) => patchTs({ atrMult: v })} fmt={(v) => `${v}×`} />
+                                <Fld label={t('settings.rsimomentum_ts_atr_max')} value={ts.atrMaxPct} opts={RSI_MOMENTUM_WIDTH_PCT_OPTIONS} onChange={(v) => patchTs({ atrMaxPct: v })} fmt={(v) => `-${v}%`} />
+                              </div>
+                            )}
+                            <p className="text-[9px] text-p5/40 mt-1 leading-relaxed">
+                              {t(stopMode === 'atrTrail' ? 'settings.rsimomentum_ts_atrtrail_hint' : 'settings.rsimomentum_ts_peaktrail_hint')}
+                            </p>
                           </>
                         )}
                       </>
@@ -1486,6 +1536,35 @@ export default function SettingsSidebar({ open, onClose }) {
                         onChange={(e) => patchRsiMomentumNested('entry', 'macdFilter', { interval: e.target.value })}
                       >
                         {RSI_MOMENTUM_ALL_INTERVALS.map((iv) => <option key={iv} value={iv}>{iv}</option>)}
+                      </select>
+                    </label>
+                  )}
+                </div>
+
+                {/* Filtro RSI 1h — confirmação multi-timeframe (intervalo fixo 1h) */}
+                <div className="rounded-md p-2.5" style={{ background: '#0f1219', border: '1px solid #2a2d3a' }}>
+                  <p className="text-p5/70 text-[10px] font-semibold uppercase tracking-wider mb-1">{t('settings.rsimomentum_higherrsi_title')}</p>
+                  <p className="text-[10px] text-p5/40 mb-2 leading-relaxed">{t('settings.rsimomentum_higherrsi_hint')}</p>
+                  <label className="flex items-start gap-2.5 cursor-pointer group mb-2">
+                    <input
+                      type="checkbox"
+                      checked={rsiMomentumConfig.entry.higherRsiFilter?.enabled ?? false}
+                      onChange={(e) => patchRsiMomentumNested('entry', 'higherRsiFilter', { enabled: e.target.checked })}
+                      className="mt-0.5 shrink-0 accent-p4"
+                    />
+                    <span className="text-p5 text-xs leading-snug group-hover:text-white transition-colors">
+                      {t('settings.rsimomentum_higherrsi_enabled')}
+                    </span>
+                  </label>
+                  {(rsiMomentumConfig.entry.higherRsiFilter?.enabled ?? false) && (
+                    <label className="flex flex-col gap-1 w-1/2">
+                      <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_higherrsi_min')}</span>
+                      <select
+                        className={`${inp} w-full`}
+                        value={rsiMomentumConfig.entry.higherRsiFilter?.minRsi ?? 50}
+                        onChange={(e) => patchRsiMomentumNested('entry', 'higherRsiFilter', { minRsi: Number(e.target.value) })}
+                      >
+                        {[40, 45, 50, 55, 60, 65, 70].map((v) => <option key={v} value={v}>{v}</option>)}
                       </select>
                     </label>
                   )}

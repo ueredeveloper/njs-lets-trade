@@ -6,6 +6,7 @@ import {
 } from '../services/api';
 import Tooltip from './Tooltip';
 import CloudZoneChart from './CloudZoneChart';
+import Rsi1hBreakdownChart from './Rsi1hBreakdownChart';
 import StatsAccordion from './StatsAccordion';
 import { useI18n } from '../i18n';
 import { CHART_VIEW } from '../utils/chartView';
@@ -60,6 +61,28 @@ function SummaryCard({ label, value, highlight, tooltip }) {
     </div>
   );
   return tooltip ? <Tooltip text={tooltip} maxW={220}>{card}</Tooltip> : card;
+}
+
+/** Card de área do formulário RSI Momentum — agrupa os controles por tema (Estratégia de entrada /
+ *  Condições de mercado / Filtros e risco), cada um com gradiente e borda próprios. Só visual, não
+ *  toca estado nem lógica. Layout inspirado no mockup enviado pelo usuário. */
+const STATS_AREA_STYLE = {
+  strategy: { background: 'linear-gradient(135deg, rgba(38,83,135,.30), rgba(28,37,74,.42))', borderColor: '#2d6798' },
+  market:   { background: 'linear-gradient(135deg, rgba(66,43,117,.34), rgba(45,28,74,.44))', borderColor: '#6848a0' },
+  risk:     { background: 'linear-gradient(135deg, rgba(112,61,37,.26), rgba(61,31,45,.46))', borderColor: '#895036' },
+};
+
+function StatsArea({ variant, icon, title, children }) {
+  return (
+    <section className="rounded-lg border p-2.5" style={STATS_AREA_STYLE[variant]}>
+      <div className="flex items-center gap-2 mb-2">
+        <span className="w-5 h-5 rounded-md bg-white/10 flex items-center justify-center text-[11px] leading-none">{icon}</span>
+        <span className="text-[10px] font-bold uppercase tracking-wider text-p5/80">{title}</span>
+        <span className="h-px flex-1 bg-white/10" />
+      </div>
+      {children}
+    </section>
+  );
 }
 
 const TABS = [
@@ -294,6 +317,10 @@ const RSI_MOM_VOLUME_OPTIONS = [0, 1_000_000, 2_000_000, 5_000_000, 30_000_000];
 /** Valores selecionáveis do filtro ADX — mínimo exigido pra considerar tendência confirmada
  *  (20/25 são os limiares mais citados na literatura pra distinguir tendência de range). */
 const RSI_MOM_ADX_MIN_OPTIONS = [15, 20, 25, 30];
+/** Valores selecionáveis do filtro "RSI 1h mín." (confirmação multi-timeframe) — 50 é a linha de
+ *  momentum / limite inferior da faixa de alta de Brown-Cardwell; grade grossa de propósito
+ *  (evitar otimizar um valor fino no mesmo histórico — ver conversa sobre data snooping). */
+const RSI_MOM_HIGHER_RSI_MIN_OPTIONS = [40, 45, 50, 55, 60, 65, 70];
 /** Valores selecionáveis do campo "Janela" — restringe os SINAIS às últimas N horas (ex.:
  *  "moedas que atingiram RSI 70 nas últimas 6/7/8 horas"). 0 = desligado, usa todo o histórico
  *  definido em Candles. */
@@ -303,9 +330,22 @@ const RSI_MOM_LOOKBACK_HOURS_OPTIONS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 12, 24, 48, 7
 const RSI_MOM_TRAILING_STEP_OPTIONS = [1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6];
 /** Quantos p.p. o alvo/stop contínuo sobe a cada degrau. */
 const RSI_MOM_TRAILING_TARGET_STEP_OPTIONS = [1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6, 8, 10];
-/** Modos do ALVO / do STOP — independentes um do outro. */
+/** Modos do ALVO / do STOP — independentes um do outro. Modos do stop: 'fixed' (constante) |
+ *  'continuous' (rampa única, ancorada na entrada) | 'twoPhase' (Escada Dupla: 2 inclinações) |
+ *  'peakTrail' (Trilha do Topo: % abaixo do pico, 2 fases) | 'atrTrail' (Trilha ATR: fase B = ATR).
+ *  Ver backend/utils/analyseRsiThresholdBacktest.js (options.trailingStop.mode). */
 const RSI_MOM_TARGET_MODE_OPTIONS = ['fixed', 'continuous', 'off'];
-const RSI_MOM_STOP_MODE_OPTIONS = ['fixed', 'continuous'];
+const RSI_MOM_STOP_MODE_OPTIONS = ['fixed', 'continuous', 'twoPhase', 'peakTrail', 'atrTrail'];
+/** Teto de lucro (venda forçada em +X%) — exit.hardTakeProfit. Independente do modo do alvo. */
+const RSI_MOM_HARD_TP_OPTIONS = [8, 10, 12, 15, 18, 20, 25, 30, 40, 50];
+/** Lucro travado (%) que separa a fase A da B na Escada Dupla (0 = breakeven). */
+const RSI_MOM_PIVOT_PCT_OPTIONS = [0, 0.5, 1, 1.5, 2, 3];
+/** Ganho do pico (%) que troca da fase apertada pra solta na Trilha do Topo / Trilha ATR. */
+const RSI_MOM_PIVOT_GAIN_OPTIONS = [2, 3, 4, 5, 6, 7, 8, 10];
+/** Largura (% abaixo do pico) das fases da Trilha do Topo, e teto da Trilha ATR. */
+const RSI_MOM_WIDTH_PCT_OPTIONS = [2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15];
+/** Multiplicador do ATR na fase B da Trilha ATR. */
+const RSI_MOM_ATR_MULT_OPTIONS = [1, 1.5, 2, 2.5, 3, 3.5, 4];
 /** Teto selecionável do card "Dias c/ 2+ entradas" — null (padrão) = sem teto, mesmo cálculo de
  *  sempre (>=2, qualquer quantidade). Um valor aqui troca o card por "% de dias com 2 a N
  *  entradas", medindo especificamente a frequência de dias DENTRO dessa faixa (2 pode virar 10
@@ -319,6 +359,8 @@ const RSI_MOM_DEFAULT_PREFS = {
   pullbackPct: 0,
   targetMode: 'fixed',
   targetPct: 5,
+  hardTakeProfitEnabled: false,
+  hardTakeProfitPct: 15,
   stopMode: 'continuous',
   stopLossPct: 5,
   positionSizeUsd: 40,
@@ -339,10 +381,24 @@ const RSI_MOM_DEFAULT_PREFS = {
   adxFilterMinAdx: 25,
   macdFilterEnabled: false,
   macdFilterInterval: '1h',
+  higherRsiFilterEnabled: false,
+  higherRsiFilterMinRsi: 50,
   trailingCoinStepPct: 3,
   trailingStopStepPct: 2,
   trailingTargetCoinStepPct: 3,
   trailingTargetStepPct: 3,
+  // Escada Dupla (stopMode 'twoPhase')
+  tsPivotPct: 1,
+  tsPhaseACoinStep: 3,
+  tsPhaseAStopStep: 2.5,
+  tsPhaseBCoinStep: 3,
+  tsPhaseBStopStep: 1,
+  // Trilha do Topo / Trilha ATR (stopMode 'peakTrail' / 'atrTrail')
+  tsPivotGainPct: 5,
+  tsWNearPct: 4,
+  tsWFarPct: 9,
+  tsAtrMult: 2,
+  tsAtrMaxPct: 12,
   allCoins: false,
   entriesDayRangeMax: null,
 };
@@ -972,6 +1028,32 @@ function RsiMomentumStats({ autoCalc }) {
     } catch { /* silencioso */ }
   }
 
+  /** Baixa um .json com a configuração usada (form do painel + config normalizada mandada ao
+   *  backtest) e TODOS os valores da tabela — agregados + a lista completa de ocorrências
+   *  (`result.occurrences`, incluindo signalRsi/signalRsi1h). É a tabela inteira devolvida pelo
+   *  backend, não só as linhas visíveis: os filtros/ordenação da tela são só de visualização. */
+  function handleDownloadJson() {
+    if (!result) return;
+    const scope = prefs.allCoins ? 'todas-moedas' : (result.symbol || symbol || 'moeda');
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      scope,
+      interval: result.interval,
+      panelConfig: prefs,   // o que está selecionado no painel (RSI_MOM_PREFS)
+      backtest: result,     // config normalizada + agregados + occurrences
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
+    a.href = url;
+    a.download = `rsi-momentum-stats_${scope}_${result.interval}_${stamp}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
   const inp = 'bg-p2 border border-p3/40 text-p5 text-[10px] sm:text-xs rounded px-1 sm:px-2 py-1 focus:outline-none focus:border-p4 w-full';
   const inpNum = `${inp} [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none`;
 
@@ -996,6 +1078,7 @@ function RsiMomentumStats({ autoCalc }) {
       symbol: (o) => o.symbol ?? '',
       signalDate: (o) => new Date(o.signalDate).getTime(),
       signalRsi: (o) => o.signalRsi,
+      signalRsi1h: (o) => o.signalRsi1h ?? -Infinity,
       entryPrice: (o) => o.entryPrice ?? -Infinity,
       outcome: (o) => o.outcome ?? '',
       exitDate: (o) => (o.exitDate ? new Date(o.exitDate).getTime() : -Infinity),
@@ -1028,19 +1111,42 @@ function RsiMomentumStats({ autoCalc }) {
     try {
       // Alvo e stop são INDEPENDENTES (ver options.targetMode / options.trailingStop em
       // analyseRsiThresholdBacktest.js). Alvo: 'fixed' | 'continuous' (base targetPct% + degraus
-      // com contador próprio) | 'off' (sem alvo). Stop: 'fixed' (stopLossPct) | 'continuous'.
-      const stopContinuous = p.stopMode === 'continuous';
+      // com contador próprio) | 'off' (sem alvo). Stop: 'fixed' | 'continuous' (rampa única) |
+      // 'twoPhase' (Escada Dupla) | 'peakTrail' (Trilha do Topo) | 'atrTrail' (Trilha ATR).
+      const stopTrailing = p.stopMode !== 'fixed';
       const commonOptions = {
         rsiThreshold: p.rsiThreshold,
         pullbackPct: p.pullbackPct,
         targetPct: p.targetPct,
         stopLossPct: p.stopLossPct,
         targetMode: p.targetMode,
-        trailingStop: stopContinuous ? {
+        hardTakeProfit: p.hardTakeProfitEnabled ? { enabled: true, pct: p.hardTakeProfitPct } : null,
+        trailingStop: stopTrailing ? {
           enabled: true,
+          mode: p.stopMode,
           startPct: p.stopLossPct,
-          coinStepPct: p.trailingCoinStepPct,
-          stopStepPct: p.trailingStopStepPct,
+          ...(p.stopMode === 'continuous' ? {
+            coinStepPct: p.trailingCoinStepPct,
+            stopStepPct: p.trailingStopStepPct,
+          } : {}),
+          ...(p.stopMode === 'twoPhase' ? {
+            pivotPct: p.tsPivotPct,
+            aCoinStepPct: p.tsPhaseACoinStep,
+            aStopStepPct: p.tsPhaseAStopStep,
+            bCoinStepPct: p.tsPhaseBCoinStep,
+            bStopStepPct: p.tsPhaseBStopStep,
+          } : {}),
+          ...(p.stopMode === 'peakTrail' ? {
+            pivotGainPct: p.tsPivotGainPct,
+            wNearPct: p.tsWNearPct,
+            wFarPct: p.tsWFarPct,
+          } : {}),
+          ...(p.stopMode === 'atrTrail' ? {
+            pivotGainPct: p.tsPivotGainPct,
+            wNearPct: p.tsWNearPct,
+            atrMult: p.tsAtrMult,
+            atrMaxPct: p.tsAtrMaxPct,
+          } : {}),
         } : null,
         trailingTarget: p.targetMode === 'continuous' ? {
           coinStepPct: p.trailingTargetCoinStepPct,
@@ -1072,6 +1178,10 @@ function RsiMomentumStats({ autoCalc }) {
         macdFilter: p.macdFilterEnabled ? {
           enabled: true,
           interval: p.macdFilterInterval,
+        } : null,
+        higherRsiFilter: p.higherRsiFilterEnabled ? {
+          enabled: true,
+          minRsi: p.higherRsiFilterMinRsi,
         } : null,
         entriesDayRange: p.entriesDayRangeMax != null ? { min: 2, max: p.entriesDayRangeMax } : null,
       };
@@ -1148,7 +1258,10 @@ function RsiMomentumStats({ autoCalc }) {
 
   return (
     <div className="flex flex-col gap-2 w-full">
-      <div className="flex flex-row gap-1 md:gap-2 items-end w-full md:w-auto md:shrink-0 flex-wrap">
+      <div className="flex flex-col gap-2.5 w-full">
+      {/* Barra de ação — escopo (uma moeda / todas) + "usar intervalo do MC". O botão Buscar e o
+          log de pesquisas ficam no rodapé do formulário. */}
+      <div className="flex flex-row gap-1 md:gap-2 items-end w-full flex-wrap">
         {/* Todas as moedas — desliga o campo Símbolo e roda o cálculo em todos os pares USDT
             ativos de uma vez (ver backend/utils/analyseRsiThresholdBacktestMarket.js). */}
         <div className="flex items-center gap-1 shrink-0 pb-1" title={t('stats.tip.all_coins')}>
@@ -1175,6 +1288,12 @@ function RsiMomentumStats({ autoCalc }) {
           </div>
         )}
 
+        {!prefs.allCoins && <McIntervalSwitch checked={useMcInterval} onChange={handleToggleMc} />}
+      </div>
+
+      {/* ÁREA — Estratégia de entrada: gatilho de RSI + alvo */}
+      <StatsArea variant="strategy" icon="🎯" title={t('stats.area_strategy')}>
+       <div className="flex flex-row gap-1 md:gap-2 items-end flex-wrap">
         <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[56px]">
           <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">Intervalo</label>
           <select className={inp} value={interval} onChange={(e) => setInterval(e.target.value)}>
@@ -1199,9 +1318,11 @@ function RsiMomentumStats({ autoCalc }) {
           </select>
         </div>
 
-        {/* ALVO — modo (fixo/contínuo/desligado) + valores, INDEPENDENTE do stop */}
+        {/* ALVO — modo (fixo/contínuo/desligado) + valores, INDEPENDENTE do stop. Agrupado num
+            bloco de fundo verde pra separar visualmente do STOP (vermelho) e dos campos de entrada. */}
+        <div className="flex flex-row gap-1 md:gap-2 items-end flex-wrap rounded-md border border-emerald-500/25 bg-emerald-500/10 px-1.5 py-1">
         <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[64px]" title={t('stats.tip.target_mode')}>
-          <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.target_mode')}</label>
+          <label className="hidden md:block text-[9px] text-emerald-400/70 uppercase tracking-wider">{t('stats.target_mode')}</label>
           <select className={inp}
             value={prefs.targetMode}
             onChange={(e) => patchPrefs({ targetMode: e.target.value })}>
@@ -1240,19 +1361,42 @@ function RsiMomentumStats({ autoCalc }) {
             </div>
           </>
         )}
+        {/* Teto de lucro — venda forçada em +X%, independente do modo do alvo */}
+        <div className="flex items-center gap-1 shrink-0 pb-1" title={t('stats.tip.hard_tp')}>
+          <span className="hidden md:inline text-[9px] text-emerald-400/70 uppercase tracking-wider">{t('stats.hard_tp')}</span>
+          <button
+            type="button"
+            onClick={() => patchPrefs({ hardTakeProfitEnabled: !prefs.hardTakeProfitEnabled })}
+            className={`relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${prefs.hardTakeProfitEnabled ? 'bg-p4' : 'bg-p3/40'}`}
+          >
+            <span className={`inline-block h-3 w-3 rounded-full bg-white shadow transition-transform ${prefs.hardTakeProfitEnabled ? 'translate-x-3' : 'translate-x-0'}`} />
+          </button>
+        </div>
+        {prefs.hardTakeProfitEnabled && (
+          <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.hard_tp')}>
+            <label className="hidden md:block text-[9px] text-emerald-400/70 uppercase tracking-wider">{t('stats.hard_tp_pct')}</label>
+            <select className={inp}
+              value={prefs.hardTakeProfitPct}
+              onChange={(e) => patchPrefs({ hardTakeProfitPct: Number(e.target.value) })}>
+              {RSI_MOM_HARD_TP_OPTIONS.map((v) => <option key={v} value={v}>+{v}%</option>)}
+            </select>
+          </div>
+        )}
+        </div>
 
-        {/* STOP — modo (fixo/contínuo) + valores, INDEPENDENTE do alvo */}
+        {/* STOP — modo (fixo/contínuo/…) + valores, INDEPENDENTE do alvo. Bloco de fundo vermelho. */}
+        <div className="flex flex-row gap-1 md:gap-2 items-end flex-wrap rounded-md border border-red-500/25 bg-red-500/10 px-1.5 py-1">
         <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[56px]" title={t('stats.tip.stop_mode')}>
-          <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.stop_mode')}</label>
+          <label className="hidden md:block text-[9px] text-red-400/70 uppercase tracking-wider">{t('stats.stop_mode')}</label>
           <select className={inp}
             value={prefs.stopMode}
             onChange={(e) => patchPrefs({ stopMode: e.target.value })}>
             {RSI_MOM_STOP_MODE_OPTIONS.map((m) => <option key={m} value={m}>{t(`stats.stop_mode_${m}`)}</option>)}
           </select>
         </div>
-        <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={prefs.stopMode === 'continuous' ? t('stats.tip.trailing_start_pct') : t('stats.tip.stop_pct')}>
+        <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={prefs.stopMode !== 'fixed' ? t('stats.tip.trailing_start_pct') : t('stats.tip.stop_pct')}>
           <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">
-            {prefs.stopMode === 'continuous' ? t('stats.trailing_start_pct') : t('stats.stop_pct')}
+            {prefs.stopMode !== 'fixed' ? t('stats.trailing_start_pct') : t('stats.stop_pct')}
           </label>
           <select className={inp}
             value={prefs.stopLossPct}
@@ -1280,6 +1424,89 @@ function RsiMomentumStats({ autoCalc }) {
             </div>
           </>
         )}
+        {prefs.stopMode === 'twoPhase' && (
+          <>
+            <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.ts_pivot_pct')}>
+              <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.ts_pivot_pct')}</label>
+              <select className={inp} value={prefs.tsPivotPct}
+                onChange={(e) => patchPrefs({ tsPivotPct: Number(e.target.value) })}>
+                {RSI_MOM_PIVOT_PCT_OPTIONS.map((v) => <option key={v} value={v}>{v === 0 ? '0 (BE)' : `+${v}%`}</option>)}
+              </select>
+            </div>
+            <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.ts_phase_a')}>
+              <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.ts_phase_a')}</label>
+              <div className="flex gap-0.5">
+                <select className={inp} value={prefs.tsPhaseAStopStep}
+                  onChange={(e) => patchPrefs({ tsPhaseAStopStep: Number(e.target.value) })}>
+                  {RSI_MOM_TRAILING_TARGET_STEP_OPTIONS.map((v) => <option key={v} value={v}>{v}pp</option>)}
+                </select>
+                <select className={inp} value={prefs.tsPhaseACoinStep}
+                  onChange={(e) => patchPrefs({ tsPhaseACoinStep: Number(e.target.value) })}>
+                  {RSI_MOM_TRAILING_STEP_OPTIONS.map((v) => <option key={v} value={v}>/{v}%</option>)}
+                </select>
+              </div>
+            </div>
+            <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.ts_phase_b')}>
+              <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.ts_phase_b')}</label>
+              <div className="flex gap-0.5">
+                <select className={inp} value={prefs.tsPhaseBStopStep}
+                  onChange={(e) => patchPrefs({ tsPhaseBStopStep: Number(e.target.value) })}>
+                  {RSI_MOM_TRAILING_TARGET_STEP_OPTIONS.map((v) => <option key={v} value={v}>{v}pp</option>)}
+                </select>
+                <select className={inp} value={prefs.tsPhaseBCoinStep}
+                  onChange={(e) => patchPrefs({ tsPhaseBCoinStep: Number(e.target.value) })}>
+                  {RSI_MOM_TRAILING_STEP_OPTIONS.map((v) => <option key={v} value={v}>/{v}%</option>)}
+                </select>
+              </div>
+            </div>
+          </>
+        )}
+        {(prefs.stopMode === 'peakTrail' || prefs.stopMode === 'atrTrail') && (
+          <>
+            <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.ts_pivot_gain')}>
+              <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.ts_pivot_gain')}</label>
+              <select className={inp} value={prefs.tsPivotGainPct}
+                onChange={(e) => patchPrefs({ tsPivotGainPct: Number(e.target.value) })}>
+                {RSI_MOM_PIVOT_GAIN_OPTIONS.map((v) => <option key={v} value={v}>+{v}%</option>)}
+              </select>
+            </div>
+            <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.ts_w_near')}>
+              <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.ts_w_near')}</label>
+              <select className={inp} value={prefs.tsWNearPct}
+                onChange={(e) => patchPrefs({ tsWNearPct: Number(e.target.value) })}>
+                {RSI_MOM_WIDTH_PCT_OPTIONS.map((v) => <option key={v} value={v}>-{v}%</option>)}
+              </select>
+            </div>
+            {prefs.stopMode === 'peakTrail' && (
+              <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.ts_w_far')}>
+                <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.ts_w_far')}</label>
+                <select className={inp} value={prefs.tsWFarPct}
+                  onChange={(e) => patchPrefs({ tsWFarPct: Number(e.target.value) })}>
+                  {RSI_MOM_WIDTH_PCT_OPTIONS.map((v) => <option key={v} value={v}>-{v}%</option>)}
+                </select>
+              </div>
+            )}
+            {prefs.stopMode === 'atrTrail' && (
+              <>
+                <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.ts_atr_mult')}>
+                  <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.ts_atr_mult')}</label>
+                  <select className={inp} value={prefs.tsAtrMult}
+                    onChange={(e) => patchPrefs({ tsAtrMult: Number(e.target.value) })}>
+                    {RSI_MOM_ATR_MULT_OPTIONS.map((v) => <option key={v} value={v}>{v}×</option>)}
+                  </select>
+                </div>
+                <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.ts_atr_max')}>
+                  <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.ts_atr_max')}</label>
+                  <select className={inp} value={prefs.tsAtrMaxPct}
+                    onChange={(e) => patchPrefs({ tsAtrMaxPct: Number(e.target.value) })}>
+                    {RSI_MOM_WIDTH_PCT_OPTIONS.map((v) => <option key={v} value={v}>-{v}%</option>)}
+                  </select>
+                </div>
+              </>
+            )}
+          </>
+        )}
+        </div>
 
         <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[56px]" title={t('stats.tip.position_size')}>
           <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.position_size')}</label>
@@ -1315,7 +1542,12 @@ function RsiMomentumStats({ autoCalc }) {
             ))}
           </select>
         </div>
+       </div>
+      </StatsArea>
 
+      {/* ÁREA — Condições de mercado: o que precisa valer no mercado pra simular a entrada */}
+      <StatsArea variant="market" icon="📊" title={t('stats.area_market')}>
+       <div className="flex flex-row gap-1 md:gap-2 items-end flex-wrap">
         {/* Filtro de largura de banda */}
         <div className="flex items-center gap-1 shrink-0 pb-1" title={t('stats.tip.bandwidth_filter')}>
           <span className="hidden md:inline text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.bandwidth_filter')}</span>
@@ -1431,7 +1663,12 @@ function RsiMomentumStats({ autoCalc }) {
             ))}
           </select>
         </div>
+       </div>
+      </StatsArea>
 
+      {/* ÁREA — Filtros de confirmação: checagens extras, independentes do gatilho de RSI */}
+      <StatsArea variant="risk" icon="⚙️" title={t('stats.area_risk')}>
+       <div className="flex flex-row gap-1 md:gap-2 items-end flex-wrap">
         {/* Remove da tabela e dos agregados (P&L, contagens) os sinais ainda "em aberto" (não bateram alvo nem stop até agora) */}
         <div className="flex items-center gap-1 shrink-0 pb-1" title={t('stats.tip.exclude_open_exits')}>
           <span className="hidden md:inline text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.exclude_open_exits')}</span>
@@ -1501,8 +1738,35 @@ function RsiMomentumStats({ autoCalc }) {
           </div>
         )}
 
-        {!prefs.allCoins && <McIntervalSwitch checked={useMcInterval} onChange={handleToggleMc} />}
+        {/* Confirmação multi-timeframe: só simula a entrada se o RSI de 1h estiver >= o mínimo no
+            instante do sinal (intervalo fixo em 1h — o mesmo da coluna "RSI 1h" e do gráfico
+            "Resultado por faixa de RSI 1h"). */}
+        <div className="flex items-center gap-1 shrink-0 pb-1" title={t('stats.tip.htf_rsi_filter')}>
+          <span className="hidden md:inline text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.htf_rsi_filter')}</span>
+          <button
+            type="button"
+            onClick={() => patchPrefs({ higherRsiFilterEnabled: !prefs.higherRsiFilterEnabled })}
+            className={`relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${prefs.higherRsiFilterEnabled ? 'bg-p4' : 'bg-p3/40'}`}
+          >
+            <span className={`inline-block h-3 w-3 rounded-full bg-white shadow transition-transform ${prefs.higherRsiFilterEnabled ? 'translate-x-3' : 'translate-x-0'}`} />
+          </button>
+        </div>
 
+        {prefs.higherRsiFilterEnabled && (
+          <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.htf_rsi_min')}>
+            <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.htf_rsi_min')}</label>
+            <select className={inp}
+              value={prefs.higherRsiFilterMinRsi}
+              onChange={(e) => patchPrefs({ higherRsiFilterMinRsi: Number(e.target.value) })}>
+              {RSI_MOM_HIGHER_RSI_MIN_OPTIONS.map((v) => <option key={v} value={v}>{v}</option>)}
+            </select>
+          </div>
+        )}
+       </div>
+      </StatsArea>
+
+      {/* Rodapé do formulário — dispara a simulação + log de pesquisas salvas. */}
+      <div className="flex flex-row gap-1 md:gap-2 items-end w-full flex-wrap">
         <button
           onClick={() => handleSearch(undefined, true)}
           disabled={loading}
@@ -1532,6 +1796,7 @@ function RsiMomentumStats({ autoCalc }) {
           </button>
         </div>
       </div>
+    </div>
 
       <div className="flex flex-col gap-2 flex-1 min-w-0">
         {error && (
@@ -1670,10 +1935,22 @@ function RsiMomentumStats({ autoCalc }) {
               {result.lookbackHours > 0 && (
                 <SummaryCard label={t('stats.lookback_hours')} value={`${result.lookbackHours}h`} highlight="text-amber-500" tooltip={t('stats.tip.lookback_hours')} />
               )}
+              {result.higherRsiFilter && (
+                <SummaryCard
+                  label={t('stats.card.blocked_by_htf_rsi')}
+                  value={`${result.higherRsiBlockedCount} · RSI 1h ≥ ${result.higherRsiFilter.minRsi}`}
+                  highlight="text-amber-500"
+                  tooltip={t('stats.tip.blocked_by_htf_rsi')}
+                />
+              )}
             </div>
 
             {prefs.prevDayCloudEnabled && result.cloudZoneStats?.zones?.length > 0 && (
               <CloudZoneChart stats={result.cloudZoneStats} prevDayCloud={result.prevDayCloud} />
+            )}
+
+            {result.rsi1hBreakdown?.bands?.length > 0 && (
+              <Rsi1hBreakdownChart stats={result.rsi1hBreakdown} />
             )}
 
             {result.bandWidth && !result.bandWidth.passed && (
@@ -1733,6 +2010,13 @@ function RsiMomentumStats({ autoCalc }) {
               ) : (
               <div className="flex flex-col gap-1">
                 <div className="flex items-center gap-3 justify-end">
+                  <button
+                    onClick={handleDownloadJson}
+                    title={t('stats.download_json_tip')}
+                    className="mr-auto text-[10px] text-p5/60 hover:text-p4 border border-p3/40 hover:border-p4 rounded px-1.5 py-0.5 transition-colors"
+                  >
+                    ⬇ {t('stats.download_json')}
+                  </button>
                   <div className="flex items-center gap-2" title={t('stats.tip.closed_only')}>
                     <span className="text-[10px] text-p5/50">{t('stats.closed_only')}</span>
                     <button
@@ -1762,6 +2046,7 @@ function RsiMomentumStats({ autoCalc }) {
                         {prefs.allCoins && <SortTh label={t('stats.vb_vol')} sortKey="volumeUsd" sort={sort} onSort={toggleSort} align="right" />}
                         <SortTh label={t('stats.signal')} sortKey="signalDate" sort={sort} onSort={toggleSort} />
                         <SortTh label="RSI" sortKey="signalRsi" sort={sort} onSort={toggleSort} align="right" />
+                        <SortTh label={`RSI ${result.refRsiInterval || '1h'}`} sortKey="signalRsi1h" sort={sort} onSort={toggleSort} align="right" />
                         {showAll && <SortTh label={t('stats.entry_p')} sortKey="entryPrice" sort={sort} onSort={toggleSort} align="right" />}
                         <SortTh label={t('stats.exit_reason')} sortKey="outcome" sort={sort} onSort={toggleSort} />
                         <SortTh label={t('stats.end')} sortKey="exitDate" sort={sort} onSort={toggleSort} />
@@ -1784,6 +2069,7 @@ function RsiMomentumStats({ autoCalc }) {
                             {prefs.allCoins && <td className="py-0.5 pr-2 text-[10px] sm:text-xs text-right font-mono text-p5/60 whitespace-nowrap">{formatVolume(o.volumeUsd)}</td>}
                             <td className="py-0.5 pr-2 text-[10px] sm:text-xs font-mono whitespace-nowrap">{formatDate(o.signalDate)}</td>
                             <td className="py-0.5 pr-2 text-[10px] sm:text-xs text-right text-yellow-600">{o.signalRsi}</td>
+                            <td className="py-0.5 pr-2 text-[10px] sm:text-xs text-right text-yellow-600/60">{o.signalRsi1h ?? '—'}</td>
                             {showAll && (
                               <td className="py-0.5 pr-2 text-[10px] sm:text-xs text-right font-mono">
                                 {o.entryPrice != null ? `$${o.entryPrice.toLocaleString('en-US', { maximumFractionDigits: 6 })}` : '—'}
@@ -1799,7 +2085,7 @@ function RsiMomentumStats({ autoCalc }) {
                       })}
 
                       <tr className="lt-table-foot" aria-hidden="true">
-                        <td colSpan={(showAll ? 7 : 5) + (prefs.allCoins ? 2 : 0)} className="h-px p-0 leading-none" />
+                        <td colSpan={(showAll ? 8 : 6) + (prefs.allCoins ? 2 : 0)} className="h-px p-0 leading-none" />
                       </tr>
                     </tbody>
                   </table>

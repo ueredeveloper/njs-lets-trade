@@ -561,7 +561,7 @@ function toValidLwCandles(candlesticks) {
 const CandlestickChartLW = forwardRef(function CandlestickChartLW({
   symbol, interval, candlesticks, colors, rightPad = 0,
   activeIndicators = [], ma9, ma21, ma50, ma200, overlayConfigs, vwapConfig, vwapSlopeHighlight,
-  bollingerConfigs = [], srConfig, pphlConfig, prevDayCloudConfig, rsi, chopConfig,
+  bollingerConfigs = [], srConfig, pphlConfig, prevDayCloudConfig, rsi, chopConfig, macdConfig,
   emaPersistCloudData, emaPersistCloudConfirmData, emaPersistCloudConfirm2Data, emaPersistCloudLayers, emaPersistCloudTones, barsSinceCrossData, tdSequentialData,
   stopLossConfig, targetConfig, buyInfo, multitradeMarkers, zoomPeriod, focusLastN,
   onNeedOlderCandles, loadingMoreCandles,
@@ -581,6 +581,9 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
   // anteriores da linha mediana (verde=tendência de alta, vermelho=tendência de baixa)
   const medianTrendSeriesRef = useRef([]);
   const subpanelStateRef = useRef({ key: null, series: {} });
+  // MACD sobreposto no preço: histograma + linha MACD + linha de sinal, num price scale próprio
+  // ('macd') confinado à faixa inferior da pane principal (ver efeito do MACD abaixo).
+  const macdSeriesRef = useRef({ hist: null, macd: null, signal: null });
   // onNeedOlderCandles/loadingMoreCandles espelhados em ref pra o listener de pan (assinado uma
   // única vez, ver efeito de criação do chart) sempre ler o valor mais recente sem precisar
   // re-assinar a cada render. pendingRestoreRangeRef guarda o range visível ANTES de disparar o
@@ -704,6 +707,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
     priceLinesRef.current = [];
     markersPluginRef.current = createSeriesMarkers(series, []);
     subpanelStateRef.current = { key: null, series: {} };
+    macdSeriesRef.current = { hist: null, macd: null, signal: null };
     // Arrastar o gráfico pra trás até quase o candle mais antigo carregado (range.from perto de
     // 0 no espaço lógico) dispara a busca de mais histórico — ver onNeedOlderCandles em
     // CandlestickChart.jsx (reaproveita o mesmo handleLoadMoreCandles do botão "+500/1000").
@@ -771,6 +775,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       bbPathSeriesRef.current = [];
       medianTrendSeriesRef.current = [];
       subpanelStateRef.current = { key: null, series: {} };
+      macdSeriesRef.current = { hist: null, macd: null, signal: null };
     };
   }, [colors?.bg, colors?.text, colors?.panel]);
 
@@ -1254,6 +1259,51 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
     }
   }, [activeIndicators, rsi, chopConfig, candlesticks, barsSinceCrossData]);
 
+  // MACD (12/26/9) SOBREPOSTO no preço — histograma + linha MACD + linha de sinal, num price
+  // scale próprio ('macd') na pane principal, confinado à faixa inferior via scaleMargins pra
+  // não achatar os candles. Intervalo próprio (macdConfig.interval), alinhado por candle igual
+  // ao CHOP/EMAs (alignFieldToCandles), então funciona em qualquer intervalo do gráfico.
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    const show = activeIndicators.includes('macd') && macdConfig;
+    const refs = macdSeriesRef.current;
+
+    if (!show) {
+      for (const k of ['hist', 'macd', 'signal']) {
+        if (refs[k]) { try { chart.removeSeries(refs[k]); } catch { /* já removida */ } refs[k] = null; }
+      }
+      return;
+    }
+
+    const scaleMargins = { top: 0.72, bottom: 0.02 };
+    if (!refs.hist) {
+      refs.hist = chart.addSeries(HistogramSeries, {
+        priceScaleId: 'macd', priceLineVisible: false, lastValueVisible: false, base: 0,
+      });
+      refs.hist.priceScale().applyOptions({ scaleMargins });
+    }
+    if (!refs.macd) {
+      refs.macd = chart.addSeries(LineSeries, {
+        priceScaleId: 'macd', color: '#38bdf8', lineWidth: 1.5,
+        priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+      });
+    }
+    if (!refs.signal) {
+      refs.signal = chart.addSeries(LineSeries, {
+        priceScaleId: 'macd', color: '#f97316', lineWidth: 1.5,
+        priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+      });
+    }
+
+    const histData = alignFieldToCandles(candlesticks, macdConfig.histogram ?? [], 'value')
+      .map((d) => ({ ...d, color: d.value >= 0 ? 'rgba(38,166,154,0.5)' : 'rgba(239,83,80,0.5)' }));
+    refs.hist.setData(histData);
+    refs.macd.setData(alignFieldToCandles(candlesticks, macdConfig.macd ?? [], 'value'));
+    refs.signal.setData(alignFieldToCandles(candlesticks, macdConfig.signal ?? [], 'value'));
+    try { refs.hist.priceScale().applyOptions({ scaleMargins, autoScale: true }); } catch { /* noop */ }
+  }, [activeIndicators, macdConfig, candlesticks]);
+
   // Legenda: cor + nome de cada linha sobreposta ao preço (EMA fixa/rápida, VWAP, Bollinger) —
   // com várias Bollinger Bands e EMAs simultâneas na mesma paleta de cores, sem isso não dava
   // pra saber o que era o quê só olhando o gráfico.
@@ -1294,6 +1344,9 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
     if (emaPersistLegend) {
       entries.push({ key: 'emaPersistCloud', color: emaPersistLegend.fill, label: emaPersistLegend.text });
     }
+    if (activeIndicators.includes('macd') && macdConfig) {
+      entries.push({ key: 'macd', color: '#38bdf8', label: `MACD 12/26/9 @${macdConfig.interval}` });
+    }
     if (activeIndicators.includes('prevDayCloud') && prevDayCloudConfig?.segments?.length) {
       // Último degrau = nuvem vigente agora (dia mais recente carregado); os degraus mais
       // antigos ficam só no próprio gráfico, sem entrada de legenda separada pra cada um.
@@ -1309,7 +1362,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       });
     }
     return entries;
-  }, [activeIndicators, overlayConfigs, vwapConfig, bollingerConfigs, emaPersistLegend, prevDayCloudConfig]);
+  }, [activeIndicators, overlayConfigs, vwapConfig, bollingerConfigs, emaPersistLegend, prevDayCloudConfig, macdConfig]);
 
   return (
     <div className="relative w-full h-full">
