@@ -265,6 +265,52 @@ function checkPrevDayCloudFilter(dailyCandles, signalTimeMs, price, maxPct, cand
 }
 
 /**
+ * Em qual das 5 faixas verticais de MESMA altura da nuvem D-1 o preço do sinal cai — faixa 1 = a
+ * mais BAIXA (fundo da nuvem), faixa 5 = a mais alta (topo). Preço abaixo do fundo inteiro cai na
+ * faixa 1; acima do topo inteiro, na faixa 5 (clamp). null quando não há nuvem de referência
+ * (início da amostra) ou ela está achatada (upper == lower) — sem faixas possíveis.
+ */
+function classifyCloudZone(cloud, price) {
+    if (!cloud) return null;
+    const { lower, upper } = cloud;
+    if (!(upper > lower)) return null;
+    const zone = Math.floor(((price - lower) / (upper - lower)) * 5) + 1;
+    return Math.max(1, Math.min(5, zone));
+}
+
+/**
+ * Distribuição dos sinais pelas 5 faixas verticais da nuvem D-1 (ver classifyCloudZone) — quantos
+ * sinais caíram em cada faixa e, dos preenchidos, taxa de acerto / P&L médio por faixa. Conta
+ * TODOS os sinais com faixa resolvida (preenchidos ou não). null se nenhum sinal tem faixa.
+ */
+function computeCloudZoneStats(occurrences) {
+    const withZone = occurrences.filter(o => o.cloudZone >= 1 && o.cloudZone <= 5);
+    if (!withZone.length) return null;
+    const zones = [1, 2, 3, 4, 5].map((zone) => {
+        const list = withZone.filter(o => o.cloudZone === zone);
+        const filled = list.filter(o => o.filled);
+        const target = filled.filter(o => o.outcome === 'target').length;
+        const stop = filled.filter(o => o.outcome === 'stop').length;
+        const open = filled.filter(o => o.outcome === 'open').length;
+        const closed = target + stop;
+        const pnlPctSum = filled.reduce((s, o) => s + o.pnlPct, 0);
+        return {
+            zone,
+            signals: list.length,
+            sharePct: parseFloat(((list.length / withZone.length) * 100).toFixed(1)),
+            filled: filled.length,
+            target,
+            stop,
+            open,
+            notFilled: list.length - filled.length,
+            winRatePct: closed > 0 ? parseFloat(((target / closed) * 100).toFixed(1)) : null,
+            avgPnlPct: filled.length ? parseFloat((pnlPctSum / filled.length).toFixed(2)) : null,
+        };
+    });
+    return { total: withZone.length, zones };
+}
+
+/**
  * Stop pelo candle de 4h ANTERIOR ao instante do sinal (mesmo critério de "candle anterior" do
  * findCandleIndexAtOrBefore acima, só que em 4h em vez de 1d): se aquele candle fechou em alta, o
  * stop é a abertura dele; se fechou em baixa, o stop é o fechamento. Nos dois casos isso é
@@ -281,12 +327,13 @@ function resolvePrevCandleStopPrice(fourHCandles, signalTimeMs) {
     return close >= open ? open : close;
 }
 
-function buildOccurrence(signalCandle, signalPrice, signalRsi, resolved, positionSizeUsd) {
+function buildOccurrence(signalCandle, signalPrice, signalRsi, resolved, positionSizeUsd, cloudZone = null) {
     if (!resolved.filled) {
         return {
             signalDate: new Date(signalCandle.openTime).toISOString(),
             signalPrice,
             signalRsi,
+            cloudZone,
             filled: false,
             entryDate: null,
             entryPrice: null,
@@ -308,6 +355,7 @@ function buildOccurrence(signalCandle, signalPrice, signalRsi, resolved, positio
         signalDate: new Date(signalCandle.openTime).toISOString(),
         signalPrice,
         signalRsi,
+        cloudZone,
         filled: true,
         entryDate: new Date(entryTime ?? signalCandle.openTime).toISOString(),
         entryPrice,
@@ -696,6 +744,16 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
             const signalPrice = parseFloat(signalCandle.close);
             if (pdcEnabled && !checkPrevDayCloudFilter(dailyCandles, signalCandle.openTime, signalPrice, pdcMaxPct, pdcCandleCount, pdcUseHighLow)) continue;
 
+            // Faixa vertical (1 = base, 5 = topo) da nuvem D-1 onde o preço do sinal cai — só faz
+            // sentido com o filtro da nuvem ligado (dailyCandles buscado). Ver classifyCloudZone /
+            // computeCloudZoneStats e o gráfico "Sinais por faixa da nuvem D-1" no frontend.
+            const cloudZone = pdcEnabled
+                ? classifyCloudZone(
+                    resolvePrevDayCloud(dailyCandles, signalCandle.openTime, pdcCandleCount, pdcUseHighLow),
+                    signalPrice,
+                )
+                : null;
+
             // ADX: só passa com tendência confirmada (>= mínimo) no instante do sinal. Sem valor
             // disponível ainda (warmup do indicador), não bloqueia.
             if (adxEnabled) {
@@ -720,6 +778,7 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
                 signalRsi: parseFloat(rsiValues[i].toFixed(2)),
                 idx,
                 stopPriceOverride,
+                cloudZone,
             });
         }
     }
@@ -741,7 +800,7 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
     }
 
     const occurrences = [];
-    for (const { signalCandle, signalPrice, signalRsi, idx, stopPriceOverride } of rawSignals) {
+    for (const { signalCandle, signalPrice, signalRsi, idx, stopPriceOverride, cloudZone } of rawSignals) {
         const ivMs = interval === '1m' ? 60_000 : intervalMs(interval);
         const signalCloseMs = signalCandle.openTime + ivMs;
 
@@ -773,7 +832,7 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
                 ? { coinStepPct: trailingTargetCoinStepPct, stepPct: trailingTargetStepPct }
                 : null,
         });
-        occurrences.push(buildOccurrence(signalCandle, signalPrice, signalRsi, resolved, positionSizeUsd));
+        occurrences.push(buildOccurrence(signalCandle, signalPrice, signalRsi, resolved, positionSizeUsd, cloudZone));
     }
 
     // "Remover saída aberta": tira da amostra (tabela E agregados) os sinais ainda não resolvidos
@@ -824,6 +883,7 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
         avgPnlPct,
         bandWidth: bandWidthResult,
         prevDayCloud: pdcEnabled ? { maxPct: pdcMaxPct, interval: pdcInterval, candleCount: pdcCandleCount, useHighLow: pdcUseHighLow } : null,
+        cloudZoneStats: pdcEnabled ? computeCloudZoneStats(finalOccurrences) : null,
         volume: volumeResult,
         excludeOpenExits,
         prevCandleStop: pcsEnabled,
@@ -848,3 +908,4 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
 
 module.exports = analyseRsiThresholdBacktest;
 module.exports.countBaseVsEvolvedExits = countBaseVsEvolvedExits;
+module.exports.computeCloudZoneStats = computeCloudZoneStats;

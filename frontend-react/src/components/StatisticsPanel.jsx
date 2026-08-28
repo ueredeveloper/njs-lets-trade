@@ -5,6 +5,8 @@ import {
   fetchVwapBandsStats, saveRsiMomentumStatsSearch, getRsiMomentumStatsSearches, clearRsiMomentumStatsSearches,
 } from '../services/api';
 import Tooltip from './Tooltip';
+import CloudZoneChart from './CloudZoneChart';
+import StatsAccordion from './StatsAccordion';
 import { useI18n } from '../i18n';
 import { CHART_VIEW } from '../utils/chartView';
 import { getEntriesForSymbol } from '../constants/strategyPresets';
@@ -1670,6 +1672,10 @@ function RsiMomentumStats({ autoCalc }) {
               )}
             </div>
 
+            {prefs.prevDayCloudEnabled && result.cloudZoneStats?.zones?.length > 0 && (
+              <CloudZoneChart stats={result.cloudZoneStats} prevDayCloud={result.prevDayCloud} />
+            )}
+
             {result.bandWidth && !result.bandWidth.passed && (
               <p className="text-[11px] text-amber-600 bg-amber-400/10 border border-amber-400/20 rounded px-2 py-1.5">
                 Largura de banda média ({result.bandWidth.avgWidthPct ?? '—'}%) abaixo do mínimo exigido ({result.bandWidth.minPct}%) — nenhuma entrada simulada.
@@ -1677,10 +1683,7 @@ function RsiMomentumStats({ autoCalc }) {
             )}
 
             {prefs.allCoins && Array.isArray(result.volumeBreakdown) && result.volumeBreakdown.some((b) => b.trades > 0) && (
-              <div className="rounded-md p-2" style={{ background: '#0f1219', border: '1px solid #2a2d3a' }}>
-                <p className="text-p5/70 text-[10px] font-semibold uppercase tracking-wider mb-1" title={t('stats.tip.volume_breakdown')}>
-                  {t('stats.volume_breakdown')}
-                </p>
+              <StatsAccordion title={t('stats.volume_breakdown')} titleAttr={t('stats.tip.volume_breakdown')}>
                 <div className="overflow-x-auto">
                   <table className="w-full text-[10px] sm:text-[11px]">
                     <thead>
@@ -1709,7 +1712,7 @@ function RsiMomentumStats({ autoCalc }) {
                     </tbody>
                   </table>
                 </div>
-              </div>
+              </StatsAccordion>
             )}
 
             {result.occurrencesTruncated && (

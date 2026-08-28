@@ -2,7 +2,7 @@
 
 const { getActiveUsdtPairs } = require('../binance/getActiveUsdtPairs');
 const analyseRsiThresholdBacktest = require('./analyseRsiThresholdBacktest');
-const { countBaseVsEvolvedExits } = require('./analyseRsiThresholdBacktest');
+const { countBaseVsEvolvedExits, computeCloudZoneStats } = require('./analyseRsiThresholdBacktest');
 const getTickers = require('../binance/cachedTicker24hr');
 const { computeDailyEntryStats } = require('./dailyEntryStats');
 const { computeAvgTradeDurationMs } = require('./tradeDurationStats');
@@ -129,6 +129,8 @@ async function analyseRsiThresholdBacktestMarket(options = {}) {
     const closedCount = totalTarget + totalStop;
     const winRatePct = closedCount > 0 ? parseFloat(((totalTarget / closedCount) * 100).toFixed(1)) : 0;
     const baseVsEvolved = countBaseVsEvolvedExits(filledOccurrences);
+    const pdcOpts = perSymbolOptions.prevDayCloud;
+    const cloudZoneStats = pdcOpts?.enabled ? computeCloudZoneStats(allOccurrences) : null;
     const volumeBreakdown = volumeMap.size > 0 ? computeVolumeBreakdown(filledOccurrences, volumeMap) : null;
     const positionSizeUsd = perSymbolOptions.positionSizeUsd ?? 40;
     const totalInvestedUsd = parseFloat((filledOccurrences.length * positionSizeUsd).toFixed(2));
@@ -149,6 +151,13 @@ async function analyseRsiThresholdBacktestMarket(options = {}) {
         positionSizeUsd,
         lookbackHours: perSymbolOptions.lookbackHours ?? 0,
         bandWidthEnabled: !!perSymbolOptions.bandWidth?.enabled,
+        prevDayCloud: pdcOpts?.enabled ? {
+            maxPct: Math.max(1, Math.min(100, Number(pdcOpts.maxPct ?? 100))),
+            interval: pdcOpts.interval ?? '4h',
+            candleCount: Math.max(1, Math.min(10, Math.round(Number(pdcOpts.candleCount ?? 3)))),
+            useHighLow: pdcOpts.useHighLow !== false,
+        } : null,
+        cloudZoneStats,
         minVolumeUsdt: Number(minVolumeUsdt) > 0 ? Number(minVolumeUsdt) : 0,
         excludeOpenExits: !!perSymbolOptions.excludeOpenExits,
         prevCandleStop: !!perSymbolOptions.prevCandleStop,

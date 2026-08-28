@@ -53,6 +53,7 @@ function summarizeResult(r = {}) {
     avgPnlPct: r.avgPnlPct ?? null,
     dailyEntryStats: r.dailyEntryStats ?? null,
     tradeDuration: r.tradeDuration ?? null,
+    cloudZoneStats: r.cloudZoneStats ?? null,
     // só no modo mercado (allCoins)
     symbolsTotal: r.symbolsTotal ?? null,
     symbolsScanned: r.symbolsScanned ?? null,
