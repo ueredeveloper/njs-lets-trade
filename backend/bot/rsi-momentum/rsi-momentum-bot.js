@@ -381,9 +381,13 @@ async function recordBracketError({ rowId, session, log, symbol, strategyId, mes
  * computeBracketPrices (fixos, contínuos ou alvo 'off') — recriada por maybeReplaceTrailingStop
  * quando um lado sobe de degrau.
  */
-async function placeInitialBracket({ rowId, adapter, config, session, log, filledQty, buyPrice, symbol, strategyId, retry = false }) {
+async function placeInitialBracket({ rowId, adapter, config, session, log, filledQty, buyPrice, peakPrice, symbol, strategyId, retry = false }) {
   if (!config.exit.restingBracket?.enabled) return;
-  const { targetPrice, stopPrice } = computeBracketPrices(config, buyPrice);
+  // Pico registrado junto da bracket — maybeReplaceTrailingStop recalcula o nível vigente a
+  // partir dele pra decidir se subiu de degrau (ver lá). Logo após a compra o pico é o próprio
+  // preço de entrada; no retry vindo do tick BOUGHT já vem o pico corrente.
+  const peak = Number.isFinite(peakPrice) ? peakPrice : buyPrice;
+  const { targetPrice, stopPrice } = computeBracketPrices(config, buyPrice, peak);
   const targetOff = resolveTargetMode(config) === 'off';
   if ((targetPrice == null && !targetOff) || stopPrice == null) {
     await recordBracketError({ rowId, session, log, symbol, strategyId, retry, message: 'alvo/stop indisponível' });
@@ -392,7 +396,7 @@ async function placeInitialBracket({ rowId, adapter, config, session, log, fille
   const prevError = session.rulesState?.exitBracketError ?? null;
   try {
     const bracket = await adapter.placeExitBracket(filledQty, bracketOrderTarget(buyPrice, targetPrice), stopPrice);
-    session.rulesState = { ...(session.rulesState ?? {}), exitBracket: { ...bracket, placedAt: new Date().toISOString() }, exitBracketError: null };
+    session.rulesState = { ...(session.rulesState ?? {}), exitBracket: { ...bracket, peakPrice: peak, placedAt: new Date().toISOString() }, exitBracketError: null };
     await saveState(rowId, { rules_state: session.rulesState }, log);
     const alvoDesc = targetOff ? 'alvo OFF (só stop)' : `alvo ${fmtPrice(bracket.targetPrice)}`;
     log(`${G}🎯 Bracket TP/SL colocada na corretora${retry ? ' (retry)' : ''} — ${alvoDesc} / stop ${fmtPrice(bracket.stopPrice)}${X}`);
@@ -412,9 +416,16 @@ async function placeInitialBracket({ rowId, adapter, config, session, log, fille
 /** Recria a bracket na corretora quando o STOP contínuo (exit.trailingStop) ou o ALVO contínuo
  *  (exit.targetMode === 'continuous') sobe de degrau — cada um com contador próprio, ver
  *  computeBracketPrices em strategyEngine.js. Nenhum dos dois contínuo → nada a recriar (níveis
- *  fixos). Comparação contra o preço PEDIDO (requestedTargetPrice/requestedStopPrice — antes do
- *  clamp da Binance), não contra o que ficou resting: senão uma perna prendida na borda do
- *  PERCENT_PRICE_BY_SIDE divergiria do live a cada tick e a bracket seria recriada em loop. */
+ *  fixos).
+ *
+ *  Pra decidir "subiu de degrau" o nível VIGENTE é RECALCULADO com computeBracketPrices a partir
+ *  do pico que ficou registrado quando a bracket foi colocada (exitBracket.peakPrice) e comparado
+ *  com o nível recalculado no pico de agora — mesma função pura, sem arredondar. Assim, pico
+ *  parado ⇒ os dois lados batem exatamente e nada é recriado. Comparar contra o preço que ficou
+ *  resting (ou contra requestedStopPrice/requestedTargetPrice) era furado: esses passaram por
+ *  roundToStep(tickSize) no ocoClient, e a diferença de até ~½ tick contra o `liveStop` cru
+ *  sozinha já disparava cancel+recria a CADA tick, com a moeda imóvel. Bracket antiga sem
+ *  peakPrice cai em buyPrice (uma recriação de catch-up e estabiliza). */
 async function maybeReplaceTrailingStop({ rowId, adapter, config, session, log, exitBracket, buyPrice, buyQty, peakPrice, symbol, strategyId }) {
   const stopTrailingOn = !!config.exit.trailingStop?.enabled;
   const targetMode = resolveTargetMode(config);
@@ -422,16 +433,18 @@ async function maybeReplaceTrailingStop({ rowId, adapter, config, session, log, 
 
   const { targetPrice: liveTarget, stopPrice: liveStop } = computeBracketPrices(config, buyPrice, peakPrice);
   if (liveStop == null) return;
-  // Degraus discretos (ver computeTrailingStopPrice/computeTrailingTargetPrice) — só recria
-  // quando stop ou alvo de fato mudou de degrau, não a cada tick por ruído de ponto flutuante.
-  const restingStop = Number(exitBracket.requestedStopPrice ?? exitBracket.stopPrice);
-  const restingTarget = Number(exitBracket.requestedTargetPrice ?? exitBracket.targetPrice);
-  // Só recria pra CIMA — todos os modos de computeTrailingStopPrice são monotônicos, então o stop
-  // nunca deve descer; o `>` (em vez de Math.abs) blinda contra ruído de ponto flutuante afrouxar
-  // a proteção na corretora.
-  const stopChanged = stopTrailingOn && Number.isFinite(restingStop) && liveStop > restingStop + 1e-9;
+
+  const placedPeak = Number.isFinite(Number(exitBracket.peakPrice)) ? Number(exitBracket.peakPrice) : buyPrice;
+  const { targetPrice: placedTarget, stopPrice: placedStop } = computeBracketPrices(config, buyPrice, placedPeak);
+
+  // Só recria pra CIMA — todos os modos de computeTrailingStopPrice/computeTrailingTargetPrice são
+  // monotônicos com o pico, então stop e alvo nunca devem descer; o `>` (em vez de Math.abs)
+  // blinda contra ruído de ponto flutuante afrouxar a proteção na corretora. `* (1 + 1e-9)`
+  // absorve o ruído da própria multiplicação de computeBracketPrices.
+  const stopChanged = stopTrailingOn && Number.isFinite(placedStop)
+    && liveStop > placedStop * (1 + 1e-9);
   const targetChanged = targetMode === 'continuous' && liveTarget != null
-    && Number.isFinite(restingTarget) && Math.abs(liveTarget - restingTarget) >= 1e-9;
+    && Number.isFinite(placedTarget) && liveTarget > placedTarget * (1 + 1e-9);
   if (!stopChanged && !targetChanged) return;
 
   const moved = stopChanged && targetChanged ? 'Stop e alvo contínuos subiram'
@@ -442,7 +455,7 @@ async function maybeReplaceTrailingStop({ rowId, adapter, config, session, log, 
     await adapter.cancelExitBracket(exitBracket);
     cancelled = true;
     const bracket = await adapter.placeExitBracket(buyQty, bracketOrderTarget(buyPrice, liveTarget), liveStop);
-    session.rulesState = { ...(session.rulesState ?? {}), exitBracket: { ...bracket, placedAt: new Date().toISOString() } };
+    session.rulesState = { ...(session.rulesState ?? {}), exitBracket: { ...bracket, peakPrice, placedAt: new Date().toISOString() } };
     await saveState(rowId, { rules_state: session.rulesState }, log);
     const alvoDesc = targetMode === 'off' ? 'alvo OFF' : fmtPrice(bracket.targetPrice);
     log(`${G}🔁 ${moved} de degrau — bracket recriada: alvo ${alvoDesc} / stop ${fmtPrice(bracket.stopPrice)}${X}`);
@@ -757,6 +770,19 @@ async function tick(rowId, adapter, strategy, log, session, stopSelf) {
     await saveState(rowId, { rules_state: session.rulesState }, log);
   }
 
+  // Primeiro tick BOUGHT depois de um restart — mostra que a evolução do stop/alvo foi retomada
+  // do rules_state (pico salvo + a OCO que ficou na corretora), não recomeçada do zero.
+  if (session.resumedBought && !session.resumeLogged) {
+    session.resumeLogged = true;
+    const { targetPrice: resumeTarget, stopPrice: resumeStop } = computeBracketPrices(config, buyPrice, peakPrice);
+    const peakGainPct = buyPrice > 0 ? ((peakPrice / buyPrice) - 1) * 100 : 0;
+    const ocoNote = rulesState.exitBracket
+      ? `OCO ${rulesState.exitBracket.orderListId ?? '(gate)'} ainda na corretora`
+      : 'sem OCO resting (será recolocada)';
+    log(`${G}🔁 Retomando trade — entrada ${fmtPrice(buyPrice)}, pico salvo ${fmtPrice(peakPrice)} (+${peakGainPct.toFixed(2)}%), `
+      + `alvo ${resumeTarget == null ? 'OFF' : fmtPrice(resumeTarget)} / stop ${fmtPrice(resumeStop)} · ${ocoNote}${X}`);
+  }
+
   // Stop contínuo modo 'atrTrail' — precisa do ATR% "do momento da compra". Calcula uma vez por
   // posição (no 1º tick BOUGHT em que dá), guarda em rules_state atrelado ao buyPrice desta
   // posição (stopAtrForBuy) pra não reaproveitar um ATR de trade anterior, e injeta em
@@ -815,7 +841,7 @@ async function tick(rowId, adapter, strategy, log, session, stopSelf) {
   // conseguir; enquanto isso, a saída cai no fallback via evaluateExit no candle em formação.
   if (config.exit.restingBracket?.enabled) {
     await placeInitialBracket({
-      rowId, adapter, config, session, log, symbol, strategyId, buyPrice,
+      rowId, adapter, config, session, log, symbol, strategyId, buyPrice, peakPrice,
       filledQty: parseFloat(state.buy_qty), retry: true,
     });
   }
@@ -862,6 +888,9 @@ async function startSymbol(row, color, startupIndex = null) {
   const session = {
     volCache: null,
     phase: row.phase === 'BOUGHT' ? 'BOUGHT' : null,
+    // true só quando a linha já estava comprada no restart — o 1º tick BOUGHT loga a retomada da
+    // evolução do stop/alvo (ver tick()). Compra feita durante esta sessão não dispara o log.
+    resumedBought: row.phase === 'BOUGHT',
     rulesState: null,
     lastExitTime: rs.lastExitTime ?? null,
     lastExitReason: rs.lastExitReason ?? null,
