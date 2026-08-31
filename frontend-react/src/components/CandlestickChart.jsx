@@ -657,6 +657,14 @@ function sliceForVisibleWindow(candles, visibleRange, maxCount) {
  *  `srCandleCount` candles anteriores àquela âncora. Largura fixa — não muda com zoom. */
 const SR_ROLL_WIDTH = 10;
 
+/** Abertura do último candle do intervalo do S/R que JÁ FECHOU até `targetMs` — o candle em
+ *  formação NÃO entra. Mesma regra do backtest (resolveSupportResistanceAt), sem look-ahead:
+ *  um candle abre em `o` e fecha em `o + step`, então está fechado até `t` sse `o + step <= t`. */
+function srClosedAnchorMs(targetMs, stepMs) {
+  if (!Number.isFinite(targetMs) || !(stepMs > 0)) return null;
+  return Math.floor((targetMs - stepMs) / stepMs) * stepMs;
+}
+
 /** Corte pro S/R rolante: os `lookback + width` candles (asc por openTime) que terminam na borda
  *  direita do trecho visível [.., toMs]. Sem visibleRange → os últimos. A borda direita acompanha
  *  o pan, mas a quantidade de candles (e portanto o cálculo por âncora) é fixa. */
@@ -5873,17 +5881,15 @@ export default function CandlestickChart() {
     return sliceForVisibleWindow(raw, visibleChartRange, count);
   }, [pivotRawCache, selectedChart?.symbol, visibleChartRange]);
 
-  // Borda direita do trecho visível SNAPADA pra grade do intervalo do S/R. Enquanto o usuário
-  // arrasta DENTRO do mesmo candle de 4h (ex.: no gráfico de 15m, 16 candles cabem num 4h), esse
-  // valor não muda → o chartSrConfig abaixo não recalcula os 10×detectSupportResistance a cada
-  // frame de arrasto. Só recalcula quando a borda cruza pra outro candle de 4h (ou quando novos
-  // candles do S/R chegam via pivotRawCache). É o que o usuário pediu: 15m muda devagar dentro de 4h.
-  const srVisibleAnchorMs = useMemo(() => {
-    const toMs = visibleChartRange?.toMs;
-    if (!Number.isFinite(toMs)) return null;
-    const step = INTERVAL_MS[srInterval] ?? 3_600_000;
-    return Math.floor(toMs / step) * step;
-  }, [visibleChartRange, srInterval]);
+  // Âncora do S/R rolante = abertura do último candle do intervalo do S/R que JÁ FECHOU até a
+  // borda direita do trecho visível (candle em formação não entra — mesma regra do backtest,
+  // sem look-ahead). Como é snapado pra grade do intervalo, arrastar DENTRO do mesmo candle de 4h
+  // (16 candles de 15m) não muda o valor → o chartSrConfig abaixo não recalcula os
+  // 10×detectSupportResistance a cada frame de arrasto.
+  const srVisibleAnchorMs = useMemo(
+    () => srClosedAnchorMs(visibleChartRange?.toMs, INTERVAL_MS[srInterval] ?? 3_600_000),
+    [visibleChartRange, srInterval],
+  );
 
   const chartSrConfig = useMemo(() => {
     // Trade das Estatísticas: desenha os níveis EXATOS que o backtest calculou pra esse sinal
@@ -5988,13 +5994,15 @@ export default function CandlestickChart() {
   }, [analysisBox, chartFlagsConfig]);
 
   // DEBUG (Teste): ao criar a caixa de análise, printa no console os níveis de S/R no momento da
-  // borda direita da caixa — mesmo cálculo rolante do gráfico, ancorado em analysisBox.toMs.
+  // borda direita da caixa — mesmo cálculo rolante do gráfico, ancorado no último candle do
+  // intervalo do S/R que já FECHOU até analysisBox.toMs (sem look-ahead, igual ao backtest).
   useEffect(() => {
     if (!analysisBox) return;
     if (!srShown) { console.warn('[S/R] caixa: indicador S/R desligado — nada a printar'); return; }
     const raw = pivotRawCache[`${selectedChart?.symbol}|${srInterval}`]?.candles ?? [];
     if (!raw.length) { console.warn(`[S/R] caixa: candles de ${srInterval} ainda não carregados`); return; }
-    const slice = sliceForRollingSR(raw, { toMs: analysisBox.toMs }, srCandleCount, SR_ROLL_WIDTH);
+    const anchorMs = srClosedAnchorMs(analysisBox.toMs, INTERVAL_MS[srInterval] ?? 3_600_000);
+    const slice = sliceForRollingSR(raw, { toMs: anchorMs }, srCandleCount, SR_ROLL_WIDTH);
     const anchorCandle = slice[slice.length - 1];
     const levels = detectSupportResistance(
       slice.slice(Math.max(0, slice.length - srCandleCount), slice.length), {});

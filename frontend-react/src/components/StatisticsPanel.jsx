@@ -1279,7 +1279,7 @@ function RsiMomentumStats({ autoCalc }) {
         logSrLevels(`trade ${new Date(o.signalDate).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}`, sym, o.sr.levels, {
           interval: o.sr.interval,
           lookback: o.sr.candleCount,
-          anchorMs: new Date(o.signalDate).getTime(),
+          signalMs: new Date(o.signalDate).getTime(),
           windowMs: [new Date(o.signalDate).getTime(), o.exitDate ? new Date(o.exitDate).getTime() : endMs],
           entrySupport: o.sr.entrySupport,
           exitResistance: o.sr.exitResistance,

@@ -39,7 +39,11 @@ export function logSrLevels(context, symbol, levels, meta = {}) {
   console.groupCollapsed(`%c[S/R] ${context} — ${symbol ?? '?'}`, 'color:#ec4899;font-weight:bold');
   if (meta.interval) console.log('intervalo S/R:', meta.interval);
   if (meta.lookback) console.log('lookback:', meta.lookback, 'candles');
-  if (meta.anchorMs != null) console.log('âncora (BRT):', fmtBRT(meta.anchorMs));
+  if (meta.anchorMs != null) console.log('âncora (BRT):', fmtBRT(meta.anchorMs), '— último candle do intervalo ≤ esse ponto');
+  if (meta.signalMs != null) {
+    console.log('sinal (BRT):', fmtBRT(meta.signalMs));
+    console.log('  (o backtest ancora no último candle do intervalo que JÁ FECHOU antes do sinal — sem look-ahead)');
+  }
   if (Array.isArray(meta.windowMs)) console.log('janela (BRT):', fmtBRT(meta.windowMs[0]), '→', fmtBRT(meta.windowMs[1]));
   if (rows.length) console.table(rows);
   else console.log('(nenhum nível de S/R nesse momento)');
