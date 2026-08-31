@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, forwardRef, useImperativeHandle } from 'react';
-import { createChart, CandlestickSeries, LineSeries, HistogramSeries, ColorType, createSeriesMarkers } from 'lightweight-charts';
+import { createChart, CandlestickSeries, LineSeries, HistogramSeries, ColorType, LineType, createSeriesMarkers } from 'lightweight-charts';
 import { computeVwapSlopeFlags } from '../utils/vwapSlopeHighlight';
 import { computeStopLossFloor } from '../utils/trailingStopLoss';
 import { RectanglePrimitive } from '../utils/lwRectanglePrimitive';
@@ -16,10 +16,19 @@ import { snapPointsToChartCandles } from '../utils/snapToChartCandles';
 
 const C_UP = '#26a69a';
 const C_DOWN = '#ef5350';
-/** Cores das linhas de S/R — resistência em tons de rosa, suporte em tons de azul. Máx. 6 níveis
- *  do backend (≈3+3). Espelha srLevelColor em CandlestickChart.jsx. */
-const SR_RESISTANCE_COLORS = ['#9d174d', '#be185d', '#db2777', '#ec4899', '#f472b6', '#f9a8d4'];
-const SR_SUPPORT_COLORS = ['#1e3a8a', '#1d4ed8', '#2563eb', '#3b82f6', '#60a5fa', '#93c5fd'];
+/** Linhas de S/R (rolante + traço das Estatísticas): uma cor só por tipo — azul p/ suporte, rosa
+ *  p/ resistência. O posto vai no rótulo (S1/S2/R1/R2), não na cor. */
+const SR_SUPPORT_LINE = '#3b82f6';
+const SR_RESISTANCE_LINE = '#ec4899';
+
+/** Ordena os níveis de um tipo por proximidade do preço (resistência: menor preço = R1; suporte:
+ *  maior preço = S1) e anexa `rank` (1..) e `label` ('S1'/'R2'…). */
+function rankSrLevels(levels, type) {
+  return (levels ?? [])
+    .filter((l) => l.type === type && Number.isFinite(Number(l.price)))
+    .sort((a, b) => (type === 'resistance' ? a.price - b.price : b.price - a.price))
+    .map((l, i) => ({ ...l, rank: i + 1, label: `${type === 'resistance' ? 'R' : 'S'}${i + 1}` }));
+}
 const VWAP_LINE_COLOR = '#FF4FA3';
 const VWAP_BAND_COLOR = 'rgba(255, 79, 163, 0.45)';
 const VWAP_BAND_FILL_COLOR = 'rgba(255, 79, 163, 0.08)';
@@ -660,6 +669,9 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
   const seriesRef = useRef(null);
   const indicatorSeriesRef = useRef({});
   const priceLinesRef = useRef([]);
+  // S/R rolante: array de LineSeries — um por "posto" de nível (R1, R2… / S1, S2…), ligando o
+  // mesmo posto entre as âncoras (estilo 'degrau'/'traço'). Vazio no estilo 'linhas'.
+  const srRollSeriesRef = useRef([]);
   const markersPluginRef = useRef(null);
   const rectPrimitiveRef = useRef(null);
   const bandFillPrimitiveRef = useRef(null);
@@ -815,6 +827,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
     flagsSeriesRef.current = [];
     indicatorSeriesRef.current = {};
     priceLinesRef.current = [];
+    srRollSeriesRef.current = [];
     markersPluginRef.current = createSeriesMarkers(series, []);
     subpanelStateRef.current = { key: null, series: {} };
     macdSeriesRef.current = { hist: null, macd: null, signal: null };
@@ -891,6 +904,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       seriesRef.current = null;
       indicatorSeriesRef.current = {};
       priceLinesRef.current = [];
+      srRollSeriesRef.current = [];
       markersPluginRef.current = null;
       rectPrimitiveRef.current = null;
       bandFillPrimitiveRef.current = null;
@@ -1172,38 +1186,161 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
     }
   }, [activeIndicators, ma9, ma21, ma50, ma200, overlayConfigs, bollingerConfigs, vwapConfig, vwapSlopeHighlight, candlesticks, emaPersistCloudData, emaPersistCloudConfirmData, emaPersistCloudConfirm2Data, emaPersistCloudLayers, emaPersistCloudTones, prevDayCloudConfig]);
 
-  // Linhas de preço: S/R. Sempre recriadas do zero (poucos níveis por vez, custo desprezível)
-  // em vez de diff — mais simples que casar id estável por nível.
+  // S/R. Dois modos (ver srConfig no CandlestickChart.jsx):
+  //  - shape antigo { levels } (override de trade das Estatísticas) → linhas de preço de ponta a
+  //    ponta, com rótulo de entrada/alvo (comportamento clássico).
+  //  - shape rolante { rolling:[{time,levels}], style } → pra cada âncora um conjunto de níveis.
+  //    'degrau' = LineSeries em escada por posto; 'traço' = segmentos curtos soltos por âncora;
+  //    'linhas' = só o conjunto da âncora mais recente como linhas de preço.
+  // Sempre recriado do zero (poucos níveis/séries, custo desprezível).
   useEffect(() => {
+    const chart = chartRef.current;
     const series = seriesRef.current;
-    if (!series) return;
+    if (!chart || !series) return;
+
     for (const line of priceLinesRef.current) {
       try { series.removePriceLine(line); } catch { /* já removida junto do chart */ }
     }
-    const lines = [];
-    const typeCount = { resistance: 0, support: 0 };
-    const eq = (a, b) => a != null && b != null && Math.abs(a - b) / b < 1e-6;
-    const entrySup = srConfig?.entrySupport ?? null;
-    const exitRes = srConfig?.exitResistance ?? null;
-    for (const lvl of srConfig?.levels ?? []) {
-      const price = Number(lvl.price);
-      if (!Number.isFinite(price)) continue;
-      const isRes = lvl.type === 'resistance';
-      const palette = isRes ? SR_RESISTANCE_COLORS : SR_SUPPORT_COLORS;
-      const color = palette[(typeCount[isRes ? 'resistance' : 'support']++) % palette.length];
-      // Linhas de referência do trade (Estatísticas): entrada / alvo — mais grossas, sólidas, com rótulo.
-      const isEntry = eq(price, entrySup);
-      const isExit = eq(price, exitRes);
-      lines.push(series.createPriceLine({
-        price, color,
-        lineWidth: (isEntry || isExit) ? 3 : (isRes ? 1 : 3),
-        lineStyle: (isEntry || isExit) ? 0 : (isRes ? 2 : 0),
-        axisLabelVisible: true,
-        title: `${isRes ? 'R' : 'S'} (${lvl.touches ?? 1}x)${isEntry ? ' entrada' : isExit ? ' alvo' : ''}`,
-      }));
+    priceLinesRef.current = [];
+    for (const s of srRollSeriesRef.current) {
+      try { chart.removeSeries(s); } catch { /* já removida */ }
     }
-    priceLinesRef.current = lines;
-  }, [srConfig]);
+    srRollSeriesRef.current = [];
+
+    if (!srConfig) return;
+
+    const eq = (a, b) => a != null && b != null && Math.abs(a - b) / b < 1e-6;
+    const entrySup = srConfig.entrySupport ?? null;
+    const exitRes = srConfig.exitResistance ?? null;
+
+    // Linhas de preço de ponta a ponta (rótulo no eixo) pra uma lista de níveis — usadas no estilo
+    // 'linhas' e no fallback do override sem janela de trade. Pontilhadas, azul (S) / rosa (R),
+    // rótulo com o posto (S1/S2/R1…); entrada/alvo em sólido mais grosso.
+    //  - mode 'full' : + destaque de entrada/alvo   - mode 'ref' : só referência fina
+    const makePriceLines = (levels, mode) => {
+      for (const type of ['support', 'resistance']) {
+        const color = type === 'support' ? SR_SUPPORT_LINE : SR_RESISTANCE_LINE;
+        for (const lvl of rankSrLevels(levels, type)) {
+          const isEntry = mode === 'full' && eq(lvl.price, entrySup);
+          const isExit = mode === 'full' && eq(lvl.price, exitRes);
+          priceLinesRef.current.push(series.createPriceLine({
+            price: lvl.price, color,
+            lineWidth: mode === 'ref' ? 1 : ((isEntry || isExit) ? 3 : 2),
+            lineStyle: (isEntry || isExit) ? 0 : 2,
+            axisLabelVisible: true,
+            title: `${lvl.label} (${lvl.touches ?? 1}x)${isEntry ? ' entrada' : isExit ? ' alvo' : ''}`,
+          }));
+        }
+      }
+    };
+
+    // Faixa de candles carregada (LW rejeita pontos de série fora dela).
+    const cs = candlesticks ?? [];
+    const minTime = cs.length ? Math.floor(Number(cs[0].openTime) / 1000) : null;
+    const maxTime = cs.length ? Math.floor(Number(cs[cs.length - 1].openTime) / 1000) : null;
+    const inRange = (tsec) => minTime == null || (tsec >= minTime && tsec <= maxTime);
+
+    // Override de trade das Estatísticas (shape { levels, tradeWindow }): TRAÇO na janela do trade
+    // — cada nível vira um segmento entrada→saída, sem linha atravessando o resto do gráfico.
+    // Sem janela (ou sem candles) → cai no clássico de ponta a ponta.
+    if (!srConfig.rolling) {
+      const tw = srConfig.tradeWindow;
+      if (!tw || minTime == null) { makePriceLines(srConfig.levels, 'full'); return; }
+      const from = Math.max(minTime, Math.floor(tw.fromMs / 1000));
+      const to = Math.min(maxTime, Math.floor(tw.toMs / 1000));
+      if (to <= from) { makePriceLines(srConfig.levels, 'full'); return; }
+      for (const type of ['support', 'resistance']) {
+        const color = type === 'support' ? SR_SUPPORT_LINE : SR_RESISTANCE_LINE;
+        for (const lvl of rankSrLevels(srConfig.levels, type)) {
+          const isEntry = eq(lvl.price, entrySup);
+          const isExit = eq(lvl.price, exitRes);
+          const s = chart.addSeries(LineSeries, {
+            color,
+            lineWidth: (isEntry || isExit) ? 3 : 2,
+            lineStyle: (isEntry || isExit) ? 0 : 2, // entrada/alvo sólido, resto pontilhado
+            lastValueVisible: isEntry || isExit,
+            priceLineVisible: false, crosshairMarkerVisible: false,
+          });
+          s.setData([{ time: from, value: lvl.price }, { time: to, value: lvl.price }]);
+          createSeriesMarkers(s, [{
+            time: to, position: 'inBar', color, shape: 'circle',
+            text: lvl.label + (isEntry ? ' entrada' : isExit ? ' alvo' : ''),
+          }]);
+          srRollSeriesRef.current.push(s);
+        }
+      }
+      return;
+    }
+
+    const anchors = srConfig.rolling;
+    if (!anchors.length) return;
+    const latest = anchors[anchors.length - 1].levels;
+
+    if (srConfig.style === 'linhas') {
+      makePriceLines(latest, 'full');
+      return;
+    }
+    if (minTime == null) { makePriceLines(latest, 'ref'); return; }
+
+    const withSteps = srConfig.style !== 'traco';
+    const times = anchors.map((a) => Math.floor(Number(a.time) / 1000));
+    const step = times.length > 1 ? Math.max(1, times[times.length - 1] - times[times.length - 2]) : 3600;
+    // Postos por âncora já rankeados (S1 = suporte mais perto do preço, R1 = resistência mais perto).
+    const rankedByAnchor = anchors.map((a) => ({
+      support: rankSrLevels(a.levels, 'support'),
+      resistance: rankSrLevels(a.levels, 'resistance'),
+    }));
+
+    for (const type of ['support', 'resistance']) {
+      const color = type === 'support' ? SR_SUPPORT_LINE : SR_RESISTANCE_LINE;
+      const width = type === 'support' ? 3 : 2;
+      // detectSupportResistance devolve no máx. ~3 níveis por tipo; teto defensivo em 6.
+      const maxRank = Math.min(6, Math.max(0, ...rankedByAnchor.map((x) => x[type].length)));
+      for (let r = 0; r < maxRank; r++) {
+        const data = [];
+        let lastPt = null;
+        for (let i = 0; i < anchors.length; i++) {
+          if (!inRange(times[i])) continue;
+          const lvl = rankedByAnchor[i][type][r];
+          if (withSteps) {
+            // Escada: liga o posto r entre âncoras; whitespace onde falta o nível.
+            data.push(lvl ? { time: times[i], value: lvl.price } : { time: times[i] });
+            if (lvl) lastPt = { time: times[i], value: lvl.price };
+          } else if (lvl) {
+            // Traço: um dash horizontal por âncora, com quebra (whitespace) antes do próximo.
+            const segEnd = Math.min(maxTime, i + 1 < anchors.length ? times[i + 1] : times[i] + step);
+            if (segEnd - times[i] > 2) {
+              const gap = Math.max(2, Math.floor((segEnd - times[i]) * 0.15));
+              data.push({ time: times[i], value: lvl.price });
+              data.push({ time: segEnd - gap, value: lvl.price });
+              data.push({ time: segEnd - gap + 1 }); // whitespace → quebra
+              lastPt = { time: segEnd - gap, value: lvl.price };
+            }
+          }
+        }
+        // tempos estritamente crescentes; pontos com valor têm prioridade sobre whitespace.
+        const dedup = [];
+        for (const p of data) {
+          if (dedup.length && dedup[dedup.length - 1].time >= p.time) {
+            if (p.value != null) dedup[dedup.length - 1] = p;
+          } else dedup.push(p);
+        }
+        if (!lastPt || !dedup.some((p) => p.value != null)) continue;
+        const s = chart.addSeries(LineSeries, {
+          color, lineWidth: width,
+          lineType: withSteps ? LineType.WithSteps : LineType.Simple,
+          lineStyle: 2, // pontilhada
+          priceLineVisible: false, lastValueVisible: r === 0, crosshairMarkerVisible: false,
+        });
+        s.setData(dedup);
+        createSeriesMarkers(s, [{
+          time: lastPt.time, position: 'inBar', color, shape: 'circle',
+          text: `${type === 'support' ? 'S' : 'R'}${r + 1}`,
+        }]);
+        srRollSeriesRef.current.push(s);
+      }
+    }
+  }, [srConfig, candlesticks]);
 
   // Linhas verticais (fullHeight, largura 2px) nos candles em que o RSI(14) cruzou pra cima do
   // "Limiar RSI" — mesmo gatilho do bot RSI Momentum (ver computeRsiUpCrossings). Roxo.

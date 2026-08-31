@@ -36,6 +36,7 @@ import {
   normalizeMaBandsDefaults,
   normalizeSrInterval,
   normalizeSrCandleCount,
+  normalizeSrStyle,
   normalizePphlInterval,
   normalizePphlCandleCount,
   normalizeWfractalsInterval,
@@ -740,6 +741,14 @@ export function CurrencyProvider({ children }) {
     });
   }, []);
 
+  const setSrStyleDefault = useCallback((style) => {
+    setUiPrefsState((prev) => {
+      const next = { ...prev, srStyleDefault: normalizeSrStyle(style) };
+      saveUiPreferences(next);
+      return next;
+    });
+  }, []);
+
   const setPphlIntervalDefault = useCallback((interval) => {
     setUiPrefsState((prev) => {
       const next = { ...prev, pphlIntervalDefault: normalizePphlInterval(interval) };
@@ -1249,6 +1258,7 @@ export function CurrencyProvider({ children }) {
         setMaBandsDefaults,
         setSrIntervalDefault,
         setSrCandleCountDefault,
+        setSrStyleDefault,
         setPphlIntervalDefault,
         setPphlCandleCountDefault,
         setWfractalsIntervalDefault,

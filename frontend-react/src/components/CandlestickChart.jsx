@@ -12,9 +12,10 @@ import CandlestickChartLW from './CandlestickChartLW';
 import convertOpenTime from '../utils/convertOpenTime';
 import Tooltip from './Tooltip';
 import { useIsMobile } from '../hooks/useIsMobile';
-import { DEFAULT_OVERLAY_SLOTS, DEFAULT_ACTIVE_INDICATORS, VALID_ACTIVE_INDICATORS, BB_PERIOD_OPTIONS, BB_STDDEV_OPTIONS, DEFAULT_SR_INTERVAL, DEFAULT_PPHL_INTERVAL, DEFAULT_WFRACTALS_INTERVAL, DEFAULT_ZIGZAG_INTERVAL, INDICATOR_CANDLE_COUNT_OPTIONS, DEFAULT_INDICATOR_CANDLE_COUNT, DEFAULT_CHOP_INTERVAL, DEFAULT_MACD_INTERVAL, DEFAULT_PREV_DAY_CLOUD_INTERVAL, PREV_DAY_CLOUD_INTERVAL_OPTIONS, GATE_PREV_DAY_CLOUD_INTERVALS, DEFAULT_PREV_DAY_CLOUD_CANDLE_COUNT, PREV_DAY_CLOUD_CANDLE_COUNT_OPTIONS, DEFAULT_PREV_DAY_CLOUD_USE_HIGH_LOW, DEFAULT_EMA_PERSIST_CLOUD_INTERVAL, DEFAULT_PERM_CLOUD_TONES, DEFAULT_EMA_PERSIST_CLOUD_LAYERS, DEFAULT_BARS_SINCE_CROSS_INTERVAL, DEFAULT_TD_SEQUENTIAL_INTERVAL, RSI_CROSS_THRESHOLD_OPTIONS, DEFAULT_RSI_CROSS_THRESHOLD, DEFAULT_COMMON_CHART_INTERVALS, getEmaPersistCloudConfirmInterval } from '../utils/uiPreferences';
+import { DEFAULT_OVERLAY_SLOTS, DEFAULT_ACTIVE_INDICATORS, VALID_ACTIVE_INDICATORS, BB_PERIOD_OPTIONS, BB_STDDEV_OPTIONS, DEFAULT_SR_INTERVAL, DEFAULT_PPHL_INTERVAL, DEFAULT_WFRACTALS_INTERVAL, DEFAULT_ZIGZAG_INTERVAL, INDICATOR_CANDLE_COUNT_OPTIONS, DEFAULT_INDICATOR_CANDLE_COUNT, DEFAULT_SR_CANDLE_COUNT, SR_STYLE_OPTIONS, DEFAULT_SR_STYLE, DEFAULT_CHOP_INTERVAL, DEFAULT_MACD_INTERVAL, DEFAULT_PREV_DAY_CLOUD_INTERVAL, PREV_DAY_CLOUD_INTERVAL_OPTIONS, GATE_PREV_DAY_CLOUD_INTERVALS, DEFAULT_PREV_DAY_CLOUD_CANDLE_COUNT, PREV_DAY_CLOUD_CANDLE_COUNT_OPTIONS, DEFAULT_PREV_DAY_CLOUD_USE_HIGH_LOW, DEFAULT_EMA_PERSIST_CLOUD_INTERVAL, DEFAULT_PERM_CLOUD_TONES, DEFAULT_EMA_PERSIST_CLOUD_LAYERS, DEFAULT_BARS_SINCE_CROSS_INTERVAL, DEFAULT_TD_SEQUENTIAL_INTERVAL, RSI_CROSS_THRESHOLD_OPTIONS, DEFAULT_RSI_CROSS_THRESHOLD, DEFAULT_COMMON_CHART_INTERVALS, getEmaPersistCloudConfirmInterval } from '../utils/uiPreferences';
 import { computeRsiUpCrossings } from '../utils/rsiThresholdCrossings';
 import { detectSupportResistance, detectPivotPointsHighLow, detectWilliamsFractals, detectZigZag } from '../utils/srDetectors';
+import { logSrLevels } from '../utils/srLevelLog';
 import { PERM_CLOUD_TONES, PERM_TONE_SWATCH } from '../utils/emaCrossPersistenceCloud';
 import { CHART_VIEW, INTERVAL_MS, computeZoomWindow, buildFixedDataZoom, buildInsideDataZoom, computeCandleLimitFromTime, isTradePanelChartView, computeManualWheelZoom } from '../utils/chartView';
 import { simulateBbTouchPath, pairBbPathCycles } from '../utils/bollingerTouchPath';
@@ -648,6 +649,26 @@ function sliceForVisibleWindow(candles, visibleRange, maxCount) {
   if (end - start + 1 < SR_MIN_WINDOW) start = Math.max(0, end - SR_MIN_WINDOW + 1);
   // teto = maxCount, mantendo a borda direita
   if (end - start + 1 > maxCount) start = end - maxCount + 1;
+  return candles.slice(start, end + 1);
+}
+
+/** Nº de candles-âncora do S/R ROLANTE: pra cada um dos últimos SR_ROLL_WIDTH candles (o da borda
+ *  direita do trecho visível + os anteriores) roda-se detectSupportResistance sobre os
+ *  `srCandleCount` candles anteriores àquela âncora. Largura fixa — não muda com zoom. */
+const SR_ROLL_WIDTH = 10;
+
+/** Corte pro S/R rolante: os `lookback + width` candles (asc por openTime) que terminam na borda
+ *  direita do trecho visível [.., toMs]. Sem visibleRange → os últimos. A borda direita acompanha
+ *  o pan, mas a quantidade de candles (e portanto o cálculo por âncora) é fixa. */
+function sliceForRollingSR(candles, visibleRange, lookback, width) {
+  if (!Array.isArray(candles) || !candles.length) return [];
+  let end = candles.length - 1;
+  if (visibleRange && Number.isFinite(visibleRange.toMs)) {
+    for (let i = candles.length - 1; i >= 0; i--) {
+      if (Number(candles[i].openTime) <= visibleRange.toMs) { end = i; break; }
+    }
+  }
+  const start = Math.max(0, end - (lookback + width) + 1);
   return candles.slice(start, end + 1);
 }
 
@@ -1421,6 +1442,53 @@ function renderIndicatorIntervalCountTile(dims, t, tipKeyInterval, tipKeyCount, 
   );
 }
 
+const SR_STYLE_LABELS = { degrau: 'Degrau', traco: 'Traço', linhas: 'Linhas' };
+
+/** Tile do S/R rolante: intervalo próprio + lookback por âncora ("x50") + estilo de desenho
+ *  (degrau / traço / linhas). O "count" aqui NÃO é a janela total — é quantos candles anteriores
+ *  a cada uma das SR_ROLL_WIDTH âncoras entram no detectSupportResistance. */
+function renderSrTile(dims, t, interval, setInterval, count, setCount, style, setStyle) {
+  const color = '#facc15';
+  const innerW = dims.w - PANEL_TILE_PAD * 2;
+  const innerH = dims.h - PANEL_TILE_PAD * 2;
+  const gap = 3;
+  const ivW = Math.max(38, innerW * 0.44 - gap);
+  const ccW = Math.max(30, (innerW - ivW - gap * 2) * 0.5);
+  const stW = Math.max(30, innerW - ivW - ccW - gap * 2);
+  const fs = (w) => scaleFontSize({ w, h: innerH }, 0.3, 9, 13);
+  return (
+    <div style={{ display: 'flex', alignItems: 'stretch', width: innerW, height: innerH, boxSizing: 'border-box', gap }}>
+      <PanelTip text={t('chart.tip.sr_interval')}>
+        <select
+          value={interval}
+          onChange={e => setInterval(e.target.value)}
+          style={{ ...panelSelect(color, { w: ivW, h: innerH }), fontSize: fs(ivW) }}
+        >
+          {OVERLAY_MA_INTERVALS.map(iv => <option key={iv} value={iv}>{`S/R ${iv}`}</option>)}
+        </select>
+      </PanelTip>
+      <PanelTip text={t('chart.tip.sr_count')}>
+        <select
+          value={count}
+          onChange={e => setCount(Number(e.target.value))}
+          style={{ ...panelSelect(color, { w: ccW, h: innerH }), fontSize: fs(ccW) }}
+        >
+          {INDICATOR_CANDLE_COUNT_OPTIONS.map(n => <option key={n} value={n}>{`x${n}`}</option>)}
+        </select>
+      </PanelTip>
+      <PanelTip text={t('chart.tip.sr_style')}>
+        <select
+          value={style}
+          onChange={e => setStyle(e.target.value)}
+          style={{ ...panelSelect(color, { w: stW, h: innerH }), fontSize: fs(stW) }}
+        >
+          {SR_STYLE_OPTIONS.map(s => <option key={s} value={s}>{SR_STYLE_LABELS[s] ?? s}</option>)}
+        </select>
+      </PanelTip>
+    </div>
+  );
+}
+
 /** Seletor do "Limiar RSI" — linha vertical no gráfico onde o RSI(14) do intervalo do gráfico
  *  cruza pra cima do valor escolhido (0 = desligado). Só aparece com o subpainel de RSI ligado. */
 function renderRsiCrossThresholdTile(dims, t, value, onChange) {
@@ -2039,6 +2107,8 @@ function ChartIndicatorPanel({
   setSrInterval,
   srCandleCount,
   setSrCandleCount,
+  srStyle,
+  setSrStyle,
   pphlInterval,
   setPphlInterval,
   pphlCandleCount,
@@ -2343,7 +2413,7 @@ function ChartIndicatorPanel({
               {tile.kind === 'bb' && renderBollingerTile(
                 tile.data, tile.dims, t, addBbGroup, removeBbGroup, updateBbGroup, toggleBbGroupFlag, botPermInterval,
               )}
-              {tile.kind === 'srInterval' && renderIndicatorIntervalCountTile(tile.dims, t, 'chart.tip.sr_interval', 'chart.tip.sr_count', 'S/R', '#facc15', srInterval, setSrInterval, srCandleCount, setSrCandleCount)}
+              {tile.kind === 'srInterval' && renderSrTile(tile.dims, t, srInterval, setSrInterval, srCandleCount, setSrCandleCount, srStyle, setSrStyle)}
               {tile.kind === 'pphlInterval' && renderIndicatorIntervalCountTile(tile.dims, t, 'chart.tip.pphl_interval', 'chart.tip.pphl_count', 'PPHL', '#2dd4bf', pphlInterval, setPphlInterval, pphlCandleCount, setPphlCandleCount)}
               {tile.kind === 'wfractalsInterval' && renderIndicatorIntervalCountTile(tile.dims, t, 'chart.tip.wfractals_interval', 'chart.tip.wfractals_count', 'WF', '#f472b6', wfractalsInterval, setWfractalsInterval, wfractalsCandleCount, setWfractalsCandleCount)}
               {tile.kind === 'zigzagInterval' && renderIndicatorIntervalCountTile(tile.dims, t, 'chart.tip.zigzag_interval', 'chart.tip.zigzag_count', 'ZZ', '#818cf8', zigzagInterval, setZigzagInterval, zigzagCandleCount, setZigzagCandleCount)}
@@ -2767,10 +2837,18 @@ const srPriceEq = (a, b) => a != null && b != null && Math.abs(a - b) / b < 1e-6
 function buildSrMarkLines(levels, entrySupport = null, exitResistance = null) {
   if (!levels?.length) return [];
   const maxTouches = Math.max(...levels.map(l => l.touches ?? 1));
-  const typeCount = { resistance: 0, support: 0 };
+  // Posto por proximidade do preço (R1 = resistência mais baixa, S1 = suporte mais alto) —
+  // mesmo critério do efeito de S/R no LW (rankSrLevels).
+  const rankOf = new Map();
+  for (const type of ['resistance', 'support']) {
+    (levels.filter(l => l.type === type)
+      .sort((a, b) => (type === 'resistance' ? a.price - b.price : b.price - a.price)))
+      .forEach((l, i) => rankOf.set(l, i + 1));
+  }
   return levels.map(lvl => {
     const isRes = lvl.type === 'resistance';
-    const color = srLevelColor(isRes ? 'resistance' : 'support', typeCount[isRes ? 'resistance' : 'support']++);
+    const rank = rankOf.get(lvl) ?? 1;
+    const color = srLevelColor(isRes ? 'resistance' : 'support', rank - 1);
     const strengthRatio = (lvl.touches ?? 1) / maxTouches;
     // Suporte desenhado bem mais grosso que a resistência — é a linha de referência da entrada
     // no backtest de S/R, o usuário precisa localizá-la de relance.
@@ -2789,7 +2867,7 @@ function buildSrMarkLines(levels, entrySupport = null, exitResistance = null) {
       },
       label: {
         show: true,
-        formatter: `${isRes ? 'R' : 'S'} ${fmtChartPrice(lvl.price)} (${lvl.touches}x)${tag}`,
+        formatter: `${isRes ? 'R' : 'S'}${rank} ${fmtChartPrice(lvl.price)} (${lvl.touches}x)${tag}`,
         color,
         fontSize: 9,
         fontWeight: (isEntry || isExit) ? 'bold' : 'normal',
@@ -3027,8 +3105,10 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
   // Todas as markLines unificadas: separadores de dia + zoom + compras + sinais MT + zonas S/R
   const mtMarkData = buildMultitradeMarkLines(candlesticks, interval, multitradeMarkers, DL, LEFT_PAD);
   // srConfig com níveis presente sem o botão "sr" ligado = override de trade das Estatísticas.
+  // Motor ECharts legado não desenha o S/R rolante — usa só os níveis da âncora mais recente.
+  const srLatestLevels = srConfig?.rolling?.length ? srConfig.rolling[srConfig.rolling.length - 1].levels : srConfig?.levels;
   const srMarkData = (showSr || srConfig?.levels?.length)
-    ? buildSrMarkLines(srConfig?.levels, srConfig?.entrySupport, srConfig?.exitResistance) : [];
+    ? buildSrMarkLines(srLatestLevels, srConfig?.entrySupport, srConfig?.exitResistance) : [];
   const pivotMarkers = showPphl ? buildPivotMarkers(pphlConfig?.points, candlesticks, DL, LEFT_PAD, interval) : { highs: [], lows: [] };
   const wfractalsMarkers = showWfractals ? buildPivotMarkers(wfractalsConfig?.points, candlesticks, DL, LEFT_PAD, interval) : { highs: [], lows: [] };
   const zigzagLine = showZigzag ? buildZigZagLine(zigzagConfig, candlesticks, DL, LEFT_PAD, interval) : { line: [], tentative: [] };
@@ -3653,7 +3733,7 @@ export default function CandlestickChart() {
   const { selectedChart, setSelectedChart, chartZoom, setChartZoom, chartTradeMarkers, chartViewSource, chartSrOverride,
     chartCandleWindowReset,
     multitradeChartFocus, tradePurchases, allTrades, chartInterval: savedInterval, setChartInterval,
-    chartPanelButtons, uiPrefs, setMaBandsDefaults, setSrIntervalDefault, setSrCandleCountDefault, setPphlIntervalDefault, setPphlCandleCountDefault,
+    chartPanelButtons, uiPrefs, setMaBandsDefaults, setSrIntervalDefault, setSrCandleCountDefault, setSrStyleDefault, setPphlIntervalDefault, setPphlCandleCountDefault,
     setWfractalsIntervalDefault, setWfractalsCandleCountDefault, setZigzagIntervalDefault, setZigzagCandleCountDefault,
     setChopIntervalDefault, setMacdIntervalDefault,
     setPrevDayCloudIntervalDefault, setPrevDayCloudCandleCountDefault, setPrevDayCloudUseHighLowDefault,
@@ -3817,7 +3897,8 @@ export default function CandlestickChart() {
   // (EMA9×EMA21) inteira no cliente duplicaria a lógica de backend/utils/emaPersistCloud.js.
   const [bbPermPathCache, setBbPermPathCache] = useState({});
   const [srInterval, setSrInterval] = useState(() => uiPrefs.srIntervalDefault ?? DEFAULT_SR_INTERVAL);
-  const [srCandleCount, setSrCandleCount] = useState(() => uiPrefs.srCandleCountDefault ?? DEFAULT_INDICATOR_CANDLE_COUNT);
+  const [srCandleCount, setSrCandleCount] = useState(() => uiPrefs.srCandleCountDefault ?? DEFAULT_SR_CANDLE_COUNT);
+  const [srStyle, setSrStyle] = useState(() => uiPrefs.srStyleDefault ?? DEFAULT_SR_STYLE);
   const [pphlInterval, setPphlInterval] = useState(() => uiPrefs.pphlIntervalDefault ?? DEFAULT_PPHL_INTERVAL);
   const [pphlCandleCount, setPphlCandleCount] = useState(() => uiPrefs.pphlCandleCountDefault ?? DEFAULT_INDICATOR_CANDLE_COUNT);
   const [wfractalsInterval, setWfractalsInterval] = useState(() => uiPrefs.wfractalsIntervalDefault ?? DEFAULT_WFRACTALS_INTERVAL);
@@ -4229,6 +4310,11 @@ export default function CandlestickChart() {
     setSrCandleCountDefault(srCandleCount);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [srCandleCount]);
+  useEffect(() => {
+    if (isTradePanelChartView(chartViewSource)) return;
+    setSrStyleDefault(srStyle);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [srStyle]);
 
   // Persiste o intervalo do Pivot Points High/Low (mesmo padrão do S/R)
   useEffect(() => {
@@ -5787,22 +5873,54 @@ export default function CandlestickChart() {
     return sliceForVisibleWindow(raw, visibleChartRange, count);
   }, [pivotRawCache, selectedChart?.symbol, visibleChartRange]);
 
+  // Borda direita do trecho visível SNAPADA pra grade do intervalo do S/R. Enquanto o usuário
+  // arrasta DENTRO do mesmo candle de 4h (ex.: no gráfico de 15m, 16 candles cabem num 4h), esse
+  // valor não muda → o chartSrConfig abaixo não recalcula os 10×detectSupportResistance a cada
+  // frame de arrasto. Só recalcula quando a borda cruza pra outro candle de 4h (ou quando novos
+  // candles do S/R chegam via pivotRawCache). É o que o usuário pediu: 15m muda devagar dentro de 4h.
+  const srVisibleAnchorMs = useMemo(() => {
+    const toMs = visibleChartRange?.toMs;
+    if (!Number.isFinite(toMs)) return null;
+    const step = INTERVAL_MS[srInterval] ?? 3_600_000;
+    return Math.floor(toMs / step) * step;
+  }, [visibleChartRange, srInterval]);
+
   const chartSrConfig = useMemo(() => {
     // Trade das Estatísticas: desenha os níveis EXATOS que o backtest calculou pra esse sinal
     // (mesmo cálculo, sem recalcular) — o gráfico e o trade são a mesma coisa. Marca a linha de
     // suporte de entrada e a de resistência-alvo pra destaque em buildSrMarkLines / LW.
     if (srTradeOverride) {
+      // Traço na janela do trade: cada nível vira um segmento curto entrada→saída, em vez de linha
+      // de ponta a ponta. A janela vem dos marcadores buy/sell (setados por openOnChart nas
+      // Estatísticas); trade ainda aberto (sem sell) → estende até o último candle.
+      const buyMs = chartTradeMarkers?.find((m) => m.side === 'buy')?.time ?? chartTradeMarkers?.[0]?.time;
+      const sellMs = chartTradeMarkers?.find((m) => m.side === 'sell')?.time;
+      const lastCandleMs = Number(selectedChart?.candlesticks?.[selectedChart.candlesticks.length - 1]?.openTime);
+      const fromMs = Number(buyMs);
+      const toMs = Number(sellMs) || (Number.isFinite(lastCandleMs) ? lastCandleMs : Date.now());
       return {
         interval: chartSrOverride.interval,
         levels: chartSrOverride.levels,
         entrySupport: chartSrOverride.entrySupport ?? null,
         exitResistance: chartSrOverride.exitResistance ?? null,
+        tradeWindow: Number.isFinite(fromMs) && toMs > fromMs ? { fromMs, toMs } : null,
       };
     }
     if (!srShown) return null;
-    const levels = detectSupportResistance(pivotWindow(srInterval, srCandleCount), {});
-    return { interval: srInterval, levels };
-  }, [srShown, srTradeOverride, chartSrOverride, srInterval, srCandleCount, pivotWindow]);
+    // S/R ROLANTE: pra cada uma das últimas SR_ROLL_WIDTH âncoras (a da borda direita visível + as
+    // anteriores), roda o detector sobre os `srCandleCount` candles anteriores àquela âncora.
+    // Largura e lookback fixos — não mudam com zoom/pan (só a borda direita acompanha o pan).
+    const raw = pivotRawCache[`${selectedChart?.symbol}|${srInterval}`]?.candles ?? [];
+    const slice = sliceForRollingSR(
+      raw, srVisibleAnchorMs != null ? { toMs: srVisibleAnchorMs } : null, srCandleCount, SR_ROLL_WIDTH);
+    const rolling = [];
+    for (let k = Math.max(0, slice.length - SR_ROLL_WIDTH); k < slice.length; k++) {
+      const from = Math.max(0, k - srCandleCount + 1);
+      const levels = detectSupportResistance(slice.slice(from, k + 1), {});
+      if (levels.length) rolling.push({ time: Number(slice[k].openTime), levels });
+    }
+    return { interval: srInterval, style: srStyle, rolling };
+  }, [srShown, srTradeOverride, chartSrOverride, chartTradeMarkers, srInterval, srCandleCount, srStyle, pivotRawCache, selectedChart?.symbol, selectedChart?.candlesticks, srVisibleAnchorMs]);
 
   const chartPphlConfig = useMemo(() => {
     if (!pphlShown) return null;
@@ -5868,6 +5986,26 @@ export default function CandlestickChart() {
       labelPos: 'top',
     };
   }, [analysisBox, chartFlagsConfig]);
+
+  // DEBUG (Teste): ao criar a caixa de análise, printa no console os níveis de S/R no momento da
+  // borda direita da caixa — mesmo cálculo rolante do gráfico, ancorado em analysisBox.toMs.
+  useEffect(() => {
+    if (!analysisBox) return;
+    if (!srShown) { console.warn('[S/R] caixa: indicador S/R desligado — nada a printar'); return; }
+    const raw = pivotRawCache[`${selectedChart?.symbol}|${srInterval}`]?.candles ?? [];
+    if (!raw.length) { console.warn(`[S/R] caixa: candles de ${srInterval} ainda não carregados`); return; }
+    const slice = sliceForRollingSR(raw, { toMs: analysisBox.toMs }, srCandleCount, SR_ROLL_WIDTH);
+    const anchorCandle = slice[slice.length - 1];
+    const levels = detectSupportResistance(
+      slice.slice(Math.max(0, slice.length - srCandleCount), slice.length), {});
+    logSrLevels('caixa de análise', selectedChart?.symbol, levels, {
+      interval: srInterval,
+      lookback: srCandleCount,
+      anchorMs: anchorCandle ? Number(anchorCandle.openTime) : null,
+      windowMs: [analysisBox.fromMs, analysisBox.toMs],
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [analysisBox]);
 
   const chartPrevDayCloudConfig = useMemo(() => {
     if (!prevDayCloudShown || !selectedChart?.symbol) return null;
@@ -6268,6 +6406,8 @@ export default function CandlestickChart() {
             setSrInterval={setSrInterval}
             srCandleCount={srCandleCount}
             setSrCandleCount={setSrCandleCount}
+            srStyle={srStyle}
+            setSrStyle={setSrStyle}
             pphlInterval={pphlInterval}
             setPphlInterval={setPphlInterval}
             pphlCandleCount={pphlCandleCount}
@@ -6395,6 +6535,8 @@ export default function CandlestickChart() {
             setSrInterval={setSrInterval}
             srCandleCount={srCandleCount}
             setSrCandleCount={setSrCandleCount}
+            srStyle={srStyle}
+            setSrStyle={setSrStyle}
             pphlInterval={pphlInterval}
             setPphlInterval={setPphlInterval}
             pphlCandleCount={pphlCandleCount}

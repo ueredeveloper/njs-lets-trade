@@ -14,6 +14,7 @@ import { CHART_VIEW } from '../utils/chartView';
 import { getEntriesForSymbol } from '../constants/strategyPresets';
 import { isMaCrossEntry } from '../utils/macrossFavoritesSort';
 import { isBollingerBandsEntry, resolveBollingerBandsPermFilter } from '../utils/multitradeChart';
+import { logSrLevels } from '../utils/srLevelLog';
 import { VWAP_BANDS_ALL_INTERVALS, VWAP_BANDS_SESSIONS, EMA_FILTER_PERIODS } from '../constants/vwapBandsConfigSchema';
 
 
@@ -1273,6 +1274,17 @@ function RsiMomentumStats({ autoCalc }) {
       // Desenha no gráfico EXATAMENTE o S/R que o backtest usou pra decidir esse trade (o
       // gráfico e o trade têm que ser a mesma coisa). null se a busca não tinha S/R ligado.
       setChartSrOverride(o.sr ?? null);
+      // DEBUG (Teste): printa no console os níveis de S/R EXATOS desse trade.
+      if (o.sr?.levels?.length) {
+        logSrLevels(`trade ${new Date(o.signalDate).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}`, sym, o.sr.levels, {
+          interval: o.sr.interval,
+          lookback: o.sr.candleCount,
+          anchorMs: new Date(o.signalDate).getTime(),
+          windowMs: [new Date(o.signalDate).getTime(), o.exitDate ? new Date(o.exitDate).getTime() : endMs],
+          entrySupport: o.sr.entrySupport,
+          exitResistance: o.sr.exitResistance,
+        });
+      }
       setChartZoom({
         source: CHART_VIEW.STATISTICS,
         startDate: o.signalDate,

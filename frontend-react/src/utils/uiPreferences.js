@@ -239,10 +239,28 @@ function normalizeIndicatorCandleCount(raw) {
   return INDICATOR_CANDLE_COUNT_OPTIONS.includes(n) ? n : DEFAULT_INDICATOR_CANDLE_COUNT;
 }
 
-export const normalizeSrCandleCount = normalizeIndicatorCandleCount;
 export const normalizePphlCandleCount = normalizeIndicatorCandleCount;
 export const normalizeWfractalsCandleCount = normalizeIndicatorCandleCount;
 export const normalizeZigzagCandleCount = normalizeIndicatorCandleCount;
+
+/** S/R do gráfico é ROLANTE: pra os últimos SR_ROLL_WIDTH candles-âncora, roda o detector sobre
+ *  os `srCandleCount` candles anteriores a cada âncora. Aqui o "count" é o LOOKBACK por âncora
+ *  (não a janela total), por isso o default é bem menor que o dos outros pivôs. */
+export const DEFAULT_SR_CANDLE_COUNT = 50;
+export function normalizeSrCandleCount(raw) {
+  const n = Math.round(Number(raw));
+  return INDICATOR_CANDLE_COUNT_OPTIONS.includes(n) ? n : DEFAULT_SR_CANDLE_COUNT;
+}
+
+/** Estilo de desenho do S/R rolante no gráfico:
+ *  - 'degrau'  linhas contínuas em escada, um "posto" de nível ligado entre âncoras vizinhas
+ *  - 'traco'   segmentos curtos soltos por âncora (sem ligar as âncoras entre si)
+ *  - 'linhas'  clássico: linhas de preço de ponta a ponta, só do conjunto da âncora mais recente */
+export const SR_STYLE_OPTIONS = ['degrau', 'traco', 'linhas'];
+export const DEFAULT_SR_STYLE = 'degrau';
+export function normalizeSrStyle(raw) {
+  return SR_STYLE_OPTIONS.includes(raw) ? raw : DEFAULT_SR_STYLE;
+}
 
 /** Intervalo de candles usado pra calcular o Choppiness Index — mesmo padrão do S/R/PPHL,
  *  independente do intervalo do gráfico. 4h por padrão (ver estudo: 1h fica contaminado pelo
@@ -458,7 +476,8 @@ export const DEFAULT_UI_PREFS = {
   overlaySlots: normalizeOverlaySlots(DEFAULT_OVERLAY_SLOTS),
   maBandsDefaults: normalizeMaBandsDefaults(DEFAULT_MA_BANDS),
   srIntervalDefault: DEFAULT_SR_INTERVAL,
-  srCandleCountDefault: DEFAULT_INDICATOR_CANDLE_COUNT,
+  srCandleCountDefault: DEFAULT_SR_CANDLE_COUNT,
+  srStyleDefault: DEFAULT_SR_STYLE,
   pphlIntervalDefault: DEFAULT_PPHL_INTERVAL,
   pphlCandleCountDefault: DEFAULT_INDICATOR_CANDLE_COUNT,
   wfractalsIntervalDefault: DEFAULT_WFRACTALS_INTERVAL,
@@ -496,7 +515,8 @@ function cloneDefaults() {
     overlaySlots: normalizeOverlaySlots(DEFAULT_OVERLAY_SLOTS),
     maBandsDefaults: normalizeMaBandsDefaults(DEFAULT_MA_BANDS),
     srIntervalDefault: DEFAULT_SR_INTERVAL,
-    srCandleCountDefault: DEFAULT_INDICATOR_CANDLE_COUNT,
+    srCandleCountDefault: DEFAULT_SR_CANDLE_COUNT,
+    srStyleDefault: DEFAULT_SR_STYLE,
     pphlIntervalDefault: DEFAULT_PPHL_INTERVAL,
     pphlCandleCountDefault: DEFAULT_INDICATOR_CANDLE_COUNT,
     wfractalsIntervalDefault: DEFAULT_WFRACTALS_INTERVAL,
@@ -559,6 +579,9 @@ export function loadUiPreferences() {
     }
     if (parsed.srCandleCountDefault !== undefined) {
       result.srCandleCountDefault = normalizeSrCandleCount(parsed.srCandleCountDefault);
+    }
+    if (parsed.srStyleDefault !== undefined) {
+      result.srStyleDefault = normalizeSrStyle(parsed.srStyleDefault);
     }
     if (parsed.pphlIntervalDefault !== undefined) {
       result.pphlIntervalDefault = normalizePphlInterval(parsed.pphlIntervalDefault);
