@@ -12,10 +12,13 @@ import CandlestickChartLW from './CandlestickChartLW';
 import convertOpenTime from '../utils/convertOpenTime';
 import Tooltip from './Tooltip';
 import { useIsMobile } from '../hooks/useIsMobile';
-import { DEFAULT_OVERLAY_SLOTS, DEFAULT_ACTIVE_INDICATORS, VALID_ACTIVE_INDICATORS, BB_PERIOD_OPTIONS, BB_STDDEV_OPTIONS, DEFAULT_SR_INTERVAL, DEFAULT_PPHL_INTERVAL, DEFAULT_CHOP_INTERVAL, DEFAULT_MACD_INTERVAL, DEFAULT_PREV_DAY_CLOUD_INTERVAL, PREV_DAY_CLOUD_INTERVAL_OPTIONS, GATE_PREV_DAY_CLOUD_INTERVALS, DEFAULT_PREV_DAY_CLOUD_CANDLE_COUNT, PREV_DAY_CLOUD_CANDLE_COUNT_OPTIONS, DEFAULT_PREV_DAY_CLOUD_USE_HIGH_LOW, DEFAULT_EMA_PERSIST_CLOUD_INTERVAL, DEFAULT_PERM_CLOUD_TONES, DEFAULT_EMA_PERSIST_CLOUD_LAYERS, DEFAULT_BARS_SINCE_CROSS_INTERVAL, DEFAULT_TD_SEQUENTIAL_INTERVAL, DEFAULT_COMMON_CHART_INTERVALS, getEmaPersistCloudConfirmInterval } from '../utils/uiPreferences';
+import { DEFAULT_OVERLAY_SLOTS, DEFAULT_ACTIVE_INDICATORS, VALID_ACTIVE_INDICATORS, BB_PERIOD_OPTIONS, BB_STDDEV_OPTIONS, DEFAULT_SR_INTERVAL, DEFAULT_PPHL_INTERVAL, DEFAULT_WFRACTALS_INTERVAL, DEFAULT_ZIGZAG_INTERVAL, INDICATOR_CANDLE_COUNT_OPTIONS, DEFAULT_INDICATOR_CANDLE_COUNT, DEFAULT_CHOP_INTERVAL, DEFAULT_MACD_INTERVAL, DEFAULT_PREV_DAY_CLOUD_INTERVAL, PREV_DAY_CLOUD_INTERVAL_OPTIONS, GATE_PREV_DAY_CLOUD_INTERVALS, DEFAULT_PREV_DAY_CLOUD_CANDLE_COUNT, PREV_DAY_CLOUD_CANDLE_COUNT_OPTIONS, DEFAULT_PREV_DAY_CLOUD_USE_HIGH_LOW, DEFAULT_EMA_PERSIST_CLOUD_INTERVAL, DEFAULT_PERM_CLOUD_TONES, DEFAULT_EMA_PERSIST_CLOUD_LAYERS, DEFAULT_BARS_SINCE_CROSS_INTERVAL, DEFAULT_TD_SEQUENTIAL_INTERVAL, RSI_CROSS_THRESHOLD_OPTIONS, DEFAULT_RSI_CROSS_THRESHOLD, DEFAULT_COMMON_CHART_INTERVALS, getEmaPersistCloudConfirmInterval } from '../utils/uiPreferences';
+import { computeRsiUpCrossings } from '../utils/rsiThresholdCrossings';
+import { detectSupportResistance, detectPivotPointsHighLow, detectWilliamsFractals, detectZigZag } from '../utils/srDetectors';
 import { PERM_CLOUD_TONES, PERM_TONE_SWATCH } from '../utils/emaCrossPersistenceCloud';
 import { CHART_VIEW, INTERVAL_MS, computeZoomWindow, buildFixedDataZoom, buildInsideDataZoom, computeCandleLimitFromTime, isTradePanelChartView, computeManualWheelZoom } from '../utils/chartView';
 import { simulateBbTouchPath, pairBbPathCycles } from '../utils/bollingerTouchPath';
+import { detectFlags } from '../utils/detectFlags';
 
 const LIMIT = DEFAULT_CANDLE_LIMIT;
 // Filtros e favoritos comuns buscam LIMIT (160) candles mas mostram só os mais recentes por
@@ -67,6 +70,16 @@ const PANEL_ROW_PX = 26;            // altura "natural" de uma row unit no dropd
 const MIN_ROW_UNIT_PX = 20;
 const C_UP   = '#26a69a';
 const C_DOWN = '#ef5350';
+/** Cores das linhas de S/R — resistência em tons de rosa, suporte em tons de azul (do mais
+ *  forte/próximo do preço pro mais fraco). O backend devolve no máximo `maxLevels` = 6 níveis
+ *  (≈3 resistências + 3 suportes, ver detectSupportResistance), então 6 tons por paleta cobrem o
+ *  pior caso. Ver buildSrMarkLines / o efeito de S/R no LW. */
+const SR_RESISTANCE_COLORS = ['#9d174d', '#be185d', '#db2777', '#ec4899', '#f472b6', '#f9a8d4'];
+const SR_SUPPORT_COLORS = ['#1e3a8a', '#1d4ed8', '#2563eb', '#3b82f6', '#60a5fa', '#93c5fd'];
+function srLevelColor(type, indexWithinType) {
+  const palette = type === 'resistance' ? SR_RESISTANCE_COLORS : SR_SUPPORT_COLORS;
+  return palette[indexWithinType % palette.length];
+}
 // BB: slate — distinto das EMAs (9 fúcsia, 21 laranja, 50 ciano, 200 âmbar)
 const BB_COLOR = '#94a3b8';
 const BB_PATH_COLOR = '#64748b';
@@ -86,6 +99,9 @@ const INDICATOR_GROUPS = [
   { id: 'ichimoku', label: 'Ichi',  color: '#60a5fa', tipKey: 'chart.tip.ichimoku' },
   { id: 'sr',       label: 'S/R',   color: '#facc15', tipKey: 'chart.tip.sr' },
   { id: 'pphl',     label: 'PPHL',  color: '#2dd4bf', tipKey: 'chart.tip.pphl' },
+  { id: 'wfractals', label: 'WF',   color: '#f472b6', tipKey: 'chart.tip.wfractals' },
+  { id: 'zigzag',   label: 'ZZ',    color: '#818cf8', tipKey: 'chart.tip.zigzag' },
+  { id: 'flags',    label: 'Band.', color: '#f5d90a', tipKey: 'chart.tip.flags' },
   { id: 'prevDayCloud', label: 'D-1', color: '#94a3b8', tipKey: 'chart.tip.prevDayCloud' },
   { id: 'rsi',      label: 'RSI',   color: '#a78bfa', tipKey: 'chart.tip.rsi' },
   { id: 'chopZone', label: 'CHOP',  color: '#f59e0b', tipKey: 'chart.tip.chopZone' },
@@ -595,34 +611,44 @@ async function fetchVwapPoints(symbol, interval, session, anchor, source, limit)
   return points;
 }
 
-/** Busca S/R num intervalo próprio (independente do gráfico) — mesmo padrão da Bollinger. */
-async function fetchSupportResistancePoints(symbol, interval, source, limit) {
+/** Candles brutos de um intervalo próprio (S/R, PPHL, WF, ZigZag) — o cálculo dos níveis é feito
+ *  no cliente (ver srDetectors.js + os useMemo chartSrConfig/chartPphlConfig/...), pra recalcular
+ *  ao vivo conforme o usuário arrasta/dá zoom (janela deslizante). */
+async function fetchPivotRawCandles(symbol, interval, source, limit) {
   const srcParam = source === 'gate' ? '&source=gate' : '';
   const candles = await fetch(
     `/services/candles/?symbol=${symbol}&limit=${limit}&interval=${interval}${srcParam}`,
   ).then(r => r.json());
-  if (!Array.isArray(candles) || !candles.length) return [];
-  const levels = await fetch('/services/support-resistance', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(candles),
-  }).then(r => r.json());
-  return Array.isArray(levels) ? levels : [];
+  return Array.isArray(candles) ? candles : [];
 }
 
-/** Pivot Points High/Low (estilo TradingView) — intervalo próprio, mesmo padrão do S/R, mas sem agrupar pivôs em zonas. */
-async function fetchPivotPointsHighLowPoints(symbol, interval, source, limit) {
-  const srcParam = source === 'gate' ? '&source=gate' : '';
-  const candles = await fetch(
-    `/services/candles/?symbol=${symbol}&limit=${limit}&interval=${interval}${srcParam}`,
-  ).then(r => r.json());
+/** "Janela deslizante" pro S/R/PPHL/WF/ZZ: os candles (asc por openTime) que caem no trecho
+ *  visível [fromMs, toMs] do gráfico, limitados a `maxCount`. Se o zoom estiver fechado demais
+ *  (poucos candles no trecho), estende pra trás terminando na borda direita do visível, até ter
+ *  ~`maxCount` candles — pra sempre haver histórico suficiente pra clusterizar. Sem visibleRange
+ *  → últimos `maxCount` candles (comportamento antigo). */
+const SR_MIN_WINDOW = 30;
+function sliceForVisibleWindow(candles, visibleRange, maxCount) {
   if (!Array.isArray(candles) || !candles.length) return [];
-  const pivots = await fetch('/services/pivot-points-hl', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(candles),
-  }).then(r => r.json());
-  return Array.isArray(pivots) ? pivots : [];
+  if (!visibleRange || !Number.isFinite(visibleRange.toMs)) {
+    return candles.slice(-maxCount);
+  }
+  const { fromMs, toMs } = visibleRange;
+  let end = candles.length - 1;
+  for (let i = candles.length - 1; i >= 0; i--) {
+    if (Number(candles[i].openTime) <= toMs) { end = i; break; }
+  }
+  let start = 0;
+  if (Number.isFinite(fromMs)) {
+    for (let i = 0; i <= end; i++) {
+      if (Number(candles[i].openTime) >= fromMs) { start = i; break; }
+    }
+  }
+  // zoom fechado demais → estende pra trás pra ter pelo menos SR_MIN_WINDOW candles
+  if (end - start + 1 < SR_MIN_WINDOW) start = Math.max(0, end - SR_MIN_WINDOW + 1);
+  // teto = maxCount, mantendo a borda direita
+  if (end - start + 1 > maxCount) start = end - maxCount + 1;
+  return candles.slice(start, end + 1);
 }
 
 /**
@@ -1036,7 +1062,7 @@ const panelSelect = (color, dims = null) => ({
 });
 
 const COMPACT_LABELS = {
-  ma9: '9', ma21: '21', ma50: '50', ma200: '200', ichimoku: 'Ich', sr: 'S/R', pphl: 'PPHL', rsi: 'RSI',
+  ma9: '9', ma21: '21', ma50: '50', ma200: '200', ichimoku: 'Ich', sr: 'S/R', pphl: 'PPHL', wfractals: 'WF', zigzag: 'ZZ', flags: 'Band.', rsi: 'RSI',
   rsi80: 'R80', rsi50: 'R50', stopLoss: 'SL', chopZone: 'CHOP', emaPersistCloud: 'PERM',
   barsSinceCross: 'BARS', tdSequential: 'TDSEQ', macd: 'MACD',
 };
@@ -1362,6 +1388,61 @@ function renderIntervalPickerTile(dims, t, tipKey, labelPrefix, color, value, on
   );
 }
 
+/** Seletor de intervalo + quantidade de candles analisados, lado a lado (PPHL, Williams
+ *  Fractals, ZigZag) — mesmo padrão compacto de renderPrevDayCloudTile. `count` é o nº de
+ *  candles do intervalo escolhido que entram no cálculo, independente do zoom do gráfico. */
+function renderIndicatorIntervalCountTile(dims, t, tipKeyInterval, tipKeyCount, labelPrefix, color, interval, setInterval, count, setCount) {
+  const innerW = dims.w - PANEL_TILE_PAD * 2;
+  const innerH = dims.h - PANEL_TILE_PAD * 2;
+  const gap = 3;
+  const ivW = Math.max(40, innerW * 0.52 - gap);
+  const ccW = Math.max(34, innerW - ivW - gap);
+  return (
+    <div style={{ display: 'flex', alignItems: 'stretch', width: innerW, height: innerH, boxSizing: 'border-box', gap }}>
+      <PanelTip text={t(tipKeyInterval)}>
+        <select
+          value={interval}
+          onChange={e => setInterval(e.target.value)}
+          style={{ ...panelSelect(color, { w: ivW, h: innerH }), fontSize: scaleFontSize({ w: ivW, h: innerH }, 0.3, 9, 13) }}
+        >
+          {OVERLAY_MA_INTERVALS.map(iv => <option key={iv} value={iv}>{`${labelPrefix} ${iv}`}</option>)}
+        </select>
+      </PanelTip>
+      <PanelTip text={t(tipKeyCount)}>
+        <select
+          value={count}
+          onChange={e => setCount(Number(e.target.value))}
+          style={{ ...panelSelect(color, { w: ccW, h: innerH }), fontSize: scaleFontSize({ w: ccW, h: innerH }, 0.3, 9, 13) }}
+        >
+          {INDICATOR_CANDLE_COUNT_OPTIONS.map(n => <option key={n} value={n}>{`x${n}`}</option>)}
+        </select>
+      </PanelTip>
+    </div>
+  );
+}
+
+/** Seletor do "Limiar RSI" — linha vertical no gráfico onde o RSI(14) do intervalo do gráfico
+ *  cruza pra cima do valor escolhido (0 = desligado). Só aparece com o subpainel de RSI ligado. */
+function renderRsiCrossThresholdTile(dims, t, value, onChange) {
+  const innerW = dims.w - PANEL_TILE_PAD * 2;
+  const innerH = dims.h - PANEL_TILE_PAD * 2;
+  return (
+    <div style={{ display: 'flex', alignItems: 'stretch', width: innerW, height: innerH, boxSizing: 'border-box' }}>
+      <PanelTip text={t('chart.tip.rsi_cross_threshold')}>
+        <select
+          value={value}
+          onChange={e => onChange(Number(e.target.value))}
+          style={{ ...panelSelect('#a78bfa', { w: innerW, h: innerH }), fontSize: scaleFontSize({ w: innerW, h: innerH }, 0.3, 9, 13) }}
+        >
+          {RSI_CROSS_THRESHOLD_OPTIONS.map(v => (
+            <option key={v} value={v}>{v === 0 ? t('chart.rsi_cross_off') : `RSI ⤴ ${v}`}</option>
+          ))}
+        </select>
+      </PanelTip>
+    </div>
+  );
+}
+
 /** Seletor da nuvem D-1: intervalo (1d/3d) + quantidade de candles do envelope (1 = só o candle
  *  anterior, N = min/max de open/close dos últimos N candles) lado a lado, mesmo padrão compacto
  *  de renderIntervalPickerTile — ver buildPrevDayCloudSegments. */
@@ -1635,7 +1716,7 @@ function computeMasonryLayout(tileDefs, width, height, gap) {
   const indTiles = tileDefs.filter((t) => t.kind === 'indicator');
 
   // --- Bollinger / S/R interval / PPHL interval / Quick-EMA sections (separate flex blocks) ---
-  const INTERVAL_PICKER_KINDS = ['srInterval', 'pphlInterval', 'chopInterval', 'macdInterval', 'prevDayCloudInterval', 'emaPersistCloudInterval', 'barsSinceCrossInterval', 'tdSequentialInterval'];
+  const INTERVAL_PICKER_KINDS = ['srInterval', 'pphlInterval', 'wfractalsInterval', 'zigzagInterval', 'rsiCrossThreshold', 'chopInterval', 'macdInterval', 'prevDayCloudInterval', 'emaPersistCloudInterval', 'barsSinceCrossInterval', 'tdSequentialInterval'];
   const blocks = tileDefs
     .filter((t) => t.kind === 'bb' || t.kind === 'vwap' || INTERVAL_PICKER_KINDS.includes(t.kind) || t.kind === 'quickEma')
     .map((t) => ({
@@ -1956,8 +2037,22 @@ function ChartIndicatorPanel({
   botPermInterval,
   srInterval,
   setSrInterval,
+  srCandleCount,
+  setSrCandleCount,
   pphlInterval,
   setPphlInterval,
+  pphlCandleCount,
+  setPphlCandleCount,
+  wfractalsInterval,
+  setWfractalsInterval,
+  wfractalsCandleCount,
+  setWfractalsCandleCount,
+  zigzagInterval,
+  setZigzagInterval,
+  zigzagCandleCount,
+  setZigzagCandleCount,
+  rsiCrossThreshold,
+  setRsiCrossThreshold,
   chopInterval,
   setChopInterval,
   macdInterval,
@@ -2000,6 +2095,8 @@ function ChartIndicatorPanel({
     const showBb = showKey('bb');
     const showSr = showKey('sr');
     const showPphl = showKey('pphl');
+    const showWfractals = showKey('wfractals');
+    const showZigzag = showKey('zigzag');
     const showChopInterval = showKey('chopZone');
     const showMacdInterval = showKey('macd');
     const showPrevDayCloudInterval = showKey('prevDayCloud');
@@ -2029,6 +2126,15 @@ function ChartIndicatorPanel({
     }
     if (showPphl) {
       list.push({ key: 'pphlInterval', kind: 'pphlInterval', data: {} });
+    }
+    if (showWfractals) {
+      list.push({ key: 'wfractalsInterval', kind: 'wfractalsInterval', data: {} });
+    }
+    if (showZigzag) {
+      list.push({ key: 'zigzagInterval', kind: 'zigzagInterval', data: {} });
+    }
+    if (activeIndicators.includes('rsi')) {
+      list.push({ key: 'rsiCrossThreshold', kind: 'rsiCrossThreshold', data: {} });
     }
     if (showChopInterval) {
       list.push({ key: 'chopInterval', kind: 'chopInterval', data: {} });
@@ -2237,8 +2343,11 @@ function ChartIndicatorPanel({
               {tile.kind === 'bb' && renderBollingerTile(
                 tile.data, tile.dims, t, addBbGroup, removeBbGroup, updateBbGroup, toggleBbGroupFlag, botPermInterval,
               )}
-              {tile.kind === 'srInterval' && renderIntervalPickerTile(tile.dims, t, 'chart.tip.sr_interval', 'S/R', '#facc15', srInterval, setSrInterval)}
-              {tile.kind === 'pphlInterval' && renderIntervalPickerTile(tile.dims, t, 'chart.tip.pphl_interval', 'PPHL', '#2dd4bf', pphlInterval, setPphlInterval)}
+              {tile.kind === 'srInterval' && renderIndicatorIntervalCountTile(tile.dims, t, 'chart.tip.sr_interval', 'chart.tip.sr_count', 'S/R', '#facc15', srInterval, setSrInterval, srCandleCount, setSrCandleCount)}
+              {tile.kind === 'pphlInterval' && renderIndicatorIntervalCountTile(tile.dims, t, 'chart.tip.pphl_interval', 'chart.tip.pphl_count', 'PPHL', '#2dd4bf', pphlInterval, setPphlInterval, pphlCandleCount, setPphlCandleCount)}
+              {tile.kind === 'wfractalsInterval' && renderIndicatorIntervalCountTile(tile.dims, t, 'chart.tip.wfractals_interval', 'chart.tip.wfractals_count', 'WF', '#f472b6', wfractalsInterval, setWfractalsInterval, wfractalsCandleCount, setWfractalsCandleCount)}
+              {tile.kind === 'zigzagInterval' && renderIndicatorIntervalCountTile(tile.dims, t, 'chart.tip.zigzag_interval', 'chart.tip.zigzag_count', 'ZZ', '#818cf8', zigzagInterval, setZigzagInterval, zigzagCandleCount, setZigzagCandleCount)}
+              {tile.kind === 'rsiCrossThreshold' && renderRsiCrossThresholdTile(tile.dims, t, rsiCrossThreshold, setRsiCrossThreshold)}
               {tile.kind === 'chopInterval' && renderIntervalPickerTile(tile.dims, t, 'chart.tip.chop_interval', 'CHOP', '#f59e0b', chopInterval, setChopInterval)}
               {tile.kind === 'macdInterval' && renderIntervalPickerTile(tile.dims, t, 'chart.tip.macd_interval', 'MACD', '#38bdf8', macdInterval, setMacdInterval)}
               {tile.kind === 'prevDayCloudInterval' && renderPrevDayCloudTile(tile.dims, t, prevDayCloudInterval, setPrevDayCloudInterval, prevDayCloudCandleCount, setPrevDayCloudCandleCount, prevDayCloudUseHighLow, setPrevDayCloudUseHighLow)}
@@ -2653,21 +2762,37 @@ function buildMultitradeMarkLines(candlesticks, interval, markers, DL, LEFT_PAD)
   });
 }
 
-function buildSrMarkLines(levels) {
+const srPriceEq = (a, b) => a != null && b != null && Math.abs(a - b) / b < 1e-6;
+
+function buildSrMarkLines(levels, entrySupport = null, exitResistance = null) {
   if (!levels?.length) return [];
   const maxTouches = Math.max(...levels.map(l => l.touches ?? 1));
+  const typeCount = { resistance: 0, support: 0 };
   return levels.map(lvl => {
     const isRes = lvl.type === 'resistance';
-    const color = isRes ? C_DOWN : C_UP;
+    const color = srLevelColor(isRes ? 'resistance' : 'support', typeCount[isRes ? 'resistance' : 'support']++);
     const strengthRatio = (lvl.touches ?? 1) / maxTouches;
+    // Suporte desenhado bem mais grosso que a resistência — é a linha de referência da entrada
+    // no backtest de S/R, o usuário precisa localizá-la de relance.
+    const baseWidth = isRes ? 1 : 3;
+    // Linhas de referência do trade (ao abrir um trade das Estatísticas): entrada e alvo.
+    const isEntry = srPriceEq(lvl.price, entrySupport);
+    const isExit = srPriceEq(lvl.price, exitResistance);
+    const tag = isEntry ? ' • entrada' : isExit ? ' • alvo' : '';
     return {
       yAxis: lvl.price,
-      lineStyle: { color, width: 1 + Math.round(strengthRatio * 2), type: 'solid', opacity: 0.35 + strengthRatio * 0.45 },
+      lineStyle: {
+        color,
+        width: (isEntry || isExit ? baseWidth + 2 : baseWidth) + Math.round(strengthRatio * 2),
+        type: 'solid',
+        opacity: (isEntry || isExit) ? 1 : 0.4 + strengthRatio * 0.45,
+      },
       label: {
         show: true,
-        formatter: `${isRes ? 'R' : 'S'} ${fmtChartPrice(lvl.price)} (${lvl.touches}x)`,
+        formatter: `${isRes ? 'R' : 'S'} ${fmtChartPrice(lvl.price)} (${lvl.touches}x)${tag}`,
         color,
         fontSize: 9,
+        fontWeight: (isEntry || isExit) ? 'bold' : 'normal',
         position: 'end',
         padding: [2, 4],
         backgroundColor: 'rgba(0,0,0,0.5)',
@@ -2675,6 +2800,31 @@ function buildSrMarkLines(levels) {
       },
     };
   });
+}
+
+/** Linhas verticais nos candles em que o RSI(14) do intervalo do gráfico cruzou PRA CIMA do
+ *  "Limiar RSI" escolhido — mesmo gatilho de entrada do bot RSI Momentum (ver
+ *  computeRsiUpCrossings). Roxo, igual à cor do botão RSI. */
+function buildRsiCrossMarkLines(rsi, candlesticks, DL, LEFT_PAD, threshold) {
+  const times = computeRsiUpCrossings(rsi, candlesticks, threshold);
+  if (!times.length) return [];
+  const offset = candlesticks.length - DL;
+  const set = new Set(times);
+  const out = [];
+  for (let j = 0; j < DL; j++) {
+    const c = candlesticks[offset + j];
+    if (c && set.has(Number(c.openTime))) {
+      out.push({
+        xAxis: j + LEFT_PAD,
+        lineStyle: { color: '#a78bfa', width: 1, type: 'solid', opacity: 0.55 },
+        label: {
+          show: true, formatter: `RSI ${threshold}`, color: '#a78bfa',
+          fontSize: 8, position: 'insideEndBottom', padding: [1, 2],
+        },
+      });
+    }
+  }
+  return out;
 }
 
 /** Mapeia cada pivô (time, price, type) pro candle exibido mais próximo — sem agrupar em zonas, um marcador por pivô. */
@@ -2701,6 +2851,37 @@ function buildPivotMarkers(pivots, candlesticks, DL, LEFT_PAD, chartInterval) {
   return { highs, lows };
 }
 
+/** Liga os pivôs do ZigZag numa polilinha (mesmo mapeamento time→índice de candle exibido do
+ *  buildPivotMarkers). Devolve { line, tentative }: `line` = pivôs confirmados; `tentative` = os
+ *  dois pontos da perna final ainda não confirmada (do último pivô até o candle mais recente). */
+function buildZigZagLine(zigzagConfig, candlesticks, DL, LEFT_PAD, chartInterval) {
+  const pts = zigzagConfig?.points;
+  if (!pts?.length || !candlesticks?.length) return { line: [], tentative: [] };
+  const maxDiffMs = (INTERVAL_MS[chartInterval] ?? 900_000) * 1.5;
+  const offset = candlesticks.length - DL;
+  const mapPoint = (time, price) => {
+    let best = 0;
+    let bestDiff = Infinity;
+    candlesticks.forEach((c, i) => {
+      const d = Math.abs(Number(c.openTime) - time);
+      if (d < bestDiff) { bestDiff = d; best = i; }
+    });
+    if (bestDiff > maxDiffMs) return null;
+    const localIdx = best - offset;
+    if (localIdx < 0 || localIdx >= DL) return null;
+    return [localIdx + LEFT_PAD, price];
+  };
+  const line = pts.map((p) => mapPoint(p.time, p.price)).filter(Boolean);
+  let tentative = [];
+  const leg = zigzagConfig.lastLeg;
+  if (leg?.from && leg?.to) {
+    const a = mapPoint(leg.from.time, leg.from.price);
+    const b = mapPoint(leg.to.time, leg.to.price);
+    if (a && b) tentative = [a, b];
+  }
+  return { line, tentative };
+}
+
 /** Triângulo apontando para baixo acima do candle do sinal (RSI/MA) que motivou a
  *  entrada — a linha vertical tracejada de 'signal' (buildMultitradeMarkLines) cruza
  *  a altura toda do gráfico e fica difícil de associar a um candle específico quando
@@ -2724,7 +2905,7 @@ function buildSignalMarkers(candlesticks, markers, DL, LEFT_PAD, chartInterval) 
   return points;
 }
 
-function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAverage, ma50, ma9, ma21, rsi }, colors, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = [], overlayConfigs = [], multitradeMarkers = [], chartLeftPad = CHART_LEFT_MARGIN, buyInfo = null, stopLossConfig = null, targetConfig = null, chartRightPad = CHART_PRICE_PAD + CHART_LEFT_MARGIN, bollingerConfig = null, srConfig = null, pphlConfig = null, vwapConfig = null, chopConfig = null, vwapSlopeHighlight = null, isMobile = false, bbPathEnabled = false, macdConfig = null) {
+function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAverage, ma50, ma9, ma21, rsi }, colors, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = [], overlayConfigs = [], multitradeMarkers = [], chartLeftPad = CHART_LEFT_MARGIN, buyInfo = null, stopLossConfig = null, targetConfig = null, chartRightPad = CHART_PRICE_PAD + CHART_LEFT_MARGIN, bollingerConfig = null, srConfig = null, pphlConfig = null, wfractalsConfig = null, zigzagConfig = null, vwapConfig = null, chopConfig = null, vwapSlopeHighlight = null, isMobile = false, bbPathEnabled = false, macdConfig = null, rsiCrossThreshold = 0) {
   const showMa9      = activeIndicators.includes('ma9');
   const showMa21     = activeIndicators.includes('ma21');
   const showMa50     = activeIndicators.includes('ma50');
@@ -2732,6 +2913,8 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
   const showIchimoku = activeIndicators.includes('ichimoku');
   const showSr       = activeIndicators.includes('sr');
   const showPphl     = activeIndicators.includes('pphl');
+  const showWfractals = activeIndicators.includes('wfractals');
+  const showZigzag   = activeIndicators.includes('zigzag');
   const showRsi      = activeIndicators.includes('rsi');
   const showRsi50    = activeIndicators.includes('rsi50');
   const showRsi80    = activeIndicators.includes('rsi80');
@@ -2843,10 +3026,17 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
 
   // Todas as markLines unificadas: separadores de dia + zoom + compras + sinais MT + zonas S/R
   const mtMarkData = buildMultitradeMarkLines(candlesticks, interval, multitradeMarkers, DL, LEFT_PAD);
-  const srMarkData = showSr ? buildSrMarkLines(srConfig?.levels) : [];
+  // srConfig com níveis presente sem o botão "sr" ligado = override de trade das Estatísticas.
+  const srMarkData = (showSr || srConfig?.levels?.length)
+    ? buildSrMarkLines(srConfig?.levels, srConfig?.entrySupport, srConfig?.exitResistance) : [];
   const pivotMarkers = showPphl ? buildPivotMarkers(pphlConfig?.points, candlesticks, DL, LEFT_PAD, interval) : { highs: [], lows: [] };
+  const wfractalsMarkers = showWfractals ? buildPivotMarkers(wfractalsConfig?.points, candlesticks, DL, LEFT_PAD, interval) : { highs: [], lows: [] };
+  const zigzagLine = showZigzag ? buildZigZagLine(zigzagConfig, candlesticks, DL, LEFT_PAD, interval) : { line: [], tentative: [] };
   const signalMarkers = buildSignalMarkers(candlesticks, multitradeMarkers, DL, LEFT_PAD, interval);
-  const allMarkLineData = [...dayBreakData, ...periodMarkData, ...tradeMarkData, ...mtMarkData, ...srMarkData];
+  const rsiCrossMarkData = (showRsi && rsiCrossThreshold > 0)
+    ? buildRsiCrossMarkLines(rsi, candlesticks, DL, LEFT_PAD, rsiCrossThreshold)
+    : [];
+  const allMarkLineData = [...dayBreakData, ...periodMarkData, ...tradeMarkData, ...mtMarkData, ...srMarkData, ...rsiCrossMarkData];
 
   const lastClose = candlesticks.length ? parseFloat(candlesticks[candlesticks.length - 1].close) : null;
   const buyPnlSeries = buildBuyPnlSeries(buyInfo, candlesticks, DL, LEFT_PAD, RIGHT_PAD, lastClose);
@@ -3057,6 +3247,50 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
       symbolSize: 8,
       itemStyle: { color: C_UP },
       z: 5,
+    }] : []),
+    ...(showWfractals && wfractalsMarkers.highs.length ? [{
+      name: 'WF Alta',
+      type: 'scatter',
+      xAxisIndex: idx, yAxisIndex: idx,
+      data: wfractalsMarkers.highs,
+      symbol: 'diamond',
+      symbolSize: 7,
+      symbolOffset: [0, -8],
+      itemStyle: { color: '#f472b6' },
+      z: 5,
+    }] : []),
+    ...(showWfractals && wfractalsMarkers.lows.length ? [{
+      name: 'WF Baixa',
+      type: 'scatter',
+      xAxisIndex: idx, yAxisIndex: idx,
+      data: wfractalsMarkers.lows,
+      symbol: 'diamond',
+      symbolSize: 7,
+      symbolOffset: [0, 8],
+      itemStyle: { color: '#f472b6' },
+      z: 5,
+    }] : []),
+    ...(showZigzag && zigzagLine.line.length >= 2 ? [{
+      name: 'ZigZag',
+      type: 'line',
+      xAxisIndex: idx, yAxisIndex: idx,
+      data: zigzagLine.line,
+      showSymbol: true,
+      symbolSize: 5,
+      lineStyle: { color: '#818cf8', width: 1.5 },
+      itemStyle: { color: '#818cf8' },
+      z: 4,
+      silent: true,
+    }] : []),
+    ...(showZigzag && zigzagLine.tentative.length === 2 ? [{
+      name: 'ZigZag (tentativa)',
+      type: 'line',
+      xAxisIndex: idx, yAxisIndex: idx,
+      data: zigzagLine.tentative,
+      showSymbol: false,
+      lineStyle: { color: '#818cf8', width: 1, type: 'dashed', opacity: 0.6 },
+      z: 4,
+      silent: true,
     }] : []),
     ...(signalMarkers.length ? [{
       name: 'Sinal',
@@ -3416,12 +3650,14 @@ function TradeHistoryPanel({ symbol, gateFavorites }) {
 // ── Componente principal ──────────────────────────────────────────────────────
 
 export default function CandlestickChart() {
-  const { selectedChart, setSelectedChart, chartZoom, setChartZoom, chartTradeMarkers, chartViewSource,
+  const { selectedChart, setSelectedChart, chartZoom, setChartZoom, chartTradeMarkers, chartViewSource, chartSrOverride,
     chartCandleWindowReset,
     multitradeChartFocus, tradePurchases, allTrades, chartInterval: savedInterval, setChartInterval,
-    chartPanelButtons, uiPrefs, setMaBandsDefaults, setSrIntervalDefault, setPphlIntervalDefault, setChopIntervalDefault, setMacdIntervalDefault,
+    chartPanelButtons, uiPrefs, setMaBandsDefaults, setSrIntervalDefault, setSrCandleCountDefault, setPphlIntervalDefault, setPphlCandleCountDefault,
+    setWfractalsIntervalDefault, setWfractalsCandleCountDefault, setZigzagIntervalDefault, setZigzagCandleCountDefault,
+    setChopIntervalDefault, setMacdIntervalDefault,
     setPrevDayCloudIntervalDefault, setPrevDayCloudCandleCountDefault, setPrevDayCloudUseHighLowDefault,
-    setEmaPersistCloudIntervalDefault, setEmaPersistCloudTonesDefault, setEmaPersistCloudLayersDefault, setBarsSinceCrossIntervalDefault, setTdSequentialIntervalDefault,
+    setEmaPersistCloudIntervalDefault, setEmaPersistCloudTonesDefault, setEmaPersistCloudLayersDefault, setBarsSinceCrossIntervalDefault, setTdSequentialIntervalDefault, setRsiCrossThresholdDefault,
     setVwapDefaults, setVwapSlopeHighlightDefault, setActiveIndicatorsPreference,
     multitradeFavorites, fiveMTradeFavorites, activeTrades } = useCurrency();
   const { t } = useI18n();
@@ -3581,11 +3817,31 @@ export default function CandlestickChart() {
   // (EMA9×EMA21) inteira no cliente duplicaria a lógica de backend/utils/emaPersistCloud.js.
   const [bbPermPathCache, setBbPermPathCache] = useState({});
   const [srInterval, setSrInterval] = useState(() => uiPrefs.srIntervalDefault ?? DEFAULT_SR_INTERVAL);
-  const [srCache, setSrCache] = useState({});
-  const [_srLoading, setSrLoading] = useState(false);
+  const [srCandleCount, setSrCandleCount] = useState(() => uiPrefs.srCandleCountDefault ?? DEFAULT_INDICATOR_CANDLE_COUNT);
   const [pphlInterval, setPphlInterval] = useState(() => uiPrefs.pphlIntervalDefault ?? DEFAULT_PPHL_INTERVAL);
-  const [pphlCache, setPphlCache] = useState({});
-  const [_pphlLoading, setPphlLoading] = useState(false);
+  const [pphlCandleCount, setPphlCandleCount] = useState(() => uiPrefs.pphlCandleCountDefault ?? DEFAULT_INDICATOR_CANDLE_COUNT);
+  const [wfractalsInterval, setWfractalsInterval] = useState(() => uiPrefs.wfractalsIntervalDefault ?? DEFAULT_WFRACTALS_INTERVAL);
+  const [wfractalsCandleCount, setWfractalsCandleCount] = useState(() => uiPrefs.wfractalsCandleCountDefault ?? DEFAULT_INDICATOR_CANDLE_COUNT);
+  const [zigzagInterval, setZigzagInterval] = useState(() => uiPrefs.zigzagIntervalDefault ?? DEFAULT_ZIGZAG_INTERVAL);
+  const [zigzagCandleCount, setZigzagCandleCount] = useState(() => uiPrefs.zigzagCandleCountDefault ?? DEFAULT_INDICATOR_CANDLE_COUNT);
+  // Candles brutos por intervalo próprio (S/R, PPHL, WF, ZigZag) — key `${symbol}|${interval}`.
+  // O cálculo dos níveis roda no cliente (srDetectors.js) sobre a janela visível (janela
+  // deslizante), ver os useMemo chartSrConfig/chartPphlConfig/... e visibleChartRange.
+  const [pivotRawCache, setPivotRawCache] = useState({});
+  const [_pivotRawLoading, setPivotRawLoading] = useState(false);
+  const [rsiCrossThreshold, setRsiCrossThreshold] = useState(() => uiPrefs.rsiCrossThresholdDefault ?? DEFAULT_RSI_CROSS_THRESHOLD);
+  // Trecho de TEMPO visível do gráfico (ms) — reportado pelos dois motores (LW via
+  // subscribeVisibleTimeRangeChange, ECharts via evento dataZoom), com debounce.
+  const [visibleChartRange, setVisibleChartRange] = useState(null);
+  const visibleRangeDebounceRef = useRef(null);
+  const reportVisibleRange = useCallback((range) => {
+    if (visibleRangeDebounceRef.current) clearTimeout(visibleRangeDebounceRef.current);
+    visibleRangeDebounceRef.current = setTimeout(() => setVisibleChartRange(range), 180);
+  }, []);
+  useEffect(() => {
+    setVisibleChartRange(null);
+    return () => { if (visibleRangeDebounceRef.current) clearTimeout(visibleRangeDebounceRef.current); };
+  }, [selectedChart?.symbol, selectedChart?.interval]);
   const [prevDayCloudInterval, setPrevDayCloudInterval] = useState(() => uiPrefs.prevDayCloudIntervalDefault ?? DEFAULT_PREV_DAY_CLOUD_INTERVAL);
   const [prevDayCloudCandleCount, setPrevDayCloudCandleCount] = useState(() => uiPrefs.prevDayCloudCandleCountDefault ?? DEFAULT_PREV_DAY_CLOUD_CANDLE_COUNT);
   const [prevDayCloudUseHighLow, setPrevDayCloudUseHighLow] = useState(() => uiPrefs.prevDayCloudUseHighLowDefault ?? DEFAULT_PREV_DAY_CLOUD_USE_HIGH_LOW);
@@ -3653,6 +3909,13 @@ export default function CandlestickChart() {
   const [measurePoints, setMeasurePoints] = useState(null);
   const [measureOneShot, setMeasureOneShot] = useState(false);
   const measureClearTimeoutRef = useRef(null);
+  // Caixa de análise: o usuário arrasta um retângulo sobre alguns candles pra rodar a
+  // detecção de bandeiras SÓ naquele trecho (ver chartFlagsConfig). `analysisBox` guarda a
+  // seleção efetivada {fromMs,toMs,priceLow,priceHigh}; `analysisDrag` é o preview em pixels
+  // enquanto arrasta. Só no motor TradingView (as bandeiras já são LW-only).
+  const [analysisBoxMode, setAnalysisBoxMode] = useState(false);
+  const [analysisBox, setAnalysisBox] = useState(null);
+  const [analysisDrag, setAnalysisDrag] = useState(null);
 
   function clearMeasureAutoHide() {
     if (measureClearTimeoutRef.current) {
@@ -3686,6 +3949,10 @@ export default function CandlestickChart() {
     setMeasureMode(false);
     setMeasurePoints(null);
     setMeasureOneShot(false);
+    // A caixa de análise é presa a candles de um símbolo/intervalo específico — descarta ao trocar.
+    setAnalysisBoxMode(false);
+    setAnalysisBox(null);
+    setAnalysisDrag(null);
   }, [selectedChart?.symbol, selectedChart?.interval]);
 
 
@@ -3957,6 +4224,11 @@ export default function CandlestickChart() {
     setSrIntervalDefault(srInterval);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [srInterval]);
+  useEffect(() => {
+    if (isTradePanelChartView(chartViewSource)) return;
+    setSrCandleCountDefault(srCandleCount);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [srCandleCount]);
 
   // Persiste o intervalo do Pivot Points High/Low (mesmo padrão do S/R)
   useEffect(() => {
@@ -3964,6 +4236,38 @@ export default function CandlestickChart() {
     setPphlIntervalDefault(pphlInterval);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pphlInterval]);
+
+  // Persiste intervalo + quantidade de candles do PPHL / Williams Fractals / ZigZag
+  useEffect(() => {
+    if (isTradePanelChartView(chartViewSource)) return;
+    setPphlCandleCountDefault(pphlCandleCount);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pphlCandleCount]);
+  useEffect(() => {
+    if (isTradePanelChartView(chartViewSource)) return;
+    setWfractalsIntervalDefault(wfractalsInterval);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wfractalsInterval]);
+  useEffect(() => {
+    if (isTradePanelChartView(chartViewSource)) return;
+    setWfractalsCandleCountDefault(wfractalsCandleCount);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wfractalsCandleCount]);
+  useEffect(() => {
+    if (isTradePanelChartView(chartViewSource)) return;
+    setZigzagIntervalDefault(zigzagInterval);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [zigzagInterval]);
+  useEffect(() => {
+    if (isTradePanelChartView(chartViewSource)) return;
+    setZigzagCandleCountDefault(zigzagCandleCount);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [zigzagCandleCount]);
+  useEffect(() => {
+    if (isTradePanelChartView(chartViewSource)) return;
+    setRsiCrossThresholdDefault(rsiCrossThreshold);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rsiCrossThreshold]);
 
   // Persiste o intervalo do CHOP (mesmo padrão do S/R/PPHL)
   useEffect(() => {
@@ -4312,76 +4616,65 @@ export default function CandlestickChart() {
     currentInterval, overlayFetchLimit, displayCandleCount, chartPanelButtons.bb, botPermInterval,
   ]);
 
-  // Busca as zonas de Suporte/Resistência — intervalo próprio (independente do gráfico), como a Bollinger.
-  const srShown = activeIndicators.includes('sr') && chartPanelButtons.sr !== false;
-  useEffect(() => {
-    if (!selectedChart?.symbol || !srShown) {
-      setSrLoading(false);
-      return undefined;
-    }
-    const key = srInterval;
-    let cancelled = false;
-    setSrLoading(true);
-    (async () => {
-      try {
-        const ovLimit = computeOverlayMaFetchLimit(
-          selectedChart.interval ?? currentInterval,
-          srInterval,
-          5,
-          Math.max(displayCandleCount, selectedChart.candlesticks?.length ?? 0, DEFAULT_CANDLE_LIMIT),
-          overlayFetchLimit,
-        );
-        const levels = await fetchSupportResistancePoints(
-          selectedChart.symbol, srInterval, selectedChart.source, ovLimit,
-        );
-        if (!cancelled) setSrCache({ [key]: levels });
-      } catch (e) {
-        console.warn('[sr]', key, e.message);
-        if (!cancelled) setSrCache({});
-      } finally {
-        if (!cancelled) setSrLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [
-    selectedChart?.symbol, selectedChart?.interval, selectedChart?.source, selectedChart?.candlesticks,
-    currentInterval, overlayFetchLimit, displayCandleCount, srShown, srInterval,
-  ]);
-
-  // Busca os pivôs do Pivot Points High/Low — intervalo próprio, mesmo padrão do S/R (pra comparação lado a lado).
+  // S/R, PPHL, Williams Fractals e ZigZag — todos calculados NO CLIENTE (srDetectors.js) sobre a
+  // janela deslizante do trecho visível (ver os useMemo chartSrConfig/... e visibleChartRange).
+  // Este efeito só garante que `pivotRawCache` tem candles brutos suficientes do intervalo próprio
+  // de cada indicador ligado (deduplicado por intervalo — se dois usam 4h, um fetch só). O `limit`
+  // cresce junto com o histórico carregado do gráfico (arrastar pra trás), igual à Bollinger.
+  // Ao abrir um trade das Estatísticas com S/R, desenha o S/R do backtest mesmo com o botão
+  // "S/R" desligado — faz parte do trade (ver chartSrOverride).
+  const srTradeOverride = chartViewSource === CHART_VIEW.STATISTICS && !!chartSrOverride?.levels?.length;
+  const srShown = (activeIndicators.includes('sr') && chartPanelButtons.sr !== false) || srTradeOverride;
   const pphlShown = activeIndicators.includes('pphl') && chartPanelButtons.pphl !== false;
+  const wfractalsShown = activeIndicators.includes('wfractals') && chartPanelButtons.wfractals !== false;
+  const zigzagShown = activeIndicators.includes('zigzag') && chartPanelButtons.zigzag !== false;
+
+  const pivotIntervalsNeeded = useMemo(() => {
+    const set = new Set();
+    if (srShown) set.add(srInterval);
+    if (pphlShown) set.add(pphlInterval);
+    if (wfractalsShown) set.add(wfractalsInterval);
+    if (zigzagShown) set.add(zigzagInterval);
+    return [...set];
+  }, [srShown, pphlShown, wfractalsShown, zigzagShown, srInterval, pphlInterval, wfractalsInterval, zigzagInterval]);
+
   useEffect(() => {
-    if (!selectedChart?.symbol || !pphlShown) {
-      setPphlLoading(false);
+    if (!selectedChart?.symbol || !pivotIntervalsNeeded.length) {
+      setPivotRawLoading(false);
       return undefined;
     }
-    const key = pphlInterval;
+    const chartIv = selectedChart.interval ?? currentInterval;
+    const chartSpan = Math.max(displayCandleCount, selectedChart.candlesticks?.length ?? 0, DEFAULT_CANDLE_LIMIT);
     let cancelled = false;
-    setPphlLoading(true);
+    const toFetch = pivotIntervalsNeeded
+      .map((iv) => {
+        const key = `${selectedChart.symbol}|${iv}`;
+        const needed = Math.min(1500, computeOverlayMaFetchLimit(chartIv, iv, 10, chartSpan, overlayFetchLimit));
+        const have = pivotRawCache[key];
+        return { iv, key, needed, stale: !have || have.limit < needed };
+      })
+      .filter((x) => x.stale);
+    if (!toFetch.length) return undefined;
+    setPivotRawLoading(true);
     (async () => {
-      try {
-        const ovLimit = computeOverlayMaFetchLimit(
-          selectedChart.interval ?? currentInterval,
-          pphlInterval,
-          10,
-          Math.max(displayCandleCount, selectedChart.candlesticks?.length ?? 0, DEFAULT_CANDLE_LIMIT),
-          overlayFetchLimit,
-        );
-        const points = await fetchPivotPointsHighLowPoints(
-          selectedChart.symbol, pphlInterval, selectedChart.source, ovLimit,
-        );
-        if (!cancelled) setPphlCache({ [key]: points });
-      } catch (e) {
-        console.warn('[pphl]', key, e.message);
-        if (!cancelled) setPphlCache({});
-      } finally {
-        if (!cancelled) setPphlLoading(false);
+      const next = {};
+      await Promise.all(toFetch.map(async ({ iv, key, needed }) => {
+        try {
+          const candles = await fetchPivotRawCandles(selectedChart.symbol, iv, selectedChart.source, needed);
+          next[key] = { candles, limit: needed };
+        } catch (e) {
+          console.warn('[pivot-raw]', key, e.message);
+        }
+      }));
+      if (!cancelled && Object.keys(next).length) {
+        setPivotRawCache((prev) => ({ ...prev, ...next }));
       }
+      if (!cancelled) setPivotRawLoading(false);
     })();
     return () => { cancelled = true; };
   }, [
-    selectedChart?.symbol, selectedChart?.interval, selectedChart?.source, selectedChart?.candlesticks,
-    currentInterval, overlayFetchLimit, displayCandleCount, pphlShown, pphlInterval,
+    selectedChart?.symbol, selectedChart?.source, selectedChart?.interval, selectedChart?.candlesticks,
+    currentInterval, overlayFetchLimit, displayCandleCount, pivotIntervalsNeeded, pivotRawCache,
   ]);
 
   // Busca os candles (ver prevDayCloudInterval) pra nuvem D-1 — botão "D-1" do painel. Refaz
@@ -4909,12 +5202,16 @@ export default function CandlestickChart() {
     setMeasureMode((v) => !v);
     setMeasurePoints(null);
     setMeasureOneShot(false);
+    setAnalysisBoxMode(false);
+    setAnalysisDrag(null);
   }
 
   // Igual ao toggle normal, mas a medição se desliga sozinha assim que o arraste termina,
   // e o resultado some sozinho ~2s depois (ver onEnd em handleMeasureStart).
   function toggleMeasureModeOnce() {
     clearMeasureAutoHide();
+    setAnalysisBoxMode(false);
+    setAnalysisDrag(null);
     setMeasureMode((v) => {
       const next = !v;
       setMeasureOneShot(next);
@@ -5014,6 +5311,79 @@ export default function CandlestickChart() {
     window.addEventListener('touchend', onEnd);
   }
 
+  function toggleAnalysisBoxMode() {
+    setAnalysisBoxMode((v) => !v);
+    setAnalysisDrag(null);
+    clearMeasureAutoHide();
+    setMeasureMode(false);
+    setMeasurePoints(null);
+    setMeasureOneShot(false);
+  }
+
+  function clearAnalysisBox() {
+    setAnalysisBoxMode(false);
+    setAnalysisBox(null);
+    setAnalysisDrag(null);
+  }
+
+  // Arrasto da caixa de análise — mesma mecânica do handleMeasureStart, mas o que interessa é
+  // a FAIXA DE TEMPO (openTime dos candles nas bordas) e a faixa de preço. Snapa nos candles
+  // pra "últimos 50 candles" sair uma seleção limpa. Ao soltar, vira `analysisBox` e o modo
+  // desliga (one-shot) — clique no botão de novo pra redesenhar.
+  function handleAnalysisBoxStart(e) {
+    if (!analysisBoxMode) return;
+    const wrap = chartWrapRef.current;
+    if (!wrap || !(showLwChart && lwChartRef.current)) return;
+    e.preventDefault();
+    const rect = wrap.getBoundingClientRect();
+    const point = e.touches?.length ? e.touches[0] : e;
+    const startX = point.clientX - rect.left;
+    const startY = point.clientY - rect.top;
+    setAnalysisDrag({ x1: startX, y1: startY, x2: startX, y2: startY });
+
+    const onMove = (ev) => {
+      const p = ev.touches?.length ? ev.touches[0] : ev;
+      setAnalysisDrag((prev) => (prev ? { ...prev, x2: p.clientX - rect.left, y2: p.clientY - rect.top } : prev));
+    };
+    const onEnd = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onEnd);
+      window.removeEventListener('touchmove', onMove);
+      window.removeEventListener('touchend', onEnd);
+      setAnalysisDrag((drag) => {
+        if (!drag) return null;
+        const candles = selectedChart?.candlesticks ?? [];
+        const firstT = candles.length ? Number(candles[0].openTime) : NaN;
+        const lastT = candles.length ? Number(candles[candles.length - 1].openTime) : NaN;
+        const midX = (rect.width) / 2;
+        // openTime da vela na borda — se cair fora do range (arrastou além da última vela),
+        // clampa na ponta pro lado do arrasto.
+        const edgeTime = (x) => {
+          const c = candleAtPixelX(x);
+          if (c) return c.openTime;
+          return x < midX ? firstT : lastT;
+        };
+        const tA = edgeTime(drag.x1);
+        const tB = edgeTime(drag.x2);
+        const pA = priceAtPixelY(drag.y1);
+        const pB = priceAtPixelY(drag.y2);
+        if (!Number.isFinite(tA) || !Number.isFinite(tB) || tA === tB) return null;
+        setAnalysisBox({
+          fromMs: Math.min(tA, tB),
+          toMs: Math.max(tA, tB),
+          priceLow: Number.isFinite(pA) && Number.isFinite(pB) ? Math.min(pA, pB) : null,
+          priceHigh: Number.isFinite(pA) && Number.isFinite(pB) ? Math.max(pA, pB) : null,
+        });
+        return null;
+      });
+      setAnalysisBoxMode(false);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onEnd);
+    window.addEventListener('touchmove', onMove, { passive: false });
+    window.addEventListener('touchend', onEnd);
+  }
+
   useEffect(() => {
     if (!chartZoom || !chartRef.current || !selectedChart?.candlesticks?.length) return;
     // Zoom embutido na option (buildFixedDataZoom); dispatchAction só como fallback legado (tabela/sem source)
@@ -5072,6 +5442,26 @@ export default function CandlestickChart() {
 
   const chartLeftPad = CHART_LEFT_MARGIN;
   const chartRightPad = CHART_PRICE_PAD + CHART_LEFT_MARGIN;
+
+  // Motor ECharts: traduz o dataZoom (start/end em %) pro trecho de TEMPO visível e reporta pro
+  // estado compartilhado (visibleChartRange) — mesmo sinal que o LW manda via
+  // subscribeVisibleTimeRangeChange. Base da janela deslizante do S/R/PPHL/WF/ZZ.
+  const emitEChartsVisibleRange = useCallback(() => {
+    const inst = chartRef.current?.getEchartsInstance?.();
+    const candles = selectedChart?.candlesticks;
+    if (!inst || !candles?.length) return;
+    const dz = inst.getOption?.()?.dataZoom?.[0];
+    const startPct = Number.isFinite(dz?.start) ? dz.start : 0;
+    const endPct = Number.isFinite(dz?.end) ? dz.end : 100;
+    const visible = candles.slice(-displayLimit);
+    if (visible.length < 2) return;
+    const lastIdx = visible.length - 1;
+    const fromIdx = Math.max(0, Math.floor((startPct / 100) * lastIdx));
+    const toIdx = Math.min(lastIdx, Math.ceil((endPct / 100) * lastIdx));
+    const fromMs = Number(visible[fromIdx]?.openTime);
+    const toMs = Number(visible[toIdx]?.openTime);
+    if (Number.isFinite(fromMs) && Number.isFinite(toMs)) reportVisibleRange({ fromMs, toMs });
+  }, [selectedChart?.candlesticks, displayLimit, reportVisibleRange]);
 
   // Zoom horizontal por scroll manual (nativo do ECharts desligado em buildInsideDataZoom/
   // buildFixedDataZoom — ver chartView.js) — passo pequeno e fixo, ancorado no cursor, pra
@@ -5390,15 +5780,94 @@ export default function CandlestickChart() {
   // habilitada como aproximação (sem multi-BB nesse motor, fora do escopo desta feature).
   const chartBollingerConfig = chartBollingerConfigs[0] ?? null;
 
+  // Candles brutos do intervalo `iv` cortados pra janela deslizante do trecho visível, limitados
+  // a `count` candles. Base pros 4 indicadores da família pivô (S/R, PPHL, WF, ZZ).
+  const pivotWindow = useCallback((iv, count) => {
+    const raw = pivotRawCache[`${selectedChart?.symbol}|${iv}`]?.candles;
+    return sliceForVisibleWindow(raw, visibleChartRange, count);
+  }, [pivotRawCache, selectedChart?.symbol, visibleChartRange]);
+
   const chartSrConfig = useMemo(() => {
+    // Trade das Estatísticas: desenha os níveis EXATOS que o backtest calculou pra esse sinal
+    // (mesmo cálculo, sem recalcular) — o gráfico e o trade são a mesma coisa. Marca a linha de
+    // suporte de entrada e a de resistência-alvo pra destaque em buildSrMarkLines / LW.
+    if (srTradeOverride) {
+      return {
+        interval: chartSrOverride.interval,
+        levels: chartSrOverride.levels,
+        entrySupport: chartSrOverride.entrySupport ?? null,
+        exitResistance: chartSrOverride.exitResistance ?? null,
+      };
+    }
     if (!srShown) return null;
-    return { interval: srInterval, levels: srCache[srInterval] ?? [] };
-  }, [srShown, srInterval, srCache]);
+    const levels = detectSupportResistance(pivotWindow(srInterval, srCandleCount), {});
+    return { interval: srInterval, levels };
+  }, [srShown, srTradeOverride, chartSrOverride, srInterval, srCandleCount, pivotWindow]);
 
   const chartPphlConfig = useMemo(() => {
     if (!pphlShown) return null;
-    return { interval: pphlInterval, points: pphlCache[pphlInterval] ?? [] };
-  }, [pphlShown, pphlInterval, pphlCache]);
+    const points = detectPivotPointsHighLow(pivotWindow(pphlInterval, pphlCandleCount), {});
+    return { interval: pphlInterval, points };
+  }, [pphlShown, pphlInterval, pphlCandleCount, pivotWindow]);
+
+  const chartWfractalsConfig = useMemo(() => {
+    if (!wfractalsShown) return null;
+    const points = detectWilliamsFractals(pivotWindow(wfractalsInterval, wfractalsCandleCount), { bars: 2 });
+    return { interval: wfractalsInterval, points };
+  }, [wfractalsShown, wfractalsInterval, wfractalsCandleCount, pivotWindow]);
+
+  const chartZigzagConfig = useMemo(() => {
+    if (!zigzagShown) return null;
+    const d = detectZigZag(pivotWindow(zigzagInterval, zigzagCandleCount), {});
+    return { interval: zigzagInterval, points: d.points ?? [], lastLeg: d.lastLeg ?? null };
+  }, [zigzagShown, zigzagInterval, zigzagCandleCount, pivotWindow]);
+
+  // Bandeiras (auto): detecção pura sobre os candles JÁ carregados no gráfico — sem fetch nem
+  // intervalo próprio (diferente de PPHL/ZZ), então acompanha o intervalo/zoom atuais.
+  //
+  //  - botão "Band." ligado  -> varre o gráfico inteiro (só a bandeira "viva" mais recente
+  //    de cada trecho é mostrada).
+  //  - caixa de análise desenhada -> varre SÓ os candles dentro dela e mostra a melhor
+  //    bandeira possível ali, mesmo que já tenha "expirado" (forwardResolveBars: Infinity).
+  //    A caixa é opt-in própria — funciona mesmo com o botão "Band." desligado.
+  const flagsShown = activeIndicators.includes('flags') && chartPanelButtons.flags !== false;
+  const chartFlagsConfig = useMemo(() => {
+    const candles = selectedChart?.candlesticks;
+    if (!candles?.length) return null;
+
+    if (analysisBox) {
+      const scoped = candles.filter((c) => {
+        const t = Number(c.openTime);
+        return t >= analysisBox.fromMs && t <= analysisBox.toMs;
+      });
+      const flags = detectFlags(scoped, { forwardResolveBars: Infinity, lookback: 100000 });
+      return { flags, scoped: true, scopedCount: scoped.length };
+    }
+
+    if (!flagsShown) return null;
+    const flags = detectFlags(candles);
+    return flags.length ? { flags, scoped: false } : null;
+  }, [flagsShown, selectedChart?.candlesticks, analysisBox]);
+
+  // Retângulo da caixa de análise pro motor TradingView — desenhado pela RectanglePrimitive,
+  // que reprojeta de tempo/preço a cada frame (não sai do lugar ao dar pan/zoom, diferente de
+  // um overlay em pixels). Sem faixa de preço válida, cobre toda a altura visível.
+  const analysisBoxRect = useMemo(() => {
+    if (!analysisBox) return null;
+    const n = chartFlagsConfig?.scoped ? chartFlagsConfig.scopedCount : null;
+    return {
+      time1: Math.floor(analysisBox.fromMs / 1000),
+      time2: Math.floor(analysisBox.toMs / 1000),
+      price1: analysisBox.priceLow,
+      price2: analysisBox.priceHigh,
+      fullHeight: !(Number.isFinite(analysisBox.priceLow) && Number.isFinite(analysisBox.priceHigh)),
+      fillColor: 'rgba(148,163,184,0.10)',
+      strokeColor: 'rgba(203,213,225,0.7)',
+      label: n != null ? `análise · ${n} candle${n === 1 ? '' : 's'}` : 'análise',
+      labelColor: '#cbd5e1',
+      labelPos: 'top',
+    };
+  }, [analysisBox, chartFlagsConfig]);
 
   const chartPrevDayCloudConfig = useMemo(() => {
     if (!prevDayCloudShown || !selectedChart?.symbol) return null;
@@ -5464,11 +5933,11 @@ export default function CandlestickChart() {
     return buildOption(
       selectedChart, colors, effectiveIndicators, displayLimit, chartZoom, tradeTimes, overlayConfigs,
       chartTradeMarkers?.length ? chartTradeMarkers : (selectedChart.tradeMarkers ?? []),
-      chartLeftPad, chartBuyInfo, chartStopLossConfig, chartTargetConfig, chartRightPad, chartBollingerConfig, chartSrConfig, chartPphlConfig, chartVwapConfig, chartChopConfig, vwapSlopeHighlight, isMobile,
-      chartBollingerConfig?.showPath ?? false, chartMacdConfig,
+      chartLeftPad, chartBuyInfo, chartStopLossConfig, chartTargetConfig, chartRightPad, chartBollingerConfig, chartSrConfig, chartPphlConfig, chartWfractalsConfig, chartZigzagConfig, chartVwapConfig, chartChopConfig, vwapSlopeHighlight, isMobile,
+      chartBollingerConfig?.showPath ?? false, chartMacdConfig, rsiCrossThreshold,
     );
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedChart, colors, effectiveIndicators, chartZoom, tradePurchases, chartTradeMarkers, activeTab, overlayConfigs, displayLimit, chartLeftPad, chartRightPad, chartBuyInfo, chartStopLossConfig, chartTargetConfig, chartBollingerConfig, chartSrConfig, chartPphlConfig, chartVwapConfig, chartChopConfig, chartMacdConfig, vwapSlopeHighlight, isMobile]);
+  }, [selectedChart, colors, effectiveIndicators, chartZoom, tradePurchases, chartTradeMarkers, activeTab, overlayConfigs, displayLimit, chartLeftPad, chartRightPad, chartBuyInfo, chartStopLossConfig, chartTargetConfig, chartBollingerConfig, chartSrConfig, chartPphlConfig, chartWfractalsConfig, chartZigzagConfig, chartVwapConfig, chartChopConfig, chartMacdConfig, vwapSlopeHighlight, isMobile, rsiCrossThreshold]);
 
   if (!selectedChart || !option) {
     return (
@@ -5507,6 +5976,8 @@ export default function CandlestickChart() {
       style={{ height: '100%', width: '100%' }}
       opts={{ renderer: 'canvas' }}
       lazyUpdate
+      onChartReady={emitEChartsVisibleRange}
+      onEvents={{ datazoom: emitEChartsVisibleRange }}
     />
   );
 
@@ -5588,6 +6059,63 @@ export default function CandlestickChart() {
       >
         %<sup className="leading-none">1</sup>
       </button>
+      {showLwChart && (
+        <button
+          onClick={toggleAnalysisBoxMode}
+          title="Caixa de análise — arraste um retângulo sobre os candles pra detectar a bandeira só naquele trecho (funciona mesmo com o botão Band. desligado)"
+          className={`w-6 h-5 md:w-7 md:h-6 inline-flex items-center justify-center text-[11px] md:text-xs rounded font-mono font-bold transition-colors border shrink-0 shadow-lg ${
+            analysisBoxMode
+              ? 'bg-slate-200 text-black border-white shadow-slate-300/50'
+              : 'bg-slate-500/80 text-white border-slate-400 hover:bg-slate-400'
+          }`}
+        >
+          ⬚
+        </button>
+      )}
+      {analysisBox && (
+        <button
+          onClick={clearAnalysisBox}
+          title="Remover a caixa de análise"
+          className="w-6 h-5 md:w-7 md:h-6 inline-flex items-center justify-center text-[11px] md:text-xs rounded font-mono font-bold transition-colors border shrink-0 shadow-lg bg-slate-700/80 text-slate-200 border-slate-500 hover:bg-slate-600"
+        >
+          ×
+        </button>
+      )}
+    </div>
+  );
+
+  // Superfície de desenho da caixa de análise + preview em pixels enquanto arrasta. A caixa
+  // JÁ efetivada é desenhada dentro do gráfico (RectanglePrimitive, via analysisBoxRect) — aqui
+  // fica só o preview transitório do arrasto.
+  const analysisBoxOverlay = analysisBoxMode && (
+    <div
+      className="absolute inset-0 z-20 select-none cursor-crosshair"
+      onMouseDown={handleAnalysisBoxStart}
+      onTouchStart={handleAnalysisBoxStart}
+    >
+      {analysisDrag && (
+        <div
+          className="absolute border-2 border-slate-200 bg-slate-300/10 pointer-events-none"
+          style={{
+            left: Math.min(analysisDrag.x1, analysisDrag.x2),
+            top: Math.min(analysisDrag.y1, analysisDrag.y2),
+            width: Math.abs(analysisDrag.x2 - analysisDrag.x1),
+            height: Math.abs(analysisDrag.y2 - analysisDrag.y1),
+          }}
+        />
+      )}
+    </div>
+  );
+
+  // Aviso no gráfico quando a caixa de análise não achou bandeira (ou é pequena demais).
+  const analysisBoxNotice = analysisBox && chartFlagsConfig?.scoped && !chartFlagsConfig.flags?.length && (
+    <div className="absolute top-12 left-1/2 -translate-x-1/2 z-30 pointer-events-none">
+      <div className="px-3 py-1.5 rounded-md bg-slate-800/90 border border-slate-500 text-slate-100 text-[11px] md:text-xs font-mono shadow-lg flex items-center gap-2">
+        <span className="text-amber-300">⬚</span>
+        {chartFlagsConfig.scopedCount != null && chartFlagsConfig.scopedCount < 12
+          ? `Seleção pequena (${chartFlagsConfig.scopedCount} candles) — mínimo ~12 para detectar bandeira`
+          : 'Nenhuma bandeira detectada na seleção'}
+      </div>
     </div>
   );
 
@@ -5738,8 +6266,22 @@ export default function CandlestickChart() {
             botPermInterval={botPermInterval}
             srInterval={srInterval}
             setSrInterval={setSrInterval}
+            srCandleCount={srCandleCount}
+            setSrCandleCount={setSrCandleCount}
             pphlInterval={pphlInterval}
             setPphlInterval={setPphlInterval}
+            pphlCandleCount={pphlCandleCount}
+            setPphlCandleCount={setPphlCandleCount}
+            wfractalsInterval={wfractalsInterval}
+            setWfractalsInterval={setWfractalsInterval}
+            wfractalsCandleCount={wfractalsCandleCount}
+            setWfractalsCandleCount={setWfractalsCandleCount}
+            zigzagInterval={zigzagInterval}
+            setZigzagInterval={setZigzagInterval}
+            zigzagCandleCount={zigzagCandleCount}
+            setZigzagCandleCount={setZigzagCandleCount}
+            rsiCrossThreshold={rsiCrossThreshold}
+            setRsiCrossThreshold={setRsiCrossThreshold}
             chopInterval={chopInterval}
             setChopInterval={setChopInterval}
             macdInterval={macdInterval}
@@ -5794,6 +6336,11 @@ export default function CandlestickChart() {
               bollingerConfigs={chartBollingerConfigs}
               srConfig={chartSrConfig}
               pphlConfig={chartPphlConfig}
+              wfractalsConfig={chartWfractalsConfig}
+              zigzagConfig={chartZigzagConfig}
+              rsiCrossThreshold={rsiCrossThreshold}
+              flagsConfig={chartFlagsConfig}
+              analysisBoxRect={analysisBoxRect}
               prevDayCloudConfig={chartPrevDayCloudConfig}
               rsi={selectedChart.rsi}
               chopConfig={chartChopConfig}
@@ -5813,6 +6360,7 @@ export default function CandlestickChart() {
               focusLastN={hasExplicitCandleWindow ? displayCandleCount : null}
               onNeedOlderCandles={handleLoadMoreCandles}
               loadingMoreCandles={loadingMoreCandles}
+              onVisibleRangeChange={reportVisibleRange}
             />
           ) : chartNode}
           {!showLwChart && !lwSupported && uiPrefs.chartEngineDefault !== 'echarts' && (
@@ -5824,6 +6372,8 @@ export default function CandlestickChart() {
             </div>
           )}
           {measureOverlay}
+          {analysisBoxOverlay}
+          {analysisBoxNotice}
           {measureButtons}
           <ChartIndicatorPanel
             activeIndicators={activeIndicators}
@@ -5843,8 +6393,22 @@ export default function CandlestickChart() {
             botPermInterval={botPermInterval}
             srInterval={srInterval}
             setSrInterval={setSrInterval}
+            srCandleCount={srCandleCount}
+            setSrCandleCount={setSrCandleCount}
             pphlInterval={pphlInterval}
             setPphlInterval={setPphlInterval}
+            pphlCandleCount={pphlCandleCount}
+            setPphlCandleCount={setPphlCandleCount}
+            wfractalsInterval={wfractalsInterval}
+            setWfractalsInterval={setWfractalsInterval}
+            wfractalsCandleCount={wfractalsCandleCount}
+            setWfractalsCandleCount={setWfractalsCandleCount}
+            zigzagInterval={zigzagInterval}
+            setZigzagInterval={setZigzagInterval}
+            zigzagCandleCount={zigzagCandleCount}
+            setZigzagCandleCount={setZigzagCandleCount}
+            rsiCrossThreshold={rsiCrossThreshold}
+            setRsiCrossThreshold={setRsiCrossThreshold}
             chopInterval={chopInterval}
             setChopInterval={setChopInterval}
             macdInterval={macdInterval}

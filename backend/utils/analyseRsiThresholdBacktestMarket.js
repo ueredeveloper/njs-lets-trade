@@ -2,7 +2,7 @@
 
 const { getActiveUsdtPairs } = require('../binance/getActiveUsdtPairs');
 const analyseRsiThresholdBacktest = require('./analyseRsiThresholdBacktest');
-const { countBaseVsEvolvedExits, computeCloudZoneStats, computeRsi1hBreakdown } = require('./analyseRsiThresholdBacktest');
+const { countBaseVsEvolvedExits, computeCloudZoneStats, computeSupportResistanceZoneStats, computeRsi1hBreakdown } = require('./analyseRsiThresholdBacktest');
 const getTickers = require('../binance/cachedTicker24hr');
 const { computeDailyEntryStats } = require('./dailyEntryStats');
 const { computeAvgTradeDurationMs } = require('./tradeDurationStats');
@@ -131,6 +131,11 @@ async function analyseRsiThresholdBacktestMarket(options = {}) {
     const baseVsEvolved = countBaseVsEvolvedExits(filledOccurrences);
     const pdcOpts = perSymbolOptions.prevDayCloud;
     const cloudZoneStats = pdcOpts?.enabled ? computeCloudZoneStats(allOccurrences) : null;
+    const srOpts = perSymbolOptions.supportResistance;
+    const supportResistanceStats = srOpts?.enabled ? computeSupportResistanceZoneStats(allOccurrences) : null;
+    const srBlockedCount = srOpts?.enabled
+        ? valid.reduce((s, { result }) => s + (result.srBlockedCount || 0), 0)
+        : 0;
     const rsi1hBreakdown = computeRsi1hBreakdown(allOccurrences);
     const higherRsiEnabled = !!perSymbolOptions.higherRsiFilter?.enabled;
     const higherRsiBlockedCount = higherRsiEnabled
@@ -164,6 +169,16 @@ async function analyseRsiThresholdBacktestMarket(options = {}) {
             useHighLow: pdcOpts.useHighLow !== false,
         } : null,
         cloudZoneStats,
+        supportResistance: srOpts?.enabled ? {
+            interval: srOpts.interval ?? '4h',
+            candleCount: Math.max(20, Math.min(1000, Math.round(Number(srOpts.candleCount ?? 200)))),
+            entrySupportRank: Math.max(1, Math.min(3, Math.round(Number(srOpts.entrySupportRank ?? 1)))),
+            exitResistanceRank: Math.max(1, Math.min(3, Math.round(Number(srOpts.exitResistanceRank ?? 1)))),
+            entryMaxPct: srOpts.entryMaxPct === 'adapt' ? 'adapt' : Math.max(1, Math.min(100, Number(srOpts.entryMaxPct ?? 10))),
+            entryMaxPctMode: srOpts.entryMaxPct === 'adapt' ? 'adapt' : 'fixed',
+        } : null,
+        supportResistanceStats,
+        srBlockedCount,
         rsi1hBreakdown,
         minVolumeUsdt: Number(minVolumeUsdt) > 0 ? Number(minVolumeUsdt) : 0,
         excludeOpenExits: !!perSymbolOptions.excludeOpenExits,

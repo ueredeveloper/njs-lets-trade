@@ -4,6 +4,7 @@ import { computeVwapSlopeFlags } from '../utils/vwapSlopeHighlight';
 import { computeStopLossFloor } from '../utils/trailingStopLoss';
 import { RectanglePrimitive } from '../utils/lwRectanglePrimitive';
 import { BandFillPrimitive } from '../utils/lwBandFillPrimitive';
+import { computeRsiUpCrossings } from '../utils/rsiThresholdCrossings';
 import { tickMarkFormatterBrt, crosshairTimeFormatterBrt } from '../utils/lwBrtTimeFormat';
 import { INTERVAL_MS } from '../utils/chartView';
 import { simulateBbTouchPath, pairBbPathCycles } from '../utils/bollingerTouchPath';
@@ -15,6 +16,10 @@ import { snapPointsToChartCandles } from '../utils/snapToChartCandles';
 
 const C_UP = '#26a69a';
 const C_DOWN = '#ef5350';
+/** Cores das linhas de S/R — resistência em tons de rosa, suporte em tons de azul. Máx. 6 níveis
+ *  do backend (≈3+3). Espelha srLevelColor em CandlestickChart.jsx. */
+const SR_RESISTANCE_COLORS = ['#9d174d', '#be185d', '#db2777', '#ec4899', '#f472b6', '#f9a8d4'];
+const SR_SUPPORT_COLORS = ['#1e3a8a', '#1d4ed8', '#2563eb', '#3b82f6', '#60a5fa', '#93c5fd'];
 const VWAP_LINE_COLOR = '#FF4FA3';
 const VWAP_BAND_COLOR = 'rgba(255, 79, 163, 0.45)';
 const VWAP_BAND_FILL_COLOR = 'rgba(255, 79, 163, 0.08)';
@@ -156,6 +161,74 @@ function buildBbPathLineAndMarkers(bollingerConfig, candlesticks) {
   }
 
   return { segments, clouds, markers };
+}
+
+const FLAG_BULL_COLOR = '#26a69a'; // bandeira de alta = verde (mesmo tom do candle de alta)
+const FLAG_BEAR_COLOR = '#ef5350'; // bandeira de baixa = vermelho
+const FLAG_BULL_FILL = 'rgba(38,166,154,0.10)';
+const FLAG_BEAR_FILL = 'rgba(239,83,80,0.10)';
+
+/**
+ * Desenho das bandeiras auto-detectadas (ver utils/detectFlags.js): por bandeira, um LineSeries
+ * pro mastro, dois pro canal (topo/fundo) e um pro alvo (só quando confirmada). O sombreado do
+ * canal sai como banda no BandFillPrimitive (prefixo 'flag-'). Tempos de detectFlags vêm em ms
+ * (openTime) — aqui viram segundos (contrato do Lightweight Charts).
+ */
+function buildFlagsDrawing(flagsConfig) {
+  const series = [];
+  const bands = [];
+  const markers = [];
+  const sec = (ms) => Math.floor(Number(ms) / 1000);
+  const seg = (aT, aV, bT, bV) => {
+    const t1 = sec(aT); const t2 = sec(bT);
+    if (!Number.isFinite(t1) || !Number.isFinite(t2) || !Number.isFinite(aV) || !Number.isFinite(bV) || t2 <= t1) return null;
+    return [{ time: t1, value: aV }, { time: t2, value: bV }];
+  };
+
+  for (const f of flagsConfig?.flags ?? []) {
+    const color = f.type === 'bull' ? FLAG_BULL_COLOR : FLAG_BEAR_COLOR;
+    const poleStyle = f.confirmed ? 0 : 2; // tracejado enquanto "em formação"
+
+    const pole = seg(f.poleStart.time, f.poleStart.price, f.poleEnd.time, f.poleEnd.price);
+    if (pole) series.push({ color, width: 2, style: poleStyle, data: pole });
+
+    const [c0, c1] = f.channel ?? [];
+    if (c0 && c1) {
+      const up = seg(c0.time, c0.upper, c1.time, c1.upper);
+      const lw = seg(c0.time, c0.lower, c1.time, c1.lower);
+      if (up) series.push({ color, width: 1, style: 2, data: up });
+      if (lw) series.push({ color, width: 1, style: 2, data: lw });
+      const bt0 = sec(c0.time); const bt1 = sec(c1.time);
+      if (bt1 > bt0 && [c0.upper, c0.lower, c1.upper, c1.lower].every(Number.isFinite)) {
+        bands.push({
+          points: [
+            { time: bt0, upper: c0.upper, lower: c0.lower },
+            { time: bt1, upper: c1.upper, lower: c1.lower },
+          ],
+          fillColor: f.type === 'bull' ? FLAG_BULL_FILL : FLAG_BEAR_FILL,
+        });
+      }
+    }
+
+    if (f.confirmed && f.breakout && f.target) {
+      // Alvo na mesma cor da bandeira (verde=alta / vermelho=baixa), pontilhado pra
+      // distinguir do mastro/canal.
+      const tgt = seg(f.breakout.time, f.target.price, f.target.time, f.target.price);
+      if (tgt) series.push({ color, width: 1.5, style: 3, data: tgt });
+
+      const pct = ((f.target.price - f.breakout.price) / f.breakout.price) * 100;
+      markers.push({
+        time: sec(f.breakout.time),
+        position: f.type === 'bull' ? 'belowBar' : 'aboveBar',
+        shape: f.type === 'bull' ? 'arrowUp' : 'arrowDown',
+        color,
+        size: 1,
+        text: `${f.label} → alvo ${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%`,
+      });
+    }
+  }
+
+  return { series, bands, markers };
 }
 
 const EMA_LINE_DEFS = [
@@ -473,6 +546,22 @@ function buildPphlMarkers(pphlConfig) {
     .filter(Boolean);
 }
 
+/** Williams Fractals — mesmos marcadores do PPHL (um por fractal), mas com cor própria
+ *  (rosa) e círculo em vez de seta, pra distinguir dos pivôs do PPHL quando os dois estão
+ *  ligados ao mesmo tempo. */
+function buildWfractalsMarkers(wfractalsConfig) {
+  if (!wfractalsConfig?.points?.length) return [];
+  return wfractalsConfig.points
+    .map((p) => {
+      const time = Math.floor(Number(p.time) / 1000);
+      if (!Number.isFinite(time)) return null;
+      return p.type === 'high'
+        ? { time, position: 'aboveBar', shape: 'circle', color: '#f472b6', size: 0.6 }
+        : { time, position: 'belowBar', shape: 'circle', color: '#f472b6', size: 0.6 };
+    })
+    .filter(Boolean);
+}
+
 /** Marcadores numéricos do TD Sequential Setup (ver computeTdSequentialSetup) — número 1-9
  *  abaixo do candle (Buy Setup, possível fundo) ou acima (Sell Setup, possível topo). A
  *  contagem 9 (setup completo) ganha marcador maior e cor sólida; as demais ficam translúcidas
@@ -561,10 +650,10 @@ function toValidLwCandles(candlesticks) {
 const CandlestickChartLW = forwardRef(function CandlestickChartLW({
   symbol, interval, candlesticks, colors, rightPad = 0,
   activeIndicators = [], ma9, ma21, ma50, ma200, overlayConfigs, vwapConfig, vwapSlopeHighlight,
-  bollingerConfigs = [], srConfig, pphlConfig, prevDayCloudConfig, rsi, chopConfig, macdConfig,
+  bollingerConfigs = [], srConfig, pphlConfig, wfractalsConfig, zigzagConfig, rsiCrossThreshold = 0, flagsConfig, analysisBoxRect, prevDayCloudConfig, rsi, chopConfig, macdConfig,
   emaPersistCloudData, emaPersistCloudConfirmData, emaPersistCloudConfirm2Data, emaPersistCloudLayers, emaPersistCloudTones, barsSinceCrossData, tdSequentialData,
   stopLossConfig, targetConfig, buyInfo, multitradeMarkers, zoomPeriod, focusLastN,
-  onNeedOlderCandles, loadingMoreCandles,
+  onNeedOlderCandles, loadingMoreCandles, onVisibleRangeChange,
 }, ref) {
   const containerRef = useRef(null);
   const chartRef = useRef(null);
@@ -575,6 +664,13 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
   const rectPrimitiveRef = useRef(null);
   const bandFillPrimitiveRef = useRef(null);
   const pnlSeriesRef = useRef(null);
+  // ZigZag: linha ligando os pivôs confirmados + linha tracejada da perna final ainda não
+  // confirmada (do último pivô até o candle mais recente).
+  const zigzagSeriesRef = useRef(null);
+  const zigzagTentativeSeriesRef = useRef(null);
+  // Bandeiras (auto): array de LineSeries — mastro + 2 linhas do canal + alvo, por bandeira.
+  // O sombreado do canal vai pelo bandFillPrimitiveRef (prefixo 'flag-'), como as demais nuvens.
+  const flagsSeriesRef = useRef([]);
   // Array de LineSeries — um por trecho do PATH (alta=verde / baixa=vermelho)
   const bbPathSeriesRef = useRef([]);
   // Array de LineSeries — um por sinal de toque na banda inferior, mostrando os 10 candles
@@ -612,6 +708,10 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
   // esse evento programático não é confiável (corre contra o próprio ciclo de render da lib);
   // rastrear o gesto real do usuário é determinístico.
   const isUserPanningRef = useRef(false);
+  // Callback de "trecho visível mudou" (pan/zoom) — espelhada em ref pra o listener assinado uma
+  // única vez sempre ler a versão mais recente. Ver S/R com janela deslizante no manipulador.
+  const onVisibleRangeChangeRef = useRef(onVisibleRangeChange);
+  useEffect(() => { onVisibleRangeChangeRef.current = onVisibleRangeChange; }, [onVisibleRangeChange]);
   useEffect(() => { onNeedOlderCandlesRef.current = onNeedOlderCandles; }, [onNeedOlderCandles]);
   useEffect(() => { loadingMoreCandlesRef.current = loadingMoreCandles; }, [loadingMoreCandles]);
   useEffect(() => { candlesticksLenRef.current = candlesticks?.length ?? 0; }, [candlesticks]);
@@ -701,8 +801,18 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       color: C_UP, lineWidth: 1.5, lineStyle: 1,
       priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
     });
+    zigzagSeriesRef.current = chart.addSeries(LineSeries, {
+      color: '#818cf8', lineWidth: 2, lineStyle: 0,
+      priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+      pointMarkersVisible: true, pointMarkersRadius: 3,
+    });
+    zigzagTentativeSeriesRef.current = chart.addSeries(LineSeries, {
+      color: '#818cf8', lineWidth: 1, lineStyle: 2,
+      priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+    });
     bbPathSeriesRef.current = [];
     medianTrendSeriesRef.current = [];
+    flagsSeriesRef.current = [];
     indicatorSeriesRef.current = {};
     priceLinesRef.current = [];
     markersPluginRef.current = createSeriesMarkers(series, []);
@@ -724,6 +834,18 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       onNeedOlderCandlesRef.current();
     };
     chart.timeScale().subscribeVisibleLogicalRangeChange(handleVisibleLogicalRangeChange);
+    // Trecho de TEMPO visível (pan/zoom) — reportado pro pai pra o S/R (e PPHL/WF/ZZ) usarem
+    // janela deslizante sobre os candles que estão aparecendo. `range` vem em segundos (UTCTimestamp)
+    // ou null quando não há dados.
+    const handleVisibleTimeRangeChange = (range) => {
+      if (!range || !onVisibleRangeChangeRef.current) return;
+      const fromMs = Number(range.from) * 1000;
+      const toMs = Number(range.to) * 1000;
+      if (Number.isFinite(fromMs) && Number.isFinite(toMs)) {
+        onVisibleRangeChangeRef.current({ fromMs, toMs });
+      }
+    };
+    chart.timeScale().subscribeVisibleTimeRangeChange(handleVisibleTimeRangeChange);
     // pointerdown/touchstart no container = início de um arrasto real; pointerup/touchend/cancel
     // (ouvidos no window, não só no container, pra pegar o "soltar" mesmo se o ponteiro sair da
     // área do gráfico antes de soltar) = fim do gesto. Esse é o único sinal confiável de "o
@@ -757,6 +879,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
     return () => {
       if (panEndTimeoutId) clearTimeout(panEndTimeoutId);
       chart.timeScale().unsubscribeVisibleLogicalRangeChange(handleVisibleLogicalRangeChange);
+      chart.timeScale().unsubscribeVisibleTimeRangeChange(handleVisibleTimeRangeChange);
       el?.removeEventListener('pointerdown', handlePanStart);
       el?.removeEventListener('touchstart', handlePanStart);
       window.removeEventListener('pointerup', handlePanEnd);
@@ -772,8 +895,11 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       rectPrimitiveRef.current = null;
       bandFillPrimitiveRef.current = null;
       pnlSeriesRef.current = null;
+      zigzagSeriesRef.current = null;
+      zigzagTentativeSeriesRef.current = null;
       bbPathSeriesRef.current = [];
       medianTrendSeriesRef.current = [];
+      flagsSeriesRef.current = [];
       subpanelStateRef.current = { key: null, series: {} };
       macdSeriesRef.current = { hist: null, macd: null, signal: null };
     };
@@ -1055,17 +1181,39 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       try { series.removePriceLine(line); } catch { /* já removida junto do chart */ }
     }
     const lines = [];
+    const typeCount = { resistance: 0, support: 0 };
+    const eq = (a, b) => a != null && b != null && Math.abs(a - b) / b < 1e-6;
+    const entrySup = srConfig?.entrySupport ?? null;
+    const exitRes = srConfig?.exitResistance ?? null;
     for (const lvl of srConfig?.levels ?? []) {
       const price = Number(lvl.price);
       if (!Number.isFinite(price)) continue;
       const isRes = lvl.type === 'resistance';
+      const palette = isRes ? SR_RESISTANCE_COLORS : SR_SUPPORT_COLORS;
+      const color = palette[(typeCount[isRes ? 'resistance' : 'support']++) % palette.length];
+      // Linhas de referência do trade (Estatísticas): entrada / alvo — mais grossas, sólidas, com rótulo.
+      const isEntry = eq(price, entrySup);
+      const isExit = eq(price, exitRes);
       lines.push(series.createPriceLine({
-        price, color: isRes ? C_DOWN : C_UP, lineWidth: 1, lineStyle: 2,
-        axisLabelVisible: true, title: `${isRes ? 'R' : 'S'} (${lvl.touches ?? 1}x)`,
+        price, color,
+        lineWidth: (isEntry || isExit) ? 3 : (isRes ? 1 : 3),
+        lineStyle: (isEntry || isExit) ? 0 : (isRes ? 2 : 0),
+        axisLabelVisible: true,
+        title: `${isRes ? 'R' : 'S'} (${lvl.touches ?? 1}x)${isEntry ? ' entrada' : isExit ? ' alvo' : ''}`,
       }));
     }
     priceLinesRef.current = lines;
   }, [srConfig]);
+
+  // Linhas verticais (fullHeight, largura 2px) nos candles em que o RSI(14) cruzou pra cima do
+  // "Limiar RSI" — mesmo gatilho do bot RSI Momentum (ver computeRsiUpCrossings). Roxo.
+  const rsiCrossRects = useMemo(() => {
+    if (!(Number(rsiCrossThreshold) > 0) || !activeIndicators.includes('rsi')) return [];
+    return computeRsiUpCrossings(rsi, candlesticks, rsiCrossThreshold).map((openMs) => {
+      const time = Math.floor(openMs / 1000);
+      return { time1: time, time2: time, fullHeight: true, fillColor: 'rgba(167,139,250,0.55)', lineWidth: 2 };
+    });
+  }, [rsi, candlesticks, rsiCrossThreshold, activeIndicators]);
 
   // Quadrados alvo/stop da posição aberta — retângulo customizado (ver lwRectanglePrimitive.js),
   // igual ao buildBuyPositionSquares do ECharts (markArea verde/vermelho com % de distância).
@@ -1074,8 +1222,10 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
     rectPrimitiveRef.current.setRects([
       ...buildPositionRects(buyInfo, stopLossConfig, targetConfig, candlesticks),
       ...buildHistoricalPositionRects(multitradeMarkers, candlesticks),
+      ...(analysisBoxRect ? [analysisBoxRect] : []),
+      ...rsiCrossRects,
     ]);
-  }, [buyInfo, stopLossConfig, targetConfig, candlesticks, multitradeMarkers]);
+  }, [buyInfo, stopLossConfig, targetConfig, candlesticks, multitradeMarkers, analysisBoxRect, rsiCrossRects]);
 
   // Linha de PnL: entrada → preço atual, verde/vermelho conforme sobe ou cai.
   useEffect(() => {
@@ -1148,11 +1298,61 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
     medianTrendSeriesRef.current = next;
   }, [bollingerConfigs, candlesticks]);
 
+  // ZigZag: liga os pivôs confirmados numa linha + perna final tracejada (não confirmada).
+  // Direto por timestamp (como buildPphlMarkers), sem mapear pro candle mais próximo.
+  useEffect(() => {
+    const line = zigzagSeriesRef.current;
+    const tentative = zigzagTentativeSeriesRef.current;
+    if (!line || !tentative) return;
+    const toPoint = (p) => {
+      const time = Math.floor(Number(p.time) / 1000);
+      const value = Number(p.price);
+      return Number.isFinite(time) && Number.isFinite(value) ? { time, value } : null;
+    };
+    const pts = (zigzagConfig?.points ?? []).map(toPoint).filter(Boolean);
+    // LW exige tempos estritamente crescentes e únicos.
+    const dedup = [];
+    for (const p of pts) {
+      if (dedup.length && dedup[dedup.length - 1].time >= p.time) dedup[dedup.length - 1] = p;
+      else dedup.push(p);
+    }
+    line.setData(dedup.length >= 2 ? dedup : []);
+
+    const leg = zigzagConfig?.lastLeg;
+    const a = leg?.from ? toPoint({ time: leg.from.time, price: leg.from.price }) : null;
+    const b = leg?.to ? toPoint({ time: leg.to.time, price: leg.to.price }) : null;
+    tentative.setData(a && b && b.time > a.time ? [a, b] : []);
+  }, [zigzagConfig]);
+
+  // Bandeiras (auto): mastro + canal (2 linhas) + alvo, um LineSeries por trecho — mesmo padrão
+  // dinâmico do PATH BB (bbPathSeriesRef). O sombreado do canal vai na banda 'flag-' do
+  // BandFillPrimitive.
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    for (const s of flagsSeriesRef.current) {
+      try { chart.removeSeries(s); } catch { /* já removida */ }
+    }
+    const { series: defs, bands } = buildFlagsDrawing(flagsConfig);
+    const next = [];
+    for (const def of defs) {
+      if (!def.data?.length) continue;
+      const s = chart.addSeries(LineSeries, {
+        color: def.color, lineWidth: def.width, lineStyle: def.style ?? 0,
+        priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+      });
+      s.setData(def.data);
+      next.push(s);
+    }
+    flagsSeriesRef.current = next;
+    bandFillPrimitiveRef.current?.replacePrefixed('flag-', bands);
+  }, [flagsConfig]);
+
   // Marcadores: PPHL + sinal/venda de Multi-Trade + % da linha de PnL + path BB (de todos os
-  // grupos com showPath ligado).
+  // grupos com showPath ligado) + rompimento das bandeiras auto.
   useEffect(() => {
     if (!markersPluginRef.current) return;
-    const markers = [...buildPphlMarkers(pphlConfig), ...buildTradeMarkers(multitradeMarkers)];
+    const markers = [...buildPphlMarkers(pphlConfig), ...buildWfractalsMarkers(wfractalsConfig), ...buildTradeMarkers(multitradeMarkers), ...buildFlagsDrawing(flagsConfig).markers];
     const pnlMarker = buildPnlMarker(buyInfo, candlesticks);
     if (pnlMarker) markers.push(pnlMarker);
     const bbPathMarkers = bollingerConfigs
@@ -1164,7 +1364,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
     }
     markers.sort((a, b) => a.time - b.time);
     markersPluginRef.current.setMarkers(markers);
-  }, [pphlConfig, multitradeMarkers, buyInfo, candlesticks, bollingerConfigs, activeIndicators, tdSequentialData]);
+  }, [pphlConfig, wfractalsConfig, flagsConfig, multitradeMarkers, buyInfo, candlesticks, bollingerConfigs, activeIndicators, tdSequentialData]);
 
   // Sub-painéis RSI/CHOP (panes nativos do LW v5) — reconstrói do zero só quando o CONJUNTO
   // ativo muda (ex.: liga CHOP com RSI já ligado), não a cada novo valor.
@@ -1347,6 +1547,37 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
     if (activeIndicators.includes('macd') && macdConfig) {
       entries.push({ key: 'macd', color: '#38bdf8', label: `MACD 12/26/9 @${macdConfig.interval}` });
     }
+    // Cor da legenda das bandeiras: verde se só alta, vermelho se só baixa, cinza se mistura.
+    const flagLegendColor = (list) => {
+      if (!list?.length) return '#94a3b8';
+      const hasBull = list.some((f) => f.type === 'bull');
+      const hasBear = list.some((f) => f.type === 'bear');
+      if (hasBull && !hasBear) return FLAG_BULL_COLOR;
+      if (hasBear && !hasBull) return FLAG_BEAR_COLOR;
+      return '#94a3b8';
+    };
+    if (flagsConfig?.scoped) {
+      const list = flagsConfig.flags ?? [];
+      const conf = list.filter((f) => f.confirmed).length;
+      const forming = list.length - conf;
+      entries.push({
+        key: 'flags',
+        color: flagLegendColor(list),
+        label: list.length
+          ? `Bandeiras na seleção: ${conf} conf.${forming ? ` + ${forming} possível(is)` : ''}`
+          : (flagsConfig.scopedCount != null && flagsConfig.scopedCount < 12
+            ? `Seleção pequena (${flagsConfig.scopedCount} candles) — mín. ~12`
+            : 'Nenhuma bandeira na seleção'),
+      });
+    } else if (flagsConfig?.flags?.length) {
+      const conf = flagsConfig.flags.filter((f) => f.confirmed).length;
+      const forming = flagsConfig.flags.length - conf;
+      entries.push({
+        key: 'flags',
+        color: flagLegendColor(flagsConfig.flags),
+        label: `Bandeiras: ${conf} conf.${forming ? ` + ${forming} em formação` : ''}`,
+      });
+    }
     if (activeIndicators.includes('prevDayCloud') && prevDayCloudConfig?.segments?.length) {
       // Último degrau = nuvem vigente agora (dia mais recente carregado); os degraus mais
       // antigos ficam só no próprio gráfico, sem entrada de legenda separada pra cada um.
@@ -1362,7 +1593,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       });
     }
     return entries;
-  }, [activeIndicators, overlayConfigs, vwapConfig, bollingerConfigs, emaPersistLegend, prevDayCloudConfig, macdConfig]);
+  }, [activeIndicators, overlayConfigs, vwapConfig, bollingerConfigs, emaPersistLegend, prevDayCloudConfig, macdConfig, flagsConfig]);
 
   return (
     <div className="relative w-full h-full">

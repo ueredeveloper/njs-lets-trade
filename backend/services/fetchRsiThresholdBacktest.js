@@ -30,6 +30,7 @@ router.get('/rsi-threshold-backtest', async (req, res) => {
         bandWidthLookback, bandWidthMinPct,
         prevDayCloudEnabled, prevDayCloudMaxPct, prevDayCloudInterval, prevDayCloudCandleCount,
         prevDayCloudUseHighLow,
+        srEnabled, srInterval, srCandleCount, srEntrySupportRank, srExitResistanceRank, srEntryMaxPct,
         minVolumeUsdt, excludeOpenExits,
         prevCandleStopEnabled,
         adxFilterEnabled, adxFilterInterval, adxFilterMinAdx,
@@ -74,6 +75,14 @@ router.get('/rsi-threshold-backtest', async (req, res) => {
             candleCount: prevDayCloudCandleCount ? parseInt(prevDayCloudCandleCount, 10) : 3,
             useHighLow: prevDayCloudUseHighLow !== '0', // padrão máx/mín; só '0' explícito desliga
 
+        } : null,
+        supportResistance: srEnabled === '1' ? {
+            enabled: true,
+            interval: srInterval ?? '4h',
+            candleCount: srCandleCount ? parseInt(srCandleCount, 10) : 200,
+            entrySupportRank: srEntrySupportRank ? parseInt(srEntrySupportRank, 10) : 1,
+            exitResistanceRank: srExitResistanceRank ? parseInt(srExitResistanceRank, 10) : 1,
+            entryMaxPct: srEntryMaxPct === 'adapt' ? 'adapt' : (srEntryMaxPct ? parseFloat(srEntryMaxPct) : 10),
         } : null,
         minVolumeUsdt:    minVolumeUsdt ? parseFloat(minVolumeUsdt) : 0,
         excludeOpenExits: excludeOpenExits === '1',

@@ -52,7 +52,7 @@ const VALID_OVERLAY_PERIODS = ['9', '21', '50', '200'];
 /** IDs válidos de indicadores do gráfico. */
 export const VALID_ACTIVE_INDICATORS = [
   'ma9', 'ma21', 'ma50', 'ma200', 'emaPersistCloud', 'barsSinceCross', 'tdSequential',
-  'ichimoku', 'sr', 'pphl', 'rsi', 'rsi50', 'rsi80', 'stopLoss', 'chopZone', 'prevDayCloud', 'macd',
+  'ichimoku', 'sr', 'pphl', 'wfractals', 'zigzag', 'flags', 'rsi', 'rsi50', 'rsi80', 'stopLoss', 'chopZone', 'prevDayCloud', 'macd',
 ];
 
 /** Cores padrão por período (convenção TradingView / melhores práticas). */
@@ -214,6 +214,36 @@ export function normalizePphlInterval(raw) {
   return CHART_INTERVAL_OPTIONS.includes(raw) ? raw : DEFAULT_PPHL_INTERVAL;
 }
 
+/** Intervalo de candles usado pra calcular os Williams Fractals (fractais de N candles de cada
+ *  lado) — mesmo padrão do S/R/PPHL, independente do intervalo do gráfico. */
+export const DEFAULT_WFRACTALS_INTERVAL = '4h';
+
+export function normalizeWfractalsInterval(raw) {
+  return CHART_INTERVAL_OPTIONS.includes(raw) ? raw : DEFAULT_WFRACTALS_INTERVAL;
+}
+
+/** Intervalo de candles usado pra calcular a linha ZigZag — mesmo padrão do S/R/PPHL. */
+export const DEFAULT_ZIGZAG_INTERVAL = '4h';
+
+export function normalizeZigzagInterval(raw) {
+  return CHART_INTERVAL_OPTIONS.includes(raw) ? raw : DEFAULT_ZIGZAG_INTERVAL;
+}
+
+/** Quantidade de candles (do intervalo próprio do indicador) que entram no cálculo do
+ *  S/R-Pivot-family (PPHL, Williams Fractals, ZigZag) — independente do zoom do gráfico. */
+export const INDICATOR_CANDLE_COUNT_OPTIONS = [20, 50, 100, 200, 300, 500, 1000];
+export const DEFAULT_INDICATOR_CANDLE_COUNT = 300;
+
+function normalizeIndicatorCandleCount(raw) {
+  const n = Math.round(Number(raw));
+  return INDICATOR_CANDLE_COUNT_OPTIONS.includes(n) ? n : DEFAULT_INDICATOR_CANDLE_COUNT;
+}
+
+export const normalizeSrCandleCount = normalizeIndicatorCandleCount;
+export const normalizePphlCandleCount = normalizeIndicatorCandleCount;
+export const normalizeWfractalsCandleCount = normalizeIndicatorCandleCount;
+export const normalizeZigzagCandleCount = normalizeIndicatorCandleCount;
+
 /** Intervalo de candles usado pra calcular o Choppiness Index — mesmo padrão do S/R/PPHL,
  *  independente do intervalo do gráfico. 4h por padrão (ver estudo: 1h fica contaminado pelo
  *  próprio candle do cruzamento EMA9x21, 4h reflete a estrutura de fundo). */
@@ -335,6 +365,17 @@ export function normalizeTdSequentialInterval(raw) {
   return CHART_INTERVAL_OPTIONS.includes(raw) ? raw : DEFAULT_TD_SEQUENTIAL_INTERVAL;
 }
 
+/** "Limiar RSI" — linha vertical no gráfico de candles onde o RSI(14) do intervalo do gráfico
+ *  cruza pra CIMA desse valor (mesmo gatilho do bot RSI Momentum). 0 = desligado. Só aparece
+ *  quando o subpainel de RSI está ligado. */
+export const RSI_CROSS_THRESHOLD_OPTIONS = [0, 50, 55, 60, 65, 70, 75, 80];
+export const DEFAULT_RSI_CROSS_THRESHOLD = 0;
+
+export function normalizeRsiCrossThreshold(raw) {
+  const n = Math.round(Number(raw));
+  return RSI_CROSS_THRESHOLD_OPTIONS.includes(n) ? n : DEFAULT_RSI_CROSS_THRESHOLD;
+}
+
 /** Motor de renderização do gráfico principal. 'lw' = TradingView Lightweight Charts (padrão,
  *  só candles + EMA/VWAP); 'echarts' = motor clássico com todos os overlays/subpainéis. Quando
  *  o gráfico usa um recurso que só existe no ECharts (Ichimoku, S/R, PPHL, RSI, CHOP, Bollinger,
@@ -417,7 +458,13 @@ export const DEFAULT_UI_PREFS = {
   overlaySlots: normalizeOverlaySlots(DEFAULT_OVERLAY_SLOTS),
   maBandsDefaults: normalizeMaBandsDefaults(DEFAULT_MA_BANDS),
   srIntervalDefault: DEFAULT_SR_INTERVAL,
+  srCandleCountDefault: DEFAULT_INDICATOR_CANDLE_COUNT,
   pphlIntervalDefault: DEFAULT_PPHL_INTERVAL,
+  pphlCandleCountDefault: DEFAULT_INDICATOR_CANDLE_COUNT,
+  wfractalsIntervalDefault: DEFAULT_WFRACTALS_INTERVAL,
+  wfractalsCandleCountDefault: DEFAULT_INDICATOR_CANDLE_COUNT,
+  zigzagIntervalDefault: DEFAULT_ZIGZAG_INTERVAL,
+  zigzagCandleCountDefault: DEFAULT_INDICATOR_CANDLE_COUNT,
   chopIntervalDefault: DEFAULT_CHOP_INTERVAL,
   macdIntervalDefault: DEFAULT_MACD_INTERVAL,
   prevDayCloudIntervalDefault: DEFAULT_PREV_DAY_CLOUD_INTERVAL,
@@ -428,6 +475,7 @@ export const DEFAULT_UI_PREFS = {
   emaPersistCloudLayersDefault: { ...DEFAULT_EMA_PERSIST_CLOUD_LAYERS },
   barsSinceCrossIntervalDefault: DEFAULT_BARS_SINCE_CROSS_INTERVAL,
   tdSequentialIntervalDefault: DEFAULT_TD_SEQUENTIAL_INTERVAL,
+  rsiCrossThresholdDefault: DEFAULT_RSI_CROSS_THRESHOLD,
   vwapDefaults: normalizeVwapDefaults(DEFAULT_VWAP),
   vwapAnchorDefault: normalizeVwapAnchor(DEFAULT_VWAP_ANCHOR),
   vwapSlopeHighlightDefault: normalizeVwapSlopeHighlight(DEFAULT_VWAP_SLOPE_HIGHLIGHT),
@@ -448,7 +496,13 @@ function cloneDefaults() {
     overlaySlots: normalizeOverlaySlots(DEFAULT_OVERLAY_SLOTS),
     maBandsDefaults: normalizeMaBandsDefaults(DEFAULT_MA_BANDS),
     srIntervalDefault: DEFAULT_SR_INTERVAL,
+    srCandleCountDefault: DEFAULT_INDICATOR_CANDLE_COUNT,
     pphlIntervalDefault: DEFAULT_PPHL_INTERVAL,
+    pphlCandleCountDefault: DEFAULT_INDICATOR_CANDLE_COUNT,
+    wfractalsIntervalDefault: DEFAULT_WFRACTALS_INTERVAL,
+    wfractalsCandleCountDefault: DEFAULT_INDICATOR_CANDLE_COUNT,
+    zigzagIntervalDefault: DEFAULT_ZIGZAG_INTERVAL,
+    zigzagCandleCountDefault: DEFAULT_INDICATOR_CANDLE_COUNT,
     chopIntervalDefault: DEFAULT_CHOP_INTERVAL,
     macdIntervalDefault: DEFAULT_MACD_INTERVAL,
     prevDayCloudIntervalDefault: DEFAULT_PREV_DAY_CLOUD_INTERVAL,
@@ -459,6 +513,7 @@ function cloneDefaults() {
     emaPersistCloudLayersDefault: { ...DEFAULT_EMA_PERSIST_CLOUD_LAYERS },
     barsSinceCrossIntervalDefault: DEFAULT_BARS_SINCE_CROSS_INTERVAL,
     tdSequentialIntervalDefault: DEFAULT_TD_SEQUENTIAL_INTERVAL,
+    rsiCrossThresholdDefault: DEFAULT_RSI_CROSS_THRESHOLD,
     vwapDefaults: normalizeVwapDefaults(DEFAULT_VWAP),
     vwapAnchorDefault: normalizeVwapAnchor(DEFAULT_VWAP_ANCHOR),
     vwapSlopeHighlightDefault: normalizeVwapSlopeHighlight(DEFAULT_VWAP_SLOPE_HIGHLIGHT),
@@ -502,8 +557,26 @@ export function loadUiPreferences() {
     if (parsed.srIntervalDefault !== undefined) {
       result.srIntervalDefault = normalizeSrInterval(parsed.srIntervalDefault);
     }
+    if (parsed.srCandleCountDefault !== undefined) {
+      result.srCandleCountDefault = normalizeSrCandleCount(parsed.srCandleCountDefault);
+    }
     if (parsed.pphlIntervalDefault !== undefined) {
       result.pphlIntervalDefault = normalizePphlInterval(parsed.pphlIntervalDefault);
+    }
+    if (parsed.pphlCandleCountDefault !== undefined) {
+      result.pphlCandleCountDefault = normalizePphlCandleCount(parsed.pphlCandleCountDefault);
+    }
+    if (parsed.wfractalsIntervalDefault !== undefined) {
+      result.wfractalsIntervalDefault = normalizeWfractalsInterval(parsed.wfractalsIntervalDefault);
+    }
+    if (parsed.wfractalsCandleCountDefault !== undefined) {
+      result.wfractalsCandleCountDefault = normalizeWfractalsCandleCount(parsed.wfractalsCandleCountDefault);
+    }
+    if (parsed.zigzagIntervalDefault !== undefined) {
+      result.zigzagIntervalDefault = normalizeZigzagInterval(parsed.zigzagIntervalDefault);
+    }
+    if (parsed.zigzagCandleCountDefault !== undefined) {
+      result.zigzagCandleCountDefault = normalizeZigzagCandleCount(parsed.zigzagCandleCountDefault);
     }
     if (parsed.chopIntervalDefault !== undefined) {
       result.chopIntervalDefault = normalizeChopInterval(parsed.chopIntervalDefault);
@@ -534,6 +607,9 @@ export function loadUiPreferences() {
     }
     if (parsed.tdSequentialIntervalDefault !== undefined) {
       result.tdSequentialIntervalDefault = normalizeTdSequentialInterval(parsed.tdSequentialIntervalDefault);
+    }
+    if (parsed.rsiCrossThresholdDefault !== undefined) {
+      result.rsiCrossThresholdDefault = normalizeRsiCrossThreshold(parsed.rsiCrossThresholdDefault);
     }
     if (parsed.vwapDefaults) {
       result.vwapDefaults = normalizeVwapDefaults(parsed.vwapDefaults);

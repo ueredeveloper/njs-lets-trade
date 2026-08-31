@@ -6,6 +6,7 @@ import {
 } from '../services/api';
 import Tooltip from './Tooltip';
 import CloudZoneChart from './CloudZoneChart';
+import SrZoneChart from './SrZoneChart';
 import Rsi1hBreakdownChart from './Rsi1hBreakdownChart';
 import StatsAccordion from './StatsAccordion';
 import { useI18n } from '../i18n';
@@ -311,6 +312,14 @@ const RSI_MOM_CLOUD_INTERVAL_OPTIONS = INTERVALS;
  *  gráfico (ver prevDayCloudCandleCount em CandlestickChart.jsx), padrão 3. 1 = só o candle
  *  anterior; N>1 = envelope [menor open/close, maior open/close] dos últimos N candles. */
 const RSI_MOM_CLOUD_CANDLE_COUNT_OPTIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+/** Filtro/alvo por Suporte/Resistência (mesmo detectSupportResistance do gráfico) — independente
+ *  da nuvem D-1. Entrada = filtro de desconto (preço na parte baixa do canal suporte→resistência);
+ *  saída = a resistência escolhida vira o alvo. Ver options.supportResistance em
+ *  backend/utils/analyseRsiThresholdBacktest.js. */
+const RSI_MOM_SR_INTERVAL_OPTIONS = INTERVALS;
+const RSI_MOM_SR_CANDLE_COUNT_OPTIONS = [20, 50, 100, 200, 300, 500, 1000];
+const RSI_MOM_SR_RANK_OPTIONS = [1, 2, 3];
+const RSI_MOM_SR_MAXPCT_OPTIONS = ['adapt', 2, 3, 5, 8, 10, 15, 20, 30, 50, 100];
 /** Valores selecionáveis do filtro "Volume 24h" — mesmo campo do bot ao vivo
  *  (config.volume.minVolumeUsdt, ver backend/bot/rsi-momentum/marketScanner.js). 0 = desligado. */
 const RSI_MOM_VOLUME_OPTIONS = [0, 1_000_000, 2_000_000, 5_000_000, 30_000_000];
@@ -374,6 +383,12 @@ const RSI_MOM_DEFAULT_PREFS = {
   prevDayCloudInterval: '4h',
   prevDayCloudCandleCount: 3,
   prevDayCloudUseHighLow: true,
+  srEnabled: false,
+  srInterval: '4h',
+  srCandleCount: 200,
+  srEntrySupportRank: 1,
+  srExitResistanceRank: 1,
+  srEntryMaxPct: 10,
   minVolumeUsdt: 0,
   excludeOpenExits: false,
   adxFilterEnabled: false,
@@ -418,7 +433,7 @@ function formatCandleSpan(candleCount, interval) {
  *  Momentum RSI — em vez de uma contagem fixa de candles (que representa tempos diferentes
  *  em cada intervalo), cada opção é convertida pro número de candles equivalente ao intervalo
  *  escolhido (ex.: 15m → 1h=4 candles, 2h=8, 6h=24, 12h=48; 5m → 1h=30, 2h=60, 4h=120). */
-const RSI_MOM_HOUR_MARKS = [1, 2, 3, 4, 6, 8, 12, 24, 48, 72, 96, 168];
+const RSI_MOM_HOUR_MARKS = [1, 2, 3, 4, 6, 8, 12, 24, 48, 72, 96, 168, 240, 336, 504, 720];
 
 function buildCandleCountOptions(interval) {
   const ms = INTERVAL_MS[interval];
@@ -633,7 +648,7 @@ function AutoCalcSwitch({ checked, onChange }) {
 }
 
 function RsiStats({ autoCalc }) {
-  const { selectedChart, setSelectedChart, setChartZoom, setChartViewSource, setChartTradeMarkers, multitradeFavorites, uiPrefs } = useCurrency();
+  const { selectedChart, setSelectedChart, setChartZoom, setChartViewSource, setChartTradeMarkers, setChartSrOverride, multitradeFavorites, uiPrefs } = useCurrency();
   const { t, formatPrice } = useI18n();
   const [symbol, setSymbol]         = useState(selectedChart?.symbol || 'BTCUSDT');
   const [interval, setInterval]     = useState(uiPrefs.statsDefaults.rsi.interval);
@@ -863,6 +878,7 @@ function RsiStats({ autoCalc }) {
 
                                 setSelectedChart(data);
                                 setChartViewSource(CHART_VIEW.STATISTICS);
+                                setChartSrOverride(null); // essa aba não tem S/R
                                 // Marca compra/venda do ciclo clicado — mesmo visual das outras abas.
                                 setChartTradeMarkers([
                                   { time: startMs, side: 'buy', price: o.entryPrice, label: '▲ Compra' },
@@ -991,7 +1007,7 @@ function SortTh({ label, sortKey, sort, onSort, align = 'left', className = '' }
 }
 
 function RsiMomentumStats({ autoCalc }) {
-  const { selectedChart, setSelectedChart, setChartZoom, setChartViewSource, setChartTradeMarkers, multitradeFavorites } = useCurrency();
+  const { selectedChart, setSelectedChart, setChartZoom, setChartViewSource, setChartTradeMarkers, setChartSrOverride, multitradeFavorites } = useCurrency();
   const { t } = useI18n();
   const [symbol, setSymbol]     = useState(selectedChart?.symbol || 'BTCUSDT');
   const [interval, setInterval] = useState('15m');
@@ -1168,6 +1184,14 @@ function RsiMomentumStats({ autoCalc }) {
           candleCount: p.prevDayCloudCandleCount,
           useHighLow: p.prevDayCloudUseHighLow,
         } : null,
+        supportResistance: p.srEnabled ? {
+          enabled: true,
+          interval: p.srInterval,
+          candleCount: p.srCandleCount,
+          entrySupportRank: p.srEntrySupportRank,
+          exitResistanceRank: p.srExitResistanceRank,
+          entryMaxPct: p.srEntryMaxPct,
+        } : null,
         minVolumeUsdt: p.minVolumeUsdt,
         excludeOpenExits: p.excludeOpenExits,
         adxFilter: p.adxFilterEnabled ? {
@@ -1246,6 +1270,9 @@ function RsiMomentumStats({ autoCalc }) {
           label: `▼ ${o.pnlPct >= 0 ? '+' : ''}${o.pnlPct}%`,
         },
       ].filter(Boolean));
+      // Desenha no gráfico EXATAMENTE o S/R que o backtest usou pra decidir esse trade (o
+      // gráfico e o trade têm que ser a mesma coisa). null se a busca não tinha S/R ligado.
+      setChartSrOverride(o.sr ?? null);
       setChartZoom({
         source: CHART_VIEW.STATISTICS,
         startDate: o.signalDate,
@@ -1639,6 +1666,66 @@ function RsiMomentumStats({ autoCalc }) {
           </>
         )}
 
+        {/* Filtro/alvo por Suporte/Resistência (mesmo detectSupportResistance do gráfico) —
+            independente da nuvem D-1. Entrada = filtro de desconto; saída = alvo na resistência. */}
+        <div className="flex items-center gap-1 shrink-0 pb-1" title={t('stats.tip.sr_filter')}>
+          <span className="hidden md:inline text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.sr_filter')}</span>
+          <button
+            type="button"
+            onClick={() => patchPrefs({ srEnabled: !prefs.srEnabled })}
+            className={`relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${prefs.srEnabled ? 'bg-p4' : 'bg-p3/40'}`}
+          >
+            <span className={`inline-block h-3 w-3 rounded-full bg-white shadow transition-transform ${prefs.srEnabled ? 'translate-x-3' : 'translate-x-0'}`} />
+          </button>
+        </div>
+
+        {prefs.srEnabled && (
+          <>
+            <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.sr_interval')}>
+              <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.sr_interval')}</label>
+              <select className={inp}
+                value={prefs.srInterval}
+                onChange={(e) => patchPrefs({ srInterval: e.target.value })}>
+                {RSI_MOM_SR_INTERVAL_OPTIONS.map((v) => <option key={v} value={v}>{v}</option>)}
+              </select>
+            </div>
+            <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.sr_candle_count')}>
+              <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.sr_candle_count')}</label>
+              <select className={inp}
+                value={prefs.srCandleCount}
+                onChange={(e) => patchPrefs({ srCandleCount: Number(e.target.value) })}>
+                {RSI_MOM_SR_CANDLE_COUNT_OPTIONS.map((v) => <option key={v} value={v}>{`x${v}`}</option>)}
+              </select>
+            </div>
+            <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.sr_entry_support')}>
+              <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.sr_entry_support')}</label>
+              <select className={inp}
+                value={prefs.srEntrySupportRank}
+                onChange={(e) => patchPrefs({ srEntrySupportRank: Number(e.target.value) })}>
+                {RSI_MOM_SR_RANK_OPTIONS.map((v) => <option key={v} value={v}>{`${v}ª ↓`}</option>)}
+              </select>
+            </div>
+            <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.sr_exit_resistance')}>
+              <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.sr_exit_resistance')}</label>
+              <select className={inp}
+                value={prefs.srExitResistanceRank}
+                onChange={(e) => patchPrefs({ srExitResistanceRank: Number(e.target.value) })}>
+                {RSI_MOM_SR_RANK_OPTIONS.map((v) => <option key={v} value={v}>{`${v}ª ↑`}</option>)}
+              </select>
+            </div>
+            <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.sr_entry_max')}>
+              <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.sr_entry_max')}</label>
+              <select className={inp}
+                value={prefs.srEntryMaxPct}
+                onChange={(e) => patchPrefs({ srEntryMaxPct: e.target.value === 'adapt' ? 'adapt' : Number(e.target.value) })}>
+                {RSI_MOM_SR_MAXPCT_OPTIONS.map((v) => (
+                  <option key={v} value={v}>{v === 'adapt' ? 'ADAPT' : `${v}%`}</option>
+                ))}
+              </select>
+            </div>
+          </>
+        )}
+
         {/* Filtro de volume 24h (mesmo campo do bot ao vivo, config.volume.minVolumeUsdt) */}
         <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[56px]" title={t('stats.tip.min_volume')}>
           <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.min_volume')}</label>
@@ -1949,6 +2036,10 @@ function RsiMomentumStats({ autoCalc }) {
               <CloudZoneChart stats={result.cloudZoneStats} prevDayCloud={result.prevDayCloud} />
             )}
 
+            {prefs.srEnabled && result.supportResistanceStats?.zones?.length > 0 && (
+              <SrZoneChart stats={result.supportResistanceStats} sr={result.supportResistance} blocked={result.srBlockedCount} />
+            )}
+
             {result.rsi1hBreakdown?.bands?.length > 0 && (
               <Rsi1hBreakdownChart stats={result.rsi1hBreakdown} />
             )}
@@ -2105,7 +2196,7 @@ function RsiMomentumStats({ autoCalc }) {
 }
 
 function MaCrossStats({ autoCalc }) {
-  const { selectedChart, setSelectedChart, setChartZoom, setChartViewSource, setChartTradeMarkers, multitradeFavorites,
+  const { selectedChart, setSelectedChart, setChartZoom, setChartViewSource, setChartTradeMarkers, setChartSrOverride, multitradeFavorites,
     uiPrefs, setActiveIndicatorsPreference } = useCurrency();
   const { t } = useI18n();
   const [symbol, setSymbol]               = useState(selectedChart?.symbol || 'BTCUSDT');
@@ -2193,6 +2284,7 @@ function MaCrossStats({ autoCalc }) {
       if (ma21Full) data.ma21 = ma21Full;
       setSelectedChart(data);
       setChartViewSource(CHART_VIEW.STATISTICS);
+      setChartSrOverride(null); // essa aba não tem S/R
       // Marca compra/venda do cruzamento clicado — mesmo visual das outras abas.
       setChartTradeMarkers([
         { time: startMs, side: 'buy', price: o.entryPrice, label: '▲ Compra' },
@@ -2391,7 +2483,7 @@ function MaCrossStats({ autoCalc }) {
 }
 
 function BollingerBandsStats({ autoCalc }) {
-  const { selectedChart, setSelectedChart, setChartZoom, setChartViewSource, setChartTradeMarkers, multitradeFavorites, uiPrefs } = useCurrency();
+  const { selectedChart, setSelectedChart, setChartZoom, setChartViewSource, setChartTradeMarkers, setChartSrOverride, multitradeFavorites, uiPrefs } = useCurrency();
   const { t } = useI18n();
   const [symbol, setSymbol]     = useState(selectedChart?.symbol || 'BTCUSDT');
   const [interval, setInterval] = useState(uiPrefs.statsDefaults.bollingerBands.interval);
@@ -2502,6 +2594,7 @@ function BollingerBandsStats({ autoCalc }) {
       const data = await fetchCandlesticksAndCloud(sym, iv, src, needed);
       setSelectedChart(data);
       setChartViewSource(CHART_VIEW.STATISTICS);
+      setChartSrOverride(null); // essa aba não tem S/R
       // Marca compra/venda do ciclo clicado — mesmo visual das outras abas.
       setChartTradeMarkers([
         { time: startMs, side: 'buy', price: o.entryPrice, label: '▲ Compra' },
@@ -2745,7 +2838,7 @@ function BollingerBandsStats({ autoCalc }) {
  * Não lê rsi_multi_bot_trades — é backend/services/fetchVwapBandsStats.js quem simula.
  */
 function VwapBandsStats({ autoCalc }) {
-  const { selectedChart, setSelectedChart, setChartZoom, setChartViewSource, setChartTradeMarkers } = useCurrency();
+  const { selectedChart, setSelectedChart, setChartZoom, setChartViewSource, setChartTradeMarkers, setChartSrOverride } = useCurrency();
   const { t } = useI18n();
   const [symbol, setSymbol]       = useState(selectedChart?.symbol || 'BTCUSDT');
   // Candle principal da escada VWAP (entry.interval — reconquista/pullback/saída rodam nessa
@@ -2837,6 +2930,7 @@ function VwapBandsStats({ autoCalc }) {
       const data = await fetchCandlesticksAndCloud(sym, iv, src, needed);
       setSelectedChart(data);
       setChartViewSource(CHART_VIEW.STATISTICS);
+      setChartSrOverride(null); // essa aba não tem S/R
       // Marca sinal/compra/venda simulados (mesmo visual das outras telas de trade — ver
       // buildMarkersFromLiveTrades) e força a VWAP+bandas do intervalo/sessão usados na
       // simulação, pra ver exatamente a banda que gerou o sinal/entrada/saída daquele ciclo.

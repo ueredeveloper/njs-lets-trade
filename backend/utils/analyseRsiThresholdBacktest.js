@@ -9,6 +9,8 @@ const { averageWithoutOutliers } = require('./removeOutliersIQR');
 const getTickers = require('../binance/cachedTicker24hr');
 const { computeDailyEntryStats } = require('./dailyEntryStats');
 const { computeAvgTradeDurationMs } = require('./tradeDurationStats');
+const { detectSupportResistance } = require('./supportResistance');
+const { detectPivotPointsHighLow } = require('./pivotPointsHighLow');
 
 const RSI_PERIOD = 14;
 const DEFAULT_CANDLE_COUNT = 1000;
@@ -55,7 +57,7 @@ const MAX_ONE_MINUTE_CANDLES = 3000;
  * assim que a posição entra, arma alvo E stop simultaneamente; o que for tocado primeiro
  * encerra a operação. `scanCandles` deve conter só candles com openTime > signalCloseMs.
  */
-function resolveFromSignal(scanCandles, signalPrice, { pullbackPct, targetPct, stopLossPct, stopPriceOverride, trailingStop, trailingTarget, targetMode, hardTakeProfitPct }) {
+function resolveFromSignal(scanCandles, signalPrice, { pullbackPct, targetPct, stopLossPct, stopPriceOverride, targetPriceOverride, trailingStop, trailingTarget, targetMode, hardTakeProfitPct }) {
     let filled = pullbackPct === 0;
     let entryTime = null;
     let entryPrice = signalPrice;
@@ -84,9 +86,15 @@ function resolveFromSignal(scanCandles, signalPrice, { pullbackPct, targetPct, s
     //         degrau; 'off' = sem alvo, só sai pelo stop. Sem targetMode explícito → 'fixed'
     //         (compat: 'continuous' se veio trailingTarget.enabled do formato antigo).
     const stopTrailingOn = !!trailingStop?.enabled;
-    const tMode = (targetMode === 'fixed' || targetMode === 'continuous' || targetMode === 'off')
-        ? targetMode
-        : (trailingTarget?.enabled ? 'continuous' : 'fixed');
+    // Alvo = linha de resistência de saída do S/R (preço absoluto, no lugar do targetPct% fixo).
+    // Só vale pra uma compra se estiver acima da entrada; quando ativo, o ALVO vira 'fixed' nesse
+    // preço (o modo contínuo/off do targetMode passa a valer só quando não há resistência).
+    const useSrTarget = targetPriceOverride != null && targetPriceOverride > entryPrice;
+    const tMode = useSrTarget
+        ? 'fixed'
+        : (targetMode === 'fixed' || targetMode === 'continuous' || targetMode === 'off')
+            ? targetMode
+            : (trailingTarget?.enabled ? 'continuous' : 'fixed');
     const ttCoinStepPct = Math.max(0.1, Number(trailingTarget?.coinStepPct ?? 3));
     const ttStepPct = Math.max(0.1, Number(trailingTarget?.stepPct ?? 3));
     // Teto de lucro (venda forçada) — mesmo do bot (exit.hardTakeProfit em tradeConfigSchema.js):
@@ -94,7 +102,11 @@ function resolveFromSignal(scanCandles, signalPrice, { pullbackPct, targetPct, s
     // nunca casar), o cap garante a saída ao tocar +hardTakeProfitPct%.
     const capPrice = hardTakeProfitPct > 0 ? entryPrice * (1 + hardTakeProfitPct / 100) : null;
     const clampTarget = (tp) => capPrice == null ? tp : (tp == null ? capPrice : Math.min(tp, capPrice));
-    let targetPrice = clampTarget(tMode === 'off' ? null : entryPrice * (1 + targetPct / 100));
+    let targetPrice = clampTarget(
+        useSrTarget ? targetPriceOverride
+            : tMode === 'off' ? null
+                : entryPrice * (1 + targetPct / 100),
+    );
 
     // Stop pelo candle 4h anterior (ver resolvePrevCandleStopPrice): preço absoluto, não %. Só
     // usa o override se fizer sentido pra uma compra (abaixo do preço de entrada). Sem override
@@ -369,11 +381,11 @@ function classifyCloudZone(cloud, price) {
  * sinais caíram em cada faixa e, dos preenchidos, taxa de acerto / P&L médio por faixa. Conta
  * TODOS os sinais com faixa resolvida (preenchidos ou não). null se nenhum sinal tem faixa.
  */
-function computeCloudZoneStats(occurrences) {
-    const withZone = occurrences.filter(o => o.cloudZone >= 1 && o.cloudZone <= 5);
+function computeZoneStats(occurrences, key) {
+    const withZone = occurrences.filter(o => o[key] >= 1 && o[key] <= 5);
     if (!withZone.length) return null;
     const zones = [1, 2, 3, 4, 5].map((zone) => {
-        const list = withZone.filter(o => o.cloudZone === zone);
+        const list = withZone.filter(o => o[key] === zone);
         const filled = list.filter(o => o.filled);
         const target = filled.filter(o => o.outcome === 'target').length;
         const stop = filled.filter(o => o.outcome === 'stop').length;
@@ -394,6 +406,133 @@ function computeCloudZoneStats(occurrences) {
         };
     });
     return { total: withZone.length, zones };
+}
+
+/** Compat: mesma assinatura de antes, agrupando por `cloudZone`. Ver computeZoneStats. */
+function computeCloudZoneStats(occurrences) {
+    return computeZoneStats(occurrences, 'cloudZone');
+}
+
+/**
+ * Distribuição dos sinais pelas 5 faixas do canal Suporte→Resistência escolhido
+ * (faixa 1 = colado no suporte de entrada / mais "barato", faixa 5 = colado na resistência de
+ * saída / mais "caro") — ver classifySrZone. Mesma forma de computeCloudZoneStats.
+ */
+function computeSupportResistanceZoneStats(occurrences) {
+    return computeZoneStats(occurrences, 'srZone');
+}
+
+// ── Suporte/Resistência no instante do sinal (mesmo detectSupportResistance do gráfico) ──────
+
+/**
+ * Zonas de S/R válidas no instante do sinal — recalculadas a partir da janela móvel dos últimos
+ * `candleCount` candles do intervalo próprio do S/R que JÁ FECHARAM antes de `signalTimeMs`
+ * (sem look-ahead: os `rightBars` candles finais da janela nunca viram pivô confirmado, que é o
+ * comportamento correto em tempo real). Cache por índice-fim da janela (o S/R só muda quando um
+ * candle novo do intervalo do S/R fecha). null se não houver janela completa ainda.
+ * Retorna { supports: [desc por preço], resistances: [asc por preço] }.
+ */
+function resolveSupportResistanceAt(srCandles, signalTimeMs, candleCount, cache) {
+    if (!srCandles || srCandles.length < candleCount) return null;
+    // Último candle do intervalo do S/R FECHADO antes do sinal (openTime + duração <= signalTime).
+    // srCandles vem ascendente; o candle [k] fecha em srCandles[k+1].openTime (ou +duração no fim).
+    let endIdx = -1;
+    for (let k = srCandles.length - 1; k >= 0; k--) {
+        const nextOpen = k + 1 < srCandles.length ? srCandles[k + 1].openTime : Infinity;
+        if (nextOpen <= signalTimeMs) { endIdx = k; break; }
+    }
+    if (endIdx < candleCount - 1) return null;
+    if (cache.has(endIdx)) return cache.get(endIdx);
+    const window = srCandles.slice(endIdx - candleCount + 1, endIdx + 1).map(c => ({
+        openTime: c.openTime, open: c.open, high: c.high, low: c.low, close: c.close,
+    }));
+    const levels = detectSupportResistance(window, {});
+    const zones = {
+        supports: levels.filter(l => l.type === 'support').sort((a, b) => b.price - a.price),
+        resistances: levels.filter(l => l.type === 'resistance').sort((a, b) => a.price - b.price),
+    };
+    cache.set(endIdx, zones);
+    return zones;
+}
+
+/** A `rank`-ésima linha de suporte ABAIXO de `price` (1 = a mais próxima). null se faltar. */
+function pickSupport(zones, price, rank) {
+    if (!zones) return null;
+    const below = zones.supports.filter(l => l.price < price * 0.999); // já vem desc
+    return below[Math.max(1, Math.round(rank)) - 1] ?? null;
+}
+
+/** A `rank`-ésima linha de resistência ACIMA de `price` (1 = a mais próxima). null se faltar. */
+function pickResistance(zones, price, rank) {
+    if (!zones) return null;
+    const above = zones.resistances.filter(l => l.price > price * 1.001); // já vem asc
+    return above[Math.max(1, Math.round(rank)) - 1] ?? null;
+}
+
+/**
+ * Filtro de desconto por S/R: só libera o sinal se o preço estiver no MÁXIMO `maxPct`% ACIMA da
+ * linha de suporte escolhida (distância absoluta ao suporte, NÃO % do canal até a resistência —
+ * a resistência de saída pode estar longe e tornaria o filtro inútil). Preço abaixo do suporte
+ * sempre passa. Sem suporte de referência → não bloqueia (fail-open, igual ao warmup da nuvem D-1).
+ */
+function checkSupportResistanceFilter(zones, signalPrice, entryRank, exitRank, maxPct) {
+    const s = pickSupport(zones, signalPrice, entryRank);
+    if (!s) return true;
+    return signalPrice <= s.price * (1 + maxPct / 100);
+}
+
+// Faixas de distância % do preço do sinal ACIMA da linha de suporte escolhida — pro breakdown
+// "Sinais por faixa do canal S/R" (SrZoneChart). Faixa 1 = colado no suporte; faixa 5 = longe.
+const SR_DISTANCE_BANDS = [3, 6, 10, 20]; // fronteiras em % acima do suporte
+
+// Limite de desconto ADAPT (entryMaxPct='adapt'): mediana de quão acima do suporte anterior a
+// moeda faz um FUNDO MAIS ALTO (pullback de alta) antes de retomar, com clamp [min, max] e default
+// se poucos episódios. Mesma filosofia do analyzeAdaptiveDip do amap-bot.
+const SR_ADAPTIVE_ENTRY_DEFAULT_PCT = 3;
+const SR_ADAPTIVE_ENTRY_MIN_PCT = 2;
+const SR_ADAPTIVE_ENTRY_MAX_PCT = 8;
+
+/**
+ * "Quando essa moeda faz um fundo mais alto (higher low) apoiada no suporte anterior, quantos %
+ * acima do suporte ela costuma fundear antes de virar pra cima?" — os fundos de swing (fractais
+ * de 3 candles) do srCandles; pra cada par consecutivo em que o fundo é MAIS ALTO que o anterior
+ * (estrutura de alta), mede `(fundo − fundoAnterior) / fundoAnterior * 100`, ignorando outliers
+ * (>20%). Mediana, clamp [SR_ADAPTIVE_ENTRY_MIN_PCT, SR_ADAPTIVE_ENTRY_MAX_PCT]; default se < 4
+ * episódios (comum em moedas travadas em range, onde "entrar no suporte" quase nunca ocorre).
+ */
+function computeAdaptiveSupportEntryPct(srCandles) {
+    if (!Array.isArray(srCandles) || srCandles.length < 30) return SR_ADAPTIVE_ENTRY_DEFAULT_PCT;
+    const lows = detectPivotPointsHighLow(srCandles, { leftBars: 3, rightBars: 3 })
+        .filter(p => p.type === 'low')
+        .map(p => p.price);
+    if (lows.length < 5) return SR_ADAPTIVE_ENTRY_DEFAULT_PCT;
+    const dists = [];
+    for (let i = 1; i < lows.length; i++) {
+        if (!(lows[i] > lows[i - 1]) || lows[i - 1] <= 0) continue; // só fundos mais altos
+        const dist = (lows[i] - lows[i - 1]) / lows[i - 1] * 100;
+        if (dist > 0 && dist <= 20) dists.push(dist);
+    }
+    if (dists.length < 4) return SR_ADAPTIVE_ENTRY_DEFAULT_PCT;
+    dists.sort((a, b) => a - b);
+    const mid = Math.floor(dists.length / 2);
+    const median = dists.length % 2 ? dists[mid] : (dists[mid - 1] + dists[mid]) / 2;
+    return Math.max(SR_ADAPTIVE_ENTRY_MIN_PCT, Math.min(SR_ADAPTIVE_ENTRY_MAX_PCT, parseFloat(median.toFixed(2))));
+}
+
+/**
+ * Faixa 1–5 pela distância % do preço do sinal ACIMA da linha de suporte escolhida
+ * (1 = ≤3%, 2 = ≤6%, 3 = ≤10%, 4 = ≤20%, 5 = >20% ou abaixo do suporte → faixa 1). null sem
+ * suporte de referência.
+ */
+function classifySrZone(zones, price, entryRank) {
+    const s = pickSupport(zones, price, entryRank);
+    if (!s) return null;
+    const distPct = ((price - s.price) / s.price) * 100;
+    if (distPct <= 0) return 1;
+    for (let i = 0; i < SR_DISTANCE_BANDS.length; i++) {
+        if (distPct <= SR_DISTANCE_BANDS[i]) return i + 1;
+    }
+    return 5;
 }
 
 // Faixas de RSI 1h (REF_RSI_INTERVAL) pro breakdown "RSI 1h × resultado" — mesma ideia do
@@ -461,7 +600,7 @@ function resolvePrevCandleStopPrice(fourHCandles, signalTimeMs) {
     return close >= open ? open : close;
 }
 
-function buildOccurrence(signalCandle, signalPrice, signalRsi, resolved, positionSizeUsd, cloudZone = null, signalRsi1h = null) {
+function buildOccurrence(signalCandle, signalPrice, signalRsi, resolved, positionSizeUsd, cloudZone = null, signalRsi1h = null, srZone = null, sr = null) {
     if (!resolved.filled) {
         return {
             signalDate: new Date(signalCandle.openTime).toISOString(),
@@ -469,6 +608,8 @@ function buildOccurrence(signalCandle, signalPrice, signalRsi, resolved, positio
             signalRsi,
             signalRsi1h,
             cloudZone,
+            srZone,
+            sr,
             filled: false,
             entryDate: null,
             entryPrice: null,
@@ -492,6 +633,8 @@ function buildOccurrence(signalCandle, signalPrice, signalRsi, resolved, positio
         signalRsi,
         signalRsi1h,
         cloudZone,
+        srZone,
+        sr,
         filled: true,
         entryDate: new Date(entryTime ?? signalCandle.openTime).toISOString(),
         entryPrice,
@@ -584,6 +727,26 @@ function countBaseVsEvolvedExits(filledOccurrences) {
  *   abertura/fechamento (corpo do candle), usa máxima/mínima (pavios) dos candles da janela —
  *   faixa mais larga, mesmo parâmetro do gráfico e do bot ao vivo. Padrão máx/mín; passe
  *   explicitamente `false` pra voltar ao corpo (abertura/fechamento).
+ * @param {object} [options.supportResistance]  Filtro/alvo por Suporte/Resistência (mesmo
+ *   detectSupportResistance de backend/utils/supportResistance.js, usado no gráfico). Independente
+ *   da nuvem D-1 — dá pra ligar os dois juntos. As zonas são recalculadas POR SINAL a partir da
+ *   janela móvel dos últimos `candleCount` candles do `interval` que fecharam antes do sinal
+ *   (sem look-ahead).
+ *   ENTRADA (filtro de desconto): só aceita o sinal se o preço estiver no máximo `entryMaxPct`%
+ *   ACIMA da linha de suporte escolhida (distância absoluta ao suporte — NÃO % do canal até a
+ *   resistência); preço abaixo do suporte também libera; sem suporte de referência não bloqueia
+ *   (fail-open).
+ *   SAÍDA: o alvo vira a `exitResistanceRank`-ésima resistência acima do preço do sinal, no
+ *   lugar do targetPct% fixo (o stop não muda). Sem resistência acima, cai no targetPct/targetMode.
+ * @param {boolean} [options.supportResistance.enabled=false]
+ * @param {string}  [options.supportResistance.interval='4h']  Mesmo leque do seletor da nuvem D-1.
+ * @param {number}  [options.supportResistance.candleCount=200]  Candles da janela móvel do S/R (20–1000).
+ * @param {number}  [options.supportResistance.entrySupportRank=1]  1 = 1º suporte abaixo do preço, 2 = 2º, 3 = 3º.
+ * @param {number}  [options.supportResistance.exitResistanceRank=1]  1 = 1ª resistência acima do preço, 2 = 2ª, 3 = 3ª.
+ * @param {number|'adapt'} [options.supportResistance.entryMaxPct=10]  Distância % máxima do preço do
+ *   sinal ACIMA da linha de suporte (1–100). 'adapt' = calcula da história da moeda (mediana de
+ *   quão perto do suporte anterior o preço faz fundo antes de virar, clamp 1–8%, default 3) —
+ *   ver computeAdaptiveSupportEntryPct. O valor resolvido volta em result.supportResistance.entryMaxPct.
  * @param {number}  [options.minVolumeUsdt=0]  Filtro opcional de volume 24h (mesmo campo do bot
  *   ao vivo, config.volume.minVolumeUsdt — ver marketScanner.js). 0 = desligado. Usa o mesmo
  *   cache de /ticker/24hr da Binance (cachedTicker24hr.js) — sem efeito quando source='gate'
@@ -682,6 +845,7 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
         priorRsiFilter  = null,
         bandWidth       = null,
         prevDayCloud    = null,
+        supportResistance = null,
         minVolumeUsdt   = 0,
         excludeOpenExits = false,
         prevCandleStop  = false,
@@ -770,6 +934,30 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
     // resolvePrevDayCloud e buildPrevDayCloudSegments no frontend. Padrão máx/mín; só `false`
     // explícito volta pro corpo.
     const pdcUseHighLow = prevDayCloud?.useHighLow !== false;
+    // ── Suporte/Resistência (mesmo detectSupportResistance do gráfico) ──────────────────────
+    const srEnabled = !!supportResistance?.enabled;
+    const srRequestedInterval = PREV_DAY_CLOUD_INTERVALS.includes(supportResistance?.interval)
+        ? supportResistance.interval : '4h';
+    const srInterval = (source === 'gate' && !GATE_PREV_DAY_CLOUD_INTERVALS.includes(srRequestedInterval))
+        ? '1d' : srRequestedInterval;
+    const srCandleCount = Math.max(20, Math.min(1000, Math.round(Number(supportResistance?.candleCount ?? 200))));
+    const srEntryRank = Math.max(1, Math.min(3, Math.round(Number(supportResistance?.entrySupportRank ?? 1))));
+    const srExitRank = Math.max(1, Math.min(3, Math.round(Number(supportResistance?.exitResistanceRank ?? 1))));
+    // 'adapt' = calcula o limite da história da moeda (ver computeAdaptiveSupportEntryPct, aplicado
+    // depois de buscar srCandles). Senão, % fixo entre 1 e 100.
+    const srEntryMaxPctAdaptive = supportResistance?.entryMaxPct === 'adapt';
+    let srEntryMaxPct = srEntryMaxPctAdaptive
+        ? SR_ADAPTIVE_ENTRY_DEFAULT_PCT
+        : Math.max(1, Math.min(100, Number(supportResistance?.entryMaxPct ?? 10)));
+    // Candles do intervalo do S/R a buscar: a janela móvel (srCandleCount) precisa caber ANTES do
+    // sinal mais antigo da amostra + a própria janela do intervalo principal. Mesma conta do
+    // pdcDayLimit, só que a "folga" é a janela inteira do S/R.
+    const srFetchLimit = srEnabled
+        ? Math.min(3000, srCandleCount + Math.ceil(
+            (mainLimit * (interval === '1m' ? 60_000 : intervalMs(interval))) / intervalMs(srInterval),
+        ) + 5)
+        : 0;
+
     // Dias/períodos cobertos pelo intervalo principal (mainLimit candles) + folga de
     // pdcCandleCount+3, pro sinal mais antigo da amostra também ter uma janela completa de
     // candles anteriores pra servir de referência — mesma conta de computePrevDayCloudFetchLimit
@@ -822,9 +1010,12 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
         refRsiNeedsFetch
             ? fetchCandles(symbol, REF_RSI_INTERVAL, refRsiLimit)
             : Promise.resolve(null),
+        srEnabled
+            ? fetchCandles(symbol, srInterval, srFetchLimit)
+            : Promise.resolve(null),
     ]);
 
-    const [candlesResult, bwCandlesResult, pdcCandlesResult, tickersResult, pcsCandlesResult, adxCandlesResult, macdCandlesResult, refRsiCandlesResult] = settled;
+    const [candlesResult, bwCandlesResult, pdcCandlesResult, tickersResult, pcsCandlesResult, adxCandlesResult, macdCandlesResult, refRsiCandlesResult, srCandlesResult] = settled;
     if (candlesResult.status === 'rejected') throw candlesResult.reason;
     const candles = candlesResult.value;
 
@@ -835,6 +1026,18 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
     const fourHCandles = pcsEnabled && pcsCandlesResult.status === 'fulfilled' && pcsCandlesResult.value
         ? pcsCandlesResult.value
         : [];
+
+    const srCandles = srEnabled && srCandlesResult.status === 'fulfilled' && srCandlesResult.value
+        ? srCandlesResult.value
+        : [];
+    // entryMaxPct='adapt' → resolve o limite da história da moeda agora que temos srCandles.
+    if (srEntryMaxPctAdaptive && srCandles.length) {
+        srEntryMaxPct = computeAdaptiveSupportEntryPct(srCandles);
+    }
+    // Cache das zonas de S/R por índice-fim da janela móvel (o S/R só muda quando um candle novo
+    // do srInterval fecha) — ver resolveSupportResistanceAt.
+    const srZonesCache = new Map();
+    let srBlocked = 0; // sinais cortados pelo filtro de desconto do S/R (só conta com ele ligado)
 
     // ADX (força de tendência) — calculado no intervalo PRÓPRIO escolhido (adxInterval), não no
     // intervalo do sinal: geralmente faz sentido olhar a tendência num timeframe maior que o do
@@ -1014,6 +1217,38 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
                 ? resolvePrevCandleStopPrice(fourHCandles, signalCandle.openTime)
                 : null;
 
+            // Suporte/Resistência vigente no instante do sinal (mesmo detectSupportResistance do
+            // gráfico, janela móvel srCandleCount, sem look-ahead). Filtro de desconto: só entra
+            // se o preço estiver na parte baixa do canal [suporte escolhido → resistência
+            // escolhida]. Alvo (srTargetPrice) = a resistência escolhida acima do preço do sinal.
+            let srZone = null;
+            let srTargetPrice = null;
+            let srLines = null;
+            if (srEnabled) {
+                const zones = resolveSupportResistanceAt(srCandles, signalCandle.openTime, srCandleCount, srZonesCache);
+                if (zones && !checkSupportResistanceFilter(zones, signalPrice, srEntryRank, srExitRank, srEntryMaxPct)) {
+                    srBlocked++;
+                    continue;
+                }
+                if (zones) {
+                    srZone = classifySrZone(zones, signalPrice, srEntryRank);
+                    const chosenR = pickResistance(zones, signalPrice, srExitRank);
+                    srTargetPrice = chosenR?.price ?? null;
+                    // Níveis EXATOS que o backtest usou nesse sinal — o gráfico desenha esses
+                    // verbatim ao abrir o trade (ver chartSrOverride), pra o gráfico e o trade
+                    // serem a mesma coisa. leftBars/rightBars = defaults do detectSupportResistance.
+                    srLines = {
+                        interval: srInterval,
+                        candleCount: srCandleCount,
+                        levels: [...zones.supports, ...zones.resistances].map((l) => ({
+                            price: l.price, touches: l.touches, type: l.type,
+                        })),
+                        entrySupport: pickSupport(zones, signalPrice, srEntryRank)?.price ?? null,
+                        exitResistance: srTargetPrice,
+                    };
+                }
+            }
+
             rawSignals.push({
                 signalCandle,
                 signalPrice,
@@ -1022,6 +1257,9 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
                 idx,
                 stopPriceOverride,
                 cloudZone,
+                srZone,
+                srTargetPrice,
+                srLines,
             });
         }
     }
@@ -1043,7 +1281,7 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
     }
 
     const occurrences = [];
-    for (const { signalCandle, signalPrice, signalRsi, signalRsi1h, idx, stopPriceOverride, cloudZone } of rawSignals) {
+    for (const { signalCandle, signalPrice, signalRsi, signalRsi1h, idx, stopPriceOverride, cloudZone, srZone, srTargetPrice, srLines } of rawSignals) {
         const ivMs = interval === '1m' ? 60_000 : intervalMs(interval);
         const signalCloseMs = signalCandle.openTime + ivMs;
 
@@ -1072,6 +1310,7 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
 
         const resolved = resolveFromSignal(scanCandles, signalPrice, {
             pullbackPct, targetPct, stopLossPct, stopPriceOverride, hardTakeProfitPct,
+            targetPriceOverride: srEnabled ? srTargetPrice : null,
             targetMode: targetModeResolved,
             trailingStop: trailingStopEnabled
                 ? {
@@ -1097,7 +1336,7 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
                 ? { coinStepPct: trailingTargetCoinStepPct, stepPct: trailingTargetStepPct }
                 : null,
         });
-        occurrences.push(buildOccurrence(signalCandle, signalPrice, signalRsi, resolved, positionSizeUsd, cloudZone, signalRsi1h));
+        occurrences.push(buildOccurrence(signalCandle, signalPrice, signalRsi, resolved, positionSizeUsd, cloudZone, signalRsi1h, srZone, srLines));
     }
 
     // "Remover saída aberta": tira da amostra (tabela E agregados) os sinais ainda não resolvidos
@@ -1150,6 +1389,14 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
         bandWidth: bandWidthResult,
         prevDayCloud: pdcEnabled ? { maxPct: pdcMaxPct, interval: pdcInterval, candleCount: pdcCandleCount, useHighLow: pdcUseHighLow } : null,
         cloudZoneStats: pdcEnabled ? computeCloudZoneStats(finalOccurrences) : null,
+        supportResistance: srEnabled ? {
+            interval: srInterval, candleCount: srCandleCount,
+            entrySupportRank: srEntryRank, exitResistanceRank: srExitRank,
+            entryMaxPct: srEntryMaxPct,
+            entryMaxPctMode: srEntryMaxPctAdaptive ? 'adapt' : 'fixed',
+        } : null,
+        supportResistanceStats: srEnabled ? computeSupportResistanceZoneStats(finalOccurrences) : null,
+        srBlockedCount: srEnabled ? srBlocked : 0,
         rsi1hBreakdown: computeRsi1hBreakdown(finalOccurrences),
         volume: volumeResult,
         excludeOpenExits,
@@ -1192,4 +1439,11 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
 module.exports = analyseRsiThresholdBacktest;
 module.exports.countBaseVsEvolvedExits = countBaseVsEvolvedExits;
 module.exports.computeCloudZoneStats = computeCloudZoneStats;
+module.exports.computeSupportResistanceZoneStats = computeSupportResistanceZoneStats;
 module.exports.computeRsi1hBreakdown = computeRsi1hBreakdown;
+module.exports.pickSupport = pickSupport;
+module.exports.pickResistance = pickResistance;
+module.exports.checkSupportResistanceFilter = checkSupportResistanceFilter;
+module.exports.classifySrZone = classifySrZone;
+module.exports.resolveSupportResistanceAt = resolveSupportResistanceAt;
+module.exports.computeAdaptiveSupportEntryPct = computeAdaptiveSupportEntryPct;

@@ -181,10 +181,24 @@ function appendTrailingStopParams(params, trailingStop, stopLossPct) {
   }
 }
 
+/** Serializa options.supportResistance (filtro de desconto + alvo por S/R) pros query params
+ *  compartilhados pelos dois endpoints de backtest RSI Momentum. */
+function appendSupportResistanceParams(params, supportResistance) {
+  if (!supportResistance?.enabled) return;
+  const sr = supportResistance;
+  params.set('srEnabled', '1');
+  params.set('srInterval', sr.interval ?? '4h');
+  params.set('srCandleCount', String(sr.candleCount ?? 200));
+  params.set('srEntrySupportRank', String(sr.entrySupportRank ?? 1));
+  params.set('srExitResistanceRank', String(sr.exitResistanceRank ?? 1));
+  params.set('srEntryMaxPct', String(sr.entryMaxPct ?? 10));
+}
+
 export async function fetchRsiThresholdBacktest(symbol, interval, options = {}) {
   const {
     rsiThreshold = 70, pullbackPct = 0, targetPct = 5, stopLossPct = 5, positionSizeUsd = 40,
     source = null, candleCount = null, lookbackHours = 0, bandWidth = null, prevDayCloud = null,
+    supportResistance = null,
     minVolumeUsdt = 0, excludeOpenExits = false, prevCandleStop = false,
     adxFilter = null, macdFilter = null, higherRsiFilter = null, hardTakeProfit = null, trailingStop = null, trailingTarget = null, targetMode = null, entriesDayRange = null,
   } = options;
@@ -209,6 +223,7 @@ export async function fetchRsiThresholdBacktest(symbol, interval, options = {}) 
     params.set('prevDayCloudCandleCount', String(prevDayCloud.candleCount ?? 1));
     params.set('prevDayCloudUseHighLow', prevDayCloud.useHighLow === false ? '0' : '1');
   }
+  appendSupportResistanceParams(params, supportResistance);
   if (minVolumeUsdt) params.set('minVolumeUsdt', String(minVolumeUsdt));
   if (excludeOpenExits) params.set('excludeOpenExits', '1');
   if (prevCandleStop) params.set('prevCandleStopEnabled', '1');
@@ -251,7 +266,7 @@ export async function fetchRsiThresholdBacktestMarket(interval, options = {}) {
   const {
     rsiThreshold = 70, pullbackPct = 0, targetPct = 5, stopLossPct = 5, positionSizeUsd = 40,
     source = null, candleCount = null, lookbackHours = 0, bandWidth = null, maxRows = null,
-    prevDayCloud = null, minVolumeUsdt = 0, excludeOpenExits = false, prevCandleStop = false,
+    prevDayCloud = null, supportResistance = null, minVolumeUsdt = 0, excludeOpenExits = false, prevCandleStop = false,
     adxFilter = null, macdFilter = null, higherRsiFilter = null, hardTakeProfit = null, trailingStop = null, trailingTarget = null, targetMode = null, entriesDayRange = null,
   } = options;
   const params = new URLSearchParams({
@@ -276,6 +291,7 @@ export async function fetchRsiThresholdBacktestMarket(interval, options = {}) {
     params.set('prevDayCloudCandleCount', String(prevDayCloud.candleCount ?? 1));
     params.set('prevDayCloudUseHighLow', prevDayCloud.useHighLow === false ? '0' : '1');
   }
+  appendSupportResistanceParams(params, supportResistance);
   if (minVolumeUsdt) params.set('minVolumeUsdt', String(minVolumeUsdt));
   if (excludeOpenExits) params.set('excludeOpenExits', '1');
   if (prevCandleStop) params.set('prevCandleStopEnabled', '1');

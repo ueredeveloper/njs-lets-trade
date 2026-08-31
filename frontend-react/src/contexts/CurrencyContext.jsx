@@ -35,7 +35,13 @@ import {
   normalizeOverlaySlots,
   normalizeMaBandsDefaults,
   normalizeSrInterval,
+  normalizeSrCandleCount,
   normalizePphlInterval,
+  normalizePphlCandleCount,
+  normalizeWfractalsInterval,
+  normalizeWfractalsCandleCount,
+  normalizeZigzagInterval,
+  normalizeZigzagCandleCount,
   normalizeChopInterval,
   normalizeMacdInterval,
   normalizePrevDayCloudInterval,
@@ -46,6 +52,7 @@ import {
   normalizeEmaPersistCloudLayers,
   normalizeBarsSinceCrossInterval,
   normalizeTdSequentialInterval,
+  normalizeRsiCrossThreshold,
   normalizeVwapDefaults,
   normalizeVwapAnchor,
   normalizeVwapSlopeHighlight,
@@ -114,6 +121,11 @@ export function CurrencyProvider({ children }) {
 
   // Marcadores simulados MT backtest: [{ time, side: 'buy'|'sell', price? }]
   const [chartTradeMarkers, setChartTradeMarkers] = useState([]);
+
+  // S/R que o backtest do RSI Momentum usou pro trade aberto no gráfico (Estatísticas) — o gráfico
+  // desenha ESSES níveis verbatim (não recalcula), pra o gráfico e o trade serem a mesma coisa.
+  // { interval, candleCount, levels:[{price,touches,type}], entrySupport, exitResistance } | null
+  const [chartSrOverride, setChartSrOverride] = useState(null);
 
   /** Foco do backtest MT: histórico e overlays para o momento do trade */
   const [multitradeChartFocus, setMultitradeChartFocus] = useState(null);
@@ -563,6 +575,7 @@ export function CurrencyProvider({ children }) {
     setChartViewSource(prev => (prev === CHART_VIEW.MULTITRADE ? CHART_VIEW.DEFAULT : prev));
     setChartTradeMarkers([]);
     setMultitradeChartFocus(null);
+    setChartSrOverride(null);
     setChartZoom(prev => (prev?.source === CHART_VIEW.MULTITRADE ? null : prev));
   }, []);
 
@@ -602,6 +615,7 @@ export function CurrencyProvider({ children }) {
     setChartViewSource(prev => (prev === CHART_VIEW.FIVE_M_TRADE ? CHART_VIEW.DEFAULT : prev));
     setChartTradeMarkers([]);
     setMultitradeChartFocus(null);
+    setChartSrOverride(null);
     setChartZoom(prev => (prev?.source === CHART_VIEW.FIVE_M_TRADE ? null : prev));
   }, []);
 
@@ -718,9 +732,57 @@ export function CurrencyProvider({ children }) {
     });
   }, []);
 
+  const setSrCandleCountDefault = useCallback((count) => {
+    setUiPrefsState((prev) => {
+      const next = { ...prev, srCandleCountDefault: normalizeSrCandleCount(count) };
+      saveUiPreferences(next);
+      return next;
+    });
+  }, []);
+
   const setPphlIntervalDefault = useCallback((interval) => {
     setUiPrefsState((prev) => {
       const next = { ...prev, pphlIntervalDefault: normalizePphlInterval(interval) };
+      saveUiPreferences(next);
+      return next;
+    });
+  }, []);
+
+  const setPphlCandleCountDefault = useCallback((count) => {
+    setUiPrefsState((prev) => {
+      const next = { ...prev, pphlCandleCountDefault: normalizePphlCandleCount(count) };
+      saveUiPreferences(next);
+      return next;
+    });
+  }, []);
+
+  const setWfractalsIntervalDefault = useCallback((interval) => {
+    setUiPrefsState((prev) => {
+      const next = { ...prev, wfractalsIntervalDefault: normalizeWfractalsInterval(interval) };
+      saveUiPreferences(next);
+      return next;
+    });
+  }, []);
+
+  const setWfractalsCandleCountDefault = useCallback((count) => {
+    setUiPrefsState((prev) => {
+      const next = { ...prev, wfractalsCandleCountDefault: normalizeWfractalsCandleCount(count) };
+      saveUiPreferences(next);
+      return next;
+    });
+  }, []);
+
+  const setZigzagIntervalDefault = useCallback((interval) => {
+    setUiPrefsState((prev) => {
+      const next = { ...prev, zigzagIntervalDefault: normalizeZigzagInterval(interval) };
+      saveUiPreferences(next);
+      return next;
+    });
+  }, []);
+
+  const setZigzagCandleCountDefault = useCallback((count) => {
+    setUiPrefsState((prev) => {
+      const next = { ...prev, zigzagCandleCountDefault: normalizeZigzagCandleCount(count) };
       saveUiPreferences(next);
       return next;
     });
@@ -801,6 +863,14 @@ export function CurrencyProvider({ children }) {
   const setTdSequentialIntervalDefault = useCallback((interval) => {
     setUiPrefsState((prev) => {
       const next = { ...prev, tdSequentialIntervalDefault: normalizeTdSequentialInterval(interval) };
+      saveUiPreferences(next);
+      return next;
+    });
+  }, []);
+
+  const setRsiCrossThresholdDefault = useCallback((value) => {
+    setUiPrefsState((prev) => {
+      const next = { ...prev, rsiCrossThresholdDefault: normalizeRsiCrossThreshold(value) };
       saveUiPreferences(next);
       return next;
     });
@@ -1178,7 +1248,13 @@ export function CurrencyProvider({ children }) {
         setOverlaySlotsPreference,
         setMaBandsDefaults,
         setSrIntervalDefault,
+        setSrCandleCountDefault,
         setPphlIntervalDefault,
+        setPphlCandleCountDefault,
+        setWfractalsIntervalDefault,
+        setWfractalsCandleCountDefault,
+        setZigzagIntervalDefault,
+        setZigzagCandleCountDefault,
         setChopIntervalDefault,
         setMacdIntervalDefault,
         setPrevDayCloudIntervalDefault,
@@ -1189,6 +1265,7 @@ export function CurrencyProvider({ children }) {
         setEmaPersistCloudLayersDefault,
         setBarsSinceCrossIntervalDefault,
         setTdSequentialIntervalDefault,
+        setRsiCrossThresholdDefault,
         setVwapDefaults,
         setVwapSlopeHighlightDefault,
         setVwapAnchorDefault,
@@ -1229,6 +1306,8 @@ export function CurrencyProvider({ children }) {
         multitradeChartFocus,
         chartTradeMarkers,
         setChartTradeMarkers,
+        chartSrOverride,
+        setChartSrOverride,
         tradePurchases,
         setTradePurchases,
         allTrades,

@@ -20,7 +20,7 @@ const { ichimokuCloudRouter } = require('./technicals-indicators');
 
 //const {client} = require('./services/fetchClient');
 const {
-  fetchCandles, fetchIchimokuCloud, fetchSupportResistance, fetchPivotPointsHighLow, fetchAllCurrencies,
+  fetchCandles, fetchIchimokuCloud, fetchSupportResistance, fetchPivotPointsHighLow, fetchWilliamsFractals, fetchZigZag, fetchAllCurrencies,
   fetchSMA, fetchRSI, fetchChopZone, fetchVWAP, fetch24HsVolume, fetchMarketCapFilter, fetchStablecoins, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter, fetchMaDistanceFilter, fetchIndicatorGrowthFilter,
   fetchRsiOversoldRecovery, fetchRsiThresholdBacktest, fetchRsiThresholdBacktestMarket, fetchMaCrossStats, fetchVwapBandsStats, fetchBollingerBandRecovery, fetchBollingerBandPositionFilter, fetchVwapPositionFilter, fetchVwapBandWidthFilter, fetchBollingerBandWidthFilter, fetchBollingerMedianTrendFilter, fetchVwapBandExpansionFilter, fetchBollingerBands, fetchMACD, fetchSimpleMaCross, fetchReloadCandles,
   fetchGateCurrencies, fetchGatePrefetch, fetchBinanceTrades, fetchGateTrades,
@@ -48,6 +48,8 @@ app.use('/services', fetchCandles);
 app.use('/services', fetchIchimokuCloud);
 app.use('/services', fetchSupportResistance);
 app.use('/services', fetchPivotPointsHighLow);
+app.use('/services', fetchWilliamsFractals);
+app.use('/services', fetchZigZag);
 app.use('/services', fetchAllCurrencies);
 app.use('/services', fetchSMA);
 app.use('/services', fetchRSI);
