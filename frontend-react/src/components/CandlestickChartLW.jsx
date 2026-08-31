@@ -20,6 +20,8 @@ const C_DOWN = '#ef5350';
  *  p/ resistência. O posto vai no rótulo (S1/S2/R1/R2), não na cor. */
 const SR_SUPPORT_LINE = '#3b82f6';
 const SR_RESISTANCE_LINE = '#ec4899';
+// Estilo 'traço': largura do traço = últimos N candles DO GRÁFICO (não do intervalo do S/R).
+const SR_TRACO_CANDLES = 10;
 
 /** Ordena os níveis de um tipo por proximidade do preço (resistência: menor preço = R1; suporte:
  *  maior preço = S1) e anexa `rank` (1..) e `label` ('S1'/'R2'…). */
@@ -1282,9 +1284,31 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
     }
     if (minTime == null) { makePriceLines(latest, 'ref'); return; }
 
-    const withSteps = srConfig.style !== 'traco';
+    // TRAÇO: os níveis da âncora mais recente (S/R "de agora"), cada um como um traço horizontal
+    // curto cobrindo só os últimos ~SR_TRACO_CANDLES candles DO GRÁFICO (não do intervalo do S/R
+    // — 10 candles de 4h ficariam largos demais num gráfico de 15m). Sem escada rolante.
+    if (srConfig.style === 'traco') {
+      const startT = Math.floor(Number(cs[Math.max(0, cs.length - 1 - SR_TRACO_CANDLES)].openTime) / 1000);
+      const endT = maxTime;
+      if (endT > startT) {
+        for (const type of ['support', 'resistance']) {
+          const color = type === 'support' ? SR_SUPPORT_LINE : SR_RESISTANCE_LINE;
+          for (const lvl of rankSrLevels(latest, type)) {
+            const s = chart.addSeries(LineSeries, {
+              color, lineWidth: type === 'support' ? 3 : 2, lineStyle: 2, // pontilhada
+              priceLineVisible: false, lastValueVisible: lvl.rank === 1, crosshairMarkerVisible: false,
+            });
+            s.setData([{ time: startT, value: lvl.price }, { time: endT, value: lvl.price }]);
+            createSeriesMarkers(s, [{ time: endT, position: 'inBar', color, shape: 'circle', text: lvl.label }]);
+            srRollSeriesRef.current.push(s);
+          }
+        }
+      }
+      return;
+    }
+
+    // DEGRAU: escada rolante — liga o mesmo posto de nível entre as 10 âncoras.
     const times = anchors.map((a) => Math.floor(Number(a.time) / 1000));
-    const step = times.length > 1 ? Math.max(1, times[times.length - 1] - times[times.length - 2]) : 3600;
     // Postos por âncora já rankeados (S1 = suporte mais perto do preço, R1 = resistência mais perto).
     const rankedByAnchor = anchors.map((a) => ({
       support: rankSrLevels(a.levels, 'support'),
@@ -1302,23 +1326,9 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
         for (let i = 0; i < anchors.length; i++) {
           if (!inRange(times[i])) continue;
           const lvl = rankedByAnchor[i][type][r];
-          if (withSteps) {
-            // Escada: liga o posto r entre âncoras; whitespace onde falta o nível.
-            data.push(lvl ? { time: times[i], value: lvl.price } : { time: times[i] });
-            if (lvl) lastPt = { time: times[i], value: lvl.price };
-          } else if (lvl) {
-            // Traço: um dash horizontal por âncora, com quebra (whitespace) antes do próximo.
-            const segEnd = Math.min(maxTime, i + 1 < anchors.length ? times[i + 1] : times[i] + step);
-            if (segEnd - times[i] > 2) {
-              const gap = Math.max(2, Math.floor((segEnd - times[i]) * 0.15));
-              data.push({ time: times[i], value: lvl.price });
-              data.push({ time: segEnd - gap, value: lvl.price });
-              data.push({ time: segEnd - gap + 1 }); // whitespace → quebra
-              lastPt = { time: segEnd - gap, value: lvl.price };
-            }
-          }
+          data.push(lvl ? { time: times[i], value: lvl.price } : { time: times[i] });
+          if (lvl) lastPt = { time: times[i], value: lvl.price };
         }
-        // tempos estritamente crescentes; pontos com valor têm prioridade sobre whitespace.
         const dedup = [];
         for (const p of data) {
           if (dedup.length && dedup[dedup.length - 1].time >= p.time) {
@@ -1327,9 +1337,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
         }
         if (!lastPt || !dedup.some((p) => p.value != null)) continue;
         const s = chart.addSeries(LineSeries, {
-          color, lineWidth: width,
-          lineType: withSteps ? LineType.WithSteps : LineType.Simple,
-          lineStyle: 2, // pontilhada
+          color, lineWidth: width, lineType: LineType.WithSteps, lineStyle: 2, // pontilhada
           priceLineVisible: false, lastValueVisible: r === 0, crosshairMarkerVisible: false,
         });
         s.setData(dedup);
