@@ -79,15 +79,6 @@ export async function fetchMarketHighlights(limit = 10) {
   return res.json(); // [{ name, list, meta? }]
 }
 
-/** Pares com salto de volume em tempo real (últimos 15min), detectado pelo monitor do backend. */
-export async function fetchVolumeIgnition() {
-  const res = await fetch('/services/volume-ignition');
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.error ?? `volume-ignition falhou: HTTP ${res.status}`);
-  }
-  return res.json(); // { list: [{ symbol, firedAt, ratio, priceChangePct, price }] }
-}
 
 /**
  * Analisa ciclos MA: entrada EMA9↑EMA21, saída EMA9↓EMA21.

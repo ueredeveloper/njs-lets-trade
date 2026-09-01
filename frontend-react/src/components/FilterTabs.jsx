@@ -5,14 +5,6 @@ import { useCurrency } from '../contexts/CurrencyContext';
 import SearchInput from './SearchInput';
 import { sortByTypeOfIntervals, sortFirstIncludesBinance } from '../utils/sort-firts-includes-binance';
 
-const brtTimeFmt = new Intl.DateTimeFormat('pt-BR', {
-  timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
-});
-
-function formatBrtTime(ms) {
-  return Number.isFinite(ms) ? brtTimeFmt.format(new Date(ms)) : '—';
-}
-
 const INTERVAL_COLORS = {
   '1h':  '#8A8AFF',
   '2h':  '#7FDBFF',
@@ -131,7 +123,6 @@ function getFilterDescription(name, t) {
     if (type === 'Trade')   return 'Trade Now';
     if (type === 'Ativos')  return 'Trades Ativos';
     if (type === 'MA-Cross') return 'MA-Cross';
-    if (type === 'Ignição') return t('filter.fav_ignition');
     if (type === 'Alta') {
       if (parts[2] === 'Binance') return t('filter.fav_gainers_binance');
       if (parts[2] === 'Gate')    return t('filter.fav_gainers_gate');
@@ -286,15 +277,9 @@ export default function FilterTabs({ activeFilter, onSelectFilter }) {
   const [flashing, setFlashing] = useState(new Set());
   const [searchQuery, setSearchQuery] = useState('');
   const prevFilterNamesRef = useRef(null); // null = primeira renderização ainda não registrada
-  const prevIgnitionCountRef = useRef(0); // Ignição fica sempre presente, então "nome novo" nunca dispara — rastreia contagem à parte
   const flashTimerRef = useRef(null);
 
   useEffect(() => {
-    const ignitionFilter = filters.find(f => f.name === 'Favoritos|Ignição');
-    const ignitionCount = ignitionFilter?.list?.length ?? 0;
-    const ignitionGrew = ignitionCount > prevIgnitionCountRef.current;
-    prevIgnitionCountRef.current = ignitionCount;
-
     // Primeira execução: registra os filtros já existentes sem piscar
     if (prevFilterNamesRef.current === null) {
       prevFilterNamesRef.current = new Set(filters.map(f => f.name));
@@ -304,8 +289,6 @@ export default function FilterTabs({ activeFilter, onSelectFilter }) {
     const prev = prevFilterNamesRef.current;
     const newNames = filters.map(f => f.name).filter(n => !prev.has(n));
     prevFilterNamesRef.current = new Set(filters.map(f => f.name));
-
-    if (ignitionGrew && !newNames.includes('Favoritos|Ignição')) newNames.push('Favoritos|Ignição');
 
     if (newNames.length === 0) return;
 
@@ -398,10 +381,6 @@ export default function FilterTabs({ activeFilter, onSelectFilter }) {
                 const isFlashing = flashing.has(filter.name);
                 const count      = filter.list?.length ?? 0;
                 const bgAlpha    = isActive ? 1.00 : isChecked ? 0.90 : 0.82;
-                const isIgnition = filter.name === 'Favoritos|Ignição';
-                const ignitionSubtitle = isIgnition
-                  ? `${filter.meta?.monitoredPairs ?? 0}p · ${formatBrtTime(filter.meta?.checkedAt)}`
-                  : null;
                 return (
                   <div
                     key={filter.name}
@@ -419,11 +398,6 @@ export default function FilterTabs({ activeFilter, onSelectFilter }) {
                     <span className="text-[10px] font-mono font-semibold truncate leading-tight" style={{ color: textColor }}>
                       {filter.name}
                     </span>
-                    {ignitionSubtitle && (
-                      <span className="text-[9px] font-mono opacity-80 truncate leading-tight" style={{ color: textColor }}>
-                        {ignitionSubtitle}
-                      </span>
-                    )}
                     <div className="flex items-end justify-between gap-1 mt-0.5">
                       <span className="text-[11px] font-mono font-bold leading-none" style={{ color: textColor }}>
                         {count}
