@@ -7,8 +7,8 @@ const { getGateCandles } = require('../gate/getGateCandles');
 const { getActiveUsdtPairs } = require('../binance/getActiveUsdtPairs');
 const { closedCandlesOnly } = require('../bot/ma-cross/strategyEngine');
 const { buildBollingerBandWidthFilterName } = require('../utils/filterNames');
-const { averageWithoutOutliers } = require('../utils/removeOutliersIQR');
-const { bollingerCycleOccurrences } = require('../utils/indicatorGrowthEngines');
+const { bandWidthRobustMean } = require('../utils/removeOutliersIQR');
+const { bollingerBandWidthSeries } = require('../utils/indicatorGrowthEngines');
 const bbBandWidthCache = require('../cache/bbBandWidthCache');
 const { ALL_INTERVALS, BB_PERIODS, BB_STD_DEVS } = require('../bot/bollinger-bands/tradeConfigSchema');
 
@@ -29,23 +29,21 @@ function parsePctParam(raw) {
 }
 
 /**
- * Largura de uma moeda = quanto ela sobe em cada ciclo fundo→topo (mínima toca a banda
- * inferior → máxima toca a banda superior), média dos ciclos completos dentro dos `candles`
- * buscados (mesmo motor de ciclos usado pelo filtro Cresc%, ver bollingerCycleOccurrences em
- * indicatorGrowthEngines.js). Substituiu a distância instantânea (upper-lower)/lower porque essa
- * ficava artificialmente alta por vários candles após um crash/pump pontual — mesmo com o preço
- * já não subindo mais rumo ao topo, a janela rolante do período ainda carregava a volatilidade
- * do evento. Ciclos isolados exageradamente altos são descartados da média (ver averageWithoutOutliers).
+ * Largura de uma moeda = distância média entre a banda superior e a inferior, (upper−lower)/lower
+ * em %, calculada candle a candle na janela de `lookback` candles (ver bollingerBandWidthSeries).
+ * A média DESCARTA as altas expressivas que inflam o valor — um pump/crash pontual alarga as
+ * bandas por ~`period` candles sem representar a "largura típica" da moeda (ver bandWidthRobustMean:
+ * Tukey 1.5×IQR + corta o decil superior + descarta acima de 2.5× a mediana).
  */
 function computeBandGrowthRow(symbol, candles, { period, stdDev }) {
   const closes = candles.map(c => parseFloat(c.close));
   const bb = BollingerBands.calculate({ period, values: closes, stdDev });
   if (!bb.length) return null;
 
-  const occurrences = bollingerCycleOccurrences(candles, { period, stdDev });
-  if (!occurrences || !occurrences.length) return null;
+  const series = bollingerBandWidthSeries(candles, { period, stdDev });
+  if (!series || !series.length) return null;
 
-  const avgWidthPct = averageWithoutOutliers(occurrences);
+  const avgWidthPct = bandWidthRobustMean(series);
   const lastBb = bb[bb.length - 1];
   const last = candles[candles.length - 1];
   const close = parseFloat(last.close);
@@ -57,10 +55,10 @@ function computeBandGrowthRow(symbol, candles, { period, stdDev }) {
   return {
     symbol,
     avgWidthPct: Math.round(avgWidthPct * 100) / 100,
-    lastWidthPct: Math.round(occurrences[occurrences.length - 1] * 100) / 100,
-    minWidthPct: Math.round(Math.min(...occurrences) * 100) / 100,
-    maxWidthPct: Math.round(Math.max(...occurrences) * 100) / 100,
-    samples: occurrences.length,
+    lastWidthPct: Math.round(series[series.length - 1] * 100) / 100,
+    minWidthPct: Math.round(Math.min(...series) * 100) / 100,
+    maxWidthPct: Math.round(Math.max(...series) * 100) / 100,
+    samples: series.length,
     close,
     upper: lastBb.upper,
     lower: lastBb.lower,
@@ -106,10 +104,10 @@ async function runWithConcurrency(items, fn, concurrency) {
 }
 
 /**
- * Largura das Bandas de Bollinger: valorização (%) média de cada ciclo fundo→topo (mínima
- * toca a banda inferior → máxima toca a banda superior) encontrado nos últimos `lookback`
- * candles fechados — ver computeBandGrowthRow acima. Ex.: moeda em squeeze (sobe pouco entre
- * fundo e topo) vs. moeda em expansão de volatilidade (sobe muito a cada ciclo).
+ * Largura das Bandas de Bollinger: distância média entre a banda superior e a inferior
+ * (upper−lower)/lower em %, candle a candle nos últimos `lookback` candles fechados, sem as
+ * altas expressivas que inflam a média (ver computeBandGrowthRow / bandWidthRobustMean).
+ * Ex.: moeda em squeeze (bandas coladas) vs. moeda em expansão de volatilidade (bandas abertas).
  *
  * GET /services/bollinger-band-width-filter?interval=4h&period=20&stdDev=2&lookback=100&order=far
  *

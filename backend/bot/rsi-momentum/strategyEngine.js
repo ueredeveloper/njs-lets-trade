@@ -3,8 +3,8 @@
 const { RSI, MACD, ATR } = require('technicalindicators');
 const { closedCandlesOnly, intervalMs } = require('../ma-cross/strategyEngine');
 const { computeStopLossFloor } = require('../shared/stopLossFloor');
-const { bollingerCycleOccurrences } = require('../../utils/indicatorGrowthEngines');
-const { averageWithoutOutliers } = require('../../utils/removeOutliersIQR');
+const { bollingerBandWidthSeries } = require('../../utils/indicatorGrowthEngines');
+const { bandWidthRobustMean } = require('../../utils/removeOutliersIQR');
 const { detectSupportResistance } = require('../../utils/supportResistance');
 
 const RSI_PERIOD = 14;
@@ -90,21 +90,22 @@ function getRequiredSpecs(config) {
 /**
  * Filtro opcional de largura de banda (mesmo motor do filtro de mercado "Larg%" — ver
  * backend/services/fetchBollingerBandWidthFilter.js e o backtest analyseRsiThresholdBacktest.js):
- * % médio de valorização de cada ciclo fundo→topo BB(period,stdDev), sem outliers. É uma
- * propriedade da moeda no período, não do candle do momento — não muda a cada tick, mas é
- * barato o bastante pra recalcular sempre (poucos candles fechados). Desligado → sempre libera.
+ * distância média entre a banda superior e a inferior, (upper−lower)/lower em %, candle a candle
+ * na janela de candles do intervalo — sem as ALTAS EXPRESSIVAS que inflam a média (pump/crash
+ * pontual, ver bandWidthRobustMean). É uma propriedade da moeda no período, não do candle do
+ * momento — barato o bastante pra recalcular sempre. Desligado → sempre libera.
  */
 function checkBandWidthFilter(config, cMap) {
     const bw = config.entry?.bandWidth;
     if (!bw?.enabled) return { allowed: true };
 
     const closed = closedCandlesOnly(cMap[bw.interval] ?? []);
-    const occurrences = bollingerCycleOccurrences(closed, { period: bw.period, stdDev: bw.stdDev });
-    if (!occurrences?.length) {
+    const series = bollingerBandWidthSeries(closed, { period: bw.period, stdDev: bw.stdDev });
+    if (!series?.length) {
         return { allowed: false, reason: 'BANDWIDTH_NO_DATA' };
     }
 
-    const avgWidthPct = Math.round(averageWithoutOutliers(occurrences) * 100) / 100;
+    const avgWidthPct = Math.round(bandWidthRobustMean(series) * 100) / 100;
     if (avgWidthPct < bw.minPct) {
         return { allowed: false, reason: 'BANDWIDTH_TOO_LOW', avgWidthPct, minPct: bw.minPct };
     }

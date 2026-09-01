@@ -68,6 +68,24 @@ function computeBollingerGrowth(candles, params) {
   return occurrences === null ? null : summarize(occurrences);
 }
 
+/**
+ * Largura das Bandas de Bollinger candle a candle: para cada candle onde a BB está definida,
+ * `w_i = (upper_i - lower_i) / lower_i * 100` (distância entre as bandas em % da banda inferior).
+ * Devolve a série de w_i pra o chamador tirar a média robusta (ver bandWidthRobustMean em
+ * removeOutliersIQR.js — descarta as altas expressivas que inflam a média). null se candles
+ * insuficientes pro período.
+ */
+function bollingerBandWidthSeries(candles, { period = 20, stdDev = 2 } = {}) {
+  if (!candles?.length || candles.length < period + 1) return null;
+  const closes = candles.map(c => parseFloat(c.close));
+  const bb = BollingerBands.calculate({ period, values: closes, stdDev });
+  const out = [];
+  for (const b of bb) {
+    if (b.lower > 0 && b.upper > b.lower) out.push(((b.upper - b.lower) / b.lower) * 100);
+  }
+  return out.length ? out : null;
+}
+
 /** Ciclo: RSI cai abaixo de `oversold` (fundo) → RSI sobe acima de `overbought` (topo). */
 function computeRsiGrowth(candles, { period = 14, oversold = 30, overbought = 70 } = {}) {
   if (!candles?.length || candles.length < period + 1) return null;
@@ -226,4 +244,5 @@ module.exports = {
   computeMaCrossGrowth,
   computeRsiThrust,
   bollingerCycleOccurrences,
+  bollingerBandWidthSeries,
 };

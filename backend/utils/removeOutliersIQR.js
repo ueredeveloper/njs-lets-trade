@@ -32,4 +32,28 @@ function averageWithoutOutliers(values) {
   return filtered.reduce((s, v) => s + v, 0) / filtered.length;
 }
 
-module.exports = { quantile, removeOutliersIQR, averageWithoutOutliers };
+/**
+ * Média robusta da largura de banda (ver bollingerBandWidthSeries em indicatorGrowthEngines.js) —
+ * descarta as ALTAS EXPRESSIVAS que inflam a média: um pump/crash pontual alarga as bandas por
+ * ~`period` candles e não representa a "largura típica" da moeda. Camadas:
+ *   1) cerca de Tukey (1.5×IQR) — tira extremos isolados;
+ *   2) corta o decil superior (10% maiores valores restantes);
+ *   3) descarta o que sobrar acima de 2.5× a mediana (regime largo vs. spike);
+ *   4) média do que resta.
+ * Com menos de 5 amostras devolve a média simples (quartis/decis não são confiáveis).
+ * null se `values` vazio.
+ */
+function bandWidthRobustMean(values) {
+  if (!values?.length) return null;
+  if (values.length < 5) return values.reduce((s, v) => s + v, 0) / values.length;
+
+  const sorted = [...removeOutliersIQR(values)].sort((a, b) => a - b);
+  const median = sorted[Math.floor(sorted.length / 2)];
+  const cap = median * 2.5;
+  const keepCount = Math.max(1, Math.floor(sorted.length * 0.9)); // fora o decil superior
+  const kept = sorted.slice(0, keepCount).filter((v) => v <= cap);
+  const base = kept.length ? kept : sorted;
+  return base.reduce((s, v) => s + v, 0) / base.length;
+}
+
+module.exports = { quantile, removeOutliersIQR, averageWithoutOutliers, bandWidthRobustMean };

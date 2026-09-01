@@ -7,8 +7,8 @@ const getCandlesForScreening = require('../utils/getCandlesForScreening');
 const candleUpdateQueue = require('../utils/candleUpdateQueue');
 const { closedCandlesOnly, intervalMs } = require('../bot/ma-cross/strategyEngine');
 const { buildBollingerBandWidthFilterName } = require('../utils/filterNames');
-const { averageWithoutOutliers } = require('../utils/removeOutliersIQR');
-const { bollingerCycleOccurrences } = require('../utils/indicatorGrowthEngines');
+const { bandWidthRobustMean } = require('../utils/removeOutliersIQR');
+const { bollingerBandWidthSeries } = require('../utils/indicatorGrowthEngines');
 const cacheSettings = require('./cacheSettings');
 
 const BATCH_SIZE = 20;
@@ -118,27 +118,26 @@ function evaluateSymbolWithCandles(symbol, preset, rawCandles, now = Date.now())
       return false;
     }
 
-    // Largura de uma moeda = quanto ela sobe em cada ciclo fundo→topo (mínima toca a banda
-    // inferior → máxima toca a banda superior), não a distância instantânea (upper-lower)/lower
-    // — essa ficava artificialmente alta por vários candles após um crash/pump pontual (ver
-    // bollingerCycleOccurrences em indicatorGrowthEngines.js, mesmo motor do filtro Cresc%).
-    const occurrences = bollingerCycleOccurrences(candles, { period: preset.period, stdDev: preset.stdDev });
-    if (!occurrences?.length) {
+    // Largura de uma moeda = distância média entre as bandas, (upper-lower)/lower em %, candle a
+    // candle na janela — SEM as altas expressivas que inflam a média (um pump/crash pontual
+    // alarga as bandas por ~period candles). Ver bollingerBandWidthSeries + bandWidthRobustMean.
+    const series = bollingerBandWidthSeries(candles, { period: preset.period, stdDev: preset.stdDev });
+    if (!series?.length) {
       symbolStore.set(key, { detail: null, computedAt: now });
       dirty = true;
       return false;
     }
 
-    const avgWidthPct = averageWithoutOutliers(occurrences);
+    const avgWidthPct = bandWidthRobustMean(series);
     const lastCandle = candles[candles.length - 1];
 
     const detail = {
       symbol,
       avgWidthPct: Math.round(avgWidthPct * 100) / 100,
-      lastWidthPct: Math.round(occurrences[occurrences.length - 1] * 100) / 100,
-      minWidthPct: Math.round(Math.min(...occurrences) * 100) / 100,
-      maxWidthPct: Math.round(Math.max(...occurrences) * 100) / 100,
-      samples: occurrences.length,
+      lastWidthPct: Math.round(series[series.length - 1] * 100) / 100,
+      minWidthPct: Math.round(Math.min(...series) * 100) / 100,
+      maxWidthPct: Math.round(Math.max(...series) * 100) / 100,
+      samples: series.length,
       close: parseFloat(lastCandle.close),
     };
 

@@ -4,8 +4,8 @@ const { RSI, ADX, MACD, ATR } = require('technicalindicators');
 const getCandles = require('../binance/getCandles');
 const { getGateCandles } = require('../gate/getGateCandles');
 const { closedCandlesOnly, intervalMs } = require('../bot/ma-cross/strategyEngine');
-const { bollingerCycleOccurrences } = require('./indicatorGrowthEngines');
-const { averageWithoutOutliers } = require('./removeOutliersIQR');
+const { bollingerBandWidthSeries } = require('./indicatorGrowthEngines');
+const { bandWidthRobustMean } = require('./removeOutliersIQR');
 const getTickers = require('../binance/cachedTicker24hr');
 const { computeDailyEntryStats } = require('./dailyEntryStats');
 const { computeAvgTradeDurationMs } = require('./tradeDurationStats');
@@ -1340,9 +1340,9 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
         let avgWidthPct = null;
         if (bwCandlesResult.status === 'fulfilled' && bwCandlesResult.value) {
             const closed = closedCandlesOnly(bwCandlesResult.value);
-            const occurrences = bollingerCycleOccurrences(closed, { period: bwPeriod, stdDev: bwStdDev });
-            if (occurrences?.length) {
-                avgWidthPct = Math.round(averageWithoutOutliers(occurrences) * 100) / 100;
+            const series = bollingerBandWidthSeries(closed, { period: bwPeriod, stdDev: bwStdDev });
+            if (series?.length) {
+                avgWidthPct = Math.round(bandWidthRobustMean(series) * 100) / 100;
             }
         }
         bandWidthResult = {

@@ -69,10 +69,10 @@ const RSI_MOMENTUM_DEFAULTS = {
      *  (evita reentrar no mesmo dump). Saída no alvo libera na hora. 0 = sem espera. */
     reentryCooldownCandles: 3,
     /** Filtro de largura de banda (mesmo motor do filtro de mercado "Larg%" — ver
-     *  backend/utils/indicatorGrowthEngines.js#bollingerCycleOccurrences e o backtest): só
-     *  libera entradas se a valorização média dos ciclos fundo→topo BB(period,stdDev) da
-     *  moeda, no intervalo escolhido (pode ser diferente do entry.interval), for ≥ minPct.
-     *  Ligado por padrão (mín. 2% no 5m). */
+     *  backend/utils/indicatorGrowthEngines.js#bollingerBandWidthSeries + bandWidthRobustMean e o
+     *  backtest): só libera entradas se a distância média entre as bandas BB(period,stdDev) —
+     *  (upper−lower)/lower em %, candle a candle na janela do lookback, SEM as altas expressivas
+     *  de pump/crash — for ≥ minPct. Filtra moeda travada em range apertado. Ligado por padrão. */
     bandWidth: {
       enabled: true, interval: '5m', period: 20, stdDev: 2, lookback: 300, minPct: 2,
     },
