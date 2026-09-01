@@ -124,8 +124,12 @@ const QUICK_PRESETS = [
 function buildSummary(value, t) {
   const { type, intervals } = value;
   if (!type) return null;
-  const ivLabel = intervals.length ? intervals.join(', ') : '—';
+  const ivLabel = intervals?.length ? intervals.join(', ') : '—';
 
+  if (type === 'botReadiness') {
+    const mode = value.mode ?? 'ready';
+    return t(`ind.bot_readiness_${mode}`);
+  }
   if (type === 'relativeStrengthIndex') {
     const c1 = (value.compare1 ?? 'above') === 'above' ? t('sum.above') : t('sum.bellow');
     const v1 = value.line1 ?? '70';
