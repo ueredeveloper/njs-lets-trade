@@ -331,6 +331,10 @@ const RSI_MOM_ADX_MIN_OPTIONS = [15, 20, 25, 30];
  *  momentum / limite inferior da faixa de alta de Brown-Cardwell; grade grossa de propósito
  *  (evitar otimizar um valor fino no mesmo histórico — ver conversa sobre data snooping). */
 const RSI_MOM_HIGHER_RSI_MIN_OPTIONS = [40, 45, 50, 55, 60, 65, 70];
+/** Filtro "Topo N": quantos candles do intervalo do sinal olhar pra trás pra achar a máxima
+ *  recente, e qual a folga % abaixo dela que ainda libera a compra (0 = só bloqueia acima do topo). */
+const RSI_MOM_NEW_HIGH_LOOKBACK_OPTIONS = [10, 15, 20, 30, 50, 100, 200];
+const RSI_MOM_NEW_HIGH_MARGIN_OPTIONS = [0, 1, 2, 3, 5, 8, 10, 15];
 /** Valores selecionáveis do campo "Janela" — restringe os SINAIS às últimas N horas (ex.:
  *  "moedas que atingiram RSI 70 nas últimas 6/7/8 horas"). 0 = desligado, usa todo o histórico
  *  definido em Candles. */
@@ -399,6 +403,9 @@ const RSI_MOM_DEFAULT_PREFS = {
   macdFilterInterval: '1h',
   higherRsiFilterEnabled: false,
   higherRsiFilterMinRsi: 50,
+  newHighFilterEnabled: false,
+  newHighFilterLookback: 20,
+  newHighFilterMarginPct: 2,
   trailingCoinStepPct: 3,
   trailingStopStepPct: 2,
   trailingTargetCoinStepPct: 3,
@@ -1208,6 +1215,11 @@ function RsiMomentumStats({ autoCalc }) {
           enabled: true,
           minRsi: p.higherRsiFilterMinRsi,
         } : null,
+        newHighFilter: p.newHighFilterEnabled ? {
+          enabled: true,
+          lookback: p.newHighFilterLookback,
+          marginPct: p.newHighFilterMarginPct,
+        } : null,
         entriesDayRange: p.entriesDayRangeMax != null ? { min: 2, max: p.entriesDayRangeMax } : null,
       };
       const data = p.allCoins
@@ -1861,6 +1873,40 @@ function RsiMomentumStats({ autoCalc }) {
             </select>
           </div>
         )}
+
+        {/* Filtro "não comprar esticado / topo novo": bloqueia o sinal se o preço estiver a menos de
+            "folga %" da máxima dos últimos N candles do intervalo do sinal. */}
+        <div className="flex items-center gap-1 shrink-0 pb-1" title={t('stats.tip.new_high_filter')}>
+          <span className="hidden md:inline text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.new_high_filter')}</span>
+          <button
+            type="button"
+            onClick={() => patchPrefs({ newHighFilterEnabled: !prefs.newHighFilterEnabled })}
+            className={`relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${prefs.newHighFilterEnabled ? 'bg-p4' : 'bg-p3/40'}`}
+          >
+            <span className={`inline-block h-3 w-3 rounded-full bg-white shadow transition-transform ${prefs.newHighFilterEnabled ? 'translate-x-3' : 'translate-x-0'}`} />
+          </button>
+        </div>
+
+        {prefs.newHighFilterEnabled && (
+          <>
+            <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.new_high_lookback')}>
+              <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.new_high_lookback')}</label>
+              <select className={inp}
+                value={prefs.newHighFilterLookback}
+                onChange={(e) => patchPrefs({ newHighFilterLookback: Number(e.target.value) })}>
+                {RSI_MOM_NEW_HIGH_LOOKBACK_OPTIONS.map((v) => <option key={v} value={v}>{`x${v}`}</option>)}
+              </select>
+            </div>
+            <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.new_high_margin')}>
+              <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.new_high_margin')}</label>
+              <select className={inp}
+                value={prefs.newHighFilterMarginPct}
+                onChange={(e) => patchPrefs({ newHighFilterMarginPct: Number(e.target.value) })}>
+                {RSI_MOM_NEW_HIGH_MARGIN_OPTIONS.map((v) => <option key={v} value={v}>{`${v}%`}</option>)}
+              </select>
+            </div>
+          </>
+        )}
        </div>
       </StatsArea>
 
@@ -2040,6 +2086,22 @@ function RsiMomentumStats({ autoCalc }) {
                   value={`${result.higherRsiBlockedCount} · RSI 1h ≥ ${result.higherRsiFilter.minRsi}`}
                   highlight="text-amber-500"
                   tooltip={t('stats.tip.blocked_by_htf_rsi')}
+                />
+              )}
+              {result.rsi5mFilter && (
+                <SummaryCard
+                  label={t('stats.card.blocked_by_rsi5m')}
+                  value={`${result.rsi5mBlockedCount} · RSI 5m > ${result.rsi5mFilter.threshold}`}
+                  highlight="text-amber-500"
+                  tooltip={t('stats.tip.blocked_by_rsi5m')}
+                />
+              )}
+              {result.newHighFilter && (
+                <SummaryCard
+                  label={t('stats.card.blocked_by_new_high')}
+                  value={`${result.newHighBlockedCount} · topo x${result.newHighFilter.lookback} −${result.newHighFilter.marginPct}%`}
+                  highlight="text-amber-500"
+                  tooltip={t('stats.tip.blocked_by_new_high')}
                 />
               )}
             </div>

@@ -141,6 +141,14 @@ async function analyseRsiThresholdBacktestMarket(options = {}) {
     const higherRsiBlockedCount = higherRsiEnabled
         ? valid.reduce((s, { result }) => s + (result.higherRsiBlockedCount || 0), 0)
         : 0;
+    const rsi5mEnabled = !!perSymbolOptions.rsi5mFilter?.enabled;
+    const rsi5mBlockedCount = rsi5mEnabled
+        ? valid.reduce((s, { result }) => s + (result.rsi5mBlockedCount || 0), 0)
+        : 0;
+    const nhEnabled = !!perSymbolOptions.newHighFilter?.enabled;
+    const newHighBlockedCount = nhEnabled
+        ? valid.reduce((s, { result }) => s + (result.newHighBlockedCount || 0), 0)
+        : 0;
     const volumeBreakdown = volumeMap.size > 0 ? computeVolumeBreakdown(filledOccurrences, volumeMap) : null;
     const positionSizeUsd = perSymbolOptions.positionSizeUsd ?? 40;
     const totalInvestedUsd = parseFloat((filledOccurrences.length * positionSizeUsd).toFixed(2));
@@ -189,6 +197,17 @@ async function analyseRsiThresholdBacktestMarket(options = {}) {
             ? { interval: '1h', minRsi: Math.max(1, Math.min(99, Number(perSymbolOptions.higherRsiFilter.minRsi ?? 50))) }
             : null,
         higherRsiBlockedCount,
+        rsi5mFilter: rsi5mEnabled
+            ? { interval: '5m', threshold: Math.max(50, Math.min(95, Number(perSymbolOptions.rsi5mFilter.threshold ?? 70))) }
+            : null,
+        rsi5mBlockedCount,
+        newHighFilter: nhEnabled
+            ? {
+                lookback: Math.max(3, Math.min(300, Math.round(Number(perSymbolOptions.newHighFilter.lookback ?? 20)))),
+                marginPct: Math.max(0, Math.min(20, Number(perSymbolOptions.newHighFilter.marginPct ?? 2))),
+            }
+            : null,
+        newHighBlockedCount,
         trailingStop: perSymbolOptions.trailingStop?.enabled ? { ...perSymbolOptions.trailingStop } : null,
         targetMode: (perSymbolOptions.targetMode === 'fixed' || perSymbolOptions.targetMode === 'continuous' || perSymbolOptions.targetMode === 'off')
             ? perSymbolOptions.targetMode

@@ -825,6 +825,18 @@ function countBaseVsEvolvedExits(filledOccurrences) {
  *   bloqueia (fail-open, igual ADX/MACD).
  * @param {boolean} [options.higherRsiFilter.enabled=false]
  * @param {number}  [options.higherRsiFilter.minRsi=50]  RSI 1h mínimo exigido no instante do sinal.
+ * @param {object} [options.rsi5mFilter]  Mesmo entry.rsi5mFilter do bot ao vivo (ver checkRsi5mFilter
+ *   em backend/bot/rsi-momentum/strategyEngine.js): exige RSI(14) do candle de 5m fechado no
+ *   FECHAMENTO do candle do sinal > `threshold`. Vem da config GLOBAL do bot (igual priorRsiFilter),
+ *   não tem toggle nas Estatísticas. Fail-open no warmup.
+ * @param {boolean} [options.rsi5mFilter.enabled=false]
+ * @param {number}  [options.rsi5mFilter.threshold=70]  RSI 5m mínimo (50–95).
+ * @param {object} [options.newHighFilter]  Filtro "não comprar esticado" (só backtest/Estatísticas):
+ *   recusa o sinal se `signalPrice >= max(high dos `lookback` candles ANTERIORES ao candle do sinal)
+ *   × (1 − `marginPct`/100)`. Pega compras perto/acima do topo recente sem estrutura acima.
+ * @param {boolean} [options.newHighFilter.enabled=false]
+ * @param {number}  [options.newHighFilter.lookback=20]  Quantos candles do intervalo do sinal (3–300).
+ * @param {number}  [options.newHighFilter.marginPct=2]  Folga % abaixo da máxima (0–20). 0 = só bloqueia acima do topo.
  * @param {object} [options.entriesDayRange]  Faixa opcional de entradas/dia pro card extra em
  *   dailyEntryStats.entriesRangeDaysPct (ver computeDailyEntryStats em dailyEntryStats.js) — ex.:
  *   {min:2, max:3} = "% de dias com 2 a 3 entradas". Sem isso, só multiEntryDaysPct (>=2, sem
@@ -852,6 +864,8 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
         adxFilter       = null,
         macdFilter      = null,
         higherRsiFilter = null,
+        rsi5mFilter     = null,
+        newHighFilter   = null,
         trailingStop    = null,
         trailingTarget  = null,
         targetMode      = null,
@@ -902,6 +916,20 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
     // JSDoc de options.higherRsiFilter. minRsi entre 1 e 99.
     const higherRsiEnabled = !!higherRsiFilter?.enabled;
     const higherRsiMin = Math.max(1, Math.min(99, Number(higherRsiFilter?.minRsi ?? 50)));
+
+    // Filtro RSI 5m (mesmo entry.rsi5mFilter do bot ao vivo — ver checkRsi5mFilter em
+    // backend/bot/rsi-momentum/strategyEngine.js): exige RSI(14) do candle de 5m fechado no
+    // fechamento do candle do sinal > threshold. Aqui vem da config GLOBAL do bot (igual ao
+    // priorRsiFilter), sem toggle nas Estatísticas.
+    const rsi5mEnabled = !!rsi5mFilter?.enabled;
+    const rsi5mThreshold = Math.max(50, Math.min(95, Number(rsi5mFilter?.threshold ?? 70)));
+
+    // Filtro "topo dos últimos N" (só backtest/Estatísticas por enquanto): recusa o sinal se o
+    // preço estiver a menos de nhMarginPct% da máxima dos nhLookback candles ANTERIORES ao candle
+    // do sinal (no intervalo do sinal). Pega compras esticadas / rompimento de topo sem estrutura.
+    const nhEnabled = !!newHighFilter?.enabled;
+    const nhLookback = Math.max(3, Math.min(300, Math.round(Number(newHighFilter?.lookback ?? 20))));
+    const nhMarginPct = Math.max(0, Math.min(20, Number(newHighFilter?.marginPct ?? 2)));
 
     const priorRsiCount = priorRsiFilter?.enabled === false
         ? 0
@@ -989,6 +1017,12 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
         ? computeOwnIntervalFetchLimit(interval, mainLimit, REF_RSI_INTERVAL, RSI_WARMUP_BARS)
         : 0;
 
+    // RSI 5m do filtro entry.rsi5mFilter — com o sinal já em 5m, é a própria série principal.
+    const rsi5mNeedsFetch = rsi5mEnabled && interval !== '5m';
+    const rsi5mLimit = rsi5mNeedsFetch
+        ? computeOwnIntervalFetchLimit(interval, mainLimit, '5m', RSI_WARMUP_BARS)
+        : 0;
+
     const settled = await Promise.allSettled([
         fetchCandles(symbol, interval, mainLimit),
         bwEnabled
@@ -1013,9 +1047,12 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
         srEnabled
             ? fetchCandles(symbol, srInterval, srFetchLimit)
             : Promise.resolve(null),
+        rsi5mNeedsFetch
+            ? fetchCandles(symbol, '5m', rsi5mLimit)
+            : Promise.resolve(null),
     ]);
 
-    const [candlesResult, bwCandlesResult, pdcCandlesResult, tickersResult, pcsCandlesResult, adxCandlesResult, macdCandlesResult, refRsiCandlesResult, srCandlesResult] = settled;
+    const [candlesResult, bwCandlesResult, pdcCandlesResult, tickersResult, pcsCandlesResult, adxCandlesResult, macdCandlesResult, refRsiCandlesResult, srCandlesResult, rsi5mCandlesResult] = settled;
     if (candlesResult.status === 'rejected') throw candlesResult.reason;
     const candles = candlesResult.value;
 
@@ -1152,10 +1189,26 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
         refRsiOffset = refRsiCandles.length - refRsiSeries.length;
     }
 
+    // RSI 5m do filtro entry.rsi5mFilter — mesmo padrão do refRsi acima.
+    let rsi5mCandles = [];
+    let rsi5mSeries = [];
+    let rsi5mOffset = 0;
+    if (rsi5mEnabled && !rsi5mNeedsFetch) {
+        rsi5mCandles = candles;
+        rsi5mSeries = rsiValues;
+        rsi5mOffset = offset;
+    } else if (rsi5mNeedsFetch && rsi5mCandlesResult.status === 'fulfilled' && rsi5mCandlesResult.value?.length) {
+        rsi5mCandles = rsi5mCandlesResult.value;
+        rsi5mSeries = RSI.calculate({ values: rsi5mCandles.map(c => parseFloat(c.close)), period: RSI_PERIOD });
+        rsi5mOffset = rsi5mCandles.length - rsi5mSeries.length;
+    }
+
     // Fase 1 — detecta os cruzamentos de RSI no candle do `interval` principal (o "pensamento"
     // continua em 15m/etc.), sem resolver ainda pullback/saída.
     const rawSignals = [];
     let higherRsiBlocked = 0; // sinais cortados pelo filtro de RSI 1h (só conta com ele ligado)
+    let rsi5mBlocked = 0;     // sinais cortados pelo filtro de RSI 5m (só conta com ele ligado)
+    let newHighBlocked = 0;   // sinais cortados pelo filtro "topo dos últimos N" (só conta com ele ligado)
     const minI = Math.max(1, priorRsiCount);
     if (!bandWidthBlocksEntries && !volumeBlocksEntries) {
         for (let i = minI; i < rsiValues.length; i++) {
@@ -1211,6 +1264,35 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
             if (higherRsiEnabled && rsi1hAtSignal != null && rsi1hAtSignal < higherRsiMin) {
                 higherRsiBlocked++;
                 continue;
+            }
+
+            // Filtro RSI 5m (config global do bot): RSI(14) do candle de 5m fechado no FECHAMENTO
+            // do candle do sinal precisa estar > threshold. Resolve em openTime + duração do candle
+            // do sinal − 1ms (o 5m que fecha junto com o candle do sinal). Fail-open no warmup.
+            if (rsi5mEnabled) {
+                const rsi5mAtSignal = resolveOwnIntervalValueAt(
+                    rsi5mCandles, rsi5mSeries, rsi5mOffset,
+                    signalCandle.openTime + (interval === '1m' ? 60_000 : intervalMs(interval)) - 1,
+                    (v) => v,
+                );
+                if (rsi5mAtSignal != null && rsi5mAtSignal <= rsi5mThreshold) {
+                    rsi5mBlocked++;
+                    continue;
+                }
+            }
+
+            // Filtro "topo dos últimos N": recusa se o preço do sinal está a menos de nhMarginPct%
+            // da máxima dos nhLookback candles ANTERIORES ao candle do sinal (não comprar esticado).
+            if (nhEnabled) {
+                let maxHigh = 0;
+                for (let j = Math.max(0, idx - nhLookback); j < idx; j++) {
+                    const h = parseFloat(candles[j].high);
+                    if (h > maxHigh) maxHigh = h;
+                }
+                if (maxHigh > 0 && signalPrice >= maxHigh * (1 - nhMarginPct / 100)) {
+                    newHighBlocked++;
+                    continue;
+                }
             }
 
             const stopPriceOverride = pcsEnabled
@@ -1405,6 +1487,10 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
         macdFilter: macdEnabled ? { interval: macdInterval } : null,
         higherRsiFilter: higherRsiEnabled ? { interval: REF_RSI_INTERVAL, minRsi: higherRsiMin } : null,
         higherRsiBlockedCount: higherRsiEnabled ? higherRsiBlocked : 0,
+        rsi5mFilter: rsi5mEnabled ? { interval: '5m', threshold: rsi5mThreshold } : null,
+        rsi5mBlockedCount: rsi5mEnabled ? rsi5mBlocked : 0,
+        newHighFilter: nhEnabled ? { lookback: nhLookback, marginPct: nhMarginPct } : null,
+        newHighBlockedCount: nhEnabled ? newHighBlocked : 0,
         trailingStop: trailingStopEnabled ? {
             mode: trailingStopMode,
             startPct: trailingStopStartPct,
