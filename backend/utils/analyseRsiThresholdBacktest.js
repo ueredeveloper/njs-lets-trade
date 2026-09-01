@@ -57,7 +57,7 @@ const MAX_ONE_MINUTE_CANDLES = 3000;
  * assim que a posição entra, arma alvo E stop simultaneamente; o que for tocado primeiro
  * encerra a operação. `scanCandles` deve conter só candles com openTime > signalCloseMs.
  */
-function resolveFromSignal(scanCandles, signalPrice, { pullbackPct, targetPct, stopLossPct, stopPriceOverride, targetPriceOverride, trailingStop, trailingTarget, targetMode, hardTakeProfitPct }) {
+function resolveFromSignal(scanCandles, signalPrice, { pullbackPct, targetPct, stopLossPct, stopPriceOverride, targetPriceOverride, trailingStop, trailingTarget, targetMode, hardTakeProfitPct, reinforceOnStop }) {
     let filled = pullbackPct === 0;
     let entryTime = null;
     let entryPrice = signalPrice;
@@ -119,6 +119,7 @@ function resolveFromSignal(scanCandles, signalPrice, { pullbackPct, targetPct, s
     let outcome = 'open';
     let exitTime = null;
     let exitPrice = null;
+    let stopScanIdx = -1; // índice do candle em que o stop inicial bateu (p/ o reforço no stop)
     let peakPrice = entryPrice;
     const stopCoinStepPct = stopTrailingOn ? Math.max(0.1, Number(trailingStop.coinStepPct ?? 1)) : null;
     const stopStepPct = stopTrailingOn ? Math.max(0.1, Number(trailingStop.stopStepPct ?? 1)) : null;
@@ -220,6 +221,7 @@ function resolveFromSignal(scanCandles, signalPrice, { pullbackPct, targetPct, s
             outcome = 'stop';
             exitTime = scanCandles[j].openTime;
             exitPrice = stopPrice;
+            stopScanIdx = j;
             break;
         }
         // 'fixed' e também 'off'-com-teto (targetPrice = capPrice) — continuous já foi checado no topo.
@@ -229,6 +231,38 @@ function resolveFromSignal(scanCandles, signalPrice, { pullbackPct, targetPct, s
             exitPrice = targetPrice;
             break;
         }
+    }
+
+    // ── Reforço no stop (escada de averaging-down) ─────────────────────────────────────────────
+    // Bateu o stop da compra inicial E o reforço está ligado: em vez de realizar a perda, a
+    // posição NÃO é vendida — runReinforcementLadder adiciona uma nova compra a mercado e passa
+    // a operar um bracket −addDropPct% / +exitRisePct% a partir dela, empilhando um degrau a
+    // cada nova queda de addDropPct% e vendendo TODAS as compras no 1º +exitRisePct% de qualquer
+    // degrau. Devolve já o resultado agregado da pilha (returnPct = retorno sobre o capital
+    // total empregado). maxRungs é só trava de segurança (o usuário pediu "sem limite").
+    if (reinforceOnStop?.enabled && outcome === 'stop' && stopScanIdx >= 0) {
+        const ladder = runReinforcementLadder(scanCandles, stopScanIdx, entryPrice, exitPrice, {
+            addDropPct: reinforceOnStop.addDropPct,
+            exitRisePct: reinforceOnStop.exitRisePct,
+            maxRungs: reinforceOnStop.maxRungs,
+        });
+        return {
+            filled: true,
+            entryTime, entryPrice, stopPrice,
+            targetPrice: ladder.finalTargetPrice,
+            outcome: ladder.outcome,
+            exitTime: ladder.exitTime,
+            exitPrice: ladder.exitPrice,
+            stopSteps: 0,
+            targetSteps: 0,
+            peakGainPct: parseFloat((((peakPrice / entryPrice) - 1) * 100).toFixed(2)),
+            reinforce: {
+                legCount: ladder.legs.length,
+                rungs: ladder.legs.length - 1,
+                avgEntryPrice: ladder.avgEntryPrice,
+                returnPct: ladder.returnPct,
+            },
+        };
     }
 
     if (outcome === 'open') {
@@ -258,6 +292,77 @@ function resolveFromSignal(scanCandles, signalPrice, { pullbackPct, targetPct, s
     return {
         filled: true, entryTime, entryPrice, targetPrice, stopPrice, outcome, exitTime, exitPrice,
         stopSteps, targetSteps, peakGainPct: parseFloat(peakGainPct.toFixed(2)),
+    };
+}
+
+/**
+ * "Escada de reforço" a partir do instante em que a compra inicial bateu o stop. NÃO vende a
+ * moeda: adiciona uma nova compra a mercado (preço = stop da compra anterior = `firstStopPrice`)
+ * e arma um bracket −`addDropPct`% / +`exitRisePct`% a partir dela. Enquanto o preço cair
+ * `addDropPct`% abaixo do ÚLTIMO aporte, empilha mais um degrau (nova compra + bracket
+ * recalculado do zero). O 1º candle cujo high alcança +`exitRisePct`% do último aporte encerra
+ * TODAS as compras nesse preço. Se a janela (`scanCandles`) acabar antes disso, outcome='open' e
+ * a pilha é marcada a mercado (último close) — prejuízo não realizado.
+ *
+ * Todos os aportes têm o MESMO tamanho, então `returnPct` é o retorno sobre o capital total
+ * empregado = média simples do retorno de cada perna até `exitPrice`. `startIdx` é o índice, em
+ * `scanCandles`, do candle em que o stop inicial bateu (a varredura recomeça dali). Empate
+ * intra-candle: conta a QUEDA (novo aporte) antes da subida (alvo) — mesma convenção pessimista
+ * do bracket inicial (stop antes de alvo).
+ */
+function runReinforcementLadder(scanCandles, startIdx, firstEntryPrice, firstStopPrice, { addDropPct, exitRisePct, maxRungs }) {
+    const drop = Math.max(0.5, Number(addDropPct)) / 100;
+    const rise = Math.max(0.5, Number(exitRisePct)) / 100;
+    const cap = Math.max(1, Math.round(Number(maxRungs) || 100));
+
+    const legs = [firstEntryPrice, firstStopPrice]; // perna 0 = compra do sinal; perna 1 = 1º reforço
+    let lastEntry = firstStopPrice;
+    let addLevel = lastEntry * (1 - drop);
+    let targetLevel = lastEntry * (1 + rise);
+    let outcome = 'open';
+    let exitTime = null;
+    let exitPrice = null;
+
+    for (let j = Math.max(0, startIdx); j < scanCandles.length; j++) {
+        const low = parseFloat(scanCandles[j].low);
+        const high = parseFloat(scanCandles[j].high);
+        if (low <= addLevel) {
+            lastEntry = addLevel;
+            legs.push(lastEntry);
+            addLevel = lastEntry * (1 - drop);
+            targetLevel = lastEntry * (1 + rise);
+            if (legs.length - 1 >= cap) { // trava de segurança
+                exitTime = scanCandles[j].openTime;
+                break;
+            }
+            continue;
+        }
+        if (high >= targetLevel) {
+            outcome = 'target';
+            exitTime = scanCandles[j].openTime;
+            exitPrice = targetLevel;
+            break;
+        }
+    }
+
+    if (outcome !== 'target') {
+        outcome = 'open';
+        exitPrice = scanCandles.length
+            ? parseFloat(scanCandles[scanCandles.length - 1].close)
+            : lastEntry;
+    }
+
+    const avgEntryPrice = legs.reduce((s, p) => s + p, 0) / legs.length;
+    const returnPct = (legs.reduce((s, p) => s + (exitPrice / p - 1), 0) / legs.length) * 100;
+
+    return {
+        legs,
+        avgEntryPrice: parseFloat(avgEntryPrice.toFixed(8)),
+        returnPct: parseFloat(returnPct.toFixed(4)),
+        outcome,
+        exitTime,
+        exitPrice,
+        finalTargetPrice: parseFloat(targetLevel.toFixed(8)),
     };
 }
 
@@ -620,12 +725,20 @@ function buildOccurrence(signalCandle, signalPrice, signalRsi, resolved, positio
             exitPrice: null,
             pnlPct: null,
             pnlUsd: null,
+            investedUsd: 0,
         };
     }
 
     const { entryTime, entryPrice, targetPrice, stopPrice, outcome, exitTime, exitPrice } = resolved;
-    const pnlPct = parseFloat((((exitPrice - entryPrice) / entryPrice) * 100).toFixed(2));
-    const pnlUsd = parseFloat((positionSizeUsd * (pnlPct / 100)).toFixed(2));
+    // Reforço no stop (ver runReinforcementLadder): a posição virou uma PILHA de N compras do
+    // mesmo tamanho. `pnlPct` passa a ser o retorno sobre o capital total empregado (todas as
+    // pernas), e `investedUsd` = positionSizeUsd × nº de compras.
+    const legCount = resolved.reinforce?.legCount ?? 1;
+    const investedUsd = parseFloat((positionSizeUsd * legCount).toFixed(2));
+    const pnlPct = resolved.reinforce
+        ? parseFloat(resolved.reinforce.returnPct.toFixed(2))
+        : parseFloat((((exitPrice - entryPrice) / entryPrice) * 100).toFixed(2));
+    const pnlUsd = parseFloat((investedUsd * (pnlPct / 100)).toFixed(2));
 
     return {
         signalDate: new Date(signalCandle.openTime).toISOString(),
@@ -645,9 +758,32 @@ function buildOccurrence(signalCandle, signalPrice, signalRsi, resolved, positio
         exitPrice,
         pnlPct,
         pnlUsd,
+        investedUsd,
+        reinforceRungs: resolved.reinforce?.rungs ?? 0,
+        avgEntryPrice: resolved.reinforce?.avgEntryPrice ?? null,
         stopSteps: resolved.stopSteps ?? 0,
         targetSteps: resolved.targetSteps ?? 0,
         peakGainPct: resolved.peakGainPct ?? null,
+    };
+}
+
+/**
+ * Resumo do "Reforço no stop" (ver runReinforcementLadder) — só sobre os trades que chegaram a
+ * usar ≥1 reforço: quantos foram, degraus somados, o pior caso (mais degraus num trade só),
+ * quantos recuperaram (saíram no alvo), quantos seguem em aberto (pilha marcada a mercado,
+ * prejuízo não realizado) e o P&L/capital somado desses trades. null se nenhum trade usou reforço.
+ */
+function computeReinforceStats(filledOccurrences) {
+    const used = filledOccurrences.filter((o) => (o.reinforceRungs ?? 0) > 0);
+    if (!used.length) return null;
+    return {
+        trades: used.length,
+        rungsTotal: used.reduce((s, o) => s + o.reinforceRungs, 0),
+        maxRungsInTrade: Math.max(...used.map((o) => o.reinforceRungs)),
+        recovered: used.filter((o) => o.outcome === 'target').length,
+        stillOpen: used.filter((o) => o.outcome === 'open').length,
+        pnlUsd: parseFloat(used.reduce((s, o) => s + o.pnlUsd, 0).toFixed(2)),
+        investedUsd: parseFloat(used.reduce((s, o) => s + (o.investedUsd ?? 0), 0).toFixed(2)),
     };
 }
 
@@ -659,6 +795,55 @@ function countBaseVsEvolvedExits(filledOccurrences) {
     const targetBase = filledOccurrences.filter(o => o.outcome === 'target' && (o.targetSteps ?? 0) === 0).length;
     const targetEvolved = filledOccurrences.filter(o => o.outcome === 'target' && (o.targetSteps ?? 0) > 0).length;
     return { stopBase, stopEvolved, targetBase, targetEvolved };
+}
+
+/**
+ * "E se o MACD confirmasse cada entrada?" — análise contrafactual do acordeão de Estatísticas
+ * (Momentum RSI). Roda SEMPRE, independente do filtro `macdFilter` estar ligado: pra cada trade
+ * FECHADO (alvo/stop) já simulado, olha o histograma do MACD (12/26/9) NO PRÓPRIO intervalo do
+ * sinal no instante do cruzamento (o.macdHistAtSignal, anexado no loop de ocorrências) e separa:
+ *   - blocked  → histograma <= 0 no sinal → o MACD teria VETADO a entrada
+ *   - allowed  → histograma  > 0 no sinal → o MACD teria CONFIRMADO a entrada
+ * De cada grupo conta quantos foram stop e quantos foram alvo, e o P&L. Assim dá pra responder:
+ * quantos stops o MACD evitaria (blocked.stops), quantos ganhos ele confirmaria (allowed.targets)
+ * e quantos ganhos ele deixaria passar (blocked.targets). Trades sem valor de MACD ainda
+ * (warmup do indicador no começo da amostra) entram em `warmupSkipped` e ficam de fora — fail-open,
+ * igual o filtro real faz.
+ */
+function computeMacdWhatIf(occurrences, interval) {
+    const closed = occurrences.filter(o => o.filled && (o.outcome === 'target' || o.outcome === 'stop'));
+    const blocked = { total: 0, stops: 0, targets: 0, pnlUsd: 0 };
+    const allowed = { total: 0, stops: 0, targets: 0, pnlUsd: 0 };
+    let warmupSkipped = 0;
+    for (const o of closed) {
+        if (o.macdHistAtSignal == null) { warmupSkipped++; continue; }
+        const g = o.macdHistAtSignal > 0 ? allowed : blocked;
+        g.total++;
+        if (o.outcome === 'stop') g.stops++; else g.targets++;
+        g.pnlUsd += o.pnlUsd;
+    }
+    blocked.pnlUsd = parseFloat(blocked.pnlUsd.toFixed(2));
+    allowed.pnlUsd = parseFloat(allowed.pnlUsd.toFixed(2));
+    const evaluated = blocked.total + allowed.total;
+    const targetsAll = blocked.targets + allowed.targets;
+    return {
+        interval,
+        macdPeriods: `${MACD_FAST_PERIOD}/${MACD_SLOW_PERIOD}/${MACD_SIGNAL_PERIOD}`,
+        closedTrades: closed.length,
+        evaluated,
+        warmupSkipped,
+        blocked,
+        allowed,
+        stopsAvoided: blocked.stops,
+        gainsBlocked: blocked.targets,
+        gainsConfirmed: allowed.targets,
+        stopsKept: allowed.stops,
+        pnlWithoutMacdUsd: parseFloat((blocked.pnlUsd + allowed.pnlUsd).toFixed(2)),
+        pnlWithMacdUsd: allowed.pnlUsd,
+        pnlBlockedUsd: blocked.pnlUsd,
+        winRateWithoutMacdPct: evaluated > 0 ? parseFloat(((targetsAll / evaluated) * 100).toFixed(1)) : 0,
+        winRateWithMacdPct: allowed.total > 0 ? parseFloat(((allowed.targets / allowed.total) * 100).toFixed(1)) : 0,
+    };
 }
 
 /**
@@ -842,6 +1027,19 @@ function countBaseVsEvolvedExits(filledOccurrences) {
  *   teto) é calculado.
  * @param {number} [options.entriesDayRange.min=2]
  * @param {number|null} [options.entriesDayRange.max=null]
+ * @param {object} [options.reinforceOnStop]  "Reforço no stop" (só backtest/Estatísticas): quando
+ *   a compra inicial bate o stop, NÃO vende — adiciona uma nova compra a mercado (no preço do
+ *   stop) e passa a operar um bracket −`addDropPct`% / +`exitRisePct`% a partir dela. Cada nova
+ *   queda de `addDropPct`% empilha mais uma compra do MESMO tamanho e reposiciona o bracket; o
+ *   1º +`exitRisePct`% de qualquer degrau vende TODAS as compras. Sem limite de degraus (o
+ *   `maxRungs` é só trava de segurança). Trades assim não têm mais outcome 'stop' — viram
+ *   'target' (recuperou) ou 'open' (pilha ainda no vermelho, não realizada). Ver
+ *   runReinforcementLadder. O P&L/taxa de acerto refletem a pilha inteira (retorno sobre o
+ *   capital total empregado). Independente do modo de alvo/stop da compra inicial.
+ * @param {boolean} [options.reinforceOnStop.enabled=false]
+ * @param {number}  [options.reinforceOnStop.addDropPct=10]   Queda % abaixo do último aporte que dispara o próximo reforço (2–30).
+ * @param {number}  [options.reinforceOnStop.exitRisePct=15]  Alta % acima do último aporte que encerra toda a pilha (2–50).
+ * @param {number}  [options.reinforceOnStop.maxRungs=100]    Trava de segurança do nº de reforços (1–100).
  */
 async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
     const {
@@ -870,7 +1068,14 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
         targetMode      = null,
         hardTakeProfit  = null,
         entriesDayRange = null,
+        reinforceOnStop = null,
     } = options;
+
+    // "Reforço no stop" (averaging-down ladder) — ver runReinforcementLadder / JSDoc acima.
+    const rfEnabled = !!reinforceOnStop?.enabled;
+    const rfAddDropPct = Math.max(2, Math.min(30, Number(reinforceOnStop?.addDropPct ?? 10)));
+    const rfExitRisePct = Math.max(2, Math.min(50, Number(reinforceOnStop?.exitRisePct ?? 15)));
+    const rfMaxRungs = Math.max(1, Math.min(100, Math.round(Number(reinforceOnStop?.maxRungs ?? 100))));
 
     // Teto de lucro (venda forçada em +pct%) — mesmo do bot (exit.hardTakeProfit). 0/null = off.
     const hardTakeProfitPct = hardTakeProfit?.enabled
@@ -1157,6 +1362,24 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
     const rsiValues = RSI.calculate({ values: closes, period: RSI_PERIOD });
     const offset = RSI_PERIOD;
 
+    // Histograma do MACD (12/26/9) no PRÓPRIO intervalo do sinal — calculado SEMPRE, só pra a
+    // análise contrafactual do acordeão "E se o MACD confirmasse?" (computeMacdWhatIf). Não
+    // interfere no filtro macdFilter (esse tem intervalo próprio e usa macdSeries/macdCandles).
+    // macdWhatIfSeries[k] ↔ candles[k + macdWhatIfOffset].
+    let macdWhatIfSeries = [];
+    let macdWhatIfOffset = 0;
+    if (closes.length > MACD_WARMUP_BARS) {
+        macdWhatIfSeries = MACD.calculate({
+            values: closes,
+            fastPeriod: MACD_FAST_PERIOD,
+            slowPeriod: MACD_SLOW_PERIOD,
+            signalPeriod: MACD_SIGNAL_PERIOD,
+            SimpleMAOscillator: false,
+            SimpleMASignal: false,
+        });
+        macdWhatIfOffset = closes.length - macdWhatIfSeries.length;
+    }
+
     // ATR de Wilder no PRÓPRIO intervalo do sinal — só pro stop contínuo modo 'atrTrail'.
     // atrSeries[k] corresponde a candles[k + atrOffset]; resolvido por sinal via atrPct abaixo.
     let atrSeries = [];
@@ -1415,8 +1638,19 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
             trailingTarget: targetModeResolved === 'continuous'
                 ? { coinStepPct: trailingTargetCoinStepPct, stepPct: trailingTargetStepPct }
                 : null,
+            reinforceOnStop: rfEnabled
+                ? { enabled: true, addDropPct: rfAddDropPct, exitRisePct: rfExitRisePct, maxRungs: rfMaxRungs }
+                : null,
         });
-        occurrences.push(buildOccurrence(signalCandle, signalPrice, signalRsi, resolved, positionSizeUsd, cloudZone, signalRsi1h, srZone, srLines));
+        const occ = buildOccurrence(signalCandle, signalPrice, signalRsi, resolved, positionSizeUsd, cloudZone, signalRsi1h, srZone, srLines);
+        // Histograma do MACD no candle do sinal (intervalo próprio) — só pro acordeão
+        // contrafactual "E se o MACD confirmasse?" (computeMacdWhatIf). null = ainda em warmup.
+        const mk = idx - macdWhatIfOffset;
+        const macdEntry = mk >= 0 && mk < macdWhatIfSeries.length ? macdWhatIfSeries[mk] : null;
+        occ.macdHistAtSignal = macdEntry && macdEntry.histogram != null
+            ? parseFloat(macdEntry.histogram.toFixed(8))
+            : null;
+        occurrences.push(occ);
     }
 
     // "Remover saída aberta": tira da amostra (tabela E agregados) os sinais ainda não resolvidos
@@ -1432,7 +1666,9 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
     const closedCount = totalTarget + totalStop;
     const baseVsEvolved = countBaseVsEvolvedExits(filledOccurrences);
     const winRatePct = closedCount > 0 ? parseFloat(((totalTarget / closedCount) * 100).toFixed(1)) : 0;
-    const totalInvestedUsd = parseFloat((filledOccurrences.length * positionSizeUsd).toFixed(2));
+    const totalInvestedUsd = parseFloat(
+        filledOccurrences.reduce((s, o) => s + (o.investedUsd ?? positionSizeUsd), 0).toFixed(2),
+    );
     const totalPnlUsd = parseFloat(filledOccurrences.reduce((s, o) => s + o.pnlUsd, 0).toFixed(2));
     const avgPnlPct = filledOccurrences.length > 0
         ? parseFloat((filledOccurrences.reduce((s, o) => s + o.pnlPct, 0) / filledOccurrences.length).toFixed(2))
@@ -1483,6 +1719,7 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
         prevCandleStop: pcsEnabled,
         adxFilter: adxEnabled ? { interval: adxInterval, minAdx: adxMinAdx } : null,
         macdFilter: macdEnabled ? { interval: macdInterval } : null,
+        macdWhatIf: computeMacdWhatIf(finalOccurrences, interval),
         higherRsiFilter: higherRsiEnabled ? { interval: REF_RSI_INTERVAL, minRsi: higherRsiMin } : null,
         higherRsiBlockedCount: higherRsiEnabled ? higherRsiBlocked : 0,
         rsi5mFilter: rsi5mEnabled ? { interval: '5m', threshold: rsi5mThreshold } : null,
@@ -1514,6 +1751,8 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
             stepPct: trailingTargetStepPct,
         } : null,
         hardTakeProfit: hardTakeProfitPct > 0 ? { pct: hardTakeProfitPct } : null,
+        reinforceOnStop: rfEnabled ? { addDropPct: rfAddDropPct, exitRisePct: rfExitRisePct } : null,
+        reinforceStats: rfEnabled ? computeReinforceStats(filledOccurrences) : null,
         dailyEntryStats: computeDailyEntryStats(filledOccurrences, positionSizeUsd, entriesDayRange),
         tradeDuration: computeAvgTradeDurationMs(filledOccurrences),
         occurrences: finalOccurrences,
@@ -1522,6 +1761,9 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
 
 module.exports = analyseRsiThresholdBacktest;
 module.exports.countBaseVsEvolvedExits = countBaseVsEvolvedExits;
+module.exports.computeMacdWhatIf = computeMacdWhatIf;
+module.exports.computeReinforceStats = computeReinforceStats;
+module.exports.runReinforcementLadder = runReinforcementLadder;
 module.exports.computeCloudZoneStats = computeCloudZoneStats;
 module.exports.computeSupportResistanceZoneStats = computeSupportResistanceZoneStats;
 module.exports.computeRsi1hBreakdown = computeRsi1hBreakdown;

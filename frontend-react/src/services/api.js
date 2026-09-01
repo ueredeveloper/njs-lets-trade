@@ -197,10 +197,10 @@ function appendSupportResistanceParams(params, supportResistance) {
 export async function fetchRsiThresholdBacktest(symbol, interval, options = {}) {
   const {
     rsiThreshold = 70, pullbackPct = 0, targetPct = 5, stopLossPct = 5, positionSizeUsd = 40,
-    source = null, candleCount = null, lookbackHours = 0, bandWidth = null, prevDayCloud = null,
+    source = null, candleCount = null, lookbackHours = 0, bandWidth = null,
     supportResistance = null,
     minVolumeUsdt = 0, excludeOpenExits = false, prevCandleStop = false,
-    adxFilter = null, macdFilter = null, higherRsiFilter = null, rsi5mFilter = null, newHighFilter = null, hardTakeProfit = null, trailingStop = null, trailingTarget = null, targetMode = null, entriesDayRange = null,
+    adxFilter = null, macdFilter = null, higherRsiFilter = null, rsi5mFilter = null, newHighFilter = null, hardTakeProfit = null, reinforceOnStop = null, trailingStop = null, trailingTarget = null, targetMode = null, entriesDayRange = null,
   } = options;
   const params = new URLSearchParams({
     symbol, interval, rsiThreshold, pullbackPct, targetPct, stopLossPct, positionSizeUsd,
@@ -215,13 +215,6 @@ export async function fetchRsiThresholdBacktest(symbol, interval, options = {}) 
     if (bandWidth.period) params.set('bandWidthPeriod', String(bandWidth.period));
     if (bandWidth.stdDev) params.set('bandWidthStdDev', String(bandWidth.stdDev));
     if (bandWidth.lookback) params.set('bandWidthLookback', String(bandWidth.lookback));
-  }
-  if (prevDayCloud?.enabled) {
-    params.set('prevDayCloudEnabled', '1');
-    params.set('prevDayCloudMaxPct', String(prevDayCloud.maxPct ?? 100));
-    params.set('prevDayCloudInterval', prevDayCloud.interval ?? '1d');
-    params.set('prevDayCloudCandleCount', String(prevDayCloud.candleCount ?? 1));
-    params.set('prevDayCloudUseHighLow', prevDayCloud.useHighLow === false ? '0' : '1');
   }
   appendSupportResistanceParams(params, supportResistance);
   if (minVolumeUsdt) params.set('minVolumeUsdt', String(minVolumeUsdt));
@@ -252,6 +245,11 @@ export async function fetchRsiThresholdBacktest(symbol, interval, options = {}) 
   if (hardTakeProfit?.enabled) {
     params.set('hardTakeProfitEnabled', '1');
     params.set('hardTakeProfitPct', String(hardTakeProfit.pct ?? 15));
+  }
+  if (reinforceOnStop?.enabled) {
+    params.set('reinforceOnStopEnabled', '1');
+    params.set('reinforceAddDropPct', String(reinforceOnStop.addDropPct ?? 10));
+    params.set('reinforceExitRisePct', String(reinforceOnStop.exitRisePct ?? 15));
   }
   appendTrailingStopParams(params, trailingStop, stopLossPct);
   if (targetMode && targetMode !== 'fixed') params.set('targetMode', targetMode);
@@ -275,8 +273,8 @@ export async function fetchRsiThresholdBacktestMarket(interval, options = {}) {
   const {
     rsiThreshold = 70, pullbackPct = 0, targetPct = 5, stopLossPct = 5, positionSizeUsd = 40,
     source = null, candleCount = null, lookbackHours = 0, bandWidth = null, maxRows = null,
-    prevDayCloud = null, supportResistance = null, minVolumeUsdt = 0, excludeOpenExits = false, prevCandleStop = false,
-    adxFilter = null, macdFilter = null, higherRsiFilter = null, rsi5mFilter = null, newHighFilter = null, hardTakeProfit = null, trailingStop = null, trailingTarget = null, targetMode = null, entriesDayRange = null,
+    supportResistance = null, minVolumeUsdt = 0, excludeOpenExits = false, prevCandleStop = false,
+    adxFilter = null, macdFilter = null, higherRsiFilter = null, rsi5mFilter = null, newHighFilter = null, hardTakeProfit = null, reinforceOnStop = null, trailingStop = null, trailingTarget = null, targetMode = null, entriesDayRange = null,
   } = options;
   const params = new URLSearchParams({
     interval, rsiThreshold, pullbackPct, targetPct, stopLossPct, positionSizeUsd,
@@ -292,13 +290,6 @@ export async function fetchRsiThresholdBacktestMarket(interval, options = {}) {
     if (bandWidth.period) params.set('bandWidthPeriod', String(bandWidth.period));
     if (bandWidth.stdDev) params.set('bandWidthStdDev', String(bandWidth.stdDev));
     if (bandWidth.lookback) params.set('bandWidthLookback', String(bandWidth.lookback));
-  }
-  if (prevDayCloud?.enabled) {
-    params.set('prevDayCloudEnabled', '1');
-    params.set('prevDayCloudMaxPct', String(prevDayCloud.maxPct ?? 100));
-    params.set('prevDayCloudInterval', prevDayCloud.interval ?? '1d');
-    params.set('prevDayCloudCandleCount', String(prevDayCloud.candleCount ?? 1));
-    params.set('prevDayCloudUseHighLow', prevDayCloud.useHighLow === false ? '0' : '1');
   }
   appendSupportResistanceParams(params, supportResistance);
   if (minVolumeUsdt) params.set('minVolumeUsdt', String(minVolumeUsdt));
@@ -329,6 +320,11 @@ export async function fetchRsiThresholdBacktestMarket(interval, options = {}) {
   if (hardTakeProfit?.enabled) {
     params.set('hardTakeProfitEnabled', '1');
     params.set('hardTakeProfitPct', String(hardTakeProfit.pct ?? 15));
+  }
+  if (reinforceOnStop?.enabled) {
+    params.set('reinforceOnStopEnabled', '1');
+    params.set('reinforceAddDropPct', String(reinforceOnStop.addDropPct ?? 10));
+    params.set('reinforceExitRisePct', String(reinforceOnStop.exitRisePct ?? 15));
   }
   appendTrailingStopParams(params, trailingStop, stopLossPct);
   if (targetMode && targetMode !== 'fixed') params.set('targetMode', targetMode);

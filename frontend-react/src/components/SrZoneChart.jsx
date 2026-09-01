@@ -7,8 +7,8 @@ import StatsAccordion from './StatsAccordion';
  * Distribuição dos sinais de RSI Momentum pelas 5 faixas do canal Suporte→Resistência escolhido
  * (faixa 1 = colado no suporte de entrada / "barato", faixa 5 = colado na resistência de saída /
  * "caro" — ver classifySrZone/computeSupportResistanceZoneStats em
- * backend/utils/analyseRsiThresholdBacktest.js). Mesmo formato do CloudZoneChart. Aparece na aba
- * Estatísticas → Momentum RSI quando a seção "S/R" está ligada.
+ * backend/utils/analyseRsiThresholdBacktest.js). Aparece na aba Estatísticas → Momentum RSI
+ * quando a seção "S/R" está ligada.
  */
 
 // Faixas de distância % do preço de entrada ACIMA da linha de suporte escolhida

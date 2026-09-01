@@ -5,9 +5,9 @@ import {
   fetchVwapBandsStats, saveRsiMomentumStatsSearch, getRsiMomentumStatsSearches, clearRsiMomentumStatsSearches,
 } from '../services/api';
 import Tooltip from './Tooltip';
-import CloudZoneChart from './CloudZoneChart';
 import SrZoneChart from './SrZoneChart';
 import Rsi1hBreakdownChart from './Rsi1hBreakdownChart';
+import MacdWhatIfAccordion from './MacdWhatIfAccordion';
 import StatsAccordion from './StatsAccordion';
 import { useI18n } from '../i18n';
 import { CHART_VIEW } from '../utils/chartView';
@@ -299,22 +299,8 @@ const RSI_MOM_BANDWIDTH_OPTIONS = [1, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.
 /** Valores selecionáveis do campo "Lookback" do filtro de largura de banda — quantos candles
  *  fechados entram no cálculo da largura média dos ciclos Bollinger. */
 const RSI_MOM_BANDWIDTH_LOOKBACK_OPTIONS = [300, 200, 100];
-/** Valores selecionáveis do filtro "Nuvem D-1" — % da altura da nuvem (candle 1d anterior),
- *  contado do fundo (lower) pra cima, até onde o preço do sinal pode ocupar (limite superior).
- *  100% = até o topo da nuvem inteira (entre abertura e fechamento de ontem); valores menores
- *  restringem até a parte de baixo dela. Preço abaixo da nuvem inteira também libera (desconto
- *  maior ainda) — ver checkPrevDayCloudFilter em backend/utils/analyseRsiThresholdBacktest.js. */
-const RSI_MOM_CLOUD_PCT_OPTIONS = [50, 60, 70, 80, 90, 100];
-/** Valores selecionáveis do intervalo da nuvem D-1 — mesmo seletor do gráfico (ver
- *  prevDayCloudInterval em CandlestickChart.jsx), padrão 4h. Com source='gate' e um intervalo sem
- *  candle nativo lá, o backend cai pra '1d'. */
-const RSI_MOM_CLOUD_INTERVAL_OPTIONS = INTERVALS;
-/** Valores selecionáveis da quantidade de candles do envelope da nuvem D-1 — mesmo seletor do
- *  gráfico (ver prevDayCloudCandleCount em CandlestickChart.jsx), padrão 3. 1 = só o candle
- *  anterior; N>1 = envelope [menor open/close, maior open/close] dos últimos N candles. */
-const RSI_MOM_CLOUD_CANDLE_COUNT_OPTIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
-/** Filtro/alvo por Suporte/Resistência (mesmo detectSupportResistance do gráfico) — independente
- *  da nuvem D-1. Entrada = filtro de desconto (preço na parte baixa do canal suporte→resistência);
+/** Filtro/alvo por Suporte/Resistência (mesmo detectSupportResistance do gráfico).
+ *  Entrada = filtro de desconto (preço na parte baixa do canal suporte→resistência);
  *  saída = a resistência escolhida vira o alvo. Ver options.supportResistance em
  *  backend/utils/analyseRsiThresholdBacktest.js. */
 const RSI_MOM_SR_INTERVAL_OPTIONS = INTERVALS;
@@ -355,6 +341,10 @@ const RSI_MOM_TARGET_MODE_OPTIONS = ['fixed', 'continuous', 'off'];
 const RSI_MOM_STOP_MODE_OPTIONS = ['fixed', 'continuous', 'twoPhase', 'peakTrail', 'atrTrail'];
 /** Teto de lucro (venda forçada em +X%) — exit.hardTakeProfit. Independente do modo do alvo. */
 const RSI_MOM_HARD_TP_OPTIONS = [8, 10, 12, 15, 18, 20, 25, 30, 40, 50];
+/** "Reforço no stop": queda % abaixo do último aporte que dispara mais uma compra, e alta % que
+ *  encerra toda a pilha (ver options.reinforceOnStop em analyseRsiThresholdBacktest.js). */
+const RSI_MOM_REINFORCE_DROP_OPTIONS = [5, 8, 10, 12, 15, 20];
+const RSI_MOM_REINFORCE_RISE_OPTIONS = [8, 10, 12, 15, 18, 20, 25];
 /** Lucro travado (%) que separa a fase A da B na Escada Dupla (0 = breakeven). */
 const RSI_MOM_PIVOT_PCT_OPTIONS = [0, 0.5, 1, 1.5, 2, 3];
 /** Ganho do pico (%) que troca da fase apertada pra solta na Trilha do Topo / Trilha ATR. */
@@ -372,45 +362,43 @@ const RSI_MOM_ENTRIES_RANGE_MAX_OPTIONS = [null, 3, 5, 7, 10];
 
 const RSI_MOM_PREFS_KEY = 'lets_trade_stats_rsi_momentum_prefs';
 const RSI_MOM_DEFAULT_PREFS = {
-  rsiThreshold: 70,
+  rsiThreshold: 69,
   pullbackPct: 0,
-  targetMode: 'fixed',
-  targetPct: 5,
-  hardTakeProfitEnabled: false,
+  targetMode: 'off',
+  targetPct: 10,
+  hardTakeProfitEnabled: true,
   hardTakeProfitPct: 15,
-  stopMode: 'continuous',
-  stopLossPct: 5,
+  stopMode: 'fixed',
+  stopLossPct: 10,
   positionSizeUsd: 40,
   lookbackHours: 0,
-  bandWidthEnabled: false,
+  bandWidthEnabled: true,
   bandWidthInterval: '5m',
-  bandWidthMinPct: 2,
+  bandWidthMinPct: 1.5,
   bandWidthLookback: 300,
-  prevDayCloudEnabled: false,
-  prevDayCloudMaxPct: 100,
-  prevDayCloudInterval: '4h',
-  prevDayCloudCandleCount: 3,
-  prevDayCloudUseHighLow: true,
-  srEnabled: false,
+  srEnabled: true,
   srInterval: '4h',
-  srCandleCount: 200,
+  srCandleCount: 50,
   srEntrySupportRank: 1,
-  srExitResistanceRank: 1,
-  srEntryMaxPct: 10,
-  minVolumeUsdt: 0,
-  excludeOpenExits: false,
+  srExitResistanceRank: 3,
+  srEntryMaxPct: 5,
+  minVolumeUsdt: 1000000,
+  excludeOpenExits: true,
   adxFilterEnabled: false,
   adxFilterInterval: '1h',
   adxFilterMinAdx: 25,
-  macdFilterEnabled: false,
+  macdFilterEnabled: true,
   macdFilterInterval: '1h',
-  higherRsiFilterEnabled: false,
-  higherRsiFilterMinRsi: 50,
-  rsi5mFilterEnabled: false,
+  higherRsiFilterEnabled: true,
+  higherRsiFilterMinRsi: 60,
+  rsi5mFilterEnabled: true,
   rsi5mFilterThreshold: 70,
   newHighFilterEnabled: false,
   newHighFilterLookback: 20,
   newHighFilterMarginPct: 2,
+  reinforceOnStopEnabled: true,
+  reinforceAddDropPct: 10,
+  reinforceExitRisePct: 15,
   trailingCoinStepPct: 3,
   trailingStopStepPct: 2,
   trailingTargetCoinStepPct: 3,
@@ -1190,13 +1178,6 @@ function RsiMomentumStats({ autoCalc }) {
           minPct: p.bandWidthMinPct,
           lookback: p.bandWidthLookback,
         } : null,
-        prevDayCloud: p.prevDayCloudEnabled ? {
-          enabled: true,
-          maxPct: p.prevDayCloudMaxPct,
-          interval: p.prevDayCloudInterval,
-          candleCount: p.prevDayCloudCandleCount,
-          useHighLow: p.prevDayCloudUseHighLow,
-        } : null,
         supportResistance: p.srEnabled ? {
           enabled: true,
           interval: p.srInterval,
@@ -1228,6 +1209,11 @@ function RsiMomentumStats({ autoCalc }) {
           enabled: true,
           lookback: p.newHighFilterLookback,
           marginPct: p.newHighFilterMarginPct,
+        } : null,
+        reinforceOnStop: p.reinforceOnStopEnabled ? {
+          enabled: true,
+          addDropPct: p.reinforceAddDropPct,
+          exitRisePct: p.reinforceExitRisePct,
         } : null,
         entriesDayRange: p.entriesDayRangeMax != null ? { min: 2, max: p.entriesDayRangeMax } : null,
       };
@@ -1649,58 +1635,8 @@ function RsiMomentumStats({ autoCalc }) {
           </>
         )}
 
-        {/* Filtro pela nuvem D-1 (candle diário anterior — mesmo indicador do gráfico) */}
-        <div className="flex items-center gap-1 shrink-0 pb-1" title={t('stats.tip.prevday_cloud_filter')}>
-          <span className="hidden md:inline text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.prevday_cloud_filter')}</span>
-          <button
-            type="button"
-            onClick={() => patchPrefs({ prevDayCloudEnabled: !prefs.prevDayCloudEnabled })}
-            className={`relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${prefs.prevDayCloudEnabled ? 'bg-p4' : 'bg-p3/40'}`}
-          >
-            <span className={`inline-block h-3 w-3 rounded-full bg-white shadow transition-transform ${prefs.prevDayCloudEnabled ? 'translate-x-3' : 'translate-x-0'}`} />
-          </button>
-        </div>
-
-        {prefs.prevDayCloudEnabled && (
-          <>
-            <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.prevday_cloud_max')}>
-              <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.prevday_cloud_max')}</label>
-              <select className={inp}
-                value={prefs.prevDayCloudMaxPct}
-                onChange={(e) => patchPrefs({ prevDayCloudMaxPct: Number(e.target.value) })}>
-                {RSI_MOM_CLOUD_PCT_OPTIONS.map((v) => <option key={v} value={v}>{v}%</option>)}
-              </select>
-            </div>
-            <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.prevday_cloud_interval')}>
-              <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.prevday_cloud_interval')}</label>
-              <select className={inp}
-                value={prefs.prevDayCloudInterval}
-                onChange={(e) => patchPrefs({ prevDayCloudInterval: e.target.value })}>
-                {RSI_MOM_CLOUD_INTERVAL_OPTIONS.map((v) => <option key={v} value={v}>{v}</option>)}
-              </select>
-            </div>
-            <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.prevday_cloud_candle_count')}>
-              <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.prevday_cloud_candle_count')}</label>
-              <select className={inp}
-                value={prefs.prevDayCloudCandleCount}
-                onChange={(e) => patchPrefs({ prevDayCloudCandleCount: Number(e.target.value) })}>
-                {RSI_MOM_CLOUD_CANDLE_COUNT_OPTIONS.map((v) => <option key={v} value={v}>{`x${v}`}</option>)}
-              </select>
-            </div>
-            <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.prevday_cloud_source')}>
-              <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.prevday_cloud_source')}</label>
-              <select className={inp}
-                value={prefs.prevDayCloudUseHighLow ? 'hl' : 'oc'}
-                onChange={(e) => patchPrefs({ prevDayCloudUseHighLow: e.target.value === 'hl' })}>
-                <option value="oc">{t('stats.prevday_cloud_source_oc')}</option>
-                <option value="hl">{t('stats.prevday_cloud_source_hl')}</option>
-              </select>
-            </div>
-          </>
-        )}
-
-        {/* Filtro/alvo por Suporte/Resistência (mesmo detectSupportResistance do gráfico) —
-            independente da nuvem D-1. Entrada = filtro de desconto; saída = alvo na resistência. */}
+        {/* Filtro/alvo por Suporte/Resistência (mesmo detectSupportResistance do gráfico).
+            Entrada = filtro de desconto; saída = alvo na resistência. */}
         <div className="flex items-center gap-1 shrink-0 pb-1" title={t('stats.tip.sr_filter')}>
           <span className="hidden md:inline text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.sr_filter')}</span>
           <button
@@ -1940,6 +1876,41 @@ function RsiMomentumStats({ autoCalc }) {
             </div>
           </>
         )}
+
+        {/* "Reforço no stop": ao bater o stop, NÃO vende — adiciona nova compra a mercado e opera
+            um bracket −X% / +Y% a partir dela, empilhando um degrau a cada nova queda de X% e
+            vendendo TODAS as compras no 1º +Y%. Sem limite de degraus. Ver options.reinforceOnStop. */}
+        <div className="flex items-center gap-1 shrink-0 pb-1" title={t('stats.tip.reinforce_on_stop')}>
+          <span className="hidden md:inline text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.reinforce_on_stop')}</span>
+          <button
+            type="button"
+            onClick={() => patchPrefs({ reinforceOnStopEnabled: !prefs.reinforceOnStopEnabled })}
+            className={`relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${prefs.reinforceOnStopEnabled ? 'bg-p4' : 'bg-p3/40'}`}
+          >
+            <span className={`inline-block h-3 w-3 rounded-full bg-white shadow transition-transform ${prefs.reinforceOnStopEnabled ? 'translate-x-3' : 'translate-x-0'}`} />
+          </button>
+        </div>
+
+        {prefs.reinforceOnStopEnabled && (
+          <>
+            <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.reinforce_drop')}>
+              <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.reinforce_drop')}</label>
+              <select className={inp}
+                value={prefs.reinforceAddDropPct}
+                onChange={(e) => patchPrefs({ reinforceAddDropPct: Number(e.target.value) })}>
+                {RSI_MOM_REINFORCE_DROP_OPTIONS.map((v) => <option key={v} value={v}>{`−${v}%`}</option>)}
+              </select>
+            </div>
+            <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.reinforce_rise')}>
+              <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.reinforce_rise')}</label>
+              <select className={inp}
+                value={prefs.reinforceExitRisePct}
+                onChange={(e) => patchPrefs({ reinforceExitRisePct: Number(e.target.value) })}>
+                {RSI_MOM_REINFORCE_RISE_OPTIONS.map((v) => <option key={v} value={v}>{`+${v}%`}</option>)}
+              </select>
+            </div>
+          </>
+        )}
        </div>
       </StatsArea>
 
@@ -2137,10 +2108,22 @@ function RsiMomentumStats({ autoCalc }) {
                   tooltip={t('stats.tip.blocked_by_new_high')}
                 />
               )}
+              {result.reinforceOnStop && (
+                <SummaryCard
+                  label={t('stats.card.reinforce_on_stop')}
+                  value={
+                    result.reinforceStats
+                      ? `${result.reinforceStats.trades} trade(s) · ${result.reinforceStats.rungsTotal} reforço(s) · ${result.reinforceStats.stillOpen} aberto(s)`
+                      : `−${result.reinforceOnStop.addDropPct}% / +${result.reinforceOnStop.exitRisePct}% · 0`
+                  }
+                  highlight={result.reinforceStats?.stillOpen > 0 ? 'text-red-600' : 'text-amber-500'}
+                  tooltip={t('stats.tip.reinforce_on_stop')}
+                />
+              )}
             </div>
 
-            {prefs.prevDayCloudEnabled && result.cloudZoneStats?.zones?.length > 0 && (
-              <CloudZoneChart stats={result.cloudZoneStats} prevDayCloud={result.prevDayCloud} />
+            {!prefs.allCoins && result.macdWhatIf && result.totalFilled > 0 && (
+              <MacdWhatIfAccordion stats={result.macdWhatIf} />
             )}
 
             {prefs.srEnabled && result.supportResistanceStats?.zones?.length > 0 && (
@@ -2273,7 +2256,12 @@ function RsiMomentumStats({ autoCalc }) {
                                 {o.entryPrice != null ? `$${o.entryPrice.toLocaleString('en-US', { maximumFractionDigits: 6 })}` : '—'}
                               </td>
                             )}
-                            <td className={`py-0.5 pr-2 text-[10px] sm:text-xs whitespace-nowrap ${outcome.className}`}>{t(outcome.key)}</td>
+                            <td className={`py-0.5 pr-2 text-[10px] sm:text-xs whitespace-nowrap ${outcome.className}`}>
+                              {t(outcome.key)}
+                              {o.reinforceRungs > 0 && (
+                                <span className="ml-1 text-amber-500" title={t('stats.tip.reinforce_badge')}>⇈{o.reinforceRungs}</span>
+                              )}
+                            </td>
                             <td className="py-0.5 pr-2 text-[10px] sm:text-xs font-mono whitespace-nowrap">{o.exitDate ? formatDate(o.exitDate) : '—'}</td>
                             <td className={`py-0.5 text-[10px] sm:text-xs text-right font-bold ${o.pnlUsd == null ? 'text-p5/30' : pos ? 'text-green-600' : 'text-red-600'}`}>
                               {o.pnlUsd != null ? `${pos ? '+' : ''}$${o.pnlUsd} (${pos ? '+' : ''}${o.pnlPct}%)` : '—'}

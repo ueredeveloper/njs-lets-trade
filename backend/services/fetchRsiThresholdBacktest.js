@@ -11,7 +11,6 @@ const DEFAULT_USER_ID = process.env.SUPABASE_DEFAULT_USER_ID ?? 'ueredeveloper';
 // GET /services/rsi-threshold-backtest?symbol=BTCUSDT&interval=15m&rsiThreshold=70
 //     &pullbackPct=-2&targetPct=5&stopLossPct=5&positionSizeUsd=40
 //     &bandWidthEnabled=1&bandWidthInterval=5m&bandWidthMinPct=2
-//     &prevDayCloudEnabled=1&prevDayCloudMaxPct=70&prevDayCloudInterval=1d&prevDayCloudCandleCount=1
 //     &minVolumeUsdt=1000000&excludeOpenExits=1
 //     &prevCandleStopEnabled=1
 //     &adxFilterEnabled=1&adxFilterInterval=1h&adxFilterMinAdx=25
@@ -28,8 +27,6 @@ router.get('/rsi-threshold-backtest', async (req, res) => {
         rsiThreshold, pullbackPct, targetPct, stopLossPct, positionSizeUsd,
         bandWidthEnabled, bandWidthInterval, bandWidthPeriod, bandWidthStdDev,
         bandWidthLookback, bandWidthMinPct,
-        prevDayCloudEnabled, prevDayCloudMaxPct, prevDayCloudInterval, prevDayCloudCandleCount,
-        prevDayCloudUseHighLow,
         srEnabled, srInterval, srCandleCount, srEntrySupportRank, srExitResistanceRank, srEntryMaxPct,
         minVolumeUsdt, excludeOpenExits,
         prevCandleStopEnabled,
@@ -39,6 +36,7 @@ router.get('/rsi-threshold-backtest', async (req, res) => {
         rsi5mFilterEnabled, rsi5mFilterThreshold,
         newHighFilterEnabled, newHighFilterLookback, newHighFilterMarginPct,
         hardTakeProfitEnabled, hardTakeProfitPct,
+        reinforceOnStopEnabled, reinforceAddDropPct, reinforceExitRisePct,
         targetMode, trailingTargetCoinStepPct, trailingTargetStepPct,
         entriesDayRangeMin, entriesDayRangeMax,
     } = req.query;
@@ -69,14 +67,6 @@ router.get('/rsi-threshold-backtest', async (req, res) => {
             stdDev:   bandWidthStdDev   ? parseFloat(bandWidthStdDev)     : 2,
             lookback: bandWidthLookback ? parseInt(bandWidthLookback, 10) : 300,
             minPct:   bandWidthMinPct   ? parseFloat(bandWidthMinPct)     : 2,
-        } : null,
-        prevDayCloud: prevDayCloudEnabled === '1' ? {
-            enabled: true,
-            maxPct:  prevDayCloudMaxPct ? parseFloat(prevDayCloudMaxPct) : 100,
-            interval: prevDayCloudInterval ?? '4h',
-            candleCount: prevDayCloudCandleCount ? parseInt(prevDayCloudCandleCount, 10) : 3,
-            useHighLow: prevDayCloudUseHighLow !== '0', // padrão máx/mín; só '0' explícito desliga
-
         } : null,
         supportResistance: srEnabled === '1' ? {
             enabled: true,
@@ -114,6 +104,11 @@ router.get('/rsi-threshold-backtest', async (req, res) => {
         hardTakeProfit: hardTakeProfitEnabled === '1' ? {
             enabled: true,
             pct:     hardTakeProfitPct ? parseFloat(hardTakeProfitPct) : 15,
+        } : null,
+        reinforceOnStop: reinforceOnStopEnabled === '1' ? {
+            enabled:     true,
+            addDropPct:  reinforceAddDropPct  ? parseFloat(reinforceAddDropPct)  : 10,
+            exitRisePct: reinforceExitRisePct ? parseFloat(reinforceExitRisePct) : 15,
         } : null,
         trailingStop: parseTrailingStopQuery(req.query, stopLossPct != null ? parseFloat(stopLossPct) : null),
         targetMode: (targetMode === 'fixed' || targetMode === 'continuous' || targetMode === 'off') ? targetMode : 'fixed',

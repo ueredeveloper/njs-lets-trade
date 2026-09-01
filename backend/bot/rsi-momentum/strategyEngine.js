@@ -5,6 +5,7 @@ const { closedCandlesOnly, intervalMs } = require('../ma-cross/strategyEngine');
 const { computeStopLossFloor } = require('../shared/stopLossFloor');
 const { bollingerCycleOccurrences } = require('../../utils/indicatorGrowthEngines');
 const { averageWithoutOutliers } = require('../../utils/removeOutliersIQR');
+const { detectSupportResistance } = require('../../utils/supportResistance');
 
 const RSI_PERIOD = 14;
 // Pullback e expiração da ordem limite de entrada são avaliados minuto a minuto, SEMPRE em
@@ -22,13 +23,6 @@ const RSI5M_WARMUP_PADDING = 10;
 // checkpoint dentro da janela do candle de entry.interval ainda em formação — não calcula RSI
 // nesse intervalo, só lê o preço de fechamento, então o limite pode ser pequeno.
 const EARLY_CONFIRM_WARMUP_PADDING = 10;
-// Intervalo do filtro entry.prevDayCloud — '1d' (padrão) ou '3d', mesmo seletor do gráfico e do
-// backtest (ver prevDayCloudInterval em CandlestickChart.jsx). 5 candles bastam pra sempre ter
-// pelo menos 2 fechados (o "de ontem"/"dos últimos 3 dias" e o anterior a ele) mesmo com algum
-// atraso/gap pontual do candle. Bot RSI Momentum só opera Binance — sem a limitação de 3d que a
-// Gate.io tem no backtest/gráfico.
-const PREV_DAY_CLOUD_INTERVAL = '1d';
-const PREV_DAY_CLOUD_LIMIT = 5;
 // MACD (12/26/9 padrão) — mesmos períodos fixos do backtest (ver analyseRsiThresholdBacktest.js),
 // só o intervalo é configurável (entry.macdFilter.interval). Warmup generoso o bastante pro
 // primeiro valor de histograma ficar disponível bem antes do candle mais recente.
@@ -42,6 +36,9 @@ const HIGHER_RSI_INTERVAL = '1h';
 // ATR de Wilder (período 14, padrão) — usado só pelo stop contínuo modo 'atrTrail', calculado no
 // entry.interval no momento da compra (ver computeAtrPct / rsi-momentum-bot.js).
 const ATR_PERIOD = 14;
+// Suporte/Resistência (entry.supportResistance) — folga de candles além da janela (candleCount)
+// pra o detectSupportResistance ter leftBars+rightBars de contexto (defaults 5/5).
+const SR_WINDOW_PADDING = 12;
 
 function computeRsiSeries(closedCandles) {
     const closes = closedCandles.map(c => parseFloat(c.close));
@@ -74,17 +71,17 @@ function getRequiredSpecs(config) {
         add(entry.earlyConfirm.interval, EARLY_CONFIRM_WARMUP_PADDING);
     }
 
-    if (entry.prevDayCloud?.enabled) {
-        const pdcCandleCount = Math.max(1, Math.round(Number(entry.prevDayCloud.candleCount ?? 1)));
-        add(entry.prevDayCloud.interval ?? PREV_DAY_CLOUD_INTERVAL, Math.max(PREV_DAY_CLOUD_LIMIT, pdcCandleCount + 3));
-    }
-
     if (entry.macdFilter?.enabled) {
         add(entry.macdFilter.interval ?? '1h', MACD_WARMUP_BARS);
     }
 
     if (entry.higherRsiFilter?.enabled) {
         add(HIGHER_RSI_INTERVAL, RSI_PERIOD * 3 + 20);
+    }
+
+    if (entry.supportResistance?.enabled) {
+        const cc = Math.max(20, Math.round(Number(entry.supportResistance.candleCount ?? 50)));
+        add(entry.supportResistance.interval ?? '4h', cc + SR_WINDOW_PADDING);
     }
 
     return [...specs.entries()].map(([interval, lim]) => ({ interval, limit: lim }));
@@ -137,11 +134,9 @@ function checkRsi5mFilter(config, cMap) {
 }
 
 /**
- * Ligado por padrão — recusa o sinal se o PRÓPRIO candle do cruzamento (abertura→fechamento) já
- * subiu mais que maxMovePct%. Sem isso, um candle-pico (ex.: STORJUSDT 24/08/2026, +11% sozinho
- * num candle de 15m) passa no cruzamento de RSI normalmente, e o pullback de belowPct% (tipicamente
- * <1%) só protege do fechamento já inflado — a compra sai perto do topo do próprio candle do sinal,
- * não do preço de antes do pump. Filtra pelo candle em si, não pela série — barato, sem lookback.
+ * Recusa o sinal se o PRÓPRIO candle do cruzamento (abertura→fechamento) já subiu mais que
+ * maxMovePct%. Desligado por padrão e sem seletor no painel — só via config salva. Filtra pelo
+ * candle em si, não pela série — barato, sem lookback.
  */
 function checkSpikeGuardFilter(config, signalCandle) {
     const sg = config.entry?.spikeGuard;
@@ -155,60 +150,6 @@ function checkSpikeGuardFilter(config, signalCandle) {
         return { allowed: false, reason: 'SPIKE_TOO_LARGE', movePct, maxMovePct: sg.maxMovePct };
     }
     return { allowed: true, movePct, maxMovePct: sg.maxMovePct };
-}
-
-/**
- * Filtro opcional (desligado por padrão — ver comentário em tradeConfigSchema.js): exige que o
- * preço do sinal esteja DENTRO da nuvem D-1 — envelope [menor open/close, maior open/close] dos
- * últimos `candleCount` candles NATIVOS (no interval acima, padrão 4h) anteriores ao sinal, mesmo
- * indicador do gráfico (ver buildPrevDayCloudSegments em
- * frontend-react/src/components/CandlestickChart.jsx) e do backtest (ver checkPrevDayCloudFilter
- * em backend/utils/analyseRsiThresholdBacktest.js). candleCount=1 (padrão) é só o candle anterior
- * sozinho. A faixa aceita é (-∞, lower + maxPct% × (upper-lower)] — não importa se o(s) candle(s)
- * anterior(es) fecharam em alta ou baixa. maxPct=100 exige só estar até o topo da nuvem; valores
- * menores restringem até a parte de baixo dela. Preço ABAIXO da nuvem inteira (price < lower)
- * também libera — desconto ainda maior que a própria nuvem, mesmo racional de "quanto mais perto
- * do fundo, melhor" que já vale pra faixa de dentro da nuvem. Só bloqueia acima do limite (preço
- * caro demais). Sem candle(s) anterior(es) suficiente(s) ainda (favorito recém-criado), libera —
- * fail-open, como os demais filtros baseados em série própria.
- */
-function checkPrevDayCloudFilter(config, cMap, signalCandle) {
-    const pdc = config.entry?.prevDayCloud;
-    if (!pdc?.enabled) return { allowed: true };
-
-    // closedCandlesOnly já descarta o candle de HOJE (ainda em formação) — diferente do backtest
-    // (que busca um histórico com vários sinais passados e por isso precisa achar os candles
-    // "anteriores ao do sinal" dentro do array inteiro), aqui o sinal é sempre "agora": os últimos
-    // candles FECHADOS já SÃO a referência, sem precisar de nenhum índice-1.
-    const closed = closedCandlesOnly(cMap[pdc.interval ?? PREV_DAY_CLOUD_INTERVAL] ?? []);
-    const n = Math.max(1, Math.round(Number(pdc.candleCount ?? 1)));
-    if (closed.length < n) return { allowed: true };
-
-    const window = closed.slice(closed.length - n);
-    let lower = Infinity, upper = -Infinity;
-    for (const c of window) {
-        if (pdc.useHighLow) {
-            // Aumenta a nuvem: máxima/mínima (pavios) em vez de abertura/fechamento (corpo).
-            const high = parseFloat(c.high);
-            const low = parseFloat(c.low);
-            if (low > 0) lower = Math.min(lower, low);
-            if (high > 0) upper = Math.max(upper, high);
-        } else {
-            const open = parseFloat(c.open);
-            const close = parseFloat(c.close);
-            if (open > 0) { lower = Math.min(lower, open); upper = Math.max(upper, open); }
-            if (close > 0) { lower = Math.min(lower, close); upper = Math.max(upper, close); }
-        }
-    }
-    if (!(upper > 0) || !Number.isFinite(lower)) return { allowed: true };
-    if (upper <= lower) return { allowed: true }; // nuvem "achatada" — sem restrição possível
-
-    const price = parseFloat(signalCandle.close);
-    const limit = lower + (pdc.maxPct / 100) * (upper - lower);
-    if (price > limit) {
-        return { allowed: false, reason: 'PREVDAY_CLOUD_OUT_OF_RANGE', price, lower, upper, limit, maxPct: pdc.maxPct };
-    }
-    return { allowed: true, price, lower, upper, limit, maxPct: pdc.maxPct };
 }
 
 /**
@@ -273,6 +214,105 @@ function checkHigherRsiFilter(config, cMap) {
     return { allowed: true, rsi1h: Math.round(rsi1h * 100) / 100, minRsi, interval: HIGHER_RSI_INTERVAL };
 }
 
+// ── Suporte/Resistência (entry.supportResistance) ────────────────────────────────────────────
+//
+// No bot só importa o "agora": as zonas saem dos últimos `candleCount` candles FECHADOS do
+// intervalo escolhido (sem look-ahead — o backtest precisa de janela móvel por sinal histórico,
+// aqui o sinal é sempre "agora"). Mesmo detectSupportResistance do gráfico e do backtest.
+
+/** { supports: [desc por preço], resistances: [asc por preço] } no instante atual, ou null se
+ *  não houver janela completa ainda. Mesma forma de resolveSupportResistanceAt do backtest. */
+function resolveSrZonesNow(cMap, srCfg) {
+    const cc = Math.max(20, Math.round(Number(srCfg?.candleCount ?? 50)));
+    const closed = closedCandlesOnly(cMap[srCfg?.interval ?? '4h'] ?? []);
+    if (closed.length < cc) return null;
+    const window = closed.slice(closed.length - cc).map(c => ({
+        openTime: c.openTime, open: c.open, high: c.high, low: c.low, close: c.close,
+    }));
+    const levels = detectSupportResistance(window, {});
+    if (!levels.length) return null;
+    return {
+        supports: levels.filter(l => l.type === 'support').sort((a, b) => b.price - a.price),
+        resistances: levels.filter(l => l.type === 'resistance').sort((a, b) => a.price - b.price),
+    };
+}
+
+/** A `rank`-ésima linha de suporte ABAIXO de `price` (1 = a mais próxima). null se faltar. */
+function pickSupport(zones, price, rank) {
+    if (!zones) return null;
+    const below = zones.supports.filter(l => l.price < price * 0.999); // já vem desc
+    return below[Math.max(1, Math.round(rank)) - 1] ?? null;
+}
+
+/** A `rank`-ésima linha de resistência ACIMA de `price` (1 = a mais próxima). null se faltar. */
+function pickResistance(zones, price, rank) {
+    if (!zones) return null;
+    const above = zones.resistances.filter(l => l.price > price * 1.001); // já vem asc
+    return above[Math.max(1, Math.round(rank)) - 1] ?? null;
+}
+
+/**
+ * Filtro de entrada por S/R + alvo por resistência. Mesma regra do backtest
+ * (checkSupportResistanceFilter / targetPriceOverride em analyseRsiThresholdBacktest.js):
+ *  - ENTRADA: só libera se o preço do sinal estiver no máximo `entryMaxPct`% ACIMA da linha de
+ *    suporte escolhida (preço abaixo do suporte também libera). Sem zonas / sem suporte de
+ *    referência → não bloqueia (fail-open, igual MACD/RSI 1h).
+ *  - SAÍDA: `srTargetPrice` = a `exitResistanceRank`-ésima resistência acima do preço do sinal
+ *    (null se não houver) — o chamador usa como alvo fixo da bracket no lugar do targetMode.
+ */
+function checkSupportResistanceEntry(config, cMap, signalPrice) {
+    const sr = config.entry?.supportResistance;
+    if (!sr?.enabled) return { allowed: true, srTargetPrice: null };
+
+    const zones = resolveSrZonesNow(cMap, sr);
+    if (!zones) return { allowed: true, srTargetPrice: null, warmup: true };
+
+    const entryRank = Math.max(1, Math.min(3, Math.round(Number(sr.entrySupportRank ?? 1))));
+    const exitRank = Math.max(1, Math.min(3, Math.round(Number(sr.exitResistanceRank ?? 1))));
+    const maxPct = Math.max(1, Math.min(100, Number(sr.entryMaxPct ?? 10)));
+
+    const support = pickSupport(zones, signalPrice, entryRank);
+    if (support && signalPrice > support.price * (1 + maxPct / 100)) {
+        return {
+            allowed: false, reason: 'SR_NO_DISCOUNT',
+            supportPrice: support.price, maxPct,
+            distPct: Math.round(((signalPrice - support.price) / support.price) * 10000) / 100,
+        };
+    }
+
+    const resistance = pickResistance(zones, signalPrice, exitRank);
+    return {
+        allowed: true,
+        srTargetPrice: resistance?.price ?? null,
+        supportPrice: support?.price ?? null,
+        resistanceRank: exitRank,
+        entryMaxPct: maxPct,
+    };
+}
+
+/**
+ * "Reforço no stop" (escada de averaging-down / martingale) — decisão pura por candle, mesma
+ * mecânica do backtest (runReinforcementLadder em analyseRsiThresholdBacktest.js): a partir do
+ * ÚLTIMO aporte da pilha (`lastEntryPrice`), o 1º candle cujo `low` cai `addDropPct`% abaixo dele
+ * adiciona mais uma compra; o 1º cujo `high` sobe `exitRisePct`% acima dele encerra TODA a pilha.
+ * Empate no mesmo candle: `addRung` antes de `exit` (pior caso, igual evaluateExit/resolveFromSignal).
+ * `forming` = candle do entry.interval em formação ({ high, low }).
+ */
+function evaluateReinforceLadder(reinforceState, forming) {
+    const last = Number(reinforceState?.lastEntryPrice);
+    const drop = Math.max(0.5, Number(reinforceState?.addDropPct ?? 10)) / 100;
+    const rise = Math.max(0.5, Number(reinforceState?.exitRisePct ?? 15)) / 100;
+    const addLevel = last * (1 - drop);
+    const tpPrice = last * (1 + rise);
+    if (!(last > 0) || !forming) return { action: 'hold', addLevel, tpPrice };
+
+    const low = parseFloat(forming.low ?? forming.close);
+    const high = parseFloat(forming.high ?? forming.close);
+    if (Number.isFinite(low) && low <= addLevel) return { action: 'addRung', addLevel, tpPrice };
+    if (Number.isFinite(high) && high >= tpPrice) return { action: 'exit', addLevel, tpPrice };
+    return { action: 'hold', addLevel, tpPrice };
+}
+
 /** ATR de Wilder (período 14) em % do último fechamento — usado pelo stop contínuo modo
  *  'atrTrail'. Calculado uma vez, no momento da compra, a partir dos candles FECHADOS do
  *  entry.interval (ver rsi-momentum-bot.js, guardado em rules_state.stopAtrPct). null sem candles
@@ -316,16 +356,13 @@ function findEarlyConfirmCheckpoint(entry, cMap, forming) {
  * opcional (entry.earlyConfirm, ligado por padrão): em vez de só reavaliar o RSI quando o candle
  * de entry.interval fecha (podendo levar até `interval` inteiro, ex. 15min), recalcula o mesmo
  * RSI de entry.interval usando o fechamento do candle mais recente do intervalo curto (checkpoint
- * de earlyConfirm.interval, ex. 5m) como preço provisório do candle ainda em formação — se isso já
- * cruza o threshold, o sinal dispara ali (2-3 checkpoints antes do fechamento cheio), sem esperar
- * o candle inteiro fechar. O threshold e o intervalo do RSI continuam os mesmos (entry.interval);
- * só o MOMENTO em que a confirmação é aceita muda. Sem checkpoint disponível ainda (início da
- * janela) ou com earlyConfirm desligado, cai no comportamento original (só candle FECHADO).
- *
- * Caso real que motivou isso: STORJUSDT 24/08/2026, candle de 15m que só terminou de cruzar no
- * próprio fechamento, já tendo subido +11% sozinho — adiantar pro 1º/2º checkpoint de 5m dentro
- * da janela pega o cruzamento mais cedo, antes do candle de 15m ter subido tudo que subiu (ver
- * também checkSpikeGuardFilter, que passa a comparar contra esse preço de confirmação adiantada).
+ * de earlyConfirm.interval, ex. 5m) como preço provisório do candle ainda em formação — se esse
+ * RSI provisório já atinge `earlyConfirm.rsiThreshold` (padrão 70, e nunca abaixo do
+ * entry.rsiThreshold), o sinal dispara ali (2-3 checkpoints antes do fechamento cheio), sem
+ * esperar o candle inteiro fechar. O intervalo do RSI continua o mesmo (entry.interval); só o
+ * MOMENTO em que a confirmação é aceita muda, e o limiar do RSI provisório pode ser um pouco mais
+ * alto que o da entrada. Sem checkpoint disponível ainda (início da janela) ou com earlyConfirm
+ * desligado, cai no comportamento original (só candle FECHADO, no entry.rsiThreshold).
  *
  * Sem pullback (desligado), a entrada é a mercado no preço de confirmação (limitPrice: null). Com
  * pullback (padrão), `limitPrice` é o preço-limite (signalPrice × (1 − belowPct/100)) — o
@@ -360,14 +397,17 @@ function evaluateEntrySignal(config, cMap) {
 
     // Caso 2 (adiantado): candle de entry.interval ainda se formando, mas já tem checkpoint de
     // earlyConfirm.interval fechado dentro da janela — só tenta se o Caso 1 ainda não confirmou.
+    // O RSI provisório precisa atingir earlyConfirm.rsiThreshold (padrão 70), NUNCA menos que o
+    // limiar de entrada — max() blinda contra uma config incoerente afrouxar o sinal adiantado.
+    const earlyThreshold = Math.max(threshold, Number(entry.earlyConfirm?.rsiThreshold ?? threshold));
     if (!crossed) {
         const forming = raw[raw.length - 1];
         const checkpoint = findEarlyConfirmCheckpoint(entry, cMap, forming);
-        if (checkpoint && lastClosedRsi < threshold) {
+        if (checkpoint && lastClosedRsi < earlyThreshold) {
             const closesWithCheckpoint = [...closed.map(c => parseFloat(c.close)), parseFloat(checkpoint.close)];
             const rsiWithCheckpoint = RSI.calculate({ values: closesWithCheckpoint, period: RSI_PERIOD });
             const earlyRsi = rsiWithCheckpoint[rsiWithCheckpoint.length - 1];
-            if (earlyRsi != null && earlyRsi >= threshold) {
+            if (earlyRsi != null && earlyRsi >= earlyThreshold) {
                 crossed = true;
                 last = earlyRsi;
                 signalCandle = { open: forming.open, close: checkpoint.close, openTime: forming.openTime };
@@ -406,11 +446,6 @@ function evaluateEntrySignal(config, cMap) {
         return { allowed: false, reason: rsi5mCheck.reason, rsi: last, threshold, rsi5m: rsi5mCheck };
     }
 
-    const prevDayCloudCheck = checkPrevDayCloudFilter(config, cMap, signalCandle);
-    if (!prevDayCloudCheck.allowed) {
-        return { allowed: false, reason: prevDayCloudCheck.reason, rsi: last, threshold, prevDayCloud: prevDayCloudCheck };
-    }
-
     const macdCheck = checkMacdFilter(config, cMap);
     if (!macdCheck.allowed) {
         return { allowed: false, reason: macdCheck.reason, rsi: last, threshold, macd: macdCheck };
@@ -421,15 +456,24 @@ function evaluateEntrySignal(config, cMap) {
         return { allowed: false, reason: higherRsiCheck.reason, rsi: last, threshold, higherRsi: higherRsiCheck };
     }
 
-    const signalPrice = parseFloat(signalCandle.close);
+    const signalClose = parseFloat(signalCandle.close);
+    const srCheck = checkSupportResistanceEntry(config, cMap, signalClose);
+    if (!srCheck.allowed) {
+        return { allowed: false, reason: srCheck.reason, rsi: last, threshold, sr: srCheck };
+    }
+
+    const signalPrice = signalClose;
     const signalOpenTime = Number(signalCandle.openTime);
     const pullbackPct = entry.pullback?.enabled ? Math.max(0.01, entry.pullback.belowPct) : 0;
     const limitPrice = pullbackPct > 0 ? signalPrice * (1 - pullbackPct / 100) : null;
 
-    const confirmNote = earlyCheckpoint ? ` — confirmação adiantada (checkpoint ${entry.earlyConfirm.interval})` : '';
+    const confirmNote = earlyCheckpoint
+        ? ` — confirmação adiantada (checkpoint ${entry.earlyConfirm.interval}, RSI ≥ ${earlyThreshold})`
+        : '';
+    const crossedValue = earlyCheckpoint ? earlyThreshold : threshold;
     const entryDesc = pullbackPct > 0
-        ? `RSI(${RSI_PERIOD}) ${iv} cruzou ${threshold} (${last.toFixed(2)})${confirmNote} — pullback -${pullbackPct}%`
-        : `RSI(${RSI_PERIOD}) ${iv} cruzou ${threshold} (${last.toFixed(2)})${confirmNote}`;
+        ? `RSI(${RSI_PERIOD}) ${iv} cruzou ${crossedValue} (${last.toFixed(2)})${confirmNote} — pullback -${pullbackPct}%`
+        : `RSI(${RSI_PERIOD}) ${iv} cruzou ${crossedValue} (${last.toFixed(2)})${confirmNote}`;
 
     return {
         allowed: true,
@@ -440,9 +484,10 @@ function evaluateEntrySignal(config, cMap) {
         bandWidth: bandWidthCheck,
         rsi5m: rsi5mCheck,
         spikeGuard: spikeGuardCheck,
-        prevDayCloud: prevDayCloudCheck,
         macd: macdCheck,
         higherRsi: higherRsiCheck,
+        sr: srCheck,
+        srTargetPrice: srCheck.srTargetPrice ?? null,
         earlyCheckpoint,
         signalOpenTime,
         signalPrice,
@@ -476,6 +521,11 @@ function checkEntryLimitExpired(config, cMap, entryLimit) {
  * disparar um novo cruzamento de RSI poucos minutos depois (RSI ainda alto) e reentrar sem
  * pausa, então a moeda fica sempre `reentryCooldownCandles` candles em standby após qualquer
  * saída, não só após stop-loss.
+ *
+ * Nota: o "reforço no stop" (martingale) NÃO passa por aqui — a recompra ao bater o stop é feita
+ * direto no ramo BOUGHT (ver startReinforceLadder em rsi-momentum-bot.js), sem sinal de entrada
+ * nem cooldown. O cooldown só volta a valer quando a escada inteira encerra (alvo ou venda
+ * forçada) e a moeda volta pra WATCHING.
  */
 function checkReentryCooldown(config, cMap, lastExitTime, lastExitReason) {
     const need = Math.max(0, Math.round(Number(config.entry?.reentryCooldownCandles ?? 0)));
@@ -617,18 +667,25 @@ function computeTrailingTargetPrice(entryPrice, peakPrice, trailingTarget, baseT
  * pico e pode nunca preencher numa alta que reverte — ver EDENUSDT 28/08), o teto garante a
  * saída ao tocar +pct%. `targetCapped` = true quando é o teto que está valendo.
  *
+ * `srTargetPrice` (opcional) — alvo por linha de resistência do S/R (ver checkSupportResistanceEntry):
+ * quando informado e ACIMA da entrada, o ALVO vira esse preço fixo, no lugar do targetMode (o teto
+ * de lucro continua valendo como `min(srTarget, cap)`). Stop não muda. Mesmo comportamento de
+ * targetPriceOverride em resolveFromSignal no backtest.
+ *
  * `peakPrice` é opcional — sem ele usa entryPrice como pico inicial. Quando alvo ou stop sobe de
  * degrau, essa perna da bracket é recriada na corretora (ver maybeReplaceTrailingStop).
  */
-function computeBracketPrices(config, entryPrice, peakPrice) {
+function computeBracketPrices(config, entryPrice, peakPrice, srTargetPrice = null) {
     if (!(entryPrice > 0)) return { targetPrice: null, stopPrice: null, targetCapped: false };
     const baseTargetPct = Math.max(0.1, Number(config.exit?.restingBracket?.targetPct ?? 5));
     const trailingStop = config.exit?.trailingStop;
     const trailingTarget = config.exit?.trailingTarget;
     const targetMode = resolveTargetMode(config);
+    const useSrTarget = Number.isFinite(Number(srTargetPrice)) && Number(srTargetPrice) > entryPrice;
 
     let targetPrice;
-    if (targetMode === 'off') targetPrice = null;
+    if (useSrTarget) targetPrice = Number(srTargetPrice);
+    else if (targetMode === 'off') targetPrice = null;
     else if (targetMode === 'continuous') {
         targetPrice = computeTrailingTargetPrice(entryPrice, peakPrice ?? entryPrice, trailingTarget, baseTargetPct);
     } else targetPrice = entryPrice * (1 + baseTargetPct / 100);
@@ -656,7 +713,8 @@ function computeBracketPrices(config, entryPrice, peakPrice) {
  *  colocar): máxima do candle em formação alcança o alvo, ou mínima rompe o stop. No empate
  *  (mesmo candle) assume o pior caso (stop primeiro), mesmo critério do backtest.
  *  opts.peakPrice: maior preço visto desde a compra — só relevante com exit.trailingStop
- *  ligado (ver computeBracketPrices); ignorado no modo fixo. */
+ *  ligado (ver computeBracketPrices); ignorado no modo fixo.
+ *  opts.srTargetPrice: alvo por resistência do S/R travado na compra (ver computeBracketPrices). */
 function evaluateExit(config, cMap, entryPrice, opts = {}) {
     const iv = config.entry.interval;
     const raw = cMap[iv] ?? [];
@@ -667,7 +725,7 @@ function evaluateExit(config, cMap, entryPrice, opts = {}) {
     const high = parseFloat(live.high ?? live.close);
     const low = parseFloat(live.low ?? live.close);
 
-    const { targetPrice, stopPrice, targetCapped } = computeBracketPrices(config, entryPrice, opts.peakPrice);
+    const { targetPrice, stopPrice, targetCapped } = computeBracketPrices(config, entryPrice, opts.peakPrice, opts.srTargetPrice ?? null);
 
     if (stopPrice != null && low <= stopPrice) {
         return {
@@ -678,11 +736,16 @@ function evaluateExit(config, cMap, entryPrice, opts = {}) {
     }
     if (targetPrice != null && high >= targetPrice) {
         const hitPct = entryPrice ? ((targetPrice - entryPrice) / entryPrice) * 100 : null;
+        const usedSrTarget = Number.isFinite(Number(opts.srTargetPrice))
+            && Number(opts.srTargetPrice) > entryPrice
+            && Math.abs(targetPrice - Number(opts.srTargetPrice)) < targetPrice * 1e-6;
         const exitDesc = targetCapped
             ? `Teto de lucro +${config.exit.hardTakeProfit.pct}% (venda forçada)`
-            : resolveTargetMode(config) === 'continuous'
-                ? `Alvo contínuo +${hitPct != null ? hitPct.toFixed(1) : '?'}% de lucro`
-                : `Alvo fixo +${config.exit.restingBracket.targetPct}% de lucro`;
+            : usedSrTarget
+                ? `Alvo na resistência S/R (+${hitPct != null ? hitPct.toFixed(1) : '?'}%)`
+                : resolveTargetMode(config) === 'continuous'
+                    ? `Alvo contínuo +${hitPct != null ? hitPct.toFixed(1) : '?'}% de lucro`
+                    : `Alvo fixo +${config.exit.restingBracket.targetPct}% de lucro`;
         return { exit: true, reason: 'RSI_TARGET', close, targetLevelValue: targetPrice, exitDesc };
     }
     return { exit: false, close };
@@ -697,9 +760,13 @@ module.exports = {
     getRequiredSpecs,
     checkBandWidthFilter,
     checkRsi5mFilter,
-    checkPrevDayCloudFilter,
     checkMacdFilter,
     checkHigherRsiFilter,
+    resolveSrZonesNow,
+    pickSupport,
+    pickResistance,
+    checkSupportResistanceEntry,
+    evaluateReinforceLadder,
     computeAtrPct,
     evaluateEntrySignal,
     evaluateExit,

@@ -52,7 +52,14 @@ const { startMarketScanner } = require('./marketScanner');
 const {
   getRequiredSpecs, evaluateEntrySignal, evaluateExit, computeBracketPrices,
   checkEntryLimitExpired, checkReentryCooldown, resolveTargetMode, computeAtrPct,
+  evaluateReinforceLadder,
 } = require('./strategyEngine');
+
+// "Reforço no stop" (martingale) — trava de segurança do nº de reforços (o usuário pediu "sem
+// limite"; isto só evita loop patológico numa queda livre) e prazo de espera quando falta saldo
+// pra um novo aporte antes da venda forçada a mercado.
+const REINFORCE_HARD_CAP = 40;
+const REINFORCE_FUNDS_SHORT_WAIT_MS = 60 * 60 * 1000; // 1h
 
 // Alvo "desligado" (exit.targetMode === 'off'): a OCO da corretora precisa das duas pernas, então
 // coloca o TP num teto absurdo (+500%) — a Binance PRENDE (clamp) em ~+100% do preço médio e, na
@@ -252,73 +259,74 @@ function fmtPrice(n) {
  *  precisar abrir o painel. Config lida só uma vez aqui (snapshot do boot) — o scanner relê a
  *  cada ciclo por conta própria (ver main()#loadConfig), então mudanças salvas depois valem sem
  *  reiniciar mesmo sem aparecer de novo neste log. */
-function logStartupConfig(body) {
+function logStartupConfig(body, source = null) {
   const e = body.entry, x = body.exit, sl = body.stopLoss;
-  const bw = e.bandWidth, pb = e.pullback, r5 = e.rsi5mFilter, sg = e.spikeGuard, ec = e.earlyConfirm;
-  const pr = e.priorRsiFilter, pdc = e.prevDayCloud, macd = e.macdFilter;
-  console.log('📋 Config ativa (RSI Momentum):');
-  console.log(`   Entrada: RSI(14) ${e.interval} cruza >= ${e.rsiThreshold} (${e.enabled ? 'ativa' : 'PAUSADA'})`);
-  console.log(pr?.enabled !== false
-    ? `   Filtro anti-repique: últimos ${pr?.count ?? 3} valores de RSI anteriores ao cruzamento precisam estar <= ${e.rsiThreshold}`
-    : '   Filtro anti-repique: desligado');
-  console.log(ec?.enabled
-    ? `   Confirmação adiantada: checkpoint de ${ec.interval} dentro da janela do candle de ${e.interval} (não espera fechar)`
-    : '   Confirmação adiantada: desligada (só candle fechado)');
-  console.log(pb.enabled
-    ? `   Pullback: -${pb.belowPct}% do sinal, espera até ${e.limitWaitCandles} candles de 1min por reteste`
-    : '   Pullback: desligado (compra a mercado na hora do sinal)');
-  console.log(`   Cooldown de reentrada: ${e.reentryCooldownCandles} candles ${e.interval} após qualquer venda`);
-  console.log(bw.enabled
-    ? `   Filtro largura de banda: ${bw.interval} BB(${bw.period},${bw.stdDev}) ≥ ${bw.minPct}% (lookback ${bw.lookback})`
-    : '   Filtro largura de banda: desligado');
-  console.log(r5?.enabled
-    ? `   Filtro RSI 5min: RSI(14) 5m > ${r5.threshold}`
-    : '   Filtro RSI 5min: desligado');
-  console.log(sg?.enabled
-    ? `   Guarda de pico: recusa sinal se o candle já subiu mais que ${sg.maxMovePct}% (abertura→fechamento)`
-    : '   Guarda de pico: desligada');
-  console.log(pdc?.enabled
-    ? `   Nuvem D-${pdc.interval === '3d' ? '3' : '1'}${pdc.candleCount > 1 ? `×${pdc.candleCount}` : ''}: preço precisa estar na faixa até ${pdc.maxPct}% da nuvem (envelope dos últimos ${pdc.candleCount ?? 1} candle(s) ${pdc.interval ?? '1d'})`
-    : '   Nuvem D-1: desligada (novo, ainda não validado)');
-  console.log(macd?.enabled
-    ? `   Filtro MACD: histograma (12,26,9) ${macd.interval} precisa estar positivo`
-    : '   Filtro MACD: desligado');
-  console.log(e.higherRsiFilter?.enabled
-    ? `   Filtro RSI 1h: RSI(14) do candle de 1h fechado precisa estar >= ${e.higherRsiFilter.minRsi} (confirmação multi-timeframe)`
-    : '   Filtro RSI 1h: desligado');
-  const bracketNote = x.restingBracket.enabled ? '' : '  (ordem resting OFF — só fallback por candle fechado)';
-  const ts = x.trailingStop;
-  const tt = x.trailingTarget;
+  const bw = e.bandWidth, pb = e.pullback, r5 = e.rsi5mFilter, ec = e.earlyConfirm;
+  const pr = e.priorRsiFilter, macd = e.macdFilter, hr = e.higherRsiFilter, sr = e.supportResistance;
+  const ts = x.trailingStop, tt = x.trailingTarget, htp = x.hardTakeProfit, rf = x.reinforceOnStop;
   const tsMode = ['continuous', 'twoPhase', 'peakTrail', 'atrTrail'].includes(ts?.mode) ? ts.mode : 'continuous';
+  const ON = (v) => (v ? '✅ LIGADO ' : '⬜ desligado');
 
-  // ── ALVO (para de subir o preço e realiza o lucro) ──
-  const targetDesc = x.targetMode === 'off'
-    ? 'DESLIGADO — a posição só é encerrada pelo stop loss'
-    : x.targetMode === 'continuous'
-      ? `contínuo — começa em +${x.restingBracket.targetPct}% e sobe ${tt.stepPct}pp a cada ${tt.coinStepPct}% de alta do pico de preço (deixa o lucro correr)`
-      : `fixo +${x.restingBracket.targetPct}% acima do preço de entrada`;
-  console.log(`   Alvo: ${targetDesc}${bracketNote}`);
-  if (x.hardTakeProfit?.enabled) {
-    console.log(`   Teto de lucro: venda FORÇADA se o preço tocar +${x.hardTakeProfit.pct}% (garante a saída em altas que revertem antes do alvo)`);
+  console.log('📋 Config ativa (RSI Momentum):');
+  if (source) console.log(`   Fonte: ${source}`);
+
+  console.log('  ── ENTRADA ──────────────────────────────────');
+  console.log(`   Sinal: RSI(14) ${e.interval} cruza para cima de ${e.rsiThreshold}  (${e.enabled ? 'ATIVO' : 'PAUSADO — só gerencia posições já abertas'})`);
+  console.log(`   ${ON(pr?.enabled !== false)} Filtro anti-repique: os ${pr?.count ?? 3} valores de RSI anteriores ao cruzamento precisam estar <= ${e.rsiThreshold}`);
+  console.log(`   ${ON(ec?.enabled)} Confirmação adiantada: checkpoint de ${ec?.interval ?? '5m'} dentro do candle de ${e.interval} em formação, RSI provisório ≥ ${Math.max(e.rsiThreshold, Number(ec?.rsiThreshold ?? e.rsiThreshold))} (não espera fechar)`);
+  console.log(pb.enabled
+    ? `   ${ON(true)} Pullback: -${pb.belowPct}% do preço do sinal, ordem limite espera até ${e.limitWaitCandles} candles de 1min por reteste`
+    : `   ${ON(false)} Pullback — compra a mercado assim que o sinal confirma`);
+
+  console.log('  ── FILTROS DE ENTRADA ───────────────────────');
+  console.log(`   ${ON(bw.enabled)} Largura de banda: ${bw.interval} BB(${bw.period},${bw.stdDev}) — valorização média dos ciclos >= ${bw.minPct}% (lookback ${bw.lookback})`);
+  console.log(`   ${ON(!!r5?.enabled)} RSI 5min: RSI(14) do candle de 5m fechado no sinal > ${r5?.threshold ?? 70}`);
+  console.log(`   ${ON(!!macd?.enabled)} MACD: histograma (12,26,9) em ${macd?.interval ?? '1h'} precisa estar POSITIVO`);
+  console.log(`   ${ON(!!hr?.enabled)} RSI 1h (multi-timeframe): RSI(14) do candle de 1h fechado >= ${hr?.minRsi ?? 50}`);
+  console.log(`   ${ON(!!sr?.enabled)} Suporte/Resistência: ${sr?.interval ?? '4h'} janela ${sr?.candleCount ?? 50} candles`);
+  if (sr?.enabled) {
+    console.log(`             entrada: só até ${sr.entryMaxPct}% acima do ${sr.entrySupportRank}º suporte abaixo do preço (filtro de desconto)`);
+    console.log(`             saída:   alvo = ${sr.exitResistanceRank}ª resistência acima do preço de entrada (sobrepõe o modo de alvo)`);
   }
 
-  // ── STOP LOSS (limita a perda; nos modos contínuos sobe com o pico e pode travar lucro) ──
+  console.log('  ── SAÍDA · ALVO ─────────────────────────────');
+  const targetDesc = x.targetMode === 'off'
+    ? 'DESLIGADO — sem alvo %; a posição sai pelo teto de lucro, pela resistência do S/R ou pelo stop'
+    : x.targetMode === 'continuous'
+      ? `contínuo — começa em +${x.restingBracket.targetPct}% e sobe ${tt.stepPct}pp a cada ${tt.coinStepPct}% de novo pico (deixa o lucro correr)`
+      : `fixo +${x.restingBracket.targetPct}% acima da entrada`;
+  console.log(`   Modo do alvo: ${targetDesc}`);
+  console.log(`   ${ON(!!htp?.enabled)} Teto de lucro: venda FORÇADA ao tocar +${htp?.pct ?? 15}% (garante a saída em altas que revertem)`);
+  console.log(`   Ordem resting na corretora (OCO/bracket): ${x.restingBracket.enabled ? 'LIGADA' : 'DESLIGADA — saída só pelo fallback via candle fechado'}`);
+
+  console.log('  ── SAÍDA · STOP ─────────────────────────────');
   let stopDesc;
   if (!ts?.enabled) {
-    stopDesc = `-${sl.maxLossPct}% fixo abaixo do preço de entrada${sl.enabled ? '' : ' (DESLIGADO)'}`;
+    stopDesc = `FIXO -${sl.maxLossPct}% abaixo da entrada${sl.enabled ? '' : '  (stopLoss DESLIGADO — sem stop!)'}`;
   } else if (tsMode === 'twoPhase') {
     const lucro = ts.pivotPct === 0 ? 'empate (breakeven)' : `${ts.pivotPct > 0 ? '+' : ''}${ts.pivotPct}% de lucro`;
-    stopDesc = `Escada Dupla — começa em -${ts.startPct}%; fase A sobe ${ts.aStopStepPct}pp a cada ${ts.aCoinStepPct}% de alta do pico até travar ${lucro}; depois fase B sobe ${ts.bStopStepPct}pp a cada ${ts.bCoinStepPct}%. Nunca desce.`;
+    stopDesc = `Escada Dupla (twoPhase) — inicial -${ts.startPct}%; fase A +${ts.aStopStepPct}pp a cada +${ts.aCoinStepPct}% até travar ${lucro}; fase B +${ts.bStopStepPct}pp a cada +${ts.bCoinStepPct}%. Nunca desce.`;
   } else if (tsMode === 'peakTrail') {
-    stopDesc = `Trilha do Topo — fica ${ts.wNearPct}% abaixo do pico de preço até o pico ganhar +${ts.pivotGainPct}%, depois ${ts.wFarPct}% abaixo. Nunca desce.`;
+    stopDesc = `Trilha do Topo (peakTrail) — ${ts.wNearPct}% abaixo do pico até o pico ganhar +${ts.pivotGainPct}%, depois ${ts.wFarPct}% abaixo. Nunca desce.`;
   } else if (tsMode === 'atrTrail') {
-    stopDesc = `Trilha ATR — ${ts.wNearPct}% abaixo do pico até +${ts.pivotGainPct}%, depois ${ts.atrMult}× o ATR% travado na compra (teto ${ts.atrMaxPct}%). Nunca desce.`;
+    stopDesc = `Trilha ATR (atrTrail) — ${ts.wNearPct}% abaixo do pico até +${ts.pivotGainPct}%, depois ${ts.atrMult}× o ATR% travado na compra (teto ${ts.atrMaxPct}%). Nunca desce.`;
   } else {
-    stopDesc = `contínuo linear — começa em -${ts.startPct}% e sobe ${ts.stopStepPct}pp a cada ${ts.coinStepPct}% de alta do pico. Nunca desce.`;
+    stopDesc = `contínuo linear — inicial -${ts.startPct}%, +${ts.stopStepPct}pp a cada +${ts.coinStepPct}% de novo pico. Nunca desce.`;
   }
-  console.log(`   Stop loss: ${stopDesc}`);
+  console.log(`   Modo do stop: ${stopDesc}`);
+  console.log(`   ${ON(!!rf?.enabled)} Reforço no stop (MARTINGALE): ao bater o stop NÃO encerra — recompra a mercado e vira escada`);
+  if (rf?.enabled) {
+    console.log(`             +1 compra de ${Number(rf.buyUsd ?? 40).toFixed(2)} USDT a cada -${rf.addDropPct}% abaixo do último aporte`);
+    console.log(`             vende TODA a pilha a mercado no 1º +${rf.exitRisePct}% acima do último aporte`);
+    console.log(`             ⚠️  posição fica SEM stop de proteção depois de disparado · sem saldo p/ novo aporte: avisa e vende a mercado em 1h · trava de segurança ${REINFORCE_HARD_CAP} degraus`);
+    console.log(`             estado em rsi_multi_bot_state.rules_state.reinforce — retoma a escada no meio depois de um restart`);
+  }
+
+  console.log('  ── SCANNER / EXECUÇÃO ───────────────────────');
   console.log(`   Volume mín 24h: ${Number(body.volume.minVolumeUsdt).toLocaleString('pt-BR')} USDT (filtra o scan de mercado)`);
-  console.log(`   Cooldown global entre entradas: ${body.entryCooldownHours}h | Polling: ${body.polling.pollMs / 1000}s aguardando sinal, ${body.polling.fastPollMs / 1000}s posição aberta`);
+  console.log(`   Cooldown de reentrada: ${e.reentryCooldownCandles} candles ${e.interval} após QUALQUER venda`);
+  console.log(`   Cooldown global entre entradas: ${body.entryCooldownHours}h`);
+  console.log(`   Polling: ${body.polling.pollMs / 1000}s aguardando sinal · ${body.polling.fastPollMs / 1000}s com posição aberta · scan de mercado a cada ${SCAN_INTERVAL_MS / 60_000}min`);
 }
 
 function buildEntryReasonLines(config, entryMeta) {
@@ -356,6 +364,28 @@ function describeClamp(bracket) {
   return `Bracket colocada com ajuste: ${parts.join('; ')}`;
 }
 
+/** Alvo por linha de resistência do S/R (entry.supportResistance) travado no momento da compra —
+ *  guardado em rules_state.srTargetPrice, atrelado ao buyPrice desta posição (srTargetForBuy) pra
+ *  não reaproveitar um alvo de trade anterior. Devolve o preço ou null. */
+function resolveSrTargetForBuy(rulesState, buyPrice) {
+  const t = Number(rulesState?.srTargetPrice);
+  const forBuy = Number(rulesState?.srTargetForBuy);
+  if (!(t > 0) || !(buyPrice > 0)) return null;
+  if (!Number.isFinite(forBuy) || Math.abs(forBuy - buyPrice) > buyPrice * 1e-6) return null;
+  return t;
+}
+
+/** Persiste o alvo por resistência do S/R (de evaluateEntrySignal / entryMeta) atrelado ao preço
+ *  de entrada — chamado logo após a compra confirmar, antes de placeInitialBracket. No-op se o
+ *  filtro S/R está desligado ou não achou resistência acima. */
+async function persistSrTarget({ rowId, session, log, entryMeta, buyPrice }) {
+  const t = Number(entryMeta?.srTargetPrice ?? entryMeta?.sr?.srTargetPrice);
+  if (!(t > 0) || !(buyPrice > 0)) return;
+  session.rulesState = { ...(session.rulesState ?? {}), srTargetPrice: t, srTargetForBuy: buyPrice };
+  await saveState(rowId, { rules_state: session.rulesState }, log);
+  log(`${G}🎯 Alvo por resistência S/R travado em ${fmtPrice(t)} (+${(((t / buyPrice) - 1) * 100).toFixed(2)}%)${X}`);
+}
+
 const BRACKET_RETRY_ALERT_EVERY = 10;
 
 /** Grava a falha em rules_state.exitBracketError (attempts/firstAt/lastAt) — o bloco BOUGHT do
@@ -387,8 +417,10 @@ async function placeInitialBracket({ rowId, adapter, config, session, log, fille
   // partir dele pra decidir se subiu de degrau (ver lá). Logo após a compra o pico é o próprio
   // preço de entrada; no retry vindo do tick BOUGHT já vem o pico corrente.
   const peak = Number.isFinite(peakPrice) ? peakPrice : buyPrice;
-  const { targetPrice, stopPrice } = computeBracketPrices(config, buyPrice, peak);
-  const targetOff = resolveTargetMode(config) === 'off';
+  const srTargetPrice = resolveSrTargetForBuy(session.rulesState, buyPrice);
+  const { targetPrice, stopPrice } = computeBracketPrices(config, buyPrice, peak, srTargetPrice);
+  // Com alvo por resistência do S/R a bracket TEM alvo real (não é o teto absurdo do modo 'off').
+  const targetOff = resolveTargetMode(config) === 'off' && srTargetPrice == null;
   if ((targetPrice == null && !targetOff) || stopPrice == null) {
     await recordBracketError({ rowId, session, log, symbol, strategyId, retry, message: 'alvo/stop indisponível' });
     return;
@@ -431,11 +463,12 @@ async function maybeReplaceTrailingStop({ rowId, adapter, config, session, log, 
   const targetMode = resolveTargetMode(config);
   if (!stopTrailingOn && targetMode !== 'continuous') return;
 
-  const { targetPrice: liveTarget, stopPrice: liveStop } = computeBracketPrices(config, buyPrice, peakPrice);
+  const srTargetPrice = resolveSrTargetForBuy(session.rulesState, buyPrice);
+  const { targetPrice: liveTarget, stopPrice: liveStop } = computeBracketPrices(config, buyPrice, peakPrice, srTargetPrice);
   if (liveStop == null) return;
 
   const placedPeak = Number.isFinite(Number(exitBracket.peakPrice)) ? Number(exitBracket.peakPrice) : buyPrice;
-  const { targetPrice: placedTarget, stopPrice: placedStop } = computeBracketPrices(config, buyPrice, placedPeak);
+  const { targetPrice: placedTarget, stopPrice: placedStop } = computeBracketPrices(config, buyPrice, placedPeak, srTargetPrice);
 
   // Só recria pra CIMA — todos os modos de computeTrailingStopPrice/computeTrailingTargetPrice são
   // monotônicos com o pico, então stop e alvo nunca devem descer; o `>` (em vez de Math.abs)
@@ -618,6 +651,10 @@ async function tick(rowId, adapter, strategy, log, session, stopSelf) {
           result: { filledQty: poll.filledQty, quoteQty: poll.quoteQty, avgPrice: poll.avgPrice },
         });
         if (bought) {
+          await persistSrTarget({
+            rowId, session, log, buyPrice: bought.avgPrice,
+            entryMeta: rulesWatch.entryLimit.entryMeta,
+          });
           await placeInitialBracket({
             rowId, adapter, config, session, log,
             filledQty: bought.filledQty, buyPrice: bought.avgPrice, symbol, strategyId,
@@ -670,6 +707,7 @@ async function tick(rowId, adapter, strategy, log, session, stopSelf) {
         capital, strategyId, symbol, result: buyResult,
       });
       if (bought) {
+        await persistSrTarget({ rowId, session, log, buyPrice: bought.avgPrice, entryMeta: signal });
         await placeInitialBracket({
           rowId, adapter, config, session, log,
           filledQty: bought.filledQty, buyPrice: bought.avgPrice, symbol, strategyId,
@@ -720,6 +758,7 @@ async function tick(rowId, adapter, strategy, log, session, stopSelf) {
         result: { filledQty: instant.filledQty, quoteQty: instant.quoteQty, avgPrice: instant.avgPrice },
       });
       if (bought) {
+        await persistSrTarget({ rowId, session, log, buyPrice: bought.avgPrice, entryMeta: entryLimit.entryMeta });
         await placeInitialBracket({
           rowId, adapter, config, session, log,
           filledQty: bought.filledQty, buyPrice: bought.avgPrice, symbol, strategyId,
@@ -733,6 +772,17 @@ async function tick(rowId, adapter, strategy, log, session, stopSelf) {
   // ── BOUGHT ────────────────────────────────────────────────────────────────
   const rulesState = { ...parseRulesState(state), ...(session.rulesState ?? {}) };
   const buyPrice = state.buy_price ? parseFloat(state.buy_price) : null;
+
+  // Escada de reforço ativa (ver handleReinforceLadder): a posição virou martingale — NÃO tem
+  // bracket resting, tudo é gerido a partir de rules_state.reinforce, candle a candle. Retomada
+  // depois de um restart cai aqui direto (o estado inteiro está no rules_state).
+  if (rulesState.reinforce?.active) {
+    return handleReinforceLadder({
+      rowId, adapter, strategy, log, state, session, config, cMap, stopSelf, symbol, strategyId, rulesState,
+    });
+  }
+
+  const srTargetPrice = resolveSrTargetForBuy(rulesState, buyPrice);
 
   // Posição com ordem de venda colocada fora do painel — bot só observa, nunca coloca bracket
   // nem vende a mercado por conta própria.
@@ -774,7 +824,7 @@ async function tick(rowId, adapter, strategy, log, session, stopSelf) {
   // do rules_state (pico salvo + a OCO que ficou na corretora), não recomeçada do zero.
   if (session.resumedBought && !session.resumeLogged) {
     session.resumeLogged = true;
-    const { targetPrice: resumeTarget, stopPrice: resumeStop } = computeBracketPrices(config, buyPrice, peakPrice);
+    const { targetPrice: resumeTarget, stopPrice: resumeStop } = computeBracketPrices(config, buyPrice, peakPrice, srTargetPrice);
     const peakGainPct = buyPrice > 0 ? ((peakPrice / buyPrice) - 1) * 100 : 0;
     const ocoNote = rulesState.exitBracket
       ? `OCO ${rulesState.exitBracket.orderListId ?? '(gate)'} ainda na corretora`
@@ -815,6 +865,16 @@ async function tick(rowId, adapter, strategy, log, session, stopSelf) {
 
     if (bracketResult.filled) {
       const kind = bracketResult.filled;
+
+      // Bateu o STOP e o "Reforço no stop" está ligado — em vez de encerrar, recompra a mercado
+      // e vira escada de averaging-down (ver startReinforceLadder / handleReinforceLadder).
+      if (kind === 'stop' && config.exit?.reinforceOnStop?.enabled) {
+        return startReinforceLadder({
+          rowId, adapter, strategy, log, state, session, config, cMap, stopSelf,
+          symbol, strategyId, rulesState, bracketResult, buyPrice,
+        });
+      }
+
       const exitResult = {
         reason: kind === 'target' ? 'RSI_TARGET' : 'STOP_LOSS',
         targetLevelValue: kind === 'target' ? rulesState.exitBracket.targetPrice : rulesState.exitBracket.stopPrice,
@@ -846,8 +906,24 @@ async function tick(rowId, adapter, strategy, log, session, stopSelf) {
     });
   }
 
-  const exitResult = evaluateExit(config, cMap, buyPrice, { peakPrice });
+  const exitResult = evaluateExit(config, cMap, buyPrice, { peakPrice, srTargetPrice });
   if (!exitResult.exit) return { phase: 'BOUGHT' };
+
+  // Fallback via candle bateu o STOP e o reforço está ligado — mesma bifurcação da bracket resting.
+  if (exitResult.reason === 'STOP_LOSS' && config.exit?.reinforceOnStop?.enabled) {
+    const lastPx = parseFloat((cMap[config.entry.interval] ?? []).at(-1)?.close ?? buyPrice);
+    return startReinforceLadder({
+      rowId, adapter, strategy, log, state, session, config, cMap, stopSelf,
+      symbol, strategyId, rulesState, buyPrice,
+      bracketResult: {
+        filled: 'stop',
+        soldQty: parseFloat(state.buy_qty),
+        exitPrice: exitResult.stopFloor ?? lastPx,
+        usdtOut: parseFloat(state.buy_qty) * (exitResult.stopFloor ?? lastPx),
+      },
+      viaCandle: true,
+    });
+  }
 
   try {
     await executeSell({
@@ -858,6 +934,222 @@ async function tick(rowId, adapter, strategy, log, session, stopSelf) {
     return { phase: 'BOUGHT' };
   }
   return retireOrCooldown({ rowId, symbol, log, stopSelf, config, cMap, state, session, reason: `trade fechado (${exitResult.reason})` });
+}
+
+// ── Reforço no stop (escada de averaging-down / martingale) ────────────────────
+//
+// Quando a compra INICIAL bate o stop e exit.reinforceOnStop.enabled: em vez de encerrar, o bot
+// recompra a mercado e passa a operar SEM bracket resting — só vigiando o candle. A cada nova
+// queda de addDropPct% abaixo do último aporte adiciona mais uma compra do mesmo tamanho; a 1ª
+// alta de exitRisePct% acima do último aporte vende TODA a pilha a mercado. Estado 100% em
+// rules_state.reinforce → o bot retoma a escada no meio depois de um restart.
+//
+// Contabilidade (pra reusar finalizeSell sem tocar em tradeExecution.js): a linha
+// rsi_multi_bot_state passa a refletir só as moedas AINDA EM CARTEIRA —
+//   buy_qty  = soma das qty das pernas não vendidas
+//   buy_price= heldCostUsd / buy_qty
+//   buy_usdt = heldCostUsd + leg1RealizedLossUsd   (custo líquido: soma do custo das pernas em
+//              carteira + a perda já realizada da perna 1 vendida no stop). finalizeSell faz
+//              pnl = usdtOut(final) − buy_usdt → P&L agregado correto da operação inteira.
+
+/** Dispara a escada: recompra a mercado a perna 2 e grava rules_state.reinforce. `bracketResult`
+ *  traz o fill do stop (soldQty/usdtOut/exitPrice). `viaCandle` = saída detectada pelo candle
+ *  (sem ordem resting) → a perna 1 NÃO foi vendida, continua na pilha. */
+async function startReinforceLadder({ rowId, adapter, strategy, log, state, session, config, cMap, stopSelf, symbol, strategyId, rulesState, bracketResult, buyPrice, viaCandle = false }) {
+  const rf = config.exit.reinforceOnStop;
+  const leg1Sold = !viaCandle;
+  // Valor de cada compra de reforço — config (exit.reinforceOnStop.buyUsd), com o aporte da
+  // entrada como fallback. Congelado no rules_state.reinforce pra não mudar no meio da escada.
+  const rungUsd = Number(rf.buyUsd) > 0 ? Number(rf.buyUsd) : parseFloat(state.capital);
+  const leg1Qty = parseFloat(state.buy_qty);
+  const leg1Cost = parseFloat(state.buy_usdt);
+
+  const leg1Proceeds = leg1Sold
+    ? (Number.isFinite(Number(bracketResult?.usdtOut)) && Number(bracketResult.usdtOut) > 0
+        ? Number(bracketResult.usdtOut)
+        : leg1Qty * (Number(bracketResult?.exitPrice) || buyPrice))
+    : 0;
+  const leg1RealizedLoss = leg1Sold ? (leg1Cost - leg1Proceeds) : 0;
+
+  log(`${Y}🛑→⇈ ${symbol} bateu o stop — "Reforço no stop" LIGADO: recomprando a mercado ${rungUsd.toFixed(2)} USDT em vez de encerrar${X}`);
+
+  let buyResult;
+  try {
+    buyResult = await adapter.marketBuy(rungUsd);
+  } catch (err) {
+    log(`${Y}⚠️  Falha ao recomprar (reforço): ${err.message}${X}`);
+    return closeReinforceFallback({ rowId, adapter, strategy, log, state, session, config, cMap, stopSelf, symbol, leg1Sold, bracketResult, reason: `reforço falhou ao recomprar (${err.message})` });
+  }
+  if (buyResult?.filled === false) {
+    return closeReinforceFallback({ rowId, adapter, strategy, log, state, session, config, cMap, stopSelf, symbol, leg1Sold, bracketResult, reason: 'reforço: recompra a mercado não preencheu' });
+  }
+
+  const leg2Cost = parseFloat(buyResult.quoteQty ?? rungUsd);
+  const leg2Qty = parseFloat(buyResult.filledQty);
+  const leg2Price = parseFloat(buyResult.avgPrice);
+
+  const heldCost = (leg1Sold ? 0 : leg1Cost) + leg2Cost;
+  const heldQty = (leg1Sold ? 0 : leg1Qty) + leg2Qty;
+
+  const reinforce = {
+    active: true,
+    addDropPct: rf.addDropPct,
+    exitRisePct: rf.exitRisePct,
+    rungUsd,
+    legs: [
+      { price: buyPrice, qtyBought: leg1Qty, costUsd: leg1Cost, soldAtStop: leg1Sold, proceedsUsd: leg1Proceeds },
+      { price: leg2Price, qtyBought: leg2Qty, costUsd: leg2Cost },
+    ],
+    rungs: 1,
+    lastEntryPrice: leg2Price,
+    heldCostUsd: heldCost,
+    leg1RealizedLossUsd: leg1RealizedLoss,
+    fundsShortSince: null,
+    startedAt: new Date().toISOString(),
+  };
+  session.rulesState = {
+    ...(rulesState ?? {}),
+    exitBracket: null, exitBracketError: null,
+    srTargetPrice: null, srTargetForBuy: null, stopPeakPrice: null,
+    reinforce,
+  };
+  await saveState(rowId, {
+    buy_qty: heldQty,
+    buy_price: heldCost / heldQty,
+    buy_usdt: heldCost + leg1RealizedLoss,
+    rules_state: session.rulesState,
+  }, log);
+
+  const d = evaluateReinforceLadder(reinforce, (cMap[config.entry.interval] ?? []).at(-1));
+  const perda = leg1Sold ? `perna 1 vendida no stop (perda ${leg1RealizedLoss.toFixed(2)} USDT)` : 'perna 1 mantida (sem ordem resting)';
+  log(`${Y}⇈ Escada de reforço iniciada — ${perda}, perna 2 comprada @ ${fmtPrice(leg2Price)}. Próximo reforço ${fmtPrice(d.addLevel)} · alvo ${fmtPrice(d.tpPrice)} (+${rf.exitRisePct}%)${X}`);
+  sendWhatsApp(`⇈ ${BOT_LABEL} [${strategyId}] ${symbol}\n"Reforço no stop" disparado: stop virou escada de averaging-down.\n${perda}, perna 2 @ ${fmtPrice(leg2Price)}.\nPróximo reforço em ${fmtPrice(d.addLevel)} (−${rf.addDropPct}%), alvo em ${fmtPrice(d.tpPrice)} (+${rf.exitRisePct}%).\n⚠️ Posição SEM stop de proteção a partir de agora.`);
+  return { phase: 'BOUGHT' };
+}
+
+/** Recompra do reforço falhou — encerra o trade do jeito normal (stop). Se a perna 1 já tinha
+ *  sido vendida na corretora (bracket OCO), só registra; se não (saída via candle), vende agora. */
+async function closeReinforceFallback({ rowId, adapter, strategy, log, state, session, config, cMap, stopSelf, symbol, leg1Sold, bracketResult, reason }) {
+  const exitResult = { reason: 'STOP_LOSS', exitDesc: `Stop (${reason})` };
+  if (leg1Sold) {
+    await recordBracketFill({ rowId, strategy, log, state, session, exitResult, result: bracketResult });
+  } else {
+    try {
+      await executeSell({ rowId, adapter, strategy, log, state, exitResult, session, defaultReasonDesc: 'Stop RSI Momentum (reforço abortado)' });
+    } catch {
+      return { phase: 'BOUGHT' };
+    }
+  }
+  return retireOrCooldown({ rowId, symbol, log, stopSelf, config, cMap, state, session, reason: `trade fechado (${reason})` });
+}
+
+/** Tick da posição em modo reforço — decide por candle (evaluateReinforceLadder): vender a pilha
+ *  no alvo, adicionar um degrau na queda, ou segurar. Retomada após restart entra aqui direto. */
+async function handleReinforceLadder({ rowId, adapter, strategy, log, state, session, config, cMap, stopSelf, symbol, strategyId, rulesState }) {
+  const rf = rulesState.reinforce;
+  const forming = (cMap[config.entry.interval] ?? []).at(-1);
+  // Valor do reforço congelado no início da escada; cai no aporte da entrada / config se faltar.
+  const rungUsd = Number(rf.rungUsd) > 0
+    ? Number(rf.rungUsd)
+    : (Number(config.exit?.reinforceOnStop?.buyUsd) > 0 ? Number(config.exit.reinforceOnStop.buyUsd) : parseFloat(state.capital));
+  const decision = evaluateReinforceLadder(rf, forming);
+
+  if (session.resumedBought && !session.resumeLogged) {
+    session.resumeLogged = true;
+    log(`${G}🔁 Retomando trade — escada de reforço ativa: ${rf.legs.length} compra(s), última entrada ${fmtPrice(rf.lastEntryPrice)}, `
+      + `próximo reforço ${fmtPrice(decision.addLevel)}, alvo ${fmtPrice(decision.tpPrice)} (+${rf.exitRisePct}%), `
+      + `investido líquido ${parseFloat(state.buy_usdt).toFixed(2)} USDT${rf.fundsShortSince ? ` · SEM SALDO desde ${rf.fundsShortSince}` : ''}${X}`);
+  }
+
+  if (decision.action === 'exit') {
+    const exitResult = {
+      reason: 'RSI_TARGET',
+      targetLevelValue: decision.tpPrice,
+      exitDesc: `Reforço no stop — alvo +${rf.exitRisePct}% sobre o último aporte (pilha de ${rf.legs.length} compras)`,
+    };
+    try {
+      await executeSell({ rowId, adapter, strategy, log, state, exitResult, session, defaultReasonDesc: 'Reforço no stop — alvo' });
+    } catch {
+      return { phase: 'BOUGHT' };
+    }
+    log(`${G}⇈✅ Escada de reforço fechada no alvo (+${rf.exitRisePct}% sobre o último aporte) — ${rf.legs.length} compras vendidas a mercado${X}`);
+    return retireOrCooldown({ rowId, symbol, log, stopSelf, config, cMap, state, session, reason: 'escada de reforço fechada no alvo' });
+  }
+
+  if (decision.action === 'addRung') {
+    // Sem saldo já pendente há ≥1h → venda forçada a mercado (o usuário pediu: avisa, espera 1h, vende).
+    if (rf.fundsShortSince && Date.now() - Date.parse(rf.fundsShortSince) >= REINFORCE_FUNDS_SHORT_WAIT_MS) {
+      const exitResult = { reason: 'STOP_LOSS', exitDesc: `Reforço sem saldo — venda forçada a mercado após 1h (pilha de ${rf.legs.length} compras)` };
+      try {
+        await executeSell({ rowId, adapter, strategy, log, state, exitResult, session, defaultReasonDesc: 'Reforço sem saldo — 1h' });
+      } catch {
+        return { phase: 'BOUGHT' };
+      }
+      log(`${Y}⇈🛑 Escada de reforço vendida a mercado — sem saldo pra novo aporte por mais de 1h${X}`);
+      return retireOrCooldown({ rowId, symbol, log, stopSelf, config, cMap, state, session, reason: 'escada de reforço vendida (sem saldo, 1h)' });
+    }
+
+    // Trava de segurança do nº de degraus — segura a posição (sem timer), só avisa uma vez.
+    if ((rf.rungs ?? 1) >= REINFORCE_HARD_CAP) {
+      if (!session.reinforceCapWarned) {
+        session.reinforceCapWarned = true;
+        log(`${Y}⚠️  Escada de reforço atingiu a trava de ${REINFORCE_HARD_CAP} degraus em ${symbol} — segurando a pilha, sem adicionar mais${X}`);
+        sendWhatsApp(`⚠️ ${BOT_LABEL} [${strategyId}] ${symbol}\nEscada de reforço parou na trava de ${REINFORCE_HARD_CAP} degraus. Segurando ${rf.legs.length} compras, sem novos aportes. Alvo segue em +${rf.exitRisePct}% do último aporte.`);
+      }
+      return { phase: 'BOUGHT' };
+    }
+
+    let buyResult;
+    try {
+      buyResult = await adapter.marketBuy(rungUsd);
+    } catch (err) {
+      return reinforceFundsShort({ rowId, log, state, session, rulesState, rf, symbol, strategyId, note: err.message });
+    }
+    if (buyResult?.filled === false) {
+      return reinforceFundsShort({ rowId, log, state, session, rulesState, rf, symbol, strategyId, note: 'ordem a mercado não preencheu' });
+    }
+
+    const legCost = parseFloat(buyResult.quoteQty ?? rungUsd);
+    const legQty = parseFloat(buyResult.filledQty);
+    const legPrice = parseFloat(buyResult.avgPrice);
+    const heldCost = (rf.heldCostUsd ?? parseFloat(state.buy_usdt)) + legCost;
+    const newQty = parseFloat(state.buy_qty) + legQty;
+    const legs = [...(rf.legs ?? []), { price: legPrice, qtyBought: legQty, costUsd: legCost }];
+    const newReinforce = {
+      ...rf, legs,
+      rungs: (rf.rungs ?? 1) + 1,
+      lastEntryPrice: legPrice,
+      heldCostUsd: heldCost,
+      fundsShortSince: null,
+    };
+    session.rulesState = { ...rulesState, reinforce: newReinforce };
+    await saveState(rowId, {
+      buy_qty: newQty,
+      buy_price: heldCost / newQty,
+      buy_usdt: heldCost + (rf.leg1RealizedLossUsd ?? 0),
+      rules_state: session.rulesState,
+    }, log);
+
+    const next = evaluateReinforceLadder(newReinforce, forming);
+    log(`${Y}⇈ Reforço #${newReinforce.rungs} a mercado @ ${fmtPrice(legPrice)} — pilha ${legs.length} compras, média ${fmtPrice(heldCost / newQty)}, `
+      + `próximo reforço ${fmtPrice(next.addLevel)} · alvo ${fmtPrice(next.tpPrice)}${X}`);
+    sendWhatsApp(`⇈ ${BOT_LABEL} [${strategyId}] ${symbol}\nReforço #${newReinforce.rungs} a mercado @ ${fmtPrice(legPrice)}.\nPilha: ${legs.length} compras, média ${fmtPrice(heldCost / newQty)}.\nPróximo reforço ${fmtPrice(next.addLevel)} (−${rf.addDropPct}%), alvo ${fmtPrice(next.tpPrice)} (+${rf.exitRisePct}%).`);
+    return { phase: 'BOUGHT' };
+  }
+
+  return { phase: 'BOUGHT' };
+}
+
+/** Marca o início da janela de 1h "sem saldo pra reforço" (ou não faz nada se já marcada) —
+ *  handleReinforceLadder vende a mercado quando a hora passa. */
+async function reinforceFundsShort({ rowId, log, state, session, rulesState, rf, symbol, strategyId, note }) {
+  if (rf.fundsShortSince) return { phase: 'BOUGHT' }; // já contando a 1h
+  const since = new Date().toISOString();
+  session.rulesState = { ...rulesState, reinforce: { ...rf, fundsShortSince: since } };
+  await saveState(rowId, { rules_state: session.rulesState }, log);
+  log(`${Y}⚠️  Sem saldo pra o reforço #${(rf.rungs ?? 1) + 1} de ${symbol} (${note}) — segurando a pilha; venda a mercado em 1h se não recuperar${X}`);
+  sendWhatsApp(`⚠️ ${BOT_LABEL} [${strategyId}] ${symbol}\nSem saldo pra o próximo reforço (${note}). Segurando ${(rf.legs?.length ?? 0)} compras.\nSe não houver saldo em 1h (a partir de ${since}), a pilha é vendida a mercado.`);
+  return { phase: 'BOUGHT' };
 }
 
 // ── startSymbol ───────────────────────────────────────────────────────────────
@@ -966,7 +1258,11 @@ async function main() {
   }
 
   console.log('🚀 rsi-momentum-bot iniciado — scanner de mercado + pullback/OCO avaliados minuto a minuto');
-  logStartupConfig(await loadGlobalConfigBody(sbReq, DEFAULT_USER_ID));
+  const cfgRow = await sbReq('GET', 'rsi_momentum_global_config', null, `?user_id=eq.${DEFAULT_USER_ID}&select=updated_at&limit=1`).catch(() => null);
+  const cfgSource = cfgRow?.[0]?.updated_at
+    ? `config global do painel (rsi_momentum_global_config, salva em ${cfgRow[0].updated_at})`
+    : 'PRESET ESTÁTICO — nenhuma config salva no painel/SQL ainda (rode supabase/set-rsi-momentum-winning-config.sql)';
+  logStartupConfig(await loadGlobalConfigBody(sbReq, DEFAULT_USER_ID), cfgSource);
 
   await syncExchangeClocks();
   setInterval(syncExchangeClocks, 60 * 60_000);

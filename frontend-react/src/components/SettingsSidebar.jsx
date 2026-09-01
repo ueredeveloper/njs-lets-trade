@@ -3,9 +3,11 @@ import { reloadCandles, getMaCrossScreenerConfig, saveMaCrossScreenerConfig,
   getBollingerMedianTrendConfig, saveBollingerMedianTrendConfig,
   getRsiMomentumConfig, saveRsiMomentumConfig,
   getCacheSettings, saveCacheSettings } from '../services/api';
-import { RSI_MOMENTUM_ALL_INTERVALS, RSI_MOMENTUM_BB_PERIODS, RSI_MOMENTUM_BB_STD_DEVS, RSI_MOMENTUM_CLOUD_PCT_OPTIONS, RSI_MOMENTUM_CLOUD_INTERVAL_OPTIONS, RSI_MOMENTUM_CLOUD_CANDLE_COUNT_OPTIONS, RSI_MOMENTUM_TRAILING_TARGET_STEP_OPTIONS, RSI_MOMENTUM_BANDWIDTH_LOOKBACK_OPTIONS,
+import { RSI_MOMENTUM_ALL_INTERVALS, RSI_MOMENTUM_BB_PERIODS, RSI_MOMENTUM_BB_STD_DEVS, RSI_MOMENTUM_TRAILING_TARGET_STEP_OPTIONS, RSI_MOMENTUM_BANDWIDTH_LOOKBACK_OPTIONS,
   RSI_MOMENTUM_TARGET_MODE_OPTIONS, RSI_MOMENTUM_STOP_MODE_OPTIONS, RSI_MOMENTUM_TARGET_PCT_OPTIONS, RSI_MOMENTUM_COIN_STEP_OPTIONS, RSI_MOMENTUM_STOP_STEP_OPTIONS, RSI_MOMENTUM_STOP_PCT_OPTIONS,
-  RSI_MOMENTUM_PIVOT_PCT_OPTIONS, RSI_MOMENTUM_PIVOT_GAIN_OPTIONS, RSI_MOMENTUM_WIDTH_PCT_OPTIONS, RSI_MOMENTUM_ATR_MULT_OPTIONS, RSI_MOMENTUM_HARD_TP_OPTIONS }
+  RSI_MOMENTUM_PIVOT_PCT_OPTIONS, RSI_MOMENTUM_PIVOT_GAIN_OPTIONS, RSI_MOMENTUM_WIDTH_PCT_OPTIONS, RSI_MOMENTUM_ATR_MULT_OPTIONS, RSI_MOMENTUM_HARD_TP_OPTIONS,
+  RSI_MOMENTUM_SR_INTERVAL_OPTIONS, RSI_MOMENTUM_SR_CANDLE_COUNT_OPTIONS, RSI_MOMENTUM_SR_RANK_OPTIONS, RSI_MOMENTUM_SR_ENTRY_MAX_PCT_OPTIONS,
+  RSI_MOMENTUM_REINFORCE_DROP_OPTIONS, RSI_MOMENTUM_REINFORCE_RISE_OPTIONS, RSI_MOMENTUM_REINFORCE_USD_OPTIONS, RSI_MOMENTUM_EARLY_CONFIRM_RSI_OPTIONS, RSI_MOMENTUM_MIN_VOLUME_OPTIONS }
   from '../constants/rsiMomentumConfigSchema';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useI18n } from '../i18n';
@@ -1100,30 +1102,74 @@ export default function SettingsSidebar({ open, onClose }) {
                   </div>
                 </div>
 
+                {/* RSI de 5min — dois usos opostos, lado a lado pra não confundir:
+                    Confirmação adiantada ANTECIPA o sinal; Filtro RSI 5min VETA sinais fracos. */}
                 <div className="rounded-md p-2.5" style={{ background: '#0f1219', border: '1px solid #2a2d3a' }}>
-                  <p className="text-p5/70 text-[10px] font-semibold uppercase tracking-wider mb-1">{t('settings.rsimomentum_earlyconfirm_title')}</p>
-                  <p className="text-[10px] text-p5/40 mb-2 leading-relaxed">{t('settings.rsimomentum_earlyconfirm_hint')}</p>
-                  <label className="flex items-start gap-2.5 cursor-pointer group mb-2">
-                    <input
-                      type="checkbox"
-                      checked={rsiMomentumConfig.entry.earlyConfirm.enabled}
-                      onChange={(e) => patchRsiMomentumNested('entry', 'earlyConfirm', { enabled: e.target.checked })}
-                      className="mt-0.5 shrink-0 accent-p4"
-                    />
-                    <span className="text-p5 text-xs leading-snug group-hover:text-white transition-colors">
-                      {t('settings.rsimomentum_earlyconfirm_enabled')}
-                    </span>
-                  </label>
-                  <label className="flex flex-col gap-1 w-1/2">
-                    <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_earlyconfirm_interval')}</span>
-                    <select
-                      className={`${inp} w-full`}
-                      value={rsiMomentumConfig.entry.earlyConfirm.interval}
-                      onChange={(e) => patchRsiMomentumNested('entry', 'earlyConfirm', { interval: e.target.value })}
-                    >
-                      {RSI_MOMENTUM_ALL_INTERVALS.map((iv) => <option key={iv} value={iv}>{iv}</option>)}
-                    </select>
-                  </label>
+                  <p className="text-p5/70 text-[10px] font-semibold uppercase tracking-wider mb-1">{t('settings.rsimomentum_rsi5m_group_title')}</p>
+                  <p className="text-[10px] text-p5/40 mb-2.5 leading-relaxed">{t('settings.rsimomentum_rsi5m_group_hint')}</p>
+
+                  {/* Confirmação adiantada — ANTECIPA */}
+                  <div className="rounded p-2 mb-2" style={{ background: '#0b0e14', border: '1px solid #23283a' }}>
+                    <label className="flex items-start gap-2.5 cursor-pointer group mb-1.5">
+                      <input
+                        type="checkbox"
+                        checked={rsiMomentumConfig.entry.earlyConfirm.enabled}
+                        onChange={(e) => patchRsiMomentumNested('entry', 'earlyConfirm', { enabled: e.target.checked })}
+                        className="mt-0.5 shrink-0 accent-p4"
+                      />
+                      <span className="text-p5 text-xs leading-snug group-hover:text-white transition-colors">
+                        <span className="text-emerald-400 font-semibold">⏩ {t('settings.rsimomentum_earlyconfirm_title')}</span> — {t('settings.rsimomentum_earlyconfirm_enabled')}
+                      </span>
+                    </label>
+                    <p className="text-[9px] text-p5/40 mb-1.5 leading-relaxed">{t('settings.rsimomentum_earlyconfirm_hint')}</p>
+                    <div className="grid grid-cols-2 gap-2">
+                      <label className="flex flex-col gap-1">
+                        <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_earlyconfirm_interval')}</span>
+                        <select
+                          className={`${inp} w-full`}
+                          value={rsiMomentumConfig.entry.earlyConfirm.interval}
+                          onChange={(e) => patchRsiMomentumNested('entry', 'earlyConfirm', { interval: e.target.value })}
+                        >
+                          {RSI_MOMENTUM_ALL_INTERVALS.map((iv) => <option key={iv} value={iv}>{iv}</option>)}
+                        </select>
+                      </label>
+                      <label className="flex flex-col gap-1">
+                        <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_earlyconfirm_rsi')}</span>
+                        <select
+                          className={`${inp} w-full`}
+                          value={rsiMomentumConfig.entry.earlyConfirm.rsiThreshold ?? 70}
+                          onChange={(e) => patchRsiMomentumNested('entry', 'earlyConfirm', { rsiThreshold: Number(e.target.value) })}
+                        >
+                          {RSI_MOMENTUM_EARLY_CONFIRM_RSI_OPTIONS.map((v) => <option key={v} value={v}>{`RSI > ${v}`}</option>)}
+                        </select>
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* Filtro RSI 5min — VETA */}
+                  <div className="rounded p-2" style={{ background: '#0b0e14', border: '1px solid #23283a' }}>
+                    <label className="flex items-start gap-2.5 cursor-pointer group mb-1.5">
+                      <input
+                        type="checkbox"
+                        checked={rsiMomentumConfig.entry.rsi5mFilter.enabled}
+                        onChange={(e) => patchRsiMomentumNested('entry', 'rsi5mFilter', { enabled: e.target.checked })}
+                        className="mt-0.5 shrink-0 accent-p4"
+                      />
+                      <span className="text-p5 text-xs leading-snug group-hover:text-white transition-colors">
+                        <span className="text-amber-400 font-semibold">⛔ {t('settings.rsimomentum_rsi5m_title')}</span> — {t('settings.rsimomentum_rsi5m_enabled')}
+                      </span>
+                    </label>
+                    <p className="text-[9px] text-p5/40 mb-1.5 leading-relaxed">{t('settings.rsimomentum_rsi5m_hint')}</p>
+                    <label className="flex flex-col gap-1 w-1/2">
+                      <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_rsi5m_threshold')}</span>
+                      <input
+                        type="number" min={50} max={95}
+                        className={`${inp} w-full`}
+                        value={rsiMomentumConfig.entry.rsi5mFilter.threshold}
+                        onChange={(e) => patchRsiMomentumNested('entry', 'rsi5mFilter', { threshold: Number(e.target.value) })}
+                      />
+                    </label>
+                  </div>
                 </div>
 
                 <label className="flex flex-col gap-1">
@@ -1337,6 +1383,57 @@ export default function SettingsSidebar({ open, onClose }) {
                   })()}
                 </div>
 
+                {/* REFORÇO NO STOP (martingale) — averaging-down quando a compra inicial bate o stop */}
+                {(() => {
+                  const rf = rsiMomentumConfig.exit.reinforceOnStop ?? { enabled: false, addDropPct: 10, exitRisePct: 15, buyUsd: 40 };
+                  const patchRf = (patch) => patchRsiMomentumNested('exit', 'reinforceOnStop', patch);
+                  return (
+                    <div className="rounded-md p-2.5" style={{ background: '#1a1210', border: '1px solid #4a2d2a' }}>
+                      <p className="text-p5/70 text-[10px] font-semibold uppercase tracking-wider mb-1">{t('settings.rsimomentum_reinforce_title')}</p>
+                      <p className="text-[10px] text-red-400/80 mb-2 leading-relaxed">{t('settings.rsimomentum_reinforce_hint')}</p>
+                      <label className="flex items-start gap-2.5 cursor-pointer group mb-2">
+                        <input
+                          type="checkbox"
+                          checked={rf.enabled}
+                          onChange={(e) => patchRf({ enabled: e.target.checked })}
+                          className="mt-0.5 shrink-0 accent-p4"
+                        />
+                        <span className="text-p5 text-xs leading-snug group-hover:text-white transition-colors">
+                          {t('settings.rsimomentum_reinforce_enabled')}
+                        </span>
+                      </label>
+                      {rf.enabled && (
+                        <div className="grid grid-cols-2 gap-2">
+                          <label className="flex flex-col gap-1">
+                            <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_reinforce_drop')}</span>
+                            <select className={`${inp} w-full`}
+                              value={rf.addDropPct}
+                              onChange={(e) => patchRf({ addDropPct: Number(e.target.value) })}>
+                              {RSI_MOMENTUM_REINFORCE_DROP_OPTIONS.map((v) => <option key={v} value={v}>−{v}%</option>)}
+                            </select>
+                          </label>
+                          <label className="flex flex-col gap-1">
+                            <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_reinforce_rise')}</span>
+                            <select className={`${inp} w-full`}
+                              value={rf.exitRisePct}
+                              onChange={(e) => patchRf({ exitRisePct: Number(e.target.value) })}>
+                              {RSI_MOMENTUM_REINFORCE_RISE_OPTIONS.map((v) => <option key={v} value={v}>+{v}%</option>)}
+                            </select>
+                          </label>
+                          <label className="flex flex-col gap-1">
+                            <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_reinforce_usd')}</span>
+                            <select className={`${inp} w-full`}
+                              value={rf.buyUsd ?? 40}
+                              onChange={(e) => patchRf({ buyUsd: Number(e.target.value) })}>
+                              {RSI_MOMENTUM_REINFORCE_USD_OPTIONS.map((v) => <option key={v} value={v}>${v}</option>)}
+                            </select>
+                          </label>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+
                 <div className="rounded-md p-2.5" style={{ background: '#0f1219', border: '1px solid #2a2d3a' }}>
                   <p className="text-p5/70 text-[10px] font-semibold uppercase tracking-wider mb-1">{t('settings.rsimomentum_bandwidth_title')}</p>
                   <p className="text-[10px] text-p5/40 mb-2 leading-relaxed">{t('settings.rsimomentum_bandwidth_hint')}</p>
@@ -1404,114 +1501,7 @@ export default function SettingsSidebar({ open, onClose }) {
                   </div>
                 </div>
 
-                <div className="rounded-md p-2.5" style={{ background: '#0f1219', border: '1px solid #2a2d3a' }}>
-                  <p className="text-p5/70 text-[10px] font-semibold uppercase tracking-wider mb-1">{t('settings.rsimomentum_rsi5m_title')}</p>
-                  <p className="text-[10px] text-p5/40 mb-2 leading-relaxed">{t('settings.rsimomentum_rsi5m_hint')}</p>
-                  <label className="flex items-start gap-2.5 cursor-pointer group mb-2">
-                    <input
-                      type="checkbox"
-                      checked={rsiMomentumConfig.entry.rsi5mFilter.enabled}
-                      onChange={(e) => patchRsiMomentumNested('entry', 'rsi5mFilter', { enabled: e.target.checked })}
-                      className="mt-0.5 shrink-0 accent-p4"
-                    />
-                    <span className="text-p5 text-xs leading-snug group-hover:text-white transition-colors">
-                      {t('settings.rsimomentum_rsi5m_enabled')}
-                    </span>
-                  </label>
-                  <label className="flex flex-col gap-1 w-1/2">
-                    <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_rsi5m_threshold')}</span>
-                    <input
-                      type="number" min={50} max={95}
-                      className={`${inp} w-full`}
-                      value={rsiMomentumConfig.entry.rsi5mFilter.threshold}
-                      onChange={(e) => patchRsiMomentumNested('entry', 'rsi5mFilter', { threshold: Number(e.target.value) })}
-                    />
-                  </label>
-                </div>
 
-                <div className="rounded-md p-2.5" style={{ background: '#0f1219', border: '1px solid #2a2d3a' }}>
-                  <p className="text-p5/70 text-[10px] font-semibold uppercase tracking-wider mb-1">{t('settings.rsimomentum_spikeguard_title')}</p>
-                  <p className="text-[10px] text-p5/40 mb-2 leading-relaxed">{t('settings.rsimomentum_spikeguard_hint')}</p>
-                  <label className="flex items-start gap-2.5 cursor-pointer group mb-2">
-                    <input
-                      type="checkbox"
-                      checked={rsiMomentumConfig.entry.spikeGuard.enabled}
-                      onChange={(e) => patchRsiMomentumNested('entry', 'spikeGuard', { enabled: e.target.checked })}
-                      className="mt-0.5 shrink-0 accent-p4"
-                    />
-                    <span className="text-p5 text-xs leading-snug group-hover:text-white transition-colors">
-                      {t('settings.rsimomentum_spikeguard_enabled')}
-                    </span>
-                  </label>
-                  <label className="flex flex-col gap-1 w-1/2">
-                    <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_spikeguard_max_move_pct')}</span>
-                    <input
-                      type="number" min={0.5} max={50} step={0.5}
-                      className={`${inp} w-full`}
-                      value={rsiMomentumConfig.entry.spikeGuard.maxMovePct}
-                      onChange={(e) => patchRsiMomentumNested('entry', 'spikeGuard', { maxMovePct: Number(e.target.value) })}
-                    />
-                  </label>
-                </div>
-
-                <div className="rounded-md p-2.5" style={{ background: '#0f1219', border: '1px solid #2a2d3a' }}>
-                  <p className="text-p5/70 text-[10px] font-semibold uppercase tracking-wider mb-1">{t('settings.rsimomentum_prevdaycloud_title')}</p>
-                  <p className="text-[10px] text-p5/40 mb-2 leading-relaxed">{t('settings.rsimomentum_prevdaycloud_hint')}</p>
-                  <label className="flex items-start gap-2.5 cursor-pointer group mb-2">
-                    <input
-                      type="checkbox"
-                      checked={rsiMomentumConfig.entry.prevDayCloud.enabled}
-                      onChange={(e) => patchRsiMomentumNested('entry', 'prevDayCloud', { enabled: e.target.checked })}
-                      className="mt-0.5 shrink-0 accent-p4"
-                    />
-                    <span className="text-p5 text-xs leading-snug group-hover:text-white transition-colors">
-                      {t('settings.rsimomentum_prevdaycloud_enabled')}
-                    </span>
-                  </label>
-                  <div className="grid grid-cols-3 gap-2">
-                    <label className="flex flex-col gap-1">
-                      <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_prevdaycloud_max_pct')}</span>
-                      <select
-                        className={`${inp} w-full`}
-                        value={rsiMomentumConfig.entry.prevDayCloud.maxPct}
-                        onChange={(e) => patchRsiMomentumNested('entry', 'prevDayCloud', { maxPct: Number(e.target.value) })}
-                      >
-                        {RSI_MOMENTUM_CLOUD_PCT_OPTIONS.map((v) => <option key={v} value={v}>{v}%</option>)}
-                      </select>
-                    </label>
-                    <label className="flex flex-col gap-1">
-                      <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_prevdaycloud_interval')}</span>
-                      <select
-                        className={`${inp} w-full`}
-                        value={rsiMomentumConfig.entry.prevDayCloud.interval}
-                        onChange={(e) => patchRsiMomentumNested('entry', 'prevDayCloud', { interval: e.target.value })}
-                      >
-                        {RSI_MOMENTUM_CLOUD_INTERVAL_OPTIONS.map((v) => <option key={v} value={v}>{v}</option>)}
-                      </select>
-                    </label>
-                    <label className="flex flex-col gap-1">
-                      <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_prevdaycloud_candle_count')}</span>
-                      <select
-                        className={`${inp} w-full`}
-                        value={rsiMomentumConfig.entry.prevDayCloud.candleCount}
-                        onChange={(e) => patchRsiMomentumNested('entry', 'prevDayCloud', { candleCount: Number(e.target.value) })}
-                      >
-                        {RSI_MOMENTUM_CLOUD_CANDLE_COUNT_OPTIONS.map((v) => <option key={v} value={v}>{`x${v}`}</option>)}
-                      </select>
-                    </label>
-                  </div>
-                  <label className="flex items-start gap-2.5 cursor-pointer group mt-2">
-                    <input
-                      type="checkbox"
-                      checked={rsiMomentumConfig.entry.prevDayCloud.useHighLow}
-                      onChange={(e) => patchRsiMomentumNested('entry', 'prevDayCloud', { useHighLow: e.target.checked })}
-                      className="mt-0.5 shrink-0 accent-p4"
-                    />
-                    <span className="text-p5 text-xs leading-snug group-hover:text-white transition-colors">
-                      {t('settings.rsimomentum_prevdaycloud_use_high_low')}
-                    </span>
-                  </label>
-                </div>
 
                 <div className="rounded-md p-2.5" style={{ background: '#0f1219', border: '1px solid #2a2d3a' }}>
                   <p className="text-p5/70 text-[10px] font-semibold uppercase tracking-wider mb-1">{t('settings.rsimomentum_macdfilter_title')}</p>
@@ -1570,14 +1560,78 @@ export default function SettingsSidebar({ open, onClose }) {
                   )}
                 </div>
 
+                {/* Suporte / Resistência — filtro de desconto na entrada + alvo na resistência */}
+                <div className="rounded-md p-2.5" style={{ background: '#0f1219', border: '1px solid #2a2d3a' }}>
+                  <p className="text-p5/70 text-[10px] font-semibold uppercase tracking-wider mb-1">{t('settings.rsimomentum_sr_title')}</p>
+                  <p className="text-[10px] text-p5/40 mb-2 leading-relaxed">{t('settings.rsimomentum_sr_hint')}</p>
+                  <label className="flex items-start gap-2.5 cursor-pointer group mb-2">
+                    <input
+                      type="checkbox"
+                      checked={rsiMomentumConfig.entry.supportResistance?.enabled ?? false}
+                      onChange={(e) => patchRsiMomentumNested('entry', 'supportResistance', { enabled: e.target.checked })}
+                      className="mt-0.5 shrink-0 accent-p4"
+                    />
+                    <span className="text-p5 text-xs leading-snug group-hover:text-white transition-colors">
+                      {t('settings.rsimomentum_sr_enabled')}
+                    </span>
+                  </label>
+                  {(rsiMomentumConfig.entry.supportResistance?.enabled ?? false) && (
+                    <div className="grid grid-cols-2 gap-2">
+                      <label className="flex flex-col gap-1">
+                        <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_sr_interval')}</span>
+                        <select className={`${inp} w-full`}
+                          value={rsiMomentumConfig.entry.supportResistance?.interval ?? '4h'}
+                          onChange={(e) => patchRsiMomentumNested('entry', 'supportResistance', { interval: e.target.value })}>
+                          {RSI_MOMENTUM_SR_INTERVAL_OPTIONS.map((v) => <option key={v} value={v}>{v}</option>)}
+                        </select>
+                      </label>
+                      <label className="flex flex-col gap-1">
+                        <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_sr_candle_count')}</span>
+                        <select className={`${inp} w-full`}
+                          value={rsiMomentumConfig.entry.supportResistance?.candleCount ?? 50}
+                          onChange={(e) => patchRsiMomentumNested('entry', 'supportResistance', { candleCount: Number(e.target.value) })}>
+                          {RSI_MOMENTUM_SR_CANDLE_COUNT_OPTIONS.map((v) => <option key={v} value={v}>{v}</option>)}
+                        </select>
+                      </label>
+                      <label className="flex flex-col gap-1">
+                        <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_sr_entry_rank')}</span>
+                        <select className={`${inp} w-full`}
+                          value={rsiMomentumConfig.entry.supportResistance?.entrySupportRank ?? 1}
+                          onChange={(e) => patchRsiMomentumNested('entry', 'supportResistance', { entrySupportRank: Number(e.target.value) })}>
+                          {RSI_MOMENTUM_SR_RANK_OPTIONS.map((v) => <option key={v} value={v}>{v}º</option>)}
+                        </select>
+                      </label>
+                      <label className="flex flex-col gap-1">
+                        <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_sr_exit_rank')}</span>
+                        <select className={`${inp} w-full`}
+                          value={rsiMomentumConfig.entry.supportResistance?.exitResistanceRank ?? 1}
+                          onChange={(e) => patchRsiMomentumNested('entry', 'supportResistance', { exitResistanceRank: Number(e.target.value) })}>
+                          {RSI_MOMENTUM_SR_RANK_OPTIONS.map((v) => <option key={v} value={v}>{v}ª</option>)}
+                        </select>
+                      </label>
+                      <label className="flex flex-col gap-1">
+                        <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_sr_entry_max_pct')}</span>
+                        <select className={`${inp} w-full`}
+                          value={rsiMomentumConfig.entry.supportResistance?.entryMaxPct ?? 5}
+                          onChange={(e) => patchRsiMomentumNested('entry', 'supportResistance', { entryMaxPct: Number(e.target.value) })}>
+                          {RSI_MOMENTUM_SR_ENTRY_MAX_PCT_OPTIONS.map((v) => <option key={v} value={v}>{v}%</option>)}
+                        </select>
+                      </label>
+                    </div>
+                  )}
+                </div>
+
                 <label className="flex flex-col gap-1">
                   <span className="text-[10px] text-p5/50">{t('settings.rsimomentum_min_volume')}</span>
-                  <input
-                    type="number" min={0} step={100_000}
+                  <select
                     className={inp}
                     value={rsiMomentumConfig.volume.minVolumeUsdt}
                     onChange={(e) => patchRsiMomentum('volume', { minVolumeUsdt: Number(e.target.value) })}
-                  />
+                  >
+                    {RSI_MOMENTUM_MIN_VOLUME_OPTIONS.map((v) => (
+                      <option key={v} value={v}>{`${v / 1_000_000}M USDT`}</option>
+                    ))}
+                  </select>
                   <span className="text-[10px] text-p5/40">{t('settings.rsimomentum_min_volume_hint')}</span>
                 </label>
 

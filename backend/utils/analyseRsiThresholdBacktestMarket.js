@@ -2,7 +2,7 @@
 
 const { getActiveUsdtPairs } = require('../binance/getActiveUsdtPairs');
 const analyseRsiThresholdBacktest = require('./analyseRsiThresholdBacktest');
-const { countBaseVsEvolvedExits, computeCloudZoneStats, computeSupportResistanceZoneStats, computeRsi1hBreakdown } = require('./analyseRsiThresholdBacktest');
+const { countBaseVsEvolvedExits, computeCloudZoneStats, computeSupportResistanceZoneStats, computeRsi1hBreakdown, computeReinforceStats } = require('./analyseRsiThresholdBacktest');
 const getTickers = require('../binance/cachedTicker24hr');
 const { computeDailyEntryStats } = require('./dailyEntryStats');
 const { computeAvgTradeDurationMs } = require('./tradeDurationStats');
@@ -151,7 +151,10 @@ async function analyseRsiThresholdBacktestMarket(options = {}) {
         : 0;
     const volumeBreakdown = volumeMap.size > 0 ? computeVolumeBreakdown(filledOccurrences, volumeMap) : null;
     const positionSizeUsd = perSymbolOptions.positionSizeUsd ?? 40;
-    const totalInvestedUsd = parseFloat((filledOccurrences.length * positionSizeUsd).toFixed(2));
+    const totalInvestedUsd = parseFloat(
+        filledOccurrences.reduce((s, o) => s + (o.investedUsd ?? positionSizeUsd), 0).toFixed(2),
+    );
+    const rfEnabled = !!perSymbolOptions.reinforceOnStop?.enabled;
     const totalPnlUsd = parseFloat(filledOccurrences.reduce((s, o) => s + o.pnlUsd, 0).toFixed(2));
     const avgPnlPct = filledOccurrences.length > 0
         ? parseFloat((filledOccurrences.reduce((s, o) => s + o.pnlPct, 0) / filledOccurrences.length).toFixed(2))
@@ -216,6 +219,11 @@ async function analyseRsiThresholdBacktestMarket(options = {}) {
         hardTakeProfit: perSymbolOptions.hardTakeProfit?.enabled
             ? { pct: Math.max(1, Math.min(200, Number(perSymbolOptions.hardTakeProfit.pct ?? 15))) }
             : null,
+        reinforceOnStop: rfEnabled ? {
+            addDropPct: Math.max(2, Math.min(30, Number(perSymbolOptions.reinforceOnStop.addDropPct ?? 10))),
+            exitRisePct: Math.max(2, Math.min(50, Number(perSymbolOptions.reinforceOnStop.exitRisePct ?? 15))),
+        } : null,
+        reinforceStats: rfEnabled ? computeReinforceStats(filledOccurrences) : null,
         dailyEntryStats: computeDailyEntryStats(filledOccurrences, positionSizeUsd, perSymbolOptions.entriesDayRange ?? null),
         tradeDuration: computeAvgTradeDurationMs(filledOccurrences),
         symbolsTotal: allSymbols.length,

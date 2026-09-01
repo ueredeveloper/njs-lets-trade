@@ -59,8 +59,12 @@ const RSI_MOMENTUM_DEFAULTS = {
      *  formação como preço provisório — se isso já cruza rsiThreshold, o sinal dispara ali (2-3
      *  checkpoints antes do fechamento cheio). O threshold e o RSI continuam sendo os de
      *  entry.interval — só o momento em que a confirmação é aceita adianta. Ver
-     *  findEarlyConfirmCheckpoint/evaluateEntrySignal em strategyEngine.js. */
-    earlyConfirm: { enabled: true, interval: '5m' },
+     *  findEarlyConfirmCheckpoint/evaluateEntrySignal em strategyEngine.js.
+     *  `rsiThreshold` (padrão 70) — o RSI provisório (recalculado com o checkpoint) precisa
+     *  atingir ESTE valor pra o sinal adiantar; pode ser mais alto que entry.rsiThreshold pra
+     *  não adiantar cedo demais. Nunca menor que entry.rsiThreshold na prática (o motor usa
+     *  max(entry.rsiThreshold, este)). */
+    earlyConfirm: { enabled: true, interval: '5m', rsiThreshold: 70 },
     /** Após STOP_LOSS, espera N candles fechados do entry.interval antes de nova compra
      *  (evita reentrar no mesmo dump). Saída no alvo libera na hora. 0 = sem espera. */
     reentryCooldownCandles: 3,
@@ -77,25 +81,10 @@ const RSI_MOMENTUM_DEFAULTS = {
      *  momento do sinal > threshold, além do cruzamento no entry.interval — tese: um RSI 5m já
      *  alto confirma que o momentum de curtíssimo prazo está junto com o sinal do entry.interval,
      *  em vez de ser só o 15m cruzando sozinho. */
-    rsi5mFilter: { enabled: false, threshold: 70 },
-    /** Ligado por padrão — recusa o sinal se o PRÓPRIO candle do cruzamento (abertura→fechamento)
-     *  já subiu mais que maxMovePct%. Caso real que motivou o filtro: STORJUSDT 24/08/2026, candle
-     *  de 15m que subiu +11% sozinho — o pullback de belowPct% (tipicamente <1%) protege só do
-     *  fechamento já inflado, não do preço de antes do pump, então a compra saiu perto do topo do
-     *  próprio candle do sinal. Ver checkSpikeGuardFilter em strategyEngine.js. */
-    spikeGuard: { enabled: true, maxMovePct: 5 },
-    /** Ligado por padrão (90%/4h×3). Exige que o preço do sinal esteja ATÉ o limite
-     *  [-∞, lower + maxPct% × altura] da nuvem D-1 (banda entre abertura/fechamento do candle
-     *  DIÁRIO nativo anterior ao dia do sinal — mesmo indicador do gráfico e do backtest, ver
-     *  checkPrevDayCloudFilter em strategyEngine.js). maxPct=100 exigiria só estar até o topo da
-     *  nuvem; 90% (padrão) restringe um pouco abaixo do topo. Preço ABAIXO da nuvem inteira
-     *  também libera — desconto ainda maior que a própria nuvem; só bloqueia acima do limite
-     *  (caro demais). interval: mesmo seletor do gráfico e do backtest em Estatísticas (padrão
-     *  4h). candleCount: quantos candles anteriores entram no envelope da nuvem — 1 é só o
-     *  candle anterior; N>1 junta os últimos N (menor/maior open+close entre eles); padrão 3.
-     *  useHighLow: aumenta a nuvem usando máxima/mínima (pavios) em vez de abertura/fechamento
-     *  (corpo) dos candles da janela — faixa mais larga; padrão ligado. */
-    prevDayCloud: { enabled: true, maxPct: 90, interval: '4h', candleCount: 3, useHighLow: true },
+    rsi5mFilter: { enabled: true, threshold: 70 },
+    /** Recusa o sinal se o PRÓPRIO candle do cruzamento já subiu mais que maxMovePct%. Desligado
+     *  por padrão (sem seletor no painel; ligável só via config salva). Ver checkSpikeGuardFilter. */
+    spikeGuard: { enabled: false, maxMovePct: 5 },
     /** Ligado por padrão (1h) — confirmação de momentum por MACD (12/26/9 fixo, só o intervalo é
      *  configurável): só libera o sinal se o histograma (MACD − linha de sinal), no intervalo
      *  escolhido, estiver POSITIVO no candle fechado mais recente — mesma regra do backtest (ver
@@ -108,7 +97,21 @@ const RSI_MOMENTUM_DEFAULTS = {
      *  enquanto o timeframe maior ainda está fraco. Base: Elder Triple Screen, linha 50 do RSI,
      *  range rules de Brown/Cardwell. Sem candles de 1h suficientes ainda, libera (fail-open, como
      *  ADX/MACD). Ver checkHigherRsiFilter em strategyEngine.js. */
-    higherRsiFilter: { enabled: false, minRsi: 50 },
+    higherRsiFilter: { enabled: true, minRsi: 60 },
+    /** Ligado por padrão (4h, janela 50 candles) — filtro/alvo por Suporte-Resistência, mesmo
+     *  detectSupportResistance do gráfico e do backtest (options.supportResistance em
+     *  analyseRsiThresholdBacktest.js). No bot as zonas são recalculadas SEMPRE do "agora"
+     *  (últimos `candleCount` candles FECHADOS do `interval`), sem look-ahead.
+     *  ENTRADA (filtro de desconto): só libera o sinal se o preço estiver no máximo `entryMaxPct`%
+     *  ACIMA da `entrySupportRank`-ésima linha de suporte abaixo dele (preço abaixo do suporte
+     *  também libera; sem suporte de referência não bloqueia — fail-open, como os demais).
+     *  SAÍDA: o alvo da bracket vira a `exitResistanceRank`-ésima resistência acima do preço de
+     *  entrada, no lugar do targetMode/targetPct (o stop não muda). Sem resistência acima, cai no
+     *  targetMode. Ver checkSupportResistanceEntry/resolveSrZonesNow em strategyEngine.js. */
+    supportResistance: {
+      enabled: true, interval: '4h', candleCount: 50,
+      entrySupportRank: 1, exitResistanceRank: 3, entryMaxPct: 5,
+    },
   },
 
   exit: {
@@ -118,10 +121,12 @@ const RSI_MOMENTUM_DEFAULTS = {
      *                  trailingTarget.coinStepPct), base = restingBracket.targetPct.
      *   'off'        — sem alvo; a posição só sai pelo stop (na corretora o alvo é colocado
      *                  no teto permitido pela Binance, ~+100%, e na prática nunca é atingido). */
-    targetMode: 'fixed',
+    targetMode: 'off',
     /** Ordem TP/SL resting na corretora (Binance: OCO real; Gate.io: emulado). targetPct = alvo
-     *  em % sobre o preço de entrada — valor do alvo FIXO e base do alvo CONTÍNUO. */
-    restingBracket: { enabled: true, targetPct: 5 },
+     *  em % sobre o preço de entrada — valor do alvo FIXO e base do alvo CONTÍNUO. Com
+     *  targetMode 'off' o alvo % é inerte (só o teto de lucro e/ou o alvo por resistência do S/R
+     *  valem); mantido como base pra quando o modo voltar pra fixed/continuous. */
+    restingBracket: { enabled: true, targetPct: 10 },
     /** Degraus do ALVO contínuo (targetMode === 'continuous') — contador PRÓPRIO, independente
      *  do stop: a cada `coinStepPct`% de alta do PICO desde a entrada, o alvo sobe `stepPct`
      *  pontos percentuais acima da base (restingBracket.targetPct) — ver computeTrailingTargetPrice
@@ -145,15 +150,26 @@ const RSI_MOMENTUM_DEFAULTS = {
      *  startPct = distância inicial do stop (%), piso de todos os modos; cai em stopLoss.maxLossPct
      *  se não informado. */
     trailingStop: {
-      enabled: true, mode: 'continuous', startPct: 5, coinStepPct: 3, stopStepPct: 2,
+      enabled: false, mode: 'continuous', startPct: 5, coinStepPct: 3, stopStepPct: 2,
       pivotPct: 1, aCoinStepPct: 3, aStopStepPct: 2.5, bCoinStepPct: 3, bStopStepPct: 1,
       pivotGainPct: 5, wNearPct: 4, wFarPct: 9, atrMult: 2, atrMaxPct: 12,
     },
+    /** Ligado por padrão (−10% / +15%) — "Reforço no stop" (escada de averaging-down /
+     *  martingale): quando a compra INICIAL bate o stop, o bot NÃO encerra — recompra a mercado
+     *  (mesmo aporte) e passa a operar SEM stop resting, só vigiando o candle: a cada nova queda
+     *  de `addDropPct`% abaixo do último aporte adiciona mais uma compra do mesmo tamanho; a 1ª
+     *  alta de `exitRisePct`% acima do último aporte vende TODA a pilha a mercado. Sem limite de
+     *  degraus (trava de segurança interna). Sem saldo pra um novo aporte: avisa e, passada 1h,
+     *  vende a pilha a mercado. Estado persistido em rsi_multi_bot_state.rules_state.reinforce —
+     *  o bot retoma a escada no meio depois de um restart. Ver evaluateReinforceLadder em
+     *  strategyEngine.js e handleReinforceLadder em rsi-momentum-bot.js. ATENÇÃO: depois de
+     *  disparado, a posição fica SEM stop de proteção (risco de martingale). */
+    reinforceOnStop: { enabled: true, addDropPct: 10, exitRisePct: 15, buyUsd: 40 },
   },
 
   /** Modo percentual fixo (com trailing opcional injetado via exit.trailingStop acima, que tem
    *  a própria matemática de dois degraus — não usa o `trailing` de computeStopLossFloor). */
-  stopLoss: { enabled: true, maxLossPct: 5 },
+  stopLoss: { enabled: true, maxLossPct: 10 },
 
   /** pollMs curto (1min) por padrão: o pullback e a espera de fill são avaliados minuto a
    *  minuto (ver comentário de entry.pullback acima) — diferente do bollinger-bands, que só
@@ -227,6 +243,9 @@ function normalizeEarlyConfirm(block) {
     // (config incoerente), evaluateEntrySignal (ver findEarlyConfirmCheckpoint) simplesmente não
     // encontra checkpoint e cai no comportamento original (só candle fechado), sem quebrar nada.
     interval: normalizeInterval(src.interval, d.interval),
+    // RSI provisório mínimo pra adiantar o sinal (ver JSDoc acima). O motor ainda aplica
+    // max(entry.rsiThreshold, este), então um valor abaixo do limiar de entrada não afrouxa nada.
+    rsiThreshold: Math.max(50, Math.min(95, Number(src.rsiThreshold ?? d.rsiThreshold))),
   };
 }
 
@@ -239,19 +258,6 @@ function normalizeSpikeGuard(block) {
   };
 }
 
-function normalizePrevDayCloud(block) {
-  const d = RSI_MOMENTUM_DEFAULTS.entry.prevDayCloud;
-  const src = block ?? {};
-  return {
-    // Mesmo motivo de normalizePullback acima — precisa cair no default (d.enabled), não num
-    // booleano fixo, senão trocar o enabled do default não afeta quem nunca salvou config.
-    enabled: typeof src.enabled === 'boolean' ? src.enabled : d.enabled,
-    maxPct: Math.max(1, Math.min(100, Number(src.maxPct ?? d.maxPct))),
-    interval: ALL_INTERVALS.includes(src.interval) ? src.interval : d.interval,
-    candleCount: Math.max(1, Math.min(10, Math.round(Number(src.candleCount ?? d.candleCount)))),
-    useHighLow: typeof src.useHighLow === 'boolean' ? src.useHighLow : d.useHighLow,
-  };
-}
 
 function normalizeMacdFilter(block) {
   const d = RSI_MOMENTUM_DEFAULTS.entry.macdFilter;
@@ -270,6 +276,22 @@ function normalizeHigherRsiFilter(block) {
   return {
     enabled: typeof src.enabled === 'boolean' ? src.enabled : d.enabled,
     minRsi: Math.max(1, Math.min(99, Number(src.minRsi ?? d.minRsi))),
+  };
+}
+
+/** Filtro/alvo por Suporte-Resistência — mesmo shape do backtest (options.supportResistance).
+ *  interval FIXO no leque padrão; janela 20..1000; ranks 1..3; entryMaxPct 1..100. */
+function normalizeSupportResistance(block) {
+  const d = RSI_MOMENTUM_DEFAULTS.entry.supportResistance;
+  const src = block ?? {};
+  const rank = (v, dflt) => Math.max(1, Math.min(3, Math.round(Number(v ?? dflt))));
+  return {
+    enabled: typeof src.enabled === 'boolean' ? src.enabled : d.enabled,
+    interval: normalizeInterval(src.interval, d.interval),
+    candleCount: Math.max(20, Math.min(1000, Math.round(Number(src.candleCount ?? d.candleCount)))),
+    entrySupportRank: rank(src.entrySupportRank, d.entrySupportRank),
+    exitResistanceRank: rank(src.exitResistanceRank, d.exitResistanceRank),
+    entryMaxPct: Math.max(1, Math.min(100, Number(src.entryMaxPct ?? d.entryMaxPct))),
   };
 }
 
@@ -292,9 +314,9 @@ function normalizeEntry(block) {
     bandWidth: normalizeBandWidth(src.bandWidth),
     rsi5mFilter: normalizeRsi5mFilter(src.rsi5mFilter),
     spikeGuard: normalizeSpikeGuard(src.spikeGuard),
-    prevDayCloud: normalizePrevDayCloud(src.prevDayCloud),
     macdFilter: normalizeMacdFilter(src.macdFilter),
     higherRsiFilter: normalizeHigherRsiFilter(src.higherRsiFilter),
+    supportResistance: normalizeSupportResistance(src.supportResistance),
   };
 }
 
@@ -343,6 +365,20 @@ function normalizeHardTakeProfit(block) {
   };
 }
 
+/** "Reforço no stop" (martingale) — { enabled, addDropPct 2..30, exitRisePct 2..50 }. Mesmo
+ *  shape do backtest (options.reinforceOnStop). */
+function normalizeReinforceOnStop(block) {
+  const d = RSI_MOMENTUM_DEFAULTS.exit.reinforceOnStop;
+  const src = block ?? {};
+  return {
+    enabled: typeof src.enabled === 'boolean' ? src.enabled : d.enabled,
+    addDropPct: Math.max(2, Math.min(30, Number(src.addDropPct ?? d.addDropPct))),
+    exitRisePct: Math.max(2, Math.min(50, Number(src.exitRisePct ?? d.exitRisePct))),
+    // Valor (USDT) de cada compra de reforço — padrão = mesmo aporte da 1ª entrada (40).
+    buyUsd: Math.max(5, Math.min(100_000, Number(src.buyUsd ?? d.buyUsd))),
+  };
+}
+
 /** Modo do alvo — independente do stop. Sem `targetMode` salvo (config antiga), deriva do
  *  `trailingTarget.enabled` legado (true → contínuo, senão fixo). */
 function normalizeTargetMode(block) {
@@ -363,6 +399,7 @@ function normalizeExit(block) {
     trailingTarget: normalizeTrailingTarget(block?.trailingTarget),
     trailingStop: normalizeTrailingStop(block?.trailingStop),
     hardTakeProfit: normalizeHardTakeProfit(block?.hardTakeProfit),
+    reinforceOnStop: normalizeReinforceOnStop(block?.reinforceOnStop),
   };
 }
 
