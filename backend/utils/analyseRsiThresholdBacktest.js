@@ -827,8 +827,7 @@ function countBaseVsEvolvedExits(filledOccurrences) {
  * @param {number}  [options.higherRsiFilter.minRsi=50]  RSI 1h mínimo exigido no instante do sinal.
  * @param {object} [options.rsi5mFilter]  Mesmo entry.rsi5mFilter do bot ao vivo (ver checkRsi5mFilter
  *   em backend/bot/rsi-momentum/strategyEngine.js): exige RSI(14) do candle de 5m fechado no
- *   FECHAMENTO do candle do sinal > `threshold`. Vem da config GLOBAL do bot (igual priorRsiFilter),
- *   não tem toggle nas Estatísticas. Fail-open no warmup.
+ *   FECHAMENTO do candle do sinal > `threshold`. Toggle próprio nas Estatísticas. Fail-open no warmup.
  * @param {boolean} [options.rsi5mFilter.enabled=false]
  * @param {number}  [options.rsi5mFilter.threshold=70]  RSI 5m mínimo (50–95).
  * @param {object} [options.newHighFilter]  Filtro "não comprar esticado" (só backtest/Estatísticas):
@@ -919,8 +918,7 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
 
     // Filtro RSI 5m (mesmo entry.rsi5mFilter do bot ao vivo — ver checkRsi5mFilter em
     // backend/bot/rsi-momentum/strategyEngine.js): exige RSI(14) do candle de 5m fechado no
-    // fechamento do candle do sinal > threshold. Aqui vem da config GLOBAL do bot (igual ao
-    // priorRsiFilter), sem toggle nas Estatísticas.
+    // fechamento do candle do sinal > threshold.
     const rsi5mEnabled = !!rsi5mFilter?.enabled;
     const rsi5mThreshold = Math.max(50, Math.min(95, Number(rsi5mFilter?.threshold ?? 70)));
 

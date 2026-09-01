@@ -200,7 +200,7 @@ export async function fetchRsiThresholdBacktest(symbol, interval, options = {}) 
     source = null, candleCount = null, lookbackHours = 0, bandWidth = null, prevDayCloud = null,
     supportResistance = null,
     minVolumeUsdt = 0, excludeOpenExits = false, prevCandleStop = false,
-    adxFilter = null, macdFilter = null, higherRsiFilter = null, newHighFilter = null, hardTakeProfit = null, trailingStop = null, trailingTarget = null, targetMode = null, entriesDayRange = null,
+    adxFilter = null, macdFilter = null, higherRsiFilter = null, rsi5mFilter = null, newHighFilter = null, hardTakeProfit = null, trailingStop = null, trailingTarget = null, targetMode = null, entriesDayRange = null,
   } = options;
   const params = new URLSearchParams({
     symbol, interval, rsiThreshold, pullbackPct, targetPct, stopLossPct, positionSizeUsd,
@@ -240,6 +240,10 @@ export async function fetchRsiThresholdBacktest(symbol, interval, options = {}) 
     params.set('higherRsiFilterEnabled', '1');
     params.set('higherRsiFilterMinRsi', String(higherRsiFilter.minRsi ?? 50));
   }
+  if (rsi5mFilter?.enabled) {
+    params.set('rsi5mFilterEnabled', '1');
+    params.set('rsi5mFilterThreshold', String(rsi5mFilter.threshold ?? 70));
+  }
   if (newHighFilter?.enabled) {
     params.set('newHighFilterEnabled', '1');
     params.set('newHighFilterLookback', String(newHighFilter.lookback ?? 20));
@@ -272,7 +276,7 @@ export async function fetchRsiThresholdBacktestMarket(interval, options = {}) {
     rsiThreshold = 70, pullbackPct = 0, targetPct = 5, stopLossPct = 5, positionSizeUsd = 40,
     source = null, candleCount = null, lookbackHours = 0, bandWidth = null, maxRows = null,
     prevDayCloud = null, supportResistance = null, minVolumeUsdt = 0, excludeOpenExits = false, prevCandleStop = false,
-    adxFilter = null, macdFilter = null, higherRsiFilter = null, newHighFilter = null, hardTakeProfit = null, trailingStop = null, trailingTarget = null, targetMode = null, entriesDayRange = null,
+    adxFilter = null, macdFilter = null, higherRsiFilter = null, rsi5mFilter = null, newHighFilter = null, hardTakeProfit = null, trailingStop = null, trailingTarget = null, targetMode = null, entriesDayRange = null,
   } = options;
   const params = new URLSearchParams({
     interval, rsiThreshold, pullbackPct, targetPct, stopLossPct, positionSizeUsd,
@@ -312,6 +316,10 @@ export async function fetchRsiThresholdBacktestMarket(interval, options = {}) {
   if (higherRsiFilter?.enabled) {
     params.set('higherRsiFilterEnabled', '1');
     params.set('higherRsiFilterMinRsi', String(higherRsiFilter.minRsi ?? 50));
+  }
+  if (rsi5mFilter?.enabled) {
+    params.set('rsi5mFilterEnabled', '1');
+    params.set('rsi5mFilterThreshold', String(rsi5mFilter.threshold ?? 70));
   }
   if (newHighFilter?.enabled) {
     params.set('newHighFilterEnabled', '1');

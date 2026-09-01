@@ -36,6 +36,7 @@ router.get('/rsi-threshold-backtest', async (req, res) => {
         adxFilterEnabled, adxFilterInterval, adxFilterMinAdx,
         macdFilterEnabled, macdFilterInterval,
         higherRsiFilterEnabled, higherRsiFilterMinRsi,
+        rsi5mFilterEnabled, rsi5mFilterThreshold,
         newHighFilterEnabled, newHighFilterLookback, newHighFilterMarginPct,
         hardTakeProfitEnabled, hardTakeProfitPct,
         targetMode, trailingTargetCoinStepPct, trailingTargetStepPct,
@@ -53,9 +54,6 @@ router.get('/rsi-threshold-backtest', async (req, res) => {
 
     const options = {
         priorRsiFilter:  globalConfig?.entry?.priorRsiFilter ?? null,
-        // Filtro RSI 5m: mesma ideia do priorRsiFilter — lido da config GLOBAL do bot, sem toggle
-        // nas Estatísticas (liga/desliga em Configurações → RSI Momentum).
-        rsi5mFilter:     globalConfig?.entry?.rsi5mFilter ?? null,
         rsiThreshold:    rsiThreshold    != null ? parseFloat(rsiThreshold)    : 70,
         pullbackPct:     pullbackPct     != null ? parseFloat(pullbackPct)     : 0,
         targetPct:       targetPct       != null ? parseFloat(targetPct)      : 5,
@@ -103,6 +101,10 @@ router.get('/rsi-threshold-backtest', async (req, res) => {
         higherRsiFilter: higherRsiFilterEnabled === '1' ? {
             enabled: true,
             minRsi:  higherRsiFilterMinRsi ? parseFloat(higherRsiFilterMinRsi) : 50,
+        } : null,
+        rsi5mFilter: rsi5mFilterEnabled === '1' ? {
+            enabled:   true,
+            threshold: rsi5mFilterThreshold ? parseFloat(rsi5mFilterThreshold) : 70,
         } : null,
         newHighFilter: newHighFilterEnabled === '1' ? {
             enabled:   true,

@@ -331,6 +331,9 @@ const RSI_MOM_ADX_MIN_OPTIONS = [15, 20, 25, 30];
  *  momentum / limite inferior da faixa de alta de Brown-Cardwell; grade grossa de propósito
  *  (evitar otimizar um valor fino no mesmo histórico — ver conversa sobre data snooping). */
 const RSI_MOM_HIGHER_RSI_MIN_OPTIONS = [40, 45, 50, 55, 60, 65, 70];
+/** Limiar do filtro "RSI 5m" (mesmo entry.rsi5mFilter do bot ao vivo) — RSI(14) do candle de 5m
+ *  no fechamento do candle do sinal precisa estar ACIMA disso. Grade da análise offline. */
+const RSI_MOM_RSI5M_OPTIONS = [55, 60, 65, 70, 75, 80];
 /** Filtro "Topo N": quantos candles do intervalo do sinal olhar pra trás pra achar a máxima
  *  recente, e qual a folga % abaixo dela que ainda libera a compra (0 = só bloqueia acima do topo). */
 const RSI_MOM_NEW_HIGH_LOOKBACK_OPTIONS = [10, 15, 20, 30, 50, 100, 200];
@@ -403,6 +406,8 @@ const RSI_MOM_DEFAULT_PREFS = {
   macdFilterInterval: '1h',
   higherRsiFilterEnabled: false,
   higherRsiFilterMinRsi: 50,
+  rsi5mFilterEnabled: false,
+  rsi5mFilterThreshold: 70,
   newHighFilterEnabled: false,
   newHighFilterLookback: 20,
   newHighFilterMarginPct: 2,
@@ -1215,6 +1220,10 @@ function RsiMomentumStats({ autoCalc }) {
           enabled: true,
           minRsi: p.higherRsiFilterMinRsi,
         } : null,
+        rsi5mFilter: p.rsi5mFilterEnabled ? {
+          enabled: true,
+          threshold: p.rsi5mFilterThreshold,
+        } : null,
         newHighFilter: p.newHighFilterEnabled ? {
           enabled: true,
           lookback: p.newHighFilterLookback,
@@ -1870,6 +1879,30 @@ function RsiMomentumStats({ autoCalc }) {
               value={prefs.higherRsiFilterMinRsi}
               onChange={(e) => patchPrefs({ higherRsiFilterMinRsi: Number(e.target.value) })}>
               {RSI_MOM_HIGHER_RSI_MIN_OPTIONS.map((v) => <option key={v} value={v}>{v}</option>)}
+            </select>
+          </div>
+        )}
+
+        {/* Filtro RSI 5m (mesmo entry.rsi5mFilter do bot ao vivo): exige RSI(14) do candle de 5m no
+            fechamento do candle do sinal ACIMA do limiar — confirma o momentum de curtíssimo prazo. */}
+        <div className="flex items-center gap-1 shrink-0 pb-1" title={t('stats.tip.rsi5m_filter')}>
+          <span className="hidden md:inline text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.rsi5m_filter')}</span>
+          <button
+            type="button"
+            onClick={() => patchPrefs({ rsi5mFilterEnabled: !prefs.rsi5mFilterEnabled })}
+            className={`relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${prefs.rsi5mFilterEnabled ? 'bg-p4' : 'bg-p3/40'}`}
+          >
+            <span className={`inline-block h-3 w-3 rounded-full bg-white shadow transition-transform ${prefs.rsi5mFilterEnabled ? 'translate-x-3' : 'translate-x-0'}`} />
+          </button>
+        </div>
+
+        {prefs.rsi5mFilterEnabled && (
+          <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.rsi5m_threshold')}>
+            <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.rsi5m_threshold')}</label>
+            <select className={inp}
+              value={prefs.rsi5mFilterThreshold}
+              onChange={(e) => patchPrefs({ rsi5mFilterThreshold: Number(e.target.value) })}>
+              {RSI_MOM_RSI5M_OPTIONS.map((v) => <option key={v} value={v}>{`>${v}`}</option>)}
             </select>
           </div>
         )}
