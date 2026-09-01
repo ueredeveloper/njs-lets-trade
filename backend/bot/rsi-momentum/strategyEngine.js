@@ -313,6 +313,87 @@ function evaluateReinforceLadder(reinforceState, forming) {
     return { action: 'hold', addLevel, tpPrice };
 }
 
+/**
+ * "Prontidão de entrada" — roda TODOS os filtros da config ativa SEM curto-circuito (diferente de
+ * evaluateEntrySignal, que para no 1º bloqueio) e devolve o retrato completo de quão perto a moeda
+ * está de disparar o sinal do bot: o RSI atual no entry.interval e a distância dele até o limiar,
+ * se está subindo, e o status de cada filtro (bandWidth, RSI 5m, MACD, RSI 1h, S/R). Usado pela
+ * lista "Prontas pra entrar" em Analisar Indicadores (ver fetchRsiMomentumWatchlist.js).
+ */
+function evaluateEntryReadiness(config, cMap) {
+    const entry = config.entry;
+    const iv = entry.interval;
+    const closed = closedCandlesOnly(cMap[iv] ?? []);
+    if (closed.length < RSI_PERIOD + 3) return null;
+
+    const rsiSeries = computeRsiSeries(closed);
+    if (rsiSeries.length < 3) return null;
+    const rsi = rsiSeries[rsiSeries.length - 1];
+    const rsiPrev = rsiSeries[rsiSeries.length - 2];
+    const rsiPrev2 = rsiSeries[rsiSeries.length - 3];
+    const threshold = Number(entry.rsiThreshold);
+    const rising = rsi > rsiPrev;
+    const accelerating = rising && (rsi - rsiPrev) >= (rsiPrev - rsiPrev2);
+    // Já cruzaria AGORA se o candle fechasse assim? (o scanner pega esses e cria favorito)
+    const crossed = rsiPrev < threshold && rsi >= threshold;
+    const gapToThreshold = parseFloat((threshold - rsi).toFixed(2));
+
+    const filters = [];
+    const push = (key, check) => filters.push({
+        key,
+        ok: check.allowed,
+        reason: check.allowed ? null : check.reason,
+        detail: check,
+    });
+
+    push('bandWidth', checkBandWidthFilter(config, cMap));
+    push('rsi5m', checkRsi5mFilter(config, cMap));
+    push('macd', checkMacdFilter(config, cMap));
+    push('higherRsi', checkHigherRsiFilter(config, cMap));
+
+    // S/R: o filtro depende do preço do sinal; usa o último fechamento como proxy do "agora".
+    const lastClose = parseFloat(closed[closed.length - 1].close);
+    push('sr', (() => {
+        const r = checkSupportResistanceEntry(config, cMap, lastClose);
+        return { allowed: r.allowed, reason: r.reason, ...r };
+    })());
+
+    const active = filters.filter(f => filterIsActive(entry, f.key));
+    const filtersOk = active.filter(f => f.ok).length;
+    const filtersTotal = active.length;
+    const blockers = active.filter(f => !f.ok).map(f => f.key);
+
+    return {
+        interval: iv,
+        rsi: parseFloat(rsi.toFixed(2)),
+        rsiPrev: parseFloat(rsiPrev.toFixed(2)),
+        threshold,
+        gapToThreshold,
+        rising,
+        accelerating,
+        crossed,
+        lastClose,
+        filters: active,
+        filtersOk,
+        filtersTotal,
+        blockers,
+        // "Só falta o RSI cruzar": todos os filtros ativos passam e o RSI ainda não cruzou.
+        onlyMissingCross: filtersTotal > 0 ? (filtersOk === filtersTotal && !crossed && gapToThreshold >= 0) : (!crossed && gapToThreshold >= 0),
+    };
+}
+
+/** Um filtro está LIGADO na config? (pra separar "passou" de "nem se aplica"). */
+function filterIsActive(entry, key) {
+    switch (key) {
+        case 'bandWidth': return !!entry.bandWidth?.enabled;
+        case 'rsi5m': return !!entry.rsi5mFilter?.enabled;
+        case 'macd': return !!entry.macdFilter?.enabled;
+        case 'higherRsi': return !!entry.higherRsiFilter?.enabled;
+        case 'sr': return !!entry.supportResistance?.enabled;
+        default: return false;
+    }
+}
+
 /** ATR de Wilder (período 14) em % do último fechamento — usado pelo stop contínuo modo
  *  'atrTrail'. Calculado uma vez, no momento da compra, a partir dos candles FECHADOS do
  *  entry.interval (ver rsi-momentum-bot.js, guardado em rules_state.stopAtrPct). null sem candles
@@ -767,6 +848,7 @@ module.exports = {
     pickResistance,
     checkSupportResistanceEntry,
     evaluateReinforceLadder,
+    evaluateEntryReadiness,
     computeAtrPct,
     evaluateEntrySignal,
     evaluateExit,

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useCurrency } from '../contexts/CurrencyContext';
-import { fetchCandlesAndIndicators, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter, fetchMaDistanceFilter, fetchIndicatorGrowthFilter, fetchMarketCapFilter, fetchBollingerBandPositionFilter, fetchBollingerBandWidthFilter, fetchBollingerMedianTrendFilter, fetchVwapPositionFilter, fetchVwapBandWidthFilter, fetchVwapBandExpansionFilter, fetchUserPrefs, saveUserPrefs } from '../services/api';
+import { fetchCandlesAndIndicators, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter, fetchMaDistanceFilter, fetchIndicatorGrowthFilter, fetchMarketCapFilter, fetchBollingerBandPositionFilter, fetchBollingerBandWidthFilter, fetchBollingerMedianTrendFilter, fetchVwapPositionFilter, fetchVwapBandWidthFilter, fetchVwapBandExpansionFilter, fetchRsiMomentumWatchlist, fetchUserPrefs, saveUserPrefs } from '../services/api';
 import { useI18n } from '../i18n';
 import {
   createRsiFilter,
@@ -82,6 +82,7 @@ const INTERVAL_LABELS = {
 const EMPTY_INDICATOR = { type: '', intervals: ['8h'] };
 
 const DEFAULT_INDICATORS = [
+  { type: 'botReadiness', mode: 'ready' },
   { type: 'bollingerBandWidth', intervals: ['15m'], period: '20', stdDev: '2', lookback: '300' },
 ];
 
@@ -273,6 +274,7 @@ function indDescKey(type) {
   if (type === 'vwapBandWidth') return 'vwap_band_width';
   if (type === 'vwapBandExpansion') return 'vwap_band_expansion';
   if (type === 'indicatorGrowth') return 'indicator_growth';
+  if (type === 'botReadiness') return 'bot_readiness';
   return 'marketcap';
 }
 
@@ -404,6 +406,7 @@ function IndicatorRow({ value, onChange }) {
             <option value="maDistance">{t('ind.ma_distance')}</option>
             <option value="relativeStrengthIndex">{t('ind.rsi')}</option>
             <option value="marketCap">{t('ind.marketcap')}</option>
+            <option value="botReadiness">{t('ind.bot_readiness')}</option>
             <option value="bollingerPosition">{t('ind.bb_position')}</option>
             <option value="bollingerBandWidth">{t('ind.bollinger_band_width')}</option>
             <option value="bollingerMedianTrend">{t('ind.bollinger_median_trend')}</option>
@@ -417,6 +420,16 @@ function IndicatorRow({ value, onChange }) {
           )}
         </div>
 
+
+        {type === 'botReadiness' && (
+          <select className={sel} value={value.mode ?? 'ready'}
+            onChange={(e) => onChange({ ...value, mode: e.target.value })}
+            title={t('ind.desc.bot_readiness')}>
+            <option value="ready">{t('ind.bot_readiness_ready')}</option>
+            <option value="contention">{t('ind.bot_readiness_contention')}</option>
+            <option value="signal">{t('ind.bot_readiness_signal')}</option>
+          </select>
+        )}
 
         {type === 'marketCap' && (
           <>
@@ -1192,7 +1205,7 @@ function IndicatorRow({ value, onChange }) {
       )}
 
       {/* Intervalos de candle das MAs (≠ tempo desde o cruzamento) */}
-      {type !== 'marketCap' && !(type === 'maCrossover' && value.mixedIntervals) && (
+      {type !== 'marketCap' && type !== 'botReadiness' && !(type === 'maCrossover' && value.mixedIntervals) && (
         <div className="flex flex-row flex-wrap gap-1 items-center">
           {type === 'maCrossover' && (
             <span className="text-[10px] text-p5/60 shrink-0 mr-1" title={t('macross.tip.candle_iv')}>
@@ -1347,7 +1360,8 @@ export default function IndicatorPanel({ open, onToggle }) {
       const vwapBandWidthIndicators = indicators.filter((ind) => ind.type === 'vwapBandWidth');
       const vwapBandExpansionIndicators = indicators.filter((ind) => ind.type === 'vwapBandExpansion');
       const growthIndicators = indicators.filter((ind) => ind.type === 'indicatorGrowth');
-      const otherIndicators = indicators.filter((ind) => ind.type && ind.type !== 'relativeStrengthIndex' && ind.type !== 'marketCap' && ind.type !== 'movingAverage' && ind.type !== 'maTimeAbove' && ind.type !== 'maCrossover' && ind.type !== 'maCompare' && ind.type !== 'maDistance' && ind.type !== 'bollingerPosition' && ind.type !== 'bollingerBandWidth' && ind.type !== 'bollingerMedianTrend' && ind.type !== 'vwapPosition' && ind.type !== 'vwapBandWidth' && ind.type !== 'vwapBandExpansion' && ind.type !== 'indicatorGrowth');
+      const botReadyIndicators = indicators.filter((ind) => ind.type === 'botReadiness');
+      const otherIndicators = indicators.filter((ind) => ind.type && ind.type !== 'relativeStrengthIndex' && ind.type !== 'marketCap' && ind.type !== 'botReadiness' && ind.type !== 'movingAverage' && ind.type !== 'maTimeAbove' && ind.type !== 'maCrossover' && ind.type !== 'maCompare' && ind.type !== 'maDistance' && ind.type !== 'bollingerPosition' && ind.type !== 'bollingerBandWidth' && ind.type !== 'bollingerMedianTrend' && ind.type !== 'vwapPosition' && ind.type !== 'vwapBandWidth' && ind.type !== 'vwapBandExpansion' && ind.type !== 'indicatorGrowth');
 
       // Salva intervalos e análises usadas nas preferências
       const allIntervals = [...new Set(indicators.flatMap(ind => ind.intervals ?? []))];
@@ -1379,6 +1393,23 @@ export default function IndicatorPanel({ open, onToggle }) {
         const preset = ind.preset ?? 'baixo';
         const filter = await fetchMarketCapFilter(metric, preset);
         addFilter(filter);
+      }
+
+      // Prontas pra entrar (bot RSI Momentum): varre o mercado com a config global ativa do bot
+      // e devolve as moedas mais perto de disparar o sinal (ver fetchRsiMomentumWatchlist.js).
+      for (const ind of botReadyIndicators) {
+        const mode = ind.mode ?? 'ready';
+        const data = await fetchRsiMomentumWatchlist(); // cache de 45s no backend
+        const pick = mode === 'signal'
+          ? (c) => c.crossed
+          : mode === 'contention'
+            ? () => true
+            : (c) => c.onlyMissingCross || c.crossed; // 'ready'
+        const list = (data.coins ?? []).filter(pick).map((c) => c.symbol);
+        const name = mode === 'signal' ? 'bot|Sinal agora'
+          : mode === 'contention' ? `bot|No páreo (RSI perto de ${data.config?.rsiThreshold ?? '?'})`
+            : 'bot|Prontas (só falta cruzar)';
+        addFilter({ name, list });
       }
 
       // MA50: cache rsiCache (intervalos 15m/1h/4h aquecidos no servidor)

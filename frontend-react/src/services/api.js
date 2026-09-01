@@ -344,6 +344,17 @@ export async function fetchRsiThresholdBacktestMarket(interval, options = {}) {
   return res.json();
 }
 
+/** Moedas mais próximas de disparar o sinal do bot RSI Momentum (config global ativa) —
+ *  ver backend/services/fetchRsiMomentumWatchlist.js. `fresh` fura o cache de 45s do backend. */
+export async function fetchRsiMomentumWatchlist({ fresh = false } = {}) {
+  const res = await fetch(`/services/rsi-momentum-watchlist${fresh ? '?fresh=1' : ''}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 /** Salva uma pesquisa da tela Estatísticas → Momentum RSI (config + resumo do resultado) num
  *  JSON no backend, pra comparar combinações depois. Fire-and-forget — não deve quebrar a UI. */
 export async function saveRsiMomentumStatsSearch(payload) {
