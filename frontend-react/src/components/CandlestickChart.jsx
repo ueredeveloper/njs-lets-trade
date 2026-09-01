@@ -6509,6 +6509,7 @@ export default function CandlestickChart() {
               onNeedOlderCandles={handleLoadMoreCandles}
               loadingMoreCandles={loadingMoreCandles}
               onVisibleRangeChange={reportVisibleRange}
+              visibleRange={visibleChartRange}
             />
           ) : chartNode}
           {!showLwChart && !lwSupported && uiPrefs.chartEngineDefault !== 'echarts' && (

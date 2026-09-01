@@ -20,8 +20,10 @@ const C_DOWN = '#ef5350';
  *  p/ resistência. O posto vai no rótulo (S1/S2/R1/R2), não na cor. */
 const SR_SUPPORT_LINE = '#3b82f6';
 const SR_RESISTANCE_LINE = '#ec4899';
-// Estilo 'traço': largura do traço = últimos N candles DO GRÁFICO (não do intervalo do S/R).
-const SR_TRACO_CANDLES = 10;
+// Estilo 'traço': largura mínima do traço, em candles DO GRÁFICO. A largura efetiva é o maior
+// entre isto e ~1 candle do intervalo do S/R (ex.: 4h ≈ 16 candles de 15m) — pra o traço ter
+// tamanho suficiente pra ser visível e "acompanhar" o arrasto, sem virar 10 candles de 4h.
+const SR_TRACO_MIN_CANDLES = 10;
 
 /** Ordena os níveis de um tipo por proximidade do preço (resistência: menor preço = R1; suporte:
  *  maior preço = S1) e anexa `rank` (1..) e `label` ('S1'/'R2'…). */
@@ -664,7 +666,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
   bollingerConfigs = [], srConfig, pphlConfig, wfractalsConfig, zigzagConfig, rsiCrossThreshold = 0, flagsConfig, analysisBoxRect, prevDayCloudConfig, rsi, chopConfig, macdConfig,
   emaPersistCloudData, emaPersistCloudConfirmData, emaPersistCloudConfirm2Data, emaPersistCloudLayers, emaPersistCloudTones, barsSinceCrossData, tdSequentialData,
   stopLossConfig, targetConfig, buyInfo, multitradeMarkers, zoomPeriod, focusLastN,
-  onNeedOlderCandles, loadingMoreCandles, onVisibleRangeChange,
+  onNeedOlderCandles, loadingMoreCandles, onVisibleRangeChange, visibleRange,
 }, ref) {
   const containerRef = useRef(null);
   const chartRef = useRef(null);
@@ -1285,11 +1287,25 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
     if (minTime == null) { makePriceLines(latest, 'ref'); return; }
 
     // TRAÇO: os níveis da âncora mais recente (S/R "de agora"), cada um como um traço horizontal
-    // curto cobrindo só os últimos ~SR_TRACO_CANDLES candles DO GRÁFICO (não do intervalo do S/R
-    // — 10 candles de 4h ficariam largos demais num gráfico de 15m). Sem escada rolante.
+    // curto, SEM escada rolante. O traço termina na borda direita do trecho VISÍVEL (não no último
+    // candle carregado) — assim acompanha o arrasto pra trás. Largura = maior entre
+    // SR_TRACO_MIN_CANDLES e ~1 candle do intervalo do S/R, em candles do gráfico.
     if (srConfig.style === 'traco') {
-      const startT = Math.floor(Number(cs[Math.max(0, cs.length - 1 - SR_TRACO_CANDLES)].openTime) / 1000);
-      const endT = maxTime;
+      const chartStepSec = cs.length > 1
+        ? Math.max(1, Math.floor((Number(cs[cs.length - 1].openTime) - Number(cs[cs.length - 2].openTime)) / 1000))
+        : 900;
+      const srStepSec = anchors.length > 1
+        ? Math.max(chartStepSec, Math.floor((Number(anchors[anchors.length - 1].time) - Number(anchors[anchors.length - 2].time)) / 1000))
+        : chartStepSec * 16;
+      const widthCandles = Math.max(SR_TRACO_MIN_CANDLES, Math.round(srStepSec / chartStepSec));
+      // borda direita do trecho VISÍVEL (prop reativa) → índice do candle do gráfico ali
+      const rightSec = Number.isFinite(visibleRange?.toMs) ? Math.floor(visibleRange.toMs / 1000) : maxTime;
+      let ei = cs.length - 1;
+      for (let i = cs.length - 1; i >= 0; i--) {
+        if (Math.floor(Number(cs[i].openTime) / 1000) <= rightSec) { ei = i; break; }
+      }
+      const endT = Math.floor(Number(cs[ei].openTime) / 1000);
+      const startT = Math.floor(Number(cs[Math.max(0, ei - widthCandles)].openTime) / 1000);
       if (endT > startT) {
         for (const type of ['support', 'resistance']) {
           const color = type === 'support' ? SR_SUPPORT_LINE : SR_RESISTANCE_LINE;
@@ -1348,7 +1364,8 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
         srRollSeriesRef.current.push(s);
       }
     }
-  }, [srConfig, candlesticks]);
+  // visibleRange só reposiciona o stub do 'traço'; degrau/linhas ignoram (posição vem do srConfig).
+  }, [srConfig, candlesticks, visibleRange]);
 
   // Linhas verticais (fullHeight, largura 2px) nos candles em que o RSI(14) cruzou pra cima do
   // "Limiar RSI" — mesmo gatilho do bot RSI Momentum (ver computeRsiUpCrossings). Roxo.
