@@ -22,10 +22,19 @@
 const SB_URL = process.env.SUPABASE_URL;
 const SB_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-const TIMEOUT_MS = 10_000;
-const MAX_RETRIES = 2;
+// Timeout e retries são configuráveis por env — em rede móvel (Termux) o default de 10s
+// estourava com frequência no sync do painel Multi-Trade (multitradeWatch.js), sobretudo
+// quando o Android suspende o processo (doze) e o fetch/timer só "acordam" depois.
+const TIMEOUT_MS = Number(process.env.SUPABASE_TIMEOUT_MS) || 20_000;
+const MAX_RETRIES = Number.isFinite(Number(process.env.SUPABASE_MAX_RETRIES))
+  ? Math.max(0, Number(process.env.SUPABASE_MAX_RETRIES))
+  : 2;
 const RETRY_DELAYS_MS = [500, 1500];
 const RETRYABLE_METHODS = new Set(['GET', 'PATCH', 'DELETE']);
+
+function retryDelay(attempt) {
+  return RETRY_DELAYS_MS[attempt] ?? RETRY_DELAYS_MS[RETRY_DELAYS_MS.length - 1];
+}
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -53,7 +62,7 @@ async function sbReq(method, table, body, query = '') {
     } catch (err) {
       clearTimeout(timer);
       if (canRetry && attempt < MAX_RETRIES) {
-        await sleep(RETRY_DELAYS_MS[attempt]);
+        await sleep(retryDelay(attempt));
         continue;
       }
       throw err.name === 'AbortError'
@@ -65,7 +74,7 @@ async function sbReq(method, table, body, query = '') {
     if (!res.ok) {
       const retryableStatus = res.status >= 500 || res.status === 429;
       if (canRetry && retryableStatus && attempt < MAX_RETRIES) {
-        await sleep(RETRY_DELAYS_MS[attempt]);
+        await sleep(retryDelay(attempt));
         continue;
       }
       throw new Error(`Supabase ${method} ${table} ${res.status}: ${text}`);
