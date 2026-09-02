@@ -2618,7 +2618,7 @@ function buildBuyPnlSeries(buyInfo, candlesticks, DL, LEFT_PAD, RIGHT_PAD, lastC
       backgroundColor: color,
       padding: [2, 4],
       borderRadius: 2,
-      fontSize: 8,
+      fontSize: 14,
       fontWeight: 'bold',
     },
     z: 10,
@@ -2647,7 +2647,7 @@ function buildStopLossLineSeries(buyInfo, stopLossConfig, candlesticks, DL, LEFT
         show: true,
         formatter: fmtChartPrice(lastVal),
         color: '#fff',
-        fontSize: 9,
+        fontSize: 13,
         backgroundColor: '#ef4444',
         padding: [2, 4],
         borderRadius: 2,
@@ -2705,7 +2705,7 @@ function buildBuyPositionSquares(buyInfo, stopLossConfig, targetConfig, candlest
     if (Number.isFinite(targetPrice)) areas.push([
       {
         xAxis: x1, yAxis: buyPrice, itemStyle: { color: 'rgba(34,197,94,0.18)' },
-        label: { show: true, position: 'insideTop', formatter: pctLabel(targetPrice) + (targetConfig.simulated ? ' (simulado)' : ''), color: '#22c55e', fontSize: 11, fontWeight: 'bold' },
+        label: { show: true, position: 'insideTop', formatter: pctLabel(targetPrice) + (targetConfig.simulated ? ' (simulado)' : ''), color: '#22c55e', fontSize: 15, fontWeight: 'bold' },
       },
       { xAxis: x2, yAxis: targetPrice },
     ]);
@@ -2719,7 +2719,7 @@ function buildBuyPositionSquares(buyInfo, stopLossConfig, targetConfig, candlest
       areas.push([
         {
           xAxis: x1, yAxis: buyPrice, itemStyle: { color: 'rgba(239,68,68,0.18)' },
-          label: { show: true, position: 'insideBottom', formatter: pctLabel(stopPrice) + (stopLossConfig.simulated ? ' (simulado)' : ''), color: '#ef4444', fontSize: 11, fontWeight: 'bold' },
+          label: { show: true, position: 'insideBottom', formatter: pctLabel(stopPrice) + (stopLossConfig.simulated ? ' (simulado)' : ''), color: '#ef4444', fontSize: 15, fontWeight: 'bold' },
         },
         { xAxis: x2, yAxis: stopPrice },
       ]);
@@ -2789,7 +2789,7 @@ function buildHistoricalPositionSquares(candlesticks, markers, DL, LEFT_PAD) {
     areas.push([
       {
         xAxis: x1, yAxis: entryPrice, itemStyle: { color },
-        label: { show: true, position: 'inside', formatter: formatPctFromBase(entryPrice, exitPrice), color: labelColor, fontSize: 10, fontWeight: 'bold' },
+        label: { show: true, position: 'inside', formatter: formatPctFromBase(entryPrice, exitPrice), color: labelColor, fontSize: 14, fontWeight: 'bold' },
       },
       { xAxis: x2, yAxis: exitPrice },
     ]);
@@ -2877,7 +2877,7 @@ function buildSrMarkLines(levels, entrySupport = null, exitResistance = null) {
         show: true,
         formatter: `${isRes ? 'R' : 'S'}${rank} ${fmtChartPrice(lvl.price)} (${lvl.touches}x)${tag}`,
         color,
-        fontSize: 9,
+        fontSize: 12,
         fontWeight: (isEntry || isExit) ? 'bold' : 'normal',
         position: 'end',
         padding: [2, 4],
@@ -3147,8 +3147,8 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
         label: {
           show: true, position: 'end', align: 'right', distance: 2,
           formatter: fmtChartPrice(lastClose),
-          color: '#111', fontSize: isMobile ? 14 : 10, fontWeight: 'bold',
-          backgroundColor: '#facc15', padding: isMobile ? [4, 8] : [2, 5], borderRadius: 2,
+          color: '#111', fontSize: isMobile ? 16 : 13, fontWeight: 'bold',
+          backgroundColor: '#facc15', padding: isMobile ? [4, 8] : [3, 6], borderRadius: 2,
         }
       }] : [])
     ]
