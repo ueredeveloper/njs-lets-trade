@@ -4,6 +4,8 @@ const { getActiveUsdtPairs } = require('../binance/getActiveUsdtPairs');
 const analyseRsiThresholdBacktest = require('./analyseRsiThresholdBacktest');
 const { countBaseVsEvolvedExits, computeCloudZoneStats, computeSupportResistanceZoneStats, computeRsi1hBreakdown, computeReinforceStats } = require('./analyseRsiThresholdBacktest');
 const getTickers = require('../binance/cachedTicker24hr');
+const { getGateFavoriteSymbols } = require('../gate/getGateFavoriteSymbols');
+const { getAllGateCurrencies } = require('../gate/getAllGateCurrencies');
 const { computeDailyEntryStats } = require('./dailyEntryStats');
 const { computeAvgTradeDurationMs } = require('./tradeDurationStats');
 
@@ -74,9 +76,16 @@ async function runWithConcurrency(items, worker, concurrency) {
  * @param {number} [options.minVolumeUsdt=0] Filtro de volume 24h (mesmo campo do bot ao vivo) —
  *   filtra a LISTA de símbolos ANTES de rodar o backtest em cada um (mais barato que deixar cada
  *   chamada individual se autobloquear), em vez de ser repassado a analyseRsiThresholdBacktest.
+ *   Aplicado ao volume 24h da Binance nos pares Binance e ao volume 24h da Gate.io nos favoritos
+ *   Gate (fontes diferentes, mesmo limite em USDT).
+ * @param {boolean} [options.includeGateFavorites=false] Além dos pares USDT da Binance, roda
+ *   também o backtest nos símbolos marcados como favoritos da Gate.io (tabela `favorites_gate` —
+ *   mesma lista "Favoritos|Gate" do frontend), cada um com `source: 'gate'`. Símbolos que já
+ *   existem na Binance NÃO são duplicados (a versão Binance prevalece). O filtro `minVolumeUsdt`
+ *   também vale pra eles, aferido pelo volume 24h da própria Gate.io.
  */
 async function analyseRsiThresholdBacktestMarket(options = {}) {
-    const { interval, maxRows = DEFAULT_MAX_ROWS, minVolumeUsdt = 0, ...perSymbolOptions } = options;
+    const { interval, maxRows = DEFAULT_MAX_ROWS, minVolumeUsdt = 0, includeGateFavorites = false, ...perSymbolOptions } = options;
 
     const { list: allSymbols } = await getActiveUsdtPairs();
 
@@ -97,10 +106,44 @@ async function analyseRsiThresholdBacktestMarket(options = {}) {
         symbols = filtered;
     }
 
-    const perSymbolResults = await runWithConcurrency(symbols, async (symbol) => {
+    // Cada item da varredura carrega a corretora de origem. Binance = source do options (null por
+    // padrão); favoritos Gate = 'gate' fixo.
+    const workItems = symbols.map((symbol) => ({ symbol, source: perSymbolOptions.source ?? null }));
+
+    // ── Favoritos Gate.io ────────────────────────────────────────────────────────────────────
+    // Só os símbolos que o usuário marcou como favorito da Gate (não o mercado Gate inteiro).
+    // Filtro de volume pelo volume 24h da PRÓPRIA Gate. Símbolo que também existe na Binance não
+    // entra de novo aqui (já está em workItems como par Binance).
+    let gateFavoritesTotal = 0;
+    let gateFavoritesBlockedByVolume = 0;
+    if (includeGateFavorites && perSymbolOptions.source !== 'gate') {
         try {
-            const result = await analyseRsiThresholdBacktest(symbol, interval, perSymbolOptions);
-            return { symbol, result };
+            const binanceSet = new Set(allSymbols);
+            const favs = (await getGateFavoriteSymbols()).filter((sym) => !binanceSet.has(sym));
+            gateFavoritesTotal = favs.length;
+            let gateVol = new Map();
+            try {
+                const gc = await getAllGateCurrencies();
+                gateVol = new Map(gc.map((c) => [c.symbol, Number(c.volume) || 0]));
+            } catch { /* fail-open: sem volume Gate, não filtra e o breakdown ignora */ }
+            let gateSymbols = favs;
+            if (Number(minVolumeUsdt) > 0 && gateVol.size > 0) {
+                gateSymbols = favs.filter((sym) => (gateVol.get(sym) ?? 0) >= Number(minVolumeUsdt));
+                gateFavoritesBlockedByVolume = favs.length - gateSymbols.length;
+            }
+            for (const sym of gateSymbols) {
+                if (gateVol.has(sym)) volumeMap.set(sym, gateVol.get(sym));
+                workItems.push({ symbol: sym, source: 'gate' });
+            }
+        } catch (err) {
+            console.warn('[rsi-threshold-backtest-market] favoritos Gate ignorados:', err.message);
+        }
+    }
+
+    const perSymbolResults = await runWithConcurrency(workItems, async ({ symbol, source }) => {
+        try {
+            const result = await analyseRsiThresholdBacktest(symbol, interval, { ...perSymbolOptions, source });
+            return { symbol, source, result };
         } catch {
             return null;
         }
@@ -111,11 +154,11 @@ async function analyseRsiThresholdBacktestMarket(options = {}) {
     const allOccurrences = [];
     let symbolsBlockedByBandWidth = 0;
 
-    for (const { symbol, result } of valid) {
+    for (const { symbol, source, result } of valid) {
         if (result.bandWidth && !result.bandWidth.passed) symbolsBlockedByBandWidth++;
         const volumeUsd = volumeMap.has(symbol) ? Number(volumeMap.get(symbol)) || 0 : null;
         for (const occ of result.occurrences) {
-            allOccurrences.push({ symbol, volumeUsd, ...occ });
+            allOccurrences.push({ symbol, source: source ?? 'binance', volumeUsd, ...occ });
         }
     }
 
@@ -222,6 +265,7 @@ async function analyseRsiThresholdBacktestMarket(options = {}) {
         reinforceOnStop: rfEnabled ? {
             addDropPct: Math.max(2, Math.min(30, Number(perSymbolOptions.reinforceOnStop.addDropPct ?? 10))),
             exitRisePct: Math.max(2, Math.min(50, Number(perSymbolOptions.reinforceOnStop.exitRisePct ?? 15))),
+            buyUsd: Math.max(5, Math.min(100_000, Number(perSymbolOptions.reinforceOnStop.buyUsd ?? positionSizeUsd))),
         } : null,
         reinforceStats: rfEnabled ? computeReinforceStats(filledOccurrences) : null,
         dailyEntryStats: computeDailyEntryStats(filledOccurrences, positionSizeUsd, perSymbolOptions.entriesDayRange ?? null),
@@ -230,6 +274,10 @@ async function analyseRsiThresholdBacktestMarket(options = {}) {
         symbolsBlockedByVolume,
         symbolsScanned: valid.length,
         symbolsBlockedByBandWidth,
+        includeGateFavorites: !!includeGateFavorites,
+        gateFavoritesTotal,
+        gateFavoritesScanned: valid.filter((v) => v.source === 'gate').length,
+        gateFavoritesBlockedByVolume,
         totalSignals: allOccurrences.length,
         totalFilled: filledOccurrences.length,
         totalTarget,

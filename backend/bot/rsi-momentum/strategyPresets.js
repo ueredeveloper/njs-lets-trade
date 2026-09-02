@@ -8,6 +8,7 @@ const PRESET_BODIES = {
   'rsi-momentum': {
     label: 'RSI Momentum',
     kind: 'rsi_momentum',
+    capitalUsdt: 20,
     entry: {
       enabled: true,
       interval: '15m',

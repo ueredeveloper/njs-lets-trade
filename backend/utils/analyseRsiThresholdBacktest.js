@@ -57,7 +57,7 @@ const MAX_ONE_MINUTE_CANDLES = 3000;
  * assim que a posição entra, arma alvo E stop simultaneamente; o que for tocado primeiro
  * encerra a operação. `scanCandles` deve conter só candles com openTime > signalCloseMs.
  */
-function resolveFromSignal(scanCandles, signalPrice, { pullbackPct, targetPct, stopLossPct, stopPriceOverride, targetPriceOverride, trailingStop, trailingTarget, targetMode, hardTakeProfitPct, reinforceOnStop }) {
+function resolveFromSignal(scanCandles, signalPrice, { pullbackPct, targetPct, stopLossPct, stopPriceOverride, targetPriceOverride, trailingStop, trailingTarget, targetMode, hardTakeProfitPct, reinforceOnStop, positionSizeUsd = 1 }) {
     let filled = pullbackPct === 0;
     let entryTime = null;
     let entryPrice = signalPrice;
@@ -245,6 +245,8 @@ function resolveFromSignal(scanCandles, signalPrice, { pullbackPct, targetPct, s
             addDropPct: reinforceOnStop.addDropPct,
             exitRisePct: reinforceOnStop.exitRisePct,
             maxRungs: reinforceOnStop.maxRungs,
+            firstLegUsd: positionSizeUsd,
+            rungUsd: Number(reinforceOnStop.buyUsd) > 0 ? Number(reinforceOnStop.buyUsd) : positionSizeUsd,
         });
         return {
             filled: true,
@@ -261,6 +263,8 @@ function resolveFromSignal(scanCandles, signalPrice, { pullbackPct, targetPct, s
                 rungs: ladder.legs.length - 1,
                 avgEntryPrice: ladder.avgEntryPrice,
                 returnPct: ladder.returnPct,
+                investedUsd: ladder.investedUsd,
+                pnlUsd: ladder.pnlUsd,
             },
         };
     }
@@ -304,13 +308,15 @@ function resolveFromSignal(scanCandles, signalPrice, { pullbackPct, targetPct, s
  * TODAS as compras nesse preço. Se a janela (`scanCandles`) acabar antes disso, outcome='open' e
  * a pilha é marcada a mercado (último close) — prejuízo não realizado.
  *
- * Todos os aportes têm o MESMO tamanho, então `returnPct` é o retorno sobre o capital total
- * empregado = média simples do retorno de cada perna até `exitPrice`. `startIdx` é o índice, em
- * `scanCandles`, do candle em que o stop inicial bateu (a varredura recomeça dali). Empate
- * intra-candle: conta a QUEDA (novo aporte) antes da subida (alvo) — mesma convenção pessimista
- * do bracket inicial (stop antes de alvo).
+ * Os aportes podem ter tamanhos diferentes: a perna 0 (compra do sinal) vale `firstLegUsd` e
+ * cada reforço vale `rungUsd` — no bot ao vivo o padrão é entrada 20 / reforço 40. `returnPct`,
+ * `avgEntryPrice` (custo médio), `investedUsd` e `pnlUsd` são todos PONDERADOS pelo tamanho de
+ * cada perna (quando `firstLegUsd === rungUsd` bate exatamente com a média simples anterior).
+ * `startIdx` é o índice, em `scanCandles`, do candle em que o stop inicial bateu (a varredura
+ * recomeça dali). Empate intra-candle: conta a QUEDA (novo aporte) antes da subida (alvo) —
+ * mesma convenção pessimista do bracket inicial (stop antes de alvo).
  */
-function runReinforcementLadder(scanCandles, startIdx, firstEntryPrice, firstStopPrice, { addDropPct, exitRisePct, maxRungs }) {
+function runReinforcementLadder(scanCandles, startIdx, firstEntryPrice, firstStopPrice, { addDropPct, exitRisePct, maxRungs, firstLegUsd = 1, rungUsd = 1 }) {
     const drop = Math.max(0.5, Number(addDropPct)) / 100;
     const rise = Math.max(0.5, Number(exitRisePct)) / 100;
     const cap = Math.max(1, Math.round(Number(maxRungs) || 100));
@@ -352,13 +358,22 @@ function runReinforcementLadder(scanCandles, startIdx, firstEntryPrice, firstSto
             : lastEntry;
     }
 
+    // `avgEntryPrice` = média simples dos preços de compra (referência visual). O P&L é ponderado
+    // pelo TAMANHO de cada perna: qty_i = usd_i / preço_i; custo total = Σ usd_i.
     const avgEntryPrice = legs.reduce((s, p) => s + p, 0) / legs.length;
-    const returnPct = (legs.reduce((s, p) => s + (exitPrice / p - 1), 0) / legs.length) * 100;
+    const legUsd = legs.map((_, i) => (i === 0 ? firstLegUsd : rungUsd));
+    const investedUsd = legUsd.reduce((s, v) => s + v, 0);
+    const totalQty = legs.reduce((s, p, i) => s + legUsd[i] / p, 0);
+    const exitValueUsd = totalQty * exitPrice;
+    const pnlUsd = exitValueUsd - investedUsd;
+    const returnPct = investedUsd > 0 ? (pnlUsd / investedUsd) * 100 : 0;
 
     return {
         legs,
         avgEntryPrice: parseFloat(avgEntryPrice.toFixed(8)),
         returnPct: parseFloat(returnPct.toFixed(4)),
+        investedUsd: parseFloat(investedUsd.toFixed(2)),
+        pnlUsd: parseFloat(pnlUsd.toFixed(2)),
         outcome,
         exitTime,
         exitPrice,
@@ -730,15 +745,18 @@ function buildOccurrence(signalCandle, signalPrice, signalRsi, resolved, positio
     }
 
     const { entryTime, entryPrice, targetPrice, stopPrice, outcome, exitTime, exitPrice } = resolved;
-    // Reforço no stop (ver runReinforcementLadder): a posição virou uma PILHA de N compras do
-    // mesmo tamanho. `pnlPct` passa a ser o retorno sobre o capital total empregado (todas as
-    // pernas), e `investedUsd` = positionSizeUsd × nº de compras.
-    const legCount = resolved.reinforce?.legCount ?? 1;
-    const investedUsd = parseFloat((positionSizeUsd * legCount).toFixed(2));
+    // Reforço no stop (ver runReinforcementLadder): a posição virou uma PILHA de N compras —
+    // perna do sinal = positionSizeUsd, cada reforço = reinforceOnStop.buyUsd. `pnlPct` é o
+    // retorno sobre o capital total empregado e `investedUsd`/`pnlUsd` já vêm ponderados da escada.
+    const investedUsd = resolved.reinforce
+        ? parseFloat(resolved.reinforce.investedUsd.toFixed(2))
+        : parseFloat(Number(positionSizeUsd).toFixed(2));
     const pnlPct = resolved.reinforce
         ? parseFloat(resolved.reinforce.returnPct.toFixed(2))
         : parseFloat((((exitPrice - entryPrice) / entryPrice) * 100).toFixed(2));
-    const pnlUsd = parseFloat((investedUsd * (pnlPct / 100)).toFixed(2));
+    const pnlUsd = resolved.reinforce
+        ? parseFloat(resolved.reinforce.pnlUsd.toFixed(2))
+        : parseFloat((investedUsd * (pnlPct / 100)).toFixed(2));
 
     return {
         signalDate: new Date(signalCandle.openTime).toISOString(),
@@ -1030,7 +1048,7 @@ function computeMacdWhatIf(occurrences, interval) {
  * @param {object} [options.reinforceOnStop]  "Reforço no stop" (só backtest/Estatísticas): quando
  *   a compra inicial bate o stop, NÃO vende — adiciona uma nova compra a mercado (no preço do
  *   stop) e passa a operar um bracket −`addDropPct`% / +`exitRisePct`% a partir dela. Cada nova
- *   queda de `addDropPct`% empilha mais uma compra do MESMO tamanho e reposiciona o bracket; o
+ *   queda de `addDropPct`% empilha mais uma compra (de `buyUsd`, padrão = aporte da entrada) e reposiciona o bracket; o
  *   1º +`exitRisePct`% de qualquer degrau vende TODAS as compras. Sem limite de degraus (o
  *   `maxRungs` é só trava de segurança). Trades assim não têm mais outcome 'stop' — viram
  *   'target' (recuperou) ou 'open' (pilha ainda no vermelho, não realizada). Ver
@@ -1040,6 +1058,7 @@ function computeMacdWhatIf(occurrences, interval) {
  * @param {number}  [options.reinforceOnStop.addDropPct=10]   Queda % abaixo do último aporte que dispara o próximo reforço (2–30).
  * @param {number}  [options.reinforceOnStop.exitRisePct=15]  Alta % acima do último aporte que encerra toda a pilha (2–50).
  * @param {number}  [options.reinforceOnStop.maxRungs=100]    Trava de segurança do nº de reforços (1–100).
+ * @param {number}  [options.reinforceOnStop.buyUsd]          Valor (US$) de cada compra de reforço (5–100000). Sem valor, usa positionSizeUsd (pernas iguais).
  */
 async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
     const {
@@ -1076,6 +1095,9 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
     const rfAddDropPct = Math.max(2, Math.min(30, Number(reinforceOnStop?.addDropPct ?? 10)));
     const rfExitRisePct = Math.max(2, Math.min(50, Number(reinforceOnStop?.exitRisePct ?? 15)));
     const rfMaxRungs = Math.max(1, Math.min(100, Math.round(Number(reinforceOnStop?.maxRungs ?? 100))));
+    // Valor (US$) de cada compra de reforço — o padrão do painel é 40 (entrada 20). Sem valor
+    // explícito, cai no aporte da entrada (pernas iguais = comportamento antigo).
+    const rfBuyUsd = Math.max(5, Math.min(100_000, Number(reinforceOnStop?.buyUsd ?? positionSizeUsd)));
 
     // Teto de lucro (venda forçada em +pct%) — mesmo do bot (exit.hardTakeProfit). 0/null = off.
     const hardTakeProfitPct = hardTakeProfit?.enabled
@@ -1316,6 +1338,9 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
 
     // Volume 24h: mesmo campo/fonte do filtro do bot ao vivo (marketScanner.js) — falha ao
     // buscar o ticker não bloqueia o backtest (fail-open), só desativa o filtro nesta chamada.
+    // Mesma regra quando a moeda não está no ticker 24h da Binance (deslistada / Gate-only, ex.:
+    // SKYAIUSDT — ver GATE_ONLY_SYMBOLS em backend/binance/getCandles.js): sem volume aferível,
+    // NÃO bloqueia (antes zerava todos os sinais). Só corta com um número real abaixo do mínimo.
     let volumeResult = null;
     if (volEnabled) {
         let quoteVolume = null;
@@ -1323,13 +1348,15 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
             const t = tickersResult.value.find((x) => x.symbol === symbol);
             quoteVolume = t ? Number(t.quoteVolume) : null;
         }
+        const known = quoteVolume != null && Number.isFinite(quoteVolume);
         volumeResult = {
             minVolumeUsdt: Number(minVolumeUsdt),
-            quoteVolume,
-            passed: quoteVolume != null && quoteVolume >= Number(minVolumeUsdt),
+            quoteVolume: known ? quoteVolume : null,
+            unavailable: !known,
+            passed: known ? quoteVolume >= Number(minVolumeUsdt) : true,
         };
     }
-    const volumeBlocksEntries = volEnabled && !volumeResult.passed;
+    const volumeBlocksEntries = volEnabled && !volumeResult.unavailable && !volumeResult.passed;
 
     // Largura de banda: mesmo motor do filtro de mercado "Larg%" (ver
     // backend/services/fetchBollingerBandWidthFilter.js) — % médio de valorização de cada
@@ -1639,8 +1666,9 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
                 ? { coinStepPct: trailingTargetCoinStepPct, stepPct: trailingTargetStepPct }
                 : null,
             reinforceOnStop: rfEnabled
-                ? { enabled: true, addDropPct: rfAddDropPct, exitRisePct: rfExitRisePct, maxRungs: rfMaxRungs }
+                ? { enabled: true, addDropPct: rfAddDropPct, exitRisePct: rfExitRisePct, maxRungs: rfMaxRungs, buyUsd: rfBuyUsd }
                 : null,
+            positionSizeUsd,
         });
         const occ = buildOccurrence(signalCandle, signalPrice, signalRsi, resolved, positionSizeUsd, cloudZone, signalRsi1h, srZone, srLines);
         // Histograma do MACD no candle do sinal (intervalo próprio) — só pro acordeão
@@ -1751,7 +1779,7 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
             stepPct: trailingTargetStepPct,
         } : null,
         hardTakeProfit: hardTakeProfitPct > 0 ? { pct: hardTakeProfitPct } : null,
-        reinforceOnStop: rfEnabled ? { addDropPct: rfAddDropPct, exitRisePct: rfExitRisePct } : null,
+        reinforceOnStop: rfEnabled ? { addDropPct: rfAddDropPct, exitRisePct: rfExitRisePct, buyUsd: rfBuyUsd } : null,
         reinforceStats: rfEnabled ? computeReinforceStats(filledOccurrences) : null,
         dailyEntryStats: computeDailyEntryStats(filledOccurrences, positionSizeUsd, entriesDayRange),
         tradeDuration: computeAvgTradeDurationMs(filledOccurrences),

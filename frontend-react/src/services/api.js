@@ -241,6 +241,7 @@ export async function fetchRsiThresholdBacktest(symbol, interval, options = {}) 
     params.set('reinforceOnStopEnabled', '1');
     params.set('reinforceAddDropPct', String(reinforceOnStop.addDropPct ?? 10));
     params.set('reinforceExitRisePct', String(reinforceOnStop.exitRisePct ?? 15));
+    params.set('reinforceBuyUsd', String(reinforceOnStop.buyUsd ?? 40));
   }
   appendTrailingStopParams(params, trailingStop, stopLossPct);
   if (targetMode && targetMode !== 'fixed') params.set('targetMode', targetMode);
@@ -266,6 +267,7 @@ export async function fetchRsiThresholdBacktestMarket(interval, options = {}) {
     source = null, candleCount = null, lookbackHours = 0, bandWidth = null, maxRows = null,
     supportResistance = null, minVolumeUsdt = 0, excludeOpenExits = false, prevCandleStop = false,
     adxFilter = null, macdFilter = null, higherRsiFilter = null, rsi5mFilter = null, newHighFilter = null, hardTakeProfit = null, reinforceOnStop = null, trailingStop = null, trailingTarget = null, targetMode = null, entriesDayRange = null,
+    includeGateFavorites = false,
   } = options;
   const params = new URLSearchParams({
     interval, rsiThreshold, pullbackPct, targetPct, stopLossPct, positionSizeUsd,
@@ -316,6 +318,7 @@ export async function fetchRsiThresholdBacktestMarket(interval, options = {}) {
     params.set('reinforceOnStopEnabled', '1');
     params.set('reinforceAddDropPct', String(reinforceOnStop.addDropPct ?? 10));
     params.set('reinforceExitRisePct', String(reinforceOnStop.exitRisePct ?? 15));
+    params.set('reinforceBuyUsd', String(reinforceOnStop.buyUsd ?? 40));
   }
   appendTrailingStopParams(params, trailingStop, stopLossPct);
   if (targetMode && targetMode !== 'fixed') params.set('targetMode', targetMode);
@@ -327,6 +330,7 @@ export async function fetchRsiThresholdBacktestMarket(interval, options = {}) {
     params.set('entriesDayRangeMin', String(entriesDayRange.min ?? 2));
     params.set('entriesDayRangeMax', String(entriesDayRange.max));
   }
+  if (includeGateFavorites) params.set('includeGateFavorites', '1');
   const res = await fetch(`/services/rsi-threshold-backtest-market?${params}`);
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
@@ -846,6 +850,20 @@ export async function fetchGateCurrencies() {
   const res = await fetch('/services/gate-currencies');
   if (!res.ok) throw new Error('Falha ao buscar moedas Gate.io');
   return res.json(); // [{ symbol, price, volume }]
+}
+
+/** Lista de descoberta: moedas da Gate.io filtradas por presença na Binance + volume 24h (Gate).
+ *  binancePresence: 'only_gate' (fora da Binance) | 'only_overlap' (nas duas) | 'any'. */
+export async function fetchGateCoinsFilter({ minVolumeUsdt = 0, maxVolumeUsdt = null, binancePresence = 'only_gate' } = {}) {
+  const params = new URLSearchParams({ binancePresence });
+  if (minVolumeUsdt) params.set('minVolumeUsdt', String(minVolumeUsdt));
+  if (maxVolumeUsdt) params.set('maxVolumeUsdt', String(maxVolumeUsdt));
+  const res = await fetch(`/services/gate-coins-filter?${params}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `gate-coins-filter falhou: HTTP ${res.status}`);
+  }
+  return res.json(); // { name, list, details, scannedAt }
 }
 
 /** Dispara o pré-carregamento de todos os intervalos padrão para um símbolo Gate.io. */

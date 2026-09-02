@@ -7,7 +7,8 @@ import { RSI_MOMENTUM_ALL_INTERVALS, RSI_MOMENTUM_BB_PERIODS, RSI_MOMENTUM_BB_ST
   RSI_MOMENTUM_TARGET_MODE_OPTIONS, RSI_MOMENTUM_STOP_MODE_OPTIONS, RSI_MOMENTUM_TARGET_PCT_OPTIONS, RSI_MOMENTUM_COIN_STEP_OPTIONS, RSI_MOMENTUM_STOP_STEP_OPTIONS, RSI_MOMENTUM_STOP_PCT_OPTIONS,
   RSI_MOMENTUM_PIVOT_PCT_OPTIONS, RSI_MOMENTUM_PIVOT_GAIN_OPTIONS, RSI_MOMENTUM_WIDTH_PCT_OPTIONS, RSI_MOMENTUM_ATR_MULT_OPTIONS, RSI_MOMENTUM_HARD_TP_OPTIONS,
   RSI_MOMENTUM_SR_INTERVAL_OPTIONS, RSI_MOMENTUM_SR_CANDLE_COUNT_OPTIONS, RSI_MOMENTUM_SR_RANK_OPTIONS, RSI_MOMENTUM_SR_ENTRY_MAX_PCT_OPTIONS,
-  RSI_MOMENTUM_REINFORCE_DROP_OPTIONS, RSI_MOMENTUM_REINFORCE_RISE_OPTIONS, RSI_MOMENTUM_REINFORCE_USD_OPTIONS, RSI_MOMENTUM_EARLY_CONFIRM_RSI_OPTIONS, RSI_MOMENTUM_MIN_VOLUME_OPTIONS }
+  RSI_MOMENTUM_REINFORCE_DROP_OPTIONS, RSI_MOMENTUM_REINFORCE_RISE_OPTIONS, RSI_MOMENTUM_REINFORCE_USD_OPTIONS, RSI_MOMENTUM_EARLY_CONFIRM_RSI_OPTIONS, RSI_MOMENTUM_MIN_VOLUME_OPTIONS,
+  RSI_MOMENTUM_CAPITAL_USD_OPTIONS }
   from '../constants/rsiMomentumConfigSchema';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useI18n } from '../i18n';
@@ -1006,6 +1007,20 @@ export default function SettingsSidebar({ open, onClose }) {
 
             {rsiMomentumConfig && (
               <div className="flex flex-col gap-3">
+                {/* Quanto investir por trade — grava em multitrade_favorites.capital / rsi_multi_bot_state.capital
+                    no favorito automático; não afeta o reforço no stop (esse tem valor próprio). */}
+                <div className="rounded-md p-2.5" style={{ background: '#0f1a14', border: '1px solid #2a4a3a' }}>
+                  <p className="text-p5/70 text-[10px] font-semibold uppercase tracking-wider mb-1">{t('settings.rsimomentum_capital_title')}</p>
+                  <p className="text-[10px] text-p5/40 mb-2 leading-relaxed">{t('settings.rsimomentum_capital_hint')}</p>
+                  <select
+                    className={`${inp} w-1/2`}
+                    value={rsiMomentumConfig.capitalUsdt ?? 20}
+                    onChange={(e) => setRsiMomentumConfig((prev) => ({ ...prev, capitalUsdt: Number(e.target.value) }))}
+                  >
+                    {RSI_MOMENTUM_CAPITAL_USD_OPTIONS.map((v) => <option key={v} value={v}>${v}</option>)}
+                  </select>
+                </div>
+
                 <label className="flex items-start gap-2.5 cursor-pointer group">
                   <input
                     type="checkbox"

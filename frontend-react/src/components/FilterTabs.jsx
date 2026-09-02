@@ -134,6 +134,11 @@ function getFilterDescription(name, t) {
     return `Favoritos: ${type}`;
   }
 
+  if (interval === 'Gate') {
+    // Gate|<presença>[|<faixa de volume>] — filtro de descoberta do painel "Analisar indicadores"
+    return `Gate: ${parts.slice(1).join(' · ')}`;
+  }
+
   if (interval === 'Mercado') {
     const param = parts[1] ?? '';
     if (param === 'USDT') return t('filter.usdt');

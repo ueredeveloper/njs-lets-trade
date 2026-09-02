@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useCurrency } from '../contexts/CurrencyContext';
-import { fetchCandlesAndIndicators, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter, fetchMaDistanceFilter, fetchIndicatorGrowthFilter, fetchMarketCapFilter, fetchBollingerBandPositionFilter, fetchBollingerBandWidthFilter, fetchBollingerMedianTrendFilter, fetchVwapPositionFilter, fetchVwapBandWidthFilter, fetchVwapBandExpansionFilter, fetchRsiMomentumWatchlist, fetchUserPrefs, saveUserPrefs } from '../services/api';
+import { fetchCandlesAndIndicators, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter, fetchMaDistanceFilter, fetchIndicatorGrowthFilter, fetchMarketCapFilter, fetchBollingerBandPositionFilter, fetchBollingerBandWidthFilter, fetchBollingerMedianTrendFilter, fetchVwapPositionFilter, fetchVwapBandWidthFilter, fetchVwapBandExpansionFilter, fetchRsiMomentumWatchlist, fetchGateCoinsFilter, fetchUserPrefs, saveUserPrefs } from '../services/api';
 import { useI18n } from '../i18n';
 import {
   createRsiFilter,
@@ -69,6 +69,27 @@ const MA_CROSS_AGE_OPTIONS = [
 ];
 
 const INTERVALS = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w'];
+
+/** Faixas de volume 24h (USDT) do filtro "Moedas Gate.io". '' = sem limite. */
+const GATE_VOLUME_OPTIONS = [
+  { value: '', label: '—' },
+  { value: '50000', label: '$50k' },
+  { value: '100000', label: '$100k' },
+  { value: '250000', label: '$250k' },
+  { value: '500000', label: '$500k' },
+  { value: '1000000', label: '$1M' },
+  { value: '2000000', label: '$2M' },
+  { value: '3000000', label: '$3M' },
+  { value: '5000000', label: '$5M' },
+  { value: '10000000', label: '$10M' },
+  { value: '25000000', label: '$25M' },
+];
+
+const GATE_PRESENCE_OPTIONS = [
+  { value: 'only_gate', labelKey: 'gatecoins.presence.only_gate' },
+  { value: 'only_overlap', labelKey: 'gatecoins.presence.only_overlap' },
+  { value: 'any', labelKey: 'gatecoins.presence.any' },
+];
 
 const INTERVAL_LABELS = {
   '1m': '1 minuto', '5m': '5 minutos', '15m': '15 minutos',
@@ -147,6 +168,14 @@ function buildSummary(value, t) {
     const metricLabel = value.metric === 'dilution' ? t('mcap.dilution') : t('mcap.turnover');
     const presetLabel = { baixo: 'baixo', medio: 'médio', alto: 'alto' }[value.preset ?? 'baixo'] ?? '';
     return t('sum.mcap', metricLabel, presetLabel);
+  }
+  if (type === 'gateCoins') {
+    const presence = GATE_PRESENCE_OPTIONS.find((o) => o.value === (value.binancePresence ?? 'only_gate'));
+    const presenceLabel = presence ? t(presence.labelKey) : '';
+    const vmin = GATE_VOLUME_OPTIONS.find((o) => o.value === (value.minVolumeUsdt ?? ''))?.label ?? '—';
+    const vmax = GATE_VOLUME_OPTIONS.find((o) => o.value === (value.maxVolumeUsdt ?? ''))?.label ?? '—';
+    const range = vmax !== '—' ? `${vmin} – ${vmax}` : `≥ ${vmin}`;
+    return t('sum.gate_coins', presenceLabel, range);
   }
   if (type === 'movingAverage') {
     const len = value.length ?? '200';
@@ -279,6 +308,7 @@ function indDescKey(type) {
   if (type === 'vwapBandExpansion') return 'vwap_band_expansion';
   if (type === 'indicatorGrowth') return 'indicator_growth';
   if (type === 'botReadiness') return 'bot_readiness';
+  if (type === 'gateCoins') return 'gate_coins';
   return 'marketcap';
 }
 
@@ -383,6 +413,12 @@ function IndicatorRow({ value, onChange }) {
                 next.period = '21';
                 next.compare = next.compare ?? 'above';
               }
+              if (newType === 'gateCoins') {
+                next.intervals = [];
+                next.minVolumeUsdt = next.minVolumeUsdt ?? '1000000';
+                next.maxVolumeUsdt = next.maxVolumeUsdt ?? '';
+                next.binancePresence = next.binancePresence ?? 'only_gate';
+              }
               if (newType === 'indicatorGrowth') {
                 next.intervals = ['4h'];
                 next.growthEngine = next.growthEngine ?? 'bollinger';
@@ -418,6 +454,7 @@ function IndicatorRow({ value, onChange }) {
             <option value="vwapBandWidth">{t('ind.vwap_band_width')}</option>
             <option value="vwapBandExpansion">{t('ind.vwap_band_expansion')}</option>
             <option value="indicatorGrowth">{t('ind.indicator_growth')}</option>
+            <option value="gateCoins">{t('ind.gate_coins')}</option>
           </select>
           {type && t(`ind.desc.${indDescKey(type)}`) !== `ind.desc.${indDescKey(type)}` && (
             <HelpIcon text={t(`ind.desc.${indDescKey(type)}`)} />
@@ -433,6 +470,41 @@ function IndicatorRow({ value, onChange }) {
             <option value="contention">{t('ind.bot_readiness_contention')}</option>
             <option value="signal">{t('ind.bot_readiness_signal')}</option>
           </select>
+        )}
+
+        {type === 'gateCoins' && (
+          <>
+            <select
+              className={sel}
+              value={value.binancePresence ?? 'only_gate'}
+              onChange={(e) => onChange({ ...value, binancePresence: e.target.value })}
+              title={t('ind.desc.gate_coins')}
+            >
+              {GATE_PRESENCE_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>{t(o.labelKey)}</option>
+              ))}
+            </select>
+            <select
+              className={sel}
+              value={value.minVolumeUsdt ?? '1000000'}
+              onChange={(e) => onChange({ ...value, minVolumeUsdt: e.target.value })}
+              title={t('gatecoins.tip.vol_min')}
+            >
+              {GATE_VOLUME_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>{t('gatecoins.vol_min')}: {o.label}</option>
+              ))}
+            </select>
+            <select
+              className={sel}
+              value={value.maxVolumeUsdt ?? ''}
+              onChange={(e) => onChange({ ...value, maxVolumeUsdt: e.target.value })}
+              title={t('gatecoins.tip.vol_max')}
+            >
+              {GATE_VOLUME_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>{t('gatecoins.vol_max')}: {o.label}</option>
+              ))}
+            </select>
+          </>
         )}
 
         {type === 'marketCap' && (
@@ -1209,7 +1281,7 @@ function IndicatorRow({ value, onChange }) {
       )}
 
       {/* Intervalos de candle das MAs (≠ tempo desde o cruzamento) */}
-      {type !== 'marketCap' && type !== 'botReadiness' && !(type === 'maCrossover' && value.mixedIntervals) && (
+      {type !== 'marketCap' && type !== 'botReadiness' && type !== 'gateCoins' && !(type === 'maCrossover' && value.mixedIntervals) && (
         <div className="flex flex-row flex-wrap gap-1 items-center">
           {type === 'maCrossover' && (
             <span className="text-[10px] text-p5/60 shrink-0 mr-1" title={t('macross.tip.candle_iv')}>
@@ -1365,7 +1437,8 @@ export default function IndicatorPanel({ open, onToggle }) {
       const vwapBandExpansionIndicators = indicators.filter((ind) => ind.type === 'vwapBandExpansion');
       const growthIndicators = indicators.filter((ind) => ind.type === 'indicatorGrowth');
       const botReadyIndicators = indicators.filter((ind) => ind.type === 'botReadiness');
-      const otherIndicators = indicators.filter((ind) => ind.type && ind.type !== 'relativeStrengthIndex' && ind.type !== 'marketCap' && ind.type !== 'botReadiness' && ind.type !== 'movingAverage' && ind.type !== 'maTimeAbove' && ind.type !== 'maCrossover' && ind.type !== 'maCompare' && ind.type !== 'maDistance' && ind.type !== 'bollingerPosition' && ind.type !== 'bollingerBandWidth' && ind.type !== 'bollingerMedianTrend' && ind.type !== 'vwapPosition' && ind.type !== 'vwapBandWidth' && ind.type !== 'vwapBandExpansion' && ind.type !== 'indicatorGrowth');
+      const gateCoinsIndicators = indicators.filter((ind) => ind.type === 'gateCoins');
+      const otherIndicators = indicators.filter((ind) => ind.type && ind.type !== 'relativeStrengthIndex' && ind.type !== 'marketCap' && ind.type !== 'botReadiness' && ind.type !== 'gateCoins' && ind.type !== 'movingAverage' && ind.type !== 'maTimeAbove' && ind.type !== 'maCrossover' && ind.type !== 'maCompare' && ind.type !== 'maDistance' && ind.type !== 'bollingerPosition' && ind.type !== 'bollingerBandWidth' && ind.type !== 'bollingerMedianTrend' && ind.type !== 'vwapPosition' && ind.type !== 'vwapBandWidth' && ind.type !== 'vwapBandExpansion' && ind.type !== 'indicatorGrowth');
 
       // Salva intervalos e análises usadas nas preferências
       const allIntervals = [...new Set(indicators.flatMap(ind => ind.intervals ?? []))];
@@ -1414,6 +1487,17 @@ export default function IndicatorPanel({ open, onToggle }) {
           : mode === 'contention' ? `bot|No páreo (RSI perto de ${data.config?.rsiThreshold ?? '?'})`
             : 'bot|Prontas (só falta cruzar)';
         addFilter({ name, list });
+      }
+
+      // Moedas Gate.io: descoberta de pares pra operar na Gate — filtra por presença na Binance
+      // (só Gate / nas duas / tanto faz) + volume 24h da própria Gate (ver fetchGateCoinsFilter.js).
+      for (const ind of gateCoinsIndicators) {
+        const minVolumeUsdt = ind.minVolumeUsdt ? Number(ind.minVolumeUsdt) : 0;
+        const maxVolumeUsdt = ind.maxVolumeUsdt ? Number(ind.maxVolumeUsdt) : null;
+        const binancePresence = ind.binancePresence ?? 'only_gate';
+        const filter = await fetchGateCoinsFilter({ minVolumeUsdt, maxVolumeUsdt, binancePresence });
+        console.log('[frontend-react] moedas Gate:', filter.name, '—', filter.list.length, 'moedas');
+        addFilter({ name: filter.name, list: filter.list, meta: filter.details, scannedAt: filter.scannedAt });
       }
 
       // MA50: cache rsiCache (intervalos 15m/1h/4h aquecidos no servidor)

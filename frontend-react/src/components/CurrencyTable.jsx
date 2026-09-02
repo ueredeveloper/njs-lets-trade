@@ -269,6 +269,7 @@ function ModalPortal({ children }) {
 function needsGateFallback(activeFilterName) {
   if (!activeFilterName) return false;
   return activeFilterName.startsWith('Mercado|')
+    || activeFilterName.startsWith('Gate|')
     || activeFilterName.startsWith('Favoritos|Alta|Gate')
     || activeFilterName.startsWith('Favoritos|Novas|Gate')
     || activeFilterName === 'Favoritos|Gate';
@@ -374,6 +375,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   const [bbTrendSort, setBbTrendSort] = useState('best'); // 'best' | 'worst'
   const [tradeFavSort, setTradeFavSort] = useState(() => loadTradeFavSort());
   const [activeFavSort, setActiveFavSort] = useState(() => loadActiveFavSort());
+  const [activeFavRefreshing, setActiveFavRefreshing] = useState(false);
   const [vwapFavSort, setVwapFavSort] = useState(() => loadVwapFavSort());
   const [bbFavSort, setBbFavSort] = useState(() => loadBbFavSort());
 
@@ -626,6 +628,20 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     setActiveFavSort(sortBy);
     setSortVolume('none');
   }, []);
+
+  // Recarrega sob demanda os dados da view AT (Trades Ativos): saldos reais (refreshActiveTrades)
+  // + resumo de compras/vendas da semana (refreshTradeFavStatus, ignorando o cache de 60s do
+  // backend) — sem esperar o poll de 30s.
+  const handleRefreshActiveFav = useCallback(async () => {
+    if (activeFavRefreshing) return;
+    setActiveFavRefreshing(true);
+    try {
+      refreshTradeFavStatus();
+      await refreshActiveTrades();
+    } finally {
+      setActiveFavRefreshing(false);
+    }
+  }, [activeFavRefreshing, refreshActiveTrades, refreshTradeFavStatus]);
 
   const onVwapFavSortChange = useCallback((sortBy) => {
     setVwapFavSort(sortBy);
@@ -1572,6 +1588,16 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                       onChange={onActiveFavSortChange}
                       className="shrink-0"
                     />
+                    <button
+                      type="button"
+                      className={`inline-flex items-center justify-center w-4 h-4 rounded border border-p3 bg-p2/80 text-[10px] leading-none text-p5/70 hover:text-p5 active:text-white transition-colors shrink-0 disabled:opacity-60 ${activeFavRefreshing ? 'animate-spin' : ''}`}
+                      title={t('activefav.refresh')}
+                      aria-label={t('activefav.refresh')}
+                      disabled={activeFavRefreshing}
+                      onClick={(e) => { e.stopPropagation(); handleRefreshActiveFav(); }}
+                    >
+                      ↻
+                    </button>
                   </div>
                 ) : isVwapBandsFavView ? (
                   <div className={`flex items-center gap-0.5 ${isMobile ? 'flex-wrap justify-center' : 'justify-start'}`}>

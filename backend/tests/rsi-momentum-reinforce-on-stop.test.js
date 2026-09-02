@@ -60,6 +60,23 @@ describe('runReinforcementLadder — reforço no stop', () => {
         expect(r.legs.length).toBe(3); // empilhou o 3º aporte
     });
 
+    test('pernas de tamanhos diferentes (entrada 20 / reforço 40): P&L e capital ponderados', () => {
+        const scan = [candle(95, 104, 103, 0)]; // vende a 103.5 (mesma cena do 1º teste)
+        const r = runReinforcementLadder(scan, 0, FIRST_ENTRY, FIRST_STOP, { ...OPTS, firstLegUsd: 20, rungUsd: 40 });
+        expect(r.legs).toEqual([100, 90]);
+        // qty: 20/100 = 0.2 ; 40/90 = 0.44444 -> total 0.64444
+        // investido = 60 ; saída = 0.64444 * 103.5 = 66.7 ; pnl = 6.7 ; retorno = 6.7/60 = 11.1667%
+        expect(r.investedUsd).toBeCloseTo(60, 6);
+        expect(r.pnlUsd).toBeCloseTo(6.7, 1);
+        expect(r.returnPct).toBeCloseTo(11.1667, 3);
+    });
+
+    test('firstLegUsd === rungUsd reproduz a média simples anterior', () => {
+        const scan = [candle(95, 104, 103, 0)];
+        const r = runReinforcementLadder(scan, 0, FIRST_ENTRY, FIRST_STOP, { ...OPTS, firstLegUsd: 40, rungUsd: 40 });
+        expect(r.returnPct).toBeCloseTo(9.25, 4);
+    });
+
     test('trava de segurança maxRungs interrompe a escada', () => {
         // preço em queda livre: cada candle dispara mais um reforço
         const scan = Array.from({ length: 10 }, (_, i) => candle(1, 2, 1, i));

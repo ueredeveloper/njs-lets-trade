@@ -34,7 +34,7 @@ export default function MacdWhatIfAccordion({ stats }) {
     <span>
       {t('stats.macd_wi.title')}
       <span className="normal-case tracking-normal text-p5/40">
-        {' '}· {t('stats.macd_wi.sub')(stats.interval, stats.macdPeriods, stats.evaluated)}
+        {' '}· {t('stats.macd_wi.sub', stats.interval, stats.macdPeriods, stats.evaluated)}
       </span>
     </span>
   );
@@ -43,7 +43,7 @@ export default function MacdWhatIfAccordion({ stats }) {
     return (
       <StatsAccordion title={title} titleAttr={t('stats.macd_wi.tip')}>
         <p className="text-p5/50 text-[10px]">
-          {stats.warmupSkipped > 0 ? t('stats.macd_wi.warmup')(stats.warmupSkipped) : t('stats.macd_wi.empty')}
+          {stats.warmupSkipped > 0 ? t('stats.macd_wi.warmup', stats.warmupSkipped) : t('stats.macd_wi.empty')}
         </p>
       </StatsAccordion>
     );
@@ -61,10 +61,10 @@ export default function MacdWhatIfAccordion({ stats }) {
       </div>
 
       <div className="mt-1.5 flex flex-col gap-0.5 text-[10px] text-p5/70 font-mono">
-        <span>{t('stats.macd_wi.winrate')(stats.winRateWithoutMacdPct, stats.winRateWithMacdPct)}</span>
-        <span>{t('stats.macd_wi.pnl')(stats.pnlWithoutMacdUsd, stats.pnlWithMacdUsd, stats.pnlBlockedUsd)}</span>
+        <span>{t('stats.macd_wi.winrate', stats.winRateWithoutMacdPct, stats.winRateWithMacdPct)}</span>
+        <span>{t('stats.macd_wi.pnl', stats.pnlWithoutMacdUsd, stats.pnlWithMacdUsd, stats.pnlBlockedUsd)}</span>
         {stats.warmupSkipped > 0 && (
-          <span className="text-p5/40">{t('stats.macd_wi.warmup')(stats.warmupSkipped)}</span>
+          <span className="text-p5/40">{t('stats.macd_wi.warmup', stats.warmupSkipped)}</span>
         )}
       </div>
     </StatsAccordion>

@@ -87,9 +87,10 @@ const VOL_CACHE_MS = 5 * 60_000;
 // estourando o peso de IP e causando ban 418. 5min alinha com o mesmo teto de polling adaptativo
 // já usado pros outros bots em intervalos ≥15m (ver CLAUDE.md).
 const SCAN_INTERVAL_MS = 5 * 60_000;
-// Sem form por moeda ainda (favorito é criado pelo próprio bot) — capital fixo por trade até
-// existir uma tela de configuração global no painel.
-const DEFAULT_CAPITAL_USDT = 40;
+// Favorito é criado pelo próprio bot (sem form por moeda). O quanto investir por trade vem da
+// config global (trade_config.capitalUsdt, editável em Configurações → RSI Momentum); este
+// valor só é usado se a config não trouxer um capitalUsdt válido.
+const DEFAULT_CAPITAL_USDT = 20;
 const DEFAULT_USER_ID = process.env.SUPABASE_DEFAULT_USER_ID ?? 'ueredeveloper';
 
 const orphanWarnedKeys = new Set();
@@ -154,9 +155,10 @@ async function loadTrackedSymbols() {
  */
 async function createAutoFavorite(symbol) {
   const presetBody = await loadGlobalConfigBody(sbReq, DEFAULT_USER_ID);
+  const capitalUsdt = Number(presetBody?.capitalUsdt) > 0 ? Number(presetBody.capitalUsdt) : DEFAULT_CAPITAL_USDT;
   const favoritePayload = {
     user_id: DEFAULT_USER_ID, symbol, exchange: 'binance', strategy_id: 'rsi-momentum',
-    enabled: true, capital: DEFAULT_CAPITAL_USDT, trade_config: presetBody,
+    enabled: true, capital: capitalUsdt, trade_config: presetBody,
   };
   try {
     await sbReq('POST', 'multitrade_favorites', favoritePayload);
@@ -167,7 +169,7 @@ async function createAutoFavorite(symbol) {
   }
   const [row] = await sbReq('POST', 'rsi_multi_bot_state', {
     symbol, exchange: 'binance', strategy_id: 'rsi-momentum',
-    initial_capital: DEFAULT_CAPITAL_USDT, capital: DEFAULT_CAPITAL_USDT,
+    initial_capital: capitalUsdt, capital: capitalUsdt,
     trade_config: presetBody, phase: 'WATCHING',
   });
   return row;
@@ -271,6 +273,7 @@ function logStartupConfig(body, source = null) {
   if (source) console.log(`   Fonte: ${source}`);
 
   console.log('  ── ENTRADA ──────────────────────────────────');
+  console.log(`   Investir por trade: ${Number(body.capitalUsdt ?? 20).toFixed(2)} USDT a mercado`);
   console.log(`   Sinal: RSI(14) ${e.interval} cruza para cima de ${e.rsiThreshold}  (${e.enabled ? 'ATIVO' : 'PAUSADO — só gerencia posições já abertas'})`);
   console.log(`   ${ON(pr?.enabled !== false)} Filtro anti-repique: os ${pr?.count ?? 3} valores de RSI anteriores ao cruzamento precisam estar <= ${e.rsiThreshold}`);
   console.log(`   ${ON(ec?.enabled)} Confirmação adiantada: checkpoint de ${ec?.interval ?? '5m'} dentro do candle de ${e.interval} em formação, RSI provisório ≥ ${Math.max(e.rsiThreshold, Number(ec?.rsiThreshold ?? e.rsiThreshold))} (não espera fechar)`);

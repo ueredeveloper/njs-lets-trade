@@ -345,6 +345,8 @@ const RSI_MOM_HARD_TP_OPTIONS = [8, 10, 12, 15, 18, 20, 25, 30, 40, 50];
  *  encerra toda a pilha (ver options.reinforceOnStop em analyseRsiThresholdBacktest.js). */
 const RSI_MOM_REINFORCE_DROP_OPTIONS = [5, 8, 10, 12, 15, 20];
 const RSI_MOM_REINFORCE_RISE_OPTIONS = [8, 10, 12, 15, 18, 20, 25];
+/** reinforceBuyUsd — valor (US$) de cada compra de reforço (padrão 40; entrada = positionSizeUsd 20). */
+const RSI_MOM_REINFORCE_USD_OPTIONS = [10, 20, 30, 40, 60, 80, 100, 150, 200, 300, 500];
 /** Lucro travado (%) que separa a fase A da B na Escada Dupla (0 = breakeven). */
 const RSI_MOM_PIVOT_PCT_OPTIONS = [0, 0.5, 1, 1.5, 2, 3];
 /** Ganho do pico (%) que troca da fase apertada pra solta na Trilha do Topo / Trilha ATR. */
@@ -370,7 +372,7 @@ const RSI_MOM_DEFAULT_PREFS = {
   hardTakeProfitPct: 15,
   stopMode: 'fixed',
   stopLossPct: 10,
-  positionSizeUsd: 40,
+  positionSizeUsd: 20,
   lookbackHours: 0,
   bandWidthEnabled: true,
   bandWidthInterval: '5m',
@@ -399,6 +401,7 @@ const RSI_MOM_DEFAULT_PREFS = {
   reinforceOnStopEnabled: true,
   reinforceAddDropPct: 10,
   reinforceExitRisePct: 15,
+  reinforceBuyUsd: 40,
   trailingCoinStepPct: 3,
   trailingStopStepPct: 2,
   trailingTargetCoinStepPct: 3,
@@ -416,6 +419,9 @@ const RSI_MOM_DEFAULT_PREFS = {
   tsAtrMult: 2,
   tsAtrMaxPct: 12,
   allCoins: false,
+  // No modo "todas as moedas", inclui também os favoritos da Gate.io (lista "Favoritos|Gate")
+  // além dos pares USDT da Binance — cada um com o mesmo filtro de volume 24h (aferido na Gate).
+  includeGateFavorites: true,
   entriesDayRangeMax: null,
 };
 
@@ -1214,8 +1220,10 @@ function RsiMomentumStats({ autoCalc }) {
           enabled: true,
           addDropPct: p.reinforceAddDropPct,
           exitRisePct: p.reinforceExitRisePct,
+          buyUsd: p.reinforceBuyUsd,
         } : null,
         entriesDayRange: p.entriesDayRangeMax != null ? { min: 2, max: p.entriesDayRangeMax } : null,
+        includeGateFavorites: !!p.includeGateFavorites,
       };
       const data = p.allCoins
         ? await fetchRsiThresholdBacktestMarket(iv, commonOptions)
@@ -1266,7 +1274,9 @@ function RsiMomentumStats({ autoCalc }) {
       Math.ceil((Date.now() - startMs) / msPerCandle) + 40));
     try {
       const sym = (o.symbol || symbol || selectedChart?.symbol || 'BTCUSDT').trim().toUpperCase();
-      const src = selectedChart?.symbol === sym ? (selectedChart?.source ?? null) : null;
+      // Ocorrência de favorito Gate carrega o.source='gate' — abre o gráfico na corretora certa.
+      const src = o.source === 'gate' ? 'gate'
+        : (selectedChart?.symbol === sym ? (selectedChart?.source ?? null) : null);
       const data = await fetchCandlesticksAndCloud(sym, iv, src, needed);
       setSelectedChart(data);
       setChartViewSource(CHART_VIEW.STATISTICS);
@@ -1320,6 +1330,22 @@ function RsiMomentumStats({ autoCalc }) {
             <span className={`inline-block h-3 w-3 rounded-full bg-white shadow transition-transform ${prefs.allCoins ? 'translate-x-3' : 'translate-x-0'}`} />
           </button>
         </div>
+
+        {prefs.allCoins && (
+          <div
+            className="flex items-center gap-1 shrink-0 pb-1"
+            title="Além dos pares da Binance, roda também nos favoritos da Gate.io (lista Favoritos|Gate) — mesmo filtro de volume 24h, aferido na Gate"
+          >
+            <span className="hidden md:inline text-[9px] text-p5/50 uppercase tracking-wider">+ Gate (G)</span>
+            <button
+              type="button"
+              onClick={() => patchPrefs({ includeGateFavorites: !prefs.includeGateFavorites })}
+              className={`relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${prefs.includeGateFavorites ? 'bg-p4' : 'bg-p3/40'}`}
+            >
+              <span className={`inline-block h-3 w-3 rounded-full bg-white shadow transition-transform ${prefs.includeGateFavorites ? 'translate-x-3' : 'translate-x-0'}`} />
+            </button>
+          </div>
+        )}
 
         {!prefs.allCoins && (
           <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[72px]">
@@ -1909,6 +1935,14 @@ function RsiMomentumStats({ autoCalc }) {
                 {RSI_MOM_REINFORCE_RISE_OPTIONS.map((v) => <option key={v} value={v}>{`+${v}%`}</option>)}
               </select>
             </div>
+            <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.reinforce_usd')}>
+              <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.reinforce_usd')}</label>
+              <select className={inp}
+                value={prefs.reinforceBuyUsd ?? 40}
+                onChange={(e) => patchPrefs({ reinforceBuyUsd: Number(e.target.value) })}>
+                {RSI_MOM_REINFORCE_USD_OPTIONS.map((v) => <option key={v} value={v}>{`$${v}`}</option>)}
+              </select>
+            </div>
           </>
         )}
        </div>
@@ -2068,9 +2102,11 @@ function RsiMomentumStats({ autoCalc }) {
               {!prefs.allCoins && result.volume && (
                 <SummaryCard
                   label={t('stats.card.volume_24h')}
-                  value={result.volume.quoteVolume != null ? `$${(result.volume.quoteVolume / 1_000_000).toFixed(1)}M` : '—'}
-                  highlight={result.volume.passed ? 'text-emerald-500' : 'text-red-600'}
-                  tooltip={`mín $${(result.volume.minVolumeUsdt / 1_000_000)}M`}
+                  value={result.volume.unavailable ? 'n/d' : (result.volume.quoteVolume != null ? `$${(result.volume.quoteVolume / 1_000_000).toFixed(1)}M` : '—')}
+                  highlight={result.volume.unavailable ? 'text-amber-500' : (result.volume.passed ? 'text-emerald-500' : 'text-red-600')}
+                  tooltip={result.volume.unavailable
+                    ? `moeda fora do ticker 24h da Binance (deslistada / Gate-only) — filtro de volume ignorado · mín $${(result.volume.minVolumeUsdt / 1_000_000)}M`
+                    : `mín $${(result.volume.minVolumeUsdt / 1_000_000)}M`}
                 />
               )}
               {prefs.allCoins && result.minVolumeUsdt > 0 && (
@@ -2079,6 +2115,14 @@ function RsiMomentumStats({ autoCalc }) {
                   value={`${result.symbolsBlockedByVolume}/${result.symbolsTotal}`}
                   highlight="text-amber-500"
                   tooltip={t('stats.tip.blocked_by_volume')}
+                />
+              )}
+              {prefs.allCoins && result.includeGateFavorites && (
+                <SummaryCard
+                  label="Favoritos Gate"
+                  value={`${result.gateFavoritesScanned}/${result.gateFavoritesTotal}`}
+                  highlight="text-p4"
+                  tooltip={`favoritos da Gate.io rodados${result.gateFavoritesBlockedByVolume > 0 ? ` · ${result.gateFavoritesBlockedByVolume} fora por volume < $${(result.minVolumeUsdt / 1_000_000)}M` : ''}`}
                 />
               )}
               {result.lookbackHours > 0 && (
@@ -2246,7 +2290,14 @@ function RsiMomentumStats({ autoCalc }) {
                             onClick={() => openOnChart(o, result.interval)}
                           >
                             {showAll && <td className="py-0.5 pr-2 text-[10px] text-p5/40">{i + 1}</td>}
-                            {prefs.allCoins && <td className="py-0.5 pr-2 text-[10px] sm:text-xs font-bold whitespace-nowrap">{o.symbol}</td>}
+                            {prefs.allCoins && (
+                              <td className="py-0.5 pr-2 text-[10px] sm:text-xs font-bold whitespace-nowrap">
+                                {o.symbol}
+                                {o.source === 'gate' && (
+                                  <span className="ml-1 rounded px-1 text-[8px] font-bold align-middle" style={{ background: '#0068ff', color: '#fff' }}>G</span>
+                                )}
+                              </td>
+                            )}
                             {prefs.allCoins && <td className="py-0.5 pr-2 text-[10px] sm:text-xs text-right font-mono text-p5/60 whitespace-nowrap">{formatVolume(o.volumeUsd)}</td>}
                             <td className="py-0.5 pr-2 text-[10px] sm:text-xs font-mono whitespace-nowrap">{formatDate(o.signalDate)}</td>
                             <td className="py-0.5 pr-2 text-[10px] sm:text-xs text-right text-yellow-600">{o.signalRsi}</td>

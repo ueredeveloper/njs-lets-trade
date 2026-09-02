@@ -169,6 +169,8 @@ const T = {
 
     'settings.rsimomentum_title':          'RSI Momentum (regras do bot)',
     'settings.rsimomentum_hint':           'Config GLOBAL do bot RSI Momentum — vale pra todo sinal novo encontrado pelo scanner de mercado. Relida a cada ciclo (até 5min): não precisa reiniciar o bot depois de salvar.',
+    'settings.rsimomentum_capital_title':  'Quanto investir por trade',
+    'settings.rsimomentum_capital_hint':   'Valor (USDT) comprado a mercado em cada nova entrada que o scanner encontrar. Não afeta o reforço no stop — esse aporte tem valor próprio abaixo.',
     'settings.rsimomentum_entry_enabled':  'Novas entradas ativas',
     'settings.rsimomentum_entry_enabled_hint': 'Desligar só pausa NOVAS entradas — posições já compradas continuam sendo gerenciadas (bracket TP/SL, venda) normalmente.',
     'settings.rsimomentum_interval':       'Intervalo do RSI',
@@ -308,6 +310,15 @@ const T = {
     'ind.vwap_band_expansion': 'Expansão das Bandas de VWAP',
     'ind.ma_distance':       'Distância vs EMA',
     'ind.indicator_growth':  'Crescimento por Ciclo (Fundo→Topo)',
+    'ind.gate_coins':        'Moedas Gate.io (por volume / presença na Binance)',
+
+    'gatecoins.presence.only_gate':    'Só Gate (fora da Binance)',
+    'gatecoins.presence.only_overlap': 'Nas duas (Gate + Binance)',
+    'gatecoins.presence.any':          'Tanto faz',
+    'gatecoins.vol_min':     'Vol mín',
+    'gatecoins.vol_max':     'Vol máx',
+    'gatecoins.tip.vol_min': 'Volume 24h mínimo na Gate.io (quote volume em USDT)',
+    'gatecoins.tip.vol_max': 'Volume 24h máximo na Gate.io (opcional)',
 
     // Indicadores — descrições tooltip
     'ind.desc.ichimoku':     'Sistema japonês com 5 linhas que indica tendência, suporte/resistência e momentum. Muito usado em análise técnica avançada.',
@@ -324,6 +335,7 @@ const T = {
     'ind.desc.vwap_band_expansion': 'Detecta moedas onde o afastamento entre a banda -1σ e a +2σ da VWAP disparou recentemente — ex.: estava em 10% e virou 30% (3x). Acha o menor afastamento (squeeze) dentro dos últimos N candles e compara com o afastamento atual. "Intervalo" é a granularidade dos candles (padrão 15m); "intervalo da VWAP" é a janela usada pra calcular a própria VWAP (padrão 4h — não precisa bater com o intervalo de candle). N (lookback) e o multiplicador mínimo são configuráveis.',
     'ind.desc.ma_distance':  'Quantos % o preço está acima (ou abaixo) de uma única EMA (9, 21, 50 ou 200). Mostra a distância na tabela e permite ordenar por moedas mais distantes ou mais próximas da média. Padrão: EMA21 no 4h.',
     'ind.desc.indicator_growth': 'Varre todo o histórico salvo da moeda procurando ciclos completos de fundo→topo (ex.: preço toca a banda inferior de Bollinger e sobe até a banda superior) e calcula a valorização média (%) entre entrada e saída. Filtra moedas cuja valorização média seja ≥ à porcentagem escolhida. Mesmo cálculo usado em Estatísticas.',
+    'ind.desc.gate_coins':   'Lista de descoberta de pares pra operar na Gate.io: cruza os tickers spot da Gate com os pares USDT ativos da Binance. "Só Gate" = pares que NÃO existem na Binance (o caso de uso: escolher moeda pra trade na Gate sem concorrência da Binance); "Nas duas" = listadas nas duas corretoras; "Tanto faz" = todas. O volume 24h (mín/máx) é medido na PRÓPRIA Gate (quote volume em USDT). O resultado vira um filtro cruzável com os demais indicadores.',
 
     // Comparadores
     'cmp.above':             'Acima',
@@ -425,6 +437,7 @@ const T = {
     'sum.macross_age':       (age, tol) => `(há ${age}, tol ±${tol}%)`,
     'sum.macross_prox':      (prox) => `(gap ≤${prox}%)`,
     'sum.mcap':              (metric, preset) => `Market Cap: ${metric} ${preset}`,
+    'sum.gate_coins':        (presence, range) => `Gate.io: ${presence} · volume ${range}`,
     'sum.bb_position':       (period, stdDev, posLabel, ivl, prox) => `BB(${period},${stdDev}): ${posLabel} (≤${prox}%) → ${ivl}`,
     'sum.bollinger_band_width': (period, stdDev, lookback, ivl) => `BB(${period},${stdDev}): largura média em ${lookback} candles → ${ivl}`,
     'sum.bollinger_median_trend': (period, stdDev, lookback, sideLabel, ivl) => `BB(${period},${stdDev}): trades c/ tendência da mediana, ${sideLabel.toLowerCase()} em ${lookback} candles → ${ivl}`,
@@ -540,6 +553,7 @@ const T = {
     'activefav.sort.buy_lots':         'Compras individuais',
     'activefav.sort.short.holdings':   'Saldo',
     'activefav.sort.short.buy_lots':   'Compras',
+    'activefav.refresh':               'Atualizar saldos e compras',
 
     // Favoritos — tooltips
     'fav.row.gate_add':       'Favorito Gate.io — marque a moeda para listar na aba G e abrir o gráfico pela Gate',
@@ -702,9 +716,11 @@ const T = {
     'stats.reinforce_on_stop':     'Reforço stop',
     'stats.reinforce_drop':        'Queda',
     'stats.reinforce_rise':        'Alta',
+    'stats.reinforce_usd':         'Aporte',
     'stats.tip.reinforce_on_stop': 'Reforço no stop: quando a compra inicial bate o stop, NÃO vende a moeda — adiciona uma nova compra a mercado (no preço do stop) e passa a operar um OCO −Queda% / +Alta% a partir dela. Cada nova queda de "Queda %" abaixo do último aporte adiciona mais uma compra do mesmo tamanho e reposiciona o OCO; a primeira alta de "Alta %" acima do último aporte vende TODAS as compras. Sem limite de reforços. Trades assim não têm mais "stop" — viram "alvo" (recuperou) ou "aberto" (pilha ainda no vermelho, prejuízo não realizado). P&L e taxa de acerto passam a refletir a pilha inteira (retorno sobre o capital total empregado). Só no backtest.',
     'stats.tip.reinforce_drop':    'Queda % abaixo do último aporte que dispara o próximo reforço (nova compra a mercado).',
     'stats.tip.reinforce_rise':    'Alta % acima do último aporte que encerra toda a pilha de compras.',
+    'stats.tip.reinforce_usd':     'Valor (US$) de cada compra de reforço. Padrão 40 — a compra do sinal usa o "Aporte" (positionSizeUsd, 20). P&L, custo médio e capital investido são ponderados pelo tamanho de cada perna.',
     'stats.card.reinforce_on_stop': 'Reforço no stop',
     'stats.tip.reinforce_badge':   'Quantos reforços (compras extras) essa posição acumulou antes de sair.',
     'stats.rsi5m_filter':      'RSI 5m',
@@ -1186,6 +1202,8 @@ const T = {
 
     'settings.rsimomentum_title':          'RSI Momentum (bot rules)',
     'settings.rsimomentum_hint':           'GLOBAL config for the RSI Momentum bot — applies to every new signal found by the market scanner. Re-read every cycle (up to 5min): no need to restart the bot after saving.',
+    'settings.rsimomentum_capital_title':  'How much to invest per trade',
+    'settings.rsimomentum_capital_hint':   'Amount (USDT) bought at market on every new entry the scanner finds. Does not affect the stop reinforcement — that add-on has its own size below.',
     'settings.rsimomentum_entry_enabled':  'New entries active',
     'settings.rsimomentum_entry_enabled_hint': 'Turning this off only pauses NEW entries — positions already bought keep being managed (TP/SL bracket, selling) normally.',
     'settings.rsimomentum_interval':       'RSI interval',
@@ -1325,6 +1343,15 @@ const T = {
     'ind.vwap_band_expansion': 'VWAP Band Expansion',
     'ind.ma_distance':       'Distance vs EMA',
     'ind.indicator_growth':  'Cycle Growth (Bottom→Top)',
+    'ind.gate_coins':        'Gate.io coins (by volume / Binance presence)',
+
+    'gatecoins.presence.only_gate':    'Gate only (not on Binance)',
+    'gatecoins.presence.only_overlap': 'On both (Gate + Binance)',
+    'gatecoins.presence.any':          'Either',
+    'gatecoins.vol_min':     'Vol min',
+    'gatecoins.vol_max':     'Vol max',
+    'gatecoins.tip.vol_min': 'Minimum 24h volume on Gate.io (quote volume in USDT)',
+    'gatecoins.tip.vol_max': 'Maximum 24h volume on Gate.io (optional)',
 
     // Indicator descriptions
     'ind.desc.ichimoku':     'Japanese system with 5 lines indicating trend, support/resistance and momentum. Widely used in advanced technical analysis.',
@@ -1341,6 +1368,7 @@ const T = {
     'ind.desc.vwap_band_expansion': 'Detects coins where the gap between the VWAP -1σ and +2σ bands has recently blown out — e.g. it was 10% and became 30% (3x). Finds the smallest gap (squeeze) within the last N candles and compares it to the current gap. "Interval" is the candle granularity (default 15m); "VWAP interval" is the rolling window used to compute the VWAP itself (default 4h — doesn\'t need to match the candle interval). N (lookback) and the minimum multiplier are configurable.',
     'ind.desc.ma_distance':  'How far the price is above (or below) a single EMA (9, 21, 50 or 200), in %. Shown in the table, sortable by farthest or closest to the average. Default: EMA21 on 4h.',
     'ind.desc.indicator_growth': 'Scans the coin\'s entire saved history looking for complete bottom→top cycles (e.g. price touches the lower Bollinger band and rises to the upper band) and computes the average appreciation (%) between entry and exit. Filters coins whose average appreciation is ≥ the chosen percentage. Same calculation used in Statistics.',
+    'ind.desc.gate_coins':   'Discovery list for pairs to trade on Gate.io: cross-references Gate spot tickers with Binance active USDT pairs. "Gate only" = pairs that do NOT exist on Binance (use case: pick a coin to trade on Gate without Binance competition); "On both" = listed on both exchanges; "Either" = all. The 24h volume (min/max) is measured on Gate itself (quote volume in USDT). The result becomes a filter you can intersect with the other indicators.',
 
     // Comparators
     'cmp.above':             'Above',
@@ -1442,6 +1470,7 @@ const T = {
     'sum.macross_age':       (age, tol) => `(within ${age}, tol ±${tol}%)`,
     'sum.macross_prox':      (prox) => `(gap ≤${prox}%)`,
     'sum.mcap':              (metric, preset) => `Market Cap: ${metric} ${preset}`,
+    'sum.gate_coins':        (presence, range) => `Gate.io: ${presence} · volume ${range}`,
     'sum.bb_position':       (period, stdDev, posLabel, ivl, prox) => `BB(${period},${stdDev}): ${posLabel} (≤${prox}%) → ${ivl}`,
     'sum.bollinger_band_width': (period, stdDev, lookback, ivl) => `BB(${period},${stdDev}): avg width over ${lookback} candles → ${ivl}`,
     'sum.bollinger_median_trend': (period, stdDev, lookback, sideLabel, ivl) => `BB(${period},${stdDev}): median-trend trades, ${sideLabel.toLowerCase()} over ${lookback} candles → ${ivl}`,
@@ -1557,6 +1586,7 @@ const T = {
     'activefav.sort.buy_lots':         'Individual purchases',
     'activefav.sort.short.holdings':   'Balance',
     'activefav.sort.short.buy_lots':   'Buys',
+    'activefav.refresh':               'Refresh balances and purchases',
 
     // Favorites — tooltips
     'fav.row.gate_add':       'Gate.io favorite — mark the coin to list under G and open the Gate chart',
@@ -1719,9 +1749,11 @@ const T = {
     'stats.reinforce_on_stop':     'Stop reinforce',
     'stats.reinforce_drop':        'Drop',
     'stats.reinforce_rise':        'Rise',
+    'stats.reinforce_usd':         'Buy size',
     'stats.tip.reinforce_on_stop': 'Stop reinforcement: when the initial buy hits its stop, it does NOT sell — it adds a new market buy (at the stop price) and starts an OCO of −Drop% / +Rise% from it. Each further drop of "Drop %" below the last buy adds another same-size buy and repositions the OCO; the first rise of "Rise %" above the last buy sells ALL buys. No cap on the number of reinforcements. Such trades no longer have a "stop" outcome — they become "target" (recovered) or "open" (stack still underwater, unrealized loss). P&L and win rate then reflect the whole stack (return on total deployed capital). Backtest only.',
     'stats.tip.reinforce_drop':    'Drop % below the last buy that triggers the next reinforcement (a new market buy).',
     'stats.tip.reinforce_rise':    'Rise % above the last buy that closes the whole stack of buys.',
+    'stats.tip.reinforce_usd':     'Amount (US$) of each reinforcement buy. Default 40 — the signal buy uses "Position size" (positionSizeUsd, 20). P&L, average cost and invested capital are weighted by each leg size.',
     'stats.card.reinforce_on_stop': 'Stop reinforce',
     'stats.tip.reinforce_badge':   'How many reinforcements (extra buys) this position stacked before exiting.',
     'stats.rsi5m_filter':      '5m RSI',

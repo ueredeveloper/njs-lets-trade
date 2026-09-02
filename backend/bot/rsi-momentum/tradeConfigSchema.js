@@ -33,6 +33,12 @@ const RSI_MOMENTUM_DEFAULTS = {
   kind: 'rsi_momentum',
   label: 'RSI Momentum',
 
+  /** Quanto investir (USDT) em cada NOVA entrada — o scanner de mercado grava este valor em
+   *  multitrade_favorites.capital / rsi_multi_bot_state.capital ao criar o favorito automático,
+   *  e o tick() compra esse tanto a mercado. NÃO afeta o reforço no stop (esse usa
+   *  exit.reinforceOnStop.buyUsd, com padrão próprio de 40). */
+  capitalUsdt: 20,
+
   entry: {
     /** false = pausa só NOVAS entradas — posição já comprada continua sendo gerenciada
      *  normalmente (bracket TP/SL, venda). */
@@ -417,6 +423,7 @@ function normalizeRsiMomentumConfig(body = {}) {
   return {
     label: body.label ?? d.label,
     kind: 'rsi_momentum',
+    capitalUsdt: Math.max(5, Math.min(100_000, Number(body.capitalUsdt ?? d.capitalUsdt))),
     entry: normalizeEntry(body.entry),
     exit: normalizeExit(body.exit),
     stopLoss: normalizeStopLoss(body.stopLoss),

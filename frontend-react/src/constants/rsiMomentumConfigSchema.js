@@ -1,6 +1,8 @@
 /** Schema RSI Momentum — espelho de backend/bot/rsi-momentum/tradeConfigSchema.js */
 
 export const RSI_MOMENTUM_ALL_INTERVALS = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '8h', '1d'];
+/** capitalUsdt — quanto investir (USDT) em cada nova entrada a mercado (não afeta o reforço no stop). */
+export const RSI_MOMENTUM_CAPITAL_USD_OPTIONS = [10, 20, 30, 40, 60, 80, 100, 150, 200, 300, 500];
 export const RSI_MOMENTUM_BB_PERIODS = [10, 20, 30];
 export const RSI_MOMENTUM_BB_STD_DEVS = [1, 2, 3];
 /** Valores selecionáveis de entry.bandWidth.lookback — quantos candles fechados entram no
@@ -52,6 +54,7 @@ export const RSI_MOMENTUM_REINFORCE_USD_OPTIONS = [20, 40, 60, 80, 100, 150, 200
 export const RSI_MOMENTUM_DEFAULTS = {
   kind: 'rsi_momentum',
   label: 'RSI Momentum',
+  capitalUsdt: 20,
   entry: {
     enabled: true,
     interval: '15m',
