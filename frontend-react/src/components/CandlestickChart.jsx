@@ -502,7 +502,7 @@ function buildBbTouchPathSeries(pathNodes, candlesticks, DL, LEFT_PAD, RIGHT_PAD
       itemStyle: { color },
       label: {
         show: !!labelExit, formatter: labelExit, color: '#fff', backgroundColor: color,
-        padding: [2, 4], borderRadius: 2, fontSize: 14, fontWeight: 'bold', position: 'top',
+        padding: [2, 4], borderRadius: 2, fontSize: 17, fontWeight: 'bold', position: 'top',
       },
     };
   });
@@ -2618,7 +2618,7 @@ function buildBuyPnlSeries(buyInfo, candlesticks, DL, LEFT_PAD, RIGHT_PAD, lastC
       backgroundColor: color,
       padding: [2, 4],
       borderRadius: 2,
-      fontSize: 14,
+      fontSize: 17,
       fontWeight: 'bold',
     },
     z: 10,
@@ -2647,7 +2647,7 @@ function buildStopLossLineSeries(buyInfo, stopLossConfig, candlesticks, DL, LEFT
         show: true,
         formatter: fmtChartPrice(lastVal),
         color: '#fff',
-        fontSize: 13,
+        fontSize: 16,
         backgroundColor: '#ef4444',
         padding: [2, 4],
         borderRadius: 2,
@@ -2877,7 +2877,7 @@ function buildSrMarkLines(levels, entrySupport = null, exitResistance = null) {
         show: true,
         formatter: `${isRes ? 'R' : 'S'}${rank} ${fmtChartPrice(lvl.price)} (${lvl.touches}x)${tag}`,
         color,
-        fontSize: 12,
+        fontSize: 14,
         fontWeight: (isEntry || isExit) ? 'bold' : 'normal',
         position: 'end',
         padding: [2, 4],
@@ -3147,7 +3147,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
         label: {
           show: true, position: 'end', align: 'right', distance: 2,
           formatter: fmtChartPrice(lastClose),
-          color: '#111', fontSize: isMobile ? 16 : 13, fontWeight: 'bold',
+          color: '#111', fontSize: isMobile ? 19 : 16, fontWeight: 'bold',
           backgroundColor: '#facc15', padding: isMobile ? [4, 8] : [3, 6], borderRadius: 2,
         }
       }] : [])
@@ -3418,7 +3418,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
       yAxis: [
         { scale: true, position: 'right', splitNumber: 8,
           axisLine: { lineStyle: { color: colors.panel } },
-          axisLabel: { color: colors.text, fontSize: 14, ...(isMobile ? { formatter: fmtAxisPriceMobile } : {}) },
+          axisLabel: { color: colors.text, fontSize: 17, ...(isMobile ? { formatter: fmtAxisPriceMobile } : {}) },
           splitLine: { lineStyle: { color: colors.panel, type: 'dashed', opacity: 0.3 } } },
         ...(macdEnabled ? [macdYAxis(0)] : []),
       ],
@@ -3517,7 +3517,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
     yAxis: [
       { gridIndex: 0, scale: true, position: 'right', splitNumber: 8,
         axisLine: { lineStyle: { color: colors.panel } },
-        axisLabel: { color: colors.text, fontSize: 14, ...(isMobile ? { formatter: fmtAxisPriceMobile } : {}) },
+        axisLabel: { color: colors.text, fontSize: 17, ...(isMobile ? { formatter: fmtAxisPriceMobile } : {}) },
         splitLine: { lineStyle: { color: colors.panel, type: 'dashed', opacity: 0.3 } } },
       ...subpanelIds.map((id, i) => subpanelYAxis(id, i + 1)),
       ...(macdEnabled ? [macdYAxis(0)] : []),
