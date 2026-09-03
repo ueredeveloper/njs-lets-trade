@@ -754,10 +754,10 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
         textColor: colors?.text || '#b3aca4',
         // Default da lib é 12. Vale pro chart INTEIRO — eixos, rótulos das priceLine E o texto
         // dos marcadores de série (o % da linha de PnL, sinais Multi-Trade, PPHL…), que não têm
-        // fontSize próprio na Lightweight Charts. 11 deixa esses números legíveis; pra não
+        // fontSize próprio na Lightweight Charts. 13 deixa esses números bem legíveis; pra não
         // reencavalar o eixo do RSI, as linhas de grade intermediárias (10/20/40/60/90/80-oculto)
         // ficam sem rótulo no eixo (só 30/50/70 mostram valor).
-        fontSize: 11,
+        fontSize: 13,
       },
       grid: {
         vertLines: { color: colors?.panel || '#003f69', style: 1 },
