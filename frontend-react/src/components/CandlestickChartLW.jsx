@@ -752,11 +752,12 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       layout: {
         background: { type: ColorType.Solid, color: colors?.bg || '#1a0a25' },
         textColor: colors?.text || '#b3aca4',
-        // Default da lib é 12 — reduzido pra caber as linhas de grade extras do RSI (10/20/
-        // 40/60/90) sem os números se sobreporem. Vale pro chart inteiro (não dá pra fixar só
-        // por pane na Lightweight Charts), mas no preço principal também ajuda a caber mais
-        // marcações no eixo.
-        fontSize: 8,
+        // Default da lib é 12. Vale pro chart INTEIRO — eixos, rótulos das priceLine E o texto
+        // dos marcadores de série (o % da linha de PnL, sinais Multi-Trade, PPHL…), que não têm
+        // fontSize próprio na Lightweight Charts. 11 deixa esses números legíveis; pra não
+        // reencavalar o eixo do RSI, as linhas de grade intermediárias (10/20/40/60/90/80-oculto)
+        // ficam sem rótulo no eixo (só 30/50/70 mostram valor).
+        fontSize: 11,
       },
       grid: {
         vertLines: { color: colors?.panel || '#003f69', style: 1 },
@@ -1577,7 +1578,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
           // depois de arrastar/zoomar o eixo (autoScale reajusta o range vertical visível).
           const gridColor = colors?.panel || '#003f69';
           [10, 20, 40, 60, 90].forEach((lvl) => {
-            s.createPriceLine({ price: lvl, color: gridColor, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: '' });
+            s.createPriceLine({ price: lvl, color: gridColor, lineWidth: 1, lineStyle: 2, axisLabelVisible: false, title: '' });
           });
           s.createPriceLine({ price: 30, color: '#ef5350', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: '30' });
           s.createPriceLine({ price: 50, color: '#ffffff', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: '50' });
@@ -1586,7 +1587,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
           if (activeIndicators.includes('rsi80')) {
             s.createPriceLine({ price: 80, color: '#fb923c', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: '80' });
           } else {
-            s.createPriceLine({ price: 80, color: gridColor, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: '' });
+            s.createPriceLine({ price: 80, color: gridColor, lineWidth: 1, lineStyle: 2, axisLabelVisible: false, title: '' });
           }
         } else {
           s.createPriceLine({ price: 38.2, color: '#26a69a', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: '38' });
