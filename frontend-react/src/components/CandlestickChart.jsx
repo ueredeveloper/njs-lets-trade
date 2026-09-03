@@ -22,6 +22,23 @@ import { simulateBbTouchPath, pairBbPathCycles } from '../utils/bollingerTouchPa
 import { detectFlags } from '../utils/detectFlags';
 
 const LIMIT = DEFAULT_CANDLE_LIMIT;
+
+// Escala de fonte do gráfico ECharts (Configurações → Tamanho da fonte). Singleton de módulo
+// setado pelo componente ANTES de montar o `option` (os builders de série são funções de módulo
+// e leem daqui). `efs(base, cat)` = tamanho final: base × escala geral × escala da categoria.
+let ECHART_FONT_SCALE = { chart: 1, price: 1, pct: 1, oco: 1 };
+function setEchartFontScale(fs) {
+  ECHART_FONT_SCALE = {
+    chart: Number(fs?.chart) || 1,
+    price: Number(fs?.chartPrice) || 1,
+    pct: Number(fs?.chartPct) || 1,
+    oco: Number(fs?.chartOco) || 1,
+  };
+}
+function efs(base, cat = 'chart') {
+  const mult = ECHART_FONT_SCALE.chart * (cat === 'chart' ? 1 : (ECHART_FONT_SCALE[cat] ?? 1));
+  return Math.max(5, Math.round(base * mult));
+}
 // Filtros e favoritos comuns buscam LIMIT (160) candles mas mostram só os mais recentes por
 // padrão — exceto TX e VWAP Bands/MA-Cross, que precisam do histórico cheio pra vendas/sinais
 // antigos (ver efeito de sincronização de intervalo mais abaixo).
@@ -502,7 +519,7 @@ function buildBbTouchPathSeries(pathNodes, candlesticks, DL, LEFT_PAD, RIGHT_PAD
       itemStyle: { color },
       label: {
         show: !!labelExit, formatter: labelExit, color: '#fff', backgroundColor: color,
-        padding: [2, 4], borderRadius: 2, fontSize: 17, fontWeight: 'bold', position: 'top',
+        padding: [2, 4], borderRadius: 2, fontSize: efs(17, 'pct'), fontWeight: 'bold', position: 'top',
       },
     };
   });
@@ -2618,7 +2635,7 @@ function buildBuyPnlSeries(buyInfo, candlesticks, DL, LEFT_PAD, RIGHT_PAD, lastC
       backgroundColor: color,
       padding: [2, 4],
       borderRadius: 2,
-      fontSize: 17,
+      fontSize: efs(17, 'pct'),
       fontWeight: 'bold',
     },
     z: 10,
@@ -2647,7 +2664,7 @@ function buildStopLossLineSeries(buyInfo, stopLossConfig, candlesticks, DL, LEFT
         show: true,
         formatter: fmtChartPrice(lastVal),
         color: '#fff',
-        fontSize: 16,
+        fontSize: efs(16, 'price'),
         backgroundColor: '#ef4444',
         padding: [2, 4],
         borderRadius: 2,
@@ -2705,7 +2722,7 @@ function buildBuyPositionSquares(buyInfo, stopLossConfig, targetConfig, candlest
     if (Number.isFinite(targetPrice)) areas.push([
       {
         xAxis: x1, yAxis: buyPrice, itemStyle: { color: 'rgba(34,197,94,0.18)' },
-        label: { show: true, position: 'insideTop', formatter: pctLabel(targetPrice) + (targetConfig.simulated ? ' (simulado)' : ''), color: '#22c55e', fontSize: 15, fontWeight: 'bold' },
+        label: { show: true, position: 'insideTop', formatter: pctLabel(targetPrice) + (targetConfig.simulated ? ' (simulado)' : ''), color: '#22c55e', fontSize: efs(15, 'oco'), fontWeight: 'bold' },
       },
       { xAxis: x2, yAxis: targetPrice },
     ]);
@@ -2719,7 +2736,7 @@ function buildBuyPositionSquares(buyInfo, stopLossConfig, targetConfig, candlest
       areas.push([
         {
           xAxis: x1, yAxis: buyPrice, itemStyle: { color: 'rgba(239,68,68,0.18)' },
-          label: { show: true, position: 'insideBottom', formatter: pctLabel(stopPrice) + (stopLossConfig.simulated ? ' (simulado)' : ''), color: '#ef4444', fontSize: 15, fontWeight: 'bold' },
+          label: { show: true, position: 'insideBottom', formatter: pctLabel(stopPrice) + (stopLossConfig.simulated ? ' (simulado)' : ''), color: '#ef4444', fontSize: efs(15, 'oco'), fontWeight: 'bold' },
         },
         { xAxis: x2, yAxis: stopPrice },
       ]);
@@ -2789,7 +2806,7 @@ function buildHistoricalPositionSquares(candlesticks, markers, DL, LEFT_PAD) {
     areas.push([
       {
         xAxis: x1, yAxis: entryPrice, itemStyle: { color },
-        label: { show: true, position: 'inside', formatter: formatPctFromBase(entryPrice, exitPrice), color: labelColor, fontSize: 14, fontWeight: 'bold' },
+        label: { show: true, position: 'inside', formatter: formatPctFromBase(entryPrice, exitPrice), color: labelColor, fontSize: efs(14, 'oco'), fontWeight: 'bold' },
       },
       { xAxis: x2, yAxis: exitPrice },
     ]);
@@ -2877,7 +2894,7 @@ function buildSrMarkLines(levels, entrySupport = null, exitResistance = null) {
         show: true,
         formatter: `${isRes ? 'R' : 'S'}${rank} ${fmtChartPrice(lvl.price)} (${lvl.touches}x)${tag}`,
         color,
-        fontSize: 14,
+        fontSize: efs(14, 'price'),
         fontWeight: (isEntry || isExit) ? 'bold' : 'normal',
         position: 'end',
         padding: [2, 4],
@@ -3147,7 +3164,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
         label: {
           show: true, position: 'end', align: 'right', distance: 2,
           formatter: fmtChartPrice(lastClose),
-          color: '#111', fontSize: isMobile ? 19 : 16, fontWeight: 'bold',
+          color: '#111', fontSize: efs(isMobile ? 19 : 16, 'price'), fontWeight: 'bold',
           backgroundColor: '#facc15', padding: isMobile ? [4, 8] : [3, 6], borderRadius: 2,
         }
       }] : [])
@@ -3418,7 +3435,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
       yAxis: [
         { scale: true, position: 'right', splitNumber: 8,
           axisLine: { lineStyle: { color: colors.panel } },
-          axisLabel: { color: colors.text, fontSize: 17, ...(isMobile ? { formatter: fmtAxisPriceMobile } : {}) },
+          axisLabel: { color: colors.text, fontSize: efs(17, 'price'), ...(isMobile ? { formatter: fmtAxisPriceMobile } : {}) },
           splitLine: { lineStyle: { color: colors.panel, type: 'dashed', opacity: 0.3 } } },
         ...(macdEnabled ? [macdYAxis(0)] : []),
       ],
@@ -3517,7 +3534,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
     yAxis: [
       { gridIndex: 0, scale: true, position: 'right', splitNumber: 8,
         axisLine: { lineStyle: { color: colors.panel } },
-        axisLabel: { color: colors.text, fontSize: 17, ...(isMobile ? { formatter: fmtAxisPriceMobile } : {}) },
+        axisLabel: { color: colors.text, fontSize: efs(17, 'price'), ...(isMobile ? { formatter: fmtAxisPriceMobile } : {}) },
         splitLine: { lineStyle: { color: colors.panel, type: 'dashed', opacity: 0.3 } } },
       ...subpanelIds.map((id, i) => subpanelYAxis(id, i + 1)),
       ...(macdEnabled ? [macdYAxis(0)] : []),
@@ -6076,6 +6093,7 @@ export default function CandlestickChart() {
 
   const option = useMemo(() => {
     if (!selectedChart) return null;
+    setEchartFontScale(uiPrefs.fontScale); // singleton lido pelos builders de série (efs())
     return buildOption(
       selectedChart, colors, effectiveIndicators, displayLimit, chartZoom, tradeTimes, overlayConfigs,
       chartTradeMarkers?.length ? chartTradeMarkers : (selectedChart.tradeMarkers ?? []),
@@ -6083,7 +6101,7 @@ export default function CandlestickChart() {
       chartBollingerConfig?.showPath ?? false, chartMacdConfig, rsiCrossThreshold,
     );
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedChart, colors, effectiveIndicators, chartZoom, tradePurchases, chartTradeMarkers, activeTab, overlayConfigs, displayLimit, chartLeftPad, chartRightPad, chartBuyInfo, chartStopLossConfig, chartTargetConfig, chartBollingerConfig, chartSrConfig, chartPphlConfig, chartWfractalsConfig, chartZigzagConfig, chartVwapConfig, chartChopConfig, chartMacdConfig, vwapSlopeHighlight, isMobile, rsiCrossThreshold]);
+  }, [selectedChart, colors, effectiveIndicators, chartZoom, tradePurchases, chartTradeMarkers, activeTab, overlayConfigs, displayLimit, chartLeftPad, chartRightPad, chartBuyInfo, chartStopLossConfig, chartTargetConfig, chartBollingerConfig, chartSrConfig, chartPphlConfig, chartWfractalsConfig, chartZigzagConfig, chartVwapConfig, chartChopConfig, chartMacdConfig, vwapSlopeHighlight, isMobile, rsiCrossThreshold, uiPrefs.fontScale]);
 
   if (!selectedChart || !option) {
     return (
@@ -6469,6 +6487,7 @@ export default function CandlestickChart() {
           {showLwChart ? (
             <CandlestickChartLW
               ref={lwChartRef}
+              fontScale={uiPrefs.fontScale}
               symbol={selectedChart.symbol}
               interval={selectedChart.interval ?? currentInterval}
               candlesticks={selectedChart.candlesticks}

@@ -667,7 +667,13 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
   emaPersistCloudData, emaPersistCloudConfirmData, emaPersistCloudConfirm2Data, emaPersistCloudLayers, emaPersistCloudTones, barsSinceCrossData, tdSequentialData,
   stopLossConfig, targetConfig, buyInfo, multitradeMarkers, zoomPeriod, focusLastN,
   onNeedOlderCandles, loadingMoreCandles, onVisibleRangeChange, visibleRange,
+  fontScale,
 }, ref) {
+  // Na Lightweight Charts o texto é um só (layout.fontSize) — vale pro eixo de preço, rótulos
+  // das priceLine (S/R, RSI 30/50/70) E o texto dos marcadores de série (% da linha de PnL,
+  // sinais Multi-Trade). Base 13; a escala vem de Configurações → Tamanho da fonte.
+  const LW_BASE_FONT = 13;
+  const lwFontSize = Math.max(6, Math.min(40, Math.round(LW_BASE_FONT * (Number(fontScale?.chart) || 1))));
   const containerRef = useRef(null);
   const chartRef = useRef(null);
   const seriesRef = useRef(null);
@@ -754,10 +760,10 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
         textColor: colors?.text || '#b3aca4',
         // Default da lib é 12. Vale pro chart INTEIRO — eixos, rótulos das priceLine E o texto
         // dos marcadores de série (o % da linha de PnL, sinais Multi-Trade, PPHL…), que não têm
-        // fontSize próprio na Lightweight Charts. 13 deixa esses números bem legíveis; pra não
-        // reencavalar o eixo do RSI, as linhas de grade intermediárias (10/20/40/60/90/80-oculto)
-        // ficam sem rótulo no eixo (só 30/50/70 mostram valor).
-        fontSize: 13,
+        // fontSize próprio na Lightweight Charts. Base 13, escalável em Configurações → Tamanho
+        // da fonte → Gráfico. Pra o eixo do RSI não reencavalar, as linhas de grade
+        // intermediárias (10/20/40/60/90/80-oculto) ficam sem rótulo no eixo (só 30/50/70).
+        fontSize: lwFontSize,
       },
       grid: {
         vertLines: { color: colors?.panel || '#003f69', style: 1 },
@@ -923,6 +929,12 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       macdSeriesRef.current = { hist: null, macd: null, signal: null };
     };
   }, [colors?.bg, colors?.text, colors?.panel]);
+
+  // Escala de fonte do gráfico — aplicada sem recriar o chart (o efeito de montagem já usa
+  // lwFontSize no valor inicial; este só reage às mudanças do slider em Configurações).
+  useEffect(() => {
+    chartRef.current?.applyOptions({ layout: { fontSize: lwFontSize } });
+  }, [lwFontSize]);
 
   // setData() + posicionamento do range visível NUM SÓ efeito — antes eram dois useEffect
   // separados (um pro setData+fitContent, outro pro focusLastN/setVisibleRange), ambos

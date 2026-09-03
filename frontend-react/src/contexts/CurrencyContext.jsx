@@ -64,6 +64,7 @@ import {
   normalizeCommonChartIntervals,
   normalizeChartEngine,
   normalizeCandleCountDisplay,
+  normalizeFontScale,
 } from '../utils/uiPreferences';
 
 const CurrencyContext = createContext(null);
@@ -928,6 +929,19 @@ export function CurrencyProvider({ children }) {
     });
   }, []);
 
+  /** Escala de fonte (Configurações → Tamanho da fonte). `patch` mescla no objeto atual;
+   *  patch === null restaura o padrão. */
+  const setFontScale = useCallback((patch) => {
+    setUiPrefsState((prev) => {
+      const next = {
+        ...prev,
+        fontScale: normalizeFontScale(patch === null ? {} : { ...prev.fontScale, ...patch }),
+      };
+      saveUiPreferences(next);
+      return next;
+    });
+  }, []);
+
   const setActiveIndicatorsPreference = useCallback((indicators) => {
     setUiPrefsState((prev) => {
       const next = { ...prev, activeIndicators: normalizeActiveIndicators(indicators) };
@@ -1047,6 +1061,14 @@ export function CurrencyProvider({ children }) {
   }, []);
 
   // Recorta Alta/Novas quando o usuário liga/desliga categorias em Exibição de ativos
+  // Escala de fonte "Site" — aplicada como `zoom` no #root (cobre todo o HTML: tabelas,
+  // filtros, painéis, botões). O gráfico tem knobs próprios (ver CandlestickChart(LW)).
+  useEffect(() => {
+    const z = Number(uiPrefs.fontScale?.site) || 1;
+    const root = document.getElementById('root') ?? document.body;
+    if (root) root.style.zoom = z === 1 ? '' : String(z);
+  }, [uiPrefs.fontScale?.site]);
+
   useEffect(() => {
     setFilters((prev) => {
       let changed = false;
@@ -1252,6 +1274,7 @@ export function CurrencyProvider({ children }) {
         setStatsDefaults,
         setChartEngineDefault,
         setCandleCountDisplayDefault,
+        setFontScale,
         chartIntervalOptions: CHART_INTERVAL_OPTIONS,
         panelKeys: PANEL_KEYS,
         isVisibleSymbol,

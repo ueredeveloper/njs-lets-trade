@@ -417,6 +417,30 @@ export function normalizeCandleCountDisplay(raw) {
   return CANDLE_COUNT_DISPLAY_OPTIONS.includes(n) ? n : DEFAULT_CANDLE_COUNT_DISPLAY;
 }
 
+/** Escalas de fonte (Configurações → Tamanho da fonte). Multiplicadores, 1 = padrão.
+ *  - site: aplicado como `zoom` no #root — cobre TODO o HTML (tabelas, filtros, painéis, botões).
+ *  - chart: texto do gráfico. No motor Lightweight Charts (padrão) é o layout.fontSize, um só
+ *    pra tudo; no ECharts multiplica todo o texto do gráfico.
+ *  - chartPrice / chartPct / chartOco: ajuste fino RELATIVO ao `chart`, só no motor ECharts —
+ *    preço do eixo lateral / % de PnL e ciclos / rótulos dos quadrados alvo-stop. */
+export const FONT_SCALE_DEFAULT = Object.freeze({ site: 1, chart: 1, chartPrice: 1, chartPct: 1, chartOco: 1 });
+export const FONT_SCALE_MIN = 0.7;
+export const FONT_SCALE_MAX = 2;
+export const FONT_SCALE_STEP = 0.05;
+
+function clampFontScale(raw, dflt) {
+  const v = Number(raw);
+  if (!Number.isFinite(v)) return dflt;
+  return Math.min(FONT_SCALE_MAX, Math.max(FONT_SCALE_MIN, Math.round(v * 100) / 100));
+}
+
+export function normalizeFontScale(raw) {
+  const src = raw && typeof raw === 'object' ? raw : {};
+  const out = {};
+  for (const k of Object.keys(FONT_SCALE_DEFAULT)) out[k] = clampFontScale(src[k], FONT_SCALE_DEFAULT[k]);
+  return out;
+}
+
 export function normalizeActiveIndicators(arr) {
   if (!Array.isArray(arr)) return [...DEFAULT_ACTIVE_INDICATORS];
   return arr.filter((id) => VALID_ACTIVE_INDICATORS.includes(id));
@@ -504,6 +528,7 @@ export const DEFAULT_UI_PREFS = {
   statsDefaults: normalizeStatsDefaults(DEFAULT_STATS),
   chartEngineDefault: DEFAULT_CHART_ENGINE,
   candleCountDisplayDefault: DEFAULT_CANDLE_COUNT_DISPLAY,
+  fontScale: { ...FONT_SCALE_DEFAULT },
 };
 
 function cloneDefaults() {
@@ -543,6 +568,7 @@ function cloneDefaults() {
     statsDefaults: normalizeStatsDefaults(DEFAULT_STATS),
     chartEngineDefault: DEFAULT_CHART_ENGINE,
     candleCountDisplayDefault: DEFAULT_CANDLE_COUNT_DISPLAY,
+    fontScale: { ...FONT_SCALE_DEFAULT },
   };
 }
 
@@ -660,6 +686,9 @@ export function loadUiPreferences() {
     }
     if (parsed.candleCountDisplayDefault !== undefined) {
       result.candleCountDisplayDefault = normalizeCandleCountDisplay(parsed.candleCountDisplayDefault);
+    }
+    if (parsed.fontScale !== undefined) {
+      result.fontScale = normalizeFontScale(parsed.fontScale);
     }
     return result;
   } catch {

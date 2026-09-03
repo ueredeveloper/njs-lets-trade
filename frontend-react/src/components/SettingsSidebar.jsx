@@ -15,7 +15,8 @@ import { useI18n } from '../i18n';
 import { useCurrency } from '../contexts/CurrencyContext';
 import { PERIOD_DEFAULT_COLORS, MAX_OVERLAY_SLOTS,
   CURRENCY_PANEL_WIDTH_MIN, CURRENCY_PANEL_WIDTH_MAX, CURRENCY_PANEL_WIDTH_DEFAULT,
-  VWAP_SLOPE_HIGHLIGHT_LOOKBACKS, CANDLE_COUNT_DISPLAY_OPTIONS, VALID_ACTIVE_INDICATORS } from '../utils/uiPreferences';
+  VWAP_SLOPE_HIGHLIGHT_LOOKBACKS, CANDLE_COUNT_DISPLAY_OPTIONS, VALID_ACTIVE_INDICATORS,
+  FONT_SCALE_DEFAULT, FONT_SCALE_MIN, FONT_SCALE_MAX, FONT_SCALE_STEP } from '../utils/uiPreferences';
 
 const OVERLAY_SETTING_INTERVALS = ['15m', '30m', '1h', '4h', '1d'];
 const OVERLAY_SETTING_PERIODS   = ['9', '21', '50', '200'];
@@ -55,6 +56,33 @@ function formatCacheMeta(meta) {
   return parts.length ? parts.join(' · ') : null;
 }
 
+/** Linha "− [valor%] +" pra uma escala de fonte. `value` é multiplicador (1 = 100%). */
+function FontStepper({ label, hint, value, onChange, disabled }) {
+  const v = Number(value) || 1;
+  const pct = Math.round(v * 100);
+  const set = (next) => onChange(Math.min(FONT_SCALE_MAX, Math.max(FONT_SCALE_MIN, Math.round(next * 100) / 100)));
+  const btn = 'flex items-center justify-center w-6 h-6 rounded border border-p3/40 text-p5/70 hover:text-p4 hover:border-p4 disabled:opacity-30 disabled:cursor-default transition-colors';
+  return (
+    <div className={`flex items-center justify-between gap-2 py-1.5 ${disabled ? 'opacity-40' : ''}`}>
+      <div className="min-w-0">
+        <div className="text-[11px] text-p5/80">{label}</div>
+        {hint && <div className="text-[9px] text-p5/40 leading-tight">{hint}</div>}
+      </div>
+      <div className="flex items-center gap-1.5 shrink-0">
+        <button type="button" className={btn} disabled={disabled || v <= FONT_SCALE_MIN + 1e-9}
+          onClick={() => set(v - FONT_SCALE_STEP)} aria-label="menor">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="w-3 h-3"><path strokeLinecap="round" d="M5 12h14" /></svg>
+        </button>
+        <span className={`text-[11px] tabular-nums w-10 text-center ${pct === 100 ? 'text-p5/50' : 'text-p4 font-semibold'}`}>{pct}%</span>
+        <button type="button" className={btn} disabled={disabled || v >= FONT_SCALE_MAX - 1e-9}
+          onClick={() => set(v + FONT_SCALE_STEP)} aria-label="maior">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="w-3 h-3"><path strokeLinecap="round" d="M12 5v14M5 12h14" /></svg>
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function AccordionItem({ id, title, hint, openSection, setOpenSection, children }) {
   const isOpen = openSection === id;
   return (
@@ -89,7 +117,7 @@ export default function SettingsSidebar({ open, onClose }) {
     setFavoriteButtonVisible, favoriteButtonKeys,
     setOverlaySlotsPreference, setCurrencyPanelWidth,
     setStatsDefaults, setVwapAnchorDefault, setVwapSlopeHighlightDefault, setChartEngineDefault,
-    setCandleCountDisplayDefault, setDefaultActiveIndicator,
+    setCandleCountDisplayDefault, setDefaultActiveIndicator, setFontScale,
     chartIntervalOptions, panelKeys,
     activeTrades, activeTradesSettings, updateActiveTradesSettings,
     ignoredActiveTrades, dismissActiveTrade, restoreActiveTrade } = useCurrency();
@@ -564,6 +592,37 @@ export default function SettingsSidebar({ open, onClose }) {
                 </button>
               ))}
             </div>
+          </AccordionItem>
+
+          {/* Tamanho da fonte */}
+          <AccordionItem id="fontSize" title={t('settings.font_size')} hint={t('settings.font_size_hint')}
+            openSection={openSection} setOpenSection={setOpenSection}>
+            {(() => {
+              const fs = { ...FONT_SCALE_DEFAULT, ...(uiPrefs.fontScale ?? {}) };
+              const isLw = (uiPrefs.chartEngineDefault ?? 'lw') !== 'echarts';
+              return (
+                <div className="flex flex-col divide-y divide-p2/20">
+                  <FontStepper label={t('settings.font_site')} hint={t('settings.font_site_hint')}
+                    value={fs.site} onChange={(v) => setFontScale({ site: v })} />
+                  <FontStepper label={t('settings.font_chart')} hint={t('settings.font_chart_hint')}
+                    value={fs.chart} onChange={(v) => setFontScale({ chart: v })} />
+                  <div className="pt-2">
+                    <div className="text-[9px] uppercase tracking-wider text-p5/40 mb-0.5">{t('settings.font_chart_fine')}</div>
+                    {isLw && <div className="text-[9px] text-amber-500/80 mb-1 leading-tight">{t('settings.font_chart_fine_lw')}</div>}
+                    <FontStepper label={t('settings.font_chart_price')} value={fs.chartPrice}
+                      onChange={(v) => setFontScale({ chartPrice: v })} disabled={isLw} />
+                    <FontStepper label={t('settings.font_chart_pct')} value={fs.chartPct}
+                      onChange={(v) => setFontScale({ chartPct: v })} disabled={isLw} />
+                    <FontStepper label={t('settings.font_chart_oco')} value={fs.chartOco}
+                      onChange={(v) => setFontScale({ chartOco: v })} disabled={isLw} />
+                  </div>
+                  <button type="button" onClick={() => setFontScale(null)}
+                    className="mt-2 text-[10px] text-p5/50 hover:text-p4 self-start transition-colors">
+                    {t('settings.font_reset')}
+                  </button>
+                </div>
+              );
+            })()}
           </AccordionItem>
 
           {/* Painéis inferiores */}
