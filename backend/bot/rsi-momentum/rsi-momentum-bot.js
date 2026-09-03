@@ -56,10 +56,9 @@ const {
 } = require('./strategyEngine');
 
 // "Reforço no stop" (martingale) — trava de segurança do nº de reforços (o usuário pediu "sem
-// limite"; isto só evita loop patológico numa queda livre) e prazo de espera quando falta saldo
-// pra um novo aporte antes da venda forçada a mercado.
+// limite"; isto só evita loop patológico numa queda livre). Quando falta saldo pra um novo
+// aporte o bot NÃO liquida nada: segura a pilha e deixa o trade sair no alvo normalmente.
 const REINFORCE_HARD_CAP = 40;
-const REINFORCE_FUNDS_SHORT_WAIT_MS = 60 * 60 * 1000; // 1h
 
 // Alvo "desligado" (exit.targetMode === 'off'): a OCO da corretora precisa das duas pernas, então
 // coloca o TP num teto absurdo (+500%) — a Binance PRENDE (clamp) em ~+100% do preço médio e, na
@@ -180,13 +179,30 @@ async function createAutoFavorite(symbol) {
  *  pullback expirou sem preencher, ou o sinal não se confirmou mais no primeiro tick. A moeda
  *  volta pro "pool" — o scanner pode sinalizá-la de novo no futuro, do zero.
  *
+ *  Exceção: moeda CURADA (rsi_multi_bot_state.curated = true — watchlist manual, ex.: SKYAI na
+ *  Gate, que o scanner Binance nunca sinaliza; ver CLAUDE.md "Watchlist curada"). Nesse caso a
+ *  linha NÃO é apagada nem a sessão encerrada: volta pra WATCHING e segue vigiando o próximo
+ *  sinal indefinidamente (a linha WATCHING é retomada no boot — loadResumableRows).
+ *
  *  Ordem importa: apaga multitrade_favorites PRIMEIRO. Não há transação entre os dois deletes
  *  (2 tabelas, 2 requests), então se um falhar depois de retentado (ver RETRYABLE_METHODS em
  *  supabaseRest.js) o órfão que sobra precisa ser o inofensivo — rsi_multi_bot_state sozinho
  *  ainda marca o símbolo como "tracked" pro loadTrackedSymbols, então o scanner não tenta
  *  recriar o sinal. Na ordem inversa (usada até a v1.111.0) o órfão era o favorito, e o
  *  scanner martelava POST duplicado (409) nesse símbolo a cada ciclo, pra sempre. */
-async function retireAutoFavorite({ rowId, symbol, log, stopSelf, reason }) {
+async function retireAutoFavorite({ rowId, symbol, log, stopSelf, reason, session }) {
+  if (session?.curated) {
+    if (reason) log(`↩️  ${symbol} (curada) — ${reason}; volta a vigiar (linha mantida, sem remover do pool)`);
+    // Preserva só o carimbo da última venda (cooldown de reentrada sobrevive a um restart no
+    // meio do cooldown); descarta o resto do rules_state (entryLimit, exitBracket, reforce…).
+    const keep = {};
+    if (session.lastExitTime) keep.lastExitTime = session.lastExitTime;
+    if (session.lastExitReason) keep.lastExitReason = session.lastExitReason;
+    session.phase = 'WATCHING';
+    session.rulesState = null;
+    await saveState(rowId, { phase: 'WATCHING', rules_state: keep }, log);
+    return { phase: 'WATCHING' };
+  }
   if (reason) log(`🗑️  ${symbol} removido do favorito automático (${reason})`);
   try {
     await sbReq('DELETE', 'multitrade_favorites', null, `?symbol=eq.${symbol}&strategy_id=eq.rsi-momentum`);
@@ -225,7 +241,7 @@ async function retireOrCooldown({ rowId, symbol, log, stopSelf, reason, config, 
     log(`⏸️  ${symbol} fechado (${reason}) — cooldown de reentrada: ${cooldown.have}/${cooldown.need} candles ${cooldown.interval}, aguardando antes de voltar pro pool`);
     return { phase: 'WATCHING', reentryCooldown: cooldown };
   }
-  return retireAutoFavorite({ rowId, symbol, log, stopSelf, reason });
+  return retireAutoFavorite({ rowId, symbol, log, stopSelf, reason, session });
 }
 
 /** Marca a linha como FAILED (visível na lista, com o motivo) e encerra a sessão — não tenta
@@ -321,7 +337,7 @@ function logStartupConfig(body, source = null) {
   if (rf?.enabled) {
     console.log(`             +1 compra de ${Number(rf.buyUsd ?? 40).toFixed(2)} USDT a cada -${rf.addDropPct}% abaixo do último aporte`);
     console.log(`             vende TODA a pilha a mercado no 1º +${rf.exitRisePct}% acima do último aporte`);
-    console.log(`             ⚠️  posição fica SEM stop de proteção depois de disparado · sem saldo p/ novo aporte: avisa e vende a mercado em 1h · trava de segurança ${REINFORCE_HARD_CAP} degraus`);
+    console.log(`             ⚠️  posição fica SEM stop de proteção depois de disparado · sem saldo p/ novo aporte: avisa e segura a pilha (não vende), trade sai no alvo normal · trava de segurança ${REINFORCE_HARD_CAP} degraus`);
     console.log(`             estado em rsi_multi_bot_state.rules_state.reinforce — retoma a escada no meio depois de um restart`);
   }
 
@@ -675,7 +691,7 @@ async function tick(rowId, adapter, strategy, log, session, stopSelf) {
         }
         const cancelReason = expiry.expired
           ? `${expiry.need} candles ${expiry.interval} sem fill` : `status ${poll.status}`;
-        return retireAutoFavorite({ rowId, symbol, log, stopSelf, reason: `pullback não preencheu — ${cancelReason}` });
+        return retireAutoFavorite({ rowId, symbol, log, stopSelf, session, reason: `pullback não preencheu — ${cancelReason}` });
       }
 
       return { phase: 'WATCHING', entryLimit: { waiting: true, ...expiry } };
@@ -686,7 +702,7 @@ async function tick(rowId, adapter, strategy, log, session, stopSelf) {
       // Raríssimo (janela entre o scanner detectar e esta sessão rodar o 1º tick) — o sinal
       // não se confirma mais nesta checagem fresca. Sem posição/ordem nenhuma envolvida, só
       // devolve a moeda pro pool em vez de deixar uma linha WATCHING zumbi.
-      return retireAutoFavorite({ rowId, symbol, log, stopSelf, reason: `sinal não se confirmou mais (${signal.reason})` });
+      return retireAutoFavorite({ rowId, symbol, log, stopSelf, session, reason: `sinal não se confirmou mais (${signal.reason})` });
     }
 
     // Sem pullback: compra a mercado assim que o sinal confirma (limitPrice null). Chama
@@ -1080,17 +1096,9 @@ async function handleReinforceLadder({ rowId, adapter, strategy, log, state, ses
   }
 
   if (decision.action === 'addRung') {
-    // Sem saldo já pendente há ≥1h → venda forçada a mercado (o usuário pediu: avisa, espera 1h, vende).
-    if (rf.fundsShortSince && Date.now() - Date.parse(rf.fundsShortSince) >= REINFORCE_FUNDS_SHORT_WAIT_MS) {
-      const exitResult = { reason: 'STOP_LOSS', exitDesc: `Reforço sem saldo — venda forçada a mercado após 1h (pilha de ${rf.legs.length} compras)` };
-      try {
-        await executeSell({ rowId, adapter, strategy, log, state, exitResult, session, defaultReasonDesc: 'Reforço sem saldo — 1h' });
-      } catch {
-        return { phase: 'BOUGHT' };
-      }
-      log(`${Y}⇈🛑 Escada de reforço vendida a mercado — sem saldo pra novo aporte por mais de 1h${X}`);
-      return retireOrCooldown({ rowId, symbol, log, stopSelf, config, cMap, state, session, reason: 'escada de reforço vendida (sem saldo, 1h)' });
-    }
+    // Sem saldo pra novo aporte: NÃO liquida a pilha. Segue com o trade — as compras já feitas
+    // ficam na carteira e saem normalmente quando o preço bater o alvo (+exitRisePct% sobre o
+    // último aporte). Só tenta o reforço de novo a cada candle caso o saldo volte.
 
     // Trava de segurança do nº de degraus — segura a posição (sem timer), só avisa uma vez.
     if ((rf.rungs ?? 1) >= REINFORCE_HARD_CAP) {
@@ -1143,15 +1151,16 @@ async function handleReinforceLadder({ rowId, adapter, strategy, log, state, ses
   return { phase: 'BOUGHT' };
 }
 
-/** Marca o início da janela de 1h "sem saldo pra reforço" (ou não faz nada se já marcada) —
- *  handleReinforceLadder vende a mercado quando a hora passa. */
+/** Sem saldo pra o próximo aporte da escada — registra e AVISA uma vez, mas NÃO liquida nada.
+ *  O trade segue: a pilha já comprada fica na carteira e sai normalmente no alvo
+ *  (+exitRisePct% sobre o último aporte). Se o saldo voltar, o próximo candle retoma a escada. */
 async function reinforceFundsShort({ rowId, log, state, session, rulesState, rf, symbol, strategyId, note }) {
-  if (rf.fundsShortSince) return { phase: 'BOUGHT' }; // já contando a 1h
+  if (rf.fundsShortSince) return { phase: 'BOUGHT' }; // já avisado
   const since = new Date().toISOString();
   session.rulesState = { ...rulesState, reinforce: { ...rf, fundsShortSince: since } };
   await saveState(rowId, { rules_state: session.rulesState }, log);
-  log(`${Y}⚠️  Sem saldo pra o reforço #${(rf.rungs ?? 1) + 1} de ${symbol} (${note}) — segurando a pilha; venda a mercado em 1h se não recuperar${X}`);
-  sendWhatsApp(`⚠️ ${BOT_LABEL} [${strategyId}] ${symbol}\nSem saldo pra o próximo reforço (${note}). Segurando ${(rf.legs?.length ?? 0)} compras.\nSe não houver saldo em 1h (a partir de ${since}), a pilha é vendida a mercado.`);
+  log(`${Y}⚠️  Sem saldo pra o reforço #${(rf.rungs ?? 1) + 1} de ${symbol} (${note}) — seguindo com o trade; a pilha de ${(rf.legs?.length ?? 0)} compras sai no alvo (+${rf.exitRisePct}%)${X}`);
+  sendWhatsApp(`⚠️ ${BOT_LABEL} [${strategyId}] ${symbol}\nSem saldo pra o próximo reforço (${note}). Nada é vendido — o trade segue normalmente.\nSegurando ${(rf.legs?.length ?? 0)} compras; a pilha sai a mercado quando o preço bater o alvo (+${rf.exitRisePct}% sobre o último aporte). Se o saldo voltar, a escada é retomada.`);
   return { phase: 'BOUGHT' };
 }
 
@@ -1164,6 +1173,15 @@ async function startSymbol(row, color, startupIndex = null) {
 
   const adapter = buildAdapter(row.exchange ?? 'binance', row.symbol);
   const log     = makeLogger(row.symbol, row.strategy_id, color);
+
+  // Moeda CURADA (watchlist manual — rsi_multi_bot_state.curated): vigiada indefinidamente pelo
+  // bot, mesmo que o scanner de mercado (Binance) nunca a sinalize (ex.: SKYAI, que só existe na
+  // Gate). Após cada trade fechar (ou pullback/sinal não confirmar) volta pra WATCHING em vez de
+  // ser removida do pool — ver retireAutoFavorite.
+  const curated = row.curated === true;
+  if (curated) {
+    log(`📌 Moeda CURADA (${row.exchange ?? 'binance'}) — vigiada indefinidamente; volta pra WATCHING após cada trade, nunca sai do pool.`);
+  }
 
   const ctx = {
     rowId: row.id,
@@ -1189,6 +1207,7 @@ async function startSymbol(row, color, startupIndex = null) {
     rulesState: null,
     lastExitTime: rs.lastExitTime ?? null,
     lastExitReason: rs.lastExitReason ?? null,
+    curated,
   };
   let volIv;
 
@@ -1207,6 +1226,7 @@ async function startSymbol(row, color, startupIndex = null) {
       return;
     }
     ctx.strategy = next;
+    session.curated = newRow.curated === true;
     log(`🔄 ${row.symbol} — config atualizada do painel (RSI ${next.config.entry.interval} > ${next.config.entry.rsiThreshold})`);
   };
 

@@ -242,6 +242,7 @@ export async function fetchRsiThresholdBacktest(symbol, interval, options = {}) 
     params.set('reinforceAddDropPct', String(reinforceOnStop.addDropPct ?? 10));
     params.set('reinforceExitRisePct', String(reinforceOnStop.exitRisePct ?? 15));
     params.set('reinforceBuyUsd', String(reinforceOnStop.buyUsd ?? 40));
+    if (reinforceOnStop.waitCandles) params.set('reinforceWaitCandles', String(reinforceOnStop.waitCandles));
   }
   appendTrailingStopParams(params, trailingStop, stopLossPct);
   if (targetMode && targetMode !== 'fixed') params.set('targetMode', targetMode);
@@ -319,6 +320,7 @@ export async function fetchRsiThresholdBacktestMarket(interval, options = {}) {
     params.set('reinforceAddDropPct', String(reinforceOnStop.addDropPct ?? 10));
     params.set('reinforceExitRisePct', String(reinforceOnStop.exitRisePct ?? 15));
     params.set('reinforceBuyUsd', String(reinforceOnStop.buyUsd ?? 40));
+    if (reinforceOnStop.waitCandles) params.set('reinforceWaitCandles', String(reinforceOnStop.waitCandles));
   }
   appendTrailingStopParams(params, trailingStop, stopLossPct);
   if (targetMode && targetMode !== 'fixed') params.set('targetMode', targetMode);
@@ -374,6 +376,21 @@ export async function clearRsiMomentumStatsSearches() {
   const res = await fetch('/services/rsi-momentum-stats-searches', { method: 'DELETE' });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
+}
+
+/** Adiciona a moeda da pesquisa atual (Estatísticas → Momentum RSI) como BOT EXCLUSIVO —
+ *  watchlist curada do bot RSI Momentum (rsi_multi_bot_state.curated = true). O bot passa a
+ *  vigiá-la indefinidamente com a config testada, mesmo fora do scanner de mercado (Binance),
+ *  e volta pra WATCHING após cada trade. `exchange` = 'gate' | 'binance'. */
+export async function addRsiMomentumCuratedBot({ symbol, interval, exchange, config }) {
+  const res = await fetch('/services/sb/rsi-momentum-curated', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ symbol, interval, exchange, config }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.hint ? `${body.error} — ${body.hint}` : (body.error ?? `HTTP ${res.status}`));
+  return body;
 }
 
 export async function fetchSimpleMaCross(symbol, entryInterval = '15m', exitInterval = '30m', source = null) {

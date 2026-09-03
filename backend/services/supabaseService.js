@@ -115,6 +115,12 @@ function sbError(res, error, context = '') {
       hint: 'Execute supabase/add-five-min-bot-columns.sql no SQL Editor do Supabase.',
     });
   }
+  if (/curated.*schema cache/i.test(msg) || /column .*curated/i.test(msg)) {
+    return res.status(500).json({
+      error: msg,
+      hint: 'Execute supabase/add-rsi-momentum-curated-column.sql no SQL Editor do Supabase.',
+    });
+  }
   res.status(500).json({ error: msg });
 }
 
@@ -842,6 +848,175 @@ router.post('/multitrade-favorites', getUserId, async (req, res) => {
   });
 
   res.json(await enrichSingleMultitradeEntry(multitradeToEntry(data)));
+});
+
+// ── Bot exclusivo (watchlist curada) do RSI Momentum ─────────────────────────
+//
+// A tela Estatísticas → Momentum RSI manda a config da última pesquisa de UMA moeda; o backend
+// a converte pro schema do bot (tradeConfigSchema.js) e cria/atualiza a moeda como CURADA
+// (rsi_multi_bot_state.curated = true) — o bot passa a vigiá-la indefinidamente numa sessão
+// dedicada, mesmo que o scanner de mercado (só Binance) nunca a sinalize (ex.: SKYAI/Gate), e
+// depois de cada trade volta pra WATCHING em vez de sair do pool. Ver retireAutoFavorite em
+// backend/bot/rsi-momentum/rsi-momentum-bot.js e supabase/add-rsi-momentum-curated-column.sql.
+
+/** Converte a config do backtest das Estatísticas (mesmo shape gravado em
+ *  rsi-momentum-stats-searches.json) no "body" que normalizeRsiMomentumConfig entende.
+ *  Filtros que o motor do backtest NÃO aplica (anti-repique, confirmação adiantada) e os que o
+ *  bot não suporta (adxFilter, newHighFilter) ficam de fora — devolve também a lista do que foi
+ *  ignorado, pra avisar o usuário. */
+function statsConfigToRsiMomentumBody({ symbol, interval, config = {}, priorRsiFilter = null }) {
+  const c = config;
+  const num = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
+  const ignored = [];
+  if (c.adxFilter?.enabled) ignored.push('filtro ADX');
+  if (c.newHighFilter?.enabled) ignored.push('filtro novo topo');
+  if (c.reinforceOnStop?.enabled && Number(c.reinforceOnStop.waitCandles) > 0) {
+    ignored.push(`espera de ${c.reinforceOnStop.waitCandles} candles no reforço (bot ainda reforça no ato)`);
+  }
+
+  const body = {
+    label: `RSI Momentum · ${symbol} (curada)`,
+    kind: 'rsi_momentum',
+    capitalUsdt: Math.max(5, num(c.positionSizeUsd, 20)),
+    entry: {
+      enabled: true,
+      interval: interval || c.interval || '15m',
+      rsiThreshold: num(c.rsiThreshold, 70),
+      // Anti-repique: o backtest das Estatísticas usa o valor da config GLOBAL (ver
+      // fetchRsiThresholdBacktest.js#priorRsiFilter) — repassa o mesmo pro bot. Confirmação
+      // adiantada (earlyConfirm) é só do bot ao vivo, o backtest não aplica → desligada.
+      priorRsiFilter: priorRsiFilter && typeof priorRsiFilter === 'object'
+        ? { enabled: priorRsiFilter.enabled !== false, count: num(priorRsiFilter.count, 3) }
+        : { enabled: true, count: 3 },
+      earlyConfirm: { enabled: false },
+      pullback: num(c.pullbackPct, 0) > 0
+        ? { enabled: true, belowPct: num(c.pullbackPct, 0.5) }
+        : { enabled: false },
+      reentryCooldownCandles: 3,
+      bandWidth: c.bandWidth?.enabled
+        ? { enabled: true, interval: c.bandWidth.interval ?? '5m',
+            lookback: num(c.bandWidth.lookback, 300), minPct: num(c.bandWidth.minPct, 2) }
+        : { enabled: false },
+      rsi5mFilter: c.rsi5mFilter?.enabled
+        ? { enabled: true, threshold: num(c.rsi5mFilter.threshold, 70) }
+        : { enabled: false },
+      spikeGuard: { enabled: false },
+      macdFilter: c.macdFilter?.enabled
+        ? { enabled: true, interval: c.macdFilter.interval ?? '1h' }
+        : { enabled: false },
+      higherRsiFilter: c.higherRsiFilter?.enabled
+        ? { enabled: true, minRsi: num(c.higherRsiFilter.minRsi, 60) }
+        : { enabled: false },
+      supportResistance: c.supportResistance?.enabled
+        ? { enabled: true,
+            interval: c.supportResistance.interval ?? '4h',
+            candleCount: num(c.supportResistance.candleCount, 50),
+            entrySupportRank: num(c.supportResistance.entrySupportRank, 1),
+            exitResistanceRank: num(c.supportResistance.exitResistanceRank, 3),
+            entryMaxPct: num(c.supportResistance.entryMaxPct, 5) }
+        : { enabled: false },
+    },
+    exit: {
+      targetMode: ['fixed', 'continuous', 'off'].includes(c.targetMode) ? c.targetMode : 'off',
+      restingBracket: { enabled: true, targetPct: Math.max(0.1, num(c.targetPct, 10)) },
+      trailingTarget: c.trailingTarget
+        ? { coinStepPct: num(c.trailingTarget.coinStepPct, 3), stepPct: num(c.trailingTarget.stepPct, 3) }
+        : undefined,
+      trailingStop: c.trailingStop?.enabled
+        ? { enabled: true, mode: c.trailingStop.mode ?? 'continuous',
+            startPct: num(c.trailingStop.startPct, num(c.stopLossPct, 5)),
+            coinStepPct: num(c.trailingStop.coinStepPct, 3),
+            stopStepPct: num(c.trailingStop.stopStepPct, 2),
+            pivotPct: num(c.trailingStop.pivotPct, 1),
+            aCoinStepPct: num(c.trailingStop.aCoinStepPct, 3),
+            aStopStepPct: num(c.trailingStop.aStopStepPct, 2.5),
+            bCoinStepPct: num(c.trailingStop.bCoinStepPct, 3),
+            bStopStepPct: num(c.trailingStop.bStopStepPct, 1),
+            pivotGainPct: num(c.trailingStop.pivotGainPct, 5),
+            wNearPct: num(c.trailingStop.wNearPct, 4),
+            wFarPct: num(c.trailingStop.wFarPct, 9),
+            atrMult: num(c.trailingStop.atrMult, 2),
+            atrMaxPct: num(c.trailingStop.atrMaxPct, 12) }
+        : { enabled: false },
+      hardTakeProfit: c.hardTakeProfit?.enabled
+        ? { enabled: true, pct: num(c.hardTakeProfit.pct, 15) }
+        : { enabled: false },
+      reinforceOnStop: c.reinforceOnStop?.enabled
+        ? { enabled: true, addDropPct: num(c.reinforceOnStop.addDropPct, 10),
+            exitRisePct: num(c.reinforceOnStop.exitRisePct, 15),
+            buyUsd: num(c.reinforceOnStop.buyUsd, 40) }
+        : { enabled: false },
+    },
+    stopLoss: { enabled: true, maxLossPct: Math.max(0.5, num(c.stopLossPct, 3)) },
+    polling: { pollMs: 60_000, fastPollMs: 20_000 },
+    entryCooldownHours: 0,
+    volume: { minVolumeUsdt: num(c.minVolumeUsdt, 0) },
+  };
+  return { body, ignored };
+}
+
+// POST /services/sb/rsi-momentum-curated — { symbol, interval, exchange, config }
+router.post('/rsi-momentum-curated', getUserId, async (req, res) => {
+  const symbol = String(req.body?.symbol ?? '').trim().toUpperCase();
+  const interval = String(req.body?.interval ?? '').trim() || null;
+  const exchange = req.body?.exchange === 'gate' ? 'gate' : 'binance';
+  const config = req.body?.config ?? null;
+  if (!symbol) return res.status(400).json({ error: 'symbol obrigatório' });
+  if (!config) return res.status(400).json({ error: 'config obrigatória (rode uma pesquisa antes)' });
+
+  // Anti-repique da config global do bot — o backtest das Estatísticas usa esse mesmo valor.
+  const { data: gcRow } = await supabase
+    .from('rsi_momentum_global_config').select('trade_config').eq('user_id', req.userId).maybeSingle();
+  const priorRsiFilter = normalizeRsiMomentumConfig(gcRow?.trade_config ?? {}).entry.priorRsiFilter;
+
+  const { body, ignored } = statsConfigToRsiMomentumBody({ symbol, interval, config, priorRsiFilter });
+  const trade_config = buildRsiMomentumTradeConfig(body);
+  const capital = Number(body.capitalUsdt);
+
+  // 1. Favorito no painel (obrigatório: multitradeWatch encerra a sessão de qualquer moeda sem
+  //    linha enabled=true aqui).
+  const { error: favErr } = await supabase
+    .from('multitrade_favorites')
+    .upsert({
+      user_id: req.userId, symbol, exchange, strategy_id: 'rsi-momentum',
+      enabled: true, capital, trade_config,
+    }, { onConflict: 'user_id,symbol,strategy_id' });
+  if (favErr) return sbError(res, favErr, 'POST rsi-momentum-curated (favorite)');
+
+  // 2. Estado runtime — curated=true. Se já existe linha, preserva a fase (pode estar comprada);
+  //    senão cria em WATCHING.
+  const { data: existing } = await supabase
+    .from('rsi_multi_bot_state')
+    .select('id, phase')
+    .eq('symbol', symbol)
+    .eq('strategy_id', 'rsi-momentum')
+    .maybeSingle();
+
+  let stateErr;
+  if (existing?.id) {
+    ({ error: stateErr } = await supabase
+      .from('rsi_multi_bot_state')
+      .update({ exchange, capital, trade_config, curated: true })
+      .eq('id', existing.id));
+  } else {
+    ({ error: stateErr } = await supabase
+      .from('rsi_multi_bot_state')
+      .insert({
+        symbol, exchange, strategy_id: 'rsi-momentum',
+        initial_capital: capital, capital, trade_config,
+        phase: 'WATCHING', curated: true,
+      }));
+  }
+  if (stateErr) return sbError(res, stateErr, 'POST rsi-momentum-curated (state)');
+
+  res.json({
+    ok: true,
+    symbol, exchange, interval: body.entry.interval,
+    capitalUsdt: capital,
+    phase: existing?.phase ?? 'WATCHING',
+    resumed: !!existing?.id,
+    ignoredFilters: ignored,
+  });
 });
 
 // PUT|PATCH /services/sb/multitrade-favorites/:id

@@ -161,3 +161,38 @@ Motor: `strategyEngine.js`, schema: `tradeConfigSchema.js`. SQL: `amap-bot.sql`.
 Símbolos são adicionados pelo painel **Multi-Trade** (sincroniza `multitrade_favorites` → `rsi_multi_bot_state`).
 
 **Avaliação pré-trade (volume, desconto, MA adaptativa, 3/4 candles, backtest):** ver `backend/bot/amap/AVALIACAO-PRE-TRADE.md`.
+
+---
+
+## RSI Momentum Bot (`backend/bot/rsi-momentum/rsi-momentum-bot.js`)
+
+```bash
+node backend/bot/rsi-momentum/rsi-momentum-bot.js            # scanner de mercado + gestão
+node backend/bot/rsi-momentum/rsi-momentum-bot.js --verbose  # 1 linha por moeda analisada
+```
+
+Sem favorito manual: `marketScanner.js` varre TODOS os pares USDT da **Binance** com uma config
+global (`rsi_momentum_global_config`); quando o RSI cruza o limiar, o bot cria o favorito
+(`multitrade_favorites` + `rsi_multi_bot_state`), gerencia o ciclo e **remove** o favorito quando
+fecha. Motor de sinal = mesmo do backtest (`backend/utils/analyseRsiThresholdBacktest.js`).
+
+### Watchlist curada (`rsi_multi_bot_state.curated = true`)
+
+Moeda vigiada **indefinidamente** pelo bot mesmo que o scanner Binance nunca a sinalize (ex.:
+**SKYAIUSDT só existe na Gate**). Com `curated = true`, `retireAutoFavorite` NÃO apaga a linha:
+após cada trade (ou pullback/sinal não confirmado) volta pra `WATCHING` e segue aguardando o
+próximo sinal — fica comprando/vendendo em loop. Cada linha roda com o `trade_config` DELA
+(`resolveStrategy(row)`), e a corretora vem de `row.exchange` (`buildAdapter` → Gate = bracket
+TP/SL emulado). Precisa da linha `multitrade_favorites` enabled=true (senão `multitradeWatch`
+encerra a sessão).
+
+**Como adicionar:** botão **"🤖 Bot exclusivo"** em Estatísticas → Momentum RSI (aparece ao
+lado de "Baixar JSON" depois de uma pesquisa de UMA moeda). Manda a config da pesquisa pra
+`POST /services/sb/rsi-momentum-curated` (`supabaseService.js#statsConfigToRsiMomentumBody`
+converte pro schema do bot; anti-repique vem da config global, earlyConfirm/adx/newHigh
+desligados). Migração: `supabase/add-rsi-momentum-curated-column.sql` (1×). SQL manual
+alternativo: `supabase/add-skyai-curated-rsi-momentum.sql`. **Reiniciar o bot** após adicionar.
+
+Desligar: `multitrade_favorites.enabled = false` (encerra a sessão sem vender/cancelar no
+próximo sync de 3 min), depois apague as 2 linhas. Limitação: se a ENTRADA falhar (ex.: saldo),
+a moeda para em `FAILED` e precisa ser reativada.

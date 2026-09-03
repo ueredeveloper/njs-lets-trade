@@ -245,6 +245,7 @@ function resolveFromSignal(scanCandles, signalPrice, { pullbackPct, targetPct, s
             addDropPct: reinforceOnStop.addDropPct,
             exitRisePct: reinforceOnStop.exitRisePct,
             maxRungs: reinforceOnStop.maxRungs,
+            waitCandles: reinforceOnStop.waitCandles,
             firstLegUsd: positionSizeUsd,
             rungUsd: Number(reinforceOnStop.buyUsd) > 0 ? Number(reinforceOnStop.buyUsd) : positionSizeUsd,
         });
@@ -315,21 +316,55 @@ function resolveFromSignal(scanCandles, signalPrice, { pullbackPct, targetPct, s
  * `startIdx` é o índice, em `scanCandles`, do candle em que o stop inicial bateu (a varredura
  * recomeça dali). Empate intra-candle: conta a QUEDA (novo aporte) antes da subida (alvo) —
  * mesma convenção pessimista do bracket inicial (stop antes de alvo).
+ *
+ * `waitCandles` > 0: NÃO reforça no instante do stop. Espera `waitCandles` candles (de 1m) e só
+ * então compra a perna 1, no FECHAMENTO desse candle (preço de mercado real então — se a moeda
+ * continuou caindo, entra mais barato; se repicou, entra confirmando). Ideia: evitar mediar pra
+ * baixo bem no meio de uma cachoeira logo após o stop. Só afeta a perna 1 — os degraus seguintes
+ * continuam entrando no ato em que o preço cai `addDropPct`% abaixo do último aporte.
  */
-function runReinforcementLadder(scanCandles, startIdx, firstEntryPrice, firstStopPrice, { addDropPct, exitRisePct, maxRungs, firstLegUsd = 1, rungUsd = 1 }) {
+function runReinforcementLadder(scanCandles, startIdx, firstEntryPrice, firstStopPrice, { addDropPct, exitRisePct, maxRungs, waitCandles = 0, firstLegUsd = 1, rungUsd = 1 }) {
     const drop = Math.max(0.5, Number(addDropPct)) / 100;
     const rise = Math.max(0.5, Number(exitRisePct)) / 100;
     const cap = Math.max(1, Math.round(Number(maxRungs) || 100));
+    const wait = Math.max(0, Math.min(200, Math.round(Number(waitCandles) || 0)));
 
-    const legs = [firstEntryPrice, firstStopPrice]; // perna 0 = compra do sinal; perna 1 = 1º reforço
-    let lastEntry = firstStopPrice;
+    // Perna 1 (1º reforço): sem espera entra no próprio preço do stop; com espera, `wait` candles
+    // depois, no fechamento desse candle. A varredura da escada recomeça daí.
+    let rungIdx = startIdx;
+    let firstRungPrice = firstStopPrice;
+    if (wait > 0) {
+        if (startIdx + wait >= scanCandles.length) {
+            // Janela acabou durante a espera — nunca chegou a reforçar. Marca só a perna 0 (a
+            // compra do sinal) a mercado no último close: prejuízo não realizado, sem escada.
+            const lastClose = scanCandles.length ? parseFloat(scanCandles[scanCandles.length - 1].close) : firstEntryPrice;
+            const qty0 = firstLegUsd / firstEntryPrice;
+            const pnl0 = qty0 * lastClose - firstLegUsd;
+            return {
+                legs: [firstEntryPrice],
+                avgEntryPrice: parseFloat(firstEntryPrice.toFixed(8)),
+                returnPct: parseFloat((firstLegUsd > 0 ? (pnl0 / firstLegUsd) * 100 : 0).toFixed(4)),
+                investedUsd: parseFloat(firstLegUsd.toFixed(2)),
+                pnlUsd: parseFloat(pnl0.toFixed(2)),
+                outcome: 'open',
+                exitTime: scanCandles.length ? scanCandles[scanCandles.length - 1].openTime : null,
+                exitPrice: lastClose,
+                finalTargetPrice: parseFloat((firstEntryPrice * (1 + rise)).toFixed(8)),
+            };
+        }
+        rungIdx = startIdx + wait;
+        firstRungPrice = parseFloat(scanCandles[rungIdx].close);
+    }
+
+    const legs = [firstEntryPrice, firstRungPrice]; // perna 0 = compra do sinal; perna 1 = 1º reforço
+    let lastEntry = firstRungPrice;
     let addLevel = lastEntry * (1 - drop);
     let targetLevel = lastEntry * (1 + rise);
     let outcome = 'open';
     let exitTime = null;
     let exitPrice = null;
 
-    for (let j = Math.max(0, startIdx); j < scanCandles.length; j++) {
+    for (let j = Math.max(0, rungIdx); j < scanCandles.length; j++) {
         const low = parseFloat(scanCandles[j].low);
         const high = parseFloat(scanCandles[j].high);
         if (low <= addLevel) {
@@ -1058,6 +1093,7 @@ function computeMacdWhatIf(occurrences, interval) {
  * @param {number}  [options.reinforceOnStop.addDropPct=10]   Queda % abaixo do último aporte que dispara o próximo reforço (2–30).
  * @param {number}  [options.reinforceOnStop.exitRisePct=15]  Alta % acima do último aporte que encerra toda a pilha (2–50).
  * @param {number}  [options.reinforceOnStop.maxRungs=100]    Trava de segurança do nº de reforços (1–100).
+ * @param {number}  [options.reinforceOnStop.waitCandles=0]   Candles de 1m a esperar entre o stop e a 1ª compra de reforço (0–200). 0 = reforça no ato. Só afeta a perna 1.
  * @param {number}  [options.reinforceOnStop.buyUsd]          Valor (US$) de cada compra de reforço (5–100000). Sem valor, usa positionSizeUsd (pernas iguais).
  */
 async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
@@ -1095,6 +1131,9 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
     const rfAddDropPct = Math.max(2, Math.min(30, Number(reinforceOnStop?.addDropPct ?? 10)));
     const rfExitRisePct = Math.max(2, Math.min(50, Number(reinforceOnStop?.exitRisePct ?? 15)));
     const rfMaxRungs = Math.max(1, Math.min(100, Math.round(Number(reinforceOnStop?.maxRungs ?? 100))));
+    // Espera (candles de 1m) entre o stop e a 1ª compra de reforço — 0 = reforça no ato. Ver
+    // runReinforcementLadder.
+    const rfWaitCandles = Math.max(0, Math.min(200, Math.round(Number(reinforceOnStop?.waitCandles ?? 0))));
     // Valor (US$) de cada compra de reforço — o padrão do painel é 40 (entrada 20). Sem valor
     // explícito, cai no aporte da entrada (pernas iguais = comportamento antigo).
     const rfBuyUsd = Math.max(5, Math.min(100_000, Number(reinforceOnStop?.buyUsd ?? positionSizeUsd)));
@@ -1666,7 +1705,7 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
                 ? { coinStepPct: trailingTargetCoinStepPct, stepPct: trailingTargetStepPct }
                 : null,
             reinforceOnStop: rfEnabled
-                ? { enabled: true, addDropPct: rfAddDropPct, exitRisePct: rfExitRisePct, maxRungs: rfMaxRungs, buyUsd: rfBuyUsd }
+                ? { enabled: true, addDropPct: rfAddDropPct, exitRisePct: rfExitRisePct, maxRungs: rfMaxRungs, waitCandles: rfWaitCandles, buyUsd: rfBuyUsd }
                 : null,
             positionSizeUsd,
         });
@@ -1779,7 +1818,7 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
             stepPct: trailingTargetStepPct,
         } : null,
         hardTakeProfit: hardTakeProfitPct > 0 ? { pct: hardTakeProfitPct } : null,
-        reinforceOnStop: rfEnabled ? { addDropPct: rfAddDropPct, exitRisePct: rfExitRisePct, buyUsd: rfBuyUsd } : null,
+        reinforceOnStop: rfEnabled ? { addDropPct: rfAddDropPct, exitRisePct: rfExitRisePct, waitCandles: rfWaitCandles, buyUsd: rfBuyUsd } : null,
         reinforceStats: rfEnabled ? computeReinforceStats(filledOccurrences) : null,
         dailyEntryStats: computeDailyEntryStats(filledOccurrences, positionSizeUsd, entriesDayRange),
         tradeDuration: computeAvgTradeDurationMs(filledOccurrences),

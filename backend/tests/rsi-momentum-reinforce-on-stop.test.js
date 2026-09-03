@@ -84,6 +84,42 @@ describe('runReinforcementLadder — reforço no stop', () => {
         expect(r.outcome).toBe('open');
         expect(r.legs.length - 1).toBeLessThanOrEqual(3);
     });
+
+    describe('waitCandles — espera antes do 1º reforço', () => {
+        test('espera N candles e compra a perna 1 no fechamento desse candle (não no preço do stop)', () => {
+            // stop a 90 (idx0); preço cai por 4 candles. Sem espera a perna 1 entra a 90; com
+            // espera 4 candles entra no fechamento do idx4 = 82, bem mais barato.
+            const scan = [
+                candle(89, 91, 89, 0),
+                candle(87, 89, 88, 1),
+                candle(85, 88, 86, 2),
+                candle(83, 86, 84, 3),
+                candle(81, 84, 82, 4),   // fechamento 82 -> preço da perna 1 (startIdx + wait = 0 + 4)
+                candle(82, 95, 94, 5),   // high 95 >= 82*1.15 = 94.3 -> alvo
+            ];
+            const r = runReinforcementLadder(scan, 0, FIRST_ENTRY, FIRST_STOP, { ...OPTS, waitCandles: 4 });
+            expect(r.legs).toEqual([100, 82]);
+            expect(r.outcome).toBe('target');
+            expect(r.exitPrice).toBeCloseTo(94.3, 4);
+        });
+
+        test('waitCandles 0 = comportamento antigo (perna 1 no preço do stop)', () => {
+            const scan = [candle(95, 104, 103, 0)];
+            const a = runReinforcementLadder(scan, 0, FIRST_ENTRY, FIRST_STOP, OPTS);
+            const b = runReinforcementLadder(scan, 0, FIRST_ENTRY, FIRST_STOP, { ...OPTS, waitCandles: 0 });
+            expect(b).toEqual(a);
+            expect(b.legs).toEqual([100, 90]);
+        });
+
+        test('janela acaba durante a espera: só a perna 0, marcada a mercado, outcome open', () => {
+            const scan = [candle(89, 90, 88, 0), candle(87, 88, 86, 1)];
+            const r = runReinforcementLadder(scan, 0, FIRST_ENTRY, FIRST_STOP, { ...OPTS, waitCandles: 5 });
+            expect(r.legs).toEqual([100]);
+            expect(r.outcome).toBe('open');
+            expect(r.exitPrice).toBeCloseTo(86, 6);
+            expect(r.investedUsd).toBeCloseTo(1, 6); // firstLegUsd default 1
+        });
+    });
 });
 
 describe('computeReinforceStats', () => {

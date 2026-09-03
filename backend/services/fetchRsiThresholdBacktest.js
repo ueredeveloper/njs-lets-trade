@@ -36,7 +36,7 @@ router.get('/rsi-threshold-backtest', async (req, res) => {
         rsi5mFilterEnabled, rsi5mFilterThreshold,
         newHighFilterEnabled, newHighFilterLookback, newHighFilterMarginPct,
         hardTakeProfitEnabled, hardTakeProfitPct,
-        reinforceOnStopEnabled, reinforceAddDropPct, reinforceExitRisePct, reinforceBuyUsd,
+        reinforceOnStopEnabled, reinforceAddDropPct, reinforceExitRisePct, reinforceBuyUsd, reinforceWaitCandles,
         targetMode, trailingTargetCoinStepPct, trailingTargetStepPct,
         entriesDayRangeMin, entriesDayRangeMax,
     } = req.query;
@@ -109,6 +109,7 @@ router.get('/rsi-threshold-backtest', async (req, res) => {
             enabled:     true,
             addDropPct:  reinforceAddDropPct  ? parseFloat(reinforceAddDropPct)  : 10,
             exitRisePct: reinforceExitRisePct ? parseFloat(reinforceExitRisePct) : 15,
+            waitCandles: reinforceWaitCandles ? parseInt(reinforceWaitCandles, 10) : 0,
             buyUsd:      reinforceBuyUsd       ? parseFloat(reinforceBuyUsd)       : 40,
         } : null,
         trailingStop: parseTrailingStopQuery(req.query, stopLossPct != null ? parseFloat(stopLossPct) : null),

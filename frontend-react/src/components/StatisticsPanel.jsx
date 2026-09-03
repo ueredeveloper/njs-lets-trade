@@ -3,6 +3,7 @@ import { useCurrency } from '../contexts/CurrencyContext';
 import {
   fetchRsiOversoldRecovery, fetchRsiThresholdBacktest, fetchRsiThresholdBacktestMarket, fetchMaCrossStats, fetchBollingerBandRecovery, fetchCandlesticksAndCloud,
   fetchVwapBandsStats, saveRsiMomentumStatsSearch, getRsiMomentumStatsSearches, clearRsiMomentumStatsSearches,
+  addRsiMomentumCuratedBot,
 } from '../services/api';
 import Tooltip from './Tooltip';
 import SrZoneChart from './SrZoneChart';
@@ -124,6 +125,11 @@ const STATS_CANDLE_COUNT_DEFAULT = 1000;
 /** Valores selecionáveis do campo "Candles" — compartilhado por todas as abas da aba
  *  Estatísticas (RSI, MA Cross, Bollinger Bands, VWAP Bands). */
 const STATS_CANDLE_COUNT_OPTIONS = [100, 200, 300, 600, 1000, 2000, 3000];
+/** Teto de candles pedíveis na aba Momentum RSI (buildCandleCountOptions). A Gate.io retém
+ *  ~10k candles de 1m por par; a Binance pagina sem teto prático (fetchKlines). O cache em
+ *  disco é aparado em 3000 (candleRetentionLimits.js) — pedidos maiores rebaixam de novo da
+ *  API a cada busca, custo aceitável por ser uma ação manual. */
+const RSI_MOM_CANDLE_COUNT_MAX = 10000;
 
 /** Preferência do campo "Candles" das abas RSI/MA Cross — mesmo padrão do campo já existente
  *  na aba Bollinger Bands (BB_CANDLE_COUNT_STORAGE_KEY/loadCandleCount), só que compartilhado
@@ -135,7 +141,14 @@ function loadCandleCountFor(tab) {
     const v = localStorage.getItem(CANDLE_COUNT_STORAGE_KEYS[tab]);
     if (v !== null) {
       const n = Number(v);
-      if (Number.isFinite(n) && STATS_CANDLE_COUNT_OPTIONS.includes(n)) return n;
+      // Só a aba Momentum RSI gera opções por tempo (buildCandleCountOptions, até 10000) e pode
+      // pedir mais que 3000 — e só quando o usuário escolhe isso no seletor. As outras abas (RSI
+      // simples, MA Cross) seguem presas à lista fixa STATS_CANDLE_COUNT_OPTIONS (teto 3000).
+      if (tab === 'rsi_momentum') {
+        if (Number.isFinite(n) && n >= 50 && n <= RSI_MOM_CANDLE_COUNT_MAX) return Math.round(n);
+      } else if (Number.isFinite(n) && STATS_CANDLE_COUNT_OPTIONS.includes(n)) {
+        return n;
+      }
     }
   } catch {}
   return STATS_CANDLE_COUNT_DEFAULT;
@@ -343,8 +356,11 @@ const RSI_MOM_STOP_MODE_OPTIONS = ['fixed', 'continuous', 'twoPhase', 'peakTrail
 const RSI_MOM_HARD_TP_OPTIONS = [8, 10, 12, 15, 18, 20, 25, 30, 40, 50];
 /** "Reforço no stop": queda % abaixo do último aporte que dispara mais uma compra, e alta % que
  *  encerra toda a pilha (ver options.reinforceOnStop em analyseRsiThresholdBacktest.js). */
-const RSI_MOM_REINFORCE_DROP_OPTIONS = [5, 8, 10, 12, 15, 20];
+const RSI_MOM_REINFORCE_DROP_OPTIONS = [2, 3, 4, 5, 6, 7, 8, 10, 12, 15, 20, 25];
 const RSI_MOM_REINFORCE_RISE_OPTIONS = [8, 10, 12, 15, 18, 20, 25];
+/** reinforceWaitCandles — candles de 1m a esperar entre o stop e a 1ª compra de reforço, pra não
+ *  mediar pra baixo no meio de uma cachoeira (0 = reforça no ato). Só afeta a perna 1. */
+const RSI_MOM_REINFORCE_WAIT_OPTIONS = [0, 3, 5, 8, 10, 15, 20, 30, 45, 60];
 /** reinforceBuyUsd — valor (US$) de cada compra de reforço (padrão 40; entrada = positionSizeUsd 20). */
 const RSI_MOM_REINFORCE_USD_OPTIONS = [10, 20, 30, 40, 60, 80, 100, 150, 200, 300, 500];
 /** Lucro travado (%) que separa a fase A da B na Escada Dupla (0 = breakeven). */
@@ -402,6 +418,7 @@ const RSI_MOM_DEFAULT_PREFS = {
   reinforceAddDropPct: 10,
   reinforceExitRisePct: 15,
   reinforceBuyUsd: 40,
+  reinforceWaitCandles: 0,
   trailingCoinStepPct: 3,
   trailingStopStepPct: 2,
   trailingTargetCoinStepPct: 3,
@@ -440,7 +457,7 @@ function formatCandleSpan(candleCount, interval) {
  *  Momentum RSI — em vez de uma contagem fixa de candles (que representa tempos diferentes
  *  em cada intervalo), cada opção é convertida pro número de candles equivalente ao intervalo
  *  escolhido (ex.: 15m → 1h=4 candles, 2h=8, 6h=24, 12h=48; 5m → 1h=30, 2h=60, 4h=120). */
-const RSI_MOM_HOUR_MARKS = [1, 2, 3, 4, 6, 8, 12, 24, 48, 72, 96, 168, 240, 336, 504, 720];
+const RSI_MOM_HOUR_MARKS = [1, 2, 3, 4, 6, 8, 12, 24, 48, 72, 96, 120, 144, 168, 240, 336, 504, 720];
 
 function buildCandleCountOptions(interval) {
   const ms = INTERVAL_MS[interval];
@@ -449,10 +466,18 @@ function buildCandleCountOptions(interval) {
   const opts = [];
   for (const h of RSI_MOM_HOUR_MARKS) {
     const count = Math.round((h * 3600000) / ms);
-    if (count < 1 || count > 3000 || seen.has(count)) continue;
+    if (count < 1 || count > RSI_MOM_CANDLE_COUNT_MAX || seen.has(count)) continue;
     seen.add(count);
     const label = h % 24 === 0 ? `${h / 24}d` : `${h}h`;
     opts.push({ value: count, label: `${label} · ${count}` });
+  }
+  // Intervalos finos (1m/5m…): as marcas de tempo não chegam ao teto — acrescenta o valor
+  // máximo redondo pra permitir baixar o máximo de histórico numa busca. Só quando o teto
+  // representa uma janela razoável (≤ 90 dias) pro intervalo escolhido.
+  const maxOpt = opts.length ? opts[opts.length - 1].value : 0;
+  if (maxOpt < RSI_MOM_CANDLE_COUNT_MAX && RSI_MOM_CANDLE_COUNT_MAX * ms <= 90 * 86400000) {
+    const span = formatCandleSpan(RSI_MOM_CANDLE_COUNT_MAX, interval);
+    opts.push({ value: RSI_MOM_CANDLE_COUNT_MAX, label: span ? `${span} · ${RSI_MOM_CANDLE_COUNT_MAX}` : String(RSI_MOM_CANDLE_COUNT_MAX) });
   }
   return opts;
 }
@@ -1037,6 +1062,13 @@ function RsiMomentumStats({ autoCalc }) {
   const [showAll, setShowAll] = useState(false);
   const [closedOnly, setClosedOnly] = useState(false);
   const [savedSearchCount, setSavedSearchCount] = useState(null);
+  // Config exata da última pesquisa de UMA moeda (config normalizada + símbolo/intervalo/fonte) —
+  // alimenta o botão "Bot exclusivo" (watchlist curada do RSI Momentum). null no modo Todas.
+  const [lastSearch, setLastSearch] = useState(null);
+  const [curatedState, setCuratedState] = useState({ loading: false, msg: null, err: null });
+  // Corretora onde a moeda vai ser operada pelo bot exclusivo — default = a fonte usada na
+  // pesquisa (Gate se a busca foi source='gate'), mas o usuário pode trocar.
+  const [curatedExchange, setCuratedExchange] = useState('binance');
 
   useEffect(() => {
     getRsiMomentumStatsSearches().then((arr) => setSavedSearchCount(Array.isArray(arr) ? arr.length : 0)).catch(() => {});
@@ -1075,6 +1107,33 @@ function RsiMomentumStats({ autoCalc }) {
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
+  }
+
+  /** Adiciona a moeda da pesquisa atual como BOT EXCLUSIVO — watchlist curada do bot RSI
+   *  Momentum (rsi_multi_bot_state.curated=true). O bot passa a vigiá-la indefinidamente com
+   *  ESTA config, fora do scanner de mercado, e volta pra WATCHING após cada trade. A corretora
+   *  vem da fonte usada na pesquisa (Gate se a busca foi com source='gate'). */
+  async function handleAddCuratedBot() {
+    if (!lastSearch || curatedState.loading) return;
+    const exchange = curatedExchange === 'gate' ? 'gate' : 'binance';
+    const fill = (s, map) => Object.entries(map).reduce((acc, [k, v]) => acc.split(`{${k}}`).join(v), s);
+    if (!window.confirm(fill(t('stats.curated_confirm'),
+      { symbol: lastSearch.symbol, exchange, interval: lastSearch.interval }))) return;
+    setCuratedState({ loading: true, msg: null, err: null });
+    try {
+      const r = await addRsiMomentumCuratedBot({
+        symbol: lastSearch.symbol,
+        interval: lastSearch.interval,
+        exchange,
+        config: lastSearch.config,
+      });
+      const parts = [fill(t('stats.curated_ok'), { symbol: r.symbol, exchange: r.exchange, capital: r.capitalUsdt })];
+      if (r.resumed) parts.push(fill(t('stats.curated_resumed'), { phase: r.phase }));
+      if (r.ignoredFilters?.length) parts.push(fill(t('stats.curated_ignored'), { list: r.ignoredFilters.join(', ') }));
+      setCuratedState({ loading: false, msg: parts.join(' '), err: null });
+    } catch (err) {
+      setCuratedState({ loading: false, msg: null, err: err.message });
+    }
   }
 
   const inp = 'bg-p2 border border-p3/40 text-p5 text-[10px] sm:text-xs rounded px-1 sm:px-2 py-1 focus:outline-none focus:border-p4 w-full';
@@ -1220,6 +1279,7 @@ function RsiMomentumStats({ autoCalc }) {
           enabled: true,
           addDropPct: p.reinforceAddDropPct,
           exitRisePct: p.reinforceExitRisePct,
+          waitCandles: p.reinforceWaitCandles,
           buyUsd: p.reinforceBuyUsd,
         } : null,
         entriesDayRange: p.entriesDayRangeMax != null ? { min: 2, max: p.entriesDayRangeMax } : null,
@@ -1229,6 +1289,13 @@ function RsiMomentumStats({ autoCalc }) {
         ? await fetchRsiThresholdBacktestMarket(iv, commonOptions)
         : await fetchRsiThresholdBacktest(sym, iv, { ...commonOptions, source: src });
       setResult(data);
+      // Guarda a config exata desta pesquisa (modo 1 moeda) pro botão "Bot exclusivo".
+      setLastSearch(p.allCoins ? null : {
+        symbol: sym, interval: iv, source: src ?? null,
+        config: { ...commonOptions },
+      });
+      if (!p.allCoins) setCuratedExchange(src === 'gate' ? 'gate' : 'binance');
+      setCuratedState({ loading: false, msg: null, err: null });
       // Grava a pesquisa (config + resumo) no log do backend — só nas buscas deliberadas
       // (botão "Buscar" / Enter, updateChart=true), não nos recálculos automáticos por clique
       // no gráfico. Fire-and-forget: falha aqui não pode quebrar a tela.
@@ -1943,6 +2010,14 @@ function RsiMomentumStats({ autoCalc }) {
                 {RSI_MOM_REINFORCE_USD_OPTIONS.map((v) => <option key={v} value={v}>{`$${v}`}</option>)}
               </select>
             </div>
+            <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.reinforce_wait')}>
+              <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.reinforce_wait')}</label>
+              <select className={inp}
+                value={prefs.reinforceWaitCandles ?? 0}
+                onChange={(e) => patchPrefs({ reinforceWaitCandles: Number(e.target.value) })}>
+                {RSI_MOM_REINFORCE_WAIT_OPTIONS.map((v) => <option key={v} value={v}>{v === 0 ? t('stats.reinforce_wait_now') : `${v}c`}</option>)}
+              </select>
+            </div>
           </>
         )}
        </div>
@@ -2156,9 +2231,10 @@ function RsiMomentumStats({ autoCalc }) {
                 <SummaryCard
                   label={t('stats.card.reinforce_on_stop')}
                   value={
-                    result.reinforceStats
+                    (result.reinforceStats
                       ? `${result.reinforceStats.trades} trade(s) · ${result.reinforceStats.rungsTotal} reforço(s) · ${result.reinforceStats.stillOpen} aberto(s)`
-                      : `−${result.reinforceOnStop.addDropPct}% / +${result.reinforceOnStop.exitRisePct}% · 0`
+                      : `−${result.reinforceOnStop.addDropPct}% / +${result.reinforceOnStop.exitRisePct}% · 0`)
+                    + (result.reinforceOnStop.waitCandles > 0 ? ` · espera ${result.reinforceOnStop.waitCandles}c` : '')
                   }
                   highlight={result.reinforceStats?.stillOpen > 0 ? 'text-red-600' : 'text-amber-500'}
                   tooltip={t('stats.tip.reinforce_on_stop')}
@@ -2235,13 +2311,39 @@ function RsiMomentumStats({ autoCalc }) {
               ) : (
               <div className="flex flex-col gap-1">
                 <div className="flex items-center gap-3 justify-end">
-                  <button
-                    onClick={handleDownloadJson}
-                    title={t('stats.download_json_tip')}
-                    className="mr-auto text-[10px] text-p5/60 hover:text-p4 border border-p3/40 hover:border-p4 rounded px-1.5 py-0.5 transition-colors"
-                  >
-                    ⬇ {t('stats.download_json')}
-                  </button>
+                  <div className="mr-auto flex items-center gap-2 flex-wrap">
+                    <button
+                      onClick={handleDownloadJson}
+                      title={t('stats.download_json_tip')}
+                      className="text-[10px] text-p5/60 hover:text-p4 border border-p3/40 hover:border-p4 rounded px-1.5 py-0.5 transition-colors"
+                    >
+                      ⬇ {t('stats.download_json')}
+                    </button>
+                    {!prefs.allCoins && lastSearch && (
+                      <span className="flex items-center gap-1">
+                        <select
+                          value={curatedExchange}
+                          onChange={(e) => setCuratedExchange(e.target.value)}
+                          title={t('stats.curated_exchange_tip')}
+                          className="text-[10px] bg-p2 border border-p3/40 text-p5 rounded px-1 py-0.5 focus:outline-none focus:border-p4"
+                        >
+                          <option value="binance">Binance</option>
+                          <option value="gate">Gate.io</option>
+                        </select>
+                        <button
+                          onClick={handleAddCuratedBot}
+                          disabled={curatedState.loading}
+                          title={t('stats.curated_tip')}
+                          className="text-[10px] text-p4 hover:text-white border border-p4/50 hover:bg-p4 rounded px-1.5 py-0.5 transition-colors disabled:opacity-50 flex items-center gap-1"
+                        >
+                          {curatedState.loading
+                            ? <span className="w-2.5 h-2.5 border border-p4 border-t-transparent rounded-full animate-spin" />
+                            : '🤖'}
+                          {t('stats.curated_add')}
+                        </button>
+                      </span>
+                    )}
+                  </div>
                   <div className="flex items-center gap-2" title={t('stats.tip.closed_only')}>
                     <span className="text-[10px] text-p5/50">{t('stats.closed_only')}</span>
                     <button
@@ -2261,6 +2363,17 @@ function RsiMomentumStats({ autoCalc }) {
                     </button>
                   </div>
                 </div>
+
+                {curatedState.msg && (
+                  <p className="text-[10px] text-emerald-500 bg-emerald-400/10 border border-emerald-400/20 rounded px-2 py-1">
+                    ✅ {curatedState.msg}
+                  </p>
+                )}
+                {curatedState.err && (
+                  <p className="text-[10px] text-red-500 bg-red-400/10 border border-red-400/20 rounded px-2 py-1">
+                    ⚠️ {curatedState.err}
+                  </p>
+                )}
 
                 <div className="overflow-x-auto">
                   <table className="min-w-full border-collapse">
