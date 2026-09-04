@@ -270,7 +270,7 @@ function checkSupportResistanceEntry(config, cMap, signalPrice) {
 
     const entryRank = Math.max(1, Math.min(3, Math.round(Number(sr.entrySupportRank ?? 1))));
     const exitRank = Math.max(1, Math.min(3, Math.round(Number(sr.exitResistanceRank ?? 1))));
-    const maxPct = Math.max(1, Math.min(100, Number(sr.entryMaxPct ?? 10)));
+    const maxPct = Math.max(0.1, Math.min(100, Number(sr.entryMaxPct ?? 10)));
 
     const support = pickSupport(zones, signalPrice, entryRank);
     if (support && signalPrice > support.price * (1 + maxPct / 100)) {

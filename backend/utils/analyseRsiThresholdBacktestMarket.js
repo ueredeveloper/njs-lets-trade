@@ -228,7 +228,7 @@ async function analyseRsiThresholdBacktestMarket(options = {}) {
             candleCount: Math.max(20, Math.min(1000, Math.round(Number(srOpts.candleCount ?? 200)))),
             entrySupportRank: Math.max(1, Math.min(3, Math.round(Number(srOpts.entrySupportRank ?? 1)))),
             exitResistanceRank: Math.max(1, Math.min(3, Math.round(Number(srOpts.exitResistanceRank ?? 1)))),
-            entryMaxPct: srOpts.entryMaxPct === 'adapt' ? 'adapt' : Math.max(1, Math.min(100, Number(srOpts.entryMaxPct ?? 10))),
+            entryMaxPct: srOpts.entryMaxPct === 'adapt' ? 'adapt' : Math.max(0.1, Math.min(100, Number(srOpts.entryMaxPct ?? 10))),
             entryMaxPctMode: srOpts.entryMaxPct === 'adapt' ? 'adapt' : 'fixed',
         } : null,
         supportResistanceStats,
@@ -263,8 +263,11 @@ async function analyseRsiThresholdBacktestMarket(options = {}) {
             ? { pct: Math.max(1, Math.min(200, Number(perSymbolOptions.hardTakeProfit.pct ?? 15))) }
             : null,
         reinforceOnStop: rfEnabled ? {
+            mode: perSymbolOptions.reinforceOnStop.mode === 'rearm' ? 'rearm' : 'ladder',
             addDropPct: Math.max(2, Math.min(30, Number(perSymbolOptions.reinforceOnStop.addDropPct ?? 10))),
             exitRisePct: Math.max(2, Math.min(50, Number(perSymbolOptions.reinforceOnStop.exitRisePct ?? 15))),
+            rearmStopPct: Math.max(0.5, Math.min(30, Number(perSymbolOptions.reinforceOnStop.rearmStopPct ?? 10))),
+            rearmTargetPct: Math.max(0.5, Math.min(50, Number(perSymbolOptions.reinforceOnStop.rearmTargetPct ?? 10))),
             buyUsd: Math.max(5, Math.min(100_000, Number(perSymbolOptions.reinforceOnStop.buyUsd ?? positionSizeUsd))),
         } : null,
         reinforceStats: rfEnabled ? computeReinforceStats(filledOccurrences) : null,

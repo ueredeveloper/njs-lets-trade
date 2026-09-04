@@ -67,7 +67,7 @@ const OFF_TARGET_MULT = 6;
 function bracketOrderTarget(buyPrice, liveTarget) {
   return liveTarget != null ? liveTarget : buyPrice * OFF_TARGET_MULT;
 }
-const { detectOrphanPosition } = require('../shared/orphanPosition');
+const { detectOrphanPosition, reconstructOpenLotFifo } = require('../shared/orphanPosition');
 
 // Componentes genéricos (compra/venda/execução/OCO), compartilhados com os outros bots de
 // trade (bollinger-bands, ma-cross, vwap-bands) — ver backend/bot/shared/*.
@@ -333,8 +333,14 @@ function logStartupConfig(body, source = null) {
     stopDesc = `contínuo linear — inicial -${ts.startPct}%, +${ts.stopStepPct}pp a cada +${ts.coinStepPct}% de novo pico. Nunca desce.`;
   }
   console.log(`   Modo do stop: ${stopDesc}`);
-  console.log(`   ${ON(!!rf?.enabled)} Reforço no stop (MARTINGALE): ao bater o stop NÃO encerra — recompra a mercado e vira escada`);
-  if (rf?.enabled) {
+  const rfRearm = rf?.mode === 'rearm';
+  console.log(`   ${ON(!!rf?.enabled)} Reforço no stop [${rf?.enabled ? (rfRearm ? 'RE-ARMAR BRACKET' : 'ESCADA / MARTINGALE') : '-'}]: ao bater o stop NÃO encerra o trade`);
+  if (rf?.enabled && rfRearm) {
+    console.log(`             a corretora VENDE no stop (perda realizada) → recompra a mercado a SOBRA da venda + ${Number(rf.buyUsd ?? 40).toFixed(2)} USDT`);
+    console.log(`             re-arma bracket normal -${rf.rearmStopPct}% / +${rf.rearmTargetPct}% sobre o novo preço; stopou de novo → repete (indefinidamente)`);
+    console.log(`             P&L medido sobre o caixa NOVO total (entrada + N×${Number(rf.buyUsd ?? 40).toFixed(2)}) — alvo pós-stop rende menos que +${rf.rearmTargetPct}% no capital`);
+    console.log(`             estado em rsi_multi_bot_state.rules_state.rearm — retoma no fluxo BOUGHT normal depois de um restart`);
+  } else if (rf?.enabled) {
     console.log(`             +1 compra de ${Number(rf.buyUsd ?? 40).toFixed(2)} USDT a cada -${rf.addDropPct}% abaixo do último aporte`);
     console.log(`             vende TODA a pilha a mercado no 1º +${rf.exitRisePct}% acima do último aporte`);
     console.log(`             ⚠️  posição fica SEM stop de proteção depois de disparado · sem saldo p/ novo aporte: avisa e segura a pilha (não vende), trade sai no alvo normal · trava de segurança ${REINFORCE_HARD_CAP} degraus`);
@@ -801,6 +807,15 @@ async function tick(rowId, adapter, strategy, log, session, stopSelf) {
     });
   }
 
+  // Reforço rearm PENDENTE (write-ahead marker) — o processo caiu no meio de uma recompra. O
+  // exitBracket já foi zerado no Supabase, então este é o único ponto que sabe o que fazer:
+  // reconcilia pelo saldo real da carteira. Ver startRearmReinforce / resumeRearmPending.
+  if (rulesState.rearm?.pending) {
+    return resumeRearmPending({
+      rowId, adapter, strategy, log, state, session, config, cMap, stopSelf, symbol, strategyId, rulesState,
+    });
+  }
+
   const srTargetPrice = resolveSrTargetForBuy(rulesState, buyPrice);
 
   // Posição com ordem de venda colocada fora do painel — bot só observa, nunca coloca bracket
@@ -894,35 +909,72 @@ async function tick(rowId, adapter, strategy, log, session, stopSelf) {
         });
       }
 
+      const rearmExit = rulesState.rearm?.active
+        ? `Bracket ${kind === 'target' ? 'TP' : 'SL'} — reforço rearm rodada #${rulesState.rearm.rungs} (${kind === 'target' ? `+${rulesState.rearm.rearmTargetPct}%` : `−${rulesState.rearm.rearmStopPct}%`} sobre a recompra; caixa total ${Number(rulesState.rearm.investedUsd).toFixed(2)} USDT)`
+        : null;
       const exitResult = {
         reason: kind === 'target' ? 'RSI_TARGET' : 'STOP_LOSS',
         targetLevelValue: kind === 'target' ? rulesState.exitBracket.targetPrice : rulesState.exitBracket.stopPrice,
-        exitDesc: kind === 'target'
-          ? (resolveTargetMode(config) === 'continuous'
-            ? 'Bracket TP no alvo contínuo (ordem resting)'
-            : 'Bracket TP no alvo fixo (ordem resting)')
-          : (config.exit.trailingStop?.enabled ? 'Bracket SL no stop contínuo (ordem resting)' : 'Bracket SL no stop fixo (ordem resting)'),
+        exitDesc: rearmExit
+          ? rearmExit
+          : kind === 'target'
+            ? (resolveTargetMode(config) === 'continuous'
+              ? 'Bracket TP no alvo contínuo (ordem resting)'
+              : 'Bracket TP no alvo fixo (ordem resting)')
+            : (config.exit.trailingStop?.enabled ? 'Bracket SL no stop contínuo (ordem resting)' : 'Bracket SL no stop fixo (ordem resting)'),
       };
       await recordBracketFill({ rowId, strategy, log, state, session, exitResult, result: bracketResult });
       return retireOrCooldown({ rowId, symbol, log, stopSelf, config, cMap, state, session, reason: `trade fechado (${exitResult.reason})` });
     }
 
-    // Recria a bracket se o stop contínuo e/ou o alvo contínuo subiu de degrau (cada um com
-    // contador próprio). Níveis fixos → no-op.
-    await maybeReplaceTrailingStop({
-      rowId, adapter, config, session, log, symbol, strategyId,
-      exitBracket: rulesState.exitBracket, buyPrice, buyQty: parseFloat(state.buy_qty), peakPrice,
-    });
+    // Modo rearm: bracket FIXO (níveis ± rearm%), sem trailing — não recria por degrau.
+    if (!rulesState.rearm?.active) {
+      // Recria a bracket se o stop contínuo e/ou o alvo contínuo subiu de degrau (cada um com
+      // contador próprio). Níveis fixos → no-op.
+      await maybeReplaceTrailingStop({
+        rowId, adapter, config, session, log, symbol, strategyId,
+        exitBracket: rulesState.exitBracket, buyPrice, buyQty: parseFloat(state.buy_qty), peakPrice,
+      });
+    }
     return { phase: 'BOUGHT' };
   }
 
   // Sem bracket resting (desligada ou falhou ao colocar) — tenta de novo aqui a cada tick até
   // conseguir; enquanto isso, a saída cai no fallback via evaluateExit no candle em formação.
-  if (config.exit.restingBracket?.enabled) {
+  if (rulesState.rearm?.active && config.exit.restingBracket?.enabled) {
+    const b = await placeRearmBracket({ rowId, adapter, session, log, state, rearm: rulesState.rearm, retry: true });
+    if (b) return { phase: 'BOUGHT' }; // bracket recolocada — o poll acontece no próximo tick
+  } else if (config.exit.restingBracket?.enabled) {
     await placeInitialBracket({
       rowId, adapter, config, session, log, symbol, strategyId, buyPrice, peakPrice,
       filledQty: parseFloat(state.buy_qty), retry: true,
     });
+  }
+
+  // Modo rearm SEM bracket na corretora (falhou ao colocar) — avalia a saída contra os níveis
+  // rearm (entryPrice ± rearm%), não contra os do config. Stop → nova rodada; alvo → encerra.
+  if (rulesState.rearm?.active && !rulesState.exitBracket) {
+    const forming = (cMap[config.entry.interval] ?? []).at(-1);
+    const rEntry = Number(rulesState.rearm.entryPrice) > 0 ? Number(rulesState.rearm.entryPrice) : buyPrice;
+    const rStop = rEntry * (1 - rulesState.rearm.rearmStopPct / 100);
+    const rTgt = rEntry * (1 + rulesState.rearm.rearmTargetPct / 100);
+    const low = parseFloat(forming?.low ?? forming?.close ?? rEntry);
+    const high = parseFloat(forming?.high ?? forming?.close ?? rEntry);
+    if (Number.isFinite(low) && low <= rStop) {
+      return startRearmReinforce({
+        rowId, adapter, strategy, log, state, session, config, cMap, stopSelf,
+        symbol, strategyId, rulesState, buyPrice, viaCandle: true,
+      });
+    }
+    if (Number.isFinite(high) && high >= rTgt) {
+      try {
+        await executeSell({ rowId, adapter, strategy, log, state, session,
+          exitResult: { reason: 'RSI_TARGET', exitDesc: `Reforço rearm rodada #${rulesState.rearm.rungs} — alvo +${rulesState.rearm.rearmTargetPct}% (bracket falhou, venda via candle)` },
+          defaultReasonDesc: 'Reforço rearm — alvo' });
+      } catch { return { phase: 'BOUGHT' }; }
+      return retireOrCooldown({ rowId, symbol, log, stopSelf, config, cMap, state, session, reason: 'reforço rearm fechado no alvo' });
+    }
+    return { phase: 'BOUGHT' };
   }
 
   const exitResult = evaluateExit(config, cMap, buyPrice, { peakPrice, srTargetPrice });
@@ -971,11 +1023,309 @@ async function tick(rowId, adapter, strategy, log, session, stopSelf) {
 //              carteira + a perda já realizada da perna 1 vendida no stop). finalizeSell faz
 //              pnl = usdtOut(final) − buy_usdt → P&L agregado correto da operação inteira.
 
+/** Re-arma a bracket da posição em modo rearm (rules_state.rearm) — usado no retry quando a
+ *  bracket falhou ao ser colocada em startRearmReinforce. Níveis = entryPrice ± rearm%. */
+async function placeRearmBracket({ rowId, adapter, session, log, state, rearm, retry = false }) {
+  const entry = Number(rearm.entryPrice) > 0 ? Number(rearm.entryPrice) : parseFloat(state.buy_price);
+  const qty = parseFloat(state.buy_qty);
+  const stopPrice = entry * (1 - rearm.rearmStopPct / 100);
+  const targetPrice = entry * (1 + rearm.rearmTargetPct / 100);
+  try {
+    const bracket = await adapter.placeExitBracket(qty, bracketOrderTarget(entry, targetPrice), stopPrice);
+    session.rulesState = { ...(session.rulesState ?? {}), exitBracket: { ...bracket, peakPrice: entry, placedAt: new Date().toISOString() }, exitBracketError: null };
+    await saveState(rowId, { rules_state: session.rulesState }, log);
+    log(`${G}🎯 Bracket rearm ${retry ? '(retry) ' : ''}na corretora — stop ${fmtPrice(bracket.stopPrice)} / alvo ${fmtPrice(bracket.targetPrice)}${X}`);
+    return bracket;
+  } catch (err) {
+    session.rulesState = { ...(session.rulesState ?? {}), exitBracket: null };
+    await saveState(rowId, { rules_state: session.rulesState }, log);
+    log(`${Y}⚠️  Bracket rearm falhou (${err.message})${retry ? '' : ' — próximo tick tenta de novo, saída via candle enquanto isso'}${X}`);
+    return null;
+  }
+}
+
+/**
+ * "Reforço no stop" modo 'rearm' (exit.reinforceOnStop.mode === 'rearm') — alternativa à escada
+ * (startReinforceLadder / handleReinforceLadder). A corretora VENDE a posição inteira no stop
+ * (OCO; perda REALIZADA). Em vez de encerrar, o bot recompra a mercado com TUDO o que sobrou da
+ * venda + o aporte fixo `buyUsd`, e re-arma um bracket NORMAL: stop −rearmStopPct% / alvo
+ * +rearmTargetPct% sobre o novo preço de compra. Se stopar de novo, este fluxo dispara outra vez —
+ * indefinidamente (só a trava REINFORCE_HARD_CAP).
+ *
+ * Contabilidade (reusa recordBracketFill/executeSell sem tocar em tradeExecution.js):
+ *   buy_qty  = qty da recompra (pilha inteira numa ordem só)
+ *   buy_price= preço médio da recompra
+ *   buy_usdt = caixa NOVO total empregado (positionSizeUsd + N×buyUsd). O proceeds da venda é
+ *              REINVESTIDO, não conta como dinheiro novo → finalizeSell faz
+ *              pnl = usdtOut(final) − buy_usdt = P&L REAL da operação inteira (um alvo de +X%
+ *              atingido depois de um stop rende MENOS que X% no capital).
+ *
+ * PERSISTÊNCIA / CRASH-SAFETY: antes de QUALQUER ordem, grava um marcador
+ * `rules_state.rearm = { pending: true, ... }` e ZERA `exitBracket` no Supabase. Assim, se o
+ * processo cair no meio (entre vender e recomprar, ou entre recomprar e salvar):
+ *   - o restart NÃO re-consulta a OCO já preenchida (exitBracket null) e por isso não dispara o
+ *     rearm de novo;
+ *   - `resumeRearmPending` (chamado no topo do BOUGHT quando rearm.pending) reconcilia pelo SALDO
+ *     REAL da carteira: posição intacta → refaz; carteira vazia → recompra agora; recompra já
+ *     feita → adota (reconstrói buy_price pelos trades próprios) e re-arma o bracket.
+ * Depois que o bracket resting está de pé, `rearm.pending` vira false e a retomada volta a ser a
+ * do fluxo BOUGHT normal (poll do exitBracket).
+ *
+ * `bracketResult` traz o fill do stop (soldQty/usdtOut). `viaCandle` = stop detectado pelo candle
+ * (sem OCO preenchida) → a posição ainda está em carteira, o bot vende a mercado agora.
+ */
+async function startRearmReinforce({ rowId, adapter, strategy, log, state, session, config, cMap, stopSelf, symbol, strategyId, rulesState, bracketResult, buyPrice, viaCandle = false }) {
+  const rf = config.exit.reinforceOnStop;
+  const rungUsd = Number(rf.buyUsd) > 0 ? Number(rf.buyUsd) : parseFloat(state.capital);
+  const prev = rulesState.rearm ?? null;
+  const priorInvested = prev ? Number(prev.investedUsd) : parseFloat(state.buy_usdt);
+  const priorRungs = prev ? Number(prev.rungs) : 0;
+
+  if (priorRungs >= REINFORCE_HARD_CAP) {
+    log(`${Y}⚠️  Reforço rearm atingiu a trava de ${REINFORCE_HARD_CAP} rodadas em ${symbol} — encerrando como stop normal${X}`);
+    return closeRearmFallback({ rowId, adapter, strategy, log, state, session, config, cMap, stopSelf, symbol, viaCandle, bracketResult, reason: `trava de ${REINFORCE_HARD_CAP} rodadas` });
+  }
+
+  const now = new Date().toISOString();
+  const ocoProceeds = !viaCandle
+    ? (Number(bracketResult?.usdtOut) > 0
+        ? Number(bracketResult.usdtOut)
+        : parseFloat(state.buy_qty) * (Number(bracketResult?.exitPrice) || buyPrice || 0))
+    : null;
+
+  // ── WRITE-AHEAD ──────────────────────────────────────────────────────────────────────────
+  // Marca a intenção ANTES de vender/recomprar. exitBracket:null impede que um restart re-consulte
+  // a OCO já preenchida e dispare o rearm de novo (double sell/buy). resumeRearmPending reconcilia
+  // pelo saldo real se o processo cair no meio.
+  const pendingRearm = {
+    ...(prev ?? {}),
+    active: true,
+    pending: true,
+    rungs: priorRungs,
+    investedUsd: priorInvested,
+    rungUsd,
+    rearmStopPct: rf.rearmStopPct,
+    rearmTargetPct: rf.rearmTargetPct,
+    soldVia: viaCandle ? 'candle' : 'oco',
+    ocoProceeds,
+    prevQty: parseFloat(state.buy_qty),
+    prevBuyUsdt: parseFloat(state.buy_usdt),
+    prevBuyPrice: parseFloat(state.buy_price),
+    startedAt: prev?.startedAt ?? now,
+    pendingSince: now,
+  };
+  session.rulesState = {
+    ...rulesState, reinforce: null, exitBracket: null, exitBracketError: null,
+    srTargetPrice: null, srTargetForBuy: null, stopPeakPrice: null,
+    rearm: pendingRearm,
+  };
+  await saveState(rowId, { rules_state: session.rulesState }, log);
+
+  // ── venda (só viaCandle; no OCO a corretora já vendeu) ──
+  let proceeds;
+  if (viaCandle) {
+    try {
+      const sell = await adapter.marketSell(parseFloat(state.buy_qty));
+      proceeds = Number(sell?.usdtOut) > 0 ? Number(sell.usdtOut) : parseFloat(state.buy_qty) * (buyPrice || 0);
+      log(`${Y}🛑 ${symbol} stop via candle — vendido a mercado (${proceeds.toFixed(2)} USDT), "Reforço no stop / re-armar" LIGADO${X}`);
+    } catch (err) {
+      return closeRearmFallback({ rowId, adapter, strategy, log, state, session, config, cMap, stopSelf, symbol, viaCandle: true, bracketResult, reason: `venda no stop falhou (${err.message})` });
+    }
+  } else {
+    proceeds = ocoProceeds;
+  }
+
+  log(`${Y}🛑→↻ ${symbol} bateu o stop — recomprando a mercado ${(proceeds + rungUsd).toFixed(2)} USDT (${proceeds.toFixed(2)} da venda + ${rungUsd.toFixed(2)} de reforço), re-armando bracket −${rf.rearmStopPct}% / +${rf.rearmTargetPct}%${X}`);
+  return finalizeRearmRebuy({
+    rowId, adapter, strategy, log, state, session, config, cMap, stopSelf, symbol, strategyId,
+    rulesState: session.rulesState, proceeds, pendingRearm,
+  });
+}
+
+/**
+ * Recompra a mercado (sobra da venda + aporte), grava o estado rearm FINAL (pending:false) com
+ * buy_qty/buy_price/buy_usdt e re-arma o bracket. Compartilhado por startRearmReinforce e por
+ * resumeRearmPending (reconciliação de restart). `proceeds` = quanto voltou da venda no stop.
+ */
+async function finalizeRearmRebuy({ rowId, adapter, strategy, log, state, session, config, cMap, stopSelf, symbol, strategyId, rulesState, proceeds, pendingRearm, buyResult = null }) {
+  const rf = config.exit.reinforceOnStop;
+  const rungUsd = Number(pendingRearm.rungUsd) > 0
+    ? Number(pendingRearm.rungUsd)
+    : (Number(rf.buyUsd) > 0 ? Number(rf.buyUsd) : parseFloat(state.capital));
+  const spendUsd = proceeds + rungUsd;
+
+  if (!buyResult) {
+    try {
+      buyResult = await adapter.marketBuy(spendUsd);
+    } catch (err) {
+      return closeRearmFallback({ rowId, adapter, strategy, log, state, session, config, cMap, stopSelf, symbol, viaCandle: true, reason: `recompra falhou (${err.message})`, cashInHand: proceeds });
+    }
+    if (buyResult?.filled === false) {
+      return closeRearmFallback({ rowId, adapter, strategy, log, state, session, config, cMap, stopSelf, symbol, viaCandle: true, reason: 'recompra a mercado não preencheu', cashInHand: proceeds });
+    }
+  }
+
+  const fillQty = parseFloat(buyResult.filledQty);
+  const fillPrice = parseFloat(buyResult.avgPrice);
+  const investedUsd = parseFloat((Number(pendingRearm.investedUsd) + rungUsd).toFixed(2));
+  const rungs = Number(pendingRearm.rungs) + 1;
+
+  const rearm = {
+    active: true,
+    pending: false,
+    rungs,
+    investedUsd,
+    entryPrice: fillPrice,
+    rungUsd,
+    rearmStopPct: rf.rearmStopPct,
+    rearmTargetPct: rf.rearmTargetPct,
+    startedAt: pendingRearm.startedAt ?? new Date().toISOString(),
+    lastRungAt: new Date().toISOString(),
+  };
+  session.rulesState = {
+    ...rulesState, reinforce: null, exitBracket: null, exitBracketError: null,
+    srTargetPrice: null, srTargetForBuy: null, stopPeakPrice: null, rearm,
+  };
+  await saveState(rowId, {
+    buy_qty: fillQty,
+    buy_price: fillPrice,
+    buy_usdt: investedUsd,
+    buy_time: new Date().toISOString(),
+    rules_state: session.rulesState,
+  }, log);
+
+  const bracket = await placeRearmBracket({ rowId, adapter, session, log, state: { ...state, buy_qty: fillQty, buy_price: fillPrice }, rearm });
+  const stopPrice = fillPrice * (1 - rf.rearmStopPct / 100);
+  const targetPrice = fillPrice * (1 + rf.rearmTargetPct / 100);
+
+  log(`${G}↻ Reforço rearm #${rungs} — recompra @ ${fmtPrice(fillPrice)} (${fillQty} un.), bracket ${fmtPrice(stopPrice)} / ${fmtPrice(targetPrice)} · caixa total empregado ${investedUsd.toFixed(2)} USDT${X}`);
+  sendWhatsApp(`↻ ${BOT_LABEL} [${strategyId}] ${symbol}\n"Reforço no stop / re-armar" #${rungs}: a corretora vendeu no stop, recomprei ${spendUsd.toFixed(2)} USDT (${proceeds.toFixed(2)} da venda + ${rungUsd.toFixed(2)} novo) @ ${fmtPrice(fillPrice)}.\nNovo bracket: stop ${fmtPrice(stopPrice)} (−${rf.rearmStopPct}%) / alvo ${fmtPrice(targetPrice)} (+${rf.rearmTargetPct}%)${bracket ? '' : ' — ⚠️ falha ao colocar na corretora, retry no próximo tick'}.\nCaixa total empregado: ${investedUsd.toFixed(2)} USDT — o alvo já não rende +${rf.rearmTargetPct}% no capital (houve stop antes).`);
+  return { phase: 'BOUGHT' };
+}
+
+/**
+ * Restart no meio de um reforço rearm (rules_state.rearm.pending === true). O marcador write-ahead
+ * diz que uma recompra estava em andamento mas pode não ter terminado. Reconcilia pelo SALDO REAL
+ * da carteira (adapter.getBaseBalance):
+ *   A) saldo ≈ prevQty  → nada foi vendido (crash antes do marketSell viaCandle) → refaz do zero.
+ *   B) saldo é poeira   → vendeu mas não recomprou → recompra agora (finalizeRearmRebuy).
+ *   C) saldo ≈ recompra → recomprou mas não salvou → adota a posição da carteira, reconstrói o
+ *      preço médio pelos trades próprios (FIFO) e re-arma o bracket.
+ * Se o saldo não puder ser lido (raro — os dois adapters têm getBaseBalance), NÃO age: repete a
+ * checagem no próximo tick (recomprar às cegas arriscaria posição dupla). No caso 'oco' a posição
+ * já está flat (sem risco); no 'candle' antes do marketSell ela fica sem bracket até a leitura
+ * voltar — janela de segundos.
+ */
+async function resumeRearmPending({ rowId, adapter, strategy, log, state, session, config, cMap, stopSelf, symbol, strategyId, rulesState }) {
+  const rp = rulesState.rearm;
+  const iv = config.entry.interval;
+  const lastPx = parseFloat((cMap[iv] ?? []).at(-1)?.close ?? state.buy_price ?? 0);
+  const prevQty = Number(rp.prevQty) || 0;
+  const rungUsd = Number(rp.rungUsd) > 0 ? Number(rp.rungUsd) : parseFloat(state.capital);
+
+  let balance = null;
+  try {
+    if (typeof adapter.getBaseBalance === 'function') balance = await adapter.getBaseBalance();
+  } catch (err) {
+    log(`${Y}⚠️  rearm pending: falha ao ler saldo da carteira (${err.message}) — tento de novo no próximo tick${X}`);
+    return { phase: 'BOUGHT' };
+  }
+  if (!Number.isFinite(balance)) {
+    // Sem uma leitura CONFIÁVEL do saldo não dá pra decidir sem risco de recomprar em dobro —
+    // espera o próximo tick (a posição está sem bracket, mas o candle-fallback abaixo cobre o stop).
+    log(`${Y}⚠️  rearm pending: saldo da carteira indisponível — aguardando o próximo tick pra reconciliar${X}`);
+    return { phase: 'BOUGHT' };
+  }
+  const balUsd = lastPx > 0 ? balance * lastPx : 0;
+  log(`${Y}🔁 Retomando reforço rearm PENDENTE (${symbol}) — saldo na carteira ${Number.isFinite(balance) ? balance : '?'} (~${balUsd.toFixed(2)} USDT), prevQty ${prevQty}${X}`);
+
+  // A) posição intacta — a venda nunca rodou (só possível no viaCandle). Refaz o rearm do zero.
+  if (Number.isFinite(balance) && prevQty > 0 && Math.abs(balance - prevQty) / prevQty <= 0.05) {
+    log(`${G}   → posição intacta na carteira; refazendo o rearm${X}`);
+    return startRearmReinforce({
+      rowId, adapter, strategy, log,
+      state: { ...state, buy_qty: prevQty, buy_usdt: rp.prevBuyUsdt, buy_price: rp.prevBuyPrice },
+      session, config, cMap, stopSelf, symbol, strategyId,
+      rulesState: { ...rulesState, rearm: Number(rp.rungs) > 0 ? { ...rp, pending: false } : null },
+      buyPrice: rp.prevBuyPrice, viaCandle: true,
+    });
+  }
+
+  // B) carteira vazia (poeira) — vendeu mas não recomprou. Recompra agora.
+  if (!Number.isFinite(balance) || balUsd < 3) {
+    const proceeds = Number(rp.ocoProceeds) > 0
+      ? Number(rp.ocoProceeds)
+      : prevQty * (Number(rp.prevBuyPrice) || lastPx) * 0.999; // estimativa da venda no stop
+    log(`${G}   → carteira vazia; recomprando ${(proceeds + rungUsd).toFixed(2)} USDT agora${X}`);
+    return finalizeRearmRebuy({
+      rowId, adapter, strategy, log, state, session, config, cMap, stopSelf, symbol, strategyId,
+      rulesState, proceeds, pendingRearm: rp,
+    });
+  }
+
+  // C) recompra JÁ feita — só faltou salvar. Adota a posição da carteira.
+  let avgPrice = lastPx;
+  try {
+    if (typeof adapter.getOwnTrades === 'function') {
+      const trades = await adapter.getOwnTrades(200);
+      const since = rp.pendingSince ? new Date(rp.pendingSince).getTime() - 5 * 60_000 : Date.now() - 3600_000;
+      const lot = reconstructOpenLotFifo((trades ?? []).filter(t => t.time >= since));
+      if (lot && lot.qty > 0 && Math.abs(lot.qty - balance) / balance <= 0.1) avgPrice = lot.avgPrice;
+    }
+  } catch { /* usa lastPx */ }
+
+  const investedUsd = parseFloat((Number(rp.investedUsd) + rungUsd).toFixed(2));
+  const rungs = Number(rp.rungs) + 1;
+  const rearm = {
+    active: true, pending: false, rungs, investedUsd, entryPrice: avgPrice, rungUsd,
+    rearmStopPct: rp.rearmStopPct, rearmTargetPct: rp.rearmTargetPct,
+    startedAt: rp.startedAt ?? new Date().toISOString(), lastRungAt: new Date().toISOString(),
+  };
+  session.rulesState = {
+    ...rulesState, reinforce: null, exitBracket: null, exitBracketError: null,
+    srTargetPrice: null, srTargetForBuy: null, stopPeakPrice: null, rearm,
+  };
+  await saveState(rowId, {
+    buy_qty: balance, buy_price: avgPrice, buy_usdt: investedUsd, buy_time: new Date().toISOString(),
+    rules_state: session.rulesState,
+  }, log);
+  await placeRearmBracket({ rowId, adapter, session, log, state: { ...state, buy_qty: balance, buy_price: avgPrice }, rearm });
+  log(`${G}   → recompra já estava feita; posição adotada (${balance} un. @ ~${fmtPrice(avgPrice)}), bracket re-armado · rearm #${rungs} · caixa ${investedUsd.toFixed(2)} USDT${X}`);
+  sendWhatsApp(`🔁 ${BOT_LABEL} [${strategyId}] ${symbol}\nReforço rearm reconciliado após restart: a recompra #${rungs} já tinha rodado (${balance} un. @ ~${fmtPrice(avgPrice)}). Bracket −${rp.rearmStopPct}% / +${rp.rearmTargetPct}% re-armado. Caixa total ${investedUsd.toFixed(2)} USDT.`);
+  return { phase: 'BOUGHT' };
+}
+
+/** Recompra do reforço rearm falhou / venda no stop falhou — encerra o trade como stop normal.
+ *  `cashInHand` != null: a posição já foi vendida (proceeds em mãos) mas a recompra falhou →
+ *  registra o resultado dessa venda. Senão: veio do OCO (bracketResult) ou vende agora. */
+async function closeRearmFallback({ rowId, adapter, strategy, log, state, session, config, cMap, stopSelf, symbol, viaCandle, bracketResult, reason, cashInHand = null }) {
+  const exitResult = { reason: 'STOP_LOSS', exitDesc: `Stop (reforço rearm abortado: ${reason})` };
+  if (cashInHand != null) {
+    const qty = Math.max(1e-9, parseFloat(state.buy_qty));
+    await recordBracketFill({
+      rowId, strategy, log, state, session, exitResult,
+      result: { soldQty: parseFloat(state.buy_qty), usdtOut: cashInHand, exitPrice: cashInHand / qty },
+    });
+  } else if (!viaCandle && Number(bracketResult?.usdtOut) > 0) {
+    await recordBracketFill({ rowId, strategy, log, state, session, exitResult, result: bracketResult });
+  } else {
+    try {
+      await executeSell({ rowId, adapter, strategy, log, state, exitResult, session, defaultReasonDesc: 'Stop RSI Momentum (reforço rearm abortado)' });
+    } catch {
+      return { phase: 'BOUGHT' };
+    }
+  }
+  return retireOrCooldown({ rowId, symbol, log, stopSelf, config, cMap, state, session, reason: `trade fechado (${reason})` });
+}
+
 /** Dispara a escada: recompra a mercado a perna 2 e grava rules_state.reinforce. `bracketResult`
  *  traz o fill do stop (soldQty/usdtOut/exitPrice). `viaCandle` = saída detectada pelo candle
  *  (sem ordem resting) → a perna 1 NÃO foi vendida, continua na pilha. */
 async function startReinforceLadder({ rowId, adapter, strategy, log, state, session, config, cMap, stopSelf, symbol, strategyId, rulesState, bracketResult, buyPrice, viaCandle = false }) {
   const rf = config.exit.reinforceOnStop;
+  if (rf.mode === 'rearm') {
+    return startRearmReinforce({ rowId, adapter, strategy, log, state, session, config, cMap, stopSelf, symbol, strategyId, rulesState, bracketResult, buyPrice, viaCandle });
+  }
   const leg1Sold = !viaCandle;
   // Valor de cada compra de reforço — config (exit.reinforceOnStop.buyUsd), com o aporte da
   // entrada como fallback. Congelado no rules_state.reinforce pra não mudar no meio da escada.

@@ -176,6 +176,22 @@ global (`rsi_momentum_global_config`); quando o RSI cruza o limiar, o bot cria o
 (`multitrade_favorites` + `rsi_multi_bot_state`), gerencia o ciclo e **remove** o favorito quando
 fecha. Motor de sinal = mesmo do backtest (`backend/utils/analyseRsiThresholdBacktest.js`).
 
+### Reforço no stop — 2 modos (`exit.reinforceOnStop.mode`)
+
+- **`ladder`** (padrão): escada de averaging-down. Ao bater o stop NÃO vende — recompra a mercado
+  (`buyUsd`), opera SEM stop, empilha a cada `-addDropPct%` e vende toda a pilha no 1º
+  `+exitRisePct%`. Estado em `rules_state.reinforce` (`handleReinforceLadder` / `evaluateReinforceLadder`).
+- **`rearm`** (novo): a corretora VENDE a posição no stop (perda REALIZADA). O bot recompra a
+  mercado com **a sobra da venda + `buyUsd`** e re-arma um bracket NORMAL `-rearmStopPct%` /
+  `+rearmTargetPct%`; stopou de novo, repete indefinidamente. `state.buy_usdt` acumula só o caixa
+  NOVO (entrada + N×`buyUsd`), então `pnl = usdtOut(final) − buy_usdt` = P&L REAL — um alvo de
+  `+X%` atingido depois de um stop rende **menos** que X% no capital. Estado em `rules_state.rearm`
+  (`startRearmReinforce` no bot, `runRearmLadder` no backtest). Espelhado nas Estatísticas.
+  **Crash-safety:** antes de vender/recomprar grava `rules_state.rearm.pending=true` e zera
+  `exitBracket` no Supabase; num restart, `resumeRearmPending` reconcilia pelo saldo REAL da
+  carteira (posição intacta → refaz; carteira vazia → recompra; recompra já feita → adota + re-arma
+  bracket, preço médio via FIFO dos trades próprios).
+
 ### Watchlist curada (`rsi_multi_bot_state.curated = true`)
 
 Moeda vigiada **indefinidamente** pelo bot mesmo que o scanner Binance nunca a sinalize (ex.:
@@ -192,6 +208,13 @@ lado de "Baixar JSON" depois de uma pesquisa de UMA moeda). Manda a config da pe
 converte pro schema do bot; anti-repique vem da config global, earlyConfirm/adx/newHigh
 desligados). Migração: `supabase/add-rsi-momentum-curated-column.sql` (1×). SQL manual
 alternativo: `supabase/add-skyai-curated-rsi-momentum.sql`. **Reiniciar o bot** após adicionar.
+
+**Editar / carregar config:** depois de pesquisar UMA moeda que já é curada, o botão vira
+**"✏️ Editar bot exclusivo"** (mesmo `POST`, atualiza `trade_config` da pesquisa atual) e aparece
+**"⤵ Carregar config"** — `GET /services/sb/rsi-momentum-curated?symbol=` devolve a config atual
+do bot já no shape do painel (`supabaseService.js#rsiMomentumConfigToStatsPrefs`, inverso de
+`statsConfigToRsiMomentumBody`) e preenche os inputs/selects. Fluxo: Carregar → ajustar → Buscar →
+Editar bot exclusivo → **reiniciar o bot**.
 
 Desligar: `multitrade_favorites.enabled = false` (encerra a sessão sem vender/cancelar no
 próximo sync de 3 min), depois apague as 2 linhas. Limitação: se a ENTRADA falhar (ex.: saldo),

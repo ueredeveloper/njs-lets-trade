@@ -43,11 +43,17 @@ export const RSI_MOMENTUM_EARLY_CONFIRM_RSI_OPTIONS = [65, 68, 69, 70, 72, 75, 8
 export const RSI_MOMENTUM_SR_INTERVAL_OPTIONS = RSI_MOMENTUM_ALL_INTERVALS;
 export const RSI_MOMENTUM_SR_CANDLE_COUNT_OPTIONS = [20, 50, 100, 200, 500];
 export const RSI_MOMENTUM_SR_RANK_OPTIONS = [1, 2, 3];
-export const RSI_MOMENTUM_SR_ENTRY_MAX_PCT_OPTIONS = [1, 2, 3, 5, 8, 10, 15, 20];
-/** exit.reinforceOnStop — "reforço no stop" (martingale): queda % que dispara novo aporte e alta
- *  % que encerra a pilha. Mesmo leque do painel de Estatísticas. */
+export const RSI_MOMENTUM_SR_ENTRY_MAX_PCT_OPTIONS = [0.5, 0.6, 0.7, 0.8, 0.9, 1, 1.5, 2, 3, 5, 8, 10, 15, 20];
+/** exit.reinforceOnStop — "reforço no stop": queda % que dispara novo aporte e alta
+ *  % que encerra a pilha (modo 'ladder'). Mesmo leque do painel de Estatísticas. */
 export const RSI_MOMENTUM_REINFORCE_DROP_OPTIONS = [5, 8, 10, 12, 15, 20];
 export const RSI_MOMENTUM_REINFORCE_RISE_OPTIONS = [8, 10, 12, 15, 18, 20, 25];
+/** exit.reinforceOnStop.mode — 'ladder' (escada sem stop) | 'rearm' (vende no stop, recompra
+ *  sobra + aporte, re-arma bracket −rearmStopPct% / +rearmTargetPct%). */
+export const RSI_MOMENTUM_REINFORCE_MODE_OPTIONS = ['ladder', 'rearm'];
+/** exit.reinforceOnStop.rearmStopPct / rearmTargetPct — bracket re-armado a cada recompra (modo 'rearm'). */
+export const RSI_MOMENTUM_REINFORCE_REARM_STOP_OPTIONS = [3, 5, 6, 8, 10, 12, 15, 20];
+export const RSI_MOMENTUM_REINFORCE_REARM_TARGET_OPTIONS = [3, 5, 6, 8, 10, 12, 15, 20, 25];
 /** exit.reinforceOnStop.buyUsd — valor (USDT) de cada compra de reforço (padrão = aporte da entrada). */
 export const RSI_MOMENTUM_REINFORCE_USD_OPTIONS = [20, 40, 60, 80, 100, 150, 200, 300, 500];
 
@@ -85,7 +91,7 @@ export const RSI_MOMENTUM_DEFAULTS = {
       pivotGainPct: 5, wNearPct: 4, wFarPct: 9, atrMult: 2, atrMaxPct: 12,
     },
     hardTakeProfit: { enabled: true, pct: 15 },
-    reinforceOnStop: { enabled: true, addDropPct: 10, exitRisePct: 15, buyUsd: 40 },
+    reinforceOnStop: { enabled: true, mode: 'ladder', addDropPct: 10, exitRisePct: 15, rearmStopPct: 10, rearmTargetPct: 10, buyUsd: 40 },
   },
   stopLoss: { enabled: true, maxLossPct: 10 },
   polling: { pollMs: 60_000, fastPollMs: 20_000 },

@@ -239,8 +239,11 @@ export async function fetchRsiThresholdBacktest(symbol, interval, options = {}) 
   }
   if (reinforceOnStop?.enabled) {
     params.set('reinforceOnStopEnabled', '1');
+    params.set('reinforceMode', reinforceOnStop.mode === 'rearm' ? 'rearm' : 'ladder');
     params.set('reinforceAddDropPct', String(reinforceOnStop.addDropPct ?? 10));
     params.set('reinforceExitRisePct', String(reinforceOnStop.exitRisePct ?? 15));
+    params.set('reinforceRearmStopPct', String(reinforceOnStop.rearmStopPct ?? 10));
+    params.set('reinforceRearmTargetPct', String(reinforceOnStop.rearmTargetPct ?? 10));
     params.set('reinforceBuyUsd', String(reinforceOnStop.buyUsd ?? 40));
     if (reinforceOnStop.waitCandles) params.set('reinforceWaitCandles', String(reinforceOnStop.waitCandles));
   }
@@ -317,8 +320,11 @@ export async function fetchRsiThresholdBacktestMarket(interval, options = {}) {
   }
   if (reinforceOnStop?.enabled) {
     params.set('reinforceOnStopEnabled', '1');
+    params.set('reinforceMode', reinforceOnStop.mode === 'rearm' ? 'rearm' : 'ladder');
     params.set('reinforceAddDropPct', String(reinforceOnStop.addDropPct ?? 10));
     params.set('reinforceExitRisePct', String(reinforceOnStop.exitRisePct ?? 15));
+    params.set('reinforceRearmStopPct', String(reinforceOnStop.rearmStopPct ?? 10));
+    params.set('reinforceRearmTargetPct', String(reinforceOnStop.rearmTargetPct ?? 10));
     params.set('reinforceBuyUsd', String(reinforceOnStop.buyUsd ?? 40));
     if (reinforceOnStop.waitCandles) params.set('reinforceWaitCandles', String(reinforceOnStop.waitCandles));
   }
@@ -388,6 +394,16 @@ export async function addRsiMomentumCuratedBot({ symbol, interval, exchange, con
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ symbol, interval, exchange, config }),
   });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.hint ? `${body.error} — ${body.hint}` : (body.error ?? `HTTP ${res.status}`));
+  return body;
+}
+
+/** Lê a config atual do bot exclusivo (curated) do RSI Momentum de uma moeda, já no shape dos
+ *  campos do painel Estatísticas → Momentum RSI. Devolve { exists, curated, phase, exchange,
+ *  capitalUsdt, interval, panelConfig }. Alimenta o botão "Carregar config". */
+export async function getRsiMomentumCuratedBot(symbol) {
+  const res = await fetch(`/services/sb/rsi-momentum-curated?symbol=${encodeURIComponent(symbol)}`);
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body.hint ? `${body.error} — ${body.hint}` : (body.error ?? `HTTP ${res.status}`));
   return body;

@@ -2,6 +2,7 @@
 
 const {
     runReinforcementLadder,
+    runRearmLadder,
     computeReinforceStats,
 } = require('../utils/analyseRsiThresholdBacktest');
 
@@ -119,6 +120,53 @@ describe('runReinforcementLadder — reforço no stop', () => {
             expect(r.exitPrice).toBeCloseTo(86, 6);
             expect(r.investedUsd).toBeCloseTo(1, 6); // firstLegUsd default 1
         });
+    });
+});
+
+describe('runRearmLadder — reforço no stop modo "re-armar bracket"', () => {
+    // Entrada 100 @ 100, stop -10% -> vende a 90 (perda realizada). Recompra sobra + aporte.
+    const FIRST_ENTRY = 100;
+    const FIRST_STOP = 90;
+
+    test('exemplo do usuário: compra 100, stop 90, recompra 190, alvo +10% rende +4.5% no capital', () => {
+        // recompra a 90; alvo = 90*1.10 = 99; stop = 90*0.90 = 81
+        const scan = [candle(88, 92, 90, 0), candle(89, 100, 99, 1)]; // idx1 high 100 >= 99
+        const r = runRearmLadder(scan, 0, FIRST_ENTRY, FIRST_STOP,
+            { stopPct: 10, targetPct: 10, maxRungs: 100, firstLegUsd: 100, rungUsd: 100 });
+        expect(r.outcome).toBe('target');
+        expect(r.legs).toEqual([100, 90]);
+        expect(r.investedUsd).toBeCloseTo(200, 6);  // caixa NOVO: 100 entrada + 100 reforço
+        expect(r.pnlUsd).toBeCloseTo(9, 4);          // 190/90*99 - 200
+        expect(r.returnPct).toBeCloseTo(4.5, 4);     // NÃO +10% — houve o stop antes
+    });
+
+    test('dois stops antes do alvo: "alvo alcançado" mas o resultado real é negativo', () => {
+        const scan = [
+            candle(78, 82, 80, 0),   // stop da 1ª recompra (entry 90 -> stop 81), sem furar o stop da 2ª (72.9)
+            candle(80, 90, 89, 1),   // recompra a 81; alvo 81*1.1 = 89.1 -> high 90 alcança
+        ];
+        const r = runRearmLadder(scan, 0, FIRST_ENTRY, FIRST_STOP,
+            { stopPct: 10, targetPct: 10, maxRungs: 100, firstLegUsd: 100, rungUsd: 100 });
+        expect(r.legs).toEqual([100, 90, 81]);
+        expect(r.investedUsd).toBeCloseTo(300, 6);
+        expect(r.pnlUsd).toBeLessThan(0);            // "target" mas no vermelho
+        expect(r.outcome).toBe('target');
+    });
+
+    test('janela acaba com a pilha submersa: outcome open, retorno negativo sobre o caixa total', () => {
+        const scan = [candle(85, 89, 86, 0), candle(83, 87, 84, 1)];
+        const r = runRearmLadder(scan, 0, FIRST_ENTRY, FIRST_STOP,
+            { stopPct: 10, targetPct: 20, maxRungs: 100, firstLegUsd: 100, rungUsd: 100 });
+        expect(r.outcome).toBe('open');
+        expect(r.returnPct).toBeLessThan(0);
+    });
+
+    test('trava maxRungs interrompe a série de recompras', () => {
+        const scan = Array.from({ length: 20 }, (_, i) => candle(0.0001, 0.0002, 0.0001, i));
+        const r = runRearmLadder(scan, 0, FIRST_ENTRY, FIRST_STOP,
+            { stopPct: 10, targetPct: 10, maxRungs: 4, firstLegUsd: 100, rungUsd: 100 });
+        expect(r.legs.length - 1).toBeLessThanOrEqual(4);
+        expect(r.investedUsd).toBeCloseTo(500, 6); // 100 + 4×100
     });
 });
 

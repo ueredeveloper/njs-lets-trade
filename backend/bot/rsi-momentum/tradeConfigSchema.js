@@ -160,17 +160,28 @@ const RSI_MOMENTUM_DEFAULTS = {
       pivotPct: 1, aCoinStepPct: 3, aStopStepPct: 2.5, bCoinStepPct: 3, bStopStepPct: 1,
       pivotGainPct: 5, wNearPct: 4, wFarPct: 9, atrMult: 2, atrMaxPct: 12,
     },
-    /** Ligado por padrão (−10% / +15%) — "Reforço no stop" (escada de averaging-down /
-     *  martingale): quando a compra INICIAL bate o stop, o bot NÃO encerra — recompra a mercado
-     *  (mesmo aporte) e passa a operar SEM stop resting, só vigiando o candle: a cada nova queda
-     *  de `addDropPct`% abaixo do último aporte adiciona mais uma compra do mesmo tamanho; a 1ª
-     *  alta de `exitRisePct`% acima do último aporte vende TODA a pilha a mercado. Sem limite de
-     *  degraus (trava de segurança interna). Sem saldo pra um novo aporte: avisa e, passada 1h,
-     *  vende a pilha a mercado. Estado persistido em rsi_multi_bot_state.rules_state.reinforce —
-     *  o bot retoma a escada no meio depois de um restart. Ver evaluateReinforceLadder em
-     *  strategyEngine.js e handleReinforceLadder em rsi-momentum-bot.js. ATENÇÃO: depois de
-     *  disparado, a posição fica SEM stop de proteção (risco de martingale). */
-    reinforceOnStop: { enabled: true, addDropPct: 10, exitRisePct: 15, buyUsd: 40 },
+    /** Ligado por padrão — "Reforço no stop". Dois modos (`mode`):
+     *
+     *  'ladder' (padrão, escada de averaging-down / martingale): quando a compra INICIAL bate o
+     *  stop, o bot NÃO encerra — recompra a mercado (aporte `buyUsd`) e passa a operar SEM stop
+     *  resting, só vigiando o candle: a cada nova queda de `addDropPct`% abaixo do último aporte
+     *  adiciona mais uma compra; a 1ª alta de `exitRisePct`% acima do último aporte vende TODA a
+     *  pilha. Estado em rules_state.reinforce. Ver evaluateReinforceLadder / handleReinforceLadder.
+     *  ATENÇÃO: depois de disparado fica SEM stop de proteção.
+     *
+     *  'rearm' (re-armar bracket): a corretora VENDE a posição no stop (perda REALIZADA) e o bot
+     *  recompra a mercado com TUDO o que sobrou da venda + `buyUsd`, re-armando um bracket NORMAL
+     *  −`rearmStopPct`% / +`rearmTargetPct`% sobre o novo preço. Se stopar de novo, repete —
+     *  indefinidamente. O P&L do trade é medido sobre o caixa NOVO total (entrada + N×buyUsd), então
+     *  um alvo de "+X%" atingido após um stop rende menos que X% no capital. Estado em
+     *  rules_state.rearm. Ver startRearmReinforce em rsi-momentum-bot.js e runRearmLadder no backtest. */
+    reinforceOnStop: {
+      enabled: true, mode: 'ladder', addDropPct: 10, exitRisePct: 15, buyUsd: 40,
+      // mode 'rearm': a corretora VENDE no stop e o bot recompra a sobra + buyUsd, re-armando um
+      // bracket normal −rearmStopPct% / +rearmTargetPct% (repete a cada novo stop). Ver
+      // startRearmReinforce em rsi-momentum-bot.js e runRearmLadder no backtest.
+      rearmStopPct: 10, rearmTargetPct: 10,
+    },
   },
 
   /** Modo percentual fixo (com trailing opcional injetado via exit.trailingStop acima, que tem
@@ -286,7 +297,7 @@ function normalizeHigherRsiFilter(block) {
 }
 
 /** Filtro/alvo por Suporte-Resistência — mesmo shape do backtest (options.supportResistance).
- *  interval FIXO no leque padrão; janela 20..1000; ranks 1..3; entryMaxPct 1..100. */
+ *  interval FIXO no leque padrão; janela 20..1000; ranks 1..3; entryMaxPct 0.1..100. */
 function normalizeSupportResistance(block) {
   const d = RSI_MOMENTUM_DEFAULTS.entry.supportResistance;
   const src = block ?? {};
@@ -297,7 +308,7 @@ function normalizeSupportResistance(block) {
     candleCount: Math.max(20, Math.min(1000, Math.round(Number(src.candleCount ?? d.candleCount)))),
     entrySupportRank: rank(src.entrySupportRank, d.entrySupportRank),
     exitResistanceRank: rank(src.exitResistanceRank, d.exitResistanceRank),
-    entryMaxPct: Math.max(1, Math.min(100, Number(src.entryMaxPct ?? d.entryMaxPct))),
+    entryMaxPct: Math.max(0.1, Math.min(100, Number(src.entryMaxPct ?? d.entryMaxPct))),
   };
 }
 
@@ -371,16 +382,22 @@ function normalizeHardTakeProfit(block) {
   };
 }
 
-/** "Reforço no stop" (martingale) — { enabled, addDropPct 2..30, exitRisePct 2..50 }. Mesmo
- *  shape do backtest (options.reinforceOnStop). */
+/** "Reforço no stop" — { enabled, mode, addDropPct 2..30, exitRisePct 2..50, rearmStopPct 0.5..30,
+ *  rearmTargetPct 0.5..50, buyUsd }. Mesmo shape do backtest (options.reinforceOnStop).
+ *  mode 'ladder' (padrão) = escada de averaging-down sem stop; 'rearm' = corretora vende no stop,
+ *  bot recompra sobra + buyUsd e re-arma bracket −rearmStopPct% / +rearmTargetPct%. */
 function normalizeReinforceOnStop(block) {
   const d = RSI_MOMENTUM_DEFAULTS.exit.reinforceOnStop;
   const src = block ?? {};
   return {
     enabled: typeof src.enabled === 'boolean' ? src.enabled : d.enabled,
+    mode: src.mode === 'rearm' ? 'rearm' : 'ladder',
     addDropPct: Math.max(2, Math.min(30, Number(src.addDropPct ?? d.addDropPct))),
     exitRisePct: Math.max(2, Math.min(50, Number(src.exitRisePct ?? d.exitRisePct))),
-    // Valor (USDT) de cada compra de reforço — padrão = mesmo aporte da 1ª entrada (40).
+    rearmStopPct: Math.max(0.5, Math.min(30, Number(src.rearmStopPct ?? d.rearmStopPct))),
+    rearmTargetPct: Math.max(0.5, Math.min(50, Number(src.rearmTargetPct ?? d.rearmTargetPct))),
+    // Valor (USDT) do aporte de cada reforço — padrão 40. No 'rearm' é o dinheiro NOVO somado à
+    // sobra da venda no stop.
     buyUsd: Math.max(5, Math.min(100_000, Number(src.buyUsd ?? d.buyUsd))),
   };
 }

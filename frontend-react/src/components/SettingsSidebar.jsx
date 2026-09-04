@@ -7,7 +7,9 @@ import { RSI_MOMENTUM_ALL_INTERVALS, RSI_MOMENTUM_BB_PERIODS, RSI_MOMENTUM_BB_ST
   RSI_MOMENTUM_TARGET_MODE_OPTIONS, RSI_MOMENTUM_STOP_MODE_OPTIONS, RSI_MOMENTUM_TARGET_PCT_OPTIONS, RSI_MOMENTUM_COIN_STEP_OPTIONS, RSI_MOMENTUM_STOP_STEP_OPTIONS, RSI_MOMENTUM_STOP_PCT_OPTIONS,
   RSI_MOMENTUM_PIVOT_PCT_OPTIONS, RSI_MOMENTUM_PIVOT_GAIN_OPTIONS, RSI_MOMENTUM_WIDTH_PCT_OPTIONS, RSI_MOMENTUM_ATR_MULT_OPTIONS, RSI_MOMENTUM_HARD_TP_OPTIONS,
   RSI_MOMENTUM_SR_INTERVAL_OPTIONS, RSI_MOMENTUM_SR_CANDLE_COUNT_OPTIONS, RSI_MOMENTUM_SR_RANK_OPTIONS, RSI_MOMENTUM_SR_ENTRY_MAX_PCT_OPTIONS,
-  RSI_MOMENTUM_REINFORCE_DROP_OPTIONS, RSI_MOMENTUM_REINFORCE_RISE_OPTIONS, RSI_MOMENTUM_REINFORCE_USD_OPTIONS, RSI_MOMENTUM_EARLY_CONFIRM_RSI_OPTIONS, RSI_MOMENTUM_MIN_VOLUME_OPTIONS,
+  RSI_MOMENTUM_REINFORCE_DROP_OPTIONS, RSI_MOMENTUM_REINFORCE_RISE_OPTIONS, RSI_MOMENTUM_REINFORCE_USD_OPTIONS,
+  RSI_MOMENTUM_REINFORCE_MODE_OPTIONS, RSI_MOMENTUM_REINFORCE_REARM_STOP_OPTIONS, RSI_MOMENTUM_REINFORCE_REARM_TARGET_OPTIONS,
+  RSI_MOMENTUM_EARLY_CONFIRM_RSI_OPTIONS, RSI_MOMENTUM_MIN_VOLUME_OPTIONS,
   RSI_MOMENTUM_CAPITAL_USD_OPTIONS }
   from '../constants/rsiMomentumConfigSchema';
 import { useLanguage } from '../contexts/LanguageContext';
@@ -1459,7 +1461,8 @@ export default function SettingsSidebar({ open, onClose }) {
 
                 {/* REFORÇO NO STOP (martingale) — averaging-down quando a compra inicial bate o stop */}
                 {(() => {
-                  const rf = rsiMomentumConfig.exit.reinforceOnStop ?? { enabled: false, addDropPct: 10, exitRisePct: 15, buyUsd: 40 };
+                  const rf = rsiMomentumConfig.exit.reinforceOnStop ?? { enabled: false, mode: 'ladder', addDropPct: 10, exitRisePct: 15, rearmStopPct: 10, rearmTargetPct: 10, buyUsd: 40 };
+                  const rfMode = rf.mode === 'rearm' ? 'rearm' : 'ladder';
                   const patchRf = (patch) => patchRsiMomentumNested('exit', 'reinforceOnStop', patch);
                   return (
                     <div className="rounded-md p-2.5" style={{ background: '#1a1210', border: '1px solid #4a2d2a' }}>
@@ -1478,22 +1481,53 @@ export default function SettingsSidebar({ open, onClose }) {
                       </label>
                       {rf.enabled && (
                         <div className="grid grid-cols-2 gap-2">
-                          <label className="flex flex-col gap-1">
-                            <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_reinforce_drop')}</span>
+                          <label className="flex flex-col gap-1 col-span-2">
+                            <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_reinforce_mode')}</span>
                             <select className={`${inp} w-full`}
-                              value={rf.addDropPct}
-                              onChange={(e) => patchRf({ addDropPct: Number(e.target.value) })}>
-                              {RSI_MOMENTUM_REINFORCE_DROP_OPTIONS.map((v) => <option key={v} value={v}>−{v}%</option>)}
+                              value={rfMode}
+                              onChange={(e) => patchRf({ mode: e.target.value })}>
+                              {RSI_MOMENTUM_REINFORCE_MODE_OPTIONS.map((v) => <option key={v} value={v}>{t(`settings.rsimomentum_reinforce_mode_${v}`)}</option>)}
                             </select>
                           </label>
-                          <label className="flex flex-col gap-1">
-                            <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_reinforce_rise')}</span>
-                            <select className={`${inp} w-full`}
-                              value={rf.exitRisePct}
-                              onChange={(e) => patchRf({ exitRisePct: Number(e.target.value) })}>
-                              {RSI_MOMENTUM_REINFORCE_RISE_OPTIONS.map((v) => <option key={v} value={v}>+{v}%</option>)}
-                            </select>
-                          </label>
+                          {rfMode === 'ladder' ? (
+                            <>
+                              <label className="flex flex-col gap-1">
+                                <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_reinforce_drop')}</span>
+                                <select className={`${inp} w-full`}
+                                  value={rf.addDropPct}
+                                  onChange={(e) => patchRf({ addDropPct: Number(e.target.value) })}>
+                                  {RSI_MOMENTUM_REINFORCE_DROP_OPTIONS.map((v) => <option key={v} value={v}>−{v}%</option>)}
+                                </select>
+                              </label>
+                              <label className="flex flex-col gap-1">
+                                <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_reinforce_rise')}</span>
+                                <select className={`${inp} w-full`}
+                                  value={rf.exitRisePct}
+                                  onChange={(e) => patchRf({ exitRisePct: Number(e.target.value) })}>
+                                  {RSI_MOMENTUM_REINFORCE_RISE_OPTIONS.map((v) => <option key={v} value={v}>+{v}%</option>)}
+                                </select>
+                              </label>
+                            </>
+                          ) : (
+                            <>
+                              <label className="flex flex-col gap-1">
+                                <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_reinforce_rearm_stop')}</span>
+                                <select className={`${inp} w-full`}
+                                  value={rf.rearmStopPct ?? 10}
+                                  onChange={(e) => patchRf({ rearmStopPct: Number(e.target.value) })}>
+                                  {RSI_MOMENTUM_REINFORCE_REARM_STOP_OPTIONS.map((v) => <option key={v} value={v}>−{v}%</option>)}
+                                </select>
+                              </label>
+                              <label className="flex flex-col gap-1">
+                                <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_reinforce_rearm_target')}</span>
+                                <select className={`${inp} w-full`}
+                                  value={rf.rearmTargetPct ?? 10}
+                                  onChange={(e) => patchRf({ rearmTargetPct: Number(e.target.value) })}>
+                                  {RSI_MOMENTUM_REINFORCE_REARM_TARGET_OPTIONS.map((v) => <option key={v} value={v}>+{v}%</option>)}
+                                </select>
+                              </label>
+                            </>
+                          )}
                           <label className="flex flex-col gap-1">
                             <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_reinforce_usd')}</span>
                             <select className={`${inp} w-full`}

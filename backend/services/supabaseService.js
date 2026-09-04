@@ -942,8 +942,12 @@ function statsConfigToRsiMomentumBody({ symbol, interval, config = {}, priorRsiF
         ? { enabled: true, pct: num(c.hardTakeProfit.pct, 15) }
         : { enabled: false },
       reinforceOnStop: c.reinforceOnStop?.enabled
-        ? { enabled: true, addDropPct: num(c.reinforceOnStop.addDropPct, 10),
+        ? { enabled: true,
+            mode: c.reinforceOnStop.mode === 'rearm' ? 'rearm' : 'ladder',
+            addDropPct: num(c.reinforceOnStop.addDropPct, 10),
             exitRisePct: num(c.reinforceOnStop.exitRisePct, 15),
+            rearmStopPct: num(c.reinforceOnStop.rearmStopPct, 10),
+            rearmTargetPct: num(c.reinforceOnStop.rearmTargetPct, 10),
             buyUsd: num(c.reinforceOnStop.buyUsd, 40) }
         : { enabled: false },
     },
@@ -954,6 +958,100 @@ function statsConfigToRsiMomentumBody({ symbol, interval, config = {}, priorRsiF
   };
   return { body, ignored };
 }
+
+/** Inverso de statsConfigToRsiMomentumBody: config normalizada do bot (normalizeRsiMomentumConfig)
+ *  → shape "panelConfig" que a aba Estatísticas → Momentum RSI usa nos inputs/selects
+ *  (RSI_MOM_DEFAULT_PREFS em frontend-react/src/components/StatisticsPanel.jsx). Alimenta o botão
+ *  "Carregar config" — preenche o painel com a config atual do bot exclusivo daquela moeda.
+ *  Campos que só existem no painel (adxFilter, newHighFilter, reinforceOnStop.waitCandles,
+ *  lookbackHours, excludeOpenExits, entriesDayRangeMax, allCoins) ficam de fora — o painel mantém
+ *  o que já estiver selecionado neles. */
+function rsiMomentumConfigToStatsPrefs(n) {
+  const e = n.entry, x = n.exit, ts = x.trailingStop;
+  const stopTrailing = !!ts.enabled;
+  return {
+    rsiThreshold: e.rsiThreshold,
+    // Painel usa 0 ou negativo (compra só se o preço cair |x|% abaixo do sinal); bot guarda belowPct positivo.
+    pullbackPct: e.pullback.enabled ? -Math.abs(e.pullback.belowPct) : 0,
+    targetMode: x.targetMode,
+    targetPct: x.restingBracket.targetPct,
+    hardTakeProfitEnabled: x.hardTakeProfit.enabled,
+    hardTakeProfitPct: x.hardTakeProfit.pct,
+    stopMode: stopTrailing ? ts.mode : 'fixed',
+    stopLossPct: stopTrailing ? ts.startPct : n.stopLoss.maxLossPct,
+    positionSizeUsd: n.capitalUsdt,
+    bandWidthEnabled: e.bandWidth.enabled,
+    bandWidthInterval: e.bandWidth.interval,
+    bandWidthMinPct: e.bandWidth.minPct,
+    bandWidthLookback: e.bandWidth.lookback,
+    srEnabled: e.supportResistance.enabled,
+    srInterval: e.supportResistance.interval,
+    srCandleCount: e.supportResistance.candleCount,
+    srEntrySupportRank: e.supportResistance.entrySupportRank,
+    srExitResistanceRank: e.supportResistance.exitResistanceRank,
+    srEntryMaxPct: e.supportResistance.entryMaxPct,
+    minVolumeUsdt: n.volume.minVolumeUsdt,
+    macdFilterEnabled: e.macdFilter.enabled,
+    macdFilterInterval: e.macdFilter.interval,
+    higherRsiFilterEnabled: e.higherRsiFilter.enabled,
+    higherRsiFilterMinRsi: e.higherRsiFilter.minRsi,
+    rsi5mFilterEnabled: e.rsi5mFilter.enabled,
+    rsi5mFilterThreshold: e.rsi5mFilter.threshold,
+    reinforceOnStopEnabled: x.reinforceOnStop.enabled,
+    reinforceMode: x.reinforceOnStop.mode ?? 'ladder',
+    reinforceAddDropPct: x.reinforceOnStop.addDropPct,
+    reinforceExitRisePct: x.reinforceOnStop.exitRisePct,
+    reinforceRearmStopPct: x.reinforceOnStop.rearmStopPct ?? 10,
+    reinforceRearmTargetPct: x.reinforceOnStop.rearmTargetPct ?? 10,
+    reinforceBuyUsd: x.reinforceOnStop.buyUsd,
+    trailingCoinStepPct: ts.coinStepPct,
+    trailingStopStepPct: ts.stopStepPct,
+    trailingTargetCoinStepPct: x.trailingTarget.coinStepPct,
+    trailingTargetStepPct: x.trailingTarget.stepPct,
+    tsPivotPct: ts.pivotPct,
+    tsPhaseACoinStep: ts.aCoinStepPct,
+    tsPhaseAStopStep: ts.aStopStepPct,
+    tsPhaseBCoinStep: ts.bCoinStepPct,
+    tsPhaseBStopStep: ts.bStopStepPct,
+    tsPivotGainPct: ts.pivotGainPct,
+    tsWNearPct: ts.wNearPct,
+    tsWFarPct: ts.wFarPct,
+    tsAtrMult: ts.atrMult,
+    tsAtrMaxPct: ts.atrMaxPct,
+  };
+}
+
+// GET /services/sb/rsi-momentum-curated?symbol= — config atual do bot exclusivo (curated) dessa
+// moeda (rsi_multi_bot_state, strategy_id 'rsi-momentum'), já convertida pro shape do painel
+// Estatísticas → Momentum RSI. Alimenta o botão "Carregar config". exists=false quando a moeda
+// nunca virou favorito/curada.
+router.get('/rsi-momentum-curated', getUserId, async (req, res) => {
+  const symbol = String(req.query?.symbol ?? '').trim().toUpperCase();
+  if (!symbol) return res.status(400).json({ error: 'symbol obrigatório' });
+
+  const { data: state, error } = await supabase
+    .from('rsi_multi_bot_state')
+    .select('symbol, exchange, phase, capital, curated, trade_config')
+    .eq('symbol', symbol)
+    .eq('strategy_id', 'rsi-momentum')
+    .maybeSingle();
+  if (error) return sbError(res, error, 'GET rsi-momentum-curated');
+  if (!state) return res.json({ exists: false, curated: false });
+
+  let tc = state.trade_config;
+  if (typeof tc === 'string') { try { tc = JSON.parse(tc); } catch { tc = null; } }
+  const normalized = normalizeRsiMomentumConfig(tc ?? {});
+
+  res.json({
+    exists: true,
+    curated: !!state.curated,
+    phase: state.phase ?? 'WATCHING',
+    exchange: state.exchange === 'gate' ? 'gate' : 'binance',
+    capitalUsdt: Number(state.capital) || null,
+    interval: normalized.entry.interval,
+    panelConfig: rsiMomentumConfigToStatsPrefs(normalized),
+  });
+});
 
 // POST /services/sb/rsi-momentum-curated — { symbol, interval, exchange, config }
 router.post('/rsi-momentum-curated', getUserId, async (req, res) => {

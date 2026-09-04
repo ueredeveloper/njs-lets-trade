@@ -241,14 +241,24 @@ function resolveFromSignal(scanCandles, signalPrice, { pullbackPct, targetPct, s
     // degrau. Devolve já o resultado agregado da pilha (returnPct = retorno sobre o capital
     // total empregado). maxRungs é só trava de segurança (o usuário pediu "sem limite").
     if (reinforceOnStop?.enabled && outcome === 'stop' && stopScanIdx >= 0) {
-        const ladder = runReinforcementLadder(scanCandles, stopScanIdx, entryPrice, exitPrice, {
-            addDropPct: reinforceOnStop.addDropPct,
-            exitRisePct: reinforceOnStop.exitRisePct,
-            maxRungs: reinforceOnStop.maxRungs,
-            waitCandles: reinforceOnStop.waitCandles,
-            firstLegUsd: positionSizeUsd,
-            rungUsd: Number(reinforceOnStop.buyUsd) > 0 ? Number(reinforceOnStop.buyUsd) : positionSizeUsd,
-        });
+        const rearm = reinforceOnStop.mode === 'rearm';
+        const rungUsd = Number(reinforceOnStop.buyUsd) > 0 ? Number(reinforceOnStop.buyUsd) : positionSizeUsd;
+        const ladder = rearm
+            ? runRearmLadder(scanCandles, stopScanIdx, entryPrice, exitPrice, {
+                stopPct: reinforceOnStop.rearmStopPct,
+                targetPct: reinforceOnStop.rearmTargetPct,
+                maxRungs: reinforceOnStop.maxRungs,
+                firstLegUsd: positionSizeUsd,
+                rungUsd,
+            })
+            : runReinforcementLadder(scanCandles, stopScanIdx, entryPrice, exitPrice, {
+                addDropPct: reinforceOnStop.addDropPct,
+                exitRisePct: reinforceOnStop.exitRisePct,
+                maxRungs: reinforceOnStop.maxRungs,
+                waitCandles: reinforceOnStop.waitCandles,
+                firstLegUsd: positionSizeUsd,
+                rungUsd,
+            });
         return {
             filled: true,
             entryTime, entryPrice, stopPrice,
@@ -260,6 +270,7 @@ function resolveFromSignal(scanCandles, signalPrice, { pullbackPct, targetPct, s
             targetSteps: 0,
             peakGainPct: parseFloat((((peakPrice / entryPrice) - 1) * 100).toFixed(2)),
             reinforce: {
+                mode: rearm ? 'rearm' : 'ladder',
                 legCount: ladder.legs.length,
                 rungs: ladder.legs.length - 1,
                 avgEntryPrice: ladder.avgEntryPrice,
@@ -413,6 +424,99 @@ function runReinforcementLadder(scanCandles, startIdx, firstEntryPrice, firstSto
         exitTime,
         exitPrice,
         finalTargetPrice: parseFloat(targetLevel.toFixed(8)),
+    };
+}
+
+/**
+ * Variante "re-armar bracket" do reforço no stop (options.reinforceOnStop.mode === 'rearm').
+ * Diferente da escada de averaging-down (runReinforcementLadder), aqui a corretora VENDE a posição
+ * inteira quando o stop bate (perda REALIZADA) e o bot, em vez de encerrar, RECOMPRA a mercado com
+ * TUDO o que sobrou da venda MAIS um aporte fixo `rungUsd`, e re-arma um bracket NORMAL: stop
+ * −`stopPct`% / alvo +`targetPct`% sobre o novo preço de compra. Se stopar de novo, repete —
+ * indefinidamente (só `maxRungs` como trava de segurança da janela).
+ *
+ * O ganho/perda é SEMPRE medido sobre o CAIXA NOVO total empregado (firstLegUsd + N×rungUsd), não
+ * sobre o tamanho nominal da pilha: um "alvo de +10%" alcançado DEPOIS de 1 stop rende bem menos
+ * que 10% no capital, porque metade (ou mais) do caixa já levou o corte do(s) stop(s). `returnPct`,
+ * `pnlUsd` e `investedUsd` já vêm nesse referencial "real".
+ *
+ * `startIdx` = índice em `scanCandles` do candle em que o stop inicial bateu; `firstStopPrice` =
+ * preço desse stop, que é também o preço da 1ª recompra. Empate intra-candle: stop antes de alvo
+ * (mesma convenção pessimista do bracket inicial).
+ */
+function runRearmLadder(scanCandles, startIdx, firstEntryPrice, firstStopPrice, { stopPct, targetPct, maxRungs, firstLegUsd = 1, rungUsd = 1 }) {
+    const sPct = Math.max(0.1, Number(stopPct)) / 100;
+    const tPct = Math.max(0.1, Number(targetPct)) / 100;
+    const cap = Math.max(1, Math.round(Number(maxRungs) || 100));
+
+    const qty0 = firstLegUsd / firstEntryPrice;
+    let proceeds = qty0 * firstStopPrice;  // o que voltou da venda no stop inicial (OCO)
+    let cashOut = firstLegUsd;             // caixa NOVO total empregado (aportes, sem contar o reinvestido)
+    let entryR = firstStopPrice;           // recompra no preço do stop anterior
+    let idx = Math.max(0, startIdx);
+    const legs = [firstEntryPrice];        // leg 0 = compra do sinal; legs 1..N = recompras
+    let outcome = 'open';
+    let exitTime = scanCandles[Math.min(idx, scanCandles.length - 1)]?.openTime ?? null;
+    let exitPrice = firstStopPrice;
+    let lastTargetPrice = entryR * (1 + tPct);
+
+    while (legs.length - 1 < cap) {
+        const buySize = proceeds + rungUsd;
+        cashOut += rungUsd;
+        const qty = buySize / entryR;
+        legs.push(entryR);
+        const stopLevel = entryR * (1 - sPct);
+        const tgtLevel = entryR * (1 + tPct);
+        lastTargetPrice = tgtLevel;
+
+        let hit = null;
+        for (let j = idx; j < scanCandles.length; j++) {
+            const low = parseFloat(scanCandles[j].low);
+            const high = parseFloat(scanCandles[j].high);
+            if (Number.isFinite(low) && low <= stopLevel) { hit = { kind: 'stop', j }; break; }
+            if (Number.isFinite(high) && high >= tgtLevel) { hit = { kind: 'target', j }; break; }
+        }
+
+        if (!hit) {
+            // Janela acabou — marca a pilha a mercado no último close (resultado não realizado).
+            const lastClose = scanCandles.length ? parseFloat(scanCandles[scanCandles.length - 1].close) : entryR;
+            proceeds = qty * lastClose;
+            outcome = 'open';
+            exitPrice = lastClose;
+            exitTime = scanCandles.length ? scanCandles[scanCandles.length - 1].openTime : exitTime;
+            break;
+        }
+        if (hit.kind === 'target') {
+            proceeds = qty * tgtLevel;
+            outcome = 'target';
+            exitPrice = tgtLevel;
+            exitTime = scanCandles[hit.j].openTime;
+            break;
+        }
+        // Stop de novo: realiza a perda desta rodada e recompra no próximo giro do while.
+        proceeds = qty * stopLevel;
+        entryR = stopLevel;
+        idx = hit.j;
+        exitTime = scanCandles[hit.j].openTime;
+        exitPrice = stopLevel;
+        outcome = 'open'; // se o while sair pela trava `cap`, fica em aberto no último stop
+    }
+
+    const pnlUsd = proceeds - cashOut;
+    const returnPct = cashOut > 0 ? (pnlUsd / cashOut) * 100 : 0;
+    const rebuys = legs.slice(1);
+    const avgEntryPrice = rebuys.length ? rebuys.reduce((s, p) => s + p, 0) / rebuys.length : firstStopPrice;
+
+    return {
+        legs,
+        avgEntryPrice: parseFloat(avgEntryPrice.toFixed(8)),
+        returnPct: parseFloat(returnPct.toFixed(4)),
+        investedUsd: parseFloat(cashOut.toFixed(2)),
+        pnlUsd: parseFloat(pnlUsd.toFixed(2)),
+        outcome,
+        exitTime,
+        exitPrice,
+        finalTargetPrice: parseFloat(lastTargetPrice.toFixed(8)),
     };
 }
 
@@ -982,8 +1086,8 @@ function computeMacdWhatIf(occurrences, interval) {
  * @param {number}  [options.supportResistance.entrySupportRank=1]  1 = 1º suporte abaixo do preço, 2 = 2º, 3 = 3º.
  * @param {number}  [options.supportResistance.exitResistanceRank=1]  1 = 1ª resistência acima do preço, 2 = 2ª, 3 = 3ª.
  * @param {number|'adapt'} [options.supportResistance.entryMaxPct=10]  Distância % máxima do preço do
- *   sinal ACIMA da linha de suporte (1–100). 'adapt' = calcula da história da moeda (mediana de
- *   quão perto do suporte anterior o preço faz fundo antes de virar, clamp 1–8%, default 3) —
+ *   sinal ACIMA da linha de suporte (0.1–100). 'adapt' = calcula da história da moeda (mediana de
+ *   quão perto do suporte anterior o preço faz fundo antes de virar, clamp 2–8%, default 3) —
  *   ver computeAdaptiveSupportEntryPct. O valor resolvido volta em result.supportResistance.entryMaxPct.
  * @param {number}  [options.minVolumeUsdt=0]  Filtro opcional de volume 24h (mesmo campo do bot
  *   ao vivo, config.volume.minVolumeUsdt — ver marketScanner.js). 0 = desligado. Usa o mesmo
@@ -1090,11 +1194,17 @@ function computeMacdWhatIf(occurrences, interval) {
  *   runReinforcementLadder. O P&L/taxa de acerto refletem a pilha inteira (retorno sobre o
  *   capital total empregado). Independente do modo de alvo/stop da compra inicial.
  * @param {boolean} [options.reinforceOnStop.enabled=false]
- * @param {number}  [options.reinforceOnStop.addDropPct=10]   Queda % abaixo do último aporte que dispara o próximo reforço (2–30).
- * @param {number}  [options.reinforceOnStop.exitRisePct=15]  Alta % acima do último aporte que encerra toda a pilha (2–50).
+ * @param {'ladder'|'rearm'} [options.reinforceOnStop.mode='ladder']  'ladder' = escada de averaging-down
+ *   descrita acima (posição NÃO é vendida no stop, opera sem stop). 'rearm' = a corretora VENDE a
+ *   posição no stop (perda realizada) e o bot recompra com a SOBRA da venda + `buyUsd`, re-armando
+ *   um bracket normal −`rearmStopPct`% / +`rearmTargetPct`%; repete a cada novo stop. Ver runRearmLadder.
+ * @param {number}  [options.reinforceOnStop.addDropPct=10]   [ladder] Queda % abaixo do último aporte que dispara o próximo reforço (2–30).
+ * @param {number}  [options.reinforceOnStop.exitRisePct=15]  [ladder] Alta % acima do último aporte que encerra toda a pilha (2–50).
+ * @param {number}  [options.reinforceOnStop.rearmStopPct=10] [rearm]  Stop % do bracket re-armado a cada recompra (0.5–30).
+ * @param {number}  [options.reinforceOnStop.rearmTargetPct=10] [rearm] Alvo % do bracket re-armado a cada recompra (0.5–50). O retorno REAL fica abaixo disso quando houve stop antes.
  * @param {number}  [options.reinforceOnStop.maxRungs=100]    Trava de segurança do nº de reforços (1–100).
- * @param {number}  [options.reinforceOnStop.waitCandles=0]   Candles de 1m a esperar entre o stop e a 1ª compra de reforço (0–200). 0 = reforça no ato. Só afeta a perna 1.
- * @param {number}  [options.reinforceOnStop.buyUsd]          Valor (US$) de cada compra de reforço (5–100000). Sem valor, usa positionSizeUsd (pernas iguais).
+ * @param {number}  [options.reinforceOnStop.waitCandles=0]   [ladder] Candles de 1m a esperar entre o stop e a 1ª compra de reforço (0–200). 0 = reforça no ato. Só afeta a perna 1.
+ * @param {number}  [options.reinforceOnStop.buyUsd]          Valor (US$) do aporte de cada reforço (5–100000). No 'rearm' é o dinheiro NOVO adicionado à sobra da venda. Sem valor, usa positionSizeUsd.
  */
 async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
     const {
@@ -1137,6 +1247,12 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
     // Valor (US$) de cada compra de reforço — o padrão do painel é 40 (entrada 20). Sem valor
     // explícito, cai no aporte da entrada (pernas iguais = comportamento antigo).
     const rfBuyUsd = Math.max(5, Math.min(100_000, Number(reinforceOnStop?.buyUsd ?? positionSizeUsd)));
+    // Modo do reforço: 'ladder' (escada de averaging-down, sem stop, sai só no repique — padrão) ou
+    // 'rearm' (a corretora vende no stop e o bot recompra com a sobra + o aporte, re-armando um
+    // bracket normal −rearmStopPct% / +rearmTargetPct%). Ver runRearmLadder / runReinforcementLadder.
+    const rfMode = reinforceOnStop?.mode === 'rearm' ? 'rearm' : 'ladder';
+    const rfRearmStopPct = Math.max(0.5, Math.min(30, Number(reinforceOnStop?.rearmStopPct ?? 10)));
+    const rfRearmTargetPct = Math.max(0.5, Math.min(50, Number(reinforceOnStop?.rearmTargetPct ?? 10)));
 
     // Teto de lucro (venda forçada em +pct%) — mesmo do bot (exit.hardTakeProfit). 0/null = off.
     const hardTakeProfitPct = hardTakeProfit?.enabled
@@ -1236,11 +1352,11 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
     const srEntryRank = Math.max(1, Math.min(3, Math.round(Number(supportResistance?.entrySupportRank ?? 1))));
     const srExitRank = Math.max(1, Math.min(3, Math.round(Number(supportResistance?.exitResistanceRank ?? 1))));
     // 'adapt' = calcula o limite da história da moeda (ver computeAdaptiveSupportEntryPct, aplicado
-    // depois de buscar srCandles). Senão, % fixo entre 1 e 100.
+    // depois de buscar srCandles). Senão, % fixo entre 0.1 e 100 (permite entrar colado no suporte).
     const srEntryMaxPctAdaptive = supportResistance?.entryMaxPct === 'adapt';
     let srEntryMaxPct = srEntryMaxPctAdaptive
         ? SR_ADAPTIVE_ENTRY_DEFAULT_PCT
-        : Math.max(1, Math.min(100, Number(supportResistance?.entryMaxPct ?? 10)));
+        : Math.max(0.1, Math.min(100, Number(supportResistance?.entryMaxPct ?? 10)));
     // Candles do intervalo do S/R a buscar: a janela móvel (srCandleCount) precisa caber ANTES do
     // sinal mais antigo da amostra + a própria janela do intervalo principal. Mesma conta do
     // pdcDayLimit, só que a "folga" é a janela inteira do S/R.
@@ -1705,7 +1821,7 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
                 ? { coinStepPct: trailingTargetCoinStepPct, stepPct: trailingTargetStepPct }
                 : null,
             reinforceOnStop: rfEnabled
-                ? { enabled: true, addDropPct: rfAddDropPct, exitRisePct: rfExitRisePct, maxRungs: rfMaxRungs, waitCandles: rfWaitCandles, buyUsd: rfBuyUsd }
+                ? { enabled: true, mode: rfMode, addDropPct: rfAddDropPct, exitRisePct: rfExitRisePct, maxRungs: rfMaxRungs, waitCandles: rfWaitCandles, buyUsd: rfBuyUsd, rearmStopPct: rfRearmStopPct, rearmTargetPct: rfRearmTargetPct }
                 : null,
             positionSizeUsd,
         });
@@ -1818,7 +1934,7 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
             stepPct: trailingTargetStepPct,
         } : null,
         hardTakeProfit: hardTakeProfitPct > 0 ? { pct: hardTakeProfitPct } : null,
-        reinforceOnStop: rfEnabled ? { addDropPct: rfAddDropPct, exitRisePct: rfExitRisePct, waitCandles: rfWaitCandles, buyUsd: rfBuyUsd } : null,
+        reinforceOnStop: rfEnabled ? { mode: rfMode, addDropPct: rfAddDropPct, exitRisePct: rfExitRisePct, waitCandles: rfWaitCandles, buyUsd: rfBuyUsd, rearmStopPct: rfRearmStopPct, rearmTargetPct: rfRearmTargetPct } : null,
         reinforceStats: rfEnabled ? computeReinforceStats(filledOccurrences) : null,
         dailyEntryStats: computeDailyEntryStats(filledOccurrences, positionSizeUsd, entriesDayRange),
         tradeDuration: computeAvgTradeDurationMs(filledOccurrences),
@@ -1831,6 +1947,7 @@ module.exports.countBaseVsEvolvedExits = countBaseVsEvolvedExits;
 module.exports.computeMacdWhatIf = computeMacdWhatIf;
 module.exports.computeReinforceStats = computeReinforceStats;
 module.exports.runReinforcementLadder = runReinforcementLadder;
+module.exports.runRearmLadder = runRearmLadder;
 module.exports.computeCloudZoneStats = computeCloudZoneStats;
 module.exports.computeSupportResistanceZoneStats = computeSupportResistanceZoneStats;
 module.exports.computeRsi1hBreakdown = computeRsi1hBreakdown;

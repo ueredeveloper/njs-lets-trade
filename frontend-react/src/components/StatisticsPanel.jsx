@@ -3,7 +3,7 @@ import { useCurrency } from '../contexts/CurrencyContext';
 import {
   fetchRsiOversoldRecovery, fetchRsiThresholdBacktest, fetchRsiThresholdBacktestMarket, fetchMaCrossStats, fetchBollingerBandRecovery, fetchCandlesticksAndCloud,
   fetchVwapBandsStats, saveRsiMomentumStatsSearch, getRsiMomentumStatsSearches, clearRsiMomentumStatsSearches,
-  addRsiMomentumCuratedBot,
+  addRsiMomentumCuratedBot, getRsiMomentumCuratedBot,
 } from '../services/api';
 import Tooltip from './Tooltip';
 import SrZoneChart from './SrZoneChart';
@@ -319,7 +319,7 @@ const RSI_MOM_BANDWIDTH_LOOKBACK_OPTIONS = [300, 200, 100];
 const RSI_MOM_SR_INTERVAL_OPTIONS = INTERVALS;
 const RSI_MOM_SR_CANDLE_COUNT_OPTIONS = [20, 50, 100, 200, 300, 500, 1000];
 const RSI_MOM_SR_RANK_OPTIONS = [1, 2, 3];
-const RSI_MOM_SR_MAXPCT_OPTIONS = ['adapt', 2, 3, 5, 8, 10, 15, 20, 30, 50, 100];
+const RSI_MOM_SR_MAXPCT_OPTIONS = ['adapt', 0.5, 0.6, 0.7, 0.8, 0.9, 1, 1.5, 2, 3, 5, 8, 10, 15, 20, 30, 50, 100];
 /** Valores selecionáveis do filtro "Volume 24h" — mesmo campo do bot ao vivo
  *  (config.volume.minVolumeUsdt, ver backend/bot/rsi-momentum/marketScanner.js). 0 = desligado. */
 const RSI_MOM_VOLUME_OPTIONS = [0, 1_000_000, 2_000_000, 5_000_000, 30_000_000];
@@ -363,6 +363,14 @@ const RSI_MOM_REINFORCE_RISE_OPTIONS = [8, 10, 12, 15, 18, 20, 25];
 const RSI_MOM_REINFORCE_WAIT_OPTIONS = [0, 3, 5, 8, 10, 15, 20, 30, 45, 60];
 /** reinforceBuyUsd — valor (US$) de cada compra de reforço (padrão 40; entrada = positionSizeUsd 20). */
 const RSI_MOM_REINFORCE_USD_OPTIONS = [10, 20, 30, 40, 60, 80, 100, 150, 200, 300, 500];
+/** reinforceMode — 'ladder' (escada de averaging-down sem stop, sai no repique) | 'rearm' (a
+ *  corretora vende no stop, o bot recompra a SOBRA + o aporte e re-arma um bracket normal
+ *  −rearmStopPct% / +rearmTargetPct%; repete a cada novo stop). Ver runRearmLadder no backend. */
+const RSI_MOM_REINFORCE_MODE_OPTIONS = ['ladder', 'rearm'];
+/** rearmStopPct / rearmTargetPct — bracket re-armado a cada recompra no modo 'rearm'. O retorno
+ *  REAL fica abaixo do rearmTargetPct quando houve stop antes (o caixa já levou o corte). */
+const RSI_MOM_REINFORCE_REARM_STOP_OPTIONS = [3, 5, 6, 8, 10, 12, 15, 20];
+const RSI_MOM_REINFORCE_REARM_TARGET_OPTIONS = [3, 5, 6, 8, 10, 12, 15, 20, 25];
 /** Lucro travado (%) que separa a fase A da B na Escada Dupla (0 = breakeven). */
 const RSI_MOM_PIVOT_PCT_OPTIONS = [0, 0.5, 1, 1.5, 2, 3];
 /** Ganho do pico (%) que troca da fase apertada pra solta na Trilha do Topo / Trilha ATR. */
@@ -415,8 +423,11 @@ const RSI_MOM_DEFAULT_PREFS = {
   newHighFilterLookback: 20,
   newHighFilterMarginPct: 2,
   reinforceOnStopEnabled: true,
+  reinforceMode: 'ladder',
   reinforceAddDropPct: 10,
   reinforceExitRisePct: 15,
+  reinforceRearmStopPct: 10,
+  reinforceRearmTargetPct: 10,
   reinforceBuyUsd: 40,
   reinforceWaitCandles: 0,
   trailingCoinStepPct: 3,
@@ -1066,6 +1077,10 @@ function RsiMomentumStats({ autoCalc }) {
   // alimenta o botão "Bot exclusivo" (watchlist curada do RSI Momentum). null no modo Todas.
   const [lastSearch, setLastSearch] = useState(null);
   const [curatedState, setCuratedState] = useState({ loading: false, msg: null, err: null });
+  // Config atual do bot exclusivo (curated) da moeda da última pesquisa de UMA moeda — alimenta
+  // os botões "Editar bot exclusivo" (troca o rótulo do botão de adicionar) e "Carregar config"
+  // (preenche o painel). { symbol, exists, curated, phase, exchange, interval, panelConfig }.
+  const [curatedInfo, setCuratedInfo] = useState(null);
   // Corretora onde a moeda vai ser operada pelo bot exclusivo — default = a fonte usada na
   // pesquisa (Gate se a busca foi source='gate'), mas o usuário pode trocar.
   const [curatedExchange, setCuratedExchange] = useState('binance');
@@ -1116,8 +1131,9 @@ function RsiMomentumStats({ autoCalc }) {
   async function handleAddCuratedBot() {
     if (!lastSearch || curatedState.loading) return;
     const exchange = curatedExchange === 'gate' ? 'gate' : 'binance';
+    const editing = curatedInfo?.symbol === lastSearch.symbol && curatedInfo?.curated;
     const fill = (s, map) => Object.entries(map).reduce((acc, [k, v]) => acc.split(`{${k}}`).join(v), s);
-    if (!window.confirm(fill(t('stats.curated_confirm'),
+    if (!window.confirm(fill(t(editing ? 'stats.curated_edit_confirm' : 'stats.curated_confirm'),
       { symbol: lastSearch.symbol, exchange, interval: lastSearch.interval }))) return;
     setCuratedState({ loading: true, msg: null, err: null });
     try {
@@ -1131,9 +1147,29 @@ function RsiMomentumStats({ autoCalc }) {
       if (r.resumed) parts.push(fill(t('stats.curated_resumed'), { phase: r.phase }));
       if (r.ignoredFilters?.length) parts.push(fill(t('stats.curated_ignored'), { list: r.ignoredFilters.join(', ') }));
       setCuratedState({ loading: false, msg: parts.join(' '), err: null });
+      // Reflete no botão que a moeda agora é (ou continua) curada.
+      getRsiMomentumCuratedBot(lastSearch.symbol)
+        .then((info) => setCuratedInfo(info?.exists ? { ...info, symbol: lastSearch.symbol } : null))
+        .catch(() => {});
     } catch (err) {
       setCuratedState({ loading: false, msg: null, err: err.message });
     }
+  }
+
+  /** Preenche os campos do painel (RSI_MOM_PREFS + intervalo + corretora) com a config atual do
+   *  bot exclusivo da moeda pesquisada. O usuário ajusta, clica em Buscar e depois em "Editar bot
+   *  exclusivo" pra salvar de volta. */
+  function handleLoadCuratedConfig() {
+    if (!curatedInfo?.panelConfig || curatedInfo.symbol !== lastSearch?.symbol) return;
+    patchPrefs({ ...curatedInfo.panelConfig, allCoins: false });
+    if (curatedInfo.interval) setInterval(curatedInfo.interval);
+    if (curatedInfo.exchange) setCuratedExchange(curatedInfo.exchange);
+    const fill = (s, map) => Object.entries(map).reduce((acc, [k, v]) => acc.split(`{${k}}`).join(v), s);
+    setCuratedState({
+      loading: false,
+      msg: fill(t('stats.curated_loaded'), { symbol: curatedInfo.symbol, phase: curatedInfo.phase }),
+      err: null,
+    });
   }
 
   const inp = 'bg-p2 border border-p3/40 text-p5 text-[10px] sm:text-xs rounded px-1 sm:px-2 py-1 focus:outline-none focus:border-p4 w-full';
@@ -1277,8 +1313,11 @@ function RsiMomentumStats({ autoCalc }) {
         } : null,
         reinforceOnStop: p.reinforceOnStopEnabled ? {
           enabled: true,
+          mode: p.reinforceMode === 'rearm' ? 'rearm' : 'ladder',
           addDropPct: p.reinforceAddDropPct,
           exitRisePct: p.reinforceExitRisePct,
+          rearmStopPct: p.reinforceRearmStopPct,
+          rearmTargetPct: p.reinforceRearmTargetPct,
           waitCandles: p.reinforceWaitCandles,
           buyUsd: p.reinforceBuyUsd,
         } : null,
@@ -1296,6 +1335,16 @@ function RsiMomentumStats({ autoCalc }) {
       });
       if (!p.allCoins) setCuratedExchange(src === 'gate' ? 'gate' : 'binance');
       setCuratedState({ loading: false, msg: null, err: null });
+      // Busca a config do bot exclusivo dessa moeda (se houver) pros botões "Editar bot exclusivo"
+      // / "Carregar config". Fire-and-forget: guarda o símbolo pra descartar respostas fora de ordem.
+      if (p.allCoins) {
+        setCuratedInfo(null);
+      } else {
+        setCuratedInfo(null);
+        getRsiMomentumCuratedBot(sym)
+          .then((info) => setCuratedInfo(info?.exists ? { ...info, symbol: sym } : null))
+          .catch(() => {});
+      }
       // Grava a pesquisa (config + resumo) no log do backend — só nas buscas deliberadas
       // (botão "Buscar" / Enter, updateChart=true), não nos recálculos automáticos por clique
       // no gráfico. Fire-and-forget: falha aqui não pode quebrar a tela.
@@ -1986,22 +2035,53 @@ function RsiMomentumStats({ autoCalc }) {
 
         {prefs.reinforceOnStopEnabled && (
           <>
-            <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.reinforce_drop')}>
-              <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.reinforce_drop')}</label>
+            <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[64px]" title={t('stats.tip.reinforce_mode')}>
+              <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.reinforce_mode')}</label>
               <select className={inp}
-                value={prefs.reinforceAddDropPct}
-                onChange={(e) => patchPrefs({ reinforceAddDropPct: Number(e.target.value) })}>
-                {RSI_MOM_REINFORCE_DROP_OPTIONS.map((v) => <option key={v} value={v}>{`−${v}%`}</option>)}
+                value={prefs.reinforceMode ?? 'ladder'}
+                onChange={(e) => patchPrefs({ reinforceMode: e.target.value })}>
+                {RSI_MOM_REINFORCE_MODE_OPTIONS.map((v) => <option key={v} value={v}>{t(`stats.reinforce_mode_${v}`)}</option>)}
               </select>
             </div>
-            <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.reinforce_rise')}>
-              <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.reinforce_rise')}</label>
-              <select className={inp}
-                value={prefs.reinforceExitRisePct}
-                onChange={(e) => patchPrefs({ reinforceExitRisePct: Number(e.target.value) })}>
-                {RSI_MOM_REINFORCE_RISE_OPTIONS.map((v) => <option key={v} value={v}>{`+${v}%`}</option>)}
-              </select>
-            </div>
+            {(prefs.reinforceMode ?? 'ladder') === 'ladder' ? (
+              <>
+                <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.reinforce_drop')}>
+                  <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.reinforce_drop')}</label>
+                  <select className={inp}
+                    value={prefs.reinforceAddDropPct}
+                    onChange={(e) => patchPrefs({ reinforceAddDropPct: Number(e.target.value) })}>
+                    {RSI_MOM_REINFORCE_DROP_OPTIONS.map((v) => <option key={v} value={v}>{`−${v}%`}</option>)}
+                  </select>
+                </div>
+                <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.reinforce_rise')}>
+                  <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.reinforce_rise')}</label>
+                  <select className={inp}
+                    value={prefs.reinforceExitRisePct}
+                    onChange={(e) => patchPrefs({ reinforceExitRisePct: Number(e.target.value) })}>
+                    {RSI_MOM_REINFORCE_RISE_OPTIONS.map((v) => <option key={v} value={v}>{`+${v}%`}</option>)}
+                  </select>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.reinforce_rearm_stop')}>
+                  <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.reinforce_rearm_stop')}</label>
+                  <select className={inp}
+                    value={prefs.reinforceRearmStopPct ?? 10}
+                    onChange={(e) => patchPrefs({ reinforceRearmStopPct: Number(e.target.value) })}>
+                    {RSI_MOM_REINFORCE_REARM_STOP_OPTIONS.map((v) => <option key={v} value={v}>{`−${v}%`}</option>)}
+                  </select>
+                </div>
+                <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.reinforce_rearm_target')}>
+                  <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.reinforce_rearm_target')}</label>
+                  <select className={inp}
+                    value={prefs.reinforceRearmTargetPct ?? 10}
+                    onChange={(e) => patchPrefs({ reinforceRearmTargetPct: Number(e.target.value) })}>
+                    {RSI_MOM_REINFORCE_REARM_TARGET_OPTIONS.map((v) => <option key={v} value={v}>{`+${v}%`}</option>)}
+                  </select>
+                </div>
+              </>
+            )}
             <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.reinforce_usd')}>
               <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.reinforce_usd')}</label>
               <select className={inp}
@@ -2010,14 +2090,16 @@ function RsiMomentumStats({ autoCalc }) {
                 {RSI_MOM_REINFORCE_USD_OPTIONS.map((v) => <option key={v} value={v}>{`$${v}`}</option>)}
               </select>
             </div>
-            <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.reinforce_wait')}>
-              <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.reinforce_wait')}</label>
-              <select className={inp}
-                value={prefs.reinforceWaitCandles ?? 0}
-                onChange={(e) => patchPrefs({ reinforceWaitCandles: Number(e.target.value) })}>
-                {RSI_MOM_REINFORCE_WAIT_OPTIONS.map((v) => <option key={v} value={v}>{v === 0 ? t('stats.reinforce_wait_now') : `${v}c`}</option>)}
-              </select>
-            </div>
+            {(prefs.reinforceMode ?? 'ladder') === 'ladder' && (
+              <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.reinforce_wait')}>
+                <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.reinforce_wait')}</label>
+                <select className={inp}
+                  value={prefs.reinforceWaitCandles ?? 0}
+                  onChange={(e) => patchPrefs({ reinforceWaitCandles: Number(e.target.value) })}>
+                  {RSI_MOM_REINFORCE_WAIT_OPTIONS.map((v) => <option key={v} value={v}>{v === 0 ? t('stats.reinforce_wait_now') : `${v}c`}</option>)}
+                </select>
+              </div>
+            )}
           </>
         )}
        </div>
@@ -2231,9 +2313,12 @@ function RsiMomentumStats({ autoCalc }) {
                 <SummaryCard
                   label={t('stats.card.reinforce_on_stop')}
                   value={
-                    (result.reinforceStats
-                      ? `${result.reinforceStats.trades} trade(s) · ${result.reinforceStats.rungsTotal} reforço(s) · ${result.reinforceStats.stillOpen} aberto(s)`
-                      : `−${result.reinforceOnStop.addDropPct}% / +${result.reinforceOnStop.exitRisePct}% · 0`)
+                    ((result.reinforceOnStop.mode === 'rearm' ? 're-arma ' : '')
+                      + (result.reinforceStats
+                        ? `${result.reinforceStats.trades} trade(s) · ${result.reinforceStats.rungsTotal} reforço(s) · ${result.reinforceStats.stillOpen} aberto(s)`
+                        : result.reinforceOnStop.mode === 'rearm'
+                          ? `−${result.reinforceOnStop.rearmStopPct}% / +${result.reinforceOnStop.rearmTargetPct}% · 0`
+                          : `−${result.reinforceOnStop.addDropPct}% / +${result.reinforceOnStop.exitRisePct}% · 0`))
                     + (result.reinforceOnStop.waitCandles > 0 ? ` · espera ${result.reinforceOnStop.waitCandles}c` : '')
                   }
                   highlight={result.reinforceStats?.stillOpen > 0 ? 'text-red-600' : 'text-amber-500'}
@@ -2338,9 +2423,21 @@ function RsiMomentumStats({ autoCalc }) {
                         >
                           {curatedState.loading
                             ? <span className="w-2.5 h-2.5 border border-p4 border-t-transparent rounded-full animate-spin" />
-                            : '🤖'}
-                          {t('stats.curated_add')}
+                            : (curatedInfo?.symbol === lastSearch.symbol && curatedInfo?.curated ? '✏️' : '🤖')}
+                          {curatedInfo?.symbol === lastSearch.symbol && curatedInfo?.curated
+                            ? t('stats.curated_edit')
+                            : t('stats.curated_add')}
                         </button>
+                        {curatedInfo?.symbol === lastSearch.symbol && curatedInfo?.exists && (
+                          <button
+                            onClick={handleLoadCuratedConfig}
+                            disabled={curatedState.loading}
+                            title={t('stats.curated_load_tip')}
+                            className="text-[10px] text-p5/60 hover:text-p4 border border-p3/40 hover:border-p4 rounded px-1.5 py-0.5 transition-colors disabled:opacity-50"
+                          >
+                            ⤵ {t('stats.curated_load')}
+                          </button>
+                        )}
                       </span>
                     )}
                   </div>
