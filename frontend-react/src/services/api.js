@@ -912,10 +912,22 @@ export function gatePreloadCandles(symbol) {
  */
 export const DEFAULT_CANDLE_LIMIT = 160;
 
-export async function fetchCandlesticksAndCloud(symbol, interval, source = null, limit = DEFAULT_CANDLE_LIMIT) {
+/**
+ * `anchor` ({ fromMs, toMs, pad? }, opcional): busca candles ANCORADOS num período específico
+ * (ex.: entrada→saída de um trade do backtest — ver openOnChart em StatisticsPanel.jsx) em vez de
+ * "os últimos `limit` candles até agora". Necessário pra abrir um trade ANTIGO no gráfico com
+ * espaço pra arrastar antes/depois dele — o cache de candles do backend é sempre relativo a
+ * "agora" e não alcança de volta um trade que já saiu da janela de retenção dele. `limit` é
+ * ignorado quando `anchor` é passado (o backend calcula o tamanho certo — ver
+ * getCandlesAroundTime.js).
+ */
+export async function fetchCandlesticksAndCloud(symbol, interval, source = null, limit = DEFAULT_CANDLE_LIMIT, anchor = null) {
   const srcParam = source === 'gate' ? '&source=gate' : '';
+  const anchorParam = anchor?.fromMs != null && anchor?.toMs != null
+    ? `&fromMs=${Math.round(anchor.fromMs)}&toMs=${Math.round(anchor.toMs)}${anchor.pad != null ? `&pad=${anchor.pad}` : ''}`
+    : '';
   const candlesRaw = await fetch(
-    `/services/candles/?symbol=${symbol}&limit=${limit}&interval=${interval}${srcParam}`,
+    `/services/candles/?symbol=${symbol}&limit=${limit}&interval=${interval}${srcParam}${anchorParam}`,
   ).then((r) => r.json());
 
   if (!Array.isArray(candlesRaw)) {

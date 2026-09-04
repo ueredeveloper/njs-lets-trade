@@ -199,6 +199,19 @@ um só cobrindo o trade inteiro: verde se aquela perna bateu o alvo, vermelho se
 reforço) ou ficou em aberto. `buildHistoricalPositionRects` (CandlestickChartLW.jsx) já suporta
 isso sem mudança — só precisa de vários marcadores compra→venda encadeados em vez de um.
 
+**Gráfico do trade — intervalo adaptativo + busca ancorada (04/09/2026):** pernas rápidas (minutos)
+num intervalo grosso (ex. 1h da entrada) colapsavam no mesmo candle e viravam "1 quadrado só" —
+`chooseChartIntervalForLegs` (StatisticsPanel.jsx) escolhe o intervalo mais FINO que cobre a
+duração total das pernas sem estourar o teto de candles buscados. Além disso, `openOnChart` busca
+candles ANCORADOS no período do trade (entrada→saída + 100 de folga cada lado) via
+`getCandlesAroundTime.js` (novo — `GET /services/candles?fromMs=&toMs=&pad=`), em vez de "os
+últimos N até agora" (`getCandles`/`getGateCandles`, cache rolante que não alcança trades antigos
+nem sobra pra arrastar depois da saída). Também corrigido: o `useEffect` de S/R do gráfico
+recriava TODAS as séries (`chart.addSeries`/`removeSeries`, caro) a cada frame de arrasto porque
+tinha `visibleRange` na dependência pra TODOS os estilos — só o estilo 'traço' rolante precisa
+disso; separado em dois efeitos (o override de trade das Estatísticas nunca mais recria nada
+durante o pan).
+
 ### Watchlist curada (`rsi_multi_bot_state.curated = true`)
 
 Moeda vigiada **indefinidamente** pelo bot mesmo que o scanner Binance nunca a sinalize (ex.:

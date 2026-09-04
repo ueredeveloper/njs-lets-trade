@@ -30,14 +30,18 @@ async function fetchPage(symbol, interval, limit, endTime) {
   return raw.map(normalizeKline);
 }
 
-// Busca até `limit` candles paginando automaticamente quando limit > 1000
-module.exports = async function fetchKlines(symbol, interval, limit = 500) {
-  if (limit <= PAGE_MAX) return fetchPage(symbol, interval, limit, null);
+// Busca até `limit` candles paginando automaticamente quando limit > 1000. `anchorEndTime`
+// (ms, opcional) ancora a busca num instante PASSADO em vez de "agora" — usado por
+// getCandlesAroundTime.js pra reconstruir a janela de candles ao redor de um trade específico
+// (ex.: abrir um trade antigo no gráfico das Estatísticas), que o cache rolante de getCandles.js
+// (sempre "os últimos N até agora") não cobre.
+module.exports = async function fetchKlines(symbol, interval, limit = 500, anchorEndTime = null) {
+  if (limit <= PAGE_MAX) return fetchPage(symbol, interval, limit, anchorEndTime);
 
   // Paginação: busca de trás para frente em janelas de PAGE_MAX
   const pages = [];
   let remaining = limit;
-  let endTime   = null;
+  let endTime   = anchorEndTime;
 
   while (remaining > 0) {
     const pageSize = Math.min(remaining, PAGE_MAX);

@@ -77,19 +77,21 @@ async function fetchGatePage(pair, interval, limit, toSec) {
  * semana cheia, mas próximo). Trata isso como "chegou ao início do que a Gate deixa
  * consultar": devolve o que já foi paginado até aqui em vez de derrubar a chamada inteira.
  */
-async function fetchFromGate(binanceSymbol, interval, limit) {
+// `anchorToSec` (segundos, opcional) ancora a busca num instante PASSADO em vez de "agora" — ver
+// mesmo parâmetro em fetchKlines.js (Binance). Usado por getCandlesAroundTime.js.
+async function fetchFromGate(binanceSymbol, interval, limit, anchorToSec = null) {
   const pair = toGateSymbol(binanceSymbol);
   const intervalMs = await convertIntervalToMiliseconds(interval);
 
   if (limit <= GATE_MAX_LIMIT) {
-    const raw = await fetchGatePage(pair, interval, limit, null);
+    const raw = await fetchGatePage(pair, interval, limit, anchorToSec);
     return raw.map(c => normalizeCandle(c, intervalMs));
   }
 
   const intervalSec = Math.floor(intervalMs / 1000);
   const pages = [];
   let remaining = limit;
-  let toSec = null;
+  let toSec = anchorToSec;
 
   while (remaining > 0) {
     const pageSize = Math.min(remaining, GATE_MAX_LIMIT);
@@ -199,7 +201,7 @@ async function getGateCandles(symbol, interval, limit) {
   });
 }
 
-module.exports = { getGateCandles };
+module.exports = { getGateCandles, fetchFromGate };
 
 // Uso direto:
 //   node backend/gate/getGateCandles.js FIOUSDT          → todos os intervalos (1000 candles cada)

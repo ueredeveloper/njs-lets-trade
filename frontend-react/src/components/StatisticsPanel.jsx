@@ -1433,15 +1433,17 @@ function RsiMomentumStats({ autoCalc }) {
     // mesmo candle e viram "1 quadrado só" em vez de um por perna. Abre num intervalo mais FINO,
     // escolhido pra cobrir a duração inteira do trade sem estourar o teto de candles buscados.
     const chartIv = o.reinforceLegs?.length ? chooseChartIntervalForLegs(o.reinforceLegs, iv) : iv;
-    const msPerCandle = INTERVAL_MS[chartIv] ?? 900000;
-    const needed = Math.min(3000, Math.max(266,
-      Math.ceil((Date.now() - startMs) / msPerCandle) + 40));
     try {
       const sym = (o.symbol || symbol || selectedChart?.symbol || 'BTCUSDT').trim().toUpperCase();
       // Ocorrência de favorito Gate carrega o.source='gate' — abre o gráfico na corretora certa.
       const src = o.source === 'gate' ? 'gate'
         : (selectedChart?.symbol === sym ? (selectedChart?.source ?? null) : null);
-      const data = await fetchCandlesticksAndCloud(sym, chartIv, src, needed);
+      // Busca ANCORADA no período do trade (entrada→saída) + 100 candles de folga pra cada lado
+      // (ver getCandlesAroundTime.js no backend) — em vez de "os últimos N candles até agora",
+      // que não alcança de volta um trade antigo (fora da janela de retenção do cache) e não
+      // sobra nada pra arrastar DEPOIS da saída. Com isso dá pra arrastar o gráfico e ver o que
+      // aconteceu antes/depois do trade específico.
+      const data = await fetchCandlesticksAndCloud(sym, chartIv, src, undefined, { fromMs: startMs, toMs: endMs, pad: 100 });
       setSelectedChart(data);
       setChartViewSource(CHART_VIEW.STATISTICS);
       // Reforço no stop (ladder/rearm): 1 quadrado compra→venda por PERNA, não um só cobrindo o
