@@ -1484,9 +1484,11 @@ function RsiMomentumStats({ autoCalc }) {
             },
           ].filter(Boolean);
       setChartTradeMarkers(markers);
-      // Desenha no gráfico EXATAMENTE o S/R que o backtest usou pra decidir esse trade (o
-      // gráfico e o trade têm que ser a mesma coisa). null se a busca não tinha S/R ligado.
-      setChartSrOverride(o.sr ?? null);
+      // TESTE (04/09/2026, a pedido do usuário): S/R DESLIGADO temporariamente aqui pra isolar se
+      // as linhas de S/R contribuem pra lentidão ao arrastar o gráfico dos trades com reforço.
+      // Normal: desenha EXATAMENTE o S/R que o backtest usou pra decidir esse trade (o gráfico e o
+      // trade têm que ser a mesma coisa) — reverter pra `setChartSrOverride(o.sr ?? null);` depois.
+      setChartSrOverride(null);
       // DEBUG (Teste): printa no console os níveis de S/R EXATOS desse trade.
       if (o.sr?.levels?.length) {
         logSrLevels(`trade ${new Date(o.signalDate).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}`, sym, o.sr.levels, {
