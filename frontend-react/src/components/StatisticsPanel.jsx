@@ -1486,11 +1486,11 @@ function RsiMomentumStats({ autoCalc }) {
             },
           ].filter(Boolean);
       setChartTradeMarkers(markers);
-      // Desenha no gráfico EXATAMENTE o S/R que o backtest usou pra decidir esse trade (o
-      // gráfico e o trade têm que ser a mesma coisa). null se a busca não tinha S/R ligado.
-      // (Confirmado 04/09/2026: a lentidão ao arrastar era o efeito de S/R recriando séries a
-      // cada frame de pan — corrigido em CandlestickChartLW.jsx, ver os dois useEffect de S/R lá.)
-      setChartSrOverride(o.sr ?? null);
+      // TESTE (04/09/2026, a pedido do usuário): S/R DESLIGADO de novo aqui — mais testes em
+      // cima do fix de candles ancorados/interval adaptativo, sem o S/R de outra variável no
+      // meio. Normal: `setChartSrOverride(o.sr ?? null);` (desenha EXATAMENTE o S/R que o
+      // backtest usou pra decidir esse trade) — reverter depois que o usuário confirmar.
+      setChartSrOverride(null);
       // DEBUG (Teste): printa no console os níveis de S/R EXATOS desse trade.
       if (o.sr?.levels?.length) {
         logSrLevels(`trade ${new Date(o.signalDate).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}`, sym, o.sr.levels, {
