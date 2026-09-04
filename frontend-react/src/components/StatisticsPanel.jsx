@@ -1486,11 +1486,10 @@ function RsiMomentumStats({ autoCalc }) {
             },
           ].filter(Boolean);
       setChartTradeMarkers(markers);
-      // TESTE (04/09/2026, a pedido do usuário): S/R DESLIGADO de novo aqui — mais testes em
-      // cima do fix de candles ancorados/interval adaptativo, sem o S/R de outra variável no
-      // meio. Normal: `setChartSrOverride(o.sr ?? null);` (desenha EXATAMENTE o S/R que o
-      // backtest usou pra decidir esse trade) — reverter depois que o usuário confirmar.
-      setChartSrOverride(null);
+      // Desenha no gráfico EXATAMENTE o S/R que o backtest usou pra decidir esse trade — são os
+      // níveis JÁ CALCULADOS no momento do sinal (o.sr), não recalculados aqui; o gráfico e o
+      // trade têm que ser a mesma coisa. null se a busca não tinha S/R ligado.
+      setChartSrOverride(o.sr ?? null);
       // DEBUG (Teste): printa no console os níveis de S/R EXATOS desse trade.
       if (o.sr?.levels?.length) {
         logSrLevels(`trade ${new Date(o.signalDate).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}`, sym, o.sr.levels, {
