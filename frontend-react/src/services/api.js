@@ -981,7 +981,14 @@ export async function fetchCandlesticksAndCloud(symbol, interval, source = null,
     }).then((r) => r.json()),
   ]);
 
-  return { symbol, interval, source: source ?? null, price: candles.at(-1)?.close, candlesticks: candles, ichimokuCloud, movingAverage, ma50, ma9, ma21, rsi };
+  // `anchor` ecoado de volta (quando usado) — carrega em selectedChart.anchor pra
+  // handleLoadMoreCandles (CandlestickChart.jsx) saber que "carregar mais" deve ALARGAR a mesma
+  // âncora (mais pad pra cada lado) em vez de trocar pra "últimos N até agora", que destruiria a
+  // janela do trade que o usuário estava olhando.
+  const anchorEcho = anchor?.fromMs != null && anchor?.toMs != null
+    ? { fromMs: anchor.fromMs, toMs: anchor.toMs, pad: anchor.pad ?? 100 }
+    : null;
+  return { symbol, interval, source: source ?? null, price: candles.at(-1)?.close, candlesticks: candles, ichimokuCloud, movingAverage, ma50, ma9, ma21, rsi, anchor: anchorEcho };
 }
 
 /**

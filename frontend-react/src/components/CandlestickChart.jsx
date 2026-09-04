@@ -5262,6 +5262,36 @@ export default function CandlestickChart() {
   async function handleLoadMoreCandles() {
     if (!selectedChart?.symbol) return;
     const currentLen = selectedChart.candlesticks?.length ?? 0;
+
+    // Gráfico ANCORADO num trade específico (ver openOnChart em StatisticsPanel.jsx — trade do
+    // Momentum RSI, com ou sem reforço no stop): "carregar mais" tem que ALARGAR a MESMA âncora
+    // (mais candles de folga pra cada lado de fromMs/toMs), nunca trocar pra "últimos N até
+    // agora" (fetchCandlesticksAndCloud sem `anchor`) — isso substituiria a janela do trade
+    // inteira por candles recentes sem relação nenhuma com ele; o corte abrupto entre os dois
+    // períodos (timestamps não contínuos) é o que fazia o gráfico "quebrar" ao arrastar (poucos
+    // candles giantes, sem sentido, até dar zoom in de novo).
+    if (selectedChart.anchor) {
+      const currentPad = Math.max(100, Number(selectedChart.anchor.pad) || 100);
+      const nextPad = Math.min(2000, currentPad * 2);
+      if (nextPad <= currentPad) return; // já no teto de folga
+      setLoadingMoreCandles(true);
+      try {
+        const data = await fetchCandlesticksAndCloud(
+          selectedChart.symbol,
+          selectedChart.interval ?? currentInterval,
+          selectedChart.source ?? null,
+          undefined,
+          { fromMs: selectedChart.anchor.fromMs, toMs: selectedChart.anchor.toMs, pad: nextPad },
+        );
+        setSelectedChart(data);
+        setDisplayCandleCount(data.candlesticks?.length ?? currentLen);
+        setHasExplicitCandleWindow(true);
+      } finally {
+        setLoadingMoreCandles(false);
+      }
+      return;
+    }
+
     const nextLimit = CANDLE_FETCH_STEPS.find(step => step > Math.max(candleFetchLimit, currentLen)) ?? MAX_CANDLES;
     if (nextLimit <= candleFetchLimit && currentLen >= MAX_CANDLES) return;
 
