@@ -1496,65 +1496,7 @@ function RsiMomentumStats({ autoCalc }) {
         )}
 
         {!prefs.allCoins && <McIntervalSwitch checked={useMcInterval} onChange={handleToggleMc} />}
-
-        {/* Ferramentas — sempre visíveis no modo 1 moeda (não dependem de ter feito uma busca).
-            "Carregar config" busca a config do bot exclusivo da moeda do campo Símbolo na hora.
-            "Salvar bot exclusivo" grava a config da última pesquisa (cria ou atualiza) — avisa se
-            você ainda não pesquisou essa moeda. "Baixar JSON" avisa se não há resultado. */}
-        {!prefs.allCoins && (
-          <div className="flex items-end gap-1 shrink-0 pb-0.5 flex-wrap">
-            <button
-              type="button"
-              onClick={handleLoadCuratedConfig}
-              disabled={curatedState.loading || !(symbol || '').trim()}
-              title={t('stats.curated_load_tip')}
-              className="text-[10px] text-p5/60 hover:text-p4 border border-p3/40 hover:border-p4 rounded px-1.5 py-1 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              {curatedState.loading
-                ? <span className="inline-block w-2.5 h-2.5 border border-p4 border-t-transparent rounded-full animate-spin align-middle" />
-                : '⤵'} {t('stats.curated_load')}
-            </button>
-            <select
-              value={curatedExchange}
-              onChange={(e) => setCuratedExchange(e.target.value)}
-              title={t('stats.curated_exchange_tip')}
-              className="text-[10px] bg-p2 border border-p3/40 text-p5 rounded px-1 py-1 focus:outline-none focus:border-p4"
-            >
-              <option value="binance">Binance</option>
-              <option value="gate">Gate.io</option>
-            </select>
-            <button
-              type="button"
-              onClick={handleAddCuratedBot}
-              disabled={curatedState.loading}
-              title={t('stats.curated_save_tip')}
-              className="text-[10px] text-p4 hover:text-white border border-p4/50 hover:bg-p4 rounded px-1.5 py-1 transition-colors disabled:opacity-50 flex items-center gap-1"
-            >
-              💾 {t('stats.curated_save')}
-            </button>
-            <button
-              type="button"
-              onClick={handleDownloadJson}
-              title={t('stats.download_json_tip')}
-              className="text-[10px] text-p5/60 hover:text-p4 border border-p3/40 hover:border-p4 rounded px-1.5 py-1 transition-colors"
-            >
-              ⬇ {t('stats.download_json')}
-            </button>
-          </div>
-        )}
       </div>
-
-      {/* Feedback de "Carregar config" / "Salvar bot exclusivo" — sempre no fluxo do topo. */}
-      {!prefs.allCoins && curatedState.msg && (
-        <p className="text-[10px] text-emerald-500 bg-emerald-400/10 border border-emerald-400/20 rounded px-2 py-1">
-          ✅ {curatedState.msg}
-        </p>
-      )}
-      {!prefs.allCoins && curatedState.err && (
-        <p className="text-[10px] text-red-500 bg-red-400/10 border border-red-400/20 rounded px-2 py-1">
-          ⚠️ {curatedState.err}
-        </p>
-      )}
 
       {/* ÁREA — Estratégia de entrada: gatilho de RSI + alvo */}
       <StatsArea variant="strategy" icon="🎯" title={t('stats.area_strategy')}>
@@ -2213,6 +2155,65 @@ function RsiMomentumStats({ autoCalc }) {
           </button>
         </div>
       </div>
+
+      {/* Ferramentas do bot exclusivo + export — abaixo das configurações, sempre visíveis no
+          modo 1 moeda (não dependem de ter feito uma busca).
+          "Carregar config" busca a config do bot exclusivo da moeda do campo Símbolo na hora.
+          "Salvar bot exclusivo" grava a config da última pesquisa (cria ou atualiza) — avisa se
+          você ainda não pesquisou essa moeda. "Baixar JSON" avisa se não há resultado. */}
+      {!prefs.allCoins && (
+        <div className="flex flex-col gap-1 w-full">
+          <div className="flex items-end gap-1 flex-wrap">
+            <button
+              type="button"
+              onClick={handleLoadCuratedConfig}
+              disabled={curatedState.loading || !(symbol || '').trim()}
+              title={t('stats.curated_load_tip')}
+              className="text-[10px] text-p5/60 hover:text-p4 border border-p3/40 hover:border-p4 rounded px-1.5 py-1 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {curatedState.loading
+                ? <span className="inline-block w-2.5 h-2.5 border border-p4 border-t-transparent rounded-full animate-spin align-middle" />
+                : '⤵'} {t('stats.curated_load')}
+            </button>
+            <select
+              value={curatedExchange}
+              onChange={(e) => setCuratedExchange(e.target.value)}
+              title={t('stats.curated_exchange_tip')}
+              className="text-[10px] bg-p2 border border-p3/40 text-p5 rounded px-1 py-1 focus:outline-none focus:border-p4"
+            >
+              <option value="binance">Binance</option>
+              <option value="gate">Gate.io</option>
+            </select>
+            <button
+              type="button"
+              onClick={handleAddCuratedBot}
+              disabled={curatedState.loading}
+              title={t('stats.curated_save_tip')}
+              className="text-[10px] text-p4 hover:text-white border border-p4/50 hover:bg-p4 rounded px-1.5 py-1 transition-colors disabled:opacity-50 flex items-center gap-1"
+            >
+              💾 {t('stats.curated_save')}
+            </button>
+            <button
+              type="button"
+              onClick={handleDownloadJson}
+              title={t('stats.download_json_tip')}
+              className="text-[10px] text-p5/60 hover:text-p4 border border-p3/40 hover:border-p4 rounded px-1.5 py-1 transition-colors"
+            >
+              ⬇ {t('stats.download_json')}
+            </button>
+          </div>
+          {curatedState.msg && (
+            <p className="text-[10px] text-emerald-500 bg-emerald-400/10 border border-emerald-400/20 rounded px-2 py-1">
+              ✅ {curatedState.msg}
+            </p>
+          )}
+          {curatedState.err && (
+            <p className="text-[10px] text-red-500 bg-red-400/10 border border-red-400/20 rounded px-2 py-1">
+              ⚠️ {curatedState.err}
+            </p>
+          )}
+        </div>
+      )}
     </div>
 
       <div className="flex flex-col gap-2 flex-1 min-w-0">
