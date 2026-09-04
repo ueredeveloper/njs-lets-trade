@@ -889,8 +889,10 @@ function statsConfigToRsiMomentumBody({ symbol, interval, config = {}, priorRsiF
         ? { enabled: priorRsiFilter.enabled !== false, count: num(priorRsiFilter.count, 3) }
         : { enabled: true, count: 3 },
       earlyConfirm: { enabled: false },
-      pullback: num(c.pullbackPct, 0) > 0
-        ? { enabled: true, belowPct: num(c.pullbackPct, 0.5) }
+      // O painel Estatísticas manda pullbackPct NEGATIVO (ou 0): compra só se o preço recuar
+      // |x|% abaixo do sinal. O bot guarda belowPct POSITIVO. 0 = desligado.
+      pullback: num(c.pullbackPct, 0) < 0
+        ? { enabled: true, belowPct: Math.abs(num(c.pullbackPct, 0.5)) }
         : { enabled: false },
       reentryCooldownCandles: 3,
       bandWidth: c.bandWidth?.enabled
