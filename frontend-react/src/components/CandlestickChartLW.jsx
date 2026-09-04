@@ -694,8 +694,11 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
   const indicatorSeriesRef = useRef({});
   const priceLinesRef = useRef([]);
   // S/R rolante: array de LineSeries — um por "posto" de nível (R1, R2… / S1, S2…), ligando o
-  // mesmo posto entre as âncoras (estilo 'degrau'/'traço'). Vazio no estilo 'linhas'.
+  // mesmo posto entre as âncoras (estilo 'degrau'). Vazio no estilo 'linhas'/override/'traço'.
   const srRollSeriesRef = useRef([]);
+  // S/R estilo 'traço' — refs PRÓPRIAS (efeito separado, depende do pan) pra não conflitar com o
+  // teardown do efeito acima a cada frame de arrasto — ver os dois useEffect de S/R abaixo.
+  const srTracoSeriesRef = useRef([]);
   const markersPluginRef = useRef(null);
   const rectPrimitiveRef = useRef(null);
   const bandFillPrimitiveRef = useRef(null);
@@ -853,6 +856,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
     indicatorSeriesRef.current = {};
     priceLinesRef.current = [];
     srRollSeriesRef.current = [];
+    srTracoSeriesRef.current = [];
     markersPluginRef.current = createSeriesMarkers(series, []);
     subpanelStateRef.current = { key: null, series: {} };
     macdSeriesRef.current = { hist: null, macd: null, signal: null };
@@ -930,6 +934,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       indicatorSeriesRef.current = {};
       priceLinesRef.current = [];
       srRollSeriesRef.current = [];
+      srTracoSeriesRef.current = [];
       markersPluginRef.current = null;
       rectPrimitiveRef.current = null;
       bandFillPrimitiveRef.current = null;
@@ -1221,9 +1226,13 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
   //  - shape antigo { levels } (override de trade das Estatísticas) → linhas de preço de ponta a
   //    ponta, com rótulo de entrada/alvo (comportamento clássico).
   //  - shape rolante { rolling:[{time,levels}], style } → pra cada âncora um conjunto de níveis.
-  //    'degrau' = LineSeries em escada por posto; 'traço' = segmentos curtos soltos por âncora;
-  //    'linhas' = só o conjunto da âncora mais recente como linhas de preço.
-  // Sempre recriado do zero (poucos níveis/séries, custo desprezível).
+  //    'degrau' = LineSeries em escada por posto; 'linhas' = só o conjunto da âncora mais recente
+  //    como linhas de preço. ('traço' vive no efeito separado logo abaixo — precisa do pan.)
+  // Sempre recriado do zero (poucos níveis/séries, custo desprezível) — MAS só quando srConfig ou
+  // candlesticks mudam de verdade. Antes este efeito também tinha `visibleRange` na dependência (o
+  // 'traço' precisa dela — ver abaixo) e isso fazia o override de trade recriar suas séries
+  // (chart.removeSeries + addSeries, caro) a CADA FRAME de arrasto, mesmo sem geometria nenhuma
+  // dependente do pan — era a causa real do gráfico ficar lento ao arrastar um trade com S/R.
   useEffect(() => {
     const chart = chartRef.current;
     const series = seriesRef.current;
@@ -1238,7 +1247,8 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
     }
     srRollSeriesRef.current = [];
 
-    if (!srConfig) return;
+    // 'traço' fica todo no efeito de baixo (precisa do pan) — aqui só limpa e sai.
+    if (!srConfig || (srConfig.rolling && srConfig.style === 'traco')) return;
 
     const eq = (a, b) => a != null && b != null && Math.abs(a - b) / b < 1e-6;
     const entrySup = srConfig.entrySupport ?? null;
@@ -1269,7 +1279,6 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
     const cs = candlesticks ?? [];
     const minTime = cs.length ? Math.floor(Number(cs[0].openTime) / 1000) : null;
     const maxTime = cs.length ? Math.floor(Number(cs[cs.length - 1].openTime) / 1000) : null;
-    const inRange = (tsec) => minTime == null || (tsec >= minTime && tsec <= maxTime);
 
     // Override de trade das Estatísticas (shape { levels, tradeWindow }): TRAÇO na janela do trade
     // — cada nível vira um segmento entrada→saída, sem linha atravessando o resto do gráfico.
@@ -1313,44 +1322,8 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
     }
     if (minTime == null) { makePriceLines(latest, 'ref'); return; }
 
-    // TRAÇO: os níveis da âncora mais recente (S/R "de agora"), cada um como um traço horizontal
-    // curto, SEM escada rolante. O traço termina na borda direita do trecho VISÍVEL (não no último
-    // candle carregado) — assim acompanha o arrasto pra trás. Largura = maior entre
-    // SR_TRACO_MIN_CANDLES e ~1 candle do intervalo do S/R, em candles do gráfico.
-    if (srConfig.style === 'traco') {
-      const chartStepSec = cs.length > 1
-        ? Math.max(1, Math.floor((Number(cs[cs.length - 1].openTime) - Number(cs[cs.length - 2].openTime)) / 1000))
-        : 900;
-      const srStepSec = anchors.length > 1
-        ? Math.max(chartStepSec, Math.floor((Number(anchors[anchors.length - 1].time) - Number(anchors[anchors.length - 2].time)) / 1000))
-        : chartStepSec * 16;
-      const widthCandles = Math.max(SR_TRACO_MIN_CANDLES, Math.round(srStepSec / chartStepSec));
-      // borda direita do trecho VISÍVEL (prop reativa) → índice do candle do gráfico ali
-      const rightSec = Number.isFinite(visibleRange?.toMs) ? Math.floor(visibleRange.toMs / 1000) : maxTime;
-      let ei = cs.length - 1;
-      for (let i = cs.length - 1; i >= 0; i--) {
-        if (Math.floor(Number(cs[i].openTime) / 1000) <= rightSec) { ei = i; break; }
-      }
-      const endT = Math.floor(Number(cs[ei].openTime) / 1000);
-      const startT = Math.floor(Number(cs[Math.max(0, ei - widthCandles)].openTime) / 1000);
-      if (endT > startT) {
-        for (const type of ['support', 'resistance']) {
-          const color = type === 'support' ? SR_SUPPORT_LINE : SR_RESISTANCE_LINE;
-          for (const lvl of rankSrLevels(latest, type)) {
-            const s = chart.addSeries(LineSeries, {
-              color, lineWidth: type === 'support' ? 3 : 2, lineStyle: 2, // pontilhada
-              priceLineVisible: false, lastValueVisible: lvl.rank === 1, crosshairMarkerVisible: false,
-            });
-            s.setData([{ time: startT, value: lvl.price }, { time: endT, value: lvl.price }]);
-            createSeriesMarkers(s, [{ time: endT, position: 'inBar', color, shape: 'circle', text: lvl.label }]);
-            srRollSeriesRef.current.push(s);
-          }
-        }
-      }
-      return;
-    }
-
     // DEGRAU: escada rolante — liga o mesmo posto de nível entre as 10 âncoras.
+    const inRange = (tsec) => minTime == null || (tsec >= minTime && tsec <= maxTime);
     const times = anchors.map((a) => Math.floor(Number(a.time) / 1000));
     // Postos por âncora já rankeados (S1 = suporte mais perto do preço, R1 = resistência mais perto).
     const rankedByAnchor = anchors.map((a) => ({
@@ -1391,7 +1364,65 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
         srRollSeriesRef.current.push(s);
       }
     }
-  // visibleRange só reposiciona o stub do 'traço'; degrau/linhas ignoram (posição vem do srConfig).
+  }, [srConfig, candlesticks]);
+
+  // S/R estilo 'traço' rolante — SEPARADO do efeito acima de propósito: é o ÚNICO estilo cuja
+  // geometria depende do trecho VISÍVEL (o traço termina na borda direita do que está na tela, não
+  // no último candle carregado, pra acompanhar o arrasto pra trás — ver comentário original
+  // abaixo). Isolar numa série de refs própria (srTracoSeriesRef) garante que só ESTE efeito
+  // recria séries a cada frame de pan — o override de trade e os demais estilos (efeito acima)
+  // nunca mais são tocados durante o arrasto.
+  useEffect(() => {
+    const chart = chartRef.current;
+    const series = seriesRef.current;
+    if (!chart || !series) return;
+
+    for (const s of srTracoSeriesRef.current) {
+      try { chart.removeSeries(s); } catch { /* já removida */ }
+    }
+    srTracoSeriesRef.current = [];
+
+    if (!srConfig?.rolling || srConfig.style !== 'traco') return;
+    const anchors = srConfig.rolling;
+    if (!anchors.length) return;
+    const latest = anchors[anchors.length - 1].levels;
+
+    const cs = candlesticks ?? [];
+    const maxTime = cs.length ? Math.floor(Number(cs[cs.length - 1].openTime) / 1000) : null;
+    if (maxTime == null) return;
+
+    // TRAÇO: os níveis da âncora mais recente (S/R "de agora"), cada um como um traço horizontal
+    // curto, SEM escada rolante. O traço termina na borda direita do trecho VISÍVEL (não no último
+    // candle carregado) — assim acompanha o arrasto pra trás. Largura = maior entre
+    // SR_TRACO_MIN_CANDLES e ~1 candle do intervalo do S/R, em candles do gráfico.
+    const chartStepSec = cs.length > 1
+      ? Math.max(1, Math.floor((Number(cs[cs.length - 1].openTime) - Number(cs[cs.length - 2].openTime)) / 1000))
+      : 900;
+    const srStepSec = anchors.length > 1
+      ? Math.max(chartStepSec, Math.floor((Number(anchors[anchors.length - 1].time) - Number(anchors[anchors.length - 2].time)) / 1000))
+      : chartStepSec * 16;
+    const widthCandles = Math.max(SR_TRACO_MIN_CANDLES, Math.round(srStepSec / chartStepSec));
+    // borda direita do trecho VISÍVEL (prop reativa) → índice do candle do gráfico ali
+    const rightSec = Number.isFinite(visibleRange?.toMs) ? Math.floor(visibleRange.toMs / 1000) : maxTime;
+    let ei = cs.length - 1;
+    for (let i = cs.length - 1; i >= 0; i--) {
+      if (Math.floor(Number(cs[i].openTime) / 1000) <= rightSec) { ei = i; break; }
+    }
+    const endT = Math.floor(Number(cs[ei].openTime) / 1000);
+    const startT = Math.floor(Number(cs[Math.max(0, ei - widthCandles)].openTime) / 1000);
+    if (endT <= startT) return;
+    for (const type of ['support', 'resistance']) {
+      const color = type === 'support' ? SR_SUPPORT_LINE : SR_RESISTANCE_LINE;
+      for (const lvl of rankSrLevels(latest, type)) {
+        const s = chart.addSeries(LineSeries, {
+          color, lineWidth: type === 'support' ? 3 : 2, lineStyle: 2, // pontilhada
+          priceLineVisible: false, lastValueVisible: lvl.rank === 1, crosshairMarkerVisible: false,
+        });
+        s.setData([{ time: startT, value: lvl.price }, { time: endT, value: lvl.price }]);
+        createSeriesMarkers(s, [{ time: endT, position: 'inBar', color, shape: 'circle', text: lvl.label }]);
+        srTracoSeriesRef.current.push(s);
+      }
+    }
   }, [srConfig, candlesticks, visibleRange]);
 
   // Linhas verticais (fullHeight, largura 2px) nos candles em que o RSI(14) cruzou pra cima do
