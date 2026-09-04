@@ -27,6 +27,27 @@ const INTERVAL_MS = {
   '1d':86400000,'3d':259200000,'1w':604800000,
 };
 
+/** Escolhe o intervalo de candle mais FINO que ainda cobre a duração INTEIRA das pernas de reforço
+ *  sem estourar `candleCap` candles buscados (ver openOnChart) — o motor da escada/rearm roda em
+ *  candles de 1 MINUTO (scanCandles em analyseRsiThresholdBacktest.js), então usar sempre o
+ *  intervalo da entrada (tipicamente 15m/1h) esmagava pernas rápidas no(s) mesmo candle, virando
+ *  "1 quadrado só" em vez de um por perna. `INTERVALS` já vem em ordem crescente de duração — pega
+ *  o 1º que cabe; se nem o mais grosso couber (trade absurdamente longo), usa esse mesmo assim.
+ *  Trade-off aceito: `candleCap` é sobre o tamanho da janela buscada (fixa, "últimos N candles até
+ *  agora" — o endpoint não busca por período), não sobre cada perna individual — uma perna
+ *  MUITO mais rápida que as outras ainda pode ficar pouco visível, mas nunca pior que o intervalo
+ *  da entrada já deixava. */
+function chooseChartIntervalForLegs(legs, fallbackIv, candleCap = 2500) {
+  if (!legs?.length) return fallbackIv;
+  const lastLeg = legs[legs.length - 1];
+  const spanMs = new Date(lastLeg.exitDate ?? lastLeg.entryDate).getTime() - new Date(legs[0].entryDate).getTime();
+  if (!(spanMs > 0)) return fallbackIv;
+  for (const iv of INTERVALS) {
+    if (spanMs / INTERVAL_MS[iv] <= candleCap) return iv;
+  }
+  return INTERVALS[INTERVALS.length - 1];
+}
+
 function formatDate(iso) {
   const d = new Date(iso);
   return d.toLocaleString('pt-BR', {
@@ -1406,7 +1427,13 @@ function RsiMomentumStats({ autoCalc }) {
   async function openOnChart(o, iv) {
     const startMs = new Date(o.signalDate).getTime();
     const endMs   = o.exitDate ? new Date(o.exitDate).getTime() : Date.now();
-    const msPerCandle = INTERVAL_MS[iv] ?? 900000;
+    // Reforço no stop: a escada/rearm roda em candles de 1 MINUTO no backtest (ver scanCandles em
+    // analyseRsiThresholdBacktest.js), então 2-3 pernas podem acontecer rápido demais pro
+    // intervalo da ENTRADA (iv, tipicamente 15m/1h) — nesse intervalo grosso elas caem no(s)
+    // mesmo candle e viram "1 quadrado só" em vez de um por perna. Abre num intervalo mais FINO,
+    // escolhido pra cobrir a duração inteira do trade sem estourar o teto de candles buscados.
+    const chartIv = o.reinforceLegs?.length ? chooseChartIntervalForLegs(o.reinforceLegs, iv) : iv;
+    const msPerCandle = INTERVAL_MS[chartIv] ?? 900000;
     const needed = Math.min(3000, Math.max(266,
       Math.ceil((Date.now() - startMs) / msPerCandle) + 40));
     try {
@@ -1414,7 +1441,7 @@ function RsiMomentumStats({ autoCalc }) {
       // Ocorrência de favorito Gate carrega o.source='gate' — abre o gráfico na corretora certa.
       const src = o.source === 'gate' ? 'gate'
         : (selectedChart?.symbol === sym ? (selectedChart?.source ?? null) : null);
-      const data = await fetchCandlesticksAndCloud(sym, iv, src, needed);
+      const data = await fetchCandlesticksAndCloud(sym, chartIv, src, needed);
       setSelectedChart(data);
       setChartViewSource(CHART_VIEW.STATISTICS);
       // Reforço no stop (ladder/rearm): 1 quadrado compra→venda por PERNA, não um só cobrindo o
