@@ -330,15 +330,29 @@ function buildPositionRects(buyInfo, stopLossConfig, targetConfig, candlesticks)
  *  quando o gráfico é aberto num intervalo mais grosso que o da simulação (ex.: gráfico em 1h
  *  pra um ciclo VWAP que durou 40min), compra e venda podem cair no MESMO candle — comparar só
  *  o horário faz o quadrado desaparecer (time2 <= time1); com o índice dá pra empurrar pro
- *  próximo candle e manter o quadrado visível. */
+ *  próximo candle e manter o quadrado visível.
+ *
+ *  Busca BINÁRIA (candlesticks vem ordenado ascendente por openTime) — trade com reforço no stop
+ *  chama isto 2× por PERNA (buildHistoricalPositionRects), então um trade com dezenas de pernas
+ *  (ladder/rearm num drawdown longo) faz dezenas de chamadas; a varredura linear anterior era
+ *  O(candles) por chamada (até 3000) e deixava o gráfico visivelmente lento nesses casos — O(log
+ *  candles) resolve sem mudar o resultado (mesmo candle mais próximo). */
 function snapToNearestCandleIndex(candlesticks, timeMs) {
   if (!candlesticks?.length || !Number.isFinite(timeMs)) return null;
-  let bestIdx = 0, bestDiff = Infinity;
-  for (let i = 0; i < candlesticks.length; i++) {
-    const d = Math.abs(Number(candlesticks[i].openTime) - timeMs);
-    if (d < bestDiff) { bestDiff = d; bestIdx = i; }
+  let lo = 0, hi = candlesticks.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (Number(candlesticks[mid].openTime) < timeMs) lo = mid + 1;
+    else hi = mid;
   }
-  return bestIdx;
+  // `lo` = 1º índice com openTime >= timeMs (ou o último, se todos forem menores). Compara com o
+  // vizinho anterior pra achar o de fato mais próximo — mesmo critério do scan linear.
+  if (lo > 0) {
+    const prevDiff = Math.abs(Number(candlesticks[lo - 1].openTime) - timeMs);
+    const curDiff = Math.abs(Number(candlesticks[lo].openTime) - timeMs);
+    if (prevDiff <= curDiff) return lo - 1;
+  }
+  return lo;
 }
 
 /** Quadrado histórico compra→venda de um ciclo já fechado (ex.: clique numa linha de estudo

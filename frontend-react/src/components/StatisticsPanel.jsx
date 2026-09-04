@@ -367,6 +367,8 @@ const RSI_MOM_REINFORCE_USD_OPTIONS = [10, 20, 30, 40, 60, 80, 100, 150, 200, 30
  *  corretora vende no stop, o bot recompra a SOBRA + o aporte e re-arma um bracket normal
  *  −rearmStopPct% / +rearmTargetPct%; repete a cada novo stop). Ver runRearmLadder no backend. */
 const RSI_MOM_REINFORCE_MODE_OPTIONS = ['ladder', 'rearm'];
+/** Trava do gráfico — ver openOnChart: acima disso, só desenha a 1ª perna + as mais recentes. */
+const MAX_REINFORCE_LEGS_ON_CHART = 40;
 /** rearmStopPct / rearmTargetPct — bracket re-armado a cada recompra no modo 'rearm'. O retorno
  *  REAL fica abaixo do rearmTargetPct quando houve stop antes (o caixa já levou o corte). */
 const RSI_MOM_REINFORCE_REARM_STOP_OPTIONS = [3, 5, 6, 8, 10, 12, 15, 20];
@@ -1421,14 +1423,24 @@ function RsiMomentumStats({ autoCalc }) {
       // buildOccurrence (backend/utils/analyseRsiThresholdBacktest.js) — mesma mecânica do
       // backtest, sem recalcular nada aqui (buildHistoricalPositionRects colore pelo próprio
       // entryPrice/exitPrice de cada marcador de venda).
-      const legs = o.reinforceLegs?.length ? o.reinforceLegs : null;
+      // Trava de segurança pro gráfico: um trade que empilhou dezenas de pernas (ladder/rearm num
+      // drawdown longo, perto do maxRungs) geraria dezenas de quadrados + marcadores e deixava o
+      // gráfico visivelmente lento (2 lookups de candle por perna — ver snapToNearestCandleIndex
+      // em CandlestickChartLW.jsx). Mantém a 1ª perna (como o trade começou) + as mais recentes;
+      // `rung` guarda o número REAL do reforço (a numeração do label não muda ao truncar).
+      const allLegs = o.reinforceLegs?.length
+        ? o.reinforceLegs.map((leg, rung) => ({ ...leg, rung }))
+        : null;
+      const legs = allLegs && allLegs.length > MAX_REINFORCE_LEGS_ON_CHART
+        ? [allLegs[0], ...allLegs.slice(-(MAX_REINFORCE_LEGS_ON_CHART - 1))]
+        : allLegs;
       const markers = legs
-        ? legs.flatMap((leg, i) => {
+        ? legs.flatMap((leg) => {
             const legStartMs = new Date(leg.entryDate).getTime();
             const legEndMs = leg.exitDate ? new Date(leg.exitDate).getTime() : endMs;
             const legPct = leg.entryPrice > 0 ? ((leg.exitPrice - leg.entryPrice) / leg.entryPrice) * 100 : null;
             return [
-              { time: legStartMs, side: 'buy', price: leg.entryPrice, label: i === 0 ? '▲ Sinal' : `▲ Reforço ${i}` },
+              { time: legStartMs, side: 'buy', price: leg.entryPrice, label: leg.rung === 0 ? '▲ Sinal' : `▲ Reforço ${leg.rung}` },
               leg.exitPrice != null && {
                 time: legEndMs, side: 'sell', price: leg.exitPrice, pnlPct: legPct,
                 entryTime: legStartMs, entryPrice: leg.entryPrice,
