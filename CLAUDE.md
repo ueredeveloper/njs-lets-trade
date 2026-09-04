@@ -192,6 +192,13 @@ fecha. Motor de sinal = mesmo do backtest (`backend/utils/analyseRsiThresholdBac
   carteira (posição intacta → refaz; carteira vazia → recompra; recompra já feita → adota + re-arma
   bracket, preço médio via FIFO dos trades próprios).
 
+Nos dois modos, o backtest devolve `legTimeline` (ver `runReinforcementLadder`/`runRearmLadder`) e
+o occurrence carrega `reinforceLegs` (1 item por perna: entryDate/entryPrice/exitDate/exitPrice/
+outcome) — o gráfico (`openOnChart` em StatisticsPanel.jsx) desenha 1 quadrado POR PERNA em vez de
+um só cobrindo o trade inteiro: verde se aquela perna bateu o alvo, vermelho se estopou (e virou
+reforço) ou ficou em aberto. `buildHistoricalPositionRects` (CandlestickChartLW.jsx) já suporta
+isso sem mudança — só precisa de vários marcadores compra→venda encadeados em vez de um.
+
 ### Watchlist curada (`rsi_multi_bot_state.curated = true`)
 
 Moeda vigiada **indefinidamente** pelo bot mesmo que o scanner Binance nunca a sinalize (ex.:

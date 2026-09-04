@@ -170,6 +170,53 @@ describe('runRearmLadder — reforço no stop modo "re-armar bracket"', () => {
     });
 });
 
+describe('legTimeline — 1 quadrado por perna pro gráfico (verde=alvo, vermelho=stop)', () => {
+    const FIRST_ENTRY = 100;
+    const FIRST_STOP = 90;
+
+    test('ladder: 2 pernas — quadrado 1 vermelho (stop), quadrado 2 verde (alvo)', () => {
+        const scan = [candle(95, 104, 103, 0)];
+        const r = runReinforcementLadder(scan, 0, FIRST_ENTRY, FIRST_STOP, { addDropPct: 10, exitRisePct: 15, maxRungs: 100 });
+        expect(r.legTimeline).toHaveLength(2);
+        expect(r.legTimeline[0]).toMatchObject({ entryTime: null, entryPrice: 100, exitPrice: 90, outcome: 'stop' });
+        expect(r.legTimeline[1]).toMatchObject({ entryPrice: 90, outcome: 'target' });
+        expect(r.legTimeline[1].exitPrice).toBeCloseTo(103.5, 6);
+    });
+
+    test('ladder: 3 pernas — vermelho, vermelho, verde (compra 1/2/3 do usuário)', () => {
+        const scan = [candle(80, 92, 82, 0), candle(90, 94, 93, 1)];
+        const r = runReinforcementLadder(scan, 0, FIRST_ENTRY, FIRST_STOP, { addDropPct: 10, exitRisePct: 15, maxRungs: 100 });
+        expect(r.legTimeline.map((l) => l.outcome)).toEqual(['stop', 'stop', 'target']);
+        expect(r.legTimeline.map((l) => l.entryPrice)).toEqual([100, 90, 81]);
+        // cada perna começa onde a anterior terminou
+        for (let i = 1; i < r.legTimeline.length; i++) {
+            expect(r.legTimeline[i].entryPrice).toBeCloseTo(r.legTimeline[i - 1].exitPrice, 6);
+            expect(r.legTimeline[i].entryTime).toBe(r.legTimeline[i - 1].exitTime);
+        }
+    });
+
+    test('ladder: nunca recupera — última perna fica vermelha (open)', () => {
+        const scan = [candle(85, 88, 86, 0)];
+        const r = runReinforcementLadder(scan, 0, FIRST_ENTRY, FIRST_STOP, { addDropPct: 10, exitRisePct: 15, maxRungs: 100 });
+        expect(r.legTimeline).toHaveLength(2);
+        expect(r.legTimeline[1].outcome).toBe('open');
+    });
+
+    test('rearm: exemplo do usuário — perna 1 vermelha (stop 90), perna 2 verde (alvo 99)', () => {
+        const scan = [candle(88, 92, 90, 0), candle(89, 100, 99, 1)];
+        const r = runRearmLadder(scan, 0, FIRST_ENTRY, FIRST_STOP, { stopPct: 10, targetPct: 10, maxRungs: 100, firstLegUsd: 100, rungUsd: 100 });
+        expect(r.legTimeline.map((l) => l.outcome)).toEqual(['stop', 'target']);
+        expect(r.legTimeline[1].entryPrice).toBe(90);
+        expect(r.legTimeline[1].exitPrice).toBeCloseTo(99, 6);
+    });
+
+    test('rearm: dois stops seguidos — vermelho, vermelho, verde', () => {
+        const scan = [candle(78, 82, 80, 0), candle(80, 90, 89, 1)];
+        const r = runRearmLadder(scan, 0, FIRST_ENTRY, FIRST_STOP, { stopPct: 10, targetPct: 10, maxRungs: 100, firstLegUsd: 100, rungUsd: 100 });
+        expect(r.legTimeline.map((l) => l.outcome)).toEqual(['stop', 'stop', 'target']);
+    });
+});
+
 describe('computeReinforceStats', () => {
     test('resume só os trades que usaram reforço', () => {
         const filled = [

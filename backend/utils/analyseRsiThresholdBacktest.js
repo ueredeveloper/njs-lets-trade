@@ -277,6 +277,9 @@ function resolveFromSignal(scanCandles, signalPrice, { pullbackPct, targetPct, s
                 returnPct: ladder.returnPct,
                 investedUsd: ladder.investedUsd,
                 pnlUsd: ladder.pnlUsd,
+                // 1 entrada por perna (compra), usado só pelo gráfico pra desenhar um quadrado por
+                // perna (verde se bateu o alvo, vermelho se estopou) — ver openOnChart no frontend.
+                legTimeline: ladder.legTimeline ?? null,
             },
         };
     }
@@ -339,6 +342,12 @@ function runReinforcementLadder(scanCandles, startIdx, firstEntryPrice, firstSto
     const rise = Math.max(0.5, Number(exitRisePct)) / 100;
     const cap = Math.max(1, Math.round(Number(maxRungs) || 100));
     const wait = Math.max(0, Math.min(200, Math.round(Number(waitCandles) || 0)));
+    const stopTime0 = scanCandles[Math.min(startIdx, Math.max(0, scanCandles.length - 1))]?.openTime ?? null;
+    // Perna 0 (compra do sinal) sempre bate o stop primeiro — é o gatilho da escada. entryTime
+    // fica null aqui: buildOccurrence substitui pelo entryTime real do trade (só esta função não
+    // sabe quando o sinal entrou). Usado só pelo gráfico (1 quadrado por perna — ver
+    // buildHistoricalPositionRects/openOnChart), não afeta o P&L/outcome do trade.
+    const leg0 = { entryTime: null, entryPrice: firstEntryPrice, exitTime: stopTime0, exitPrice: firstStopPrice, outcome: 'stop' };
 
     // Perna 1 (1º reforço): sem espera entra no próprio preço do stop; com espera, `wait` candles
     // depois, no fechamento desse candle. A varredura da escada recomeça daí.
@@ -353,6 +362,7 @@ function runReinforcementLadder(scanCandles, startIdx, firstEntryPrice, firstSto
             const pnl0 = qty0 * lastClose - firstLegUsd;
             return {
                 legs: [firstEntryPrice],
+                legTimeline: [leg0],
                 avgEntryPrice: parseFloat(firstEntryPrice.toFixed(8)),
                 returnPct: parseFloat((firstLegUsd > 0 ? (pnl0 / firstLegUsd) * 100 : 0).toFixed(4)),
                 investedUsd: parseFloat(firstLegUsd.toFixed(2)),
@@ -367,6 +377,10 @@ function runReinforcementLadder(scanCandles, startIdx, firstEntryPrice, firstSto
         firstRungPrice = parseFloat(scanCandles[rungIdx].close);
     }
 
+    const legTimeline = [leg0];
+    let curEntryTime = scanCandles[Math.min(rungIdx, Math.max(0, scanCandles.length - 1))]?.openTime ?? stopTime0;
+    let curEntryPrice = firstRungPrice;
+
     const legs = [firstEntryPrice, firstRungPrice]; // perna 0 = compra do sinal; perna 1 = 1º reforço
     let lastEntry = firstRungPrice;
     let addLevel = lastEntry * (1 - drop);
@@ -379,8 +393,12 @@ function runReinforcementLadder(scanCandles, startIdx, firstEntryPrice, firstSto
         const low = parseFloat(scanCandles[j].low);
         const high = parseFloat(scanCandles[j].high);
         if (low <= addLevel) {
+            // Fecha a perna atual (bateu o próprio stop) e abre a próxima no mesmo preço/instante.
+            legTimeline.push({ entryTime: curEntryTime, entryPrice: curEntryPrice, exitTime: scanCandles[j].openTime, exitPrice: addLevel, outcome: 'stop' });
             lastEntry = addLevel;
             legs.push(lastEntry);
+            curEntryTime = scanCandles[j].openTime;
+            curEntryPrice = lastEntry;
             addLevel = lastEntry * (1 - drop);
             targetLevel = lastEntry * (1 + rise);
             if (legs.length - 1 >= cap) { // trava de segurança
@@ -402,7 +420,10 @@ function runReinforcementLadder(scanCandles, startIdx, firstEntryPrice, firstSto
         exitPrice = scanCandles.length
             ? parseFloat(scanCandles[scanCandles.length - 1].close)
             : lastEntry;
+        if (exitTime == null) exitTime = scanCandles.length ? scanCandles[scanCandles.length - 1].openTime : curEntryTime;
     }
+    // Fecha a ÚLTIMA perna, a que estava aberta quando a varredura terminou (alvo/aberta).
+    legTimeline.push({ entryTime: curEntryTime, entryPrice: curEntryPrice, exitTime, exitPrice, outcome });
 
     // `avgEntryPrice` = média simples dos preços de compra (referência visual). O P&L é ponderado
     // pelo TAMANHO de cada perna: qty_i = usd_i / preço_i; custo total = Σ usd_i.
@@ -416,6 +437,7 @@ function runReinforcementLadder(scanCandles, startIdx, firstEntryPrice, firstSto
 
     return {
         legs,
+        legTimeline,
         avgEntryPrice: parseFloat(avgEntryPrice.toFixed(8)),
         returnPct: parseFloat(returnPct.toFixed(4)),
         investedUsd: parseFloat(investedUsd.toFixed(2)),
@@ -459,8 +481,15 @@ function runRearmLadder(scanCandles, startIdx, firstEntryPrice, firstStopPrice, 
     let exitTime = scanCandles[Math.min(idx, scanCandles.length - 1)]?.openTime ?? null;
     let exitPrice = firstStopPrice;
     let lastTargetPrice = entryR * (1 + tPct);
+    // legTimeline: uma entrada por perna (compra), na ordem em que aconteceram — perna 0 (sempre
+    // 'stop', é o gatilho do rearm) primeiro. Usado só pelo gráfico (1 quadrado por perna, verde
+    // se bateu o alvo, vermelho se estopou de novo) — não afeta o P&L/outcome do trade. entryTime
+    // da perna 0 fica null: buildOccurrence substitui pelo entryTime real do trade.
+    const legTimeline = [{ entryTime: null, entryPrice: firstEntryPrice, exitTime, exitPrice: firstStopPrice, outcome: 'stop' }];
 
     while (legs.length - 1 < cap) {
+        const legEntryTime = scanCandles[Math.min(idx, Math.max(0, scanCandles.length - 1))]?.openTime ?? exitTime;
+        const legEntryPrice = entryR;
         const buySize = proceeds + rungUsd;
         cashOut += rungUsd;
         const qty = buySize / entryR;
@@ -484,6 +513,7 @@ function runRearmLadder(scanCandles, startIdx, firstEntryPrice, firstStopPrice, 
             outcome = 'open';
             exitPrice = lastClose;
             exitTime = scanCandles.length ? scanCandles[scanCandles.length - 1].openTime : exitTime;
+            legTimeline.push({ entryTime: legEntryTime, entryPrice: legEntryPrice, exitTime, exitPrice, outcome: 'open' });
             break;
         }
         if (hit.kind === 'target') {
@@ -491,6 +521,7 @@ function runRearmLadder(scanCandles, startIdx, firstEntryPrice, firstStopPrice, 
             outcome = 'target';
             exitPrice = tgtLevel;
             exitTime = scanCandles[hit.j].openTime;
+            legTimeline.push({ entryTime: legEntryTime, entryPrice: legEntryPrice, exitTime, exitPrice, outcome: 'target' });
             break;
         }
         // Stop de novo: realiza a perda desta rodada e recompra no próximo giro do while.
@@ -500,6 +531,7 @@ function runRearmLadder(scanCandles, startIdx, firstEntryPrice, firstStopPrice, 
         exitTime = scanCandles[hit.j].openTime;
         exitPrice = stopLevel;
         outcome = 'open'; // se o while sair pela trava `cap`, fica em aberto no último stop
+        legTimeline.push({ entryTime: legEntryTime, entryPrice: legEntryPrice, exitTime, exitPrice, outcome: 'stop' });
     }
 
     const pnlUsd = proceeds - cashOut;
@@ -509,6 +541,7 @@ function runRearmLadder(scanCandles, startIdx, firstEntryPrice, firstStopPrice, 
 
     return {
         legs,
+        legTimeline,
         avgEntryPrice: parseFloat(avgEntryPrice.toFixed(8)),
         returnPct: parseFloat(returnPct.toFixed(4)),
         investedUsd: parseFloat(cashOut.toFixed(2)),
@@ -897,6 +930,20 @@ function buildOccurrence(signalCandle, signalPrice, signalRsi, resolved, positio
         ? parseFloat(resolved.reinforce.pnlUsd.toFixed(2))
         : parseFloat((investedUsd * (pnlPct / 100)).toFixed(2));
 
+    // 1 item por perna (compra) — usado só pelo gráfico pra desenhar um quadrado por perna: verde
+    // se aquela perna bateu o alvo, vermelho se estopou (ver openOnChart no StatisticsPanel). A
+    // perna 0 (compra do sinal) não tem entryTime próprio na escada/rearm — usa o entryTime real
+    // do trade, igual ao resto da função.
+    const reinforceLegs = resolved.reinforce?.legTimeline?.length
+        ? resolved.reinforce.legTimeline.map((leg, i) => ({
+            entryDate: new Date(i === 0 ? (entryTime ?? signalCandle.openTime) : leg.entryTime).toISOString(),
+            entryPrice: leg.entryPrice,
+            exitDate: leg.exitTime != null ? new Date(leg.exitTime).toISOString() : null,
+            exitPrice: leg.exitPrice,
+            outcome: leg.outcome,
+        }))
+        : null;
+
     return {
         signalDate: new Date(signalCandle.openTime).toISOString(),
         signalPrice,
@@ -917,6 +964,8 @@ function buildOccurrence(signalCandle, signalPrice, signalRsi, resolved, positio
         pnlUsd,
         investedUsd,
         reinforceRungs: resolved.reinforce?.rungs ?? 0,
+        reinforceMode: resolved.reinforce?.mode ?? null,
+        reinforceLegs,
         avgEntryPrice: resolved.reinforce?.avgEntryPrice ?? null,
         stopSteps: resolved.stopSteps ?? 0,
         targetSteps: resolved.targetSteps ?? 0,

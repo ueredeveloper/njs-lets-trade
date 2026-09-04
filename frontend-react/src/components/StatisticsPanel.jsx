@@ -1415,14 +1415,36 @@ function RsiMomentumStats({ autoCalc }) {
       const data = await fetchCandlesticksAndCloud(sym, iv, src, needed);
       setSelectedChart(data);
       setChartViewSource(CHART_VIEW.STATISTICS);
-      setChartTradeMarkers([
-        { time: startMs, side: 'buy', price: o.entryPrice ?? o.signalPrice, label: '▲ Sinal' },
-        o.filled && o.exitPrice != null && {
-          time: endMs, side: 'sell', price: o.exitPrice, pnlPct: o.pnlPct,
-          entryTime: startMs, entryPrice: o.entryPrice,
-          label: `▼ ${o.pnlPct >= 0 ? '+' : ''}${o.pnlPct}%`,
-        },
-      ].filter(Boolean));
+      // Reforço no stop (ladder/rearm): 1 quadrado compra→venda por PERNA, não um só cobrindo o
+      // trade inteiro — verde se aquela perna bateu o alvo, vermelho se estopou (repique: virou
+      // reforço; sem repique: perna final ficou "aberta", também vermelha). Ver reinforceLegs em
+      // buildOccurrence (backend/utils/analyseRsiThresholdBacktest.js) — mesma mecânica do
+      // backtest, sem recalcular nada aqui (buildHistoricalPositionRects colore pelo próprio
+      // entryPrice/exitPrice de cada marcador de venda).
+      const legs = o.reinforceLegs?.length ? o.reinforceLegs : null;
+      const markers = legs
+        ? legs.flatMap((leg, i) => {
+            const legStartMs = new Date(leg.entryDate).getTime();
+            const legEndMs = leg.exitDate ? new Date(leg.exitDate).getTime() : endMs;
+            const legPct = leg.entryPrice > 0 ? ((leg.exitPrice - leg.entryPrice) / leg.entryPrice) * 100 : null;
+            return [
+              { time: legStartMs, side: 'buy', price: leg.entryPrice, label: i === 0 ? '▲ Sinal' : `▲ Reforço ${i}` },
+              leg.exitPrice != null && {
+                time: legEndMs, side: 'sell', price: leg.exitPrice, pnlPct: legPct,
+                entryTime: legStartMs, entryPrice: leg.entryPrice,
+                label: `▼ ${leg.outcome === 'target' ? 'Alvo' : 'Stop'}${legPct != null ? ` ${legPct >= 0 ? '+' : ''}${legPct.toFixed(2)}%` : ''}`,
+              },
+            ].filter(Boolean);
+          })
+        : [
+            { time: startMs, side: 'buy', price: o.entryPrice ?? o.signalPrice, label: '▲ Sinal' },
+            o.filled && o.exitPrice != null && {
+              time: endMs, side: 'sell', price: o.exitPrice, pnlPct: o.pnlPct,
+              entryTime: startMs, entryPrice: o.entryPrice,
+              label: `▼ ${o.pnlPct >= 0 ? '+' : ''}${o.pnlPct}%`,
+            },
+          ].filter(Boolean);
+      setChartTradeMarkers(markers);
       // Desenha no gráfico EXATAMENTE o S/R que o backtest usou pra decidir esse trade (o
       // gráfico e o trade têm que ser a mesma coisa). null se a busca não tinha S/R ligado.
       setChartSrOverride(o.sr ?? null);
