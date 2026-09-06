@@ -409,6 +409,15 @@ export async function getRsiMomentumCuratedBot(symbol) {
   return body;
 }
 
+/** Lista todas as moedas com bot exclusivo (curated) do RSI Momentum — [{ symbol, exchange,
+ *  phase }]. Alimenta o seletor "Carregar configuração salva" das Estatísticas. */
+export async function getRsiMomentumCuratedList() {
+  const res = await fetch('/services/sb/rsi-momentum-curated-list');
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.hint ? `${body.error} — ${body.hint}` : (body.error ?? `HTTP ${res.status}`));
+  return Array.isArray(body) ? body : (body.list ?? []);
+}
+
 export async function fetchSimpleMaCross(symbol, entryInterval = '15m', exitInterval = '30m', source = null) {
   const params = new URLSearchParams({ symbol, entryInterval, exitInterval });
   if (source) params.set('source', source);

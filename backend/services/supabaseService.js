@@ -1023,6 +1023,24 @@ function rsiMomentumConfigToStatsPrefs(n) {
   };
 }
 
+// GET /services/sb/rsi-momentum-curated-list — lista todas as moedas com bot exclusivo (curated)
+// do RSI Momentum. Alimenta o seletor "Carregar configuração salva" das Estatísticas, que junta
+// a config GERAL do scanner com a de cada bot exclusivo numa única lista.
+router.get('/rsi-momentum-curated-list', getUserId, async (req, res) => {
+  const { data, error } = await supabase
+    .from('rsi_multi_bot_state')
+    .select('symbol, exchange, phase')
+    .eq('strategy_id', 'rsi-momentum')
+    .eq('curated', true)
+    .order('symbol', { ascending: true });
+  if (error) return sbError(res, error, 'GET rsi-momentum-curated-list');
+  res.json((data ?? []).map((r) => ({
+    symbol: r.symbol,
+    exchange: r.exchange === 'gate' ? 'gate' : 'binance',
+    phase: r.phase ?? 'WATCHING',
+  })));
+});
+
 // GET /services/sb/rsi-momentum-curated?symbol= — config atual do bot exclusivo (curated) dessa
 // moeda (rsi_multi_bot_state, strategy_id 'rsi-momentum'), já convertida pro shape do painel
 // Estatísticas → Momentum RSI. Alimenta o botão "Carregar config". exists=false quando a moeda
@@ -2855,7 +2873,10 @@ router.get('/rsi-momentum-config', getUserId, async (req, res) => {
   const { data, error } = await supabase
     .from('rsi_momentum_global_config').select('*').eq('user_id', req.userId).maybeSingle();
   if (error) return sbError(res, error, 'GET rsi-momentum-config');
-  res.json(normalizeRsiMomentumConfig(data?.trade_config ?? {}));
+  const normalized = normalizeRsiMomentumConfig(data?.trade_config ?? {});
+  // panelConfig — mesmo shape usado pelo bot exclusivo (curated), pro seletor "Carregar
+  // configuração salva" das Estatísticas poder preencher o painel com a config GERAL também.
+  res.json({ ...normalized, panelConfig: rsiMomentumConfigToStatsPrefs(normalized) });
 });
 
 // PUT /services/sb/rsi-momentum-config

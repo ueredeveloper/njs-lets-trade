@@ -3,7 +3,7 @@ import { useCurrency } from '../contexts/CurrencyContext';
 import {
   fetchRsiOversoldRecovery, fetchRsiThresholdBacktest, fetchRsiThresholdBacktestMarket, fetchMaCrossStats, fetchBollingerBandRecovery, fetchCandlesticksAndCloud,
   fetchVwapBandsStats, saveRsiMomentumStatsSearch, getRsiMomentumStatsSearches, clearRsiMomentumStatsSearches,
-  addRsiMomentumCuratedBot, getRsiMomentumCuratedBot,
+  addRsiMomentumCuratedBot, getRsiMomentumCuratedBot, getRsiMomentumCuratedList, getRsiMomentumConfig,
 } from '../services/api';
 import Tooltip from './Tooltip';
 import SrZoneChart from './SrZoneChart';
@@ -1073,11 +1073,10 @@ function SortTh({ label, sortKey, sort, onSort, align = 'left', className = '' }
 }
 
 function RsiMomentumStats({ autoCalc }) {
-  const { selectedChart, setSelectedChart, setChartZoom, setChartViewSource, setChartTradeMarkers, setChartSrOverride, multitradeFavorites } = useCurrency();
+  const { selectedChart, setSelectedChart, setChartZoom, setChartViewSource, setChartTradeMarkers, setChartSrOverride } = useCurrency();
   const { t } = useI18n();
   const [symbol, setSymbol]     = useState(selectedChart?.symbol || 'BTCUSDT');
   const [interval, setInterval] = useState('15m');
-  const [useMcInterval, setUseMcInterval] = useState(() => loadUseMcInterval('rsi_momentum', false));
   const [candleCount, setCandleCount] = useState(() => loadCandleCountFor('rsi_momentum'));
   const [prefs, setPrefs] = useState(() => loadRsiMomPrefs());
   const [sort, setSort] = useState({ key: null, dir: 'asc' });
@@ -1107,10 +1106,64 @@ function RsiMomentumStats({ autoCalc }) {
   // Corretora onde a moeda vai ser operada pelo bot exclusivo — default = a fonte usada na
   // pesquisa (Gate se a busca foi source='gate'), mas o usuário pode trocar.
   const [curatedExchange, setCuratedExchange] = useState('binance');
+  // Seletor "Carregar configuração salva" — junta a config GERAL do bot (rsi_momentum_global_config,
+  // usada por todas as moedas do scanner) com cada bot exclusivo (curated) existente (ex.: SKYAIUSDT)
+  // numa única lista, pra preencher o painel sem precisar saber o símbolo de cor.
+  const [configOptions, setConfigOptions] = useState([{ value: 'global', label: 'Configuração geral' }]);
+  const [selectedConfigOption, setSelectedConfigOption] = useState('global');
+  const [configSelectState, setConfigSelectState] = useState({ loading: false, msg: null, err: null });
 
   useEffect(() => {
     getRsiMomentumStatsSearches().then((arr) => setSavedSearchCount(Array.isArray(arr) ? arr.length : 0)).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    getRsiMomentumCuratedList()
+      .then((list) => {
+        const curatedOpts = (Array.isArray(list) ? list : []).map((c) => ({
+          value: `curated:${c.symbol}`,
+          label: `Bot exclusivo: ${c.symbol}`,
+        }));
+        setConfigOptions([{ value: 'global', label: 'Configuração geral' }, ...curatedOpts]);
+      })
+      .catch(() => {});
+  }, []);
+
+  /** Preenche os campos do painel com a config selecionada no seletor "Carregar configuração
+   *  salva": a config GERAL do scanner (rsi_momentum_global_config) ou a de um bot exclusivo
+   *  específico (rsi_multi_bot_state.curated=true). Não depende de uma pesquisa anterior. */
+  async function handleLoadSelectedConfig() {
+    if (configSelectState.loading) return;
+    setConfigSelectState({ loading: true, msg: null, err: null });
+    try {
+      if (selectedConfigOption === 'global') {
+        const info = await getRsiMomentumConfig();
+        if (!info?.panelConfig) {
+          setConfigSelectState({ loading: false, msg: null, err: 'Configuração geral ainda não foi salva.' });
+          return;
+        }
+        patchPrefs(info.panelConfig);
+        if (info.entry?.interval) setInterval(info.entry.interval);
+        setConfigSelectState({ loading: false, msg: 'Configuração geral carregada no painel.', err: null });
+        return;
+      }
+      const sym = selectedConfigOption.startsWith('curated:') ? selectedConfigOption.slice('curated:'.length) : '';
+      if (!sym) { setConfigSelectState({ loading: false, msg: null, err: null }); return; }
+      const info = await getRsiMomentumCuratedBot(sym);
+      if (!info?.exists || !info.panelConfig) {
+        setConfigSelectState({ loading: false, msg: null, err: `Bot exclusivo de ${sym} não encontrado.` });
+        return;
+      }
+      patchPrefs({ ...info.panelConfig, allCoins: false });
+      if (info.interval) setInterval(info.interval);
+      if (info.exchange) setCuratedExchange(info.exchange);
+      setSymbol(sym);
+      setCuratedInfo({ ...info, symbol: sym });
+      setConfigSelectState({ loading: false, msg: `Configuração de ${sym} carregada no painel.`, err: null });
+    } catch (err) {
+      setConfigSelectState({ loading: false, msg: null, err: err.message });
+    }
+  }
 
   async function handleClearSavedSearches() {
     if (savedSearchCount === 0) return;
@@ -1254,13 +1307,10 @@ function RsiMomentumStats({ autoCalc }) {
     });
   }
 
-  async function handleSearch(overrideSymbol, updateChart = false, overrideInterval, overrideSource, overrideUseMc, overrideCandleCount, overridePrefs) {
+  async function handleSearch(overrideSymbol, updateChart = false, overrideInterval, overrideSource, overrideCandleCount, overridePrefs) {
     const p = overridePrefs ?? prefs;
-    const useMc = overrideUseMc ?? useMcInterval;
     const sym  = (overrideSymbol ?? symbol).trim().toUpperCase();
-    const mcIv  = (!p.allCoins && useMc) ? mcEntryFor(multitradeFavorites, sym)?.tradeConfig?.entry?.ma1?.interval : null;
-    const iv    = overrideInterval ?? mcIv ?? interval;
-    if (mcIv) setInterval(mcIv);
+    const iv    = overrideInterval ?? interval;
     const chartSource = selectedChart?.symbol === sym ? (selectedChart?.source ?? null) : null;
     const src   = overrideSource !== undefined ? overrideSource : chartSource;
     const candles = overrideCandleCount ?? candleCount;
@@ -1417,13 +1467,6 @@ function RsiMomentumStats({ autoCalc }) {
     if (autoCalc && !prefs.allCoins) handleSearch(selectedChart.symbol);
   }, [selectedChart?.symbol, autoCalc]);
 
-  function handleToggleMc(next) {
-    setUseMcInterval(next);
-    saveUseMcInterval('rsi_momentum', next);
-    if (!next) setInterval('15m');
-    handleSearch(undefined, false, undefined, undefined, next);
-  }
-
   async function openOnChart(o, iv) {
     const startMs = new Date(o.signalDate).getTime();
     const endMs   = o.exitDate ? new Date(o.exitDate).getTime() : Date.now();
@@ -1559,8 +1602,53 @@ function RsiMomentumStats({ autoCalc }) {
           </div>
         )}
 
-        {!prefs.allCoins && <McIntervalSwitch checked={useMcInterval} onChange={handleToggleMc} />}
+        {/* Seletor "Carregar configuração salva" — junta a config GERAL do scanner (todas as
+            moedas rodam com ela) e cada bot exclusivo (curated) existente numa única lista, pra
+            preencher o painel sem precisar digitar o símbolo. */}
+        {!prefs.allCoins && (
+          <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[140px]">
+            <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">Config salva</label>
+            <div className="flex items-center gap-1">
+              <select
+                value={selectedConfigOption}
+                onChange={(e) => setSelectedConfigOption(e.target.value)}
+                title="Escolha a configuração salva (geral ou de um bot exclusivo) pra carregar no painel"
+                className={`${inp} flex-1 min-w-0`}
+              >
+                {configOptions.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={handleLoadSelectedConfig}
+                disabled={configSelectState.loading}
+                title="Preenche os campos do painel com a configuração escolhida"
+                className="shrink-0 text-[10px] text-p5/60 hover:text-p4 border border-p3/40 hover:border-p4 rounded px-1.5 py-1 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {configSelectState.loading
+                  ? <span className="inline-block w-2.5 h-2.5 border border-p4 border-t-transparent rounded-full animate-spin align-middle" />
+                  : '📥'}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
+
+      {(configSelectState.msg || configSelectState.err) && (
+        <div className="flex flex-col gap-1 w-full">
+          {configSelectState.msg && (
+            <p className="text-[10px] text-emerald-500 bg-emerald-400/10 border border-emerald-400/20 rounded px-2 py-1">
+              ✅ {configSelectState.msg}
+            </p>
+          )}
+          {configSelectState.err && (
+            <p className="text-[10px] text-red-500 bg-red-400/10 border border-red-400/20 rounded px-2 py-1">
+              ⚠️ {configSelectState.err}
+            </p>
+          )}
+        </div>
+      )}
 
       {/* ÁREA — Estratégia de entrada: gatilho de RSI + alvo */}
       <StatsArea variant="strategy" icon="🎯" title={t('stats.area_strategy')}>
