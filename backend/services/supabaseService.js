@@ -678,12 +678,26 @@ function parseEntryLimit(rulesState) {
   };
 }
 
+/** Falha registrada na última tentativa de entrada — a corretora rejeitou a ordem (ex.: saldo
+ *  insuficiente) e o rsi-momentum-bot marcou phase=FAILED, gravando o motivo em
+ *  rules_state.entryFailure. Exposto pro frontend mostrar o motivo no modal de estado e
+ *  oferecer "voltar a aguardar" em vez de só o botão de apagar. */
+function parseEntryFailure(rulesState) {
+  let rs = rulesState;
+  if (typeof rs === 'string') {
+    try { rs = JSON.parse(rs); } catch { return null; }
+  }
+  const ef = rs?.entryFailure;
+  if (!ef || !ef.message) return null;
+  return { message: String(ef.message), at: ef.at ?? null };
+}
+
 async function enrichMultitradeEntriesWithState(entries) {
   if (!entries?.length) return entries ?? [];
   const symbols = [...new Set(entries.map(e => e.symbol))];
   const { data: states, error } = await supabase
     .from('rsi_multi_bot_state')
-    .select('symbol, strategy_id, phase, buy_time, buy_price, buy_qty, entry_signal_time, entry_signal_price, rules_state')
+    .select('symbol, strategy_id, phase, buy_time, buy_price, buy_qty, entry_signal_time, entry_signal_price, rules_state, curated')
     .in('symbol', symbols);
   if (error) {
     console.warn('[supabase] enrichMultitradeEntriesWithState:', error.message);
@@ -706,6 +720,8 @@ async function enrichMultitradeEntriesWithState(entries) {
       activeSetup: parseActiveSetup(st?.rules_state),
       exitBracket: parseExitBracket(st?.rules_state),
       entryLimit: parseEntryLimit(st?.rules_state),
+      entryFailure: parseEntryFailure(st?.rules_state),
+      curated: !!st?.curated,
     };
   });
 }
@@ -1232,6 +1248,23 @@ router.patch('/multitrade-bot-state', getUserId, async (req, res) => {
   }
 
   try {
+    if (phase === 'WATCHING') {
+      // Rearmar pra AGUARDANDO limpa a falha de entrada registrada (rules_state.entryFailure) —
+      // sem isso o aviso de falha ("saldo insuficiente" etc.) fica no painel/gráfico mesmo
+      // depois de voltar a vigiar a moeda.
+      const { data: st } = await supabase
+        .from('rsi_multi_bot_state')
+        .select('rules_state')
+        .eq('symbol', symbol)
+        .eq('strategy_id', strategyId)
+        .maybeSingle();
+      let rs = st?.rules_state;
+      if (typeof rs === 'string') { try { rs = JSON.parse(rs); } catch { rs = null; } }
+      if (rs && rs.entryFailure) {
+        const { entryFailure, ...rest } = rs;
+        patch.rules_state = rest;
+      }
+    }
     if (phase === 'WATCHING' && req.body.sell) {
       const { data: existing } = await supabase
         .from('rsi_multi_bot_state')

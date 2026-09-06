@@ -29,10 +29,12 @@ function PhaseStatusCard({ phase, entry }) {
   const ph = multitradePhaseBadge(phase, lang);
   const isBought = phase === 'BOUGHT';
   const isPending = phase === 'PENDING';
+  const isFailed = phase === 'FAILED';
 
   let botDoes = 'Monitora sinais de entrada (cruzamento de MAs) e compra automaticamente quando der.';
   if (isBought) botDoes = 'Considera que você tem posição aberta e monitora sinais de saída (cruzamento inverso, stop-loss).';
   if (isPending) botDoes = 'Aguardando preço de compra (estado pendente legado).';
+  if (isFailed) botDoes = 'Não faz nada — a última tentativa de compra foi rejeitada pela corretora. Só volta a operar quando você rearmar a moeda pra AGUARDANDO.';
 
   return (
     <div className="rounded-lg p-3 space-y-2" style={{ background: `${ph.color}10`, border: `1px solid ${ph.color}44` }}>
@@ -52,6 +54,12 @@ function PhaseStatusCard({ phase, entry }) {
           <div>Compra registrada: {fmtBuyTimeShort(entry.buyTime)}</div>
           {entry.buyPrice != null && <div>Preço: {Number(entry.buyPrice)}</div>}
           {entry.buyQty != null && <div>Quantidade: {Number(entry.buyQty)}</div>}
+        </div>
+      )}
+      {isFailed && entry?.entryFailure && (
+        <div className="text-[9px] font-mono pt-1 border-t border-p2/30 space-y-0.5">
+          <div style={{ color: '#fca5a5' }}>{entry.entryFailure.message}</div>
+          {entry.entryFailure.at && <div className="text-p5/50">Falhou em: {fmtBuyTimeShort(entry.entryFailure.at)}</div>}
         </div>
       )}
     </div>
@@ -281,6 +289,7 @@ export default function MultitradeBotStateModal({
   const isWatching = phase === 'WATCHING';
   const isBought = phase === 'BOUGHT';
   const isPending = phase === 'PENDING';
+  const isFailed = phase === 'FAILED';
 
   useEffect(() => {
     if (!entry) return;
@@ -365,6 +374,31 @@ export default function MultitradeBotStateModal({
               O que você pode fazer
             </p>
             <div className="space-y-2.5">
+
+              {/* FAILED: rearmar pra AGUARDANDO (limpa a falha; a moeda volta pro ciclo do bot) */}
+              {isFailed && (
+                <ActionCard
+                  number={1}
+                  title="Voltar a aguardar sinal → AGUARDANDO"
+                  when={entry?.curated
+                    ? 'Esta moeda é um bot exclusivo (curado). Limpa a falha e volta a vigiá-la — o bot compra de novo no próximo sinal. Resolva antes o motivo da falha (ex.: saldo na corretora).'
+                    : 'Limpa a falha e o bot volta a monitorar esta moeda para uma nova entrada.'}
+                  accent="#3b82f6"
+                >
+                  <label className="flex items-start gap-2 cursor-pointer">
+                    <input type="checkbox" checked={confirmSold} onChange={e => setConfirmSold(e.target.checked)}
+                      className="mt-0.5 shrink-0 accent-cyan-500" />
+                    <span className="text-[10px] text-p5/70 leading-snug">
+                      Confirmo que o motivo da falha foi resolvido (ou quero tentar de novo mesmo assim)
+                    </span>
+                  </label>
+                  <button type="button" disabled={saving || !confirmSold} onClick={() => applyPhase('WATCHING')}
+                    className="w-full py-2 rounded text-[10px] font-bold disabled:opacity-40"
+                    style={{ background: '#3b82f622', color: '#93c5fd', border: '1px solid #3b82f655' }}>
+                    Aplicar AGUARDANDO
+                  </button>
+                </ActionCard>
+              )}
 
               {/* WATCHING: só registrar compra manual */}
               {isWatching && (

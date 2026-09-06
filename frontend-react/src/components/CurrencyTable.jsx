@@ -1053,6 +1053,10 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
    *  o backend também limpa o rsi_multi_bot_state pra liberar o símbolo de volta pro scanner. */
   async function handleRemoveRsiMomentumFailed(rmEntry) {
     if (!rmEntry?.id || rmRemovingId) return;
+    const confirmMsg = rmEntry.curated
+      ? `Apagar o bot exclusivo de ${rmEntry.symbol} de vez? Isso remove a config curada por completo.\n\nPara apenas limpar a falha e voltar a AGUARDANDO, cancele e clique na fase "F".`
+      : `Remover ${rmEntry.symbol} da lista? O favorito é apagado (o scanner pode sinalizar de novo depois).\n\nPara apenas limpar a falha e voltar a AGUARDANDO, cancele e clique na fase "F".`;
+    if (!window.confirm(confirmMsg)) return;
     setRmRemovingId(rmEntry.id);
     try {
       await removeMultitradeEntry(rmEntry.id);
@@ -2287,7 +2291,9 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                             disabled={rmRemovingId === rmEntry.id}
                             className="text-[8px] font-bold px-1 py-0.5 rounded shrink-0 disabled:opacity-40"
                             style={{ background: 'rgba(239,68,68,0.13)', color: '#f87171', border: '1px solid rgba(239,68,68,0.33)' }}
-                            title="Remover falha RSI Momentum (libera a moeda pro scanner sinalizar de novo)"
+                            title={rmEntry?.curated
+                              ? 'Apagar o bot exclusivo desta moeda de vez (perde a config curada). Para só limpar a falha e voltar a aguardar, clique na fase "F".'
+                              : 'Apagar o favorito desta moeda (libera pro scanner sinalizar de novo). Para só limpar a falha e voltar a aguardar, clique na fase "F".'}
                             onClick={(e) => { e.stopPropagation(); handleRemoveRsiMomentumFailed(rmEntry); }}>
                             ✕
                           </button>
