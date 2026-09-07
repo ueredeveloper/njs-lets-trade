@@ -539,6 +539,109 @@ function saveRsiMomPrefs(prefs) {
   try { localStorage.setItem(RSI_MOM_PREFS_KEY, JSON.stringify(prefs)); } catch {}
 }
 
+/** Monta o objeto `options` do backtest (e o `config` do bot exclusivo) a partir do estado
+ *  atual dos campos do painel Momentum RSI. Extraído de handleSearch pra que o botão
+ *  "Bot exclusivo" / "Editar bot exclusivo" salve exatamente o que está selecionado agora —
+ *  antes ele reenviava a config da última "Buscar" (`lastSearch.config`), então mudanças feitas
+ *  depois de "Carregar config" (ex.: trocar escada → re-armar) eram descartadas em silêncio.
+ *  Alvo e stop são INDEPENDENTES (ver options.targetMode / options.trailingStop em
+ *  analyseRsiThresholdBacktest.js). */
+function buildRsiMomCommonOptions(p, candleCount) {
+  const stopTrailing = p.stopMode !== 'fixed';
+  return {
+    rsiThreshold: p.rsiThreshold,
+    pullbackPct: p.pullbackPct,
+    targetPct: p.targetPct,
+    stopLossPct: p.stopLossPct,
+    targetMode: p.targetMode,
+    hardTakeProfit: p.hardTakeProfitEnabled ? { enabled: true, pct: p.hardTakeProfitPct } : null,
+    trailingStop: stopTrailing ? {
+      enabled: true,
+      mode: p.stopMode,
+      startPct: p.stopLossPct,
+      ...(p.stopMode === 'continuous' ? {
+        coinStepPct: p.trailingCoinStepPct,
+        stopStepPct: p.trailingStopStepPct,
+      } : {}),
+      ...(p.stopMode === 'twoPhase' ? {
+        pivotPct: p.tsPivotPct,
+        aCoinStepPct: p.tsPhaseACoinStep,
+        aStopStepPct: p.tsPhaseAStopStep,
+        bCoinStepPct: p.tsPhaseBCoinStep,
+        bStopStepPct: p.tsPhaseBStopStep,
+      } : {}),
+      ...(p.stopMode === 'peakTrail' ? {
+        pivotGainPct: p.tsPivotGainPct,
+        wNearPct: p.tsWNearPct,
+        wFarPct: p.tsWFarPct,
+      } : {}),
+      ...(p.stopMode === 'atrTrail' ? {
+        pivotGainPct: p.tsPivotGainPct,
+        wNearPct: p.tsWNearPct,
+        atrMult: p.tsAtrMult,
+        atrMaxPct: p.tsAtrMaxPct,
+      } : {}),
+    } : null,
+    trailingTarget: p.targetMode === 'continuous' ? {
+      coinStepPct: p.trailingTargetCoinStepPct,
+      stepPct: p.trailingTargetStepPct,
+    } : null,
+    positionSizeUsd: p.positionSizeUsd,
+    candleCount,
+    lookbackHours: p.lookbackHours,
+    bandWidth: p.bandWidthEnabled ? {
+      enabled: true,
+      interval: p.bandWidthInterval,
+      minPct: p.bandWidthMinPct,
+      lookback: p.bandWidthLookback,
+    } : null,
+    supportResistance: p.srEnabled ? {
+      enabled: true,
+      interval: p.srInterval,
+      candleCount: p.srCandleCount,
+      entrySupportRank: p.srEntrySupportRank,
+      exitResistanceRank: p.srExitResistanceRank,
+      entryMaxPct: p.srEntryMaxPct,
+    } : null,
+    minVolumeUsdt: p.minVolumeUsdt,
+    excludeOpenExits: p.excludeOpenExits,
+    adxFilter: p.adxFilterEnabled ? {
+      enabled: true,
+      interval: p.adxFilterInterval,
+      minAdx: p.adxFilterMinAdx,
+    } : null,
+    macdFilter: p.macdFilterEnabled ? {
+      enabled: true,
+      interval: p.macdFilterInterval,
+    } : null,
+    higherRsiFilter: p.higherRsiFilterEnabled ? {
+      enabled: true,
+      minRsi: p.higherRsiFilterMinRsi,
+    } : null,
+    rsi5mFilter: p.rsi5mFilterEnabled ? {
+      enabled: true,
+      threshold: p.rsi5mFilterThreshold,
+    } : null,
+    newHighFilter: p.newHighFilterEnabled ? {
+      enabled: true,
+      lookback: p.newHighFilterLookback,
+      marginPct: p.newHighFilterMarginPct,
+    } : null,
+    reinforceOnStop: p.reinforceOnStopEnabled ? {
+      enabled: true,
+      mode: p.reinforceMode === 'rearm' ? 'rearm' : 'ladder',
+      addDropPct: p.reinforceAddDropPct,
+      exitRisePct: p.reinforceExitRisePct,
+      rearmStopPct: p.reinforceRearmStopPct,
+      rearmTargetPct: p.reinforceRearmTargetPct,
+      waitCandles: p.reinforceWaitCandles,
+      buyUsd: p.reinforceBuyUsd,
+    } : null,
+    entriesDayRange: p.entriesDayRangeMax != null ? { min: 2, max: p.entriesDayRangeMax } : null,
+    includeGateFavorites: !!p.includeGateFavorites,
+  };
+}
+
 const STATS_AUTO_CALC_STORAGE_KEY = 'lets_trade_stats_auto_calc';
 
 /** Preferência do switch "Cálculo Automático" (barra de abas) — quando ligado, clicar numa
@@ -1212,25 +1315,29 @@ function RsiMomentumStats({ autoCalc }) {
       return;
     }
     const exchange = curatedExchange === 'gate' ? 'gate' : 'binance';
-    const editing = curatedInfo?.symbol === lastSearch.symbol && curatedInfo?.curated;
+    const editing = curatedInfo?.symbol === sym && curatedInfo?.curated;
     const fill = (s, map) => Object.entries(map).reduce((acc, [k, v]) => acc.split(`{${k}}`).join(v), s);
     if (!window.confirm(fill(t(editing ? 'stats.curated_edit_confirm' : 'stats.curated_confirm'),
-      { symbol: lastSearch.symbol, exchange, interval: lastSearch.interval }))) return;
+      { symbol: sym, exchange, interval }))) return;
+    // Monta a config a partir do estado ATUAL dos campos (não de lastSearch.config), pra que
+    // ajustes feitos depois de "Carregar config" — ex.: trocar escada → re-armar — sejam salvos.
+    // lastSearch continua só como trava de "já rodou uma busca desta moeda".
+    const config = buildRsiMomCommonOptions(prefs, candleCount);
     setCuratedState({ loading: true, msg: null, err: null });
     try {
       const r = await addRsiMomentumCuratedBot({
-        symbol: lastSearch.symbol,
-        interval: lastSearch.interval,
+        symbol: sym,
+        interval,
         exchange,
-        config: lastSearch.config,
+        config,
       });
       const parts = [fill(t('stats.curated_ok'), { symbol: r.symbol, exchange: r.exchange, capital: r.capitalUsdt })];
       if (r.resumed) parts.push(fill(t('stats.curated_resumed'), { phase: r.phase }));
       if (r.ignoredFilters?.length) parts.push(fill(t('stats.curated_ignored'), { list: r.ignoredFilters.join(', ') }));
       setCuratedState({ loading: false, msg: parts.join(' '), err: null });
       // Reflete no botão que a moeda agora é (ou continua) curada.
-      getRsiMomentumCuratedBot(lastSearch.symbol)
-        .then((info) => setCuratedInfo(info?.exists ? { ...info, symbol: lastSearch.symbol } : null))
+      getRsiMomentumCuratedBot(sym)
+        .then((info) => setCuratedInfo(info?.exists ? { ...info, symbol: sym } : null))
         .catch(() => {});
     } catch (err) {
       setCuratedState({ loading: false, msg: null, err: err.message });
@@ -1319,112 +1426,14 @@ function RsiMomentumStats({ autoCalc }) {
     setError(null);
     setResult(null);
     try {
-      // Alvo e stop são INDEPENDENTES (ver options.targetMode / options.trailingStop em
-      // analyseRsiThresholdBacktest.js). Alvo: 'fixed' | 'continuous' (base targetPct% + degraus
-      // com contador próprio) | 'off' (sem alvo). Stop: 'fixed' | 'continuous' (rampa única) |
-      // 'twoPhase' (Escada Dupla) | 'peakTrail' (Trilha do Topo) | 'atrTrail' (Trilha ATR).
-      const stopTrailing = p.stopMode !== 'fixed';
-      const commonOptions = {
-        rsiThreshold: p.rsiThreshold,
-        pullbackPct: p.pullbackPct,
-        targetPct: p.targetPct,
-        stopLossPct: p.stopLossPct,
-        targetMode: p.targetMode,
-        hardTakeProfit: p.hardTakeProfitEnabled ? { enabled: true, pct: p.hardTakeProfitPct } : null,
-        trailingStop: stopTrailing ? {
-          enabled: true,
-          mode: p.stopMode,
-          startPct: p.stopLossPct,
-          ...(p.stopMode === 'continuous' ? {
-            coinStepPct: p.trailingCoinStepPct,
-            stopStepPct: p.trailingStopStepPct,
-          } : {}),
-          ...(p.stopMode === 'twoPhase' ? {
-            pivotPct: p.tsPivotPct,
-            aCoinStepPct: p.tsPhaseACoinStep,
-            aStopStepPct: p.tsPhaseAStopStep,
-            bCoinStepPct: p.tsPhaseBCoinStep,
-            bStopStepPct: p.tsPhaseBStopStep,
-          } : {}),
-          ...(p.stopMode === 'peakTrail' ? {
-            pivotGainPct: p.tsPivotGainPct,
-            wNearPct: p.tsWNearPct,
-            wFarPct: p.tsWFarPct,
-          } : {}),
-          ...(p.stopMode === 'atrTrail' ? {
-            pivotGainPct: p.tsPivotGainPct,
-            wNearPct: p.tsWNearPct,
-            atrMult: p.tsAtrMult,
-            atrMaxPct: p.tsAtrMaxPct,
-          } : {}),
-        } : null,
-        trailingTarget: p.targetMode === 'continuous' ? {
-          coinStepPct: p.trailingTargetCoinStepPct,
-          stepPct: p.trailingTargetStepPct,
-        } : null,
-        positionSizeUsd: p.positionSizeUsd,
-        candleCount: candles,
-        lookbackHours: p.lookbackHours,
-        bandWidth: p.bandWidthEnabled ? {
-          enabled: true,
-          interval: p.bandWidthInterval,
-          minPct: p.bandWidthMinPct,
-          lookback: p.bandWidthLookback,
-        } : null,
-        supportResistance: p.srEnabled ? {
-          enabled: true,
-          interval: p.srInterval,
-          candleCount: p.srCandleCount,
-          entrySupportRank: p.srEntrySupportRank,
-          exitResistanceRank: p.srExitResistanceRank,
-          entryMaxPct: p.srEntryMaxPct,
-        } : null,
-        minVolumeUsdt: p.minVolumeUsdt,
-        excludeOpenExits: p.excludeOpenExits,
-        adxFilter: p.adxFilterEnabled ? {
-          enabled: true,
-          interval: p.adxFilterInterval,
-          minAdx: p.adxFilterMinAdx,
-        } : null,
-        macdFilter: p.macdFilterEnabled ? {
-          enabled: true,
-          interval: p.macdFilterInterval,
-        } : null,
-        higherRsiFilter: p.higherRsiFilterEnabled ? {
-          enabled: true,
-          minRsi: p.higherRsiFilterMinRsi,
-        } : null,
-        rsi5mFilter: p.rsi5mFilterEnabled ? {
-          enabled: true,
-          threshold: p.rsi5mFilterThreshold,
-        } : null,
-        newHighFilter: p.newHighFilterEnabled ? {
-          enabled: true,
-          lookback: p.newHighFilterLookback,
-          marginPct: p.newHighFilterMarginPct,
-        } : null,
-        reinforceOnStop: p.reinforceOnStopEnabled ? {
-          enabled: true,
-          mode: p.reinforceMode === 'rearm' ? 'rearm' : 'ladder',
-          addDropPct: p.reinforceAddDropPct,
-          exitRisePct: p.reinforceExitRisePct,
-          rearmStopPct: p.reinforceRearmStopPct,
-          rearmTargetPct: p.reinforceRearmTargetPct,
-          waitCandles: p.reinforceWaitCandles,
-          buyUsd: p.reinforceBuyUsd,
-        } : null,
-        entriesDayRange: p.entriesDayRangeMax != null ? { min: 2, max: p.entriesDayRangeMax } : null,
-        includeGateFavorites: !!p.includeGateFavorites,
-      };
+      const commonOptions = buildRsiMomCommonOptions(p, candles);
       const data = p.allCoins
         ? await fetchRsiThresholdBacktestMarket(iv, commonOptions)
         : await fetchRsiThresholdBacktest(sym, iv, { ...commonOptions, source: src });
       setResult(data);
-      // Guarda a config exata desta pesquisa (modo 1 moeda) pro botão "Bot exclusivo".
-      setLastSearch(p.allCoins ? null : {
-        symbol: sym, interval: iv, source: src ?? null,
-        config: { ...commonOptions },
-      });
+      // Trava do botão "Bot exclusivo": marca que ESTA moeda já teve uma busca (a config em si
+      // é remontada dos campos atuais na hora de salvar — ver handleAddCuratedBot).
+      setLastSearch(p.allCoins ? null : { symbol: sym });
       if (!p.allCoins) setCuratedExchange(src === 'gate' ? 'gate' : 'binance');
       setCuratedState({ loading: false, msg: null, err: null });
       // Busca a config do bot exclusivo dessa moeda (se houver) pros botões "Editar bot exclusivo"
