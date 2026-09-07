@@ -78,6 +78,30 @@ async function loadGlobalConfigBody(sbReq, userId) {
   return normalizeRsiMomentumConfig(row.trade_config);
 }
 
+/**
+ * Config do bot EXCLUSIVO (curado) de uma moeda — rsi_multi_bot_state.curated = true, strategy_id
+ * 'rsi-momentum'. Usada pelo formulário "Momentum RSI · Trade Exclusivo" em Analisar Indicadores
+ * (ver fetchRsiMomentumWatchlist.js) pra varrer o mercado com a MESMA config que o bot aplica
+ * naquela moeda. Sem linha curada → lança (o chamador devolve 400 com a dica).
+ */
+async function loadCuratedConfigBody(sbReq, userId, symbol) {
+  const sym = String(symbol ?? '').trim().toUpperCase();
+  if (!sym) throw new Error('symbol obrigatório para o Trade Exclusivo');
+  let rows;
+  try {
+    rows = await sbReq(
+      'GET', 'rsi_multi_bot_state', null,
+      `?strategy_id=eq.rsi-momentum&curated=eq.true&symbol=eq.${encodeURIComponent(sym)}&limit=1`,
+    );
+  } catch (err) {
+    throw new Error(`falha ao ler a config curada de ${sym}: ${err.message}`);
+  }
+  let tc = rows?.[0]?.trade_config;
+  if (typeof tc === 'string') { try { tc = JSON.parse(tc); } catch { tc = null; } }
+  if (!tc) throw new Error(`${sym} não é um bot exclusivo (curated) do RSI Momentum`);
+  return normalizeRsiMomentumConfig(tc);
+}
+
 function resolveConfigBody(row) {
   if (row?.trade_config?.kind) return row.trade_config;
   const sid = row?.strategy_id;
@@ -96,6 +120,7 @@ module.exports = {
   normalizeStrategyId,
   getStrategyPresetBody,
   loadGlobalConfigBody,
+  loadCuratedConfigBody,
   resolveConfigBody,
   buildTradeConfig,
 };

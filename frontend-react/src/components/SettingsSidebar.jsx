@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { reloadCandles, getMaCrossScreenerConfig, saveMaCrossScreenerConfig,
   getBollingerMedianTrendConfig, saveBollingerMedianTrendConfig,
   getRsiMomentumConfig, saveRsiMomentumConfig,
+  getRsiMomentumCuratedList,
   getCacheSettings, saveCacheSettings } from '../services/api';
 import { RSI_MOMENTUM_ALL_INTERVALS, RSI_MOMENTUM_BB_PERIODS, RSI_MOMENTUM_BB_STD_DEVS, RSI_MOMENTUM_TRAILING_TARGET_STEP_OPTIONS, RSI_MOMENTUM_BANDWIDTH_LOOKBACK_OPTIONS,
   RSI_MOMENTUM_TARGET_MODE_OPTIONS, RSI_MOMENTUM_STOP_MODE_OPTIONS, RSI_MOMENTUM_TARGET_PCT_OPTIONS, RSI_MOMENTUM_COIN_STEP_OPTIONS, RSI_MOMENTUM_STOP_STEP_OPTIONS, RSI_MOMENTUM_STOP_PCT_OPTIONS,
@@ -120,6 +121,7 @@ export default function SettingsSidebar({ open, onClose }) {
     setOverlaySlotsPreference, setCurrencyPanelWidth,
     setStatsDefaults, setVwapAnchorDefault, setVwapSlopeHighlightDefault, setChartEngineDefault,
     setCandleCountDisplayDefault, setDefaultActiveIndicator, setFontScale,
+    setRsiMomentumCuratedDefault,
     chartIntervalOptions, panelKeys,
     activeTrades, activeTradesSettings, updateActiveTradesSettings,
     ignoredActiveTrades, dismissActiveTrade, restoreActiveTrade } = useCurrency();
@@ -236,6 +238,7 @@ export default function SettingsSidebar({ open, onClose }) {
   const [rsiMomentumLoaded, setRsiMomentumLoaded]         = useState(false);
   const [rsiMomentumLoadError, setRsiMomentumLoadError]   = useState('');
   const [rsiMomentumSaveState, setRsiMomentumSaveState]   = useState(null); // null | 'saving' | 'saved' | 'error'
+  const [rsiMomentumCuratedCoins, setRsiMomentumCuratedCoins] = useState(null); // null = carregando; [] = nenhuma
 
   useEffect(() => {
     if (!open || rsiMomentumLoaded) return;
@@ -243,6 +246,13 @@ export default function SettingsSidebar({ open, onClose }) {
       .then((cfg) => { setRsiMomentumConfig(cfg); setRsiMomentumLoaded(true); })
       .catch((err) => { setRsiMomentumLoadError(err.message); setRsiMomentumLoaded(true); });
   }, [open, rsiMomentumLoaded]);
+
+  useEffect(() => {
+    if (!open || rsiMomentumCuratedCoins !== null) return;
+    getRsiMomentumCuratedList()
+      .then((list) => setRsiMomentumCuratedCoins(Array.isArray(list) ? list : []))
+      .catch(() => setRsiMomentumCuratedCoins([]));
+  }, [open, rsiMomentumCuratedCoins]);
 
   function patchRsiMomentum(section, patch) {
     setRsiMomentumConfig((prev) => ({ ...prev, [section]: { ...prev[section], ...patch } }));
@@ -1792,6 +1802,31 @@ export default function SettingsSidebar({ open, onClose }) {
                 </div>
               </div>
             )}
+
+            {/* Moeda do bot exclusivo (curated) que preenche por padrão o formulário
+                "Momentum RSI · Trade Exclusivo" em Analisar Indicadores. */}
+            <div className="rounded-md p-2.5 mt-3" style={{ background: '#0f1219', border: '1px solid #2a2d3a' }}>
+              <p className="text-p5/70 text-[10px] font-semibold uppercase tracking-wider mb-1">{t('settings.rsimomentum_curated_default_title')}</p>
+              <p className="text-[10px] text-p5/40 mb-2 leading-relaxed">{t('settings.rsimomentum_curated_default_hint')}</p>
+              {rsiMomentumCuratedCoins === null ? (
+                <p className="text-[10px] text-p5/40">{t('settings.loading')}</p>
+              ) : rsiMomentumCuratedCoins.length === 0 ? (
+                <p className="text-[10px] text-p5/40">{t('settings.rsimomentum_curated_default_empty')}</p>
+              ) : (
+                <select
+                  className={`${inp} w-full`}
+                  value={uiPrefs.rsiMomentumCuratedDefault ?? ''}
+                  onChange={(e) => setRsiMomentumCuratedDefault(e.target.value)}
+                >
+                  <option value="">{t('settings.rsimomentum_curated_default_first')}</option>
+                  {rsiMomentumCuratedCoins.map((c) => (
+                    <option key={c.symbol} value={c.symbol}>
+                      {c.symbol} ({c.exchange === 'gate' ? 'Gate' : 'Binance'})
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
           </AccordionItem>
 
           {/* Caches de filtros/estatísticas (liga/desliga por cache) */}

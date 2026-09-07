@@ -65,6 +65,7 @@ import {
   normalizeChartEngine,
   normalizeCandleCountDisplay,
   normalizeFontScale,
+  normalizeRsiMomentumCuratedDefault,
 } from '../utils/uiPreferences';
 
 const CurrencyContext = createContext(null);
@@ -984,6 +985,16 @@ export function CurrencyProvider({ children }) {
     });
   }, []);
 
+  /** Moeda do bot exclusivo (curated) do RSI Momentum que preenche por padrão o formulário
+   *  "Momentum RSI · Trade Exclusivo" em Analisar Indicadores (Configurações → RSI Momentum). */
+  const setRsiMomentumCuratedDefault = useCallback((symbol) => {
+    setUiPrefsState((prev) => {
+      const next = { ...prev, rsiMomentumCuratedDefault: normalizeRsiMomentumCuratedDefault(symbol) };
+      saveUiPreferences(next);
+      return next;
+    });
+  }, []);
+
   const isVisibleSymbol = useCallback(
     (symbol, options) => isSymbolVisible(symbol, assetDisplay, options),
     [assetDisplay],
@@ -1275,6 +1286,7 @@ export function CurrencyProvider({ children }) {
         setChartEngineDefault,
         setCandleCountDisplayDefault,
         setFontScale,
+        setRsiMomentumCuratedDefault,
         chartIntervalOptions: CHART_INTERVAL_OPTIONS,
         panelKeys: PANEL_KEYS,
         isVisibleSymbol,

@@ -347,10 +347,23 @@ export async function fetchRsiThresholdBacktestMarket(interval, options = {}) {
   return res.json();
 }
 
-/** Moedas mais próximas de disparar o sinal do bot RSI Momentum (config global ativa) —
- *  ver backend/services/fetchRsiMomentumWatchlist.js. `fresh` fura o cache de 45s do backend. */
-export async function fetchRsiMomentumWatchlist({ fresh = false } = {}) {
-  const res = await fetch(`/services/rsi-momentum-watchlist${fresh ? '?fresh=1' : ''}`);
+/** Moedas mais próximas de disparar o sinal do bot RSI Momentum — ver
+ *  backend/services/fetchRsiMomentumWatchlist.js. `scope` = 'geral' (config global ativa) ou
+ *  'exclusivo' (config do bot curado de `symbol`). Overrides opcionais (tradeInterval / srInterval
+ *  / srCandleCount / rsiSignal) ajustam a config antes da varredura. `fresh` fura o cache de 45s. */
+export async function fetchRsiMomentumWatchlist({
+  scope, symbol, tradeInterval, srInterval, srCandleCount, rsiSignal, fresh = false,
+} = {}) {
+  const p = new URLSearchParams();
+  if (scope) p.set('scope', scope);
+  if (symbol) p.set('symbol', symbol);
+  if (tradeInterval) p.set('tradeInterval', tradeInterval);
+  if (srInterval) p.set('srInterval', srInterval);
+  if (srCandleCount) p.set('srCandleCount', String(srCandleCount));
+  if (rsiSignal) p.set('rsiSignal', String(rsiSignal));
+  if (fresh) p.set('fresh', '1');
+  const qs = p.toString();
+  const res = await fetch(`/services/rsi-momentum-watchlist${qs ? `?${qs}` : ''}`);
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error ?? `HTTP ${res.status}`);

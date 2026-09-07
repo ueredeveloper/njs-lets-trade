@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useCurrency } from '../contexts/CurrencyContext';
-import { fetchCandlesAndIndicators, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter, fetchMaDistanceFilter, fetchIndicatorGrowthFilter, fetchMarketCapFilter, fetchBollingerBandPositionFilter, fetchBollingerBandWidthFilter, fetchBollingerMedianTrendFilter, fetchVwapPositionFilter, fetchVwapBandWidthFilter, fetchVwapBandExpansionFilter, fetchRsiMomentumWatchlist, fetchGateCoinsFilter, fetchUserPrefs, saveUserPrefs } from '../services/api';
+import { fetchCandlesAndIndicators, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter, fetchMaDistanceFilter, fetchIndicatorGrowthFilter, fetchMarketCapFilter, fetchBollingerBandPositionFilter, fetchBollingerBandWidthFilter, fetchBollingerMedianTrendFilter, fetchVwapPositionFilter, fetchVwapBandWidthFilter, fetchVwapBandExpansionFilter, fetchRsiMomentumWatchlist, getRsiMomentumConfig, getRsiMomentumCuratedBot, getRsiMomentumCuratedList, fetchGateCoinsFilter, fetchUserPrefs, saveUserPrefs } from '../services/api';
+import { RSI_MOMENTUM_ALL_INTERVALS, RSI_MOMENTUM_SR_INTERVAL_OPTIONS, RSI_MOMENTUM_SR_CANDLE_COUNT_OPTIONS } from '../constants/rsiMomentumConfigSchema';
 import { useI18n } from '../i18n';
 import {
   createRsiFilter,
@@ -70,6 +71,9 @@ const MA_CROSS_AGE_OPTIONS = [
 
 const INTERVALS = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w'];
 
+/** Valores de RSI de sinal (limiar de cruzamento de entrada) oferecidos nos formulários Momentum RSI. */
+const MOMENTUM_RSI_SIGNAL_OPTIONS = [55, 60, 63, 65, 67, 68, 69, 70, 72, 74, 75, 78, 80];
+
 /** Faixas de volume 24h (USDT) do filtro "Moedas Gate.io". '' = sem limite. */
 const GATE_VOLUME_OPTIONS = [
   { value: '', label: '—' },
@@ -102,9 +106,12 @@ const INTERVAL_LABELS = {
 
 const EMPTY_INDICATOR = { type: '', intervals: ['8h'] };
 
+// Painel abre com exatamente dois formulários Momentum RSI — Trade Geral (config global) e Trade
+// Exclusivo (bot curado). A busca cria só dois filtros: bot|Geral e bot|Exclusivo <SYMBOL>. Ambos
+// nascem pré-preenchidos com a config que está rodando (ver useEffect de prefill em IndicatorRow).
 const DEFAULT_INDICATORS = [
   { type: 'botReadiness', mode: 'ready' },
-  { type: 'bollingerBandWidth', intervals: ['15m'], period: '20', stdDev: '2', lookback: '300' },
+  { type: 'botReadinessCurated', mode: 'ready' },
 ];
 
 /** Formulários prontos — cada um substitui a lista de indicadores por uma única busca pré-configurada. */
@@ -147,9 +154,15 @@ function buildSummary(value, t) {
   if (!type) return null;
   const ivLabel = intervals?.length ? intervals.join(', ') : '—';
 
-  if (type === 'botReadiness') {
+  if (type === 'botReadiness' || type === 'botReadinessCurated') {
     const mode = value.mode ?? 'ready';
-    return t(`ind.bot_readiness_${mode}`);
+    const parts = [t(`ind.bot_readiness_${mode}`)];
+    if (type === 'botReadinessCurated' && value.symbol) parts.unshift(value.symbol);
+    const ov = [];
+    if (value.tradeInterval) ov.push(`trade ${value.tradeInterval}`);
+    if (value.rsiSignal) ov.push(`RSI ${value.rsiSignal}`);
+    if (value.srInterval || value.srCandleCount) ov.push(`S/R ${value.srInterval ?? '—'}/${value.srCandleCount ?? '—'}`);
+    return ov.length ? `${parts.join(' · ')} — ${ov.join(', ')}` : parts.join(' · ');
   }
   if (type === 'relativeStrengthIndex') {
     const c1 = (value.compare1 ?? 'above') === 'above' ? t('sum.above') : t('sum.bellow');
@@ -308,6 +321,7 @@ function indDescKey(type) {
   if (type === 'vwapBandExpansion') return 'vwap_band_expansion';
   if (type === 'indicatorGrowth') return 'indicator_growth';
   if (type === 'botReadiness') return 'bot_readiness';
+  if (type === 'botReadinessCurated') return 'bot_readiness_curated';
   if (type === 'gateCoins') return 'gate_coins';
   return 'marketcap';
 }
@@ -315,10 +329,56 @@ function indDescKey(type) {
 function IndicatorRow({ value, onChange }) {
   const { type, intervals } = value;
   const { t } = useI18n();
+  const { uiPrefs } = useCurrency();
   const [showPicker, setShowPicker] = useState(false);
   const [showAgePicker, setShowAgePicker] = useState(false);
+  const [momentumCuratedCoins, setMomentumCuratedCoins] = useState([]);
   const ageWindows = resolveMacrossAgeWindows(value);
   const isMacrossCross = type === 'maCrossover' && !(value.signalMode ?? 'cross_up').startsWith('near');
+
+  const isMomentum = type === 'botReadiness' || type === 'botReadinessCurated';
+  const isMomentumCurated = type === 'botReadinessCurated';
+  const curatedDefaultSymbol = uiPrefs?.rsiMomentumCuratedDefault || '';
+
+  // Lista de moedas do bot exclusivo (curated) — só quando o formulário Trade Exclusivo está ativo.
+  useEffect(() => {
+    if (!isMomentumCurated) return;
+    let cancelled = false;
+    getRsiMomentumCuratedList()
+      .then((list) => { if (!cancelled) setMomentumCuratedCoins(Array.isArray(list) ? list : []); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [isMomentumCurated]);
+
+  // Pré-preenche os seletores (intervalo do trade / S/R / RSI de sinal) com a config que está
+  // rodando agora — global (Trade Geral) ou do bot curado da moeda (Trade Exclusivo). Só toca em
+  // campo ainda não definido: escolha explícita do usuário (inclusive "—") é preservada.
+  const momentumPrefillSymbol = isMomentumCurated
+    ? (value.symbol || curatedDefaultSymbol || momentumCuratedCoins[0]?.symbol || '')
+    : '';
+  useEffect(() => {
+    if (!isMomentum) return;
+    let cancelled = false;
+    const req = isMomentumCurated
+      ? (momentumPrefillSymbol ? getRsiMomentumCuratedBot(momentumPrefillSymbol) : Promise.resolve(null))
+      : getRsiMomentumConfig();
+    req.then((cfg) => {
+      if (cancelled || !cfg) return;
+      const pc = cfg.panelConfig ?? {};
+      const tradeIv = isMomentumCurated ? cfg.interval : cfg.entry?.interval;
+      onChange((cur) => {
+        const patch = {};
+        if (cur.tradeInterval === undefined && tradeIv) patch.tradeInterval = tradeIv;
+        if (cur.srInterval === undefined && pc.srInterval) patch.srInterval = pc.srInterval;
+        if (cur.srCandleCount === undefined && pc.srCandleCount != null) patch.srCandleCount = String(pc.srCandleCount);
+        if (cur.rsiSignal === undefined && pc.rsiThreshold != null) patch.rsiSignal = String(pc.rsiThreshold);
+        if (isMomentumCurated && !cur.symbol && momentumPrefillSymbol) patch.symbol = momentumPrefillSymbol;
+        return Object.keys(patch).length ? { ...cur, ...patch } : cur;
+      });
+    }).catch(() => {});
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isMomentum, isMomentumCurated, momentumPrefillSymbol]);
 
   function toggleInterval(iv) {
     onChange({
@@ -447,6 +507,7 @@ function IndicatorRow({ value, onChange }) {
             <option value="relativeStrengthIndex">{t('ind.rsi')}</option>
             <option value="marketCap">{t('ind.marketcap')}</option>
             <option value="botReadiness">{t('ind.bot_readiness')}</option>
+            <option value="botReadinessCurated">{t('ind.bot_readiness_curated')}</option>
             <option value="bollingerPosition">{t('ind.bb_position')}</option>
             <option value="bollingerBandWidth">{t('ind.bollinger_band_width')}</option>
             <option value="bollingerMedianTrend">{t('ind.bollinger_median_trend')}</option>
@@ -462,14 +523,51 @@ function IndicatorRow({ value, onChange }) {
         </div>
 
 
-        {type === 'botReadiness' && (
-          <select className={sel} value={value.mode ?? 'ready'}
-            onChange={(e) => onChange({ ...value, mode: e.target.value })}
-            title={t('ind.desc.bot_readiness')}>
-            <option value="ready">{t('ind.bot_readiness_ready')}</option>
-            <option value="contention">{t('ind.bot_readiness_contention')}</option>
-            <option value="signal">{t('ind.bot_readiness_signal')}</option>
-          </select>
+        {(type === 'botReadiness' || type === 'botReadinessCurated') && (
+          <>
+            {type === 'botReadinessCurated' && (
+              <select className={sel} value={value.symbol ?? ''}
+                onChange={(e) => onChange({ ...value, symbol: e.target.value })}
+                title={t('ind.momrsi_curated_coin')}>
+                {!value.symbol && <option value="">—</option>}
+                {(momentumCuratedCoins.length
+                  ? momentumCuratedCoins
+                  : (value.symbol ? [{ symbol: value.symbol }] : [])
+                ).map((c) => <option key={c.symbol} value={c.symbol}>{c.symbol}</option>)}
+              </select>
+            )}
+            <select className={sel} value={value.mode ?? 'ready'}
+              onChange={(e) => onChange({ ...value, mode: e.target.value })}
+              title={t(`ind.desc.${indDescKey(type)}`)}>
+              <option value="ready">{t('ind.bot_readiness_ready')}</option>
+              <option value="contention">{t('ind.bot_readiness_contention')}</option>
+              <option value="signal">{t('ind.bot_readiness_signal')}</option>
+            </select>
+            <select className={sel} value={value.tradeInterval ?? ''}
+              onChange={(e) => onChange({ ...value, tradeInterval: e.target.value })}
+              title={t('ind.momrsi_trade_interval')}>
+              <option value="">{t('ind.momrsi_trade_interval')}: —</option>
+              {RSI_MOMENTUM_ALL_INTERVALS.map((iv) => <option key={iv} value={iv}>{t('ind.momrsi_trade_interval')}: {iv}</option>)}
+            </select>
+            <select className={sel} value={value.srInterval ?? ''}
+              onChange={(e) => onChange({ ...value, srInterval: e.target.value })}
+              title={t('ind.momrsi_sr_interval')}>
+              <option value="">S/R iv: —</option>
+              {RSI_MOMENTUM_SR_INTERVAL_OPTIONS.map((iv) => <option key={iv} value={iv}>S/R iv: {iv}</option>)}
+            </select>
+            <select className={sel} value={value.srCandleCount ?? ''}
+              onChange={(e) => onChange({ ...value, srCandleCount: e.target.value })}
+              title={t('ind.momrsi_sr_candles')}>
+              <option value="">S/R candles: —</option>
+              {RSI_MOMENTUM_SR_CANDLE_COUNT_OPTIONS.map((n) => <option key={n} value={String(n)}>S/R candles: {n}</option>)}
+            </select>
+            <select className={sel} value={value.rsiSignal ?? ''}
+              onChange={(e) => onChange({ ...value, rsiSignal: e.target.value })}
+              title={t('ind.momrsi_rsi_signal')}>
+              <option value="">RSI sinal: —</option>
+              {MOMENTUM_RSI_SIGNAL_OPTIONS.map((n) => <option key={n} value={String(n)}>RSI sinal: {n}</option>)}
+            </select>
+          </>
         )}
 
         {type === 'gateCoins' && (
@@ -1281,7 +1379,7 @@ function IndicatorRow({ value, onChange }) {
       )}
 
       {/* Intervalos de candle das MAs (≠ tempo desde o cruzamento) */}
-      {type !== 'marketCap' && type !== 'botReadiness' && type !== 'gateCoins' && !(type === 'maCrossover' && value.mixedIntervals) && (
+      {type !== 'marketCap' && type !== 'botReadiness' && type !== 'botReadinessCurated' && type !== 'gateCoins' && !(type === 'maCrossover' && value.mixedIntervals) && (
         <div className="flex flex-row flex-wrap gap-1 items-center">
           {type === 'maCrossover' && (
             <span className="text-[10px] text-p5/60 shrink-0 mr-1" title={t('macross.tip.candle_iv')}>
@@ -1403,8 +1501,10 @@ export default function IndicatorPanel({ open, onToggle }) {
     });
   }, []);
 
-  function updateIndicator(index, newVal) {
-    setIndicators((prev) => prev.map((item, i) => (i === index ? newVal : item)));
+  function updateIndicator(index, newValOrFn) {
+    setIndicators((prev) => prev.map((item, i) => (
+      i === index ? (typeof newValOrFn === 'function' ? newValOrFn(item) : newValOrFn) : item
+    )));
   }
 
   function addRow() {
@@ -1436,9 +1536,9 @@ export default function IndicatorPanel({ open, onToggle }) {
       const vwapBandWidthIndicators = indicators.filter((ind) => ind.type === 'vwapBandWidth');
       const vwapBandExpansionIndicators = indicators.filter((ind) => ind.type === 'vwapBandExpansion');
       const growthIndicators = indicators.filter((ind) => ind.type === 'indicatorGrowth');
-      const botReadyIndicators = indicators.filter((ind) => ind.type === 'botReadiness');
+      const botReadyIndicators = indicators.filter((ind) => ind.type === 'botReadiness' || ind.type === 'botReadinessCurated');
       const gateCoinsIndicators = indicators.filter((ind) => ind.type === 'gateCoins');
-      const otherIndicators = indicators.filter((ind) => ind.type && ind.type !== 'relativeStrengthIndex' && ind.type !== 'marketCap' && ind.type !== 'botReadiness' && ind.type !== 'gateCoins' && ind.type !== 'movingAverage' && ind.type !== 'maTimeAbove' && ind.type !== 'maCrossover' && ind.type !== 'maCompare' && ind.type !== 'maDistance' && ind.type !== 'bollingerPosition' && ind.type !== 'bollingerBandWidth' && ind.type !== 'bollingerMedianTrend' && ind.type !== 'vwapPosition' && ind.type !== 'vwapBandWidth' && ind.type !== 'vwapBandExpansion' && ind.type !== 'indicatorGrowth');
+      const otherIndicators = indicators.filter((ind) => ind.type && ind.type !== 'relativeStrengthIndex' && ind.type !== 'marketCap' && ind.type !== 'botReadiness' && ind.type !== 'botReadinessCurated' && ind.type !== 'gateCoins' && ind.type !== 'movingAverage' && ind.type !== 'maTimeAbove' && ind.type !== 'maCrossover' && ind.type !== 'maCompare' && ind.type !== 'maDistance' && ind.type !== 'bollingerPosition' && ind.type !== 'bollingerBandWidth' && ind.type !== 'bollingerMedianTrend' && ind.type !== 'vwapPosition' && ind.type !== 'vwapBandWidth' && ind.type !== 'vwapBandExpansion' && ind.type !== 'indicatorGrowth');
 
       // Salva intervalos e análises usadas nas preferências
       const allIntervals = [...new Set(indicators.flatMap(ind => ind.intervals ?? []))];
@@ -1472,20 +1572,35 @@ export default function IndicatorPanel({ open, onToggle }) {
         addFilter(filter);
       }
 
-      // Prontas pra entrar (bot RSI Momentum): varre o mercado com a config global ativa do bot
-      // e devolve as moedas mais perto de disparar o sinal (ver fetchRsiMomentumWatchlist.js).
+      // Momentum RSI (Trade Geral / Trade Exclusivo): varre o mercado com a config que está rodando
+      // agora — global (scope=geral) ou do bot curado da moeda (scope=exclusivo) — com os overrides
+      // dos seletores, e devolve as moedas mais perto de disparar o sinal (ver fetchRsiMomentumWatchlist.js).
       for (const ind of botReadyIndicators) {
         const mode = ind.mode ?? 'ready';
-        const data = await fetchRsiMomentumWatchlist(); // cache de 45s no backend
+        const scope = ind.type === 'botReadinessCurated' ? 'exclusivo' : 'geral';
+        if (scope === 'exclusivo' && !ind.symbol) {
+          alert(t('ind.momrsi_curated_coin_missing'));
+          continue;
+        }
+        const data = await fetchRsiMomentumWatchlist({
+          scope,
+          symbol: scope === 'exclusivo' ? ind.symbol : undefined,
+          tradeInterval: ind.tradeInterval || undefined,
+          srInterval: ind.srInterval || undefined,
+          srCandleCount: ind.srCandleCount || undefined,
+          rsiSignal: ind.rsiSignal || undefined,
+        });
         const pick = mode === 'signal'
           ? (c) => c.crossed
           : mode === 'contention'
             ? () => true
             : (c) => c.onlyMissingCross || c.crossed; // 'ready'
         const list = (data.coins ?? []).filter(pick).map((c) => c.symbol);
-        const name = mode === 'signal' ? 'bot|Sinal agora'
-          : mode === 'contention' ? `bot|No páreo (RSI perto de ${data.config?.rsiThreshold ?? '?'})`
-            : 'bot|Prontas (só falta cruzar)';
+        const prefix = scope === 'exclusivo' ? `bot|Exclusivo ${ind.symbol}` : 'bot|Geral';
+        const ivTag = data.config?.interval ? ` ${data.config.interval}` : '';
+        const name = mode === 'signal' ? `${prefix} · Sinal agora${ivTag}`
+          : mode === 'contention' ? `${prefix} · No páreo (RSI ~${data.config?.rsiThreshold ?? '?'})`
+            : `${prefix} · Prontas (só falta cruzar)${ivTag}`;
         addFilter({ name, list });
       }
 

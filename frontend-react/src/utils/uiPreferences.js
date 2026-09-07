@@ -529,7 +529,14 @@ export const DEFAULT_UI_PREFS = {
   chartEngineDefault: DEFAULT_CHART_ENGINE,
   candleCountDisplayDefault: DEFAULT_CANDLE_COUNT_DISPLAY,
   fontScale: { ...FONT_SCALE_DEFAULT },
+  // Símbolo do bot exclusivo (curated) do RSI Momentum que preenche por padrão o formulário
+  // "Momentum RSI · Trade Exclusivo" em Analisar Indicadores. '' = primeira da lista.
+  rsiMomentumCuratedDefault: '',
 };
+
+export function normalizeRsiMomentumCuratedDefault(raw) {
+  return typeof raw === 'string' ? raw.trim().toUpperCase() : '';
+}
 
 function cloneDefaults() {
   return {
@@ -569,6 +576,7 @@ function cloneDefaults() {
     chartEngineDefault: DEFAULT_CHART_ENGINE,
     candleCountDisplayDefault: DEFAULT_CANDLE_COUNT_DISPLAY,
     fontScale: { ...FONT_SCALE_DEFAULT },
+    rsiMomentumCuratedDefault: '',
   };
 }
 
@@ -689,6 +697,9 @@ export function loadUiPreferences() {
     }
     if (parsed.fontScale !== undefined) {
       result.fontScale = normalizeFontScale(parsed.fontScale);
+    }
+    if (parsed.rsiMomentumCuratedDefault !== undefined) {
+      result.rsiMomentumCuratedDefault = normalizeRsiMomentumCuratedDefault(parsed.rsiMomentumCuratedDefault);
     }
     return result;
   } catch {
