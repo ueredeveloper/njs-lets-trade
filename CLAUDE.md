@@ -19,7 +19,26 @@ npm run frontend:react   # Vite dev server on port 5173
 # Tests (backend only)
 npx jest
 npx jest backend/tests/calculate-liquidity.test.js   # single test file
+
+# Bots de trade (Bollinger + RSI Momentum) — sobe também a API interna de admin
+npm run bots:bands
 ```
+
+## API interna de administração (`backend/admin/`)
+
+O launcher `npm run bots:bands` sobe um `http.Server` **só loopback** (default
+`127.0.0.1:4100`) com endpoints **só de leitura** — `GET /internal/health`,
+`/internal/info` (versão, git, pids/uptime dos bots), `/internal/log`. É o lado
+cooperativo da administração remota: o projeto `njs-whatsapp` (porta 3005) consome
+isso para responder `/admin/status`, `/admin/health`, `/admin/log` no WhatsApp.
+Não há endpoint de restart/update/shell — isso é feito por fora. Config no `.env`
+(`INTERNAL_ADMIN_*`).
+
+**Ao editar `backend/admin/` ou `backend/bot/start-bands-bots.js`, leia
+`backend/admin/README.md` primeiro.** Invariantes que não podem quebrar: bind só
+em `127.0.0.1`; `authorized()` (loopback + `X-Internal-Token`) em toda request;
+só `GET`; nada de restart/update/exec; não vazar segredo em `/internal/info`;
+falha de git/disco/porta não derruba os bots.
 
 ## Architecture
 
