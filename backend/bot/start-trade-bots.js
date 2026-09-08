@@ -57,8 +57,12 @@ botControl.clearStalePending();
   console.log(line);
   try { botLog.writeLine(`[launcher] ${line}`); } catch { /* nunca derruba o launcher */ }
 
-  const testeLine = '>> TESTE DE DEPLOY VIA /update — SE VOCE VE ESTA LINHA EM CAIXA ALTA, O CODIGO NOVO ESTA NO AR';
-  console.log(testeLine);
+  const acao = recent && last.action === 'update' && last.ok !== false ? 'UPDATE OK'
+    : recent && last.action === 'update' ? 'UPDATE FALHOU'
+    : recent && last.action === 'restart' ? 'RESTART OK'
+    : 'START NORMAL';
+  const testeLine = `>> ===== DEPLOY VIA WHATSAPP: ${acao} — CAIXA ALTA CONFIRMA CODIGO NOVO NO AR (v${v}) =====`;
+  console.log(testeLine.toUpperCase());
   try { botLog.writeLine(`[launcher] ${testeLine}`); } catch { /* nunca derruba o launcher */ }
 }
 
