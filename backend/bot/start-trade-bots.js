@@ -55,6 +55,9 @@ botControl.clearStalePending();
     line = `>> njs-lets-trade launcher v${v}`;
   }
   console.log(line);
+  // Marcador em AMARELO (ANSI) desta atualização — bem visível no prompt do Termux.
+  // Temporário: reverter depois do teste de deploy.
+  console.log(`\x1b[1;33m>>> ATUALIZAÇÃO DO MOMENTO — v${v} no ar\x1b[0m`);
   try { botLog.writeLine(`[launcher] ${line}`); } catch { /* nunca derruba o launcher */ }
 
   const acao = recent && last.action === 'update' && last.ok !== false ? 'UPDATE OK'
