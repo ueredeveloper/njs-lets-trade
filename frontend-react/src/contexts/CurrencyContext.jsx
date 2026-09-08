@@ -54,6 +54,8 @@ import {
   normalizeBarsSinceCrossInterval,
   normalizeTdSequentialInterval,
   normalizeRsiCrossThreshold,
+  normalizeRsiCrossValue,
+  normalizeRsiCrossInterval,
   normalizeVwapDefaults,
   normalizeVwapAnchor,
   normalizeVwapSlopeHighlight,
@@ -884,6 +886,22 @@ export function CurrencyProvider({ children }) {
     });
   }, []);
 
+  const setRsiCrossValueDefault = useCallback((value) => {
+    setUiPrefsState((prev) => {
+      const next = { ...prev, rsiCrossValueDefault: normalizeRsiCrossValue(value) };
+      saveUiPreferences(next);
+      return next;
+    });
+  }, []);
+
+  const setRsiCrossIntervalDefault = useCallback((interval) => {
+    setUiPrefsState((prev) => {
+      const next = { ...prev, rsiCrossIntervalDefault: normalizeRsiCrossInterval(interval) };
+      saveUiPreferences(next);
+      return next;
+    });
+  }, []);
+
   const setVwapDefaults = useCallback((patch) => {
     setUiPrefsState((prev) => {
       const next = {
@@ -1276,6 +1294,8 @@ export function CurrencyProvider({ children }) {
         setBarsSinceCrossIntervalDefault,
         setTdSequentialIntervalDefault,
         setRsiCrossThresholdDefault,
+        setRsiCrossValueDefault,
+        setRsiCrossIntervalDefault,
         setVwapDefaults,
         setVwapSlopeHighlightDefault,
         setVwapAnchorDefault,

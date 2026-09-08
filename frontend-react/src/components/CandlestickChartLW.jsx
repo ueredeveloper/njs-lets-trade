@@ -4,7 +4,6 @@ import { computeVwapSlopeFlags } from '../utils/vwapSlopeHighlight';
 import { computeStopLossFloor } from '../utils/trailingStopLoss';
 import { RectanglePrimitive } from '../utils/lwRectanglePrimitive';
 import { BandFillPrimitive } from '../utils/lwBandFillPrimitive';
-import { computeRsiUpCrossings } from '../utils/rsiThresholdCrossings';
 import { tickMarkFormatterBrt, crosshairTimeFormatterBrt } from '../utils/lwBrtTimeFormat';
 import { INTERVAL_MS } from '../utils/chartView';
 import { simulateBbTouchPath, pairBbPathCycles } from '../utils/bollingerTouchPath';
@@ -677,7 +676,7 @@ function toValidLwCandles(candlesticks) {
 const CandlestickChartLW = forwardRef(function CandlestickChartLW({
   symbol, interval, candlesticks, colors, rightPad = 0,
   activeIndicators = [], ma9, ma21, ma50, ma200, overlayConfigs, vwapConfig, vwapSlopeHighlight,
-  bollingerConfigs = [], srConfig, pphlConfig, wfractalsConfig, zigzagConfig, rsiCrossThreshold = 0, flagsConfig, analysisBoxRect, prevDayCloudConfig, rsi, chopConfig, macdConfig,
+  bollingerConfigs = [], srConfig, pphlConfig, wfractalsConfig, zigzagConfig, rsiCrossThreshold = 0, rsiCrossTimes = [], flagsConfig, analysisBoxRect, prevDayCloudConfig, rsi, chopConfig, macdConfig,
   emaPersistCloudData, emaPersistCloudConfirmData, emaPersistCloudConfirm2Data, emaPersistCloudLayers, emaPersistCloudTones, barsSinceCrossData, tdSequentialData,
   stopLossConfig, targetConfig, buyInfo, multitradeMarkers, zoomPeriod, focusLastN,
   onNeedOlderCandles, loadingMoreCandles, onVisibleRangeChange, visibleRange,
@@ -1425,15 +1424,16 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
     }
   }, [srConfig, candlesticks, visibleRange]);
 
-  // Linhas verticais (fullHeight, largura 2px) nos candles em que o RSI(14) cruzou pra cima do
-  // "Limiar RSI" — mesmo gatilho do bot RSI Momentum (ver computeRsiUpCrossings). Roxo.
+  // Linhas verticais (fullHeight, largura 2px) nos candles em que o RSI(14) do intervalo ESCOLHIDO
+  // cruzou pra cima do "Limiar RSI" — mesmo gatilho do bot RSI Momentum. `rsiCrossTimes` (openTime
+  // em ms, já snapado pra grade do gráfico) vem calculado no pai (ver chartRsiCrossTimes). Roxo.
   const rsiCrossRects = useMemo(() => {
-    if (!(Number(rsiCrossThreshold) > 0) || !activeIndicators.includes('rsi')) return [];
-    return computeRsiUpCrossings(rsi, candlesticks, rsiCrossThreshold).map((openMs) => {
-      const time = Math.floor(openMs / 1000);
+    if (!(Number(rsiCrossThreshold) > 0) || !activeIndicators.includes('rsi') || !rsiCrossTimes?.length) return [];
+    return rsiCrossTimes.map((openMs) => {
+      const time = Math.floor(Number(openMs) / 1000);
       return { time1: time, time2: time, fullHeight: true, fillColor: 'rgba(167,139,250,0.55)', lineWidth: 2 };
     });
-  }, [rsi, candlesticks, rsiCrossThreshold, activeIndicators]);
+  }, [rsiCrossTimes, rsiCrossThreshold, activeIndicators]);
 
   // Quadrados alvo/stop da posição aberta — retângulo customizado (ver lwRectanglePrimitive.js),
   // igual ao buildBuyPositionSquares do ECharts (markArea verde/vermelho com % de distância).

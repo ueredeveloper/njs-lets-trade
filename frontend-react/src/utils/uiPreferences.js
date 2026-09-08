@@ -383,15 +383,33 @@ export function normalizeTdSequentialInterval(raw) {
   return CHART_INTERVAL_OPTIONS.includes(raw) ? raw : DEFAULT_TD_SEQUENTIAL_INTERVAL;
 }
 
-/** "Limiar RSI" — linha vertical no gráfico de candles onde o RSI(14) do intervalo do gráfico
- *  cruza pra CIMA desse valor (mesmo gatilho do bot RSI Momentum). 0 = desligado. Só aparece
- *  quando o subpainel de RSI está ligado. */
-export const RSI_CROSS_THRESHOLD_OPTIONS = [0, 50, 55, 60, 65, 70, 75, 80];
+/** "Limiar RSI" — linha vertical roxa no gráfico de candles onde o RSI(14) do intervalo ESCOLHIDO
+ *  (não mais o do gráfico) cruza pra CIMA do valor escolhido — mesmo gatilho do bot RSI Momentum.
+ *  Três controles: botão liga/desliga, seletor de intervalo, seletor de valor. Só aparece quando
+ *  o subpainel de RSI está ligado. */
+export const RSI_CROSS_THRESHOLD_OPTIONS = [0, 50, 55, 60, 65, 67, 68, 69, 70, 75, 80];
 export const DEFAULT_RSI_CROSS_THRESHOLD = 0;
+// Valores oferecidos no seletor quando o indicador está LIGADO (o liga/desliga virou um botão
+// separado — 0 não é mais uma opção do select). `DEFAULT_RSI_CROSS_VALUE` = valor usado ao
+// ligar sem nunca ter escolhido um (69 = mesmo limiar do trade principal em 15m).
+export const RSI_CROSS_VALUE_OPTIONS = [50, 55, 60, 65, 67, 68, 69, 70, 75, 80];
+export const DEFAULT_RSI_CROSS_VALUE = 69;
+// Intervalos gate-safe pro cálculo do RSI(14) da linha vertical (default = 15m, o do trade principal).
+export const RSI_CROSS_INTERVAL_OPTIONS = ['5m', '15m', '30m', '1h', '4h'];
+export const DEFAULT_RSI_CROSS_INTERVAL = '15m';
 
 export function normalizeRsiCrossThreshold(raw) {
   const n = Math.round(Number(raw));
   return RSI_CROSS_THRESHOLD_OPTIONS.includes(n) ? n : DEFAULT_RSI_CROSS_THRESHOLD;
+}
+
+export function normalizeRsiCrossValue(raw) {
+  const n = Math.round(Number(raw));
+  return RSI_CROSS_VALUE_OPTIONS.includes(n) ? n : DEFAULT_RSI_CROSS_VALUE;
+}
+
+export function normalizeRsiCrossInterval(raw) {
+  return RSI_CROSS_INTERVAL_OPTIONS.includes(raw) ? raw : DEFAULT_RSI_CROSS_INTERVAL;
 }
 
 /** Motor de renderização do gráfico principal. 'lw' = TradingView Lightweight Charts (padrão,
@@ -519,6 +537,8 @@ export const DEFAULT_UI_PREFS = {
   barsSinceCrossIntervalDefault: DEFAULT_BARS_SINCE_CROSS_INTERVAL,
   tdSequentialIntervalDefault: DEFAULT_TD_SEQUENTIAL_INTERVAL,
   rsiCrossThresholdDefault: DEFAULT_RSI_CROSS_THRESHOLD,
+  rsiCrossValueDefault: DEFAULT_RSI_CROSS_VALUE,
+  rsiCrossIntervalDefault: DEFAULT_RSI_CROSS_INTERVAL,
   vwapDefaults: normalizeVwapDefaults(DEFAULT_VWAP),
   vwapAnchorDefault: normalizeVwapAnchor(DEFAULT_VWAP_ANCHOR),
   vwapSlopeHighlightDefault: normalizeVwapSlopeHighlight(DEFAULT_VWAP_SLOPE_HIGHLIGHT),
@@ -566,6 +586,8 @@ function cloneDefaults() {
     barsSinceCrossIntervalDefault: DEFAULT_BARS_SINCE_CROSS_INTERVAL,
     tdSequentialIntervalDefault: DEFAULT_TD_SEQUENTIAL_INTERVAL,
     rsiCrossThresholdDefault: DEFAULT_RSI_CROSS_THRESHOLD,
+    rsiCrossValueDefault: DEFAULT_RSI_CROSS_VALUE,
+    rsiCrossIntervalDefault: DEFAULT_RSI_CROSS_INTERVAL,
     vwapDefaults: normalizeVwapDefaults(DEFAULT_VWAP),
     vwapAnchorDefault: normalizeVwapAnchor(DEFAULT_VWAP_ANCHOR),
     vwapSlopeHighlightDefault: normalizeVwapSlopeHighlight(DEFAULT_VWAP_SLOPE_HIGHLIGHT),
@@ -667,6 +689,12 @@ export function loadUiPreferences() {
     }
     if (parsed.rsiCrossThresholdDefault !== undefined) {
       result.rsiCrossThresholdDefault = normalizeRsiCrossThreshold(parsed.rsiCrossThresholdDefault);
+    }
+    if (parsed.rsiCrossValueDefault !== undefined) {
+      result.rsiCrossValueDefault = normalizeRsiCrossValue(parsed.rsiCrossValueDefault);
+    }
+    if (parsed.rsiCrossIntervalDefault !== undefined) {
+      result.rsiCrossIntervalDefault = normalizeRsiCrossInterval(parsed.rsiCrossIntervalDefault);
     }
     if (parsed.vwapDefaults) {
       result.vwapDefaults = normalizeVwapDefaults(parsed.vwapDefaults);

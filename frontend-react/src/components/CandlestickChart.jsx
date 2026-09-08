@@ -12,8 +12,8 @@ import CandlestickChartLW from './CandlestickChartLW';
 import convertOpenTime from '../utils/convertOpenTime';
 import Tooltip from './Tooltip';
 import { useIsMobile } from '../hooks/useIsMobile';
-import { DEFAULT_OVERLAY_SLOTS, DEFAULT_ACTIVE_INDICATORS, VALID_ACTIVE_INDICATORS, BB_PERIOD_OPTIONS, BB_STDDEV_OPTIONS, DEFAULT_SR_INTERVAL, DEFAULT_PPHL_INTERVAL, DEFAULT_WFRACTALS_INTERVAL, DEFAULT_ZIGZAG_INTERVAL, INDICATOR_CANDLE_COUNT_OPTIONS, DEFAULT_INDICATOR_CANDLE_COUNT, DEFAULT_SR_CANDLE_COUNT, SR_STYLE_OPTIONS, DEFAULT_SR_STYLE, DEFAULT_CHOP_INTERVAL, DEFAULT_MACD_INTERVAL, DEFAULT_PREV_DAY_CLOUD_INTERVAL, PREV_DAY_CLOUD_INTERVAL_OPTIONS, GATE_PREV_DAY_CLOUD_INTERVALS, DEFAULT_PREV_DAY_CLOUD_CANDLE_COUNT, PREV_DAY_CLOUD_CANDLE_COUNT_OPTIONS, DEFAULT_PREV_DAY_CLOUD_USE_HIGH_LOW, DEFAULT_EMA_PERSIST_CLOUD_INTERVAL, DEFAULT_PERM_CLOUD_TONES, DEFAULT_EMA_PERSIST_CLOUD_LAYERS, DEFAULT_BARS_SINCE_CROSS_INTERVAL, DEFAULT_TD_SEQUENTIAL_INTERVAL, RSI_CROSS_THRESHOLD_OPTIONS, DEFAULT_RSI_CROSS_THRESHOLD, DEFAULT_COMMON_CHART_INTERVALS, getEmaPersistCloudConfirmInterval } from '../utils/uiPreferences';
-import { computeRsiUpCrossings } from '../utils/rsiThresholdCrossings';
+import { DEFAULT_OVERLAY_SLOTS, DEFAULT_ACTIVE_INDICATORS, VALID_ACTIVE_INDICATORS, BB_PERIOD_OPTIONS, BB_STDDEV_OPTIONS, DEFAULT_SR_INTERVAL, DEFAULT_PPHL_INTERVAL, DEFAULT_WFRACTALS_INTERVAL, DEFAULT_ZIGZAG_INTERVAL, INDICATOR_CANDLE_COUNT_OPTIONS, DEFAULT_INDICATOR_CANDLE_COUNT, DEFAULT_SR_CANDLE_COUNT, SR_STYLE_OPTIONS, DEFAULT_SR_STYLE, DEFAULT_CHOP_INTERVAL, DEFAULT_MACD_INTERVAL, DEFAULT_PREV_DAY_CLOUD_INTERVAL, PREV_DAY_CLOUD_INTERVAL_OPTIONS, GATE_PREV_DAY_CLOUD_INTERVALS, DEFAULT_PREV_DAY_CLOUD_CANDLE_COUNT, PREV_DAY_CLOUD_CANDLE_COUNT_OPTIONS, DEFAULT_PREV_DAY_CLOUD_USE_HIGH_LOW, DEFAULT_EMA_PERSIST_CLOUD_INTERVAL, DEFAULT_PERM_CLOUD_TONES, DEFAULT_EMA_PERSIST_CLOUD_LAYERS, DEFAULT_BARS_SINCE_CROSS_INTERVAL, DEFAULT_TD_SEQUENTIAL_INTERVAL, DEFAULT_RSI_CROSS_THRESHOLD, RSI_CROSS_VALUE_OPTIONS, DEFAULT_RSI_CROSS_VALUE, RSI_CROSS_INTERVAL_OPTIONS, DEFAULT_RSI_CROSS_INTERVAL, DEFAULT_COMMON_CHART_INTERVALS, getEmaPersistCloudConfirmInterval } from '../utils/uiPreferences';
+import { computeRsiUpCrossingsFromCandles } from '../utils/rsiThresholdCrossings';
 import { detectSupportResistance, detectPivotPointsHighLow, detectWilliamsFractals, detectZigZag } from '../utils/srDetectors';
 import { logSrLevels } from '../utils/srLevelLog';
 import { PERM_CLOUD_TONES, PERM_TONE_SWATCH } from '../utils/emaCrossPersistenceCloud';
@@ -1514,21 +1514,71 @@ function renderSrTile(dims, t, interval, setInterval, count, setCount, style, se
   );
 }
 
-/** Seletor do "Limiar RSI" — linha vertical no gráfico onde o RSI(14) do intervalo do gráfico
- *  cruza pra cima do valor escolhido (0 = desligado). Só aparece com o subpainel de RSI ligado. */
-function renderRsiCrossThresholdTile(dims, t, value, onChange) {
+/** "Limiar RSI" — linha vertical roxa no gráfico onde o RSI(14) do intervalo ESCOLHIDO cruza pra
+ *  cima do valor escolhido. Três controles lado a lado: botão liga/desliga, seletor de intervalo
+ *  (default 15m — o do trade principal), seletor de valor (default 69). `threshold` = valor
+ *  efetivo (0 = desligado); `value` = valor lembrado pro botão religar. Só aparece com o
+ *  subpainel de RSI ligado. */
+function renderRsiCrossThresholdTile(dims, t, threshold, setThreshold, value, setValue, interval, setInterval) {
   const innerW = dims.w - PANEL_TILE_PAD * 2;
   const innerH = dims.h - PANEL_TILE_PAD * 2;
+  const on = Number(threshold) > 0;
+  const gap = 3;
+  const btnW = Math.max(30, innerW * 0.2 - gap);
+  const ivW = Math.max(40, innerW * 0.34 - gap);
+  const selW = Math.max(48, innerW - btnW - ivW - gap * 2);
+  const pickValue = on ? Number(threshold) : Number(value) || DEFAULT_RSI_CROSS_VALUE;
+  const toggle = () => {
+    if (on) setThreshold(0);
+    else setThreshold(Number(value) || DEFAULT_RSI_CROSS_VALUE);
+  };
+  const pick = (v) => {
+    setValue(v);
+    if (on) setThreshold(v);
+  };
   return (
-    <div style={{ display: 'flex', alignItems: 'stretch', width: innerW, height: innerH, boxSizing: 'border-box' }}>
+    <div style={{ display: 'flex', alignItems: 'stretch', width: innerW, height: innerH, boxSizing: 'border-box', gap }}>
+      <PanelTip text={t('chart.tip.rsi_cross_toggle')}>
+        <button
+          type="button"
+          aria-pressed={on}
+          onClick={(e) => { e.stopPropagation(); toggle(); }}
+          style={{
+            width: btnW,
+            height: innerH,
+            padding: 0,
+            borderRadius: 4,
+            border: on ? '1px solid #a78bfa' : '1px solid #334155',
+            background: on ? 'rgba(167,139,250,0.18)' : 'transparent',
+            color: on ? '#a78bfa' : '#64748b',
+            fontSize: scaleFontSize({ w: btnW, h: innerH }, 0.3, 8, 12),
+            fontFamily: 'monospace',
+            cursor: 'pointer',
+            boxSizing: 'border-box',
+          }}
+        >
+          {on ? t('chart.rsi_cross_on') : t('chart.rsi_cross_off')}
+        </button>
+      </PanelTip>
+      <PanelTip text={t('chart.tip.rsi_cross_interval')}>
+        <select
+          value={interval}
+          onChange={e => setInterval(e.target.value)}
+          style={{ ...panelSelect('#a78bfa', { w: ivW, h: innerH }), fontSize: scaleFontSize({ w: ivW, h: innerH }, 0.3, 9, 13), opacity: on ? 1 : 0.55 }}
+        >
+          {RSI_CROSS_INTERVAL_OPTIONS.map(iv => (
+            <option key={iv} value={iv}>{`RSI ${iv}`}</option>
+          ))}
+        </select>
+      </PanelTip>
       <PanelTip text={t('chart.tip.rsi_cross_threshold')}>
         <select
-          value={value}
-          onChange={e => onChange(Number(e.target.value))}
-          style={{ ...panelSelect('#a78bfa', { w: innerW, h: innerH }), fontSize: scaleFontSize({ w: innerW, h: innerH }, 0.3, 9, 13) }}
+          value={pickValue}
+          onChange={e => pick(Number(e.target.value))}
+          style={{ ...panelSelect('#a78bfa', { w: selW, h: innerH }), fontSize: scaleFontSize({ w: selW, h: innerH }, 0.3, 9, 13), opacity: on ? 1 : 0.55 }}
         >
-          {RSI_CROSS_THRESHOLD_OPTIONS.map(v => (
-            <option key={v} value={v}>{v === 0 ? t('chart.rsi_cross_off') : `RSI ⤴ ${v}`}</option>
+          {RSI_CROSS_VALUE_OPTIONS.map(v => (
+            <option key={v} value={v}>{`⤴ ${v}`}</option>
           ))}
         </select>
       </PanelTip>
@@ -2148,6 +2198,10 @@ function ChartIndicatorPanel({
   setZigzagCandleCount,
   rsiCrossThreshold,
   setRsiCrossThreshold,
+  rsiCrossValue,
+  setRsiCrossValue,
+  rsiCrossInterval,
+  setRsiCrossInterval,
   chopInterval,
   setChopInterval,
   macdInterval,
@@ -2442,7 +2496,7 @@ function ChartIndicatorPanel({
               {tile.kind === 'pphlInterval' && renderIndicatorIntervalCountTile(tile.dims, t, 'chart.tip.pphl_interval', 'chart.tip.pphl_count', 'PPHL', '#2dd4bf', pphlInterval, setPphlInterval, pphlCandleCount, setPphlCandleCount)}
               {tile.kind === 'wfractalsInterval' && renderIndicatorIntervalCountTile(tile.dims, t, 'chart.tip.wfractals_interval', 'chart.tip.wfractals_count', 'WF', '#f472b6', wfractalsInterval, setWfractalsInterval, wfractalsCandleCount, setWfractalsCandleCount)}
               {tile.kind === 'zigzagInterval' && renderIndicatorIntervalCountTile(tile.dims, t, 'chart.tip.zigzag_interval', 'chart.tip.zigzag_count', 'ZZ', '#818cf8', zigzagInterval, setZigzagInterval, zigzagCandleCount, setZigzagCandleCount)}
-              {tile.kind === 'rsiCrossThreshold' && renderRsiCrossThresholdTile(tile.dims, t, rsiCrossThreshold, setRsiCrossThreshold)}
+              {tile.kind === 'rsiCrossThreshold' && renderRsiCrossThresholdTile(tile.dims, t, rsiCrossThreshold, setRsiCrossThreshold, rsiCrossValue, setRsiCrossValue, rsiCrossInterval, setRsiCrossInterval)}
               {tile.kind === 'chopInterval' && renderIntervalPickerTile(tile.dims, t, 'chart.tip.chop_interval', 'CHOP', '#f59e0b', chopInterval, setChopInterval)}
               {tile.kind === 'macdInterval' && renderIntervalPickerTile(tile.dims, t, 'chart.tip.macd_interval', 'MACD', '#38bdf8', macdInterval, setMacdInterval)}
               {tile.kind === 'prevDayCloudInterval' && renderPrevDayCloudTile(tile.dims, t, prevDayCloudInterval, setPrevDayCloudInterval, prevDayCloudCandleCount, setPrevDayCloudCandleCount, prevDayCloudUseHighLow, setPrevDayCloudUseHighLow)}
@@ -2905,14 +2959,13 @@ function buildSrMarkLines(levels, entrySupport = null, exitResistance = null) {
   });
 }
 
-/** Linhas verticais nos candles em que o RSI(14) do intervalo do gráfico cruzou PRA CIMA do
- *  "Limiar RSI" escolhido — mesmo gatilho de entrada do bot RSI Momentum (ver
- *  computeRsiUpCrossings). Roxo, igual à cor do botão RSI. */
-function buildRsiCrossMarkLines(rsi, candlesticks, DL, LEFT_PAD, threshold) {
-  const times = computeRsiUpCrossings(rsi, candlesticks, threshold);
-  if (!times.length) return [];
+/** Linhas verticais nos candles em que o RSI(14) do intervalo ESCOLHIDO cruzou PRA CIMA do
+ *  "Limiar RSI" — mesmo gatilho de entrada do bot RSI Momentum. `crossTimes` = openTime (ms) já
+ *  snapado pra grade do gráfico (ver chartRsiCrossTimes). Roxo, igual à cor do botão RSI. */
+function buildRsiCrossMarkLines(crossTimes, candlesticks, DL, LEFT_PAD, threshold) {
+  if (!crossTimes?.length) return [];
   const offset = candlesticks.length - DL;
-  const set = new Set(times);
+  const set = new Set(crossTimes.map(Number));
   const out = [];
   for (let j = 0; j < DL; j++) {
     const c = candlesticks[offset + j];
@@ -3008,7 +3061,7 @@ function buildSignalMarkers(candlesticks, markers, DL, LEFT_PAD, chartInterval) 
   return points;
 }
 
-function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAverage, ma50, ma9, ma21, rsi }, colors, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = [], overlayConfigs = [], multitradeMarkers = [], chartLeftPad = CHART_LEFT_MARGIN, buyInfo = null, stopLossConfig = null, targetConfig = null, chartRightPad = CHART_PRICE_PAD + CHART_LEFT_MARGIN, bollingerConfig = null, srConfig = null, pphlConfig = null, wfractalsConfig = null, zigzagConfig = null, vwapConfig = null, chopConfig = null, vwapSlopeHighlight = null, isMobile = false, bbPathEnabled = false, macdConfig = null, rsiCrossThreshold = 0) {
+function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAverage, ma50, ma9, ma21, rsi }, colors, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = [], overlayConfigs = [], multitradeMarkers = [], chartLeftPad = CHART_LEFT_MARGIN, buyInfo = null, stopLossConfig = null, targetConfig = null, chartRightPad = CHART_PRICE_PAD + CHART_LEFT_MARGIN, bollingerConfig = null, srConfig = null, pphlConfig = null, wfractalsConfig = null, zigzagConfig = null, vwapConfig = null, chopConfig = null, vwapSlopeHighlight = null, isMobile = false, bbPathEnabled = false, macdConfig = null, rsiCrossThreshold = 0, rsiCrossTimes = []) {
   const showMa9      = activeIndicators.includes('ma9');
   const showMa21     = activeIndicators.includes('ma21');
   const showMa50     = activeIndicators.includes('ma50');
@@ -3139,7 +3192,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
   const zigzagLine = showZigzag ? buildZigZagLine(zigzagConfig, candlesticks, DL, LEFT_PAD, interval) : { line: [], tentative: [] };
   const signalMarkers = buildSignalMarkers(candlesticks, multitradeMarkers, DL, LEFT_PAD, interval);
   const rsiCrossMarkData = (showRsi && rsiCrossThreshold > 0)
-    ? buildRsiCrossMarkLines(rsi, candlesticks, DL, LEFT_PAD, rsiCrossThreshold)
+    ? buildRsiCrossMarkLines(rsiCrossTimes, candlesticks, DL, LEFT_PAD, rsiCrossThreshold)
     : [];
   const allMarkLineData = [...dayBreakData, ...periodMarkData, ...tradeMarkData, ...mtMarkData, ...srMarkData, ...rsiCrossMarkData];
 
@@ -3762,7 +3815,7 @@ export default function CandlestickChart() {
     setWfractalsIntervalDefault, setWfractalsCandleCountDefault, setZigzagIntervalDefault, setZigzagCandleCountDefault,
     setChopIntervalDefault, setMacdIntervalDefault,
     setPrevDayCloudIntervalDefault, setPrevDayCloudCandleCountDefault, setPrevDayCloudUseHighLowDefault,
-    setEmaPersistCloudIntervalDefault, setEmaPersistCloudTonesDefault, setEmaPersistCloudLayersDefault, setBarsSinceCrossIntervalDefault, setTdSequentialIntervalDefault, setRsiCrossThresholdDefault,
+    setEmaPersistCloudIntervalDefault, setEmaPersistCloudTonesDefault, setEmaPersistCloudLayersDefault, setBarsSinceCrossIntervalDefault, setTdSequentialIntervalDefault, setRsiCrossThresholdDefault, setRsiCrossValueDefault, setRsiCrossIntervalDefault,
     setVwapDefaults, setVwapSlopeHighlightDefault, setActiveIndicatorsPreference,
     multitradeFavorites, fiveMTradeFavorites, activeTrades } = useCurrency();
   const { t } = useI18n();
@@ -3936,6 +3989,13 @@ export default function CandlestickChart() {
   const [pivotRawCache, setPivotRawCache] = useState({});
   const [_pivotRawLoading, setPivotRawLoading] = useState(false);
   const [rsiCrossThreshold, setRsiCrossThreshold] = useState(() => uiPrefs.rsiCrossThresholdDefault ?? DEFAULT_RSI_CROSS_THRESHOLD);
+  // Valor lembrado do "Limiar RSI" pro botão de liga/desliga religar (o select não tem mais "off").
+  const [rsiCrossValue, setRsiCrossValue] = useState(() => (
+    uiPrefs.rsiCrossValueDefault
+    ?? (uiPrefs.rsiCrossThresholdDefault > 0 ? uiPrefs.rsiCrossThresholdDefault : DEFAULT_RSI_CROSS_VALUE)
+  ));
+  // Intervalo do RSI(14) usado pra linha vertical do "Limiar RSI" (independente do intervalo do gráfico).
+  const [rsiCrossInterval, setRsiCrossInterval] = useState(() => uiPrefs.rsiCrossIntervalDefault ?? DEFAULT_RSI_CROSS_INTERVAL);
   // Trecho de TEMPO visível do gráfico (ms) — reportado pelos dois motores (LW via
   // subscribeVisibleTimeRangeChange, ECharts via evento dataZoom), com debounce.
   const [visibleChartRange, setVisibleChartRange] = useState(null);
@@ -4379,6 +4439,16 @@ export default function CandlestickChart() {
     setRsiCrossThresholdDefault(rsiCrossThreshold);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rsiCrossThreshold]);
+  useEffect(() => {
+    if (isTradePanelChartView(chartViewSource)) return;
+    setRsiCrossValueDefault(rsiCrossValue);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rsiCrossValue]);
+  useEffect(() => {
+    if (isTradePanelChartView(chartViewSource)) return;
+    setRsiCrossIntervalDefault(rsiCrossInterval);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rsiCrossInterval]);
 
   // Persiste o intervalo do CHOP (mesmo padrão do S/R/PPHL)
   useEffect(() => {
@@ -4740,14 +4810,20 @@ export default function CandlestickChart() {
   const wfractalsShown = activeIndicators.includes('wfractals') && chartPanelButtons.wfractals !== false;
   const zigzagShown = activeIndicators.includes('zigzag') && chartPanelButtons.zigzag !== false;
 
+  // Linha vertical do "Limiar RSI": precisa dos candles brutos do intervalo escolhido pra calcular
+  // o RSI(14) no cliente (o `selectedChart.rsi` é só do intervalo do gráfico e das últimas ~166
+  // velas). Reutiliza o mesmo cache/fetch dos pivôs.
+  const rsiCrossShown = Number(rsiCrossThreshold) > 0 && activeIndicators.includes('rsi');
+
   const pivotIntervalsNeeded = useMemo(() => {
     const set = new Set();
     if (srShown) set.add(srInterval);
     if (pphlShown) set.add(pphlInterval);
     if (wfractalsShown) set.add(wfractalsInterval);
     if (zigzagShown) set.add(zigzagInterval);
+    if (rsiCrossShown) set.add(rsiCrossInterval);
     return [...set];
-  }, [srShown, pphlShown, wfractalsShown, zigzagShown, srInterval, pphlInterval, wfractalsInterval, zigzagInterval]);
+  }, [srShown, pphlShown, wfractalsShown, zigzagShown, rsiCrossShown, srInterval, pphlInterval, wfractalsInterval, zigzagInterval, rsiCrossInterval]);
 
   useEffect(() => {
     if (!selectedChart?.symbol || !pivotIntervalsNeeded.length) {
@@ -5928,6 +6004,33 @@ export default function CandlestickChart() {
     return sliceForVisibleWindow(raw, visibleChartRange, count);
   }, [pivotRawCache, selectedChart?.symbol, visibleChartRange]);
 
+  // Linha vertical roxa do "Limiar RSI": lista de `openTime` (ms) — já snapada pra grade do
+  // intervalo do GRÁFICO — dos candles em que o RSI(14) do intervalo escolhido cruzou pra cima do
+  // limiar. Os dois motores (LW e ECharts) casam esses ms com o openTime dos candles exibidos.
+  const chartRsiCrossTimes = useMemo(() => {
+    if (!rsiCrossShown) return [];
+    const raw = pivotRawCache[`${selectedChart?.symbol}|${rsiCrossInterval}`]?.candles;
+    const chartCandles = selectedChart?.candlesticks;
+    if (!raw?.length || !chartCandles?.length) return [];
+    const chartIvMs = INTERVAL_MS[selectedChart.interval ?? currentInterval] ?? 900_000;
+    const times = chartCandles.map((c) => Number(c.openTime));
+    const firstMs = times[0];
+    const lastMs = times[times.length - 1];
+    const snapped = new Set();
+    for (const openMs of computeRsiUpCrossingsFromCandles(raw, rsiCrossThreshold)) {
+      if (openMs < firstMs || openMs > lastMs + chartIvMs) continue;
+      // candle do gráfico que contém o instante do cruzamento (último com openTime <= openMs)
+      let lo = 0;
+      let hi = times.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi + 1) >> 1;
+        if (times[mid] <= openMs) lo = mid; else hi = mid - 1;
+      }
+      snapped.add(times[lo]);
+    }
+    return [...snapped].sort((a, b) => a - b);
+  }, [rsiCrossShown, pivotRawCache, selectedChart?.symbol, selectedChart?.candlesticks, selectedChart?.interval, currentInterval, rsiCrossInterval, rsiCrossThreshold]);
+
   // Âncora do S/R rolante = abertura do último candle do intervalo do S/R que JÁ FECHOU até a
   // borda direita do trecho visível (candle em formação não entra — mesma regra do backtest,
   // sem look-ahead). Como é snapado pra grade do intervalo, arrastar DENTRO do mesmo candle de 4h
@@ -6128,10 +6231,10 @@ export default function CandlestickChart() {
       selectedChart, colors, effectiveIndicators, displayLimit, chartZoom, tradeTimes, overlayConfigs,
       chartTradeMarkers?.length ? chartTradeMarkers : (selectedChart.tradeMarkers ?? []),
       chartLeftPad, chartBuyInfo, chartStopLossConfig, chartTargetConfig, chartRightPad, chartBollingerConfig, chartSrConfig, chartPphlConfig, chartWfractalsConfig, chartZigzagConfig, chartVwapConfig, chartChopConfig, vwapSlopeHighlight, isMobile,
-      chartBollingerConfig?.showPath ?? false, chartMacdConfig, rsiCrossThreshold,
+      chartBollingerConfig?.showPath ?? false, chartMacdConfig, rsiCrossThreshold, chartRsiCrossTimes,
     );
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedChart, colors, effectiveIndicators, chartZoom, tradePurchases, chartTradeMarkers, activeTab, overlayConfigs, displayLimit, chartLeftPad, chartRightPad, chartBuyInfo, chartStopLossConfig, chartTargetConfig, chartBollingerConfig, chartSrConfig, chartPphlConfig, chartWfractalsConfig, chartZigzagConfig, chartVwapConfig, chartChopConfig, chartMacdConfig, vwapSlopeHighlight, isMobile, rsiCrossThreshold, uiPrefs.fontScale]);
+  }, [selectedChart, colors, effectiveIndicators, chartZoom, tradePurchases, chartTradeMarkers, activeTab, overlayConfigs, displayLimit, chartLeftPad, chartRightPad, chartBuyInfo, chartStopLossConfig, chartTargetConfig, chartBollingerConfig, chartSrConfig, chartPphlConfig, chartWfractalsConfig, chartZigzagConfig, chartVwapConfig, chartChopConfig, chartMacdConfig, vwapSlopeHighlight, isMobile, rsiCrossThreshold, chartRsiCrossTimes, uiPrefs.fontScale]);
 
   if (!selectedChart || !option) {
     return (
@@ -6478,6 +6581,10 @@ export default function CandlestickChart() {
             setZigzagCandleCount={setZigzagCandleCount}
             rsiCrossThreshold={rsiCrossThreshold}
             setRsiCrossThreshold={setRsiCrossThreshold}
+            rsiCrossValue={rsiCrossValue}
+            setRsiCrossValue={setRsiCrossValue}
+            rsiCrossInterval={rsiCrossInterval}
+            setRsiCrossInterval={setRsiCrossInterval}
             chopInterval={chopInterval}
             setChopInterval={setChopInterval}
             macdInterval={macdInterval}
@@ -6536,6 +6643,7 @@ export default function CandlestickChart() {
               wfractalsConfig={chartWfractalsConfig}
               zigzagConfig={chartZigzagConfig}
               rsiCrossThreshold={rsiCrossThreshold}
+              rsiCrossTimes={chartRsiCrossTimes}
               flagsConfig={chartFlagsConfig}
               analysisBoxRect={analysisBoxRect}
               prevDayCloudConfig={chartPrevDayCloudConfig}
@@ -6609,6 +6717,10 @@ export default function CandlestickChart() {
             setZigzagCandleCount={setZigzagCandleCount}
             rsiCrossThreshold={rsiCrossThreshold}
             setRsiCrossThreshold={setRsiCrossThreshold}
+            rsiCrossValue={rsiCrossValue}
+            setRsiCrossValue={setRsiCrossValue}
+            rsiCrossInterval={rsiCrossInterval}
+            setRsiCrossInterval={setRsiCrossInterval}
             chopInterval={chopInterval}
             setChopInterval={setChopInterval}
             macdInterval={macdInterval}
