@@ -39,6 +39,7 @@ function buildReasonLabels(config) {
     const maxMovePct = config.entry.spikeGuard?.maxMovePct;
     const macdIv = config.entry.macdFilter?.interval ?? '1h';
     const higherRsiMin = config.entry.higherRsiFilter?.minRsi ?? 50;
+    const emaCrossIv = config.entry.emaCrossFilter?.interval ?? '8h';
     const srIv = config.entry.supportResistance?.interval ?? '4h';
     const srMaxPct = config.entry.supportResistance?.entryMaxPct ?? 5;
     const srRank = config.entry.supportResistance?.entrySupportRank ?? 1;
@@ -54,6 +55,7 @@ function buildReasonLabels(config) {
         RSI5M_TOO_LOW: `RSI(14) do candle 5m abaixo do mínimo exigido (${rsi5mThreshold})`,
         MACD_HISTOGRAM_NEGATIVE: `histograma do MACD (${macdIv}) não está positivo`,
         HIGHER_RSI_TOO_LOW: `RSI de 1h abaixo do mínimo exigido (${higherRsiMin})`,
+        EMA_CROSS_BEARISH: `EMA9 não está acima da EMA21 no ${emaCrossIv} (tendência ainda de baixa/lateral)`,
         SR_NO_DISCOUNT: `preço mais de ${srMaxPct}% acima do ${srRank}º suporte ${srIv} (sem desconto pra entrar)`,
     };
 }
@@ -97,6 +99,9 @@ function shortSymbolDetail(signal) {
     if (signal.reason === 'HIGHER_RSI_TOO_LOW' && signal.higherRsi?.rsi1h != null) {
         return `(1h ${Number(signal.higherRsi.rsi1h).toFixed(1)})`;
     }
+    if (signal.reason === 'EMA_CROSS_BEARISH' && signal.emaCross?.interval) {
+        return `(${signal.emaCross.interval})`;
+    }
     return '';
 }
 
@@ -118,6 +123,8 @@ function fmtSignalReason(symbol, signal, reasonLabels) {
         detail = ` (preço +${signal.sr.distPct}% acima do suporte ${signal.sr.supportPrice})`;
     } else if (signal.reason === 'HIGHER_RSI_TOO_LOW' && signal.higherRsi?.rsi1h != null) {
         detail = ` (RSI 1h atual: ${Number(signal.higherRsi.rsi1h).toFixed(2)})`;
+    } else if (signal.reason === 'EMA_CROSS_BEARISH' && signal.emaCross?.ema9 != null) {
+        detail = ` (EMA9 ${signal.emaCross.ema9} ≤ EMA21 ${signal.emaCross.ema21} no ${signal.emaCross.interval})`;
     }
     return `   ${symbol}: ${reasonLabels[signal.reason] ?? signal.reason}${detail}`;
 }

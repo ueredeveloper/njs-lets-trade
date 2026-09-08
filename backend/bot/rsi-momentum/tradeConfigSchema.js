@@ -104,6 +104,15 @@ const RSI_MOMENTUM_DEFAULTS = {
      *  range rules de Brown/Cardwell. Sem candles de 1h suficientes ainda, libera (fail-open, como
      *  ADX/MACD). Ver checkHigherRsiFilter em strategyEngine.js. */
     higherRsiFilter: { enabled: true, minRsi: 60 },
+    /** Desligado por padrão — filtro de tendência pela dupla EMA9×EMA21 (a mesma do indicador
+     *  PERM do gráfico e do backtest, options.emaCrossFilter em analyseRsiThresholdBacktest.js)
+     *  num intervalo próprio (default 8h). Só libera o sinal se a EMA9 estiver ACIMA da EMA21
+     *  nesse intervalo no candle fechado mais recente — o gatilho de entrada é de um intervalo
+     *  menor (ex.: 15m), este filtro evita comprar o rompimento enquanto a tendência do timeframe
+     *  maior ainda está de baixa/lateral (topo de exaustão). Períodos fixos 9/21; só o intervalo é
+     *  configurável. Sem warmup suficiente ainda, libera (fail-open). Ver checkEmaCrossFilter em
+     *  strategyEngine.js. */
+    emaCrossFilter: { enabled: false, interval: '8h' },
     /** Ligado por padrão (4h, janela 50 candles) — filtro/alvo por Suporte-Resistência, mesmo
      *  detectSupportResistance do gráfico e do backtest (options.supportResistance em
      *  analyseRsiThresholdBacktest.js). No bot as zonas são recalculadas SEMPRE do "agora"
@@ -296,6 +305,17 @@ function normalizeHigherRsiFilter(block) {
   };
 }
 
+/** Filtro de tendência EMA9×EMA21 — períodos FIXOS 9/21, só `enabled` + `interval` (configurável,
+ *  default 8h). Mesmo shape do backtest (options.emaCrossFilter). */
+function normalizeEmaCrossFilter(block) {
+  const d = RSI_MOMENTUM_DEFAULTS.entry.emaCrossFilter;
+  const src = block ?? {};
+  return {
+    enabled: typeof src.enabled === 'boolean' ? src.enabled : d.enabled,
+    interval: normalizeInterval(src.interval, d.interval),
+  };
+}
+
 /** Filtro/alvo por Suporte-Resistência — mesmo shape do backtest (options.supportResistance).
  *  interval FIXO no leque padrão; janela 20..1000; ranks 1..3; entryMaxPct 0.1..100. */
 function normalizeSupportResistance(block) {
@@ -333,6 +353,7 @@ function normalizeEntry(block) {
     spikeGuard: normalizeSpikeGuard(src.spikeGuard),
     macdFilter: normalizeMacdFilter(src.macdFilter),
     higherRsiFilter: normalizeHigherRsiFilter(src.higherRsiFilter),
+    emaCrossFilter: normalizeEmaCrossFilter(src.emaCrossFilter),
     supportResistance: normalizeSupportResistance(src.supportResistance),
   };
 }

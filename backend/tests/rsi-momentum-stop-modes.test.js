@@ -3,8 +3,10 @@
 const {
   computeTrailingStopPrice,
   checkHigherRsiFilter,
+  checkEmaCrossFilter,
   computeAtrPct,
   computeBracketPrices,
+  getRequiredSpecs,
 } = require('../bot/rsi-momentum/strategyEngine');
 const { normalizeRsiMomentumConfig } = require('../bot/rsi-momentum/tradeConfigSchema');
 
@@ -86,6 +88,34 @@ describe('checkHigherRsiFilter — confirmação RSI 1h', () => {
     // série cravada em alta → RSI ~ alto
     const up = candles([...Array(30).keys()].map((i) => 80 + i));
     expect(checkHigherRsiFilter(config, { '1h': up }).allowed).toBe(true);
+  });
+});
+
+describe('checkEmaCrossFilter — tendência EMA9×EMA21 (espelho das Estatísticas)', () => {
+  test('desligado → sempre libera', () => {
+    const config = normalizeRsiMomentumConfig({ entry: { emaCrossFilter: { enabled: false } } });
+    expect(checkEmaCrossFilter(config, {}).allowed).toBe(true);
+  });
+
+  test('sem candles suficientes pro warmup → libera (fail-open)', () => {
+    const config = normalizeRsiMomentumConfig({ entry: { emaCrossFilter: { enabled: true, interval: '8h' } } });
+    expect(checkEmaCrossFilter(config, { '8h': candles([100, 101, 102]) }).allowed).toBe(true);
+  });
+
+  test('EMA9 abaixo da EMA21 (série em queda) → bloqueia; acima (série em alta) → libera', () => {
+    const config = normalizeRsiMomentumConfig({ entry: { emaCrossFilter: { enabled: true, interval: '8h' } } });
+    const down = checkEmaCrossFilter(config, { '8h': candles([...Array(60).keys()].map((i) => 200 - i * 2)) });
+    expect(down.allowed).toBe(false);
+    expect(down.reason).toBe('EMA_CROSS_BEARISH');
+    const up = checkEmaCrossFilter(config, { '8h': candles([...Array(60).keys()].map((i) => 50 + i * 2)) });
+    expect(up.allowed).toBe(true);
+  });
+
+  test('normaliza pro default 8h (6h fora de ALL_INTERVALS) e getRequiredSpecs pede o intervalo', () => {
+    const c6h = normalizeRsiMomentumConfig({ entry: { emaCrossFilter: { enabled: true, interval: '6h' } } });
+    expect(c6h.entry.emaCrossFilter.interval).toBe('8h');
+    const c4h = normalizeRsiMomentumConfig({ entry: { emaCrossFilter: { enabled: true, interval: '4h' } } });
+    expect(getRequiredSpecs(c4h).some((s) => s.interval === '4h')).toBe(true);
   });
 });
 

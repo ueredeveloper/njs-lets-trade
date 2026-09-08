@@ -76,6 +76,7 @@ export const RSI_MOMENTUM_DEFAULTS = {
     rsi5mFilter: { enabled: true, threshold: 70 },
     macdFilter: { enabled: true, interval: '1h' },
     higherRsiFilter: { enabled: true, minRsi: 60 },
+    emaCrossFilter: { enabled: false, interval: '8h' },
     supportResistance: {
       enabled: true, interval: '4h', candleCount: 50,
       entrySupportRank: 1, exitResistanceRank: 3, entryMaxPct: 5,

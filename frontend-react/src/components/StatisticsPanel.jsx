@@ -330,6 +330,9 @@ const RSI_MOM_ADX_MIN_OPTIONS = [15, 20, 25, 30];
  *  momentum / limite inferior da faixa de alta de Brown-Cardwell; grade grossa de propósito
  *  (evitar otimizar um valor fino no mesmo histórico — ver conversa sobre data snooping). */
 const RSI_MOM_HIGHER_RSI_MIN_OPTIONS = [40, 45, 50, 55, 60, 65, 70];
+/** Intervalos do filtro EMA9×EMA21 (entry.emaCrossFilter) — só os que o bot ao vivo aceita
+ *  (RSI_MOMENTUM_ALL_INTERVALS em tradeConfigSchema.js), pra painel e bot ficarem espelho. */
+const RSI_MOM_EMA_CROSS_INTERVAL_OPTIONS = ['15m', '30m', '1h', '2h', '4h', '8h', '1d'];
 /** Limiar do filtro "RSI 5m" (mesmo entry.rsi5mFilter do bot ao vivo) — RSI(14) do candle de 5m
  *  no fechamento do candle do sinal precisa estar ACIMA disso. Grade da análise offline. */
 const RSI_MOM_RSI5M_OPTIONS = [55, 60, 65, 70, 75, 80];
@@ -419,6 +422,8 @@ const RSI_MOM_DEFAULT_PREFS = {
   macdFilterInterval: '1h',
   higherRsiFilterEnabled: true,
   higherRsiFilterMinRsi: 60,
+  emaCrossFilterEnabled: false,
+  emaCrossFilterInterval: '8h',
   rsi5mFilterEnabled: true,
   rsi5mFilterThreshold: 70,
   newHighFilterEnabled: false,
@@ -596,6 +601,10 @@ function buildRsiMomCommonOptions(p, candleCount) {
     higherRsiFilter: p.higherRsiFilterEnabled ? {
       enabled: true,
       minRsi: p.higherRsiFilterMinRsi,
+    } : null,
+    emaCrossFilter: p.emaCrossFilterEnabled ? {
+      enabled: true,
+      interval: p.emaCrossFilterInterval,
     } : null,
     rsi5mFilter: p.rsi5mFilterEnabled ? {
       enabled: true,
@@ -2124,6 +2133,31 @@ function RsiMomentumStats({ autoCalc }) {
           </div>
         )}
 
+        {/* Filtro de tendência EMA9×EMA21 (mesma dupla do indicador PERM do gráfico): só simula a
+            entrada se a EMA9 estiver ACIMA da EMA21 no intervalo escolhido no instante do sinal.
+            Períodos fixos 9/21 — só o intervalo é configurável. */}
+        <div className="flex items-center gap-1 shrink-0 pb-1" title={t('stats.tip.ema_cross_filter')}>
+          <span className="hidden md:inline text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.ema_cross_filter')}</span>
+          <button
+            type="button"
+            onClick={() => patchPrefs({ emaCrossFilterEnabled: !prefs.emaCrossFilterEnabled })}
+            className={`relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${prefs.emaCrossFilterEnabled ? 'bg-p4' : 'bg-p3/40'}`}
+          >
+            <span className={`inline-block h-3 w-3 rounded-full bg-white shadow transition-transform ${prefs.emaCrossFilterEnabled ? 'translate-x-3' : 'translate-x-0'}`} />
+          </button>
+        </div>
+
+        {prefs.emaCrossFilterEnabled && (
+          <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[56px]" title={t('stats.tip.ema_cross_interval')}>
+            <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.ema_cross_interval')}</label>
+            <select className={inp}
+              value={prefs.emaCrossFilterInterval}
+              onChange={(e) => patchPrefs({ emaCrossFilterInterval: e.target.value })}>
+              {RSI_MOM_EMA_CROSS_INTERVAL_OPTIONS.map((iv) => <option key={iv} value={iv}>{iv}</option>)}
+            </select>
+          </div>
+        )}
+
         {/* Filtro RSI 5m (mesmo entry.rsi5mFilter do bot ao vivo): exige RSI(14) do candle de 5m no
             fechamento do candle do sinal ACIMA do limiar — confirma o momentum de curtíssimo prazo. */}
         <div className="flex items-center gap-1 shrink-0 pb-1" title={t('stats.tip.rsi5m_filter')}>
@@ -2518,6 +2552,14 @@ function RsiMomentumStats({ autoCalc }) {
                   value={`${result.higherRsiBlockedCount} · RSI 1h ≥ ${result.higherRsiFilter.minRsi}`}
                   highlight="text-amber-500"
                   tooltip={t('stats.tip.blocked_by_htf_rsi')}
+                />
+              )}
+              {result.emaCrossFilter && (
+                <SummaryCard
+                  label={t('stats.card.blocked_by_ema_cross')}
+                  value={`${result.emaCrossBlockedCount} · EMA9>EMA21 ${result.emaCrossFilter.interval}`}
+                  highlight="text-amber-500"
+                  tooltip={t('stats.tip.blocked_by_ema_cross')}
                 />
               )}
               {result.rsi5mFilter && (

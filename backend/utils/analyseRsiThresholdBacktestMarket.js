@@ -184,6 +184,10 @@ async function analyseRsiThresholdBacktestMarket(options = {}) {
     const higherRsiBlockedCount = higherRsiEnabled
         ? valid.reduce((s, { result }) => s + (result.higherRsiBlockedCount || 0), 0)
         : 0;
+    const emaCrossEnabled = !!perSymbolOptions.emaCrossFilter?.enabled;
+    const emaCrossBlockedCount = emaCrossEnabled
+        ? valid.reduce((s, { result }) => s + (result.emaCrossBlockedCount || 0), 0)
+        : 0;
     const rsi5mEnabled = !!perSymbolOptions.rsi5mFilter?.enabled;
     const rsi5mBlockedCount = rsi5mEnabled
         ? valid.reduce((s, { result }) => s + (result.rsi5mBlockedCount || 0), 0)
@@ -243,6 +247,10 @@ async function analyseRsiThresholdBacktestMarket(options = {}) {
             ? { interval: '1h', minRsi: Math.max(1, Math.min(99, Number(perSymbolOptions.higherRsiFilter.minRsi ?? 50))) }
             : null,
         higherRsiBlockedCount,
+        emaCrossFilter: emaCrossEnabled
+            ? { interval: perSymbolOptions.emaCrossFilter.interval ?? '8h', fastPeriod: 9, slowPeriod: 21 }
+            : null,
+        emaCrossBlockedCount,
         rsi5mFilter: rsi5mEnabled
             ? { interval: '5m', threshold: Math.max(50, Math.min(95, Number(perSymbolOptions.rsi5mFilter.threshold ?? 70))) }
             : null,

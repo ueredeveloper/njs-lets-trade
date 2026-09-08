@@ -280,7 +280,7 @@ function fmtPrice(n) {
 function logStartupConfig(body, source = null) {
   const e = body.entry, x = body.exit, sl = body.stopLoss;
   const bw = e.bandWidth, pb = e.pullback, r5 = e.rsi5mFilter, ec = e.earlyConfirm;
-  const pr = e.priorRsiFilter, macd = e.macdFilter, hr = e.higherRsiFilter, sr = e.supportResistance;
+  const pr = e.priorRsiFilter, macd = e.macdFilter, hr = e.higherRsiFilter, ema = e.emaCrossFilter, sr = e.supportResistance;
   const ts = x.trailingStop, tt = x.trailingTarget, htp = x.hardTakeProfit, rf = x.reinforceOnStop;
   const tsMode = ['continuous', 'twoPhase', 'peakTrail', 'atrTrail'].includes(ts?.mode) ? ts.mode : 'continuous';
   const ON = (v) => (v ? '✅ LIGADO ' : '⬜ desligado');
@@ -302,6 +302,7 @@ function logStartupConfig(body, source = null) {
   console.log(`   ${ON(!!r5?.enabled)} RSI 5min: RSI(14) do candle de 5m fechado no sinal > ${r5?.threshold ?? 70}`);
   console.log(`   ${ON(!!macd?.enabled)} MACD: histograma (12,26,9) em ${macd?.interval ?? '1h'} precisa estar POSITIVO`);
   console.log(`   ${ON(!!hr?.enabled)} RSI 1h (multi-timeframe): RSI(14) do candle de 1h fechado >= ${hr?.minRsi ?? 50}`);
+  console.log(`   ${ON(!!ema?.enabled)} EMA 9/21 (tendência): EMA9 precisa estar ACIMA da EMA21 no ${ema?.interval ?? '8h'} (candle fechado)`);
   console.log(`   ${ON(!!sr?.enabled)} Suporte/Resistência: ${sr?.interval ?? '4h'} janela ${sr?.candleCount ?? 50} candles`);
   if (sr?.enabled) {
     console.log(`             entrada: só até ${sr.entryMaxPct}% acima do ${sr.entrySupportRank}º suporte abaixo do preço (filtro de desconto)`);

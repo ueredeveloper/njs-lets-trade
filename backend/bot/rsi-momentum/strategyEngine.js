@@ -1,6 +1,6 @@
 'use strict';
 
-const { RSI, MACD, ATR } = require('technicalindicators');
+const { RSI, MACD, ATR, EMA } = require('technicalindicators');
 const { closedCandlesOnly, intervalMs } = require('../ma-cross/strategyEngine');
 const { computeStopLossFloor } = require('../shared/stopLossFloor');
 const { bollingerBandWidthSeries } = require('../../utils/indicatorGrowthEngines');
@@ -33,6 +33,12 @@ const MACD_WARMUP_BARS = MACD_SLOW_PERIOD + MACD_SIGNAL_PERIOD + 10;
 // Filtro RSI 1h (entry.higherRsiFilter) — intervalo FIXO, o mesmo da coluna "RSI 1h" das
 // Estatísticas (REF_RSI_INTERVAL em analyseRsiThresholdBacktest.js).
 const HIGHER_RSI_INTERVAL = '1h';
+// Filtro de tendência EMA9×EMA21 (entry.emaCrossFilter) — mesma dupla 9/21 do indicador PERM do
+// gráfico e do backtest (options.emaCrossFilter em analyseRsiThresholdBacktest.js). Períodos
+// FIXOS, só o intervalo é configurável (default 8h). Libera só quando a EMA9 está ACIMA da EMA21.
+const EMA_FAST_PERIOD = 9;
+const EMA_SLOW_PERIOD = 21;
+const EMA_CROSS_WARMUP_BARS = EMA_SLOW_PERIOD * 3 + 20;
 // ATR de Wilder (período 14, padrão) — usado só pelo stop contínuo modo 'atrTrail', calculado no
 // entry.interval no momento da compra (ver computeAtrPct / rsi-momentum-bot.js).
 const ATR_PERIOD = 14;
@@ -77,6 +83,10 @@ function getRequiredSpecs(config) {
 
     if (entry.higherRsiFilter?.enabled) {
         add(HIGHER_RSI_INTERVAL, RSI_PERIOD * 3 + 20);
+    }
+
+    if (entry.emaCrossFilter?.enabled) {
+        add(entry.emaCrossFilter.interval ?? '8h', EMA_CROSS_WARMUP_BARS);
     }
 
     if (entry.supportResistance?.enabled) {
@@ -215,6 +225,39 @@ function checkHigherRsiFilter(config, cMap) {
     return { allowed: true, rsi1h: Math.round(rsi1h * 100) / 100, minRsi, interval: HIGHER_RSI_INTERVAL };
 }
 
+/**
+ * Filtro opcional de tendência pela dupla EMA9×EMA21 (mesma do indicador PERM do gráfico e do
+ * backtest — options.emaCrossFilter em analyseRsiThresholdBacktest.js) num intervalo próprio
+ * configurável (entry.emaCrossFilter.interval, default 8h). Só libera o sinal se a EMA9 estiver
+ * ACIMA da EMA21 nesse intervalo no candle FECHADO mais recente — EMA9 ≤ EMA21 = timeframe maior
+ * ainda em baixa/lateral (comprar o rompimento aqui costuma ser topo de exaustão). Períodos fixos
+ * 9/21; só o intervalo é configurável (mesmo padrão do MACD). Sem candles suficientes pro warmup
+ * ainda, libera (fail-open, como o MACD e o RSI 1h).
+ */
+function checkEmaCrossFilter(config, cMap) {
+    const f = config.entry?.emaCrossFilter;
+    if (!f?.enabled) return { allowed: true };
+
+    const iv = f.interval ?? '8h';
+    const closed = closedCandlesOnly(cMap[iv] ?? []);
+    if (closed.length < EMA_SLOW_PERIOD + 2) return { allowed: true };
+
+    const closes = closed.map(c => parseFloat(c.close));
+    const fastEma = EMA.calculate({ values: closes, period: EMA_FAST_PERIOD });
+    const slowEma = EMA.calculate({ values: closes, period: EMA_SLOW_PERIOD });
+    if (!fastEma.length || !slowEma.length) return { allowed: true };
+
+    const ema9 = fastEma[fastEma.length - 1];
+    const ema21 = slowEma[slowEma.length - 1];
+    if (!Number.isFinite(ema9) || !Number.isFinite(ema21)) return { allowed: true };
+
+    const round = (v) => Math.round(v * 1e8) / 1e8;
+    if (ema9 <= ema21) {
+        return { allowed: false, reason: 'EMA_CROSS_BEARISH', ema9: round(ema9), ema21: round(ema21), interval: iv };
+    }
+    return { allowed: true, ema9: round(ema9), ema21: round(ema21), interval: iv };
+}
+
 // ── Suporte/Resistência (entry.supportResistance) ────────────────────────────────────────────
 //
 // No bot só importa o "agora": as zonas saem dos últimos `candleCount` candles FECHADOS do
@@ -351,6 +394,7 @@ function evaluateEntryReadiness(config, cMap) {
     push('rsi5m', checkRsi5mFilter(config, cMap));
     push('macd', checkMacdFilter(config, cMap));
     push('higherRsi', checkHigherRsiFilter(config, cMap));
+    push('emaCross', checkEmaCrossFilter(config, cMap));
 
     // S/R: o filtro depende do preço do sinal; usa o último fechamento como proxy do "agora".
     const lastClose = parseFloat(closed[closed.length - 1].close);
@@ -390,6 +434,7 @@ function filterIsActive(entry, key) {
         case 'rsi5m': return !!entry.rsi5mFilter?.enabled;
         case 'macd': return !!entry.macdFilter?.enabled;
         case 'higherRsi': return !!entry.higherRsiFilter?.enabled;
+        case 'emaCross': return !!entry.emaCrossFilter?.enabled;
         case 'sr': return !!entry.supportResistance?.enabled;
         default: return false;
     }
@@ -538,6 +583,11 @@ function evaluateEntrySignal(config, cMap) {
         return { allowed: false, reason: higherRsiCheck.reason, rsi: last, threshold, higherRsi: higherRsiCheck };
     }
 
+    const emaCrossCheck = checkEmaCrossFilter(config, cMap);
+    if (!emaCrossCheck.allowed) {
+        return { allowed: false, reason: emaCrossCheck.reason, rsi: last, threshold, emaCross: emaCrossCheck };
+    }
+
     const signalClose = parseFloat(signalCandle.close);
     const srCheck = checkSupportResistanceEntry(config, cMap, signalClose);
     if (!srCheck.allowed) {
@@ -568,6 +618,7 @@ function evaluateEntrySignal(config, cMap) {
         spikeGuard: spikeGuardCheck,
         macd: macdCheck,
         higherRsi: higherRsiCheck,
+        emaCross: emaCrossCheck,
         sr: srCheck,
         srTargetPrice: srCheck.srTargetPrice ?? null,
         earlyCheckpoint,
@@ -844,6 +895,7 @@ module.exports = {
     checkRsi5mFilter,
     checkMacdFilter,
     checkHigherRsiFilter,
+    checkEmaCrossFilter,
     resolveSrZonesNow,
     pickSupport,
     pickResistance,

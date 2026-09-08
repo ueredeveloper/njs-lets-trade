@@ -7,6 +7,8 @@
 --            MACD 1h positivo
 --            RSI 1h >= 60  (confirmacao multi-timeframe)
 --            RSI 5m > 70   (confirmacao de curtissimo prazo)
+--            EMA 9/21 no 8h: EMA9 ACIMA da EMA21 (filtro de tendencia do timeframe maior) <-- NOVO
+--              evita comprar o rompimento enquanto o 8h ainda esta de baixa/lateral (topo de exaustao)
 --            volume 24h min $1M
 --            SUPORTE/RESISTENCIA 4h (janela 50 candles) <-- NOVO no bot:
 --              entra so ate 5% acima do 1o suporte abaixo do preco (filtro de desconto)
@@ -34,7 +36,7 @@ BEGIN;
 INSERT INTO rsi_momentum_global_config (user_id, trade_config, updated_at)
 VALUES (
   'ueredeveloper',
-  '{"label":"RSI Momentum","kind":"rsi_momentum","capitalUsdt":20,"entry":{"enabled":true,"interval":"15m","rsiThreshold":69,"priorRsiFilter":{"enabled":true,"count":3},"pullback":{"enabled":false,"belowPct":0.5},"earlyConfirm":{"enabled":true,"interval":"5m","rsiThreshold":70},"limitWaitCandles":20,"reentryCooldownCandles":3,"bandWidth":{"enabled":true,"interval":"5m","period":20,"stdDev":2,"lookback":300,"minPct":1.5},"rsi5mFilter":{"enabled":true,"threshold":70},"spikeGuard":{"enabled":false,"maxMovePct":5},"macdFilter":{"enabled":true,"interval":"1h"},"higherRsiFilter":{"enabled":true,"minRsi":60},"supportResistance":{"enabled":true,"interval":"4h","candleCount":50,"entrySupportRank":1,"exitResistanceRank":3,"entryMaxPct":5}},"exit":{"targetMode":"off","restingBracket":{"enabled":true,"targetPct":10},"trailingTarget":{"coinStepPct":3,"stepPct":3},"hardTakeProfit":{"enabled":true,"pct":15},"trailingStop":{"enabled":false,"mode":"continuous","startPct":5,"coinStepPct":3,"stopStepPct":2,"pivotPct":1,"aCoinStepPct":3,"aStopStepPct":2.5,"bCoinStepPct":3,"bStopStepPct":1,"pivotGainPct":5,"wNearPct":4,"wFarPct":9,"atrMult":2,"atrMaxPct":12},"reinforceOnStop":{"enabled":true,"addDropPct":10,"exitRisePct":15,"buyUsd":40}},"stopLoss":{"enabled":true,"maxLossPct":10},"polling":{"pollMs":60000,"fastPollMs":20000},"volume":{"minVolumeUsdt":1000000},"entryCooldownHours":0}'::jsonb,
+  '{"label":"RSI Momentum","kind":"rsi_momentum","capitalUsdt":20,"entry":{"enabled":true,"interval":"15m","rsiThreshold":69,"priorRsiFilter":{"enabled":true,"count":3},"pullback":{"enabled":false,"belowPct":0.5},"earlyConfirm":{"enabled":true,"interval":"5m","rsiThreshold":70},"limitWaitCandles":20,"reentryCooldownCandles":3,"bandWidth":{"enabled":true,"interval":"5m","period":20,"stdDev":2,"lookback":300,"minPct":1.5},"rsi5mFilter":{"enabled":true,"threshold":70},"spikeGuard":{"enabled":false,"maxMovePct":5},"macdFilter":{"enabled":true,"interval":"1h"},"higherRsiFilter":{"enabled":true,"minRsi":60},"emaCrossFilter":{"enabled":true,"interval":"8h"},"supportResistance":{"enabled":true,"interval":"4h","candleCount":50,"entrySupportRank":1,"exitResistanceRank":3,"entryMaxPct":5}},"exit":{"targetMode":"off","restingBracket":{"enabled":true,"targetPct":10},"trailingTarget":{"coinStepPct":3,"stepPct":3},"hardTakeProfit":{"enabled":true,"pct":15},"trailingStop":{"enabled":false,"mode":"continuous","startPct":5,"coinStepPct":3,"stopStepPct":2,"pivotPct":1,"aCoinStepPct":3,"aStopStepPct":2.5,"bCoinStepPct":3,"bStopStepPct":1,"pivotGainPct":5,"wNearPct":4,"wFarPct":9,"atrMult":2,"atrMaxPct":12},"reinforceOnStop":{"enabled":true,"addDropPct":10,"exitRisePct":15,"buyUsd":40}},"stopLoss":{"enabled":true,"maxLossPct":10},"polling":{"pollMs":60000,"fastPollMs":20000},"volume":{"minVolumeUsdt":1000000},"entryCooldownHours":0}'::jsonb,
   now()
 )
 ON CONFLICT (user_id) DO UPDATE
@@ -51,6 +53,7 @@ COMMIT;
 --        trade_config->'exit'->'hardTakeProfit'                 AS teto_de_lucro,
 --        trade_config->'stopLoss'                               AS stop,
 --        trade_config->'entry'->'higherRsiFilter'               AS filtro_rsi_1h,
+--        trade_config->'entry'->'emaCrossFilter'                AS filtro_ema_9_21,
 --        trade_config->'entry'->'rsi5mFilter'                   AS filtro_rsi_5m,
 --        trade_config->'entry'->'bandWidth'                     AS largura_banda,
 --        updated_at

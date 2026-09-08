@@ -1,6 +1,6 @@
 'use strict';
 
-const { RSI, ADX, MACD, ATR } = require('technicalindicators');
+const { RSI, ADX, MACD, ATR, EMA } = require('technicalindicators');
 const getCandles = require('../binance/getCandles');
 const { getGateCandles } = require('../gate/getGateCandles');
 const { closedCandlesOnly, intervalMs } = require('../bot/ma-cross/strategyEngine');
@@ -33,6 +33,12 @@ const ATR_PERIOD = 14;
 const MACD_FAST_PERIOD = 12;
 const MACD_SLOW_PERIOD = 26;
 const MACD_SIGNAL_PERIOD = 9;
+// EMA rápida/lenta do filtro de tendência emaCrossFilter (mesma dupla 9/21 do indicador PERM do
+// gráfico) — períodos FIXOS, sem seletor próprio; só o intervalo é configurável (mesmo padrão de
+// ADX/MACD). O filtro só libera o sinal quando a EMA9 está ACIMA da EMA21 nesse intervalo.
+const EMA_FAST_PERIOD = 9;
+const EMA_SLOW_PERIOD = 21;
+const EMA_WARMUP_BARS = EMA_SLOW_PERIOD * 3 + 10;
 // Warmup mínimo de cada indicador (candles perdidos até o 1º valor válido da série) — usado só
 // pra dimensionar o fetch (computeOwnIntervalFetchLimit), com folga generosa.
 const ADX_WARMUP_BARS = ADX_PERIOD * 2 + 10;
@@ -1216,6 +1222,13 @@ function computeMacdWhatIf(occurrences, interval) {
  *   bloqueia (fail-open, igual ADX/MACD).
  * @param {boolean} [options.higherRsiFilter.enabled=false]
  * @param {number}  [options.higherRsiFilter.minRsi=50]  RSI 1h mínimo exigido no instante do sinal.
+ * @param {object} [options.emaCrossFilter]  Filtro de tendência pela dupla EMA9×EMA21 (mesma dupla
+ *   do indicador PERM do gráfico) num intervalo PRÓPRIO configurável — só permite o sinal se a EMA9
+ *   estiver ACIMA da EMA21 nesse intervalo no instante do sinal (EMA9 ≤ EMA21 = timeframe ainda em
+ *   baixa/lateral, bloqueia). Períodos fixos 9/21; só o intervalo é configurável (mesmo padrão de
+ *   ADX/MACD). Sem EMA disponível ainda (warmup), NÃO bloqueia (fail-open).
+ * @param {boolean} [options.emaCrossFilter.enabled=false]
+ * @param {string}  [options.emaCrossFilter.interval='8h']
  * @param {object} [options.rsi5mFilter]  Mesmo entry.rsi5mFilter do bot ao vivo (ver checkRsi5mFilter
  *   em backend/bot/rsi-momentum/strategyEngine.js): exige RSI(14) do candle de 5m fechado no
  *   FECHAMENTO do candle do sinal > `threshold`. Toggle próprio nas Estatísticas. Fail-open no warmup.
@@ -1275,6 +1288,7 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
         adxFilter       = null,
         macdFilter      = null,
         higherRsiFilter = null,
+        emaCrossFilter  = null,
         rsi5mFilter     = null,
         newHighFilter   = null,
         trailingStop    = null,
@@ -1346,6 +1360,10 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
     // JSDoc de options.higherRsiFilter. minRsi entre 1 e 99.
     const higherRsiEnabled = !!higherRsiFilter?.enabled;
     const higherRsiMin = Math.max(1, Math.min(99, Number(higherRsiFilter?.minRsi ?? 50)));
+
+    // Filtro de tendência EMA9×EMA21 num intervalo próprio — ver JSDoc de options.emaCrossFilter.
+    const emaCrossEnabled = !!emaCrossFilter?.enabled;
+    const emaCrossInterval = emaCrossFilter?.interval ?? '8h';
 
     // Filtro RSI 5m (mesmo entry.rsi5mFilter do bot ao vivo — ver checkRsi5mFilter em
     // backend/bot/rsi-momentum/strategyEngine.js): exige RSI(14) do candle de 5m fechado no
@@ -1438,6 +1456,9 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
     const macdLimit = macdEnabled
         ? computeOwnIntervalFetchLimit(interval, mainLimit, macdInterval, MACD_WARMUP_BARS)
         : 0;
+    const emaCrossLimit = emaCrossEnabled
+        ? computeOwnIntervalFetchLimit(interval, mainLimit, emaCrossInterval, EMA_WARMUP_BARS)
+        : 0;
 
     // RSI 1h de referência (informativo, ver REF_RSI_INTERVAL) — só busca candles próprios quando
     // o intervalo do sinal não é já 1h.
@@ -1479,9 +1500,12 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
         rsi5mNeedsFetch
             ? fetchCandles(symbol, '5m', rsi5mLimit)
             : Promise.resolve(null),
+        emaCrossEnabled
+            ? fetchCandles(symbol, emaCrossInterval, emaCrossLimit)
+            : Promise.resolve(null),
     ]);
 
-    const [candlesResult, bwCandlesResult, pdcCandlesResult, tickersResult, pcsCandlesResult, adxCandlesResult, macdCandlesResult, refRsiCandlesResult, srCandlesResult, rsi5mCandlesResult] = settled;
+    const [candlesResult, bwCandlesResult, pdcCandlesResult, tickersResult, pcsCandlesResult, adxCandlesResult, macdCandlesResult, refRsiCandlesResult, srCandlesResult, rsi5mCandlesResult, emaCrossCandlesResult] = settled;
     if (candlesResult.status === 'rejected') throw candlesResult.reason;
     const candles = candlesResult.value;
 
@@ -1538,6 +1562,24 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
             SimpleMASignal: false,
         });
         macdOffset = macdCandles.length - macdSeries.length;
+    }
+
+    // EMA9 × EMA21 (filtro de tendência) — no intervalo PRÓPRIO escolhido (emaCrossInterval).
+    // emaCrossSeries[k].diff = EMA9 − EMA21 alinhado a emaCrossCandles[k + emaCrossOffset]; > 0 =
+    // EMA9 acima da EMA21 (libera). Mesmo padrão de alinhamento do ADX/MACD.
+    const emaCrossCandles = emaCrossEnabled && emaCrossCandlesResult.status === 'fulfilled' && emaCrossCandlesResult.value
+        ? emaCrossCandlesResult.value
+        : [];
+    let emaCrossSeries = [];
+    let emaCrossOffset = 0;
+    if (emaCrossCandles.length) {
+        const closesEc = emaCrossCandles.map(c => parseFloat(c.close));
+        const fastEma = EMA.calculate({ values: closesEc, period: EMA_FAST_PERIOD });
+        const slowEma = EMA.calculate({ values: closesEc, period: EMA_SLOW_PERIOD });
+        // A EMA rápida (período menor) tem mais pontos — descarta a dianteira pra casar com a lenta.
+        const fastLead = fastEma.length - slowEma.length;
+        emaCrossSeries = slowEma.map((slow, k) => ({ diff: fastEma[k + fastLead] - slow }));
+        emaCrossOffset = emaCrossCandles.length - emaCrossSeries.length;
     }
 
     // Volume 24h: mesmo campo/fonte do filtro do bot ao vivo (marketScanner.js) — falha ao
@@ -1659,6 +1701,7 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
     // continua em 15m/etc.), sem resolver ainda pullback/saída.
     const rawSignals = [];
     let higherRsiBlocked = 0; // sinais cortados pelo filtro de RSI 1h (só conta com ele ligado)
+    let emaCrossBlocked = 0;  // sinais cortados pelo filtro EMA9×EMA21 (só conta com ele ligado)
     let rsi5mBlocked = 0;     // sinais cortados pelo filtro de RSI 5m (só conta com ele ligado)
     let newHighBlocked = 0;   // sinais cortados pelo filtro "topo dos últimos N" (só conta com ele ligado)
     const minI = Math.max(1, priorRsiCount);
@@ -1704,6 +1747,16 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
             if (macdEnabled) {
                 const macdHist = resolveOwnIntervalValueAt(macdCandles, macdSeries, macdOffset, signalCandle.openTime, (e) => e.histogram);
                 if (macdHist != null && macdHist <= 0) continue;
+            }
+
+            // EMA9 × EMA21: só passa com a EMA9 ACIMA da EMA21 no intervalo escolhido (diff > 0) no
+            // instante do sinal. Sem valor disponível ainda (warmup), não bloqueia.
+            if (emaCrossEnabled) {
+                const emaDiff = resolveOwnIntervalValueAt(emaCrossCandles, emaCrossSeries, emaCrossOffset, signalCandle.openTime, (e) => e.diff);
+                if (emaDiff != null && emaDiff <= 0) {
+                    emaCrossBlocked++;
+                    continue;
+                }
             }
 
             // RSI 1h vigente no instante do sinal — informativo (coluna "RSI 1h" / gráfico de
@@ -1954,6 +2007,8 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
         macdWhatIf: computeMacdWhatIf(finalOccurrences, interval),
         higherRsiFilter: higherRsiEnabled ? { interval: REF_RSI_INTERVAL, minRsi: higherRsiMin } : null,
         higherRsiBlockedCount: higherRsiEnabled ? higherRsiBlocked : 0,
+        emaCrossFilter: emaCrossEnabled ? { interval: emaCrossInterval, fastPeriod: EMA_FAST_PERIOD, slowPeriod: EMA_SLOW_PERIOD } : null,
+        emaCrossBlockedCount: emaCrossEnabled ? emaCrossBlocked : 0,
         rsi5mFilter: rsi5mEnabled ? { interval: '5m', threshold: rsi5mThreshold } : null,
         rsi5mBlockedCount: rsi5mEnabled ? rsi5mBlocked : 0,
         newHighFilter: nhEnabled ? { lookback: nhLookback, marginPct: nhMarginPct } : null,

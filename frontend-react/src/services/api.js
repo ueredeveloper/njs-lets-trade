@@ -191,7 +191,7 @@ export async function fetchRsiThresholdBacktest(symbol, interval, options = {}) 
     source = null, candleCount = null, lookbackHours = 0, bandWidth = null,
     supportResistance = null,
     minVolumeUsdt = 0, excludeOpenExits = false, prevCandleStop = false,
-    adxFilter = null, macdFilter = null, higherRsiFilter = null, rsi5mFilter = null, newHighFilter = null, hardTakeProfit = null, reinforceOnStop = null, trailingStop = null, trailingTarget = null, targetMode = null, entriesDayRange = null,
+    adxFilter = null, macdFilter = null, higherRsiFilter = null, emaCrossFilter = null, rsi5mFilter = null, newHighFilter = null, hardTakeProfit = null, reinforceOnStop = null, trailingStop = null, trailingTarget = null, targetMode = null, entriesDayRange = null,
   } = options;
   const params = new URLSearchParams({
     symbol, interval, rsiThreshold, pullbackPct, targetPct, stopLossPct, positionSizeUsd,
@@ -223,6 +223,10 @@ export async function fetchRsiThresholdBacktest(symbol, interval, options = {}) 
   if (higherRsiFilter?.enabled) {
     params.set('higherRsiFilterEnabled', '1');
     params.set('higherRsiFilterMinRsi', String(higherRsiFilter.minRsi ?? 50));
+  }
+  if (emaCrossFilter?.enabled) {
+    params.set('emaCrossFilterEnabled', '1');
+    params.set('emaCrossFilterInterval', emaCrossFilter.interval ?? '8h');
   }
   if (rsi5mFilter?.enabled) {
     params.set('rsi5mFilterEnabled', '1');
@@ -270,7 +274,7 @@ export async function fetchRsiThresholdBacktestMarket(interval, options = {}) {
     rsiThreshold = 70, pullbackPct = 0, targetPct = 5, stopLossPct = 5, positionSizeUsd = 40,
     source = null, candleCount = null, lookbackHours = 0, bandWidth = null, maxRows = null,
     supportResistance = null, minVolumeUsdt = 0, excludeOpenExits = false, prevCandleStop = false,
-    adxFilter = null, macdFilter = null, higherRsiFilter = null, rsi5mFilter = null, newHighFilter = null, hardTakeProfit = null, reinforceOnStop = null, trailingStop = null, trailingTarget = null, targetMode = null, entriesDayRange = null,
+    adxFilter = null, macdFilter = null, higherRsiFilter = null, emaCrossFilter = null, rsi5mFilter = null, newHighFilter = null, hardTakeProfit = null, reinforceOnStop = null, trailingStop = null, trailingTarget = null, targetMode = null, entriesDayRange = null,
     includeGateFavorites = false,
   } = options;
   const params = new URLSearchParams({
@@ -304,6 +308,10 @@ export async function fetchRsiThresholdBacktestMarket(interval, options = {}) {
   if (higherRsiFilter?.enabled) {
     params.set('higherRsiFilterEnabled', '1');
     params.set('higherRsiFilterMinRsi', String(higherRsiFilter.minRsi ?? 50));
+  }
+  if (emaCrossFilter?.enabled) {
+    params.set('emaCrossFilterEnabled', '1');
+    params.set('emaCrossFilterInterval', emaCrossFilter.interval ?? '8h');
   }
   if (rsi5mFilter?.enabled) {
     params.set('rsi5mFilterEnabled', '1');
