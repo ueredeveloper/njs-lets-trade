@@ -39,6 +39,11 @@ const { EXIT: CONTROL_EXIT } = botControl;
 // Resquício de `pendingAction` de um crash no meio de um restart/update.
 botControl.clearStalePending();
 
+// ── TESTE DE ATUALIZAÇÃO (temporário) ──────────────────────────────────────────
+// Linha de versão no prompt a cada start do launcher, pra confirmar o deploy no
+// Termux. Reverter depois do teste.
+console.log(`🟢 ATUALIZAÇÃO OK — launcher v${require('../../package.json').version}`);
+
 const LAUNCHER_STARTED_AT = Date.now();
 
 const BOTS = [
