@@ -26,19 +26,33 @@ npm run bots:bands
 
 ## API interna de administração (`backend/admin/`)
 
-O launcher `npm run bots:bands` sobe um `http.Server` **só loopback** (default
-`127.0.0.1:4100`) com endpoints **só de leitura** — `GET /internal/health`,
-`/internal/info` (versão, git, pids/uptime dos bots), `/internal/log`. É o lado
-cooperativo da administração remota: o projeto `njs-whatsapp` (porta 3005) consome
-isso para responder `/admin/status`, `/admin/health`, `/admin/log` no WhatsApp.
-Não há endpoint de restart/update/shell — isso é feito por fora. Config no `.env`
-(`INTERNAL_ADMIN_*`).
+`npm run bots:bands` agora sobe **`bots-supervisor.js` → `start-bands-bots.js` →
+bots**. O launcher hospeda um `http.Server` **só loopback** (default
+`127.0.0.1:4100`):
+- **Leitura:** `GET /internal/health`, `/internal/info` (versão, git, pids/uptime,
+  `pendingAction`, `lastAction`), `/internal/log`.
+- **Controle (opt-in):** `POST /internal/{restart,update,stop,pull}` — só com
+  `INTERNAL_ADMIN_TOKEN` + `INTERNAL_ADMIN_ALLOW_CONTROL=true`. A API **não roda
+  git/npm/shell**: grava a intenção (`botControl.js`) e mata o launcher com um
+  exit code sentinela (`10` restart, `11` update, `0` stop); o **supervisor**
+  reage — em `update` faz `git fetch` + `merge --ff-only` + `npm ci` (se o
+  `package-lock` mudou; `dist` é versionado, sem build) e respawn. `pull` é
+  dry-run (roda no launcher, não reinicia).
 
-**Ao editar `backend/admin/` ou `backend/bot/start-bands-bots.js`, leia
-`backend/admin/README.md` primeiro.** Invariantes que não podem quebrar: bind só
-em `127.0.0.1`; `authorized()` (loopback + `X-Internal-Token`) em toda request;
-só `GET`; nada de restart/update/exec; não vazar segredo em `/internal/info`;
-falha de git/disco/porta não derruba os bots.
+É o lado cooperativo da administração remota: `njs-whatsapp` (porta 3005) consome
+isso para `/admin/status|health|log|restart|update|stop|pull` no WhatsApp. Config
+no `.env` (`INTERNAL_ADMIN_*`). Launcher sozinho (sem restart/update):
+`npm run bots:bands:nosup`.
+
+**Ao editar `backend/admin/`, `backend/bot/start-bands-bots.js` ou
+`backend/bot/bots-supervisor.js`, leia `backend/admin/README.md` primeiro.**
+Invariantes que não podem quebrar: bind só em `127.0.0.1`; `authorized()`
+(loopback + `X-Internal-Token`) em toda request; `GET` sempre leitura, mutação só
+nos 4 `POST` de controle e cada um exige token + `ALLOW_CONTROL`; a API nunca
+executa comando (só `setPending` + `onControl`); `runUpdate` é sequência fixa (nada
+de `reset --hard`/build/ref do request) e recusa working tree sujo; não vazar
+segredo em `/internal/info`; falha de git/disco/porta/npm não derruba
+supervisor/launcher/bots.
 
 ## Architecture
 

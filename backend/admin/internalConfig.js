@@ -11,11 +11,18 @@
  * são feitos POR FORA (process manager + git) pelo orquestrador.
  *
  * Variáveis no .env (raiz do projeto):
- *   INTERNAL_ADMIN_ENABLED   true|false   (default: true)
- *   INTERNAL_ADMIN_HOST      default 127.0.0.1  — NÃO expor à internet
- *   INTERNAL_ADMIN_PORT      default 4100
- *   INTERNAL_ADMIN_TOKEN     segredo compartilhado com o njs-whatsapp
- *                            (header X-Internal-Token). Sem token → só loopback.
+ *   INTERNAL_ADMIN_ENABLED        true|false   (default: true)
+ *   INTERNAL_ADMIN_HOST           default 127.0.0.1  — NÃO expor à internet
+ *   INTERNAL_ADMIN_PORT           default 4100
+ *   INTERNAL_ADMIN_TOKEN          segredo compartilhado com o njs-whatsapp
+ *                                 (header X-Internal-Token). Sem token → só loopback.
+ *   INTERNAL_ADMIN_ALLOW_CONTROL  true|false   (default: false) — libera os
+ *                                 `POST /internal/{restart,update,stop,pull}`.
+ *                                 Só funciona junto com um TOKEN configurado.
+ *   INTERNAL_ADMIN_UPDATE_NPM     auto|always|never (default: auto) — quando o
+ *                                 update roda `npm ci` (auto = só se o lock mudou).
+ *   INTERNAL_ADMIN_GIT_REMOTE     default origin
+ *   INTERNAL_ADMIN_GIT_BRANCH     default: branch atual do checkout
  */
 
 const path = require('path');
@@ -34,6 +41,10 @@ const internalConfig = {
   host: process.env.INTERNAL_ADMIN_HOST || '127.0.0.1',
   port: parseInt(process.env.INTERNAL_ADMIN_PORT || '4100', 10),
   token: (process.env.INTERNAL_ADMIN_TOKEN || '').trim() || null,
+  allowControl: bool(process.env.INTERNAL_ADMIN_ALLOW_CONTROL, false),
+  npmOnUpdate: (process.env.INTERNAL_ADMIN_UPDATE_NPM || 'auto').trim().toLowerCase(),
+  gitRemote: (process.env.INTERNAL_ADMIN_GIT_REMOTE || 'origin').trim(),
+  gitBranch: (process.env.INTERNAL_ADMIN_GIT_BRANCH || '').trim(),
   repoRoot: REPO_ROOT,
   // Log combinado do launcher dos bots (ver botLog.js)
   logFile: process.env.INTERNAL_ADMIN_LOG_FILE

@@ -33,6 +33,11 @@ require('dotenv').config({ path: path.join(__dirname, '../../.env') });
 
 const botLog = require('../admin/botLog');
 const { startInternalAdminServer } = require('../admin/internalServer');
+const botControl = require('../admin/botControl');
+const { EXIT: CONTROL_EXIT } = botControl;
+
+// Resquício de `pendingAction` de um crash no meio de um restart/update.
+botControl.clearStalePending();
 
 const LAUNCHER_STARTED_AT = Date.now();
 
@@ -91,7 +96,30 @@ function getLauncherState() {
   };
 }
 
-const adminServer = startInternalAdminServer(getLauncherState);
+// Controle remoto (via API interna → njs-whatsapp): restart/update/stop viram um
+// exit code sentinela que o supervisor (bots-supervisor.js) interpreta. Este
+// processo NÃO roda git/npm — só encerra os filhos com carinho e sai.
+function onControl(action) {
+  if (shuttingDown) return { ok: false, message: 'já encerrando' };
+  const code = CONTROL_EXIT[String(action).toUpperCase()];
+  if (code == null) return { ok: false, message: `ação desconhecida: ${action}` };
+  const label = { stop: 'PARAR', restart: 'REINICIAR', update: 'ATUALIZAR' }[action] || action;
+  console.log(`\n🛰️  [launcher] controle recebido: ${label} → encerrando (exit ${code})`);
+  botLog.writeLine(`[launcher] controle: ${label} (exit ${code})`);
+  shutdown();
+  // dá um tempo pro SIGTERM chegar nos filhos antes de matar o processo
+  setTimeout(() => process.exit(code), 1200);
+  return { ok: true, action, message: `'${action}' aceito` };
+}
+
+// restart/update só fazem sentido sob o supervisor (bots-supervisor.js), que é
+// quem reage ao exit code. Rodando o launcher direto (`bots:bands:nosup`), os
+// POST de controle respondem 503.
+const supervised = process.env.BOTS_SUPERVISED === '1';
+const adminServer = startInternalAdminServer(
+  getLauncherState,
+  supervised ? { onControl } : {},
+);
 
 let shuttingDown = false;
 function shutdown() {
