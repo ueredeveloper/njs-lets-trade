@@ -55,17 +55,17 @@ botControl.clearStalePending();
     line = `>> njs-lets-trade launcher v${v}`;
   }
   console.log(line);
-  // Marcador em AMARELO (ANSI) desta atualização — bem visível no prompt do Termux.
-  // Temporário: reverter depois do teste de deploy.
-  console.log(`\x1b[1;33m>>> ATUALIZAÇÃO DO MOMENTO — v${v} no ar\x1b[0m`);
   try { botLog.writeLine(`[launcher] ${line}`); } catch { /* nunca derruba o launcher */ }
 
+  // Banner AMARELO (ANSI) da atualização — bem visível no prompt do Termux pra
+  // confirmar que o /update|/restart pelo WhatsApp puxou o código novo.
+  // Temporário: reverter depois do teste de deploy.
   const acao = recent && last.action === 'update' && last.ok !== false ? 'UPDATE OK'
     : recent && last.action === 'update' ? 'UPDATE FALHOU'
     : recent && last.action === 'restart' ? 'RESTART OK'
     : 'START NORMAL';
-  const testeLine = `>> ===== DEPLOY VIA WHATSAPP: ${acao} — CAIXA ALTA CONFIRMA CODIGO NOVO NO AR (v${v}) =====`;
-  console.log(testeLine.toUpperCase());
+  const testeLine = `>>> ATUALIZAÇÃO DO MOMENTO — ${acao} · v${v} NO AR <<<`;
+  console.log(`\x1b[1;33m${testeLine}\x1b[0m`);
   try { botLog.writeLine(`[launcher] ${testeLine}`); } catch { /* nunca derruba o launcher */ }
 }
 
