@@ -1,17 +1,14 @@
 'use strict';
 
 /**
- * Liga Bollinger Bands + RSI Momentum de uma vez só — pensado pro Termux, pra não precisar
- * abrir duas sessões/telas separadas (uma pra cada bot).
- *
- * VWAP Bands e Ignição de Volume saíram da lista (v1.111.7) — usuário não usa nenhum dos
- * dois no momento; tirar do launcher evita processo ocioso e sync de relógio desnecessário
- * a cada restart. Reative aqui se voltar a usar algum dos dois.
+ * Launcher dos bots de trade — pensado pro Termux, pra não precisar abrir uma sessão/tela
+ * por bot. Hoje sobe só o RSI Momentum (Bollinger Bands saiu em v1.135.6, VWAP Bands e
+ * Ignição de Volume em v1.111.7 — usuário não usa nenhum; reative na lista BOTS se voltar).
  *
  * Cada bot roda no PRÓPRIO processo filho (spawn), não no mesmo processo Node — assim um
  * erro fatal (ex.: env do Supabase ausente, exceção não tratada) que mataria o processo só
- * derruba aquele bot; o outro continua rodando normalmente. Se um filho cair, o launcher
- * tenta subir ele de novo sozinho (com um limite, pra não entrar em loop de restart).
+ * derruba aquele bot; os outros continuam. Se um filho cair, o launcher tenta subir ele de
+ * novo sozinho (com um limite, pra não entrar em loop de restart).
  *
  * Este launcher também sobe a API interna de administração (backend/admin/internalServer.js,
  * só loopback) — é ela que o njs-whatsapp consulta pra responder /admin/status, /admin/health
@@ -19,11 +16,11 @@
  * log combinado (backend/admin/botLog.js) que o /admin/log lê.
  *
  * Uso:
- *   node backend/bot/start-bands-bots.js
- *   node backend/bot/start-bands-bots.js --symbol BTCUSDT   (repassado pros dois bots)
+ *   node backend/bot/start-trade-bots.js
+ *   node backend/bot/start-trade-bots.js --symbol BTCUSDT   (repassado pros bots)
  *
  * Ou via package.json:
- *   npm run bots:bands
+ *   npm run bots
  */
 
 const path = require('path');
@@ -39,26 +36,34 @@ const { EXIT: CONTROL_EXIT } = botControl;
 // Resquício de `pendingAction` de um crash no meio de um restart/update.
 botControl.clearStalePending();
 
-// Versão no prompt a cada start do launcher — e, se o start veio de um /restart ou
-// /update recente (< 120s), o que disparou (lê botControl.readState().last).
-console.log(`🤖 njs-lets-trade — launcher v${require('../../package.json').version}`);
+// Uma linha no prompt a cada start do launcher, dizendo O QUE aconteceu: start
+// normal, ou reinício/atualização via /restart|/update recente (< 120s) — lê
+// botControl.readState().last. Sem emoji (alguns não renderizam no Termux).
 {
+  const v = require('../../package.json').version;
   const last = botControl.readState().last;
   const ageS = last?.at ? (Date.now() - Date.parse(last.at)) / 1000 : Infinity;
-  if (last && ageS < 120) {
-    if (last.action === 'restart') {
-      console.log('   ↻ reiniciado via /restart (código inalterado)');
-    } else if (last.action === 'update') {
-      console.log(`   ⬆ atualizado via /update: ${last.fromCommit || '?'} → ${last.toCommit || '?'}${last.ok === false ? ` — FALHOU: ${last.error}` : ''}`);
-    }
+  const recent = last && ageS < 120;
+  let line;
+  if (recent && last.action === 'update' && last.ok !== false) {
+    line = `>> ATUALIZADO via /update  ${last.fromCommit} -> ${last.toCommit}  (agora na v${v})`;
+  } else if (recent && last.action === 'update') {
+    line = `>> /update FALHOU (${last.error}) — rodando com o codigo anterior, v${v}`;
+  } else if (recent && last.action === 'restart') {
+    line = `>> REINICIADO via /restart  (codigo inalterado, v${v})`;
+  } else {
+    line = `>> njs-lets-trade launcher v${v}`;
   }
+  console.log(line);
+  try { botLog.writeLine(`[launcher] ${line}`); } catch { /* nunca derruba o launcher */ }
 }
 
 const LAUNCHER_STARTED_AT = Date.now();
 
 const BOTS = [
-  { label: 'Bollinger Bands',  script: path.join(__dirname, 'bollinger-bands', 'bollinger-bands-bot.js') },
   { label: 'RSI Momentum',     script: path.join(__dirname, 'rsi-momentum', 'rsi-momentum-bot.js') },
+  // Bollinger Bands saiu da lista (v1.135.6) — usuário não usa. Reative aqui se voltar:
+  // { label: 'Bollinger Bands',  script: path.join(__dirname, 'bollinger-bands', 'bollinger-bands-bot.js') },
 ];
 
 const MAX_RESTARTS = 3;
@@ -89,6 +94,13 @@ function startBot(bot, restarts = 0) {
     console.error(`⚠️  [${bot.label}] encerrou (code=${code}, signal=${signal})`);
     if (restarts >= MAX_RESTARTS) {
       console.error(`❌ [${bot.label}] atingiu o limite de ${MAX_RESTARTS} reinícios — desistindo.`);
+      // Se NENHUM bot está mais de pé, não faz sentido o launcher virar zumbi: sai
+      // não-zero pro supervisor tentar do zero (e alertar no WhatsApp se insistir).
+      if (BOTS.every((b) => !b.running) && !shuttingDown) {
+        console.error('❌ todos os bots desistiram — encerrando o launcher (o supervisor reinicia).');
+        shutdown();
+        setTimeout(() => process.exit(1), 800);
+      }
       return;
     }
     console.error(`🔁 [${bot.label}] reiniciando (tentativa ${restarts + 1}/${MAX_RESTARTS})...`);
@@ -128,7 +140,7 @@ function onControl(action) {
 }
 
 // restart/update só fazem sentido sob o supervisor (bots-supervisor.js), que é
-// quem reage ao exit code. Rodando o launcher direto (`bots:bands:nosup`), os
+// quem reage ao exit code. Rodando o launcher direto (`bots:nosup`), os
 // POST de controle respondem 503.
 const supervised = process.env.BOTS_SUPERVISED === '1';
 const adminServer = startInternalAdminServer(

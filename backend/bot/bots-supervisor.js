@@ -2,7 +2,7 @@
 
 /**
  * Supervisor do launcher dos bots — fica sempre vivo enquanto o launcher
- * (`start-bands-bots.js`) reinicia. É o entrypoint do `npm run bots:bands`.
+ * (`start-trade-bots.js`) reinicia. É o entrypoint do `npm run bots`.
  *
  * Por que existe: o launcher não consegue se auto-atualizar com limpeza (trocaria
  * o próprio código em execução). Então ele apenas SAI com um exit code sentinela
@@ -29,14 +29,19 @@ require('dotenv').config({ path: path.join(__dirname, '../../.env') });
 
 const botLog = require('../admin/botLog');
 const botControl = require('../admin/botControl');
+const { sendWhatsApp } = require('./whatsapp');
 const { EXIT } = botControl;
 
-const LAUNCHER = process.env.BOTS_LAUNCHER_SCRIPT || path.join(__dirname, 'start-bands-bots.js');
+const LAUNCHER = process.env.BOTS_LAUNCHER_SCRIPT || path.join(__dirname, 'start-trade-bots.js');
 const EXTRA_ARGS = process.argv.slice(2);
 const CRASH_BACKOFF_MS = 5000;
+// Quantos crashes seguidos (< 60s de vida) antes de avisar no WhatsApp.
+const CRASH_ALERT_AFTER = 3;
 
 let current = null;
 let stopping = false;
+let launchedAt = 0;
+let crashStreak = 0;
 
 function log(line) {
   const msg = `[supervisor] ${line}`;
@@ -44,8 +49,15 @@ function log(line) {
   try { botLog.writeLine(msg); } catch { /* nunca derruba o supervisor */ }
 }
 
+/** Aviso no WhatsApp — best-effort, nunca derruba o supervisor. Retorna a promise
+ *  pra quem precisa esperar o envio antes de `process.exit` (ver /stop). */
+function notify(msg) {
+  return Promise.resolve(sendWhatsApp(`🛰️ Bots (supervisor)\n${msg}`)).catch(() => {});
+}
+
 function spawnLauncher() {
   if (stopping) return;
+  launchedAt = Date.now();
   current = spawn(process.execPath, [LAUNCHER, ...EXTRA_ARGS], {
     stdio: 'inherit',
     env: { ...process.env, BOTS_SUPERVISED: '1' },
@@ -57,26 +69,40 @@ function spawnLauncher() {
     if (code === EXIT.STOP) {
       botControl.recordResult('stop', { ok: true });
       log('launcher pediu PARADA (exit 0) — encerrando o supervisor.');
-      process.exit(0);
+      const done = () => process.exit(0);
+      Promise.race([notify('⏹️ bots PARADOS via /stop.'), new Promise((r) => setTimeout(r, 4000))]).then(done, done);
       return;
     }
 
     if (code === EXIT.RESTART) {
       botControl.recordResult('restart', { ok: true });
       log('RESTART solicitado — subindo o launcher de novo...');
+      crashStreak = 0;
       spawnLauncher();
       return;
     }
 
     if (code === EXIT.UPDATE) {
+      crashStreak = 0;
       handleUpdate().catch((err) => {
         log(`erro inesperado no update: ${err.message} — subindo com o código atual`);
+        notify(`⚠️ /update FALHOU (erro inesperado: ${err.message}). Subindo com o código anterior.`);
+        botControl.recordResult('update', { ok: false, error: err.message, log: [] });
         spawnLauncher();
       });
       return;
     }
 
-    log(`launcher caiu (code=${code}, signal=${signal}) — respawn em ${CRASH_BACKOFF_MS / 1000}s`);
+    // Saída não solicitada = crash. Conta os crashes rápidos (< 60s de vida) e avisa
+    // no WhatsApp quando passar do limite — o launcher a essa altura já tentou o
+    // próprio auto-restart dos filhos (MAX_RESTARTS) e mesmo assim caiu.
+    const lifeS = (Date.now() - launchedAt) / 1000;
+    if (lifeS < 60) crashStreak++; else crashStreak = 0;
+    log(`launcher caiu (code=${code}, signal=${signal}, vida ${lifeS.toFixed(0)}s, seguidos ${crashStreak}) — respawn em ${CRASH_BACKOFF_MS / 1000}s`);
+    // Avisa no WhatsApp ao cruzar o limite e depois a cada 12 crashes (não spammar).
+    if (crashStreak === CRASH_ALERT_AFTER || (crashStreak > CRASH_ALERT_AFTER && crashStreak % 12 === 0)) {
+      notify(`❌ launcher dos bots caiu ${crashStreak}x seguidas (code=${code}). Continuo tentando subir, mas veja o log — provável erro no código/ambiente.`);
+    }
     setTimeout(spawnLauncher, CRASH_BACKOFF_MS);
   });
 }
@@ -90,12 +116,15 @@ async function handleUpdate() {
     result = { ok: false, error: err.message, log: [] };
   }
   for (const l of result.log || []) log(l);
-  if (result.ok) {
-    log(result.updated
-      ? `update OK: ${result.fromCommit} → ${result.toCommit}${result.npmRan ? ' (deps reinstaladas)' : ''}`
-      : 'update: já estava na última versão');
+  if (result.ok && result.updated) {
+    log(`update OK: ${result.fromCommit} → ${result.toCommit}${result.npmRan ? ' (deps reinstaladas)' : ''}`);
+    notify(`✅ /update OK: ${result.fromCommit} → ${result.toCommit}${result.npmRan ? ' (deps reinstaladas)' : ''}. Subindo os bots…`);
+  } else if (result.ok) {
+    log('update: já estava na última versão');
+    notify(`ℹ️ /update: já estava na última versão (${result.fromCommit}). Reiniciando mesmo assim.`);
   } else {
     log(`update FALHOU: ${result.error} — subindo com o código atual`);
+    notify(`⚠️ /update FALHOU: ${result.error}\nOs bots vão subir com o código ANTERIOR (${result.fromCommit || '?'}).`);
   }
   botControl.recordResult('update', result);
   spawnLauncher();

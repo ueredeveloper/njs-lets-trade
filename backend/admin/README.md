@@ -3,7 +3,7 @@
 > Subsistema criado para o `njs-lets-trade` ser administrado remotamente pelo
 > projeto **`njs-whatsapp`** (repositório separado, HTTP na porta 3005).
 > Este documento é a referência para quem for editar `backend/admin/` ou o
-> launcher `backend/bot/start-bands-bots.js`.
+> launcher `backend/bot/start-trade-bots.js`.
 
 ---
 
@@ -54,14 +54,13 @@ njs-whatsapp (porta 3005)   ── GET/POST /admin/* ──┐
 
 ## 2. Onde roda
 
-`npm run bots:bands` agora sobe **dois** processos:
+`npm run bots` agora sobe **dois** processos:
 
 ```
-npm run bots:bands
-  └─ bots-supervisor.js          ← fica sempre vivo; faz git pull + respawn
-       └─ start-bands-bots.js    ← launcher: spawn dos bots + http.Server :4100
-            ├─ bollinger-bands-bot.js
-            └─ rsi-momentum-bot.js
+npm run bots
+  └─ bots-supervisor.js          ← fica sempre vivo; faz git pull + respawn; avisa no WhatsApp
+       └─ start-trade-bots.js    ← launcher: spawn dos bots + http.Server :4100
+            └─ rsi-momentum-bot.js   (Bollinger saiu em v1.135.6 — reative na lista BOTS)
 ```
 
 A API interna é um `http.Server` dentro do **launcher**. Restart/update funcionam
@@ -76,13 +75,13 @@ stop) e o **supervisor** reage:
 | outro | crash → respawn com backoff de 5s |
 
 ```
-$ npm run bots:bands
-[supervisor] iniciando — launcher: backend/bot/start-bands-bots.js
+$ npm run bots
+[supervisor] iniciando — launcher: backend/bot/start-trade-bots.js
 [admin] API interna em http://127.0.0.1:4100 (health|info|log · token)
 ...saída dos bots...
 ```
 
-Rodar o launcher sozinho (sem supervisor, sem restart/update): `npm run bots:bands:nosup`.
+Rodar o launcher sozinho (sem supervisor, sem restart/update): `npm run bots:nosup`.
 
 Se nada disso estiver rodando, a API não existe — e é isso mesmo: o que é
 administrado é **o bot**. O `npm start` (frontend + `backend/server.js`) não tem
@@ -103,14 +102,29 @@ e não precisa dessa API.
 
 ### `bots-supervisor.js` (novo — `backend/bot/`)
 
-Processo pai, entrypoint do `npm run bots:bands`. Spawn do launcher; no `exit`
+Processo pai, entrypoint do `npm run bots`. Spawn do launcher; no `exit`
 interpreta o code sentinela (ver tabela na seção 2). `runUpdate()` roda aqui, com
 os bots já parados. Encaminha `SIGINT`/`SIGTERM` pro launcher. Loga tudo com
 prefixo `[supervisor]` no `launcher.log` (aparece no `/admin/log`). Grava o
 resultado do update em `botControl.recordResult()`.
 Override de teste: `BOTS_LAUNCHER_SCRIPT` troca o script do launcher.
 
-### `start-bands-bots.js` (launcher — modificado)
+**Avisos no WhatsApp** (`require('./whatsapp').sendWhatsApp`, best-effort, nunca
+derruba o supervisor): resultado do `/update` (OK `X → Y` / FALHOU + motivo /
+já-atualizado), `/stop`, e crash-loop do launcher (`CRASH_ALERT_AFTER = 3` quedas
+com < 60s de vida cada; depois a cada 12). O `/stop` espera o envio (timeout 4s)
+antes do `process.exit`.
+
+### linha de status no prompt (launcher)
+
+Todo start do `start-trade-bots.js` imprime **uma** linha dizendo o que foi —
+lê `botControl.readState().last` (só se a ação foi há < 120s):
+`>> njs-lets-trade launcher vX` (start normal) · `>> ATUALIZADO via /update A -> B` ·
+`>> /update FALHOU (...)` · `>> REINICIADO via /restart`. Sem emoji (Termux não
+renderiza alguns). Se **todos** os bots desistirem (`MAX_RESTARTS`), o launcher
+sai `1` pro supervisor tentar do zero (e alertar no crash-loop).
+
+### `start-trade-bots.js` (launcher — modificado)
 
 O que foi adicionado (o resto do comportamento — spawn por filho, restart com
 limite `MAX_RESTARTS`, shutdown — é o original):
@@ -165,8 +179,6 @@ sem ele responde `403`, igual aos outros.
     "dirty": false
   },
   "bots": [
-    { "label": "Bollinger Bands", "pid": 12346, "running": true, "restarts": 0,
-      "startedAt": "2026-09-06T12:00:01.000Z", "lastExit": null },
     { "label": "RSI Momentum", "pid": 12347, "running": true, "restarts": 0,
       "startedAt": "2026-09-06T12:00:01.000Z", "lastExit": null }
   ],
@@ -181,7 +193,7 @@ sem ele responde `403`, igual aos outros.
 ```json
 {
   "file": "C:\\workspace\\njs-lets-trade\\backend\\data\\bot\\launcher.log",
-  "lines": ["[RSI Momentum] 12:20:01 sinal BTCUSDT ...", "[Bollinger Bands] ..."]
+  "lines": ["[RSI Momentum] 12:20:01 sinal BTCUSDT ...", "[supervisor] ..."]
 }
 ```
 - `lines` default 100, teto 2000.
@@ -205,7 +217,7 @@ Só respondem `202`/`200` se **`token` configurado + `X-Internal-Token` correto 
 | `POST /internal/stop`    | launcher sai com `0` → supervisor encerra também | `202 { ok, action:"stop" }` |
 | `POST /internal/pull`    | dry-run: `git fetch` + diff, **não** reinicia | `200 { ok, behind, ahead, dirty, commits:[...] }` |
 
-Sem supervisor (`bots:bands:nosup`), restart/update respondem `503` (o exit code
+Sem supervisor (`bots:nosup`), restart/update respondem `503` (o exit code
 não teria quem reagir). `pull` funciona sempre.
 
 ---
@@ -291,7 +303,7 @@ volta a ser 100% leitura e os `POST` dão `403`.
 
 ```bash
 # terminal 1
-npm run bots:bands
+npm run bots
 
 # terminal 2  (com token configurado, TODA rota exige o header)
 curl -s -H "X-Internal-Token: <token>" http://127.0.0.1:4100/internal/health
@@ -337,5 +349,5 @@ node -e "require('./backend/admin/internalServer').startInternalAdminServer(()=>
   estado meio-mergeado); se o `npm ci` falhar, o código já é o novo mas pode
   faltar dependência — `lastAction.error` diz, e os bots podem entrar em loop de
   restart até você rodar `npm ci` no Termux.
-- **restart/update sem supervisor**: `bots:bands:nosup` não tem quem reaja ao
-  exit code — os POST respondem `503`. Use `npm run bots:bands` (com supervisor).
+- **restart/update sem supervisor**: `bots:nosup` não tem quem reaja ao
+  exit code — os POST respondem `503`. Use `npm run bots` (com supervisor).

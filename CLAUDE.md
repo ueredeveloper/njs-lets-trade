@@ -20,13 +20,13 @@ npm run frontend:react   # Vite dev server on port 5173
 npx jest
 npx jest backend/tests/calculate-liquidity.test.js   # single test file
 
-# Bots de trade (Bollinger + RSI Momentum) — sobe também a API interna de admin
-npm run bots:bands
+# Bot de trade (RSI Momentum) — sobe também o supervisor + a API interna de admin
+npm run bots
 ```
 
 ## API interna de administração (`backend/admin/`)
 
-`npm run bots:bands` agora sobe **`bots-supervisor.js` → `start-bands-bots.js` →
+`npm run bots` agora sobe **`bots-supervisor.js` → `start-trade-bots.js` →
 bots**. O launcher hospeda um `http.Server` **só loopback** (default
 `127.0.0.1:4100`):
 - **Leitura:** `GET /internal/health`, `/internal/info` (versão, git, pids/uptime,
@@ -42,9 +42,17 @@ bots**. O launcher hospeda um `http.Server` **só loopback** (default
 É o lado cooperativo da administração remota: `njs-whatsapp` (porta 3005) consome
 isso para `/admin/status|health|log|restart|update|stop|pull` no WhatsApp. Config
 no `.env` (`INTERNAL_ADMIN_*`). Launcher sozinho (sem restart/update):
-`npm run bots:bands:nosup`.
+`npm run bots:nosup`.
 
-**Ao editar `backend/admin/`, `backend/bot/start-bands-bots.js` ou
+O **supervisor avisa no WhatsApp** (via `backend/bot/whatsapp.js`, best-effort) o
+resultado de `/update` (OK `X → Y` / FALHOU + motivo / já-atualizado), o `/stop`, e
+crash-loop do launcher (≥3 quedas < 60s de vida, depois a cada 12). O launcher
+imprime **uma linha no prompt** a cada start dizendo o que foi (start normal /
+`>> ATUALIZADO via /update X -> Y` / `>> REINICIADO via /restart` / falha) — lê
+`botControl.readState().last` (janela de 120s). Só sobe o **RSI Momentum**
+(Bollinger saiu em v1.135.6 — reative na lista `BOTS` de `start-trade-bots.js`).
+
+**Ao editar `backend/admin/`, `backend/bot/start-trade-bots.js` ou
 `backend/bot/bots-supervisor.js`, leia `backend/admin/README.md` primeiro.**
 Invariantes que não podem quebrar: bind só em `127.0.0.1`; `authorized()`
 (loopback + `X-Internal-Token`) em toda request; `GET` sempre leitura, mutação só

@@ -1,10 +1,10 @@
 'use strict';
 
 /**
- * Log combinado do launcher dos bots (start-bands-bots.js).
+ * Log combinado do launcher dos bots (start-trade-bots.js).
  *
  * Os bots rodam em processos filhos; sem isto o stdout deles só existe no terminal
- * que rodou `npm run bots:bands`. Aqui a saída dos filhos é espelhada no console E
+ * que rodou `npm run bots`. Aqui a saída dos filhos é espelhada no console E
  * gravada num arquivo com rotação simples por tamanho — é esse arquivo que o
  * `/admin/log` do njs-whatsapp vai ler.
  */
