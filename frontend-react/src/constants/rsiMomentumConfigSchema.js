@@ -41,7 +41,7 @@ export const RSI_MOMENTUM_HARD_TP_OPTIONS = [8, 10, 12, 15, 18, 20, 25, 30, 40, 
 export const RSI_MOMENTUM_EARLY_CONFIRM_RSI_OPTIONS = [65, 68, 69, 70, 72, 75, 80];
 /** entry.supportResistance — filtro/alvo por Suporte-Resistência (mesmo leque do backtest). */
 export const RSI_MOMENTUM_SR_INTERVAL_OPTIONS = RSI_MOMENTUM_ALL_INTERVALS;
-export const RSI_MOMENTUM_SR_CANDLE_COUNT_OPTIONS = [20, 50, 100, 200, 500];
+export const RSI_MOMENTUM_SR_CANDLE_COUNT_OPTIONS = [20, 50, 100, 200, 300, 500, 1000];
 export const RSI_MOMENTUM_SR_RANK_OPTIONS = [1, 2, 3];
 export const RSI_MOMENTUM_SR_ENTRY_MAX_PCT_OPTIONS = [0.5, 0.6, 0.7, 0.8, 0.9, 1, 1.5, 2, 3, 5, 8, 10, 15, 20];
 /** exit.reinforceOnStop — "reforço no stop": queda % que dispara novo aporte e alta
