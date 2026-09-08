@@ -40,9 +40,19 @@ const { EXIT: CONTROL_EXIT } = botControl;
 botControl.clearStalePending();
 
 // ── TESTE DE ATUALIZAÇÃO (temporário) ──────────────────────────────────────────
-// Linha de versão no prompt a cada start do launcher, pra confirmar o deploy no
-// Termux. Reverter depois do teste.
-console.log(`🟢 ATUALIZAÇÃO OK — launcher v${require('../../package.json').version}`);
+// Linha de versão + qual ação de controle disparou este start. Reverter depois do teste.
+console.log(`🟢 NOVÍSSIMA ATUALIZAÇÃO /UPDATE — launcher v${require('../../package.json').version}`);
+{
+  const last = botControl.readState().last;
+  const ageS = last?.at ? (Date.now() - Date.parse(last.at)) / 1000 : Infinity;
+  if (last && ageS < 120) {
+    if (last.action === 'restart') {
+      console.log('🔁 REINÍCIO CONFIRMADO — este start veio do /restart (código não mudou)');
+    } else if (last.action === 'update') {
+      console.log(`⬆️  UPDATE CONFIRMADO — este start veio do /update (${last.fromCommit || '?'} → ${last.toCommit || '?'}${last.ok === false ? ' — FALHOU: ' + last.error : ''})`);
+    }
+  }
+}
 
 const LAUNCHER_STARTED_AT = Date.now();
 

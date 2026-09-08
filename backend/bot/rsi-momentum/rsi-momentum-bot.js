@@ -1686,7 +1686,7 @@ async function main() {
   // ── TESTE DE ATUALIZAÇÃO (temporário) ──────────────────────────────────────
   // Textos de iniciação padrão silenciados de propósito pra o teste de deploy no
   // Termux mostrar SÓ a linha de versão abaixo. Reverter depois do teste.
-  console.log('🟢 ATUALIZAÇÃO OK — bot RSI Momentum v1.135.3');
+  console.log('🟢 NOVÍSSIMA ATUALIZAÇÃO /UPDATE — bot RSI Momentum v1.135.4');
   // console.log('🚀 rsi-momentum-bot iniciado — scanner de mercado + pullback/OCO avaliados minuto a minuto');
   // const cfgRow = await sbReq('GET', 'rsi_momentum_global_config', null, `?user_id=eq.${DEFAULT_USER_ID}&select=updated_at&limit=1`).catch(() => null);
   // const cfgSource = cfgRow?.[0]?.updated_at
