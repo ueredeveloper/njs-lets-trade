@@ -56,6 +56,10 @@ botControl.clearStalePending();
   }
   console.log(line);
   try { botLog.writeLine(`[launcher] ${line}`); } catch { /* nunca derruba o launcher */ }
+
+  const testeLine = '>> TESTE DE DEPLOY VIA /update — SE VOCE VE ESTA LINHA EM CAIXA ALTA, O CODIGO NOVO ESTA NO AR';
+  console.log(testeLine);
+  try { botLog.writeLine(`[launcher] ${testeLine}`); } catch { /* nunca derruba o launcher */ }
 }
 
 const LAUNCHER_STARTED_AT = Date.now();
