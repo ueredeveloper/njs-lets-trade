@@ -692,6 +692,41 @@ function parseEntryFailure(rulesState) {
   return { message: String(ef.message), at: ef.at ?? null };
 }
 
+/** Pernas do ciclo "Reforço no stop" (rearm/ladder) da posição ABERTA — gravadas perna a perna
+ *  pelo rsi-momentum-bot em rules_state.rearm.legTimeline / rules_state.reinforce.legTimeline
+ *  (ver startRearmReinforce / handleReinforceLadder). Mapeia pro MESMO shape que o backtest já
+ *  expõe em o.reinforceLegs (analyseRsiThresholdBacktest.js) — { entryDate, entryPrice, exitDate,
+ *  exitPrice, outcome } — e anexa a perna ABERTA atual (outcome 'open'), pro gráfico ao vivo
+ *  desenhar 1 quadrado por perna (1ª compra → stop → reforço → …), igual às Estatísticas.
+ *  null quando não há reforço ativo. */
+function parseReinforceLegs(rulesState, { buyTime, buyPrice } = {}) {
+  let rs = rulesState;
+  if (typeof rs === 'string') {
+    try { rs = JSON.parse(rs); } catch { return null; }
+  }
+  const rf = rs?.rearm?.active ? rs.rearm : (rs?.reinforce?.active ? rs.reinforce : null);
+  if (!rf) return null;
+
+  const legs = (Array.isArray(rf.legTimeline) ? rf.legTimeline : []).map(l => ({
+    entryDate: l.entryTime ? new Date(l.entryTime).toISOString() : null,
+    entryPrice: l.entryPrice != null ? Number(l.entryPrice) : null,
+    exitDate: l.exitTime ? new Date(l.exitTime).toISOString() : null,
+    exitPrice: l.exitPrice != null ? Number(l.exitPrice) : null,
+    outcome: l.outcome ?? 'stop',
+  }));
+
+  // Perna aberta atual — não está no legTimeline (só pernas fechadas entram lá).
+  const openEntryPrice = Number(rf.entryPrice ?? rf.lastEntryPrice ?? buyPrice);
+  if (Number.isFinite(openEntryPrice) && openEntryPrice > 0) {
+    const openEntryDate = buyTime
+      ? new Date(buyTime).toISOString()
+      : (rf.lastRungAt ? new Date(rf.lastRungAt).toISOString() : null);
+    legs.push({ entryDate: openEntryDate, entryPrice: openEntryPrice, exitDate: null, exitPrice: null, outcome: 'open' });
+  }
+
+  return legs.length ? legs : null;
+}
+
 async function enrichMultitradeEntriesWithState(entries) {
   if (!entries?.length) return entries ?? [];
   const symbols = [...new Set(entries.map(e => e.symbol))];
@@ -721,6 +756,10 @@ async function enrichMultitradeEntriesWithState(entries) {
       exitBracket: parseExitBracket(st?.rules_state),
       entryLimit: parseEntryLimit(st?.rules_state),
       entryFailure: parseEntryFailure(st?.rules_state),
+      reinforceLegs: parseReinforceLegs(st?.rules_state, {
+        buyTime: st?.buy_time ?? null,
+        buyPrice: st?.buy_price != null ? Number(st.buy_price) : null,
+      }),
       curated: !!st?.curated,
     };
   });
@@ -838,6 +877,10 @@ router.get('/bot-state', getUserId, async (req, res) => {
     entrySignalTime: st.entry_signal_time ?? null,
     entrySignalPrice: st.entry_signal_price != null ? Number(st.entry_signal_price) : null,
     entryLimit: parseEntryLimit(st.rules_state),
+    reinforceLegs: parseReinforceLegs(st.rules_state, {
+      buyTime: st.buy_time ?? null,
+      buyPrice: st.buy_price != null ? Number(st.buy_price) : null,
+    }),
   }));
   res.json(entries);
 });

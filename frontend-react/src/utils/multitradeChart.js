@@ -1,4 +1,4 @@
-import { INTERVAL_MS, computeCandleLimitFromTime } from './chartView';
+import { INTERVAL_MS, computeCandleLimitFromTime, chooseChartIntervalForLegs } from './chartView';
 
 const CANDLES_BEFORE = 10;
 
@@ -178,6 +178,35 @@ export function tradeFetchPlan(entry, row, signalMs) {
   };
 }
 
+/**
+ * Pernas do ciclo "Reforço no stop" (rearm/ladder) → marcadores compra→venda, 1 par por perna.
+ * `legs` vem no shape de o.reinforceLegs do backtest / parseReinforceLegs do serviço:
+ *   { entryDate, entryPrice, exitDate, exitPrice, outcome }  outcome ∈ 'stop'|'target'|'open'
+ * O quadrado verde/vermelho é desenhado por buildHistoricalPositionRects (CandlestickChartLW.jsx)
+ * a partir do entryTime/entryPrice no marcador de venda — verde se aquela perna bateu o alvo,
+ * vermelho se estopou (virou reforço). A perna 'open' (posição corrente) NÃO ganha marcador de
+ * venda aqui — o box de alvo/stop + a linha de PnL ao vivo vêm do marcador `entry` separado.
+ */
+function reinforceLegMarkers(legs, fallbackEndMs) {
+  return (legs ?? []).flatMap((leg, rung) => {
+    const entryMs = leg.entryDate ? new Date(leg.entryDate).getTime() : null;
+    if (!Number.isFinite(entryMs)) return [];
+    const label = rung === 0 ? '▲ Compra' : `▲ Reforço ${rung}`;
+    const out = [{ time: entryMs, side: 'buy', price: leg.entryPrice ?? null, label, real: true }];
+    if (leg.outcome !== 'open' && leg.exitPrice != null) {
+      const exitMs = leg.exitDate ? new Date(leg.exitDate).getTime() : fallbackEndMs;
+      const pct = leg.entryPrice > 0 ? ((leg.exitPrice - leg.entryPrice) / leg.entryPrice) * 100 : null;
+      out.push({
+        time: exitMs, side: 'sell', price: leg.exitPrice,
+        entryTime: entryMs, entryPrice: leg.entryPrice, pnlPct: pct,
+        label: `▼ ${leg.outcome === 'target' ? 'Alvo' : 'Stop'}${pct != null ? ` ${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%` : ''}`,
+        real: true,
+      });
+    }
+    return out;
+  });
+}
+
 /** Marcadores de trades reais (Supabase rsi_multi_bot_trades + posição aberta) */
 export function buildMarkersFromLiveTrades(trades, entry) {
   const markers = [];
@@ -207,11 +236,19 @@ export function buildMarkersFromLiveTrades(trades, entry) {
   }
 
   if (entry?.phase === 'BOUGHT' && openMs) {
+    // Posição aberta em ciclo de "Reforço no stop" (rearm/ladder): desenha 1 quadrado por PERNA
+    // (1ª compra → stop → reforço → …) a partir de entry.reinforceLegs, além do marcador `entry`
+    // da perna corrente (mantém o box de alvo/stop + a linha de PnL ao vivo). Sem reforço, só o
+    // marcador `entry` de sempre.
+    const closedLegs = (entry.reinforceLegs ?? []).filter((l) => l.outcome !== 'open');
+    if (closedLegs.length) {
+      markers.push(...reinforceLegMarkers(closedLegs, Date.now()));
+    }
     markers.push({
       time: openMs,
       side: 'entry',
       price: entry.buyPrice,
-      label: '▌ Compra',
+      label: closedLegs.length ? `▌ Reforço ${closedLegs.length}` : '▌ Compra',
     });
   }
 
@@ -221,6 +258,31 @@ export function buildMarkersFromLiveTrades(trades, entry) {
     if (!entryMs) continue;
 
     const isOpenDup = openMs && Math.abs(entryMs - openMs) < 60_000;
+
+    // Trade fechado que foi um ciclo de reforço: expande o leg_timeline em 1 par compra→venda
+    // por perna, em vez do par agregado único (que esconderia a 1ª compra estopada).
+    const legTimeline = t.leg_timeline ?? t.legTimeline;
+    if (!isOpenDup && Array.isArray(legTimeline) && legTimeline.length) {
+      if (t.entry_signal_time) {
+        markers.push({
+          time: new Date(t.entry_signal_time).getTime(),
+          side: 'signal',
+          price: t.entry_signal_price != null ? Number(t.entry_signal_price) : null,
+        });
+      }
+      markers.push(...reinforceLegMarkers(
+        legTimeline.map((l) => ({
+          entryDate: l.entryTime ?? l.entryDate,
+          entryPrice: l.entryPrice,
+          exitDate: l.exitTime ?? l.exitDate,
+          exitPrice: l.exitPrice,
+          outcome: l.outcome,
+        })),
+        exitMs ?? Date.now(),
+      ));
+      continue;
+    }
+
     if (!isOpenDup) {
       if (t.entry_signal_time) {
         markers.push({
@@ -389,7 +451,7 @@ export async function loadMultitradeSymbolChart(entry, {
   applyMultitradeSymbolChart,
 }) {
   if (!entry?.symbol) return;
-  const interval = resolveTradeChartInterval(entry, null);
+  const strategyInterval = resolveTradeChartInterval(entry, null);
   const src = entry.exchange === 'gate' ? 'gate' : null;
   const sym = entry.symbol.toUpperCase();
 
@@ -399,8 +461,25 @@ export async function loadMultitradeSymbolChart(entry, {
   // gráfico não faz sentido. Trades sem `interval` gravado (antes da coluna existir, ou de
   // antes do bot reiniciar após a migration) também são descartados — sem essa marcação não
   // dá pra confirmar que são do intervalo atual.
-  const sameIntervalTrades = trades.filter(t => t.interval === interval);
+  const sameIntervalTrades = trades.filter(t => t.interval === strategyInterval);
   const markers = buildMarkersFromLiveTrades(sameIntervalTrades, entry);
+
+  // Ciclo de "Reforço no stop" (rearm/ladder) — posição aberta (entry.reinforceLegs) ou trade
+  // fechado (leg_timeline): a 1ª compra pode ser horas antes de agora e a janela fixa de 80
+  // candles não alcança. Busca ANCORADA no período das pernas, no intervalo mais fino que cabe
+  // (chooseChartIntervalForLegs) — mesma lógica das Estatísticas.
+  const reinforceLegs = entry?.reinforceLegs?.length
+    ? entry.reinforceLegs
+    : (sameIntervalTrades.find(t => Array.isArray(t.leg_timeline) && t.leg_timeline.length)?.leg_timeline ?? [])
+        .map(l => ({ entryDate: l.entryTime ?? l.entryDate, exitDate: l.exitTime ?? l.exitDate }));
+  const legEntryMs = reinforceLegs
+    .map(l => new Date(l.entryDate).getTime())
+    .filter(Number.isFinite);
+  const firstLegMs = legEntryMs.length ? Math.min(...legEntryMs) : null;
+
+  const interval = firstLegMs != null
+    ? chooseChartIntervalForLegs(reinforceLegs, strategyInterval)
+    : strategyInterval;
 
   // Carga inicial pequena e fixa (não mais "cobrir o sinal/compra mais antigo dos 30 trades",
   // que em intervalos rápidos tipo 1m podia passar de 900 candles e deixar o primeiro render
@@ -410,7 +489,9 @@ export async function loadMultitradeSymbolChart(entry, {
   // usado pela view de trades em CurrencyTable.jsx) — não precisa mais adivinhar upfront.
   const candleLimit = 80;
 
-  const chartData = await fetchCandlesticksAndCloud(sym, interval, src, candleLimit);
+  const chartData = firstLegMs != null
+    ? await fetchCandlesticksAndCloud(sym, interval, src, undefined, { fromMs: firstLegMs, toMs: Date.now(), pad: 100 })
+    : await fetchCandlesticksAndCloud(sym, interval, src, candleLimit);
 
   // Reafirma o override de VWAP/Bollinger do próprio favorito (mesmos defaults usados em
   // applyChartVwapBandsOverlay/applyChartBollingerBandsOverlay) — precisa ser setado aqui de

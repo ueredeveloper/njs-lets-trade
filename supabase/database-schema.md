@@ -209,6 +209,9 @@ erDiagram
 | `duration_ms` | BIGINT | |
 | `fee_usdt` | NUMERIC | |
 | `entry_signal_id` / `exit_signal_id` | BIGINT | |
+| `leg_timeline` | JSONB | Pernas do ciclo "Reforço no stop" (rearm/ladder): `[{ entryTime, entryPrice, exitTime, exitPrice, outcome }]`, `outcome ∈ 'stop'\|'target'\|'open'`. NULL quando o ciclo não teve reforço. Migração: `add-rsi-momentum-leg-timeline-column.sql` |
+| `reinforce_mode` | TEXT | `rearm` \| `ladder` \| NULL |
+| `reinforce_rungs` | SMALLINT | nº de reforços disparados no ciclo (0 = nenhum) |
 | `created_at` | TIMESTAMPTZ | |
 
 ### Views (criadas manualmente no Supabase)

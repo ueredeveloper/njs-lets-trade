@@ -25,6 +25,25 @@ export function computeCandleLimitFromTime(fetchFromMs, interval, { buffer = 40,
   return Math.min(max, Math.max(min, Math.ceil((Date.now() - fetchFromMs) / ms) + buffer));
 }
 
+/** Intervalos em ordem crescente de duração — usado por chooseChartIntervalForLegs. */
+export const INTERVALS_ASC = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d'];
+
+/** Escolhe o intervalo de candle mais FINO que ainda cobre a duração INTEIRA das pernas de
+ *  reforço (rearm/ladder) sem estourar `candleCap` candles buscados. O motor da escada roda em
+ *  candles de 1 MINUTO, então usar sempre o intervalo da entrada (tipicamente 15m/1h) esmaga
+ *  pernas rápidas no(s) mesmo candle e vira "1 quadrado só" em vez de um por perna. Usado tanto
+ *  pelas Estatísticas (backtest, legs com entryDate/exitDate) quanto pelo gráfico ao vivo. */
+export function chooseChartIntervalForLegs(legs, fallbackIv, candleCap = 2500) {
+  if (!legs?.length) return fallbackIv;
+  const lastLeg = legs[legs.length - 1];
+  const spanMs = new Date(lastLeg.exitDate ?? lastLeg.entryDate).getTime() - new Date(legs[0].entryDate).getTime();
+  if (!(spanMs > 0)) return fallbackIv;
+  for (const iv of INTERVALS_ASC) {
+    if (spanMs / INTERVAL_MS[iv] <= candleCap) return iv;
+  }
+  return INTERVALS_ASC[INTERVALS_ASC.length - 1];
+}
+
 /** Velas extras antes da entrada / depois da saída no zoom MT e Estatísticas */
 export const CHART_ZOOM_PAD = 10;
 

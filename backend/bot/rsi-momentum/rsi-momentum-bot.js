@@ -1093,6 +1093,24 @@ async function startRearmReinforce({ rowId, adapter, strategy, log, state, sessi
         : parseFloat(state.buy_qty) * (Number(bracketResult?.exitPrice) || buyPrice || 0))
     : null;
 
+  // Perna que ACABOU de estopar → só vira registro fechado do legTimeline DEPOIS que a recompra
+  // confirma (finalizeRearmRebuy). Aqui só monta o candidato em `pendingStoppedLeg`: se o
+  // processo cair entre o write-ahead e a recompra, um resume re-chama startRearmReinforce e
+  // SOBRESCREVE este campo (não duplica a perna). Preço de saída: fill do stop, stopPrice da OCO
+  // que estava na corretora, ou −rearmStopPct% como último recurso.
+  const stoppedLegExitPrice = Number(bracketResult?.exitPrice) > 0
+    ? Number(bracketResult.exitPrice)
+    : (Number(rulesState.exitBracket?.stopPrice) > 0
+        ? Number(rulesState.exitBracket.stopPrice)
+        : parseFloat(state.buy_price) * (1 - (prev?.rearmStopPct ?? rf.rearmStopPct ?? 5) / 100));
+  const pendingStoppedLeg = {
+    entryTime: prev ? (prev.lastRungAt ?? prev.prevBuyTime ?? prev.startedAt ?? null) : (state.buy_time ?? null),
+    entryPrice: parseFloat(state.buy_price),
+    exitTime: now,
+    exitPrice: stoppedLegExitPrice,
+    outcome: 'stop',
+  };
+
   // ── WRITE-AHEAD ──────────────────────────────────────────────────────────────────────────
   // Marca a intenção ANTES de vender/recomprar. exitBracket:null impede que um restart re-consulte
   // a OCO já preenchida e dispare o rearm de novo (double sell/buy). resumeRearmPending reconcilia
@@ -1111,6 +1129,9 @@ async function startRearmReinforce({ rowId, adapter, strategy, log, state, sessi
     prevQty: parseFloat(state.buy_qty),
     prevBuyUsdt: parseFloat(state.buy_usdt),
     prevBuyPrice: parseFloat(state.buy_price),
+    prevBuyTime: state.buy_time ?? null,
+    legTimeline: prev?.legTimeline ?? [],
+    pendingStoppedLeg,
     startedAt: prev?.startedAt ?? now,
     pendingSince: now,
   };
@@ -1179,6 +1200,11 @@ async function finalizeRearmRebuy({ rowId, adapter, strategy, log, state, sessio
     rungUsd,
     rearmStopPct: rf.rearmStopPct,
     rearmTargetPct: rf.rearmTargetPct,
+    // agora que a recompra confirmou, a perna estopada vira registro fechado (uma vez só).
+    legTimeline: [
+      ...(pendingRearm.legTimeline ?? []),
+      ...(pendingRearm.pendingStoppedLeg ? [pendingRearm.pendingStoppedLeg] : []),
+    ],
     startedAt: pendingRearm.startedAt ?? new Date().toISOString(),
     lastRungAt: new Date().toISOString(),
   };
@@ -1279,6 +1305,10 @@ async function resumeRearmPending({ rowId, adapter, strategy, log, state, sessio
   const rearm = {
     active: true, pending: false, rungs, investedUsd, entryPrice: avgPrice, rungUsd,
     rearmStopPct: rp.rearmStopPct, rearmTargetPct: rp.rearmTargetPct,
+    legTimeline: [
+      ...(rp.legTimeline ?? []),
+      ...(rp.pendingStoppedLeg ? [rp.pendingStoppedLeg] : []),
+    ],
     startedAt: rp.startedAt ?? new Date().toISOString(), lastRungAt: new Date().toISOString(),
   };
   session.rulesState = {
@@ -1359,6 +1389,16 @@ async function startReinforceLadder({ rowId, adapter, strategy, log, state, sess
 
   const heldCost = (leg1Sold ? 0 : leg1Cost) + leg2Cost;
   const heldQty = (leg1Sold ? 0 : leg1Qty) + leg2Qty;
+  const nowIso = new Date().toISOString();
+
+  // Perna 0 (compra inicial) fechada no stop — preço de saída: fill do stop, stopPrice da OCO,
+  // ou −addDropPct% como fallback. A perna 2 (nova) fica aberta e é sintetizada no serviço; a
+  // cada novo degrau (handleReinforceLadder) a perna anterior fecha e a nova é anexada.
+  const leg0ExitPrice = Number(bracketResult?.exitPrice) > 0
+    ? Number(bracketResult.exitPrice)
+    : (Number(rulesState.exitBracket?.stopPrice) > 0
+        ? Number(rulesState.exitBracket.stopPrice)
+        : buyPrice * (1 - (rf.addDropPct ?? 10) / 100));
 
   const reinforce = {
     active: true,
@@ -1369,12 +1409,16 @@ async function startReinforceLadder({ rowId, adapter, strategy, log, state, sess
       { price: buyPrice, qtyBought: leg1Qty, costUsd: leg1Cost, soldAtStop: leg1Sold, proceedsUsd: leg1Proceeds },
       { price: leg2Price, qtyBought: leg2Qty, costUsd: leg2Cost },
     ],
+    legTimeline: [
+      { entryTime: state.buy_time ?? null, entryPrice: buyPrice, exitTime: nowIso, exitPrice: leg0ExitPrice, outcome: 'stop' },
+    ],
     rungs: 1,
     lastEntryPrice: leg2Price,
+    lastRungAt: nowIso,
     heldCostUsd: heldCost,
     leg1RealizedLossUsd: leg1RealizedLoss,
     fundsShortSince: null,
-    startedAt: new Date().toISOString(),
+    startedAt: nowIso,
   };
   session.rulesState = {
     ...(rulesState ?? {}),
@@ -1476,10 +1520,18 @@ async function handleReinforceLadder({ rowId, adapter, strategy, log, state, ses
     const heldCost = (rf.heldCostUsd ?? parseFloat(state.buy_usdt)) + legCost;
     const newQty = parseFloat(state.buy_qty) + legQty;
     const legs = [...(rf.legs ?? []), { price: legPrice, qtyBought: legQty, costUsd: legCost }];
+    const nowIso = new Date().toISOString();
+    // Fecha a perna que estava aberta (último aporte) no preço do novo degrau e anexa — 1
+    // registro por perna, encadeado (a nova perna nasce onde a anterior terminou).
+    const legTimeline = [
+      ...(rf.legTimeline ?? []),
+      { entryTime: rf.lastRungAt ?? rf.startedAt ?? null, entryPrice: rf.lastEntryPrice, exitTime: nowIso, exitPrice: legPrice, outcome: 'stop' },
+    ];
     const newReinforce = {
-      ...rf, legs,
+      ...rf, legs, legTimeline,
       rungs: (rf.rungs ?? 1) + 1,
       lastEntryPrice: legPrice,
+      lastRungAt: nowIso,
       heldCostUsd: heldCost,
       fundsShortSince: null,
     };

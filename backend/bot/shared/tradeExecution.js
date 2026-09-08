@@ -58,6 +58,47 @@ function postExitRulesState(exitTime, opts = {}) {
   return out;
 }
 
+/**
+ * Timeline COMPLETO das pernas de um ciclo "Reforço no stop" (rearm/ladder) que está fechando
+ * agora — pernas já fechadas (rules_state.rearm.legTimeline / rules_state.reinforce.legTimeline,
+ * gravadas perna a perna pelo rsi-momentum-bot) + a perna FINAL (a que a venda de agora
+ * encerrou). Vai pra rsi_multi_bot_trades.leg_timeline pra o histórico do trade não perder o
+ * ciclo inteiro (1ª compra + reforços + saída), independente da corretora.
+ *
+ * Shape de cada perna = o mesmo do backtest (analyseRsiThresholdBacktest.js):
+ *   { entryTime, entryPrice, exitTime, exitPrice, outcome }  outcome ∈ 'stop' | 'target' | 'open'
+ *
+ * null quando o ciclo não teve reforço (fica igual pros outros bots que compartilham finalizeSell).
+ */
+function buildClosedLegTimeline(rulesState, state, finalLeg) {
+  const rf = rulesState?.rearm ?? rulesState?.reinforce ?? null;
+  if (!rf) return null;
+  const closed = Array.isArray(rf.legTimeline) ? rf.legTimeline.slice() : [];
+  const finalEntryPrice = Number(rf.entryPrice ?? rf.lastEntryPrice ?? state?.buy_price);
+  closed.push({
+    entryTime: rf.lastRungAt ?? state?.buy_time ?? null,
+    entryPrice: Number.isFinite(finalEntryPrice) ? finalEntryPrice : null,
+    exitTime: finalLeg.exitTime,
+    exitPrice: finalLeg.exitPrice != null ? Number(finalLeg.exitPrice) : null,
+    outcome: finalLeg.pnlUsdt != null && finalLeg.pnlUsdt >= 0 ? 'target' : 'stop',
+  });
+  return closed.length ? closed : null;
+}
+
+/** Campos de reforço pro insert de trade fechado — spread condicional: sem reforço no ciclo,
+ *  nada é enviado (a coluna leg_timeline fica NULL e o insert não quebra se a migração
+ *  add-rsi-momentum-leg-timeline-column.sql ainda não rodou). */
+function reinforceTradeFields(rulesState, state, finalLeg) {
+  const timeline = buildClosedLegTimeline(rulesState, state, finalLeg);
+  if (!timeline) return {};
+  const rf = rulesState.rearm ?? rulesState.reinforce;
+  return {
+    leg_timeline: timeline,
+    reinforce_mode: rulesState.rearm ? 'rearm' : 'ladder',
+    reinforce_rungs: Number(rf?.rungs ?? 0),
+  };
+}
+
 function resolveLastExitTime(state, session) {
   const fromRow = parseRulesState(state).lastExitTime;
   if (fromRow) return fromRow;
@@ -280,6 +321,7 @@ function createTradeExecution({
       interval: resolveConfigInterval(config),
       ...entrySignalFieldsFromState(state),
       ...exitSignalFields(exitResult),
+      ...reinforceTradeFields(parseRulesState(state), state, { exitTime, exitPrice, pnlUsdt }),
     }, log);
 
     const lastExitReason = exitResult?.reason ?? reasonLabel ?? null;
@@ -374,6 +416,7 @@ function createTradeExecution({
         interval: resolveConfigInterval(strategy.config),
         ...entrySignalFieldsFromState(state),
         ...exitSignalFields(exitResult),
+        ...reinforceTradeFields(parseRulesState(state), state, { exitTime, exitPrice: est.exitPrice, pnlUsdt: est.pnlUsdt }),
       }, log);
 
       const lastExitReason = exitResult?.reason ?? 'DUST';
@@ -414,4 +457,6 @@ module.exports = {
   resolveLastExitReason,
   hasOpenPosition,
   entrySignalFields,
+  buildClosedLegTimeline,
+  reinforceTradeFields,
 };

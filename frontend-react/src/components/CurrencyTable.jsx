@@ -16,7 +16,7 @@ import TradeLotSellModal from './TradeLotSellModal';
 import VwapBandsFavoriteModal from './VwapBandsFavoriteModal';
 import BollingerBandsFavoriteModal from './BollingerBandsFavoriteModal';
 import { getEntriesForSymbol } from '../constants/strategyPresets';
-import { CHART_VIEW } from '../utils/chartView';
+import { CHART_VIEW, chooseChartIntervalForLegs } from '../utils/chartView';
 import {
   resolveTradeChartInterval,
   loadMultitradeSymbolChart,
@@ -1193,6 +1193,26 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
           || s.phase === 'FAILED' || (s.phase === 'WATCHING' && s.entryLimit)) ?? null;
         if (botTrades?.length || liveEntry) {
           setChartTradeMarkers(buildMarkersFromLiveTrades(botTrades, liveEntry));
+        }
+
+        // Ciclo de "Reforço no stop": a 1ª compra pode estar horas atrás — refaz a busca ANCORADA
+        // no período das pernas (a 1ª busca acima é "últimos N até agora" e não alcança). Mesma
+        // lógica de intervalo adaptativo das Estatísticas / loadMultitradeSymbolChart.
+        const rLegs = liveEntry?.reinforceLegs?.length
+          ? liveEntry.reinforceLegs
+          : ((botTrades ?? []).find(t => Array.isArray(t.leg_timeline) && t.leg_timeline.length)?.leg_timeline ?? [])
+              .map(l => ({ entryDate: l.entryTime ?? l.entryDate, exitDate: l.exitTime ?? l.exitDate }));
+        const rLegEntryMs = rLegs.map(l => new Date(l.entryDate).getTime()).filter(Number.isFinite);
+        const firstLegMs = rLegEntryMs.length ? Math.min(...rLegEntryMs) : null;
+        if (firstLegMs != null) {
+          const rIv = chooseChartIntervalForLegs(rLegs, effectiveInterval);
+          const anchored = await fetchCandlesticksAndCloud(
+            item.symbol, rIv, effectiveSource, undefined,
+            { fromMs: firstLegMs, toMs: Date.now(), pad: 100 },
+          ).catch(() => null);
+          if (anchored) {
+            setSelectedChart({ ...anchored, interval: rIv, symbol: item.symbol, source: effectiveSource ?? null });
+          }
         }
       }
     } catch (err) {
