@@ -39,17 +39,17 @@ const { EXIT: CONTROL_EXIT } = botControl;
 // Resquício de `pendingAction` de um crash no meio de um restart/update.
 botControl.clearStalePending();
 
-// ── TESTE DE ATUALIZAÇÃO (temporário) ──────────────────────────────────────────
-// Linha de versão + qual ação de controle disparou este start. Reverter depois do teste.
-console.log(`🟢 NOVÍSSIMA ATUALIZAÇÃO /UPDATE — launcher v${require('../../package.json').version}`);
+// Versão no prompt a cada start do launcher — e, se o start veio de um /restart ou
+// /update recente (< 120s), o que disparou (lê botControl.readState().last).
+console.log(`🤖 njs-lets-trade — launcher v${require('../../package.json').version}`);
 {
   const last = botControl.readState().last;
   const ageS = last?.at ? (Date.now() - Date.parse(last.at)) / 1000 : Infinity;
   if (last && ageS < 120) {
     if (last.action === 'restart') {
-      console.log('🔁 REINÍCIO CONFIRMADO — este start veio do /restart (código não mudou)');
+      console.log('   ↻ reiniciado via /restart (código inalterado)');
     } else if (last.action === 'update') {
-      console.log(`⬆️  UPDATE CONFIRMADO — este start veio do /update (${last.fromCommit || '?'} → ${last.toCommit || '?'}${last.ok === false ? ' — FALHOU: ' + last.error : ''})`);
+      console.log(`   ⬆ atualizado via /update: ${last.fromCommit || '?'} → ${last.toCommit || '?'}${last.ok === false ? ` — FALHOU: ${last.error}` : ''}`);
     }
   }
 }
