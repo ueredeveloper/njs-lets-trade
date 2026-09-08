@@ -1683,7 +1683,7 @@ async function main() {
     process.exit(1);
   }
 
-  console.log(`🚀 rsi-momentum-bot v${require('../../package.json').version} iniciado — scanner de mercado + pullback/OCO avaliados minuto a minuto`);
+  console.log(`🚀 rsi-momentum-bot v${require('../../../package.json').version} iniciado — scanner de mercado + pullback/OCO avaliados minuto a minuto`);
   const cfgRow = await sbReq('GET', 'rsi_momentum_global_config', null, `?user_id=eq.${DEFAULT_USER_ID}&select=updated_at&limit=1`).catch(() => null);
   const cfgSource = cfgRow?.[0]?.updated_at
     ? `config global do painel (rsi_momentum_global_config, salva em ${cfgRow[0].updated_at})`
