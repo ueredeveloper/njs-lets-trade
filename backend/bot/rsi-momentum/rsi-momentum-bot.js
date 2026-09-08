@@ -271,88 +271,50 @@ function fmtPrice(n) {
   return x.toFixed(2);
 }
 
-/** Imprime no boot as regras vigentes (config global lida de rsi_momentum_global_config, ou o
- *  preset estático se o usuário nunca abriu o formulário — ver loadGlobalConfigBody) pra ficar
- *  claro no log qual pullback/cooldown/alvo/stop o scanner vai aplicar nos próximos sinais, sem
- *  precisar abrir o painel. Config lida só uma vez aqui (snapshot do boot) — o scanner relê a
- *  cada ciclo por conta própria (ver main()#loadConfig), então mudanças salvas depois valem sem
- *  reiniciar mesmo sem aparecer de novo neste log. */
+/** Resumo compacto (5 linhas) das regras vigentes no boot — config global de
+ *  rsi_momentum_global_config, ou o preset estático (ver loadGlobalConfigBody).
+ *  Snapshot do boot: o scanner relê a config a cada ciclo (main()#loadConfig), então
+ *  mudança salva depois vale sem reiniciar mesmo sem reaparecer aqui. Detalhe filtro a
+ *  filtro fica no painel de Estatísticas / Configurações. */
 function logStartupConfig(body, source = null) {
   const e = body.entry, x = body.exit, sl = body.stopLoss;
   const bw = e.bandWidth, pb = e.pullback, r5 = e.rsi5mFilter, ec = e.earlyConfirm;
   const pr = e.priorRsiFilter, macd = e.macdFilter, hr = e.higherRsiFilter, ema = e.emaCrossFilter, sr = e.supportResistance;
   const ts = x.trailingStop, tt = x.trailingTarget, htp = x.hardTakeProfit, rf = x.reinforceOnStop;
   const tsMode = ['continuous', 'twoPhase', 'peakTrail', 'atrTrail'].includes(ts?.mode) ? ts.mode : 'continuous';
-  const ON = (v) => (v ? '✅ LIGADO ' : '⬜ desligado');
 
-  console.log('📋 Config ativa (RSI Momentum):');
-  if (source) console.log(`   Fonte: ${source}`);
+  // Só os filtros LIGADOS entram na linha (resumo).
+  const filtros = [];
+  if (pr?.enabled !== false) filtros.push(`antirepique ${pr?.count ?? 3}`);
+  if (ec?.enabled) filtros.push(`confirm ${ec.interval ?? '5m'}≥${Math.max(e.rsiThreshold, Number(ec.rsiThreshold ?? e.rsiThreshold))}`);
+  if (bw?.enabled) filtros.push(`banda ${bw.interval}≥${bw.minPct}%`);
+  if (r5?.enabled) filtros.push(`RSI5m>${r5.threshold ?? 70}`);
+  if (macd?.enabled) filtros.push(`MACD ${macd.interval ?? '1h'}>0`);
+  if (hr?.enabled) filtros.push(`RSI1h≥${hr.minRsi ?? 50}`);
+  if (ema?.enabled) filtros.push(`EMA9>21 ${ema.interval ?? '8h'}`);
+  if (sr?.enabled) filtros.push(`S/R ${sr.interval ?? '4h'} (≤${sr.entryMaxPct}% do ${sr.entrySupportRank}º sup → ${sr.exitResistanceRank}ª resist)`);
 
-  console.log('  ── ENTRADA ──────────────────────────────────');
-  console.log(`   Investir por trade: ${Number(body.capitalUsdt ?? 20).toFixed(2)} USDT a mercado`);
-  console.log(`   Sinal: RSI(14) ${e.interval} cruza para cima de ${e.rsiThreshold}  (${e.enabled ? 'ATIVO' : 'PAUSADO — só gerencia posições já abertas'})`);
-  console.log(`   ${ON(pr?.enabled !== false)} Filtro anti-repique: os ${pr?.count ?? 3} valores de RSI anteriores ao cruzamento precisam estar <= ${e.rsiThreshold}`);
-  console.log(`   ${ON(ec?.enabled)} Confirmação adiantada: checkpoint de ${ec?.interval ?? '5m'} dentro do candle de ${e.interval} em formação, RSI provisório ≥ ${Math.max(e.rsiThreshold, Number(ec?.rsiThreshold ?? e.rsiThreshold))} (não espera fechar)`);
-  console.log(pb.enabled
-    ? `   ${ON(true)} Pullback: -${pb.belowPct}% do preço do sinal, ordem limite espera até ${e.limitWaitCandles} candles de 1min por reteste`
-    : `   ${ON(false)} Pullback — compra a mercado assim que o sinal confirma`);
+  const alvo = x.targetMode === 'off' ? 'OFF'
+    : x.targetMode === 'continuous' ? `contínuo +${x.restingBracket.targetPct}% (+${tt.stepPct}pp/${tt.coinStepPct}%)`
+      : `fixo +${x.restingBracket.targetPct}%`;
 
-  console.log('  ── FILTROS DE ENTRADA ───────────────────────');
-  console.log(`   ${ON(bw.enabled)} Largura de banda: ${bw.interval} BB(${bw.period},${bw.stdDev}) — valorização média dos ciclos >= ${bw.minPct}% (lookback ${bw.lookback})`);
-  console.log(`   ${ON(!!r5?.enabled)} RSI 5min: RSI(14) do candle de 5m fechado no sinal > ${r5?.threshold ?? 70}`);
-  console.log(`   ${ON(!!macd?.enabled)} MACD: histograma (12,26,9) em ${macd?.interval ?? '1h'} precisa estar POSITIVO`);
-  console.log(`   ${ON(!!hr?.enabled)} RSI 1h (multi-timeframe): RSI(14) do candle de 1h fechado >= ${hr?.minRsi ?? 50}`);
-  console.log(`   ${ON(!!ema?.enabled)} EMA 9/21 (tendência): EMA9 precisa estar ACIMA da EMA21 no ${ema?.interval ?? '8h'} (candle fechado)`);
-  console.log(`   ${ON(!!sr?.enabled)} Suporte/Resistência: ${sr?.interval ?? '4h'} janela ${sr?.candleCount ?? 50} candles`);
-  if (sr?.enabled) {
-    console.log(`             entrada: só até ${sr.entryMaxPct}% acima do ${sr.entrySupportRank}º suporte abaixo do preço (filtro de desconto)`);
-    console.log(`             saída:   alvo = ${sr.exitResistanceRank}ª resistência acima do preço de entrada (sobrepõe o modo de alvo)`);
-  }
+  let stop;
+  if (!ts?.enabled) stop = `fixo -${sl.maxLossPct}%${sl.enabled ? '' : ' (SEM STOP!)'}`;
+  else if (tsMode === 'twoPhase') stop = `escada dupla -${ts.startPct}% (A ${ts.aStopStepPct}/${ts.aCoinStepPct} → trava ${ts.pivotPct}% → B ${ts.bStopStepPct}/${ts.bCoinStepPct})`;
+  else if (tsMode === 'peakTrail') stop = `trilha topo ${ts.wNearPct}%→${ts.wFarPct}% (pivô +${ts.pivotGainPct}%)`;
+  else if (tsMode === 'atrTrail') stop = `trilha ATR ${ts.wNearPct}%→${ts.atrMult}×ATR (teto ${ts.atrMaxPct}%, pivô +${ts.pivotGainPct}%)`;
+  else stop = `contínuo -${ts.startPct}% (+${ts.stopStepPct}pp/${ts.coinStepPct}%)`;
 
-  console.log('  ── SAÍDA · ALVO ─────────────────────────────');
-  const targetDesc = x.targetMode === 'off'
-    ? 'DESLIGADO — sem alvo %; a posição sai pelo teto de lucro, pela resistência do S/R ou pelo stop'
-    : x.targetMode === 'continuous'
-      ? `contínuo — começa em +${x.restingBracket.targetPct}% e sobe ${tt.stepPct}pp a cada ${tt.coinStepPct}% de novo pico (deixa o lucro correr)`
-      : `fixo +${x.restingBracket.targetPct}% acima da entrada`;
-  console.log(`   Modo do alvo: ${targetDesc}`);
-  console.log(`   ${ON(!!htp?.enabled)} Teto de lucro: venda FORÇADA ao tocar +${htp?.pct ?? 15}% (garante a saída em altas que revertem)`);
-  console.log(`   Ordem resting na corretora (OCO/bracket): ${x.restingBracket.enabled ? 'LIGADA' : 'DESLIGADA — saída só pelo fallback via candle fechado'}`);
+  let reforco = 'sem reforço';
+  if (rf?.enabled && rf.mode === 'rearm') reforco = `reforço RE-ARMAR -${rf.rearmStopPct}%/+${rf.rearmTargetPct}% (buyUsd ${Number(rf.buyUsd ?? 40)})`;
+  else if (rf?.enabled) reforco = `reforço ESCADA -${rf.addDropPct}%/+${rf.exitRisePct}% (buyUsd ${Number(rf.buyUsd ?? 40)}, SEM stop após disparo, cap ${REINFORCE_HARD_CAP})`;
 
-  console.log('  ── SAÍDA · STOP ─────────────────────────────');
-  let stopDesc;
-  if (!ts?.enabled) {
-    stopDesc = `FIXO -${sl.maxLossPct}% abaixo da entrada${sl.enabled ? '' : '  (stopLoss DESLIGADO — sem stop!)'}`;
-  } else if (tsMode === 'twoPhase') {
-    const lucro = ts.pivotPct === 0 ? 'empate (breakeven)' : `${ts.pivotPct > 0 ? '+' : ''}${ts.pivotPct}% de lucro`;
-    stopDesc = `Escada Dupla (twoPhase) — inicial -${ts.startPct}%; fase A +${ts.aStopStepPct}pp a cada +${ts.aCoinStepPct}% até travar ${lucro}; fase B +${ts.bStopStepPct}pp a cada +${ts.bCoinStepPct}%. Nunca desce.`;
-  } else if (tsMode === 'peakTrail') {
-    stopDesc = `Trilha do Topo (peakTrail) — ${ts.wNearPct}% abaixo do pico até o pico ganhar +${ts.pivotGainPct}%, depois ${ts.wFarPct}% abaixo. Nunca desce.`;
-  } else if (tsMode === 'atrTrail') {
-    stopDesc = `Trilha ATR (atrTrail) — ${ts.wNearPct}% abaixo do pico até +${ts.pivotGainPct}%, depois ${ts.atrMult}× o ATR% travado na compra (teto ${ts.atrMaxPct}%). Nunca desce.`;
-  } else {
-    stopDesc = `contínuo linear — inicial -${ts.startPct}%, +${ts.stopStepPct}pp a cada +${ts.coinStepPct}% de novo pico. Nunca desce.`;
-  }
-  console.log(`   Modo do stop: ${stopDesc}`);
-  const rfRearm = rf?.mode === 'rearm';
-  console.log(`   ${ON(!!rf?.enabled)} Reforço no stop [${rf?.enabled ? (rfRearm ? 'RE-ARMAR BRACKET' : 'ESCADA / MARTINGALE') : '-'}]: ao bater o stop NÃO encerra o trade`);
-  if (rf?.enabled && rfRearm) {
-    console.log(`             a corretora VENDE no stop (perda realizada) → recompra a mercado a SOBRA da venda + ${Number(rf.buyUsd ?? 40).toFixed(2)} USDT`);
-    console.log(`             re-arma bracket normal -${rf.rearmStopPct}% / +${rf.rearmTargetPct}% sobre o novo preço; stopou de novo → repete (indefinidamente)`);
-    console.log(`             P&L medido sobre o caixa NOVO total (entrada + N×${Number(rf.buyUsd ?? 40).toFixed(2)}) — alvo pós-stop rende menos que +${rf.rearmTargetPct}% no capital`);
-    console.log(`             estado em rsi_multi_bot_state.rules_state.rearm — retoma no fluxo BOUGHT normal depois de um restart`);
-  } else if (rf?.enabled) {
-    console.log(`             +1 compra de ${Number(rf.buyUsd ?? 40).toFixed(2)} USDT a cada -${rf.addDropPct}% abaixo do último aporte`);
-    console.log(`             vende TODA a pilha a mercado no 1º +${rf.exitRisePct}% acima do último aporte`);
-    console.log(`             ⚠️  posição fica SEM stop de proteção depois de disparado · sem saldo p/ novo aporte: avisa e segura a pilha (não vende), trade sai no alvo normal · trava de segurança ${REINFORCE_HARD_CAP} degraus`);
-    console.log(`             estado em rsi_multi_bot_state.rules_state.reinforce — retoma a escada no meio depois de um restart`);
-  }
-
-  console.log('  ── SCANNER / EXECUÇÃO ───────────────────────');
-  console.log(`   Volume mín 24h: ${Number(body.volume.minVolumeUsdt).toLocaleString('pt-BR')} USDT (filtra o scan de mercado)`);
-  console.log(`   Cooldown de reentrada: ${e.reentryCooldownCandles} candles ${e.interval} após QUALQUER venda`);
-  console.log(`   Cooldown global entre entradas: ${body.entryCooldownHours}h`);
-  console.log(`   Polling: ${body.polling.pollMs / 1000}s aguardando sinal · ${body.polling.fastPollMs / 1000}s com posição aberta · scan de mercado a cada ${SCAN_INTERVAL_MS / 60_000}min`);
+  const v = require('../../../package.json').version;
+  console.log(`📋 RSI Momentum v${v}${source ? ` · ${source}` : ''}`);
+  console.log(`   Entrada: RSI(14) ${e.interval} ×${e.rsiThreshold} (${e.enabled ? 'ATIVO' : 'PAUSADO'}) · aporte ${Number(body.capitalUsdt ?? 20)} USDT · ${pb.enabled ? `pullback -${pb.belowPct}% (${e.limitWaitCandles}c)` : 'a mercado'}`);
+  console.log(`   Filtros: ${filtros.join(' · ') || '(nenhum)'}`);
+  console.log(`   Alvo: ${alvo} · teto ${htp?.enabled ? `+${htp.pct ?? 15}%` : 'off'} · OCO ${x.restingBracket.enabled ? 'on' : 'off'}  |  Stop: ${stop} · ${reforco}`);
+  console.log(`   Scanner: vol≥${Number(body.volume.minVolumeUsdt).toLocaleString('pt-BR')} · cooldown ${e.reentryCooldownCandles}c/${body.entryCooldownHours}h · poll ${body.polling.pollMs / 1000}s/${body.polling.fastPollMs / 1000}s · scan ${SCAN_INTERVAL_MS / 60_000}min`);
 }
 
 function buildEntryReasonLines(config, entryMeta) {
@@ -1683,11 +1645,10 @@ async function main() {
     process.exit(1);
   }
 
-  console.log(`🚀 rsi-momentum-bot v${require('../../../package.json').version} iniciado — scanner de mercado + pullback/OCO avaliados minuto a minuto`);
   const cfgRow = await sbReq('GET', 'rsi_momentum_global_config', null, `?user_id=eq.${DEFAULT_USER_ID}&select=updated_at&limit=1`).catch(() => null);
   const cfgSource = cfgRow?.[0]?.updated_at
-    ? `config global do painel (rsi_momentum_global_config, salva em ${cfgRow[0].updated_at})`
-    : 'PRESET ESTÁTICO — nenhuma config salva no painel/SQL ainda (rode supabase/set-rsi-momentum-winning-config.sql)';
+    ? `painel (salvo ${new Date(cfgRow[0].updated_at).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })})`
+    : 'PRESET ESTÁTICO (rode set-rsi-momentum-winning-config.sql)';
   logStartupConfig(await loadGlobalConfigBody(sbReq, DEFAULT_USER_ID), cfgSource);
 
   await syncExchangeClocks();

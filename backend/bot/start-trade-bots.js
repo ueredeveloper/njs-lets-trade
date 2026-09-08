@@ -56,17 +56,6 @@ botControl.clearStalePending();
   }
   console.log(line);
   try { botLog.writeLine(`[launcher] ${line}`); } catch { /* nunca derruba o launcher */ }
-
-  // Banner AMARELO (ANSI) da atualização — bem visível no prompt do Termux pra
-  // confirmar que o /update|/restart pelo WhatsApp puxou o código novo.
-  // Temporário: reverter depois do teste de deploy.
-  const acao = recent && last.action === 'update' && last.ok !== false ? 'UPDATE OK'
-    : recent && last.action === 'update' ? 'UPDATE FALHOU'
-    : recent && last.action === 'restart' ? 'RESTART OK'
-    : 'START NORMAL';
-  const testeLine = `>>> ATUALIZAÇÃO DO MOMENTO — ${acao} · v${v} NO AR <<<`;
-  console.log(`\x1b[1;33m${testeLine}\x1b[0m`);
-  try { botLog.writeLine(`[launcher] ${testeLine}`); } catch { /* nunca derruba o launcher */ }
 }
 
 const LAUNCHER_STARTED_AT = Date.now();
