@@ -1683,12 +1683,16 @@ async function main() {
     process.exit(1);
   }
 
-  console.log('🚀 rsi-momentum-bot iniciado — scanner de mercado + pullback/OCO avaliados minuto a minuto');
-  const cfgRow = await sbReq('GET', 'rsi_momentum_global_config', null, `?user_id=eq.${DEFAULT_USER_ID}&select=updated_at&limit=1`).catch(() => null);
-  const cfgSource = cfgRow?.[0]?.updated_at
-    ? `config global do painel (rsi_momentum_global_config, salva em ${cfgRow[0].updated_at})`
-    : 'PRESET ESTÁTICO — nenhuma config salva no painel/SQL ainda (rode supabase/set-rsi-momentum-winning-config.sql)';
-  logStartupConfig(await loadGlobalConfigBody(sbReq, DEFAULT_USER_ID), cfgSource);
+  // ── TESTE DE ATUALIZAÇÃO (temporário) ──────────────────────────────────────
+  // Textos de iniciação padrão silenciados de propósito pra o teste de deploy no
+  // Termux mostrar SÓ a linha de versão abaixo. Reverter depois do teste.
+  console.log('🟢 ATUALIZAÇÃO OK — bot RSI Momentum v1.135.2');
+  // console.log('🚀 rsi-momentum-bot iniciado — scanner de mercado + pullback/OCO avaliados minuto a minuto');
+  // const cfgRow = await sbReq('GET', 'rsi_momentum_global_config', null, `?user_id=eq.${DEFAULT_USER_ID}&select=updated_at&limit=1`).catch(() => null);
+  // const cfgSource = cfgRow?.[0]?.updated_at
+  //   ? `config global do painel (rsi_momentum_global_config, salva em ${cfgRow[0].updated_at})`
+  //   : 'PRESET ESTÁTICO — nenhuma config salva no painel/SQL ainda (rode supabase/set-rsi-momentum-winning-config.sql)';
+  // logStartupConfig(await loadGlobalConfigBody(sbReq, DEFAULT_USER_ID), cfgSource);
 
   await syncExchangeClocks();
   setInterval(syncExchangeClocks, 60 * 60_000);
@@ -1707,9 +1711,9 @@ async function main() {
   let resumable = await loadResumableRows();
   if (symbolFilter) resumable = resumable.filter(r => r.symbol.toUpperCase() === symbolFilter);
   await Promise.all(resumable.map((row, i) => startSymbol(row, COLORS[i % COLORS.length], i)));
-  if (resumable.length) {
-    console.log(`🔁 ${resumable.length} moeda(s) retomada(s) do restart (pending/comprada/watching)`);
-  }
+  // if (resumable.length) {
+  //   console.log(`🔁 ${resumable.length} moeda(s) retomada(s) do restart (pending/comprada/watching)`);
+  // }
 
   // Sync manual: se o usuário desativar/apagar o favorito automático de uma moeda pending/
   // comprada direto no painel ou via SQL, encerra a sessão (não cancela ordem/vende sozinho —

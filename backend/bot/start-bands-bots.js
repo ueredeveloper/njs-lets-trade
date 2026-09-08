@@ -140,12 +140,4 @@ process.on('SIGINT', () => { shutdown(); process.exit(); });
 process.on('SIGTERM', () => { shutdown(); process.exit(); });
 process.on('exit', shutdown);
 
-// Marcador de deploy — some depois que o teste de update no Termux confirmar.
-{
-  const v = require(path.join(__dirname, '../../package.json')).version;
-  const line = `🧪 [deploy-test] atualização via Termux OK — v${v} (supervisor + filtro EMA 9/21)`;
-  console.log(line);
-  try { botLog.writeLine(`[launcher] ${line}`); } catch { /* nunca derruba o launcher */ }
-}
-
 for (const bot of BOTS) startBot(bot);
