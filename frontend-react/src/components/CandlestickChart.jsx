@@ -12,14 +12,24 @@ import CandlestickChartLW from './CandlestickChartLW';
 import convertOpenTime from '../utils/convertOpenTime';
 import Tooltip from './Tooltip';
 import { useIsMobile } from '../hooks/useIsMobile';
-import { DEFAULT_OVERLAY_SLOTS, DEFAULT_ACTIVE_INDICATORS, VALID_ACTIVE_INDICATORS, BB_PERIOD_OPTIONS, BB_STDDEV_OPTIONS, DEFAULT_SR_INTERVAL, DEFAULT_PPHL_INTERVAL, DEFAULT_WFRACTALS_INTERVAL, DEFAULT_ZIGZAG_INTERVAL, INDICATOR_CANDLE_COUNT_OPTIONS, DEFAULT_INDICATOR_CANDLE_COUNT, DEFAULT_SR_CANDLE_COUNT, SR_STYLE_OPTIONS, DEFAULT_SR_STYLE, DEFAULT_CHOP_INTERVAL, DEFAULT_MACD_INTERVAL, DEFAULT_PREV_DAY_CLOUD_INTERVAL, PREV_DAY_CLOUD_INTERVAL_OPTIONS, GATE_PREV_DAY_CLOUD_INTERVALS, DEFAULT_PREV_DAY_CLOUD_CANDLE_COUNT, PREV_DAY_CLOUD_CANDLE_COUNT_OPTIONS, DEFAULT_PREV_DAY_CLOUD_USE_HIGH_LOW, DEFAULT_EMA_PERSIST_CLOUD_INTERVAL, DEFAULT_PERM_CLOUD_TONES, DEFAULT_EMA_PERSIST_CLOUD_LAYERS, DEFAULT_BARS_SINCE_CROSS_INTERVAL, DEFAULT_TD_SEQUENTIAL_INTERVAL, DEFAULT_RSI_CROSS_THRESHOLD, RSI_CROSS_VALUE_OPTIONS, DEFAULT_RSI_CROSS_VALUE, RSI_CROSS_INTERVAL_OPTIONS, DEFAULT_RSI_CROSS_INTERVAL, DEFAULT_COMMON_CHART_INTERVALS, getEmaPersistCloudConfirmInterval } from '../utils/uiPreferences';
+import { DEFAULT_OVERLAY_SLOTS, DEFAULT_ACTIVE_INDICATORS, VALID_ACTIVE_INDICATORS, BB_PERIOD_OPTIONS, BB_STDDEV_OPTIONS, DEFAULT_PREV_DAY_CLOUD_INTERVAL, GATE_PREV_DAY_CLOUD_INTERVALS, DEFAULT_PREV_DAY_CLOUD_CANDLE_COUNT, DEFAULT_EMA_PERSIST_CLOUD_INTERVAL, DEFAULT_PERM_CLOUD_TONES, DEFAULT_EMA_PERSIST_CLOUD_LAYERS, DEFAULT_RSI_CROSS_INTERVAL, DEFAULT_COMMON_CHART_INTERVALS, getEmaPersistCloudConfirmInterval } from '../utils/uiPreferences';
 import { computeRsiUpCrossingsFromCandles } from '../utils/rsiThresholdCrossings';
 import { detectSupportResistance, detectPivotPointsHighLow, detectWilliamsFractals, detectZigZag } from '../utils/srDetectors';
 import { logSrLevels } from '../utils/srLevelLog';
-import { PERM_CLOUD_TONES, PERM_TONE_SWATCH } from '../utils/emaCrossPersistenceCloud';
 import { CHART_VIEW, INTERVAL_MS, computeZoomWindow, buildFixedDataZoom, buildInsideDataZoom, computeCandleLimitFromTime, isTradePanelChartView, computeManualWheelZoom } from '../utils/chartView';
 import { simulateBbTouchPath, pairBbPathCycles } from '../utils/bollingerTouchPath';
 import { detectFlags } from '../utils/detectFlags';
+import PanelTip from './PanelTip';
+import {
+  PANEL_GAP, PANEL_TILE_PAD, SECTION_TITLE_ROWS,
+  scaleFontSize, panelBtn, panelSelect, scaleSectionTitle,
+} from '../utils/chartPanelStyles';
+import GroupBox from './chartHandlers/GroupBox';
+import { groupBoxRowSpan } from '../utils/chartHandlers/groupBoxLayout';
+import { SR_PALETTE } from '../utils/chartHandlers/descriptors';
+import { sliceRankedSrLevels } from '../utils/srRank';
+import { HANDLER_DESCRIPTORS, HANDLER_GROUP_STORES } from '../utils/chartHandlers/descriptors';
+import { useGroupedHandlers } from '../utils/chartHandlers/useGroupedHandlers';
 
 const LIMIT = DEFAULT_CANDLE_LIMIT;
 
@@ -69,15 +79,9 @@ const DEFAULT_INTERVAL = '15m';
 const CHART_PRICE_PAD = 54;        // direita: rótulos do eixo de preço
 const CHART_LEFT_MARGIN = 8;       // margem esquerda mínima
 const PANEL_MIN_WIDTH = 160;
-const PANEL_GAP = 2;
-const PANEL_TILE_PAD = 2;
 const PANEL_CARD_PAD = 6;
-/** Legend/título (ex.: "BOLLINGER BANDS", "VWAP") no topo de cada bloco de botões com intervalo
- *  próprio — deixa claro pro usuário o que aquele grupo de botões é. Ocupa 1 linha inteira do
- *  grid do próprio bloco (mesma altura de linha das demais, `rowH`) — reservada no total de
- *  linhas do tile (bbRowSpan/quickEmaRowSpan/VWAP_ROW_SPAN), não descontada à parte, senão em
- *  blocos pequenos (poucos grupos) a legend "comia" o espaço dos botões até sumirem. */
-const SECTION_TITLE_ROWS = 1;
+// PANEL_GAP, PANEL_TILE_PAD, SECTION_TITLE_ROWS, scaleFontSize, panelBtn, panelSelect,
+// scaleSectionTitle e PanelTip agora vêm de ../utils/chartPanelStyles + ./PanelTip (import acima).
 /** Painel de indicadores agora abre como dropdown no topo do gráfico (flutuando por cima,
  *  sem empurrar o chart) — largura e altura limitadas, com scroll vertical pro que não couber. */
 const PANEL_WIDTH_RATIO = 0.2;      // desktop/notebook: 20% da largura do gráfico
@@ -111,19 +115,9 @@ const INDICATOR_GROUPS = [
   { id: 'ma21',     label: 'EMA21',  color: '#fb923c', tipKey: 'chart.tip.sma21' },
   { id: 'ma50',     label: 'EMA50',  color: '#22d3ee', tipKey: 'chart.tip.sma50' },
   { id: 'ma200',    label: 'EMA200', color: '#f59e0b', tipKey: 'chart.tip.sma200' },
-  { id: 'emaPersistCloud', label: 'Perman.', color: '#4ade80', tipKey: 'chart.tip.emaPersistCloud' },
-  { id: 'barsSinceCross', label: 'Bars×',  color: '#38bdf8', tipKey: 'chart.tip.barsSinceCross' },
-  { id: 'tdSequential',   label: 'TD Seq', color: '#fb7185', tipKey: 'chart.tip.tdSequential' },
   { id: 'ichimoku', label: 'Ichi',  color: '#60a5fa', tipKey: 'chart.tip.ichimoku' },
-  { id: 'sr',       label: 'S/R',   color: '#facc15', tipKey: 'chart.tip.sr' },
-  { id: 'pphl',     label: 'PPHL',  color: '#2dd4bf', tipKey: 'chart.tip.pphl' },
-  { id: 'wfractals', label: 'WF',   color: '#f472b6', tipKey: 'chart.tip.wfractals' },
-  { id: 'zigzag',   label: 'ZZ',    color: '#818cf8', tipKey: 'chart.tip.zigzag' },
   { id: 'flags',    label: 'Band.', color: '#f5d90a', tipKey: 'chart.tip.flags' },
-  { id: 'prevDayCloud', label: 'D-1', color: '#94a3b8', tipKey: 'chart.tip.prevDayCloud' },
   { id: 'rsi',      label: 'RSI',   color: '#a78bfa', tipKey: 'chart.tip.rsi' },
-  { id: 'chopZone', label: 'CHOP',  color: '#f59e0b', tipKey: 'chart.tip.chopZone' },
-  { id: 'macd',     label: 'MACD',  color: '#38bdf8', tipKey: 'chart.tip.macd' },
 ];
 
 const RSI_EXTRA_INDICATORS = [
@@ -329,7 +323,9 @@ const CHART_INDICATOR_IDS = [
  *  Todo o resto (EMA9/21/50/200, Ichimoku, S/R, PPHL, SL, Bollinger, Quick EMA, VWAP) é desenhado
  *  em cima do candle a partir de dados buscados pro intervalo antigo — ficaria "colado" no
  *  intervalo errado até recarregar, por isso some ao trocar. */
-const INTERVAL_CHANGE_KEEP_INDICATORS = new Set(['rsi', 'chopZone', 'rsi50', 'rsi80', 'macd']);
+const INTERVAL_CHANGE_KEEP_INDICATORS = new Set(['rsi', 'rsi50', 'rsi80']);
+// CHOP/MACD (agora manipuladores caixa) sobrevivem à troca de intervalo via
+// descriptor.keepOnIntervalChange = true (têm intervalo próprio); Bars×/TD Seq = false.
 
 function overlayPanelKey(slot) {
   const num = parseInt(slot.id.replace('slot', ''), 10);
@@ -347,14 +343,6 @@ function filterIndicatorsByPanel(activeIndicators, panelButtons) {
     if (!CHART_INDICATOR_IDS.includes(id)) return true;
     return panelButtons[id] !== false;
   });
-}
-
-function PanelTip({ text, children, position = 'left' }) {
-  return (
-    <Tooltip text={text} position={position} maxW={280} portal fill>
-      {children}
-    </Tooltip>
-  );
 }
 
 function alignPointsToCandles(candlesticks, points) {
@@ -1062,51 +1050,6 @@ function buildOverlaySeries(overlayConfigs, candlesticks, alignSeries) {
   });
 }
 
-function scaleFontSize(dims, ratio = 0.32, min = 10, max = 18) {
-  if (!dims) return min;
-  return Math.max(min, Math.min(max, Math.round(Math.min(dims.w, dims.h) * ratio)));
-}
-
-const panelBtn = (active, color, darkText = false, dims = null) => ({
-  fontSize: scaleFontSize(dims),
-  padding: 0,
-  borderRadius: 3,
-  cursor: 'pointer',
-  fontFamily: 'monospace',
-  background: active ? color : 'rgba(0,0,0,0.45)',
-  color: active ? (darkText ? '#000' : '#fff') : color,
-  border: `1px solid ${color}`,
-  opacity: active ? 1 : 0.7,
-  transition: 'all 0.15s',
-  whiteSpace: 'nowrap',
-  lineHeight: 1,
-  boxSizing: 'border-box',
-  textAlign: 'center',
-  width: '100%',
-  height: '100%',
-  minWidth: 0,
-  minHeight: 0,
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-});
-
-const panelSelect = (color, dims = null) => ({
-  width: '100%',
-  height: '100%',
-  minHeight: 0,
-  fontSize: scaleFontSize(dims, 0.26, 9, 14),
-  padding: 0,
-  borderRadius: 3,
-  fontFamily: 'monospace',
-  boxSizing: 'border-box',
-  textAlign: 'center',
-  cursor: 'pointer',
-  background: '#111',
-  color,
-  border: `1px solid ${color}66`,
-});
-
 const COMPACT_LABELS = {
   ma9: '9', ma21: '21', ma50: '50', ma200: '200', ichimoku: 'Ich', sr: 'S/R', pphl: 'PPHL', wfractals: 'WF', zigzag: 'ZZ', flags: 'Band.', rsi: 'RSI',
   rsi80: 'R80', rsi50: 'R50', stopLoss: 'SL', chopZone: 'CHOP', emaPersistCloud: 'PERM',
@@ -1120,8 +1063,6 @@ const PANEL_GRID_COLS = 4;
 const INDICATOR_TILE_ROWS = 2;
 
 const BANDS_COL_SPAN = 4;
-
-const INTERVAL_PICKER_ROW_SPAN = 1;
 
 const VWAP_ROW_SPAN = 5 + SECTION_TITLE_ROWS;
 
@@ -1413,338 +1354,6 @@ function renderVwapTile(dims, t, vwap, setVwap, slopeHighlightOn, setSlopeHighli
   );
 }
 
-/** Seletor de intervalo compacto (1 linha) pra indicadores com intervalo próprio (S/R, PPHL, D-1)
- *  — mesmo padrão da Bollinger. `options` default cobre os intervalos normais do gráfico; a
- *  nuvem D-1 passa uma lista própria (só '1d'/'3d' — ver PREV_DAY_CLOUD_INTERVAL_OPTIONS). */
-function renderIntervalPickerTile(dims, t, tipKey, labelPrefix, color, value, onChange, options = OVERLAY_MA_INTERVALS) {
-  const innerW = dims.w - PANEL_TILE_PAD * 2;
-  const innerH = dims.h - PANEL_TILE_PAD * 2;
-  return (
-    <div style={{ display: 'flex', alignItems: 'stretch', width: innerW, height: innerH, boxSizing: 'border-box' }}>
-      <PanelTip text={t(tipKey)}>
-        <select
-          value={value}
-          onChange={e => onChange(e.target.value)}
-          style={{ ...panelSelect(color, { w: innerW, h: innerH }), fontSize: scaleFontSize({ w: innerW, h: innerH }, 0.3, 9, 13) }}
-        >
-          {options.map(iv => <option key={iv} value={iv}>{`${labelPrefix} ${iv}`}</option>)}
-        </select>
-      </PanelTip>
-    </div>
-  );
-}
-
-/** Seletor de intervalo + quantidade de candles analisados, lado a lado (PPHL, Williams
- *  Fractals, ZigZag) — mesmo padrão compacto de renderPrevDayCloudTile. `count` é o nº de
- *  candles do intervalo escolhido que entram no cálculo, independente do zoom do gráfico. */
-function renderIndicatorIntervalCountTile(dims, t, tipKeyInterval, tipKeyCount, labelPrefix, color, interval, setInterval, count, setCount) {
-  const innerW = dims.w - PANEL_TILE_PAD * 2;
-  const innerH = dims.h - PANEL_TILE_PAD * 2;
-  const gap = 3;
-  const ivW = Math.max(40, innerW * 0.52 - gap);
-  const ccW = Math.max(34, innerW - ivW - gap);
-  return (
-    <div style={{ display: 'flex', alignItems: 'stretch', width: innerW, height: innerH, boxSizing: 'border-box', gap }}>
-      <PanelTip text={t(tipKeyInterval)}>
-        <select
-          value={interval}
-          onChange={e => setInterval(e.target.value)}
-          style={{ ...panelSelect(color, { w: ivW, h: innerH }), fontSize: scaleFontSize({ w: ivW, h: innerH }, 0.3, 9, 13) }}
-        >
-          {OVERLAY_MA_INTERVALS.map(iv => <option key={iv} value={iv}>{`${labelPrefix} ${iv}`}</option>)}
-        </select>
-      </PanelTip>
-      <PanelTip text={t(tipKeyCount)}>
-        <select
-          value={count}
-          onChange={e => setCount(Number(e.target.value))}
-          style={{ ...panelSelect(color, { w: ccW, h: innerH }), fontSize: scaleFontSize({ w: ccW, h: innerH }, 0.3, 9, 13) }}
-        >
-          {INDICATOR_CANDLE_COUNT_OPTIONS.map(n => <option key={n} value={n}>{`x${n}`}</option>)}
-        </select>
-      </PanelTip>
-    </div>
-  );
-}
-
-const SR_STYLE_LABELS = { degrau: 'Degrau', traco: 'Traço', linhas: 'Linhas' };
-
-/** Tile do S/R rolante: intervalo próprio + lookback por âncora ("x50") + estilo de desenho
- *  (degrau / traço / linhas). O "count" aqui NÃO é a janela total — é quantos candles anteriores
- *  a cada uma das SR_ROLL_WIDTH âncoras entram no detectSupportResistance. */
-function renderSrTile(dims, t, interval, setInterval, count, setCount, style, setStyle) {
-  const color = '#facc15';
-  const innerW = dims.w - PANEL_TILE_PAD * 2;
-  const innerH = dims.h - PANEL_TILE_PAD * 2;
-  const gap = 3;
-  const ivW = Math.max(38, innerW * 0.44 - gap);
-  const ccW = Math.max(30, (innerW - ivW - gap * 2) * 0.5);
-  const stW = Math.max(30, innerW - ivW - ccW - gap * 2);
-  const fs = (w) => scaleFontSize({ w, h: innerH }, 0.3, 9, 13);
-  return (
-    <div style={{ display: 'flex', alignItems: 'stretch', width: innerW, height: innerH, boxSizing: 'border-box', gap }}>
-      <PanelTip text={t('chart.tip.sr_interval')}>
-        <select
-          value={interval}
-          onChange={e => setInterval(e.target.value)}
-          style={{ ...panelSelect(color, { w: ivW, h: innerH }), fontSize: fs(ivW) }}
-        >
-          {OVERLAY_MA_INTERVALS.map(iv => <option key={iv} value={iv}>{`S/R ${iv}`}</option>)}
-        </select>
-      </PanelTip>
-      <PanelTip text={t('chart.tip.sr_count')}>
-        <select
-          value={count}
-          onChange={e => setCount(Number(e.target.value))}
-          style={{ ...panelSelect(color, { w: ccW, h: innerH }), fontSize: fs(ccW) }}
-        >
-          {INDICATOR_CANDLE_COUNT_OPTIONS.map(n => <option key={n} value={n}>{`x${n}`}</option>)}
-        </select>
-      </PanelTip>
-      <PanelTip text={t('chart.tip.sr_style')}>
-        <select
-          value={style}
-          onChange={e => setStyle(e.target.value)}
-          style={{ ...panelSelect(color, { w: stW, h: innerH }), fontSize: fs(stW) }}
-        >
-          {SR_STYLE_OPTIONS.map(s => <option key={s} value={s}>{SR_STYLE_LABELS[s] ?? s}</option>)}
-        </select>
-      </PanelTip>
-    </div>
-  );
-}
-
-/** "Limiar RSI" — linha vertical roxa no gráfico onde o RSI(14) do intervalo ESCOLHIDO cruza pra
- *  cima do valor escolhido. Três controles lado a lado: botão liga/desliga, seletor de intervalo
- *  (default 15m — o do trade principal), seletor de valor (default 69). `threshold` = valor
- *  efetivo (0 = desligado); `value` = valor lembrado pro botão religar. Só aparece com o
- *  subpainel de RSI ligado. */
-function renderRsiCrossThresholdTile(dims, t, threshold, setThreshold, value, setValue, interval, setInterval) {
-  const innerW = dims.w - PANEL_TILE_PAD * 2;
-  const innerH = dims.h - PANEL_TILE_PAD * 2;
-  const on = Number(threshold) > 0;
-  const gap = 3;
-  const btnW = Math.max(30, innerW * 0.2 - gap);
-  const ivW = Math.max(40, innerW * 0.34 - gap);
-  const selW = Math.max(48, innerW - btnW - ivW - gap * 2);
-  const pickValue = on ? Number(threshold) : Number(value) || DEFAULT_RSI_CROSS_VALUE;
-  const toggle = () => {
-    if (on) setThreshold(0);
-    else setThreshold(Number(value) || DEFAULT_RSI_CROSS_VALUE);
-  };
-  const pick = (v) => {
-    setValue(v);
-    if (on) setThreshold(v);
-  };
-  return (
-    <div style={{ display: 'flex', alignItems: 'stretch', width: innerW, height: innerH, boxSizing: 'border-box', gap }}>
-      <PanelTip text={t('chart.tip.rsi_cross_toggle')}>
-        <button
-          type="button"
-          aria-pressed={on}
-          onClick={(e) => { e.stopPropagation(); toggle(); }}
-          style={{
-            width: btnW,
-            height: innerH,
-            padding: 0,
-            borderRadius: 4,
-            border: on ? '1px solid #a78bfa' : '1px solid #334155',
-            background: on ? 'rgba(167,139,250,0.18)' : 'transparent',
-            color: on ? '#a78bfa' : '#64748b',
-            fontSize: scaleFontSize({ w: btnW, h: innerH }, 0.3, 8, 12),
-            fontFamily: 'monospace',
-            cursor: 'pointer',
-            boxSizing: 'border-box',
-          }}
-        >
-          {on ? t('chart.rsi_cross_on') : t('chart.rsi_cross_off')}
-        </button>
-      </PanelTip>
-      <PanelTip text={t('chart.tip.rsi_cross_interval')}>
-        <select
-          value={interval}
-          onChange={e => setInterval(e.target.value)}
-          style={{ ...panelSelect('#a78bfa', { w: ivW, h: innerH }), fontSize: scaleFontSize({ w: ivW, h: innerH }, 0.3, 9, 13), opacity: on ? 1 : 0.55 }}
-        >
-          {RSI_CROSS_INTERVAL_OPTIONS.map(iv => (
-            <option key={iv} value={iv}>{`RSI ${iv}`}</option>
-          ))}
-        </select>
-      </PanelTip>
-      <PanelTip text={t('chart.tip.rsi_cross_threshold')}>
-        <select
-          value={pickValue}
-          onChange={e => pick(Number(e.target.value))}
-          style={{ ...panelSelect('#a78bfa', { w: selW, h: innerH }), fontSize: scaleFontSize({ w: selW, h: innerH }, 0.3, 9, 13), opacity: on ? 1 : 0.55 }}
-        >
-          {RSI_CROSS_VALUE_OPTIONS.map(v => (
-            <option key={v} value={v}>{`⤴ ${v}`}</option>
-          ))}
-        </select>
-      </PanelTip>
-    </div>
-  );
-}
-
-/** Seletor da nuvem D-1: intervalo (1d/3d) + quantidade de candles do envelope (1 = só o candle
- *  anterior, N = min/max de open/close dos últimos N candles) lado a lado, mesmo padrão compacto
- *  de renderIntervalPickerTile — ver buildPrevDayCloudSegments. */
-function renderPrevDayCloudTile(dims, t, interval, setInterval, candleCount, setCandleCount, useHighLow, setUseHighLow) {
-  const innerW = dims.w - PANEL_TILE_PAD * 2;
-  const innerH = dims.h - PANEL_TILE_PAD * 2;
-  const gap = 3;
-  const ivW = Math.max(36, innerW * 0.4 - gap);
-  const ccW = Math.max(30, innerW * 0.28 - gap);
-  const hlW = Math.max(30, innerW - ivW - ccW - gap * 2);
-  return (
-    <div style={{ display: 'flex', alignItems: 'stretch', width: innerW, height: innerH, boxSizing: 'border-box', gap }}>
-      <PanelTip text={t('chart.tip.prevDayCloud_interval')}>
-        <select
-          value={interval}
-          onChange={e => setInterval(e.target.value)}
-          style={{ ...panelSelect('#94a3b8', { w: ivW, h: innerH }), fontSize: scaleFontSize({ w: ivW, h: innerH }, 0.3, 9, 13) }}
-        >
-          {PREV_DAY_CLOUD_INTERVAL_OPTIONS.map(iv => <option key={iv} value={iv}>{`D ${iv}`}</option>)}
-        </select>
-      </PanelTip>
-      <PanelTip text={t('chart.tip.prevDayCloud_candle_count')}>
-        <select
-          value={candleCount}
-          onChange={e => setCandleCount(Number(e.target.value))}
-          style={{ ...panelSelect('#94a3b8', { w: ccW, h: innerH }), fontSize: scaleFontSize({ w: ccW, h: innerH }, 0.3, 9, 13) }}
-        >
-          {PREV_DAY_CLOUD_CANDLE_COUNT_OPTIONS.map(n => <option key={n} value={n}>{`x${n}`}</option>)}
-        </select>
-      </PanelTip>
-      <PanelTip text={t('chart.tip.prevDayCloud_source')}>
-        <select
-          value={useHighLow ? 'hl' : 'oc'}
-          onChange={e => setUseHighLow(e.target.value === 'hl')}
-          style={{ ...panelSelect('#94a3b8', { w: hlW, h: innerH }), fontSize: scaleFontSize({ w: hlW, h: innerH }, 0.3, 9, 13) }}
-        >
-          <option value="oc">{t('chart.prevDayCloud_source_oc')}</option>
-          <option value="hl">{t('chart.prevDayCloud_source_hl')}</option>
-        </select>
-      </PanelTip>
-    </div>
-  );
-}
-
-function renderPermIntervalTile(dims, t, interval, setInterval, tones, setTones, layers, setLayers) {
-  const innerW = dims.w - PANEL_TILE_PAD * 2;
-  const innerH = dims.h - PANEL_TILE_PAD * 2;
-  const rowGap = 3;
-  const rowH = (innerH - rowGap) / 2;
-  const swatchGap = 3;
-  const swatchSize = Math.max(10, Math.min(18, rowH - 4));
-  const swatchesW = PERM_CLOUD_TONES.length * swatchSize + (PERM_CLOUD_TONES.length - 1) * swatchGap + 4;
-  const toggleTone = (id) => {
-    setTones((prev) => ({ ...prev, [id]: prev?.[id] === false }));
-  };
-  const toggleLayer = (key) => {
-    setLayers((prev) => ({ ...prev, [key]: !prev?.[key] }));
-  };
-  // Rótulo dinâmico: cada switch mostra o intervalo REAL que ele liga, calculado a partir do
-  // principal escolhido no select (ex.: principal 1h → layer1 "1h" → layer2 "30m" → layer3
-  // "15m"). layer2/layer3 somem se não houver intervalo menor disponível (ex.: principal já é
-  // '1m'). Ficam numa 2ª linha, embaixo do select+tons — 6 controles não cabem lado a lado numa
-  // linha só sem sobrepor (ver rowSpan +1 pra esse tile em computeMasonryLayout).
-  const confirm1Iv = getEmaPersistCloudConfirmInterval(interval);
-  const confirm2Iv = confirm1Iv ? getEmaPersistCloudConfirmInterval(confirm1Iv) : null;
-  const selectW = Math.max(72, innerW - swatchesW);
-  const renderLayerToggle = (key, label, on) => (
-    <button
-      key={key}
-      type="button"
-      aria-pressed={on}
-      onClick={(e) => { e.stopPropagation(); toggleLayer(key); }}
-      style={{
-        flex: 1,
-        minWidth: 0,
-        height: rowH,
-        padding: 0,
-        borderRadius: 4,
-        border: on ? '1px solid #4ade80' : '1px solid #334155',
-        background: on ? 'rgba(74,222,128,0.18)' : 'transparent',
-        color: on ? '#4ade80' : '#64748b',
-        fontSize: scaleFontSize({ w: 34, h: rowH }, 0.28, 8, 11),
-        fontFamily: 'monospace',
-        cursor: 'pointer',
-        boxSizing: 'border-box',
-      }}
-    >
-      {label}
-    </button>
-  );
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: rowGap, width: innerW, height: innerH, boxSizing: 'border-box' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 4, width: innerW, height: rowH, boxSizing: 'border-box' }}>
-        <PanelTip text={t('chart.tip.emaPersistCloud_interval')}>
-          <select
-            value={interval}
-            onChange={e => setInterval(e.target.value)}
-            style={{ ...panelSelect('#4ade80', { w: selectW, h: rowH }), fontSize: scaleFontSize({ w: selectW, h: rowH }, 0.3, 9, 13), flex: 1, minWidth: 0 }}
-          >
-            {OVERLAY_MA_INTERVALS.map(iv => <option key={iv} value={iv}>{`PERM ${iv}`}</option>)}
-          </select>
-        </PanelTip>
-        <PanelTip text={t('chart.tip.emaPersistCloud_tones')}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: swatchGap, flexShrink: 0 }}>
-            {PERM_CLOUD_TONES.map((id) => {
-              const on = tones?.[id] !== false;
-              const color = PERM_TONE_SWATCH[id];
-              return (
-                <button
-                  key={id}
-                  type="button"
-                  aria-pressed={on}
-                  title={id}
-                  onClick={(e) => { e.stopPropagation(); toggleTone(id); }}
-                  style={{
-                    width: swatchSize,
-                    height: swatchSize,
-                    padding: 0,
-                    borderRadius: '50%',
-                    border: on ? `2px solid ${color}` : '2px solid #334155',
-                    background: on ? color : 'transparent',
-                    opacity: on ? 1 : 0.35,
-                    cursor: 'pointer',
-                    boxSizing: 'border-box',
-                  }}
-                />
-              );
-            })}
-          </div>
-        </PanelTip>
-      </div>
-      <PanelTip text={t('chart.tip.emaPersistCloud_layers')}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: swatchGap, width: innerW, height: rowH, boxSizing: 'border-box' }}>
-          {renderLayerToggle('layer1', interval, layers?.layer1 !== false)}
-          {confirm1Iv && renderLayerToggle('layer2', confirm1Iv, layers?.layer2 !== false)}
-          {confirm2Iv && renderLayerToggle('layer3', confirm2Iv, layers?.layer3 === true)}
-        </div>
-      </PanelTip>
-    </div>
-  );
-}
-
-function scaleSectionTitle(dims) {
-  return {
-    fontSize: scaleFontSize(dims, 0.24, 8, 12),
-    letterSpacing: 0.4,
-    color: '#64748b',
-    fontFamily: 'monospace',
-    textTransform: 'uppercase',
-    textAlign: 'center',
-    lineHeight: 1.1,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    height: '100%',
-    width: '100%',
-  };
-}
-
 /**
  * Expande tiles para baixo se houver espaço vazio abaixo deles.
  * Garante que nenhuma linha do grid fique vazia quando há tiles vizinhos
@@ -1859,18 +1468,16 @@ function computeMasonryLayout(tileDefs, width, height, gap) {
   const indTiles = tileDefs.filter((t) => t.kind === 'indicator');
 
   // --- Bollinger / S/R interval / PPHL interval / Quick-EMA sections (separate flex blocks) ---
-  const INTERVAL_PICKER_KINDS = ['srInterval', 'pphlInterval', 'wfractalsInterval', 'zigzagInterval', 'rsiCrossThreshold', 'chopInterval', 'macdInterval', 'prevDayCloudInterval', 'emaPersistCloudInterval', 'barsSinceCrossInterval', 'tdSequentialInterval'];
+  // `kind:'handler'` = manipulador no padrão caixa (ver GroupBox.jsx / descriptors.js). bb/vwap/
+  // quickEma ainda têm renderers próprios (a converter num passo futuro).
   const blocks = tileDefs
-    .filter((t) => t.kind === 'bb' || t.kind === 'vwap' || INTERVAL_PICKER_KINDS.includes(t.kind) || t.kind === 'quickEma')
+    .filter((t) => t.kind === 'bb' || t.kind === 'vwap' || t.kind === 'handler' || t.kind === 'quickEma')
     .map((t) => ({
       ...t,
       colSpan: BANDS_COL_SPAN,
-      rowSpan: t.kind === 'bb' ? bbRowSpan(t.data.groups) : t.kind === 'vwap' ? VWAP_ROW_SPAN
-        // PERM tem 1 linha a mais que os outros interval-pickers: select + tons numa linha,
-        // os 3 switches de camada (1h/30m/15m) na linha de baixo — não cabe tudo lado a lado
-        // sem sobrepor (ver renderPermIntervalTile).
-        : t.kind === 'emaPersistCloudInterval' ? INTERVAL_PICKER_ROW_SPAN + 1
-        : INTERVAL_PICKER_KINDS.includes(t.kind) ? INTERVAL_PICKER_ROW_SPAN : quickEmaRowSpan(t.data.groups),
+      rowSpan: t.kind === 'handler' ? groupBoxRowSpan(t.data.descriptor, t.data.api.groups)
+        : t.kind === 'bb' ? bbRowSpan(t.data.groups) : t.kind === 'vwap' ? VWAP_ROW_SPAN
+        : quickEmaRowSpan(t.data.groups),
     }));
 
   // Pack indicator buttons — spans calculados dinamicamente pelo número de tiles
@@ -2163,6 +1770,7 @@ function renderQuickEmaGroupsTile(
 
 
 function ChartIndicatorPanel({
+  handlers = {},
   activeIndicators,
   toggleIndicator,
   quickEmaGroups,
@@ -2178,50 +1786,6 @@ function ChartIndicatorPanel({
   updateBbGroup,
   toggleBbGroupFlag,
   botPermInterval,
-  srInterval,
-  setSrInterval,
-  srCandleCount,
-  setSrCandleCount,
-  srStyle,
-  setSrStyle,
-  pphlInterval,
-  setPphlInterval,
-  pphlCandleCount,
-  setPphlCandleCount,
-  wfractalsInterval,
-  setWfractalsInterval,
-  wfractalsCandleCount,
-  setWfractalsCandleCount,
-  zigzagInterval,
-  setZigzagInterval,
-  zigzagCandleCount,
-  setZigzagCandleCount,
-  rsiCrossThreshold,
-  setRsiCrossThreshold,
-  rsiCrossValue,
-  setRsiCrossValue,
-  rsiCrossInterval,
-  setRsiCrossInterval,
-  chopInterval,
-  setChopInterval,
-  macdInterval,
-  setMacdInterval,
-  prevDayCloudInterval,
-  setPrevDayCloudInterval,
-  prevDayCloudCandleCount,
-  setPrevDayCloudCandleCount,
-  prevDayCloudUseHighLow,
-  setPrevDayCloudUseHighLow,
-  emaPersistCloudInterval,
-  setEmaPersistCloudInterval,
-  emaPersistCloudTones,
-  setEmaPersistCloudTones,
-  emaPersistCloudLayers,
-  setEmaPersistCloudLayers,
-  barsSinceCrossInterval,
-  setBarsSinceCrossInterval,
-  tdSequentialInterval,
-  setTdSequentialInterval,
   vwap,
   setVwap,
   vwapSlopeHighlightOn,
@@ -2242,16 +1806,6 @@ function ChartIndicatorPanel({
     const showKey = (key) => panelButtons[key] !== false;
     const indicators = [...INDICATOR_GROUPS, ...RSI_EXTRA_INDICATORS].filter(({ id }) => showKey(id));
     const showBb = showKey('bb');
-    const showSr = showKey('sr');
-    const showPphl = showKey('pphl');
-    const showWfractals = showKey('wfractals');
-    const showZigzag = showKey('zigzag');
-    const showChopInterval = showKey('chopZone');
-    const showMacdInterval = showKey('macd');
-    const showPrevDayCloudInterval = showKey('prevDayCloud');
-    const showEmaPersistCloudInterval = showKey('emaPersistCloud');
-    const showBarsSinceCrossInterval = showKey('barsSinceCross');
-    const showTdSequentialInterval = showKey('tdSequential');
     const showVwap = showKey('vwap');
 
     const list = [];
@@ -2261,47 +1815,18 @@ function ChartIndicatorPanel({
         kind: 'indicator',
         data: {
           ...ind,
-          // "D-1" fixo confundia quando o intervalo escolhido não era 1 dia (padrão é 4h) — o
-          // botão agora reflete o intervalo atual (D 4h / D 1d / D 3d…), mesmo prefixo já usado
-          // no seletor de intervalo da nuvem (renderPrevDayCloudTile).
-          label: ind.id === 'prevDayCloud' ? `D ${prevDayCloudInterval}` : ind.label,
           active: activeIndicators.includes(ind.id),
-          darkText: ind.id === 'ma200' || ind.id === 'rsi80' || ind.id === 'rsi50' || ind.id === 'emaPersistCloud' || ind.id === 'tdSequential',
+          darkText: ind.id === 'ma200' || ind.id === 'rsi80' || ind.id === 'rsi50',
         },
       });
     }
-    if (showSr) {
-      list.push({ key: 'srInterval', kind: 'srInterval', data: {} });
-    }
-    if (showPphl) {
-      list.push({ key: 'pphlInterval', kind: 'pphlInterval', data: {} });
-    }
-    if (showWfractals) {
-      list.push({ key: 'wfractalsInterval', kind: 'wfractalsInterval', data: {} });
-    }
-    if (showZigzag) {
-      list.push({ key: 'zigzagInterval', kind: 'zigzagInterval', data: {} });
-    }
-    if (activeIndicators.includes('rsi')) {
-      list.push({ key: 'rsiCrossThreshold', kind: 'rsiCrossThreshold', data: {} });
-    }
-    if (showChopInterval) {
-      list.push({ key: 'chopInterval', kind: 'chopInterval', data: {} });
-    }
-    if (showMacdInterval) {
-      list.push({ key: 'macdInterval', kind: 'macdInterval', data: {} });
-    }
-    if (showPrevDayCloudInterval) {
-      list.push({ key: 'prevDayCloudInterval', kind: 'prevDayCloudInterval', data: {} });
-    }
-    if (showEmaPersistCloudInterval) {
-      list.push({ key: 'emaPersistCloudInterval', kind: 'emaPersistCloudInterval', data: {} });
-    }
-    if (showBarsSinceCrossInterval) {
-      list.push({ key: 'barsSinceCrossInterval', kind: 'barsSinceCrossInterval', data: {} });
-    }
-    if (showTdSequentialInterval) {
-      list.push({ key: 'tdSequentialInterval', kind: 'tdSequentialInterval', data: {} });
+    // Manipuladores no padrão caixa (Bollinger/EMA), dirigidos por descriptor.
+    for (const d of HANDLER_DESCRIPTORS) {
+      if (panelButtons[d.panelButtonKey] === false) continue;
+      if (typeof d.panelGate === 'function' && !d.panelGate({ activeIndicators })) continue;
+      const api = handlers[d.id];
+      if (!api) continue;
+      list.push({ key: `handler-${d.id}`, kind: 'handler', data: { descriptor: d, api } });
     }
     if (showBb) {
       list.push({ key: 'bb', kind: 'bb', data: { groups: bbGroups } });
@@ -2311,7 +1836,7 @@ function ChartIndicatorPanel({
     }
     list.push({ key: 'quickEma', kind: 'quickEma', data: { groups: quickEmaGroups } });
     return list;
-  }, [panelButtons, activeIndicators, quickEmaGroups, bbGroups, prevDayCloudInterval]);
+  }, [panelButtons, activeIndicators, quickEmaGroups, bbGroups, handlers]);
 
   // Painel agora é um dropdown flutuante no topo do gráfico (não empurra mais o chart) —
   // largura limitada (60% no desktop, full width no mobile) e altura travada em % do
@@ -2489,20 +2014,12 @@ function ChartIndicatorPanel({
                 width: `${(tile.colSpan / PANEL_GRID_COLS) * 100}%`,
               }}
             >
+              {tile.kind === 'handler' && (
+                <GroupBox descriptor={tile.data.descriptor} api={tile.data.api} dims={tile.dims} t={t} />
+              )}
               {tile.kind === 'bb' && renderBollingerTile(
                 tile.data, tile.dims, t, addBbGroup, removeBbGroup, updateBbGroup, toggleBbGroupFlag, botPermInterval,
               )}
-              {tile.kind === 'srInterval' && renderSrTile(tile.dims, t, srInterval, setSrInterval, srCandleCount, setSrCandleCount, srStyle, setSrStyle)}
-              {tile.kind === 'pphlInterval' && renderIndicatorIntervalCountTile(tile.dims, t, 'chart.tip.pphl_interval', 'chart.tip.pphl_count', 'PPHL', '#2dd4bf', pphlInterval, setPphlInterval, pphlCandleCount, setPphlCandleCount)}
-              {tile.kind === 'wfractalsInterval' && renderIndicatorIntervalCountTile(tile.dims, t, 'chart.tip.wfractals_interval', 'chart.tip.wfractals_count', 'WF', '#f472b6', wfractalsInterval, setWfractalsInterval, wfractalsCandleCount, setWfractalsCandleCount)}
-              {tile.kind === 'zigzagInterval' && renderIndicatorIntervalCountTile(tile.dims, t, 'chart.tip.zigzag_interval', 'chart.tip.zigzag_count', 'ZZ', '#818cf8', zigzagInterval, setZigzagInterval, zigzagCandleCount, setZigzagCandleCount)}
-              {tile.kind === 'rsiCrossThreshold' && renderRsiCrossThresholdTile(tile.dims, t, rsiCrossThreshold, setRsiCrossThreshold, rsiCrossValue, setRsiCrossValue, rsiCrossInterval, setRsiCrossInterval)}
-              {tile.kind === 'chopInterval' && renderIntervalPickerTile(tile.dims, t, 'chart.tip.chop_interval', 'CHOP', '#f59e0b', chopInterval, setChopInterval)}
-              {tile.kind === 'macdInterval' && renderIntervalPickerTile(tile.dims, t, 'chart.tip.macd_interval', 'MACD', '#38bdf8', macdInterval, setMacdInterval)}
-              {tile.kind === 'prevDayCloudInterval' && renderPrevDayCloudTile(tile.dims, t, prevDayCloudInterval, setPrevDayCloudInterval, prevDayCloudCandleCount, setPrevDayCloudCandleCount, prevDayCloudUseHighLow, setPrevDayCloudUseHighLow)}
-              {tile.kind === 'emaPersistCloudInterval' && renderPermIntervalTile(tile.dims, t, emaPersistCloudInterval, setEmaPersistCloudInterval, emaPersistCloudTones, setEmaPersistCloudTones, emaPersistCloudLayers, setEmaPersistCloudLayers)}
-              {tile.kind === 'barsSinceCrossInterval' && renderIntervalPickerTile(tile.dims, t, 'chart.tip.barsSinceCross_interval', 'BARS', '#38bdf8', barsSinceCrossInterval, setBarsSinceCrossInterval)}
-              {tile.kind === 'tdSequentialInterval' && renderIntervalPickerTile(tile.dims, t, 'chart.tip.tdSequential_interval', 'TD SEQ', '#fb7185', tdSequentialInterval, setTdSequentialInterval)}
               {tile.kind === 'vwap' && renderVwapTile(tile.dims, t, vwap, setVwap, vwapSlopeHighlightOn, setVwapSlopeHighlightOn)}
               {tile.kind === 'quickEma' && renderQuickEmaGroupsTile(
                 tile.data, tile.dims, t,
@@ -2913,7 +2430,7 @@ function buildMultitradeMarkLines(candlesticks, interval, markers, DL, LEFT_PAD)
 
 const srPriceEq = (a, b) => a != null && b != null && Math.abs(a - b) / b < 1e-6;
 
-function buildSrMarkLines(levels, entrySupport = null, exitResistance = null) {
+function buildSrMarkLines(levels, entrySupport = null, exitResistance = null, showSupport = 3, showResistance = 3) {
   if (!levels?.length) return [];
   const maxTouches = Math.max(...levels.map(l => l.touches ?? 1));
   // Posto por proximidade do preço (R1 = resistência mais baixa, S1 = suporte mais alto) —
@@ -2924,7 +2441,11 @@ function buildSrMarkLines(levels, entrySupport = null, exitResistance = null) {
       .sort((a, b) => (type === 'resistance' ? a.price - b.price : b.price - a.price)))
       .forEach((l, i) => rankOf.set(l, i + 1));
   }
-  return levels.map(lvl => {
+  // "Mostrar" (showSupport/showResistance): filtra por posto.
+  return levels.filter((l) => {
+    const r = rankOf.get(l) ?? 1;
+    return r <= (l.type === 'resistance' ? showResistance : showSupport);
+  }).map(lvl => {
     const isRes = lvl.type === 'resistance';
     const rank = rankOf.get(lvl) ?? 1;
     const color = srLevelColor(isRes ? 'resistance' : 'support', rank - 1);
@@ -3061,20 +2582,19 @@ function buildSignalMarkers(candlesticks, markers, DL, LEFT_PAD, chartInterval) 
   return points;
 }
 
-function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAverage, ma50, ma9, ma21, rsi }, colors, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = [], overlayConfigs = [], multitradeMarkers = [], chartLeftPad = CHART_LEFT_MARGIN, buyInfo = null, stopLossConfig = null, targetConfig = null, chartRightPad = CHART_PRICE_PAD + CHART_LEFT_MARGIN, bollingerConfig = null, srConfig = null, pphlConfig = null, wfractalsConfig = null, zigzagConfig = null, vwapConfig = null, chopConfig = null, vwapSlopeHighlight = null, isMobile = false, bbPathEnabled = false, macdConfig = null, rsiCrossThreshold = 0, rsiCrossTimes = []) {
+function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAverage, ma50, ma9, ma21, rsi }, colors, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = [], overlayConfigs = [], multitradeMarkers = [], chartLeftPad = CHART_LEFT_MARGIN, buyInfo = null, stopLossConfig = null, targetConfig = null, chartRightPad = CHART_PRICE_PAD + CHART_LEFT_MARGIN, bollingerConfig = null, srConfigs = [], pphlConfig = null, wfractalsConfig = null, zigzagConfig = null, vwapConfig = null, chopConfig = null, vwapSlopeHighlight = null, isMobile = false, bbPathEnabled = false, macdConfig = null, rsiCrossThreshold = 0, rsiCrossTimes = []) {
   const showMa9      = activeIndicators.includes('ma9');
   const showMa21     = activeIndicators.includes('ma21');
   const showMa50     = activeIndicators.includes('ma50');
   const showMa200    = activeIndicators.includes('ma200');
   const showIchimoku = activeIndicators.includes('ichimoku');
-  const showSr       = activeIndicators.includes('sr');
-  const showPphl     = activeIndicators.includes('pphl');
-  const showWfractals = activeIndicators.includes('wfractals');
-  const showZigzag   = activeIndicators.includes('zigzag');
+  const showPphl     = !!pphlConfig;      // PPHL/WF/ZZ viraram manipuladores caixa — gate pela config
+  const showWfractals = !!wfractalsConfig;
+  const showZigzag   = !!zigzagConfig;
   const showRsi      = activeIndicators.includes('rsi');
   const showRsi50    = activeIndicators.includes('rsi50');
   const showRsi80    = activeIndicators.includes('rsi80');
-  const showChopZone = activeIndicators.includes('chopZone');
+  const showChopZone = !!chopConfig; // CHOP virou manipulador caixa — gate pela config, não activeIndicators
   const showStopLoss = activeIndicators.includes('stopLoss');
   // Subpainéis empilhados abaixo do preço (RSI, CHOP...) — cada um ganha seu próprio grid,
   // na ordem desta lista. subpanelCount define a partir de qual gridIndex os rótulos do
@@ -3182,11 +2702,12 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
 
   // Todas as markLines unificadas: separadores de dia + zoom + compras + sinais MT + zonas S/R
   const mtMarkData = buildMultitradeMarkLines(candlesticks, interval, multitradeMarkers, DL, LEFT_PAD);
-  // srConfig com níveis presente sem o botão "sr" ligado = override de trade das Estatísticas.
-  // Motor ECharts legado não desenha o S/R rolante — usa só os níveis da âncora mais recente.
-  const srLatestLevels = srConfig?.rolling?.length ? srConfig.rolling[srConfig.rolling.length - 1].levels : srConfig?.levels;
-  const srMarkData = (showSr || srConfig?.levels?.length)
-    ? buildSrMarkLines(srLatestLevels, srConfig?.entrySupport, srConfig?.exitResistance) : [];
+  // Motor ECharts legado não desenha o S/R rolante — usa só os níveis da âncora mais recente de
+  // cada instância. `srConfigs` = 1+ instâncias (ou 1 do override de trade das Estatísticas).
+  const srMarkData = srConfigs.flatMap((cfg) => {
+    const latest = cfg.rolling?.length ? cfg.rolling[cfg.rolling.length - 1].levels : cfg.levels;
+    return buildSrMarkLines(latest, cfg.entrySupport, cfg.exitResistance, cfg.showSupport ?? 3, cfg.showResistance ?? 3);
+  });
   const pivotMarkers = showPphl ? buildPivotMarkers(pphlConfig?.points, candlesticks, DL, LEFT_PAD, interval) : { highs: [], lows: [] };
   const wfractalsMarkers = showWfractals ? buildPivotMarkers(wfractalsConfig?.points, candlesticks, DL, LEFT_PAD, interval) : { highs: [], lows: [] };
   const zigzagLine = showZigzag ? buildZigZagLine(zigzagConfig, candlesticks, DL, LEFT_PAD, interval) : { line: [], tentative: [] };
@@ -3261,7 +2782,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
   // MACD (12/26/9) sobreposto no gráfico de preço — eixo Y próprio (esquerda), confinado à
   // faixa inferior do painel (min/max assimétricos: linha do zero fica ~25% acima da base) pra
   // não achatar os candles. Intervalo próprio, alinhado por candle igual ao CHOP.
-  const showMacd = activeIndicators.includes('macd');
+  const showMacd = !!macdConfig; // MACD virou manipulador caixa — gate pela config
   const macdAbsVals = showMacd && macdConfig
     ? [...(macdConfig.macd ?? []), ...(macdConfig.signal ?? []), ...(macdConfig.histogram ?? [])]
         .map((p) => Math.abs(p.value)).filter(Number.isFinite)
@@ -3811,11 +3332,7 @@ export default function CandlestickChart() {
   const { selectedChart, setSelectedChart, chartZoom, setChartZoom, chartTradeMarkers, chartViewSource, chartSrOverride,
     chartCandleWindowReset,
     multitradeChartFocus, tradePurchases, allTrades, chartInterval: savedInterval, setChartInterval,
-    chartPanelButtons, uiPrefs, setMaBandsDefaults, setSrIntervalDefault, setSrCandleCountDefault, setSrStyleDefault, setPphlIntervalDefault, setPphlCandleCountDefault,
-    setWfractalsIntervalDefault, setWfractalsCandleCountDefault, setZigzagIntervalDefault, setZigzagCandleCountDefault,
-    setChopIntervalDefault, setMacdIntervalDefault,
-    setPrevDayCloudIntervalDefault, setPrevDayCloudCandleCountDefault, setPrevDayCloudUseHighLowDefault,
-    setEmaPersistCloudIntervalDefault, setEmaPersistCloudTonesDefault, setEmaPersistCloudLayersDefault, setBarsSinceCrossIntervalDefault, setTdSequentialIntervalDefault, setRsiCrossThresholdDefault, setRsiCrossValueDefault, setRsiCrossIntervalDefault,
+    chartPanelButtons, uiPrefs, setMaBandsDefaults,
     setVwapDefaults, setVwapSlopeHighlightDefault, setActiveIndicatorsPreference,
     multitradeFavorites, fiveMTradeFavorites, activeTrades } = useCurrency();
   const { t } = useI18n();
@@ -3896,6 +3413,16 @@ export default function CandlestickChart() {
   const [adaptiveBandOverlay, setAdaptiveBandOverlay] = useState(null);
   const [maBands, setMaBands] = useState(() => ({ ...uiPrefs.maBandsDefaults }));
   const [bbGroups, setBbGroups] = useState(loadBbGroups);
+  // Manipuladores de indicador no padrão "caixa de grupos" (Bollinger/EMA) — um hook só pra todos.
+  const handlers = useGroupedHandlers(HANDLER_GROUP_STORES);
+  // max:1 — o grupo habilitado de cada manipulador de instância única.
+  const chopGroup = handlers.chop?.groups.find((g) => g.enabled) ?? null;
+  const macdGroup = handlers.macd?.groups.find((g) => g.enabled) ?? null;
+  const barsSinceCrossGroup = handlers.barsSinceCross?.groups.find((g) => g.enabled) ?? null;
+  const tdSequentialGroup = handlers.tdSequential?.groups.find((g) => g.enabled) ?? null;
+  const pphlGroup = handlers.pphl?.groups.find((g) => g.enabled) ?? null;
+  const wfractalsGroup = handlers.wfractals?.groups.find((g) => g.enabled) ?? null;
+  const zigzagGroup = handlers.zigzag?.groups.find((g) => g.enabled) ?? null;
   // Nível do filtro PERM (1h/30m/15m) configurado no favorito Bollinger Bands do manipulador
   // (bot ao vivo) pra essa moeda — ver resolveBollingerBandsPermFilter (multitradeChart.js).
   // Usado tanto pelo botão PERM manual (renderBollingerTile) quanto pra ligar showPermFilter
@@ -3974,28 +3501,20 @@ export default function CandlestickChart() {
   // backend/utils/analyseBollingerBandRecovery.js), já que reproduzir a nuvem PERM
   // (EMA9×EMA21) inteira no cliente duplicaria a lógica de backend/utils/emaPersistCloud.js.
   const [bbPermPathCache, setBbPermPathCache] = useState({});
-  const [srInterval, setSrInterval] = useState(() => uiPrefs.srIntervalDefault ?? DEFAULT_SR_INTERVAL);
-  const [srCandleCount, setSrCandleCount] = useState(() => uiPrefs.srCandleCountDefault ?? DEFAULT_SR_CANDLE_COUNT);
-  const [srStyle, setSrStyle] = useState(() => uiPrefs.srStyleDefault ?? DEFAULT_SR_STYLE);
-  const [pphlInterval, setPphlInterval] = useState(() => uiPrefs.pphlIntervalDefault ?? DEFAULT_PPHL_INTERVAL);
-  const [pphlCandleCount, setPphlCandleCount] = useState(() => uiPrefs.pphlCandleCountDefault ?? DEFAULT_INDICATOR_CANDLE_COUNT);
-  const [wfractalsInterval, setWfractalsInterval] = useState(() => uiPrefs.wfractalsIntervalDefault ?? DEFAULT_WFRACTALS_INTERVAL);
-  const [wfractalsCandleCount, setWfractalsCandleCount] = useState(() => uiPrefs.wfractalsCandleCountDefault ?? DEFAULT_INDICATOR_CANDLE_COUNT);
-  const [zigzagInterval, setZigzagInterval] = useState(() => uiPrefs.zigzagIntervalDefault ?? DEFAULT_ZIGZAG_INTERVAL);
-  const [zigzagCandleCount, setZigzagCandleCount] = useState(() => uiPrefs.zigzagCandleCountDefault ?? DEFAULT_INDICATOR_CANDLE_COUNT);
+  // S/R: multi-instância (handlers.sr). Cada instância tem intervalo/estilo/candleCount + quais
+  // linhas calcular/mostrar. O rolling roda em chartSrConfigs (mais abaixo).
+  const srGroups = handlers.sr?.groups ?? [];
+  const enabledSrGroups = srGroups.filter((g) => g.enabled);
+  // PPHL/WF/ZZ: intervalo + candleCount agora vivem no grupo do manipulador (handlers.pphl / .wfractals / .zigzag).
   // Candles brutos por intervalo próprio (S/R, PPHL, WF, ZigZag) — key `${symbol}|${interval}`.
   // O cálculo dos níveis roda no cliente (srDetectors.js) sobre a janela visível (janela
   // deslizante), ver os useMemo chartSrConfig/chartPphlConfig/... e visibleChartRange.
   const [pivotRawCache, setPivotRawCache] = useState({});
   const [_pivotRawLoading, setPivotRawLoading] = useState(false);
-  const [rsiCrossThreshold, setRsiCrossThreshold] = useState(() => uiPrefs.rsiCrossThresholdDefault ?? DEFAULT_RSI_CROSS_THRESHOLD);
-  // Valor lembrado do "Limiar RSI" pro botão de liga/desliga religar (o select não tem mais "off").
-  const [rsiCrossValue, setRsiCrossValue] = useState(() => (
-    uiPrefs.rsiCrossValueDefault
-    ?? (uiPrefs.rsiCrossThresholdDefault > 0 ? uiPrefs.rsiCrossThresholdDefault : DEFAULT_RSI_CROSS_VALUE)
-  ));
-  // Intervalo do RSI(14) usado pra linha vertical do "Limiar RSI" (independente do intervalo do gráfico).
-  const [rsiCrossInterval, setRsiCrossInterval] = useState(() => uiPrefs.rsiCrossIntervalDefault ?? DEFAULT_RSI_CROSS_INTERVAL);
+  // Limiar RSI: virou manipulador caixa (handlers.rsiCross). `rsiCrossThreshold` (0 = desligado) e
+  // `rsiCrossInterval` são derivados do grupo habilitado — o resto do arquivo/motores usa eles
+  // como antes. Só aparece com o subpainel RSI ligado (panelGate do descriptor).
+  const rsiCrossGroup = handlers.rsiCross?.groups.find((g) => g.enabled) ?? null;
   // Trecho de TEMPO visível do gráfico (ms) — reportado pelos dois motores (LW via
   // subscribeVisibleTimeRangeChange, ECharts via evento dataZoom), com debounce.
   const [visibleChartRange, setVisibleChartRange] = useState(null);
@@ -4008,36 +3527,30 @@ export default function CandlestickChart() {
     setVisibleChartRange(null);
     return () => { if (visibleRangeDebounceRef.current) clearTimeout(visibleRangeDebounceRef.current); };
   }, [selectedChart?.symbol, selectedChart?.interval]);
-  const [prevDayCloudInterval, setPrevDayCloudInterval] = useState(() => uiPrefs.prevDayCloudIntervalDefault ?? DEFAULT_PREV_DAY_CLOUD_INTERVAL);
-  const [prevDayCloudCandleCount, setPrevDayCloudCandleCount] = useState(() => uiPrefs.prevDayCloudCandleCountDefault ?? DEFAULT_PREV_DAY_CLOUD_CANDLE_COUNT);
-  const [prevDayCloudUseHighLow, setPrevDayCloudUseHighLow] = useState(() => uiPrefs.prevDayCloudUseHighLowDefault ?? DEFAULT_PREV_DAY_CLOUD_USE_HIGH_LOW);
+  // D-1: intervalo/candleCount/source agora vivem no grupo do manipulador (handlers.prevDayCloud).
+  const prevDayCloudGroup = handlers.prevDayCloud?.groups.find((g) => g.enabled) ?? null;
   // Cache por símbolo + intervalo (1d/3d) — ver prevDayCloudEffectiveInterval.
   const [prevDayCloudCache, setPrevDayCloudCache] = useState({});
-  const [chopInterval, setChopInterval] = useState(() => uiPrefs.chopIntervalDefault ?? DEFAULT_CHOP_INTERVAL);
+  // CHOP/MACD: intervalo agora vive no grupo do manipulador (handlers.chop / handlers.macd).
   const [chopCache, setChopCache] = useState({});
   const [_chopLoading, setChopLoading] = useState(false);
-  const [macdInterval, setMacdInterval] = useState(() => uiPrefs.macdIntervalDefault ?? DEFAULT_MACD_INTERVAL);
   const [macdCache, setMacdCache] = useState({});
   const [_macdLoading, setMacdLoading] = useState(false);
-  const [emaPersistCloudInterval, setEmaPersistCloudInterval] = useState(() => uiPrefs.emaPersistCloudIntervalDefault ?? DEFAULT_EMA_PERSIST_CLOUD_INTERVAL);
-  const [emaPersistCloudTones, setEmaPersistCloudTones] = useState(() => ({
-    ...DEFAULT_PERM_CLOUD_TONES,
-    ...(uiPrefs.emaPersistCloudTonesDefault ?? {}),
-  }));
+  // PERM: intervalo/tons/camadas agora vivem no grupo do manipulador (handlers.emaPersistCloud).
+  const emaPersistCloudGroup = handlers.emaPersistCloud?.groups.find((g) => g.enabled) ?? null;
+  const emaPersistCloudInterval = emaPersistCloudGroup?.interval ?? DEFAULT_EMA_PERSIST_CLOUD_INTERVAL;
+  const emaPersistCloudTones = emaPersistCloudGroup?.tones ?? DEFAULT_PERM_CLOUD_TONES;
+  const emaPersistCloudLayers = emaPersistCloudGroup?.layers ?? DEFAULT_EMA_PERSIST_CLOUD_LAYERS;
   const [emaPersistCloudCache, setEmaPersistCloudCache] = useState({});
   const [_emaPersistCloudLoading, setEmaPersistCloudLoading] = useState(false);
-  // Quantas nuvens PERM mostrar: 1 (só o principal), 2 (+ confirmação, padrão) ou 3 (+ mais um
-  // nível — a confirmação DA confirmação, ex.: 1h+30m+15m). Ver renderPermIntervalTile.
-  const [emaPersistCloudLayers, setEmaPersistCloudLayers] = useState(() => uiPrefs.emaPersistCloudLayersDefault ?? DEFAULT_EMA_PERSIST_CLOUD_LAYERS);
   // Dados do intervalo de confirmação da nuvem verde (ex.: 15m quando emaPersistCloudInterval é
   // 1h — ver EMA_PERSIST_CLOUD_CONFIRM_INTERVAL). Cache separado, mesma chave (intervalo principal).
   const [emaPersistCloudConfirmCache, setEmaPersistCloudConfirmCache] = useState({});
   // Dados de mais um nível de confirmação (3ª nuvem, só quando emaPersistCloudLayers === 3).
   const [emaPersistCloudConfirm2Cache, setEmaPersistCloudConfirm2Cache] = useState({});
-  const [barsSinceCrossInterval, setBarsSinceCrossInterval] = useState(() => uiPrefs.barsSinceCrossIntervalDefault ?? DEFAULT_BARS_SINCE_CROSS_INTERVAL);
+  // Bars×/TD Seq: intervalo agora vive no grupo do manipulador (handlers.barsSinceCross / .tdSequential).
   const [barsSinceCrossCache, setBarsSinceCrossCache] = useState({});
   const [_barsSinceCrossLoading, setBarsSinceCrossLoading] = useState(false);
-  const [tdSequentialInterval, setTdSequentialInterval] = useState(() => uiPrefs.tdSequentialIntervalDefault ?? DEFAULT_TD_SEQUENTIAL_INTERVAL);
   const [tdSequentialCache, setTdSequentialCache] = useState({});
   const [_tdSequentialLoading, setTdSequentialLoading] = useState(false);
   const [vwap, setVwap] = useState(() => ({ ...uiPrefs.vwapDefaults }));
@@ -4384,140 +3897,12 @@ export default function CandlestickChart() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [maBands.pct, maBands.showAbove, maBands.showBelow, maBands.period, maBands.interval]);
 
-  // Persiste o intervalo do S/R (independente do intervalo do gráfico, como MA1/MA2/BB)
-  useEffect(() => {
-    if (isTradePanelChartView(chartViewSource)) return;
-    setSrIntervalDefault(srInterval);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [srInterval]);
-  useEffect(() => {
-    if (isTradePanelChartView(chartViewSource)) return;
-    setSrCandleCountDefault(srCandleCount);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [srCandleCount]);
-  useEffect(() => {
-    if (isTradePanelChartView(chartViewSource)) return;
-    setSrStyleDefault(srStyle);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [srStyle]);
+  // S/R, PPHL/WF/ZZ, Limiar RSI, CHOP/MACD: persistência agora no store do manipulador
+  // (localStorage direto, ver groupStore).
 
-  // Persiste o intervalo do Pivot Points High/Low (mesmo padrão do S/R)
-  useEffect(() => {
-    if (isTradePanelChartView(chartViewSource)) return;
-    setPphlIntervalDefault(pphlInterval);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pphlInterval]);
+  // D-1: persistência agora no store do manipulador (localStorage direto, ver groupStore).
 
-  // Persiste intervalo + quantidade de candles do PPHL / Williams Fractals / ZigZag
-  useEffect(() => {
-    if (isTradePanelChartView(chartViewSource)) return;
-    setPphlCandleCountDefault(pphlCandleCount);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pphlCandleCount]);
-  useEffect(() => {
-    if (isTradePanelChartView(chartViewSource)) return;
-    setWfractalsIntervalDefault(wfractalsInterval);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wfractalsInterval]);
-  useEffect(() => {
-    if (isTradePanelChartView(chartViewSource)) return;
-    setWfractalsCandleCountDefault(wfractalsCandleCount);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wfractalsCandleCount]);
-  useEffect(() => {
-    if (isTradePanelChartView(chartViewSource)) return;
-    setZigzagIntervalDefault(zigzagInterval);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [zigzagInterval]);
-  useEffect(() => {
-    if (isTradePanelChartView(chartViewSource)) return;
-    setZigzagCandleCountDefault(zigzagCandleCount);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [zigzagCandleCount]);
-  useEffect(() => {
-    if (isTradePanelChartView(chartViewSource)) return;
-    setRsiCrossThresholdDefault(rsiCrossThreshold);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rsiCrossThreshold]);
-  useEffect(() => {
-    if (isTradePanelChartView(chartViewSource)) return;
-    setRsiCrossValueDefault(rsiCrossValue);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rsiCrossValue]);
-  useEffect(() => {
-    if (isTradePanelChartView(chartViewSource)) return;
-    setRsiCrossIntervalDefault(rsiCrossInterval);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rsiCrossInterval]);
-
-  // Persiste o intervalo do CHOP (mesmo padrão do S/R/PPHL)
-  useEffect(() => {
-    if (isTradePanelChartView(chartViewSource)) return;
-    setChopIntervalDefault(chopInterval);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chopInterval]);
-
-  // Persiste o intervalo do MACD (mesmo padrão do S/R/PPHL/CHOP)
-  useEffect(() => {
-    if (isTradePanelChartView(chartViewSource)) return;
-    setMacdIntervalDefault(macdInterval);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [macdInterval]);
-
-  // Persiste o intervalo da nuvem D-1 (1d/3d) — mesmo padrão do S/R/PPHL/CHOP
-  useEffect(() => {
-    if (isTradePanelChartView(chartViewSource)) return;
-    setPrevDayCloudIntervalDefault(prevDayCloudInterval);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [prevDayCloudInterval]);
-
-  // Persiste a quantidade de candles do envelope da nuvem D-1 — mesmo padrão do intervalo acima.
-  useEffect(() => {
-    if (isTradePanelChartView(chartViewSource)) return;
-    setPrevDayCloudCandleCountDefault(prevDayCloudCandleCount);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [prevDayCloudCandleCount]);
-
-  // Persiste o modo da nuvem D-1 (corpo open/close vs. pavios high/low) — mesmo padrão acima.
-  useEffect(() => {
-    if (isTradePanelChartView(chartViewSource)) return;
-    setPrevDayCloudUseHighLowDefault(prevDayCloudUseHighLow);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [prevDayCloudUseHighLow]);
-
-  // Persiste o intervalo da nuvem PERM (inclinação EMA9) — mesmo padrão do S/R/PPHL/CHOP
-  useEffect(() => {
-    if (isTradePanelChartView(chartViewSource)) return;
-    setEmaPersistCloudIntervalDefault(emaPersistCloudInterval);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [emaPersistCloudInterval]);
-
-  // Persiste a quantidade de nuvens PERM (1/2/3) — mesmo padrão do intervalo acima.
-  useEffect(() => {
-    if (isTradePanelChartView(chartViewSource)) return;
-    setEmaPersistCloudLayersDefault(emaPersistCloudLayers);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [emaPersistCloudLayers]);
-
-  useEffect(() => {
-    if (isTradePanelChartView(chartViewSource)) return;
-    setEmaPersistCloudTonesDefault(emaPersistCloudTones);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [emaPersistCloudTones]);
-
-  // Persiste o intervalo do Bars Since MA Cross — BARS (mesmo padrão acima)
-  useEffect(() => {
-    if (isTradePanelChartView(chartViewSource)) return;
-    setBarsSinceCrossIntervalDefault(barsSinceCrossInterval);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [barsSinceCrossInterval]);
-
-  // Persiste o intervalo do TD Sequential — TD SEQ (mesmo padrão acima)
-  useEffect(() => {
-    if (isTradePanelChartView(chartViewSource)) return;
-    setTdSequentialIntervalDefault(tdSequentialInterval);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tdSequentialInterval]);
+  // PERM, Bars×/TD Seq: persistência agora no store do manipulador (localStorage direto, ver groupStore).
 
   // Persiste preferências do VWAP (ligado, intervalo, sessão, bandas) — mesmo padrão da Bollinger.
   // A âncora (ancorada/contínua) não é mais escolhida aqui — vem de Configurações (uiPrefs.vwapAnchorDefault).
@@ -4805,25 +4190,29 @@ export default function CandlestickChart() {
   // Ao abrir um trade das Estatísticas com S/R, desenha o S/R do backtest mesmo com o botão
   // "S/R" desligado — faz parte do trade (ver chartSrOverride).
   const srTradeOverride = chartViewSource === CHART_VIEW.STATISTICS && !!chartSrOverride?.levels?.length;
-  const srShown = (activeIndicators.includes('sr') && chartPanelButtons.sr !== false) || srTradeOverride;
-  const pphlShown = activeIndicators.includes('pphl') && chartPanelButtons.pphl !== false;
-  const wfractalsShown = activeIndicators.includes('wfractals') && chartPanelButtons.wfractals !== false;
-  const zigzagShown = activeIndicators.includes('zigzag') && chartPanelButtons.zigzag !== false;
+  const pphlShown = !!pphlGroup && chartPanelButtons.pphl !== false;
+  const wfractalsShown = !!wfractalsGroup && chartPanelButtons.wfractals !== false;
+  const zigzagShown = !!zigzagGroup && chartPanelButtons.zigzag !== false;
 
   // Linha vertical do "Limiar RSI": precisa dos candles brutos do intervalo escolhido pra calcular
   // o RSI(14) no cliente (o `selectedChart.rsi` é só do intervalo do gráfico e das últimas ~166
   // velas). Reutiliza o mesmo cache/fetch dos pivôs.
-  const rsiCrossShown = Number(rsiCrossThreshold) > 0 && activeIndicators.includes('rsi');
+  const rsiCrossShown = !!rsiCrossGroup && activeIndicators.includes('rsi');
+  const rsiCrossThreshold = rsiCrossShown ? Number(rsiCrossGroup.value) : 0; // 0 = desligado
+  const rsiCrossInterval = rsiCrossGroup?.interval ?? DEFAULT_RSI_CROSS_INTERVAL;
 
+  const srIntervalsKey = enabledSrGroups.map((g) => g.interval).sort().join(',');
   const pivotIntervalsNeeded = useMemo(() => {
     const set = new Set();
-    if (srShown) set.add(srInterval);
-    if (pphlShown) set.add(pphlInterval);
-    if (wfractalsShown) set.add(wfractalsInterval);
-    if (zigzagShown) set.add(zigzagInterval);
+    if (srTradeOverride && chartSrOverride?.interval) set.add(chartSrOverride.interval);
+    for (const g of enabledSrGroups) set.add(g.interval);
+    if (pphlShown) set.add(pphlGroup.interval);
+    if (wfractalsShown) set.add(wfractalsGroup.interval);
+    if (zigzagShown) set.add(zigzagGroup.interval);
     if (rsiCrossShown) set.add(rsiCrossInterval);
     return [...set];
-  }, [srShown, pphlShown, wfractalsShown, zigzagShown, rsiCrossShown, srInterval, pphlInterval, wfractalsInterval, zigzagInterval, rsiCrossInterval]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [srTradeOverride, chartSrOverride?.interval, srIntervalsKey, pphlShown, wfractalsShown, zigzagShown, rsiCrossShown, pphlGroup?.interval, wfractalsGroup?.interval, zigzagGroup?.interval, rsiCrossInterval]);
 
   useEffect(() => {
     if (!selectedChart?.symbol || !pivotIntervalsNeeded.length) {
@@ -4869,7 +4258,10 @@ export default function CandlestickChart() {
   // os candles mais antigos também — ver computePrevDayCloudFetchLimit. Nem todo intervalo existe
   // nativamente na Gate.io (ver GATE_PREV_DAY_CLOUD_INTERVALS/CLAUDE.md): com source='gate' e um
   // intervalo não suportado lá, o efetivo cai pra '1d'.
-  const prevDayCloudShown = activeIndicators.includes('prevDayCloud') && chartPanelButtons.prevDayCloud !== false;
+  const prevDayCloudShown = !!prevDayCloudGroup && chartPanelButtons.prevDayCloud !== false;
+  const prevDayCloudInterval = prevDayCloudGroup?.interval ?? DEFAULT_PREV_DAY_CLOUD_INTERVAL;
+  const prevDayCloudCandleCount = prevDayCloudGroup?.candleCount ?? DEFAULT_PREV_DAY_CLOUD_CANDLE_COUNT;
+  const prevDayCloudUseHighLow = prevDayCloudGroup?.source !== 'oc';
   const prevDayCloudEffectiveInterval = (selectedChart?.source === 'gate' && !GATE_PREV_DAY_CLOUD_INTERVALS.includes(prevDayCloudInterval))
     ? '1d'
     : prevDayCloudInterval;
@@ -4901,26 +4293,26 @@ export default function CandlestickChart() {
   ]);
 
   // Busca o Choppiness Index — intervalo próprio (independente do gráfico), mesmo padrão do S/R/PPHL.
-  const chopShown = activeIndicators.includes('chopZone') && chartPanelButtons.chopZone !== false;
+  const chopShown = !!chopGroup && chartPanelButtons.chopZone !== false;
   useEffect(() => {
     if (!selectedChart?.symbol || !chopShown) {
       setChopLoading(false);
       return undefined;
     }
-    const key = chopInterval;
+    const key = chopGroup.interval;
     let cancelled = false;
     setChopLoading(true);
     (async () => {
       try {
         const ovLimit = computeOverlayMaFetchLimit(
           selectedChart.interval ?? currentInterval,
-          chopInterval,
+          chopGroup.interval,
           14,
           Math.max(displayCandleCount, selectedChart.candlesticks?.length ?? 0, DEFAULT_CANDLE_LIMIT),
           overlayFetchLimit,
         );
         const points = await fetchChopOverlayPoints(
-          selectedChart.symbol, chopInterval, selectedChart.source, ovLimit,
+          selectedChart.symbol, chopGroup.interval, selectedChart.source, ovLimit,
         );
         if (!cancelled) setChopCache({ [key]: points });
       } catch (e) {
@@ -4933,30 +4325,30 @@ export default function CandlestickChart() {
     return () => { cancelled = true; };
   }, [
     selectedChart?.symbol, selectedChart?.interval, selectedChart?.source, selectedChart?.candlesticks,
-    currentInterval, overlayFetchLimit, displayCandleCount, chopShown, chopInterval,
+    currentInterval, overlayFetchLimit, displayCandleCount, chopShown, chopGroup?.interval,
   ]);
 
   // Busca o MACD (12/26/9) — intervalo próprio (independente do gráfico), mesmo padrão do CHOP.
-  const macdShown = activeIndicators.includes('macd') && chartPanelButtons.macd !== false;
+  const macdShown = !!macdGroup && chartPanelButtons.macd !== false;
   useEffect(() => {
     if (!selectedChart?.symbol || !macdShown) {
       setMacdLoading(false);
       return undefined;
     }
-    const key = macdInterval;
+    const key = macdGroup.interval;
     let cancelled = false;
     setMacdLoading(true);
     (async () => {
       try {
         const ovLimit = computeOverlayMaFetchLimit(
           selectedChart.interval ?? currentInterval,
-          macdInterval,
+          macdGroup.interval,
           35, // warmup MACD: slow(26) + signal(9)
           Math.max(displayCandleCount, selectedChart.candlesticks?.length ?? 0, DEFAULT_CANDLE_LIMIT),
           overlayFetchLimit,
         );
         const data = await fetchMacdOverlayPoints(
-          selectedChart.symbol, macdInterval, selectedChart.source, ovLimit,
+          selectedChart.symbol, macdGroup.interval, selectedChart.source, ovLimit,
         );
         if (!cancelled) setMacdCache({ [key]: data });
       } catch (e) {
@@ -4969,7 +4361,7 @@ export default function CandlestickChart() {
     return () => { cancelled = true; };
   }, [
     selectedChart?.symbol, selectedChart?.interval, selectedChart?.source, selectedChart?.candlesticks,
-    currentInterval, overlayFetchLimit, displayCandleCount, macdShown, macdInterval,
+    currentInterval, overlayFetchLimit, displayCandleCount, macdShown, macdGroup?.interval,
   ]);
 
   // Busca candles + EMA9/21 pra nuvem PERM (inclinação EMA9) — intervalo próprio (independente
@@ -4980,7 +4372,7 @@ export default function CandlestickChart() {
   // — mesmo com o switch desligado na tela — porque também é usado pra confirmar/esmaecer o
   // layer1 (ver isBullishConfirmedAt); só o de layer3 é opcional de buscar, já que só serve pra
   // desenho (ver EMA_PERSIST_CLOUD_CONFIRM_INTERVAL).
-  const emaPersistCloudShown = activeIndicators.includes('emaPersistCloud') && chartPanelButtons.emaPersistCloud !== false;
+  const emaPersistCloudShown = !!emaPersistCloudGroup && chartPanelButtons.emaPersistCloud !== false;
   const emaPersistCloudConfirmInterval = getEmaPersistCloudConfirmInterval(emaPersistCloudInterval);
   const emaPersistCloudConfirm2IntervalRaw = emaPersistCloudConfirmInterval
     ? getEmaPersistCloudConfirmInterval(emaPersistCloudConfirmInterval) : null;
@@ -5053,26 +4445,26 @@ export default function CandlestickChart() {
   ]);
 
   // Busca candles + EMA9/21 pro Bars Since MA Cross (BARS) — mesmo padrão acima.
-  const barsSinceCrossShown = activeIndicators.includes('barsSinceCross') && chartPanelButtons.barsSinceCross !== false;
+  const barsSinceCrossShown = !!barsSinceCrossGroup && chartPanelButtons.barsSinceCross !== false;
   useEffect(() => {
     if (!selectedChart?.symbol || !barsSinceCrossShown) {
       setBarsSinceCrossLoading(false);
       return undefined;
     }
-    const key = barsSinceCrossInterval;
+    const key = barsSinceCrossGroup.interval;
     let cancelled = false;
     setBarsSinceCrossLoading(true);
     (async () => {
       try {
         const ovLimit = computeOverlayMaFetchLimit(
           selectedChart.interval ?? currentInterval,
-          barsSinceCrossInterval,
+          barsSinceCrossGroup.interval,
           21,
           Math.max(displayCandleCount, selectedChart.candlesticks?.length ?? 0, DEFAULT_CANDLE_LIMIT),
           overlayFetchLimit,
         );
         const data = await fetchEmaCrossOverlayData(
-          selectedChart.symbol, barsSinceCrossInterval, selectedChart.source, ovLimit,
+          selectedChart.symbol, barsSinceCrossGroup.interval, selectedChart.source, ovLimit,
         );
         if (!cancelled) setBarsSinceCrossCache({ [key]: data });
       } catch (e) {
@@ -5085,30 +4477,30 @@ export default function CandlestickChart() {
     return () => { cancelled = true; };
   }, [
     selectedChart?.symbol, selectedChart?.interval, selectedChart?.source, selectedChart?.candlesticks,
-    currentInterval, overlayFetchLimit, displayCandleCount, barsSinceCrossShown, barsSinceCrossInterval,
+    currentInterval, overlayFetchLimit, displayCandleCount, barsSinceCrossShown, barsSinceCrossGroup?.interval,
   ]);
 
   // Busca só os candles pro TD Sequential (TD SEQ) — não precisa de EMA, mesmo padrão acima.
-  const tdSequentialShown = activeIndicators.includes('tdSequential') && chartPanelButtons.tdSequential !== false;
+  const tdSequentialShown = !!tdSequentialGroup && chartPanelButtons.tdSequential !== false;
   useEffect(() => {
     if (!selectedChart?.symbol || !tdSequentialShown) {
       setTdSequentialLoading(false);
       return undefined;
     }
-    const key = tdSequentialInterval;
+    const key = tdSequentialGroup.interval;
     let cancelled = false;
     setTdSequentialLoading(true);
     (async () => {
       try {
         const ovLimit = computeOverlayMaFetchLimit(
           selectedChart.interval ?? currentInterval,
-          tdSequentialInterval,
+          tdSequentialGroup.interval,
           10,
           Math.max(displayCandleCount, selectedChart.candlesticks?.length ?? 0, DEFAULT_CANDLE_LIMIT),
           overlayFetchLimit,
         );
         const candlesticks = await fetchIntervalCandlesOnly(
-          selectedChart.symbol, tdSequentialInterval, selectedChart.source, ovLimit,
+          selectedChart.symbol, tdSequentialGroup.interval, selectedChart.source, ovLimit,
         );
         if (!cancelled) setTdSequentialCache({ [key]: candlesticks });
       } catch (e) {
@@ -5121,7 +4513,7 @@ export default function CandlestickChart() {
     return () => { cancelled = true; };
   }, [
     selectedChart?.symbol, selectedChart?.interval, selectedChart?.source, selectedChart?.candlesticks,
-    currentInterval, overlayFetchLimit, displayCandleCount, tdSequentialShown, tdSequentialInterval,
+    currentInterval, overlayFetchLimit, displayCandleCount, tdSequentialShown, tdSequentialGroup?.interval,
   ]);
 
   // Busca a série do VWAP — intervalo próprio (independente do gráfico), mesmo padrão da Bollinger.
@@ -5275,6 +4667,11 @@ export default function CandlestickChart() {
     const keptIndicators = activeIndicators.filter((id) => INTERVAL_CHANGE_KEEP_INDICATORS.has(id));
     if (keptIndicators.length !== activeIndicators.length) {
       setActiveIndicatorsPreference(keptIndicators);
+    }
+    // Manipuladores caixa sem intervalo próprio recalculável (descriptor.keepOnIntervalChange:false)
+    // são desligados na troca de intervalo — mesmo motivo dos overlays.
+    for (const d of HANDLER_DESCRIPTORS) {
+      if (d.keepOnIntervalChange === false) handlers[d.id]?.disableAll();
     }
     setBbGroups((prev) => {
       if (!prev.some((g) => g.enabled || g.showPath || g.showMedianTrend || g.showPermFilter)) return prev;
@@ -6032,69 +5429,82 @@ export default function CandlestickChart() {
   }, [rsiCrossShown, pivotRawCache, selectedChart?.symbol, selectedChart?.candlesticks, selectedChart?.interval, currentInterval, rsiCrossInterval, rsiCrossThreshold]);
 
   // Âncora do S/R rolante = abertura do último candle do intervalo do S/R que JÁ FECHOU até a
-  // borda direita do trecho visível (candle em formação não entra — mesma regra do backtest,
-  // sem look-ahead). Como é snapado pra grade do intervalo, arrastar DENTRO do mesmo candle de 4h
-  // (16 candles de 15m) não muda o valor → o chartSrConfig abaixo não recalcula os
-  // 10×detectSupportResistance a cada frame de arrasto.
-  const srVisibleAnchorMs = useMemo(
-    () => srClosedAnchorMs(visibleChartRange?.toMs, INTERVAL_MS[srInterval] ?? 3_600_000),
-    [visibleChartRange, srInterval],
-  );
+  // borda direita do trecho visível (candle em formação não entra — sem look-ahead). Snapado pra
+  // grade do intervalo, então arrastar DENTRO do mesmo candle não muda a chave → chartSrConfigs
+  // não recalcula os 10×detectSupportResistance por instância a cada frame de arrasto. Uma âncora
+  // por intervalo distinto entre as instâncias habilitadas.
+  const srAnchorByInterval = useMemo(() => {
+    const m = {};
+    for (const g of enabledSrGroups) {
+      if (!(g.interval in m)) m[g.interval] = srClosedAnchorMs(visibleChartRange?.toMs, INTERVAL_MS[g.interval] ?? 3_600_000);
+    }
+    return m;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleChartRange, srIntervalsKey]);
+  const srAnchorsKey = Object.entries(srAnchorByInterval).map(([k, v]) => `${k}:${v}`).join('|');
 
-  const chartSrConfig = useMemo(() => {
-    // Trade das Estatísticas: desenha os níveis EXATOS que o backtest calculou pra esse sinal
-    // (mesmo cálculo, sem recalcular) — o gráfico e o trade são a mesma coisa. Marca a linha de
-    // suporte de entrada e a de resistência-alvo pra destaque em buildSrMarkLines / LW.
+  // S/R MULTI-INSTÂNCIA: uma config por instância habilitada (ou uma única do override do trade
+  // das Estatísticas). Cada config: { id, color, interval, style, rolling:[{time,levels}],
+  // showSupport, showResistance }. "Calcular" (calcSupport/calcResistance) fatia os níveis já aqui;
+  // "Mostrar" (showSupport/showResistance) viaja na config e o LW/ECharts filtra por rank.
+  const chartSrConfigs = useMemo(() => {
     if (srTradeOverride) {
-      // Traço na janela do trade: cada nível vira um segmento curto entrada→saída, em vez de linha
-      // de ponta a ponta. A janela vem dos marcadores buy/sell (setados por openOnChart nas
-      // Estatísticas); trade ainda aberto (sem sell) → estende até o último candle.
       const buyMs = chartTradeMarkers?.find((m) => m.side === 'buy')?.time ?? chartTradeMarkers?.[0]?.time;
       const sellMs = chartTradeMarkers?.find((m) => m.side === 'sell')?.time;
       const lastCandleMs = Number(selectedChart?.candlesticks?.[selectedChart.candlesticks.length - 1]?.openTime);
       const fromMs = Number(buyMs);
       const toMs = Number(sellMs) || (Number.isFinite(lastCandleMs) ? lastCandleMs : Date.now());
-      return {
+      return [{
+        id: 'sr-trade-override',
+        color: SR_PALETTE[0],
         interval: chartSrOverride.interval,
         levels: chartSrOverride.levels,
         entrySupport: chartSrOverride.entrySupport ?? null,
         exitResistance: chartSrOverride.exitResistance ?? null,
         tradeWindow: Number.isFinite(fromMs) && toMs > fromMs ? { fromMs, toMs } : null,
-      };
+        showSupport: 3,
+        showResistance: 3,
+      }];
     }
-    if (!srShown) return null;
-    // S/R ROLANTE: pra cada uma das últimas SR_ROLL_WIDTH âncoras (a da borda direita visível + as
-    // anteriores), roda o detector sobre os `srCandleCount` candles anteriores àquela âncora.
-    // Largura e lookback fixos — não mudam com zoom/pan (só a borda direita acompanha o pan).
-    const raw = pivotRawCache[`${selectedChart?.symbol}|${srInterval}`]?.candles ?? [];
-    const slice = sliceForRollingSR(
-      raw, srVisibleAnchorMs != null ? { toMs: srVisibleAnchorMs } : null, srCandleCount, SR_ROLL_WIDTH);
-    const rolling = [];
-    for (let k = Math.max(0, slice.length - SR_ROLL_WIDTH); k < slice.length; k++) {
-      const from = Math.max(0, k - srCandleCount + 1);
-      const levels = detectSupportResistance(slice.slice(from, k + 1), {});
-      if (levels.length) rolling.push({ time: Number(slice[k].openTime), levels });
-    }
-    return { interval: srInterval, style: srStyle, rolling };
-  }, [srShown, srTradeOverride, chartSrOverride, chartTradeMarkers, srInterval, srCandleCount, srStyle, pivotRawCache, selectedChart?.symbol, selectedChart?.candlesticks, srVisibleAnchorMs]);
+    if (!enabledSrGroups.length || chartPanelButtons.sr === false) return [];
+    const out = [];
+    enabledSrGroups.forEach((g, i) => {
+      const raw = pivotRawCache[`${selectedChart?.symbol}|${g.interval}`]?.candles ?? [];
+      const anchorMs = srAnchorByInterval[g.interval];
+      const slice = sliceForRollingSR(raw, anchorMs != null ? { toMs: anchorMs } : null, g.candleCount, SR_ROLL_WIDTH);
+      const rolling = [];
+      for (let k = Math.max(0, slice.length - SR_ROLL_WIDTH); k < slice.length; k++) {
+        const from = Math.max(0, k - g.candleCount + 1);
+        let levels = detectSupportResistance(slice.slice(from, k + 1), {});
+        levels = sliceRankedSrLevels(levels, g.calcSupport, g.calcResistance);
+        if (levels.length) rolling.push({ time: Number(slice[k].openTime), levels });
+      }
+      out.push({
+        id: g.id, color: SR_PALETTE[i % SR_PALETTE.length], interval: g.interval, style: g.style,
+        rolling, showSupport: g.showSupport, showResistance: g.showResistance,
+      });
+    });
+    return out;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [srTradeOverride, chartSrOverride, chartTradeMarkers, handlers.sr?.groups, chartPanelButtons.sr, pivotRawCache, selectedChart?.symbol, selectedChart?.candlesticks, srAnchorsKey]);
 
   const chartPphlConfig = useMemo(() => {
     if (!pphlShown) return null;
-    const points = detectPivotPointsHighLow(pivotWindow(pphlInterval, pphlCandleCount), {});
-    return { interval: pphlInterval, points };
-  }, [pphlShown, pphlInterval, pphlCandleCount, pivotWindow]);
+    const points = detectPivotPointsHighLow(pivotWindow(pphlGroup.interval, pphlGroup.candleCount), {});
+    return { interval: pphlGroup.interval, points };
+  }, [pphlShown, pphlGroup?.interval, pphlGroup?.candleCount, pivotWindow]);
 
   const chartWfractalsConfig = useMemo(() => {
     if (!wfractalsShown) return null;
-    const points = detectWilliamsFractals(pivotWindow(wfractalsInterval, wfractalsCandleCount), { bars: 2 });
-    return { interval: wfractalsInterval, points };
-  }, [wfractalsShown, wfractalsInterval, wfractalsCandleCount, pivotWindow]);
+    const points = detectWilliamsFractals(pivotWindow(wfractalsGroup.interval, wfractalsGroup.candleCount), { bars: 2 });
+    return { interval: wfractalsGroup.interval, points };
+  }, [wfractalsShown, wfractalsGroup?.interval, wfractalsGroup?.candleCount, pivotWindow]);
 
   const chartZigzagConfig = useMemo(() => {
     if (!zigzagShown) return null;
-    const d = detectZigZag(pivotWindow(zigzagInterval, zigzagCandleCount), {});
-    return { interval: zigzagInterval, points: d.points ?? [], lastLeg: d.lastLeg ?? null };
-  }, [zigzagShown, zigzagInterval, zigzagCandleCount, pivotWindow]);
+    const d = detectZigZag(pivotWindow(zigzagGroup.interval, zigzagGroup.candleCount), {});
+    return { interval: zigzagGroup.interval, points: d.points ?? [], lastLeg: d.lastLeg ?? null };
+  }, [zigzagShown, zigzagGroup?.interval, zigzagGroup?.candleCount, pivotWindow]);
 
   // Bandeiras (auto): detecção pura sobre os candles JÁ carregados no gráfico — sem fetch nem
   // intervalo próprio (diferente de PPHL/ZZ), então acompanha o intervalo/zoom atuais.
@@ -6148,17 +5558,18 @@ export default function CandlestickChart() {
   // intervalo do S/R que já FECHOU até analysisBox.toMs (sem look-ahead, igual ao backtest).
   useEffect(() => {
     if (!analysisBox) return;
-    if (!srShown) { console.warn('[S/R] caixa: indicador S/R desligado — nada a printar'); return; }
-    const raw = pivotRawCache[`${selectedChart?.symbol}|${srInterval}`]?.candles ?? [];
-    if (!raw.length) { console.warn(`[S/R] caixa: candles de ${srInterval} ainda não carregados`); return; }
-    const anchorMs = srClosedAnchorMs(analysisBox.toMs, INTERVAL_MS[srInterval] ?? 3_600_000);
-    const slice = sliceForRollingSR(raw, { toMs: anchorMs }, srCandleCount, SR_ROLL_WIDTH);
+    const g = enabledSrGroups[0]; // dump da 1ª instância S/R habilitada
+    if (!g) { console.warn('[S/R] caixa: nenhuma instância S/R ligada — nada a printar'); return; }
+    const raw = pivotRawCache[`${selectedChart?.symbol}|${g.interval}`]?.candles ?? [];
+    if (!raw.length) { console.warn(`[S/R] caixa: candles de ${g.interval} ainda não carregados`); return; }
+    const anchorMs = srClosedAnchorMs(analysisBox.toMs, INTERVAL_MS[g.interval] ?? 3_600_000);
+    const slice = sliceForRollingSR(raw, { toMs: anchorMs }, g.candleCount, SR_ROLL_WIDTH);
     const anchorCandle = slice[slice.length - 1];
     const levels = detectSupportResistance(
-      slice.slice(Math.max(0, slice.length - srCandleCount), slice.length), {});
+      slice.slice(Math.max(0, slice.length - g.candleCount), slice.length), {});
     logSrLevels('caixa de análise', selectedChart?.symbol, levels, {
-      interval: srInterval,
-      lookback: srCandleCount,
+      interval: g.interval,
+      lookback: g.candleCount,
       anchorMs: anchorCandle ? Number(anchorCandle.openTime) : null,
       windowMs: [analysisBox.fromMs, analysisBox.toMs],
     });
@@ -6174,14 +5585,14 @@ export default function CandlestickChart() {
 
   const chartChopConfig = useMemo(() => {
     if (!chopShown) return null;
-    return { interval: chopInterval, points: chopCache[chopInterval] ?? [] };
-  }, [chopShown, chopInterval, chopCache]);
+    return { interval: chopGroup.interval, points: chopCache[chopGroup.interval] ?? [] };
+  }, [chopShown, chopGroup?.interval, chopCache]);
 
   const chartMacdConfig = useMemo(() => {
     if (!macdShown) return null;
-    const d = macdCache[macdInterval] ?? { macd: [], signal: [], histogram: [] };
-    return { interval: macdInterval, macd: d.macd ?? [], signal: d.signal ?? [], histogram: d.histogram ?? [] };
-  }, [macdShown, macdInterval, macdCache]);
+    const d = macdCache[macdGroup.interval] ?? { macd: [], signal: [], histogram: [] };
+    return { interval: macdGroup.interval, macd: d.macd ?? [], signal: d.signal ?? [], histogram: d.histogram ?? [] };
+  }, [macdShown, macdGroup?.interval, macdCache]);
 
   const chartEmaPersistCloudData = useMemo(() => {
     if (!emaPersistCloudShown) return null;
@@ -6200,14 +5611,14 @@ export default function CandlestickChart() {
 
   const chartBarsSinceCrossData = useMemo(() => {
     if (!barsSinceCrossShown) return null;
-    return barsSinceCrossCache[barsSinceCrossInterval] ?? null;
-  }, [barsSinceCrossShown, barsSinceCrossInterval, barsSinceCrossCache]);
+    return barsSinceCrossCache[barsSinceCrossGroup.interval] ?? null;
+  }, [barsSinceCrossShown, barsSinceCrossGroup?.interval, barsSinceCrossCache]);
 
   const chartTdSequentialData = useMemo(() => {
     if (!tdSequentialShown) return null;
-    const candlesticks = tdSequentialCache[tdSequentialInterval];
+    const candlesticks = tdSequentialCache[tdSequentialGroup.interval];
     return candlesticks ? { candlesticks } : null;
-  }, [tdSequentialShown, tdSequentialInterval, tdSequentialCache]);
+  }, [tdSequentialShown, tdSequentialGroup?.interval, tdSequentialCache]);
 
   const chartVwapConfig = useMemo(() => {
     const enabled = vwap.enabled && chartPanelButtons.vwap !== false;
@@ -6230,11 +5641,11 @@ export default function CandlestickChart() {
     return buildOption(
       selectedChart, colors, effectiveIndicators, displayLimit, chartZoom, tradeTimes, overlayConfigs,
       chartTradeMarkers?.length ? chartTradeMarkers : (selectedChart.tradeMarkers ?? []),
-      chartLeftPad, chartBuyInfo, chartStopLossConfig, chartTargetConfig, chartRightPad, chartBollingerConfig, chartSrConfig, chartPphlConfig, chartWfractalsConfig, chartZigzagConfig, chartVwapConfig, chartChopConfig, vwapSlopeHighlight, isMobile,
+      chartLeftPad, chartBuyInfo, chartStopLossConfig, chartTargetConfig, chartRightPad, chartBollingerConfig, chartSrConfigs, chartPphlConfig, chartWfractalsConfig, chartZigzagConfig, chartVwapConfig, chartChopConfig, vwapSlopeHighlight, isMobile,
       chartBollingerConfig?.showPath ?? false, chartMacdConfig, rsiCrossThreshold, chartRsiCrossTimes,
     );
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedChart, colors, effectiveIndicators, chartZoom, tradePurchases, chartTradeMarkers, activeTab, overlayConfigs, displayLimit, chartLeftPad, chartRightPad, chartBuyInfo, chartStopLossConfig, chartTargetConfig, chartBollingerConfig, chartSrConfig, chartPphlConfig, chartWfractalsConfig, chartZigzagConfig, chartVwapConfig, chartChopConfig, chartMacdConfig, vwapSlopeHighlight, isMobile, rsiCrossThreshold, chartRsiCrossTimes, uiPrefs.fontScale]);
+  }, [selectedChart, colors, effectiveIndicators, chartZoom, tradePurchases, chartTradeMarkers, activeTab, overlayConfigs, displayLimit, chartLeftPad, chartRightPad, chartBuyInfo, chartStopLossConfig, chartTargetConfig, chartBollingerConfig, chartSrConfigs, chartPphlConfig, chartWfractalsConfig, chartZigzagConfig, chartVwapConfig, chartChopConfig, chartMacdConfig, vwapSlopeHighlight, isMobile, rsiCrossThreshold, chartRsiCrossTimes, uiPrefs.fontScale]);
 
   if (!selectedChart || !option) {
     return (
@@ -6546,6 +5957,7 @@ export default function CandlestickChart() {
             <div className="text-p5/50 text-xs font-mono">Selecione uma moeda pra conferir as regras.</div>
           )}
           <ChartIndicatorPanel
+            handlers={handlers}
             activeIndicators={activeIndicators}
             toggleIndicator={toggleIndicator}
             quickEmaGroups={quickEmaGroups}
@@ -6561,50 +5973,6 @@ export default function CandlestickChart() {
             updateBbGroup={updateBbGroup}
             toggleBbGroupFlag={toggleBbGroupFlag}
             botPermInterval={botPermInterval}
-            srInterval={srInterval}
-            setSrInterval={setSrInterval}
-            srCandleCount={srCandleCount}
-            setSrCandleCount={setSrCandleCount}
-            srStyle={srStyle}
-            setSrStyle={setSrStyle}
-            pphlInterval={pphlInterval}
-            setPphlInterval={setPphlInterval}
-            pphlCandleCount={pphlCandleCount}
-            setPphlCandleCount={setPphlCandleCount}
-            wfractalsInterval={wfractalsInterval}
-            setWfractalsInterval={setWfractalsInterval}
-            wfractalsCandleCount={wfractalsCandleCount}
-            setWfractalsCandleCount={setWfractalsCandleCount}
-            zigzagInterval={zigzagInterval}
-            setZigzagInterval={setZigzagInterval}
-            zigzagCandleCount={zigzagCandleCount}
-            setZigzagCandleCount={setZigzagCandleCount}
-            rsiCrossThreshold={rsiCrossThreshold}
-            setRsiCrossThreshold={setRsiCrossThreshold}
-            rsiCrossValue={rsiCrossValue}
-            setRsiCrossValue={setRsiCrossValue}
-            rsiCrossInterval={rsiCrossInterval}
-            setRsiCrossInterval={setRsiCrossInterval}
-            chopInterval={chopInterval}
-            setChopInterval={setChopInterval}
-            macdInterval={macdInterval}
-            setMacdInterval={setMacdInterval}
-            prevDayCloudInterval={prevDayCloudInterval}
-            setPrevDayCloudInterval={setPrevDayCloudInterval}
-            prevDayCloudCandleCount={prevDayCloudCandleCount}
-            setPrevDayCloudCandleCount={setPrevDayCloudCandleCount}
-            prevDayCloudUseHighLow={prevDayCloudUseHighLow}
-            setPrevDayCloudUseHighLow={setPrevDayCloudUseHighLow}
-            emaPersistCloudInterval={emaPersistCloudInterval}
-            setEmaPersistCloudInterval={setEmaPersistCloudInterval}
-            emaPersistCloudTones={emaPersistCloudTones}
-            setEmaPersistCloudTones={setEmaPersistCloudTones}
-            emaPersistCloudLayers={emaPersistCloudLayers}
-            setEmaPersistCloudLayers={setEmaPersistCloudLayers}
-            barsSinceCrossInterval={barsSinceCrossInterval}
-            setBarsSinceCrossInterval={setBarsSinceCrossInterval}
-            tdSequentialInterval={tdSequentialInterval}
-            setTdSequentialInterval={setTdSequentialInterval}
             vwap={vwap}
             setVwap={setVwap}
             vwapSlopeHighlightOn={vwapSlopeHighlightOn}
@@ -6638,7 +6006,7 @@ export default function CandlestickChart() {
               vwapConfig={chartVwapConfig}
               vwapSlopeHighlight={vwapSlopeHighlight}
               bollingerConfigs={chartBollingerConfigs}
-              srConfig={chartSrConfig}
+              srConfigs={chartSrConfigs}
               pphlConfig={chartPphlConfig}
               wfractalsConfig={chartWfractalsConfig}
               zigzagConfig={chartZigzagConfig}
@@ -6682,6 +6050,7 @@ export default function CandlestickChart() {
           {analysisBoxNotice}
           {measureButtons}
           <ChartIndicatorPanel
+            handlers={handlers}
             activeIndicators={activeIndicators}
             toggleIndicator={toggleIndicator}
             quickEmaGroups={quickEmaGroups}
@@ -6697,50 +6066,6 @@ export default function CandlestickChart() {
             updateBbGroup={updateBbGroup}
             toggleBbGroupFlag={toggleBbGroupFlag}
             botPermInterval={botPermInterval}
-            srInterval={srInterval}
-            setSrInterval={setSrInterval}
-            srCandleCount={srCandleCount}
-            setSrCandleCount={setSrCandleCount}
-            srStyle={srStyle}
-            setSrStyle={setSrStyle}
-            pphlInterval={pphlInterval}
-            setPphlInterval={setPphlInterval}
-            pphlCandleCount={pphlCandleCount}
-            setPphlCandleCount={setPphlCandleCount}
-            wfractalsInterval={wfractalsInterval}
-            setWfractalsInterval={setWfractalsInterval}
-            wfractalsCandleCount={wfractalsCandleCount}
-            setWfractalsCandleCount={setWfractalsCandleCount}
-            zigzagInterval={zigzagInterval}
-            setZigzagInterval={setZigzagInterval}
-            zigzagCandleCount={zigzagCandleCount}
-            setZigzagCandleCount={setZigzagCandleCount}
-            rsiCrossThreshold={rsiCrossThreshold}
-            setRsiCrossThreshold={setRsiCrossThreshold}
-            rsiCrossValue={rsiCrossValue}
-            setRsiCrossValue={setRsiCrossValue}
-            rsiCrossInterval={rsiCrossInterval}
-            setRsiCrossInterval={setRsiCrossInterval}
-            chopInterval={chopInterval}
-            setChopInterval={setChopInterval}
-            macdInterval={macdInterval}
-            setMacdInterval={setMacdInterval}
-            prevDayCloudInterval={prevDayCloudInterval}
-            setPrevDayCloudInterval={setPrevDayCloudInterval}
-            prevDayCloudCandleCount={prevDayCloudCandleCount}
-            setPrevDayCloudCandleCount={setPrevDayCloudCandleCount}
-            prevDayCloudUseHighLow={prevDayCloudUseHighLow}
-            setPrevDayCloudUseHighLow={setPrevDayCloudUseHighLow}
-            emaPersistCloudInterval={emaPersistCloudInterval}
-            setEmaPersistCloudInterval={setEmaPersistCloudInterval}
-            emaPersistCloudTones={emaPersistCloudTones}
-            setEmaPersistCloudTones={setEmaPersistCloudTones}
-            emaPersistCloudLayers={emaPersistCloudLayers}
-            setEmaPersistCloudLayers={setEmaPersistCloudLayers}
-            barsSinceCrossInterval={barsSinceCrossInterval}
-            setBarsSinceCrossInterval={setBarsSinceCrossInterval}
-            tdSequentialInterval={tdSequentialInterval}
-            setTdSequentialInterval={setTdSequentialInterval}
             vwap={vwap}
             setVwap={setVwap}
             vwapSlopeHighlightOn={vwapSlopeHighlightOn}
