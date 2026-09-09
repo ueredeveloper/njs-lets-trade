@@ -21,11 +21,12 @@ import { simulateBbTouchPath, pairBbPathCycles } from '../utils/bollingerTouchPa
 import { detectFlags } from '../utils/detectFlags';
 import PanelTip from './PanelTip';
 import {
-  PANEL_GAP, PANEL_TILE_PAD, SECTION_TITLE_ROWS,
-  scaleFontSize, panelBtn, panelSelect, scaleSectionTitle,
+  PANEL_GAP,
+  CARD_CONTROL_H,
+  panelCard, cardHeader, cardTitle, cardSectionLabel,
+  cardOnBtn, cardCloseBtn, cardAddBtn, toggleGroup, toggleBtn, cardSelect,
 } from '../utils/chartPanelStyles';
 import GroupBox from './chartHandlers/GroupBox';
-import { groupBoxRowSpan } from '../utils/chartHandlers/groupBoxLayout';
 import { SR_PALETTE } from '../utils/chartHandlers/descriptors';
 import { sliceRankedSrLevels } from '../utils/srRank';
 import { HANDLER_DESCRIPTORS, HANDLER_GROUP_STORES } from '../utils/chartHandlers/descriptors';
@@ -80,16 +81,14 @@ const CHART_PRICE_PAD = 54;        // direita: rótulos do eixo de preço
 const CHART_LEFT_MARGIN = 8;       // margem esquerda mínima
 const PANEL_MIN_WIDTH = 160;
 const PANEL_CARD_PAD = 6;
-// PANEL_GAP, PANEL_TILE_PAD, SECTION_TITLE_ROWS, scaleFontSize, panelBtn, panelSelect,
-// scaleSectionTitle e PanelTip agora vêm de ../utils/chartPanelStyles + ./PanelTip (import acima).
-/** Painel de indicadores agora abre como dropdown no topo do gráfico (flutuando por cima,
- *  sem empurrar o chart) — largura e altura limitadas, com scroll vertical pro que não couber. */
+// PANEL_GAP e os primitivos de card (panelCard/cardHeader/toggleBtn/…) vêm de
+// ../utils/chartPanelStyles; PanelTip de ./PanelTip (imports acima).
+/** Painel de indicadores abre como dropdown no topo do gráfico (flutua por cima, sem empurrar o
+ *  chart) — largura responsiva, altura limitada com scroll vertical pro que não couber. Os cards
+ *  têm altura natural (empilham); nada de dimensionamento pixel-a-pixel. */
 const PANEL_WIDTH_RATIO = 0.2;      // desktop/notebook: 20% da largura do gráfico
 const PANEL_MAX_HEIGHT_RATIO = 0.45; // acima disso, rola em vez de cobrir o gráfico inteiro
 const PANEL_MAX_HEIGHT_PX = 320;    // teto absoluto, mesmo em telas bem altas
-const PANEL_ROW_PX = 26;            // altura "natural" de uma row unit no dropdown
-/** Altura mínima (px) de uma "row unit" do painel — abaixo disso, o painel rola em vez de espremer os tiles. */
-const MIN_ROW_UNIT_PX = 20;
 const C_UP   = '#26a69a';
 const C_DOWN = '#ef5350';
 /** Cores das linhas de S/R — resistência em tons de rosa, suporte em tons de azul (do mais
@@ -1056,36 +1055,6 @@ const COMPACT_LABELS = {
   barsSinceCross: 'BARS', tdSequential: 'TDSEQ', macd: 'MACD',
 };
 
-/** Grid base do painel — cada botão ocupa N×M células. */
-const PANEL_GRID_COLS = 4;
-
-/** Altura em linhas de cada tile de indicador. */
-const INDICATOR_TILE_ROWS = 2;
-
-const BANDS_COL_SPAN = 4;
-
-const VWAP_ROW_SPAN = 5 + SECTION_TITLE_ROWS;
-
-/** Grid interno do bloco de EMAs rápidas: intervalo+remover, 4 botões de período, banda cima/baixo. */
-const QUICK_EMA_GRID_COLS = 4;
-const QUICK_EMA_GROUP_ROWS = 4;
-
-function quickEmaRowSpan(groups) {
-  const addRow = groups.length < MAX_QUICK_EMA_GROUPS ? 1 : 0;
-  return Math.max(1, SECTION_TITLE_ROWS + groups.length * QUICK_EMA_GROUP_ROWS + addRow);
-}
-
-/** Grid interno do bloco de Bollinger Bands: intervalo+remover, período+desvio, ON/LS/LM/LI,
- *  PATH+TENDÊNCIA, PERM — 4 colunas/5 linhas por grupo do Quick EMA acima (PERM ganhou linha
- *  própria: a linha PATH+TENDÊNCIA já ocupa as 4 colunas inteiras, sem espaço pra um 3º botão). */
-const BB_GRID_COLS = 4;
-const BB_GROUP_ROWS = 5;
-
-function bbRowSpan(groups) {
-  const addRow = groups.length < MAX_BB_GROUPS ? 1 : 0;
-  return Math.max(1, SECTION_TITLE_ROWS + groups.length * BB_GROUP_ROWS + addRow);
-}
-
 /**
  * Bollinger Bands — lista de até MAX_BB_GROUPS bandas (mesmo padrão do Quick EMA acima), cada
  * uma com intervalo/período/desvio próprios, ON/OFF geral, quais das 3 linhas mostrar
@@ -1097,9 +1066,18 @@ function bbRowSpan(groups) {
  * BB com PERM habilitado num nível 1h/30m/15m pra essa moeda, o botão fica sem dado pra mostrar
  * — ver bbPermPathCache/occurrencesToBbPathNodes).
  */
-function renderBollingerTile(
+/** Sub-bloco (uma instância de grupo) dentro de um card de manipulador multi-instância. */
+const HANDLER_SUB_BLOCK = {
+  border: '1px solid var(--color-pnl-border)',
+  borderRadius: 4,
+  padding: 4,
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 3,
+};
+
+function renderBollingerCard(
   { groups },
-  dims,
   t,
   addBbGroup,
   removeBbGroup,
@@ -1107,154 +1085,92 @@ function renderBollingerTile(
   toggleBbGroupFlag,
   botPermInterval,
 ) {
-  const innerW = dims.w - PANEL_TILE_PAD * 2;
-  const innerH = dims.h - PANEL_TILE_PAD * 2;
-  const rows = bbRowSpan(groups);
-  const rowH = (innerH - (rows - 1) * PANEL_GAP) / rows;
-  const colW = (innerW - (BB_GRID_COLS - 1) * PANEL_GAP) / BB_GRID_COLS;
-  const ivDims = { w: colW * 3 + PANEL_GAP * 2, h: rowH };
-  const removeDims = { w: colW, h: rowH };
-  const halfDims = { w: colW * 2 + PANEL_GAP, h: rowH };
-  const quarterDims = { w: colW, h: rowH };
-  const addDims = { w: innerW, h: rowH };
-  const titleDims = { w: innerW, h: rowH };
-
-  const cells = groups.flatMap((g, i) => {
-    const color = bbGroupColor(i);
-    const ivRow = SECTION_TITLE_ROWS + i * BB_GROUP_ROWS + 1;
-    const periodRow = SECTION_TITLE_ROWS + i * BB_GROUP_ROWS + 2;
-    const lineRow = SECTION_TITLE_ROWS + i * BB_GROUP_ROWS + 3;
-    const extraRow = SECTION_TITLE_ROWS + i * BB_GROUP_ROWS + 4;
-    const permRow = SECTION_TITLE_ROWS + i * BB_GROUP_ROWS + 5;
-    const permAvailable = !!botPermInterval;
-    const permTip = permAvailable
-      ? `Mostra só os ciclos do PATH que passariam pelo filtro PERM (nuvem EMA9×EMA21) do manipulador dessa moeda, no nível ${botPermInterval === 'h1' ? '1h' : botPermInterval === 'm30' ? '30m' : '15m'} — mesmo nível configurado no favorito Bollinger Bands (bot ao vivo)`
-      : 'Sem favorito Bollinger Bands com PERM habilitado (1h/30m/15m) pra essa moeda — sem dado pra filtrar';
-    return [
-      <div key={`${g.id}-iv`} style={{ gridColumn: '1 / span 3', gridRow: `${ivRow}`, display: 'flex', alignItems: 'stretch' }}>
-        <PanelTip text={t('chart.tip.bb_interval')}>
-          <select
-            value={g.interval}
-            onChange={(e) => updateBbGroup(g.id, { interval: e.target.value })}
-            style={{ ...panelSelect(color, ivDims), fontSize: scaleFontSize(ivDims, 0.35, 9, 13) }}
-          >
-            {OVERLAY_MA_INTERVALS.map((iv) => <option key={iv} value={iv}>{iv}</option>)}
-          </select>
-        </PanelTip>
-      </div>,
-      <div key={`${g.id}-rm`} style={{ gridColumn: '4', gridRow: `${ivRow}`, display: 'flex', alignItems: 'stretch' }}>
-        <PanelTip text={t('chart.tip.bb_remove')}>
-          <button
-            type="button"
-            onClick={() => removeBbGroup(g.id)}
-            style={{ ...panelBtn(false, '#f87171', false, removeDims), fontSize: 11 }}
-          >
-            ×
-          </button>
-        </PanelTip>
-      </div>,
-      <div key={`${g.id}-period`} style={{ gridColumn: '1 / span 2', gridRow: `${periodRow}`, display: 'flex', alignItems: 'stretch' }}>
-        <PanelTip text={t('chart.tip.bb_period')}>
-          <select
-            value={g.period}
-            onChange={(e) => updateBbGroup(g.id, { period: e.target.value })}
-            style={{ ...panelSelect(color, halfDims), fontSize: scaleFontSize(halfDims, 0.35, 9, 13) }}
-          >
-            {BB_PERIOD_OPTIONS.map((p) => <option key={p} value={p}>{p}</option>)}
-          </select>
-        </PanelTip>
-      </div>,
-      <div key={`${g.id}-stddev`} style={{ gridColumn: '3 / span 2', gridRow: `${periodRow}`, display: 'flex', alignItems: 'stretch' }}>
-        <PanelTip text={t('chart.tip.bb_stddev')}>
-          <select
-            value={g.stdDev}
-            onChange={(e) => updateBbGroup(g.id, { stdDev: Number(e.target.value) })}
-            style={{ ...panelSelect(color, halfDims), fontSize: scaleFontSize(halfDims, 0.35, 9, 13) }}
-          >
-            {BB_STDDEV_OPTIONS.map((s) => <option key={s} value={s}>±{s}σ</option>)}
-          </select>
-        </PanelTip>
-      </div>,
-      <div key={`${g.id}-on`} style={{ gridColumn: '1', gridRow: `${lineRow}`, display: 'flex', alignItems: 'stretch' }}>
-        <PanelTip text={t('chart.tip.bb_on')}>
-          <button type="button" onClick={() => toggleBbGroupFlag(g.id, 'enabled')} style={panelBtn(g.enabled, color, false, quarterDims)}>
-            ON
-          </button>
-        </PanelTip>
-      </div>,
-      <div key={`${g.id}-ls`} style={{ gridColumn: '2', gridRow: `${lineRow}`, display: 'flex', alignItems: 'stretch' }}>
-        <PanelTip text={t('chart.tip.bb_upper')}>
-          <button type="button" onClick={() => toggleBbGroupFlag(g.id, 'showUpper')} style={panelBtn(g.showUpper, color, false, quarterDims)}>
-            LS
-          </button>
-        </PanelTip>
-      </div>,
-      <div key={`${g.id}-lm`} style={{ gridColumn: '3', gridRow: `${lineRow}`, display: 'flex', alignItems: 'stretch' }}>
-        <PanelTip text={t('chart.tip.bb_middle')}>
-          <button type="button" onClick={() => toggleBbGroupFlag(g.id, 'showMiddle')} style={panelBtn(g.showMiddle, color, false, quarterDims)}>
-            LM
-          </button>
-        </PanelTip>
-      </div>,
-      <div key={`${g.id}-li`} style={{ gridColumn: '4', gridRow: `${lineRow}`, display: 'flex', alignItems: 'stretch' }}>
-        <PanelTip text={t('chart.tip.bb_lower')}>
-          <button type="button" onClick={() => toggleBbGroupFlag(g.id, 'showLower')} style={panelBtn(g.showLower, color, false, quarterDims)}>
-            LI
-          </button>
-        </PanelTip>
-      </div>,
-      <div key={`${g.id}-path`} style={{ gridColumn: '1 / span 2', gridRow: `${extraRow}`, display: 'flex', alignItems: 'stretch' }}>
-        <PanelTip text={t('chart.tip.bb_path')}>
-          <button type="button" onClick={() => toggleBbGroupFlag(g.id, 'showPath')} style={panelBtn(g.showPath, BB_PATH_COLOR, false, halfDims)}>
-            {g.showPath ? 'PATH ON' : 'PATH'}
-          </button>
-        </PanelTip>
-      </div>,
-      <div key={`${g.id}-trend`} style={{ gridColumn: '3 / span 2', gridRow: `${extraRow}`, display: 'flex', alignItems: 'stretch' }}>
-        <PanelTip text={t('chart.tip.bb_median_trend')}>
-          <button type="button" onClick={() => toggleBbGroupFlag(g.id, 'showMedianTrend')} style={panelBtn(g.showMedianTrend, MEDIAN_TREND_COLOR, false, halfDims)}>
-            {g.showMedianTrend ? 'TEND ON' : 'TENDÊNCIA'}
-          </button>
-        </PanelTip>
-      </div>,
-      <div key={`${g.id}-perm`} style={{ gridColumn: `1 / span ${BB_GRID_COLS}`, gridRow: `${permRow}`, display: 'flex', alignItems: 'stretch' }}>
-        <PanelTip text={permTip}>
-          <button
-            type="button"
-            onClick={() => toggleBbGroupFlag(g.id, 'showPermFilter')}
-            style={!permAvailable
-              ? { ...panelBtn(g.showPermFilter, PERM_FILTER_COLOR, false, addDims), opacity: 0.4 }
-              : panelBtn(g.showPermFilter, PERM_FILTER_COLOR, false, addDims)}
-          >
-            {g.showPermFilter ? 'PERM ON' : 'PERM'}
-          </button>
-        </PanelTip>
-      </div>,
-    ];
-  });
+  const permAvailable = !!botPermInterval;
+  const permTip = permAvailable
+    ? `Mostra só os ciclos do PATH que passariam pelo filtro PERM (nuvem EMA9×EMA21) do manipulador dessa moeda, no nível ${botPermInterval === 'h1' ? '1h' : botPermInterval === 'm30' ? '30m' : '15m'} — mesmo nível configurado no favorito Bollinger Bands (bot ao vivo)`
+    : 'Sem favorito Bollinger Bands com PERM habilitado (1h/30m/15m) pra essa moeda — sem dado pra filtrar';
 
   return (
-    <div style={{
-      display: 'grid',
-      gridTemplateColumns: `repeat(${BB_GRID_COLS}, 1fr)`,
-      gridTemplateRows: `repeat(${rows}, 1fr)`,
-      gap: PANEL_GAP,
-      width: innerW,
-      height: innerH,
-      boxSizing: 'border-box',
-    }}>
-      <div style={{ gridColumn: `1 / span ${BB_GRID_COLS}`, gridRow: '1', ...scaleSectionTitle(titleDims) }}>
-        Bollinger Bands
+    <div style={panelCard()}>
+      <div style={cardHeader()}>
+        <span style={cardTitle()}>Bollinger Bands</span>
+        <span style={cardSectionLabel()}>{groups.length}/{MAX_BB_GROUPS}</span>
       </div>
-      {cells}
+      {groups.map((g, i) => {
+        const color = bbGroupColor(i);
+        return (
+          <div key={g.id} style={HANDLER_SUB_BLOCK}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 4 }}>
+              <span style={{ width: 10, height: 10, borderRadius: 2, background: color, flexShrink: 0 }} />
+              <div style={{ display: 'flex', gap: 2 }}>
+                <PanelTip text={t('chart.tip.bb_on')}>
+                  <button type="button" onClick={() => toggleBbGroupFlag(g.id, 'enabled')} style={cardOnBtn(!!g.enabled)}>ON</button>
+                </PanelTip>
+                <PanelTip text={t('chart.tip.bb_remove')}>
+                  <button type="button" onClick={() => removeBbGroup(g.id)} style={cardCloseBtn()}>×</button>
+                </PanelTip>
+              </div>
+            </div>
+            <div style={toggleGroup()}>
+              <div style={{ flex: 2, minWidth: 0, display: 'flex' }}>
+                <PanelTip text={t('chart.tip.bb_interval')}>
+                  <select value={g.interval} onChange={(e) => updateBbGroup(g.id, { interval: e.target.value })} style={cardSelect(color)}>
+                    {OVERLAY_MA_INTERVALS.map((iv) => <option key={iv} value={iv}>{iv}</option>)}
+                  </select>
+                </PanelTip>
+              </div>
+              <div style={{ flex: 1, minWidth: 0, display: 'flex' }}>
+                <PanelTip text={t('chart.tip.bb_period')}>
+                  <select value={g.period} onChange={(e) => updateBbGroup(g.id, { period: e.target.value })} style={cardSelect(color)}>
+                    {BB_PERIOD_OPTIONS.map((p) => <option key={p} value={p}>{p}</option>)}
+                  </select>
+                </PanelTip>
+              </div>
+              <div style={{ flex: 1, minWidth: 0, display: 'flex' }}>
+                <PanelTip text={t('chart.tip.bb_stddev')}>
+                  <select value={g.stdDev} onChange={(e) => updateBbGroup(g.id, { stdDev: Number(e.target.value) })} style={cardSelect(color)}>
+                    {BB_STDDEV_OPTIONS.map((s) => <option key={s} value={s}>±{s}σ</option>)}
+                  </select>
+                </PanelTip>
+              </div>
+            </div>
+            <div style={toggleGroup()}>
+              <PanelTip text={t('chart.tip.bb_upper')}>
+                <button type="button" onClick={() => toggleBbGroupFlag(g.id, 'showUpper')} style={toggleBtn(g.showUpper, color)}>LS</button>
+              </PanelTip>
+              <PanelTip text={t('chart.tip.bb_middle')}>
+                <button type="button" onClick={() => toggleBbGroupFlag(g.id, 'showMiddle')} style={toggleBtn(g.showMiddle, color)}>LM</button>
+              </PanelTip>
+              <PanelTip text={t('chart.tip.bb_lower')}>
+                <button type="button" onClick={() => toggleBbGroupFlag(g.id, 'showLower')} style={toggleBtn(g.showLower, color)}>LI</button>
+              </PanelTip>
+            </div>
+            <div style={toggleGroup()}>
+              <PanelTip text={t('chart.tip.bb_path')}>
+                <button type="button" onClick={() => toggleBbGroupFlag(g.id, 'showPath')} style={toggleBtn(g.showPath, BB_PATH_COLOR)}>
+                  {g.showPath ? 'PATH ON' : 'PATH'}
+                </button>
+              </PanelTip>
+              <PanelTip text={t('chart.tip.bb_median_trend')}>
+                <button type="button" onClick={() => toggleBbGroupFlag(g.id, 'showMedianTrend')} style={toggleBtn(g.showMedianTrend, MEDIAN_TREND_COLOR)}>
+                  {g.showMedianTrend ? 'TEND ON' : 'TENDÊNCIA'}
+                </button>
+              </PanelTip>
+            </div>
+            <div style={{ ...toggleGroup(), opacity: permAvailable ? 1 : 0.4 }}>
+              <PanelTip text={permTip}>
+                <button type="button" onClick={() => toggleBbGroupFlag(g.id, 'showPermFilter')} style={toggleBtn(g.showPermFilter, PERM_FILTER_COLOR)}>
+                  {g.showPermFilter ? 'PERM ON' : 'PERM'}
+                </button>
+              </PanelTip>
+            </div>
+          </div>
+        );
+      })}
       {groups.length < MAX_BB_GROUPS && (
-        <div style={{ gridColumn: `1 / span ${BB_GRID_COLS}`, gridRow: `${rows}`, display: 'flex', alignItems: 'stretch' }}>
-          <PanelTip text={t('chart.tip.bb_add')}>
-            <button type="button" onClick={addBbGroup} style={panelBtn(false, '#94a3b8', false, addDims)}>
-              + Bollinger
-            </button>
-          </PanelTip>
-        </div>
+        <PanelTip text={t('chart.tip.bb_add')}>
+          <button type="button" onClick={addBbGroup} style={cardAddBtn()}>+ Bollinger</button>
+        </PanelTip>
       )}
     </div>
   );
@@ -1264,88 +1180,40 @@ function renderBollingerTile(
  * VWAP de sessão: intervalo próprio + sessão (diário/semanal) + bandas ±σ + ON/OFF —
  * mesmo padrão da Bollinger, sem período/desvio (é um único acumulado por sessão, não uma média móvel).
  */
-function renderVwapTile(dims, t, vwap, setVwap, slopeHighlightOn, setSlopeHighlightOn) {
-  const innerW = dims.w - PANEL_TILE_PAD * 2;
-  const innerH = dims.h - PANEL_TILE_PAD * 2;
-  const rowH = (innerH - (VWAP_ROW_SPAN - 1) * PANEL_GAP) / VWAP_ROW_SPAN;
-  const rowDims = { w: innerW, h: rowH };
-  const halfDims = { w: (innerW - PANEL_GAP) / 2, h: rowH };
+function renderVwapCard(t, vwap, setVwap, slopeHighlightOn, setSlopeHighlightOn) {
   const color = '#4ade80';
   const declineColor = '#ef4444';
-  const r = (n) => SECTION_TITLE_ROWS + n;
   return (
-    <div style={{
-      display: 'grid',
-      gridTemplateColumns: '1fr 1fr',
-      gridTemplateRows: `repeat(${VWAP_ROW_SPAN}, 1fr)`,
-      gap: PANEL_GAP,
-      width: innerW,
-      height: innerH,
-      boxSizing: 'border-box',
-    }}>
-      <div style={{ gridColumn: '1 / span 2', gridRow: '1', ...scaleSectionTitle(rowDims) }}>VWAP</div>
-      <div style={{ gridColumn: '1 / span 2', gridRow: `${r(1)}`, display: 'flex', alignItems: 'stretch' }}>
+    <div style={panelCard()}>
+      <div style={cardHeader()}>
+        <span style={cardTitle()}>VWAP</span>
+        <PanelTip text={t('chart.tip.vwap_on')}>
+          <button type="button" onClick={() => setVwap(v => ({ ...v, enabled: !v.enabled }))} style={cardOnBtn(!!vwap.enabled)}>ON</button>
+        </PanelTip>
+      </div>
+      <div style={toggleGroup()}>
         <PanelTip text={t('chart.tip.vwap_interval')}>
-          <select
-            value={vwap.interval}
-            onChange={e => setVwap(v => ({ ...v, interval: e.target.value }))}
-            style={panelSelect(color, rowDims)}
-          >
+          <select value={vwap.interval} onChange={e => setVwap(v => ({ ...v, interval: e.target.value }))} style={cardSelect(color)}>
             {OVERLAY_MA_INTERVALS.map(iv => <option key={iv} value={iv}>{`VWAP ${iv}`}</option>)}
           </select>
         </PanelTip>
       </div>
-      <div style={{ gridColumn: '1', gridRow: `${r(2)}`, display: 'flex', alignItems: 'stretch' }}>
+      <div style={toggleGroup()}>
         <PanelTip text={t('chart.tip.vwap_session')}>
-          <button
-            type="button"
-            onClick={() => setVwap(v => ({ ...v, session: 'daily' }))}
-            style={panelBtn(vwap.session === 'daily', color, true, halfDims)}
-          >
-            Diário
-          </button>
+          <button type="button" onClick={() => setVwap(v => ({ ...v, session: 'daily' }))} style={toggleBtn(vwap.session === 'daily', color)}>Diário</button>
+        </PanelTip>
+        <PanelTip text={t('chart.tip.vwap_session')}>
+          <button type="button" onClick={() => setVwap(v => ({ ...v, session: 'weekly' }))} style={toggleBtn(vwap.session === 'weekly', color)}>Semanal</button>
         </PanelTip>
       </div>
-      <div style={{ gridColumn: '2', gridRow: `${r(2)}`, display: 'flex', alignItems: 'stretch' }}>
-        <PanelTip text={t('chart.tip.vwap_session')}>
-          <button
-            type="button"
-            onClick={() => setVwap(v => ({ ...v, session: 'weekly' }))}
-            style={panelBtn(vwap.session === 'weekly', color, true, halfDims)}
-          >
-            Semanal
-          </button>
-        </PanelTip>
-      </div>
-      <div style={{ gridColumn: '1 / span 2', gridRow: `${r(3)}`, display: 'flex', alignItems: 'stretch' }}>
+      <div style={toggleGroup()}>
         <PanelTip text={t('chart.tip.vwap_bands')}>
-          <button
-            type="button"
-            onClick={() => setVwap(v => ({ ...v, bands: !v.bands }))}
-            style={panelBtn(vwap.bands, color, true, rowDims)}
-          >
+          <button type="button" onClick={() => setVwap(v => ({ ...v, bands: !v.bands }))} style={toggleBtn(vwap.bands, color)}>
             {vwap.bands ? 'Bandas ON' : 'Bandas OFF'}
           </button>
         </PanelTip>
-      </div>
-      <div style={{ gridColumn: '1 / span 2', gridRow: `${r(4)}`, display: 'flex', alignItems: 'stretch' }}>
-        <PanelTip text={t('chart.tip.vwap_on')}>
-          <button
-            type="button"
-            onClick={() => setVwap(v => ({ ...v, enabled: !v.enabled }))}
-            style={panelBtn(vwap.enabled, color, true, rowDims)}
-          >
-            {vwap.enabled ? 'VWAP ON' : 'VWAP OFF'}
-          </button>
-        </PanelTip>
-      </div>
-      <div style={{ gridColumn: '1 / span 2', gridRow: `${r(5)}`, display: 'flex', alignItems: 'stretch' }}>
         <PanelTip text={t('chart.tip.vwap_slope_highlight')}>
-          <button
-            type="button"
-            onClick={() => setSlopeHighlightOn(v => !v)}
-            style={panelBtn(slopeHighlightOn, declineColor, false, rowDims)}
-          >
+          <button type="button" onClick={() => setSlopeHighlightOn(v => !v)} style={toggleBtn(slopeHighlightOn, declineColor)}>
             {slopeHighlightOn ? 'Queda VWAP ON' : 'Queda VWAP OFF'}
           </button>
         </PanelTip>
@@ -1353,228 +1221,6 @@ function renderVwapTile(dims, t, vwap, setVwap, slopeHighlightOn, setSlopeHighli
     </div>
   );
 }
-
-/**
- * Expande tiles para baixo se houver espaço vazio abaixo deles.
- * Garante que nenhuma linha do grid fique vazia quando há tiles vizinhos
- * com alturas diferentes (ex.: subset de indicadores visíveis).
- */
-function fillGapsDown(placements, gridCols, maxRow) {
-  if (!placements.length || maxRow <= 0) return placements;
-
-  const occupied = new Set();
-  placements.forEach((p) => {
-    for (let r = p.startRow; r < p.startRow + p.rowSpan; r++) {
-      for (let c = p.startCol; c < p.startCol + p.colSpan; c++) {
-        occupied.add(`${r},${c}`);
-      }
-    }
-  });
-
-  return placements.map((tile) => {
-    let ext = 0;
-    while (tile.startRow + tile.rowSpan + ext < maxRow) {
-      const nextRow = tile.startRow + tile.rowSpan + ext;
-      let free = true;
-      for (let c = tile.startCol; c < tile.startCol + tile.colSpan && free; c++) {
-        if (occupied.has(`${nextRow},${c}`)) free = false;
-      }
-      if (!free) break;
-      for (let c = tile.startCol; c < tile.startCol + tile.colSpan; c++) {
-        occupied.add(`${nextRow},${c}`);
-      }
-      ext++;
-    }
-    if (!ext) return tile;
-    const newRowSpan = tile.rowSpan + ext;
-    return { ...tile, rowSpan: newRowSpan, gridRow: `${tile.startRow + 1} / span ${newRowSpan}` };
-  });
-}
-
-function tilePixelDims(colSpan, rowSpan, rowUnits, width, height, gap, gridCols) {
-  const cellW = (width - (gridCols - 1) * gap) / gridCols;
-  const cellH = (height - (rowUnits - 1) * gap) / rowUnits;
-  return {
-    w: colSpan * cellW + (colSpan - 1) * gap,
-    h: rowSpan * cellH + (rowSpan - 1) * gap,
-  };
-}
-
-/**
- * Distribui N tiles de indicadores preenchendo o grid (4 cols) sem lacunas.
- * Cada tile tem rowSpan = INDICATOR_TILE_ROWS. As colunas variam por contagem:
- *   1 tile  → [4]         preenche toda a largura
- *   2 tiles → [3, 1]      big + small
- *   3 tiles → [2, 1, 1]   big + 2 small
- *   4 tiles → [1,1,1,1]   todos iguais
- *   N>4: "banda de resto" no topo (cria variedade) + bandas de 4 iguais abaixo
- */
-function _getBandCols(bandSize) {
-  if (bandSize === 1) return [4];
-  if (bandSize === 2) return [3, 1];
-  if (bandSize === 3) return [2, 1, 1];
-  return [1, 1, 1, 1];
-}
-
-function packIndicatorsFill(tiles) {
-  if (!tiles.length) return { placements: [], rowUnits: 0 };
-
-  const N = tiles.length;
-  const COLS = PANEL_GRID_COLS;
-  const ROW_H = INDICATOR_TILE_ROWS;
-
-  const firstBandSize = N % COLS || COLS;
-  const placements = [];
-  let tileIdx = 0;
-  let row = 0;
-
-  const placeBand = (bandCols) => {
-    let col = 0;
-    for (const colSpan of bandCols) {
-      if (tileIdx >= tiles.length) break;
-      placements.push({
-        ...tiles[tileIdx],
-        colSpan,
-        rowSpan: ROW_H,
-        gridColumn: `${col + 1} / span ${colSpan}`,
-        gridRow:    `${row + 1} / span ${ROW_H}`,
-        startRow: row,
-        startCol: col,
-      });
-      col += colSpan;
-      tileIdx++;
-    }
-    row += ROW_H;
-  };
-
-  placeBand(_getBandCols(firstBandSize));
-  while (tileIdx < tiles.length) placeBand([1, 1, 1, 1]);
-
-  return { placements, rowUnits: row };
-}
-
-function computeMasonryLayout(tileDefs, width, height, gap) {
-  if (!tileDefs.length || width <= 0 || height <= 0) {
-    return {
-      cols: PANEL_GRID_COLS,
-      indicatorRowUnits: 1,
-      indicatorPlacements: [],
-      blockPlacements: [],
-      indicatorHeight: height,
-    };
-  }
-
-  // --- Indicator buttons (spans dinâmicos por contagem) ---
-  const indTiles = tileDefs.filter((t) => t.kind === 'indicator');
-
-  // --- Bollinger / S/R interval / PPHL interval / Quick-EMA sections (separate flex blocks) ---
-  // `kind:'handler'` = manipulador no padrão caixa (ver GroupBox.jsx / descriptors.js). bb/vwap/
-  // quickEma ainda têm renderers próprios (a converter num passo futuro).
-  const blocks = tileDefs
-    .filter((t) => t.kind === 'bb' || t.kind === 'vwap' || t.kind === 'handler' || t.kind === 'quickEma')
-    .map((t) => ({
-      ...t,
-      colSpan: BANDS_COL_SPAN,
-      rowSpan: t.kind === 'handler' ? groupBoxRowSpan(t.data.descriptor, t.data.api.groups)
-        : t.kind === 'bb' ? bbRowSpan(t.data.groups) : t.kind === 'vwap' ? VWAP_ROW_SPAN
-        : quickEmaRowSpan(t.data.groups),
-    }));
-
-  // Pack indicator buttons — spans calculados dinamicamente pelo número de tiles
-  const indPack = packIndicatorsFill(indTiles);
-  const indFilledPlacements = indPack.placements;
-  const indRowUnits = indTiles.length ? Math.max(1, indPack.rowUnits) : 0;
-
-  // Total rows for the shared CSS grid
-  const hasIndSection = indTiles.length > 0;
-  const totalIndRowUnits = indRowUnits;
-
-  // Height split between indicator section and bands section
-  const blockRowUnits = blocks.reduce((sum, b) => sum + b.rowSpan, 0);
-  const totalUnits    = (hasIndSection ? totalIndRowUnits : 0) + blockRowUnits;
-  const sectionCount  = (hasIndSection ? 1 : 0) + blocks.length;
-  const gapTotal      = sectionCount > 1 ? (sectionCount - 1) * gap : 0;
-  const availableH    = height - gapTotal;
-
-  const indicatorHeightRaw = hasIndSection && totalUnits > 0
-    ? (availableH * totalIndRowUnits) / totalUnits
-    : 0;
-  // Piso mínimo: evita que o painel force tiles a alturas ilegíveis quando há muitos manipuladores.
-  const indicatorHeight = hasIndSection
-    ? Math.max(indicatorHeightRaw, totalIndRowUnits * MIN_ROW_UNIT_PX)
-    : 0;
-
-  const blockTotalHeight = Math.max(0, availableH - indicatorHeight);
-  const indH = indicatorHeight || height;
-
-  // Compute pixel dims now that totalIndRowUnits is known
-  const dimsFor = (colSpan, rowSpan) =>
-    tilePixelDims(colSpan, rowSpan, totalIndRowUnits, width, indH, gap, PANEL_GRID_COLS);
-
-  const indicatorPlacements = [
-    ...indFilledPlacements.map((t) => ({ ...t, dims: dimsFor(t.colSpan, t.rowSpan) })),
-  ];
-
-  const blockPlacements = blocks.map((tile) => {
-    const blockW = tilePixelDims(tile.colSpan, 1, 1, width, 0, gap, PANEL_GRID_COLS).w;
-    const rawH = blockRowUnits > 0
-      ? (blockTotalHeight * tile.rowSpan) / blockRowUnits
-      : blockTotalHeight;
-    return {
-      ...tile,
-      dims: {
-        w: blockW,
-        h: Math.max(rawH, tile.rowSpan * MIN_ROW_UNIT_PX),
-      },
-    };
-  });
-
-  return {
-    cols: PANEL_GRID_COLS,
-    indicatorRowUnits: hasIndSection ? totalIndRowUnits : 0,
-    indicatorPlacements,
-    blockPlacements,
-    indicatorHeight,
-  };
-}
-
-const panelTileShell = {
-  boxSizing: 'border-box',
-  minWidth: 0,
-  minHeight: 0,
-  overflow: 'hidden',
-  display: 'flex',
-  alignItems: 'stretch',
-  width: '100%',
-  height: '100%',
-};
-
-const panelBlockShell = {
-  ...panelTileShell,
-  background: 'rgba(0,0,0,0.5)',
-  borderRadius: 4,
-  padding: PANEL_TILE_PAD,
-};
-
-const panelBandsShell = {
-  ...panelBlockShell,
-};
-
-const blockInner = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: PANEL_GAP,
-  height: '100%',
-  width: '100%',
-  minHeight: 0,
-};
-
-const blockRow = {
-  flex: 1,
-  minHeight: 0,
-  display: 'flex',
-  alignItems: 'stretch',
-};
 
 const topToggleBtn = {
   pointerEvents: 'auto',
@@ -1594,29 +1240,36 @@ const topToggleBtn = {
   transition: 'all 0.15s',
 };
 
-function renderIndicatorTile({ id, color, tipKey, active, darkText }, dims, t, toggleIndicator) {
-  // Texto vertical quando o tile é significativamente mais alto do que largo
-  const isVertical = dims.h > dims.w * 1.3;
+/** Card "Indicadores rápidos" — todos os botões simples de indicador (EMA9/21/50/200, Ichi,
+ *  Band., RSI, R80, R50, SL) num wrap de toggles. Seguem o intervalo do próprio gráfico. */
+function renderQuickIndicatorsCard(indicators, t, toggleIndicator) {
+  if (!indicators.length) return null;
+  const hint = t('chart.panel.chart_interval_hint');
   return (
-    <PanelTip text={t(tipKey)}>
-      <button
-        type="button"
-        onClick={() => toggleIndicator(id)}
-        style={{
-          ...panelBtn(active, color, darkText, dims),
-          writingMode: isVertical ? 'vertical-lr' : undefined,
-          letterSpacing: isVertical ? 1 : undefined,
-        }}
-      >
-        {COMPACT_LABELS[id] ?? id}
-      </button>
-    </PanelTip>
+    <div style={panelCard()}>
+      <div style={cardHeader()}>
+        <span style={cardTitle()}>{t('chart.panel.card_quick_indicators')}</span>
+        <span style={cardSectionLabel()}>{hint === 'chart.panel.chart_interval_hint' ? 'intervalo do gráfico' : hint}</span>
+      </div>
+      <div style={toggleGroup(true)}>
+        {indicators.map((ind) => (
+          <PanelTip key={ind.id} text={t(ind.tipKey)}>
+            <button
+              type="button"
+              onClick={() => toggleIndicator(ind.id)}
+              style={{ ...toggleBtn(ind.active, ind.color), flex: '0 0 auto', minWidth: 30 }}
+            >
+              {COMPACT_LABELS[ind.id] ?? ind.id}
+            </button>
+          </PanelTip>
+        ))}
+      </div>
+    </div>
   );
 }
 
-function renderQuickEmaGroupsTile(
+function renderQuickEmaCard(
   { groups },
-  dims,
   t,
   addQuickEmaGroup,
   removeQuickEmaGroup,
@@ -1625,144 +1278,83 @@ function renderQuickEmaGroupsTile(
   updateQuickEmaGroupBandPct,
   updateQuickEmaGroupBandPeriod,
 ) {
-  const innerW = dims.w - PANEL_TILE_PAD * 2;
-  const innerH = dims.h - PANEL_TILE_PAD * 2;
-  const rows = quickEmaRowSpan(groups);
-  const rowH = (innerH - (rows - 1) * PANEL_GAP) / rows;
-  const colW = (innerW - (QUICK_EMA_GRID_COLS - 1) * PANEL_GAP) / QUICK_EMA_GRID_COLS;
-  const selectDims = { w: colW * 3 + PANEL_GAP * 2, h: rowH };
-  const removeDims = { w: colW, h: rowH };
-  const periodDims = { w: colW, h: rowH };
-  const bandPeriodDims = { w: innerW, h: rowH };
-  const bandDims = { w: colW * 2 + PANEL_GAP, h: rowH };
-  const addDims = { w: innerW, h: rowH };
-  const titleDims = { w: innerW, h: rowH };
-
-  const cells = groups.flatMap((g, i) => {
-    const ivRow = SECTION_TITLE_ROWS + i * QUICK_EMA_GROUP_ROWS + 1;
-    const pRow = SECTION_TITLE_ROWS + i * QUICK_EMA_GROUP_ROWS + 2;
-    const bandSelectRow = SECTION_TITLE_ROWS + i * QUICK_EMA_GROUP_ROWS + 3;
-    const pctRow = SECTION_TITLE_ROWS + i * QUICK_EMA_GROUP_ROWS + 4;
-    const bandColor = g.bandPeriod ? (QUICK_EMA_PERIOD_COLORS[g.bandPeriod] ?? '#94a3b8') : '#475569';
-    return [
-      <div key={`${g.id}-iv`} style={{ gridColumn: '1 / span 3', gridRow: `${ivRow}`, display: 'flex', alignItems: 'stretch' }}>
-        <PanelTip text={t('chart.tip.quick_ema_interval')}>
-          <select
-            value={g.interval}
-            onChange={(e) => updateQuickEmaGroupInterval(g.id, e.target.value)}
-            style={{ ...panelSelect('#94a3b8', selectDims), fontSize: scaleFontSize(selectDims, 0.35, 9, 13) }}
-          >
-            {OVERLAY_MA_INTERVALS.map((iv) => <option key={iv} value={iv}>{iv}</option>)}
-          </select>
-        </PanelTip>
-      </div>,
-      <div key={`${g.id}-rm`} style={{ gridColumn: '4', gridRow: `${ivRow}`, display: 'flex', alignItems: 'stretch' }}>
-        <PanelTip text={t('chart.tip.quick_ema_remove')}>
-          <button
-            type="button"
-            onClick={() => removeQuickEmaGroup(g.id)}
-            style={{ ...panelBtn(false, '#f87171', false, removeDims), fontSize: 11 }}
-          >
-            ×
-          </button>
-        </PanelTip>
-      </div>,
-      ...QUICK_EMA_PERIODS.map((p, pi) => {
-        const active = g.periods.includes(p);
-        const color = QUICK_EMA_PERIOD_COLORS[p];
-        return (
-          <div key={`${g.id}-${p}`} style={{ gridColumn: `${pi + 1}`, gridRow: `${pRow}`, display: 'flex', alignItems: 'stretch' }}>
-            <PanelTip text={t('chart.tip.quick_ema_period', p, g.interval)}>
-              <button
-                type="button"
-                onClick={() => toggleQuickEmaGroupPeriod(g.id, p)}
-                style={panelBtn(active, color, false, periodDims)}
-              >
-                {p}
-              </button>
-            </PanelTip>
-          </div>
-        );
-      }),
-      <div key={`${g.id}-bandperiod`} style={{ gridColumn: `1 / span ${QUICK_EMA_GRID_COLS}`, gridRow: `${bandSelectRow}`, display: 'flex', alignItems: 'stretch' }}>
-        <PanelTip text={t('chart.tip.quick_ema_band_period')}>
-          <select
-            value={g.bandPeriod ?? 'off'}
-            onChange={(e) => updateQuickEmaGroupBandPeriod(g.id, e.target.value === 'off' ? null : e.target.value)}
-            style={{
-              ...panelSelect(bandColor, bandPeriodDims),
-              fontSize: scaleFontSize(bandPeriodDims, 0.35, 9, 13),
-              opacity: g.bandPeriod ? 1 : 0.6,
-            }}
-          >
-            <option value="off">OFF</option>
-            {QUICK_EMA_PERIODS.map((p) => <option key={p} value={p}>{`EMA${p}`}</option>)}
-          </select>
-        </PanelTip>
-      </div>,
-      <div key={`${g.id}-above`} style={{ gridColumn: '1 / span 2', gridRow: `${pctRow}`, display: 'flex', alignItems: 'stretch' }}>
-        <PanelTip text={t('chart.tip.quick_ema_band_above')}>
-          <select
-            value={g.abovePct ?? 'off'}
-            onChange={(e) => updateQuickEmaGroupBandPct(g.id, 'above', e.target.value === 'off' ? null : (e.target.value === QUICK_EMA_BAND_ADAPTIVE ? QUICK_EMA_BAND_ADAPTIVE : Number(e.target.value)))}
-            style={{
-              ...panelSelect(g.abovePct === QUICK_EMA_BAND_ADAPTIVE ? '#facc15' : (g.abovePct != null ? '#22c55e' : '#475569'), bandDims),
-              fontSize: scaleFontSize(bandDims, 0.35, 9, 13),
-              opacity: g.abovePct != null ? 1 : 0.6,
-            }}
-          >
-            <option value="off">OFF</option>
-            <option value={QUICK_EMA_BAND_ADAPTIVE}>ADAPT</option>
-            {QUICK_EMA_BAND_PCT_OPTIONS.map((pct) => <option key={pct} value={pct}>{`+${pct}%`}</option>)}
-          </select>
-        </PanelTip>
-      </div>,
-      <div key={`${g.id}-below`} style={{ gridColumn: '3 / span 2', gridRow: `${pctRow}`, display: 'flex', alignItems: 'stretch' }}>
-        <PanelTip text={t('chart.tip.quick_ema_band_below')}>
-          <select
-            value={g.belowPct ?? 'off'}
-            onChange={(e) => updateQuickEmaGroupBandPct(g.id, 'below', e.target.value === 'off' ? null : (e.target.value === QUICK_EMA_BAND_ADAPTIVE ? QUICK_EMA_BAND_ADAPTIVE : Number(e.target.value)))}
-            style={{
-              ...panelSelect(g.belowPct === QUICK_EMA_BAND_ADAPTIVE ? '#facc15' : (g.belowPct != null ? '#f87171' : '#475569'), bandDims),
-              fontSize: scaleFontSize(bandDims, 0.35, 9, 13),
-              opacity: g.belowPct != null ? 1 : 0.6,
-            }}
-          >
-            <option value="off">OFF</option>
-            <option value={QUICK_EMA_BAND_ADAPTIVE}>ADAPT</option>
-            {QUICK_EMA_BAND_PCT_OPTIONS.map((pct) => <option key={pct} value={pct}>{`-${pct}%`}</option>)}
-          </select>
-        </PanelTip>
-      </div>,
-    ];
-  });
+  const pctSelect = (kind, g) => {
+    const val = kind === 'above' ? g.abovePct : g.belowPct;
+    const accent = val === QUICK_EMA_BAND_ADAPTIVE ? '#facc15' : (val != null ? (kind === 'above' ? '#22c55e' : '#f87171') : undefined);
+    const sign = kind === 'above' ? '+' : '-';
+    return (
+      <PanelTip text={t(kind === 'above' ? 'chart.tip.quick_ema_band_above' : 'chart.tip.quick_ema_band_below')}>
+        <select
+          value={val ?? 'off'}
+          onChange={(e) => updateQuickEmaGroupBandPct(g.id, kind, e.target.value === 'off' ? null : (e.target.value === QUICK_EMA_BAND_ADAPTIVE ? QUICK_EMA_BAND_ADAPTIVE : Number(e.target.value)))}
+          style={{ ...cardSelect(accent), opacity: val != null ? 1 : 0.6 }}
+        >
+          <option value="off">OFF</option>
+          <option value={QUICK_EMA_BAND_ADAPTIVE}>ADAPT</option>
+          {QUICK_EMA_BAND_PCT_OPTIONS.map((pct) => <option key={pct} value={pct}>{`${sign}${pct}%`}</option>)}
+        </select>
+      </PanelTip>
+    );
+  };
 
   return (
-    <div style={{
-      display: 'grid',
-      gridTemplateColumns: `repeat(${QUICK_EMA_GRID_COLS}, 1fr)`,
-      gridTemplateRows: `repeat(${rows}, 1fr)`,
-      gap: PANEL_GAP,
-      width: innerW,
-      height: innerH,
-      boxSizing: 'border-box',
-    }}>
-      <div style={{ gridColumn: `1 / span ${QUICK_EMA_GRID_COLS}`, gridRow: '1', ...scaleSectionTitle(titleDims) }}>
-        EMA rápida
+    <div style={panelCard()}>
+      <div style={cardHeader()}>
+        <span style={cardTitle()}>EMA rápida</span>
+        <span style={cardSectionLabel()}>{groups.length}/{MAX_QUICK_EMA_GROUPS}</span>
       </div>
-      {cells}
+      {groups.map((g) => {
+        const bandColor = g.bandPeriod ? (QUICK_EMA_PERIOD_COLORS[g.bandPeriod] ?? '#94a3b8') : undefined;
+        return (
+          <div key={g.id} style={HANDLER_SUB_BLOCK}>
+            <div style={toggleGroup()}>
+              <div style={{ flex: 3, minWidth: 0, display: 'flex' }}>
+                <PanelTip text={t('chart.tip.quick_ema_interval')}>
+                  <select value={g.interval} onChange={(e) => updateQuickEmaGroupInterval(g.id, e.target.value)} style={cardSelect()}>
+                    {OVERLAY_MA_INTERVALS.map((iv) => <option key={iv} value={iv}>{iv}</option>)}
+                  </select>
+                </PanelTip>
+              </div>
+              <PanelTip text={t('chart.tip.quick_ema_remove')}>
+                <button type="button" onClick={() => removeQuickEmaGroup(g.id)} style={cardCloseBtn()}>×</button>
+              </PanelTip>
+            </div>
+            <div style={toggleGroup()}>
+              {QUICK_EMA_PERIODS.map((p) => (
+                <PanelTip key={p} text={t('chart.tip.quick_ema_period', p, g.interval)}>
+                  <button
+                    type="button"
+                    onClick={() => toggleQuickEmaGroupPeriod(g.id, p)}
+                    style={toggleBtn(g.periods.includes(p), QUICK_EMA_PERIOD_COLORS[p])}
+                  >
+                    {p}
+                  </button>
+                </PanelTip>
+              ))}
+            </div>
+            <div style={toggleGroup()}>
+              <PanelTip text={t('chart.tip.quick_ema_band_period')}>
+                <select
+                  value={g.bandPeriod ?? 'off'}
+                  onChange={(e) => updateQuickEmaGroupBandPeriod(g.id, e.target.value === 'off' ? null : e.target.value)}
+                  style={{ ...cardSelect(bandColor), opacity: g.bandPeriod ? 1 : 0.6 }}
+                >
+                  <option value="off">OFF</option>
+                  {QUICK_EMA_PERIODS.map((p) => <option key={p} value={p}>{`EMA${p}`}</option>)}
+                </select>
+              </PanelTip>
+            </div>
+            <div style={toggleGroup()}>
+              <div style={{ flex: 1, minWidth: 0, display: 'flex' }}>{pctSelect('above', g)}</div>
+              <div style={{ flex: 1, minWidth: 0, display: 'flex' }}>{pctSelect('below', g)}</div>
+            </div>
+          </div>
+        );
+      })}
       {groups.length < MAX_QUICK_EMA_GROUPS && (
-        <div style={{ gridColumn: `1 / span ${QUICK_EMA_GRID_COLS}`, gridRow: `${rows}`, display: 'flex', alignItems: 'stretch' }}>
-          <PanelTip text={t('chart.tip.quick_ema_add')}>
-            <button
-              type="button"
-              onClick={addQuickEmaGroup}
-              style={panelBtn(false, '#94a3b8', false, addDims)}
-            >
-              + Intervalo
-            </button>
-          </PanelTip>
-        </div>
+        <PanelTip text={t('chart.tip.quick_ema_add')}>
+          <button type="button" onClick={addQuickEmaGroup} style={cardAddBtn()}>+ Intervalo</button>
+        </PanelTip>
       )}
     </div>
   );
@@ -1790,7 +1382,6 @@ function ChartIndicatorPanel({
   setVwap,
   vwapSlopeHighlightOn,
   setVwapSlopeHighlightOn,
-  overlayMaLoading,
   panelButtons,
   collapsed,
   onToggleCollapse,
@@ -1859,26 +1450,14 @@ function ChartIndicatorPanel({
     Math.max(160, Math.round(chartSize.h * PANEL_MAX_HEIGHT_RATIO)),
   );
 
-  // 1ª passada: só pra descobrir quantas "row units" o conteúdo precisa (contagem de
-  // indicadores/blocos ativos), sem travar altura ainda.
-  const probeLayout = useMemo(
-    () => computeMasonryLayout(tileDefs, contentWidth, 10000, PANEL_GAP, overlayMaLoading),
-    [tileDefs, contentWidth, overlayMaLoading],
-  );
-  const totalRowUnits = probeLayout.indicatorRowUnits
-    + probeLayout.blockPlacements.reduce((sum, b) => sum + b.rowSpan, 0);
-  const panelHeight = Math.min(Math.max(MIN_ROW_UNIT_PX, totalRowUnits * PANEL_ROW_PX), maxPanelHeight);
-
-  const layout = useMemo(
-    () => computeMasonryLayout(tileDefs, contentWidth, panelHeight, PANEL_GAP, overlayMaLoading),
-    [tileDefs, contentWidth, panelHeight, overlayMaLoading],
-  );
+  const indicatorTiles = tileDefs.filter((tile) => tile.kind === 'indicator').map((tile) => tile.data);
+  const blocks = tileDefs.filter((tile) => tile.kind !== 'indicator');
 
   if (!tileDefs.length) {
     return null;
   }
 
-  const toggleBtn = (
+  const collapseToggle = (
     <Tooltip text={t(collapsed ? 'chart.tip.panel_expand' : 'chart.tip.panel_collapse')} position="bottom" portal>
       <button
         type="button"
@@ -1907,7 +1486,7 @@ function ChartIndicatorPanel({
         pointerEvents: 'none',
       }}
     >
-      {collapsed && toggleBtn}
+      {collapsed && collapseToggle}
 
       {!collapsed && (
         <div
@@ -1925,8 +1504,8 @@ function ChartIndicatorPanel({
             flexDirection: 'column',
             gap: PANEL_GAP,
             padding: PANEL_CARD_PAD,
-            background: 'rgba(8,12,20,0.96)',
-            border: '1px solid #334155',
+            background: 'var(--color-pnl-bg)',
+            border: '1px solid var(--color-pnl-border-2)',
             borderRadius: 6,
             boxShadow: '0 10px 28px rgba(0,0,0,0.55)',
           }}
@@ -1954,8 +1533,8 @@ function ChartIndicatorPanel({
                   borderRadius: 3,
                   border: 'none',
                   cursor: 'pointer',
-                  color: panelTab === id ? '#e2e8f0' : '#475569',
-                  background: panelTab === id ? '#334155' : 'transparent',
+                  color: panelTab === id ? 'var(--color-pnl-text)' : 'var(--color-pnl-muted)',
+                  background: panelTab === id ? 'var(--color-pnl-toggle)' : 'transparent',
                 }}
               >
                 {label}
@@ -1967,71 +1546,31 @@ function ChartIndicatorPanel({
             <div style={{ flex: 1, minHeight: 0, width: '100%', display: 'flex', flexDirection: 'column' }}>
               <TradeHistoryPanel symbol={selectedChart?.symbol} gateFavorites={gateFavorites} />
             </div>
-          ) : layout.indicatorPlacements.length > 0 && (
+          ) : (
             <>
-            {/* Legend: deixa claro que este bloco acompanha o intervalo do próprio gráfico —
-                diferente das bandas abaixo (Bollinger/VWAP/EMA rápida), que têm intervalo próprio. */}
-            <div style={{
-              flexShrink: 0, fontSize: 9, letterSpacing: 1, color: '#64748b', fontFamily: 'monospace',
-              textTransform: 'uppercase', lineHeight: 1,
-            }}>
-              Indicadores · intervalo do gráfico
-            </div>
-            <div style={{
-              flex: layout.blockPlacements.length > 0 ? layout.indicatorRowUnits : 1,
-              minHeight: layout.indicatorRowUnits * MIN_ROW_UNIT_PX,
-              display: 'grid',
-              gridTemplateColumns: `repeat(${layout.cols}, 1fr)`,
-              gridTemplateRows: `repeat(${layout.indicatorRowUnits}, 1fr)`,
-              gridAutoFlow: 'dense',
-              gap: PANEL_GAP,
-              width: '100%',
-            }}
-            >
-              {layout.indicatorPlacements.map((tile) => (
-                <div
-                  key={tile.key}
-                  style={{
-                    ...(tile.kind === 'indicator' ? panelTileShell : panelBlockShell),
-                    gridColumn: tile.gridColumn,
-                    gridRow: tile.gridRow,
-                  }}
-                >
-                  {tile.kind === 'indicator' && renderIndicatorTile(tile.data, tile.dims, t, toggleIndicator)}
+              {renderQuickIndicatorsCard(indicatorTiles, t, toggleIndicator)}
+              {blocks.map((tile) => (
+                <div key={tile.key}>
+                  {tile.kind === 'handler' && (
+                    <GroupBox descriptor={tile.data.descriptor} api={tile.data.api} t={t} />
+                  )}
+                  {tile.kind === 'bb' && renderBollingerCard(
+                    tile.data, t, addBbGroup, removeBbGroup, updateBbGroup, toggleBbGroupFlag, botPermInterval,
+                  )}
+                  {tile.kind === 'vwap' && renderVwapCard(t, vwap, setVwap, vwapSlopeHighlightOn, setVwapSlopeHighlightOn)}
+                  {tile.kind === 'quickEma' && renderQuickEmaCard(
+                    tile.data, t,
+                    addQuickEmaGroup, removeQuickEmaGroup, updateQuickEmaGroupInterval, toggleQuickEmaGroupPeriod,
+                    updateQuickEmaGroupBandPct, updateQuickEmaGroupBandPeriod,
+                  )}
                 </div>
               ))}
-            </div>
             </>
           )}
-
-          {panelTab !== 'executed' && layout.blockPlacements.map((tile) => (
-            <div
-              key={tile.key}
-              style={{
-                ...panelBandsShell,
-                flex: tile.rowSpan,
-                minHeight: tile.rowSpan * MIN_ROW_UNIT_PX,
-                width: `${(tile.colSpan / PANEL_GRID_COLS) * 100}%`,
-              }}
-            >
-              {tile.kind === 'handler' && (
-                <GroupBox descriptor={tile.data.descriptor} api={tile.data.api} dims={tile.dims} t={t} />
-              )}
-              {tile.kind === 'bb' && renderBollingerTile(
-                tile.data, tile.dims, t, addBbGroup, removeBbGroup, updateBbGroup, toggleBbGroupFlag, botPermInterval,
-              )}
-              {tile.kind === 'vwap' && renderVwapTile(tile.dims, t, vwap, setVwap, vwapSlopeHighlightOn, setVwapSlopeHighlightOn)}
-              {tile.kind === 'quickEma' && renderQuickEmaGroupsTile(
-                tile.data, tile.dims, t,
-                addQuickEmaGroup, removeQuickEmaGroup, updateQuickEmaGroupInterval, toggleQuickEmaGroupPeriod,
-                updateQuickEmaGroupBandPct, updateQuickEmaGroupBandPeriod,
-              )}
-            </div>
-          ))}
         </div>
       )}
 
-      {!collapsed && toggleBtn}
+      {!collapsed && collapseToggle}
     </div>
   );
 }
@@ -3425,7 +2964,7 @@ export default function CandlestickChart() {
   const zigzagGroup = handlers.zigzag?.groups.find((g) => g.enabled) ?? null;
   // Nível do filtro PERM (1h/30m/15m) configurado no favorito Bollinger Bands do manipulador
   // (bot ao vivo) pra essa moeda — ver resolveBollingerBandsPermFilter (multitradeChart.js).
-  // Usado tanto pelo botão PERM manual (renderBollingerTile) quanto pra ligar showPermFilter
+  // Usado tanto pelo botão PERM manual (renderBollingerCard) quanto pra ligar showPermFilter
   // sozinho no grupo auto-sincronizado (TRADE_BB_GROUP_ID, ver hasForcedBollinger abaixo).
   // null = sem favorito BB pra essa moeda, filtro desligado no bot, ou intervalo sem
   // equivalente aqui (4h, 2h, 5m…) — o botão PERM fica sem efeito nesse caso.

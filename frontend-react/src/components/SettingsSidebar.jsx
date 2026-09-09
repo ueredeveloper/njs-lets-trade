@@ -16,6 +16,7 @@ import { RSI_MOMENTUM_ALL_INTERVALS, RSI_MOMENTUM_BB_PERIODS, RSI_MOMENTUM_BB_ST
 import { useLanguage } from '../contexts/LanguageContext';
 import { useI18n } from '../i18n';
 import { useCurrency } from '../contexts/CurrencyContext';
+import { PALETTES } from '../utils/palettes';
 import { PERIOD_DEFAULT_COLORS, MAX_OVERLAY_SLOTS,
   CURRENCY_PANEL_WIDTH_MIN, CURRENCY_PANEL_WIDTH_MAX, CURRENCY_PANEL_WIDTH_DEFAULT,
   VWAP_SLOPE_HIGHLIGHT_LOOKBACKS, CANDLE_COUNT_DISPLAY_OPTIONS, VALID_ACTIVE_INDICATORS,
@@ -23,26 +24,6 @@ import { PERIOD_DEFAULT_COLORS, MAX_OVERLAY_SLOTS,
 
 const OVERLAY_SETTING_INTERVALS = ['15m', '30m', '1h', '4h', '1d'];
 const OVERLAY_SETTING_PERIODS   = ['9', '21', '50', '200'];
-
-const PALETTES = [
-  { id: 'default',    name: 'Padrão / Default',
-    colors: { p1: '#260d33', p2: '#003f69', p3: '#106b87', p4: '#157a8c', p5: '#b3aca4' } },
-  { id: 'dracula',   name: 'Dracula',
-    colors: { p1: '#13131f', p2: '#1e1e2e', p3: '#2d2d44', p4: '#bd93f9', p5: '#f8f8f2' } },
-  { id: 'tokyo',     name: 'Tokyo Night',
-    colors: { p1: '#0a0c16', p2: '#13152a', p3: '#1e2035', p4: '#7aa2f7', p5: '#c0caf5' } },
-  { id: 'light',     name: 'Claro / Light',
-    colors: { p1: '#f1f5f9', p2: '#dde3ec', p3: '#94a3b8', p4: '#0369a1', p5: '#0f172a' } },
-  { id: 'light-warm',name: 'Claro Quente / Warm Light',
-    colors: { p1: '#faf7f2', p2: '#ede8df', p3: '#a8a29e', p4: '#b45309', p5: '#1c1917' } },
-];
-
-function applyPalette(colors) {
-  const root = document.documentElement;
-  Object.entries(colors).forEach(([k, v]) => root.style.setProperty(`--color-${k}`, v));
-  document.body.style.backgroundColor = colors.p1;
-  window.dispatchEvent(new Event('palette-updated'));
-}
 
 const RELOAD_INTERVALS = ['all', '1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '8h', '1d'];
 
@@ -119,7 +100,7 @@ export default function SettingsSidebar({ open, onClose }) {
     uiPrefs, setDefaultChartInterval, setCommonChartIntervals, setPanelVisible,
     setFavoriteButtonVisible, favoriteButtonKeys,
     setOverlaySlotsPreference, setCurrencyPanelWidth,
-    setStatsDefaults, setVwapAnchorDefault, setVwapSlopeHighlightDefault, setChartEngineDefault,
+    setStatsDefaults, setVwapAnchorDefault, setVwapSlopeHighlightDefault, setChartEngineDefault, setPaletteDefault,
     setCandleCountDisplayDefault, setDefaultActiveIndicator, setFontScale,
     setRsiMomentumCuratedDefault,
     chartIntervalOptions, panelKeys,
@@ -160,7 +141,7 @@ export default function SettingsSidebar({ open, onClose }) {
   }
 
   const [openSection, setOpenSection]     = useState(null);
-  const [activeId, setActiveId]           = useState('default');
+  const activeId = uiPrefs.paletteDefault ?? 'default';
   const [reloadSymbol, setReloadSymbol]   = useState('');
   const [reloadInterval, setReloadInterval] = useState('all');
   const [reloadState, setReloadState]     = useState(null);
@@ -1971,7 +1952,7 @@ export default function SettingsSidebar({ open, onClose }) {
               {PALETTES.map((palette) => {
                 const isActive = activeId === palette.id;
                 return (
-                  <button key={palette.id} onClick={() => { setActiveId(palette.id); applyPalette(palette.colors); }}
+                  <button key={palette.id} onClick={() => setPaletteDefault(palette.id)}
                     className={`flex flex-col gap-2 p-3 rounded border text-left transition-all ${isActive ? 'border-p4 bg-p2/60' : 'border-p2/40 hover:border-p3 hover:bg-p2/30'}`}>
                     <div className="flex items-center justify-between">
                       <span className="text-p5 text-xs font-medium">{palette.name}</span>

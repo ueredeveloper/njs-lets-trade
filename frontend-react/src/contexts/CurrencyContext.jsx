@@ -65,10 +65,12 @@ import {
   normalizeStatsDefaults,
   normalizeCommonChartIntervals,
   normalizeChartEngine,
+  normalizePaletteDefault,
   normalizeCandleCountDisplay,
   normalizeFontScale,
   normalizeRsiMomentumCuratedDefault,
 } from '../utils/uiPreferences';
+import { applyPaletteById } from '../utils/palettes';
 
 const CurrencyContext = createContext(null);
 
@@ -940,6 +942,15 @@ export function CurrencyProvider({ children }) {
     });
   }, []);
 
+  const setPaletteDefault = useCallback((id) => {
+    setUiPrefsState((prev) => {
+      const next = { ...prev, paletteDefault: normalizePaletteDefault(id) };
+      saveUiPreferences(next);
+      applyPaletteById(next.paletteDefault);
+      return next;
+    });
+  }, []);
+
   const setCandleCountDisplayDefault = useCallback((count) => {
     setUiPrefsState((prev) => {
       const next = { ...prev, candleCountDisplayDefault: normalizeCandleCountDisplay(count) };
@@ -1097,6 +1108,12 @@ export function CurrencyProvider({ children }) {
     const root = document.getElementById('root') ?? document.body;
     if (root) root.style.zoom = z === 1 ? '' : String(z);
   }, [uiPrefs.fontScale?.site]);
+
+  // Paleta de cor do site — mantém o React como fonte da verdade (main.jsx já aplicou a paleta
+  // salva pré-paint; isto cobre StrictMode / hot-reload / mudança em runtime). Idempotente.
+  useEffect(() => {
+    applyPaletteById(uiPrefs.paletteDefault);
+  }, [uiPrefs.paletteDefault]);
 
   useEffect(() => {
     setFilters((prev) => {
@@ -1304,6 +1321,7 @@ export function CurrencyProvider({ children }) {
         setCurrencyPanelWidth,
         setStatsDefaults,
         setChartEngineDefault,
+        setPaletteDefault,
         setCandleCountDisplayDefault,
         setFontScale,
         setRsiMomentumCuratedDefault,

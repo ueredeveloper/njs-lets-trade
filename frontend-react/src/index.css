@@ -6,14 +6,30 @@
   --color-p3: #106b87;
   --color-p4: #157a8c;
   --color-p5: #b3aca4;
+
+  /* Painel de indicadores do gráfico — 12 roles (ver src/utils/palettes.js). Estes são os
+     valores da paleta "default"; applyPalette() sobrescreve em runtime conforme a paleta ativa.
+     Ficam aqui só pra o primeiro paint (antes do JS) não piscar. */
+  --color-pnl-bg: #260d33;
+  --color-pnl-card: #003f69;
+  --color-pnl-input: #003f69;
+  --color-pnl-border: #106b87;
+  --color-pnl-border-2: #157a8c;
+  --color-pnl-accent: #157a8c;
+  --color-pnl-on: #4ade80;
+  --color-pnl-danger: #f87171;
+  --color-pnl-warn: #facc15;
+  --color-pnl-text: #b3aca4;
+  --color-pnl-muted: #b3aca499;
+  --color-pnl-toggle: #106b87;
 }
 
 body {
   margin: 0;
   font-family: system-ui, sans-serif;
   font-size: 12px;
-  background-color: #1a0a25;
-  color: #b3aca4;
+  background-color: var(--color-p1, #1a0a25);
+  color: var(--color-p5, #b3aca4);
   height: 100dvh;
   overflow: hidden;
 }
@@ -34,8 +50,8 @@ html {
 
 /* Scrollbar sutil */
 ::-webkit-scrollbar { width: 5px; height: 5px; }
-::-webkit-scrollbar-track { background: #260d33; }
-::-webkit-scrollbar-thumb { background: #157a8c; border-radius: 4px; }
+::-webkit-scrollbar-track { background: var(--color-p1, #260d33); }
+::-webkit-scrollbar-thumb { background: var(--color-p4, #157a8c); border-radius: 4px; }
 
 /* Bordas de tabela — padrão favorito TX */
 .lt-table-head {

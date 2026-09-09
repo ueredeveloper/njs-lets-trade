@@ -1,5 +1,6 @@
 import { DEFAULT_PERM_CLOUD_TONES, normalizeEmaPersistCloudTones } from './emaCrossPersistenceCloud';
 import { INTERVAL_MS } from './chartView';
+import { PALETTE_IDS, DEFAULT_PALETTE_ID } from './palettes';
 
 const STORAGE_KEY = 'lets_trade_ui_prefs';
 
@@ -424,6 +425,11 @@ export function normalizeChartEngine(raw) {
   return CHART_ENGINE_OPTIONS.includes(raw) ? raw : DEFAULT_CHART_ENGINE;
 }
 
+/** Paleta de cor do site (Configurações → Paleta de cores). Ver src/utils/palettes.js. */
+export function normalizePaletteDefault(raw) {
+  return PALETTE_IDS.includes(raw) ? raw : DEFAULT_PALETTE_ID;
+}
+
 /** Quantidade de candles visíveis ao abrir o gráfico (janela inicial) — mesmos presets da
  *  toolbar do gráfico (ver LAST_CANDLE_PRESETS em CandlestickChart.jsx). Editável em
  *  Configurações → Quantidade de candles padrão. */
@@ -547,6 +553,7 @@ export const DEFAULT_UI_PREFS = {
   currencyPanelWidth: CURRENCY_PANEL_WIDTH_DEFAULT,
   statsDefaults: normalizeStatsDefaults(DEFAULT_STATS),
   chartEngineDefault: DEFAULT_CHART_ENGINE,
+  paletteDefault: DEFAULT_PALETTE_ID,
   candleCountDisplayDefault: DEFAULT_CANDLE_COUNT_DISPLAY,
   fontScale: { ...FONT_SCALE_DEFAULT },
   // Símbolo do bot exclusivo (curated) do RSI Momentum que preenche por padrão o formulário
@@ -596,6 +603,7 @@ function cloneDefaults() {
     currencyPanelWidth: CURRENCY_PANEL_WIDTH_DEFAULT,
     statsDefaults: normalizeStatsDefaults(DEFAULT_STATS),
     chartEngineDefault: DEFAULT_CHART_ENGINE,
+    paletteDefault: DEFAULT_PALETTE_ID,
     candleCountDisplayDefault: DEFAULT_CANDLE_COUNT_DISPLAY,
     fontScale: { ...FONT_SCALE_DEFAULT },
     rsiMomentumCuratedDefault: '',
@@ -719,6 +727,9 @@ export function loadUiPreferences() {
     }
     if (parsed.chartEngineDefault !== undefined) {
       result.chartEngineDefault = normalizeChartEngine(parsed.chartEngineDefault);
+    }
+    if (parsed.paletteDefault !== undefined) {
+      result.paletteDefault = normalizePaletteDefault(parsed.paletteDefault);
     }
     if (parsed.candleCountDisplayDefault !== undefined) {
       result.candleCountDisplayDefault = normalizeCandleCountDisplay(parsed.candleCountDisplayDefault);
