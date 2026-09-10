@@ -1,6 +1,7 @@
 import { DEFAULT_PERM_CLOUD_TONES, normalizeEmaPersistCloudTones } from './emaCrossPersistenceCloud';
 import { INTERVAL_MS } from './chartView';
 import { PALETTE_IDS, DEFAULT_PALETTE_ID } from './palettes';
+import { normalizeSrRankSel } from './srRank';
 
 const STORAGE_KEY = 'lets_trade_ui_prefs';
 
@@ -246,11 +247,25 @@ export const normalizeZigzagCandleCount = normalizeIndicatorCandleCount;
 
 /** S/R do gráfico é ROLANTE: pra os últimos SR_ROLL_WIDTH candles-âncora, roda o detector sobre
  *  os `srCandleCount` candles anteriores a cada âncora. Aqui o "count" é o LOOKBACK por âncora
- *  (não a janela total), por isso o default é bem menor que o dos outros pivôs. */
-export const DEFAULT_SR_CANDLE_COUNT = 50;
+ *  (não a janela total). Default x300 pra a janela alcançar a estrutura de fundo do trade
+ *  momentum (entrada perto do suporte, alvo na 3ª resistência). */
+export const DEFAULT_SR_CANDLE_COUNT = 300;
 export function normalizeSrCandleCount(raw) {
   const n = Math.round(Number(raw));
   return INDICATOR_CANDLE_COUNT_OPTIONS.includes(n) ? n : DEFAULT_SR_CANDLE_COUNT;
+}
+
+/** Postos de S/R exibidos por padrão num grupo novo — um seletor por tipo (fundido "calcular" +
+ *  "ver": só se calcula o que se vê). O trade momentum vive ENTRE o 1º suporte abaixo (S1, piso do
+ *  filtro de desconto na entrada) e a 3ª resistência acima (R3, alvo) — mesmos postos do backtest
+ *  (entrySupportRank / exitResistanceRank). Formato: `'all'` ou lista de inteiros (ver srRank.js). */
+export const DEFAULT_SR_SUPPORT_RANKS = [1];
+export const DEFAULT_SR_RESISTANCE_RANKS = [3];
+export function normalizeSrSupportRanks(raw) {
+  return normalizeSrRankSel(raw, [...DEFAULT_SR_SUPPORT_RANKS]);
+}
+export function normalizeSrResistanceRanks(raw) {
+  return normalizeSrRankSel(raw, [...DEFAULT_SR_RESISTANCE_RANKS]);
 }
 
 /** Estilo de desenho do S/R rolante no gráfico:
@@ -258,7 +273,7 @@ export function normalizeSrCandleCount(raw) {
  *  - 'traco'   segmentos curtos soltos por âncora (sem ligar as âncoras entre si)
  *  - 'linhas'  clássico: linhas de preço de ponta a ponta, só do conjunto da âncora mais recente */
 export const SR_STYLE_OPTIONS = ['degrau', 'traco', 'linhas'];
-export const DEFAULT_SR_STYLE = 'degrau';
+export const DEFAULT_SR_STYLE = 'traco';
 export function normalizeSrStyle(raw) {
   return SR_STYLE_OPTIONS.includes(raw) ? raw : DEFAULT_SR_STYLE;
 }
@@ -526,6 +541,8 @@ export const DEFAULT_UI_PREFS = {
   srIntervalDefault: DEFAULT_SR_INTERVAL,
   srCandleCountDefault: DEFAULT_SR_CANDLE_COUNT,
   srStyleDefault: DEFAULT_SR_STYLE,
+  srSupportRanksDefault: [...DEFAULT_SR_SUPPORT_RANKS],
+  srResistanceRanksDefault: [...DEFAULT_SR_RESISTANCE_RANKS],
   pphlIntervalDefault: DEFAULT_PPHL_INTERVAL,
   pphlCandleCountDefault: DEFAULT_INDICATOR_CANDLE_COUNT,
   wfractalsIntervalDefault: DEFAULT_WFRACTALS_INTERVAL,
@@ -576,6 +593,8 @@ function cloneDefaults() {
     srIntervalDefault: DEFAULT_SR_INTERVAL,
     srCandleCountDefault: DEFAULT_SR_CANDLE_COUNT,
     srStyleDefault: DEFAULT_SR_STYLE,
+    srSupportRanksDefault: [...DEFAULT_SR_SUPPORT_RANKS],
+    srResistanceRanksDefault: [...DEFAULT_SR_RESISTANCE_RANKS],
     pphlIntervalDefault: DEFAULT_PPHL_INTERVAL,
     pphlCandleCountDefault: DEFAULT_INDICATOR_CANDLE_COUNT,
     wfractalsIntervalDefault: DEFAULT_WFRACTALS_INTERVAL,
@@ -646,6 +665,12 @@ export function loadUiPreferences() {
     }
     if (parsed.srStyleDefault !== undefined) {
       result.srStyleDefault = normalizeSrStyle(parsed.srStyleDefault);
+    }
+    if (parsed.srSupportRanksDefault !== undefined) {
+      result.srSupportRanksDefault = normalizeSrSupportRanks(parsed.srSupportRanksDefault);
+    }
+    if (parsed.srResistanceRanksDefault !== undefined) {
+      result.srResistanceRanksDefault = normalizeSrResistanceRanks(parsed.srResistanceRanksDefault);
     }
     if (parsed.pphlIntervalDefault !== undefined) {
       result.pphlIntervalDefault = normalizePphlInterval(parsed.pphlIntervalDefault);

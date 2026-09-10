@@ -430,6 +430,18 @@ export async function getRsiMomentumCuratedBot(symbol) {
   return body;
 }
 
+/** Remove o bot exclusivo (curated) de uma moeda do RSI Momentum — apaga o favorito e o estado
+ *  do bot. Só funciona sem posição/ordem aberta (fase WATCHING/FAILED); BOUGHT/PENDING recusa
+ *  (venda antes). Alimenta o botão "Remover bot exclusivo" das Estatísticas. */
+export async function removeRsiMomentumCuratedBot(symbol) {
+  const res = await fetch(`/services/sb/rsi-momentum-curated?symbol=${encodeURIComponent(symbol)}`, {
+    method: 'DELETE',
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.hint ? `${body.error} — ${body.hint}` : (body.error ?? `HTTP ${res.status}`));
+  return body;
+}
+
 /** Lista todas as moedas com bot exclusivo (curated) do RSI Momentum — [{ symbol, exchange,
  *  phase }]. Alimenta o seletor "Carregar configuração salva" das Estatísticas. */
 export async function getRsiMomentumCuratedList() {

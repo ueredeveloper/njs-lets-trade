@@ -30,7 +30,9 @@ npm run bots
 bots**. O launcher hospeda um `http.Server` **só loopback** (default
 `127.0.0.1:4100`):
 - **Leitura:** `GET /internal/health`, `/internal/info` (versão, git, pids/uptime,
-  `pendingAction`, `lastAction`), `/internal/log`.
+  `pendingAction`, `lastAction`), `/internal/log` (colapsa as linhas repetitivas de
+  heartbeat — scan RSI Momentum, `📋 Moedas avaliadas` — só a última de cada bloco
+  com `(N×, hh:mm→hh:mm)`; `?raw=1` desliga).
 - **Controle (opt-in):** `POST /internal/{restart,update,stop,pull}` — só com
   `INTERNAL_ADMIN_TOKEN` + `INTERNAL_ADMIN_ALLOW_CONTROL=true`. A API **não roda
   git/npm/shell**: grava a intenção (`botControl.js`) e mata o launcher com um

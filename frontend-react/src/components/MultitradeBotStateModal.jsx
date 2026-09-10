@@ -265,6 +265,7 @@ export default function MultitradeBotStateModal({
   onConfirm,
   onCancel,
   onBuyMore,
+  onRemoveCurated,
 }) {
   const activeEntries = useMemo(
     () => (entries ?? []).filter(e => e.enabled !== false),
@@ -281,6 +282,8 @@ export default function MultitradeBotStateModal({
   const [error, setError] = useState(null);
   const [confirmSold, setConfirmSold] = useState(false);
   const [showEditBought, setShowEditBought] = useState(false);
+  const [confirmRemoveCurated, setConfirmRemoveCurated] = useState(false);
+  const [removingCurated, setRemovingCurated] = useState(false);
 
   const entry = activeEntries.find(e => normalizeStrategyId(e.strategyId) === strategyId)
     ?? activeEntries[0];
@@ -299,7 +302,22 @@ export default function MultitradeBotStateModal({
     setError(null);
     setConfirmSold(false);
     setShowEditBought(false);
+    setConfirmRemoveCurated(false);
   }, [entry?.id, entry?.phase, entry?.buyPrice, entry?.buyQty, entry?.buyTime]);
+
+  async function handleRemoveCurated() {
+    if (!entry || !onRemoveCurated) return;
+    setRemovingCurated(true);
+    setError(null);
+    try {
+      await onRemoveCurated(entry);
+      onCancel?.();
+    } catch (err) {
+      setError(err?.message ?? 'Não foi possível remover o bot exclusivo');
+    } finally {
+      setRemovingCurated(false);
+    }
+  }
 
   async function applyPhase(nextPhase) {
     if (!entry) return;
@@ -527,6 +545,33 @@ export default function MultitradeBotStateModal({
                     </button>
                   </ActionCard>
                 </>
+              )}
+
+              {/* Bot exclusivo (curado): remover de vez — só quando não há posição/ordem aberta
+                  (WATCHING ou FAILED). O favorito e o estado do bot são apagados; o bot para de
+                  operar esta moeda. */}
+              {entry?.curated && onRemoveCurated && (isWatching || isFailed) && (
+                <ActionCard
+                  number={2}
+                  title="Remover bot exclusivo"
+                  when="Apaga a moeda do bot exclusivo (config curada + favorito). O bot para de comprar/vender esta moeda. Reinicie o bot depois."
+                  accent="#ef4444"
+                >
+                  <label className="flex items-start gap-2 cursor-pointer">
+                    <input type="checkbox" checked={confirmRemoveCurated}
+                      onChange={e => setConfirmRemoveCurated(e.target.checked)}
+                      className="mt-0.5 shrink-0 accent-red-500" />
+                    <span className="text-[10px] text-p5/70 leading-snug">
+                      Confirmo que quero parar de operar {symbol} e apagar o bot exclusivo dela
+                    </span>
+                  </label>
+                  <button type="button" disabled={removingCurated || !confirmRemoveCurated}
+                    onClick={handleRemoveCurated}
+                    className="w-full py-2 rounded text-[10px] font-bold disabled:opacity-40"
+                    style={{ background: '#ef444422', color: '#fca5a5', border: '1px solid #ef444455' }}>
+                    {removingCurated ? 'Removendo…' : 'Remover bot exclusivo'}
+                  </button>
+                </ActionCard>
               )}
             </div>
           </div>

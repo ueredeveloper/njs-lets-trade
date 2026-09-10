@@ -19,7 +19,6 @@ const MONO = 'monospace';
 export function panelCard() {
   return {
     border: '1px solid var(--color-pnl-border)',
-    background: 'var(--color-pnl-card)',
     borderRadius: 6,
     padding: 6,
     display: 'flex',

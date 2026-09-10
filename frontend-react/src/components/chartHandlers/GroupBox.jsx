@@ -60,6 +60,47 @@ const CUSTOM_CELLS = {
       </div>
     );
   },
+  // S/R — UM seletor de postos por tipo (campos `support` / `resistance`; fundido calcular+ver).
+  // Botões S1 S2 S3 (postos exatos, multi-seleção) + "Todas" ('all' = todos os postos, sem teto).
+  // `f.srType` = 'support'|'resistance'.
+  srRanks(group, api, color, t, f) {
+    const key = f.key;
+    const isRes = f.srType === 'resistance';
+    const prefix = isRes ? 'R' : 'S';
+    const typeLabel = isRes ? 'RES' : 'SUP';
+    const offDefault = isRes ? [3] : [1]; // ao desligar "Todas": volta pro posto-padrão do tipo
+    const sel = group[key];
+    const isAll = sel === 'all';
+    const list = Array.isArray(sel) ? sel : [];
+    const has = (r) => isAll || list.includes(r);
+    const set = (next) => api.update(group.id, { [key]: next });
+    const toggleRank = (r) => {
+      const base = isAll ? [1, 2, 3] : list;
+      const next = base.includes(r) ? base.filter((x) => x !== r) : [...base, r].sort((a, b) => a - b);
+      set(next.length ? next : offDefault);
+    };
+    return (
+      <div style={{ display: 'flex', alignItems: 'stretch', gap: 2, width: '100%' }}>
+        <span style={{ ...cardSectionLabel(), alignSelf: 'center', width: 30, flexShrink: 0 }}>{typeLabel}</span>
+        {[1, 2, 3].map((r) => (
+          <button
+            key={r} type="button" aria-pressed={has(r)}
+            onClick={(e) => { e.stopPropagation(); toggleRank(r); }}
+            style={toggleBtn(has(r) && !isAll, color)}
+          >
+            {prefix}{r}
+          </button>
+        ))}
+        <button
+          type="button" aria-pressed={isAll}
+          onClick={(e) => { e.stopPropagation(); set(isAll ? offDefault : 'all'); }}
+          style={toggleBtn(isAll, color)}
+        >
+          Todas
+        </button>
+      </div>
+    );
+  },
   // Camadas da nuvem PERM (principal + confirmação + confirmação-da-confirmação) — rótulo = o
   // intervalo REAL que cada uma liga, derivado do intervalo principal.
   permLayers(group, api) {
@@ -117,7 +158,7 @@ function FieldCell({ cell, group, color, descriptor, api, t }) {
     if (!f) return null;
     if (f.kind === 'custom') {
       const fn = typeof f.render === 'string' ? CUSTOM_CELLS[f.render] : f.render;
-      return fn ? fn(group, api, color, t) : null;
+      return fn ? fn(group, api, color, t, f) : null;
     }
     const numeric = Array.isArray(f.options) && f.options.every((o) => typeof o === 'number');
     return (

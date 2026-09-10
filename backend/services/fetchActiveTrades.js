@@ -1,14 +1,12 @@
 const router          = require('express').Router();
-const { gateRequest } = require('../gate/getGateClient');
+const { gateRequest }    = require('../gate/getGateClient');
+const { binanceRequest } = require('../binance/tradeClient');
 const getTickers      = require('../binance/cachedTicker24hr');
-const crypto          = require('crypto');
 const path            = require('path');
 const fs              = require('fs');
 
 const MIN_HOLDING_USDT_DEFAULT = 3;
-const BINANCE_BASE     = 'https://api.binance.com';
 const BALANCE_TTL_MS   = 30_000;
-const CLOCK_TTL_MS     = 60 * 60_000;
 
 /** Stablecoins USD-pegged exibidas como caixa (preço = 1). */
 const STABLE_USD = new Set(['USDT', 'USDC']);
@@ -53,22 +51,6 @@ function writeIgnoreList(set) {
   fs.writeFileSync(IGNORE_FILE, JSON.stringify([...set], null, 2));
 }
 
-let binanceClockOffset = 0;
-let binanceClockSyncAt = 0;
-
-async function syncBinanceClock() {
-  if (Date.now() - binanceClockSyncAt < CLOCK_TTL_MS) return;
-  try {
-    const res  = await fetch(`${BINANCE_BASE}/api/v3/time`);
-    const data = await res.json();
-    binanceClockOffset = Math.floor(data.serverTime / 1000) - Math.floor(Date.now() / 1000);
-    binanceClockSyncAt = Date.now();
-  } catch (err) {
-    console.error(`⚠️  syncBinanceClock falhou (offset zerado): ${err.message}`);
-    binanceClockOffset = 0;
-  }
-}
-
 let balanceCache    = null;
 let balanceCachedAt = 0;
 
@@ -95,23 +77,15 @@ async function getGateBalances() {
 
 async function getBinanceBalances() {
   try {
-    const apiKey = process.env.BINANCE_API_KEY;
-    const secret = process.env.BINANCE_SECRET_KEY;
-    if (!apiKey || !secret) return { ok: false, map: new Map() };
-
-    await syncBinanceClock();
-    const timestamp = Math.floor(Date.now() / 1000 + binanceClockOffset) * 1000;
-    const qs  = `timestamp=${timestamp}&recvWindow=10000`;
-    const sig = crypto.createHmac('sha256', secret).update(qs).digest('hex');
-    const res = await fetch(`${BINANCE_BASE}/api/v3/account?${qs}&signature=${sig}`, {
-      headers: { 'X-MBX-APIKEY': apiKey },
-    });
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      console.error('[active-trades] Binance balance error:', res.status, body.msg ?? '');
+    if (!process.env.BINANCE_API_KEY || !process.env.BINANCE_SECRET_KEY) {
       return { ok: false, map: new Map() };
     }
-    const data = await res.json();
+
+    // binanceRequest (tradeClient.js) mantém o offset de relógio em ms e, no erro
+    // "Timestamp for this request ... outside of the recvWindow", ressincroniza com
+    // /api/v3/time e tenta de novo uma vez — o relógio do Windows deste host derrapa
+    // dezenas de segundos entre resyncs (ver "Gate.io clock synchronization" no CLAUDE.md).
+    const data = await binanceRequest('GET', '/api/v3/account');
     const map = new Map();
     for (const b of data.balances || []) {
       const qty = qtyTotal([b.free, b.locked]);
@@ -149,7 +123,12 @@ router.get('/active-trades', async (req, res) => {
   try {
     if (!balanceCache || Date.now() - balanceCachedAt > BALANCE_TTL_MS) {
       const [gate, binance] = await Promise.all([getGateBalances(), getBinanceBalances()]);
-      balanceCache    = { gate, binance };
+      // Se uma corretora falhar agora (relógio, rede), mantém o último saldo bom dela
+      // em vez de sumir com todas as moedas daquela exchange no favorito AT.
+      balanceCache = {
+        gate:    gate.ok    ? gate    : (balanceCache?.gate?.ok    ? balanceCache.gate    : gate),
+        binance: binance.ok ? binance : (balanceCache?.binance?.ok ? balanceCache.binance : binance),
+      };
       balanceCachedAt = Date.now();
     }
     const { ok: gateOk, map: gateBalances }      = balanceCache.gate;

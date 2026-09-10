@@ -57,7 +57,8 @@ export function makeGroupStore(descriptor) {
     for (const fl of flags) {
       out[fl.key] = typeof g?.[fl.key] === 'boolean' ? g[fl.key] : gd[fl.key];
     }
-    return typeof descriptor.sanitize === 'function' ? descriptor.sanitize(out, i) : out;
+    // 3º arg = grupo CRU (pré-normalização) — deixa o descriptor migrar campos renomeados.
+    return typeof descriptor.sanitize === 'function' ? descriptor.sanitize(out, i, g) : out;
   }
 
   /** 1º acesso sem nada salvo: um grupo só, tudo desligado (padrão defaultBbGroups). */

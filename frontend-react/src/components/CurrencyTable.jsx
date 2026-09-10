@@ -2569,6 +2569,10 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
             onBuyMore={({ strategyId, amountUsdt, mode, pullbackPct, oco }) => buyMultitradeMore({
               symbol: mtStateModal.symbol, strategyId, amountUsdt, mode, pullbackPct, oco,
             })}
+            onRemoveCurated={async (entry) => {
+              await removeMultitradeEntry(entry.id);
+              setMtStateModal(null);
+            }}
             onCancel={() => setMtStateModal(null)}
           />
         </ModalPortal>

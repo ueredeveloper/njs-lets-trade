@@ -146,9 +146,11 @@ function startInternalAdminServer(getState, opts = {}) {
 
     if (route === 'GET /internal/log') {
       const n = parseInt(url.searchParams.get('lines') || '100', 10);
+      // `?raw=1` desliga o colapso das linhas de heartbeat (scan/moedas avaliadas).
+      const raw = ['1', 'true', 'yes'].includes((url.searchParams.get('raw') || '').toLowerCase());
       return send(res, 200, {
         file: botLog.LOG_FILE,
-        lines: botLog.tail(Number.isFinite(n) ? n : 100),
+        lines: botLog.tail(Number.isFinite(n) ? n : 100, { collapse: !raw }),
       });
     }
 

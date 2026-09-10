@@ -22,6 +22,8 @@ import {
   DEFAULT_PREV_DAY_CLOUD_INTERVAL, DEFAULT_PREV_DAY_CLOUD_CANDLE_COUNT,
   normalizeSrInterval, normalizeSrCandleCount, normalizeSrStyle,
   SR_STYLE_OPTIONS, DEFAULT_SR_INTERVAL, DEFAULT_SR_CANDLE_COUNT, DEFAULT_SR_STYLE,
+  normalizeSrSupportRanks, normalizeSrResistanceRanks,
+  DEFAULT_SR_SUPPORT_RANKS, DEFAULT_SR_RESISTANCE_RANKS,
   normalizeEmaPersistCloudInterval, normalizeEmaPersistCloudLayers,
   DEFAULT_EMA_PERSIST_CLOUD_INTERVAL, DEFAULT_EMA_PERSIST_CLOUD_LAYERS,
   DEFAULT_CHOP_INTERVAL, DEFAULT_MACD_INTERVAL,
@@ -289,10 +291,6 @@ export const SR_STYLE_LABELS = { degrau: 'Degrau', traco: 'Traço', linhas: 'Lin
  *  S/R no gráfico continuam azul=suporte / rosa=resistência por tipo). */
 export const SR_PALETTE = ['#facc15', '#f472b6', '#38bdf8', '#a3e635'];
 
-const SR_LINE_COUNT_OPTIONS = [1, 2, 3];
-const srSupFmt = (n) => ['S1', 'S1–S2', 'S1–S3 (todas)'][n - 1] ?? `S1–S${n}`;
-const srResFmt = (n) => ['R1', 'R1–R2', 'R1–R3 (todas)'][n - 1] ?? `R1–R${n}`;
-
 const sr = {
   id: 'sr',
   title: 'S/R',
@@ -309,31 +307,45 @@ const sr = {
     { key: 'interval', kind: 'select', options: PICKER_INTERVALS, default: DEFAULT_SR_INTERVAL, fmt: (v) => `S/R ${v}` },
     { key: 'candleCount', kind: 'select', options: INDICATOR_CANDLE_COUNT_OPTIONS, default: DEFAULT_SR_CANDLE_COUNT, fmt: (n) => `x${n}` },
     { key: 'style', kind: 'select', options: SR_STYLE_OPTIONS, default: DEFAULT_SR_STYLE, fmt: (v) => SR_STYLE_LABELS[v] ?? v },
-    { key: 'calcSupport', kind: 'select', options: SR_LINE_COUNT_OPTIONS, default: 1, fmt: srSupFmt },
-    { key: 'calcResistance', kind: 'select', options: SR_LINE_COUNT_OPTIONS, default: 3, fmt: srResFmt },
-    { key: 'showSupport', kind: 'select', options: SR_LINE_COUNT_OPTIONS, default: 1, fmt: srSupFmt },
-    { key: 'showResistance', kind: 'select', options: SR_LINE_COUNT_OPTIONS, default: 3, fmt: srResFmt },
+    // UM seletor de postos por tipo (fundido "calcular" + "ver" — só se calcula o que se vê).
+    // 'all' (S1, S2, … sem teto) ou lista exata [1, 3]. Botões em GroupBox (render 'srRanks').
+    // Padrão: S1 (1º suporte abaixo, piso da entrada) + R3 (3ª resistência, alvo) = o corredor do
+    // trade momentum. Espelha entrySupportRank / exitResistanceRank do backtest.
+    { key: 'support',    kind: 'custom', render: 'srRanks', srType: 'support',    normalize: normalizeSrSupportRanks,    default: () => [...DEFAULT_SR_SUPPORT_RANKS] },
+    { key: 'resistance', kind: 'custom', render: 'srRanks', srType: 'resistance', normalize: normalizeSrResistanceRanks, default: () => [...DEFAULT_SR_RESISTANCE_RANKS] },
   ],
   flags: [{ key: 'enabled', label: 'ON', default: false }],
   cols: 4,
   rows: [
     [{ ref: 'field:interval', span: 3 }, { ref: 'remove', span: 1 }],
     [{ ref: 'flag:enabled', span: 1 }, { ref: 'field:candleCount', span: 1 }, { ref: 'field:style', span: 2 }],
-    [{ ref: 'field:calcSupport', span: 2 }, { ref: 'field:calcResistance', span: 2 }],
-    [{ ref: 'field:showSupport', span: 2 }, { ref: 'field:showResistance', span: 2 }],
+    [{ ref: 'field:support', span: 4 }],
+    [{ ref: 'field:resistance', span: 4 }],
   ],
   // O rolling (10×detectSupportResistance por instância) roda no componente — ver chartSrConfigs.
   // Aqui só valida `enabled`; a config real é montada lá com pivotRawCache + âncora do visível.
   toDrawConfig(g) {
     if (!g.enabled) return null;
     return { id: g.id, interval: g.interval, candleCount: g.candleCount, style: g.style,
-      calcSupport: g.calcSupport, calcResistance: g.calcResistance,
-      showSupport: g.showSupport, showResistance: g.showResistance };
+      support: g.support, resistance: g.resistance };
+  },
+  // Grupo salvo antes da fusão calc/ver: usa o que estava VISÍVEL (showSupport/showResistance),
+  // caindo pra o "calcular" e por fim pro default.
+  sanitize(out, i, g) {
+    if (g && g.support === undefined && (g.showSupport !== undefined || g.calcSupport !== undefined)) {
+      out.support = normalizeSrSupportRanks(g.showSupport ?? g.calcSupport);
+    }
+    if (g && g.resistance === undefined && (g.showResistance !== undefined || g.calcResistance !== undefined)) {
+      out.resistance = normalizeSrResistanceRanks(g.showResistance ?? g.calcResistance);
+    }
+    return out;
   },
   migrateFromLegacy: makeLegacyMigrator(['sr'], (p) => ({
     interval: normalizeSrInterval(p.srIntervalDefault),
     candleCount: normalizeSrCandleCount(p.srCandleCountDefault),
     style: normalizeSrStyle(p.srStyleDefault),
+    support: normalizeSrSupportRanks(p.srSupportRanksDefault),
+    resistance: normalizeSrResistanceRanks(p.srResistanceRanksDefault),
   })),
 };
 

@@ -1201,6 +1201,48 @@ router.post('/rsi-momentum-curated', getUserId, async (req, res) => {
   });
 });
 
+// DELETE /services/sb/rsi-momentum-curated?symbol= — remove o bot exclusivo (curated) de uma
+// moeda: apaga o favorito (multitrade_favorites) e o estado runtime (rsi_multi_bot_state), só
+// quando NÃO há posição/ordem aberta (phase WATCHING ou FAILED). BOUGHT/PENDING têm posição real
+// na corretora que este endpoint não vende/cancela — recusa e pede pra vender antes. Alimenta o
+// botão "Remover bot exclusivo" das Estatísticas → Momentum RSI.
+router.delete('/rsi-momentum-curated', getUserId, async (req, res) => {
+  const symbol = String(req.query?.symbol ?? '').trim().toUpperCase();
+  if (!symbol) return res.status(400).json({ error: 'symbol obrigatório' });
+
+  const { data: state } = await supabase
+    .from('rsi_multi_bot_state')
+    .select('id, phase')
+    .eq('symbol', symbol)
+    .eq('strategy_id', 'rsi-momentum')
+    .maybeSingle();
+
+  if (state && !['WATCHING', 'FAILED'].includes(state.phase)) {
+    return res.status(409).json({
+      error: `${symbol} está em ${state.phase} — há posição/ordem aberta na corretora.`,
+      hint: 'Venda a posição (ou cancele a ordem) antes de remover o bot exclusivo.',
+    });
+  }
+
+  const { error: favErr } = await supabase
+    .from('multitrade_favorites')
+    .delete()
+    .eq('user_id', req.userId)
+    .eq('symbol', symbol)
+    .eq('strategy_id', 'rsi-momentum');
+  if (favErr) return sbError(res, favErr, 'DELETE rsi-momentum-curated (favorite)');
+
+  const { error: stateErr } = await supabase
+    .from('rsi_multi_bot_state')
+    .delete()
+    .eq('symbol', symbol)
+    .eq('strategy_id', 'rsi-momentum')
+    .in('phase', ['WATCHING', 'FAILED']);
+  if (stateErr) return sbError(res, stateErr, 'DELETE rsi-momentum-curated (state)');
+
+  res.json({ ok: true, deleted: symbol });
+});
+
 // PUT|PATCH /services/sb/multitrade-favorites/:id
 async function updateMultitrade(req, res) {
   const row = bodyToMultitradeRow(req.userId, req.body);

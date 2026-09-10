@@ -28,7 +28,7 @@ import {
 } from '../utils/chartPanelStyles';
 import GroupBox from './chartHandlers/GroupBox';
 import { SR_PALETTE } from '../utils/chartHandlers/descriptors';
-import { sliceRankedSrLevels } from '../utils/srRank';
+import { sliceRankedSrLevels, srRankAllowed } from '../utils/srRank';
 import { HANDLER_DESCRIPTORS, HANDLER_GROUP_STORES } from '../utils/chartHandlers/descriptors';
 import { useGroupedHandlers } from '../utils/chartHandlers/useGroupedHandlers';
 
@@ -1244,13 +1244,8 @@ const topToggleBtn = {
  *  Band., RSI, R80, R50, SL) num wrap de toggles. Seguem o intervalo do próprio gráfico. */
 function renderQuickIndicatorsCard(indicators, t, toggleIndicator) {
   if (!indicators.length) return null;
-  const hint = t('chart.panel.chart_interval_hint');
   return (
     <div style={panelCard()}>
-      <div style={cardHeader()}>
-        <span style={cardTitle()}>{t('chart.panel.card_quick_indicators')}</span>
-        <span style={cardSectionLabel()}>{hint === 'chart.panel.chart_interval_hint' ? 'intervalo do gráfico' : hint}</span>
-      </div>
       <div style={toggleGroup(true)}>
         {indicators.map((ind) => (
           <PanelTip key={ind.id} text={t(ind.tipKey)}>
@@ -1300,7 +1295,7 @@ function renderQuickEmaCard(
   return (
     <div style={panelCard()}>
       <div style={cardHeader()}>
-        <span style={cardTitle()}>EMA rápida</span>
+        <span style={cardTitle()}>EMA</span>
         <span style={cardSectionLabel()}>{groups.length}/{MAX_QUICK_EMA_GROUPS}</span>
       </div>
       {groups.map((g) => {
@@ -1353,7 +1348,7 @@ function renderQuickEmaCard(
       })}
       {groups.length < MAX_QUICK_EMA_GROUPS && (
         <PanelTip text={t('chart.tip.quick_ema_add')}>
-          <button type="button" onClick={addQuickEmaGroup} style={cardAddBtn()}>+ Intervalo</button>
+          <button type="button" onClick={addQuickEmaGroup} style={cardAddBtn()}>+ EMA</button>
         </PanelTip>
       )}
     </div>
@@ -1969,7 +1964,7 @@ function buildMultitradeMarkLines(candlesticks, interval, markers, DL, LEFT_PAD)
 
 const srPriceEq = (a, b) => a != null && b != null && Math.abs(a - b) / b < 1e-6;
 
-function buildSrMarkLines(levels, entrySupport = null, exitResistance = null, showSupport = 3, showResistance = 3) {
+function buildSrMarkLines(levels, entrySupport = null, exitResistance = null, showSupport = 'all', showResistance = 'all') {
   if (!levels?.length) return [];
   const maxTouches = Math.max(...levels.map(l => l.touches ?? 1));
   // Posto por proximidade do preço (R1 = resistência mais baixa, S1 = suporte mais alto) —
@@ -1978,12 +1973,14 @@ function buildSrMarkLines(levels, entrySupport = null, exitResistance = null, sh
   for (const type of ['resistance', 'support']) {
     (levels.filter(l => l.type === type)
       .sort((a, b) => (type === 'resistance' ? a.price - b.price : b.price - a.price)))
-      .forEach((l, i) => rankOf.set(l, i + 1));
+      // posto já vindo de sliceRankedSrLevels (rankeado no conjunto completo) tem prioridade —
+      // senão um R3 desenhado sozinho viraria "R1".
+      .forEach((l, i) => rankOf.set(l, Number.isFinite(Number(l.rank)) ? Number(l.rank) : i + 1));
   }
-  // "Mostrar" (showSupport/showResistance): filtra por posto.
+  // "Mostrar" (showSupport/showResistance): 'all' ou postos exatos [1, 3].
   return levels.filter((l) => {
     const r = rankOf.get(l) ?? 1;
-    return r <= (l.type === 'resistance' ? showResistance : showSupport);
+    return srRankAllowed(l.type === 'resistance' ? showResistance : showSupport, r);
   }).map(lvl => {
     const isRes = lvl.type === 'resistance';
     const rank = rankOf.get(lvl) ?? 1;
@@ -2245,7 +2242,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
   // cada instância. `srConfigs` = 1+ instâncias (ou 1 do override de trade das Estatísticas).
   const srMarkData = srConfigs.flatMap((cfg) => {
     const latest = cfg.rolling?.length ? cfg.rolling[cfg.rolling.length - 1].levels : cfg.levels;
-    return buildSrMarkLines(latest, cfg.entrySupport, cfg.exitResistance, cfg.showSupport ?? 3, cfg.showResistance ?? 3);
+    return buildSrMarkLines(latest, cfg.entrySupport, cfg.exitResistance, cfg.showSupport ?? 'all', cfg.showResistance ?? 'all');
   });
   const pivotMarkers = showPphl ? buildPivotMarkers(pphlConfig?.points, candlesticks, DL, LEFT_PAD, interval) : { highs: [], lows: [] };
   const wfractalsMarkers = showWfractals ? buildPivotMarkers(wfractalsConfig?.points, candlesticks, DL, LEFT_PAD, interval) : { highs: [], lows: [] };
@@ -4984,8 +4981,9 @@ export default function CandlestickChart() {
 
   // S/R MULTI-INSTÂNCIA: uma config por instância habilitada (ou uma única do override do trade
   // das Estatísticas). Cada config: { id, color, interval, style, rolling:[{time,levels}],
-  // showSupport, showResistance }. "Calcular" (calcSupport/calcResistance) fatia os níveis já aqui;
-  // "Mostrar" (showSupport/showResistance) viaja na config e o LW/ECharts filtra por rank.
+  // showSupport, showResistance }. UM seletor por tipo (g.support / g.resistance): fatia os níveis
+  // já aqui (rankeados sobre o conjunto completo, posto preservado) e viaja na config como
+  // showSupport/showResistance pro LW/ECharts (que hoje só re-confere o posto já preservado).
   const chartSrConfigs = useMemo(() => {
     if (srTradeOverride) {
       const buyMs = chartTradeMarkers?.find((m) => m.side === 'buy')?.time ?? chartTradeMarkers?.[0]?.time;
@@ -5001,8 +4999,8 @@ export default function CandlestickChart() {
         entrySupport: chartSrOverride.entrySupport ?? null,
         exitResistance: chartSrOverride.exitResistance ?? null,
         tradeWindow: Number.isFinite(fromMs) && toMs > fromMs ? { fromMs, toMs } : null,
-        showSupport: 3,
-        showResistance: 3,
+        showSupport: 'all',
+        showResistance: 'all',
       }];
     }
     if (!enabledSrGroups.length || chartPanelButtons.sr === false) return [];
@@ -5015,12 +5013,12 @@ export default function CandlestickChart() {
       for (let k = Math.max(0, slice.length - SR_ROLL_WIDTH); k < slice.length; k++) {
         const from = Math.max(0, k - g.candleCount + 1);
         let levels = detectSupportResistance(slice.slice(from, k + 1), {});
-        levels = sliceRankedSrLevels(levels, g.calcSupport, g.calcResistance);
+        levels = sliceRankedSrLevels(levels, g.support, g.resistance);
         if (levels.length) rolling.push({ time: Number(slice[k].openTime), levels });
       }
       out.push({
         id: g.id, color: SR_PALETTE[i % SR_PALETTE.length], interval: g.interval, style: g.style,
-        rolling, showSupport: g.showSupport, showResistance: g.showResistance,
+        rolling, showSupport: g.support, showResistance: g.resistance,
       });
     });
     return out;

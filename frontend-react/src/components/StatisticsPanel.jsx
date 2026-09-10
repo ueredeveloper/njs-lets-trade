@@ -3,7 +3,7 @@ import { useCurrency } from '../contexts/CurrencyContext';
 import {
   fetchRsiOversoldRecovery, fetchRsiThresholdBacktest, fetchRsiThresholdBacktestMarket, fetchMaCrossStats, fetchBollingerBandRecovery, fetchCandlesticksAndCloud,
   fetchVwapBandsStats, saveRsiMomentumStatsSearch, getRsiMomentumStatsSearches, clearRsiMomentumStatsSearches,
-  addRsiMomentumCuratedBot, getRsiMomentumCuratedBot, getRsiMomentumCuratedList, getRsiMomentumConfig,
+  addRsiMomentumCuratedBot, removeRsiMomentumCuratedBot, getRsiMomentumCuratedBot, getRsiMomentumCuratedList, getRsiMomentumConfig,
 } from '../services/api';
 import Tooltip from './Tooltip';
 import SrZoneChart from './SrZoneChart';
@@ -1332,6 +1332,32 @@ function RsiMomentumStats({ autoCalc }) {
     }
   }
 
+  /** Remove a moeda do campo Símbolo do bot exclusivo (curated) do RSI Momentum — apaga o
+   *  favorito + estado do bot. Só funciona sem posição aberta (WATCHING/FAILED). É como o
+   *  usuário para de operar uma moeda curada (ex.: SKYAI). Reiniciar o bot depois. */
+  async function handleRemoveCuratedBot() {
+    const sym = (symbol || '').trim().toUpperCase();
+    if (!sym || curatedState.loading) return;
+    const fill = (s, map) => Object.entries(map).reduce((acc, [k, v]) => acc.split(`{${k}}`).join(v), s);
+    if (!window.confirm(fill(t('stats.curated_remove_confirm'), { symbol: sym }))) return;
+    setCuratedState({ loading: true, msg: null, err: null });
+    try {
+      await removeRsiMomentumCuratedBot(sym);
+      setCuratedInfo(null);
+      setSelectedConfigOption((prev) => (prev === `curated:${sym}` ? 'global' : prev));
+      setCuratedState({ loading: false, msg: fill(t('stats.curated_remove_ok'), { symbol: sym }), err: null });
+      getRsiMomentumCuratedList().then((list) => {
+        const curatedOpts = (Array.isArray(list) ? list : []).map((c) => ({
+          value: `curated:${c.symbol}`,
+          label: `Bot exclusivo: ${c.symbol}`,
+        }));
+        setConfigOptions([{ value: 'global', label: 'Configuração geral' }, ...curatedOpts]);
+      }).catch(() => {});
+    } catch (err) {
+      setCuratedState({ loading: false, msg: null, err: err.message });
+    }
+  }
+
   /** Preenche os campos do painel (RSI_MOM_PREFS + intervalo + corretora) com a config atual do
    *  bot exclusivo da moeda no campo Símbolo. Busca a config na hora (não depende de uma pesquisa
    *  anterior). O usuário ajusta, clica em Buscar e depois em "Salvar bot exclusivo" pra salvar de
@@ -2358,6 +2384,17 @@ function RsiMomentumStats({ autoCalc }) {
             >
               {curatedEditing ? '✏️' : '💾'} {t(curatedEditing ? 'stats.curated_edit' : 'stats.curated_save')}
             </button>
+            {curatedEditing && (
+              <button
+                type="button"
+                onClick={handleRemoveCuratedBot}
+                disabled={curatedState.loading}
+                title={t('stats.curated_remove_tip')}
+                className="shrink-0 flex items-center gap-1 text-[10px] text-red-400 hover:text-white border border-red-400/50 hover:bg-red-500 rounded px-1.5 py-1 transition-colors disabled:opacity-50"
+              >
+                🗑 {t('stats.curated_remove')}
+              </button>
+            )}
             <button
               type="button"
               onClick={handleDownloadJson}

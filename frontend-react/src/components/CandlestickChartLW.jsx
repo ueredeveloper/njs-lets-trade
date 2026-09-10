@@ -12,7 +12,7 @@ import { buildEmaCrossPersistenceClouds, formatEma9SlopeLegend, SLOPE_STATE_META
 import { computeBarsSinceMaCross } from '../utils/barsSinceMaCross';
 import { computeTdSequentialSetup } from '../utils/tdSequentialSetup';
 import { snapPointsToChartCandles } from '../utils/snapToChartCandles';
-import { rankSrLevels } from '../utils/srRank';
+import { rankSrLevels, srRankAllowed } from '../utils/srRank';
 
 const C_UP = '#26a69a';
 const C_DOWN = '#ef5350';
@@ -1250,9 +1250,9 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
 
       const entrySup = srConfig.entrySupport ?? null;
       const exitRes = srConfig.exitResistance ?? null;
-      const showN = (type) => (type === 'support' ? (srConfig.showSupport ?? 3) : (srConfig.showResistance ?? 3));
-      // rankSrLevels + filtro "Mostrar" (showSupport/showResistance).
-      const ranked = (levels, type) => rankSrLevels(levels, type).filter((l) => l.rank <= showN(type));
+      const showSel = (type) => (type === 'support' ? srConfig.showSupport : srConfig.showResistance);
+      // rankSrLevels + filtro "Mostrar" (showSupport/showResistance): 'all' ou postos exatos [1,3].
+      const ranked = (levels, type) => rankSrLevels(levels, type).filter((l) => srRankAllowed(showSel(type), l.rank));
 
       // Linhas de preço de ponta a ponta (rótulo no eixo) — estilo 'linhas' + fallback do override.
       const makePriceLines = (levels, mode) => {
@@ -1324,11 +1324,12 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
         for (let r = 0; r < maxRank; r++) {
           const data = [];
           let lastPt = null;
+          let lastLabel = null;
           for (let i = 0; i < anchors.length; i++) {
             if (!inRange(times[i])) continue;
             const lvl = rankedByAnchor[i][type][r];
             data.push(lvl ? { time: times[i], value: lvl.price } : { time: times[i] });
-            if (lvl) lastPt = { time: times[i], value: lvl.price };
+            if (lvl) { lastPt = { time: times[i], value: lvl.price }; lastLabel = lvl.label; }
           }
           const dedup = [];
           for (const p of data) {
@@ -1344,7 +1345,8 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
           s.setData(dedup);
           createSeriesMarkers(s, [{
             time: lastPt.time, position: 'inBar', color, shape: 'circle',
-            text: `${type === 'support' ? 'S' : 'R'}${r + 1}`,
+            // posto REAL do nível (pode ser [3] sozinho) — não a posição no array desenhado
+            text: lastLabel ?? `${type === 'support' ? 'S' : 'R'}${r + 1}`,
           }]);
           srRollSeriesRef.current.push(s);
         }
@@ -1377,7 +1379,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       const anchors = srConfig.rolling;
       if (!anchors.length) continue;
       const latest = anchors[anchors.length - 1].levels;
-      const showN = (type) => (type === 'support' ? (srConfig.showSupport ?? 3) : (srConfig.showResistance ?? 3));
+      const showSel = (type) => (type === 'support' ? srConfig.showSupport : srConfig.showResistance);
 
       // TRAÇO: níveis da âncora mais recente como traços horizontais curtos terminando na borda
       // direita do trecho VISÍVEL (acompanha o arrasto pra trás). Largura = maior entre
@@ -1399,7 +1401,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       if (endT <= startT) continue;
       for (const type of ['support', 'resistance']) {
         const color = type === 'support' ? SR_SUPPORT_LINE : SR_RESISTANCE_LINE;
-        for (const lvl of rankSrLevels(latest, type).filter((l) => l.rank <= showN(type))) {
+        for (const lvl of rankSrLevels(latest, type).filter((l) => srRankAllowed(showSel(type), l.rank))) {
           const s = chart.addSeries(LineSeries, {
             color, lineWidth: type === 'support' ? 3 : 2, lineStyle: 2,
             priceLineVisible: false, lastValueVisible: lvl.rank === 1, crosshairMarkerVisible: false,

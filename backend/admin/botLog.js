@@ -86,14 +86,87 @@ function pipeChildOutput(readable, { label, target }) {
   readable.on('end', () => { if (buf) writeLine(`[${label}] ${buf}`); buf = ''; });
 }
 
-/** Últimas `lines` linhas do log (arquivo atual + rotacionado, se preciso). */
-function tail(lines = 100) {
+// ---------------------------------------------------------------------------
+// Colapso das linhas de "heartbeat" para o /admin/log do WhatsApp
+// ---------------------------------------------------------------------------
+// O scanner do RSI Momentum loga um bloco a cada ciclo (~a cada 20-30 min) e o
+// multitrade-watch loga "📋 Moedas avaliadas" a cada 3 min — quase sempre com o
+// mesmo conteúdo (só os números mudam). No terminal do `npm run bots` e no
+// arquivo em disco isso fica; mas o `/admin/log` só mostra ~25 linhas no
+// WhatsApp e elas eram gastas repetindo o mesmo bloco. `collapseNoise()` mantém
+// só a ÚLTIMA ocorrência de cada linha-ruído, anotada com "(N×)" e a janela de
+// horário. É aplicado só na leitura via `tail()`.
+const NOISE_PATTERNS = [
+  /📋 Moedas avaliadas/,
+  /🔎 Scan RSI Momentum:/,
+  /\]\s+bloqueadas —/,
+  /\]\s+erros:\s/,
+  /falha ao buscar volume 24h/,
+  /\[writeCandles\].*spike de preço/,
+];
+
+function isNoiseLine(line) {
+  return NOISE_PATTERNS.some((re) => re.test(line));
+}
+
+// Assinatura da linha: o texto com timestamps removidos e números trocados por
+// "#", pra "82 moeda(s)" e "81 moeda(s)" caírem no mesmo grupo. O prefixo
+// `[label]` fica (separa os bots); mudar a lista de moedas muda a assinatura.
+function noiseSignature(line) {
+  return line
+    .replace(/\[\d[\d:/ .-]*\]/g, '')
+    .replace(/\d+(?:[.,]\d+)*/g, '#')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// Extrai só o horário (HH:MM ou HH:MM:SS) do 1º [bloco] tipo timestamp da linha —
+// a data ("10-09/2026") é redundante numa janela de poucas horas.
+const LINE_TS_RE = /\[[^\]]*?(\d{1,2}:\d{2}(?::\d{2})?)[^\]]*\]/;
+function lineTimestamp(line) {
+  const m = line.match(LINE_TS_RE);
+  return m ? m[1] : null;
+}
+
+function collapseNoise(lines) {
+  const groups = new Map(); // signature -> { count, lastIdx, first, last }
+  lines.forEach((line, i) => {
+    if (!isNoiseLine(line)) return;
+    const sig = noiseSignature(line);
+    const g = groups.get(sig) || { count: 0, first: null, last: null };
+    g.count += 1;
+    g.lastIdx = i;
+    const ts = lineTimestamp(line);
+    if (ts) { if (!g.first) g.first = ts; g.last = ts; }
+    groups.set(sig, g);
+  });
+
+  const out = [];
+  lines.forEach((line, i) => {
+    if (!isNoiseLine(line)) { out.push(line); return; }
+    const g = groups.get(noiseSignature(line));
+    if (!g || i !== g.lastIdx) return; // só a última ocorrência de cada grupo
+    if (g.count === 1) { out.push(line); return; }
+    let tag = ` (${g.count}×`;
+    if (g.first && g.last && g.first !== g.last) tag += `, ${g.first}→${g.last}`;
+    out.push(line + tag + ')');
+  });
+  return out;
+}
+
+/**
+ * Últimas `lines` linhas do log (arquivo atual + rotacionado, se preciso).
+ * Por padrão colapsa as linhas repetitivas de heartbeat (ver `collapseNoise`);
+ * passe `{ collapse: false }` pra ter o log cru.
+ */
+function tail(lines = 100, { collapse = true } = {}) {
   const wanted = Math.max(1, Math.min(lines, 2000));
   const parts = [];
   for (const f of [`${LOG_FILE}.1`, LOG_FILE]) {
     try { parts.push(fs.readFileSync(f, 'utf8')); } catch { /* pode não existir */ }
   }
-  const all = parts.join('').split('\n').filter(Boolean);
+  let all = parts.join('').split('\n').filter(Boolean);
+  if (collapse) all = collapseNoise(all);
   return all.slice(-wanted);
 }
 
@@ -101,4 +174,4 @@ function close() {
   if (stream) { try { stream.end(); } catch {} stream = null; }
 }
 
-module.exports = { writeLine, pipeChildOutput, tail, close, LOG_FILE };
+module.exports = { writeLine, pipeChildOutput, tail, collapseNoise, close, LOG_FILE };
