@@ -8,14 +8,15 @@
  * o próprio código em execução). Então ele apenas SAI com um exit code sentinela
  * e este processo pai faz o trabalho:
  *
- *   exit 0  (STOP)     → encerra o supervisor também (parada intencional)
- *   exit 10 (RESTART)  → sobe o launcher de novo, sem tocar no código
- *   exit 11 (UPDATE)   → git fetch + merge --ff-only + npm ci (se o lock mudou) → sobe de novo
- *   qualquer outro     → crash: respawn com backoff
+ *   exit 0  (STOP)      → encerra o supervisor também (parada intencional)
+ *   exit 10 (RESTART)   → sobe o launcher de novo, sem tocar no código
+ *   exit 11 (UPDATE)    → git fetch + merge --ff-only + npm ci (se o lock mudou) → sobe de novo
+ *   exit 12 (SYNC_LOCK) → npm install --package-lock-only + commit do package-lock.json → sobe de novo
+ *   qualquer outro      → crash: respawn com backoff
  *
- * Os exit codes 10/11 são disparados pela API interna (`POST /internal/restart`,
- * `/internal/update`) que o njs-whatsapp chama a partir de um comando no WhatsApp.
- * Ver `backend/admin/botControl.js` e `backend/admin/internalServer.js`.
+ * Os exit codes 10/11/12 são disparados pela API interna (`POST /internal/restart`,
+ * `/internal/update`, `/internal/sync-lock`) que o njs-whatsapp chama a partir de um
+ * comando no WhatsApp. Ver `backend/admin/botControl.js` e `backend/admin/internalServer.js`.
  *
  * Uso (idêntico ao launcher — args são repassados):
  *   node backend/bot/bots-supervisor.js
@@ -93,6 +94,17 @@ function spawnLauncher() {
       return;
     }
 
+    if (code === EXIT.SYNC_LOCK) {
+      crashStreak = 0;
+      handleSyncLock().catch((err) => {
+        log(`erro inesperado no sync-lock: ${err.message} — subindo com o código atual`);
+        notify(`⚠️ /sync-lock FALHOU (erro inesperado: ${err.message}). Subindo os bots.`);
+        botControl.recordResult('sync-lock', { ok: false, error: err.message, log: [] });
+        spawnLauncher();
+      });
+      return;
+    }
+
     // Saída não solicitada = crash. Conta os crashes rápidos (< 60s de vida) e avisa
     // no WhatsApp quando passar do limite — o launcher a essa altura já tentou o
     // próprio auto-restart dos filhos (MAX_RESTARTS) e mesmo assim caiu.
@@ -127,6 +139,31 @@ async function handleUpdate() {
     notify(`⚠️ /update FALHOU: ${result.error}\nOs bots vão subir com o código ANTERIOR (${result.fromCommit || '?'}).`);
   }
   botControl.recordResult('update', result);
+  spawnLauncher();
+}
+
+async function handleSyncLock() {
+  log('SYNC-LOCK solicitado — npm install --package-lock-only + commit (bots parados durante isso)...');
+  let result;
+  try {
+    result = await botControl.runSyncLock();
+  } catch (err) {
+    result = { ok: false, error: err.message, log: [] };
+  }
+  for (const l of result.log || []) log(l);
+
+  if (result.ok && result.committed) {
+    const push = result.pushed ? 'e enviado (push OK)' : 'LOCAL (push falhou — traga com git pull na máquina de dev)';
+    log(`sync-lock OK: package-lock.json commitado ${result.toCommit} ${push}`);
+    notify(`✅ /sync-lock OK\npackage-lock.json regenerado e commitado (${result.toCommit}) — ${push}.\n${result.diffStat || ''}\nSubindo os bots…`);
+  } else if (result.ok) {
+    log('sync-lock: package-lock.json já estava sincronizado');
+    notify('ℹ️ /sync-lock: package-lock.json já estava sincronizado, nada a commitar. Subindo os bots.');
+  } else {
+    log(`sync-lock FALHOU: ${result.error} — subindo os bots mesmo assim`);
+    notify(`⚠️ /sync-lock FALHOU: ${result.error}\nOs bots vão subir normalmente (o lock quebrado não derruba o bot em execução).`);
+  }
+  botControl.recordResult('sync-lock', result);
   spawnLauncher();
 }
 

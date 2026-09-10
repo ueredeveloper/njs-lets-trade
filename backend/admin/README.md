@@ -25,7 +25,7 @@ njs-whatsapp (porta 3005)   ── GET/POST /admin/* ──┐
                                       │
                                       ├─ gitInfo.js        → branch / commit / dirty
                                       ├─ botLog.js          → launcher.log (stdout dos bots)
-                                      ├─ botControl.js      → intenção restart/update + git pull
+                                      ├─ botControl.js      → intenção restart/update/sync-lock + git pull
                                       └─ estado dos filhos  → pid / uptime / restarts
                                           (bollinger-bands-bot.js, rsi-momentum-bot.js)
 ```
@@ -41,6 +41,7 @@ njs-whatsapp (porta 3005)   ── GET/POST /admin/* ──┐
 | `POST /admin/update`  | `POST /internal/update`      | ✅ (exige token + `ALLOW_CONTROL`) |
 | `POST /admin/stop`    | `POST /internal/stop`        | ✅ (exige token + `ALLOW_CONTROL`) |
 | `POST /admin/pull`    | `POST /internal/pull` (dry-run) | ✅ (exige token + `ALLOW_CONTROL`) |
+| `POST /admin/sync-lock` | `POST /internal/sync-lock` | ✅ (comando `/sync-lock` no WhatsApp; exige token + `ALLOW_CONTROL`) |
 
 > O lado `njs-whatsapp` consome esta API (`src/admin/letsTrade.js` faz `fetch` com
 > `X-Internal-Token`, degradação limpa se o launcher estiver fora).
@@ -72,6 +73,7 @@ stop) e o **supervisor** reage:
 | `0`  | encerra também (parada intencional) |
 | `10` | respawn do launcher, sem tocar no código |
 | `11` | `git fetch` + `merge --ff-only` + `npm ci` (se o lock mudou) → respawn |
+| `12` | `npm install --package-lock-only` + `git commit` do `package-lock.json` (+ `git push` best-effort) → respawn |
 | outro | crash → respawn com backoff de 5s |
 
 ```
@@ -96,32 +98,35 @@ e não precisa dessa API.
 | `internalConfig.js` | Lê `INTERNAL_ADMIN_*` do `.env` da raiz. Exporta `internalConfig` (`enabled`, `host`, `port`, `token`, `repoRoot`, `logFile`). | `host` deve continuar com default `127.0.0.1`. Não trocar para `0.0.0.0`. |
 | `gitInfo.js` | `getGitInfo()` → `{ available, branch, commit, commitFull, commitDate, subject, dirty }`. Roda `git` via `execFileSync` com `cwd = repoRoot`, cache de 15s, timeout 4s. Erro → `{ available:false, error }`. | Manter tolerante a falha (git ausente do PATH, não é repo). Nunca deixar lançar. |
 | `botLog.js` | Espelha stdout/stderr dos bots filhos → console **+** `backend/data/bot/launcher.log`. Rotação por tamanho (2 MB, mantém `launcher.log.1`). `tail(n, {collapse})` lê `.1` + atual e, por padrão, **colapsa as linhas de heartbeat** (bloco do scanner RSI Momentum a cada ciclo, `📋 Moedas avaliadas` do multitrade-watch a cada 3 min) — só a última ocorrência sobrevive, anotada `(N×, hh:mm→hh:mm)` — pro `/admin/log` do WhatsApp (~25 linhas) não repetir o mesmo bloco. `pipeChildOutput(stream, {label, target})`, `writeLine`, `collapseNoise`, `close`. | Log nunca pode derrubar o launcher — tudo em `try/catch`. Não aumentar `MAX_BYTES` sem pensar em disco no Termux. O colapso é só na leitura: arquivo e stdout do `npm run bots` ficam completos. |
-| `internalServer.js` | `startInternalAdminServer(getState, { onControl })` → `http.Server`. GET `/internal/health\|info\|log` + POST `/internal/restart\|update\|stop\|pull`. Auth: loopback obrigatório + `X-Internal-Token` se `token` setado; POST exige também `INTERNAL_ADMIN_ALLOW_CONTROL=true`. `server.on('error')` só loga (não derruba). | Ver invariantes de segurança abaixo. POST NUNCA roda git/npm/shell — só `botControl.setPending()` + `onControl()`. |
-| `botControl.js` | Estado da intenção de controle (`backend/data/bot/control-action.json`: `pending` / `last`), exit codes sentinela (`EXIT = {STOP:0, RESTART:10, UPDATE:11}`), `dryRunPull()` (roda no launcher, não reinicia) e `runUpdate()` (roda no **supervisor**: `git fetch` → `merge --ff-only` → `npm ci` condicional). | Sequência de update é FIXA. Nada de `reset --hard`, build, comando arbitrário. `runUpdate` recusa working tree sujo. |
+| `internalServer.js` | `startInternalAdminServer(getState, { onControl })` → `http.Server`. GET `/internal/health\|info\|log` + POST `/internal/restart\|update\|stop\|pull\|sync-lock`. Auth: loopback obrigatório + `X-Internal-Token` se `token` setado; POST exige também `INTERNAL_ADMIN_ALLOW_CONTROL=true`. `server.on('error')` só loga (não derruba). | Ver invariantes de segurança abaixo. POST NUNCA roda git/npm/shell — só `botControl.setPending()` + `onControl()`. |
+| `botControl.js` | Estado da intenção de controle (`backend/data/bot/control-action.json`: `pending` / `last`), exit codes sentinela (`EXIT = {STOP:0, RESTART:10, UPDATE:11, SYNC_LOCK:12}`), `dryRunPull()` (roda no launcher, não reinicia), `runUpdate()` e `runSyncLock()` (rodam no **supervisor**). `runUpdate`: `git fetch` → `merge --ff-only` → `npm ci` condicional. `runSyncLock`: `npm install --package-lock-only` → `git add package-lock.json` → `git commit` → `git push` best-effort — conserta o lock fora de sincronia sem tocar `node_modules`. | Sequências de update/sync-lock são FIXAS. Nada de `reset --hard`, build, comando arbitrário. Ambas recusam working tree sujo (`runSyncLock` tolera só o próprio `package-lock.json` modificado). |
 | `README.md` | Este arquivo. | — |
 
 ### `bots-supervisor.js` (novo — `backend/bot/`)
 
 Processo pai, entrypoint do `npm run bots`. Spawn do launcher; no `exit`
-interpreta o code sentinela (ver tabela na seção 2). `runUpdate()` roda aqui, com
-os bots já parados. Encaminha `SIGINT`/`SIGTERM` pro launcher. Loga tudo com
-prefixo `[supervisor]` no `launcher.log` (aparece no `/admin/log`). Grava o
-resultado do update em `botControl.recordResult()`.
+interpreta o code sentinela (ver tabela na seção 2). `runUpdate()` / `runSyncLock()`
+rodam aqui, com os bots já parados (`handleUpdate` / `handleSyncLock`). Encaminha
+`SIGINT`/`SIGTERM` pro launcher. Loga tudo com prefixo `[supervisor]` no
+`launcher.log` (aparece no `/admin/log`). Grava o resultado em
+`botControl.recordResult()`.
 Override de teste: `BOTS_LAUNCHER_SCRIPT` troca o script do launcher.
 
 **Avisos no WhatsApp** (`require('./whatsapp').sendWhatsApp`, best-effort, nunca
 derruba o supervisor): resultado do `/update` (OK `X → Y` / FALHOU + motivo /
-já-atualizado), `/stop`, e crash-loop do launcher (`CRASH_ALERT_AFTER = 3` quedas
-com < 60s de vida cada; depois a cada 12). O `/stop` espera o envio (timeout 4s)
-antes do `process.exit`.
+já-atualizado), do `/sync-lock` (commitado `X` + push OK/local / já-sincronizado /
+FALHOU), `/stop`, e crash-loop do launcher (`CRASH_ALERT_AFTER = 3` quedas com
+< 60s de vida cada; depois a cada 12). O `/stop` espera o envio (timeout 4s) antes
+do `process.exit`.
 
 ### linha de status no prompt (launcher)
 
 Todo start do `start-trade-bots.js` imprime **uma** linha dizendo o que foi —
 lê `botControl.readState().last` (só se a ação foi há < 120s):
 `>> njs-lets-trade launcher vX` (start normal) · `>> ATUALIZADO via /update A -> B` ·
-`>> /update FALHOU (...)` · `>> REINICIADO via /restart`. Sem emoji (Termux não
-renderiza alguns). Se **todos** os bots desistirem (`MAX_RESTARTS`), o launcher
+`>> /update FALHOU (...)` · `>> REINICIADO via /restart` ·
+`>> LOCK SINCRONIZADO via /sync-lock commit X (push OK|commit LOCAL)`. Sem emoji
+(Termux não renderiza alguns). Se **todos** os bots desistirem (`MAX_RESTARTS`), o launcher
 sai `1` pro supervisor tentar do zero (e alertar no crash-loop).
 
 ### `start-trade-bots.js` (launcher — modificado)
@@ -193,21 +198,27 @@ sem ele responde `403`, igual aos outros.
 ```json
 {
   "file": "C:\\workspace\\njs-lets-trade\\backend\\data\\bot\\launcher.log",
-  "lines": ["[RSI Momentum] 12:20:01 sinal BTCUSDT ...", "[supervisor] ..."]
+  "version": "1.137.0",
+  "git": { "available": true, "branch": "main", "commit": "0ce20f5", "dirty": false },
+  "lines": ["📌 njs-lets-trade v1.137.0 · main@0ce20f5", "[RSI Momentum] 12:20:01 sinal BTCUSDT ...", "[supervisor] ..."]
 }
 ```
 - `lines` default 100, teto 2000.
-- Cada linha vem prefixada com `[<label do bot>]` (ou `[supervisor]` / `[launcher]`).
+- **1ª linha = a versão que está rodando** (`📌 njs-lets-trade vX · branch@commit`) — sempre
+  presente, mesmo que o banner de start do launcher já tenha saído da janela / sido colapsado.
+  Também vem solta em `version` + `git`.
+- Cada linha (fora o cabeçalho) vem prefixada com `[<label do bot>]` (ou `[supervisor]` / `[launcher]`).
 - As linhas repetitivas de heartbeat (scan do RSI Momentum, `📋 Moedas avaliadas`)
   são **colapsadas**: só a última de cada bloco fica, com `(N×, hh:mm→hh:mm)`.
   `?raw=1` devolve o log cru, sem colapso.
 
 Novos campos no `/internal/info`:
 - `controlEnabled` — `true` se `token` setado E `INTERNAL_ADMIN_ALLOW_CONTROL=true`.
-- `pendingAction` — `{ action, at, by }` enquanto um restart/update está em curso, senão `null`.
-- `lastAction` — resultado do último controle: `{ action, at, ok, fromCommit?, toCommit?, updated?, npmRan?, error? }`.
+- `pendingAction` — `{ action, at, by }` enquanto um restart/update/sync-lock está em curso, senão `null`.
+- `lastAction` — resultado do último controle: `{ action, at, ok, fromCommit?, toCommit?, updated?, npmRan?, error? }`
+  (sync-lock: `{ action:"sync-lock", ok, changed?, committed?, pushed?, pushError?, diffStat?, error? }`).
 
-### Controle — `POST /internal/{restart,update,stop,pull}`
+### Controle — `POST /internal/{restart,update,stop,pull,sync-lock}`
 
 Só respondem `202`/`200` se **`token` configurado + `X-Internal-Token` correto +
 `INTERNAL_ADMIN_ALLOW_CONTROL=true`**. Senão `403`. Header opcional
@@ -219,9 +230,28 @@ Só respondem `202`/`200` se **`token` configurado + `X-Internal-Token` correto 
 | `POST /internal/update`  | launcher sai com `11` → supervisor `git pull` + `npm ci` (auto) + respawn | `202 { ok, action:"update", message }` |
 | `POST /internal/stop`    | launcher sai com `0` → supervisor encerra também | `202 { ok, action:"stop" }` |
 | `POST /internal/pull`    | dry-run: `git fetch` + diff, **não** reinicia | `200 { ok, behind, ahead, dirty, commits:[...] }` |
+| `POST /internal/sync-lock` | launcher sai com `12` → supervisor `npm install --package-lock-only` + `git commit` do `package-lock.json` (+ `git push` best-effort) + respawn | `202 { ok, action:"sync-lock", message }` |
 
-Sem supervisor (`bots:nosup`), restart/update respondem `503` (o exit code
-não teria quem reagir). `pull` funciona sempre.
+Sem supervisor (`bots:nosup`), restart/update/sync-lock respondem `503` (o exit
+code não teria quem reagir). `pull` funciona sempre.
+
+**`sync-lock` — quando usar.** O `package-lock.json` sai de sincronia com o
+`package.json` (ex.: `@whiskeysockets/baileys` declara `sharp` como peerDependency
+não-opcional e a subárvore `@img/*` / `@img/colour` nunca foi gravada no lock).
+Aí o `npm ci` do `/update` falha com `Missing: … from lock file` (não derruba os
+bots — só não reinstala deps). Fluxo: **`/update`** (código entra via `merge
+--ff-only`, `npm ci` falha mas segue) → **`/sync-lock`** (regenera + commita o
+lock). `--package-lock-only` NÃO toca `node_modules`, então é seguro rodar com os
+bots no ar. `runSyncLock`:
+1. recusa se a árvore tiver arquivo sujo além do próprio `package-lock.json`;
+2. `npm install --package-lock-only --no-audit --no-fund`;
+3. lock não mudou → nada a commitar (`committed:false`);
+4. `git add package-lock.json` + `git commit`;
+5. `git push` best-effort — **se o device é pull-only o commit fica LOCAL**; nesse
+   caso o `/update` seguinte vê o checkout "à frente" do remoto e recusa com uma
+   mensagem clara (faça o push da máquina de dev, ou `git reset --hard
+   origin/<branch>` no Termux). A correção definitiva é rodar o `/sync-lock` (ou
+   `npm install` + commit) numa máquina que consiga dar push.
 
 ---
 
@@ -231,20 +261,22 @@ não teria quem reagir). `pull` funciona sempre.
    pode escutar em `0.0.0.0` / IP de rede.
 2. **`authorized(req)` roda em TODA request** — checa IP loopback e, se houver
    `token`, o header `X-Internal-Token`.
-3. **GET é sempre leitura.** Mutação só via os 4 `POST /internal/*` de controle,
+3. **GET é sempre leitura.** Mutação só via os 5 `POST /internal/*` de controle,
    e cada um exige `token` + `INTERNAL_ADMIN_ALLOW_CONTROL=true` (loopback sozinho
    NÃO basta pra mutação).
 4. **A API não executa nada.** Nenhum `git`/`npm`/`exec`/`spawn`/`shell` dentro de
    `internalServer.js`. O `POST` só grava a intenção (`botControl.setPending`) e
-   chama `onControl` (que faz `process.exit(code)`). Quem roda `git pull`/`npm ci`
-   é o supervisor, e **só a sequência fixa** de `botControl.runUpdate` — sem
-   `reset --hard`, sem build, sem comando vindo do request. `runUpdate` recusa
-   working tree sujo.
+   chama `onControl` (que faz `process.exit(code)`). Quem roda `git`/`npm` é o
+   supervisor, e **só as sequências fixas** de `botControl.runUpdate` /
+   `botControl.runSyncLock` — sem `reset --hard`, sem build, sem comando vindo do
+   request. Ambas recusam working tree sujo (`runSyncLock` tolera só o próprio
+   `package-lock.json` modificado; nunca faz `git add -A` / `git add .`).
 5. **Nunca vazar segredo** no `/internal/info` (`.env`, chave de corretora,
    token, dados de carteira).
 6. Falha de git, disco ou porta ocupada **não pode derrubar o launcher, o
-   supervisor nem os bots** — sempre `try/catch` / `on('error')`. Update que
-   falha → supervisor sobe os bots com o código atual e reporta em `lastAction`.
+   supervisor nem os bots** — sempre `try/catch` / `on('error')`. Update /
+   sync-lock que falha → supervisor sobe os bots com o código atual e reporta em
+   `lastAction`.
 
 ---
 
@@ -270,8 +302,9 @@ no launcher, mas então tem que ser leitura pura (nada que altere working tree o
 `node_modules`).
 
 **O que NÃO adicionar:** `POST /internal/exec`, `/internal/shell`, update que
-aceite branch/ref/comando do request, `git reset --hard`, build no Termux.
-A sequência de `runUpdate` é fixa por segurança.
+aceite branch/ref/comando do request, `git reset --hard`, build no Termux,
+`git add -A`/`git add .` (o `runSyncLock` só adiciona `package-lock.json` explícito).
+As sequências de `runUpdate` / `runSyncLock` são fixas por segurança.
 
 ---
 
@@ -282,7 +315,7 @@ INTERNAL_ADMIN_ENABLED=true          # false desliga a API (bots continuam)
 INTERNAL_ADMIN_HOST=127.0.0.1
 INTERNAL_ADMIN_PORT=4100
 INTERNAL_ADMIN_TOKEN=<segredo>       # igual ao LETS_TRADE_INTERNAL_TOKEN do njs-whatsapp
-INTERNAL_ADMIN_ALLOW_CONTROL=true    # libera POST restart/update/stop/pull (precisa do TOKEN)
+INTERNAL_ADMIN_ALLOW_CONTROL=true    # libera POST restart/update/stop/pull/sync-lock (precisa do TOKEN)
 INTERNAL_ADMIN_UPDATE_NPM=auto       # auto (npm ci só se o lock mudou) | always | never
 # INTERNAL_ADMIN_GIT_REMOTE=origin
 # INTERNAL_ADMIN_GIT_BRANCH=         # default: branch atual do checkout
@@ -320,6 +353,7 @@ curl -s -X POST -H "X-Internal-Token: <token>" http://127.0.0.1:4100/internal/pu
 curl -s -X POST -H "X-Internal-Token: <token>" -H "X-Requested-By: 5561..." \
      http://127.0.0.1:4100/internal/restart
 curl -s -X POST -H "X-Internal-Token: <token>" http://127.0.0.1:4100/internal/update
+curl -s -X POST -H "X-Internal-Token: <token>" http://127.0.0.1:4100/internal/sync-lock
 ```
 
 Sem subir os bots (só a API, com estado falso):
@@ -350,7 +384,15 @@ node -e "require('./backend/admin/internalServer').startInternalAdminServer(()=>
   `npm ci` na mão quando precisar). Timeout interno de 10 min.
 - **update falhou no meio**: o merge é `--ff-only` (nunca deixa a árvore num
   estado meio-mergeado); se o `npm ci` falhar, o código já é o novo mas pode
-  faltar dependência — `lastAction.error` diz, e os bots podem entrar em loop de
-  restart até você rodar `npm ci` no Termux.
-- **restart/update sem supervisor**: `bots:nosup` não tem quem reaja ao
+  faltar dependência — `lastAction.error` diz. Se for `Missing: … from lock file`
+  (lock fora de sincronia) rode **`/sync-lock`** — não precisa de `npm ci` na mão.
+- **`npm ci` erra `Missing: @img/colour … from lock file`** (ou `sharp`, `@img/*`):
+  o `package-lock.json` não tem a subárvore que o `sharp` (peer não-opcional do
+  `@whiskeysockets/baileys`) exige. É **não-fatal** — os bots seguem no
+  `node_modules` atual. Conserto: **`/sync-lock`** (regenera + commita o lock).
+- **`/sync-lock` num device pull-only**: o commit fica LOCAL (push falha). O
+  `/update` seguinte recusa por "checkout à frente do remoto" — faça o push desse
+  commit da máquina de dev (ou `git reset --hard origin/<branch>` no Termux). O
+  ideal é rodar o `/sync-lock` numa máquina com push.
+- **restart/update/sync-lock sem supervisor**: `bots:nosup` não tem quem reaja ao
   exit code — os POST respondem `503`. Use `npm run bots` (com supervisor).

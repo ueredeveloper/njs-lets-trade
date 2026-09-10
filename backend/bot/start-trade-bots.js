@@ -49,6 +49,12 @@ botControl.clearStalePending();
     line = `>> ATUALIZADO via /update  ${last.fromCommit} -> ${last.toCommit}  (agora na v${v})`;
   } else if (recent && last.action === 'update') {
     line = `>> /update FALHOU (${last.error}) — rodando com o codigo anterior, v${v}`;
+  } else if (recent && last.action === 'sync-lock' && last.ok !== false) {
+    line = last.committed
+      ? `>> LOCK SINCRONIZADO via /sync-lock  commit ${last.toCommit}${last.pushed ? ' (push OK)' : ' (commit LOCAL, sem push)'}  v${v}`
+      : `>> /sync-lock: package-lock.json ja estava sincronizado, v${v}`;
+  } else if (recent && last.action === 'sync-lock') {
+    line = `>> /sync-lock FALHOU (${last.error}) — v${v}`;
   } else if (recent && last.action === 'restart') {
     line = `>> REINICIADO via /restart  (codigo inalterado, v${v})`;
   } else {
@@ -123,14 +129,15 @@ function getLauncherState() {
   };
 }
 
-// Controle remoto (via API interna → njs-whatsapp): restart/update/stop viram um
-// exit code sentinela que o supervisor (bots-supervisor.js) interpreta. Este
-// processo NÃO roda git/npm — só encerra os filhos com carinho e sai.
+// Controle remoto (via API interna → njs-whatsapp): restart/update/stop/sync-lock
+// viram um exit code sentinela que o supervisor (bots-supervisor.js) interpreta.
+// Este processo NÃO roda git/npm — só encerra os filhos com carinho e sai.
 function onControl(action) {
   if (shuttingDown) return { ok: false, message: 'já encerrando' };
-  const code = CONTROL_EXIT[String(action).toUpperCase()];
+  // 'sync-lock' → chave EXIT.SYNC_LOCK
+  const code = CONTROL_EXIT[String(action).toUpperCase().replace(/-/g, '_')];
   if (code == null) return { ok: false, message: `ação desconhecida: ${action}` };
-  const label = { stop: 'PARAR', restart: 'REINICIAR', update: 'ATUALIZAR' }[action] || action;
+  const label = { stop: 'PARAR', restart: 'REINICIAR', update: 'ATUALIZAR', 'sync-lock': 'SINCRONIZAR LOCK' }[action] || action;
   console.log(`\n🛰️  [launcher] controle recebido: ${label} → encerrando (exit ${code})`);
   botLog.writeLine(`[launcher] controle: ${label} (exit ${code})`);
   shutdown();

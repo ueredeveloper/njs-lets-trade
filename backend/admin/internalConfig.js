@@ -7,8 +7,9 @@
  * (projeto separado, porta 3005) consulta estes endpoints para responder
  * `/admin/status`, `/admin/health` e `/admin/log` no WhatsApp.
  *
- * Só LEITURA. Nada aqui reinicia, atualiza ou executa comando — restart/update
- * são feitos POR FORA (process manager + git) pelo orquestrador.
+ * GET = só leitura. Mutação só nos `POST /internal/{restart,update,stop,pull,sync-lock}`
+ * e mesmo assim a API não executa git/npm: grava a intenção e sai com exit code
+ * sentinela; quem age é o supervisor (`bots-supervisor.js`). Ver `botControl.js`.
  *
  * Variáveis no .env (raiz do projeto):
  *   INTERNAL_ADMIN_ENABLED        true|false   (default: true)
@@ -17,7 +18,7 @@
  *   INTERNAL_ADMIN_TOKEN          segredo compartilhado com o njs-whatsapp
  *                                 (header X-Internal-Token). Sem token → só loopback.
  *   INTERNAL_ADMIN_ALLOW_CONTROL  true|false   (default: false) — libera os
- *                                 `POST /internal/{restart,update,stop,pull}`.
+ *                                 `POST /internal/{restart,update,stop,pull,sync-lock}`.
  *                                 Só funciona junto com um TOKEN configurado.
  *   INTERNAL_ADMIN_UPDATE_NPM     auto|always|never (default: auto) — quando o
  *                                 update roda `npm ci` (auto = só se o lock mudou).

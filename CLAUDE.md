@@ -30,39 +30,49 @@ npm run bots
 bots**. O launcher hospeda um `http.Server` **só loopback** (default
 `127.0.0.1:4100`):
 - **Leitura:** `GET /internal/health`, `/internal/info` (versão, git, pids/uptime,
-  `pendingAction`, `lastAction`), `/internal/log` (colapsa as linhas repetitivas de
-  heartbeat — scan RSI Momentum, `📋 Moedas avaliadas` — só a última de cada bloco
-  com `(N×, hh:mm→hh:mm)`; `?raw=1` desliga).
-- **Controle (opt-in):** `POST /internal/{restart,update,stop,pull}` — só com
-  `INTERNAL_ADMIN_TOKEN` + `INTERNAL_ADMIN_ALLOW_CONTROL=true`. A API **não roda
+  `pendingAction`, `lastAction`), `/internal/log` (1ª linha = versão/commit em
+  execução; colapsa as linhas repetitivas de heartbeat — scan RSI Momentum,
+  `📋 Moedas avaliadas` — só a última de cada bloco com `(N×, hh:mm→hh:mm)`;
+  `?raw=1` desliga o colapso).
+- **Controle (opt-in):** `POST /internal/{restart,update,stop,pull,sync-lock}` — só
+  com `INTERNAL_ADMIN_TOKEN` + `INTERNAL_ADMIN_ALLOW_CONTROL=true`. A API **não roda
   git/npm/shell**: grava a intenção (`botControl.js`) e mata o launcher com um
-  exit code sentinela (`10` restart, `11` update, `0` stop); o **supervisor**
-  reage — em `update` faz `git fetch` + `merge --ff-only` + `npm ci` (se o
-  `package-lock` mudou; `dist` é versionado, sem build) e respawn. `pull` é
-  dry-run (roda no launcher, não reinicia).
+  exit code sentinela (`10` restart, `11` update, `12` sync-lock, `0` stop); o
+  **supervisor** reage — em `update` faz `git fetch` + `merge --ff-only` + `npm ci`
+  (se o `package-lock` mudou; `dist` é versionado, sem build) e respawn. `pull` é
+  dry-run (roda no launcher, não reinicia). **`sync-lock`** = `npm install
+  --package-lock-only` + `git add package-lock.json` + `git commit` + `git push`
+  best-effort — conserta o lock fora de sincronia (baileys puxa `sharp`/`@img/*`
+  como peer e a árvore nunca foi gravada → `npm ci` do `/update` quebra com
+  "Missing: … from lock file"). Fluxo: `/update` (código entra, `npm ci` falha
+  mas não derruba) → `/sync-lock` (regenera+commita o lock). `--package-lock-only`
+  não toca `node_modules`, zero risco pros bots. Recusa working tree com arquivo
+  sujo além do próprio `package-lock.json`.
 
 É o lado cooperativo da administração remota: `njs-whatsapp` (porta 3005) consome
-isso para `/admin/status|health|log|restart|update|stop|pull` no WhatsApp. Config
-no `.env` (`INTERNAL_ADMIN_*`). Launcher sozinho (sem restart/update):
-`npm run bots:nosup`.
+isso para `/admin/status|health|log|restart|update|stop|pull|sync-lock` no
+WhatsApp. Config no `.env` (`INTERNAL_ADMIN_*`). Launcher sozinho (sem
+restart/update): `npm run bots:nosup`.
 
 O **supervisor avisa no WhatsApp** (via `backend/bot/whatsapp.js`, best-effort) o
-resultado de `/update` (OK `X → Y` / FALHOU + motivo / já-atualizado), o `/stop`, e
+resultado de `/update` (OK `X → Y` / FALHOU + motivo / já-atualizado), de
+`/sync-lock` (commitado `X` + push OK/local / já-sincronizado / FALHOU), o `/stop`, e
 crash-loop do launcher (≥3 quedas < 60s de vida, depois a cada 12). O launcher
 imprime **uma linha no prompt** a cada start dizendo o que foi (start normal /
-`>> ATUALIZADO via /update X -> Y` / `>> REINICIADO via /restart` / falha) — lê
-`botControl.readState().last` (janela de 120s). Só sobe o **RSI Momentum**
+`>> ATUALIZADO via /update X -> Y` / `>> REINICIADO via /restart` /
+`>> LOCK SINCRONIZADO via /sync-lock` / falha) — lê `botControl.readState().last`
+(janela de 120s). Só sobe o **RSI Momentum**
 (Bollinger saiu em v1.135.6 — reative na lista `BOTS` de `start-trade-bots.js`).
 
 **Ao editar `backend/admin/`, `backend/bot/start-trade-bots.js` ou
 `backend/bot/bots-supervisor.js`, leia `backend/admin/README.md` primeiro.**
 Invariantes que não podem quebrar: bind só em `127.0.0.1`; `authorized()`
 (loopback + `X-Internal-Token`) em toda request; `GET` sempre leitura, mutação só
-nos 4 `POST` de controle e cada um exige token + `ALLOW_CONTROL`; a API nunca
-executa comando (só `setPending` + `onControl`); `runUpdate` é sequência fixa (nada
-de `reset --hard`/build/ref do request) e recusa working tree sujo; não vazar
-segredo em `/internal/info`; falha de git/disco/porta/npm não derruba
-supervisor/launcher/bots.
+nos 5 `POST` de controle e cada um exige token + `ALLOW_CONTROL`; a API nunca
+executa comando (só `setPending` + `onControl`); `runUpdate`/`runSyncLock` são
+sequências fixas (nada de `reset --hard`/build/ref do request) e recusam working
+tree sujo; não vazar segredo em `/internal/info`; falha de git/disco/porta/npm não
+derruba supervisor/launcher/bots.
 
 ## Architecture
 

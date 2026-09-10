@@ -7,10 +7,11 @@
  *   GET  /internal/health   → njs-whatsapp GET  /admin/health
  *   GET  /internal/info     → njs-whatsapp GET  /admin/status
  *   GET  /internal/log      → njs-whatsapp GET  /admin/log
- *   POST /internal/restart  → njs-whatsapp POST /admin/restart
- *   POST /internal/update   → njs-whatsapp POST /admin/update
- *   POST /internal/stop     → njs-whatsapp POST /admin/stop
- *   POST /internal/pull     → njs-whatsapp POST /admin/pull   (dry-run)
+ *   POST /internal/restart   → njs-whatsapp POST /admin/restart
+ *   POST /internal/update    → njs-whatsapp POST /admin/update
+ *   POST /internal/stop      → njs-whatsapp POST /admin/stop
+ *   POST /internal/pull      → njs-whatsapp POST /admin/pull       (dry-run)
+ *   POST /internal/sync-lock → njs-whatsapp POST /admin/sync-lock  (npm install --package-lock-only + commit)
  *
  * Os `POST` de controle só respondem se:
  *   - há `INTERNAL_ADMIN_TOKEN` configurado E o header `X-Internal-Token` bate;
@@ -55,7 +56,7 @@ function controlAllowed() {
 
 /**
  * @param {() => object} getState  snapshot do launcher: { startedAt, bots: [{label,pid,running,restarts,startedAt,lastExit}] }
- * @param {{ onControl?: (action: 'restart'|'update'|'stop') => { ok: boolean, message?: string } }} [opts]
+ * @param {{ onControl?: (action: 'restart'|'update'|'stop'|'sync-lock') => { ok: boolean, message?: string } }} [opts]
  *        onControl: chamado quando um POST de controle é aceito. O launcher deve
  *        fazer shutdown gracioso e sair com o exit code sentinela correspondente.
  */
@@ -75,7 +76,7 @@ function startInternalAdminServer(getState, opts = {}) {
     // ---- controle (POST) -------------------------------------------------
     if (req.method === 'POST' && url.pathname.startsWith('/internal/')) {
       const action = url.pathname.slice('/internal/'.length);
-      if (!['restart', 'update', 'stop', 'pull'].includes(action)) {
+      if (!['restart', 'update', 'stop', 'pull', 'sync-lock'].includes(action)) {
         return send(res, 404, { error: 'rota não encontrada' });
       }
       if (!controlAllowed()) {
@@ -99,12 +100,14 @@ function startInternalAdminServer(getState, opts = {}) {
       const state = safeState(getState);
       const anyRunning = (state.bots || []).some((b) => b.running);
       botControl.setPending(action, by);
+      const messages = {
+        update: 'update aceito — git pull + restart em andamento (acompanhe /internal/log e /internal/info.lastAction)',
+        'sync-lock': 'sync-lock aceito — npm install --package-lock-only + commit do package-lock.json em andamento (acompanhe /internal/log e /internal/info.lastAction)',
+      };
       send(res, 202, {
         ok: true,
         action,
-        message: action === 'update'
-          ? 'update aceito — git pull + restart em andamento (acompanhe /internal/log e /internal/info.lastAction)'
-          : `${action} aceito`,
+        message: messages[action] || `${action} aceito`,
         botsRunning: anyRunning,
       });
       // dispara depois de a resposta sair (onControl mata o processo)
@@ -148,9 +151,16 @@ function startInternalAdminServer(getState, opts = {}) {
       const n = parseInt(url.searchParams.get('lines') || '100', 10);
       // `?raw=1` desliga o colapso das linhas de heartbeat (scan/moedas avaliadas).
       const raw = ['1', 'true', 'yes'].includes((url.searchParams.get('raw') || '').toLowerCase());
+      const git = safeCall(getGitInfo) || { available: false };
+      // 1ª linha = versão que está rodando, pro /log do WhatsApp mostrar SEMPRE (o banner de
+      // start do launcher pode já ter saído da janela ou sido colapsado).
+      const header = `📌 njs-lets-trade v${pkg.version || '?'}`
+        + (git.available ? ` · ${git.branch}@${git.commit}${git.dirty ? ' (árvore suja)' : ''}` : '');
       return send(res, 200, {
         file: botLog.LOG_FILE,
-        lines: botLog.tail(Number.isFinite(n) ? n : 100, { collapse: !raw }),
+        version: pkg.version || null,
+        git,
+        lines: [header, ...botLog.tail(Number.isFinite(n) ? n : 100, { collapse: !raw })],
       });
     }
 
