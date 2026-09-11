@@ -162,10 +162,10 @@ async function dryRunPull() {
 // ---------------------------------------------------------------------------
 
 /**
- * @param {{ npm?: 'auto'|'always'|'never' }} opts
+ * @param {{ npmMode?: 'auto'|'always'|'never' }} opts
  * @returns {Promise<{ ok, fromCommit?, toCommit?, updated?, npmRan?, error?, log: string[] }>}
  */
-async function runUpdate({ npm = internalConfig.npmOnUpdate } = {}) {
+async function runUpdate({ npmMode = internalConfig.npmOnUpdate } = {}) {
   const log = [];
   const step = (m) => log.push(m);
   let fromCommit;
@@ -213,7 +213,7 @@ async function runUpdate({ npm = internalConfig.npmOnUpdate } = {}) {
     toCommit = git(['rev-parse', '--short', 'HEAD']);
     const lockAfter = fileHash('package-lock.json');
 
-    const wantNpm = npm === 'always' || (npm === 'auto' && lockBefore !== lockAfter);
+    const wantNpm = npmMode === 'always' || (npmMode === 'auto' && lockBefore !== lockAfter);
     let npmRan = false;
     if (wantNpm) {
       step('package-lock.json mudou → npm ci --omit=dev (pode levar minutos no Termux)');
