@@ -254,6 +254,7 @@ function resolveFromSignal(scanCandles, signalPrice, { pullbackPct, targetPct, s
                 stopPct: reinforceOnStop.rearmStopPct,
                 targetPct: reinforceOnStop.rearmTargetPct,
                 maxRungs: reinforceOnStop.maxRungs,
+                reentryResolver: reinforceOnStop.reentryResolver,
                 firstLegUsd: positionSizeUsd,
                 rungUsd,
             })
@@ -262,6 +263,7 @@ function resolveFromSignal(scanCandles, signalPrice, { pullbackPct, targetPct, s
                 exitRisePct: reinforceOnStop.exitRisePct,
                 maxRungs: reinforceOnStop.maxRungs,
                 waitCandles: reinforceOnStop.waitCandles,
+                reentryResolver: reinforceOnStop.reentryResolver,
                 firstLegUsd: positionSizeUsd,
                 rungUsd,
             });
@@ -343,7 +345,7 @@ function resolveFromSignal(scanCandles, signalPrice, { pullbackPct, targetPct, s
  * baixo bem no meio de uma cachoeira logo após o stop. Só afeta a perna 1 — os degraus seguintes
  * continuam entrando no ato em que o preço cai `addDropPct`% abaixo do último aporte.
  */
-function runReinforcementLadder(scanCandles, startIdx, firstEntryPrice, firstStopPrice, { addDropPct, exitRisePct, maxRungs, waitCandles = 0, firstLegUsd = 1, rungUsd = 1 }) {
+function runReinforcementLadder(scanCandles, startIdx, firstEntryPrice, firstStopPrice, { addDropPct, exitRisePct, maxRungs, waitCandles = 0, reentryResolver = null, firstLegUsd = 1, rungUsd = 1 }) {
     const drop = Math.max(0.5, Number(addDropPct)) / 100;
     const rise = Math.max(0.5, Number(exitRisePct)) / 100;
     const cap = Math.max(1, Math.round(Number(maxRungs) || 100));
@@ -355,30 +357,42 @@ function runReinforcementLadder(scanCandles, startIdx, firstEntryPrice, firstSto
     // buildHistoricalPositionRects/openOnChart), não afeta o P&L/outcome do trade.
     const leg0 = { entryTime: null, entryPrice: firstEntryPrice, exitTime: stopTime0, exitPrice: firstStopPrice, outcome: 'stop' };
 
-    // Perna 1 (1º reforço): sem espera entra no próprio preço do stop; com espera, `wait` candles
-    // depois, no fechamento desse candle. A varredura da escada recomeça daí.
+    // Janela acabou antes da perna 1 reforçar (espera por candles OU por RSI nunca terminou
+    // dentro da amostra) — marca só a perna 0 (a compra do sinal) a mercado no último close:
+    // prejuízo não realizado, sem escada.
+    const onlyLeg0Open = () => {
+        const lastClose = scanCandles.length ? parseFloat(scanCandles[scanCandles.length - 1].close) : firstEntryPrice;
+        const qty0 = firstLegUsd / firstEntryPrice;
+        const pnl0 = qty0 * lastClose - firstLegUsd;
+        return {
+            legs: [firstEntryPrice],
+            legTimeline: [leg0],
+            avgEntryPrice: parseFloat(firstEntryPrice.toFixed(8)),
+            returnPct: parseFloat((firstLegUsd > 0 ? (pnl0 / firstLegUsd) * 100 : 0).toFixed(4)),
+            investedUsd: parseFloat(firstLegUsd.toFixed(2)),
+            pnlUsd: parseFloat(pnl0.toFixed(2)),
+            outcome: 'open',
+            exitTime: scanCandles.length ? scanCandles[scanCandles.length - 1].openTime : null,
+            exitPrice: lastClose,
+            finalTargetPrice: parseFloat((firstEntryPrice * (1 + rise)).toFixed(8)),
+        };
+    };
+
+    // Perna 1 (1º reforço) — 3 gatilhos possíveis, em ordem de prioridade:
+    //   reentryResolver (reentryTrigger === 'rsiRecross') — espera o RSI recruzar, ver
+    //   findRsiRecrossPoint; sem ele, `wait` candles (waitCandles, legado); sem nenhum dos dois,
+    //   entra no próprio preço do stop (comportamento original).
     let rungIdx = startIdx;
     let firstRungPrice = firstStopPrice;
-    if (wait > 0) {
-        if (startIdx + wait >= scanCandles.length) {
-            // Janela acabou durante a espera — nunca chegou a reforçar. Marca só a perna 0 (a
-            // compra do sinal) a mercado no último close: prejuízo não realizado, sem escada.
-            const lastClose = scanCandles.length ? parseFloat(scanCandles[scanCandles.length - 1].close) : firstEntryPrice;
-            const qty0 = firstLegUsd / firstEntryPrice;
-            const pnl0 = qty0 * lastClose - firstLegUsd;
-            return {
-                legs: [firstEntryPrice],
-                legTimeline: [leg0],
-                avgEntryPrice: parseFloat(firstEntryPrice.toFixed(8)),
-                returnPct: parseFloat((firstLegUsd > 0 ? (pnl0 / firstLegUsd) * 100 : 0).toFixed(4)),
-                investedUsd: parseFloat(firstLegUsd.toFixed(2)),
-                pnlUsd: parseFloat(pnl0.toFixed(2)),
-                outcome: 'open',
-                exitTime: scanCandles.length ? scanCandles[scanCandles.length - 1].openTime : null,
-                exitPrice: lastClose,
-                finalTargetPrice: parseFloat((firstEntryPrice * (1 + rise)).toFixed(8)),
-            };
-        }
+    if (reentryResolver) {
+        const r = reentryResolver(stopTime0);
+        if (!r) return onlyLeg0Open();
+        const idx = findScanIndexAtOrAfter(scanCandles, r.timeMs);
+        if (idx < 0) return onlyLeg0Open();
+        rungIdx = idx;
+        firstRungPrice = r.price;
+    } else if (wait > 0) {
+        if (startIdx + wait >= scanCandles.length) return onlyLeg0Open();
         rungIdx = startIdx + wait;
         firstRungPrice = parseFloat(scanCandles[rungIdx].close);
     }
@@ -472,7 +486,7 @@ function runReinforcementLadder(scanCandles, startIdx, firstEntryPrice, firstSto
  * preço desse stop, que é também o preço da 1ª recompra. Empate intra-candle: stop antes de alvo
  * (mesma convenção pessimista do bracket inicial).
  */
-function runRearmLadder(scanCandles, startIdx, firstEntryPrice, firstStopPrice, { stopPct, targetPct, maxRungs, firstLegUsd = 1, rungUsd = 1 }) {
+function runRearmLadder(scanCandles, startIdx, firstEntryPrice, firstStopPrice, { stopPct, targetPct, maxRungs, reentryResolver = null, firstLegUsd = 1, rungUsd = 1 }) {
     const sPct = Math.max(0.1, Number(stopPct)) / 100;
     const tPct = Math.max(0.1, Number(targetPct)) / 100;
     const cap = Math.max(1, Math.round(Number(maxRungs) || 100));
@@ -492,6 +506,42 @@ function runRearmLadder(scanCandles, startIdx, firstEntryPrice, firstStopPrice, 
     // se bateu o alvo, vermelho se estopou de novo) — não afeta o P&L/outcome do trade. entryTime
     // da perna 0 fica null: buildOccurrence substitui pelo entryTime real do trade.
     const legTimeline = [{ entryTime: null, entryPrice: firstEntryPrice, exitTime, exitPrice: firstStopPrice, outcome: 'stop' }];
+
+    // Gatilho de reentrada por RSI (reentryTrigger === 'rsiRecross') — vale pra CADA recompra
+    // (cada stop reabre a espera), diferente do modo ladder (só a perna 1). Sem reentryResolver
+    // (gatilho 'immediate'), recompra sempre no próprio preço do stop (comportamento original).
+    const nextEntryPoint = (fromTimeMs, fallbackPrice, fallbackIdx) => {
+        if (!reentryResolver) return { price: fallbackPrice, idx: fallbackIdx, found: true };
+        const r = reentryResolver(fromTimeMs);
+        if (!r) return { found: false };
+        const foundIdx = findScanIndexAtOrAfter(scanCandles, r.timeMs);
+        if (foundIdx < 0) return { found: false };
+        return { price: r.price, idx: foundIdx, found: true };
+    };
+
+    if (reentryResolver) {
+        const next = nextEntryPoint(exitTime, firstStopPrice, idx);
+        if (!next.found) {
+            // Nunca recruzou — a pilha nunca chega a recomprar; fica flat com só a perna 0 (o
+            // caixa realizado na venda do stop, sem nenhum aporte novo).
+            const pnl0 = proceeds - firstLegUsd;
+            return {
+                legs: [firstEntryPrice],
+                legTimeline,
+                avgEntryPrice: parseFloat(firstStopPrice.toFixed(8)),
+                returnPct: parseFloat((firstLegUsd > 0 ? (pnl0 / firstLegUsd) * 100 : 0).toFixed(4)),
+                investedUsd: parseFloat(firstLegUsd.toFixed(2)),
+                pnlUsd: parseFloat(pnl0.toFixed(2)),
+                outcome: 'open',
+                exitTime,
+                exitPrice: firstStopPrice,
+                finalTargetPrice: parseFloat((firstStopPrice * (1 + tPct)).toFixed(8)),
+            };
+        }
+        entryR = next.price;
+        idx = next.idx;
+        lastTargetPrice = entryR * (1 + tPct);
+    }
 
     while (legs.length - 1 < cap) {
         const legEntryTime = scanCandles[Math.min(idx, Math.max(0, scanCandles.length - 1))]?.openTime ?? exitTime;
@@ -530,14 +580,21 @@ function runRearmLadder(scanCandles, startIdx, firstEntryPrice, firstStopPrice, 
             legTimeline.push({ entryTime: legEntryTime, entryPrice: legEntryPrice, exitTime, exitPrice, outcome: 'target' });
             break;
         }
-        // Stop de novo: realiza a perda desta rodada e recompra no próximo giro do while.
+        // Stop de novo: realiza a perda desta rodada.
         proceeds = qty * stopLevel;
-        entryR = stopLevel;
         idx = hit.j;
         exitTime = scanCandles[hit.j].openTime;
         exitPrice = stopLevel;
-        outcome = 'open'; // se o while sair pela trava `cap`, fica em aberto no último stop
+        outcome = 'open'; // se o while sair (trava `cap` ou reentrada nunca recruza), fica em aberto no último stop
         legTimeline.push({ entryTime: legEntryTime, entryPrice: legEntryPrice, exitTime, exitPrice, outcome: 'stop' });
+
+        // Recompra no próximo giro do while — no ato (fallback = o próprio preço do stop) ou,
+        // com reentryResolver, só quando o RSI recruzar. Nunca recruzando dentro da amostra, a
+        // pilha fica flat neste último stop (outcome/exitPrice/exitTime já refletem isso).
+        const next = nextEntryPoint(exitTime, stopLevel, idx);
+        if (!next.found) break;
+        entryR = next.price;
+        idx = next.idx;
     }
 
     const pnlUsd = proceeds - cashOut;
@@ -597,6 +654,85 @@ function resolveOwnIntervalValueAt(ownCandles, ownSeries, ownOffset, timeMs, pic
     if (seriesIdx < 0 || seriesIdx >= ownSeries.length) return null;
     const value = pick(ownSeries[seriesIdx]);
     return Number.isFinite(value) ? value : null;
+}
+
+/** RSI 5m do candle FECHADO no instante `timeMs` > `threshold` (fail-open sem série de 5m, mesma
+ *  convenção dos demais filtros baseados em série própria — ver checkRsi5mFilter). */
+function checkRsi5mAt(rsi5mCandles, rsi5mSeries, rsi5mOffset, timeMs, threshold) {
+    if (!rsi5mCandles.length) return true;
+    const v = resolveOwnIntervalValueAt(rsi5mCandles, rsi5mSeries, rsi5mOffset, timeMs, (x) => x);
+    return v == null || v > threshold;
+}
+
+/** 1º índice de `scanCandles` (ascendente) cujo openTime >= timeMs, ou -1 se a janela acabou
+ *  antes. Usado pra mapear o instante do recruzamento de RSI (achado no intervalo PRINCIPAL, ver
+ *  findRsiRecrossPoint) de volta pra posição no stream de 1m usado pela escada/rearm. */
+function findScanIndexAtOrAfter(scanCandles, timeMs) {
+    for (let i = 0; i < scanCandles.length; i++) {
+        if (scanCandles[i].openTime >= timeMs) return i;
+    }
+    return -1;
+}
+
+/**
+ * Gatilho de reentrada por RSI do reforço no stop (options.reinforceOnStop.reentryTrigger ===
+ * 'rsiRecross') — a partir de `fromTimeMs` (o instante em que um stop bateu), procura o 1º ponto
+ * em que o RSI(14) do intervalo PRINCIPAL (o mesmo do sinal de entrada) volta a cruzar PARA CIMA
+ * de `threshold` — mesma detecção do sinal de entrada original (RSI anterior < threshold, RSI
+ * atual >= threshold), reaproveitando só a parte de RSI (os demais filtros de entrada —
+ * bandWidth/MACD/RSI1h/EMA/S/R — NÃO entram aqui). Dois reforços opcionais, mesma mecânica do
+ * sinal de entrada (mas intervalo FIXO 5m, sem seletor próprio):
+ *   - rsi5m: exige RSI(14) do candle de 5m fechado no fechamento do candle do intervalo principal
+ *     > rsi5m.threshold (ver checkRsi5mAt).
+ *   - earlyConfirm: dentro da janela do candle do intervalo principal que ainda estaria "em
+ *     formação" nesse ponto da história, usa o fechamento de cada candle de 5m já fechado ali
+ *     como preço PROVISÓRIO do candle em formação — recalcula o RSI com esse fechamento anexado
+ *     (mesma técnica de findEarlyConfirmCheckpoint/evaluateEntrySignal do bot ao vivo); cruzando
+ *     earlyConfirm.threshold, aceita ali, antes do candle inteiro fechar.
+ * candles/closes/rsiValues/offset cobrem TODA a história (fetch único do backtest) — inclusive
+ * depois do sinal original, então não precisa re-buscar nada, só continuar a varredura a partir
+ * de onde o stop bateu. Devolve { timeMs, price } do 1º ponto que bate tudo, ou null se a história
+ * do backtest acaba antes de recruzar (a espera nunca teria terminado dentro da amostra).
+ */
+function findRsiRecrossPoint({
+    candles, closes, rsiValues, offset, ivMs,
+    rsi5mCandles, rsi5mSeries, rsi5mOffset,
+    fromTimeMs, threshold, rsi5m, earlyConfirm,
+}) {
+    let k = -1;
+    for (let i = 0; i < rsiValues.length; i++) {
+        if (candles[i + offset].openTime > fromTimeMs) { k = i; break; }
+    }
+    if (k <= 0) return null; // sem candle seguinte ao stop, ou sem RSI anterior pra comparar
+
+    for (; k < rsiValues.length; k++) {
+        const cnd = candles[k + offset];
+
+        if (earlyConfirm?.enabled && rsi5mCandles.length) {
+            const winStart = cnd.openTime;
+            const winEnd = winStart + ivMs;
+            const priorCloses = closes.slice(0, k + offset); // fechados antes deste candle
+            for (const cp of rsi5mCandles) {
+                if (cp.openTime < winStart || cp.openTime >= winEnd) continue;
+                const cpClose = parseFloat(cp.close);
+                if (!Number.isFinite(cpClose)) continue;
+                const provisional = RSI.calculate({ values: [...priorCloses, cpClose], period: RSI_PERIOD });
+                const earlyRsi = provisional[provisional.length - 1];
+                if (earlyRsi != null && earlyRsi >= earlyConfirm.threshold
+                    && (!rsi5m?.enabled || checkRsi5mAt(rsi5mCandles, rsi5mSeries, rsi5mOffset, cp.openTime, rsi5m.threshold))) {
+                    return { timeMs: cp.openTime, price: cpClose };
+                }
+            }
+        }
+
+        const rsiPrev = rsiValues[k - 1];
+        const rsiCur = rsiValues[k];
+        if (rsiPrev < threshold && rsiCur >= threshold
+            && (!rsi5m?.enabled || checkRsi5mAt(rsi5mCandles, rsi5mSeries, rsi5mOffset, cnd.openTime + ivMs - 1, rsi5m.threshold))) {
+            return { timeMs: cnd.openTime, price: parseFloat(cnd.close) };
+        }
+    }
+    return null;
 }
 
 /**
@@ -1314,6 +1450,31 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
     // 'rearm' (a corretora vende no stop e o bot recompra com a sobra + o aporte, re-armando um
     // bracket normal −rearmStopPct% / +rearmTargetPct%). Ver runRearmLadder / runReinforcementLadder.
     const rfMode = reinforceOnStop?.mode === 'rearm' ? 'rearm' : 'ladder';
+    // Gatilho da próxima recompra — 'immediate' (padrão, no ato) ou 'rsiRecross' (espera o RSI do
+    // intervalo principal voltar a cruzar reentryRsi.rsiThreshold, com RSI 5m/confirmação
+    // adiantada opcionais — ver findRsiRecrossPoint). No modo ladder só afeta a perna 1 (mesmo
+    // escopo do waitCandles, que fica ignorado quando este gatilho está ligado); no rearm vale
+    // pra CADA recompra.
+    const rfReentryTrigger = reinforceOnStop?.reentryTrigger === 'rsiRecross' ? 'rsiRecross' : 'immediate';
+    const rfReentryRsiThreshold = Math.max(1, Math.min(99, Number(reinforceOnStop?.reentryRsi?.rsiThreshold ?? 69)));
+    const rfReentryRsi5mEnabled = !!reinforceOnStop?.reentryRsi?.rsi5mFilter?.enabled;
+    const rfReentryRsi5mThreshold = Math.max(50, Math.min(95, Number(reinforceOnStop?.reentryRsi?.rsi5mFilter?.threshold ?? 75)));
+    const rfReentryEarlyConfirmEnabled = reinforceOnStop?.reentryRsi?.earlyConfirm?.enabled !== false;
+    const rfReentryEarlyConfirmThreshold = Math.max(50, Math.min(95, Number(reinforceOnStop?.reentryRsi?.earlyConfirm?.rsiThreshold ?? 75)));
+    // Intervalo PRÓPRIO do RSI de reentrada — desligado por padrão do entry.interval (o mesmo do
+    // trade), mas pode ser outro qualquer (ex.: entrar de volta pelo RSI de 5m mesmo num trade de
+    // 15m/1h). E intervalo PRÓPRIO da confirmação (RSI 5m/adiantada) — antes fixo em 5m, agora
+    // configurável, compartilhado pelos dois reforços (rsi5mFilter + earlyConfirm). Backtest only
+    // por enquanto (ver JSDoc de exit.reinforceOnStop em tradeConfigSchema.js — mesmo status do
+    // waitCandles: testável em Estatísticas antes de ir pro bot ao vivo).
+    const rfReentryRequestedInterval = PREV_DAY_CLOUD_INTERVALS.includes(reinforceOnStop?.reentryRsi?.interval)
+        ? reinforceOnStop.reentryRsi.interval : interval;
+    const rfReentryInterval = (source === 'gate' && !GATE_PREV_DAY_CLOUD_INTERVALS.includes(rfReentryRequestedInterval))
+        ? interval : rfReentryRequestedInterval;
+    const rfConfirmRequestedInterval = PREV_DAY_CLOUD_INTERVALS.includes(reinforceOnStop?.reentryRsi?.confirmInterval)
+        ? reinforceOnStop.reentryRsi.confirmInterval : '5m';
+    const rfConfirmInterval = (source === 'gate' && !GATE_PREV_DAY_CLOUD_INTERVALS.includes(rfConfirmRequestedInterval))
+        ? '1h' : rfConfirmRequestedInterval;
     const rfRearmStopPct = Math.max(0.5, Math.min(30, Number(reinforceOnStop?.rearmStopPct ?? 10)));
     const rfRearmTargetPct = Math.max(0.5, Math.min(50, Number(reinforceOnStop?.rearmTargetPct ?? 10)));
 
@@ -1473,6 +1634,21 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
         ? computeOwnIntervalFetchLimit(interval, mainLimit, '5m', RSI_WARMUP_BARS)
         : 0;
 
+    // Gatilho de reentrada por RSI do reforço no stop (reentryTrigger === 'rsiRecross') — intervalo
+    // PRÓPRIO do RSI de reentrada (rfReentryInterval, default = interval do sinal) e da confirmação
+    // (rfConfirmInterval, default 5m). Cada um só busca candles NOVOS se não coincidir com uma
+    // série já buscada por outro motivo (ver reuso em rfReentryCandles/rfConfirmCandles abaixo).
+    const rfReentryNeedsOwnFetch = rfEnabled && rfReentryTrigger === 'rsiRecross' && rfReentryInterval !== interval;
+    const rfReentryOwnLimit = rfReentryNeedsOwnFetch
+        ? computeOwnIntervalFetchLimit(interval, mainLimit, rfReentryInterval, RSI_WARMUP_BARS)
+        : 0;
+    const rfConfirmActive = rfEnabled && rfReentryTrigger === 'rsiRecross'
+        && (rfReentryRsi5mEnabled || rfReentryEarlyConfirmEnabled);
+    const rfConfirmNeedsOwnFetch = rfConfirmActive && rfConfirmInterval !== interval && rfConfirmInterval !== rfReentryInterval;
+    const rfConfirmOwnLimit = rfConfirmNeedsOwnFetch
+        ? computeOwnIntervalFetchLimit(interval, mainLimit, rfConfirmInterval, RSI_WARMUP_BARS)
+        : 0;
+
     const settled = await Promise.allSettled([
         fetchCandles(symbol, interval, mainLimit),
         bwEnabled
@@ -1503,9 +1679,19 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
         emaCrossEnabled
             ? fetchCandles(symbol, emaCrossInterval, emaCrossLimit)
             : Promise.resolve(null),
+        rfReentryNeedsOwnFetch
+            ? fetchCandles(symbol, rfReentryInterval, rfReentryOwnLimit)
+            : Promise.resolve(null),
+        rfConfirmNeedsOwnFetch
+            ? fetchCandles(symbol, rfConfirmInterval, rfConfirmOwnLimit)
+            : Promise.resolve(null),
     ]);
 
-    const [candlesResult, bwCandlesResult, pdcCandlesResult, tickersResult, pcsCandlesResult, adxCandlesResult, macdCandlesResult, refRsiCandlesResult, srCandlesResult, rsi5mCandlesResult, emaCrossCandlesResult] = settled;
+    const [
+        candlesResult, bwCandlesResult, pdcCandlesResult, tickersResult, pcsCandlesResult, adxCandlesResult,
+        macdCandlesResult, refRsiCandlesResult, srCandlesResult, rsi5mCandlesResult, emaCrossCandlesResult,
+        rfReentryCandlesResult, rfConfirmCandlesResult,
+    ] = settled;
     if (candlesResult.status === 'rejected') throw candlesResult.reason;
     const candles = candlesResult.value;
 
@@ -1697,6 +1883,56 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
         rsi5mOffset = rsi5mCandles.length - rsi5mSeries.length;
     }
 
+    // RSI de reentrada do reforço no stop (rfReentryInterval) — intervalo PRÓPRIO, reaproveita a
+    // série principal quando coincide com o intervalo do sinal (mesmo padrão do refRsi/rsi5m).
+    let rfReentryCandles = [];
+    let rfReentrySeries = [];
+    let rfReentryOffset = 0;
+    if (rfEnabled && rfReentryTrigger === 'rsiRecross') {
+        if (!rfReentryNeedsOwnFetch) {
+            rfReentryCandles = candles;
+            rfReentrySeries = rsiValues;
+            rfReentryOffset = offset;
+        } else if (rfReentryCandlesResult.status === 'fulfilled' && rfReentryCandlesResult.value?.length) {
+            rfReentryCandles = rfReentryCandlesResult.value;
+            rfReentrySeries = RSI.calculate({ values: rfReentryCandles.map(c => parseFloat(c.close)), period: RSI_PERIOD });
+            rfReentryOffset = rfReentryCandles.length - rfReentrySeries.length;
+        }
+    }
+
+    // Confirmação (RSI 5m/adiantada) do gatilho de reentrada — intervalo PRÓPRIO (rfConfirmInterval),
+    // reaproveita a série principal ou a de reentrada quando coincidem; senão busca própria.
+    let rfConfirmCandles = [];
+    let rfConfirmSeries = [];
+    let rfConfirmOffset = 0;
+    if (rfConfirmActive) {
+        if (rfConfirmInterval === interval) {
+            rfConfirmCandles = candles; rfConfirmSeries = rsiValues; rfConfirmOffset = offset;
+        } else if (rfConfirmInterval === rfReentryInterval) {
+            rfConfirmCandles = rfReentryCandles; rfConfirmSeries = rfReentrySeries; rfConfirmOffset = rfReentryOffset;
+        } else if (rfConfirmCandlesResult.status === 'fulfilled' && rfConfirmCandlesResult.value?.length) {
+            rfConfirmCandles = rfConfirmCandlesResult.value;
+            rfConfirmSeries = RSI.calculate({ values: rfConfirmCandles.map(c => parseFloat(c.close)), period: RSI_PERIOD });
+            rfConfirmOffset = rfConfirmCandles.length - rfConfirmSeries.length;
+        }
+    }
+
+    // Gatilho de reentrada por RSI do reforço no stop (reentryTrigger === 'rsiRecross') — resolver
+    // construído UMA VEZ por símbolo (séries já cobrem toda a história buscada), reaproveitado por
+    // runReinforcementLadder/runRearmLadder pra cada stop que ocorrer. Ver findRsiRecrossPoint.
+    const rfReentryIntervalMs = rfReentryInterval === '1m' ? 60_000 : intervalMs(rfReentryInterval);
+    const rfReentryCloses = rfReentryCandles === candles ? closes : rfReentryCandles.map(c => parseFloat(c.close));
+    const rfReentryResolver = rfEnabled && rfReentryTrigger === 'rsiRecross'
+        ? (fromTimeMs) => findRsiRecrossPoint({
+            candles: rfReentryCandles, closes: rfReentryCloses,
+            rsiValues: rfReentrySeries, offset: rfReentryOffset, ivMs: rfReentryIntervalMs,
+            rsi5mCandles: rfConfirmCandles, rsi5mSeries: rfConfirmSeries, rsi5mOffset: rfConfirmOffset,
+            fromTimeMs, threshold: rfReentryRsiThreshold,
+            rsi5m: rfReentryRsi5mEnabled ? { enabled: true, threshold: rfReentryRsi5mThreshold } : null,
+            earlyConfirm: rfReentryEarlyConfirmEnabled ? { enabled: true, threshold: rfReentryEarlyConfirmThreshold } : null,
+        })
+        : null;
+
     // Fase 1 — detecta os cruzamentos de RSI no candle do `interval` principal (o "pensamento"
     // continua em 15m/etc.), sem resolver ainda pullback/saída.
     const rawSignals = [];
@@ -1867,8 +2103,24 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
         }
     }
 
+    // Exclusividade por símbolo — o bot ao vivo só mantém 1 trade aberto por moeda (a linha fica
+    // WATCHING/PENDING/BOUGHT; enquanto BOUGHT/reforçando, nenhum sinal novo é avaliado pra ela).
+    // rawSignals é cronológico (fase 1 varre i ascendente) — um novo sinal cujo candle abre ANTES
+    // do fim (real) do trade anterior é ignorado aqui, em vez de virar outro trade "simultâneo".
+    // Sem isso, um trade que demora pra fechar (ex.: reforço com reentryTrigger 'rsiRecross', que
+    // espera o RSI recruzar indefinidamente) deixa a moeda "ocupada" por muito tempo, e cada novo
+    // cruzamento de RSI nesse meio-tempo virava um trade independente — a mesma moeda aparecendo
+    // dezenas de vezes na lista, todos convergindo pro mesmo desfecho (ver KORUBUSDT, 11/09/2026).
+    let occupiedUntilMs = -Infinity;
+    let exclusivityBlocked = 0;
+
     const occurrences = [];
     for (const { signalCandle, signalPrice, signalRsi, signalRsi1h, idx, stopPriceOverride, cloudZone, srZone, srTargetPrice, srLines } of rawSignals) {
+        if (signalCandle.openTime < occupiedUntilMs) {
+            exclusivityBlocked++;
+            continue;
+        }
+
         const ivMs = interval === '1m' ? 60_000 : intervalMs(interval);
         const signalCloseMs = signalCandle.openTime + ivMs;
 
@@ -1923,10 +2175,24 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
                 ? { coinStepPct: trailingTargetCoinStepPct, stepPct: trailingTargetStepPct }
                 : null,
             reinforceOnStop: rfEnabled
-                ? { enabled: true, mode: rfMode, addDropPct: rfAddDropPct, exitRisePct: rfExitRisePct, maxRungs: rfMaxRungs, waitCandles: rfWaitCandles, buyUsd: rfBuyUsd, rearmStopPct: rfRearmStopPct, rearmTargetPct: rfRearmTargetPct }
+                ? {
+                    enabled: true, mode: rfMode, addDropPct: rfAddDropPct, exitRisePct: rfExitRisePct,
+                    maxRungs: rfMaxRungs, waitCandles: rfWaitCandles, buyUsd: rfBuyUsd,
+                    rearmStopPct: rfRearmStopPct, rearmTargetPct: rfRearmTargetPct,
+                    reentryResolver: rfReentryResolver,
+                }
                 : null,
             positionSizeUsd,
         });
+
+        // A moeda fica "ocupada" até o trade fechar de verdade — 'open' (nunca fechou dentro da
+        // amostra) usa o último candle varrido como fim (não há dado além dali pra saber se/quando
+        // fecharia, então bloqueia o resto da amostra, igual o bot ao vivo ficaria travado nela).
+        if (resolved.filled) {
+            occupiedUntilMs = resolved.exitTime
+                ?? (scanCandles.length ? scanCandles[scanCandles.length - 1].openTime : signalCandle.openTime);
+        }
+
         const occ = buildOccurrence(signalCandle, signalPrice, signalRsi, resolved, positionSizeUsd, cloudZone, signalRsi1h, srZone, srLines);
         // Histograma do MACD no candle do sinal (intervalo próprio) — só pro acordeão
         // contrafactual "E se o MACD confirmasse?" (computeMacdWhatIf). null = ainda em warmup.
@@ -2013,6 +2279,9 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
         rsi5mBlockedCount: rsi5mEnabled ? rsi5mBlocked : 0,
         newHighFilter: nhEnabled ? { lookback: nhLookback, marginPct: nhMarginPct } : null,
         newHighBlockedCount: nhEnabled ? newHighBlocked : 0,
+        // Sinais ignorados por já haver um trade aberto na mesma moeda (ver occupiedUntilMs acima)
+        // — sempre ativo, não é um filtro opcional. Mesma regra do bot ao vivo (1 posição/moeda).
+        exclusivityBlockedCount: exclusivityBlocked,
         trailingStop: trailingStopEnabled ? {
             mode: trailingStopMode,
             startPct: trailingStopStartPct,
@@ -2038,7 +2307,18 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
             stepPct: trailingTargetStepPct,
         } : null,
         hardTakeProfit: hardTakeProfitPct > 0 ? { pct: hardTakeProfitPct } : null,
-        reinforceOnStop: rfEnabled ? { mode: rfMode, addDropPct: rfAddDropPct, exitRisePct: rfExitRisePct, waitCandles: rfWaitCandles, buyUsd: rfBuyUsd, rearmStopPct: rfRearmStopPct, rearmTargetPct: rfRearmTargetPct } : null,
+        reinforceOnStop: rfEnabled ? {
+            mode: rfMode, addDropPct: rfAddDropPct, exitRisePct: rfExitRisePct, waitCandles: rfWaitCandles,
+            buyUsd: rfBuyUsd, rearmStopPct: rfRearmStopPct, rearmTargetPct: rfRearmTargetPct,
+            reentryTrigger: rfReentryTrigger,
+            reentryRsi: rfReentryTrigger === 'rsiRecross' ? {
+                interval: rfReentryInterval,
+                rsiThreshold: rfReentryRsiThreshold,
+                confirmInterval: rfConfirmInterval,
+                rsi5mFilter: { enabled: rfReentryRsi5mEnabled, threshold: rfReentryRsi5mThreshold },
+                earlyConfirm: { enabled: rfReentryEarlyConfirmEnabled, threshold: rfReentryEarlyConfirmThreshold },
+            } : null,
+        } : null,
         reinforceStats: rfEnabled ? computeReinforceStats(filledOccurrences) : null,
         dailyEntryStats: computeDailyEntryStats(filledOccurrences, positionSizeUsd, entriesDayRange),
         tradeDuration: computeAvgTradeDurationMs(filledOccurrences),
@@ -2052,6 +2332,8 @@ module.exports.computeMacdWhatIf = computeMacdWhatIf;
 module.exports.computeReinforceStats = computeReinforceStats;
 module.exports.runReinforcementLadder = runReinforcementLadder;
 module.exports.runRearmLadder = runRearmLadder;
+module.exports.findRsiRecrossPoint = findRsiRecrossPoint;
+module.exports.findScanIndexAtOrAfter = findScanIndexAtOrAfter;
 module.exports.computeCloudZoneStats = computeCloudZoneStats;
 module.exports.computeSupportResistanceZoneStats = computeSupportResistanceZoneStats;
 module.exports.computeRsi1hBreakdown = computeRsi1hBreakdown;

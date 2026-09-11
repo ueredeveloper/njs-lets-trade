@@ -190,6 +190,32 @@ const RSI_MOMENTUM_DEFAULTS = {
       // bracket normal −rearmStopPct% / +rearmTargetPct% (repete a cada novo stop). Ver
       // startRearmReinforce em rsi-momentum-bot.js e runRearmLadder no backtest.
       rearmStopPct: 10, rearmTargetPct: 10,
+      /** Gatilho da PRÓXIMA recompra após um stop — 'immediate' (recompra no ato, no preço do
+       *  próprio stop) ou 'rsiRecross' (PADRÃO — espera o RSI(14) voltar a cruzar PARA CIMA de
+       *  reentryRsi.rsiThreshold antes de recomprar — mesmo motor de detecção do sinal de entrada
+       *  original (evaluateEntrySignal), só a parte de RSI; os demais filtros de entrada —
+       *  bandWidth/MACD/RSI1h/EMA/S/R — NÃO entram aqui. Ideia: deixar a moeda "consolidar" (RSI
+       *  sair da sobrevenda do stop e voltar pra cima do limiar) antes de reforçar, em vez de
+       *  reforçar às cegas no ato.
+       *  No modo 'ladder' só afeta a perna 1 (mesmo escopo do antigo waitCandles — degraus
+       *  seguintes continuam entrando no ato da queda). No modo 'rearm' vale pra CADA recompra
+       *  (cada stop reabre a espera) — ver evaluateReentryRsiSignal em strategyEngine.js e
+       *  beginLadderReentryWait/beginRearmReentryWait em rsi-momentum-bot.js.
+       *  Config vencedora validada em Estatísticas (ver CLAUDE.md): RSI>80 no intervalo de 5m. */
+      reentryTrigger: 'rsiRecross',
+      reentryRsi: {
+        // Intervalo PRÓPRIO do RSI de reentrada — pode ser diferente do entry.interval do trade
+        // (padrão 5m, config vencedora). Sem valor salvo (configs antigas), cai no entry.interval.
+        interval: '5m',
+        rsiThreshold: 80,
+        // Intervalo PRÓPRIO da confirmação (rsi5mFilter + earlyConfirm), padrão 5m.
+        confirmInterval: '5m',
+        // Opcional — mesma regra de entry.rsi5mFilter, no confirmInterval acima.
+        rsi5mFilter: { enabled: false, threshold: 75 },
+        // Desligado por padrão — com interval === confirmInterval (5m/5m) não há "adiantamento"
+        // possível (precisa de confirmInterval mais CURTO que interval pra fazer sentido).
+        earlyConfirm: { enabled: false, rsiThreshold: 75 },
+      },
     },
   },
 
@@ -403,10 +429,38 @@ function normalizeHardTakeProfit(block) {
   };
 }
 
+/** Gatilho de reentrada por RSI (reinforceOnStop.reentryRsi) — { interval, rsiThreshold 50..95,
+ *  confirmInterval, rsi5mFilter: { enabled, threshold 50..95 }, earlyConfirm: { enabled,
+ *  rsiThreshold 50..95 } }. Mesmo shape restrito à parte de RSI de entry.rsi5mFilter/
+ *  entry.earlyConfirm, com intervalo PRÓPRIO em cada ponta (interval do RSI de reentrada,
+ *  confirmInterval do rsi5mFilter/earlyConfirm) em vez de fixo — ver evaluateReentryRsiSignal em
+ *  strategyEngine.js. Default 5m/5m (config vencedora, ver CLAUDE.md). */
+function normalizeReentryRsi(block) {
+  const d = RSI_MOMENTUM_DEFAULTS.exit.reinforceOnStop.reentryRsi;
+  const src = block ?? {};
+  const rsi5m = src.rsi5mFilter ?? {};
+  const early = src.earlyConfirm ?? {};
+  return {
+    interval: normalizeInterval(src.interval, d.interval),
+    rsiThreshold: Math.max(50, Math.min(95, Number(src.rsiThreshold ?? d.rsiThreshold))),
+    confirmInterval: normalizeInterval(src.confirmInterval, d.confirmInterval),
+    rsi5mFilter: {
+      enabled: rsi5m.enabled === true,
+      threshold: Math.max(50, Math.min(95, Number(rsi5m.threshold ?? d.rsi5mFilter.threshold))),
+    },
+    earlyConfirm: {
+      enabled: typeof early.enabled === 'boolean' ? early.enabled : d.earlyConfirm.enabled,
+      rsiThreshold: Math.max(50, Math.min(95, Number(early.rsiThreshold ?? d.earlyConfirm.rsiThreshold))),
+    },
+  };
+}
+
 /** "Reforço no stop" — { enabled, mode, addDropPct 2..30, exitRisePct 2..50, rearmStopPct 0.5..30,
- *  rearmTargetPct 0.5..50, buyUsd }. Mesmo shape do backtest (options.reinforceOnStop).
- *  mode 'ladder' (padrão) = escada de averaging-down sem stop; 'rearm' = corretora vende no stop,
- *  bot recompra sobra + buyUsd e re-arma bracket −rearmStopPct% / +rearmTargetPct%. */
+ *  rearmTargetPct 0.5..50, buyUsd, reentryTrigger, reentryRsi }. Mesmo shape do backtest
+ *  (options.reinforceOnStop). mode 'ladder' (padrão) = escada de averaging-down sem stop;
+ *  'rearm' = corretora vende no stop, bot recompra sobra + buyUsd e re-arma bracket
+ *  −rearmStopPct% / +rearmTargetPct%. reentryTrigger 'immediate' recompra no ato; 'rsiRecross'
+ *  (PADRÃO) espera o RSI voltar a cruzar reentryRsi.rsiThreshold — ver JSDoc acima. */
 function normalizeReinforceOnStop(block) {
   const d = RSI_MOMENTUM_DEFAULTS.exit.reinforceOnStop;
   const src = block ?? {};
@@ -420,6 +474,10 @@ function normalizeReinforceOnStop(block) {
     // Valor (USDT) do aporte de cada reforço — padrão 40. No 'rearm' é o dinheiro NOVO somado à
     // sobra da venda no stop.
     buyUsd: Math.max(5, Math.min(100_000, Number(src.buyUsd ?? d.buyUsd))),
+    reentryTrigger: (src.reentryTrigger === 'rsiRecross' || src.reentryTrigger === 'immediate')
+      ? src.reentryTrigger
+      : d.reentryTrigger, // sem valor salvo (config nova/antiga), cai no default
+    reentryRsi: normalizeReentryRsi(src.reentryRsi),
   };
 }
 

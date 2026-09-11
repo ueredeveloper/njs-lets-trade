@@ -1012,7 +1012,21 @@ function statsConfigToRsiMomentumBody({ symbol, interval, config = {}, priorRsiF
             exitRisePct: num(c.reinforceOnStop.exitRisePct, 15),
             rearmStopPct: num(c.reinforceOnStop.rearmStopPct, 10),
             rearmTargetPct: num(c.reinforceOnStop.rearmTargetPct, 10),
-            buyUsd: num(c.reinforceOnStop.buyUsd, 40) }
+            buyUsd: num(c.reinforceOnStop.buyUsd, 40),
+            reentryTrigger: c.reinforceOnStop.reentryTrigger === 'rsiRecross' ? 'rsiRecross' : 'immediate',
+            reentryRsi: {
+              interval: c.reinforceOnStop.reentryRsi?.interval || interval || '5m',
+              rsiThreshold: num(c.reinforceOnStop.reentryRsi?.rsiThreshold, 80),
+              confirmInterval: c.reinforceOnStop.reentryRsi?.confirmInterval || '5m',
+              rsi5mFilter: {
+                enabled: !!c.reinforceOnStop.reentryRsi?.rsi5mFilter?.enabled,
+                threshold: num(c.reinforceOnStop.reentryRsi?.rsi5mFilter?.threshold, 75),
+              },
+              earlyConfirm: {
+                enabled: c.reinforceOnStop.reentryRsi?.earlyConfirm?.enabled !== false,
+                rsiThreshold: num(c.reinforceOnStop.reentryRsi?.earlyConfirm?.rsiThreshold, 75),
+              },
+            } }
         : { enabled: false },
     },
     stopLoss: { enabled: true, maxLossPct: Math.max(0.5, num(c.stopLossPct, 3)) },
@@ -1070,6 +1084,14 @@ function rsiMomentumConfigToStatsPrefs(n) {
     reinforceRearmStopPct: x.reinforceOnStop.rearmStopPct ?? 10,
     reinforceRearmTargetPct: x.reinforceOnStop.rearmTargetPct ?? 10,
     reinforceBuyUsd: x.reinforceOnStop.buyUsd,
+    reinforceReentryTrigger: x.reinforceOnStop.reentryTrigger === 'immediate' ? 'immediate' : 'rsiRecross',
+    reinforceReentryInterval: x.reinforceOnStop.reentryRsi?.interval || '',
+    reinforceReentryRsi: x.reinforceOnStop.reentryRsi?.rsiThreshold ?? 80,
+    reinforceReentryConfirmInterval: x.reinforceOnStop.reentryRsi?.confirmInterval || '5m',
+    reinforceReentryRsi5mEnabled: !!x.reinforceOnStop.reentryRsi?.rsi5mFilter?.enabled,
+    reinforceReentryRsi5mThreshold: x.reinforceOnStop.reentryRsi?.rsi5mFilter?.threshold ?? 75,
+    reinforceReentryEarlyConfirmEnabled: !!x.reinforceOnStop.reentryRsi?.earlyConfirm?.enabled,
+    reinforceReentryEarlyConfirmRsi: x.reinforceOnStop.reentryRsi?.earlyConfirm?.rsiThreshold ?? 75,
     trailingCoinStepPct: ts.coinStepPct,
     trailingStopStepPct: ts.stopStepPct,
     trailingTargetCoinStepPct: x.trailingTarget.coinStepPct,

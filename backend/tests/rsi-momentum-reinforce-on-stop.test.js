@@ -4,6 +4,8 @@ const {
     runReinforcementLadder,
     runRearmLadder,
     computeReinforceStats,
+    findRsiRecrossPoint,
+    findScanIndexAtOrAfter,
 } = require('../utils/analyseRsiThresholdBacktest');
 
 /** Candle mínimo pro motor da escada (só usa low/high/close/openTime). */
@@ -236,5 +238,172 @@ describe('computeReinforceStats', () => {
 
     test('null quando nenhum trade usou reforço', () => {
         expect(computeReinforceStats([{ reinforceRungs: 0, outcome: 'stop', pnlUsd: -10 }])).toBeNull();
+    });
+});
+
+/** Candle do intervalo PRINCIPAL pro findRsiRecrossPoint — só usa openTime/close. */
+function mainCandle(i, close, ivMs = 900_000, t0 = 0) {
+    return { openTime: t0 + i * ivMs, close: String(close) };
+}
+
+describe('findRsiRecrossPoint — gatilho de reentrada por RSI (reentryTrigger "rsiRecross")', () => {
+    const IV_MS = 900_000; // 15m
+    // 8 candles de 15m; offset=3 (RSI "nasce" em candles[3]) -> rsiValues[k] <-> candles[k+3].
+    const candles = Array.from({ length: 8 }, (_, i) => mainCandle(i, 100 + i));
+    const closes = candles.map((c) => parseFloat(c.close));
+    const offset = 3;
+    const rsiValues = [50, 55, 60, 65, 72]; // candles[3..7]
+
+    test('acha o 1º cruzamento pra CIMA do threshold depois de fromTimeMs', () => {
+        const r = findRsiRecrossPoint({
+            candles, closes, rsiValues, offset, ivMs: IV_MS,
+            rsi5mCandles: [], rsi5mSeries: [], rsi5mOffset: 0,
+            fromTimeMs: candles[5].openTime, threshold: 69, rsi5m: null, earlyConfirm: null,
+        });
+        expect(r).not.toBeNull();
+        expect(r.timeMs).toBe(candles[7].openTime); // rsiValues[3]=65 -> rsiValues[4]=72 cruza aqui
+        expect(r.price).toBeCloseTo(107, 6);
+    });
+
+    test('nunca cruza o threshold -> null', () => {
+        const r = findRsiRecrossPoint({
+            candles, closes, rsiValues, offset, ivMs: IV_MS,
+            rsi5mCandles: [], rsi5mSeries: [], rsi5mOffset: 0,
+            fromTimeMs: candles[5].openTime, threshold: 90, rsi5m: null, earlyConfirm: null,
+        });
+        expect(r).toBeNull();
+    });
+
+    test('sem candle nenhum depois de fromTimeMs -> null', () => {
+        const r = findRsiRecrossPoint({
+            candles, closes, rsiValues, offset, ivMs: IV_MS,
+            rsi5mCandles: [], rsi5mSeries: [], rsi5mOffset: 0,
+            fromTimeMs: candles[7].openTime, threshold: 69, rsi5m: null, earlyConfirm: null,
+        });
+        expect(r).toBeNull();
+    });
+
+    test('filtro RSI 5m bloqueia o cruzamento (RSI 5m no fechamento <= threshold)', () => {
+        // RSI 5m no fechamento do candle[7] (openTime+ivMs-1) resolve pro candle 5m em 6_300_000.
+        const rsi5mCandles = [{ openTime: 0 }, { openTime: candles[7].openTime }];
+        const rsi5mSeries = [80, 60];
+        const r = findRsiRecrossPoint({
+            candles, closes, rsiValues, offset, ivMs: IV_MS,
+            rsi5mCandles, rsi5mSeries, rsi5mOffset: 0,
+            fromTimeMs: candles[5].openTime, threshold: 69, rsi5m: { enabled: true, threshold: 65 }, earlyConfirm: null,
+        });
+        expect(r).toBeNull(); // 60 <= 65 -> bloqueia o único cruzamento disponível
+    });
+
+    test('filtro RSI 5m libera quando o RSI 5m está acima do threshold', () => {
+        const rsi5mCandles = [{ openTime: 0 }, { openTime: candles[7].openTime }];
+        const rsi5mSeries = [80, 90];
+        const r = findRsiRecrossPoint({
+            candles, closes, rsiValues, offset, ivMs: IV_MS,
+            rsi5mCandles, rsi5mSeries, rsi5mOffset: 0,
+            fromTimeMs: candles[5].openTime, threshold: 69, rsi5m: { enabled: true, threshold: 65 }, earlyConfirm: null,
+        });
+        expect(r).not.toBeNull();
+        expect(r.timeMs).toBe(candles[7].openTime);
+    });
+});
+
+describe('findScanIndexAtOrAfter', () => {
+    const scan = [candle(1, 2, 1, 0), candle(1, 2, 1, 2), candle(1, 2, 1, 5)];
+
+    test('acha o 1º candle com openTime >= alvo', () => {
+        expect(findScanIndexAtOrAfter(scan, scan[1].openTime)).toBe(1);
+        expect(findScanIndexAtOrAfter(scan, scan[1].openTime + 1)).toBe(2);
+    });
+
+    test('-1 quando nenhum candle alcança o alvo', () => {
+        expect(findScanIndexAtOrAfter(scan, scan[2].openTime + 1)).toBe(-1);
+    });
+});
+
+describe('runReinforcementLadder — reentryResolver (reentryTrigger "rsiRecross")', () => {
+    const FIRST_ENTRY = 100;
+    const FIRST_STOP = 90;
+    const OPTS = { addDropPct: 10, exitRisePct: 15, maxRungs: 100 };
+
+    test('perna 1 entra no preço/instante devolvido pelo resolver, não no preço do stop', () => {
+        const scan = [
+            candle(89, 91, 89, 0),
+            candle(87, 89, 88, 1),
+            candle(84, 96, 95, 2), // resolver aponta pra cá (close 82) -> depois disso, high 96 >= 82*1.15=94.3 -> alvo
+        ];
+        const resolver = jest.fn((fromTimeMs) => {
+            expect(fromTimeMs).toBe(scan[0].openTime); // stopTime0
+            return { timeMs: scan[2].openTime, price: 82 };
+        });
+        const r = runReinforcementLadder(scan, 0, FIRST_ENTRY, FIRST_STOP, { ...OPTS, reentryResolver: resolver });
+        expect(resolver).toHaveBeenCalledTimes(1);
+        expect(r.legs).toEqual([100, 82]);
+        expect(r.outcome).toBe('target');
+        expect(r.exitPrice).toBeCloseTo(94.3, 4);
+    });
+
+    test('resolver nunca acha reentrada -> só a perna 0, outcome open', () => {
+        const scan = [candle(89, 91, 89, 0), candle(85, 88, 86, 1)];
+        const resolver = jest.fn(() => null);
+        const r = runReinforcementLadder(scan, 0, FIRST_ENTRY, FIRST_STOP, { ...OPTS, reentryResolver: resolver });
+        expect(r.legs).toEqual([100]);
+        expect(r.outcome).toBe('open');
+        expect(r.exitPrice).toBeCloseTo(86, 6);
+    });
+
+    test('reentryResolver tem prioridade sobre waitCandles quando os dois vêm preenchidos', () => {
+        const scan = [candle(89, 91, 89, 0), candle(95, 104, 103, 1)];
+        const resolver = () => ({ timeMs: scan[1].openTime, price: 95 });
+        const r = runReinforcementLadder(scan, 0, FIRST_ENTRY, FIRST_STOP, { ...OPTS, waitCandles: 1, reentryResolver: resolver });
+        expect(r.legs).toEqual([100, 95]); // 95 do resolver, não 89 (fechamento do candle 1 após wait)
+    });
+});
+
+describe('runRearmLadder — reentryResolver (reentryTrigger "rsiRecross")', () => {
+    const FIRST_ENTRY = 100;
+    const FIRST_STOP = 90;
+
+    test('recompra no preço/instante do resolver em vez do preço do stop', () => {
+        const scan = [
+            candle(85, 88, 86, 0),
+            candle(88, 100, 99, 1), // resolver aponta pra cá (close 92) -> alvo = 92*1.10=101.2? checar high
+        ];
+        // recompra a 92 (resolver): alvo = 92*1.10 = 101.2, stop = 92*0.90 = 82.8 — nenhum bate no candle 1
+        // (high 100 < 101.2, low 88 > 82.8) -> outcome open no fim da janela.
+        const resolver = jest.fn(() => ({ timeMs: scan[1].openTime, price: 92 }));
+        const r = runRearmLadder(scan, 0, FIRST_ENTRY, FIRST_STOP,
+            { stopPct: 10, targetPct: 10, maxRungs: 100, firstLegUsd: 100, rungUsd: 100, reentryResolver: resolver });
+        expect(r.legs).toEqual([100, 92]); // 92 do resolver, não 90 (preço do stop)
+        expect(resolver).toHaveBeenCalledTimes(1);
+    });
+
+    test('resolver nunca acha reentrada -> fica flat só com a perna 0 (sem recompra nenhuma)', () => {
+        const scan = [candle(85, 88, 86, 0)];
+        const resolver = jest.fn(() => null);
+        const r = runRearmLadder(scan, 0, FIRST_ENTRY, FIRST_STOP,
+            { stopPct: 10, targetPct: 10, maxRungs: 100, firstLegUsd: 100, rungUsd: 100, reentryResolver: resolver });
+        expect(r.legs).toEqual([100]);
+        expect(r.outcome).toBe('open');
+        expect(r.investedUsd).toBeCloseTo(100, 6); // nenhum aporte novo — só o caixa original
+    });
+
+    test('resolver é chamado de novo a CADA stop (diferente do modo ladder, que só afeta a perna 1)', () => {
+        const scan = [
+            candle(78, 82, 80, 0),  // resolver aponta a 1ª recompra pra cá (92) -> stop 82.8, low 78 já bate
+            candle(80, 90, 89, 1),  // resolver aponta a 2ª recompra pra cá (81) -> alvo 81*1.1=89.1, high 90 bate
+            candle(85, 95, 94, 2),  // nunca alcançado — o alvo já fechou a pilha no candle anterior
+        ];
+        const calls = [];
+        const resolver = jest.fn((fromTimeMs) => {
+            calls.push(fromTimeMs);
+            if (calls.length === 1) return { timeMs: scan[0].openTime, price: 92 }; // antes da 1ª recompra
+            return { timeMs: scan[1].openTime, price: 81 }; // depois do 2º stop
+        });
+        const r = runRearmLadder(scan, 0, FIRST_ENTRY, FIRST_STOP,
+            { stopPct: 10, targetPct: 10, maxRungs: 100, firstLegUsd: 100, rungUsd: 100, reentryResolver: resolver });
+        expect(resolver).toHaveBeenCalledTimes(2);
+        expect(r.legs).toEqual([100, 92, 81]);
+        expect(r.outcome).toBe('target');
     });
 });

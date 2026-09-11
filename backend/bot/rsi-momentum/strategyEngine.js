@@ -94,6 +94,21 @@ function getRequiredSpecs(config) {
         add(entry.supportResistance.interval ?? '4h', cc + SR_WINDOW_PADDING);
     }
 
+    // Gatilho de reentrada por RSI (exit.reinforceOnStop.reentryTrigger === 'rsiRecross') —
+    // intervalo PRÓPRIO do RSI de reentrada (reentryRsi.interval, default entry.interval — já
+    // coberto acima nesse caso) e do intervalo de confirmação (reentryRsi.confirmInterval,
+    // default 5m), só quando o filtro RSI e/ou a confirmação adiantada estão ligados. Ver
+    // evaluateReentryRsiSignal.
+    const rf = config.exit?.reinforceOnStop;
+    if (rf?.enabled && rf.reentryTrigger === 'rsiRecross') {
+        const reentryIv = rf.reentryRsi?.interval || entry.interval;
+        add(reentryIv, RSI_PERIOD * 3 + 30);
+        if (rf.reentryRsi?.rsi5mFilter?.enabled || rf.reentryRsi?.earlyConfirm?.enabled) {
+            const confirmIv = rf.reentryRsi?.confirmInterval || RSI5M_INTERVAL;
+            add(confirmIv, RSI_PERIOD + RSI5M_WARMUP_PADDING + EARLY_CONFIRM_WARMUP_PADDING);
+        }
+    }
+
     return [...specs.entries()].map(([interval, lim]) => ({ interval, limit: lim }));
 }
 
@@ -355,6 +370,85 @@ function evaluateReinforceLadder(reinforceState, forming) {
     if (Number.isFinite(low) && low <= addLevel) return { action: 'addRung', addLevel, tpPrice };
     if (Number.isFinite(high) && high >= tpPrice) return { action: 'exit', addLevel, tpPrice };
     return { action: 'hold', addLevel, tpPrice };
+}
+
+/** RSI(14) do candle FECHADO mais recente, no intervalo escolhido, > threshold. Fail-open (sem
+ *  candles suficientes ainda) — mesma convenção dos demais filtros baseados em série própria. */
+function checkRsiAboveAt(cMap, interval, threshold) {
+    const closed = closedCandlesOnly(cMap[interval] ?? []);
+    if (closed.length < RSI_PERIOD + 2) return { allowed: true, interval };
+    const series = computeRsiSeries(closed);
+    const rsi = series[series.length - 1];
+    if (!Number.isFinite(rsi)) return { allowed: true, interval };
+    if (rsi <= threshold) {
+        return { allowed: false, reason: 'CONFIRM_RSI_TOO_LOW', rsi, threshold, interval };
+    }
+    return { allowed: true, rsi, threshold, interval };
+}
+
+/**
+ * Gatilho de reentrada por RSI (exit.reinforceOnStop.reentryTrigger === 'rsiRecross') — em vez de
+ * recomprar direto ao bater o stop, espera o RSI(14) voltar a cruzar PARA CIMA de
+ * reentryRsi.rsiThreshold — mesma detecção do sinal de entrada original (evaluateEntrySignal),
+ * reaproveitando só a parte de RSI. Intervalo PRÓPRIO em cada ponta (reentryRsi.interval, default
+ * = entry.interval — configs salvas antes deste campo existir caem no comportamento antigo;
+ * reentryRsi.confirmInterval, default 5m), independentes do intervalo do trade. Dois reforços
+ * OPCIONAIS, compartilhando confirmInterval:
+ *   - reentryRsi.rsi5mFilter: RSI(14) do candle FECHADO mais recente do confirmInterval > threshold.
+ *   - reentryRsi.earlyConfirm: usa o fechamento do candle mais recente do confirmInterval como
+ *     preço provisório do candle de reentryRsi.interval ainda em formação
+ *     (findEarlyConfirmCheckpoint), pra não esperar o candle inteiro fechar — só funciona quando
+ *     confirmInterval é mais CURTO que reentryRsi.interval (senão não há "adiantamento" possível).
+ * Os demais filtros de entrada (bandWidth/MACD/RSI1h/EMA/S/R) NÃO entram aqui — só RSI. Ideia:
+ * deixar a moeda "consolidar" (RSI sair da sobrevenda do stop e voltar pra cima do limiar) antes
+ * de reforçar, em vez de reforçar às cegas no ato do stop. Ver beginLadderReentryWait /
+ * beginRearmReentryWait em rsi-momentum-bot.js.
+ */
+function evaluateReentryRsiSignal(config, cMap) {
+    const rr = config.exit?.reinforceOnStop?.reentryRsi;
+    const threshold = Math.max(1, Math.min(99, Number(rr?.rsiThreshold ?? 69)));
+    const iv = rr?.interval || config.entry.interval;
+    const confirmIv = rr?.confirmInterval || RSI5M_INTERVAL;
+
+    const closed = closedCandlesOnly(cMap[iv] ?? []);
+    if (closed.length < RSI_PERIOD + 2) return { allowed: false, reason: 'INSUFFICIENT_DATA' };
+
+    const rsiClosed = computeRsiSeries(closed);
+    if (rsiClosed.length < 2) return { allowed: false, reason: 'INSUFFICIENT_DATA' };
+
+    const lastClosedRsi = rsiClosed[rsiClosed.length - 1];
+    const prevClosedRsi = rsiClosed[rsiClosed.length - 2];
+
+    let crossed = prevClosedRsi < threshold && lastClosedRsi >= threshold;
+    let last = lastClosedRsi;
+    let earlyCheckpoint = null;
+
+    const earlyThreshold = Math.max(threshold, Number(rr?.earlyConfirm?.rsiThreshold ?? threshold));
+    if (!crossed && rr?.earlyConfirm?.enabled) {
+        const raw = cMap[iv] ?? [];
+        const forming = raw[raw.length - 1];
+        const checkpoint = findEarlyConfirmCheckpoint({ interval: iv, earlyConfirm: { enabled: true, interval: confirmIv } }, cMap, forming);
+        if (checkpoint && lastClosedRsi < earlyThreshold) {
+            const closesWithCheckpoint = [...closed.map(c => parseFloat(c.close)), parseFloat(checkpoint.close)];
+            const rsiWithCheckpoint = RSI.calculate({ values: closesWithCheckpoint, period: RSI_PERIOD });
+            const earlyRsi = rsiWithCheckpoint[rsiWithCheckpoint.length - 1];
+            if (earlyRsi != null && earlyRsi >= earlyThreshold) {
+                crossed = true;
+                last = earlyRsi;
+                earlyCheckpoint = { openTime: Number(checkpoint.openTime), price: parseFloat(checkpoint.close) };
+            }
+        }
+    }
+
+    if (!crossed) return { allowed: false, reason: 'RSI_NOT_CROSSING', rsi: last, threshold };
+
+    if (rr?.rsi5mFilter?.enabled) {
+        const check = checkRsiAboveAt(cMap, confirmIv, rr.rsi5mFilter.threshold);
+        if (!check.allowed) return { allowed: false, reason: check.reason, rsi: last, threshold, rsi5m: check };
+    }
+
+    const price = earlyCheckpoint ? earlyCheckpoint.price : parseFloat(closed[closed.length - 1].close);
+    return { allowed: true, rsi: last, threshold, earlyCheckpoint, price };
 }
 
 /**
@@ -901,6 +995,7 @@ module.exports = {
     pickResistance,
     checkSupportResistanceEntry,
     evaluateReinforceLadder,
+    evaluateReentryRsiSignal,
     evaluateEntryReadiness,
     computeAtrPct,
     evaluateEntrySignal,

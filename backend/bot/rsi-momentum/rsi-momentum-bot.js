@@ -52,7 +52,7 @@ const { startMarketScanner } = require('./marketScanner');
 const {
   getRequiredSpecs, evaluateEntrySignal, evaluateExit, computeBracketPrices,
   checkEntryLimitExpired, checkReentryCooldown, resolveTargetMode, computeAtrPct,
-  evaluateReinforceLadder,
+  evaluateReinforceLadder, evaluateReentryRsiSignal,
 } = require('./strategyEngine');
 
 // "Reforço no stop" (martingale) — trava de segurança do nº de reforços (o usuário pediu "sem
@@ -779,6 +779,16 @@ async function tick(rowId, adapter, strategy, log, session, stopSelf) {
     });
   }
 
+  // Reforço rearm AGUARDANDO o RSI recruzar (reentryTrigger === 'rsiRecross') — a corretora já
+  // vendeu no stop (posição 100% flat, caixa em mãos), só falta decidir QUANDO recomprar. Estado
+  // já é estável/reconciliado (nada "em flight"), retomar depois de um restart é só voltar a
+  // checar o RSI a cada tick — ver beginRearmReentryWait / tickRearmReentryWait.
+  if (rulesState.rearm?.awaitingReentry) {
+    return tickRearmReentryWait({
+      rowId, adapter, strategy, log, state, session, config, cMap, stopSelf, symbol, strategyId, rulesState,
+    });
+  }
+
   const srTargetPrice = resolveSrTargetForBuy(rulesState, buyPrice);
 
   // Posição com ordem de venda colocada fora do painel — bot só observa, nunca coloca bracket
@@ -1119,10 +1129,54 @@ async function startRearmReinforce({ rowId, adapter, strategy, log, state, sessi
     proceeds = ocoProceeds;
   }
 
+  // Gatilho de reentrada por RSI: já vendeu (posição flat, caixa em mãos) — em vez de recomprar
+  // no ato, entra em espera até o RSI recruzar. Ver beginRearmReentryWait/tickRearmReentryWait.
+  if (rf.reentryTrigger === 'rsiRecross') {
+    return beginRearmReentryWait({
+      rowId, log, symbol, strategyId, config, session, rulesState: session.rulesState, proceeds, pendingRearm,
+    });
+  }
+
   log(`${Y}🛑→↻ ${symbol} bateu o stop — recomprando a mercado ${(proceeds + rungUsd).toFixed(2)} USDT (${proceeds.toFixed(2)} da venda + ${rungUsd.toFixed(2)} de reforço), re-armando bracket −${rf.rearmStopPct}% / +${rf.rearmTargetPct}%${X}`);
   return finalizeRearmRebuy({
     rowId, adapter, strategy, log, state, session, config, cMap, stopSelf, symbol, strategyId,
     rulesState: session.rulesState, proceeds, pendingRearm,
+  });
+}
+
+/**
+ * Entra em espera de reentrada (reinforceOnStop.reentryTrigger === 'rsiRecross', modo 'rearm') —
+ * a corretora já vendeu no stop (posição flat), o caixa (`proceeds` + o aporte `rungUsd`, somado
+ * só na hora da recompra — ver tickRearmReentryWait) fica parado até o RSI(14) do entry.interval
+ * voltar a cruzar reentryRsi.rsiThreshold. Estado 100% reconciliado (nada "em flight"): um
+ * restart no meio da espera só volta a checar o RSI no próximo tick, sem risco de compra dupla.
+ */
+async function beginRearmReentryWait({ rowId, log, symbol, strategyId, config, session, rulesState, proceeds, pendingRearm }) {
+  const rearmWait = { ...pendingRearm, pending: false, awaitingReentry: true, proceeds, waitStartedAt: new Date().toISOString() };
+  session.rulesState = { ...rulesState, rearm: rearmWait };
+  await saveState(rowId, { rules_state: session.rulesState }, log);
+  const rr = config.exit.reinforceOnStop.reentryRsi;
+  log(`${Y}🛑⏳ ${symbol} bateu o stop (rearm #${pendingRearm.rungs + 1}) — caixa ${proceeds.toFixed(2)} USDT em mãos. Aguardando RSI(${config.entry.interval}) voltar a ${rr.rsiThreshold} antes de recomprar${X}`);
+  sendWhatsApp(`🛑⏳ ${BOT_LABEL} [${strategyId}] ${symbol}\n"Reforço no stop / re-armar": stop bateu, caixa ${proceeds.toFixed(2)} USDT em mãos.\nAguardando o RSI(${config.entry.interval}) voltar a cruzar ${rr.rsiThreshold} antes de recomprar, pra deixar a moeda consolidar.`);
+  return { phase: 'BOUGHT' };
+}
+
+/** Tick da espera de reentrada rearm — checa o RSI a cada candle (evaluateReentryRsiSignal);
+ *  cruzando, recompra pelo mesmo caminho da recompra imediata (finalizeRearmRebuy). Retomada
+ *  após restart entra aqui direto (rules_state.rearm.awaitingReentry). */
+async function tickRearmReentryWait({ rowId, adapter, strategy, log, state, session, config, cMap, stopSelf, symbol, strategyId, rulesState }) {
+  const rp = rulesState.rearm;
+  if (session.resumedBought && !session.resumeLogged) {
+    session.resumeLogged = true;
+    log(`${G}🔁 Retomando — aguardando RSI voltar a ${config.exit.reinforceOnStop.reentryRsi.rsiThreshold} pra recomprar (rearm #${rp.rungs + 1}), caixa ${Number(rp.proceeds).toFixed(2)} USDT${X}`);
+  }
+  const decision = evaluateReentryRsiSignal(config, cMap);
+  if (!decision.allowed) return { phase: 'BOUGHT' };
+
+  log(`${G}↻ RSI(${config.entry.interval}) voltou a ${decision.threshold} (${decision.rsi.toFixed(2)}) — recomprando (rearm) em ${symbol}${X}`);
+  return finalizeRearmRebuy({
+    rowId, adapter, strategy, log, state, session, config, cMap, stopSelf, symbol, strategyId,
+    rulesState, proceeds: Number(rp.proceeds) || 0, pendingRearm: rp,
   });
 }
 
@@ -1333,6 +1387,24 @@ async function startReinforceLadder({ rowId, adapter, strategy, log, state, sess
     : 0;
   const leg1RealizedLoss = leg1Sold ? (leg1Cost - leg1Proceeds) : 0;
 
+  // Perna 0 (compra inicial) fechada no stop — preço de saída: fill do stop, stopPrice da OCO,
+  // ou −addDropPct% como fallback.
+  const leg0ExitPrice = Number(bracketResult?.exitPrice) > 0
+    ? Number(bracketResult.exitPrice)
+    : (Number(rulesState.exitBracket?.stopPrice) > 0
+        ? Number(rulesState.exitBracket.stopPrice)
+        : buyPrice * (1 - (rf.addDropPct ?? 10) / 100));
+
+  // Gatilho de reentrada por RSI: em vez de recomprar a perna 2 no ato, espera o RSI recruzar —
+  // só afeta a perna 1 (mesmo escopo do antigo waitCandles do backtest). Ver
+  // beginLadderReentryWait/tickLadderReentryWait.
+  if (rf.reentryTrigger === 'rsiRecross') {
+    return beginLadderReentryWait({
+      rowId, log, state, session, config, symbol, strategyId, rulesState,
+      rf, leg1Sold, rungUsd, leg1Qty, leg1Cost, leg1Proceeds, leg1RealizedLoss, buyPrice, leg0ExitPrice,
+    });
+  }
+
   log(`${Y}🛑→⇈ ${symbol} bateu o stop — "Reforço no stop" LIGADO: recomprando a mercado ${rungUsd.toFixed(2)} USDT em vez de encerrar${X}`);
 
   let buyResult;
@@ -1354,15 +1426,9 @@ async function startReinforceLadder({ rowId, adapter, strategy, log, state, sess
   const heldQty = (leg1Sold ? 0 : leg1Qty) + leg2Qty;
   const nowIso = new Date().toISOString();
 
-  // Perna 0 (compra inicial) fechada no stop — preço de saída: fill do stop, stopPrice da OCO,
-  // ou −addDropPct% como fallback. A perna 2 (nova) fica aberta e é sintetizada no serviço; a
-  // cada novo degrau (handleReinforceLadder) a perna anterior fecha e a nova é anexada.
-  const leg0ExitPrice = Number(bracketResult?.exitPrice) > 0
-    ? Number(bracketResult.exitPrice)
-    : (Number(rulesState.exitBracket?.stopPrice) > 0
-        ? Number(rulesState.exitBracket.stopPrice)
-        : buyPrice * (1 - (rf.addDropPct ?? 10) / 100));
-
+  // leg0ExitPrice (perna 0 fechada no stop) já calculado acima. A perna 2 (nova) fica aberta e é
+  // sintetizada no serviço; a cada novo degrau (handleReinforceLadder) a perna anterior fecha e a
+  // nova é anexada.
   const reinforce = {
     active: true,
     addDropPct: rf.addDropPct,
@@ -1403,6 +1469,109 @@ async function startReinforceLadder({ rowId, adapter, strategy, log, state, sess
   return { phase: 'BOUGHT' };
 }
 
+/**
+ * Entra em espera de reentrada (reinforceOnStop.reentryTrigger === 'rsiRecross', modo 'ladder') —
+ * em vez de recomprar a perna 2 no ato do stop, grava rules_state.reinforce já com
+ * `active: true` (o dispatcher do BOUGHT cai em handleReinforceLadder normalmente) e
+ * `awaitingReentry: true`, e espera o RSI(14) do entry.interval voltar a cruzar
+ * reentryRsi.rsiThreshold. Só afeta a perna 1 (mesmo escopo do antigo waitCandles do backtest).
+ * state.buy_qty/buy_price/buy_usdt ficam INTOCADOS (ainda os da perna 1) até a recompra confirmar
+ * — mesmo padrão "write-ahead, sem tocar contabilidade até confirmar" do rearm.
+ */
+async function beginLadderReentryWait({ rowId, log, state, session, config, symbol, strategyId, rulesState, rf, leg1Sold, rungUsd, leg1Qty, leg1Cost, leg1Proceeds, leg1RealizedLoss, buyPrice, leg0ExitPrice }) {
+  const nowIso = new Date().toISOString();
+  const reinforce = {
+    active: true,
+    awaitingReentry: true,
+    addDropPct: rf.addDropPct,
+    exitRisePct: rf.exitRisePct,
+    rungUsd,
+    leg1Sold,
+    legs: [
+      { price: buyPrice, qtyBought: leg1Qty, costUsd: leg1Cost, soldAtStop: leg1Sold, proceedsUsd: leg1Proceeds },
+    ],
+    legTimeline: [
+      { entryTime: state.buy_time ?? null, entryPrice: buyPrice, exitTime: nowIso, exitPrice: leg0ExitPrice, outcome: 'stop' },
+    ],
+    rungs: 0,
+    heldCostUsd: leg1Sold ? 0 : leg1Cost,
+    leg1RealizedLossUsd: leg1RealizedLoss,
+    fundsShortSince: null,
+    startedAt: nowIso,
+    waitStartedAt: nowIso,
+  };
+  session.rulesState = {
+    ...(rulesState ?? {}),
+    exitBracket: null, exitBracketError: null,
+    srTargetPrice: null, srTargetForBuy: null, stopPeakPrice: null,
+    reinforce,
+  };
+  await saveState(rowId, { rules_state: session.rulesState }, log);
+
+  const rr = config.exit.reinforceOnStop.reentryRsi;
+  const perda = leg1Sold ? `perna 1 vendida no stop (perda ${leg1RealizedLoss.toFixed(2)} USDT)` : 'perna 1 mantida (sem ordem resting)';
+  log(`${Y}🛑⏳ ${symbol} bateu o stop — ${perda}. Aguardando RSI(${config.entry.interval}) voltar a ${rr.rsiThreshold} antes de reforçar${X}`);
+  sendWhatsApp(`🛑⏳ ${BOT_LABEL} [${strategyId}] ${symbol}\nStop bateu — ${perda}.\nAguardando o RSI(${config.entry.interval}) voltar a cruzar ${rr.rsiThreshold} antes de reforçar (em vez de recomprar direto), pra deixar a moeda consolidar.`);
+  return { phase: 'BOUGHT' };
+}
+
+/** Tick da espera de reentrada ladder — checa o RSI a cada candle (evaluateReentryRsiSignal);
+ *  cruzando, compra a perna 1 (mesma contabilidade de startReinforceLadder) e a escada segue
+ *  normal (handleReinforceLadder). Retomada após restart entra aqui direto
+ *  (rules_state.reinforce.awaitingReentry). */
+async function tickLadderReentryWait({ rowId, adapter, log, state, session, config, cMap, symbol, strategyId, rulesState }) {
+  const rf = rulesState.reinforce;
+  if (session.resumedBought && !session.resumeLogged) {
+    session.resumeLogged = true;
+    log(`${G}🔁 Retomando — aguardando RSI voltar a ${config.exit.reinforceOnStop.reentryRsi.rsiThreshold} pra reforçar (${rf.legs.length} compra(s) na pilha)${X}`);
+  }
+  const decision = evaluateReentryRsiSignal(config, cMap);
+  if (!decision.allowed) return { phase: 'BOUGHT' };
+
+  const rungUsd = Number(rf.rungUsd) > 0 ? Number(rf.rungUsd) : parseFloat(state.capital);
+  let buyResult;
+  try {
+    buyResult = await adapter.marketBuy(rungUsd);
+  } catch (err) {
+    log(`${Y}⚠️  Reforço (espera RSI) falhou ao comprar em ${symbol}: ${err.message} — tento de novo no próximo tick${X}`);
+    return { phase: 'BOUGHT' };
+  }
+  if (buyResult?.filled === false) {
+    log(`${Y}⚠️  Reforço (espera RSI): ordem a mercado não preencheu em ${symbol} — tento de novo${X}`);
+    return { phase: 'BOUGHT' };
+  }
+
+  const legCost = parseFloat(buyResult.quoteQty ?? rungUsd);
+  const legQty = parseFloat(buyResult.filledQty);
+  const legPrice = parseFloat(buyResult.avgPrice);
+  const leg1 = rf.legs[0];
+  const heldCost = (rf.leg1Sold ? 0 : leg1.costUsd) + legCost;
+  const heldQty = (rf.leg1Sold ? 0 : leg1.qtyBought) + legQty;
+  const nowIso = new Date().toISOString();
+
+  const reinforce = {
+    ...rf,
+    awaitingReentry: false,
+    legs: [...rf.legs, { price: legPrice, qtyBought: legQty, costUsd: legCost }],
+    rungs: 1,
+    lastEntryPrice: legPrice,
+    lastRungAt: nowIso,
+    heldCostUsd: heldCost,
+  };
+  session.rulesState = { ...rulesState, reinforce };
+  await saveState(rowId, {
+    buy_qty: heldQty,
+    buy_price: heldCost / heldQty,
+    buy_usdt: heldCost + (rf.leg1RealizedLossUsd ?? 0),
+    rules_state: session.rulesState,
+  }, log);
+
+  const d = evaluateReinforceLadder(reinforce, (cMap[config.entry.interval] ?? []).at(-1));
+  log(`${G}⇈ RSI(${config.entry.interval}) voltou a ${decision.threshold} (${decision.rsi.toFixed(2)}) — reforço #1 comprado a mercado @ ${fmtPrice(legPrice)} em ${symbol}. Próximo reforço ${fmtPrice(d.addLevel)} · alvo ${fmtPrice(d.tpPrice)}${X}`);
+  sendWhatsApp(`⇈ ${BOT_LABEL} [${strategyId}] ${symbol}\nRSI voltou a ${decision.threshold} — reforço #1 comprado @ ${fmtPrice(legPrice)} (esperou desde o stop).\nPróximo reforço ${fmtPrice(d.addLevel)} (−${rf.addDropPct}%), alvo ${fmtPrice(d.tpPrice)} (+${rf.exitRisePct}%).\n⚠️ Posição SEM stop de proteção a partir de agora.`);
+  return { phase: 'BOUGHT' };
+}
+
 /** Recompra do reforço falhou — encerra o trade do jeito normal (stop). Se a perna 1 já tinha
  *  sido vendida na corretora (bracket OCO), só registra; se não (saída via candle), vende agora. */
 async function closeReinforceFallback({ rowId, adapter, strategy, log, state, session, config, cMap, stopSelf, symbol, leg1Sold, bracketResult, reason }) {
@@ -1423,6 +1592,14 @@ async function closeReinforceFallback({ rowId, adapter, strategy, log, state, se
  *  no alvo, adicionar um degrau na queda, ou segurar. Retomada após restart entra aqui direto. */
 async function handleReinforceLadder({ rowId, adapter, strategy, log, state, session, config, cMap, stopSelf, symbol, strategyId, rulesState }) {
   const rf = rulesState.reinforce;
+
+  // Aguardando o RSI recruzar antes da perna 1 (reentryTrigger === 'rsiRecross') — ver
+  // beginLadderReentryWait/tickLadderReentryWait. Ainda não há evaluateReinforceLadder pra
+  // rodar (sem lastEntryPrice: a pilha só tem a perna 0, que já estopou).
+  if (rf.awaitingReentry) {
+    return tickLadderReentryWait({ rowId, adapter, log, state, session, config, cMap, symbol, strategyId, rulesState });
+  }
+
   const forming = (cMap[config.entry.interval] ?? []).at(-1);
   // Valor do reforço congelado no início da escada; cai no aporte da entrada / config se faltar.
   const rungUsd = Number(rf.rungUsd) > 0

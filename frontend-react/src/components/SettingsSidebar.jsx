@@ -10,6 +10,7 @@ import { RSI_MOMENTUM_ALL_INTERVALS, RSI_MOMENTUM_BB_PERIODS, RSI_MOMENTUM_BB_ST
   RSI_MOMENTUM_SR_INTERVAL_OPTIONS, RSI_MOMENTUM_SR_CANDLE_COUNT_OPTIONS, RSI_MOMENTUM_SR_RANK_OPTIONS, RSI_MOMENTUM_SR_ENTRY_MAX_PCT_OPTIONS,
   RSI_MOMENTUM_REINFORCE_DROP_OPTIONS, RSI_MOMENTUM_REINFORCE_RISE_OPTIONS, RSI_MOMENTUM_REINFORCE_USD_OPTIONS,
   RSI_MOMENTUM_REINFORCE_MODE_OPTIONS, RSI_MOMENTUM_REINFORCE_REARM_STOP_OPTIONS, RSI_MOMENTUM_REINFORCE_REARM_TARGET_OPTIONS,
+  RSI_MOMENTUM_REENTRY_TRIGGER_OPTIONS, RSI_MOMENTUM_REENTRY_RSI_OPTIONS, RSI_MOMENTUM_REENTRY_RSI5M_OPTIONS,
   RSI_MOMENTUM_EARLY_CONFIRM_RSI_OPTIONS, RSI_MOMENTUM_MIN_VOLUME_OPTIONS,
   RSI_MOMENTUM_CAPITAL_USD_OPTIONS }
   from '../constants/rsiMomentumConfigSchema';
@@ -1455,6 +1456,16 @@ export default function SettingsSidebar({ open, onClose }) {
                   const rf = rsiMomentumConfig.exit.reinforceOnStop ?? { enabled: false, mode: 'ladder', addDropPct: 10, exitRisePct: 15, rearmStopPct: 10, rearmTargetPct: 10, buyUsd: 40 };
                   const rfMode = rf.mode === 'rearm' ? 'rearm' : 'ladder';
                   const patchRf = (patch) => patchRsiMomentumNested('exit', 'reinforceOnStop', patch);
+                  // Config vencedora (ver CLAUDE.md): "Esperar RSI subir" é o padrão.
+                  const reentryTrigger = rf.reentryTrigger === 'immediate' ? 'immediate' : 'rsiRecross';
+                  const reentryRsi = rf.reentryRsi ?? {
+                    interval: '5m', rsiThreshold: 80, confirmInterval: '5m',
+                    rsi5mFilter: { enabled: false, threshold: 75 },
+                    earlyConfirm: { enabled: false, rsiThreshold: 75 },
+                  };
+                  const patchReentryRsi = (patch) => patchRf({ reentryRsi: { ...reentryRsi, ...patch } });
+                  const patchReentryRsi5m = (patch) => patchReentryRsi({ rsi5mFilter: { ...reentryRsi.rsi5mFilter, ...patch } });
+                  const patchReentryEarly = (patch) => patchReentryRsi({ earlyConfirm: { ...reentryRsi.earlyConfirm, ...patch } });
                   return (
                     <div className="rounded-md p-2.5" style={{ background: '#1a1210', border: '1px solid #4a2d2a' }}>
                       <p className="text-p5/70 text-[10px] font-semibold uppercase tracking-wider mb-1">{t('settings.rsimomentum_reinforce_title')}</p>
@@ -1527,6 +1538,95 @@ export default function SettingsSidebar({ open, onClose }) {
                               {RSI_MOMENTUM_REINFORCE_USD_OPTIONS.map((v) => <option key={v} value={v}>${v}</option>)}
                             </select>
                           </label>
+
+                          <div className="col-span-2 rounded p-2 mt-1" style={{ background: '#150f0d', border: '1px solid #3a2422' }}>
+                            <label className="flex flex-col gap-1 mb-2">
+                              <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_reinforce_reentry_trigger')}</span>
+                              <select className={`${inp} w-full`}
+                                value={reentryTrigger}
+                                onChange={(e) => patchRf({ reentryTrigger: e.target.value })}>
+                                {RSI_MOMENTUM_REENTRY_TRIGGER_OPTIONS.map((v) => <option key={v} value={v}>{t(`settings.rsimomentum_reinforce_reentry_trigger_${v}`)}</option>)}
+                              </select>
+                            </label>
+                            {reentryTrigger === 'rsiRecross' && (
+                              <>
+                                <p className="text-[9px] text-p5/40 mb-2 leading-relaxed">{t('settings.rsimomentum_reinforce_reentry_hint')}</p>
+                                <div className="grid grid-cols-2 gap-2">
+                                  <label className="flex flex-col gap-1">
+                                    <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_reinforce_reentry_interval')}</span>
+                                    <select className={`${inp} w-full`}
+                                      value={reentryRsi.interval || '5m'}
+                                      onChange={(e) => patchReentryRsi({ interval: e.target.value })}>
+                                      {RSI_MOMENTUM_ALL_INTERVALS.map((iv) => <option key={iv} value={iv}>{iv}</option>)}
+                                    </select>
+                                  </label>
+                                  <label className="flex flex-col gap-1">
+                                    <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_reinforce_reentry_rsi')}</span>
+                                    <select className={`${inp} w-full`}
+                                      value={reentryRsi.rsiThreshold}
+                                      onChange={(e) => patchReentryRsi({ rsiThreshold: Number(e.target.value) })}>
+                                      {RSI_MOMENTUM_REENTRY_RSI_OPTIONS.map((v) => <option key={v} value={v}>{`RSI > ${v}`}</option>)}
+                                    </select>
+                                  </label>
+
+                                  {(reentryRsi.rsi5mFilter?.enabled || reentryRsi.earlyConfirm?.enabled) && (
+                                    <label className="flex flex-col gap-1 col-span-2">
+                                      <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_reinforce_reentry_confirm_interval')}</span>
+                                      <select className={`${inp} w-full`}
+                                        value={reentryRsi.confirmInterval || '5m'}
+                                        onChange={(e) => patchReentryRsi({ confirmInterval: e.target.value })}>
+                                        {RSI_MOMENTUM_ALL_INTERVALS.map((iv) => <option key={iv} value={iv}>{iv}</option>)}
+                                      </select>
+                                    </label>
+                                  )}
+
+                                  <label className="flex items-start gap-2 cursor-pointer group col-span-2">
+                                    <input
+                                      type="checkbox"
+                                      checked={reentryRsi.rsi5mFilter?.enabled ?? false}
+                                      onChange={(e) => patchReentryRsi5m({ enabled: e.target.checked })}
+                                      className="mt-0.5 shrink-0 accent-p4"
+                                    />
+                                    <span className="text-p5 text-[11px] leading-snug group-hover:text-white transition-colors">
+                                      {t('settings.rsimomentum_reinforce_reentry_rsi5m_enabled')}
+                                    </span>
+                                  </label>
+                                  {reentryRsi.rsi5mFilter?.enabled && (
+                                    <label className="flex flex-col gap-1">
+                                      <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_reinforce_reentry_rsi5m')}</span>
+                                      <select className={`${inp} w-full`}
+                                        value={reentryRsi.rsi5mFilter.threshold}
+                                        onChange={(e) => patchReentryRsi5m({ threshold: Number(e.target.value) })}>
+                                        {RSI_MOMENTUM_REENTRY_RSI5M_OPTIONS.map((v) => <option key={v} value={v}>{`RSI > ${v}`}</option>)}
+                                      </select>
+                                    </label>
+                                  )}
+
+                                  <label className="flex items-start gap-2 cursor-pointer group col-span-2">
+                                    <input
+                                      type="checkbox"
+                                      checked={reentryRsi.earlyConfirm?.enabled ?? false}
+                                      onChange={(e) => patchReentryEarly({ enabled: e.target.checked })}
+                                      className="mt-0.5 shrink-0 accent-p4"
+                                    />
+                                    <span className="text-p5 text-[11px] leading-snug group-hover:text-white transition-colors">
+                                      {t('settings.rsimomentum_reinforce_reentry_early_enabled')}
+                                    </span>
+                                  </label>
+                                  {reentryRsi.earlyConfirm?.enabled !== false && (
+                                    <label className="flex flex-col gap-1">
+                                      <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_reinforce_reentry_early_rsi')}</span>
+                                      <select className={`${inp} w-full`}
+                                        value={reentryRsi.earlyConfirm?.rsiThreshold ?? 75}
+                                        onChange={(e) => patchReentryEarly({ rsiThreshold: Number(e.target.value) })}>
+                                        {RSI_MOMENTUM_REENTRY_RSI5M_OPTIONS.map((v) => <option key={v} value={v}>{`RSI > ${v}`}</option>)}
+                                      </select>
+                                    </label>
+                                  )}
+                                </div>
+                              </>
+                            )}
+                          </div>
                         </div>
                       )}
                     </div>

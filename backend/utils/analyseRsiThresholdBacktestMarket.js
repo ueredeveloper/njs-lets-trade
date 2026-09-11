@@ -196,6 +196,8 @@ async function analyseRsiThresholdBacktestMarket(options = {}) {
     const newHighBlockedCount = nhEnabled
         ? valid.reduce((s, { result }) => s + (result.newHighBlockedCount || 0), 0)
         : 0;
+    // Sempre ativo (ver exclusividade por símbolo em analyseRsiThresholdBacktest.js).
+    const exclusivityBlockedCount = valid.reduce((s, { result }) => s + (result.exclusivityBlockedCount || 0), 0);
     const volumeBreakdown = volumeMap.size > 0 ? computeVolumeBreakdown(filledOccurrences, volumeMap) : null;
     const positionSizeUsd = perSymbolOptions.positionSizeUsd ?? 40;
     const totalInvestedUsd = parseFloat(
@@ -262,6 +264,7 @@ async function analyseRsiThresholdBacktestMarket(options = {}) {
             }
             : null,
         newHighBlockedCount,
+        exclusivityBlockedCount,
         trailingStop: perSymbolOptions.trailingStop?.enabled ? { ...perSymbolOptions.trailingStop } : null,
         targetMode: (perSymbolOptions.targetMode === 'fixed' || perSymbolOptions.targetMode === 'continuous' || perSymbolOptions.targetMode === 'off')
             ? perSymbolOptions.targetMode
@@ -277,6 +280,10 @@ async function analyseRsiThresholdBacktestMarket(options = {}) {
             rearmStopPct: Math.max(0.5, Math.min(30, Number(perSymbolOptions.reinforceOnStop.rearmStopPct ?? 10))),
             rearmTargetPct: Math.max(0.5, Math.min(50, Number(perSymbolOptions.reinforceOnStop.rearmTargetPct ?? 10))),
             buyUsd: Math.max(5, Math.min(100_000, Number(perSymbolOptions.reinforceOnStop.buyUsd ?? positionSizeUsd))),
+            reentryTrigger: perSymbolOptions.reinforceOnStop.reentryTrigger === 'rsiRecross' ? 'rsiRecross' : 'immediate',
+            reentryRsi: perSymbolOptions.reinforceOnStop.reentryTrigger === 'rsiRecross'
+                ? { ...perSymbolOptions.reinforceOnStop.reentryRsi }
+                : null,
         } : null,
         reinforceStats: rfEnabled ? computeReinforceStats(filledOccurrences) : null,
         dailyEntryStats: computeDailyEntryStats(filledOccurrences, positionSizeUsd, perSymbolOptions.entriesDayRange ?? null),

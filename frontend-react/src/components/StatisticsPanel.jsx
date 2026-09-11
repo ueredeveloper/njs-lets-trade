@@ -11,7 +11,7 @@ import Rsi1hBreakdownChart from './Rsi1hBreakdownChart';
 import MacdWhatIfAccordion from './MacdWhatIfAccordion';
 import StatsAccordion from './StatsAccordion';
 import { useI18n } from '../i18n';
-import { CHART_VIEW, chooseChartIntervalForLegs } from '../utils/chartView';
+import { CHART_VIEW } from '../utils/chartView';
 import { getEntriesForSymbol } from '../constants/strategyPresets';
 import { isMaCrossEntry } from '../utils/macrossFavoritesSort';
 import { isBollingerBandsEntry, resolveBollingerBandsPermFilter } from '../utils/multitradeChart';
@@ -376,6 +376,15 @@ const MAX_REINFORCE_LEGS_ON_CHART = 40;
  *  REAL fica abaixo do rearmTargetPct quando houve stop antes (o caixa já levou o corte). */
 const RSI_MOM_REINFORCE_REARM_STOP_OPTIONS = [3, 5, 6, 8, 10, 12, 15, 20];
 const RSI_MOM_REINFORCE_REARM_TARGET_OPTIONS = [3, 5, 6, 8, 10, 12, 15, 20, 25];
+/** reinforceReentryTrigger — 'immediate' (recompra no ato do stop) | 'rsiRecross' (espera o
+ *  RSI(14) do intervalo de entrada voltar a cruzar pra cima do limiar antes de reforçar/recomprar
+ *  — no modo 'ladder' só afeta a perna 1, no 'rearm' vale a cada recompra). Ver
+ *  findRsiRecrossPoint em analyseRsiThresholdBacktest.js. */
+const RSI_MOM_REINFORCE_REENTRY_TRIGGER_OPTIONS = ['immediate', 'rsiRecross'];
+/** reinforceReentryRsi / reinforceReentryRsi5mThreshold / reinforceReentryEarlyConfirmRsi —
+ *  mesmo leque do RSI de entrada / RSI 5m / confirmação adiantada. */
+const RSI_MOM_REENTRY_RSI_OPTIONS = [65, 66, 67, 68, 69, 70, 71, 72, 75, 80];
+const RSI_MOM_REENTRY_RSI5M_OPTIONS = [60, 65, 68, 69, 70, 72, 75, 80];
 /** Lucro travado (%) que separa a fase A da B na Escada Dupla (0 = breakeven). */
 const RSI_MOM_PIVOT_PCT_OPTIONS = [0, 0.5, 1, 1.5, 2, 3];
 /** Ganho do pico (%) que troca da fase apertada pra solta na Trilha do Topo / Trilha ATR. */
@@ -437,6 +446,16 @@ const RSI_MOM_DEFAULT_PREFS = {
   reinforceRearmTargetPct: 10,
   reinforceBuyUsd: 40,
   reinforceWaitCandles: 0,
+  reinforceReentryTrigger: 'immediate',
+  reinforceReentryRsi: 69,
+  // '' = usa o mesmo intervalo do trade (padrão) — só grava um valor explícito quando o usuário
+  // escolhe um intervalo PRÓPRIO pro RSI de reentrada, diferente do trade.
+  reinforceReentryInterval: '',
+  reinforceReentryConfirmInterval: '5m',
+  reinforceReentryRsi5mEnabled: false,
+  reinforceReentryRsi5mThreshold: 75,
+  reinforceReentryEarlyConfirmEnabled: true,
+  reinforceReentryEarlyConfirmRsi: 75,
   trailingCoinStepPct: 3,
   trailingStopStepPct: 2,
   trailingTargetCoinStepPct: 3,
@@ -530,7 +549,7 @@ function saveRsiMomPrefs(prefs) {
  *  depois de "Carregar config" (ex.: trocar escada → re-armar) eram descartadas em silêncio.
  *  Alvo e stop são INDEPENDENTES (ver options.targetMode / options.trailingStop em
  *  analyseRsiThresholdBacktest.js). */
-function buildRsiMomCommonOptions(p, candleCount) {
+function buildRsiMomCommonOptions(p, candleCount, tradeInterval) {
   const stopTrailing = p.stopMode !== 'fixed';
   return {
     rsiThreshold: p.rsiThreshold,
@@ -624,6 +643,15 @@ function buildRsiMomCommonOptions(p, candleCount) {
       rearmTargetPct: p.reinforceRearmTargetPct,
       waitCandles: p.reinforceWaitCandles,
       buyUsd: p.reinforceBuyUsd,
+      reentryTrigger: p.reinforceReentryTrigger === 'rsiRecross' ? 'rsiRecross' : 'immediate',
+      reentryRsi: {
+        // '' (padrão) = mesmo intervalo do trade — ver RSI_MOM_DEFAULT_PREFS.
+        interval: p.reinforceReentryInterval || tradeInterval,
+        rsiThreshold: p.reinforceReentryRsi,
+        confirmInterval: p.reinforceReentryConfirmInterval || '5m',
+        rsi5mFilter: { enabled: !!p.reinforceReentryRsi5mEnabled, threshold: p.reinforceReentryRsi5mThreshold },
+        earlyConfirm: { enabled: p.reinforceReentryEarlyConfirmEnabled !== false, rsiThreshold: p.reinforceReentryEarlyConfirmRsi },
+      },
     } : null,
     entriesDayRange: p.entriesDayRangeMax != null ? { min: 2, max: p.entriesDayRangeMax } : null,
     includeGateFavorites: !!p.includeGateFavorites,
@@ -1185,7 +1213,11 @@ function RsiMomentumStats({ autoCalc }) {
   const [error, setError]     = useState(null);
   const [showAll, setShowAll] = useState(false);
   const [closedOnly, setClosedOnly] = useState(false);
-  const [savedSearchCount, setSavedSearchCount] = useState(null);
+  // Lista de pesquisas salvas (rsi-momentum-stats-searches.json) — alimenta o seletor "Pesquisas
+  // salvas" (ver describeSavedSearch/handleLoadSavedSearch) e o contador do rodapé.
+  const [savedSearches, setSavedSearches] = useState([]);
+  const [selectedSavedSearchId, setSelectedSavedSearchId] = useState('');
+  const [loadSearchState, setLoadSearchState] = useState({ loading: false, err: null });
   // Config exata da última pesquisa de UMA moeda (config normalizada + símbolo/intervalo/fonte) —
   // alimenta o botão "Bot exclusivo" (watchlist curada do RSI Momentum). null no modo Todas.
   const [lastSearch, setLastSearch] = useState(null);
@@ -1205,7 +1237,7 @@ function RsiMomentumStats({ autoCalc }) {
   const [configSelectState, setConfigSelectState] = useState({ loading: false, msg: null, err: null });
 
   useEffect(() => {
-    getRsiMomentumStatsSearches().then((arr) => setSavedSearchCount(Array.isArray(arr) ? arr.length : 0)).catch(() => {});
+    getRsiMomentumStatsSearches().then((arr) => setSavedSearches(Array.isArray(arr) ? arr : [])).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -1257,12 +1289,65 @@ function RsiMomentumStats({ autoCalc }) {
   }
 
   async function handleClearSavedSearches() {
-    if (savedSearchCount === 0) return;
+    if (savedSearches.length === 0) return;
     if (!window.confirm(t('stats.searchlog_clear_confirm'))) return;
     try {
       await clearRsiMomentumStatsSearches();
-      setSavedSearchCount(0);
+      setSavedSearches([]);
+      setSelectedSavedSearchId('');
     } catch { /* silencioso */ }
+  }
+
+  /** Rótulo diferenciador de uma pesquisa salva pro seletor "Pesquisas salvas" — data/hora,
+   *  escopo (moeda ou "todas"), intervalo, RSI/volume/alvo/stop e um resumo do resultado, pra
+   *  distinguir buscas parecidas sem precisar abrir cada uma. Ex.: "01/09 15:00 — Todas · 15m ·
+   *  RSI>69 · Vol $1.0M · Alvo OFF · Stop 10% · Reforço rearm+RSI — 12 trades, 100%". */
+  function describeSavedSearch(entry) {
+    const c = entry.config ?? {};
+    const r = entry.result ?? {};
+    const scopeLabel = c.allCoins ? t('stats.searchlog_scope_market') : (entry.scope || c.symbol || '?');
+    const bits = [
+      entry.interval || null,
+      Number.isFinite(c.rsiThreshold) ? `RSI>${c.rsiThreshold}` : null,
+      c.minVolumeUsdt ? `Vol ${formatVolume(c.minVolumeUsdt)}` : null,
+      c.targetMode === 'off' ? 'Alvo OFF' : (Number.isFinite(c.targetPct) ? `Alvo ${c.targetPct}%` : null),
+      Number.isFinite(c.stopLossPct) ? `Stop ${c.stopLossPct}%` : null,
+      c.reinforceOnStop?.enabled
+        ? `Reforço ${c.reinforceOnStop.mode}${c.reinforceOnStop.reentryTrigger === 'rsiRecross' ? '+RSI' : ''}`
+        : null,
+    ].filter(Boolean);
+    const resultBit = Number.isFinite(r.totalFilled)
+      ? `${r.totalFilled} trade${r.totalFilled === 1 ? '' : 's'}${Number.isFinite(r.winRatePct) ? `, ${r.winRatePct}%` : ''}`
+      : null;
+    return [formatDate(entry.savedAt), scopeLabel, ...bits].filter(Boolean).join(' · ')
+      + (resultBit ? ` — ${resultBit}` : '');
+  }
+
+  /** Reexecuta uma pesquisa salva com a config EXATA que foi usada (sem reconstruir a partir dos
+   *  campos do painel — o log já guarda o options completo mandado ao backtest), pra reproduzir
+   *  o resultado fielmente. Sincroniza símbolo/intervalo/"todas as moedas" pro formulário refletir
+   *  o que está na tela; os demais campos do painel (RSI/filtros/etc.) não são reescritos — a
+   *  tabela mostrada já é a fonte da verdade até o usuário clicar "Buscar" de novo. */
+  async function handleLoadSavedSearch() {
+    const entry = savedSearches.find((e) => String(e.id) === String(selectedSavedSearchId));
+    if (!entry || loadSearchState.loading) return;
+    const c = entry.config ?? {};
+    setLoadSearchState({ loading: true, err: null });
+    try {
+      const iv = entry.interval || interval;
+      const sym = entry.scope || c.symbol || '';
+      setInterval(iv);
+      patchPrefs({ allCoins: !!c.allCoins });
+      if (!c.allCoins) setSymbol(sym);
+      const data = c.allCoins
+        ? await fetchRsiThresholdBacktestMarket(iv, c)
+        : await fetchRsiThresholdBacktest(sym, iv, c);
+      setResult(data);
+      setError(null);
+      setLoadSearchState({ loading: false, err: null });
+    } catch (err) {
+      setLoadSearchState({ loading: false, err: err.message });
+    }
   }
 
   /** Baixa um .json com a configuração usada (form do painel + config normalizada mandada ao
@@ -1310,7 +1395,7 @@ function RsiMomentumStats({ autoCalc }) {
     // Monta a config a partir do estado ATUAL dos campos (não de lastSearch.config), pra que
     // ajustes feitos depois de "Carregar config" — ex.: trocar escada → re-armar — sejam salvos.
     // lastSearch continua só como trava de "já rodou uma busca desta moeda".
-    const config = buildRsiMomCommonOptions(prefs, candleCount);
+    const config = buildRsiMomCommonOptions(prefs, candleCount, interval);
     setCuratedState({ loading: true, msg: null, err: null });
     try {
       const r = await addRsiMomentumCuratedBot({
@@ -1444,7 +1529,7 @@ function RsiMomentumStats({ autoCalc }) {
     setError(null);
     setResult(null);
     try {
-      const commonOptions = buildRsiMomCommonOptions(p, candles);
+      const commonOptions = buildRsiMomCommonOptions(p, candles, iv);
       const data = p.allCoins
         ? await fetchRsiThresholdBacktestMarket(iv, commonOptions)
         : await fetchRsiThresholdBacktest(sym, iv, { ...commonOptions, source: src });
@@ -1474,7 +1559,7 @@ function RsiMomentumStats({ autoCalc }) {
           config: { ...commonOptions, allCoins: !!p.allCoins, source: p.allCoins ? null : (src ?? null) },
           result: data,
         })
-          .then((r) => { if (r?.total != null) setSavedSearchCount(r.total); })
+          .then(() => { getRsiMomentumStatsSearches().then((arr) => setSavedSearches(Array.isArray(arr) ? arr : [])).catch(() => {}); })
           .catch(() => {});
       }
       if (updateChart && !p.allCoins) {
@@ -1497,12 +1582,10 @@ function RsiMomentumStats({ autoCalc }) {
   async function openOnChart(o, iv) {
     const startMs = new Date(o.signalDate).getTime();
     const endMs   = o.exitDate ? new Date(o.exitDate).getTime() : Date.now();
-    // Reforço no stop: a escada/rearm roda em candles de 1 MINUTO no backtest (ver scanCandles em
-    // analyseRsiThresholdBacktest.js), então 2-3 pernas podem acontecer rápido demais pro
-    // intervalo da ENTRADA (iv, tipicamente 15m/1h) — nesse intervalo grosso elas caem no(s)
-    // mesmo candle e viram "1 quadrado só" em vez de um por perna. Abre num intervalo mais FINO,
-    // escolhido pra cobrir a duração inteira do trade sem estourar o teto de candles buscados.
-    const chartIv = o.reinforceLegs?.length ? chooseChartIntervalForLegs(o.reinforceLegs, iv) : iv;
+    // Sempre abre no intervalo do TRADE (iv, ex.: 15m) — mesmo com reforço no stop, cujas pernas
+    // (escada/rearm) rodam em candles de 1 MINUTO no backtest e podem cair no mesmo candle do
+    // intervalo do trade (ver reinforceLegs em buildOccurrence, analyseRsiThresholdBacktest.js).
+    const chartIv = iv;
     try {
       const sym = (o.symbol || symbol || selectedChart?.symbol || 'BTCUSDT').trim().toUpperCase();
       // Ocorrência de favorito Gate carrega o.source='gate' — abre o gráfico na corretora certa.
@@ -2323,6 +2406,91 @@ function RsiMomentumStats({ autoCalc }) {
                 </select>
               </div>
             )}
+
+            {/* Gatilho de reentrada por RSI: em vez de recomprar direto no stop, espera o RSI(14)
+                do intervalo de entrada voltar a cruzar pra cima do limiar — opcionalmente confirmado
+                pelo RSI de 5m (fechado ou adiantado). Ver findRsiRecrossPoint no backend. */}
+            <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[86px]" title={t('stats.tip.reinforce_reentry_trigger')}>
+              <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.reinforce_reentry_trigger')}</label>
+              <select className={inp}
+                value={prefs.reinforceReentryTrigger ?? 'immediate'}
+                onChange={(e) => patchPrefs({ reinforceReentryTrigger: e.target.value })}>
+                {RSI_MOM_REINFORCE_REENTRY_TRIGGER_OPTIONS.map((v) => <option key={v} value={v}>{t(`stats.reinforce_reentry_trigger_${v}`)}</option>)}
+              </select>
+            </div>
+            {prefs.reinforceReentryTrigger === 'rsiRecross' && (
+              <>
+                <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[56px]" title={t('stats.tip.reinforce_reentry_interval')}>
+                  <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.reinforce_reentry_interval')}</label>
+                  <select className={inp}
+                    value={prefs.reinforceReentryInterval || interval}
+                    onChange={(e) => patchPrefs({ reinforceReentryInterval: e.target.value })}>
+                    {INTERVALS.map((iv) => <option key={iv} value={iv}>{iv}</option>)}
+                  </select>
+                </div>
+                <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.reinforce_reentry_rsi')}>
+                  <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.reinforce_reentry_rsi')}</label>
+                  <select className={inp}
+                    value={prefs.reinforceReentryRsi ?? 69}
+                    onChange={(e) => patchPrefs({ reinforceReentryRsi: Number(e.target.value) })}>
+                    {RSI_MOM_REENTRY_RSI_OPTIONS.map((v) => <option key={v} value={v}>{`RSI > ${v}`}</option>)}
+                  </select>
+                </div>
+
+                {(prefs.reinforceReentryRsi5mEnabled || prefs.reinforceReentryEarlyConfirmEnabled !== false) && (
+                  <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[56px]" title={t('stats.tip.reinforce_reentry_confirm_interval')}>
+                    <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.reinforce_reentry_confirm_interval')}</label>
+                    <select className={inp}
+                      value={prefs.reinforceReentryConfirmInterval || '5m'}
+                      onChange={(e) => patchPrefs({ reinforceReentryConfirmInterval: e.target.value })}>
+                      {INTERVALS.map((iv) => <option key={iv} value={iv}>{iv}</option>)}
+                    </select>
+                  </div>
+                )}
+
+                <div className="flex items-center gap-1 shrink-0 pb-1" title={t('stats.tip.reinforce_reentry_rsi5m')}>
+                  <span className="hidden md:inline text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.reinforce_reentry_rsi5m')}</span>
+                  <button
+                    type="button"
+                    onClick={() => patchPrefs({ reinforceReentryRsi5mEnabled: !prefs.reinforceReentryRsi5mEnabled })}
+                    className={`relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${prefs.reinforceReentryRsi5mEnabled ? 'bg-p4' : 'bg-p3/40'}`}
+                  >
+                    <span className={`inline-block h-3 w-3 rounded-full bg-white shadow transition-transform ${prefs.reinforceReentryRsi5mEnabled ? 'translate-x-3' : 'translate-x-0'}`} />
+                  </button>
+                </div>
+                {prefs.reinforceReentryRsi5mEnabled && (
+                  <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.reinforce_reentry_rsi5m')}>
+                    <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.reinforce_reentry_rsi5m_value')}</label>
+                    <select className={inp}
+                      value={prefs.reinforceReentryRsi5mThreshold ?? 75}
+                      onChange={(e) => patchPrefs({ reinforceReentryRsi5mThreshold: Number(e.target.value) })}>
+                      {RSI_MOM_REENTRY_RSI5M_OPTIONS.map((v) => <option key={v} value={v}>{`RSI > ${v}`}</option>)}
+                    </select>
+                  </div>
+                )}
+
+                <div className="flex items-center gap-1 shrink-0 pb-1" title={t('stats.tip.reinforce_reentry_early')}>
+                  <span className="hidden md:inline text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.reinforce_reentry_early')}</span>
+                  <button
+                    type="button"
+                    onClick={() => patchPrefs({ reinforceReentryEarlyConfirmEnabled: prefs.reinforceReentryEarlyConfirmEnabled === false })}
+                    className={`relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${prefs.reinforceReentryEarlyConfirmEnabled !== false ? 'bg-p4' : 'bg-p3/40'}`}
+                  >
+                    <span className={`inline-block h-3 w-3 rounded-full bg-white shadow transition-transform ${prefs.reinforceReentryEarlyConfirmEnabled !== false ? 'translate-x-3' : 'translate-x-0'}`} />
+                  </button>
+                </div>
+                {prefs.reinforceReentryEarlyConfirmEnabled !== false && (
+                  <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.reinforce_reentry_early')}>
+                    <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.reinforce_reentry_early_value')}</label>
+                    <select className={inp}
+                      value={prefs.reinforceReentryEarlyConfirmRsi ?? 75}
+                      onChange={(e) => patchPrefs({ reinforceReentryEarlyConfirmRsi: Number(e.target.value) })}>
+                      {RSI_MOM_REENTRY_RSI5M_OPTIONS.map((v) => <option key={v} value={v}>{`RSI > ${v}`}</option>)}
+                    </select>
+                  </div>
+                )}
+              </>
+            )}
           </>
         )}
        </div>
@@ -2406,13 +2574,47 @@ function RsiMomentumStats({ autoCalc }) {
           </>
         )}
 
+        {/* Seletor "Pesquisas salvas" — reabre uma busca anterior (rsi-momentum-stats-searches.json)
+            com a config EXATA que foi usada, sem precisar lembrar/remontar os filtros. Rótulo com
+            data/escopo/intervalo/RSI/volume/alvo/stop/reforço + resumo do resultado, pra diferenciar
+            buscas parecidas (ver describeSavedSearch). */}
+        {savedSearches.length > 0 && (
+          <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[160px] max-w-[420px]" title={t('stats.tip.searchlog_load')}>
+            <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.searchlog_load')}</label>
+            <div className="flex items-center gap-1">
+              <select
+                value={selectedSavedSearchId}
+                onChange={(e) => setSelectedSavedSearchId(e.target.value)}
+                className={`${inp} flex-1 min-w-0`}
+              >
+                <option value="">{t('stats.searchlog_pick')}</option>
+                {savedSearches.map((e) => (
+                  <option key={e.id} value={e.id}>{describeSavedSearch(e)}</option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={handleLoadSavedSearch}
+                disabled={!selectedSavedSearchId || loadSearchState.loading}
+                title={t('stats.searchlog_load_tip')}
+                className="shrink-0 text-[10px] text-p5/60 hover:text-p4 border border-p3/40 hover:border-p4 rounded px-1.5 py-1 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {loadSearchState.loading
+                  ? <span className="inline-block w-2.5 h-2.5 border border-p4 border-t-transparent rounded-full animate-spin align-middle" />
+                  : '👁'}
+              </button>
+            </div>
+            {loadSearchState.err && <span className="text-[9px] text-red-400">{loadSearchState.err}</span>}
+          </div>
+        )}
+
         <div className="shrink-0 flex items-center gap-1.5 text-[10px] text-p5/50" title={t('stats.tip.searchlog')}>
-          <span className="hidden md:inline">{t('stats.searchlog')}: {savedSearchCount ?? '…'}</span>
-          <span className="md:hidden">📁 {savedSearchCount ?? '…'}</span>
+          <span className="hidden md:inline">{t('stats.searchlog')}: {savedSearches.length}</span>
+          <span className="md:hidden">📁 {savedSearches.length}</span>
           <button
             type="button"
             onClick={handleClearSavedSearches}
-            disabled={!savedSearchCount}
+            disabled={!savedSearches.length}
             className="rounded border border-p3/40 px-1.5 py-0.5 text-[10px] text-p5/60 hover:text-red-400 hover:border-red-400/40 transition-colors disabled:opacity-40 disabled:cursor-default"
           >
             {t('stats.searchlog_clear')}

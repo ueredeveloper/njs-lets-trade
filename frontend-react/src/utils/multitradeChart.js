@@ -1,4 +1,4 @@
-import { INTERVAL_MS, computeCandleLimitFromTime, chooseChartIntervalForLegs } from './chartView';
+import { INTERVAL_MS, computeCandleLimitFromTime } from './chartView';
 
 const CANDLES_BEFORE = 10;
 
@@ -466,8 +466,8 @@ export async function loadMultitradeSymbolChart(entry, {
 
   // Ciclo de "Reforço no stop" (rearm/ladder) — posição aberta (entry.reinforceLegs) ou trade
   // fechado (leg_timeline): a 1ª compra pode ser horas antes de agora e a janela fixa de 80
-  // candles não alcança. Busca ANCORADA no período das pernas, no intervalo mais fino que cabe
-  // (chooseChartIntervalForLegs) — mesma lógica das Estatísticas.
+  // candles não alcança. Busca ANCORADA no período das pernas, sempre no intervalo do TRADE
+  // (strategyInterval) — mesma lógica das Estatísticas.
   const reinforceLegs = entry?.reinforceLegs?.length
     ? entry.reinforceLegs
     : (sameIntervalTrades.find(t => Array.isArray(t.leg_timeline) && t.leg_timeline.length)?.leg_timeline ?? [])
@@ -477,9 +477,7 @@ export async function loadMultitradeSymbolChart(entry, {
     .filter(Number.isFinite);
   const firstLegMs = legEntryMs.length ? Math.min(...legEntryMs) : null;
 
-  const interval = firstLegMs != null
-    ? chooseChartIntervalForLegs(reinforceLegs, strategyInterval)
-    : strategyInterval;
+  const interval = strategyInterval;
 
   // Carga inicial pequena e fixa (não mais "cobrir o sinal/compra mais antigo dos 30 trades",
   // que em intervalos rápidos tipo 1m podia passar de 900 candles e deixar o primeiro render

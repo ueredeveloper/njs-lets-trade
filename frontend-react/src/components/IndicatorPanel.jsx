@@ -108,10 +108,20 @@ const EMPTY_INDICATOR = { type: '', intervals: ['8h'] };
 
 // Painel abre com exatamente dois formulários Momentum RSI — Trade Geral (config global) e Trade
 // Exclusivo (bot curado). A busca cria só dois filtros: bot|Geral e bot|Exclusivo <SYMBOL>. Ambos
-// nascem pré-preenchidos com a config que está rodando (ver useEffect de prefill em IndicatorRow).
+// nascem com os valores mais usados pelo usuário (ver MOMENTUM_GERAL_PRESET / MOMENTUM_SKYAI_PRESET
+// abaixo) — campo já definido não é sobrescrito pelo prefill da config ao vivo do bot (ver
+// useEffect de prefill em IndicatorRow, que só toca em campo `undefined`).
+const MOMENTUM_GERAL_PRESET = {
+  type: 'botReadiness', mode: 'contention',
+  tradeInterval: '15m', srInterval: '4h', srCandleCount: '300', rsiSignal: '69',
+};
+const MOMENTUM_SKYAI_PRESET = {
+  type: 'botReadinessCurated', mode: 'contention', symbol: 'SKYAIUSDT',
+  tradeInterval: '15m', srInterval: '15m', srCandleCount: '300', rsiSignal: '69',
+};
 const DEFAULT_INDICATORS = [
-  { type: 'botReadiness', mode: 'ready' },
-  { type: 'botReadinessCurated', mode: 'ready' },
+  { ...MOMENTUM_GERAL_PRESET },
+  { ...MOMENTUM_SKYAI_PRESET },
 ];
 
 /** Formulários prontos — cada um substitui a lista de indicadores por uma única busca pré-configurada. */
@@ -145,6 +155,16 @@ const QUICK_PRESETS = [
     labelKey: 'ip.preset_bbpos15m_top',
     tipKey: 'ip.preset_bbpos15m_top_tip',
     build: () => [{ type: 'bollingerPosition', intervals: ['15m'], period: '20', stdDev: '2', position: 'near_top', proximityPct: '20' }],
+  },
+  {
+    labelKey: 'ip.preset_momentum_geral',
+    tipKey: 'ip.preset_momentum_geral_tip',
+    build: () => [{ ...MOMENTUM_GERAL_PRESET }],
+  },
+  {
+    labelKey: 'ip.preset_momentum_skyai',
+    tipKey: 'ip.preset_momentum_skyai_tip',
+    build: () => [{ ...MOMENTUM_SKYAI_PRESET }],
   },
 ];
 

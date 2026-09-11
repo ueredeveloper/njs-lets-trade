@@ -56,6 +56,16 @@ export const RSI_MOMENTUM_REINFORCE_REARM_STOP_OPTIONS = [3, 5, 6, 8, 10, 12, 15
 export const RSI_MOMENTUM_REINFORCE_REARM_TARGET_OPTIONS = [3, 5, 6, 8, 10, 12, 15, 20, 25];
 /** exit.reinforceOnStop.buyUsd — valor (USDT) de cada compra de reforço (padrão = aporte da entrada). */
 export const RSI_MOMENTUM_REINFORCE_USD_OPTIONS = [20, 40, 60, 80, 100, 150, 200, 300, 500];
+/** exit.reinforceOnStop.reentryTrigger — 'immediate' (recompra no ato do stop) | 'rsiRecross'
+ *  (espera o RSI(14) do entry.interval voltar a cruzar reentryRsi.rsiThreshold antes de
+ *  reforçar/recomprar — no modo 'ladder' só afeta a perna 1, no 'rearm' vale a cada recompra). */
+export const RSI_MOMENTUM_REENTRY_TRIGGER_OPTIONS = ['immediate', 'rsiRecross'];
+/** exit.reinforceOnStop.reentryRsi.rsiThreshold — RSI(14) do entry.interval (mesmo leque de
+ *  entry.rsiThreshold/entry.earlyConfirm.rsiThreshold). */
+export const RSI_MOMENTUM_REENTRY_RSI_OPTIONS = [65, 66, 67, 68, 69, 70, 71, 72, 75, 80];
+/** exit.reinforceOnStop.reentryRsi.rsi5mFilter.threshold / earlyConfirm.rsiThreshold — RSI(14)
+ *  do candle de 5m (mesmo leque de entry.rsi5mFilter.threshold/entry.earlyConfirm.rsiThreshold). */
+export const RSI_MOMENTUM_REENTRY_RSI5M_OPTIONS = [60, 65, 68, 69, 70, 72, 75, 80];
 
 export const RSI_MOMENTUM_DEFAULTS = {
   kind: 'rsi_momentum',
@@ -92,7 +102,21 @@ export const RSI_MOMENTUM_DEFAULTS = {
       pivotGainPct: 5, wNearPct: 4, wFarPct: 9, atrMult: 2, atrMaxPct: 12,
     },
     hardTakeProfit: { enabled: true, pct: 15 },
-    reinforceOnStop: { enabled: true, mode: 'ladder', addDropPct: 10, exitRisePct: 15, rearmStopPct: 10, rearmTargetPct: 10, buyUsd: 40 },
+    reinforceOnStop: {
+      enabled: true, mode: 'ladder', addDropPct: 10, exitRisePct: 15, rearmStopPct: 10, rearmTargetPct: 10, buyUsd: 40,
+      // Config vencedora (ver CLAUDE.md): espera o RSI(14) de 5m voltar a cruzar 80 antes de
+      // reforçar/recomprar, em vez de recomprar no ato do stop.
+      reentryTrigger: 'rsiRecross',
+      reentryRsi: {
+        interval: '5m',
+        rsiThreshold: 80,
+        confirmInterval: '5m',
+        rsi5mFilter: { enabled: false, threshold: 75 },
+        // Desligado por padrão — com interval === confirmInterval (5m/5m) não há "adiantamento"
+        // possível (precisa de confirmInterval mais CURTO que interval).
+        earlyConfirm: { enabled: false, rsiThreshold: 75 },
+      },
+    },
   },
   stopLoss: { enabled: true, maxLossPct: 10 },
   polling: { pollMs: 60_000, fastPollMs: 20_000 },

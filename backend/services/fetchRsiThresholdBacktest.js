@@ -22,6 +22,10 @@ const DEFAULT_USER_ID = process.env.SUPABASE_DEFAULT_USER_ID ?? 'ueredeveloper';
 //     &trailingStopMode=peakTrail&trailingStopPivotGainPct=5&trailingStopWNearPct=4&trailingStopWFarPct=9
 //     &trailingStopMode=atrTrail&trailingStopPivotGainPct=5&trailingStopWNearPct=4&trailingStopAtrMult=2&trailingStopAtrMaxPct=12
 //     &targetMode=continuous&trailingTargetCoinStepPct=3&trailingTargetStepPct=3
+//     &reinforceOnStopEnabled=1&reinforceReentryTrigger=rsiRecross&reinforceReentryRsi=69
+//     &reinforceReentryInterval=5m&reinforceReentryConfirmInterval=1m   (default = interval do sinal / 5m)
+//     &reinforceReentryRsi5mEnabled=1&reinforceReentryRsi5mThreshold=75
+//     &reinforceReentryEarlyConfirmEnabled=1&reinforceReentryEarlyConfirmRsi=75
 router.get('/rsi-threshold-backtest', async (req, res) => {
     const {
         symbol, interval, source, candleCount, lookbackHours,
@@ -40,6 +44,9 @@ router.get('/rsi-threshold-backtest', async (req, res) => {
         hardTakeProfitEnabled, hardTakeProfitPct,
         reinforceOnStopEnabled, reinforceMode, reinforceAddDropPct, reinforceExitRisePct, reinforceBuyUsd, reinforceWaitCandles,
         reinforceRearmStopPct, reinforceRearmTargetPct,
+        reinforceReentryTrigger, reinforceReentryRsi, reinforceReentryInterval, reinforceReentryConfirmInterval,
+        reinforceReentryRsi5mEnabled, reinforceReentryRsi5mThreshold,
+        reinforceReentryEarlyConfirmEnabled, reinforceReentryEarlyConfirmRsi,
         targetMode, trailingTargetCoinStepPct, trailingTargetStepPct,
         entriesDayRangeMin, entriesDayRangeMax,
     } = req.query;
@@ -121,6 +128,20 @@ router.get('/rsi-threshold-backtest', async (req, res) => {
             rearmTargetPct: reinforceRearmTargetPct ? parseFloat(reinforceRearmTargetPct) : 10,
             waitCandles:    reinforceWaitCandles ? parseInt(reinforceWaitCandles, 10) : 0,
             buyUsd:         reinforceBuyUsd       ? parseFloat(reinforceBuyUsd)       : 40,
+            reentryTrigger: reinforceReentryTrigger === 'rsiRecross' ? 'rsiRecross' : 'immediate',
+            reentryRsi: {
+                interval:       reinforceReentryInterval || interval,
+                rsiThreshold:   reinforceReentryRsi ? parseFloat(reinforceReentryRsi) : 69,
+                confirmInterval: reinforceReentryConfirmInterval || '5m',
+                rsi5mFilter: {
+                    enabled:   reinforceReentryRsi5mEnabled === '1',
+                    threshold: reinforceReentryRsi5mThreshold ? parseFloat(reinforceReentryRsi5mThreshold) : 75,
+                },
+                earlyConfirm: {
+                    enabled:      reinforceReentryEarlyConfirmEnabled === '1',
+                    rsiThreshold: reinforceReentryEarlyConfirmRsi ? parseFloat(reinforceReentryEarlyConfirmRsi) : 75,
+                },
+            },
         } : null,
         trailingStop: parseTrailingStopQuery(req.query, stopLossPct != null ? parseFloat(stopLossPct) : null),
         targetMode: (targetMode === 'fixed' || targetMode === 'continuous' || targetMode === 'off') ? targetMode : 'fixed',

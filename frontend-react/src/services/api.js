@@ -250,6 +250,20 @@ export async function fetchRsiThresholdBacktest(symbol, interval, options = {}) 
     params.set('reinforceRearmTargetPct', String(reinforceOnStop.rearmTargetPct ?? 10));
     params.set('reinforceBuyUsd', String(reinforceOnStop.buyUsd ?? 40));
     if (reinforceOnStop.waitCandles) params.set('reinforceWaitCandles', String(reinforceOnStop.waitCandles));
+    if (reinforceOnStop.reentryTrigger === 'rsiRecross') {
+      params.set('reinforceReentryTrigger', 'rsiRecross');
+      params.set('reinforceReentryRsi', String(reinforceOnStop.reentryRsi?.rsiThreshold ?? 69));
+      if (reinforceOnStop.reentryRsi?.interval) params.set('reinforceReentryInterval', reinforceOnStop.reentryRsi.interval);
+      if (reinforceOnStop.reentryRsi?.confirmInterval) params.set('reinforceReentryConfirmInterval', reinforceOnStop.reentryRsi.confirmInterval);
+      if (reinforceOnStop.reentryRsi?.rsi5mFilter?.enabled) {
+        params.set('reinforceReentryRsi5mEnabled', '1');
+        params.set('reinforceReentryRsi5mThreshold', String(reinforceOnStop.reentryRsi.rsi5mFilter.threshold ?? 75));
+      }
+      if (reinforceOnStop.reentryRsi?.earlyConfirm?.enabled !== false) {
+        params.set('reinforceReentryEarlyConfirmEnabled', '1');
+        params.set('reinforceReentryEarlyConfirmRsi', String(reinforceOnStop.reentryRsi?.earlyConfirm?.rsiThreshold ?? 75));
+      }
+    }
   }
   appendTrailingStopParams(params, trailingStop, stopLossPct);
   if (targetMode && targetMode !== 'fixed') params.set('targetMode', targetMode);
@@ -335,6 +349,20 @@ export async function fetchRsiThresholdBacktestMarket(interval, options = {}) {
     params.set('reinforceRearmTargetPct', String(reinforceOnStop.rearmTargetPct ?? 10));
     params.set('reinforceBuyUsd', String(reinforceOnStop.buyUsd ?? 40));
     if (reinforceOnStop.waitCandles) params.set('reinforceWaitCandles', String(reinforceOnStop.waitCandles));
+    if (reinforceOnStop.reentryTrigger === 'rsiRecross') {
+      params.set('reinforceReentryTrigger', 'rsiRecross');
+      params.set('reinforceReentryRsi', String(reinforceOnStop.reentryRsi?.rsiThreshold ?? 69));
+      if (reinforceOnStop.reentryRsi?.interval) params.set('reinforceReentryInterval', reinforceOnStop.reentryRsi.interval);
+      if (reinforceOnStop.reentryRsi?.confirmInterval) params.set('reinforceReentryConfirmInterval', reinforceOnStop.reentryRsi.confirmInterval);
+      if (reinforceOnStop.reentryRsi?.rsi5mFilter?.enabled) {
+        params.set('reinforceReentryRsi5mEnabled', '1');
+        params.set('reinforceReentryRsi5mThreshold', String(reinforceOnStop.reentryRsi.rsi5mFilter.threshold ?? 75));
+      }
+      if (reinforceOnStop.reentryRsi?.earlyConfirm?.enabled !== false) {
+        params.set('reinforceReentryEarlyConfirmEnabled', '1');
+        params.set('reinforceReentryEarlyConfirmRsi', String(reinforceOnStop.reentryRsi?.earlyConfirm?.rsiThreshold ?? 75));
+      }
+    }
   }
   appendTrailingStopParams(params, trailingStop, stopLossPct);
   if (targetMode && targetMode !== 'fixed') params.set('targetMode', targetMode);
