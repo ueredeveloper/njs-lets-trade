@@ -12,11 +12,17 @@
  *   exit 10 (RESTART)   → sobe o launcher de novo, sem tocar no código
  *   exit 11 (UPDATE)    → git fetch + merge --ff-only + npm ci (se o lock mudou) → sobe de novo
  *   exit 12 (SYNC_LOCK) → npm install --package-lock-only + commit do package-lock.json → sobe de novo
+ *   exit 13 (RESTART_SUPERVISOR) → sobe um PROCESSO SUPERVISOR NOVO (spawn detached) e encerra
+ *                        este — único jeito de recarregar código de backend/admin (ou deste
+ *                        próprio arquivo), já que um /update comum só atualiza os arquivos no
+ *                        disco, não o que já está carregado em memória neste processo (ver
+ *                        restartSupervisor()).
  *   qualquer outro      → crash: respawn com backoff
  *
- * Os exit codes 10/11/12 são disparados pela API interna (`POST /internal/restart`,
- * `/internal/update`, `/internal/sync-lock`) que o njs-whatsapp chama a partir de um
- * comando no WhatsApp. Ver `backend/admin/botControl.js` e `backend/admin/internalServer.js`.
+ * Os exit codes 10/11/12/13 são disparados pela API interna (`POST /internal/restart`,
+ * `/internal/update`, `/internal/sync-lock`, `/internal/restart-supervisor`) que o njs-whatsapp
+ * chama a partir de um comando no WhatsApp. Ver `backend/admin/botControl.js` e
+ * `backend/admin/internalServer.js`.
  *
  * Uso (idêntico ao launcher — args são repassados):
  *   node backend/bot/bots-supervisor.js
@@ -105,6 +111,12 @@ function spawnLauncher() {
       return;
     }
 
+    if (code === EXIT.RESTART_SUPERVISOR) {
+      crashStreak = 0;
+      restartSupervisor();
+      return;
+    }
+
     // Saída não solicitada = crash. Conta os crashes rápidos (< 60s de vida) e avisa
     // no WhatsApp quando passar do limite — o launcher a essa altura já tentou o
     // próprio auto-restart dos filhos (MAX_RESTARTS) e mesmo assim caiu.
@@ -165,6 +177,32 @@ async function handleSyncLock() {
   }
   botControl.recordResult('sync-lock', result);
   spawnLauncher();
+}
+
+/**
+ * RESTART_SUPERVISOR — diferente de RESTART (que só sobe o launcher de novo dentro DESTE
+ * processo), aqui é o próprio SUPERVISOR que precisa trocar de processo: `require()` só lê o
+ * código do disco na primeira vez, então um `/update` que mexeu em backend/admin/* ou neste
+ * arquivo (bots-supervisor.js) deixa o supervisor rodando a versão ANTIGA em memória mesmo
+ * depois do `git merge` já ter atualizado os arquivos — um `/update`/`/restart` comuns não
+ * resolvem isso, porque ambos só reagem DENTRO deste mesmo processo já carregado.
+ *
+ * Sobe um supervisor NOVO (mesmo script, `spawn` detached — sobrevive independente deste
+ * processo, sem depender de nenhum watchdog externo) e só DEPOIS encerra este. O novo processo
+ * já nasce lendo o botControl.js/bots-supervisor.js atuais do disco.
+ */
+function restartSupervisor() {
+  log('RESTART DO SUPERVISOR solicitado — subindo um processo supervisor novo e encerrando este...');
+  botControl.recordResult('restart-supervisor', { ok: true });
+  stopping = true; // este processo não deve mais reagir a nada — o novo assume a partir daqui
+  const child = spawn(process.execPath, [__filename, ...EXTRA_ARGS], {
+    detached: true,
+    stdio: 'ignore', // sem terminal pra herdar — observabilidade é só via botLog (/internal/log)
+    env: process.env,
+  });
+  child.unref();
+  notify(`🔁 Supervisor reiniciando (PID novo: ${child.pid}) — este processo encerra agora.`)
+    .finally(() => process.exit(0));
 }
 
 function stopAll(sig) {

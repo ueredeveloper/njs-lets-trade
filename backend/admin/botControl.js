@@ -33,7 +33,11 @@ const STATE_FILE = process.env.INTERNAL_ADMIN_STATE_FILE
   || path.join(internalConfig.repoRoot, 'backend/data/bot/control-action.json');
 
 // Exit codes que o launcher usa pra falar com o supervisor.
-const EXIT = { STOP: 0, RESTART: 10, UPDATE: 11, SYNC_LOCK: 12 };
+// RESTART_SUPERVISOR: diferente do RESTART normal (só o launcher/bots), este reinicia o
+// PRÓPRIO PROCESSO SUPERVISOR — necessário depois de um /update que mexeu em
+// backend/admin/* ou bots-supervisor.js, já que esse código só é recarregado quando o
+// supervisor (não só o launcher) sobe de novo (ver comentário em bots-supervisor.js).
+const EXIT = { STOP: 0, RESTART: 10, UPDATE: 11, SYNC_LOCK: 12, RESTART_SUPERVISOR: 13 };
 
 // Ações que viram exit code (o `pull` não — roda inline).
 const CONTROL_ACTIONS = {
@@ -41,6 +45,7 @@ const CONTROL_ACTIONS = {
   restart: EXIT.RESTART,
   update: EXIT.UPDATE,
   'sync-lock': EXIT.SYNC_LOCK,
+  'restart-supervisor': EXIT.RESTART_SUPERVISOR,
 };
 
 function git(args, { timeout = 15000 } = {}) {

@@ -137,7 +137,10 @@ function onControl(action) {
   // 'sync-lock' → chave EXIT.SYNC_LOCK
   const code = CONTROL_EXIT[String(action).toUpperCase().replace(/-/g, '_')];
   if (code == null) return { ok: false, message: `ação desconhecida: ${action}` };
-  const label = { stop: 'PARAR', restart: 'REINICIAR', update: 'ATUALIZAR', 'sync-lock': 'SINCRONIZAR LOCK' }[action] || action;
+  const label = {
+    stop: 'PARAR', restart: 'REINICIAR', update: 'ATUALIZAR', 'sync-lock': 'SINCRONIZAR LOCK',
+    'restart-supervisor': 'REINICIAR SUPERVISOR',
+  }[action] || action;
   console.log(`\n🛰️  [launcher] controle recebido: ${label} → encerrando (exit ${code})`);
   botLog.writeLine(`[launcher] controle: ${label} (exit ${code})`);
   shutdown();

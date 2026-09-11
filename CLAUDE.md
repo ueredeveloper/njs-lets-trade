@@ -34,25 +34,32 @@ bots**. O launcher hospeda um `http.Server` **só loopback** (default
   execução; colapsa as linhas repetitivas de heartbeat — scan RSI Momentum,
   `📋 Moedas avaliadas` — só a última de cada bloco com `(N×, hh:mm→hh:mm)`;
   `?raw=1` desliga o colapso).
-- **Controle (opt-in):** `POST /internal/{restart,update,stop,pull,sync-lock}` — só
-  com `INTERNAL_ADMIN_TOKEN` + `INTERNAL_ADMIN_ALLOW_CONTROL=true`. A API **não roda
+- **Controle (opt-in):** `POST /internal/{restart,update,stop,pull,sync-lock,restart-supervisor}`
+  — só com `INTERNAL_ADMIN_TOKEN` + `INTERNAL_ADMIN_ALLOW_CONTROL=true`. A API **não roda
   git/npm/shell**: grava a intenção (`botControl.js`) e mata o launcher com um
-  exit code sentinela (`10` restart, `11` update, `12` sync-lock, `0` stop); o
-  **supervisor** reage — em `update` faz `git fetch` + `merge --ff-only` + `npm ci`
-  (se o `package-lock` mudou; `dist` é versionado, sem build) e respawn. `pull` é
-  dry-run (roda no launcher, não reinicia). **`sync-lock`** = `npm install
-  --package-lock-only` + `git add package-lock.json` + `git commit` + `git push`
-  best-effort — conserta o lock fora de sincronia (baileys puxa `sharp`/`@img/*`
-  como peer e a árvore nunca foi gravada → `npm ci` do `/update` quebra com
-  "Missing: … from lock file"). Fluxo: `/update` (código entra, `npm ci` falha
-  mas não derruba) → `/sync-lock` (regenera+commita o lock). `--package-lock-only`
-  não toca `node_modules`, zero risco pros bots. Recusa working tree com arquivo
-  sujo além do próprio `package-lock.json`.
+  exit code sentinela (`10` restart, `11` update, `12` sync-lock, `13`
+  restart-supervisor, `0` stop); o **supervisor** reage — em `update` faz `git
+  fetch` + `merge --ff-only` + `npm ci` (se o `package-lock` mudou; `dist` é
+  versionado, sem build) e respawn. `pull` é dry-run (roda no launcher, não
+  reinicia). **`sync-lock`** = `npm install --package-lock-only` + `git add
+  package-lock.json` + `git commit` + `git push` best-effort — conserta o lock
+  fora de sincronia (baileys puxa `sharp`/`@img/*` como peer e a árvore nunca foi
+  gravada → `npm ci` do `/update` quebra com "Missing: … from lock file"). Fluxo:
+  `/update` (código entra, `npm ci` falha mas não derruba) → `/sync-lock`
+  (regenera+commita o lock). `--package-lock-only` não toca `node_modules`, zero
+  risco pros bots. Recusa working tree com arquivo sujo além do próprio
+  `package-lock.json`. **`restart-supervisor`** — sobe um SUPERVISOR novo (`spawn`
+  detached, sobrevive sozinho, sem watchdog externo) e só então encerra este;
+  necessário porque `require()` só lê `backend/admin/*`/`bots-supervisor.js` do
+  disco na 1ª vez — uma correção nesse código fica "presa" na memória do
+  supervisor antigo até ele reiniciar de verdade, e um `/update` comum não faz
+  isso sozinho (só troca os arquivos no disco).
 
 É o lado cooperativo da administração remota: `njs-whatsapp` (porta 3005) consome
 isso para `/admin/status|health|log|restart|update|stop|pull|sync-lock` no
-WhatsApp. Config no `.env` (`INTERNAL_ADMIN_*`). Launcher sozinho (sem
-restart/update): `npm run bots:nosup`.
+WhatsApp (`restart-supervisor` ainda só existe do lado `njs-lets-trade` — falta a
+rota/comando espelhado no `njs-whatsapp`). Config no `.env` (`INTERNAL_ADMIN_*`).
+Launcher sozinho (sem restart/update): `npm run bots:nosup`.
 
 O **supervisor avisa no WhatsApp** (via `backend/bot/whatsapp.js`, best-effort) o
 resultado de `/update` (OK `X → Y` / FALHOU + motivo / já-atualizado), de

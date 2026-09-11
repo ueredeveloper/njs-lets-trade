@@ -12,6 +12,10 @@
  *   POST /internal/stop      → njs-whatsapp POST /admin/stop
  *   POST /internal/pull      → njs-whatsapp POST /admin/pull       (dry-run)
  *   POST /internal/sync-lock → njs-whatsapp POST /admin/sync-lock  (npm install --package-lock-only + commit)
+ *   POST /internal/restart-supervisor → njs-whatsapp POST /admin/restart-supervisor
+ *       (reinicia o PROCESSO SUPERVISOR inteiro — não só o launcher/bots. Necessário depois de um
+ *       /update que mexeu em backend/admin/* ou bots-supervisor.js: esse código só é recarregado
+ *       quando o supervisor sobe de novo, um /update comum não basta — ver bots-supervisor.js)
  *
  * Os `POST` de controle só respondem se:
  *   - há `INTERNAL_ADMIN_TOKEN` configurado E o header `X-Internal-Token` bate;
@@ -56,7 +60,7 @@ function controlAllowed() {
 
 /**
  * @param {() => object} getState  snapshot do launcher: { startedAt, bots: [{label,pid,running,restarts,startedAt,lastExit}] }
- * @param {{ onControl?: (action: 'restart'|'update'|'stop'|'sync-lock') => { ok: boolean, message?: string } }} [opts]
+ * @param {{ onControl?: (action: 'restart'|'update'|'stop'|'sync-lock'|'restart-supervisor') => { ok: boolean, message?: string } }} [opts]
  *        onControl: chamado quando um POST de controle é aceito. O launcher deve
  *        fazer shutdown gracioso e sair com o exit code sentinela correspondente.
  */
@@ -76,7 +80,7 @@ function startInternalAdminServer(getState, opts = {}) {
     // ---- controle (POST) -------------------------------------------------
     if (req.method === 'POST' && url.pathname.startsWith('/internal/')) {
       const action = url.pathname.slice('/internal/'.length);
-      if (!['restart', 'update', 'stop', 'pull', 'sync-lock'].includes(action)) {
+      if (!['restart', 'update', 'stop', 'pull', 'sync-lock', 'restart-supervisor'].includes(action)) {
         return send(res, 404, { error: 'rota não encontrada' });
       }
       if (!controlAllowed()) {
@@ -103,6 +107,7 @@ function startInternalAdminServer(getState, opts = {}) {
       const messages = {
         update: 'update aceito — git pull + restart em andamento (acompanhe /internal/log e /internal/info.lastAction)',
         'sync-lock': 'sync-lock aceito — npm install --package-lock-only + commit do package-lock.json em andamento (acompanhe /internal/log e /internal/info.lastAction)',
+        'restart-supervisor': 'restart-supervisor aceito — reiniciando o PROCESSO SUPERVISOR inteiro, não só os bots (acompanhe /internal/log e /internal/info.lastAction)',
       };
       send(res, 202, {
         ok: true,
