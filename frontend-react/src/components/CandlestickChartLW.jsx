@@ -1292,10 +1292,18 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
               priceLineVisible: false, crosshairMarkerVisible: false,
             });
             s.setData([{ time: from, value: lvl.price }, { time: to, value: lvl.price }]);
-            createSeriesMarkers(s, [{
-              time: to, position: 'inBar', color, shape: 'circle',
-              text: lvl.label + (isEntry ? ' entrada' : isExit ? ' alvo' : ''),
-            }]);
+            // createSeriesMarkers indexa o marker no timeScale GLOBAL do chart (soma de todos os
+            // pontos de todas as séries) e depois busca esse índice DENTRO dos 2 pontos desta
+            // série — se o candlestick principal estiver no meio de uma troca de dados (arrasto
+            // carregando histórico mais antigo), o índice buscado pode cair fora do range desta
+            // série específica e a lib lança "Value is null" (ensureNotNull em dataByIndex).
+            // Cosmético (só o rótulo do nível) — não vale derrubar o gráfico inteiro por isso.
+            try {
+              createSeriesMarkers(s, [{
+                time: to, position: 'inBar', color, shape: 'circle',
+                text: lvl.label + (isEntry ? ' entrada' : isExit ? ' alvo' : ''),
+              }]);
+            } catch { /* ver comentário acima */ }
             srRollSeriesRef.current.push(s);
           }
         }
@@ -1343,11 +1351,16 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
             priceLineVisible: false, lastValueVisible: r === 0, crosshairMarkerVisible: false,
           });
           s.setData(dedup);
-          createSeriesMarkers(s, [{
-            time: lastPt.time, position: 'inBar', color, shape: 'circle',
-            // posto REAL do nível (pode ser [3] sozinho) — não a posição no array desenhado
-            text: lastLabel ?? `${type === 'support' ? 'S' : 'R'}${r + 1}`,
-          }]);
+          // Ver comentário no bloco de override de trade acima sobre createSeriesMarkers lançar
+          // "Value is null" (ensureNotNull) quando o candlestick principal troca de dados no meio
+          // de um arrasto — cosmético, não deve derrubar o gráfico.
+          try {
+            createSeriesMarkers(s, [{
+              time: lastPt.time, position: 'inBar', color, shape: 'circle',
+              // posto REAL do nível (pode ser [3] sozinho) — não a posição no array desenhado
+              text: lastLabel ?? `${type === 'support' ? 'S' : 'R'}${r + 1}`,
+            }]);
+          } catch { /* ver comentário acima */ }
           srRollSeriesRef.current.push(s);
         }
       }
@@ -1407,7 +1420,15 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
             priceLineVisible: false, lastValueVisible: lvl.rank === 1, crosshairMarkerVisible: false,
           });
           s.setData([{ time: startT, value: lvl.price }, { time: endT, value: lvl.price }]);
-          createSeriesMarkers(s, [{ time: endT, position: 'inBar', color, shape: 'circle', text: lvl.label }]);
+          // Este efeito recria as séries a CADA frame de arrasto (depende de visibleRange) — é
+          // aqui que mais se observa o "Uncaught Error: Value is null" da lib (ensureNotNull em
+          // dataByIndex dentro de createSeriesMarkers): o candlestick principal pode estar no meio
+          // de uma troca de dados (carregando histórico mais antigo) quando este ponto ainda não
+          // tem índice válido no timeScale global. Cosmético (só o rótulo do nível), não deve
+          // derrubar o gráfico — o próximo frame de pan recria a série certa de qualquer jeito.
+          try {
+            createSeriesMarkers(s, [{ time: endT, position: 'inBar', color, shape: 'circle', text: lvl.label }]);
+          } catch { /* ver comentário acima */ }
           srTracoSeriesRef.current.push(s);
         }
       }
