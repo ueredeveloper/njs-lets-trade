@@ -1675,7 +1675,10 @@ export default function IndicatorPanel({ open, onToggle }) {
       // Quase-compra (RSI Momentum): moedas em que o RSI já cruzou o limiar de entrada mas foi
       // barrado por outro filtro, gravadas pelo scanner do bot (ver nearMissLogger.js) — dentro
       // do período escolhido (hoje / 3 dias / 7 dias / 30 dias / tudo), opcionalmente filtrado
-      // por um único motivo (ver fetchRsiMomentumNearMisses.js).
+      // por um único motivo (ver fetchRsiMomentumNearMisses.js). Nome prefixado com o intervalo
+      // ATUAL do bandWidth do bot (5m por padrão, vem em data.bandWidth.interval) — sem isso o
+      // parseFilterChartInterval do frontend não reconhece "bot|..." como intervalo e a coluna
+      // "Larg%" da tabela caía no fallback de 4h, incomparável com o bandWidth real do bot.
       for (const ind of nearMissIndicators) {
         const period = ind.period || '7d';
         const data = await fetchRsiMomentumNearMisses({ period, reason: ind.reason || undefined });
@@ -1684,7 +1687,8 @@ export default function IndicatorPanel({ open, onToggle }) {
           ? t(NEAR_MISS_PERIOD_OPTIONS.find((o) => o.value === period).labelKey)
           : period;
         const reasonTag = ind.reason ? ` · ${ind.reason}` : '';
-        const name = `bot|Quase-compra ${periodLabel}${reasonTag}`;
+        const bwInterval = data.bandWidth?.interval || '5m';
+        const name = `${bwInterval}|Quase-compra ${periodLabel}${reasonTag}`;
         addFilter({ name, list });
       }
 
