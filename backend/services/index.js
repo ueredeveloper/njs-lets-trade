@@ -25,6 +25,7 @@ const fetchRsiOversoldRecovery = require('./fetchRsiOversoldRecovery')
 const fetchRsiThresholdBacktest = require('./fetchRsiThresholdBacktest')
 const fetchRsiThresholdBacktestMarket = require('./fetchRsiThresholdBacktestMarket')
 const fetchRsiMomentumWatchlist = require('./fetchRsiMomentumWatchlist')
+const fetchRsiMomentumNearMisses = require('./fetchRsiMomentumNearMisses')
 const fetchMaCrossStats          = require('./fetchMaCrossStats')
 const fetchVwapBandsStats        = require('./fetchVwapBandsStats')
 const fetchBollingerBandRecovery = require('./fetchBollingerBandRecovery')
@@ -58,6 +59,6 @@ module.exports = {
     fetchSMA, fetchRSI, fetchChopZone, fetchVWAP, fetch24HsVolume, fetchMarketCapFilter, fetchStablecoins,
     fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter, fetchMaDistanceFilter, fetchIndicatorGrowthFilter, fetchRsiOversoldRecovery, fetchRsiThresholdBacktest, fetchRsiThresholdBacktestMarket, fetchMaCrossStats, fetchVwapBandsStats, fetchBollingerBandRecovery, fetchBollingerBandPositionFilter, fetchVwapPositionFilter, fetchVwapBandWidthFilter, fetchBollingerBandWidthFilter, fetchBollingerMedianTrendFilter, fetchVwapBandExpansionFilter, fetchBollingerBands, fetchMACD, fetchSimpleMaCross, fetchReloadCandles,
     fetchGateCurrencies, fetchGateCoinsFilter, fetchGatePrefetch, fetchBinanceTrades, fetchGateTrades, fetchActiveTrades,
-    fetchTradeFavorites, stgBotStatus, multitradeService, fetchMarketHighlights, whatsappMessagesService, fetchCacheSettings, rsiMomentumStatsSearchLog, fetchRsiMomentumWatchlist }
+    fetchTradeFavorites, stgBotStatus, multitradeService, fetchMarketHighlights, whatsappMessagesService, fetchCacheSettings, rsiMomentumStatsSearchLog, fetchRsiMomentumWatchlist, fetchRsiMomentumNearMisses }
 
 

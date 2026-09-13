@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useCurrency } from '../contexts/CurrencyContext';
-import { fetchCandlesAndIndicators, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter, fetchMaDistanceFilter, fetchIndicatorGrowthFilter, fetchMarketCapFilter, fetchBollingerBandPositionFilter, fetchBollingerBandWidthFilter, fetchBollingerMedianTrendFilter, fetchVwapPositionFilter, fetchVwapBandWidthFilter, fetchVwapBandExpansionFilter, fetchRsiMomentumWatchlist, getRsiMomentumConfig, getRsiMomentumCuratedBot, getRsiMomentumCuratedList, fetchGateCoinsFilter, fetchUserPrefs, saveUserPrefs } from '../services/api';
+import { fetchCandlesAndIndicators, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter, fetchMaDistanceFilter, fetchIndicatorGrowthFilter, fetchMarketCapFilter, fetchBollingerBandPositionFilter, fetchBollingerBandWidthFilter, fetchBollingerMedianTrendFilter, fetchVwapPositionFilter, fetchVwapBandWidthFilter, fetchVwapBandExpansionFilter, fetchRsiMomentumWatchlist, fetchRsiMomentumNearMisses, getRsiMomentumConfig, getRsiMomentumCuratedBot, getRsiMomentumCuratedList, fetchGateCoinsFilter, fetchUserPrefs, saveUserPrefs } from '../services/api';
 import { RSI_MOMENTUM_ALL_INTERVALS, RSI_MOMENTUM_SR_INTERVAL_OPTIONS, RSI_MOMENTUM_SR_CANDLE_COUNT_OPTIONS } from '../constants/rsiMomentumConfigSchema';
 import { useI18n } from '../i18n';
 import {
@@ -95,6 +95,24 @@ const GATE_PRESENCE_OPTIONS = [
   { value: 'any', labelKey: 'gatecoins.presence.any' },
 ];
 
+/** Separador de período do filtro "Momentum RSI · Quase-compra" — ver fetchRsiMomentumNearMisses.js. */
+const NEAR_MISS_PERIOD_OPTIONS = [
+  { value: 'hoje', labelKey: 'ind.near_miss_period_today' },
+  { value: '3d', labelKey: 'ind.near_miss_period_3d' },
+  { value: '7d', labelKey: 'ind.near_miss_period_7d' },
+  { value: '30d', labelKey: 'ind.near_miss_period_30d' },
+  { value: 'tudo', labelKey: 'ind.near_miss_period_all' },
+];
+
+/** Motivos de bloqueio registrados em rsi_momentum_near_misses — ver
+ *  strategyEngine.js#evaluateEntrySignal (RSI_NOT_CROSSING/ENTRY_OFF/INSUFFICIENT_DATA nunca
+ *  são gravados, não aparecem aqui). */
+const NEAR_MISS_REASONS = [
+  'RSI_VOLATILE_NEAR_THRESHOLD', 'SPIKE_TOO_LARGE', 'BANDWIDTH_TOO_LOW', 'BANDWIDTH_NO_DATA',
+  'RSI5M_TOO_LOW', 'RSI5M_NO_DATA', 'MACD_HISTOGRAM_NEGATIVE', 'HIGHER_RSI_TOO_LOW',
+  'EMA_CROSS_BEARISH', 'SR_NO_DISCOUNT',
+];
+
 const INTERVAL_LABELS = {
   '1m': '1 minuto', '5m': '5 minutos', '15m': '15 minutos',
   '1h': '1 hora', '2h': '2 horas', '4h': '4 horas',
@@ -183,6 +201,12 @@ function buildSummary(value, t) {
     if (value.rsiSignal) ov.push(`RSI ${value.rsiSignal}`);
     if (value.srInterval || value.srCandleCount) ov.push(`S/R ${value.srInterval ?? '—'}/${value.srCandleCount ?? '—'}`);
     return ov.length ? `${parts.join(' · ')} — ${ov.join(', ')}` : parts.join(' · ');
+  }
+  if (type === 'nearMiss') {
+    const period = NEAR_MISS_PERIOD_OPTIONS.find((o) => o.value === (value.period ?? '7d'));
+    const periodLabel = period ? t(period.labelKey) : (value.period ?? '7d');
+    const reasonLabel = value.reason ? t(`ind.nm_reason_${value.reason}`) : t('ind.near_miss_reason_all');
+    return `${t('ind.near_miss')} — ${periodLabel} · ${reasonLabel}`;
   }
   if (type === 'relativeStrengthIndex') {
     const c1 = (value.compare1 ?? 'above') === 'above' ? t('sum.above') : t('sum.bellow');
@@ -342,6 +366,7 @@ function indDescKey(type) {
   if (type === 'indicatorGrowth') return 'indicator_growth';
   if (type === 'botReadiness') return 'bot_readiness';
   if (type === 'botReadinessCurated') return 'bot_readiness_curated';
+  if (type === 'nearMiss') return 'near_miss';
   if (type === 'gateCoins') return 'gate_coins';
   return 'marketcap';
 }
@@ -499,6 +524,11 @@ function IndicatorRow({ value, onChange }) {
                 next.maxVolumeUsdt = next.maxVolumeUsdt ?? '';
                 next.binancePresence = next.binancePresence ?? 'only_gate';
               }
+              if (newType === 'nearMiss') {
+                next.intervals = [];
+                next.period = next.period ?? '7d';
+                next.reason = next.reason ?? '';
+              }
               if (newType === 'indicatorGrowth') {
                 next.intervals = ['4h'];
                 next.growthEngine = next.growthEngine ?? 'bollinger';
@@ -528,6 +558,7 @@ function IndicatorRow({ value, onChange }) {
             <option value="marketCap">{t('ind.marketcap')}</option>
             <option value="botReadiness">{t('ind.bot_readiness')}</option>
             <option value="botReadinessCurated">{t('ind.bot_readiness_curated')}</option>
+            <option value="nearMiss">{t('ind.near_miss')}</option>
             <option value="bollingerPosition">{t('ind.bb_position')}</option>
             <option value="bollingerBandWidth">{t('ind.bollinger_band_width')}</option>
             <option value="bollingerMedianTrend">{t('ind.bollinger_median_trend')}</option>
@@ -621,6 +652,22 @@ function IndicatorRow({ value, onChange }) {
               {GATE_VOLUME_OPTIONS.map((o) => (
                 <option key={o.value} value={o.value}>{t('gatecoins.vol_max')}: {o.label}</option>
               ))}
+            </select>
+          </>
+        )}
+
+        {type === 'nearMiss' && (
+          <>
+            <select className={sel} value={value.period ?? '7d'}
+              onChange={(e) => onChange({ ...value, period: e.target.value })}
+              title={t('ind.desc.near_miss')}>
+              {NEAR_MISS_PERIOD_OPTIONS.map((o) => <option key={o.value} value={o.value}>{t(o.labelKey)}</option>)}
+            </select>
+            <select className={sel} value={value.reason ?? ''}
+              onChange={(e) => onChange({ ...value, reason: e.target.value })}
+              title={t('ind.near_miss_reason_tip')}>
+              <option value="">{t('ind.near_miss_reason_all')}</option>
+              {NEAR_MISS_REASONS.map((r) => <option key={r} value={r}>{t(`ind.nm_reason_${r}`)}</option>)}
             </select>
           </>
         )}
@@ -1399,7 +1446,7 @@ function IndicatorRow({ value, onChange }) {
       )}
 
       {/* Intervalos de candle das MAs (≠ tempo desde o cruzamento) */}
-      {type !== 'marketCap' && type !== 'botReadiness' && type !== 'botReadinessCurated' && type !== 'gateCoins' && !(type === 'maCrossover' && value.mixedIntervals) && (
+      {type !== 'marketCap' && type !== 'botReadiness' && type !== 'botReadinessCurated' && type !== 'gateCoins' && type !== 'nearMiss' && !(type === 'maCrossover' && value.mixedIntervals) && (
         <div className="flex flex-row flex-wrap gap-1 items-center">
           {type === 'maCrossover' && (
             <span className="text-[10px] text-p5/60 shrink-0 mr-1" title={t('macross.tip.candle_iv')}>
@@ -1557,8 +1604,9 @@ export default function IndicatorPanel({ open, onToggle }) {
       const vwapBandExpansionIndicators = indicators.filter((ind) => ind.type === 'vwapBandExpansion');
       const growthIndicators = indicators.filter((ind) => ind.type === 'indicatorGrowth');
       const botReadyIndicators = indicators.filter((ind) => ind.type === 'botReadiness' || ind.type === 'botReadinessCurated');
+      const nearMissIndicators = indicators.filter((ind) => ind.type === 'nearMiss');
       const gateCoinsIndicators = indicators.filter((ind) => ind.type === 'gateCoins');
-      const otherIndicators = indicators.filter((ind) => ind.type && ind.type !== 'relativeStrengthIndex' && ind.type !== 'marketCap' && ind.type !== 'botReadiness' && ind.type !== 'botReadinessCurated' && ind.type !== 'gateCoins' && ind.type !== 'movingAverage' && ind.type !== 'maTimeAbove' && ind.type !== 'maCrossover' && ind.type !== 'maCompare' && ind.type !== 'maDistance' && ind.type !== 'bollingerPosition' && ind.type !== 'bollingerBandWidth' && ind.type !== 'bollingerMedianTrend' && ind.type !== 'vwapPosition' && ind.type !== 'vwapBandWidth' && ind.type !== 'vwapBandExpansion' && ind.type !== 'indicatorGrowth');
+      const otherIndicators = indicators.filter((ind) => ind.type && ind.type !== 'relativeStrengthIndex' && ind.type !== 'marketCap' && ind.type !== 'botReadiness' && ind.type !== 'botReadinessCurated' && ind.type !== 'nearMiss' && ind.type !== 'gateCoins' && ind.type !== 'movingAverage' && ind.type !== 'maTimeAbove' && ind.type !== 'maCrossover' && ind.type !== 'maCompare' && ind.type !== 'maDistance' && ind.type !== 'bollingerPosition' && ind.type !== 'bollingerBandWidth' && ind.type !== 'bollingerMedianTrend' && ind.type !== 'vwapPosition' && ind.type !== 'vwapBandWidth' && ind.type !== 'vwapBandExpansion' && ind.type !== 'indicatorGrowth');
 
       // Salva intervalos e análises usadas nas preferências
       const allIntervals = [...new Set(indicators.flatMap(ind => ind.intervals ?? []))];
@@ -1621,6 +1669,22 @@ export default function IndicatorPanel({ open, onToggle }) {
         const name = mode === 'signal' ? `${prefix} · Sinal agora${ivTag}`
           : mode === 'contention' ? `${prefix} · No páreo (RSI ~${data.config?.rsiThreshold ?? '?'})`
             : `${prefix} · Prontas (só falta cruzar)${ivTag}`;
+        addFilter({ name, list });
+      }
+
+      // Quase-compra (RSI Momentum): moedas em que o RSI já cruzou o limiar de entrada mas foi
+      // barrado por outro filtro, gravadas pelo scanner do bot (ver nearMissLogger.js) — dentro
+      // do período escolhido (hoje / 3 dias / 7 dias / 30 dias / tudo), opcionalmente filtrado
+      // por um único motivo (ver fetchRsiMomentumNearMisses.js).
+      for (const ind of nearMissIndicators) {
+        const period = ind.period || '7d';
+        const data = await fetchRsiMomentumNearMisses({ period, reason: ind.reason || undefined });
+        const list = (data.coins ?? []).map((c) => c.symbol);
+        const periodLabel = NEAR_MISS_PERIOD_OPTIONS.find((o) => o.value === period)?.labelKey
+          ? t(NEAR_MISS_PERIOD_OPTIONS.find((o) => o.value === period).labelKey)
+          : period;
+        const reasonTag = ind.reason ? ` · ${ind.reason}` : '';
+        const name = `bot|Quase-compra ${periodLabel}${reasonTag}`;
         addFilter({ name, list });
       }
 

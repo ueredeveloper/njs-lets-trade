@@ -49,6 +49,7 @@ const { startMultitradeWatch, configFingerprint } = require('../multitradeWatch'
 const { resolveStrategy } = require('./tradeConfigSchema');
 const { STRATEGY_IDS, loadGlobalConfigBody } = require('./strategyPresets');
 const { startMarketScanner } = require('./marketScanner');
+const { logNearMissIfNeeded } = require('./nearMissLogger');
 const {
   getRequiredSpecs, evaluateEntrySignal, evaluateExit, computeBracketPrices,
   checkEntryLimitExpired, checkReentryCooldown, resolveTargetMode, computeAtrPct,
@@ -1881,6 +1882,7 @@ async function main() {
       if (!row) return;
       await startSymbol(row, COLORS[colorCursor++ % COLORS.length]);
     },
+    onNearMiss: (symbol, signal, config, cMap) => logNearMissIfNeeded({ symbol, config, cMap, signal, log: console.log }),
     log: console.log,
     intervalMs: SCAN_INTERVAL_MS,
     verbose,

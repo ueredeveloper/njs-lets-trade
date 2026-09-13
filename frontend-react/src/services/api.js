@@ -407,6 +407,23 @@ export async function fetchRsiMomentumWatchlist({
   return res.json();
 }
 
+/** Moedas que o RSI Momentum quase comprou — RSI já cruzou o limiar mas foi barrado por outro
+ *  filtro (bandWidth, rsi5m, MACD, RSI 1h, EMA cross, S/R, spikeGuard, anti-repique). Gravado
+ *  pelo scanner do bot (ver backend/bot/rsi-momentum/nearMissLogger.js), lido por
+ *  GET /services/rsi-momentum-near-misses. `period`: 'hoje' | '3d' | '7d' | '30d' | 'tudo'. */
+export async function fetchRsiMomentumNearMisses({ period, reason } = {}) {
+  const p = new URLSearchParams();
+  if (period) p.set('period', period);
+  if (reason) p.set('reason', reason);
+  const qs = p.toString();
+  const res = await fetch(`/services/rsi-momentum-near-misses${qs ? `?${qs}` : ''}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 /** Salva uma pesquisa da tela Estatísticas → Momentum RSI (config + resumo do resultado) num
  *  JSON no backend, pra comparar combinações depois. Fire-and-forget — não deve quebrar a UI. */
 export async function saveRsiMomentumStatsSearch(payload) {

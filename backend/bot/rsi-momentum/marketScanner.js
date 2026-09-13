@@ -135,7 +135,8 @@ function fmtSignalReason(symbol, signal, reasonLabels) {
  * sem precisar reiniciar o bot. `loadTrackedSymbols()` deve devolver um Set/array com os
  * símbolos que JÁ têm favorito rsi-momentum (qualquer fase — pending/comprada/falha) — essas
  * são puladas. `onSignal(symbol, signal)` é chamado (sequencialmente, aguardado) pra cada
- * sinal novo encontrado.
+ * sinal novo encontrado. `onNearMiss(symbol, signal, config, cMap)` (opcional) é chamado quando
+ * o RSI já cruzou mas outro filtro bloqueou — ver nearMissLogger.js.
  *
  * Log de cada ciclo (pra dar visibilidade do que o scanner está decidindo, sem abrir o painel):
  * sempre imprime quantas moedas foram analisadas, os sinais encontrados e um resumo de motivos
@@ -143,7 +144,7 @@ function fmtSignalReason(symbol, signal, reasonLabels) {
  * imprime além disso uma linha por moeda analisada (símbolo + motivo + RSI/limiar) — verboso
  * (varre ~400 pares a cada ciclo), útil só pra depurar/conferir regras na hora.
  */
-async function scanMarketOnce({ loadConfig, loadTrackedSymbols, onSignal, log, verbose = false }) {
+async function scanMarketOnce({ loadConfig, loadTrackedSymbols, onSignal, onNearMiss, log, verbose = false }) {
     const [config, { list: symbols }, trackedRaw] = await Promise.all([
         loadConfig(),
         getActiveUsdtPairs(),
@@ -188,9 +189,9 @@ async function scanMarketOnce({ loadConfig, loadTrackedSymbols, onSignal, log, v
     let evalErrors = 0;
 
     await runWithConcurrency(candidates, async (symbol) => {
-        let signal;
+        let signal, cMap;
         try {
-            const cMap = await fetchCandleMap(symbol, specs);
+            cMap = await fetchCandleMap(symbol, specs);
             signal = evaluateEntrySignal(config, cMap);
         } catch (err) {
             evalErrors++;
@@ -203,6 +204,13 @@ async function scanMarketOnce({ loadConfig, loadTrackedSymbols, onSignal, log, v
                 (reasonSymbols[signal.reason] ??= []).push(`${symbol}${shortSymbolDetail(signal)}`);
             }
             if (verbose) log(fmtSignalReason(symbol, signal, reasonLabels));
+            if (onNearMiss) {
+                try {
+                    await onNearMiss(symbol, signal, config, cMap);
+                } catch (err) {
+                    log(`⚠️  [rsi-momentum-scanner] falha ao registrar quase-compra de ${symbol}: ${err.message}`);
+                }
+            }
             return;
         }
         signalSymbols.push(signal.rsi != null ? `${symbol}(rsi ${Number(signal.rsi).toFixed(2)})` : symbol);
@@ -234,8 +242,8 @@ async function scanMarketOnce({ loadConfig, loadTrackedSymbols, onSignal, log, v
     }
 }
 
-function startMarketScanner({ loadConfig, loadTrackedSymbols, onSignal, log, intervalMs = 60_000, verbose = false }) {
-    const run = () => scanMarketOnce({ loadConfig, loadTrackedSymbols, onSignal, log, verbose }).catch((err) => {
+function startMarketScanner({ loadConfig, loadTrackedSymbols, onSignal, onNearMiss, log, intervalMs = 60_000, verbose = false }) {
+    const run = () => scanMarketOnce({ loadConfig, loadTrackedSymbols, onSignal, onNearMiss, log, verbose }).catch((err) => {
         log(`⚠️  [rsi-momentum-scanner] ${err.message}`);
     });
     run();
