@@ -7,7 +7,7 @@ import { reloadCandles, getMaCrossScreenerConfig, saveMaCrossScreenerConfig,
 import { RSI_MOMENTUM_ALL_INTERVALS, RSI_MOMENTUM_BB_PERIODS, RSI_MOMENTUM_BB_STD_DEVS, RSI_MOMENTUM_TRAILING_TARGET_STEP_OPTIONS, RSI_MOMENTUM_BANDWIDTH_LOOKBACK_OPTIONS,
   RSI_MOMENTUM_TARGET_MODE_OPTIONS, RSI_MOMENTUM_STOP_MODE_OPTIONS, RSI_MOMENTUM_TARGET_PCT_OPTIONS, RSI_MOMENTUM_COIN_STEP_OPTIONS, RSI_MOMENTUM_STOP_STEP_OPTIONS, RSI_MOMENTUM_STOP_PCT_OPTIONS,
   RSI_MOMENTUM_PIVOT_PCT_OPTIONS, RSI_MOMENTUM_PIVOT_GAIN_OPTIONS, RSI_MOMENTUM_WIDTH_PCT_OPTIONS, RSI_MOMENTUM_ATR_MULT_OPTIONS, RSI_MOMENTUM_HARD_TP_OPTIONS,
-  RSI_MOMENTUM_SR_INTERVAL_OPTIONS, RSI_MOMENTUM_SR_CANDLE_COUNT_OPTIONS, RSI_MOMENTUM_SR_RANK_OPTIONS, RSI_MOMENTUM_SR_ENTRY_MAX_PCT_OPTIONS,
+  RSI_MOMENTUM_SR_INTERVAL_OPTIONS, RSI_MOMENTUM_SR_CANDLE_COUNT_OPTIONS, RSI_MOMENTUM_SR_RANK_OPTIONS, RSI_MOMENTUM_SR_ENTRY_MAX_PCT_OPTIONS, RSI_MOMENTUM_SR_STOP_RANK_OPTIONS,
   RSI_MOMENTUM_REINFORCE_DROP_OPTIONS, RSI_MOMENTUM_REINFORCE_RISE_OPTIONS, RSI_MOMENTUM_REINFORCE_USD_OPTIONS,
   RSI_MOMENTUM_REINFORCE_MODE_OPTIONS, RSI_MOMENTUM_REINFORCE_REARM_STOP_OPTIONS, RSI_MOMENTUM_REINFORCE_REARM_TARGET_OPTIONS,
   RSI_MOMENTUM_REENTRY_TRIGGER_OPTIONS, RSI_MOMENTUM_REENTRY_RSI_OPTIONS, RSI_MOMENTUM_REENTRY_RSI5M_OPTIONS,
@@ -1366,9 +1366,22 @@ export default function SettingsSidebar({ open, onClose }) {
                   <p className="text-p5/70 text-[10px] font-semibold uppercase tracking-wider mb-2">{t('settings.rsimomentum_stop_title')}</p>
                   {(() => {
                     const ts = rsiMomentumConfig.exit.trailingStop;
-                    const stopMode = !ts.enabled ? 'fixed' : (ts.mode ?? 'continuous');
+                    const srStopOn = rsiMomentumConfig.entry.supportResistance?.stopEnabled ?? false;
+                    const stopMode = !ts.enabled ? (srStopOn ? 'srSupport' : 'fixed') : (ts.mode ?? 'continuous');
                     const patchTs = (patch) => patchRsiMomentumNested('exit', 'trailingStop', patch);
-                    const onModeChange = (v) => patchTs(v === 'fixed' ? { enabled: false } : { enabled: true, mode: v });
+                    const patchSr = (patch) => patchRsiMomentumNested('entry', 'supportResistance', patch);
+                    const onModeChange = (v) => {
+                      if (v === 'srSupport') {
+                        // Precisa das zonas do S/R (mesmo acordeão do filtro/alvo) — escolher esse
+                        // modo liga o acordeão sozinho. Ainda NÃO wired na execução do bot ao vivo
+                        // (ver comentário em tradeConfigSchema.js) — só grava a config por enquanto.
+                        patchTs({ enabled: false });
+                        patchSr({ enabled: true, stopEnabled: true });
+                        return;
+                      }
+                      if (srStopOn) patchSr({ stopEnabled: false });
+                      patchTs(v === 'fixed' ? { enabled: false } : { enabled: true, mode: v });
+                    };
                     const Fld = ({ label, value, opts, onChange, fmt = (x) => x }) => (
                       <label className="flex flex-col gap-1">
                         <span className="text-[9px] text-p5/40">{label}</span>
@@ -1394,6 +1407,17 @@ export default function SettingsSidebar({ open, onClose }) {
                             opts={RSI_MOMENTUM_STOP_PCT_OPTIONS}
                             onChange={(v) => patchRsiMomentum('stopLoss', { maxLossPct: v })}
                             fmt={(v) => `-${v}%`} />
+                        )}
+
+                        {stopMode === 'srSupport' && (
+                          <>
+                            <Fld label={t('settings.rsimomentum_sr_stop_rank')}
+                              value={rsiMomentumConfig.entry.supportResistance?.stopSupportRank ?? 2}
+                              opts={RSI_MOMENTUM_SR_STOP_RANK_OPTIONS}
+                              onChange={(v) => patchSr({ stopSupportRank: v })}
+                              fmt={(v) => `S${v}`} />
+                            <p className="text-[9px] text-p5/40 mt-1 leading-relaxed">{t('settings.rsimomentum_sr_stop_hint')}</p>
+                          </>
                         )}
 
                         {stopMode === 'continuous' && (
@@ -1796,7 +1820,12 @@ export default function SettingsSidebar({ open, onClose }) {
                     <input
                       type="checkbox"
                       checked={rsiMomentumConfig.entry.supportResistance?.enabled ?? false}
-                      onChange={(e) => patchRsiMomentumNested('entry', 'supportResistance', { enabled: e.target.checked })}
+                      onChange={(e) => patchRsiMomentumNested('entry', 'supportResistance', {
+                        enabled: e.target.checked,
+                        // Desligar o acordeão sem suporte pro Stop 'srSupport' funcionar — o
+                        // select de Stop volta pra 'Fixo' sozinho (stopMode deriva de stopEnabled).
+                        ...(!e.target.checked ? { stopEnabled: false } : {}),
+                      })}
                       className="mt-0.5 shrink-0 accent-p4"
                     />
                     <span className="text-p5 text-xs leading-snug group-hover:text-white transition-colors">

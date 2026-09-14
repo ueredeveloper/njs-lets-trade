@@ -236,6 +236,8 @@ async function analyseRsiThresholdBacktestMarket(options = {}) {
             exitResistanceRank: Math.max(1, Math.min(3, Math.round(Number(srOpts.exitResistanceRank ?? 1)))),
             entryMaxPct: srOpts.entryMaxPct === 'adapt' ? 'adapt' : Math.max(0.1, Math.min(100, Number(srOpts.entryMaxPct ?? 10))),
             entryMaxPctMode: srOpts.entryMaxPct === 'adapt' ? 'adapt' : 'fixed',
+            stopEnabled: !!srOpts.stopEnabled,
+            stopSupportRank: Math.max(1, Math.min(5, Math.round(Number(srOpts.stopSupportRank ?? 2)))),
         } : null,
         supportResistanceStats,
         srBlockedCount,

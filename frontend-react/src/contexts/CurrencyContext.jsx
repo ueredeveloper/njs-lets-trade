@@ -128,7 +128,7 @@ export function CurrencyProvider({ children }) {
 
   // S/R que o backtest do RSI Momentum usou pro trade aberto no gráfico (Estatísticas) — o gráfico
   // desenha ESSES níveis verbatim (não recalcula), pra o gráfico e o trade serem a mesma coisa.
-  // { interval, candleCount, levels:[{price,touches,type}], entrySupport, exitResistance } | null
+  // { interval, candleCount, levels:[{price,touches,type}], entrySupport, stopSupport, exitResistance } | null
   const [chartSrOverride, setChartSrOverride] = useState(null);
 
   /** Foco do backtest MT: histórico e overlays para o momento do trade */

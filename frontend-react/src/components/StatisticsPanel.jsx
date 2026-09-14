@@ -320,6 +320,10 @@ const RSI_MOM_SR_INTERVAL_OPTIONS = INTERVALS;
 const RSI_MOM_SR_CANDLE_COUNT_OPTIONS = [20, 50, 100, 200, 300, 500, 1000];
 const RSI_MOM_SR_RANK_OPTIONS = [1, 2, 3];
 const RSI_MOM_SR_MAXPCT_OPTIONS = ['adapt', 0.5, 0.6, 0.7, 0.8, 0.9, 1, 1.5, 2, 3, 5, 8, 10, 15, 20, 30, 50, 100];
+/** Rank do suporte usado como Stop Loss (options.supportResistance.stopSupportRank) — leque maior
+ *  que o das linhas de entrada/saída (S1-S3) porque um stop mais "de fora" (S4/S5) é uma escolha
+ *  legítima (mais seguro, porém mais largo), diferente da entrada/alvo que ficam perto do preço. */
+const RSI_MOM_SR_STOP_RANK_OPTIONS = [1, 2, 3, 4, 5];
 /** Valores selecionáveis do filtro "Volume 24h" — mesmo campo do bot ao vivo
  *  (config.volume.minVolumeUsdt, ver backend/bot/rsi-momentum/marketScanner.js). 0 = desligado. */
 const RSI_MOM_VOLUME_OPTIONS = [0, 1_000_000, 2_000_000, 5_000_000, 30_000_000];
@@ -350,11 +354,14 @@ const RSI_MOM_TRAILING_STEP_OPTIONS = [1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6];
 /** Quantos p.p. o alvo/stop contínuo sobe a cada degrau. */
 const RSI_MOM_TRAILING_TARGET_STEP_OPTIONS = [1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6, 8, 10];
 /** Modos do ALVO / do STOP — independentes um do outro. Modos do stop: 'fixed' (constante) |
- *  'continuous' (rampa única, ancorada na entrada) | 'twoPhase' (Escada Dupla: 2 inclinações) |
- *  'peakTrail' (Trilha do Topo: % abaixo do pico, 2 fases) | 'atrTrail' (Trilha ATR: fase B = ATR).
- *  Ver backend/utils/analyseRsiThresholdBacktest.js (options.trailingStop.mode). */
+ *  'srSupport' (preço ABSOLUTO da linha de suporte do S/R, ver srStopSupportRank — em vez do
+ *  Stop % fixo; precisa do acordeão Suporte/Resistência ligado) | 'continuous' (rampa única,
+ *  ancorada na entrada) | 'twoPhase' (Escada Dupla: 2 inclinações) | 'peakTrail' (Trilha do Topo:
+ *  % abaixo do pico, 2 fases) | 'atrTrail' (Trilha ATR: fase B = ATR).
+ *  Ver backend/utils/analyseRsiThresholdBacktest.js (options.trailingStop.mode /
+ *  options.supportResistance.stopEnabled). */
 const RSI_MOM_TARGET_MODE_OPTIONS = ['fixed', 'continuous', 'off'];
-const RSI_MOM_STOP_MODE_OPTIONS = ['fixed', 'continuous', 'twoPhase', 'peakTrail', 'atrTrail'];
+const RSI_MOM_STOP_MODE_OPTIONS = ['fixed', 'srSupport', 'continuous', 'twoPhase', 'peakTrail', 'atrTrail'];
 /** Teto de lucro (venda forçada em +X%) — exit.hardTakeProfit. Independente do modo do alvo. */
 const RSI_MOM_HARD_TP_OPTIONS = [8, 10, 12, 15, 18, 20, 25, 30, 40, 50];
 /** "Reforço no stop": queda % abaixo do último aporte que dispara mais uma compra, e alta % que
@@ -422,6 +429,7 @@ const RSI_MOM_DEFAULT_PREFS = {
   srEntrySupportRank: 1,
   srExitResistanceRank: 3,
   srEntryMaxPct: 5,
+  srStopSupportRank: 2,
   minVolumeUsdt: 1000000,
   excludeOpenExits: true,
   adxFilterEnabled: false,
@@ -494,7 +502,7 @@ function formatCandleSpan(candleCount, interval) {
  *  Momentum RSI — em vez de uma contagem fixa de candles (que representa tempos diferentes
  *  em cada intervalo), cada opção é convertida pro número de candles equivalente ao intervalo
  *  escolhido (ex.: 15m → 1h=4 candles, 2h=8, 6h=24, 12h=48; 5m → 1h=30, 2h=60, 4h=120). */
-const RSI_MOM_HOUR_MARKS = [1, 2, 3, 4, 6, 8, 12, 24, 48, 72, 96, 120, 144, 168, 240, 336, 504, 720];
+const RSI_MOM_HOUR_MARKS = [1, 2, 3, 4, 6, 8, 12, 24, 48, 72, 96, 120, 144, 168, 240, 336, 504, 720, 1440];
 
 function buildCandleCountOptions(interval) {
   const ms = INTERVAL_MS[interval];
@@ -550,7 +558,9 @@ function saveRsiMomPrefs(prefs) {
  *  Alvo e stop são INDEPENDENTES (ver options.targetMode / options.trailingStop em
  *  analyseRsiThresholdBacktest.js). */
 function buildRsiMomCommonOptions(p, candleCount, tradeInterval) {
-  const stopTrailing = p.stopMode !== 'fixed';
+  // 'srSupport' não é um modo "trailing" (preço ABSOLUTO da linha de suporte, fixo — não anda com
+  // o pico) — igual 'fixed' nesse sentido, só que o valor vem do S/R em vez do stopLossPct %.
+  const stopTrailing = !['fixed', 'srSupport'].includes(p.stopMode);
   return {
     rsiThreshold: p.rsiThreshold,
     pullbackPct: p.pullbackPct,
@@ -605,6 +615,8 @@ function buildRsiMomCommonOptions(p, candleCount, tradeInterval) {
       entrySupportRank: p.srEntrySupportRank,
       exitResistanceRank: p.srExitResistanceRank,
       entryMaxPct: p.srEntryMaxPct,
+      stopEnabled: p.stopMode === 'srSupport',
+      stopSupportRank: p.srStopSupportRank,
     } : null,
     minVolumeUsdt: p.minVolumeUsdt,
     excludeOpenExits: p.excludeOpenExits,
@@ -1311,7 +1323,9 @@ function RsiMomentumStats({ autoCalc }) {
       Number.isFinite(c.rsiThreshold) ? `RSI>${c.rsiThreshold}` : null,
       c.minVolumeUsdt ? `Vol ${formatVolume(c.minVolumeUsdt)}` : null,
       c.targetMode === 'off' ? 'Alvo OFF' : (Number.isFinite(c.targetPct) ? `Alvo ${c.targetPct}%` : null),
-      Number.isFinite(c.stopLossPct) ? `Stop ${c.stopLossPct}%` : null,
+      c.supportResistance?.stopEnabled
+        ? `Stop S${c.supportResistance.stopSupportRank}`
+        : (Number.isFinite(c.stopLossPct) ? `Stop ${c.stopLossPct}%` : null),
       c.reinforceOnStop?.enabled
         ? `Reforço ${c.reinforceOnStop.mode}${c.reinforceOnStop.reentryTrigger === 'rsiRecross' ? '+RSI' : ''}`
         : null,
@@ -1651,6 +1665,7 @@ function RsiMomentumStats({ autoCalc }) {
           signalMs: new Date(o.signalDate).getTime(),
           windowMs: [new Date(o.signalDate).getTime(), o.exitDate ? new Date(o.exitDate).getTime() : endMs],
           entrySupport: o.sr.entrySupport,
+          stopSupport: o.sr.stopSupport,
           exitResistance: o.sr.exitResistance,
         });
       }
@@ -1855,23 +1870,36 @@ function RsiMomentumStats({ autoCalc }) {
 
         {/* STOP — modo (fixo/contínuo/…) + valores, INDEPENDENTE do alvo. Bloco de fundo vermelho. */}
         <div className="flex flex-row gap-1 md:gap-2 items-end flex-wrap rounded-md border border-red-500/25 bg-red-500/10 px-1.5 py-1">
-        <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[56px]" title={t('stats.tip.stop_mode')}>
+        <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[56px]" title={prefs.stopMode === 'srSupport' ? t('stats.tip.stop_mode_srSupport') : t('stats.tip.stop_mode')}>
           <label className="hidden md:block text-[9px] text-red-400/70 uppercase tracking-wider">{t('stats.stop_mode')}</label>
           <select className={inp}
             value={prefs.stopMode}
-            onChange={(e) => patchPrefs({ stopMode: e.target.value })}>
+            onChange={(e) => patchPrefs({
+              stopMode: e.target.value,
+              // 'srSupport' precisa das zonas do S/R (mesmo acordeão do filtro/alvo) — escolher
+              // esse modo liga o acordeão sozinho, senão o backend não teria zona pra usar.
+              ...(e.target.value === 'srSupport' ? { srEnabled: true } : {}),
+            })}>
             {RSI_MOM_STOP_MODE_OPTIONS.map((m) => <option key={m} value={m}>{t(`stats.stop_mode_${m}`)}</option>)}
           </select>
         </div>
-        <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={prefs.stopMode !== 'fixed' ? t('stats.tip.trailing_start_pct') : t('stats.tip.stop_pct')}>
+        <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={prefs.stopMode === 'srSupport' ? t('stats.tip.sr_stop_rank') : (prefs.stopMode !== 'fixed' ? t('stats.tip.trailing_start_pct') : t('stats.tip.stop_pct'))}>
           <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">
-            {prefs.stopMode !== 'fixed' ? t('stats.trailing_start_pct') : t('stats.stop_pct')}
+            {prefs.stopMode === 'srSupport' ? t('stats.sr_stop_rank') : (prefs.stopMode !== 'fixed' ? t('stats.trailing_start_pct') : t('stats.stop_pct'))}
           </label>
-          <select className={inp}
-            value={prefs.stopLossPct}
-            onChange={(e) => patchPrefs({ stopLossPct: Number(e.target.value) })}>
-            {RSI_MOM_PCT_OPTIONS.map((v) => <option key={v} value={v}>-{v}%</option>)}
-          </select>
+          {prefs.stopMode === 'srSupport' ? (
+            <select className={inp}
+              value={prefs.srStopSupportRank}
+              onChange={(e) => patchPrefs({ srStopSupportRank: Number(e.target.value) })}>
+              {RSI_MOM_SR_STOP_RANK_OPTIONS.map((v) => <option key={v} value={v}>{`S${v}`}</option>)}
+            </select>
+          ) : (
+            <select className={inp}
+              value={prefs.stopLossPct}
+              onChange={(e) => patchPrefs({ stopLossPct: Number(e.target.value) })}>
+              {RSI_MOM_PCT_OPTIONS.map((v) => <option key={v} value={v}>-{v}%</option>)}
+            </select>
+          )}
         </div>
         {prefs.stopMode === 'continuous' && (
           <>
@@ -2064,7 +2092,11 @@ function RsiMomentumStats({ autoCalc }) {
           <span className="hidden md:inline text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.sr_filter')}</span>
           <button
             type="button"
-            onClick={() => patchPrefs({ srEnabled: !prefs.srEnabled })}
+            onClick={() => patchPrefs({
+              srEnabled: !prefs.srEnabled,
+              // Desligar o acordeão sem suporte pro Stop 'srSupport' funcionar — volta pro fixo.
+              ...((prefs.srEnabled && prefs.stopMode === 'srSupport') ? { stopMode: 'fixed' } : {}),
+            })}
             className={`relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${prefs.srEnabled ? 'bg-p4' : 'bg-p3/40'}`}
           >
             <span className={`inline-block h-3 w-3 rounded-full bg-white shadow transition-transform ${prefs.srEnabled ? 'translate-x-3' : 'translate-x-0'}`} />

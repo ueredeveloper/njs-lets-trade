@@ -977,7 +977,11 @@ function statsConfigToRsiMomentumBody({ symbol, interval, config = {}, priorRsiF
             candleCount: num(c.supportResistance.candleCount, 50),
             entrySupportRank: num(c.supportResistance.entrySupportRank, 1),
             exitResistanceRank: num(c.supportResistance.exitResistanceRank, 3),
-            entryMaxPct: num(c.supportResistance.entryMaxPct, 5) }
+            entryMaxPct: num(c.supportResistance.entryMaxPct, 5),
+            // Stop por S/R — schema pronto, AINDA NÃO wired na execução do bot ao vivo (ver
+            // comentário em tradeConfigSchema.js). Só carrega a config pro "Bot exclusivo".
+            stopEnabled: !!c.supportResistance.stopEnabled,
+            stopSupportRank: num(c.supportResistance.stopSupportRank, 2) }
         : { enabled: false },
     },
     exit: {
@@ -1055,7 +1059,7 @@ function rsiMomentumConfigToStatsPrefs(n) {
     targetPct: x.restingBracket.targetPct,
     hardTakeProfitEnabled: x.hardTakeProfit.enabled,
     hardTakeProfitPct: x.hardTakeProfit.pct,
-    stopMode: stopTrailing ? ts.mode : 'fixed',
+    stopMode: stopTrailing ? ts.mode : (e.supportResistance.stopEnabled ? 'srSupport' : 'fixed'),
     stopLossPct: stopTrailing ? ts.startPct : n.stopLoss.maxLossPct,
     positionSizeUsd: n.capitalUsdt,
     bandWidthEnabled: e.bandWidth.enabled,
@@ -1068,6 +1072,7 @@ function rsiMomentumConfigToStatsPrefs(n) {
     srEntrySupportRank: e.supportResistance.entrySupportRank,
     srExitResistanceRank: e.supportResistance.exitResistanceRank,
     srEntryMaxPct: e.supportResistance.entryMaxPct,
+    srStopSupportRank: e.supportResistance.stopSupportRank ?? 2,
     minVolumeUsdt: n.volume.minVolumeUsdt,
     macdFilterEnabled: e.macdFilter.enabled,
     macdFilterInterval: e.macdFilter.interval,

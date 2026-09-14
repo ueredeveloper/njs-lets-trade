@@ -183,6 +183,10 @@ function appendSupportResistanceParams(params, supportResistance) {
   params.set('srEntrySupportRank', String(sr.entrySupportRank ?? 1));
   params.set('srExitResistanceRank', String(sr.exitResistanceRank ?? 1));
   params.set('srEntryMaxPct', String(sr.entryMaxPct ?? 10));
+  if (sr.stopEnabled) {
+    params.set('srStopEnabled', '1');
+    params.set('srStopSupportRank', String(sr.stopSupportRank ?? 2));
+  }
 }
 
 export async function fetchRsiThresholdBacktest(symbol, interval, options = {}) {

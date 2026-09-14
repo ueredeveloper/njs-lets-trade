@@ -126,6 +126,14 @@ const RSI_MOMENTUM_DEFAULTS = {
     supportResistance: {
       enabled: true, interval: '4h', candleCount: 50,
       entrySupportRank: 1, exitResistanceRank: 3, entryMaxPct: 5,
+      // Stop pelo suporte do S/R (preço ABSOLUTO da `stopSupportRank`-ésima zona, S1-S5) em vez
+      // do stopLoss.maxLossPct fixo — mesmo campo do backtest/Estatísticas (options.
+      // supportResistance.stopEnabled em analyseRsiThresholdBacktest.js). Schema pronto (config
+      // aceita e normaliza o campo), mas AINDA NÃO wired em computeBracketPrices/evaluateExit
+      // (strategyEngine.js) nem em rsi-momentum-bot.js — o bot ao vivo ignora isso por enquanto e
+      // continua no stopLoss.maxLossPct. Ligar aqui não muda o comportamento até essa parte ser
+      // implementada.
+      stopEnabled: false, stopSupportRank: 2,
     },
   },
 
@@ -355,6 +363,10 @@ function normalizeSupportResistance(block) {
     entrySupportRank: rank(src.entrySupportRank, d.entrySupportRank),
     exitResistanceRank: rank(src.exitResistanceRank, d.exitResistanceRank),
     entryMaxPct: Math.max(0.1, Math.min(100, Number(src.entryMaxPct ?? d.entryMaxPct))),
+    // Stop pelo suporte do S/R — schema/normalização prontos, NÃO wired ainda na execução (ver
+    // comentário em RSI_MOMENTUM_DEFAULTS.entry.supportResistance acima).
+    stopEnabled: typeof src.stopEnabled === 'boolean' ? src.stopEnabled : d.stopEnabled,
+    stopSupportRank: Math.max(1, Math.min(5, Math.round(Number(src.stopSupportRank ?? d.stopSupportRank)))),
   };
 }
 

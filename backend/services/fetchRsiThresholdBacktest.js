@@ -13,6 +13,7 @@ const DEFAULT_USER_ID = process.env.SUPABASE_DEFAULT_USER_ID ?? 'ueredeveloper';
 //     &bandWidthEnabled=1&bandWidthInterval=5m&bandWidthMinPct=2
 //     &minVolumeUsdt=1000000&excludeOpenExits=1
 //     &prevCandleStopEnabled=1
+//     &srEnabled=1&srStopEnabled=1&srStopSupportRank=2   (stop pelo suporte S/R em vez de stopLossPct)
 //     &adxFilterEnabled=1&adxFilterInterval=1h&adxFilterMinAdx=25
 //     &macdFilterEnabled=1&macdFilterInterval=1h
 //     &higherRsiFilterEnabled=1&higherRsiFilterMinRsi=50   (RSI 1h mínimo — confirmação multi-timeframe)
@@ -33,6 +34,7 @@ router.get('/rsi-threshold-backtest', async (req, res) => {
         bandWidthEnabled, bandWidthInterval, bandWidthPeriod, bandWidthStdDev,
         bandWidthLookback, bandWidthMinPct,
         srEnabled, srInterval, srCandleCount, srEntrySupportRank, srExitResistanceRank, srEntryMaxPct,
+        srStopEnabled, srStopSupportRank,
         minVolumeUsdt, excludeOpenExits,
         prevCandleStopEnabled,
         adxFilterEnabled, adxFilterInterval, adxFilterMinAdx,
@@ -85,6 +87,8 @@ router.get('/rsi-threshold-backtest', async (req, res) => {
             entrySupportRank: srEntrySupportRank ? parseInt(srEntrySupportRank, 10) : 1,
             exitResistanceRank: srExitResistanceRank ? parseInt(srExitResistanceRank, 10) : 1,
             entryMaxPct: srEntryMaxPct === 'adapt' ? 'adapt' : (srEntryMaxPct ? parseFloat(srEntryMaxPct) : 10),
+            stopEnabled: srStopEnabled === '1',
+            stopSupportRank: srStopSupportRank ? parseInt(srStopSupportRank, 10) : 2,
         } : null,
         minVolumeUsdt:    minVolumeUsdt ? parseFloat(minVolumeUsdt) : 0,
         excludeOpenExits: excludeOpenExits === '1',

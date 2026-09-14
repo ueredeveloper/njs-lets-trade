@@ -1259,6 +1259,10 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
 
       const entrySup = srConfig.entrySupport ?? null;
       const exitRes = srConfig.exitResistance ?? null;
+      // Suporte usado como STOP LOSS (options.supportResistance.stopEnabled) — mesma linha do
+      // suporte de entrada quando o rank coincide (ex.: S1 pros dois), daí o rótulo acumula
+      // "entrada + stop" nesse caso.
+      const stopSup = srConfig.stopSupport ?? null;
       const showSel = (type) => (type === 'support' ? srConfig.showSupport : srConfig.showResistance);
       // rankSrLevels + filtro "Mostrar" (showSupport/showResistance): 'all' ou postos exatos [1,3].
       const ranked = (levels, type) => rankSrLevels(levels, type).filter((l) => srRankAllowed(showSel(type), l.rank));
@@ -1270,12 +1274,15 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
           for (const lvl of ranked(levels, type)) {
             const isEntry = mode === 'full' && eq(lvl.price, entrySup);
             const isExit = mode === 'full' && eq(lvl.price, exitRes);
+            const isStop = mode === 'full' && eq(lvl.price, stopSup);
+            const marked = isEntry || isExit || isStop;
+            const tags = [isEntry && 'entrada', isStop && 'stop', isExit && 'alvo'].filter(Boolean).join('+');
             priceLinesRef.current.push(series.createPriceLine({
               price: lvl.price, color,
-              lineWidth: mode === 'ref' ? 1 : ((isEntry || isExit) ? 3 : 2),
-              lineStyle: (isEntry || isExit) ? 0 : 2,
+              lineWidth: mode === 'ref' ? 1 : (marked ? 3 : 2),
+              lineStyle: marked ? 0 : 2,
               axisLabelVisible: true,
-              title: `${lvl.label} (${lvl.touches ?? 1}x)${isEntry ? ' entrada' : isExit ? ' alvo' : ''}`,
+              title: `${lvl.label} (${lvl.touches ?? 1}x)${tags ? ` ${tags}` : ''}`,
             }));
           }
         }
@@ -1293,11 +1300,14 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
           for (const lvl of ranked(srConfig.levels, type)) {
             const isEntry = eq(lvl.price, entrySup);
             const isExit = eq(lvl.price, exitRes);
+            const isStop = eq(lvl.price, stopSup);
+            const marked = isEntry || isExit || isStop;
+            const tags = [isEntry && 'entrada', isStop && 'stop', isExit && 'alvo'].filter(Boolean).join('+');
             const s = chart.addSeries(LineSeries, {
               color,
-              lineWidth: (isEntry || isExit) ? 3 : 2,
-              lineStyle: (isEntry || isExit) ? 0 : 2,
-              lastValueVisible: isEntry || isExit,
+              lineWidth: marked ? 3 : 2,
+              lineStyle: marked ? 0 : 2,
+              lastValueVisible: marked,
               priceLineVisible: false, crosshairMarkerVisible: false,
             });
             s.setData([{ time: from, value: lvl.price }, { time: to, value: lvl.price }]);
@@ -1310,7 +1320,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
             try {
               createSeriesMarkers(s, [{
                 time: to, position: 'inBar', color, shape: 'circle',
-                text: lvl.label + (isEntry ? ' entrada' : isExit ? ' alvo' : ''),
+                text: lvl.label + (tags ? ` ${tags}` : ''),
               }]);
             } catch { /* ver comentário acima */ }
             srRollSeriesRef.current.push(s);

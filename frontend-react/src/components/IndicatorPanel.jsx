@@ -97,6 +97,11 @@ const GATE_PRESENCE_OPTIONS = [
 
 /** Separador de período do filtro "Momentum RSI · Quase-compra" — ver fetchRsiMomentumNearMisses.js. */
 const NEAR_MISS_PERIOD_OPTIONS = [
+  { value: '1h', labelKey: 'ind.near_miss_period_1h' },
+  { value: '2h', labelKey: 'ind.near_miss_period_2h' },
+  { value: '4h', labelKey: 'ind.near_miss_period_4h' },
+  { value: '6h', labelKey: 'ind.near_miss_period_6h' },
+  { value: '12h', labelKey: 'ind.near_miss_period_12h' },
   { value: 'hoje', labelKey: 'ind.near_miss_period_today' },
   { value: '3d', labelKey: 'ind.near_miss_period_3d' },
   { value: '7d', labelKey: 'ind.near_miss_period_7d' },

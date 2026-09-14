@@ -2004,7 +2004,7 @@ function buildMultitradeMarkLines(candlesticks, interval, markers, DL, LEFT_PAD)
 
 const srPriceEq = (a, b) => a != null && b != null && Math.abs(a - b) / b < 1e-6;
 
-function buildSrMarkLines(levels, entrySupport = null, exitResistance = null, showSupport = 'all', showResistance = 'all') {
+function buildSrMarkLines(levels, entrySupport = null, exitResistance = null, showSupport = 'all', showResistance = 'all', stopSupport = null) {
   if (!levels?.length) return [];
   const maxTouches = Math.max(...levels.map(l => l.touches ?? 1));
   // Posto por proximidade do preço (R1 = resistência mais baixa, S1 = suporte mais alto) —
@@ -2032,21 +2032,23 @@ function buildSrMarkLines(levels, entrySupport = null, exitResistance = null, sh
     // Linhas de referência do trade (ao abrir um trade das Estatísticas): entrada e alvo.
     const isEntry = srPriceEq(lvl.price, entrySupport);
     const isExit = srPriceEq(lvl.price, exitResistance);
-    const tag = isEntry ? ' • entrada' : isExit ? ' • alvo' : '';
+    const isStop = srPriceEq(lvl.price, stopSupport);
+    const marked = isEntry || isExit || isStop;
+    const tag = [isEntry && ' • entrada', isStop && ' • stop', isExit && ' • alvo'].filter(Boolean).join('');
     return {
       yAxis: lvl.price,
       lineStyle: {
         color,
-        width: (isEntry || isExit ? baseWidth + 2 : baseWidth) + Math.round(strengthRatio * 2),
+        width: (marked ? baseWidth + 2 : baseWidth) + Math.round(strengthRatio * 2),
         type: 'solid',
-        opacity: (isEntry || isExit) ? 1 : 0.4 + strengthRatio * 0.45,
+        opacity: marked ? 1 : 0.4 + strengthRatio * 0.45,
       },
       label: {
         show: true,
         formatter: `${isRes ? 'R' : 'S'}${rank} ${fmtChartPrice(lvl.price)} (${lvl.touches}x)${tag}`,
         color,
         fontSize: efs(14, 'price'),
-        fontWeight: (isEntry || isExit) ? 'bold' : 'normal',
+        fontWeight: marked ? 'bold' : 'normal',
         position: 'end',
         padding: [2, 4],
         backgroundColor: 'rgba(0,0,0,0.5)',
@@ -2280,7 +2282,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
   // cada instância. `srConfigs` = 1+ instâncias (ou 1 do override de trade das Estatísticas).
   const srMarkData = srConfigs.flatMap((cfg) => {
     const latest = cfg.rolling?.length ? cfg.rolling[cfg.rolling.length - 1].levels : cfg.levels;
-    return buildSrMarkLines(latest, cfg.entrySupport, cfg.exitResistance, cfg.showSupport ?? 'all', cfg.showResistance ?? 'all');
+    return buildSrMarkLines(latest, cfg.entrySupport, cfg.exitResistance, cfg.showSupport ?? 'all', cfg.showResistance ?? 'all', cfg.stopSupport);
   });
   const pivotMarkers = showPphl ? buildPivotMarkers(pphlConfig?.points, candlesticks, DL, LEFT_PAD, interval) : { highs: [], lows: [] };
   const wfractalsMarkers = showWfractals ? buildPivotMarkers(wfractalsConfig?.points, candlesticks, DL, LEFT_PAD, interval) : { highs: [], lows: [] };
@@ -5067,6 +5069,7 @@ export default function CandlestickChart() {
         levels: chartSrOverride.levels,
         entrySupport: chartSrOverride.entrySupport ?? null,
         exitResistance: chartSrOverride.exitResistance ?? null,
+        stopSupport: chartSrOverride.stopSupport ?? null,
         tradeWindow: Number.isFinite(fromMs) && toMs > fromMs ? { fromMs, toMs } : null,
         showSupport: 'all',
         showResistance: 'all',

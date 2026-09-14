@@ -880,7 +880,10 @@ function resolveSupportResistanceAt(srCandles, signalTimeMs, candleCount, cache)
     const window = srCandles.slice(endIdx - candleCount + 1, endIdx + 1).map(c => ({
         openTime: c.openTime, open: c.open, high: c.high, low: c.low, close: c.close,
     }));
-    const levels = detectSupportResistance(window, {});
+    // maxLevels maior que o default (6) — dá margem pro Stop por S/R (S1-S5, ver srStopRank)
+    // achar zonas mais distantes sem mudar os postos 1-3 usados pela entrada/alvo (já vêm
+    // ordenados por força; pedir mais níveis só adiciona mais fracos no fim da lista).
+    const levels = detectSupportResistance(window, { maxLevels: 12 });
     const zones = {
         supports: levels.filter(l => l.type === 'support').sort((a, b) => b.price - a.price),
         resistances: levels.filter(l => l.type === 'resistance').sort((a, b) => a.price - b.price),
@@ -1579,6 +1582,14 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
     const srCandleCount = Math.max(20, Math.min(1000, Math.round(Number(supportResistance?.candleCount ?? 200))));
     const srEntryRank = Math.max(1, Math.min(3, Math.round(Number(supportResistance?.entrySupportRank ?? 1))));
     const srExitRank = Math.max(1, Math.min(3, Math.round(Number(supportResistance?.exitResistanceRank ?? 1))));
+    // Stop pelo suporte do S/R (em vez do stopLossPct fixo): usa o preço ABSOLUTO da Nª zona de
+    // suporte (srStopRank, 1=mais próxima) vigente no instante do sinal como stopPriceOverride —
+    // mesma mecânica do prevCandleStop (preço absoluto, não %). Precisa do srEnabled (mesmas
+    // zonas do filtro/alvo de S/R). Sem suporte disponível abaixo do preço, cai no stopLossPct.
+    const srStopEnabled = srEnabled && !!supportResistance?.stopEnabled;
+    // Leque maior que o das linhas de entrada/saída (1-3) — S4/S5 é uma escolha legítima pro stop
+    // (mais "de fora", mais seguro, porém mais largo). Ver maxLevels em resolveSupportResistanceAt.
+    const srStopRank = Math.max(1, Math.min(5, Math.round(Number(supportResistance?.stopSupportRank ?? 2))));
     // 'adapt' = calcula o limite da história da moeda (ver computeAdaptiveSupportEntryPct, aplicado
     // depois de buscar srCandles). Senão, % fixo entre 0.1 e 100 (permite entrar colado no suporte).
     const srEntryMaxPctAdaptive = supportResistance?.entryMaxPct === 'adapt';
@@ -2036,7 +2047,7 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
                 }
             }
 
-            const stopPriceOverride = pcsEnabled
+            const pcsStopPriceOverride = pcsEnabled
                 ? resolvePrevCandleStopPrice(fourHCandles, signalCandle.openTime)
                 : null;
 
@@ -2047,6 +2058,7 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
             let srZone = null;
             let srTargetPrice = null;
             let srLines = null;
+            let srStopPrice = null;
             if (srEnabled) {
                 const zones = resolveSupportResistanceAt(srCandles, signalCandle.openTime, srCandleCount, srZonesCache);
                 if (zones && !checkSupportResistanceFilter(zones, signalPrice, srEntryRank, srExitRank, srEntryMaxPct)) {
@@ -2057,6 +2069,11 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
                     srZone = classifySrZone(zones, signalPrice, srEntryRank);
                     const chosenR = pickResistance(zones, signalPrice, srExitRank);
                     srTargetPrice = chosenR?.price ?? null;
+                    // Stop pelo suporte (srStopRank, S2 por padrão) — preço ABSOLUTO da zona,
+                    // vira stopPriceOverride abaixo. Sem zona disponível, cai no prevCandleStop/%.
+                    if (srStopEnabled) {
+                        srStopPrice = pickSupport(zones, signalPrice, srStopRank)?.price ?? null;
+                    }
                     // Níveis EXATOS que o backtest usou nesse sinal — o gráfico desenha esses
                     // verbatim ao abrir o trade (ver chartSrOverride), pra o gráfico e o trade
                     // serem a mesma coisa. leftBars/rightBars = defaults do detectSupportResistance.
@@ -2068,9 +2085,17 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
                         })),
                         entrySupport: pickSupport(zones, signalPrice, srEntryRank)?.price ?? null,
                         exitResistance: srTargetPrice,
+                        stopSupport: srStopPrice,
                     };
                 }
             }
+
+            // Stop pelo suporte tem prioridade sobre o candle 4h anterior quando ambos estão
+            // ligados (não faz sentido combinar os dois) — sem suporte válido, cai no
+            // pcsStopPriceOverride/stopLossPct normal (ver checagem em resolveFromSignal).
+            const stopPriceOverride = (srStopEnabled && Number.isFinite(srStopPrice))
+                ? srStopPrice
+                : pcsStopPriceOverride;
 
             rawSignals.push({
                 signalCandle,
@@ -2261,6 +2286,7 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
             entrySupportRank: srEntryRank, exitResistanceRank: srExitRank,
             entryMaxPct: srEntryMaxPct,
             entryMaxPctMode: srEntryMaxPctAdaptive ? 'adapt' : 'fixed',
+            stopEnabled: srStopEnabled, stopSupportRank: srStopRank,
         } : null,
         supportResistanceStats: srEnabled ? computeSupportResistanceZoneStats(finalOccurrences) : null,
         srBlockedCount: srEnabled ? srBlocked : 0,

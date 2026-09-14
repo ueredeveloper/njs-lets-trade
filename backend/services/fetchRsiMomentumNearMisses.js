@@ -9,7 +9,8 @@
  * varredura em que isso acontece. Alimenta o formulário "Momentum RSI · Quase-compra" em
  * Analisar Indicadores (separador de período: hoje / 3 dias / 7 dias / 30 dias / tudo).
  *
- * Query: `period` (hoje|3d|7d|30d|tudo, default 7d), `reason` (opcional, filtra por 1 motivo).
+ * Query: `period` (1h|2h|4h|6h|12h|hoje|3d|7d|30d|tudo, default 7d), `reason` (opcional, filtra
+ * por 1 motivo).
  * Devolve 1 linha por SÍMBOLO (a mais recente do período) + contagem de ocorrências no período,
  * pra virar filtro de moedas na tabela — o histórico completo por linha fica em `rows`.
  */
@@ -20,8 +21,11 @@ const { loadGlobalConfigBody } = require('../bot/rsi-momentum/strategyPresets');
 const { normalizeRsiMomentumConfig } = require('../bot/rsi-momentum/tradeConfigSchema');
 
 const DEFAULT_USER_ID = process.env.SUPABASE_DEFAULT_USER_ID ?? 'ueredeveloper';
-const PERIODS = new Set(['hoje', '3d', '7d', '30d', 'tudo']);
-const PERIOD_MS = { '3d': 3 * 86_400_000, '7d': 7 * 86_400_000, '30d': 30 * 86_400_000 };
+const PERIODS = new Set(['1h', '2h', '4h', '6h', '12h', 'hoje', '3d', '7d', '30d', 'tudo']);
+const PERIOD_MS = {
+    '1h': 1 * 3_600_000, '2h': 2 * 3_600_000, '4h': 4 * 3_600_000, '6h': 6 * 3_600_000, '12h': 12 * 3_600_000,
+    '3d': 3 * 86_400_000, '7d': 7 * 86_400_000, '30d': 30 * 86_400_000,
+};
 const BRT_OFFSET_MS = 3 * 60 * 60_000;
 const MAX_ROWS = 3000;
 

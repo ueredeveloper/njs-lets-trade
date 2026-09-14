@@ -12,10 +12,12 @@ export const RSI_MOMENTUM_BANDWIDTH_LOOKBACK_OPTIONS = [300, 200, 100];
 export const RSI_MOMENTUM_MIN_VOLUME_OPTIONS = [1_000_000, 2_000_000, 5_000_000, 10_000_000, 20_000_000, 50_000_000, 100_000_000];
 /** Modos do ALVO (exit.targetMode) — independente do stop. */
 export const RSI_MOMENTUM_TARGET_MODE_OPTIONS = ['fixed', 'continuous', 'off'];
-/** Modos do STOP — 'fixed' (stopLoss.maxLossPct) ou stop contínuo exit.trailingStop com
+/** Modos do STOP — 'fixed' (stopLoss.maxLossPct) | 'srSupport' (preço ABSOLUTO da linha de
+ *  suporte do S/R, ver entry.supportResistance.stopSupportRank — NÃO wired ainda na execução do
+ *  bot ao vivo, ver CLAUDE.md/tradeConfigSchema.js) ou stop contínuo exit.trailingStop com
  *  exit.trailingStop.mode: 'continuous' | 'twoPhase' (Escada Dupla) | 'peakTrail' (Trilha do
  *  Topo) | 'atrTrail' (Trilha ATR). Mesmos modos do backtest/Estatísticas. */
-export const RSI_MOMENTUM_STOP_MODE_OPTIONS = ['fixed', 'continuous', 'twoPhase', 'peakTrail', 'atrTrail'];
+export const RSI_MOMENTUM_STOP_MODE_OPTIONS = ['fixed', 'srSupport', 'continuous', 'twoPhase', 'peakTrail', 'atrTrail'];
 /** exit.trailingStop.pivotPct — lucro (%) travado no fim da fase A da Escada Dupla (0 = breakeven). */
 export const RSI_MOMENTUM_PIVOT_PCT_OPTIONS = [-2, -1, 0, 0.5, 1, 1.5, 2, 3, 4, 5];
 /** exit.trailingStop.pivotGainPct — ganho do pico (%) que troca da fase A pra B (Trilha do Topo / ATR). */
@@ -43,6 +45,9 @@ export const RSI_MOMENTUM_EARLY_CONFIRM_RSI_OPTIONS = [65, 68, 69, 70, 72, 75, 8
 export const RSI_MOMENTUM_SR_INTERVAL_OPTIONS = RSI_MOMENTUM_ALL_INTERVALS;
 export const RSI_MOMENTUM_SR_CANDLE_COUNT_OPTIONS = [20, 50, 100, 200, 300, 500, 1000];
 export const RSI_MOMENTUM_SR_RANK_OPTIONS = [1, 2, 3];
+/** entry.supportResistance.stopSupportRank — leque maior (S1-S5) que o de entrada/saída, ver
+ *  mesma constante no painel de Estatísticas (RSI_MOM_SR_STOP_RANK_OPTIONS). */
+export const RSI_MOMENTUM_SR_STOP_RANK_OPTIONS = [1, 2, 3, 4, 5];
 export const RSI_MOMENTUM_SR_ENTRY_MAX_PCT_OPTIONS = [0.5, 0.6, 0.7, 0.8, 0.9, 1, 1.5, 2, 3, 5, 8, 10, 15, 20];
 /** exit.reinforceOnStop — "reforço no stop": queda % que dispara novo aporte e alta
  *  % que encerra a pilha (modo 'ladder'). Mesmo leque do painel de Estatísticas. */
@@ -90,6 +95,9 @@ export const RSI_MOMENTUM_DEFAULTS = {
     supportResistance: {
       enabled: true, interval: '4h', candleCount: 50,
       entrySupportRank: 1, exitResistanceRank: 3, entryMaxPct: 5,
+      // Stop pelo suporte do S/R (Stop mode 'srSupport') — schema pronto, mas AINDA NÃO wired na
+      // execução do bot ao vivo (só no backtest/Estatísticas por enquanto). Ver CLAUDE.md.
+      stopEnabled: false, stopSupportRank: 2,
     },
   },
   exit: {

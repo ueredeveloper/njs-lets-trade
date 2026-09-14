@@ -25,9 +25,11 @@ export function logSrLevels(context, symbol, levels, meta = {}) {
       .filter((l) => l.type === type && Number.isFinite(Number(l.price)))
       .sort((a, b) => (type === 'resistance' ? a.price - b.price : b.price - a.price))
       .forEach((l, i) => {
-        let ref = '';
-        if (near(l.price, meta.entrySupport)) ref = 'entrada';
-        else if (near(l.price, meta.exitResistance)) ref = 'alvo';
+        const tags = [];
+        if (near(l.price, meta.entrySupport)) tags.push('entrada');
+        if (near(l.price, meta.stopSupport)) tags.push('stop');
+        if (near(l.price, meta.exitResistance)) tags.push('alvo');
+        const ref = tags.join('+');
         rows.push({
           nível: `${type === 'resistance' ? 'R' : 'S'}${i + 1}`,
           preço: Number(l.price),
