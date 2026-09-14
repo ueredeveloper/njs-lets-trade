@@ -243,7 +243,7 @@ const EMA_LINE_DEFS = [
   { id: 'ma200', color: '#f59e0b', label: 'EMA200' },
 ];
 
-/** Array de indicador (ma9/ma21/ma50/movingAverage/rsi) é alinhado ao FIM do array de candles —
+/** Array de indicador (ma9/ma21/ma50/movingAverage) é alinhado ao FIM do array de candles —
  *  mesma convenção usada em CandlestickChart.jsx (alignSeries/candles[offset+i]). */
 function alignIndicatorToCandles(candlesticks, arr) {
   if (!arr?.length || !candlesticks?.length) return [];
@@ -423,6 +423,15 @@ function buildPnlMarker(buyInfo, candlesticks) {
     shape: 'circle', color: isUp ? C_UP : C_DOWN, size: 0.1,
     text: `${isUp ? '+' : ''}${pct.toFixed(2)}%`,
   };
+}
+
+/** "#rrggbb" → "rgba(r,g,b,alpha)" — o retângulo customizado (lwRectanglePrimitive.js) usa
+ *  `fillColor` direto como `ctx.fillStyle` do canvas, sem campo de opacidade separado. */
+function hexToRgba(hex, alpha) {
+  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex ?? '');
+  if (!m) return `rgba(167,139,250,${alpha})`; // fallback: roxo original
+  const [r, g, b] = m.slice(1).map((h) => parseInt(h, 16));
+  return `rgba(${r},${g},${b},${alpha})`;
 }
 
 function vwapFieldSeries(points, field) {
@@ -669,7 +678,7 @@ function toValidLwCandles(candlesticks) {
 const CandlestickChartLW = forwardRef(function CandlestickChartLW({
   symbol, interval, candlesticks, colors, rightPad = 0,
   activeIndicators = [], ma9, ma21, ma50, ma200, overlayConfigs, vwapConfig, vwapSlopeHighlight,
-  bollingerConfigs = [], srConfigs = [], pphlConfig, wfractalsConfig, zigzagConfig, rsiCrossThreshold = 0, rsiCrossTimes = [], flagsConfig, analysisBoxRect, prevDayCloudConfig, rsi, chopConfig, macdConfig,
+  bollingerConfigs = [], srConfigs = [], pphlConfig, wfractalsConfig, zigzagConfig, rsiCrossConfigs = [], flagsConfig, analysisBoxRect, prevDayCloudConfig, rsiConfig, chopConfig, macdConfig,
   emaPersistCloudData, emaPersistCloudConfirmData, emaPersistCloudConfirm2Data, emaPersistCloudLayers, emaPersistCloudTones, barsSinceCrossData, tdSequentialData,
   stopLossConfig, targetConfig, buyInfo, multitradeMarkers, zoomPeriod, focusLastN,
   onNeedOlderCandles, loadingMoreCandles, onVisibleRangeChange, visibleRange,
@@ -1436,15 +1445,18 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
   }, [srConfigs, candlesticks, visibleRange]);
 
   // Linhas verticais (fullHeight, largura 2px) nos candles em que o RSI(14) do intervalo ESCOLHIDO
-  // cruzou pra cima do "Limiar RSI" — mesmo gatilho do bot RSI Momentum. `rsiCrossTimes` (openTime
-  // em ms, já snapado pra grade do gráfico) vem calculado no pai (ver chartRsiCrossTimes). Roxo.
+  // de cada instância do "Limiar RSI" cruzou pra cima — mesmo gatilho do bot RSI Momentum. 1 cor
+  // por instância (ver chartRsiCrossConfigs no pai), pra comparar vários limiares/intervalos.
   const rsiCrossRects = useMemo(() => {
-    if (!(Number(rsiCrossThreshold) > 0) || !activeIndicators.includes('rsi') || !rsiCrossTimes?.length) return [];
-    return rsiCrossTimes.map((openMs) => {
-      const time = Math.floor(Number(openMs) / 1000);
-      return { time1: time, time2: time, fullHeight: true, fillColor: 'rgba(167,139,250,0.55)', lineWidth: 2 };
+    if (!rsiConfig || !rsiCrossConfigs?.length) return [];
+    return rsiCrossConfigs.flatMap((cfg) => {
+      const fillColor = hexToRgba(cfg.color, 0.55);
+      return (cfg.times ?? []).map((openMs) => {
+        const time = Math.floor(Number(openMs) / 1000);
+        return { time1: time, time2: time, fullHeight: true, fillColor, lineWidth: 2 };
+      });
     });
-  }, [rsiCrossTimes, rsiCrossThreshold, activeIndicators]);
+  }, [rsiCrossConfigs, rsiConfig]);
 
   // Quadrados alvo/stop da posição aberta — retângulo customizado (ver lwRectanglePrimitive.js),
   // igual ao buildBuyPositionSquares do ECharts (markArea verde/vermelho com % de distância).
@@ -1602,12 +1614,14 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart) return;
-    const showRsi = activeIndicators.includes('rsi');
-    // CHOP/BARS viraram manipuladores caixa — gate pela config recebida, não por activeIndicators.
+    // RSI/CHOP/BARS viraram manipuladores caixa — gate pela config recebida, não por activeIndicators.
+    const showRsi = !!rsiConfig;
     const showChop = !!chopConfig;
     const showBarsCross = !!barsSinceCrossData;
     const ids = [...(showRsi ? ['rsi'] : []), ...(showChop ? ['chopZone'] : []), ...(showBarsCross ? ['barsSinceCross'] : [])];
-    const key = ids.join(',');
+    // Linhas superior/inferior do RSI entram na key — mudar o valor (ex.: 70→69) precisa
+    // reconstruir a priceLine, não só trocar os dados da série.
+    const key = `${ids.join(',')}|rsi:${rsiConfig?.upper ?? ''}-${rsiConfig?.lower ?? ''}`;
     const state = subpanelStateRef.current;
 
     if (state.key !== key) {
@@ -1642,22 +1656,19 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
           priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
         }, pane.paneIndex());
         if (id === 'rsi') {
-          // Linhas de grade extras (10/20/40/60/90 e 80 quando R80 não está ligado) — sem elas
-          // só havia referência visual em 30/50/70, deixando buracos grandes pra ler o valor
-          // depois de arrastar/zoomar o eixo (autoScale reajusta o range vertical visível).
+          // Linhas de grade extras (a cada 10, exceto onde a linha superior/inferior configurada
+          // já cai) — sem elas só havia referência visual nas 3 linhas coloridas, deixando buracos
+          // grandes pra ler o valor depois de arrastar/zoomar o eixo (autoScale reajusta o range).
+          const lower = rsiConfig?.lower ?? 30;
+          const upper = rsiConfig?.upper ?? 70;
           const gridColor = colors?.panel || '#003f69';
-          [10, 20, 40, 60, 90].forEach((lvl) => {
+          [10, 20, 30, 40, 50, 60, 70, 80, 90].forEach((lvl) => {
+            if (lvl === lower || lvl === upper || lvl === 50) return;
             s.createPriceLine({ price: lvl, color: gridColor, lineWidth: 1, lineStyle: 2, axisLabelVisible: false, title: '' });
           });
-          s.createPriceLine({ price: 30, color: '#ef5350', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: '30' });
+          s.createPriceLine({ price: lower, color: '#ef5350', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: String(lower) });
           s.createPriceLine({ price: 50, color: '#ffffff', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: '50' });
-          s.createPriceLine({ price: 70, color: '#26a69a', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: '70' });
-          if (activeIndicators.includes('rsi50')) s.createPriceLine({ price: 50, color: '#facc15', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: '50' });
-          if (activeIndicators.includes('rsi80')) {
-            s.createPriceLine({ price: 80, color: '#fb923c', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: '80' });
-          } else {
-            s.createPriceLine({ price: 80, color: gridColor, lineWidth: 1, lineStyle: 2, axisLabelVisible: false, title: '' });
-          }
+          s.createPriceLine({ price: upper, color: '#26a69a', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: String(upper) });
         } else {
           s.createPriceLine({ price: 38.2, color: '#26a69a', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: '38' });
           s.createPriceLine({ price: 61.8, color: '#ef5350', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: '62' });
@@ -1675,7 +1686,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       state.series = newSeries;
     }
 
-    if (state.series.rsi) state.series.rsi.setData(alignIndicatorToCandles(candlesticks, rsi));
+    if (state.series.rsi) state.series.rsi.setData(vwapFieldSeries(rsiConfig?.points ?? [], 'value'));
     if (state.series.chopZone) state.series.chopZone.setData(vwapFieldSeries(chopConfig?.points ?? [], 'value'));
     if (state.series.barsSinceCross) {
       // Intervalo PRÓPRIO (ex.: BARS em 1h sobre gráfico em 15m) — mesmo padrão da nuvem PERM:
@@ -1689,7 +1700,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       }
       state.series.barsSinceCross.setData(data);
     }
-  }, [activeIndicators, rsi, chopConfig, candlesticks, barsSinceCrossData]);
+  }, [rsiConfig, chopConfig, candlesticks, barsSinceCrossData]);
 
   // MACD (12/26/9) SOBREPOSTO no preço — histograma + linha MACD + linha de sinal, num price
   // scale próprio ('macd') na pane principal, confinado à faixa inferior via scaleMargins pra

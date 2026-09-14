@@ -12,7 +12,7 @@ import CandlestickChartLW from './CandlestickChartLW';
 import convertOpenTime from '../utils/convertOpenTime';
 import Tooltip from './Tooltip';
 import { useIsMobile } from '../hooks/useIsMobile';
-import { DEFAULT_OVERLAY_SLOTS, DEFAULT_ACTIVE_INDICATORS, VALID_ACTIVE_INDICATORS, BB_PERIOD_OPTIONS, BB_STDDEV_OPTIONS, DEFAULT_PREV_DAY_CLOUD_INTERVAL, GATE_PREV_DAY_CLOUD_INTERVALS, DEFAULT_PREV_DAY_CLOUD_CANDLE_COUNT, DEFAULT_EMA_PERSIST_CLOUD_INTERVAL, DEFAULT_PERM_CLOUD_TONES, DEFAULT_EMA_PERSIST_CLOUD_LAYERS, DEFAULT_RSI_CROSS_INTERVAL, DEFAULT_COMMON_CHART_INTERVALS, getEmaPersistCloudConfirmInterval } from '../utils/uiPreferences';
+import { DEFAULT_OVERLAY_SLOTS, DEFAULT_ACTIVE_INDICATORS, VALID_ACTIVE_INDICATORS, BB_PERIOD_OPTIONS, BB_STDDEV_OPTIONS, DEFAULT_PREV_DAY_CLOUD_INTERVAL, GATE_PREV_DAY_CLOUD_INTERVALS, DEFAULT_PREV_DAY_CLOUD_CANDLE_COUNT, DEFAULT_EMA_PERSIST_CLOUD_INTERVAL, DEFAULT_PERM_CLOUD_TONES, DEFAULT_EMA_PERSIST_CLOUD_LAYERS, DEFAULT_COMMON_CHART_INTERVALS, getEmaPersistCloudConfirmInterval } from '../utils/uiPreferences';
 import { computeRsiUpCrossingsFromCandles } from '../utils/rsiThresholdCrossings';
 import { detectSupportResistance, detectPivotPointsHighLow, detectWilliamsFractals, detectZigZag } from '../utils/srDetectors';
 import { logSrLevels } from '../utils/srLevelLog';
@@ -27,7 +27,7 @@ import {
   cardOnBtn, cardCloseBtn, cardAddBtn, toggleGroup, toggleBtn, cardSelect,
 } from '../utils/chartPanelStyles';
 import GroupBox from './chartHandlers/GroupBox';
-import { SR_PALETTE } from '../utils/chartHandlers/descriptors';
+import { SR_PALETTE, RSI_CROSS_COLOR_HEX } from '../utils/chartHandlers/descriptors';
 import { sliceRankedSrLevels, srRankAllowed } from '../utils/srRank';
 import { HANDLER_DESCRIPTORS, HANDLER_GROUP_STORES } from '../utils/chartHandlers/descriptors';
 import { useGroupedHandlers } from '../utils/chartHandlers/useGroupedHandlers';
@@ -116,12 +116,11 @@ const INDICATOR_GROUPS = [
   { id: 'ma200',    label: 'EMA200', color: '#f59e0b', tipKey: 'chart.tip.sma200' },
   { id: 'ichimoku', label: 'Ichi',  color: '#60a5fa', tipKey: 'chart.tip.ichimoku' },
   { id: 'flags',    label: 'Band.', color: '#f5d90a', tipKey: 'chart.tip.flags' },
-  { id: 'rsi',      label: 'RSI',   color: '#a78bfa', tipKey: 'chart.tip.rsi' },
 ];
 
+// RSI (subpainel) virou manipulador caixa (handlers.rsi, ver descriptors.js) — intervalo próprio
+// + linhas superior/inferior configuráveis, substituindo os botões avulsos RSI/R80/R50 daqui.
 const RSI_EXTRA_INDICATORS = [
-  { id: 'rsi80', label: 'R80', color: '#fb923c', tipKey: 'chart.tip.rsi80' },
-  { id: 'rsi50', label: 'R50', color: '#facc15', tipKey: 'chart.tip.rsi50' },
   { id: 'stopLoss', label: 'SL', color: '#f87171', tipKey: 'chart.tip.stopLoss' },
 ];
 
@@ -316,15 +315,13 @@ const CHART_INDICATOR_IDS = [
   ...RSI_EXTRA_INDICATORS.map(g => g.id),
 ];
 
-/** Indicadores que sobrevivem à troca manual de intervalo do gráfico (botões 1m/5m/15m/...):
- *  RSI e CHOP abrem em subpainel próprio (embaixo do candle, com seu próprio eixo/dados), então
- *  continuam válidos no novo intervalo. R50/R80 são só marcações dentro desse subpainel de RSI.
- *  Todo o resto (EMA9/21/50/200, Ichimoku, S/R, PPHL, SL, Bollinger, Quick EMA, VWAP) é desenhado
- *  em cima do candle a partir de dados buscados pro intervalo antigo — ficaria "colado" no
- *  intervalo errado até recarregar, por isso some ao trocar. */
-const INTERVAL_CHANGE_KEEP_INDICATORS = new Set(['rsi', 'rsi50', 'rsi80']);
-// CHOP/MACD (agora manipuladores caixa) sobrevivem à troca de intervalo via
-// descriptor.keepOnIntervalChange = true (têm intervalo próprio); Bars×/TD Seq = false.
+/** Indicadores do toggle simples (flat, não-manipulador) que sobrevivem à troca manual de
+ *  intervalo do gráfico (botões 1m/5m/15m/...) — hoje nenhum: EMA9/21/50/200, Ichimoku, Band.,
+ *  SL são desenhados em cima do candle a partir de dados buscados pro intervalo antigo, ficariam
+ *  "colados" no intervalo errado até recarregar, por isso somem ao trocar. RSI/CHOP/MACD (agora
+ *  manipuladores caixa, ver HANDLER_DESCRIPTORS) sobrevivem via descriptor.keepOnIntervalChange
+ *  = true (têm intervalo PRÓPRIO, independente do candle) — Bars×/TD Seq = false. */
+const INTERVAL_CHANGE_KEEP_INDICATORS = new Set([]);
 
 function overlayPanelKey(slot) {
   const num = parseInt(slot.id.replace('slot', ''), 10);
@@ -342,6 +339,29 @@ function filterIndicatorsByPanel(activeIndicators, panelButtons) {
     if (!CHART_INDICATOR_IDS.includes(id)) return true;
     return panelButtons[id] !== false;
   });
+}
+
+/** Encaixa os instantes de cruzamento pra cima do "Limiar RSI" (candles do intervalo ESCOLHIDO
+ *  daquela instância) nos candles REALMENTE exibidos no gráfico — devolve os `openTime` (ms) dos
+ *  candles do GRÁFICO afetados. Usado por instância do manipulador rsiCross (ver chartRsiCrossConfigs). */
+function snapRsiCrossTimes(raw, chartCandles, chartIvMs, threshold) {
+  if (!raw?.length || !chartCandles?.length) return [];
+  const times = chartCandles.map((c) => Number(c.openTime));
+  const firstMs = times[0];
+  const lastMs = times[times.length - 1];
+  const snapped = new Set();
+  for (const openMs of computeRsiUpCrossingsFromCandles(raw, threshold)) {
+    if (openMs < firstMs || openMs > lastMs + chartIvMs) continue;
+    // candle do gráfico que contém o instante do cruzamento (último com openTime <= openMs)
+    let lo = 0;
+    let hi = times.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (times[mid] <= openMs) lo = mid; else hi = mid - 1;
+    }
+    snapped.add(times[lo]);
+  }
+  return [...snapped].sort((a, b) => a - b);
 }
 
 function alignPointsToCandles(candlesticks, points) {
@@ -823,6 +843,26 @@ async function fetchChopOverlayPoints(symbol, interval, source, limit) {
   }));
 }
 
+/** RSI(14) num intervalo próprio (independente do gráfico) — mesmo padrão do CHOP/MACD.
+ *  Devolve [{openTime, value}]. */
+async function fetchRsiOverlayPoints(symbol, interval, source, limit) {
+  const srcParam = source === 'gate' ? '&source=gate' : '';
+  const candles = await fetch(
+    `/services/candles/?symbol=${symbol}&limit=${limit}&interval=${interval}${srcParam}`,
+  ).then(r => r.json());
+  if (!Array.isArray(candles) || !candles.length) return [];
+  const series = await fetch('/services/rsi', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(candles),
+  }).then(r => r.json());
+  if (!Array.isArray(series)) return [];
+  const offset = candles.length - series.length;
+  return series
+    .map((val, i) => ({ openTime: Number(candles[offset + i].openTime), value: val }))
+    .filter(p => Number.isFinite(p.value));
+}
+
 /** MACD (12/26/9, períodos fixos) num intervalo próprio (independente do gráfico) — mesmo padrão
  *  do S/R/PPHL/CHOP. Devolve { macd, signal, histogram }, cada um como [{openTime, value}]. */
 async function fetchMacdOverlayPoints(symbol, interval, source, limit) {
@@ -1051,7 +1091,7 @@ function buildOverlaySeries(overlayConfigs, candlesticks, alignSeries) {
 
 const COMPACT_LABELS = {
   ma9: '9', ma21: '21', ma50: '50', ma200: '200', ichimoku: 'Ich', sr: 'S/R', pphl: 'PPHL', wfractals: 'WF', zigzag: 'ZZ', flags: 'Band.', rsi: 'RSI',
-  rsi80: 'R80', rsi50: 'R50', stopLoss: 'SL', chopZone: 'CHOP', emaPersistCloud: 'PERM',
+  stopLoss: 'SL', chopZone: 'CHOP', emaPersistCloud: 'PERM',
   barsSinceCross: 'BARS', tdSequential: 'TDSEQ', macd: 'MACD',
 };
 
@@ -1402,14 +1442,14 @@ function ChartIndicatorPanel({
         data: {
           ...ind,
           active: activeIndicators.includes(ind.id),
-          darkText: ind.id === 'ma200' || ind.id === 'rsi80' || ind.id === 'rsi50',
+          darkText: ind.id === 'ma200',
         },
       });
     }
     // Manipuladores no padrão caixa (Bollinger/EMA), dirigidos por descriptor.
     for (const d of HANDLER_DESCRIPTORS) {
       if (panelButtons[d.panelButtonKey] === false) continue;
-      if (typeof d.panelGate === 'function' && !d.panelGate({ activeIndicators })) continue;
+      if (typeof d.panelGate === 'function' && !d.panelGate({ activeIndicators, handlers })) continue;
       const api = handlers[d.id];
       if (!api) continue;
       list.push({ key: `handler-${d.id}`, kind: 'handler', data: { descriptor: d, api } });
@@ -2019,7 +2059,7 @@ function buildSrMarkLines(levels, entrySupport = null, exitResistance = null, sh
 /** Linhas verticais nos candles em que o RSI(14) do intervalo ESCOLHIDO cruzou PRA CIMA do
  *  "Limiar RSI" — mesmo gatilho de entrada do bot RSI Momentum. `crossTimes` = openTime (ms) já
  *  snapado pra grade do gráfico (ver chartRsiCrossTimes). Roxo, igual à cor do botão RSI. */
-function buildRsiCrossMarkLines(crossTimes, candlesticks, DL, LEFT_PAD, threshold) {
+function buildRsiCrossMarkLines(crossTimes, candlesticks, DL, LEFT_PAD, threshold, color = '#a78bfa') {
   if (!crossTimes?.length) return [];
   const offset = candlesticks.length - DL;
   const set = new Set(crossTimes.map(Number));
@@ -2029,9 +2069,9 @@ function buildRsiCrossMarkLines(crossTimes, candlesticks, DL, LEFT_PAD, threshol
     if (c && set.has(Number(c.openTime))) {
       out.push({
         xAxis: j + LEFT_PAD,
-        lineStyle: { color: '#a78bfa', width: 1, type: 'solid', opacity: 0.55 },
+        lineStyle: { color, width: 1, type: 'solid', opacity: 0.55 },
         label: {
-          show: true, formatter: `RSI ${threshold}`, color: '#a78bfa',
+          show: true, formatter: `RSI ${threshold}`, color,
           fontSize: 8, position: 'insideEndBottom', padding: [1, 2],
         },
       });
@@ -2118,7 +2158,7 @@ function buildSignalMarkers(candlesticks, markers, DL, LEFT_PAD, chartInterval) 
   return points;
 }
 
-function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAverage, ma50, ma9, ma21, rsi }, colors, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = [], overlayConfigs = [], multitradeMarkers = [], chartLeftPad = CHART_LEFT_MARGIN, buyInfo = null, stopLossConfig = null, targetConfig = null, chartRightPad = CHART_PRICE_PAD + CHART_LEFT_MARGIN, bollingerConfig = null, srConfigs = [], pphlConfig = null, wfractalsConfig = null, zigzagConfig = null, vwapConfig = null, chopConfig = null, vwapSlopeHighlight = null, isMobile = false, bbPathEnabled = false, macdConfig = null, rsiCrossThreshold = 0, rsiCrossTimes = []) {
+function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAverage, ma50, ma9, ma21 }, colors, activeIndicators, displayLimit = LIMIT, zoomPeriod = null, tradeTimes = [], overlayConfigs = [], multitradeMarkers = [], chartLeftPad = CHART_LEFT_MARGIN, buyInfo = null, stopLossConfig = null, targetConfig = null, chartRightPad = CHART_PRICE_PAD + CHART_LEFT_MARGIN, bollingerConfig = null, srConfigs = [], pphlConfig = null, wfractalsConfig = null, zigzagConfig = null, vwapConfig = null, chopConfig = null, vwapSlopeHighlight = null, isMobile = false, bbPathEnabled = false, macdConfig = null, rsiConfig = null, rsiCrossConfigs = []) {
   const showMa9      = activeIndicators.includes('ma9');
   const showMa21     = activeIndicators.includes('ma21');
   const showMa50     = activeIndicators.includes('ma50');
@@ -2127,9 +2167,7 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
   const showPphl     = !!pphlConfig;      // PPHL/WF/ZZ viraram manipuladores caixa — gate pela config
   const showWfractals = !!wfractalsConfig;
   const showZigzag   = !!zigzagConfig;
-  const showRsi      = activeIndicators.includes('rsi');
-  const showRsi50    = activeIndicators.includes('rsi50');
-  const showRsi80    = activeIndicators.includes('rsi80');
+  const showRsi      = !!rsiConfig; // RSI virou manipulador caixa — gate pela config, não activeIndicators
   const showChopZone = !!chopConfig; // CHOP virou manipulador caixa — gate pela config, não activeIndicators
   const showStopLoss = activeIndicators.includes('stopLoss');
   // Subpainéis empilhados abaixo do preço (RSI, CHOP...) — cada um ganha seu próprio grid,
@@ -2248,8 +2286,8 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
   const wfractalsMarkers = showWfractals ? buildPivotMarkers(wfractalsConfig?.points, candlesticks, DL, LEFT_PAD, interval) : { highs: [], lows: [] };
   const zigzagLine = showZigzag ? buildZigZagLine(zigzagConfig, candlesticks, DL, LEFT_PAD, interval) : { line: [], tentative: [] };
   const signalMarkers = buildSignalMarkers(candlesticks, multitradeMarkers, DL, LEFT_PAD, interval);
-  const rsiCrossMarkData = (showRsi && rsiCrossThreshold > 0)
-    ? buildRsiCrossMarkLines(rsiCrossTimes, candlesticks, DL, LEFT_PAD, rsiCrossThreshold)
+  const rsiCrossMarkData = showRsi
+    ? rsiCrossConfigs.flatMap((cfg) => buildRsiCrossMarkLines(cfg.times, candlesticks, DL, LEFT_PAD, cfg.threshold, cfg.color))
     : [];
   const allMarkLineData = [...dayBreakData, ...periodMarkData, ...tradeMarkData, ...mtMarkData, ...srMarkData, ...rsiCrossMarkData];
 
@@ -2566,26 +2604,24 @@ function buildOption({ symbol, interval, candlesticks, ichimokuCloud, movingAver
 
   function buildSubpanelSeries(id, gridIdx) {
     if (id === 'rsi') {
+      const lower = rsiConfig?.lower ?? 30;
+      const upper = rsiConfig?.upper ?? 70;
       return {
-        name: 'RSI',
+        name: `RSI@${rsiConfig?.interval ?? ''}`,
         type: 'line',
         xAxisIndex: gridIdx, yAxisIndex: gridIdx,
-        data: alignSeries(rsi),
+        data: alignSeries(alignPointsToCandles(candlesticks, rsiConfig?.points ?? [])),
         showSymbol: false,
         lineStyle: { color: '#a78bfa', width: 1.5 },
         markLine: {
           silent: true, symbol: 'none',
           data: [
-            { yAxis: 30, lineStyle: { color: '#ef5350', type: 'dashed', width: 1 },
-              label: { formatter: '30', color: '#ef5350', fontSize: 6, position: 'end' } },
+            { yAxis: lower, lineStyle: { color: '#ef5350', type: 'dashed', width: 1 },
+              label: { formatter: String(lower), color: '#ef5350', fontSize: 6, position: 'end' } },
             { yAxis: 50, lineStyle: { color: '#ffffff', type: 'dashed', width: 1, opacity: 0.5 },
               label: { formatter: '50', color: '#ffffff', fontSize: 6, position: 'end' } },
-            ...(showRsi50 ? [{ yAxis: 50, lineStyle: { color: '#facc15', type: 'dashed', width: 1, opacity: 0.6 },
-              label: { formatter: '50', color: '#facc15', fontSize: 6, position: 'end' } }] : []),
-            { yAxis: 70, lineStyle: { color: '#26a69a', type: 'dashed', width: 1 },
-              label: { formatter: '70', color: '#26a69a', fontSize: 6, position: 'end' } },
-            ...(showRsi80 ? [{ yAxis: 80, lineStyle: { color: '#fb923c', type: 'dashed', width: 1 },
-              label: { formatter: '80', color: '#fb923c', fontSize: 6, position: 'end' } }] : []),
+            { yAxis: upper, lineStyle: { color: '#26a69a', type: 'dashed', width: 1 },
+              label: { formatter: String(upper), color: '#26a69a', fontSize: 6, position: 'end' } },
           ],
         },
       };
@@ -2954,6 +2990,7 @@ export default function CandlestickChart() {
   // max:1 — o grupo habilitado de cada manipulador de instância única.
   const chopGroup = handlers.chop?.groups.find((g) => g.enabled) ?? null;
   const macdGroup = handlers.macd?.groups.find((g) => g.enabled) ?? null;
+  const rsiGroup = handlers.rsi?.groups.find((g) => g.enabled) ?? null;
   const barsSinceCrossGroup = handlers.barsSinceCross?.groups.find((g) => g.enabled) ?? null;
   const tdSequentialGroup = handlers.tdSequential?.groups.find((g) => g.enabled) ?? null;
   const pphlGroup = handlers.pphl?.groups.find((g) => g.enabled) ?? null;
@@ -3047,10 +3084,10 @@ export default function CandlestickChart() {
   // deslizante), ver os useMemo chartSrConfig/chartPphlConfig/... e visibleChartRange.
   const [pivotRawCache, setPivotRawCache] = useState({});
   const [_pivotRawLoading, setPivotRawLoading] = useState(false);
-  // Limiar RSI: virou manipulador caixa (handlers.rsiCross). `rsiCrossThreshold` (0 = desligado) e
-  // `rsiCrossInterval` são derivados do grupo habilitado — o resto do arquivo/motores usa eles
-  // como antes. Só aparece com o subpainel RSI ligado (panelGate do descriptor).
-  const rsiCrossGroup = handlers.rsiCross?.groups.find((g) => g.enabled) ?? null;
+  // Limiar RSI: virou manipulador caixa MULTI-instância (handlers.rsiCross, max 4) — cada
+  // instância tem intervalo/limiar/cor PRÓPRIOS (ver descriptors.js). Só aparece com o subpainel
+  // RSI ligado (panelGate do descriptor).
+  const rsiCrossGroups = (handlers.rsiCross?.groups ?? []).filter((g) => g.enabled);
   // Trecho de TEMPO visível do gráfico (ms) — reportado pelos dois motores (LW via
   // subscribeVisibleTimeRangeChange, ECharts via evento dataZoom), com debounce.
   const [visibleChartRange, setVisibleChartRange] = useState(null);
@@ -3067,11 +3104,13 @@ export default function CandlestickChart() {
   const prevDayCloudGroup = handlers.prevDayCloud?.groups.find((g) => g.enabled) ?? null;
   // Cache por símbolo + intervalo (1d/3d) — ver prevDayCloudEffectiveInterval.
   const [prevDayCloudCache, setPrevDayCloudCache] = useState({});
-  // CHOP/MACD: intervalo agora vive no grupo do manipulador (handlers.chop / handlers.macd).
+  // CHOP/MACD/RSI: intervalo agora vive no grupo do manipulador (handlers.chop / .macd / .rsi).
   const [chopCache, setChopCache] = useState({});
   const [_chopLoading, setChopLoading] = useState(false);
   const [macdCache, setMacdCache] = useState({});
   const [_macdLoading, setMacdLoading] = useState(false);
+  const [rsiCache, setRsiCache] = useState({});
+  const [_rsiLoading, setRsiLoading] = useState(false);
   // PERM: intervalo/tons/camadas agora vivem no grupo do manipulador (handlers.emaPersistCloud).
   const emaPersistCloudGroup = handlers.emaPersistCloud?.groups.find((g) => g.enabled) ?? null;
   const emaPersistCloudInterval = emaPersistCloudGroup?.interval ?? DEFAULT_EMA_PERSIST_CLOUD_INTERVAL;
@@ -3731,11 +3770,10 @@ export default function CandlestickChart() {
   const zigzagShown = !!zigzagGroup && chartPanelButtons.zigzag !== false;
 
   // Linha vertical do "Limiar RSI": precisa dos candles brutos do intervalo escolhido pra calcular
-  // o RSI(14) no cliente (o `selectedChart.rsi` é só do intervalo do gráfico e das últimas ~166
-  // velas). Reutiliza o mesmo cache/fetch dos pivôs.
-  const rsiCrossShown = !!rsiCrossGroup && activeIndicators.includes('rsi');
-  const rsiCrossThreshold = rsiCrossShown ? Number(rsiCrossGroup.value) : 0; // 0 = desligado
-  const rsiCrossInterval = rsiCrossGroup?.interval ?? DEFAULT_RSI_CROSS_INTERVAL;
+  // o RSI(14) no cliente (o subpainel RSI pode estar num intervalo diferente). Reutiliza o mesmo
+  // cache/fetch dos pivôs. Só aparece com o subpainel RSI (handlers.rsi) ligado.
+  const rsiCrossShown = rsiCrossGroups.length > 0 && !!rsiGroup && chartPanelButtons.rsi !== false;
+  const rsiCrossIntervalsKey = rsiCrossGroups.map((g) => g.interval).sort().join(',');
 
   const srIntervalsKey = enabledSrGroups.map((g) => g.interval).sort().join(',');
   const pivotIntervalsNeeded = useMemo(() => {
@@ -3745,10 +3783,10 @@ export default function CandlestickChart() {
     if (pphlShown) set.add(pphlGroup.interval);
     if (wfractalsShown) set.add(wfractalsGroup.interval);
     if (zigzagShown) set.add(zigzagGroup.interval);
-    if (rsiCrossShown) set.add(rsiCrossInterval);
+    if (rsiCrossShown) for (const g of rsiCrossGroups) set.add(g.interval);
     return [...set];
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [srTradeOverride, chartSrOverride?.interval, srIntervalsKey, pphlShown, wfractalsShown, zigzagShown, rsiCrossShown, pphlGroup?.interval, wfractalsGroup?.interval, zigzagGroup?.interval, rsiCrossInterval]);
+  }, [srTradeOverride, chartSrOverride?.interval, srIntervalsKey, pphlShown, wfractalsShown, zigzagShown, rsiCrossShown, pphlGroup?.interval, wfractalsGroup?.interval, zigzagGroup?.interval, rsiCrossIntervalsKey]);
 
   useEffect(() => {
     if (!selectedChart?.symbol || !pivotIntervalsNeeded.length) {
@@ -3898,6 +3936,42 @@ export default function CandlestickChart() {
   }, [
     selectedChart?.symbol, selectedChart?.interval, selectedChart?.source, selectedChart?.candlesticks,
     currentInterval, overlayFetchLimit, displayCandleCount, macdShown, macdGroup?.interval,
+  ]);
+
+  // Busca o RSI(14) — intervalo próprio (independente do gráfico), mesmo padrão do CHOP/MACD.
+  const rsiShown = !!rsiGroup && chartPanelButtons.rsi !== false;
+  useEffect(() => {
+    if (!selectedChart?.symbol || !rsiShown) {
+      setRsiLoading(false);
+      return undefined;
+    }
+    const key = rsiGroup.interval;
+    let cancelled = false;
+    setRsiLoading(true);
+    (async () => {
+      try {
+        const ovLimit = computeOverlayMaFetchLimit(
+          selectedChart.interval ?? currentInterval,
+          rsiGroup.interval,
+          15, // warmup RSI(14)
+          Math.max(displayCandleCount, selectedChart.candlesticks?.length ?? 0, DEFAULT_CANDLE_LIMIT),
+          overlayFetchLimit,
+        );
+        const points = await fetchRsiOverlayPoints(
+          selectedChart.symbol, rsiGroup.interval, selectedChart.source, ovLimit,
+        );
+        if (!cancelled) setRsiCache({ [key]: points });
+      } catch (e) {
+        console.warn('[rsi]', key, e.message);
+        if (!cancelled) setRsiCache({});
+      } finally {
+        if (!cancelled) setRsiLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [
+    selectedChart?.symbol, selectedChart?.interval, selectedChart?.source, selectedChart?.candlesticks,
+    currentInterval, overlayFetchLimit, displayCandleCount, rsiShown, rsiGroup?.interval,
   ]);
 
   // Busca candles + EMA9/21 pra nuvem PERM (inclinação EMA9) — intervalo próprio (independente
@@ -4937,32 +5011,27 @@ export default function CandlestickChart() {
     return sliceForVisibleWindow(raw, visibleChartRange, count);
   }, [pivotRawCache, selectedChart?.symbol, visibleChartRange]);
 
-  // Linha vertical roxa do "Limiar RSI": lista de `openTime` (ms) — já snapada pra grade do
-  // intervalo do GRÁFICO — dos candles em que o RSI(14) do intervalo escolhido cruzou pra cima do
-  // limiar. Os dois motores (LW e ECharts) casam esses ms com o openTime dos candles exibidos.
-  const chartRsiCrossTimes = useMemo(() => {
+  // Linhas verticais do "Limiar RSI" — 1 config por INSTÂNCIA habilitada (intervalo/limiar/cor
+  // próprios), cada uma com sua lista de `openTime` (ms) já snapada pra grade do GRÁFICO. Os dois
+  // motores (LW e ECharts) casam esses ms com o openTime dos candles exibidos, um traço por cor.
+  const chartRsiCrossConfigs = useMemo(() => {
     if (!rsiCrossShown) return [];
-    const raw = pivotRawCache[`${selectedChart?.symbol}|${rsiCrossInterval}`]?.candles;
     const chartCandles = selectedChart?.candlesticks;
-    if (!raw?.length || !chartCandles?.length) return [];
-    const chartIvMs = INTERVAL_MS[selectedChart.interval ?? currentInterval] ?? 900_000;
-    const times = chartCandles.map((c) => Number(c.openTime));
-    const firstMs = times[0];
-    const lastMs = times[times.length - 1];
-    const snapped = new Set();
-    for (const openMs of computeRsiUpCrossingsFromCandles(raw, rsiCrossThreshold)) {
-      if (openMs < firstMs || openMs > lastMs + chartIvMs) continue;
-      // candle do gráfico que contém o instante do cruzamento (último com openTime <= openMs)
-      let lo = 0;
-      let hi = times.length - 1;
-      while (lo < hi) {
-        const mid = (lo + hi + 1) >> 1;
-        if (times[mid] <= openMs) lo = mid; else hi = mid - 1;
-      }
-      snapped.add(times[lo]);
-    }
-    return [...snapped].sort((a, b) => a - b);
-  }, [rsiCrossShown, pivotRawCache, selectedChart?.symbol, selectedChart?.candlesticks, selectedChart?.interval, currentInterval, rsiCrossInterval, rsiCrossThreshold]);
+    if (!chartCandles?.length) return [];
+    const chartIvMs = INTERVAL_MS[selectedChart?.interval ?? currentInterval] ?? 900_000;
+    return rsiCrossGroups.map((g) => {
+      const raw = pivotRawCache[`${selectedChart?.symbol}|${g.interval}`]?.candles;
+      const threshold = Number(g.value);
+      return {
+        id: g.id,
+        interval: g.interval,
+        threshold,
+        color: RSI_CROSS_COLOR_HEX[g.color] ?? RSI_CROSS_COLOR_HEX.green,
+        times: snapRsiCrossTimes(raw, chartCandles, chartIvMs, threshold),
+      };
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rsiCrossShown, handlers.rsiCross?.groups, pivotRawCache, selectedChart?.symbol, selectedChart?.candlesticks, selectedChart?.interval, currentInterval]);
 
   // Âncora do S/R rolante = abertura do último candle do intervalo do S/R que JÁ FECHOU até a
   // borda direita do trecho visível (candle em formação não entra — sem look-ahead). Snapado pra
@@ -5131,6 +5200,14 @@ export default function CandlestickChart() {
     return { interval: macdGroup.interval, macd: d.macd ?? [], signal: d.signal ?? [], histogram: d.histogram ?? [] };
   }, [macdShown, macdGroup?.interval, macdCache]);
 
+  const chartRsiConfig = useMemo(() => {
+    if (!rsiShown) return null;
+    return {
+      interval: rsiGroup.interval, upper: rsiGroup.upper, lower: rsiGroup.lower,
+      points: rsiCache[rsiGroup.interval] ?? [],
+    };
+  }, [rsiShown, rsiGroup?.interval, rsiGroup?.upper, rsiGroup?.lower, rsiCache]);
+
   const chartEmaPersistCloudData = useMemo(() => {
     if (!emaPersistCloudShown) return null;
     return emaPersistCloudCache[emaPersistCloudInterval] ?? null;
@@ -5179,10 +5256,10 @@ export default function CandlestickChart() {
       selectedChart, colors, effectiveIndicators, displayLimit, chartZoom, tradeTimes, overlayConfigs,
       chartTradeMarkers?.length ? chartTradeMarkers : (selectedChart.tradeMarkers ?? []),
       chartLeftPad, chartBuyInfo, chartStopLossConfig, chartTargetConfig, chartRightPad, chartBollingerConfig, chartSrConfigs, chartPphlConfig, chartWfractalsConfig, chartZigzagConfig, chartVwapConfig, chartChopConfig, vwapSlopeHighlight, isMobile,
-      chartBollingerConfig?.showPath ?? false, chartMacdConfig, rsiCrossThreshold, chartRsiCrossTimes,
+      chartBollingerConfig?.showPath ?? false, chartMacdConfig, chartRsiConfig, chartRsiCrossConfigs,
     );
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedChart, colors, effectiveIndicators, chartZoom, tradePurchases, chartTradeMarkers, activeTab, overlayConfigs, displayLimit, chartLeftPad, chartRightPad, chartBuyInfo, chartStopLossConfig, chartTargetConfig, chartBollingerConfig, chartSrConfigs, chartPphlConfig, chartWfractalsConfig, chartZigzagConfig, chartVwapConfig, chartChopConfig, chartMacdConfig, vwapSlopeHighlight, isMobile, rsiCrossThreshold, chartRsiCrossTimes, uiPrefs.fontScale]);
+  }, [selectedChart, colors, effectiveIndicators, chartZoom, tradePurchases, chartTradeMarkers, activeTab, overlayConfigs, displayLimit, chartLeftPad, chartRightPad, chartBuyInfo, chartStopLossConfig, chartTargetConfig, chartBollingerConfig, chartSrConfigs, chartPphlConfig, chartWfractalsConfig, chartZigzagConfig, chartVwapConfig, chartChopConfig, chartMacdConfig, chartRsiConfig, vwapSlopeHighlight, isMobile, chartRsiCrossConfigs, uiPrefs.fontScale]);
 
   if (!selectedChart || !option) {
     return (
@@ -5547,12 +5624,11 @@ export default function CandlestickChart() {
               pphlConfig={chartPphlConfig}
               wfractalsConfig={chartWfractalsConfig}
               zigzagConfig={chartZigzagConfig}
-              rsiCrossThreshold={rsiCrossThreshold}
-              rsiCrossTimes={chartRsiCrossTimes}
+              rsiCrossConfigs={chartRsiCrossConfigs}
               flagsConfig={chartFlagsConfig}
               analysisBoxRect={analysisBoxRect}
               prevDayCloudConfig={chartPrevDayCloudConfig}
-              rsi={selectedChart.rsi}
+              rsiConfig={chartRsiConfig}
               chopConfig={chartChopConfig}
               macdConfig={chartMacdConfig}
               emaPersistCloudData={chartEmaPersistCloudData}

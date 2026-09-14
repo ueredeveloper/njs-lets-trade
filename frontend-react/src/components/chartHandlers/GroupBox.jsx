@@ -6,6 +6,13 @@ import {
 } from '../../utils/chartPanelStyles';
 import { getEmaPersistCloudConfirmInterval } from '../../utils/uiPreferences';
 import { PERM_CLOUD_TONES, PERM_TONE_SWATCH } from '../../utils/emaCrossPersistenceCloud';
+import { RSI_CROSS_COLOR_HEX } from '../../utils/chartHandlers/descriptors';
+
+/** Nome-de-cor → hex pro chip do mini-cabeçalho multi-instância quando o descriptor declara
+ *  `colorField` (hoje só rsiCross usa isso — ver GroupBox abaixo). Reaproveita o mesmo mapa do
+ *  campo `color` do descriptor; qualquer outro descriptor com um campo de cor por nome pode
+ *  reusar as mesmas chaves. */
+const COLOR_SWATCHES = RSI_CROSS_COLOR_HEX;
 
 /**
  * Manipulador de indicador no padrão CARD (mock "Painel Indicadores Nano"): cabeçalho (título +
@@ -14,8 +21,8 @@ import { PERM_CLOUD_TONES, PERM_TONE_SWATCH } from '../../utils/emaCrossPersiste
  * sendo a dica de layout do corpo, mas agora renderiza em flex de altura natural (sem `dims`).
  *
  * - single-instance (descriptor.max === 1): ON + × ficam no cabeçalho, agindo em groups[0].
- * - multi-instance (só S/R, max 4): cada grupo é um sub-bloco com mini-cabeçalho próprio
- *   (chip de cor + ON + ×); o cabeçalho do card mostra só o título + contador n/max.
+ * - multi-instance (S/R, Limiar RSI — max 4): cada grupo é um sub-bloco com mini-cabeçalho
+ *   próprio (chip de cor + ON + ×); o cabeçalho do card mostra só o título + contador n/max.
  *
  * Contrato de `api` (de useGroupedHandlers.js): { groups, add(), remove(id), update(id, patch),
  * toggleFlag(id, key) }.
@@ -245,7 +252,7 @@ export default function GroupBox({ descriptor, api, t }) {
     );
   }
 
-  // ── Multi-instance (S/R): sub-bloco por grupo ──
+  // ── Multi-instance (S/R, Limiar RSI): sub-bloco por grupo ──
   return (
     <div style={panelCard()}>
       <div style={cardHeader()}>
@@ -253,7 +260,11 @@ export default function GroupBox({ descriptor, api, t }) {
         <span style={cardSectionLabel()}>{groups.length}/{max}</span>
       </div>
       {groups.map((g, gi) => {
-        const color = palette?.[gi % palette.length] ?? baseColor;
+        // descriptor.colorField (ex.: rsiCross) = cor ESCOLHIDA pelo usuário num campo próprio,
+        // não posicional — o chip bate com a linha real desenhada no gráfico. Sem colorField
+        // (ex.: S/R) cai no palette por posição de sempre.
+        const color = (descriptor.colorField && COLOR_SWATCHES[g[descriptor.colorField]])
+          || palette?.[gi % palette.length] || baseColor;
         return (
           <div
             key={g.id}

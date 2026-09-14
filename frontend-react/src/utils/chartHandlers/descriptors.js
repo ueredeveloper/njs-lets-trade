@@ -210,30 +210,95 @@ const zigzag = pivotDescriptor({
   normInterval: normalizeZigzagInterval, normCount: normalizeZigzagCandleCount,
 });
 
-// ─── Etapa 3: Limiar RSI (cruzamento) — max:1, só aparece com o subpainel RSI ligado ───
+// ─── Etapa 3: RSI (subpainel) — max:1, intervalo PRÓPRIO (independente do gráfico), mesmo
+// padrão do CHOP/MACD; linhas superior/inferior configuráveis (padrão 70/30, mas qualquer moeda
+// pode precisar de outro valor — ex.: 69, limiar vencedor do RSI Momentum). Substitui os antigos
+// botões avulsos RSI/R50/R80 (fixos no intervalo do candle do gráfico) — R50 era só uma 2ª linha
+// decorativa em cima da neutra (sempre desenhada) e R80 virou o próprio campo "upper" em 80.
+const RSI_UPPER_OPTIONS = [60, 65, 67, 68, 69, 70, 72, 75, 78, 80, 85, 90];
+const RSI_LOWER_OPTIONS = [10, 15, 20, 22, 25, 28, 30, 31, 32, 33, 35, 40];
+const DEFAULT_RSI_INTERVAL = '15m';
+
+const rsi = {
+  id: 'rsi',
+  title: 'RSI',
+  addLabel: '+ RSI',
+  color: '#a78bfa',
+  palette: ['#a78bfa'],
+  max: 1,
+  storageKey: 'lets_trade_rsi_groups_v1',
+  autoGroupIds: [],
+  keepOnIntervalChange: true,
+  panelButtonKey: 'rsi',
+  legacyIndicatorIds: ['rsi', 'rsi50', 'rsi80'],
+  fields: [
+    { key: 'interval', kind: 'select', options: PICKER_INTERVALS, default: DEFAULT_RSI_INTERVAL, fmt: (v) => `RSI ${v}` },
+    { key: 'lower', kind: 'select', options: RSI_LOWER_OPTIONS, default: 30, fmt: (v) => `LI ${v}` },
+    { key: 'upper', kind: 'select', options: RSI_UPPER_OPTIONS, default: 70, fmt: (v) => `LS ${v}` },
+  ],
+  flags: [{ key: 'enabled', label: 'ON', default: false }],
+  cols: 4,
+  rows: [[{ ref: 'flag:enabled', span: 1 }, { ref: 'field:interval', span: 3 }],
+    [{ ref: 'field:lower', span: 2 }, { ref: 'field:upper', span: 2 }]],
+  toDrawConfig(g, i, ctx) {
+    if (!g.enabled) return null;
+    return { id: g.id, interval: g.interval, upper: g.upper, lower: g.lower, points: ctx.caches.rsi?.[g.interval] ?? [] };
+  },
+  // Sem intervalo/limiar antigo pra herdar (RSI sempre seguiu o intervalo do candle do gráfico
+  // até aqui) — só migra se o botão RSI estava ligado; R80 vira upper:80, R50 é descartado
+  // (linha decorativa redundante com a neutra, que continua sempre desenhada em 50).
+  migrateFromLegacy: () => {
+    try {
+      const p = loadUiPreferences();
+      const active = p.activeIndicators ?? [];
+      return [{
+        interval: DEFAULT_RSI_INTERVAL,
+        upper: active.includes('rsi80') ? 80 : 70,
+        lower: 30,
+        enabled: active.includes('rsi'),
+      }];
+    } catch { return null; }
+  },
+};
+
+// ─── Etapa 3b: Limiar RSI (cruzamento) — MULTI-INSTÂNCIA (max:4), só aparece com o subpainel
+// RSI ligado. Cada instância tem intervalo + limiar + cor PRÓPRIOS (escolhida, não posicional)
+// — permite comparar visualmente vários filtros do RSI Momentum ao mesmo tempo (ex.: 15m verde
+// = cruzamento do RSI principal, 5m azul = confirmação do rsi5mFilter). ───
+
+export const RSI_CROSS_COLOR_OPTIONS = ['green', 'blue', 'yellow'];
+export const RSI_CROSS_COLOR_HEX = { green: '#22c55e', blue: '#38bdf8', yellow: '#eab308' };
+const RSI_CROSS_COLOR_LABEL = { green: 'Verde', blue: 'Azul', yellow: 'Amarelo' };
 
 const rsiCross = {
   id: 'rsiCross',
   title: 'Limiar RSI',
   addLabel: '+ Limiar RSI',
-  color: '#a78bfa',
-  palette: ['#a78bfa'],
-  max: 1,
+  color: RSI_CROSS_COLOR_HEX.green,
+  palette: RSI_CROSS_COLOR_OPTIONS.map((c) => RSI_CROSS_COLOR_HEX[c]),
+  max: 4,
   storageKey: 'lets_trade_rsicross_groups_v1',
   autoGroupIds: [],
   keepOnIntervalChange: true,
-  panelGate: (ctx) => (ctx.activeIndicators ?? []).includes('rsi'),
+  panelGate: (ctx) => !!ctx.handlers?.rsi?.groups?.some((g) => g.enabled),
   legacyIndicatorIds: [],
+  // Chip do mini-cabeçalho (GroupBox.jsx, multi-instância) usa a cor ESCOLHIDA neste campo em
+  // vez do palette posicional genérico — assim o quadradinho bate com a linha real no gráfico.
+  colorField: 'color',
   fields: [
     { key: 'interval', kind: 'select', options: RSI_CROSS_INTERVAL_OPTIONS, default: DEFAULT_RSI_CROSS_INTERVAL, fmt: (v) => `RSI ${v}` },
     { key: 'value', kind: 'select', options: RSI_CROSS_VALUE_OPTIONS, default: DEFAULT_RSI_CROSS_VALUE, fmt: (v) => `⤴ ${v}` },
+    { key: 'color', kind: 'select', options: RSI_CROSS_COLOR_OPTIONS, default: 'green', fmt: (v) => RSI_CROSS_COLOR_LABEL[v] ?? v },
   ],
   flags: [{ key: 'enabled', label: 'ON', default: false }],
   cols: 4,
-  rows: [[{ ref: 'flag:enabled', span: 1 }, { ref: 'field:interval', span: 2 }, { ref: 'field:value', span: 1 }]],
+  rows: [
+    [{ ref: 'flag:enabled', span: 1 }, { ref: 'field:interval', span: 2 }, { ref: 'field:value', span: 1 }],
+    [{ ref: 'field:color', span: 4 }],
+  ],
   toDrawConfig(g) {
     if (!g.enabled) return null;
-    return { id: g.id, interval: g.interval, threshold: Number(g.value) };
+    return { id: g.id, interval: g.interval, threshold: Number(g.value), color: g.color };
   },
   migrateFromLegacy: () => {
     try {
@@ -242,6 +307,7 @@ const rsiCross = {
       return [{
         interval: normalizeRsiCrossInterval(p.rsiCrossIntervalDefault),
         value: normalizeRsiCrossValue(p.rsiCrossValueDefault ?? (on ? p.rsiCrossThresholdDefault : DEFAULT_RSI_CROSS_VALUE)),
+        color: 'green',
         enabled: on,
       }];
     } catch { return null; }
@@ -386,7 +452,7 @@ const emaPersistCloud = {
 };
 
 /** @type {Array<object>} */
-export const HANDLER_DESCRIPTORS = [sr, pphl, wfractals, zigzag, rsiCross, prevDayCloud, emaPersistCloud, chop, macd, barsSinceCross, tdSequential];
+export const HANDLER_DESCRIPTORS = [sr, pphl, wfractals, zigzag, rsi, rsiCross, prevDayCloud, emaPersistCloud, chop, macd, barsSinceCross, tdSequential];
 
 /** Map id → store, construído a partir dos descriptors. Referência estável (módulo). */
 export const HANDLER_GROUP_STORES = Object.fromEntries(

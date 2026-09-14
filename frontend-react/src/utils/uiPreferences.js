@@ -54,7 +54,7 @@ const VALID_OVERLAY_PERIODS = ['9', '21', '50', '200'];
 /** IDs válidos de indicadores do gráfico. */
 export const VALID_ACTIVE_INDICATORS = [
   'ma9', 'ma21', 'ma50', 'ma200', 'emaPersistCloud', 'barsSinceCross', 'tdSequential',
-  'ichimoku', 'sr', 'pphl', 'wfractals', 'zigzag', 'flags', 'rsi', 'rsi50', 'rsi80', 'stopLoss', 'chopZone', 'prevDayCloud', 'macd',
+  'ichimoku', 'sr', 'pphl', 'wfractals', 'zigzag', 'flags', 'rsi', 'stopLoss', 'chopZone', 'prevDayCloud', 'macd',
 ];
 
 /** Cores padrão por período (convenção TradingView / melhores práticas). */

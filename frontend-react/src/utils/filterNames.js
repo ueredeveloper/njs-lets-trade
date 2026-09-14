@@ -331,6 +331,35 @@ export function parseBollingerMedianTrendFilterName(name) {
   };
 }
 
+/** Nome do filtro "Quase-compra" do RSI Momentum (ver IndicatorPanel.jsx#nearMissIndicators):
+ *  "5m|Quase-compra últimos 7 dias · MACD_HISTOGRAM_NEGATIVE" — só o segundo token importa. */
+export function isNearMissFilterName(name) {
+  return typeof name === 'string' && name.includes('|Quase-compra');
+}
+
+/** Sigla curta por motivo de bloqueio de rsi_momentum_near_misses (ver nearMissLogger.js) —
+ *  mostrada na coluna "Motivo" da tabela (ver CurrencyTable.jsx) e ao lado do nome completo no
+ *  select de motivos (IndicatorPanel.jsx). Convenção: base do indicador (RSI/MACD/EMA/S-R/BW já
+ *  são siglas técnicas universais, independentes de idioma) + sufixo "-" (valor baixo/negativo/
+ *  baixista) ou "0" (sem dados); OSC e SPK são condições isoladas, sem sufixo.
+ */
+export const NEAR_MISS_REASON_ACRONYMS = {
+  RSI_VOLATILE_NEAR_THRESHOLD: 'OSC',
+  SPIKE_TOO_LARGE: 'SPK',
+  BANDWIDTH_TOO_LOW: 'BW-',
+  BANDWIDTH_NO_DATA: 'BW0',
+  RSI5M_TOO_LOW: 'R5M-',
+  RSI5M_NO_DATA: 'R5M0',
+  MACD_HISTOGRAM_NEGATIVE: 'MCD-',
+  HIGHER_RSI_TOO_LOW: 'R1H-',
+  EMA_CROSS_BEARISH: 'EMA-',
+  SR_NO_DISCOUNT: 'SR-',
+};
+
+export function nearMissReasonAcronym(reason) {
+  return NEAR_MISS_REASON_ACRONYMS[reason] ?? null;
+}
+
 /** Constrói nome RSI a partir da query (ex: 8h|rsi|above|70|bellow|99). */
 export function buildRsiNomeFromQuery(query, lang = 'en') {
   const parts = query.trim().split('|');

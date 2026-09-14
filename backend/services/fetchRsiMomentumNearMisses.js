@@ -25,19 +25,19 @@ const PERIOD_MS = { '3d': 3 * 86_400_000, '7d': 7 * 86_400_000, '30d': 30 * 86_4
 const BRT_OFFSET_MS = 3 * 60 * 60_000;
 const MAX_ROWS = 3000;
 
-/** Intervalo/período/desvio do filtro de largura de banda da config GLOBAL ativa agora — usado
- *  pra prefixar o nome do filtro (ver parseFilterChartInterval no frontend) com o MESMO intervalo
- *  que o bot usa no seu próprio bandWidth check, assim a coluna "Larg%" da tabela (que recalcula
- *  a largura ao vivo com o intervalo do prefixo do nome) bate com o número que travou a moeda —
- *  sem isso ela caía no fallback genérico de 4h, incomparável com o bandWidth.interval real do
- *  bot (5m por padrão). Fail-open pro default do schema se a config não carregar. */
-async function currentBandWidthFilter() {
+/** `entry.interval` (15m por padrão, prefixo do nome do filtro — representa o TRADE em si) +
+ *  `entry.bandWidth` (interval/period/stdDev, 5m por padrão — usado pelo frontend SÓ pra
+ *  recalcular a coluna "Larg%" no intervalo/parâmetros REAIS que o bot checa, já que esse
+ *  sub-filtro roda num intervalo diferente do trade) da config GLOBAL ativa agora. Fail-open pro
+ *  default do schema se a config não carregar. */
+async function currentEntryConfig() {
+    let body;
     try {
-        const body = normalizeRsiMomentumConfig(await loadGlobalConfigBody(sbReq, DEFAULT_USER_ID));
-        return body.entry.bandWidth;
+        body = normalizeRsiMomentumConfig(await loadGlobalConfigBody(sbReq, DEFAULT_USER_ID));
     } catch {
-        return normalizeRsiMomentumConfig({}).entry.bandWidth;
+        body = normalizeRsiMomentumConfig({});
     }
+    return { interval: body.entry.interval, bandWidth: body.entry.bandWidth };
 }
 
 /** Início do dia em BRT (America/Sao_Paulo, UTC-3), devolvido como instante UTC. */
@@ -63,9 +63,9 @@ router.get('/rsi-momentum-near-misses', async (req, res) => {
     if (reason) query += `&reason=eq.${encodeURIComponent(reason)}`;
 
     try {
-        const [rows, bandWidth] = await Promise.all([
+        const [rows, entryConfig] = await Promise.all([
             sbReq('GET', 'rsi_momentum_near_misses', null, query),
-            currentBandWidthFilter(),
+            currentEntryConfig(),
         ]);
 
         const reasonCounts = {};
@@ -99,10 +99,17 @@ router.get('/rsi-momentum-near-misses', async (req, res) => {
             symbolsTotal: coins.length,
             reasonCounts,
             coins,
-            // Config ATUAL do bandWidth (não a de quando cada linha foi detectada) — usado pelo
-            // frontend pra prefixar o nome do filtro com o intervalo certo (ver comentário em
-            // currentBandWidthFilter acima).
-            bandWidth: { interval: bandWidth.interval, period: bandWidth.period, stdDev: bandWidth.stdDev, minPct: bandWidth.minPct },
+            // Config ATUAL (não a de quando cada linha foi detectada) — ver comentário em
+            // currentEntryConfig acima. entryInterval prefixa o nome do filtro (intervalo do
+            // TRADE); bandWidth alimenta só a coluna "Larg%" (intervalo/período/desvio REAIS do
+            // sub-filtro de largura de banda, que roda num intervalo diferente do trade).
+            entryInterval: entryConfig.interval,
+            bandWidth: {
+                interval: entryConfig.bandWidth.interval,
+                period: entryConfig.bandWidth.period,
+                stdDev: entryConfig.bandWidth.stdDev,
+                lookback: entryConfig.bandWidth.lookback,
+            },
         });
     } catch (err) {
         console.error('[rsi-momentum-near-misses]', err.message);

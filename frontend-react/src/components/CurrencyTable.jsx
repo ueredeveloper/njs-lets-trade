@@ -7,7 +7,7 @@ import {
   fetchMaCrossoverFilter, fetchMultitradeTrades, fetchBotState,
   fetchGateTrades, fetchBinanceTrades,
 } from '../services/api';
-import { parseMaCrossFilterName, parseMaCompareFilterName, parseMaDistanceFilterName, parseIndicatorGrowthFilterName, parseVwapBandWidthFilterName, parseBollingerBandWidthFilterName, parseBollingerMedianTrendFilterName, parseRsiFilterName, parseFilterChartInterval } from '../utils/filterNames';
+import { parseMaCrossFilterName, parseMaCompareFilterName, parseMaDistanceFilterName, parseIndicatorGrowthFilterName, parseVwapBandWidthFilterName, parseBollingerBandWidthFilterName, parseBollingerMedianTrendFilterName, parseRsiFilterName, parseFilterChartInterval, isNearMissFilterName, nearMissReasonAcronym } from '../utils/filterNames';
 import { useI18n } from '../i18n';
 import MultitradeModal from './MultitradeModal';
 import MultitradeBotStateModal from './MultitradeBotStateModal';
@@ -560,6 +560,16 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   const rsiMeta = activeRsiFilter?.meta ?? null;
   const isRsiFilter = !!activeRsiFilter;
 
+  const activeNearMissFilter = useMemo(() => {
+    if (!activeFilter || favoriteView) return null;
+    const f = findFilter(activeFilter);
+    if (!f || !isNearMissFilterName(f.name)) return null;
+    return f;
+  }, [activeFilter, favoriteView, findFilter]);
+
+  const nearMissMeta = activeNearMissFilter?.meta ?? null;
+  const isNearMissFilter = !!activeNearMissFilter;
+
   const showVwapFavWidthCol = isVwapBandsFavView && (vwapFavSort === 'width_far' || vwapFavSort === 'width_near');
   const showBbFavWidthCol = isBollingerBandsFavView
     && (bbFavSort === 'width_far' || bbFavSort === 'width_near' || bbFavSort === 'near_lower' || bbFavSort === 'near_upper');
@@ -574,7 +584,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     && !isVwapWidthFilter && !isBbWidthFilter && !isBbTrendFilter && !activeMacmpFilter;
   const showGenericWidthCol = showGenericWidthToggle && genericWidthSort !== 'off';
 
-  const hasDedicatedExtraCol = isAltaFilter || isMaDistanceFilter || isGrowthFilter || isVwapWidthFilter || isBbWidthFilter || isBbTrendFilter || isRsiFilter || showVwapFavWidthCol || showBbFavWidthCol;
+  const hasDedicatedExtraCol = isAltaFilter || isMaDistanceFilter || isGrowthFilter || isVwapWidthFilter || isBbWidthFilter || isBbTrendFilter || isRsiFilter || isNearMissFilter || showVwapFavWidthCol || showBbFavWidthCol;
   const extraColCount = (hasDedicatedExtraCol ? 1 : 0) + (showGenericWidthCol ? 1 : 0);
   const tableColCount = 6 + extraColCount;
 
@@ -597,8 +607,16 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     // lookback 300: mesmo padrão do filtro dedicado "Largura BB" e do painel de Estatísticas
     // (ver comentário em StatisticsPanel.jsx BB_CANDLE_COUNT_DEFAULT), pra "Larg" bater com
     // "Valor. média" com os campos padrão.
-    return [{ interval: filterChartInterval ?? '4h', period: 20, stdDev: 2, lookback: 300, symbols: genericWidthSymbols, gateSymbols: [] }];
-  }, [genericWidthSymbols, filterChartInterval]);
+    // Quase-compra (RSI Momentum): o PREFIXO do nome agora é o intervalo do TRADE (entry.interval,
+    // 15m), não o do bandWidth (5m) — a coluna "Larg%" precisa continuar batendo com o número que
+    // realmente travou a moeda no bot, então usa `bandWidth` guardado no próprio filtro (ver
+    // IndicatorPanel.jsx#nearMissIndicators) em vez do intervalo do prefixo/defaults genéricos.
+    const nmBw = isNearMissFilter ? activeNearMissFilter?.bandWidth : null;
+    const cfg = nmBw
+      ? { interval: nmBw.interval, period: nmBw.period, stdDev: nmBw.stdDev, lookback: nmBw.lookback ?? 300 }
+      : { interval: filterChartInterval ?? '4h', period: 20, stdDev: 2, lookback: 300 };
+    return [{ ...cfg, symbols: genericWidthSymbols, gateSymbols: [] }];
+  }, [genericWidthSymbols, filterChartInterval, isNearMissFilter, activeNearMissFilter?.bandWidth]);
 
   const { meta: genericWidthMeta } = useBollingerBandWidthMeta(showGenericWidthCol, genericWidthConfigs);
 
@@ -1379,7 +1397,10 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   // Coluna de ações (C = comprado / V = vender) do lado direito — mesma lógica de piso fixo
   // da coluna de favoritos à esquerda (favColMinPx acima): não cresce com o drag, o espaço
   // liberado vai pra coluna Par. Rótulos de 1 letra — piso bem menor que o da coluna de favoritos.
-  const actionsColPx = (isMobile ? 3.0 : 3.6) * REM_PX;
+  // Quase-compra nunca tem botão aqui (isBotFavRow exige favorito ativo, o que contradiz o
+  // sentido do filtro — moeda que ainda NÃO comprou) — zera o piso pra sobrar espaço pra Larg%
+  // sem espremer o Par a 0 quando o usuário liga "Larg cima"/"Larg baixo".
+  const actionsColPx = isNearMissFilter ? 0 : (isMobile ? 3.0 : 3.6) * REM_PX;
   const fixedColsPx = priceColPx + volColPx + spinnerColPx + actionsColPx + (extraColCount * changeColPx);
   const favColWidthPx = favColMinPx;
   const parColWidthPx = tableContainerWidth > 0
@@ -1741,6 +1762,14 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                   onClick={() => setRsiSort((s) => (s === 'high' ? 'low' : 'high'))}
                 >
                   RSI {rsiSort === 'high' ? '↓' : '↑'}
+                </th>
+              )}
+              {isNearMissFilter && (
+                <th
+                  className="text-center px-2 py-1 text-p5 opacity-80 font-normal uppercase tracking-wider whitespace-nowrap"
+                  title={t('ind.near_miss_reason_col_tip')}
+                >
+                  {t('ind.near_miss_reason_col')}
                 </th>
               )}
               {showGenericWidthCol && (
@@ -2207,6 +2236,22 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                         style={{ color: rsi == null ? 'rgba(255,255,255,0.35)' : rsi >= 70 ? '#ef4444' : rsi <= 30 ? '#22c55e' : '#e2c341' }}
                       >
                         {rsi != null ? rsi.toFixed(2) : '—'}
+                      </td>
+                    );
+                  })()}
+                  {isNearMissFilter && (() => {
+                    const info = nearMissMeta?.[item.symbol];
+                    const acronym = info?.reason ? nearMissReasonAcronym(info.reason) : null;
+                    const title = info?.reason
+                      ? `${t(`ind.nm_reason_${info.reason}`)}${info.occurrences ? ` — ${info.occurrences}x` : ''}`
+                      : undefined;
+                    return (
+                      <td
+                        className="px-2 py-1 text-center font-mono text-[10px] font-semibold uppercase"
+                        style={{ color: acronym ? '#e2c341' : 'rgba(255,255,255,0.35)' }}
+                        title={title}
+                      >
+                        {acronym ?? '—'}
                       </td>
                     );
                   })()}

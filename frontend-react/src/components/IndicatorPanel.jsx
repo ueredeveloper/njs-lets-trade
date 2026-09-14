@@ -17,7 +17,7 @@ import {
 } from '../utils/createIchimokuFilter';
 import Tooltip from './Tooltip';
 import { MA_CROSS_PERIOD_MIN, MA_CROSS_PERIOD_MAX } from '../constants/maCrossConfigSchema';
-import { buildMaCrossFilterName, buildMaCompareFilterName, buildMaDistanceFilterName, buildIndicatorGrowthFilterName, buildBollingerBandWidthFilterName, buildBollingerMedianTrendFilterName, buildVwapBandWidthFilterName, buildVwapBandExpansionFilterName } from '../utils/filterNames';
+import { buildMaCrossFilterName, buildMaCompareFilterName, buildMaDistanceFilterName, buildIndicatorGrowthFilterName, buildBollingerBandWidthFilterName, buildBollingerMedianTrendFilterName, buildVwapBandWidthFilterName, buildVwapBandExpansionFilterName, nearMissReasonAcronym } from '../utils/filterNames';
 
 const INTERVAL_MS = {
   '1m': 60_000, '3m': 180_000, '5m': 300_000, '15m': 900_000, '30m': 1_800_000,
@@ -667,7 +667,9 @@ function IndicatorRow({ value, onChange }) {
               onChange={(e) => onChange({ ...value, reason: e.target.value })}
               title={t('ind.near_miss_reason_tip')}>
               <option value="">{t('ind.near_miss_reason_all')}</option>
-              {NEAR_MISS_REASONS.map((r) => <option key={r} value={r}>{t(`ind.nm_reason_${r}`)}</option>)}
+              {NEAR_MISS_REASONS.map((r) => (
+                <option key={r} value={r}>{t(`ind.nm_reason_${r}`)} | {nearMissReasonAcronym(r)}</option>
+              ))}
             </select>
           </>
         )}
@@ -1676,9 +1678,12 @@ export default function IndicatorPanel({ open, onToggle }) {
       // barrado por outro filtro, gravadas pelo scanner do bot (ver nearMissLogger.js) — dentro
       // do período escolhido (hoje / 3 dias / 7 dias / 30 dias / tudo), opcionalmente filtrado
       // por um único motivo (ver fetchRsiMomentumNearMisses.js). Nome prefixado com o intervalo
-      // ATUAL do bandWidth do bot (5m por padrão, vem em data.bandWidth.interval) — sem isso o
-      // parseFilterChartInterval do frontend não reconhece "bot|..." como intervalo e a coluna
-      // "Larg%" da tabela caía no fallback de 4h, incomparável com o bandWidth real do bot.
+      // PRINCIPAL do RSI Momentum (entry.interval, 15m por padrão, vem em data.entryInterval) —
+      // representa o TRADE em si (a config), não o sub-filtro que bloqueou cada linha. A coluna
+      // "Larg%" da tabela continua batendo com o bot: em vez de ler o intervalo do PREFIXO do
+      // nome (que agora é o do trade, 15m), CurrencyTable.jsx lê `bandWidth` guardado aqui no
+      // próprio filtro (interval/period/stdDev REAIS do bandWidth, 5m por padrão — ver
+      // isNearMissFilter/activeNearMissFilter?.bandWidth).
       for (const ind of nearMissIndicators) {
         const period = ind.period || '7d';
         const data = await fetchRsiMomentumNearMisses({ period, reason: ind.reason || undefined });
@@ -1687,9 +1692,15 @@ export default function IndicatorPanel({ open, onToggle }) {
           ? t(NEAR_MISS_PERIOD_OPTIONS.find((o) => o.value === period).labelKey)
           : period;
         const reasonTag = ind.reason ? ` · ${ind.reason}` : '';
-        const bwInterval = data.bandWidth?.interval || '5m';
-        const name = `${bwInterval}|Quase-compra ${periodLabel}${reasonTag}`;
-        addFilter({ name, list });
+        const entryInterval = data.entryInterval || '15m';
+        const name = `${entryInterval}|Quase-compra ${periodLabel}${reasonTag}`;
+        // meta por símbolo: motivo do bloqueio (coluna "Motivo" da tabela — ver CurrencyTable.jsx)
+        // + contagem/data da última ocorrência (tooltip).
+        const meta = {};
+        for (const c of data.coins ?? []) {
+          meta[c.symbol] = { reason: c.lastReason, occurrences: c.occurrences, lastDetectedAt: c.lastDetectedAt };
+        }
+        addFilter({ name, list, meta, bandWidth: data.bandWidth ?? null });
       }
 
       // Moedas Gate.io: descoberta de pares pra operar na Gate — filtra por presença na Binance
