@@ -16,10 +16,17 @@ import { rankSrLevels, srRankAllowed } from '../utils/srRank';
 
 const C_UP = '#26a69a';
 const C_DOWN = '#ef5350';
-/** Linhas de S/R (rolante + traço das Estatísticas): uma cor só por tipo — azul p/ suporte, rosa
- *  p/ resistência. O posto vai no rótulo (S1/S2/R1/R2), não na cor. */
-const SR_SUPPORT_LINE = '#3b82f6';
-const SR_RESISTANCE_LINE = '#ec4899';
+/** Linhas de S/R (rolante + traço das Estatísticas): uma cor por POSTO dentro de cada tipo —
+ *  suporte em tons de azul, resistência em tons de rosa/vermelho. S1/R1 usa a cor "clássica"
+ *  (azul/rosa), postos seguintes ciclam pela paleta. Facilita distinguir S1 de S2, S3... no
+ *  gráfico sem depender só do rótulo. */
+const SR_SUPPORT_COLORS = ['#3b82f6', '#06b6d4', '#6366f1', '#14b8a6', '#0ea5e9', '#8b5cf6'];
+const SR_RESISTANCE_COLORS = ['#ec4899', '#f97316', '#ef4444', '#f59e0b', '#db2777', '#d946ef'];
+function srLineColor(type, rank) {
+  const palette = type === 'support' ? SR_SUPPORT_COLORS : SR_RESISTANCE_COLORS;
+  const idx = Math.max(0, (Number(rank) || 1) - 1) % palette.length;
+  return palette[idx];
+}
 // Estilo 'traço': largura mínima do traço, em candles DO GRÁFICO. A largura efetiva é o maior
 // entre isto e ~1 candle do intervalo do S/R (ex.: 4h ≈ 16 candles de 15m) — pra o traço ter
 // tamanho suficiente pra ser visível e "acompanhar" o arrasto, sem virar 10 candles de 4h.
@@ -1270,8 +1277,8 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       // Linhas de preço de ponta a ponta (rótulo no eixo) — estilo 'linhas' + fallback do override.
       const makePriceLines = (levels, mode) => {
         for (const type of ['support', 'resistance']) {
-          const color = type === 'support' ? SR_SUPPORT_LINE : SR_RESISTANCE_LINE;
           for (const lvl of ranked(levels, type)) {
+            const color = srLineColor(type, lvl.rank);
             const isEntry = mode === 'full' && eq(lvl.price, entrySup);
             const isExit = mode === 'full' && eq(lvl.price, exitRes);
             const isStop = mode === 'full' && eq(lvl.price, stopSup);
@@ -1296,8 +1303,8 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
         const to = Math.min(maxTime, Math.floor(tw.toMs / 1000));
         if (to <= from) { makePriceLines(srConfig.levels, 'full'); continue; }
         for (const type of ['support', 'resistance']) {
-          const color = type === 'support' ? SR_SUPPORT_LINE : SR_RESISTANCE_LINE;
           for (const lvl of ranked(srConfig.levels, type)) {
+            const color = srLineColor(type, lvl.rank);
             const isEntry = eq(lvl.price, entrySup);
             const isExit = eq(lvl.price, exitRes);
             const isStop = eq(lvl.price, stopSup);
@@ -1345,10 +1352,10 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       }));
 
       for (const type of ['support', 'resistance']) {
-        const color = type === 'support' ? SR_SUPPORT_LINE : SR_RESISTANCE_LINE;
         const width = type === 'support' ? 3 : 2;
         const maxRank = Math.min(6, Math.max(0, ...rankedByAnchor.map((x) => x[type].length)));
         for (let r = 0; r < maxRank; r++) {
+          const color = srLineColor(type, r + 1);
           const data = [];
           let lastPt = null;
           let lastLabel = null;
@@ -1432,8 +1439,8 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       const startT = Math.floor(Number(cs[Math.max(0, ei - widthCandles)].openTime) / 1000);
       if (endT <= startT) continue;
       for (const type of ['support', 'resistance']) {
-        const color = type === 'support' ? SR_SUPPORT_LINE : SR_RESISTANCE_LINE;
         for (const lvl of rankSrLevels(latest, type).filter((l) => srRankAllowed(showSel(type), l.rank))) {
+          const color = srLineColor(type, lvl.rank);
           const s = chart.addSeries(LineSeries, {
             color, lineWidth: type === 'support' ? 3 : 2, lineStyle: 2,
             priceLineVisible: false, lastValueVisible: lvl.rank === 1, crosshairMarkerVisible: false,
