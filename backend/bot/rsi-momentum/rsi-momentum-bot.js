@@ -53,7 +53,7 @@ const { logNearMissIfNeeded } = require('./nearMissLogger');
 const {
   getRequiredSpecs, evaluateEntrySignal, evaluateExit, computeBracketPrices,
   checkEntryLimitExpired, checkReentryCooldown, resolveTargetMode, computeAtrPct,
-  evaluateReinforceLadder, evaluateReentryRsiSignal,
+  evaluateReinforceLadder, evaluateReentryRsiSignal, SR_STOP_FALLBACK_PCT,
 } = require('./strategyEngine');
 
 // "Reforço no stop" (martingale) — trava de segurança do nº de reforços (o usuário pediu "sem
@@ -300,7 +300,8 @@ function logStartupConfig(body, source = null) {
       : `fixo +${x.restingBracket.targetPct}%`;
 
   let stop;
-  if (!ts?.enabled) stop = `fixo -${sl.maxLossPct}%${sl.enabled ? '' : ' (SEM STOP!)'}`;
+  if (!ts?.enabled && sr?.enabled && sr?.stopEnabled) stop = `S/R ${sr.interval ?? '4h'} S${sr.stopSupportRank ?? 2} (fallback -${SR_STOP_FALLBACK_PCT}%)`;
+  else if (!ts?.enabled) stop = `fixo -${sl.maxLossPct}%${sl.enabled ? '' : ' (SEM STOP!)'}`;
   else if (tsMode === 'twoPhase') stop = `escada dupla -${ts.startPct}% (A ${ts.aStopStepPct}/${ts.aCoinStepPct} → trava ${ts.pivotPct}% → B ${ts.bStopStepPct}/${ts.bCoinStepPct})`;
   else if (tsMode === 'peakTrail') stop = `trilha topo ${ts.wNearPct}%→${ts.wFarPct}% (pivô +${ts.pivotGainPct}%)`;
   else if (tsMode === 'atrTrail') stop = `trilha ATR ${ts.wNearPct}%→${ts.atrMult}×ATR (teto ${ts.atrMaxPct}%, pivô +${ts.pivotGainPct}%)`;
@@ -364,15 +365,36 @@ function resolveSrTargetForBuy(rulesState, buyPrice) {
   return t;
 }
 
-/** Persiste o alvo por resistência do S/R (de evaluateEntrySignal / entryMeta) atrelado ao preço
- *  de entrada — chamado logo após a compra confirmar, antes de placeInitialBracket. No-op se o
- *  filtro S/R está desligado ou não achou resistência acima. */
-async function persistSrTarget({ rowId, session, log, entryMeta, buyPrice }) {
+/** Mesma coisa que resolveSrTargetForBuy, pro STOP por suporte do S/R (entry.supportResistance.
+ *  stopEnabled) — rules_state.srStopPrice/srStopForBuy. Devolve o preço ou null (null tanto com o
+ *  filtro desligado quanto sem suporte disponível naquele posto — computeBracketPrices cai no
+ *  SR_STOP_FALLBACK_PCT nesse caso, nunca deixa a posição sem stop nenhum). */
+function resolveSrStopForBuy(rulesState, buyPrice) {
+  const s = Number(rulesState?.srStopPrice);
+  const forBuy = Number(rulesState?.srStopForBuy);
+  if (!(s > 0) || !(buyPrice > 0)) return null;
+  if (!Number.isFinite(forBuy) || Math.abs(forBuy - buyPrice) > buyPrice * 1e-6) return null;
+  return s;
+}
+
+/** Persiste o alvo por resistência E o stop por suporte do S/R (de evaluateEntrySignal /
+ *  entryMeta) atrelados ao preço de entrada — chamado logo após a compra confirmar, antes de
+ *  placeInitialBracket. No-op pra cada um se o respectivo campo do filtro S/R está desligado ou
+ *  não achou a linha correspondente. */
+async function persistSrLevels({ rowId, session, log, entryMeta, buyPrice }) {
   const t = Number(entryMeta?.srTargetPrice ?? entryMeta?.sr?.srTargetPrice);
-  if (!(t > 0) || !(buyPrice > 0)) return;
-  session.rulesState = { ...(session.rulesState ?? {}), srTargetPrice: t, srTargetForBuy: buyPrice };
+  const s = Number(entryMeta?.srStopPrice ?? entryMeta?.sr?.srStopPrice);
+  const hasTarget = t > 0 && buyPrice > 0;
+  const hasStop = s > 0 && buyPrice > 0;
+  if (!hasTarget && !hasStop) return;
+  session.rulesState = {
+    ...(session.rulesState ?? {}),
+    ...(hasTarget ? { srTargetPrice: t, srTargetForBuy: buyPrice } : {}),
+    ...(hasStop ? { srStopPrice: s, srStopForBuy: buyPrice } : {}),
+  };
   await saveState(rowId, { rules_state: session.rulesState }, log);
-  log(`${G}🎯 Alvo por resistência S/R travado em ${fmtPrice(t)} (+${(((t / buyPrice) - 1) * 100).toFixed(2)}%)${X}`);
+  if (hasTarget) log(`${G}🎯 Alvo por resistência S/R travado em ${fmtPrice(t)} (+${(((t / buyPrice) - 1) * 100).toFixed(2)}%)${X}`);
+  if (hasStop) log(`${G}🛡️  Stop por suporte S/R travado em ${fmtPrice(s)} (${(((s / buyPrice) - 1) * 100).toFixed(2)}%)${X}`);
 }
 
 const BRACKET_RETRY_ALERT_EVERY = 10;
@@ -407,7 +429,8 @@ async function placeInitialBracket({ rowId, adapter, config, session, log, fille
   // preço de entrada; no retry vindo do tick BOUGHT já vem o pico corrente.
   const peak = Number.isFinite(peakPrice) ? peakPrice : buyPrice;
   const srTargetPrice = resolveSrTargetForBuy(session.rulesState, buyPrice);
-  const { targetPrice, stopPrice } = computeBracketPrices(config, buyPrice, peak, srTargetPrice);
+  const srStopPrice = resolveSrStopForBuy(session.rulesState, buyPrice);
+  const { targetPrice, stopPrice } = computeBracketPrices(config, buyPrice, peak, srTargetPrice, srStopPrice);
   // Com alvo por resistência do S/R a bracket TEM alvo real (não é o teto absurdo do modo 'off').
   const targetOff = resolveTargetMode(config) === 'off' && srTargetPrice == null;
   if ((targetPrice == null && !targetOff) || stopPrice == null) {
@@ -453,11 +476,12 @@ async function maybeReplaceTrailingStop({ rowId, adapter, config, session, log, 
   if (!stopTrailingOn && targetMode !== 'continuous') return;
 
   const srTargetPrice = resolveSrTargetForBuy(session.rulesState, buyPrice);
-  const { targetPrice: liveTarget, stopPrice: liveStop } = computeBracketPrices(config, buyPrice, peakPrice, srTargetPrice);
+  const srStopPrice = resolveSrStopForBuy(session.rulesState, buyPrice);
+  const { targetPrice: liveTarget, stopPrice: liveStop } = computeBracketPrices(config, buyPrice, peakPrice, srTargetPrice, srStopPrice);
   if (liveStop == null) return;
 
   const placedPeak = Number.isFinite(Number(exitBracket.peakPrice)) ? Number(exitBracket.peakPrice) : buyPrice;
-  const { targetPrice: placedTarget, stopPrice: placedStop } = computeBracketPrices(config, buyPrice, placedPeak, srTargetPrice);
+  const { targetPrice: placedTarget, stopPrice: placedStop } = computeBracketPrices(config, buyPrice, placedPeak, srTargetPrice, srStopPrice);
 
   // Só recria pra CIMA — todos os modos de computeTrailingStopPrice/computeTrailingTargetPrice são
   // monotônicos com o pico, então stop e alvo nunca devem descer; o `>` (em vez de Math.abs)
@@ -640,7 +664,7 @@ async function tick(rowId, adapter, strategy, log, session, stopSelf) {
           result: { filledQty: poll.filledQty, quoteQty: poll.quoteQty, avgPrice: poll.avgPrice },
         });
         if (bought) {
-          await persistSrTarget({
+          await persistSrLevels({
             rowId, session, log, buyPrice: bought.avgPrice,
             entryMeta: rulesWatch.entryLimit.entryMeta,
           });
@@ -696,7 +720,7 @@ async function tick(rowId, adapter, strategy, log, session, stopSelf) {
         capital, strategyId, symbol, result: buyResult,
       });
       if (bought) {
-        await persistSrTarget({ rowId, session, log, buyPrice: bought.avgPrice, entryMeta: signal });
+        await persistSrLevels({ rowId, session, log, buyPrice: bought.avgPrice, entryMeta: signal });
         await placeInitialBracket({
           rowId, adapter, config, session, log,
           filledQty: bought.filledQty, buyPrice: bought.avgPrice, symbol, strategyId,
@@ -747,7 +771,7 @@ async function tick(rowId, adapter, strategy, log, session, stopSelf) {
         result: { filledQty: instant.filledQty, quoteQty: instant.quoteQty, avgPrice: instant.avgPrice },
       });
       if (bought) {
-        await persistSrTarget({ rowId, session, log, buyPrice: bought.avgPrice, entryMeta: entryLimit.entryMeta });
+        await persistSrLevels({ rowId, session, log, buyPrice: bought.avgPrice, entryMeta: entryLimit.entryMeta });
         await placeInitialBracket({
           rowId, adapter, config, session, log,
           filledQty: bought.filledQty, buyPrice: bought.avgPrice, symbol, strategyId,
@@ -791,6 +815,7 @@ async function tick(rowId, adapter, strategy, log, session, stopSelf) {
   }
 
   const srTargetPrice = resolveSrTargetForBuy(rulesState, buyPrice);
+  const srStopPrice = resolveSrStopForBuy(rulesState, buyPrice);
 
   // Posição com ordem de venda colocada fora do painel — bot só observa, nunca coloca bracket
   // nem vende a mercado por conta própria.
@@ -832,7 +857,7 @@ async function tick(rowId, adapter, strategy, log, session, stopSelf) {
   // do rules_state (pico salvo + a OCO que ficou na corretora), não recomeçada do zero.
   if (session.resumedBought && !session.resumeLogged) {
     session.resumeLogged = true;
-    const { targetPrice: resumeTarget, stopPrice: resumeStop } = computeBracketPrices(config, buyPrice, peakPrice, srTargetPrice);
+    const { targetPrice: resumeTarget, stopPrice: resumeStop } = computeBracketPrices(config, buyPrice, peakPrice, srTargetPrice, srStopPrice);
     const peakGainPct = buyPrice > 0 ? ((peakPrice / buyPrice) - 1) * 100 : 0;
     const ocoNote = rulesState.exitBracket
       ? `OCO ${rulesState.exitBracket.orderListId ?? '(gate)'} ainda na corretora`
@@ -895,7 +920,11 @@ async function tick(rowId, adapter, strategy, log, session, stopSelf) {
             ? (resolveTargetMode(config) === 'continuous'
               ? 'Bracket TP no alvo contínuo (ordem resting)'
               : 'Bracket TP no alvo fixo (ordem resting)')
-            : (config.exit.trailingStop?.enabled ? 'Bracket SL no stop contínuo (ordem resting)' : 'Bracket SL no stop fixo (ordem resting)'),
+            : (config.exit.trailingStop?.enabled
+              ? 'Bracket SL no stop contínuo (ordem resting)'
+              : config.entry?.supportResistance?.stopEnabled
+                ? 'Bracket SL no stop por S/R (ordem resting)'
+                : 'Bracket SL no stop fixo (ordem resting)'),
       };
       await recordBracketFill({ rowId, strategy, log, state, session, exitResult, result: bracketResult });
       return retireOrCooldown({ rowId, symbol, log, stopSelf, config, cMap, state, session, reason: `trade fechado (${exitResult.reason})` });
@@ -951,7 +980,7 @@ async function tick(rowId, adapter, strategy, log, session, stopSelf) {
     return { phase: 'BOUGHT' };
   }
 
-  const exitResult = evaluateExit(config, cMap, buyPrice, { peakPrice, srTargetPrice });
+  const exitResult = evaluateExit(config, cMap, buyPrice, { peakPrice, srTargetPrice, srStopPrice });
   if (!exitResult.exit) return { phase: 'BOUGHT' };
 
   // Fallback via candle bateu o STOP e o reforço está ligado — mesma bifurcação da bracket resting.
@@ -1111,7 +1140,7 @@ async function startRearmReinforce({ rowId, adapter, strategy, log, state, sessi
   };
   session.rulesState = {
     ...rulesState, reinforce: null, exitBracket: null, exitBracketError: null,
-    srTargetPrice: null, srTargetForBuy: null, stopPeakPrice: null,
+    srTargetPrice: null, srTargetForBuy: null, srStopPrice: null, srStopForBuy: null, stopPeakPrice: null,
     rearm: pendingRearm,
   };
   await saveState(rowId, { rules_state: session.rulesState }, log);
@@ -1228,7 +1257,7 @@ async function finalizeRearmRebuy({ rowId, adapter, strategy, log, state, sessio
   };
   session.rulesState = {
     ...rulesState, reinforce: null, exitBracket: null, exitBracketError: null,
-    srTargetPrice: null, srTargetForBuy: null, stopPeakPrice: null, rearm,
+    srTargetPrice: null, srTargetForBuy: null, srStopPrice: null, srStopForBuy: null, stopPeakPrice: null, rearm,
   };
   await saveState(rowId, {
     buy_qty: fillQty,
@@ -1331,7 +1360,7 @@ async function resumeRearmPending({ rowId, adapter, strategy, log, state, sessio
   };
   session.rulesState = {
     ...rulesState, reinforce: null, exitBracket: null, exitBracketError: null,
-    srTargetPrice: null, srTargetForBuy: null, stopPeakPrice: null, rearm,
+    srTargetPrice: null, srTargetForBuy: null, srStopPrice: null, srStopForBuy: null, stopPeakPrice: null, rearm,
   };
   await saveState(rowId, {
     buy_qty: balance, buy_price: avgPrice, buy_usdt: investedUsd, buy_time: new Date().toISOString(),
@@ -1453,7 +1482,7 @@ async function startReinforceLadder({ rowId, adapter, strategy, log, state, sess
   session.rulesState = {
     ...(rulesState ?? {}),
     exitBracket: null, exitBracketError: null,
-    srTargetPrice: null, srTargetForBuy: null, stopPeakPrice: null,
+    srTargetPrice: null, srTargetForBuy: null, srStopPrice: null, srStopForBuy: null, stopPeakPrice: null,
     reinforce,
   };
   await saveState(rowId, {
@@ -1504,7 +1533,7 @@ async function beginLadderReentryWait({ rowId, log, state, session, config, symb
   session.rulesState = {
     ...(rulesState ?? {}),
     exitBracket: null, exitBracketError: null,
-    srTargetPrice: null, srTargetForBuy: null, stopPeakPrice: null,
+    srTargetPrice: null, srTargetForBuy: null, srStopPrice: null, srStopForBuy: null, stopPeakPrice: null,
     reinforce,
   };
   await saveState(rowId, { rules_state: session.rulesState }, log);

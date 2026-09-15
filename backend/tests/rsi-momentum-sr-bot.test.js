@@ -5,6 +5,7 @@ const {
     checkSupportResistanceEntry,
     computeBracketPrices,
     evaluateReinforceLadder,
+    SR_STOP_FALLBACK_PCT,
 } = require('../bot/rsi-momentum/strategyEngine');
 const { normalizeRsiMomentumConfig } = require('../bot/rsi-momentum/tradeConfigSchema');
 
@@ -43,9 +44,9 @@ describe('resolveSrZonesNow / checkSupportResistanceEntry', () => {
         expect(r.warmup).toBe(true);
     });
 
-    test('filtro desligado → passa, sem alvo', () => {
+    test('filtro desligado → passa, sem alvo nem stop', () => {
         const r = checkSupportResistanceEntry({ entry: { supportResistance: { enabled: false } } }, cMap, 100);
-        expect(r).toEqual({ allowed: true, srTargetPrice: null });
+        expect(r).toEqual({ allowed: true, srTargetPrice: null, srStopPrice: null });
     });
 
     test('preço muito acima do suporte → bloqueia (SR_NO_DISCOUNT)', () => {
@@ -63,6 +64,38 @@ describe('resolveSrZonesNow / checkSupportResistanceEntry', () => {
         if (zones.resistances.length) {
             expect(r.srTargetPrice).toBeGreaterThan(nearestSupport);
         }
+    });
+
+    test('stopEnabled: devolve o preço ABSOLUTO do posto escolhido (stopSupportRank)', () => {
+        const zones = resolveSrZonesNow(cMap, SR_CFG);
+        const nearestSupport = zones.supports[0].price;
+        const price = nearestSupport * 1.01;
+        const r = checkSupportResistanceEntry(
+            { entry: { supportResistance: { ...SR_CFG, stopEnabled: true, stopSupportRank: 1 } } }, cMap, price,
+        );
+        expect(r.allowed).toBe(true);
+        expect(r.srStopPrice).toBeCloseTo(nearestSupport, 6);
+    });
+
+    test('stopEnabled sem suporte disponível naquele posto → srStopPrice null (fallback fica por conta do chamador)', () => {
+        const zones = resolveSrZonesNow(cMap, SR_CFG);
+        const nearestSupport = zones.supports[0].price;
+        const price = nearestSupport * 1.01;
+        // Fixture só tem 1 zona de suporte — rank 2 não existe.
+        const r = checkSupportResistanceEntry(
+            { entry: { supportResistance: { ...SR_CFG, stopEnabled: true, stopSupportRank: 2 } } }, cMap, price,
+        );
+        expect(r.allowed).toBe(true);
+        expect(r.srStopPrice).toBeNull();
+    });
+
+    test('stopEnabled false → srStopPrice sempre null, mesmo com suporte disponível', () => {
+        const zones = resolveSrZonesNow(cMap, SR_CFG);
+        const nearestSupport = zones.supports[0].price;
+        const r = checkSupportResistanceEntry(
+            { entry: { supportResistance: { ...SR_CFG, stopEnabled: false, stopSupportRank: 1 } } }, cMap, nearestSupport * 1.01,
+        );
+        expect(r.srStopPrice).toBeNull();
     });
 });
 
@@ -91,6 +124,56 @@ describe('computeBracketPrices — alvo por resistência do S/R', () => {
     test('srTargetPrice abaixo/igual à entrada é ignorado', () => {
         const r = computeBracketPrices(base(), 100, 100, 95);
         expect(r.targetPrice).toBeNull(); // volta pro targetMode "off"
+    });
+});
+
+describe('computeBracketPrices — stop por suporte do S/R (entry.supportResistance.stopEnabled)', () => {
+    const srStopCfg = (overrides) => normalizeRsiMomentumConfig({
+        entry: { supportResistance: { enabled: true, stopEnabled: true, stopSupportRank: 2, ...overrides?.sr } },
+        exit: { targetMode: 'off', trailingStop: { enabled: false }, hardTakeProfit: { enabled: false } },
+        stopLoss: { enabled: true, maxLossPct: 10 },
+        ...overrides?.rest,
+    });
+
+    test('srStopPrice válido (abaixo da entrada) vira o stop, FIXO — ignora entryPrice/peakPrice além da entrada', () => {
+        const r = computeBracketPrices(srStopCfg(), 100, 100, null, 90);
+        expect(r.stopPrice).toBeCloseTo(90, 6);
+        // "fixo" = não recalcula com o pico, diferente do stop contínuo.
+        const withHigherPeak = computeBracketPrices(srStopCfg(), 100, 150, null, 90);
+        expect(withHigherPeak.stopPrice).toBeCloseTo(90, 6);
+    });
+
+    test('sem srStopPrice (linha escolhida não existe) → cai no fallback de SR_STOP_FALLBACK_PCT%', () => {
+        const r = computeBracketPrices(srStopCfg(), 100, 100, null, null);
+        expect(r.stopPrice).toBeCloseTo(100 * (1 - SR_STOP_FALLBACK_PCT / 100), 6);
+    });
+
+    test('srStopPrice inválido (>= entrada) → mesmo fallback, nunca usa o valor bruto', () => {
+        const r = computeBracketPrices(srStopCfg(), 100, 100, null, 105);
+        expect(r.stopPrice).toBeCloseTo(100 * (1 - SR_STOP_FALLBACK_PCT / 100), 6);
+    });
+
+    test('stop contínuo (trailingStop.enabled) tem prioridade sobre o stop por S/R', () => {
+        const cfg = srStopCfg({ rest: { exit: {
+            targetMode: 'off',
+            trailingStop: { enabled: true, mode: 'continuous', startPct: 5, coinStepPct: 3, stopStepPct: 2 },
+            hardTakeProfit: { enabled: false },
+        } } });
+        const r = computeBracketPrices(cfg, 100, 100, null, 90);
+        // 90 seria o stop por S/R; com trailing ligado o stop vem de computeTrailingStopPrice
+        // (100*(1-5%) no pico=entrada), não do S/R.
+        expect(r.stopPrice).toBeCloseTo(95, 6);
+    });
+
+    test('stopEnabled desligado → volta pro stopLoss.maxLossPct fixo, ignora srStopPrice informado', () => {
+        const cfg = normalizeRsiMomentumConfig({
+            entry: { supportResistance: { enabled: true, stopEnabled: false } },
+            exit: { targetMode: 'off', trailingStop: { enabled: false }, hardTakeProfit: { enabled: false } },
+            stopLoss: { enabled: true, maxLossPct: 12 },
+        });
+        // srStopPrice=90 seria usado se stopEnabled estivesse ligado — aqui deve ser ignorado.
+        const r = computeBracketPrices(cfg, 100, 100, null, 90);
+        expect(r.stopPrice).toBeCloseTo(88 /* maxLossPct 12% */, 6);
     });
 });
 

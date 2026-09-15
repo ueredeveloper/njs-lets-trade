@@ -45,6 +45,11 @@ const ATR_PERIOD = 14;
 // Suporte/Resistência (entry.supportResistance) — folga de candles além da janela (candleCount)
 // pra o detectSupportResistance ter leftBars+rightBars de contexto (defaults 5/5).
 const SR_WINDOW_PADDING = 12;
+// Stop pelo suporte do S/R (entry.supportResistance.stopEnabled) sem zona disponível na
+// `stopSupportRank`-ésima linha (moeda sem histórico suficiente, ou preço já abaixo de todo
+// suporte detectado) — cai nesse % fixo em vez de deixar a posição sem proteção nenhuma. Mesmo
+// valor default de computeStopLossFloor (backend/bot/shared/stopLossFloor.js).
+const SR_STOP_FALLBACK_PCT = 5;
 
 function computeRsiSeries(closedCandles) {
     const closes = closedCandles.map(c => parseFloat(c.close));
@@ -311,20 +316,27 @@ function pickResistance(zones, price, rank) {
 }
 
 /**
- * Filtro de entrada por S/R + alvo por resistência. Mesma regra do backtest
- * (checkSupportResistanceFilter / targetPriceOverride em analyseRsiThresholdBacktest.js):
+ * Filtro de entrada por S/R + alvo por resistência + stop por suporte. Mesma regra do backtest
+ * (checkSupportResistanceFilter / targetPriceOverride / stopPriceOverride em
+ * analyseRsiThresholdBacktest.js):
  *  - ENTRADA: só libera se o preço do sinal estiver no máximo `entryMaxPct`% ACIMA da linha de
  *    suporte escolhida (preço abaixo do suporte também libera). Sem zonas / sem suporte de
  *    referência → não bloqueia (fail-open, igual MACD/RSI 1h).
  *  - SAÍDA: `srTargetPrice` = a `exitResistanceRank`-ésima resistência acima do preço do sinal
  *    (null se não houver) — o chamador usa como alvo fixo da bracket no lugar do targetMode.
+ *  - STOP (`sr.stopEnabled`, padrão desligado): `srStopPrice` = a `stopSupportRank`-ésima linha de
+ *    suporte ABAIXO do preço do sinal (padrão S2; leque 1-5, mais largo que entrada/saída — S4/S5
+ *    é uma escolha legítima pro stop, mais "de fora"), preço ABSOLUTO travado nesse instante — o
+ *    chamador (computeBracketPrices) usa como stop fixo no lugar de stopLoss.maxLossPct. null se
+ *    `stopEnabled` estiver desligado ou não houver suporte disponível naquele posto (cai no
+ *    SR_STOP_FALLBACK_PCT em computeBracketPrices).
  */
 function checkSupportResistanceEntry(config, cMap, signalPrice) {
     const sr = config.entry?.supportResistance;
-    if (!sr?.enabled) return { allowed: true, srTargetPrice: null };
+    if (!sr?.enabled) return { allowed: true, srTargetPrice: null, srStopPrice: null };
 
     const zones = resolveSrZonesNow(cMap, sr);
-    if (!zones) return { allowed: true, srTargetPrice: null, warmup: true };
+    if (!zones) return { allowed: true, srTargetPrice: null, srStopPrice: null, warmup: true };
 
     const entryRank = Math.max(1, Math.min(3, Math.round(Number(sr.entrySupportRank ?? 1))));
     const exitRank = Math.max(1, Math.min(3, Math.round(Number(sr.exitResistanceRank ?? 1))));
@@ -340,9 +352,12 @@ function checkSupportResistanceEntry(config, cMap, signalPrice) {
     }
 
     const resistance = pickResistance(zones, signalPrice, exitRank);
+    const stopRank = Math.max(1, Math.min(5, Math.round(Number(sr.stopSupportRank ?? 2))));
+    const srStopPrice = sr.stopEnabled ? (pickSupport(zones, signalPrice, stopRank)?.price ?? null) : null;
     return {
         allowed: true,
         srTargetPrice: resistance?.price ?? null,
+        srStopPrice,
         supportPrice: support?.price ?? null,
         resistanceRank: exitRank,
         entryMaxPct: maxPct,
@@ -715,6 +730,7 @@ function evaluateEntrySignal(config, cMap) {
         emaCross: emaCrossCheck,
         sr: srCheck,
         srTargetPrice: srCheck.srTargetPrice ?? null,
+        srStopPrice: srCheck.srStopPrice ?? null,
         earlyCheckpoint,
         signalOpenTime,
         signalPrice,
@@ -878,10 +894,17 @@ function computeTrailingTargetPrice(entryPrice, peakPrice, trailingTarget, baseT
 /**
  * Alvo e stop a partir do preço de entrada — os dois modos são INDEPENDENTES.
  *
- * STOP:
- *  - Fixo (`exit.trailingStop.enabled === false`): stop = entryPrice*(1-maxLossPct%), constante.
- *  - Contínuo (`exit.trailingStop.enabled`): sobe em degraus com o `peakPrice`, ver
- *    computeTrailingStopPrice (contador próprio `trailingStop.coinStepPct`).
+ * STOP, em ordem de prioridade:
+ *  1. Contínuo (`exit.trailingStop.enabled`): sobe em degraus com o `peakPrice`, ver
+ *     computeTrailingStopPrice (contador próprio `trailingStop.coinStepPct`).
+ *  2. Pelo suporte do S/R (`entry.supportResistance.stopEnabled`, escolhido pelo usuário nas
+ *     Configurações — padrão S2): stop = `srStopPrice` (preço ABSOLUTO da linha de suporte
+ *     travado no instante do sinal, ver checkSupportResistanceEntry/stopSupportRank) — como já
+ *     nasce de um OCO (bracket TP/SL resting), fica FIXO nesse valor pelo resto do trade, não
+ *     acompanha a linha S/R recalculada depois. Sem suporte disponível naquele posto (moeda sem
+ *     histórico, ou já abaixo de toda zona detectada), cai em `entryPrice*(1-SR_STOP_FALLBACK_PCT%)`
+ *     em vez de deixar a posição sem proteção.
+ *  3. Fixo (`stopLoss.maxLossPct`): stop = entryPrice*(1-maxLossPct%), constante.
  *
  * ALVO (`exit.targetMode`):
  *  - 'fixed' (padrão): entryPrice*(1+targetPct%), constante desde a entrada.
@@ -896,13 +919,17 @@ function computeTrailingTargetPrice(entryPrice, peakPrice, trailingTarget, baseT
  *
  * `srTargetPrice` (opcional) — alvo por linha de resistência do S/R (ver checkSupportResistanceEntry):
  * quando informado e ACIMA da entrada, o ALVO vira esse preço fixo, no lugar do targetMode (o teto
- * de lucro continua valendo como `min(srTarget, cap)`). Stop não muda. Mesmo comportamento de
- * targetPriceOverride em resolveFromSignal no backtest.
+ * de lucro continua valendo como `min(srTarget, cap)`). Mesmo comportamento de targetPriceOverride
+ * em resolveFromSignal no backtest.
+ *
+ * `srStopPrice` (opcional) — ver prioridade 2 do STOP acima. Ignorado se `trailingStop.enabled` ou
+ * se `entry.supportResistance.stopEnabled` estiver desligado (mesmo que um valor seja passado).
  *
  * `peakPrice` é opcional — sem ele usa entryPrice como pico inicial. Quando alvo ou stop sobe de
- * degrau, essa perna da bracket é recriada na corretora (ver maybeReplaceTrailingStop).
+ * degrau, essa perna da bracket é recriada na corretora (ver maybeReplaceTrailingStop). O stop por
+ * S/R nunca sobe de degrau (é fixo), então não passa por ali.
  */
-function computeBracketPrices(config, entryPrice, peakPrice, srTargetPrice = null) {
+function computeBracketPrices(config, entryPrice, peakPrice, srTargetPrice = null, srStopPrice = null) {
     if (!(entryPrice > 0)) return { targetPrice: null, stopPrice: null, targetCapped: false };
     const baseTargetPct = Math.max(0.1, Number(config.exit?.restingBracket?.targetPct ?? 5));
     const trailingStop = config.exit?.trailingStop;
@@ -928,11 +955,18 @@ function computeBracketPrices(config, entryPrice, peakPrice, srTargetPrice = nul
         }
     }
 
-    const stopPrice = trailingStop?.enabled
-        ? computeTrailingStopPrice(entryPrice, peakPrice ?? entryPrice, trailingStop)
-        : (config.stopLoss?.enabled
+    const srStopEnabled = !!config.entry?.supportResistance?.stopEnabled;
+    let stopPrice;
+    if (trailingStop?.enabled) {
+        stopPrice = computeTrailingStopPrice(entryPrice, peakPrice ?? entryPrice, trailingStop);
+    } else if (srStopEnabled) {
+        const validSrStop = Number.isFinite(Number(srStopPrice)) && Number(srStopPrice) > 0 && Number(srStopPrice) < entryPrice;
+        stopPrice = validSrStop ? Number(srStopPrice) : entryPrice * (1 - SR_STOP_FALLBACK_PCT / 100);
+    } else {
+        stopPrice = config.stopLoss?.enabled
             ? computeStopLossFloor(entryPrice, entryPrice, { ...config.stopLoss, trailing: false })
-            : null);
+            : null;
+    }
     return { targetPrice, stopPrice, targetCapped };
 }
 
@@ -941,7 +975,8 @@ function computeBracketPrices(config, entryPrice, peakPrice, srTargetPrice = nul
  *  (mesmo candle) assume o pior caso (stop primeiro), mesmo critério do backtest.
  *  opts.peakPrice: maior preço visto desde a compra — só relevante com exit.trailingStop
  *  ligado (ver computeBracketPrices); ignorado no modo fixo.
- *  opts.srTargetPrice: alvo por resistência do S/R travado na compra (ver computeBracketPrices). */
+ *  opts.srTargetPrice: alvo por resistência do S/R travado na compra (ver computeBracketPrices).
+ *  opts.srStopPrice: stop por suporte do S/R travado na compra (ver computeBracketPrices). */
 function evaluateExit(config, cMap, entryPrice, opts = {}) {
     const iv = config.entry.interval;
     const raw = cMap[iv] ?? [];
@@ -952,7 +987,7 @@ function evaluateExit(config, cMap, entryPrice, opts = {}) {
     const high = parseFloat(live.high ?? live.close);
     const low = parseFloat(live.low ?? live.close);
 
-    const { targetPrice, stopPrice, targetCapped } = computeBracketPrices(config, entryPrice, opts.peakPrice, opts.srTargetPrice ?? null);
+    const { targetPrice, stopPrice, targetCapped } = computeBracketPrices(config, entryPrice, opts.peakPrice, opts.srTargetPrice ?? null, opts.srStopPrice ?? null);
 
     if (stopPrice != null && low <= stopPrice) {
         return {
@@ -981,6 +1016,7 @@ function evaluateExit(config, cMap, entryPrice, opts = {}) {
 module.exports = {
     RSI_PERIOD,
     PULLBACK_INTERVAL,
+    SR_STOP_FALLBACK_PCT,
     intervalMs,
     closedCandlesOnly,
     computeRsiSeries,

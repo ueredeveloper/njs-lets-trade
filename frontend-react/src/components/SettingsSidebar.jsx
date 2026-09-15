@@ -1373,8 +1373,10 @@ export default function SettingsSidebar({ open, onClose }) {
                     const onModeChange = (v) => {
                       if (v === 'srSupport') {
                         // Precisa das zonas do S/R (mesmo acordeão do filtro/alvo) — escolher esse
-                        // modo liga o acordeão sozinho. Ainda NÃO wired na execução do bot ao vivo
-                        // (ver comentário em tradeConfigSchema.js) — só grava a config por enquanto.
+                        // modo liga o acordeão sozinho. Stop FIXO no preço absoluto do suporte
+                        // travado no instante da compra (checkSupportResistanceEntry/
+                        // computeBracketPrices em strategyEngine.js) — sem suporte disponível
+                        // naquele posto cai num stop fixo de SR_STOP_FALLBACK_PCT% (5%).
                         patchTs({ enabled: false });
                         patchSr({ enabled: true, stopEnabled: true });
                         return;
