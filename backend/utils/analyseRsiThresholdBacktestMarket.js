@@ -8,6 +8,7 @@ const { getGateFavoriteSymbols } = require('../gate/getGateFavoriteSymbols');
 const { getAllGateCurrencies } = require('../gate/getAllGateCurrencies');
 const { computeDailyEntryStats } = require('./dailyEntryStats');
 const { computeAvgTradeDurationMs } = require('./tradeDurationStats');
+const { getGroupForSymbol, getMeta: getCorrelationGroupsMeta } = require('./correlationGroups');
 
 const CONCURRENCY = 15;
 const DEFAULT_MAX_ROWS = 300;
@@ -47,6 +48,39 @@ function computeVolumeBreakdown(filledOccurrences, volumeMap) {
     });
 }
 
+/** Marca `correlationBlocked = true` nos trades preenchidos que caíram numa moeda cujo GRUPO de
+ *  correlação (ver backend/utils/correlationGroups.js) já tinha outro trade aberto no momento da
+ *  entrada — simula "não abrir posição em moeda correlacionada com outra já aberta". Roda um
+ *  passe cronológico (por entryDate) sobre os trades JÁ resolvidos independentemente por símbolo
+ *  (ver nota de arquitetura no topo do arquivo): não é uma re-simulação completa de portfólio —
+ *  cada símbolo continua decidindo seus próprios sinais sozinho, isso só filtra o resultado
+ *  cruzando os grupos depois. Moeda sem grupo (idiossincrática) nunca é bloqueada. Muta os
+ *  objetos em `filledOccurrences` (mesma referência usada em `allOccurrences`).
+ *  Devolve a contagem de trades bloqueados. */
+function applyCorrelationGroupFilter(filledOccurrences) {
+    const chronological = filledOccurrences
+        .filter((o) => o.entryDate)
+        .slice()
+        .sort((a, b) => new Date(a.entryDate) - new Date(b.entryDate));
+
+    const busyUntilByGroup = new Map(); // groupId -> ms (Infinity = ainda aberto no fim do backtest)
+    let blocked = 0;
+    for (const o of chronological) {
+        const group = getGroupForSymbol(o.symbol);
+        if (group == null) continue;
+        const entryMs = new Date(o.entryDate).getTime();
+        const busyUntil = busyUntilByGroup.get(group) ?? -Infinity;
+        if (entryMs < busyUntil) {
+            o.correlationBlocked = true;
+            blocked++;
+            continue;
+        }
+        const exitMs = o.exitDate ? new Date(o.exitDate).getTime() : Infinity;
+        busyUntilByGroup.set(group, exitMs);
+    }
+    return blocked;
+}
+
 async function runWithConcurrency(items, worker, concurrency) {
     const results = [];
     let idx = 0;
@@ -78,6 +112,12 @@ async function runWithConcurrency(items, worker, concurrency) {
  *   chamada individual se autobloquear), em vez de ser repassado a analyseRsiThresholdBacktest.
  *   Aplicado ao volume 24h da Binance nos pares Binance e ao volume 24h da Gate.io nos favoritos
  *   Gate (fontes diferentes, mesmo limite em USDT).
+ * @param {boolean} [options.avoidCorrelatedEntries=false] Não conta um trade preenchido se, no
+ *   momento da entrada, outra moeda do MESMO grupo de correlação (ver
+ *   backend/utils/correlationGroups.js — snapshot estático, recalculado por
+ *   backend/scripts/computeCorrelationGroups.js) já tinha um trade aberto. Filtro pós-hoc sobre
+ *   os trades já resolvidos independentemente por símbolo — não re-simula um portfólio completo
+ *   (ver applyCorrelationGroupFilter). Moeda sem grupo forte nunca é bloqueada.
  * @param {boolean} [options.includeGateFavorites=false] Além dos pares USDT da Binance, roda
  *   também o backtest nos símbolos marcados como favoritos da Gate.io (tabela `favorites_gate` —
  *   mesma lista "Favoritos|Gate" do frontend), cada um com `source: 'gate'`. Símbolos que já
@@ -164,11 +204,18 @@ async function analyseRsiThresholdBacktestMarket(options = {}) {
 
     allOccurrences.sort((a, b) => new Date(b.signalDate) - new Date(a.signalDate));
 
-    const filledOccurrences = allOccurrences.filter((o) => o.filled);
+    const avoidCorrelatedEntries = !!perSymbolOptions.avoidCorrelatedEntries;
+    const priceFilledOccurrences = allOccurrences.filter((o) => o.filled);
+    const correlationBlockedCount = avoidCorrelatedEntries
+        ? applyCorrelationGroupFilter(priceFilledOccurrences)
+        : 0;
+    const filledOccurrences = avoidCorrelatedEntries
+        ? priceFilledOccurrences.filter((o) => !o.correlationBlocked)
+        : priceFilledOccurrences;
     const totalTarget = filledOccurrences.filter((o) => o.outcome === 'target').length;
     const totalStop = filledOccurrences.filter((o) => o.outcome === 'stop').length;
     const totalOpen = filledOccurrences.filter((o) => o.outcome === 'open').length;
-    const totalNotFilled = allOccurrences.length - filledOccurrences.length;
+    const totalNotFilled = allOccurrences.length - priceFilledOccurrences.length;
     const closedCount = totalTarget + totalStop;
     const winRatePct = closedCount > 0 ? parseFloat(((totalTarget / closedCount) * 100).toFixed(1)) : 0;
     const baseVsEvolved = countBaseVsEvolvedExits(filledOccurrences);
@@ -267,6 +314,9 @@ async function analyseRsiThresholdBacktestMarket(options = {}) {
             : null,
         newHighBlockedCount,
         exclusivityBlockedCount,
+        avoidCorrelatedEntries,
+        correlationBlockedCount,
+        correlationGroupsComputedAt: avoidCorrelatedEntries ? getCorrelationGroupsMeta().computedAt : null,
         trailingStop: perSymbolOptions.trailingStop?.enabled ? { ...perSymbolOptions.trailingStop } : null,
         targetMode: (perSymbolOptions.targetMode === 'fixed' || perSymbolOptions.targetMode === 'continuous' || perSymbolOptions.targetMode === 'off')
             ? perSymbolOptions.targetMode

@@ -293,7 +293,7 @@ export async function fetchRsiThresholdBacktestMarket(interval, options = {}) {
     source = null, candleCount = null, lookbackHours = 0, bandWidth = null, maxRows = null,
     supportResistance = null, minVolumeUsdt = 0, excludeOpenExits = false, prevCandleStop = false,
     adxFilter = null, macdFilter = null, higherRsiFilter = null, emaCrossFilter = null, rsi5mFilter = null, newHighFilter = null, hardTakeProfit = null, reinforceOnStop = null, trailingStop = null, trailingTarget = null, targetMode = null, entriesDayRange = null,
-    includeGateFavorites = false,
+    includeGateFavorites = false, avoidCorrelatedEntries = false,
   } = options;
   const params = new URLSearchParams({
     interval, rsiThreshold, pullbackPct, targetPct, stopLossPct, positionSizeUsd,
@@ -379,6 +379,7 @@ export async function fetchRsiThresholdBacktestMarket(interval, options = {}) {
     params.set('entriesDayRangeMax', String(entriesDayRange.max));
   }
   if (includeGateFavorites) params.set('includeGateFavorites', '1');
+  if (avoidCorrelatedEntries) params.set('avoidCorrelatedEntries', '1');
   const res = await fetch(`/services/rsi-threshold-backtest-market?${params}`);
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));

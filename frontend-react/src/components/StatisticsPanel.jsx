@@ -485,6 +485,9 @@ const RSI_MOM_DEFAULT_PREFS = {
   // além dos pares USDT da Binance — cada um com o mesmo filtro de volume 24h (aferido na Gate).
   includeGateFavorites: true,
   entriesDayRangeMax: null,
+  // Só faz sentido no modo "todas as moedas" — bloqueia um trade se outra moeda do mesmo grupo
+  // de correlação já está aberta (ver backend/utils/correlationGroups.js).
+  avoidCorrelatedEntries: false,
 };
 
 /** Quantidade de candles × duração do intervalo, formatado em horas/dias — mostrado ao lado do
@@ -667,6 +670,7 @@ function buildRsiMomCommonOptions(p, candleCount, tradeInterval) {
     } : null,
     entriesDayRange: p.entriesDayRangeMax != null ? { min: 2, max: p.entriesDayRangeMax } : null,
     includeGateFavorites: !!p.includeGateFavorites,
+    avoidCorrelatedEntries: !!p.avoidCorrelatedEntries,
   };
 }
 
@@ -1710,6 +1714,22 @@ function RsiMomentumStats({ autoCalc }) {
               className={`relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${prefs.includeGateFavorites ? 'bg-p4' : 'bg-p3/40'}`}
             >
               <span className={`inline-block h-3 w-3 rounded-full bg-white shadow transition-transform ${prefs.includeGateFavorites ? 'translate-x-3' : 'translate-x-0'}`} />
+            </button>
+          </div>
+        )}
+
+        {prefs.allCoins && (
+          <div
+            className="flex items-center gap-1 shrink-0 pb-1"
+            title="Não conta um trade se, na hora da entrada, outra moeda do MESMO grupo de correlação já estava com um trade aberto (grupos calculados por backend/scripts/computeCorrelationGroups.js — ver painel 'Grupos de Correlação')"
+          >
+            <span className="hidden md:inline text-[9px] text-p5/50 uppercase tracking-wider">Sem correlacionadas</span>
+            <button
+              type="button"
+              onClick={() => patchPrefs({ avoidCorrelatedEntries: !prefs.avoidCorrelatedEntries })}
+              className={`relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${prefs.avoidCorrelatedEntries ? 'bg-p4' : 'bg-p3/40'}`}
+            >
+              <span className={`inline-block h-3 w-3 rounded-full bg-white shadow transition-transform ${prefs.avoidCorrelatedEntries ? 'translate-x-3' : 'translate-x-0'}`} />
             </button>
           </div>
         )}
@@ -2847,6 +2867,18 @@ function RsiMomentumStats({ autoCalc }) {
                   value={`${result.newHighBlockedCount} · topo x${result.newHighFilter.lookback} −${result.newHighFilter.marginPct}%`}
                   highlight="text-amber-500"
                   tooltip={t('stats.tip.blocked_by_new_high')}
+                />
+              )}
+              {result.avoidCorrelatedEntries && (
+                <SummaryCard
+                  label="Bloqueados · correlação"
+                  value={result.correlationGroupsComputedAt
+                    ? String(result.correlationBlockedCount)
+                    : `${result.correlationBlockedCount} · sem cache`}
+                  highlight="text-amber-500"
+                  tooltip={result.correlationGroupsComputedAt
+                    ? `trades não contados por já haver moeda do mesmo grupo aberta · grupos calculados em ${new Date(result.correlationGroupsComputedAt).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}`
+                    : 'grupos de correlação ainda não calculados — rode backend/scripts/computeCorrelationGroups.js'}
                 />
               )}
               {result.reinforceOnStop && (

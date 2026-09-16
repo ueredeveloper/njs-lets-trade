@@ -18,6 +18,7 @@ const DEFAULT_USER_ID = process.env.SUPABASE_DEFAULT_USER_ID ?? 'ueredeveloper';
 //     &trailingStopEnabled=1&trailingStopMode=continuous&trailingStopStartPct=5&trailingStopCoinStepPct=1&trailingStopStopStepPct=1
 //     (modos: continuous | twoPhase | peakTrail | atrTrail — ver parseTrailingStopQuery.js)
 //     &targetMode=continuous&trailingTargetCoinStepPct=3&trailingTargetStepPct=3
+//     &avoidCorrelatedEntries=1 (ver backend/utils/correlationGroups.js)
 //
 // Mesmo cálculo de /rsi-threshold-backtest, mas rodado em TODOS os pares USDT ativos da
 // Binance de uma vez (sem `symbol`) — ver backend/utils/analyseRsiThresholdBacktestMarket.js.
@@ -46,6 +47,7 @@ router.get('/rsi-threshold-backtest-market', async (req, res) => {
         targetMode, trailingTargetCoinStepPct, trailingTargetStepPct,
         entriesDayRangeMin, entriesDayRangeMax,
         includeGateFavorites,
+        avoidCorrelatedEntries,
     } = req.query;
 
     if (!interval) {
@@ -88,6 +90,7 @@ router.get('/rsi-threshold-backtest-market', async (req, res) => {
         } : null,
         minVolumeUsdt:    minVolumeUsdt ? parseFloat(minVolumeUsdt) : 0,
         includeGateFavorites: includeGateFavorites === '1',
+        avoidCorrelatedEntries: avoidCorrelatedEntries === '1',
         excludeOpenExits: excludeOpenExits === '1',
         prevCandleStop:   prevCandleStopEnabled === '1',
         adxFilter: adxFilterEnabled === '1' ? {
