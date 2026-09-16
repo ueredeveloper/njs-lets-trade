@@ -1186,8 +1186,9 @@ async function beginRearmReentryWait({ rowId, log, symbol, strategyId, config, s
   session.rulesState = { ...rulesState, rearm: rearmWait };
   await saveState(rowId, { rules_state: session.rulesState }, log);
   const rr = config.exit.reinforceOnStop.reentryRsi;
-  log(`${Y}🛑⏳ ${symbol} bateu o stop (rearm #${pendingRearm.rungs + 1}) — caixa ${proceeds.toFixed(2)} USDT em mãos. Aguardando RSI(${config.entry.interval}) voltar a ${rr.rsiThreshold} antes de recomprar${X}`);
-  sendWhatsApp(`🛑⏳ ${BOT_LABEL} [${strategyId}] ${symbol}\n"Reforço no stop / re-armar": stop bateu, caixa ${proceeds.toFixed(2)} USDT em mãos.\nAguardando o RSI(${config.entry.interval}) voltar a cruzar ${rr.rsiThreshold} antes de recomprar, pra deixar a moeda consolidar.`);
+  const reentryIv = rr?.interval || config.entry.interval;
+  log(`${Y}🛑⏳ ${symbol} bateu o stop (rearm #${pendingRearm.rungs + 1}) — caixa ${proceeds.toFixed(2)} USDT em mãos. Aguardando RSI(${reentryIv}) voltar a ${rr.rsiThreshold} antes de recomprar${X}`);
+  sendWhatsApp(`🛑⏳ ${BOT_LABEL} [${strategyId}] ${symbol}\n"Reforço no stop / re-armar": stop bateu, caixa ${proceeds.toFixed(2)} USDT em mãos.\nAguardando o RSI(${reentryIv}) voltar a cruzar ${rr.rsiThreshold} antes de recomprar, pra deixar a moeda consolidar.`);
   return { phase: 'BOUGHT' };
 }
 
@@ -1203,7 +1204,8 @@ async function tickRearmReentryWait({ rowId, adapter, strategy, log, state, sess
   const decision = evaluateReentryRsiSignal(config, cMap);
   if (!decision.allowed) return { phase: 'BOUGHT' };
 
-  log(`${G}↻ RSI(${config.entry.interval}) voltou a ${decision.threshold} (${decision.rsi.toFixed(2)}) — recomprando (rearm) em ${symbol}${X}`);
+  const reentryIvDone = config.exit.reinforceOnStop.reentryRsi?.interval || config.entry.interval;
+  log(`${G}↻ RSI(${reentryIvDone}) voltou a ${decision.threshold} (${decision.rsi.toFixed(2)}) — recomprando (rearm) em ${symbol}${X}`);
   return finalizeRearmRebuy({
     rowId, adapter, strategy, log, state, session, config, cMap, stopSelf, symbol, strategyId,
     rulesState, proceeds: Number(rp.proceeds) || 0, pendingRearm: rp,
@@ -1539,9 +1541,10 @@ async function beginLadderReentryWait({ rowId, log, state, session, config, symb
   await saveState(rowId, { rules_state: session.rulesState }, log);
 
   const rr = config.exit.reinforceOnStop.reentryRsi;
+  const reentryIv = rr?.interval || config.entry.interval;
   const perda = leg1Sold ? `perna 1 vendida no stop (perda ${leg1RealizedLoss.toFixed(2)} USDT)` : 'perna 1 mantida (sem ordem resting)';
-  log(`${Y}🛑⏳ ${symbol} bateu o stop — ${perda}. Aguardando RSI(${config.entry.interval}) voltar a ${rr.rsiThreshold} antes de reforçar${X}`);
-  sendWhatsApp(`🛑⏳ ${BOT_LABEL} [${strategyId}] ${symbol}\nStop bateu — ${perda}.\nAguardando o RSI(${config.entry.interval}) voltar a cruzar ${rr.rsiThreshold} antes de reforçar (em vez de recomprar direto), pra deixar a moeda consolidar.`);
+  log(`${Y}🛑⏳ ${symbol} bateu o stop — ${perda}. Aguardando RSI(${reentryIv}) voltar a ${rr.rsiThreshold} antes de reforçar${X}`);
+  sendWhatsApp(`🛑⏳ ${BOT_LABEL} [${strategyId}] ${symbol}\nStop bateu — ${perda}.\nAguardando o RSI(${reentryIv}) voltar a cruzar ${rr.rsiThreshold} antes de reforçar (em vez de recomprar direto), pra deixar a moeda consolidar.`);
   return { phase: 'BOUGHT' };
 }
 
