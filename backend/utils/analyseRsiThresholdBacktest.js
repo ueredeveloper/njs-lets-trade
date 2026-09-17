@@ -2,7 +2,8 @@
 
 const { RSI, ADX, MACD, ATR, EMA } = require('technicalindicators');
 const getCandles = require('../binance/getCandles');
-const { getGateCandles } = require('../gate/getGateCandles');
+const fetchKlines = require('../binance/fetchKlines');
+const { getGateCandles, fetchFromGate } = require('../gate/getGateCandles');
 const { closedCandlesOnly, intervalMs } = require('../bot/ma-cross/strategyEngine');
 const { bollingerBandWidthSeries } = require('./indicatorGrowthEngines');
 const { bandWidthRobustMean } = require('./removeOutliersIQR');
@@ -1406,6 +1407,20 @@ function computeMacdWhatIf(occurrences, interval) {
  * @param {number}  [options.reinforceOnStop.maxRungs=100]    Trava de segurança do nº de reforços (1–100).
  * @param {number}  [options.reinforceOnStop.waitCandles=0]   [ladder] Candles de 1m a esperar entre o stop e a 1ª compra de reforço (0–200). 0 = reforça no ato. Só afeta a perna 1.
  * @param {number}  [options.reinforceOnStop.buyUsd]          Valor (US$) do aporte de cada reforço (5–100000). No 'rearm' é o dinheiro NOVO adicionado à sobra da venda. Sem valor, usa positionSizeUsd.
+ * @param {Object}  [options.windowMs]           Escopa a simulação a uma janela de tempo FIXA em vez de
+ *   "os candleCount candles mais recentes até agora" (ver mainLimit/fetchCandles) — usado pela caixa de
+ *   análise do gráfico (previsão de trade dentro de um retângulo desenhado, possivelmente no passado).
+ *   Busca os candles do intervalo PRINCIPAL direto na corretora (fetchKlines/fetchFromGate, sem o cache
+ *   rolante de getCandles/getGateCandles — não mexe no que o bot ao vivo usa), ancorados em `toMs`, com
+ *   folga de RSI_WARMUP_BARS candles ANTES de `fromMs` pra os indicadores já saírem "aquecidos" no início
+ *   da janela. Só entradas com openTime >= fromMs contam como sinal (ver signalCutoffMs); nenhum candle
+ *   depois de `toMs` é buscado, então a saída de um trade sem alvo/stop atingido cai naturalmente como
+ *   'open' no último candle da janela. Filtros em OUTROS intervalos (bandWidth, prevDayCloud, ADX, MACD,
+ *   S/R, EMA cross, RSI 1h/5m…) continuam usando o cache rolante "até agora" — para uma janela recente
+ *   isso não muda o resultado; para uma janela antiga é uma aproximação conhecida (aceitável pro caso de
+ *   uso: escanear uma seleção do gráfico, tipicamente recente).
+ * @param {number}  options.windowMs.fromMs      Início da janela (ms) — só sinais a partir daqui contam.
+ * @param {number}  options.windowMs.toMs        Fim da janela (ms) — nenhum candle buscado depois disso.
  */
 async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
     const {
@@ -1417,6 +1432,7 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
         candleCount,
         lookbackHours   = 0,
         source          = null,
+        windowMs        = null,
         priorRsiFilter  = null,
         bandWidth       = null,
         prevDayCloud    = null,
@@ -1546,10 +1562,24 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
         ? 0
         : Math.max(1, Math.round(Number(priorRsiFilter?.count ?? 3)));
 
-    const signalCutoffMs = lookbackHours > 0 ? Date.now() - lookbackHours * 60 * 60 * 1000 : 0;
+    // Janela fixa (windowMs) tem prioridade sobre lookbackHours — ver JSDoc de options.windowMs.
+    const signalCutoffMs = windowMs?.fromMs > 0
+        ? windowMs.fromMs
+        : (lookbackHours > 0 ? Date.now() - lookbackHours * 60 * 60 * 1000 : 0);
 
     const fetchCandles = source === 'gate' ? getGateCandles : getCandles;
     const mainLimit = candleCount ?? DEFAULT_CANDLE_COUNT;
+
+    // Busca ancorada em windowMs.toMs (direto na corretora, sem cache) em vez do fetchCandles
+    // normal ("os mainLimit mais recentes até agora") — ver JSDoc de options.windowMs.
+    const fetchMainWindowCandles = async () => {
+        const mainIntervalMs = intervalMs(interval);
+        const spanCandles = Math.max(1, Math.ceil((windowMs.toMs - windowMs.fromMs) / mainIntervalMs));
+        const limit = Math.min(3000, spanCandles + RSI_WARMUP_BARS);
+        return source === 'gate'
+            ? fetchFromGate(symbol, interval, limit, Math.floor(windowMs.toMs / 1000))
+            : fetchKlines(symbol, interval, limit, windowMs.toMs);
+    };
 
     const bwEnabled = !!bandWidth?.enabled;
     const bwInterval = bandWidth?.interval ?? '5m';
@@ -1661,7 +1691,7 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
         : 0;
 
     const settled = await Promise.allSettled([
-        fetchCandles(symbol, interval, mainLimit),
+        windowMs ? fetchMainWindowCandles() : fetchCandles(symbol, interval, mainLimit),
         bwEnabled
             ? fetchCandles(symbol, bwInterval, bwLookback + bwPeriod + BB_MIN_CANDLES_PADDING)
             : Promise.resolve(null),

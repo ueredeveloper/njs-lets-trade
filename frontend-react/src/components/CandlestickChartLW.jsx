@@ -685,7 +685,7 @@ function toValidLwCandles(candlesticks) {
 const CandlestickChartLW = forwardRef(function CandlestickChartLW({
   symbol, interval, candlesticks, colors, rightPad = 0,
   activeIndicators = [], ma9, ma21, ma50, ma200, overlayConfigs, vwapConfig, vwapSlopeHighlight,
-  bollingerConfigs = [], srConfigs = [], pphlConfig, wfractalsConfig, zigzagConfig, rsiCrossConfigs = [], flagsConfig, analysisBoxRect, prevDayCloudConfig, rsiConfig, chopConfig, macdConfig,
+  bollingerConfigs = [], srConfigs = [], pphlConfig, wfractalsConfig, zigzagConfig, rsiCrossConfigs = [], flagsConfig, analysisBoxRect, tradeBoxRects = [], tradeBoxSrMarks = [], prevDayCloudConfig, rsiConfig, chopConfig, macdConfig,
   emaPersistCloudData, emaPersistCloudConfirmData, emaPersistCloudConfirm2Data, emaPersistCloudLayers, emaPersistCloudTones, barsSinceCrossData, tdSequentialData,
   stopLossConfig, targetConfig, buyInfo, multitradeMarkers, zoomPeriod, focusLastN,
   onNeedOlderCandles, loadingMoreCandles, onVisibleRangeChange, visibleRange,
@@ -707,6 +707,10 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
   // S/R estilo 'traço' — refs PRÓPRIAS (efeito separado, depende do pan) pra não conflitar com o
   // teardown do efeito acima a cada frame de arrasto — ver os dois useEffect de S/R abaixo.
   const srTracoSeriesRef = useRef([]);
+  // S/R "traço" da caixa de previsão de trade — uma série por nível por occurrence (ver
+  // tradeBoxSrMarks/chartTradeBoxSrMarks em CandlestickChart.jsx). Refs PRÓPRIAS: não depende do
+  // pan (traço FIXO, terminando na entrada do trade, ao contrário do traço rolante de srConfigs).
+  const tradeBoxSrSeriesRef = useRef([]);
   const markersPluginRef = useRef(null);
   const rectPrimitiveRef = useRef(null);
   const bandFillPrimitiveRef = useRef(null);
@@ -775,6 +779,11 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
   useImperativeHandle(ref, () => ({
     coordinateToPrice: (y) => seriesRef.current?.coordinateToPrice(y) ?? null,
     coordinateToTime: (x) => chartRef.current?.timeScale().coordinateToTime(x) ?? null,
+    // Direção inversa — usada pra posicionar UI HTML (selects) "sobre" um retângulo desenhado no
+    // canvas (ver a caixa de análise/previsão de trade em CandlestickChart.jsx). `timeMs` em
+    // milissegundos (mesma unidade do resto do projeto); a lib trabalha em segundos internamente.
+    timeToCoordinate: (timeMs) => chartRef.current?.timeScale().timeToCoordinate(Math.floor(timeMs / 1000)) ?? null,
+    priceToCoordinate: (price) => seriesRef.current?.priceToCoordinate(price) ?? null,
   }), []);
 
   useEffect(() => {
@@ -1461,6 +1470,43 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
     }
   }, [srConfigs, candlesticks, visibleRange]);
 
+  // S/R "traço" por entrada da caixa de previsão de trade (tradeBoxSrMarks) — mesmo visual do
+  // traço rolante acima (LineSeries tracejada + marker com o rótulo do nível no fim), mas FIXO
+  // (termina na entrada do trade, não acompanha o pan) e alimentado pelos níveis que o PRÓPRIO
+  // backtest já usou pra aquele sinal (o.sr.levels), não recalculado aqui.
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    for (const s of tradeBoxSrSeriesRef.current) {
+      try { chart.removeSeries(s); } catch { /* já removida */ }
+    }
+    tradeBoxSrSeriesRef.current = [];
+    if (!tradeBoxSrMarks?.length) return;
+    for (const mark of tradeBoxSrMarks) {
+      if (mark.time2 <= mark.time1) continue;
+      for (const type of ['support', 'resistance']) {
+        for (const lvl of rankSrLevels(mark.levels, type)) {
+          const color = srLineColor(type, lvl.rank);
+          const s = chart.addSeries(LineSeries, {
+            color, lineWidth: type === 'support' ? 3 : 2, lineStyle: 2,
+            priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+          });
+          s.setData([{ time: mark.time1, value: lvl.price }, { time: mark.time2, value: lvl.price }]);
+          try {
+            createSeriesMarkers(s, [{ time: mark.time2, position: 'inBar', color, shape: 'circle', text: lvl.label }]);
+          } catch { /* mesmo caso do traço rolante — cosmético, não deve derrubar o gráfico */ }
+          tradeBoxSrSeriesRef.current.push(s);
+        }
+      }
+    }
+    return () => {
+      for (const s of tradeBoxSrSeriesRef.current) {
+        try { chart.removeSeries(s); } catch { /* já removida */ }
+      }
+      tradeBoxSrSeriesRef.current = [];
+    };
+  }, [tradeBoxSrMarks]);
+
   // Linhas verticais (fullHeight, largura 2px) nos candles em que o RSI(14) do intervalo ESCOLHIDO
   // de cada instância do "Limiar RSI" cruzou pra cima — mesmo gatilho do bot RSI Momentum. 1 cor
   // por instância (ver chartRsiCrossConfigs no pai), pra comparar vários limiares/intervalos.
@@ -1484,8 +1530,9 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       ...buildHistoricalPositionRects(multitradeMarkers, candlesticks),
       ...(analysisBoxRect ? [analysisBoxRect] : []),
       ...rsiCrossRects,
+      ...tradeBoxRects,
     ]);
-  }, [buyInfo, stopLossConfig, targetConfig, candlesticks, multitradeMarkers, analysisBoxRect, rsiCrossRects]);
+  }, [buyInfo, stopLossConfig, targetConfig, candlesticks, multitradeMarkers, analysisBoxRect, rsiCrossRects, tradeBoxRects]);
 
   // Linha de PnL: entrada → preço atual, verde/vermelho conforme sobe ou cai.
   useEffect(() => {

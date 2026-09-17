@@ -27,9 +27,10 @@ const DEFAULT_USER_ID = process.env.SUPABASE_DEFAULT_USER_ID ?? 'ueredeveloper';
 //     &reinforceReentryInterval=5m&reinforceReentryConfirmInterval=1m   (default = interval do sinal / 5m)
 //     &reinforceReentryRsi5mEnabled=1&reinforceReentryRsi5mThreshold=75
 //     &reinforceReentryEarlyConfirmEnabled=1&reinforceReentryEarlyConfirmRsi=75
+//     &fromMs=...&toMs=...   (caixa de análise do gráfico — escopa a candles [fromMs,toMs], ver options.windowMs)
 router.get('/rsi-threshold-backtest', async (req, res) => {
     const {
-        symbol, interval, source, candleCount, lookbackHours,
+        symbol, interval, source, candleCount, lookbackHours, fromMs, toMs,
         rsiThreshold, pullbackPct, targetPct, stopLossPct, positionSizeUsd,
         bandWidthEnabled, bandWidthInterval, bandWidthPeriod, bandWidthStdDev,
         bandWidthLookback, bandWidthMinPct,
@@ -156,6 +157,12 @@ router.get('/rsi-threshold-backtest', async (req, res) => {
         entriesDayRange: entriesDayRangeMax != null ? {
             min: entriesDayRangeMin != null ? parseInt(entriesDayRangeMin, 10) : 2,
             max: parseInt(entriesDayRangeMax, 10),
+        } : null,
+        // Caixa de análise do gráfico (previsão de trade dentro de um retângulo desenhado) — ver
+        // JSDoc de options.windowMs em analyseRsiThresholdBacktest.js.
+        windowMs: (fromMs != null && toMs != null) ? {
+            fromMs: parseInt(fromMs, 10),
+            toMs: parseInt(toMs, 10),
         } : null,
     };
 

@@ -2,7 +2,7 @@ import { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import { useI18n } from '../i18n';
 import ReactECharts from 'echarts-for-react';
 import { useCurrency } from '../contexts/CurrencyContext';
-import { fetchCandlesticksAndCloud, fetchGateTrades, fetchBinanceTrades, fetchChartAdaptiveBands, fetchBollingerBandRecovery, DEFAULT_CANDLE_LIMIT, getBollingerMedianTrendConfig } from '../services/api';
+import { fetchCandlesticksAndCloud, fetchGateTrades, fetchBinanceTrades, fetchChartAdaptiveBands, fetchBollingerBandRecovery, DEFAULT_CANDLE_LIMIT, getBollingerMedianTrendConfig, fetchRsiThresholdBacktest, getRsiMomentumConfig, getRsiMomentumCuratedBot } from '../services/api';
 import { buildMarkersFromExchangeTrades, attachPnlToExchangeTrades, isMaCrossEntry, isVwapBandsEntry, isBollingerBandsEntry, resolveBollingerBandsPermFilter } from '../utils/multitradeChart';
 import { computeVwapSlopeFlags } from '../utils/vwapSlopeHighlight';
 import { buildTrailingStopSeries, resolveChartStopLoss, resolveChartTarget, computeStopLossFloor } from '../utils/trailingStopLoss';
@@ -19,6 +19,7 @@ import { logSrLevels } from '../utils/srLevelLog';
 import { CHART_VIEW, INTERVAL_MS, computeZoomWindow, buildFixedDataZoom, buildInsideDataZoom, computeCandleLimitFromTime, isTradePanelChartView, computeManualWheelZoom } from '../utils/chartView';
 import { simulateBbTouchPath, pairBbPathCycles } from '../utils/bollingerTouchPath';
 import { detectFlags } from '../utils/detectFlags';
+import { buildRsiMomCommonOptions } from '../utils/rsiMomCommonOptions';
 import PanelTip from './PanelTip';
 import {
   PANEL_GAP,
@@ -76,6 +77,29 @@ const INTERVALS = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h',
  *  Padrão de fábrica; o usuário pode customizar em Configurações → Intervalos rápidos do gráfico (uiPrefs.commonChartIntervals). */
 const COMMON_CHART_INTERVALS = DEFAULT_COMMON_CHART_INTERVALS;
 const DEFAULT_INTERVAL = '15m';
+
+// Painel de regras da caixa de previsão de trade (ver analysisBoxRulesPanel) — só os intervalos
+// suportados também na Gate.io (CLAUDE.md: sem '3m'), já que a simulação pode rodar numa moeda
+// Gate-only (ex.: SKYAI).
+const ANALYSIS_BOX_RULE_INTERVALS = ['1m', '5m', '15m', '30m', '1h', '4h', '8h', '1d'];
+// Um item por filtro do motor RSI Momentum (analyseRsiThresholdBacktest.js) — TODOS aparecem no
+// painel de regras, ligados ou não na config carregada, pra dar pra ligar um que não estava em
+// uso (ex.: testar "e se o MACD também confirmasse?"). `key` = campo *Enabled do panelConfig
+// (mesmo shape de RSI_MOM_PREFS/buildRsiMomCommonOptions).
+const ANALYSIS_BOX_FILTER_ROWS = [
+  { key: 'srEnabled', label: 'S/R', intervalKey: 'srInterval' },
+  { key: 'macdFilterEnabled', label: 'MACD', intervalKey: 'macdFilterInterval' },
+  { key: 'emaCrossFilterEnabled', label: 'EMA9/21', intervalKey: 'emaCrossFilterInterval' },
+  { key: 'higherRsiFilterEnabled', label: 'RSI1h ≥', numberKey: 'higherRsiFilterMinRsi', numberMin: 1, numberMax: 99 },
+  { key: 'rsi5mFilterEnabled', label: 'RSI5m >', numberKey: 'rsi5mFilterThreshold', numberMin: 50, numberMax: 95 },
+  { key: 'bandWidthEnabled', label: 'Banda', intervalKey: 'bandWidthInterval' },
+  { key: 'newHighFilterEnabled', label: 'Topo N' },
+  { key: 'hardTakeProfitEnabled', label: 'Take Profit %', numberKey: 'hardTakeProfitPct', numberMin: 1, numberMax: 200 },
+  {
+    key: 'reinforceOnStopEnabled', label: 'Reforço no stop', selectKey: 'reinforceMode',
+    selectOptions: [['ladder', 'Escada'], ['rearm', 'Rearm']],
+  },
+];
 
 const CHART_PRICE_PAD = 54;        // direita: rótulos do eixo de preço
 const CHART_LEFT_MARGIN = 8;       // margem esquerda mínima
@@ -3172,6 +3196,27 @@ export default function CandlestickChart() {
   const [analysisBoxMode, setAnalysisBoxMode] = useState(false);
   const [analysisBox, setAnalysisBox] = useState(null);
   const [analysisDrag, setAnalysisDrag] = useState(null);
+  // Previsão de trade dentro da caixa: 'flag' (padrão, bandeira de alta/baixa) ou 'trade' (roda o
+  // motor de sinal de uma estratégia — só RSI Momentum por enquanto — escopado à janela da caixa,
+  // ver chartTradeBoxSim). `analysisBoxRuleSource` escolhe as REGRAS: 'default' = config global do
+  // bot (rsi_momentum_global_config), 'exclusive' = config curada da moeda atual, se existir.
+  const [analysisBoxKind, setAnalysisBoxKind] = useState('flag');
+  const [analysisBoxStrategy, setAnalysisBoxStrategy] = useState('rsi-momentum');
+  const [analysisBoxRuleSource, setAnalysisBoxRuleSource] = useState('default');
+  // Config carregada do servidor (padrão/exclusiva, ver efeito de carga) — NÃO editada
+  // diretamente; `analysisBoxOverrides` guarda só os campos que o usuário mudou nos selects do
+  // painel de regras, mesclados por cima dela (ver analysisBoxEffectiveConfig) antes de rodar a
+  // simulação. Reseta ao trocar de moeda ou de fonte da regra (padrão↔exclusiva).
+  const [analysisBoxLoadedConfig, setAnalysisBoxLoadedConfig] = useState(null);
+  const [analysisBoxOverrides, setAnalysisBoxOverrides] = useState({});
+  const [analysisBoxRulesOpen, setAnalysisBoxRulesOpen] = useState(false);
+  const [analysisBoxTradeSim, setAnalysisBoxTradeSim] = useState(null);
+  // MACD do intervalo do próprio macdFilter da config usada na caixa (só busca quando o filtro
+  // está ligado — ver efeito logo abaixo do da simulação). null quando não usado/ainda carregando.
+  const [analysisBoxMacdData, setAnalysisBoxMacdData] = useState(null);
+  // Posição em pixel (canto superior da caixa) pros selects de Tipo/Estratégia/Regra ficarem
+  // "grudados" nela — recalculada a cada pan/zoom (ver efeito logo abaixo de handleAnalysisBoxStart).
+  const [analysisBoxAnchorPx, setAnalysisBoxAnchorPx] = useState(null);
 
   function clearMeasureAutoHide() {
     if (measureClearTimeoutRef.current) {
@@ -4550,6 +4595,19 @@ export default function CandlestickChart() {
     setAnalysisBoxMode(false);
     setAnalysisBox(null);
     setAnalysisDrag(null);
+    setAnalysisBoxTradeSim(null);
+    setAnalysisBoxAnchorPx(null);
+    setAnalysisBoxLoadedConfig(null);
+    setAnalysisBoxOverrides({});
+    setAnalysisBoxRulesOpen(false);
+    setAnalysisBoxMacdData(null);
+  }
+
+  // Grava um campo alterado no painel de regras da caixa — mesclado por cima da config
+  // carregada (ver analysisBoxEffectiveConfig), nunca a config em si (padrão/exclusiva no
+  // servidor continuam intocadas; isto é só um "e se" local desta caixa).
+  function setAnalysisBoxOverride(key, value) {
+    setAnalysisBoxOverrides((prev) => ({ ...prev, [key]: value }));
   }
 
   // Arrasto da caixa de análise — mesma mecânica do handleMeasureStart, mas o que interessa é
@@ -4609,6 +4667,135 @@ export default function CandlestickChart() {
     window.addEventListener('touchmove', onMove, { passive: false });
     window.addEventListener('touchend', onEnd);
   }
+
+  // Posição em pixel do canto superior-esquerdo da caixa — reprojetada a cada pan/zoom
+  // (visibleChartRange, debounced) pros selects de Tipo/Estratégia/Regra ficarem "grudados" nela.
+  // Checa lwChartRef.current direto (em vez de showLwChart, só computado mais abaixo, depois do
+  // early-return "sem gráfico selecionado" — hooks não podem ficar depois de um return condicional)
+  // — o ref só existe montado quando o motor Lightweight Charts está ativo, mesma coisa na prática.
+  // null quando a caixa saiu da área visível (timeToCoordinate devolve null fora do range) — nesse
+  // caso os selects simplesmente somem, em vez de flutuar longe do retângulo.
+  useEffect(() => {
+    if (!analysisBox || !lwChartRef.current) { setAnalysisBoxAnchorPx(null); return; }
+    const left = lwChartRef.current.timeToCoordinate(analysisBox.fromMs);
+    const top = Number.isFinite(analysisBox.priceHigh)
+      ? lwChartRef.current.priceToCoordinate(analysisBox.priceHigh)
+      : 8;
+    setAnalysisBoxAnchorPx(Number.isFinite(left) ? { left, top: Number.isFinite(top) ? top : 8 } : null);
+  }, [analysisBox, visibleChartRange]);
+
+  // 1) Carrega a config (padrão global ou exclusiva da moeda) do servidor — só refaz quando a
+  // fonte da regra, a moeda ou a caixa mudam. Ajustes do usuário no painel de regras
+  // (analysisBoxOverrides) NÃO disparam isto de novo — só a simulação (efeito 2 abaixo).
+  useEffect(() => {
+    if (!analysisBox || analysisBoxKind !== 'trade' || !selectedChart?.symbol) return undefined;
+    let cancelled = false;
+    setAnalysisBoxLoadedConfig({ loading: true, error: null, panelConfig: null, tradeInterval: null });
+    setAnalysisBoxOverrides({});
+    (async () => {
+      try {
+        const symbol = selectedChart.symbol;
+        const info = analysisBoxRuleSource === 'exclusive'
+          ? await getRsiMomentumCuratedBot(symbol)
+          : await getRsiMomentumConfig();
+        if (cancelled) return;
+        if (analysisBoxRuleSource === 'exclusive' && !info?.exists) {
+          setAnalysisBoxLoadedConfig({ loading: false, error: 'sem bot exclusivo pra essa moeda', panelConfig: null, tradeInterval: null });
+          return;
+        }
+        const panelConfig = info?.panelConfig;
+        const tradeInterval = info?.interval ?? info?.entry?.interval;
+        if (!panelConfig || !tradeInterval) {
+          setAnalysisBoxLoadedConfig({ loading: false, error: 'config indisponível', panelConfig: null, tradeInterval: null });
+          return;
+        }
+        setAnalysisBoxLoadedConfig({ loading: false, error: null, panelConfig, tradeInterval });
+      } catch (err) {
+        if (!cancelled) setAnalysisBoxLoadedConfig({ loading: false, error: err.message || 'falha ao carregar config', panelConfig: null, tradeInterval: null });
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [analysisBox, analysisBoxKind, analysisBoxRuleSource, selectedChart?.symbol]);
+
+  // Config EFETIVA da simulação: a carregada + o que o usuário mudou no painel de regras (ver
+  // ANALYSIS_BOX_FILTER_ROWS/analysisBoxRulesPanel) por cima — inclui até filtros que a config
+  // original tinha DESLIGADO (o usuário pode ligar um filtro que não estava em uso pra testar).
+  const analysisBoxEffectiveConfig = useMemo(() => {
+    if (!analysisBoxLoadedConfig?.panelConfig) return null;
+    const { tradeInterval: intervalOverride, ...panelOverrides } = analysisBoxOverrides;
+    return {
+      panelConfig: { ...analysisBoxLoadedConfig.panelConfig, ...panelOverrides },
+      tradeInterval: intervalOverride || analysisBoxLoadedConfig.tradeInterval,
+    };
+  }, [analysisBoxLoadedConfig, analysisBoxOverrides]);
+
+  // 2) Roda a simulação (backtest escopado à janela da caixa, ver options.windowMs) sempre que a
+  // caixa ou a config efetiva mudarem. Debounce curto pra não disparar uma request por tecla
+  // digitada num input numérico do painel de regras. Resultado vira retângulos dentro da própria
+  // caixa (chartTradeBoxRects) e o resumo entra no label do retângulo (analysisBoxRect).
+  useEffect(() => {
+    if (!analysisBox || analysisBoxKind !== 'trade' || !selectedChart?.symbol) return undefined;
+    if (analysisBoxLoadedConfig?.loading) return undefined;
+    if (analysisBoxLoadedConfig?.error) {
+      setAnalysisBoxTradeSim({ loading: false, error: analysisBoxLoadedConfig.error, occurrences: null });
+      return undefined;
+    }
+    if (!analysisBoxEffectiveConfig) return undefined;
+    let cancelled = false;
+    setAnalysisBoxTradeSim({ loading: true, error: null, occurrences: null });
+    const timer = setTimeout(() => {
+      (async () => {
+        try {
+          const symbol = selectedChart.symbol;
+          const source = selectedChart?.source ?? null;
+          const { panelConfig, tradeInterval } = analysisBoxEffectiveConfig;
+          const commonOptions = buildRsiMomCommonOptions(panelConfig, undefined, tradeInterval);
+          const data = await fetchRsiThresholdBacktest(symbol, tradeInterval, {
+            ...commonOptions,
+            source,
+            fromMs: analysisBox.fromMs,
+            toMs: analysisBox.toMs,
+          });
+          if (cancelled) return;
+          setAnalysisBoxTradeSim({
+            loading: false, error: null, occurrences: data?.occurrences ?? [], interval: tradeInterval, source, panelConfig,
+          });
+        } catch (err) {
+          if (!cancelled) setAnalysisBoxTradeSim({ loading: false, error: err.message || 'falha na simulação', occurrences: null });
+        }
+      })();
+    }, 350);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [
+    analysisBox, analysisBoxKind, selectedChart?.symbol, selectedChart?.source,
+    analysisBoxEffectiveConfig, analysisBoxLoadedConfig?.loading, analysisBoxLoadedConfig?.error,
+  ]);
+
+  // "outros indicadores se estiver utilizando" (MACD) — só busca quando a config da caixa liga
+  // macdFilter, no INTERVALO do próprio filtro (pode ser diferente do intervalo mostrado no
+  // gráfico). Fetch "últimos N candles até agora" (mesmo endpoint do grupo manual MACD do
+  // toolbar) — pra uma caixa recente cobre a janela toda; pra uma caixa muito antiga é uma
+  // aproximação (mesma ressalva do windowMs no backend).
+  useEffect(() => {
+    const cfg = analysisBoxTradeSim;
+    const macdOn = !!cfg?.panelConfig?.macdFilterEnabled && !cfg.loading && !cfg.error;
+    if (!macdOn || !selectedChart?.symbol || !analysisBox) { setAnalysisBoxMacdData(null); return undefined; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const macdInterval = cfg.panelConfig.macdFilterInterval || '1h';
+        const ivMs = INTERVAL_MS[macdInterval] ?? 3_600_000;
+        const spanCandles = Math.max(1, Math.ceil((analysisBox.toMs - analysisBox.fromMs) / ivMs));
+        const limit = Math.min(1500, spanCandles + 40);
+        const data = await fetchMacdOverlayPoints(selectedChart.symbol, macdInterval, cfg.source, limit);
+        if (!cancelled) setAnalysisBoxMacdData({ interval: macdInterval, ...data });
+      } catch (err) {
+        console.warn('[analysisBox macd]', err.message);
+        if (!cancelled) setAnalysisBoxMacdData(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [analysisBox, analysisBoxTradeSim, selectedChart?.symbol]);
 
   useEffect(() => {
     if (!chartZoom || !chartRef.current || !selectedChart?.candlesticks?.length) return;
@@ -5128,7 +5315,9 @@ export default function CandlestickChart() {
     const candles = selectedChart?.candlesticks;
     if (!candles?.length) return null;
 
-    if (analysisBox) {
+    // Kind 'trade' usa a mesma caixa pra outra coisa (ver chartTradeBoxRects) — não desenha
+    // bandeira dentro dela nesse modo.
+    if (analysisBox && analysisBoxKind === 'flag') {
       const scoped = candles.filter((c) => {
         const t = Number(c.openTime);
         return t >= analysisBox.fromMs && t <= analysisBox.toMs;
@@ -5137,18 +5326,166 @@ export default function CandlestickChart() {
       return { flags, scoped: true, scopedCount: scoped.length };
     }
 
-    if (!flagsShown) return null;
+    if (analysisBox || !flagsShown) return null;
     const flags = detectFlags(candles);
     return flags.length ? { flags, scoped: false } : null;
-  }, [flagsShown, selectedChart?.candlesticks, analysisBox]);
+  }, [flagsShown, selectedChart?.candlesticks, analysisBox, analysisBoxKind]);
+
+  // Previsão de trade dentro da caixa: converte os `occurrences` do backtest escopado
+  // (analysisBoxTradeSim) em retângulos verde(alvo)/vermelho(stop)/âmbar(aberto) — mesmo shape de
+  // buildHistoricalPositionRects, mas alimentado direto pelos tempos/preços do backend (já em ms),
+  // sem precisar casar candle por candle.
+  // OCO de cada trade: banda até o ALVO (verde) e banda até o STOP (vermelho) — mesma paleta de
+  // buildPositionRects (posição aberta), só que aqui as DUAS bandas sempre aparecem (é o bracket
+  // que foi colocado), e a que foi de fato atingida ganha contorno forte + rótulo com o desfecho
+  // ("alvo ✓"/"stop ✗" + pnlPct); a outra ponta fica esmaecida (não tocada).
+  const chartTradeBoxRects = useMemo(() => {
+    if (!analysisBox || analysisBoxKind !== 'trade' || !analysisBoxTradeSim?.occurrences?.length) return [];
+    return analysisBoxTradeSim.occurrences.flatMap((o) => {
+      // Occurrence do backtest usa entryDate/exitDate (strings ISO) — NÃO entryTime/exitTime
+      // (esse era o shape de multitradeMarkers, de outra parte do app; buildOccurrence em
+      // analyseRsiThresholdBacktest.js devolve datas). Confundir os dois fazia TODO trade cair
+      // fora do filtro (Number(undefined) = NaN) e a caixa sempre mostrar "sem sinal".
+      const entryMs = Date.parse(o.entryDate);
+      if (!Number.isFinite(entryMs) || entryMs < analysisBox.fromMs || entryMs > analysisBox.toMs) return [];
+      const entryPrice = Number(o.entryPrice);
+      if (!Number.isFinite(entryPrice) || entryPrice <= 0) return [];
+
+      // Com reforço no stop (ladder/rearm), reinforceLegs tem 1 item por PERNA (a 1ª sempre é a
+      // entrada original, mesmo sem reforço real ter acontecido — ver CLAUDE.md). Uma occurrence
+      // com 2+ pernas cobre um período em que a posição ficou FECHADA entre uma perna e a
+      // próxima (ex.: perna 1 estopou dia X, ficou fora do mercado até reabrir na perna 2 dia Y)
+      // — desenhar UM retângulo só do entry da 1ª à saída da ÚLTIMA (usando targetPrice/stopPrice
+      // do topo, que só valem pra 1ª perna) fazia o OCO "flutuar" aberto por cima do intervalo
+      // sem posição nenhuma. Com 2+ pernas, desenha UM retângulo POR PERNA (fecha e reabre no
+      // gráfico); com só 1, mantém o par alvo/stop (dá pra ver o bracket inteiro, tocado ou não).
+      const legs = o.reinforceLegs?.length ? o.reinforceLegs : null;
+      if (legs && legs.length > 1) {
+        return legs.flatMap((leg) => {
+          const legEntryMs = Date.parse(leg.entryDate);
+          const legEntryPrice = Number(leg.entryPrice);
+          if (!Number.isFinite(legEntryMs) || !Number.isFinite(legEntryPrice) || legEntryPrice <= 0) return [];
+          const legEntryTime = Math.floor(legEntryMs / 1000);
+          const legExitMsRaw = leg.exitDate ? Date.parse(leg.exitDate) : NaN;
+          const legExitMs = Number.isFinite(legExitMsRaw) ? legExitMsRaw : analysisBox.toMs;
+          const legExitTime = Math.max(legEntryTime + 1, Math.floor(legExitMs / 1000));
+          const legExitPrice = Number.isFinite(Number(leg.exitPrice)) ? Number(leg.exitPrice) : legEntryPrice;
+          const legPct = ((legExitPrice - legEntryPrice) / legEntryPrice) * 100;
+          const legOutcome = leg.outcome ?? 'open';
+          const isProfit = legOutcome === 'target' || (legOutcome !== 'stop' && legPct >= 0);
+          const outcomeLabel = { target: 'alvo ✓', stop: 'stop ✗', open: 'aberto' }[legOutcome] ?? legOutcome;
+          return [{
+            time1: legEntryTime, time2: legExitTime, price1: legEntryPrice, price2: legExitPrice,
+            fillColor: isProfit ? 'rgba(34,197,94,0.22)' : 'rgba(239,68,68,0.22)',
+            strokeColor: isProfit ? 'rgba(34,197,94,0.75)' : 'rgba(239,68,68,0.75)',
+            labelColor: isProfit ? '#22c55e' : '#ef4444',
+            label: `${outcomeLabel} ${legPct >= 0 ? '+' : ''}${legPct.toFixed(2)}%`,
+            labelPos: 'above',
+          }];
+        });
+      }
+
+      const entryTime = Math.floor(entryMs / 1000);
+      const exitMsRaw = o.exitDate ? Date.parse(o.exitDate) : NaN;
+      const exitMs = Number.isFinite(exitMsRaw) ? exitMsRaw : analysisBox.toMs;
+      const exitTime = Math.max(entryTime + 1, Math.floor(exitMs / 1000));
+      const exitPrice = Number.isFinite(Number(o.exitPrice)) ? Number(o.exitPrice) : entryPrice;
+      const pct = Number.isFinite(Number(o.pnlPct)) ? Number(o.pnlPct) : ((exitPrice - entryPrice) / entryPrice) * 100;
+      const pctLabel = `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`;
+      const rects = [];
+      const targetPrice = Number(o.targetPrice);
+      if (Number.isFinite(targetPrice)) {
+        const hit = o.outcome === 'target';
+        rects.push({
+          time1: entryTime, time2: exitTime, price1: entryPrice, price2: targetPrice,
+          fillColor: hit ? 'rgba(34,197,94,0.22)' : 'rgba(34,197,94,0.08)',
+          strokeColor: hit ? 'rgba(34,197,94,0.9)' : 'rgba(34,197,94,0.3)',
+          labelColor: '#22c55e',
+          label: hit ? `alvo ✓ ${pctLabel}` : 'alvo',
+          labelPos: 'top',
+        });
+      }
+      const stopPrice = Number(o.stopPrice);
+      if (Number.isFinite(stopPrice)) {
+        const hit = o.outcome === 'stop';
+        rects.push({
+          time1: entryTime, time2: exitTime, price1: entryPrice, price2: stopPrice,
+          fillColor: hit ? 'rgba(239,68,68,0.22)' : 'rgba(239,68,68,0.08)',
+          strokeColor: hit ? 'rgba(239,68,68,0.9)' : 'rgba(239,68,68,0.3)',
+          labelColor: '#ef4444',
+          label: hit ? `stop ✗ ${pctLabel}` : 'stop',
+          labelPos: 'bottom',
+        });
+      }
+      if (!rects.length) {
+        // Sem alvo/stop absoluto na occurrence (ex.: alvo desligado e sem hardTakeProfit/S-R) —
+        // ainda mostra o resultado bruto entrada→saída, senão o trade fica invisível na caixa.
+        const isProfit = o.outcome === 'target' || (o.outcome !== 'stop' && pct >= 0);
+        rects.push({
+          time1: entryTime, time2: exitTime, price1: entryPrice, price2: exitPrice,
+          fillColor: isProfit ? 'rgba(34,197,94,0.22)' : 'rgba(239,68,68,0.22)',
+          strokeColor: isProfit ? 'rgba(34,197,94,0.65)' : 'rgba(239,68,68,0.65)',
+          labelColor: isProfit ? '#22c55e' : '#ef4444',
+          label: `${o.outcome === 'open' ? 'aberto' : (isProfit ? 'alvo' : 'stop')} ${pctLabel}`,
+          labelPos: 'above',
+        });
+      }
+      return rects;
+    });
+  }, [analysisBox, analysisBoxKind, analysisBoxTradeSim]);
+
+  // S/R "traço" de cada entrada — reaproveita o `sr.levels` que o PRÓPRIO backtest devolve por
+  // occurrence (já é o S/R vigente NO MOMENTO daquele sinal, ver options.supportResistance em
+  // analyseRsiThresholdBacktest.js); só aparece quando a config usada tinha S/R ligado (senão
+  // `o.sr` vem null). Traço curto terminando na entrada (não rolante — o trade já é histórico).
+  const chartTradeBoxSrMarks = useMemo(() => {
+    if (!analysisBox || analysisBoxKind !== 'trade' || !analysisBoxTradeSim?.occurrences?.length) return [];
+    const tradeIvMs = INTERVAL_MS[analysisBoxTradeSim.interval] ?? 3_600_000;
+    const widthSec = 20 * Math.floor(tradeIvMs / 1000);
+    return analysisBoxTradeSim.occurrences
+      .map((o) => {
+        if (!o.sr?.levels?.length) return null;
+        const entryMs = Date.parse(o.entryDate);
+        if (!Number.isFinite(entryMs)) return null;
+        const time2 = Math.floor(entryMs / 1000);
+        const time1 = Math.max(Math.floor(analysisBox.fromMs / 1000), time2 - widthSec);
+        if (time2 <= time1) return null;
+        return { time1, time2, levels: o.sr.levels };
+      })
+      .filter(Boolean);
+  }, [analysisBox, analysisBoxKind, analysisBoxTradeSim]);
+
+  // Resumo curto dos filtros REALMENTE usados pela config da caixa — visibilidade rápida de
+  // "outros indicadores" que não ganharam overlay próprio no gráfico (só MACD ganhou, ver
+  // analysisBoxMacdData).
+  const analysisBoxFiltersUsed = useMemo(() => {
+    const p = analysisBoxTradeSim?.panelConfig;
+    if (!p) return [];
+    const parts = [];
+    if (p.srEnabled) parts.push(`S/R ${p.srInterval}`);
+    if (p.macdFilterEnabled) parts.push(`MACD ${p.macdFilterInterval}`);
+    if (p.emaCrossFilterEnabled) parts.push(`EMA9/21 ${p.emaCrossFilterInterval}`);
+    if (p.higherRsiFilterEnabled) parts.push(`RSI1h≥${p.higherRsiFilterMinRsi}`);
+    if (p.rsi5mFilterEnabled) parts.push(`RSI5m>${p.rsi5mFilterThreshold}`);
+    if (p.bandWidthEnabled) parts.push(`Banda ${p.bandWidthInterval}`);
+    if (p.newHighFilterEnabled) parts.push('Topo N');
+    if (p.hardTakeProfitEnabled) parts.push(`TP ${p.hardTakeProfitPct}%`);
+    if (p.reinforceOnStopEnabled) parts.push(`Reforço ${p.reinforceMode === 'rearm' ? 'rearm' : 'escada'}`);
+    return parts;
+  }, [analysisBoxTradeSim]);
+
+  // Enquanto a caixa está mostrando um trade simulado, o gráfico fica "limpo" — sem outros
+  // indicadores/overlays manuais nem a posição real aberta — pra não confundir o resultado
+  // simulado com o que já está na tela. Some sozinho ao trocar de volta pra 'flag' ou limpar a
+  // caixa (ver clearAnalysisBox).
+  const tradeBoxActive = analysisBoxKind === 'trade' && !!analysisBox;
 
   // Retângulo da caixa de análise pro motor TradingView — desenhado pela RectanglePrimitive,
   // que reprojeta de tempo/preço a cada frame (não sai do lugar ao dar pan/zoom, diferente de
   // um overlay em pixels). Sem faixa de preço válida, cobre toda a altura visível.
   const analysisBoxRect = useMemo(() => {
     if (!analysisBox) return null;
-    const n = chartFlagsConfig?.scoped ? chartFlagsConfig.scopedCount : null;
-    return {
+    const base = {
       time1: Math.floor(analysisBox.fromMs / 1000),
       time2: Math.floor(analysisBox.toMs / 1000),
       price1: analysisBox.priceLow,
@@ -5156,11 +5493,23 @@ export default function CandlestickChart() {
       fullHeight: !(Number.isFinite(analysisBox.priceLow) && Number.isFinite(analysisBox.priceHigh)),
       fillColor: 'rgba(148,163,184,0.10)',
       strokeColor: 'rgba(203,213,225,0.7)',
-      label: n != null ? `análise · ${n} candle${n === 1 ? '' : 's'}` : 'análise',
       labelColor: '#cbd5e1',
       labelPos: 'top',
     };
-  }, [analysisBox, chartFlagsConfig]);
+    if (analysisBoxKind === 'trade') {
+      const n = chartTradeBoxRects.length;
+      const label = analysisBoxTradeSim?.loading
+        ? 'trade · simulando…'
+        : analysisBoxTradeSim?.error
+          ? `trade · ${analysisBoxTradeSim.error}`
+          : n > 0
+            ? `trade · ${n} sinal${n === 1 ? '' : 'is'}`
+            : 'trade · sem sinal';
+      return { ...base, label, labelColor: analysisBoxTradeSim?.error ? '#f87171' : '#cbd5e1' };
+    }
+    const n = chartFlagsConfig?.scoped ? chartFlagsConfig.scopedCount : null;
+    return { ...base, label: n != null ? `análise · ${n} candle${n === 1 ? '' : 's'}` : 'análise' };
+  }, [analysisBox, analysisBoxKind, chartFlagsConfig, analysisBoxTradeSim, chartTradeBoxRects]);
 
   // DEBUG (Teste): ao criar a caixa de análise, printa no console os níveis de S/R no momento da
   // borda direita da caixa — mesmo cálculo rolante do gráfico, ancorado no último candle do
@@ -5387,7 +5736,7 @@ export default function CandlestickChart() {
       {showLwChart && (
         <button
           onClick={toggleAnalysisBoxMode}
-          title="Caixa de análise — arraste um retângulo sobre os candles pra detectar a bandeira só naquele trecho (funciona mesmo com o botão Band. desligado)"
+          title="Caixa de análise — arraste um retângulo sobre os candles pra detectar bandeira OU simular um trade só naquele trecho (escolha o tipo nos selects que aparecem sobre a caixa; funciona mesmo com o botão Band. desligado)"
           className={`w-6 h-5 md:w-7 md:h-6 inline-flex items-center justify-center text-[11px] md:text-xs rounded font-mono font-bold transition-colors border shrink-0 shadow-lg ${
             analysisBoxMode
               ? 'bg-slate-200 text-black border-white shadow-slate-300/50'
@@ -5432,15 +5781,211 @@ export default function CandlestickChart() {
     </div>
   );
 
-  // Aviso no gráfico quando a caixa de análise não achou bandeira (ou é pequena demais).
-  const analysisBoxNotice = analysisBox && chartFlagsConfig?.scoped && !chartFlagsConfig.flags?.length && (
+  // Aviso no gráfico quando a caixa de análise não achou bandeira (ou é pequena demais) — ou,
+  // em modo 'trade', quando a simulação terminou sem nenhum sinal na janela.
+  const analysisBoxNoticeFlag = analysisBox && analysisBoxKind === 'flag'
+    && chartFlagsConfig?.scoped && !chartFlagsConfig.flags?.length;
+  const analysisBoxNoticeTrade = analysisBox && analysisBoxKind === 'trade'
+    && analysisBoxTradeSim && !analysisBoxTradeSim.loading && !analysisBoxTradeSim.error
+    && chartTradeBoxRects.length === 0;
+  const analysisBoxNotice = (analysisBoxNoticeFlag || analysisBoxNoticeTrade) && (
     <div className="absolute top-12 left-1/2 -translate-x-1/2 z-30 pointer-events-none">
       <div className="px-3 py-1.5 rounded-md bg-slate-800/90 border border-slate-500 text-slate-100 text-[11px] md:text-xs font-mono shadow-lg flex items-center gap-2">
         <span className="text-amber-300">⬚</span>
-        {chartFlagsConfig.scopedCount != null && chartFlagsConfig.scopedCount < 12
-          ? `Seleção pequena (${chartFlagsConfig.scopedCount} candles) — mínimo ~12 para detectar bandeira`
-          : 'Nenhuma bandeira detectada na seleção'}
+        {analysisBoxNoticeTrade
+          ? 'Nenhum sinal de trade na seleção'
+          : (chartFlagsConfig.scopedCount != null && chartFlagsConfig.scopedCount < 12
+            ? `Seleção pequena (${chartFlagsConfig.scopedCount} candles) — mínimo ~12 para detectar bandeira`
+            : 'Nenhuma bandeira detectada na seleção')}
       </div>
+    </div>
+  );
+
+  // Selects "grudados" na caixa (Tipo: bandeira/trade; Estratégia; Regra: padrão/exclusiva da
+  // moeda) — posicionados via analysisBoxAnchorPx (canto superior-esquerdo da caixa, reprojetado
+  // a cada pan/zoom). Só aparecem enquanto a caixa está dentro da área visível do gráfico.
+  // Painel de regras/filtros da caixa (aberto pelo botão "⚙" em analysisBoxSelects) — edita a
+  // config EFETIVA (analysisBoxEffectiveConfig) desta caixa sem tocar na config salva no servidor
+  // (padrão/exclusiva). TODOS os filtros do motor aparecem aqui, ligados ou não na config
+  // carregada — dá pra ligar um que estava desligado (ex.: "e se o MACD também confirmasse?").
+  const analysisBoxRulesPanel = (() => {
+    if (analysisBoxLoadedConfig?.loading) {
+      return (
+        <div className="px-2 py-1.5 rounded bg-slate-900/95 border border-slate-600 text-slate-300 text-[10px] font-mono shadow-lg">
+          carregando config…
+        </div>
+      );
+    }
+    if (analysisBoxLoadedConfig?.error || !analysisBoxEffectiveConfig) {
+      return (
+        <div className="px-2 py-1.5 rounded bg-slate-900/95 border border-red-500/60 text-red-300 text-[10px] font-mono shadow-lg">
+          {analysisBoxLoadedConfig?.error ?? 'config indisponível'}
+        </div>
+      );
+    }
+    const p = analysisBoxEffectiveConfig.panelConfig;
+    const iv = analysisBoxEffectiveConfig.tradeInterval;
+    const selCls = 'bg-p2 border border-p3/40 text-p5 text-[10px] rounded px-1 py-0.5 focus:outline-none focus:border-p4';
+    const numCls = `${selCls} w-12 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none`;
+    return (
+      <div className="w-64 max-h-72 overflow-y-auto px-2 py-2 rounded bg-slate-900/95 border border-slate-600 shadow-lg flex flex-col gap-1.5">
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] text-slate-400 font-mono">Regra base</span>
+          <button
+            type="button"
+            onClick={() => setAnalysisBoxOverrides({})}
+            className="text-[9px] text-slate-400 hover:text-slate-200 underline"
+          >
+            restaurar
+          </button>
+        </div>
+        <div className="flex items-center gap-1 flex-wrap">
+          <select
+            value={iv}
+            onChange={(e) => setAnalysisBoxOverride('tradeInterval', e.target.value)}
+            title="Intervalo do sinal (RSI de entrada)"
+            className={selCls}
+          >
+            {ANALYSIS_BOX_RULE_INTERVALS.map((o) => <option key={o} value={o}>{o}</option>)}
+          </select>
+          <span className="text-[10px] text-slate-400">RSI&gt;</span>
+          <input
+            type="number" min={1} max={99} value={p.rsiThreshold ?? ''}
+            onChange={(e) => setAnalysisBoxOverride('rsiThreshold', Number(e.target.value))}
+            className={numCls}
+          />
+        </div>
+        <div className="flex items-center gap-1 flex-wrap">
+          <span className="text-[10px] text-slate-400">Alvo%</span>
+          <input
+            type="number" min={0} step={0.5} value={p.targetPct ?? ''} disabled={p.targetMode === 'off'}
+            onChange={(e) => setAnalysisBoxOverride('targetPct', Number(e.target.value))}
+            className={`${numCls} disabled:opacity-40`}
+          />
+          <select
+            value={p.targetMode ?? 'fixed'}
+            onChange={(e) => setAnalysisBoxOverride('targetMode', e.target.value)}
+            title="Modo do alvo"
+            className={selCls}
+          >
+            <option value="fixed">fixo</option>
+            <option value="continuous">contínuo</option>
+            <option value="off">off</option>
+          </select>
+          <span className="text-[10px] text-slate-400">Stop%</span>
+          <input
+            type="number" min={0.5} step={0.5} value={p.stopLossPct ?? ''}
+            onChange={(e) => setAnalysisBoxOverride('stopLossPct', Number(e.target.value))}
+            className={numCls}
+          />
+        </div>
+        <div className="border-t border-slate-700 pt-1 mt-0.5 text-[10px] text-slate-400 font-mono">Filtros</div>
+        {ANALYSIS_BOX_FILTER_ROWS.map((row) => {
+          const enabled = !!p[row.key];
+          return (
+            <label key={row.key} className="flex items-center gap-1.5 flex-wrap cursor-pointer">
+              <input
+                type="checkbox" checked={enabled}
+                onChange={(e) => setAnalysisBoxOverride(row.key, e.target.checked)}
+                className="accent-p4"
+              />
+              <span className={`text-[10px] ${enabled ? 'text-p5' : 'text-slate-500'}`}>{row.label}</span>
+              {row.intervalKey && (
+                <select
+                  value={p[row.intervalKey] ?? ANALYSIS_BOX_RULE_INTERVALS[0]}
+                  onChange={(e) => setAnalysisBoxOverride(row.intervalKey, e.target.value)}
+                  disabled={!enabled}
+                  className={`${selCls} disabled:opacity-40`}
+                >
+                  {ANALYSIS_BOX_RULE_INTERVALS.map((o) => <option key={o} value={o}>{o}</option>)}
+                </select>
+              )}
+              {row.numberKey && (
+                <input
+                  type="number" min={row.numberMin} max={row.numberMax}
+                  value={p[row.numberKey] ?? ''}
+                  onChange={(e) => setAnalysisBoxOverride(row.numberKey, Number(e.target.value))}
+                  disabled={!enabled}
+                  className={`${numCls} disabled:opacity-40`}
+                />
+              )}
+              {row.selectKey && (
+                <select
+                  value={p[row.selectKey] ?? row.selectOptions[0][0]}
+                  onChange={(e) => setAnalysisBoxOverride(row.selectKey, e.target.value)}
+                  disabled={!enabled}
+                  className={`${selCls} disabled:opacity-40`}
+                >
+                  {row.selectOptions.map(([val, lab]) => <option key={val} value={val}>{lab}</option>)}
+                </select>
+              )}
+            </label>
+          );
+        })}
+      </div>
+    );
+  })();
+
+  const analysisBoxSelects = analysisBox && showLwChart && analysisBoxAnchorPx && (
+    <div
+      className="absolute z-30 flex flex-col gap-1 items-start"
+      style={{ left: Math.max(4, analysisBoxAnchorPx.left), top: Math.max(4, analysisBoxAnchorPx.top - 32) }}
+    >
+      <div className="flex items-center gap-1 bg-slate-900/95 border border-slate-600 rounded px-1.5 py-1 shadow-lg">
+        <select
+          value={analysisBoxKind}
+          onChange={(e) => setAnalysisBoxKind(e.target.value)}
+          title="O que mostrar dentro da caixa"
+          className="bg-p2 border border-p3/40 text-p5 text-[10px] rounded px-1 py-0.5 focus:outline-none focus:border-p4"
+        >
+          <option value="flag">Bandeira</option>
+          <option value="trade">Trade</option>
+        </select>
+        {analysisBoxKind === 'trade' && (
+          <>
+            <select
+              value={analysisBoxStrategy}
+              onChange={(e) => setAnalysisBoxStrategy(e.target.value)}
+              title="Estratégia de trade simulada na caixa"
+              className="bg-p2 border border-p3/40 text-p5 text-[10px] rounded px-1 py-0.5 focus:outline-none focus:border-p4"
+            >
+              <option value="rsi-momentum">RSI Momentum</option>
+            </select>
+            <select
+              value={analysisBoxRuleSource}
+              onChange={(e) => setAnalysisBoxRuleSource(e.target.value)}
+              title="Regras: config padrão do bot (geral) ou config exclusiva desta moeda"
+              className="bg-p2 border border-p3/40 text-p5 text-[10px] rounded px-1 py-0.5 focus:outline-none focus:border-p4"
+            >
+              <option value="default">Padrão</option>
+              <option value="exclusive">Exclusiva</option>
+            </select>
+            <button
+              type="button"
+              onClick={() => setAnalysisBoxRulesOpen((v) => !v)}
+              title="Editar regras/filtros desta caixa"
+              disabled={!analysisBoxLoadedConfig?.panelConfig}
+              className={`w-5 h-5 inline-flex items-center justify-center text-[11px] rounded border shrink-0 disabled:opacity-40 ${
+                analysisBoxRulesOpen
+                  ? 'bg-slate-200 text-black border-white'
+                  : 'bg-p2 text-p5 border-p3/40 hover:bg-p3/30'
+              }`}
+            >
+              ⚙
+            </button>
+          </>
+        )}
+      </div>
+      {analysisBoxKind === 'trade' && !analysisBoxRulesOpen && analysisBoxFiltersUsed.length > 0 && (
+        <div
+          className="px-1.5 py-0.5 rounded bg-slate-900/90 border border-slate-700 text-slate-300 text-[9px] font-mono shadow whitespace-nowrap cursor-pointer"
+          title="Filtros/indicadores usados pela config desta caixa — clique pra editar"
+          onClick={() => setAnalysisBoxRulesOpen(true)}
+        >
+          {analysisBoxFiltersUsed.join(' · ')}
+        </div>
+      )}
+      {analysisBoxKind === 'trade' && analysisBoxRulesOpen && analysisBoxRulesPanel}
     </div>
   );
 
@@ -5614,37 +6159,39 @@ export default function CandlestickChart() {
               interval={selectedChart.interval ?? currentInterval}
               candlesticks={selectedChart.candlesticks}
               colors={colors}
-              activeIndicators={effectiveIndicators}
+              activeIndicators={tradeBoxActive ? [] : effectiveIndicators}
               ma9={selectedChart.ma9}
               ma21={selectedChart.ma21}
               ma50={selectedChart.ma50}
               ma200={selectedChart.movingAverage}
-              overlayConfigs={overlayConfigs}
-              vwapConfig={chartVwapConfig}
+              overlayConfigs={tradeBoxActive ? null : overlayConfigs}
+              vwapConfig={tradeBoxActive ? null : chartVwapConfig}
               vwapSlopeHighlight={vwapSlopeHighlight}
-              bollingerConfigs={chartBollingerConfigs}
-              srConfigs={chartSrConfigs}
-              pphlConfig={chartPphlConfig}
-              wfractalsConfig={chartWfractalsConfig}
-              zigzagConfig={chartZigzagConfig}
-              rsiCrossConfigs={chartRsiCrossConfigs}
+              bollingerConfigs={tradeBoxActive ? [] : chartBollingerConfigs}
+              srConfigs={tradeBoxActive ? [] : chartSrConfigs}
+              pphlConfig={tradeBoxActive ? null : chartPphlConfig}
+              wfractalsConfig={tradeBoxActive ? null : chartWfractalsConfig}
+              zigzagConfig={tradeBoxActive ? null : chartZigzagConfig}
+              rsiCrossConfigs={tradeBoxActive ? [] : chartRsiCrossConfigs}
               flagsConfig={chartFlagsConfig}
               analysisBoxRect={analysisBoxRect}
-              prevDayCloudConfig={chartPrevDayCloudConfig}
+              tradeBoxRects={chartTradeBoxRects}
+              tradeBoxSrMarks={chartTradeBoxSrMarks}
+              prevDayCloudConfig={tradeBoxActive ? null : chartPrevDayCloudConfig}
               rsiConfig={chartRsiConfig}
-              chopConfig={chartChopConfig}
-              macdConfig={chartMacdConfig}
-              emaPersistCloudData={chartEmaPersistCloudData}
-              emaPersistCloudConfirmData={chartEmaPersistCloudConfirmData}
-              emaPersistCloudConfirm2Data={chartEmaPersistCloudConfirm2Data}
+              chopConfig={tradeBoxActive ? null : chartChopConfig}
+              macdConfig={tradeBoxActive ? analysisBoxMacdData : chartMacdConfig}
+              emaPersistCloudData={tradeBoxActive ? null : chartEmaPersistCloudData}
+              emaPersistCloudConfirmData={tradeBoxActive ? null : chartEmaPersistCloudConfirmData}
+              emaPersistCloudConfirm2Data={tradeBoxActive ? null : chartEmaPersistCloudConfirm2Data}
               emaPersistCloudLayers={emaPersistCloudLayers}
               emaPersistCloudTones={emaPersistCloudTones}
-              barsSinceCrossData={chartBarsSinceCrossData}
-              tdSequentialData={chartTdSequentialData}
-              stopLossConfig={chartStopLossConfig}
-              targetConfig={chartTargetConfig}
-              buyInfo={chartBuyInfo}
-              multitradeMarkers={chartTradeMarkers?.length ? chartTradeMarkers : (selectedChart.tradeMarkers ?? [])}
+              barsSinceCrossData={tradeBoxActive ? null : chartBarsSinceCrossData}
+              tdSequentialData={tradeBoxActive ? null : chartTdSequentialData}
+              stopLossConfig={tradeBoxActive ? null : chartStopLossConfig}
+              targetConfig={tradeBoxActive ? null : chartTargetConfig}
+              buyInfo={tradeBoxActive ? null : chartBuyInfo}
+              multitradeMarkers={tradeBoxActive ? [] : (chartTradeMarkers?.length ? chartTradeMarkers : (selectedChart.tradeMarkers ?? []))}
               zoomPeriod={chartZoom}
               focusLastN={hasExplicitCandleWindow ? displayCandleCount : null}
               onNeedOlderCandles={handleLoadMoreCandles}
@@ -5664,6 +6211,7 @@ export default function CandlestickChart() {
           {measureOverlay}
           {analysisBoxOverlay}
           {analysisBoxNotice}
+          {analysisBoxSelects}
           {measureButtons}
           <ChartIndicatorPanel
             handlers={handlers}

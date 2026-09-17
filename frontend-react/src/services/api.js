@@ -196,6 +196,7 @@ export async function fetchRsiThresholdBacktest(symbol, interval, options = {}) 
     supportResistance = null,
     minVolumeUsdt = 0, excludeOpenExits = false, prevCandleStop = false,
     adxFilter = null, macdFilter = null, higherRsiFilter = null, emaCrossFilter = null, rsi5mFilter = null, newHighFilter = null, hardTakeProfit = null, reinforceOnStop = null, trailingStop = null, trailingTarget = null, targetMode = null, entriesDayRange = null,
+    fromMs = null, toMs = null,
   } = options;
   const params = new URLSearchParams({
     symbol, interval, rsiThreshold, pullbackPct, targetPct, stopLossPct, positionSizeUsd,
@@ -203,6 +204,11 @@ export async function fetchRsiThresholdBacktest(symbol, interval, options = {}) 
   if (source) params.set('source', source);
   if (candleCount) params.set('candleCount', String(candleCount));
   if (lookbackHours) params.set('lookbackHours', String(lookbackHours));
+  // Caixa de análise do gráfico — escopa a simulação a [fromMs,toMs] em vez de "até agora".
+  if (fromMs != null && toMs != null) {
+    params.set('fromMs', String(fromMs));
+    params.set('toMs', String(toMs));
+  }
   if (bandWidth?.enabled) {
     params.set('bandWidthEnabled', '1');
     params.set('bandWidthInterval', bandWidth.interval ?? '5m');

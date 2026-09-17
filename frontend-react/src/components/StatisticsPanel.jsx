@@ -16,6 +16,7 @@ import { getEntriesForSymbol } from '../constants/strategyPresets';
 import { isMaCrossEntry } from '../utils/macrossFavoritesSort';
 import { isBollingerBandsEntry, resolveBollingerBandsPermFilter } from '../utils/multitradeChart';
 import { logSrLevels } from '../utils/srLevelLog';
+import { buildRsiMomCommonOptions } from '../utils/rsiMomCommonOptions';
 import { VWAP_BANDS_ALL_INTERVALS, VWAP_BANDS_SESSIONS, EMA_FILTER_PERIODS } from '../constants/vwapBandsConfigSchema';
 
 
@@ -551,127 +552,6 @@ function loadRsiMomPrefs() {
 
 function saveRsiMomPrefs(prefs) {
   try { localStorage.setItem(RSI_MOM_PREFS_KEY, JSON.stringify(prefs)); } catch {}
-}
-
-/** Monta o objeto `options` do backtest (e o `config` do bot exclusivo) a partir do estado
- *  atual dos campos do painel Momentum RSI. Extraído de handleSearch pra que o botão
- *  "Bot exclusivo" / "Editar bot exclusivo" salve exatamente o que está selecionado agora —
- *  antes ele reenviava a config da última "Buscar" (`lastSearch.config`), então mudanças feitas
- *  depois de "Carregar config" (ex.: trocar escada → re-armar) eram descartadas em silêncio.
- *  Alvo e stop são INDEPENDENTES (ver options.targetMode / options.trailingStop em
- *  analyseRsiThresholdBacktest.js). */
-function buildRsiMomCommonOptions(p, candleCount, tradeInterval) {
-  // 'srSupport' não é um modo "trailing" (preço ABSOLUTO da linha de suporte, fixo — não anda com
-  // o pico) — igual 'fixed' nesse sentido, só que o valor vem do S/R em vez do stopLossPct %.
-  const stopTrailing = !['fixed', 'srSupport'].includes(p.stopMode);
-  return {
-    rsiThreshold: p.rsiThreshold,
-    pullbackPct: p.pullbackPct,
-    targetPct: p.targetPct,
-    stopLossPct: p.stopLossPct,
-    targetMode: p.targetMode,
-    hardTakeProfit: p.hardTakeProfitEnabled ? { enabled: true, pct: p.hardTakeProfitPct } : null,
-    trailingStop: stopTrailing ? {
-      enabled: true,
-      mode: p.stopMode,
-      startPct: p.stopLossPct,
-      ...(p.stopMode === 'continuous' ? {
-        coinStepPct: p.trailingCoinStepPct,
-        stopStepPct: p.trailingStopStepPct,
-      } : {}),
-      ...(p.stopMode === 'twoPhase' ? {
-        pivotPct: p.tsPivotPct,
-        aCoinStepPct: p.tsPhaseACoinStep,
-        aStopStepPct: p.tsPhaseAStopStep,
-        bCoinStepPct: p.tsPhaseBCoinStep,
-        bStopStepPct: p.tsPhaseBStopStep,
-      } : {}),
-      ...(p.stopMode === 'peakTrail' ? {
-        pivotGainPct: p.tsPivotGainPct,
-        wNearPct: p.tsWNearPct,
-        wFarPct: p.tsWFarPct,
-      } : {}),
-      ...(p.stopMode === 'atrTrail' ? {
-        pivotGainPct: p.tsPivotGainPct,
-        wNearPct: p.tsWNearPct,
-        atrMult: p.tsAtrMult,
-        atrMaxPct: p.tsAtrMaxPct,
-      } : {}),
-    } : null,
-    trailingTarget: p.targetMode === 'continuous' ? {
-      coinStepPct: p.trailingTargetCoinStepPct,
-      stepPct: p.trailingTargetStepPct,
-    } : null,
-    positionSizeUsd: p.positionSizeUsd,
-    candleCount,
-    lookbackHours: p.lookbackHours,
-    bandWidth: p.bandWidthEnabled ? {
-      enabled: true,
-      interval: p.bandWidthInterval,
-      minPct: p.bandWidthMinPct,
-      lookback: p.bandWidthLookback,
-    } : null,
-    supportResistance: p.srEnabled ? {
-      enabled: true,
-      interval: p.srInterval,
-      candleCount: p.srCandleCount,
-      entrySupportRank: p.srEntrySupportRank,
-      exitResistanceRank: p.srExitResistanceRank,
-      entryMaxPct: p.srEntryMaxPct,
-      stopEnabled: p.stopMode === 'srSupport',
-      stopSupportRank: p.srStopSupportRank,
-    } : null,
-    minVolumeUsdt: p.minVolumeUsdt,
-    excludeOpenExits: p.excludeOpenExits,
-    adxFilter: p.adxFilterEnabled ? {
-      enabled: true,
-      interval: p.adxFilterInterval,
-      minAdx: p.adxFilterMinAdx,
-    } : null,
-    macdFilter: p.macdFilterEnabled ? {
-      enabled: true,
-      interval: p.macdFilterInterval,
-    } : null,
-    higherRsiFilter: p.higherRsiFilterEnabled ? {
-      enabled: true,
-      minRsi: p.higherRsiFilterMinRsi,
-    } : null,
-    emaCrossFilter: p.emaCrossFilterEnabled ? {
-      enabled: true,
-      interval: p.emaCrossFilterInterval,
-    } : null,
-    rsi5mFilter: p.rsi5mFilterEnabled ? {
-      enabled: true,
-      threshold: p.rsi5mFilterThreshold,
-    } : null,
-    newHighFilter: p.newHighFilterEnabled ? {
-      enabled: true,
-      lookback: p.newHighFilterLookback,
-      marginPct: p.newHighFilterMarginPct,
-    } : null,
-    reinforceOnStop: p.reinforceOnStopEnabled ? {
-      enabled: true,
-      mode: p.reinforceMode === 'rearm' ? 'rearm' : 'ladder',
-      addDropPct: p.reinforceAddDropPct,
-      exitRisePct: p.reinforceExitRisePct,
-      rearmStopPct: p.reinforceRearmStopPct,
-      rearmTargetPct: p.reinforceRearmTargetPct,
-      waitCandles: p.reinforceWaitCandles,
-      buyUsd: p.reinforceBuyUsd,
-      reentryTrigger: p.reinforceReentryTrigger === 'rsiRecross' ? 'rsiRecross' : 'immediate',
-      reentryRsi: {
-        // '' (padrão) = mesmo intervalo do trade — ver RSI_MOM_DEFAULT_PREFS.
-        interval: p.reinforceReentryInterval || tradeInterval,
-        rsiThreshold: p.reinforceReentryRsi,
-        confirmInterval: p.reinforceReentryConfirmInterval || '5m',
-        rsi5mFilter: { enabled: !!p.reinforceReentryRsi5mEnabled, threshold: p.reinforceReentryRsi5mThreshold },
-        earlyConfirm: { enabled: p.reinforceReentryEarlyConfirmEnabled !== false, rsiThreshold: p.reinforceReentryEarlyConfirmRsi },
-      },
-    } : null,
-    entriesDayRange: p.entriesDayRangeMax != null ? { min: 2, max: p.entriesDayRangeMax } : null,
-    includeGateFavorites: !!p.includeGateFavorites,
-    avoidCorrelatedEntries: !!p.avoidCorrelatedEntries,
-  };
 }
 
 const STATS_AUTO_CALC_STORAGE_KEY = 'lets_trade_stats_auto_calc';
