@@ -276,8 +276,12 @@ function fmtPrice(n) {
  *  rsi_momentum_global_config, ou o preset estático (ver loadGlobalConfigBody).
  *  Snapshot do boot: o scanner relê a config a cada ciclo (main()#loadConfig), então
  *  mudança salva depois vale sem reiniciar mesmo sem reaparecer aqui. Detalhe filtro a
- *  filtro fica no painel de Estatísticas / Configurações. */
-function logStartupConfig(body, source = null) {
+ *  filtro fica no painel de Estatísticas / Configurações.
+ *  Reaproveitada também pra moeda CURADA (bot exclusivo — ver startSymbol): mesmo shape
+ *  de config (resolveStrategy(row).config), passando `logFn` = logger da própria moeda
+ *  (fica marcado [SYMBOL/rsi-momentum] no launcher.log) e `scanner: false` — a cadência
+ *  do scanner de mercado (SCAN_INTERVAL_MS) não existe pro tick loop de uma moeda curada. */
+function logStartupConfig(body, source = null, { logFn = console.log, scanner = true } = {}) {
   const e = body.entry, x = body.exit, sl = body.stopLoss;
   const bw = e.bandWidth, pb = e.pullback, r5 = e.rsi5mFilter, ec = e.earlyConfirm;
   const pr = e.priorRsiFilter, macd = e.macdFilter, hr = e.higherRsiFilter, ema = e.emaCrossFilter, sr = e.supportResistance;
@@ -312,11 +316,13 @@ function logStartupConfig(body, source = null) {
   else if (rf?.enabled) reforco = `reforço ESCADA -${rf.addDropPct}%/+${rf.exitRisePct}% (buyUsd ${Number(rf.buyUsd ?? 40)}, SEM stop após disparo, cap ${REINFORCE_HARD_CAP})`;
 
   const v = require('../../../package.json').version;
-  console.log(`📋 RSI Momentum v${v}${source ? ` · ${source}` : ''}`);
-  console.log(`   Entrada: RSI(14) ${e.interval} ×${e.rsiThreshold} (${e.enabled ? 'ATIVO' : 'PAUSADO'}) · aporte ${Number(body.capitalUsdt ?? 20)} USDT · ${pb.enabled ? `pullback -${pb.belowPct}% (${e.limitWaitCandles}c)` : 'a mercado'}`);
-  console.log(`   Filtros: ${filtros.join(' · ') || '(nenhum)'}`);
-  console.log(`   Alvo: ${alvo} · teto ${htp?.enabled ? `+${htp.pct ?? 15}%` : 'off'} · OCO ${x.restingBracket.enabled ? 'on' : 'off'}  |  Stop: ${stop} · ${reforco}`);
-  console.log(`   Scanner: vol≥${Number(body.volume.minVolumeUsdt).toLocaleString('pt-BR')} · cooldown ${e.reentryCooldownCandles}c/${body.entryCooldownHours}h · poll ${body.polling.pollMs / 1000}s/${body.polling.fastPollMs / 1000}s · scan ${SCAN_INTERVAL_MS / 60_000}min`);
+  logFn(`📋 RSI Momentum v${v}${source ? ` · ${source}` : ''}`);
+  logFn(`   Entrada: RSI(14) ${e.interval} ×${e.rsiThreshold} (${e.enabled ? 'ATIVO' : 'PAUSADO'}) · aporte ${Number(body.capitalUsdt ?? 20)} USDT · ${pb.enabled ? `pullback -${pb.belowPct}% (${e.limitWaitCandles}c)` : 'a mercado'}`);
+  logFn(`   Filtros: ${filtros.join(' · ') || '(nenhum)'}`);
+  logFn(`   Alvo: ${alvo} · teto ${htp?.enabled ? `+${htp.pct ?? 15}%` : 'off'} · OCO ${x.restingBracket.enabled ? 'on' : 'off'}  |  Stop: ${stop} · ${reforco}`);
+  const scanTail = scanner ? ` · scan ${SCAN_INTERVAL_MS / 60_000}min` : '';
+  const cadenceLabel = scanner ? 'Scanner' : 'Execução';
+  logFn(`   ${cadenceLabel}: vol≥${Number(body.volume.minVolumeUsdt).toLocaleString('pt-BR')} · cooldown ${e.reentryCooldownCandles}c/${body.entryCooldownHours}h · poll ${body.polling.pollMs / 1000}s/${body.polling.fastPollMs / 1000}s${scanTail}`);
 }
 
 function buildEntryReasonLines(config, entryMeta) {
@@ -1756,6 +1762,7 @@ async function startSymbol(row, color, startupIndex = null) {
   const curated = row.curated === true;
   if (curated) {
     log(`📌 Moeda CURADA (${row.exchange ?? 'binance'}) — vigiada indefinidamente; volta pra WATCHING após cada trade, nunca sai do pool.`);
+    logStartupConfig(strategy.config, 'bot exclusivo', { logFn: log, scanner: false });
   }
 
   const ctx = {
