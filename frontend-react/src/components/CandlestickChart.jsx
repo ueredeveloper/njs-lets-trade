@@ -82,12 +82,31 @@ const DEFAULT_INTERVAL = '15m';
 // suportados também na Gate.io (CLAUDE.md: sem '3m'), já que a simulação pode rodar numa moeda
 // Gate-only (ex.: SKYAI).
 const ANALYSIS_BOX_RULE_INTERVALS = ['1m', '5m', '15m', '30m', '1h', '4h', '8h', '1d'];
+// Mesmos leques de opções do painel Estatísticas (StatisticsPanel.jsx RSI_MOM_SR_*/
+// RSI_MOM_TRAILING_*/RSI_MOM_PIVOT_*/RSI_MOM_WIDTH_*/RSI_MOM_ATR_MULT_OPTIONS) — duplicados aqui
+// (não exportados de lá) pra dar paridade de opções ao editar a caixa de previsão de trade.
+const ANALYSIS_BOX_SR_CANDLE_COUNT_OPTIONS = [20, 50, 100, 200, 300, 500, 1000];
+const ANALYSIS_BOX_SR_RANK_OPTIONS = [1, 2, 3];
+const ANALYSIS_BOX_SR_MAXPCT_OPTIONS = ['adapt', 0.5, 0.6, 0.7, 0.8, 0.9, 1, 1.5, 2, 3, 5, 8, 10, 15, 20, 30, 50, 100];
+const ANALYSIS_BOX_SR_STOP_RANK_OPTIONS = [1, 2, 3, 4, 5];
+const ANALYSIS_BOX_TRAILING_STEP_OPTIONS = [1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6];
+const ANALYSIS_BOX_TRAILING_TARGET_STEP_OPTIONS = [1, 1.5, 2, 2.5, 3, 3.5, 4, 5, 6, 8, 10];
+const ANALYSIS_BOX_PIVOT_PCT_OPTIONS = [0, 0.5, 1, 1.5, 2, 3];
+const ANALYSIS_BOX_PIVOT_GAIN_OPTIONS = [2, 3, 4, 5, 6, 7, 8, 10];
+const ANALYSIS_BOX_WIDTH_PCT_OPTIONS = [2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 15];
+const ANALYSIS_BOX_ATR_MULT_OPTIONS = [1, 1.5, 2, 2.5, 3, 3.5, 4];
+// Modos do stop — mesmo leque de options.trailingStop.mode + 'srSupport' (stop pelo suporte do
+// S/R) do painel Estatísticas (ver RSI_MOM_STOP_MODE_OPTIONS/buildRsiMomCommonOptions).
+const ANALYSIS_BOX_STOP_MODE_OPTIONS = [
+  ['fixed', 'fixo'], ['srSupport', 'S/R'], ['continuous', 'contínuo'],
+  ['twoPhase', 'escada dupla'], ['peakTrail', 'trilha topo'], ['atrTrail', 'trilha ATR'],
+];
 // Um item por filtro do motor RSI Momentum (analyseRsiThresholdBacktest.js) — TODOS aparecem no
 // painel de regras, ligados ou não na config carregada, pra dar pra ligar um que não estava em
 // uso (ex.: testar "e se o MACD também confirmasse?"). `key` = campo *Enabled do panelConfig
-// (mesmo shape de RSI_MOM_PREFS/buildRsiMomCommonOptions).
+// (mesmo shape de RSI_MOM_PREFS/buildRsiMomCommonOptions). 'S/R' ganhou bloco próprio (todos os
+// selects do S/R de Estatísticas) — ver analysisBoxRulesPanel, não entra mais nesta lista genérica.
 const ANALYSIS_BOX_FILTER_ROWS = [
-  { key: 'srEnabled', label: 'S/R', intervalKey: 'srInterval' },
   { key: 'macdFilterEnabled', label: 'MACD', intervalKey: 'macdFilterInterval' },
   { key: 'emaCrossFilterEnabled', label: 'EMA9/21', intervalKey: 'emaCrossFilterInterval' },
   { key: 'higherRsiFilterEnabled', label: 'RSI1h ≥', numberKey: 'higherRsiFilterMinRsi', numberMin: 1, numberMax: 99 },
@@ -4610,6 +4629,13 @@ export default function CandlestickChart() {
     setAnalysisBoxOverrides((prev) => ({ ...prev, [key]: value }));
   }
 
+  // Grava vários campos de uma vez (ex.: trocar o modo do stop pra 'srSupport' precisa ligar
+  // srEnabled junto, senão o S/R fica desligado e o stop cai no fixo silenciosamente — mesma
+  // regra do painel Estatísticas, ver StatisticsPanel.jsx).
+  function setAnalysisBoxOverrideMulti(patch) {
+    setAnalysisBoxOverrides((prev) => ({ ...prev, ...patch }));
+  }
+
   // Arrasto da caixa de análise — mesma mecânica do handleMeasureStart, mas o que interessa é
   // a FAIXA DE TEMPO (openTime dos candles nas bordas) e a faixa de preço. Snapa nos candles
   // pra "últimos 50 candles" sair uma seleção limpa. Ao soltar, vira `analysisBox` e o modo
@@ -5463,6 +5489,11 @@ export default function CandlestickChart() {
     if (!p) return [];
     const parts = [];
     if (p.srEnabled) parts.push(`S/R ${p.srInterval}`);
+    if (p.stopMode === 'srSupport') {
+      parts.push(`Stop S${p.srStopSupportRank ?? 2}${p.srStopTrailingEnabled ? ' ↑' : ''}`);
+    } else if (p.stopMode && p.stopMode !== 'fixed') {
+      parts.push(`Stop ${p.stopMode}`);
+    }
     if (p.macdFilterEnabled) parts.push(`MACD ${p.macdFilterInterval}`);
     if (p.emaCrossFilterEnabled) parts.push(`EMA9/21 ${p.emaCrossFilterInterval}`);
     if (p.higherRsiFilterEnabled) parts.push(`RSI1h≥${p.higherRsiFilterMinRsi}`);
@@ -5872,12 +5903,247 @@ export default function CandlestickChart() {
             <option value="continuous">contínuo</option>
             <option value="off">off</option>
           </select>
-          <span className="text-[10px] text-slate-400">Stop%</span>
-          <input
-            type="number" min={0.5} step={0.5} value={p.stopLossPct ?? ''}
-            onChange={(e) => setAnalysisBoxOverride('stopLossPct', Number(e.target.value))}
-            className={numCls}
-          />
+        </div>
+        {/* Stop — mesmo leque de modos do painel Estatísticas (fixo/S/R/contínuo/escada dupla/
+            trilha topo/trilha ATR), incluindo o stop S/R escalável (estudo). */}
+        <div className="flex items-center gap-1 flex-wrap">
+          <span className="text-[10px] text-slate-400">Stop</span>
+          <select
+            value={p.stopMode ?? 'fixed'}
+            onChange={(e) => setAnalysisBoxOverrideMulti({
+              stopMode: e.target.value,
+              // 'srSupport' precisa do acordeão S/R ligado (senão não há suporte pra usar).
+              ...(e.target.value === 'srSupport' ? { srEnabled: true } : {}),
+            })}
+            title="Modo do stop"
+            className={selCls}
+          >
+            {ANALYSIS_BOX_STOP_MODE_OPTIONS.map(([val, lab]) => <option key={val} value={val}>{lab}</option>)}
+          </select>
+          {p.stopMode === 'srSupport' ? (
+            <select
+              value={p.srStopSupportRank ?? 2}
+              onChange={(e) => setAnalysisBoxOverride('srStopSupportRank', Number(e.target.value))}
+              title="Linha de suporte usada como stop"
+              className={selCls}
+            >
+              {ANALYSIS_BOX_SR_STOP_RANK_OPTIONS.map((v) => <option key={v} value={v}>{`S${v}`}</option>)}
+            </select>
+          ) : (
+            <input
+              type="number" min={0.5} step={0.5} value={p.stopLossPct ?? ''}
+              onChange={(e) => setAnalysisBoxOverride('stopLossPct', Number(e.target.value))}
+              title={p.stopMode === 'fixed' ? 'Stop %' : 'Stop inicial %'}
+              className={numCls}
+            />
+          )}
+        </div>
+        {p.stopMode === 'srSupport' && (
+          <div className="flex items-center gap-1.5 flex-wrap pl-3">
+            <label className="flex items-center gap-1 cursor-pointer">
+              <input
+                type="checkbox" checked={!!p.srStopTrailingEnabled}
+                onChange={(e) => setAnalysisBoxOverride('srStopTrailingEnabled', e.target.checked)}
+                className="accent-p4"
+              />
+              <span className={`text-[10px] ${p.srStopTrailingEnabled ? 'text-p5' : 'text-slate-500'}`}>Escalável</span>
+            </label>
+            {p.srStopTrailingEnabled && (
+              <>
+                <span className="text-[10px] text-slate-400">a cada</span>
+                <select
+                  value={p.srStopTrailingCoinStepPct ?? 1}
+                  onChange={(e) => setAnalysisBoxOverride('srStopTrailingCoinStepPct', Number(e.target.value))}
+                  className={selCls}
+                >
+                  {ANALYSIS_BOX_TRAILING_STEP_OPTIONS.map((v) => <option key={v} value={v}>{v}%</option>)}
+                </select>
+                <span className="text-[10px] text-slate-400">sobe</span>
+                <select
+                  value={p.srStopTrailingStopStepPct ?? 1}
+                  onChange={(e) => setAnalysisBoxOverride('srStopTrailingStopStepPct', Number(e.target.value))}
+                  className={selCls}
+                >
+                  {ANALYSIS_BOX_TRAILING_STEP_OPTIONS.map((v) => <option key={v} value={v}>{v}%</option>)}
+                </select>
+              </>
+            )}
+          </div>
+        )}
+        {p.stopMode === 'continuous' && (
+          <div className="flex items-center gap-1 flex-wrap pl-3">
+            <span className="text-[10px] text-slate-400">+pp a cada</span>
+            <select
+              value={p.trailingStopStepPct ?? 1}
+              onChange={(e) => setAnalysisBoxOverride('trailingStopStepPct', Number(e.target.value))}
+              className={selCls}
+            >
+              {ANALYSIS_BOX_TRAILING_TARGET_STEP_OPTIONS.map((v) => <option key={v} value={v}>{v}pp</option>)}
+            </select>
+            <select
+              value={p.trailingCoinStepPct ?? 1}
+              onChange={(e) => setAnalysisBoxOverride('trailingCoinStepPct', Number(e.target.value))}
+              className={selCls}
+            >
+              {ANALYSIS_BOX_TRAILING_STEP_OPTIONS.map((v) => <option key={v} value={v}>/{v}%</option>)}
+            </select>
+          </div>
+        )}
+        {p.stopMode === 'twoPhase' && (
+          <div className="flex items-center gap-1 flex-wrap pl-3">
+            <span className="text-[10px] text-slate-400">pivô</span>
+            <select
+              value={p.tsPivotPct ?? 1}
+              onChange={(e) => setAnalysisBoxOverride('tsPivotPct', Number(e.target.value))}
+              className={selCls}
+            >
+              {ANALYSIS_BOX_PIVOT_PCT_OPTIONS.map((v) => <option key={v} value={v}>{v === 0 ? '0 (BE)' : `+${v}%`}</option>)}
+            </select>
+            <span className="text-[10px] text-slate-400">A</span>
+            <select
+              value={p.tsPhaseAStopStep ?? 2.5}
+              onChange={(e) => setAnalysisBoxOverride('tsPhaseAStopStep', Number(e.target.value))}
+              className={selCls}
+            >
+              {ANALYSIS_BOX_TRAILING_TARGET_STEP_OPTIONS.map((v) => <option key={v} value={v}>{v}pp</option>)}
+            </select>
+            <select
+              value={p.tsPhaseACoinStep ?? 3}
+              onChange={(e) => setAnalysisBoxOverride('tsPhaseACoinStep', Number(e.target.value))}
+              className={selCls}
+            >
+              {ANALYSIS_BOX_TRAILING_STEP_OPTIONS.map((v) => <option key={v} value={v}>/{v}%</option>)}
+            </select>
+            <span className="text-[10px] text-slate-400">B</span>
+            <select
+              value={p.tsPhaseBStopStep ?? 1}
+              onChange={(e) => setAnalysisBoxOverride('tsPhaseBStopStep', Number(e.target.value))}
+              className={selCls}
+            >
+              {ANALYSIS_BOX_TRAILING_TARGET_STEP_OPTIONS.map((v) => <option key={v} value={v}>{v}pp</option>)}
+            </select>
+            <select
+              value={p.tsPhaseBCoinStep ?? 3}
+              onChange={(e) => setAnalysisBoxOverride('tsPhaseBCoinStep', Number(e.target.value))}
+              className={selCls}
+            >
+              {ANALYSIS_BOX_TRAILING_STEP_OPTIONS.map((v) => <option key={v} value={v}>/{v}%</option>)}
+            </select>
+          </div>
+        )}
+        {(p.stopMode === 'peakTrail' || p.stopMode === 'atrTrail') && (
+          <div className="flex items-center gap-1 flex-wrap pl-3">
+            <span className="text-[10px] text-slate-400">pivô alta</span>
+            <select
+              value={p.tsPivotGainPct ?? 5}
+              onChange={(e) => setAnalysisBoxOverride('tsPivotGainPct', Number(e.target.value))}
+              className={selCls}
+            >
+              {ANALYSIS_BOX_PIVOT_GAIN_OPTIONS.map((v) => <option key={v} value={v}>+{v}%</option>)}
+            </select>
+            <span className="text-[10px] text-slate-400">near</span>
+            <select
+              value={p.tsWNearPct ?? 4}
+              onChange={(e) => setAnalysisBoxOverride('tsWNearPct', Number(e.target.value))}
+              className={selCls}
+            >
+              {ANALYSIS_BOX_WIDTH_PCT_OPTIONS.map((v) => <option key={v} value={v}>-{v}%</option>)}
+            </select>
+            {p.stopMode === 'peakTrail' && (
+              <>
+                <span className="text-[10px] text-slate-400">far</span>
+                <select
+                  value={p.tsWFarPct ?? 9}
+                  onChange={(e) => setAnalysisBoxOverride('tsWFarPct', Number(e.target.value))}
+                  className={selCls}
+                >
+                  {ANALYSIS_BOX_WIDTH_PCT_OPTIONS.map((v) => <option key={v} value={v}>-{v}%</option>)}
+                </select>
+              </>
+            )}
+            {p.stopMode === 'atrTrail' && (
+              <>
+                <span className="text-[10px] text-slate-400">ATR×</span>
+                <select
+                  value={p.tsAtrMult ?? 2}
+                  onChange={(e) => setAnalysisBoxOverride('tsAtrMult', Number(e.target.value))}
+                  className={selCls}
+                >
+                  {ANALYSIS_BOX_ATR_MULT_OPTIONS.map((v) => <option key={v} value={v}>{v}×</option>)}
+                </select>
+                <span className="text-[10px] text-slate-400">teto</span>
+                <select
+                  value={p.tsAtrMaxPct ?? 12}
+                  onChange={(e) => setAnalysisBoxOverride('tsAtrMaxPct', Number(e.target.value))}
+                  className={selCls}
+                >
+                  {ANALYSIS_BOX_WIDTH_PCT_OPTIONS.map((v) => <option key={v} value={v}>-{v}%</option>)}
+                </select>
+              </>
+            )}
+          </div>
+        )}
+        {/* S/R — mesmos selects do painel Estatísticas (filtro de desconto na entrada + alvo na
+            resistência; stop por S/R fica no bloco de Stop acima, ligado por stopMode 'srSupport'). */}
+        <div className="border-t border-slate-700 pt-1 mt-0.5 flex items-center gap-1.5 flex-wrap">
+          <label className="flex items-center gap-1.5 cursor-pointer">
+            <input
+              type="checkbox" checked={!!p.srEnabled}
+              onChange={(e) => setAnalysisBoxOverrideMulti({
+                srEnabled: e.target.checked,
+                // Desligar o S/R sem o Stop 'srSupport' funcionar — volta pro fixo.
+                ...((!e.target.checked && p.stopMode === 'srSupport') ? { stopMode: 'fixed' } : {}),
+              })}
+              className="accent-p4"
+            />
+            <span className={`text-[10px] ${p.srEnabled ? 'text-p5' : 'text-slate-500'}`}>S/R</span>
+          </label>
+          {p.srEnabled && (
+            <>
+              <select
+                value={p.srInterval ?? ANALYSIS_BOX_RULE_INTERVALS[0]}
+                onChange={(e) => setAnalysisBoxOverride('srInterval', e.target.value)}
+                title="Intervalo do S/R"
+                className={selCls}
+              >
+                {ANALYSIS_BOX_RULE_INTERVALS.map((o) => <option key={o} value={o}>{o}</option>)}
+              </select>
+              <select
+                value={p.srCandleCount ?? 200}
+                onChange={(e) => setAnalysisBoxOverride('srCandleCount', Number(e.target.value))}
+                title="Candles da janela do S/R"
+                className={selCls}
+              >
+                {ANALYSIS_BOX_SR_CANDLE_COUNT_OPTIONS.map((v) => <option key={v} value={v}>{`x${v}`}</option>)}
+              </select>
+              <select
+                value={p.srEntrySupportRank ?? 1}
+                onChange={(e) => setAnalysisBoxOverride('srEntrySupportRank', Number(e.target.value))}
+                title="Suporte de referência da entrada"
+                className={selCls}
+              >
+                {ANALYSIS_BOX_SR_RANK_OPTIONS.map((v) => <option key={v} value={v}>{`${v}ª ↓`}</option>)}
+              </select>
+              <select
+                value={p.srExitResistanceRank ?? 1}
+                onChange={(e) => setAnalysisBoxOverride('srExitResistanceRank', Number(e.target.value))}
+                title="Resistência usada como alvo de saída"
+                className={selCls}
+              >
+                {ANALYSIS_BOX_SR_RANK_OPTIONS.map((v) => <option key={v} value={v}>{`${v}ª ↑`}</option>)}
+              </select>
+              <select
+                value={p.srEntryMaxPct ?? 10}
+                onChange={(e) => setAnalysisBoxOverride('srEntryMaxPct', e.target.value === 'adapt' ? 'adapt' : Number(e.target.value))}
+                title="Distância máxima acima do suporte pra aceitar a entrada"
+                className={selCls}
+              >
+                {ANALYSIS_BOX_SR_MAXPCT_OPTIONS.map((v) => (
+                  <option key={v} value={v}>{v === 'adapt' ? 'ADAPT' : `${v}%`}</option>
+                ))}
+              </select>
+            </>
+          )}
         </div>
         <div className="border-t border-slate-700 pt-1 mt-0.5 text-[10px] text-slate-400 font-mono">Filtros</div>
         {ANALYSIS_BOX_FILTER_ROWS.map((row) => {

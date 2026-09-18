@@ -63,6 +63,11 @@ export function buildRsiMomCommonOptions(p, candleCount, tradeInterval) {
       entryMaxPct: p.srEntryMaxPct,
       stopEnabled: p.stopMode === 'srSupport',
       stopSupportRank: p.srStopSupportRank,
+      // Stop S/R escalável (estudo) — só faz sentido com stopMode 'srSupport'. Ver
+      // srStopTrailingEnabled/CoinStepPct/StopStepPct em RSI_MOM_DEFAULT_PREFS.
+      stopTrailingEnabled: p.stopMode === 'srSupport' && !!p.srStopTrailingEnabled,
+      stopTrailingCoinStepPct: p.srStopTrailingCoinStepPct,
+      stopTrailingStopStepPct: p.srStopTrailingStopStepPct,
     } : null,
     minVolumeUsdt: p.minVolumeUsdt,
     excludeOpenExits: p.excludeOpenExits,

@@ -82,7 +82,18 @@ export const ASSET_CATEGORY_KEYS = [
   'lpTokens',
   'synthetic',
   'tokenizedStocks',
+  'break',
 ];
+
+/** Símbolos (par completo, ex. 'PONDUSDT') fora do status TRADING na Binance no momento
+ *  (BREAK/HALT/…) — ver backend/binance/getBreakUsdtPairs.js. Populado uma vez no boot do app
+ *  (App.jsx) via setBreakSymbols; diferente das outras categorias (que classificam pelo NOME do
+ *  ticker), esta depende de dado ao vivo da Binance, não dá pra inferir do símbolo sozinho. */
+let BREAK_SYMBOLS = new Set();
+
+export function setBreakSymbols(symbols) {
+  BREAK_SYMBOLS = new Set((symbols ?? []).map((s) => String(s).toUpperCase()));
+}
 
 export const DEFAULT_ASSET_DISPLAY = Object.fromEntries(
   ASSET_CATEGORY_KEYS.map((k) => [k, false]),
@@ -176,7 +187,8 @@ function isStablecoin(base) {
 }
 
 export function getSymbolCategories(symbol) {
-  const base = extractBase(symbol);
+  const upper = String(symbol || '').toUpperCase();
+  const base = extractBase(upper);
   const categories = [];
 
   if (isStablecoin(base)) categories.push('stablecoins');
@@ -187,6 +199,7 @@ export function getSymbolCategories(symbol) {
   if (isLpToken(base)) categories.push('lpTokens');
   if (isSynthetic(base)) categories.push('synthetic');
   if (isTokenizedStock(base)) categories.push('tokenizedStocks');
+  if (BREAK_SYMBOLS.has(upper)) categories.push('break');
 
   return categories;
 }

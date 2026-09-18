@@ -35,6 +35,16 @@ export function invalidateAllCurrenciesCache() {
   allCurrenciesInflight = null;
 }
 
+/** Pares USDT da Binance fora do status TRADING (BREAK/HALT/…) — ver
+ *  backend/binance/getBreakUsdtPairs.js. Alimenta a categoria "Pausadas (BREAK)" de
+ *  Configurações → Exibição de ativos (setBreakSymbols em utils/assetCategories.js). */
+export async function fetchBreakUsdtPairs() {
+  const res = await fetch('/services/break-usdt-pairs');
+  if (!res.ok) throw new Error('Falha ao buscar moedas em BREAK');
+  const data = await res.json();
+  return data.list ?? [];
+}
+
 export async function fetchUserPrefs() {
   try {
     const res = await fetch('/services/sb/user-prefs');
@@ -186,6 +196,11 @@ function appendSupportResistanceParams(params, supportResistance) {
   if (sr.stopEnabled) {
     params.set('srStopEnabled', '1');
     params.set('srStopSupportRank', String(sr.stopSupportRank ?? 2));
+    if (sr.stopTrailingEnabled) {
+      params.set('srStopTrailingEnabled', '1');
+      params.set('srStopTrailingCoinStepPct', String(sr.stopTrailingCoinStepPct ?? 1));
+      params.set('srStopTrailingStopStepPct', String(sr.stopTrailingStopStepPct ?? 1));
+    }
   }
 }
 

@@ -11,7 +11,8 @@ import {
 import { CurrencyProvider, useCurrency } from './contexts/CurrencyContext';
 import { LanguageProvider } from './contexts/LanguageContext';
 import { useI18n } from './i18n';
-import { fetchAllCurrencies, fetch24hVolume, fetchStablecoins, fetchCandlesticksAndCloud, getFavorites } from './services/api';
+import { fetchAllCurrencies, fetchBreakUsdtPairs, fetch24hVolume, fetchStablecoins, fetchCandlesticksAndCloud, getFavorites } from './services/api';
+import { setBreakSymbols } from './utils/assetCategories';
 import { loadUiPreferences, firstVisiblePanel, CURRENCY_PANEL_WIDTH_MIN, CURRENCY_PANEL_WIDTH_MAX } from './utils/uiPreferences';
 import { useIsMobile } from './hooks/useIsMobile';
 import FilterTabs from './components/FilterTabs';
@@ -154,8 +155,19 @@ function AppContent() {
     let cancelled = false;
     async function init() {
       try {
-        const allCurrencies = await fetchAllCurrencies();
+        // Busca em paralelo pra popular a categoria "Pausadas (BREAK)" (Configurações → Exibição
+        // de ativos) ANTES do primeiro setCurrencies — getSymbolCategories/isSymbolVisible leem
+        // esse Set de forma síncrona (módulo, não estado React), então precisa estar pronto antes
+        // do filtro rodar pela 1ª vez.
+        const [allCurrencies, breakSymbols] = await Promise.all([
+          fetchAllCurrencies(),
+          fetchBreakUsdtPairs().catch((err) => {
+            console.warn('[App] fetchBreakUsdtPairs:', err.message);
+            return [];
+          }),
+        ]);
         if (cancelled) return;
+        setBreakSymbols(breakSymbols);
         setCurrencies({ name: '1h|All', list: allCurrencies });
 
         const binanceUsdtList = allCurrencies

@@ -64,7 +64,7 @@ const MAX_ONE_MINUTE_CANDLES = 3000;
  * assim que a posição entra, arma alvo E stop simultaneamente; o que for tocado primeiro
  * encerra a operação. `scanCandles` deve conter só candles com openTime > signalCloseMs.
  */
-function resolveFromSignal(scanCandles, signalPrice, { pullbackPct, targetPct, stopLossPct, stopPriceOverride, targetPriceOverride, trailingStop, trailingTarget, targetMode, hardTakeProfitPct, reinforceOnStop, positionSizeUsd = 1 }) {
+function resolveFromSignal(scanCandles, signalPrice, { pullbackPct, targetPct, stopLossPct, stopPriceOverride, targetPriceOverride, trailingStop, trailingTarget, targetMode, hardTakeProfitPct, reinforceOnStop, srStopTrailing, positionSizeUsd = 1 }) {
     let filled = pullbackPct === 0;
     let entryTime = null;
     let entryPrice = signalPrice;
@@ -119,9 +119,10 @@ function resolveFromSignal(scanCandles, signalPrice, { pullbackPct, targetPct, s
     // usa o override se fizer sentido pra uma compra (abaixo do preço de entrada). Sem override
     // válido, cai no stop fixo (stopLossPct ou trailingStop.startPct no modo contínuo).
     const startStopPct = stopTrailingOn ? Number(trailingStop.startPct ?? stopLossPct) : stopLossPct;
-    let stopPrice = (!stopTrailingOn && Number.isFinite(stopPriceOverride) && stopPriceOverride > 0 && stopPriceOverride < entryPrice)
+    const srStopBase = (!stopTrailingOn && Number.isFinite(stopPriceOverride) && stopPriceOverride > 0 && stopPriceOverride < entryPrice)
         ? stopPriceOverride
-        : entryPrice * (1 - startStopPct / 100);
+        : null;
+    let stopPrice = srStopBase ?? entryPrice * (1 - startStopPct / 100);
 
     let outcome = 'open';
     let exitTime = null;
@@ -130,7 +131,13 @@ function resolveFromSignal(scanCandles, signalPrice, { pullbackPct, targetPct, s
     let peakPrice = entryPrice;
     const stopCoinStepPct = stopTrailingOn ? Math.max(0.1, Number(trailingStop.coinStepPct ?? 1)) : null;
     const stopStepPct = stopTrailingOn ? Math.max(0.1, Number(trailingStop.stopStepPct ?? 1)) : null;
-    const anyTrailing = stopTrailingOn || tMode === 'continuous';
+    // Stop por S/R escalável (estudo) — degrau MULTIPLICATIVO sobre o preço do suporte (srStopBase),
+    // não p.p. de distância da entrada como o trailingStop normal. Mutuamente exclusivo com
+    // trailingStop (que já desliga srStopBase acima) — os dois nunca ficam ligados ao mesmo tempo.
+    const srStopTrailingOn = !!(srStopBase && srStopTrailing?.enabled);
+    const srStopTrailCoinStepPct = srStopTrailingOn ? Math.max(0.1, Number(srStopTrailing.coinStepPct ?? 1)) : null;
+    const srStopTrailStopStepPct = srStopTrailingOn ? Math.max(0.1, Number(srStopTrailing.stopStepPct ?? 1)) : null;
+    const anyTrailing = stopTrailingOn || tMode === 'continuous' || srStopTrailingOn;
 
     // Modo do stop contínuo (todos INDEPENDENTES do alvo) — ver JSDoc de options.trailingStop:
     //   'continuous' (padrão): rampa linear única, ancorada na ENTRADA — stop sobe `stopStepPct` p.p.
@@ -212,6 +219,11 @@ function resolveFromSignal(scanCandles, signalPrice, { pullbackPct, targetPct, s
             const gainPct = ((peakPrice / entryPrice) - 1) * 100;
             if (stopTrailingOn) {
                 stopPrice = Math.max(stopPrice, trailingStopCandidate(gainPct));
+            } else if (srStopTrailingOn) {
+                const steps = Math.floor(gainPct / srStopTrailCoinStepPct);
+                if (steps > 0) {
+                    stopPrice = Math.max(stopPrice, srStopBase * (1 + steps * srStopTrailStopStepPct / 100));
+                }
             }
             if (tMode === 'continuous') {
                 const steps = Math.floor(gainPct / ttCoinStepPct);
@@ -314,6 +326,8 @@ function resolveFromSignal(scanCandles, signalPrice, { pullbackPct, targetPct, s
         } else {
             stopSteps = Math.max(0, Math.floor(peakGainPct / stopCoinStepPct));
         }
+    } else if (srStopTrailingOn) {
+        stopSteps = Math.max(0, Math.floor(peakGainPct / srStopTrailCoinStepPct));
     }
     const targetSteps = tMode === 'continuous' ? Math.max(0, Math.floor(peakGainPct / ttCoinStepPct)) : 0;
 
@@ -1620,6 +1634,14 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
     // Leque maior que o das linhas de entrada/saída (1-3) — S4/S5 é uma escolha legítima pro stop
     // (mais "de fora", mais seguro, porém mais largo). Ver maxLevels em resolveSupportResistanceAt.
     const srStopRank = Math.max(1, Math.min(5, Math.round(Number(supportResistance?.stopSupportRank ?? 2))));
+    // Stop por S/R ESCALÁVEL (estudo, só Estatísticas): em vez de ficar travado na linha de
+    // suporte, sobe em degraus junto com o preço — a cada `stopTrailingCoinStepPct`% de alta do
+    // pico (a partir da entrada), o stop sobe `stopTrailingStopStepPct`% sobre o PREÇO DO SUPORTE
+    // (degrau multiplicativo, não p.p. de distância como o trailingStop normal). Monotônico, nunca
+    // desce. Só vale com srStopEnabled ligado (precisa de uma base fixa pra escalar a partir dela).
+    const srStopTrailingEnabled = srStopEnabled && !!supportResistance?.stopTrailingEnabled;
+    const srStopTrailingCoinStepPct = Math.max(0.1, Number(supportResistance?.stopTrailingCoinStepPct ?? 1));
+    const srStopTrailingStopStepPct = Math.max(0.1, Number(supportResistance?.stopTrailingStopStepPct ?? 1));
     // 'adapt' = calcula o limite da história da moeda (ver computeAdaptiveSupportEntryPct, aplicado
     // depois de buscar srCandles). Senão, % fixo entre 0.1 e 100 (permite entrar colado no suporte).
     const srEntryMaxPctAdaptive = supportResistance?.entryMaxPct === 'adapt';
@@ -2229,6 +2251,9 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
             trailingTarget: targetModeResolved === 'continuous'
                 ? { coinStepPct: trailingTargetCoinStepPct, stepPct: trailingTargetStepPct }
                 : null,
+            srStopTrailing: srStopTrailingEnabled
+                ? { enabled: true, coinStepPct: srStopTrailingCoinStepPct, stopStepPct: srStopTrailingStopStepPct }
+                : null,
             reinforceOnStop: rfEnabled
                 ? {
                     enabled: true, mode: rfMode, addDropPct: rfAddDropPct, exitRisePct: rfExitRisePct,
@@ -2317,6 +2342,9 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
             entryMaxPct: srEntryMaxPct,
             entryMaxPctMode: srEntryMaxPctAdaptive ? 'adapt' : 'fixed',
             stopEnabled: srStopEnabled, stopSupportRank: srStopRank,
+            stopTrailingEnabled: srStopTrailingEnabled,
+            stopTrailingCoinStepPct: srStopTrailingCoinStepPct,
+            stopTrailingStopStepPct: srStopTrailingStopStepPct,
         } : null,
         supportResistanceStats: srEnabled ? computeSupportResistanceZoneStats(finalOccurrences) : null,
         srBlockedCount: srEnabled ? srBlocked : 0,

@@ -431,6 +431,9 @@ const RSI_MOM_DEFAULT_PREFS = {
   srExitResistanceRank: 3,
   srEntryMaxPct: 5,
   srStopSupportRank: 2,
+  srStopTrailingEnabled: false,
+  srStopTrailingCoinStepPct: 1,
+  srStopTrailingStopStepPct: 1,
   minVolumeUsdt: 1000000,
   excludeOpenExits: true,
   adxFilterEnabled: false,
@@ -1208,7 +1211,7 @@ function RsiMomentumStats({ autoCalc }) {
       c.minVolumeUsdt ? `Vol ${formatVolume(c.minVolumeUsdt)}` : null,
       c.targetMode === 'off' ? 'Alvo OFF' : (Number.isFinite(c.targetPct) ? `Alvo ${c.targetPct}%` : null),
       c.supportResistance?.stopEnabled
-        ? `Stop S${c.supportResistance.stopSupportRank}`
+        ? `Stop S${c.supportResistance.stopSupportRank}${c.supportResistance.stopTrailingEnabled ? ' ↑' : ''}`
         : (Number.isFinite(c.stopLossPct) ? `Stop ${c.stopLossPct}%` : null),
       c.reinforceOnStop?.enabled
         ? `Reforço ${c.reinforceOnStop.mode}${c.reinforceOnStop.reentryTrigger === 'rsiRecross' ? '+RSI' : ''}`
@@ -1801,6 +1804,43 @@ function RsiMomentumStats({ autoCalc }) {
             </select>
           )}
         </div>
+        {prefs.stopMode === 'srSupport' && (
+          <>
+            {/* Stop S/R escalável (estudo): em vez de ficar travado na linha de suporte, sobe em
+                degraus junto com o preço — a cada X% de alta, o stop sobe Y% (ver srStopTrailing
+                em analyseRsiThresholdBacktest.js). Desligado por padrão (stop fixo na linha). */}
+            <div className="flex items-center gap-1 shrink-0 pb-1" title={t('stats.tip.sr_stop_trailing')}>
+              <span className="hidden md:inline text-[9px] text-red-400/70 uppercase tracking-wider">{t('stats.sr_stop_trailing')}</span>
+              <button
+                type="button"
+                onClick={() => patchPrefs({ srStopTrailingEnabled: !prefs.srStopTrailingEnabled })}
+                className={`relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${prefs.srStopTrailingEnabled ? 'bg-p4' : 'bg-p3/40'}`}
+              >
+                <span className={`inline-block h-3 w-3 rounded-full bg-white shadow transition-transform ${prefs.srStopTrailingEnabled ? 'translate-x-3' : 'translate-x-0'}`} />
+              </button>
+            </div>
+            {prefs.srStopTrailingEnabled && (
+              <>
+                <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.sr_stop_trailing_coin_step')}>
+                  <label className="hidden md:block text-[9px] text-red-400/70 uppercase tracking-wider">{t('stats.sr_stop_trailing_coin_step')}</label>
+                  <select className={inp}
+                    value={prefs.srStopTrailingCoinStepPct}
+                    onChange={(e) => patchPrefs({ srStopTrailingCoinStepPct: Number(e.target.value) })}>
+                    {RSI_MOM_TRAILING_STEP_OPTIONS.map((v) => <option key={v} value={v}>{v}%</option>)}
+                  </select>
+                </div>
+                <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.sr_stop_trailing_stop_step')}>
+                  <label className="hidden md:block text-[9px] text-red-400/70 uppercase tracking-wider">{t('stats.sr_stop_trailing_stop_step')}</label>
+                  <select className={inp}
+                    value={prefs.srStopTrailingStopStepPct}
+                    onChange={(e) => patchPrefs({ srStopTrailingStopStepPct: Number(e.target.value) })}>
+                    {RSI_MOM_TRAILING_STEP_OPTIONS.map((v) => <option key={v} value={v}>{v}%</option>)}
+                  </select>
+                </div>
+              </>
+            )}
+          </>
+        )}
         {prefs.stopMode === 'continuous' && (
           <>
             <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.trailing_stop_step')}>
