@@ -6,6 +6,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 When presenting times to the user (signals, entries, exits, stops, candles, logs, trades, DB/API timestamps): always convert to **BRT** (America/Sao_Paulo, UTC−3). Prefer `DD/MM HH:MM` or `DD/MM HH:MM:SS`. Do not lead with UTC; mention UTC in parentheses only if needed to cross-check raw logs.
 
+## Repositório atualizado antes de agir
+
+**A cada pedido no chat** (pergunta, diagnóstico ou edição) e **antes de editar qualquer arquivo**, o projeto local tem que estar em dia com o remoto. Antes de investigar/responder/editar: `git fetch origin` + `git status -sb`.
+
+- Em dia (0 atrás) → segue.
+- Atrás de `origin/main` e working tree limpo → `git pull --ff-only` e segue.
+- Atrás mas com arquivos modificados, ou histórico divergente → **não** puxa: avisa o usuário e espera a decisão (nunca `reset --hard`/`stash` sem pedir).
+- Pedido longo: refaça a checagem antes da 1ª edição se passou tempo, ou se o usuário disser que fez pull/push.
+
+Vale também pro diagnóstico: analisar código desatualizado gera conclusão errada. Isso é sobre o checkout DESTA máquina — o código do Termux (bots) é outra coisa e o usuário atualiza lá manualmente.
+
 ## Commands
 
 ```bash
