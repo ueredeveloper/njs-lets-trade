@@ -31,6 +31,7 @@ const DETAIL_FIELD = {
     HIGHER_RSI_TOO_LOW: 'higherRsi',
     EMA_CROSS_BEARISH: 'emaCross',
     SR_NO_DISCOUNT: 'sr',
+    SR_NO_DATA: 'sr',
 };
 
 const lastLogged = new Map(); // symbol -> { reason, at }

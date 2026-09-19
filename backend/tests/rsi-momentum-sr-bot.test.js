@@ -37,11 +37,25 @@ describe('resolveSrZonesNow / checkSupportResistanceEntry', () => {
         expect(zones.supports.length + zones.resistances.length).toBeGreaterThan(0);
     });
 
-    test('janela incompleta → null (fail-open no chamador)', () => {
+    test('janela incompleta → null e o filtro BLOQUEIA (SR_NO_DATA, fail-closed)', () => {
         expect(resolveSrZonesNow({ '4h': srCandles().slice(0, 10) }, SR_CFG)).toBeNull();
         const r = checkSupportResistanceEntry({ entry: { supportResistance: SR_CFG } }, { '4h': srCandles().slice(0, 10) }, 100);
+        expect(r.allowed).toBe(false);
+        expect(r.reason).toBe('SR_NO_DATA');
+        expect(r.candles).toBe(9); // closedCandlesOnly descarta o último (em formação)
+        expect(r.required).toBe(30);
+    });
+
+    test('sem candles nenhum do intervalo do S/R → também bloqueia (SR_NO_DATA)', () => {
+        const r = checkSupportResistanceEntry({ entry: { supportResistance: SR_CFG } }, {}, 100);
+        expect(r.allowed).toBe(false);
+        expect(r.reason).toBe('SR_NO_DATA');
+        expect(r.candles).toBe(0);
+    });
+
+    test('filtro desligado com histórico curto → passa (SR_NO_DATA só vale com o S/R ligado)', () => {
+        const r = checkSupportResistanceEntry({ entry: { supportResistance: { enabled: false } } }, { '4h': srCandles().slice(0, 10) }, 100);
         expect(r.allowed).toBe(true);
-        expect(r.warmup).toBe(true);
     });
 
     test('filtro desligado → passa, sem alvo nem stop', () => {

@@ -43,6 +43,7 @@ function buildReasonLabels(config) {
     const srIv = config.entry.supportResistance?.interval ?? '4h';
     const srMaxPct = config.entry.supportResistance?.entryMaxPct ?? 5;
     const srRank = config.entry.supportResistance?.entrySupportRank ?? 1;
+    const srCandleCount = config.entry.supportResistance?.candleCount ?? 50;
     return {
         ENTRY_OFF: 'entradas pausadas na configuração',
         INSUFFICIENT_DATA: 'histórico de candles insuficiente pra calcular o RSI',
@@ -57,6 +58,7 @@ function buildReasonLabels(config) {
         HIGHER_RSI_TOO_LOW: `RSI de 1h abaixo do mínimo exigido (${higherRsiMin})`,
         EMA_CROSS_BEARISH: `EMA9 não está acima da EMA21 no ${emaCrossIv} (tendência ainda de baixa/lateral)`,
         SR_NO_DISCOUNT: `preço mais de ${srMaxPct}% acima do ${srRank}º suporte ${srIv} (sem desconto pra entrar)`,
+        SR_NO_DATA: `moeda sem histórico ${srIv} suficiente pro S/R (${srCandleCount} candles) — sem como medir a distância até o suporte`,
     };
 }
 
@@ -121,6 +123,8 @@ function fmtSignalReason(symbol, signal, reasonLabels) {
         detail = ` (candle subiu +${signal.spikeGuard.movePct}%)`;
     } else if (signal.reason === 'SR_NO_DISCOUNT' && signal.sr?.supportPrice != null) {
         detail = ` (preço +${signal.sr.distPct}% acima do suporte ${signal.sr.supportPrice})`;
+    } else if (signal.reason === 'SR_NO_DATA' && signal.sr?.candles != null) {
+        detail = ` (só ${signal.sr.candles}/${signal.sr.required} candles ${signal.sr.interval})`;
     } else if (signal.reason === 'HIGHER_RSI_TOO_LOW' && signal.higherRsi?.rsi1h != null) {
         detail = ` (RSI 1h atual: ${Number(signal.higherRsi.rsi1h).toFixed(2)})`;
     } else if (signal.reason === 'EMA_CROSS_BEARISH' && signal.emaCross?.ema9 != null) {

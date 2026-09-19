@@ -284,11 +284,17 @@ function checkEmaCrossFilter(config, cMap) {
 // intervalo escolhido (sem look-ahead — o backtest precisa de janela móvel por sinal histórico,
 // aqui o sinal é sempre "agora"). Mesmo detectSupportResistance do gráfico e do backtest.
 
+/** Candles fechados disponíveis vs. janela exigida pelo S/R (`candleCount`, mín. 20). */
+function srHistoryStatus(cMap, srCfg) {
+    const required = Math.max(20, Math.round(Number(srCfg?.candleCount ?? 50)));
+    const closed = closedCandlesOnly(cMap[srCfg?.interval ?? '4h'] ?? []);
+    return { required, closed };
+}
+
 /** { supports: [desc por preço], resistances: [asc por preço] } no instante atual, ou null se
  *  não houver janela completa ainda. Mesma forma de resolveSupportResistanceAt do backtest. */
 function resolveSrZonesNow(cMap, srCfg) {
-    const cc = Math.max(20, Math.round(Number(srCfg?.candleCount ?? 50)));
-    const closed = closedCandlesOnly(cMap[srCfg?.interval ?? '4h'] ?? []);
+    const { required: cc, closed } = srHistoryStatus(cMap, srCfg);
     if (closed.length < cc) return null;
     const window = closed.slice(closed.length - cc).map(c => ({
         openTime: c.openTime, open: c.open, high: c.high, low: c.low, close: c.close,
@@ -320,8 +326,11 @@ function pickResistance(zones, price, rank) {
  * (checkSupportResistanceFilter / targetPriceOverride / stopPriceOverride em
  * analyseRsiThresholdBacktest.js):
  *  - ENTRADA: só libera se o preço do sinal estiver no máximo `entryMaxPct`% ACIMA da linha de
- *    suporte escolhida (preço abaixo do suporte também libera). Sem zonas / sem suporte de
- *    referência → não bloqueia (fail-open, igual MACD/RSI 1h).
+ *    suporte escolhida (preço abaixo do suporte também libera). Histórico INSUFICIENTE (moeda
+ *    recém-listada, menos de `candleCount` candles fechados no intervalo do S/R) → BLOQUEIA
+ *    (`SR_NO_DATA`, fail-closed): sem a janela não dá pra saber a distância até o suporte, e liberar
+ *    às cegas deixou entrar 25% acima do S1 (牛来USDT, 18/09/2026). Janela completa mas sem
+ *    nenhuma zona detectada / sem suporte de referência → não bloqueia (fail-open).
  *  - SAÍDA: `srTargetPrice` = a `exitResistanceRank`-ésima resistência acima do preço do sinal
  *    (null se não houver) — o chamador usa como alvo fixo da bracket no lugar do targetMode.
  *  - STOP (`sr.stopEnabled`, padrão desligado): `srStopPrice` = a `stopSupportRank`-ésima linha de
@@ -335,8 +344,16 @@ function checkSupportResistanceEntry(config, cMap, signalPrice) {
     const sr = config.entry?.supportResistance;
     if (!sr?.enabled) return { allowed: true, srTargetPrice: null, srStopPrice: null };
 
+    const { required, closed } = srHistoryStatus(cMap, sr);
+    if (closed.length < required) {
+        return {
+            allowed: false, reason: 'SR_NO_DATA',
+            interval: sr.interval ?? '4h', candles: closed.length, required,
+        };
+    }
+
     const zones = resolveSrZonesNow(cMap, sr);
-    if (!zones) return { allowed: true, srTargetPrice: null, srStopPrice: null, warmup: true };
+    if (!zones) return { allowed: true, srTargetPrice: null, srStopPrice: null };
 
     const entryRank = Math.max(1, Math.min(3, Math.round(Number(sr.entrySupportRank ?? 1))));
     const exitRank = Math.max(1, Math.min(3, Math.round(Number(sr.exitResistanceRank ?? 1))));
@@ -1027,6 +1044,7 @@ module.exports = {
     checkHigherRsiFilter,
     checkEmaCrossFilter,
     resolveSrZonesNow,
+    srHistoryStatus,
     pickSupport,
     pickResistance,
     checkSupportResistanceEntry,

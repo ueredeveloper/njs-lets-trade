@@ -2113,7 +2113,10 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
             let srStopPrice = null;
             if (srEnabled) {
                 const zones = resolveSupportResistanceAt(srCandles, signalCandle.openTime, srCandleCount, srZonesCache);
-                if (zones && !checkSupportResistanceFilter(zones, signalPrice, srEntryRank, srExitRank, srEntryMaxPct)) {
+                // zones == null ⇔ histórico do S/R menor que srCandleCount (moeda recém-listada ou
+                // período recuado demais) → bloqueia, igual ao bot ao vivo (SR_NO_DATA em
+                // checkSupportResistanceEntry): sem a janela não há como medir o desconto.
+                if (!zones || !checkSupportResistanceFilter(zones, signalPrice, srEntryRank, srExitRank, srEntryMaxPct)) {
                     srBlocked++;
                     continue;
                 }

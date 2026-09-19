@@ -354,6 +354,7 @@ export const NEAR_MISS_REASON_ACRONYMS = {
   HIGHER_RSI_TOO_LOW: 'R1H-',
   EMA_CROSS_BEARISH: 'EMA-',
   SR_NO_DISCOUNT: 'SR-',
+  SR_NO_DATA: 'SR0',
 };
 
 export function nearMissReasonAcronym(reason) {
