@@ -82,7 +82,7 @@ function parseCashActiveKey(symbol) {
 // Rótulo de 1 letra pro botão de fase na coluna de ações (à direita, ver td actionsColWidth)
 // — coluna estreita demais pro texto completo (AGUARDANDO/PENDENTE/COMPRADO) do badge cheio
 // usado no resto da UI (modal de estado, MultitradePanel).
-const BOT_PHASE_ACTION_LABEL = { WATCHING: 'A', PENDING: 'P', BOUGHT: 'C', FAILED: 'F' };
+const BOT_PHASE_ACTION_LABEL = { WATCHING: 'A', PENDING: 'P', BOUGHT: 'C', FAILED: 'F', REBUY: 'R' };
 
 const HIGHLIGHT_FILTERS = {
   ALTA_BINANCE: 'Favoritos|Alta|Binance',
@@ -1981,7 +1981,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
               const botEntries = isBotFavRow ? (isMT ? mtEntries : (vwapEntry ? [vwapEntry] : (bbEntry ? [bbEntry] : (rmEntry ? [rmEntry] : [])))) : null;
               const botPhase = botEntries ? symbolPhaseSummary(botEntries) : null;
               const botPh = botPhase ? multitradePhaseBadge(botPhase, lang) : null;
-              const boughtEntry = botEntries ? botEntries.find(e => e.phase === 'BOUGHT' && e.buyTime) : null;
+              const boughtEntry = botEntries ? botEntries.find(e => e.phase === 'BOUGHT' && !e.awaitingReentry && e.buyTime) : null;
               const isBbDisabledRow = isBollingerBandsFavView && bbDisabled;
 
               return (

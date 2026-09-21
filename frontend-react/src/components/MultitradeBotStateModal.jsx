@@ -2,9 +2,9 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   STRATEGY_LABELS, STRATEGY_COLORS, normalizeStrategyId,
 } from '../constants/strategyPresets';
-import { multitradePhaseBadge, PHASE_HINT_PT, fmtBuyTimeShort } from '../utils/multitradePhase';
+import { multitradePhaseBadge, displayPhase, PHASE_HINT_PT, fmtBuyTimeShort } from '../utils/multitradePhase';
 import { useI18n } from '../i18n';
-import { fetchBinancePrice, fetchGatePrice } from '../services/api';
+import { fetchBinancePrice, fetchGatePrice, fetchMultitradeRescue } from '../services/api';
 import BracketDragSlider from './BracketDragSlider';
 
 const MT_COLOR = '#22d3ee';
@@ -26,13 +26,16 @@ function localInputToIso(value) {
 
 function PhaseStatusCard({ phase, entry }) {
   const { lang } = useI18n();
-  const ph = multitradePhaseBadge(phase, lang);
-  const isBought = phase === 'BOUGHT';
+  const shown = displayPhase(entry) === 'REBUY' ? 'REBUY' : phase;
+  const ph = multitradePhaseBadge(shown, lang);
+  const isRebuy = shown === 'REBUY';
+  const isBought = phase === 'BOUGHT' && !isRebuy;
   const isPending = phase === 'PENDING';
   const isFailed = phase === 'FAILED';
 
   let botDoes = 'Monitora sinais de entrada (cruzamento de MAs) e compra automaticamente quando der.';
   if (isBought) botDoes = 'Considera que você tem posição aberta e monitora sinais de saída (cruzamento inverso, stop-loss).';
+  if (isRebuy) botDoes = 'A posição foi vendida no stop (reforço rearm). Não há moeda do bot na carteira: ele acompanha o RSI e recompra sozinho quando recruzar.';
   if (isPending) botDoes = 'Aguardando preço de compra (estado pendente legado).';
   if (isFailed) botDoes = 'Não faz nada — a última tentativa de compra foi rejeitada pela corretora. Só volta a operar quando você rearmar a moeda pra AGUARDANDO.';
 
@@ -44,7 +47,7 @@ function PhaseStatusCard({ phase, entry }) {
           {ph.text}
         </span>
       </div>
-      <p className="text-[10px] text-p5/55 leading-relaxed">{PHASE_HINT_PT[phase] ?? PHASE_HINT_PT.WATCHING}</p>
+      <p className="text-[10px] text-p5/55 leading-relaxed">{PHASE_HINT_PT[shown] ?? PHASE_HINT_PT.WATCHING}</p>
       <p className="text-[9px] text-p5/40 leading-relaxed">
         <span className="text-p5/60 font-semibold">Bot: </span>
         {botDoes}
@@ -237,6 +240,75 @@ function BuyMoreCard({ symbol, exchange, strategyId, defaultAmount, currentBuyPr
   );
 }
 
+/** "Resgatar da corretora": lê saldo, trades e ordens abertas e devolve pro modal preencher
+ *  preço médio/quantidade/hora — e oferecer ADOTAR a OCO que já está aberta (em vez do bot tentar
+ *  colocar outra por cima). Pra quando o bot comprou mas não conseguiu gravar a compra/OCO. */
+function RescueBox({ symbol, strategyId, rescue, adoptOco, onRescued, onToggleAdopt }) {
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState(null);
+
+  async function run() {
+    setLoading(true);
+    setErr(null);
+    try {
+      onRescued(await fetchMultitradeRescue({ symbol, strategyId }));
+    } catch (e) {
+      setErr(e?.message ?? 'Falha ao consultar a corretora');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const r = rescue;
+  return (
+    <div className="rounded p-2 space-y-1.5" style={{ background: '#0b1a20', border: `1px solid ${MT_COLOR}44` }}>
+      <p className="text-[9px] text-p5/50 leading-relaxed">
+        Lê a corretora (saldo, trades e ordens abertas) e preenche preço médio, quantidade, hora e a OCO
+        já aberta — use quando o bot comprou mas não conseguiu gravar a compra.
+      </p>
+      <button type="button" disabled={loading} onClick={run}
+        className="w-full py-1.5 rounded text-[10px] font-bold disabled:opacity-50"
+        style={{ background: `${MT_COLOR}22`, color: MT_COLOR, border: `1px solid ${MT_COLOR}55` }}>
+        {loading ? 'Consultando a corretora…' : '🔎 Resgatar da corretora'}
+      </button>
+      {err && <p className="text-[10px] text-red-400">{err}</p>}
+      {r && !r.hasPosition && (
+        <p className="text-[10px] text-amber-400">
+          Nenhuma posição encontrada na corretora (saldo total {Number(r.totalQty ?? 0)}).
+        </p>
+      )}
+      {r?.hasPosition && (
+        <div className="text-[9px] font-mono text-p5/70 space-y-0.5">
+          <div>Saldo: {r.totalQty} (livre {r.freeQty} · em ordens {r.lockedQty})</div>
+          <div>
+            Preço médio: {r.avgPrice != null ? r.avgPrice : '—'}{' '}
+            {r.avgPrice != null && (r.confident
+              ? <span className="text-emerald-400">✓ confere com o saldo</span>
+              : <span className="text-amber-400">⚠ estimado (trades ≠ saldo) — confira</span>)}
+          </div>
+          <div>Compra: {r.buyTime ? fmtBuyTimeShort(r.buyTime) : '— (preencha)'}</div>
+          {r.oco ? (
+            <label className="flex items-start gap-2 cursor-pointer pt-1">
+              <input type="checkbox" checked={adoptOco} onChange={e => onToggleAdopt(e.target.checked)}
+                className="mt-0.5 shrink-0 accent-cyan-500" />
+              <span className="leading-snug text-p5/80">
+                Adotar a OCO já aberta #{r.oco.orderListId} — alvo {r.oco.targetPrice} / stop {r.oco.stopPrice}
+              </span>
+            </label>
+          ) : (
+            <div className="text-amber-400">Sem OCO aberta na corretora.</div>
+          )}
+          {r.otherOrders?.length > 0 && (
+            <div className="text-amber-400">
+              ⚠ {r.otherOrders.length} outra(s) ordem(ns) de venda aberta(s) na corretora — o bot não as gerencia.
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function BoughtFormFields({ buyPrice, buyQty, buyTime, onPrice, onQty, onTime }) {
   return (
     <>
@@ -284,6 +356,8 @@ export default function MultitradeBotStateModal({
   const [showEditBought, setShowEditBought] = useState(false);
   const [confirmRemoveCurated, setConfirmRemoveCurated] = useState(false);
   const [removingCurated, setRemovingCurated] = useState(false);
+  const [rescue, setRescue] = useState(null);
+  const [adoptOco, setAdoptOco] = useState(false);
 
   const entry = activeEntries.find(e => normalizeStrategyId(e.strategyId) === strategyId)
     ?? activeEntries[0];
@@ -303,7 +377,31 @@ export default function MultitradeBotStateModal({
     setConfirmSold(false);
     setShowEditBought(false);
     setConfirmRemoveCurated(false);
+    setRescue(null);
+    setAdoptOco(false);
   }, [entry?.id, entry?.phase, entry?.buyPrice, entry?.buyQty, entry?.buyTime]);
+
+  // Preenche o formulário com o que a corretora tem de fato (ver RescueBox).
+  function handleRescued(r) {
+    setRescue(r);
+    setError(null);
+    if (!r?.hasPosition) { setAdoptOco(false); return; }
+    if (r.avgPrice != null) setBuyPrice(String(Number(Number(r.avgPrice).toPrecision(8))));
+    if (r.totalQty > 0) setBuyQty(String(Number(Number(r.totalQty).toFixed(8))));
+    if (r.buyTime) setBuyTime(toLocalInputValue(r.buyTime));
+    setAdoptOco(!!r.oco);
+  }
+
+  const rescueBox = entry && (
+    <RescueBox
+      symbol={symbol}
+      strategyId={normalizeStrategyId(entry.strategyId)}
+      rescue={rescue}
+      adoptOco={adoptOco}
+      onRescued={handleRescued}
+      onToggleAdopt={setAdoptOco}
+    />
+  );
 
   async function handleRemoveCurated() {
     if (!entry || !onRemoveCurated) return;
@@ -335,6 +433,7 @@ export default function MultitradeBotStateModal({
         payload.buyPrice = price;
         payload.buyQty = qty;
         payload.buyTime = timeIso;
+        if (rescue?.oco && adoptOco) payload.adoptOrderListId = rescue.oco.orderListId;
       }
       await onConfirm(payload);
       onCancel?.();
@@ -423,9 +522,10 @@ export default function MultitradeBotStateModal({
                 <ActionCard
                   number={1}
                   title="Registrar compra manual → BOUGHT"
-                  when="Use se você comprou na corretora por conta própria e quer que o bot gerencie a saída."
+                  when="Use se você comprou na corretora por conta própria (ou o bot comprou mas não conseguiu gravar) e quer que o bot gerencie a saída."
                   accent="#22c55e"
                 >
+                  {rescueBox}
                   <BoughtFormFields
                     buyPrice={buyPrice} buyQty={buyQty} buyTime={buyTime}
                     onPrice={setBuyPrice} onQty={setBuyQty} onTime={setBuyTime}
@@ -464,7 +564,7 @@ export default function MultitradeBotStateModal({
                   <ActionCard
                     number={2}
                     title="Corrigir dados da compra"
-                    when="Ajuste preço, quantidade ou hora se o registro estiver errado (continua BOUGHT)."
+                    when="Ajuste preço, quantidade ou hora se o registro estiver errado (continua BOUGHT) — ou resgate da corretora a compra e a OCO que o bot não conseguiu gravar."
                     accent="#94a3b8"
                   >
                     {!showEditBought ? (
@@ -475,6 +575,7 @@ export default function MultitradeBotStateModal({
                       </button>
                     ) : (
                       <>
+                        {rescueBox}
                         <BoughtFormFields
                           buyPrice={buyPrice} buyQty={buyQty} buyTime={buyTime}
                           onPrice={setBuyPrice} onQty={setBuyQty} onTime={setBuyTime}
@@ -488,7 +589,7 @@ export default function MultitradeBotStateModal({
                     )}
                   </ActionCard>
 
-                  {onBuyMore && (
+                  {onBuyMore && !entry?.awaitingReentry && (
                     <ActionCard
                       number={3}
                       title="Comprar mais (média de preço)"
@@ -534,6 +635,7 @@ export default function MultitradeBotStateModal({
                     when="Se a ordem pendente foi preenchida ou você comprou manualmente."
                     accent="#22c55e"
                   >
+                    {rescueBox}
                     <BoughtFormFields
                       buyPrice={buyPrice} buyQty={buyQty} buyTime={buyTime}
                       onPrice={setBuyPrice} onQty={setBuyQty} onTime={setBuyTime}

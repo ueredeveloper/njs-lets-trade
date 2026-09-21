@@ -24,8 +24,14 @@ const { sbReq } = require('./supabaseRest');
 const { sendWhatsApp } = require('../whatsapp');
 const { isGateDustResult, estimateDustClosePnl } = require('../gate/gateMarketSell');
 const { computeStopLossFloor: defaultComputeStopLossFloor } = require('./stopLossFloor');
+const {
+  stashPendingState, peekPendingState, clearPendingState, markPendingAttempt,
+} = require('./pendingState');
 
 const G = '\x1b[32m', R = '\x1b[31m', Y = '\x1b[33m', X = '\x1b[0m';
+// Pendência local mais velha que isso é descartada (a posição já teve tempo de ser resolvida na
+// mão pelo painel) — evita reaplicar um patch fóssil por cima de um estado que mudou depois.
+const PENDING_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_ENTRY_COOLDOWN_HOURS = 4;
 
 function entryCooldownHours(config) {
@@ -153,13 +159,80 @@ function entrySignalFieldsFromState(state) {
   };
 }
 
+/**
+ * `durableState` (opt-in — hoje só o rsi-momentum): a compra e a bracket/OCO passam por um journal
+ * local (pendingState.js) ANTES do PATCH no Supabase. Se o Supabase não responder, o bot segue
+ * (a posição já existe na corretora) e `flushPendingState` reenvia a cada tick até gravar.
+ */
 function createTradeExecution({
   botLabel, buildReasonLines, computeStopLossFloor = defaultComputeStopLossFloor,
-  extraBuyLogLines, extraInitialRulesState, buildExitReasonLines,
+  extraBuyLogLines, extraInitialRulesState, buildExitReasonLines, durableState = false,
 }) {
   let rulesStateColumnOk = true;
 
   async function saveState(id, update, log) {
+    if (!durableState || !peekPendingState(id)) return patchState(id, update, log);
+    // Há compra/OCO ainda não gravada: mescla este update no journal (o mais novo vence) e tenta
+    // gravar TUDO junto. Falhou → não derruba o tick, o journal segue guardando (flush reenvia).
+    const entry = stashPendingState(id, update);
+    try {
+      await patchState(id, entry.patch, log);
+      clearPendingState(id);
+    } catch (err) {
+      markPendingAttempt(id);
+      log?.(`${Y}⚠️  Supabase indisponível (${err.message}) — estado guardado localmente, reenvio no próximo tick${X}`);
+    }
+  }
+
+  /**
+   * Reenvia ao Supabase o que ficou no journal local. Devolve `true` se AINDA há pendência (o
+   * chamador deve pular o tick: decidir em cima de um estado desatualizado — ex.: `BOUGHT` só na
+   * memória — é o que gerava o "posição órfã" e a perda da OCO).
+   */
+  async function flushPendingState(id, log) {
+    const entry = peekPendingState(id);
+    if (!entry) return false;
+    const label = `${entry.symbol ?? '?'} [${entry.strategyId ?? '?'}]`;
+
+    if (Date.now() - new Date(entry.stashedAt).getTime() > PENDING_MAX_AGE_MS) {
+      clearPendingState(id);
+      log?.(`${Y}⚠️  Pendência local de ${label} com mais de 24h — descartada${X}`);
+      sendWhatsApp(`⚠️ ${botLabel} ${label}\nPendência local (compra/OCO não gravada no Supabase) com mais de 24h foi descartada. Confira o estado da moeda no painel (botão C → Resgatar da corretora).`);
+      return false;
+    }
+
+    try {
+      const rows = await sbReq('GET', 'rsi_multi_bot_state', null, `?id=eq.${id}&select=id,phase,buy_time&limit=1`);
+      const row = rows?.[0];
+      const p = entry.patch;
+      const sameBuyTime = !row?.buy_time || !p.buy_time
+        || new Date(row.buy_time).getTime() === new Date(p.buy_time).getTime();
+      let stale = null;
+      if (!row) stale = 'linha do bot não existe mais';
+      else if (p.phase === 'BOUGHT' && row.phase === 'BOUGHT' && !sameBuyTime) stale = 'já existe outra compra registrada';
+      else if (p.phase == null && row.phase !== 'BOUGHT') stale = 'a posição já foi encerrada';
+      if (stale) {
+        clearPendingState(id);
+        log?.(`${Y}⚠️  Pendência local de ${label} descartada — ${stale}${X}`);
+        return false;
+      }
+
+      await patchState(id, p, log);
+      clearPendingState(id);
+      log?.(`${G}✅ Estado pendente de ${label} gravado no Supabase (compra/OCO que estavam só no journal local)${X}`);
+      sendWhatsApp(`✅ ${botLabel} ${label}\nCompra/OCO que estavam guardadas localmente foram gravadas no Supabase.`);
+      return false;
+    } catch (err) {
+      markPendingAttempt(id);
+      const attempts = peekPendingState(id)?.attempts ?? 1;
+      if (attempts === 1 || attempts % 10 === 0) {
+        log?.(`${Y}⚠️  Ainda sem gravar o estado pendente de ${label} (tentativa ${attempts}): ${err.message}${X}`);
+      }
+      return true;
+    }
+  }
+
+  async function patchState(id, update, log) {
     const payload = { ...update, updated_at: new Date().toISOString() };
     if (!rulesStateColumnOk && payload.rules_state !== undefined) {
       delete payload.rules_state;
@@ -230,13 +303,28 @@ function createTradeExecution({
         : {}),
       ...(extraRulesState ?? {}),
     };
-    await saveState(rowId, {
+    const buyPatch = {
       phase: 'BOUGHT', buy_price: avgPrice, buy_qty: filledQty,
       buy_usdt: quoteQty, buy_time: buyTime,
       rsi_entry: entryMeta.ma1,
       rules_state: session.rulesState,
       ...entrySignalFields(entryMeta),
-    }, log);
+    };
+    // Write-ahead: a compra JÁ aconteceu na corretora — guarda local antes do PATCH, pra que uma
+    // falha do Supabase (ou queda do processo) não faça o bot esquecer a posição e a OCO.
+    let journaled = false;
+    if (durableState) {
+      try {
+        stashPendingState(rowId, buyPatch, { symbol, strategyId });
+        journaled = true;
+      } catch (err) {
+        log?.(`${Y}⚠️  Não consegui gravar o journal local da compra (${err.message}) — segue só com o Supabase${X}`);
+      }
+    }
+    await saveState(rowId, buyPatch, log);
+    if (journaled && peekPendingState(rowId)) {
+      sendWhatsApp(`⚠️ ${botLabel} [${strategyId}] ${symbol}\nCompra executada na corretora, mas o Supabase não respondeu ao registrar. Guardei a compra (e a OCO, quando colocada) localmente e reenvio sozinho a cada tick — não precisa fazer nada. Se preferir, use o botão C → "Resgatar da corretora".`);
+    }
 
     const reasonLines = buildReasonLines ? buildReasonLines(strategy.config, entryMeta) : [];
 
@@ -443,7 +531,7 @@ function createTradeExecution({
   }
 
   return {
-    saveState, insertTrade, hasOpenPosition, resetOrphanPosition,
+    saveState, flushPendingState, insertTrade, hasOpenPosition, resetOrphanPosition,
     parseRulesState, postExitRulesState, resolveLastExitTime, resolveLastExitReason,
     executeBuy, recordBuyFill, executeSell, recordBracketFill,
   };

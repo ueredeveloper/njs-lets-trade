@@ -57,6 +57,7 @@ const { binancePlaceRestingLimitBuy } = require('../binance/tradeClient');
 const { getAvgPrice } = require('../binance/ocoClient');
 const { gateLastPrice } = require('../gate/gateAccount');
 const { buildAdapter: buildTradeAdapter, syncExchangeClocks } = require('../bot/shared/buildAdapter');
+const { summarizeSellOrders, buildRescueReport } = require('../bot/shared/rescuePosition');
 
 // Mesmo buffer conservador aplicado pelos bots (ma-cross-bot.js) na quantidade "utilizável"
 // após a compra, pra sobrar margem de segurança na hora de vender (taxa + arredondamento).
@@ -692,6 +693,18 @@ function parseEntryFailure(rulesState) {
   return { message: String(ef.message), at: ef.at ?? null };
 }
 
+/** Reforço rearm com `reentryTrigger: 'rsiRecross'` que JÁ vendeu no stop e espera o RSI recruzar pra
+ *  recomprar (rules_state.rearm.awaitingReentry). A fase continua BOUGHT no banco de propósito (o ciclo
+ *  do reforço segue aberto), mas a carteira está SEM a moeda — o painel precisa mostrar isso em vez de
+ *  "comprado" (caso SKYAIUSDT 21/09: stop na OCO às 01:43 BRT, painel seguia "C"). */
+function parseAwaitingReentry(rulesState) {
+  let rs = rulesState;
+  if (typeof rs === 'string') {
+    try { rs = JSON.parse(rs); } catch { return false; }
+  }
+  return !!(rs?.rearm?.active && rs.rearm.awaitingReentry);
+}
+
 /** Pernas do ciclo "Reforço no stop" (rearm/ladder) da posição ABERTA — gravadas perna a perna
  *  pelo rsi-momentum-bot em rules_state.rearm.legTimeline / rules_state.reinforce.legTimeline
  *  (ver startRearmReinforce / handleReinforceLadder). Mapeia pro MESMO shape que o backtest já
@@ -756,6 +769,7 @@ async function enrichMultitradeEntriesWithState(entries) {
       exitBracket: parseExitBracket(st?.rules_state),
       entryLimit: parseEntryLimit(st?.rules_state),
       entryFailure: parseEntryFailure(st?.rules_state),
+      awaitingReentry: st?.phase === 'BOUGHT' && parseAwaitingReentry(st?.rules_state),
       reinforceLegs: parseReinforceLegs(st?.rules_state, {
         buyTime: st?.buy_time ?? null,
         buyPrice: st?.buy_price != null ? Number(st.buy_price) : null,
@@ -1331,7 +1345,81 @@ async function upsertBotStatePatch(fav, symbol, strategyId, patch) {
   return existing ?? null;
 }
 
-// PATCH /services/sb/multitrade-bot-state — ajuste manual de fase (WATCHING / BOUGHT)
+// GET /services/sb/multitrade-rescue-position?symbol=&strategyId= — "Resgatar da corretora" (modal
+// Estado do bot, botão C): lê SALDO (livre + travado em ordens), preço médio/hora da compra (FIFO
+// dos trades próprios, 7 dias) e a OCO de saída já aberta, pra o usuário registrar/corrigir a
+// posição quando o bot não conseguiu gravar a compra. Só leitura — não altera nada.
+router.get('/multitrade-rescue-position', getUserId, async (req, res) => {
+  const symbol = req.query.symbol?.toUpperCase();
+  const strategyId = normStrategyId(req.query.strategyId ?? req.query.strategy_id ?? 'ma-cross');
+  if (!symbol) return res.status(400).json({ error: 'symbol obrigatório' });
+  if (!strategyId) return res.status(400).json({ error: 'strategyId obrigatório' });
+
+  const { data: fav, error: favErr } = await supabase
+    .from('multitrade_favorites')
+    .select('*')
+    .eq('user_id', req.userId)
+    .eq('symbol', symbol)
+    .eq('strategy_id', strategyId)
+    .single();
+  if (favErr || !fav) return res.status(404).json({ error: 'favorito não encontrado' });
+
+  try {
+    if (fav.exchange !== 'gate') await syncExchangeClocks();
+    const adapter = buildTradeAdapter(fav.exchange, symbol);
+    const [freeQty, orders, trades, lastPrice] = await Promise.all([
+      adapter.getBaseBalance(),
+      adapter.getOpenOrders(),
+      // Sem trades o preço médio/hora vêm vazios e o usuário preenche à mão — não bloqueia o resgate.
+      adapter.getOwnTrades(500).catch(() => []),
+      (fav.exchange === 'gate' ? gateLastPrice(toGateSymbol(symbol)) : getAvgPrice(symbol)).catch(() => null),
+    ]);
+    res.json({
+      exchange: fav.exchange, symbol, lastPrice,
+      ...buildRescueReport({ freeQty, orders, trades, lastPrice }),
+    });
+  } catch (err) {
+    res.status(500).json({ error: `Falha ao consultar a corretora: ${err.message}` });
+  }
+});
+
+/** rules_state com a OCO JÁ ABERTA na corretora adotada em `exitBracket` — o bot passa a
+ *  acompanhá-la (pollExitBracket → alvo/stop → reforço no stop) em vez de tentar colocar outra
+ *  por cima (falharia por saldo travado). Confere na corretora que a lista existe mesmo aberta. */
+async function buildAdoptedRulesState({ fav, symbol, strategyId, buyPrice, orderListId }) {
+  if (fav.exchange === 'gate') throw new Error('adoção de OCO só existe na Binance');
+  await syncExchangeClocks();
+  const adapter = buildTradeAdapter(fav.exchange, symbol);
+  const { oco } = summarizeSellOrders(await adapter.getOpenOrders());
+  if (!oco || String(oco.orderListId) !== String(orderListId)) {
+    throw new Error(`a OCO ${orderListId} não está mais aberta na corretora`);
+  }
+  const { data: st } = await supabase
+    .from('rsi_multi_bot_state')
+    .select('rules_state')
+    .eq('symbol', symbol)
+    .eq('strategy_id', strategyId)
+    .maybeSingle();
+  let rs = st?.rules_state;
+  if (typeof rs === 'string') { try { rs = JSON.parse(rs); } catch { rs = null; } }
+  // entryLimit/entryFailure ficam pra trás: a compra agora está registrada.
+  const { entryLimit, entryFailure, ...keep } = rs ?? {};
+  const peak = Number(keep.stopPeakPrice) > 0 ? Number(keep.stopPeakPrice) : Number(buyPrice);
+  return {
+    ...keep,
+    stopPeakPrice: peak,
+    exitBracket: {
+      exchange: 'binance', legs: oco.legs, orderListId: oco.orderListId,
+      targetPrice: oco.targetPrice, stopPrice: oco.stopPrice,
+      peakPrice: peak, placedAt: new Date().toISOString(), adopted: true,
+    },
+    exitBracketError: null,
+  };
+}
+
+// PATCH /services/sb/multitrade-bot-state — ajuste manual de fase (WATCHING / BOUGHT).
+// Com phase BOUGHT aceita `adoptOrderListId` (OCO aberta na corretora, vinda do resgate) —
+// ver buildAdoptedRulesState.
 router.patch('/multitrade-bot-state', getUserId, async (req, res) => {
   const symbol = req.body?.symbol?.toUpperCase();
   const strategyId = normStrategyId(req.body?.strategyId ?? req.body?.strategy_id ?? 'ma-cross');
@@ -1362,6 +1450,16 @@ router.patch('/multitrade-bot-state', getUserId, async (req, res) => {
     });
   } catch (err) {
     return res.status(400).json({ error: err.message });
+  }
+
+  if (phase === 'BOUGHT' && req.body.adoptOrderListId != null) {
+    try {
+      patch.rules_state = await buildAdoptedRulesState({
+        fav, symbol, strategyId, buyPrice: patch.buy_price, orderListId: req.body.adoptOrderListId,
+      });
+    } catch (err) {
+      return res.status(409).json({ error: `Não foi possível adotar a OCO: ${err.message}` });
+    }
   }
 
   try {

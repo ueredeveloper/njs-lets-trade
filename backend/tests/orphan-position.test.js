@@ -5,7 +5,7 @@ describe('reconstructOpenLotFifo', () => {
     const lot = reconstructOpenLotFifo([
       { time: 1, side: 'buy', qty: 100, price: 2 },
     ]);
-    expect(lot).toEqual({ qty: 100, avgPrice: 2 });
+    expect(lot).toEqual({ qty: 100, avgPrice: 2, firstTime: 1 });
   });
 
   test('round-trip fechado não deixa resíduo (compra + venda total)', () => {

@@ -339,11 +339,13 @@ function buildEntryReasonLines(config, entryMeta) {
 // saveState/hasOpenPosition/resetOrphanPosition/parseRulesState/executeSell/recordBracketFill/
 // recordBuyFill são genéricos — ver backend/bot/shared/tradeExecution.js.
 const {
-  saveState, hasOpenPosition, resetOrphanPosition,
+  saveState, flushPendingState, hasOpenPosition, resetOrphanPosition,
   parseRulesState, executeSell, recordBracketFill, recordBuyFill,
 } = createTradeExecution({
   botLabel: BOT_LABEL,
   buildReasonLines: buildEntryReasonLines,
+  // Compra + OCO passam por journal local antes do Supabase (ver shared/pendingState.js).
+  durableState: true,
 });
 
 /** Mensagem explicando que a Binance rejeitaria o alvo/stop calculado (longe demais do preço
@@ -582,6 +584,11 @@ async function tick(rowId, adapter, strategy, log, session, stopSelf) {
   const specs = getRequiredSpecs(config);
   const cMap  = await fetchCandleMap(adapter, specs);
 
+  // Compra/OCO que só chegou no journal local (Supabase fora do ar quando a compra fechou):
+  // reenvia ANTES de ler o estado. Se ainda não deu, pula o tick — decidir em cima do estado
+  // velho do Supabase (WATCHING) com a posição só na memória é o que virava "posição órfã".
+  if (await flushPendingState(rowId, log)) return { phase: session.phase ?? 'BOUGHT' };
+
   const rows = await sbReq('GET', 'rsi_multi_bot_state', null, `?id=eq.${rowId}&limit=1`);
   const state = rows?.[0];
   if (!state) return { phase: 'WATCHING' };
@@ -601,7 +608,14 @@ async function tick(rowId, adapter, strategy, log, session, stopSelf) {
     const orphanKey = `${symbol}|${strategyId}`;
     const liveCandles = cMap[config.entry.interval] ?? [];
     const lastPrice = liveCandles.length ? parseFloat(liveCandles[liveCandles.length - 1].close) : null;
-    const orphan = await detectOrphanPosition({ adapter, lastPrice }).catch(() => null);
+    // Com limite de entrada GTC armada (PENDING + rules_state.entryLimit) o saldo na corretora é o
+    // fill ESPERADO dessa ordem, não uma posição órfã — quem trata é o poll logo abaixo (com o
+    // entryMeta completo: hora do sinal, RSI, S/R). Rodar a detecção antes dele reconciliava todo
+    // fill de pullback pelo caminho "órfã" (aviso falso no WhatsApp + entry_signal_time/rsi_entry
+    // nulos + níveis S/R perdidos — caso real: BOMEUSDT 21/09).
+    const limitArmed = typeof adapter.pollRestingLimitBuy === 'function'
+      && !!(parseRulesState(state).entryLimit ?? session.rulesState?.entryLimit);
+    const orphan = limitArmed ? null : await detectOrphanPosition({ adapter, lastPrice }).catch(() => null);
     if (orphan?.confident) {
       log(`${Y}⚠️  Posição órfã na corretora (${orphan.qty} ${symbol}, sem registro no Supabase) — reconciliando pela compra que os trades recentes confirmam...${X}`);
       const entryMeta = {
@@ -655,46 +669,52 @@ async function tick(rowId, adapter, strategy, log, session, stopSelf) {
         return { phase: 'WATCHING' };
       }
 
-      if (poll.filled) {
-        log(`${G}✅ Limite @ ${fmtPrice(rulesWatch.entryLimit.price)} preenchida (pullback)${X}`);
-        const bought = await recordBuyFill({
-          rowId, strategy, log, session,
-          entryMeta: rulesWatch.entryLimit.entryMeta ?? {
-            entryDesc: rulesWatch.entryLimit.entryDesc,
-            close: poll.avgPrice,
-            limitPrice: rulesWatch.entryLimit.price,
-            signalOpenTime: rulesWatch.entryLimit.signalOpenTime,
-            signalPrice: rulesWatch.entryLimit.signalPrice,
-          },
-          capital, strategyId, symbol,
-          result: { filledQty: poll.filledQty, quoteQty: poll.quoteQty, avgPrice: poll.avgPrice },
-        });
-        if (bought) {
-          await persistSrLevels({
-            rowId, session, log, buyPrice: bought.avgPrice,
-            entryMeta: rulesWatch.entryLimit.entryMeta,
-          });
-          await placeInitialBracket({
-            rowId, adapter, config, session, log,
-            filledQty: bought.filledQty, buyPrice: bought.avgPrice, symbol, strategyId,
-          });
+      if (!poll.filled) {
+        const expiry = checkEntryLimitExpired(config, cMap, rulesWatch.entryLimit);
+        if (!expiry.expired && poll.open !== false) {
+          return { phase: 'WATCHING', entryLimit: { waiting: true, ...expiry } };
         }
-        return { phase: bought ? 'BOUGHT' : 'WATCHING' };
-      }
-
-      const expiry = checkEntryLimitExpired(config, cMap, rulesWatch.entryLimit);
-      if (expiry.expired || poll.open === false) {
+        let cancelled = null;
         try {
-          if (poll.open !== false) await adapter.cancelRestingLimitBuy(rulesWatch.entryLimit);
+          if (poll.open !== false) cancelled = await adapter.cancelRestingLimitBuy(rulesWatch.entryLimit);
         } catch (err) {
           log(`${Y}⚠️  Falha ao cancelar limite expirada: ${err.message}${X}`);
         }
-        const cancelReason = expiry.expired
-          ? `${expiry.need} candles ${expiry.interval} sem fill` : `status ${poll.status}`;
-        return retireAutoFavorite({ rowId, symbol, log, stopSelf, session, reason: `pullback não preencheu — ${cancelReason}` });
+        // Fill PARCIAL que só aparece ao cancelar (executedQty > 0): a corretora já tem posição —
+        // segue como compra em vez de apagar o favorito e deixar o saldo sem dono.
+        if (cancelled?.filled) {
+          poll = cancelled;
+        } else {
+          const cancelReason = expiry.expired
+            ? `${expiry.need} candles ${expiry.interval} sem fill` : `status ${poll.status}`;
+          return retireAutoFavorite({ rowId, symbol, log, stopSelf, session, reason: `pullback não preencheu — ${cancelReason}` });
+        }
       }
 
-      return { phase: 'WATCHING', entryLimit: { waiting: true, ...expiry } };
+      log(`${G}✅ Limite @ ${fmtPrice(rulesWatch.entryLimit.price)} preenchida (pullback)${X}`);
+      const bought = await recordBuyFill({
+        rowId, strategy, log, session,
+        entryMeta: rulesWatch.entryLimit.entryMeta ?? {
+          entryDesc: rulesWatch.entryLimit.entryDesc,
+          close: poll.avgPrice,
+          limitPrice: rulesWatch.entryLimit.price,
+          signalOpenTime: rulesWatch.entryLimit.signalOpenTime,
+          signalPrice: rulesWatch.entryLimit.signalPrice,
+        },
+        capital, strategyId, symbol,
+        result: { filledQty: poll.filledQty, quoteQty: poll.quoteQty, avgPrice: poll.avgPrice },
+      });
+      if (bought) {
+        await persistSrLevels({
+          rowId, session, log, buyPrice: bought.avgPrice,
+          entryMeta: rulesWatch.entryLimit.entryMeta,
+        });
+        await placeInitialBracket({
+          rowId, adapter, config, session, log,
+          filledQty: bought.filledQty, buyPrice: bought.avgPrice, symbol, strategyId,
+        });
+      }
+      return { phase: bought ? 'BOUGHT' : 'WATCHING' };
     }
 
     const signal = evaluateEntrySignal(config, cMap);

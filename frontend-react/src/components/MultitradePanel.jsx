@@ -7,7 +7,7 @@ import MultitradeSellModal from './MultitradeSellModal';
 import MultitradeBuyModal from './MultitradeBuyModal';
 import { fetchCandlesticksAndCloud, fetchMultitradeTrades } from '../services/api';
 import { loadMultitradeSymbolChart } from '../utils/multitradeChart';
-import { multitradePhaseBadge, symbolPhaseSummary, fmtBuyTimeShort } from '../utils/multitradePhase';
+import { multitradePhaseBadge, symbolPhaseSummary, displayPhase, fmtBuyTimeShort } from '../utils/multitradePhase';
 import {
   compareMacrossFavorites, filterMacrossFavorites, formatMacrossStatusBadge,
   loadMacrossFavSort, isMaCrossEntry,
@@ -210,8 +210,9 @@ export default function MultitradePanel() {
                 const activeEntries = entries.filter(e => e.enabled !== false);
                 const summaryPhase = symbolPhaseSummary(activeEntries);
                 const ph = multitradePhaseBadge(summaryPhase, lang);
-                const boughtEntry = activeEntries.find(e => e.phase === 'BOUGHT' && e.buyTime);
-                const sellableEntry = activeEntries.find(e => e.phase === 'BOUGHT') ?? null;
+                const boughtEntry = activeEntries.find(e => e.phase === 'BOUGHT' && !e.awaitingReentry && e.buyTime);
+                // Sem "Vender" enquanto aguarda recompra: a corretora já vendeu no stop, não há posição do bot.
+                const sellableEntry = activeEntries.find(e => e.phase === 'BOUGHT' && !e.awaitingReentry) ?? null;
                 const buyableEntry = activeEntries.find(e =>
                   normalizeStrategyId(e.strategyId) === 'ma-cross' && e.phase !== 'BOUGHT',
                 ) ?? null;
@@ -250,7 +251,7 @@ export default function MultitradePanel() {
                         <div className="flex gap-0.5 flex-wrap mt-0.5">
                           {activeEntries.map(e => {
                             const sid = normalizeStrategyId(e.strategyId);
-                            const eph = multitradePhaseBadge(e.phase, lang);
+                            const eph = multitradePhaseBadge(displayPhase(e), lang);
                             return (
                               <span key={e.id} className="text-[6px] font-mono px-0.5 rounded"
                                 style={{ color: eph.color }}
@@ -352,7 +353,7 @@ export default function MultitradePanel() {
           {backtestEntry && !isAdHocStudy && (
             <div className="flex items-center gap-1.5 px-2 py-1 border-b border-p2 shrink-0 flex-wrap">
               {(() => {
-                const ph = multitradePhaseBadge(backtestEntry.phase, lang);
+                const ph = multitradePhaseBadge(displayPhase(backtestEntry), lang);
                 return (
                   <>
                     <span className="text-[9px] text-p5/50">Bot:</span>

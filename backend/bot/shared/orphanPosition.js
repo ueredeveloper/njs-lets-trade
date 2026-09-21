@@ -32,7 +32,7 @@ function reconstructOpenLotFifo(trades) {
   const queue = [];
   for (const t of sorted) {
     if (t.side === 'buy') {
-      if (t.qty > 0) queue.push({ qty: t.qty, price: t.price });
+      if (t.qty > 0) queue.push({ qty: t.qty, price: t.price, time: t.time });
       continue;
     }
     let remaining = t.qty;
@@ -47,7 +47,8 @@ function reconstructOpenLotFifo(trades) {
   const qty = queue.reduce((s, l) => s + l.qty, 0);
   if (qty <= 1e-12) return null;
   const cost = queue.reduce((s, l) => s + l.qty * l.price, 0);
-  return { qty, avgPrice: cost / qty };
+  // firstTime = hora (ms) da compra mais antiga ainda aberta — vira o buy_time no resgate manual.
+  return { qty, avgPrice: cost / qty, firstTime: queue[0].time };
 }
 
 /**

@@ -1660,13 +1660,13 @@ export async function removeMultitradeFavorite(id) {
 
 /** Ajuste manual de fase no rsi_multi_bot_state (WATCHING ou BOUGHT). */
 export async function patchMultitradeBotState({
-  symbol, strategyId, phase, buyPrice, buyQty, buyTime, buyUsdt, sell,
+  symbol, strategyId, phase, buyPrice, buyQty, buyTime, buyUsdt, sell, adoptOrderListId,
 }) {
   const res = await fetch('/services/sb/multitrade-bot-state', {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      symbol, strategyId, phase, buyPrice, buyQty, buyTime, buyUsdt, sell,
+      symbol, strategyId, phase, buyPrice, buyQty, buyTime, buyUsdt, sell, adoptOrderListId,
     }),
   });
   if (!res.ok) {
@@ -1674,6 +1674,17 @@ export async function patchMultitradeBotState({
     throw new Error(body.error ?? `patchMultitradeBotState falhou: HTTP ${res.status}`);
   }
   return res.json();
+}
+
+/** "Resgatar da corretora" (modal Estado do bot): saldo total, preço médio/hora da compra (FIFO
+ *  dos trades próprios) e a OCO de saída já aberta — só leitura. Devolve { hasPosition, totalQty,
+ *  freeQty, lockedQty, avgPrice, buyTime, confident, oco, otherOrders, lastPrice }. */
+export async function fetchMultitradeRescue({ symbol, strategyId }) {
+  const params = new URLSearchParams({ symbol, strategyId });
+  const res = await fetch(`/services/sb/multitrade-rescue-position?${params}`);
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error ?? `fetchMultitradeRescue falhou: HTTP ${res.status}`);
+  return body;
 }
 
 /** Compra a mercado imediata no capital configurado do favorito (ordem real, não é só bookkeeping). */

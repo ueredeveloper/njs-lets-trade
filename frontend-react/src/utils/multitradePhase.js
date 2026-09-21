@@ -2,8 +2,8 @@
 
 /** Rótulos na UI — traduzidos (o valor salvo no Supabase continua em inglês: phase). */
 export const PHASE_LABELS = {
-  pt: { WATCHING: 'AGUARDANDO', BOUGHT: 'COMPRADO', PENDING: 'PENDENTE', FAILED: 'FALHA' },
-  en: { WATCHING: 'WATCHING', BOUGHT: 'BOUGHT', PENDING: 'PENDING', FAILED: 'FAILED' },
+  pt: { WATCHING: 'AGUARDANDO', BOUGHT: 'COMPRADO', PENDING: 'PENDENTE', FAILED: 'FALHA', REBUY: 'AGUARDA RECOMPRA' },
+  en: { WATCHING: 'WATCHING', BOUGHT: 'BOUGHT', PENDING: 'PENDING', FAILED: 'FAILED', REBUY: 'AWAITING REBUY' },
 };
 
 /** Explicação em português (tooltip). */
@@ -12,13 +12,23 @@ export const PHASE_HINT_PT = {
   BOUGHT:   'comprado — bot gerencia a saída',
   PENDING:  'pendente — ordem limit aguardando preço (AMAP) ou ordem limite de pullback (RSI Momentum)',
   FAILED:   'falha — a corretora rejeitou a ordem (ex.: saldo insuficiente); o bot não tenta de novo sozinho',
+  REBUY:    'aguarda recompra — reforço rearm: a corretora JÁ vendeu no stop (sem a moeda na carteira); o bot recompra quando o RSI recruzar',
 };
+
+/** Fase pra EXIBIR. O reforço rearm com gatilho por RSI mantém phase=BOUGHT no banco enquanto espera
+ *  recomprar, mas a moeda já foi vendida no stop — mostra REBUY em vez de "comprado". As AÇÕES do
+ *  modal continuam usando a fase real (entry.phase). */
+export function displayPhase(entry) {
+  return entry?.phase === 'BOUGHT' && entry.awaitingReentry ? 'REBUY' : (entry?.phase ?? 'WATCHING');
+}
 
 export function multitradePhaseBadge(phase, lang = 'pt') {
   const labels = PHASE_LABELS[lang] ?? PHASE_LABELS.pt;
   switch (phase) {
     case 'BOUGHT':
       return { text: labels.BOUGHT, short: 'BOUGHT', color: '#22c55e', hint: PHASE_HINT_PT.BOUGHT };
+    case 'REBUY':
+      return { text: labels.REBUY, short: 'REBUY', color: '#a78bfa', hint: PHASE_HINT_PT.REBUY };
     case 'PENDING':
       return { text: labels.PENDING, short: 'PENDING', color: '#f59e0b', hint: PHASE_HINT_PT.PENDING };
     case 'FAILED':
@@ -31,7 +41,8 @@ export function multitradePhaseBadge(phase, lang = 'pt') {
 /** Fase dominante entre estratégias ativas do símbolo. */
 export function symbolPhaseSummary(entries) {
   const active = (entries ?? []).filter(e => e.enabled !== false);
-  if (active.some(e => e.phase === 'BOUGHT')) return 'BOUGHT';
+  if (active.some(e => displayPhase(e) === 'BOUGHT')) return 'BOUGHT';
+  if (active.some(e => displayPhase(e) === 'REBUY')) return 'REBUY';
   if (active.some(e => e.phase === 'PENDING')) return 'PENDING';
   if (active.some(e => e.phase === 'FAILED')) return 'FAILED';
   return 'WATCHING';

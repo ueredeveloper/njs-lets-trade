@@ -310,3 +310,25 @@ Editar bot exclusivo → **reiniciar o bot**.
 Desligar: `multitrade_favorites.enabled = false` (encerra a sessão sem vender/cancelar no
 próximo sync de 3 min), depois apague as 2 linhas. Limitação: se a ENTRADA falhar (ex.: saldo),
 a moeda para em `FAILED` e precisa ser reativada.
+
+### Compra não gravada / "posição órfã" (RSI Momentum, v1.148.0)
+
+- **Falso positivo corrigido:** o tick rodava `detectOrphanPosition` ANTES do poll da limite GTC
+  armada (`rules_state.entryLimit`), então todo fill de pullback virava "posição órfã reconciliada"
+  (aviso no WhatsApp + `entry_signal_time`/`rsi_entry` nulos + níveis S/R perdidos — caso BOMEUSDT
+  21/09). Agora, com `entryLimit` armada, a detecção é pulada e o fill segue o caminho normal;
+  fill PARCIAL que só aparece ao cancelar por expiração também vira compra (antes apagava o favorito).
+- **Journal local** (`backend/bot/shared/pendingState.js` → `backend/data/bot/pending-state.json`,
+  gitignored): com `durableState: true` (só o rsi-momentum) a compra e a OCO são gravadas LOCALMENTE
+  antes do PATCH no Supabase. Supabase fora → o bot segue (posição/OCO já existem na corretora),
+  avisa no WhatsApp e `flushPendingState` reenvia a cada tick (pula o tick enquanto pendente;
+  descarta se já há OUTRA compra na linha ou passou de 24h). Sobrevive a restart.
+- **Resgatar da corretora** (modal Estado do bot, botão **C** da tabela; fases A/P/C/F):
+  `GET /services/sb/multitrade-rescue-position` lê saldo (livre + travado em ordens), preço médio/hora
+  (FIFO dos trades, 7 dias) e a OCO aberta (`shared/rescuePosition.js`); o botão preenche o formulário e
+  oferece **adotar a OCO** (`PATCH multitrade-bot-state` com `adoptOrderListId` → `rules_state.exitBracket`,
+  conferido na corretora). Só Binance adota OCO (Gate: emulada, sem leitura das legs).
+- **Painel × reforço rearm:** com `reentryTrigger: 'rsiRecross'` o banco mantém `phase=BOUGHT` enquanto o bot espera
+  recomprar (`rules_state.rearm.awaitingReentry`), mas a moeda JÁ foi vendida no stop. O enrich expõe
+  `awaitingReentry` e a UI mostra **AGUARDA RECOMPRA** (letra **R**, `displayPhase`) em vez de COMPRADO/C, sem
+  "Vender"/"Comprar mais" (caso SKYAIUSDT 21/09).
