@@ -118,6 +118,23 @@ export async function fetchMaCrossStats(symbol, {
   return res.json();
 }
 
+/**
+ * Backtest dos "Setups Matadores" (só compra). Sem `symbol` varre o mercado USDT da Binance.
+ * `params` = query da rota /services/candle-setups-backtest (ver backend/services/fetchCandleSetupsBacktest.js).
+ */
+export async function fetchCandleSetupsBacktest(params = {}) {
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== null && v !== '') qs.set(k, String(v));
+  }
+  const res = await fetch(`/services/candle-setups-backtest?${qs}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 export async function fetchVwapBandsStats(symbol, {
   source = null, entryInterval = null, session = null, vwapInterval = null, pollInterval = null,
   emaFilterEnabled = null, emaFilterPeriod = null, emaFilterInterval = null, candleCount = null,

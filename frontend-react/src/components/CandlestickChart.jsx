@@ -3,11 +3,10 @@ import { useI18n } from '../i18n';
 import ReactECharts from 'echarts-for-react';
 import { useCurrency } from '../contexts/CurrencyContext';
 import { fetchCandlesticksAndCloud, fetchGateTrades, fetchBinanceTrades, fetchChartAdaptiveBands, fetchBollingerBandRecovery, DEFAULT_CANDLE_LIMIT, getBollingerMedianTrendConfig, fetchRsiThresholdBacktest, getRsiMomentumConfig, getRsiMomentumCuratedBot } from '../services/api';
-import { buildMarkersFromExchangeTrades, attachPnlToExchangeTrades, isMaCrossEntry, isVwapBandsEntry, isBollingerBandsEntry, resolveBollingerBandsPermFilter } from '../utils/multitradeChart';
+import { buildMarkersFromExchangeTrades, attachPnlToExchangeTrades, isVwapBandsEntry, isBollingerBandsEntry, resolveBollingerBandsPermFilter } from '../utils/multitradeChart';
 import { computeVwapSlopeFlags } from '../utils/vwapSlopeHighlight';
 import { buildTrailingStopSeries, resolveChartStopLoss, resolveChartTarget, computeStopLossFloor } from '../utils/trailingStopLoss';
-import { getEntriesForSymbol, buildAdHocMaCrossEntry } from '../constants/strategyPresets';
-import MaCrossRuleCheckChart from './MaCrossRuleCheckChart';
+import { getEntriesForSymbol } from '../constants/strategyPresets';
 import CandlestickChartLW from './CandlestickChartLW';
 import convertOpenTime from '../utils/convertOpenTime';
 import Tooltip from './Tooltip';
@@ -2963,7 +2962,6 @@ export default function CandlestickChart() {
   const [showAllCandlePresets, setShowAllCandlePresets] = useState(false);
   const [themeTick, setThemeTick] = useState(0);
   const activeIndicators = uiPrefs.activeIndicators ?? [...DEFAULT_ACTIVE_INDICATORS];
-  const [activeTab, setActiveTab] = useState('chart'); // 'chart' | 'rules'
   const [tradeOverlaySlots, setTradeOverlaySlots] = useState(null);
   const [quickEmaGroups, setQuickEmaGroups] = useState(loadQuickEmaGroups);
   const addQuickEmaGroup = useCallback(() => {
@@ -3261,7 +3259,7 @@ export default function CandlestickChart() {
       clearTimeout(t2);
       ro.disconnect();
     };
-  }, [selectedChart?.symbol, selectedChart?.interval, activeTab]);
+  }, [selectedChart?.symbol, selectedChart?.interval]);
 
   // Troca de moeda/intervalo invalida qualquer medição de % em aberto (coordenadas ficariam obsoletas).
   useEffect(() => {
@@ -4931,7 +4929,7 @@ export default function CandlestickChart() {
     // Em fase de captura ele roda antes disso, no caminho de descida do evento até o canvas.
     wrap.addEventListener('wheel', handleWheel, { passive: false, capture: true });
     return () => wrap.removeEventListener('wheel', handleWheel, { capture: true });
-  }, [chartLeftPad, chartRightPad, selectedChart?.symbol, activeTab]);
+  }, [chartLeftPad, chartRightPad, selectedChart?.symbol]);
 
   const effectiveIndicators = useMemo(
     () => filterIndicatorsByPanel(activeIndicators, chartPanelButtons),
@@ -5149,28 +5147,6 @@ export default function CandlestickChart() {
     const resolved = resolveChartTarget(selectedChart.symbol, multitradeFavorites);
     return resolved ? { ...resolved, simulated: true } : resolved;
   }, [selectedChart?.symbol, multitradeFavorites, vwapLadderLevels, bollingerTargetLevels, realExitBracket]);
-
-  // Aba "Bot": mostra a estratégia REAL do favorito da moeda selecionada (ma-cross ou
-  // vwap-bands) — antes disso era sempre tratado como ma-cross, mostrando linhas de
-  // EMA e rodando o backtest errado até pra favoritos vwap-bands. Sem favorito nenhum,
-  // cai no molde ad-hoc de ma-cross (comportamento antigo, só pra estudo livre).
-  const botFavoriteEntry = useMemo(() => {
-    const sym = selectedChart?.symbol;
-    if (!sym) return null;
-    const entries = getEntriesForSymbol(multitradeFavorites, sym).filter(e => e.enabled !== false);
-    return entries.find(e => isMaCrossEntry(e)) ?? entries.find(e => isVwapBandsEntry(e)) ?? null;
-  }, [selectedChart?.symbol, multitradeFavorites]);
-
-  const botStrategyId = botFavoriteEntry ? (isVwapBandsEntry(botFavoriteEntry) ? 'vwap-bands' : 'ma-cross') : 'ma-cross';
-
-  const botAdHocTradeConfig = useMemo(() => {
-    const sym = selectedChart?.symbol;
-    if (!sym || botFavoriteEntry) return null;
-    const exchange = selectedChart.source === 'gate' ? 'gate' : 'binance';
-    return buildAdHocMaCrossEntry(sym, exchange).tradeConfig;
-  }, [selectedChart?.symbol, selectedChart?.source, botFavoriteEntry]);
-
-  const botTradeConfig = botFavoriteEntry?.tradeConfig ?? botAdHocTradeConfig;
 
   // Limiar (%) do filtro de tendência da mediana — mesmo valor global editável em
   // Configurações (bollinger_median_trend_config), lido uma vez e reaproveitado pra colorir
@@ -5642,7 +5618,7 @@ export default function CandlestickChart() {
       chartBollingerConfig?.showPath ?? false, chartMacdConfig, chartRsiConfig, chartRsiCrossConfigs,
     );
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedChart, colors, effectiveIndicators, chartZoom, tradePurchases, chartTradeMarkers, activeTab, overlayConfigs, displayLimit, chartLeftPad, chartRightPad, chartBuyInfo, chartStopLossConfig, chartTargetConfig, chartBollingerConfig, chartSrConfigs, chartPphlConfig, chartWfractalsConfig, chartZigzagConfig, chartVwapConfig, chartChopConfig, chartMacdConfig, chartRsiConfig, vwapSlopeHighlight, isMobile, chartRsiCrossConfigs, uiPrefs.fontScale]);
+  }, [selectedChart, colors, effectiveIndicators, chartZoom, tradePurchases, chartTradeMarkers, overlayConfigs, displayLimit, chartLeftPad, chartRightPad, chartBuyInfo, chartStopLossConfig, chartTargetConfig, chartBollingerConfig, chartSrConfigs, chartPphlConfig, chartWfractalsConfig, chartZigzagConfig, chartVwapConfig, chartChopConfig, chartMacdConfig, chartRsiConfig, vwapSlopeHighlight, isMobile, chartRsiCrossConfigs, uiPrefs.fontScale]);
 
   if (!selectedChart || !option) {
     return (
@@ -5674,7 +5650,7 @@ export default function CandlestickChart() {
   // ── Chart ECharts (usado em ambas as abas) ───────────────────────────────────
   const chartNode = (
     <ReactECharts
-      key={`${selectedChart.symbol}-${activeTab}`}
+      key={selectedChart.symbol}
       ref={chartRef}
       option={option}
       notMerge={true}
@@ -6259,25 +6235,8 @@ export default function CandlestickChart() {
     <div className="flex flex-col h-full min-h-0">
       {/* Toolbar — compacta no mobile (intervalos em scroll horizontal) */}
       <div className="flex flex-col px-2 md:px-3 pt-1 md:pt-2 pb-0.5 md:pb-1 shrink-0 gap-0.5 md:gap-1 border-b border-p2/40">
-        {/* Linha 0 — abas + botões de janela de candles (separados dos intervalos) */}
+        {/* Linha 0 — botões de janela de candles (separados dos intervalos) */}
         <div className="flex items-center gap-1 border-b border-p2/20 pb-0.5 md:pb-1 mb-0.5">
-          {[
-            { id: 'chart',  label: t('chart.tab.chart') },
-            { id: 'rules',  label: t('chart.tab.rules') },
-          ].map(({ id, label }) => (
-            <button
-              key={id}
-              onClick={() => setActiveTab(id)}
-              className={`px-2 md:px-3 py-0.5 text-[10px] md:text-xs rounded font-mono transition-colors ${
-                activeTab === id
-                  ? 'bg-p4 text-white'
-                  : 'text-p5/60 hover:text-p5 hover:bg-p3/20'
-              }`}
-            >
-              {label}
-            </button>
-          ))}
-
           {/* Grupo de janela de candles — alinhado à direita, isolado dos intervalos. Só os mais
               usados ficam visíveis; "›" abre os demais (mesmo padrão da linha de intervalos abaixo). */}
           <div className="ml-auto flex items-center gap-1 pl-2 border-l border-p2/30">
@@ -6359,154 +6318,100 @@ export default function CandlestickChart() {
 
       </div>
 
-      {/* Conteúdo da aba */}
-      {activeTab === 'rules' ? (
-        <div
-          className="flex-1 min-h-0 flex flex-col px-2 md:px-3 py-2 relative"
-          onClick={() => { if (!panelCollapsed) setPanelCollapsed(true); }}
-        >
-          {selectedChart?.symbol ? (
-            <MaCrossRuleCheckChart
-              symbol={selectedChart.symbol}
-              exchange={selectedChart.source === 'gate' ? 'gate' : 'binance'}
-              strategyId={botStrategyId}
-              tradeConfig={botTradeConfig}
-              realPhase={botFavoriteEntry?.phase}
-              realBuyTime={botFavoriteEntry?.buyTime}
-              realTradeMarkers={selectedChart?.tradeMarkers ?? chartTradeMarkers ?? []}
-              fillHeight
-              activeIndicators={activeIndicators}
-              quickEmaGroups={quickEmaGroups}
-              bollingerBandsGroups={bbGroups}
-              panelButtons={chartPanelButtons}
-              candleWindowCount={hasExplicitCandleWindow ? displayCandleCount : null}
-            />
-          ) : (
-            <div className="text-p5/50 text-xs font-mono">Selecione uma moeda pra conferir as regras.</div>
-          )}
-          <ChartIndicatorPanel
-            handlers={handlers}
-            activeIndicators={activeIndicators}
-            toggleIndicator={toggleIndicator}
-            quickEmaGroups={quickEmaGroups}
-            addQuickEmaGroup={addQuickEmaGroup}
-            removeQuickEmaGroup={removeQuickEmaGroup}
-            updateQuickEmaGroupInterval={updateQuickEmaGroupInterval}
-            toggleQuickEmaGroupPeriod={toggleQuickEmaGroupPeriod}
-            updateQuickEmaGroupBandPct={updateQuickEmaGroupBandPct}
-            updateQuickEmaGroupBandPeriod={updateQuickEmaGroupBandPeriod}
-            bbGroups={bbGroups}
-            addBbGroup={addBbGroup}
-            removeBbGroup={removeBbGroup}
-            updateBbGroup={updateBbGroup}
-            toggleBbGroupFlag={toggleBbGroupFlag}
-            botPermInterval={botPermInterval}
-            vwap={vwap}
-            setVwap={setVwap}
-            vwapSlopeHighlightOn={vwapSlopeHighlightOn}
-            setVwapSlopeHighlightOn={setVwapSlopeHighlightOn}
-            overlayMaLoading={overlayMaLoading}
-            panelButtons={chartPanelButtons}
-            collapsed={panelCollapsed}
-            onToggleCollapse={() => setPanelCollapsed(v => !v)}
+      <div
+        ref={chartWrapRef}
+        className="flex-1 min-h-0 relative"
+        onClick={() => { if (!panelCollapsed) setPanelCollapsed(true); }}
+      >
+        {showLwChart ? (
+          <CandlestickChartLW
+            ref={lwChartRef}
+            fontScale={uiPrefs.fontScale}
+            symbol={selectedChart.symbol}
+            interval={selectedChart.interval ?? currentInterval}
+            candlesticks={selectedChart.candlesticks}
+            colors={colors}
+            activeIndicators={tradeBoxActive ? [] : effectiveIndicators}
+            ma9={selectedChart.ma9}
+            ma21={selectedChart.ma21}
+            ma50={selectedChart.ma50}
+            ma200={selectedChart.movingAverage}
+            overlayConfigs={tradeBoxActive ? null : overlayConfigs}
+            vwapConfig={tradeBoxActive ? null : chartVwapConfig}
+            vwapSlopeHighlight={vwapSlopeHighlight}
+            bollingerConfigs={tradeBoxActive ? [] : chartBollingerConfigs}
+            srConfigs={tradeBoxActive ? [] : chartSrConfigs}
+            pphlConfig={tradeBoxActive ? null : chartPphlConfig}
+            wfractalsConfig={tradeBoxActive ? null : chartWfractalsConfig}
+            zigzagConfig={tradeBoxActive ? null : chartZigzagConfig}
+            rsiCrossConfigs={tradeBoxActive ? [] : chartRsiCrossConfigs}
+            flagsConfig={chartFlagsConfig}
+            analysisBoxRect={analysisBoxRect}
+            tradeBoxRects={chartTradeBoxRects}
+            tradeBoxSrMarks={chartTradeBoxSrMarks}
+            prevDayCloudConfig={tradeBoxActive ? null : chartPrevDayCloudConfig}
+            rsiConfig={chartRsiConfig}
+            chopConfig={tradeBoxActive ? null : chartChopConfig}
+            macdConfig={tradeBoxActive ? analysisBoxMacdData : chartMacdConfig}
+            emaPersistCloudData={tradeBoxActive ? null : chartEmaPersistCloudData}
+            emaPersistCloudConfirmData={tradeBoxActive ? null : chartEmaPersistCloudConfirmData}
+            emaPersistCloudConfirm2Data={tradeBoxActive ? null : chartEmaPersistCloudConfirm2Data}
+            emaPersistCloudLayers={emaPersistCloudLayers}
+            emaPersistCloudTones={emaPersistCloudTones}
+            barsSinceCrossData={tradeBoxActive ? null : chartBarsSinceCrossData}
+            tdSequentialData={tradeBoxActive ? null : chartTdSequentialData}
+            stopLossConfig={tradeBoxActive ? null : chartStopLossConfig}
+            targetConfig={tradeBoxActive ? null : chartTargetConfig}
+            buyInfo={tradeBoxActive ? null : chartBuyInfo}
+            multitradeMarkers={tradeBoxActive ? [] : (chartTradeMarkers?.length ? chartTradeMarkers : (selectedChart.tradeMarkers ?? []))}
+            zoomPeriod={chartZoom}
+            focusLastN={hasExplicitCandleWindow ? displayCandleCount : null}
+            onNeedOlderCandles={handleLoadMoreCandles}
+            loadingMoreCandles={loadingMoreCandles}
+            onVisibleRangeChange={reportVisibleRange}
+            visibleRange={visibleChartRange}
           />
-        </div>
-      ) : (
-        <div
-          ref={chartWrapRef}
-          className="flex-1 min-h-0 relative"
-          onClick={() => { if (!panelCollapsed) setPanelCollapsed(true); }}
-        >
-          {showLwChart ? (
-            <CandlestickChartLW
-              ref={lwChartRef}
-              fontScale={uiPrefs.fontScale}
-              symbol={selectedChart.symbol}
-              interval={selectedChart.interval ?? currentInterval}
-              candlesticks={selectedChart.candlesticks}
-              colors={colors}
-              activeIndicators={tradeBoxActive ? [] : effectiveIndicators}
-              ma9={selectedChart.ma9}
-              ma21={selectedChart.ma21}
-              ma50={selectedChart.ma50}
-              ma200={selectedChart.movingAverage}
-              overlayConfigs={tradeBoxActive ? null : overlayConfigs}
-              vwapConfig={tradeBoxActive ? null : chartVwapConfig}
-              vwapSlopeHighlight={vwapSlopeHighlight}
-              bollingerConfigs={tradeBoxActive ? [] : chartBollingerConfigs}
-              srConfigs={tradeBoxActive ? [] : chartSrConfigs}
-              pphlConfig={tradeBoxActive ? null : chartPphlConfig}
-              wfractalsConfig={tradeBoxActive ? null : chartWfractalsConfig}
-              zigzagConfig={tradeBoxActive ? null : chartZigzagConfig}
-              rsiCrossConfigs={tradeBoxActive ? [] : chartRsiCrossConfigs}
-              flagsConfig={chartFlagsConfig}
-              analysisBoxRect={analysisBoxRect}
-              tradeBoxRects={chartTradeBoxRects}
-              tradeBoxSrMarks={chartTradeBoxSrMarks}
-              prevDayCloudConfig={tradeBoxActive ? null : chartPrevDayCloudConfig}
-              rsiConfig={chartRsiConfig}
-              chopConfig={tradeBoxActive ? null : chartChopConfig}
-              macdConfig={tradeBoxActive ? analysisBoxMacdData : chartMacdConfig}
-              emaPersistCloudData={tradeBoxActive ? null : chartEmaPersistCloudData}
-              emaPersistCloudConfirmData={tradeBoxActive ? null : chartEmaPersistCloudConfirmData}
-              emaPersistCloudConfirm2Data={tradeBoxActive ? null : chartEmaPersistCloudConfirm2Data}
-              emaPersistCloudLayers={emaPersistCloudLayers}
-              emaPersistCloudTones={emaPersistCloudTones}
-              barsSinceCrossData={tradeBoxActive ? null : chartBarsSinceCrossData}
-              tdSequentialData={tradeBoxActive ? null : chartTdSequentialData}
-              stopLossConfig={tradeBoxActive ? null : chartStopLossConfig}
-              targetConfig={tradeBoxActive ? null : chartTargetConfig}
-              buyInfo={tradeBoxActive ? null : chartBuyInfo}
-              multitradeMarkers={tradeBoxActive ? [] : (chartTradeMarkers?.length ? chartTradeMarkers : (selectedChart.tradeMarkers ?? []))}
-              zoomPeriod={chartZoom}
-              focusLastN={hasExplicitCandleWindow ? displayCandleCount : null}
-              onNeedOlderCandles={handleLoadMoreCandles}
-              loadingMoreCandles={loadingMoreCandles}
-              onVisibleRangeChange={reportVisibleRange}
-              visibleRange={visibleChartRange}
-            />
-          ) : chartNode}
-          {!showLwChart && !lwSupported && uiPrefs.chartEngineDefault !== 'echarts' && (
-            <div
-              className="absolute top-1 left-2 z-10 text-[10px] font-mono text-p5/50 pointer-events-none"
-              title={`TradingView indisponível agora: ${lwUnsupportedReason.join(', ')}`}
-            >
-              ECharts (auto: {lwUnsupportedReason.join(', ')})
-            </div>
-          )}
-          {measureOverlay}
-          {analysisBoxOverlay}
-          {analysisBoxNotice}
-          {analysisBoxSelects}
-          {measureButtons}
-          <ChartIndicatorPanel
-            handlers={handlers}
-            activeIndicators={activeIndicators}
-            toggleIndicator={toggleIndicator}
-            quickEmaGroups={quickEmaGroups}
-            addQuickEmaGroup={addQuickEmaGroup}
-            removeQuickEmaGroup={removeQuickEmaGroup}
-            updateQuickEmaGroupInterval={updateQuickEmaGroupInterval}
-            toggleQuickEmaGroupPeriod={toggleQuickEmaGroupPeriod}
-            updateQuickEmaGroupBandPct={updateQuickEmaGroupBandPct}
-            updateQuickEmaGroupBandPeriod={updateQuickEmaGroupBandPeriod}
-            bbGroups={bbGroups}
-            addBbGroup={addBbGroup}
-            removeBbGroup={removeBbGroup}
-            updateBbGroup={updateBbGroup}
-            toggleBbGroupFlag={toggleBbGroupFlag}
-            botPermInterval={botPermInterval}
-            vwap={vwap}
-            setVwap={setVwap}
-            vwapSlopeHighlightOn={vwapSlopeHighlightOn}
-            setVwapSlopeHighlightOn={setVwapSlopeHighlightOn}
-            overlayMaLoading={overlayMaLoading}
-            panelButtons={chartPanelButtons}
-            collapsed={panelCollapsed}
-            onToggleCollapse={() => setPanelCollapsed(v => !v)}
-          />
-        </div>
-      )}
+        ) : chartNode}
+        {!showLwChart && !lwSupported && uiPrefs.chartEngineDefault !== 'echarts' && (
+          <div
+            className="absolute top-1 left-2 z-10 text-[10px] font-mono text-p5/50 pointer-events-none"
+            title={`TradingView indisponível agora: ${lwUnsupportedReason.join(', ')}`}
+          >
+            ECharts (auto: {lwUnsupportedReason.join(', ')})
+          </div>
+        )}
+        {measureOverlay}
+        {analysisBoxOverlay}
+        {analysisBoxNotice}
+        {analysisBoxSelects}
+        {measureButtons}
+        <ChartIndicatorPanel
+          handlers={handlers}
+          activeIndicators={activeIndicators}
+          toggleIndicator={toggleIndicator}
+          quickEmaGroups={quickEmaGroups}
+          addQuickEmaGroup={addQuickEmaGroup}
+          removeQuickEmaGroup={removeQuickEmaGroup}
+          updateQuickEmaGroupInterval={updateQuickEmaGroupInterval}
+          toggleQuickEmaGroupPeriod={toggleQuickEmaGroupPeriod}
+          updateQuickEmaGroupBandPct={updateQuickEmaGroupBandPct}
+          updateQuickEmaGroupBandPeriod={updateQuickEmaGroupBandPeriod}
+          bbGroups={bbGroups}
+          addBbGroup={addBbGroup}
+          removeBbGroup={removeBbGroup}
+          updateBbGroup={updateBbGroup}
+          toggleBbGroupFlag={toggleBbGroupFlag}
+          botPermInterval={botPermInterval}
+          vwap={vwap}
+          setVwap={setVwap}
+          vwapSlopeHighlightOn={vwapSlopeHighlightOn}
+          setVwapSlopeHighlightOn={setVwapSlopeHighlightOn}
+          overlayMaLoading={overlayMaLoading}
+          panelButtons={chartPanelButtons}
+          collapsed={panelCollapsed}
+          onToggleCollapse={() => setPanelCollapsed(v => !v)}
+        />
+      </div>
     </div>
   );
 }
