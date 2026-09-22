@@ -1293,7 +1293,7 @@ function computeMacdWhatIf(occurrences, interval) {
  * @param {string}  [options.supportResistance.interval='4h']  Mesmo leque do seletor da nuvem D-1.
  * @param {number}  [options.supportResistance.candleCount=200]  Candles da janela móvel do S/R (20–1000).
  * @param {number}  [options.supportResistance.entrySupportRank=1]  1 = 1º suporte abaixo do preço, 2 = 2º, 3 = 3º.
- * @param {number}  [options.supportResistance.exitResistanceRank=1]  1 = 1ª resistência acima do preço, 2 = 2ª, 3 = 3ª.
+ * @param {number}  [options.supportResistance.exitResistanceRank=1]  1 = 1ª resistência acima do preço, 2 = 2ª, ... 5 = 5ª.
  * @param {number|'adapt'} [options.supportResistance.entryMaxPct=10]  Distância % máxima do preço do
  *   sinal ACIMA da linha de suporte (0.1–100). 'adapt' = calcula da história da moeda (mediana de
  *   quão perto do suporte anterior o preço faz fundo antes de virar, clamp 2–8%, default 3) —
@@ -1625,7 +1625,9 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
         ? '1d' : srRequestedInterval;
     const srCandleCount = Math.max(20, Math.min(1000, Math.round(Number(supportResistance?.candleCount ?? 200))));
     const srEntryRank = Math.max(1, Math.min(3, Math.round(Number(supportResistance?.entrySupportRank ?? 1))));
-    const srExitRank = Math.max(1, Math.min(3, Math.round(Number(supportResistance?.exitResistanceRank ?? 1))));
+    // Leque maior que o de entrada (1-3) — alvo mais distante (S4/S5) é R:R maior, porém saída
+    // mais rara; mesma lógica do srStopRank (1-5) logo abaixo.
+    const srExitRank = Math.max(1, Math.min(5, Math.round(Number(supportResistance?.exitResistanceRank ?? 1))));
     // Stop pelo suporte do S/R (em vez do stopLossPct fixo): usa o preço ABSOLUTO da Nª zona de
     // suporte (srStopRank, 1=mais próxima) vigente no instante do sinal como stopPriceOverride —
     // mesma mecânica do prevCandleStop (preço absoluto, não %). Precisa do srEnabled (mesmas

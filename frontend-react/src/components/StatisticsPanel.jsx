@@ -322,6 +322,9 @@ const RSI_MOM_BANDWIDTH_LOOKBACK_OPTIONS = [300, 200, 100];
 const RSI_MOM_SR_INTERVAL_OPTIONS = INTERVALS;
 const RSI_MOM_SR_CANDLE_COUNT_OPTIONS = [20, 50, 100, 200, 300, 500, 1000];
 const RSI_MOM_SR_RANK_OPTIONS = [1, 2, 3];
+/** Leque maior que o de entrada — alvo mais distante (4ª/5ª resistência) é uma escolha legítima
+ *  (R:R maior, porém saída mais rara). Ver clamp em analyseRsiThresholdBacktest.js (srExitRank). */
+const RSI_MOM_SR_EXIT_RANK_OPTIONS = [1, 2, 3, 4, 5];
 const RSI_MOM_SR_MAXPCT_OPTIONS = ['adapt', 0.5, 0.6, 0.7, 0.8, 0.9, 1, 1.5, 2, 3, 5, 8, 10, 15, 20, 30, 50, 100];
 /** Rank do suporte usado como Stop Loss (options.supportResistance.stopSupportRank) — leque maior
  *  que o das linhas de entrada/saída (S1-S3) porque um stop mais "de fora" (S4/S5) é uma escolha
@@ -329,7 +332,7 @@ const RSI_MOM_SR_MAXPCT_OPTIONS = ['adapt', 0.5, 0.6, 0.7, 0.8, 0.9, 1, 1.5, 2, 
 const RSI_MOM_SR_STOP_RANK_OPTIONS = [1, 2, 3, 4, 5];
 /** Valores selecionáveis do filtro "Volume 24h" — mesmo campo do bot ao vivo
  *  (config.volume.minVolumeUsdt, ver backend/bot/rsi-momentum/marketScanner.js). 0 = desligado. */
-const RSI_MOM_VOLUME_OPTIONS = [0, 1_000_000, 2_000_000, 5_000_000, 30_000_000];
+const RSI_MOM_VOLUME_OPTIONS = [0, 1_000_000, 2_000_000, 5_000_000, 10_000_000, 15_000_000, 20_000_000, 30_000_000];
 /** Valores selecionáveis do filtro ADX — mínimo exigido pra considerar tendência confirmada
  *  (20/25 são os limiares mais citados na literatura pra distinguir tendência de range). */
 const RSI_MOM_ADX_MIN_OPTIONS = [15, 20, 25, 30];
@@ -342,7 +345,7 @@ const RSI_MOM_HIGHER_RSI_MIN_OPTIONS = [40, 45, 50, 55, 60, 65, 70];
 const RSI_MOM_EMA_CROSS_INTERVAL_OPTIONS = ['15m', '30m', '1h', '2h', '4h', '8h', '1d'];
 /** Limiar do filtro "RSI 5m" (mesmo entry.rsi5mFilter do bot ao vivo) — RSI(14) do candle de 5m
  *  no fechamento do candle do sinal precisa estar ACIMA disso. Grade da análise offline. */
-const RSI_MOM_RSI5M_OPTIONS = [55, 60, 65, 70, 75, 80];
+const RSI_MOM_RSI5M_OPTIONS = [55, 60, 65, 70, 75, 80, 85, 90];
 /** Filtro "Topo N": quantos candles do intervalo do sinal olhar pra trás pra achar a máxima
  *  recente, e qual a folga % abaixo dela que ainda libera a compra (0 = só bloqueia acima do topo). */
 const RSI_MOM_NEW_HIGH_LOOKBACK_OPTIONS = [10, 15, 20, 30, 50, 100, 200];
@@ -2068,7 +2071,7 @@ function RsiMomentumStats({ autoCalc }) {
               <select className={inp}
                 value={prefs.srEntrySupportRank}
                 onChange={(e) => patchPrefs({ srEntrySupportRank: Number(e.target.value) })}>
-                {RSI_MOM_SR_RANK_OPTIONS.map((v) => <option key={v} value={v}>{`${v}ª ↓`}</option>)}
+                {RSI_MOM_SR_RANK_OPTIONS.map((v) => <option key={v} value={v}>{`S${v}`}</option>)}
               </select>
             </div>
             <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.sr_exit_resistance')}>
@@ -2076,7 +2079,7 @@ function RsiMomentumStats({ autoCalc }) {
               <select className={inp}
                 value={prefs.srExitResistanceRank}
                 onChange={(e) => patchPrefs({ srExitResistanceRank: Number(e.target.value) })}>
-                {RSI_MOM_SR_RANK_OPTIONS.map((v) => <option key={v} value={v}>{`${v}ª ↑`}</option>)}
+                {RSI_MOM_SR_EXIT_RANK_OPTIONS.map((v) => <option key={v} value={v}>{`R${v}`}</option>)}
               </select>
             </div>
             <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[48px]" title={t('stats.tip.sr_entry_max')}>

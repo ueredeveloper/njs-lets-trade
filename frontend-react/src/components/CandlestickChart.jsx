@@ -77,10 +77,12 @@ const INTERVALS = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h',
 const COMMON_CHART_INTERVALS = DEFAULT_COMMON_CHART_INTERVALS;
 const DEFAULT_INTERVAL = '15m';
 
-// Painel de regras da caixa de previsão de trade (ver analysisBoxRulesPanel) — só os intervalos
+// Painel de regras da caixa de previsão de trade (ver analysisBoxRulesPanel) — intervalos
 // suportados também na Gate.io (CLAUDE.md: sem '3m'), já que a simulação pode rodar numa moeda
-// Gate-only (ex.: SKYAI).
-const ANALYSIS_BOX_RULE_INTERVALS = ['1m', '5m', '15m', '30m', '1h', '4h', '8h', '1d'];
+// Gate-only (ex.: SKYAI), MAIS '2h' (Gate não tem, só Binance) porque é o intervalo real do
+// filtro MACD na config vencedora hoje (backend/CLAUDE.md) — sem ele o seletor não conseguia
+// nem mostrar o valor que a config carregada já estava usando.
+const ANALYSIS_BOX_RULE_INTERVALS = ['1m', '5m', '15m', '30m', '1h', '2h', '4h', '8h', '1d'];
 // Mesmos leques de opções do painel Estatísticas (StatisticsPanel.jsx RSI_MOM_SR_*/
 // RSI_MOM_TRAILING_*/RSI_MOM_PIVOT_*/RSI_MOM_WIDTH_*/RSI_MOM_ATR_MULT_OPTIONS) — duplicados aqui
 // (não exportados de lá) pra dar paridade de opções ao editar a caixa de previsão de trade.
@@ -3863,7 +3865,13 @@ export default function CandlestickChart() {
     const toFetch = pivotIntervalsNeeded
       .map((iv) => {
         const key = `${selectedChart.symbol}|${iv}`;
-        const needed = Math.min(1500, computeOverlayMaFetchLimit(chartIv, iv, 10, chartSpan, overlayFetchLimit));
+        // Sem teto próprio aqui (antes travava em 1500) — cresce junto com `chartSpan` (que já
+        // acompanha "carregar mais"/arrastar pra trás no gráfico principal), até o mesmo MAX_CANDLES
+        // (10500) de computeOverlayMaFetchLimit. Sem isso, S/R, PPHL, Williams Fractals, ZigZag e o
+        // "Limiar RSI" paravam de aparecer nos candles mais antigos depois de ~1500 candles do
+        // intervalo PRÓPRIO deles carregados (ex.: Limiar RSI em 15m sumia além de poucos dias),
+        // mesmo com o preço já mostrando candles bem mais antigos.
+        const needed = computeOverlayMaFetchLimit(chartIv, iv, 10, chartSpan, overlayFetchLimit);
         const have = pivotRawCache[key];
         return { iv, key, needed, stale: !have || have.limit < needed };
       })
@@ -6098,7 +6106,7 @@ export default function CandlestickChart() {
                 title="Suporte de referência da entrada"
                 className={selCls}
               >
-                {ANALYSIS_BOX_SR_RANK_OPTIONS.map((v) => <option key={v} value={v}>{`${v}ª ↓`}</option>)}
+                {ANALYSIS_BOX_SR_RANK_OPTIONS.map((v) => <option key={v} value={v}>{`S${v}`}</option>)}
               </select>
               <select
                 value={p.srExitResistanceRank ?? 1}
@@ -6106,7 +6114,7 @@ export default function CandlestickChart() {
                 title="Resistência usada como alvo de saída"
                 className={selCls}
               >
-                {ANALYSIS_BOX_SR_RANK_OPTIONS.map((v) => <option key={v} value={v}>{`${v}ª ↑`}</option>)}
+                {ANALYSIS_BOX_SR_RANK_OPTIONS.map((v) => <option key={v} value={v}>{`R${v}`}</option>)}
               </select>
               <select
                 value={p.srEntryMaxPct ?? 10}
