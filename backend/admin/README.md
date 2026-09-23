@@ -26,6 +26,9 @@ njs-whatsapp (porta 3005)   ── GET/POST /admin/* ──┐
                                       ├─ gitInfo.js        → branch / commit / dirty
                                       ├─ botLog.js          → launcher.log (stdout dos bots)
                                       ├─ botControl.js      → intenção restart/update/sync-lock + git pull
+                                      ├─ tradeStatusJournal.js (backend/bot/shared/) → snapshot por
+                                      │    símbolo (trade-status.json), gravado pelo rsi-momentum-bot
+                                      │    a cada tick — /internal/trade só LÊ o arquivo
                                       └─ estado dos filhos  → pid / uptime / restarts
                                           (bollinger-bands-bot.js, rsi-momentum-bot.js)
 ```
@@ -37,6 +40,7 @@ njs-whatsapp (porta 3005)   ── GET/POST /admin/* ──┐
 | `GET  /admin/health`  | `GET /internal/health` (+ `/internal/info` no sub-campo) | ✅ |
 | `GET  /admin/status`  | `GET /internal/info`         | ✅ |
 | `GET  /admin/log`     | `GET /internal/log?lines=`   | ✅ |
+| `GET  /admin/trade` (ainda não existe no `njs-whatsapp` — falta adicionar lá) | `GET /internal/trade` (sem `symbol`, lista as moedas EM TRADE agora; `?symbol=` foca uma) | ✅ do lado `njs-lets-trade`; ⏳ falta a rota/comando no `njs-whatsapp` |
 | `POST /admin/restart` | `POST /internal/restart`     | ✅ (exige token + `ALLOW_CONTROL`) |
 | `POST /admin/update`  | `POST /internal/update`      | ✅ (exige token + `ALLOW_CONTROL`) |
 | `POST /admin/stop`    | `POST /internal/stop`        | ✅ (exige token + `ALLOW_CONTROL`) |
@@ -111,7 +115,8 @@ e não precisa dessa API.
 | `internalConfig.js` | Lê `INTERNAL_ADMIN_*` do `.env` da raiz. Exporta `internalConfig` (`enabled`, `host`, `port`, `token`, `repoRoot`, `logFile`). | `host` deve continuar com default `127.0.0.1`. Não trocar para `0.0.0.0`. |
 | `gitInfo.js` | `getGitInfo()` → `{ available, branch, commit, commitFull, commitDate, subject, dirty }`. Roda `git` via `execFileSync` com `cwd = repoRoot`, cache de 15s, timeout 4s. Erro → `{ available:false, error }`. | Manter tolerante a falha (git ausente do PATH, não é repo). Nunca deixar lançar. |
 | `botLog.js` | Espelha stdout/stderr dos bots filhos → console **+** `backend/data/bot/launcher.log`. Rotação por tamanho (2 MB, mantém `launcher.log.1`). `tail(n, {collapse})` lê `.1` + atual e, por padrão, **colapsa as linhas de heartbeat** (bloco do scanner RSI Momentum a cada ciclo, `📋 Moedas avaliadas` do multitrade-watch a cada 3 min) — só a última ocorrência sobrevive, anotada `(N×, hh:mm→hh:mm)` — pro `/admin/log` do WhatsApp (~25 linhas) não repetir o mesmo bloco. `pipeChildOutput(stream, {label, target})`, `writeLine`, `collapseNoise`, `close`. | Log nunca pode derrubar o launcher — tudo em `try/catch`. Não aumentar `MAX_BYTES` sem pensar em disco no Termux. O colapso é só na leitura: arquivo e stdout do `npm run bots` ficam completos. |
-| `internalServer.js` | `startInternalAdminServer(getState, { onControl })` → `http.Server`. GET `/internal/health\|info\|log` + POST `/internal/restart\|update\|stop\|pull\|sync-lock\|restart-supervisor`. Auth: loopback obrigatório + `X-Internal-Token` se `token` setado; POST exige também `INTERNAL_ADMIN_ALLOW_CONTROL=true`. `server.on('error')` só loga (não derruba). | Ver invariantes de segurança abaixo. POST NUNCA roda git/npm/shell — só `botControl.setPending()` + `onControl()`. |
+| `internalServer.js` | `startInternalAdminServer(getState, { onControl })` → `http.Server`. GET `/internal/health\|info\|log\|trade` + POST `/internal/restart\|update\|stop\|pull\|sync-lock\|restart-supervisor`. Auth: loopback obrigatório + `X-Internal-Token` se `token` setado; POST exige também `INTERNAL_ADMIN_ALLOW_CONTROL=true`. `server.on('error')` só loga (não derruba). | Ver invariantes de segurança abaixo. POST NUNCA roda git/npm/shell — só `botControl.setPending()` + `onControl()`. |
+| `../bot/shared/tradeStatusJournal.js` | Journal LOCAL (`backend/data/bot/trade-status.json`, gitignored) do estado de cada trade rastreado pelo rsi-momentum-bot — símbolo, fase, hora/preço/RSI da entrada, preço atual, variação %, alvo/stop, reforço. `writeTradeStatus`/`readTradeStatus`/`readAllTradeStatus`/`removeTradeStatus`, mesmo padrão atômico (tmp+rename) do `pendingState.js`. O BOT escreve a cada tick (`snapshotTradeStatus` em `rsi-momentum-bot.js`, chamado pelo wrapper `tick()` em cima de `tickCore()`); o `internalServer.js` só LÊ. | Não importar isto no `rsi-momentum-bot.js` como dependência pesada — é só fs+JSON. Escrita nunca pode lançar pro chamador (`tick()` engole erro do snapshot). |
 | `botControl.js` | Estado da intenção de controle (`backend/data/bot/control-action.json`: `pending` / `last`), exit codes sentinela (`EXIT = {STOP:0, RESTART:10, UPDATE:11, SYNC_LOCK:12, RESTART_SUPERVISOR:13}`), `dryRunPull()` (roda no launcher, não reinicia), `runUpdate()` e `runSyncLock()` (rodam no **supervisor**). `runUpdate`: `git fetch` → `merge --ff-only` → `npm ci` condicional. `runSyncLock`: `npm install --package-lock-only` → `git add package-lock.json` → `git commit` → `git push` best-effort — conserta o lock fora de sincronia sem tocar `node_modules`. `restart-supervisor` (exit `13`) NÃO tem `runX()` aqui — a troca de processo é feita direto em `bots-supervisor.js` (`restartSupervisor()`), o mesmo padrão do `restart` puro (exit `10`), que também não passa por `botControl.js` além do `recordResult`. | Sequências de update/sync-lock são FIXAS. Nada de `reset --hard`, build, comando arbitrário. Ambas recusam working tree sujo (`runSyncLock` tolera só o próprio `package-lock.json` modificado). |
 | `README.md` | Este arquivo. | — |
 
@@ -233,6 +238,47 @@ sem ele responde `403`, igual aos outros.
 - As linhas repetitivas de heartbeat (scan do RSI Momentum, `📋 Moedas avaliadas`)
   são **colapsadas**: só a última de cada bloco fica, com `(N×, hh:mm→hh:mm)`.
   `?raw=1` devolve o log cru, sem colapso.
+
+### `GET /internal/trade?symbol=BTCUSDT`
+
+Estado do trade ESPECÍFICO daquela moeda (rsi-momentum-bot) — pensado pro comando do WhatsApp
+"como está o trade de X" (símbolo, momento/preço/RSI da compra, preço atual, alta/baixa desde a
+entrada, alvo/stop, reforço). Lê `backend/data/bot/trade-status.json`
+(`tradeStatusJournal.readTradeStatus`), sem falar com Supabase nem exchange — dado só tão fresco
+quanto o último tick do bot (`fastPollMs`/`pollMs`, ver seção "Adaptive polling" do CLAUDE.md).
+
+```json
+{
+  "trade": {
+    "symbol": "BTCUSDT", "strategyId": "rsi-momentum", "exchange": "Binance",
+    "phase": "BOUGHT", "curated": false,
+    "entrySignalTime": "2026-09-23T10:00:00.000Z", "entrySignalPrice": 60000,
+    "entryTime": "2026-09-23T10:05:00.000Z", "entryPrice": 60050, "entryRsi": 71.2,
+    "currentPrice": 60650, "changePct": 1.0, "direction": "alta",
+    "target": 66055, "stop": 54045,
+    "reinforce": { "mode": "ladder", "rungs": 0, "awaitingReentry": false },
+    "entryFailure": null,
+    "updatedAt": "2026-09-23T11:23:58.391Z"
+  },
+  "checkedAt": "2026-09-23T11:24:20.661Z"
+}
+```
+
+- Sem `symbol` na query → `{ "trades": [...] }` só com as moedas EM TRADE agora (`phase ===
+  'BOUGHT'`, posição realmente aberta), ordenado do mais recente pro mais antigo — pensado pro
+  comando do WhatsApp "quais moedas estão em trade, subiram/desceram, em reforço" sem precisar
+  digitar símbolo nenhum. `?all=1` devolve TODOS os símbolos do journal (WATCHING curada, PENDING,
+  BOUGHT, FAILED) — só pra depurar, não é o que o comando do WhatsApp deve chamar.
+- Símbolo nunca rastreado (ou já retirado do pool) → `404 { error }`. Uma moeda retirada
+  (`retireAutoFavorite`, caminho não-curado) some do journal; uma moeda FAILED fica até o usuário
+  apagar manualmente pelo painel — o `updatedAt` parado é o sinal de que ficou velho.
+- `direction`: `'alta'`/`'baixa'`/`'estável'` (±0.05% de banda morta) comparando `currentPrice`
+  com `entryPrice`; `null` fora da fase BOUGHT.
+- `target`/`stop`: preço absoluto da bracket resting real na corretora (`rules_state.exitBracket`),
+  `null` se ainda não foi colocada (ex.: acabou de comprar) ou se o trade está em reforço "ladder"
+  (sem bracket, martingale candle a candle).
+- `reinforce`: `null` fora de reforço; `mode` `'ladder'` (escada sem stop) ou `'rearm'` (corretora
+  vende no stop, bot recompra e re-arma) — ver "Reforço no stop" no CLAUDE.md.
 
 Novos campos no `/internal/info`:
 - `controlEnabled` — `true` se `token` setado E `INTERNAL_ADMIN_ALLOW_CONTROL=true`.
@@ -381,6 +427,9 @@ npm run bots
 curl -s -H "X-Internal-Token: <token>" http://127.0.0.1:4100/internal/health
 curl -s -H "X-Internal-Token: <token>" http://127.0.0.1:4100/internal/info
 curl -s -H "X-Internal-Token: <token>" "http://127.0.0.1:4100/internal/log?lines=20"
+curl -s -H "X-Internal-Token: <token>" "http://127.0.0.1:4100/internal/trade?symbol=BTCUSDT"
+curl -s -H "X-Internal-Token: <token>" "http://127.0.0.1:4100/internal/trade"   # só quem tá EM TRADE (BOUGHT)
+curl -s -H "X-Internal-Token: <token>" "http://127.0.0.1:4100/internal/trade?all=1"   # + WATCHING/PENDING/FAILED
 curl -s http://127.0.0.1:4100/internal/health    # deve dar 403 (sem token)
 curl -s -H "X-Internal-Token: errado" http://127.0.0.1:4100/internal/info   # 403
 
@@ -439,3 +488,8 @@ node -e "require('./backend/admin/internalServer').startInternalAdminServer(()=>
   `njs-whatsapp` (repositório separado, fora deste projeto) espelhando
   `/admin/sync-lock`. Até lá, só dá pra chamar via `curl` direto (loopback) ou
   criando a rota lá.
+- **`/internal/trade?symbol=` idem** — só existe deste lado. Falta o `njs-whatsapp`
+  adicionar `/admin/trade` (com/sem `?symbol=`) e um comando tipo `/trade BTCUSDT`
+  que chama `GET /admin/trade?symbol=BTCUSDT` e formata a resposta pro usuário. Só
+  cobre o rsi-momentum-bot (único bot ativo — ver CLAUDE.md) e só o que o bot já
+  escreveu no último tick; sem posição rastreada dá `404`.

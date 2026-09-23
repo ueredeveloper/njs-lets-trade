@@ -78,6 +78,7 @@ const {
   createTradeExecution, entrySignalFields, resolveLastExitTime, resolveLastExitReason,
 } = require('../shared/tradeExecution');
 const { sendWhatsApp } = require('../whatsapp');
+const { writeTradeStatus, removeTradeStatus } = require('../shared/tradeStatusJournal');
 
 const BOT_LABEL = 'RSI-MOMENTUM';
 const VOL_CACHE_MS = 5 * 60_000;
@@ -215,6 +216,7 @@ async function retireAutoFavorite({ rowId, symbol, log, stopSelf, reason, sessio
   } catch (err) {
     log(`${Y}⚠️  Falha ao remover estado do favorito automático: ${err.message}${X}`);
   }
+  try { removeTradeStatus(symbol); } catch {}
   if (stopSelf) await stopSelf();
   return { phase: 'RETIRED' };
 }
@@ -579,7 +581,7 @@ async function fetchCandleMap(adapter, specs) {
 }
 
 // ── Tick ──────────────────────────────────────────────────────────────────────
-async function tick(rowId, adapter, strategy, log, session, stopSelf) {
+async function tickCore(rowId, adapter, strategy, log, session, stopSelf) {
   const { config } = strategy;
   const specs = getRequiredSpecs(config);
   const cMap  = await fetchCandleMap(adapter, specs);
@@ -594,6 +596,10 @@ async function tick(rowId, adapter, strategy, log, session, stopSelf) {
   if (!state) return { phase: 'WATCHING' };
 
   const { symbol, strategy_id: strategyId, capital } = state;
+  // Contexto pro snapshot do /internal/trade (ver tick() logo abaixo e tradeStatusJournal.js) —
+  // guardado no `session` (mutável, sobrevive ao fim desta função) pra não precisar mudar as
+  // dezenas de `return` deste bloco só pra carregar cMap/config/state até o wrapper.
+  session._tickCtx = { cMap, config, symbol, strategyId, state };
   let phase = session.phase ?? state.phase;
   if (phase === 'BOUGHT' && !hasOpenPosition(state)) {
     return resetOrphanPosition(rowId, log, session, state, 'sem buy_qty/buy_price no Supabase');
@@ -1034,6 +1040,63 @@ async function tick(rowId, adapter, strategy, log, session, stopSelf) {
     return { phase: 'BOUGHT' };
   }
   return retireOrCooldown({ rowId, symbol, log, stopSelf, config, cMap, state, session, reason: `trade fechado (${exitResult.reason})` });
+}
+
+/** Espelha o resultado do tick num JSON local (tradeStatusJournal.js) — a API interna
+ *  (backend/admin/, processo separado do bot) lê esse arquivo pra responder "como está indo o
+ *  trade da moeda X" no `/internal/trade?symbol=` (WhatsApp) sem importar o motor de trade nem
+ *  falar com o Supabase. Nunca lança — `tick()` chama isto depois do resultado real, um erro
+ *  aqui não pode derrubar o ciclo do bot. */
+function snapshotTradeStatus(adapter, session, result) {
+  const ctx = session._tickCtx;
+  if (!ctx) return;
+  const { cMap, config, symbol, strategyId, state } = ctx;
+  const rs = { ...parseRulesState(state), ...(session.rulesState ?? {}) };
+  const lastCandles = cMap[config.entry.interval] ?? [];
+  const currentPrice = lastCandles.length ? parseFloat(lastCandles[lastCandles.length - 1].close) : null;
+  const phase = result?.phase ?? session.phase ?? state.phase ?? 'WATCHING';
+  const buyPrice = state.buy_price != null ? parseFloat(state.buy_price) : null;
+  const changePct = phase === 'BOUGHT' && buyPrice != null && currentPrice != null
+    ? ((currentPrice / buyPrice) - 1) * 100 : null;
+  const eb = rs.exitBracket;
+  const reinforceMode = rs.rearm?.active ? 'rearm' : (rs.reinforce?.active ? 'ladder' : null);
+  const reinforceState = reinforceMode === 'rearm' ? rs.rearm : reinforceMode === 'ladder' ? rs.reinforce : null;
+
+  writeTradeStatus(symbol, {
+    symbol,
+    strategyId,
+    exchange: adapter?.name ?? null,
+    phase,
+    curated: !!session.curated,
+    entrySignalTime: state.entry_signal_time ?? null,
+    entrySignalPrice: state.entry_signal_price != null ? parseFloat(state.entry_signal_price) : null,
+    entryTime: state.buy_time ?? null,
+    entryPrice: buyPrice,
+    entryRsi: state.rsi_entry != null ? parseFloat(state.rsi_entry) : null,
+    currentPrice,
+    changePct: changePct != null ? Number(changePct.toFixed(2)) : null,
+    direction: changePct == null ? null : changePct > 0.05 ? 'alta' : changePct < -0.05 ? 'baixa' : 'estável',
+    target: eb?.targetPrice != null ? Number(eb.targetPrice) : null,
+    stop: eb?.stopPrice != null ? Number(eb.stopPrice) : null,
+    reinforce: reinforceMode ? {
+      mode: reinforceMode,
+      rungs: reinforceState?.rungs ?? (Array.isArray(reinforceState?.legTimeline) ? reinforceState.legTimeline.length : 0),
+      awaitingReentry: !!reinforceState?.awaitingReentry,
+    } : null,
+    entryFailure: phase === 'FAILED' ? (rs.entryFailure?.message ?? null) : null,
+    updatedAt: new Date().toISOString(),
+  });
+}
+
+/** Wrapper fino sobre tickCore() — só acrescenta o snapshot pro `/internal/trade` sem tocar nas
+ *  dezenas de `return` do bloco WATCHING/BOUGHT acima. Erro no snapshot é engolido: nunca pode
+ *  atrapalhar o ciclo real do bot. */
+async function tick(rowId, adapter, strategy, log, session, stopSelf) {
+  const result = await tickCore(rowId, adapter, strategy, log, session, stopSelf);
+  try { snapshotTradeStatus(adapter, session, result); } catch (err) {
+    log(`${Y}⚠️  Falha ao gravar snapshot de status (/internal/trade): ${err.message}${X}`);
+  }
+  return result;
 }
 
 // ── Reforço no stop (escada de averaging-down / martingale) ────────────────────

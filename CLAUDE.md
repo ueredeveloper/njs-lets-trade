@@ -44,7 +44,14 @@ bots**. O launcher hospeda um `http.Server` **só loopback** (default
   `pendingAction`, `lastAction`), `/internal/log` (1ª linha = versão/commit em
   execução; colapsa as linhas repetitivas de heartbeat — scan RSI Momentum,
   `📋 Moedas avaliadas` — só a última de cada bloco com `(N×, hh:mm→hh:mm)`;
-  `?raw=1` desliga o colapso).
+  `?raw=1` desliga o colapso), `/internal/trade?symbol=` (estado só daquela moeda
+  — fase, hora/preço/RSI da compra, preço atual, alta/baixa desde a entrada,
+  alvo/stop, reforço; sem `symbol` lista só quem está EM TRADE agora — fase
+  BOUGHT, posição aberta — pensado pro comando do WhatsApp sem precisar digitar
+  símbolo; `?all=1` inclui WATCHING/PENDING/FAILED). Lê
+  `backend/data/bot/trade-status.json`, escrito a cada tick pelo rsi-momentum-bot
+  (`tradeStatusJournal.js`) — nunca fala com Supabase/exchange, dado só tão
+  fresco quanto o último tick.
 - **Controle (opt-in):** `POST /internal/{restart,update,stop,pull,sync-lock,restart-supervisor}`
   — só com `INTERNAL_ADMIN_TOKEN` + `INTERNAL_ADMIN_ALLOW_CONTROL=true`. A API **não roda
   git/npm/shell**: grava a intenção (`botControl.js`) e mata o launcher com um
@@ -68,8 +75,9 @@ bots**. O launcher hospeda um `http.Server` **só loopback** (default
 
 É o lado cooperativo da administração remota: `njs-whatsapp` (porta 3005) consome
 isso para `/admin/status|health|log|restart|update|stop|pull|sync-lock` no
-WhatsApp (`restart-supervisor` ainda só existe do lado `njs-lets-trade` — falta a
-rota/comando espelhado no `njs-whatsapp`). Config no `.env` (`INTERNAL_ADMIN_*`).
+WhatsApp (`restart-supervisor` e `trade` ainda só existem do lado `njs-lets-trade`
+— falta a rota/comando espelhado no `njs-whatsapp`, ex. `/trade BTCUSDT`). Config
+no `.env` (`INTERNAL_ADMIN_*`).
 Launcher sozinho (sem restart/update): `npm run bots:nosup`.
 
 O **supervisor avisa no WhatsApp** (via `backend/bot/whatsapp.js`, best-effort) o

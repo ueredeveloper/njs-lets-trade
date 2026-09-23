@@ -7,6 +7,7 @@
  *   GET  /internal/health   → njs-whatsapp GET  /admin/health
  *   GET  /internal/info     → njs-whatsapp GET  /admin/status
  *   GET  /internal/log      → njs-whatsapp GET  /admin/log
+ *   GET  /internal/trade?symbol=  → njs-whatsapp GET /admin/trade?symbol=  (ainda não espelhado lá)
  *   POST /internal/restart   → njs-whatsapp POST /admin/restart
  *   POST /internal/update    → njs-whatsapp POST /admin/update
  *   POST /internal/stop      → njs-whatsapp POST /admin/stop
@@ -33,6 +34,7 @@ const { internalConfig } = require('./internalConfig');
 const { getGitInfo } = require('./gitInfo');
 const botLog = require('./botLog');
 const botControl = require('./botControl');
+const tradeStatus = require('../bot/shared/tradeStatusJournal');
 
 const pkg = require(path.join(internalConfig.repoRoot, 'package.json'));
 
@@ -167,6 +169,24 @@ function startInternalAdminServer(getState, opts = {}) {
         git,
         lines: [header, ...botLog.tail(Number.isFinite(n) ? n : 100, { collapse: !raw })],
       });
+    }
+
+    if (route === 'GET /internal/trade') {
+      const symbol = (url.searchParams.get('symbol') || '').trim().toUpperCase();
+      if (!symbol) {
+        // Sem `symbol`: lista as moedas EM TRADE agora (posição aberta) — não o rastreio
+        // inteiro (WATCHING/PENDING/FAILED também ficam no journal, mas não são "um trade").
+        // `?all=1` devolve todas as fases, útil só pra depurar.
+        const showAll = ['1', 'true', 'yes'].includes((url.searchParams.get('all') || '').toLowerCase());
+        const all = safeCall(() => tradeStatus.readAllTradeStatus()) || {};
+        const trades = Object.values(all)
+          .filter((t) => showAll || t.phase === 'BOUGHT')
+          .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
+        return send(res, 200, { trades, checkedAt: new Date().toISOString() });
+      }
+      const trade = safeCall(() => tradeStatus.readTradeStatus(symbol));
+      if (!trade) return send(res, 404, { error: `sem trade rastreado para ${symbol}` });
+      return send(res, 200, { trade, checkedAt: new Date().toISOString() });
     }
 
     return send(res, 404, { error: 'rota não encontrada' });
