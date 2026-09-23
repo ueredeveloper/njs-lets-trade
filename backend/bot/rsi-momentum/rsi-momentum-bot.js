@@ -61,6 +61,13 @@ const {
 // aporte o bot NÃO liquida nada: segura a pilha e deixa o trade sair no alvo normalmente.
 const REINFORCE_HARD_CAP = 40;
 
+// `proceeds` (usdtOut/filled_total/cummulativeQuoteQty) que sai da venda no stop é o valor BRUTO
+// da execução — Gate.io e Binance descontam a taxa de corretagem (~0,1–0,2%) do USDT que
+// efetivamente cai na carteira antes de creditar o saldo. Sem esse desconto, `spendUsd = proceeds
+// + rungUsd` pede pra recomprar um valor maior do que o saldo livre real → Gate.io rejeita com
+// "400: Not enough balance" (caso SKYAIUSDT 23/09) e o rearm aborta pro fallback de stop normal.
+const REARM_SELL_FEE_BUFFER = 0.003; // 0,3% — cobre a taxa (Gate 0,2% / Binance 0,1%) + folga
+
 // Alvo "desligado" (exit.targetMode === 'off'): a OCO da corretora precisa das duas pernas, então
 // coloca o TP num teto absurdo (+500%) — a Binance PRENDE (clamp) em ~+100% do preço médio e, na
 // prática, a posição só sai pelo stop. Gate.io não tem esse filtro; o trigger fica parado inofensivo.
@@ -1256,7 +1263,7 @@ async function startRearmReinforce({ rowId, adapter, strategy, log, state, sessi
     });
   }
 
-  log(`${Y}🛑→↻ ${symbol} bateu o stop — recomprando a mercado ${(proceeds + rungUsd).toFixed(2)} USDT (${proceeds.toFixed(2)} da venda + ${rungUsd.toFixed(2)} de reforço), re-armando bracket −${rf.rearmStopPct}% / +${rf.rearmTargetPct}%${X}`);
+  log(`${Y}🛑→↻ ${symbol} bateu o stop — recomprando a mercado ${(proceeds * (1 - REARM_SELL_FEE_BUFFER) + rungUsd).toFixed(2)} USDT (${proceeds.toFixed(2)} da venda + ${rungUsd.toFixed(2)} de reforço), re-armando bracket −${rf.rearmStopPct}% / +${rf.rearmTargetPct}%${X}`);
   return finalizeRearmRebuy({
     rowId, adapter, strategy, log, state, session, config, cMap, stopSelf, symbol, strategyId,
     rulesState: session.rulesState, proceeds, pendingRearm,
@@ -1311,7 +1318,9 @@ async function finalizeRearmRebuy({ rowId, adapter, strategy, log, state, sessio
   const rungUsd = Number(pendingRearm.rungUsd) > 0
     ? Number(pendingRearm.rungUsd)
     : (Number(rf.buyUsd) > 0 ? Number(rf.buyUsd) : parseFloat(state.capital));
-  const spendUsd = proceeds + rungUsd;
+  // `proceeds` é o valor BRUTO da venda (ver REARM_SELL_FEE_BUFFER) — desconta a taxa antes de
+  // somar ao aporte, senão a recompra pede mais USDT do que realmente sobrou na carteira.
+  const spendUsd = proceeds * (1 - REARM_SELL_FEE_BUFFER) + rungUsd;
 
   if (!buyResult) {
     try {
@@ -1420,7 +1429,7 @@ async function resumeRearmPending({ rowId, adapter, strategy, log, state, sessio
     const proceeds = Number(rp.ocoProceeds) > 0
       ? Number(rp.ocoProceeds)
       : prevQty * (Number(rp.prevBuyPrice) || lastPx) * 0.999; // estimativa da venda no stop
-    log(`${G}   → carteira vazia; recomprando ${(proceeds + rungUsd).toFixed(2)} USDT agora${X}`);
+    log(`${G}   → carteira vazia; recomprando ${(proceeds * (1 - REARM_SELL_FEE_BUFFER) + rungUsd).toFixed(2)} USDT agora${X}`);
     return finalizeRearmRebuy({
       rowId, adapter, strategy, log, state, session, config, cMap, stopSelf, symbol, strategyId,
       rulesState, proceeds, pendingRearm: rp,

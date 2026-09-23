@@ -1383,6 +1383,62 @@ router.get('/multitrade-rescue-position', getUserId, async (req, res) => {
   }
 });
 
+// GET /services/sb/multitrade-buy-quote?symbol=&strategyId= — modal "Estado do bot", card
+// "Registrar compra manual → BOUGHT" (fase AGUARDANDO): lê o saldo LIVRE de USDT na corretora
+// (quanto dá pra comprar agora) e sugere o TIPO de compra — "reforço" (valor = exit.
+// reinforceOnStop.buyUsd) quando o último fechamento foi por STOP_LOSS e o reforço está
+// habilitado na config (rearm/ladder — só rsi-momentum), senão "nova compra" (capital da
+// config). Só leitura — não altera nada, não coloca ordem.
+router.get('/multitrade-buy-quote', getUserId, async (req, res) => {
+  const symbol = req.query.symbol?.toUpperCase();
+  const strategyId = normStrategyId(req.query.strategyId ?? req.query.strategy_id ?? 'ma-cross');
+  if (!symbol) return res.status(400).json({ error: 'symbol obrigatório' });
+  if (!strategyId) return res.status(400).json({ error: 'strategyId obrigatório' });
+
+  const { data: fav, error: favErr } = await supabase
+    .from('multitrade_favorites')
+    .select('*')
+    .eq('user_id', req.userId)
+    .eq('symbol', symbol)
+    .eq('strategy_id', strategyId)
+    .single();
+  if (favErr || !fav) return res.status(404).json({ error: 'favorito não encontrado' });
+
+  const { data: st } = await supabase
+    .from('rsi_multi_bot_state')
+    .select('rules_state')
+    .eq('symbol', symbol)
+    .eq('strategy_id', strategyId)
+    .maybeSingle();
+  let rulesState = st?.rules_state ?? null;
+  if (typeof rulesState === 'string') {
+    try { rulesState = JSON.parse(rulesState); } catch { rulesState = null; }
+  }
+  const lastExitReason = rulesState?.lastExitReason ?? null;
+
+  try {
+    if (fav.exchange !== 'gate') await syncExchangeClocks();
+    const adapter = buildTradeAdapter(fav.exchange, symbol);
+    const freeQuote = await adapter.getQuoteBalance();
+
+    const reinforce = fav.trade_config?.exit?.reinforceOnStop;
+    const canReinforce = strategyId === 'rsi-momentum' && reinforce?.enabled && lastExitReason === 'STOP_LOSS';
+    const suggestion = canReinforce
+      ? {
+          type: 'reinforce', amountUsdt: Number(reinforce.buyUsd),
+          reason: 'Última saída foi por stop e o reforço no stop está ligado — este valor é o aporte (buyUsd) configurado.',
+        }
+      : {
+          type: 'new', amountUsdt: Number(fav.capital),
+          reason: 'Sem reforço pendente — este valor é o capital configurado pra uma entrada nova.',
+        };
+
+    res.json({ exchange: fav.exchange, symbol, quoteAsset: 'USDT', freeQuote, lastExitReason, suggestion });
+  } catch (err) {
+    res.status(500).json({ error: `Falha ao consultar a corretora: ${err.message}` });
+  }
+});
+
 /** rules_state com a OCO JÁ ABERTA na corretora adotada em `exitBracket` — o bot passa a
  *  acompanhá-la (pollExitBracket → alvo/stop → reforço no stop) em vez de tentar colocar outra
  *  por cima (falharia por saldo travado). Confere na corretora que a lista existe mesmo aberta. */
@@ -3025,6 +3081,17 @@ router.post('/user-prefs', getUserId, async (req, res) => {
       lastUsed: r.last_used,
     })),
   });
+});
+
+// DELETE /services/sb/recent-indicators — limpa o histórico de análises usadas no painel
+// "Analisar indicadores" (deixa de pré-preencher os formulários mais utilizados ao abrir).
+router.delete('/recent-indicators', getUserId, async (req, res) => {
+  const { error } = await supabase
+    .from('recent_indicators')
+    .delete()
+    .eq('user_id', req.userId);
+  if (error) return sbError(res, error, 'DELETE recent-indicators');
+  res.json({ ok: true });
 });
 
 // ── Config do screener automático BB+VWAP (4h) do ma-cross ──────────────────────

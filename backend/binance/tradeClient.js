@@ -252,10 +252,21 @@ function binanceBaseAsset(symbol) {
 /** Saldo livre do ativo-base — usado por detectOrphanPosition (backend/bot/shared/
  *  orphanPosition.js) pra descobrir se a corretora tem uma posição que o Supabase não sabe
  *  que existe (ex.: processo caiu entre o fill da compra e o saveState que marca BOUGHT). */
-async function binanceGetAssetBalance(symbol) {
+/** Saldo livre de UM ativo da conta (ex.: 'BTC', 'USDT'). */
+async function binanceGetBalance(asset) {
   const account = await binanceRequest('GET', '/api/v3/account');
-  const balance = account.balances?.find(b => b.asset === binanceBaseAsset(symbol));
+  const balance = account.balances?.find(b => b.asset === asset);
   return balance ? parseFloat(balance.free) : 0;
+}
+
+async function binanceGetAssetBalance(symbol) {
+  return binanceGetBalance(binanceBaseAsset(symbol));
+}
+
+/** Saldo livre de USDT — quanto dá pra gastar numa compra nova/reforço agora (ver
+ *  /multitrade-buy-quote em supabaseService.js). */
+async function binanceGetQuoteBalance() {
+  return binanceGetBalance('USDT');
 }
 
 /** Trades próprios recentes, normalizados pro mesmo formato usado em gateAccount.js
@@ -288,6 +299,7 @@ module.exports = {
   binanceMarketSell,
   binance24hVolume,
   binanceGetAssetBalance,
+  binanceGetQuoteBalance,
   binanceGetOwnTrades,
   binanceGetOpenOrders,
   decimalsFromStep,

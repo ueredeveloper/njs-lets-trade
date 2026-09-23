@@ -22,9 +22,9 @@ const { ichimokuCloudRouter } = require('./technicals-indicators');
 const {
   fetchCandles, fetchIchimokuCloud, fetchSupportResistance, fetchPivotPointsHighLow, fetchWilliamsFractals, fetchZigZag, fetchAllCurrencies, fetchBreakUsdtPairs,
   fetchSMA, fetchRSI, fetchChopZone, fetchVWAP, fetch24HsVolume, fetchMarketCapFilter, fetchStablecoins, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter, fetchMaDistanceFilter, fetchIndicatorGrowthFilter,
-  fetchRsiOversoldRecovery, fetchRsiThresholdBacktest, fetchRsiThresholdBacktestMarket, fetchCandleSetupsBacktest, fetchMaCrossStats, fetchVwapBandsStats, fetchBollingerBandRecovery, fetchBollingerBandPositionFilter, fetchVwapPositionFilter, fetchVwapBandWidthFilter, fetchBollingerBandWidthFilter, fetchBollingerMedianTrendFilter, fetchVwapBandExpansionFilter, fetchBollingerBands, fetchMACD, fetchSimpleMaCross, fetchReloadCandles,
+  fetchRsiOversoldRecovery, fetchRsiThresholdBacktest, fetchRsiThresholdBacktestMarket, fetchCandleSetupsBacktest, fetchMaCrossStats, fetchVwapBandsStats, fetchBollingerBandRecovery, fetchBollingerBandPositionFilter, fetchVwapPositionFilter, fetchVwapBandWidthFilter, fetchBollingerBandWidthFilter, fetchBandWidthEvolution, fetchBollingerMedianTrendFilter, fetchVwapBandExpansionFilter, fetchBollingerBands, fetchMACD, fetchSimpleMaCross, fetchReloadCandles,
   fetchGateCurrencies, fetchGateCoinsFilter, fetchGatePrefetch, fetchBinanceTrades, fetchGateTrades,
-  fetchActiveTrades, fetchTradeFavorites, stgBotStatus, multitradeService, fetchMarketHighlights, whatsappMessagesService, fetchCacheSettings, rsiMomentumStatsSearchLog, fetchRsiMomentumWatchlist, fetchRsiMomentumNearMisses } = require('./services');
+  fetchActiveTrades, fetchTradeFavorites, stgBotStatus, multitradeService, fetchMarketHighlights, whatsappMessagesService, fetchCacheSettings, rsiMomentumStatsSearchLog, bandWidthEvolutionSearchLog, fetchRsiMomentumWatchlist, fetchRsiMomentumNearMisses } = require('./services');
 const supabaseService = require('./services/supabaseService');
 const { refreshMedianTrendThreshold } = require('./utils/bollingerMedianTrendConfig');
 
@@ -78,6 +78,7 @@ app.use('/services', fetchBollingerBandPositionFilter)
 app.use('/services', fetchVwapPositionFilter)
 app.use('/services', fetchVwapBandWidthFilter)
 app.use('/services', fetchBollingerBandWidthFilter)
+app.use('/services', fetchBandWidthEvolution)
 app.use('/services', fetchBollingerMedianTrendFilter)
 app.use('/services', fetchVwapBandExpansionFilter)
 app.use('/services', fetchCacheSettings)
@@ -96,6 +97,7 @@ app.use('/services', stgBotStatus)
 app.use('/services', multitradeService)
 app.use('/services', whatsappMessagesService)
 app.use('/services', rsiMomentumStatsSearchLog)
+app.use('/services', bandWidthEvolutionSearchLog)
 app.use('/services', fetchRsiMomentumWatchlist)
 app.use('/services', fetchRsiMomentumNearMisses)
 app.use('/services/sb', supabaseService)

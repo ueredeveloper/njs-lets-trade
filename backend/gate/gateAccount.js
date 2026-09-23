@@ -10,11 +10,22 @@ const { gateRequest } = require('./getGateClient');
 
 const GATE_PUBLIC_BASE = 'https://api.gateio.ws/api/v4';
 
-async function gateGetTokenBalance(pair) {
-  const base     = pair.split('_')[0];
+/** Saldo livre de UMA moeda da conta (ex.: 'SKYAI', 'USDT') — usado tanto pro ativo-base
+ *  (gateGetTokenBalance) quanto pro quote (gateGetQuoteBalance). */
+async function gateGetBalance(currency) {
   const accounts = await gateRequest('GET', '/spot/accounts');
-  const acc      = accounts.find(a => a.currency === base);
+  const acc      = accounts.find(a => a.currency === currency);
   return acc ? parseFloat(acc.available) : 0;
+}
+
+async function gateGetTokenBalance(pair) {
+  return gateGetBalance(pair.split('_')[0]);
+}
+
+/** Saldo livre de USDT — quanto dá pra gastar numa compra nova/reforço agora (ver
+ *  /multitrade-buy-quote em supabaseService.js). */
+async function gateGetQuoteBalance() {
+  return gateGetBalance('USDT');
 }
 
 async function gate24hVolume(pair) {
@@ -48,4 +59,6 @@ async function gateGetOpenOrders(pair) {
   return Array.isArray(data) ? data : [];
 }
 
-module.exports = { gateGetTokenBalance, gate24hVolume, gateGetOwnTrades, gateGetOpenOrders, gateLastPrice };
+module.exports = {
+  gateGetTokenBalance, gateGetQuoteBalance, gate24hVolume, gateGetOwnTrades, gateGetOpenOrders, gateLastPrice,
+};

@@ -23,6 +23,15 @@ const getTickers = require('../../binance/cachedTicker24hr');
 
 const SCAN_CONCURRENCY = 15;
 
+/** Horário do ciclo de scan (BRT), carimbado nas linhas de resumo (sinais/bloqueadas) — sem
+ *  isso o digest do WhatsApp (formatLog.js, njs-whatsapp) não tem timestamp pra exibir nessas
+ *  linhas, só nos eventos por-moeda (que já vêm com [HH:MM:SS] do logger de cada símbolo). */
+function nowBrt() {
+    return new Date().toLocaleTimeString('pt-BR', {
+        timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit', second: '2-digit',
+    });
+}
+
 /**
  * Tradução dos `reason` devolvidos por evaluateEntrySignal/checkBandWidthFilter (ver
  * strategyEngine.js) — só pra exibição nos logs do scanner, os códigos em si continuam em
@@ -226,23 +235,22 @@ async function scanMarketOnce({ loadConfig, loadTrackedSymbols, onSignal, onNear
         }
     }, SCAN_CONCURRENCY);
 
-    log(`🔎 Scan RSI Momentum: ${candidates.length} moeda(s) analisadas`);
-    if (blockedByVolume) log(`   bloqueadas — volume 24h abaixo de ${minVolumeUsdt.toLocaleString('pt-BR')} USDT: ${blockedByVolume}`);
-    if (signalSymbols.length) log(`   sinais (${signalSymbols.length}): ${signalSymbols.join(', ')}`);
-    if (evalErrors) log(`   erros: ${evalErrors}`);
+    const ts = nowBrt();
+    log(`[${ts}] 🔎 Scan RSI Momentum: ${candidates.length} moeda(s) analisadas`);
+    if (blockedByVolume) log(`[${ts}]    bloqueadas — volume 24h abaixo de ${minVolumeUsdt.toLocaleString('pt-BR')} USDT: ${blockedByVolume}`);
+    if (signalSymbols.length) log(`[${ts}]    sinais (${signalSymbols.length}): ${signalSymbols.join(', ')}`);
+    if (evalErrors) log(`[${ts}]    erros: ${evalErrors}`);
 
-    // Uma linha por motivo de bloqueio — símbolos até MAX_SYMBOLS_SHOWN (com "+N mais" se
-    // passar disso); RSI_NOT_CROSSING só com a contagem (praticamente toda moeda cai nele).
-    const MAX_SYMBOLS_SHOWN = 20;
+    // Uma linha por motivo de bloqueio, com TODOS os símbolos daquele motivo (sem corte) e o
+    // horário do ciclo — exceção: RSI_NOT_CROSSING só com a contagem, porque é o motivo de
+    // praticamente toda moeda sem sinal (centenas por ciclo) e listar símbolo não ajuda em nada.
     for (const [r, n] of Object.entries(reasonCounts)) {
         const syms = reasonSymbols[r];
         if (!syms) {
-            log(`   bloqueadas — ${reasonLabels[r] ?? r}: ${n}`);
+            log(`[${ts}]    bloqueadas — ${reasonLabels[r] ?? r}: ${n}`);
             continue;
         }
-        const shown = syms.slice(0, MAX_SYMBOLS_SHOWN).join(', ');
-        const rest = syms.length > MAX_SYMBOLS_SHOWN ? `, +${syms.length - MAX_SYMBOLS_SHOWN} mais` : '';
-        log(`   bloqueadas — ${reasonLabels[r] ?? r} (${n}): ${shown}${rest}`);
+        log(`[${ts}]    bloqueadas — ${reasonLabels[r] ?? r} (${n}): ${syms.join(', ')}`);
     }
 }
 

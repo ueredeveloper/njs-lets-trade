@@ -61,6 +61,13 @@ export async function saveUserPrefs(update) {
   }).catch(() => {});
 }
 
+/** Limpa o histórico de análises usadas no painel "Analisar indicadores" (recent_indicators). */
+export async function clearRecentIndicators() {
+  const res = await fetch('/services/sb/recent-indicators', { method: 'DELETE' });
+  if (!res.ok) throw new Error('Falha ao limpar análises mais utilizadas');
+  return res.json();
+}
+
 export async function fetchStablecoins() {
   const res = await fetch('/services/stablecoins');
   if (!res.ok) throw new Error(`stablecoins falhou: HTTP ${res.status}`);
@@ -132,6 +139,51 @@ export async function fetchCandleSetupsBacktest(params = {}) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error ?? `HTTP ${res.status}`);
   }
+  return res.json();
+}
+
+/**
+ * Evolução da largura das Bandas de Bollinger (%) e velocidade de expansão (thrust).
+ * `params` = query de /services/band-width-evolution (ver backend/services/fetchBandWidthEvolution.js).
+ * Com `symbol`: série candle-a-candle de uma moeda. Sem `symbol`: varredura do mercado (1 linha/moeda).
+ */
+export async function fetchBandWidthEvolution(params = {}) {
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== null && v !== '') qs.set(k, String(v));
+  }
+  const res = await fetch(`/services/band-width-evolution?${qs}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+/** Salva uma pesquisa da tela Estatísticas → Banda BB (config + resumo do resultado) num JSON no
+ *  backend, pra comparar depois quais moedas/parâmetros mostraram expansão rápida. Fire-and-forget
+ *  — não deve quebrar a UI. */
+export async function saveBandWidthEvolutionSearch(payload) {
+  const res = await fetch('/services/band-width-evolution-searches', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+/** Lista as pesquisas salvas da aba Banda BB (mais recente primeiro). */
+export async function getBandWidthEvolutionSearches() {
+  const res = await fetch('/services/band-width-evolution-searches');
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+/** Apaga TODAS as pesquisas salvas do log da aba Banda BB. */
+export async function clearBandWidthEvolutionSearches() {
+  const res = await fetch('/services/band-width-evolution-searches', { method: 'DELETE' });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 }
 
@@ -1701,6 +1753,18 @@ export async function fetchMultitradeRescue({ symbol, strategyId }) {
   const res = await fetch(`/services/sb/multitrade-rescue-position?${params}`);
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body.error ?? `fetchMultitradeRescue falhou: HTTP ${res.status}`);
+  return body;
+}
+
+/** "Registrar compra manual" (modal Estado do bot, fase AGUARDANDO/PENDENTE): saldo LIVRE de
+ *  USDT na corretora e o tipo de compra sugerido (nova vs reforço) — só leitura, não coloca
+ *  ordem. Devolve { exchange, quoteAsset, freeQuote, lastExitReason, suggestion: { type,
+ *  amountUsdt, reason } }. */
+export async function fetchMultitradeBuyQuote({ symbol, strategyId }) {
+  const params = new URLSearchParams({ symbol, strategyId });
+  const res = await fetch(`/services/sb/multitrade-buy-quote?${params}`);
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error ?? `fetchMultitradeBuyQuote falhou: HTTP ${res.status}`);
   return body;
 }
 

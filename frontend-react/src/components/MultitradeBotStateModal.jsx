@@ -4,7 +4,7 @@ import {
 } from '../constants/strategyPresets';
 import { multitradePhaseBadge, displayPhase, PHASE_HINT_PT, fmtBuyTimeShort } from '../utils/multitradePhase';
 import { useI18n } from '../i18n';
-import { fetchBinancePrice, fetchGatePrice, fetchMultitradeRescue } from '../services/api';
+import { fetchBinancePrice, fetchGatePrice, fetchMultitradeRescue, fetchMultitradeBuyQuote } from '../services/api';
 import BracketDragSlider from './BracketDragSlider';
 
 const MT_COLOR = '#22d3ee';
@@ -309,6 +309,67 @@ function RescueBox({ symbol, strategyId, rescue, adoptOco, onRescued, onToggleAd
   );
 }
 
+/** Saldo livre de USDT na corretora + tipo de compra sugerido (nova vs reforço) — carrega
+ *  sozinho ao abrir o card, pra o usuário saber quanto dá pra comprar ANTES de ir comprar na
+ *  corretora e voltar aqui só pra registrar (ver caso SKYAIUSDT: reforço rearm de 80 USDT
+ *  tentado com só ~80 USDT livre no total, faltou pro proceeds da venda + o aporte). */
+function BuyQuoteBox({ symbol, strategyId }) {
+  const [quote, setQuote] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setErr(null);
+    setQuote(null);
+    fetchMultitradeBuyQuote({ symbol, strategyId })
+      .then(q => { if (!cancelled) setQuote(q); })
+      .catch(e => { if (!cancelled) setErr(e?.message ?? 'Falha ao consultar saldo'); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [symbol, strategyId]);
+
+  if (loading) {
+    return <p className="text-[9px] text-p5/40">Consultando saldo livre na corretora…</p>;
+  }
+  if (err) {
+    return <p className="text-[10px] text-red-400">{err}</p>;
+  }
+  if (!quote) return null;
+
+  const isReinforce = quote.suggestion?.type === 'reinforce';
+  const amount = Number(quote.suggestion?.amountUsdt);
+  const free = Number(quote.freeQuote);
+  const enough = Number.isFinite(amount) && Number.isFinite(free) ? free >= amount : true;
+
+  return (
+    <div className="rounded p-2 space-y-1" style={{ background: '#0b1a20', border: `1px solid ${MT_COLOR}44` }}>
+      <div className="flex items-center justify-between text-[10px]">
+        <span className="text-p5/50">Saldo livre ({quote.exchange === 'gate' ? 'Gate.io' : 'Binance'})</span>
+        <span className="font-mono font-bold" style={{ color: MT_COLOR }}>
+          {Number.isFinite(free) ? `$${free.toFixed(2)}` : '—'}
+        </span>
+      </div>
+      <div className="flex items-center justify-between text-[10px]">
+        <span className="text-p5/50">Tipo de compra</span>
+        <span className="font-mono font-bold" style={{ color: isReinforce ? '#a78bfa' : '#22c55e' }}>
+          {isReinforce ? 'Reforço' : 'Nova compra'}{Number.isFinite(amount) ? ` — $${amount.toFixed(2)}` : ''}
+        </span>
+      </div>
+      {quote.suggestion?.reason && (
+        <p className="text-[9px] text-p5/40 leading-relaxed">{quote.suggestion.reason}</p>
+      )}
+      {!enough && (
+        <p className="text-[9px] text-amber-400 leading-relaxed">
+          ⚠ Saldo livre menor que o valor sugerido — compre um valor menor na corretora pra não tomar
+          "saldo insuficiente".
+        </p>
+      )}
+    </div>
+  );
+}
+
 function BoughtFormFields({ buyPrice, buyQty, buyTime, onPrice, onQty, onTime }) {
   return (
     <>
@@ -525,6 +586,7 @@ export default function MultitradeBotStateModal({
                   when="Use se você comprou na corretora por conta própria (ou o bot comprou mas não conseguiu gravar) e quer que o bot gerencie a saída."
                   accent="#22c55e"
                 >
+                  {entry && <BuyQuoteBox symbol={symbol} strategyId={normalizeStrategyId(entry.strategyId)} />}
                   {rescueBox}
                   <BoughtFormFields
                     buyPrice={buyPrice} buyQty={buyQty} buyTime={buyTime}
@@ -635,6 +697,7 @@ export default function MultitradeBotStateModal({
                     when="Se a ordem pendente foi preenchida ou você comprou manualmente."
                     accent="#22c55e"
                   >
+                    {entry && <BuyQuoteBox symbol={symbol} strategyId={normalizeStrategyId(entry.strategyId)} />}
                     {rescueBox}
                     <BoughtFormFields
                       buyPrice={buyPrice} buyQty={buyQty} buyTime={buyTime}

@@ -35,6 +35,8 @@ const fetchBollingerBandPositionFilter = require('./fetchBollingerBandPositionFi
 const fetchVwapPositionFilter = require('./fetchVwapPositionFilter')
 const fetchVwapBandWidthFilter = require('./fetchVwapBandWidthFilter')
 const fetchBollingerBandWidthFilter = require('./fetchBollingerBandWidthFilter')
+const fetchBandWidthEvolution = require('./fetchBandWidthEvolution')
+const bandWidthEvolutionSearchLog = require('./bandWidthEvolutionSearchLog')
 const fetchBollingerMedianTrendFilter = require('./fetchBollingerMedianTrendFilter')
 const fetchVwapBandExpansionFilter = require('./fetchVwapBandExpansionFilter')
 const fetchBollingerBands             = require('./fetchBollingerBands')
@@ -59,8 +61,8 @@ const rsiMomentumStatsSearchLog = require('./rsiMomentumStatsSearchLog')
 module.exports = {
     fetchCandles, fetchIchimokuCloud, fetchSupportResistance, fetchPivotPointsHighLow, fetchWilliamsFractals, fetchZigZag, fetchAllCurrencies, fetchBreakUsdtPairs,
     fetchSMA, fetchRSI, fetchChopZone, fetchVWAP, fetch24HsVolume, fetchMarketCapFilter, fetchStablecoins,
-    fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter, fetchMaDistanceFilter, fetchIndicatorGrowthFilter, fetchRsiOversoldRecovery, fetchRsiThresholdBacktest, fetchRsiThresholdBacktestMarket, fetchCandleSetupsBacktest, fetchMaCrossStats, fetchVwapBandsStats, fetchBollingerBandRecovery, fetchBollingerBandPositionFilter, fetchVwapPositionFilter, fetchVwapBandWidthFilter, fetchBollingerBandWidthFilter, fetchBollingerMedianTrendFilter, fetchVwapBandExpansionFilter, fetchBollingerBands, fetchMACD, fetchSimpleMaCross, fetchReloadCandles,
+    fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter, fetchMaDistanceFilter, fetchIndicatorGrowthFilter, fetchRsiOversoldRecovery, fetchRsiThresholdBacktest, fetchRsiThresholdBacktestMarket, fetchCandleSetupsBacktest, fetchMaCrossStats, fetchVwapBandsStats, fetchBollingerBandRecovery, fetchBollingerBandPositionFilter, fetchVwapPositionFilter, fetchVwapBandWidthFilter, fetchBollingerBandWidthFilter, fetchBandWidthEvolution, fetchBollingerMedianTrendFilter, fetchVwapBandExpansionFilter, fetchBollingerBands, fetchMACD, fetchSimpleMaCross, fetchReloadCandles,
     fetchGateCurrencies, fetchGateCoinsFilter, fetchGatePrefetch, fetchBinanceTrades, fetchGateTrades, fetchActiveTrades,
-    fetchTradeFavorites, stgBotStatus, multitradeService, fetchMarketHighlights, whatsappMessagesService, fetchCacheSettings, rsiMomentumStatsSearchLog, fetchRsiMomentumWatchlist, fetchRsiMomentumNearMisses }
+    fetchTradeFavorites, stgBotStatus, multitradeService, fetchMarketHighlights, whatsappMessagesService, fetchCacheSettings, rsiMomentumStatsSearchLog, bandWidthEvolutionSearchLog, fetchRsiMomentumWatchlist, fetchRsiMomentumNearMisses }
 
 

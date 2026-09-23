@@ -86,6 +86,26 @@ function bollingerBandWidthSeries(candles, { period = 20, stdDev = 2 } = {}) {
   return out.length ? out : null;
 }
 
+/**
+ * Mesma série de bollingerBandWidthSeries, mas pareada com o timestamp (openTime) do candle de
+ * cada ponto — usada pra desenhar a evolução no tempo (Estatísticas → aba Banda BB), em vez de só
+ * a média/min/max agregados que bollingerBandWidthSeries alimenta hoje.
+ */
+function bollingerBandWidthSeriesWithTime(candles, { period = 20, stdDev = 2 } = {}) {
+  if (!candles?.length || candles.length < period + 1) return null;
+  const closes = candles.map(c => parseFloat(c.close));
+  const bb = BollingerBands.calculate({ period, values: closes, stdDev });
+  const offset = period - 1;
+  const out = [];
+  for (let i = 0; i < bb.length; i++) {
+    const b = bb[i];
+    if (b.lower > 0 && b.upper > b.lower) {
+      out.push({ time: Number(candles[i + offset].openTime), widthPct: ((b.upper - b.lower) / b.lower) * 100 });
+    }
+  }
+  return out.length ? out : null;
+}
+
 /** Ciclo: RSI cai abaixo de `oversold` (fundo) → RSI sobe acima de `overbought` (topo). */
 function computeRsiGrowth(candles, { period = 14, oversold = 30, overbought = 70 } = {}) {
   if (!candles?.length || candles.length < period + 1) return null;
@@ -222,6 +242,54 @@ function computeRsiThrust(candles, { period = 14, from = 50, to = 70, interval }
   return { totalOccurrences, avgMinutes, avgVelocity, current };
 }
 
+/**
+ * Expansão da largura de banda dentro da janela de candles buscada: acha o MENOR valor de largura
+ * da série (o "fundo" mais recente que a janela alcança) e mede a subida até o valor ATUAL — em
+ * pontos concretos ("foi de 1% pra 3%", "de 4% pra 10%"), não um cruzamento de patamar fixo
+ * escolhido a dedo (que só faz sentido pra uma moeda cuja largura "normal" já é perto desses
+ * valores — a largura "normal" varia demais de moeda pra moeda pra um limiar único fazer sentido
+ * no mercado inteiro). `ratio`/`gainPct` (atual ÷ fundo, e o ganho % equivalente) respondem direto
+ * "dobrou?"/"triplicou?" (ratio 2 = ganho 100%, ratio 3 = ganho 200%) — o que importa é o GANHO
+ * relativo, não os valores absolutos em si (1%→2% e 5%→10% são o mesmo ganho de 100%). O quanto a
+ * busca alcança pra trás é o próprio `lookback` já usado pra buscar a série (ver conversa sobre
+ * lookback pequeno perder expansões que começaram antes da janela). Usado pela aba Estatísticas →
+ * Banda BB (avaliação de velocidade de expansão, independente do RSI Momentum).
+ */
+const BAND_WIDTH_RATIO_MIN_TROUGH_PCT = 0.05;
+
+function computeBandWidthExpansion(candles, { period = 20, stdDev = 2 } = {}) {
+  const series = bollingerBandWidthSeriesWithTime(candles, { period, stdDev });
+  if (!series || series.length < 2) return null;
+
+  let troughIdx = 0;
+  for (let i = 1; i < series.length; i++) {
+    if (series[i].widthPct < series[troughIdx].widthPct) troughIdx = i;
+  }
+  const lastIdx = series.length - 1;
+  const trough = series[troughIdx];
+  const current = series[lastIdx];
+  const minutesSinceTrough = (current.time - trough.time) / 60_000;
+  const velocityPpPerMin = minutesSinceTrough > 0
+    ? parseFloat(((current.widthPct - trough.widthPct) / minutesSinceTrough).toFixed(4))
+    : null;
+  // Fundo perto de 0 (stablecoin, ou candle flat) faz a razão explodir pra números sem sentido
+  // (ex.: USDP/XUSD deram "ratio" na casa dos trilhões) — abaixo desse piso, "ganho relativo" não
+  // é uma pergunta que faça sentido pra essa moeda; null em vez de um número absurdo.
+  const ratio = trough.widthPct >= BAND_WIDTH_RATIO_MIN_TROUGH_PCT ? current.widthPct / trough.widthPct : null;
+  const rising = lastIdx > 0 ? current.widthPct > series[lastIdx - 1].widthPct : false;
+
+  return {
+    troughWidthPct: parseFloat(trough.widthPct.toFixed(2)),
+    troughTime: trough.time,
+    currentWidthPct: parseFloat(current.widthPct.toFixed(2)),
+    minutesSinceTrough: parseFloat(minutesSinceTrough.toFixed(1)),
+    velocityPpPerMin,
+    ratio: ratio != null ? parseFloat(ratio.toFixed(2)) : null,
+    gainPct: ratio != null ? parseFloat(((ratio - 1) * 100).toFixed(1)) : null,
+    rising,
+  };
+}
+
 const ENGINES = {
   bollinger: computeBollingerGrowth,
   rsi: computeRsiGrowth,
@@ -243,6 +311,8 @@ module.exports = {
   computeRsiGrowth,
   computeMaCrossGrowth,
   computeRsiThrust,
+  computeBandWidthExpansion,
   bollingerCycleOccurrences,
   bollingerBandWidthSeries,
+  bollingerBandWidthSeriesWithTime,
 };

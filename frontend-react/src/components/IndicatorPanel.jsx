@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useCurrency } from '../contexts/CurrencyContext';
-import { fetchCandlesAndIndicators, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter, fetchMaDistanceFilter, fetchIndicatorGrowthFilter, fetchMarketCapFilter, fetchBollingerBandPositionFilter, fetchBollingerBandWidthFilter, fetchBollingerMedianTrendFilter, fetchVwapPositionFilter, fetchVwapBandWidthFilter, fetchVwapBandExpansionFilter, fetchRsiMomentumWatchlist, fetchRsiMomentumNearMisses, getRsiMomentumConfig, getRsiMomentumCuratedBot, getRsiMomentumCuratedList, fetchGateCoinsFilter, fetchUserPrefs, saveUserPrefs } from '../services/api';
+import { fetchCandlesAndIndicators, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter, fetchMaDistanceFilter, fetchIndicatorGrowthFilter, fetchMarketCapFilter, fetchBollingerBandPositionFilter, fetchBollingerBandWidthFilter, fetchBollingerMedianTrendFilter, fetchVwapPositionFilter, fetchVwapBandWidthFilter, fetchVwapBandExpansionFilter, fetchRsiMomentumWatchlist, fetchRsiMomentumNearMisses, getRsiMomentumConfig, getRsiMomentumCuratedBot, getRsiMomentumCuratedList, fetchGateCoinsFilter, fetchUserPrefs, saveUserPrefs, clearRecentIndicators } from '../services/api';
 import { RSI_MOMENTUM_ALL_INTERVALS, RSI_MOMENTUM_SR_INTERVAL_OPTIONS, RSI_MOMENTUM_SR_CANDLE_COUNT_OPTIONS } from '../constants/rsiMomentumConfigSchema';
 import { useI18n } from '../i18n';
 import {
@@ -134,18 +134,49 @@ const EMPTY_INDICATOR = { type: '', intervals: ['8h'] };
 // nascem com os valores mais usados pelo usuário (ver MOMENTUM_GERAL_PRESET / MOMENTUM_SKYAI_PRESET
 // abaixo) — campo já definido não é sobrescrito pelo prefill da config ao vivo do bot (ver
 // useEffect de prefill em IndicatorRow, que só toca em campo `undefined`).
+// Valores conferidos direto no Supabase (rsi_momentum_global_config / rsi_multi_bot_state, campo
+// entry.supportResistance) em 23/09/2026 — os dois bots rodam S/R 4h · 200 candles.
 const MOMENTUM_GERAL_PRESET = {
   type: 'botReadiness', mode: 'contention',
-  tradeInterval: '15m', srInterval: '4h', srCandleCount: '300', rsiSignal: '69',
+  tradeInterval: '15m', srInterval: '4h', srCandleCount: '200', rsiSignal: '69',
 };
 const MOMENTUM_SKYAI_PRESET = {
   type: 'botReadinessCurated', mode: 'contention', symbol: 'SKYAIUSDT',
-  tradeInterval: '15m', srInterval: '15m', srCandleCount: '300', rsiSignal: '69',
+  tradeInterval: '15m', srInterval: '4h', srCandleCount: '200', rsiSignal: '69',
 };
 const DEFAULT_INDICATORS = [
   { ...MOMENTUM_GERAL_PRESET },
   { ...MOMENTUM_SKYAI_PRESET },
 ];
+
+/** Chave canônica (ordem de chaves estável) pra deduplicar configs de indicador entre os presets
+ *  fixos e o histórico de "mais usados" vindo do backend (recent_indicators). */
+function canonicalIndicatorKey(ind) {
+  const obj = { type: ind?.type, ...ind };
+  return JSON.stringify(obj, Object.keys(obj).sort());
+}
+
+/** Histórico de análises usadas (recent_indicators, ver GET/POST /services/sb/user-prefs): só
+ *  entra como formulário auto-preenchido quem foi buscado mais de uma vez, até um teto, e nunca
+ *  duplicando os presets fixos (Momentum Geral/Exclusivo) que já abrem por padrão. */
+const RECENT_MIN_USE_COUNT = 2;
+const RECENT_MAX_AUTOFILL = 3;
+
+function pickRecentIndicatorsToAutofill(recentIndicators, existingIndicators) {
+  if (!recentIndicators?.length) return [];
+  const existingKeys = new Set(existingIndicators.map(canonicalIndicatorKey));
+  const extras = [];
+  for (const r of recentIndicators) {
+    if (!r?.config?.type) continue;
+    if ((r.count ?? 1) < RECENT_MIN_USE_COUNT) continue;
+    const key = canonicalIndicatorKey(r.config);
+    if (existingKeys.has(key)) continue;
+    existingKeys.add(key);
+    extras.push({ ...r.config });
+    if (extras.length >= RECENT_MAX_AUTOFILL) break;
+  }
+  return extras;
+}
 
 /** Formulários prontos — cada um substitui a lista de indicadores por uma única busca pré-configurada. */
 const QUICK_PRESETS = [
@@ -1567,13 +1598,32 @@ export default function IndicatorPanel({ open, onToggle }) {
   const [indicators, setIndicators] = useState(DEFAULT_INDICATORS);
   const [searching, setSearching] = useState(false);
   const [savedIntervals, setSavedIntervals] = useState(['15m', '1h', '4h']);
+  const [recentIndicators, setRecentIndicators] = useState([]);
+  const [clearingRecent, setClearingRecent] = useState(false);
 
-  // Carrega preferências do backend na montagem
+  // Carrega preferências do backend na montagem — inclui o histórico de análises mais usadas
+  // (recent_indicators), que entra como formulário extra já preenchido (ver
+  // pickRecentIndicatorsToAutofill) além dos dois presets fixos de Momentum RSI.
   useEffect(() => {
     fetchUserPrefs().then(prefs => {
       if (prefs?.intervals?.length) setSavedIntervals(prefs.intervals);
+      const recents = prefs?.recentIndicators ?? [];
+      setRecentIndicators(recents);
+      const extras = pickRecentIndicatorsToAutofill(recents, DEFAULT_INDICATORS);
+      if (extras.length) setIndicators((prev) => [...prev, ...extras]);
     });
   }, []);
+
+  async function handleClearRecentIndicators() {
+    if (!recentIndicators.length) return;
+    if (!window.confirm(t('ip.clear_recent_confirm'))) return;
+    setClearingRecent(true);
+    try {
+      await clearRecentIndicators();
+      setRecentIndicators([]);
+    } catch { /* silencioso */ }
+    finally { setClearingRecent(false); }
+  }
 
   function updateIndicator(index, newValOrFn) {
     setIndicators((prev) => prev.map((item, i) => (
@@ -2028,6 +2078,18 @@ export default function IndicatorPanel({ open, onToggle }) {
             </button>
           </Tooltip>
         ))}
+        <Tooltip text={t('ip.clear_recent_tip')}>
+          <button
+            type="button"
+            onClick={handleClearRecentIndicators}
+            disabled={!recentIndicators.length || clearingRecent}
+            className="ml-auto text-[10px] px-2 py-1 rounded border border-p3/40 text-p5/60 hover:text-red-400 hover:border-red-400/40 transition-colors disabled:opacity-40 disabled:cursor-default"
+          >
+            {clearingRecent
+              ? <span className="inline-block w-2.5 h-2.5 border border-p4 border-t-transparent rounded-full animate-spin align-middle" />
+              : t('ip.clear_recent')}
+          </button>
+        </Tooltip>
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-2">
