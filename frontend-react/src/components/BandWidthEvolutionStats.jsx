@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import ReactECharts from 'echarts-for-react';
 import { useCurrency } from '../contexts/CurrencyContext';
 import {
@@ -123,7 +123,7 @@ function evolutionChartOption(series, expansion, colors) {
   };
 }
 
-export default function BandWidthEvolutionStats({ autoCalc }) {
+export default function BandWidthEvolutionStats({ autoCalc, externalRequest }) {
   const { selectedChart, setSelectedChart, setChartViewSource } = useCurrency();
   const { t } = useI18n();
   const [prefs, setPrefs] = useState(loadPrefs);
@@ -134,6 +134,7 @@ export default function BandWidthEvolutionStats({ autoCalc }) {
   const [sort, setSort] = useState({ key: 'gainPct', dir: -1 });
   const [themeTick, setThemeTick] = useState(0);
   const [savedCount, setSavedCount] = useState(0);
+  const lastExternalRequestId = useRef(null);
 
   useEffect(() => {
     const fn = () => setThemeTick((n) => n + 1);
@@ -160,8 +161,9 @@ export default function BandWidthEvolutionStats({ autoCalc }) {
     });
   }
 
-  async function handleSearch(overrideSymbol) {
+  async function handleSearch(overrideSymbol, anchor) {
     const sym = (overrideSymbol ?? symbol).trim().toUpperCase();
+    const scope = anchor ? 'symbol' : prefs.scope;
     const params = {
       interval: prefs.interval,
       period: prefs.period,
@@ -169,10 +171,15 @@ export default function BandWidthEvolutionStats({ autoCalc }) {
       lookback: prefs.lookback,
       deltaCandles: prefs.deltaCandles,
     };
-    if (prefs.scope === 'symbol') {
+    if (scope === 'symbol') {
       if (!sym) return;
       params.symbol = sym;
-      if (selectedChart?.symbol === sym && selectedChart?.source === 'gate') params.source = 'gate';
+      if (anchor?.source) params.source = anchor.source;
+      else if (selectedChart?.symbol === sym && selectedChart?.source === 'gate') params.source = 'gate';
+      if (anchor?.fromMs != null && anchor?.toMs != null) {
+        params.fromMs = anchor.fromMs;
+        params.toMs = anchor.toMs;
+      }
     }
     setLoading(true);
     setError(null);
@@ -182,7 +189,7 @@ export default function BandWidthEvolutionStats({ autoCalc }) {
       setResult(data);
       // Grava a pesquisa (config + resumo) no log do backend — fire-and-forget, não deve
       // quebrar a tela se o backend falhar em salvar.
-      saveBandWidthEvolutionSearch({ scope: prefs.scope, config: { ...params, symbol: prefs.scope === 'symbol' ? sym : null }, result: data })
+      saveBandWidthEvolutionSearch({ scope, config: { ...params, symbol: scope === 'symbol' ? sym : null }, result: data })
         .then(() => setSavedCount((n) => n + 1))
         .catch(() => {});
     } catch (err) {
@@ -201,6 +208,23 @@ export default function BandWidthEvolutionStats({ autoCalc }) {
     if (autoCalc && prefs.scope === 'symbol') handleSearch(selectedChart.symbol);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedChart?.symbol, autoCalc]);
+
+  // Pedido externo (botão "Evolução BB" do quadrado de trade no gráfico): busca ANCORADA no
+  // período exato do trade em vez dos candles mais recentes até agora — ver getCandlesAroundTime.js
+  // no backend. `requestId` (timestamp) garante 1 disparo por pedido, mesmo que o usuário saia e
+  // volte pra esta aba sem um pedido novo (o mesmo objeto de pedido não deve rebuscar de novo).
+  useEffect(() => {
+    if (!externalRequest || externalRequest.requestId === lastExternalRequestId.current) return;
+    lastExternalRequestId.current = externalRequest.requestId;
+    setPref({ scope: 'symbol' });
+    setSymbol(externalRequest.symbol);
+    handleSearch(externalRequest.symbol, {
+      fromMs: externalRequest.fromMs,
+      toMs: externalRequest.toMs,
+      source: externalRequest.source,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [externalRequest]);
 
   async function openOnChart(sym, source) {
     try {
@@ -334,6 +358,11 @@ export default function BandWidthEvolutionStats({ autoCalc }) {
         <div className="flex flex-col gap-2">
           <p className="text-[10px] text-p5/50">
             {result.symbol} · {result.interval} · BB({result.period},{result.stdDev}) · {result.series.length} amostras
+            {result.anchored && (
+              <span className="ml-2 px-1.5 py-0.5 rounded bg-p4/20 text-p4">
+                período do quadrado: {formatDateTime(result.fromMs)} → {formatDateTime(result.toMs)}
+              </span>
+            )}
           </p>
 
           <div className="flex flex-wrap gap-3">

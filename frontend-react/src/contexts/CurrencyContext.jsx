@@ -134,6 +134,18 @@ export function CurrencyProvider({ children }) {
   /** Foco do backtest MT: histórico e overlays para o momento do trade */
   const [multitradeChartFocus, setMultitradeChartFocus] = useState(null);
 
+  // Pedido de abrir uma aba específica de Estatísticas com um período pré-carregado — usado pelo
+  // botão "Evolução BB" do quadrado de trade no gráfico (ver CandlestickChart.jsx): em vez do
+  // gráfico chamar o backend direto, ele só descreve O QUE quer ({tab, symbol, source, fromMs,
+  // toMs}) aqui; App.jsx abre o painel Estatísticas e StatisticsPanel troca de aba/dispara a
+  // busca observando isto. `requestId` garante que pedidos repetidos pro MESMO período (ex.:
+  // clicar o botão duas vezes) ainda disparem o efeito (objeto novo, não é dedupado por conteúdo).
+  const [statsPanelRequest, setStatsPanelRequest] = useState(null);
+  const requestStatsPanel = useCallback((payload) => {
+    setStatsPanelRequest({ ...payload, requestId: Date.now() });
+  }, []);
+  const clearStatsPanelRequest = useCallback(() => setStatsPanelRequest(null), []);
+
   // Trades de compra do usuário para a moeda selecionada (favorito Trade Now)
   // Array de { time: number (ms), price: string, qty: string, isBuyer: boolean }
   const [tradePurchases, setTradePurchases] = useState([]);
@@ -1354,6 +1366,9 @@ export function CurrencyProvider({ children }) {
         applyFiveMTradeChartView,
         clearFiveMTradeChartView,
         multitradeChartFocus,
+        statsPanelRequest,
+        requestStatsPanel,
+        clearStatsPanelRequest,
         chartTradeMarkers,
         setChartTradeMarkers,
         chartSrOverride,

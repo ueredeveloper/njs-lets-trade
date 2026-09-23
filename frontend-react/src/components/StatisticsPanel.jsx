@@ -3988,8 +3988,19 @@ function VwapBandsStats({ autoCalc }) {
 
 export default function StatisticsPanel() {
   const { t } = useI18n();
+  const { statsPanelRequest } = useCurrency();
   const [activeTab, setActiveTab] = useState('rsi');
   const [autoCalc, setAutoCalc] = useState(() => loadAutoCalcPref());
+  // Pedido externo (botão "Evolução BB" do quadrado no gráfico, ver CandlestickChart.jsx): troca
+  // pra aba pedida. Ajuste de estado DURANTE o render (não em useEffect — padrão "Adjusting some
+  // state when a prop changes" dos docs do React) comparando com o último requestId processado;
+  // `statsPanelRequest` em si vira a prop `externalRequest` da aba (repassado direto, sem cópia
+  // local) — cada aba que aceita pedido externo já dedupa pelo próprio `requestId`.
+  const [lastStatsPanelRequestId, setLastStatsPanelRequestId] = useState(null);
+  if (statsPanelRequest && statsPanelRequest.requestId !== lastStatsPanelRequestId) {
+    setLastStatsPanelRequestId(statsPanelRequest.requestId);
+    setActiveTab(statsPanelRequest.tab);
+  }
 
   function handleToggleAutoCalc(next) {
     setAutoCalc(next);
@@ -4024,7 +4035,12 @@ export default function StatisticsPanel() {
         {activeTab === 'bollinger_bands' && <BollingerBandsStats autoCalc={autoCalc} />}
         {activeTab === 'vwap_bands' && <VwapBandsStats autoCalc={autoCalc} />}
         {activeTab === 'candle_setups' && <CandleSetupsStats autoCalc={autoCalc} />}
-        {activeTab === 'band_evolution' && <BandWidthEvolutionStats autoCalc={autoCalc} />}
+        {activeTab === 'band_evolution' && (
+          <BandWidthEvolutionStats
+            autoCalc={autoCalc}
+            externalRequest={statsPanelRequest?.tab === 'band_evolution' ? statsPanelRequest : null}
+          />
+        )}
       </div>
     </div>
   );

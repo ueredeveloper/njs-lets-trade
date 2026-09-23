@@ -30,7 +30,7 @@ const MOBILE_SHEET_FILTERS_HEIGHT = '30%';
 function AppContent() {
   const { setCurrencies, setFilters, selectedChart, setSelectedChart, setGateFavorites, setBinanceFavorites,
     setChartInterval, uiPrefs, clearFavoriteView, setCurrencyPanelWidth,
-    visibleCurrencyRows, selectAdjacentCurrency } = useCurrency();
+    visibleCurrencyRows, selectAdjacentCurrency, statsPanelRequest } = useCurrency();
   const { t } = useI18n();
   const isMobile = useIsMobile();
 
@@ -150,6 +150,15 @@ function AppContent() {
   function toggleMaximizePanel() {
     setLayoutMode((m) => (m === 'panel' ? 'split' : 'panel'));
   }
+
+  // Botão "Evolução BB" do quadrado de trade no gráfico (ver CandlestickChart.jsx) pediu um
+  // período específico de Estatísticas — garante que o painel esteja aberto e visível (StatisticsPanel
+  // troca de aba sozinho observando o mesmo statsPanelRequest, ver useCurrency()).
+  useEffect(() => {
+    if (!statsPanelRequest) return;
+    setOpenPanels(['stats']);
+    setLayoutMode((m) => (m === 'chart' ? 'split' : m));
+  }, [statsPanelRequest]);
 
   useEffect(() => {
     let cancelled = false;

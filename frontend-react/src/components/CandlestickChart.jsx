@@ -2952,7 +2952,7 @@ export default function CandlestickChart() {
     multitradeChartFocus, tradePurchases, allTrades, chartInterval: savedInterval, setChartInterval,
     chartPanelButtons, uiPrefs, setMaBandsDefaults,
     setVwapDefaults, setVwapSlopeHighlightDefault, setActiveIndicatorsPreference,
-    multitradeFavorites, fiveMTradeFavorites, activeTrades } = useCurrency();
+    multitradeFavorites, fiveMTradeFavorites, activeTrades, requestStatsPanel } = useCurrency();
   const { t } = useI18n();
   const isMobile = useIsMobile();
   const chartRef = useRef(null);
@@ -4749,6 +4749,22 @@ export default function CandlestickChart() {
     return () => { cancelled = true; };
   }, [analysisBox, analysisBoxKind, analysisBoxRuleSource, selectedChart?.symbol]);
 
+  // "Evolução BB": ao escolher esse tipo na caixa de análise, pede pro painel Estatísticas abrir
+  // a aba Evolução BB ANCORADA no período exato da caixa (ver requestStatsPanel em
+  // CurrencyContext.jsx / getCandlesAroundTime.js no backend) — mesmo mecanismo do botão
+  // "📊 Evolução BB" que aparece num trade aberto das Estatísticas, só que aqui a caixa é
+  // desenhada manualmente pelo usuário em QUALQUER moeda/situação, não só num trade do backtest.
+  useEffect(() => {
+    if (!analysisBox || analysisBoxKind !== 'bbEvolution' || !selectedChart?.symbol) return;
+    requestStatsPanel({
+      tab: 'band_evolution',
+      symbol: selectedChart.symbol,
+      source: selectedChart.source ?? null,
+      fromMs: analysisBox.fromMs,
+      toMs: analysisBox.toMs,
+    });
+  }, [analysisBox, analysisBoxKind, selectedChart?.symbol, selectedChart?.source, requestStatsPanel]);
+
   // Config EFETIVA da simulação: a carregada + o que o usuário mudou no painel de regras (ver
   // ANALYSIS_BOX_FILTER_ROWS/analysisBoxRulesPanel) por cima — inclui até filtros que a config
   // original tinha DESLIGADO (o usuário pode ligar um filtro que não estava em uso pra testar).
@@ -5522,6 +5538,9 @@ export default function CandlestickChart() {
             : 'trade · sem sinal';
       return { ...base, label, labelColor: analysisBoxTradeSim?.error ? '#f87171' : '#cbd5e1' };
     }
+    if (analysisBoxKind === 'bbEvolution') {
+      return { ...base, label: '📊 evolução BB' };
+    }
     const n = chartFlagsConfig?.scoped ? chartFlagsConfig.scopedCount : null;
     return { ...base, label: n != null ? `análise · ${n} candle${n === 1 ? '' : 's'}` : 'análise' };
   }, [analysisBox, analysisBoxKind, chartFlagsConfig, analysisBoxTradeSim, chartTradeBoxRects]);
@@ -5803,15 +5822,20 @@ export default function CandlestickChart() {
   const analysisBoxNoticeTrade = analysisBox && analysisBoxKind === 'trade'
     && analysisBoxTradeSim && !analysisBoxTradeSim.loading && !analysisBoxTradeSim.error
     && chartTradeBoxRects.length === 0;
-  const analysisBoxNotice = (analysisBoxNoticeFlag || analysisBoxNoticeTrade) && (
+  // 'bbEvolution' não desenha nada na própria caixa (o resultado abre nas Estatísticas) — o aviso
+  // aqui é só a confirmação de que o pedido foi disparado, não um "sem resultado" como os outros 2.
+  const analysisBoxNoticeBbEvolution = analysisBox && analysisBoxKind === 'bbEvolution';
+  const analysisBoxNotice = (analysisBoxNoticeFlag || analysisBoxNoticeTrade || analysisBoxNoticeBbEvolution) && (
     <div className="absolute top-12 left-1/2 -translate-x-1/2 z-30 pointer-events-none">
       <div className="px-3 py-1.5 rounded-md bg-slate-800/90 border border-slate-500 text-slate-100 text-[11px] md:text-xs font-mono shadow-lg flex items-center gap-2">
         <span className="text-amber-300">⬚</span>
-        {analysisBoxNoticeTrade
-          ? 'Nenhum sinal de trade na seleção'
-          : (chartFlagsConfig.scopedCount != null && chartFlagsConfig.scopedCount < 12
-            ? `Seleção pequena (${chartFlagsConfig.scopedCount} candles) — mínimo ~12 para detectar bandeira`
-            : 'Nenhuma bandeira detectada na seleção')}
+        {analysisBoxNoticeBbEvolution
+          ? '📊 Evolução BB aberta em Estatísticas'
+          : analysisBoxNoticeTrade
+            ? 'Nenhum sinal de trade na seleção'
+            : (chartFlagsConfig.scopedCount != null && chartFlagsConfig.scopedCount < 12
+              ? `Seleção pequena (${chartFlagsConfig.scopedCount} candles) — mínimo ~12 para detectar bandeira`
+              : 'Nenhuma bandeira detectada na seleção')}
       </div>
     </div>
   );
@@ -6190,6 +6214,7 @@ export default function CandlestickChart() {
         >
           <option value="flag">Bandeira</option>
           <option value="trade">Trade</option>
+          <option value="bbEvolution">Evolução BB</option>
         </select>
         {analysisBoxKind === 'trade' && (
           <>
@@ -6245,6 +6270,26 @@ export default function CandlestickChart() {
       <div className="flex flex-col px-2 md:px-3 pt-1 md:pt-2 pb-0.5 md:pb-1 shrink-0 gap-0.5 md:gap-1 border-b border-p2/40">
         {/* Linha 0 — botões de janela de candles (separados dos intervalos) */}
         <div className="flex items-center gap-1 border-b border-p2/20 pb-0.5 md:pb-1 mb-0.5">
+          {/* "Evolução BB" do quadrado — só aparece com um trade das Estatísticas aberto no
+              gráfico (chartZoom.source === STATISTICS traz start/end exatos do trade, setado por
+              todo openOnChart das abas de Estatísticas). Pede pro painel Estatísticas trocar pra
+              aba Evolução BB e buscar ANCORADO nesse período exato (ver requestStatsPanel em
+              CurrencyContext.jsx / getCandlesAroundTime.js no backend), em vez de "agora". */}
+          {chartZoom?.source === CHART_VIEW.STATISTICS && chartZoom.startDate && chartZoom.endDate && selectedChart?.symbol && (
+            <button
+              onClick={() => requestStatsPanel({
+                tab: 'band_evolution',
+                symbol: selectedChart.symbol,
+                source: selectedChart.source ?? null,
+                fromMs: new Date(chartZoom.startDate).getTime(),
+                toMs: new Date(chartZoom.endDate).getTime(),
+              })}
+              title="Evolução da largura de Bollinger nesse período exato do trade"
+              className="px-1.5 md:px-2 py-0.5 text-[10px] md:text-xs rounded font-mono transition-colors border border-p3/40 text-p5 hover:bg-p3/40 hover:text-white shrink-0"
+            >
+              📊 Evolução BB
+            </button>
+          )}
           {/* Grupo de janela de candles — alinhado à direita, isolado dos intervalos. Só os mais
               usados ficam visíveis; "›" abre os demais (mesmo padrão da linha de intervalos abaixo). */}
           <div className="ml-auto flex items-center gap-1 pl-2 border-l border-p2/30">

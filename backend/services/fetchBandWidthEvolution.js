@@ -5,6 +5,7 @@ const getCandlesForScreening = require('../utils/getCandlesForScreening');
 const { getGateCandles } = require('../gate/getGateCandles');
 const { getActiveUsdtPairs } = require('../binance/getActiveUsdtPairs');
 const { closedCandlesOnly } = require('../bot/ma-cross/strategyEngine');
+const { getCandlesAroundTime } = require('../utils/getCandlesAroundTime');
 const { bollingerBandWidthSeriesWithTime, computeBandWidthExpansion } = require('../utils/indicatorGrowthEngines');
 const { ALL_INTERVALS, BB_PERIODS, BB_STD_DEVS } = require('../bot/bollinger-bands/tradeConfigSchema');
 
@@ -52,6 +53,12 @@ function summarizeRow(symbol, series, expansion, deltaCandles) {
  * GET /services/band-width-evolution?symbol=BTCUSDT&interval=5m&period=20&stdDev=2&lookback=200
  *     &deltaCandles=3[&source=gate]
  *
+ * Com `fromMs`&`toMs` (ms): ANCORA a busca nesse período específico em vez dos candles mais
+ * recentes até agora — usado pelo botão "Evolução BB" do quadrado de trade no gráfico (ver
+ * getCandlesAroundTime.js, mesmo mecanismo do `?fromMs=&toMs=&pad=` de /services/candles). Nesse
+ * modo `lookback` vira o padding (candles de folga) pra cada lado do período, não uma janela
+ * "até agora".
+ *
  * Sem `symbol`: varre o mercado USDT da Binance e devolve 1 linha por moeda (sem a série
  * candle-a-candle, só o resumo), ordenado pela expansão mais rápida primeiro (deltaPct desc).
  */
@@ -64,6 +71,9 @@ router.get('/band-width-evolution', async (req, res) => {
     const deltaCandles = Math.max(1, parseInt(req.query.deltaCandles ?? '3', 10));
     const symbol = req.query.symbol ? String(req.query.symbol).trim().toUpperCase() : null;
     const source = req.query.source === 'gate' ? 'gate' : null;
+    const fromMs = req.query.fromMs ? parseInt(req.query.fromMs, 10) : null;
+    const toMs = req.query.toMs ? parseInt(req.query.toMs, 10) : null;
+    const anchored = symbol && Number.isFinite(fromMs) && Number.isFinite(toMs);
 
     if (!ALLOWED_INTERVALS.has(interval)) {
       return res.status(400).json({ error: `intervalo não suportado: ${interval}` });
@@ -82,9 +92,11 @@ router.get('/band-width-evolution', async (req, res) => {
     const limit = lookback + minCandles;
 
     if (symbol) {
-      const raw = source === 'gate'
-        ? await getGateCandles(symbol, interval, limit)
-        : (await getCandlesForScreening(symbol, interval, limit)).candles;
+      const raw = anchored
+        ? await getCandlesAroundTime(symbol, interval, source, fromMs, toMs, lookback)
+        : (source === 'gate'
+          ? await getGateCandles(symbol, interval, limit)
+          : (await getCandlesForScreening(symbol, interval, limit)).candles);
       const candles = closedCandlesOnly(raw);
       if (!candles?.length || candles.length < minCandles) {
         return res.status(404).json({ error: 'candles insuficientes pra essa janela' });
@@ -97,6 +109,7 @@ router.get('/band-width-evolution', async (req, res) => {
 
       return res.json({
         symbol, interval, period, stdDev, lookback, deltaCandles,
+        anchored: !!anchored, fromMs: anchored ? fromMs : null, toMs: anchored ? toMs : null,
         series,
         currentWidthPct: row.currentWidthPct,
         widthNCandlesAgo: row.widthNCandlesAgo,
