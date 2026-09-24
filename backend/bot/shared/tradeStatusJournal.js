@@ -59,4 +59,47 @@ function removeTradeStatus(symbol) {
   writeAll(all);
 }
 
-module.exports = { writeTradeStatus, readTradeStatus, readAllTradeStatus, removeTradeStatus };
+// ── Trades FECHADOS recentes ──────────────────────────────────────────────────
+// O journal acima só guarda o estado ATUAL por símbolo (a moeda some/volta a WATCHING ao fechar).
+// Pro /internal/trade (WhatsApp) mostrar "fechou no alvo 🟢 / no stop 🔴" há pouco, cada fechamento
+// vira uma linha num arquivo à parte, podado por idade e tamanho.
+const CLOSED_MAX = 30;
+const CLOSED_KEEP_MS = 24 * 3600 * 1000;
+
+function closedFile() {
+  return process.env.TRADE_CLOSED_FILE
+    || path.join(__dirname, '..', '..', 'data', 'bot', 'trade-closed.json');
+}
+
+function readClosedAll() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(closedFile(), 'utf8'));
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+/** entry: { symbol, outcome: 'alvo'|'stop', entryPrice, exitPrice, changePct, entryTime, closedAt, reason } */
+function recordClosedTrade(entry) {
+  const cutoff = Date.now() - CLOSED_KEEP_MS;
+  const list = readClosedAll()
+    .filter((e) => Date.parse(e.closedAt) >= cutoff)
+    .concat(entry)
+    .slice(-CLOSED_MAX);
+  const file = closedFile();
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(list, null, 2));
+  fs.renameSync(tmp, file);
+}
+
+/** Fechados nas últimas `maxAgeMs` (default 6h), mais recentes primeiro. */
+function readRecentClosed(maxAgeMs = 6 * 3600 * 1000) {
+  const cutoff = Date.now() - maxAgeMs;
+  return readClosedAll()
+    .filter((e) => Date.parse(e.closedAt) >= cutoff)
+    .sort((a, b) => (b.closedAt || '').localeCompare(a.closedAt || ''));
+}
+
+module.exports = { writeTradeStatus, readTradeStatus, readAllTradeStatus, removeTradeStatus, recordClosedTrade, readRecentClosed };

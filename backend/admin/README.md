@@ -40,7 +40,7 @@ njs-whatsapp (porta 3005)   ── GET/POST /admin/* ──┐
 | `GET  /admin/health`  | `GET /internal/health` (+ `/internal/info` no sub-campo) | ✅ |
 | `GET  /admin/status`  | `GET /internal/info`         | ✅ |
 | `GET  /admin/log`     | `GET /internal/log?lines=`   | ✅ |
-| `GET  /admin/trade` (ainda não existe no `njs-whatsapp` — falta adicionar lá) | `GET /internal/trade` (sem `symbol`, lista as moedas EM TRADE agora; `?symbol=` foca uma) | ✅ do lado `njs-lets-trade`; ⏳ falta a rota/comando no `njs-whatsapp` |
+| `GET  /admin/trade` (ainda não existe no `njs-whatsapp` — falta adicionar lá) | `GET /internal/trade` (sem `symbol`, lista as moedas EM TRADE agora + `closed` = fechadas nas últimas 6h (alvo/stop, `trade-closed.json`); `?symbol=` foca uma) | ✅ do lado `njs-lets-trade`; ⏳ falta a rota/comando no `njs-whatsapp` |
 | `POST /admin/restart` | `POST /internal/restart`     | ✅ (exige token + `ALLOW_CONTROL`) |
 | `POST /admin/update`  | `POST /internal/update`      | ✅ (exige token + `ALLOW_CONTROL`) |
 | `POST /admin/stop`    | `POST /internal/stop`        | ✅ (exige token + `ALLOW_CONTROL`) |

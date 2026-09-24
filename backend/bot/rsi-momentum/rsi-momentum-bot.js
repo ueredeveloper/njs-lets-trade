@@ -85,7 +85,7 @@ const {
   createTradeExecution, entrySignalFields, resolveLastExitTime, resolveLastExitReason,
 } = require('../shared/tradeExecution');
 const { sendWhatsApp } = require('../whatsapp');
-const { writeTradeStatus, removeTradeStatus } = require('../shared/tradeStatusJournal');
+const { writeTradeStatus, removeTradeStatus, readTradeStatus, recordClosedTrade } = require('../shared/tradeStatusJournal');
 
 const BOT_LABEL = 'RSI-MOMENTUM';
 const VOL_CACHE_MS = 5 * 60_000;
@@ -244,6 +244,19 @@ async function retireAutoFavorite({ rowId, symbol, log, stopSelf, reason, sessio
  * ~2min depois do 1º stop, também levando stop.
  */
 async function retireOrCooldown({ rowId, symbol, log, stopSelf, reason, config, cMap, state, session }) {
+  // Registra o fechamento (alvo 🟢 / stop 🔴) pro /internal/trade → WhatsApp. Best-effort.
+  try {
+    const last = readTradeStatus(symbol) ?? {};
+    const lastCandle = (cMap[config.entry.interval] ?? []).at(-1);
+    const exitPrice = lastCandle ? parseFloat(lastCandle.close) : last.currentPrice ?? null;
+    const entryPrice = last.entryPrice ?? (state.buy_price != null ? parseFloat(state.buy_price) : null);
+    const changePct = entryPrice && exitPrice ? Number((((exitPrice / entryPrice) - 1) * 100).toFixed(2)) : last.changePct ?? null;
+    const isStop = /stop|loss/i.test(String(reason)) && !(changePct > 0);
+    recordClosedTrade({
+      symbol, outcome: isStop ? 'stop' : 'alvo', entryPrice, exitPrice, changePct,
+      entryTime: last.entryTime ?? state.buy_time ?? null, closedAt: new Date().toISOString(), reason: String(reason),
+    });
+  } catch {}
   const lastExitTime = resolveLastExitTime(state, session);
   const lastExitReason = resolveLastExitReason(state, session);
   const cooldown = checkReentryCooldown(config, cMap, lastExitTime, lastExitReason);

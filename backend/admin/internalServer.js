@@ -182,7 +182,8 @@ function startInternalAdminServer(getState, opts = {}) {
         const trades = Object.values(all)
           .filter((t) => showAll || t.phase === 'BOUGHT')
           .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
-        return send(res, 200, { trades, checkedAt: new Date().toISOString() });
+        const closed = safeCall(() => tradeStatus.readRecentClosed()) || [];
+        return send(res, 200, { trades, closed, checkedAt: new Date().toISOString() });
       }
       const trade = safeCall(() => tradeStatus.readTradeStatus(symbol));
       if (!trade) return send(res, 404, { error: `sem trade rastreado para ${symbol}` });
