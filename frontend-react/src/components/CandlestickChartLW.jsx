@@ -14,6 +14,50 @@ import { computeTdSequentialSetup } from '../utils/tdSequentialSetup';
 import { snapPointsToChartCandles } from '../utils/snapToChartCandles';
 import { rankSrLevels, srRankAllowed } from '../utils/srRank';
 
+/** createSeriesMarkers "blindado" pros rótulos de S/R (séries de 2 pontos recriadas no pan).
+ *  O "Uncaught Error: Value is null" (ensureNotNull em _recalculateMarkers → dataByIndex) NÃO
+ *  sai da chamada createSeriesMarkers — sai do loop de pintura da lib (updateAllViews, num
+ *  requestAnimationFrame) quando o timeScale está no meio de uma troca (arrasto carregando
+ *  histórico, série recém-criada/removida). Um try/catch em volta da criação nunca pegava isso.
+ *  Aqui interceptamos o attachPrimitive só durante a criação pra embrulhar os hooks de render
+ *  do primitive (nomes públicos da API de plugins, não mudam no build minificado): se o recálculo
+ *  falhar naquele frame, o rótulo some só nesse frame (paneViews vazio) e volta no próximo. */
+function createSafeSeriesMarkers(series, markers) {
+  let broken = false;
+  series.attachPrimitive = (primitive) => {
+    const { updateAllViews, paneViews, autoscaleInfo } = primitive;
+    primitive.updateAllViews = function (...args) {
+      try { updateAllViews.apply(this, args); broken = false; } catch { broken = true; }
+    };
+    primitive.paneViews = function (...args) {
+      if (broken) return [];
+      let views;
+      try { views = paneViews.apply(this, args); } catch { return []; }
+      // renderer() também valida (_makeValid → logicalToCoordinate com ensureNotNull).
+      return (views ?? []).map((view) => {
+        const safe = Object.create(view);
+        safe.renderer = (...rArgs) => {
+          try { return view.renderer(...rArgs); } catch { return null; }
+        };
+        return safe;
+      });
+    };
+    if (typeof autoscaleInfo === 'function') {
+      primitive.autoscaleInfo = function (...args) {
+        try { return autoscaleInfo.apply(this, args); } catch { return null; }
+      };
+    }
+    return Object.getPrototypeOf(series).attachPrimitive.call(series, primitive);
+  };
+  try {
+    return createSeriesMarkers(series, markers);
+  } catch {
+    return null; // setMarkers também recalcula sincrono — mesmo caso, cosmético
+  } finally {
+    delete series.attachPrimitive;
+  }
+}
+
 const C_UP = '#26a69a';
 const C_DOWN = '#ef5350';
 /** Linhas de S/R (rolante + traço das Estatísticas): uma cor por POSTO dentro de cada tipo —
@@ -1334,7 +1378,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
             // série específica e a lib lança "Value is null" (ensureNotNull em dataByIndex).
             // Cosmético (só o rótulo do nível) — não vale derrubar o gráfico inteiro por isso.
             try {
-              createSeriesMarkers(s, [{
+              createSafeSeriesMarkers(s, [{
                 time: to, position: 'inBar', color, shape: 'circle',
                 text: lvl.label + (tags ? ` ${tags}` : ''),
               }]);
@@ -1390,7 +1434,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
           // "Value is null" (ensureNotNull) quando o candlestick principal troca de dados no meio
           // de um arrasto — cosmético, não deve derrubar o gráfico.
           try {
-            createSeriesMarkers(s, [{
+            createSafeSeriesMarkers(s, [{
               time: lastPt.time, position: 'inBar', color, shape: 'circle',
               // posto REAL do nível (pode ser [3] sozinho) — não a posição no array desenhado
               text: lastLabel ?? `${type === 'support' ? 'S' : 'R'}${r + 1}`,
@@ -1461,8 +1505,9 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
           // de uma troca de dados (carregando histórico mais antigo) quando este ponto ainda não
           // tem índice válido no timeScale global. Cosmético (só o rótulo do nível), não deve
           // derrubar o gráfico — o próximo frame de pan recria a série certa de qualquer jeito.
+          // O erro sai do loop de pintura, não daqui — quem segura é createSafeSeriesMarkers.
           try {
-            createSeriesMarkers(s, [{ time: endT, position: 'inBar', color, shape: 'circle', text: lvl.label }]);
+            createSafeSeriesMarkers(s, [{ time: endT, position: 'inBar', color, shape: 'circle', text: lvl.label }]);
           } catch { /* ver comentário acima */ }
           srTracoSeriesRef.current.push(s);
         }
@@ -1493,7 +1538,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
           });
           s.setData([{ time: mark.time1, value: lvl.price }, { time: mark.time2, value: lvl.price }]);
           try {
-            createSeriesMarkers(s, [{ time: mark.time2, position: 'inBar', color, shape: 'circle', text: lvl.label }]);
+            createSafeSeriesMarkers(s, [{ time: mark.time2, position: 'inBar', color, shape: 'circle', text: lvl.label }]);
           } catch { /* mesmo caso do traço rolante — cosmético, não deve derrubar o gráfico */ }
           tradeBoxSrSeriesRef.current.push(s);
         }
