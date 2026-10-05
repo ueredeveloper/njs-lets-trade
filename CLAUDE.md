@@ -301,6 +301,14 @@ confirmou), `ENTRY_FAILED` (markFailed). Grava candle do sinal, preço da limite
 de moedas com seletor de período (hoje/ontem/3 dias/semana/mês, BRT) — clique abre o gráfico com a seta
 amarela no candle do sinal + círculo na limite. Migração: `supabase/add-rsi-momentum-missed-signals-table.sql`.
 Backfill a partir das LIMIT BUY canceladas da Binance: `node backend/bot/rsi-momentum/backfill-missed-signals.js 30`.
+**Bots exclusivos (curated) no SSE:** a rota também roda o motor de entrada de cada bot exclusivo
+Binance sobre os candles (`curatedSignalReplay.js`, trade_config DELE, ≤7 dias desde a criação do
+favorito, cache 5 min) e lista como `NO_ORDER` ("bot exclusivo não agiu") todo sinal confirmado sem
+BUY nos myTrades logo depois — pega o que o bot nunca gravou (parado/sem restart, ou tick que pulou
+o minuto num entry.interval de 1m). A linha leva o `interval` do bot → o gráfico abre nele; clicar
+num bot exclusivo no favorito RSI também abre no `entry.interval` dele. Coluna **Desde%** = preço
+atual vs. preço do último sinal. `backfill-missed-signals.js` usa a config de cada bot exclusivo
+(`--curated` varre só eles).
 Obs.: a espera do pullback (`limitWaitCandles`) conta desde a abertura do candle do sinal, não da ordem —
 na prática a limite fica ~35–55 min aberta com 60 configurado.
 

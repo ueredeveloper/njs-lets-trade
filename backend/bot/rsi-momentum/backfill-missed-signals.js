@@ -5,7 +5,11 @@
  * na Binance — os pullbacks que expiraram ANTES do bot passar a gravar a tabela
  * (missedSignalLogger.js). Idempotente (índice único symbol+signal_time+reason → 409 = pula).
  *
- *   node backend/bot/rsi-momentum/backfill-missed-signals.js [dias=14]
+ *   node backend/bot/rsi-momentum/backfill-missed-signals.js [dias=14] [--curated | --symbols=A,B]
+ *
+ * Moedas CURADAS (bot exclusivo — rsi_multi_bot_state.curated) usam o trade_config DELAS
+ * (intervalo/pullback próprios, ex. 1m e 1%) em vez da config global. `--curated` varre só elas
+ * (segundos em vez de minutos); `--symbols=` restringe a uma lista.
  *
  * Reconstrói o sinal: a limite é armada em signalClose × (1 − pullback.belowPct%) — então
  * signalPrice ≈ limite / (1 − belowPct%) e o candle do sinal é o candle FECHADO de entry.interval
@@ -33,15 +37,35 @@ async function klines(symbol, interval, startTime, endTime) {
 async function main() {
     const days = Number(process.argv[2]) || 14;
     const since = Date.now() - days * 86_400_000;
+    const onlyCurated = process.argv.includes('--curated');
+    const symbolsArg = process.argv.find(a => a.startsWith('--symbols='));
     const cfg = normalizeRsiMomentumConfig(await loadGlobalConfigBody(sbReq, DEFAULT_USER_ID));
-    const interval = cfg.entry.interval;
-    const belowPct = Number(cfg.entry.pullback?.belowPct ?? 3);
-    const ivMs = IV_MS[interval] ?? 900e3;
+    const globalParams = { interval: cfg.entry.interval, belowPct: Number(cfg.entry.pullback?.belowPct ?? 3) };
+
+    // Bot exclusivo: intervalo/pullback do trade_config da própria linha.
+    const curatedRows = await sbReq('GET', 'rsi_multi_bot_state', null,
+        '?select=symbol,exchange,trade_config&curated=eq.true');
+    const paramsBySymbol = new Map();
+    for (const row of curatedRows) {
+        if ((row.exchange ?? 'binance') !== 'binance') continue; // allOrders só existe na Binance
+        const c = normalizeRsiMomentumConfig(row.trade_config ?? {});
+        paramsBySymbol.set(row.symbol, { interval: c.entry.interval, belowPct: Number(c.entry.pullback?.belowPct ?? 3) });
+    }
+    const paramsFor = sym => paramsBySymbol.get(sym) ?? globalParams;
 
     await syncBinanceClock();
-    const info = await (await fetch('https://api.binance.com/api/v3/exchangeInfo?permissions=SPOT')).json();
-    const symbols = info.symbols.filter(s => s.quoteAsset === 'USDT' && s.status === 'TRADING').map(s => s.symbol);
-    console.log(`Varrendo ${symbols.length} pares USDT, ${days} dias, ${interval}, pullback ${belowPct}%…`);
+    let symbols;
+    if (symbolsArg) {
+        symbols = symbolsArg.slice('--symbols='.length).split(',').map(x => x.trim().toUpperCase()).filter(Boolean);
+    } else if (onlyCurated) {
+        symbols = [...paramsBySymbol.keys()];
+    } else {
+        const info = await (await fetch('https://api.binance.com/api/v3/exchangeInfo?permissions=SPOT')).json();
+        symbols = info.symbols.filter(s => s.quoteAsset === 'USDT' && s.status === 'TRADING').map(s => s.symbol);
+    }
+    const curatedDesc = [...paramsBySymbol].map(([sym, p]) => `${sym} ${p.interval}/${p.belowPct}%`).join(', ');
+    console.log(`Varrendo ${symbols.length} pares USDT, ${days} dias — global ${globalParams.interval}/pullback ${globalParams.belowPct}%`
+        + (curatedDesc ? `; exclusivos: ${curatedDesc}` : '') + '…');
 
     const orders = [];
     for (let i = 0; i < symbols.length; i++) {
@@ -60,6 +84,8 @@ async function main() {
 
     let inserted = 0;
     for (const o of orders.sort((a, b) => a.time - b.time)) {
+        const { interval, belowPct } = paramsFor(o.symbol);
+        const ivMs = IV_MS[interval] ?? 900e3;
         const limit = Number(o.price);
         const expectedClose = limit / (1 - belowPct / 100);
         const candles = await klines(o.symbol, interval, o.time - 4 * ivMs, o.time);
@@ -79,7 +105,7 @@ async function main() {
                 order_placed_at: new Date(o.time).toISOString(),
                 min_low: minLow,
                 miss_pct: minLow != null ? Number((((minLow / limit) - 1) * 100).toFixed(3)) : null,
-                detail: { backfill: true, orderId: o.orderId, cancelledAt: new Date(o.updateTime).toISOString() },
+                detail: { backfill: true, curated: paramsBySymbol.has(o.symbol), orderId: o.orderId, cancelledAt: new Date(o.updateTime).toISOString() },
             });
             inserted++;
             console.log(`  + ${o.symbol} sinal ${new Date(signalMs - 3 * 3600e3).toISOString().slice(5, 16).replace('T', ' ')} BRT`);

@@ -125,6 +125,7 @@ const MISSED_REASON_LABEL = {
   LIMIT_CLOSED: 'limite cancelada',
   SIGNAL_LOST: 'sinal sumiu',
   ENTRY_FAILED: 'entrada falhou',
+  NO_ORDER: 'bot exclusivo não agiu',
 };
 
 /** Marcadores do gráfico pros sinais sem entrada de UMA moeda: seta amarela ('signal') no candle
@@ -629,7 +630,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     && !isVwapWidthFilter && !isBbWidthFilter && !isBbTrendFilter && !activeMacmpFilter;
   const showGenericWidthCol = showGenericWidthToggle && genericWidthSort !== 'off';
 
-  const hasDedicatedExtraCol = isAltaFilter || isMaDistanceFilter || isGrowthFilter || isVwapWidthFilter || isBbWidthFilter || isBbTrendFilter || isRsiFilter || isNearMissFilter || showVwapFavWidthCol || showBbFavWidthCol;
+  const hasDedicatedExtraCol = isAltaFilter || isMaDistanceFilter || isGrowthFilter || isVwapWidthFilter || isBbWidthFilter || isBbTrendFilter || isRsiFilter || isNearMissFilter || showVwapFavWidthCol || showBbFavWidthCol || isRsiMissedFavView;
   const extraColCount = (hasDedicatedExtraCol ? 1 : 0) + (showGenericWidthCol ? 1 : 0);
   const tableColCount = 6 + extraColCount;
 
@@ -1200,6 +1201,12 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
         effectiveInterval = filterChartInterval;
       } else if (isBotFavorite) {
         effectiveInterval = resolveTradeChartInterval(botEntry, null);
+      } else {
+        // Bot exclusivo RSI Momentum (curated): abre no intervalo de entrada DELE (ex. 1m), não
+        // no intervalo que o gráfico estava.
+        const rmEntry = getRsiMomentumEntry(multitradeFavorites, item.symbol);
+        const rmInterval = rmEntry?.curated ? rmEntry.tradeConfig?.entry?.interval : null;
+        if (rmInterval) effectiveInterval = rmInterval;
       }
 
       setChartInterval(effectiveInterval);
@@ -1895,6 +1902,14 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                   {t('ind.near_miss_reason_col')}
                 </th>
               )}
+              {isRsiMissedFavView && (
+                <th
+                  className="text-right px-2 py-1 text-p5 opacity-80 font-normal uppercase tracking-wider whitespace-nowrap"
+                  title="Variação do preço desde o sinal mais recente (fechamento do candle do sinal) até agora"
+                >
+                  Desde%
+                </th>
+              )}
               {showGenericWidthCol && (
                 <th
                   className="text-right px-2 py-1 text-p5 opacity-80 font-normal uppercase tracking-wider whitespace-nowrap"
@@ -2110,6 +2125,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
               return (
                 <tr
                   key={item.__rowKey ?? item.symbol}
+                  data-vrow=""
                   onClick={() => handleSelect(item)}
                   style={{ height: rowHeightPx }}
                   className={`lt-table-row cursor-pointer transition-colors ${
@@ -2385,6 +2401,22 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                         title={title}
                       >
                         {acronym ?? '—'}
+                      </td>
+                    );
+                  })()}
+                  {isRsiMissedFavView && (() => {
+                    // Último sinal da moeda no período: preço do sinal (fallback: limite) × preço atual.
+                    const last = missedBySymbol.get(item.symbol)?.last;
+                    const ref = Number(last?.signal_price) || Number(last?.limit_price) || 0;
+                    const price = Number(item.price) || 0;
+                    const sincePct = ref > 0 && price > 0 ? ((price / ref) - 1) * 100 : null;
+                    return (
+                      <td
+                        className="px-2 py-1 text-right font-mono text-[10px] font-semibold"
+                        style={{ color: sincePct == null ? 'rgba(255,255,255,0.35)' : sincePct >= 0 ? '#22c55e' : '#ef4444' }}
+                        title={sincePct != null ? `Sinal ${fmtBuyTime(last.signal_time)} a ${formatPrice(ref)} → agora ${formatPrice(price)}` : undefined}
+                      >
+                        {sincePct != null ? fmtChangePct(sincePct) : '—'}
                       </td>
                     );
                   })()}
