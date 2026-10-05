@@ -1805,6 +1805,16 @@ export async function fetchMultitradeTrades({ symbol, strategyId, limit } = {}) 
   return res.json();
 }
 
+/** Sinais RSI Momentum que não viraram compra (pullback expirou, limite cancelada, sinal sumiu,
+ *  entrada falhou) — favorito "SSE" da tabela. `{ symbols: [{symbol,count,last}], rows }`. */
+export async function fetchRsiMomentumMissedSignals({ days = 14, symbol } = {}) {
+  const params = new URLSearchParams({ days: String(days) });
+  if (symbol) params.set('symbol', symbol);
+  const res = await fetch(`/services/rsi-momentum-missed-signals?${params}`);
+  if (!res.ok) throw new Error(`rsi-momentum-missed-signals falhou: HTTP ${res.status}`);
+  return res.json();
+}
+
 export async function fetchMultitradeTimeline({ symbol, limit } = {}) {
   const params = new URLSearchParams();
   if (symbol) params.set('symbol', symbol);

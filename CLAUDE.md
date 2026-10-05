@@ -291,6 +291,19 @@ tinha `visibleRange` na dependência pra TODOS os estilos — só o estilo 'tra�
 disso; separado em dois efeitos (o override de trade das Estatísticas nunca mais recria nada
 durante o pan).
 
+### Sinais sem entrada — favorito SSE (v1.154.0)
+
+Sinal CONFIRMADO que não virou compra é gravado em `rsi_momentum_missed_signals`
+(`missedSignalLogger.js`, best-effort) ANTES do `retireAutoFavorite` apagar a linha: `PULLBACK_EXPIRED`
+(limite expirou), `LIMIT_CLOSED` (limite sumiu sem fill), `SIGNAL_LOST` (scanner sinalizou, 1º tick não
+confirmou), `ENTRY_FAILED` (markFailed). Grava candle do sinal, preço da limite, menor mínima e
+`miss_pct` ("faltou X%"). Rota `GET /services/rsi-momentum-missed-signals?days=`; botão **SSE** na tabela
+de moedas com seletor de período (hoje/ontem/3 dias/semana/mês, BRT) — clique abre o gráfico com a seta
+amarela no candle do sinal + círculo na limite. Migração: `supabase/add-rsi-momentum-missed-signals-table.sql`.
+Backfill a partir das LIMIT BUY canceladas da Binance: `node backend/bot/rsi-momentum/backfill-missed-signals.js 30`.
+Obs.: a espera do pullback (`limitWaitCandles`) conta desde a abertura do candle do sinal, não da ordem —
+na prática a limite fica ~35–55 min aberta com 60 configurado.
+
 ### Watchlist curada (`rsi_multi_bot_state.curated = true`)
 
 Moeda vigiada **indefinidamente** pelo bot mesmo que o scanner Binance nunca a sinalize (ex.:

@@ -50,6 +50,11 @@ const { resolveStrategy } = require('./tradeConfigSchema');
 const { STRATEGY_IDS, loadGlobalConfigBody } = require('./strategyPresets');
 const { startMarketScanner } = require('./marketScanner');
 const { logNearMissIfNeeded } = require('./nearMissLogger');
+const { logMissedSignal } = require('./missedSignalLogger');
+
+// Último sinal confirmado pelo scanner por símbolo — usado só pra registrar SIGNAL_LOST (a
+// sessão recém-criada não confirma mais o sinal no 1º tick e não tem o candle do sinal).
+const scannerSignals = new Map();
 const {
   getRequiredSpecs, evaluateEntrySignal, evaluateExit, computeBracketPrices,
   checkEntryLimitExpired, checkReentryCooldown, resolveTargetMode, computeAtrPct,
@@ -280,6 +285,15 @@ async function markFailed({ rowId, session, log, symbol, strategyId, message, st
     ? entrySignalFields({ signalOpenTime: signal.signalOpenTime, signalPrice: signal.close })
     : {};
   await saveState(rowId, { phase: 'FAILED', rules_state: session.rulesState, ...signalFields }, log);
+  if (signal) {
+    const ctx = session._tickCtx ?? {};
+    await logMissedSignal({
+      symbol, exchange: ctx.state?.exchange ?? 'binance', interval: ctx.config?.entry?.interval,
+      reason: 'ENTRY_FAILED', signalOpenTime: signal.signalOpenTime, signalPrice: signal.close,
+      limitPrice: signal.limitPrice, rsi: signal.rsi, threshold: signal.threshold,
+      detail: { message }, log,
+    });
+  }
   log(`${R}❌ Entrada falhou (${symbol}): ${message}${X}`);
   sendWhatsApp(`❌ ${BOT_LABEL} ${symbol}\nFalha ao entrar: ${message}\nA moeda fica marcada como "falha" na lista — não vou tentar de novo sozinho.`);
   if (stopSelf) await stopSelf();
@@ -713,6 +727,14 @@ async function tickCore(rowId, adapter, strategy, log, session, stopSelf) {
         } else {
           const cancelReason = expiry.expired
             ? `${expiry.need} candles ${expiry.interval} sem fill` : `status ${poll.status}`;
+          const el = rulesWatch.entryLimit;
+          await logMissedSignal({
+            symbol, exchange: state.exchange ?? 'binance', interval: config.entry.interval,
+            reason: expiry.expired ? 'PULLBACK_EXPIRED' : 'LIMIT_CLOSED',
+            signalOpenTime: el.signalOpenTime, signalPrice: el.signalPrice, limitPrice: el.price,
+            orderPlacedAt: el.placedAt, rsi: el.entryMeta?.rsi, threshold: el.entryMeta?.threshold,
+            cMap, detail: { cancelReason, curated: !!session.curated }, log,
+          });
           return retireAutoFavorite({ rowId, symbol, log, stopSelf, session, reason: `pullback não preencheu — ${cancelReason}` });
         }
       }
@@ -748,6 +770,16 @@ async function tickCore(rowId, adapter, strategy, log, session, stopSelf) {
       // Raríssimo (janela entre o scanner detectar e esta sessão rodar o 1º tick) — o sinal
       // não se confirma mais nesta checagem fresca. Sem posição/ordem nenhuma envolvida, só
       // devolve a moeda pro pool em vez de deixar uma linha WATCHING zumbi.
+      const scanned = scannerSignals.get(symbol);
+      if (scanned) {
+        scannerSignals.delete(symbol);
+        await logMissedSignal({
+          symbol, exchange: state.exchange ?? 'binance', interval: config.entry.interval,
+          reason: 'SIGNAL_LOST', signalOpenTime: scanned.signalOpenTime, signalPrice: scanned.close,
+          limitPrice: scanned.limitPrice, rsi: scanned.rsi, threshold: scanned.threshold,
+          detail: { lostReason: signal.reason }, log,
+        });
+      }
       return retireAutoFavorite({ rowId, symbol, log, stopSelf, session, reason: `sinal não se confirmou mais (${signal.reason})` });
     }
 
@@ -2020,8 +2052,9 @@ async function main() {
       return resolveStrategy({ strategy_id: 'rsi-momentum', trade_config: body }).config;
     },
     loadTrackedSymbols,
-    onSignal: async (symbol) => {
+    onSignal: async (symbol, signal) => {
       if (registry.getByKey(symbol, 'rsi-momentum')) return; // corrida: sessão já rodando
+      if (signal?.signalOpenTime) scannerSignals.set(symbol, signal);
       const row = await createAutoFavorite(symbol);
       if (!row) return;
       await startSymbol(row, COLORS[colorCursor++ % COLORS.length]);

@@ -5,7 +5,7 @@ import SearchInput from './SearchInput';
 import {
   fetchCandlesticksAndCloud, fetchGateCurrencies, gatePreloadCandles,
   fetchMaCrossoverFilter, fetchMultitradeTrades, fetchBotState,
-  fetchGateTrades, fetchBinanceTrades,
+  fetchGateTrades, fetchBinanceTrades, fetchRsiMomentumMissedSignals,
 } from '../services/api';
 import { parseMaCrossFilterName, parseMaCompareFilterName, parseMaDistanceFilterName, parseIndicatorGrowthFilterName, parseVwapBandWidthFilterName, parseBollingerBandWidthFilterName, parseBollingerMedianTrendFilterName, parseRsiFilterName, parseFilterChartInterval, isNearMissFilterName, nearMissReasonAcronym } from '../utils/filterNames';
 import { useI18n } from '../i18n';
@@ -16,7 +16,7 @@ import TradeLotSellModal from './TradeLotSellModal';
 import VwapBandsFavoriteModal from './VwapBandsFavoriteModal';
 import BollingerBandsFavoriteModal from './BollingerBandsFavoriteModal';
 import { getEntriesForSymbol } from '../constants/strategyPresets';
-import { CHART_VIEW } from '../utils/chartView';
+import { CHART_VIEW, INTERVAL_MS } from '../utils/chartView';
 import {
   resolveTradeChartInterval,
   loadMultitradeSymbolChart,
@@ -54,6 +54,8 @@ import MacrossFavSortSelect from './MacrossFavSortSelect';
 import MacmpTableSortSelect from './MacmpTableSortSelect';
 import TradeFavSortSelect from './TradeFavSortSelect';
 import ActiveFavSortSelect from './ActiveFavSortSelect';
+import MissedSignalsPeriodSelect from './MissedSignalsPeriodSelect';
+import { loadMissedPeriod, saveMissedPeriod, missedPeriodRange, MISSED_PERIOD_OPTIONS } from '../utils/missedSignalsPeriod';
 import VwapFavSortSelect from './VwapFavSortSelect';
 import BollingerFavSortSelect from './BollingerFavSortSelect';
 import GenericWidthSortSelect from './GenericWidthSortSelect';
@@ -64,6 +66,7 @@ const MT_COLOR      = '#22d3ee';
 const VWAP_BANDS_COLOR = '#a78bfa';
 const BOLLINGER_BANDS_COLOR = '#f472b6';
 const RSI_MOMENTUM_COLOR = '#38bdf8';
+const RSI_MISSED_COLOR  = '#f59e0b';
 const TRADE_COLOR   = '#00c076';
 const ACTIVE_COLOR  = '#f59e0b';
 const ALTA_COLOR    = '#f97316';
@@ -115,6 +118,31 @@ function getRsiMomentumEntry(favorites, symbol) {
   return getEntriesForSymbol(favorites, symbol).find(e => e.strategyId === 'rsi-momentum') ?? null;
 }
 
+
+/** Rótulo curto do motivo de um "sinal sem entrada" (rsi_momentum_missed_signals.reason). */
+const MISSED_REASON_LABEL = {
+  PULLBACK_EXPIRED: 'pullback expirou',
+  LIMIT_CLOSED: 'limite cancelada',
+  SIGNAL_LOST: 'sinal sumiu',
+  ENTRY_FAILED: 'entrada falhou',
+};
+
+/** Marcadores do gráfico pros sinais sem entrada de UMA moeda: seta amarela ('signal') no candle
+ *  do sinal + círculo no preço da limite (quando houve ordem) — mesmo desenho das setas de sinal
+ *  do RSI Momentum (buildTradeMarkers em CandlestickChartLW.jsx). */
+function buildMissedSignalMarkers(signals) {
+  const out = [];
+  for (const s of signals ?? []) {
+    const ms = new Date(s.signal_time).getTime();
+    if (!Number.isFinite(ms)) continue;
+    out.push({ time: ms, side: 'signal', price: s.signal_price != null ? Number(s.signal_price) : null, label: 'Sinal' });
+    if (s.limit_price != null) {
+      const miss = s.miss_pct != null ? ` (faltou ${Number(s.miss_pct).toFixed(2)}%)` : '';
+      out.push({ time: ms, side: 'possible_entry', price: Number(s.limit_price), label: `limite${miss}` });
+    }
+  }
+  return out;
+}
 
 function fmtBuyTime(iso) {
   if (!iso) return null;
@@ -339,6 +367,22 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   const isMobile = useIsMobile();
   const [loadingSymbol, setLoadingSymbol]       = useState(null);
   const [activeRow, setActiveRow]               = useState(null);
+  // Favorito "SSE" — sinais RSI Momentum que não viraram compra (pullback expirou etc.), ver
+  // backend/services/fetchRsiMomentumMissedSignals.js. Recarrega a cada 5 min.
+  const [missedSignals, setMissedSignals]       = useState({ symbols: [], rows: [] });
+  const [missedPeriod, setMissedPeriod]         = useState(() => loadMissedPeriod());
+  const onMissedPeriodChange = useCallback((id) => { setMissedPeriod(id); saveMissedPeriod(id); }, []);
+  // Busca o mês inteiro (31 dias) uma vez; o seletor de período (hoje/ontem/3d/semana/mês) filtra no cliente.
+  const loadMissedSignals = useCallback(() => {
+    fetchRsiMomentumMissedSignals({ days: 31 })
+      .then(setMissedSignals)
+      .catch((err) => console.warn('[CurrencyTable] sinais sem entrada indisponíveis:', err.message));
+  }, []);
+  useEffect(() => {
+    loadMissedSignals();
+    const id = setInterval(loadMissedSignals, 5 * 60_000);
+    return () => clearInterval(id);
+  }, [loadMissedSignals]);
   const [mtModal, setMtModal]       = useState(null);
   const [vwapModal, setVwapModal]   = useState(null);
   const [bbModal, setBbModal]       = useState(null);
@@ -430,6 +474,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   const isActiveFavView = favoriteView === 'active';
   const isVwapBandsFavView = favoriteView === 'vwap-bands';
   const isBollingerBandsFavView = favoriteView === 'bollinger-bands';
+  const isRsiMissedFavView = favoriteView === 'rsi-missed';
   const isAltaFilter = activeFilter?.startsWith('Favoritos|Alta|') ?? false;
   const isNovasFilter = activeFilter?.startsWith('Favoritos|Novas|') ?? false;
   const isFavVolumeContext = !!favoriteView || isAltaFilter || isNovasFilter;
@@ -678,6 +723,24 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     setSortVolume('none');
   }, []);
 
+  // Sinais sem entrada dentro do período escolhido — `rows` (mais recente primeiro, ordem da API)
+  // e `symbols` agregados (1 por moeda, `last` = sinal mais recente do período).
+  const missedFiltered = useMemo(() => {
+    const [fromMs, toMs] = missedPeriodRange(missedPeriod);
+    const rowsIn = missedSignals.rows.filter((r) => {
+      const ms = new Date(r.signal_time).getTime();
+      return ms >= fromMs && ms < toMs;
+    });
+    const bySymbol = new Map();
+    for (const r of rowsIn) {
+      const cur = bySymbol.get(r.symbol);
+      if (cur) cur.count++;
+      else bySymbol.set(r.symbol, { symbol: r.symbol, exchange: r.exchange, interval: r.interval, count: 1, last: r });
+    }
+    return { rows: rowsIn, symbols: [...bySymbol.values()], bySymbol };
+  }, [missedSignals, missedPeriod]);
+  const missedBySymbol = missedFiltered.bySymbol;
+
   const rows = useMemo(() => {
     if (!currencies.list?.length) return [];
 
@@ -747,6 +810,16 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
         const pb = RM_PHASE_ORDER[rmPhaseBySymbol.get(b.symbol) ?? 'WATCHING'] ?? 9;
         return pa !== pb ? pa - pb : a.symbol.localeCompare(b.symbol);
       });
+    } else if (favoriteView === 'rsi-missed') {
+      // Ordem da API: sinal mais recente primeiro.
+      const missedSymbols = missedFiltered.symbols.map(s => s.symbol);
+      list = resolveFavorites(new Set(missedSymbols), currencies.list, gateAll);
+      const have = new Set(list.map(c => c.symbol));
+      for (const sym of missedSymbols) {
+        if (!have.has(sym)) list.push({ symbol: sym, price: 0, volume: 0 });
+      }
+      const order = new Map(missedSymbols.map((sym, i) => [sym, i]));
+      list = list.slice().sort((a, b) => (order.get(a.symbol) ?? 1e9) - (order.get(b.symbol) ?? 1e9));
     } else if (favoriteView === 'trades') {
       const filtered = filterTradeFavorites(tradeFavSymbols, tradeFavStatus, tradeFavSort);
       list = resolveFavorites(new Set(filtered), currencies.list, gateAll);
@@ -874,7 +947,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     }
 
     return list;
-  }, [currencies, activeFilter, selectedQuote, findFilter, search, favoriteView, gateFavorites, binanceFavorites, multitradeFavorites, sortVolume, gateAll, filterVisibleCurrencies, isVisibleSymbol, currencyBySymbol, activeMacrossFilter, macrossScannedAt, macrossTick, isMacrossFavView, macrossFavSort, macrossFavStatus, macrossEntriesBySymbol, isTradesFavView, tradeFavSort, tradeFavSymbols, tradeFavStatus, isActiveFavView, activeFavSort, activeTrades, isAltaFilter, isNovasFilter, highlightMeta, activeMacmpFilter, macmpMeta, macmpTableSort, activeMaDistanceFilter, maDistMeta, maDistSort, activeGrowthFilter, growthMeta, growthSort, activeVwapWidthFilter, vwapWidthMeta, vwapWidthSort, activeBbWidthFilter, bbWidthMeta, bbWidthSort, activeBbTrendFilter, bbTrendMeta, bbTrendSort, activeRsiFilter, rsiMeta, rsiSort, isVwapBandsFavView, vwapFavSort, vwapFavWidthMeta, bbFavSort, bbFavWidthMeta, showGenericWidthCol, genericWidthMeta, genericWidthSort]);
+  }, [currencies, activeFilter, selectedQuote, findFilter, search, favoriteView, gateFavorites, binanceFavorites, multitradeFavorites, sortVolume, gateAll, filterVisibleCurrencies, isVisibleSymbol, currencyBySymbol, activeMacrossFilter, macrossScannedAt, macrossTick, isMacrossFavView, macrossFavSort, macrossFavStatus, macrossEntriesBySymbol, isTradesFavView, tradeFavSort, tradeFavSymbols, tradeFavStatus, isActiveFavView, activeFavSort, activeTrades, isAltaFilter, isNovasFilter, highlightMeta, activeMacmpFilter, macmpMeta, macmpTableSort, activeMaDistanceFilter, maDistMeta, maDistSort, activeGrowthFilter, growthMeta, growthSort, activeVwapWidthFilter, vwapWidthMeta, vwapWidthSort, activeBbWidthFilter, bbWidthMeta, bbWidthSort, activeBbTrendFilter, bbTrendMeta, bbTrendSort, activeRsiFilter, rsiMeta, rsiSort, missedFiltered, isVwapBandsFavView, vwapFavSort, vwapFavWidthMeta, bbFavSort, bbFavWidthMeta, showGenericWidthCol, genericWidthMeta, genericWidthSort]);
 
   // Publica a lista visível (já filtrada/ordenada) e a função de seleção real pro contexto —
   // os botões ‹ › do gráfico usam isso pra passar pra moeda anterior/seguinte na mesma ordem
@@ -1097,6 +1170,11 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
       setChartTradeMarkers([]);
       clearMultitradeChartView();
 
+      if (isRsiMissedFavView) {
+        await selectMissedSignalSymbol(item.symbol);
+        return;
+      }
+
       const tradeMeta = isTradesFavView ? tradeFavStatus[item.symbol] : null;
       const isGateOnly = !currencies.list.some(c => c.symbol === item.symbol);
       const isGateFav  = gateFavorites.has(item.symbol);
@@ -1238,6 +1316,29 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     } finally {
       setLoadingSymbol(null);
     }
+  }
+
+  /** Favorito SSE: abre o gráfico no intervalo do sinal, ancorado no sinal mais recente da moeda,
+   *  com a seta amarela em cada sinal sem entrada (sinais mais antigos aparecem arrastando pra trás). */
+  async function selectMissedSignalSymbol(symbol) {
+    const signals = missedFiltered.rows.filter(r => r.symbol === symbol);
+    const last = signals[0];
+    if (!last) return;
+    const interval = last.interval || '15m';
+    const ivMs = INTERVAL_MS[interval] ?? 900_000;
+    const signalMs = new Date(last.signal_time).getTime();
+    const src = last.exchange === 'gate' ? 'gate' : null;
+    const endMs = Math.min(Date.now(), signalMs + 40 * ivMs);
+    setChartInterval(interval);
+    const data = await fetchCandlesticksAndCloud(symbol, interval, src, undefined, { fromMs: signalMs, toMs: endMs, pad: 100 });
+    setSelectedChart({ ...data, interval, symbol, source: src });
+    setChartViewSource(CHART_VIEW.STATISTICS);
+    setChartTradeMarkers(buildMissedSignalMarkers(signals));
+    setChartZoom({
+      source: CHART_VIEW.STATISTICS,
+      startDate: new Date(signalMs - 20 * ivMs).toISOString(),
+      endDate: new Date(endMs).toISOString(),
+    });
   }
 
   function handleToggleFavoriteView(type) {
@@ -1524,6 +1625,19 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
             onClick={() => handleToggleFavoriteView('rsi-momentum')}
           />
           )}
+          {uiPrefs.visibleFavoriteButtons['rsi-missed'] !== false && (
+          <ToolbarBtn
+            id="currency-table-btn-filter-rsi-missed"
+            active={isRsiMissedFavView}
+            color={RSI_MISSED_COLOR}
+            label="SSE"
+            count={missedFiltered.symbols.length}
+            title={isRsiMissedFavView
+              ? 'Sinais sem entrada (RSI Momentum) — clique pra sair'
+              : `Sinais sem entrada — RSI Momentum deu sinal mas não comprou (pullback expirou etc.) · ${MISSED_PERIOD_OPTIONS.find(o => o.id === missedPeriod)?.label ?? ''} (${missedFiltered.symbols.length})`}
+            onClick={() => { if (!isRsiMissedFavView) loadMissedSignals(); handleToggleFavoriteView('rsi-missed'); }}
+          />
+          )}
           {uiPrefs.visibleFavoriteButtons.gate !== false && (
           <ToolbarBtn
             active={favoriteView === 'gate'}
@@ -1605,6 +1719,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                     : isActiveFavView ? t('activefav.sort.label')
                     : isVwapBandsFavView ? t('vwapfav.sort.label')
                     : isBollingerBandsFavView ? t('bbfav.sort.label')
+                    : isRsiMissedFavView ? 'Período dos sinais sem entrada'
                     : activeMacmpFilter ? t('macmp.sort.label')
                     : showGenericWidthToggle ? t('genwidth.sort.label')
                     : undefined
@@ -1657,6 +1772,14 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                     <BollingerFavSortSelect
                       value={bbFavSort}
                       onChange={onBbFavSortChange}
+                      className="shrink-0"
+                    />
+                  </div>
+                ) : isRsiMissedFavView ? (
+                  <div className={`flex items-center gap-0.5 ${isMobile ? 'flex-wrap justify-center' : 'justify-start'}`}>
+                    <MissedSignalsPeriodSelect
+                      value={missedPeriod}
+                      onChange={onMissedPeriodChange}
                       className="shrink-0"
                     />
                   </div>
@@ -2114,6 +2237,16 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                           </span>
                         </span>
                       )}
+                      {isRsiMissedFavView && missedBySymbol.get(item.symbol) && (() => {
+                        const m = missedBySymbol.get(item.symbol);
+                        const miss = m.last.miss_pct != null ? ` · faltou ${Number(m.last.miss_pct).toFixed(2)}%` : '';
+                        return (
+                          <span className="text-[9px] font-normal" style={{ color: RSI_MISSED_COLOR }}
+                            title={`${m.count} sinal(is) sem entrada no período — último: ${MISSED_REASON_LABEL[m.last.reason] ?? m.last.reason}`}>
+                            ▼ {fmtBuyTime(m.last.signal_time)} · {MISSED_REASON_LABEL[m.last.reason] ?? m.last.reason}{miss}{m.count > 1 ? ` · ${m.count}×` : ''}
+                          </span>
+                        );
+                      })()}
                       {isTradesFavView && tradeBadge && (
                         <span className="text-[9px] font-normal text-emerald-400/90">{tradeBadge}</span>
                       )}
