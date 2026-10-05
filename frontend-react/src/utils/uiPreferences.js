@@ -411,7 +411,7 @@ export const DEFAULT_RSI_CROSS_THRESHOLD = 0;
 export const RSI_CROSS_VALUE_OPTIONS = [50, 55, 60, 65, 67, 68, 69, 70, 75, 80];
 export const DEFAULT_RSI_CROSS_VALUE = 69;
 // Intervalos gate-safe pro cálculo do RSI(14) da linha vertical (default = 15m, o do trade principal).
-export const RSI_CROSS_INTERVAL_OPTIONS = ['5m', '15m', '30m', '1h', '4h'];
+export const RSI_CROSS_INTERVAL_OPTIONS = ['1m', '5m', '15m', '30m', '1h', '4h'];
 export const DEFAULT_RSI_CROSS_INTERVAL = '15m';
 
 export function normalizeRsiCrossThreshold(raw) {
