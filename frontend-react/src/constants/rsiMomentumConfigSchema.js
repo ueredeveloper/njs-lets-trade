@@ -57,7 +57,7 @@ export const RSI_MOMENTUM_REINFORCE_RISE_OPTIONS = [8, 10, 12, 15, 18, 20, 25];
  *  sobra + aporte, re-arma bracket −rearmStopPct% / +rearmTargetPct%). */
 export const RSI_MOMENTUM_REINFORCE_MODE_OPTIONS = ['ladder', 'rearm'];
 /** exit.reinforceOnStop.rearmStopPct / rearmTargetPct — bracket re-armado a cada recompra (modo 'rearm'). */
-export const RSI_MOMENTUM_REINFORCE_REARM_STOP_OPTIONS = [3, 5, 6, 8, 10, 12, 15, 20];
+export const RSI_MOMENTUM_REINFORCE_REARM_STOP_OPTIONS = [3, 4, 5, 6, 8, 10, 12, 15, 20];
 export const RSI_MOMENTUM_REINFORCE_REARM_TARGET_OPTIONS = [3, 5, 6, 8, 10, 12, 15, 20, 25];
 /** exit.reinforceOnStop.buyUsd — valor (USDT) de cada compra de reforço (padrão = aporte da entrada). */
 export const RSI_MOMENTUM_REINFORCE_USD_OPTIONS = [20, 40, 60, 80, 100, 150, 200, 300, 500];

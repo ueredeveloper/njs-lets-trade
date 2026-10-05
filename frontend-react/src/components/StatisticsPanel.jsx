@@ -389,7 +389,7 @@ const RSI_MOM_REINFORCE_MODE_OPTIONS = ['ladder', 'rearm'];
 const MAX_REINFORCE_LEGS_ON_CHART = 40;
 /** rearmStopPct / rearmTargetPct — bracket re-armado a cada recompra no modo 'rearm'. O retorno
  *  REAL fica abaixo do rearmTargetPct quando houve stop antes (o caixa já levou o corte). */
-const RSI_MOM_REINFORCE_REARM_STOP_OPTIONS = [3, 5, 6, 8, 10, 12, 15, 20];
+const RSI_MOM_REINFORCE_REARM_STOP_OPTIONS = [3, 4, 5, 6, 8, 10, 12, 15, 20];
 const RSI_MOM_REINFORCE_REARM_TARGET_OPTIONS = [3, 5, 6, 8, 10, 12, 15, 20, 25];
 /** reinforceReentryTrigger — 'immediate' (recompra no ato do stop) | 'rsiRecross' (espera o
  *  RSI(14) do intervalo de entrada voltar a cruzar pra cima do limiar antes de reforçar/recomprar
