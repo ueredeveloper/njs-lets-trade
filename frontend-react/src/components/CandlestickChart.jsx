@@ -2,7 +2,7 @@ import { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import { useI18n } from '../i18n';
 import ReactECharts from 'echarts-for-react';
 import { useCurrency } from '../contexts/CurrencyContext';
-import { fetchCandlesticksAndCloud, fetchGateTrades, fetchBinanceTrades, fetchChartAdaptiveBands, fetchBollingerBandRecovery, DEFAULT_CANDLE_LIMIT, getBollingerMedianTrendConfig, fetchRsiThresholdBacktest, getRsiMomentumConfig, getRsiMomentumCuratedBot } from '../services/api';
+import { fetchCandlesticksAndCloud, fetchGateTrades, fetchBinanceTrades, fetchChartAdaptiveBands, fetchBollingerBandRecovery, DEFAULT_CANDLE_LIMIT, getBollingerMedianTrendConfig, fetchRsiThresholdBacktest, getRsiMomentumConfig, getRsiMomentumCuratedBot, getRsiMomentumCuratedList, addRsiMomentumCuratedBot } from '../services/api';
 import { buildMarkersFromExchangeTrades, attachPnlToExchangeTrades, isVwapBandsEntry, isBollingerBandsEntry, resolveBollingerBandsPermFilter } from '../utils/multitradeChart';
 import { computeVwapSlopeFlags } from '../utils/vwapSlopeHighlight';
 import { buildTrailingStopSeries, resolveChartStopLoss, resolveChartTarget, computeStopLossFloor } from '../utils/trailingStopLoss';
@@ -3222,6 +3222,12 @@ export default function CandlestickChart() {
   const [analysisBoxKind, setAnalysisBoxKind] = useState('flag');
   const [analysisBoxStrategy, setAnalysisBoxStrategy] = useState('rsi-momentum');
   const [analysisBoxRuleSource, setAnalysisBoxRuleSource] = useState('default');
+  // Regra 'exclusive': QUAL bot exclusivo (curated) usar — lista de todos (getRsiMomentumCuratedList),
+  // não só o da moeda aberta. Padrão: a moeda do gráfico se ela tiver bot exclusivo, senão o 1º da lista.
+  const [analysisBoxCuratedList, setAnalysisBoxCuratedList] = useState(null);
+  const [analysisBoxExclusiveSymbol, setAnalysisBoxExclusiveSymbol] = useState(null);
+  // Resultado do "Salvar no bot exclusivo" ({ saving, msg, err }).
+  const [analysisBoxSaveState, setAnalysisBoxSaveState] = useState(null);
   // Config carregada do servidor (padrão/exclusiva, ver efeito de carga) — NÃO editada
   // diretamente; `analysisBoxOverrides` guarda só os campos que o usuário mudou nos selects do
   // painel de regras, mesclados por cima dela (ver analysisBoxEffectiveConfig) antes de rodar a
@@ -4719,20 +4725,48 @@ export default function CandlestickChart() {
   // 1) Carrega a config (padrão global ou exclusiva da moeda) do servidor — só refaz quando a
   // fonte da regra, a moeda ou a caixa mudam. Ajustes do usuário no painel de regras
   // (analysisBoxOverrides) NÃO disparam isto de novo — só a simulação (efeito 2 abaixo).
+  // 0) Lista de bots exclusivos — carrega ao escolher a regra 'Exclusiva' e escolhe o padrão.
+  useEffect(() => {
+    if (!analysisBox || analysisBoxKind !== 'trade' || analysisBoxRuleSource !== 'exclusive') return undefined;
+    let cancelled = false;
+    getRsiMomentumCuratedList()
+      .then((list) => {
+        if (cancelled) return;
+        setAnalysisBoxCuratedList(list);
+        setAnalysisBoxExclusiveSymbol((prev) => {
+          if (prev && list.some((b) => b.symbol === prev)) return prev;
+          const own = list.find((b) => b.symbol === selectedChart?.symbol);
+          return own?.symbol ?? list[0]?.symbol ?? null;
+        });
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setAnalysisBoxCuratedList([]);
+        console.warn('[analysisBox curated list]', err.message);
+      });
+    return () => { cancelled = true; };
+  }, [analysisBox, analysisBoxKind, analysisBoxRuleSource, selectedChart?.symbol]);
+
   useEffect(() => {
     if (!analysisBox || analysisBoxKind !== 'trade' || !selectedChart?.symbol) return undefined;
+    const exclusive = analysisBoxRuleSource === 'exclusive';
+    if (exclusive && analysisBoxCuratedList == null) return undefined; // lista ainda carregando
     let cancelled = false;
     setAnalysisBoxLoadedConfig({ loading: true, error: null, panelConfig: null, tradeInterval: null });
     setAnalysisBoxOverrides({});
+    setAnalysisBoxSaveState(null);
     (async () => {
       try {
-        const symbol = selectedChart.symbol;
-        const info = analysisBoxRuleSource === 'exclusive'
-          ? await getRsiMomentumCuratedBot(symbol)
+        if (exclusive && !analysisBoxExclusiveSymbol) {
+          setAnalysisBoxLoadedConfig({ loading: false, error: 'nenhum bot exclusivo cadastrado', panelConfig: null, tradeInterval: null });
+          return;
+        }
+        const info = exclusive
+          ? await getRsiMomentumCuratedBot(analysisBoxExclusiveSymbol)
           : await getRsiMomentumConfig();
         if (cancelled) return;
-        if (analysisBoxRuleSource === 'exclusive' && !info?.exists) {
-          setAnalysisBoxLoadedConfig({ loading: false, error: 'sem bot exclusivo pra essa moeda', panelConfig: null, tradeInterval: null });
+        if (exclusive && !info?.exists) {
+          setAnalysisBoxLoadedConfig({ loading: false, error: `bot exclusivo ${analysisBoxExclusiveSymbol} não encontrado`, panelConfig: null, tradeInterval: null });
           return;
         }
         const panelConfig = info?.panelConfig;
@@ -4741,13 +4775,41 @@ export default function CandlestickChart() {
           setAnalysisBoxLoadedConfig({ loading: false, error: 'config indisponível', panelConfig: null, tradeInterval: null });
           return;
         }
-        setAnalysisBoxLoadedConfig({ loading: false, error: null, panelConfig, tradeInterval });
+        setAnalysisBoxLoadedConfig({
+          loading: false, error: null, panelConfig, tradeInterval,
+          exchange: info?.exchange ?? null, botSymbol: exclusive ? analysisBoxExclusiveSymbol : null, phase: info?.phase ?? null,
+        });
       } catch (err) {
         if (!cancelled) setAnalysisBoxLoadedConfig({ loading: false, error: err.message || 'falha ao carregar config', panelConfig: null, tradeInterval: null });
       }
     })();
     return () => { cancelled = true; };
-  }, [analysisBox, analysisBoxKind, analysisBoxRuleSource, selectedChart?.symbol]);
+  }, [analysisBox, analysisBoxKind, analysisBoxRuleSource, analysisBoxExclusiveSymbol, analysisBoxCuratedList, selectedChart?.symbol]);
+
+  // Grava a config editada na caixa (carregada + ajustes) no bot exclusivo escolhido — mesmo
+  // POST do botão "Editar bot exclusivo" das Estatísticas (statsConfigToRsiMomentumBody no
+  // backend). Preserva a fase/posição do bot; passa a valer quando o bot reiniciar.
+  async function saveAnalysisBoxExclusive() {
+    const cfg = analysisBoxEffectiveConfig;
+    const loaded = analysisBoxLoadedConfig;
+    if (!cfg || !loaded?.botSymbol) return;
+    setAnalysisBoxSaveState({ saving: true, msg: null, err: null });
+    try {
+      const r = await addRsiMomentumCuratedBot({
+        symbol: loaded.botSymbol,
+        interval: cfg.tradeInterval,
+        exchange: loaded.exchange ?? 'binance',
+        config: buildRsiMomCommonOptions(cfg.panelConfig, undefined, cfg.tradeInterval),
+      });
+      // A config salva vira a nova base (sem ajustes pendentes).
+      setAnalysisBoxLoadedConfig((prev) => ({ ...prev, panelConfig: cfg.panelConfig, tradeInterval: cfg.tradeInterval }));
+      setAnalysisBoxOverrides({});
+      const ignored = r?.ignoredFilters?.length ? ` · ignorado pelo bot: ${r.ignoredFilters.join(', ')}` : '';
+      setAnalysisBoxSaveState({ saving: false, err: null, msg: `salvo em ${loaded.botSymbol} — reinicie o bot pra valer${ignored}` });
+    } catch (err) {
+      setAnalysisBoxSaveState({ saving: false, msg: null, err: err.message || 'falha ao salvar' });
+    }
+  }
 
   // "Evolução BB": ao escolher esse tipo na caixa de análise, pede pro painel Estatísticas abrir
   // a aba Evolução BB ANCORADA no período exato da caixa (ver requestStatsPanel em
@@ -5869,14 +5931,35 @@ export default function CandlestickChart() {
     return (
       <div className="w-64 max-h-72 overflow-y-auto px-2 py-2 rounded bg-slate-900/95 border border-slate-600 shadow-lg flex flex-col gap-1.5">
         <div className="flex items-center justify-between">
-          <span className="text-[10px] text-slate-400 font-mono">Regra base</span>
+          <span className="text-[10px] text-slate-400 font-mono">
+            {analysisBoxLoadedConfig?.botSymbol
+              ? `Bot exclusivo ${analysisBoxLoadedConfig.botSymbol}${analysisBoxLoadedConfig.exchange === 'gate' ? ' (Gate)' : ''}`
+              : 'Regra base (padrão)'}
+          </span>
           <button
             type="button"
-            onClick={() => setAnalysisBoxOverrides({})}
+            onClick={() => { setAnalysisBoxOverrides({}); setAnalysisBoxSaveState(null); }}
             className="text-[9px] text-slate-400 hover:text-slate-200 underline"
           >
             restaurar
           </button>
+        </div>
+        {/* Entrada: pullback (0 = compra a mercado; negativo = limite |x|% abaixo do sinal) e valor por compra. */}
+        <div className="flex items-center gap-1 flex-wrap">
+          <span className="text-[10px] text-slate-400">Pullback%</span>
+          <input
+            type="number" max={0} step={0.5} value={p.pullbackPct ?? 0}
+            onChange={(e) => setAnalysisBoxOverride('pullbackPct', Number(e.target.value))}
+            title="0 = compra a mercado no sinal; -3 = ordem limite 3% abaixo do preço do sinal"
+            className={numCls}
+          />
+          <span className="text-[10px] text-slate-400">US$</span>
+          <input
+            type="number" min={5} step={5} value={p.positionSizeUsd ?? ''}
+            onChange={(e) => setAnalysisBoxOverride('positionSizeUsd', Number(e.target.value))}
+            title="Valor por compra (USDT)"
+            className={numCls}
+          />
         </div>
         <div className="flex items-center gap-1 flex-wrap">
           <select
@@ -5911,6 +5994,28 @@ export default function CandlestickChart() {
             <option value="continuous">contínuo</option>
             <option value="off">off</option>
           </select>
+          {p.targetMode === 'continuous' && (
+            <>
+              <span className="text-[10px] text-slate-400">+</span>
+              <select
+                value={p.trailingTargetStepPct ?? 3}
+                onChange={(e) => setAnalysisBoxOverride('trailingTargetStepPct', Number(e.target.value))}
+                title="Quanto o alvo sobe a cada passo"
+                className={selCls}
+              >
+                {ANALYSIS_BOX_TRAILING_TARGET_STEP_OPTIONS.map((v) => <option key={v} value={v}>{`${v}%`}</option>)}
+              </select>
+              <span className="text-[10px] text-slate-400">a cada</span>
+              <select
+                value={p.trailingTargetCoinStepPct ?? 3}
+                onChange={(e) => setAnalysisBoxOverride('trailingTargetCoinStepPct', Number(e.target.value))}
+                title="Alta da moeda que move o alvo"
+                className={selCls}
+              >
+                {ANALYSIS_BOX_TRAILING_TARGET_STEP_OPTIONS.map((v) => <option key={v} value={v}>{`${v}%`}</option>)}
+              </select>
+            </>
+          )}
         </div>
         {/* Stop — mesmo leque de modos do painel Estatísticas (fixo/S/R/contínuo/escada dupla/
             trilha topo/trilha ATR), incluindo o stop S/R escalável (estudo). */}
@@ -6196,6 +6301,119 @@ export default function CandlestickChart() {
             </label>
           );
         })}
+        {p.bandWidthEnabled && (
+          <div className="flex items-center gap-1 flex-wrap pl-4">
+            <span className="text-[10px] text-slate-400">banda mín%</span>
+            <input
+              type="number" min={0} step={0.1} value={p.bandWidthMinPct ?? ''}
+              onChange={(e) => setAnalysisBoxOverride('bandWidthMinPct', Number(e.target.value))}
+              title="Largura mínima média da Bollinger pra aceitar a entrada"
+              className={numCls}
+            />
+            <span className="text-[10px] text-slate-400">lookback</span>
+            <input
+              type="number" min={1} step={1} value={p.bandWidthLookback ?? ''}
+              onChange={(e) => setAnalysisBoxOverride('bandWidthLookback', Number(e.target.value))}
+              title="Candles da média da largura"
+              className={numCls}
+            />
+          </div>
+        )}
+        {/* Detalhes do reforço no stop — mesmos campos do painel Estatísticas. */}
+        {p.reinforceOnStopEnabled && (
+          <div className="flex flex-col gap-1 pl-4">
+            <div className="flex items-center gap-1 flex-wrap">
+              <span className="text-[10px] text-slate-400">US$/reforço</span>
+              <input
+                type="number" min={5} step={5} value={p.reinforceBuyUsd ?? ''}
+                onChange={(e) => setAnalysisBoxOverride('reinforceBuyUsd', Number(e.target.value))}
+                className={numCls}
+              />
+              {p.reinforceMode === 'rearm' ? (
+                <>
+                  <span className="text-[10px] text-slate-400">stop%</span>
+                  <input
+                    type="number" min={0.5} step={0.5} value={p.reinforceRearmStopPct ?? ''}
+                    onChange={(e) => setAnalysisBoxOverride('reinforceRearmStopPct', Number(e.target.value))}
+                    title="Stop do bracket re-armado após cada reforço"
+                    className={numCls}
+                  />
+                  <span className="text-[10px] text-slate-400">alvo%</span>
+                  <input
+                    type="number" min={0.5} step={0.5} value={p.reinforceRearmTargetPct ?? ''}
+                    onChange={(e) => setAnalysisBoxOverride('reinforceRearmTargetPct', Number(e.target.value))}
+                    title="Alvo do bracket re-armado após cada reforço"
+                    className={numCls}
+                  />
+                </>
+              ) : (
+                <>
+                  <span className="text-[10px] text-slate-400">a cada -%</span>
+                  <input
+                    type="number" min={0.5} step={0.5} value={p.reinforceAddDropPct ?? ''}
+                    onChange={(e) => setAnalysisBoxOverride('reinforceAddDropPct', Number(e.target.value))}
+                    title="Queda que dispara mais um degrau da escada"
+                    className={numCls}
+                  />
+                  <span className="text-[10px] text-slate-400">sai +%</span>
+                  <input
+                    type="number" min={0.5} step={0.5} value={p.reinforceExitRisePct ?? ''}
+                    onChange={(e) => setAnalysisBoxOverride('reinforceExitRisePct', Number(e.target.value))}
+                    title="Alta sobre o preço médio que vende a pilha toda"
+                    className={numCls}
+                  />
+                </>
+              )}
+            </div>
+            {p.reinforceMode === 'rearm' && (
+              <div className="flex items-center gap-1 flex-wrap">
+                <span className="text-[10px] text-slate-400">recompra</span>
+                <select
+                  value={p.reinforceReentryTrigger ?? 'immediate'}
+                  onChange={(e) => setAnalysisBoxOverride('reinforceReentryTrigger', e.target.value)}
+                  title="Recompra logo após o stop ou só quando o RSI cruzar de novo"
+                  className={selCls}
+                >
+                  <option value="immediate">no ato</option>
+                  <option value="rsiRecross">RSI cruzar</option>
+                </select>
+                {p.reinforceReentryTrigger === 'rsiRecross' && (
+                  <>
+                    <select
+                      value={p.reinforceReentryInterval || iv}
+                      onChange={(e) => setAnalysisBoxOverride('reinforceReentryInterval', e.target.value)}
+                      title="Intervalo do RSI da recompra"
+                      className={selCls}
+                    >
+                      {ANALYSIS_BOX_RULE_INTERVALS.map((o) => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                    <span className="text-[10px] text-slate-400">RSI&gt;</span>
+                    <input
+                      type="number" min={1} max={99} value={p.reinforceReentryRsi ?? ''}
+                      onChange={(e) => setAnalysisBoxOverride('reinforceReentryRsi', Number(e.target.value))}
+                      className={numCls}
+                    />
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+        {analysisBoxLoadedConfig?.botSymbol && (
+          <div className="border-t border-slate-700 pt-1.5 mt-0.5 flex flex-col gap-1">
+            <button
+              type="button"
+              onClick={saveAnalysisBoxExclusive}
+              disabled={analysisBoxSaveState?.saving || Object.keys(analysisBoxOverrides).length === 0}
+              title="Grava estes ajustes na config do bot exclusivo (mantém fase/posição; vale após reiniciar o bot)"
+              className="px-2 py-1 rounded text-[10px] font-semibold bg-amber-500/90 text-black hover:bg-amber-400 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {analysisBoxSaveState?.saving ? 'salvando…' : `Salvar no bot exclusivo ${analysisBoxLoadedConfig.botSymbol}`}
+            </button>
+            {analysisBoxSaveState?.msg && <span className="text-[9px] text-emerald-300">{analysisBoxSaveState.msg}</span>}
+            {analysisBoxSaveState?.err && <span className="text-[9px] text-red-300">{analysisBoxSaveState.err}</span>}
+          </div>
+        )}
       </div>
     );
   })();
@@ -6235,6 +6453,23 @@ export default function CandlestickChart() {
               <option value="default">Padrão</option>
               <option value="exclusive">Exclusiva</option>
             </select>
+            {analysisBoxRuleSource === 'exclusive' && (
+              <select
+                value={analysisBoxExclusiveSymbol ?? ''}
+                onChange={(e) => setAnalysisBoxExclusiveSymbol(e.target.value || null)}
+                disabled={!analysisBoxCuratedList?.length}
+                title="Qual bot exclusivo usar nesta caixa"
+                className="bg-p2 border border-p3/40 text-p5 text-[10px] rounded px-1 py-0.5 focus:outline-none focus:border-p4 disabled:opacity-40"
+              >
+                {analysisBoxCuratedList == null && <option value="">carregando…</option>}
+                {analysisBoxCuratedList?.length === 0 && <option value="">nenhum bot exclusivo</option>}
+                {(analysisBoxCuratedList ?? []).map((b) => (
+                  <option key={b.symbol} value={b.symbol}>
+                    {`${b.symbol.replace(/USDT$/, '')}${b.exchange === 'gate' ? ' · G' : ''}${b.phase && b.phase !== 'WATCHING' ? ` · ${b.phase}` : ''}`}
+                  </option>
+                ))}
+              </select>
+            )}
             <button
               type="button"
               onClick={() => setAnalysisBoxRulesOpen((v) => !v)}
