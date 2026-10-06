@@ -918,7 +918,8 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
     priceLinesRef.current = [];
     srRollSeriesRef.current = [];
     srTracoSeriesRef.current = [];
-    markersPluginRef.current = createSeriesMarkers(series, []);
+    // Blindado igual aos rótulos de S/R: o recálculo dos marcadores também roda no loop de pintura.
+    markersPluginRef.current = createSafeSeriesMarkers(series, []);
     subpanelStateRef.current = { key: null, series: {} };
     macdSeriesRef.current = { hist: null, macd: null, signal: null };
     // Arrastar o gráfico pra trás até quase o candle mais antigo carregado (range.from perto de
@@ -927,28 +928,35 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
     // Guarda o range visível ANTES de disparar pra restaurar depois que candlesticks crescer
     // (ver efeito de setData abaixo), senão o fitContent() padrão volta a visão pros candles
     // mais recentes assim que os dados mais antigos chegam.
+    // timeScale().getVisibleRange() lança "Value is null" (ensureNotNull em
+    // _timeRangeForLogicalRange) quando a janela visível cai num índice sem ponto de tempo —
+    // arrastando além da borda, ou com o eixo de tempo encolhendo no meio do pan (séries de S/R
+    // recriadas). Com subscribeVisibleTimeRangeChange quem chamava era a PRÓPRIA lib, no handler
+    // de mouse, sem try/catch possível do nosso lado ("Uncaught Error" ao arrastar). Por isso o
+    // trecho de tempo agora é derivado aqui, a partir do range lógico, com a chamada protegida.
+    const safeVisibleTimeRange = () => {
+      try { return chart.timeScale().getVisibleRange(); } catch { return null; }
+    };
     const handleVisibleLogicalRangeChange = (range) => {
+      // Trecho de TEMPO visível (pan/zoom) — reportado pro pai pra o S/R (e PPHL/WF/ZZ) usarem
+      // janela deslizante sobre os candles que estão aparecendo. Em segundos (UTCTimestamp).
+      if (range && onVisibleRangeChangeRef.current) {
+        const tr = safeVisibleTimeRange();
+        const fromMs = Number(tr?.from) * 1000;
+        const toMs = Number(tr?.to) * 1000;
+        if (Number.isFinite(fromMs) && Number.isFinite(toMs)) {
+          onVisibleRangeChangeRef.current({ fromMs, toMs });
+        }
+      }
       if (!isUserPanningRef.current) return;
       if (!range || range.from > 5) return;
       if (loadingMoreCandlesRef.current || !onNeedOlderCandlesRef.current) return;
       if (triggeredForLenRef.current === candlesticksLenRef.current) return;
       triggeredForLenRef.current = candlesticksLenRef.current;
-      pendingRestoreRangeRef.current = chart.timeScale().getVisibleRange();
+      pendingRestoreRangeRef.current = safeVisibleTimeRange();
       onNeedOlderCandlesRef.current();
     };
     chart.timeScale().subscribeVisibleLogicalRangeChange(handleVisibleLogicalRangeChange);
-    // Trecho de TEMPO visível (pan/zoom) — reportado pro pai pra o S/R (e PPHL/WF/ZZ) usarem
-    // janela deslizante sobre os candles que estão aparecendo. `range` vem em segundos (UTCTimestamp)
-    // ou null quando não há dados.
-    const handleVisibleTimeRangeChange = (range) => {
-      if (!range || !onVisibleRangeChangeRef.current) return;
-      const fromMs = Number(range.from) * 1000;
-      const toMs = Number(range.to) * 1000;
-      if (Number.isFinite(fromMs) && Number.isFinite(toMs)) {
-        onVisibleRangeChangeRef.current({ fromMs, toMs });
-      }
-    };
-    chart.timeScale().subscribeVisibleTimeRangeChange(handleVisibleTimeRangeChange);
     // pointerdown/touchstart no container = início de um arrasto real; pointerup/touchend/cancel
     // (ouvidos no window, não só no container, pra pegar o "soltar" mesmo se o ponteiro sair da
     // área do gráfico antes de soltar) = fim do gesto. Esse é o único sinal confiável de "o
@@ -982,7 +990,6 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
     return () => {
       if (panEndTimeoutId) clearTimeout(panEndTimeoutId);
       chart.timeScale().unsubscribeVisibleLogicalRangeChange(handleVisibleLogicalRangeChange);
-      chart.timeScale().unsubscribeVisibleTimeRangeChange(handleVisibleTimeRangeChange);
       el?.removeEventListener('pointerdown', handlePanStart);
       el?.removeEventListener('touchstart', handlePanStart);
       window.removeEventListener('pointerup', handlePanEnd);
@@ -1052,7 +1059,9 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       if (pendingRestoreRangeRef.current) {
         // candlesticks cresceu por causa do arrasto pra trás (onNeedOlderCandles) — restaura
         // exatamente onde o usuário estava em vez de saltar pros candles mais recentes.
-        chart?.timeScale().setVisibleRange(pendingRestoreRangeRef.current);
+        try {
+          chart?.timeScale().setVisibleRange(pendingRestoreRangeRef.current);
+        } catch { /* eixo sem pontos nesse frame — fica onde a lib deixou */ }
         pendingRestoreRangeRef.current = null;
       } else if (zoomPeriod?.startDate && zoomPeriod?.endDate) {
         // Zoom de período ativo (clique numa ocorrência de Estatísticas/Multi-Trade) — deixa pro
@@ -1714,8 +1723,26 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
     if (tdSequentialData?.candlesticks?.length) { // TD Seq virou manipulador caixa — gate pela config
       markers.push(...buildTdSequentialMarkers(candlesticks, tdSequentialData.candlesticks));
     }
-    markers.sort((a, b) => a.time - b.time);
-    markersPluginRef.current.setMarkers(markers);
+    // setMarkers recalcula SÍNCRONO (_recalculateMarkers → ensureNotNull em dataByIndex) — aqui,
+    // dentro do efeito, um "Value is null" derrubava o componente inteiro (série principal ainda
+    // com os dados antigos/vazia ao trocar moeda/intervalo, ou marcador sem candle por perto).
+    // Só passa marcador com tempo finito, encaixado no intervalo de candles REAIS da série (a lib
+    // já fazia esse encaixe na ponta — aqui é explícito, sem depender do timeScale global).
+    const real = (seriesRef.current?.data() ?? []).filter((d) => d.close != null);
+    const t0 = real.length ? Number(real[0].time) : null;
+    const t1 = real.length ? Number(real[real.length - 1].time) : null;
+    const safeMarkers = t0 == null ? [] : markers
+      .filter((m) => Number.isFinite(Number(m.time)))
+      .map((m) => {
+        const t = Number(m.time);
+        return t < t0 ? { ...m, time: t0 } : t > t1 ? { ...m, time: t1 } : m;
+      });
+    safeMarkers.sort((a, b) => a.time - b.time);
+    try {
+      markersPluginRef.current.setMarkers(safeMarkers);
+    } catch (err) {
+      console.warn('[Gráfico] marcadores ignorados neste frame', err);
+    }
   }, [pphlConfig, wfractalsConfig, flagsConfig, multitradeMarkers, buyInfo, candlesticks, bollingerConfigs, activeIndicators, tdSequentialData]);
 
   // Sub-painéis RSI/CHOP (panes nativos do LW v5) — reconstrói do zero só quando o CONJUNTO

@@ -209,51 +209,42 @@ export function CurrencyProvider({ children }) {
   const toggleFavoriteView = useCallback((type) => {
     setFavoriteView((prev) => {
       const next = prev === type ? null : type;
-      console.log('[Favoritos] favoriteView', { prev, next, type });
       return next;
     });
   }, []);
 
   const toggleGateFavorite = useCallback(async (symbol) => {
     const sym = symbol.toUpperCase();
-    console.log('[Favoritos] Gate toggle iniciar', sym);
     setGateFavorites((prev) => {
       const next = new Set(prev);
       const removing = next.has(sym);
       if (removing) {
         next.delete(sym);
         removeFavorite(sym, 'gate')
-          .then(() => console.log('[Favoritos] Gate removido OK', sym))
           .catch((err) => console.error('[Favoritos] Gate remover falhou', sym, err));
       } else {
         next.add(sym);
         addFavorite(sym, 'gate')
-          .then(() => console.log('[Favoritos] Gate adicionado OK', sym))
           .catch((err) => console.error('[Favoritos] Gate adicionar falhou', sym, err));
       }
-      console.log('[Favoritos] Gate toggle estado', { sym, removing, size: next.size });
       return next;
     });
   }, []);
 
   const toggleBinanceFavorite = useCallback(async (symbol) => {
     const sym = symbol.toUpperCase();
-    console.log('[Favoritos] Binance toggle iniciar', sym);
     setBinanceFavorites((prev) => {
       const next = new Set(prev);
       const removing = next.has(sym);
       if (removing) {
         next.delete(sym);
         removeFavorite(sym, 'binance')
-          .then(() => console.log('[Favoritos] Binance removido OK', sym))
           .catch((err) => console.error('[Favoritos] Binance remover falhou', sym, err));
       } else {
         next.add(sym);
         addFavorite(sym, 'binance')
-          .then(() => console.log('[Favoritos] Binance adicionado OK', sym))
           .catch((err) => console.error('[Favoritos] Binance adicionar falhou', sym, err));
       }
-      console.log('[Favoritos] Binance toggle estado', { sym, removing, size: next.size });
       return next;
     });
   }, []);

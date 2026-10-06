@@ -729,7 +729,6 @@ export async function getFavorites(type) {
 }
 
 export async function addFavorite(symbol, type) {
-  console.log('[Favoritos] API addFavorite', { symbol, type });
   const res = await fetch('/services/sb/favorites', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -741,12 +740,10 @@ export async function addFavorite(symbol, type) {
     throw new Error(body?.error || 'Falha ao adicionar favorito');
   }
   const data = await res.json();
-  console.log('[Favoritos] API addFavorite OK', { symbol, type });
   return data;
 }
 
 export async function addTradeFavorite(symbol, { exchange = 'binance', interval, rsiBuy, rsiSell, sellInterval }) {
-  console.log('[Favoritos] API addTradeFavorite', { symbol, exchange, interval, rsiBuy, rsiSell });
   const res = await fetch('/services/sb/favorites', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -758,12 +755,10 @@ export async function addTradeFavorite(symbol, { exchange = 'binance', interval,
     throw new Error(body?.error || 'Falha ao salvar configuração de trade');
   }
   const data = await res.json();
-  console.log('[Favoritos] API addTradeFavorite OK', symbol);
   return data;
 }
 
 export async function removeFavorite(symbol, type) {
-  console.log('[Favoritos] API removeFavorite', { symbol, type });
   const res = await fetch(`/services/sb/favorites/${encodeURIComponent(symbol)}?type=${type}`, { method: 'DELETE' });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
@@ -771,7 +766,6 @@ export async function removeFavorite(symbol, type) {
     throw new Error(body?.error || 'Falha ao remover favorito');
   }
   const data = await res.json();
-  console.log('[Favoritos] API removeFavorite OK', { symbol, type });
   return data;
 }
 

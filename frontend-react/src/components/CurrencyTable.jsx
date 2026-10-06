@@ -206,12 +206,10 @@ function FavButton({ active, color, label, text, symbol, kind, onClick, tipKey }
       type="button"
       onPointerDown={(e) => {
         e.stopPropagation();
-        console.log(`${FAV_LOG} pointerdown`, { kind: btnKind, symbol, active });
       }}
       onClick={(e) => {
         e.preventDefault();
         e.stopPropagation();
-        console.log(`${FAV_LOG} clique`, { kind: btnKind, symbol, active });
         try {
           const result = onClick?.(e);
           if (result?.then) {
@@ -246,7 +244,6 @@ function ToolbarBtn({ active, color, label, count, onClick, title, id }) {
       onClick={(e) => {
         e.preventDefault();
         e.stopPropagation();
-        console.log(`${FAV_LOG} toolbar`, { label, active: filled, count });
         try {
           onClick?.();
         } catch (err) {
@@ -1349,7 +1346,6 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   }
 
   function handleToggleFavoriteView(type) {
-    console.log(`${FAV_LOG} toggle view`, { type, prev: favoriteView });
     const entering = favoriteView !== type;
     toggleFavoriteView(type);
     setSearch('');
@@ -2156,7 +2152,6 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                       )}
                       {uiPrefs.visibleFavoriteButtons.macross !== false && (
                       <FavButton tipKey="macross" kind="MC" symbol={item.symbol} active={isMT}      color={MT_COLOR}      label="MA-Cross" text="MC" onClick={() => {
-                        console.log(`${FAV_LOG} MC abrir modal`, { symbol: item.symbol, entries: mtEntries.length, isMT });
                         setMtModal({ symbol: item.symbol, exchange: isGate && !isBinance ? 'gate' : 'binance', entries: mtEntries });
                       }} />
                       )}
@@ -2600,7 +2595,6 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                           )}
                           {uiPrefs.visibleFavoriteButtons.macross !== false && (
                           <FavButton tipKey="macross" kind="MC" symbol={item.symbol} active={isMTGate} color={MT_COLOR}    label="MA-Cross" text="MC" onClick={() => {
-                            console.log(`${FAV_LOG} MC abrir modal (Gate)`, { symbol: item.symbol, entries: mtEntriesGate.length });
                             setMtModal({ symbol: item.symbol, exchange: 'gate', entries: mtEntriesGate });
                           }} />
                           )}
@@ -2688,27 +2682,22 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
             defaultExchange={mtModal.exchange}
             currentEntries={mtModal.entries}
             onConfirm={async ({ saves }) => {
-              console.log(`${FAV_LOG} MC confirmar`, { symbol: mtModal.symbol, saves });
               try {
                 await saveMultitradeSymbol({ saves });
-                console.log(`${FAV_LOG} MC salvo OK`, mtModal.symbol);
                 setMtModal(null);
               } catch (err) {
                 console.error(`${FAV_LOG} MC salvar falhou`, mtModal.symbol, err);
               }
             }}
             onRemove={mtModal.entries?.length ? async () => {
-              console.log(`${FAV_LOG} MC remover`, { symbol: mtModal.symbol, ids: mtModal.entries.map(e => e.id) });
               try {
                 for (const e of mtModal.entries) await removeMultitradeEntry(e.id);
-                console.log(`${FAV_LOG} MC removido OK`, mtModal.symbol);
                 setMtModal(null);
               } catch (err) {
                 console.error(`${FAV_LOG} MC remover falhou`, mtModal.symbol, err);
               }
             } : undefined}
             onCancel={() => {
-              console.log(`${FAV_LOG} MC cancelar`, mtModal.symbol);
               setMtModal(null);
             }}
           />
@@ -2722,19 +2711,14 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
             defaultExchange={vwapModal.exchange}
             currentEntry={vwapModal.entry}
             onConfirm={async ({ id, payload }) => {
-              console.log(`${FAV_LOG} VWAP confirmar`, { symbol: vwapModal.symbol, id });
               await saveMultitradeSymbol({ saves: [{ id, payload }] });
-              console.log(`${FAV_LOG} VWAP salvo OK`, vwapModal.symbol);
               setVwapModal(null);
             }}
             onRemove={async (id) => {
-              console.log(`${FAV_LOG} VWAP remover`, { symbol: vwapModal.symbol, id });
               await removeMultitradeEntry(id);
-              console.log(`${FAV_LOG} VWAP removido OK`, vwapModal.symbol);
               setVwapModal(null);
             }}
             onCancel={() => {
-              console.log(`${FAV_LOG} VWAP cancelar`, vwapModal.symbol);
               setVwapModal(null);
             }}
           />
@@ -2748,19 +2732,14 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
             defaultExchange={bbModal.exchange}
             currentEntry={bbModal.entry}
             onConfirm={async ({ id, payload }) => {
-              console.log(`${FAV_LOG} BB confirmar`, { symbol: bbModal.symbol, id });
               await saveMultitradeSymbol({ saves: [{ id, payload }] });
-              console.log(`${FAV_LOG} BB salvo OK`, bbModal.symbol);
               setBbModal(null);
             }}
             onRemove={async (id) => {
-              console.log(`${FAV_LOG} BB remover`, { symbol: bbModal.symbol, id });
               await removeMultitradeEntry(id);
-              console.log(`${FAV_LOG} BB removido OK`, bbModal.symbol);
               setBbModal(null);
             }}
             onCancel={() => {
-              console.log(`${FAV_LOG} BB cancelar`, bbModal.symbol);
               setBbModal(null);
             }}
           />
