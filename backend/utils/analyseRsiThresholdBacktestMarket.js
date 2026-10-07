@@ -235,6 +235,15 @@ async function analyseRsiThresholdBacktestMarket(options = {}) {
     const emaCrossBlockedCount = emaCrossEnabled
         ? valid.reduce((s, { result }) => s + (result.emaCrossBlockedCount || 0), 0)
         : 0;
+    const bbLowerEnabled = !!perSymbolOptions.bbLowerFilter?.enabled;
+    const bbLowerBlockedCount = bbLowerEnabled
+        ? valid.reduce((s, { result }) => s + (result.bbLowerBlockedCount || 0), 0)
+        : 0;
+    // Config efetiva (já saneada pelo motor) — pega do 1º resultado que tiver.
+    const bbLowerFilterEffective = bbLowerEnabled
+        ? (valid.find(({ result }) => result.bbLowerFilter)?.result.bbLowerFilter
+            ?? { interval: perSymbolOptions.bbLowerFilter.interval ?? '15m', maxPct: Number(perSymbolOptions.bbLowerFilter.maxPct ?? 2), period: 20, stdDev: 2 })
+        : null;
     const rsi5mEnabled = !!perSymbolOptions.rsi5mFilter?.enabled;
     const rsi5mBlockedCount = rsi5mEnabled
         ? valid.reduce((s, { result }) => s + (result.rsi5mBlockedCount || 0), 0)
@@ -305,6 +314,8 @@ async function analyseRsiThresholdBacktestMarket(options = {}) {
             ? { interval: perSymbolOptions.emaCrossFilter.interval ?? '8h', fastPeriod: 9, slowPeriod: 21 }
             : null,
         emaCrossBlockedCount,
+        bbLowerFilter: bbLowerFilterEffective,
+        bbLowerBlockedCount,
         rsi5mFilter: rsi5mEnabled
             ? { interval: '5m', threshold: Math.max(50, Math.min(95, Number(perSymbolOptions.rsi5mFilter.threshold ?? 70))) }
             : null,

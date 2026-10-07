@@ -1,6 +1,6 @@
 'use strict';
 
-const { RSI, ADX, MACD, ATR, EMA } = require('technicalindicators');
+const { RSI, ADX, MACD, ATR, EMA, BollingerBands } = require('technicalindicators');
 const getCandles = require('../binance/getCandles');
 const fetchKlines = require('../binance/fetchKlines');
 const { getGateCandles, fetchFromGate } = require('../gate/getGateCandles');
@@ -40,6 +40,9 @@ const MACD_SIGNAL_PERIOD = 9;
 const EMA_FAST_PERIOD = 9;
 const EMA_SLOW_PERIOD = 21;
 const EMA_WARMUP_BARS = EMA_SLOW_PERIOD * 3 + 10;
+// Filtro "perto da banda inferior" (bbLowerFilter) — Bollinger 20/2 (mesmos BB_PERIOD/BB_STDDEV
+// do filtro de largura), num intervalo PRÓPRIO configurável (padrão 15m).
+const BB_LOWER_WARMUP_BARS = BB_PERIOD + 10;
 // Warmup mínimo de cada indicador (candles perdidos até o 1º valor válido da série) — usado só
 // pra dimensionar o fetch (computeOwnIntervalFetchLimit), com folga generosa.
 const ADX_WARMUP_BARS = ADX_PERIOD * 2 + 10;
@@ -1383,6 +1386,14 @@ function computeMacdWhatIf(occurrences, interval) {
  *   ADX/MACD). Sem EMA disponível ainda (warmup), NÃO bloqueia (fail-open).
  * @param {boolean} [options.emaCrossFilter.enabled=false]
  * @param {string}  [options.emaCrossFilter.interval='8h']
+ * @param {object} [options.bbLowerFilter]  Filtro "perto da banda inferior": só permite o sinal se o
+ *   preço do sinal (close do candle do sinal) estiver a no máximo `maxPct`% ACIMA da banda inferior
+ *   de Bollinger (20/2) do intervalo PRÓPRIO escolhido, no instante do sinal — distância =
+ *   (preço − inferior) / inferior × 100. Preço abaixo da banda (distância negativa) passa. Sem
+ *   banda disponível ainda (warmup), NÃO bloqueia (fail-open, igual ADX/MACD/EMA).
+ * @param {boolean} [options.bbLowerFilter.enabled=false]
+ * @param {string}  [options.bbLowerFilter.interval='15m']
+ * @param {number}  [options.bbLowerFilter.maxPct=2]  Distância máxima % acima da banda inferior (0–50).
  * @param {object} [options.rsi5mFilter]  Mesmo entry.rsi5mFilter do bot ao vivo (ver checkRsi5mFilter
  *   em backend/bot/rsi-momentum/strategyEngine.js): exige RSI(14) do candle de 5m fechado no
  *   FECHAMENTO do candle do sinal > `threshold`. Toggle próprio nas Estatísticas. Fail-open no warmup.
@@ -1458,6 +1469,7 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
         macdFilter      = null,
         higherRsiFilter = null,
         emaCrossFilter  = null,
+        bbLowerFilter   = null,
         rsi5mFilter     = null,
         newHighFilter   = null,
         trailingStop    = null,
@@ -1558,6 +1570,12 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
     // Filtro de tendência EMA9×EMA21 num intervalo próprio — ver JSDoc de options.emaCrossFilter.
     const emaCrossEnabled = !!emaCrossFilter?.enabled;
     const emaCrossInterval = emaCrossFilter?.interval ?? '8h';
+
+    // Filtro "perto da banda inferior de Bollinger" num intervalo próprio — ver JSDoc de options.bbLowerFilter.
+    const bbLowerEnabled = !!bbLowerFilter?.enabled;
+    const bbLowerInterval = bbLowerFilter?.interval ?? '15m';
+    const bbLowerMaxPctRaw = Number(bbLowerFilter?.maxPct ?? 2);
+    const bbLowerMaxPct = Number.isFinite(bbLowerMaxPctRaw) ? Math.max(0, Math.min(50, bbLowerMaxPctRaw)) : 2;
 
     // Filtro RSI 5m (mesmo entry.rsi5mFilter do bot ao vivo — ver checkRsi5mFilter em
     // backend/bot/rsi-momentum/strategyEngine.js): exige RSI(14) do candle de 5m fechado no
@@ -1685,6 +1703,11 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
     const emaCrossLimit = emaCrossEnabled
         ? computeOwnIntervalFetchLimit(interval, mainLimit, emaCrossInterval, EMA_WARMUP_BARS)
         : 0;
+    // Com o intervalo da banda == intervalo do sinal, reaproveita os candles principais.
+    const bbLowerNeedsFetch = bbLowerEnabled && bbLowerInterval !== interval;
+    const bbLowerLimit = bbLowerNeedsFetch
+        ? computeOwnIntervalFetchLimit(interval, mainLimit, bbLowerInterval, BB_LOWER_WARMUP_BARS)
+        : 0;
 
     // RSI 1h de referência (informativo, ver REF_RSI_INTERVAL) — só busca candles próprios quando
     // o intervalo do sinal não é já 1h.
@@ -1750,12 +1773,15 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
         rfConfirmNeedsOwnFetch
             ? fetchCandles(symbol, rfConfirmInterval, rfConfirmOwnLimit)
             : Promise.resolve(null),
+        bbLowerNeedsFetch
+            ? fetchCandles(symbol, bbLowerInterval, bbLowerLimit)
+            : Promise.resolve(null),
     ]);
 
     const [
         candlesResult, bwCandlesResult, pdcCandlesResult, tickersResult, pcsCandlesResult, adxCandlesResult,
         macdCandlesResult, refRsiCandlesResult, srCandlesResult, rsi5mCandlesResult, emaCrossCandlesResult,
-        rfReentryCandlesResult, rfConfirmCandlesResult,
+        rfReentryCandlesResult, rfConfirmCandlesResult, bbLowerCandlesResult,
     ] = settled;
     if (candlesResult.status === 'rejected') throw candlesResult.reason;
     const candles = candlesResult.value;
@@ -1831,6 +1857,25 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
         const fastLead = fastEma.length - slowEma.length;
         emaCrossSeries = slowEma.map((slow, k) => ({ diff: fastEma[k + fastLead] - slow }));
         emaCrossOffset = emaCrossCandles.length - emaCrossSeries.length;
+    }
+
+    // Bollinger 20/2 do filtro "perto da banda inferior" — intervalo próprio (bbLowerInterval);
+    // bbLowerSeries[k].lower alinhado a bbLowerCandles[k + bbLowerOffset]. Mesmo intervalo do
+    // sinal → usa os próprios candles principais (sem fetch extra).
+    const bbLowerCandles = !bbLowerEnabled
+        ? []
+        : !bbLowerNeedsFetch
+            ? candles
+            : (bbLowerCandlesResult.status === 'fulfilled' && bbLowerCandlesResult.value ? bbLowerCandlesResult.value : []);
+    let bbLowerSeries = [];
+    let bbLowerOffset = 0;
+    if (bbLowerCandles.length) {
+        bbLowerSeries = BollingerBands.calculate({
+            values: bbLowerCandles.map(c => parseFloat(c.close)),
+            period: BB_PERIOD,
+            stdDev: BB_STDDEV,
+        });
+        bbLowerOffset = bbLowerCandles.length - bbLowerSeries.length;
     }
 
     // Volume 24h: mesmo campo/fonte do filtro do bot ao vivo (marketScanner.js) — falha ao
@@ -2003,6 +2048,7 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
     const rawSignals = [];
     let higherRsiBlocked = 0; // sinais cortados pelo filtro de RSI 1h (só conta com ele ligado)
     let emaCrossBlocked = 0;  // sinais cortados pelo filtro EMA9×EMA21 (só conta com ele ligado)
+    let bbLowerBlocked = 0;   // sinais cortados pelo filtro "perto da banda inferior" (só conta com ele ligado)
     let rsi5mBlocked = 0;     // sinais cortados pelo filtro de RSI 5m (só conta com ele ligado)
     let newHighBlocked = 0;   // sinais cortados pelo filtro "topo dos últimos N" (só conta com ele ligado)
     const minI = Math.max(1, priorRsiCount);
@@ -2056,6 +2102,16 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
                 const emaDiff = resolveOwnIntervalValueAt(emaCrossCandles, emaCrossSeries, emaCrossOffset, signalCandle.openTime, (e) => e.diff);
                 if (emaDiff != null && emaDiff <= 0) {
                     emaCrossBlocked++;
+                    continue;
+                }
+            }
+
+            // Banda inferior de Bollinger: só passa com o preço do sinal a no máximo bbLowerMaxPct%
+            // acima da inferior no intervalo escolhido. Sem banda ainda (warmup), não bloqueia.
+            if (bbLowerEnabled) {
+                const lower = resolveOwnIntervalValueAt(bbLowerCandles, bbLowerSeries, bbLowerOffset, signalCandle.openTime, (b) => b.lower);
+                if (lower != null && lower > 0 && ((signalPrice - lower) / lower) * 100 > bbLowerMaxPct) {
+                    bbLowerBlocked++;
                     continue;
                 }
             }
@@ -2364,6 +2420,8 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
         higherRsiBlockedCount: higherRsiEnabled ? higherRsiBlocked : 0,
         emaCrossFilter: emaCrossEnabled ? { interval: emaCrossInterval, fastPeriod: EMA_FAST_PERIOD, slowPeriod: EMA_SLOW_PERIOD } : null,
         emaCrossBlockedCount: emaCrossEnabled ? emaCrossBlocked : 0,
+        bbLowerFilter: bbLowerEnabled ? { interval: bbLowerInterval, maxPct: bbLowerMaxPct, period: BB_PERIOD, stdDev: BB_STDDEV } : null,
+        bbLowerBlockedCount: bbLowerEnabled ? bbLowerBlocked : 0,
         rsi5mFilter: rsi5mEnabled ? { interval: '5m', threshold: rsi5mThreshold } : null,
         rsi5mBlockedCount: rsi5mEnabled ? rsi5mBlocked : 0,
         newHighFilter: nhEnabled ? { lookback: nhLookback, marginPct: nhMarginPct } : null,

@@ -15,6 +15,7 @@ const DEFAULT_USER_ID = process.env.SUPABASE_DEFAULT_USER_ID ?? 'ueredeveloper';
 //     &macdFilterEnabled=1&macdFilterInterval=1h
 //     &higherRsiFilterEnabled=1&higherRsiFilterMinRsi=50
 //     &emaCrossFilterEnabled=1&emaCrossFilterInterval=8h
+//     &bbLowerFilterEnabled=1&bbLowerFilterInterval=15m&bbLowerFilterMaxPct=2   (preço do sinal até X% acima da banda inferior de Bollinger)
 //     &trailingStopEnabled=1&trailingStopMode=continuous&trailingStopStartPct=5&trailingStopCoinStepPct=1&trailingStopStopStepPct=1
 //     (modos: continuous | twoPhase | peakTrail | atrTrail — ver parseTrailingStopQuery.js)
 //     &targetMode=continuous&trailingTargetCoinStepPct=3&trailingTargetStepPct=3
@@ -37,6 +38,7 @@ router.get('/rsi-threshold-backtest-market', async (req, res) => {
         macdFilterEnabled, macdFilterInterval,
         higherRsiFilterEnabled, higherRsiFilterMinRsi,
         emaCrossFilterEnabled, emaCrossFilterInterval,
+        bbLowerFilterEnabled, bbLowerFilterInterval, bbLowerFilterMaxPct,
         rsi5mFilterEnabled, rsi5mFilterThreshold,
         newHighFilterEnabled, newHighFilterLookback, newHighFilterMarginPct,
         hardTakeProfitEnabled, hardTakeProfitPct,
@@ -113,6 +115,11 @@ router.get('/rsi-threshold-backtest-market', async (req, res) => {
         emaCrossFilter: emaCrossFilterEnabled === '1' ? {
             enabled:  true,
             interval: emaCrossFilterInterval ?? '8h',
+        } : null,
+        bbLowerFilter: bbLowerFilterEnabled === '1' ? {
+            enabled:  true,
+            interval: bbLowerFilterInterval ?? '15m',
+            maxPct:   bbLowerFilterMaxPct != null && bbLowerFilterMaxPct !== '' ? parseFloat(bbLowerFilterMaxPct) : 2,
         } : null,
         rsi5mFilter: rsi5mFilterEnabled === '1' ? {
             enabled:   true,

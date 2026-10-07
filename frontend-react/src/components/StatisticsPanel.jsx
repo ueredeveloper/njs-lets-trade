@@ -345,6 +345,10 @@ const RSI_MOM_HIGHER_RSI_MIN_OPTIONS = [40, 45, 50, 55, 60, 65, 70];
 /** Intervalos do filtro EMA9×EMA21 (entry.emaCrossFilter) — só os que o bot ao vivo aceita
  *  (RSI_MOMENTUM_ALL_INTERVALS em tradeConfigSchema.js), pra painel e bot ficarem espelho. */
 const RSI_MOM_EMA_CROSS_INTERVAL_OPTIONS = ['15m', '30m', '1h', '2h', '4h', '8h', '1d'];
+/** Filtro "perto da banda inferior" (Bollinger 20/2): intervalo da banda (padrão 15m) e distância
+ *  máxima % do preço do sinal acima da banda inferior. Só backtest/Estatísticas (bot ao vivo não tem). */
+const RSI_MOM_BB_LOWER_INTERVAL_OPTIONS = ['5m', '15m', '30m', '1h', '2h', '4h', '8h', '1d'];
+const RSI_MOM_BB_LOWER_MAX_PCT_OPTIONS = [0, 0.5, 1, 1.5, 2, 3, 4, 5, 7, 10];
 /** Limiar do filtro "RSI 5m" (mesmo entry.rsi5mFilter do bot ao vivo) — RSI(14) do candle de 5m
  *  no fechamento do candle do sinal precisa estar ACIMA disso. Grade da análise offline. */
 const RSI_MOM_RSI5M_OPTIONS = [55, 60, 65, 70, 75, 80, 85, 90];
@@ -452,6 +456,9 @@ const RSI_MOM_DEFAULT_PREFS = {
   higherRsiFilterMinRsi: 60,
   emaCrossFilterEnabled: false,
   emaCrossFilterInterval: '8h',
+  bbLowerFilterEnabled: false,
+  bbLowerFilterInterval: '15m',
+  bbLowerFilterMaxPct: 2,
   rsi5mFilterEnabled: true,
   rsi5mFilterThreshold: 70,
   newHighFilterEnabled: false,
@@ -2246,6 +2253,40 @@ function RsiMomentumStats({ autoCalc }) {
           </div>
         )}
 
+        {/* Filtro "perto da banda inferior" de Bollinger (20/2) num intervalo próprio: só simula a
+            entrada se o preço do sinal estiver a no máximo X% acima da banda inferior. */}
+        <div className="flex items-center gap-1 shrink-0 pb-1" title={t('stats.tip.bb_lower_filter')}>
+          <span className="hidden md:inline text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.bb_lower_filter')}</span>
+          <button
+            type="button"
+            onClick={() => patchPrefs({ bbLowerFilterEnabled: !prefs.bbLowerFilterEnabled })}
+            className={`relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${prefs.bbLowerFilterEnabled ? 'bg-p4' : 'bg-p3/40'}`}
+          >
+            <span className={`inline-block h-3 w-3 rounded-full bg-white shadow transition-transform ${prefs.bbLowerFilterEnabled ? 'translate-x-3' : 'translate-x-0'}`} />
+          </button>
+        </div>
+
+        {prefs.bbLowerFilterEnabled && (
+          <>
+            <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[56px]" title={t('stats.tip.bb_lower_interval')}>
+              <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.bb_lower_interval')}</label>
+              <select className={inp}
+                value={prefs.bbLowerFilterInterval ?? '15m'}
+                onChange={(e) => patchPrefs({ bbLowerFilterInterval: e.target.value })}>
+                {RSI_MOM_BB_LOWER_INTERVAL_OPTIONS.map((iv) => <option key={iv} value={iv}>{iv}</option>)}
+              </select>
+            </div>
+            <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[56px]" title={t('stats.tip.bb_lower_max_pct')}>
+              <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.bb_lower_max_pct')}</label>
+              <select className={inp}
+                value={prefs.bbLowerFilterMaxPct ?? 2}
+                onChange={(e) => patchPrefs({ bbLowerFilterMaxPct: Number(e.target.value) })}>
+                {RSI_MOM_BB_LOWER_MAX_PCT_OPTIONS.map((v) => <option key={v} value={v}>≤ {v}%</option>)}
+              </select>
+            </div>
+          </>
+        )}
+
         {/* Filtro RSI 5m (mesmo entry.rsi5mFilter do bot ao vivo): exige RSI(14) do candle de 5m no
             fechamento do candle do sinal ACIMA do limiar — confirma o momentum de curtíssimo prazo. */}
         <div className="flex items-center gap-1 shrink-0 pb-1" title={t('stats.tip.rsi5m_filter')}>
@@ -2778,6 +2819,14 @@ function RsiMomentumStats({ autoCalc }) {
                   value={`${result.emaCrossBlockedCount} · EMA9>EMA21 ${result.emaCrossFilter.interval}`}
                   highlight="text-amber-500"
                   tooltip={t('stats.tip.blocked_by_ema_cross')}
+                />
+              )}
+              {result.bbLowerFilter && (
+                <SummaryCard
+                  label={t('stats.card.blocked_by_bb_lower')}
+                  value={`${result.bbLowerBlockedCount} · BB inf. ≤ ${result.bbLowerFilter.maxPct}% ${result.bbLowerFilter.interval}`}
+                  highlight="text-amber-500"
+                  tooltip={t('stats.tip.blocked_by_bb_lower')}
                 />
               )}
               {result.rsi5mFilter && (
