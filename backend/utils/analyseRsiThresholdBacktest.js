@@ -1393,7 +1393,11 @@ function computeMacdWhatIf(occurrences, interval) {
  *   banda disponível ainda (warmup), NÃO bloqueia (fail-open, igual ADX/MACD/EMA).
  * @param {boolean} [options.bbLowerFilter.enabled=false]
  * @param {string}  [options.bbLowerFilter.interval='15m']
- * @param {number}  [options.bbLowerFilter.maxPct=2]  Distância máxima % acima da banda inferior (0–50).
+ * @param {number|'off'} [options.bbLowerFilter.maxPct=2]  Distância máxima % acima da banda inferior (0–50).
+ *   'off' desliga a regra da distância (fica só a de belowLine).
+ * @param {string}  [options.bbLowerFilter.belowLine='middle']  Regra extra na MESMA Bollinger: o preço do
+ *   sinal precisa estar ABAIXO dessa linha — 'middle' (mediana/SMA20, padrão), 'upper' (superior) ou
+ *   'none' (desliga a regra, só vale a distância da inferior).
  * @param {object} [options.rsi5mFilter]  Mesmo entry.rsi5mFilter do bot ao vivo (ver checkRsi5mFilter
  *   em backend/bot/rsi-momentum/strategyEngine.js): exige RSI(14) do candle de 5m fechado no
  *   FECHAMENTO do candle do sinal > `threshold`. Toggle próprio nas Estatísticas. Fail-open no warmup.
@@ -1574,8 +1578,12 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
     // Filtro "perto da banda inferior de Bollinger" num intervalo próprio — ver JSDoc de options.bbLowerFilter.
     const bbLowerEnabled = !!bbLowerFilter?.enabled;
     const bbLowerInterval = bbLowerFilter?.interval ?? '15m';
+    // null = regra da distância desligada (maxPct 'off').
     const bbLowerMaxPctRaw = Number(bbLowerFilter?.maxPct ?? 2);
-    const bbLowerMaxPct = Number.isFinite(bbLowerMaxPctRaw) ? Math.max(0, Math.min(50, bbLowerMaxPctRaw)) : 2;
+    const bbLowerMaxPct = bbLowerFilter?.maxPct === 'off'
+        ? null
+        : (Number.isFinite(bbLowerMaxPctRaw) ? Math.max(0, Math.min(50, bbLowerMaxPctRaw)) : 2);
+    const bbLowerBelowLine = ['middle', 'upper', 'none'].includes(bbLowerFilter?.belowLine) ? bbLowerFilter.belowLine : 'middle';
 
     // Filtro RSI 5m (mesmo entry.rsi5mFilter do bot ao vivo — ver checkRsi5mFilter em
     // backend/bot/rsi-momentum/strategyEngine.js): exige RSI(14) do candle de 5m fechado no
@@ -2107,12 +2115,23 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
             }
 
             // Banda inferior de Bollinger: só passa com o preço do sinal a no máximo bbLowerMaxPct%
-            // acima da inferior no intervalo escolhido. Sem banda ainda (warmup), não bloqueia.
+            // acima da inferior no intervalo escolhido E abaixo da linha bbLowerBelowLine (mediana
+            // por padrão) da mesma banda. Sem banda ainda (warmup), não bloqueia.
             if (bbLowerEnabled) {
-                const lower = resolveOwnIntervalValueAt(bbLowerCandles, bbLowerSeries, bbLowerOffset, signalCandle.openTime, (b) => b.lower);
-                if (lower != null && lower > 0 && ((signalPrice - lower) / lower) * 100 > bbLowerMaxPct) {
-                    bbLowerBlocked++;
-                    continue;
+                // Mesmo alinhamento de resolveOwnIntervalValueAt, mas precisa das 3 linhas da banda.
+                const bbAt = bbLowerSeries.length
+                    ? bbLowerSeries[findCandleIndexAtOrBefore(bbLowerCandles, signalCandle.openTime) - bbLowerOffset]
+                    : null;
+                if (bbAt && bbAt.lower > 0) {
+                    const tooFar = bbLowerMaxPct != null && ((signalPrice - bbAt.lower) / bbAt.lower) * 100 > bbLowerMaxPct;
+                    const lineValue = bbLowerBelowLine === 'middle' ? bbAt.middle
+                        : bbLowerBelowLine === 'upper' ? bbAt.upper
+                        : null;
+                    const notBelowLine = lineValue != null && Number.isFinite(lineValue) && signalPrice >= lineValue;
+                    if (tooFar || notBelowLine) {
+                        bbLowerBlocked++;
+                        continue;
+                    }
                 }
             }
 
@@ -2420,7 +2439,7 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
         higherRsiBlockedCount: higherRsiEnabled ? higherRsiBlocked : 0,
         emaCrossFilter: emaCrossEnabled ? { interval: emaCrossInterval, fastPeriod: EMA_FAST_PERIOD, slowPeriod: EMA_SLOW_PERIOD } : null,
         emaCrossBlockedCount: emaCrossEnabled ? emaCrossBlocked : 0,
-        bbLowerFilter: bbLowerEnabled ? { interval: bbLowerInterval, maxPct: bbLowerMaxPct, period: BB_PERIOD, stdDev: BB_STDDEV } : null,
+        bbLowerFilter: bbLowerEnabled ? { interval: bbLowerInterval, maxPct: bbLowerMaxPct, belowLine: bbLowerBelowLine, period: BB_PERIOD, stdDev: BB_STDDEV } : null,
         bbLowerBlockedCount: bbLowerEnabled ? bbLowerBlocked : 0,
         rsi5mFilter: rsi5mEnabled ? { interval: '5m', threshold: rsi5mThreshold } : null,
         rsi5mBlockedCount: rsi5mEnabled ? rsi5mBlocked : 0,

@@ -4,7 +4,7 @@ import { reloadCandles, getMaCrossScreenerConfig, saveMaCrossScreenerConfig,
   getRsiMomentumConfig, saveRsiMomentumConfig,
   getRsiMomentumCuratedList,
   getCacheSettings, saveCacheSettings } from '../services/api';
-import { RSI_MOMENTUM_ALL_INTERVALS, RSI_MOMENTUM_BB_PERIODS, RSI_MOMENTUM_BB_STD_DEVS, RSI_MOMENTUM_TRAILING_TARGET_STEP_OPTIONS, RSI_MOMENTUM_BANDWIDTH_LOOKBACK_OPTIONS,
+import { RSI_MOMENTUM_ALL_INTERVALS, RSI_MOMENTUM_BB_LOWER_MAX_PCT_OPTIONS, RSI_MOMENTUM_BB_LOWER_BELOW_LINE_OPTIONS, RSI_MOMENTUM_BB_PERIODS, RSI_MOMENTUM_BB_STD_DEVS, RSI_MOMENTUM_TRAILING_TARGET_STEP_OPTIONS, RSI_MOMENTUM_BANDWIDTH_LOOKBACK_OPTIONS,
   RSI_MOMENTUM_TARGET_MODE_OPTIONS, RSI_MOMENTUM_STOP_MODE_OPTIONS, RSI_MOMENTUM_TARGET_PCT_OPTIONS, RSI_MOMENTUM_COIN_STEP_OPTIONS, RSI_MOMENTUM_STOP_STEP_OPTIONS, RSI_MOMENTUM_STOP_PCT_OPTIONS,
   RSI_MOMENTUM_PIVOT_PCT_OPTIONS, RSI_MOMENTUM_PIVOT_GAIN_OPTIONS, RSI_MOMENTUM_WIDTH_PCT_OPTIONS, RSI_MOMENTUM_ATR_MULT_OPTIONS, RSI_MOMENTUM_HARD_TP_OPTIONS,
   RSI_MOMENTUM_SR_INTERVAL_OPTIONS, RSI_MOMENTUM_SR_CANDLE_COUNT_OPTIONS, RSI_MOMENTUM_SR_RANK_OPTIONS, RSI_MOMENTUM_SR_ENTRY_MAX_PCT_OPTIONS, RSI_MOMENTUM_SR_STOP_RANK_OPTIONS,
@@ -1811,6 +1811,57 @@ export default function SettingsSidebar({ open, onClose }) {
                         {RSI_MOMENTUM_ALL_INTERVALS.map((iv) => <option key={iv} value={iv}>{iv}</option>)}
                       </select>
                     </label>
+                  )}
+                </div>
+
+                {/* Bollinger — preço perto da banda inferior e abaixo da mediana (intervalo próprio, default 15m) */}
+                <div className="rounded-md p-2.5" style={{ background: '#0f1219', border: '1px solid #2a2d3a' }}>
+                  <p className="text-p5/70 text-[10px] font-semibold uppercase tracking-wider mb-1">{t('settings.rsimomentum_bblower_title')}</p>
+                  <p className="text-[10px] text-p5/40 mb-2 leading-relaxed">{t('settings.rsimomentum_bblower_hint')}</p>
+                  <label className="flex items-start gap-2.5 cursor-pointer group mb-2">
+                    <input
+                      type="checkbox"
+                      checked={rsiMomentumConfig.entry.bbLowerFilter?.enabled ?? false}
+                      onChange={(e) => patchRsiMomentumNested('entry', 'bbLowerFilter', { enabled: e.target.checked })}
+                      className="mt-0.5 shrink-0 accent-p4"
+                    />
+                    <span className="text-p5 text-xs leading-snug group-hover:text-white transition-colors">
+                      {t('settings.rsimomentum_bblower_enabled')}
+                    </span>
+                  </label>
+                  {(rsiMomentumConfig.entry.bbLowerFilter?.enabled ?? false) && (
+                    <div className="grid grid-cols-3 gap-2">
+                      <label className="flex flex-col gap-1">
+                        <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_bblower_interval')}</span>
+                        <select
+                          className={`${inp} w-full`}
+                          value={rsiMomentumConfig.entry.bbLowerFilter?.interval ?? '15m'}
+                          onChange={(e) => patchRsiMomentumNested('entry', 'bbLowerFilter', { interval: e.target.value })}
+                        >
+                          {RSI_MOMENTUM_ALL_INTERVALS.map((iv) => <option key={iv} value={iv}>{iv}</option>)}
+                        </select>
+                      </label>
+                      <label className="flex flex-col gap-1">
+                        <span className="text-[9px] text-p5/40">{t('settings.rsimomentum_bblower_max_pct')}</span>
+                        <select
+                          className={`${inp} w-full`}
+                          value={rsiMomentumConfig.entry.bbLowerFilter?.maxPct ?? 2}
+                          onChange={(e) => patchRsiMomentumNested('entry', 'bbLowerFilter', { maxPct: e.target.value === 'off' ? 'off' : Number(e.target.value) })}
+                        >
+                          {RSI_MOMENTUM_BB_LOWER_MAX_PCT_OPTIONS.map((v) => <option key={v} value={v}>{v === 'off' ? t('stats.bb_lower_max_pct.off') : `≤ ${v}%`}</option>)}
+                        </select>
+                      </label>
+                      <label className="flex flex-col gap-1">
+                        <span className="text-[9px] text-p5/40">{t('stats.bb_below_line')}</span>
+                        <select
+                          className={`${inp} w-full`}
+                          value={rsiMomentumConfig.entry.bbLowerFilter?.belowLine ?? 'middle'}
+                          onChange={(e) => patchRsiMomentumNested('entry', 'bbLowerFilter', { belowLine: e.target.value })}
+                        >
+                          {RSI_MOMENTUM_BB_LOWER_BELOW_LINE_OPTIONS.map((v) => <option key={v} value={v}>{t(`stats.bb_below_line.${v}`)}</option>)}
+                        </select>
+                      </label>
+                    </div>
                   )}
                 </div>
 

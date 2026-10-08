@@ -242,7 +242,7 @@ async function analyseRsiThresholdBacktestMarket(options = {}) {
     // Config efetiva (já saneada pelo motor) — pega do 1º resultado que tiver.
     const bbLowerFilterEffective = bbLowerEnabled
         ? (valid.find(({ result }) => result.bbLowerFilter)?.result.bbLowerFilter
-            ?? { interval: perSymbolOptions.bbLowerFilter.interval ?? '15m', maxPct: Number(perSymbolOptions.bbLowerFilter.maxPct ?? 2), period: 20, stdDev: 2 })
+            ?? { interval: perSymbolOptions.bbLowerFilter.interval ?? '15m', maxPct: perSymbolOptions.bbLowerFilter.maxPct === 'off' ? null : Number(perSymbolOptions.bbLowerFilter.maxPct ?? 2), belowLine: perSymbolOptions.bbLowerFilter.belowLine ?? 'middle', period: 20, stdDev: 2 })
         : null;
     const rsi5mEnabled = !!perSymbolOptions.rsi5mFilter?.enabled;
     const rsi5mBlockedCount = rsi5mEnabled

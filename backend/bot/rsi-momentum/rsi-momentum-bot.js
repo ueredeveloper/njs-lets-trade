@@ -320,7 +320,7 @@ function fmtPrice(n) {
 function logStartupConfig(body, source = null, { logFn = console.log, scanner = true } = {}) {
   const e = body.entry, x = body.exit, sl = body.stopLoss;
   const bw = e.bandWidth, pb = e.pullback, r5 = e.rsi5mFilter, ec = e.earlyConfirm;
-  const pr = e.priorRsiFilter, macd = e.macdFilter, hr = e.higherRsiFilter, ema = e.emaCrossFilter, sr = e.supportResistance;
+  const pr = e.priorRsiFilter, macd = e.macdFilter, hr = e.higherRsiFilter, ema = e.emaCrossFilter, bbl = e.bbLowerFilter, sr = e.supportResistance;
   const ts = x.trailingStop, tt = x.trailingTarget, htp = x.hardTakeProfit, rf = x.reinforceOnStop;
   const tsMode = ['continuous', 'twoPhase', 'peakTrail', 'atrTrail'].includes(ts?.mode) ? ts.mode : 'continuous';
 
@@ -333,6 +333,12 @@ function logStartupConfig(body, source = null, { logFn = console.log, scanner = 
   if (macd?.enabled) filtros.push(`MACD ${macd.interval ?? '1h'}>0`);
   if (hr?.enabled) filtros.push(`RSI1h≥${hr.minRsi ?? 50}`);
   if (ema?.enabled) filtros.push(`EMA9>21 ${ema.interval ?? '8h'}`);
+  if (bbl?.enabled) {
+    const bblParts = [];
+    if (bbl.maxPct !== 'off') bblParts.push(`≤${bbl.maxPct ?? 2}% da inf`);
+    if (bbl.belowLine !== 'none') bblParts.push(`< ${bbl.belowLine === 'upper' ? 'sup' : 'mediana'}`);
+    filtros.push(`BB ${bbl.interval ?? '15m'} ${bblParts.join(' ') || '(sem regra)'}`);
+  }
   if (sr?.enabled) filtros.push(`S/R ${sr.interval ?? '4h'} (≤${sr.entryMaxPct}% do ${sr.entrySupportRank}º sup → ${sr.exitResistanceRank}ª resist)`);
 
   const alvo = x.targetMode === 'off' ? 'OFF'

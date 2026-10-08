@@ -70,6 +70,9 @@ export const RSI_MOMENTUM_REENTRY_TRIGGER_OPTIONS = ['immediate', 'rsiRecross'];
 export const RSI_MOMENTUM_REENTRY_RSI_OPTIONS = [65, 66, 67, 68, 69, 70, 71, 72, 75, 80];
 /** exit.reinforceOnStop.reentryRsi.rsi5mFilter.threshold / earlyConfirm.rsiThreshold — RSI(14)
  *  do candle de 5m (mesmo leque de entry.rsi5mFilter.threshold/entry.earlyConfirm.rsiThreshold). */
+/** Filtro "perto da banda inferior" (entry.bbLowerFilter) — mesmos leques das Estatísticas. */
+export const RSI_MOMENTUM_BB_LOWER_MAX_PCT_OPTIONS = ['off', 0, 0.5, 1, 1.5, 2, 3, 4, 5, 7, 10];
+export const RSI_MOMENTUM_BB_LOWER_BELOW_LINE_OPTIONS = ['middle', 'upper', 'none'];
 export const RSI_MOMENTUM_REENTRY_RSI5M_OPTIONS = [60, 65, 68, 69, 70, 72, 75, 80];
 
 export const RSI_MOMENTUM_DEFAULTS = {
@@ -92,6 +95,7 @@ export const RSI_MOMENTUM_DEFAULTS = {
     macdFilter: { enabled: true, interval: '1h' },
     higherRsiFilter: { enabled: true, minRsi: 60 },
     emaCrossFilter: { enabled: false, interval: '8h' },
+    bbLowerFilter: { enabled: false, interval: '15m', maxPct: 2, belowLine: 'middle' },
     supportResistance: {
       enabled: true, interval: '4h', candleCount: 50,
       entrySupportRank: 1, exitResistanceRank: 3, entryMaxPct: 5,

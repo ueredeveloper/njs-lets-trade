@@ -291,6 +291,14 @@ tinha `visibleRange` na dependência pra TODOS os estilos — só o estilo 'tra�
 disso; separado em dois efeitos (o override de trade das Estatísticas nunca mais recria nada
 durante o pan).
 
+### Filtro Bollinger "BB inf." (`entry.bbLowerFilter`)
+
+Bollinger 20/2 num intervalo próprio (padrão 15m). No sinal, o preço tem que estar no máximo `maxPct`% acima
+da banda inferior (`'off'` desliga) **e** abaixo da `belowLine` (`middle` = mediana, padrão; `upper`; `none` desliga).
+Mesmo filtro nas Estatísticas (`options.bbLowerFilter`), no bot ao vivo (`checkBbLowerFilter` em
+`strategyEngine.js`, motivos `BB_LOWER_TOO_FAR` / `BB_NOT_BELOW_LINE`), em Configurações e no bot exclusivo
+(`statsConfigToRsiMomentumBody` / `rsiMomentumConfigToStatsPrefs`). Fail-open no warmup.
+
 ### Sinais sem entrada — favorito SSE (v1.154.0)
 
 Sinal CONFIRMADO que não virou compra é gravado em `rsi_momentum_missed_signals`

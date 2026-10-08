@@ -1,6 +1,6 @@
 'use strict';
 
-const { RSI, MACD, ATR, EMA } = require('technicalindicators');
+const { RSI, MACD, ATR, EMA, BollingerBands } = require('technicalindicators');
 const { closedCandlesOnly, intervalMs } = require('../ma-cross/strategyEngine');
 const { computeStopLossFloor } = require('../shared/stopLossFloor');
 const { bollingerBandWidthSeries } = require('../../utils/indicatorGrowthEngines');
@@ -39,6 +39,11 @@ const HIGHER_RSI_INTERVAL = '1h';
 const EMA_FAST_PERIOD = 9;
 const EMA_SLOW_PERIOD = 21;
 const EMA_CROSS_WARMUP_BARS = EMA_SLOW_PERIOD * 3 + 20;
+// Filtro "perto da banda inferior" (entry.bbLowerFilter) — Bollinger 20/2 fixa, mesma do backtest
+// (options.bbLowerFilter em analyseRsiThresholdBacktest.js); só o intervalo é configurável (default 15m).
+const BB_LOWER_PERIOD = 20;
+const BB_LOWER_STDDEV = 2;
+const BB_LOWER_WARMUP_BARS = BB_LOWER_PERIOD + 20;
 // ATR de Wilder (período 14, padrão) — usado só pelo stop contínuo modo 'atrTrail', calculado no
 // entry.interval no momento da compra (ver computeAtrPct / rsi-momentum-bot.js).
 const ATR_PERIOD = 14;
@@ -92,6 +97,10 @@ function getRequiredSpecs(config) {
 
     if (entry.emaCrossFilter?.enabled) {
         add(entry.emaCrossFilter.interval ?? '8h', EMA_CROSS_WARMUP_BARS);
+    }
+
+    if (entry.bbLowerFilter?.enabled) {
+        add(entry.bbLowerFilter.interval ?? '15m', BB_LOWER_WARMUP_BARS);
     }
 
     if (entry.supportResistance?.enabled) {
@@ -276,6 +285,49 @@ function checkEmaCrossFilter(config, cMap) {
         return { allowed: false, reason: 'EMA_CROSS_BEARISH', ema9: round(ema9), ema21: round(ema21), interval: iv };
     }
     return { allowed: true, ema9: round(ema9), ema21: round(ema21), interval: iv };
+}
+
+/**
+ * Filtro opcional "perto da banda inferior de Bollinger" (mesmo do backtest — options.bbLowerFilter
+ * em analyseRsiThresholdBacktest.js), Bollinger 20/2 no intervalo próprio entry.bbLowerFilter.interval
+ * (default 15m), lida no candle FECHADO mais recente. Duas regras, cada uma desligável:
+ *   - maxPct: preço do sinal no máximo X% ACIMA da banda inferior ('off' desliga);
+ *   - belowLine: preço do sinal ABAIXO da 'middle' (mediana, padrão) ou 'upper' ('none' desliga).
+ * Sem candles suficientes pro warmup ainda, libera (fail-open, como MACD/EMA).
+ */
+function checkBbLowerFilter(config, cMap, price) {
+    const f = config.entry?.bbLowerFilter;
+    if (!f?.enabled) return { allowed: true };
+
+    const iv = f.interval ?? '15m';
+    const closed = closedCandlesOnly(cMap[iv] ?? []);
+    if (closed.length < BB_LOWER_PERIOD + 1 || !Number.isFinite(price)) return { allowed: true };
+
+    const bands = BollingerBands.calculate({
+        values: closed.map(c => parseFloat(c.close)),
+        period: BB_LOWER_PERIOD,
+        stdDev: BB_LOWER_STDDEV,
+    });
+    const b = bands[bands.length - 1];
+    if (!b || !(b.lower > 0)) return { allowed: true };
+
+    const round = (v) => Math.round(v * 1e8) / 1e8;
+    const maxPct = f.maxPct === 'off' ? null : Number(f.maxPct ?? 2);
+    const belowLine = ['middle', 'upper', 'none'].includes(f.belowLine) ? f.belowLine : 'middle';
+    const distPct = Math.round(((price - b.lower) / b.lower) * 10000) / 100;
+    const info = {
+        interval: iv, price: round(price), lower: round(b.lower), middle: round(b.middle), upper: round(b.upper),
+        distPct, maxPct, belowLine,
+    };
+
+    if (maxPct != null && Number.isFinite(maxPct) && distPct > maxPct) {
+        return { allowed: false, reason: 'BB_LOWER_TOO_FAR', ...info };
+    }
+    const lineValue = belowLine === 'middle' ? b.middle : belowLine === 'upper' ? b.upper : null;
+    if (lineValue != null && price >= lineValue) {
+        return { allowed: false, reason: 'BB_NOT_BELOW_LINE', ...info, lineValue: round(lineValue) };
+    }
+    return { allowed: true, ...info };
 }
 
 // ── Suporte/Resistência (entry.supportResistance) ────────────────────────────────────────────
@@ -522,8 +574,9 @@ function evaluateEntryReadiness(config, cMap) {
     push('higherRsi', checkHigherRsiFilter(config, cMap));
     push('emaCross', checkEmaCrossFilter(config, cMap));
 
-    // S/R: o filtro depende do preço do sinal; usa o último fechamento como proxy do "agora".
+    // S/R e BB inferior: dependem do preço do sinal; usa o último fechamento como proxy do "agora".
     const lastClose = parseFloat(closed[closed.length - 1].close);
+    push('bbLower', checkBbLowerFilter(config, cMap, lastClose));
     push('sr', (() => {
         const r = checkSupportResistanceEntry(config, cMap, lastClose);
         return { allowed: r.allowed, reason: r.reason, ...r };
@@ -561,6 +614,7 @@ function filterIsActive(entry, key) {
         case 'macd': return !!entry.macdFilter?.enabled;
         case 'higherRsi': return !!entry.higherRsiFilter?.enabled;
         case 'emaCross': return !!entry.emaCrossFilter?.enabled;
+        case 'bbLower': return !!entry.bbLowerFilter?.enabled;
         case 'sr': return !!entry.supportResistance?.enabled;
         default: return false;
     }
@@ -715,6 +769,11 @@ function evaluateEntrySignal(config, cMap) {
     }
 
     const signalClose = parseFloat(signalCandle.close);
+    const bbLowerCheck = checkBbLowerFilter(config, cMap, signalClose);
+    if (!bbLowerCheck.allowed) {
+        return { allowed: false, reason: bbLowerCheck.reason, rsi: last, threshold, bbLower: bbLowerCheck };
+    }
+
     const srCheck = checkSupportResistanceEntry(config, cMap, signalClose);
     if (!srCheck.allowed) {
         return { allowed: false, reason: srCheck.reason, rsi: last, threshold, sr: srCheck };
@@ -745,6 +804,7 @@ function evaluateEntrySignal(config, cMap) {
         macd: macdCheck,
         higherRsi: higherRsiCheck,
         emaCross: emaCrossCheck,
+        bbLower: bbLowerCheck,
         sr: srCheck,
         srTargetPrice: srCheck.srTargetPrice ?? null,
         srStopPrice: srCheck.srStopPrice ?? null,
@@ -1043,6 +1103,7 @@ module.exports = {
     checkMacdFilter,
     checkHigherRsiFilter,
     checkEmaCrossFilter,
+    checkBbLowerFilter,
     resolveSrZonesNow,
     srHistoryStatus,
     pickSupport,

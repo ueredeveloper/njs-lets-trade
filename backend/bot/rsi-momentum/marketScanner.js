@@ -49,6 +49,9 @@ function buildReasonLabels(config) {
     const macdIv = config.entry.macdFilter?.interval ?? '1h';
     const higherRsiMin = config.entry.higherRsiFilter?.minRsi ?? 50;
     const emaCrossIv = config.entry.emaCrossFilter?.interval ?? '8h';
+    const bbLowerIv = config.entry.bbLowerFilter?.interval ?? '15m';
+    const bbLowerMaxPct = config.entry.bbLowerFilter?.maxPct ?? 2;
+    const bbLowerLine = config.entry.bbLowerFilter?.belowLine === 'upper' ? 'superior' : 'mediana';
     const srIv = config.entry.supportResistance?.interval ?? '4h';
     const srMaxPct = config.entry.supportResistance?.entryMaxPct ?? 5;
     const srRank = config.entry.supportResistance?.entrySupportRank ?? 1;
@@ -66,6 +69,8 @@ function buildReasonLabels(config) {
         MACD_HISTOGRAM_NEGATIVE: `histograma do MACD (${macdIv}) não está positivo`,
         HIGHER_RSI_TOO_LOW: `RSI de 1h abaixo do mínimo exigido (${higherRsiMin})`,
         EMA_CROSS_BEARISH: `EMA9 não está acima da EMA21 no ${emaCrossIv} (tendência ainda de baixa/lateral)`,
+        BB_LOWER_TOO_FAR: `preço mais de ${bbLowerMaxPct}% acima da banda inferior de Bollinger ${bbLowerIv}`,
+        BB_NOT_BELOW_LINE: `preço não está abaixo da ${bbLowerLine} da Bollinger ${bbLowerIv}`,
         SR_NO_DISCOUNT: `preço mais de ${srMaxPct}% acima do ${srRank}º suporte ${srIv} (sem desconto pra entrar)`,
         SR_NO_DATA: `moeda sem histórico ${srIv} suficiente pro S/R (${srCandleCount} candles) — sem como medir a distância até o suporte`,
     };
@@ -113,6 +118,9 @@ function shortSymbolDetail(signal) {
     if (signal.reason === 'EMA_CROSS_BEARISH' && signal.emaCross?.interval) {
         return `(${signal.emaCross.interval})`;
     }
+    if ((signal.reason === 'BB_LOWER_TOO_FAR' || signal.reason === 'BB_NOT_BELOW_LINE') && signal.bbLower?.distPct != null) {
+        return `(BB inf. +${signal.bbLower.distPct}%)`;
+    }
     return '';
 }
 
@@ -138,6 +146,10 @@ function fmtSignalReason(symbol, signal, reasonLabels) {
         detail = ` (RSI 1h atual: ${Number(signal.higherRsi.rsi1h).toFixed(2)})`;
     } else if (signal.reason === 'EMA_CROSS_BEARISH' && signal.emaCross?.ema9 != null) {
         detail = ` (EMA9 ${signal.emaCross.ema9} ≤ EMA21 ${signal.emaCross.ema21} no ${signal.emaCross.interval})`;
+    } else if (signal.reason === 'BB_LOWER_TOO_FAR' && signal.bbLower?.lower != null) {
+        detail = ` (preço ${signal.bbLower.price} = +${signal.bbLower.distPct}% da inferior ${signal.bbLower.lower})`;
+    } else if (signal.reason === 'BB_NOT_BELOW_LINE' && signal.bbLower?.lineValue != null) {
+        detail = ` (preço ${signal.bbLower.price} ≥ ${signal.bbLower.lineValue})`;
     }
     return `   ${symbol}: ${reasonLabels[signal.reason] ?? signal.reason}${detail}`;
 }

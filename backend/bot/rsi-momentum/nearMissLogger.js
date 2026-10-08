@@ -30,6 +30,8 @@ const DETAIL_FIELD = {
     MACD_HISTOGRAM_NEGATIVE: 'macd',
     HIGHER_RSI_TOO_LOW: 'higherRsi',
     EMA_CROSS_BEARISH: 'emaCross',
+    BB_LOWER_TOO_FAR: 'bbLower',
+    BB_NOT_BELOW_LINE: 'bbLower',
     SR_NO_DISCOUNT: 'sr',
     SR_NO_DATA: 'sr',
 };

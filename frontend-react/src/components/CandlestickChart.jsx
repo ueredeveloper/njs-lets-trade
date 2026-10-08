@@ -110,6 +110,7 @@ const ANALYSIS_BOX_STOP_MODE_OPTIONS = [
 const ANALYSIS_BOX_FILTER_ROWS = [
   { key: 'macdFilterEnabled', label: 'MACD', intervalKey: 'macdFilterInterval' },
   { key: 'emaCrossFilterEnabled', label: 'EMA9/21', intervalKey: 'emaCrossFilterInterval' },
+  { key: 'bbLowerFilterEnabled', label: 'BB inf.', intervalKey: 'bbLowerFilterInterval' },
   { key: 'higherRsiFilterEnabled', label: 'RSI1h ≥', numberKey: 'higherRsiFilterMinRsi', numberMin: 1, numberMax: 99 },
   { key: 'rsi5mFilterEnabled', label: 'RSI5m >', numberKey: 'rsi5mFilterThreshold', numberMin: 50, numberMax: 95 },
   { key: 'bandWidthEnabled', label: 'Banda', intervalKey: 'bandWidthInterval' },
@@ -5558,6 +5559,7 @@ export default function CandlestickChart() {
     }
     if (p.macdFilterEnabled) parts.push(`MACD ${p.macdFilterInterval}`);
     if (p.emaCrossFilterEnabled) parts.push(`EMA9/21 ${p.emaCrossFilterInterval}`);
+    if (p.bbLowerFilterEnabled) parts.push(`BB inf. ${p.bbLowerFilterInterval ?? '15m'}`);
     if (p.higherRsiFilterEnabled) parts.push(`RSI1h≥${p.higherRsiFilterMinRsi}`);
     if (p.rsi5mFilterEnabled) parts.push(`RSI5m>${p.rsi5mFilterThreshold}`);
     if (p.bandWidthEnabled) parts.push(`Banda ${p.bandWidthInterval}`);

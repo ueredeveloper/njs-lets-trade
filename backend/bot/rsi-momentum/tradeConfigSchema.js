@@ -113,6 +113,11 @@ const RSI_MOMENTUM_DEFAULTS = {
      *  configurável. Sem warmup suficiente ainda, libera (fail-open). Ver checkEmaCrossFilter em
      *  strategyEngine.js. */
     emaCrossFilter: { enabled: false, interval: '8h' },
+    /** Desligado por padrão — filtro "perto da banda inferior de Bollinger" (20/2) no intervalo
+     *  próprio (default 15m), mesmo do backtest (options.bbLowerFilter). maxPct = distância máxima %
+     *  do preço do sinal ACIMA da banda inferior ('off' desliga); belowLine = preço tem que estar
+     *  ABAIXO da 'middle' (mediana) / 'upper', ou 'none'. Ver checkBbLowerFilter em strategyEngine.js. */
+    bbLowerFilter: { enabled: false, interval: '15m', maxPct: 2, belowLine: 'middle' },
     /** Ligado por padrão (4h, janela 50 candles) — filtro/alvo por Suporte-Resistência, mesmo
      *  detectSupportResistance do gráfico e do backtest (options.supportResistance em
      *  analyseRsiThresholdBacktest.js). No bot as zonas são recalculadas SEMPRE do "agora"
@@ -352,6 +357,20 @@ function normalizeEmaCrossFilter(block) {
   };
 }
 
+/** Filtro "perto da banda inferior de Bollinger" — mesmo shape do backtest (options.bbLowerFilter).
+ *  maxPct 0..50 ou 'off'; belowLine 'middle' | 'upper' | 'none'. */
+function normalizeBbLowerFilter(block) {
+  const d = RSI_MOMENTUM_DEFAULTS.entry.bbLowerFilter;
+  const src = block ?? {};
+  const rawPct = Number(src.maxPct ?? d.maxPct);
+  return {
+    enabled: typeof src.enabled === 'boolean' ? src.enabled : d.enabled,
+    interval: normalizeInterval(src.interval, d.interval),
+    maxPct: src.maxPct === 'off' ? 'off' : (Number.isFinite(rawPct) ? Math.max(0, Math.min(50, rawPct)) : d.maxPct),
+    belowLine: ['middle', 'upper', 'none'].includes(src.belowLine) ? src.belowLine : d.belowLine,
+  };
+}
+
 /** Filtro/alvo por Suporte-Resistência — mesmo shape do backtest (options.supportResistance).
  *  interval FIXO no leque padrão; janela 20..1000; ranks 1..3; entryMaxPct 0.1..100. */
 function normalizeSupportResistance(block) {
@@ -394,6 +413,7 @@ function normalizeEntry(block) {
     macdFilter: normalizeMacdFilter(src.macdFilter),
     higherRsiFilter: normalizeHigherRsiFilter(src.higherRsiFilter),
     emaCrossFilter: normalizeEmaCrossFilter(src.emaCrossFilter),
+    bbLowerFilter: normalizeBbLowerFilter(src.bbLowerFilter),
     supportResistance: normalizeSupportResistance(src.supportResistance),
   };
 }

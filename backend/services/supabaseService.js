@@ -985,6 +985,12 @@ function statsConfigToRsiMomentumBody({ symbol, interval, config = {}, priorRsiF
       emaCrossFilter: c.emaCrossFilter?.enabled
         ? { enabled: true, interval: c.emaCrossFilter.interval ?? '8h' }
         : { enabled: false },
+      bbLowerFilter: c.bbLowerFilter?.enabled
+        ? { enabled: true,
+            interval: c.bbLowerFilter.interval ?? '15m',
+            maxPct: c.bbLowerFilter.maxPct === 'off' ? 'off' : num(c.bbLowerFilter.maxPct, 2),
+            belowLine: c.bbLowerFilter.belowLine ?? 'middle' }
+        : { enabled: false },
       supportResistance: c.supportResistance?.enabled
         ? { enabled: true,
             interval: c.supportResistance.interval ?? '4h',
@@ -1094,6 +1100,10 @@ function rsiMomentumConfigToStatsPrefs(n) {
     higherRsiFilterMinRsi: e.higherRsiFilter.minRsi,
     emaCrossFilterEnabled: e.emaCrossFilter.enabled,
     emaCrossFilterInterval: e.emaCrossFilter.interval,
+    bbLowerFilterEnabled: e.bbLowerFilter.enabled,
+    bbLowerFilterInterval: e.bbLowerFilter.interval,
+    bbLowerFilterMaxPct: e.bbLowerFilter.maxPct,
+    bbLowerFilterBelowLine: e.bbLowerFilter.belowLine,
     rsi5mFilterEnabled: e.rsi5mFilter.enabled,
     rsi5mFilterThreshold: e.rsi5mFilter.threshold,
     reinforceOnStopEnabled: x.reinforceOnStop.enabled,
