@@ -194,6 +194,33 @@ const QUICK_EMA_STORAGE_KEY = 'lets_trade_quick_ema_groups_v4';
  *  permite achar/atualizar/remover só esse grupo sem mexer nos que o usuário montou à mão. */
 const TRADE_EMA_GROUP_ID = 'trade-ema-filter';
 
+/** Modo de intervalo dos indicadores (seletor no topo da aba Indicadores do painel):
+ *  'own'   = cada indicador usa o intervalo escolhido DENTRO dele (ex.: RSI 15m num gráfico 1m);
+ *  'chart' = todo indicador segue o intervalo do gráfico (o intervalo próprio fica guardado e
+ *            volta a valer ao trocar de modo). Grupos sincronizados com trade/Estatísticas
+ *            (TRADE_*_GROUP_ID, STATS_BB_GROUP_ID, VWAP forçada) nunca são trocados — o gráfico
+ *            tem que mostrar exatamente o que o bot/backtest usou. */
+const INDICATOR_INTERVAL_MODE_KEY = 'lets_trade_indicator_interval_mode';
+function loadIndicatorIntervalMode() {
+  try { return localStorage.getItem(INDICATOR_INTERVAL_MODE_KEY) === 'chart' ? 'chart' : 'own'; } catch { return 'own'; }
+}
+function saveIndicatorIntervalMode(mode) {
+  try { localStorage.setItem(INDICATOR_INTERVAL_MODE_KEY, mode); } catch { /* storage indisponível */ }
+}
+/** Troca o `interval` do grupo pelo do gráfico (iv); null/sem interval/igual → devolve o mesmo objeto. */
+function withChartInterval(group, iv) {
+  if (!group || !iv || !group.interval || group.interval === iv) return group;
+  return { ...group, interval: iv };
+}
+/** withChartInterval memoizado — mantém a identidade do objeto entre renders (deps de efeitos). */
+function useChartIntervalGroup(group, iv) {
+  return useMemo(() => withChartInterval(group, iv), [group, iv]);
+}
+/** Mesmo que useChartIntervalGroup, pra listas de grupos (multi-instância). */
+function useChartIntervalGroups(groups, iv) {
+  return useMemo(() => (iv && groups ? groups.map((g) => withChartInterval(g, iv)) : groups), [groups, iv]);
+}
+
 /** Normaliza pct de banda: null = desligada, 'adaptive' = calculada do histórico, número = fixa. */
 function normalizeQuickEmaBandPct(value) {
   if (value === null) return null;
@@ -1327,6 +1354,27 @@ const topToggleBtn = {
 
 /** Card "Indicadores rápidos" — todos os botões simples de indicador (EMA9/21/50/200, Ichi,
  *  Band., RSI, R80, R50, SL) num wrap de toggles. Seguem o intervalo do próprio gráfico. */
+/** Seletor do modo de intervalo dos indicadores (topo da aba Indicadores) — ver
+ *  INDICATOR_INTERVAL_MODE_KEY. No modo 'chart' o select de intervalo de cada indicador continua
+ *  editável (guarda o intervalo próprio pra quando voltar ao modo 'own'), mas não é usado. */
+function renderIndicatorIntervalModeCard(t, mode, setMode, chartInterval) {
+  if (!setMode) return null;
+  return (
+    <div style={panelCard()}>
+      <PanelTip text={t('chart.panel.iv_mode_tip')}>
+        <select
+          value={mode}
+          onChange={(e) => setMode(e.target.value === 'chart' ? 'chart' : 'own')}
+          style={cardSelect()}
+        >
+          <option value="own">{t('chart.panel.iv_mode_own')}</option>
+          <option value="chart">{t('chart.panel.iv_mode_chart', chartInterval ?? '')}</option>
+        </select>
+      </PanelTip>
+    </div>
+  );
+}
+
 function renderQuickIndicatorsCard(indicators, t, toggleIndicator) {
   if (!indicators.length) return null;
   return (
@@ -1458,6 +1506,9 @@ function ChartIndicatorPanel({
   updateBbGroup,
   toggleBbGroupFlag,
   botPermInterval,
+  indicatorIntervalMode = 'own',
+  setIndicatorIntervalMode,
+  chartInterval,
   vwap,
   setVwap,
   vwapSlopeHighlightOn,
@@ -1628,6 +1679,7 @@ function ChartIndicatorPanel({
             </div>
           ) : (
             <>
+              {renderIndicatorIntervalModeCard(t, indicatorIntervalMode, setIndicatorIntervalMode, chartInterval)}
               {renderQuickIndicatorsCard(indicatorTiles, t, toggleIndicator)}
               {blocks.map((tile) => (
                 <div key={tile.key}>
@@ -2966,7 +3018,22 @@ export default function CandlestickChart() {
   const [themeTick, setThemeTick] = useState(0);
   const activeIndicators = uiPrefs.activeIndicators ?? [...DEFAULT_ACTIVE_INDICATORS];
   const [tradeOverlaySlots, setTradeOverlaySlots] = useState(null);
-  const [quickEmaGroups, setQuickEmaGroups] = useState(loadQuickEmaGroups);
+  // Modo de intervalo dos indicadores (ver INDICATOR_INTERVAL_MODE_KEY). ivOverride = intervalo
+  // do gráfico quando o modo é 'chart', senão null (cada indicador usa o próprio). Os grupos
+  // "*Own" (estado bruto) alimentam o PAINEL — o select de cada indicador continua mostrando/
+  // editando o intervalo próprio; os grupos sem sufixo (efetivos) alimentam busca e desenho.
+  const [indicatorIntervalMode, setIndicatorIntervalModeState] = useState(loadIndicatorIntervalMode);
+  const setIndicatorIntervalMode = useCallback((mode) => {
+    setIndicatorIntervalModeState(mode);
+    saveIndicatorIntervalMode(mode);
+  }, []);
+  const ivOverride = indicatorIntervalMode === 'chart' ? (selectedChart?.interval ?? currentInterval) : null;
+  const [quickEmaGroupsOwn, setQuickEmaGroups] = useState(loadQuickEmaGroups);
+  const quickEmaGroups = useMemo(() => (
+    ivOverride && OVERLAY_MA_INTERVALS.includes(ivOverride)
+      ? quickEmaGroupsOwn.map((g) => (g.id === TRADE_EMA_GROUP_ID ? g : withChartInterval(g, ivOverride)))
+      : quickEmaGroupsOwn
+  ), [quickEmaGroupsOwn, ivOverride]);
   const addQuickEmaGroup = useCallback(() => {
     setQuickEmaGroups((prev) => {
       if (prev.length >= MAX_QUICK_EMA_GROUPS) return prev;
@@ -3030,18 +3097,24 @@ export default function CandlestickChart() {
   const [overlayMaLoading, setOverlayMaLoading] = useState(false);
   const [adaptiveBandOverlay, setAdaptiveBandOverlay] = useState(null);
   const [maBands, setMaBands] = useState(() => ({ ...uiPrefs.maBandsDefaults }));
-  const [bbGroups, setBbGroups] = useState(loadBbGroups);
+  const [bbGroupsOwn, setBbGroups] = useState(loadBbGroups);
+  const bbGroups = useMemo(() => (
+    ivOverride
+      ? bbGroupsOwn.map((g) => (AUTO_BB_GROUP_IDS.includes(g.id) ? g : withChartInterval(g, ivOverride)))
+      : bbGroupsOwn
+  ), [bbGroupsOwn, ivOverride]);
   // Manipuladores de indicador no padrão "caixa de grupos" (Bollinger/EMA) — um hook só pra todos.
   const handlers = useGroupedHandlers(HANDLER_GROUP_STORES);
-  // max:1 — o grupo habilitado de cada manipulador de instância única.
-  const chopGroup = handlers.chop?.groups.find((g) => g.enabled) ?? null;
-  const macdGroup = handlers.macd?.groups.find((g) => g.enabled) ?? null;
-  const rsiGroup = handlers.rsi?.groups.find((g) => g.enabled) ?? null;
-  const barsSinceCrossGroup = handlers.barsSinceCross?.groups.find((g) => g.enabled) ?? null;
-  const tdSequentialGroup = handlers.tdSequential?.groups.find((g) => g.enabled) ?? null;
-  const pphlGroup = handlers.pphl?.groups.find((g) => g.enabled) ?? null;
-  const wfractalsGroup = handlers.wfractals?.groups.find((g) => g.enabled) ?? null;
-  const zigzagGroup = handlers.zigzag?.groups.find((g) => g.enabled) ?? null;
+  // max:1 — o grupo habilitado de cada manipulador de instância única (já com o intervalo do
+  // gráfico quando o modo é 'chart' — ver ivOverride).
+  const chopGroup = useChartIntervalGroup(handlers.chop?.groups.find((g) => g.enabled) ?? null, ivOverride);
+  const macdGroup = useChartIntervalGroup(handlers.macd?.groups.find((g) => g.enabled) ?? null, ivOverride);
+  const rsiGroup = useChartIntervalGroup(handlers.rsi?.groups.find((g) => g.enabled) ?? null, ivOverride);
+  const barsSinceCrossGroup = useChartIntervalGroup(handlers.barsSinceCross?.groups.find((g) => g.enabled) ?? null, ivOverride);
+  const tdSequentialGroup = useChartIntervalGroup(handlers.tdSequential?.groups.find((g) => g.enabled) ?? null, ivOverride);
+  const pphlGroup = useChartIntervalGroup(handlers.pphl?.groups.find((g) => g.enabled) ?? null, ivOverride);
+  const wfractalsGroup = useChartIntervalGroup(handlers.wfractals?.groups.find((g) => g.enabled) ?? null, ivOverride);
+  const zigzagGroup = useChartIntervalGroup(handlers.zigzag?.groups.find((g) => g.enabled) ?? null, ivOverride);
   // Nível do filtro PERM (1h/30m/15m) configurado no favorito Bollinger Bands do manipulador
   // (bot ao vivo) pra essa moeda — ver resolveBollingerBandsPermFilter (multitradeChart.js).
   // Usado tanto pelo botão PERM manual (renderBollingerCard) quanto pra ligar showPermFilter
@@ -3122,7 +3195,7 @@ export default function CandlestickChart() {
   const [bbPermPathCache, setBbPermPathCache] = useState({});
   // S/R: multi-instância (handlers.sr). Cada instância tem intervalo/estilo/candleCount + quais
   // linhas calcular/mostrar. O rolling roda em chartSrConfigs (mais abaixo).
-  const srGroups = handlers.sr?.groups ?? [];
+  const srGroups = useChartIntervalGroups(handlers.sr?.groups, ivOverride) ?? [];
   const enabledSrGroups = srGroups.filter((g) => g.enabled);
   // PPHL/WF/ZZ: intervalo + candleCount agora vivem no grupo do manipulador (handlers.pphl / .wfractals / .zigzag).
   // Candles brutos por intervalo próprio (S/R, PPHL, WF, ZigZag) — key `${symbol}|${interval}`.
@@ -3133,7 +3206,7 @@ export default function CandlestickChart() {
   // Limiar RSI: virou manipulador caixa MULTI-instância (handlers.rsiCross, max 4) — cada
   // instância tem intervalo/limiar/cor PRÓPRIOS (ver descriptors.js). Só aparece com o subpainel
   // RSI ligado (panelGate do descriptor).
-  const rsiCrossGroups = (handlers.rsiCross?.groups ?? []).filter((g) => g.enabled);
+  const rsiCrossGroups = (useChartIntervalGroups(handlers.rsiCross?.groups, ivOverride) ?? []).filter((g) => g.enabled);
   // Trecho de TEMPO visível do gráfico (ms) — reportado pelos dois motores (LW via
   // subscribeVisibleTimeRangeChange, ECharts via evento dataZoom), com debounce.
   const [visibleChartRange, setVisibleChartRange] = useState(null);
@@ -3158,7 +3231,7 @@ export default function CandlestickChart() {
   const [rsiCache, setRsiCache] = useState({});
   const [_rsiLoading, setRsiLoading] = useState(false);
   // PERM: intervalo/tons/camadas agora vivem no grupo do manipulador (handlers.emaPersistCloud).
-  const emaPersistCloudGroup = handlers.emaPersistCloud?.groups.find((g) => g.enabled) ?? null;
+  const emaPersistCloudGroup = useChartIntervalGroup(handlers.emaPersistCloud?.groups.find((g) => g.enabled) ?? null, ivOverride);
   const emaPersistCloudInterval = emaPersistCloudGroup?.interval ?? DEFAULT_EMA_PERSIST_CLOUD_INTERVAL;
   const emaPersistCloudTones = emaPersistCloudGroup?.tones ?? DEFAULT_PERM_CLOUD_TONES;
   const emaPersistCloudLayers = emaPersistCloudGroup?.layers ?? DEFAULT_EMA_PERSIST_CLOUD_LAYERS;
@@ -3174,7 +3247,7 @@ export default function CandlestickChart() {
   const [_barsSinceCrossLoading, setBarsSinceCrossLoading] = useState(false);
   const [tdSequentialCache, setTdSequentialCache] = useState({});
   const [_tdSequentialLoading, setTdSequentialLoading] = useState(false);
-  const [vwap, setVwap] = useState(() => ({ ...uiPrefs.vwapDefaults }));
+  const [vwapOwn, setVwap] = useState(() => ({ ...uiPrefs.vwapDefaults }));
   // Botão "Queda VWAP" (painel do gráfico, tile da VWAP) — liga/desliga a nuvem/destaque
   // vermelho dos trechos em que a própria VWAP está caindo (vwapSlopeAt, mesmo cálculo do
   // vwapSlopeFilter do bot vwap-bands). Só o ON/OFF é local à sessão do gráfico (mesmo padrão
@@ -3435,6 +3508,11 @@ export default function CandlestickChart() {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasForcedVwap, multitradeChartFocus?.vwapOverride, chartViewSource, chartZoom?.vwap]);
+  // VWAP efetiva (busca/desenho): segue o intervalo do gráfico no modo 'chart', exceto quando
+  // forçada pelo favorito vwap-bands ou pela aba Estatísticas (tem que bater com o bot/backtest).
+  const vwap = useMemo(() => (
+    hasForcedVwap || chartZoom?.vwap ? vwapOwn : withChartInterval(vwapOwn, ivOverride)
+  ), [vwapOwn, ivOverride, hasForcedVwap, chartZoom?.vwap]);
 
   // Favorito bollinger-bands: força a banda de Bollinger (período/desvio/intervalo do
   // próprio bot) no chart como um grupo próprio (TRADE_BB_GROUP_ID) — mesma ideia do
@@ -3556,9 +3634,9 @@ export default function CandlestickChart() {
   // A âncora (ancorada/contínua) não é mais escolhida aqui — vem de Configurações (uiPrefs.vwapAnchorDefault).
   useEffect(() => {
     if (isTradePanelChartView(chartViewSource)) return;
-    setVwapDefaults({ enabled: vwap.enabled, interval: vwap.interval, session: vwap.session, bands: vwap.bands });
+    setVwapDefaults({ enabled: vwapOwn.enabled, interval: vwapOwn.interval, session: vwapOwn.session, bands: vwapOwn.bands });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [vwap.enabled, vwap.interval, vwap.session, vwap.bands]);
+  }, [vwapOwn.enabled, vwapOwn.interval, vwapOwn.session, vwapOwn.bands]);
 
   // Persiste só o ON/OFF do botão "Queda VWAP" — lookback/inclinação mínima continuam
   // exclusivos de Configurações (não têm controle no painel do gráfico).
@@ -5309,7 +5387,7 @@ export default function CandlestickChart() {
       };
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rsiCrossShown, handlers.rsiCross?.groups, pivotRawCache, selectedChart?.symbol, selectedChart?.candlesticks, selectedChart?.interval, currentInterval]);
+  }, [rsiCrossShown, handlers.rsiCross?.groups, ivOverride, pivotRawCache, selectedChart?.symbol, selectedChart?.candlesticks, selectedChart?.interval, currentInterval]);
 
   // Âncora do S/R rolante = abertura do último candle do intervalo do S/R que JÁ FECHOU até a
   // borda direita do trecho visível (candle em formação não entra — sem look-ahead). Snapado pra
@@ -5371,7 +5449,7 @@ export default function CandlestickChart() {
     });
     return out;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [srTradeOverride, chartSrOverride, chartTradeMarkers, handlers.sr?.groups, chartPanelButtons.sr, pivotRawCache, selectedChart?.symbol, selectedChart?.candlesticks, srAnchorsKey]);
+  }, [srTradeOverride, chartSrOverride, chartTradeMarkers, handlers.sr?.groups, ivOverride, chartPanelButtons.sr, pivotRawCache, selectedChart?.symbol, selectedChart?.candlesticks, srAnchorsKey]);
 
   const chartPphlConfig = useMemo(() => {
     if (!pphlShown) return null;
@@ -6679,20 +6757,23 @@ export default function CandlestickChart() {
           handlers={handlers}
           activeIndicators={activeIndicators}
           toggleIndicator={toggleIndicator}
-          quickEmaGroups={quickEmaGroups}
+          quickEmaGroups={quickEmaGroupsOwn}
           addQuickEmaGroup={addQuickEmaGroup}
           removeQuickEmaGroup={removeQuickEmaGroup}
           updateQuickEmaGroupInterval={updateQuickEmaGroupInterval}
           toggleQuickEmaGroupPeriod={toggleQuickEmaGroupPeriod}
           updateQuickEmaGroupBandPct={updateQuickEmaGroupBandPct}
           updateQuickEmaGroupBandPeriod={updateQuickEmaGroupBandPeriod}
-          bbGroups={bbGroups}
+          bbGroups={bbGroupsOwn}
           addBbGroup={addBbGroup}
           removeBbGroup={removeBbGroup}
           updateBbGroup={updateBbGroup}
           toggleBbGroupFlag={toggleBbGroupFlag}
           botPermInterval={botPermInterval}
-          vwap={vwap}
+          indicatorIntervalMode={indicatorIntervalMode}
+          setIndicatorIntervalMode={setIndicatorIntervalMode}
+          chartInterval={selectedChart?.interval ?? currentInterval}
+          vwap={vwapOwn}
           setVwap={setVwap}
           vwapSlopeHighlightOn={vwapSlopeHighlightOn}
           setVwapSlopeHighlightOn={setVwapSlopeHighlightOn}

@@ -9,7 +9,7 @@ const GATE_BASE = 'https://api.gateio.ws/api/v4';
 const LIMIT_DEFAULT = 10;
 /**
  * Folga de candidatos: o frontend aplica Exibição de ativos (bStocks etc.)
- * e corta nos 10 finais — se cortássemos no backend, a tabela NB ficaria vazia.
+ * e corta nos finais (20 em alta, 10 novas) — se cortássemos no backend, a tabela NB ficaria vazia.
  */
 const CANDIDATE_MULTIPLIER = 8;
 const MIN_VOLUME_USDT = 1_000_000;

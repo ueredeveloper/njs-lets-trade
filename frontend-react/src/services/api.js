@@ -86,7 +86,7 @@ export async function fetch24hVolume() {
   return res.json();
 }
 
-/** Top 10 em alta + novas listagens (Binance e Gate.io). */
+/** Top 20 em alta + top 10 novas listagens (Binance e Gate.io). */
 export async function fetchMarketHighlights(limit = 10) {
   const res = await fetch(`/services/market-highlights?limit=${limit}`);
   if (!res.ok) {
@@ -1818,6 +1818,14 @@ export async function fetchRsiMomentumMissedSignals({ days = 14, symbol } = {}) 
   if (symbol) params.set('symbol', symbol);
   const res = await fetch(`/services/rsi-momentum-missed-signals?${params}`);
   if (!res.ok) throw new Error(`rsi-momentum-missed-signals falhou: HTTP ${res.status}`);
+  return res.json();
+}
+
+/** Proximidade do sinal de cada moeda do favorito RSI (intervalo/limiar do próprio bot) — ver
+ *  backend/services/fetchRsiMomentumSignalProximity.js. */
+export async function fetchRsiMomentumSignalProximity({ fresh = false } = {}) {
+  const res = await fetch(`/services/rsi-momentum-signal-proximity${fresh ? '?fresh=1' : ''}`);
+  if (!res.ok) throw new Error(`rsi-momentum-signal-proximity falhou: HTTP ${res.status}`);
   return res.json();
 }
 

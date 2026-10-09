@@ -5,7 +5,7 @@ import SearchInput from './SearchInput';
 import {
   fetchCandlesticksAndCloud, fetchGateCurrencies, gatePreloadCandles,
   fetchMaCrossoverFilter, fetchMultitradeTrades, fetchBotState,
-  fetchGateTrades, fetchBinanceTrades, fetchRsiMomentumMissedSignals,
+  fetchGateTrades, fetchBinanceTrades, fetchRsiMomentumMissedSignals, fetchRsiMomentumSignalProximity,
 } from '../services/api';
 import { parseMaCrossFilterName, parseMaCompareFilterName, parseMaDistanceFilterName, parseIndicatorGrowthFilterName, parseVwapBandWidthFilterName, parseBollingerBandWidthFilterName, parseBollingerMedianTrendFilterName, parseRsiFilterName, parseFilterChartInterval, isNearMissFilterName, nearMissReasonAcronym } from '../utils/filterNames';
 import { useI18n } from '../i18n';
@@ -55,6 +55,8 @@ import MacmpTableSortSelect from './MacmpTableSortSelect';
 import TradeFavSortSelect from './TradeFavSortSelect';
 import ActiveFavSortSelect from './ActiveFavSortSelect';
 import MissedSignalsPeriodSelect from './MissedSignalsPeriodSelect';
+import RsiMomFavSortSelect from './RsiMomFavSortSelect';
+import { loadRsiMomFavSort, compareSignalProximity } from '../utils/rsiMomFavoritesSort';
 import { loadMissedPeriod, saveMissedPeriod, missedPeriodRange, MISSED_PERIOD_OPTIONS } from '../utils/missedSignalsPeriod';
 import VwapFavSortSelect from './VwapFavSortSelect';
 import BollingerFavSortSelect from './BollingerFavSortSelect';
@@ -473,6 +475,24 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   const isVwapBandsFavView = favoriteView === 'vwap-bands';
   const isBollingerBandsFavView = favoriteView === 'bollinger-bands';
   const isRsiMissedFavView = favoriteView === 'rsi-missed';
+  // Favorito "RSI" — seletor ‹ › Fase / Sinal. "Sinal" ordena pela proximidade do sinal de cada
+  // moeda no intervalo/limiar do PRÓPRIO bot (1m, 15m…), em % de preço — ver
+  // backend/services/fetchRsiMomentumSignalProximity.js. Só busca com a lista RSI aberta em "Sinal".
+  const isRsiMomFavView = favoriteView === 'rsi-momentum';
+  const [rmFavSort, setRmFavSort] = useState(() => loadRsiMomFavSort());
+  const [rmProximity, setRmProximity] = useState(null); // Map symbol → linha da API
+  const showRmSignalCol = isRsiMomFavView && rmFavSort === 'signal';
+  const onRmFavSortChange = useCallback((id) => { setRmFavSort(id); setSortVolume('none'); }, []);
+  useEffect(() => {
+    if (!showRmSignalCol) return undefined;
+    let alive = true;
+    const load = () => fetchRsiMomentumSignalProximity()
+      .then((data) => { if (alive) setRmProximity(new Map((data.rows ?? []).map(r => [r.symbol, r]))); })
+      .catch((err) => console.warn('[CurrencyTable] proximidade do sinal RSI indisponível:', err.message));
+    load();
+    const id = setInterval(load, 20_000);
+    return () => { alive = false; clearInterval(id); };
+  }, [showRmSignalCol]);
   const isAltaFilter = activeFilter?.startsWith('Favoritos|Alta|') ?? false;
   const isNovasFilter = activeFilter?.startsWith('Favoritos|Novas|') ?? false;
   const isFavVolumeContext = !!favoriteView || isAltaFilter || isNovasFilter;
@@ -627,7 +647,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     && !isVwapWidthFilter && !isBbWidthFilter && !isBbTrendFilter && !activeMacmpFilter;
   const showGenericWidthCol = showGenericWidthToggle && genericWidthSort !== 'off';
 
-  const hasDedicatedExtraCol = isAltaFilter || isMaDistanceFilter || isGrowthFilter || isVwapWidthFilter || isBbWidthFilter || isBbTrendFilter || isRsiFilter || isNearMissFilter || showVwapFavWidthCol || showBbFavWidthCol || isRsiMissedFavView;
+  const hasDedicatedExtraCol = isAltaFilter || isMaDistanceFilter || isGrowthFilter || isVwapWidthFilter || isBbWidthFilter || isBbTrendFilter || isRsiFilter || isNearMissFilter || showVwapFavWidthCol || showBbFavWidthCol || isRsiMissedFavView || showRmSignalCol;
   const extraColCount = (hasDedicatedExtraCol ? 1 : 0) + (showGenericWidthCol ? 1 : 0);
   const tableColCount = 6 + extraColCount;
 
@@ -804,6 +824,10 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
       }
       const RM_PHASE_ORDER = { BOUGHT: 0, PENDING: 1, FAILED: 2, WATCHING: 3 };
       list = list.slice().sort((a, b) => {
+        if (rmFavSort === 'signal') {
+          const c = compareSignalProximity(rmProximity?.get(a.symbol), rmProximity?.get(b.symbol));
+          if (c !== 0) return c;
+        }
         const pa = RM_PHASE_ORDER[rmPhaseBySymbol.get(a.symbol) ?? 'WATCHING'] ?? 9;
         const pb = RM_PHASE_ORDER[rmPhaseBySymbol.get(b.symbol) ?? 'WATCHING'] ?? 9;
         return pa !== pb ? pa - pb : a.symbol.localeCompare(b.symbol);
@@ -945,7 +969,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     }
 
     return list;
-  }, [currencies, activeFilter, selectedQuote, findFilter, search, favoriteView, gateFavorites, binanceFavorites, multitradeFavorites, sortVolume, gateAll, filterVisibleCurrencies, isVisibleSymbol, currencyBySymbol, activeMacrossFilter, macrossScannedAt, macrossTick, isMacrossFavView, macrossFavSort, macrossFavStatus, macrossEntriesBySymbol, isTradesFavView, tradeFavSort, tradeFavSymbols, tradeFavStatus, isActiveFavView, activeFavSort, activeTrades, isAltaFilter, isNovasFilter, highlightMeta, activeMacmpFilter, macmpMeta, macmpTableSort, activeMaDistanceFilter, maDistMeta, maDistSort, activeGrowthFilter, growthMeta, growthSort, activeVwapWidthFilter, vwapWidthMeta, vwapWidthSort, activeBbWidthFilter, bbWidthMeta, bbWidthSort, activeBbTrendFilter, bbTrendMeta, bbTrendSort, activeRsiFilter, rsiMeta, rsiSort, missedFiltered, isVwapBandsFavView, vwapFavSort, vwapFavWidthMeta, bbFavSort, bbFavWidthMeta, showGenericWidthCol, genericWidthMeta, genericWidthSort]);
+  }, [currencies, activeFilter, selectedQuote, findFilter, search, favoriteView, gateFavorites, binanceFavorites, multitradeFavorites, sortVolume, gateAll, filterVisibleCurrencies, isVisibleSymbol, currencyBySymbol, activeMacrossFilter, macrossScannedAt, macrossTick, isMacrossFavView, macrossFavSort, macrossFavStatus, macrossEntriesBySymbol, isTradesFavView, tradeFavSort, tradeFavSymbols, tradeFavStatus, isActiveFavView, activeFavSort, activeTrades, isAltaFilter, isNovasFilter, highlightMeta, activeMacmpFilter, macmpMeta, macmpTableSort, activeMaDistanceFilter, maDistMeta, maDistSort, activeGrowthFilter, growthMeta, growthSort, activeVwapWidthFilter, vwapWidthMeta, vwapWidthSort, activeBbWidthFilter, bbWidthMeta, bbWidthSort, activeBbTrendFilter, bbTrendMeta, bbTrendSort, activeRsiFilter, rsiMeta, rsiSort, missedFiltered, rmFavSort, rmProximity, isVwapBandsFavView, vwapFavSort, vwapFavWidthMeta, bbFavSort, bbFavWidthMeta, showGenericWidthCol, genericWidthMeta, genericWidthSort]);
 
   // Publica a lista visível (já filtrada/ordenada) e a função de seleção real pro contexto —
   // os botões ‹ › do gráfico usam isso pra passar pra moeda anterior/seguinte na mesma ordem
@@ -1496,6 +1520,10 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     : (activeMacmpFilter ? 6.4 * REM_PX : showFavSortInHeader ? 6.0 * REM_PX : 6.6 * REM_PX);
   const priceColPx = (isMobile ? 3 : 3.25) * REM_PX;
   const changeColPx = (isMobile ? 2.75 : 3) * REM_PX;
+  // Coluna RSI do favorito RSI (modo "Sinal"): só o inteiro do RSI (2 dígitos) — mais estreita que
+  // as colunas de % (changeColPx); a sobra vai pra coluna Par.
+  const rsiSignalColPx = (isMobile ? 2 : 2.25) * REM_PX;
+  const dedicatedExtraColPx = showRmSignalCol ? rsiSignalColPx : changeColPx;
   const volColPx = (isMobile ? 2.25 : 2.5) * REM_PX;
   const spinnerColPx = (isMobile ? 0.75 : 1) * REM_PX;
   // Coluna de ações (C = comprado / V = vender) do lado direito — mesma lógica de piso fixo
@@ -1505,7 +1533,8 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   // sentido do filtro — moeda que ainda NÃO comprou) — zera o piso pra sobrar espaço pra Larg%
   // sem espremer o Par a 0 quando o usuário liga "Larg cima"/"Larg baixo".
   const actionsColPx = isNearMissFilter ? 0 : (isMobile ? 3.0 : 3.6) * REM_PX;
-  const fixedColsPx = priceColPx + volColPx + spinnerColPx + actionsColPx + (extraColCount * changeColPx);
+  const fixedColsPx = priceColPx + volColPx + spinnerColPx + actionsColPx
+    + (hasDedicatedExtraCol ? dedicatedExtraColPx : 0) + (showGenericWidthCol ? changeColPx : 0);
   const favColWidthPx = favColMinPx;
   const parColWidthPx = tableContainerWidth > 0
     ? Math.max(tableContainerWidth - favColWidthPx - fixedColsPx, 0)
@@ -1704,9 +1733,12 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
             <col className="currency-table-col-fav" style={{ width: favColWidth }} />
             <col className="currency-table-col-par" style={{ width: parColWidth }} />
             <col className="currency-table-col-price" style={{ width: priceColWidth }} />
-            {Array.from({ length: extraColCount }).map((_, i) => (
-              <col key={`change-col-${i}`} className="currency-table-col-change" style={{ width: changeColWidth }} />
-            ))}
+            {hasDedicatedExtraCol && (
+              <col className="currency-table-col-change" style={{ width: `${dedicatedExtraColPx}px` }} />
+            )}
+            {showGenericWidthCol && (
+              <col className="currency-table-col-change" style={{ width: changeColWidth }} />
+            )}
             <col className="currency-table-col-vol" style={{ width: volColWidth }} />
             <col className="currency-table-col-actions" style={{ width: actionsColWidth }} />
             <col className="currency-table-col-spinner" style={{ width: spinnerColWidth }} />
@@ -1723,6 +1755,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                     : isVwapBandsFavView ? t('vwapfav.sort.label')
                     : isBollingerBandsFavView ? t('bbfav.sort.label')
                     : isRsiMissedFavView ? 'Período dos sinais sem entrada'
+                    : isRsiMomFavView ? t('rsimomfav.sort.label')
                     : activeMacmpFilter ? t('macmp.sort.label')
                     : showGenericWidthToggle ? t('genwidth.sort.label')
                     : undefined
@@ -1775,6 +1808,14 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                     <BollingerFavSortSelect
                       value={bbFavSort}
                       onChange={onBbFavSortChange}
+                      className="shrink-0"
+                    />
+                  </div>
+                ) : isRsiMomFavView ? (
+                  <div className={`flex items-center gap-0.5 ${isMobile ? 'flex-wrap justify-center' : 'justify-start'}`}>
+                    <RsiMomFavSortSelect
+                      value={rmFavSort}
+                      onChange={onRmFavSortChange}
                       className="shrink-0"
                     />
                   </div>
@@ -1896,6 +1937,14 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                   title={t('ind.near_miss_reason_col_tip')}
                 >
                   {t('ind.near_miss_reason_col')}
+                </th>
+              )}
+              {showRmSignalCol && (
+                <th
+                  className="text-center px-1 py-1 text-p5 opacity-80 font-normal uppercase tracking-wider whitespace-nowrap"
+                  title={t('rsimomfav.col.signal_tip')}
+                >
+                  {t('rsimomfav.col.signal')}
                 </th>
               )}
               {isRsiMissedFavView && (
@@ -2396,6 +2445,38 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                         title={title}
                       >
                         {acronym ?? '—'}
+                      </td>
+                    );
+                  })()}
+                  {showRmSignalCol && (() => {
+                    // RSI(14) atual no intervalo DESTE bot (só o número); a cor diz o quanto falta pro limiar —
+                    // verde = cruzaria se o candle fechasse agora, amarelo = falta ≤ 5. Detalhes no title.
+                    const p = rmProximity?.get(item.symbol);
+                    const modeTag = p?.mode === 'reentry' ? ` · ${t('rsimomfav.reentry')}` : '';
+                    // Só a parte inteira (67.05 → 67); trunca em vez de arredondar pra 69.9 não aparecer como 70.
+                    const rsiTxt = p?.rsiLive != null ? String(Math.trunc(p.rsiLive)) : '—';
+                    let text = '—';
+                    let color = 'rgba(255,255,255,0.35)';
+                    let title = p ? `${p.interval} · RSI agora ${p.rsiLive ?? '—'} (último fechado ${p.rsi ?? '—'}) · limiar ${p.threshold}${p.gap != null ? ` · falta ${p.gap > 0 ? p.gap.toFixed(1) : 0}` : ''}${p.status === 'above' ? ` · ${t('rsimomfav.above')}` : ''}${p.status === 'below' && p.gap != null && p.gap <= 0 ? ` · ${t('rsimomfav.crossing')}` : ''}${modeTag}` : undefined;
+                    if (p?.status === 'below' && p.gap != null) {
+                      text = rsiTxt;
+                      color = p.gap <= 0 ? '#22c55e' : p.gap <= 5 ? '#e2c341' : 'rgba(255,255,255,0.6)';
+                      if (p.targetPrice != null) title = `${title} · ${t('rsimomfav.target_price')} ${formatPrice(p.targetPrice)} (+${p.distPct}%)`;
+                    } else if (p?.status === 'above') {
+                      text = rsiTxt;
+                    } else if (p?.status === 'bought') {
+                      // Em trade = círculo verde (texto "em trade" fica só na dica).
+                      text = (
+                        <span
+                          aria-label={t('rsimomfav.bought')}
+                          style={{ display: 'inline-block', width: 9, height: 9, borderRadius: '50%', background: '#22c55e', verticalAlign: 'middle' }}
+                        />
+                      );
+                      title = title ? `${title} · ${t('rsimomfav.bought')}` : t('rsimomfav.bought');
+                    }
+                    return (
+                      <td className="px-1 py-1 text-center font-mono text-[10px] font-semibold" style={{ color }} title={title}>
+                        {text}
                       </td>
                     );
                   })()}

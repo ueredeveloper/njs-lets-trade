@@ -144,6 +144,14 @@ const MOMENTUM_SKYAI_PRESET = {
   type: 'botReadinessCurated', mode: 'contention', symbol: 'SKYAIUSDT',
   tradeInterval: '15m', srInterval: '4h', srCandleCount: '200', rsiSignal: '69',
 };
+/** Dica (title) do seletor de linha do Ichimoku — era referenciada sem existir (ReferenceError ao escolher Ichimoku). */
+const ICHIMOKU_LINE_LABELS = {
+  conversion: 'Tenkan-sen (conversão, 9)',
+  base: 'Kijun-sen (base, 26)',
+  spanA: 'Senkou Span A',
+  spanB: 'Senkou Span B (52)',
+};
+
 const DEFAULT_INDICATORS = [
   { ...MOMENTUM_GERAL_PRESET },
   { ...MOMENTUM_SKYAI_PRESET },
@@ -408,7 +416,10 @@ function indDescKey(type) {
 }
 
 function IndicatorRow({ value, onChange }) {
-  const { type, intervals } = value;
+  const { type } = value;
+  // Formulários Momentum (botReadiness*) não têm `intervals` — ao trocar o tipo pra RSI etc. o
+  // campo vinha undefined e quebrava as pills/toggleInterval.
+  const intervals = Array.isArray(value.intervals) ? value.intervals : [];
   const { t } = useI18n();
   const { uiPrefs } = useCurrency();
   const [showPicker, setShowPicker] = useState(false);
@@ -504,6 +515,8 @@ function IndicatorRow({ value, onChange }) {
             onChange={(e) => {
               const newType = e.target.value;
               const next = { ...value, type: newType, params: {} };
+              // Vindo de um formulário Momentum (sem `intervals`): começa com 15m em vez de undefined.
+              if (!Array.isArray(next.intervals)) next.intervals = ['15m'];
               if (newType === 'maCompare') {
                 next.intervals = ['1h'];
                 next.ma1Period = '9';

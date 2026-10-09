@@ -24,7 +24,7 @@ const {
   fetchSMA, fetchRSI, fetchChopZone, fetchVWAP, fetch24HsVolume, fetchMarketCapFilter, fetchStablecoins, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter, fetchMaDistanceFilter, fetchIndicatorGrowthFilter,
   fetchRsiOversoldRecovery, fetchRsiThresholdBacktest, fetchRsiThresholdBacktestMarket, fetchCandleSetupsBacktest, fetchMaCrossStats, fetchVwapBandsStats, fetchBollingerBandRecovery, fetchBollingerBandPositionFilter, fetchVwapPositionFilter, fetchVwapBandWidthFilter, fetchBollingerBandWidthFilter, fetchBandWidthEvolution, fetchBollingerMedianTrendFilter, fetchVwapBandExpansionFilter, fetchBollingerBands, fetchMACD, fetchSimpleMaCross, fetchReloadCandles,
   fetchGateCurrencies, fetchGateCoinsFilter, fetchGatePrefetch, fetchBinanceTrades, fetchGateTrades,
-  fetchActiveTrades, fetchTradeFavorites, stgBotStatus, multitradeService, fetchMarketHighlights, whatsappMessagesService, fetchCacheSettings, rsiMomentumStatsSearchLog, bandWidthEvolutionSearchLog, fetchRsiMomentumWatchlist, fetchRsiMomentumNearMisses, fetchRsiMomentumMissedSignals } = require('./services');
+  fetchActiveTrades, fetchTradeFavorites, stgBotStatus, multitradeService, fetchMarketHighlights, whatsappMessagesService, fetchCacheSettings, rsiMomentumStatsSearchLog, bandWidthEvolutionSearchLog, fetchRsiMomentumWatchlist, fetchRsiMomentumNearMisses, fetchRsiMomentumMissedSignals, fetchRsiMomentumSignalProximity } = require('./services');
 const supabaseService = require('./services/supabaseService');
 const { refreshMedianTrendThreshold } = require('./utils/bollingerMedianTrendConfig');
 
@@ -99,6 +99,7 @@ app.use('/services', whatsappMessagesService)
 app.use('/services', rsiMomentumStatsSearchLog)
 app.use('/services', bandWidthEvolutionSearchLog)
 app.use('/services', fetchRsiMomentumWatchlist)
+app.use('/services', fetchRsiMomentumSignalProximity)
 app.use('/services', fetchRsiMomentumNearMisses)
 app.use('/services', fetchRsiMomentumMissedSignals)
 app.use('/services/sb', supabaseService)

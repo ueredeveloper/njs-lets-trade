@@ -82,9 +82,15 @@ function isAutoHighlightFilter(name) {
 }
 
 const HIGHLIGHT_DISPLAY_LIMIT = 10;
+/** Em alta (↑B / ↑G) mostra top 20; novas listagens (NB / NG) seguem em 10. */
+const GAINERS_DISPLAY_LIMIT = 20;
+
+function highlightDisplayLimit(name) {
+  return name?.startsWith('Favoritos|Alta|') ? GAINERS_DISPLAY_LIMIT : HIGHLIGHT_DISPLAY_LIMIT;
+}
 
 /** Aplica Exibição de ativos e corta nos N finais usados na UI (NB, ↑B, cards). */
-function applyAssetDisplayToHighlight(filter, assetDisplay, limit = HIGHLIGHT_DISPLAY_LIMIT) {
+function applyAssetDisplayToHighlight(filter, assetDisplay, limit = highlightDisplayLimit(filter?.name)) {
   if (!filter || !isAutoHighlightFilter(filter.name)) return filter;
   const candidates = Array.isArray(filter.meta?.candidates) && filter.meta.candidates.length > 0
     ? filter.meta.candidates
@@ -1072,7 +1078,7 @@ export function CurrencyProvider({ children }) {
   const ensureMarketHighlights = useCallback(async () => {
     setMarketHighlightsLoading(true);
     try {
-      const items = await fetchMarketHighlights(HIGHLIGHT_DISPLAY_LIMIT);
+      const items = await fetchMarketHighlights(GAINERS_DISPLAY_LIMIT);
       const display = assetDisplayRef.current;
       setFilters((prev) => {
         let next = [...prev];
