@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useMemo, startTransition, useCallback } from 'react';
+import { memo, useEffect, useRef, useState, useMemo, startTransition, useCallback } from 'react';
 import {
   BOOT_STAGE,
   MAX_BOOT_STAGE,
@@ -15,14 +15,27 @@ import { fetchAllCurrencies, fetchBreakUsdtPairs, fetch24hVolume, fetchStablecoi
 import { setBreakSymbols } from './utils/assetCategories';
 import { loadUiPreferences, firstVisiblePanel, CURRENCY_PANEL_WIDTH_MIN, CURRENCY_PANEL_WIDTH_MAX } from './utils/uiPreferences';
 import { useIsMobile } from './hooks/useIsMobile';
-import FilterTabs from './components/FilterTabs';
-import CurrencyTable from './components/CurrencyTable';
-import IndicatorPanel from './components/IndicatorPanel';
-import CandlestickChart from './components/CandlestickChart';
-import SettingsSidebar from './components/SettingsSidebar';
-import StatisticsPanel from './components/StatisticsPanel';
+import FilterTabsRaw from './components/FilterTabs';
+import CurrencyTableRaw from './components/CurrencyTable';
+import IndicatorPanelRaw from './components/IndicatorPanel';
+import CandlestickChartRaw from './components/CandlestickChart';
+import SettingsSidebarRaw from './components/SettingsSidebar';
+import StatisticsPanelRaw from './components/StatisticsPanel';
 import BootStageBar from './components/BootStageBar';
 import MaximizeIcon from './components/MaximizeIcon';
+
+// Painéis pesados memoizados: estado local do AppContent (layoutMode ao maximizar/dividir,
+// openPanels, modal de moedas…) re-renderizava a árvore INTEIRA a cada clique — gráfico, tabela
+// de moedas, configurações (mesmo fechada), indicadores e estatísticas — travando a thread
+// principal por 200ms–1s+ e fazendo clique em aba/maximizar parecer "não responder". Com memo
+// eles só re-renderizam quando as próprias props ou o CurrencyContext mudam (handlers passados
+// como prop são estáveis via useCallback).
+const FilterTabs = memo(FilterTabsRaw);
+const CurrencyTable = memo(CurrencyTableRaw);
+const IndicatorPanel = memo(IndicatorPanelRaw);
+const CandlestickChart = memo(CandlestickChartRaw);
+const SettingsSidebar = memo(SettingsSidebarRaw);
+const StatisticsPanel = memo(StatisticsPanelRaw);
 
 const MOBILE_SHEET_HEIGHT = '88%';
 const MOBILE_SHEET_FILTERS_HEIGHT = '30%';
@@ -127,9 +140,9 @@ function AppContent() {
     });
   }, [uiPrefs.visiblePanels, bootDebug]);
 
-  function pickPanelOnCurrencySelect() {
-    if (uiPrefs.visiblePanels.stats !== false) return 'stats';
-    return firstVisiblePanel(uiPrefs.visiblePanels);
+  function pickPanelOnCurrencySelect(visiblePanels) {
+    if (visiblePanels.stats !== false) return 'stats';
+    return firstVisiblePanel(visiblePanels);
   }
 
   // Aba de painel: sempre seleciona QUAL painel mostrar (indicadores/estatísticas),
@@ -215,6 +228,28 @@ function AppContent() {
     return () => { cancelled = true; };
   }, []);
 
+  // Estáveis (useCallback) pra não furar o memo de CurrencyTable/FilterTabs/SettingsSidebar
+  // a cada render do AppContent (ver comentário dos imports memoizados no topo). Ficam ANTES do
+  // early return do loading — hooks não podem variar entre renders.
+  const closeCurrencyModal = useCallback(() => {
+    setDragY(0);
+    setCurrencyModalVisible(false);
+    setTimeout(() => setCurrencyModalOpen(false), 320);
+  }, []);
+
+  const handleSelectCurrency = useCallback(() => {
+    const target = pickPanelOnCurrencySelect(uiPrefs.visiblePanels);
+    if (isMobile) closeCurrencyModal();
+    if (target) setOpenPanels([target]);
+  }, [uiPrefs.visiblePanels, isMobile, closeCurrencyModal]);
+
+  const handleSelectFilter = useCallback((name) => {
+    setActiveFilter(name);
+    if (name) clearFavoriteView();
+  }, [clearFavoriteView]);
+
+  const closeSettings = useCallback(() => setSettingsOpen(false), []);
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-dvh min-h-0 bg-p1">
@@ -230,12 +265,6 @@ function AppContent() {
     setCurrencyModalOpen(true);
     setDragY(0);
     requestAnimationFrame(() => requestAnimationFrame(() => setCurrencyModalVisible(true)));
-  }
-
-  function closeCurrencyModal() {
-    setDragY(0);
-    setCurrencyModalVisible(false);
-    setTimeout(() => setCurrencyModalOpen(false), 320);
   }
 
   function handleDragStart(e) {
@@ -257,20 +286,6 @@ function AppContent() {
     dragStartY.current = null;
   }
 
-  function handleSelectCurrency() {
-    const target = pickPanelOnCurrencySelect();
-    if (isMobile) {
-      closeCurrencyModal();
-      if (target) setOpenPanels([target]);
-      return;
-    }
-    if (target) setOpenPanels([target]);
-  }
-
-  function handleSelectFilter(name) {
-    setActiveFilter(name);
-    if (name) clearFavoriteView();
-  }
 
   const showIndicator = show(BOOT_STAGE.INDICATOR_PANEL)
     && (bootDebug || (openPanels.includes('indicators') && uiPrefs.visiblePanels.indicators !== false));
@@ -307,7 +322,7 @@ function AppContent() {
         </div>
       </header>
 
-      <SettingsSidebar open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <SettingsSidebar open={settingsOpen} onClose={closeSettings} />
 
       {/* Mobile — bottom sheet */}
       {currencyModalOpen && show(BOOT_STAGE.MOBILE_BTN) && (
