@@ -1180,6 +1180,32 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     }
   }
 
+  /** Moedas RSI Momentum em AGUARDANDO (WATCHING) separadas por bot: exclusivo (curated) ×
+   *  geral (criadas pelo scanner). Alimenta o "remover todas aguardando" do modal da fase A. */
+  const rmWatchingEntries = useMemo(() => {
+    const watching = multitradeFavorites.filter(e => e.strategyId === 'rsi-momentum'
+      && e.enabled !== false && (e.phase ?? 'WATCHING') === 'WATCHING');
+    return {
+      curated: watching.filter(e => e.curated),
+      general: watching.filter(e => !e.curated),
+      all: watching,
+    };
+  }, [multitradeFavorites]);
+
+  async function handleRemoveAllRsiMomentumWatching(scope) {
+    const targets = rmWatchingEntries[scope] ?? [];
+    let removed = 0;
+    for (const e of targets) {
+      try {
+        await removeMultitradeEntry(e.id);
+        removed += 1;
+      } catch (err) {
+        console.error(`${FAV_LOG} RSI Momentum remover aguardando falha erro`, { symbol: e.symbol }, err);
+      }
+    }
+    return { removed, failed: targets.length - removed };
+  }
+
   async function handleSelect(item, source = null) {
     onSelectCurrency?.();
     resetChartCandleWindow();
@@ -2843,6 +2869,12 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
               await removeMultitradeEntry(entry.id);
               setMtStateModal(null);
             }}
+            watchingBulk={mtStateModal.entries?.some(e => e.strategyId === 'rsi-momentum') ? {
+              curated: rmWatchingEntries.curated.length,
+              general: rmWatchingEntries.general.length,
+              all: rmWatchingEntries.all.length,
+            } : null}
+            onRemoveAllWatching={handleRemoveAllRsiMomentumWatching}
             onCancel={() => setMtStateModal(null)}
           />
         </ModalPortal>

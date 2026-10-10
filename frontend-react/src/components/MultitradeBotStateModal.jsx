@@ -88,6 +88,79 @@ function ActionCard({ number, title, when, children, accent = MT_COLOR }) {
   );
 }
 
+const BULK_SCOPES = [
+  { id: 'curated', label: 'Exclusivo' },
+  { id: 'general', label: 'Geral' },
+  { id: 'all', label: 'Todos' },
+];
+
+/** Remove de uma vez todas as moedas RSI Momentum em AGUARDANDO (WATCHING) — só do bot
+ *  exclusivo (curadas), só do geral (criadas pelo scanner) ou ambas. WATCHING não tem
+ *  posição/ordem na corretora, então apagar é seguro (mesma regra do DELETE individual). */
+function BulkRemoveWatchingCard({ number, counts, defaultScope, onRemove, onDone }) {
+  const [scope, setScope] = useState(defaultScope);
+  const [confirm, setConfirm] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+  const n = counts[scope] ?? 0;
+  const scopeText = scope === 'curated' ? 'do bot exclusivo' : scope === 'general' ? 'do bot geral' : 'dos dois bots';
+
+  async function run() {
+    setBusy(true);
+    setResult(null);
+    try {
+      const r = await onRemove(scope);
+      if (r?.failed) setResult(`${r.removed} removida(s), ${r.failed} falharam`);
+      else onDone?.();
+    } catch (err) {
+      setResult(err?.message ?? 'Falha ao remover');
+    } finally {
+      setBusy(false);
+      setConfirm(false);
+    }
+  }
+
+  return (
+    <ActionCard
+      number={number}
+      title="Remover todas que estão AGUARDANDO"
+      when="Apaga de uma vez as moedas em AGUARDANDO (sem posição nem ordem na corretora). Compradas, pendentes e com falha não são tocadas. Curadas: reinicie o bot depois."
+      accent="#f97316"
+    >
+      <div className="flex gap-1">
+        {BULK_SCOPES.map(s => {
+          const on = s.id === scope;
+          return (
+            <button key={s.id} type="button" onClick={() => { setScope(s.id); setConfirm(false); }}
+              className="flex-1 text-[9px] font-bold px-2 py-1 rounded"
+              style={{
+                background: on ? '#f9731633' : '#2a2d3a',
+                color: on ? '#fdba74' : '#94a3b8',
+                border: `1px solid ${on ? '#f9731655' : '#3a3d4a'}`,
+              }}>
+              {s.label} ({counts[s.id] ?? 0})
+            </button>
+          );
+        })}
+      </div>
+      <label className="flex items-start gap-2 cursor-pointer">
+        <input type="checkbox" checked={confirm} disabled={n === 0}
+          onChange={e => setConfirm(e.target.checked)}
+          className="mt-0.5 shrink-0 accent-orange-500" />
+        <span className="text-[10px] text-p5/70 leading-snug">
+          Confirmo apagar {n} moeda(s) em AGUARDANDO {scopeText}
+        </span>
+      </label>
+      <button type="button" disabled={busy || !confirm || n === 0} onClick={run}
+        className="w-full py-2 rounded text-[10px] font-bold disabled:opacity-40"
+        style={{ background: '#f9731622', color: '#fdba74', border: '1px solid #f9731655' }}>
+        {busy ? 'Removendo…' : `Remover ${n} aguardando`}
+      </button>
+      {result && <p className="text-[10px] text-red-400 text-center">{result}</p>}
+    </ActionCard>
+  );
+}
+
 const PULLBACK_PRESETS = [1, 2, 3, 5];
 
 /** Comprar mais (média de preço) numa posição BOUGHT — mercado (imediato, atualiza
@@ -399,6 +472,8 @@ export default function MultitradeBotStateModal({
   onCancel,
   onBuyMore,
   onRemoveCurated,
+  watchingBulk,
+  onRemoveAllWatching,
 }) {
   const activeEntries = useMemo(
     () => (entries ?? []).filter(e => e.enabled !== false),
@@ -737,6 +812,16 @@ export default function MultitradeBotStateModal({
                     {removingCurated ? 'Removendo…' : 'Remover bot exclusivo'}
                   </button>
                 </ActionCard>
+              )}
+
+              {isWatching && watchingBulk && onRemoveAllWatching && (
+                <BulkRemoveWatchingCard
+                  number={entry?.curated && onRemoveCurated ? 3 : 2}
+                  counts={watchingBulk}
+                  defaultScope={entry?.curated ? 'curated' : 'general'}
+                  onRemove={onRemoveAllWatching}
+                  onDone={onCancel}
+                />
               )}
             </div>
           </div>
