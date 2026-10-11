@@ -4422,23 +4422,18 @@ export default function CandlestickChart() {
 
   const colors = useMemo(() => getThemeColors(), [themeTick]);
 
-  async function handleIntervalChange(iv) {
-    if (iv === currentInterval) return;
-    setCurrentInterval(iv);
-    setChartInterval(iv);
-
-    // Overlays desenhados sobre o candle (EMA, Ichimoku, S/R, PPHL, SL, Bollinger, Quick EMA,
-    // VWAP) ficam presos ao intervalo em que foram buscados — trocar o intervalo pelos botões
-    // do gráfico limpa esses overlays. RSI/CHOP continuam: abrem em subpainel próprio, que já
-    // recalcula sozinho pro novo intervalo.
-    const keptIndicators = activeIndicators.filter((id) => INTERVAL_CHANGE_KEEP_INDICATORS.has(id));
+  /** Desliga os indicadores do gráfico. all=false: só o que fica preso ao intervalo (troca de
+   *  intervalo); all=true: TUDO, inclusive os manipuladores com intervalo próprio (botão "⊘"
+   *  da barra do gráfico, sem precisar abrir o manipulador). */
+  function clearChartIndicators(all) {
+    const keptIndicators = all ? [] : activeIndicators.filter((id) => INTERVAL_CHANGE_KEEP_INDICATORS.has(id));
     if (keptIndicators.length !== activeIndicators.length) {
       setActiveIndicatorsPreference(keptIndicators);
     }
     // Manipuladores caixa sem intervalo próprio recalculável (descriptor.keepOnIntervalChange:false)
-    // são desligados na troca de intervalo — mesmo motivo dos overlays.
+    // são desligados na troca de intervalo — mesmo motivo dos overlays. all=true desliga todos.
     for (const d of HANDLER_DESCRIPTORS) {
-      if (d.keepOnIntervalChange === false) handlers[d.id]?.disableAll();
+      if (all || d.keepOnIntervalChange === false) handlers[d.id]?.disableAll();
     }
     setBbGroups((prev) => {
       if (!prev.some((g) => g.enabled || g.showPath || g.showMedianTrend || g.showPermFilter)) return prev;
@@ -4460,6 +4455,25 @@ export default function CandlestickChart() {
       setVwapSlopeHighlightOn(false);
       setVwapSlopeHighlightDefault({ enabled: false });
     }
+  }
+
+  // Algum indicador desenhado agora? Controla o botão "⊘" (desligar todos) da barra do gráfico.
+  const anyChartIndicatorOn = activeIndicators.length > 0
+    || HANDLER_DESCRIPTORS.some((d) => handlers[d.id]?.groups.some((g) => g.enabled))
+    || bbGroupsOwn.some((g) => g.enabled || g.showPath || g.showMedianTrend || g.showPermFilter)
+    || quickEmaGroupsOwn.some((g) => g.periods.length || g.bandPeriod)
+    || !!vwap.enabled || vwapSlopeHighlightOn;
+
+  async function handleIntervalChange(iv) {
+    if (iv === currentInterval) return;
+    setCurrentInterval(iv);
+    setChartInterval(iv);
+
+    // Overlays desenhados sobre o candle (EMA, Ichimoku, S/R, PPHL, SL, Bollinger, Quick EMA,
+    // VWAP) ficam presos ao intervalo em que foram buscados — trocar o intervalo pelos botões
+    // do gráfico limpa esses overlays. RSI/CHOP continuam: abrem em subpainel próprio, que já
+    // recalcula sozinho pro novo intervalo.
+    clearChartIndicators(false);
 
     if (!selectedChart?.symbol) return;
     setLoadingInterval(true);
@@ -6605,6 +6619,15 @@ export default function CandlestickChart() {
               📊 Evolução BB
             </button>
           )}
+          {/* Desliga TODOS os indicadores desenhados no gráfico sem abrir o manipulador. */}
+          <button
+            onClick={() => clearChartIndicators(true)}
+            disabled={!anyChartIndicatorOn}
+            title={t('chart.disable_all_indicators')}
+            className="px-1.5 md:px-2 py-0.5 text-[10px] md:text-xs rounded font-mono transition-colors disabled:opacity-40 border border-p3/40 text-p5 hover:bg-p3/40 hover:text-white shrink-0"
+          >
+            {t('chart.disable_all_indicators_btn')}
+          </button>
           {/* Grupo de janela de candles — alinhado à direita, isolado dos intervalos. Só os mais
               usados ficam visíveis; "›" abre os demais (mesmo padrão da linha de intervalos abaixo). */}
           <div className="ml-auto flex items-center gap-1 pl-2 border-l border-p2/30">
