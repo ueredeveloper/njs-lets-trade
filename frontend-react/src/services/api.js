@@ -327,7 +327,7 @@ export async function fetchRsiThresholdBacktest(symbol, interval, options = {}) 
     params.set('bbLowerFilterInterval', bbLowerFilter.interval ?? '15m');
     params.set('bbLowerFilterMaxPct', String(bbLowerFilter.maxPct ?? 2));
     params.set('bbLowerFilterBelowLine', bbLowerFilter.belowLine ?? 'middle');
-    params.set('bbLowerFilterBelowLineTolPct', String(bbLowerFilter.belowLineTolPct ?? 0));
+    params.set('bbLowerFilterBelowLineTolPct', String(bbLowerFilter.belowLineTolPct ?? 1));
   }
   if (rsi5mFilter?.enabled) {
     params.set('rsi5mFilterEnabled', '1');
@@ -433,7 +433,7 @@ export async function fetchRsiThresholdBacktestMarket(interval, options = {}) {
     params.set('bbLowerFilterInterval', bbLowerFilter.interval ?? '15m');
     params.set('bbLowerFilterMaxPct', String(bbLowerFilter.maxPct ?? 2));
     params.set('bbLowerFilterBelowLine', bbLowerFilter.belowLine ?? 'middle');
-    params.set('bbLowerFilterBelowLineTolPct', String(bbLowerFilter.belowLineTolPct ?? 0));
+    params.set('bbLowerFilterBelowLineTolPct', String(bbLowerFilter.belowLineTolPct ?? 1));
   }
   if (rsi5mFilter?.enabled) {
     params.set('rsi5mFilterEnabled', '1');

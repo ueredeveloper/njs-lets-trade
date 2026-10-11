@@ -464,7 +464,7 @@ const RSI_MOM_DEFAULT_PREFS = {
   bbLowerFilterInterval: '15m',
   bbLowerFilterMaxPct: 2,
   bbLowerFilterBelowLine: 'middle',
-  bbLowerFilterBelowLineTolPct: 0,
+  bbLowerFilterBelowLineTolPct: 1,
   rsi5mFilterEnabled: true,
   rsi5mFilterThreshold: 70,
   newHighFilterEnabled: false,
@@ -566,6 +566,12 @@ function loadRsiMomPrefs() {
       if (saved.targetMode === undefined) {
         if (saved.targetPct === 0) { saved.targetMode = 'off'; saved.stopMode = 'continuous'; saved.targetPct = RSI_MOM_DEFAULT_PREFS.targetPct; }
         else { saved.targetMode = 'fixed'; if (saved.stopMode === undefined) saved.stopMode = 'fixed'; }
+      }
+      // Migração: a tolerância do "Abaixo da" (BB inf.) nasceu com padrão 0 (v1.161.0) e passou
+      // pra 1% — prefs gravados naquela janela herdariam o 0. Leva uma vez pro novo padrão.
+      if (saved.bbBelowLineTolDefaultV !== 1) {
+        saved.bbLowerFilterBelowLineTolPct = RSI_MOM_DEFAULT_PREFS.bbLowerFilterBelowLineTolPct;
+        saved.bbBelowLineTolDefaultV = 1;
       }
       return { ...RSI_MOM_DEFAULT_PREFS, ...saved };
     }
@@ -2302,7 +2308,7 @@ function RsiMomentumStats({ autoCalc }) {
               <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[56px]" title={t('stats.tip.bb_below_line_tol')}>
                 <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.bb_below_line_tol')}</label>
                 <select className={inp}
-                  value={prefs.bbLowerFilterBelowLineTolPct ?? 0}
+                  value={prefs.bbLowerFilterBelowLineTolPct ?? 1}
                   onChange={(e) => patchPrefs({ bbLowerFilterBelowLineTolPct: Number(e.target.value) })}>
                   {RSI_MOM_BB_BELOW_LINE_TOL_OPTIONS.map((v) => <option key={v} value={v}>{v === 0 ? t('stats.bb_below_line_tol.none') : `+${v}%`}</option>)}
                 </select>

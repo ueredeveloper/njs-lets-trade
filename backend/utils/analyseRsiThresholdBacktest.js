@@ -1399,7 +1399,7 @@ function computeMacdWhatIf(occurrences, interval) {
  * @param {string}  [options.bbLowerFilter.belowLine='middle']  Regra extra na MESMA Bollinger: o preço do
  *   sinal precisa estar ABAIXO dessa linha — 'middle' (mediana/SMA20, padrão), 'upper' (superior) ou
  *   'none' (desliga a regra, só vale a distância da inferior).
- * @param {number}  [options.bbLowerFilter.belowLineTolPct=0]  Tolerância da regra belowLine (0|1|2|3):
+ * @param {number}  [options.bbLowerFilter.belowLineTolPct=1]  Tolerância da regra belowLine (0|1|2|3):
  *   o preço pode ficar até X% ACIMA da linha. 0 = estritamente abaixo.
  * @param {object} [options.rsi5mFilter]  Mesmo entry.rsi5mFilter do bot ao vivo (ver checkRsi5mFilter
  *   em backend/bot/rsi-momentum/strategyEngine.js): exige RSI(14) do candle de 5m fechado no

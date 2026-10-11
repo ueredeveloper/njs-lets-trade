@@ -1866,7 +1866,7 @@ export default function SettingsSidebar({ open, onClose }) {
                           <span className="text-[9px] text-p5/40">{t('stats.bb_below_line_tol')}</span>
                           <select
                             className={`${inp} w-full`}
-                            value={rsiMomentumConfig.entry.bbLowerFilter?.belowLineTolPct ?? 0}
+                            value={rsiMomentumConfig.entry.bbLowerFilter?.belowLineTolPct ?? 1}
                             onChange={(e) => patchRsiMomentumNested('entry', 'bbLowerFilter', { belowLineTolPct: Number(e.target.value) })}
                           >
                             {RSI_MOMENTUM_BB_BELOW_LINE_TOL_OPTIONS.map((v) => <option key={v} value={v}>{v === 0 ? t('stats.bb_below_line_tol.none') : `+${v}%`}</option>)}

@@ -124,7 +124,7 @@ router.get('/rsi-threshold-backtest', async (req, res) => {
             maxPct:   bbLowerFilterMaxPct === 'off' ? 'off'
                 : (bbLowerFilterMaxPct != null && bbLowerFilterMaxPct !== '' ? parseFloat(bbLowerFilterMaxPct) : 2),
             belowLine: bbLowerFilterBelowLine ?? 'middle',
-            belowLineTolPct: bbLowerFilterBelowLineTolPct != null && bbLowerFilterBelowLineTolPct !== '' ? Number(bbLowerFilterBelowLineTolPct) : 0,
+            belowLineTolPct: bbLowerFilterBelowLineTolPct != null && bbLowerFilterBelowLineTolPct !== '' ? Number(bbLowerFilterBelowLineTolPct) : 1,
         } : null,
         rsi5mFilter: rsi5mFilterEnabled === '1' ? {
             enabled:   true,

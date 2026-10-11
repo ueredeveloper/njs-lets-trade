@@ -117,7 +117,7 @@ const RSI_MOMENTUM_DEFAULTS = {
      *  próprio (default 15m), mesmo do backtest (options.bbLowerFilter). maxPct = distância máxima %
      *  do preço do sinal ACIMA da banda inferior ('off' desliga); belowLine = preço tem que estar
      *  ABAIXO da 'middle' (mediana) / 'upper', ou 'none'. Ver checkBbLowerFilter em strategyEngine.js. */
-    bbLowerFilter: { enabled: false, interval: '15m', maxPct: 2, belowLine: 'middle', belowLineTolPct: 0 },
+    bbLowerFilter: { enabled: false, interval: '15m', maxPct: 2, belowLine: 'middle', belowLineTolPct: 1 },
     /** Ligado por padrão (4h, janela 50 candles) — filtro/alvo por Suporte-Resistência, mesmo
      *  detectSupportResistance do gráfico e do backtest (options.supportResistance em
      *  analyseRsiThresholdBacktest.js). No bot as zonas são recalculadas SEMPRE do "agora"

@@ -93,7 +93,7 @@ export function buildRsiMomCommonOptions(p, candleCount, tradeInterval) {
       interval: p.bbLowerFilterInterval ?? '15m',
       maxPct: p.bbLowerFilterMaxPct ?? 2,
       belowLine: p.bbLowerFilterBelowLine ?? 'middle',
-      belowLineTolPct: p.bbLowerFilterBelowLineTolPct ?? 0,
+      belowLineTolPct: p.bbLowerFilterBelowLineTolPct ?? 1,
     } : null,
     rsi5mFilter: p.rsi5mFilterEnabled ? {
       enabled: true,
