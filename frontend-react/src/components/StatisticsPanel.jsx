@@ -351,6 +351,8 @@ const RSI_MOM_BB_LOWER_INTERVAL_OPTIONS = ['5m', '15m', '30m', '1h', '2h', '4h',
 const RSI_MOM_BB_LOWER_MAX_PCT_OPTIONS = ['off', 0, 0.5, 1, 1.5, 2, 3, 4, 5, 7, 10];
 /** Linha da MESMA Bollinger abaixo da qual o preço do sinal precisa estar (padrão: mediana). */
 const RSI_MOM_BB_LOWER_BELOW_LINE_OPTIONS = ['middle', 'upper', 'none'];
+// Tolerância da regra "abaixo da linha": aceita o preço até X% ACIMA da linha (0 = estrito).
+const RSI_MOM_BB_BELOW_LINE_TOL_OPTIONS = [0, 1, 2, 3];
 /** Limiar do filtro "RSI 5m" (mesmo entry.rsi5mFilter do bot ao vivo) — RSI(14) do candle de 5m
  *  no fechamento do candle do sinal precisa estar ACIMA disso. Grade da análise offline. */
 const RSI_MOM_RSI5M_OPTIONS = [55, 60, 65, 70, 75, 80, 85, 90];
@@ -462,6 +464,7 @@ const RSI_MOM_DEFAULT_PREFS = {
   bbLowerFilterInterval: '15m',
   bbLowerFilterMaxPct: 2,
   bbLowerFilterBelowLine: 'middle',
+  bbLowerFilterBelowLineTolPct: 0,
   rsi5mFilterEnabled: true,
   rsi5mFilterThreshold: 70,
   newHighFilterEnabled: false,
@@ -2295,6 +2298,16 @@ function RsiMomentumStats({ autoCalc }) {
                 {RSI_MOM_BB_LOWER_BELOW_LINE_OPTIONS.map((v) => <option key={v} value={v}>{t(`stats.bb_below_line.${v}`)}</option>)}
               </select>
             </div>
+            {(prefs.bbLowerFilterBelowLine ?? 'middle') !== 'none' && (
+              <div className="flex flex-col gap-0 md:gap-0.5 flex-1 min-w-[56px]" title={t('stats.tip.bb_below_line_tol')}>
+                <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.bb_below_line_tol')}</label>
+                <select className={inp}
+                  value={prefs.bbLowerFilterBelowLineTolPct ?? 0}
+                  onChange={(e) => patchPrefs({ bbLowerFilterBelowLineTolPct: Number(e.target.value) })}>
+                  {RSI_MOM_BB_BELOW_LINE_TOL_OPTIONS.map((v) => <option key={v} value={v}>{v === 0 ? t('stats.bb_below_line_tol.none') : `+${v}%`}</option>)}
+                </select>
+              </div>
+            )}
           </>
         )}
 
@@ -2838,7 +2851,7 @@ function RsiMomentumStats({ autoCalc }) {
                   value={[
                     result.bbLowerBlockedCount,
                     result.bbLowerFilter.maxPct != null && `BB inf. ≤ ${result.bbLowerFilter.maxPct}%`,
-                    result.bbLowerFilter.belowLine && result.bbLowerFilter.belowLine !== 'none' && `< ${t(`stats.bb_below_line.${result.bbLowerFilter.belowLine}`)}`,
+                    result.bbLowerFilter.belowLine && result.bbLowerFilter.belowLine !== 'none' && `< ${t(`stats.bb_below_line.${result.bbLowerFilter.belowLine}`)}${result.bbLowerFilter.belowLineTolPct > 0 ? ` +${result.bbLowerFilter.belowLineTolPct}%` : ''}`,
                     result.bbLowerFilter.interval,
                   ].filter((x) => x !== false && x != null).join(' · ')}
                   highlight="text-amber-500"

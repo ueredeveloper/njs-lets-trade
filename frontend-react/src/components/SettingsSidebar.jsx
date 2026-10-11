@@ -4,7 +4,7 @@ import { reloadCandles, getMaCrossScreenerConfig, saveMaCrossScreenerConfig,
   getRsiMomentumConfig, saveRsiMomentumConfig,
   getRsiMomentumCuratedList,
   getCacheSettings, saveCacheSettings } from '../services/api';
-import { RSI_MOMENTUM_ALL_INTERVALS, RSI_MOMENTUM_BB_LOWER_MAX_PCT_OPTIONS, RSI_MOMENTUM_BB_LOWER_BELOW_LINE_OPTIONS, RSI_MOMENTUM_BB_PERIODS, RSI_MOMENTUM_BB_STD_DEVS, RSI_MOMENTUM_TRAILING_TARGET_STEP_OPTIONS, RSI_MOMENTUM_BANDWIDTH_LOOKBACK_OPTIONS,
+import { RSI_MOMENTUM_ALL_INTERVALS, RSI_MOMENTUM_BB_LOWER_MAX_PCT_OPTIONS, RSI_MOMENTUM_BB_LOWER_BELOW_LINE_OPTIONS, RSI_MOMENTUM_BB_BELOW_LINE_TOL_OPTIONS, RSI_MOMENTUM_BB_PERIODS, RSI_MOMENTUM_BB_STD_DEVS, RSI_MOMENTUM_TRAILING_TARGET_STEP_OPTIONS, RSI_MOMENTUM_BANDWIDTH_LOOKBACK_OPTIONS,
   RSI_MOMENTUM_TARGET_MODE_OPTIONS, RSI_MOMENTUM_STOP_MODE_OPTIONS, RSI_MOMENTUM_TARGET_PCT_OPTIONS, RSI_MOMENTUM_COIN_STEP_OPTIONS, RSI_MOMENTUM_STOP_STEP_OPTIONS, RSI_MOMENTUM_STOP_PCT_OPTIONS,
   RSI_MOMENTUM_PIVOT_PCT_OPTIONS, RSI_MOMENTUM_PIVOT_GAIN_OPTIONS, RSI_MOMENTUM_WIDTH_PCT_OPTIONS, RSI_MOMENTUM_ATR_MULT_OPTIONS, RSI_MOMENTUM_HARD_TP_OPTIONS,
   RSI_MOMENTUM_SR_INTERVAL_OPTIONS, RSI_MOMENTUM_SR_CANDLE_COUNT_OPTIONS, RSI_MOMENTUM_SR_RANK_OPTIONS, RSI_MOMENTUM_SR_ENTRY_MAX_PCT_OPTIONS, RSI_MOMENTUM_SR_STOP_RANK_OPTIONS,
@@ -1861,6 +1861,18 @@ export default function SettingsSidebar({ open, onClose }) {
                           {RSI_MOMENTUM_BB_LOWER_BELOW_LINE_OPTIONS.map((v) => <option key={v} value={v}>{t(`stats.bb_below_line.${v}`)}</option>)}
                         </select>
                       </label>
+                      {(rsiMomentumConfig.entry.bbLowerFilter?.belowLine ?? 'middle') !== 'none' && (
+                        <label className="flex flex-col gap-1" title={t('stats.tip.bb_below_line_tol')}>
+                          <span className="text-[9px] text-p5/40">{t('stats.bb_below_line_tol')}</span>
+                          <select
+                            className={`${inp} w-full`}
+                            value={rsiMomentumConfig.entry.bbLowerFilter?.belowLineTolPct ?? 0}
+                            onChange={(e) => patchRsiMomentumNested('entry', 'bbLowerFilter', { belowLineTolPct: Number(e.target.value) })}
+                          >
+                            {RSI_MOMENTUM_BB_BELOW_LINE_TOL_OPTIONS.map((v) => <option key={v} value={v}>{v === 0 ? t('stats.bb_below_line_tol.none') : `+${v}%`}</option>)}
+                          </select>
+                        </label>
+                      )}
                     </div>
                   )}
                 </div>

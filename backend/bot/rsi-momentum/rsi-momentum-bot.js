@@ -336,7 +336,7 @@ function logStartupConfig(body, source = null, { logFn = console.log, scanner = 
   if (bbl?.enabled) {
     const bblParts = [];
     if (bbl.maxPct !== 'off') bblParts.push(`≤${bbl.maxPct ?? 2}% da inf`);
-    if (bbl.belowLine !== 'none') bblParts.push(`< ${bbl.belowLine === 'upper' ? 'sup' : 'mediana'}`);
+    if (bbl.belowLine !== 'none') bblParts.push(`< ${bbl.belowLine === 'upper' ? 'sup' : 'mediana'}${bbl.belowLineTolPct > 0 ? ` +${bbl.belowLineTolPct}%` : ''}`);
     filtros.push(`BB ${bbl.interval ?? '15m'} ${bblParts.join(' ') || '(sem regra)'}`);
   }
   if (sr?.enabled) filtros.push(`S/R ${sr.interval ?? '4h'} (≤${sr.entryMaxPct}% do ${sr.entrySupportRank}º sup → ${sr.exitResistanceRank}ª resist)`);

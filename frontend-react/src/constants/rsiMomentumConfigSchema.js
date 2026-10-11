@@ -73,6 +73,7 @@ export const RSI_MOMENTUM_REENTRY_RSI_OPTIONS = [65, 66, 67, 68, 69, 70, 71, 72,
 /** Filtro "perto da banda inferior" (entry.bbLowerFilter) — mesmos leques das Estatísticas. */
 export const RSI_MOMENTUM_BB_LOWER_MAX_PCT_OPTIONS = ['off', 0, 0.5, 1, 1.5, 2, 3, 4, 5, 7, 10];
 export const RSI_MOMENTUM_BB_LOWER_BELOW_LINE_OPTIONS = ['middle', 'upper', 'none'];
+export const RSI_MOMENTUM_BB_BELOW_LINE_TOL_OPTIONS = [0, 1, 2, 3];
 export const RSI_MOMENTUM_REENTRY_RSI5M_OPTIONS = [60, 65, 68, 69, 70, 72, 75, 80];
 
 export const RSI_MOMENTUM_DEFAULTS = {
@@ -95,7 +96,7 @@ export const RSI_MOMENTUM_DEFAULTS = {
     macdFilter: { enabled: true, interval: '1h' },
     higherRsiFilter: { enabled: true, minRsi: 60 },
     emaCrossFilter: { enabled: false, interval: '8h' },
-    bbLowerFilter: { enabled: false, interval: '15m', maxPct: 2, belowLine: 'middle' },
+    bbLowerFilter: { enabled: false, interval: '15m', maxPct: 2, belowLine: 'middle', belowLineTolPct: 0 },
     supportResistance: {
       enabled: true, interval: '4h', candleCount: 50,
       entrySupportRank: 1, exitResistanceRank: 3, entryMaxPct: 5,

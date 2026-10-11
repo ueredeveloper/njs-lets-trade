@@ -989,7 +989,8 @@ function statsConfigToRsiMomentumBody({ symbol, interval, config = {}, priorRsiF
         ? { enabled: true,
             interval: c.bbLowerFilter.interval ?? '15m',
             maxPct: c.bbLowerFilter.maxPct === 'off' ? 'off' : num(c.bbLowerFilter.maxPct, 2),
-            belowLine: c.bbLowerFilter.belowLine ?? 'middle' }
+            belowLine: c.bbLowerFilter.belowLine ?? 'middle',
+            belowLineTolPct: num(c.bbLowerFilter.belowLineTolPct, 0) }
         : { enabled: false },
       supportResistance: c.supportResistance?.enabled
         ? { enabled: true,
@@ -1104,6 +1105,7 @@ function rsiMomentumConfigToStatsPrefs(n) {
     bbLowerFilterInterval: e.bbLowerFilter.interval,
     bbLowerFilterMaxPct: e.bbLowerFilter.maxPct,
     bbLowerFilterBelowLine: e.bbLowerFilter.belowLine,
+    bbLowerFilterBelowLineTolPct: e.bbLowerFilter.belowLineTolPct ?? 0,
     rsi5mFilterEnabled: e.rsi5mFilter.enabled,
     rsi5mFilterThreshold: e.rsi5mFilter.threshold,
     reinforceOnStopEnabled: x.reinforceOnStop.enabled,

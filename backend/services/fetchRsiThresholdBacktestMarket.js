@@ -15,7 +15,7 @@ const DEFAULT_USER_ID = process.env.SUPABASE_DEFAULT_USER_ID ?? 'ueredeveloper';
 //     &macdFilterEnabled=1&macdFilterInterval=1h
 //     &higherRsiFilterEnabled=1&higherRsiFilterMinRsi=50
 //     &emaCrossFilterEnabled=1&emaCrossFilterInterval=8h
-//     &bbLowerFilterEnabled=1&bbLowerFilterInterval=15m&bbLowerFilterMaxPct=2|off&bbLowerFilterBelowLine=middle   (preço do sinal até X% acima da banda inferior de Bollinger e abaixo da mediana|superior|none)
+//     &bbLowerFilterEnabled=1&bbLowerFilterInterval=15m&bbLowerFilterMaxPct=2|off&bbLowerFilterBelowLine=middle&bbLowerFilterBelowLineTolPct=0|1|2|3   (preço do sinal até X% acima da banda inferior de Bollinger e abaixo da mediana|superior|none)
 //     &trailingStopEnabled=1&trailingStopMode=continuous&trailingStopStartPct=5&trailingStopCoinStepPct=1&trailingStopStopStepPct=1
 //     (modos: continuous | twoPhase | peakTrail | atrTrail — ver parseTrailingStopQuery.js)
 //     &targetMode=continuous&trailingTargetCoinStepPct=3&trailingTargetStepPct=3
@@ -38,7 +38,7 @@ router.get('/rsi-threshold-backtest-market', async (req, res) => {
         macdFilterEnabled, macdFilterInterval,
         higherRsiFilterEnabled, higherRsiFilterMinRsi,
         emaCrossFilterEnabled, emaCrossFilterInterval,
-        bbLowerFilterEnabled, bbLowerFilterInterval, bbLowerFilterMaxPct, bbLowerFilterBelowLine,
+        bbLowerFilterEnabled, bbLowerFilterInterval, bbLowerFilterMaxPct, bbLowerFilterBelowLine, bbLowerFilterBelowLineTolPct,
         rsi5mFilterEnabled, rsi5mFilterThreshold,
         newHighFilterEnabled, newHighFilterLookback, newHighFilterMarginPct,
         hardTakeProfitEnabled, hardTakeProfitPct,
@@ -122,6 +122,7 @@ router.get('/rsi-threshold-backtest-market', async (req, res) => {
             maxPct:   bbLowerFilterMaxPct === 'off' ? 'off'
                 : (bbLowerFilterMaxPct != null && bbLowerFilterMaxPct !== '' ? parseFloat(bbLowerFilterMaxPct) : 2),
             belowLine: bbLowerFilterBelowLine ?? 'middle',
+            belowLineTolPct: bbLowerFilterBelowLineTolPct != null && bbLowerFilterBelowLineTolPct !== '' ? Number(bbLowerFilterBelowLineTolPct) : 0,
         } : null,
         rsi5mFilter: rsi5mFilterEnabled === '1' ? {
             enabled:   true,

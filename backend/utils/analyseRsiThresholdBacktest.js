@@ -12,6 +12,7 @@ const { computeDailyEntryStats } = require('./dailyEntryStats');
 const { computeAvgTradeDurationMs } = require('./tradeDurationStats');
 const { detectSupportResistance } = require('./supportResistance');
 const { detectPivotPointsHighLow } = require('./pivotPointsHighLow');
+const { normalizeBbBelowLineTolPct, isAboveBbLineWithTolerance } = require('./bbBelowLineTolerance');
 
 const RSI_PERIOD = 14;
 const DEFAULT_CANDLE_COUNT = 1000;
@@ -1398,6 +1399,8 @@ function computeMacdWhatIf(occurrences, interval) {
  * @param {string}  [options.bbLowerFilter.belowLine='middle']  Regra extra na MESMA Bollinger: o preço do
  *   sinal precisa estar ABAIXO dessa linha — 'middle' (mediana/SMA20, padrão), 'upper' (superior) ou
  *   'none' (desliga a regra, só vale a distância da inferior).
+ * @param {number}  [options.bbLowerFilter.belowLineTolPct=0]  Tolerância da regra belowLine (0|1|2|3):
+ *   o preço pode ficar até X% ACIMA da linha. 0 = estritamente abaixo.
  * @param {object} [options.rsi5mFilter]  Mesmo entry.rsi5mFilter do bot ao vivo (ver checkRsi5mFilter
  *   em backend/bot/rsi-momentum/strategyEngine.js): exige RSI(14) do candle de 5m fechado no
  *   FECHAMENTO do candle do sinal > `threshold`. Toggle próprio nas Estatísticas. Fail-open no warmup.
@@ -1584,6 +1587,7 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
         ? null
         : (Number.isFinite(bbLowerMaxPctRaw) ? Math.max(0, Math.min(50, bbLowerMaxPctRaw)) : 2);
     const bbLowerBelowLine = ['middle', 'upper', 'none'].includes(bbLowerFilter?.belowLine) ? bbLowerFilter.belowLine : 'middle';
+    const bbLowerBelowLineTolPct = normalizeBbBelowLineTolPct(bbLowerFilter?.belowLineTolPct);
 
     // Filtro RSI 5m (mesmo entry.rsi5mFilter do bot ao vivo — ver checkRsi5mFilter em
     // backend/bot/rsi-momentum/strategyEngine.js): exige RSI(14) do candle de 5m fechado no
@@ -2127,7 +2131,8 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
                     const lineValue = bbLowerBelowLine === 'middle' ? bbAt.middle
                         : bbLowerBelowLine === 'upper' ? bbAt.upper
                         : null;
-                    const notBelowLine = lineValue != null && Number.isFinite(lineValue) && signalPrice >= lineValue;
+                    const notBelowLine = lineValue != null && Number.isFinite(lineValue)
+                        && isAboveBbLineWithTolerance(signalPrice, lineValue, bbLowerBelowLineTolPct);
                     if (tooFar || notBelowLine) {
                         bbLowerBlocked++;
                         continue;
@@ -2439,7 +2444,7 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
         higherRsiBlockedCount: higherRsiEnabled ? higherRsiBlocked : 0,
         emaCrossFilter: emaCrossEnabled ? { interval: emaCrossInterval, fastPeriod: EMA_FAST_PERIOD, slowPeriod: EMA_SLOW_PERIOD } : null,
         emaCrossBlockedCount: emaCrossEnabled ? emaCrossBlocked : 0,
-        bbLowerFilter: bbLowerEnabled ? { interval: bbLowerInterval, maxPct: bbLowerMaxPct, belowLine: bbLowerBelowLine, period: BB_PERIOD, stdDev: BB_STDDEV } : null,
+        bbLowerFilter: bbLowerEnabled ? { interval: bbLowerInterval, maxPct: bbLowerMaxPct, belowLine: bbLowerBelowLine, belowLineTolPct: bbLowerBelowLineTolPct, period: BB_PERIOD, stdDev: BB_STDDEV } : null,
         bbLowerBlockedCount: bbLowerEnabled ? bbLowerBlocked : 0,
         rsi5mFilter: rsi5mEnabled ? { interval: '5m', threshold: rsi5mThreshold } : null,
         rsi5mBlockedCount: rsi5mEnabled ? rsi5mBlocked : 0,

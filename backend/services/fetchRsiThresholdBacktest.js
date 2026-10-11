@@ -19,7 +19,7 @@ const DEFAULT_USER_ID = process.env.SUPABASE_DEFAULT_USER_ID ?? 'ueredeveloper';
 //     &macdFilterEnabled=1&macdFilterInterval=1h
 //     &higherRsiFilterEnabled=1&higherRsiFilterMinRsi=50   (RSI 1h mínimo — confirmação multi-timeframe)
 //     &emaCrossFilterEnabled=1&emaCrossFilterInterval=8h   (EMA9 acima da EMA21 no intervalo escolhido)
-//     &bbLowerFilterEnabled=1&bbLowerFilterInterval=15m&bbLowerFilterMaxPct=2|off&bbLowerFilterBelowLine=middle   (preço do sinal até X% acima da banda inferior de Bollinger e abaixo da mediana|superior|none)
+//     &bbLowerFilterEnabled=1&bbLowerFilterInterval=15m&bbLowerFilterMaxPct=2|off&bbLowerFilterBelowLine=middle&bbLowerFilterBelowLineTolPct=0|1|2|3   (preço do sinal até X% acima da banda inferior de Bollinger e abaixo da mediana|superior|none)
 //     &trailingStopEnabled=1&trailingStopMode=continuous&trailingStopStartPct=5&trailingStopCoinStepPct=1&trailingStopStopStepPct=1
 //     &trailingStopMode=twoPhase&trailingStopPivotPct=1&trailingStopACoinStepPct=3&trailingStopAStopStepPct=2.5&trailingStopBCoinStepPct=3&trailingStopBStopStepPct=1
 //     &trailingStopMode=peakTrail&trailingStopPivotGainPct=5&trailingStopWNearPct=4&trailingStopWFarPct=9
@@ -45,7 +45,7 @@ router.get('/rsi-threshold-backtest', async (req, res) => {
         macdFilterEnabled, macdFilterInterval,
         higherRsiFilterEnabled, higherRsiFilterMinRsi,
         emaCrossFilterEnabled, emaCrossFilterInterval,
-        bbLowerFilterEnabled, bbLowerFilterInterval, bbLowerFilterMaxPct, bbLowerFilterBelowLine,
+        bbLowerFilterEnabled, bbLowerFilterInterval, bbLowerFilterMaxPct, bbLowerFilterBelowLine, bbLowerFilterBelowLineTolPct,
         rsi5mFilterEnabled, rsi5mFilterThreshold,
         newHighFilterEnabled, newHighFilterLookback, newHighFilterMarginPct,
         hardTakeProfitEnabled, hardTakeProfitPct,
@@ -124,6 +124,7 @@ router.get('/rsi-threshold-backtest', async (req, res) => {
             maxPct:   bbLowerFilterMaxPct === 'off' ? 'off'
                 : (bbLowerFilterMaxPct != null && bbLowerFilterMaxPct !== '' ? parseFloat(bbLowerFilterMaxPct) : 2),
             belowLine: bbLowerFilterBelowLine ?? 'middle',
+            belowLineTolPct: bbLowerFilterBelowLineTolPct != null && bbLowerFilterBelowLineTolPct !== '' ? Number(bbLowerFilterBelowLineTolPct) : 0,
         } : null,
         rsi5mFilter: rsi5mFilterEnabled === '1' ? {
             enabled:   true,

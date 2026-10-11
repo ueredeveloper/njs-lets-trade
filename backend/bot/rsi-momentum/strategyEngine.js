@@ -6,6 +6,7 @@ const { computeStopLossFloor } = require('../shared/stopLossFloor');
 const { bollingerBandWidthSeries } = require('../../utils/indicatorGrowthEngines');
 const { bandWidthRobustMean } = require('../../utils/removeOutliersIQR');
 const { detectSupportResistance } = require('../../utils/supportResistance');
+const { normalizeBbBelowLineTolPct, isAboveBbLineWithTolerance } = require('../../utils/bbBelowLineTolerance');
 
 const RSI_PERIOD = 14;
 // Pullback e expiração da ordem limite de entrada são avaliados minuto a minuto, SEMPRE em
@@ -292,7 +293,8 @@ function checkEmaCrossFilter(config, cMap) {
  * em analyseRsiThresholdBacktest.js), Bollinger 20/2 no intervalo próprio entry.bbLowerFilter.interval
  * (default 15m), lida no candle FECHADO mais recente. Duas regras, cada uma desligável:
  *   - maxPct: preço do sinal no máximo X% ACIMA da banda inferior ('off' desliga);
- *   - belowLine: preço do sinal ABAIXO da 'middle' (mediana, padrão) ou 'upper' ('none' desliga).
+ *   - belowLine: preço do sinal ABAIXO da 'middle' (mediana, padrão) ou 'upper' ('none' desliga);
+ *     belowLineTolPct (0|1|2|3) tolera até X% acima da linha.
  * Sem candles suficientes pro warmup ainda, libera (fail-open, como MACD/EMA).
  */
 function checkBbLowerFilter(config, cMap, price) {
@@ -314,17 +316,18 @@ function checkBbLowerFilter(config, cMap, price) {
     const round = (v) => Math.round(v * 1e8) / 1e8;
     const maxPct = f.maxPct === 'off' ? null : Number(f.maxPct ?? 2);
     const belowLine = ['middle', 'upper', 'none'].includes(f.belowLine) ? f.belowLine : 'middle';
+    const belowLineTolPct = normalizeBbBelowLineTolPct(f.belowLineTolPct);
     const distPct = Math.round(((price - b.lower) / b.lower) * 10000) / 100;
     const info = {
         interval: iv, price: round(price), lower: round(b.lower), middle: round(b.middle), upper: round(b.upper),
-        distPct, maxPct, belowLine,
+        distPct, maxPct, belowLine, belowLineTolPct,
     };
 
     if (maxPct != null && Number.isFinite(maxPct) && distPct > maxPct) {
         return { allowed: false, reason: 'BB_LOWER_TOO_FAR', ...info };
     }
     const lineValue = belowLine === 'middle' ? b.middle : belowLine === 'upper' ? b.upper : null;
-    if (lineValue != null && price >= lineValue) {
+    if (lineValue != null && isAboveBbLineWithTolerance(price, lineValue, belowLineTolPct)) {
         return { allowed: false, reason: 'BB_NOT_BELOW_LINE', ...info, lineValue: round(lineValue) };
     }
     return { allowed: true, ...info };

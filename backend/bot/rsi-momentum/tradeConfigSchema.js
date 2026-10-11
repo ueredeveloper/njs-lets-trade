@@ -117,7 +117,7 @@ const RSI_MOMENTUM_DEFAULTS = {
      *  próprio (default 15m), mesmo do backtest (options.bbLowerFilter). maxPct = distância máxima %
      *  do preço do sinal ACIMA da banda inferior ('off' desliga); belowLine = preço tem que estar
      *  ABAIXO da 'middle' (mediana) / 'upper', ou 'none'. Ver checkBbLowerFilter em strategyEngine.js. */
-    bbLowerFilter: { enabled: false, interval: '15m', maxPct: 2, belowLine: 'middle' },
+    bbLowerFilter: { enabled: false, interval: '15m', maxPct: 2, belowLine: 'middle', belowLineTolPct: 0 },
     /** Ligado por padrão (4h, janela 50 candles) — filtro/alvo por Suporte-Resistência, mesmo
      *  detectSupportResistance do gráfico e do backtest (options.supportResistance em
      *  analyseRsiThresholdBacktest.js). No bot as zonas são recalculadas SEMPRE do "agora"
@@ -358,7 +358,7 @@ function normalizeEmaCrossFilter(block) {
 }
 
 /** Filtro "perto da banda inferior de Bollinger" — mesmo shape do backtest (options.bbLowerFilter).
- *  maxPct 0..50 ou 'off'; belowLine 'middle' | 'upper' | 'none'. */
+ *  maxPct 0..50 ou 'off'; belowLine 'middle' | 'upper' | 'none'; belowLineTolPct 0|1|2|3 (% acima da linha tolerado). */
 function normalizeBbLowerFilter(block) {
   const d = RSI_MOMENTUM_DEFAULTS.entry.bbLowerFilter;
   const src = block ?? {};
@@ -368,6 +368,7 @@ function normalizeBbLowerFilter(block) {
     interval: normalizeInterval(src.interval, d.interval),
     maxPct: src.maxPct === 'off' ? 'off' : (Number.isFinite(rawPct) ? Math.max(0, Math.min(50, rawPct)) : d.maxPct),
     belowLine: ['middle', 'upper', 'none'].includes(src.belowLine) ? src.belowLine : d.belowLine,
+    belowLineTolPct: [0, 1, 2, 3].includes(Number(src.belowLineTolPct)) ? Number(src.belowLineTolPct) : d.belowLineTolPct,
   };
 }
 
