@@ -320,6 +320,17 @@ atual vs. preço do último sinal. `backfill-missed-signals.js` usa a config de 
 Obs.: a espera do pullback (`limitWaitCandles`) conta desde a abertura do candle do sinal, não da ordem —
 na prática a limite fica ~35–55 min aberta com 60 configurado.
 
+### Espera do pullback = mesma regra no backtest (v1.163.0)
+
+`entry.limitWaitCandles` é em candles de **1 MINUTO** (não do `entry.interval`), contados da abertura do
+candle do sinal — padrão **90** (era 20; varredura 11/10/2026 nos exclusivos 3m: mediana do pullback de 1%
+~78 min). O backtest (`analyseRsiThresholdBacktest.js#resolveFromSignal`, `fillDeadlineMs`) agora expira a
+limite igual ao bot e deixa a moeda ocupada até a expiração; antes aceitava o toque horas/dias depois e
+inflava o P&L. Estatísticas: campo **Espera (min)** + botão **Sugerir** (roda a simulação com várias esperas
+e escolhe a menor com >= 80% do melhor P&L). Seletor **Moedas**: Uma moeda / Todas / **Bots exclusivos**
+(`onlyCurated=1` → só `rsi_multi_bot_state.curated`, cada um na própria corretora, sem filtro de volume,
+config do painel pra todos).
+
 ### Watchlist curada (`rsi_multi_bot_state.curated = true`)
 
 Moeda vigiada **indefinidamente** pelo bot mesmo que o scanner Binance nunca a sinalize (ex.:

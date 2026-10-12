@@ -68,7 +68,7 @@ const MAX_ONE_MINUTE_CANDLES = 3000;
  * assim que a posição entra, arma alvo E stop simultaneamente; o que for tocado primeiro
  * encerra a operação. `scanCandles` deve conter só candles com openTime > signalCloseMs.
  */
-function resolveFromSignal(scanCandles, signalPrice, { pullbackPct, targetPct, stopLossPct, stopPriceOverride, targetPriceOverride, trailingStop, trailingTarget, targetMode, hardTakeProfitPct, reinforceOnStop, srStopTrailing, positionSizeUsd = 1 }) {
+function resolveFromSignal(scanCandles, signalPrice, { pullbackPct, fillDeadlineMs = null, targetPct, stopLossPct, stopPriceOverride, targetPriceOverride, trailingStop, trailingTarget, targetMode, hardTakeProfitPct, reinforceOnStop, srStopTrailing, positionSizeUsd = 1 }) {
     let filled = pullbackPct === 0;
     let entryTime = null;
     let entryPrice = signalPrice;
@@ -78,6 +78,9 @@ function resolveFromSignal(scanCandles, signalPrice, { pullbackPct, targetPct, s
         const limitPrice = signalPrice * (1 + pullbackPct / 100);
         filled = false;
         for (let j = 0; j < scanCandles.length; j++) {
+            // Mesma expiração do bot (checkEntryLimitExpired): a limite só vive até o fim do
+            // N-ésimo candle de 1m desde a abertura do candle do sinal.
+            if (fillDeadlineMs != null && Number(scanCandles[j].openTime) >= fillDeadlineMs) break;
             if (parseFloat(scanCandles[j].low) <= limitPrice) {
                 filled = true;
                 entryTime = scanCandles[j].openTime;
@@ -86,7 +89,7 @@ function resolveFromSignal(scanCandles, signalPrice, { pullbackPct, targetPct, s
                 break;
             }
         }
-        if (!filled) return { filled: false };
+        if (!filled) return { filled: false, expiredAtMs: fillDeadlineMs };
     }
 
     // ALVO e STOP são INDEPENDENTES.
@@ -1238,6 +1241,11 @@ function computeMacdWhatIf(occurrences, interval) {
  * @param {number} [options.pullbackPct=0]     0 = compra no close do candle do sinal. Negativo
  *   (ex.: -2) = só entra se o preço cair esse % abaixo do preço do sinal depois dele (ordem
  *   limite, avaliada minuto a minuto); se nunca cair o suficiente, fica "não preenchido".
+ * @param {number} [options.limitWaitCandles=90] Validade da limite do pullback em candles de 1
+ *   MINUTO contados da ABERTURA do candle do sinal — mesma regra do bot ao vivo
+ *   (entry.limitWaitCandles / checkEntryLimitExpired em rsi-momentum/strategyEngine.js). Não
+ *   tocou até lá = "não preenchido", e a moeda fica ocupada até a expiração (o bot não avalia
+ *   sinal novo com a limite armada).
  * @param {number} [options.targetPct=5]       Alvo de lucro (%) a partir do preço de entrada.
  * @param {number} [options.stopLossPct=5]     Stop-loss (%) a partir do preço de entrada.
  * @param {number} [options.positionSizeUsd=40] Aporte hipotético (US$) por sinal preenchido.
@@ -1458,6 +1466,7 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
     const {
         rsiThreshold   = 70,
         pullbackPct    = 0,
+        limitWaitCandles: rawLimitWaitCandles = 90,
         targetPct      = 5,
         stopLossPct    = 5,
         positionSizeUsd = 40,
@@ -1486,6 +1495,8 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
         entriesDayRange = null,
         reinforceOnStop = null,
     } = options;
+    // Mesmo clamp do schema do bot (tradeConfigSchema.js: 1..300).
+    const limitWaitCandles = Math.max(1, Math.min(300, Math.round(Number(rawLimitWaitCandles) || 90)));
 
     // "Reforço no stop" (averaging-down ladder) — ver runReinforcementLadder / JSDoc acima.
     const rfEnabled = !!reinforceOnStop?.enabled;
@@ -2310,7 +2321,9 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
         }
 
         const resolved = resolveFromSignal(scanCandles, signalPrice, {
-            pullbackPct, targetPct, stopLossPct, stopPriceOverride, hardTakeProfitPct,
+            pullbackPct,
+            fillDeadlineMs: pullbackPct !== 0 ? signalCandle.openTime + limitWaitCandles * 60_000 : null,
+            targetPct, stopLossPct, stopPriceOverride, hardTakeProfitPct,
             targetPriceOverride: srEnabled ? srTargetPrice : null,
             targetMode: targetModeResolved,
             trailingStop: trailingStopEnabled
@@ -2356,6 +2369,9 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
         if (resolved.filled) {
             occupiedUntilMs = resolved.exitTime
                 ?? (scanCandles.length ? scanCandles[scanCandles.length - 1].openTime : signalCandle.openTime);
+        } else if (resolved.expiredAtMs != null) {
+            // Limite armada e não preenchida — no bot a moeda fica PENDING até expirar.
+            occupiedUntilMs = resolved.expiredAtMs;
         }
 
         const occ = buildOccurrence(signalCandle, signalPrice, signalRsi, resolved, positionSizeUsd, cloudZone, signalRsi1h, srZone, srLines);
@@ -2398,6 +2414,7 @@ async function analyseRsiThresholdBacktest(symbol, interval, options = {}) {
         rsiThreshold,
         priorRsiCount,
         pullbackPct,
+        limitWaitCandles,
         targetPct,
         stopLossPct,
         positionSizeUsd,

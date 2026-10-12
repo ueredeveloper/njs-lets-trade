@@ -33,7 +33,7 @@ const DEFAULT_USER_ID = process.env.SUPABASE_DEFAULT_USER_ID ?? 'ueredeveloper';
 router.get('/rsi-threshold-backtest', async (req, res) => {
     const {
         symbol, interval, source, candleCount, lookbackHours, fromMs, toMs,
-        rsiThreshold, pullbackPct, targetPct, stopLossPct, positionSizeUsd,
+        rsiThreshold, pullbackPct, limitWaitCandles, targetPct, stopLossPct, positionSizeUsd,
         bandWidthEnabled, bandWidthInterval, bandWidthPeriod, bandWidthStdDev,
         bandWidthLookback, bandWidthMinPct,
         srEnabled, srInterval, srCandleCount, srEntrySupportRank, srExitResistanceRank, srEntryMaxPct,
@@ -71,6 +71,8 @@ router.get('/rsi-threshold-backtest', async (req, res) => {
         priorRsiFilter:  globalConfig?.entry?.priorRsiFilter ?? null,
         rsiThreshold:    rsiThreshold    != null ? parseFloat(rsiThreshold)    : 70,
         pullbackPct:     pullbackPct     != null ? parseFloat(pullbackPct)     : 0,
+        // Validade da limite do pullback, em candles de 1m (mesma regra do bot — entry.limitWaitCandles).
+        limitWaitCandles: limitWaitCandles != null && limitWaitCandles !== '' ? parseInt(limitWaitCandles, 10) : 90,
         targetPct:       targetPct       != null ? parseFloat(targetPct)      : 5,
         stopLossPct:     stopLossPct     != null ? parseFloat(stopLossPct)    : 5,
         positionSizeUsd: positionSizeUsd != null ? parseFloat(positionSizeUsd) : 40,

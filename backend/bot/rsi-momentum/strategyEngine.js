@@ -825,7 +825,7 @@ function evaluateEntrySignal(config, cMap) {
  * um cMap['1m'] à parte quando o pullback está ligado.
  */
 function checkEntryLimitExpired(config, cMap, entryLimit) {
-    const need = Math.max(1, Math.round(Number(config.entry?.limitWaitCandles ?? 20)));
+    const need = Math.max(1, Math.round(Number(config.entry?.limitWaitCandles ?? 90)));
     const sinceMs = Number(entryLimit?.signalOpenTime)
         || (entryLimit?.placedAt ? new Date(entryLimit.placedAt).getTime() : NaN);
     if (!Number.isFinite(sinceMs)) {

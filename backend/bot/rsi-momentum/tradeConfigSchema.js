@@ -57,7 +57,9 @@ const RSI_MOMENTUM_DEFAULTS = {
      *  checados minuto a minuto (polling.pollMs), não no candle do entry.interval. Desligado
      *  (padrão) compra a mercado assim que o RSI confirma o cruzamento (candle fechado). */
     pullback: { enabled: false, belowPct: 0.5 },
-    limitWaitCandles: 20,
+    // 90 (era 20): varredura de 11/10/2026 nos bots exclusivos 3m — mediana do pullback de 1%
+    // ~78 min desde o sinal; 20 min pegava <1/6 deles. Ver "Sugerir espera" nas Estatísticas.
+    limitWaitCandles: 90,
     /** Ligado por padrão — confirmação ADIANTADA do cruzamento: em vez de só reavaliar o RSI de
      *  entry.interval quando esse candle fecha (podendo levar até `interval` inteiro), recalcula
      *  o mesmo RSI usando o fechamento do candle mais recente de `interval` (aqui, um intervalo

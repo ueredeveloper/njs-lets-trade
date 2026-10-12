@@ -967,6 +967,8 @@ function statsConfigToRsiMomentumBody({ symbol, interval, config = {}, priorRsiF
       pullback: num(c.pullbackPct, 0) < 0
         ? { enabled: true, belowPct: Math.abs(num(c.pullbackPct, 0.5)) }
         : { enabled: false },
+      // Validade da limite do pullback (candles de 1m) — o backtest das Estatísticas aplica a mesma.
+      limitWaitCandles: num(c.limitWaitCandles, 90),
       reentryCooldownCandles: 3,
       bandWidth: c.bandWidth?.enabled
         ? { enabled: true, interval: c.bandWidth.interval ?? '5m',
@@ -1076,6 +1078,7 @@ function rsiMomentumConfigToStatsPrefs(n) {
     rsiThreshold: e.rsiThreshold,
     // Painel usa 0 ou negativo (compra só se o preço cair |x|% abaixo do sinal); bot guarda belowPct positivo.
     pullbackPct: e.pullback.enabled ? -Math.abs(e.pullback.belowPct) : 0,
+    limitWaitCandles: e.limitWaitCandles,
     targetMode: x.targetMode,
     targetPct: x.restingBracket.targetPct,
     hardTakeProfitEnabled: x.hardTakeProfit.enabled,

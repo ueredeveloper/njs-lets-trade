@@ -829,7 +829,7 @@ async function tickCore(rowId, adapter, strategy, log, session, stopSelf) {
     } catch (err) {
       return markFailed({ rowId, session, log, symbol, strategyId, message: err.message, stopSelf, signal });
     }
-    const waitN = config.entry.limitWaitCandles ?? 20;
+    const waitN = config.entry.limitWaitCandles ?? 90;
     const entryLimit = {
       ...handle,
       price: handle.price ?? signal.limitPrice,

@@ -20,13 +20,15 @@ const DEFAULT_USER_ID = process.env.SUPABASE_DEFAULT_USER_ID ?? 'ueredeveloper';
 //     (modos: continuous | twoPhase | peakTrail | atrTrail — ver parseTrailingStopQuery.js)
 //     &targetMode=continuous&trailingTargetCoinStepPct=3&trailingTargetStepPct=3
 //     &avoidCorrelatedEntries=1 (ver backend/utils/correlationGroups.js)
+//     &onlyCurated=1 (só as moedas com bot exclusivo — rsi_multi_bot_state.curated, cada uma na
+//                     própria corretora, sem filtro de volume)
 //
 // Mesmo cálculo de /rsi-threshold-backtest, mas rodado em TODOS os pares USDT ativos da
 // Binance de uma vez (sem `symbol`) — ver backend/utils/analyseRsiThresholdBacktestMarket.js.
 router.get('/rsi-threshold-backtest-market', async (req, res) => {
     const {
         interval, source, candleCount, lookbackHours, maxRows,
-        rsiThreshold, pullbackPct, targetPct, stopLossPct, positionSizeUsd,
+        rsiThreshold, pullbackPct, limitWaitCandles, targetPct, stopLossPct, positionSizeUsd,
         bandWidthEnabled, bandWidthInterval, bandWidthPeriod, bandWidthStdDev,
         bandWidthLookback, bandWidthMinPct,
         srEnabled, srInterval, srCandleCount, srEntrySupportRank, srExitResistanceRank, srEntryMaxPct,
@@ -51,6 +53,7 @@ router.get('/rsi-threshold-backtest-market', async (req, res) => {
         entriesDayRangeMin, entriesDayRangeMax,
         includeGateFavorites,
         avoidCorrelatedEntries,
+        onlyCurated,
     } = req.query;
 
     if (!interval) {
@@ -66,6 +69,8 @@ router.get('/rsi-threshold-backtest-market', async (req, res) => {
         priorRsiFilter:  globalConfig?.entry?.priorRsiFilter ?? null,
         rsiThreshold:    rsiThreshold    != null ? parseFloat(rsiThreshold)    : 70,
         pullbackPct:     pullbackPct     != null ? parseFloat(pullbackPct)     : 0,
+        // Validade da limite do pullback, em candles de 1m (mesma regra do bot — entry.limitWaitCandles).
+        limitWaitCandles: limitWaitCandles != null && limitWaitCandles !== '' ? parseInt(limitWaitCandles, 10) : 90,
         targetPct:       targetPct       != null ? parseFloat(targetPct)      : 5,
         stopLossPct:     stopLossPct     != null ? parseFloat(stopLossPct)    : 5,
         positionSizeUsd: positionSizeUsd != null ? parseFloat(positionSizeUsd) : 40,
@@ -172,6 +177,20 @@ router.get('/rsi-threshold-backtest-market', async (req, res) => {
             max: parseInt(entriesDayRangeMax, 10),
         } : null,
     };
+
+    if (onlyCurated === '1') {
+        try {
+            const rows = await sbReq('GET', 'rsi_multi_bot_state', null,
+                '?strategy_id=eq.rsi-momentum&curated=eq.true&select=symbol,exchange&order=symbol.asc');
+            options.symbolList = (Array.isArray(rows) ? rows : []).map((r) => ({
+                symbol: r.symbol, source: r.exchange === 'gate' ? 'gate' : null,
+            }));
+        } catch (err) {
+            console.error('[rsi-threshold-backtest-market] lista de bots exclusivos:', err.message);
+            return res.status(500).json({ error: `falha ao ler bots exclusivos: ${err.message}` });
+        }
+        if (!options.symbolList.length) return res.status(400).json({ error: 'nenhum bot exclusivo cadastrado' });
+    }
 
     try {
         const value = await analyseRsiThresholdBacktestMarket(options);

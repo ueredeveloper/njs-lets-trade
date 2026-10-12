@@ -123,11 +123,20 @@ async function runWithConcurrency(items, worker, concurrency) {
  *   mesma lista "Favoritos|Gate" do frontend), cada um com `source: 'gate'`. Símbolos que já
  *   existem na Binance NÃO são duplicados (a versão Binance prevalece). O filtro `minVolumeUsdt`
  *   também vale pra eles, aferido pelo volume 24h da própria Gate.io.
+ * @param {Array<{symbol:string, source:?string}>} [options.symbolList] Lista FIXA de moedas
+ *   (modo "Bots exclusivos" das Estatísticas — rsi_multi_bot_state.curated). Quando presente,
+ *   substitui a varredura do mercado: roda só nessas moedas, cada uma na própria corretora, SEM
+ *   filtro de volume (foram escolhidas a dedo) e ignorando includeGateFavorites.
  */
 async function analyseRsiThresholdBacktestMarket(options = {}) {
-    const { interval, maxRows = DEFAULT_MAX_ROWS, minVolumeUsdt = 0, includeGateFavorites = false, ...perSymbolOptions } = options;
+    const { interval, maxRows = DEFAULT_MAX_ROWS, minVolumeUsdt: rawMinVolumeUsdt = 0, includeGateFavorites = false, symbolList = null, ...perSymbolOptions } = options;
+    const fixedList = Array.isArray(symbolList) ? symbolList : null;
+    // Lista fixa (bots exclusivos) não passa pelo filtro de volume.
+    const minVolumeUsdt = fixedList ? 0 : rawMinVolumeUsdt;
 
-    const { list: allSymbols } = await getActiveUsdtPairs();
+    const allSymbols = fixedList
+        ? fixedList.map((it) => it.symbol)
+        : (await getActiveUsdtPairs()).list;
 
     let symbols = allSymbols;
     let symbolsBlockedByVolume = 0;
@@ -148,7 +157,9 @@ async function analyseRsiThresholdBacktestMarket(options = {}) {
 
     // Cada item da varredura carrega a corretora de origem. Binance = source do options (null por
     // padrão); favoritos Gate = 'gate' fixo.
-    const workItems = symbols.map((symbol) => ({ symbol, source: perSymbolOptions.source ?? null }));
+    const workItems = fixedList
+        ? fixedList.map(({ symbol, source }) => ({ symbol, source: source === 'gate' ? 'gate' : (perSymbolOptions.source ?? null) }))
+        : symbols.map((symbol) => ({ symbol, source: perSymbolOptions.source ?? null }));
 
     // ── Favoritos Gate.io ────────────────────────────────────────────────────────────────────
     // Só os símbolos que o usuário marcou como favorito da Gate (não o mercado Gate inteiro).
@@ -156,7 +167,7 @@ async function analyseRsiThresholdBacktestMarket(options = {}) {
     // entra de novo aqui (já está em workItems como par Binance).
     let gateFavoritesTotal = 0;
     let gateFavoritesBlockedByVolume = 0;
-    if (includeGateFavorites && perSymbolOptions.source !== 'gate') {
+    if (!fixedList && includeGateFavorites && perSymbolOptions.source !== 'gate') {
         try {
             const binanceSet = new Set(allSymbols);
             const favs = (await getGateFavoriteSymbols()).filter((sym) => !binanceSet.has(sym));
@@ -358,7 +369,8 @@ async function analyseRsiThresholdBacktestMarket(options = {}) {
         symbolsBlockedByVolume,
         symbolsScanned: valid.length,
         symbolsBlockedByBandWidth,
-        includeGateFavorites: !!includeGateFavorites,
+        includeGateFavorites: !fixedList && !!includeGateFavorites,
+        symbolList: fixedList ? fixedList.map((it) => it.symbol) : null,
         gateFavoritesTotal,
         gateFavoritesScanned: valid.filter((v) => v.source === 'gate').length,
         gateFavoritesBlockedByVolume,

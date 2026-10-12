@@ -87,7 +87,7 @@ export const RSI_MOMENTUM_DEFAULTS = {
     priorRsiFilter: { enabled: true, count: 3 },
     pullback: { enabled: false, belowPct: 0.5 },
     earlyConfirm: { enabled: true, interval: '5m', rsiThreshold: 70 },
-    limitWaitCandles: 20,
+    limitWaitCandles: 90,
     reentryCooldownCandles: 3,
     bandWidth: {
       enabled: true, interval: '5m', period: 20, stdDev: 2, lookback: 300, minPct: 1.5,

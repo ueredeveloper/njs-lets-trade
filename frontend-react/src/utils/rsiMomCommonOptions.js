@@ -10,6 +10,8 @@ export function buildRsiMomCommonOptions(p, candleCount, tradeInterval) {
   return {
     rsiThreshold: p.rsiThreshold,
     pullbackPct: p.pullbackPct,
+    // Validade da limite do pullback em candles de 1m — mesma regra do bot (entry.limitWaitCandles).
+    limitWaitCandles: p.limitWaitCandles ?? 90,
     targetPct: p.targetPct,
     stopLossPct: p.stopLossPct,
     targetMode: p.targetMode,

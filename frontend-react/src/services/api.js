@@ -275,7 +275,7 @@ function appendSupportResistanceParams(params, supportResistance) {
 
 export async function fetchRsiThresholdBacktest(symbol, interval, options = {}) {
   const {
-    rsiThreshold = 70, pullbackPct = 0, targetPct = 5, stopLossPct = 5, positionSizeUsd = 40,
+    rsiThreshold = 70, pullbackPct = 0, limitWaitCandles = 90, targetPct = 5, stopLossPct = 5, positionSizeUsd = 40,
     source = null, candleCount = null, lookbackHours = 0, bandWidth = null,
     supportResistance = null,
     minVolumeUsdt = 0, excludeOpenExits = false, prevCandleStop = false,
@@ -285,6 +285,7 @@ export async function fetchRsiThresholdBacktest(symbol, interval, options = {}) 
   const params = new URLSearchParams({
     symbol, interval, rsiThreshold, pullbackPct, targetPct, stopLossPct, positionSizeUsd,
   });
+  if (pullbackPct) params.set('limitWaitCandles', String(limitWaitCandles));
   if (source) params.set('source', source);
   if (candleCount) params.set('candleCount', String(candleCount));
   if (lookbackHours) params.set('lookbackHours', String(lookbackHours));
@@ -386,15 +387,16 @@ export async function fetchRsiThresholdBacktest(symbol, interval, options = {}) 
 
 export async function fetchRsiThresholdBacktestMarket(interval, options = {}) {
   const {
-    rsiThreshold = 70, pullbackPct = 0, targetPct = 5, stopLossPct = 5, positionSizeUsd = 40,
+    rsiThreshold = 70, pullbackPct = 0, limitWaitCandles = 90, targetPct = 5, stopLossPct = 5, positionSizeUsd = 40,
     source = null, candleCount = null, lookbackHours = 0, bandWidth = null, maxRows = null,
     supportResistance = null, minVolumeUsdt = 0, excludeOpenExits = false, prevCandleStop = false,
     adxFilter = null, macdFilter = null, higherRsiFilter = null, emaCrossFilter = null, bbLowerFilter = null, rsi5mFilter = null, newHighFilter = null, hardTakeProfit = null, reinforceOnStop = null, trailingStop = null, trailingTarget = null, targetMode = null, entriesDayRange = null,
-    includeGateFavorites = false, avoidCorrelatedEntries = false,
+    includeGateFavorites = false, avoidCorrelatedEntries = false, onlyCurated = false,
   } = options;
   const params = new URLSearchParams({
     interval, rsiThreshold, pullbackPct, targetPct, stopLossPct, positionSizeUsd,
   });
+  if (pullbackPct) params.set('limitWaitCandles', String(limitWaitCandles));
   if (source) params.set('source', source);
   if (candleCount) params.set('candleCount', String(candleCount));
   if (lookbackHours) params.set('lookbackHours', String(lookbackHours));
@@ -484,6 +486,8 @@ export async function fetchRsiThresholdBacktestMarket(interval, options = {}) {
   }
   if (includeGateFavorites) params.set('includeGateFavorites', '1');
   if (avoidCorrelatedEntries) params.set('avoidCorrelatedEntries', '1');
+  // Só as moedas com bot exclusivo (rsi_multi_bot_state.curated) — lista lida no backend.
+  if (onlyCurated) params.set('onlyCurated', '1');
   const res = await fetch(`/services/rsi-threshold-backtest-market?${params}`);
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));

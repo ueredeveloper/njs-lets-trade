@@ -427,6 +427,8 @@ const RSI_MOM_PREFS_KEY = 'lets_trade_stats_rsi_momentum_prefs';
 const RSI_MOM_DEFAULT_PREFS = {
   rsiThreshold: 69,
   pullbackPct: 0,
+  // Validade da limite do pullback, em candles de 1m desde a abertura do candle do sinal (= bot).
+  limitWaitCandles: 90,
   targetMode: 'off',
   targetPct: 10,
   hardTakeProfitEnabled: true,
@@ -505,6 +507,9 @@ const RSI_MOM_DEFAULT_PREFS = {
   tsAtrMult: 2,
   tsAtrMaxPct: 12,
   allCoins: false,
+  // Com allCoins: true, roda só nas moedas com bot exclusivo (rsi_multi_bot_state.curated) em vez
+  // do mercado inteiro — seletor "Moedas" (Uma moeda / Todas as moedas / Bots exclusivos).
+  onlyCurated: false,
   // No modo "todas as moedas", inclui também os favoritos da Gate.io (lista "Favoritos|Gate")
   // além dos pares USDT da Binance — cada um com o mesmo filtro de volume 24h (aferido na Gate).
   includeGateFavorites: true,
@@ -556,6 +561,26 @@ function buildCandleCountOptions(interval) {
 
 /** Preferências da aba Momentum RSI — lembradas entre buscas (mesmo padrão dos outros
  *  campos persistidos desta tela, ver loadPullbackPct/loadLookback acima). */
+/** Esperas candidatas (min, candles de 1m) pro "Sugerir espera" — múltiplos do intervalo do
+ *  sinal (5…100 candles dele) + degraus de hora, só os que deixam alguma janela depois do candle
+ *  do sinal (> 1 candle do intervalo) e cabem no teto do bot (300, tradeConfigSchema.js). */
+function suggestWaitCandidates(interval) {
+  const m = Math.max(1, Math.round((INTERVAL_MS[interval] ?? 60_000) / 60_000));
+  const set = new Set([5, 10, 20, 30, 40, 60, 100].map((k) => k * m).concat([60, 120, 180, 240, 300]));
+  return [...set].filter((w) => w > m && w <= 300).sort((a, b) => a - b);
+}
+
+/** "Joelho" da curva espera × P&L: a MENOR espera que já entrega >= 80% do melhor P&L entre as
+ *  candidatas — esperar mais que isso rende pouco a mais e prende a moeda (limite armada) por
+ *  mais tempo. Melhor P&L <= 0 → a de maior P&L. */
+function pickSuggestedWait(rows) {
+  const ok = rows.filter((r) => Number.isFinite(r.pnl));
+  if (!ok.length) return null;
+  const best = Math.max(...ok.map((r) => r.pnl));
+  if (best <= 0) return ok.find((r) => r.pnl === best).wait;
+  return ok.find((r) => r.pnl >= best * 0.8).wait;
+}
+
 function loadRsiMomPrefs() {
   try {
     const raw = localStorage.getItem(RSI_MOM_PREFS_KEY);
@@ -1147,6 +1172,8 @@ function RsiMomentumStats({ autoCalc }) {
   // alimenta o botão "Bot exclusivo" (watchlist curada do RSI Momentum). null no modo Todas.
   const [lastSearch, setLastSearch] = useState(null);
   const [curatedState, setCuratedState] = useState({ loading: false, msg: null, err: null });
+  // "Sugerir espera" do pullback — { loading, progress, total, rows: [{wait, pnl, filled, notFilled}], picked, err, interval }
+  const [waitSuggest, setWaitSuggest] = useState(null);
   // Config atual do bot exclusivo (curated) da moeda da última pesquisa de UMA moeda — alimenta
   // os botões "Editar bot exclusivo" (troca o rótulo do botão de adicionar) e "Carregar config"
   // (preenche o painel). { symbol, exists, curated, phase, exchange, interval, panelConfig }.
@@ -1230,7 +1257,9 @@ function RsiMomentumStats({ autoCalc }) {
   function describeSavedSearch(entry) {
     const c = entry.config ?? {};
     const r = entry.result ?? {};
-    const scopeLabel = c.allCoins ? t('stats.searchlog_scope_market') : (entry.scope || c.symbol || '?');
+    const scopeLabel = c.allCoins
+      ? t(c.onlyCurated ? 'stats.searchlog_scope_curated' : 'stats.searchlog_scope_market')
+      : (entry.scope || c.symbol || '?');
     const bits = [
       entry.interval || null,
       Number.isFinite(c.rsiThreshold) ? `RSI>${c.rsiThreshold}` : null,
@@ -1264,7 +1293,7 @@ function RsiMomentumStats({ autoCalc }) {
       const iv = entry.interval || interval;
       const sym = entry.scope || c.symbol || '';
       setInterval(iv);
-      patchPrefs({ allCoins: !!c.allCoins });
+      patchPrefs({ allCoins: !!c.allCoins, onlyCurated: !!c.allCoins && !!c.onlyCurated });
       if (!c.allCoins) setSymbol(sym);
       const data = c.allCoins
         ? await fetchRsiThresholdBacktestMarket(iv, c)
@@ -1283,7 +1312,9 @@ function RsiMomentumStats({ autoCalc }) {
    *  backend, não só as linhas visíveis: os filtros/ordenação da tela são só de visualização. */
   function handleDownloadJson() {
     if (!result) { window.alert(t('stats.download_json_no_data')); return; }
-    const scope = prefs.allCoins ? 'todas-moedas' : (result.symbol || symbol || 'moeda');
+    const scope = prefs.allCoins
+      ? (prefs.onlyCurated ? 'bots-exclusivos' : 'todas-moedas')
+      : (result.symbol || symbol || 'moeda');
     const payload = {
       exportedAt: new Date().toISOString(),
       scope,
@@ -1444,6 +1475,40 @@ function RsiMomentumStats({ autoCalc }) {
     });
   }
 
+  /** Roda a MESMA simulação do "Buscar" (moeda/escopo, config do painel, intervalo do sinal) com
+   *  várias esperas candidatas (suggestWaitCandidates) e preenche o campo Espera com o joelho da
+   *  curva (pickSuggestedWait). Sequencial de propósito — no modo várias moedas cada rodada já
+   *  dispara dezenas de backtests em paralelo no backend. */
+  async function handleSuggestWait() {
+    const p = prefs;
+    const sym = symbol.trim().toUpperCase();
+    if (!p.pullbackPct || (!p.allCoins && !sym) || waitSuggest?.loading) return;
+    const iv = interval;
+    const src = selectedChart?.symbol === sym ? (selectedChart?.source ?? null) : null;
+    const candidates = suggestWaitCandidates(iv);
+    const rows = [];
+    setWaitSuggest({ loading: true, progress: 0, total: candidates.length, rows: [], picked: null, err: null, interval: iv });
+    try {
+      for (const wait of candidates) {
+        const opts = {
+          ...buildRsiMomCommonOptions({ ...p, limitWaitCandles: wait }, candleCount, iv),
+          onlyCurated: !!p.allCoins && !!p.onlyCurated,
+          maxRows: 1,
+        };
+        const data = p.allCoins
+          ? await fetchRsiThresholdBacktestMarket(iv, opts)
+          : await fetchRsiThresholdBacktest(sym, iv, { ...opts, source: src });
+        rows.push({ wait, pnl: Number(data?.totalPnlUsd), filled: data?.totalFilled ?? 0, notFilled: data?.totalNotFilled ?? 0 });
+        setWaitSuggest((prev) => ({ ...prev, progress: rows.length, rows: [...rows] }));
+      }
+      const picked = pickSuggestedWait(rows);
+      setWaitSuggest((prev) => ({ ...prev, loading: false, picked }));
+      if (picked) patchPrefs({ limitWaitCandles: picked });
+    } catch (err) {
+      setWaitSuggest((prev) => ({ ...prev, loading: false, err: err.message }));
+    }
+  }
+
   async function handleSearch(overrideSymbol, updateChart = false, overrideInterval, overrideSource, overrideCandleCount, overridePrefs) {
     const p = overridePrefs ?? prefs;
     const sym  = (overrideSymbol ?? symbol).trim().toUpperCase();
@@ -1456,7 +1521,10 @@ function RsiMomentumStats({ autoCalc }) {
     setError(null);
     setResult(null);
     try {
-      const commonOptions = buildRsiMomCommonOptions(p, candles, iv);
+      const commonOptions = {
+        ...buildRsiMomCommonOptions(p, candles, iv),
+        onlyCurated: !!p.allCoins && !!p.onlyCurated,
+      };
       const data = p.allCoins
         ? await fetchRsiThresholdBacktestMarket(iv, commonOptions)
         : await fetchRsiThresholdBacktest(sym, iv, { ...commonOptions, source: src });
@@ -1481,7 +1549,7 @@ function RsiMomentumStats({ autoCalc }) {
       // no gráfico. Fire-and-forget: falha aqui não pode quebrar a tela.
       if (updateChart) {
         saveRsiMomentumStatsSearch({
-          scope: p.allCoins ? 'market' : sym,
+          scope: p.allCoins ? (p.onlyCurated ? 'curated' : 'market') : sym,
           interval: iv,
           config: { ...commonOptions, allCoins: !!p.allCoins, source: p.allCoins ? null : (src ?? null) },
           result: data,
@@ -1598,20 +1666,26 @@ function RsiMomentumStats({ autoCalc }) {
       {/* Barra de ação — escopo (uma moeda / todas) + "usar intervalo do MC". O botão Buscar e o
           log de pesquisas ficam no rodapé do formulário. */}
       <div className="flex flex-row gap-1 md:gap-2 items-end w-full flex-wrap">
-        {/* Todas as moedas — desliga o campo Símbolo e roda o cálculo em todos os pares USDT
-            ativos de uma vez (ver backend/utils/analyseRsiThresholdBacktestMarket.js). */}
-        <div className="flex items-center gap-1 shrink-0 pb-1" title={t('stats.tip.all_coins')}>
-          <span className="hidden md:inline text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.all_coins')}</span>
-          <button
-            type="button"
-            onClick={() => patchPrefs({ allCoins: !prefs.allCoins })}
-            className={`relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${prefs.allCoins ? 'bg-p4' : 'bg-p3/40'}`}
+        {/* Escopo — Uma moeda (campo Símbolo) / Todas as moedas (todos os pares USDT ativos, ver
+            backend/utils/analyseRsiThresholdBacktestMarket.js) / Bots exclusivos (só as moedas
+            curated, mesmo backtest de mercado com lista fixa — onlyCurated). */}
+        <div className="flex items-center gap-1 shrink-0 pb-1" title={t('stats.tip.scope')}>
+          <span className="hidden md:inline text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.scope')}</span>
+          <select
+            value={!prefs.allCoins ? 'one' : (prefs.onlyCurated ? 'curated' : 'all')}
+            onChange={(e) => {
+              const v = e.target.value;
+              patchPrefs({ allCoins: v !== 'one', onlyCurated: v === 'curated' });
+            }}
+            className="bg-p2 border border-p3/40 text-p5 text-[10px] sm:text-xs rounded px-1 sm:px-2 py-1 focus:outline-none focus:border-p4"
           >
-            <span className={`inline-block h-3 w-3 rounded-full bg-white shadow transition-transform ${prefs.allCoins ? 'translate-x-3' : 'translate-x-0'}`} />
-          </button>
+            <option value="one">{t('stats.scope_one')}</option>
+            <option value="all">{t('stats.all_coins')}</option>
+            <option value="curated">{t('stats.scope_curated')}</option>
+          </select>
         </div>
 
-        {prefs.allCoins && (
+        {prefs.allCoins && !prefs.onlyCurated && (
           <div
             className="flex items-center gap-1 shrink-0 pb-1"
             title="Além dos pares da Binance, roda também nos favoritos da Gate.io (lista Favoritos|Gate) — mesmo filtro de volume 24h, aferido na Gate"
@@ -1730,6 +1804,45 @@ function RsiMomentumStats({ autoCalc }) {
             ))}
           </select>
         </div>
+
+        {prefs.pullbackPct !== 0 && (
+          <div className="flex flex-col gap-0 md:gap-0.5 min-w-[56px]" title={t('stats.tip.limit_wait')}>
+            <label className="hidden md:block text-[9px] text-p5/50 uppercase tracking-wider">{t('stats.limit_wait')}</label>
+            <div className="flex items-center gap-1">
+              <input className={inpNum} type="number" min={1} max={300}
+                value={prefs.limitWaitCandles ?? 90}
+                onChange={(e) => patchPrefs({ limitWaitCandles: Math.max(1, Math.min(300, Number(e.target.value) || 90)) })} />
+              <button
+                type="button"
+                onClick={handleSuggestWait}
+                disabled={!!waitSuggest?.loading || (!prefs.allCoins && !symbol.trim())}
+                title={t('stats.tip.suggest_wait')}
+                className="shrink-0 px-1.5 py-1 rounded border border-p4/50 text-p4 text-[10px] sm:text-xs hover:bg-p4/10 disabled:opacity-40"
+              >
+                {waitSuggest?.loading ? `${waitSuggest.progress}/${waitSuggest.total}` : t('stats.suggest_wait')}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {prefs.pullbackPct !== 0 && waitSuggest && (waitSuggest.rows.length > 0 || waitSuggest.err) && (
+          <div className="basis-full flex flex-wrap items-center gap-1 text-[10px] sm:text-xs text-p5/70">
+            <span className="text-p5/50">{t('stats.suggest_wait_result').replace('{iv}', waitSuggest.interval)}</span>
+            {waitSuggest.rows.map((r) => (
+              <button
+                key={r.wait}
+                type="button"
+                onClick={() => patchPrefs({ limitWaitCandles: r.wait })}
+                title={`${r.filled} trades · ${r.notFilled} não preenchidos`}
+                className={`px-1.5 py-0.5 rounded border font-mono ${r.wait === waitSuggest.picked ? 'border-p4 bg-p4/15 text-p4' : 'border-p3/40'} ${r.wait === prefs.limitWaitCandles ? 'underline' : ''}`}
+              >
+                {r.wait}min · {Number.isFinite(r.pnl) ? `$${r.pnl.toFixed(2)}` : '—'} · {r.filled}t
+              </button>
+            ))}
+            {waitSuggest.err && <span className="text-red-500">{waitSuggest.err}</span>}
+            <button type="button" onClick={() => setWaitSuggest(null)} className="text-p5/40 hover:text-p5">✕</button>
+          </div>
+        )}
 
         {/* ALVO — modo (fixo/contínuo/desligado) + valores, INDEPENDENTE do stop. Agrupado num
             bloco de fundo verde pra separar visualmente do STOP (vermelho) e dos campos de entrada. */}
@@ -2702,7 +2815,9 @@ function RsiMomentumStats({ autoCalc }) {
                 <SummaryCard
                   label={t('stats.card.symbols_scanned')}
                   value={`${result.symbolsScanned}/${result.symbolsTotal}`}
-                  tooltip={t('stats.tip.symbols_scanned')}
+                  tooltip={Array.isArray(result.symbolList)
+                    ? `${t('stats.scope_curated')}: ${result.symbolList.join(', ')}`
+                    : t('stats.tip.symbols_scanned')}
                 />
               ) : (
                 <SummaryCard
