@@ -81,8 +81,9 @@ const DEFAULT_INTERVAL = '15m';
 // suportados também na Gate.io (CLAUDE.md: sem '3m'), já que a simulação pode rodar numa moeda
 // Gate-only (ex.: SKYAI), MAIS '2h' (Gate não tem, só Binance) porque é o intervalo real do
 // filtro MACD na config vencedora hoje (backend/CLAUDE.md) — sem ele o seletor não conseguia
-// nem mostrar o valor que a config carregada já estava usando.
-const ANALYSIS_BOX_RULE_INTERVALS = ['1m', '5m', '15m', '30m', '1h', '2h', '4h', '8h', '1d'];
+// nem mostrar o valor que a config carregada já estava usando. '3m' também (Binance-only, idem
+// '2h'): bots exclusivos com entry.interval 3m apareciam como '1m' (1ª opção) no seletor.
+const ANALYSIS_BOX_RULE_INTERVALS = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '8h', '1d'];
 // Mesmos leques de opções do painel Estatísticas (StatisticsPanel.jsx RSI_MOM_SR_*/
 // RSI_MOM_TRAILING_*/RSI_MOM_PIVOT_*/RSI_MOM_WIDTH_*/RSI_MOM_ATR_MULT_OPTIONS) — duplicados aqui
 // (não exportados de lá) pra dar paridade de opções ao editar a caixa de previsão de trade.
