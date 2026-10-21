@@ -137,6 +137,12 @@ export function CurrencyProvider({ children }) {
   // { interval, candleCount, levels:[{price,touches,type}], entrySupport, stopSupport, exitResistance } | null
   const [chartSrOverride, setChartSrOverride] = useState(null);
 
+  // Bandeira que o backtest da aba Estatísticas → Bandeiras usou pro trade aberto no gráfico —
+  // desenhada verbatim (não redetecta). Só vale enquanto `markers` for o MESMO array de
+  // chartTradeMarkers (outra aba que abrir um trade troca os marcadores e isso some sozinho).
+  // { flags:[shape de detectFlags], markers } | null
+  const [chartFlagsOverride, setChartFlagsOverride] = useState(null);
+
   /** Foco do backtest MT: histórico e overlays para o momento do trade */
   const [multitradeChartFocus, setMultitradeChartFocus] = useState(null);
 
@@ -1370,6 +1376,8 @@ export function CurrencyProvider({ children }) {
         setChartTradeMarkers,
         chartSrOverride,
         setChartSrOverride,
+        chartFlagsOverride,
+        setChartFlagsOverride,
         tradePurchases,
         setTradePurchases,
         allTrades,

@@ -3001,7 +3001,7 @@ function TradeHistoryPanel({ symbol, gateFavorites }) {
 // ── Componente principal ──────────────────────────────────────────────────────
 
 export default function CandlestickChart() {
-  const { selectedChart, setSelectedChart, chartZoom, setChartZoom, chartTradeMarkers, chartViewSource, chartSrOverride,
+  const { selectedChart, setSelectedChart, chartZoom, setChartZoom, chartTradeMarkers, chartViewSource, chartSrOverride, chartFlagsOverride,
     chartCandleWindowReset,
     multitradeChartFocus, tradePurchases, allTrades, chartInterval: savedInterval, setChartInterval,
     chartPanelButtons, uiPrefs, setMaBandsDefaults,
@@ -5497,6 +5497,12 @@ export default function CandlestickChart() {
     const candles = selectedChart?.candlesticks;
     if (!candles?.length) return null;
 
+    // Trade aberto pela aba Estatísticas → Bandeiras: desenha a bandeira EXATA do backtest.
+    if (chartViewSource === CHART_VIEW.STATISTICS && chartFlagsOverride?.flags?.length
+      && chartFlagsOverride.markers === chartTradeMarkers) {
+      return { flags: chartFlagsOverride.flags, scoped: false };
+    }
+
     // Kind 'trade' usa a mesma caixa pra outra coisa (ver chartTradeBoxRects) — não desenha
     // bandeira dentro dela nesse modo.
     if (analysisBox && analysisBoxKind === 'flag') {
@@ -5511,7 +5517,7 @@ export default function CandlestickChart() {
     if (analysisBox || !flagsShown) return null;
     const flags = detectFlags(candles);
     return flags.length ? { flags, scoped: false } : null;
-  }, [flagsShown, selectedChart?.candlesticks, analysisBox, analysisBoxKind]);
+  }, [flagsShown, selectedChart?.candlesticks, analysisBox, analysisBoxKind, chartViewSource, chartFlagsOverride, chartTradeMarkers]);
 
   // Previsão de trade dentro da caixa: converte os `occurrences` do backtest escopado
   // (analysisBoxTradeSim) em retângulos verde(alvo)/vermelho(stop)/âmbar(aberto) — mesmo shape de
@@ -5615,6 +5621,50 @@ export default function CandlestickChart() {
       return rects;
     });
   }, [analysisBox, analysisBoxKind, analysisBoxTradeSim]);
+
+  // OCO do trade aberto pela aba Estatísticas → Bandeiras: faixa até o ALVO (verde) e até o STOP
+  // (vermelho) com os níveis EXATOS do backtest e o porquê de cada um no rótulo (ex.: "alvo 1×
+  // mastro", "stop fundo da bandeira"). A ponta atingida ganha contorno forte. Mesmo visual de
+  // chartTradeBoxRects; vale enquanto o override for o do trade atual (ver chartFlagsConfig).
+  const chartFlagOcoRects = useMemo(() => {
+    const oco = chartFlagsOverride?.oco;
+    if (!oco || chartViewSource !== CHART_VIEW.STATISTICS || chartFlagsOverride.markers !== chartTradeMarkers) return [];
+    const t1 = Math.floor(oco.entryMs / 1000);
+    const t2 = Math.max(t1 + 1, Math.floor(oco.exitMs / 1000));
+    const pctFrom = (p) => {
+      const v = ((p - oco.entryPrice) / oco.entryPrice) * 100;
+      return `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`;
+    };
+    const result = Number.isFinite(oco.pnlPct) ? ` · resultado ${oco.pnlPct >= 0 ? '+' : ''}${oco.pnlPct.toFixed(2)}%` : '';
+    const targetHit = oco.outcome === 'target';
+    const stopHit = oco.outcome === 'stop';
+    const rects = [];
+    if (Number.isFinite(oco.targetPrice)) {
+      rects.push({
+        time1: t1, time2: t2, price1: oco.entryPrice, price2: oco.targetPrice,
+        fillColor: targetHit ? 'rgba(34,197,94,0.22)' : 'rgba(34,197,94,0.10)',
+        strokeColor: targetHit ? 'rgba(34,197,94,0.9)' : 'rgba(34,197,94,0.4)',
+        labelColor: '#22c55e',
+        label: `${targetHit ? 'alvo ✓' : 'alvo'} ${oco.targetWhy} ${pctFrom(oco.targetPrice)}${targetHit ? result : ''}`,
+        labelPos: oco.targetPrice >= oco.entryPrice ? 'top' : 'bottom',
+      });
+    }
+    if (Number.isFinite(oco.stopPrice)) {
+      rects.push({
+        time1: t1, time2: t2, price1: oco.entryPrice, price2: oco.stopPrice,
+        fillColor: stopHit ? 'rgba(239,68,68,0.22)' : 'rgba(239,68,68,0.10)',
+        strokeColor: stopHit ? 'rgba(239,68,68,0.9)' : 'rgba(239,68,68,0.4)',
+        labelColor: '#ef4444',
+        label: `${stopHit ? 'stop ✗' : 'stop'} ${oco.stopWhy} ${pctFrom(oco.stopPrice)}${stopHit ? result : ''}`,
+        labelPos: oco.stopPrice >= oco.entryPrice ? 'top' : 'bottom',
+      });
+    }
+    return rects;
+  }, [chartFlagsOverride, chartViewSource, chartTradeMarkers]);
+  const tradeBoxRectsAll = useMemo(
+    () => (chartFlagOcoRects.length ? [...chartTradeBoxRects, ...chartFlagOcoRects] : chartTradeBoxRects),
+    [chartTradeBoxRects, chartFlagOcoRects],
+  );
 
   // S/R "traço" de cada entrada — reaproveita o `sr.levels` que o PRÓPRIO backtest devolve por
   // occurrence (já é o S/R vigente NO MOMENTO daquele sinal, ver options.supportResistance em
@@ -6739,7 +6789,7 @@ export default function CandlestickChart() {
             rsiCrossConfigs={tradeBoxActive ? [] : chartRsiCrossConfigs}
             flagsConfig={chartFlagsConfig}
             analysisBoxRect={analysisBoxRect}
-            tradeBoxRects={chartTradeBoxRects}
+            tradeBoxRects={tradeBoxRectsAll}
             tradeBoxSrMarks={chartTradeBoxSrMarks}
             prevDayCloudConfig={tradeBoxActive ? null : chartPrevDayCloudConfig}
             rsiConfig={chartRsiConfig}

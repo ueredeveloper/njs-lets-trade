@@ -331,6 +331,26 @@ e escolhe a menor com >= 80% do melhor P&L). Seletor **Moedas**: Uma moeda / Tod
 (`onlyCurated=1` → só `rsi_multi_bot_state.curated`, cada um na própria corretora, sem filtro de volume,
 config do painel pra todos).
 
+### Estatísticas → aba "Bandeiras" (v1.164.0)
+
+Estudo de entrada por bandeira de alta/baixa, **4h por padrão**, uma moeda ou mercado USDT. Motor
+`backend/utils/analyseFlagBacktest.js` (rota `GET /services/flag-backtest`), detector
+`backend/bot/flags/detectFlags.js` = **espelho CJS** de `frontend-react/src/utils/detectFlags.js`
+(botão "Band." do gráfico) — mude os dois juntos. Cada bandeira confirmada é simulada em 3 momentos
+de entrada (fechamento do rompimento / abertura seguinte / reteste do nível rompido), stop no
+extremo da bandeira / linha do canal / %, alvo = measured move × fração, + estudo de alvo
+(0,25×…2× do mastro) e faixas (mastro, retração, duração, HTF). Bandeira de baixa = short teórico.
+Lista "em formação agora" com gatilho/stop/alvo. Clique abre no gráfico a bandeira EXATA do
+backtest (`chartFlagsOverride` no CurrencyContext, válido só enquanto os marcadores forem os dela)
++ o **OCO** do trade (`chartFlagsOverride.oco` → `chartFlagOcoRects` em CandlestickChart.jsx: faixa
+verde até o alvo, vermelha até o stop, rótulo com o motivo do nível) e o cartão `TradeOcoCard` na aba
+(entrada/stop/alvo com a regra de cada um, % e R:R). Bandeira em formação → OCO planejado no gatilho.
+**JSON de estudo:** cada busca grava a simulação COMPLETA (sem o corte de 400/grupo da tela) em
+`backend/data/flag-studies/<data BRT>_<moeda|mercado>_<intervalo>.json` (gitignored, últimos 50) —
+`coins[]` → `flags[]` (padrão + desenho) → `entries.{close,nextOpen,retest}` (trade + `targetStudy`
+por fração). `backend/utils/flagStudyStore.js`; `GET /services/flag-backtest/studies[/:file]`;
+botão "⬇ Baixar JSON" na aba.
+
 ### Watchlist curada (`rsi_multi_bot_state.curated = true`)
 
 Moeda vigiada **indefinidamente** pelo bot mesmo que o scanner Binance nunca a sinalize (ex.:

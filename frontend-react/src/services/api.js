@@ -126,6 +126,23 @@ export async function fetchMaCrossStats(symbol, {
 }
 
 /**
+ * Backtest de bandeiras de alta/baixa (Estatísticas → Bandeiras). Sem `symbol` varre o mercado USDT da Binance.
+ * `params` = query da rota /services/flag-backtest (ver backend/services/fetchFlagBacktest.js).
+ */
+export async function fetchFlagBacktest(params = {}) {
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== null && v !== '') qs.set(k, String(v));
+  }
+  const res = await fetch(`/services/flag-backtest?${qs}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+/**
  * Backtest dos "Setups Matadores" (só compra). Sem `symbol` varre o mercado USDT da Binance.
  * `params` = query da rota /services/candle-setups-backtest (ver backend/services/fetchCandleSetupsBacktest.js).
  */

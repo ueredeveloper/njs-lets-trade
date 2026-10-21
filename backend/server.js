@@ -22,7 +22,7 @@ const { ichimokuCloudRouter } = require('./technicals-indicators');
 const {
   fetchCandles, fetchIchimokuCloud, fetchSupportResistance, fetchPivotPointsHighLow, fetchWilliamsFractals, fetchZigZag, fetchAllCurrencies, fetchBreakUsdtPairs,
   fetchSMA, fetchRSI, fetchChopZone, fetchVWAP, fetch24HsVolume, fetchMarketCapFilter, fetchStablecoins, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter, fetchMaDistanceFilter, fetchIndicatorGrowthFilter,
-  fetchRsiOversoldRecovery, fetchRsiThresholdBacktest, fetchRsiThresholdBacktestMarket, fetchCandleSetupsBacktest, fetchMaCrossStats, fetchVwapBandsStats, fetchBollingerBandRecovery, fetchBollingerBandPositionFilter, fetchVwapPositionFilter, fetchVwapBandWidthFilter, fetchBollingerBandWidthFilter, fetchBandWidthEvolution, fetchBollingerMedianTrendFilter, fetchVwapBandExpansionFilter, fetchBollingerBands, fetchMACD, fetchSimpleMaCross, fetchReloadCandles,
+  fetchRsiOversoldRecovery, fetchRsiThresholdBacktest, fetchRsiThresholdBacktestMarket, fetchCandleSetupsBacktest, fetchFlagBacktest, fetchMaCrossStats, fetchVwapBandsStats, fetchBollingerBandRecovery, fetchBollingerBandPositionFilter, fetchVwapPositionFilter, fetchVwapBandWidthFilter, fetchBollingerBandWidthFilter, fetchBandWidthEvolution, fetchBollingerMedianTrendFilter, fetchVwapBandExpansionFilter, fetchBollingerBands, fetchMACD, fetchSimpleMaCross, fetchReloadCandles,
   fetchGateCurrencies, fetchGateCoinsFilter, fetchGatePrefetch, fetchBinanceTrades, fetchGateTrades,
   fetchActiveTrades, fetchTradeFavorites, stgBotStatus, multitradeService, fetchMarketHighlights, whatsappMessagesService, fetchCacheSettings, rsiMomentumStatsSearchLog, bandWidthEvolutionSearchLog, fetchRsiMomentumWatchlist, fetchRsiMomentumNearMisses, fetchRsiMomentumMissedSignals, fetchRsiMomentumSignalProximity } = require('./services');
 const supabaseService = require('./services/supabaseService');
@@ -71,6 +71,7 @@ app.use('/services', fetchRsiOversoldRecovery)
 app.use('/services', fetchRsiThresholdBacktest)
 app.use('/services', fetchRsiThresholdBacktestMarket)
 app.use('/services', fetchCandleSetupsBacktest)
+app.use('/services', fetchFlagBacktest)
 app.use('/services', fetchMaCrossStats)
 app.use('/services', fetchVwapBandsStats)
 app.use('/services', fetchBollingerBandRecovery)

@@ -11,6 +11,7 @@ import Rsi1hBreakdownChart from './Rsi1hBreakdownChart';
 import MacdWhatIfAccordion from './MacdWhatIfAccordion';
 import CandleSetupsStats from './CandleSetupsStats';
 import BandWidthEvolutionStats from './BandWidthEvolutionStats';
+import FlagStats from './FlagStats';
 import StatsAccordion from './StatsAccordion';
 import { useI18n } from '../i18n';
 import { CHART_VIEW } from '../utils/chartView';
@@ -98,6 +99,7 @@ const TABS = [
   { id: 'bollinger_bands', labelKey: 'stats.tab.bollinger_bands' },
   { id: 'vwap_bands', labelKey: 'stats.tab.vwap_bands' },
   { id: 'candle_setups', labelKey: 'stats.tab.candle_setups' },
+  { id: 'flags', labelKey: 'stats.tab.flags' },
   { id: 'band_evolution', labelKey: 'stats.tab.band_evolution' },
 ];
 
@@ -4234,6 +4236,7 @@ export default function StatisticsPanel() {
         {activeTab === 'bollinger_bands' && <BollingerBandsStats autoCalc={autoCalc} />}
         {activeTab === 'vwap_bands' && <VwapBandsStats autoCalc={autoCalc} />}
         {activeTab === 'candle_setups' && <CandleSetupsStats autoCalc={autoCalc} />}
+        {activeTab === 'flags' && <FlagStats autoCalc={autoCalc} />}
         {activeTab === 'band_evolution' && (
           <BandWidthEvolutionStats
             autoCalc={autoCalc}
