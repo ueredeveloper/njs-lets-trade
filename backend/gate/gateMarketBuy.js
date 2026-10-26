@@ -70,11 +70,19 @@ async function gateLimitBuy(pair, usdtAmount, price, opts = {}) {
 
 /** Coloca LIMIT GTC e retorna na hora — ver binancePlaceRestingLimitBuy. */
 async function gatePlaceRestingLimitBuy(pair, usdtAmount, price) {
-  const limitPrice = parseFloat(price.toFixed(8));
-  const qty        = parseFloat((usdtAmount / limitPrice).toFixed(8));
+  // Preço/quantidade na precisão do PAR (a Gate recusa casas a mais — toFixed(8) fixo quebrava em
+  // pares de 2–6 casas). require tardio: gateMarketSell.js é do bot e não precisa carregar antes.
+  const { getGatePairMeta, floorGateAmount, formatGatePrice } = require('../bot/gate/gateMarketSell');
+  const meta       = await getGatePairMeta(pair);
+  const priceStr   = formatGatePrice(price, meta.pricePrecision);
+  if (!priceStr) throw new Error(`Gate.io: preço inválido para limite (${price})`);
+  const limitPrice = parseFloat(priceStr);
+  const amountStr  = floorGateAmount(usdtAmount / limitPrice, meta.amountPrecision);
+  if (!amountStr) throw new Error(`Gate.io: quantidade inválida para limite (${usdtAmount} USDT @ ${priceStr})`);
+  const qty        = parseFloat(amountStr);
   const order      = await gateRequest('POST', '/spot/orders', {
     currency_pair: pair, side: 'buy', type: 'limit',
-    price: String(limitPrice), amount: String(qty), time_in_force: 'gtc',
+    price: priceStr, amount: amountStr, time_in_force: 'gtc',
   });
   return {
     exchange: 'gate',

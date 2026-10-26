@@ -351,6 +351,23 @@ verde até o alvo, vermelha até o stop, rótulo com o motivo do nível) e o car
 por fração). `backend/utils/flagStudyStore.js`; `GET /services/flag-backtest/studies[/:file]`;
 botão "⬇ Baixar JSON" na aba.
 
+### OCO manual no gráfico (botão "OCO", motor LW)
+
+Linhas arrastáveis no gráfico (`CandlestickChartLW.jsx`, props `ocoDraft`/`onOcoDraftChange`):
+entrada **amarela**, alvo verde, stop vermelho; cartão em `ChartOcoTool.jsx`. Entrada seguindo o
+preço → **Comprar agora** (`POST /services/manual-oco-buy`: mercado + OCO na hora). Entrada
+arrastada (fixa) → **Criar ordem no bot**: grava em `manual_oco_orders` (`POST
+/services/manual-oco-orders`, migração `supabase/add-manual-oco-orders-table.sql`) e o
+**rsi-momentum-bot** executa (`backend/bot/manual-oco/manualOcoWatcher.js`, a cada 15s): entrada
+abaixo do preço = LIMIT GTC; acima = compra a mercado no rompimento; no fill coloca a OCO e avisa no
+WhatsApp. Preços são referência — tick/precisão/faixa PERCENT_PRICE ajustados sozinhos; limite funda
+demais pra Binance espera o preço chegar perto. Ordem avulsa (sem favorito/`rsi_multi_bot_state`).
+"Comprar agora" também grava a linha (`entry_kind 'market'`). Ao abrir a moeda o gráfico busca as
+ordens ATIVAS (`utils/manualOco.js`) e desenha: OCO montada em verde/vermelho + **Vender agora**
+(`POST /services/manual-oco-orders/:id/sell`: SELLING → cancela OCO → venda a mercado → SOLD);
+ainda na compra = previsão azul (alvo) / laranja (stop) + **Cancelar compra**
+(`ManualOcoOrdersPanel.jsx`). O watcher vigia as BRACKETED até `CLOSED_TARGET`/`CLOSED_STOP`.
+
 ### Watchlist curada (`rsi_multi_bot_state.curated = true`)
 
 Moeda vigiada **indefinidamente** pelo bot mesmo que o scanner Binance nunca a sinalize (ex.:

@@ -91,6 +91,7 @@ const {
 } = require('../shared/tradeExecution');
 const { sendWhatsApp } = require('../whatsapp');
 const { writeTradeStatus, removeTradeStatus, readTradeStatus, recordClosedTrade } = require('../shared/tradeStatusJournal');
+const { startManualOcoWatcher } = require('../manual-oco/manualOcoWatcher');
 
 const BOT_LABEL = 'RSI-MOMENTUM';
 const VOL_CACHE_MS = 5 * 60_000;
@@ -2013,6 +2014,10 @@ async function main() {
 
   await syncExchangeClocks();
   setInterval(syncExchangeClocks, 60 * 60_000);
+
+  // OCO manual com entrada arrastada no gráfico (tabela manual_oco_orders) — independente da
+  // estratégia, só pega carona no processo que já roda 24h (ver manualOcoWatcher.js).
+  startManualOcoWatcher({ log: console.log });
 
   const symbolFilter = process.argv.includes('--symbol')
     ? process.argv[process.argv.indexOf('--symbol') + 1]?.toUpperCase()

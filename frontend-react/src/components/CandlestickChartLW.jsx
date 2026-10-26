@@ -13,6 +13,7 @@ import { computeBarsSinceMaCross } from '../utils/barsSinceMaCross';
 import { computeTdSequentialSetup } from '../utils/tdSequentialSetup';
 import { snapPointsToChartCandles } from '../utils/snapToChartCandles';
 import { rankSrLevels, srRankAllowed } from '../utils/srRank';
+import { manualOcoLevels } from '../utils/manualOco';
 
 /** createSeriesMarkers "blindado" pros rótulos de S/R (séries de 2 pontos recriadas no pan).
  *  O "Uncaught Error: Value is null" (ensureNotNull em _recalculateMarkers → dataByIndex) NÃO
@@ -363,6 +364,67 @@ function buildPositionRects(buyInfo, stopLossConfig, targetConfig, candlesticks)
         label: formatPctFromBase(buyPrice, stopPrice) + (stopLossConfig.simulated ? ' (simulado)' : ''),
         labelPos: 'bottom',
       });
+    }
+  }
+  return rects;
+}
+
+/** OCO manual (botão "OCO" do gráfico, ver ChartOcoTool.jsx): faixa verde entrada→alvo e
+ *  vermelha entrada→stop, começando DEPOIS do último candle e indo 6 candles à frente (o setData
+ *  estende o eixo com 8 candles de whitespace, então o tempo futuro tem coordenada). */
+function buildOcoDraftRects(ocoDraft, candlesticks) {
+  const valid = toValidLwCandles(candlesticks);
+  if (!ocoDraft?.entry || valid.length < 2) return [];
+  const { entry, target, stop } = ocoDraft;
+  const ivSec = Math.max(valid[valid.length - 1].time - valid[valid.length - 2].time, 0);
+  const lastTime = valid[valid.length - 1].time;
+  const time1 = lastTime + ivSec;
+  const time2 = lastTime + ivSec * 7;
+  const rects = [];
+  if (Number.isFinite(target)) {
+    rects.push({
+      time1, time2, price1: entry, price2: target,
+      fillColor: 'rgba(34,197,94,0.16)', labelColor: '#22c55e',
+      label: `OCO alvo ${formatPctFromBase(entry, target)}`, labelPos: 'top',
+    });
+  }
+  if (Number.isFinite(stop)) {
+    rects.push({
+      time1, time2, price1: entry, price2: stop,
+      fillColor: 'rgba(239,68,68,0.16)', labelColor: '#ef4444',
+      label: `OCO stop ${formatPctFromBase(entry, stop)}`, labelPos: 'bottom',
+    });
+  }
+  return rects;
+}
+
+/** Ordens da OCO manual já gravadas (manual_oco_orders) da moeda do gráfico — ver
+ *  ManualOcoOrdersPanel.jsx. Montada (comprou + OCO): verde/vermelho como uma posição, do candle
+ *  da compra até 6 candles à frente. Ainda na compra: PREVISÃO em azul (alvo) / laranja (stop) a
+ *  partir do preço da entrada (níveis em utils/manualOco.js#manualOcoLevels). */
+function buildManualOcoRects(orders, candlesticks) {
+  if (!orders?.length || !candlesticks?.length) return [];
+  const valid = toValidLwCandles(candlesticks);
+  if (valid.length < 2) return [];
+  const ivSec = Math.max(valid[valid.length - 1].time - valid[valid.length - 2].time, 0);
+  const time2 = valid[valid.length - 1].time + ivSec * 6;
+  const rects = [];
+  for (const o of orders) {
+    const { mounted, entry, target, stop, noOco, sinceMs } = manualOcoLevels(o);
+    if (!(entry > 0) || noOco) continue;
+    const idx = snapToNearestCandleIndex(candlesticks, sinceMs) ?? candlesticks.length - 1;
+    const time1 = Math.min(Math.floor(Number(candlesticks[idx].openTime) / 1000), time2 - ivSec);
+    const t = mounted
+      ? { fill: 'rgba(34,197,94,0.14)', color: '#22c55e', name: 'alvo' }
+      : { fill: 'rgba(59,130,246,0.14)', color: '#3b82f6', name: 'prev. alvo' };
+    const s = mounted
+      ? { fill: 'rgba(239,68,68,0.14)', color: '#ef4444', name: 'stop' }
+      : { fill: 'rgba(249,115,22,0.14)', color: '#f97316', name: 'prev. stop' };
+    if (target > 0) {
+      rects.push({ time1, time2, price1: entry, price2: target, fillColor: t.fill, labelColor: t.color, label: `#${o.id} ${t.name} ${formatPctFromBase(entry, target)}`, labelPos: 'top' });
+    }
+    if (stop > 0) {
+      rects.push({ time1, time2, price1: entry, price2: stop, fillColor: s.fill, labelColor: s.color, label: `#${o.id} ${s.name} ${formatPctFromBase(entry, stop)}`, labelPos: 'bottom' });
     }
   }
   return rects;
@@ -733,7 +795,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
   emaPersistCloudData, emaPersistCloudConfirmData, emaPersistCloudConfirm2Data, emaPersistCloudLayers, emaPersistCloudTones, barsSinceCrossData, tdSequentialData,
   stopLossConfig, targetConfig, buyInfo, multitradeMarkers, zoomPeriod, focusLastN,
   onNeedOlderCandles, loadingMoreCandles, onVisibleRangeChange, visibleRange,
-  fontScale,
+  fontScale, ocoDraft, onOcoDraftChange, manualOcoOrders,
 }, ref) {
   // Na Lightweight Charts o texto é um só (layout.fontSize) — vale pro eixo de preço, rótulos
   // das priceLine (S/R, RSI 30/50/70) E o texto dos marcadores de série (% da linha de PnL,
@@ -815,6 +877,15 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
   // abaixo) travado: a busca nova volta a caber exatamente no mesmo tamanho (DEFAULT_CANDLE_LIMIT)
   // que já tinha disparado antes, e o guard bloqueia pra sempre o próximo arrasto pra trás.
   useEffect(() => { triggeredForLenRef.current = -1; }, [symbol, interval]);
+  // OCO manual arrastável — espelhada em ref pros listeners de arrasto (assinados uma vez) lerem
+  // sempre os preços atuais. Linhas próprias (não entram no priceLinesRef do S/R, que é recriado
+  // por outro efeito).
+  const ocoDraftRef = useRef(ocoDraft);
+  const onOcoDraftChangeRef = useRef(onOcoDraftChange);
+  const ocoPriceLinesRef = useRef([]);
+  const manualOcoLinesRef = useRef([]);
+  useEffect(() => { ocoDraftRef.current = ocoDraft; }, [ocoDraft]);
+  useEffect(() => { onOcoDraftChangeRef.current = onOcoDraftChange; }, [onOcoDraftChange]);
 
   // Expõe conversão pixel↔preço/tempo pro pai (régua de medição em CandlestickChart.jsx) —
   // equivalente ao convertToPixel/convertFromPixel que o ReactECharts expõe via
@@ -1001,6 +1072,8 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       seriesRef.current = null;
       indicatorSeriesRef.current = {};
       priceLinesRef.current = [];
+      ocoPriceLinesRef.current = [];
+      manualOcoLinesRef.current = [];
       srRollSeriesRef.current = [];
       srTracoSeriesRef.current = [];
       markersPluginRef.current = null;
@@ -1585,8 +1658,153 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       ...(analysisBoxRect ? [analysisBoxRect] : []),
       ...rsiCrossRects,
       ...tradeBoxRects,
+      ...buildOcoDraftRects(ocoDraft, candlesticks),
+      ...buildManualOcoRects(manualOcoOrders, candlesticks),
     ]);
-  }, [buyInfo, stopLossConfig, targetConfig, candlesticks, multitradeMarkers, analysisBoxRect, rsiCrossRects, tradeBoxRects]);
+  }, [buyInfo, stopLossConfig, targetConfig, candlesticks, multitradeMarkers, analysisBoxRect, rsiCrossRects, tradeBoxRects, ocoDraft, manualOcoOrders]);
+
+  // Linhas (com rótulo no eixo) das ordens da OCO manual já gravadas — não arrastáveis; mesmas
+  // cores dos retângulos (buildManualOcoRects). OCO_FAILED: só a entrada, em vermelho "SEM OCO".
+  useEffect(() => {
+    const series = seriesRef.current;
+    if (!series) return;
+    for (const line of manualOcoLinesRef.current) {
+      try { series.removePriceLine(line); } catch { /* série recriada */ }
+    }
+    manualOcoLinesRef.current = [];
+    for (const o of manualOcoOrders ?? []) {
+      const { mounted, entry, target, stop, noOco } = manualOcoLevels(o);
+      if (!(entry > 0)) continue;
+      const line = (price, color, title, lineStyle = 0) => manualOcoLinesRef.current.push(
+        series.createPriceLine({ price, color, lineWidth: 1, lineStyle, axisLabelVisible: true, title }),
+      );
+      if (noOco) { line(entry, '#ef4444', `#${o.id} SEM OCO`); continue; }
+      if (mounted) {
+        line(entry, '#e2e8f0', `#${o.id} compra`, 2);
+        if (target > 0) line(target, '#22c55e', `#${o.id} alvo`);
+        if (stop > 0) line(stop, '#ef4444', `#${o.id} stop`);
+      } else {
+        line(entry, '#facc15', `#${o.id} ${o.entry_kind === 'trigger' ? 'rompimento' : 'compra limite'}`, 2);
+        if (target > 0) line(target, '#3b82f6', `#${o.id} prev. alvo`, 2);
+        if (stop > 0) line(stop, '#f97316', `#${o.id} prev. stop`, 2);
+      }
+    }
+  }, [manualOcoOrders, colors?.bg, colors?.text, colors?.panel]);
+
+  // OCO manual: linhas de entrada (amarela) / alvo / stop com rótulo no eixo — as três
+  // arrastáveis (efeito abaixo); entrada arrastada fica fixa (entryLocked), senão segue o preço.
+  // Depende das cores porque o chart é recriado quando elas mudam e as linhas antigas morrem
+  // junto com a série.
+  useEffect(() => {
+    const series = seriesRef.current;
+    if (!series) return;
+    for (const line of ocoPriceLinesRef.current) {
+      try { series.removePriceLine(line); } catch { /* série recriada */ }
+    }
+    ocoPriceLinesRef.current = [];
+    if (!ocoDraft?.entry) return;
+    const { entry, target, stop } = ocoDraft;
+    ocoPriceLinesRef.current = [
+      series.createPriceLine({
+        price: entry, color: '#facc15', lineWidth: 2, lineStyle: ocoDraft.entryLocked ? 0 : 2,
+        axisLabelVisible: true, title: `${ocoDraft.entryLocked ? 'Entrada' : 'Entrada (mercado)'} ⇕`,
+      }),
+      series.createPriceLine({ price: target, color: '#22c55e', lineWidth: 2, lineStyle: 0, axisLabelVisible: true, title: `Alvo ${formatPctFromBase(entry, target)} ⇕` }),
+      series.createPriceLine({ price: stop, color: '#ef4444', lineWidth: 2, lineStyle: 0, axisLabelVisible: true, title: `Stop ${formatPctFromBase(entry, stop)} ⇕` }),
+    ];
+  }, [ocoDraft, colors?.bg, colors?.text, colors?.panel]);
+
+  // Arrasto da entrada/alvo/stop da OCO manual. A lib escuta mousedown/touchstart nos próprios canvas —
+  // ouvindo na fase de CAPTURA no container e parando a propagação quando o clique cai a poucos
+  // px de uma das linhas, o gráfico não inicia o pan e o movimento vira arrasto da linha.
+  // Assinado uma vez: lê ocoDraftRef/seriesRef no momento do evento.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return undefined;
+    let dragLeg = null;
+    const localY = (clientY) => clientY - el.getBoundingClientRect().top;
+    const hitLeg = (clientY, tolPx) => {
+      const d = ocoDraftRef.current;
+      const s = seriesRef.current;
+      if (!d?.entry || !s) return null;
+      const y = localY(clientY);
+      let best = null;
+      let bestDist = tolPx;
+      for (const leg of ['entry', 'target', 'stop']) {
+        const ly = s.priceToCoordinate(d[leg]);
+        if (ly == null) continue;
+        const dist = Math.abs(ly - y);
+        if (dist <= bestDist) { best = leg; bestDist = dist; }
+      }
+      return best;
+    };
+    const moveTo = (clientY) => {
+      const d = ocoDraftRef.current;
+      const s = seriesRef.current;
+      if (!dragLeg || !d?.entry || !s) return;
+      const p = s.coordinateToPrice(localY(clientY));
+      if (!Number.isFinite(p) || p <= 0) return;
+      // stop < entrada < alvo, com folga mín. de 0,1% — OCO de venda.
+      if (dragLeg === 'entry') {
+        const entry = Math.min(Math.max(p, d.stop * 1.001), d.target * 0.999);
+        onOcoDraftChangeRef.current?.({ ...d, entry, entryLocked: true });
+        return;
+      }
+      const next = dragLeg === 'target' ? Math.max(p, d.entry * 1.001) : Math.min(p, d.entry * 0.999);
+      onOcoDraftChangeRef.current?.({ ...d, [dragLeg]: next });
+    };
+    const onMouseMove = (e) => moveTo(e.clientY);
+    const onTouchMove = (e) => {
+      if (!dragLeg || e.touches.length !== 1) return;
+      e.preventDefault();
+      moveTo(e.touches[0].clientY);
+    };
+    const endDrag = () => {
+      dragLeg = null;
+      el.classList.remove('oco-hover');
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', endDrag);
+      window.removeEventListener('touchmove', onTouchMove);
+      window.removeEventListener('touchend', endDrag);
+      window.removeEventListener('touchcancel', endDrag);
+    };
+    const onMouseDown = (e) => {
+      if (e.button !== 0) return;
+      const leg = hitLeg(e.clientY, 7);
+      if (!leg) return;
+      e.stopPropagation();
+      e.preventDefault();
+      dragLeg = leg;
+      window.addEventListener('mousemove', onMouseMove);
+      window.addEventListener('mouseup', endDrag);
+    };
+    const onTouchStart = (e) => {
+      if (e.touches.length !== 1) return;
+      const leg = hitLeg(e.touches[0].clientY, 16);
+      if (!leg) return;
+      e.stopPropagation();
+      e.preventDefault();
+      dragLeg = leg;
+      window.addEventListener('touchmove', onTouchMove, { passive: false });
+      window.addEventListener('touchend', endDrag);
+      window.addEventListener('touchcancel', endDrag);
+    };
+    // Cursor ⇕ ao passar sobre uma linha arrastável (classe .oco-hover em index.css — a lib põe
+    // cursor nos próprios canvas, então só um seletor descendente com !important vence).
+    const onHover = (e) => {
+      if (dragLeg) return;
+      el.classList.toggle('oco-hover', !!hitLeg(e.clientY, 7));
+    };
+    el.addEventListener('mousedown', onMouseDown, true);
+    el.addEventListener('touchstart', onTouchStart, { capture: true, passive: false });
+    el.addEventListener('mousemove', onHover);
+    return () => {
+      endDrag();
+      el.removeEventListener('mousedown', onMouseDown, true);
+      el.removeEventListener('touchstart', onTouchStart, { capture: true });
+      el.removeEventListener('mousemove', onHover);
+    };
+  }, []);
 
   // Linha de PnL: entrada → preço atual, verde/vermelho conforme sobe ou cai.
   useEffect(() => {

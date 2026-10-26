@@ -6,6 +6,12 @@ const { buildAdapter } = require('../bot/shared/buildAdapter');
 const getTickers = require('../binance/cachedTicker24hr');
 const supabase = require('../supabase/client');
 const { getSymbolFilters, getAvgPrice } = require('../binance/ocoClient');
+const { fetchLivePrice } = require('../bot/shared/livePrice');
+
+// OCO manual do gráfico (ChartOcoTool.jsx / ManualOcoOrdersPanel.jsx). Entrada arrastada: o painel
+// só grava o pedido e backend/bot/manual-oco/manualOcoWatcher.js (dentro do rsi-momentum-bot) arma
+// a compra, coloca a OCO no fill e detecta alvo/stop. Migração: supabase/add-manual-oco-orders-table.sql.
+const MANUAL_OCO_TABLE = 'manual_oco_orders';
 
 // GET /services/binance-trades?symbol=BTCUSDT&limit=500
 router.get('/binance-trades', async (req, res) => {
@@ -265,6 +271,184 @@ router.post('/binance-bracket-sell', async (req, res) => {
     res.json(bracket);
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /services/manual-oco-buy
+// Body: { symbol, exchange?: 'binance'|'gate', usdt, targetPrice, stopPrice }
+// Botão "Comprar agora" da OCO arrastada no gráfico (ChartOcoTool.jsx): compra a mercado `usdt`
+// e na sequência coloca a OCO de venda da quantidade comprada nos preços ABSOLUTOS do alvo/stop
+// (Binance = OCO real; Gate = par de trigger orders emulado — mesmo placeExitBracket dos bots).
+// Recusa antes de comprar se o preço atual já não está entre o stop e o alvo. Se a compra sai e a
+// OCO falha, responde 502 com `bought` — a posição fica SEM proteção e o usuário precisa saber.
+// Ordem avulsa: não cria favorito nem linha em rsi_multi_bot_state.
+router.post('/manual-oco-buy', async (req, res) => {
+  const { symbol, exchange = 'binance', usdt, targetPrice, stopPrice } = req.body ?? {};
+  const usdtNum = Number(usdt);
+  const target = Number(targetPrice);
+  const stop = Number(stopPrice);
+  if (!symbol || !(usdtNum > 0) || !(target > 0) || !(stop > 0))
+    return res.status(400).json({ error: 'symbol, usdt, targetPrice e stopPrice são obrigatórios (> 0)' });
+  if (!['binance', 'gate'].includes(exchange))
+    return res.status(400).json({ error: 'exchange deve ser binance ou gate' });
+  if (!(stop < target))
+    return res.status(400).json({ error: 'stop precisa ficar abaixo do alvo' });
+
+  const symbolUpper = symbol.toUpperCase();
+  let price;
+  try {
+    price = await fetchLivePrice(exchange, symbolUpper);
+  } catch (err) {
+    return res.status(500).json({ error: `Falha ao ler o preço atual: ${err.message}` });
+  }
+  if (!(price > 0)) return res.status(500).json({ error: `preço atual inválido para ${symbolUpper}` });
+  if (!(stop < price && price < target)) {
+    return res.status(409).json({
+      error: `Preço atual (${price}) fora da OCO (stop ${stop} / alvo ${target}) — reposicione as linhas.`,
+      price,
+    });
+  }
+
+  if (exchange === 'binance') await syncBinanceClock(); // ver comentário no /binance-bracket-sell
+  const adapter = buildAdapter(exchange, symbolUpper);
+
+  let bought;
+  try {
+    bought = await adapter.marketBuy(usdtNum);
+  } catch (err) {
+    return res.status(500).json({ error: `Compra falhou: ${err.message}` });
+  }
+
+  // Grava em manual_oco_orders (entry_kind 'market') pra o gráfico mostrar a OCO ao abrir a moeda
+  // e o bot detectar alvo/stop executado. Best-effort: tabela ausente não desfaz a compra.
+  const record = (fields) => supabase.from(MANUAL_OCO_TABLE).insert({
+    symbol: symbolUpper, exchange, usdt: usdtNum,
+    entry_price: bought.avgPrice, target_price: target, stop_price: stop, entry_kind: 'market',
+    fill: { filledQty: bought.filledQty, quoteQty: bought.quoteQty, avgPrice: bought.avgPrice, at: new Date().toISOString() },
+    ...fields,
+  }).then(({ error }) => { if (error) console.warn(`[manual-oco-buy] registro falhou: ${error.message}`); });
+
+  try {
+    const bracket = await adapter.placeExitBracket(bought.filledQty, target, stop);
+    await record({ status: 'BRACKETED', bracket });
+    res.json({ bought, bracket });
+  } catch (err) {
+    await record({ status: 'OCO_FAILED', error: err.message });
+    res.status(502).json({
+      error: `Comprou ${bought.filledQty} a ~${bought.avgPrice}, mas a OCO FALHOU: ${err.message} — posição sem stop/alvo, proteja manualmente.`,
+      bought,
+    });
+  }
+});
+
+
+// POST /services/manual-oco-orders
+// Body: { symbol, exchange?, usdt, entryPrice, targetPrice, stopPrice }
+// entry abaixo do preço atual → 'limit' (LIMIT BUY GTC); acima → 'trigger' (compra a mercado no
+// rompimento). Exige stop < entrada < alvo.
+router.post('/manual-oco-orders', async (req, res) => {
+  const { symbol, exchange = 'binance', usdt, entryPrice, targetPrice, stopPrice } = req.body ?? {};
+  const usdtNum = Number(usdt);
+  const entry = Number(entryPrice);
+  const target = Number(targetPrice);
+  const stop = Number(stopPrice);
+  if (!symbol || !(usdtNum > 0) || !(entry > 0) || !(target > 0) || !(stop > 0))
+    return res.status(400).json({ error: 'symbol, usdt, entryPrice, targetPrice e stopPrice são obrigatórios (> 0)' });
+  if (!['binance', 'gate'].includes(exchange))
+    return res.status(400).json({ error: 'exchange deve ser binance ou gate' });
+  if (!(stop < entry && entry < target))
+    return res.status(400).json({ error: 'precisa stop < entrada < alvo' });
+
+  const symbolUpper = symbol.toUpperCase();
+  let price;
+  try {
+    price = await fetchLivePrice(exchange, symbolUpper);
+  } catch (err) {
+    return res.status(500).json({ error: `Falha ao ler o preço atual: ${err.message}` });
+  }
+  if (!(price > 0)) return res.status(500).json({ error: `preço atual inválido para ${symbolUpper}` });
+
+  const { data, error } = await supabase.from(MANUAL_OCO_TABLE).insert({
+    symbol: symbolUpper, exchange, usdt: usdtNum,
+    entry_price: entry, target_price: target, stop_price: stop,
+    entry_kind: entry < price ? 'limit' : 'trigger',
+  }).select().single();
+  if (error) {
+    return res.status(500).json({ error: error.message, hint: 'rode supabase/add-manual-oco-orders-table.sql (1×)' });
+  }
+  res.json({ ...data, livePrice: price });
+});
+
+// GET /services/manual-oco-orders?symbol=BTCUSDT — últimas 20 do símbolo (ativas primeiro na UI).
+router.get('/manual-oco-orders', async (req, res) => {
+  const { symbol } = req.query;
+  if (!symbol) return res.status(400).json({ error: 'symbol obrigatório' });
+  const { data, error } = await supabase.from(MANUAL_OCO_TABLE)
+    .select('*').eq('symbol', symbol.toUpperCase())
+    .order('id', { ascending: false }).limit(20);
+  if (error) return res.status(500).json({ error: error.message, hint: 'rode supabase/add-manual-oco-orders-table.sql (1×)' });
+  res.json(data ?? []);
+});
+
+// POST /services/manual-oco-orders/:id/cancel — NEW (bot ainda não pegou) vira CANCELLED direto;
+// OPEN vira CANCEL_REQUESTED e o bot cancela a limite na corretora no próximo passe.
+router.post('/manual-oco-orders/:id/cancel', async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'id inválido' });
+  const now = new Date().toISOString();
+  for (const [from, to] of [['NEW', 'CANCELLED'], ['OPEN', 'CANCEL_REQUESTED']]) {
+    const { data, error } = await supabase.from(MANUAL_OCO_TABLE)
+      .update({ status: to, updated_at: now }).eq('id', id).eq('status', from).select();
+    if (error) return res.status(500).json({ error: error.message });
+    if (data?.length) return res.json(data[0]);
+  }
+  res.status(409).json({ error: 'ordem não está mais pendente (já comprou ou foi encerrada)' });
+});
+
+// POST /services/manual-oco-orders/:id/sell — "Vender agora" do gráfico: cancela a OCO e vende a
+// mercado a quantidade comprada (limitada ao saldo livre). Marca SELLING antes (condicional) pra o
+// watcher do bot não pollar a OCO no meio. Se a OCO já tinha executado, devolve 409 e encerra a
+// linha como CLOSED_*; se a OCO foi cancelada mas a venda falhou, vira OCO_FAILED (sem proteção).
+router.post('/manual-oco-orders/:id/sell', async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'id inválido' });
+
+  const { data: rows, error: lockErr } = await supabase.from(MANUAL_OCO_TABLE)
+    .update({ status: 'SELLING', updated_at: new Date().toISOString() })
+    .eq('id', id).in('status', ['BRACKETED', 'OCO_FAILED', 'FILLED']).select();
+  if (lockErr) return res.status(500).json({ error: lockErr.message });
+  const row = rows?.[0];
+  if (!row) return res.status(409).json({ error: 'ordem sem posição aberta (ainda não comprou ou já foi encerrada)' });
+
+  const finish = (fields) => supabase.from(MANUAL_OCO_TABLE)
+    .update({ ...fields, updated_at: new Date().toISOString() }).eq('id', id);
+  const exchange = row.exchange === 'gate' ? 'gate' : 'binance';
+  try {
+    if (exchange === 'binance') await syncBinanceClock();
+    const adapter = buildAdapter(exchange, row.symbol);
+
+    if (row.bracket) {
+      await adapter.cancelExitBracket(row.bracket);
+      const r = await adapter.pollExitBracket(row.bracket).catch(() => null);
+      if (r?.filled) {
+        const exit = { kind: r.filled, soldQty: r.soldQty, usdtOut: r.usdtOut, exitPrice: r.exitPrice, at: new Date().toISOString() };
+        await finish({ status: r.filled === 'target' ? 'CLOSED_TARGET' : 'CLOSED_STOP', exit });
+        return res.status(409).json({ error: `A OCO já tinha executado (${r.filled === 'target' ? 'alvo' : 'stop'} a ~${r.exitPrice}).` });
+      }
+    }
+
+    let qty = Number(row.fill?.filledQty);
+    const free = Number(await adapter.getBaseBalance());
+    if (Number.isFinite(free) && free > 0) qty = Number.isFinite(qty) && qty > 0 ? Math.min(qty, free) : free;
+    if (!(qty > 0)) throw new Error('sem saldo do ativo para vender');
+
+    const sold = await adapter.marketSell(qty);
+    const exit = { kind: 'manual', soldQty: sold.soldQty, usdtOut: sold.usdtOut, exitPrice: sold.exitPrice, at: new Date().toISOString() };
+    await finish({ status: 'SOLD', exit, error: null });
+    res.json({ ...row, status: 'SOLD', exit });
+  } catch (err) {
+    await finish({ status: 'OCO_FAILED', error: `venda imediata falhou: ${err.message}` });
+    res.status(500).json({ error: `Venda falhou: ${err.message} — confira a posição na corretora (a OCO pode ter sido cancelada).` });
   }
 });
 

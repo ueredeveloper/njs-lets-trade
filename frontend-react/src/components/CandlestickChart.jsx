@@ -8,6 +8,10 @@ import { computeVwapSlopeFlags } from '../utils/vwapSlopeHighlight';
 import { buildTrailingStopSeries, resolveChartStopLoss, resolveChartTarget, computeStopLossFloor } from '../utils/trailingStopLoss';
 import { getEntriesForSymbol } from '../constants/strategyPresets';
 import CandlestickChartLW from './CandlestickChartLW';
+import ChartOcoTool from './ChartOcoTool';
+import ManualOcoOrdersPanel from './ManualOcoOrdersPanel';
+import { listManualOcoOrders } from '../services/api';
+import { isManualOcoActive } from '../utils/manualOco';
 import convertOpenTime from '../utils/convertOpenTime';
 import Tooltip from './Tooltip';
 import { useIsMobile } from '../hooks/useIsMobile';
@@ -3283,6 +3287,47 @@ export default function CandlestickChart() {
   const [measurePoints, setMeasurePoints] = useState(null);
   const [measureOneShot, setMeasureOneShot] = useState(false);
   const measureClearTimeoutRef = useRef(null);
+  // OCO manual (botão "OCO", só no motor LW): { entry, target, stop, entryLocked } em preço
+  // absoluto. Sem entryLocked a entrada acompanha o último close (compra a mercado); arrastar a
+  // linha amarela fixa a entrada (ordem executada pelo bot). Alvo/stop são arrastados no gráfico
+  // (CandlestickChartLW.jsx) e ficam fixos enquanto o preço anda. Ver ChartOcoTool.jsx.
+  const [ocoDraft, setOcoDraft] = useState(null);
+  const ocoLastClose = useMemo(() => {
+    const cs = selectedChart?.candlesticks;
+    for (let i = (cs?.length ?? 0) - 1; i >= 0; i--) {
+      const c = Number(cs[i]?.close);
+      if (Number.isFinite(c) && c > 0) return c;
+    }
+    return null;
+  }, [selectedChart?.candlesticks]);
+  useEffect(() => { setOcoDraft(null); }, [selectedChart?.symbol]);
+  useEffect(() => {
+    if (ocoLastClose == null) return;
+    setOcoDraft((d) => (d && !d.entryLocked && d.entry !== ocoLastClose ? { ...d, entry: ocoLastClose } : d));
+  }, [ocoLastClose]);
+  // Ordens da OCO manual JÁ gravadas (manual_oco_orders) da moeda aberta — buscadas ao clicar na
+  // moeda e a cada 10s; as ativas são desenhadas no gráfico + ManualOcoOrdersPanel (vender/cancelar).
+  // Tabela ausente (migração não rodada) = lista vazia silenciosa.
+  const [manualOcoOrders, setManualOcoOrders] = useState([]);
+  const ocoSymbol = selectedChart?.symbol;
+  const reloadManualOcoOrders = useCallback(async () => {
+    if (!ocoSymbol) return;
+    try {
+      const list = await listManualOcoOrders(ocoSymbol);
+      setManualOcoOrders((list ?? []).filter(isManualOcoActive));
+    } catch { /* sem tabela/sem rede — não desenha nada */ }
+  }, [ocoSymbol]);
+  useEffect(() => {
+    setManualOcoOrders([]);
+    reloadManualOcoOrders();
+    const id = setInterval(reloadManualOcoOrders, 10_000);
+    return () => clearInterval(id);
+  }, [reloadManualOcoOrders]);
+  const toggleOcoDraft = useCallback(() => {
+    setOcoDraft((d) => (d || ocoLastClose == null
+      ? null
+      : { entry: ocoLastClose, target: ocoLastClose * 1.03, stop: ocoLastClose * 0.98 }));
+  }, [ocoLastClose]);
   // Caixa de análise: o usuário arrasta um retângulo sobre alguns candles pra rodar a
   // detecção de bandeiras SÓ naquele trecho (ver chartFlagsConfig). `analysisBox` guarda a
   // seleção efetivada {fromMs,toMs,priceLow,priceHigh}; `analysisDrag` é o preview em pixels
@@ -5987,6 +6032,19 @@ export default function CandlestickChart() {
           ⬚
         </button>
       )}
+      {showLwChart && (
+        <button
+          onClick={(e) => { e.stopPropagation(); toggleOcoDraft(); }}
+          title="OCO manual — desenha alvo/stop arrastáveis no gráfico e libera o botão Comprar agora (compra a mercado + OCO de venda nesses preços)"
+          className={`h-5 md:h-6 px-1 inline-flex items-center justify-center text-[10px] md:text-[11px] rounded font-mono font-bold transition-colors border shrink-0 shadow-lg ${
+            ocoDraft
+              ? 'bg-green-400 text-black border-green-200 shadow-green-400/50'
+              : 'bg-green-600/80 text-white border-green-500 hover:bg-green-500'
+          }`}
+        >
+          OCO
+        </button>
+      )}
       {analysisBox && (
         <button
           onClick={clearAnalysisBox}
@@ -6812,8 +6870,29 @@ export default function CandlestickChart() {
             loadingMoreCandles={loadingMoreCandles}
             onVisibleRangeChange={reportVisibleRange}
             visibleRange={visibleChartRange}
+            ocoDraft={ocoDraft}
+            onOcoDraftChange={setOcoDraft}
+            manualOcoOrders={manualOcoOrders}
           />
         ) : chartNode}
+        {showLwChart && (
+          <ManualOcoOrdersPanel
+            orders={manualOcoOrders}
+            marketPrice={ocoLastClose}
+            onChanged={reloadManualOcoOrders}
+          />
+        )}
+        {showLwChart && ocoDraft && (
+          <ChartOcoTool
+            symbol={selectedChart.symbol}
+            exchange={selectedChart.source === 'gate' ? 'gate' : 'binance'}
+            ocoDraft={ocoDraft}
+            marketPrice={ocoLastClose}
+            onChange={setOcoDraft}
+            onOrdersChanged={reloadManualOcoOrders}
+            onClose={() => setOcoDraft(null)}
+          />
+        )}
         {!showLwChart && !lwSupported && uiPrefs.chartEngineDefault !== 'echarts' && (
           <div
             className="absolute top-1 left-2 z-10 text-[10px] font-mono text-p5/50 pointer-events-none"

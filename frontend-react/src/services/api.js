@@ -2150,3 +2150,55 @@ export async function fetchCandlesAndIndicators(currencies, intervals, maPeriod 
 
   return results;
 }
+
+/** OCO manual do gráfico (ChartOcoTool.jsx): compra a mercado `usdt` e coloca a OCO de venda nos
+ *  preços absolutos do alvo/stop arrastados. Erro com `bought` = comprou mas a OCO falhou. */
+export async function buyWithManualOco({ symbol, exchange, usdt, targetPrice, stopPrice }) {
+  const res = await fetch('/services/manual-oco-buy', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ symbol, exchange, usdt, targetPrice, stopPrice }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error(body.error ?? `HTTP ${res.status}`);
+    err.bought = body.bought ?? null;
+    throw err;
+  }
+  return body;
+}
+
+/** OCO manual com entrada fixa (linha amarela arrastada) — só grava o pedido; o bot RSI Momentum
+ *  arma a compra (limite abaixo do preço / rompimento acima) e coloca a OCO no fill. */
+export async function createManualOcoOrder({ symbol, exchange, usdt, entryPrice, targetPrice, stopPrice }) {
+  const res = await fetch('/services/manual-oco-orders', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ symbol, exchange, usdt, entryPrice, targetPrice, stopPrice }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.hint ? `${body.error} — ${body.hint}` : (body.error ?? `HTTP ${res.status}`));
+  return body;
+}
+
+export async function listManualOcoOrders(symbol) {
+  const res = await fetch(`/services/manual-oco-orders?symbol=${encodeURIComponent(symbol)}`);
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.hint ? `${body.error} — ${body.hint}` : (body.error ?? `HTTP ${res.status}`));
+  return body;
+}
+
+export async function cancelManualOcoOrder(id) {
+  const res = await fetch(`/services/manual-oco-orders/${id}/cancel`, { method: 'POST' });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`);
+  return body;
+}
+
+/** "Vender agora" de uma OCO manual montada: cancela a OCO e vende a mercado. */
+export async function sellManualOcoOrder(id) {
+  const res = await fetch(`/services/manual-oco-orders/${id}/sell`, { method: 'POST' });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`);
+  return body;
+}
