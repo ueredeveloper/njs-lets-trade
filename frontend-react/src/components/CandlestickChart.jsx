@@ -6715,7 +6715,7 @@ export default function CandlestickChart() {
             <label className="flex items-center gap-0.5 text-[10px] text-green-400" title="Alvo: % acima do preço de entrada">
               alvo +
               <input
-                type="number" min="0.1" step="0.5" value={paParams.targetPct}
+                type="number" min="0.1" step="0.1" value={paParams.targetPct}
                 onChange={(e) => setPaParams((p) => ({ ...p, targetPct: Number(e.target.value) }))}
                 className="w-12 bg-p2 border border-p3/40 text-p5 rounded px-1 py-0.5 text-right"
               />%
@@ -6723,7 +6723,7 @@ export default function CandlestickChart() {
             <label className="flex items-center gap-0.5 text-[10px] text-red-400" title="Stop loss: % abaixo do preço de entrada">
               stop −
               <input
-                type="number" min="0.1" step="0.5" value={paParams.stopPct}
+                type="number" min="0.1" step="0.1" value={paParams.stopPct}
                 onChange={(e) => setPaParams((p) => ({ ...p, stopPct: Number(e.target.value) }))}
                 className="w-12 bg-p2 border border-p3/40 text-p5 rounded px-1 py-0.5 text-right"
               />%
@@ -6731,7 +6731,7 @@ export default function CandlestickChart() {
             <label className="flex items-center gap-0.5 text-[10px] text-yellow-300" title="Entrada LIMIT: nível do candle de referência (0 = mínima, 50 = meio, 100 = máxima)">
               entrada
               <input
-                type="number" min="0" max="100" step="5" value={paParams.entryLevelPct}
+                type="number" min="0" max="100" step="1" value={paParams.entryLevelPct}
                 onChange={(e) => setPaParams((p) => ({ ...p, entryLevelPct: Number(e.target.value) }))}
                 className="w-11 bg-p2 border border-p3/40 text-p5 rounded px-1 py-0.5 text-right"
               />%
