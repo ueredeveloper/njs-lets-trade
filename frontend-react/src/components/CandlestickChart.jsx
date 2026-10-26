@@ -12,6 +12,7 @@ import ChartOcoTool from './ChartOcoTool';
 import ManualOcoOrdersPanel from './ManualOcoOrdersPanel';
 import { listManualOcoOrders } from '../services/api';
 import { isManualOcoActive } from '../utils/manualOco';
+import { simulatePriceActionBox, PRICE_ACTION_DEFAULTS } from '../utils/priceActionBoxSim';
 import convertOpenTime from '../utils/convertOpenTime';
 import Tooltip from './Tooltip';
 import { useIsMobile } from '../hooks/useIsMobile';
@@ -3362,6 +3363,16 @@ export default function CandlestickChart() {
   // Posição em pixel (canto superior da caixa) pros selects de Tipo/Estratégia/Regra ficarem
   // "grudados" nela — recalculada a cada pan/zoom (ver efeito logo abaixo de handleAnalysisBoxStart).
   const [analysisBoxAnchorPx, setAnalysisBoxAnchorPx] = useState(null);
+  // Tipo 'priceAction': parâmetros editáveis do simulador (priceActionBoxSim.js) — lembrados no
+  // navegador entre sessões (conveniência; padrão alvo 10% / entrada 50% do candle / stop 5%).
+  const [paParams, setPaParams] = useState(() => {
+    try {
+      return { ...PRICE_ACTION_DEFAULTS, ...JSON.parse(localStorage.getItem('chartPriceActionParams') || '{}') };
+    } catch { return PRICE_ACTION_DEFAULTS; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem('chartPriceActionParams', JSON.stringify(paParams)); } catch { /* sem storage */ }
+  }, [paParams]);
 
   function clearMeasureAutoHide() {
     if (measureClearTimeoutRef.current) {
@@ -5706,9 +5717,59 @@ export default function CandlestickChart() {
     }
     return rects;
   }, [chartFlagsOverride, chartViewSource, chartTradeMarkers]);
+  // Caixa tipo 'priceAction' — simulação client-side nos candles da tela (priceActionBoxSim.js):
+  // 1º candle de alta fechado na caixa → LIMIT no nível do candle de referência → OCO alvo/stop.
+  const paIntervalMs = INTERVAL_MS[selectedChart?.interval ?? currentInterval] ?? 0;
+  const paSim = useMemo(() => {
+    if (!analysisBox || analysisBoxKind !== 'priceAction') return null;
+    return simulatePriceActionBox(selectedChart?.candlesticks, analysisBox, paParams, paIntervalMs);
+  }, [analysisBox, analysisBoxKind, selectedChart?.candlesticks, paParams, paIntervalMs]);
+
+  // Desenho: faixa amarela no candle de referência (de onde sai a entrada, com o nível) até o fill
+  // (ou até a borda da caixa, se não preencheu) + OCO do trade igual ao chartTradeBoxRects (a ponta
+  // atingida ganha contorno forte e o resultado no rótulo).
+  const chartPaBoxRects = useMemo(() => {
+    if (!paSim?.ref) return [];
+    const ivSec = Math.max(1, Math.floor(paIntervalMs / 1000));
+    const refT = Math.floor(paSim.ref.openTime / 1000);
+    const fillT = paSim.fill ? Math.floor(paSim.fill.openTime / 1000) : Math.floor(analysisBox.toMs / 1000);
+    const lvlLabel = `${paSim.params.entryRef === 'prev' ? 'ant. ' : ''}${paSim.level}%`;
+    const rects = [{
+      time1: refT, time2: Math.max(refT + ivSec, fillT), price1: paSim.ref.low, price2: paSim.ref.high,
+      fillColor: 'rgba(250,204,21,0.10)', strokeColor: 'rgba(250,204,21,0.6)', labelColor: '#facc15',
+      label: paSim.status === 'notFilled'
+        ? `entrada ${fmtPrice(paSim.entryPlanned)} (${lvlLabel}) · não preencheu`
+        : `entrada ${fmtPrice(paSim.entry)} (${lvlLabel})`,
+      labelPos: 'bottom',
+    }];
+    if (!paSim.fill) return rects;
+    const t1 = fillT;
+    const t2 = Math.max(t1 + ivSec, Math.floor(paSim.exit.openTime / 1000) + ivSec);
+    const pctLabel = `${paSim.pnlPct >= 0 ? '+' : ''}${paSim.pnlPct.toFixed(2)}%`;
+    const targetHit = paSim.outcome === 'target';
+    const stopHit = paSim.outcome === 'stop';
+    rects.push({
+      time1: t1, time2: t2, price1: paSim.entry, price2: paSim.targetPrice,
+      fillColor: targetHit ? 'rgba(34,197,94,0.22)' : 'rgba(34,197,94,0.08)',
+      strokeColor: targetHit ? 'rgba(34,197,94,0.9)' : 'rgba(34,197,94,0.3)',
+      labelColor: '#22c55e',
+      label: targetHit ? `alvo ✓ ${pctLabel}` : `alvo +${paSim.params.targetPct}%`,
+      labelPos: 'top',
+    });
+    rects.push({
+      time1: t1, time2: t2, price1: paSim.entry, price2: paSim.stopPrice,
+      fillColor: stopHit ? 'rgba(239,68,68,0.22)' : 'rgba(239,68,68,0.08)',
+      strokeColor: stopHit ? 'rgba(239,68,68,0.9)' : 'rgba(239,68,68,0.3)',
+      labelColor: '#ef4444',
+      label: stopHit ? `stop ✗ ${pctLabel}` : paSim.outcome === 'open' ? `aberto ${pctLabel}` : `stop −${paSim.params.stopPct}%`,
+      labelPos: 'bottom',
+    });
+    return rects;
+  }, [paSim, paIntervalMs, analysisBox]);
+
   const tradeBoxRectsAll = useMemo(
-    () => (chartFlagOcoRects.length ? [...chartTradeBoxRects, ...chartFlagOcoRects] : chartTradeBoxRects),
-    [chartTradeBoxRects, chartFlagOcoRects],
+    () => [...chartTradeBoxRects, ...chartFlagOcoRects, ...chartPaBoxRects],
+    [chartTradeBoxRects, chartFlagOcoRects, chartPaBoxRects],
   );
 
   // S/R "traço" de cada entrada — reaproveita o `sr.levels` que o PRÓPRIO backtest devolve por
@@ -5793,9 +5854,20 @@ export default function CandlestickChart() {
     if (analysisBoxKind === 'bbEvolution') {
       return { ...base, label: '📊 evolução BB' };
     }
+    if (analysisBoxKind === 'priceAction') {
+      const label = {
+        closed: paSim?.outcome === 'target' ? 'price action · alvo ✓' : 'price action · stop ✗',
+        open: 'price action · em aberto',
+        notFilled: 'price action · entrada não preencheu',
+        noSignal: 'price action · sem candle de alta fechado',
+        noRef: 'price action · sem candle anterior',
+        badParams: 'price action · parâmetros inválidos',
+      }[paSim?.status] ?? 'price action';
+      return { ...base, label };
+    }
     const n = chartFlagsConfig?.scoped ? chartFlagsConfig.scopedCount : null;
     return { ...base, label: n != null ? `análise · ${n} candle${n === 1 ? '' : 's'}` : 'análise' };
-  }, [analysisBox, analysisBoxKind, chartFlagsConfig, analysisBoxTradeSim, chartTradeBoxRects]);
+  }, [analysisBox, analysisBoxKind, chartFlagsConfig, analysisBoxTradeSim, chartTradeBoxRects, paSim]);
 
   // DEBUG (Teste): ao criar a caixa de análise, printa no console os níveis de S/R no momento da
   // borda direita da caixa — mesmo cálculo rolante do gráfico, ancorado no último candle do
@@ -6626,7 +6698,7 @@ export default function CandlestickChart() {
       className="absolute z-30 flex flex-col gap-1 items-start"
       style={{ left: Math.max(4, analysisBoxAnchorPx.left), top: Math.max(4, analysisBoxAnchorPx.top - 32) }}
     >
-      <div className="flex items-center gap-1 bg-slate-900/95 border border-slate-600 rounded px-1.5 py-1 shadow-lg">
+      <div className="flex flex-wrap items-center gap-1 bg-slate-900/95 border border-slate-600 rounded px-1.5 py-1 shadow-lg">
         <select
           value={analysisBoxKind}
           onChange={(e) => setAnalysisBoxKind(e.target.value)}
@@ -6635,8 +6707,54 @@ export default function CandlestickChart() {
         >
           <option value="flag">Bandeira</option>
           <option value="trade">Trade</option>
+          <option value="priceAction">Price action</option>
           <option value="bbEvolution">Evolução BB</option>
         </select>
+        {analysisBoxKind === 'priceAction' && (
+          <>
+            <label className="flex items-center gap-0.5 text-[10px] text-green-400" title="Alvo: % acima do preço de entrada">
+              alvo +
+              <input
+                type="number" min="0.1" step="0.5" value={paParams.targetPct}
+                onChange={(e) => setPaParams((p) => ({ ...p, targetPct: Number(e.target.value) }))}
+                className="w-12 bg-p2 border border-p3/40 text-p5 rounded px-1 py-0.5 text-right"
+              />%
+            </label>
+            <label className="flex items-center gap-0.5 text-[10px] text-red-400" title="Stop loss: % abaixo do preço de entrada">
+              stop −
+              <input
+                type="number" min="0.1" step="0.5" value={paParams.stopPct}
+                onChange={(e) => setPaParams((p) => ({ ...p, stopPct: Number(e.target.value) }))}
+                className="w-12 bg-p2 border border-p3/40 text-p5 rounded px-1 py-0.5 text-right"
+              />%
+            </label>
+            <label className="flex items-center gap-0.5 text-[10px] text-yellow-300" title="Entrada LIMIT: nível do candle de referência (0 = mínima, 50 = meio, 100 = máxima)">
+              entrada
+              <input
+                type="number" min="0" max="100" step="5" value={paParams.entryLevelPct}
+                onChange={(e) => setPaParams((p) => ({ ...p, entryLevelPct: Number(e.target.value) }))}
+                className="w-11 bg-p2 border border-p3/40 text-p5 rounded px-1 py-0.5 text-right"
+              />%
+            </label>
+            <select
+              value={paParams.entryRef}
+              onChange={(e) => setPaParams((p) => ({ ...p, entryRef: e.target.value }))}
+              title="Candle de referência da entrada: o candle de alta do sinal (o anterior à entrada) ou o candle antes dele"
+              className="bg-p2 border border-p3/40 text-p5 text-[10px] rounded px-1 py-0.5 focus:outline-none focus:border-p4"
+            >
+              <option value="signal">do candle de alta</option>
+              <option value="prev">do candle antes dele</option>
+            </select>
+            <button
+              type="button"
+              onClick={() => setPaParams(PRICE_ACTION_DEFAULTS)}
+              title="Voltar ao padrão (alvo 10%, entrada 50% do candle de alta, stop 5%)"
+              className="w-5 h-5 inline-flex items-center justify-center text-[11px] rounded border shrink-0 bg-p2 text-p5 border-p3/40 hover:bg-p3/30"
+            >
+              ↺
+            </button>
+          </>
+        )}
         {analysisBoxKind === 'trade' && (
           <>
             <select
@@ -6699,6 +6817,31 @@ export default function CandlestickChart() {
         </div>
       )}
       {analysisBoxKind === 'trade' && analysisBoxRulesOpen && analysisBoxRulesPanel}
+      {analysisBoxKind === 'priceAction' && paSim && (
+        <div className="px-1.5 py-1 rounded bg-slate-900/90 border border-slate-700 text-slate-300 text-[10px] font-mono shadow leading-snug">
+          {paSim.signal && (
+            <div>
+              sinal {fmtDate(paSim.signal.openTime)} · entrada {fmtPrice(paSim.entry ?? paSim.entryPlanned)}
+              {paSim.fill && ` em ${fmtDate(paSim.fill.openTime)}`}
+            </div>
+          )}
+          {paSim.status === 'closed' && (
+            <div className={paSim.outcome === 'target' ? 'text-green-400' : 'text-red-400'}>
+              {paSim.outcome === 'target' ? 'alvo ✓' : 'stop ✗'} {fmtPrice(paSim.exitPrice)} em {fmtDate(paSim.exit.openTime)}
+              {` · ${paSim.pnlPct >= 0 ? '+' : ''}${paSim.pnlPct.toFixed(2)}% · ${paSim.candlesHeld} candle${paSim.candlesHeld === 1 ? '' : 's'}`}
+            </div>
+          )}
+          {paSim.status === 'open' && (
+            <div className={paSim.pnlPct >= 0 ? 'text-green-400' : 'text-red-400'}>
+              em aberto · agora {paSim.pnlPct >= 0 ? '+' : ''}{paSim.pnlPct.toFixed(2)}% · {paSim.candlesHeld} candles
+            </div>
+          )}
+          {paSim.status === 'notFilled' && <div className="text-amber-300">a entrada não foi tocada dentro da caixa — alargue a caixa ou suba o nível</div>}
+          {paSim.status === 'noSignal' && <div className="text-amber-300">nenhum candle de alta fechado dentro da caixa</div>}
+          {paSim.status === 'noRef' && <div className="text-amber-300">não há candle antes do sinal carregado</div>}
+          {paSim.status === 'badParams' && <div className="text-red-400">alvo e stop precisam ser &gt; 0 (stop &lt; 100%)</div>}
+        </div>
+      )}
     </div>
   );
 
