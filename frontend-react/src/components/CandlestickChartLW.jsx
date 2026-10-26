@@ -782,6 +782,42 @@ function toValidLwCandles(candlesticks) {
 }
 
 /**
+ * Contorna um bug do Lightweight Charts 5.2 que derrubava o componente ao arrastar o gráfico pra
+ * trás ("Uncaught Error: Value is null" em SeriesBarColorer.Candlestick → hitTest). Quando um
+ * setData/removeSeries muda o INÍCIO do eixo de tempo (candles mais antigos chegando pelo
+ * onNeedOlderCandles, ou uma série que começava antes sendo removida), a lib reatribui os índices
+ * das linhas de TODAS as séries no lugar, mas só atualiza a busca por índice de cada série uma por
+ * uma (_sendUpdateToChart) — e o setData de cada série já chama updateCrosshair, que faz hit-test
+ * em todas. Uma série ainda não atualizada (o candle) é consultada com índices velhos → linha null
+ * → ensureNotNull lança dentro do nosso efeito de setData. Só acontece com o crosshair num pane
+ * (mouse em cima do gráfico = justamente durante o arrasto). Limpar o crosshair antes dessas
+ * mudanças faz o updateCrosshair pular o hit-test; o próximo movimento do mouse o redesenha.
+ * Mudanças só no FIM (candle novo, whitespace à direita) não reindexam nada e não limpam.
+ */
+function guardCrosshairDuringReindex(chart) {
+  const firstTimeBySeries = new WeakMap();
+  const clear = () => { try { chart.clearCrosshairPosition(); } catch { /* chart destruído */ } };
+  const origAddSeries = chart.addSeries.bind(chart);
+  chart.addSeries = (...args) => {
+    const s = origAddSeries(...args);
+    const origSetData = s.setData.bind(s);
+    s.setData = (data) => {
+      const first = data?.length ? data[0].time : null;
+      if (first !== (firstTimeBySeries.get(s) ?? null)) clear();
+      firstTimeBySeries.set(s, first);
+      return origSetData(data);
+    };
+    return s;
+  };
+  const origRemoveSeries = chart.removeSeries.bind(chart);
+  chart.removeSeries = (s) => {
+    if (firstTimeBySeries.get(s) != null) clear();
+    firstTimeBySeries.delete(s);
+    return origRemoveSeries(s);
+  };
+}
+
+/**
  * Motor de gráfico padrão (TradingView Lightweight Charts). Candles + EMA9/21/50/200 + EMAs
  * extras com bandas % + VWAP(bandas) + Bollinger + S/R + PPHL + RSI/CHOP (sub-painéis nativos)
  * + Stop Loss/Alvo + marcadores de trade. Só ficam de fora (ver CandlestickChart.jsx): nuvem
@@ -953,6 +989,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
         vertTouchDrag: true,
       },
     });
+    guardCrosshairDuringReindex(chart);
     const series = chart.addSeries(CandlestickSeries, {
       upColor: C_UP, downColor: C_DOWN,
       borderUpColor: C_UP, borderDownColor: C_DOWN,
