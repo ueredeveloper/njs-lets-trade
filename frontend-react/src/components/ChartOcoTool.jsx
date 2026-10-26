@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { buyWithManualOco, createManualOcoOrder } from '../services/api';
 
 const USDT_STORAGE_KEY = 'chartOcoUsdt';
@@ -56,12 +56,23 @@ function PctInput({ value, onCommit, sign }) {
  * As duas viram linha em manual_oco_orders e aparecem no gráfico + ManualOcoOrdersPanel
  * (vender/cancelar). Depois da OCO montada o bot só vigia alvo/stop — não gerencia a posição.
  */
-export default function ChartOcoTool({ symbol, exchange, ocoDraft, marketPrice, onChange, onOrdersChanged, onClose }) {
+export default function ChartOcoTool({ symbol, exchange, ocoDraft, marketPrice, suggester, onChange, onOrdersChanged, onClose }) {
   const [usdt, setUsdt] = useState(readStoredUsdt);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState(null); // { ok: bool, text }
 
   useEffect(() => { setStatus(null); }, [symbol]);
+
+  // Sugestão pra entrada atual (ocoSuggest.js) + a MESMA estatística aplicada ao alvo/stop que
+  // está desenhado agora — dá pra comparar "12%/6% que eu quero" × "o que a moeda anda fazendo".
+  const entryPx = ocoDraft?.entry;
+  const suggestion = useMemo(() => (entryPx ? suggester?.suggest(entryPx) ?? null : null), [suggester, entryPx]);
+  const currentStats = useMemo(() => {
+    if (!suggestion || !ocoDraft?.entry) return null;
+    const t = pctOf(ocoDraft.entry, ocoDraft.target);
+    const s = -pctOf(ocoDraft.entry, ocoDraft.stop);
+    return t > 0 && s > 0 ? suggestion.evalPct(t, s) : null;
+  }, [suggestion, ocoDraft]);
 
   if (!ocoDraft?.entry) return null;
   const { entry, target, stop, entryLocked } = ocoDraft;
@@ -182,6 +193,46 @@ export default function ChartOcoTool({ symbol, exchange, ocoDraft, marketPrice, 
           </span>
         )}
       </div>
+      {suggestion && (
+        <div className="mt-1 rounded border border-sky-800 bg-sky-950/40 p-1 text-[10px] leading-snug">
+          <div className="flex items-center justify-between gap-1">
+            <span className="text-sky-300">
+              Sugestão: <span className="text-green-400">+{suggestion.targetPct}%</span> / <span className="text-red-400">−{suggestion.stopPct}%</span>
+            </span>
+            <button
+              onClick={() => onChange({ ...ocoDraft, target: suggestion.targetPrice, stop: suggestion.stopPrice })}
+              title="Aplicar alvo e stop sugeridos"
+              className="rounded bg-sky-700 px-1.5 text-white hover:bg-sky-600"
+            >
+              Aplicar
+            </button>
+          </div>
+          <div className="text-slate-300">
+            em {suggestion.horizon} candles: alvo {(suggestion.winRate * 100).toFixed(0)}% · stop {(suggestion.lossRate * 100).toFixed(0)}% · nenhum {(suggestion.openRate * 100).toFixed(0)}%
+          </div>
+          <div className="text-slate-400">
+            com stop −{suggestion.stopPct}%: {suggestion.ladder.map((l) => `+${l.targetPct}% ${(l.winRate * 100).toFixed(0)}%`).join(' · ')}
+          </div>
+          <div className="text-slate-400">
+            máx. de alta em {suggestion.horizon} candles: mediana +{suggestion.mfeMedian.toFixed(1)}% · 1 em 4 +{suggestion.mfeP75.toFixed(1)}%
+            {suggestion.atrPct != null && ` · ATR ${suggestion.atrPct.toFixed(1)}%`}
+          </div>
+          {(suggestion.resistance || suggestion.support) && (
+            <div className="text-slate-400">
+              {suggestion.resistance && `R ${fmtPrice(suggestion.resistance.price)} (${pctOf(entry, suggestion.resistance.price).toFixed(1)}%)`}
+              {suggestion.resistance && suggestion.support && ' · '}
+              {suggestion.support && `S ${fmtPrice(suggestion.support.price)} (${pctOf(entry, suggestion.support.price).toFixed(1)}%)`}
+            </div>
+          )}
+          {suggestion.notes.length > 0 && <div className="text-amber-300">{suggestion.notes.join(' · ')}</div>}
+          {currentStats && (
+            <div className={currentStats.winRate >= currentStats.lossRate ? 'text-slate-300' : 'text-orange-300'}>
+              o seu (+{targetPct.toFixed(1)}/−{(-stopPct).toFixed(1)}): alvo {(currentStats.winRate * 100).toFixed(0)}% · stop {(currentStats.lossRate * 100).toFixed(0)}%
+            </div>
+          )}
+          <div className="text-slate-500">frequência em {suggestion.samples} candles desta tela, sem sinal — chance, não garantia</div>
+        </div>
+      )}
       {entryLocked ? (
         <button
           onClick={handleCreateOrder}

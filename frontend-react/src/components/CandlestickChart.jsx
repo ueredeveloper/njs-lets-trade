@@ -13,6 +13,7 @@ import ManualOcoOrdersPanel from './ManualOcoOrdersPanel';
 import { listManualOcoOrders } from '../services/api';
 import { isManualOcoActive } from '../utils/manualOco';
 import { simulatePriceActionBox, PRICE_ACTION_DEFAULTS } from '../utils/priceActionBoxSim';
+import { buildOcoSuggester } from '../utils/ocoSuggest';
 import convertOpenTime from '../utils/convertOpenTime';
 import Tooltip from './Tooltip';
 import { useIsMobile } from '../hooks/useIsMobile';
@@ -3324,11 +3325,22 @@ export default function CandlestickChart() {
     const id = setInterval(reloadManualOcoOrders, 10_000);
     return () => clearInterval(id);
   }, [reloadManualOcoOrders]);
+  // Sugestão de alvo/stop medida no histórico da moeda + S/R (ocoSuggest.js) — a parte cara só
+  // recalcula quando os candles mudam; o ajuste por entrada é barato (ChartOcoTool chama a cada arrasto).
+  const ocoSuggester = useMemo(
+    () => buildOcoSuggester(selectedChart?.candlesticks, INTERVAL_MS[selectedChart?.interval ?? currentInterval] ?? 0),
+    [selectedChart?.candlesticks, selectedChart?.interval, currentInterval],
+  );
+  // Abre já na sugestão; sem candles suficientes cai no +3% / −2% fixo.
   const toggleOcoDraft = useCallback(() => {
-    setOcoDraft((d) => (d || ocoLastClose == null
-      ? null
-      : { entry: ocoLastClose, target: ocoLastClose * 1.03, stop: ocoLastClose * 0.98 }));
-  }, [ocoLastClose]);
+    setOcoDraft((d) => {
+      if (d || ocoLastClose == null) return null;
+      const s = ocoSuggester?.suggest(ocoLastClose);
+      return s
+        ? { entry: ocoLastClose, target: s.targetPrice, stop: s.stopPrice }
+        : { entry: ocoLastClose, target: ocoLastClose * 1.03, stop: ocoLastClose * 0.98 };
+    });
+  }, [ocoLastClose, ocoSuggester]);
   // Caixa de análise: o usuário arrasta um retângulo sobre alguns candles pra rodar a
   // detecção de bandeiras SÓ naquele trecho (ver chartFlagsConfig). `analysisBox` guarda a
   // seleção efetivada {fromMs,toMs,priceLow,priceHigh}; `analysisDrag` é o preview em pixels
@@ -7031,6 +7043,7 @@ export default function CandlestickChart() {
             exchange={selectedChart.source === 'gate' ? 'gate' : 'binance'}
             ocoDraft={ocoDraft}
             marketPrice={ocoLastClose}
+            suggester={ocoSuggester}
             onChange={setOcoDraft}
             onOrdersChanged={reloadManualOcoOrders}
             onClose={() => setOcoDraft(null)}
