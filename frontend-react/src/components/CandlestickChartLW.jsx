@@ -1721,7 +1721,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
         if (target > 0) line(target, '#22c55e', `#${o.id} alvo`);
         if (stop > 0) line(stop, '#ef4444', `#${o.id} stop`);
       } else {
-        line(entry, '#facc15', `#${o.id} ${o.entry_kind === 'trigger' ? 'rompimento' : 'compra limite'}`, 2);
+        line(entry, '#facc15', `#${o.id} ${o.entry_kind === 'trigger' ? 'rompimento' : 'compra na queda'}`, 2);
         if (target > 0) line(target, '#3b82f6', `#${o.id} prev. alvo`, 2);
         if (stop > 0) line(stop, '#f97316', `#${o.id} prev. stop`, 2);
       }

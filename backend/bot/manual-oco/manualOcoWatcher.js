@@ -7,20 +7,20 @@
  * sendo vigiada no Termux mesmo com o PC/painel desligado.
  *
  * Ciclo (a cada POLL_MS, uma passada por vez):
- *   NEW    → 'limit': LIMIT BUY GTC no entry_price (placeRestingLimitBuy) → OPEN + buy_handle
- *            'trigger': só vira OPEN (vigia o preço)
- *   OPEN   → 'limit': poll da limite; preencheu → FILLED; sumiu sem fill → CLOSED
- *            'trigger': preço ≥ entrada → compra a mercado → FILLED
- *   CANCEL_REQUESTED → cancela a limite (fill parcial no cancelamento vira FILLED) → CANCELLED
+ *   NEW    → OPEN (vigia o preço). NADA vai pra corretora antes da entrada — o saldo só é usado na
+ *            compra, então dá pra ter mais ordens pendentes do que saldo.
+ *   OPEN   → 'limit': preço ≤ entrada → compra a mercado → FILLED (caiu abaixo do stop → FAILED)
+ *            'trigger': preço ≥ entrada → compra a mercado → FILLED (passou do alvo → FAILED)
+ *            Linhas antigas com buy_handle (LIMIT GTC armada na corretora): poll da limite.
+ *   CANCEL_REQUESTED → (só linhas antigas) cancela a limite; fill parcial vira FILLED → CANCELLED
  *   FILLED → coloca a OCO de venda (placeExitBracket, alvo/stop absolutos) → BRACKETED, ou
  *            OCO_FAILED (posição sem proteção — aviso no WhatsApp)
  *   BRACKETED → poll da OCO; uma perna executou → CLOSED_TARGET / CLOSED_STOP (+ exit, WhatsApp).
  *            Inclui as do "Comprar agora" (entry_kind 'market'). "Vender agora" do gráfico tira a
  *            linha daqui (SELLING) antes de mexer na OCO — ver /manual-oco-orders/:id/sell.
  * Preços são REFERÊNCIA: a corretora pode exigir ajuste e ele é feito sem perguntar — tick/precisão
- * (entrada, alvo e stop arredondados), OCO da Binance presa na faixa PERCENT_PRICE (ocoClient.js,
- * `bracket.clamped`), e limite funda demais espera o preço chegar perto (ver NEW). Os preços
- * efetivos ficam em buy_handle.price / bracket.targetPrice / bracket.stopPrice.
+ * (alvo e stop arredondados) e OCO da Binance presa na faixa PERCENT_PRICE (ocoClient.js,
+ * `bracket.clamped`). Os preços efetivos ficam em fill.avgPrice / bracket.targetPrice / bracket.stopPrice.
  * O fill é gravado (FILLED) ANTES da OCO: se o processo cair no meio, a OCO é tentada de novo no
  * restart. Ordem avulsa — nenhuma linha em rsi_multi_bot_state; o bot não gerencia a posição.
  * Tabela ausente (migração supabase/add-manual-oco-orders-table.sql não rodada) só loga uma vez.
@@ -30,7 +30,6 @@ const { buildAdapter } = require('../shared/buildAdapter');
 const { sbReq } = require('../shared/supabaseRest');
 const { fetchLivePrice } = require('../shared/livePrice');
 const { sendWhatsApp } = require('../whatsapp');
-const { getSymbolFilters, getAvgPrice } = require('../../binance/ocoClient');
 
 const TABLE = 'manual_oco_orders';
 const POLL_MS = 15_000;
@@ -112,50 +111,26 @@ async function processRow(row, log) {
   }
 
   if (row.status === 'NEW') {
-    if (row.entry_kind === 'trigger') {
-      await patchIf(row, { status: 'OPEN' });
-      log(`👀 [OCO manual] ${tag}: vigiando rompimento em ${fmt(entry)} (${usdt} USDT)`);
-      return;
-    }
-    // Binance só aceita LIMIT BUY até X% abaixo do preço médio (PERCENT_PRICE_BY_SIDE, lado bid).
-    // Entrada mais funda que isso: em vez de falhar, fica NEW e tenta de novo quando o preço
-    // chegar perto. Tick/precisão são ajustados dentro do placeRestingLimitBuy (Binance e Gate).
-    if (row.exchange !== 'gate') {
-      const [{ bidMultiplierDown }, avgPrice] = await Promise.all([getSymbolFilters(row.symbol), getAvgPrice(row.symbol)]);
-      const minBid = bidMultiplierDown != null && avgPrice > 0 ? avgPrice * bidMultiplierDown * 1.002 : null;
-      if (minBid != null && entry < minBid) {
-        const note = `aguardando o preço se aproximar — Binance só aceita limite a partir de ~${fmt(minBid)}`;
-        if (row.error !== note) await patchIf(row, { error: note });
-        return;
-      }
-    }
-    let handle;
-    try {
-      handle = await adapter.placeRestingLimitBuy(usdt, entry);
-    } catch (err) {
-      await patchIf(row, { status: 'FAILED', error: err.message });
-      log(`❌ [OCO manual] ${tag}: corretora recusou a limite — ${err.message}`);
-      notify(`❌ OCO manual ${row.symbol}: corretora recusou a compra limite em ${fmt(entry)} (${err.message})`, log);
-      return;
-    }
-    const ok = await patchIf(row, { status: 'OPEN', buy_handle: handle, error: null });
-    if (!ok) {
-      // Painel cancelou enquanto a limite era armada — desfaz na corretora.
-      const r = await adapter.cancelRestingLimitBuy(handle);
-      if (r?.filled) await recordFill({ ...row, buy_handle: handle }, adapter, r, log);
-      return;
-    }
-    log(`📌 [OCO manual] ${tag}: LIMIT BUY ${usdt} USDT @ ${fmt(handle.price ?? entry)} armada`);
+    await patchIf(row, { status: 'OPEN', error: null });
+    log(`👀 [OCO manual] ${tag}: vigiando ${row.entry_kind === 'trigger' ? 'rompimento' : 'queda'} até ${fmt(entry)} (${usdt} USDT)`);
     return;
   }
 
-  // OPEN
-  if (row.entry_kind === 'trigger') {
+  // OPEN sem buy_handle: nada na corretora — o bot vigia o preço e compra A MERCADO quando ele
+  // chega na entrada ('trigger' sobe até ela, 'limit' cai até ela). Assim o saldo só é usado na
+  // hora da compra e dá pra ter mais ordens pendentes do que saldo.
+  if (!row.buy_handle) {
     const price = await fetchLivePrice(row.exchange, row.symbol);
-    if (!(price >= entry)) return;
-    if (price >= Number(row.target_price)) {
-      await patchIf(row, { status: 'FAILED', error: `preço (${fmt(price)}) passou do alvo antes da compra` });
-      log(`⚠️  [OCO manual] ${tag}: preço ${fmt(price)} já acima do alvo — compra abortada`);
+    const isTrigger = row.entry_kind === 'trigger';
+    if (isTrigger ? !(price >= entry) : !(price <= entry)) return;
+    // Passou da OCO antes da compra (gap / passe de 15s): comprar agora deixaria a OCO inválida.
+    const blown = isTrigger
+      ? (price >= Number(row.target_price) && `preço (${fmt(price)}) passou do alvo antes da compra`)
+      : (price <= Number(row.stop_price) && `preço (${fmt(price)}) caiu abaixo do stop antes da compra`);
+    if (blown) {
+      await patchIf(row, { status: 'FAILED', error: blown });
+      log(`⚠️  [OCO manual] ${tag}: ${blown} — compra abortada`);
+      notify(`⚠️ OCO manual ${row.symbol}: ${blown} — compra abortada`, log);
       return;
     }
     let fill;
@@ -163,14 +138,15 @@ async function processRow(row, log) {
       fill = await adapter.marketBuy(usdt);
     } catch (err) {
       await patchIf(row, { status: 'FAILED', error: err.message });
-      log(`❌ [OCO manual] ${tag}: compra no rompimento falhou — ${err.message}`);
-      notify(`❌ OCO manual ${row.symbol}: compra no rompimento (${fmt(entry)}) falhou (${err.message})`, log);
+      log(`❌ [OCO manual] ${tag}: compra a mercado em ${fmt(price)} falhou — ${err.message}`);
+      notify(`❌ OCO manual ${row.symbol}: preço chegou na entrada (${fmt(entry)}) mas a compra de ${usdt} USDT falhou (${err.message}) — saldo?`, log);
       return;
     }
     await recordFill(row, adapter, fill, log);
     return;
   }
-  if (!row.buy_handle) return;
+
+  // OPEN com buy_handle: LIMIT antiga já armada na corretora (versão anterior) — segue o poll.
   const poll = await adapter.pollRestingLimitBuy(row.buy_handle);
   if (poll.filled) { await recordFill(row, adapter, poll, log); return; }
   if (poll.open === false) {

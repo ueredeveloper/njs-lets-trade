@@ -344,8 +344,9 @@ router.post('/manual-oco-buy', async (req, res) => {
 
 // POST /services/manual-oco-orders
 // Body: { symbol, exchange?, usdt, entryPrice, targetPrice, stopPrice }
-// entry abaixo do preço atual → 'limit' (LIMIT BUY GTC); acima → 'trigger' (compra a mercado no
-// rompimento). Exige stop < entrada < alvo.
+// entry abaixo do preço atual → 'limit' (bot compra a mercado quando o preço CAI até ela); acima →
+// 'trigger' (compra a mercado no rompimento). Nada vai pra corretora antes disso — ver
+// manualOcoWatcher.js. Exige stop < entrada < alvo.
 router.post('/manual-oco-orders', async (req, res) => {
   const { symbol, exchange = 'binance', usdt, entryPrice, targetPrice, stopPrice } = req.body ?? {};
   const usdtNum = Number(usdt);
@@ -390,15 +391,18 @@ router.get('/manual-oco-orders', async (req, res) => {
   res.json(data ?? []);
 });
 
-// POST /services/manual-oco-orders/:id/cancel — NEW (bot ainda não pegou) vira CANCELLED direto;
-// OPEN vira CANCEL_REQUESTED e o bot cancela a limite na corretora no próximo passe.
+// POST /services/manual-oco-orders/:id/cancel — NEW e OPEN sem nada na corretora viram CANCELLED
+// direto; OPEN com limite antiga armada (buy_handle) vira CANCEL_REQUESTED e o bot cancela a
+// limite na corretora no próximo passe.
 router.post('/manual-oco-orders/:id/cancel', async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) return res.status(400).json({ error: 'id inválido' });
   const now = new Date().toISOString();
-  for (const [from, to] of [['NEW', 'CANCELLED'], ['OPEN', 'CANCEL_REQUESTED']]) {
-    const { data, error } = await supabase.from(MANUAL_OCO_TABLE)
-      .update({ status: to, updated_at: now }).eq('id', id).eq('status', from).select();
+  for (const [from, to, noHandle] of [['NEW', 'CANCELLED'], ['OPEN', 'CANCELLED', true], ['OPEN', 'CANCEL_REQUESTED']]) {
+    let q = supabase.from(MANUAL_OCO_TABLE)
+      .update({ status: to, updated_at: now }).eq('id', id).eq('status', from);
+    if (noHandle) q = q.is('buy_handle', null);
+    const { data, error } = await q.select();
     if (error) return res.status(500).json({ error: error.message });
     if (data?.length) return res.json(data[0]);
   }

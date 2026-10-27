@@ -1,8 +1,13 @@
 // Sugestão de alvo/stop "realista" pra OCO manual do gráfico (ChartOcoTool.jsx), medida nos
 // candles JÁ carregados (intervalo da tela) em vez de um % fixo.
 //
+// Tudo no INTERVALO DO GRÁFICO (o usuário opera 1h/4h): o intervalo é medido pelo espaçamento
+// real dos candles e o horizonte é fixo em CANDLES (H = 24 → ≈ 1 dia no 1h, ≈ 4 dias no 4h). Antes
+// era "≈ 1 dia" pra qualquer intervalo — no 4h só olhava 6 candles à frente e a sugestão saía
+// praticamente igual à do 1h.
+//
 // Base estatística: cada candle fechado recente (até 300) vira uma entrada hipotética no close;
-// anda até H candles à frente (≈ 1 dia, entre 6 e 48) e vê o que vem PRIMEIRO — alvo (máxima ≥
+// anda até H candles à frente e vê o que vem PRIMEIRO — alvo (máxima ≥
 // +T%), stop (mínima ≤ −S%; candle que toca os dois = stop) ou nenhum dos dois. Sem filtro de
 // sinal, então NÃO mede vantagem (a expectativa de qualquer par fica ~0 — a vantagem vem do
 // sinal de entrada); mede a PROBABILIDADE de cada alvo/stop ser atingido no ritmo atual da moeda.
@@ -20,6 +25,7 @@ import { detectSupportResistance } from './srDetectors';
 
 const MAX_SAMPLES = 300;
 const MIN_SAMPLES = 40;
+const HORIZON_CANDLES = 24;
 const LEVEL_BUFFER = 0.003; // 0,3% antes da resistência / depois do suporte
 // Escada de alvos mostrada no cartão = múltiplos do ATR (escala com a volatilidade da moeda —
 // +3/5/8/12% fixos não diziam nada pra BTC nem pra uma memecoin).
@@ -56,11 +62,25 @@ function quantile(sorted, q) {
  * Pré-calcula os caminhos das amostras (só depende dos candles) e devolve um sugeridor barato por
  * preço de entrada. null quando não há candles suficientes.
  */
-export function buildOcoSuggester(candlesticks, intervalMs, nowMs = Date.now()) {
+/** Intervalo REAL dos candles (mediana do espaçamento) — fonte da verdade, não depende do estado
+ *  da tela; cai no `fallbackMs` informado se não der pra medir. */
+function measureIntervalMs(cs, fallbackMs) {
+  const diffs = [];
+  for (let i = Math.max(1, cs.length - 50); i < cs.length; i++) {
+    const d = cs[i].openTime - cs[i - 1].openTime;
+    if (d > 0) diffs.push(d);
+  }
+  if (!diffs.length) return fallbackMs || 0;
+  diffs.sort((a, b) => a - b);
+  return diffs[Math.floor(diffs.length / 2)];
+}
+
+export function buildOcoSuggester(candlesticks, fallbackIntervalMs, nowMs = Date.now()) {
   let cs = toCandles(candlesticks);
+  const intervalMs = measureIntervalMs(cs, fallbackIntervalMs);
   // Último candle ainda em formação não entra (máx./mín. incompletas).
   if (cs.length && intervalMs > 0 && cs[cs.length - 1].openTime + intervalMs > nowMs) cs = cs.slice(0, -1);
-  const H = Math.min(48, Math.max(6, Math.round(86_400_000 / (intervalMs || 3_600_000))));
+  const H = HORIZON_CANDLES;
   const lastStart = cs.length - 1 - H;
   if (lastStart < MIN_SAMPLES) return null;
   const firstStart = Math.max(0, lastStart - MAX_SAMPLES + 1);
@@ -122,10 +142,13 @@ export function buildOcoSuggester(candlesticks, intervalMs, nowMs = Date.now()) 
     }
 
     let T = S;
+    let anyFair = false;
     for (let t = Math.ceil(S * 2) / 2; t <= 20; t += 0.5) {
       const r = evalPct(t, S);
-      if (r.winRate >= r.lossRate) T = t;
+      if (r.winRate >= r.lossRate) { T = t; anyFair = true; }
     }
+    if (!anyFair) notes.push('queda no período: nem com R:R 1 o alvo veio antes do stop na maioria — cautela');
+    if (samples.length < 150) notes.push(`só ${samples.length} amostras — carregue mais candles pra uma estatística mais firme`);
     if (resistance) {
       const rPct = ((resistance.price * (1 - LEVEL_BUFFER)) / entry - 1) * 100;
       if (rPct < T && rPct >= 0.5) {
@@ -146,6 +169,8 @@ export function buildOcoSuggester(candlesticks, intervalMs, nowMs = Date.now()) 
       ladder: ladderTargets.map((t) => ({ targetPct: t, ...evalPct(t, S) })),
       samples: samples.length,
       horizon: H,
+      intervalMs,
+      horizonMs: intervalMs * H,
       atrPct: atr,
       mfeMedian: quantile(mfe, 0.5),
       mfeP75: quantile(mfe, 0.75),
@@ -156,5 +181,5 @@ export function buildOcoSuggester(candlesticks, intervalMs, nowMs = Date.now()) 
     };
   };
 
-  return { suggest, horizon: H, samples: samples.length };
+  return { suggest, horizon: H, intervalMs, samples: samples.length };
 }

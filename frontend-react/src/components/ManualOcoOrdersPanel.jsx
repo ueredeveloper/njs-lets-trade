@@ -4,7 +4,7 @@ import { manualOcoLevels } from '../utils/manualOco';
 
 const STATUS_LABEL = {
   NEW: 'aguardando bot',
-  OPEN: 'compra armada',
+  OPEN: 'bot vigiando',
   CANCEL_REQUESTED: 'cancelando…',
   FILLED: 'comprou · pondo OCO',
   BRACKETED: 'OCO montada',
@@ -79,7 +79,7 @@ export default function ManualOcoOrdersPanel({ orders, marketPrice, onChanged })
               </div>
             ) : (
               <div className="text-yellow-300">
-                {o.entry_kind === 'trigger' ? 'rompimento' : 'limite'} {fmtPrice(entry)}
+                {o.entry_kind === 'trigger' ? 'rompimento' : o.buy_handle ? 'limite' : 'na queda'} {fmtPrice(entry)}
                 {marketPrice && entry > 0 && <span className="text-slate-400"> · preço {fmtPct(marketPrice, entry)}</span>}
               </div>
             )}
