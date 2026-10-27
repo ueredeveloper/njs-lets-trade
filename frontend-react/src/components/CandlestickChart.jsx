@@ -6708,7 +6708,16 @@ export default function CandlestickChart() {
   const analysisBoxSelects = analysisBox && showLwChart && analysisBoxAnchorPx && (
     <div
       className="absolute z-30 flex flex-col gap-1 items-start"
-      style={{ left: Math.max(4, analysisBoxAnchorPx.left), top: Math.max(4, analysisBoxAnchorPx.top - 32) }}
+      // Price action desenha o OCO na caixa — os controles + resumo crescem pra CIMA (base ancorada
+      // acima da borda superior da caixa OU do alvo, o que estiver mais alto) em vez de cobrir o
+      // OCO. Mínimo de ~90px de folga pra não sair do topo do gráfico.
+      style={analysisBoxKind === 'priceAction'
+        ? (() => {
+          const targetY = paSim?.targetPrice ? lwChartRef.current?.priceToCoordinate(paSim.targetPrice) : null;
+          const topY = Number.isFinite(targetY) ? Math.min(analysisBoxAnchorPx.top, targetY) : analysisBoxAnchorPx.top;
+          return { left: Math.max(4, analysisBoxAnchorPx.left), top: Math.max(90, topY - 4), transform: 'translateY(-100%)' };
+        })()
+        : { left: Math.max(4, analysisBoxAnchorPx.left), top: Math.max(4, analysisBoxAnchorPx.top - 32) }}
     >
       <div className="flex flex-wrap items-center gap-1 bg-slate-900/95 border border-slate-600 rounded px-1.5 py-1 shadow-lg">
         <select

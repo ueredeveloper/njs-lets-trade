@@ -140,7 +140,7 @@ export default function ChartOcoTool({ symbol, exchange, ocoDraft, marketPrice, 
     const how = isBreakout
       ? `compra a MERCADO quando o preço SUBIR até ${fmtPrice(entry)} (rompimento)`
       : `compra a MERCADO quando o preço CAIR até ${fmtPrice(entry)}`;
-    if (!window.confirm(`Criar ordem de ${usdtNum} USDT em ${symbol} (${exchangeName})?\n\n${how}\n${summary()}\n\nNada vai pra corretora antes disso: o bot RSI Momentum vigia o preço (precisa estar rodando) e o saldo só é usado na hora da compra.`)) return;
+    if (!window.confirm(`Criar ordem de ${usdtNum} USDT em ${symbol} (${exchangeName})?\n\n${how}\n${summary()}\n\nNada vai pra corretora antes disso: o bot RSI Momentum vigia o preço (precisa estar rodando) e o saldo só é usado na hora da compra. Alvo e stop ficam nos mesmos % sobre o preço que for realmente comprado.`)) return;
     setBusy(true);
     setStatus(null);
     try {

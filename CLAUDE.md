@@ -360,9 +360,10 @@ arrastada (fixa) → **Criar ordem no bot**: grava em `manual_oco_orders` (`POST
 /services/manual-oco-orders`, migração `supabase/add-manual-oco-orders-table.sql`) e o
 **rsi-momentum-bot** executa (`backend/bot/manual-oco/manualOcoWatcher.js`, a cada 15s): **nada vai
 pra corretora antes da entrada** (o saldo só é usado na compra → dá pra ter mais ordens pendentes que
-saldo). Entrada abaixo do preço (`limit`) = compra a mercado quando o preço CAI até ela (abaixo do
-stop → aborta); acima (`trigger`) = compra a mercado no rompimento (passou do alvo → aborta); em
-seguida coloca a OCO e avisa no WhatsApp. Linhas antigas com `buy_handle` (LIMIT GTC já armada)
+saldo). Entrada abaixo do preço (`limit`) = compra a mercado quando o preço CAI até ela; acima
+(`trigger`) = compra a mercado no rompimento (passou do alvo → aborta); em seguida coloca a OCO
+**relativa ao preço comprado** (mesmos % desenhados sobre o `fill.avgPrice` — entrada 10/stop −5%,
+comprou a 8 → stop 7,60; `bracketLevels`) e avisa no WhatsApp. Linhas antigas com `buy_handle` (LIMIT GTC já armada)
 seguem no poll. Preços são referência — tick/precisão/faixa PERCENT_PRICE da OCO ajustados
 sozinhos. Ordem avulsa (sem favorito/`rsi_multi_bot_state`).
 "Comprar agora" também grava a linha (`entry_kind 'market'`). Ao abrir a moeda o gráfico busca as

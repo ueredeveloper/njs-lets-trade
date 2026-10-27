@@ -9,8 +9,9 @@
  * Ciclo (a cada POLL_MS, uma passada por vez):
  *   NEW    → OPEN (vigia o preço). NADA vai pra corretora antes da entrada — o saldo só é usado na
  *            compra, então dá pra ter mais ordens pendentes do que saldo.
- *   OPEN   → 'limit': preço ≤ entrada → compra a mercado → FILLED (caiu abaixo do stop → FAILED)
+ *   OPEN   → 'limit': preço ≤ entrada → compra a mercado → FILLED
  *            'trigger': preço ≥ entrada → compra a mercado → FILLED (passou do alvo → FAILED)
+ *            Alvo/stop da OCO = os % desenhados aplicados ao preço REAL da compra (bracketLevels).
  *            Linhas antigas com buy_handle (LIMIT GTC armada na corretora): poll da limite.
  *   CANCEL_REQUESTED → (só linhas antigas) cancela a limite; fill parcial vira FILLED → CANCELLED
  *   FILLED → coloca a OCO de venda (placeExitBracket, alvo/stop absolutos) → BRACKETED, ou
@@ -51,10 +52,24 @@ function notify(text, log) {
   sendWhatsApp(text).catch(err => log(`⚠️  [OCO manual] WhatsApp falhou: ${err.message}`));
 }
 
+/** Alvo/stop da OCO. Compra feita pelo bot (limit/trigger, a mercado quando o preço chega na
+ *  entrada): mantém os % desenhados (alvo/entrada, stop/entrada) e aplica sobre o preço REAL da
+ *  compra — entrada 10, stop −5%, comprou a 8 (gap) → stop 7,60, não 9,50. Linhas antigas com
+ *  LIMIT na corretora (buy_handle) e "Comprar agora" ('market') ficam nos preços absolutos. */
+function bracketLevels(row, fill) {
+  const target = Number(row.target_price);
+  const stop = Number(row.stop_price);
+  const entry = Number(row.entry_price);
+  const avg = Number(fill.avgPrice);
+  if (row.entry_kind === 'market' || row.buy_handle || !(entry > 0) || !(avg > 0)) return { target, stop };
+  return { target: avg * (target / entry), stop: avg * (stop / entry) };
+}
+
 async function placeBracket(row, adapter, fill, log) {
   const tag = `${row.symbol} #${row.id}`;
   try {
-    const bracket = await adapter.placeExitBracket(Number(fill.filledQty), Number(row.target_price), Number(row.stop_price));
+    const lv = bracketLevels(row, fill);
+    const bracket = await adapter.placeExitBracket(Number(fill.filledQty), lv.target, lv.stop);
     await patchIf(row, { status: 'BRACKETED', bracket, error: null });
     log(`✅ [OCO manual] ${tag}: OCO colocada — alvo ${fmt(bracket.targetPrice)} / stop ${fmt(bracket.stopPrice)}`);
     notify(`✅ OCO manual ${row.symbol}: comprado ${fmt(fill.filledQty)} a ~${fmt(fill.avgPrice)} · alvo ${fmt(bracket.targetPrice)} / stop ${fmt(bracket.stopPrice)}`, log);
@@ -123,10 +138,10 @@ async function processRow(row, log) {
     const price = await fetchLivePrice(row.exchange, row.symbol);
     const isTrigger = row.entry_kind === 'trigger';
     if (isTrigger ? !(price >= entry) : !(price <= entry)) return;
-    // Passou da OCO antes da compra (gap / passe de 15s): comprar agora deixaria a OCO inválida.
-    const blown = isTrigger
-      ? (price >= Number(row.target_price) && `preço (${fmt(price)}) passou do alvo antes da compra`)
-      : (price <= Number(row.stop_price) && `preço (${fmt(price)}) caiu abaixo do stop antes da compra`);
+    // Queda além do stop desenhado NÃO aborta: a OCO é relativa ao preço comprado (bracketLevels).
+    // Rompimento que já passou do alvo aborta — seria comprar o pico de uma alta que já aconteceu.
+    const blown = isTrigger && price >= Number(row.target_price)
+      && `preço (${fmt(price)}) passou do alvo antes da compra`;
     if (blown) {
       await patchIf(row, { status: 'FAILED', error: blown });
       log(`⚠️  [OCO manual] ${tag}: ${blown} — compra abortada`);
