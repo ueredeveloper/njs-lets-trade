@@ -1689,7 +1689,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
   // igual ao buildBuyPositionSquares do ECharts (markArea verde/vermelho com % de distância).
   useEffect(() => {
     if (!rectPrimitiveRef.current) return;
-    rectPrimitiveRef.current.setRects([
+    const rects = [
       ...buildPositionRects(buyInfo, stopLossConfig, targetConfig, candlesticks),
       ...buildHistoricalPositionRects(multitradeMarkers, candlesticks),
       ...(analysisBoxRect ? [analysisBoxRect] : []),
@@ -1697,7 +1697,30 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       ...tradeBoxRects,
       ...buildOcoDraftRects(ocoDraft, candlesticks),
       ...buildManualOcoRects(manualOcoOrders, candlesticks),
-    ]);
+    ];
+    rectPrimitiveRef.current.setRects(rects);
+
+    // OCO (manual, simulado, bandeira…) desenhado DEPOIS do último candle: a visão padrão termina
+    // 3 candles à frente (focusLastN) e cortava o retângulo na borda direita. Se a tela está
+    // mostrando o fim do gráfico, desliza a janela (mesmo zoom) até o fim do retângulo + RIGHT_GAP
+    // candles vazios. Em índice LÓGICO (não tempo): a janela pode passar do último ponto da série
+    // (é o mesmo espaço do rightOffset), então a folga não fica presa aos 8 candles de whitespace.
+    // Olhando o histórico (último candle fora da tela) não mexe.
+    const RIGHT_GAP = 6;
+    const valid = toValidLwCandles(candlesticks);
+    const ts = chartRef.current?.timeScale();
+    if (!ts || valid.length < 2) return;
+    const lastIdx = valid.length - 1; // índice lógico do último candle real (whitespace vem depois)
+    const lastTime = valid[lastIdx].time;
+    const ivSec = lastTime - valid[lastIdx - 1].time;
+    const maxTime2 = Math.max(...rects.map((r) => Math.max(r.time1 ?? 0, r.time2 ?? 0)));
+    if (!(ivSec > 0) || !(maxTime2 > lastTime)) return;
+    const need = lastIdx + Math.min(Math.ceil((maxTime2 - lastTime) / ivSec), 8) + RIGHT_GAP;
+    try {
+      const lr = ts.getVisibleLogicalRange();
+      if (!lr || lr.to < lastIdx || lr.to >= need) return;
+      ts.setVisibleLogicalRange({ from: lr.from + (need - lr.to), to: need });
+    } catch { /* eixo sem pontos nesse frame */ }
   }, [buyInfo, stopLossConfig, targetConfig, candlesticks, multitradeMarkers, analysisBoxRect, rsiCrossRects, tradeBoxRects, ocoDraft, manualOcoOrders]);
 
   // Linhas (com rótulo no eixo) das ordens da OCO manual já gravadas — não arrastáveis; mesmas

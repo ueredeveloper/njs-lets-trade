@@ -34,7 +34,7 @@ export default function ManualOcoOrdersPanel({ orders, marketPrice, onChanged })
 
   if (!orders?.length) return null;
 
-  const run = async (id, action, confirmText) => {
+  const run = async (id, action, confirmText, spent) => {
     if (busyId || !window.confirm(confirmText)) return;
     setBusyId(id);
     setMessage(null);
@@ -43,7 +43,10 @@ export default function ManualOcoOrdersPanel({ orders, marketPrice, onChanged })
       setMessage({
         ok: true,
         text: r?.status === 'SOLD'
-          ? `#${id} vendida a ~${fmtPrice(r.exit?.exitPrice)} (${fmtPrice(r.exit?.usdtOut)} USDT)`
+          ? `#${id} vendida a ~${fmtPrice(r.exit?.exitPrice)} (${fmtPrice(r.exit?.usdtOut)} USDT${
+            spent > 0 && Number.isFinite(Number(r.exit?.usdtOut))
+              ? ` · ${fmtPct(spent, Number(r.exit.usdtOut))}`
+              : ''})`
           : `#${id}: cancelamento enviado`,
       });
     } catch (err) {
@@ -62,6 +65,13 @@ export default function ManualOcoOrdersPanel({ orders, marketPrice, onChanged })
       {orders.map((o) => {
         const { mounted, entry, target, stop, noOco } = manualOcoLevels(o);
         const busy = busyId === o.id;
+        // Resultado estimado da venda imediata a mercado (preço atual × preço médio da compra; sem
+        // taxa nem slippage) — em % e em USDT sobre o valor gasto na compra.
+        const sellPct = mounted && marketPrice && entry > 0 ? ((marketPrice - entry) / entry) * 100 : null;
+        const spent = Number(o.fill?.quoteQty) || Number(o.usdt);
+        const sellTxt = sellPct != null
+          ? `${sellPct >= 0 ? '+' : ''}${sellPct.toFixed(2)}% · ${sellPct >= 0 ? '+' : ''}${(spent * sellPct / 100).toFixed(2)} USDT`
+          : null;
         return (
           <div key={o.id} className="border-b border-slate-700 py-1 last:border-b-0">
             <div className="flex items-center justify-between gap-1">
@@ -74,7 +84,9 @@ export default function ManualOcoOrdersPanel({ orders, marketPrice, onChanged })
               <div>
                 compra {fmtPrice(entry)}
                 {marketPrice && entry > 0 && (
-                  <span className={marketPrice >= entry ? 'text-green-400' : 'text-red-400'}> · agora {fmtPct(entry, marketPrice)}</span>
+                  <span className={marketPrice >= entry ? 'text-green-400' : 'text-red-400'}>
+                    {' · agora '}<span className="text-[13px] font-bold">{fmtPct(entry, marketPrice)}</span>
+                  </span>
                 )}
               </div>
             ) : (
@@ -94,7 +106,9 @@ export default function ManualOcoOrdersPanel({ orders, marketPrice, onChanged })
             {mounted && o.status !== 'SELLING' && (
               <button
                 onClick={() => run(o.id, sellManualOcoOrder,
-                  `Vender AGORA a mercado a posição #${o.id} de ${o.symbol}?\n\nA OCO (alvo/stop) é cancelada antes da venda.`)}
+                  `Vender AGORA a mercado a posição #${o.id} de ${o.symbol}?\n\n`
+                  + (sellTxt ? `Resultado estimado: ${sellTxt} (~${fmtPrice(marketPrice)}, sem taxa)\n\n` : '')
+                  + 'A OCO (alvo/stop) é cancelada antes da venda.', spent)}
                 disabled={busy}
                 className="mt-1 w-full rounded bg-red-600 py-0.5 font-bold text-white hover:bg-red-500 disabled:opacity-40"
               >
