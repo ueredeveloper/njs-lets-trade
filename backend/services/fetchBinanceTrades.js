@@ -435,7 +435,7 @@ router.post('/manual-oco-orders/:id/sell', async (req, res) => {
       await adapter.cancelExitBracket(row.bracket);
       const r = await adapter.pollExitBracket(row.bracket).catch(() => null);
       if (r?.filled) {
-        const exit = { kind: r.filled, soldQty: r.soldQty, usdtOut: r.usdtOut, exitPrice: r.exitPrice, at: new Date().toISOString() };
+        const exit = { kind: r.filled, soldQty: r.soldQty, usdtOut: r.usdtOut, exitPrice: r.exitPrice, at: new Date().toISOString(), notified: false };
         await finish({ status: r.filled === 'target' ? 'CLOSED_TARGET' : 'CLOSED_STOP', exit });
         return res.status(409).json({ error: `A OCO já tinha executado (${r.filled === 'target' ? 'alvo' : 'stop'} a ~${r.exitPrice}).` });
       }
@@ -447,7 +447,7 @@ router.post('/manual-oco-orders/:id/sell', async (req, res) => {
     if (!(qty > 0)) throw new Error('sem saldo do ativo para vender');
 
     const sold = await adapter.marketSell(qty);
-    const exit = { kind: 'manual', soldQty: sold.soldQty, usdtOut: sold.usdtOut, exitPrice: sold.exitPrice, at: new Date().toISOString() };
+    const exit = { kind: 'manual', soldQty: sold.soldQty, usdtOut: sold.usdtOut, exitPrice: sold.exitPrice, at: new Date().toISOString(), notified: false };
     await finish({ status: 'SOLD', exit, error: null });
     res.json({ ...row, status: 'SOLD', exit });
   } catch (err) {

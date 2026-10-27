@@ -16,7 +16,9 @@
  *   CANCEL_REQUESTED → (só linhas antigas) cancela a limite; fill parcial vira FILLED → CANCELLED
  *   FILLED → coloca a OCO de venda (placeExitBracket, alvo/stop absolutos) → BRACKETED, ou
  *            OCO_FAILED (posição sem proteção — aviso no WhatsApp)
- *   BRACKETED → poll da OCO; uma perna executou → CLOSED_TARGET / CLOSED_STOP (+ exit, WhatsApp).
+ *   BRACKETED → poll da OCO; uma perna executou → CLOSED_TARGET / CLOSED_STOP (+ exit). Aviso de
+ *            venda no WhatsApp DURÁVEL (exit.notified, re-tenta até entregar — notifyExit), inclusive
+ *            o do "Vender agora" (SOLD).
  *            Inclui as do "Comprar agora" (entry_kind 'market'). "Vender agora" do gráfico tira a
  *            linha daqui (SELLING) antes de mexer na OCO — ver /manual-oco-orders/:id/sell.
  * Preços são REFERÊNCIA: a corretora pode exigir ajuste e ele é feito sem perguntar — tick/precisão
@@ -31,6 +33,7 @@ const { buildAdapter } = require('../shared/buildAdapter');
 const { sbReq } = require('../shared/supabaseRest');
 const { fetchLivePrice } = require('../shared/livePrice');
 const { sendWhatsApp } = require('../whatsapp');
+const { sendText } = require('../whatsappApiClient');
 
 const TABLE = 'manual_oco_orders';
 const POLL_MS = 15_000;
@@ -63,6 +66,51 @@ function bracketLevels(row, fill) {
   const avg = Number(fill.avgPrice);
   if (row.entry_kind === 'market' || row.buy_handle || !(entry > 0) || !(avg > 0)) return { target, stop };
   return { target: avg * (target / entry), stop: avg * (stop / entry) };
+}
+
+const EXIT_ICON = { target: '🎯', stop: '🛑', manual: '💰' };
+const EXIT_LABEL = { target: 'alvo executado', stop: 'stop executado', manual: 'vendido (Vender agora)' };
+const NOTIFY_RETRY_MS = 60_000;
+const NOTIFY_MAX_AGE_MS = 24 * 3600_000;
+const notifyLastTry = new Map(); // id → ms da última tentativa (re-tenta no máx. 1×/min)
+
+/** Aviso de VENDA durável: a linha fechada leva `exit.notified=false` e só vira true depois que o
+ *  serviço do WhatsApp aceitou a mensagem. Se ele estiver fora (reconexão do Baileys, Termux
+ *  dormindo…), as próximas passadas re-tentam (pendingExitNotices) por até 24h — antes era um
+ *  disparo único e a mensagem se perdia. Também cobre o "Vender agora" (rota /sell grava
+ *  notified=false e o aviso sai daqui). */
+async function notifyExit(row, log) {
+  const exit = row.exit ?? {};
+  const now = Date.now();
+  if (now - (notifyLastTry.get(row.id) ?? 0) < NOTIFY_RETRY_MS) return;
+  notifyLastTry.set(row.id, now);
+
+  const spent = Number(row.fill?.quoteQty);
+  const out = Number(exit.usdtOut);
+  const pnl = spent > 0 && Number.isFinite(out) ? out - spent : null;
+  const pnlTxt = pnl != null ? ` · P&L ${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)} USDT (${((pnl / spent) * 100).toFixed(2)}%)` : '';
+  const icon = EXIT_ICON[exit.kind] ?? '💰';
+  const label = EXIT_LABEL[exit.kind] ?? 'vendido';
+  const at = exit.at ? new Date(exit.at).toLocaleString('pt-BR', {
+    timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+  }) : '';
+  log(`${icon} [OCO manual] ${row.symbol} #${row.id}: ${label} a ~${fmt(exit.exitPrice)}${pnlTxt}`);
+  try {
+    await sendText(`${icon} OCO manual ${row.symbol}: ${label} a ~${fmt(exit.exitPrice)}${pnlTxt}${at ? ` (${at})` : ''}`);
+  } catch (err) {
+    log(`⚠️  [OCO manual] ${row.symbol} #${row.id}: aviso de venda no WhatsApp falhou (${err.message}) — re-tento em 1 min`);
+    return;
+  }
+  notifyLastTry.delete(row.id);
+  await sbReq('PATCH', TABLE, { exit: { ...exit, notified: true } }, `?id=eq.${row.id}`);
+  log(`📤 [OCO manual] ${row.symbol} #${row.id}: aviso de venda enviado`);
+}
+
+/** Linhas fechadas (alvo/stop/Vender agora) com aviso ainda não entregue, das últimas 24h. */
+async function pendingExitNotices() {
+  const since = new Date(Date.now() - NOTIFY_MAX_AGE_MS).toISOString();
+  return sbReq('GET', TABLE, null,
+    `?status=in.(CLOSED_TARGET,CLOSED_STOP,SOLD)&exit->>notified=eq.false&exit->>at=gt.${since}&order=id.asc&limit=20`);
 }
 
 async function placeBracket(row, adapter, fill, log) {
@@ -104,14 +152,11 @@ async function processRow(row, log) {
     if (!row.bracket) return;
     const r = await adapter.pollExitBracket(row.bracket);
     if (!r?.filled) return;
-    const exit = { kind: r.filled, soldQty: r.soldQty, usdtOut: r.usdtOut, exitPrice: r.exitPrice, at: new Date().toISOString() };
-    const ok = await patchIf(row, { status: r.filled === 'target' ? 'CLOSED_TARGET' : 'CLOSED_STOP', exit });
+    const exit = { kind: r.filled, soldQty: r.soldQty, usdtOut: r.usdtOut, exitPrice: r.exitPrice, at: new Date().toISOString(), notified: false };
+    const status = r.filled === 'target' ? 'CLOSED_TARGET' : 'CLOSED_STOP';
+    const ok = await patchIf(row, { status, exit });
     if (!ok) return;
-    const spent = Number(row.fill?.quoteQty);
-    const pnl = Number.isFinite(spent) && Number.isFinite(r.usdtOut) ? r.usdtOut - spent : null;
-    const pnlTxt = pnl != null ? ` · P&L ${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)} USDT (${((pnl / spent) * 100).toFixed(2)}%)` : '';
-    log(`${r.filled === 'target' ? '🎯' : '🛑'} [OCO manual] ${tag}: ${r.filled === 'target' ? 'ALVO' : 'STOP'} executado a ~${fmt(r.exitPrice)}${pnlTxt}`);
-    notify(`${r.filled === 'target' ? '🎯' : '🛑'} OCO manual ${row.symbol}: ${r.filled === 'target' ? 'alvo' : 'stop'} executado a ~${fmt(r.exitPrice)}${pnlTxt}`, log);
+    await notifyExit({ ...row, status, exit }, log);
     return;
   }
 
@@ -180,12 +225,19 @@ function startManualOcoWatcher({ log = console.log } = {}) {
       const rows = await sbReq('GET', TABLE, null,
         `?status=in.(${ACTIVE_STATUSES.join(',')})&order=id.asc&limit=50`);
       lastErr = null;
-      for (const row of rows ?? []) {
+      // Posições abertas primeiro: com várias OPEN (cada uma lê o preço), a venda demorava a ser
+      // vista no fim da fila.
+      const firstRank = (s) => (s === 'BRACKETED' || s === 'FILLED' ? 0 : 1);
+      const ordered = [...(rows ?? [])].sort((a, b) => firstRank(a.status) - firstRank(b.status));
+      for (const row of ordered) {
         try {
           await processRow(row, log);
         } catch (err) {
           log(`⚠️  [OCO manual] ${row.symbol} #${row.id}: ${err.message}`);
         }
+      }
+      for (const row of await pendingExitNotices().catch(() => []) ?? []) {
+        await notifyExit(row, log).catch(err => log(`⚠️  [OCO manual] ${row.symbol} #${row.id}: ${err.message}`));
       }
     } catch (err) {
       if (err.message !== lastErr) log(`⚠️  [OCO manual] leitura de ${TABLE} falhou: ${err.message}`);
