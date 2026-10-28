@@ -17,6 +17,16 @@ function fmtPrice(p) {
   return Number.isFinite(n) ? String(Number(n.toPrecision(6))) : '—';
 }
 
+// Hora da compra em BRT, ex.: "12/09 15:30".
+function fmtBuyTime(iso) {
+  const d = iso ? new Date(iso) : null;
+  if (!d || Number.isNaN(d.getTime())) return null;
+  const p = Object.fromEntries(new Intl.DateTimeFormat('pt-BR', {
+    timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
+  }).formatToParts(d).map((x) => [x.type, x.value]));
+  return `${p.day}/${p.month} ${p.hour}:${p.minute}`;
+}
+
 function fmtPct(base, price) {
   const pct = ((price - base) / base) * 100;
   return `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`;
@@ -83,6 +93,7 @@ export default function ManualOcoOrdersPanel({ orders, marketPrice, onChanged })
             {mounted ? (
               <div>
                 compra {fmtPrice(entry)}
+                {fmtBuyTime(o.fill?.at) && <span className="text-slate-400"> · {fmtBuyTime(o.fill?.at)}</span>}
                 {marketPrice && entry > 0 && (
                   <span className={marketPrice >= entry ? 'text-green-400' : 'text-red-400'}>
                     {' · agora '}<span className="text-[13px] font-bold">{fmtPct(entry, marketPrice)}</span>
