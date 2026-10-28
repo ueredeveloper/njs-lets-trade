@@ -5,7 +5,7 @@ import SearchInput from './SearchInput';
 import {
   fetchCandlesticksAndCloud, fetchGateCurrencies, gatePreloadCandles,
   fetchMaCrossoverFilter, fetchMultitradeTrades, fetchBotState,
-  fetchGateTrades, fetchBinanceTrades, fetchRsiMomentumMissedSignals, fetchRsiMomentumSignalProximity,
+  fetchGateTrades, fetchBinanceTrades, fetchRsiMomentumMissedSignals, fetchRsiMomentumSignalProximity, listActiveManualOcoOrders,
 } from '../services/api';
 import { parseMaCrossFilterName, parseMaCompareFilterName, parseMaDistanceFilterName, parseIndicatorGrowthFilterName, parseVwapBandWidthFilterName, parseBollingerBandWidthFilterName, parseBollingerMedianTrendFilterName, parseRsiFilterName, parseFilterChartInterval, isNearMissFilterName, nearMissReasonAcronym } from '../utils/filterNames';
 import { useI18n } from '../i18n';
@@ -56,6 +56,8 @@ import TradeFavSortSelect from './TradeFavSortSelect';
 import ActiveFavSortSelect from './ActiveFavSortSelect';
 import MissedSignalsPeriodSelect from './MissedSignalsPeriodSelect';
 import RsiMomFavSortSelect from './RsiMomFavSortSelect';
+import BinanceFavSortSelect from './BinanceFavSortSelect';
+import { loadBinanceFavSort, sortBinanceFavorites } from '../utils/binanceFavoritesSort';
 import { loadRsiMomFavSort, compareSignalProximity } from '../utils/rsiMomFavoritesSort';
 import { loadMissedPeriod, saveMissedPeriod, missedPeriodRange, MISSED_PERIOD_OPTIONS } from '../utils/missedSignalsPeriod';
 import VwapFavSortSelect from './VwapFavSortSelect';
@@ -479,6 +481,23 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   // moeda no intervalo/limiar do PRÓPRIO bot (1m, 15m…), em % de preço — ver
   // backend/services/fetchRsiMomentumSignalProximity.js. Só busca com a lista RSI aberta em "Sinal".
   const isRsiMomFavView = favoriteView === 'rsi-momentum';
+  // Favorito "B" — seletor ‹ › Padrão / Compradas / Aguardando (fase do bot de cada moeda).
+  const isBinanceFavView = favoriteView === 'binance';
+  const [binFavSort, setBinFavSort] = useState(() => loadBinanceFavSort());
+  const onBinFavSortChange = useCallback((id) => { setBinFavSort(id); setSortVolume('none'); }, []);
+  // OCO do Price action (manual_oco_orders) — esperando entrada conta como "aguardando", comprada
+  // como "comprada". Só busca com o B aberto numa ordenação por fase; atualiza a cada 60s.
+  const [binManualOco, setBinManualOco] = useState(null);
+  useEffect(() => {
+    if (!isBinanceFavView || binFavSort === 'default') return undefined;
+    let cancelled = false;
+    const load = () => listActiveManualOcoOrders()
+      .then((list) => { if (!cancelled) setBinManualOco(list); })
+      .catch((err) => console.warn('[CurrencyTable] manual-oco-orders:', err.message));
+    load();
+    const id = setInterval(load, 60_000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [isBinanceFavView, binFavSort]);
   const [rmFavSort, setRmFavSort] = useState(() => loadRsiMomFavSort());
   const [rmProximity, setRmProximity] = useState(null); // Map symbol → linha da API
   const showRmSignalCol = isRsiMomFavView && rmFavSort === 'signal';
@@ -768,6 +787,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
       list = resolveFavorites(gateFavorites, currencies.list, gateAll);
     } else if (favoriteView === 'binance') {
       list = currencies.list.filter((c) => binanceFavorites.has(c.symbol));
+      list = sortBinanceFavorites(list, binFavSort, multitradeFavorites, activeTrades, binManualOco);
     } else if (favoriteView === 'macross') {
       const mtSymbols = multitradeFavorites
         .filter(e => e.enabled !== false && isMaCrossEntry(e))
@@ -969,7 +989,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
     }
 
     return list;
-  }, [currencies, activeFilter, selectedQuote, findFilter, search, favoriteView, gateFavorites, binanceFavorites, multitradeFavorites, sortVolume, gateAll, filterVisibleCurrencies, isVisibleSymbol, currencyBySymbol, activeMacrossFilter, macrossScannedAt, macrossTick, isMacrossFavView, macrossFavSort, macrossFavStatus, macrossEntriesBySymbol, isTradesFavView, tradeFavSort, tradeFavSymbols, tradeFavStatus, isActiveFavView, activeFavSort, activeTrades, isAltaFilter, isNovasFilter, highlightMeta, activeMacmpFilter, macmpMeta, macmpTableSort, activeMaDistanceFilter, maDistMeta, maDistSort, activeGrowthFilter, growthMeta, growthSort, activeVwapWidthFilter, vwapWidthMeta, vwapWidthSort, activeBbWidthFilter, bbWidthMeta, bbWidthSort, activeBbTrendFilter, bbTrendMeta, bbTrendSort, activeRsiFilter, rsiMeta, rsiSort, missedFiltered, rmFavSort, rmProximity, isVwapBandsFavView, vwapFavSort, vwapFavWidthMeta, bbFavSort, bbFavWidthMeta, showGenericWidthCol, genericWidthMeta, genericWidthSort]);
+  }, [currencies, activeFilter, selectedQuote, findFilter, search, favoriteView, gateFavorites, binanceFavorites, multitradeFavorites, sortVolume, gateAll, filterVisibleCurrencies, isVisibleSymbol, currencyBySymbol, activeMacrossFilter, macrossScannedAt, macrossTick, isMacrossFavView, macrossFavSort, macrossFavStatus, macrossEntriesBySymbol, isTradesFavView, tradeFavSort, tradeFavSymbols, tradeFavStatus, isActiveFavView, activeFavSort, activeTrades, isAltaFilter, isNovasFilter, highlightMeta, activeMacmpFilter, macmpMeta, macmpTableSort, activeMaDistanceFilter, maDistMeta, maDistSort, activeGrowthFilter, growthMeta, growthSort, activeVwapWidthFilter, vwapWidthMeta, vwapWidthSort, activeBbWidthFilter, bbWidthMeta, bbWidthSort, activeBbTrendFilter, bbTrendMeta, bbTrendSort, activeRsiFilter, rsiMeta, rsiSort, missedFiltered, rmFavSort, rmProximity, binFavSort, binManualOco, isVwapBandsFavView, vwapFavSort, vwapFavWidthMeta, bbFavSort, bbFavWidthMeta, showGenericWidthCol, genericWidthMeta, genericWidthSort]);
 
   // Publica a lista visível (já filtrada/ordenada) e a função de seleção real pro contexto —
   // os botões ‹ › do gráfico usam isso pra passar pra moeda anterior/seguinte na mesma ordem
@@ -1782,6 +1802,7 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                     : isBollingerBandsFavView ? t('bbfav.sort.label')
                     : isRsiMissedFavView ? 'Período dos sinais sem entrada'
                     : isRsiMomFavView ? t('rsimomfav.sort.label')
+                    : isBinanceFavView ? t('binfav.sort.label')
                     : activeMacmpFilter ? t('macmp.sort.label')
                     : showGenericWidthToggle ? t('genwidth.sort.label')
                     : undefined
@@ -1842,6 +1863,14 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
                     <RsiMomFavSortSelect
                       value={rmFavSort}
                       onChange={onRmFavSortChange}
+                      className="shrink-0"
+                    />
+                  </div>
+                ) : isBinanceFavView ? (
+                  <div className={`flex items-center gap-0.5 ${isMobile ? 'flex-wrap justify-center' : 'justify-start'}`}>
+                    <BinanceFavSortSelect
+                      value={binFavSort}
+                      onChange={onBinFavSortChange}
                       className="shrink-0"
                     />
                   </div>

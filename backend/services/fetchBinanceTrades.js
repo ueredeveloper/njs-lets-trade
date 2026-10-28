@@ -382,7 +382,17 @@ router.post('/manual-oco-orders', async (req, res) => {
 
 // GET /services/manual-oco-orders?symbol=BTCUSDT — últimas 20 do símbolo (ativas primeiro na UI).
 router.get('/manual-oco-orders', async (req, res) => {
-  const { symbol } = req.query;
+  const { symbol, active } = req.query;
+  // ?active=1 sem symbol — todas as ordens ainda vivas (esperando entrada ou posição aberta), pra
+  // ordenação do favorito B (Compradas / Aguardando) na tabela de moedas.
+  if (!symbol && active) {
+    const { data, error } = await supabase.from(MANUAL_OCO_TABLE)
+      .select('id, symbol, exchange, status')
+      .in('status', ['NEW', 'OPEN', 'CANCEL_REQUESTED', 'FILLED', 'BRACKETED', 'SELLING', 'OCO_FAILED'])
+      .order('id', { ascending: false }).limit(500);
+    if (error) return res.status(500).json({ error: error.message, hint: 'rode supabase/add-manual-oco-orders-table.sql (1×)' });
+    return res.json(data ?? []);
+  }
   if (!symbol) return res.status(400).json({ error: 'symbol obrigatório' });
   const { data, error } = await supabase.from(MANUAL_OCO_TABLE)
     .select('*').eq('symbol', symbol.toUpperCase())

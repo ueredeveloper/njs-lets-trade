@@ -2188,6 +2188,14 @@ export async function listManualOcoOrders(symbol) {
   return body;
 }
 
+/** Todas as ordens OCO manuais (Price action) ainda vivas — esperando entrada ou posição aberta. */
+export async function listActiveManualOcoOrders() {
+  const res = await fetch('/services/manual-oco-orders?active=1');
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.hint ? `${body.error} — ${body.hint}` : (body.error ?? `HTTP ${res.status}`));
+  return body;
+}
+
 export async function cancelManualOcoOrder(id) {
   const res = await fetch(`/services/manual-oco-orders/${id}/cancel`, { method: 'POST' });
   const body = await res.json().catch(() => ({}));
