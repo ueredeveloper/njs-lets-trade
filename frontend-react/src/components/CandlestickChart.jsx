@@ -19,7 +19,7 @@ import Tooltip from './Tooltip';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { DEFAULT_OVERLAY_SLOTS, DEFAULT_ACTIVE_INDICATORS, VALID_ACTIVE_INDICATORS, BB_PERIOD_OPTIONS, BB_STDDEV_OPTIONS, DEFAULT_PREV_DAY_CLOUD_INTERVAL, GATE_PREV_DAY_CLOUD_INTERVALS, DEFAULT_PREV_DAY_CLOUD_CANDLE_COUNT, DEFAULT_EMA_PERSIST_CLOUD_INTERVAL, DEFAULT_PERM_CLOUD_TONES, DEFAULT_EMA_PERSIST_CLOUD_LAYERS, DEFAULT_COMMON_CHART_INTERVALS, getEmaPersistCloudConfirmInterval } from '../utils/uiPreferences';
 import { computeRsiUpCrossingsFromCandles } from '../utils/rsiThresholdCrossings';
-import { detectSupportResistance, detectPivotPointsHighLow, detectWilliamsFractals, detectZigZag } from '../utils/srDetectors';
+import { detectPivotPointsHighLow, detectWilliamsFractals, detectZigZag } from '../utils/srDetectors';
 import { logSrLevels } from '../utils/srLevelLog';
 import { CHART_VIEW, INTERVAL_MS, computeZoomWindow, buildFixedDataZoom, buildInsideDataZoom, computeCandleLimitFromTime, isTradePanelChartView, computeManualWheelZoom } from '../utils/chartView';
 import { simulateBbTouchPath, pairBbPathCycles } from '../utils/bollingerTouchPath';
@@ -34,7 +34,7 @@ import {
 } from '../utils/chartPanelStyles';
 import GroupBox from './chartHandlers/GroupBox';
 import { SR_PALETTE, RSI_CROSS_COLOR_HEX } from '../utils/chartHandlers/descriptors';
-import { sliceRankedSrLevels, srRankAllowed } from '../utils/srRank';
+import { srRankAllowed, detectExpandingSrLevels, SR_EXPAND_MAX_MULT } from '../utils/srRank';
 import { HANDLER_DESCRIPTORS, HANDLER_GROUP_STORES } from '../utils/chartHandlers/descriptors';
 import { useGroupedHandlers } from '../utils/chartHandlers/useGroupedHandlers';
 
@@ -2149,7 +2149,7 @@ function buildSrMarkLines(levels, entrySupport = null, exitResistance = null, sh
       },
       label: {
         show: true,
-        formatter: `${isRes ? 'R' : 'S'}${rank} ${fmtChartPrice(lvl.price)} (${lvl.touches}x)${tag}`,
+        formatter: `${isRes ? 'R' : 'S'}${rank}${lvl.expandedCandles ? `·${lvl.expandedCandles}c` : ''} ${fmtChartPrice(lvl.price)} (${lvl.touches}x)${tag}`,
         color,
         fontSize: efs(14, 'price'),
         fontWeight: marked ? 'bold' : 'normal',
@@ -5517,12 +5517,12 @@ export default function CandlestickChart() {
     enabledSrGroups.forEach((g, i) => {
       const raw = pivotRawCache[`${selectedChart?.symbol}|${g.interval}`]?.candles ?? [];
       const anchorMs = srAnchorByInterval[g.interval];
-      const slice = sliceForRollingSR(raw, anchorMs != null ? { toMs: anchorMs } : null, g.candleCount, SR_ROLL_WIDTH);
+      // Fatia com folga de até SR_EXPAND_MAX_MULT× o lookback: se faltar S1/R1… nos `candleCount`
+      // candles, detectExpandingSrLevels amplia a janela até achar (ver srRank.js).
+      const slice = sliceForRollingSR(raw, anchorMs != null ? { toMs: anchorMs } : null, g.candleCount * SR_EXPAND_MAX_MULT, SR_ROLL_WIDTH);
       const rolling = [];
       for (let k = Math.max(0, slice.length - SR_ROLL_WIDTH); k < slice.length; k++) {
-        const from = Math.max(0, k - g.candleCount + 1);
-        let levels = detectSupportResistance(slice.slice(from, k + 1), {});
-        levels = sliceRankedSrLevels(levels, g.support, g.resistance);
+        const levels = detectExpandingSrLevels(slice, k, g.candleCount, g.support, g.resistance);
         if (levels.length) rolling.push({ time: Number(slice[k].openTime), levels });
       }
       out.push({
@@ -5891,10 +5891,9 @@ export default function CandlestickChart() {
     const raw = pivotRawCache[`${selectedChart?.symbol}|${g.interval}`]?.candles ?? [];
     if (!raw.length) { console.warn(`[S/R] caixa: candles de ${g.interval} ainda não carregados`); return; }
     const anchorMs = srClosedAnchorMs(analysisBox.toMs, INTERVAL_MS[g.interval] ?? 3_600_000);
-    const slice = sliceForRollingSR(raw, { toMs: anchorMs }, g.candleCount, SR_ROLL_WIDTH);
+    const slice = sliceForRollingSR(raw, { toMs: anchorMs }, g.candleCount * SR_EXPAND_MAX_MULT, SR_ROLL_WIDTH);
     const anchorCandle = slice[slice.length - 1];
-    const levels = detectSupportResistance(
-      slice.slice(Math.max(0, slice.length - g.candleCount), slice.length), {});
+    const levels = detectExpandingSrLevels(slice, slice.length - 1, g.candleCount, g.support, g.resistance);
     logSrLevels('caixa de análise', selectedChart?.symbol, levels, {
       interval: g.interval,
       lookback: g.candleCount,
