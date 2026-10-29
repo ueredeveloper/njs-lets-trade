@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { buyWithManualOco, createManualOcoOrder } from '../services/api';
 
-// v2: o padrão subiu de 20 pra 50 USDT — chave nova pra não herdar o 20 já salvo.
-const USDT_STORAGE_KEY = 'chartOcoUsdtV2';
-const DEFAULT_USDT = 50;
+// v3: o padrão caiu de 50 pra 40 USDT — chave nova pra não herdar o 50 já salvo.
+const USDT_STORAGE_KEY = 'chartOcoUsdtV3';
+const DEFAULT_USDT = 40;
 
 function fmtPrice(p) {
   const n = Number(p);
