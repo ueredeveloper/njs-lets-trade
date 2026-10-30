@@ -1159,7 +1159,8 @@ export function CurrencyProvider({ children }) {
   }, []);
 
   const clearAllFilters = useCallback(() => {
-    setFilters((prev) => prev.filter((f) => f.name === 'Mercado|USDT' || isAutoHighlightFilter(f.name)));
+    setFilters((prev) => prev.filter((f) => f.name === 'Mercado|USDT' || f.name.startsWith('Exclusivas|')
+      || isAutoHighlightFilter(f.name)));
   }, []);
 
   const joinFilters = useCallback((selectedFilterNames) => {

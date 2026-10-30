@@ -1110,6 +1110,14 @@ export async function fetchGateCoinsFilter({ minVolumeUsdt = 0, maxVolumeUsdt = 
   return res.json(); // { name, list, details, scannedAt }
 }
 
+/** Filtros fixos "Exclusivas|Gate" / "Exclusivas|Binance" — ver fetchGateCoinsFilter.js. */
+export async function fetchExchangeExclusiveFilters() {
+  const res = await fetch('/services/exchange-exclusive-coins');
+  if (!res.ok) throw new Error(`exchange-exclusive-coins falhou: HTTP ${res.status}`);
+  const data = await res.json();
+  return data.filters ?? [];
+}
+
 /** Dispara o pré-carregamento de todos os intervalos padrão para um símbolo Gate.io. */
 export function gatePreloadCandles(symbol) {
   fetch(`/services/gate-prefetch?symbol=${encodeURIComponent(symbol)}`).catch(() => {});

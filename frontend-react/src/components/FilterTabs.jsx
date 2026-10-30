@@ -134,6 +134,11 @@ function getFilterDescription(name, t) {
     return `Favoritos: ${type}`;
   }
 
+  if (interval === 'Exclusivas') {
+    if (type === 'Gate')    return t('filter.exclusive_gate');
+    if (type === 'Binance') return t('filter.exclusive_binance');
+  }
+
   if (interval === 'Gate') {
     // Gate|<presença>[|<faixa de volume>] — filtro de descoberta do painel "Analisar indicadores"
     return `Gate: ${parts.slice(1).join(' · ')}`;

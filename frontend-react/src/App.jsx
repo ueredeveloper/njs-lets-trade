@@ -11,7 +11,7 @@ import {
 import { CurrencyProvider, useCurrency } from './contexts/CurrencyContext';
 import { LanguageProvider } from './contexts/LanguageContext';
 import { useI18n } from './i18n';
-import { fetchAllCurrencies, fetchBreakUsdtPairs, fetch24hVolume, fetchStablecoins, fetchCandlesticksAndCloud, getFavorites } from './services/api';
+import { fetchAllCurrencies, fetchBreakUsdtPairs, fetch24hVolume, fetchStablecoins, fetchCandlesticksAndCloud, getFavorites, fetchExchangeExclusiveFilters } from './services/api';
 import { setBreakSymbols } from './utils/assetCategories';
 import { loadUiPreferences, firstVisiblePanel, CURRENCY_PANEL_WIDTH_MIN, CURRENCY_PANEL_WIDTH_MAX } from './utils/uiPreferences';
 import { useIsMobile } from './hooks/useIsMobile';
@@ -211,6 +211,16 @@ function AppContent() {
           ...volumeFilters,
           ...stableFilters,
         ]);
+
+        // Exclusivas Gate / Binance (cruza tickers Gate × pares Binance) — não segura o boot;
+        // entra no painel quando chegar.
+        fetchExchangeExclusiveFilters()
+          .then((exclusive) => {
+            if (cancelled || !exclusive.length) return;
+            const names = new Set(exclusive.map((f) => f.name));
+            setFilters((prev) => [...prev.filter((f) => !names.has(f.name)), ...exclusive]);
+          })
+          .catch((err) => console.warn('[App] fetchExchangeExclusiveFilters:', err.message));
 
         setSelectedChart({ ...btcData, interval: defaultIv, symbol: 'BTCUSDT' });
         setChartInterval(defaultIv);

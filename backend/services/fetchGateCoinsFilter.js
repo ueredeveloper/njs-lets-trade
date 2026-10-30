@@ -62,4 +62,34 @@ router.get('/gate-coins-filter', async (req, res) => {
     }
 });
 
+// GET /services/exchange-exclusive-coins
+//
+// Filtros fixos do painel de filtros: "Exclusivas|Gate" (par USDT negociado na Gate e fora dos
+// pares TRADING da Binance) e "Exclusivas|Binance" (par TRADING na Binance que a Gate nem lista).
+// Gate sem volume 24h fica de fora da lista "só Gate" (par morto), mas ainda conta como listado
+// pra lista "só Binance". Ordenadas por volume 24h (Gate) / alfabética (Binance).
+router.get('/exchange-exclusive-coins', async (req, res) => {
+    try {
+        const [gate, usdtPairs] = await Promise.all([getAllGateCurrencies(), getActiveUsdtPairs()]);
+        const binanceSet = new Set(usdtPairs.list ?? []);
+        const gateSet = new Set(gate.map((c) => c.symbol));
+
+        const gateOnly = gate
+            .filter((c) => /^[A-Z0-9]{1,20}USDT$/.test(c.symbol) && !binanceSet.has(c.symbol) && Number(c.volume) > 0)
+            .map((c) => c.symbol);
+        const binanceOnly = (usdtPairs.list ?? []).filter((s) => !gateSet.has(s)).sort();
+
+        res.json({
+            filters: [
+                { name: 'Exclusivas|Gate', list: gateOnly },
+                { name: 'Exclusivas|Binance', list: binanceOnly },
+            ],
+            scannedAt: Date.now(),
+        });
+    } catch (err) {
+        console.error('[exchange-exclusive-coins]', err.message);
+        res.status(502).json({ error: err.message });
+    }
+});
+
 module.exports = router;
