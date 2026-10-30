@@ -44,8 +44,9 @@ export default function ManualOcoOrdersPanel({ orders, marketPrice, onChanged })
 
   if (!orders?.length) return null;
 
+  // confirmText null = sem confirmação (Cancelar compra — nada foi comprado ainda).
   const run = async (id, action, confirmText, spent) => {
-    if (busyId || !window.confirm(confirmText)) return;
+    if (busyId || (confirmText && !window.confirm(confirmText))) return;
     setBusyId(id);
     setMessage(null);
     try {
@@ -128,7 +129,7 @@ export default function ManualOcoOrdersPanel({ orders, marketPrice, onChanged })
             )}
             {(o.status === 'NEW' || o.status === 'OPEN') && (
               <button
-                onClick={() => run(o.id, cancelManualOcoOrder, `Cancelar a ordem de compra #${o.id} de ${o.symbol}?`)}
+                onClick={() => run(o.id, cancelManualOcoOrder, null)}
                 disabled={busy}
                 className="mt-1 w-full rounded bg-orange-600 py-0.5 font-bold text-white hover:bg-orange-500 disabled:opacity-40"
               >
