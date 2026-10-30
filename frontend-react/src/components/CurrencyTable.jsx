@@ -481,12 +481,14 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
   // moeda no intervalo/limiar do PRÓPRIO bot (1m, 15m…), em % de preço — ver
   // backend/services/fetchRsiMomentumSignalProximity.js. Só busca com a lista RSI aberta em "Sinal".
   const isRsiMomFavView = favoriteView === 'rsi-momentum';
-  // Favorito "B" — seletor ‹ › Padrão / Compradas / Aguardando (fase do bot de cada moeda).
+  // Favorito "B" — seletor ‹ › Padrão / Compradas / Aguardando (fase do bot de cada moeda) /
+  // Entrada / Alvo / Stop (proximidade do preço atual até o nível — binanceFavoritesSort.js).
   const isBinanceFavView = favoriteView === 'binance';
   const [binFavSort, setBinFavSort] = useState(() => loadBinanceFavSort());
   const onBinFavSortChange = useCallback((id) => { setBinFavSort(id); setSortVolume('none'); }, []);
   // OCO do Price action (manual_oco_orders) — esperando entrada conta como "aguardando", comprada
-  // como "comprada". Só busca com o B aberto numa ordenação por fase; atualiza a cada 60s.
+  // como "comprada"; também dá entrada/alvo/stop pras ordenações por proximidade. Só busca com o B
+  // aberto numa ordenação que não seja a Padrão; atualiza a cada 60s.
   const [binManualOco, setBinManualOco] = useState(null);
   useEffect(() => {
     if (!isBinanceFavView || binFavSort === 'default') return undefined;
