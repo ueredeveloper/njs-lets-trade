@@ -384,10 +384,11 @@ router.post('/manual-oco-orders', async (req, res) => {
 router.get('/manual-oco-orders', async (req, res) => {
   const { symbol, active } = req.query;
   // ?active=1 sem symbol — todas as ordens ainda vivas (esperando entrada ou posição aberta), pra
-  // ordenação do favorito B (Compradas / Aguardando) na tabela de moedas.
+  // ordenação do favorito B (Compradas / Aguardando / perto da entrada, alvo, stop) na tabela de
+  // moedas. Os preços vão junto — manualOcoLevels (frontend utils/manualOco.js) precisa deles.
   if (!symbol && active) {
     const { data, error } = await supabase.from(MANUAL_OCO_TABLE)
-      .select('id, symbol, exchange, status')
+      .select('id, symbol, exchange, status, entry_price, target_price, stop_price, buy_handle, fill, bracket, created_at')
       .in('status', ['NEW', 'OPEN', 'CANCEL_REQUESTED', 'FILLED', 'BRACKETED', 'SELLING', 'OCO_FAILED'])
       .order('id', { ascending: false }).limit(500);
     if (error) return res.status(500).json({ error: error.message, hint: 'rode supabase/add-manual-oco-orders-table.sql (1×)' });

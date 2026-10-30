@@ -13,8 +13,8 @@ export const BINANCE_FAV_SORT_OPTIONS = [
   { id: 'nearStop', labelKey: 'binfav.sort.nearStop', shortKey: 'binfav.sort.short.nearStop' },
 ];
 
-// Proximidade: 'entry' só vale pra quem AINDA não comprou (entrada pendente); alvo/stop só pra
-// posição aberta (antes da compra são só previsão). Quem não tem o nível vai pro fim.
+// Proximidade: vale pra compradas E aguardando — comprada usa o preço pago + OCO real, aguardando
+// a entrada pendente + alvo/stop previstos da OCO. Quem não tem o nível vai pro fim.
 const PROXIMITY_LEVEL = { nearEntry: 'entry', nearTarget: 'target', nearStop: 'stop' };
 
 // Moeda sem bot nenhum (`null`) sempre no fim.
@@ -118,11 +118,10 @@ function levelsBySymbol(multitradeFavorites, manualOcoOrders) {
  *  mantendo a ordem original (sort estável). */
 function sortByLevelProximity(list, level, multitradeFavorites, manualOcoOrders) {
   const levels = levelsBySymbol(multitradeFavorites, manualOcoOrders);
-  const wantBought = level !== 'entry';
   const dist = (c) => {
     const lv = levels.get(c.symbol);
     const price = positive(c.price);
-    if (!lv || !price || lv.bought !== wantBought || lv[level] == null) return Infinity;
+    if (!lv || !price || lv[level] == null) return Infinity;
     return Math.abs(price - lv[level]) / price * 100;
   };
   const d = new Map(list.map(c => [c.symbol, dist(c)]));
