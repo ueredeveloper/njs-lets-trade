@@ -34,6 +34,9 @@ const CONFIG = {
   interval: '4h',
   usdt: 25,
   maxActive: 3,
+  // Critérios do scanner (o resto fica no padrão de bullishBreakoutScanner.js#DEFAULTS): corpo
+  // verde >= 5% e volume 24h >= 1,5M USDT. Também valem na reconferência do fechamento.
+  scan: { minBodyPct: 5, minVolume24h: 1_500_000 },
   exit: { targetPct: 10, stopMode: 'candleMid', minStopPct: 5 },
 };
 const SCAN_EVERY_MS = 15 * 60_000;
@@ -67,7 +70,9 @@ async function ensureBinanceFavorite(userId, symbol) {
 }
 
 async function runCycle(log) {
-  const { list, meta } = await scanBullishBreakouts({ interval: CONFIG.interval, withinCandles: 1, closedOnly: false });
+  const { list, meta } = await scanBullishBreakouts({
+    interval: CONFIG.interval, ...CONFIG.scan, withinCandles: 1, closedOnly: false,
+  });
   if (!list.length) return;
 
   const live = await sbReq('GET', ORDERS, null,

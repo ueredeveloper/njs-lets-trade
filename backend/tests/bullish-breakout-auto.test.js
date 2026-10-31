@@ -23,7 +23,11 @@ describe('exitLevels — alvo +10%, stop na metade do candle (mín. 5%)', () => 
     expect(lv.stop).toBeCloseTo(95);
   });
 
-  test('config padrão: 25 USDT, máx. 3 ordens, 4h', () => {
-    expect(CONFIG).toMatchObject({ interval: '4h', usdt: 25, maxActive: 3, exit: { targetPct: 10, minStopPct: 5 } });
+  test('config padrão: 25 USDT, máx. 3 ordens, 4h, corpo >= 5%, volume 24h >= 1,5M', () => {
+    expect(CONFIG).toMatchObject({
+      interval: '4h', usdt: 25, maxActive: 3,
+      scan: { minBodyPct: 5, minVolume24h: 1_500_000 },
+      exit: { targetPct: 10, minStopPct: 5 },
+    });
   });
 });
