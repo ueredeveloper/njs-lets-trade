@@ -56,6 +56,7 @@ const fetchTradeFavorites      = require('./fetchTradeFavorites')
 const stgBotStatus             = require('./stgBotStatus')
 const multitradeService        = require('./multitradeService')
 const fetchMarketHighlights    = require('./fetchMarketHighlights')
+const fetchBullishBreakout     = require('./fetchBullishBreakout')
 const whatsappMessagesService  = require('./whatsapp-messages/whatsappMessagesService')
 const fetchCacheSettings       = require('./fetchCacheSettings')
 const rsiMomentumStatsSearchLog = require('./rsiMomentumStatsSearchLog')
@@ -66,6 +67,6 @@ module.exports = {
     fetchSMA, fetchRSI, fetchChopZone, fetchVWAP, fetch24HsVolume, fetchMarketCapFilter, fetchStablecoins,
     fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter, fetchMaDistanceFilter, fetchIndicatorGrowthFilter, fetchRsiOversoldRecovery, fetchRsiThresholdBacktest, fetchRsiThresholdBacktestMarket, fetchCandleSetupsBacktest, fetchFlagBacktest, fetchMaCrossStats, fetchVwapBandsStats, fetchBollingerBandRecovery, fetchBollingerBandPositionFilter, fetchVwapPositionFilter, fetchVwapBandWidthFilter, fetchBollingerBandWidthFilter, fetchBandWidthEvolution, fetchBollingerMedianTrendFilter, fetchVwapBandExpansionFilter, fetchBollingerBands, fetchMACD, fetchSimpleMaCross, fetchReloadCandles,
     fetchGateCurrencies, fetchGateCoinsFilter, fetchGatePrefetch, fetchBinanceTrades, fetchGateTrades, fetchActiveTrades,
-    fetchTradeFavorites, stgBotStatus, multitradeService, fetchMarketHighlights, whatsappMessagesService, fetchCacheSettings, rsiMomentumStatsSearchLog, bandWidthEvolutionSearchLog, fetchRsiMomentumWatchlist, fetchRsiMomentumNearMisses, fetchRsiMomentumMissedSignals, fetchRsiMomentumSignalProximity }
+    fetchTradeFavorites, stgBotStatus, multitradeService, fetchMarketHighlights, fetchBullishBreakout, whatsappMessagesService, fetchCacheSettings, rsiMomentumStatsSearchLog, bandWidthEvolutionSearchLog, fetchRsiMomentumWatchlist, fetchRsiMomentumNearMisses, fetchRsiMomentumMissedSignals, fetchRsiMomentumSignalProximity }
 
 

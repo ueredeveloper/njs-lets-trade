@@ -1110,6 +1110,19 @@ export async function fetchGateCoinsFilter({ minVolumeUsdt = 0, maxVolumeUsdt = 
   return res.json(); // { name, list, details, scannedAt }
 }
 
+/** Explosão de Alta — candle único de explosão no mercado USDT (ver bullishBreakoutScanner.js). */
+export async function fetchBullishBreakoutFilter({ interval = '4h', minBodyPct, minVolumeRatio, closedOnly = false } = {}) {
+  const params = new URLSearchParams({ interval, closedOnly: String(closedOnly) });
+  if (minBodyPct) params.set('minBodyPct', String(minBodyPct));
+  if (minVolumeRatio) params.set('minVolumeRatio', String(minVolumeRatio));
+  const res = await fetch(`/services/bullish-breakout?${params}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `bullish-breakout falhou: HTTP ${res.status}`);
+  }
+  return res.json(); // { name, list, meta: { breakouts, scannedAt, ... } }
+}
+
 /** Filtros fixos "Exclusivas|Gate" / "Exclusivas|Binance" — ver fetchGateCoinsFilter.js. */
 export async function fetchExchangeExclusiveFilters() {
   const res = await fetch('/services/exchange-exclusive-coins');

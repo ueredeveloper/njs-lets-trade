@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useCurrency } from '../contexts/CurrencyContext';
-import { fetchCandlesAndIndicators, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter, fetchMaDistanceFilter, fetchIndicatorGrowthFilter, fetchMarketCapFilter, fetchBollingerBandPositionFilter, fetchBollingerBandWidthFilter, fetchBollingerMedianTrendFilter, fetchVwapPositionFilter, fetchVwapBandWidthFilter, fetchVwapBandExpansionFilter, fetchRsiMomentumWatchlist, fetchRsiMomentumNearMisses, getRsiMomentumConfig, getRsiMomentumCuratedBot, getRsiMomentumCuratedList, fetchGateCoinsFilter, fetchUserPrefs, saveUserPrefs, clearRecentIndicators } from '../services/api';
+import { fetchCandlesAndIndicators, fetchIndicatorSearch, fetchMaFilter, fetchMaTimeAboveFilter, fetchMaCrossoverFilter, fetchMaCompareFilter, fetchMaDistanceFilter, fetchIndicatorGrowthFilter, fetchMarketCapFilter, fetchBollingerBandPositionFilter, fetchBollingerBandWidthFilter, fetchBollingerMedianTrendFilter, fetchVwapPositionFilter, fetchVwapBandWidthFilter, fetchVwapBandExpansionFilter, fetchRsiMomentumWatchlist, fetchRsiMomentumNearMisses, getRsiMomentumConfig, getRsiMomentumCuratedBot, getRsiMomentumCuratedList, fetchGateCoinsFilter, fetchBullishBreakoutFilter, fetchUserPrefs, saveUserPrefs, clearRecentIndicators } from '../services/api';
 import { RSI_MOMENTUM_ALL_INTERVALS, RSI_MOMENTUM_SR_INTERVAL_OPTIONS, RSI_MOMENTUM_SR_CANDLE_COUNT_OPTIONS } from '../constants/rsiMomentumConfigSchema';
 import { useI18n } from '../i18n';
 import {
@@ -88,6 +88,10 @@ const GATE_VOLUME_OPTIONS = [
   { value: '10000000', label: '$10M' },
   { value: '25000000', label: '$25M' },
 ];
+
+// Explosão de Alta (bullishBreakoutScanner.js): corpo verde mínimo e volume × média dos 20 anteriores
+const BULLISH_BREAKOUT_BODY_OPTIONS = ['2', '3', '4', '5', '7', '10', '15'];
+const BULLISH_BREAKOUT_VOLUME_OPTIONS = ['1.5', '2', '3', '5', '10'];
 
 const GATE_PRESENCE_OPTIONS = [
   { value: 'only_gate', labelKey: 'gatecoins.presence.only_gate' },
@@ -278,6 +282,10 @@ function buildSummary(value, t) {
     const range = vmax !== '—' ? `${vmin} – ${vmax}` : `≥ ${vmin}`;
     return t('sum.gate_coins', presenceLabel, range);
   }
+  if (type === 'bullishBreakout') {
+    const candle = value.closedOnly ? t('ind.bb_out_candle_closed') : t('ind.bb_out_candle_current');
+    return `${t('ind.bullish_breakout')} — corpo ≥ ${value.minBodyPct ?? '5'}% · volume ≥ ${value.minVolumeRatio ?? '3'}× · ${candle} · ${ivLabel}`;
+  }
   if (type === 'movingAverage') {
     const len = value.length ?? '200';
     const cmp = (value.compare ?? 'above') === 'above' ? t('sum.above_short') : t('sum.bellow_short');
@@ -412,6 +420,7 @@ function indDescKey(type) {
   if (type === 'botReadinessCurated') return 'bot_readiness_curated';
   if (type === 'nearMiss') return 'near_miss';
   if (type === 'gateCoins') return 'gate_coins';
+  if (type === 'bullishBreakout') return 'bullish_breakout';
   return 'marketcap';
 }
 
@@ -573,6 +582,12 @@ function IndicatorRow({ value, onChange }) {
                 next.maxVolumeUsdt = next.maxVolumeUsdt ?? '';
                 next.binancePresence = next.binancePresence ?? 'only_gate';
               }
+              if (newType === 'bullishBreakout') {
+                next.intervals = ['4h'];
+                next.minBodyPct = next.minBodyPct ?? '5';
+                next.minVolumeRatio = next.minVolumeRatio ?? '3';
+                next.closedOnly = next.closedOnly ?? false;
+              }
               if (newType === 'nearMiss') {
                 next.intervals = [];
                 next.period = next.period ?? '7d';
@@ -616,6 +631,7 @@ function IndicatorRow({ value, onChange }) {
             <option value="vwapBandExpansion">{t('ind.vwap_band_expansion')}</option>
             <option value="indicatorGrowth">{t('ind.indicator_growth')}</option>
             <option value="gateCoins">{t('ind.gate_coins')}</option>
+            <option value="bullishBreakout">{t('ind.bullish_breakout')}</option>
           </select>
           {type && t(`ind.desc.${indDescKey(type)}`) !== `ind.desc.${indDescKey(type)}` && (
             <HelpIcon text={t(`ind.desc.${indDescKey(type)}`)} />
@@ -666,6 +682,27 @@ function IndicatorRow({ value, onChange }) {
               title={t('ind.momrsi_rsi_signal')}>
               <option value="">RSI sinal: —</option>
               {MOMENTUM_RSI_SIGNAL_OPTIONS.map((n) => <option key={n} value={String(n)}>RSI sinal: {n}</option>)}
+            </select>
+          </>
+        )}
+
+        {type === 'bullishBreakout' && (
+          <>
+            <select className={sel} value={value.minBodyPct ?? '5'}
+              onChange={(e) => onChange({ ...value, minBodyPct: e.target.value })}
+              title={t('ind.bb_out_body_tip')}>
+              {BULLISH_BREAKOUT_BODY_OPTIONS.map((n) => <option key={n} value={n}>Corpo ≥ {n}%</option>)}
+            </select>
+            <select className={sel} value={value.minVolumeRatio ?? '3'}
+              onChange={(e) => onChange({ ...value, minVolumeRatio: e.target.value })}
+              title={t('ind.bb_out_volume_tip')}>
+              {BULLISH_BREAKOUT_VOLUME_OPTIONS.map((n) => <option key={n} value={n}>Volume ≥ {n}×</option>)}
+            </select>
+            <select className={sel} value={value.closedOnly ? 'closed' : 'current'}
+              onChange={(e) => onChange({ ...value, closedOnly: e.target.value === 'closed' })}
+              title={t('ind.bb_out_candle_tip')}>
+              <option value="current">{t('ind.bb_out_candle_current')}</option>
+              <option value="closed">{t('ind.bb_out_candle_closed')}</option>
             </select>
           </>
         )}
@@ -1676,7 +1713,8 @@ export default function IndicatorPanel({ open, onToggle }) {
       const botReadyIndicators = indicators.filter((ind) => ind.type === 'botReadiness' || ind.type === 'botReadinessCurated');
       const nearMissIndicators = indicators.filter((ind) => ind.type === 'nearMiss');
       const gateCoinsIndicators = indicators.filter((ind) => ind.type === 'gateCoins');
-      const otherIndicators = indicators.filter((ind) => ind.type && ind.type !== 'relativeStrengthIndex' && ind.type !== 'marketCap' && ind.type !== 'botReadiness' && ind.type !== 'botReadinessCurated' && ind.type !== 'nearMiss' && ind.type !== 'gateCoins' && ind.type !== 'movingAverage' && ind.type !== 'maTimeAbove' && ind.type !== 'maCrossover' && ind.type !== 'maCompare' && ind.type !== 'maDistance' && ind.type !== 'bollingerPosition' && ind.type !== 'bollingerBandWidth' && ind.type !== 'bollingerMedianTrend' && ind.type !== 'vwapPosition' && ind.type !== 'vwapBandWidth' && ind.type !== 'vwapBandExpansion' && ind.type !== 'indicatorGrowth');
+      const bullishBreakoutIndicators = indicators.filter((ind) => ind.type === 'bullishBreakout');
+      const otherIndicators = indicators.filter((ind) => ind.type && ind.type !== 'relativeStrengthIndex' && ind.type !== 'marketCap' && ind.type !== 'botReadiness' && ind.type !== 'botReadinessCurated' && ind.type !== 'nearMiss' && ind.type !== 'gateCoins' && ind.type !== 'bullishBreakout' && ind.type !== 'movingAverage' && ind.type !== 'maTimeAbove' && ind.type !== 'maCrossover' && ind.type !== 'maCompare' && ind.type !== 'maDistance' && ind.type !== 'bollingerPosition' && ind.type !== 'bollingerBandWidth' && ind.type !== 'bollingerMedianTrend' && ind.type !== 'vwapPosition' && ind.type !== 'vwapBandWidth' && ind.type !== 'vwapBandExpansion' && ind.type !== 'indicatorGrowth');
 
       // Salva intervalos e análises usadas nas preferências
       const allIntervals = [...new Set(indicators.flatMap(ind => ind.intervals ?? []))];
@@ -1780,6 +1818,19 @@ export default function IndicatorPanel({ open, onToggle }) {
         const filter = await fetchGateCoinsFilter({ minVolumeUsdt, maxVolumeUsdt, binancePresence });
         console.log('[frontend-react] moedas Gate:', filter.name, '—', filter.list.length, 'moedas');
         addFilter({ name: filter.name, list: filter.list, meta: filter.details, scannedAt: filter.scannedAt });
+      }
+
+      // Explosão de Alta: um candle único de explosão (corpo verde + volume × média + rompeu a
+      // máxima dos 20 anteriores) NO candle atual ou no último fechado — ver bullishBreakoutScanner.js.
+      // Lista vem ordenada da explosão mais forte pra mais fraca.
+      for (const ind of bullishBreakoutIndicators) {
+        for (const interval of ind.intervals) {
+          const filter = await fetchBullishBreakoutFilter({
+            interval, minBodyPct: ind.minBodyPct ?? '5', minVolumeRatio: ind.minVolumeRatio ?? '3', closedOnly: !!ind.closedOnly,
+          });
+          console.log('[frontend-react] explosão de alta:', filter.name, '—', filter.list.length, 'moedas');
+          addFilter({ name: filter.name, list: filter.list, meta: filter.meta?.breakouts, scannedAt: filter.meta?.scannedAt });
+        }
       }
 
       // MA50: cache rsiCache (intervalos 15m/1h/4h aquecidos no servidor)
