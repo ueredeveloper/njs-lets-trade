@@ -372,6 +372,23 @@ ordens ATIVAS (`utils/manualOco.js`) e desenha: OCO montada em verde/vermelho + 
 ainda na compra = previsão azul (alvo) / laranja (stop) + **Cancelar compra**
 (`ManualOcoOrdersPanel.jsx`). O watcher vigia as BRACKETED até `CLOSED_TARGET`/`CLOSED_STOP`.
 
+### Explosão de Alta — scanner + compra no fechamento do candle
+
+Scanner `backend/market/bullishBreakoutScanner.js` (rota `GET /services/bullish-breakout`, indicador
+**"Explosão de Alta"** em Analisar Indicadores, filtro `4h|Explosão|c5|v3|f40|r`): candle único com corpo
+verde ≥ X%, volume ≥ N× a média dos 20 anteriores, fechamento acima de 40% do range e rompendo a máxima
+desses 20. OCO do gráfico ganhou o modo **"no fechamento do candle"** (`entry_kind 'candle_close'`,
+coluna `close_condition`, migração `supabase/add-manual-oco-close-condition.sql`): o watcher espera o
+candle fechar e NÃO compra se fechou num padrão de baixa (`bearishClosePattern` em
+`backend/bot/shared/candleCloseCondition.js`: shooting star, inverted hammer, gravestone doji, hanging man
+depois de alta, bearish engulfing, tweezer top); senão compra a mercado + OCO relativa ao preço comprado.
+**Automático** (`backend/bot/breakout-auto/bullishBreakoutAuto.js`, roda no processo do rsi-momentum,
+`BULLISH_BREAKOUT_AUTO=off` desliga): a cada 15 min varre o 4h; moeda nova → favorito Binance + ordem
+`candle_close` (25 USDT, máx. 3 vivas, 1 por moeda por candle). No fechamento ainda reconfere a explosão
+no candle fechado (`close_condition.confirmBreakout`) e a OCO usa `close_condition.exit`: alvo +10%,
+stop na metade do candle fechado `(máx+mín)/2`, no mínimo −5%. O watcher ignora `entry_kind`
+desconhecido (bot desatualizado comprava `candle_close` na hora — caso ADX #141).
+
 ### Watchlist curada (`rsi_multi_bot_state.curated = true`)
 
 Moeda vigiada **indefinidamente** pelo bot mesmo que o scanner Binance nunca a sinalize (ex.:

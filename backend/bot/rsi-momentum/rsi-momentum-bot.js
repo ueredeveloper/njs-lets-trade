@@ -92,6 +92,7 @@ const {
 const { sendWhatsApp } = require('../whatsapp');
 const { writeTradeStatus, removeTradeStatus, readTradeStatus, recordClosedTrade } = require('../shared/tradeStatusJournal');
 const { startManualOcoWatcher } = require('../manual-oco/manualOcoWatcher');
+const { startBullishBreakoutAuto } = require('../breakout-auto/bullishBreakoutAuto');
 
 const BOT_LABEL = 'RSI-MOMENTUM';
 const VOL_CACHE_MS = 5 * 60_000;
@@ -2018,6 +2019,9 @@ async function main() {
   // OCO manual com entrada arrastada no gráfico (tabela manual_oco_orders) — independente da
   // estratégia, só pega carona no processo que já roda 24h (ver manualOcoWatcher.js).
   startManualOcoWatcher({ log: console.log });
+  // Explosão de Alta automática: scanner 4h → favorito Binance + ordem OCO "no fechamento do
+  // candle" executada pelo watcher acima (ver breakout-auto/bullishBreakoutAuto.js).
+  startBullishBreakoutAuto({ log: console.log });
 
   const symbolFilter = process.argv.includes('--symbol')
     ? process.argv[process.argv.indexOf('--symbol') + 1]?.toUpperCase()

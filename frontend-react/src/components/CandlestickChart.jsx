@@ -7051,6 +7051,7 @@ export default function CandlestickChart() {
             exchange={selectedChart.source === 'gate' ? 'gate' : 'binance'}
             ocoDraft={ocoDraft}
             marketPrice={ocoLastClose}
+            interval={selectedChart?.interval ?? currentInterval}
             suggester={ocoSuggester}
             onChange={setOcoDraft}
             onOrdersChanged={reloadManualOcoOrders}

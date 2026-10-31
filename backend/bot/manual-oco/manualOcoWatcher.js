@@ -11,6 +11,11 @@
  *            compra, então dá pra ter mais ordens pendentes do que saldo.
  *   OPEN   → 'limit': preço ≤ entrada → compra a mercado → FILLED
  *            'trigger': preço ≥ entrada → compra a mercado → FILLED (passou do alvo → FAILED)
+ *            'candle_close': espera o candle do pedido fechar (close_condition.closeAt); fechou
+ *            num padrão de baixa (shooting star / inverted hammer / gravestone doji / hanging man /
+ *            bearish engulfing / tweezer top — bearishClosePattern) → CLOSED (não comprou, aviso
+ *            no WhatsApp); senão compra a mercado → FILLED. Migração
+ *            supabase/add-manual-oco-close-condition.sql.
  *            Alvo/stop da OCO = os % desenhados aplicados ao preço REAL da compra (bracketLevels).
  *            Linhas antigas com buy_handle (LIMIT GTC armada na corretora): poll da limite.
  *   CANCEL_REQUESTED → (só linhas antigas) cancela a limite; fill parcial vira FILLED → CANCELLED
@@ -32,6 +37,10 @@
 const { buildAdapter } = require('../shared/buildAdapter');
 const { sbReq } = require('../shared/supabaseRest');
 const { fetchLivePrice } = require('../shared/livePrice');
+const { fetchClosedCandle, bearishClosePattern, intervalMs } = require('../shared/candleCloseCondition');
+const fetchKlines = require('../../binance/fetchKlines');
+const { evaluateBullishBreakout } = require('../../market/bullishBreakoutScanner');
+const { exitLevels } = require('../breakout-auto/bullishBreakoutAuto');
 const { sendWhatsApp } = require('../whatsapp');
 const { sendText } = require('../whatsappApiClient');
 
@@ -137,6 +146,91 @@ async function recordFill(row, adapter, fill, log) {
   await placeBracket({ ...row, status: 'FILLED' }, adapter, clean, log);
 }
 
+function fmtBrt(ms) {
+  return new Date(ms).toLocaleString('pt-BR', {
+    timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+  });
+}
+
+const KNOWN_ENTRY_KINDS = new Set(['limit', 'trigger', 'market', 'candle_close']);
+const unknownKindWarned = new Set();
+
+// Folga depois do fechamento antes de ler o candle — a corretora leva alguns segundos pra fechá-lo.
+const CANDLE_CLOSE_GRACE_MS = 5_000;
+
+async function processCandleClose(row, adapter, log) {
+  const tag = `${row.symbol} #${row.id}`;
+  const cc = row.close_condition;
+  if (!cc?.closeAt) {
+    await patchIf(row, { status: 'FAILED', error: 'close_condition ausente' });
+    return;
+  }
+  if (Date.now() < cc.closeAt + CANDLE_CLOSE_GRACE_MS) return;
+
+  const candle = await fetchClosedCandle(row.exchange, row.symbol, cc.interval, cc.candleOpenTime);
+  if (!candle) {
+    // Só some dos últimos 5 candles se o bot ficou fora tempo demais — não compra "de atrasado".
+    if (Date.now() > cc.closeAt + 4 * intervalMs(cc.interval)) {
+      const why = `candle ${cc.interval} de ${fmtBrt(cc.candleOpenTime)} não encontrado (bot ficou fora?)`;
+      await patchIf(row, { status: 'FAILED', error: why });
+      log(`⚠️  [OCO manual] ${tag}: ${why} — compra abortada`);
+      notify(`⚠️ OCO manual ${row.symbol}: ${why} — compra abortada`, log);
+    }
+    return;
+  }
+
+  const closeTxt = `candle ${cc.interval} fechou às ${fmtBrt(cc.closeAt)} em ${fmt(candle.close)}`;
+  const pattern = bearishClosePattern(candle, candle.prev);
+  if (pattern) {
+    const why = `${closeTxt} formando ${pattern} (padrão de baixa)`;
+    if (!await patchIf(row, { status: 'CLOSED', error: why })) return;
+    log(`⏹️  [OCO manual] ${tag}: ${why} — não comprou`);
+    notify(`⏹️ OCO manual ${row.symbol}: ${why} — NÃO comprou (a alta não se manteve).`, log);
+    return;
+  }
+
+  // Ordens da Explosão de Alta automática (breakout-auto/bullishBreakoutAuto.js): o scanner achou a
+  // explosão com o candle ABERTO — confere se ela continuou valendo no candle fechado.
+  if (cc.confirmBreakout) {
+    const opts = { ...cc.confirmBreakout, interval: cc.interval, closedOnly: false };
+    const history = (await fetchKlines(row.symbol, cc.interval, opts.lookback + 6))
+      .filter((k) => Number(k.openTime) <= cc.candleOpenTime);
+    const confirmed = Number(history[history.length - 1]?.openTime) === cc.candleOpenTime
+      && evaluateBullishBreakout(history, opts);
+    if (!confirmed) {
+      const bodyPct = ((candle.close - candle.open) / candle.open) * 100;
+      const why = `${closeTxt} (corpo ${bodyPct >= 0 ? '+' : ''}${bodyPct.toFixed(2)}%) — a explosão não se confirmou no fechamento`;
+      if (!await patchIf(row, { status: 'CLOSED', error: why })) return;
+      log(`⏹️  [OCO manual] ${tag}: ${why} — não comprou`);
+      notify(`⏹️ Explosão de Alta ${row.symbol}: ${why} — NÃO comprou.`, log);
+      return;
+    }
+  }
+
+  const usdt = Number(row.usdt);
+  log(`✅ [OCO manual] ${tag}: ${closeTxt}, sem padrão de baixa — comprando ${usdt} USDT a mercado`);
+  let fill;
+  try {
+    fill = await adapter.marketBuy(usdt);
+  } catch (err) {
+    await patchIf(row, { status: 'FAILED', error: err.message });
+    log(`❌ [OCO manual] ${tag}: compra a mercado falhou — ${err.message}`);
+    notify(`❌ OCO manual ${row.symbol}: ${closeTxt} (segurou o preço) mas a compra de ${usdt} USDT falhou (${err.message}) — saldo?`, log);
+    return;
+  }
+  // Regra de saída própria (Explosão automática): alvo +X% e stop na metade do candle fechado, com
+  // distância mínima. Grava como entrada = preço comprado, então bracketLevels devolve os níveis
+  // exatos — e um restart no meio (FILLED) recoloca a MESMA OCO.
+  let filledRow = row;
+  if (cc.exit && Number(fill.avgPrice) > 0) {
+    const lv = exitLevels(Number(fill.avgPrice), candle, cc.exit);
+    const levels = { entry_price: Number(fill.avgPrice), target_price: lv.target, stop_price: lv.stop };
+    await sbReq('PATCH', TABLE, levels, `?id=eq.${row.id}`);
+    filledRow = { ...row, ...levels };
+  }
+  await recordFill(filledRow, adapter, fill, log);
+}
+
 async function processRow(row, log) {
   const adapter = buildAdapter(row.exchange === 'gate' ? 'gate' : 'binance', row.symbol);
   const tag = `${row.symbol} #${row.id}`;
@@ -172,7 +266,28 @@ async function processRow(row, log) {
 
   if (row.status === 'NEW') {
     await patchIf(row, { status: 'OPEN', error: null });
-    log(`👀 [OCO manual] ${tag}: vigiando ${row.entry_kind === 'trigger' ? 'rompimento' : 'queda'} até ${fmt(entry)} (${usdt} USDT)`);
+    const cc = row.close_condition;
+    log(row.entry_kind === 'candle_close' && cc
+      ? `👀 [OCO manual] ${tag}: espera o candle ${cc.interval} fechar às ${fmtBrt(cc.closeAt)} — compra a mercado se não fechar em padrão de baixa (${usdt} USDT)`
+      : `👀 [OCO manual] ${tag}: vigiando ${row.entry_kind === 'trigger' ? 'rompimento' : 'queda'} até ${fmt(entry)} (${usdt} USDT)`);
+    return;
+  }
+
+  // Compra no fechamento do candle: espera o candle do pedido fechar e compra a mercado só se ele
+  // NÃO fechou num padrão de baixa (a alta se manteve). Padrão de baixa → CLOSED.
+  if (row.entry_kind === 'candle_close') {
+    await processCandleClose(row, adapter, log);
+    return;
+  }
+
+  // Tipo de entrada que esta versão não conhece (painel mais novo que o bot): NÃO compra. Antes caía
+  // no ramo 'limit' abaixo — a ADX #141 ('candle_close' criada antes do bot ser atualizado) comprou
+  // na hora em vez de esperar o fechamento.
+  if (!KNOWN_ENTRY_KINDS.has(row.entry_kind)) {
+    if (!unknownKindWarned.has(row.id)) {
+      unknownKindWarned.add(row.id);
+      log(`⚠️  [OCO manual] ${tag}: entry_kind '${row.entry_kind}' desconhecido — atualize o bot; ordem ignorada até lá`);
+    }
     return;
   }
 

@@ -7,6 +7,7 @@ const getTickers = require('../binance/cachedTicker24hr');
 const supabase = require('../supabase/client');
 const { getSymbolFilters, getAvgPrice } = require('../binance/ocoClient');
 const { fetchLivePrice } = require('../bot/shared/livePrice');
+const { buildCloseCondition } = require('../bot/shared/candleCloseCondition');
 
 // OCO manual do gráfico (ChartOcoTool.jsx / ManualOcoOrdersPanel.jsx). Entrada arrastada: o painel
 // só grava o pedido e backend/bot/manual-oco/manualOcoWatcher.js (dentro do rsi-momentum-bot) arma
@@ -348,7 +349,7 @@ router.post('/manual-oco-buy', async (req, res) => {
 // 'trigger' (compra a mercado no rompimento). Nada vai pra corretora antes disso — ver
 // manualOcoWatcher.js. Exige stop < entrada < alvo.
 router.post('/manual-oco-orders', async (req, res) => {
-  const { symbol, exchange = 'binance', usdt, entryPrice, targetPrice, stopPrice } = req.body ?? {};
+  const { symbol, exchange = 'binance', usdt, entryPrice, targetPrice, stopPrice, closeCondition } = req.body ?? {};
   const usdtNum = Number(usdt);
   const entry = Number(entryPrice);
   const target = Number(targetPrice);
@@ -369,13 +370,26 @@ router.post('/manual-oco-orders', async (req, res) => {
   }
   if (!(price > 0)) return res.status(500).json({ error: `preço atual inválido para ${symbolUpper}` });
 
+  // closeCondition { interval }: compra a mercado só depois que o candle aberto agora FECHAR sem
+  // padrão de baixa — ver shared/candleCloseCondition.js.
+  let close_condition = null;
+  if (closeCondition) {
+    try {
+      close_condition = buildCloseCondition({ exchange, interval: closeCondition.interval });
+    } catch (err) {
+      return res.status(400).json({ error: err.message });
+    }
+  }
+
   const { data, error } = await supabase.from(MANUAL_OCO_TABLE).insert({
     symbol: symbolUpper, exchange, usdt: usdtNum,
     entry_price: entry, target_price: target, stop_price: stop,
-    entry_kind: entry < price ? 'limit' : 'trigger',
+    entry_kind: close_condition ? 'candle_close' : entry < price ? 'limit' : 'trigger',
+    ...(close_condition && { close_condition }),
   }).select().single();
   if (error) {
-    return res.status(500).json({ error: error.message, hint: 'rode supabase/add-manual-oco-orders-table.sql (1×)' });
+    const hint = close_condition ? 'rode supabase/add-manual-oco-close-condition.sql (1×)' : 'rode supabase/add-manual-oco-orders-table.sql (1×)';
+    return res.status(500).json({ error: error.message, hint });
   }
   res.json({ ...data, livePrice: price });
 });

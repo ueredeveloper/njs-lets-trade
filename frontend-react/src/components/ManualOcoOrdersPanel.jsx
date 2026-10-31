@@ -27,6 +27,15 @@ function fmtBuyTime(iso) {
   return `${p.day}/${p.month} ${p.hour}:${p.minute}`;
 }
 
+// Entrada "no fechamento do candle": "fecha 4h 13:00 sem padrão de baixa".
+function candleCloseLabel(o) {
+  const cc = o.close_condition ?? {};
+  const at = cc.closeAt ? new Date(cc.closeAt).toLocaleTimeString('pt-BR', {
+    timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit',
+  }) : '?';
+  return `fecha ${cc.interval ?? ''} ${at} sem padrão de baixa`;
+}
+
 function fmtPct(base, price) {
   const pct = ((price - base) / base) * 100;
   return `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`;
@@ -103,7 +112,7 @@ export default function ManualOcoOrdersPanel({ orders, marketPrice, onChanged })
               </div>
             ) : (
               <div className="text-yellow-300">
-                {o.entry_kind === 'trigger' ? 'rompimento' : o.buy_handle ? 'limite' : 'na queda'} {fmtPrice(entry)}
+                {o.entry_kind === 'candle_close' ? candleCloseLabel(o) : <>{o.entry_kind === 'trigger' ? 'rompimento' : o.buy_handle ? 'limite' : 'na queda'} {fmtPrice(entry)}</>}
                 {marketPrice && entry > 0 && <span className="text-slate-400"> · preço {fmtPct(marketPrice, entry)}</span>}
               </div>
             )}

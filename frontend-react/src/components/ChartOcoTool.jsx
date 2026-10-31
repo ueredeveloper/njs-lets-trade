@@ -28,6 +28,29 @@ function fmtSpan(ms) {
   return `~${d} dia${d === 1 ? '' : 's'}`;
 }
 
+// Compra no fechamento do candle (backend/bot/shared/candleCloseCondition.js): só intervalos de
+// minuto/hora/dia, alinhados no epoch UTC nas duas corretoras.
+const CLOSE_UNIT_MS = { m: 60_000, h: 3_600_000, d: 86_400_000 };
+const CLOSE_INTERVALS = {
+  binance: ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d'],
+  gate: ['1m', '5m', '15m', '30m', '1h', '4h', '8h', '1d'],
+};
+const REJECTION_TIP = 'Não compra se o candle fechar num padrão de baixa — shooting star, inverted hammer, '
+  + 'gravestone doji, hanging man (depois de alta) ou, junto com o candle anterior, bearish engulfing / tweezer top: '
+  + 'a alta não se manteve.';
+
+/** Fechamento do candle aberto agora (ms) ou null se o intervalo não suporta. */
+function candleCloseAt(interval, exchange, nowMs = Date.now()) {
+  if (!CLOSE_INTERVALS[exchange === 'gate' ? 'gate' : 'binance'].includes(interval)) return null;
+  const m = /^(\d+)([mhd])$/.exec(interval);
+  const ivMs = Number(m[1]) * CLOSE_UNIT_MS[m[2]];
+  return Math.floor(nowMs / ivMs) * ivMs + ivMs;
+}
+
+function fmtBrtTime(ms) {
+  return new Date(ms).toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit' });
+}
+
 function pctOf(entry, price) {
   return ((price - entry) / entry) * 100;
 }
@@ -75,10 +98,17 @@ function PctInput({ value, onCommit, sign }) {
  * As duas viram linha em manual_oco_orders e aparecem no gráfico + ManualOcoOrdersPanel
  * (vender/cancelar). Depois da OCO montada o bot só vigia alvo/stop — não gerencia a posição.
  */
-export default function ChartOcoTool({ symbol, exchange, ocoDraft, marketPrice, suggester, onChange, onOrdersChanged, onClose }) {
+export default function ChartOcoTool({ symbol, exchange, ocoDraft, marketPrice, interval, suggester, onChange, onOrdersChanged, onClose }) {
   const [usdt, setUsdt] = useState(readStoredUsdt);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState(null); // { ok: bool, text }
+  const [closeMode, setCloseMode] = useState(''); // '' = compra normal · 'close' = no fechamento do candle
+  // re-render a cada 30s pra hora do fechamento virar sozinha quando o candle fecha
+  const [nowMs, setNowMs] = useState(Date.now);
+  useEffect(() => {
+    const id = setInterval(() => setNowMs(Date.now()), 30_000);
+    return () => clearInterval(id);
+  }, []);
 
   useEffect(() => { setStatus(null); }, [symbol]);
 
@@ -103,6 +133,8 @@ export default function ChartOcoTool({ symbol, exchange, ocoDraft, marketPrice, 
   const entryVsMarket = entryLocked && marketPrice ? pctOf(marketPrice, entry) : null;
   const isBreakout = entryLocked && marketPrice != null && entry >= marketPrice;
   const exchangeName = exchange === 'gate' ? 'Gate.io' : 'Binance';
+  const closeAt = candleCloseAt(interval, exchange, nowMs);
+  const buyOnClose = closeMode === 'close' && !!closeAt;
 
   const saveUsdt = (v) => {
     setUsdt(v);
@@ -127,6 +159,27 @@ export default function ChartOcoTool({ symbol, exchange, ocoDraft, marketPrice, 
         ok: true,
         text: `Comprado ${fmtPrice(r.bought?.filledQty)} a ~${fmtPrice(r.bought?.avgPrice)} · OCO alvo ${fmtPrice(b.targetPrice ?? target)} / stop ${fmtPrice(b.stopPrice ?? stop)}${b.clamped?.target || b.clamped?.stop ? ' (ajustada pela corretora)' : ''}`,
       });
+    } catch (err) {
+      setStatus({ ok: false, text: err.message });
+    } finally {
+      setBusy(false);
+      onOrdersChanged?.();
+    }
+  };
+
+  const handleCloseOrder = async () => {
+    if (!valid || busy || !buyOnClose) return;
+    const how = `espera o candle ${interval} fechar às ${fmtBrtTime(closeAt)} e compra a MERCADO se ele não fechar num padrão de baixa`
+      + ' (shooting star, inverted hammer, gravestone doji, hanging man, bearish engulfing, tweezer top). Padrão de baixa → não compra.';
+    if (!window.confirm(`Agendar compra de ${usdtNum} USDT em ${symbol} (${exchangeName})?\n\n${how}\n${summary()}\n\nO bot RSI Momentum precisa estar rodando. Alvo e stop ficam nos mesmos % sobre o preço que for realmente comprado.`)) return;
+    setBusy(true);
+    setStatus(null);
+    try {
+      const r = await createManualOcoOrder({
+        symbol, exchange, usdt: usdtNum, entryPrice: entry, targetPrice: target, stopPrice: stop,
+        closeCondition: { interval },
+      });
+      setStatus({ ok: true, text: `Ordem #${r.id} agendada — às ${fmtBrtTime(r.close_condition?.closeAt ?? closeAt)} compra a mercado se o candle não fechar em padrão de baixa.` });
     } catch (err) {
       setStatus({ ok: false, text: err.message });
     } finally {
@@ -267,7 +320,33 @@ export default function ChartOcoTool({ symbol, exchange, ocoDraft, marketPrice, 
           </>)}
         </div>
       </details>
-      {entryLocked ? (
+      <div className="mt-1 flex items-center gap-1 text-[10px]">
+        <span className="text-slate-400">Compra</span>
+        <select
+          value={closeMode}
+          onChange={(e) => setCloseMode(e.target.value)}
+          disabled={!closeAt}
+          title={closeAt
+            ? `Espera o candle ${interval} fechar (${fmtBrtTime(closeAt)}) antes de comprar. ${REJECTION_TIP}`
+            : `Intervalo ${interval ?? '?'} não suporta compra no fechamento`}
+          className="flex-1 bg-black/40 border border-slate-600 rounded px-1 disabled:opacity-40"
+        >
+          <option value="">{entryLocked ? 'quando o preço chegar' : 'agora'}</option>
+          {closeAt && (
+            <option value="close">no fechamento {interval} {fmtBrtTime(closeAt)} sem padrão de baixa</option>
+          )}
+        </select>
+      </div>
+      {buyOnClose ? (
+        <button
+          onClick={handleCloseOrder}
+          disabled={!valid || busy}
+          title={REJECTION_TIP}
+          className="mt-2 w-full rounded bg-amber-500 py-1 font-bold text-black hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {busy ? 'Enviando…' : `Comprar no fechamento ${fmtBrtTime(closeAt)}`}
+        </button>
+      ) : entryLocked ? (
         <button
           onClick={handleCreateOrder}
           disabled={!valid || busy}
