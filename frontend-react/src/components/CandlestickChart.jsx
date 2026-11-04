@@ -11,7 +11,7 @@ import CandlestickChartLW from './CandlestickChartLW';
 import ChartOcoTool from './ChartOcoTool';
 import ManualOcoOrdersPanel from './ManualOcoOrdersPanel';
 import { listManualOcoOrders } from '../services/api';
-import { isManualOcoActive } from '../utils/manualOco';
+import { isManualOcoActive, manualOcoLevels } from '../utils/manualOco';
 import { simulatePriceActionBox, PRICE_ACTION_DEFAULTS } from '../utils/priceActionBoxSim';
 import { buildOcoSuggester } from '../utils/ocoSuggest';
 import convertOpenTime from '../utils/convertOpenTime';
@@ -1877,8 +1877,9 @@ function buildBuyPnlSeries(buyInfo, candlesticks, DL, LEFT_PAD, RIGHT_PAD, lastC
     symbolSize: 4,
     lineStyle: { color, width: 1.5, type: 'dotted' },
     itemStyle: { color },
+    // % desligado: confundia (ex. BONK +1,98% de compra antiga). O % com OCO ativa é só no motor LW.
     endLabel: {
-      show: true,
+      show: false,
       formatter: pctLabel,
       color: '#fff',
       backgroundColor: color,
@@ -5261,6 +5262,26 @@ export default function CandlestickChart() {
     multitradeFavorites, fiveMTradeFavorites, activeTrades, allTrades, tradePurchases, chartTradeMarkers,
   ]);
 
+  // Comprada COM OCO ativa — OCO manual montada (não OCO_FAILED) ou bot BOUGHT com exitBracket
+  // real. Só nesse caso o gráfico LW mostra a linha laranja entrada → preço atual com o %.
+  const chartOcoBuyInfo = useMemo(() => {
+    const sym = selectedChart?.symbol?.toUpperCase();
+    if (!sym) return null;
+    for (const o of manualOcoOrders) {
+      if (o.symbol?.toUpperCase() !== sym) continue;
+      const l = manualOcoLevels(o);
+      if (l.mounted && !l.noOco && l.entry > 0) {
+        return { price: l.entry, time: Number.isFinite(l.sinceMs) ? l.sinceMs : null };
+      }
+    }
+    const mt = multitradeFavorites?.find(
+      e => e.symbol?.toUpperCase() === sym && e.phase === 'BOUGHT' && !e.awaitingReentry
+        && e.buyPrice != null && (e.exitBracket?.targetPrice != null || e.exitBracket?.stopPrice != null),
+    );
+    if (mt) return { price: Number(mt.buyPrice), time: mt.buyTime ? new Date(mt.buyTime).getTime() : null };
+    return null;
+  }, [selectedChart?.symbol, manualOcoOrders, multitradeFavorites]);
+
   // Alvo/stop reais da escada VWAP Bands (posição BOUGHT em modo ladder) — o alvo é
   // sempre a próxima banda acima (targetLevel) e o stop a banda tocada que armou o
   // degrau (touchLevel), ambos ao vivo (recalculados a cada tick pelo bot, não fixos
@@ -7026,6 +7047,7 @@ export default function CandlestickChart() {
             stopLossConfig={tradeBoxActive ? null : chartStopLossConfig}
             targetConfig={tradeBoxActive ? null : chartTargetConfig}
             buyInfo={tradeBoxActive ? null : chartBuyInfo}
+            ocoBuyInfo={tradeBoxActive ? null : chartOcoBuyInfo}
             multitradeMarkers={tradeBoxActive ? [] : (chartTradeMarkers?.length ? chartTradeMarkers : (selectedChart.tradeMarkers ?? []))}
             zoomPeriod={chartZoom}
             focusLastN={hasExplicitCandleWindow ? displayCandleCount : null}

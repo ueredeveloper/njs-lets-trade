@@ -493,10 +493,14 @@ function buildHistoricalPositionRects(multitradeMarkers, candlesticks) {
   return out;
 }
 
+/** Posição comprada COM OCO ativa: linha laranja (pra cima ou pra baixo) + % no ponto final. */
+const C_OCO_PNL = '#f97316';
+
 /** Linha pontilhada do preço de compra até o fechamento atual — verde se subiu, vermelho se
- *  caiu (mesma ideia do buildBuyPnlSeries do ECharts). buildPnlMarker desenha o % no ponto
- *  final (o marcador aceita texto; a série de linha sozinha não tem label embutido no LW). */
-function buildPnlLineData(buyInfo, candlesticks) {
+ *  caiu (mesma ideia do buildBuyPnlSeries do ECharts); com OCO ativa, laranja. buildPnlMarker
+ *  desenha o % no ponto final só com OCO ativa (sem OCO o % confundia — ex. BONK +1,98% de uma
+ *  compra antiga do histórico). */
+function buildPnlLineData(buyInfo, candlesticks, fixedColor) {
   if (!buyInfo?.price || !candlesticks?.length) return null;
   const buyPrice = buyInfo.price;
   if (!Number.isFinite(buyPrice) || buyPrice <= 0) return null;
@@ -516,7 +520,7 @@ function buildPnlLineData(buyInfo, candlesticks) {
   }
   if (buyTime >= lastTime) return null;
   return {
-    color: lastClose >= buyPrice ? C_UP : C_DOWN,
+    color: fixedColor ?? (lastClose >= buyPrice ? C_UP : C_DOWN),
     data: [{ time: buyTime, value: buyPrice }, { time: lastTime, value: lastClose }],
   };
 }
@@ -533,7 +537,7 @@ function buildPnlMarker(buyInfo, candlesticks) {
   const isUp = pct >= 0;
   return {
     time: lastTime, position: isUp ? 'atPriceTop' : 'atPriceBottom', price: lastClose,
-    shape: 'circle', color: isUp ? C_UP : C_DOWN, size: 0.1,
+    shape: 'circle', color: C_OCO_PNL, size: 0.1,
     text: `${isUp ? '+' : ''}${pct.toFixed(2)}%`,
   };
 }
@@ -831,7 +835,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
   emaPersistCloudData, emaPersistCloudConfirmData, emaPersistCloudConfirm2Data, emaPersistCloudLayers, emaPersistCloudTones, barsSinceCrossData, tdSequentialData,
   stopLossConfig, targetConfig, buyInfo, multitradeMarkers, zoomPeriod, focusLastN,
   onNeedOlderCandles, loadingMoreCandles, onVisibleRangeChange, visibleRange,
-  fontScale, ocoDraft, onOcoDraftChange, manualOcoOrders,
+  fontScale, ocoDraft, onOcoDraftChange, manualOcoOrders, ocoBuyInfo,
 }, ref) {
   // Na Lightweight Charts o texto é um só (layout.fontSize) — vale pro eixo de preço, rótulos
   // das priceLine (S/R, RSI 30/50/70) E o texto dos marcadores de série (% da linha de PnL,
@@ -1866,17 +1870,20 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
     };
   }, []);
 
-  // Linha de PnL: entrada → preço atual, verde/vermelho conforme sobe ou cai.
+  // Linha de PnL: entrada → preço atual, verde/vermelho conforme sobe ou cai; com OCO ativa
+  // (ocoBuyInfo) laranja, a partir da entrada da OCO.
   useEffect(() => {
     if (!pnlSeriesRef.current) return;
-    const entry = buildPnlLineData(buyInfo, candlesticks);
+    const entry = ocoBuyInfo
+      ? buildPnlLineData(ocoBuyInfo, candlesticks, C_OCO_PNL)
+      : buildPnlLineData(buyInfo, candlesticks);
     if (entry) {
       pnlSeriesRef.current.applyOptions({ color: entry.color });
       pnlSeriesRef.current.setData(entry.data);
     } else {
       pnlSeriesRef.current.setData([]);
     }
-  }, [buyInfo, candlesticks]);
+  }, [buyInfo, ocoBuyInfo, candlesticks]);
 
   // Trajetória BB lower→upper (simulada): um LineSeries por trecho, verde/vermelho — de todos
   // os grupos com showPath ligado, concatenados.
@@ -1992,7 +1999,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
   useEffect(() => {
     if (!markersPluginRef.current) return;
     const markers = [...buildPphlMarkers(pphlConfig), ...buildWfractalsMarkers(wfractalsConfig), ...buildTradeMarkers(multitradeMarkers), ...buildFlagsDrawing(flagsConfig).markers];
-    const pnlMarker = buildPnlMarker(buyInfo, candlesticks);
+    const pnlMarker = ocoBuyInfo ? buildPnlMarker(ocoBuyInfo, candlesticks) : null;
     if (pnlMarker) markers.push(pnlMarker);
     const bbPathMarkers = bollingerConfigs
       .filter((cfg) => cfg.showPath)
@@ -2021,7 +2028,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
     } catch (err) {
       console.warn('[Gráfico] marcadores ignorados neste frame', err);
     }
-  }, [pphlConfig, wfractalsConfig, flagsConfig, multitradeMarkers, buyInfo, candlesticks, bollingerConfigs, activeIndicators, tdSequentialData]);
+  }, [pphlConfig, wfractalsConfig, flagsConfig, multitradeMarkers, ocoBuyInfo, candlesticks, bollingerConfigs, activeIndicators, tdSequentialData]);
 
   // Sub-painéis RSI/CHOP (panes nativos do LW v5) — reconstrói do zero só quando o CONJUNTO
   // ativo muda (ex.: liga CHOP com RSI já ligado), não a cada novo valor.
