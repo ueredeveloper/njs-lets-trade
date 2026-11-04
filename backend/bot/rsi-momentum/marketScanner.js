@@ -19,6 +19,10 @@ const { getActiveUsdtPairs } = require('../../binance/getActiveUsdtPairs');
 const { fetchBinanceCandles } = require('../prices');
 const { getRequiredSpecs, evaluateEntrySignal } = require('./strategyEngine');
 const { getSymbolCategories } = require('../../utils/assetCategories');
+
+// Stablecoins (sem momentum) e bStocks (ações/ETFs tokenizados — Binance recusa "not permitted
+// for this account" nesta conta) ficam fora da varredura.
+const isUntradableCategory = (sym) => getSymbolCategories(sym).some((c) => c === 'stablecoins' || c === 'tokenizedStocks');
 const getTickers = require('../../binance/cachedTicker24hr');
 
 const SCAN_CONCURRENCY = 15;
@@ -198,7 +202,7 @@ async function scanMarketOnce({ loadConfig, loadTrackedSymbols, onSignal, onNear
     // Stablecoin (USDCUSDT, USD1USDT, XAUTUSDT etc.) não faz sentido pra uma estratégia de
     // momentum de RSI — o preço é pareado a $1 (ou ouro/outra moeda), sem tendência real pra
     // "cruzar RSI" perseguir. Fora do scan, nunca chega a martelar candles/avaliar à toa.
-    const afterBasicFilters = symbols.filter((sym) => !tracked.has(sym) && !getSymbolCategories(sym).includes('stablecoins'));
+    const afterBasicFilters = symbols.filter((sym) => !tracked.has(sym) && !isUntradableCategory(sym));
     const candidates = volumeMap
         ? afterBasicFilters.filter((sym) => (volumeMap.get(sym) ?? 0) >= minVolumeUsdt)
         : afterBasicFilters;

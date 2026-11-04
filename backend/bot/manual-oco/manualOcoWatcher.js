@@ -48,6 +48,14 @@ const TABLE = 'manual_oco_orders';
 const POLL_MS = 15_000;
 const ACTIVE_STATUSES = ['NEW', 'OPEN', 'CANCEL_REQUESTED', 'FILLED', 'BRACKETED'];
 
+/** Dica no fim do aviso de compra que falhou — par não liberado pra conta (bStock etc.) não é saldo. */
+function buyFailHint(err) {
+  const m = String(err?.message || '');
+  if (/not permitted for this account/i.test(m)) return 'par não liberado pra esta conta (ex.: ação/ETF tokenizado)';
+  if (/insufficient balance/i.test(m)) return 'saldo USDT livre insuficiente';
+  return 'saldo?';
+}
+
 function fmt(p) {
   return Number.isFinite(Number(p)) ? String(Number(Number(p).toPrecision(6))) : '—';
 }
@@ -215,7 +223,7 @@ async function processCandleClose(row, adapter, log) {
   } catch (err) {
     await patchIf(row, { status: 'FAILED', error: err.message });
     log(`❌ [OCO manual] ${tag}: compra a mercado falhou — ${err.message}`);
-    notify(`❌ OCO manual ${row.symbol}: ${closeTxt} (segurou o preço) mas a compra de ${usdt} USDT falhou (${err.message}) — saldo?`, log);
+    notify(`❌ OCO manual ${row.symbol}: ${closeTxt} (segurou o preço) mas a compra de ${usdt} USDT falhou (${err.message}) — ${buyFailHint(err)}`, log);
     return;
   }
   // Regra de saída própria (Explosão automática): alvo +X% e stop na metade do candle fechado, com
@@ -314,7 +322,7 @@ async function processRow(row, log) {
     } catch (err) {
       await patchIf(row, { status: 'FAILED', error: err.message });
       log(`❌ [OCO manual] ${tag}: compra a mercado em ${fmt(price)} falhou — ${err.message}`);
-      notify(`❌ OCO manual ${row.symbol}: preço chegou na entrada (${fmt(entry)}) mas a compra de ${usdt} USDT falhou (${err.message}) — saldo?`, log);
+      notify(`❌ OCO manual ${row.symbol}: preço chegou na entrada (${fmt(entry)}) mas a compra de ${usdt} USDT falhou (${err.message}) — ${buyFailHint(err)}`, log);
       return;
     }
     await recordFill(row, adapter, fill, log);

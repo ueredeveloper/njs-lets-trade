@@ -37,6 +37,10 @@ const getTickers = require('../binance/cachedTicker24hr');
 const { getActiveUsdtPairs } = require('../binance/getActiveUsdtPairs');
 const { getSymbolCategories } = require('../utils/assetCategories');
 
+// Stablecoins (sem momentum) e bStocks (ações/ETFs tokenizados — Binance recusa "not permitted
+// for this account" nesta conta) ficam fora da varredura.
+const isUntradableCategory = (sym) => getSymbolCategories(sym).some((c) => c === 'stablecoins' || c === 'tokenizedStocks');
+
 const DEFAULTS = {
   interval: '4h',
   minBodyPct: 5,
@@ -194,7 +198,7 @@ async function scanBullishBreakouts(rawOptions = {}, { log = () => {} } = {}) {
   const [{ list: symbols }, tickers] = await Promise.all([getActiveUsdtPairs(), getTickers()]);
   const volume24h = new Map(tickers.map((t) => [t.symbol, Number(t.quoteVolume)]));
 
-  const candidates = symbols.filter((sym) => !getSymbolCategories(sym).includes('stablecoins')
+  const candidates = symbols.filter((sym) => !isUntradableCategory(sym)
     && (volume24h.get(sym) ?? 0) >= opts.minVolume24h);
 
   const hits = [];

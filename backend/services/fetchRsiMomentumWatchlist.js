@@ -25,6 +25,10 @@ const { getRequiredSpecs, evaluateEntryReadiness } = require('../bot/rsi-momentu
 const { loadGlobalConfigBody, loadCuratedConfigBody } = require('../bot/rsi-momentum/strategyPresets');
 const { toEngineConfig, normalizeRsiMomentumConfig } = require('../bot/rsi-momentum/tradeConfigSchema');
 const { getSymbolCategories } = require('../utils/assetCategories');
+
+// Stablecoins (sem momentum) e bStocks (ações/ETFs tokenizados — Binance recusa "not permitted
+// for this account" nesta conta) ficam fora da varredura.
+const isUntradableCategory = (sym) => getSymbolCategories(sym).some((c) => c === 'stablecoins' || c === 'tokenizedStocks');
 const getTickers = require('../binance/cachedTicker24hr');
 const { sbReq } = require('../bot/shared/supabaseRest');
 
@@ -143,7 +147,7 @@ async function compute({ scope = 'geral', symbol = null, overrides = {} } = {}) 
     ]);
     const volumeMap = new Map(Array.isArray(tickers) ? tickers.map((t) => [t.symbol, Number(t.quoteVolume)]) : []);
 
-    let candidates = allSymbols.filter((s) => !getSymbolCategories(s).includes('stablecoins'));
+    let candidates = allSymbols.filter((s) => !isUntradableCategory(s));
     if (minVolumeUsdt > 0 && volumeMap.size) {
         candidates = candidates.filter((s) => (volumeMap.get(s) ?? 0) >= minVolumeUsdt);
     }
