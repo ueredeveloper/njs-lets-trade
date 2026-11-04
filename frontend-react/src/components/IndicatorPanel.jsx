@@ -133,11 +133,10 @@ const INTERVAL_LABELS = {
 
 const EMPTY_INDICATOR = { type: '', intervals: ['8h'] };
 
-// Painel abre com exatamente dois formulários Momentum RSI — Trade Geral (config global) e Trade
-// Exclusivo (bot curado). A busca cria só dois filtros: bot|Geral e bot|Exclusivo <SYMBOL>. Ambos
-// nascem com os valores mais usados pelo usuário (ver MOMENTUM_GERAL_PRESET / MOMENTUM_SKYAI_PRESET
-// abaixo) — campo já definido não é sobrescrito pelo prefill da config ao vivo do bot (ver
-// useEffect de prefill em IndicatorRow, que só toca em campo `undefined`).
+// Formulários Momentum RSI — Trade Geral (config global) e Trade Exclusivo (bot curado), usados
+// nos formulários prontos. Nascem com os valores mais usados pelo usuário — campo já definido não
+// é sobrescrito pelo prefill da config ao vivo do bot (ver useEffect de prefill em IndicatorRow,
+// que só toca em campo `undefined`).
 // Valores conferidos direto no Supabase (rsi_momentum_global_config / rsi_multi_bot_state, campo
 // entry.supportResistance) em 23/09/2026 — os dois bots rodam S/R 4h · 200 candles.
 const MOMENTUM_GERAL_PRESET = {
@@ -156,39 +155,11 @@ const ICHIMOKU_LINE_LABELS = {
   spanB: 'Senkou Span B (52)',
 };
 
+// Painel abre SÓ com a Explosão de Alta (volume ≥ 1,5× · corpo ≥ 5% · candle atual). Os Momentum
+// RSI Geral/Exclusivo continuam nos formulários prontos (QUICK_PRESETS).
 const DEFAULT_INDICATORS = [
-  { ...MOMENTUM_GERAL_PRESET },
-  { ...MOMENTUM_SKYAI_PRESET },
+  { type: 'bullishBreakout', intervals: ['4h'], minBodyPct: '5', minVolumeRatio: '1.5', closedOnly: false },
 ];
-
-/** Chave canônica (ordem de chaves estável) pra deduplicar configs de indicador entre os presets
- *  fixos e o histórico de "mais usados" vindo do backend (recent_indicators). */
-function canonicalIndicatorKey(ind) {
-  const obj = { type: ind?.type, ...ind };
-  return JSON.stringify(obj, Object.keys(obj).sort());
-}
-
-/** Histórico de análises usadas (recent_indicators, ver GET/POST /services/sb/user-prefs): só
- *  entra como formulário auto-preenchido quem foi buscado mais de uma vez, até um teto, e nunca
- *  duplicando os presets fixos (Momentum Geral/Exclusivo) que já abrem por padrão. */
-const RECENT_MIN_USE_COUNT = 2;
-const RECENT_MAX_AUTOFILL = 3;
-
-function pickRecentIndicatorsToAutofill(recentIndicators, existingIndicators) {
-  if (!recentIndicators?.length) return [];
-  const existingKeys = new Set(existingIndicators.map(canonicalIndicatorKey));
-  const extras = [];
-  for (const r of recentIndicators) {
-    if (!r?.config?.type) continue;
-    if ((r.count ?? 1) < RECENT_MIN_USE_COUNT) continue;
-    const key = canonicalIndicatorKey(r.config);
-    if (existingKeys.has(key)) continue;
-    existingKeys.add(key);
-    extras.push({ ...r.config });
-    if (extras.length >= RECENT_MAX_AUTOFILL) break;
-  }
-  return extras;
-}
 
 /** Formulários prontos — cada um substitui a lista de indicadores por uma única busca pré-configurada. */
 const QUICK_PRESETS = [
@@ -1651,16 +1622,12 @@ export default function IndicatorPanel({ open, onToggle }) {
   const [recentIndicators, setRecentIndicators] = useState([]);
   const [clearingRecent, setClearingRecent] = useState(false);
 
-  // Carrega preferências do backend na montagem — inclui o histórico de análises mais usadas
-  // (recent_indicators), que entra como formulário extra já preenchido (ver
-  // pickRecentIndicatorsToAutofill) além dos dois presets fixos de Momentum RSI.
+  // Carrega preferências do backend na montagem. O histórico (recent_indicators) não vira mais
+  // formulário auto-preenchido — o painel abre só com DEFAULT_INDICATORS.
   useEffect(() => {
     fetchUserPrefs().then(prefs => {
       if (prefs?.intervals?.length) setSavedIntervals(prefs.intervals);
-      const recents = prefs?.recentIndicators ?? [];
-      setRecentIndicators(recents);
-      const extras = pickRecentIndicatorsToAutofill(recents, DEFAULT_INDICATORS);
-      if (extras.length) setIndicators((prev) => [...prev, ...extras]);
+      setRecentIndicators(prefs?.recentIndicators ?? []);
     });
   }, []);
 
