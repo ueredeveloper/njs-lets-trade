@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { buyWithManualOco, createManualOcoOrder } from '../services/api';
+import { MANUAL_OCO_MIN_STOP_PCT, withMinStop } from '../utils/manualOco';
 
 // v3: o padrão caiu de 50 pra 40 USDT — chave nova pra não herdar o 50 já salvo.
 const USDT_STORAGE_KEY = 'chartOcoUsdtV3';
@@ -127,7 +128,11 @@ export default function ChartOcoTool({ symbol, exchange, ocoDraft, marketPrice, 
   const { entry, target, stop, entryLocked } = ocoDraft;
   const targetPct = pctOf(entry, target);
   const stopPct = pctOf(entry, stop);
-  const rr = stopPct < 0 ? targetPct / -stopPct : null;
+  // Stop que vai na ordem: a linha desenhada, respeitando o mínimo de 10% abaixo da entrada.
+  const orderStop = withMinStop(stop, entry);
+  const orderStopPct = pctOf(entry, orderStop);
+  const stopWidened = orderStop < stop;
+  const rr = orderStopPct < 0 ? targetPct / -orderStopPct : null;
   const usdtNum = Number(usdt);
   const valid = usdtNum > 0 && stop < entry && entry < target;
   const entryVsMarket = entryLocked && marketPrice ? pctOf(marketPrice, entry) : null;
@@ -143,7 +148,7 @@ export default function ChartOcoTool({ symbol, exchange, ocoDraft, marketPrice, 
 
   const summary = () => (
     `Alvo ${fmtPrice(target)} (+${targetPct.toFixed(2)}%)\n`
-    + `Stop ${fmtPrice(stop)} (${stopPct.toFixed(2)}%)\n\n`
+    + `Stop ${fmtPrice(orderStop)} (${orderStopPct.toFixed(2)}%)\n\n`
     + `Os preços podem ser ajustados às regras da ${exchangeName} (tick / faixa permitida).`
   );
 
@@ -153,11 +158,11 @@ export default function ChartOcoTool({ symbol, exchange, ocoDraft, marketPrice, 
     setBusy(true);
     setStatus(null);
     try {
-      const r = await buyWithManualOco({ symbol, exchange, usdt: usdtNum, targetPrice: target, stopPrice: stop });
+      const r = await buyWithManualOco({ symbol, exchange, usdt: usdtNum, targetPrice: target, stopPrice: orderStop });
       const b = r.bracket ?? {};
       setStatus({
         ok: true,
-        text: `Comprado ${fmtPrice(r.bought?.filledQty)} a ~${fmtPrice(r.bought?.avgPrice)} · OCO alvo ${fmtPrice(b.targetPrice ?? target)} / stop ${fmtPrice(b.stopPrice ?? stop)}${b.clamped?.target || b.clamped?.stop ? ' (ajustada pela corretora)' : ''}`,
+        text: `Comprado ${fmtPrice(r.bought?.filledQty)} a ~${fmtPrice(r.bought?.avgPrice)} · OCO alvo ${fmtPrice(b.targetPrice ?? target)} / stop ${fmtPrice(b.stopPrice ?? orderStop)}${b.clamped?.target || b.clamped?.stop ? ' (ajustada pela corretora)' : ''}`,
       });
     } catch (err) {
       setStatus({ ok: false, text: err.message });
@@ -176,7 +181,7 @@ export default function ChartOcoTool({ symbol, exchange, ocoDraft, marketPrice, 
     setStatus(null);
     try {
       const r = await createManualOcoOrder({
-        symbol, exchange, usdt: usdtNum, entryPrice: entry, targetPrice: target, stopPrice: stop,
+        symbol, exchange, usdt: usdtNum, entryPrice: entry, targetPrice: target, stopPrice: orderStop,
         closeCondition: { interval },
       });
       setStatus({ ok: true, text: `Ordem #${r.id} agendada — às ${fmtBrtTime(r.close_condition?.closeAt ?? closeAt)} compra a mercado se o candle não fechar em padrão de baixa.` });
@@ -197,7 +202,7 @@ export default function ChartOcoTool({ symbol, exchange, ocoDraft, marketPrice, 
     setBusy(true);
     setStatus(null);
     try {
-      const r = await createManualOcoOrder({ symbol, exchange, usdt: usdtNum, entryPrice: entry, targetPrice: target, stopPrice: stop });
+      const r = await createManualOcoOrder({ symbol, exchange, usdt: usdtNum, entryPrice: entry, targetPrice: target, stopPrice: orderStop });
       setStatus({ ok: true, text: `Ordem #${r.id} criada no bot (${r.entry_kind === 'trigger' ? 'rompimento' : 'queda'}) — compra a mercado quando o preço chegar em ${fmtPrice(entry)}.` });
     } catch (err) {
       setStatus({ ok: false, text: err.message });
@@ -282,7 +287,7 @@ export default function ChartOcoTool({ symbol, exchange, ocoDraft, marketPrice, 
             {suggestion.notes.length > 0 && <span className="text-amber-300" title={suggestion.notes.join('\n')}> ⚠</span>}
           </span>
           <button
-            onClick={() => onChange({ ...ocoDraft, target: suggestion.targetPrice, stop: suggestion.stopPrice })}
+            onClick={() => onChange({ ...ocoDraft, target: suggestion.targetPrice, stop: withMinStop(suggestion.stopPrice, ocoDraft.entry) })}
             title="Aplicar alvo e stop sugeridos"
             className="rounded bg-sky-700 px-1.5 text-white hover:bg-sky-600"
           >
@@ -320,6 +325,11 @@ export default function ChartOcoTool({ symbol, exchange, ocoDraft, marketPrice, 
           </>)}
         </div>
       </details>
+      {stopWidened && (
+        <div className="mt-1 text-[10px] text-amber-300">
+          Stop mínimo −{MANUAL_OCO_MIN_STOP_PCT}%: a ordem sai com stop em {fmtPrice(orderStop)}.
+        </div>
+      )}
       <div className="mt-1 flex items-center gap-1 text-[10px]">
         <span className="text-slate-400">Compra</span>
         <select

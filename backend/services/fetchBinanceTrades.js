@@ -8,6 +8,7 @@ const supabase = require('../supabase/client');
 const { getSymbolFilters, getAvgPrice } = require('../binance/ocoClient');
 const { fetchLivePrice } = require('../bot/shared/livePrice');
 const { buildCloseCondition } = require('../bot/shared/candleCloseCondition');
+const { applyMinStop } = require('../bot/shared/manualOcoStop');
 
 // OCO manual do gráfico (ChartOcoTool.jsx / ManualOcoOrdersPanel.jsx). Entrada arrastada: o painel
 // só grava o pedido e backend/bot/manual-oco/manualOcoWatcher.js (dentro do rsi-momentum-bot) arma
@@ -330,7 +331,7 @@ router.post('/manual-oco-buy', async (req, res) => {
   }).then(({ error }) => { if (error) console.warn(`[manual-oco-buy] registro falhou: ${error.message}`); });
 
   try {
-    const bracket = await adapter.placeExitBracket(bought.filledQty, target, stop);
+    const bracket = await adapter.placeExitBracket(bought.filledQty, target, applyMinStop(stop, bought.avgPrice));
     await record({ status: 'BRACKETED', bracket });
     res.json({ bought, bracket });
   } catch (err) {

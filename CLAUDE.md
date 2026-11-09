@@ -371,6 +371,9 @@ ordens ATIVAS (`utils/manualOco.js`) e desenha: OCO montada em verde/vermelho + 
 (`POST /services/manual-oco-orders/:id/sell`: SELLING → cancela OCO → venda a mercado → SOLD);
 ainda na compra = previsão azul (alvo) / laranja (stop) + **Cancelar compra**
 (`ManualOcoOrdersPanel.jsx`). O watcher vigia as BRACKETED até `CLOSED_TARGET`/`CLOSED_STOP`.
+**Stop mínimo de 10%** abaixo do preço comprado em toda OCO real (`backend/bot/shared/manualOcoStop.js`,
+espelho `withMinStop` em `utils/manualOco.js`; cartão avisa quando a linha está mais perto). A caixa
+"Price action" do gráfico simula com o mesmo mínimo.
 
 ### Explosão de Alta — scanner + compra no fechamento do candle
 
@@ -386,7 +389,7 @@ depois de alta, bearish engulfing, tweezer top); senão compra a mercado + OCO r
 `BULLISH_BREAKOUT_AUTO=off` desliga): a cada 15 min varre o 4h; moeda nova → favorito Binance + ordem
 `candle_close` (corpo ≥ 5%, volume 24h ≥ 1,5M; 25 USDT, máx. 3 vivas, 1 por moeda por candle). No fechamento ainda reconfere a explosão
 no candle fechado (`close_condition.confirmBreakout`) e a OCO usa `close_condition.exit`: alvo +10%,
-stop na metade do candle fechado `(máx+mín)/2`, no mínimo −5%. O watcher ignora `entry_kind`
+stop na metade do candle fechado `(máx+mín)/2`, no mínimo −10%. O watcher ignora `entry_kind`
 desconhecido (bot desatualizado comprava `candle_close` na hora — caso ADX #141).
 
 ### Watchlist curada (`rsi_multi_bot_state.curated = true`)

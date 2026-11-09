@@ -8,14 +8,16 @@
 //      ou o candle antes dele ('prev').
 //   3. A limite precisa preencher DENTRO da caixa (borda direita = validade). Fill quando a mínima
 //      toca o nível; abriu abaixo (gap) = preenche na abertura.
-//   4. Depois do fill: alvo +targetPct% / stop −stopPct% sobre o preço de entrada, até o fim dos
+//   4. Depois do fill: alvo +targetPct% / stop −stopPct% (mínimo 10%) sobre o preço de entrada, até o fim dos
 //      candles carregados. Candle que toca os dois = STOP (conservador, sem saber a ordem
 //      intra-candle) — inclusive o próprio candle do fill, onde o alvo só vale se o candle FECHOU
 //      acima dele (a máxima pode ter vindo antes da entrada). Sem taxa de corretagem.
 
+import { MANUAL_OCO_MIN_STOP_PCT } from './manualOco';
+
 export const PRICE_ACTION_DEFAULTS = {
   targetPct: 10,
-  stopPct: 5,
+  stopPct: MANUAL_OCO_MIN_STOP_PCT,
   entryRef: 'signal',
   entryLevelPct: 50,
 };
@@ -33,6 +35,7 @@ function num(v) {
  */
 export function simulatePriceActionBox(candlesticks, box, params, intervalMs, nowMs = Date.now()) {
   const p = { ...PRICE_ACTION_DEFAULTS, ...params };
+  p.stopPct = Math.max(MANUAL_OCO_MIN_STOP_PCT, Number(p.stopPct));
   const cs = (candlesticks ?? [])
     .map((c) => ({
       openTime: num(c.openTime), open: num(c.open), high: num(c.high), low: num(c.low), close: num(c.close),

@@ -41,6 +41,7 @@ const { fetchClosedCandle, bearishClosePattern, intervalMs } = require('../share
 const fetchKlines = require('../../binance/fetchKlines');
 const { evaluateBullishBreakout } = require('../../market/bullishBreakoutScanner');
 const { exitLevels } = require('../breakout-auto/bullishBreakoutAuto');
+const { applyMinStop } = require('../shared/manualOcoStop');
 const { sendWhatsApp } = require('../whatsapp');
 const { sendText } = require('../whatsappApiClient');
 
@@ -75,14 +76,15 @@ function notify(text, log) {
 /** Alvo/stop da OCO. Compra feita pelo bot (limit/trigger, a mercado quando o preço chega na
  *  entrada): mantém os % desenhados (alvo/entrada, stop/entrada) e aplica sobre o preço REAL da
  *  compra — entrada 10, stop −5%, comprou a 8 (gap) → stop 7,60, não 9,50. Linhas antigas com
- *  LIMIT na corretora (buy_handle) e "Comprar agora" ('market') ficam nos preços absolutos. */
+ *  LIMIT na corretora (buy_handle) e "Comprar agora" ('market') ficam nos preços absolutos. Em
+ *  todos os casos o stop fica a no mínimo MIN_STOP_PCT% do preço comprado (applyMinStop). */
 function bracketLevels(row, fill) {
   const target = Number(row.target_price);
   const stop = Number(row.stop_price);
   const entry = Number(row.entry_price);
   const avg = Number(fill.avgPrice);
-  if (row.entry_kind === 'market' || row.buy_handle || !(entry > 0) || !(avg > 0)) return { target, stop };
-  return { target: avg * (target / entry), stop: avg * (stop / entry) };
+  if (row.entry_kind === 'market' || row.buy_handle || !(entry > 0) || !(avg > 0)) return { target, stop: applyMinStop(stop, avg) };
+  return { target: avg * (target / entry), stop: applyMinStop(avg * (stop / entry), avg) };
 }
 
 const EXIT_ICON = { target: '🎯', stop: '🛑', manual: '💰' };

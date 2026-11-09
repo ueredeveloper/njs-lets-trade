@@ -5,6 +5,14 @@ export const MANUAL_OCO_PENDING = new Set(['NEW', 'OPEN', 'CANCEL_REQUESTED']);
 /** Comprou — posição aberta (com ou sem OCO). */
 export const MANUAL_OCO_MOUNTED = new Set(['FILLED', 'BRACKETED', 'SELLING', 'OCO_FAILED']);
 
+/** Distância mínima do stop (espelho: backend/bot/shared/manualOcoStop.js). */
+export const MANUAL_OCO_MIN_STOP_PCT = 10;
+
+/** Stop nunca a menos de MANUAL_OCO_MIN_STOP_PCT% abaixo da entrada. */
+export function withMinStop(stop, entry) {
+  return Math.min(stop, entry * (1 - MANUAL_OCO_MIN_STOP_PCT / 100));
+}
+
 export function isManualOcoActive(o) {
   return MANUAL_OCO_PENDING.has(o.status) || MANUAL_OCO_MOUNTED.has(o.status);
 }

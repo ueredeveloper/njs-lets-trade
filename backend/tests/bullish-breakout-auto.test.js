@@ -3,31 +3,31 @@ jest.mock('../bot/shared/supabaseRest', () => ({ sbReq: jest.fn() }));
 
 const { exitLevels, CONFIG } = require('../bot/breakout-auto/bullishBreakoutAuto');
 
-describe('exitLevels — alvo +10%, stop na metade do candle (mín. 5%)', () => {
-  test('metade do candle mais longe que 5% → stop na metade', () => {
-    // candle 100 → máx 130, mín 98: metade 114; comprou a 125 → piso 5% = 118,75 → stop 114
-    const lv = exitLevels(125, { high: 130, low: 98 });
+describe('exitLevels — alvo +10%, stop na metade do candle (mín. 10%)', () => {
+  test('metade do candle mais longe que 10% → stop na metade', () => {
+    // candle máx 130, mín 90: metade 110; comprou a 125 → piso 10% = 112,5 → stop 110
+    const lv = exitLevels(125, { high: 130, low: 90 });
     expect(lv.target).toBeCloseTo(137.5);
-    expect(lv.stop).toBeCloseTo(114);
+    expect(lv.stop).toBeCloseTo(110);
   });
 
-  test('metade do candle a menos de 5% → stop vai pra −5%', () => {
-    // candle máx 106, mín 100: metade 103; comprou a 105 → piso 99,75 → stop 99,75
+  test('metade do candle a menos de 10% → stop vai pra −10%', () => {
+    // candle máx 106, mín 100: metade 103; comprou a 105 → piso 94,5 → stop 94,5
     const lv = exitLevels(105, { high: 106, low: 100 });
-    expect(lv.stop).toBeCloseTo(99.75);
+    expect(lv.stop).toBeCloseTo(94.5);
     expect(lv.target).toBeCloseTo(115.5);
   });
 
-  test('metade ACIMA do preço comprado (gap pra baixo) → stop −5%', () => {
+  test('metade ACIMA do preço comprado (gap pra baixo) → stop −10%', () => {
     const lv = exitLevels(100, { high: 130, low: 110 });
-    expect(lv.stop).toBeCloseTo(95);
+    expect(lv.stop).toBeCloseTo(90);
   });
 
   test('config padrão: 25 USDT, máx. 3 ordens, 4h, corpo >= 5%, volume 24h >= 1,5M', () => {
     expect(CONFIG).toMatchObject({
       interval: '4h', usdt: 25, maxActive: 3,
       scan: { minBodyPct: 5, minVolume24h: 1_500_000 },
-      exit: { targetPct: 10, minStopPct: 5 },
+      exit: { targetPct: 10, minStopPct: 10 },
     });
   });
 });

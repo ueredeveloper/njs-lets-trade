@@ -11,7 +11,7 @@ import CandlestickChartLW from './CandlestickChartLW';
 import ChartOcoTool from './ChartOcoTool';
 import ManualOcoOrdersPanel from './ManualOcoOrdersPanel';
 import { listManualOcoOrders } from '../services/api';
-import { isManualOcoActive, manualOcoLevels } from '../utils/manualOco';
+import { isManualOcoActive, manualOcoLevels, withMinStop, MANUAL_OCO_MIN_STOP_PCT } from '../utils/manualOco';
 import { simulatePriceActionBox, PRICE_ACTION_DEFAULTS } from '../utils/priceActionBoxSim';
 import { buildOcoSuggester } from '../utils/ocoSuggest';
 import convertOpenTime from '../utils/convertOpenTime';
@@ -3338,8 +3338,8 @@ export default function CandlestickChart() {
       if (d || ocoLastClose == null) return null;
       const s = ocoSuggester?.suggest(ocoLastClose);
       return s
-        ? { entry: ocoLastClose, target: s.targetPrice, stop: s.stopPrice }
-        : { entry: ocoLastClose, target: ocoLastClose * 1.03, stop: ocoLastClose * 0.98 };
+        ? { entry: ocoLastClose, target: s.targetPrice, stop: withMinStop(s.stopPrice, ocoLastClose) }
+        : { entry: ocoLastClose, target: ocoLastClose * 1.03, stop: withMinStop(ocoLastClose, ocoLastClose) };
     });
   }, [ocoLastClose, ocoSuggester]);
   // Caixa de análise: o usuário arrasta um retângulo sobre alguns candles pra rodar a
@@ -3377,10 +3377,11 @@ export default function CandlestickChart() {
   // "grudados" nela — recalculada a cada pan/zoom (ver efeito logo abaixo de handleAnalysisBoxStart).
   const [analysisBoxAnchorPx, setAnalysisBoxAnchorPx] = useState(null);
   // Tipo 'priceAction': parâmetros editáveis do simulador (priceActionBoxSim.js) — lembrados no
-  // navegador entre sessões (conveniência; padrão alvo 10% / entrada 50% do candle / stop 5%).
+  // navegador entre sessões (conveniência; padrão alvo 10% / entrada 50% do candle / stop 10%, o mínimo).
   const [paParams, setPaParams] = useState(() => {
     try {
-      return { ...PRICE_ACTION_DEFAULTS, ...JSON.parse(localStorage.getItem('chartPriceActionParams') || '{}') };
+      const saved = { ...PRICE_ACTION_DEFAULTS, ...JSON.parse(localStorage.getItem('chartPriceActionParams') || '{}') };
+      return { ...saved, stopPct: Math.max(MANUAL_OCO_MIN_STOP_PCT, Number(saved.stopPct) || 0) };
     } catch { return PRICE_ACTION_DEFAULTS; }
   });
   useEffect(() => {
@@ -6761,11 +6762,12 @@ export default function CandlestickChart() {
                 className="w-12 bg-p2 border border-p3/40 text-p5 rounded px-1 py-0.5 text-right"
               />%
             </label>
-            <label className="flex items-center gap-0.5 text-[10px] text-red-400" title="Stop loss: % abaixo do preço de entrada">
+            <label className="flex items-center gap-0.5 text-[10px] text-red-400" title={`Stop loss: % abaixo do preço de entrada (mínimo ${MANUAL_OCO_MIN_STOP_PCT}%)`}>
               stop −
               <input
-                type="number" min="0.1" step="0.1" value={paParams.stopPct}
+                type="number" min={MANUAL_OCO_MIN_STOP_PCT} step="0.1" value={paParams.stopPct}
                 onChange={(e) => setPaParams((p) => ({ ...p, stopPct: Number(e.target.value) }))}
+                onBlur={() => setPaParams((p) => ({ ...p, stopPct: Math.max(MANUAL_OCO_MIN_STOP_PCT, p.stopPct) }))}
                 className="w-12 bg-p2 border border-p3/40 text-p5 rounded px-1 py-0.5 text-right"
               />%
             </label>
@@ -6789,7 +6791,7 @@ export default function CandlestickChart() {
             <button
               type="button"
               onClick={() => setPaParams(PRICE_ACTION_DEFAULTS)}
-              title="Voltar ao padrão (alvo 10%, entrada 50% do candle de alta, stop 5%)"
+              title="Voltar ao padrão (alvo 10%, entrada 50% do candle de alta, stop 10%)"
               className="w-5 h-5 inline-flex items-center justify-center text-[11px] rounded border shrink-0 bg-p2 text-p5 border-p3/40 hover:bg-p3/30"
             >
               ↺
