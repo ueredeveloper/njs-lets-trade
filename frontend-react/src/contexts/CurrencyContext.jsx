@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useCallback, useEffect, useMemo, useRef } from 'react';
-import { addFavorite, removeFavorite, fetchActiveTrades, ignoreActiveTrade,
+import { getFavorites, addFavorite, removeFavorite, fetchActiveTrades, ignoreActiveTrade,
   unignoreActiveTrade, fetchIgnoredActiveTrades, fetchActiveTradesSettings, updateActiveTradesSettings,
   fetchMultitradeFavorites, addMultitradeFavorite, updateMultitradeFavorite, removeMultitradeFavorite,
   patchMultitradeBotState,
@@ -76,6 +76,8 @@ const CurrencyContext = createContext(null);
 
 /** Poll da fase BOUGHT/WATCHING após compra/venda do bot. */
 const MULTITRADE_STATE_POLL_MS = 30_000;
+/** Poll do favorito Binance — o bot adiciona moedas sozinho (Explosão de Alta automática). */
+const BINANCE_FAVORITES_POLL_MS = 60_000;
 
 function isAutoHighlightFilter(name) {
   return name?.startsWith('Favoritos|Alta|') || name?.startsWith('Favoritos|Novas|');
@@ -243,8 +245,11 @@ export function CurrencyProvider({ children }) {
     });
   }, []);
 
+  const binanceFavoriteToggledAtRef = useRef(0);
+
   const toggleBinanceFavorite = useCallback(async (symbol) => {
     const sym = symbol.toUpperCase();
+    binanceFavoriteToggledAtRef.current = Date.now();
     setBinanceFavorites((prev) => {
       const next = new Set(prev);
       const removing = next.has(sym);
@@ -1253,6 +1258,25 @@ export function CurrencyProvider({ children }) {
     };
     load();
     const id = setInterval(load, MULTITRADE_STATE_POLL_MS);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
+
+  // Favorito Binance criado pelo bot só aparecia ao recarregar a página. Descarta a resposta se o
+  // usuário mexeu num favorito agora há pouco (o GET pode ter lido o banco antes do POST/DELETE dele).
+  useEffect(() => {
+    let cancelled = false;
+    const id = setInterval(async () => {
+      const startedAt = Date.now();
+      try {
+        const list = await getFavorites('binance');
+        if (cancelled || binanceFavoriteToggledAtRef.current > startedAt - 5_000) return;
+        setBinanceFavorites((prev) => (
+          prev.size === list.length && list.every((s) => prev.has(s)) ? prev : new Set(list)
+        ));
+      } catch (err) {
+        if (!cancelled) console.warn('[CurrencyContext] poll favoritos Binance:', err.message);
+      }
+    }, BINANCE_FAVORITES_POLL_MS);
     return () => { cancelled = true; clearInterval(id); };
   }, []);
 
