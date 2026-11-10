@@ -36,7 +36,8 @@ const CONFIG = {
   maxActive: 3,
   // Critérios do scanner (o resto fica no padrão de bullishBreakoutScanner.js#DEFAULTS): corpo
   // verde >= 5% e volume 24h >= 1,5M USDT. Também valem na reconferência do fechamento.
-  scan: { minBodyPct: 5, minVolume24h: 1_500_000 },
+  // firstOfMove: só a 1ª explosão do movimento (2ª/3ª seguidas, como a INITUSDT 09–10/11, ficam de fora).
+  scan: { minBodyPct: 5, minVolume24h: 1_500_000, firstOfMove: true },
   exit: { targetPct: 10, stopMode: 'candleMid', minStopPct: 10 },
 };
 const SCAN_EVERY_MS = 15 * 60_000;

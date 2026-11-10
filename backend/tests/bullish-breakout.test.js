@@ -116,3 +116,32 @@ describe('findRecentBreakout', () => {
     expect(r.candlesAgo).toBe(2);
   });
 });
+
+describe('findRecentBreakout — firstOfMove (só a 1ª explosão do movimento)', () => {
+  // 20 laterais + 1ª explosão (100 → 106,6, rompe 102) + 2ª explosão logo depois (106,6 → 120, rompe 115)
+  const second = { openTime: 21 * H4, open: 106.6, high: 122, low: 106, close: 120, volume: 40_000 };
+  const twoInARow = [...series(SLP_LIKE), second];
+  const now = 21 * H4 + 1000;
+
+  test('a 1ª explosão passa com firstOfMove', () => {
+    expect(findRecentBreakout(series(SLP_LIKE), { ...DEFAULTS, firstOfMove: true }, NOW_OPEN)).not.toBeNull();
+  });
+
+  test('a 2ª explosão seguida passa sem o filtro e fica de fora com ele', () => {
+    expect(findRecentBreakout(twoInARow, DEFAULTS, now)).not.toBeNull();
+    expect(findRecentBreakout(twoInARow, { ...DEFAULTS, firstOfMove: true }, now)).toBeNull();
+  });
+
+  test('explosão anterior fora dos `lookback` candles não bloqueia', () => {
+    const flat = Array.from({ length: 20 }, (_, i) => ({
+      openTime: (21 + i) * H4, open: 106, high: 107, low: 105, close: 106, volume: 1000,
+    }));
+    const late = { openTime: 41 * H4, open: 106, high: 120, low: 105.5, close: 118, volume: 20_000 };
+    const cs = [...series(SLP_LIKE), ...flat, late];
+    expect(findRecentBreakout(cs, { ...DEFAULTS, firstOfMove: true }, 41 * H4 + 1000)).not.toBeNull();
+  });
+
+  test('nome do filtro marca a regra', () => {
+    expect(buildFilterName(normalizeOptions({ firstOfMove: 'true' }))).toBe('4h|Explosão|c5|v3|f40|r|1a');
+  });
+});

@@ -26,6 +26,10 @@
  * Por padrão inclui o candle EM FORMAÇÃO (pega o estouro enquanto acontece); `closedOnly`
  * ignora o candle aberto (menos sinal falso — o candle aberto pode devolver a alta).
  *
+ * `firstOfMove`: só vale a 1ª explosão do movimento — se algum dos `lookback` candles anteriores
+ * ao estouro também foi explosão (mesmos critérios), a moeda fica de fora. Caso INITUSDT 4h
+ * 09–10/11/2026: explodiu às 13:00, 17:00 e 01:00 e o automático entrou nas três.
+ *
  * Candles via fetchKlines direto (não o cache em disco de getCandles.js): o scan pede só
  * lookback+2 candles por moeda e precisa do candle aberto fresco, sem gravar ~400 arquivos.
  *
@@ -50,6 +54,7 @@ const DEFAULTS = {
   withinCandles: 1,
   requireBreakout: true,
   closedOnly: false,
+  firstOfMove: false,
   minVolume24h: 1_000_000,
 };
 
@@ -83,6 +88,7 @@ function normalizeOptions(raw = {}) {
     withinCandles: Math.trunc(num(raw.withinCandles, DEFAULTS.withinCandles)),
     requireBreakout: bool(raw.requireBreakout, DEFAULTS.requireBreakout),
     closedOnly: bool(raw.closedOnly, DEFAULTS.closedOnly),
+    firstOfMove: bool(raw.firstOfMove, DEFAULTS.firstOfMove),
     minVolume24h: num(raw.minVolume24h, DEFAULTS.minVolume24h),
   };
   if (!VALID_INTERVALS.includes(opts.interval)) throw new Error(`intervalo inválido: ${opts.interval}`);
@@ -165,7 +171,14 @@ function findRecentBreakout(candles, options, nowMs = Date.now()) {
     const r = evaluateBullishBreakout(cs.slice(0, cs.length - ago), { ...opts, closedOnly: false }, nowMs);
     if (r && (!best || r.score > best.score)) best = { ...r, candlesAgo: ago };
   }
-  if (best) best.changeSincePct = round(((lastClose - best.close) / best.close) * 100);
+  if (!best) return null;
+  if (opts.firstOfMove) {
+    const at = cs.length - 1 - best.candlesAgo;
+    for (let j = at - 1; j >= Math.max(opts.lookback, at - opts.lookback); j--) {
+      if (evaluateBullishBreakout(cs.slice(0, j + 1), { ...opts, closedOnly: false }, nowMs)) return null;
+    }
+  }
+  best.changeSincePct = round(((lastClose - best.close) / best.close) * 100);
   return best;
 }
 
@@ -186,6 +199,7 @@ function buildFilterName(opts) {
   if (opts.withinCandles > 1) parts.push(`n${opts.withinCandles}`);
   if (opts.requireBreakout) parts.push('r');
   if (opts.closedOnly) parts.push('fechado');
+  if (opts.firstOfMove) parts.push('1a');
   return parts.join('|');
 }
 
@@ -206,7 +220,9 @@ async function scanBullishBreakouts(rawOptions = {}, { log = () => {} } = {}) {
   const now = Date.now();
   await runWithConcurrency(candidates, async (symbol) => {
     try {
-      const candles = await fetchKlines(symbol, opts.interval, opts.lookback + opts.withinCandles + 1);
+      // firstOfMove avalia também os `lookback` candles antes do estouro, cada um com o seu histórico.
+      const extra = opts.firstOfMove ? opts.lookback : 0;
+      const candles = await fetchKlines(symbol, opts.interval, opts.lookback + opts.withinCandles + 1 + extra);
       const r = findRecentBreakout(candles, opts, now);
       if (r) hits.push({ symbol, ...r, volume24h: volume24h.get(symbol) });
     } catch (err) {
