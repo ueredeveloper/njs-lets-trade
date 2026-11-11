@@ -13,7 +13,7 @@
  *      fechou num padrão de baixa OU se a explosão não se confirmou no candle fechado
  *      (close_condition.confirmBreakout); senão compra a mercado e monta a OCO com
  *      close_condition.exit — alvo +10% e stop na METADE do candle fechado ((máx+mín)/2), nunca a
- *      menos de 5% do preço comprado.
+ *      menos de 10% do preço comprado. Só a 1ª explosão do movimento (scan.firstOfMove).
  *
  * Limites: no máximo MAX_ACTIVE ordens automáticas vivas (aguardando + compradas); uma moeda com
  * qualquer ordem OCO viva (manual ou automática) é pulada; e uma ordem por moeda por candle.
