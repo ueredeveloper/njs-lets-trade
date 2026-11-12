@@ -1,5 +1,5 @@
 const {
-  evaluateBullishBreakout, findRecentBreakout, normalizeOptions, buildFilterName, DEFAULTS,
+  evaluateBullishBreakout, findRecentBreakout, findBreakoutSignals, normalizeOptions, buildFilterName, DEFAULTS,
 } = require('../market/bullishBreakoutScanner');
 
 const H4 = 4 * 3_600_000;
@@ -139,6 +139,14 @@ describe('findRecentBreakout — firstOfMove (só a 1ª explosão do movimento)'
     const late = { openTime: 41 * H4, open: 106, high: 120, low: 105.5, close: 118, volume: 20_000 };
     const cs = [...series(SLP_LIKE), ...flat, late];
     expect(findRecentBreakout(cs, { ...DEFAULTS, firstOfMove: true }, 41 * H4 + 1000)).not.toBeNull();
+  });
+
+  test('findBreakoutSignals lista as explosões da série (firstOfMove tira a 2ª seguida)', () => {
+    const all = findBreakoutSignals(twoInARow, DEFAULTS, now);
+    expect(all.map((s) => s.openTime)).toEqual([20 * H4, 21 * H4]);
+    const first = findBreakoutSignals(twoInARow, { ...DEFAULTS, firstOfMove: true }, now);
+    expect(first.map((s) => s.openTime)).toEqual([20 * H4]);
+    expect(findBreakoutSignals(series({ open: 100, high: 102, low: 99, close: 101, volume: 1000 }), DEFAULTS, NOW_OPEN)).toEqual([]);
   });
 
   test('nome do filtro marca a regra', () => {

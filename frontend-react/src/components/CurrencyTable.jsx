@@ -6,6 +6,7 @@ import {
   fetchCandlesticksAndCloud, fetchGateCurrencies, gatePreloadCandles,
   fetchMaCrossoverFilter, fetchMultitradeTrades, fetchBotState,
   fetchGateTrades, fetchBinanceTrades, fetchRsiMomentumMissedSignals, fetchRsiMomentumSignalProximity, listActiveManualOcoOrders,
+  fetchBullishBreakoutSignals,
 } from '../services/api';
 import { parseMaCrossFilterName, parseMaCompareFilterName, parseMaDistanceFilterName, parseIndicatorGrowthFilterName, parseVwapBandWidthFilterName, parseBollingerBandWidthFilterName, parseBollingerMedianTrendFilterName, parseRsiFilterName, parseFilterChartInterval, isNearMissFilterName, nearMissReasonAcronym } from '../utils/filterNames';
 import { useI18n } from '../i18n';
@@ -147,6 +148,39 @@ function buildMissedSignalMarkers(signals) {
     }
   }
   return out;
+}
+
+/** O que aconteceu com o sinal da Explosão automática (status/erro da ordem manual_oco_orders). */
+function breakoutOutcomeLabel(order) {
+  if (!order) return 'sem ordem';
+  const err = String(order.error ?? '');
+  if (/insufficient balance/i.test(err)) return 'sem saldo';
+  if (/not permitted/i.test(err)) return 'moeda não permitida';
+  if (/padrão de baixa/.test(err)) return 'fechou em padrão de baixa';
+  if (/não se confirmou/.test(err)) return 'explosão não confirmou';
+  if (/não encontrado/.test(err)) return 'bot ficou fora';
+  switch (order.status) {
+    case 'CLOSED_TARGET': return 'comprou · alvo';
+    case 'CLOSED_STOP': return 'comprou · stop';
+    case 'SOLD': return 'comprou · vendida';
+    case 'BRACKETED': case 'FILLED': case 'SELLING': case 'OCO_FAILED': return 'comprou';
+    case 'NEW': case 'OPEN': return 'aguardando fechamento';
+    case 'CANCELLED': case 'CANCEL_REQUESTED': return 'cancelada';
+    case 'CLOSED': return 'não entrou';
+    case 'FAILED': return 'entrada falhou';
+    default: return order.status;
+  }
+}
+
+/** Seta amarela ('signal') no candle 4h de cada Explosão de Alta automática da moeda, entrando ou
+ *  não — o texto diz o desfecho (comprou, sem saldo, padrão de baixa...). */
+function buildBreakoutSignalMarkers(signals) {
+  return (signals ?? []).map((s) => ({
+    time: Number(s.candleOpenTime),
+    side: 'signal',
+    price: s.price != null ? Number(s.price) : null,
+    label: `Explosão${s.bodyPct != null ? ` +${Number(s.bodyPct).toFixed(1)}%` : ''} · ${breakoutOutcomeLabel(s.order)}`,
+  })).filter((m) => Number.isFinite(m.time));
 }
 
 function fmtBuyTime(iso) {
@@ -1349,13 +1383,18 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
         // ativo (ex.: símbolo desfavoritado no meio de um ciclo PENDING/BOUGHT — ver comentário
         // na rota /bot-state) pra desenhar a seta de sinal enquanto ainda não virou trade
         // fechado (sem isso, PENDING só ganhava a seta depois de comprar e a compra fechar).
-        const [data, botTrades, liveStates] = await Promise.all([
+        // Favorito B: também as Explosões de Alta automáticas da moeda (seta amarela no candle do
+        // sinal, com ou sem entrada — sem saldo, padrão de baixa, máx. de ordens...).
+        const wantBreakouts = isBinanceFavView && effectiveSource !== 'gate';
+        const [data, botTrades, liveStates, breakoutRes] = await Promise.all([
           fetchCandlesticksAndCloud(item.symbol, effectiveInterval, effectiveSource),
           fetchMultitradeTrades({ symbol: item.symbol, limit: 30 }).catch(() => []),
           fetchBotState(item.symbol).catch(() => []),
+          wantBreakouts ? fetchBullishBreakoutSignals(item.symbol).catch(() => null) : null,
         ]);
         setSelectedChart({ ...data, interval: effectiveInterval, symbol: item.symbol, source: effectiveSource ?? null });
         if (effectiveSource === 'gate') gatePreloadCandles(item.symbol);
+        const breakoutMarkers = buildBreakoutSignalMarkers(breakoutRes?.signals);
         // Entre as estratégias que possam estar rodando o mesmo símbolo, prioriza a que está
         // com ciclo ativo (PENDING/BOUGHT), com ordem limite armada (WATCHING + entryLimit —
         // caso do bollinger-bands-bot.js, que não tem fase PENDING) ou que falhou (FAILED —
@@ -1363,8 +1402,22 @@ export default function CurrencyTable({ activeFilter, onSelectFilter, onSelectCu
         // tem sinal/compra pra marcar.
         const liveEntry = (liveStates ?? []).find(s => s.phase === 'PENDING' || s.phase === 'BOUGHT'
           || s.phase === 'FAILED' || (s.phase === 'WATCHING' && s.entryLimit)) ?? null;
-        if (botTrades?.length || liveEntry) {
-          setChartTradeMarkers(buildMarkersFromLiveTrades(botTrades, liveEntry));
+        if (botTrades?.length || liveEntry || breakoutMarkers.length) {
+          const base = botTrades?.length || liveEntry ? buildMarkersFromLiveTrades(botTrades, liveEntry) : [];
+          setChartTradeMarkers([...base, ...breakoutMarkers]);
+        }
+
+        // Última explosão fora dos candles carregados (ex.: gráfico em 15m e sinal de ontem) →
+        // busca ancorada nela, como no SSE. Só se não houver o ciclo de reforço abaixo (ele já ancora).
+        const lastBreakoutMs = breakoutMarkers.length ? breakoutMarkers[breakoutMarkers.length - 1].time : null;
+        const firstLoadedMs = Number(data?.candlesticks?.[0]?.openTime);
+        if (lastBreakoutMs != null && Number.isFinite(firstLoadedMs) && lastBreakoutMs < firstLoadedMs
+          && !liveEntry?.reinforceLegs?.length) {
+          const anchored = await fetchCandlesticksAndCloud(
+            item.symbol, effectiveInterval, effectiveSource, undefined,
+            { fromMs: lastBreakoutMs, toMs: Date.now(), pad: 100 },
+          ).catch(() => null);
+          if (anchored) setSelectedChart({ ...anchored, interval: effectiveInterval, symbol: item.symbol, source: effectiveSource ?? null });
         }
 
         // Ciclo de "Reforço no stop": a 1ª compra pode estar horas atrás — refaz a busca ANCORADA

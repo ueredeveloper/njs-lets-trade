@@ -182,6 +182,25 @@ function findRecentBreakout(candles, options, nowMs = Date.now()) {
   return best;
 }
 
+/**
+ * Todos os candles de explosão de uma série (histórico de UMA moeda — seta do sinal no gráfico).
+ * Cada candle é avaliado com os `lookback` anteriores a ele, como no scan; com firstOfMove, um
+ * candle só vale se nenhum dos `lookback` anteriores também foi explosão. O último candle entra
+ * mesmo em formação (closed=false). Devolve em ordem cronológica.
+ */
+function findBreakoutSignals(candles, options, nowMs = Date.now()) {
+  const opts = { ...DEFAULTS, ...options, closedOnly: false };
+  const cs = candles ?? [];
+  const hits = cs.map((_, i) => (i >= opts.lookback ? evaluateBullishBreakout(cs.slice(0, i + 1), opts, nowMs) : null));
+  const out = [];
+  for (let i = 0; i < hits.length; i++) {
+    if (!hits[i]) continue;
+    if (opts.firstOfMove && hits.slice(Math.max(0, i - opts.lookback), i).some(Boolean)) continue;
+    out.push(hits[i]);
+  }
+  return out;
+}
+
 async function runWithConcurrency(items, worker, concurrency) {
   let idx = 0;
   async function next() {
@@ -315,6 +334,6 @@ if (require.main === module) {
 }
 
 module.exports = {
-  DEFAULTS, VALID_INTERVALS, normalizeOptions, evaluateBullishBreakout, findRecentBreakout, buildFilterName,
+  DEFAULTS, VALID_INTERVALS, normalizeOptions, evaluateBullishBreakout, findRecentBreakout, findBreakoutSignals, buildFilterName,
   scanBullishBreakouts, getBullishBreakouts,
 };

@@ -392,6 +392,11 @@ explosão do movimento** — `firstOfMove`: nenhum dos 20 candles anteriores pod
 no candle fechado (`close_condition.confirmBreakout`) e a OCO usa `close_condition.exit`: alvo +10%,
 stop na metade do candle fechado `(máx+mín)/2`, no mínimo −10%. O watcher ignora `entry_kind`
 desconhecido (bot desatualizado comprava `candle_close` na hora — caso ADX #141).
+**Seta do sinal no favorito B (v1.180.0):** clicar numa moeda do favorito Binance desenha a seta amarela
+no candle 4h de cada Explosão automática, com ou sem entrada — `GET /services/bullish-breakout/signals?symbol=`
+junta as ordens do automático (`manual_oco_orders`, desfecho pelo status/erro: sem saldo, padrão de baixa…)
+com o replay dos critérios (`findBreakoutSignals`, CONFIG.scan + firstOfMove, sem o volume 24h) nos candles
+fechados — pega também o sinal que nem virou ordem (máx. de ordens vivas, bot parado).
 
 ### Watchlist curada (`rsi_multi_bot_state.curated = true`)
 

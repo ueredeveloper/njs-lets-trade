@@ -1865,6 +1865,15 @@ export async function fetchRsiMomentumMissedSignals({ days = 14, symbol } = {}) 
   return res.json();
 }
 
+/** Sinais da Explosão de Alta automática numa moeda (com ou sem entrada) — seta no gráfico do
+ *  favorito B. `{ symbol, interval, signals: [{candleOpenTime, price, bodyPct, volumeRatio, order}] }`,
+ *  ver backend/services/fetchBullishBreakout.js. */
+export async function fetchBullishBreakoutSignals(symbol) {
+  const res = await fetch(`/services/bullish-breakout/signals?symbol=${encodeURIComponent(symbol)}`);
+  if (!res.ok) throw new Error(`bullish-breakout/signals falhou: HTTP ${res.status}`);
+  return res.json();
+}
+
 /** Proximidade do sinal de cada moeda do favorito RSI (intervalo/limiar do próprio bot) — ver
  *  backend/services/fetchRsiMomentumSignalProximity.js. */
 export async function fetchRsiMomentumSignalProximity({ fresh = false } = {}) {
