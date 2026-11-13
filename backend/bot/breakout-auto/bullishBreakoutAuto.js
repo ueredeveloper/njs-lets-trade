@@ -37,10 +37,10 @@ const CONFIG = {
   usdt: 25,
   maxActive: 3,
   // Critérios do scanner (o resto fica no padrão de bullishBreakoutScanner.js#DEFAULTS): corpo
-  // verde >= 5% e volume 24h >= 1,5M USDT. O volume 24h só filtra na varredura (candle aberto) — a
+  // verde >= 5% e volume 24h >= 1M USDT (era 1,5M até v1.182.0). O volume 24h só filtra na varredura (candle aberto) — a
   // reconferência do fechamento (confirmBreakout) olha só o candle, não o volume 24h.
   // firstOfMove: só a 1ª explosão do movimento (2ª/3ª seguidas, como a INITUSDT 09–10/11, ficam de fora).
-  scan: { minBodyPct: 5, minVolume24h: 1_500_000, firstOfMove: true },
+  scan: { minBodyPct: 5, minVolume24h: 1_000_000, firstOfMove: true },
   exit: { targetPct: 10, stopMode: 'candleMid', minStopPct: 10 },
   // Entrada: em vez de comprar a mercado no fechamento, espera o preço cair discountPct% abaixo do
   // fechamento por até waitHours (backtest 30/10–13/11/2026: direto −3,5%/trade; −5% em 12h encheu

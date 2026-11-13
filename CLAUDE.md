@@ -388,7 +388,7 @@ candle fechar e NÃO compra se fechou num padrão de baixa (`bearishClosePattern
 depois de alta, bearish engulfing, tweezer top); senão compra a mercado + OCO relativa ao preço comprado.
 **Automático** (`backend/bot/breakout-auto/bullishBreakoutAuto.js`, roda no processo do rsi-momentum,
 `BULLISH_BREAKOUT_AUTO=off` desliga): a cada 15 min varre o 4h; moeda nova → favorito Binance + ordem
-`candle_close` (corpo ≥ 5%, volume 24h ≥ 1,5M; 25 USDT, máx. 3 vivas, 1 por moeda por candle; **só a 1ª
+`candle_close` (corpo ≥ 5%, volume 24h ≥ 1M — só na varredura, não no fechamento; 25 USDT, máx. 3 vivas, 1 por moeda por candle; **só a 1ª
 explosão do movimento** — `firstOfMove`: nenhum dos 20 candles anteriores pode ter sido explosão). No fechamento ainda reconfere a explosão
 no candle fechado (`close_condition.confirmBreakout`) e **não compra no fechamento** (v1.181.0,
 `close_condition.entryDiscount` = CONFIG.entry `{ discountPct: 5, waitHours: 12 }`): a ordem vira
