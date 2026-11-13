@@ -58,7 +58,12 @@ router.get('/bullish-breakout/signals', async (req, res) => {
         volumeRatio: o.close_condition?.detected?.volumeRatio ?? null,
         order: null,
       };
-      if (!cur.order) cur.order = { id: o.id, status: o.status, error: o.error ?? null, avgPrice: o.fill?.avgPrice ?? null };
+      if (!cur.order) {
+        cur.order = {
+          id: o.id, status: o.status, error: o.error ?? null, avgPrice: o.fill?.avgPrice ?? null,
+          entryKind: o.entry_kind, discountPct: o.close_condition?.entryDiscount?.discountPct ?? null,
+        };
+      }
       byCandle.set(t, cur);
     }
     const signals = [...byCandle.values()].sort((a, b) => a.candleOpenTime - b.candleOpenTime);

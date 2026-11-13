@@ -159,6 +159,10 @@ function breakoutOutcomeLabel(order) {
   if (/padrão de baixa/.test(err)) return 'fechou em padrão de baixa';
   if (/não se confirmou/.test(err)) return 'explosão não confirmou';
   if (/não encontrado/.test(err)) return 'bot ficou fora';
+  if (/expirou/.test(err)) return `entrada −${order.discountPct ?? 5}% expirou`;
+  if ((order.status === 'NEW' || order.status === 'OPEN') && order.entryKind === 'limit') {
+    return `aguardando −${order.discountPct ?? 5}%`;
+  }
   switch (order.status) {
     case 'CLOSED_TARGET': return 'comprou · alvo';
     case 'CLOSED_STOP': return 'comprou · stop';

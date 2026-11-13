@@ -15,7 +15,9 @@
  *            num padrão de baixa (shooting star / inverted hammer / gravestone doji / hanging man /
  *            bearish engulfing / tweezer top — bearishClosePattern) → CLOSED (não comprou, aviso
  *            no WhatsApp); senão compra a mercado → FILLED. Migração
- *            supabase/add-manual-oco-close-condition.sql.
+ *            supabase/add-manual-oco-close-condition.sql. Com close_condition.entryDiscount
+ *            (Explosão automática) não compra no fechamento: vira 'limit' X% abaixo do fechamento
+ *            com prazo (limitExpiresAt → CLOSED) e a OCO usa o candle fechado (exitCandle).
  *            Alvo/stop da OCO = os % desenhados aplicados ao preço REAL da compra (bracketLevels).
  *            Linhas antigas com buy_handle (LIMIT GTC armada na corretora): poll da limite.
  *   CANCEL_REQUESTED → (só linhas antigas) cancela a limite; fill parcial vira FILLED → CANCELLED
@@ -217,6 +219,26 @@ async function processCandleClose(row, adapter, log) {
     }
   }
 
+  // Entrada com desconto (Explosão automática, close_condition.entryDiscount): não compra agora —
+  // vira entry_kind 'limit' X% abaixo do fechamento, vigiada pelo ramo 'limit' de processRow até
+  // limitExpiresAt. O candle fechado vai junto (exitCandle) pra OCO usar a metade DELE no fill.
+  const disc = cc.entryDiscount;
+  if (disc && Number(disc.discountPct) > 0) {
+    const limitPrice = Number(candle.close) * (1 - Number(disc.discountPct) / 100);
+    const expiresAt = cc.closeAt + Number(disc.waitHours || 12) * 3600_000;
+    const exitCandle = { high: Number(candle.high), low: Number(candle.low), close: Number(candle.close) };
+    const lv = exitLevels(limitPrice, exitCandle, cc.exit ?? undefined);
+    const ok = await patchIf(row, {
+      entry_kind: 'limit', entry_price: limitPrice, target_price: lv.target, stop_price: lv.stop,
+      close_condition: { ...cc, exitCandle, limitExpiresAt: expiresAt },
+    });
+    if (!ok) return;
+    const txt = `${closeTxt}, explosão confirmada — entrada armada ${disc.discountPct}% abaixo, em ${fmt(limitPrice)}, até ${fmtBrt(expiresAt)}`;
+    log(`🎯 [OCO manual] ${tag}: ${txt}`);
+    notify(`🎯 Explosão de Alta ${row.symbol}: ${txt} · alvo ${fmt(lv.target)} / stop ${fmt(lv.stop)} (relativos ao preço comprado).`, log);
+    return;
+  }
+
   const usdt = Number(row.usdt);
   log(`✅ [OCO manual] ${tag}: ${closeTxt}, sem padrão de baixa — comprando ${usdt} USDT a mercado`);
   let fill;
@@ -228,17 +250,19 @@ async function processCandleClose(row, adapter, log) {
     notify(`❌ OCO manual ${row.symbol}: ${closeTxt} (segurou o preço) mas a compra de ${usdt} USDT falhou (${err.message}) — ${buyFailHint(err)}`, log);
     return;
   }
-  // Regra de saída própria (Explosão automática): alvo +X% e stop na metade do candle fechado, com
-  // distância mínima. Grava como entrada = preço comprado, então bracketLevels devolve os níveis
-  // exatos — e um restart no meio (FILLED) recoloca a MESMA OCO.
-  let filledRow = row;
-  if (cc.exit && Number(fill.avgPrice) > 0) {
-    const lv = exitLevels(Number(fill.avgPrice), candle, cc.exit);
-    const levels = { entry_price: Number(fill.avgPrice), target_price: lv.target, stop_price: lv.stop };
-    await sbReq('PATCH', TABLE, levels, `?id=eq.${row.id}`);
-    filledRow = { ...row, ...levels };
-  }
-  await recordFill(filledRow, adapter, fill, log);
+  await recordFill(await withExitRule(row, fill, candle), adapter, fill, log);
+}
+
+/** Regra de saída própria (Explosão automática): alvo +X% e stop na metade do candle de explosão,
+ *  com distância mínima, sobre o preço REAL comprado. Grava como entrada = preço comprado, então
+ *  bracketLevels devolve os níveis exatos — e um restart no meio (FILLED) recoloca a MESMA OCO. */
+async function withExitRule(row, fill, candle) {
+  const cc = row.close_condition;
+  if (!cc?.exit || !candle || !(Number(fill.avgPrice) > 0)) return row;
+  const lv = exitLevels(Number(fill.avgPrice), candle, cc.exit);
+  const levels = { entry_price: Number(fill.avgPrice), target_price: lv.target, stop_price: lv.stop };
+  await sbReq('PATCH', TABLE, levels, `?id=eq.${row.id}`);
+  return { ...row, ...levels };
 }
 
 async function processRow(row, log) {
@@ -305,6 +329,15 @@ async function processRow(row, log) {
   // chega na entrada ('trigger' sobe até ela, 'limit' cai até ela). Assim o saldo só é usado na
   // hora da compra e dá pra ter mais ordens pendentes do que saldo.
   if (!row.buy_handle) {
+    // Entrada com prazo (Explosão automática com desconto): passou de limitExpiresAt sem encher → CLOSED.
+    const expiresAt = Number(row.close_condition?.limitExpiresAt);
+    if (expiresAt > 0 && Date.now() > expiresAt) {
+      const why = `entrada em ${fmt(entry)} expirou às ${fmtBrt(expiresAt)} sem o preço cair até ela`;
+      if (!await patchIf(row, { status: 'CLOSED', error: why })) return;
+      log(`⌛ [OCO manual] ${tag}: ${why} — não comprou`);
+      notify(`⌛ Explosão de Alta ${row.symbol}: ${why} — NÃO comprou.`, log);
+      return;
+    }
     const price = await fetchLivePrice(row.exchange, row.symbol);
     const isTrigger = row.entry_kind === 'trigger';
     if (isTrigger ? !(price >= entry) : !(price <= entry)) return;
@@ -327,7 +360,7 @@ async function processRow(row, log) {
       notify(`❌ OCO manual ${row.symbol}: preço chegou na entrada (${fmt(entry)}) mas a compra de ${usdt} USDT falhou (${err.message}) — ${buyFailHint(err)}`, log);
       return;
     }
-    await recordFill(row, adapter, fill, log);
+    await recordFill(await withExitRule(row, fill, row.close_condition?.exitCandle), adapter, fill, log);
     return;
   }
 
@@ -375,4 +408,4 @@ function startManualOcoWatcher({ log = console.log } = {}) {
   return setInterval(pass, POLL_MS);
 }
 
-module.exports = { startManualOcoWatcher };
+module.exports = { startManualOcoWatcher, _test: { processRow, bracketLevels } };

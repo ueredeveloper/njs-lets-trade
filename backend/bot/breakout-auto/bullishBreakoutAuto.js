@@ -11,9 +11,11 @@
  *      manual_oco_orders com entry_kind 'candle_close' pro fechamento DAQUELE candle;
  *   3. o manualOcoWatcher executa no fechamento (ver processCandleClose): não compra se o candle
  *      fechou num padrão de baixa OU se a explosão não se confirmou no candle fechado
- *      (close_condition.confirmBreakout); senão compra a mercado e monta a OCO com
- *      close_condition.exit — alvo +10% e stop na METADE do candle fechado ((máx+mín)/2), nunca a
- *      menos de 10% do preço comprado. Só a 1ª explosão do movimento (scan.firstOfMove).
+ *      (close_condition.confirmBreakout); senão arma a entrada 5% ABAIXO do fechamento
+ *      (close_condition.entryDiscount → vira entry_kind 'limit', expira em 12h) e, se encher,
+ *      compra a mercado e monta a OCO com close_condition.exit — alvo +10% e stop na METADE do
+ *      candle fechado ((máx+mín)/2), nunca a menos de 10% do preço comprado. Só a 1ª explosão do
+ *      movimento (scan.firstOfMove).
  *
  * Limites: no máximo MAX_ACTIVE ordens automáticas vivas (aguardando + compradas); uma moeda com
  * qualquer ordem OCO viva (manual ou automática) é pulada; e uma ordem por moeda por candle.
@@ -39,6 +41,10 @@ const CONFIG = {
   // firstOfMove: só a 1ª explosão do movimento (2ª/3ª seguidas, como a INITUSDT 09–10/11, ficam de fora).
   scan: { minBodyPct: 5, minVolume24h: 1_500_000, firstOfMove: true },
   exit: { targetPct: 10, stopMode: 'candleMid', minStopPct: 10 },
+  // Entrada: em vez de comprar a mercado no fechamento, espera o preço cair discountPct% abaixo do
+  // fechamento por até waitHours (backtest 30/10–13/11/2026: direto −3,5%/trade; −5% em 12h encheu
+  // 69% e −1,7%/trade). Expirou sem encher → CLOSED.
+  entry: { discountPct: 5, waitHours: 12 },
 };
 const SCAN_EVERY_MS = 15 * 60_000;
 const FIRST_SCAN_DELAY_MS = 60_000;
@@ -106,6 +112,7 @@ async function runCycle(log) {
         source: SOURCE,
         confirmBreakout: { ...meta.options, withinCandles: 1, closedOnly: false },
         exit: CONFIG.exit,
+        entryDiscount: CONFIG.entry,
         detected: { bodyPct: b.bodyPct, volumeRatio: b.volumeRatio, closePos: b.closePos, breakoutPct: b.breakoutPct },
       },
     }) ?? [];
@@ -122,8 +129,9 @@ async function runCycle(log) {
       }
     }
     const txt = `${symbol} ${CONFIG.interval} explodiu (corpo +${b.bodyPct}%, vol ${b.volumeRatio}×, rompeu +${b.breakoutPct}%) — `
-      + `ordem #${row.id} de ${CONFIG.usdt} USDT: compra a mercado no fechamento ${fmtBrt(closeAt)} se a explosão `
-      + `se confirmar e não fechar em padrão de baixa · alvo +${CONFIG.exit.targetPct}% / stop na metade do candle (mín. −${CONFIG.exit.minStopPct}%)${favTxt}`;
+      + `ordem #${row.id} de ${CONFIG.usdt} USDT: no fechamento ${fmtBrt(closeAt)}, se a explosão se confirmar e não `
+      + `fechar em padrão de baixa, arma a entrada ${CONFIG.entry.discountPct}% abaixo do fechamento (espera até `
+      + `${CONFIG.entry.waitHours}h) · alvo +${CONFIG.exit.targetPct}% / stop na metade do candle (mín. −${CONFIG.exit.minStopPct}%)${favTxt}`;
     log(`🚀 [Explosão auto] ${txt}`);
     sendWhatsApp(`🚀 Explosão de Alta: ${txt}`).catch((err) => log(`⚠️  [Explosão auto] WhatsApp falhou: ${err.message}`));
   }

@@ -389,7 +389,10 @@ depois de alta, bearish engulfing, tweezer top); senão compra a mercado + OCO r
 `BULLISH_BREAKOUT_AUTO=off` desliga): a cada 15 min varre o 4h; moeda nova → favorito Binance + ordem
 `candle_close` (corpo ≥ 5%, volume 24h ≥ 1,5M; 25 USDT, máx. 3 vivas, 1 por moeda por candle; **só a 1ª
 explosão do movimento** — `firstOfMove`: nenhum dos 20 candles anteriores pode ter sido explosão). No fechamento ainda reconfere a explosão
-no candle fechado (`close_condition.confirmBreakout`) e a OCO usa `close_condition.exit`: alvo +10%,
+no candle fechado (`close_condition.confirmBreakout`) e **não compra no fechamento** (v1.181.0,
+`close_condition.entryDiscount` = CONFIG.entry `{ discountPct: 5, waitHours: 12 }`): a ordem vira
+`entry_kind 'limit'` 5% abaixo do fechamento com `limitExpiresAt` (+12h → CLOSED "expirou") e o candle
+fechado em `exitCandle`; ordens antigas sem `entryDiscount` seguem comprando a mercado. A OCO usa `close_condition.exit`: alvo +10%,
 stop na metade do candle fechado `(máx+mín)/2`, no mínimo −10%. O watcher ignora `entry_kind`
 desconhecido (bot desatualizado comprava `candle_close` na hora — caso ADX #141).
 **Seta do sinal no favorito B (v1.180.0):** clicar numa moeda do favorito Binance desenha a seta amarela
