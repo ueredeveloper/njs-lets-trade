@@ -92,6 +92,14 @@ const GATE_VOLUME_OPTIONS = [
 // Explosão de Alta (bullishBreakoutScanner.js): corpo verde mínimo e volume × média dos 20 anteriores
 const BULLISH_BREAKOUT_BODY_OPTIONS = ['2', '3', '4', '5', '7', '10', '15'];
 const BULLISH_BREAKOUT_VOLUME_OPTIONS = ['1.5', '2', '3', '5', '10'];
+// Volume 24h mínimo (USDT) — padrão 1M, igual ao bot price action (bullishBreakoutAuto.js CONFIG.scan).
+const BULLISH_BREAKOUT_VOL24H_OPTIONS = [
+  { value: '500000', label: '0,5M' },
+  { value: '1000000', label: '1M' },
+  { value: '1500000', label: '1,5M' },
+];
+const BULLISH_BREAKOUT_VOL24H_DEFAULT = '1000000';
+const vol24hLabel = (v) => BULLISH_BREAKOUT_VOL24H_OPTIONS.find((o) => o.value === String(v))?.label ?? `${Number(v) / 1e6}M`;
 
 const GATE_PRESENCE_OPTIONS = [
   { value: 'only_gate', labelKey: 'gatecoins.presence.only_gate' },
@@ -158,7 +166,7 @@ const ICHIMOKU_LINE_LABELS = {
 // Painel abre SÓ com a Explosão de Alta (volume ≥ 1,5× · corpo ≥ 5% · candle atual). Os Momentum
 // RSI Geral/Exclusivo continuam nos formulários prontos (QUICK_PRESETS).
 const DEFAULT_INDICATORS = [
-  { type: 'bullishBreakout', intervals: ['4h'], minBodyPct: '5', minVolumeRatio: '1.5', closedOnly: false, firstOfMove: true },
+  { type: 'bullishBreakout', intervals: ['4h'], minBodyPct: '5', minVolumeRatio: '1.5', closedOnly: false, firstOfMove: true, minVolume24h: '1000000' },
 ];
 
 /** Formulários prontos — cada um substitui a lista de indicadores por uma única busca pré-configurada. */
@@ -256,7 +264,7 @@ function buildSummary(value, t) {
   if (type === 'bullishBreakout') {
     const candle = value.closedOnly ? t('ind.bb_out_candle_closed') : t('ind.bb_out_candle_current');
     const first = value.firstOfMove === false ? 'qualquer explosão' : '1ª explosão';
-    return `${t('ind.bullish_breakout')} — corpo ≥ ${value.minBodyPct ?? '5'}% · volume ≥ ${value.minVolumeRatio ?? '3'}× · ${candle} · ${first} · ${ivLabel}`;
+    return `${t('ind.bullish_breakout')} — corpo ≥ ${value.minBodyPct ?? '5'}% · volume ≥ ${value.minVolumeRatio ?? '3'}× · vol 24h ≥ ${vol24hLabel(value.minVolume24h ?? BULLISH_BREAKOUT_VOL24H_DEFAULT)} · ${candle} · ${first} · ${ivLabel}`;
   }
   if (type === 'movingAverage') {
     const len = value.length ?? '200';
@@ -675,6 +683,11 @@ function IndicatorRow({ value, onChange }) {
               title={t('ind.bb_out_candle_tip')}>
               <option value="current">{t('ind.bb_out_candle_current')}</option>
               <option value="closed">{t('ind.bb_out_candle_closed')}</option>
+            </select>
+            <select className={sel} value={value.minVolume24h ?? BULLISH_BREAKOUT_VOL24H_DEFAULT}
+              onChange={(e) => onChange({ ...value, minVolume24h: e.target.value })}
+              title="Volume 24h mínimo da moeda (USDT) — o bot price action usa 1M">
+              {BULLISH_BREAKOUT_VOL24H_OPTIONS.map((o) => <option key={o.value} value={o.value}>Vol 24h ≥ {o.label}</option>)}
             </select>
             <select className={sel} value={value.firstOfMove === false ? 'any' : 'first'}
               onChange={(e) => onChange({ ...value, firstOfMove: e.target.value === 'first' })}
@@ -1803,6 +1816,7 @@ export default function IndicatorPanel({ open, onToggle }) {
             interval, minBodyPct: ind.minBodyPct ?? '5', minVolumeRatio: ind.minVolumeRatio ?? '3', closedOnly: !!ind.closedOnly,
             // Padrão = bot price action: só a 1ª explosão do movimento (firstOfMove).
             firstOfMove: ind.firstOfMove !== false,
+            minVolume24h: ind.minVolume24h ?? BULLISH_BREAKOUT_VOL24H_DEFAULT,
           });
           console.log('[frontend-react] explosão de alta:', filter.name, '—', filter.list.length, 'moedas');
           addFilter({ name: filter.name, list: filter.list, meta: filter.meta?.breakouts, scannedAt: filter.meta?.scannedAt });

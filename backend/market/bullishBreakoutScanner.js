@@ -219,6 +219,8 @@ function buildFilterName(opts) {
   if (opts.requireBreakout) parts.push('r');
   if (opts.closedOnly) parts.push('fechado');
   if (opts.firstOfMove) parts.push('1a');
+  // Volume 24h fora do padrão (1M) entra no nome, senão buscas com 0,5M e 1M viram o mesmo filtro.
+  if (opts.minVolume24h !== DEFAULTS.minVolume24h) parts.push(`vol${opts.minVolume24h / 1e6}M`);
   return parts.join('|');
 }
 

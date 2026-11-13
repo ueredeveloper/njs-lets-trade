@@ -151,5 +151,7 @@ describe('findRecentBreakout — firstOfMove (só a 1ª explosão do movimento)'
 
   test('nome do filtro marca a regra', () => {
     expect(buildFilterName(normalizeOptions({ firstOfMove: 'true' }))).toBe('4h|Explosão|c5|v3|f40|r|1a');
+    expect(buildFilterName(normalizeOptions({ firstOfMove: 'true', minVolume24h: '500000' }))).toBe('4h|Explosão|c5|v3|f40|r|1a|vol0.5M');
+    expect(buildFilterName(normalizeOptions({ minVolume24h: '1000000' }))).toBe('4h|Explosão|c5|v3|f40|r');
   });
 });
