@@ -158,7 +158,7 @@ const ICHIMOKU_LINE_LABELS = {
 // Painel abre SÓ com a Explosão de Alta (volume ≥ 1,5× · corpo ≥ 5% · candle atual). Os Momentum
 // RSI Geral/Exclusivo continuam nos formulários prontos (QUICK_PRESETS).
 const DEFAULT_INDICATORS = [
-  { type: 'bullishBreakout', intervals: ['4h'], minBodyPct: '5', minVolumeRatio: '1.5', closedOnly: false },
+  { type: 'bullishBreakout', intervals: ['4h'], minBodyPct: '5', minVolumeRatio: '1.5', closedOnly: false, firstOfMove: true },
 ];
 
 /** Formulários prontos — cada um substitui a lista de indicadores por uma única busca pré-configurada. */
@@ -255,7 +255,8 @@ function buildSummary(value, t) {
   }
   if (type === 'bullishBreakout') {
     const candle = value.closedOnly ? t('ind.bb_out_candle_closed') : t('ind.bb_out_candle_current');
-    return `${t('ind.bullish_breakout')} — corpo ≥ ${value.minBodyPct ?? '5'}% · volume ≥ ${value.minVolumeRatio ?? '3'}× · ${candle} · ${ivLabel}`;
+    const first = value.firstOfMove === false ? 'qualquer explosão' : '1ª explosão';
+    return `${t('ind.bullish_breakout')} — corpo ≥ ${value.minBodyPct ?? '5'}% · volume ≥ ${value.minVolumeRatio ?? '3'}× · ${candle} · ${first} · ${ivLabel}`;
   }
   if (type === 'movingAverage') {
     const len = value.length ?? '200';
@@ -674,6 +675,12 @@ function IndicatorRow({ value, onChange }) {
               title={t('ind.bb_out_candle_tip')}>
               <option value="current">{t('ind.bb_out_candle_current')}</option>
               <option value="closed">{t('ind.bb_out_candle_closed')}</option>
+            </select>
+            <select className={sel} value={value.firstOfMove === false ? 'any' : 'first'}
+              onChange={(e) => onChange({ ...value, firstOfMove: e.target.value === 'first' })}
+              title="1ª explosão: igual ao bot price action — fica de fora a moeda que já explodiu em algum dos 20 candles anteriores (2ª/3ª alta seguida)">
+              <option value="first">1ª explosão</option>
+              <option value="any">Qualquer explosão</option>
             </select>
           </>
         )}
@@ -1794,6 +1801,8 @@ export default function IndicatorPanel({ open, onToggle }) {
         for (const interval of ind.intervals) {
           const filter = await fetchBullishBreakoutFilter({
             interval, minBodyPct: ind.minBodyPct ?? '5', minVolumeRatio: ind.minVolumeRatio ?? '3', closedOnly: !!ind.closedOnly,
+            // Padrão = bot price action: só a 1ª explosão do movimento (firstOfMove).
+            firstOfMove: ind.firstOfMove !== false,
           });
           console.log('[frontend-react] explosão de alta:', filter.name, '—', filter.list.length, 'moedas');
           addFilter({ name: filter.name, list: filter.list, meta: filter.meta?.breakouts, scannedAt: filter.meta?.scannedAt });

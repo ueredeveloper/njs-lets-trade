@@ -380,7 +380,8 @@ espelho `withMinStop` em `utils/manualOco.js`; cartão avisa quando a linha est�
 Scanner `backend/market/bullishBreakoutScanner.js` (rota `GET /services/bullish-breakout`, indicador
 **"Explosão de Alta"** em Analisar Indicadores, filtro `4h|Explosão|c5|v3|f40|r`): candle único com corpo
 verde ≥ X%, volume ≥ N× a média dos 20 anteriores, fechamento acima de 40% do range e rompendo a máxima
-desses 20. OCO do gráfico ganhou o modo **"no fechamento do candle"** (`entry_kind 'candle_close'`,
+desses 20. No painel o padrão é **só a 1ª explosão** (`firstOfMove`, igual ao bot; filtro termina em `|1a`;
+seletor "Qualquer explosão" desliga). OCO do gráfico ganhou o modo **"no fechamento do candle"** (`entry_kind 'candle_close'`,
 coluna `close_condition`, migração `supabase/add-manual-oco-close-condition.sql`): o watcher espera o
 candle fechar e NÃO compra se fechou num padrão de baixa (`bearishClosePattern` em
 `backend/bot/shared/candleCloseCondition.js`: shooting star, inverted hammer, gravestone doji, hanging man
