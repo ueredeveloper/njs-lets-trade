@@ -380,6 +380,17 @@ router.post('/manual-oco-orders', async (req, res) => {
     } catch (err) {
       return res.status(400).json({ error: err.message });
     }
+    // entryDiscount { discountPct, waitHours } (opcional): no fechamento NÃO compra a mercado — arma
+    // a entrada X% abaixo do fechamento, válida por waitHours (mesma regra da Explosão automática,
+    // manualOcoWatcher.js#processCandleClose). discountPct 0/ausente = compra a mercado como antes.
+    const disc = closeCondition.entryDiscount;
+    const discountPct = Number(disc?.discountPct);
+    if (disc && discountPct > 0) {
+      const waitHours = disc.waitHours == null ? 12 : Number(disc.waitHours);
+      if (!(discountPct <= 20)) return res.status(400).json({ error: 'desconto da entrada deve ficar entre 0 e 20%' });
+      if (!(waitHours >= 1 && waitHours <= 48)) return res.status(400).json({ error: 'espera da entrada deve ficar entre 1 e 48 h' });
+      close_condition.entryDiscount = { discountPct, waitHours };
+    }
   }
 
   const { data, error } = await supabase.from(MANUAL_OCO_TABLE).insert({

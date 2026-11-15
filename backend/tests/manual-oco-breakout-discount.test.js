@@ -108,3 +108,41 @@ test('ordem sem entryDiscount (antiga) continua comprando a mercado no fechament
   expect(adapter.marketBuy).toHaveBeenCalledWith(25);
   Date.now.mockRestore();
 });
+
+// OCO manual do gráfico ("no fechamento" + "X% abaixo do fechamento"): sem source/exit/confirmBreakout.
+function manualRow(extra = {}) {
+  return {
+    id: 2, symbol: 'YUSDT', exchange: 'binance', usdt: 40, status: 'OPEN', entry_kind: 'candle_close',
+    entry_price: 100, target_price: 115, stop_price: 85, // desenhado: +15% / −15%
+    close_condition: {
+      interval: '4h', candleOpenTime: OPEN_T, closeAt: OPEN_T + H4,
+      entryDiscount: { discountPct: 3, waitHours: 12 },
+    },
+    ...extra,
+  };
+}
+
+test('OCO manual com desconto: arma 3% abaixo do fechamento mantendo os % desenhados', async () => {
+  jest.spyOn(Date, 'now').mockReturnValue(OPEN_T + H4 + 60_000);
+  fetchClosedCandle.mockResolvedValue({ open: 180, high: 205, low: 178, close: 200 });
+  await processRow(manualRow(), log);
+  expect(fetchKlines).not.toHaveBeenCalled(); // sem confirmBreakout
+  expect(adapter.marketBuy).not.toHaveBeenCalled();
+  const patch = sbReq.mock.calls.find(([m]) => m === 'PATCH')[2];
+  expect(patch.entry_kind).toBe('limit');
+  expect(patch.entry_price).toBeCloseTo(194);
+  expect(patch.target_price).toBeCloseTo(223.1); // 194 × 1,15 — não o +10% do automático
+  expect(patch.stop_price).toBeCloseTo(164.9); // 194 × 0,85 (já além do mínimo de 10%)
+  expect(patch.close_condition.limitExpiresAt).toBe(OPEN_T + H4 + 12 * 3600_000);
+  Date.now.mockRestore();
+});
+
+test('OCO manual com stop desenhado curto: stop respeita o mínimo de 10% sobre a limite', async () => {
+  jest.spyOn(Date, 'now').mockReturnValue(OPEN_T + H4 + 60_000);
+  fetchClosedCandle.mockResolvedValue({ open: 90, high: 101, low: 89, close: 100 });
+  await processRow(manualRow({ stop_price: 97 }), log);
+  const patch = sbReq.mock.calls.find(([m]) => m === 'PATCH')[2];
+  expect(patch.entry_price).toBeCloseTo(97);
+  expect(patch.stop_price).toBeCloseTo(87.3); // 97 × 0,90
+  Date.now.mockRestore();
+});

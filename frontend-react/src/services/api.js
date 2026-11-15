@@ -2202,7 +2202,9 @@ export async function buyWithManualOco({ symbol, exchange, usdt, targetPrice, st
 /** OCO manual com entrada fixa (linha amarela arrastada) — só grava o pedido; o bot RSI Momentum
  *  arma a compra (limite abaixo do preço / rompimento acima) e coloca a OCO no fill. */
 /** closeCondition { interval } (opcional): compra a mercado só depois que o candle aberto agora
- *  FECHAR sem padrão de baixa — ver backend/bot/shared/candleCloseCondition.js. */
+ *  FECHAR sem padrão de baixa — ver backend/bot/shared/candleCloseCondition.js.
+ *  closeCondition.entryDiscount { discountPct, waitHours } (opcional): em vez de comprar no
+ *  fechamento, arma a entrada discountPct% abaixo dele, válida por waitHours. */
 export async function createManualOcoOrder({ symbol, exchange, usdt, entryPrice, targetPrice, stopPrice, closeCondition }) {
   const res = await fetch('/services/manual-oco-orders', {
     method: 'POST',

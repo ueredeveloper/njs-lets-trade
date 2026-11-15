@@ -6,6 +6,22 @@ import { MANUAL_OCO_MIN_STOP_PCT, withMinStop } from '../utils/manualOco';
 const USDT_STORAGE_KEY = 'chartOcoUsdtV3';
 const DEFAULT_USDT = 40;
 
+// Compra no fechamento com desconto: em vez de comprar a mercado quando o candle fecha, o bot arma
+// a entrada X% ABAIXO do fechamento e espera o preço cair até ela por CLOSE_WAIT_HOURS — mesma regra
+// da Explosão de Alta automática (backend/bot/breakout-auto/bullishBreakoutAuto.js, CONFIG.entry).
+const CLOSE_DISCOUNT_STORAGE_KEY = 'chartOcoCloseDiscountPct';
+const DEFAULT_CLOSE_DISCOUNT_PCT = 5;
+const CLOSE_DISCOUNT_OPTIONS = [0, 1, 2, 3, 4, 5, 7, 10];
+const CLOSE_WAIT_HOURS = 12;
+
+function readStoredDiscount() {
+  try {
+    const raw = localStorage.getItem(CLOSE_DISCOUNT_STORAGE_KEY);
+    const v = raw == null ? NaN : Number(raw);
+    return CLOSE_DISCOUNT_OPTIONS.includes(v) ? v : DEFAULT_CLOSE_DISCOUNT_PCT;
+  } catch { return DEFAULT_CLOSE_DISCOUNT_PCT; }
+}
+
 function fmtPrice(p) {
   const n = Number(p);
   if (!Number.isFinite(n)) return '—';
@@ -104,6 +120,7 @@ export default function ChartOcoTool({ symbol, exchange, ocoDraft, marketPrice, 
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState(null); // { ok: bool, text }
   const [closeMode, setCloseMode] = useState(''); // '' = compra normal · 'close' = no fechamento do candle
+  const [closeDiscount, setCloseDiscount] = useState(readStoredDiscount); // % abaixo do fechamento (0 = a mercado)
   // re-render a cada 30s pra hora do fechamento virar sozinha quando o candle fecha
   const [nowMs, setNowMs] = useState(Date.now);
   useEffect(() => {
@@ -141,6 +158,11 @@ export default function ChartOcoTool({ symbol, exchange, ocoDraft, marketPrice, 
   const closeAt = candleCloseAt(interval, exchange, nowMs);
   const buyOnClose = closeMode === 'close' && !!closeAt;
 
+  const saveDiscount = (v) => {
+    setCloseDiscount(v);
+    try { localStorage.setItem(CLOSE_DISCOUNT_STORAGE_KEY, String(v)); } catch { /* sem storage */ }
+  };
+
   const saveUsdt = (v) => {
     setUsdt(v);
     try { if (Number(v) > 0) localStorage.setItem(USDT_STORAGE_KEY, String(v)); } catch { /* sem storage */ }
@@ -174,17 +196,29 @@ export default function ChartOcoTool({ symbol, exchange, ocoDraft, marketPrice, 
 
   const handleCloseOrder = async () => {
     if (!valid || busy || !buyOnClose) return;
-    const how = `espera o candle ${interval} fechar às ${fmtBrtTime(closeAt)} e compra a MERCADO se ele não fechar num padrão de baixa`
-      + ' (shooting star, inverted hammer, gravestone doji, hanging man, bearish engulfing, tweezer top). Padrão de baixa → não compra.';
+    const buyTxt = closeDiscount > 0
+      ? `arma a entrada ${closeDiscount}% ABAIXO do fechamento (compra a mercado se o preço cair até ela em até ${CLOSE_WAIT_HOURS}h; senão expira sem comprar)`
+      : 'compra a MERCADO';
+    const how = `espera o candle ${interval} fechar às ${fmtBrtTime(closeAt)} e, se ele não fechar num padrão de baixa, ${buyTxt}`
+      + ' (padrões: shooting star, inverted hammer, gravestone doji, hanging man, bearish engulfing, tweezer top). Padrão de baixa → não compra.';
     if (!window.confirm(`Agendar compra de ${usdtNum} USDT em ${symbol} (${exchangeName})?\n\n${how}\n${summary()}\n\nO bot RSI Momentum precisa estar rodando. Alvo e stop ficam nos mesmos % sobre o preço que for realmente comprado.`)) return;
     setBusy(true);
     setStatus(null);
     try {
       const r = await createManualOcoOrder({
         symbol, exchange, usdt: usdtNum, entryPrice: entry, targetPrice: target, stopPrice: orderStop,
-        closeCondition: { interval },
+        closeCondition: {
+          interval,
+          ...(closeDiscount > 0 && { entryDiscount: { discountPct: closeDiscount, waitHours: CLOSE_WAIT_HOURS } }),
+        },
       });
-      setStatus({ ok: true, text: `Ordem #${r.id} agendada — às ${fmtBrtTime(r.close_condition?.closeAt ?? closeAt)} compra a mercado se o candle não fechar em padrão de baixa.` });
+      const at = fmtBrtTime(r.close_condition?.closeAt ?? closeAt);
+      setStatus({
+        ok: true,
+        text: closeDiscount > 0
+          ? `Ordem #${r.id} agendada — às ${at}, se o candle não fechar em padrão de baixa, arma a entrada ${closeDiscount}% abaixo do fechamento (${CLOSE_WAIT_HOURS}h).`
+          : `Ordem #${r.id} agendada — às ${at} compra a mercado se o candle não fechar em padrão de baixa.`,
+      });
     } catch (err) {
       setStatus({ ok: false, text: err.message });
     } finally {
@@ -347,6 +381,23 @@ export default function ChartOcoTool({ symbol, exchange, ocoDraft, marketPrice, 
           )}
         </select>
       </div>
+      {buyOnClose && (
+        <div className="mt-1 flex items-center gap-1 text-[10px]">
+          <span className="text-slate-400">Entrada</span>
+          <select
+            value={closeDiscount}
+            onChange={(e) => saveDiscount(Number(e.target.value))}
+            title={`Depois do fechamento: arma a compra X% abaixo do preço de fechamento e espera até ${CLOSE_WAIT_HOURS}h o preço cair até ela (igual à Explosão automática). Alvo e stop mantêm os % desenhados, sobre o preço comprado.`}
+            className="flex-1 bg-black/40 border border-slate-600 rounded px-1"
+          >
+            {CLOSE_DISCOUNT_OPTIONS.map((p) => (
+              <option key={p} value={p}>
+                {p === 0 ? 'no fechamento (a mercado)' : `${p}% abaixo do fechamento · até ${CLOSE_WAIT_HOURS}h${p === DEFAULT_CLOSE_DISCOUNT_PCT ? ' (padrão)' : ''}`}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
       {buyOnClose ? (
         <button
           onClick={handleCloseOrder}
@@ -354,7 +405,9 @@ export default function ChartOcoTool({ symbol, exchange, ocoDraft, marketPrice, 
           title={REJECTION_TIP}
           className="mt-2 w-full rounded bg-amber-500 py-1 font-bold text-black hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-40"
         >
-          {busy ? 'Enviando…' : `Comprar no fechamento ${fmtBrtTime(closeAt)}`}
+          {busy ? 'Enviando…' : closeDiscount > 0
+            ? `Fechamento ${fmtBrtTime(closeAt)} → entrada −${closeDiscount}%`
+            : `Comprar no fechamento ${fmtBrtTime(closeAt)}`}
         </button>
       ) : entryLocked ? (
         <button

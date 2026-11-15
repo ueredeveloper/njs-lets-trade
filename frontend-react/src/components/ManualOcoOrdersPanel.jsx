@@ -33,7 +33,14 @@ function candleCloseLabel(o) {
   const at = cc.closeAt ? new Date(cc.closeAt).toLocaleTimeString('pt-BR', {
     timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit',
   }) : '?';
-  return `fecha ${cc.interval ?? ''} ${at} sem padrão de baixa`;
+  const disc = Number(cc.entryDiscount?.discountPct);
+  return `fecha ${cc.interval ?? ''} ${at} sem padrão de baixa${disc > 0 ? ` → entrada −${disc}%` : ''}`;
+}
+
+// Entrada com desconto já armada (fechou sem padrão de baixa): prazo da limite em BRT.
+function limitExpiryLabel(o) {
+  const ms = Number(o.close_condition?.limitExpiresAt);
+  return ms > 0 ? ` · até ${fmtBuyTime(new Date(ms).toISOString())}` : '';
 }
 
 function fmtPct(base, price) {
@@ -112,7 +119,7 @@ export default function ManualOcoOrdersPanel({ orders, marketPrice, onChanged })
               </div>
             ) : (
               <div className="text-yellow-300">
-                {o.entry_kind === 'candle_close' ? candleCloseLabel(o) : <>{o.entry_kind === 'trigger' ? 'rompimento' : o.buy_handle ? 'limite' : 'na queda'} {fmtPrice(entry)}</>}
+                {o.entry_kind === 'candle_close' ? candleCloseLabel(o) : <>{o.entry_kind === 'trigger' ? 'rompimento' : o.buy_handle ? 'limite' : 'na queda'} {fmtPrice(entry)}{limitExpiryLabel(o)}</>}
                 {marketPrice && entry > 0 && <span className="text-slate-400"> · preço {fmtPct(marketPrice, entry)}</span>}
               </div>
             )}
