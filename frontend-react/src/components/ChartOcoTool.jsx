@@ -6,21 +6,16 @@ import { MANUAL_OCO_MIN_STOP_PCT, withMinStop } from '../utils/manualOco';
 const USDT_STORAGE_KEY = 'chartOcoUsdtV3';
 const DEFAULT_USDT = 40;
 
-// Compra no fechamento com desconto: em vez de comprar a mercado quando o candle fecha, o bot arma
-// a entrada X% ABAIXO do fechamento e espera o preço cair até ela por CLOSE_WAIT_HOURS — mesma regra
-// da Explosão de Alta automática (backend/bot/breakout-auto/bullishBreakoutAuto.js, CONFIG.entry).
-const CLOSE_DISCOUNT_STORAGE_KEY = 'chartOcoCloseDiscountPct';
-const DEFAULT_CLOSE_DISCOUNT_PCT = 5;
+// Compra no fechamento = mesmo padrão da Explosão de Alta automática (v1.186.0,
+// backend/bot/breakout-auto/bullishBreakoutAuto.js): ao escolher "no fechamento", o seletor de
+// entrada volta pra "a mercado" e alvo/stop vão pra +CLOSE_TARGET_PCT% / −CLOSE_STOP_PCT% da entrada
+// (dá pra mudar depois). Opcional: arma a entrada X% ABAIXO do fechamento e espera o preço cair até
+// ela por CLOSE_WAIT_HOURS. Sem localStorage: toda escolha de "no fechamento" começa no padrão.
+const DEFAULT_CLOSE_DISCOUNT_PCT = 0;
 const CLOSE_DISCOUNT_OPTIONS = [0, 1, 2, 3, 4, 5, 7, 10];
 const CLOSE_WAIT_HOURS = 12;
-
-function readStoredDiscount() {
-  try {
-    const raw = localStorage.getItem(CLOSE_DISCOUNT_STORAGE_KEY);
-    const v = raw == null ? NaN : Number(raw);
-    return CLOSE_DISCOUNT_OPTIONS.includes(v) ? v : DEFAULT_CLOSE_DISCOUNT_PCT;
-  } catch { return DEFAULT_CLOSE_DISCOUNT_PCT; }
-}
+const CLOSE_TARGET_PCT = 15;
+const CLOSE_STOP_PCT = 15;
 
 function fmtPrice(p) {
   const n = Number(p);
@@ -120,7 +115,7 @@ export default function ChartOcoTool({ symbol, exchange, ocoDraft, marketPrice, 
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState(null); // { ok: bool, text }
   const [closeMode, setCloseMode] = useState(''); // '' = compra normal · 'close' = no fechamento do candle
-  const [closeDiscount, setCloseDiscount] = useState(readStoredDiscount); // % abaixo do fechamento (0 = a mercado)
+  const [closeDiscount, setCloseDiscount] = useState(DEFAULT_CLOSE_DISCOUNT_PCT); // % abaixo do fechamento (0 = a mercado)
   // re-render a cada 30s pra hora do fechamento virar sozinha quando o candle fecha
   const [nowMs, setNowMs] = useState(Date.now);
   useEffect(() => {
@@ -158,9 +153,14 @@ export default function ChartOcoTool({ symbol, exchange, ocoDraft, marketPrice, 
   const closeAt = candleCloseAt(interval, exchange, nowMs);
   const buyOnClose = closeMode === 'close' && !!closeAt;
 
-  const saveDiscount = (v) => {
-    setCloseDiscount(v);
-    try { localStorage.setItem(CLOSE_DISCOUNT_STORAGE_KEY, String(v)); } catch { /* sem storage */ }
+  const saveDiscount = (v) => setCloseDiscount(v);
+
+  // "No fechamento" = padrão do bot: entrada a mercado, alvo +15% / stop −15% da entrada.
+  const selectCloseMode = (v) => {
+    setCloseMode(v);
+    if (v !== 'close') return;
+    setCloseDiscount(DEFAULT_CLOSE_DISCOUNT_PCT);
+    onChange({ ...ocoDraft, target: entry * (1 + CLOSE_TARGET_PCT / 100), stop: entry * (1 - CLOSE_STOP_PCT / 100) });
   };
 
   const saveUsdt = (v) => {
@@ -368,7 +368,7 @@ export default function ChartOcoTool({ symbol, exchange, ocoDraft, marketPrice, 
         <span className="text-slate-400">Compra</span>
         <select
           value={closeMode}
-          onChange={(e) => setCloseMode(e.target.value)}
+          onChange={(e) => selectCloseMode(e.target.value)}
           disabled={!closeAt}
           title={closeAt
             ? `Espera o candle ${interval} fechar (${fmtBrtTime(closeAt)}) antes de comprar. ${REJECTION_TIP}`
@@ -387,12 +387,12 @@ export default function ChartOcoTool({ symbol, exchange, ocoDraft, marketPrice, 
           <select
             value={closeDiscount}
             onChange={(e) => saveDiscount(Number(e.target.value))}
-            title={`Depois do fechamento: arma a compra X% abaixo do preço de fechamento e espera até ${CLOSE_WAIT_HOURS}h o preço cair até ela (igual à Explosão automática). Alvo e stop mantêm os % desenhados, sobre o preço comprado.`}
+            title={`Padrão: compra a mercado quando o candle fecha. Opcional: arma a compra X% abaixo do preço de fechamento e espera até ${CLOSE_WAIT_HOURS}h o preço cair até ela. Alvo e stop mantêm os % desenhados, sobre o preço comprado.`}
             className="flex-1 bg-black/40 border border-slate-600 rounded px-1"
           >
             {CLOSE_DISCOUNT_OPTIONS.map((p) => (
               <option key={p} value={p}>
-                {p === 0 ? 'no fechamento (a mercado)' : `${p}% abaixo do fechamento · até ${CLOSE_WAIT_HOURS}h${p === DEFAULT_CLOSE_DISCOUNT_PCT ? ' (padrão)' : ''}`}
+                {p === 0 ? `no fechamento (a mercado)${p === DEFAULT_CLOSE_DISCOUNT_PCT ? ' (padrão)' : ''}` : `${p}% abaixo do fechamento · até ${CLOSE_WAIT_HOURS}h${p === DEFAULT_CLOSE_DISCOUNT_PCT ? ' (padrão)' : ''}`}
               </option>
             ))}
           </select>

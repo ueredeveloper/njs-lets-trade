@@ -390,11 +390,14 @@ depois de alta, bearish engulfing, tweezer top); senão compra a mercado + OCO r
 `BULLISH_BREAKOUT_AUTO=off` desliga): a cada 15 min varre o 4h; moeda nova → favorito Binance + ordem
 `candle_close` (corpo ≥ 5%, volume 24h ≥ 1M — só na varredura, não no fechamento; 25 USDT, máx. 3 vivas, 1 por moeda por candle; **só a 1ª
 explosão do movimento** — `firstOfMove`: nenhum dos 20 candles anteriores pode ter sido explosão). No fechamento ainda reconfere a explosão
-no candle fechado (`close_condition.confirmBreakout`) e **não compra no fechamento** (v1.181.0,
-`close_condition.entryDiscount` = CONFIG.entry `{ discountPct: 5, waitHours: 12 }`): a ordem vira
-`entry_kind 'limit'` 5% abaixo do fechamento com `limitExpiresAt` (+12h → CLOSED "expirou") e o candle
-fechado em `exitCandle`; ordens antigas sem `entryDiscount` seguem comprando a mercado. A OCO usa `close_condition.exit`: alvo +10%,
-stop na metade do candle fechado `(máx+mín)/2`, no mínimo −10%. O watcher ignora `entry_kind`
+no candle fechado (`close_condition.confirmBreakout`) e **compra a mercado no fechamento** (v1.186.0 —
+`CONFIG.entry = null`; de v1.181.0 a v1.185.0 armava a entrada 5% abaixo, `close_condition.entryDiscount`
+`{ discountPct: 5, waitHours: 12 }` → `entry_kind 'limit'` com `limitExpiresAt` +12h e o candle fechado em
+`exitCandle`; o watcher ainda honra isso nas ordens já gravadas). A OCO usa `close_condition.exit`: alvo +15%,
+stop −15% (ou a metade do candle fechado `(máx+mín)/2`, se mais longe) — era +10%/−10% até v1.185.0. O OCO
+do gráfico: o padrão segue "Compra agora" (rascunho na sugestão pelos candles); ao escolher **"no fechamento
+do candle"** o cartão assume o padrão do bot — entrada **a mercado** no seletor (desconto opcional, não
+lembrado) e alvo +15% / stop −15% da entrada (`CLOSE_TARGET_PCT`/`CLOSE_STOP_PCT` em `ChartOcoTool.jsx`). O watcher ignora `entry_kind`
 desconhecido (bot desatualizado comprava `candle_close` na hora — caso ADX #141).
 **Seta do sinal no favorito B (v1.180.0):** clicar numa moeda do favorito Binance desenha a seta amarela
 no candle 4h de cada Explosão automática, com ou sem entrada — `GET /services/bullish-breakout/signals?symbol=`
