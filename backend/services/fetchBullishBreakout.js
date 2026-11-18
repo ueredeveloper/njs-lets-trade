@@ -5,6 +5,7 @@ const supabase = require('../supabase/client');
 const fetchKlines = require('../binance/fetchKlines');
 const { getBullishBreakouts, findBreakoutSignals, normalizeOptions } = require('../market/bullishBreakoutScanner');
 const { CONFIG: AUTO_CONFIG, SOURCE: AUTO_SOURCE } = require('../bot/breakout-auto/bullishBreakoutAuto');
+const { bullishClosePattern, intervalMs } = require('../bot/shared/candleCloseCondition');
 
 // GET /services/bullish-breakout?interval=4h&minBodyPct=5&minVolumeRatio=3&minClosePos=0.4
 //   &lookback=20&withinCandles=1&requireBreakout=true&closedOnly=false&minVolume24h=1000000
@@ -42,23 +43,43 @@ router.get('/bullish-breakout/signals', async (req, res) => {
     ]);
     const orders = ordersRes.error ? [] : (ordersRes.data ?? []);
 
+    // Padrão de alta do candle (v1.187.0) — o mesmo bullishClosePattern que o watcher usa no
+    // fechamento; no candle ainda aberto não vale (pode mudar até fechar).
+    const num = candles.map((k) => ({
+      openTime: Number(k.openTime), open: Number(k.open), high: Number(k.high), low: Number(k.low), close: Number(k.close),
+    }));
+    const ivMs = intervalMs(opts.interval);
+    const idxByTime = new Map(num.map((k, i) => [k.openTime, i]));
+    const patternAt = (t) => {
+      const i = idxByTime.get(t);
+      return i == null ? null : bullishClosePattern(num[i], num.slice(Math.max(0, i - 4), i));
+    };
+
     const byCandle = new Map();
     for (const s of findBreakoutSignals(candles, opts)) {
       byCandle.set(s.openTime, {
         candleOpenTime: s.openTime, closed: s.closed, price: s.close,
         bodyPct: s.bodyPct, volumeRatio: s.volumeRatio, order: null,
+        bullishPattern: s.closed ? patternAt(s.openTime) : null, authorizedBy: s.closed ? 'body' : null,
       });
     }
     for (const o of orders) {
       const t = Number(o.close_condition?.candleOpenTime);
       if (!Number.isFinite(t)) continue;
       const cur = byCandle.get(t) ?? {
-        candleOpenTime: t, closed: true, price: null,
+        candleOpenTime: t, closed: true, price: num[idxByTime.get(t)]?.close ?? null,
         bodyPct: o.close_condition?.detected?.bodyPct ?? null,
         volumeRatio: o.close_condition?.detected?.volumeRatio ?? null,
-        order: null,
+        order: null, bullishPattern: t + ivMs <= Date.now() ? patternAt(t) : null, authorizedBy: null,
       };
       if (!cur.order) {
+        // Registro do fechamento gravado pelo watcher: vale mais que o replay (é o que o bot decidiu).
+        const chk = o.close_condition?.closeCheck;
+        if (chk) {
+          cur.authorizedBy = chk.authorizedBy ?? null;
+          cur.bullishPattern = chk.bullishPattern ?? cur.bullishPattern;
+          if (chk.bodyPct != null) cur.bodyPct = chk.bodyPct;
+        }
         cur.order = {
           id: o.id, status: o.status, error: o.error ?? null, avgPrice: o.fill?.avgPrice ?? null,
           entryKind: o.entry_kind, discountPct: o.close_condition?.entryDiscount?.discountPct ?? null,

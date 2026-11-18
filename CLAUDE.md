@@ -390,7 +390,10 @@ depois de alta, bearish engulfing, tweezer top); senão compra a mercado + OCO r
 `BULLISH_BREAKOUT_AUTO=off` desliga): a cada 15 min varre o 4h; moeda nova → favorito Binance + ordem
 `candle_close` (corpo ≥ 5%, volume 24h ≥ 1M — só na varredura, não no fechamento; 25 USDT, máx. 3 vivas, 1 por moeda por candle; **só a 1ª
 explosão do movimento** — `firstOfMove`: nenhum dos 20 candles anteriores pode ter sido explosão). No fechamento ainda reconfere a explosão
-no candle fechado (`close_condition.confirmBreakout`) e **compra a mercado no fechamento** (v1.186.0 —
+no candle fechado (`close_condition.confirmBreakout`; **v1.187.0:** se o corpo ficou abaixo de 5% mas o candle
+fechou num padrão de ALTA — `bullishClosePattern` em `candleCloseCondition.js`: hammer, bullish engulfing,
+piercing line, morning star, tweezer bottom, bullish marubozu, three white soldiers — reconfere sem o corpo
+mínimo, mantendo volume/fechamento no alto/rompimento) e **compra a mercado no fechamento** (v1.186.0 —
 `CONFIG.entry = null`; de v1.181.0 a v1.185.0 armava a entrada 5% abaixo, `close_condition.entryDiscount`
 `{ discountPct: 5, waitHours: 12 }` → `entry_kind 'limit'` com `limitExpiresAt` +12h e o candle fechado em
 `exitCandle`; o watcher ainda honra isso nas ordens já gravadas). A OCO usa `close_condition.exit`: alvo +15%,
@@ -403,7 +406,10 @@ desconhecido (bot desatualizado comprava `candle_close` na hora — caso ADX #14
 no candle 4h de cada Explosão automática, com ou sem entrada — `GET /services/bullish-breakout/signals?symbol=`
 junta as ordens do automático (`manual_oco_orders`, desfecho pelo status/erro: sem saldo, padrão de baixa…)
 com o replay dos critérios (`findBreakoutSignals`, CONFIG.scan + firstOfMove, sem o volume 24h) nos candles
-fechados — pega também o sinal que nem virou ordem (máx. de ordens vivas, bot parado).
+fechados — pega também o sinal que nem virou ordem (máx. de ordens vivas, bot parado). O rótulo da seta
+mostra o padrão de alta do candle fechado e, quando foi ele que liberou (corpo < 5%), "entrou por Martelo"
+etc. — o watcher grava `close_condition.closeCheck` `{ authorizedBy: 'body'|'pattern'|null, bullishPattern, bodyPct }`
+no fechamento; sem ele (ordens antigas / replay) a rota recalcula o padrão nos candles.
 
 ### Watchlist curada (`rsi_multi_bot_state.curated = true`)
 

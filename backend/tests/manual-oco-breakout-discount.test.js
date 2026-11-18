@@ -146,3 +146,34 @@ test('OCO manual com stop desenhado curto: stop respeita o mínimo de 10% sobre 
   expect(patch.stop_price).toBeCloseTo(87.3); // 97 × 0,90
   Date.now.mockRestore();
 });
+
+describe('Explosão automática: corpo abaixo de 5% mas candle de alta (v1.187.0)', () => {
+  const { evaluateBullishBreakout } = require('../market/bullishBreakoutScanner');
+  const noDiscount = () => { const r = autoRow(); delete r.close_condition.entryDiscount; return r; };
+  // Só passa no critério sem corpo mínimo (o resto da explosão confirmado).
+  beforeEach(() => evaluateBullishBreakout.mockImplementation((_h, o) => (o.minBodyPct === 0 ? { ok: true } : null)));
+  afterAll(() => evaluateBullishBreakout.mockImplementation(() => ({ ok: true })));
+
+  test('marubozu de +3% → compra a mercado', async () => {
+    jest.spyOn(Date, 'now').mockReturnValue(OPEN_T + H4 + 60_000);
+    fetchClosedCandle.mockResolvedValue({ open: 100, high: 103.1, low: 99.95, close: 103, prev: [] });
+    fetchKlines.mockResolvedValue([{ openTime: OPEN_T }]);
+    await processRow(noDiscount(), log);
+    expect(adapter.marketBuy).toHaveBeenCalledWith(25);
+    // grava qual regra autorizou (seta do gráfico mostra "entrou por Marubozu de alta")
+    const patch = sbReq.mock.calls.find(([m, , b]) => m === 'PATCH' && b?.close_condition?.closeCheck)[2];
+    expect(patch.close_condition.closeCheck).toEqual({ authorizedBy: 'pattern', bullishPattern: 'bullish marubozu', bodyPct: 3 });
+    Date.now.mockRestore();
+  });
+
+  test('corpo +3% sem padrão de alta → CLOSED, não compra', async () => {
+    jest.spyOn(Date, 'now').mockReturnValue(OPEN_T + H4 + 60_000);
+    fetchClosedCandle.mockResolvedValue({ open: 100, high: 105, low: 98, close: 103, prev: [] });
+    fetchKlines.mockResolvedValue([{ openTime: OPEN_T }]);
+    await processRow(noDiscount(), log);
+    expect(adapter.marketBuy).not.toHaveBeenCalled();
+    const patch = sbReq.mock.calls.find(([m]) => m === 'PATCH')[2];
+    expect(patch.status).toBe('CLOSED');
+    Date.now.mockRestore();
+  });
+});

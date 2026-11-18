@@ -39,7 +39,7 @@
 const { buildAdapter } = require('../shared/buildAdapter');
 const { sbReq } = require('../shared/supabaseRest');
 const { fetchLivePrice } = require('../shared/livePrice');
-const { fetchClosedCandle, bearishClosePattern, intervalMs } = require('../shared/candleCloseCondition');
+const { fetchClosedCandle, bearishClosePattern, bullishClosePattern, intervalMs } = require('../shared/candleCloseCondition');
 const fetchKlines = require('../../binance/fetchKlines');
 const { evaluateBullishBreakout } = require('../../market/bullishBreakoutScanner');
 const { exitLevels } = require('../breakout-auto/bullishBreakoutAuto');
@@ -203,16 +203,32 @@ async function processCandleClose(row, adapter, log) {
 
   // Ordens da Explosão de Alta automática (breakout-auto/bullishBreakoutAuto.js): o scanner achou a
   // explosão com o candle ABERTO — confere se ela continuou valendo no candle fechado.
+  let bullish = null;
+  // Registro do fechamento (só Explosão automática): qual regra autorizou e o padrão de alta do
+  // candle — a seta do gráfico (GET /bullish-breakout/signals) mostra "entrou por martelo" etc.
+  let closeCheck = null;
   if (cc.confirmBreakout) {
     const opts = { ...cc.confirmBreakout, interval: cc.interval, closedOnly: false };
     const history = (await fetchKlines(row.symbol, cc.interval, opts.lookback + 6))
       .filter((k) => Number(k.openTime) <= cc.candleOpenTime);
-    const confirmed = Number(history[history.length - 1]?.openTime) === cc.candleOpenTime
-      && evaluateBullishBreakout(history, opts);
+    const isCandle = Number(history[history.length - 1]?.openTime) === cc.candleOpenTime;
+    let confirmed = isCandle && evaluateBullishBreakout(history, opts);
+    // v1.187.0: fechou num padrão de ALTA (martelo, engolfo, estrela da manhã…) → o corpo mínimo
+    // (minBodyPct, 5%) deixa de valer; volume, fechamento no alto e rompimento continuam exigidos.
+    if (!confirmed && isCandle) {
+      bullish = bullishClosePattern(candle, candle.prev);
+      confirmed = !!bullish && evaluateBullishBreakout(history, { ...opts, minBodyPct: 0 });
+    }
+    const bodyPct = ((candle.close - candle.open) / candle.open) * 100;
+    const authorizedBy = !confirmed ? null : (bullish ? 'pattern' : 'body');
+    closeCheck = {
+      authorizedBy,
+      bullishPattern: bullish ?? bullishClosePattern(candle, candle.prev),
+      bodyPct: Math.round(bodyPct * 100) / 100,
+    };
     if (!confirmed) {
-      const bodyPct = ((candle.close - candle.open) / candle.open) * 100;
-      const why = `${closeTxt} (corpo ${bodyPct >= 0 ? '+' : ''}${bodyPct.toFixed(2)}%) — a explosão não se confirmou no fechamento`;
-      if (!await patchIf(row, { status: 'CLOSED', error: why })) return;
+      const why = `${closeTxt} (corpo ${bodyPct >= 0 ? '+' : ''}${bodyPct.toFixed(2)}%${bullish ? `, ${bullish}` : ''}) — a explosão não se confirmou no fechamento`;
+      if (!await patchIf(row, { status: 'CLOSED', error: why, close_condition: { ...cc, closeCheck } })) return;
       log(`⏹️  [OCO manual] ${tag}: ${why} — não comprou`);
       notify(`⏹️ Explosão de Alta ${row.symbol}: ${why} — NÃO comprou.`, log);
       return;
@@ -230,7 +246,7 @@ async function processCandleClose(row, adapter, log) {
     const lv = discountLevels(row, limitPrice, exitCandle);
     const ok = await patchIf(row, {
       entry_kind: 'limit', entry_price: limitPrice, target_price: lv.target, stop_price: lv.stop,
-      close_condition: { ...cc, exitCandle, limitExpiresAt: expiresAt },
+      close_condition: { ...cc, exitCandle, limitExpiresAt: expiresAt, ...(closeCheck && { closeCheck }) },
     });
     if (!ok) return;
     const label = cc.source ? 'Explosão de Alta' : 'OCO manual';
@@ -240,8 +256,12 @@ async function processCandleClose(row, adapter, log) {
     return;
   }
 
+  if (closeCheck) {
+    // Status OPEN → o próprio PATCH condicional evita gravar por cima de um cancelamento no meio.
+    if (!await patchIf(row, { close_condition: { ...cc, closeCheck } })) return;
+  }
   const usdt = Number(row.usdt);
-  log(`✅ [OCO manual] ${tag}: ${closeTxt}, sem padrão de baixa — comprando ${usdt} USDT a mercado`);
+  log(`✅ [OCO manual] ${tag}: ${closeTxt}, sem padrão de baixa${bullish ? ` — fechou em ${bullish} (corpo < mínimo, autorizado pelo padrão de alta)` : ''} — comprando ${usdt} USDT a mercado`);
   let fill;
   try {
     fill = await adapter.marketBuy(usdt);

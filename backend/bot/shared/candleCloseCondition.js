@@ -102,6 +102,90 @@ function bearishClosePattern(candle, prev = []) {
     ?? (tweezerTop(candle, p) ? 'tweezer top' : null);
 }
 
+// ─── Padrões de ALTA (Explosão automática, v1.187.0) ────────────────────────────────────────────
+// Candle fechado num destes desenhos autoriza a entrada mesmo com corpo abaixo do mínimo do scanner
+// (minBodyPct). Rodam DEPOIS de bearishClosePattern — um candle de baixa nunca chega aqui (ex.: o
+// martelo depois de alta já foi barrado como hanging man). Inverted hammer fica de fora (é barrado).
+
+const bodyOf = (c) => Math.abs(c.close - c.open);
+const rangeOf = (c) => c.high - c.low;
+
+/** Martelo: o mesmo desenho do hanging man (corpo em cima, pavio inferior longo), sem alta antes. */
+function hammer(c, prev) {
+  const range = rangeOf(c);
+  if (!(range > 0) || priorUptrend(prev)) return false;
+  const body = bodyOf(c);
+  const lower = Math.min(c.open, c.close) - c.low;
+  const upper = c.high - Math.max(c.open, c.close);
+  return lower >= 2 * body && lower >= 0.6 * range && upper <= 0.1 * range;
+}
+
+/** Bullish engulfing: anterior vermelho, este verde e o corpo deste cobre o corpo inteiro do anterior. */
+function bullishEngulfing(c, p) {
+  return !!p && isRed(p) && isGreen(c) && c.open <= p.close && c.close >= p.open;
+}
+
+/** Piercing line: anterior vermelho, este verde abre no/abaixo do fechamento dele e fecha acima do
+ *  meio do corpo dele, sem passar da abertura (aí já seria engolfo). */
+function piercingLine(c, p) {
+  if (!p || !isRed(p) || !isGreen(c)) return false;
+  const mid = (p.open + p.close) / 2;
+  return c.open <= p.close && c.close > mid && c.close < p.open;
+}
+
+/** Morning star: vermelho forte (corpo >= 50% do range), candle pequeno (corpo <= 30% do 1º) e um
+ *  verde fechando acima do meio do corpo do 1º. */
+function morningStar(c, prev) {
+  const p2 = prev[prev.length - 2];
+  const p1 = prev[prev.length - 1];
+  if (!p2 || !p1 || !isRed(p2) || !isGreen(c)) return false;
+  const b2 = bodyOf(p2);
+  if (!(rangeOf(p2) > 0) || b2 < 0.5 * rangeOf(p2)) return false;
+  return bodyOf(p1) <= 0.3 * b2 && c.close > (p2.open + p2.close) / 2;
+}
+
+/** Tweezer bottom: anterior vermelho, este verde, mínimas "iguais" (mesma tolerância do tweezer top). */
+function tweezerBottom(c, p) {
+  return !!p && isRed(p) && isGreen(c) && Math.abs(c.low - p.low) <= TWEEZER_HIGH_TOL * Math.max(c.low, p.low);
+}
+
+/** Marubozu de alta: verde com corpo >= 90% do range (quase sem pavio). */
+function bullishMarubozu(c) {
+  const range = rangeOf(c);
+  return range > 0 && isGreen(c) && bodyOf(c) >= 0.9 * range;
+}
+
+/** Three white soldiers: 3 verdes, cada um fecha acima do anterior, abre dentro do corpo do anterior
+ *  e fecha nos 30% de cima do próprio range. */
+function threeWhiteSoldiers(c, prev) {
+  const p2 = prev[prev.length - 2];
+  const p1 = prev[prev.length - 1];
+  if (!p2 || !p1) return false;
+  const trio = [p2, p1, c];
+  if (!trio.every((k) => isGreen(k) && rangeOf(k) > 0 && (k.close - k.low) / rangeOf(k) >= 0.7)) return false;
+  return p1.close > p2.close && c.close > p1.close
+    && p1.open >= p2.open && p1.open <= p2.close
+    && c.open >= p1.open && c.open <= p1.close;
+}
+
+/**
+ * Padrão de ALTA no candle que acabou de fechar.
+ * @param {{open,high,low,close}} candle
+ * @param {Array<{open,high,low,close}>} prev  candles ANTERIORES (ascendentes), pode ser vazio
+ * @returns {string|null} nome do padrão, ou null
+ */
+function bullishClosePattern(candle, prev = []) {
+  const p = prev[prev.length - 1];
+  if (hammer(candle, prev)) return 'hammer';
+  if (morningStar(candle, prev)) return 'morning star';
+  if (threeWhiteSoldiers(candle, prev)) return 'three white soldiers';
+  if (bullishEngulfing(candle, p)) return 'bullish engulfing';
+  if (piercingLine(candle, p)) return 'piercing line';
+  if (tweezerBottom(candle, p)) return 'tweezer bottom';
+  if (bullishMarubozu(candle)) return 'bullish marubozu';
+  return null;
+}
+
 /** Candle FECHADO que abriu em `openTime` + `prev` (até 4 anteriores), ou null se não está entre
  *  os últimos candles (bot ficou fora tempo demais) ou ainda não fechou. */
 async function fetchClosedCandle(exchange, symbol, interval, openTime, nowMs = Date.now()) {
@@ -119,5 +203,5 @@ async function fetchClosedCandle(exchange, symbol, interval, openTime, nowMs = D
 }
 
 module.exports = {
-  buildCloseCondition, fetchClosedCandle, upperWickRejection, bearishClosePattern, intervalMs, BINANCE_INTERVALS, GATE_INTERVALS,
+  buildCloseCondition, fetchClosedCandle, upperWickRejection, bearishClosePattern, bullishClosePattern, intervalMs, BINANCE_INTERVALS, GATE_INTERVALS,
 };

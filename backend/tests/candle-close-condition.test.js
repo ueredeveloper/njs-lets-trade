@@ -83,3 +83,46 @@ describe('buildCloseCondition', () => {
     expect(() => buildCloseCondition({ exchange: 'binance', interval: '1w' })).toThrow(/não suportado/);
   });
 });
+
+describe('bullishClosePattern (v1.187.0 — autoriza a Explosão sem o corpo mínimo)', () => {
+  const { bullishClosePattern } = require('../bot/shared/candleCloseCondition');
+  const down = [106, 104, 102, 100].map((c) => ({ open: c + 2, high: c + 2.5, low: c - 0.5, close: c }));
+  const up = [100, 102, 104, 106].map((c) => ({ open: c - 2, high: c + 0.5, low: c - 2.5, close: c }));
+
+  test('martelo depois de queda; depois de alta não (é hanging man, barrado antes)', () => {
+    const c = { open: 97.6, high: 99, low: 92, close: 98.8 };
+    expect(bullishClosePattern(c, down)).toBe('hammer');
+    expect(bullishClosePattern(c, up)).not.toBe('hammer');
+    expect(bearishClosePattern(c, up)).toBe('hanging man');
+  });
+
+  test('engolfo de alta e linha de perfuração', () => {
+    const p = { open: 99.5, high: 100, low: 97, close: 97.5 };
+    expect(bullishClosePattern({ open: 97.2, high: 101.8, low: 96.8, close: 101.5 }, [p])).toBe('bullish engulfing');
+    const p2 = { open: 100, high: 100.4, low: 96, close: 96.5 };
+    expect(bullishClosePattern({ open: 96.3, high: 99.4, low: 95.6, close: 99 }, [p2])).toBe('piercing line');
+  });
+
+  test('estrela da manhã', () => {
+    const prev = [{ open: 102, high: 102.5, low: 96.5, close: 97 }, { open: 97, high: 97.8, low: 95.5, close: 96.6 }];
+    expect(bullishClosePattern({ open: 96.8, high: 101.3, low: 96.4, close: 101 }, prev)).toBe('morning star');
+  });
+
+  test('fundo pinça', () => {
+    const p = { open: 99.5, high: 100, low: 96, close: 97 };
+    expect(bullishClosePattern({ open: 97.2, high: 100.2, low: 96.05, close: 98 }, [p])).toBe('tweezer bottom');
+  });
+
+  test('marubozu de alta com corpo de 3% (abaixo dos 5%)', () => {
+    expect(bullishClosePattern({ open: 100, high: 103.1, low: 99.95, close: 103 }, [])).toBe('bullish marubozu');
+  });
+
+  test('três soldados', () => {
+    const prev = [{ open: 98.4, high: 100.6, low: 98.1, close: 100.4 }, { open: 99.8, high: 102.6, low: 99.5, close: 102.4 }];
+    expect(bullishClosePattern({ open: 101.8, high: 104.8, low: 101.5, close: 104.6 }, prev)).toBe('three white soldiers');
+  });
+
+  test('verde comum com pavios dos dois lados não é padrão', () => {
+    expect(bullishClosePattern({ open: 100, high: 104, low: 98, close: 102 }, [])).toBeNull();
+  });
+});

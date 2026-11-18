@@ -178,13 +178,32 @@ function breakoutOutcomeLabel(order) {
 
 /** Seta amarela ('signal') no candle 4h de cada Explosão de Alta automática da moeda, entrando ou
  *  não — o texto diz o desfecho (comprou, sem saldo, padrão de baixa...). */
+/** Nomes em PT dos padrões de alta (backend/bot/shared/candleCloseCondition.js#bullishClosePattern). */
+const BULLISH_PATTERN_PT = {
+  hammer: 'Martelo',
+  'bullish engulfing': 'Engolfo de alta',
+  'piercing line': 'Linha de perfuração',
+  'morning star': 'Estrela da manhã',
+  'tweezer bottom': 'Fundo pinça',
+  'bullish marubozu': 'Marubozu de alta',
+  'three white soldiers': 'Três soldados',
+};
+
+/** Seta amarela ('signal') no candle 4h de cada Explosão de Alta automática da moeda, entrando ou
+ *  não — o texto diz o desfecho (comprou, sem saldo, padrão de baixa...) e o padrão de alta do
+ *  candle fechado. authorizedBy 'pattern' = corpo abaixo dos 5%, entrada liberada pelo padrão. */
 function buildBreakoutSignalMarkers(signals) {
-  return (signals ?? []).map((s) => ({
-    time: Number(s.candleOpenTime),
-    side: 'signal',
-    price: s.price != null ? Number(s.price) : null,
-    label: `Explosão${s.bodyPct != null ? ` +${Number(s.bodyPct).toFixed(1)}%` : ''} · ${breakoutOutcomeLabel(s.order)}`,
-  })).filter((m) => Number.isFinite(m.time));
+  return (signals ?? []).map((s) => {
+    const pat = s.bullishPattern ? (BULLISH_PATTERN_PT[s.bullishPattern] ?? s.bullishPattern) : null;
+    const body = s.bodyPct != null ? ` ${Number(s.bodyPct) >= 0 ? '+' : ''}${Number(s.bodyPct).toFixed(1)}%` : '';
+    const patTxt = !pat ? '' : (s.authorizedBy === 'pattern' ? ` · entrou por ${pat}` : ` · ${pat}`);
+    return {
+      time: Number(s.candleOpenTime),
+      side: 'signal',
+      price: s.price != null ? Number(s.price) : null,
+      label: `Explosão${body}${patTxt} · ${breakoutOutcomeLabel(s.order)}`,
+    };
+  }).filter((m) => Number.isFinite(m.time));
 }
 
 function fmtBuyTime(iso) {

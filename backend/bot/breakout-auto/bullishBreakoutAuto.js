@@ -11,7 +11,8 @@
  *      manual_oco_orders com entry_kind 'candle_close' pro fechamento DAQUELE candle;
  *   3. o manualOcoWatcher executa no fechamento (ver processCandleClose): não compra se o candle
  *      fechou num padrão de baixa OU se a explosão não se confirmou no candle fechado
- *      (close_condition.confirmBreakout); senão compra a mercado NO FECHAMENTO (v1.186.0 — a
+ *      (close_condition.confirmBreakout — v1.187.0: corpo abaixo de minBodyPct passa se o candle
+ *      fechou num padrão de ALTA, bullishClosePattern); senão compra a mercado NO FECHAMENTO (v1.186.0 — a
  *      entrada 5% abaixo do fechamento saiu; ordens antigas com close_condition.entryDiscount
  *      ainda seguem a regra delas) e monta a OCO com close_condition.exit — alvo +15% e stop −15%
  *      (ou a METADE do candle fechado, (máx+mín)/2, se ela estiver mais longe). Só a 1ª explosão
