@@ -1,8 +1,11 @@
 // Simulador "Price action" da caixa de análise do gráfico (tipo 'priceAction' em
 // CandlestickChart.jsx). Roda nos candles JÁ carregados no gráfico (mesmo intervalo da tela):
 //
-//   1. Sinal = 1º candle de ALTA FECHADO (close > open) com abertura dentro da caixa — o usuário
-//      começa a caixa no candle que quer.
+//   1. Sinal = 1º candle FECHADO com abertura dentro da caixa que passa na regra `signalRule`:
+//      'bot' (padrão, v1.188.0) = a regra do bot no fechamento (Explosão de Alta): corpo verde
+//      >= minBodyPct% OU padrão de alta (martelo, engolfo, estrela da manhã... — candlePatterns.js),
+//      e nunca um padrão de baixa (shooting star, enforcado...); 'green' = qualquer candle de alta
+//      (close > open), o comportamento antigo. O usuário começa a caixa no candle que quer.
 //   2. Entrada = LIMIT no nível `entryLevelPct`% do candle de referência (0 = mínima, 50 = meio,
 //      100 = máxima). Referência: o próprio candle do sinal ('signal' — é o "anterior" à entrada)
 //      ou o candle antes dele ('prev').
@@ -14,12 +17,15 @@
 //      acima dele (a máxima pode ter vindo antes da entrada). Sem taxa de corretagem.
 
 import { MANUAL_OCO_MIN_STOP_PCT } from './manualOco';
+import { bearishClosePattern, bullishClosePattern } from './candlePatterns';
 
 export const PRICE_ACTION_DEFAULTS = {
-  targetPct: 10,
-  stopPct: MANUAL_OCO_MIN_STOP_PCT,
+  targetPct: 15, // = Explosão de Alta automática (bullishBreakoutAuto.js CONFIG.exit, v1.186.0)
+  stopPct: Math.max(15, MANUAL_OCO_MIN_STOP_PCT),
   entryRef: 'signal',
   entryLevelPct: 50,
+  signalRule: 'bot',
+  minBodyPct: 5,
 };
 
 function num(v) {
@@ -45,19 +51,47 @@ export function simulatePriceActionBox(candlesticks, box, params, intervalMs, no
   if (!(p.targetPct > 0) || !(p.stopPct > 0) || !(p.stopPct < 100)) return { status: 'badParams' };
 
   const isClosed = (c) => !(intervalMs > 0) || c.openTime + intervalMs <= nowMs;
-  const signalIdx = cs.findIndex((c) => c.openTime >= box.fromMs && c.openTime <= box.toMs
-    && c.close > c.open && isClosed(c));
-  if (signalIdx < 0) return { status: 'noSignal' };
+  // Análise de candle de cada candle fechado da caixa até o sinal (padrão de alta/baixa + corpo);
+  // `rejected` = candles que a regra do bot recusou por padrão de baixa (aparecem no resumo).
+  const analyse = (i) => {
+    const c = cs[i];
+    const prev = cs.slice(Math.max(0, i - 4), i);
+    return {
+      bodyPct: ((c.close - c.open) / c.open) * 100,
+      bullish: bullishClosePattern(c, prev),
+      bearish: bearishClosePattern(c, prev),
+    };
+  };
+  const rejected = [];
+  let signalIdx = -1;
+  let analysis = null;
+  for (let i = 0; i < cs.length; i++) {
+    const c = cs[i];
+    if (c.openTime < box.fromMs) continue;
+    if (c.openTime > box.toMs || !isClosed(c)) break;
+    const a = analyse(i);
+    if (p.signalRule === 'green') {
+      if (c.close > c.open) { signalIdx = i; analysis = { ...a, authorizedBy: 'green' }; break; }
+      continue;
+    }
+    if (a.bearish) {
+      if (c.close > c.open) rejected.push({ openTime: c.openTime, pattern: a.bearish });
+      continue;
+    }
+    if (a.bodyPct >= Number(p.minBodyPct)) { signalIdx = i; analysis = { ...a, authorizedBy: 'body' }; break; }
+    if (a.bullish) { signalIdx = i; analysis = { ...a, authorizedBy: 'pattern' }; break; }
+  }
+  if (signalIdx < 0) return { status: 'noSignal', rejected, params: p };
 
   const signal = cs[signalIdx];
   const refIdx = p.entryRef === 'prev' ? signalIdx - 1 : signalIdx;
-  if (refIdx < 0) return { status: 'noRef', signal };
+  if (refIdx < 0) return { status: 'noRef', signal, analysis, rejected, params: p };
   const ref = cs[refIdx];
   const level = Math.min(100, Math.max(0, Number(p.entryLevelPct)));
   const entryPlanned = ref.low + (ref.high - ref.low) * (level / 100);
   const targetFor = (e) => e * (1 + p.targetPct / 100);
   const stopFor = (e) => e * (1 - p.stopPct / 100);
-  const base = { signal, ref, refIdx, signalIdx, entryPlanned, level, params: p };
+  const base = { signal, ref, refIdx, signalIdx, entryPlanned, level, params: p, analysis, rejected };
 
   let fillIdx = -1;
   let entry = null;

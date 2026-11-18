@@ -13,6 +13,7 @@ import ManualOcoOrdersPanel from './ManualOcoOrdersPanel';
 import { listManualOcoOrders } from '../services/api';
 import { isManualOcoActive, manualOcoLevels, withMinStop, MANUAL_OCO_MIN_STOP_PCT } from '../utils/manualOco';
 import { simulatePriceActionBox, PRICE_ACTION_DEFAULTS } from '../utils/priceActionBoxSim';
+import { patternPt, BULLISH_PATTERN_WHY } from '../utils/candlePatterns';
 import { buildOcoSuggester } from '../utils/ocoSuggest';
 import convertOpenTime from '../utils/convertOpenTime';
 import Tooltip from './Tooltip';
@@ -3005,6 +3006,105 @@ function TradeHistoryPanel({ symbol, gateFavorites }) {
   );
 }
 
+// ── Controles da caixa de análise (Price action / Trade) ─────────────────────
+// Fora do componente principal de propósito: definidos dentro dele, seriam um tipo novo a cada
+// render e o input perderia o foco a cada tecla.
+
+const BOX_CTRL = 'h-5 bg-slate-800/90 border border-slate-600 text-slate-100 text-[10px] rounded '
+  + 'transition-colors hover:border-slate-400 focus:outline-none focus:border-p4 focus:ring-1 focus:ring-p4/60 '
+  + 'disabled:opacity-40 disabled:cursor-not-allowed';
+
+function BoxSelect({ value, onChange, title, disabled, children, className = '' }) {
+  return (
+    <div className={`relative inline-flex ${className}`}>
+      <select
+        value={value}
+        onChange={onChange}
+        title={title}
+        disabled={disabled}
+        className={`${BOX_CTRL} appearance-none cursor-pointer pl-1.5 pr-4 w-full`}
+      >
+        {children}
+      </select>
+      <svg aria-hidden="true" viewBox="0 0 10 6" className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 w-1.5 h-1 fill-slate-400">
+        <path d="M0 0h10L5 6z" />
+      </svg>
+    </div>
+  );
+}
+
+/** Campo numérico compacto: rótulo colorido DENTRO do campo, à esquerda, e sufixo ("%") à direita. */
+function BoxNumField({ label, suffix = '%', tone = 'text-slate-400', title, width = 'w-[4rem]', className = '', ...input }) {
+  return (
+    <label
+      title={title}
+      className={`${BOX_CTRL} ${width} ${className} inline-flex items-center cursor-text focus-within:border-p4 focus-within:ring-1 focus-within:ring-p4/60`}
+    >
+      <span className={`pl-1 select-none whitespace-nowrap ${tone}`}>{label}</span>
+      <input
+        type="number"
+        {...input}
+        className="w-full min-w-0 bg-transparent text-right tabular-nums font-mono text-[10px] text-slate-100 px-px focus:outline-none
+          [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+      />
+      {suffix && <span className="pr-1 text-slate-500 select-none">{suffix}</span>}
+    </label>
+  );
+}
+
+/** Botões lado a lado, um ativo (substitui um select de 2–3 opções curtas). */
+function BoxSegmented({ value, onChange, options, title, className = '' }) {
+  return (
+    <div role="radiogroup" title={title} className={`inline-flex h-5 p-px rounded bg-slate-800/90 border border-slate-600 ${className}`}>
+      {options.map((o) => {
+        const active = value === o.value;
+        return (
+          <button
+            key={o.value}
+            type="button"
+            role="radio"
+            aria-checked={active}
+            title={o.title}
+            onClick={() => onChange(o.value)}
+            className={`flex-1 px-1.5 text-[10px] rounded-sm transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-p4 ${
+              active ? 'bg-p4 text-white shadow-sm' : 'text-slate-300 hover:text-white hover:bg-slate-700/70'
+            }`}
+          >
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function BoxIconButton({ onClick, title, active, disabled, children }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      disabled={disabled}
+      className={`h-5 w-5 inline-flex items-center justify-center text-[11px] rounded border shrink-0 transition-colors
+        focus:outline-none focus-visible:ring-1 focus-visible:ring-p4 disabled:opacity-40 disabled:cursor-not-allowed ${
+        active ? 'bg-slate-100 text-slate-900 border-white' : 'bg-slate-800/90 text-slate-300 border-slate-600 hover:border-slate-400 hover:text-white'
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+/** Linha do resumo da caixa: rótulo fixo à esquerda + valor. */
+function BoxSummaryRow({ label, children, tone = 'text-slate-200' }) {
+  return (
+    <div className="contents">
+      <span className="text-[9px] uppercase tracking-wide text-slate-500 leading-[15px]">{label}</span>
+      <span className={`${tone} min-w-0`}>{children}</span>
+    </div>
+  );
+}
+
 // ── Componente principal ──────────────────────────────────────────────────────
 
 export default function CandlestickChart() {
@@ -3353,7 +3453,8 @@ export default function CandlestickChart() {
   // motor de sinal de uma estratégia — só RSI Momentum por enquanto — escopado à janela da caixa,
   // ver chartTradeBoxSim). `analysisBoxRuleSource` escolhe as REGRAS: 'default' = config global do
   // bot (rsi_momentum_global_config), 'exclusive' = config curada da moeda atual, se existir.
-  const [analysisBoxKind, setAnalysisBoxKind] = useState('flag');
+  // Padrão 'priceAction' (v1.188.0): a caixa abre direto na análise de candle / trade price action.
+  const [analysisBoxKind, setAnalysisBoxKind] = useState('priceAction');
   const [analysisBoxStrategy, setAnalysisBoxStrategy] = useState('rsi-momentum');
   const [analysisBoxRuleSource, setAnalysisBoxRuleSource] = useState('default');
   // Regra 'exclusive': QUAL bot exclusivo (curated) usar — lista de todos (getRsiMomentumCuratedList),
@@ -3377,15 +3478,19 @@ export default function CandlestickChart() {
   // "grudados" nela — recalculada a cada pan/zoom (ver efeito logo abaixo de handleAnalysisBoxStart).
   const [analysisBoxAnchorPx, setAnalysisBoxAnchorPx] = useState(null);
   // Tipo 'priceAction': parâmetros editáveis do simulador (priceActionBoxSim.js) — lembrados no
-  // navegador entre sessões (conveniência; padrão alvo 10% / entrada 50% do candle / stop 10%, o mínimo).
+  // navegador entre sessões (conveniência; padrão alvo +15% / entrada 50% do candle / stop −15%, como o bot da Explosão). A chave
+  // ganhou ".v2" na v1.188.0: a antiga gravava os 10%/10% antigos já no 1º render e prenderia o padrão novo.
+  // Detalhes do resumo da caixa Price action (candle, padrão, entrada, saída): acordeão FECHADO por
+  // padrão — só o resultado fica à vista.
+  const [paDetailsOpen, setPaDetailsOpen] = useState(false);
   const [paParams, setPaParams] = useState(() => {
     try {
-      const saved = { ...PRICE_ACTION_DEFAULTS, ...JSON.parse(localStorage.getItem('chartPriceActionParams') || '{}') };
+      const saved = { ...PRICE_ACTION_DEFAULTS, ...JSON.parse(localStorage.getItem('chartPriceActionParams.v2') || '{}') };
       return { ...saved, stopPct: Math.max(MANUAL_OCO_MIN_STOP_PCT, Number(saved.stopPct) || 0) };
     } catch { return PRICE_ACTION_DEFAULTS; }
   });
   useEffect(() => {
-    try { localStorage.setItem('chartPriceActionParams', JSON.stringify(paParams)); } catch { /* sem storage */ }
+    try { localStorage.setItem('chartPriceActionParams.v2', JSON.stringify(paParams)); } catch { /* sem storage */ }
   }, [paParams]);
 
   function clearMeasureAutoHide() {
@@ -5768,6 +5873,15 @@ export default function CandlestickChart() {
     const refT = Math.floor(paSim.ref.openTime / 1000);
     const fillT = paSim.fill ? Math.floor(paSim.fill.openTime / 1000) : Math.floor(analysisBox.toMs / 1000);
     const lvlLabel = `${paSim.params.entryRef === 'prev' ? 'ant. ' : ''}${paSim.level}%`;
+    // Tipo do candle do sinal, em amarelo um pouco ABAIXO da faixa (sublabel, fora do quadrado):
+    // 1ª linha = padrão + por que entrou; 2ª = explicação curta do padrão.
+    const a = paSim.analysis;
+    const bodyTxt = a ? `${a.bodyPct >= 0 ? '+' : ''}${a.bodyPct.toFixed(2)}%` : '';
+    const candleType = !a ? null
+      : a.bullish
+        ? `${patternPt(a.bullish)} · corpo ${bodyTxt}${a.authorizedBy === 'pattern' ? ' · entrou pelo padrão' : a.authorizedBy === 'body' ? ' · entrou pelo corpo' : ''}`
+          + (BULLISH_PATTERN_WHY[a.bullish] ? `\n${BULLISH_PATTERN_WHY[a.bullish]}` : '')
+        : `sem padrão de alta · corpo ${bodyTxt}${a.authorizedBy === 'body' ? ` ≥ ${paSim.params.minBodyPct}%` : ''}`;
     const rects = [{
       time1: refT, time2: Math.max(refT + ivSec, fillT), price1: paSim.ref.low, price2: paSim.ref.high,
       fillColor: 'rgba(250,204,21,0.10)', strokeColor: 'rgba(250,204,21,0.6)', labelColor: '#facc15',
@@ -5775,6 +5889,7 @@ export default function CandlestickChart() {
         ? `entrada ${fmtPrice(paSim.entryPlanned)} (${lvlLabel}) · não preencheu`
         : `entrada ${fmtPrice(paSim.entry)} (${lvlLabel})`,
       labelPos: 'bottom',
+      sublabel: candleType, sublabelColor: '#fde047',
     }];
     if (!paSim.fill) return rects;
     const t1 = fillT;
@@ -5893,7 +6008,7 @@ export default function CandlestickChart() {
         closed: paSim?.outcome === 'target' ? 'price action · alvo ✓' : 'price action · stop ✗',
         open: 'price action · em aberto',
         notFilled: 'price action · entrada não preencheu',
-        noSignal: 'price action · sem candle de alta fechado',
+        noSignal: 'price action · sem sinal',
         noRef: 'price action · sem candle anterior',
         badParams: 'price action · parâmetros inválidos',
       }[paSim?.status] ?? 'price action';
@@ -6740,119 +6855,143 @@ export default function CandlestickChart() {
         })()
         : { left: Math.max(4, analysisBoxAnchorPx.left), top: Math.max(4, analysisBoxAnchorPx.top - 32) }}
     >
-      <div className="flex flex-wrap items-center gap-1 bg-slate-900/95 border border-slate-600 rounded px-1.5 py-1 shadow-lg">
-        <select
-          value={analysisBoxKind}
-          onChange={(e) => setAnalysisBoxKind(e.target.value)}
-          title="O que mostrar dentro da caixa"
-          className="bg-p2 border border-p3/40 text-p5 text-[10px] rounded px-1 py-0.5 focus:outline-none focus:border-p4"
-        >
-          <option value="flag">Bandeira</option>
-          <option value="trade">Trade</option>
-          <option value="priceAction">Price action</option>
-          <option value="bbEvolution">Evolução BB</option>
-        </select>
+      <div className="flex flex-col items-stretch gap-1 bg-slate-900/95 backdrop-blur-sm border border-slate-700 rounded-md p-1 shadow-lg shadow-black/40 max-w-[calc(100vw-24px)]">
+        <div className="flex flex-wrap items-center justify-between gap-1">
+          <BoxSelect
+            value={analysisBoxKind}
+            onChange={(e) => setAnalysisBoxKind(e.target.value)}
+            title="O que mostrar dentro da caixa"
+            className="font-medium flex-1"
+          >
+            <option value="priceAction">Price action</option>
+            <option value="flag">Bandeira</option>
+            <option value="trade">Trade</option>
+            <option value="bbEvolution">Evolução BB</option>
+          </BoxSelect>
+          {analysisBoxKind === 'priceAction' && (
+            <>
+              <BoxSegmented
+                value={paParams.signalRule ?? 'bot'}
+                onChange={(v) => setPaParams((p) => ({ ...p, signalRule: v }))}
+                title="Qual candle vira sinal"
+                className="flex-1"
+                options={[
+                  { value: 'bot', label: 'padrão', title: 'Regra do bot no fechamento: corpo ≥ X% ou padrão de alta (martelo, engolfo, estrela da manhã, fundo pinça, marubozu, três soldados, linha de perfuração), nunca padrão de baixa' },
+                  { value: 'green', label: 'qualquer', title: 'Qualquer candle de alta fechado (close > open)' },
+                ]}
+              />
+            </>
+          )}
+          {analysisBoxKind === 'trade' && (
+            <>
+              <BoxSelect
+                value={analysisBoxStrategy}
+                onChange={(e) => setAnalysisBoxStrategy(e.target.value)}
+                title="Estratégia de trade simulada na caixa"
+                className="flex-1"
+              >
+                <option value="rsi-momentum">RSI Momentum</option>
+              </BoxSelect>
+              <BoxSegmented
+                value={analysisBoxRuleSource}
+                onChange={setAnalysisBoxRuleSource}
+                title="Regras: config padrão do bot (geral) ou config exclusiva desta moeda"
+                className="flex-1"
+                options={[
+                  { value: 'default', label: 'Padrão' },
+                  { value: 'exclusive', label: 'Exclusiva' },
+                ]}
+              />
+              {analysisBoxRuleSource === 'exclusive' && (
+                <BoxSelect
+                  value={analysisBoxExclusiveSymbol ?? ''}
+                  onChange={(e) => setAnalysisBoxExclusiveSymbol(e.target.value || null)}
+                  disabled={!analysisBoxCuratedList?.length}
+                  title="Qual bot exclusivo usar nesta caixa"
+                  className="flex-1"
+                >
+                  {analysisBoxCuratedList == null && <option value="">carregando…</option>}
+                  {analysisBoxCuratedList?.length === 0 && <option value="">nenhum bot exclusivo</option>}
+                  {(analysisBoxCuratedList ?? []).map((b) => (
+                    <option key={b.symbol} value={b.symbol}>
+                      {`${b.symbol.replace(/USDT$/, '')}${b.exchange === 'gate' ? ' · G' : ''}${b.phase && b.phase !== 'WATCHING' ? ` · ${b.phase}` : ''}`}
+                    </option>
+                  ))}
+                </BoxSelect>
+              )}
+              <BoxIconButton
+                onClick={() => setAnalysisBoxRulesOpen((v) => !v)}
+                title="Editar regras/filtros desta caixa"
+                disabled={!analysisBoxLoadedConfig?.panelConfig}
+                active={analysisBoxRulesOpen}
+              >
+                ⚙
+              </BoxIconButton>
+            </>
+          )}
+        </div>
         {analysisBoxKind === 'priceAction' && (
+          // 3 linhas no total: [tipo · regra do sinal] / [corpo · alvo · stop] / [entrada · ref. · ↺]
           <>
-            <label className="flex items-center gap-0.5 text-[10px] text-green-400" title="Alvo: % acima do preço de entrada">
-              alvo +
-              <input
-                type="number" min="0.1" step="0.1" value={paParams.targetPct}
-                onChange={(e) => setPaParams((p) => ({ ...p, targetPct: Number(e.target.value) }))}
-                className="w-12 bg-p2 border border-p3/40 text-p5 rounded px-1 py-0.5 text-right"
-              />%
-            </label>
-            <label className="flex items-center gap-0.5 text-[10px] text-red-400" title={`Stop loss: % abaixo do preço de entrada (mínimo ${MANUAL_OCO_MIN_STOP_PCT}%)`}>
-              stop −
-              <input
-                type="number" min={MANUAL_OCO_MIN_STOP_PCT} step="0.1" value={paParams.stopPct}
-                onChange={(e) => setPaParams((p) => ({ ...p, stopPct: Number(e.target.value) }))}
-                onBlur={() => setPaParams((p) => ({ ...p, stopPct: Math.max(MANUAL_OCO_MIN_STOP_PCT, p.stopPct) }))}
-                className="w-12 bg-p2 border border-p3/40 text-p5 rounded px-1 py-0.5 text-right"
-              />%
-            </label>
-            <label className="flex items-center gap-0.5 text-[10px] text-yellow-300" title="Entrada LIMIT: nível do candle de referência (0 = mínima, 50 = meio, 100 = máxima)">
-              entrada
-              <input
-                type="number" min="0" max="100" step="1" value={paParams.entryLevelPct}
-                onChange={(e) => setPaParams((p) => ({ ...p, entryLevelPct: Number(e.target.value) }))}
-                className="w-11 bg-p2 border border-p3/40 text-p5 rounded px-1 py-0.5 text-right"
-              />%
-            </label>
-            <select
+          <div className="flex items-center justify-between gap-1">
+            {(paParams.signalRule ?? 'bot') === 'bot' && (
+              <BoxNumField
+                label="corpo ≥"
+                className="flex-1"
+                title="Corpo verde mínimo pra virar sinal sem padrão de alta (o bot usa 5%)"
+                min="0" step="0.5" value={paParams.minBodyPct ?? 5}
+                onChange={(e) => setPaParams((p) => ({ ...p, minBodyPct: Number(e.target.value) }))}
+              />
+            )}
+            <BoxNumField
+              label="alvo +"
+              tone="text-green-400"
+              className="flex-1"
+              title="Alvo: % acima do preço de entrada"
+              min="0.1" step="0.1" value={paParams.targetPct}
+              onChange={(e) => setPaParams((p) => ({ ...p, targetPct: Number(e.target.value) }))}
+            />
+            <BoxNumField
+              label="stop −"
+              tone="text-red-400"
+              className="flex-1"
+              title={`Stop loss: % abaixo do preço de entrada (mínimo ${MANUAL_OCO_MIN_STOP_PCT}%)`}
+              min={MANUAL_OCO_MIN_STOP_PCT} step="0.1" value={paParams.stopPct}
+              onChange={(e) => setPaParams((p) => ({ ...p, stopPct: Number(e.target.value) }))}
+              onBlur={() => setPaParams((p) => ({ ...p, stopPct: Math.max(MANUAL_OCO_MIN_STOP_PCT, p.stopPct) }))}
+            />
+          </div>
+          <div className="flex items-center justify-between gap-1">
+            <BoxNumField
+              label="entrada"
+              tone="text-yellow-300"
+              className="flex-1"
+              title="Entrada LIMIT: nível do candle de referência (0 = mínima, 50 = meio, 100 = máxima)"
+              min="0" max="100" step="1" value={paParams.entryLevelPct}
+              onChange={(e) => setPaParams((p) => ({ ...p, entryLevelPct: Number(e.target.value) }))}
+            />
+            <BoxSelect
               value={paParams.entryRef}
               onChange={(e) => setPaParams((p) => ({ ...p, entryRef: e.target.value }))}
-              title="Candle de referência da entrada: o candle de alta do sinal (o anterior à entrada) ou o candle antes dele"
-              className="bg-p2 border border-p3/40 text-p5 text-[10px] rounded px-1 py-0.5 focus:outline-none focus:border-p4"
+              title="Candle de referência da entrada: o candle do sinal (o anterior à entrada) ou o candle antes dele"
+              className="flex-1"
             >
-              <option value="signal">do candle de alta</option>
-              <option value="prev">do candle antes dele</option>
-            </select>
-            <button
-              type="button"
+              <option value="signal">do sinal</option>
+              <option value="prev">do anterior</option>
+            </BoxSelect>
+            <BoxIconButton
               onClick={() => setPaParams(PRICE_ACTION_DEFAULTS)}
-              title="Voltar ao padrão (alvo 10%, entrada 50% do candle de alta, stop 10%)"
-              className="w-5 h-5 inline-flex items-center justify-center text-[11px] rounded border shrink-0 bg-p2 text-p5 border-p3/40 hover:bg-p3/30"
+              title="Voltar ao padrão (sinal = corpo ≥ 5% ou padrão de alta, alvo +15%, entrada 50% do candle do sinal, stop −15%)"
             >
               ↺
-            </button>
-          </>
-        )}
-        {analysisBoxKind === 'trade' && (
-          <>
-            <select
-              value={analysisBoxStrategy}
-              onChange={(e) => setAnalysisBoxStrategy(e.target.value)}
-              title="Estratégia de trade simulada na caixa"
-              className="bg-p2 border border-p3/40 text-p5 text-[10px] rounded px-1 py-0.5 focus:outline-none focus:border-p4"
-            >
-              <option value="rsi-momentum">RSI Momentum</option>
-            </select>
-            <select
-              value={analysisBoxRuleSource}
-              onChange={(e) => setAnalysisBoxRuleSource(e.target.value)}
-              title="Regras: config padrão do bot (geral) ou config exclusiva desta moeda"
-              className="bg-p2 border border-p3/40 text-p5 text-[10px] rounded px-1 py-0.5 focus:outline-none focus:border-p4"
-            >
-              <option value="default">Padrão</option>
-              <option value="exclusive">Exclusiva</option>
-            </select>
-            {analysisBoxRuleSource === 'exclusive' && (
-              <select
-                value={analysisBoxExclusiveSymbol ?? ''}
-                onChange={(e) => setAnalysisBoxExclusiveSymbol(e.target.value || null)}
-                disabled={!analysisBoxCuratedList?.length}
-                title="Qual bot exclusivo usar nesta caixa"
-                className="bg-p2 border border-p3/40 text-p5 text-[10px] rounded px-1 py-0.5 focus:outline-none focus:border-p4 disabled:opacity-40"
-              >
-                {analysisBoxCuratedList == null && <option value="">carregando…</option>}
-                {analysisBoxCuratedList?.length === 0 && <option value="">nenhum bot exclusivo</option>}
-                {(analysisBoxCuratedList ?? []).map((b) => (
-                  <option key={b.symbol} value={b.symbol}>
-                    {`${b.symbol.replace(/USDT$/, '')}${b.exchange === 'gate' ? ' · G' : ''}${b.phase && b.phase !== 'WATCHING' ? ` · ${b.phase}` : ''}`}
-                  </option>
-                ))}
-              </select>
-            )}
-            <button
-              type="button"
-              onClick={() => setAnalysisBoxRulesOpen((v) => !v)}
-              title="Editar regras/filtros desta caixa"
-              disabled={!analysisBoxLoadedConfig?.panelConfig}
-              className={`w-5 h-5 inline-flex items-center justify-center text-[11px] rounded border shrink-0 disabled:opacity-40 ${
-                analysisBoxRulesOpen
-                  ? 'bg-slate-200 text-black border-white'
-                  : 'bg-p2 text-p5 border-p3/40 hover:bg-p3/30'
-              }`}
-            >
-              ⚙
-            </button>
+            </BoxIconButton>
+          </div>
           </>
         )}
       </div>
       {analysisBoxKind === 'trade' && !analysisBoxRulesOpen && analysisBoxFiltersUsed.length > 0 && (
         <div
-          className="px-1.5 py-0.5 rounded bg-slate-900/90 border border-slate-700 text-slate-300 text-[9px] font-mono shadow whitespace-nowrap cursor-pointer"
+          className="px-2 py-0.5 rounded-md bg-slate-900/95 border border-slate-700 text-slate-300 text-[10px] font-mono shadow-lg whitespace-nowrap cursor-pointer hover:border-slate-500 transition-colors"
           title="Filtros/indicadores usados pela config desta caixa — clique pra editar"
           onClick={() => setAnalysisBoxRulesOpen(true)}
         >
@@ -6861,28 +7000,93 @@ export default function CandlestickChart() {
       )}
       {analysisBoxKind === 'trade' && analysisBoxRulesOpen && analysisBoxRulesPanel}
       {analysisBoxKind === 'priceAction' && paSim && (
-        <div className="px-1.5 py-1 rounded bg-slate-900/90 border border-slate-700 text-slate-300 text-[10px] font-mono shadow leading-snug">
-          {paSim.signal && (
-            <div>
-              sinal {fmtDate(paSim.signal.openTime)} · entrada {fmtPrice(paSim.entry ?? paSim.entryPlanned)}
-              {paSim.fill && ` em ${fmtDate(paSim.fill.openTime)}`}
-            </div>
+        <div className="max-w-[min(260px,calc(100vw-24px))] rounded-md bg-slate-900/95 backdrop-blur-sm border border-slate-700 shadow-lg shadow-black/40 text-[10px] leading-[15px] overflow-hidden">
+          {/* Faixa do resultado: cor = desfecho (verde alvo, vermelho stop, azul em aberto, âmbar aviso) */}
+          {(() => {
+            const pnl = paSim.pnlPct != null ? `${paSim.pnlPct >= 0 ? '+' : ''}${paSim.pnlPct.toFixed(2)}%` : null;
+            const head = {
+              closed: paSim.outcome === 'target'
+                ? { tone: 'bg-green-500/15 text-green-300 border-green-500/30', text: 'Alvo atingido', pnl }
+                : { tone: 'bg-red-500/15 text-red-300 border-red-500/30', text: 'Stop atingido', pnl },
+              open: { tone: 'bg-sky-500/15 text-sky-300 border-sky-500/30', text: 'Em aberto', pnl },
+              notFilled: { tone: 'bg-amber-500/15 text-amber-300 border-amber-500/30', text: 'Entrada não preencheu' },
+              noSignal: { tone: 'bg-amber-500/15 text-amber-300 border-amber-500/30', text: 'Sem sinal na caixa' },
+              noRef: { tone: 'bg-amber-500/15 text-amber-300 border-amber-500/30', text: 'Sem candle anterior' },
+              badParams: { tone: 'bg-red-500/15 text-red-300 border-red-500/30', text: 'Parâmetros inválidos' },
+            }[paSim.status];
+            if (!head) return null;
+            // Cabeçalho = botão do acordeão: resultado sempre à vista, detalhes só se abrir.
+            return (
+              <button
+                type="button"
+                onClick={() => setPaDetailsOpen((v) => !v)}
+                aria-expanded={paDetailsOpen}
+                title={paDetailsOpen ? 'Esconder detalhes' : 'Ver detalhes (candle, padrão, entrada, saída)'}
+                className={`w-full flex items-center gap-2 px-2 py-0.5 text-left focus:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-p4 hover:brightness-125 ${head.tone} ${paDetailsOpen ? 'border-b' : ''}`}
+              >
+                <svg aria-hidden="true" viewBox="0 0 6 10" className={`w-1 h-2 shrink-0 fill-current opacity-70 transition-transform ${paDetailsOpen ? 'rotate-90' : ''}`}>
+                  <path d="M0 0l6 5-6 5z" />
+                </svg>
+                <span className="font-semibold">{head.text}</span>
+                {head.pnl && <span className="ml-auto font-mono tabular-nums font-semibold">{head.pnl}</span>}
+              </button>
+            );
+          })()}
+          {paDetailsOpen && (
+          <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-px px-2 py-1">
+            {paSim.analysis && (
+              <BoxSummaryRow label="Candle">
+                <span className="font-mono tabular-nums">{paSim.analysis.bodyPct >= 0 ? '+' : ''}{paSim.analysis.bodyPct.toFixed(2)}%</span>
+                {paSim.analysis.bullish
+                  ? <span className="ml-1 px-1 rounded-sm bg-sky-500/15 text-sky-300 font-medium">{patternPt(paSim.analysis.bullish)}</span>
+                  : <span className="ml-1 text-slate-500">sem padrão</span>}
+                {paSim.analysis.authorizedBy === 'pattern' && <span className="text-sky-300/80"> · pelo padrão</span>}
+                {paSim.analysis.authorizedBy === 'body' && <span className="text-slate-400"> · pelo corpo</span>}
+              </BoxSummaryRow>
+            )}
+            {paSim.signal && (
+              <BoxSummaryRow label="Entrada" tone="text-yellow-200">
+                <span className="font-mono tabular-nums">{fmtPrice(paSim.entry ?? paSim.entryPlanned)}</span>
+                <span className="text-slate-400 font-mono tabular-nums"> · sinal {fmtDate(paSim.signal.openTime)}</span>
+              </BoxSummaryRow>
+            )}
+            {paSim.status === 'closed' && (
+              <BoxSummaryRow label="Saída" tone={paSim.outcome === 'target' ? 'text-green-300' : 'text-red-300'}>
+                <span className="font-mono tabular-nums">{fmtPrice(paSim.exitPrice)}</span>
+                <span className="text-slate-400 font-mono tabular-nums"> · {fmtDate(paSim.exit.openTime)} · {paSim.candlesHeld} candle{paSim.candlesHeld === 1 ? '' : 's'}</span>
+              </BoxSummaryRow>
+            )}
+            {paSim.status === 'open' && (
+              <BoxSummaryRow label="Agora" tone={paSim.pnlPct >= 0 ? 'text-green-300' : 'text-red-300'}>
+                <span className="text-slate-400">{paSim.candlesHeld} candles desde a entrada</span>
+              </BoxSummaryRow>
+            )}
+            {paSim.rejected?.length > 0 && (
+              <BoxSummaryRow label="Recusado" tone="text-red-300">
+                <span className="flex flex-wrap gap-0.5">
+                  {paSim.rejected.slice(0, 3).map((r) => (
+                    <span key={r.openTime} className="px-1 rounded-sm bg-red-500/15">
+                      <span className="font-mono tabular-nums">{fmtDate(r.openTime)}</span> {patternPt(r.pattern)}
+                    </span>
+                  ))}
+                  {paSim.rejected.length > 3 && <span className="text-red-300/70">+{paSim.rejected.length - 3}</span>}
+                </span>
+              </BoxSummaryRow>
+            )}
+            {paSim.status === 'notFilled' && (
+              <BoxSummaryRow label="Dica" tone="text-amber-200/90">a entrada não foi tocada dentro da caixa. Alargue a caixa ou suba o nível.</BoxSummaryRow>
+            )}
+            {paSim.status === 'noSignal' && (
+              <BoxSummaryRow label="Dica" tone="text-amber-200/90">
+                {paSim.params?.signalRule === 'green'
+                  ? 'nenhum candle de alta fechado dentro da caixa'
+                  : `nenhum candle fechado com corpo ≥ ${paSim.params?.minBodyPct ?? 5}% ou padrão de alta dentro da caixa`}
+              </BoxSummaryRow>
+            )}
+            {paSim.status === 'noRef' && <BoxSummaryRow label="Dica" tone="text-amber-200/90">não há candle antes do sinal carregado</BoxSummaryRow>}
+            {paSim.status === 'badParams' && <BoxSummaryRow label="Dica" tone="text-red-300">alvo e stop precisam ser &gt; 0 (stop &lt; 100%)</BoxSummaryRow>}
+          </div>
           )}
-          {paSim.status === 'closed' && (
-            <div className={paSim.outcome === 'target' ? 'text-green-400' : 'text-red-400'}>
-              {paSim.outcome === 'target' ? 'alvo ✓' : 'stop ✗'} {fmtPrice(paSim.exitPrice)} em {fmtDate(paSim.exit.openTime)}
-              {` · ${paSim.pnlPct >= 0 ? '+' : ''}${paSim.pnlPct.toFixed(2)}% · ${paSim.candlesHeld} candle${paSim.candlesHeld === 1 ? '' : 's'}`}
-            </div>
-          )}
-          {paSim.status === 'open' && (
-            <div className={paSim.pnlPct >= 0 ? 'text-green-400' : 'text-red-400'}>
-              em aberto · agora {paSim.pnlPct >= 0 ? '+' : ''}{paSim.pnlPct.toFixed(2)}% · {paSim.candlesHeld} candles
-            </div>
-          )}
-          {paSim.status === 'notFilled' && <div className="text-amber-300">a entrada não foi tocada dentro da caixa — alargue a caixa ou suba o nível</div>}
-          {paSim.status === 'noSignal' && <div className="text-amber-300">nenhum candle de alta fechado dentro da caixa</div>}
-          {paSim.status === 'noRef' && <div className="text-amber-300">não há candle antes do sinal carregado</div>}
-          {paSim.status === 'badParams' && <div className="text-red-400">alvo e stop precisam ser &gt; 0 (stop &lt; 100%)</div>}
         </div>
       )}
     </div>

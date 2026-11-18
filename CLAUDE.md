@@ -373,7 +373,12 @@ ainda na compra = previsão azul (alvo) / laranja (stop) + **Cancelar compra**
 (`ManualOcoOrdersPanel.jsx`). O watcher vigia as BRACKETED até `CLOSED_TARGET`/`CLOSED_STOP`.
 **Stop mínimo de 10%** abaixo do preço comprado em toda OCO real (`backend/bot/shared/manualOcoStop.js`,
 espelho `withMinStop` em `utils/manualOco.js`; cartão avisa quando a linha está mais perto). A caixa
-"Price action" do gráfico simula com o mesmo mínimo.
+"Price action" do gráfico simula com o mesmo mínimo. É o tipo PADRÃO da caixa de análise (v1.188.0) e o
+sinal segue a regra do bot no fechamento (`signalRule: 'bot'`): 1º candle fechado com corpo ≥ 5% OU padrão de
+alta, recusando padrão de baixa (`priceActionBoxSim.js` + `utils/candlePatterns.js`, **espelho ESM** de
+`bearishClosePattern`/`bullishClosePattern` de `backend/bot/shared/candleCloseCondition.js` — mude os dois
+juntos); o resumo mostra o padrão, se entrou pelo corpo ou pelo padrão, e os candles recusados. `'green'` =
+qualquer candle de alta (antigo).
 
 ### Explosão de Alta — scanner + compra no fechamento do candle
 

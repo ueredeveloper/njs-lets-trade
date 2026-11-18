@@ -31,6 +31,7 @@ class RectanglePaneView {
         return {
           x1, x2, y1, y2, fillColor: r.fillColor, strokeColor: r.strokeColor,
           label: r.label, labelColor: r.labelColor, labelPos: r.labelPos,
+          sublabel: r.sublabel, sublabelColor: r.sublabelColor,
           lineWidth: r.lineWidth,
         };
       })
@@ -79,6 +80,15 @@ class RectangleRenderer {
           else if (it.labelPos === 'above') { ctx.textBaseline = 'bottom'; y = top - pad; }
           ctx.fillText(it.label, (left + right) / 2, y);
         }
+        // sublabel: linha extra FORA do quadrado, um pouco abaixo da borda inferior, alinhada à
+        // esquerda (pode ser mais larga que o quadrado — ex.: explicação do padrão do candle).
+        if (it.sublabel) {
+          ctx.font = '10px monospace';
+          ctx.fillStyle = it.sublabelColor ?? it.labelColor;
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'top';
+          String(it.sublabel).split('\n').forEach((line, i) => ctx.fillText(line, left, bottom + 18 + i * 13));
+        }
       }
     });
   }
@@ -94,7 +104,8 @@ export class RectanglePrimitive {
   }
 
   /** rects: [{ time1, price1, time2, price2, fillColor, label, labelColor, labelPos, strokeColor?,
-   *  fullHeight?, lineWidth? }] (time em segundos; labelPos: 'top'|'bottom' — encostado na borda,
+   *  fullHeight?, lineWidth?, sublabel?, sublabelColor? }] (time em segundos; sublabel = texto
+   *  extra (aceita \n) logo ABAIXO da borda inferior, fora do quadrado, alinhado à esquerda; labelPos: 'top'|'bottom' — encostado na borda,
    *  dentro do quadrado — |'above' — fora, acima da borda superior — |undefined — centralizado;
    *  strokeColor desenha a borda; fullHeight ignora price1/price2 e cobre a pane toda; lineWidth
    *  força uma largura mínima em px, centrada no x — pra linhas verticais com time1 == time2) */
