@@ -55,14 +55,23 @@ router.get('/bullish-breakout/signals', async (req, res) => {
       return i == null ? null : bullishClosePattern(num[i], num.slice(Math.max(0, i - 4), i));
     };
 
+    // Duas passadas: só corpo (o que o scan do bot detecta, inclusive explosão que depois fechou em
+    // padrão de baixa) + regra do fechamento (candlePatterns: corpo OU padrão de alta, sem padrão de
+    // baixa). A 2ª diz se o bot compraria e acrescenta os candles liberados só pelo padrão.
+    const byRule = new Map(findBreakoutSignals(candles, { ...opts, candlePatterns: true }).map((s) => [s.openTime, s]));
     const byCandle = new Map();
-    for (const s of findBreakoutSignals(candles, opts)) {
+    const addReplay = (s) => {
+      if (byCandle.has(s.openTime)) return;
+      const atClose = byRule.get(s.openTime);
       byCandle.set(s.openTime, {
         candleOpenTime: s.openTime, closed: s.closed, price: s.close,
         bodyPct: s.bodyPct, volumeRatio: s.volumeRatio, order: null,
-        bullishPattern: s.closed ? patternAt(s.openTime) : null, authorizedBy: s.closed ? 'body' : null,
+        bullishPattern: s.closed ? patternAt(s.openTime) : null,
+        authorizedBy: s.closed ? (atClose?.authorizedBy ?? null) : null,
       });
-    }
+    };
+    findBreakoutSignals(candles, opts).forEach(addReplay);
+    byRule.forEach(addReplay);
     for (const o of orders) {
       const t = Number(o.close_condition?.candleOpenTime);
       if (!Number.isFinite(t)) continue;

@@ -155,3 +155,35 @@ describe('findRecentBreakout — firstOfMove (só a 1ª explosão do movimento)'
     expect(buildFilterName(normalizeOptions({ minVolume24h: '1000000' }))).toBe('4h|Explosão|c5|v3|f40|r');
   });
 });
+
+describe('candlePatterns — regra do bot no fechamento (v1.189.0)', () => {
+  const P = { ...DEFAULTS, candlePatterns: true };
+  // Martelo: corpo 4,5% (< 5%), mas a máxima chegou a +5% da abertura
+  const HAMMER = { open: 100, high: 105, low: 90, close: 104.5, volume: 5000 };
+
+  test('padrão de alta no candle fechado dispensa o corpo mínimo', () => {
+    const r = evaluateBullishBreakout(series(HAMMER), P, NOW_CLOSED);
+    expect(r).toMatchObject({ authorizedBy: 'pattern', bullishPattern: 'hammer', bodyPct: 4.5, closed: true });
+    expect(evaluateBullishBreakout(series(HAMMER), DEFAULTS, NOW_CLOSED)).toBeNull();
+  });
+
+  test('candle em formação segue só o corpo', () => {
+    expect(evaluateBullishBreakout(series(HAMMER), P, NOW_OPEN)).toBeNull();
+  });
+
+  test('máxima que nunca chegou ao corpo mínimo não passa (o scan do bot nunca viu)', () => {
+    const maru = { open: 100, high: 103.1, low: 99.95, close: 103, volume: 5000 };
+    expect(evaluateBullishBreakout(series(maru), P, NOW_CLOSED)).toBeNull();
+  });
+
+  test('padrão de baixa no fechamento tira a moeda', () => {
+    const cs = series({ open: 100, high: 106, low: 89, close: 105.5, volume: 5000 });
+    [101.2, 101.5, 101.8].forEach((c, k) => { cs[17 + k].close = c; }); // alta antes → enforcado
+    expect(evaluateBullishBreakout(cs, DEFAULTS, NOW_CLOSED)).toMatchObject({ authorizedBy: 'body' });
+    expect(evaluateBullishBreakout(cs, P, NOW_CLOSED)).toBeNull();
+  });
+
+  test('nome do filtro ganha |pa', () => {
+    expect(buildFilterName(normalizeOptions({ candlePatterns: 'true' }))).toMatch(/\|pa$/);
+  });
+});

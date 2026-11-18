@@ -386,7 +386,7 @@ Scanner `backend/market/bullishBreakoutScanner.js` (rota `GET /services/bullish-
 **"Explosão de Alta"** em Analisar Indicadores, filtro `4h|Explosão|c5|v3|f40|r`): candle único com corpo
 verde ≥ X%, volume ≥ N× a média dos 20 anteriores, fechamento acima de 40% do range e rompendo a máxima
 desses 20. No painel o padrão é **só a 1ª explosão** (`firstOfMove`, igual ao bot; filtro termina em `|1a`;
-seletor "Qualquer explosão" desliga). OCO do gráfico ganhou o modo **"no fechamento do candle"** (`entry_kind 'candle_close'`,
+seletor "Qualquer explosão" desliga). **v1.189.0:** o painel segue a regra do bot no fechamento (`candlePatterns`, padrão ligado, filtro termina em `|pa`; seletor "Só corpo" desliga): no candle FECHADO, padrão de baixa tira a moeda e corpo < X% passa com padrão de alta se a máxima chegou a X% (`risePct` — o scan do bot só vê o candle se o corpo passou de 5% com ele aberto); no candle em formação nada muda. A rota `/signals` usa a mesma regra no replay (`authorizedBy` null = explosão que o bot recusaria no fechamento). OCO do gráfico ganhou o modo **"no fechamento do candle"** (`entry_kind 'candle_close'`,
 coluna `close_condition`, migração `supabase/add-manual-oco-close-condition.sql`): o watcher espera o
 candle fechar e NÃO compra se fechou num padrão de baixa (`bearishClosePattern` em
 `backend/bot/shared/candleCloseCondition.js`: shooting star, inverted hammer, gravestone doji, hanging man

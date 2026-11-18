@@ -1111,8 +1111,8 @@ export async function fetchGateCoinsFilter({ minVolumeUsdt = 0, maxVolumeUsdt = 
 }
 
 /** Explosão de Alta — candle único de explosão no mercado USDT (ver bullishBreakoutScanner.js). */
-export async function fetchBullishBreakoutFilter({ interval = '4h', minBodyPct, minVolumeRatio, closedOnly = false, firstOfMove = true, minVolume24h } = {}) {
-  const params = new URLSearchParams({ interval, closedOnly: String(closedOnly), firstOfMove: String(firstOfMove) });
+export async function fetchBullishBreakoutFilter({ interval = '4h', minBodyPct, minVolumeRatio, closedOnly = false, firstOfMove = true, candlePatterns = true, minVolume24h } = {}) {
+  const params = new URLSearchParams({ interval, closedOnly: String(closedOnly), firstOfMove: String(firstOfMove), candlePatterns: String(candlePatterns) });
   if (minVolume24h) params.set('minVolume24h', String(minVolume24h));
   if (minBodyPct) params.set('minBodyPct', String(minBodyPct));
   if (minVolumeRatio) params.set('minVolumeRatio', String(minVolumeRatio));

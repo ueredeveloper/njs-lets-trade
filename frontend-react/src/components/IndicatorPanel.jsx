@@ -166,7 +166,7 @@ const ICHIMOKU_LINE_LABELS = {
 // Painel abre SÓ com a Explosão de Alta (volume ≥ 1,5× · corpo ≥ 5% · candle atual). Os Momentum
 // RSI Geral/Exclusivo continuam nos formulários prontos (QUICK_PRESETS).
 const DEFAULT_INDICATORS = [
-  { type: 'bullishBreakout', intervals: ['4h'], minBodyPct: '5', minVolumeRatio: '1.5', closedOnly: false, firstOfMove: true, minVolume24h: '1000000' },
+  { type: 'bullishBreakout', intervals: ['4h'], minBodyPct: '5', minVolumeRatio: '1.5', closedOnly: false, firstOfMove: true, candlePatterns: true, minVolume24h: '1000000' },
 ];
 
 /** Formulários prontos — cada um substitui a lista de indicadores por uma única busca pré-configurada. */
@@ -264,7 +264,8 @@ function buildSummary(value, t) {
   if (type === 'bullishBreakout') {
     const candle = value.closedOnly ? t('ind.bb_out_candle_closed') : t('ind.bb_out_candle_current');
     const first = value.firstOfMove === false ? 'qualquer explosão' : '1ª explosão';
-    return `${t('ind.bullish_breakout')} — corpo ≥ ${value.minBodyPct ?? '5'}% · volume ≥ ${value.minVolumeRatio ?? '3'}× · vol 24h ≥ ${vol24hLabel(value.minVolume24h ?? BULLISH_BREAKOUT_VOL24H_DEFAULT)} · ${candle} · ${first} · ${ivLabel}`;
+    const rule = value.candlePatterns === false ? '' : ' ou padrão de alta';
+    return `${t('ind.bullish_breakout')} — corpo ≥ ${value.minBodyPct ?? '5'}%${rule} · volume ≥ ${value.minVolumeRatio ?? '3'}× · vol 24h ≥ ${vol24hLabel(value.minVolume24h ?? BULLISH_BREAKOUT_VOL24H_DEFAULT)} · ${candle} · ${first} · ${ivLabel}`;
   }
   if (type === 'movingAverage') {
     const len = value.length ?? '200';
@@ -694,6 +695,12 @@ function IndicatorRow({ value, onChange }) {
               title="1ª explosão: igual ao bot price action — fica de fora a moeda que já explodiu em algum dos 20 candles anteriores (2ª/3ª alta seguida)">
               <option value="first">1ª explosão</option>
               <option value="any">Qualquer explosão</option>
+            </select>
+            <select className={sel} value={value.candlePatterns === false ? 'body' : 'bot'}
+              onChange={(e) => onChange({ ...value, candlePatterns: e.target.value === 'bot' })}
+              title="Regra do bot no fechamento do candle: corpo ≥ X% OU padrão de alta (martelo, engolfo, marubozu… — com a máxima tendo passado de X%), e nunca padrão de baixa (estrela cadente, enforcado, engolfo de baixa…). Só muda o candle FECHADO — use com 'Último fechado' pra ver o que o bot compraria.">
+              <option value="bot">Corpo ou padrão de alta</option>
+              <option value="body">Só corpo</option>
             </select>
           </>
         )}
@@ -1816,6 +1823,8 @@ export default function IndicatorPanel({ open, onToggle }) {
             interval, minBodyPct: ind.minBodyPct ?? '5', minVolumeRatio: ind.minVolumeRatio ?? '3', closedOnly: !!ind.closedOnly,
             // Padrão = bot price action: só a 1ª explosão do movimento (firstOfMove).
             firstOfMove: ind.firstOfMove !== false,
+            // Padrão = regra do bot no fechamento (v1.187.0): corpo OU padrão de alta, sem padrão de baixa.
+            candlePatterns: ind.candlePatterns !== false,
             minVolume24h: ind.minVolume24h ?? BULLISH_BREAKOUT_VOL24H_DEFAULT,
           });
           console.log('[frontend-react] explosão de alta:', filter.name, '—', filter.list.length, 'moedas');

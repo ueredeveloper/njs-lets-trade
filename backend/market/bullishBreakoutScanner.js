@@ -30,6 +30,15 @@
  * ao estouro também foi explosão (mesmos critérios), a moeda fica de fora. Caso INITUSDT 4h
  * 09–10/11/2026: explodiu às 13:00, 17:00 e 01:00 e o automático entrou nas três.
  *
+ * `candlePatterns` (v1.189.0, regra do bot no fechamento — manualOcoWatcher#processCandleClose):
+ * num candle FECHADO, padrão de baixa (bearishClosePattern: shooting star, enforcado, engolfo de
+ * baixa…) tira a moeda; corpo abaixo de minBodyPct passa se o candle fechou num padrão de ALTA
+ * (bullishClosePattern: martelo, engolfo de alta, marubozu…) E a máxima chegou a minBodyPct acima da
+ * abertura (risePct) — o bot só vê o candle se o scan pegou o corpo ≥ 5% com ele aberto, e o máximo
+ * que o corpo chegou foi high − open. Volume, fechamento no alto e rompimento continuam exigidos.
+ * No candle em formação não muda nada (padrão só existe no fechamento). firstOfMove continua
+ * olhando só o corpo nos anteriores, igual ao scan do bot.
+ *
  * Candles via fetchKlines direto (não o cache em disco de getCandles.js): o scan pede só
  * lookback+2 candles por moeda e precisa do candle aberto fresco, sem gravar ~400 arquivos.
  *
@@ -40,6 +49,7 @@ const fetchKlines = require('../binance/fetchKlines');
 const getTickers = require('../binance/cachedTicker24hr');
 const { getActiveUsdtPairs } = require('../binance/getActiveUsdtPairs');
 const { getSymbolCategories } = require('../utils/assetCategories');
+const { bearishClosePattern, bullishClosePattern } = require('../bot/shared/candleCloseCondition');
 
 // Stablecoins (sem momentum) e bStocks (ações/ETFs tokenizados — Binance recusa "not permitted
 // for this account" nesta conta) ficam fora da varredura.
@@ -55,6 +65,7 @@ const DEFAULTS = {
   requireBreakout: true,
   closedOnly: false,
   firstOfMove: false,
+  candlePatterns: false,
   minVolume24h: 1_000_000,
 };
 
@@ -89,6 +100,7 @@ function normalizeOptions(raw = {}) {
     requireBreakout: bool(raw.requireBreakout, DEFAULTS.requireBreakout),
     closedOnly: bool(raw.closedOnly, DEFAULTS.closedOnly),
     firstOfMove: bool(raw.firstOfMove, DEFAULTS.firstOfMove),
+    candlePatterns: bool(raw.candlePatterns, DEFAULTS.candlePatterns),
     minVolume24h: num(raw.minVolume24h, DEFAULTS.minVolume24h),
   };
   if (!VALID_INTERVALS.includes(opts.interval)) throw new Error(`intervalo inválido: ${opts.interval}`);
@@ -130,13 +142,25 @@ function evaluateBullishBreakout(candles, options, nowMs = Date.now()) {
   const closePos = (cur.close - cur.low) / (cur.high - cur.low);
   const priorHigh = Math.max(...prev.map((c) => c.high));
   const brokeOut = cur.close > priorHigh;
+  const risePct = ((cur.high - cur.open) / cur.open) * 100;
+  const closed = cur.openTime + ivMs <= nowMs;
 
-  if (bodyPct < opts.minBodyPct || volumeRatio < opts.minVolumeRatio || closePos < opts.minClosePos) return null;
+  // Regra do bot no fechamento (candlePatterns): padrão de baixa barra; padrão de alta dispensa o corpo.
+  let bullishPattern = null;
+  if (opts.candlePatterns && closed) {
+    const last4 = prev.slice(-4);
+    if (bearishClosePattern(cur, last4)) return null;
+    bullishPattern = bullishClosePattern(cur, last4);
+  }
+  let authorizedBy = bodyPct >= opts.minBodyPct ? 'body' : null;
+  if (!authorizedBy && bullishPattern && risePct >= opts.minBodyPct) authorizedBy = 'pattern';
+
+  if (!authorizedBy || volumeRatio < opts.minVolumeRatio || closePos < opts.minClosePos) return null;
   if (opts.requireBreakout && !brokeOut) return null;
 
   return {
     openTime: cur.openTime,
-    closed: cur.openTime + ivMs <= nowMs,
+    closed,
     open: cur.open,
     high: cur.high,
     low: cur.low,
@@ -147,7 +171,9 @@ function evaluateBullishBreakout(candles, options, nowMs = Date.now()) {
     priorHigh,
     brokeOut,
     breakoutPct: round(((cur.close - priorHigh) / priorHigh) * 100),
-    risePct: round(((cur.high - cur.open) / cur.open) * 100),
+    risePct: round(risePct),
+    authorizedBy,
+    bullishPattern,
     // Volume limitado a 20× pra uma moeda ilíquida com volume anterior ~0 não dominar o ranking
     score: round(bodyPct * Math.min(volumeRatio, 20) * closePos),
   };
@@ -175,7 +201,7 @@ function findRecentBreakout(candles, options, nowMs = Date.now()) {
   if (opts.firstOfMove) {
     const at = cs.length - 1 - best.candlesAgo;
     for (let j = at - 1; j >= Math.max(opts.lookback, at - opts.lookback); j--) {
-      if (evaluateBullishBreakout(cs.slice(0, j + 1), { ...opts, closedOnly: false }, nowMs)) return null;
+      if (evaluateBullishBreakout(cs.slice(0, j + 1), { ...opts, closedOnly: false, candlePatterns: false }, nowMs)) return null;
     }
   }
   best.changeSincePct = round(((lastClose - best.close) / best.close) * 100);
@@ -191,11 +217,14 @@ function findRecentBreakout(candles, options, nowMs = Date.now()) {
 function findBreakoutSignals(candles, options, nowMs = Date.now()) {
   const opts = { ...DEFAULTS, ...options, closedOnly: false };
   const cs = candles ?? [];
-  const hits = cs.map((_, i) => (i >= opts.lookback ? evaluateBullishBreakout(cs.slice(0, i + 1), opts, nowMs) : null));
+  const evalAt = (o) => cs.map((_, i) => (i >= opts.lookback ? evaluateBullishBreakout(cs.slice(0, i + 1), o, nowMs) : null));
+  const hits = evalAt(opts);
+  // firstOfMove olha só o corpo nos anteriores (igual ao scan do bot), mesmo com candlePatterns.
+  const bodyHits = opts.candlePatterns ? evalAt({ ...opts, candlePatterns: false }) : hits;
   const out = [];
   for (let i = 0; i < hits.length; i++) {
     if (!hits[i]) continue;
-    if (opts.firstOfMove && hits.slice(Math.max(0, i - opts.lookback), i).some(Boolean)) continue;
+    if (opts.firstOfMove && bodyHits.slice(Math.max(0, i - opts.lookback), i).some(Boolean)) continue;
     out.push(hits[i]);
   }
   return out;
@@ -219,6 +248,7 @@ function buildFilterName(opts) {
   if (opts.requireBreakout) parts.push('r');
   if (opts.closedOnly) parts.push('fechado');
   if (opts.firstOfMove) parts.push('1a');
+  if (opts.candlePatterns) parts.push('pa');
   // Volume 24h fora do padrão (1M) entra no nome, senão buscas com 0,5M e 1M viram o mesmo filtro.
   if (opts.minVolume24h !== DEFAULTS.minVolume24h) parts.push(`vol${opts.minVolume24h / 1e6}M`);
   return parts.join('|');
