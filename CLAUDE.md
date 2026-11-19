@@ -378,7 +378,9 @@ sinal segue a regra do bot no fechamento (`signalRule: 'bot'`): 1º candle fecha
 alta, recusando padrão de baixa (`priceActionBoxSim.js` + `utils/candlePatterns.js`, **espelho ESM** de
 `bearishClosePattern`/`bullishClosePattern` de `backend/bot/shared/candleCloseCondition.js` — mude os dois
 juntos); o resumo mostra o padrão, se entrou pelo corpo ou pelo padrão, e os candles recusados. `'green'` =
-qualquer candle de alta (antigo).
+qualquer candle de alta (antigo). **v1.190.0:** a caixa encadeia VÁRIOS trades (fechou um, procura o
+próximo sinal a partir do candle seguinte à saída; sinal novo antes do fill refaz a limite) — `trades`/`totals`
+no retorno, faixa+OCO numerados por trade, cabeçalho com o total e detalhes por trade + composto.
 
 ### Explosão de Alta — scanner + compra no fechamento do candle
 

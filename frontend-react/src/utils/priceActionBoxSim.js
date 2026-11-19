@@ -11,10 +11,14 @@
 //      ou o candle antes dele ('prev').
 //   3. A limite precisa preencher DENTRO da caixa (borda direita = validade). Fill quando a mínima
 //      toca o nível; abriu abaixo (gap) = preenche na abertura.
+//      Sinal novo antes do fill = a limite é refeita nele (v1.190.0).
 //   4. Depois do fill: alvo +targetPct% / stop −stopPct% (mínimo 10%) sobre o preço de entrada, até o fim dos
 //      candles carregados. Candle que toca os dois = STOP (conservador, sem saber a ordem
 //      intra-candle) — inclusive o próprio candle do fill, onde o alvo só vale se o candle FECHOU
 //      acima dele (a máxima pode ter vindo antes da entrada). Sem taxa de corretagem.
+//   5. Vários trades na caixa (v1.190.0): fechado um trade (alvo/stop), procura o PRÓXIMO sinal a
+//      partir do candle seguinte à saída — uma posição por vez, como o bot. Para no trade em aberto,
+//      na entrada que não preencheu ou quando não há mais sinal. Antes só o 1º trade aparecia.
 
 import { MANUAL_OCO_MIN_STOP_PCT } from './manualOco';
 import { bearishClosePattern, bullishClosePattern } from './candlePatterns';
@@ -51,6 +55,39 @@ export function simulatePriceActionBox(candlesticks, box, params, intervalMs, no
   if (!(p.targetPct > 0) || !(p.stopPct > 0) || !(p.stopPct < 100)) return { status: 'badParams' };
 
   const isClosed = (c) => !(intervalMs > 0) || c.openTime + intervalMs <= nowMs;
+
+  // Encadeia os trades: cada um começa no candle depois da saída do anterior.
+  const trades = [];
+  let first = null;
+  let start = cs.findIndex((c) => c.openTime >= box.fromMs);
+  while (start >= 0 && start < cs.length) {
+    const r = simulateFrom(cs, start, box, p, isClosed);
+    if (!first) first = r;
+    if (r.signal && r.status !== 'noRef') trades.push(r);
+    if (r.status !== 'closed') break;
+    start = r.exitIdx + 1;
+  }
+  if (!first) return { status: 'noSignal', rejected: [], params: p, trades: [] };
+  const closed = trades.filter((t) => t.status === 'closed');
+  const totals = {
+    count: trades.filter((t) => t.fill).length,
+    wins: closed.filter((t) => t.outcome === 'target').length,
+    losses: closed.filter((t) => t.outcome === 'stop').length,
+    pnlSumPct: trades.reduce((acc, t) => acc + (t.fill ? t.pnlPct : 0), 0),
+    compoundPct: (trades.reduce((acc, t) => acc * (t.fill ? 1 + t.pnlPct / 100 : 1), 1) - 1) * 100,
+  };
+  const targets = trades.map((t) => t.targetPrice).filter(Number.isFinite);
+  return {
+    ...first,
+    trades,
+    totals,
+    maxTargetPrice: targets.length ? Math.max(...targets) : null,
+    rejected: trades.length ? trades.flatMap((t) => t.rejected ?? []) : first.rejected,
+  };
+}
+
+/** Um trade: 1º sinal a partir de cs[startIdx] (dentro da caixa) → limite → alvo/stop. */
+function simulateFrom(cs, startIdx, box, p, isClosed, carried = []) {
   // Análise de candle de cada candle fechado da caixa até o sinal (padrão de alta/baixa + corpo);
   // `rejected` = candles que a regra do bot recusou por padrão de baixa (aparecem no resumo).
   const analyse = (i) => {
@@ -62,24 +99,28 @@ export function simulatePriceActionBox(candlesticks, box, params, intervalMs, no
       bearish: bearishClosePattern(c, prev),
     };
   };
-  const rejected = [];
+  const rejected = [...carried];
+  // Análise do candle i se ele é sinal pela regra (null se não é); registra os recusados.
+  const signalAt = (i) => {
+    const c = cs[i];
+    const a = analyse(i);
+    if (p.signalRule === 'green') return c.close > c.open ? { ...a, authorizedBy: 'green' } : null;
+    if (a.bearish) {
+      if (c.close > c.open && !rejected.some((r) => r.openTime === c.openTime)) rejected.push({ openTime: c.openTime, pattern: a.bearish });
+      return null;
+    }
+    if (a.bodyPct >= Number(p.minBodyPct)) return { ...a, authorizedBy: 'body' };
+    if (a.bullish) return { ...a, authorizedBy: 'pattern' };
+    return null;
+  };
   let signalIdx = -1;
   let analysis = null;
-  for (let i = 0; i < cs.length; i++) {
+  for (let i = startIdx; i < cs.length; i++) {
     const c = cs[i];
     if (c.openTime < box.fromMs) continue;
     if (c.openTime > box.toMs || !isClosed(c)) break;
-    const a = analyse(i);
-    if (p.signalRule === 'green') {
-      if (c.close > c.open) { signalIdx = i; analysis = { ...a, authorizedBy: 'green' }; break; }
-      continue;
-    }
-    if (a.bearish) {
-      if (c.close > c.open) rejected.push({ openTime: c.openTime, pattern: a.bearish });
-      continue;
-    }
-    if (a.bodyPct >= Number(p.minBodyPct)) { signalIdx = i; analysis = { ...a, authorizedBy: 'body' }; break; }
-    if (a.bullish) { signalIdx = i; analysis = { ...a, authorizedBy: 'pattern' }; break; }
+    analysis = signalAt(i);
+    if (analysis) { signalIdx = i; break; }
   }
   if (signalIdx < 0) return { status: 'noSignal', rejected, params: p };
 
@@ -103,6 +144,9 @@ export function simulatePriceActionBox(candlesticks, box, params, intervalMs, no
       entry = c.open < entryPlanned ? c.open : entryPlanned;
       break;
     }
+    // Sinal NOVO antes de a limite preencher → a limite é refeita nele (senão uma entrada que nunca
+    // preenche travaria os trades seguintes da caixa).
+    if (isClosed(c) && signalAt(i)) return simulateFrom(cs, i, box, p, isClosed, rejected);
   }
   if (fillIdx < 0) {
     return {

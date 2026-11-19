@@ -5870,6 +5870,11 @@ export default function CandlestickChart() {
   const chartPaBoxRects = useMemo(() => {
     if (!paSim?.ref) return [];
     const ivSec = Math.max(1, Math.floor(paIntervalMs / 1000));
+    // Vários trades na caixa (v1.190.0): um conjunto faixa amarela + OCO por trade, numerados.
+    const list = paSim.trades?.length ? paSim.trades : [paSim];
+    const multi = list.length > 1;
+    return list.flatMap((tr, n) => paTradeRects(tr, multi ? `#${n + 1} ` : ''));
+    function paTradeRects(paSim, tag) {
     const refT = Math.floor(paSim.ref.openTime / 1000);
     const fillT = paSim.fill ? Math.floor(paSim.fill.openTime / 1000) : Math.floor(analysisBox.toMs / 1000);
     const lvlLabel = `${paSim.params.entryRef === 'prev' ? 'ant. ' : ''}${paSim.level}%`;
@@ -5886,8 +5891,8 @@ export default function CandlestickChart() {
       time1: refT, time2: Math.max(refT + ivSec, fillT), price1: paSim.ref.low, price2: paSim.ref.high,
       fillColor: 'rgba(250,204,21,0.10)', strokeColor: 'rgba(250,204,21,0.6)', labelColor: '#facc15',
       label: paSim.status === 'notFilled'
-        ? `entrada ${fmtPrice(paSim.entryPlanned)} (${lvlLabel}) · não preencheu`
-        : `entrada ${fmtPrice(paSim.entry)} (${lvlLabel})`,
+        ? `${tag}entrada ${fmtPrice(paSim.entryPlanned)} (${lvlLabel}) · não preencheu`
+        : `${tag}entrada ${fmtPrice(paSim.entry)} (${lvlLabel})`,
       labelPos: 'bottom',
       sublabel: candleType, sublabelColor: '#fde047',
     }];
@@ -5914,6 +5919,7 @@ export default function CandlestickChart() {
       labelPos: 'bottom',
     });
     return rects;
+    }
   }, [paSim, paIntervalMs, analysisBox]);
 
   const tradeBoxRectsAll = useMemo(
@@ -6012,6 +6018,11 @@ export default function CandlestickChart() {
         noRef: 'price action · sem candle anterior',
         badParams: 'price action · parâmetros inválidos',
       }[paSim?.status] ?? 'price action';
+      const tt = paSim?.totals;
+      if (paSim?.trades?.length > 1 && tt) {
+        const pnl = `${tt.pnlSumPct >= 0 ? '+' : ''}${tt.pnlSumPct.toFixed(1)}%`;
+        return { ...base, label: `price action · ${tt.count} trades · ${tt.wins} ✓ ${tt.losses} ✗ · ${pnl}` };
+      }
       return { ...base, label };
     }
     const n = chartFlagsConfig?.scoped ? chartFlagsConfig.scopedCount : null;
@@ -6849,7 +6860,8 @@ export default function CandlestickChart() {
       // OCO. Mínimo de ~90px de folga pra não sair do topo do gráfico.
       style={analysisBoxKind === 'priceAction'
         ? (() => {
-          const targetY = paSim?.targetPrice ? lwChartRef.current?.priceToCoordinate(paSim.targetPrice) : null;
+          const topTarget = paSim?.maxTargetPrice ?? paSim?.targetPrice;
+          const targetY = topTarget ? lwChartRef.current?.priceToCoordinate(topTarget) : null;
           const topY = Number.isFinite(targetY) ? Math.min(analysisBoxAnchorPx.top, targetY) : analysisBoxAnchorPx.top;
           return { left: Math.max(4, analysisBoxAnchorPx.left), top: Math.max(90, topY - 4), transform: 'translateY(-100%)' };
         })()
@@ -7015,6 +7027,14 @@ export default function CandlestickChart() {
               badParams: { tone: 'bg-red-500/15 text-red-300 border-red-500/30', text: 'Parâmetros inválidos' },
             }[paSim.status];
             if (!head) return null;
+            const tt = paSim.totals;
+            if (paSim.trades?.length > 1 && tt) {
+              head.text = `${tt.count} trades · ${tt.wins} alvo${tt.wins === 1 ? '' : 's'} · ${tt.losses} stop${tt.losses === 1 ? '' : 's'}`;
+              head.pnl = `${tt.pnlSumPct >= 0 ? '+' : ''}${tt.pnlSumPct.toFixed(2)}%`;
+              head.tone = tt.pnlSumPct >= 0
+                ? 'bg-green-500/15 text-green-300 border-green-500/30'
+                : 'bg-red-500/15 text-red-300 border-red-500/30';
+            }
             // Cabeçalho = botão do acordeão: resultado sempre à vista, detalhes só se abrir.
             return (
               <button
@@ -7032,7 +7052,33 @@ export default function CandlestickChart() {
               </button>
             );
           })()}
-          {paDetailsOpen && (
+          {paDetailsOpen && paSim.trades?.length > 1 && (
+          <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-px px-2 py-1">
+            {paSim.trades.map((tr, n) => {
+              const res = tr.status === 'closed'
+                ? (tr.outcome === 'target' ? 'alvo ✓' : 'stop ✗')
+                : tr.status === 'open' ? 'aberto' : 'não preencheu';
+              const tone = tr.status === 'closed' ? (tr.outcome === 'target' ? 'text-green-300' : 'text-red-300')
+                : tr.status === 'open' ? 'text-sky-300' : 'text-amber-300';
+              const how = tr.analysis?.authorizedBy === 'pattern' ? patternPt(tr.analysis.bullish) : 'corpo';
+              return (
+                <BoxSummaryRow key={tr.signal.openTime} label={`#${n + 1}`} tone={tone}>
+                  <span className="font-mono tabular-nums">{fmtDate((tr.fill ?? tr.signal).openTime)}</span>
+                  <span className="text-slate-400"> · {how} · </span>
+                  <span>{res}</span>
+                  {tr.pnlPct != null && <span className="font-mono tabular-nums"> {tr.pnlPct >= 0 ? '+' : ''}{tr.pnlPct.toFixed(2)}%</span>}
+                </BoxSummaryRow>
+              );
+            })}
+            {paSim.totals && paSim.trades.length > 1 && (
+              <BoxSummaryRow label="Composto" tone={paSim.totals.compoundPct >= 0 ? 'text-green-300' : 'text-red-300'}>
+                <span className="font-mono tabular-nums">{paSim.totals.compoundPct >= 0 ? '+' : ''}{paSim.totals.compoundPct.toFixed(2)}%</span>
+                <span className="text-slate-400"> · reinvestindo a cada trade</span>
+              </BoxSummaryRow>
+            )}
+          </div>
+          )}
+          {paDetailsOpen && !(paSim.trades?.length > 1) && (
           <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-px px-2 py-1">
             {paSim.analysis && (
               <BoxSummaryRow label="Candle">
