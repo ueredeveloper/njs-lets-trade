@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import PriceActionSettings from './PriceActionSettings';
 import { reloadCandles, getMaCrossScreenerConfig, saveMaCrossScreenerConfig,
   getBollingerMedianTrendConfig, saveBollingerMedianTrendConfig,
   getRsiMomentumConfig, saveRsiMomentumConfig,
@@ -2031,6 +2032,12 @@ export default function SettingsSidebar({ open, onClose }) {
                 </select>
               )}
             </div>
+          </AccordionItem>
+
+          {/* Bot Price action (Explosão de Alta automática) — backend/bot/breakout-auto/priceActionConfig.js */}
+          <AccordionItem id="priceAction" title="Price action (bot)" hint="Explosão de Alta automática: candle 4h com corpo ≥ mínimo ou padrão de alta → compra a mercado no fechamento + OCO. O bot relê esta config a cada varredura (15 min)."
+            openSection={openSection} setOpenSection={setOpenSection}>
+            <PriceActionSettings open={open && openSection === 'priceAction'} inp={inp} />
           </AccordionItem>
 
           {/* Caches de filtros/estatísticas (liga/desliga por cache) */}

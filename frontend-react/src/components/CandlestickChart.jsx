@@ -14,6 +14,7 @@ import { listManualOcoOrders } from '../services/api';
 import { isManualOcoActive, manualOcoLevels, withMinStop, MANUAL_OCO_MIN_STOP_PCT } from '../utils/manualOco';
 import { simulatePriceActionBox, PRICE_ACTION_DEFAULTS } from '../utils/priceActionBoxSim';
 import { patternPt, BULLISH_PATTERN_WHY } from '../utils/candlePatterns';
+import { REGIME_OPTIONS, BEAR_GUARD_OPTIONS, regimeNeeds } from '../utils/priceActionRegime';
 import { buildOcoSuggester } from '../utils/ocoSuggest';
 import convertOpenTime from '../utils/convertOpenTime';
 import Tooltip from './Tooltip';
@@ -61,7 +62,7 @@ function efs(base, cat = 'chart') {
 // padrão — exceto TX e VWAP Bands/MA-Cross, que precisam do histórico cheio pra vendas/sinais
 // antigos (ver efeito de sincronização de intervalo mais abaixo).
 const DEFAULT_DISPLAY_CANDLE_COUNT = 80;
-const LAST_CANDLE_PRESETS = [10, 20, 40, 80, 160, 320];
+const LAST_CANDLE_PRESETS = [10, 20, 40, 80, 160, 320, 1000];
 /** Presets mais usados da janela de candles — os demais ficam escondidos atrás do botão "›"
  *  (mesmo padrão do picker de intervalos logo abaixo, ver COMMON_CHART_INTERVALS). */
 const COMMON_CANDLE_PRESETS = [20, 80, 160];
@@ -5859,10 +5860,40 @@ export default function CandlestickChart() {
   // Caixa tipo 'priceAction' — simulação client-side nos candles da tela (priceActionBoxSim.js):
   // 1º candle de alta fechado na caixa → LIMIT no nível do candle de referência → OCO alvo/stop.
   const paIntervalMs = INTERVAL_MS[selectedChart?.interval ?? currentInterval] ?? 0;
+  // Filtro de regime (priceActionRegime.js): BTC 4h / MACD 4h da moeda / EMA20 1d — candles
+  // buscados ANCORADOS no período da caixa até agora (+120 de folga pro aquecimento das médias),
+  // independentes do intervalo da tela. Chave = o que já foi buscado, pra não refazer a cada arrasto.
+  const [paRegimeCtx, setPaRegimeCtx] = useState({ key: null, data: {} });
+  const paRegime = paParams.regime ?? 'off';
+  const paBearGuard = paParams.bearGuard ?? 'off';
+  const paFilterOn = paRegime !== 'off' || paBearGuard !== 'off';
+  const paRegimeFromMs = analysisBox ? Math.floor(analysisBox.fromMs / 3_600_000) * 3_600_000 : null;
+  useEffect(() => {
+    if (analysisBoxKind !== 'priceAction' || !paFilterOn || paRegimeFromMs == null || !selectedChart?.symbol) return undefined;
+    const need = regimeNeeds(paRegime, paBearGuard);
+    const sym = selectedChart.symbol;
+    const src = selectedChart.source === 'gate' ? '&source=gate' : '';
+    const key = `${sym}|${paRegime}|${paBearGuard}|${paRegimeFromMs}`;
+    if (paRegimeCtx.key === key) return undefined;
+    let cancelled = false;
+    const get = (symbol, interval, extra = '') => fetch(
+      `/services/candles/?symbol=${symbol}&interval=${interval}&fromMs=${paRegimeFromMs}&toMs=${Date.now()}&pad=120${extra}`,
+    ).then((r) => r.json()).then((d) => (Array.isArray(d) ? d : [])).catch(() => []);
+    Promise.all([
+      need.btc4h ? get('BTCUSDT', '4h') : null,
+      need.coin4h ? get(sym, '4h', src) : null,
+      need.coin1d ? get(sym, '1d', src) : null,
+      need.btc1d ? get('BTCUSDT', '1d') : null,
+    ]).then(([btc4h, coin4h, coin1d, btc1d]) => {
+      if (!cancelled) setPaRegimeCtx({ key, data: { btc4h, coin4h, coin1d, btc1d } });
+    });
+    return () => { cancelled = true; };
+  }, [analysisBoxKind, paRegime, paBearGuard, paFilterOn, paRegimeFromMs, selectedChart?.symbol, selectedChart?.source, paRegimeCtx.key]);
   const paSim = useMemo(() => {
     if (!analysisBox || analysisBoxKind !== 'priceAction') return null;
-    return simulatePriceActionBox(selectedChart?.candlesticks, analysisBox, paParams, paIntervalMs);
-  }, [analysisBox, analysisBoxKind, selectedChart?.candlesticks, paParams, paIntervalMs]);
+    const ctx = paRegimeCtx.key?.startsWith(`${selectedChart?.symbol}|${paRegime}|${paBearGuard}|`) ? paRegimeCtx.data : {};
+    return simulatePriceActionBox(selectedChart?.candlesticks, analysisBox, paParams, paIntervalMs, Date.now(), ctx);
+  }, [analysisBox, analysisBoxKind, selectedChart?.candlesticks, selectedChart?.symbol, paParams, paIntervalMs, paRegimeCtx, paRegime, paBearGuard]);
 
   // Desenho: faixa amarela no candle de referência (de onde sai a entrada, com o nível) até o fill
   // (ou até a borda da caixa, se não preencheu) + OCO do trade igual ao chartTradeBoxRects (a ponta
@@ -6018,12 +6049,15 @@ export default function CandlestickChart() {
         noRef: 'price action · sem candle anterior',
         badParams: 'price action · parâmetros inválidos',
       }[paSim?.status] ?? 'price action';
+      // P&L do intervalo selecionado (soma dos trades) + variação da moeda no mesmo período.
       const tt = paSim?.totals;
+      const sg = (v) => `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`;
+      const coin = paSim?.intervalChangePct != null ? ` · moeda ${sg(paSim.intervalChangePct)}` : '';
       if (paSim?.trades?.length > 1 && tt) {
-        const pnl = `${tt.pnlSumPct >= 0 ? '+' : ''}${tt.pnlSumPct.toFixed(1)}%`;
-        return { ...base, label: `price action · ${tt.count} trades · ${tt.wins} ✓ ${tt.losses} ✗ · ${pnl}` };
+        return { ...base, label: `price action · ${tt.count} trades · ${tt.wins} ✓ ${tt.losses} ✗ · P&L ${sg(tt.pnlSumPct)}${coin}` };
       }
-      return { ...base, label };
+      if (tt?.count) return { ...base, label: `${label} · P&L ${sg(tt.pnlSumPct)}${coin}` };
+      return { ...base, label: `${label}${coin}` };
     }
     const n = chartFlagsConfig?.scoped ? chartFlagsConfig.scopedCount : null;
     return { ...base, label: n != null ? `análise · ${n} candle${n === 1 ? '' : 's'}` : 'análise' };
@@ -6992,11 +7026,38 @@ export default function CandlestickChart() {
               <option value="prev">do anterior</option>
             </BoxSelect>
             <BoxIconButton
-              onClick={() => setPaParams(PRICE_ACTION_DEFAULTS)}
+              onClick={() => setPaParams({ ...PRICE_ACTION_DEFAULTS, regime: paParams.regime ?? 'off', bearGuard: paParams.bearGuard ?? 'off' })}
               title="Voltar ao padrão (sinal = corpo ≥ 5% ou padrão de alta, alvo +15%, entrada 50% do candle do sinal, stop −15%)"
             >
               ↺
             </BoxIconButton>
+          </div>
+          <div className="flex items-center justify-between gap-1">
+            <BoxSelect
+              value={paRegime}
+              onChange={(e) => setPaParams((p) => ({ ...p, regime: e.target.value }))}
+              title={'Filtro de regime no fechamento do candle do sinal (só candles já fechados):\n'
+                + '• BTC > EMA50 4h — o mercado em alta\n'
+                + '• BTC + MACD 4h — e o histograma MACD(12,26,9) 4h da moeda positivo\n'
+                + '• BTC + EMA20 1d — e a moeda fechou acima da EMA20 no diário\n'
+                + '• BTC + EMA20 1d + MACD 4h — as três juntas\n'
+                + 'Estudo 67 moedas 4h (26/06→18/11): sem filtro +0,49%/trade; BTC +1,65%; BTC+MACD +2,32%; BTC+EMA20 1d +1,67%. 1000 candles, 50 moedas: BTC+EMA20 1d 54% / +1,28%; + MACD 4h 58% / +2,30%. Sinal barrado aparece em "Recusado".'}
+              className={`flex-1 ${paRegime !== 'off' ? 'text-sky-300' : ''}`}
+            >
+              {REGIME_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </BoxSelect>
+            <BoxSelect
+              value={paBearGuard}
+              onChange={(e) => setPaParams((p) => ({ ...p, bearGuard: e.target.value }))}
+              title={'Detector de período de baixa (combina com o regime): só entra com a EMA20 diária do BTC subindo (último 1d fechado > o de 5 dias antes).\n'
+                + 'Estudo 77 moedas, 1000 candles 4h, alvo +15%, regime BTC+EMA20 1d+MACD 4h: stop −30% de +4,07% pra +5,61%/trade (outubro de −7,7% pra −2,1%); stop −20% +4,35%. Reage com atraso: a virada ainda pega trades abertos antes dela.'}
+              className={`flex-1 ${paBearGuard !== 'off' ? 'text-sky-300' : ''}`}
+            >
+              {BEAR_GUARD_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </BoxSelect>
+            {paFilterOn && paSim?.regimePending && (
+              <span className="text-[9px] text-amber-300 whitespace-nowrap" title="Candles do BTC/da moeda ainda carregando (ou indisponíveis) — sinais sem dado passam">carregando…</span>
+            )}
           </div>
           </>
         )}
@@ -7070,6 +7131,25 @@ export default function CandlestickChart() {
                 </BoxSummaryRow>
               );
             })}
+            {paSim.rejected?.length > 0 && (
+              <BoxSummaryRow label="Recusado" tone="text-red-300">
+                {Object.entries(paSim.rejected.reduce((acc, r) => {
+                  const k = patternPt(r.pattern); acc[k] = (acc[k] ?? 0) + 1; return acc;
+                }, {})).map(([k, n]) => `${n}× ${k}`).join(' · ')}
+              </BoxSummaryRow>
+            )}
+            {paSim.totals && (
+              <BoxSummaryRow label="P&L" tone={paSim.totals.pnlSumPct >= 0 ? 'text-green-300' : 'text-red-300'}>
+                <span className="font-mono tabular-nums">{paSim.totals.pnlSumPct >= 0 ? '+' : ''}{paSim.totals.pnlSumPct.toFixed(2)}%</span>
+                <span className="text-slate-400"> · soma dos trades no intervalo</span>
+              </BoxSummaryRow>
+            )}
+            {paSim.intervalChangePct != null && (
+              <BoxSummaryRow label="Moeda" tone={paSim.intervalChangePct >= 0 ? 'text-green-300' : 'text-red-300'}>
+                <span className="font-mono tabular-nums">{paSim.intervalChangePct >= 0 ? '+' : ''}{paSim.intervalChangePct.toFixed(2)}%</span>
+                <span className="text-slate-400"> · variação no intervalo</span>
+              </BoxSummaryRow>
+            )}
             {paSim.totals && paSim.trades.length > 1 && (
               <BoxSummaryRow label="Composto" tone={paSim.totals.compoundPct >= 0 ? 'text-green-300' : 'text-red-300'}>
                 <span className="font-mono tabular-nums">{paSim.totals.compoundPct >= 0 ? '+' : ''}{paSim.totals.compoundPct.toFixed(2)}%</span>
@@ -7105,6 +7185,12 @@ export default function CandlestickChart() {
             {paSim.status === 'open' && (
               <BoxSummaryRow label="Agora" tone={paSim.pnlPct >= 0 ? 'text-green-300' : 'text-red-300'}>
                 <span className="text-slate-400">{paSim.candlesHeld} candles desde a entrada</span>
+              </BoxSummaryRow>
+            )}
+            {paSim.intervalChangePct != null && (
+              <BoxSummaryRow label="Moeda" tone={paSim.intervalChangePct >= 0 ? 'text-green-300' : 'text-red-300'}>
+                <span className="font-mono tabular-nums">{paSim.intervalChangePct >= 0 ? '+' : ''}{paSim.intervalChangePct.toFixed(2)}%</span>
+                <span className="text-slate-400"> · variação no intervalo</span>
               </BoxSummaryRow>
             )}
             {paSim.rejected?.length > 0 && (

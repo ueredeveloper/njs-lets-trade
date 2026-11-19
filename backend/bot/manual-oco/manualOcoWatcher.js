@@ -43,6 +43,7 @@ const { fetchClosedCandle, bearishClosePattern, bullishClosePattern, intervalMs 
 const fetchKlines = require('../../binance/fetchKlines');
 const { evaluateBullishBreakout } = require('../../market/bullishBreakoutScanner');
 const { exitLevels } = require('../breakout-auto/bullishBreakoutAuto');
+const { checkMarketRegime } = require('../breakout-auto/marketRegime');
 const { applyMinStop } = require('../shared/manualOcoStop');
 const { sendWhatsApp } = require('../whatsapp');
 const { sendText } = require('../whatsappApiClient');
@@ -228,6 +229,21 @@ async function processCandleClose(row, adapter, log) {
     };
     if (!confirmed) {
       const why = `${closeTxt} (corpo ${bodyPct >= 0 ? '+' : ''}${bodyPct.toFixed(2)}%${bullish ? `, ${bullish}` : ''}) — a explosão não se confirmou no fechamento`;
+      if (!await patchIf(row, { status: 'CLOSED', error: why, close_condition: { ...cc, closeCheck } })) return;
+      log(`⏹️  [OCO manual] ${tag}: ${why} — não comprou`);
+      notify(`⏹️ Explosão de Alta ${row.symbol}: ${why} — NÃO comprou.`, log);
+      return;
+    }
+  }
+
+  // Filtros de mercado (v1.191.0, close_condition.regime — Configurações → Price action): BTC 4h >
+  // EMA50, moeda > EMA20 1d, MACD 4h > 0, EMA20 1d do BTC subindo, top N altas 24h — no FECHAMENTO
+  // do candle, só com candles 4h/1d já fechados. Ordens antigas sem `regime` não passam por aqui.
+  if (cc.regime) {
+    const rg = await checkMarketRegime(row.symbol, cc.closeAt, cc.regime);
+    closeCheck = { ...(closeCheck ?? {}), regime: { ok: rg.ok, reason: rg.reason ?? null, ...rg.details } };
+    if (!rg.ok) {
+      const why = `${closeTxt} — filtro de mercado barrou: ${rg.reason}`;
       if (!await patchIf(row, { status: 'CLOSED', error: why, close_condition: { ...cc, closeCheck } })) return;
       log(`⏹️  [OCO manual] ${tag}: ${why} — não comprou`);
       notify(`⏹️ Explosão de Alta ${row.symbol}: ${why} — NÃO comprou.`, log);

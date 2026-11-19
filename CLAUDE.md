@@ -380,7 +380,14 @@ alta, recusando padrão de baixa (`priceActionBoxSim.js` + `utils/candlePatterns
 juntos); o resumo mostra o padrão, se entrou pelo corpo ou pelo padrão, e os candles recusados. `'green'` =
 qualquer candle de alta (antigo). **v1.190.0:** a caixa encadeia VÁRIOS trades (fechou um, procura o
 próximo sinal a partir do candle seguinte à saída; sinal novo antes do fill refaz a limite) — `trades`/`totals`
-no retorno, faixa+OCO numerados por trade, cabeçalho com o total e detalhes por trade + composto.
+no retorno, faixa+OCO numerados por trade, cabeçalho com o total e detalhes por trade + composto. Rótulo
+mostra o P&L do intervalo + variação da moeda (`intervalChangePct`). **Filtro de regime** (`params.regime`,
+`utils/priceActionRegime.js`): `btc` (BTC 4h > EMA50), `btcMacd` (+ MACD 4h da moeda > 0), `btcD1` (+ moeda >
+EMA20 1d), `btcD1Macd` (EMA20 1d + MACD 4h — melhor no estudo de 1000 candles/50 moedas: 58%, +2,30%/trade), só candles fechados até o fechamento do sinal; o gráfico busca BTC/moeda 4h/1d ancorados no período
+da caixa; sinal barrado vai pro "Recusado" com o motivo. Estudo 67 moedas 4h 26/06→18/11/2026: sem filtro
++0,49%/trade, BTC +1,65%, BTC+MACD +2,32%. **Detector de baixa** (`params.bearGuard: 'btcE20'`, seletor
+"Baixa" na caixa, combina com o regime): só entra com a EMA20 1d do BTC subindo (vs. 5 dias antes) — com alvo
++15% / stop −30% levou o estudo de +4,07% pra +5,61%/trade (outubro −7,7% → −2,1%). Ainda não está no bot.
 
 ### Explosão de Alta — scanner + compra no fechamento do candle
 
@@ -404,7 +411,17 @@ mínimo, mantendo volume/fechamento no alto/rompimento) e **compra a mercado no 
 `CONFIG.entry = null`; de v1.181.0 a v1.185.0 armava a entrada 5% abaixo, `close_condition.entryDiscount`
 `{ discountPct: 5, waitHours: 12 }` → `entry_kind 'limit'` com `limitExpiresAt` +12h e o candle fechado em
 `exitCandle`; o watcher ainda honra isso nas ordens já gravadas). A OCO usa `close_condition.exit`: alvo +15%,
-stop −15% (ou a metade do candle fechado `(máx+mín)/2`, se mais longe) — era +10%/−10% até v1.185.0. O OCO
+stop −15% (ou a metade do candle fechado `(máx+mín)/2`, se mais longe) — era +10%/−10% até v1.185.0.
+**v1.191.0 — config no painel + filtros de mercado:** Configurações → **Price action (bot)**
+(`PriceActionSettings.jsx`, `GET/PUT /services/sb/price-action-config`, tabela `price_action_bot_config` —
+migração `supabase/add-price-action-bot-config.sql`; sem linha/tabela = padrão de
+`breakout-auto/priceActionConfig.js#DEFAULTS`); o bot relê a cada varredura (15 min). Padrão: alvo **+15% /
+stop −30%**, e `close_condition.regime` (`breakout-auto/marketRegime.js`, espelho de
+`frontend-react/src/utils/priceActionRegime.js` 'btcD1Macd' + bearGuard 'btcE20'): BTC 4h > EMA50, moeda > EMA20
+1d, MACD 4h > 0, EMA20 1d do BTC subindo e moeda entre as **40 maiores altas 24h** — conferidos na varredura
+(pula a moeda, loga 1×/candle) e de novo no FECHAMENTO pelo watcher (só candles 4h/1d fechados; barrou →
+CLOSED "filtro de mercado barrou: …", `closeCheck.regime`); falha de dado = não compra. Ordens antigas sem
+`regime` seguem como antes. O OCO
 do gráfico: o padrão segue "Compra agora" (rascunho na sugestão pelos candles); ao escolher **"no fechamento
 do candle"** o cartão assume o padrão do bot — entrada **a mercado** no seletor (desconto opcional, não
 lembrado) e alvo +15% / stop −15% da entrada (`CLOSE_TARGET_PCT`/`CLOSE_STOP_PCT` em `ChartOcoTool.jsx`). O watcher ignora `entry_kind`

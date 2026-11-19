@@ -25,17 +25,18 @@ describe('exitLevels — alvo/stop sobre o preço comprado, stop na metade do ca
     expect(lv.stop).toBeCloseTo(90);
   });
 
-  test('config padrão (v1.186.0): alvo +15% / stop −15% → comprou a 100: alvo 115, stop 85', () => {
+  test('config padrão (v1.191.0): alvo +15% / stop −30% → comprou a 100: alvo 115, stop 70', () => {
     const lv = exitLevels(100, { high: 106, low: 100 });
     expect(lv.target).toBeCloseTo(115);
-    expect(lv.stop).toBeCloseTo(85);
+    expect(lv.stop).toBeCloseTo(70);
   });
 
   test('config padrão: 25 USDT, máx. 3 ordens, 4h, corpo >= 5%, volume 24h >= 1M, só 1ª explosão, compra no fechamento', () => {
     expect(CONFIG).toMatchObject({
       interval: '4h', usdt: 25, maxActive: 3,
       scan: { minBodyPct: 5, minVolume24h: 1_000_000, firstOfMove: true },
-      exit: { targetPct: 15, minStopPct: 15 },
+      exit: { targetPct: 15, minStopPct: 30 },
+      regime: { topGainers: 40, btcEma20_1dRising: true },
     });
     expect(CONFIG.entry).toBeNull();
   });

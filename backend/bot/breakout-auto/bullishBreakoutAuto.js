@@ -27,30 +27,38 @@ const { sbReq } = require('../shared/supabaseRest');
 const { sendWhatsApp } = require('../whatsapp');
 const { scanBullishBreakouts } = require('../../market/bullishBreakoutScanner');
 const { intervalMs } = require('../shared/candleCloseCondition');
+const { DEFAULTS: PA_DEFAULTS, loadPriceActionConfig } = require('./priceActionConfig');
+const { checkMarketRegime } = require('./marketRegime');
 
 const SOURCE = 'bullish_breakout_auto';
 const ORDERS = 'manual_oco_orders';
 const FAVORITES = 'favorites_binance';
 const LIVE_STATUSES = ['NEW', 'OPEN', 'CANCEL_REQUESTED', 'FILLED', 'BRACKETED', 'SELLING', 'OCO_FAILED'];
 
-const CONFIG = {
-  interval: '4h',
-  usdt: 25,
-  maxActive: 3,
-  // Critérios do scanner (o resto fica no padrão de bullishBreakoutScanner.js#DEFAULTS): corpo
-  // verde >= 5% e volume 24h >= 1M USDT (era 1,5M até v1.182.0). O volume 24h só filtra na varredura (candle aberto) — a
-  // reconferência do fechamento (confirmBreakout) olha só o candle, não o volume 24h.
-  // firstOfMove: só a 1ª explosão do movimento (2ª/3ª seguidas, como a INITUSDT 09–10/11, ficam de fora).
-  scan: { minBodyPct: 5, minVolume24h: 1_000_000, firstOfMove: true },
-  // Alvo +15% / stop −15% do preço comprado (era +10%/−10% até v1.185.0). Stop = o mais longe
-  // entre −minStopPct% e a metade do candle de explosão — na prática −15%; a metade só passa disso
-  // em candle com range > ~30%.
-  exit: { targetPct: 15, stopMode: 'candleMid', minStopPct: 15 },
-  // Entrada: compra a mercado no fechamento do candle (sem desconto). Até v1.185.0 armava a entrada
-  // 5% abaixo do fechamento por 12h ({ discountPct: 5, waitHours: 12 }); null = sem desconto. O
-  // watcher ainda honra close_condition.entryDiscount das ordens já gravadas.
-  entry: null,
-};
+/** Config efetiva a partir da config do painel (priceActionConfig.js — Configurações → Price action). */
+function buildConfig(pa = PA_DEFAULTS) {
+  return {
+    interval: '4h',
+    enabled: pa.enabled,
+    usdt: pa.usdt,
+    maxActive: pa.maxActive,
+    // Critérios do scanner (o resto fica no padrão de bullishBreakoutScanner.js#DEFAULTS): corpo
+    // verde >= minBodyPct e volume 24h >= minVolume24h. O volume 24h só filtra na varredura (candle
+    // aberto) — a reconferência do fechamento (confirmBreakout) olha só o candle.
+    // firstOfMove: só a 1ª explosão do movimento (2ª/3ª seguidas, como a INITUSDT 09–10/11, ficam de fora).
+    scan: { minBodyPct: pa.minBodyPct, minVolume24h: pa.minVolume24h, firstOfMove: pa.firstOfMove },
+    // Alvo +targetPct / stop −stopPct do preço comprado (v1.191.0: +15% / −30%; era −15% até
+    // v1.190.0). Stop = o mais longe entre −minStopPct% e a metade do candle de explosão.
+    exit: { targetPct: pa.targetPct, stopMode: 'candleMid', minStopPct: pa.stopPct },
+    // Filtros de mercado (marketRegime.js) — conferidos na varredura E no fechamento do candle.
+    regime: pa.regime,
+    // Entrada: compra a mercado no fechamento do candle (sem desconto). Até v1.185.0 armava a entrada
+    // 5% abaixo do fechamento por 12h ({ discountPct: 5, waitHours: 12 }); null = sem desconto. O
+    // watcher ainda honra close_condition.entryDiscount das ordens já gravadas.
+    entry: null,
+  };
+}
+const CONFIG = buildConfig();
 const SCAN_EVERY_MS = 15 * 60_000;
 const FIRST_SCAN_DELAY_MS = 60_000;
 
@@ -81,7 +89,24 @@ async function ensureBinanceFavorite(userId, symbol) {
   return true;
 }
 
+/** Texto curto dos filtros de mercado ligados (log/WhatsApp). */
+function regimeLabel(rg) {
+  if (!rg) return 'sem filtro de mercado';
+  const p = [];
+  if (rg.btcEma50_4h) p.push('BTC 4h > EMA50');
+  if (rg.coinEma20_1d) p.push('moeda > EMA20 1d');
+  if (rg.coinMacd4h) p.push('MACD 4h > 0');
+  if (rg.btcEma20_1dRising) p.push('EMA20 1d do BTC subindo');
+  if (rg.topGainers > 0) p.push(`top ${rg.topGainers} altas 24h`);
+  return p.length ? p.join(' · ') : 'sem filtro de mercado';
+}
+
+// Moeda+candle já recusada pelo filtro de mercado — loga uma vez só por candle (a varredura roda a cada 15 min).
+const regimeRefused = new Map();
+
 async function runCycle(log) {
+  const CONFIG = buildConfig(await loadPriceActionConfig(sbReq, process.env.SUPABASE_DEFAULT_USER_ID));
+  if (!CONFIG.enabled) return;
   const { list, meta } = await scanBullishBreakouts({
     interval: CONFIG.interval, ...CONFIG.scan, withinCandles: 1, closedOnly: false,
   });
@@ -92,6 +117,7 @@ async function runCycle(log) {
   const liveSymbols = new Set(live.map((o) => o.symbol));
   let activeAuto = live.filter((o) => o.close_condition?.source === SOURCE).length;
   const userId = process.env.SUPABASE_DEFAULT_USER_ID;
+  for (const [k, at] of regimeRefused) if (Date.now() - at > 8 * 3600_000) regimeRefused.delete(k);
 
   for (const symbol of list) {
     const b = meta.breakouts[symbol];
@@ -102,6 +128,16 @@ async function runCycle(log) {
     if (same?.length) continue;
     if (activeAuto >= CONFIG.maxActive) {
       log(`🚀 [Explosão auto] ${symbol} explodiu (corpo +${b.bodyPct}%, vol ${b.volumeRatio}×) mas já há ${activeAuto}/${CONFIG.maxActive} ordens automáticas — pulada`);
+      continue;
+    }
+    // Filtros de mercado (v1.191.0) no estado ATUAL — reconferidos no fechamento pelo watcher.
+    const rg = await checkMarketRegime(symbol, Date.now(), CONFIG.regime);
+    if (!rg.ok) {
+      const key = `${symbol}|${b.openTime}`;
+      if (!regimeRefused.has(key)) {
+        regimeRefused.set(key, Date.now());
+        log(`⏭️  [Explosão auto] ${symbol} explodiu (corpo +${b.bodyPct}%, vol ${b.volumeRatio}×) mas o filtro de mercado barrou: ${rg.reason}`);
+      }
       continue;
     }
 
@@ -117,8 +153,12 @@ async function runCycle(log) {
         source: SOURCE,
         confirmBreakout: { ...meta.options, withinCandles: 1, closedOnly: false },
         exit: CONFIG.exit,
+        ...(CONFIG.regime && { regime: CONFIG.regime }),
         ...(CONFIG.entry && { entryDiscount: CONFIG.entry }),
-        detected: { bodyPct: b.bodyPct, volumeRatio: b.volumeRatio, closePos: b.closePos, breakoutPct: b.breakoutPct },
+        detected: {
+          bodyPct: b.bodyPct, volumeRatio: b.volumeRatio, closePos: b.closePos, breakoutPct: b.breakoutPct,
+          regime: rg.details,
+        },
       },
     }) ?? [];
     if (!row) continue;
@@ -137,7 +177,8 @@ async function runCycle(log) {
       + `ordem #${row.id} de ${CONFIG.usdt} USDT: no fechamento ${fmtBrt(closeAt)}, se a explosão se confirmar e não `
       + `fechar em padrão de baixa, ${CONFIG.entry
         ? `arma a entrada ${CONFIG.entry.discountPct}% abaixo do fechamento (espera até ${CONFIG.entry.waitHours}h)`
-        : 'compra a mercado'} · alvo +${CONFIG.exit.targetPct}% / stop −${CONFIG.exit.minStopPct}%${favTxt}`;
+        : 'compra a mercado'} · alvo +${CONFIG.exit.targetPct}% / stop −${CONFIG.exit.minStopPct}%`
+      + `${rg.details.gainerRank ? ` · #${rg.details.gainerRank} em alta 24h` : ''} · filtros: ${regimeLabel(CONFIG.regime)}${favTxt}`;
     log(`🚀 [Explosão auto] ${txt}`);
     sendWhatsApp(`🚀 Explosão de Alta: ${txt}`).catch((err) => log(`⚠️  [Explosão auto] WhatsApp falhou: ${err.message}`));
   }
@@ -151,8 +192,11 @@ function startBullishBreakoutAuto({ log = console.log } = {}) {
   if (!process.env.SUPABASE_DEFAULT_USER_ID) {
     log('⚠️  [Explosão auto] SUPABASE_DEFAULT_USER_ID ausente no .env — ordens seguem, mas sem favorito Binance');
   }
-  log(`🚀 [Explosão auto] ligada — scanner ${CONFIG.interval} a cada ${SCAN_EVERY_MS / 60_000} min, `
-    + `${CONFIG.usdt} USDT/ordem, máx. ${CONFIG.maxActive} ordens`);
+  loadPriceActionConfig(sbReq, process.env.SUPABASE_DEFAULT_USER_ID).then((pa) => {
+    const c = buildConfig(pa);
+    log(`🚀 [Explosão auto] ${c.enabled ? 'ligada' : 'DESLIGADA no painel (Configurações → Price action)'} — scanner ${c.interval} a cada ${SCAN_EVERY_MS / 60_000} min, `
+      + `${c.usdt} USDT/ordem, máx. ${c.maxActive} ordens, alvo +${c.exit.targetPct}% / stop −${c.exit.minStopPct}% · filtros: ${regimeLabel(c.regime)}`);
+  });
   let running = false;
   const pass = async () => {
     if (running) return;
@@ -169,4 +213,4 @@ function startBullishBreakoutAuto({ log = console.log } = {}) {
   return setInterval(pass, SCAN_EVERY_MS);
 }
 
-module.exports = { startBullishBreakoutAuto, exitLevels, CONFIG, SOURCE };
+module.exports = { startBullishBreakoutAuto, exitLevels, buildConfig, regimeLabel, CONFIG, SOURCE };

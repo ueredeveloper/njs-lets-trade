@@ -3223,6 +3223,35 @@ router.put('/rsi-momentum-config', getUserId, async (req, res) => {
   res.json(normalizeRsiMomentumConfig(data.trade_config));
 });
 
+// ── Config do bot Price action (Explosão de Alta automática) ─────────────────────────────────
+// Configurações → Price action no painel. Relida pelo bot a cada varredura (15 min) — ver
+// backend/bot/breakout-auto/priceActionConfig.js. Migração: supabase/add-price-action-bot-config.sql.
+
+// GET /services/sb/price-action-config  → config normalizada (+ saved:false se nunca salva)
+router.get('/price-action-config', getUserId, async (req, res) => {
+  const { normalizePriceActionConfig, TABLE } = require('../bot/breakout-auto/priceActionConfig');
+  const { data, error } = await supabase.from(TABLE).select('*').eq('user_id', req.userId).maybeSingle();
+  // Tabela ainda não criada: devolve o padrão pro formulário abrir (salvar avisa a migração).
+  if (error && !/does not exist|schema cache/i.test(error.message)) return sbError(res, error, 'GET price-action-config');
+  res.json({ ...normalizePriceActionConfig(data?.config ?? {}), saved: !!data, updatedAt: data?.updated_at ?? null, tableMissing: !!error });
+});
+
+// PUT /services/sb/price-action-config
+router.put('/price-action-config', getUserId, async (req, res) => {
+  const { normalizePriceActionConfig, TABLE } = require('../bot/breakout-auto/priceActionConfig');
+  const config = normalizePriceActionConfig(req.body ?? {});
+  const { data, error } = await supabase.from(TABLE)
+    .upsert({ user_id: req.userId, config, updated_at: new Date().toISOString() }, { onConflict: 'user_id' })
+    .select().single();
+  if (error) {
+    if (/does not exist|schema cache/i.test(error.message)) {
+      return res.status(400).json({ error: 'tabela price_action_bot_config não existe — rode supabase/add-price-action-bot-config.sql no Supabase' });
+    }
+    return sbError(res, error, 'PUT price-action-config');
+  }
+  res.json({ ...normalizePriceActionConfig(data.config), saved: true, updatedAt: data.updated_at, tableMissing: false });
+});
+
 // Captura erros assíncronos que escapam dos handlers (Express 4 não faz isso automaticamente).
 // Sem este handler, um throw dentro de um async route crasharia o processo inteiro.
 // eslint-disable-next-line no-unused-vars

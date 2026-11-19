@@ -1710,6 +1710,30 @@ export async function saveRsiMomentumConfig(config) {
   return res.json();
 }
 
+// ── Config do bot Price action (Explosão de Alta automática) ─────────────────
+// backend/bot/breakout-auto/priceActionConfig.js — relida pelo bot a cada varredura (15 min).
+export async function getPriceActionConfig() {
+  const res = await fetch('/services/sb/price-action-config');
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function savePriceActionConfig(config) {
+  const res = await fetch('/services/sb/price-action-config', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(config),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 // ── Configurações de cache (liga/desliga por cache no backend) ──────────────
 
 export async function getCacheSettings() {

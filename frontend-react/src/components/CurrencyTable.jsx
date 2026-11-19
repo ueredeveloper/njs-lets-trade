@@ -158,6 +158,7 @@ function breakoutOutcomeLabel(order) {
   if (/not permitted/i.test(err)) return 'moeda não permitida';
   if (/padrão de baixa/.test(err)) return 'fechou em padrão de baixa';
   if (/não se confirmou/.test(err)) return 'explosão não confirmou';
+  if (/filtro de mercado barrou: (.+)$/.test(err)) return `filtro: ${err.match(/filtro de mercado barrou: (.+)$/)[1]}`;
   if (/não encontrado/.test(err)) return 'bot ficou fora';
   if (/expirou/.test(err)) return `entrada −${order.discountPct ?? 5}% expirou`;
   if ((order.status === 'NEW' || order.status === 'OPEN') && order.entryKind === 'limit') {
