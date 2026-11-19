@@ -52,6 +52,8 @@ function buildConfig(pa = PA_DEFAULTS) {
     exit: { targetPct: pa.targetPct, stopMode: 'candleMid', minStopPct: pa.stopPct },
     // Filtros de mercado (marketRegime.js) — conferidos na varredura E no fechamento do candle.
     regime: pa.regime,
+    // Padrões de alta ligados no painel (o watcher só aceita estes no fechamento).
+    bullishPatterns: pa.bullishPatterns,
     // Entrada: compra a mercado no fechamento do candle (sem desconto). Até v1.185.0 armava a entrada
     // 5% abaixo do fechamento por 12h ({ discountPct: 5, waitHours: 12 }); null = sem desconto. O
     // watcher ainda honra close_condition.entryDiscount das ordens já gravadas.
@@ -154,6 +156,7 @@ async function runCycle(log) {
         confirmBreakout: { ...meta.options, withinCandles: 1, closedOnly: false },
         exit: CONFIG.exit,
         ...(CONFIG.regime && { regime: CONFIG.regime }),
+        bullishPatterns: CONFIG.bullishPatterns,
         ...(CONFIG.entry && { entryDiscount: CONFIG.entry }),
         detected: {
           bodyPct: b.bodyPct, volumeRatio: b.volumeRatio, closePos: b.closePos, breakoutPct: b.breakoutPct,

@@ -166,3 +166,78 @@ describe('watcher no fechamento com close_condition.regime', () => {
     expect(p.error).toMatch(/filtro de mercado barrou: período de baixa/);
   });
 });
+
+describe('padrões de alta escolhidos no painel (bullishPatterns)', () => {
+  const { bullishClosePattern, BULLISH_PATTERNS } = jest.requireActual('../bot/shared/candleCloseCondition');
+  const { evaluateBullishBreakout } = require('../market/bullishBreakoutScanner');
+  const MARU = { open: 100, high: 103.1, low: 99.95, close: 103 }; // marubozu de alta, corpo 3%
+
+  test('bullishClosePattern respeita a lista (null = todos)', () => {
+    expect(bullishClosePattern(MARU, [])).toBe('bullish marubozu');
+    expect(bullishClosePattern(MARU, [], ['hammer'])).toBeNull();
+    expect(bullishClosePattern(MARU, [], ['bullish marubozu'])).toBe('bullish marubozu');
+    expect(bullishClosePattern(MARU, [], [])).toBeNull();
+  });
+
+  test('config: padrão = todos; lista do painel filtrada e na ordem de prioridade', () => {
+    expect(DEFAULTS.bullishPatterns).toEqual(BULLISH_PATTERNS);
+    expect(normalizePriceActionConfig({}).bullishPatterns).toHaveLength(7);
+    expect(normalizePriceActionConfig({ bullishPatterns: ['bullish marubozu', 'xx', 'hammer'] }).bullishPatterns)
+      .toEqual(['hammer', 'bullish marubozu']);
+    expect(normalizePriceActionConfig({ bullishPatterns: [] }).bullishPatterns).toEqual([]);
+    expect(buildConfig(normalizePriceActionConfig({ bullishPatterns: ['hammer'] })).bullishPatterns).toEqual(['hammer']);
+  });
+
+  describe('watcher: corpo 3% em marubozu', () => {
+    const OPEN_T = T0 - H4;
+    let adapter;
+    beforeEach(() => {
+      jest.clearAllMocks();
+      adapter = {
+        marketBuy: jest.fn(async () => ({ filledQty: 1, quoteQty: 25, avgPrice: 103 })),
+        placeExitBracket: jest.fn(async (qty, target, stop) => ({ targetPrice: target, stopPrice: stop })),
+      };
+      buildAdapter.mockReturnValue(adapter);
+      sbReq.mockImplementation(async () => [{}]);
+      jest.spyOn(Date, 'now').mockReturnValue(T0 + 60_000);
+      fetchClosedCandle.mockResolvedValue({ ...MARU, prev: [] });
+      fetchKlines.mockResolvedValue([{ openTime: OPEN_T }]);
+      // corpo < 5% → só confirma com minBodyPct 0 (caminho do padrão de alta)
+      evaluateBullishBreakout.mockImplementation((_h, o) => (o.minBodyPct === 0 ? { ok: true } : null));
+    });
+    afterEach(() => { jest.restoreAllMocks(); evaluateBullishBreakout.mockImplementation(() => ({ ok: true })); });
+    const row = (bullishPatterns) => ({
+      id: 9, symbol: 'XUSDT', exchange: 'binance', usdt: 25, status: 'OPEN', entry_kind: 'candle_close',
+      entry_price: 103, target_price: 118, stop_price: 72,
+      close_condition: {
+        interval: '4h', candleOpenTime: OPEN_T, closeAt: T0, source: 'bullish_breakout_auto',
+        confirmBreakout: { lookback: 20, minBodyPct: 5 }, exit: { targetPct: 15, stopMode: 'candleMid', minStopPct: 30 },
+        ...(bullishPatterns && { bullishPatterns }),
+      },
+    });
+    test('marubozu marcado → compra pelo padrão', async () => {
+      await processRow(row(['bullish marubozu']), () => {});
+      expect(adapter.marketBuy).toHaveBeenCalled();
+    });
+    test('marubozu desmarcado → NÃO compra', async () => {
+      await processRow(row(['hammer']), () => {});
+      expect(adapter.marketBuy).not.toHaveBeenCalled();
+      expect(sbReq.mock.calls.find(([m, , b]) => m === 'PATCH' && b?.status === 'CLOSED')[2].error).toMatch(/não se confirmou/);
+    });
+    test('ordem antiga sem a lista → todos valem', async () => {
+      await processRow(row(null), () => {});
+      expect(adapter.marketBuy).toHaveBeenCalled();
+    });
+  });
+});
+
+test('config: todo campo editável sobrevive ida e volta (painel → banco → painel)', () => {
+  const edited = {
+    enabled: false, usdt: 20, maxActive: 5, minBodyPct: 4, minVolume24h: 500_000, firstOfMove: false,
+    bullishPatterns: ['hammer', 'morning star', 'three white soldiers', 'bullish engulfing', 'piercing line', 'bullish marubozu'],
+    targetPct: 18, stopPct: 25,
+    regime: { btcEma50_4h: false, coinEma20_1d: true, coinMacd4h: false, btcEma20_1dRising: true, topGainers: 20, minVolume24h: 2_000_000 },
+  };
+  expect(normalizePriceActionConfig(JSON.parse(JSON.stringify(normalizePriceActionConfig(edited))))).toEqual(edited);
+  expect(DEFAULTS.usdt).toBe(20);
+});

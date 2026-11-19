@@ -84,8 +84,9 @@ function isAutoHighlightFilter(name) {
 }
 
 const HIGHLIGHT_DISPLAY_LIMIT = 10;
-/** Em alta (↑B / ↑G) mostra top 20; novas listagens (NB / NG) seguem em 10. */
-const GAINERS_DISPLAY_LIMIT = 20;
+/** Em alta (↑B / ↑G) mostra top 40 — o mesmo "top 40 altas 24h" do bot Price action
+ *  (breakout-auto/marketRegime.js); novas listagens (NB / NG) seguem em 10. */
+const GAINERS_DISPLAY_LIMIT = 40;
 
 function highlightDisplayLimit(name) {
   return name?.startsWith('Favoritos|Alta|') ? GAINERS_DISPLAY_LIMIT : HIGHLIGHT_DISPLAY_LIMIT;

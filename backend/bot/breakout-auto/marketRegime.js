@@ -112,14 +112,24 @@ function evaluateRegime(series, closeMs, cfg = DEFAULT_REGIME) {
 
 const isUntradable = (sym) => getSymbolCategories(sym).some((c) => c === 'stablecoins' || c === 'tokenizedStocks');
 
+/**
+ * Ranking de alta 24h da Binance — A MESMA regra do bot e das listas ↑B do painel
+ * (market/marketHighlights.js): pares USDT ativos, sem stablecoin / ação tokenizada, volume 24h
+ * (quoteVolume) >= minVolume24h, ordenado pela variação 24h do ticker (priceChangePercent).
+ * @returns {Array<{symbol, changePct, volume}>}
+ */
+function rankBinanceGainers(tickers, activeSymbols, minVolume24h = DEFAULT_REGIME.minVolume24h) {
+  const active = activeSymbols instanceof Set ? activeSymbols : new Set(activeSymbols ?? []);
+  return (tickers ?? [])
+    .map((t) => ({ symbol: t.symbol, changePct: Number(t.priceChangePercent), volume: Number(t.quoteVolume) }))
+    .filter((t) => active.has(t.symbol) && !isUntradable(t.symbol) && t.volume >= minVolume24h && Number.isFinite(t.changePct))
+    .sort((a, b) => b.changePct - a.changePct);
+}
+
 /** Posição (1 = maior alta) da moeda no ranking de alta 24h, ou null se fora do universo. */
 async function topGainerRank(symbol, minVolume24h = DEFAULT_REGIME.minVolume24h) {
   const [{ list }, tickers] = await Promise.all([getActiveUsdtPairs(), getTickers()]);
-  const active = new Set(list);
-  const ranked = tickers
-    .filter((t) => active.has(t.symbol) && !isUntradable(t.symbol) && Number(t.quoteVolume) >= minVolume24h)
-    .sort((a, b) => Number(b.priceChangePercent) - Number(a.priceChangePercent));
-  const idx = ranked.findIndex((t) => t.symbol === symbol);
+  const idx = rankBinanceGainers(tickers, list, minVolume24h).findIndex((t) => t.symbol === symbol);
   return idx < 0 ? null : idx + 1;
 }
 
@@ -162,6 +172,6 @@ async function checkMarketRegime(symbol, closeMs, cfg = DEFAULT_REGIME) {
 }
 
 module.exports = {
-  DEFAULT_REGIME, evaluateRegime, checkMarketRegime, topGainerRank, ema, macdHist,
+  DEFAULT_REGIME, evaluateRegime, checkMarketRegime, topGainerRank, rankBinanceGainers, ema, macdHist,
   _test: { resetBtcCache: () => { btcCache.data = null; btcCache.at = 0; } },
 };

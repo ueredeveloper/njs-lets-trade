@@ -172,19 +172,25 @@ function threeWhiteSoldiers(c, prev) {
  * Padrão de ALTA no candle que acabou de fechar.
  * @param {{open,high,low,close}} candle
  * @param {Array<{open,high,low,close}>} prev  candles ANTERIORES (ascendentes), pode ser vazio
+ * @param {string[]|null} [allowed]  só estes padrões valem (Configurações → Price action); null = todos.
+ *   Na ordem de prioridade: um padrão desligado é pulado e o próximo que bater vale.
  * @returns {string|null} nome do padrão, ou null
  */
-function bullishClosePattern(candle, prev = []) {
+function bullishClosePattern(candle, prev = [], allowed = null) {
   const p = prev[prev.length - 1];
-  if (hammer(candle, prev)) return 'hammer';
-  if (morningStar(candle, prev)) return 'morning star';
-  if (threeWhiteSoldiers(candle, prev)) return 'three white soldiers';
-  if (bullishEngulfing(candle, p)) return 'bullish engulfing';
-  if (piercingLine(candle, p)) return 'piercing line';
-  if (tweezerBottom(candle, p)) return 'tweezer bottom';
-  if (bullishMarubozu(candle)) return 'bullish marubozu';
+  const ok = (name) => !allowed || allowed.includes(name);
+  if (ok('hammer') && hammer(candle, prev)) return 'hammer';
+  if (ok('morning star') && morningStar(candle, prev)) return 'morning star';
+  if (ok('three white soldiers') && threeWhiteSoldiers(candle, prev)) return 'three white soldiers';
+  if (ok('bullish engulfing') && bullishEngulfing(candle, p)) return 'bullish engulfing';
+  if (ok('piercing line') && piercingLine(candle, p)) return 'piercing line';
+  if (ok('tweezer bottom') && tweezerBottom(candle, p)) return 'tweezer bottom';
+  if (ok('bullish marubozu') && bullishMarubozu(candle)) return 'bullish marubozu';
   return null;
 }
+
+/** Todos os padrões de alta, na ordem de prioridade de bullishClosePattern. */
+const BULLISH_PATTERNS = ['hammer', 'morning star', 'three white soldiers', 'bullish engulfing', 'piercing line', 'tweezer bottom', 'bullish marubozu'];
 
 /** Candle FECHADO que abriu em `openTime` + `prev` (até 4 anteriores), ou null se não está entre
  *  os últimos candles (bot ficou fora tempo demais) ou ainda não fechou. */
@@ -203,5 +209,5 @@ async function fetchClosedCandle(exchange, symbol, interval, openTime, nowMs = D
 }
 
 module.exports = {
-  buildCloseCondition, fetchClosedCandle, upperWickRejection, bearishClosePattern, bullishClosePattern, intervalMs, BINANCE_INTERVALS, GATE_INTERVALS,
+  buildCloseCondition, fetchClosedCandle, upperWickRejection, bearishClosePattern, bullishClosePattern, BULLISH_PATTERNS, intervalMs, BINANCE_INTERVALS, GATE_INTERVALS,
 };

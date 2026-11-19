@@ -217,14 +217,14 @@ async function processCandleClose(row, adapter, log) {
     // v1.187.0: fechou num padrão de ALTA (martelo, engolfo, estrela da manhã…) → o corpo mínimo
     // (minBodyPct, 5%) deixa de valer; volume, fechamento no alto e rompimento continuam exigidos.
     if (!confirmed && isCandle) {
-      bullish = bullishClosePattern(candle, candle.prev);
+      bullish = bullishClosePattern(candle, candle.prev, cc.bullishPatterns ?? null);
       confirmed = !!bullish && evaluateBullishBreakout(history, { ...opts, minBodyPct: 0 });
     }
     const bodyPct = ((candle.close - candle.open) / candle.open) * 100;
     const authorizedBy = !confirmed ? null : (bullish ? 'pattern' : 'body');
     closeCheck = {
       authorizedBy,
-      bullishPattern: bullish ?? bullishClosePattern(candle, candle.prev),
+      bullishPattern: bullish ?? bullishClosePattern(candle, candle.prev, cc.bullishPatterns ?? null),
       bodyPct: Math.round(bodyPct * 100) / 100,
     };
     if (!confirmed) {

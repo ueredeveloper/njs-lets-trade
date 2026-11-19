@@ -402,7 +402,7 @@ candle fechar e NÃO compra se fechou num padrão de baixa (`bearishClosePattern
 depois de alta, bearish engulfing, tweezer top); senão compra a mercado + OCO relativa ao preço comprado.
 **Automático** (`backend/bot/breakout-auto/bullishBreakoutAuto.js`, roda no processo do rsi-momentum,
 `BULLISH_BREAKOUT_AUTO=off` desliga): a cada 15 min varre o 4h; moeda nova → favorito Binance + ordem
-`candle_close` (corpo ≥ 5%, volume 24h ≥ 1M — só na varredura, não no fechamento; 25 USDT, máx. 3 vivas, 1 por moeda por candle; **só a 1ª
+`candle_close` (corpo ≥ 5%, volume 24h ≥ 1M — só na varredura, não no fechamento; 20 USDT (era 25 até v1.191.0), máx. 3 vivas, 1 por moeda por candle; **só a 1ª
 explosão do movimento** — `firstOfMove`: nenhum dos 20 candles anteriores pode ter sido explosão). No fechamento ainda reconfere a explosão
 no candle fechado (`close_condition.confirmBreakout`; **v1.187.0:** se o corpo ficou abaixo de 5% mas o candle
 fechou num padrão de ALTA — `bullishClosePattern` em `candleCloseCondition.js`: hammer, bullish engulfing,
@@ -421,7 +421,12 @@ stop −30%**, e `close_condition.regime` (`breakout-auto/marketRegime.js`, espe
 1d, MACD 4h > 0, EMA20 1d do BTC subindo e moeda entre as **40 maiores altas 24h** — conferidos na varredura
 (pula a moeda, loga 1×/candle) e de novo no FECHAMENTO pelo watcher (só candles 4h/1d fechados; barrou →
 CLOSED "filtro de mercado barrou: …", `closeCheck.regime`); falha de dado = não compra. Ordens antigas sem
-`regime` seguem como antes. O OCO
+`regime` seguem como antes. **Padrões de alta escolhíveis** (`bullishPatterns`, todos marcados por padrão;
+lista vazia = só corpo mínimo): vão em `close_condition.bullishPatterns` e o watcher passa pra
+`bullishClosePattern(candle, prev, allowed)` — desmarcado é pulado na ordem de prioridade; ordem antiga sem a
+lista = todos. Padrões de baixa sempre barram (não configurável). Ranking de alta: caixinha + seletor Top 10/20/40 (`regime.topGainers`, 0 = off). **v1.192.0:** favoritos ↑B/↑G
+mostram 40; ↑B usa o MESMO ranking do bot (`marketRegime.js#rankBinanceGainers`: ticker 24h, pares USDT ativos,
+vol. ≥ 1M, sem stablecoin/ação tokenizada — API de marketing da Binance só de fallback). Valor por ordem padrão: 20 USDT. O OCO
 do gráfico: o padrão segue "Compra agora" (rascunho na sugestão pelos candles); ao escolher **"no fechamento
 do candle"** o cartão assume o padrão do bot — entrada **a mercado** no seletor (desconto opcional, não
 lembrado) e alvo +15% / stop −15% da entrada (`CLOSE_TARGET_PCT`/`CLOSE_STOP_PCT` em `ChartOcoTool.jsx`). O watcher ignora `entry_kind`

@@ -4,6 +4,11 @@ const fs = require('fs');
 const path = require('path');
 const getTickers = require('../binance/cachedTicker24hr');
 const { getActiveUsdtPairs } = require('../binance/getActiveUsdtPairs');
+const { getSymbolCategories } = require('../utils/assetCategories');
+
+// Mesmo universo do bot Price action (breakout-auto/marketRegime.js#rankBinanceGainers): sem
+// stablecoin nem ação tokenizada — senão a posição na lista ↑B não bate com o "top N" do bot.
+const isUntradable = (sym) => getSymbolCategories(sym).some((c) => c === 'stablecoins' || c === 'tokenizedStocks');
 
 const GATE_BASE = 'https://api.gateio.ws/api/v4';
 const LIMIT_DEFAULT = 10;
@@ -144,7 +149,7 @@ async function fetchBinanceMarketingSymbols() {
 /** Rankeia candidatos em alta (USDT spot ativo, vol. mínimo). */
 function rankBinanceGainers(items, activeSet, candidateLimit) {
   return items
-    .filter((t) => isUsdtSpot(t.symbol) && activeSet.has(t.symbol))
+    .filter((t) => isUsdtSpot(t.symbol) && activeSet.has(t.symbol) && !isUntradable(t.symbol))
     .filter((t) => Number(t.volume) >= MIN_VOLUME_USDT)
     .filter((t) => Number.isFinite(t.changePct))
     .sort((a, b) => b.changePct - a.changePct)
@@ -181,13 +186,16 @@ async function computeMarketHighlights(limit = LIMIT_DEFAULT) {
 
   const candidateLimit = limit * CANDIDATE_MULTIPLIER;
 
-  let binanceGainers;
-  try {
-    const marketingRows = await fetchBinanceMarketingSymbols();
-    binanceGainers = buildBinanceGainersFromMarketing(marketingRows, activeSet, candidateLimit);
-  } catch (err) {
-    console.warn('[market-highlights] marketing API indisponível — fallback ticker/24hr:', err.message);
-    binanceGainers = buildBinanceGainersFromTickers(binanceTickers, activeSet, candidateLimit);
+  // ↑B = a MESMA fonte do bot Price action (ticker/24hr, variação 24h rolante) — v1.192.0. Antes
+  // vinha da API de marketing da Binance (dayChange), que ordenava diferente do "top 40" do bot.
+  // A de marketing fica só de reserva se o ticker vier vazio.
+  let binanceGainers = buildBinanceGainersFromTickers(binanceTickers, activeSet, candidateLimit);
+  if (!binanceGainers.length) {
+    try {
+      binanceGainers = buildBinanceGainersFromMarketing(await fetchBinanceMarketingSymbols(), activeSet, candidateLimit);
+    } catch (err) {
+      console.warn('[market-highlights] ticker vazio e marketing API indisponível:', err.message);
+    }
   }
 
   const gateGainers = gateTickers

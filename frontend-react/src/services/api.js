@@ -86,7 +86,7 @@ export async function fetch24hVolume() {
   return res.json();
 }
 
-/** Top 20 em alta + top 10 novas listagens (Binance e Gate.io). */
+/** Top 40 em alta + top 10 novas listagens (Binance e Gate.io). */
 export async function fetchMarketHighlights(limit = 10) {
   const res = await fetch(`/services/market-highlights?limit=${limit}`);
   if (!res.ok) {

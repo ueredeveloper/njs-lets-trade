@@ -12,16 +12,20 @@
  */
 
 const { DEFAULT_REGIME } = require('./marketRegime');
+const { BULLISH_PATTERNS } = require('../shared/candleCloseCondition');
 
 const TABLE = 'price_action_bot_config';
 
 const DEFAULTS = Object.freeze({
   enabled: true,
-  usdt: 25,
+  usdt: 20, // v1.192.0 (era 25)
   maxActive: 3,
   minBodyPct: 5,
   minVolume24h: 1_000_000,
   firstOfMove: true,
+  // Padrões de ALTA que liberam a entrada com corpo abaixo do mínimo (v1.187.0) — todos por padrão.
+  // Lista vazia = só a regra do corpo.
+  bullishPatterns: [...BULLISH_PATTERNS],
   targetPct: 15,
   stopPct: 30,
   regime: { ...DEFAULT_REGIME },
@@ -44,6 +48,9 @@ function normalizePriceActionConfig(raw = {}) {
     minBodyPct: num(raw.minBodyPct, d.minBodyPct, 0.5, 50),
     minVolume24h: num(raw.minVolume24h, d.minVolume24h, 0, 1e10),
     firstOfMove: bool(raw.firstOfMove, d.firstOfMove),
+    bullishPatterns: Array.isArray(raw.bullishPatterns)
+      ? BULLISH_PATTERNS.filter((p) => raw.bullishPatterns.includes(p))
+      : [...d.bullishPatterns],
     targetPct: num(raw.targetPct, d.targetPct, 1, 200),
     stopPct: num(raw.stopPct, d.stopPct, 10, 90),
     regime: {
@@ -69,4 +76,4 @@ async function loadPriceActionConfig(sbReq, userId) {
   }
 }
 
-module.exports = { TABLE, DEFAULTS, normalizePriceActionConfig, loadPriceActionConfig };
+module.exports = { TABLE, DEFAULTS, BULLISH_PATTERNS, normalizePriceActionConfig, loadPriceActionConfig };
