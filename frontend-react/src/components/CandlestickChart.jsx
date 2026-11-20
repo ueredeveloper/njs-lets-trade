@@ -5869,18 +5869,24 @@ export default function CandlestickChart() {
   // Filtro de regime (priceActionRegime.js): BTC 4h / MACD 4h da moeda / EMA20 1d — candles
   // buscados ANCORADOS no período da caixa até agora (+120 de folga pro aquecimento das médias),
   // independentes do intervalo da tela. Chave = o que já foi buscado, pra não refazer a cada arrasto.
-  const [paRegimeCtx, setPaRegimeCtx] = useState({ key: null, data: {} });
+  const [paRegimeCtx, setPaRegimeCtx] = useState({ key: null, fromMs: null, data: {} });
   const paRegime = paParams.regime ?? 'off';
   const paBearGuard = paParams.bearGuard ?? 'off';
   const paFilterOn = paRegime !== 'off' || paBearGuard !== 'off';
   const paRegimeFromMs = analysisBox ? Math.floor(analysisBox.fromMs / 3_600_000) * 3_600_000 : null;
+  // Candles do filtro já buscados servem pra esta caixa? Mesma moeda/filtros e buscados a partir de
+  // um início igual ou ANTERIOR ao da caixa (vão até "agora") — arrastar a caixa pra direita não refaz.
+  const paRegimeKey = `${selectedChart?.symbol}|${paRegime}|${paBearGuard}`;
+  const paRegimeReady = paRegimeCtx.key === paRegimeKey && paRegimeCtx.fromMs != null
+    && paRegimeFromMs != null && paRegimeCtx.fromMs <= paRegimeFromMs;
   useEffect(() => {
     if (analysisBoxKind !== 'priceAction' || !paFilterOn || paRegimeFromMs == null || !selectedChart?.symbol) return undefined;
     const need = regimeNeeds(paRegime, paBearGuard);
     const sym = selectedChart.symbol;
     const src = selectedChart.source === 'gate' ? '&source=gate' : '';
-    const key = `${sym}|${paRegime}|${paBearGuard}|${paRegimeFromMs}`;
-    if (paRegimeCtx.key === key) return undefined;
+    const key = paRegimeKey;
+    if (paRegimeReady) return undefined;
+    const fromMs = paRegimeFromMs;
     let cancelled = false;
     const get = (symbol, interval, extra = '') => fetch(
       `/services/candles/?symbol=${symbol}&interval=${interval}&fromMs=${paRegimeFromMs}&toMs=${Date.now()}&pad=120${extra}`,
@@ -5891,15 +5897,19 @@ export default function CandlestickChart() {
       need.coin1d ? get(sym, '1d', src) : null,
       need.btc1d ? get('BTCUSDT', '1d') : null,
     ]).then(([btc4h, coin4h, coin1d, btc1d]) => {
-      if (!cancelled) setPaRegimeCtx({ key, data: { btc4h, coin4h, coin1d, btc1d } });
+      if (!cancelled) setPaRegimeCtx({ key, fromMs, data: { btc4h, coin4h, coin1d, btc1d } });
     });
     return () => { cancelled = true; };
-  }, [analysisBoxKind, paRegime, paBearGuard, paFilterOn, paRegimeFromMs, selectedChart?.symbol, selectedChart?.source, paRegimeCtx.key]);
+  }, [analysisBoxKind, paRegime, paBearGuard, paFilterOn, paRegimeFromMs, selectedChart?.symbol, selectedChart?.source, paRegimeKey, paRegimeReady]);
   const paSim = useMemo(() => {
     if (!analysisBox || analysisBoxKind !== 'priceAction') return null;
-    const ctx = paRegimeCtx.key?.startsWith(`${selectedChart?.symbol}|${paRegime}|${paBearGuard}|`) ? paRegimeCtx.data : {};
+    // Filtro ligado e candles do BTC/moeda ainda não chegaram: NÃO simula. Antes simulava sem eles
+    // (sinal sem dado passa), desenhava as OCOs e um instante depois o filtro as recusava — as OCOs
+    // "apareciam e sumiam".
+    if (paFilterOn && !paRegimeReady) return { status: 'loading', trades: [], rejected: [], params: paParams };
+    const ctx = paFilterOn ? paRegimeCtx.data : {};
     return simulatePriceActionBox(selectedChart?.candlesticks, analysisBox, paParams, paIntervalMs, Date.now(), ctx);
-  }, [analysisBox, analysisBoxKind, selectedChart?.candlesticks, selectedChart?.symbol, paParams, paIntervalMs, paRegimeCtx, paRegime, paBearGuard]);
+  }, [analysisBox, analysisBoxKind, selectedChart?.candlesticks, paParams, paIntervalMs, paRegimeCtx, paFilterOn, paRegimeReady]);
 
   // Desenho: faixa amarela no candle de referência (de onde sai a entrada, com o nível) até o fill
   // (ou até a borda da caixa, se não preencheu) + OCO do trade igual ao chartTradeBoxRects (a ponta
@@ -6102,6 +6112,7 @@ export default function CandlestickChart() {
           : paSim?.outcome === 'breakeven' ? 'price action · saiu na entrada'
             : paSim?.outcome === 'mixed' ? 'price action · 2ª estopou, 1ª na entrada' : 'price action · stop ✗',
         open: 'price action · em aberto',
+        loading: 'price action · carregando filtros…',
         notFilled: 'price action · entrada não preencheu',
         noSignal: 'price action · sem sinal',
         noRef: 'price action · sem candle anterior',
@@ -7156,7 +7167,7 @@ export default function CandlestickChart() {
             >
               {BEAR_GUARD_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
             </BoxSelect>
-            {paFilterOn && paSim?.regimePending && (
+            {paFilterOn && (paSim?.regimePending || paSim?.status === 'loading') && (
               <span className="text-[9px] text-amber-300 whitespace-nowrap" title="Candles do BTC/da moeda ainda carregando (ou indisponíveis) — sinais sem dado passam">carregando…</span>
             )}
           </div>
@@ -7188,6 +7199,7 @@ export default function CandlestickChart() {
                     ? { tone: paSim.pnlPct >= 0 ? 'bg-amber-500/15 text-amber-300 border-amber-500/30' : 'bg-red-500/15 text-red-300 border-red-500/30', text: '2ª compra estopou · 1ª saiu na entrada', pnl }
                     : { tone: 'bg-red-500/15 text-red-300 border-red-500/30', text: 'Stop atingido', pnl },
               open: { tone: 'bg-sky-500/15 text-sky-300 border-sky-500/30', text: 'Em aberto', pnl },
+              loading: { tone: 'bg-slate-500/15 text-slate-300 border-slate-500/30', text: 'Carregando filtros de mercado…' },
               notFilled: { tone: 'bg-amber-500/15 text-amber-300 border-amber-500/30', text: 'Entrada não preencheu' },
               noSignal: { tone: 'bg-amber-500/15 text-amber-300 border-amber-500/30', text: 'Sem sinal na caixa' },
               noRef: { tone: 'bg-amber-500/15 text-amber-300 border-amber-500/30', text: 'Sem candle anterior' },
