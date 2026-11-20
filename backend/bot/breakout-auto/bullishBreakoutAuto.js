@@ -49,7 +49,12 @@ function buildConfig(pa = PA_DEFAULTS) {
     scan: { minBodyPct: pa.minBodyPct, minVolume24h: pa.minVolume24h, firstOfMove: pa.firstOfMove },
     // Alvo +targetPct / stop −stopPct do preço comprado (v1.191.0: +15% / −30%; era −15% até
     // v1.190.0). Stop = o mais longe entre −minStopPct% e a metade do candle de explosão.
-    exit: { targetPct: pa.targetPct, stopMode: 'candleMid', minStopPct: pa.stopPct },
+    // onDrop (v1.193.0): queda de X% depois da compra → alvo vai pra entrada / martingale — vai em
+    // close_condition.exit.onDrop e o watcher executa (processOnDrop). 'off' = não grava.
+    exit: {
+      targetPct: pa.targetPct, stopMode: 'candleMid', minStopPct: pa.stopPct,
+      ...(pa.onDrop && pa.onDrop.mode !== 'off' && { onDrop: { ...pa.onDrop } }),
+    },
     // Filtros de mercado (marketRegime.js) — conferidos na varredura E no fechamento do candle.
     regime: pa.regime,
     // Padrões de alta ligados no painel (o watcher só aceita estes no fechamento).
@@ -92,6 +97,14 @@ async function ensureBinanceFavorite(userId, symbol) {
 }
 
 /** Texto curto dos filtros de mercado ligados (log/WhatsApp). */
+/** Texto curto da regra de queda (log/WhatsApp). */
+function onDropLabel(od) {
+  if (!od || od.mode === 'off') return '';
+  return od.mode === 'martingale'
+    ? ` · caiu ${od.dropPct}%: alvo → entrada + martingale ${od.martingaleUsdt} USDT (stop −${od.martingaleStopPct}%)`
+    : ` · caiu ${od.dropPct}%: alvo → entrada`;
+}
+
 function regimeLabel(rg) {
   if (!rg) return 'sem filtro de mercado';
   const p = [];
@@ -180,7 +193,7 @@ async function runCycle(log) {
       + `ordem #${row.id} de ${CONFIG.usdt} USDT: no fechamento ${fmtBrt(closeAt)}, se a explosão se confirmar e não `
       + `fechar em padrão de baixa, ${CONFIG.entry
         ? `arma a entrada ${CONFIG.entry.discountPct}% abaixo do fechamento (espera até ${CONFIG.entry.waitHours}h)`
-        : 'compra a mercado'} · alvo +${CONFIG.exit.targetPct}% / stop −${CONFIG.exit.minStopPct}%`
+        : 'compra a mercado'} · alvo +${CONFIG.exit.targetPct}% / stop −${CONFIG.exit.minStopPct}%${onDropLabel(CONFIG.exit.onDrop)}`
       + `${rg.details.gainerRank ? ` · #${rg.details.gainerRank} em alta 24h` : ''} · filtros: ${regimeLabel(CONFIG.regime)}${favTxt}`;
     log(`🚀 [Explosão auto] ${txt}`);
     sendWhatsApp(`🚀 Explosão de Alta: ${txt}`).catch((err) => log(`⚠️  [Explosão auto] WhatsApp falhou: ${err.message}`));
@@ -198,7 +211,7 @@ function startBullishBreakoutAuto({ log = console.log } = {}) {
   loadPriceActionConfig(sbReq, process.env.SUPABASE_DEFAULT_USER_ID).then((pa) => {
     const c = buildConfig(pa);
     log(`🚀 [Explosão auto] ${c.enabled ? 'ligada' : 'DESLIGADA no painel (Configurações → Price action)'} — scanner ${c.interval} a cada ${SCAN_EVERY_MS / 60_000} min, `
-      + `${c.usdt} USDT/ordem, máx. ${c.maxActive} ordens, alvo +${c.exit.targetPct}% / stop −${c.exit.minStopPct}% · filtros: ${regimeLabel(c.regime)}`);
+      + `${c.usdt} USDT/ordem, máx. ${c.maxActive} ordens, alvo +${c.exit.targetPct}% / stop −${c.exit.minStopPct}%${onDropLabel(c.exit.onDrop)} · filtros: ${regimeLabel(c.regime)}`);
   });
   let running = false;
   const pass = async () => {

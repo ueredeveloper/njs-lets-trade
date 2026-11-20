@@ -23,7 +23,10 @@
  *   CANCEL_REQUESTED → (só linhas antigas) cancela a limite; fill parcial vira FILLED → CANCELLED
  *   FILLED → coloca a OCO de venda (placeExitBracket, alvo/stop absolutos) → BRACKETED, ou
  *            OCO_FAILED (posição sem proteção — aviso no WhatsApp)
- *   BRACKETED → poll da OCO; uma perna executou → CLOSED_TARGET / CLOSED_STOP (+ exit). Aviso de
+ *   BRACKETED → poll da OCO; uma perna executou → CLOSED_TARGET / CLOSED_STOP (+ exit). Com
+ *            close_condition.exit.onDrop (Explosão automática, v1.193.0): caiu X% do preço comprado →
+ *            o alvo da OCO vai pro preço de entrada ('breakeven') e, no 'martingale', compra de novo
+ *            e grava a 2ª compra como ordem FILHA (FILLED, OCO própria) — ver processOnDrop. Aviso de
  *            venda no WhatsApp DURÁVEL (exit.notified, re-tenta até entregar — notifyExit), inclusive
  *            o do "Vender agora" (SOLD).
  *            Inclui as do "Comprar agora" (entry_kind 'market'). "Vender agora" do gráfico tira a
@@ -316,6 +319,149 @@ async function withExitRule(row, fill, candle) {
   return { ...row, ...levels };
 }
 
+const MARTINGALE_SOURCE = 'bullish_breakout_martingale';
+
+/** Uma perna da OCO executou → CLOSED_TARGET / CLOSED_STOP + aviso de venda. */
+async function closeBracketed(row, r, log) {
+  const exit = { kind: r.filled, soldQty: r.soldQty, usdtOut: r.usdtOut, exitPrice: r.exitPrice, at: new Date().toISOString(), notified: false };
+  const status = r.filled === 'target' ? 'CLOSED_TARGET' : 'CLOSED_STOP';
+  const ok = await patchIf(row, { status, exit });
+  if (!ok) return;
+  await notifyExit({ ...row, status, exit }, log);
+}
+
+/**
+ * Regra de queda da Explosão automática (close_condition.exit.onDrop — Configurações → Price action,
+ * espelho da caixa Price action do gráfico). Com a posição BRACKETED, o preço caiu `dropPct`% abaixo
+ * do preço comprado:
+ *   1. alvo → entrada: cancela a OCO e recoloca com alvo = preço comprado, MESMO stop;
+ *   2. 'martingale': compra mais `martingaleUsdt` a mercado e grava uma ordem FILHA (status FILLED,
+ *      entry_kind 'market', source MARTINGALE_SOURCE, parentId) com alvo = preço da 1ª compra e stop
+ *      −martingaleStopPct% do preço da 2ª — o fluxo normal coloca a OCO dela, vigia e avisa.
+ * Crash-safety: cada passo grava `close_condition.dropState.stage` ANTES de mexer na corretora:
+ *   moving → (cancela + recoloca a OCO) → moved → buying → (compra + filha) → done.
+ *   Restart em 'moving' refaz (cancelar é idempotente; se uma perna executou no meio, fecha normal).
+ *   Restart em 'buying' NÃO recompra (a compra pode ter saído) → 'failed' + aviso pra conferir.
+ */
+async function processOnDrop(row, adapter, log) {
+  const cc = { ...(row.close_condition ?? {}) };
+  const od = cc.exit?.onDrop;
+  if (!od || !['breakeven', 'martingale'].includes(od.mode) || !row.bracket) return;
+  const tag = `${row.symbol} #${row.id}`;
+  const avg = Number(row.fill?.avgPrice);
+  const qty = Number(row.fill?.filledQty);
+  if (!(avg > 0) || !(qty > 0)) return;
+  let st = cc.dropState ?? null;
+  if (st && ['done', 'failed'].includes(st.stage)) return;
+  // Grava o próximo passo (condicionado ao status: o "Vender agora" no meio interrompe).
+  const save = async (next, extra = {}) => {
+    const close_condition = { ...cc, dropState: next };
+    if (!await patchIf(row, { ...extra, close_condition })) return false;
+    cc.dropState = next;
+    row = { ...row, ...extra, close_condition };
+    st = next;
+    return true;
+  };
+
+  if (!st) {
+    const trigger = avg * (1 - Number(od.dropPct) / 100);
+    const price = await fetchLivePrice(row.exchange, row.symbol);
+    if (!(price <= trigger)) return;
+    if (!await save({ stage: 'moving', at: new Date().toISOString(), price })) return;
+    log(`📉 [OCO manual] ${tag}: caiu ${od.dropPct}% (${fmt(price)} ≤ ${fmt(trigger)}) — movendo o alvo pra entrada ${fmt(avg)}${od.mode === 'martingale' ? ' + martingale' : ''}`);
+  }
+
+  if (st.stage === 'moving') {
+    await adapter.cancelExitBracket(row.bracket);
+    const r = await adapter.pollExitBracket(row.bracket).catch(() => null);
+    if (r?.filled) { await closeBracketed(row, r, log); return; }
+    const stop = Number(row.bracket.stopPrice ?? row.stop_price);
+    let bracket;
+    try {
+      bracket = await adapter.placeExitBracket(qty, avg, stop);
+    } catch (err) {
+      // Não deu pra recolocar com o alvo na entrada → volta a OCO original (a posição não fica sem stop).
+      let orig;
+      try {
+        orig = await adapter.placeExitBracket(qty, Number(row.bracket.targetPrice ?? row.target_price), stop);
+      } catch (err2) {
+        await patchIf(row, {
+          status: 'OCO_FAILED', error: `queda de ${od.dropPct}%: OCO cancelada e não recolocada (${err2.message})`,
+          close_condition: { ...cc, dropState: { ...st, stage: 'failed', error: err2.message } },
+        });
+        log(`❌ [OCO manual] ${tag}: OCO cancelada pra mover o alvo e NÃO recolocada — ${err2.message}`);
+        notify(`🚨 Explosão de Alta ${row.symbol}: caiu ${od.dropPct}%, a OCO foi cancelada pra mover o alvo e NÃO foi recolocada (${err2.message}) — posição SEM stop/alvo, proteja manualmente.`, log);
+        return;
+      }
+      await sbReq('PATCH', TABLE, {
+        bracket: orig, close_condition: { ...cc, dropState: { ...st, stage: 'failed', error: err.message } }, updated_at: new Date().toISOString(),
+      }, `?id=eq.${row.id}`);
+      log(`⚠️  [OCO manual] ${tag}: não deu pra pôr o alvo na entrada (${err.message}) — OCO original recolocada`);
+      notify(`⚠️ Explosão de Alta ${row.symbol}: caiu ${od.dropPct}% mas não deu pra mover o alvo pra entrada (${err.message}) — OCO original recolocada, sem martingale.`, log);
+      return;
+    }
+    const next = { ...st, stage: od.mode === 'martingale' ? 'moved' : 'done', movedAt: new Date().toISOString(), target: bracket.targetPrice };
+    const close_condition = { ...cc, dropState: next };
+    // Incondicional (como o fill): a OCO nova JÁ está na corretora — perder o handle a deixaria órfã.
+    await sbReq('PATCH', TABLE, { bracket, target_price: bracket.targetPrice, close_condition, updated_at: new Date().toISOString() }, `?id=eq.${row.id}`);
+    cc.dropState = next;
+    st = next;
+    row = { ...row, bracket, target_price: bracket.targetPrice, close_condition };
+    log(`🎯 [OCO manual] ${tag}: alvo movido pra entrada — OCO alvo ${fmt(bracket.targetPrice)} / stop ${fmt(bracket.stopPrice)}`);
+    notify(`📉 Explosão de Alta ${row.symbol}: caiu ${od.dropPct}% — alvo movido pra entrada (${fmt(bracket.targetPrice)}), stop segue em ${fmt(bracket.stopPrice)}.`, log);
+    if (od.mode !== 'martingale') return;
+  }
+
+  if (st.stage === 'buying') {
+    // Caiu no meio da compra do martingale: não sabe se a compra saiu → não recompra.
+    await save({ ...st, stage: 'failed', error: 'reinício no meio da compra do martingale' });
+    log(`⚠️  [OCO manual] ${tag}: reinício no meio da compra do martingale — confira o saldo na corretora (2ª compra pode estar sem OCO)`);
+    notify(`⚠️ Explosão de Alta ${row.symbol}: o bot reiniciou no meio da compra do martingale — confira na corretora se a 2ª compra saiu (pode estar SEM OCO).`, log);
+    return;
+  }
+
+  if (st.stage === 'moved') {
+    const usdt2 = Number(od.martingaleUsdt);
+    if (!await save({ ...st, stage: 'buying' })) return;
+    let fill2;
+    try {
+      fill2 = await adapter.marketBuy(usdt2);
+    } catch (err) {
+      await save({ ...st, stage: 'failed', error: err.message });
+      log(`❌ [OCO manual] ${tag}: martingale de ${usdt2} USDT falhou — ${err.message}`);
+      notify(`❌ Explosão de Alta ${row.symbol}: martingale de ${usdt2} USDT falhou (${err.message}) — ${buyFailHint(err)}. A 1ª compra segue com o alvo na entrada.`, log);
+      return;
+    }
+    const clean = { filledQty: fill2.filledQty, quoteQty: fill2.quoteQty, avgPrice: fill2.avgPrice, at: new Date().toISOString() };
+    const avg2 = Number(fill2.avgPrice);
+    const stop2 = avg2 * (1 - Number(od.martingaleStopPct) / 100);
+    let child = null;
+    try {
+      [child] = await sbReq('POST', TABLE, {
+        symbol: row.symbol, exchange: row.exchange, usdt: usdt2,
+        entry_price: avg2, target_price: avg, stop_price: stop2,
+        entry_kind: 'market', status: 'FILLED', fill: clean,
+        close_condition: {
+          source: MARTINGALE_SOURCE, parentId: row.id,
+          interval: cc.interval, candleOpenTime: cc.candleOpenTime,
+          martingale: { dropPct: od.dropPct, stopPct: od.martingaleStopPct, parentEntry: avg },
+        },
+      }) ?? [];
+    } catch (err) {
+      log(`❌ [OCO manual] ${tag}: martingale comprou mas a ordem filha não foi gravada — ${err.message}`);
+    }
+    // Incondicional: a compra já saiu na corretora.
+    const done = { ...st, stage: 'done', childId: child?.id ?? null, fill: clean };
+    await sbReq('PATCH', TABLE, { close_condition: { ...cc, dropState: done }, updated_at: new Date().toISOString() }, `?id=eq.${row.id}`);
+    log(`➕ [OCO manual] ${tag}: martingale comprou ${fmt(clean.filledQty)} a ~${fmt(avg2)} (${usdt2} USDT) — ordem #${child?.id ?? '?'}: alvo ${fmt(avg)} / stop ${fmt(stop2)}`);
+    if (!child) {
+      notify(`🚨 Explosão de Alta ${row.symbol}: martingale COMPROU ${fmt(clean.filledQty)} a ~${fmt(avg2)} mas a ordem não foi gravada — 2ª compra SEM OCO, proteja manualmente.`, log);
+      return;
+    }
+    await placeBracket({ ...child, status: 'FILLED' }, adapter, clean, log);
+  }
+}
+
 async function processRow(row, log) {
   const adapter = buildAdapter(row.exchange === 'gate' ? 'gate' : 'binance', row.symbol);
   const tag = `${row.symbol} #${row.id}`;
@@ -329,13 +475,12 @@ async function processRow(row, log) {
 
   if (row.status === 'BRACKETED') {
     if (!row.bracket) return;
-    const r = await adapter.pollExitBracket(row.bracket);
-    if (!r?.filled) return;
-    const exit = { kind: r.filled, soldQty: r.soldQty, usdtOut: r.usdtOut, exitPrice: r.exitPrice, at: new Date().toISOString(), notified: false };
-    const status = r.filled === 'target' ? 'CLOSED_TARGET' : 'CLOSED_STOP';
-    const ok = await patchIf(row, { status, exit });
-    if (!ok) return;
-    await notifyExit({ ...row, status, exit }, log);
+    // Mudando a OCO no meio (queda → alvo na entrada): a OCO gravada pode já estar cancelada.
+    if (row.close_condition?.dropState?.stage !== 'moving') {
+      const r = await adapter.pollExitBracket(row.bracket);
+      if (r?.filled) { await closeBracketed(row, r, log); return; }
+    }
+    await processOnDrop(row, adapter, log);
     return;
   }
 
@@ -459,4 +604,4 @@ function startManualOcoWatcher({ log = console.log } = {}) {
   return setInterval(pass, POLL_MS);
 }
 
-module.exports = { startManualOcoWatcher, _test: { processRow, bracketLevels, discountLevels } };
+module.exports = { startManualOcoWatcher, MARTINGALE_SOURCE, _test: { processRow, bracketLevels, discountLevels, processOnDrop } };

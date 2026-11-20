@@ -431,6 +431,17 @@ do gráfico: o padrão segue "Compra agora" (rascunho na sugestão pelos candles
 do candle"** o cartão assume o padrão do bot — entrada **a mercado** no seletor (desconto opcional, não
 lembrado) e alvo +15% / stop −15% da entrada (`CLOSE_TARGET_PCT`/`CLOSE_STOP_PCT` em `ChartOcoTool.jsx`). O watcher ignora `entry_kind`
 desconhecido (bot desatualizado comprava `candle_close` na hora — caso ADX #141).
+**Queda depois da compra / martingale (v1.193.0):** `onDrop` na config (`priceActionConfig.js`, card "Se cair
+depois da compra" no painel; padrão `'off'`) → `close_condition.exit.onDrop` das ordens novas. Com a posição
+BRACKETED, preço ≤ comprado −`dropPct`% (15): `'breakeven'` cancela e recoloca a OCO com alvo = preço comprado
+(stop igual); `'martingale'` faz isso E compra `martingaleUsdt` a mercado, gravada como ordem FILHA
+(`status FILLED`, `entry_kind 'market'`, `source 'bullish_breakout_martingale'`, `parentId`) com alvo = preço da
+1ª compra e stop −`martingaleStopPct`% (15) do preço dela — o fluxo normal põe/vigia a OCO dela. Passos em
+`close_condition.dropState.stage` (moving → moved → buying → done/failed); restart em `buying` NÃO recompra
+(avisa). `manualOcoWatcher.js#processOnDrop`. A caixa Price action do gráfico simula o mesmo (seletor "alvo
+normal / alvo na entrada −15% / martingale −15%" + valor da 2ª, `priceActionBoxSim.js` `breakevenDropPct`/
+`dropReinforce`/`reinforceMult`/`reinforceStopPct`, P&L em USDT) e ganhou entrada **a mercado no fechamento**
+(`entryMode 'close'`, padrão; `'limit'` = a limite em X% do candle de antes).
 **Seta do sinal no favorito B (v1.180.0):** clicar numa moeda do favorito Binance desenha a seta amarela
 no candle 4h de cada Explosão automática, com ou sem entrada — `GET /services/bullish-breakout/signals?symbol=`
 junta as ordens do automático (`manual_oco_orders`, desfecho pelo status/erro: sem saldo, padrão de baixa…)

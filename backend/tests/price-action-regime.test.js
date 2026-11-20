@@ -237,6 +237,7 @@ test('config: todo campo editável sobrevive ida e volta (painel → banco → p
     bullishPatterns: ['hammer', 'morning star', 'three white soldiers', 'bullish engulfing', 'piercing line', 'bullish marubozu'],
     targetPct: 18, stopPct: 25,
     regime: { btcEma50_4h: false, coinEma20_1d: true, coinMacd4h: false, btcEma20_1dRising: true, topGainers: 20, minVolume24h: 2_000_000 },
+    onDrop: { mode: 'martingale', dropPct: 12, martingaleUsdt: 40, martingaleStopPct: 18 },
   };
   expect(normalizePriceActionConfig(JSON.parse(JSON.stringify(normalizePriceActionConfig(edited))))).toEqual(edited);
   expect(DEFAULTS.usdt).toBe(20);

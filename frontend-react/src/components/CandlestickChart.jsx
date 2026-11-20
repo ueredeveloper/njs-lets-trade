@@ -13,6 +13,12 @@ import ManualOcoOrdersPanel from './ManualOcoOrdersPanel';
 import { listManualOcoOrders } from '../services/api';
 import { isManualOcoActive, manualOcoLevels, withMinStop, MANUAL_OCO_MIN_STOP_PCT } from '../utils/manualOco';
 import { simulatePriceActionBox, PRICE_ACTION_DEFAULTS } from '../utils/priceActionBoxSim';
+
+// Queda (%) depois da entrada que move o alvo da caixa Price action pro preço de entrada.
+const BREAKEVEN_DROP_PCT = 15;
+// Valor de cada entrada da caixa Price action (= bot da Explosão de Alta) — base do P&L em USDT e do
+// valor da 2ª compra do martingale (20, 40, 60…).
+const PA_ENTRY_USD = 20;
 import { patternPt, BULLISH_PATTERN_WHY } from '../utils/candlePatterns';
 import { REGIME_OPTIONS, BEAR_GUARD_OPTIONS, regimeNeeds } from '../utils/priceActionRegime';
 import { buildOcoSuggester } from '../utils/ocoSuggest';
@@ -5908,7 +5914,7 @@ export default function CandlestickChart() {
     function paTradeRects(paSim, tag) {
     const refT = Math.floor(paSim.ref.openTime / 1000);
     const fillT = paSim.fill ? Math.floor(paSim.fill.openTime / 1000) : Math.floor(analysisBox.toMs / 1000);
-    const lvlLabel = `${paSim.params.entryRef === 'prev' ? 'ant. ' : ''}${paSim.level}%`;
+    const lvlLabel = paSim.closeEntry ? 'a mercado no fechamento' : `${paSim.params.entryRef === 'prev' ? 'ant. ' : ''}${paSim.level}%`;
     // Tipo do candle do sinal, em amarelo um pouco ABAIXO da faixa (sublabel, fora do quadrado):
     // 1ª linha = padrão + por que entrou; 2ª = explicação curta do padrão.
     const a = paSim.analysis;
@@ -5933,22 +5939,72 @@ export default function CandlestickChart() {
     const pctLabel = `${paSim.pnlPct >= 0 ? '+' : ''}${paSim.pnlPct.toFixed(2)}%`;
     const targetHit = paSim.outcome === 'target';
     const stopHit = paSim.outcome === 'stop';
+    const beHit = paSim.outcome === 'breakeven' || paSim.legs?.[0]?.outcome === 'breakeven';
+    // Alvo → entrada ativado: o alvo original vai só até o candle da queda; dali em diante uma
+    // faixa âmbar (entrada ↔ gatilho da queda) mostra o alvo novo no preço de entrada.
+    const beT = paSim.breakevenAt ? Math.floor(paSim.breakevenAt.openTime / 1000) : null;
     rects.push({
-      time1: t1, time2: t2, price1: paSim.entry, price2: paSim.targetPrice,
+      time1: t1, time2: beT != null ? Math.max(t1 + ivSec, beT) : t2, price1: paSim.entry, price2: paSim.targetPrice,
       fillColor: targetHit ? 'rgba(34,197,94,0.22)' : 'rgba(34,197,94,0.08)',
       strokeColor: targetHit ? 'rgba(34,197,94,0.9)' : 'rgba(34,197,94,0.3)',
       labelColor: '#22c55e',
-      label: targetHit ? `alvo ✓ ${pctLabel}` : `alvo +${paSim.params.targetPct}%`,
+      label: targetHit ? `alvo ✓ ${pctLabel}` : `alvo +${paSim.params.targetPct}%${beT != null ? ' (movido)' : ''}`,
       labelPos: 'top',
     });
+    if (beT != null && !paSim.reinforced) {
+      // Alvo novo = o PRÓPRIO preço de entrada: faixa fina verde na entrada (não é stop — o stop
+      // continua sendo o retângulo vermelho de −stopPct%).
+      const band = paSim.entry * 0.0015;
+      rects.push({
+        time1: beT, time2: Math.max(beT + ivSec, t2), price1: paSim.entry - band, price2: paSim.entry + band,
+        fillColor: beHit ? 'rgba(34,197,94,0.55)' : 'rgba(34,197,94,0.30)',
+        strokeColor: 'rgba(34,197,94,0.95)',
+        labelColor: '#22c55e',
+        label: beHit ? `alvo na entrada ✓ ${pctLabel}` : `alvo na entrada (caiu −${paSim.params.breakevenDropPct}%)`,
+        labelPos: 'top',
+      });
+    }
+    // Cada compra com o PRÓPRIO stop: a 1ª sempre −stopPct% da entrada (retângulo do trade inteiro);
+    // a 2ª (reforço) −reinforceStopPct% do preço dela, do candle da queda até a saída DELA.
+    const leg1Stop = paSim.legs?.[0]?.outcome === 'stop' || (!paSim.legs && stopHit);
     rects.push({
       time1: t1, time2: t2, price1: paSim.entry, price2: paSim.stopPrice,
-      fillColor: stopHit ? 'rgba(239,68,68,0.22)' : 'rgba(239,68,68,0.08)',
-      strokeColor: stopHit ? 'rgba(239,68,68,0.9)' : 'rgba(239,68,68,0.3)',
+      fillColor: leg1Stop ? 'rgba(239,68,68,0.22)' : 'rgba(239,68,68,0.08)',
+      strokeColor: leg1Stop ? 'rgba(239,68,68,0.9)' : 'rgba(239,68,68,0.3)',
       labelColor: '#ef4444',
-      label: stopHit ? `stop ✗ ${pctLabel}` : paSim.outcome === 'open' ? `aberto ${pctLabel}` : `stop −${paSim.params.stopPct}%`,
+      label: leg1Stop ? `stop ✗ ${pctLabel}` : paSim.outcome === 'open' ? `aberto ${pctLabel}` : `stop −${paSim.params.stopPct}%`,
       labelPos: 'bottom',
     });
+    // OCO do martingale (2ª compra): verde do preço dela até a 1ª entrada (alvo das duas) e vermelho
+    // até o stop dela (−reinforceStopPct%), do candle da queda até a saída da 2ª.
+    if (paSim.reinforced && Number.isFinite(paSim.reinforceStopPrice) && beT != null) {
+      const leg2 = paSim.legs?.[1];
+      const leg2Stop = leg2?.outcome === 'stop';
+      const leg2Target = leg2?.outcome === 'breakeven' || leg2?.outcome === 'target';
+      const leg2End = Math.max(beT + ivSec, paSim.addExit ? Math.floor(paSim.addExit.openTime / 1000) + ivSec : t2);
+      const leg2Pct = leg2?.exitPrice != null ? ((leg2.exitPrice - leg2.price) / leg2.price) * 100 : null;
+      const sg = (v) => `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`;
+      const usd2 = Math.round(paSim.reinforceMult * PA_ENTRY_USD);
+      const tgtPct = ((paSim.entry - paSim.addPrice) / paSim.addPrice) * 100;
+      rects.push({
+        time1: beT, time2: leg2End, price1: paSim.addPrice, price2: paSim.entry,
+        fillColor: leg2Target ? 'rgba(34,197,94,0.30)' : 'rgba(34,197,94,0.14)',
+        strokeColor: leg2Target ? 'rgba(34,197,94,0.95)' : 'rgba(34,197,94,0.5)',
+        labelColor: '#22c55e',
+        label: leg2Target
+          ? `martingale ✓ 2ª ${leg2Pct != null ? sg(leg2Pct) : ''} · total ${pctLabel}`
+          : `martingale ${usd2}$ a ${fmtPrice(paSim.addPrice)} · alvo 1ª entrada ${sg(tgtPct)}`,
+        labelPos: 'top',
+      });
+      rects.push({
+        time1: beT, time2: leg2End, price1: paSim.addPrice, price2: paSim.reinforceStopPrice,
+        fillColor: leg2Stop ? 'rgba(239,68,68,0.30)' : 'rgba(239,68,68,0.14)',
+        strokeColor: leg2Stop ? 'rgba(239,68,68,0.95)' : 'rgba(239,68,68,0.5)',
+        labelColor: '#f87171',
+        label: leg2Stop ? `stop da 2ª ✗ ${leg2Pct != null ? sg(leg2Pct) : ''}` : `stop da 2ª −${paSim.params.reinforceStopPct}%`,
+        labelPos: 'bottom',
+      });
+    }
     return rects;
     }
   }, [paSim, paIntervalMs, analysisBox]);
@@ -6042,7 +6098,9 @@ export default function CandlestickChart() {
     }
     if (analysisBoxKind === 'priceAction') {
       const label = {
-        closed: paSim?.outcome === 'target' ? 'price action · alvo ✓' : 'price action · stop ✗',
+        closed: paSim?.outcome === 'target' ? 'price action · alvo ✓'
+          : paSim?.outcome === 'breakeven' ? 'price action · saiu na entrada'
+            : paSim?.outcome === 'mixed' ? 'price action · 2ª estopou, 1ª na entrada' : 'price action · stop ✗',
         open: 'price action · em aberto',
         notFilled: 'price action · entrada não preencheu',
         noSignal: 'price action · sem sinal',
@@ -6054,7 +6112,7 @@ export default function CandlestickChart() {
       const sg = (v) => `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`;
       const coin = paSim?.intervalChangePct != null ? ` · moeda ${sg(paSim.intervalChangePct)}` : '';
       if (paSim?.trades?.length > 1 && tt) {
-        return { ...base, label: `price action · ${tt.count} trades · ${tt.wins} ✓ ${tt.losses} ✗ · P&L ${sg(tt.pnlSumPct)}${coin}` };
+        return { ...base, label: `price action · ${tt.count} trades · ${tt.wins} ✓ ${tt.losses} ✗${tt.breakevens ? ` ${tt.breakevens} =` : ''}${tt.mixed ? ` ${tt.mixed} ½` : ''} · P&L ${sg(tt.pnlSumPct)}${coin}` };
       }
       if (tt?.count) return { ...base, label: `${label} · P&L ${sg(tt.pnlSumPct)}${coin}` };
       return { ...base, label: `${label}${coin}` };
@@ -7008,29 +7066,72 @@ export default function CandlestickChart() {
             />
           </div>
           <div className="flex items-center justify-between gap-1">
-            <BoxNumField
-              label="entrada"
-              tone="text-yellow-300"
+            <BoxSegmented
+              value={paParams.entryMode === 'limit' ? 'limit' : 'close'}
+              onChange={(v) => setPaParams((p) => ({ ...p, entryMode: v }))}
+              title="Onde a caixa compra"
               className="flex-1"
-              title="Entrada LIMIT: nível do candle de referência (0 = mínima, 50 = meio, 100 = máxima)"
-              min="0" max="100" step="1" value={paParams.entryLevelPct}
-              onChange={(e) => setPaParams((p) => ({ ...p, entryLevelPct: Number(e.target.value) }))}
+              options={[
+                { value: 'close', label: 'a mercado', title: 'Compra a MERCADO quando o candle do sinal fecha — preço = fechamento (close) do candle (igual ao bot)' },
+                { value: 'limit', label: 'limite', title: 'Ordem limite num nível do candle de referência (0 = mínima, 50 = meio, 100 = máxima) — espera o preço voltar' },
+              ]}
             />
-            <BoxSelect
-              value={paParams.entryRef}
-              onChange={(e) => setPaParams((p) => ({ ...p, entryRef: e.target.value }))}
-              title="Candle de referência da entrada: o candle do sinal (o anterior à entrada) ou o candle antes dele"
-              className="flex-1"
-            >
-              <option value="signal">do sinal</option>
-              <option value="prev">do anterior</option>
-            </BoxSelect>
+            {paParams.entryMode === 'limit' && (
+            <>
+            <BoxNumField
+                label="entrada"
+                tone="text-yellow-300"
+                className="flex-1"
+                title="Entrada LIMIT: nível do candle de referência (0 = mínima, 50 = meio, 100 = máxima)"
+                min="0" max="100" step="1" value={paParams.entryLevelPct}
+                onChange={(e) => setPaParams((p) => ({ ...p, entryLevelPct: Number(e.target.value) }))}
+              />
+              <BoxSelect
+                value={paParams.entryRef}
+                onChange={(e) => setPaParams((p) => ({ ...p, entryRef: e.target.value }))}
+                title="Candle de referência da entrada: o candle do sinal (o anterior à entrada) ou o candle antes dele"
+                className="flex-1"
+              >
+                <option value="signal">do sinal</option>
+                <option value="prev">do anterior</option>
+              </BoxSelect>
+            </>
+            )}
             <BoxIconButton
-              onClick={() => setPaParams({ ...PRICE_ACTION_DEFAULTS, regime: paParams.regime ?? 'off', bearGuard: paParams.bearGuard ?? 'off' })}
-              title="Voltar ao padrão (sinal = corpo ≥ 5% ou padrão de alta, alvo +15%, entrada 50% do candle do sinal, stop −15%)"
+              onClick={() => setPaParams({ ...PRICE_ACTION_DEFAULTS, regime: paParams.regime ?? 'off', bearGuard: paParams.bearGuard ?? 'off', breakevenDropPct: paParams.breakevenDropPct ?? 0, dropReinforce: !!paParams.dropReinforce, reinforceMult: paParams.reinforceMult ?? 1 })}
+              title="Voltar ao padrão (sinal = corpo ≥ 5% ou padrão de alta, alvo +15%, entrada no fechamento do candle do sinal, stop −15%)"
             >
               ↺
             </BoxIconButton>
+          </div>
+          <div className="flex items-center justify-between gap-1">
+            <BoxSegmented
+              value={(paParams.breakevenDropPct ?? 0) > 0 ? (paParams.dropReinforce ? 'martingale' : 'on') : 'off'}
+              onChange={(v) => setPaParams((p) => ({
+                ...p,
+                breakevenDropPct: v === 'off' ? 0 : BREAKEVEN_DROP_PCT,
+                dropReinforce: v === 'martingale',
+              }))}
+              title={`O que fazer se, depois de entrar, a moeda cair ${BREAKEVEN_DROP_PCT}% ou mais (sem bater o stop)`}
+              className="flex-1"
+              options={[
+                { value: 'off', label: 'alvo normal', title: `Alvo fixo em +alvo% (sem mudar)` },
+                { value: 'on', label: `alvo na entrada −${BREAKEVEN_DROP_PCT}%`, title: `Caiu ${BREAKEVEN_DROP_PCT}% depois de entrar → alvo = preço de entrada (o stop continua igual)` },
+                { value: 'martingale', label: `martingale −${BREAKEVEN_DROP_PCT}%`, title: `Caiu ${BREAKEVEN_DROP_PCT}% depois de entrar → o alvo da 1ª compra vai pro preço de entrada e COMPRA DE NOVO (valor ao lado). Alvo da 2ª = preço da 1ª entrada; stop da 2ª = −15% do preço dela. A 1ª mantém o stop dela (−stop%).` },
+              ]}
+            />
+            {(paParams.breakevenDropPct ?? 0) > 0 && paParams.dropReinforce && (
+              <BoxSelect
+                value={String(Math.round((paParams.reinforceMult ?? 1) * PA_ENTRY_USD))}
+                onChange={(e) => setPaParams((p) => ({ ...p, reinforceMult: Number(e.target.value) / PA_ENTRY_USD }))}
+                title={`Valor da 2ª compra (a entrada é ${PA_ENTRY_USD} USDT)`}
+                className="text-yellow-300"
+              >
+                {[1, 2, 3, 4, 5].map((m) => (
+                  <option key={m} value={String(m * PA_ENTRY_USD)}>{`2ª: ${m * PA_ENTRY_USD}$`}</option>
+                ))}
+              </BoxSelect>
+            )}
           </div>
           <div className="flex items-center justify-between gap-1">
             <BoxSelect
@@ -7076,11 +7177,16 @@ export default function CandlestickChart() {
         <div className="max-w-[min(260px,calc(100vw-24px))] rounded-md bg-slate-900/95 backdrop-blur-sm border border-slate-700 shadow-lg shadow-black/40 text-[10px] leading-[15px] overflow-hidden">
           {/* Faixa do resultado: cor = desfecho (verde alvo, vermelho stop, azul em aberto, âmbar aviso) */}
           {(() => {
-            const pnl = paSim.pnlPct != null ? `${paSim.pnlPct >= 0 ? '+' : ''}${paSim.pnlPct.toFixed(2)}%` : null;
+            const usd = (v) => (v != null ? ` (${v >= 0 ? '+' : ''}${v.toFixed(2)}$)` : '');
+            const pnl = paSim.pnlPct != null ? `${paSim.pnlPct >= 0 ? '+' : ''}${paSim.pnlPct.toFixed(2)}%${usd(paSim.pnlUnits != null ? paSim.pnlUnits * PA_ENTRY_USD : null)}` : null;
             const head = {
               closed: paSim.outcome === 'target'
                 ? { tone: 'bg-green-500/15 text-green-300 border-green-500/30', text: 'Alvo atingido', pnl }
-                : { tone: 'bg-red-500/15 text-red-300 border-red-500/30', text: 'Stop atingido', pnl },
+                : paSim.outcome === 'breakeven'
+                  ? { tone: 'bg-amber-500/15 text-amber-300 border-amber-500/30', text: paSim.reinforced ? 'Martingale · saiu tudo na entrada' : 'Saiu na entrada (alvo movido)', pnl }
+                  : paSim.outcome === 'mixed'
+                    ? { tone: paSim.pnlPct >= 0 ? 'bg-amber-500/15 text-amber-300 border-amber-500/30' : 'bg-red-500/15 text-red-300 border-red-500/30', text: '2ª compra estopou · 1ª saiu na entrada', pnl }
+                    : { tone: 'bg-red-500/15 text-red-300 border-red-500/30', text: 'Stop atingido', pnl },
               open: { tone: 'bg-sky-500/15 text-sky-300 border-sky-500/30', text: 'Em aberto', pnl },
               notFilled: { tone: 'bg-amber-500/15 text-amber-300 border-amber-500/30', text: 'Entrada não preencheu' },
               noSignal: { tone: 'bg-amber-500/15 text-amber-300 border-amber-500/30', text: 'Sem sinal na caixa' },
@@ -7090,8 +7196,8 @@ export default function CandlestickChart() {
             if (!head) return null;
             const tt = paSim.totals;
             if (paSim.trades?.length > 1 && tt) {
-              head.text = `${tt.count} trades · ${tt.wins} alvo${tt.wins === 1 ? '' : 's'} · ${tt.losses} stop${tt.losses === 1 ? '' : 's'}`;
-              head.pnl = `${tt.pnlSumPct >= 0 ? '+' : ''}${tt.pnlSumPct.toFixed(2)}%`;
+              head.text = `${tt.count} trades · ${tt.wins} alvo${tt.wins === 1 ? '' : 's'} · ${tt.losses} stop${tt.losses === 1 ? '' : 's'}${tt.breakevens ? ` · ${tt.breakevens} na entrada` : ''}${tt.mixed ? ` · ${tt.mixed} só a 2ª estopou` : ''}`;
+              head.pnl = `${tt.pnlSumPct >= 0 ? '+' : ''}${tt.pnlSumPct.toFixed(2)}%${usd(tt.pnlUnits * PA_ENTRY_USD)}`;
               head.tone = tt.pnlSumPct >= 0
                 ? 'bg-green-500/15 text-green-300 border-green-500/30'
                 : 'bg-red-500/15 text-red-300 border-red-500/30';
@@ -7117,9 +7223,9 @@ export default function CandlestickChart() {
           <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-px px-2 py-1">
             {paSim.trades.map((tr, n) => {
               const res = tr.status === 'closed'
-                ? (tr.outcome === 'target' ? 'alvo ✓' : 'stop ✗')
+                ? (tr.outcome === 'target' ? 'alvo ✓' : tr.outcome === 'breakeven' ? (tr.reinforced ? 'martingale → entrada' : 'na entrada =') : tr.outcome === 'mixed' ? '2ª stop, 1ª entrada' : 'stop ✗')
                 : tr.status === 'open' ? 'aberto' : 'não preencheu';
-              const tone = tr.status === 'closed' ? (tr.outcome === 'target' ? 'text-green-300' : 'text-red-300')
+              const tone = tr.status === 'closed' ? (tr.outcome === 'target' ? 'text-green-300' : (tr.outcome === 'breakeven' || tr.outcome === 'mixed') ? 'text-amber-300' : 'text-red-300')
                 : tr.status === 'open' ? 'text-sky-300' : 'text-amber-300';
               const how = tr.analysis?.authorizedBy === 'pattern' ? patternPt(tr.analysis.bullish) : 'corpo';
               return (
@@ -7177,9 +7283,17 @@ export default function CandlestickChart() {
               </BoxSummaryRow>
             )}
             {paSim.status === 'closed' && (
-              <BoxSummaryRow label="Saída" tone={paSim.outcome === 'target' ? 'text-green-300' : 'text-red-300'}>
+              <BoxSummaryRow label="Saída" tone={paSim.outcome === 'target' ? 'text-green-300' : (paSim.outcome === 'breakeven' || paSim.outcome === 'mixed') ? 'text-amber-300' : 'text-red-300'}>
                 <span className="font-mono tabular-nums">{fmtPrice(paSim.exitPrice)}</span>
                 <span className="text-slate-400 font-mono tabular-nums"> · {fmtDate(paSim.exit.openTime)} · {paSim.candlesHeld} candle{paSim.candlesHeld === 1 ? '' : 's'}</span>
+              </BoxSummaryRow>
+            )}
+            {paSim.breakevenAt && (
+              <BoxSummaryRow label="Alvo→ent." tone="text-amber-300">
+                <span className="text-slate-300">caiu −{paSim.params.breakevenDropPct}% em </span>
+                <span className="font-mono tabular-nums">{fmtDate(paSim.breakevenAt.openTime)}</span>
+                {paSim.reinforced && <span className="text-yellow-200"> · comprou mais {Math.round(paSim.reinforceMult * PA_ENTRY_USD)}$ a {fmtPrice(paSim.addPrice)} · stop dela {fmtPrice(paSim.reinforceStopPrice)}{paSim.addOutcome === 'stop' ? ' (estopou)' : ''}</span>}
+                <span className="text-slate-400"> · alvo movido pra {fmtPrice(paSim.entry)}</span>
               </BoxSummaryRow>
             )}
             {paSim.status === 'open' && (

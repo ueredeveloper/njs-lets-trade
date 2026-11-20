@@ -9,6 +9,12 @@
  * Padrão (v1.191.0) = a configuração validada na caixa Price action do gráfico: alvo +15% / stop
  * −30%, BTC 4h > EMA50, moeda > EMA20 1d, MACD 4h > 0, EMA20 1d do BTC subindo (período de baixa)
  * e moeda entre as 40 maiores altas 24h.
+ *
+ * `onDrop` (v1.193.0) — o que fazer se, depois da compra, o preço cair `dropPct`% (= caixa Price
+ * action do gráfico, priceActionBoxSim.js): 'off' (nada), 'breakeven' (o alvo da OCO vai pro preço de
+ * entrada; o stop não muda) ou 'martingale' (alvo → entrada E compra de novo `martingaleUsdt` USDT,
+ * com OCO própria: alvo = preço da 1ª entrada, stop = −martingaleStopPct% do preço da 2ª compra).
+ * Executado pelo manualOcoWatcher (processOnDrop). Padrão 'off'.
  */
 
 const { DEFAULT_REGIME } = require('./marketRegime');
@@ -29,7 +35,10 @@ const DEFAULTS = Object.freeze({
   targetPct: 15,
   stopPct: 30,
   regime: { ...DEFAULT_REGIME },
+  onDrop: { mode: 'off', dropPct: 15, martingaleUsdt: 20, martingaleStopPct: 15 },
 });
+
+const ON_DROP_MODES = ['off', 'breakeven', 'martingale'];
 
 const num = (v, def, min, max) => {
   const n = Number(v);
@@ -62,6 +71,13 @@ function normalizePriceActionConfig(raw = {}) {
       topGainers: Math.trunc(num(r.topGainers, d.regime.topGainers, 0, 500)),
       minVolume24h: num(r.minVolume24h, d.regime.minVolume24h, 0, 1e10),
     },
+    onDrop: {
+      mode: ON_DROP_MODES.includes(raw.onDrop?.mode) ? raw.onDrop.mode : d.onDrop.mode,
+      dropPct: num(raw.onDrop?.dropPct, d.onDrop.dropPct, 1, 80),
+      martingaleUsdt: num(raw.onDrop?.martingaleUsdt, d.onDrop.martingaleUsdt, 6, 10_000),
+      // Mesmo piso de 10% de toda OCO real (manualOcoStop.js).
+      martingaleStopPct: num(raw.onDrop?.martingaleStopPct, d.onDrop.martingaleStopPct, 10, 90),
+    },
   };
 }
 
@@ -76,4 +92,4 @@ async function loadPriceActionConfig(sbReq, userId) {
   }
 }
 
-module.exports = { TABLE, DEFAULTS, BULLISH_PATTERNS, normalizePriceActionConfig, loadPriceActionConfig };
+module.exports = { TABLE, DEFAULTS, ON_DROP_MODES, BULLISH_PATTERNS, normalizePriceActionConfig, loadPriceActionConfig };

@@ -220,6 +220,58 @@ export default function PriceActionSettings({ open, inp }) {
         </div>
       </Card>
 
+      {/* Regra de queda (v1.193.0) — mesmo seletor da caixa Price action do gráfico. Executada pelo
+          watcher do bot (manualOcoWatcher.js#processOnDrop) com a posição já comprada. */}
+      <Card title="Se cair depois da compra" tone={{ background: '#1a1410', border: '1px solid #4a3a2a' }}>
+        <div className="flex flex-col gap-1.5">
+          {[
+            { v: 'off', label: 'Alvo normal', hint: 'nada muda: a OCO fica com o alvo e o stop de cima' },
+            { v: 'breakeven', label: 'Alvo na entrada', hint: 'caiu X%: o alvo da OCO vai pro preço de entrada (sai no zero a zero); o stop não muda' },
+            { v: 'martingale', label: 'Martingale', hint: 'caiu X%: o alvo vai pra entrada E compra de novo, com OCO própria: alvo = preço da 1ª entrada, stop −Y% do preço da 2ª compra' },
+          ].map((o) => (
+            <label key={o.v} className="flex items-start gap-2 cursor-pointer group min-w-0">
+              <input
+                type="radio" name="pa-on-drop" className="mt-0.5 shrink-0 accent-p4"
+                checked={(cfg.onDrop?.mode ?? 'off') === o.v}
+                onChange={() => patch({ onDrop: { ...cfg.onDrop, mode: o.v } })}
+              />
+              <span className="text-[11px] text-p5 leading-snug group-hover:text-white min-w-0">
+                {o.label}
+                <span className="block text-[10px] text-p5/40">{o.hint}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+        {(cfg.onDrop?.mode ?? 'off') !== 'off' && (
+          <div className="grid grid-cols-2 gap-2 mt-2">
+            <Field label="Queda (%)">
+              <input type="number" min={1} max={80} step={0.5} className={field} value={cfg.onDrop.dropPct}
+                onChange={(e) => patch({ onDrop: { ...cfg.onDrop, dropPct: num(e.target.value) } })} />
+            </Field>
+            {cfg.onDrop.mode === 'martingale' && (
+              <>
+                <Field label="2ª compra (USDT)">
+                  <select className={field} value={cfg.onDrop.martingaleUsdt}
+                    onChange={(e) => patch({ onDrop: { ...cfg.onDrop, martingaleUsdt: Number(e.target.value) } })}>
+                    {[...new Set([cfg.usdt, 2 * cfg.usdt, 3 * cfg.usdt, 4 * cfg.usdt, 5 * cfg.usdt, cfg.onDrop.martingaleUsdt])]
+                      .filter((v) => v > 0).sort((a, b) => a - b)
+                      .map((v) => <option key={v} value={v}>{v} USDT{v === cfg.usdt ? ' (= entrada)' : ''}</option>)}
+                  </select>
+                </Field>
+                <Field label="Stop da 2ª (%, mín. 10)">
+                  <input type="number" min={10} max={90} step={0.5} className={field} value={cfg.onDrop.martingaleStopPct}
+                    onChange={(e) => patch({ onDrop: { ...cfg.onDrop, martingaleStopPct: num(e.target.value) } })} />
+                </Field>
+              </>
+            )}
+          </div>
+        )}
+        <p className="text-[10px] text-p5/40 mt-2 leading-relaxed">
+          Vale pras ordens criadas depois de salvar (as já abertas seguem a regra de quando foram criadas). O stop da 1ª compra nunca muda.
+          No martingale a 2ª compra aparece como uma ordem OCO separada (dá pra vender sozinha pelo gráfico).
+        </p>
+      </Card>
+
       <Card title="Filtros de mercado" tone={{ background: '#0f1219', border: '1px solid #2a2d3a' }}>
         <div className="flex flex-col gap-2">
           {REGIME_FIELDS.map((f) => (
