@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { getPriceActionConfig, savePriceActionConfig } from '../services/api';
+import { getPriceActionConfig, savePriceActionConfig, getPriceActionMarketState } from '../services/api';
 import CandlePatternIcon from './CandlePatternIcon';
 
 // Configurações → Price action: config do bot "Explosão de Alta automática"
@@ -35,6 +35,16 @@ const TOP_OPTIONS = [10, 20, 40];
 const fmtBrt = (iso) => new Date(iso).toLocaleString('pt-BR', {
   timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
 });
+
+/** Luz do filtro: verde = passa agora, vermelha = barra agora, cinza = carregando / sem dado. */
+function Light({ ok, title }) {
+  const cls = ok == null
+    ? 'bg-slate-500'
+    : ok ? 'bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.9)]' : 'bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.9)]';
+  return <span title={title} className={`mt-1 w-2 h-2 rounded-full shrink-0 ${cls}`} />;
+}
+
+const sgPct = (v) => (v == null ? '—' : `${v >= 0 ? '+' : ''}${String(v.toFixed(2)).replace('.', ',')}%`);
 
 /** Rótulo em cima + controle ocupando a coluna toda. */
 function Field({ label, children }) {
@@ -77,6 +87,25 @@ export default function PriceActionSettings({ open, inp }) {
   const [dirty, setDirty] = useState(false);
   const [saveState, setSaveState] = useState(null); // null | 'saving' | 'saved' | erro (string)
   const [lastTop, setLastTop] = useState(40); // último top N escolhido (religar o filtro volta nele)
+  // Estado AGORA dos filtros de mercado (luzes) — GET /bullish-breakout/market-state.
+  const [market, setMarket] = useState(null);
+  const [marketErr, setMarketErr] = useState('');
+  const [marketLoading, setMarketLoading] = useState(false);
+  const mTop = cfg?.regime?.topGainers > 0 ? cfg.regime.topGainers : 40;
+  const mVol = cfg?.regime?.minVolume24h ?? 1_000_000;
+  const fetchMarket = (fresh) => getPriceActionMarketState({ topGainers: mTop, minVolume24h: mVol, fresh })
+    .then((m) => { setMarket(m); setMarketErr(''); })
+    .catch((err) => setMarketErr(err.message));
+  // Botão "atualizar" (ignora o cache de 3 min do backend).
+  const loadMarket = () => {
+    setMarketLoading(true);
+    fetchMarket(true).finally(() => setMarketLoading(false));
+  };
+  const hasCfg = !!cfg;
+  useEffect(() => {
+    if (!open || !hasCfg) return;
+    fetchMarket(false);
+  }, [open, hasCfg, mTop, mVol]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!open || cfg) return;
@@ -109,6 +138,15 @@ export default function PriceActionSettings({ open, inp }) {
   if (!cfg) return <p className="text-[10px] text-p5/40">Carregando…</p>;
 
   const rg = cfg.regime;
+  // Luz de cada filtro: BTC = sim/não do mercado; moeda = quantas das N maiores altas passam agora.
+  const marketLight = (key) => {
+    if (!market) return { ok: null, text: marketErr ? 'indisponível' : '' };
+    if (key === 'btcEma50_4h') return { ok: market.btcEma50_4h.ok, text: `BTC ${sgPct(market.btcEma50_4h.value)} vs. EMA50 4h` };
+    if (key === 'btcEma20_1dRising') return { ok: market.btcEma20_1dRising.ok, text: `EMA20 1d do BTC ${sgPct(market.btcEma20_1dRising.value)} em 5 dias` };
+    const total = market.coins.length;
+    const pass = market.coins.filter((c) => c[key]).length;
+    return { ok: pass > 0, text: `${pass}/${total} das ${market.topGainers} maiores altas passam` };
+  };
   const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
   const field = `${inp} w-full min-w-0`;
 
@@ -274,9 +312,22 @@ export default function PriceActionSettings({ open, inp }) {
 
       <Card title="Filtros de mercado" tone={{ background: '#0f1219', border: '1px solid #2a2d3a' }}>
         <div className="flex flex-col gap-2">
-          {REGIME_FIELDS.map((f) => (
-            <Check key={f.key} checked={!!rg[f.key]} onChange={(v) => patchRegime({ [f.key]: v })} label={f.label} hint={f.hint} />
-          ))}
+          {REGIME_FIELDS.map((f) => {
+            const st = marketLight(f.key);
+            return (
+              <Check
+                key={f.key} checked={!!rg[f.key]} onChange={(v) => patchRegime({ [f.key]: v })} label={f.label}
+                hint={(
+                  <>
+                    {f.hint}
+                    {st.text && <span className={`block ${st.ok == null ? 'text-p5/40' : st.ok ? 'text-emerald-400' : 'text-red-400'}`}>agora: {st.text}</span>}
+                  </>
+                )}
+              >
+                <Light ok={st.ok} title={st.text || 'carregando…'} />
+              </Check>
+            );
+          })}
           {/* Ranking de alta 24h da Binance — 0 = desligado; religar volta no último top escolhido. */}
           <Check
             checked={rg.topGainers > 0}
@@ -305,6 +356,41 @@ export default function PriceActionSettings({ open, inp }) {
             </Field>
           </div>
         </div>
+        {/* Resumo: com as caixinhas marcadas AGORA, quantas das maiores altas passariam em tudo. */}
+        {(() => {
+          if (!market) {
+            return (
+              <p className="text-[10px] mt-2 text-p5/40">
+                {marketErr ? <span className="text-red-400">estado atual indisponível: {marketErr}</span> : 'carregando estado atual dos filtros…'}
+              </p>
+            );
+          }
+          const btcOk = (!rg.btcEma50_4h || market.btcEma50_4h.ok) && (!rg.btcEma20_1dRising || market.btcEma20_1dRising.ok);
+          const pass = market.coins.filter((c) => (!rg.coinEma20_1d || c.coinEma20_1d) && (!rg.coinMacd4h || c.coinMacd4h));
+          const n = btcOk ? pass.length : 0;
+          return (
+            <div className="mt-2 rounded px-2 py-1.5 text-[10px] leading-snug flex items-start gap-2" style={{ background: n > 0 ? '#0f2a1c' : '#2a1212' }}>
+              <Light ok={n > 0} />
+              <span className="min-w-0">
+                <span className={n > 0 ? 'text-emerald-300' : 'text-red-300'}>
+                  Agora: {n} de {market.coins.length} das maiores altas passariam em todos os filtros marcados
+                </span>
+                {!btcOk && <span className="block text-p5/50">o BTC barra tudo enquanto um filtro do BTC estiver vermelho</span>}
+                {btcOk && pass.length > 0 && (
+                  <span className="block text-p5/50 truncate" title={pass.map((c) => c.symbol).join(', ')}>
+                    {pass.slice(0, 8).map((c) => c.symbol.replace(/USDT$/, '')).join(', ')}{pass.length > 8 ? ` +${pass.length - 8}` : ''}
+                  </span>
+                )}
+                <span className="block text-p5/40">
+                  atualizado {fmtBrt(new Date(market.at).toISOString())} ·{' '}
+                  <button type="button" className="underline hover:text-white disabled:opacity-50" disabled={marketLoading} onClick={loadMarket}>
+                    {marketLoading ? 'atualizando…' : 'atualizar'}
+                  </button>
+                </span>
+              </span>
+            </div>
+          );
+        })()}
         <p className="text-[10px] text-p5/40 mt-2 leading-relaxed">
           Conferidos na varredura e de novo no fechamento do candle, só com candles 4h/1d já fechados. Falha ao buscar dados = não compra.
           Estudo (caixa Price action, 1000 candles 4h, +15%/−30%): 77 moedas +5,6%/trade; 20 maiores altas +6,9%; 40 +5,0% (com taxa).

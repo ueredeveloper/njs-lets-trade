@@ -20,6 +20,28 @@ router.get('/bullish-breakout', async (req, res) => {
   }
 });
 
+// GET /services/bullish-breakout/market-state[?topGainers=40&minVolume24h=1000000]
+// Estado AGORA dos filtros de mercado do bot (luzes em Configurações → Price action): BTC 4h vs.
+// EMA50, EMA20 1d do BTC subindo e, pras N maiores altas 24h, EMA20 1d / MACD 4h de cada moeda.
+// Cache de 3 min por (topGainers, volume) — o painel pode reabrir à vontade.
+const marketStateCache = new Map();
+router.get('/bullish-breakout/market-state', async (req, res) => {
+  const topGainers = Math.min(100, Math.max(1, Math.trunc(Number(req.query.topGainers) || 40)));
+  const minVolume24h = Math.max(0, Number(req.query.minVolume24h) || 1_000_000);
+  const key = `${topGainers}|${minVolume24h}`;
+  const hit = marketStateCache.get(key);
+  if (hit && Date.now() - hit.at < 3 * 60_000 && req.query.fresh !== '1') return res.json(hit.data);
+  try {
+    const { marketStateNow } = require('../bot/breakout-auto/marketRegime');
+    const data = await marketStateNow({ topGainers, minVolume24h });
+    marketStateCache.set(key, { at: Date.now(), data });
+    res.json(data);
+  } catch (err) {
+    console.error('[bullish-breakout/market-state]', err.message);
+    res.status(502).json({ error: err.message });
+  }
+});
+
 // GET /services/bullish-breakout/signals?symbol=OGUSDT[&limit=300]
 // Sinais da Explosão automática numa moeda (seta do sinal no gráfico do favorito B), com ou sem
 // entrada. Junta duas fontes:

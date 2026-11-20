@@ -1712,6 +1712,17 @@ export async function saveRsiMomentumConfig(config) {
 
 // ── Config do bot Price action (Explosão de Alta automática) ─────────────────
 // backend/bot/breakout-auto/priceActionConfig.js — relida pelo bot a cada varredura (15 min).
+/** Estado AGORA dos filtros de mercado do bot Price action (luzes em Configurações → Price action). */
+export async function getPriceActionMarketState({ topGainers = 40, minVolume24h = 1_000_000, fresh = false } = {}) {
+  const q = new URLSearchParams({ topGainers: String(topGainers), minVolume24h: String(minVolume24h), ...(fresh && { fresh: '1' }) });
+  const res = await fetch(`/services/bullish-breakout/market-state?${q}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error ?? `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 export async function getPriceActionConfig() {
   const res = await fetch('/services/sb/price-action-config');
   if (!res.ok) {

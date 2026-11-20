@@ -171,7 +171,46 @@ async function checkMarketRegime(symbol, closeMs, cfg = DEFAULT_REGIME) {
   }
 }
 
+/**
+ * Estado ATUAL dos filtros (luzes de Configurações → Price action — GET /bullish-breakout/market-state).
+ * Filtros do BTC = um sim/não pro mercado todo. Filtros da moeda = avaliados em cada uma das
+ * `topGainers` maiores altas 24h de agora (mesmo ranking do bot) — o painel cruza com as caixinhas
+ * marcadas pra dizer quantas passariam em tudo. Mesma regra do bot: só candles já fechados.
+ */
+async function marketStateNow({ topGainers = DEFAULT_REGIME.topGainers, minVolume24h = DEFAULT_REGIME.minVolume24h } = {}) {
+  const now = Date.now();
+  const only = (k) => ({ btcEma50_4h: false, coinEma20_1d: false, coinMacd4h: false, btcEma20_1dRising: false, [k]: true });
+  const btc = await btcSeries();
+  const b50 = evaluateRegime(btc, now, only('btcEma50_4h'));
+  const b20 = evaluateRegime(btc, now, only('btcEma20_1dRising'));
+  const [{ list }, tickers] = await Promise.all([getActiveUsdtPairs(), getTickers()]);
+  const n = topGainers > 0 ? topGainers : DEFAULT_REGIME.topGainers;
+  const top = rankBinanceGainers(tickers, list, minVolume24h).slice(0, n);
+  const coins = [];
+  // Poucas por vez pra não estourar o peso da API da Binance.
+  for (let i = 0; i < top.length; i += 8) {
+    const batch = await Promise.all(top.slice(i, i + 8).map(async (t, k) => {
+      try {
+        const [coin4h, coin1d] = await Promise.all([fetchKlines(t.symbol, '4h', 120), fetchKlines(t.symbol, '1d', 40)]);
+        const e = evaluateRegime({ coin1d }, now, only('coinEma20_1d'));
+        const m = evaluateRegime({ coin4h }, now, only('coinMacd4h'));
+        return { symbol: t.symbol, rank: i + k + 1, changePct: t.changePct, coinEma20_1d: e.ok, coinMacd4h: m.ok };
+      } catch {
+        return { symbol: t.symbol, rank: i + k + 1, changePct: t.changePct, coinEma20_1d: null, coinMacd4h: null };
+      }
+    }));
+    coins.push(...batch);
+  }
+  return {
+    at: now,
+    btcEma50_4h: { ok: b50.ok, value: b50.details.btcVsEma50Pct ?? null, reason: b50.reason ?? null },
+    btcEma20_1dRising: { ok: b20.ok, value: b20.details.btcEma20_1dSlopePct ?? null, reason: b20.reason ?? null },
+    topGainers: n,
+    coins,
+  };
+}
+
 module.exports = {
-  DEFAULT_REGIME, evaluateRegime, checkMarketRegime, topGainerRank, rankBinanceGainers, ema, macdHist,
+  DEFAULT_REGIME, evaluateRegime, checkMarketRegime, topGainerRank, rankBinanceGainers, ema, macdHist, marketStateNow,
   _test: { resetBtcCache: () => { btcCache.data = null; btcCache.at = 0; } },
 };
