@@ -76,9 +76,9 @@ function fmtDropPct(price, avg) {
 
 /** PATCH condicionado ao status lido — devolve false se o painel mudou a linha no meio
  *  (ex.: cancelou um NEW enquanto a limite era armada). */
-async function patchIf(row, fields) {
+async function patchIf(row, fields, extraFilter = '') {
   const rows = await sbReq('PATCH', TABLE, { ...fields, updated_at: new Date().toISOString() },
-    `?id=eq.${row.id}&status=eq.${row.status}`);
+    `?id=eq.${row.id}&status=eq.${row.status}${extraFilter}`);
   return Array.isArray(rows) && rows.length > 0;
 }
 
@@ -328,6 +328,23 @@ async function withExitRule(row, fill, candle) {
 
 const MARTINGALE_SOURCE = 'bullish_breakout_martingale';
 
+// Dono de cada passo do processOnDrop. Caso AIGENSYN #300 (22/11/2026): DOIS processos do bot
+// rodando juntos executaram o "Martingale agora" ao mesmo tempo — 2 OCOs na 1ª compra, 2 compras
+// de martingale e a 2ª filha sem saldo pra OCO (OCO_FAILED). Agora cada passo é REIVINDICADO com
+// PATCH condicionado ao estágio atual (+ dono): só um processo avança; o outro desiste. Um passo
+// em andamento ('moving'/'buying') de OUTRO processo só é retomado depois de DROP_LEASE_MS sem
+// avanço (restart de verdade), nunca enquanto o outro ainda pode estar no meio.
+const INSTANCE_ID = `${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
+const DROP_LEASE_MS = 3 * 60_000;
+
+/** Filtro PostgREST: dropState no banco ainda é o que este processo leu (estágio + dono). */
+function dropStateFilter(st) {
+  if (!st) return '&close_condition->dropState=is.null';
+  let f = `&close_condition->dropState->>stage=eq.${encodeURIComponent(st.stage)}`;
+  if (st.owner) f += `&close_condition->dropState->>owner=eq.${encodeURIComponent(st.owner)}`;
+  return f;
+}
+
 /** Uma perna da OCO executou → CLOSED_TARGET / CLOSED_STOP + aviso de venda. */
 async function closeBracketed(row, r, log) {
   const exit = { kind: r.filled, soldQty: r.soldQty, usdtOut: r.usdtOut, exitPrice: r.exitPrice, at: new Date().toISOString(), notified: false };
@@ -361,10 +378,16 @@ async function processOnDrop(row, adapter, log) {
   let st = cc.dropState ?? null;
   const dropTxt = () => (st?.forced ? 'martingale adiantado no gráfico' : `caiu ${od.dropPct}%`);
   if (st && ['done', 'failed'].includes(st.stage)) return;
-  // Grava o próximo passo (condicionado ao status: o "Vender agora" no meio interrompe).
+  // Grava o próximo passo, condicionado ao status (o "Vender agora" no meio interrompe) E ao
+  // dropState lido (outro processo que avançou antes faz este desistir — ver INSTANCE_ID).
   const save = async (next, extra = {}) => {
-    const close_condition = { ...cc, dropState: next };
-    if (!await patchIf(row, { ...extra, close_condition })) return false;
+    const claimed = { ...next, owner: INSTANCE_ID, ownedAt: new Date().toISOString() };
+    const close_condition = { ...cc, dropState: claimed };
+    if (!await patchIf(row, { ...extra, close_condition }, dropStateFilter(st))) {
+      log(`⏸️  [OCO manual] ${tag}: passo '${next.stage}' da queda já foi pego por outro processo — este desiste`);
+      return false;
+    }
+    next = claimed;
     cc.dropState = next;
     row = { ...row, ...extra, close_condition };
     st = next;
@@ -385,11 +408,19 @@ async function processOnDrop(row, adapter, log) {
       return;
     }
     if (!forced && !(price <= trigger)) return;
-    if (!await save({ stage: 'moving', at: new Date().toISOString(), price, ...(forced && { forced: true }) })) return;
+    // origTarget: o gráfico segue desenhando a OCO completa (verde até ele) depois do alvo ir pra entrada.
+    const origTarget = Number(row.bracket.targetPrice ?? row.target_price) || null;
+    if (!await save({ stage: 'moving', at: new Date().toISOString(), price, origTarget, ...(forced && { forced: true }) })) return;
     const why = forced
       ? `ADIANTADO pelo gráfico a ${fmtDropPct(price, avg)} (regra: −${od.dropPct}%)`
       : `caiu ${od.dropPct}% (${fmt(price)} ≤ ${fmt(trigger)})`;
     log(`📉 [OCO manual] ${tag}: ${why} — movendo o alvo pra entrada ${fmt(avg)}${od.mode === 'martingale' ? ' + martingale' : ''}`);
+  } else if (['moving', 'buying'].includes(st.stage) && st.owner !== INSTANCE_ID) {
+    // Passo em andamento gravado por OUTRO processo: enquanto o prazo não vence, ele pode estar no
+    // meio (cancelando/recolocando a OCO, comprando) — não mexe. Venceu (restart) → reivindica e retoma.
+    const age = Date.now() - Date.parse(st.ownedAt ?? st.at ?? 0);
+    if (st.owner && age < DROP_LEASE_MS) return;
+    if (!await save({ ...st })) return;
   }
 
   if (st.stage === 'moving') {
@@ -421,7 +452,7 @@ async function processOnDrop(row, adapter, log) {
       notify(`⚠️ Explosão de Alta ${row.symbol}: ${dropTxt()} mas não deu pra mover o alvo pra entrada (${err.message}) — OCO original recolocada, sem martingale.`, log);
       return;
     }
-    const next = { ...st, stage: od.mode === 'martingale' ? 'moved' : 'done', movedAt: new Date().toISOString(), target: bracket.targetPrice };
+    const next = { ...st, stage: od.mode === 'martingale' ? 'moved' : 'done', movedAt: new Date().toISOString(), ownedAt: new Date().toISOString(), target: bracket.targetPrice };
     const close_condition = { ...cc, dropState: next };
     // Incondicional (como o fill): a OCO nova JÁ está na corretora — perder o handle a deixaria órfã.
     await sbReq('PATCH', TABLE, { bracket, target_price: bracket.targetPrice, close_condition, updated_at: new Date().toISOString() }, `?id=eq.${row.id}`);

@@ -459,6 +459,14 @@ entrada agora") adianta a regra sem esperar os −`dropPct`%: `POST /services/ma
 `close_condition.forceDrop` (condicional ao `updated_at` lido → 409 se o watcher mexeu no meio) e o watcher executa o
 MESMO `processOnDrop` no próximo passe (≤ 15s), `dropState.forced = true`. Preço voltou pra cima da compra antes do
 passe → pedido ignorado e limpo (aviso no WhatsApp), a regra normal segue.
+**Trava entre processos + "Revisar OCO":** caso AIGENSYN #300 (22/11/2026) — DOIS processos do bot no Termux
+executaram o martingale juntos (2 OCOs na mãe, 2 compras, #301 OCO_FAILED sem saldo). `processOnDrop` agora
+reivindica cada passo com PATCH condicionado ao `dropState` lido (estágio + `owner` = INSTANCE_ID do processo);
+passo 'moving'/'buying' de outro processo só é retomado depois de 3 min parado. Botão **"Revisar OCO"** no cartão
+da compra (`GET /services/manual-oco-orders/:id/oco-review`, `POST …/fix`, `backend/bot/manual-oco/ocoReview.js`,
+roda no Express, só Binance): confere mãe + filhas do martingale × OCOs abertas — cancela OCO duplicada (sem
+dono, igual à de uma perna que já tem a dela), adota OCO aberta não rastreada que casa com a perna sem OCO,
+senão coloca a OCO que falta (alvo/stop da linha, limitada ao saldo livre); OCO desconhecida só é listada.
 **Seta do sinal no favorito B (v1.180.0):** clicar numa moeda do favorito Binance desenha a seta amarela
 no candle 4h de cada Explosão automática, com ou sem entrada — `GET /services/bullish-breakout/signals?symbol=`
 junta as ordens do automático (`manual_oco_orders`, desfecho pelo status/erro: sem saldo, padrão de baixa…)

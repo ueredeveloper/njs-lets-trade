@@ -13,6 +13,25 @@ export function withMinStop(stop, entry) {
   return Math.min(stop, entry * (1 - MANUAL_OCO_MIN_STOP_PCT / 100));
 }
 
+/** Ordem filha do martingale (2ª compra — ver manualOcoWatcher.js#processOnDrop). */
+export const MANUAL_OCO_MARTINGALE_SOURCE = 'bullish_breakout_martingale';
+export function isMartingaleChild(o) {
+  return o?.close_condition?.source === MANUAL_OCO_MARTINGALE_SOURCE;
+}
+
+/** Alvo ORIGINAL da 1ª compra depois que a regra de queda moveu o alvo pra entrada — o gráfico
+ *  mantém a OCO completa (verde até ele) enquanto a OCO não executou. dropState.origTarget é
+ *  gravado pelo watcher; ordens de antes disso: entrada × (1 + exit.targetPct%). null = não moveu. */
+export function manualOcoOrigTarget(o) {
+  const cc = o?.close_condition ?? {};
+  if (!['moved', 'buying', 'done'].includes(cc.dropState?.stage)) return null;
+  const orig = Number(cc.dropState.origTarget);
+  if (orig > 0) return orig;
+  const entry = Number(o.fill?.avgPrice ?? o.entry_price);
+  const pct = Number(cc.exit?.targetPct);
+  return entry > 0 && pct > 0 ? entry * (1 + pct / 100) : null;
+}
+
 export function isManualOcoActive(o) {
   return MANUAL_OCO_PENDING.has(o.status) || MANUAL_OCO_MOUNTED.has(o.status);
 }

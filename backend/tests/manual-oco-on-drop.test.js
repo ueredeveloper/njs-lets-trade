@@ -81,7 +81,7 @@ test("'martingale': alvo → entrada + compra 20 USDT + ordem filha com alvo na 
 test("restart em 'buying' NÃO recompra (a compra pode ter saído)", async () => {
   await processRow(bracketedRow('martingale', { stage: 'buying' }), log);
   expect(adapter.marketBuy).not.toHaveBeenCalled();
-  const patch = sbReq.mock.calls.find(([m]) => m === 'PATCH')[2];
+  const patch = sbReq.mock.calls.filter(([m]) => m === 'PATCH').pop()[2];
   expect(patch.close_condition.dropState.stage).toBe('failed');
 });
 
@@ -90,6 +90,39 @@ test("restart em 'moving': não faz poll da OCO velha, refaz cancelar + recoloca
   expect(fetchLivePrice).not.toHaveBeenCalled();
   expect(adapter.cancelExitBracket).toHaveBeenCalledTimes(1);
   expect(adapter.placeExitBracket).toHaveBeenCalledWith(0.2, 100, 70);
+});
+
+// Caso AIGENSYN #300 (22/11/2026): dois processos do bot executaram o martingale juntos.
+test("'moving' de OUTRO processo dentro do prazo → não mexe (ele pode estar no meio)", async () => {
+  const st = { stage: 'moving', owner: 'outro-123', ownedAt: new Date().toISOString() };
+  await processRow(bracketedRow('martingale', st), log);
+  expect(adapter.cancelExitBracket).not.toHaveBeenCalled();
+  expect(adapter.placeExitBracket).not.toHaveBeenCalled();
+  expect(adapter.marketBuy).not.toHaveBeenCalled();
+});
+
+test("'moving' de outro processo com prazo vencido (restart) → reivindica e retoma", async () => {
+  const st = { stage: 'moving', owner: 'outro-123', ownedAt: new Date(Date.now() - 10 * 60_000).toISOString() };
+  await processRow(bracketedRow('breakeven', st), log);
+  const claim = sbReq.mock.calls.find(([m]) => m === 'PATCH');
+  expect(claim[3]).toContain('close_condition->dropState->>owner=eq.outro-123');
+  expect(adapter.placeExitBracket).toHaveBeenCalledWith(0.2, 100, 70);
+});
+
+test('outro processo pegou o passo antes (PATCH condicional não casa) → não compra o martingale', async () => {
+  sbReq.mockImplementation(async (method, table, body, q) => (
+    method === 'PATCH' && q.includes('dropState->>stage=eq.moved') ? [] : [{}]));
+  await processRow(bracketedRow('martingale', { stage: 'moved', owner: 'outro-123', ownedAt: new Date().toISOString() }), log);
+  expect(adapter.marketBuy).not.toHaveBeenCalled();
+});
+
+test('1ª reivindicação exige dropState vazio no banco', async () => {
+  fetchLivePrice.mockResolvedValue(85);
+  sbReq.mockImplementation(async (method, table, body, q) => (
+    method === 'PATCH' && q.includes('dropState=is.null') ? [] : [{}]));
+  await processRow(bracketedRow('martingale'), log);
+  expect(adapter.cancelExitBracket).not.toHaveBeenCalled();
+  expect(adapter.marketBuy).not.toHaveBeenCalled();
 });
 
 test('perna da OCO executou durante o cancelamento → fecha normal, sem recolocar', async () => {

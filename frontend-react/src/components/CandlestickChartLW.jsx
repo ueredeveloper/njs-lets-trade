@@ -13,7 +13,14 @@ import { computeBarsSinceMaCross } from '../utils/barsSinceMaCross';
 import { computeTdSequentialSetup } from '../utils/tdSequentialSetup';
 import { snapPointsToChartCandles } from '../utils/snapToChartCandles';
 import { rankSrLevels, srRankAllowed } from '../utils/srRank';
-import { manualOcoLevels } from '../utils/manualOco';
+import { manualOcoLevels, isMartingaleChild, manualOcoOrigTarget } from '../utils/manualOco';
+
+// Cores da OCO manual (retângulos + linhas). Martingale (ordem filha) com paleta própria — ciano
+// (alvo) / fúcsia (stop) / violeta (compra) — pra não se confundir com a OCO da 1ª compra.
+const MANUAL_OCO_COLORS = {
+  normal: { target: '#22c55e', targetFill: 'rgba(34,197,94,0.14)', stop: '#ef4444', stopFill: 'rgba(239,68,68,0.14)', entry: '#e2e8f0', tag: '' },
+  martingale: { target: '#06b6d4', targetFill: 'rgba(6,182,212,0.18)', stop: '#d946ef', stopFill: 'rgba(217,70,239,0.16)', entry: '#a78bfa', tag: ' mg' },
+};
 
 /** createSeriesMarkers "blindado" pros rótulos de S/R (séries de 2 pontos recriadas no pan).
  *  O "Uncaught Error: Value is null" (ensureNotNull em _recalculateMarkers → dataByIndex) NÃO
@@ -414,13 +421,19 @@ function buildManualOcoRects(orders, candlesticks) {
     if (!(entry > 0) || noOco) continue;
     const idx = snapToNearestCandleIndex(candlesticks, sinceMs) ?? candlesticks.length - 1;
     const time1 = Math.min(Math.floor(Number(candlesticks[idx].openTime) / 1000), time2 - ivSec);
+    const pal = MANUAL_OCO_COLORS[isMartingaleChild(o) ? 'martingale' : 'normal'];
     const t = mounted
-      ? { fill: 'rgba(34,197,94,0.14)', color: '#22c55e', name: 'alvo' }
+      ? { fill: pal.targetFill, color: pal.target, name: `alvo${pal.tag}` }
       : { fill: 'rgba(59,130,246,0.14)', color: '#3b82f6', name: 'prev. alvo' };
     const s = mounted
-      ? { fill: 'rgba(239,68,68,0.14)', color: '#ef4444', name: 'stop' }
+      ? { fill: pal.stopFill, color: pal.stop, name: `stop${pal.tag}` }
       : { fill: 'rgba(249,115,22,0.14)', color: '#f97316', name: 'prev. stop' };
-    if (target > 0) {
+    // 1ª compra com o alvo movido pra entrada (martingale / alvo na entrada): mantém a OCO
+    // completa — verde até o alvo ORIGINAL — enquanto ela não executou.
+    const orig = mounted ? manualOcoOrigTarget(o) : null;
+    if (orig > entry && !(target > entry * 1.001)) {
+      rects.push({ time1, time2, price1: entry, price2: orig, fillColor: t.fill, labelColor: t.color, label: `#${o.id} alvo original ${formatPctFromBase(entry, orig)} (agora na entrada)`, labelPos: 'top' });
+    } else if (target > 0) {
       rects.push({ time1, time2, price1: entry, price2: target, fillColor: t.fill, labelColor: t.color, label: `#${o.id} ${t.name} ${formatPctFromBase(entry, target)}`, labelPos: 'top' });
     }
     if (stop > 0) {
@@ -1744,9 +1757,12 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       );
       if (noOco) { line(entry, '#ef4444', `#${o.id} SEM OCO`); continue; }
       if (mounted) {
-        line(entry, '#e2e8f0', `#${o.id} compra`, 2);
-        if (target > 0) line(target, '#22c55e', `#${o.id} alvo`);
-        if (stop > 0) line(stop, '#ef4444', `#${o.id} stop`);
+        const pal = MANUAL_OCO_COLORS[isMartingaleChild(o) ? 'martingale' : 'normal'];
+        line(entry, pal.entry, `#${o.id} compra${pal.tag}`, 2);
+        if (target > 0) line(target, pal.target, `#${o.id} alvo${pal.tag}`);
+        if (stop > 0) line(stop, pal.stop, `#${o.id} stop${pal.tag}`);
+        const orig = manualOcoOrigTarget(o);
+        if (orig > entry && !(target > entry * 1.001)) line(orig, pal.target, `#${o.id} alvo original`, 2);
       } else {
         line(entry, '#facc15', `#${o.id} ${o.entry_kind === 'candle_close' ? 'compra no fechamento' : o.entry_kind === 'trigger' ? 'rompimento' : 'compra na queda'}`, 2);
         if (target > 0) line(target, '#3b82f6', `#${o.id} prev. alvo`, 2);

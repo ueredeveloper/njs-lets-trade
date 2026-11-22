@@ -9,6 +9,7 @@ const { getSymbolFilters, getAvgPrice } = require('../binance/ocoClient');
 const { fetchLivePrice } = require('../bot/shared/livePrice');
 const { buildCloseCondition } = require('../bot/shared/candleCloseCondition');
 const { applyMinStop } = require('../bot/shared/manualOcoStop');
+const { reviewOco } = require('../bot/manual-oco/ocoReview');
 
 // OCO manual do gráfico (ChartOcoTool.jsx / ManualOcoOrdersPanel.jsx). Entrada arrastada: o painel
 // só grava o pedido e backend/bot/manual-oco/manualOcoWatcher.js (dentro do rsi-momentum-bot) arma
@@ -483,6 +484,26 @@ router.post('/manual-oco-orders/:id/drop-now', async (req, res) => {
   if (!upd?.length) return res.status(409).json({ error: 'a ordem mudou enquanto isso (o bot pode ter agido) — atualize e tente de novo' });
   res.json(upd[0]);
 });
+
+// GET  /services/manual-oco-orders/:id/oco-review      — "Revisar OCO": diagnóstico (só leitura) da
+//      família da ordem (mãe + filhas do martingale) × OCOs abertas na Binance.
+// POST /services/manual-oco-orders/:id/oco-review/fix  — executa as correções: cancela OCO duplicada,
+//      adota OCO aberta não rastreada, coloca a OCO que falta. Ver backend/bot/manual-oco/ocoReview.js.
+async function handleOcoReview(req, res, fix) {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'id inválido' });
+  try {
+    const { data: rows } = await supabase.from(MANUAL_OCO_TABLE).select('symbol').eq('id', id).limit(1);
+    if (!rows?.[0]) return res.status(404).json({ error: 'ordem não encontrada' });
+    await syncBinanceClock();
+    const adapter = buildAdapter('binance', rows[0].symbol);
+    res.json(await reviewOco(id, { fix, sb: supabase, adapter, table: MANUAL_OCO_TABLE }));
+  } catch (err) {
+    res.status(err.status ?? 500).json({ error: err.message });
+  }
+}
+router.get('/manual-oco-orders/:id/oco-review', (req, res) => handleOcoReview(req, res, false));
+router.post('/manual-oco-orders/:id/oco-review/fix', (req, res) => handleOcoReview(req, res, true));
 
 // POST /services/manual-oco-orders/:id/sell — "Vender agora" do gráfico: cancela a OCO e vende a
 // mercado a quantidade comprada (limitada ao saldo livre). Marca SELLING antes (condicional) pra o

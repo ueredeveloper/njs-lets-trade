@@ -2282,6 +2282,15 @@ export async function dropNowManualOcoOrder(id) {
   return body;
 }
 
+/** "Revisar OCO": diagnóstico (fix=false) ou correção (fix=true) das OCOs da ordem + filhas do
+ *  martingale contra a Binance — ver backend/bot/manual-oco/ocoReview.js. */
+export async function reviewManualOcoOrder(id, fix = false) {
+  const res = await fetch(`/services/manual-oco-orders/${id}/oco-review${fix ? '/fix' : ''}`, { method: fix ? 'POST' : 'GET' });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`);
+  return body;
+}
+
 /** "Vender agora" de uma OCO manual montada: cancela a OCO e vende a mercado. */
 export async function sellManualOcoOrder(id) {
   const res = await fetch(`/services/manual-oco-orders/${id}/sell`, { method: 'POST' });

@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { cancelManualOcoOrder, sellManualOcoOrder, dropNowManualOcoOrder } from '../services/api';
-import { manualOcoLevels } from '../utils/manualOco';
+import { cancelManualOcoOrder, sellManualOcoOrder, dropNowManualOcoOrder, reviewManualOcoOrder } from '../services/api';
+import { manualOcoLevels, isMartingaleChild } from '../utils/manualOco';
 
 const STATUS_LABEL = {
   NEW: 'aguardando bot',
@@ -70,8 +70,28 @@ function fmtPct(base, price) {
 export default function ManualOcoOrdersPanel({ orders, marketPrice, onChanged }) {
   const [busyId, setBusyId] = useState(null);
   const [message, setMessage] = useState(null); // { ok, text }
+  // "Revisar OCO": { id, data } — data = resposta de /oco-review (diagnóstico) ou /fix (resultado).
+  const [review, setReview] = useState(null);
 
   if (!orders?.length) return null;
+
+  const runReview = async (o, fix) => {
+    if (busyId) return;
+    if (fix && !window.confirm(
+      `Corrigir as OCOs de ${o.symbol} (#${review?.data?.rootId ?? o.id} + martingale)?\n\n`
+      + ((review?.fixed ? (review.data?.after ?? review.data?.before) : review?.data?.before)?.steps ?? [])
+        .map((s) => `• ${s}`).join('\n'))) return;
+    setBusyId(o.id);
+    setMessage(null);
+    try {
+      setReview({ id: o.id, data: await reviewManualOcoOrder(o.id, fix), fixed: fix });
+    } catch (err) {
+      setReview({ id: o.id, error: err.message });
+    } finally {
+      setBusyId(null);
+      if (fix) onChanged?.();
+    }
+  };
 
   // confirmText null = sem confirmação (Cancelar compra — nada foi comprado ainda).
   const run = async (id, action, confirmText, spent, okText) => {
@@ -115,7 +135,10 @@ export default function ManualOcoOrdersPanel({ orders, marketPrice, onChanged })
         return (
           <div key={o.id} className="border-b border-slate-700 py-1 last:border-b-0">
             <div className="flex items-center justify-between gap-1">
-              <span className="font-bold">#{o.id} · {Number(o.usdt)} USDT</span>
+              <span className="font-bold">
+                #{o.id} · {Number(o.usdt)} USDT
+                {isMartingaleChild(o) && <span className="text-cyan-400"> · mg da #{o.close_condition.parentId}</span>}
+              </span>
               <span className={noOco ? 'font-bold text-red-400' : mounted ? 'text-green-400' : 'text-sky-300'}>
                 {STATUS_LABEL[o.status] ?? o.status}
               </span>
@@ -192,6 +215,53 @@ export default function ManualOcoOrdersPanel({ orders, marketPrice, onChanged })
                 {busy ? 'Vendendo…' : `Vender agora${marketPrice ? ` (~${fmtPrice(marketPrice)})` : ''}`}
               </button>
             )}
+            {mounted && o.status !== 'SELLING' && o.exchange !== 'gate' && (
+              <button
+                onClick={() => runReview(o, false)}
+                disabled={busy}
+                title="Confere esta compra e as do martingale contra as OCOs abertas na Binance"
+                className="mt-1 w-full rounded bg-slate-600 py-0.5 font-bold text-white hover:bg-slate-500 disabled:opacity-40"
+              >
+                {busy ? 'Revisando…' : 'Revisar OCO'}
+              </button>
+            )}
+            {review?.id === o.id && (() => {
+              if (review.error) return <div className="mt-1 break-words text-red-400">{review.error}</div>;
+              const d = review.data;
+              const diag = review.fixed ? (d.after ?? d.before) : d.before;
+              return (
+                <div className="mt-1 rounded border border-slate-600 p-1">
+                  {diag.legs.map((l) => (
+                    <div key={l.id} className={l.ok ? 'text-green-400' : 'text-red-400'}>
+                      #{l.id}{l.parentId ? ' (mg)' : ''} {fmtPrice(l.qty)} · {l.ok ? `OCO ${l.orderListId} ok` : 'SEM OCO'}
+                    </div>
+                  ))}
+                  {diag.unknown.map((g) => (
+                    <div key={g.orderListId} className="text-amber-300">
+                      OCO {g.orderListId} ({fmtPrice(g.qty)}) sem dono — não mexo
+                    </div>
+                  ))}
+                  {review.fixed && d.done.map((s) => <div key={s} className="text-green-400">✓ {s}</div>)}
+                  {review.fixed && d.errors.map((s) => <div key={s} className="break-words text-red-400">✗ {s}</div>)}
+                  {diag.ok
+                    ? <div className="text-green-400">tudo certo{diag.busy ? ' (martingale em andamento)' : ''}</div>
+                    : (
+                      <>
+                        {diag.steps.map((s) => <div key={s} className="break-words text-amber-300">• {s}</div>)}
+                        <button
+                          onClick={() => runReview(o, true)}
+                          disabled={busy || diag.busy}
+                          title={diag.busy ? 'martingale em andamento — espere e revise de novo' : ''}
+                          className="mt-1 w-full rounded bg-amber-600 py-0.5 font-bold text-white hover:bg-amber-500 disabled:opacity-40"
+                        >
+                          {busy ? 'Corrigindo…' : 'Corrigir (cancelar e refazer)'}
+                        </button>
+                      </>
+                    )}
+                  <div className="text-slate-400">livre {fmtPrice(diag.free)} · <button className="underline" onClick={() => setReview(null)}>fechar</button></div>
+                </div>
+              );
+            })()}
             {(o.status === 'NEW' || o.status === 'OPEN') && (
               <button
                 onClick={() => run(o.id, cancelManualOcoOrder, null)}
