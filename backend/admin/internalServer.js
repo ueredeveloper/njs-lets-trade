@@ -17,6 +17,9 @@
  *       (reinicia o PROCESSO SUPERVISOR inteiro — não só o launcher/bots. Necessário depois de um
  *       /update que mexeu em backend/admin/* ou bots-supervisor.js: esse código só é recarregado
  *       quando o supervisor sobe de novo, um /update comum não basta — ver bots-supervisor.js)
+ *   POST /internal/reset?commit=<sha> → njs-whatsapp POST /admin/reset  (/reset <sha>; sem commit = último de <remote>/<branch>)
+ *       `git reset --hard <sha>` feito pelo SUPERVISOR (botControl.runReset). Aqui só se valida
+ *       o formato (hex 7–40, regex pura — nada de git) e grava `pending.commit`.
  *
  * Os `POST` de controle só respondem se:
  *   - há `INTERNAL_ADMIN_TOKEN` configurado E o header `X-Internal-Token` bate;
@@ -35,6 +38,7 @@ const { getGitInfo } = require('./gitInfo');
 const botLog = require('./botLog');
 const botControl = require('./botControl');
 const tradeStatus = require('../bot/shared/tradeStatusJournal');
+const priceActionStatus = require('../bot/shared/priceActionStatusJournal');
 
 const pkg = require(path.join(internalConfig.repoRoot, 'package.json'));
 
@@ -62,7 +66,7 @@ function controlAllowed() {
 
 /**
  * @param {() => object} getState  snapshot do launcher: { startedAt, bots: [{label,pid,running,restarts,startedAt,lastExit}] }
- * @param {{ onControl?: (action: 'restart'|'update'|'stop'|'sync-lock'|'restart-supervisor') => { ok: boolean, message?: string } }} [opts]
+ * @param {{ onControl?: (action: 'restart'|'update'|'stop'|'sync-lock'|'restart-supervisor'|'reset') => { ok: boolean, message?: string } }} [opts]
  *        onControl: chamado quando um POST de controle é aceito. O launcher deve
  *        fazer shutdown gracioso e sair com o exit code sentinela correspondente.
  */
@@ -82,7 +86,7 @@ function startInternalAdminServer(getState, opts = {}) {
     // ---- controle (POST) -------------------------------------------------
     if (req.method === 'POST' && url.pathname.startsWith('/internal/')) {
       const action = url.pathname.slice('/internal/'.length);
-      if (!['restart', 'update', 'stop', 'pull', 'sync-lock', 'restart-supervisor'].includes(action)) {
+      if (!['restart', 'update', 'stop', 'pull', 'sync-lock', 'restart-supervisor', 'reset'].includes(action)) {
         return send(res, 404, { error: 'rota não encontrada' });
       }
       if (!controlAllowed()) {
@@ -100,20 +104,33 @@ function startInternalAdminServer(getState, opts = {}) {
         return;
       }
 
+      // reset: o commit vem na query; só validação de formato aqui (o supervisor confere o resto).
+      let extra = null;
+      if (action === 'reset') {
+        // Sem commit (ou `latest`) = último commit de <remote>/<branch> — resolvido pelo supervisor.
+        const commit = (url.searchParams.get('commit') || '').trim().toLowerCase() || botControl.LATEST;
+        if (!botControl.isValidResetTarget(commit)) {
+          return send(res, 400, { ok: false, error: 'commit inválido — mande o hash (7 a 40 caracteres hexadecimais), ex.: /reset 68ea1c1, ou /reset sozinho pro último commit' });
+        }
+        extra = { commit: commit.toLowerCase() };
+      }
+
       if (!onControl) {
         return send(res, 503, { ok: false, error: 'launcher não expôs onControl (rodando sem supervisor?)' });
       }
       const state = safeState(getState);
       const anyRunning = (state.bots || []).some((b) => b.running);
-      botControl.setPending(action, by);
+      botControl.setPending(action, by, extra);
       const messages = {
         update: 'update aceito — git pull + restart em andamento (acompanhe /internal/log e /internal/info.lastAction)',
         'sync-lock': 'sync-lock aceito — npm install --package-lock-only + commit do package-lock.json em andamento (acompanhe /internal/log e /internal/info.lastAction)',
+        reset: `reset aceito — git reset --hard ${extra?.commit === botControl.LATEST ? 'no último commit do remoto' : extra?.commit} + restart em andamento (acompanhe /internal/log e /internal/info.lastAction)`,
         'restart-supervisor': 'restart-supervisor aceito — reiniciando o PROCESSO SUPERVISOR inteiro, não só os bots (acompanhe /internal/log e /internal/info.lastAction)',
       };
       send(res, 202, {
         ok: true,
         action,
+        ...(extra || {}),
         message: messages[action] || `${action} aceito`,
         botsRunning: anyRunning,
       });
@@ -167,6 +184,8 @@ function startInternalAdminServer(getState, opts = {}) {
         file: botLog.LOG_FILE,
         version: pkg.version || null,
         git,
+        // Resumo do bot Price action (regras + ordens vivas) — JSON gravado pelo bot filho, só leitura.
+        priceAction: safeCall(() => priceActionStatus.readPriceActionStatus()),
         lines: [header, ...botLog.tail(Number.isFinite(n) ? n : 100, { collapse: !raw })],
       });
     }

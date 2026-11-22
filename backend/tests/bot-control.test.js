@@ -15,13 +15,13 @@ process.env.INTERNAL_ADMIN_STATE_FILE = path.join(tmpDir, 'control-action.json')
 const botControl = require('../admin/botControl');
 
 describe('botControl — exit codes', () => {
-  test('STOP=0, RESTART=10, UPDATE=11, SYNC_LOCK=12, RESTART_SUPERVISOR=13', () => {
-    expect(botControl.EXIT).toEqual({ STOP: 0, RESTART: 10, UPDATE: 11, SYNC_LOCK: 12, RESTART_SUPERVISOR: 13 });
+  test('STOP=0, RESTART=10, UPDATE=11, SYNC_LOCK=12, RESTART_SUPERVISOR=13, RESET=14', () => {
+    expect(botControl.EXIT).toEqual({ STOP: 0, RESTART: 10, UPDATE: 11, SYNC_LOCK: 12, RESTART_SUPERVISOR: 13, RESET: 14 });
   });
 
   test('CONTROL_ACTIONS: as ações que reiniciam o processo (pull roda inline, fora daqui)', () => {
     expect(botControl.CONTROL_ACTIONS).toEqual({
-      stop: 0, restart: 10, update: 11, 'sync-lock': 12, 'restart-supervisor': 13,
+      stop: 0, restart: 10, update: 11, 'sync-lock': 12, 'restart-supervisor': 13, reset: 14,
     });
   });
 

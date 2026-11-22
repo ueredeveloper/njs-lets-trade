@@ -446,6 +446,44 @@ router.post('/manual-oco-orders/:id/cancel', async (req, res) => {
   res.status(409).json({ error: 'ordem não está mais pendente (já comprou ou foi encerrada)' });
 });
 
+// POST /services/manual-oco-orders/:id/drop-now — "Martingale agora" (ou "Alvo na entrada agora")
+// do gráfico: ADIANTA a regra de queda da Explosão automática (close_condition.exit.onDrop) sem
+// esperar os −X%. Não mexe na corretora daqui — só grava close_condition.forceDrop e o
+// manualOcoWatcher do bot executa o MESMO fluxo da queda (processOnDrop) no próximo passe (≤ 15s),
+// com o mesmo crash-safety. Condicional ao updated_at lido: se o watcher mexeu na linha no meio
+// (ex.: a queda real já disparou), devolve 409 em vez de sobrescrever o dropState dele.
+router.post('/manual-oco-orders/:id/drop-now', async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'id inválido' });
+  const { data: rows, error } = await supabase.from(MANUAL_OCO_TABLE).select('*').eq('id', id).limit(1);
+  if (error) return res.status(500).json({ error: error.message });
+  const row = rows?.[0];
+  if (!row) return res.status(404).json({ error: 'ordem não encontrada' });
+  if (row.status !== 'BRACKETED') return res.status(409).json({ error: 'só dá pra adiantar com a OCO montada (posição comprada)' });
+  const cc = row.close_condition ?? {};
+  const od = cc.exit?.onDrop;
+  if (!od || !['martingale', 'breakeven'].includes(od.mode)) {
+    return res.status(409).json({ error: 'esta ordem não tem regra de queda (martingale / alvo na entrada)' });
+  }
+  if (cc.dropState) return res.status(409).json({ error: `a regra de queda já disparou (${cc.dropState.stage})` });
+  if (cc.forceDrop) return res.status(409).json({ error: 'já adiantado — o bot executa no próximo passe (≤ 15s)' });
+  const avg = Number(row.fill?.avgPrice);
+  const price = await fetchLivePrice(row.exchange, row.symbol).catch(() => NaN);
+  if (!(avg > 0) || !(price > 0)) return res.status(502).json({ error: 'sem preço de compra ou preço atual' });
+  // O alvo vai pro preço de entrada: com o preço ACIMA dela a OCO nova seria recusada.
+  if (price >= avg) return res.status(409).json({ error: `preço atual (${price}) não está abaixo da compra (${avg}) — nada a adiantar` });
+
+  const forceDrop = { at: new Date().toISOString(), price, pct: Number((((price - avg) / avg) * 100).toFixed(2)) };
+  let q = supabase.from(MANUAL_OCO_TABLE)
+    .update({ close_condition: { ...cc, forceDrop }, updated_at: new Date().toISOString() })
+    .eq('id', id).eq('status', 'BRACKETED');
+  q = row.updated_at ? q.eq('updated_at', row.updated_at) : q;
+  const { data: upd, error: updErr } = await q.select();
+  if (updErr) return res.status(500).json({ error: updErr.message });
+  if (!upd?.length) return res.status(409).json({ error: 'a ordem mudou enquanto isso (o bot pode ter agido) — atualize e tente de novo' });
+  res.json(upd[0]);
+});
+
 // POST /services/manual-oco-orders/:id/sell — "Vender agora" do gráfico: cancela a OCO e vende a
 // mercado a quantidade comprada (limitada ao saldo livre). Marca SELLING antes (condicional) pra o
 // watcher do bot não pollar a OCO no meio. Se a OCO já tinha executado, devolve 409 e encerra a

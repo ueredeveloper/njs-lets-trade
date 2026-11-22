@@ -52,11 +52,11 @@ bots**. O launcher hospeda um `http.Server` **só loopback** (default
   `backend/data/bot/trade-status.json`, escrito a cada tick pelo rsi-momentum-bot
   (`tradeStatusJournal.js`) — nunca fala com Supabase/exchange, dado só tão
   fresco quanto o último tick.
-- **Controle (opt-in):** `POST /internal/{restart,update,stop,pull,sync-lock,restart-supervisor}`
+- **Controle (opt-in):** `POST /internal/{restart,update,stop,pull,sync-lock,restart-supervisor,reset}`
   — só com `INTERNAL_ADMIN_TOKEN` + `INTERNAL_ADMIN_ALLOW_CONTROL=true`. A API **não roda
   git/npm/shell**: grava a intenção (`botControl.js`) e mata o launcher com um
   exit code sentinela (`10` restart, `11` update, `12` sync-lock, `13`
-  restart-supervisor, `0` stop); o **supervisor** reage — em `update` faz `git
+  restart-supervisor, `14` reset, `0` stop); o **supervisor** reage — em `update` faz `git
   fetch` + `merge --ff-only` + `npm ci` (se o `package-lock` mudou; `dist` é
   versionado, sem build) e respawn. `pull` é dry-run (roda no launcher, não
   reinicia). **`sync-lock`** = `npm install --package-lock-only` + `git add
@@ -71,7 +71,18 @@ bots**. O launcher hospeda um `http.Server` **só loopback** (default
   necessário porque `require()` só lê `backend/admin/*`/`bots-supervisor.js` do
   disco na 1ª vez — uma correção nesse código fica "presa" na memória do
   supervisor antigo até ele reiniciar de verdade, e um `/update` comum não faz
-  isso sozinho (só troca os arquivos no disco).
+  isso sozinho (só troca os arquivos no disco). **`reset`** (`POST /internal/reset?commit=<sha>`,
+  `/reset <sha>` no WhatsApp; **`/reset` sozinho = último commit de `origin/<branch>`**, `commit=latest`) = `git reset --hard <sha>` feito pelo supervisor
+  (`botControl.runReset`): só SHA hexadecimal 7–40 (nada de ref/branch/`HEAD~1`), `git fetch` antes e
+  o commit TEM que estar no histórico de `<remote>/<branch>`; descarta alteração local em arquivo
+  versionado (lista em `discarded`, não versionado fica), `npm ci` se o lock mudou, respawn. É a única
+  exceção ao "sem reset --hard" — pedida pelo dono. O resultado traz `fromCommit` → desfaz com
+  `/reset <fromCommit>`; `/update` volta pro mais novo.
+- **`/internal/log` → `priceAction`**: snapshot do bot Price action (regras efetivas + ordens vivas),
+  lido de `backend/data/bot/price-action-status.json` (`shared/priceActionStatusJournal.js`; regras
+  gravadas pelo `bullishBreakoutAuto` a cada scan, ordens pelo `manualOcoWatcher` a cada passe). O
+  `/log` do WhatsApp mostra um bloco **PRICE ACTION** (versão, regras, ordens vivas, últimos eventos
+  `[Explosão auto]`/`[OCO manual]`) em vez de misturar no RESUMO.
 
 É o lado cooperativo da administração remota: `njs-whatsapp` (porta 3005) consome
 isso para `/admin/status|health|log|restart|update|stop|pull|sync-lock` no
@@ -94,10 +105,10 @@ imprime **uma linha no prompt** a cada start dizendo o que foi (start normal /
 `backend/bot/bots-supervisor.js`, leia `backend/admin/README.md` primeiro.**
 Invariantes que não podem quebrar: bind só em `127.0.0.1`; `authorized()`
 (loopback + `X-Internal-Token`) em toda request; `GET` sempre leitura, mutação só
-nos 5 `POST` de controle e cada um exige token + `ALLOW_CONTROL`; a API nunca
+nos `POST` de controle e cada um exige token + `ALLOW_CONTROL`; a API nunca
 executa comando (só `setPending` + `onControl`); `runUpdate`/`runSyncLock` são
-sequências fixas (nada de `reset --hard`/build/ref do request) e recusam working
-tree sujo; não vazar segredo em `/internal/info`; falha de git/disco/porta/npm não
+sequências fixas (nada de build/ref do request) e recusam working
+tree sujo; `reset --hard` SÓ no `runReset` (SHA hex validado + no histórico do remoto); não vazar segredo em `/internal/info`; falha de git/disco/porta/npm não
 derruba supervisor/launcher/bots.
 
 ## Architecture
@@ -442,6 +453,12 @@ BRACKETED, preço ≤ comprado −`dropPct`% (15): `'breakeven'` cancela e recol
 normal / alvo na entrada −15% / martingale −15%" + valor da 2ª, `priceActionBoxSim.js` `breakevenDropPct`/
 `dropReinforce`/`reinforceMult`/`reinforceStopPct`, P&L em USDT) e ganhou entrada **a mercado no fechamento**
 (`entryMode 'close'`, padrão; `'limit'` = a limite em X% do candle de antes).
+**Martingale agora (v1.195.0):** no cartão da ordem comprada (`ManualOcoOrdersPanel.jsx`), com regra de queda
+`martingale`/`breakeven` ainda não disparada e preço ABAIXO da compra, botão **"Martingale agora"** (ou "Alvo na
+entrada agora") adianta a regra sem esperar os −`dropPct`%: `POST /services/manual-oco-orders/:id/drop-now` só grava
+`close_condition.forceDrop` (condicional ao `updated_at` lido → 409 se o watcher mexeu no meio) e o watcher executa o
+MESMO `processOnDrop` no próximo passe (≤ 15s), `dropState.forced = true`. Preço voltou pra cima da compra antes do
+passe → pedido ignorado e limpo (aviso no WhatsApp), a regra normal segue.
 **Seta do sinal no favorito B (v1.180.0):** clicar numa moeda do favorito Binance desenha a seta amarela
 no candle 4h de cada Explosão automática, com ou sem entrada — `GET /services/bullish-breakout/signals?symbol=`
 junta as ordens do automático (`manual_oco_orders`, desfecho pelo status/erro: sem saldo, padrão de baixa…)

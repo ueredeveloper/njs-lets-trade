@@ -29,6 +29,8 @@ const { scanBullishBreakouts } = require('../../market/bullishBreakoutScanner');
 const { intervalMs } = require('../shared/candleCloseCondition');
 const { DEFAULTS: PA_DEFAULTS, loadPriceActionConfig } = require('./priceActionConfig');
 const { checkMarketRegime } = require('./marketRegime');
+const { writePriceActionPart } = require('../shared/priceActionStatusJournal');
+const PKG_VERSION = (() => { try { return require('../../../package.json').version; } catch { return null; } })();
 
 const SOURCE = 'bullish_breakout_auto';
 const ORDERS = 'manual_oco_orders';
@@ -116,11 +118,34 @@ function regimeLabel(rg) {
   return p.length ? p.join(' · ') : 'sem filtro de mercado';
 }
 
+/** Regras efetivas → price-action-status.json (o /log do WhatsApp resume daqui). */
+function journalRules(c, extra = {}) {
+  writePriceActionPart('rules', {
+    version: PKG_VERSION,
+    enabled: c.enabled,
+    interval: c.interval,
+    scanEveryMin: SCAN_EVERY_MS / 60_000,
+    usdt: c.usdt,
+    maxActive: c.maxActive,
+    minBodyPct: c.scan.minBodyPct,
+    minVolume24h: c.scan.minVolume24h,
+    firstOfMove: !!c.scan.firstOfMove,
+    entry: c.entry ? `limite −${c.entry.discountPct}% (até ${c.entry.waitHours}h)` : 'a mercado no fechamento do candle',
+    targetPct: c.exit.targetPct,
+    stopPct: c.exit.minStopPct,
+    onDrop: c.exit.onDrop ?? null,
+    regime: regimeLabel(c.regime),
+    bullishPatterns: Array.isArray(c.bullishPatterns) ? c.bullishPatterns.length : null,
+    ...extra,
+  });
+}
+
 // Moeda+candle já recusada pelo filtro de mercado — loga uma vez só por candle (a varredura roda a cada 15 min).
 const regimeRefused = new Map();
 
 async function runCycle(log) {
   const CONFIG = buildConfig(await loadPriceActionConfig(sbReq, process.env.SUPABASE_DEFAULT_USER_ID));
+  journalRules(CONFIG, { lastScanAt: CONFIG.enabled ? new Date().toISOString() : null });
   if (!CONFIG.enabled) return;
   const { list, meta } = await scanBullishBreakouts({
     interval: CONFIG.interval, ...CONFIG.scan, withinCandles: 1, closedOnly: false,
@@ -210,6 +235,7 @@ function startBullishBreakoutAuto({ log = console.log } = {}) {
   }
   loadPriceActionConfig(sbReq, process.env.SUPABASE_DEFAULT_USER_ID).then((pa) => {
     const c = buildConfig(pa);
+    journalRules(c, { startedAt: new Date().toISOString() });
     log(`🚀 [Explosão auto] ${c.enabled ? 'ligada' : 'DESLIGADA no painel (Configurações → Price action)'} — scanner ${c.interval} a cada ${SCAN_EVERY_MS / 60_000} min, `
       + `${c.usdt} USDT/ordem, máx. ${c.maxActive} ordens, alvo +${c.exit.targetPct}% / stop −${c.exit.minStopPct}%${onDropLabel(c.exit.onDrop)} · filtros: ${regimeLabel(c.regime)}`);
   });

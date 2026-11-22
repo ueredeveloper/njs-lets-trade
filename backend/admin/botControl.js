@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Ações de controle dos bots (restart / update / stop / pull / sync-lock) disparadas
+ * Ações de controle dos bots (restart / update / stop / pull / sync-lock / reset) disparadas
  * pela API interna (`POST /internal/*`) e executadas pelo supervisor (`bots-supervisor.js`).
  *
  * DECISÃO DE ARQUITETURA (muda os invariantes antigos do README):
@@ -10,11 +10,14 @@
  *   - A API NUNCA executa git/npm/shell. Ela só grava a intenção e mata o launcher
  *     com um exit code sentinela. Quem faz `git`/`npm`/respawn é o supervisor
  *     (processo pai, que fica vivo enquanto o launcher reinicia).
- *   - Sequências FIXAS, sem comando arbitrário, sem `reset --hard`, sem build (o
+ *   - Sequências FIXAS, sem comando arbitrário, sem build (o
  *     `frontend-react/dist` é versionado, então o pull já traz o bundle):
  *       update    → fetch → merge --ff-only → npm ci condicional
  *       sync-lock → npm install --package-lock-only → git add package-lock.json →
  *                   git commit → git push (best-effort)
+ *       reset     → fetch → commit (só SHA hex) tem que estar em <remote>/<branch> →
+ *                   reset --hard <sha> → npm ci condicional. ÚNICO lugar com
+ *                   `reset --hard` — exceção pedida pelo dono (comando /reset).
  *
  * O `pull` (dry-run) é o único que roda no próprio processo do launcher: é só
  * `git fetch` + `git log HEAD..origin/branch`, não toca working tree nem reinicia.
@@ -37,7 +40,9 @@ const STATE_FILE = process.env.INTERNAL_ADMIN_STATE_FILE
 // PRÓPRIO PROCESSO SUPERVISOR — necessário depois de um /update que mexeu em
 // backend/admin/* ou bots-supervisor.js, já que esse código só é recarregado quando o
 // supervisor (não só o launcher) sobe de novo (ver comentário em bots-supervisor.js).
-const EXIT = { STOP: 0, RESTART: 10, UPDATE: 11, SYNC_LOCK: 12, RESTART_SUPERVISOR: 13 };
+// RESET: `git reset --hard <commit>` pedido pelo /reset do WhatsApp (o commit vai no
+// `pending.commit`, gravado pela API — ver runReset).
+const EXIT = { STOP: 0, RESTART: 10, UPDATE: 11, SYNC_LOCK: 12, RESTART_SUPERVISOR: 13, RESET: 14 };
 
 // Ações que viram exit code (o `pull` não — roda inline).
 const CONTROL_ACTIONS = {
@@ -46,7 +51,23 @@ const CONTROL_ACTIONS = {
   update: EXIT.UPDATE,
   'sync-lock': EXIT.SYNC_LOCK,
   'restart-supervisor': EXIT.RESTART_SUPERVISOR,
+  reset: EXIT.RESET,
 };
+
+// Único formato aceito pro /reset: SHA hexadecimal (abreviado ≥ 7 ou completo). Nada de
+// branch/tag/`HEAD~1`/`origin/x` — só hash, e o runReset ainda exige que ele esteja no
+// histórico de <remote>/<branch>.
+const COMMIT_RE = /^[0-9a-f]{7,40}$/i;
+function isValidCommit(c) {
+  return typeof c === 'string' && COMMIT_RE.test(c.trim());
+}
+
+// Alvo especial do /reset sem argumento: o último commit de <remote>/<branch> (ref FIXA da config,
+// nada vindo do request além desta palavra).
+const LATEST = 'latest';
+function isValidResetTarget(c) {
+  return c === LATEST || isValidCommit(c);
+}
 
 function git(args, { timeout = 15000 } = {}) {
   return execFileSync('git', args, {
@@ -101,9 +122,9 @@ function writeState(state) {
   } catch { /* estado é best-effort — nunca derruba o processo */ }
 }
 
-function setPending(action, by) {
+function setPending(action, by, extra) {
   const state = readState();
-  state.pending = { action, at: new Date().toISOString(), by: by || null };
+  state.pending = { action, at: new Date().toISOString(), by: by || null, ...(extra || {}) };
   writeState(state);
 }
 
@@ -336,9 +357,124 @@ async function runSyncLock() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// reset — `git reset --hard <commit>`, roda no SUPERVISOR com o launcher derrubado
+// ---------------------------------------------------------------------------
+
+/**
+ * Volta (ou avança) o checkout pra um commit EXATO — ou, com `commit = 'latest'` (/reset sem
+ * argumento), pro último commit de <remote>/<branch> depois do fetch (deixa igual ao GitHub). Pedido explícito do dono do projeto
+ * (comando /reset <sha> no WhatsApp) — é a exceção documentada ao "sem reset --hard".
+ * Travas:
+ *   1. `commit` só hexadecimal 7–40 (COMMIT_RE) — sem ref/branch/expressão;
+ *   2. `git fetch` antes, e o commit TEM que estar no histórico de <remote>/<branch>
+ *      (`merge-base --is-ancestor`) — não dá pra pular pra commit solto/de outro branch;
+ *   3. alterações locais em arquivos versionados SÃO descartadas (é o que o --hard faz) e
+ *      voltam listadas em `discarded`; arquivos não versionados ficam (sem `git clean`);
+ *   4. `npm ci` se o package-lock mudou (igual o update);
+ *   5. `fromCommit` volta no resultado → dá pra desfazer com `/reset <fromCommit>`.
+ *
+ * @returns {Promise<{ ok, fromCommit?, toCommit?, changed?, discarded?, behind?, npmRan?, error?, log: string[] }>}
+ */
+async function runReset(commit, { npmMode = internalConfig.npmOnUpdate } = {}) {
+  const log = [];
+  const step = (m) => log.push(m);
+  let fromCommit;
+  let toCommit;
+  try {
+    if (!isValidResetTarget(commit)) {
+      return { ok: false, error: `commit inválido: "${String(commit ?? '').slice(0, 60)}" — mande o hash (7 a 40 caracteres hexadecimais)`, log };
+    }
+    const sha = commit.trim().toLowerCase();
+    fromCommit = git(['rev-parse', '--short', 'HEAD']);
+    const remote = internalConfig.gitRemote;
+    const branch = currentBranch();
+
+    step(`git fetch --prune ${remote}`);
+    git(['fetch', '--prune', remote], { timeout: 120000 });
+
+    const latest = sha === LATEST;
+    let full;
+    try {
+      full = git(['rev-parse', '--verify', '--quiet', latest ? `${remote}/${branch}^{commit}` : `${sha}^{commit}`]);
+    } catch {
+      full = '';
+    }
+    if (!full) {
+      return {
+        ok: false, fromCommit, log,
+        error: latest
+          ? `não achei ${remote}/${branch} depois do fetch`
+          : `commit ${sha} não encontrado (nem depois do fetch) — ou é ambíguo; mande mais caracteres`,
+      };
+    }
+    try {
+      git(['merge-base', '--is-ancestor', full, `${remote}/${branch}`]);
+    } catch {
+      return { ok: false, fromCommit, error: `commit ${sha} não está no histórico de ${remote}/${branch} — recusado`, log };
+    }
+
+    if (latest) step(`último commit de ${remote}/${branch}: ${full.slice(0, 7)}`);
+    const discarded = git(['status', '--porcelain', '--untracked-files=no'])
+      .split('\n').map((l) => l.trim()).filter(Boolean);
+    const headFull = git(['rev-parse', 'HEAD']);
+    if (headFull === full && discarded.length === 0) {
+      step(`já está em ${fromCommit} — nada a fazer`);
+      return { ok: true, fromCommit, toCommit: fromCommit, changed: false, discarded: [], npmRan: false, behind: countBehind(remote, branch), log };
+    }
+
+    const lockBefore = fileHash('package-lock.json');
+    step(`git reset --hard ${full.slice(0, 12)}${discarded.length ? ` (descartando ${discarded.length} alteração(ões) local(is))` : ''}`);
+    git(['reset', '--hard', full], { timeout: 60000 });
+    toCommit = git(['rev-parse', '--short', 'HEAD']);
+    const lockAfter = fileHash('package-lock.json');
+    const behind = countBehind(remote, branch);
+
+    const wantNpm = npmMode === 'always' || (npmMode === 'auto' && lockBefore !== lockAfter);
+    let npmRan = false;
+    if (wantNpm) {
+      step('package-lock.json mudou → npm ci --omit=dev (pode levar minutos no Termux)');
+      try {
+        npm(['ci', '--omit=dev', '--no-audit', '--no-fund']);
+        npmRan = true;
+      } catch (e) {
+        step('⚠️ npm ci FALHOU — pode faltar dependência; rode manualmente no Termux');
+        return {
+          ok: false, fromCommit, toCommit, changed: true, discarded, behind, npmRan: false,
+          error: `reset feito, mas npm ci falhou: ${(e.stderr || e.message || '').toString().trim().slice(0, 400)}`,
+          log,
+        };
+      }
+    }
+
+    step(`ok: ${fromCommit} → ${toCommit}${behind ? ` (${behind} commit(s) atrás de ${remote}/${branch})` : ''}${npmRan ? ' (deps reinstaladas)' : ''}`);
+    return { ok: true, fromCommit, toCommit, changed: true, discarded, behind, npmRan, log };
+  } catch (err) {
+    return {
+      ok: false,
+      fromCommit,
+      toCommit,
+      error: (err.stderr || err.message || String(err)).toString().trim().slice(0, 400),
+      log,
+    };
+  }
+}
+
+function countBehind(remote, branch) {
+  try {
+    return parseInt(git(['rev-list', '--count', `HEAD..${remote}/${branch}`]) || '0', 10);
+  } catch {
+    return null;
+  }
+}
+
 module.exports = {
   EXIT,
   CONTROL_ACTIONS,
+  isValidCommit,
+  isValidResetTarget,
+  LATEST,
+  runReset,
   readState,
   setPending,
   recordResult,

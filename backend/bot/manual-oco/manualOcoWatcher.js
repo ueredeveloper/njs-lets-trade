@@ -50,6 +50,7 @@ const { checkMarketRegime } = require('../breakout-auto/marketRegime');
 const { applyMinStop } = require('../shared/manualOcoStop');
 const { sendWhatsApp } = require('../whatsapp');
 const { sendText } = require('../whatsappApiClient');
+const { writePriceActionPart } = require('../shared/priceActionStatusJournal');
 
 const TABLE = 'manual_oco_orders';
 const POLL_MS = 15_000;
@@ -65,6 +66,12 @@ function buyFailHint(err) {
 
 function fmt(p) {
   return Number.isFinite(Number(p)) ? String(Number(Number(p).toPrecision(6))) : '—';
+}
+
+/** "−9.80%" do preço atual vs. o preço comprado. */
+function fmtDropPct(price, avg) {
+  const pct = ((price - avg) / avg) * 100;
+  return `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`;
 }
 
 /** PATCH condicionado ao status lido — devolve false se o painel mudou a linha no meio
@@ -352,6 +359,7 @@ async function processOnDrop(row, adapter, log) {
   const qty = Number(row.fill?.filledQty);
   if (!(avg > 0) || !(qty > 0)) return;
   let st = cc.dropState ?? null;
+  const dropTxt = () => (st?.forced ? 'martingale adiantado no gráfico' : `caiu ${od.dropPct}%`);
   if (st && ['done', 'failed'].includes(st.stage)) return;
   // Grava o próximo passo (condicionado ao status: o "Vender agora" no meio interrompe).
   const save = async (next, extra = {}) => {
@@ -366,9 +374,22 @@ async function processOnDrop(row, adapter, log) {
   if (!st) {
     const trigger = avg * (1 - Number(od.dropPct) / 100);
     const price = await fetchLivePrice(row.exchange, row.symbol);
-    if (!(price <= trigger)) return;
-    if (!await save({ stage: 'moving', at: new Date().toISOString(), price })) return;
-    log(`📉 [OCO manual] ${tag}: caiu ${od.dropPct}% (${fmt(price)} ≤ ${fmt(trigger)}) — movendo o alvo pra entrada ${fmt(avg)}${od.mode === 'martingale' ? ' + martingale' : ''}`);
+    // forceDrop = "Martingale agora" do gráfico (POST /manual-oco-orders/:id/drop-now): dispara sem
+    // esperar os −dropPct%, desde que o preço ainda esteja abaixo da compra (alvo vai pra entrada).
+    const forced = !!cc.forceDrop;
+    if (forced && !(price < avg)) {
+      const { forceDrop, ...rest } = cc;
+      await patchIf(row, { close_condition: rest });
+      log(`⏭️  [OCO manual] ${tag}: martingale adiantado ignorado — preço ${fmt(price)} voltou pra cima da compra ${fmt(avg)}`);
+      notify(`⏭️ Explosão de Alta ${row.symbol}: o adiantamento do ${od.mode === 'martingale' ? 'martingale' : 'alvo na entrada'} foi ignorado — o preço (${fmt(price)}) voltou pra cima da compra (${fmt(avg)}). A regra normal (−${od.dropPct}%) segue valendo.`, log);
+      return;
+    }
+    if (!forced && !(price <= trigger)) return;
+    if (!await save({ stage: 'moving', at: new Date().toISOString(), price, ...(forced && { forced: true }) })) return;
+    const why = forced
+      ? `ADIANTADO pelo gráfico a ${fmtDropPct(price, avg)} (regra: −${od.dropPct}%)`
+      : `caiu ${od.dropPct}% (${fmt(price)} ≤ ${fmt(trigger)})`;
+    log(`📉 [OCO manual] ${tag}: ${why} — movendo o alvo pra entrada ${fmt(avg)}${od.mode === 'martingale' ? ' + martingale' : ''}`);
   }
 
   if (st.stage === 'moving') {
@@ -390,14 +411,14 @@ async function processOnDrop(row, adapter, log) {
           close_condition: { ...cc, dropState: { ...st, stage: 'failed', error: err2.message } },
         });
         log(`❌ [OCO manual] ${tag}: OCO cancelada pra mover o alvo e NÃO recolocada — ${err2.message}`);
-        notify(`🚨 Explosão de Alta ${row.symbol}: caiu ${od.dropPct}%, a OCO foi cancelada pra mover o alvo e NÃO foi recolocada (${err2.message}) — posição SEM stop/alvo, proteja manualmente.`, log);
+        notify(`🚨 Explosão de Alta ${row.symbol}: ${dropTxt()}, a OCO foi cancelada pra mover o alvo e NÃO foi recolocada (${err2.message}) — posição SEM stop/alvo, proteja manualmente.`, log);
         return;
       }
       await sbReq('PATCH', TABLE, {
         bracket: orig, close_condition: { ...cc, dropState: { ...st, stage: 'failed', error: err.message } }, updated_at: new Date().toISOString(),
       }, `?id=eq.${row.id}`);
       log(`⚠️  [OCO manual] ${tag}: não deu pra pôr o alvo na entrada (${err.message}) — OCO original recolocada`);
-      notify(`⚠️ Explosão de Alta ${row.symbol}: caiu ${od.dropPct}% mas não deu pra mover o alvo pra entrada (${err.message}) — OCO original recolocada, sem martingale.`, log);
+      notify(`⚠️ Explosão de Alta ${row.symbol}: ${dropTxt()} mas não deu pra mover o alvo pra entrada (${err.message}) — OCO original recolocada, sem martingale.`, log);
       return;
     }
     const next = { ...st, stage: od.mode === 'martingale' ? 'moved' : 'done', movedAt: new Date().toISOString(), target: bracket.targetPrice };
@@ -408,7 +429,7 @@ async function processOnDrop(row, adapter, log) {
     st = next;
     row = { ...row, bracket, target_price: bracket.targetPrice, close_condition };
     log(`🎯 [OCO manual] ${tag}: alvo movido pra entrada — OCO alvo ${fmt(bracket.targetPrice)} / stop ${fmt(bracket.stopPrice)}`);
-    notify(`📉 Explosão de Alta ${row.symbol}: caiu ${od.dropPct}% — alvo movido pra entrada (${fmt(bracket.targetPrice)}), stop segue em ${fmt(bracket.stopPrice)}.`, log);
+    notify(`📉 Explosão de Alta ${row.symbol}: ${dropTxt()} — alvo movido pra entrada (${fmt(bracket.targetPrice)}), stop segue em ${fmt(bracket.stopPrice)}.`, log);
     if (od.mode !== 'martingale') return;
   }
 
@@ -569,6 +590,27 @@ async function processRow(row, log) {
   }
 }
 
+/** Ordens vivas → price-action-status.json (o /log do WhatsApp resume daqui). Best-effort. */
+function journalOrders(rows) {
+  writePriceActionPart('orders', {
+    list: rows.map((r) => {
+      const cc = r.close_condition ?? {};
+      return {
+        id: r.id, symbol: r.symbol, status: r.status, source: cc.source ?? 'manual', entryKind: r.entry_kind,
+        usdt: Number(r.usdt) || null,
+        entry: Number(r.fill?.avgPrice ?? r.entry_price) || null,
+        boughtAt: r.fill?.at ?? null,
+        target: Number(r.bracket?.targetPrice ?? r.target_price) || null,
+        stop: Number(r.bracket?.stopPrice ?? r.stop_price) || null,
+        closeAt: cc.closeAt ?? null,
+        parentId: cc.parentId ?? null,
+        dropStage: cc.dropState?.stage ?? null,
+        forceDrop: !!cc.forceDrop,
+      };
+    }),
+  });
+}
+
 function startManualOcoWatcher({ log = console.log } = {}) {
   let running = false;
   let lastErr = null;
@@ -579,6 +621,7 @@ function startManualOcoWatcher({ log = console.log } = {}) {
       const rows = await sbReq('GET', TABLE, null,
         `?status=in.(${ACTIVE_STATUSES.join(',')})&order=id.asc&limit=50`);
       lastErr = null;
+      journalOrders(rows ?? []);
       // Posições abertas primeiro: com várias OPEN (cada uma lê o preço), a venda demorava a ser
       // vista no fim da fila.
       const firstRank = (s) => (s === 'BRACKETED' || s === 'FILLED' ? 0 : 1);

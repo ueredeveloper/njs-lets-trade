@@ -17,6 +17,7 @@
  *                        próprio arquivo), já que um /update comum só atualiza os arquivos no
  *                        disco, não o que já está carregado em memória neste processo (ver
  *                        restartSupervisor()).
+ *   exit 14 (RESET)     → git fetch + git reset --hard <commit do pending> + npm ci (se o lock mudou) → sobe de novo
  *   qualquer outro      → crash: respawn com backoff
  *
  * Os exit codes 10/11/12/13 são disparados pela API interna (`POST /internal/restart`,
@@ -111,6 +112,17 @@ function spawnLauncher() {
       return;
     }
 
+    if (code === EXIT.RESET) {
+      crashStreak = 0;
+      handleReset().catch((err) => {
+        log(`erro inesperado no reset: ${err.message} — subindo com o código atual`);
+        notify(`⚠️ /reset FALHOU (erro inesperado: ${err.message}). Subindo com o código atual.`);
+        botControl.recordResult('reset', { ok: false, error: err.message, log: [] });
+        spawnLauncher();
+      });
+      return;
+    }
+
     if (code === EXIT.RESTART_SUPERVISOR) {
       crashStreak = 0;
       restartSupervisor();
@@ -176,6 +188,35 @@ async function handleSyncLock() {
     notify(`⚠️ /sync-lock FALHOU: ${result.error}\nOs bots vão subir normalmente (o lock quebrado não derruba o bot em execução).`);
   }
   botControl.recordResult('sync-lock', result);
+  spawnLauncher();
+}
+
+async function handleReset() {
+  const commit = botControl.readState().pending?.commit || null;
+  log(`RESET solicitado — git reset --hard ${commit === botControl.LATEST ? '(último commit do remoto)' : commit || '(sem commit!)'} (bots parados durante isso)...`);
+  let result;
+  try {
+    result = await botControl.runReset(commit);
+  } catch (err) {
+    result = { ok: false, error: err.message, log: [] };
+  }
+  result.targetCommit = commit;
+  for (const l of result.log || []) log(l);
+  const lost = result.discarded?.length
+    ? `\n⚠️ ${result.discarded.length} alteração(ões) local(is) descartada(s): ${result.discarded.slice(0, 5).join(', ')}`
+    : '';
+  const behind = result.behind ? `\n(${result.behind} commit(s) atrás do remoto — /update traz de volta)` : '';
+  if (result.ok && result.changed) {
+    log(`reset OK: ${result.fromCommit} → ${result.toCommit}${result.npmRan ? ' (deps reinstaladas)' : ''}`);
+    notify(`⏪ /reset OK: ${result.fromCommit} → ${result.toCommit}${result.npmRan ? ' (deps reinstaladas)' : ''}${lost}${behind}\nDesfazer: /reset ${result.fromCommit}\nSubindo os bots…`);
+  } else if (result.ok) {
+    log(`reset: já estava em ${result.fromCommit}`);
+    notify(`ℹ️ /reset: já estava em ${result.fromCommit}. Reiniciando mesmo assim.`);
+  } else {
+    log(`reset FALHOU: ${result.error} — subindo com o código atual`);
+    notify(`⚠️ /reset FALHOU: ${result.error}\nOs bots vão subir com o código atual (${result.toCommit || result.fromCommit || '?'}).`);
+  }
+  botControl.recordResult('reset', result);
   spawnLauncher();
 }
 

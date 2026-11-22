@@ -2273,6 +2273,15 @@ export async function cancelManualOcoOrder(id) {
   return body;
 }
 
+/** "Martingale agora": adianta a regra de queda (close_condition.exit.onDrop) sem esperar os −X% —
+ *  o bot executa no próximo passe do watcher (≤ 15s). */
+export async function dropNowManualOcoOrder(id) {
+  const res = await fetch(`/services/manual-oco-orders/${id}/drop-now`, { method: 'POST' });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`);
+  return body;
+}
+
 /** "Vender agora" de uma OCO manual montada: cancela a OCO e vende a mercado. */
 export async function sellManualOcoOrder(id) {
   const res = await fetch(`/services/manual-oco-orders/${id}/sell`, { method: 'POST' });

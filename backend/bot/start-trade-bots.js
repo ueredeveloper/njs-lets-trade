@@ -55,6 +55,12 @@ botControl.clearStalePending();
       : `>> /sync-lock: package-lock.json ja estava sincronizado, v${v}`;
   } else if (recent && last.action === 'sync-lock') {
     line = `>> /sync-lock FALHOU (${last.error}) — v${v}`;
+  } else if (recent && last.action === 'reset' && last.ok !== false) {
+    line = last.changed === false
+      ? `>> /reset: ja estava em ${last.fromCommit}, v${v}`
+      : `>> RESET via /reset  ${last.fromCommit} -> ${last.toCommit}  (agora na v${v})`;
+  } else if (recent && last.action === 'reset') {
+    line = `>> /reset FALHOU (${last.error}) — v${v}`;
   } else if (recent && last.action === 'restart') {
     line = `>> REINICIADO via /restart  (codigo inalterado, v${v})`;
   } else {
@@ -139,7 +145,7 @@ function onControl(action) {
   if (code == null) return { ok: false, message: `ação desconhecida: ${action}` };
   const label = {
     stop: 'PARAR', restart: 'REINICIAR', update: 'ATUALIZAR', 'sync-lock': 'SINCRONIZAR LOCK',
-    'restart-supervisor': 'REINICIAR SUPERVISOR',
+    'restart-supervisor': 'REINICIAR SUPERVISOR', reset: 'RESET --HARD',
   }[action] || action;
   console.log(`\n🛰️  [launcher] controle recebido: ${label} → encerrando (exit ${code})`);
   botLog.writeLine(`[launcher] controle: ${label} (exit ${code})`);

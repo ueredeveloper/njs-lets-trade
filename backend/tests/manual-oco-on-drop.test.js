@@ -117,3 +117,27 @@ test("config: padrão 'off' não grava onDrop; martingale vai em exit.onDrop", (
   const pa = normalizePriceActionConfig({ onDrop: { mode: 'martingale', martingaleUsdt: 40, martingaleStopPct: 5 } });
   expect(buildConfig(pa).exit.onDrop).toEqual({ mode: 'martingale', dropPct: 15, martingaleUsdt: 40, martingaleStopPct: 10 });
 });
+
+// "Martingale agora" do gráfico (POST /manual-oco-orders/:id/drop-now grava close_condition.forceDrop).
+test('forceDrop: caiu só 10% → adianta o martingale (alvo → entrada + 2ª compra), marca forced', async () => {
+  fetchLivePrice.mockResolvedValue(90);
+  const row = bracketedRow('martingale');
+  row.close_condition.forceDrop = { at: 'x', price: 90, pct: -10 };
+  await processRow(row, log);
+  expect(adapter.placeExitBracket).toHaveBeenNthCalledWith(1, 0.2, 100, 70);
+  expect(adapter.marketBuy).toHaveBeenCalledWith(20);
+  const first = sbReq.mock.calls.find(([m, , b]) => m === 'PATCH' && b.close_condition?.dropState)[2];
+  expect(first.close_condition.dropState).toMatchObject({ stage: 'moving', forced: true });
+});
+
+test('forceDrop com o preço de volta acima da compra → ignora e limpa o pedido, sem mexer na OCO', async () => {
+  fetchLivePrice.mockResolvedValue(101);
+  const row = bracketedRow('martingale');
+  row.close_condition.forceDrop = { at: 'x', price: 90, pct: -10 };
+  await processRow(row, log);
+  expect(adapter.cancelExitBracket).not.toHaveBeenCalled();
+  expect(adapter.marketBuy).not.toHaveBeenCalled();
+  const patch = sbReq.mock.calls.find(([m, , b]) => m === 'PATCH' && b.close_condition)[2];
+  expect(patch.close_condition.forceDrop).toBeUndefined();
+  expect(patch.close_condition.dropState).toBeUndefined();
+});
