@@ -75,21 +75,26 @@ function readStoredUsdt() {
 }
 
 /** Campo de % que só aplica no Enter/blur — o valor exibido acompanha o arrasto da linha, mas
- *  enquanto o usuário digita ("3." etc.) não é sobrescrito. */
+ *  enquanto o usuário digita ("3." etc.) não é sobrescrito.
+ *  "Editando" = o usuário DIGITOU algo (não só focou): com o campo focado, arrastar a linha no
+ *  gráfico não tira o foco (o mousedown do arrasto chama preventDefault), e o campo ficava parado
+ *  no valor antigo — e, ao perder o foco depois, reaplicava esse valor velho e desfazia o arrasto.
+ *  Agora o valor segue o arrasto até a 1ª tecla, e o blur só aplica se o texto mudou. */
 function PctInput({ value, onCommit, sign }) {
   const [text, setText] = useState(value.toFixed(2));
   const [editing, setEditing] = useState(false);
   useEffect(() => { if (!editing) setText(value.toFixed(2)); }, [value, editing]);
   const commit = () => {
+    const wasEditing = editing;
     setEditing(false);
+    if (!wasEditing) return; // só focou/arrastou — nada digitado, não reaplica
     const n = Math.abs(parseFloat(String(text).replace(',', '.')));
     if (n > 0 && n < 100) onCommit(sign * n);
   };
   return (
     <input
       type="text" inputMode="decimal" value={text}
-      onFocus={() => setEditing(true)}
-      onChange={(e) => setText(e.target.value)}
+      onChange={(e) => { setEditing(true); setText(e.target.value); }}
       onBlur={commit}
       onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
       className="w-14 bg-black/40 border border-slate-600 rounded px-1 text-right"

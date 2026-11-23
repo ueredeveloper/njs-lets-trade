@@ -1,6 +1,79 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { cancelManualOcoOrder, sellManualOcoOrder, dropNowManualOcoOrder, reviewManualOcoOrder } from '../services/api';
 import { manualOcoLevels, isMartingaleChild } from '../utils/manualOco';
+import { computePositionSignals } from '../utils/positionSignals';
+
+const TONE_DOT = { green: 'bg-green-500', yellow: 'bg-yellow-400', red: 'bg-red-500' };
+const TONE_TEXT = { green: 'text-green-400', yellow: 'text-yellow-300', red: 'text-red-400' };
+const SIGNALS_REFRESH_MS = 2 * 60e3;
+
+/**
+ * Acordeão "Sinais" (fechado) de uma posição comprada: sair ou deixar correr? Busca os candles do
+ * intervalo da ordem (close_condition.interval, padrão 4h) e mostra cada indicador com bolinha
+ * verde/amarela/vermelha + decisão (regras em utils/positionSignals.js). Atualiza a cada 2 min.
+ */
+function PositionSignals({ order, entry }) {
+  const interval = order.close_condition?.interval || '4h';
+  const fillAtMs = order.fill?.at ? Date.parse(order.fill.at) : NaN;
+  const [state, setState] = useState({ data: null, error: null });
+
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const url = `/services/candles/?symbol=${order.symbol}&limit=200&interval=${interval}${order.exchange === 'gate' ? '&source=gate' : ''}`;
+        const raw = await fetch(url).then((r) => r.json());
+        if (!Array.isArray(raw)) throw new Error('candles indisponíveis');
+        const candles = [...raw].sort((a, b) => a.openTime - b.openTime);
+        const data = computePositionSignals(candles, { interval, entryPrice: entry, fillAtMs });
+        if (alive) setState({ data, error: data ? null : 'candles insuficientes' });
+      } catch (err) {
+        if (alive) setState({ data: null, error: err.message });
+      }
+    };
+    load();
+    const id = setInterval(load, SIGNALS_REFRESH_MS);
+    return () => { alive = false; clearInterval(id); };
+  }, [order.symbol, order.exchange, interval, entry, fillAtMs]);
+
+  const rows = state.data?.rows ?? [];
+  const count = (t) => rows.filter((r) => r.tone === t).length;
+  return (
+    <details className="mt-1 rounded border border-slate-700">
+      <summary className="cursor-pointer select-none px-1 py-0.5 text-slate-300 hover:text-white">
+        Sinais {interval}
+        {rows.length > 0 && (
+          <span>
+            {' · '}<span className="text-green-400">{count('green')}●</span>
+            {' '}<span className="text-yellow-300">{count('yellow')}●</span>
+            {count('red') > 0 && <>{' '}<span className="text-red-400">{count('red')}●</span></>}
+          </span>
+        )}
+      </summary>
+      <div className="px-1 pb-1">
+        {state.error && <div className="text-red-400">{state.error}</div>}
+        {!state.data && !state.error && <div className="text-slate-400">carregando…</div>}
+        {rows.map((r) => (
+          <div key={r.key} className="border-b border-slate-800 py-0.5 last:border-b-0">
+            <div className="flex items-center gap-1">
+              <span className={`inline-block h-2 w-2 shrink-0 rounded-full ${TONE_DOT[r.tone]}`} />
+              <span className="font-bold">{r.name}</span>
+              <span className="ml-auto text-slate-400">{r.value}</span>
+            </div>
+            <div className={`pl-3 ${TONE_TEXT[r.tone]}`}>{r.decision}</div>
+          </div>
+        ))}
+        {state.data && (
+          <div className="mt-0.5 text-slate-500">
+            só candles fechados · último fechou {new Date(state.data.closedAt).toLocaleString('pt-BR', {
+              timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+            })}
+          </div>
+        )}
+      </div>
+    </details>
+  );
+}
 
 const STATUS_LABEL = {
   NEW: 'aguardando bot',
@@ -171,17 +244,36 @@ export default function ManualOcoOrdersPanel({ orders, marketPrice, onChanged })
               if (!rule) return null;
               const { od, state, forced, martingale } = rule;
               const what = martingale ? `martingale ${Number(od.martingaleUsdt)} USDT` : 'alvo na entrada';
-              const below = marketPrice && entry > 0 && marketPrice < entry;
-              const canForce = o.status === 'BRACKETED' && !state && !forced;
               return (
-                <div className="mt-0.5">
-                  <div className="text-slate-400">
-                    se cair {Number(od.dropPct)}%: {what}
-                    {state && <span className={state.stage === 'failed' ? ' text-red-400' : ' text-amber-300'}>
-                      {' · '}{DROP_STAGE_LABEL[state.stage] ?? state.stage}{state.forced ? ' (adiantado)' : ''}
-                    </span>}
-                    {forced && !state && <span className="text-amber-300"> · adiantado — bot executa em até 15s</span>}
-                  </div>
+                <div className="mt-0.5 text-slate-400">
+                  se cair {Number(od.dropPct)}%: {what}
+                  {state && <span className={state.stage === 'failed' ? ' text-red-400' : ' text-amber-300'}>
+                    {' · '}{DROP_STAGE_LABEL[state.stage] ?? state.stage}{state.forced ? ' (adiantado)' : ''}
+                  </span>}
+                  {forced && !state && <span className="text-amber-300"> · adiantado — bot executa em até 15s</span>}
+                </div>
+              );
+            })()}
+            {o.error && <div className={`break-words ${noOco ? 'text-red-400' : 'text-amber-300'}`}>{o.error}</div>}
+            {/* Ações da posição comprada (martingale/alvo na entrada agora, vender, revisar) num
+                acordeão FECHADO — ficam à mão sem ocupar o card (e o gráfico). <details> é estado do
+                DOM, então continua aberto nos re-renders do poll de 10s. */}
+            {mounted && !noOco && o.status !== 'SELLING' && entry > 0 && (
+              <PositionSignals order={o} entry={entry} />
+            )}
+            {mounted && o.status !== 'SELLING' && (() => {
+              const rule = dropRule(o);
+              const od = rule?.od;
+              const martingale = rule?.martingale;
+              const what = martingale ? `martingale ${Number(od?.martingaleUsdt)} USDT` : 'alvo na entrada';
+              const below = marketPrice && entry > 0 && marketPrice < entry;
+              const canForce = rule && o.status === 'BRACKETED' && !rule.state && !rule.forced;
+              return (
+                <details className="mt-1 rounded border border-slate-700">
+                  <summary className="cursor-pointer select-none px-1 py-0.5 text-slate-300 hover:text-white">
+                    Ações{sellTxt ? <span className={sellPct >= 0 ? 'text-green-400' : 'text-red-400'}> · venda {sellTxt}</span> : ''}
+                  </summary>
+                  <div className="px-1 pb-1">
                   {canForce && (
                     <button
                       onClick={() => run(o.id, dropNowManualOcoOrder,
@@ -199,11 +291,6 @@ export default function ManualOcoOrdersPanel({ orders, marketPrice, onChanged })
                       {busy ? 'Enviando…' : `${martingale ? 'Martingale agora' : 'Alvo na entrada agora'}${below ? ` (${fmtPct(entry, marketPrice)})` : ''}`}
                     </button>
                   )}
-                </div>
-              );
-            })()}
-            {o.error && <div className={`break-words ${noOco ? 'text-red-400' : 'text-amber-300'}`}>{o.error}</div>}
-            {mounted && o.status !== 'SELLING' && (
               <button
                 onClick={() => run(o.id, sellManualOcoOrder,
                   `Vender AGORA a mercado a posição #${o.id} de ${o.symbol}?\n\n`
@@ -214,8 +301,7 @@ export default function ManualOcoOrdersPanel({ orders, marketPrice, onChanged })
               >
                 {busy ? 'Vendendo…' : `Vender agora${marketPrice ? ` (~${fmtPrice(marketPrice)})` : ''}`}
               </button>
-            )}
-            {mounted && o.status !== 'SELLING' && o.exchange !== 'gate' && (
+            {o.exchange !== 'gate' && (
               <button
                 onClick={() => runReview(o, false)}
                 disabled={busy}
@@ -260,6 +346,10 @@ export default function ManualOcoOrdersPanel({ orders, marketPrice, onChanged })
                     )}
                   <div className="text-slate-400">livre {fmtPrice(diag.free)} · <button className="underline" onClick={() => setReview(null)}>fechar</button></div>
                 </div>
+              );
+            })()}
+                  </div>
+                </details>
               );
             })()}
             {(o.status === 'NEW' || o.status === 'OPEN') && (

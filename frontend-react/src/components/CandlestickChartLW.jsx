@@ -810,28 +810,99 @@ function toValidLwCandles(candlesticks) {
  * (mouse em cima do gráfico = justamente durante o arrasto). Limpar o crosshair antes dessas
  * mudanças faz o updateCrosshair pular o hit-test; o próximo movimento do mouse o redesenha.
  * Mudanças só no FIM (candle novo, whitespace à direita) não reindexam nada e não limpam.
+ *
+ * Por que a versão anterior (que só olhava o 1º tempo de cada série) não bastava: as séries
+ * auxiliares (S/R, traços, BB, PnL, zigzag, flags...) mandavam tempos que NÃO são tempos de candle
+ * (ms arbitrários, pontos no meio de um candle, além do whitespace). Cada tempo desses vira um
+ * ponto novo no eixo compartilhado — e inserir/remover ponto no MEIO do eixo também reindexa tudo,
+ * sem mudar o 1º tempo de ninguém. Era isso que continuava derrubando a lib no hit-test e no loop
+ * de pintura. Agora:
+ *  1. A 1ª série criada (o candle) define o eixo. Os tempos das demais são "encaixados" no candle
+ *     que os contém (piso), presos entre o 1º candle e o último whitespace, sem repetir tempo —
+ *     então série auxiliar nunca mais cria nem tira ponto do eixo.
+ *  2. O crosshair é limpo quando o candle muda de um jeito que não seja só acrescentar no fim
+ *     (histórico antigo, troca de moeda/intervalo), e quando uma série auxiliar ainda guarda tempos
+ *     do eixo antigo e é regravada/removida.
  */
-function guardCrosshairDuringReindex(chart) {
-  const firstTimeBySeries = new WeakMap();
+function guardTimeScale(chart) {
+  let mainSeries = null;
+  let mainTimes = []; // tempos do candle + whitespace, crescentes
+  let mainGen = 0; // muda a cada troca do eixo que não seja só acréscimo no fim
+  const genBySeries = new WeakMap(); // série auxiliar → mainGen da última gravação (-1 = sem encaixe)
   const clear = () => { try { chart.clearCrosshairPosition(); } catch { /* chart destruído */ } };
+
+  // Devolve null quando não dá pra encaixar (eixo ainda vazio, tempo em formato desconhecido).
+  const snapToMain = (data) => {
+    if (!Array.isArray(data) || !data.length) return data ?? [];
+    if (!mainTimes.length) return null;
+    const lastMain = mainTimes.length - 1;
+    const out = [];
+    for (const d of data) {
+      const t = d?.time;
+      if (typeof t !== 'number' || !Number.isFinite(t)) return null;
+      // maior tempo de candle <= t (busca binária)
+      let lo = 0; let hi = lastMain;
+      if (t <= mainTimes[0]) hi = 0;
+      else if (t >= mainTimes[lastMain]) lo = lastMain;
+      else {
+        while (lo < hi) {
+          const mid = (lo + hi + 1) >> 1;
+          if (mainTimes[mid] <= t) lo = mid; else hi = mid - 1;
+        }
+      }
+      const st = mainTimes[t <= mainTimes[0] ? 0 : lo];
+      const item = st === t ? d : { ...d, time: st };
+      if (out.length && out[out.length - 1].time === st) out[out.length - 1] = item;
+      else out.push(item);
+    }
+    return out;
+  };
+
   const origAddSeries = chart.addSeries.bind(chart);
   chart.addSeries = (...args) => {
     const s = origAddSeries(...args);
+    const isMain = mainSeries === null;
+    if (isMain) mainSeries = s;
     const origSetData = s.setData.bind(s);
     s.setData = (data) => {
-      const first = data?.length ? data[0].time : null;
-      if (first !== (firstTimeBySeries.get(s) ?? null)) clear();
-      firstTimeBySeries.set(s, first);
-      return origSetData(data);
+      if (isMain) {
+        const next = Array.isArray(data) ? data.map((d) => d.time) : [];
+        const prev = mainTimes;
+        const isAppend = prev.length > 0 && next.length >= prev.length
+          && next[0] === prev[0] && next[prev.length - 1] === prev[prev.length - 1];
+        if (!isAppend) { clear(); mainGen += 1; }
+        mainTimes = next;
+        return origSetData(data);
+      }
+      const snapped = snapToMain(data);
+      const prevGen = genBySeries.get(s);
+      if (prevGen !== undefined && prevGen !== mainGen) clear(); // ainda tinha tempos do eixo antigo
+      genBySeries.set(s, snapped === null ? -1 : mainGen);
+      return origSetData(snapped ?? data);
     };
     return s;
   };
   const origRemoveSeries = chart.removeSeries.bind(chart);
   chart.removeSeries = (s) => {
-    if (firstTimeBySeries.get(s) != null) clear();
-    firstTimeBySeries.delete(s);
+    const g = genBySeries.get(s);
+    if (g !== undefined && g !== mainGen) clear();
+    genBySeries.delete(s);
     return origRemoveSeries(s);
   };
+}
+
+/** setVisibleRange só quando o eixo de tempo tem pontos — sem isso a lib lança "Value is null"
+ *  (ensureNotNull em logicalRangeForTimeRange). Acontecia no requestAnimationFrame do efeito de
+ *  setData quando o chart era recriado entre o setData e o frame (o rAF pegava o chart novo,
+ *  vazio) e no efeito de zoomPeriod antes de os candles chegarem. */
+function safeSetVisibleRange(chart, range) {
+  if (!chart) return false;
+  try {
+    chart.timeScale().setVisibleRange(range);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -1006,7 +1077,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
         vertTouchDrag: true,
       },
     });
-    guardCrosshairDuringReindex(chart);
+    guardTimeScale(chart);
     const series = chart.addSeries(CandlestickSeries, {
       upColor: C_UP, downColor: C_DOWN,
       borderUpColor: C_UP, borderDownColor: C_DOWN,
@@ -1174,6 +1245,9 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       }
     }
     seriesRef.current.setData(data);
+    // O frame tem que mexer no MESMO chart que recebeu o setData — se o chart for recriado nesse
+    // meio-tempo (troca de cores), chartRef já aponta pro novo, ainda vazio.
+    const chartAtSetData = chartRef.current;
     // Adia a definição do range visível pro próximo frame — chamar setVisibleRange()/fitContent()
     // na MESMA execução síncrona do setData() usava dimensões/layout internos da lib ainda não
     // recalculados pros dados novos (candles reais ficavam espremidos numa ponta da tela mesmo
@@ -1183,12 +1257,11 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
     // processar o setData antes da gente mexer no timeScale.
     const rafId = requestAnimationFrame(() => {
       const chart = chartRef.current;
+      if (!chart || chart !== chartAtSetData) return;
       if (pendingRestoreRangeRef.current) {
         // candlesticks cresceu por causa do arrasto pra trás (onNeedOlderCandles) — restaura
         // exatamente onde o usuário estava em vez de saltar pros candles mais recentes.
-        try {
-          chart?.timeScale().setVisibleRange(pendingRestoreRangeRef.current);
-        } catch { /* eixo sem pontos nesse frame — fica onde a lib deixou */ }
+        safeSetVisibleRange(chart, pendingRestoreRangeRef.current);
         pendingRestoreRangeRef.current = null;
       } else if (zoomPeriod?.startDate && zoomPeriod?.endDate) {
         // Zoom de período ativo (clique numa ocorrência de Estatísticas/Multi-Trade) — deixa pro
@@ -1208,7 +1281,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
         const ivSec = valid.length > 1 ? Math.abs(valid[1].time - valid[0].time) : 0;
         const to = lastTime + ivSec * 3; // mesmo respiro de 3 candles do rightOffset (setVisibleRange ignora rightOffset)
         if (Number.isFinite(from) && Number.isFinite(to) && to >= from) {
-          chart?.timeScale().setVisibleRange({ from, to });
+          safeSetVisibleRange(chart, { from, to });
         }
       } else {
         // fitContent() calcula um barSpacing pra caber TODOS os candles carregados na largura do
@@ -1248,7 +1321,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
     const from = Math.floor(new Date(zoomPeriod.startDate).getTime() / 1000) - padSec;
     const to = Math.floor(new Date(zoomPeriod.endDate).getTime() / 1000) + padSec;
     if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) return;
-    chart.timeScale().setVisibleRange({ from, to }); // ver comentário no efeito de focusLastN acima — sem reaplicar barSpacing fixo depois
+    safeSetVisibleRange(chart, { from, to }); // ver comentário no efeito de focusLastN acima — sem reaplicar barSpacing fixo depois
   }, [zoomPeriod, interval]);
 
   // Linhas: EMAs + EMAs extras + VWAP(bandas) + Bollinger.
@@ -1724,15 +1797,31 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
     // (é o mesmo espaço do rightOffset), então a folga não fica presa aos 8 candles de whitespace.
     // Olhando o histórico (último candle fora da tela) não mexe.
     const RIGHT_GAP = 6;
+    // Com ordem OCO manual ativa, o cartão ManualOcoOrdersPanel (w-60 = 240px, canto inferior
+    // direito, colado no eixo de preço) fica por cima dos ÚLTIMOS candles — justo os que importam.
+    // A folga à direita passa a ter pelo menos a largura do cartão (+ margem), em px convertidos
+    // pra candles pelo barSpacing atual; limitada a metade da área do gráfico (tela estreita).
+    const OCO_PANEL_PX = 240 + 80;
     const valid = toValidLwCandles(candlesticks);
     const ts = chartRef.current?.timeScale();
     if (!ts || valid.length < 2) return;
     const lastIdx = valid.length - 1; // índice lógico do último candle real (whitespace vem depois)
     const lastTime = valid[lastIdx].time;
     const ivSec = lastTime - valid[lastIdx - 1].time;
-    const maxTime2 = Math.max(...rects.map((r) => Math.max(r.time1 ?? 0, r.time2 ?? 0)));
-    if (!(ivSec > 0) || !(maxTime2 > lastTime)) return;
-    const need = lastIdx + Math.min(Math.ceil((maxTime2 - lastTime) / ivSec), 8) + RIGHT_GAP;
+    if (!(ivSec > 0)) return;
+    const maxTime2 = rects.length ? Math.max(...rects.map((r) => Math.max(r.time1 ?? 0, r.time2 ?? 0))) : 0;
+    let gap = maxTime2 > lastTime ? Math.min(Math.ceil((maxTime2 - lastTime) / ivSec), 8) + RIGHT_GAP : 0;
+    // Só com OCO MONTADA (comprou + OCO na corretora) — ordem ainda na compra não abre a folga.
+    if (manualOcoOrders?.some((o) => { const l = manualOcoLevels(o); return l.mounted && !l.noOco; })) {
+      try {
+        const barSpacing = ts.options().barSpacing || 10;
+        const plotW = ts.width() || 0;
+        const panelPx = plotW > 0 ? Math.min(OCO_PANEL_PX, plotW * 0.6) : OCO_PANEL_PX;
+        gap = Math.max(gap, Math.ceil(panelPx / barSpacing));
+      } catch { /* eixo sem pontos nesse frame */ }
+    }
+    if (!gap) return;
+    const need = lastIdx + gap;
     try {
       const lr = ts.getVisibleLogicalRange();
       if (!lr || lr.to < lastIdx || lr.to >= need) return;
@@ -1824,14 +1913,23 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       if (!dragLeg || !d?.entry || !s) return;
       const p = s.coordinateToPrice(localY(clientY));
       if (!Number.isFinite(p) || p <= 0) return;
+      const leg = dragLeg;
       // stop < entrada < alvo, com folga mín. de 0,1% — OCO de venda.
-      if (dragLeg === 'entry') {
-        const entry = Math.min(Math.max(p, d.stop * 1.001), d.target * 0.999);
-        onOcoDraftChangeRef.current?.({ ...d, entry, entryLocked: true });
-        return;
-      }
-      const next = dragLeg === 'target' ? Math.max(p, d.entry * 1.001) : Math.min(p, d.entry * 0.999);
-      onOcoDraftChangeRef.current?.({ ...d, [dragLeg]: next });
+      // Updater FUNCIONAL (onOcoDraftChange = setOcoDraft): aplica sobre o rascunho MAIS NOVO, não
+      // sobre o ref (que só é atualizado depois do render). Com o objeto montado a partir do ref,
+      // vários mousemove antes do render — ou um tick de preço movendo a entrada "a mercado" no meio
+      // do arrasto do alvo/stop — gravavam por cima com valores velhos.
+      const apply = (prev) => {
+        if (!prev?.entry) return prev;
+        if (leg === 'entry') {
+          const entry = Math.min(Math.max(p, prev.stop * 1.001), prev.target * 0.999);
+          return { ...prev, entry, entryLocked: true };
+        }
+        const next = leg === 'target' ? Math.max(p, prev.entry * 1.001) : Math.min(p, prev.entry * 0.999);
+        return { ...prev, [leg]: next };
+      };
+      ocoDraftRef.current = apply(ocoDraftRef.current); // hit-test do próximo evento já no valor novo
+      onOcoDraftChangeRef.current?.(apply);
     };
     const onMouseMove = (e) => moveTo(e.clientY);
     const onTouchMove = (e) => {
@@ -1848,12 +1946,20 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       window.removeEventListener('touchend', endDrag);
       window.removeEventListener('touchcancel', endDrag);
     };
+    // O preventDefault do início do arrasto impede o navegador de tirar o foco de um campo (ex. %
+    // do alvo no cartão da OCO) — tira na mão, pro campo aplicar o que foi digitado ANTES do arrasto
+    // e voltar a acompanhar a linha.
+    const blurFocusedField = () => {
+      const a = document.activeElement;
+      if (a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.tagName === 'SELECT')) a.blur();
+    };
     const onMouseDown = (e) => {
       if (e.button !== 0) return;
       const leg = hitLeg(e.clientY, 7);
       if (!leg) return;
       e.stopPropagation();
       e.preventDefault();
+      blurFocusedField();
       dragLeg = leg;
       window.addEventListener('mousemove', onMouseMove);
       window.addEventListener('mouseup', endDrag);
@@ -1864,6 +1970,7 @@ const CandlestickChartLW = forwardRef(function CandlestickChartLW({
       if (!leg) return;
       e.stopPropagation();
       e.preventDefault();
+      blurFocusedField();
       dragLeg = leg;
       window.addEventListener('touchmove', onTouchMove, { passive: false });
       window.addEventListener('touchend', endDrag);
