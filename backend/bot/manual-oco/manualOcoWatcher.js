@@ -29,6 +29,9 @@
  *            e grava a 2ª compra como ordem FILHA (FILLED, OCO própria) — ver processOnDrop. Aviso de
  *            venda no WhatsApp DURÁVEL (exit.notified, re-tenta até entregar — notifyExit), inclusive
  *            o do "Vender agora" (SOLD).
+ *            Stop PRENDIDO pela faixa da Binance (pediu −30%, aceitou ~−20% — bracket.clamped.stop):
+ *            maybeLowerStop rebaixa a OCO conforme o preço cai, até o stop pedido (desiredStopPrice),
+ *            sem passar na frente da regra de queda/martingale.
  *            Inclui as do "Comprar agora" (entry_kind 'market'). "Vender agora" do gráfico tira a
  *            linha daqui (SELLING) antes de mexer na OCO — ver /manual-oco-orders/:id/sell.
  * Preços são REFERÊNCIA: a corretora pode exigir ajuste e ele é feito sem perguntar — tick/precisão
@@ -48,6 +51,7 @@ const { evaluateBullishBreakout } = require('../../market/bullishBreakoutScanner
 const { exitLevels } = require('../breakout-auto/bullishBreakoutAuto');
 const { checkMarketRegime } = require('../breakout-auto/marketRegime');
 const { applyMinStop } = require('../shared/manualOcoStop');
+const { binanceLowestOcoStop } = require('../../binance/ocoClient');
 const { sendWhatsApp } = require('../whatsapp');
 const { sendText } = require('../whatsappApiClient');
 const { writePriceActionPart } = require('../shared/priceActionStatusJournal');
@@ -371,6 +375,9 @@ async function processOnDrop(row, adapter, log) {
   const cc = { ...(row.close_condition ?? {}) };
   const od = cc.exit?.onDrop;
   if (!od || !['breakeven', 'martingale'].includes(od.mode) || !row.bracket) return;
+  // Rebaixamento do stop trocando a OCO agora (maybeLowerStop, segundos): espera ele terminar e
+  // roda no próximo passe com o bracket novo — a regra (−dropPct% / "Martingale agora") não muda.
+  if (cc.stopLower) return;
   const tag = `${row.symbol} #${row.id}`;
   const avg = Number(row.fill?.avgPrice);
   const qty = Number(row.fill?.filledQty);
@@ -383,7 +390,8 @@ async function processOnDrop(row, adapter, log) {
   const save = async (next, extra = {}) => {
     const claimed = { ...next, owner: INSTANCE_ID, ownedAt: new Date().toISOString() };
     const close_condition = { ...cc, dropState: claimed };
-    if (!await patchIf(row, { ...extra, close_condition }, dropStateFilter(st))) {
+    // + nenhum rebaixamento de stop começou em outro processo depois da leitura (stopLower).
+    if (!await patchIf(row, { ...extra, close_condition }, `${dropStateFilter(st)}&close_condition->stopLower=is.null`)) {
       log(`⏸️  [OCO manual] ${tag}: passo '${next.stage}' da queda já foi pego por outro processo — este desiste`);
       return false;
     }
@@ -452,6 +460,9 @@ async function processOnDrop(row, adapter, log) {
       notify(`⚠️ Explosão de Alta ${row.symbol}: ${dropTxt()} mas não deu pra mover o alvo pra entrada (${err.message}) — OCO original recolocada, sem martingale.`, log);
       return;
     }
+    // Guarda o stop DESEJADO (pedido antes do clamp da Binance) pro rebaixamento seguir depois.
+    const want = desiredStop(row);
+    if (want) bracket = { ...bracket, desiredStopPrice: want };
     const next = { ...st, stage: od.mode === 'martingale' ? 'moved' : 'done', movedAt: new Date().toISOString(), ownedAt: new Date().toISOString(), target: bracket.targetPrice };
     const close_condition = { ...cc, dropState: next };
     // Incondicional (como o fill): a OCO nova JÁ está na corretora — perder o handle a deixaria órfã.
@@ -514,6 +525,143 @@ async function processOnDrop(row, adapter, log) {
   }
 }
 
+/**
+ * Stop DESEJADO da OCO quando a Binance prendeu o pedido na faixa PERCENT_PRICE_BY_SIDE (perna de
+ * venda ≥ askMultiplierDown × preço médio de 5 min — 0,8 nos pares USDT, ou seja, no máx. ~−20%
+ * do preço atual): pediu −30%, ficou em −20%. null = stop já é o pedido (nada pra rebaixar).
+ */
+function desiredStop(row) {
+  const b = row.bracket;
+  if (!b) return null;
+  if (Number(b.desiredStopPrice) > 0) return Number(b.desiredStopPrice);
+  return b.clamped?.stop && Number(b.requestedStopPrice) > 0 ? Number(b.requestedStopPrice) : null;
+}
+
+const LOWER_STOP_EVERY_MS = 60_000; // no máx. 1 tentativa/min por ordem
+const LOWER_STOP_MIN_STEP_PCT = 2; // só troca a OCO se o stop desce ≥ 2% do preço comprado (ou chega no desejado)
+const LOWER_STOP_LEASE_MS = 3 * 60_000;
+const lowerStopLastTry = new Map(); // id → ms
+
+/**
+ * Rebaixa o stop PRENDIDO conforme o preço cai: a faixa da Binance é relativa ao preço ATUAL, então
+ * um stop de −30% da compra, recusado logo depois dela, passa a caber quando o preço cai ~12,5%.
+ * Enquanto o stop gravado estiver acima do desejado, a cada minuto: stop possível agora
+ * (binanceLowestOcoStop) → se desce ≥ LOWER_STOP_MIN_STEP_PCT% (ou chega no desejado), cancela a
+ * OCO e recoloca com o MESMO alvo e o stop novo. Nunca sobe o stop. Só Binance.
+ *
+ * Martingale tem PRIORIDADE e as regras dele não mudam: não age com a regra de queda em andamento
+ * (dropState ≠ done/failed), com "Martingale agora" pedido (forceDrop) nem com o preço já no gatilho
+ * (−dropPct%) — o martingale roda primeiro. Exclusão entre processos: reivindica com PATCH
+ * condicionado (close_condition.stopLower is null + dropState lido), e o processOnDrop só reivindica
+ * com stopLower vazio. Crash no meio (marca velha, de outro processo, > LOWER_STOP_LEASE_MS): confere
+ * a OCO antiga e recoloca se ela sumiu.
+ * @returns true se trocou a OCO (ou reconciliou) neste passe.
+ */
+async function maybeLowerStop(row, adapter, log) {
+  if (row.exchange === 'gate' || !row.bracket?.orderListId) return false;
+  const cc = row.close_condition ?? {};
+  const tag = `${row.symbol} #${row.id}`;
+  const avg = Number(row.fill?.avgPrice);
+  const qty = Number(row.fill?.filledQty);
+  if (!(avg > 0) || !(qty > 0)) return false;
+  const want = desiredStop(row);
+  const target = Number(row.bracket.targetPrice ?? row.target_price);
+
+  // Marca de rebaixamento em andamento.
+  if (cc.stopLower) {
+    const age = Date.now() - Date.parse(cc.stopLower.at ?? 0);
+    if (cc.stopLower.owner === INSTANCE_ID || age < LOWER_STOP_LEASE_MS) return false;
+    // Outro processo caiu no meio: a OCO antiga pode ter sido cancelada sem a nova.
+    const r = await adapter.pollExitBracket(row.bracket).catch(() => null);
+    if (r?.filled) {
+      const { stopLower, ...rest } = cc;
+      await closeBracketed({ ...row, close_condition: rest }, r, log);
+      return true;
+    }
+    try {
+      const bracket = await adapter.placeExitBracket(qty, target, want ?? Number(row.bracket.stopPrice));
+      await sbReq('PATCH', TABLE, {
+        bracket: { ...bracket, ...(want && { desiredStopPrice: want }) },
+        close_condition: (({ stopLower, ...rest }) => rest)(cc), updated_at: new Date().toISOString(),
+      }, `?id=eq.${row.id}`);
+      log(`🔧 [OCO manual] ${tag}: rebaixamento do stop interrompido — OCO recolocada (alvo ${fmt(bracket.targetPrice)} / stop ${fmt(bracket.stopPrice)})`);
+    } catch (err) {
+      // Provavelmente a OCO nova SAIU (saldo travado nela) — o "Revisar OCO" adota/corrige.
+      await sbReq('PATCH', TABLE, {
+        status: 'OCO_FAILED', error: `rebaixamento do stop interrompido: ${err.message} — use "Revisar OCO"`,
+        close_condition: (({ stopLower, ...rest }) => rest)(cc), updated_at: new Date().toISOString(),
+      }, `?id=eq.${row.id}`);
+      log(`❌ [OCO manual] ${tag}: rebaixamento do stop interrompido e a OCO não foi recolocada — ${err.message}`);
+      notify(`🚨 OCO manual ${row.symbol}: o rebaixamento do stop foi interrompido e a OCO não pôde ser recolocada (${err.message}). Confira no gráfico com "Revisar OCO".`, log);
+    }
+    return true;
+  }
+
+  const cur = Number(row.bracket.stopPrice);
+  if (!(want > 0) || !(cur > want)) return false;
+  const st = cc.dropState;
+  if (cc.forceDrop || (st && !['done', 'failed'].includes(st.stage))) return false; // martingale primeiro
+  const now = Date.now();
+  if (now - (lowerStopLastTry.get(row.id) ?? 0) < LOWER_STOP_EVERY_MS) return false;
+  lowerStopLastTry.set(row.id, now);
+
+  const od = cc.exit?.onDrop;
+  if (!st && od && ['breakeven', 'martingale'].includes(od.mode)) {
+    const price = await fetchLivePrice(row.exchange, row.symbol);
+    if (price <= avg * (1 - Number(od.dropPct) / 100)) return false; // gatilho do martingale: ele vai antes
+  }
+  const floor = await binanceLowestOcoStop(row.symbol);
+  if (!(floor > 0)) return false;
+  const next = Math.max(want, floor);
+  const reachesWant = next <= want * 1.0005;
+  if (!(next < cur)) return false;
+  if (!reachesWant && ((cur - next) / avg) * 100 < LOWER_STOP_MIN_STEP_PCT) return false;
+
+  // Reivindica (exclusão com outro processo e com o processOnDrop).
+  const mark = { owner: INSTANCE_ID, at: new Date().toISOString(), fromListId: row.bracket.orderListId };
+  const claimed = await patchIf(row, { close_condition: { ...cc, stopLower: mark } },
+    `&close_condition->stopLower=is.null${dropStateFilter(st ?? null)}&bracket->>orderListId=eq.${row.bracket.orderListId}`);
+  if (!claimed) return false;
+  const clearMark = (({ stopLower, ...rest }) => rest)(cc);
+
+  await adapter.cancelExitBracket(row.bracket);
+  const r = await adapter.pollExitBracket(row.bracket).catch(() => null);
+  if (r?.filled) { await closeBracketed({ ...row, close_condition: clearMark }, r, log); return true; }
+  let bracket;
+  try {
+    bracket = await adapter.placeExitBracket(qty, target, want);
+  } catch (err) {
+    // Não coube → volta a OCO de antes (a posição não fica sem stop).
+    try {
+      bracket = await adapter.placeExitBracket(qty, target, cur);
+    } catch (err2) {
+      await sbReq('PATCH', TABLE, {
+        status: 'OCO_FAILED', error: `rebaixando o stop: OCO cancelada e não recolocada (${err2.message})`,
+        close_condition: clearMark, updated_at: new Date().toISOString(),
+      }, `?id=eq.${row.id}`);
+      log(`❌ [OCO manual] ${tag}: OCO cancelada pra rebaixar o stop e NÃO recolocada — ${err2.message}`);
+      notify(`🚨 OCO manual ${row.symbol}: a OCO foi cancelada pra rebaixar o stop e NÃO foi recolocada (${err2.message}) — posição SEM stop/alvo, proteja manualmente.`, log);
+      return true;
+    }
+    await sbReq('PATCH', TABLE, {
+      bracket: { ...bracket, desiredStopPrice: want }, close_condition: clearMark, updated_at: new Date().toISOString(),
+    }, `?id=eq.${row.id}`);
+    lowerStopLastTry.set(row.id, Date.now() + 9 * 60_000); // próxima tentativa em ~10 min
+    log(`⚠️  [OCO manual] ${tag}: não deu pra rebaixar o stop (${err.message}) — OCO anterior recolocada`);
+    return true;
+  }
+  // Incondicional: a OCO nova JÁ está na corretora — perder o handle a deixaria órfã.
+  const saved = { ...bracket, desiredStopPrice: want };
+  await sbReq('PATCH', TABLE, {
+    bracket: saved, close_condition: clearMark, updated_at: new Date().toISOString(),
+  }, `?id=eq.${row.id}`);
+  const pctTxt = `${(((bracket.stopPrice - avg) / avg) * 100).toFixed(1)}%`;
+  const done = !(saved.clamped?.stop);
+  log(`⤵️  [OCO manual] ${tag}: stop rebaixado ${fmt(cur)} → ${fmt(bracket.stopPrice)} (${pctTxt} da compra)${done ? ' — chegou no stop pedido' : ` — segue até ${fmt(want)}`}`);
+  notify(`⤵️ OCO manual ${row.symbol}: stop rebaixado de ${fmt(cur)} pra ${fmt(bracket.stopPrice)} (${pctTxt} da compra)${done ? ' — chegou no stop pedido.' : `; a Binance ainda limita, segue descendo até ${fmt(want)} se o preço cair.`} Alvo segue em ${fmt(bracket.targetPrice)}.`, log);
+  return true;
+}
+
 async function processRow(row, log) {
   const adapter = buildAdapter(row.exchange === 'gate' ? 'gate' : 'binance', row.symbol);
   const tag = `${row.symbol} #${row.id}`;
@@ -527,11 +675,14 @@ async function processRow(row, log) {
 
   if (row.status === 'BRACKETED') {
     if (!row.bracket) return;
-    // Mudando a OCO no meio (queda → alvo na entrada): a OCO gravada pode já estar cancelada.
-    if (row.close_condition?.dropState?.stage !== 'moving') {
+    // Mudando a OCO no meio (queda → alvo na entrada / rebaixando o stop): a OCO gravada pode já
+    // estar cancelada.
+    if (row.close_condition?.dropState?.stage !== 'moving' && !row.close_condition?.stopLower) {
       const r = await adapter.pollExitBracket(row.bracket);
       if (r?.filled) { await closeBracketed(row, r, log); return; }
     }
+    // Rebaixou o stop neste passe → a regra de queda roda no próximo, já com o bracket novo.
+    if (await maybeLowerStop(row, adapter, log)) return;
     await processOnDrop(row, adapter, log);
     return;
   }

@@ -144,6 +144,23 @@ async function binancePlaceOcoSell(symbol, qty, targetPrice, stopPrice) {
   };
 }
 
+/**
+ * Stop (gatilho) mais BAIXO que uma OCO de venda aceita AGORA — a mesma conta do clamp de
+ * binancePlaceOcoSell: limite do stop ≥ askMultiplierDown × preço médio de 5 min (+ folga), e o
+ * gatilho STOP_LIMIT_SLIPPAGE_PCT% acima do limite. Usado pra rebaixar um stop que foi prendido
+ * (ex.: pediu −30%, a Binance só aceitou −20%) conforme o preço cai e a faixa desce junto
+ * (manualOcoWatcher#maybeLowerStop). null = símbolo sem filtro de faixa.
+ */
+async function binanceLowestOcoStop(symbol) {
+  const { tickSize, priceDecimals, askMultiplierDown } = await getSymbolFilters(symbol);
+  if (askMultiplierDown == null) return null;
+  const avgPrice = await getAvgPrice(symbol);
+  if (!(avgPrice > 0)) return null;
+  const SAFETY_MARGIN_PCT = 0.2; // mesma folga do clamp
+  const stopLimit = parseFloat(roundToStep(avgPrice * askMultiplierDown * (1 + SAFETY_MARGIN_PCT / 100), tickSize, priceDecimals, 'ceil'));
+  return parseFloat(roundToStep(stopLimit / (1 - STOP_LIMIT_SLIPPAGE_PCT / 100), tickSize, priceDecimals, 'ceil'));
+}
+
 async function binanceCancelOco(symbol, orderListId) {
   try {
     await binanceRequest('DELETE', '/api/v3/orderList', { symbol, orderListId });
@@ -174,4 +191,4 @@ async function binancePollOco(symbol, orderListId, legs) {
   return { filled: null };
 }
 
-module.exports = { binancePlaceOcoSell, binanceCancelOco, binancePollOco, getSymbolFilters, getAvgPrice };
+module.exports = { binancePlaceOcoSell, binanceCancelOco, binancePollOco, binanceLowestOcoStop, getSymbolFilters, getAvgPrice };

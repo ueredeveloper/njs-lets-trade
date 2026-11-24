@@ -382,6 +382,14 @@ ordens ATIVAS (`utils/manualOco.js`) e desenha: OCO montada em verde/vermelho + 
 (`POST /services/manual-oco-orders/:id/sell`: SELLING → cancela OCO → venda a mercado → SOLD);
 ainda na compra = previsão azul (alvo) / laranja (stop) + **Cancelar compra**
 (`ManualOcoOrdersPanel.jsx`). O watcher vigia as BRACKETED até `CLOSED_TARGET`/`CLOSED_STOP`.
+**Stop prendido pela Binance → rebaixado depois (v1.198.0):** a perna de venda da OCO tem que ficar ≥
+`askMultiplierDown` (0,8 nos pares USDT) × preço médio de 5 min (`PERCENT_PRICE_BY_SIDE`), então um stop de
+−30% vira ~−20% na hora (`bracket.clamped.stop`). `manualOcoWatcher.js#maybeLowerStop` (1×/min, só Binance)
+recalcula o mínimo aceito (`ocoClient.js#binanceLowestOcoStop`) e, se desce ≥ 2% do preço comprado (ou chega no
+pedido), cancela e recoloca a OCO com o MESMO alvo, até `bracket.desiredStopPrice`; nunca sobe; não deu → volta a
+OCO anterior. Martingale tem prioridade e as regras não mudam: não age com `dropState` em andamento, `forceDrop`
+("Martingale agora") nem com o preço no gatilho −dropPct%; exclusão entre processos pela marca
+`close_condition.stopLower` (o `processOnDrop` só reivindica com ela vazia). Testes: `manual-oco-lower-stop.test.js`.
 **Stop mínimo de 10%** abaixo do preço comprado em toda OCO real (`backend/bot/shared/manualOcoStop.js`,
 espelho `withMinStop` em `utils/manualOco.js`; cartão avisa quando a linha está mais perto). A caixa
 "Price action" do gráfico simula com o mesmo mínimo. É o tipo PADRÃO da caixa de análise (v1.188.0) e o
